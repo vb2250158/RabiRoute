@@ -7,10 +7,12 @@ import {
   storePlanAttachments
 } from "./planAttachments.js";
 import type { PlanAttachment } from "./shared/planAttachmentContract.js";
+import type { PlanImportanceLevel, PlanUrgencyLevel } from "./shared/planSortContract.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export type PlanStatus = "未开始" | "进行中" | "暂停" | "已完成" | "已归档";
+const PLAN_STATUSES = new Set<PlanStatus>(["未开始", "进行中", "暂停", "已完成", "已归档"]);
 export type PlanStepStatus = "未开始" | "进行中" | "已完成";
 
 export type PlanApprovalFileAction = "create" | "modify" | "delete" | "move";
@@ -107,6 +109,11 @@ export type PlanItem = {
   title: string;
   focus: string;
   status: PlanStatus;
+  /** Integer sort value. 0 is highest; 4 means unset. */
+  importance?: PlanImportanceLevel;
+  /** Integer sort value. 0 is most urgent; 4 means unset. */
+  urgency?: PlanUrgencyLevel;
+  /** Legacy compatibility input. New writers should use importance. */
   priority?: string;
   kind?: string;
   currentStep?: string;
@@ -1273,6 +1280,14 @@ function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
   };
 }
 
+function validatePlanStatusInput(value: unknown): void {
+  if (value === undefined) return;
+  const status = typeof value === "string" ? value.trim() : "";
+  if (!PLAN_STATUSES.has(status as PlanStatus)) {
+    throw new Error(`Unsupported plan status: ${String(value)}. Use 未开始, 进行中, 暂停, 已完成, or 已归档; lifecycle presentation labels are derived.`);
+  }
+}
+
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
   const title = String(raw.title || "").trim();
   if (!title) return null;
@@ -1285,6 +1300,12 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     title,
     focus: String(raw.focus || title).trim(),
     status,
+    importance: typeof raw.importance === "number" && Number.isInteger(raw.importance) && raw.importance >= 0 && raw.importance <= 4
+      ? raw.importance as PlanImportanceLevel
+      : undefined,
+    urgency: typeof raw.urgency === "number" && Number.isInteger(raw.urgency) && raw.urgency >= 0 && raw.urgency <= 4
+      ? raw.urgency as PlanUrgencyLevel
+      : undefined,
     priority: typeof raw.priority === "string" ? raw.priority : undefined,
     kind: typeof raw.kind === "string" ? raw.kind : undefined,
     currentStep: typeof raw.currentStep === "string" ? raw.currentStep : undefined,
@@ -1444,6 +1465,8 @@ const planListDirtyAt = new Map<string, number>();
 const planListDirtyFiles = new Map<string, Set<string> | null>();
 const planListRefreshTimers = new Map<string, NodeJS.Timeout>();
 const planListRefreshInFlight = new Set<string>();
+const planListLoadInFlight = new Map<string, Promise<PlanItem[]>>();
+const planListGeneration = new Map<string, number>();
 
 function planListCacheKey(roleDir: string): string {
   return path.resolve(roleDir);
@@ -1451,6 +1474,7 @@ function planListCacheKey(roleDir: string): string {
 
 function clearPlanListCache(roleDir: string): void {
   const cacheKey = planListCacheKey(roleDir);
+  planListGeneration.set(cacheKey, (planListGeneration.get(cacheKey) ?? 0) + 1);
   planListCache.delete(cacheKey);
   planFileCache.delete(cacheKey);
   planListDirtyAt.delete(cacheKey);
@@ -1578,6 +1602,35 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     return code === "ENOENT" ? { filePath, missing: true } : { filePath, retry: true };
   }
+}
+
+async function allPlanFilesAsync(roleDir: string): Promise<string[]> {
+  const directories = [
+    path.join(plansDir(roleDir), "items", "active"),
+    path.join(plansDir(roleDir), "archive")
+  ];
+  const groups = await Promise.all(directories.map(async (directory) => {
+    try {
+      const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
+        .map((entry) => path.join(directory, entry.name))
+        .sort((left, right) => left.localeCompare(right));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }));
+  return groups.flat();
+}
+
+async function readPlanFileForCatalog(filePath: string): Promise<AsyncPlanFileCacheResult> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await readChangedPlanFile(filePath);
+    if (!result.retry) return result;
+    await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+  }
+  return { filePath, retry: true };
 }
 
 function schedulePlanListCacheRefresh(roleDir: string): void {
@@ -1774,7 +1827,73 @@ export function listPlans(roleDir: string): PlanItem[] {
   return plans;
 }
 
+export async function listPlansAsync(roleDir: string): Promise<PlanItem[]> {
+  const cacheKey = planListCacheKey(roleDir);
+  const cached = planListCache.get(cacheKey);
+  const watchBacked = ensurePlanListWatchers(roleDir);
+  const dirtyAt = planListDirtyAt.get(cacheKey);
+  if (cached && watchBacked && dirtyAt === undefined) return cached.plans;
+  if (cached && watchBacked && dirtyAt !== undefined && planListDirtyFiles.get(cacheKey) instanceof Set) {
+    if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
+    return cached.plans;
+  }
+  if (cached && !watchBacked && cached.validUntil > Date.now()) return cached.plans;
+
+  const existingLoad = planListLoadInFlight.get(cacheKey);
+  if (existingLoad) return existingLoad;
+  let load!: Promise<PlanItem[]>;
+  load = (async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const generation = planListGeneration.get(cacheKey) ?? 0;
+      const loadStartedAt = Date.now();
+      const files = await allPlanFilesAsync(roleDir);
+      const results = await Promise.all(files.map((filePath) => readPlanFileForCatalog(filePath)));
+      const retry = results.find((result) => result.retry);
+      if (retry || generation !== (planListGeneration.get(cacheKey) ?? 0)) continue;
+      const cachedFiles = new Map<string, PlanFileCacheEntry>();
+      for (const result of results) {
+        if (result.entry) cachedFiles.set(path.resolve(result.filePath), result.entry);
+      }
+      planFileCache.set(cacheKey, cachedFiles);
+      const refreshed = plansFromFileCache(roleDir) ?? { signature: "", items: [] };
+      const plans = uniquePlans(refreshed.items);
+      planListCache.set(cacheKey, {
+        signature: refreshed.signature,
+        validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+        plans
+      });
+      const changedDuringLoad = (planListDirtyAt.get(cacheKey) ?? 0) > loadStartedAt;
+      if (changedDuringLoad) {
+        if (planListDirtyFiles.get(cacheKey) instanceof Set && !planListRefreshTimers.has(cacheKey)) {
+          schedulePlanListCacheRefresh(roleDir);
+        }
+      } else {
+        planListDirtyAt.delete(cacheKey);
+        planListDirtyFiles.delete(cacheKey);
+      }
+      return plans;
+    }
+    throw new Error("Plan catalog kept changing while loading; retry shortly.");
+  })().finally(() => {
+    if (planListLoadInFlight.get(cacheKey) === load) planListLoadInFlight.delete(cacheKey);
+  });
+  planListLoadInFlight.set(cacheKey, load);
+  return load;
+}
+
 export function getPlan(roleDir: string, planId: string): PlanItem | null {
+  const cacheKey = planListCacheKey(roleDir);
+  const cached = planListCache.get(cacheKey);
+  const dirtyFiles = planListDirtyFiles.get(cacheKey);
+  if (cached && dirtyFiles !== null) {
+    const candidateFiles = planCandidateFiles(roleDir, planId).map((filePath) => path.resolve(filePath));
+    const targetIsDirty = dirtyFiles instanceof Set
+      && candidateFiles.some((filePath) => dirtyFiles.has(filePath));
+    if (!targetIsDirty) {
+      const cachedPlan = cached.plans.find((plan) => plan.id === planId);
+      if (cachedPlan) return cachedPlan;
+    }
+  }
   return findPlanRecord(roleDir, planId)?.plan ?? null;
 }
 
@@ -1985,6 +2104,7 @@ export function roleMemoryCounts(roleDir: string): {
 
 export function createPlan(roleDir: string, input: Record<string, unknown>): PlanItem {
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
+  validatePlanStatusInput(input.status);
   validatePlanSecretaryBindingInput(input.secretaryBinding);
   validatePlanTaskBindingInput(input.taskBinding);
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("plan", String(input.title || ""));
@@ -2007,6 +2127,7 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   const record = findPlanRecord(roleDir, planId);
   if (!record) throw new Error(`Plan not found: ${planId}`);
   const existing = record.plan;
+  if (Object.prototype.hasOwnProperty.call(patch, "status")) validatePlanStatusInput(patch.status);
   if (Object.prototype.hasOwnProperty.call(patch, "secretaryBinding")) validatePlanSecretaryBindingInput(patch.secretaryBinding);
   if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
   const recordedAt = nowIso();

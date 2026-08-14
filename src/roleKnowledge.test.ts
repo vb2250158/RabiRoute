@@ -14,6 +14,7 @@ import {
   listArchivedMemories,
   listConsolidatedMemories,
   listPlans,
+  listPlansAsync,
   listRecentMemories,
   listRoleSkills,
   markMemoryConsolidationRunDelivered,
@@ -76,6 +77,100 @@ test("plan list cache is invalidated by canonical create and update writes", () 
 
   updatePlan(roleDir, created.id, { title: "Updated cache plan" });
   assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "Updated cache plan");
+});
+
+test("plan writes reject presentation-only lifecycle labels as top-level status", () => {
+  const roleDir = makeRoleDir();
+  assert.throws(() => createPlan(roleDir, {
+    id: "invalid-lifecycle-status",
+    title: "Invalid lifecycle status",
+    focus: "Reject presentation-only lifecycle labels",
+    status: "等待打包",
+    currentStepId: "package",
+    steps: [{ id: "package", title: "等待打包", status: "进行中" }],
+    keywords: ["lifecycle"]
+  }), /Unsupported plan status/);
+
+  const created = createPlan(roleDir, {
+    id: "valid-lifecycle-status",
+    title: "Valid lifecycle status",
+    focus: "Keep the stored lifecycle status supported",
+    status: "进行中",
+    currentStepId: "package",
+    steps: [{ id: "package", title: "等待打包", status: "进行中" }],
+    keywords: ["lifecycle"]
+  });
+  assert.throws(() => updatePlan(roleDir, created.id, { status: "等待 QA 验收" }), /Unsupported plan status/);
+  assert.equal(getPlan(roleDir, created.id)?.status, "进行中");
+});
+
+test("cold plan catalogs load asynchronously and share one in-flight cache fill", async () => {
+  const roleDir = makeRoleDir();
+  for (let index = 0; index < 80; index += 1) {
+    createPlan(roleDir, {
+      id: `async-plan-${String(index).padStart(3, "0")}`,
+      title: `异步计划 ${index}`,
+      focus: `验证异步目录 ${index}`,
+      steps: [{ id: "load", title: "加载", status: "未开始" }],
+      keywords: ["异步目录"]
+    });
+  }
+  const originalReadFile = fs.promises.readFile;
+  let reads = 0;
+  fs.promises.readFile = (async (...args: Parameters<typeof fs.promises.readFile>) => {
+    reads += 1;
+    await new Promise((resolve) => setImmediate(resolve));
+    return originalReadFile(...args as [path: fs.PathLike, options: BufferEncoding]);
+  }) as typeof fs.promises.readFile;
+  try {
+    let eventLoopYielded = false;
+    setImmediate(() => { eventLoopYielded = true; });
+    const [first, second] = await Promise.all([listPlansAsync(roleDir), listPlansAsync(roleDir)]);
+    assert.equal(eventLoopYielded, true);
+    assert.equal(first.length, 80);
+    assert.equal(second, first);
+    assert.equal(reads >= 80 && reads < 160, true);
+    const coldReads = reads;
+    assert.equal(await listPlansAsync(roleDir), first);
+    assert.equal(reads, coldReads);
+  } finally {
+    fs.promises.readFile = originalReadFile;
+  }
+});
+
+test("an async plan catalog retries when a canonical write invalidates the in-flight snapshot", async () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    id: "async-invalidation-plan",
+    title: "写入前标题",
+    focus: "验证异步缓存失效",
+    steps: [{ id: "load", title: "加载", status: "未开始" }],
+    keywords: ["异步缓存失效"]
+  });
+  const originalReadFile = fs.promises.readFile;
+  let releaseFirstRead: (() => void) | undefined;
+  let firstReadStartedResolve!: () => void;
+  const firstReadStarted = new Promise<void>((resolve) => { firstReadStartedResolve = resolve; });
+  let firstRead = true;
+  fs.promises.readFile = (async (...args: Parameters<typeof fs.promises.readFile>) => {
+    const result = await originalReadFile(...args as [path: fs.PathLike, options: BufferEncoding]);
+    if (firstRead) {
+      firstRead = false;
+      firstReadStartedResolve();
+      await new Promise<void>((resolve) => { releaseFirstRead = resolve; });
+    }
+    return result;
+  }) as typeof fs.promises.readFile;
+  try {
+    const loading = listPlansAsync(roleDir);
+    await firstReadStarted;
+    updatePlan(roleDir, plan.id, { title: "写入后标题" });
+    releaseFirstRead?.();
+    const loaded = await loading;
+    assert.equal(loaded.find((item) => item.id === plan.id)?.title, "写入后标题");
+  } finally {
+    fs.promises.readFile = originalReadFile;
+  }
 });
 
 test("new memories use Markdown files while legacy JSON remains readable without duplication", () => {
@@ -281,6 +376,37 @@ test("plan list cache reparses only the externally changed plan file", { concurr
 
   assert.deepEqual(planFileReads, [path.resolve(changedFile)]);
   assert.deepEqual(planFileStats, [path.resolve(changedFile), path.resolve(changedFile)]);
+});
+
+test("plan detail reads reuse the warm plan list cache", { concurrency: false }, () => {
+  const roleDir = makeRoleDir();
+  for (let index = 0; index < 8; index += 1) {
+    createPlan(roleDir, {
+      id: `detail-cache-${index}`,
+      title: `Detail cache ${index}`,
+      focus: `Reuse the warm catalog for detail ${index}`,
+      status: "进行中",
+      currentStepId: "inspect",
+      steps: [{ id: "inspect", title: "Inspect", status: "进行中" }],
+      keywords: ["cache", "detail"]
+    });
+  }
+  const plans = listPlans(roleDir);
+  const originalReadFileSync = fs.readFileSync;
+  let planFileReads = 0;
+  fs.readFileSync = ((filePath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (typeof filePath === "string" && filePath.includes(`${path.sep}plans${path.sep}`) && filePath.endsWith(".json")) {
+      planFileReads += 1;
+    }
+    return (originalReadFileSync as (...callArgs: unknown[]) => unknown)(filePath, ...args);
+  }) as typeof fs.readFileSync;
+  try {
+    for (const plan of plans) assert.equal(getPlan(roleDir, plan.id)?.id, plan.id);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  assert.equal(planFileReads, 0);
 });
 
 test("plans store managed image, video, and file attachments without persisting base64", () => {

@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { PlanItem } from "./roleKnowledge.js";
-import { migrateLegacyPackageGatePlan, planIsWaitingForPackage } from "./planPackageWaiting.js";
+import {
+  migrateLegacyPackageGatePlan,
+  planHasTargetPackageInclusionEvidence,
+  planIsStructuredQaPhase,
+  planIsWaitingForPackage,
+  planIsWaitingForQaAcceptance
+} from "./planPackageWaiting.js";
 
 function plan(patch: Partial<PlanItem>): PlanItem {
   return {
@@ -13,7 +19,12 @@ function plan(patch: Partial<PlanItem>): PlanItem {
     attachments: [],
     steps: [
       { id: "implement", title: "完成实现", status: "已完成" },
-      { id: "matching-tests", title: "完成匹配测试", status: "已完成" },
+      {
+        id: "matching-tests",
+        title: "完成匹配测试与同步提交",
+        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
       { id: "package", title: "等待打包", status: "进行中" }
     ],
     createdAt: "2026-07-28T00:00:00.000Z",
@@ -29,6 +40,15 @@ test("package waiting uses the structured package step and excludes QA, approval
   assert.equal(planIsWaitingForPackage(plan({ waitingFor: "等待确认 r224818 已进包" })), true);
 
   assert.equal(planIsWaitingForPackage(plan({
+    steps: [
+      { id: "implement", title: "完成 Main 实现", status: "已完成" },
+      { id: "matching-tests", title: "完成测试", status: "已完成" },
+      { id: "package", title: "等待目标包", status: "进行中" }
+    ],
+    waitingFor: "等待目标包身份与进包结果"
+  })), false);
+
+  assert.equal(planIsWaitingForPackage(plan({
     currentStepId: "package-next-client-build",
     waitingFor: "等待用户今晚明确说‘开始打包’",
     steps: [
@@ -37,7 +57,7 @@ test("package waiting uses the structured package step and excludes QA, approval
       { id: "package-next-client-build", title: "等待下一次打包", status: "进行中" },
       { id: "close", title: "收口", status: "未开始" }
     ]
-  })), true);
+  })), false);
 
   assert.equal(planIsWaitingForPackage(plan({
     currentStepId: "verify-package",
@@ -60,6 +80,151 @@ test("package waiting uses the structured package step and excludes QA, approval
   })), false);
 });
 
+test("PangHu package lifecycle stays running until formal sync, submit, and conflict-free readback are complete", () => {
+  const incomplete = plan({
+    waitingFor: "等待目标包身份",
+    steps: [
+      { id: "implement", title: "完成 Main 实现", detail: "Main 已完成开发验证。", status: "已完成" },
+      { id: "package", title: "等待目标包", status: "进行中" }
+    ]
+  });
+  assert.equal(planIsWaitingForPackage(incomplete), false);
+  assert.equal(planIsWaitingForPackage(plan({ waitingFor: "等待目标包身份与进包结果" })), true);
+
+  const realPlanShape = plan({
+    waitingFor: "等待本轮目标包构建完成；需回读版本、渠道、构建编号和Release r225253纳入证明。",
+    steps: [
+      { id: "implement", title: "完成实现", status: "已完成" },
+      { id: "development-validation-release", title: "完成Release验证与提交", status: "已完成" },
+      {
+        id: "package",
+        title: "等待目标包并证明纳入 Release r225253",
+        detail: "等待打包前置门槛已完成：Main测试变更r225252、Release六路径与测试r225253已提交；本计划无Art侧目标；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "进行中"
+      }
+    ]
+  });
+  assert.equal(planIsWaitingForPackage(realPlanShape), true);
+});
+
+test("package waiting requires the complete machine-readable conflict readback contract", () => {
+  const ambiguous = plan({
+    waitingFor: "等待目标包身份",
+    steps: [
+      { id: "implement", title: "完成 Main 实现", status: "已完成" },
+      {
+        id: "matching-tests",
+        title: "完成同步提交",
+        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225253；无目标 diff 或远端更新。",
+        status: "已完成"
+      },
+      { id: "package", title: "等待目标包", status: "进行中" }
+    ]
+  });
+  assert.equal(planIsWaitingForPackage(ambiguous), false);
+
+  const complete = plan({
+    waitingFor: "等待目标包身份",
+    steps: ambiguous.steps.map((step) => step.id === "matching-tests"
+      ? {
+          ...step,
+          detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。"
+        }
+      : step)
+  });
+  assert.equal(planIsWaitingForPackage(complete), true);
+});
+
+test("non-Unity logic and deferred UI runtime acceptance do not block package waiting after delivery closure", () => {
+  const nonUi = plan({
+    waitingFor: "等待目标包身份与纳入证明",
+    steps: [
+      {
+        id: "implement",
+        title: "完成纯 C# 数据转换规则",
+        detail: "非 Unity 测试 matched=6, failed=0。",
+        status: "已完成"
+      },
+      {
+        id: "delivery-closure",
+        title: "完成同步提交回读",
+        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225300；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
+      { id: "package", title: "等待目标包", status: "进行中" }
+    ]
+  });
+  assert.equal(planIsWaitingForPackage(nonUi), true);
+
+  const uiWithDeferredRuntime = plan({
+    ...nonUi,
+    steps: nonUi.steps.map((step) => step.id === "implement"
+      ? {
+          ...step,
+          title: "完成 UI 静态与序列化合同",
+          detail: "静态引用与序列化检查通过；GameView、PlayMode 交互和 Unity 生命周期列入不干扰用户 Editor 的包内 QA 合同。"
+        }
+      : step)
+  });
+  assert.equal(planIsWaitingForPackage(uiWithDeferredRuntime), true);
+});
+
+test("target package inclusion moves the structured QA phase from package waiting to QA acceptance", () => {
+  const qaWithoutPackageProof = plan({
+    currentStepId: "send-special-qa",
+    currentStep: "发送专项 QA 请求。",
+    nextAction: "发送 QA 并取得 sentMessageId。",
+    waitingFor: "",
+    steps: [
+      { id: "implement", title: "完成实现", status: "已完成" },
+      {
+        id: "matching-tests",
+        title: "完成同步提交",
+        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
+      {
+        id: "package-target-build",
+        title: "历史包记录",
+        detail: "旧包 1.0.297 已完成，但不足以证明纳入本轮 r225253。",
+        status: "已完成"
+      },
+      { id: "send-special-qa", title: "发送专项 QA", status: "进行中" }
+    ]
+  });
+  assert.equal(planIsStructuredQaPhase(qaWithoutPackageProof), true);
+  assert.equal(planHasTargetPackageInclusionEvidence(qaWithoutPackageProof), false);
+  assert.equal(planIsWaitingForPackage(qaWithoutPackageProof), true);
+  assert.equal(planIsWaitingForQaAcceptance(qaWithoutPackageProof), false);
+
+  const qaWithPackageProof = plan({
+    ...qaWithoutPackageProof,
+    steps: qaWithoutPackageProof.steps.map((step) => step.id === "package-target-build"
+      ? {
+          ...step,
+          title: "完成目标统一包",
+          detail: "Android/PC 1.0.298 统一包已交付，并证明纳入 Release r225253。"
+        }
+      : step)
+  });
+  assert.equal(planHasTargetPackageInclusionEvidence(qaWithPackageProof), true);
+  assert.equal(planIsWaitingForPackage(qaWithPackageProof), false);
+  assert.equal(planIsWaitingForQaAcceptance(qaWithPackageProof), true);
+});
+
+test("mixed package-and-QA step ids are not accepted as a structured QA phase", () => {
+  const mixed = plan({
+    currentStepId: "package-and-qa",
+    waitingFor: "等待 QA 结论",
+    steps: [
+      ...plan({}).steps.slice(0, 2),
+      { id: "package-and-qa", title: "打包并等待 QA", status: "进行中" }
+    ]
+  });
+  assert.equal(planIsStructuredQaPhase(mixed), false);
+  assert.equal(planIsWaitingForQaAcceptance(mixed), false);
+});
+
 test("legacy global packaging blockers migrate to non-blocked package waiting only after prior steps complete", () => {
   const source = plan({
     isBlocked: true,
@@ -67,7 +232,12 @@ test("legacy global packaging blockers migrate to non-blocked package waiting on
     waitingFor: "等待正式打包任务返回含 r224818 与目标包身份。",
     steps: [
       { id: "implement", title: "完成 Main / Release 实现", status: "已完成" },
-      { id: "matching-tests", title: "完成双分支目标测试 3/3", status: "已完成" },
+      {
+        id: "matching-tests",
+        title: "完成双分支目标测试 3/3",
+        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
       {
         id: "package",
         title: "等待目标包产物",

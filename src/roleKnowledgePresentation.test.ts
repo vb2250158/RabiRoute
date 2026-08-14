@@ -143,7 +143,12 @@ test("plan presentation blocks only complete pending approvals and keeps other o
     blockedBy: "",
     steps: [
       { id: "implement", title: "完成 Main / Release 实现", status: "已完成" },
-      { id: "matching-tests", title: "完成双分支目标测试 3/3", status: "已完成" },
+      {
+        id: "matching-tests",
+        title: "完成双分支目标测试 3/3",
+        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
       { id: "package", title: "等待目标包产物", status: "进行中", waitingFor: "等待目标包身份与进包结果" }
     ]
   });
@@ -196,7 +201,7 @@ test("plan presentation blocks only complete pending approvals and keeps other o
   assert.equal(planPresentation(implementationMentioningQa).tone, "running");
   assert.equal(planPresentation(developmentValidation).status, "正在执行");
   assert.equal(planPresentation(developmentValidation).tone, "running");
-  assert.equal(planPresentation(awaitingPackage).status, "待统一打包");
+  assert.equal(planPresentation(awaitingPackage).status, "等待打包");
   assert.equal(planPresentation(awaitingPackage).tone, "waiting_package");
   assert.equal(planPresentation(awaitingPackage).sortBucket, 4);
   assert.deepEqual(planPresentation(awaitingPackage).palette, {
@@ -242,7 +247,7 @@ test("plan presentation derives an environment wait from the authoritative curre
   assert.equal(planPresentation(item).tone, "waiting_external");
 });
 
-test("plan presentation keeps a busy Unity owner in the environment wait stage", () => {
+test("plan presentation keeps a busy Main Unity owner actionable", () => {
   const item = plan({
     id: "waiting-main-unity-owner",
     title: "Waiting Main Unity owner",
@@ -256,8 +261,28 @@ test("plan presentation keeps a busy Unity owner in the environment wait stage",
     }]
   });
 
-  assert.equal(planPresentation(item).status, "等待测试环境");
-  assert.equal(planPresentation(item).tone, "waiting_external");
+  assert.equal(planPresentation(item).status, "正在执行");
+  assert.equal(planPresentation(item).tone, "running");
+});
+
+test("plan presentation keeps shared Unity queues and MCP contention actionable", () => {
+  for (const waitingFor of [
+    "等待唯一Main Unity工作位完成运行验收",
+    "共享PlayMode run仍queued，等待队列释放",
+    "正式 Main Unity 运行环境释放后再合并",
+    "Main Unity MCP暂不可用，等待恢复"
+  ]) {
+    const item = plan({
+      id: `shared-unity-${waitingFor.length}`,
+      title: "Shared Unity remains actionable",
+      currentStepId: "verify-runtime",
+      waitingFor,
+      steps: [{ id: "verify-runtime", title: "继续实现并补运行验收", status: "进行中", waitingFor }]
+    });
+
+    assert.equal(planPresentation(item).status, "正在执行");
+    assert.equal(planPresentation(item).tone, "running");
+  }
 });
 
 test("plan presentation distinguishes a material wait from active execution", () => {
@@ -343,24 +368,103 @@ test("plan presentation keeps an explicit run-and-send instruction actionable", 
   assert.equal(planPresentation(item).tone, "running");
 });
 
-test("plan presentation keeps a QA step actionable until a real send receipt exists", () => {
+test("plan presentation enters QA after target-package inclusion even before the QA send receipt", () => {
   const item = plan({
     id: "qa-send-missing",
     title: "QA send is still actionable",
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "qa-task",
+      sessionTitle: "[PangHu][QA] Target package acceptance",
+      workspace: "C:\\Data\\CottonProject\\PangHu"
+    },
     currentStepId: "verify",
     currentStep: "目标包已完成，但尚未取得本轮 QA 发送回执。",
     nextAction: "修复引用锚点后发送 QA 请求并回读 sentMessageId。",
     waitingFor: "等待可引用消息锚点",
-    steps: [{
-      id: "verify",
-      title: "发送 QA 验收请求",
-      status: "进行中",
-      waitingFor: "等待可引用消息锚点"
-    }]
+    steps: [
+      {
+        id: "package-target-build",
+        title: "完成目标包并证明纳入",
+        status: "已完成",
+        detail: "Android/PC 1.0.298 统一包已交付，并证明纳入 Release r225253。"
+      },
+      {
+        id: "verify",
+        title: "发送 QA 验收请求",
+        status: "进行中",
+        waitingFor: "等待可引用消息锚点"
+      }
+    ]
   });
 
-  assert.equal(planPresentation(item).status, "正在执行");
-  assert.equal(planPresentation(item).tone, "running");
+  assert.equal(planPresentation(item).status, "等待 QA 验收");
+  assert.equal(planPresentation(item).tone, "qa");
+});
+
+test("plan presentation stays blue package waiting when a QA step has no target-package inclusion proof", () => {
+  const item = plan({
+    id: "qa-before-target-package",
+    title: "QA before target package",
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "qa-task-before-package",
+      sessionTitle: "PangHu task",
+      workspace: "C:\\Data\\CottonProject\\PangHu"
+    },
+    currentStepId: "send-special-qa",
+    currentStep: "等待 QA 结论。",
+    waitingFor: "等待 QA 回传",
+    steps: [
+      {
+        id: "sync-submit",
+        title: "完成同步提交",
+        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
+      {
+        id: "package-target-build",
+        title: "历史包记录",
+        detail: "旧包 1.0.297 已完成，但不足以证明纳入本轮 r225253。",
+        status: "已完成"
+      },
+      { id: "send-special-qa", title: "发送专项 QA", status: "进行中" }
+    ]
+  });
+
+  assert.equal(planPresentation(item).status, "等待打包");
+  assert.equal(planPresentation(item).tone, "waiting_package");
+});
+
+test("completed package steps may use the current QA step for inclusion and delivery proof", () => {
+  const warehouse = plan({
+    id: "warehouse-qa",
+    title: "Warehouse QA",
+    currentStepId: "verify-qa-acceptance",
+    currentStep: "等待 QA 验收：TapTap Android 1.0.297(298)，Main/Release r224817/r224818纳入r225189；QA sentMessageId=596755646。",
+    steps: [
+      { id: "package", title: "确认目标包身份与Release r224818进包证明", status: "已完成" },
+      {
+        id: "verify-qa-acceptance",
+        title: "等待 QA 验收",
+        status: "进行中",
+        detail: "TapTap Android 1.0.297(298)，Main/Release r224817/r224818纳入r225189；QA sentMessageId=596755646。"
+      }
+    ]
+  });
+  assert.equal(planPresentation(warehouse).tone, "qa");
+
+  const unifiedPackage = plan({
+    id: "unified-package-qa",
+    title: "Unified package QA",
+    currentStepId: "verify",
+    currentStep: "Android 1.0.300(301) QA文件已发送并回读，等待专项结论。",
+    steps: [
+      { id: "build", title: "构建r226029 Android与PC产物", status: "已完成" },
+      { id: "verify", title: "等待Android QA验证", status: "进行中", detail: "Android 1.0.300(301) QA文件已发送并回读。" }
+    ]
+  });
+  assert.equal(planPresentation(unifiedPackage).tone, "qa");
 });
 
 test("plan presentation keeps an available CLI fallback actionable instead of calling it an environment wait", () => {
@@ -537,7 +641,12 @@ test("plans awaiting approval sort first, then by Manager presentation status an
       waitingFor: "等待目标包身份",
       steps: [
         { id: "implement", title: "完成实现", status: "已完成" },
-        { id: "matching-tests", title: "完成匹配测试", status: "已完成" },
+        {
+          id: "matching-tests",
+          title: "完成匹配测试",
+          detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+          status: "已完成"
+        },
         { id: "package", title: "等待目标包", status: "进行中" }
       ],
       updatedAt: "2026-07-28T03:00:00.000Z"
@@ -693,25 +802,101 @@ test("plan pages filter by the requested view and full plan query before advanci
 
 test("plan pages apply Manager-side status filters and update-time sorting before pagination", () => {
   const presented = presentPlans([
-    plan({ id: "running-old", title: "Running old", updatedAt: "2026-07-01T00:00:00.000Z" }),
-    plan({ id: "done-new", title: "Done new", status: "已完成", updatedAt: "2026-07-04T00:00:00.000Z" }),
-    plan({ id: "running-new", title: "Running new", updatedAt: "2026-07-03T00:00:00.000Z" })
+    plan({ id: "running-old", title: "Running old", updatedAt: "2026-07-01T00:00:00.000Z", keywords: ["WebGUI"] }),
+    plan({ id: "done-new", title: "Done new", status: "已完成", updatedAt: "2026-07-04T00:00:00.000Z", keywords: ["Release"] }),
+    plan({ id: "running-new", title: "Running new", updatedAt: "2026-07-03T00:00:00.000Z", keywords: ["WebGUI", "Performance"] })
   ]);
 
   const byTime = paginateRolePlans(presented, "", 8, { view: "plans", sort: "updated" });
   const runningOnly = paginateRolePlans(presented, "", 8, {
     view: "plans",
     sort: "updated",
-    statuses: ["正在执行"]
+    statuses: ["正在执行"],
+    tags: ["performance"]
   });
 
   assert.deepEqual(byTime.items.map((item) => item.id), ["done-new", "running-new", "running-old"]);
-  assert.deepEqual(runningOnly.items.map((item) => item.id), ["running-new", "running-old"]);
-  assert.equal(runningOnly.total, 2);
+  assert.deepEqual(runningOnly.items.map((item) => item.id), ["running-new"]);
+  assert.equal(runningOnly.total, 1);
   assert.deepEqual(byTime.facets.statuses.map((item) => [item.status, item.count]), [
     ["正在执行", 2],
     ["已完成", 1]
   ]);
+  assert.deepEqual(byTime.facets.tags, [
+    { tag: "WebGUI", count: 2 },
+    { tag: "Performance", count: 1 },
+    { tag: "Release", count: 1 }
+  ]);
+});
+
+test("later plan pages can omit repeated filter facets", () => {
+  const presented = presentPlans([
+    plan({ id: "one", title: "One", keywords: ["WebGUI", "Performance"] }),
+    plan({ id: "two", title: "Two", keywords: ["Release"] })
+  ]);
+
+  const page = paginateRolePlans(presented, "1", 1, { includeFacets: false });
+
+  assert.equal(page.items.length, 1);
+  assert.deepEqual(page.facets, { statuses: [], tags: [] });
+});
+
+test("plan pages sort importance and urgency before pagination", () => {
+  const presented = presentPlans([
+    plan({ id: "missing", title: "Missing priority", updatedAt: "2026-08-01T00:00:00.000Z" }),
+    plan({ id: "low", title: "Low", importance: 3, urgency: 3, updatedAt: "2026-08-01T00:00:00.000Z" }),
+    plan({ id: "general", title: "General", priority: "3:一般", urgency: 2, updatedAt: "2026-08-01T00:00:00.000Z" }),
+    plan({ id: "high", title: "High", importance: 1, urgency: 1, updatedAt: "2026-08-01T00:00:00.000Z" }),
+    plan({ id: "important", title: "Important", priority: "2:重要", updatedAt: "2026-08-01T00:00:00.000Z" }),
+    plan({ id: "p0", title: "P0", importance: 0, updatedAt: "2026-08-01T00:00:00.000Z" }),
+    plan({ id: "very-important", title: "Very important", priority: "1:非常重要", urgency: 0, updatedAt: "2026-08-01T00:00:00.000Z" }),
+    plan({ id: "medium", title: "Medium", importance: 2, updatedAt: "2026-08-01T00:00:00.000Z" })
+  ]);
+
+  const byImportance = paginateRolePlans(presented, "", 20, { sort: "importance" });
+  const byUrgency = paginateRolePlans(presented, "", 20, { sort: "urgency" });
+
+  assert.deepEqual(byImportance.items.map((item) => item.id), [
+    "p0",
+    "very-important",
+    "high",
+    "important",
+    "general",
+    "medium",
+    "low",
+    "missing"
+  ]);
+  assert.deepEqual(byUrgency.items.map((item) => item.id), [
+    "very-important",
+    "high",
+    "general",
+    "low",
+    "important",
+    "medium",
+    "missing",
+    "p0"
+  ]);
+});
+
+test("plan presentation exposes integer sort levels separately from labels and colors", () => {
+  const presented = presentPlan(plan({
+    id: "integer-levels",
+    title: "Integer levels",
+    status: "进行中",
+    importance: 0,
+    urgency: 2
+  }));
+
+  assert.equal(presented.presentation.statusLevel, 2);
+  assert.equal(presented.presentation.sortBucket, 2);
+  assert.equal(presented.presentation.importance.level, 0);
+  assert.equal(presented.presentation.importance.label, "最高");
+  assert.equal(presented.presentation.urgency.level, 2);
+  assert.equal(presented.presentation.urgency.label, "中");
+  assert.notEqual(
+    presented.presentation.importance.palette.background,
+    presented.presentation.urgency.palette.background
+  );
 });
 
 test("plan page counts summarize the Manager-derived presentation stages", () => {
@@ -724,7 +909,12 @@ test("plan page counts summarize the Manager-derived presentation stages", () =>
       currentStepId: "package",
       waitingFor: "等待目标包身份",
       steps: [
-        { id: "implement", title: "Implement", status: "已完成" },
+        {
+          id: "implement",
+          title: "Implement",
+          detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+          status: "已完成"
+        },
         { id: "package", title: "Package", status: "进行中" }
       ]
     }),
@@ -763,7 +953,7 @@ test("plan page counts summarize the Manager-derived presentation stages", () =>
 test("plan page inputs reject invalid cursors and clamp oversized limits", () => {
   assert.equal(normalizeRolePlanPageLimit(null), 12);
   assert.equal(normalizeRolePlanPageLimit("0"), 1);
-  assert.equal(normalizeRolePlanPageLimit("999"), 50);
+  assert.equal(normalizeRolePlanPageLimit("999"), 250);
   assert.throws(() => normalizeRolePlanPageLimit("many"), /Invalid plan page limit/);
   assert.throws(() => paginateRolePlans([], "next", 12), /Invalid plan page cursor/);
 });
