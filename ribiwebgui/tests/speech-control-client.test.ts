@@ -1,6 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { speechControlClient } from "../src/speech/speechControlClient";
+import { SpeechControlRequestError, speechControlClient } from "../src/speech/speechControlClient";
+
+test("preserves runtime failure reason and recovery action from Manager", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: -1,
+    message: "RabiSpeech 启动超时。",
+    detail: "健康检查在 5 秒内没有响应。",
+    resolution: "关闭语音服务后重新启动；仍失败时查看启动日志。"
+  }), {
+    status: 502,
+    headers: { "content-type": "application/json" }
+  })) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => speechControlClient.startRuntime(),
+      (error: unknown) => {
+        assert.ok(error instanceof SpeechControlRequestError);
+        assert.equal(error.message, "RabiSpeech 启动超时。");
+        assert.match(error.detail, /5 秒/);
+        assert.match(error.resolution, /启动日志/);
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("maps speaker identity and persistent record commands to Manager endpoints", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
@@ -145,7 +173,8 @@ test("updates and reconciles the host microphone without a Route selector", asyn
       asrModel: "faster-whisper/small",
       language: "zh",
       prompt: null,
-      suppressDuringPlayback: true
+      suppressDuringPlayback: true,
+      streamingEnabled: false
     });
     await speechControlClient.reconcileMicrophone();
   } finally {
@@ -156,6 +185,7 @@ test("updates and reconciles the host microphone without a Route selector", asyn
   assert.equal(requests[0]?.init.method, "PUT");
   const body = JSON.parse(String(requests[0]?.init.body));
   assert.equal(body.asrModel, "faster-whisper/small");
+  assert.equal(body.streamingEnabled, false);
   assert.equal("routeId" in body, false);
   assert.equal("sessionId" in body, false);
   assert.equal(requests[1]?.url, "/api/speech/microphone/reconcile");

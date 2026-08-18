@@ -156,3 +156,43 @@ test("equivalent workspace replies reserve, release, and commit pendingResponseD
   assert.equal(completed?.pendingResponseDeliveryId, undefined);
   assert.equal(completed?.response?.deliveryId, retry.deliveryId);
 });
+
+test("open requests reassign detached Message Agent parties and retain reply aliases", () => {
+  const store = new AgentRequestStore(new MemoryPersistence());
+  const request = store.prepare({
+    source: { threadId: "old-message", agentType: "message_processing", workspace: "C:\\repo" },
+    target: parties().target,
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+  store.commit(request);
+
+  const result = store.reconcileOpenParties((party, _record, role) => role === "source" && party.threadId === "old-message"
+    ? { threadId: "current-message", threadName: "协助处理消息1", agentType: "message_processing", workspace: "C:\\repo" }
+    : undefined);
+
+  assert.equal(result.reassigned.length, 1);
+  assert.equal(store.get(request.requestId || "")?.source.threadId, "current-message");
+  assert.equal(store.resolveReplyDestination(
+    request.requestId || "",
+    parties().target,
+    { threadId: "old-message", agentType: "agent", workspace: "C:\\repo" }
+  )?.threadId, "current-message");
+});
+
+test("pending deliveries to detached Message Agents are cancelled instead of replayed", () => {
+  const store = new AgentRequestStore(new MemoryPersistence());
+  const request = store.prepare({
+    source: parties().source,
+    target: { threadId: "old-message", agentType: "agent", workspace: "C:\\repo" },
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+
+  const result = store.reconcileOpenParties((party, _record, role) => role === "target" && party.threadId === "old-message"
+    ? { threadId: "current-message", threadName: "协助处理消息1", agentType: "agent", workspace: "C:\\repo" }
+    : undefined);
+
+  assert.equal(result.cancelled.length, 1);
+  assert.equal(store.get(request.requestId || "")?.status, "cancelled");
+});

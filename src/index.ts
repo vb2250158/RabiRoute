@@ -37,6 +37,7 @@ import {
   type WearableHealthAlertDeliveryContext
 } from "./wearableHealthAlertDelivery.js";
 import type { WearableHealthAlert } from "./wearableHealth.js";
+import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
 
 type GatewayStatus = {
   messageAdapter?: {
@@ -492,6 +493,11 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
 const adapters = config.messageAdapterTypes.length > 0
   ? config.messageAdapterTypes.map(createMessageAdapterByType)
   : [createMessageAdapter()];
+
+const stopPerformanceReporter = startGatewayPerformanceReporter();
+process.once("SIGINT", stopPerformanceReporter);
+process.once("SIGTERM", stopPerformanceReporter);
+process.once("beforeExit", stopPerformanceReporter);
 
 for (const adapter of adapters) {
   patchMessageAdapterStatus({

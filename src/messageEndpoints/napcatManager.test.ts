@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  autoLoginNapcatInstancesOnRabiStart,
   ensureNapcatInstanceReady,
   launchNapcatInstance,
   napcatStatusHasUsableConnection,
@@ -748,4 +749,128 @@ test("ensure ready ignores other QQ quick-login entries and requests a QR login 
     fs.rmSync(root, { recursive: true, force: true });
     await Promise.all([close(onebot), close(webui)]);
   }
+});
+
+test("Rabi startup auto login runs enabled NapCat instances by default and skips opted-out instances", async () => {
+  const calls: string[] = [];
+  const logs: string[] = [];
+  let releaseChecks!: () => void;
+  const checksReleased = new Promise<void>((resolve) => { releaseChecks = resolve; });
+  const enabledInstances = [{
+    id: "default-on",
+    enabled: true,
+    gatewayPort: 8789,
+    httpUrl: "http://127.0.0.1:3000"
+  }, {
+    id: "explicit-on",
+    enabled: true,
+    autoLoginOnRabiStart: true,
+    gatewayPort: 8791,
+    httpUrl: "http://127.0.0.1:3001"
+  }, {
+    id: "explicit-off",
+    enabled: true,
+    autoLoginOnRabiStart: false,
+    gatewayPort: 8792,
+    httpUrl: "http://127.0.0.1:3002"
+  }, {
+    id: "disabled-instance",
+    enabled: false,
+    gatewayPort: 8793,
+    httpUrl: "http://127.0.0.1:3003"
+  }];
+  const runtimes = [{
+    definition: {
+      id: "enabled-route",
+      enabled: true,
+      messageAdapters: ["napcat"],
+      gatewayPort: 8789,
+      napcatInstances: enabledInstances
+    }
+  }, {
+    definition: {
+      id: "disabled-route",
+      enabled: false,
+      messageAdapters: ["napcat"],
+      gatewayPort: 8800,
+      napcatInstances: [{
+        id: "disabled-route-instance",
+        gatewayPort: 8800,
+        httpUrl: "http://127.0.0.1:3010"
+      }]
+    }
+  }];
+
+  const pendingResults = autoLoginNapcatInstancesOnRabiStart({
+    rootDir: process.cwd(),
+    getRuntimes: () => runtimes,
+    normalizeNapCatInstances: (definition) => definition.napcatInstances ?? [],
+    appendLog: (_runtime, line) => logs.push(line),
+    checkHttpEndpoint: async () => false
+  }, async (_ctx, request) => {
+    calls.push(`${request.gatewayId}/${request.instanceId}`);
+    await checksReleased;
+    return { ok: true, state: "ready" };
+  });
+
+  while (calls.length < 2) await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, [
+    "enabled-route/default-on",
+    "enabled-route/explicit-on"
+  ]);
+  releaseChecks();
+  const results = await pendingResults;
+  assert.equal(results.length, 2);
+  assert.equal(logs.length, 2);
+  assert.match(logs[0] ?? "", /startup auto login.*default-on.*ready/i);
+});
+
+test("Rabi startup auto login keeps the same QQ serialized while other accounts run concurrently", async () => {
+  const calls: string[] = [];
+  let releaseFirstAccount!: () => void;
+  const firstAccountReleased = new Promise<void>((resolve) => { releaseFirstAccount = resolve; });
+  const instances = [{
+    id: "same-qq-first",
+    botUserId: "10000",
+    gatewayPort: 8789,
+    httpUrl: "http://127.0.0.1:3000"
+  }, {
+    id: "same-qq-second",
+    botUserId: "10000",
+    gatewayPort: 8791,
+    httpUrl: "http://127.0.0.1:3001"
+  }, {
+    id: "other-qq",
+    botUserId: "20000",
+    gatewayPort: 8792,
+    httpUrl: "http://127.0.0.1:3002"
+  }];
+  const runtime = {
+    definition: {
+      id: "route",
+      enabled: true,
+      messageAdapters: ["napcat"],
+      gatewayPort: 8789,
+      napcatInstances: instances
+    }
+  };
+
+  const pending = autoLoginNapcatInstancesOnRabiStart({
+    rootDir: process.cwd(),
+    getRuntimes: () => [runtime],
+    normalizeNapCatInstances: () => instances,
+    appendLog: () => undefined,
+    checkHttpEndpoint: async () => false
+  }, async (_ctx, request) => {
+    calls.push(String(request.instanceId));
+    if (request.instanceId === "same-qq-first") await firstAccountReleased;
+    return { ok: true, state: "ready" };
+  });
+
+  while (calls.length < 2) await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["same-qq-first", "other-qq"]);
+  releaseFirstAccount();
+  await pending;
+  assert.deepEqual(calls, ["same-qq-first", "other-qq", "same-qq-second"]);
 });

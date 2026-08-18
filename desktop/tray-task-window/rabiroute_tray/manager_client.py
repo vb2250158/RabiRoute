@@ -42,6 +42,19 @@ class RolePanelSendResult:
 
 
 @dataclass(frozen=True)
+class SelectionSpeechSettings:
+    enabled: bool = False
+    advanced: bool = False
+    model: str = ""
+
+
+@dataclass(frozen=True)
+class SpeechActionResult:
+    ok: bool
+    message: str = ""
+
+
+@dataclass(frozen=True)
 class PlanFeedbackSubmitResult:
     ok: bool
     delivery_status: str = ""
@@ -180,6 +193,47 @@ class ManagerClient:
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
             return RolePanelSendResult(ok=False, message=str(error))
 
+    def selection_speech_settings(self) -> SelectionSpeechSettings:
+        payload = self._get_json("/api/speech/selection-reader/settings")
+        data = payload.get("data")
+        row = data if isinstance(data, dict) else {}
+        return SelectionSpeechSettings(
+            enabled=row.get("enabled") is True,
+            advanced=row.get("advanced") is True,
+            model=str(row.get("model") or "").strip()[:200],
+        )
+
+    def speech_models(self) -> list[dict[str, Any]]:
+        payload = self._get_json("/api/speech/models")
+        data = payload.get("data")
+        rows = data.get("models") if isinstance(data, dict) else []
+        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+    def synthesize_speech(self, text: str, model: str) -> SpeechActionResult:
+        try:
+            self._post_binary(
+                "/api/speech/tts",
+                {
+                    "model": model,
+                    "input": text,
+                    "voice": "default",
+                    "responseFormat": "wav",
+                    "speed": 1,
+                    "language": None,
+                    "instructions": None,
+                    "sampleRate": None,
+                    "play": True,
+                    "sessionId": None,
+                    "routeId": None,
+                },
+                timeout_seconds=120,
+            )
+            return SpeechActionResult(ok=True)
+        except HTTPError as error:
+            return SpeechActionResult(ok=False, message=self._error_message(error))
+        except (OSError, URLError, TimeoutError) as error:
+            return SpeechActionResult(ok=False, message=str(error))
+
     def submit_plan_feedback(
         self,
         role_id: str,
@@ -232,6 +286,13 @@ class ManagerClient:
         request.add_header("content-type", "application/json; charset=utf-8")
         with urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _post_binary(self, path: str, payload: dict[str, Any], timeout_seconds: float | None = None) -> None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = Request(f"{self.manager_url}{path}", data=data, method="POST")
+        request.add_header("content-type", "application/json; charset=utf-8")
+        with urlopen(request, timeout=timeout_seconds or self.timeout_seconds):
+            return
 
     def _error_message(self, error: HTTPError) -> str:
         try:

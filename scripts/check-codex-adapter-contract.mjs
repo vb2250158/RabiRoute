@@ -34,9 +34,11 @@ assert.match(sessionResolver, /resolveCodexSession/);
 assert.match(sessionResolver, /dependencies\.deliver/);
 assert.match(sessionResolver, /if \(exact\)/);
 assert.match(sessionResolver, /exact\.cwd[\s\S]*sameCodexWorkspace/);
-assert.match(sessionResolver, /if \(exact\.archived\)/);
-assert.ok(sessionResolver.indexOf("if (archivedBinding)") < sessionResolver.indexOf("createIdempotently(params.title"),
-  "An archived saved binding may rebind an existing active same-name task, but must fail before replacement creation.");
+assert.match(sessionResolver, /if \(!exact\.archived\) return \{ kind: "id", thread: exact \}/);
+assert.match(sessionResolver, /reason: "archived"/);
+assert.match(sessionResolver, /previousThread: exact/);
+assert.ok(sessionResolver.indexOf('reason: "archived"') < sessionResolver.indexOf("const matches ="),
+  "An archived saved binding must create a new task before any same-name lookup can reuse another task.");
 assert.doesNotMatch(sessionResolver, /exact\.title\s*===\s*params\.title/,
   "Mutable Desktop/SQLite title metadata must not invalidate a stable task ID binding.");
 assert.match(runtime, /bootstrapEmptyDesktopThread/);
@@ -48,8 +50,8 @@ for (const source of [overview, routeConfig, runtimeLog]) {
   assert.doesNotMatch(source, /app-server-stdio|app-server stdio|共用同一个 Runtime/);
 }
 assert.match(routeConfig, /Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime/);
-assert.doesNotMatch(routeConfig, /createIfMissing:\s*true/);
 assert.match(routeConfig, /createIfMissing:\s*false/);
+assert.match(routeConfig, /initializeCodexPlanAssistants[\s\S]*createIfMissing:\s*true/);
 assert.doesNotMatch(routeConfig, /@blur="ensureCodexThreadBinding"/);
 assert.match(gatewayStore, /await bindCodexSessionForSave\(selectedGateway\.value/);
 assert.match(sessionBinding, /createIfMissing:\s*true/);
@@ -81,4 +83,4 @@ if (fs.existsSync(builtAgentThreadsPath)) {
     "The runnable dist/agentThreads.js must contain the canonical resolver.");
 }
 
-console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID plus workspace remains stable across title changes; archived duplicates may rebind existing active tasks but never create replacements.");
+console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID plus workspace remains stable across title changes; archived bindings create and persist a new task without same-name reuse.");

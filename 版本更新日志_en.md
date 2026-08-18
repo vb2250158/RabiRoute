@@ -8,6 +8,92 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased - 2026-08-12
 
+### Archived Agent tasks are replaced automatically
+
+- When the bound Primary Persona, Message Agent, or plan secretary task is archived, the next real delivery creates a new Desktop task, persists the replacement binding, and delivers to the new task. RabiRoute does not deliver into archived history or reuse another same-name task.
+- Message Agents keep their slot number, affinity history, and message associations while resetting initialization for the new task. Plan secretaries update both the Route `codexPlanAssistantSessions` entry and the plan `secretaryBinding`.
+- Scans, status refreshes, and input blur remain read-only and never create tasks. Real prompts still use only `RabiRoute -> Desktop IPC -> target task owner`; no fallback Runtime is introduced.
+
+### Windows supports system-wide selected-text actions
+
+- After Speech Service is enabled, the TTS page can turn on **Read selected text aloud**. Drag-selecting text in any Windows app that exposes text selection shows two system-level actions: the left action reads it aloud, and the right action sends it to the persona Route currently selected in the tray.
+- Selection alone never reads or sends text. The feature follows the current available default TTS model, while **Advanced options** reveals a fixed model selector. Manager persists one host setting shared by the tray and WebGUI.
+
+### WebGUI page labels switch immediately
+
+- Clicking Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, Performance, or Runtime Diagnostics immediately updates the selected state, top title, and URL and shows a shared loading message.
+- Page code and data load asynchronously after the switch. If an old page chunk is no longer available, WebGUI still refreshes once and restores the intended page.
+- The Chinese UI no longer rescans every added subtree for translation. English DOM localization is split into batches of at most 4 ms and 200 nodes per frame, preventing large pages such as Message Adapters from creating one translation long task during mount.
+
+### Heavy Manager requests no longer occupy the HTTP main thread
+
+- Codex Desktop task-catalog discovery now waits at most eight seconds. A timeout stops the short-lived metadata process, returns partial discovery results, and shows a retry hint. Performance logs add `manager.agent_scan.desktop_ready` and `manager.agent_scan.codex_catalog` to distinguish Desktop connectivity from task-catalog latency.
+- The process-wide low-priority heavy-read budget increases from one to two. Agent discovery remains isolated in a child process while one execution slot stays available for memory or performance reads, avoiding queue waits close to one minute.
+- Heavy read tasks moved from Worker Threads to low-priority child processes. A memory-catalog scan had produced a 2866.8 ms Manager event-loop maximum; process isolation keeps heavy reads out of the HTTP process's V8 runtime and scheduling class.
+- Read tasks reuse resident child processes instead of restarting a process and reloading modules for every memory read, Agent scan, or performance query. All pools share a process-wide limit of two heavy tasks; `/meta` exposes `executionMode`, `workerPids`, the shared budget, current process count, and cumulative spawn count.
+- Performance aggregation, raw JSONL parsing, and response JSON serialization use a dedicated single-process pool. Identical queries share one task, only one task may wait, and saturation returns 503 with no HTTP-main-thread fallback. Manager streams performance history one record at a time during startup.
+- Agent discovery moved into a dedicated bounded child process, and concurrent identical scans share one task. Codex Desktop tasks default to pages of 200; Route settings and Quick Setup can load more instead of constructing an approximately 12 MB task list at once.
+- Recent and consolidated memory enumeration, Markdown/JSON parsing, lifecycle projection, and `viewedAt` writes moved into child processes. Reading one memory no longer rescans the full directory on the HTTP main thread.
+- The message-processing board now returns a summary DTO and omits attachments, raw reply context, and complete evidence from list responses; the requirement-detail API still returns the complete record.
+- Added stage telemetry for Agent discovery, memory Workers, message-board summaries, and RabiSpeech `/health` and `/v1/capabilities`; `/meta.agentScanWorkers` exposes discovery queue status.
+- Concurrent RabiSpeech status readers now share one local probe, adjacent calls reuse a 500 ms status result, and telemetry records `manager.speech.status.shared_flight` plus `manager.speech.status.cache_hit`, avoiding duplicate timeout requests when the service is offline.
+
+### Older group sources can restore exact send-review evidence
+
+- When a source message falls outside the recent window, `send-context` restores only one record with the same Route and source ID from the persona's formal group history. Missing, duplicate, or conflicting Route evidence is rejected instead of returning the misleading `found 0 context records` result.
+- Reference and image checks for tracked group replies use the formal source evidence bound to that approval. A stale `conversationKey` cannot rewrite the formal group; group, Route, instance, or target mismatches and unreviewed image attachments still fail closed. Ordinary untracked sends do not use this recovery.
+
+### Manager recovery safely resumes confirmed-missing sends and task creation
+
+- An absent managed-send receipt now returns `missing` instead of being mislabeled `uncertain`. With the original `deliveryId` and an unchanged payload, Manager retries once only when the same Route's Outbox authoritatively contains neither a request nor a terminal record. An existing request, a different payload digest, or another non-terminal retry remains non-replayable.
+- A Codex task creation reservation stuck in `creating` for more than five minutes may move through `failed_before_create` and retry only when it has no `threadId` and a second `state_db` lookup finds no task with the same name and workspace. An existing `threadId` or insufficient lookup evidence becomes `uncertain` and cannot create a duplicate.
+
+### Incomplete plan feedback resumes after Manager recovery
+
+- After startup, Manager scans `pending/failed` plan guidance and approvals and reads the original bound task by stable `feedbackId`. Accepted feedback only receives its missing delivery receipt; active tasks and failed readbacks wait; confirmed-missing feedback is replayed once during the current Manager process, avoiding both permanent interruption loss and blind duplicate sends.
+- Business tasks now write results with stable ID `response-<feedbackId>`, and recovery recognizes that result before reading Desktop history. If Desktop accepted a turn but the IPC response timed out, Manager briefly continues readback; an active turn remains `pending` instead of being immediately marked failed or replayed.
+
+### RabiSpeech startup failures are actionable
+
+- Manager now launches RabiSpeech through `scripts/start.ps1`, keeping Python, private dependencies, and NVIDIA DLL paths consistent with manual startup. `/health` now performs only fast readiness detection, so model discovery and warm-up no longer make an online service appear to have timed out.
+- The Speech Service page renders separate cause and recovery lines. Missing dependencies, port 8781 conflicts, configuration errors, and readiness timeouts receive matching actions, while only a sanitized startup-log tail is returned.
+
+### Work-group issues support managed registration
+
+- XinghaiBuilder's managed issue registration now accepts work-group issues with a verified quoted claim. It restricts the source to group `474222421`, verifies the source message and a matching claim receipt with `status=sent` plus `sentMessageId`, enforces unique plan/task bindings, two deduplication passes, and three-way workspace agreement, and idempotently produces a `governanceVersion=3` mapping. Tencent Sheet and direct user-request registration semantics are unchanged.
+- A legacy unified-Outbox claim that was really sent but missed the dedicated receipt ledger can now be recovered only after the local outbound record and the live NapCat reply segment agree. Forged input, one-sided logs, and non-sent records remain rejected, and recovery does not resend the group message.
+- Work-group `begin` no longer limits business-task types to a fixed legacy list. Structurally valid formal tasks such as `[PangHu][只读调查] ...` are validated through full task ID, workspace, plan binding, and registration mapping, while Plan Secretary titles and unstructured impersonation remain rejected.
+
+### PangHu Main development no longer waits for an exclusive Unity workstation
+
+- PangHu plans no longer freeze because the formal Main Unity Editor is open, importing, temporarily unavailable through MCP, or using a shared test queue. The original business task continues implementation, narrow SVN work, static asset and serialization contracts, non-Unity runners, and CLI validation; remaining GameView or interaction checks become human or later runtime acceptance.
+- Plan orchestration, Plan Secretary, closure Skills, completion-message templates, and the PangHu package/QA contract now use the same rule. The Editor and another task's tests remain undisturbed, while unrelated full-suite failures are recorded without blocking matched validation or feature development.
+
+### Package and QA use a four-stage delivery lifecycle
+
+- Non-terminal plans expose only green `In progress`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification`. External decisions, permissions, information, assets, accounts, devices, owners, and receipts remain internal gap details; `manual-verify-*` appears only after development closure when a visual or interaction check remains.
+- Awaiting package reads revisions, applicability, matching-test results, submission, and conflict-free readback from the plan's completed delivery steps. A later delivery-verification step does not return a plan to In progress when those five requirements are complete and only package identity or inclusion proof is missing; a missing requirement continues the original task.
+- QA sending and `sentMessageId` no longer create a `package complete, send QA` main stage. Inside green QA, a missing receipt selects `send_qa_request`; a real receipt with only the verdict outstanding selects `wait_for_qa_result`. Strict audit rejects contradictory structured steps and wait text.
+- QA feedback is consumed only for a structured QA step when a user or external source states an explicit QA verdict. Guidance responses, approval responses, Agent-reported test counts, and bare `passed / verified` prose cannot complete a plan.
+
+### Plan lists support combined status and tag filters
+
+- Status, importance, and urgency sorting now compare Manager-projected integer levels, while update-time sorting continues to compare timestamps. Importance and urgency use `0–4`; labels and colors are mapped separately. Legacy `priority` and `dueAt` remain read compatibility inputs. Highest importance now precedes high, medium, low, and unset plans.
+- Removed the duplicate leading status badge from plan-directory rows. Each row now keeps exactly one trailing label for the active sort mode: status, relative update time, importance, or urgency, with distinct colors for different levels.
+- **List sorting and filters** now uses extensible groups. In addition to presentation statuses, users can search and select plan `keywords` tags. Values within each group use OR matching, while plans must match both groups.
+- The trigger and result summary show the active filter count, with per-group clear actions and **Clear filters**. **Done** still sends the draft to Manager, which applies it before pagination so the directory and cards share one result.
+- Narrow screens stack the groups into one column. Checkboxes, close controls, and actions keep at least 44px targets with visible keyboard focus.
+
+### Delivery prompts and language-style risk control
+
+- Default workspace policy, proactive communication, Agent reply contracts, Message Agent initialization, and Plan Secretary notices now use compact wording. Repeated explanations moved to documentation or Skills. Current persona templates were shortened while preserving project ownership, task binding, attachment review, delivery exit, and receipt boundaries.
+- Personas may bind a target language-style Skill through `languageStyle.styleSkillUrl`. `/api/agent/send` defaults to `styleValidation=1`; failures return reasons before Outbox, and the same `deliveryId` may be confirmed with `styleValidation=0`.
+- Added `POST /api/language-style/validate`. The Codex language-style Hook uses the same endpoint and reports only failed checks without rewriting or blocking output.
+
+### Codex Hook plugins remain independent
+
+- `rabi-codex-context` Hook commands load scripts only from their own `PLUGIN_ROOT`. A regression test now forbids references or writes to `.codex`, `.agents`, `config.toml`, `marketplace.json`, or another plugin, so an independent language-style Hook can register the same lifecycle events alongside RabiRoute.
+
 ### Outbound messages are attributable to an Agent session
 
 - `/api/agent/send` now requires `sender.agentType` and `sender.sessionId` for every message channel. Completed results and idempotency receipts retain both fields, and requests missing either field are rejected before Outbox.
@@ -120,6 +206,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Message-group and Message Agent configuration, phase one
 
+- Fixed plan-progress notifications, plan/memory callback reminders, and pending Agent-to-Agent replies continuing to target an old Message Agent task after **Message Agent mode** was disabled, which made Codex Desktop switch tasks automatically. New chat messages and those unfinished follow-ups now go to the current Route's Primary Persona. Existing tasks and audit records remain but are no longer opened by these deliveries. If the Primary Persona is not Codex or lacks a complete task binding, delivery fails closed instead of silently selecting another task.
 - Codex **Plan assistant tasks** now have a separate enable switch like **Message Agent mode**. Turning it off stops secretary handoff and automatic secretary-model selection while retaining the bound Desktop tasks for reuse. Manager now owns one shared `codexPlanAssistantModel`, defaulting to `gpt-5.6-terra`, instead of persisting a model per secretary. Existing bindings and legacy per-task models migrate on read, and WebGUI verifies that the running Manager preserves both the switch and shared model after save.
 - With Plan Secretary enabled, Manager persists a separate `secretaryBinding` for every plan. WebGUI guidance/approval still reaches the business `taskBinding`, while the responsible Secretary simultaneously receives the control notice. Business-task Stop Hooks, ordinary progress, and state changes also go to the Secretary first instead of waking the Primary Persona by default. The Secretary escalates only decisions, approval, authorization, missing user input, cross-plan conflicts, complete closure, or safety-reviewed outbound communication. The original Primary Persona fallback remains when no usable Secretary is available so notifications are not lost.
 - QQ, personal Weixin, Feishu, WeCom, role-panel, and RabiLink text chats now use message groups automatically without a per-endpoint switch. Endpoint cards retain only normal-pause, incomplete-sentence, and maximum-wait values. ASR/voice transcripts, heartbeat, commands, approvals, health alerts, and structured events continue direct delivery without added waiting.
@@ -191,13 +278,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Manager-owned plan presentation and paused-resume contract
 
-- Manager now derives the shared Awaiting approval, Awaiting QA acceptance, Executing, external-wait, and Awaiting shared package stages together with ordering and counts. The QA tone keeps its existing purple palette, while WebGUI and the Qt tray consume this DTO without reclassifying business state.
+- Manager now derives the shared Awaiting approval, Awaiting QA acceptance, Executing, external-wait, and Awaiting shared package stages together with ordering and counts. All actionable non-terminal stages use green, while real external waits use red; WebGUI and the Qt tray consume this DTO without reclassifying business state.
 - The `implementation/development validation → Awaiting shared package → Awaiting QA acceptance → complete on QA pass; return to implementation on failure` lifecycle is required only for plans that change project content such as code, prefabs, assets, or configuration. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance keep their real steps and wait reasons; Agents and batch jobs must not manufacture package or QA steps for them.
 - A paused plan must retain exactly one in-progress resume step addressed by `currentStepId`; plan writes, work-cycle finish preflight, and strict audit consistently fail closed on missing, mismatched, or multiple resume points.
 - Thread reconciliation reuses Manager presentation and real send receipts to classify idle work as `terminal / blocked / actionable / frozen / waiting_result`, avoiding duplicate inquiries after a verified delivery that is waiting only for a result.
-- Environment waiting now means a real runner, MCP service, device, or listener is unavailable with no CLI, fallback-validation, or retry path. Explicit Unity prohibitions show `Waiting for renewed authorization`. A missing QA send receipt remains actionable when sending can be repaired; QA waiting begins only after target-package completion, a real send receipt, and no remaining action except the verdict.
+- Runner, MCP, device, listener, and Unity authorization gaps remain internal. Available CLI, fallback validation, retries, sending, or repair show `Executing`; no safe action shows `Paused`.
 - A repair branch that applies only after a failed QA verdict is no longer treated as current local work, so a verified receipt that explicitly waits only for QA and forbids resending remains `waiting_result`; an older QA receipt does not cover a later owner review or placement confirmation, which remains `actionable`. `work-cycle begin` now gives idempotent Manager GETs bounded retries with a per-attempt timeout and creates no history snapshot or cycle before recent memory is available; side-effecting POST and PATCH requests are still never replayed automatically.
-- Plan presentation no longer treats historical completion text such as “runtime screenshots sent” in `currentStep/detail` as a current send action. Only explicit action sentences in `nextAction` and the current step title count. A delivered review that only awaits a result stays `Awaiting external response`, while a still-pending CLI, repair, or send instruction remains `Executing`.
+- Plan presentation no longer treats historical completion text such as “runtime screenshots sent” in `currentStep/detail` as a current send action. A result-only wait with no safe action is `Paused`; a pending CLI, repair, or send instruction is `Executing`.
 - Thread reconciliation now exposes `frozen_until_dependencies`: a cross-plan dependency such as a unified package freezes only when structured evidence waits for other original owners and states that no independent CLI, control-plane, or business action remains. Owner coordination, missing contracts, pending replies, retries, and fallback paths remain actionable.
 
 ### Manager single-instance protection, failure evidence, and independent endpoint health
@@ -338,7 +425,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - The current step's `approvalRequest` is now the single blocked-state source of truth. Only a complete actionable contract with `responseStatus=pending` simultaneously derives `Blocked` and `approval.ready/enabled=true`, so every blocked plan is approvable. `isBlocked` is a compatibility projection and `blockedBy` is explanatory text only; legacy non-approval blockers are downgraded to running at read time and cleaned on the next canonical write.
 - Incomplete approval contracts remain approval-disabled but keep the plan running while the Agent investigates, gathers evidence, and repairs the contract. QA waits, missing inputs, execution failures, tool timeouts, external artifacts, and ordinary owner waits must continue through inquiry, retry, rerouting, decomposition, escalation, or alternatives. A real human decision to pause, cancel, narrow scope, or accept risk becomes a concrete approval contract instead of an unapprovable blocker.
-- Manager now derives `waiting_package / Awaiting package` without adding a top-level plan state. A blue badge appears only for a structured current package/build step after prior work is complete and the plan explicitly waits for bundling, building, package inclusion, target identity, or the user starting a build. QA, approval, material waits, and unfinished implementation are excluded. `sortBucket` places these plans below ordinary running work.
+- Manager now derives `waiting_package / Awaiting package` without adding a top-level plan state. A green badge appears only for a structured current package/build step after prior work is complete and the plan explicitly waits for bundling, building, package inclusion, target identity, or the user starting a build. QA, approval, material waits, and unfinished implementation are excluded. `sortBucket` places these plans below ordinary running work.
 - Explicit QA failure or reproduction reopens investigation on the same plan and `taskBinding`, asks only for the minimum evidence required by the issue type, and completes acceptance only after an explicit QA pass.
 - RibiWebGUI and the Qt tray continue to consume only Manager's shared `presentation`. The public Rabi plan-tracking Skill and AgentPacket now forbid hand-written `isBlocked`; each inspection must choose a verifiable next action for non-approval obstacles, and contract-external implementation stops only after the approval contract becomes complete and pending.
 
@@ -429,7 +516,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - `presentation.approval` now centrally returns `none / incomplete / ready`, `missing[]`, and normalized details. WebGUI and tray render the same content, and both `incomplete` and `ready` accept feedback. The tracking Skill and shared AgentPacket hints tell Agents to use user feedback to add real paths and commands and refresh the description when scope changes.
 - Rabi Manager now centrally derives plan view membership, display status, approval capability, and approval-first/status/update-time ordering. RibiWebGUI and the Qt tray use the same `Current / Plans / Recent Memory / Archived` categories plus the same title/status, current-step, keyword, complete-step, and progress hierarchy.
 - The plan `presentation` DTO now includes one shared status palette. RibiWebGUI and the Qt tray use the same plan-card accent and status-badge foreground/background colors instead of maintaining separate category, sorting, or status-color maps.
-- Plans now support a top-level `暂停` state. It preserves the single in-progress step and `currentStepId` as the resume position, stays out of Current, derives no blocked/QA/approval presentation, uses one shared slate palette, and always sorts after every other plan. While paused, bound Codex-task `Stop` completion reminders are also ignored; resuming only changes the top-level state back to `进行中`. AgentPacket hints, the public tracking Skill, and bilingual interface/UI documentation are synchronized.
+- Plans now support a top-level `暂停` state. It preserves the single in-progress step and `currentStepId`, uses the shared red palette, and always sorts last. Resuming changes only the top-level state back to `进行中`.
 - Added `GET/POST /api/roles/:roleId/plans/:planId/feedback`. WebGUI and tray approval cards can submit guidance; Manager writes a separate `planId/stepId`-associated JSONL audit record and notifies the Agent through the `plan_feedback` system event. A recorded-but-undelivered result keeps the draft and retries with the same `feedbackId`.
 - After receiving approval through QQ or another channel, an Agent can call the same endpoint with `record_only` to record the user's guidance or its handling result. Feedback never advances a plan, approves an external action, or changes status directly; only a later explicit plan PATCH does so.
 
@@ -527,7 +614,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Awaiting-QA-acceptance state for Qt plan cards
 
-- Plan cards derive the purple `Awaiting QA acceptance` badge only from the structured current `qa-* / verify-*` step. QA words inside implementation prose do not change the badge early, and the source plan status remains unchanged.
+- Plan cards derive the green `Awaiting QA acceptance` badge only from the structured current `qa-* / verify-*` step. QA words inside implementation prose do not change the badge early, and the source plan status remains unchanged.
 
 ### Qt tray right-click latency
 

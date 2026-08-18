@@ -30,6 +30,25 @@ export function hasMoreKnowledgeAfterWindow(total: number, start: number, count:
   return safeStart + safeCount < safeTotal;
 }
 
+export function hasMoreKnowledgeBeforeWindow(start: number): boolean {
+  return Math.max(0, Math.trunc(start)) > 0;
+}
+
+export function previousKnowledgeRenderWindow(
+  start: number,
+  count: number,
+  batchSize: number
+): { start: number; count: number } {
+  const safeStart = Math.max(0, Math.trunc(start));
+  const safeCount = Math.max(0, Math.trunc(count));
+  const safeBatchSize = Math.max(0, Math.trunc(batchSize));
+  const previousStart = Math.max(0, safeStart - safeBatchSize);
+  return {
+    start: previousStart,
+    count: safeCount + safeStart - previousStart
+  };
+}
+
 export function shouldAutoLoadNextKnowledgeBatch(
   sentinelIsIntersecting: boolean,
   directoryJumpInProgress: boolean

@@ -89,6 +89,7 @@ export type NapCatInstanceConfig = {
   id: string;
   name: string;
   enabled: boolean;
+  autoLoginOnRabiStart: boolean;
   gatewayPort: number;
   httpUrl: string;
   webuiUrl: string;
@@ -231,6 +232,7 @@ function normalizeNapCatInstance(item: unknown, index: number): NapCatInstanceCo
     id,
     name: String(source.name || source.label || id),
     enabled: source.enabled !== false,
+    autoLoginOnRabiStart: source.autoLoginOnRabiStart !== false,
     gatewayPort,
     httpUrl: String(source.httpUrl || source.napcatHttpUrl || "http://127.0.0.1:3000"),
     webuiUrl: String(source.webuiUrl || source.napcatWebuiUrl || "http://127.0.0.1:6099/webui"),
@@ -468,6 +470,7 @@ const defaultNapCatInstance: NapCatInstanceConfig = {
   id: "default",
   name: "默认 NapCat",
   enabled: true,
+  autoLoginOnRabiStart: true,
   gatewayPort: Number(process.env.GATEWAY_PORT ?? "8789"),
   httpUrl: process.env.NAPCAT_HTTP_URL ?? "http://127.0.0.1:3000",
   webuiUrl: process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
@@ -543,6 +546,10 @@ export const config = {
   codexThreadId: process.env.CODEX_THREAD_ID?.trim() || "",
   codexThreadName: process.env.CODEX_THREAD_NAME ?? "QQ 消息监听",
   codexCwd: normalizeCodexCwd(process.env.CODEX_CWD) ?? process.cwd(),
+  dshSessionId: process.env.DSH_SESSION_ID?.trim() || "",
+  dshSessionName: process.env.DSH_SESSION_NAME?.trim() || "",
+  dshCwd: normalizeCodexCwd(process.env.DSH_CWD) ?? "",
+  dshBaseUrl: process.env.DSH_BASE_URL?.trim() || "http://127.0.0.1:3080",
   codexPlanAssistantEnabled,
   codexPlanAssistantModel,
   codexPlanAssistantSessions: activeCodexPlanAssistantSessions,

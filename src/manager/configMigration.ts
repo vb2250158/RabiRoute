@@ -13,6 +13,7 @@ import {
   type NotificationRuleDefinition,
   type RecentMessageLimits
 } from "../shared/gatewayConfigModel.js";
+import { normalizeLanguageStyleBinding } from "../shared/languageStyle.js";
 import {
   routeRuntimeParts,
   sanitizeConfigName,
@@ -34,7 +35,7 @@ type JsonObject = Record<string, unknown>;
 
 export type PersonaConfigFragment = Pick<
   GatewayDefinition,
-  "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+  "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle"
 >;
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -115,6 +116,9 @@ export function readPersonaConfigFragment(personaConfigPath: string): Partial<Ga
     if (Array.isArray(parsed.speechTriggerKeywords)) {
       fragment.speechTriggerKeywords = normalizeSpeechTriggerKeywords(parsed.speechTriggerKeywords);
     }
+    if (parsed.languageStyle != null) {
+      fragment.languageStyle = normalizeLanguageStyleBinding(parsed.languageStyle);
+    }
   }
   if (rules) {
     fragment.notificationRules = defaultPersonaRules(rules);
@@ -133,6 +137,7 @@ function normalizedPersonaConfigValue(
     recentMessageLimit: legacyRecentMessageLimit,
     recentMessageLimits: existingRecentMessageLimits,
     speechTriggerKeywords: existingSpeechTriggerKeywords,
+    languageStyle: existingLanguageStyle,
     automationRules: existingAutomationRules,
     notificationRules: existingNotificationRules,
     ...base
@@ -142,6 +147,7 @@ function normalizedPersonaConfigValue(
   const recentMessageLimits = fragment.recentMessageLimits ?? existingRecentMessageLimits;
   const recentMessageLimit = fragment.recentMessageLimit ?? legacyRecentMessageLimit;
   const speechTriggerKeywords = fragment.speechTriggerKeywords ?? existingSpeechTriggerKeywords;
+  const languageStyle = fragment.languageStyle ?? existingLanguageStyle;
   const configuredAutomations = normalizePersonaAutomationRules(fragment.automationRules ?? existingAutomationRules);
   const automationRules = ensureDefaultPersonaAutomations(configuredAutomations.length > 0
     ? configuredAutomations
@@ -155,6 +161,7 @@ function normalizedPersonaConfigValue(
     ...(materializeDefaults || Array.isArray(speechTriggerKeywords)
       ? { speechTriggerKeywords: normalizeSpeechTriggerKeywords(speechTriggerKeywords) }
       : {}),
+    ...(languageStyle != null ? { languageStyle: normalizeLanguageStyleBinding(languageStyle) } : {}),
     automationRules
   };
 }

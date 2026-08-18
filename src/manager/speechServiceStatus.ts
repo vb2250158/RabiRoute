@@ -8,6 +8,8 @@ export type SpeechProviderStatus = SpeechProvider;
 export type SpeechServiceStatus = SpeechRuntimeStatus;
 
 import { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
+import { recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
+import { managerSpeechProbeOperation } from "../shared/performanceOperations.js";
 export { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
 
 type FetchLike = typeof fetch;
@@ -85,6 +87,9 @@ function normalizeSpeakerIdentityCapability(value: unknown): SpeechSpeakerIdenti
 async function requestJson(fetchImpl: FetchLike, url: string, timeoutMs: number): Promise<Record<string, unknown>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const endpoint = new URL(url).pathname;
+  const operation = managerSpeechProbeOperation(endpoint === "/health" ? "health" : "capabilities");
+  const startedAt = performance.now();
   try {
     const response = await fetchImpl(url, {
       method: "GET",
@@ -92,7 +97,21 @@ async function requestJson(fetchImpl: FetchLike, url: string, timeoutMs: number)
       signal: controller.signal
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return asRecord(await response.json());
+    const result = asRecord(await response.json());
+    recordPerformanceOperation(operation, performance.now() - startedAt);
+    return result;
+  } catch (error) {
+    recordPerformanceOperation(operation, performance.now() - startedAt, true);
+    if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+      throw new Error(`${endpoint} 在 ${timeoutMs} 毫秒内没有响应。`);
+    }
+    const cause = error && typeof error === "object" && "cause" in error
+      ? (error as { cause?: { code?: unknown } }).cause
+      : undefined;
+    if (cause?.code === "ECONNREFUSED") {
+      throw new Error(`${endpoint} 无法连接到本机 RabiSpeech。`);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -100,7 +119,7 @@ async function requestJson(fetchImpl: FetchLike, url: string, timeoutMs: number)
 
 export async function inspectLocalSpeechService(
   configuredUrl: string,
-  options: { fetchImpl?: FetchLike; timeoutMs?: number } = {}
+  options: { fetchImpl?: FetchLike; timeoutMs?: number; includeCapabilities?: boolean } = {}
 ): Promise<SpeechServiceStatus> {
   const checkedAt = new Date().toISOString();
   const empty = { tts: [] as SpeechProviderStatus[], asr: [] as SpeechProviderStatus[] };
@@ -121,14 +140,15 @@ export async function inspectLocalSpeechService(
   const fetchImpl = options.fetchImpl ?? fetch;
   const startedAt = performance.now();
   try {
-    const capabilitiesRequest = requestJson(
-      fetchImpl,
-      `${baseUrl}/v1/capabilities`,
-      options.timeoutMs ?? 5000
-    ).catch((): Record<string, unknown> => ({}));
     const health = await requestJson(fetchImpl, `${baseUrl}/health`, options.timeoutMs ?? 5000);
+    const capabilities = options.includeCapabilities === false
+      ? {}
+      : await requestJson(
+          fetchImpl,
+          `${baseUrl}/v1/capabilities`,
+          options.timeoutMs ?? 5000
+        ).catch((): Record<string, unknown> => ({}));
     // Older RabiSpeech versions expose the same provider data from /health.
-    const capabilities = await capabilitiesRequest;
     const providers = asRecord(health.providers || capabilities.providers);
     const defaults = asRecord(providers.defaults);
     return {

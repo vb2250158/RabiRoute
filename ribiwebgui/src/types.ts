@@ -63,6 +63,13 @@ export type AgentScanResult = {
   endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
+  sessionPage?: {
+    offset: number;
+    limit: number;
+    returned: number;
+    hasMore: boolean;
+    nextOffset?: number;
+  };
   plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
   warnings?: string[];
 };
@@ -256,6 +263,8 @@ export type RolePlan = {
   title: string;
   focus: string;
   status: "未开始" | "进行中" | "暂停" | "已完成" | "已归档";
+  importance?: number;
+  urgency?: number;
   priority?: string;
   kind?: string;
   currentStep?: string;
@@ -290,13 +299,34 @@ export type RolePlan = {
   keywords: string[];
   presentation: {
     status: string;
-    tone: "blocked" | "qa" | "running" | "waiting_external" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
+    tone: "blocked" | "manual_verification" | "qa" | "running" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
+    statusLevel?: number;
     sortBucket: number;
     views: Array<"current" | "plans" | "archived">;
     palette: {
       accent: string;
       background: string;
       foreground: string;
+    };
+    importance?: {
+      level: number;
+      label: string;
+      labelEn: string;
+      palette: {
+        accent: string;
+        background: string;
+        foreground: string;
+      };
+    };
+    urgency?: {
+      level: number;
+      label: string;
+      labelEn: string;
+      palette: {
+        accent: string;
+        background: string;
+        foreground: string;
+      };
     };
     approval: {
       state: "none" | "incomplete" | "ready";

@@ -10,9 +10,8 @@ export type RolePlanPageCounts = {
     executing: number;
     qa: number;
     waitingPackage: number;
-    waitingExternal: number;
     approval: number;
-    pending: number;
+    manualVerification: number;
     paused: number;
     completed: number;
     archived: number;
@@ -33,6 +32,10 @@ export type RolePlanPage<T> = {
         background: string;
         foreground: string;
       };
+    }>;
+    tags: Array<{
+      tag: string;
+      count: number;
     }>;
   };
 };
@@ -57,14 +60,26 @@ export type RolePlanSummary = ReturnType<typeof summarizeRolePlan>;
 
 type PresentedPlanLike = {
   updatedAt: string;
+  dueAt?: string;
+  importance?: number;
+  urgency?: number;
+  priority?: string;
+  keywords: string[];
   presentation: {
     status: string;
     tone: string;
+    statusLevel: number;
     views: string[];
     palette: {
       accent: string;
       background: string;
       foreground: string;
+    };
+    importance: {
+      level: number;
+    };
+    urgency: {
+      level: number;
     };
   };
 };
@@ -72,12 +87,14 @@ type PresentedPlanLike = {
 export type RolePlanPageFilter = {
   view?: string;
   query?: string;
-  sort?: "status" | "updated";
+  sort?: "status" | "updated" | "importance" | "urgency";
   statuses?: string[];
+  tags?: string[];
+  includeFacets?: boolean;
 };
 
 export const DEFAULT_ROLE_PLAN_PAGE_SIZE = 12;
-export const MAX_ROLE_PLAN_PAGE_SIZE = 50;
+export const MAX_ROLE_PLAN_PAGE_SIZE = 250;
 export const DEFAULT_ROLE_MEMORY_PAGE_SIZE = 24;
 export const MAX_ROLE_MEMORY_PAGE_SIZE = 100;
 
@@ -99,6 +116,32 @@ export function normalizeRoleMemoryPageLimit(value: string | null): number {
   return Math.min(MAX_ROLE_MEMORY_PAGE_SIZE, Math.max(1, Number(value)));
 }
 
+function sortPlans<T extends PresentedPlanLike>(plans: T[], sort: RolePlanPageFilter["sort"]): T[] {
+  if (sort === "updated") {
+    return plans
+      .map((plan, index) => ({ plan, index, value: new Date(plan.updatedAt).getTime() }))
+      .sort((left, right) => {
+        const leftTime = Number.isFinite(left.value) ? left.value : 0;
+        const rightTime = Number.isFinite(right.value) ? right.value : 0;
+        return rightTime - leftTime || left.index - right.index;
+      })
+      .map((item) => item.plan);
+  }
+  if (sort === "importance") {
+    return plans
+      .map((plan, index) => ({ plan, index, rank: plan.presentation.importance.level }))
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+      .map((item) => item.plan);
+  }
+  if (sort === "urgency") {
+    return plans
+      .map((plan, index) => ({ plan, index, rank: plan.presentation.urgency.level }))
+      .sort((left, right) => left.rank - right.rank || left.index - right.index)
+      .map((item) => item.plan);
+  }
+  return plans;
+}
+
 export function paginateRolePlans<T extends PresentedPlanLike>(
   plans: T[],
   cursor: string,
@@ -111,27 +154,40 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
     if (filter.view && !plan.presentation.views.includes(filter.view)) return false;
     return !normalizedQuery || searchableKnowledgeStrings(plan).some((value) => value.includes(normalizedQuery));
   });
+  const includeFacets = filter.includeFacets !== false;
   const statusFacets = new Map<string, RolePlanPage<T>["facets"]["statuses"][number]>();
-  for (const plan of viewAndQueryPlans) {
-    const status = plan.presentation.status;
-    const current = statusFacets.get(status);
-    if (current) current.count += 1;
-    else statusFacets.set(status, { status, count: 1, palette: plan.presentation.palette });
+  const tagFacets = new Map<string, RolePlanPage<T>["facets"]["tags"][number]>();
+  if (includeFacets) {
+    for (const plan of viewAndQueryPlans) {
+      const status = plan.presentation.status;
+      const current = statusFacets.get(status);
+      if (current) current.count += 1;
+      else statusFacets.set(status, { status, count: 1, palette: plan.presentation.palette });
+    }
+    for (const plan of viewAndQueryPlans) {
+      const planTags = new Set<string>();
+      for (const rawTag of plan.keywords || []) {
+        const tag = String(rawTag || "").trim();
+        const normalizedTag = tag.toLocaleLowerCase();
+        if (!tag || planTags.has(normalizedTag)) continue;
+        planTags.add(normalizedTag);
+        const current = tagFacets.get(normalizedTag);
+        if (current) current.count += 1;
+        else tagFacets.set(normalizedTag, { tag, count: 1 });
+      }
+    }
   }
   const selectedStatuses = filter.statuses?.length ? new Set(filter.statuses) : undefined;
-  const filteredPlans = selectedStatuses
+  const statusFilteredPlans = selectedStatuses
     ? viewAndQueryPlans.filter((plan) => selectedStatuses.has(plan.presentation.status))
     : viewAndQueryPlans;
-  const orderedPlans = filter.sort === "updated"
-    ? filteredPlans
-      .map((plan, index) => ({ plan, index, updatedAt: new Date(plan.updatedAt).getTime() }))
-      .sort((left, right) => {
-        const leftTime = Number.isFinite(left.updatedAt) ? left.updatedAt : 0;
-        const rightTime = Number.isFinite(right.updatedAt) ? right.updatedAt : 0;
-        return rightTime - leftTime || left.index - right.index;
-      })
-      .map((item) => item.plan)
-    : filteredPlans;
+  const selectedTags = filter.tags?.length
+    ? new Set(filter.tags.map((tag) => tag.trim().toLocaleLowerCase()).filter(Boolean))
+    : undefined;
+  const filteredPlans = selectedTags
+    ? statusFilteredPlans.filter((plan) => plan.keywords.some((tag) => selectedTags.has(tag.trim().toLocaleLowerCase())))
+    : statusFilteredPlans;
+  const orderedPlans = sortPlans(filteredPlans, filter.sort);
   const items = orderedPlans.slice(offset, offset + limit);
   const nextOffset = offset + items.length;
   const counts: RolePlanPageCounts = {
@@ -146,9 +202,8 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
       executing: plans.filter((plan) => plan.presentation.tone === "running").length,
       qa: plans.filter((plan) => plan.presentation.tone === "qa").length,
       waitingPackage: plans.filter((plan) => plan.presentation.tone === "waiting_package").length,
-      waitingExternal: plans.filter((plan) => plan.presentation.tone === "waiting_external").length,
       approval: plans.filter((plan) => plan.presentation.tone === "blocked").length,
-      pending: plans.filter((plan) => plan.presentation.tone === "pending").length,
+      manualVerification: plans.filter((plan) => plan.presentation.tone === "manual_verification").length,
       paused: plans.filter((plan) => plan.presentation.tone === "paused").length,
       completed: plans.filter((plan) => plan.presentation.tone === "done").length,
       archived: plans.filter((plan) => plan.presentation.tone === "archived").length
@@ -159,7 +214,10 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
     total: orderedPlans.length,
     nextCursor: nextOffset < orderedPlans.length ? String(nextOffset) : "",
     counts,
-    facets: { statuses: [...statusFacets.values()] }
+    facets: {
+      statuses: [...statusFacets.values()],
+      tags: [...tagFacets.values()].sort((left, right) => right.count - left.count || left.tag.localeCompare(right.tag, "zh-CN"))
+    }
   };
 }
 
@@ -206,6 +264,8 @@ export function summarizeRolePlan(plan: RolePlanSummarySource) {
     id: plan.id,
     title: plan.title,
     status: plan.status,
+    importance: plan.importance,
+    urgency: plan.urgency,
     priority: plan.priority,
     kind: plan.kind,
     project: plan.project ? { name: plan.project.name } : undefined,

@@ -404,12 +404,13 @@ export const useGatewayStore = defineStore("gateway", () => {
       }
       sharedAutoAssignGatewayPorts(gateways.value, Number(meta.value.managerPort || 0));
       validateGatewayPortConflicts(gateways.value);
-      const expectedEnabledMessageAgents = gateways.value
-        .filter(gateway => gateway.messageProcessingAgents?.codex?.enabled === true)
+      const expectedMessageAgentSettings = gateways.value
+        .filter(gateway => gateway.agentAdapters?.includes("codex"))
         .map(gateway => ({
           id: gateway.id,
           configName: gateway.configName,
-          policy: gateway.messageProcessingAgents?.codex
+          policy: gateway.messageProcessingAgents?.codex,
+          enabled: gateway.messageProcessingAgents?.codex?.enabled === true
         }));
       const expectedPlanAssistantSettings = gateways.value
         .filter(gateway => gateway.agentAdapters?.includes("codex"))
@@ -447,15 +448,17 @@ export const useGatewayStore = defineStore("gateway", () => {
       }
       const savedGateways = body?.data?.config?.gateways;
       if (Array.isArray(savedGateways)) {
-        const messageAgentSettingWasDropped = expectedEnabledMessageAgents.some(expected => {
+        const messageAgentSettingWasDropped = expectedMessageAgentSettings.some(expected => {
           const saved = savedGateways.find((gateway: GatewayDefinition) => (
             gateway.id === expected.id || gateway.configName === expected.configName
           ));
           const policy = saved?.messageProcessingAgents?.codex;
-          return policy?.enabled !== true
-            || policy.model !== expected.policy?.model
-            || policy.reasoningEffort !== expected.policy?.reasoningEffort
-            || policy.maxAgents !== expected.policy?.maxAgents;
+          return (policy?.enabled === true) !== expected.enabled
+            || Boolean(expected.policy && (
+              policy?.model !== expected.policy.model
+              || policy?.reasoningEffort !== expected.policy.reasoningEffort
+              || policy?.maxAgents !== expected.policy.maxAgents
+            ));
         });
         if (messageAgentSettingWasDropped) {
           throw new Error("Manager 版本过旧，未保存消息处理 Agent 设置。请重启 Manager 后再次保存。");

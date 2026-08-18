@@ -65,6 +65,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
     },
     routeId,
     channel,
+    styleValidation: 1,
     params,
     payload: { type: "text", text: "<这里填写要发送的正文>" },
     ...(context.messageProcessingRequirementId

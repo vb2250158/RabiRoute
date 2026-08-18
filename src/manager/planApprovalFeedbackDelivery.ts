@@ -1,10 +1,16 @@
-import type { PlanFeedbackRecord } from "../planFeedback.js";
+import { planFeedbackResponseId, type PlanFeedbackRecord } from "../planFeedback.js";
 import type { PlanItem } from "../roleKnowledge.js";
 
 export type PlanApprovalFeedbackTaskRequest = {
   threadId: string;
   cwd: string;
   prompt: string;
+};
+
+export type PlanApprovalFeedbackTaskDeliveryReadRequest = {
+  threadId: string;
+  cwd: string;
+  deliveryId: string;
 };
 
 export type PlanApprovalFeedbackPersonaRequest = {
@@ -26,6 +32,9 @@ export type DeliverPlanApprovalFeedbackOptions = {
   feedback: PlanFeedbackRecord;
   secretary?: PlanApprovalFeedbackSecretaryTarget;
   sendToTask: (request: PlanApprovalFeedbackTaskRequest) => Promise<void>;
+  readTaskDelivery?: (
+    request: PlanApprovalFeedbackTaskDeliveryReadRequest
+  ) => Promise<"accepted" | "in_progress" | "missing">;
   sendToSecretary?: (target: PlanApprovalFeedbackSecretaryTarget, request: PlanApprovalFeedbackPersonaRequest) => Promise<void>;
   sendToPersona: (request: PlanApprovalFeedbackPersonaRequest) => Promise<void>;
   directRetryAttempts?: number;
@@ -36,6 +45,13 @@ export type PlanApprovalFeedbackDeliveryResult = {
   mode: "bound_task" | "secretary_fallback" | "persona_fallback";
   message?: string;
 };
+
+export class PlanFeedbackDeliveryPendingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PlanFeedbackDeliveryPendingError";
+  }
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -97,25 +113,47 @@ function feedbackApiUrl(options: DeliverPlanApprovalFeedbackOptions): string {
 }
 
 function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
+  const responseId = planFeedbackResponseId(options.feedback);
   if (isGuidance(options.feedback)) {
     return [
       "[计划引导：已直接投递到绑定业务会话]",
       ...feedbackLines(options.feedback),
-      "这是该计划绑定的原业务任务。请直接消费本次引导，不要等待人格 Agent 再次转发，也不要创建重复计划或替代会话。",
-      "系统会同时通知该计划绑定的秘书。业务进展、状态变化和本轮结果优先回到秘书，不要直接通知主人格；只有秘书判断确实需要用户或主人格决策、授权、补充输入，或计划已经完整收尾时，才由秘书升级给主人格。",
-      "请先读取 Manager 中的当前计划与反馈记录，再结合用户引导继续推进。引导属于整个计划，不绑定某个步骤；若它改变了范围、优先级、执行方法或后续路径，请显式 PATCH 计划，并同步调整尚未开始的步骤。引导记录本身不自动改变计划状态，也不代表审批。",
-      `处理完成后，向 ${feedbackApiUrl(options)} POST 一条 kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false 的处理说明，只回写当前 planId，不要携带 stepId；不要只在本任务里输出正文。`
+      "这是原业务任务。直接消费引导；秘书同步跟进控制面。",
+      "读取当前计划与反馈。引导影响范围、优先级或路径时，PATCH 计划和未开始步骤；引导不等于审批。",
+      `完成后 POST ${feedbackApiUrl(options)}：feedbackId=${responseId}、kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false，只写当前 planId。`
     ].join("\n");
   }
   return [
     "[计划审批：已直接投递到绑定业务会话]",
     ...feedbackLines(options.feedback),
-    "这是该计划绑定的原业务任务。请直接消费本次审批，不要等待人格 Agent 再次转发，也不要创建重复计划或替代会话。",
-    "系统会同时通知该计划绑定的秘书。业务进展、状态变化和本轮结果优先回到秘书，不要直接通知主人格；只有秘书判断确实需要用户或主人格决策、授权、补充输入，或计划已经完整收尾时，才由秘书升级给主人格。",
-    "请先读取 Manager 中的当前计划与审批记录，再按审批意见显式更新对应计划或步骤；审批记录本身不自动推进计划。",
-    "计划说明必须写具体：实际文件与改动、完整命令及影响、配置/数据/外部变更、验证、回退和明确排除范围。",
-    `处理完成后，向 ${feedbackApiUrl(options)} POST 一条 kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false 的处理说明，回写当前 planId / stepId；不要只在本任务里输出正文。`
+    "这是原业务任务。直接消费审批；秘书同步跟进控制面。",
+    "读取当前计划与审批记录，按意见更新计划或步骤。说明实际改动、命令、外部变化、验证、回退和排除范围。",
+    `完成后 POST ${feedbackApiUrl(options)}：feedbackId=${responseId}、kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false，写当前 planId / stepId。`
   ].join("\n");
+}
+
+async function readTaskDeliveryAfterError(
+  options: DeliverPlanApprovalFeedbackOptions,
+  taskRequest: PlanApprovalFeedbackTaskRequest,
+  attempts: number,
+  delayMs: number
+): Promise<"accepted" | "in_progress" | "missing" | undefined> {
+  if (!options.readTaskDelivery) return undefined;
+  let lastState: "accepted" | "in_progress" | "missing" | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      lastState = await options.readTaskDelivery({
+        threadId: taskRequest.threadId,
+        cwd: taskRequest.cwd,
+        deliveryId: options.feedback.id
+      });
+      if (lastState === "accepted" || lastState === "missing") return lastState;
+    } catch {
+      // Keep polling briefly because Desktop readback can become available after the send response times out.
+    }
+    if (attempt + 1 < attempts) await wait(delayMs);
+  }
+  return lastState;
 }
 
 function controlFeedbackText(
@@ -129,11 +167,11 @@ function controlFeedbackText(
     ...feedbackLines(options.feedback),
     ...(directFailure ? [`绑定业务会话自动直投失败：${directFailure}`] : []),
     guidance
-      ? `当前引导没有成功直达绑定业务会话，请由${recipient}按原流程处理、记录失败并继续原业务任务。`
-      : `当前审批没有成功直达绑定业务会话，请由${recipient}按原流程处理、记录失败并继续原业务任务。`,
+      ? `引导未直达业务任务。由${recipient}记录失败并续投原任务。`
+      : `审批未直达业务任务。由${recipient}记录失败并续投原任务。`,
     guidance
-      ? "请先读取 Manager 中的当前计划与反馈记录，再结合引导继续推进；引导属于整个计划，必要时同步调整尚未开始的步骤。引导本身不自动改变计划状态，也不代表审批。"
-      : "请先读取 Manager 中的当前计划与审批记录，再按意见更新计划或对应步骤；审批记录本身不自动推进计划。"
+      ? "读取计划与反馈；必要时调整未开始步骤。引导不等于审批。"
+      : "读取计划与审批记录，按意见更新计划或步骤。"
   ].join("\n");
 }
 
@@ -147,8 +185,8 @@ function controlNoticeText(options: DeliverPlanApprovalFeedbackOptions): string 
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
     options.secretary
-      ? "无需再次转发或代替业务会话重复处理。秘书负责跟进计划状态、消费后续结果，并且只在确需决策、授权、补充输入或计划完整收尾时通知主人格。"
-      : "无需再次转发或代替业务会话重复处理；人格 Agent 只需知悉，并按既有计划闭环复核后续结果。"
+      ? "秘书跟进计划和结果；仅在需要决定、授权、输入或最终复核时通知主人格。"
+      : "人格 Agent 只需复核后续结果。"
   ].join("\n");
 }
 
@@ -161,8 +199,8 @@ function controlPendingNoticeText(options: DeliverPlanApprovalFeedbackOptions, f
     `已找到绑定业务会话：${binding.sessionTitle || binding.sessionId}`,
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
-    `Desktop owner 暂时未接管该任务，系统正在对同一会话自动重试：${failure}`,
-    `${label}仍保持 pending，尚未标记为 delivered。${options.secretary ? "秘书" : "人格 Agent"}无需代为转发、无需创建替代任务，也不要重复处理本次反馈。`
+    `Desktop owner 尚未接管，系统重试同一会话：${failure}`,
+    `${label}保持 pending。${options.secretary ? "秘书" : "人格 Agent"}等待重试结果。`
   ].join("\n");
 }
 
@@ -175,8 +213,8 @@ function controlFailedNoticeText(options: DeliverPlanApprovalFeedbackOptions, fa
     `绑定业务会话：${binding.sessionTitle || binding.sessionId}`,
     `会话 ID：${binding.sessionId}`,
     `工作区：${binding.workspace}`,
-    `系统完成有界重试后仍未成功交给 Desktop owner：${failure}`,
-    `本次${label}未标记为已投递，也没有启动备用 Runtime、创建替代任务或改投其它任务。请保留原 taskBinding，等待 Desktop owner 可用后重试。`
+    `有界重试后仍未交给 Desktop owner：${failure}`,
+    `${label}未投递。保留原 taskBinding，等待 Desktop owner 可用后重试。`
   ].join("\n");
 }
 
@@ -214,6 +252,7 @@ export async function deliverPlanApprovalFeedback(
   };
   const retryAttempts = Math.max(1, Math.floor(options.directRetryAttempts ?? 12));
   const retryDelayMs = Math.max(1, Math.floor(options.directRetryDelayMs ?? 15_000));
+  const readbackAttempts = Math.min(3, retryAttempts);
   let lastError: unknown;
   let pendingNoticeFailure = "";
 
@@ -224,6 +263,15 @@ export async function deliverPlanApprovalFeedback(
       break;
     } catch (error) {
       lastError = error;
+      const readback = await readTaskDeliveryAfterError(options, taskRequest, readbackAttempts, retryDelayMs);
+      if (readback === "accepted") {
+        lastError = undefined;
+        break;
+      }
+      if (readback === "in_progress") {
+        lastError = new PlanFeedbackDeliveryPendingError(errorMessage(error));
+        break;
+      }
       const retryable = isRetryableBoundTaskDeliveryError(error);
       if (attempt === 0 && retryable) {
         try {
@@ -242,6 +290,7 @@ export async function deliverPlanApprovalFeedback(
 
   if (lastError !== undefined) {
     const message = errorMessage(lastError);
+    if (lastError instanceof PlanFeedbackDeliveryPendingError) throw lastError;
     try {
       await sendToControl(options, {
         kind: "auto_delivery_failed_notice",

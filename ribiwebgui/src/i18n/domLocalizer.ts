@@ -1,4 +1,5 @@
 import { LOCALE_CHANGED_EVENT, type AppLocale, translateText } from "./index";
+import { createFrameBudgetTreeScheduler } from "./frameBudgetTreeScheduler";
 
 const localizedAttributes = ["aria-label", "placeholder", "title"] as const;
 const originalText = new WeakMap<Text, string>();
@@ -38,33 +39,35 @@ function localizeAttributes(element: Element, locale: AppLocale): void {
   }
 }
 
-function localizeTree(root: Node, locale: AppLocale): void {
-  if (root.nodeType === Node.TEXT_NODE) {
-    localizeTextNode(root as Text, locale);
-    return;
-  }
-  if (!(root instanceof Element) && !(root instanceof DocumentFragment) && !(root instanceof Document)) return;
-  if (root instanceof Element) localizeAttributes(root, locale);
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    if (node.nodeType === Node.TEXT_NODE) localizeTextNode(node as Text, locale);
-    else localizeAttributes(node as Element, locale);
-    node = walker.nextNode();
-  }
+function localizeNode(node: Node, locale: AppLocale): void {
+  if (node.nodeType === Node.TEXT_NODE) localizeTextNode(node as Text, locale);
+  else if (node instanceof Element) localizeAttributes(node, locale);
 }
 
 export function installDomLocalizer(): () => void {
   let locale = (document.documentElement.lang === "en" ? "en" : "zh-CN") as AppLocale;
-  const apply = () => localizeTree(document.body, locale);
+  const scheduler = createFrameBudgetTreeScheduler<Node>({
+    process: node => localizeNode(node, locale),
+    children: node => {
+      if (node instanceof Element && shouldSkip(node)) return [];
+      return Array.from(node.childNodes);
+    },
+    schedule: callback => window.requestAnimationFrame(callback),
+    cancel: handle => window.cancelAnimationFrame(handle),
+    now: () => performance.now(),
+    budgetMs: 4,
+    maxNodesPerFrame: 200
+  });
+  const apply = () => scheduler.enqueue(document.body);
   const observer = new MutationObserver((records) => {
+    if (locale === "zh-CN") return;
     for (const record of records) {
       if (record.type === "characterData") {
         const node = record.target as Text;
         const current = node.nodeValue || "";
         const source = originalText.get(node);
         if (source == null || current !== translateText(source, locale)) originalText.set(node, current);
-        localizeTextNode(node, locale);
+        scheduler.enqueue(node);
         continue;
       }
       if (record.type === "attributes") {
@@ -76,11 +79,11 @@ export function installDomLocalizer(): () => void {
           const source = originals.get(attribute);
           if (source == null || current !== translateText(source, locale)) originals.set(attribute, current);
           originalAttributes.set(element, originals);
-          localizeAttributes(element, locale);
+          scheduler.enqueue(element);
         }
         continue;
       }
-      for (const node of record.addedNodes) localizeTree(node, locale);
+      for (const node of record.addedNodes) scheduler.enqueue(node);
     }
   });
   observer.observe(document.body, {
@@ -92,12 +95,14 @@ export function installDomLocalizer(): () => void {
   });
   const onLocaleChanged = (event: Event) => {
     locale = (event as CustomEvent<AppLocale>).detail;
+    scheduler.clear();
     apply();
   };
   window.addEventListener(LOCALE_CHANGED_EVENT, onLocaleChanged);
-  apply();
+  if (locale === "en") apply();
   return () => {
     observer.disconnect();
+    scheduler.dispose();
     window.removeEventListener(LOCALE_CHANGED_EVENT, onLocaleChanged);
   };
 }

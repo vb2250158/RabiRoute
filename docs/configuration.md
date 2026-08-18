@@ -109,7 +109,8 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot 实验支持；Marvis 仅人工接力。
 - `primaryAgentAdapter`：当前 Route 的主控 Agent，必须是 `agentAdapters` 中的一项。消息命中规则后只投递给主控，不会广播给列表里的其他 Agent。旧配置没有该字段时使用列表第一项；删除主控后自动改用仍存在的第一项。
 - Agent 端先使用基础能力层描述安装、认证、项目、会话和投递，再按真实支持情况声明托管任务扩展。当前只有 Codex 声明“消息处理 Agent 模式”“独立记忆整理 Agent”“计划协助会话”和“Hook 管理”；WebGUI 只在 Codex 卡片显示，读取非 Codex Route 时也会丢弃这些误配。以后能力等同的处理端可以逐项声明并复用相应界面；自带 Agent 编排的平台不需要声明。
-- `messageProcessingAgents.codex`：Codex 消息处理 Agent 的调度资格、独立模型和任务数量上限。默认关闭；开启后，聊天消息默认形成消息组并按不同话题复用或动态创建消息处理任务，ASR 和结构化事件照常直接投递。`maxAgents` 可选，范围 `1–32`；留空时保持按忙碌情况动态扩容，达到上限后继续复用已有任务，不再新建。设为 `1` 时固定保留并复用“`<人格名> 协助处理消息1`”，即使该任务仍在运行也把新消息补充给它。降低上限只解除超额任务与当前 Route 的消息处理池关联，不删除 Desktop 任务。`heartbeat` 是持续进行的同一项巡检职责：第一次选择或创建一个消息处理任务，此后的定时触发始终补充到最近处理 heartbeat 的同一任务。未设置上限且只有 1 个任务时命名为“`<人格名> 协助处理消息`”，扩展到多个时依次改为“`<人格名> 协助处理消息1`”“…消息2”；改名保留原 Desktop 任务 ID 和 workspace。普通调度只把 Codex 当前明确为 `idle` 的任务当作空闲候选；`notLoaded` 表示已有任务尚未加载，会复用并由正常 Desktop 链路打开。Desktop 离线或状态不可读取时，消息组留在可恢复队列中重试，不创建替代任务。`agents.json` 只保存任务 ID、名称、workspace 和初始化信息；消息端/会话/说话人的熟悉度保存在独立的 `routing-affinity.json`，两者都不保存 active/idle 状态。默认模型与推理强度为 `gpt-5.6-luna` / `medium`，只影响消息处理轮次，不改主人格、秘书或计划 Agent。
+- `messageProcessingAgents.codex`：Codex 消息处理 Agent 的调度资格、独立模型和任务数量上限。默认关闭；开启后，聊天消息默认形成消息组并按不同话题复用或动态创建消息处理任务，ASR 和结构化事件照常直接投递。Agent 列表、上限截取和实际投递共用同一套权重顺序：依次考虑引用的 Agent 外发消息、原消息组、消息端、会话、说话人和最近使用时间，同分时才使用固定序号。`maxAgents` 可选，范围 `1–32`；留空时保持按忙碌情况动态扩容，达到上限后继续复用排序范围内的任务，不再新建。设为 `1` 时固定保留并复用“`<人格名> 协助处理消息1`”，即使该任务仍在运行也把新消息补充给它。降低上限只解除超额任务与当前 Route 的消息处理池关联，不删除 Desktop 任务；已完成记录仍保留原处理者用于审计，未完成的计划进展通知、计划/记忆回调、Agent 间待回复请求和提醒会迁移到当前排序选中的任务，不会重新唤醒已解绑或已归档的旧任务。`heartbeat` 是持续进行的同一项巡检职责：第一次选择或创建一个消息处理任务，此后的定时触发始终补充到最近处理 heartbeat 的同一任务。未设置上限且只有 1 个任务时命名为“`<人格名> 协助处理消息`”，扩展到多个时依次改为“`<人格名> 协助处理消息1`”“…消息2”；改名保留原 Desktop 任务 ID 和 workspace。普通调度只把 Codex 当前明确为 `idle` 的任务当作空闲候选；`notLoaded` 表示已有任务尚未加载，会复用并由正常 Desktop 链路打开。Desktop 离线或状态不可读取时，消息组留在可恢复队列中重试，不创建替代任务。`agents.json` 只保存任务 ID、名称、workspace 和初始化信息；消息端/会话/说话人的熟悉度保存在独立的 `routing-affinity.json`，两者都不保存 active/idle 状态。默认模型与推理强度为 `gpt-5.6-luna` / `medium`，只影响消息处理轮次，不改主人格、秘书或计划 Agent。
+- 关闭 `messageProcessingAgents.codex.enabled` 后，普通聊天恢复逐条投递给主人格；已关联消息组产生的计划进展通知、知识回调提醒和 Agent 间待回复也迁移到当前 Route 的主人格任务。旧消息处理任务和审计记录保留，但不会再因这些后续工作自动打开。
 - 开启 `messageProcessingAgents.codex.enabled` 后，同一设置区域会显示消息处理看板。看板不是另一套统计：它读取 Manager 保存的消息发送需求，明确区分必须回复、由 Agent 判断、已转交、等待发送、等待审批、已发送、不需要回复和发送失败。直接 @、直接回复和私聊默认必须处理；普通群消息允许 Agent 主动参与讨论，也允许提交有原因的“不回复”。计划与来源消息完成结构化关联后，统一计划写入函数会在进展变化时生成通知需求，并复用原消息处理任务把结果发回来源群或私聊。看板通过 Manager 事件刷新，不定时扫描聊天或计划目录。
 - `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录完整查找。只有 RabiRoute 自己按稳定名称动态建立的消息处理任务使用 app-server 状态库的名称过滤，避免首次投递扫描完整任务目录；普通会话绑定仍保留完整查找。一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
 - `codexCwd`：目标 Desktop 任务的项目目录。它用于校验已保存 ID、同名任务消歧和新建位置；选择已有任务时自动采用任务自己的目录。
@@ -180,7 +181,7 @@ Windows 路径在 WebUI 里写 `C:\Path\To\Project` 或 `C:/Path/To/Project`；�
 - `feishu`：飞书独立消息端。签名/加密事件回调写入 `feishu-messages.jsonl`，按 v2 `event_id` 持久去重，并按来源 `chat_id` 隔离会话和回发文本。缺少应用凭据、Verification Token、Encrypt Key 或事件订阅确认时，监听和出站都保持关闭。
 旧配置仍然兼容：`messageInputsDisabled=true` 或 `messageAdapters=["disabled"]` 会临时关闭整个路由的消息进入；`messageAdaptersDisabled` 会被视为对应 adapter 的 `inputEnabled=false`。新配置建议优先使用 `messageAdapterPolicies` 表达“接收”和“发送”两个管道级开关。
 
-NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。路由页“打开 NapCat”会在用户明确点击后自动启动绑定实例、使用已有 quick login 并修复 OneBot 连接；需要腾讯安全确认时只打开正确页面交给用户。详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
+NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。每个 QQ 实例的“启动 Rabi 时自动登录”默认开启；Manager 监听成功后异步启动绑定实例、使用已有 quick login 并修复 OneBot 连接，不等待该流程完成。路由页“打开 NapCat”可随时手动执行同一流程。详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
 
 - `rabilink`：旧配置中的内部兼容键，界面名称为“眼镜端（经 RabiLink）”。眼镜才是消息端；RabiLink Relay 是 Manager 持有的系统内置转接服务。当前 AIUI 把最终 ASR 文本作为 `rabilink.observation` 上送；电脑端 worker 先写入角色目录下的 `rabilink-conversation.jsonl` 统一会话账本并完成上行，不逐句同步等待 Codex。审阅器在线程空闲、触摸板引导或周期反思时读取账本并唤醒或 steer 固定 Codex 线程；Agent、定时器和规划器的文本再通过 Outbox 与 Relay 独立下行。旧插件消息和本地 `/rabilink` POST 仍走兼容转发路径，并保留 `rabilink-voice-transcripts.jsonl` 调试记录。
 - `wearable`：智能手表 / 手环健康消息端。它复用全局 RabiLink Relay worker 接收结构化 `wearable.health` observation，按角色写入 `wearable-health/` 时间线；普通样本不进入聊天账本，只有命中心率/睡眠规则时才以 `wearable_health_alert` 投递 Agent。手机配置、Agent 查询 API 和实验数据源见 `docs/rabilink-wearable-health.md`。
@@ -211,6 +212,18 @@ data/roles/Rabi/personaConfig.json
 ```
 
 多条 Route 绑定同一人格时，共用该人格根级 `personaConfig.json` 的自动化规则、语音关键词和上下文额度；Route 自己仍保留消息端、pipeline、热投递模式、处理端和本机脚本权限等运行配置。绑定人格但没有匹配外部消息规则时，外部消息只记录不投递；内置角色面板规则仍存在。显式无人格 route 会按已启用消息入口生成默认规则。
+
+人格可在 `personaConfig.json` 绑定外发语言风格：
+
+```json
+"languageStyle": {
+  "styleSkillUrl": "file:///C:/Users/Example/.codex/skills/direct-evidence-language-style"
+}
+```
+
+URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`。`/api/agent/send` 默认使用 `styleValidation=1`；校验失败时消息停在 Outbox 前，并返回原因。Agent 确认本次原文后，可用同一 `deliveryId` 和 `styleValidation=0` 重发。
+
+默认投递规则只保留当前任务必须知道的动作、边界和接口字段。完整流程说明放在文档或 Skill 中；人格模板只补充该人格、消息端或定时任务的差异。
 
 一旦普通消息命中规则，会直接进入 Route 选定的主控 Agent。主控是 Codex 时，当前 turn 活跃则 `steer`，空闲则 `start`。不需要给每个普通消息端另配“热推送”开关。Heartbeat 的忙碌跳过和语音的热/关键词模式是两个明确例外。
 

@@ -10,12 +10,12 @@ import { agentThreadRequestFailureData, handleAgentThreadRequest, type AgentThre
 import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
 import { listCodexDesktopThreads } from "../codexDesktopBridge.js";
+import { isDshSessionId } from "../dshSessionBridge.js";
 import { agentStateReportDecision } from "../agentAdapters/stateReportOrder.js";
 import {
   deployAstrbotAdapter,
   getCopilotStatus,
   openMarvis,
-  scanAgentAdapters,
   testAstrbotLogin as testAstrbotLoginEndpoint,
   type AgentManagerApiContext,
   type AstrbotLoginTestRequest,
@@ -24,8 +24,20 @@ import {
 import type { MessageAdapterType } from "../adapters/messageAdapter.js";
 import type { ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLogToDir } from "../history.js";
+import {
+  messageAgentPoolStatePath,
+  readCurrentMessageAgentWorkers,
+  replacePersistedMessageAgentWorker,
+  resolveCurrentMessageAgentWorker
+} from "../messageAgentPool.js";
+import {
+  resolveDeliveredMessageProcessingTarget,
+  resolveMessageProcessingDeliveryTarget,
+  type MessageProcessingDeliveryTarget
+} from "./messageProcessingDeliveryTarget.js";
 import { listDeliveryReplayAttempts } from "../deliveryReplayLedger.js";
 import {
+  autoLoginNapcatInstancesOnRabiStart,
   configureNapcatOneBot,
   ensureNapcatInstanceReady,
   launchNapcatInstance as launchNapcatInstanceEndpoint,
@@ -53,6 +65,10 @@ import { appendMessageContextToDir, recentMessageContextItems } from "../message
 import { SpeechIngressStore } from "../speechIngressStore.js";
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
 import { createManagerOperationalLog, managerOperationalError } from "./operationalLog.js";
+import { PerformanceMonitoringService } from "./performanceMonitoring.js";
+import { PerformanceApi } from "./performanceRoutes.js";
+import { measureSyncPerformanceOperation, recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
+import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { readJsonlTail } from "./jsonlTail.js";
 import { requestWeixinLogin } from "../weixinLoginRequest.js";
 import { PersonaSyncService } from "../personaSync.js";
@@ -75,12 +91,16 @@ import {
   type IdentityRelationPatch
 } from "../identityRelations.js";
 import { listConversationSituations } from "../conversationSituationStore.js";
+import type { ReviewedReplySourceEvidence } from "../replyImageDescriptions.js";
 import {
   handleAgentSend,
+  inspectAgentSendDelivery,
+  prepareAgentSendRequest,
   validateAgentSendReplyImageDescriptions,
   type AgentSendRequest,
   type AgentSendResult
 } from "../agentSend.js";
+import { evaluateAgentSendLanguageStyle } from "../agentSendLanguageStyle.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import {
   MessageProcessingBoardStore,
@@ -92,11 +112,18 @@ import {
   type MessageProcessingWorkerRuntimeStatus,
   type RegisterMessageGroupRequirementInput
 } from "../messageProcessing/board.js";
-import { messageProcessingBoardStatePath } from "../messageProcessing/persistence.js";
+import {
+  CoalescingMessageProcessingBoardPersistence,
+  messageProcessingBoardStatePath
+} from "../messageProcessing/persistence.js";
 import {
   MessageProcessingSendContextReview,
   type MessageProcessingSendContextApprovalInput
 } from "../messageProcessing/sendContextReview.js";
+import {
+  loadMessageProcessingContext,
+  recoverReviewedMessageProcessingSourceRecord
+} from "../messageProcessing/sourceContextRecovery.js";
 import { normalizeCodexMemoryConsolidationAgentModel } from "../shared/codexMemoryConsolidationAgent.js";
 import {
   agentSendReceiptResponse,
@@ -128,6 +155,7 @@ import {
   type SpeechPushMode
 } from "../shared/gatewayConfigModel.js";
 import {
+  codexPlanAssistantInitializationPrompt,
   normalizeCodexPlanAssistantModel,
   resolveCodexPlanAssistantTurnModel
 } from "../shared/codexPlanAssistantSessions.js";
@@ -154,6 +182,7 @@ import { ManagerConfigRepository } from "./configRepository.js";
 import { collectWatchedConfigFiles, configFilesSnapshot } from "./configWatchSnapshot.js";
 import { configWatchDirectoryRules, configWatchEventMatches } from "./configWatchPolicy.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
+import { resolveReportedCodexBindingUpdate } from "./codexBindingUpdate.js";
 import { handleDesktopLifecycleApi } from "./desktopLifecycleRoutes.js";
 import { proxySpeechEventStream } from "./speechEventProxy.js";
 import {
@@ -163,12 +192,20 @@ import {
   type PlanTaskCompletionDelivery
 } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
+import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
+import { LanguageStyleValidator } from "../languageStyleValidation.js";
 import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
 import {
   deliverPlanApprovalFeedback,
+  PlanFeedbackDeliveryPendingError,
   type PlanApprovalFeedbackPersonaRequest,
   type PlanApprovalFeedbackSecretaryTarget
 } from "./planApprovalFeedbackDelivery.js";
+import {
+  listOpenPlanFeedbackRecoveryCandidates,
+  recoverPlanFeedbackCandidate,
+  type PlanFeedbackRecoveryTaskRequest
+} from "./planFeedbackRecovery.js";
 import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
 import {
   ManualTriggerProcessRegistry,
@@ -213,7 +250,13 @@ import { runBoundedScans, type ScanDiagnostic } from "./scanController.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
-import { managerCatalogWorkerPool, managerReadWorkerPool } from "./managerReadWorkerPool.js";
+import {
+  ManagerReadWorkerError,
+  managerAgentScanWorkerPool,
+  managerCatalogWorkerPool,
+  managerPerformanceWorkerPool,
+  managerReadWorkerPool
+} from "./managerReadWorkerPool.js";
 import { handlePersonaMessagingApi } from "./personaMessagingRoutes.js";
 import { PersonaCatalog } from "./personaCatalog.js";
 import { loadPersonaMessageAuthority, type PersonaMessageAuthority } from "./personaMessageAuthority.js";
@@ -226,6 +269,10 @@ import {
   speechControlErrorStatus,
   type ManagerSpeechDeliveryOutcome
 } from "./speechControl.js";
+import {
+  SelectionSpeechSettingsStore,
+  selectionSpeechSettingsPath
+} from "./selectionSpeechSettings.js";
 import {
   SpeechRuntimeControl,
   SpeechRuntimeControlError
@@ -264,16 +311,12 @@ import {
   applyMemoryConsolidationResult,
   createPlan,
   createRecentMemory,
-  getConsolidatedMemory,
   getPlan,
-  getRecentMemory,
   getRoleSkill,
-  listActiveRecentMemories,
-  listArchivedMemories,
-  listConsolidatedMemories,
   listConsolidationRuns,
   planAcceptsGuidance,
   listPlans,
+  listPlansAsync,
   listRecentMemories,
   listRoleSkills,
   markMemoryConsolidationRunDelivered,
@@ -281,7 +324,6 @@ import {
   pendingMemoryConsolidation,
   presentRoleMemory,
   presentRoleMemories,
-  roleMemoryCounts,
   roleKnowledgeSnapshot,
   subscribePlanUpdates,
   type PlanItem,
@@ -297,7 +339,6 @@ import {
 import {
   normalizeRoleMemoryPageLimit,
   normalizeRolePlanPageLimit,
-  paginateRoleMemory,
   paginateRolePlans,
   summarizeRolePlan
 } from "../roleKnowledgePagination.js";
@@ -306,6 +347,7 @@ import {
   appendPlanFeedback,
   createPlanFeedbackRecord,
   listPlanFeedback,
+  planFeedbackResponseId,
   planFeedbackAttachmentsEqual,
   planFeedbackPlanAttachmentsEqual,
   planFeedbackSummary,
@@ -395,6 +437,10 @@ type GatewayDefinition = {
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  dshSessionId?: string;
+  dshSessionName?: string;
+  dshCwd?: string;
+  dshBaseUrl?: string;
   codexPlanAssistantEnabled?: boolean;
   codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
@@ -433,6 +479,7 @@ type GatewayDefinition = {
   recentMessageLimits?: RecentMessageLimits;
   speechPushMode?: SpeechPushMode;
   speechTriggerKeywords?: string[];
+  languageStyle?: import("../shared/languageStyle.js").LanguageStyleBinding;
   automationRules?: PersonaAutomationRuleDefinition[];
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
@@ -447,6 +494,7 @@ type RouteProfileDefinition = {
   recentMessageLimits?: RecentMessageLimits;
   speechPushMode?: SpeechPushMode;
   speechTriggerKeywords?: string[];
+  languageStyle?: import("../shared/languageStyle.js").LanguageStyleBinding;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;
@@ -518,6 +566,7 @@ type NapCatInstanceDefinition = {
   id: string;
   name?: string;
   enabled?: boolean;
+  autoLoginOnRabiStart?: boolean;
   gatewayPort: number;
   httpUrl: string;
   webuiUrl?: string;
@@ -599,7 +648,10 @@ const managerHttpLimits = {
   maxRequestsPerSocket: 100
 } as const;
 const managerOperationalLog = createManagerOperationalLog({ rootDir });
-const messageProcessingBoard = new MessageProcessingBoardStore(messageProcessingBoardStatePath(rootDir));
+const messageProcessingBoardPersistence = new CoalescingMessageProcessingBoardPersistence(
+  messageProcessingBoardStatePath(rootDir)
+);
+const messageProcessingBoard = new MessageProcessingBoardStore(messageProcessingBoardPersistence);
 const agentRequests = new AgentRequestStore(agentRequestStatePath(rootDir));
 const agentRequestReminderTimers = new Map<string, NodeJS.Timeout>();
 const managerRequestContexts = new WeakMap<http.ServerResponse, {
@@ -607,6 +659,7 @@ const managerRequestContexts = new WeakMap<http.ServerResponse, {
   method: string;
   pathname: () => string;
   startedAt: number;
+  responseBytes?: number;
 }>();
 const rabiGlobalConfig = new RabiGlobalConfigStore(rootDir);
 const managerReadOnly = managerReadOnlyEnabled();
@@ -730,14 +783,14 @@ let personaMessageAuthority: PersonaMessageAuthority | undefined;
 const messageProcessingSendContextReview = new MessageProcessingSendContextReview({
   getRequirement: (requirementId) => messageProcessingBoard.getRequirement(requirementId),
   findRequirementBySourceMessage: (routeId, messageId) => messageProcessingBoard.findLatestBySourceMessage(routeId, messageId),
-  loadContext: (requirement) => {
+  findRequirementsBySourceMessage: (routeId, messageId) => messageProcessingBoard.findBySourceMessage(routeId, messageId),
+  loadContext: (requirement, sourceMessageId) => {
     const roleId = String(requirement.source.roleId || "").trim();
     if (!roleId) return [];
-    return recentMessageContextItems([roleDirForApi(roleId)], {
-      conversationKey: requirement.source.conversationKey,
-      limit: 80,
-      maxChars: 24_000,
-      includeArchives: true
+    return loadMessageProcessingContext({
+      roleDir: roleDirForApi(roleId),
+      requirement,
+      sourceMessageId
     });
   }
 });
@@ -754,12 +807,23 @@ const codexHookContextService = new CodexHookContextService({
   isManagedAgentSession,
   recordAgentRequestStop
 });
+const languageStyleValidator = new LanguageStyleValidator();
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
 const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
 const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
 const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
 const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
+const persistedPerformanceConfig = rabiGlobalConfig.read().performance;
+const performanceMonitoring = new PerformanceMonitoringService(rootDir, managerReadOnly
+  ? { ...persistedPerformanceConfig, enabled: false }
+  : persistedPerformanceConfig);
+const performanceApi = new PerformanceApi({
+  service: performanceMonitoring,
+  globalConfig: rabiGlobalConfig,
+  gatewayExists: gatewayId => Boolean(runtimes.get(gatewayId)),
+  readWorkerPool: managerPerformanceWorkerPool
+});
 let memoryConsolidationScheduler: MemoryConsolidationScheduler | undefined;
 const planTaskCompletionDelivery = createPlanTaskCompletionDelivery<GatewayRuntime>({
   getRuntime: gatewayId => runtimes.get(gatewayId),
@@ -839,6 +903,7 @@ const personaSyncLanServer = new PersonaSyncLanServer(personaSyncRouteContext(),
   port: Number(process.env.RABILINK_PERSONA_SYNC_LAN_PORT ?? 0),
   onStatus: status => publishManagerEvent("persona_sync_lan_status", status)
 });
+const selectionSpeechSettings = new SelectionSpeechSettingsStore(selectionSpeechSettingsPath(rootDir));
 const speechControl = new ManagerSpeechControl({
   serviceUrl: () => speechServiceUrl(),
   rolesRoot: () => rolesRoot,
@@ -1101,6 +1166,7 @@ function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstance
       id,
       name: item.name?.trim() || id,
       enabled: item.enabled !== false,
+      autoLoginOnRabiStart: item.autoLoginOnRabiStart !== false,
       gatewayPort,
       httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
       webuiUrl: item.webuiUrl?.trim() || definition.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
@@ -1550,7 +1616,8 @@ function writePersonaConfigFile(roleId: string, items: GatewayDefinition[]): voi
     automationRules: source?.automationRules,
     notificationRules: source?.notificationRules,
     recentMessageLimits: source?.recentMessageLimits,
-    speechTriggerKeywords: source?.speechTriggerKeywords
+    speechTriggerKeywords: source?.speechTriggerKeywords,
+    languageStyle: source?.languageStyle
   });
 }
 
@@ -1693,6 +1760,7 @@ function loadRuntimes(): void {
     }
   }
   memoryConsolidationScheduler?.reschedule();
+  reconcileMessageProcessingAgentRequests();
 }
 
 function syncRunningGateways(): void {
@@ -1722,7 +1790,6 @@ function reloadChangedConfig(reason: string): void {
     personaCatalog.invalidate(rolesRoot);
     loadRuntimes();
     syncRunningGateways();
-    reconcileSpeechMicrophone(reason);
     console.log(`gateway-manager reloaded ${reason}`);
   } catch (error) {
     console.error(`Failed to reload gateway config ${reason}`, error);
@@ -1912,9 +1979,15 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     FEISHU_EVENT_SUBSCRIPTION_ENABLED: definition.feishuEventSubscriptionEnabled === true ? "true" : "false",
     FEISHU_WEBHOOK_PORT: String(definition.feishuWebhookPort ?? definition.gatewayPort),
     FEISHU_WEBHOOK_PATH: definition.feishuWebhookPath ?? "/feishu",
-    CODEX_THREAD_ID: definition.codexThreadId?.trim() || "",
+    CODEX_THREAD_ID: definition.primaryAgentAdapter === "dsh"
+      ? (definition.dshSessionId?.trim() || definition.codexThreadId?.trim() || "")
+      : (definition.codexThreadId?.trim() || ""),
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
+    DSH_SESSION_ID: definition.dshSessionId?.trim() || "",
+    DSH_SESSION_NAME: definition.dshSessionName?.trim() || "",
+    DSH_BASE_URL: definition.dshBaseUrl?.trim() || "",
+    DSH_CWD: normalizeCodexCwd(definition.dshCwd) || "",
     CODEX_PLAN_ASSISTANT_ENABLED: definition.codexPlanAssistantEnabled === true ? "true" : "false",
     CODEX_PLAN_ASSISTANT_MODEL: normalizeCodexPlanAssistantModel(definition.codexPlanAssistantModel),
     CODEX_PLAN_ASSISTANT_SESSIONS: JSON.stringify(definition.codexPlanAssistantSessions ?? []),
@@ -2130,6 +2203,20 @@ function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdap
       monitorThreadName: "AstrBot Agent",
       monitorThreadSource: astrbotUrl,
       message: "AstrBot 已配置；等待当前 Manager 进程收到成功投递上报。"
+    };
+  }
+
+  if (adapterType === "dsh") {
+    const dshBaseUrl = definition.dshBaseUrl?.trim() || "http://127.0.0.1:3080";
+    return {
+      agentAdapterType: adapterType,
+      bound: Boolean(definition.dshSessionId?.trim() && definition.dshCwd?.trim()),
+      monitorThreadName: definition.dshSessionName?.trim() || "DSH 主人格",
+      monitorThreadSource: dshBaseUrl,
+      monitorThreadId: definition.dshSessionId?.trim() || "",
+      monitorThreadCwd: definition.dshCwd?.trim() || "",
+      deliveryTransport: "http",
+      message: "DSH 会话主人格：投递通过 DSH apiproxy session.prompt 完成。"
     };
   }
 
@@ -3350,8 +3437,14 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
       error: managerOperationalError(failure, rootDir)
     });
   }
+  const serialized = measureSyncPerformanceOperation(
+    PERFORMANCE_OPERATIONS.managerHttpJsonSerialize,
+    () => JSON.stringify(body)
+  );
+  const context = managerRequestContexts.get(response);
+  if (context) context.responseBytes = Buffer.byteLength(serialized);
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(body, null, 2));
+  response.end(serialized);
 }
 
 function readJsonBody<T>(request: http.IncomingMessage, maxBytes = 0): Promise<T> {
@@ -3849,10 +3942,25 @@ async function deliverAgentRequestReminder(requestId: string): Promise<void> {
     return;
   }
   try {
+    const messageProcessingTarget = currentMessageProcessingTargetByThreadId(request.target.threadId)
+      ?? ((request.target.agentType === "message_processing" || request.target.agentType === "primary_persona")
+        && request.target.threadName
+        && request.target.workspace
+        ? {
+            agentType: request.target.agentType,
+            worker: {
+              threadId: request.target.threadId,
+              threadName: request.target.threadName,
+              workspace: request.target.workspace
+            }
+          } as MessageProcessingDeliveryTarget
+        : undefined);
+    const target = messageProcessingTarget?.worker ?? request.target;
     const result = await handleAgentThreadRequest({
       action: "send",
-      threadId: request.target.threadId,
-      cwd: request.target.workspace,
+      threadId: target.threadId,
+      ...(target.threadName ? { title: target.threadName, createIfMissing: true } : {}),
+      cwd: target.workspace,
       prompt: agentRequestReminderPrompt(request)
     }, {
       allowedWorkspaces: agentThreadAllowedWorkspaces(),
@@ -3861,6 +3969,15 @@ async function deliverAgentRequestReminder(requestId: string): Promise<void> {
     });
     if (result.data.status !== "delivered") {
       throw new Error(String(result.data.warning || result.data.message || "Agent request reminder was not accepted."));
+    }
+    if (messageProcessingTarget) {
+      persistResolvedMessageProcessingTarget(
+        messageProcessingTarget,
+        result.data,
+        runtimeForMessageProcessingTarget(messageProcessingTarget)
+      );
+    } else {
+      persistResolvedAgentRequestTarget(target, result.data);
     }
     const updated = agentRequests.recordReminderResult(requestId, true);
     publishManagerEvent("agent_requests_changed", {
@@ -3972,8 +4089,10 @@ function recordMessageProcessingSend(request: AgentSendRequest, result: AgentSen
 
 async function dispatchPlanNotificationRequirement(requirement: MessageProcessingRequirement): Promise<void> {
   if (requirement.kind !== "plan_progress_notification") return;
-  if (!requirement.worker?.threadId || !requirement.worker.workspace) {
-    messageProcessingBoard.recordDispatchFailure(requirement.id, "原消息没有绑定可复用的消息处理 Agent；等待 heartbeat 或人工重新分配。");
+  const target = currentMessageProcessingTarget(requirement);
+  const worker = target?.worker;
+  if (!target || !worker?.threadId || !worker.workspace) {
+    messageProcessingBoard.recordDispatchFailure(requirement.id, "当前 Route 没有可用的主人格或消息处理 Agent 任务；等待配置恢复或人工重新分配。");
     publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "send_failed" });
     return;
   }
@@ -3998,7 +4117,7 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     ...(requirement.plan?.changes || []).map((change) => `- ${change}`),
     "",
     "RabiManager 已自动生成一项必须发送的计划进展通知。请结合计划当前内容整理简短、可理解的进展，不要把内部 taskBinding、路径或控制面字段原样发给群成员。",
-    `先 POST ${outcomeUrl} 提交 decision=reply，再 GET ${sendContextUrl} 读取最新双向消息。确认没有他人已经通知、没有新消息改变结论后，POST 同一 send-context 地址审核确切 proposedSend，并把返回 token 写入 tracking.sendContextReviewToken。`,
+    `先 POST ${outcomeUrl} 提交 decision=reply，再 GET ${sendContextUrl}?sourceMessageId=<本次拟引用的原消息ID> 读取精确来源和最新双向消息。确认没有他人已经通知、没有新消息改变结论后，POST ${sendContextUrl} 审核确切 proposedSend，并把返回 token 写入 tracking.sendContextReviewToken。`,
     `最后使用 POST ${sendApiUrl}，明确填写 routeId、channel、params、payload、deliveryId，并在 tracking.requirementId 填 ${requirement.id}。不要把来源 replyContext 原样当发送参数。`,
     `发送请求模板：${JSON.stringify(sendRequestTemplate || { error: "当前来源无法生成明确发送目标，请提交 invalid_source，不要猜测。" })}`,
     `当前 replyContext：${JSON.stringify(requirement.source.replyContext || {})}`,
@@ -4006,17 +4125,27 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     "普通问题和讨论仍由你判断是否参与；这条计划进展通知本身不是可选讨论。"
   ].join("\n");
   try {
-    await handleAgentThreadRequest({
+    const result = await handleAgentThreadRequest({
       action: "send",
-      threadId: requirement.worker.threadId,
-      cwd: requirement.worker.workspace,
+      threadId: worker.threadId,
+      title: worker.threadName,
+      createIfMissing: true,
+      cwd: worker.workspace,
       sandbox: "workspace-write",
       prompt
     }, {
       allowedWorkspaces: agentThreadAllowedWorkspaces(),
       defaultWorkspace: rootDir
     });
-    messageProcessingBoard.recordDispatch(requirement.id, requirement.worker);
+    if (result.data.status !== "delivered") {
+      throw new Error(String(result.data.warning || result.data.message || "Plan notification was not accepted."));
+    }
+    const resolved = persistResolvedMessageProcessingTarget(
+      target,
+      result.data,
+      runtimeForMessageProcessingRequirement(requirement)
+    );
+    messageProcessingBoard.recordDispatch(requirement.id, resolved.worker);
     publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "processing" });
   } catch (error) {
     messageProcessingBoard.recordDispatchFailure(requirement.id, error);
@@ -4025,6 +4154,221 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
 }
 
 const knowledgeCallbackReminderTimers = new Map<string, NodeJS.Timeout>();
+
+function runtimeForMessageProcessingRequirement(requirement: MessageProcessingRequirement): GatewayRuntime | undefined {
+  const routeIds = [requirement.source.routeId, requirement.source.routeProfileId].filter(Boolean);
+  for (const routeId of routeIds) {
+    const exact = runtimes.get(String(routeId));
+    if (exact) return exact;
+  }
+  return [...runtimes.values()].find((runtime) =>
+    routeIds.some((routeId) => (runtime.definition.routeProfiles ?? []).some((profile) => profile.id === routeId))
+  );
+}
+
+function currentMessageProcessingWorker(requirement: MessageProcessingRequirement): MessageProcessingRequirement["worker"] {
+  return currentMessageProcessingTarget(requirement)?.worker;
+}
+
+function currentMessageProcessingTarget(requirement: MessageProcessingRequirement): MessageProcessingDeliveryTarget | undefined {
+  const runtime = runtimeForMessageProcessingRequirement(requirement);
+  if (!runtime) {
+    return requirement.worker
+      ? { agentType: "message_processing", worker: requirement.worker }
+      : undefined;
+  }
+  const maxAgents = runtime.definition.messageProcessingAgents?.codex?.maxAgents;
+  const managedWorker = runtime.definition.messageProcessingAgents?.codex?.enabled === true
+    ? resolveCurrentMessageAgentWorker(
+      messageAgentPoolStatePath(dataDirFor(runtime.definition)),
+      requirement.worker,
+      maxAgents,
+      {
+        groupId: requirement.messageGroupId || requirement.id,
+        endpoint: requirement.source.endpoint,
+        conversationKey: requirement.source.conversationKey,
+        sender: requirement.source.sender
+      }
+    )
+    : undefined;
+  return resolveMessageProcessingDeliveryTarget(runtime.definition, managedWorker);
+}
+
+function runtimeForMessageProcessingTarget(target: MessageProcessingDeliveryTarget): GatewayRuntime | undefined {
+  if (target.agentType === "primary_persona") {
+    return [...runtimes.values()].find((runtime) =>
+      (String(runtime.definition.codexThreadId || "").trim() === target.worker.threadId
+        && String(runtime.definition.codexCwd || "").trim() === target.worker.workspace)
+      || (String(runtime.definition.dshSessionId || "").trim() === target.worker.threadId
+        && String(runtime.definition.dshCwd || "").trim() === target.worker.workspace)
+    );
+  }
+  return [...runtimes.values()].find((runtime) => readCurrentMessageAgentWorkers(
+    messageAgentPoolStatePath(dataDirFor(runtime.definition))
+  ).some((worker) => worker.threadId === target.worker.threadId));
+}
+
+function replaceOpenAgentRequestParties(
+  previousThreadId: string,
+  worker: NonNullable<MessageProcessingRequirement["worker"]>
+): void {
+  const result = agentRequests.reconcileOpenParties((party) => party.threadId === previousThreadId
+    ? {
+        ...party,
+        threadId: worker.threadId,
+        threadName: worker.threadName,
+        workspace: worker.workspace
+      }
+    : undefined);
+  if (!result.reassigned.length && !result.cancelled.length) return;
+  publishManagerEvent("agent_requests_changed", {
+    status: "archived_task_binding_replaced",
+    previousThreadId,
+    threadId: worker.threadId,
+    reassignedRequestIds: result.reassigned.map((request) => request.id),
+    cancelledRequestIds: result.cancelled.map((request) => request.id)
+  });
+}
+
+function persistResolvedAgentRequestTarget(
+  target: { threadId: string; threadName?: string; workspace?: string },
+  result: Record<string, unknown>
+): void {
+  const previousThreadId = String(result.previousThreadId || "").trim();
+  const thread = result.thread && typeof result.thread === "object"
+    ? result.thread as { id?: unknown; title?: unknown; cwd?: unknown }
+    : undefined;
+  const threadId = String(thread?.id || result.threadId || "").trim();
+  if (!previousThreadId || previousThreadId !== target.threadId || !threadId || threadId === previousThreadId) return;
+  replaceOpenAgentRequestParties(previousThreadId, {
+    threadId,
+    threadName: String(thread?.title || target.threadName || threadId),
+    workspace: String(thread?.cwd || target.workspace || rootDir)
+  });
+}
+
+function persistResolvedMessageProcessingTarget(
+  target: MessageProcessingDeliveryTarget,
+  result: Record<string, unknown>,
+  runtime: GatewayRuntime | undefined
+): MessageProcessingDeliveryTarget {
+  const resolved = resolveDeliveredMessageProcessingTarget(target, result);
+  if (!resolved.previousThreadId) return resolved.target;
+  if (!runtime) {
+    throw new Error(`Cannot persist replacement for archived ${target.agentType} task ${resolved.previousThreadId}.`);
+  }
+  const replacement = resolved.target.worker;
+  if (target.agentType === "primary_persona") {
+    const configuredThreadId = String(runtime.definition.codexThreadId || "").trim();
+    if (configuredThreadId !== resolved.previousThreadId && configuredThreadId !== replacement.threadId) {
+      throw new Error(`Primary Persona binding changed before archived task replacement could be saved: ${configuredThreadId}`);
+    }
+    if (configuredThreadId !== replacement.threadId) {
+      runtime.definition.codexThreadId = replacement.threadId;
+      runtime.definition.codexThreadName = replacement.threadName;
+      runtime.definition.codexCwd = replacement.workspace;
+      writeAdapterConfigFile(runtime.definition);
+    }
+  } else {
+    const statePath = messageAgentPoolStatePath(dataDirFor(runtime.definition));
+    const replaced = replacePersistedMessageAgentWorker(
+      statePath,
+      resolved.previousThreadId,
+      replacement
+    );
+    const alreadyPersisted = !replaced && readCurrentMessageAgentWorkers(statePath)
+      .some((worker) => worker.threadId === replacement.threadId);
+    if (!replaced && !alreadyPersisted) {
+      throw new Error(`Message Agent replacement could not be saved: ${resolved.previousThreadId}`);
+    }
+  }
+  messageProcessingBoard.replaceWorkerReferences(resolved.previousThreadId, replacement);
+  replaceOpenAgentRequestParties(resolved.previousThreadId, replacement);
+  reconcileMessageProcessingAgentRequests();
+  publishManagerEvent("codex_binding_replaced", {
+    gatewayId: runtime.definition.id,
+    agentType: target.agentType,
+    previousThreadId: resolved.previousThreadId,
+    threadId: replacement.threadId,
+    workspace: replacement.workspace
+  });
+  return resolved.target;
+}
+
+function currentMessageProcessingTargetByThreadId(threadId: string): MessageProcessingDeliveryTarget | undefined {
+  const historicalTargets = messageProcessingBoard.snapshot().requirements
+    .filter((requirement) => requirement.worker?.threadId === threadId)
+    .flatMap((requirement) => {
+      const target = currentMessageProcessingTarget(requirement);
+      return target ? [target] : [];
+    });
+  const uniqueHistoricalTargets = [...new Map(historicalTargets.map((target) => [
+    `${target.agentType}\n${target.worker.threadId}\n${target.worker.workspace}`,
+    target
+  ])).values()];
+  if (uniqueHistoricalTargets.length === 1) return uniqueHistoricalTargets[0];
+  if (uniqueHistoricalTargets.length > 1) return undefined;
+  const candidates = [...runtimes.values()].flatMap((runtime) => {
+    const modeEnabled = runtime.definition.messageProcessingAgents?.codex?.enabled === true;
+    const workers = readCurrentMessageAgentWorkers(
+      messageAgentPoolStatePath(dataDirFor(runtime.definition)),
+      modeEnabled ? runtime.definition.messageProcessingAgents?.codex?.maxAgents : undefined
+    );
+    const matchingWorker = workers.find((worker) => worker.threadId === threadId);
+    if (!matchingWorker) return [];
+    const target = resolveMessageProcessingDeliveryTarget(
+      runtime.definition,
+      modeEnabled
+        ? {
+            threadId: matchingWorker.threadId,
+            threadName: matchingWorker.threadName,
+            workspace: matchingWorker.workspace
+          }
+        : undefined
+    );
+    return target ? [target] : [];
+  });
+  const unique = [...new Map(candidates.map((target) => [
+    `${target.agentType}\n${target.worker.threadId}\n${target.worker.workspace}`,
+    target
+  ])).values()];
+  return unique.length === 1 ? unique[0] : undefined;
+}
+
+function reconcileMessageProcessingAgentRequests(): void {
+  const knownMessageWorkers = new Set(messageProcessingBoard.snapshot().requirements
+    .flatMap((requirement) => requirement.worker?.threadId ? [requirement.worker.threadId] : []));
+  const result = agentRequests.reconcileOpenParties((party, record) => {
+    const isMessageProcessingParty = party.agentType === "message_processing" || knownMessageWorkers.has(party.threadId);
+    if (!isMessageProcessingParty) return undefined;
+    const requirement = record.messageProcessingRequirementId
+      ? messageProcessingBoard.getRequirement(record.messageProcessingRequirementId)
+      : undefined;
+    const target = requirement
+      ? currentMessageProcessingTarget(requirement)
+      : currentMessageProcessingTargetByThreadId(party.threadId);
+    if (!target) return null;
+    const worker = target.worker;
+    const agentType = target.agentType;
+    if (worker.threadId === party.threadId && agentType === party.agentType) return undefined;
+    return {
+      threadId: worker.threadId,
+      threadName: worker.threadName,
+      workspace: worker.workspace,
+      agentType
+    };
+  });
+  if (!result.reassigned.length && !result.cancelled.length) return;
+  managerOperationalLog.record("info", "message_agent_request_bindings_reconciled", {
+    result: `reassigned=${result.reassigned.length};cancelled=${result.cancelled.length}`,
+    action: [...result.reassigned, ...result.cancelled].map((request) => request.id).join(",")
+  });
+  publishManagerEvent("agent_requests_changed", {
+    status: "message_agent_bindings_reconciled",
+    reassignedRequestIds: result.reassigned.map((request) => request.id),
+    cancelledRequestIds: result.cancelled.map((request) => request.id)
+  });
+}
 
 export function buildKnowledgeCallbackReminderPrompt(
   requirement: MessageProcessingRequirement,
@@ -4065,22 +4409,35 @@ async function sendKnowledgeCallbackReminder(requirementId: string): Promise<voi
   if (!requirement) return;
   const pending = messageProcessingBoard.pendingKnowledgeMatches(requirementId);
   if (!pending.length) return;
-  if (!requirement.worker?.threadId || !requirement.worker.workspace) {
+  const target = currentMessageProcessingTarget(requirement);
+  const worker = target?.worker;
+  if (!target || !worker?.threadId || !worker.workspace) {
     scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
     return;
   }
   const prompt = buildKnowledgeCallbackReminderPrompt(requirement, pending);
   try {
-    await handleAgentThreadRequest({
+    const result = await handleAgentThreadRequest({
       action: "send",
-      threadId: requirement.worker.threadId,
-      cwd: requirement.worker.workspace,
+      threadId: worker.threadId,
+      title: worker.threadName,
+      createIfMissing: true,
+      cwd: worker.workspace,
       prompt,
       sandbox: "workspace-write"
     }, {
       allowedWorkspaces: agentThreadAllowedWorkspaces(),
       defaultWorkspace: rootDir
     });
+    if (result.data.status !== "delivered") {
+      throw new Error(String(result.data.warning || result.data.message || "Knowledge callback reminder was not accepted."));
+    }
+    const resolved = persistResolvedMessageProcessingTarget(
+      target,
+      result.data,
+      runtimeForMessageProcessingRequirement(requirement)
+    );
+    messageProcessingBoard.recordWorkerReference(requirement.id, resolved.worker);
   } catch (error) {
     managerOperationalLog.record("warn", "knowledge_callback_reminder_failed", {
       action: requirementId,
@@ -4092,9 +4449,21 @@ async function sendKnowledgeCallbackReminder(requirementId: string): Promise<voi
 }
 
 async function messageProcessingBoardPayload(routeId?: string, limit?: number): Promise<Record<string, unknown>> {
-  if (managerReadOnly) return messageProcessingBoard.board({ routeId, limit });
+  if (managerReadOnly) return measureSyncPerformanceOperation(
+    PERFORMANCE_OPERATIONS.managerMessageBoardSummary,
+    () => messageProcessingBoard.boardSummary({ routeId, limit })
+  );
   const openStatuses = new Set(["pending_dispatch", "processing", "handed_off", "awaiting_send", "awaiting_approval", "fact_record_pending", "send_failed"]);
-  const candidates = messageProcessingBoard.list({ routeId, limit }).filter((item) => item.worker && openStatuses.has(item.status));
+  const boardSnapshot = measureSyncPerformanceOperation(
+    PERFORMANCE_OPERATIONS.managerMessageBoardSummary,
+    () => messageProcessingBoard.boardSummary({ routeId, limit })
+  ) as { items?: MessageProcessingRequirement[] };
+  const displayItems = (boardSnapshot.items ?? []).map((item) => {
+    if (!openStatuses.has(item.status)) return item;
+    const worker = currentMessageProcessingWorker(item);
+    return worker ? { ...item, worker } : item;
+  });
+  const candidates = displayItems.filter((item) => item.worker && openStatuses.has(item.status));
   const byThread = new Map<string, MessageProcessingRequirement[]>();
   const workerRuntime = new Map<string, MessageProcessingWorkerRuntimeObservation>();
   for (const item of candidates) {
@@ -4128,7 +4497,33 @@ async function messageProcessingBoardPayload(routeId?: string, limit?: number): 
       workerRuntime.set(threadId, { status: "unavailable", observedAt: new Date().toISOString() });
     }
   }));
-  return messageProcessingBoard.board({ routeId, limit }, workerRuntime);
+  const enriched = measureSyncPerformanceOperation(
+    PERFORMANCE_OPERATIONS.managerMessageBoardSummary,
+    () => messageProcessingBoard.boardSummary({ routeId, limit }, workerRuntime)
+  ) as Record<string, unknown> & {
+    items?: MessageProcessingRequirement[];
+  };
+  enriched.items = (enriched.items ?? []).map((item) => {
+    if (!openStatuses.has(item.status)) return item;
+    const worker = currentMessageProcessingWorker(item);
+    const runtime = worker ? workerRuntime.get(worker.threadId) : undefined;
+    return worker
+      ? {
+          ...item,
+          worker: {
+            ...worker,
+            ...(runtime?.threadName ? { threadName: runtime.threadName } : {}),
+            ...(runtime?.workspace ? { workspace: runtime.workspace } : {}),
+            ...(runtime ? {
+              runtimeStatus: runtime.status,
+              active: runtime.status === "active" ? true : runtime.status === "idle" ? false : undefined,
+              observedAt: runtime.observedAt
+            } : {})
+          }
+        }
+      : item;
+  });
+  return enriched;
 }
 
 function setMessageProcessingPlanBaseline(item: MessageProcessingRequirement, roleIdInput?: string, planIdInput?: string): void {
@@ -4193,15 +4588,23 @@ function ensurePlanSecretaryTarget(
 }
 
 async function sendPlanFeedbackToSecretary(
+  runtime: GatewayRuntime,
+  roleDir: string,
+  plan: PlanItem,
   target: PlanApprovalFeedbackSecretaryTarget,
   request: PlanApprovalFeedbackPersonaRequest
 ): Promise<void> {
+  const resolved = await resolvePlanSecretaryDeliveryTarget(runtime, roleDir, plan, target);
   const result = await handleAgentThreadRequest({
     action: "send",
-    threadId: target.threadId,
-    cwd: target.workspace,
-    prompt: request.text,
-    model: target.model,
+    threadId: resolved.target.threadId,
+    title: resolved.target.threadName,
+    createIfMissing: true,
+    cwd: resolved.target.workspace,
+    prompt: resolved.initializationPrompt
+      ? `${resolved.initializationPrompt}\n\n${request.text}`
+      : request.text,
+    model: resolved.target.model,
     sandbox: "workspace-write"
   }, {
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
@@ -4210,20 +4613,26 @@ async function sendPlanFeedbackToSecretary(
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw new Error(String(result.data.message || "Plan secretary feedback delivery failed with HTTP " + result.statusCode + "."));
   }
+  if (resolved.initializationPrompt) markPlanSecretaryInitialized(runtime, resolved.target.threadId);
 }
 
 async function sendPlanTaskCompletionToSecretary(
-  _runtime: GatewayRuntime,
+  runtime: GatewayRuntime,
   target: PlanSecretaryTarget,
   delivery: PlanTaskCompletionDelivery,
   prompt: string
 ): Promise<void> {
+  const resolved = await resolvePlanSecretaryDeliveryTarget(runtime, delivery.roleDir, delivery.plan, target);
   const result = await handleAgentThreadRequest({
     action: "send",
-    threadId: target.threadId,
-    cwd: target.workspace,
-    prompt,
-    model: target.model,
+    threadId: resolved.target.threadId,
+    title: resolved.target.threadName,
+    createIfMissing: true,
+    cwd: resolved.target.workspace,
+    prompt: resolved.initializationPrompt
+      ? `${resolved.initializationPrompt}\n\n${prompt}`
+      : prompt,
+    model: resolved.target.model,
     sandbox: "workspace-write",
     sourceThreadId: delivery.sourceSessionId,
     sourceAgentType: "plan_agent",
@@ -4237,6 +4646,104 @@ async function sendPlanTaskCompletionToSecretary(
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw new Error(String(result.data.message || "Plan task completion delivery to secretary failed with HTTP " + result.statusCode + "."));
   }
+  if (resolved.initializationPrompt) markPlanSecretaryInitialized(runtime, resolved.target.threadId);
+}
+
+function markPlanSecretaryInitialized(runtime: GatewayRuntime, threadId: string): void {
+  let changed = false;
+  runtime.definition.codexPlanAssistantSessions = (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => {
+    if (session.threadId !== threadId || session.initializedAt) return session;
+    changed = true;
+    return { ...session, initializedAt: new Date().toISOString() };
+  });
+  if (changed) writeAdapterConfigFile(runtime.definition);
+}
+
+async function resolvePlanSecretaryDeliveryTarget(
+  runtime: GatewayRuntime,
+  roleDir: string,
+  plan: PlanItem,
+  target: PlanSecretaryTarget | PlanApprovalFeedbackSecretaryTarget
+): Promise<{ target: PlanSecretaryTarget; initializationPrompt?: string }> {
+  const previousSession = (runtime.definition.codexPlanAssistantSessions ?? [])
+    .find((session) => session.threadId === target.threadId);
+  // DSH secretary endpoints are self-managed sessions: skip Codex task
+  // resolution/creation and deliver directly through the DSH session bridge.
+  if (isDshSessionId(target.threadId)) {
+    return {
+      target: {
+        threadId: target.threadId,
+        threadName: target.threadName,
+        workspace: target.workspace,
+        index: previousSession?.index ?? ("index" in target ? target.index : 1),
+        model: target.model
+      }
+    };
+  }
+  const result = await handleAgentThreadRequest({
+    action: "resolve",
+    threadId: target.threadId,
+    title: target.threadName,
+    cwd: target.workspace,
+    createIfMissing: true,
+    lookupMode: "state_db"
+  }, {
+    allowedWorkspaces: agentThreadAllowedWorkspaces(),
+    defaultWorkspace: rootDir
+  });
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    throw new Error(String(result.data.message || "Plan secretary task resolution failed with HTTP " + result.statusCode + "."));
+  }
+  const thread = result.data.thread as { id?: unknown; title?: unknown; cwd?: unknown } | undefined;
+  const threadId = String(thread?.id || "").trim();
+  if (!threadId) throw new Error("Plan secretary task resolution did not return a task id.");
+  const resolvedTarget: PlanSecretaryTarget = {
+    threadId,
+    threadName: String(thread?.title || target.threadName),
+    workspace: String(thread?.cwd || target.workspace),
+    index: previousSession?.index ?? ("index" in target ? target.index : 1),
+    model: target.model
+  };
+  if (threadId === target.threadId) return { target: resolvedTarget };
+
+  const sessions = runtime.definition.codexPlanAssistantSessions ?? [];
+  runtime.definition.codexPlanAssistantSessions = sessions.map((session) => session.threadId === target.threadId
+    ? {
+        ...session,
+        threadId,
+        threadName: resolvedTarget.threadName,
+        workspace: resolvedTarget.workspace,
+        initializedAt: undefined
+      }
+    : session);
+  writeAdapterConfigFile(runtime.definition);
+  if (plan.secretaryBinding?.sessionId === target.threadId) {
+    updatePlan(roleDir, plan.id, {
+      secretaryBinding: {
+        ...plan.secretaryBinding,
+        sessionId: threadId,
+        sessionTitle: resolvedTarget.threadName,
+        workspace: resolvedTarget.workspace
+      }
+    });
+  }
+
+  const sourceThreadName = String(runtime.definition.codexThreadName || runtime.definition.name || runtime.definition.id).trim();
+  const count = Math.max(1, sessions.length);
+  const index = resolvedTarget.index;
+  return {
+    target: resolvedTarget,
+    initializationPrompt: codexPlanAssistantInitializationPrompt({
+      roleId: String(runtime.definition.agentRoleId || ""),
+      sourceThreadId: String(runtime.definition.codexThreadId || ""),
+      sourceThreadName,
+      assistantThreadId: threadId,
+      assistantThreadName: resolvedTarget.threadName,
+      workspace: resolvedTarget.workspace,
+      count,
+      index
+    })
+  };
 }
 
 function runtimeForRoleDelivery(roleId: string, gatewayId: string): GatewayRuntime {
@@ -4259,6 +4766,9 @@ function deliverPlanTaskCompletion(delivery: PlanTaskCompletionDelivery): Promis
 }
 
 const activePlanFeedbackDeliveries = new Set<string>();
+const attemptedPlanFeedbackRecoveries = new Set<string>();
+const PLAN_FEEDBACK_RECOVERY_RECHECK_MS = 15_000;
+let planFeedbackRecoveryTimer: NodeJS.Timeout | undefined;
 
 function schedulePlanFeedbackDelivery(
   roleDir: string,
@@ -4293,7 +4803,14 @@ function schedulePlanFeedbackDelivery(
           }
         : undefined,
       sendToTask: sendPlanQaFeedbackToTask,
-      sendToSecretary: sendPlanFeedbackToSecretary,
+      readTaskDelivery: inspectPlanFeedbackDelivery,
+      sendToSecretary: (target, request) => sendPlanFeedbackToSecretary(
+        runtime,
+        roleDir,
+        secretaryAssignment.plan,
+        target,
+        request
+      ),
       sendToPersona: async (request) => {
         const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
         const isNotice = request.kind !== "full_feedback";
@@ -4321,7 +4838,7 @@ function schedulePlanFeedbackDelivery(
           planId: plan.id,
           planStepId: record.stepId,
           planFeedbackId: record.id,
-          planFeedbackResponseId: `response-${record.id}`,
+          planFeedbackResponseId: planFeedbackResponseId(record),
           planFeedbackKind: record.kind,
           planFeedbackAutoDelivered: request.kind === "auto_delivered_notice",
           planFeedbackDeliveryNoticeKind: isNotice ? request.kind : undefined,
@@ -4331,12 +4848,19 @@ function schedulePlanFeedbackDelivery(
       }
     })
       .then((result) => updatePlanFeedbackDelivery(roleDir, record, "delivered", result.message))
-      .catch((error) => updatePlanFeedbackDelivery(
-        roleDir,
-        record,
-        "failed",
-        error instanceof Error ? error.message : String(error)
-      ))
+      .catch((error) => {
+        const pending = error instanceof PlanFeedbackDeliveryPendingError;
+        if (pending) {
+          attemptedPlanFeedbackRecoveries.delete(deliveryKey);
+          queuePlanFeedbackRecoverySweep("pending delivery readback");
+        }
+        return updatePlanFeedbackDelivery(
+          roleDir,
+          record,
+          pending ? "pending" : "failed",
+          error instanceof Error ? error.message : String(error)
+        );
+      })
       .then((terminalRecord) => {
         record = terminalRecord;
         publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
@@ -4762,8 +5286,85 @@ function writeSpeechRuntimeJson(
     .then(data => jsonResponse(response, 200, { code: 0, data }))
     .catch(error => jsonResponse(response, error instanceof SpeechRuntimeControlError ? error.status : 502, {
       code: -1,
-      message: error instanceof Error ? error.message : String(error)
+      message: error instanceof Error ? error.message : String(error),
+      ...(error instanceof SpeechRuntimeControlError && error.detail ? { detail: error.detail } : {}),
+      ...(error instanceof SpeechRuntimeControlError && error.resolution ? { resolution: error.resolution } : {})
     }));
+}
+
+async function inspectPlanFeedbackDelivery(
+  request: PlanFeedbackRecoveryTaskRequest
+): Promise<"accepted" | "in_progress" | "missing"> {
+  const result = await handleAgentThreadRequest({
+    action: "read",
+    threadId: request.threadId,
+    cwd: request.cwd,
+    deliveryId: request.deliveryId
+  }, {
+    allowedWorkspaces: agentThreadAllowedWorkspaces(),
+    defaultWorkspace: rootDir
+  });
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    throw new Error(String(result.data.message || `Plan feedback readback failed with HTTP ${result.statusCode}.`));
+  }
+  const state = (result.data.delivery as { state?: unknown } | undefined)?.state;
+  if (state === "accepted" || state === "in_progress" || state === "missing") return state;
+  throw new Error("Plan feedback readback returned no authoritative delivery state.");
+}
+
+function queuePlanFeedbackRecoverySweep(reason: string, delayMs = PLAN_FEEDBACK_RECOVERY_RECHECK_MS): void {
+  if (managerReadOnly || planFeedbackRecoveryTimer) return;
+  planFeedbackRecoveryTimer = setTimeout(() => {
+    planFeedbackRecoveryTimer = undefined;
+    void runPlanFeedbackRecoverySweep(reason);
+  }, Math.max(0, delayMs));
+  planFeedbackRecoveryTimer.unref();
+}
+
+async function runPlanFeedbackRecoverySweep(reason: string): Promise<void> {
+  if (managerReadOnly) return;
+  const candidates = listOpenPlanFeedbackRecoveryCandidates(rolesRoot);
+  let delivered = 0;
+  let scheduled = 0;
+  let deferred = 0;
+  let alreadyAttempted = 0;
+  for (const candidate of candidates) {
+    const recoveryKey = `${candidate.roleId}:${candidate.plan.id}:${candidate.feedback.id}`;
+    if (attemptedPlanFeedbackRecoveries.has(recoveryKey)) {
+      alreadyAttempted += 1;
+      continue;
+    }
+    const outcome = await recoverPlanFeedbackCandidate(candidate, {
+      inspect: inspectPlanFeedbackDelivery,
+      schedule: async (current) => {
+        attemptedPlanFeedbackRecoveries.add(recoveryKey);
+        schedulePlanFeedbackDelivery(
+          current.roleDir,
+          current.roleId,
+          String(current.feedback.gatewayId || "").trim(),
+          current.plan,
+          current.feedback
+        );
+      }
+    });
+    if (outcome.state === "delivered") {
+      delivered += 1;
+      publishManagerEvent("plan_feedback_changed", {
+        roleId: candidate.roleId,
+        planId: candidate.plan.id,
+        feedbackId: outcome.record.id
+      });
+    } else if (outcome.state === "scheduled") {
+      scheduled += 1;
+    } else {
+      deferred += 1;
+    }
+  }
+  managerOperationalLog.record("info", "plan_feedback_recovery_sweep", {
+    action: reason,
+    result: `candidates=${candidates.length}; delivered=${delivered}; scheduled=${scheduled}; deferred=${deferred}; alreadyAttempted=${alreadyAttempted}`
+  });
+  if (deferred > 0) queuePlanFeedbackRecoverySweep("deferred delivery readback");
 }
 
 function writeSpeechModelManagerJson(
@@ -4815,6 +5416,19 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       response,
       () => speechModelManager.installModel(decodeURIComponent(modelInstallMatch[1] || "")),
       202
+    );
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/selection-reader/settings") {
+    jsonResponse(response, 200, { code: 0, data: selectionSpeechSettings.read() });
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/selection-reader/settings") {
+    writeSpeechJson(
+      response,
+      readJsonBody<unknown>(request).then(body => selectionSpeechSettings.write(body)),
+      200,
+      500
     );
     return true;
   }
@@ -5613,51 +6227,60 @@ function handleRoleKnowledgeApi(
       const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
       const wantsPage = !itemId && requestUrl.searchParams.has("limit");
       const wantsSummary = wantsPage && requestUrl.searchParams.get("detail") === "summary";
-      const data = itemId
-        ? (() => {
-          const plan = getPlan(roleDir, itemId);
-          return plan ? presentedPlanWithFeedback(roleDir, plan) : undefined;
-        })()
-        : wantsPage
-          ? (() => {
-            const requestedView = requestUrl.searchParams.get("view")?.trim() || undefined;
-            if (requestedView && !["current", "plans", "archived"].includes(requestedView)) {
-              throw new Error("Invalid plan page view.");
-            }
-            const requestedSort = requestUrl.searchParams.get("sort")?.trim() || "status";
-            if (!["status", "updated"].includes(requestedSort)) {
-              throw new Error("Invalid plan page sort.");
-            }
-            const page = paginateRolePlans(
-              presentPlans(listPlans(roleDir)),
-              requestUrl.searchParams.get("cursor")?.trim() || "",
-              normalizeRolePlanPageLimit(requestUrl.searchParams.get("limit")),
-              {
-                view: requestedView,
-                query: requestUrl.searchParams.get("query") || "",
-                sort: requestedSort as "status" | "updated",
-                statuses: requestUrl.searchParams.getAll("status").map((value) => value.trim()).filter(Boolean)
-              }
-            );
-            return {
-              ...page,
-              items: page.items.map((plan) => wantsSummary
-                ? summarizeRolePlan(plan)
-                : {
-                  ...plan,
-                  approval: planFeedbackSummary(roleDir, plan.id)
-                })
-            };
-          })()
-          : presentPlans(listPlans(roleDir)).map((plan) => ({
-            ...plan,
-            approval: planFeedbackSummary(roleDir, plan.id)
-          }));
-      if (itemId && !data) {
-        jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
+      if (itemId) {
+        const plan = getPlan(roleDir, itemId);
+        if (!plan) {
+          jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
+          return true;
+        }
+        jsonResponse(response, 200, { code: 0, data: presentedPlanWithFeedback(roleDir, plan) });
         return true;
       }
-      jsonResponse(response, 200, { code: 0, data });
+      void listPlansAsync(roleDir)
+        .then((plans) => {
+          const data = wantsPage
+            ? (() => {
+              const requestedView = requestUrl.searchParams.get("view")?.trim() || undefined;
+              if (requestedView && !["current", "plans", "archived"].includes(requestedView)) {
+                throw new Error("Invalid plan page view.");
+              }
+              const requestedSort = requestUrl.searchParams.get("sort")?.trim() || "status";
+              if (!["status", "updated", "importance", "urgency"].includes(requestedSort)) {
+                throw new Error("Invalid plan page sort.");
+              }
+              const page = paginateRolePlans(
+                presentPlans(plans),
+                requestUrl.searchParams.get("cursor")?.trim() || "",
+                normalizeRolePlanPageLimit(requestUrl.searchParams.get("limit")),
+                {
+                  view: requestedView,
+                  query: requestUrl.searchParams.get("query") || "",
+                  sort: requestedSort as "status" | "updated" | "importance" | "urgency",
+                  statuses: requestUrl.searchParams.getAll("status").map((value) => value.trim()).filter(Boolean),
+                  tags: requestUrl.searchParams.getAll("tag").map((value) => value.trim()).filter(Boolean),
+                  includeFacets: requestUrl.searchParams.get("facets") !== "0"
+                }
+              );
+              return {
+                ...page,
+                items: page.items.map((plan) => wantsSummary
+                  ? summarizeRolePlan(plan)
+                  : {
+                    ...plan,
+                    approval: planFeedbackSummary(roleDir, plan.id)
+                  })
+              };
+            })()
+            : presentPlans(plans).map((plan) => ({
+              ...plan,
+              approval: planFeedbackSummary(roleDir, plan.id)
+            }));
+          jsonResponse(response, 200, { code: 0, data });
+        })
+        .catch((error) => jsonResponse(response, 400, {
+          code: -1,
+          message: error instanceof Error ? error.message : String(error)
+        }));
       return true;
     }
     if (request.method === "GET" && resource === "skills") {
@@ -5672,7 +6295,12 @@ function handleRoleKnowledgeApi(
     if (request.method === "GET" && resource === "memory" && !itemId) {
       const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
       if (requestUrl.searchParams.get("counts") === "1") {
-        jsonResponse(response, 200, { code: 0, data: roleMemoryCounts(roleDir) });
+        void managerReadWorkerPool.queryRoleMemoryCounts(roleDir)
+          .then((data) => jsonResponse(response, 200, { code: 0, data }))
+          .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+            code: -1,
+            message: error instanceof Error ? error.message : String(error)
+          }));
         return true;
       }
       if (requestUrl.searchParams.has("limit")) {
@@ -5680,34 +6308,25 @@ function handleRoleKnowledgeApi(
         if (kind !== "recent" && kind !== "consolidated" && kind !== "archived") {
           throw new Error("Invalid memory page kind.");
         }
-        const items = kind === "consolidated"
-          ? presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated")
-          : presentRoleMemories(
-            roleDir,
-            sortKnowledgeByUpdatedAt(kind === "archived" ? listArchivedMemories(roleDir) : listActiveRecentMemories(roleDir)),
-            "recent"
-          );
-        jsonResponse(response, 200, {
-          code: 0,
-          data: paginateRoleMemory(
-            items,
-            requestUrl.searchParams.get("cursor")?.trim() || "",
-            normalizeRoleMemoryPageLimit(requestUrl.searchParams.get("limit")),
-            requestUrl.searchParams.get("query") || "",
-            roleMemoryCounts(roleDir)
-          )
-        });
+        void managerReadWorkerPool.queryRoleMemoryPage(roleDir, {
+          kind,
+          cursor: requestUrl.searchParams.get("cursor")?.trim() || "",
+          limit: normalizeRoleMemoryPageLimit(requestUrl.searchParams.get("limit")),
+          query: requestUrl.searchParams.get("query") || ""
+        })
+          .then((data) => jsonResponse(response, 200, { code: 0, data }))
+          .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+            code: -1,
+            message: error instanceof Error ? error.message : String(error)
+          }));
         return true;
       }
-      jsonResponse(response, 200, {
-        code: 0,
-        data: {
-          recent: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listActiveRecentMemories(roleDir)), "recent"),
-          consolidated: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated"),
-          archived: presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listArchivedMemories(roleDir)), "recent"),
-          consolidationRuns: listConsolidationRuns(roleDir)
-        }
-      });
+      void managerReadWorkerPool.queryRoleMemoryOverview(roleDir)
+        .then((data) => jsonResponse(response, 200, { code: 0, data }))
+        .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+          code: -1,
+          message: error instanceof Error ? error.message : String(error)
+        }));
       return true;
     }
     if (request.method === "POST" && resource === "plans" && !itemId) {
@@ -5725,28 +6344,33 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "GET" && resource === "memory/recent") {
-      const memory = itemId ? getRecentMemory(roleDir, itemId) : undefined;
-      const presented = presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listActiveRecentMemories(roleDir)), "recent");
-      const data = itemId
-        ? (memory ? presentRoleMemory(memory, "recent") : undefined)
-        : presented;
-      if (itemId && !data) {
-        jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
-        return true;
-      }
-      jsonResponse(response, 200, { code: 0, data });
+      void managerReadWorkerPool.queryRoleMemoryCatalog(roleDir, "recent", itemId)
+        .then((data) => {
+          if (itemId && !data) {
+            jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
+            return;
+          }
+          jsonResponse(response, 200, { code: 0, data });
+        })
+        .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+          code: -1,
+          message: error instanceof Error ? error.message : String(error)
+        }));
       return true;
     }
     if (request.method === "GET" && resource === "memory/consolidated") {
-      const memory = itemId ? getConsolidatedMemory(roleDir, itemId) : undefined;
-      const data = itemId
-        ? (memory ? presentRoleMemory(memory, "consolidated") : undefined)
-        : presentRoleMemories(roleDir, sortKnowledgeByUpdatedAt(listConsolidatedMemories(roleDir)), "consolidated");
-      if (itemId && !data) {
-        jsonResponse(response, 404, { code: -1, message: `Consolidated memory not found: ${itemId}` });
-        return true;
-      }
-      jsonResponse(response, 200, { code: 0, data });
+      void managerReadWorkerPool.queryRoleMemoryCatalog(roleDir, "consolidated", itemId)
+        .then((data) => {
+          if (itemId && !data) {
+            jsonResponse(response, 404, { code: -1, message: `Consolidated memory not found: ${itemId}` });
+            return;
+          }
+          jsonResponse(response, 200, { code: 0, data });
+        })
+        .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+          code: -1,
+          message: error instanceof Error ? error.message : String(error)
+        }));
       return true;
     }
     if (request.method === "POST" && resource === "memory/recent" && !itemId) {
@@ -5858,18 +6482,25 @@ function standaloneGatewayPayload(
   includeDiagnostics = true,
   includeConfigDefinitions = includeDiagnostics
 ): Record<string, unknown> {
-  const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
-  const tailCache: JsonlTailCache = new Map();
-  return buildStandaloneGatewayPayload(
-    {
-      runtimes: runtimes.values(),
-      runtimeStatus: includeDiagnostics
-        ? (runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache)
-        : (runtime) => runtimeSummaryStatusWithRoleInfoCache(runtime, roleInfoCatalogCache),
-      routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
-      rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
-    },
-    { includeConfigDefinitions }
+  return measureSyncPerformanceOperation(
+    includeDiagnostics
+      ? PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics
+      : PERFORMANCE_OPERATIONS.managerGatewaysBuildSummary,
+    () => {
+      const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
+      const tailCache: JsonlTailCache = new Map();
+      return buildStandaloneGatewayPayload(
+        {
+          runtimes: runtimes.values(),
+          runtimeStatus: includeDiagnostics
+            ? (runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache)
+            : (runtime) => runtimeSummaryStatusWithRoleInfoCache(runtime, roleInfoCatalogCache),
+          routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+          rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+        },
+        { includeConfigDefinitions }
+      );
+    }
   );
 }
 
@@ -6013,12 +6644,38 @@ function metaPayload(): Record<string, unknown> {
     rabiLinkRelay: publicRabiLinkRelayConfig(rabiLinkRelayConfigForMeta()),
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
     managerRuntime: managerRuntimeDiagnosticsSummary(),
+    performance: performanceMonitoring.store.status(),
+    messageProcessingPersistence: messageProcessingBoardPersistence.status(),
     readWorkers: managerReadWorkerPool.status(),
     catalogWorkers: managerCatalogWorkerPool.status(),
+    agentScanWorkers: managerAgentScanWorkerPool.status(),
+    performanceWorkers: managerPerformanceWorkerPool.status(),
     httpLimits: managerHttpLimits,
     personaSyncLan: personaSyncLanServer.status(),
     computerName: os.hostname()
   };
+}
+
+async function prewarmRolePlanCatalogs(): Promise<void> {
+  const startedAt = Date.now();
+  let roleDirectories: string[] = [];
+  try {
+    const entries = await fs.promises.readdir(rolesRoot, { withFileTypes: true });
+    roleDirectories = entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(rolesRoot, entry.name));
+    const results = await Promise.allSettled(roleDirectories.map((roleDir) => listPlansAsync(roleDir)));
+    managerOperationalLog.record("info", "role_plan_catalogs_prewarmed", {
+      durationMs: Date.now() - startedAt,
+      result: `roles=${roleDirectories.length}; fulfilled=${results.filter((result) => result.status === "fulfilled").length}`
+    });
+  } catch (error) {
+    managerOperationalLog.record("warn", "role_plan_catalogs_prewarm_failed", {
+      durationMs: Date.now() - startedAt,
+      result: `roles=${roleDirectories.length}`,
+      error: managerOperationalError(error, rootDir)
+    });
+  }
 }
 
 function contentTypeFor(filePath: string): string {
@@ -6249,6 +6906,20 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
         updatedAt: new Date().toISOString()
       };
       agentStateByGateway.set(gatewayId, previous);
+      if (adapterType === "codex") {
+        const bindingUpdate = resolveReportedCodexBindingUpdate(runtime.definition, body.state ?? {});
+        if (bindingUpdate) {
+          runtime.definition.codexThreadId = bindingUpdate.threadId;
+          runtime.definition.codexCwd = bindingUpdate.workspace;
+          writeAdapterConfigFile(runtime.definition);
+          publishManagerEvent("codex_binding_replaced", {
+            gatewayId,
+            previousThreadId: String(body.state?.bindingPreviousThreadId || ""),
+            threadId: bindingUpdate.threadId,
+            workspace: bindingUpdate.workspace
+          });
+        }
+      }
       jsonResponse(response, 200, { code: 0 });
     })
     .catch((error) => {
@@ -6301,6 +6972,13 @@ export function handleManagerPersonaDomainApi(
 }
 
 export async function startManager(): Promise<void> {
+  if (!managerReadOnly) {
+    await performanceMonitoring.start().catch((error) => {
+      managerOperationalLog.record("warn", "performance_monitor_start_failed", {
+        error: managerOperationalError(error, rootDir)
+      });
+    });
+  }
   // Built-artifact acceptance is a control-plane liveness/read-boundary check.
   // Do not let a transient NAS route scan delay the isolated Manager listener;
   // normal installed runtime still loads and owns its configured Routes.
@@ -6346,6 +7024,14 @@ export async function startManager(): Promise<void> {
       const mutating = !["GET", "HEAD", "OPTIONS"].includes(method);
       const failed = response.statusCode >= 400;
       const slow = durationMs >= 2_000;
+      const context = managerRequestContexts.get(response);
+      performanceMonitoring.recordHttpRequest(
+        pathname,
+        response.statusCode,
+        durationMs,
+        requestId,
+        context?.responseBytes
+      );
       if (!mutating && !failed && !slow) return;
       managerOperationalLog.record(failed ? "warn" : slow ? "warn" : "info", "http_request_completed", {
         requestId,
@@ -6382,6 +7068,9 @@ export async function startManager(): Promise<void> {
       if (handleWebguiLanAccessApi(request, requestUrl, response)) {
         return;
       }
+      if (performanceApi.handle(request, requestUrl, response)) {
+        return;
+      }
       if (handleManagerEventApi(request, requestUrl, response)) {
         return;
       }
@@ -6404,6 +7093,9 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (handleCodexHookApi(request, requestUrl, response, codexHookContextService)) {
+        return;
+      }
+      if (handleLanguageStyleApi(request, requestUrl, response, languageStyleValidator)) {
         return;
       }
       if (handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext(true))) {
@@ -6446,7 +7138,6 @@ export async function startManager(): Promise<void> {
             writeConfig(body);
             loadRuntimes();
             syncRunningGateways();
-            reconcileSpeechMicrophone("gateway save");
             jsonResponse(response, 200, standaloneGatewayPayload());
           })
           .catch((error) => {
@@ -6482,7 +7173,10 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/meta") {
-        jsonResponse(response, 200, metaPayload());
+        jsonResponse(response, 200, measureSyncPerformanceOperation(
+          PERFORMANCE_OPERATIONS.managerMetaBuild,
+          metaPayload
+        ));
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/scan/message-adapters") {
@@ -6572,8 +7266,9 @@ export async function startManager(): Promise<void> {
       const messageProcessingSendContextMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)\/send-context$/);
       if (request.method === "GET" && messageProcessingSendContextMatch) {
         const requirementId = decodeURIComponent(messageProcessingSendContextMatch[1]);
+        const sourceMessageId = requestUrl.searchParams.get("sourceMessageId")?.trim() || undefined;
         try {
-          const data = messageProcessingSendContextReview.snapshot(requirementId);
+          const data = messageProcessingSendContextReview.snapshot(requirementId, sourceMessageId);
           jsonResponse(response, 200, { code: 0, data });
         } catch (error) {
           jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
@@ -6851,8 +7546,37 @@ export async function startManager(): Promise<void> {
       if (request.method === "POST" && requestUrl.pathname === "/api/agent/send") {
         void readJsonBody<AgentSendRequest>(request)
           .then(async (body) => {
-            if (!readAgentSendReceipt(rootDir, String(body.deliveryId || ""))) {
-              messageProcessingSendContextReview.validateSend(body);
+            const receiptBeforeValidation = readAgentSendReceipt(rootDir, String(body.deliveryId || ""));
+            const validatedSendContext = !receiptBeforeValidation
+              ? messageProcessingSendContextReview.validateSend(body)
+              : undefined;
+            let reviewedReplySource: ReviewedReplySourceEvidence | undefined;
+            if (validatedSendContext?.sourceMessageId) {
+              const prepared = prepareAgentSendRequest(body);
+              if (prepared.channel === "napcat" && prepared.target.target === "group") {
+                const roleId = String(validatedSendContext.requirement.source.roleId || "").trim();
+                if (!roleId) {
+                  throw new Error(`Cannot recover reviewed source ${validatedSendContext.sourceMessageId}: requirement has no roleId.`);
+                }
+                const recovered = recoverReviewedMessageProcessingSourceRecord(
+                  roleDirForApi(roleId),
+                  validatedSendContext.requirement,
+                  validatedSendContext.sourceMessageId,
+                  {
+                    expectedGroupId: String(prepared.target.groupId || ""),
+                    expectedInstanceId: String(prepared.target.instanceId || "")
+                  }
+                );
+                reviewedReplySource = {
+                  routeId: recovered.routeId,
+                  sourceMessageId: recovered.sourceMessageId,
+                  groupId: recovered.groupId,
+                  instanceId: recovered.instanceId,
+                  record: recovered.record,
+                  dataDirs: [recovered.roleDir],
+                  reviewedAttachmentIds: recovered.reviewedAttachmentIds
+                };
+              }
             }
             const replyOptions = {
               rootDir,
@@ -6872,11 +7596,45 @@ export async function startManager(): Promise<void> {
                 };
               })
             };
-            if (!readAgentSendReceipt(rootDir, String(body.deliveryId || ""))) {
-              validateAgentSendReplyImageDescriptions(body, replyOptions);
+            if (!receiptBeforeValidation) {
+              validateAgentSendReplyImageDescriptions(body, replyOptions, reviewedReplySource);
             }
-            const deliver = () => handleAgentSend(body, replyOptions);
-            const result = await executeIdempotentAgentSend(body, { rootDir, deliver });
+            const existingReceipt = readAgentSendReceipt(rootDir, String(body.deliveryId || ""));
+            let languageStyleValidation: AgentSendResult["languageStyleValidation"];
+            if (!existingReceipt) {
+              const styleDecision = await evaluateAgentSendLanguageStyle(body, replyOptions, languageStyleValidator);
+              languageStyleValidation = styleDecision.metadata;
+              if (styleDecision.blocked) {
+                const prepared = prepareAgentSendRequest(body);
+                jsonResponse(response, 409, {
+                  code: -1,
+                  ok: false,
+                  status: "style_confirmation_required",
+                  reason: "Language style validation failed. Review the reasons, then resend the same deliveryId with styleValidation=0 only after confirming the text is intentional.",
+                  deliveryId: prepared.deliveryId,
+                  sender: prepared.sender,
+                  channel: prepared.channel,
+                  routeId: prepared.routeId,
+                  target: prepared.target,
+                  languageStyleValidation
+                });
+                return null;
+              }
+            }
+            const deliver = async () => ({
+              ...await handleAgentSend(body, replyOptions, reviewedReplySource),
+              ...(languageStyleValidation ? { languageStyleValidation } : {})
+            });
+            const result = await executeIdempotentAgentSend(body, {
+              rootDir,
+              deliver,
+              recover: async () => {
+                const inspection = await inspectAgentSendDelivery(body, replyOptions);
+                if (inspection.state === "completed") return inspection;
+                if (inspection.state === "missing") return { state: "retry" };
+                return { state: "uncertain", reason: inspection.reason };
+              }
+            });
             if (result.body.replyImageDescriptionArchive && result.body.idempotency.duplicate === false) {
               managerOperationalLog.record("info", "agent_reply_image_descriptions_archived", {
                 action: String(body.deliveryId || ""),
@@ -6887,6 +7645,7 @@ export async function startManager(): Promise<void> {
             return result;
           })
           .then((result) => {
+            if (!result) return;
             jsonResponse(response, result.statusCode, { code: result.body.ok ? 0 : -1, ...result.body });
           })
           .catch((error) => {
@@ -6910,16 +7669,46 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (requestUrl.pathname === "/api/gateways") {
-        const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
-        const tailCache: JsonlTailCache = new Map();
-        jsonResponse(response, 200, [...runtimes.values()]
-          .map((runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache)));
+        jsonResponse(response, 200, measureSyncPerformanceOperation(
+          PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics,
+          () => {
+            const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
+            const tailCache: JsonlTailCache = new Map();
+            return [...runtimes.values()]
+              .map((runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache));
+          }
+        ));
         return;
       }
       if (requestUrl.pathname === "/api/scan/agents" && request.method === "GET") {
-        void (async () => {
-          jsonResponse(response, 200, await scanAgentAdapters(agentManagerApiCtx()));
-        })();
+        const codexLimit = Number(requestUrl.searchParams.get("codexLimit") || "200");
+        const codexOffset = Number(requestUrl.searchParams.get("codexOffset") || "0");
+        const codexQuery = requestUrl.searchParams.get("codexQuery") || undefined;
+        const runtimeSnapshots = [...runtimes.values()].map((runtime) => ({ definition: runtime.definition }));
+        void managerAgentScanWorkerPool.queryAgentScan<Record<string, unknown>>(
+          rootDir,
+          runtimeSnapshots,
+          { codexLimit, codexOffset, codexQuery }
+        )
+          .then((data) => {
+            const operations = Array.isArray(data.__performanceOperations)
+              ? data.__performanceOperations as Array<{ operation?: unknown; durationMs?: unknown; error?: unknown }>
+              : [];
+            for (const operation of operations) {
+              recordPerformanceOperation(
+                String(operation.operation || "manager.agent_scan.unknown"),
+                Number(operation.durationMs || 0),
+                operation.error === true
+              );
+            }
+            const responseData = { ...data };
+            delete responseData.__performanceOperations;
+            jsonResponse(response, 200, responseData);
+          })
+          .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+            code: -1,
+            message: error instanceof Error ? error.message : String(error)
+          }));
         return;
       }
       if (requestUrl.pathname === "/api/agent/copilot-install" && request.method === "POST") {
@@ -7209,7 +7998,6 @@ export async function startManager(): Promise<void> {
       if (requestUrl.pathname === "/reload") {
         loadRuntimes();
         syncRunningGateways();
-        reconcileSpeechMicrophone("manual reload");
         if (request.headers.accept?.includes("application/json")) {
           jsonResponse(response, 200, { ok: true, gateways: [...runtimes.values()].map(runtimeStatus) });
         } else {
@@ -7255,6 +8043,14 @@ export async function startManager(): Promise<void> {
     });
     syncRabiLinkRelayRuntime();
     memoryConsolidationScheduler?.start();
+    setImmediate(() => { void prewarmRolePlanCatalogs(); });
+    setImmediate(() => { void runPlanFeedbackRecoverySweep("manager startup"); });
+    if (managerShouldAutostart) {
+      setImmediate(() => {
+        void autoLoginNapcatInstancesOnRabiStart(napcatManagerCtx())
+          .catch(error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`));
+      });
+    }
   });
 
   const configWatcher = managerShouldAutostart && managerConfigWatcherEnabled() ? startConfigWatcher() : null;
@@ -7276,6 +8072,8 @@ export async function startManager(): Promise<void> {
     knowledgeCallbackReminderTimers.clear();
     for (const timer of agentRequestReminderTimers.values()) clearTimeout(timer);
     agentRequestReminderTimers.clear();
+    if (planFeedbackRecoveryTimer) clearTimeout(planFeedbackRecoveryTimer);
+    planFeedbackRecoveryTimer = undefined;
     memoryConsolidationScheduler?.stop();
     configWatcher?.close();
     personaSyncAutoReconciler?.stop();
@@ -7283,11 +8081,16 @@ export async function startManager(): Promise<void> {
     personaSyncLanServer.stop();
     rabiLinkRelayRuntime.stop();
     speechModelManager.stop();
+    performanceApi.close();
     stopAllGateways();
     server.close(() => {
-      process.exit(0);
+      void Promise.allSettled([
+        messageProcessingBoardPersistence.flush(),
+        managerOperationalLog.flush(),
+        performanceMonitoring.stop()
+      ]).finally(() => process.exit(0));
     });
-    setTimeout(() => process.exit(0), 2500).unref();
+    setTimeout(() => process.exit(0), 10_000).unref();
   }
 
   process.on("SIGINT", () => shutdownManager("SIGINT"));

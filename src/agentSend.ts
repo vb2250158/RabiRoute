@@ -1,15 +1,20 @@
 import {
   handleAgentReply,
+  inspectAgentReplyDelivery,
   type AgentReplyOptions,
+  type AgentReplyDeliveryInspection,
   type AgentReplyRequest,
   type AgentReplyResult
 } from "./outbox.js";
 import {
   archiveReplyImageDescriptions,
   prepareReplyImageDescriptions,
+  type ReviewedReplySourceEvidence,
   type ReplyImageDescriptionArchive,
   type ReplyImageDescriptionPlan
 } from "./replyImageDescriptions.js";
+import { normalizeStyleValidationMode, type StyleValidationMode } from "./shared/languageStyle.js";
+import type { LanguageStyleValidationResult } from "./languageStyleValidation.js";
 
 export type AgentSendChannel =
   | "napcat"
@@ -35,6 +40,7 @@ export type AgentSendRequest = {
   params?: unknown;
   payload?: unknown;
   tracking?: unknown;
+  styleValidation?: unknown;
 };
 
 export type AgentSendResult = AgentReplyResult & {
@@ -44,7 +50,17 @@ export type AgentSendResult = AgentReplyResult & {
   routeId?: string;
   target?: Record<string, unknown>;
   replyImageDescriptionArchive?: ReplyImageDescriptionArchive;
+  languageStyleValidation?: {
+    mode: StyleValidationMode;
+    bypassed: boolean;
+    styleSkillUrl: string;
+    result?: LanguageStyleValidationResult;
+  };
 };
+
+export type AgentSendDeliveryInspection =
+  | { state: "completed"; result: AgentSendResult }
+  | Exclude<AgentReplyDeliveryInspection, { state: "completed" }>;
 
 type NormalizedAgentSend = {
   deliveryId: string;
@@ -54,6 +70,7 @@ type NormalizedAgentSend = {
   allowAdditionalReply: boolean;
   replyImageDescriptions: string[];
   target: Record<string, unknown>;
+  styleValidation: StyleValidationMode;
   internal: AgentReplyRequest;
 };
 
@@ -138,7 +155,7 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
 }
 
 function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
-  assertOnlyFields(request as Record<string, unknown>, ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking"], "request");
+  assertOnlyFields(request as Record<string, unknown>, ["deliveryId", "sender", "routeId", "channel", "params", "payload", "tracking", "styleValidation"], "request");
   const deliveryId = textValue(request.deliveryId, "deliveryId") as string;
   const sender = senderValue(request.sender);
   const routeId = textValue(request.routeId, "routeId") as string;
@@ -147,6 +164,7 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   const params = objectValue(request.params, "params");
   const payload = payloadFields(objectValue(request.payload, "payload"));
   const tracking = objectValue(request.tracking, "tracking", false);
+  const styleValidation = normalizeStyleValidationMode(request.styleValidation);
   assertOnlyFields(tracking, ["requirementId", "sendContextReviewToken"], "tracking");
   const requirementId = textValue(tracking.requirementId, "tracking.requirementId", false);
   const replyContext: Record<string, unknown> = requirementId
@@ -275,16 +293,37 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
     });
   }
 
-  return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, internal };
+  return { deliveryId, sender, routeId, channel, allowAdditionalReply, replyImageDescriptions, target, styleValidation, internal };
 }
 
 export function prepareAgentSendRequest(request: AgentSendRequest): NormalizedAgentSend {
   return normalizeAgentSend(request);
 }
 
+export async function inspectAgentSendDelivery(
+  request: AgentSendRequest,
+  options: AgentReplyOptions
+): Promise<AgentSendDeliveryInspection> {
+  const normalized = normalizeAgentSend(request);
+  const inspection = await inspectAgentReplyDelivery(normalized.internal, options);
+  if (inspection.state !== "completed") return inspection;
+  return {
+    state: "completed",
+    result: {
+      ...inspection.result,
+      deliveryId: normalized.deliveryId,
+      sender: normalized.sender,
+      channel: normalized.channel,
+      routeId: normalized.routeId,
+      target: normalized.target
+    }
+  };
+}
+
 function replyImageDescriptionPlan(
   normalized: NormalizedAgentSend,
-  options: AgentReplyOptions
+  options: AgentReplyOptions,
+  reviewedSource?: ReviewedReplySourceEvidence
 ): ReplyImageDescriptionPlan | undefined {
   return prepareReplyImageDescriptions({
     deliveryId: normalized.deliveryId,
@@ -293,19 +332,24 @@ function replyImageDescriptionPlan(
     channel: normalized.channel,
     target: normalized.target,
     replyImageDescriptions: normalized.replyImageDescriptions
-  }, options);
+  }, options, reviewedSource);
 }
 
 export function validateAgentSendReplyImageDescriptions(
   request: AgentSendRequest,
-  options: AgentReplyOptions
+  options: AgentReplyOptions,
+  reviewedSource?: ReviewedReplySourceEvidence
 ): void {
-  replyImageDescriptionPlan(normalizeAgentSend(request), options);
+  replyImageDescriptionPlan(normalizeAgentSend(request), options, reviewedSource);
 }
 
-export async function handleAgentSend(request: AgentSendRequest, options: AgentReplyOptions): Promise<AgentSendResult> {
+export async function handleAgentSend(
+  request: AgentSendRequest,
+  options: AgentReplyOptions,
+  reviewedSource?: ReviewedReplySourceEvidence
+): Promise<AgentSendResult> {
   const normalized = normalizeAgentSend(request);
-  const imageDescriptionPlan = replyImageDescriptionPlan(normalized, options);
+  const imageDescriptionPlan = replyImageDescriptionPlan(normalized, options, reviewedSource);
   const result = await handleAgentReply(normalized.internal, options);
   const replyImageDescriptionArchive = result.status === "sent" && imageDescriptionPlan
     ? archiveReplyImageDescriptions(imageDescriptionPlan, {

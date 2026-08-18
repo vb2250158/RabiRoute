@@ -5,19 +5,23 @@
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_dynamic_libs
 
 repo_root = Path(SPECPATH)
 tray_dir = repo_root / "desktop" / "tray-task-window"
+uiautomation_binaries = collect_dynamic_libs("uiautomation")
 
 a = Analysis(
     [str(tray_dir / "main.py")],
     pathex=[str(tray_dir)],
-    binaries=[],
+    binaries=uiautomation_binaries,
     datas=[],
     hiddenimports=[
         "PySide6.QtCore",
         "PySide6.QtGui",
         "PySide6.QtWidgets",
+        "comtypes.client",
+        "uiautomation",
         "rabiroute_tray.app_paths",
         "rabiroute_tray.desktop_adapter",
         "rabiroute_tray.desktop_models",
@@ -26,6 +30,7 @@ a = Analysis(
         "rabiroute_tray.lifecycle_controller",
         "rabiroute_tray.manager_client",
         "rabiroute_tray.qt_async",
+        "rabiroute_tray.system_selection",
         "rabiroute_tray.task_window",
         "rabiroute_tray.tray_menu_controller",
         "rabiroute_tray.tray_app",

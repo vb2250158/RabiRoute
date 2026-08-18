@@ -10,9 +10,22 @@ import {
   planApprovalGate,
   planIsBlocked
 } from "./roleKnowledge.js";
-import { planIsWaitingForPackage } from "./planPackageWaiting.js";
+import {
+  planHasPackageLifecycle,
+  planIsWaitingForPackage,
+  planIsWaitingForQaAcceptance
+} from "./planPackageWaiting.js";
+import {
+  PLAN_IMPORTANCE_PRESENTATION,
+  PLAN_URGENCY_PRESENTATION,
+  PlanImportanceLevel,
+  PlanStatusSortLevel,
+  PlanUrgencyLevel,
+  resolvePlanImportanceLevel,
+  resolvePlanUrgencyLevel
+} from "./shared/planSortContract.js";
 
-export type PlanPresentationTone = "blocked" | "qa" | "running" | "waiting_external" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
+export type PlanPresentationTone = "blocked" | "manual_verification" | "qa" | "running" | "waiting_package" | "done" | "archived" | "paused" | "unknown";
 export type PlanPresentationView = "current" | "plans" | "archived";
 
 export type PlanPresentationPalette = {
@@ -24,9 +37,22 @@ export type PlanPresentationPalette = {
 export type PlanPresentation = {
   status: string;
   tone: PlanPresentationTone;
+  statusLevel: PlanStatusSortLevel;
   sortBucket: number;
   views: PlanPresentationView[];
   palette: PlanPresentationPalette;
+  importance: {
+    level: PlanImportanceLevel;
+    label: string;
+    labelEn: string;
+    palette: PlanPresentationPalette;
+  };
+  urgency: {
+    level: PlanUrgencyLevel;
+    label: string;
+    labelEn: string;
+    palette: PlanPresentationPalette;
+  };
   approval: {
     state: "none" | "incomplete" | "ready";
     enabled: boolean;
@@ -45,29 +71,27 @@ export type PresentedPlanItem = Omit<PlanItem, "attachments"> & {
 
 type DatedKnowledgeItem = Pick<RecentMemoryItem | ConsolidatedMemoryItem, "id" | "createdAt" | "updatedAt">;
 
-const PLAN_STATUS_RANK: Record<PlanPresentationTone, number> = {
-  blocked: 0,
-  qa: 1,
-  running: 2,
-  waiting_external: 3,
-  waiting_package: 4,
-  pending: 5,
-  done: 6,
-  archived: 7,
-  unknown: 8,
-  paused: 9
+const PLAN_STATUS_RANK: Record<PlanPresentationTone, PlanStatusSortLevel> = {
+  blocked: PlanStatusSortLevel.Approval,
+  manual_verification: PlanStatusSortLevel.Qa,
+  qa: PlanStatusSortLevel.Qa,
+  running: PlanStatusSortLevel.Running,
+  waiting_package: PlanStatusSortLevel.WaitingPackage,
+  done: PlanStatusSortLevel.Done,
+  archived: PlanStatusSortLevel.Archived,
+  unknown: PlanStatusSortLevel.Unknown,
+  paused: PlanStatusSortLevel.Paused
 };
 
 const PLAN_PRESENTATION_PALETTE: Record<PlanPresentationTone, PlanPresentationPalette> = {
   blocked: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" },
-  qa: { accent: "#8e63c7", background: "#f3e8ff", foreground: "#7e22ce" },
+  manual_verification: { accent: "#f97316", background: "#fff7ed", foreground: "#c2410c" },
+  qa: { accent: "#7c3aed", background: "#f3e8ff", foreground: "#6d28d9" },
   running: { accent: "#16a34a", background: "#eaf8ef", foreground: "#15803d" },
-  waiting_external: { accent: "#f59e0b", background: "#fff7e6", foreground: "#a96008" },
   waiting_package: { accent: "#2563eb", background: "#eff6ff", foreground: "#1d4ed8" },
-  pending: { accent: "#f59e0b", background: "#fff7e6", foreground: "#a96008" },
   done: { accent: "#607d8b", background: "#eaf4f7", foreground: "#52677a" },
   archived: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" },
-  paused: { accent: "#64748b", background: "#f1f5f9", foreground: "#475569" },
+  paused: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" },
   unknown: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" }
 };
 
@@ -93,30 +117,11 @@ function hasExecutableAlternative(plan: PlanItem): boolean {
     .some((sentence) => /(?:^|[，,:：])\s*(?:先|仍可|继续|改用|替代|重试|可执行|运行|执行|发送|修复|补跑|补发)[^\n]{0,100}(?:CLI|命令行|node\s|npm(?:\.cmd)?\s|脚本|静态检查|只读检查|替代验证|重试路径|发送|QA|验收请求|修复锚点|cli|command|script|static check|fallback|retry)/i.test(sentence));
 }
 
-function hasRealQaSendReceipt(plan: PlanItem): boolean {
-  const step = currentPlanStep(plan);
-  const evidence = [plan.currentStep, plan.nextAction, plan.waitingFor, step?.title, step?.detail, step?.waitingFor]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean)
-    .join("\n");
-  return /sentMessageId\s*[:=]\s*\d+/i.test(evidence)
-    || /(?:status\s*[:=]\s*sent|已真实(?:发送|送达)|真实(?:发送|送达))[^\n]{0,80}(?:QA|验收)|(?:QA|验收)[^\n]{0,80}(?:status\s*[:=]\s*sent|已真实(?:发送|送达)|真实(?:发送|送达))/i.test(evidence);
-}
-
 function isWaitingForRenewedAuthorization(plan: PlanItem): boolean {
   const waiting = [authoritativeWaitingText(plan), planActionText(plan)]
     .filter(Boolean)
     .join("\n");
   return /(?:用户|负责人|审批人)[^\n]{0,40}(?:明确)?(?:禁止|不允许|未授权|撤销授权)[^\n]{0,80}(?:Unity|GUI|MCP|菜单|PlayMode|Editor)|(?:等待|需)[^\n]{0,40}(?:重新授权|恢复授权|明确授权)/i.test(waiting);
-}
-
-function isWaitingForQa(plan: PlanItem): boolean {
-  const step = currentPlanStep(plan);
-  if (!step || step.status !== "进行中") return false;
-  const structuredStepId = step.id.trim().toLowerCase();
-  return /^(qa|verify)(?:[-_:].*)?$/.test(structuredStepId)
-    && hasRealQaSendReceipt(plan)
-    && !hasExecutableAlternative(plan);
 }
 
 function authoritativeWaitingText(plan: PlanItem): string {
@@ -127,22 +132,26 @@ function authoritativeWaitingText(plan: PlanItem): string {
     .join("\n");
 }
 
-function externalWaitingStatus(plan: PlanItem): string {
+function planIsWaitingForManualVerification(plan: PlanItem): boolean {
+  const step = currentPlanStep(plan);
+  const currentStepId = String(plan.currentStepId || "").trim();
+  const manualStep = /^manual-verify-/i.test(currentStepId);
+  if (!manualStep) return false;
+  const currentIndex = step ? plan.steps.findIndex((item) => item.id === step.id) : -1;
+  return currentIndex > 0 && plan.steps.slice(0, currentIndex).every((item) => item.status === "已完成");
+}
+
+function isPangHuSharedUnityContention(plan: PlanItem): boolean {
   const waiting = authoritativeWaitingText(plan);
-  if (!waiting) return "";
-  if (isWaitingForRenewedAuthorization(plan)) return "等待重新授权";
-  if (hasExecutableAlternative(plan)) return "";
-  if (/(?:环境|测试账号|账号|权限|队列|进程|端口|网络|设备|服务|Unity|Editor|编辑器|MCP|environment|account|permission|queue|process|port|network|device|service)/i.test(waiting)) {
-    return "等待测试环境";
-  }
-  if (/(?:素材|美术|设计稿|图片|音频|视频|PSD|asset|artwork|image|audio|video)/i.test(waiting)) {
-    return "待素材";
-  }
-  return /(?:资料|文档|说明|截图|日志|证据|数据|样本|版本|复现步骤|路径|清单|document|screenshot|log|evidence|data|sample|version|reproduction|path|inventory)/i.test(waiting)
-    ? "待资料"
-    : /(?:等待|待)[^\n]{0,80}(?:回传|回复|答复|回执|结果|交付|返回|确认)|(?:await|waiting for)[^\n]{0,80}(?:response|reply|receipt|result|delivery|return|confirmation)/i.test(waiting)
-      ? "待外部回执"
-      : "";
+  if (!waiting) return false;
+  return /(?:Main\s*Unity|Main\s*Editor|正式\s*Main)[^\n]{0,100}(?:owner|占用|忙碌|队列|排队|导入|Importing|MCP|工作位|退出|释放|空闲)|(?:共享|唯一)[^\n]{0,60}(?:Unity|PlayMode|EditMode|测试|runner|工作位)/i.test(waiting);
+}
+
+function hasUnactionableWait(plan: PlanItem): boolean {
+  const waiting = authoritativeWaitingText(plan);
+  return Boolean(waiting)
+    && !isPangHuSharedUnityContention(plan)
+    && (isWaitingForRenewedAuthorization(plan) || !hasExecutableAlternative(plan));
 }
 
 function approvalPresentation(plan: PlanItem): PlanPresentation["approval"] {
@@ -182,38 +191,59 @@ export function planPresentation(plan: PlanItem): PlanPresentation {
     : plan.status === "进行中"
       ? ["current", "plans"]
       : ["plans"];
+  const build = (status: string, tone: PlanPresentationTone) => buildPlanPresentation(plan, status, tone, views, approval);
   if (plan.status === "进行中") {
     if (planIsBlocked(plan)) {
-      return buildPlanPresentation("待审批", "blocked", views, approval);
+      return build("待审批", "blocked");
     }
-    if (isWaitingForRenewedAuthorization(plan)) {
-      return buildPlanPresentation("等待重新授权", "waiting_external", views, approval);
+    if (isWaitingForRenewedAuthorization(plan)) return build("暂停", "paused");
+    if (isPangHuSharedUnityContention(plan)) return build("进行中", "running");
+    if (planIsWaitingForManualVerification(plan)) return build("待人工核验", "manual_verification");
+    if (planIsWaitingForPackage(plan)) return build("等待打包", "waiting_package");
+    if (planIsWaitingForQaAcceptance(plan) && (planHasPackageLifecycle(plan) || !hasExecutableAlternative(plan))) {
+      return build("等待 QA", "qa");
     }
-    if (isWaitingForQa(plan)) return buildPlanPresentation("等待 QA 验收", "qa", views, approval);
-    if (planIsWaitingForPackage(plan)) return buildPlanPresentation("待统一打包", "waiting_package", views, approval);
-    const waitingStatus = approval.state === "incomplete" ? "" : externalWaitingStatus(plan);
-    if (waitingStatus) return buildPlanPresentation(waitingStatus, "waiting_external", views, approval);
-    return buildPlanPresentation("正在执行", "running", views, approval);
+    if (approval.state !== "incomplete" && hasUnactionableWait(plan)) return build("暂停", "paused");
+    return build("进行中", "running");
   }
-  if (plan.status === "未开始") return buildPlanPresentation(plan.status, "pending", views, approval);
-  if (plan.status === "暂停") return buildPlanPresentation(plan.status, "paused", views, approval);
-  if (plan.status === "已完成") return buildPlanPresentation(plan.status, "done", views, approval);
-  if (plan.status === "已归档") return buildPlanPresentation(plan.status, "archived", views, approval);
-  return buildPlanPresentation(plan.status, "unknown", views, approval);
+  if (plan.status === "未开始") return build("暂停", "paused");
+  if (plan.status === "暂停") return build(plan.status, "paused");
+  if (plan.status === "已完成") return build(plan.status, "done");
+  if (plan.status === "已归档") return build(plan.status, "archived");
+  return build(plan.status, "unknown");
 }
 
 function buildPlanPresentation(
+  plan: PlanItem,
   status: string,
   tone: PlanPresentationTone,
   views: PlanPresentationView[],
   approval: PlanPresentation["approval"]
 ): PlanPresentation {
+  const statusLevel = PLAN_STATUS_RANK[tone];
+  const importanceLevel = resolvePlanImportanceLevel(plan.importance ?? plan.priority);
+  const urgencyLevel = resolvePlanUrgencyLevel(plan.urgency, plan.dueAt);
+  const importance = PLAN_IMPORTANCE_PRESENTATION[importanceLevel];
+  const urgency = PLAN_URGENCY_PRESENTATION[urgencyLevel];
   return {
     status,
     tone,
-    sortBucket: PLAN_STATUS_RANK[tone],
+    statusLevel,
+    sortBucket: statusLevel,
     views: [...views],
     palette: { ...PLAN_PRESENTATION_PALETTE[tone] },
+    importance: {
+      level: importanceLevel,
+      label: importance.labelZh,
+      labelEn: importance.labelEn,
+      palette: { ...importance.palette }
+    },
+    urgency: {
+      level: urgencyLevel,
+      label: urgency.labelZh,
+      labelEn: urgency.labelEn,
+      palette: { ...urgency.palette }
+    },
     approval
   };
 }
@@ -239,7 +269,7 @@ export function presentPlans(plans: PlanItem[]): PresentedPlanItem[] {
       const approvalRank = { ready: 0, incomplete: 1, none: 2 } as const;
       const approvalDelta = approvalRank[left.presentation.approval.state] - approvalRank[right.presentation.approval.state];
       if (approvalDelta !== 0) return approvalDelta;
-      const statusDelta = PLAN_STATUS_RANK[left.presentation.tone] - PLAN_STATUS_RANK[right.presentation.tone];
+      const statusDelta = left.presentation.statusLevel - right.presentation.statusLevel;
       if (statusDelta !== 0) return statusDelta;
       const dateDelta = dateValue(right.updatedAt, right.createdAt) - dateValue(left.updatedAt, left.createdAt);
       if (dateDelta !== 0) return dateDelta;

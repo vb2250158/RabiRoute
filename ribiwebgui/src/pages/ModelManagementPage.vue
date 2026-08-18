@@ -22,9 +22,6 @@ let managerEvents: EventSource | null = null;
 let loadVersion = 0;
 
 const copy = computed(() => isEnglish.value ? {
-  eyebrow: "LOCAL MODEL LIBRARY",
-  title: "Install only the speech models you need",
-  intro: "RabiRoute no longer treats ASR or TTS as required parts of the standard install. Browse the supported local models here, prepare the speech environment once, then download individual weights on demand.",
   refresh: "Refresh",
   runtimeTitle: "Speech environment",
   runtimeCopy: "Installs the private Python dependencies and Windows speech host. It does not download any model weights.",
@@ -61,12 +58,8 @@ const copy = computed(() => isEnglish.value ? {
   lastTask: "Last task",
   jobRunning: "Running",
   jobCompleted: "Completed",
-  jobFailed: "Failed",
-  noModels: "The standard package contains no ASR or TTS weights."
+  jobFailed: "Failed"
 } : {
-  eyebrow: "本机模型库",
-  title: "只安装你真正要用的语音模型",
-  intro: "RabiRoute 的标准安装不再把 ASR 或 TTS 当成必装内容。你可以在这里查看支持的本地模型，先准备一次语音运行环境，再按需下载单个模型权重。",
   refresh: "刷新",
   runtimeTitle: "语音运行环境",
   runtimeCopy: "安装私有 Python 依赖和 Windows 语音宿主，不会顺带下载任何模型权重。",
@@ -103,8 +96,7 @@ const copy = computed(() => isEnglish.value ? {
   lastTask: "最近任务",
   jobRunning: "执行中",
   jobCompleted: "已完成",
-  jobFailed: "失败",
-  noModels: "标准安装包不包含任何 ASR 或 TTS 权重。"
+  jobFailed: "失败"
 });
 
 const capabilityItems = computed(() => [
@@ -238,26 +230,6 @@ onBeforeUnmount(() => managerEvents?.close());
 
 <template>
   <div class="page-shell model-management-page">
-    <section class="model-hero app-card">
-      <div class="model-hero-copy">
-        <div class="model-eyebrow">{{ copy.eyebrow }}</div>
-        <h1>{{ copy.title }}</h1>
-        <p>{{ copy.intro }}</p>
-        <div class="hero-notice">
-          <v-icon size="18">mdi-package-variant</v-icon>
-          <span>{{ copy.noModels }}</span>
-        </div>
-      </div>
-      <div class="model-hero-orbit" aria-hidden="true">
-        <div class="orbit orbit-one" />
-        <div class="orbit orbit-two" />
-        <v-icon class="orbit-icon" size="58">mdi-cube-scan</v-icon>
-        <span class="orbit-label orbit-label-tts">TTS</span>
-        <span class="orbit-label orbit-label-asr">ASR</span>
-        <span class="orbit-label orbit-label-speaker">VOICE ID</span>
-      </div>
-    </section>
-
     <v-alert v-if="actionError" type="error" variant="tonal" closable @click:close="actionError = ''">
       {{ actionError }}
     </v-alert>
@@ -442,44 +414,7 @@ onBeforeUnmount(() => managerEvents?.close());
   gap: 20px;
 }
 
-.model-hero {
-  position: relative;
-  min-height: 294px;
-  overflow: hidden;
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(270px, .7fr);
-  align-items: center;
-  padding: clamp(28px, 5vw, 58px);
-  color: white;
-  background:
-    radial-gradient(circle at 82% 18%, rgba(25, 191, 193, .36), transparent 28%),
-    linear-gradient(128deg, #0c1a2b 0%, #123251 58%, #0e5060 100%);
-}
-
-.model-hero::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
-  background-size: 32px 32px;
-  mask-image: linear-gradient(90deg, black, transparent 75%);
-}
-
-.model-hero-copy { position: relative; z-index: 1; max-width: 760px; }
-.model-eyebrow, .section-kicker { color: var(--model-cyan); font-size: 11px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; }
-.model-hero h1 { margin: 10px 0 14px; max-width: 720px; font-size: clamp(34px, 5vw, 58px); line-height: 1.04; letter-spacing: -.035em; }
-.model-hero p { margin: 0; max-width: 710px; color: rgba(255,255,255,.76); font-size: 16px; line-height: 1.75; }
-.hero-notice { display: inline-flex; align-items: center; gap: 8px; margin-top: 24px; padding: 9px 13px; border: 1px solid rgba(255,255,255,.17); border-radius: 6px; background: rgba(4, 18, 30, .32); color: rgba(255,255,255,.92); font-size: 13px; }
-
-.model-hero-orbit { position: relative; z-index: 1; width: 270px; height: 230px; justify-self: end; }
-.orbit { position: absolute; inset: 25px; border: 1px solid rgba(255,255,255,.24); border-radius: 50%; transform: rotate(-16deg); }
-.orbit-two { inset: 54px 7px; transform: rotate(38deg); border-color: rgba(25,191,193,.5); }
-.orbit-icon { position: absolute; inset: 0; margin: auto; color: white; filter: drop-shadow(0 0 24px rgba(25,191,193,.6)); }
-.orbit-label { position: absolute; padding: 5px 8px; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; background: rgba(12,26,43,.76); font: 800 10px/1 ui-monospace, monospace; letter-spacing: .08em; }
-.orbit-label-tts { top: 14px; right: 30px; }
-.orbit-label-asr { bottom: 18px; left: 18px; }
-.orbit-label-speaker { right: 0; bottom: 70px; }
+.section-kicker { color: var(--model-cyan); font-size: 11px; font-weight: 900; letter-spacing: .16em; text-transform: uppercase; }
 
 .runtime-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr); gap: 20px; }
 .runtime-card, .job-card { min-height: 250px; }
@@ -523,8 +458,6 @@ onBeforeUnmount(() => managerEvents?.close());
 }
 
 @media (max-width: 820px) {
-  .model-hero { grid-template-columns: 1fr; }
-  .model-hero-orbit { display: none; }
   .runtime-grid { grid-template-columns: 1fr; }
   .library-header { align-items: stretch; flex-direction: column; }
   .model-search { width: 100%; flex-basis: auto; }
@@ -532,8 +465,6 @@ onBeforeUnmount(() => managerEvents?.close());
 
 @media (max-width: 640px) {
   .model-management-page { padding: 16px; }
-  .model-hero { min-height: 0; padding: 28px 22px; }
-  .model-hero h1 { font-size: 34px; }
   .runtime-statuses, .model-grid { grid-template-columns: 1fr; }
   .capability-filter { align-items: stretch; flex-direction: column; }
   .model-card-actions { align-items: stretch; flex-direction: column-reverse; }

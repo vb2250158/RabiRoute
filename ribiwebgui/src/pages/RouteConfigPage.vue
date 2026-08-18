@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
-import MessageProcessingBoard from "../components/MessageProcessingBoard.vue";
 import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
@@ -23,10 +22,13 @@ import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract"
 import { copyTextToClipboard } from "../clipboard";
 import { routeScopedAdaptersPath, routeScopedRuntimePath } from "../routeScopedNavigation";
 
+const MessageProcessingBoard = defineAsyncComponent(() => import("../components/MessageProcessingBoard.vue"));
+
 const store = useGatewayStore();
 const speech = useSpeechStore();
 const route = useRoute();
 const router = useRouter();
+const messageProcessingBoardOpen = ref(false);
 const runtime = computed(() => store.selectedRuntime);
 const personaAvatarUrl = computed(() => (runtime.value.roleInfo?.options || [])
   .find(option => option.value === store.selectedGateway?.agentRoleId)?.avatarUrl || "");
@@ -159,6 +161,39 @@ async function runAgentScan(): Promise<void> {
     agentScan.value.agents = data.agents ?? {};
   } catch { /* ignore */ }
   finally { agentScan.value.loading = false; }
+}
+
+async function loadMoreCodexSessions(): Promise<void> {
+  const page = agentScan.value.agents.codex?.sessionPage;
+  if (agentScan.value.loading || !page?.hasMore || page.nextOffset == null) return;
+  agentScan.value.loading = true;
+  try {
+    const params = new URLSearchParams({
+      codexOffset: String(page.nextOffset),
+      codexLimit: String(page.limit)
+    });
+    const res = await fetch(`/api/scan/agents?${params}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || `Agent 扫描失败（HTTP ${res.status}）`);
+    const currentCodex = agentScan.value.agents.codex;
+    const nextCodex = data.agents?.codex as AgentScanResult | undefined;
+    const sessions = [...(currentCodex?.sessions ?? []), ...(nextCodex?.sessions ?? [])];
+    const uniqueSessions = [...new Map(sessions.map(session => [
+      session.id || `${session.name}:${session.projectPath || ""}:${session.updatedAt || ""}`,
+      session
+    ])).values()];
+    agentScan.value.agents = {
+      ...agentScan.value.agents,
+      ...(data.agents ?? {}),
+      codex: nextCodex ? { ...nextCodex, sessions: uniqueSessions } : currentCodex
+    };
+    agentScan.value.threadNames = [...new Set([...agentScan.value.threadNames, ...(data.threadNames ?? [])])];
+    agentScan.value.cwdOptions = [...new Set([...agentScan.value.cwdOptions, ...(data.cwdOptions ?? [])])];
+  } catch {
+    // Keep the already loaded task page available.
+  } finally {
+    agentScan.value.loading = false;
+  }
 }
 
 // 会话/项目扫描只在进入设置页时自动执行一次；后续刷新必须由用户点击扫描按钮触发。
@@ -689,6 +724,7 @@ function ensureNapcatInstances(): NapCatInstance[] {
       id: "default",
       name: "默认 NapCat",
       enabled: true,
+      autoLoginOnRabiStart: true,
       gatewayPort: gateway.value.gatewayPort || 8789,
       httpUrl: gateway.value.napcatHttpUrl || "http://127.0.0.1:3000",
       webuiUrl: gateway.value.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
@@ -3453,18 +3489,14 @@ async function initializeCodexPlanAssistants(): Promise<void> {
     for (let index = 0; index < titles.length; index += 1) {
       const desiredTitle = titles[index];
       const previous = existing[index];
-      const result = previous
-        ? await postAgentThreadAction({
-            action: "rename",
-            threadId: previous.threadId,
-            title: desiredTitle,
-            cwd: previous.workspace || current.codexCwd
-          })
-        : await postAgentThreadAction({
-            action: "resolve",
-            title: desiredTitle,
-            cwd: current.codexCwd
-          });
+      const result = await postAgentThreadAction({
+        action: "resolve",
+        threadId: previous?.threadId,
+        title: desiredTitle,
+        cwd: previous?.workspace || current.codexCwd,
+        createIfMissing: true,
+        lookupMode: "state_db"
+      });
       const thread = result.thread;
       if (!thread?.id) throw new Error(`计划协助会话 ${index + 1} 没有返回完整任务 ID。`);
       resolved.push({
@@ -4150,6 +4182,15 @@ watch(
                                     复制 WebUI 登录密钥
                                   </v-btn>
                                 </div>
+                                <v-switch
+                                  v-model="instance.autoLoginOnRabiStart"
+                                  class="mt-2"
+                                  label="启动 Rabi 时自动登录"
+                                  hint="默认开启。Manager 启动完成后在后台启动该 NapCat，并使用已保存的快速登录身份。"
+                                  persistent-hint
+                                  color="primary"
+                                  @update:model-value="touch"
+                                />
                                 <v-expansion-panels class="mt-3" variant="accordion">
                                   <v-expansion-panel>
                                     <v-expansion-panel-title>高级配置</v-expansion-panel-title>
@@ -5015,7 +5056,7 @@ watch(
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">消息处理 Agent 模式</div>
-                      <div class="section-note">开启后，这个 Agent 端可以接收合并后的消息组。主人格、计划秘书和一计划一 Agent 的绑定不会改变。</div>
+                      <div class="section-note">开启时，聊天消息和相关后续通知交给消息处理 Agent；关闭时改投给主人格。计划秘书和一计划一 Agent 的绑定不会改变。</div>
                     </div>
                     <v-switch
                       color="primary"
@@ -5028,7 +5069,7 @@ watch(
                     />
                   </div>
                   <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                    开启后，聊天消息默认形成消息组，并动态创建或复用 Codex 消息处理 Agent；ASR 和结构化事件照常直接投递。
+                    开启后，聊天消息默认形成消息组，并动态创建或复用 Codex 消息处理 Agent；关闭后，新消息、计划进展通知、回调提醒和 Agent 间待回复改投给主人格，不再打开消息处理任务。ASR 和结构化事件照常直接投递。
                   </v-alert>
                   <div v-if="messageProcessingAgentPolicy(agent.type).enabled" class="catalog-param-grid mt-2">
                     <v-text-field
@@ -5054,16 +5095,35 @@ watch(
                       min="1"
                       :max="MAX_MESSAGE_PROCESSING_AGENTS"
                       label="消息处理 Agent 上限"
-                      hint="留空时按忙碌情况动态扩容；达到上限后继续复用已有任务。设置为 1 时固定使用“协助处理消息1”。"
+                      hint="Agent 列表统一按消息引用、消息组、会话、说话人和最近使用时间加权排序；上限保留排序后的前 N 个。设置为 1 时，所有新消息和未完成后续都集中到“协助处理消息1”。"
                       persistent-hint
                       @update:model-value="value => setMessageProcessingAgentPolicy(agent.type, { maxAgents: value === '' || value == null ? undefined : Number(value) })"
                     />
                   </div>
-                  <MessageProcessingBoard
+                  <v-btn
                     v-if="messageProcessingAgentPolicy(agent.type).enabled"
-                    :gateway-id="gateway.id"
-                    :enabled="true"
-                  />
+                    class="mt-3"
+                    variant="tonal"
+                    prepend-icon="mdi-view-dashboard-outline"
+                    @click="messageProcessingBoardOpen = true"
+                  >
+                    打开消息处理看板
+                  </v-btn>
+                  <v-dialog v-model="messageProcessingBoardOpen" max-width="1200" scrollable>
+                    <v-card>
+                      <v-card-title class="d-flex align-center justify-space-between">
+                        <span>消息处理看板</span>
+                        <v-btn icon="mdi-close" variant="text" size="small" title="关闭" @click="messageProcessingBoardOpen = false" />
+                      </v-card-title>
+                      <v-card-text>
+                        <MessageProcessingBoard
+                          v-if="messageProcessingBoardOpen && messageProcessingAgentPolicy(agent.type).enabled"
+                          :gateway-id="gateway.id"
+                          :enabled="true"
+                        />
+                      </v-card-text>
+                    </v-card>
+                  </v-dialog>
                 </div>
                 <!-- Codex -->
                 <template v-if="agent.type === 'codex'">
@@ -5095,12 +5155,22 @@ watch(
                         <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
-                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" item-title="title" item-value="value" :return-object="false" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="显示全部 Desktop 会话且不显示 ID；输入名称后只查找，唯一匹配就绑定，没有匹配则在点击保存时创建" persistent-hint @update:model-value="selectCodexSession" @blur="lookupCodexThreadBinding">
+                    <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" item-title="title" item-value="value" :return-object="false" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="每次读取 200 个 Desktop 任务且不显示 ID；可继续加载，输入名称后只查找，唯一匹配就绑定，没有匹配则在点击保存时创建" persistent-hint @update:model-value="selectCodexSession" @blur="lookupCodexThreadBinding">
                       <template #append-inner>
                         <v-progress-circular v-if="agentScan.loading || codexBinding.loading" size="16" width="2" indeterminate />
                         <v-icon v-else-if="codexSessionItems().length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
                       </template>
                     </v-combobox>
+                    <v-btn
+                      v-if="agentScanFor('codex')?.sessionPage?.hasMore"
+                      size="small"
+                      variant="text"
+                      prepend-icon="mdi-chevron-down"
+                      :loading="agentScan.loading"
+                      @click="loadMoreCodexSessions"
+                    >
+                      加载更多 Desktop 任务
+                    </v-btn>
                   </div>
                   <div class="d-flex align-center ga-2 flex-wrap mt-2">
                     <v-btn

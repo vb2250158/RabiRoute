@@ -9,9 +9,9 @@ test("explicit conversations require a visible acknowledgement even without plan
   assert.equal(communicationModeForRouteKind("direct_reply"), "explicit");
   assert.equal(communicationModeForRouteKind("private"), "explicit");
   const text = proactiveCommunicationPolicyLines("explicit").join("\n");
-  assert.match(text, /默认必须让对方看到回应/);
-  assert.match(text, /无需新建计划/);
-  assert.match(text, /下一步由谁做/);
+  assert.match(text, /明确面向本角色的消息默认回复/);
+  assert.match(text, /说明理解、下一步和负责人/);
+  assert.match(text, /负责人/);
 });
 
 test("ambient group messages stay selective while internal work must keep moving", () => {
@@ -19,8 +19,7 @@ test("ambient group messages stay selective while internal work must keep moving
   assert.equal(communicationModeForRouteKind("heartbeat"), "heartbeat");
   assert.equal(communicationModeForRouteKind("manual_trigger"), "internal");
   const ambient = proactiveCommunicationPolicyLines("ambient").join("\n");
-  assert.match(ambient, /不要求逐条发言/);
-  assert.match(ambient, /建设性想法/);
-  assert.match(ambient, /不必等别人明确 @/);
-  assert.match(proactiveCommunicationPolicyLines("internal").join("\n"), /不要只复述/);
+  assert.match(ambient, /没有新增价值时保持安静/);
+  assert.match(ambient, /项目事实先核对并交回原计划或记忆/);
+  assert.match(proactiveCommunicationPolicyLines("internal").join("\n"), /直接推进已授权任务/);
 });

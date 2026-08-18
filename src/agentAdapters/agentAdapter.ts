@@ -2,6 +2,7 @@ import { notifyCodex } from "../codexRuntime.js";
 import { notifyCopilotCli } from "../copilotCli.js";
 import { notifyMarvis } from "../marvis.js";
 import { notifyAstrbot } from "./astrbotAdapter.js";
+import { notifyDshSession } from "../dshSessionBridge.js";
 import type { AgentAdapterType } from "./types.js";
 
 export type AgentAdapter = {
@@ -35,6 +36,15 @@ export function createAgentAdapter(type: AgentAdapterType): AgentAdapter {
     return {
       type,
       deliver: notifyAstrbot
+    };
+  }
+
+  if (type === "dsh") {
+    return {
+      type,
+      deliver: async (message) => {
+        await notifyDshSession(message);
+      }
     };
   }
 

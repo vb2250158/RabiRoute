@@ -113,8 +113,8 @@ test("AgentPacket expands CQ reply chains and centralizes at mappings", () => {
   assert.match(packet.message, /\[CQ:at,qq=10003\] : 秋雨Memories/);
   assert.match(packet.message, /\[CQ:at,qq=10002\] : 定位同学/);
   assert.match(packet.message, /\[主动协作要求\]/);
-  assert.match(packet.message, /默认必须让对方看到回应/);
-  assert.match(packet.message, /无需新建计划/);
+  assert.match(packet.message, /明确面向本角色的消息默认回复/);
+  assert.match(packet.message, /说明理解、下一步和负责人/);
   assert.doesNotMatch(packet.message, /当前消息 messageId/);
   assert.doesNotMatch(packet.message, /纯文本/);
 });
@@ -638,25 +638,17 @@ test("AgentPacket exposes exact plan secretary sessions without replacing busine
 
     assert.match(packet.message, /\[计划协助会话\]/);
     assert.match(packet.message, /threadId=019fa314-2c07-7523-896f-9bb6b638054b/);
-    assert.match(packet.message, /计划管理秘书槽/);
-    assert.match(packet.message, /secretaryBinding，记录当前负责秘书/);
-    assert.match(packet.message, /不得把秘书 ID 写入 taskBinding/);
-    assert.match(packet.message, /taskBinding\.sessionId \+ workspace 必须指向独立业务任务会话/);
-    assert.match(packet.message, /秘书及其子 Agent不得直接修改业务文件/);
-    assert.match(packet.message, /计划引导\/审批会同时投给业务 taskBinding 和负责秘书/);
-    assert.match(packet.message, /业务任务完成提醒、计划进展和状态变化也优先直达负责秘书/);
-    assert.match(packet.message, /不再默认唤醒主人格/);
-    assert.match(packet.message, /发出秘书消息不等于委派完成/);
-    assert.match(packet.message, /核对精确 threadId \+ workspace、秘书真实任务状态和阶段回执/);
-    assert.match(packet.message, /秘书开始后等待其结果，不得并行执行同一份日志\/截图读取、查重、计划 PATCH/);
-    assert.match(packet.message, /只有当前步骤具有完整、可提交且 responseStatus=pending 的 approvalRequest 时，Manager 才自动派生审批阻塞/);
-    assert.match(packet.message, /计划暂停或秘书轮转不能清空业务 taskBinding/);
-    assert.match(packet.message, /只有需要用户\/主人格做决定、批准、授权、补充输入/);
-    assert.match(packet.message, /计划完整收尾/);
-    assert.match(packet.message, /可推进但无人管理的计划数 = 0/);
-    assert.match(packet.message, /可推进但空闲的业务任务数 = 0/);
-    assert.match(packet.message, /同一 planId 同时只能有一个控制面 writer/);
-    assert.match(packet.message, /active cycle 全局阻塞/);
+    assert.match(packet.message, /持久计划秘书/);
+    assert.match(packet.message, /secretaryBinding 记录秘书/);
+    assert.match(packet.message, /taskBinding\.sessionId \+ workspace 只指向独立业务任务/);
+    assert.match(packet.message, /业务任务执行调查、实现、测试、构建、发布和外部操作/);
+    assert.match(packet.message, /计划引导、审批和业务结果优先送达负责秘书/);
+    assert.match(packet.message, /委派完成以精确 threadId、workspace 和阶段回执为准/);
+    assert.match(packet.message, /approvalRequest 完整且 responseStatus=pending 时由 Manager 派生阻塞/);
+    assert.match(packet.message, /秘书轮转或计划暂停不清空 taskBinding/);
+    assert.match(packet.message, /仅把决定、批准、授权、缺少输入或最终复核升级给主人格/);
+    assert.match(packet.message, /没有无人管理或可推进但空闲的计划/);
+    assert.match(packet.message, /同一 planId 只有一个控制面 writer/);
   } finally {
     config.codexPlanAssistantSessions = previousSessions;
   }
@@ -879,10 +871,10 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
   assert.doesNotMatch(packet.message, /不应注入的历史角色面板消息/);
   assert.equal(packet.templateValues.recentMessageLimit, 0);
   assert.equal(packet.templateValues.recentMessages, "");
-  assert.match(packet.message, /面向用户的回复必须回到当前计划记录/);
-  assert.match(packet.message, /先按审批意见读取并 PATCH 更新对应计划或步骤/);
-  assert.match(packet.message, /isBlocked 由 Manager 根据完整且待决的审批合同自动派生/);
-  assert.match(packet.message, /不要重复输出计划回复正文/);
+  assert.match(packet.message, /处理说明通过明确发送 API 写入当前 planId \/ stepId/);
+  assert.match(packet.message, /读取审批记录并 PATCH 计划或步骤/);
+  assert.match(packet.message, /isBlocked 由 Manager 派生/);
+  assert.match(packet.message, /简短说明计划已更新、回复已回写/);
 
   const guidancePacket = buildAgentPacket({
     route,
@@ -910,10 +902,10 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
     dataDir: roleDir
   });
 
-  assert.match(guidancePacket.message, /本次是计划引导处理/);
-  assert.match(guidancePacket.message, /引导属于整个计划，不绑定某个步骤/);
-  assert.match(guidancePacket.message, /同步调整尚未开始的步骤/);
-  assert.match(guidancePacket.message, /不带 stepId 的 guidance_response/);
+  assert.match(guidancePacket.message, /读取计划与反馈，按引导推进/);
+  assert.match(guidancePacket.message, /范围、优先级或路径变化时 PATCH 计划/);
+  assert.match(guidancePacket.message, /PATCH 计划和未开始步骤/);
+  assert.match(guidancePacket.message, /当前 planId 的 guidance_response/);
   assert.doesNotMatch(guidancePacket.message, /approvalRequest\.responseStatus/);
 });
 
@@ -1349,11 +1341,9 @@ test("AgentPacket requires a bound latest-context review before a message-proces
   });
 
   assert.match(packet.message, /requirements\/requirement-1\/send-context/);
-  assert.match(packet.message, /contextVersion、完整 reviewedContextIds/);
-  assert.match(packet.message, /priorReplies 和 alreadyReplied/);
+  assert.match(packet.message, /核对最新消息，取得 sendContextReviewToken/);
   assert.match(packet.message, /sendContextReviewToken/);
-  assert.match(packet.message, /发送者会话变化、目标或正文变化/);
+  assert.match(packet.message, /发送目标或正文变化时重新审核/);
   assert.match(packet.message, /replyImageDescriptions/);
-  assert.match(packet.message, /逐张写明实际看到的内容及图片想表达的意思/);
-  assert.match(packet.message, /同名 \.md/);
+  assert.match(packet.message, /逐张填写 params\.replyImageDescriptions/);
 });

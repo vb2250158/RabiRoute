@@ -8,12 +8,12 @@ English | <a href="./napcat-unattended.md">简体中文</a>
 
 > Status: current guide. RabiRoute can discover, manage, and launch NapCat instances, while QQ authentication and security verification remain the responsibility of NapCat and QQNT.
 
-RabiRoute receives NapCat/OneBot events, records messages, evaluates routes, and delivers work to a handler. When a user explicitly clicks **Open NapCat**, it can also coordinate local startup, quick-login selection, and OneBot connection repair. It must not store QQ passwords, cookies, or tokens in `data/route`, `data/roles`, examples, or the repository.
+RabiRoute receives NapCat/OneBot events, records messages, evaluates routes, and delivers work to a handler. After the Manager starts listening, or when a user clicks **Open NapCat**, it can coordinate local startup, quick-login selection, and OneBot connection repair. It must not store QQ passwords, cookies, or tokens in `data/route`, `data/roles`, examples, or the repository.
 
 ## Responsibility split
 
 - NapCat starts QQNT, maintains the QQ login, exposes its WebUI, WebSocket Client, and HTTP Server.
-- RabiRoute listens for OneBot events, calls the HTTP API, reports health, and records routing events. After an explicit user action, it may start the bound instance, select an existing quick-login account, and repair its OneBot endpoints.
+- RabiRoute listens for OneBot events, calls the HTTP API, reports health, and records routing events. With **Auto login when Rabi starts** enabled, it starts the bound instance, selects an existing quick-login account, and repairs OneBot endpoints in the background after the Manager is listening. **Open NapCat** runs the same flow on demand.
 - Windows supervision, such as startup at sign-in or service management, keeps NapCat and the RabiRoute Manager alive.
 
 RabiRoute does not type a QQ password or bypass CAPTCHA, device confirmation, or risk-control checks. When human verification is required, the one-click flow opens the authenticated WebUI for the correct instance and waits for the user to finish the step.
@@ -30,7 +30,7 @@ The **Open NapCat** button for a QQ instance follows this order:
 6. If QQ is logged in but OneBot is not connected, write and apply the instance's HTTP and WebSocket configuration.
 7. Hand control to the user only for CAPTCHA, device confirmation, QR login, or a conflict that cannot be resolved safely.
 
-Health scans remain read-only. Login, startup, and configuration repair run only through an explicit user action handled by `POST /api/message/napcat-ensure-ready`.
+Health scans remain read-only. Login, startup, and configuration repair use the Manager-owned `napcat-ensure-ready` action. Startup auto login runs asynchronously after the Manager begins listening, and Manager readiness does not wait for NapCat checks or authentication.
 
 Start, restart, and stop actions are serialized by the bound QQ account. A double click, two concurrent callers, or mapped-drive and UNC paths that resolve to the same NapCat installation can therefore enter only one lifecycle operation. Immediately before spawning, RabiRoute rechecks the live OneBot login and reuses a ready instance instead of creating a second QQNT/NapCat process tree. This guard protects process lifecycle only; it does not bypass QR login, CAPTCHA, device confirmation, or any other QQ security check.
 
@@ -66,9 +66,15 @@ setx NAPCAT_QUICK_PASSWORD "<qq-password>"
 
 `setx` affects only processes started afterward. Restart NapCat Shell, its Windows service, or the user session as appropriate. During troubleshooting, report only whether a variable exists and its length; never print the credential.
 
+## Auto login when Rabi starts
+
+Each QQ instance has an **Auto login when Rabi starts** switch, enabled by default. After the Manager begins listening, it queues background work that reuses the correct live account or starts the bound NapCat Shell, selects an existing quick-login identity, and repairs OneBot HTTP/WebSocket configuration. Different accounts or instances run concurrently, while work bound to the same QQ account remains serialized. Manager startup and WebGUI access do not wait for these steps.
+
+Turning the switch off skips startup auto login only. **Open NapCat**, health checks, manual start, and restart remain available. CAPTCHA, QR login, device confirmation, and similar security steps are recorded as requiring user action and can be completed later in the instance WebUI.
+
 ## Process supervision
 
-The RabiRoute Manager supervises route subprocesses it starts and reloads affected routes after changes under `data/route/*/adapterConfig.json` or `data/roles/*/personaConfig.json`. It does not continuously restart NapCat in the background. It controls an instance only after an explicit open/start/restart action.
+The RabiRoute Manager supervises route subprocesses it starts and reloads affected routes after changes under `data/route/*/adapterConfig.json` or `data/roles/*/personaConfig.json`. NapCat startup auto login runs once per Manager start. Later exits, disconnects, or expired login state remain visible through health status and user actions.
 
 Common NapCat supervision choices:
 

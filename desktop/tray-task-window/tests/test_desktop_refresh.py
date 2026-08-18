@@ -126,7 +126,7 @@ class _ApiManager:
                 "title": "API package plan",
                 "status": "进行中",
                 "presentation": {
-                    "status": "待统一打包",
+                    "status": "等待打包",
                     "tone": "waiting_package",
                     "sortBucket": 4,
                     "views": ["current", "plans"],
@@ -199,7 +199,7 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(external_plan and external_plan.display_tone, "waiting_external")
         self.assertEqual(external_plan and external_plan.display_sort_bucket, 3)
         package_plan = result.plan_snapshot and result.plan_snapshot.active[3]
-        self.assertEqual(package_plan and package_plan.display_status, "待统一打包")
+        self.assertEqual(package_plan and package_plan.display_status, "等待打包")
         self.assertEqual(package_plan and package_plan.display_tone, "waiting_package")
         self.assertEqual(package_plan and package_plan.display_sort_bucket, 4)
         self.assertEqual(package_plan and package_plan.display_accent, "#2563eb")

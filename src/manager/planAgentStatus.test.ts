@@ -33,6 +33,7 @@ test("plan Agent status keeps work state separate from Codex task state", async 
   const values = new Map<string, unknown>([
     ["active-thread", thread({ id: "active-thread", status: { type: "active" } })],
     ["idle-thread", thread({ id: "idle-thread", status: { type: "idle" } })],
+    ["extended-path-thread", thread({ id: "extended-path-thread", cwd: "\\\\?\\C:\\work", status: { type: "idle" } })],
     ["unavailable-thread", thread({ id: "unavailable-thread", status: { type: "unavailable" } })]
   ]);
   const service = createPlanAgentStatusService({
@@ -46,6 +47,7 @@ test("plan Agent status keeps work state separate from Codex task state", async 
   const statuses = await service.inspectPlans([
     plan({ id: "active", taskBinding: { agentType: "codex", sessionId: "active-thread", workspace: "C:\\work" } }),
     plan({ id: "idle", taskBinding: { agentType: "codex", sessionId: "idle-thread", workspace: "C:\\work" } }),
+    plan({ id: "extended-path", taskBinding: { agentType: "codex", sessionId: "extended-path-thread", workspace: "C:\\work" } }),
     plan({ id: "unavailable", taskBinding: { agentType: "codex", sessionId: "unavailable-thread", workspace: "C:\\work" } }),
     plan({ id: "missing", taskBinding: { agentType: "codex", sessionId: "missing-thread", workspace: "C:\\work" } }),
     plan({ id: "unbound" })
@@ -59,6 +61,7 @@ test("plan Agent status keeps work state separate from Codex task state", async 
   })), [
     { planId: "active", working: true, agentStatus: "working", sessionStatus: "active" },
     { planId: "idle", working: false, agentStatus: "idle", sessionStatus: "idle" },
+    { planId: "extended-path", working: false, agentStatus: "idle", sessionStatus: "idle" },
     { planId: "unavailable", working: false, agentStatus: "unknown", sessionStatus: "unavailable" },
     { planId: "missing", working: false, agentStatus: "unknown", sessionStatus: "missing" },
     { planId: "unbound", working: false, agentStatus: "unknown", sessionStatus: "unbound" }

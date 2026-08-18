@@ -11,6 +11,7 @@ class _RecordingManagerClient(ManagerClient):
         self.paths: list[str] = []
         self.posts: list[tuple[str, dict]] = []
         self.post_timeouts: list[float | None] = []
+        self.binary_posts: list[tuple[str, dict, float | None]] = []
 
     def _get_json(self, path: str) -> dict:
         self.paths.append(path)
@@ -22,6 +23,10 @@ class _RecordingManagerClient(ManagerClient):
             return {"code": 0, "data": {"recent": [], "consolidated": []}}
         if "/role-panel/messages" in path:
             return {"messages": [{"id": "message-1"}]}
+        if path == "/api/speech/selection-reader/settings":
+            return {"code": 0, "data": {"enabled": True, "advanced": True, "model": "tts/test"}}
+        if path == "/api/speech/models":
+            return {"code": 0, "data": {"models": [{"id": "tts/test", "capability": "tts"}]}}
         return {"data": {"manager": [{"id": "route-1"}]}}
 
     def _get_bytes(self, path: str) -> bytes:
@@ -32,6 +37,9 @@ class _RecordingManagerClient(ManagerClient):
         self.posts.append((path, payload or {}))
         self.post_timeouts.append(timeout_seconds)
         return {"code": 0, "data": {"deliveryStatus": "delivered"}}
+
+    def _post_binary(self, path: str, payload: dict, timeout_seconds: float | None = None) -> None:
+        self.binary_posts.append((path, payload, timeout_seconds))
 
 
 class ManagerSnapshotTest(unittest.TestCase):
@@ -117,6 +125,23 @@ class ManagerSnapshotTest(unittest.TestCase):
         )
 
         self.assertEqual(snapshot.selected_gateway and snapshot.selected_gateway.get("id"), "legacy-rabi")
+
+    def test_selection_speech_uses_manager_settings_models_and_host_queue(self) -> None:
+        client = _RecordingManagerClient()
+
+        settings = client.selection_speech_settings()
+        models = client.speech_models()
+        result = client.synthesize_speech("划选文字", "tts/test")
+
+        self.assertTrue(settings.enabled)
+        self.assertTrue(settings.advanced)
+        self.assertEqual(settings.model, "tts/test")
+        self.assertEqual(models, [{"id": "tts/test", "capability": "tts"}])
+        self.assertTrue(result.ok)
+        self.assertEqual(client.binary_posts[0][0], "/api/speech/tts")
+        self.assertEqual(client.binary_posts[0][1]["input"], "划选文字")
+        self.assertTrue(client.binary_posts[0][1]["play"])
+        self.assertEqual(client.binary_posts[0][2], 120)
 
 
 if __name__ == "__main__":

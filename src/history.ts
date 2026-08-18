@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { measureSyncPerformanceOperation } from "./performance/performanceInstrumentation.js";
 import { withFileLockSync } from "./shared/filePersistence.js";
+import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
 import type { ResolvedForwardMessage } from "./napcatForwardMessages.js";
 import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
 
@@ -227,6 +229,12 @@ export type AdapterLogRecord = {
   data?: unknown;
 };
 
+function appendHistoryRecord(filePath: string, record: unknown): void {
+  measureSyncPerformanceOperation(PERFORMANCE_OPERATIONS.runtimeHistoryAppend, () => {
+    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+  });
+}
+
 function adapterLogPath(adapter: string, dataDir = config.dataDir): string {
   fs.mkdirSync(dataDir, { recursive: true });
   return path.join(dataDir, `${adapter}-adapter.log.jsonl`);
@@ -239,7 +247,7 @@ export function appendAdapterLog(adapter: string, record: Omit<AdapterLogRecord,
     ...record,
     adapter
   };
-  fs.appendFileSync(adapterLogPath(adapter), `${JSON.stringify(normalized)}\n`, "utf8");
+  appendHistoryRecord(adapterLogPath(adapter), normalized);
 }
 
 export function appendAdapterLogToDir(adapter: string, record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>, dataDir: string): void {
@@ -249,7 +257,7 @@ export function appendAdapterLogToDir(adapter: string, record: Omit<AdapterLogRe
     ...record,
     adapter
   };
-  fs.appendFileSync(adapterLogPath(adapter, dataDir), `${JSON.stringify(normalized)}\n`, "utf8");
+  appendHistoryRecord(adapterLogPath(adapter, dataDir), normalized);
 }
 
 function logPath(dataDir = config.memoryDataDir): string {
@@ -258,11 +266,11 @@ function logPath(dataDir = config.memoryDataDir): string {
 }
 
 export function appendGroupMessage(record: GroupMessageRecord): void {
-  fs.appendFileSync(logPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(logPath(), record);
 }
 
 export function appendGroupMessageToDir(record: GroupMessageRecord, dataDir: string): void {
-  fs.appendFileSync(logPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(logPath(dataDir), record);
 }
 
 function privateLogPath(dataDir = config.memoryDataDir): string {
@@ -271,11 +279,11 @@ function privateLogPath(dataDir = config.memoryDataDir): string {
 }
 
 export function appendPrivateMessage(record: PrivateMessageRecord): void {
-  fs.appendFileSync(privateLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(privateLogPath(), record);
 }
 
 export function appendPrivateMessageToDir(record: PrivateMessageRecord, dataDir: string): void {
-  fs.appendFileSync(privateLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(privateLogPath(dataDir), record);
 }
 
 function heartbeatLogPath(dataDir = config.memoryDataDir): string {
@@ -284,11 +292,11 @@ function heartbeatLogPath(dataDir = config.memoryDataDir): string {
 }
 
 export function appendHeartbeatEvent(record: HeartbeatEventRecord): void {
-  fs.appendFileSync(heartbeatLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(heartbeatLogPath(), record);
 }
 
 export function appendHeartbeatEventToDir(record: HeartbeatEventRecord, dataDir: string): void {
-  fs.appendFileSync(heartbeatLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(heartbeatLogPath(dataDir), record);
 }
 
 function manualTriggerLogPath(dataDir = config.memoryDataDir): string {
@@ -297,11 +305,11 @@ function manualTriggerLogPath(dataDir = config.memoryDataDir): string {
 }
 
 export function appendManualTriggerEvent(record: ManualTriggerRecord): void {
-  fs.appendFileSync(manualTriggerLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(manualTriggerLogPath(), record);
 }
 
 export function appendManualTriggerEventToDir(record: ManualTriggerRecord, dataDir: string): void {
-  fs.appendFileSync(manualTriggerLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(manualTriggerLogPath(dataDir), record);
 }
 
 function voiceTranscriptLogPath(dataDir = config.memoryDataDir, fileName = "voice-transcripts.jsonl"): string {
@@ -320,17 +328,20 @@ function appendVoiceTranscriptOnce(filePath: string, record: VoiceTranscriptEven
   const lockPath = `${filePath}.lock`;
   return withFileLockSync(lockPath, () => {
     if (identity && fs.existsSync(filePath)) {
-      const duplicate = fs.readFileSync(filePath, "utf8").split(/\r?\n/).some(line => {
-        if (!line.trim()) return false;
-        try {
-          return voiceTranscriptIdentity(JSON.parse(line) as VoiceTranscriptEventRecord) === identity;
-        } catch {
-          return false;
-        }
-      });
+      const duplicate = measureSyncPerformanceOperation(
+        PERFORMANCE_OPERATIONS.runtimeHistoryDuplicateScan,
+        () => fs.readFileSync(filePath, "utf8").split(/\r?\n/).some(line => {
+          if (!line.trim()) return false;
+          try {
+            return voiceTranscriptIdentity(JSON.parse(line) as VoiceTranscriptEventRecord) === identity;
+          } catch {
+            return false;
+          }
+        })
+      );
       if (duplicate) return false;
     }
-    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+    appendHistoryRecord(filePath, record);
     return true;
   });
 }
@@ -376,11 +387,11 @@ function wecomLogPath(dataDir = config.memoryDataDir): string {
 }
 
 export function appendWeComMessage(record: WeComMessageRecord): void {
-  fs.appendFileSync(wecomLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(wecomLogPath(), record);
 }
 
 export function appendWeComMessageToDir(record: WeComMessageRecord, dataDir: string): void {
-  fs.appendFileSync(wecomLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(wecomLogPath(dataDir), record);
 }
 
 function feishuLogPath(dataDir = config.memoryDataDir): string {
@@ -397,17 +408,20 @@ function appendFeishuMessageOnce(filePath: string, record: FeishuMessageRecord):
   const lockPath = `${filePath}.lock`;
   return withFileLockSync(lockPath, () => {
     if (identity && fs.existsSync(filePath)) {
-      const duplicate = fs.readFileSync(filePath, "utf8").split(/\r?\n/).some((line) => {
-        if (!line.trim()) return false;
-        try {
-          return feishuEventIdentity(JSON.parse(line) as FeishuMessageRecord) === identity;
-        } catch {
-          return false;
-        }
-      });
+      const duplicate = measureSyncPerformanceOperation(
+        PERFORMANCE_OPERATIONS.runtimeHistoryDuplicateScan,
+        () => fs.readFileSync(filePath, "utf8").split(/\r?\n/).some((line) => {
+          if (!line.trim()) return false;
+          try {
+            return feishuEventIdentity(JSON.parse(line) as FeishuMessageRecord) === identity;
+          } catch {
+            return false;
+          }
+        })
+      );
       if (duplicate) return false;
     }
-    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+    appendHistoryRecord(filePath, record);
     return true;
   });
 }
@@ -426,11 +440,11 @@ function weixinLogPath(dataDir = config.memoryDataDir): string {
 }
 
 export function appendWeixinMessage(record: WeixinMessageRecord): void {
-  fs.appendFileSync(weixinLogPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(weixinLogPath(), record);
 }
 
 export function appendWeixinMessageToDir(record: WeixinMessageRecord, dataDir: string): void {
-  fs.appendFileSync(weixinLogPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(weixinLogPath(dataDir), record);
 }
 
 function agentPacketPath(dataDir = config.memoryDataDir): string {
@@ -439,11 +453,11 @@ function agentPacketPath(dataDir = config.memoryDataDir): string {
 }
 
 export function appendAgentPacket(record: AgentPacketRecord): void {
-  fs.appendFileSync(agentPacketPath(), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(agentPacketPath(), record);
 }
 
 export function appendAgentPacketToDir(record: AgentPacketRecord, dataDir: string): void {
-  fs.appendFileSync(agentPacketPath(dataDir), `${JSON.stringify(record)}\n`, "utf8");
+  appendHistoryRecord(agentPacketPath(dataDir), record);
 }
 
 export function readGroupMessages(dataDir = config.memoryDataDir): GroupMessageRecord[] {

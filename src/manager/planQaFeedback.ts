@@ -30,9 +30,15 @@ export type PlanQaFeedbackResult = {
   plan?: PlanItem;
 };
 
-const QA_FAILURE_PATTERN = /问题仍存在|仍然存在|未解决|失败复现|仍可复现|依旧存在|没有修复|未通过|验收失败|not\s+fixed|still\s+(?:exists|reproducible)|reproduced\s+again/i;
-const QA_PASS_PATTERN = /QA\s*明确通过|QA\s*通过|验收通过|问题已解决|确认未再复现|\bpassed\b|\bverified\b/i;
+const QA_FAILURE_PATTERN = /问题仍存在|仍然存在|未解决|失败复现|仍可复现|依旧存在|没有修复|未通过|验收失败|QA\s+failed|not\s+fixed|still\s+(?:exists|reproducible)|reproduced\s+again/i;
+const QA_PASS_PATTERN = /QA\s*明确通过|QA\s*通过|QA\s+(?:passed|verified)|验收通过|问题已解决|确认未再复现|acceptance\s+passed/i;
 const QA_STEP_ID = /^(?:qa|verify)(?:[-_:].*)?$/i;
+
+function isQaVerdictFeedback(feedback: PlanFeedbackRecord): boolean {
+  return feedback.kind === "approval_suggestion"
+    && feedback.author === "user"
+    && feedback.source !== "agent";
+}
 
 function isQaStep(step: PlanStep | undefined): step is PlanStep {
   return Boolean(step && QA_STEP_ID.test(String(step.id || "")));
@@ -257,6 +263,9 @@ function completeAcceptance(
 export async function consumePlanQaFeedback(
   options: ConsumePlanQaFeedbackOptions
 ): Promise<PlanQaFeedbackResult> {
+  if (!isQaVerdictFeedback(options.feedback)) {
+    return { outcome: "ignored", status: "ignored", missingEvidence: [] };
+  }
   const feedbackRecords = listPlanFeedback(options.roleDir, options.feedback.planId);
   const latest = feedbackRecords.find((record) => record.id === options.feedback.id) || options.feedback;
   if (latest.qaHandling && latest.qaHandling.status !== "dispatch_failed") {

@@ -7,12 +7,10 @@ import {
   type PlanFeedbackAttachmentUpload
 } from "@shared/planFeedbackContract";
 import {
-  findPlanAttachmentMentionQuery,
-  insertPlanAttachmentMention,
   planAttachmentMentionCandidates,
-  referencedPlanAttachmentIds,
-  type PlanAttachmentMentionCandidate
+  referencedPlanAttachmentIds
 } from "@shared/planAttachmentMentions";
+import PlanFeedbackComposer from "../components/PlanFeedbackComposer.vue";
 import { useI18n } from "../i18n";
 import { knowledgeItemMatchesQuery, normalizeKnowledgeQuery } from "../knowledgeSearch";
 import { knowledgePageShouldWork } from "../knowledgePageActivity";
@@ -30,9 +28,11 @@ import { activePlanIdAtAnchor, directoryScrollTopForItem } from "../planDirector
 import {
   drainKnowledgePages,
   hasMoreKnowledgeAfterWindow,
+  hasMoreKnowledgeBeforeWindow,
   knowledgeRenderWindow,
   mergeKnowledgePage,
   nextKnowledgeRenderLimit,
+  previousKnowledgeRenderWindow,
   shouldAutoLoadNextKnowledgeBatch
 } from "../knowledgePagination";
 import {
@@ -57,7 +57,7 @@ import {
   type RolePlanPageFilter
 } from "../roleKnowledgeClient";
 import { planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
-import { formatPlanRelativeTime, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
+import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
 import type { PlanKnowledgeView, PlanListSortMode } from "../planPresentationStyles";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract";
@@ -80,14 +80,21 @@ const planVideoDurations = reactive<Record<string, number>>({});
 const activeDirectoryPlanId = ref("");
 const planListSortMode = ref<PlanListSortMode>("status");
 const planListHiddenStatuses = ref<string[]>([]);
+const planListSelectedTags = ref<string[]>([]);
 const planListDraftSortMode = ref<PlanListSortMode>("status");
 const planListDraftHiddenStatuses = ref<string[]>([]);
+const planListDraftSelectedTags = ref<string[]>([]);
+const planListTagQuery = ref("");
 const planListDialogOpen = ref(false);
 const planListResultTotal = ref(0);
 const planListStatusOptions = ref<Array<{
   status: string;
   count: number;
   palette: RolePlan["presentation"]["palette"];
+}>>([]);
+const planListTagOptions = ref<Array<{
+  tag: string;
+  count: number;
 }>>([]);
 const approvalDrafts = reactive<Record<string, string>>({});
 const approvalPending = reactive<Record<string, boolean>>({});
@@ -106,17 +113,6 @@ type ApprovalAttachmentDraft = {
 };
 const approvalAttachments = reactive<Record<string, ApprovalAttachmentDraft[]>>({});
 const submittedApprovalAttachments = new Map<string, ApprovalAttachmentDraft[]>();
-const approvalFileInput = ref<HTMLInputElement | null>(null);
-const attachmentTargetPlanId = ref("");
-type ApprovalMentionMenuState = {
-  open: boolean;
-  query: string;
-  start: number;
-  end: number;
-  activeIndex: number;
-};
-const approvalMentionMenus = reactive<Record<string, ApprovalMentionMenuState>>({});
-const approvalTextareaElements = new Map<string, HTMLTextAreaElement>();
 const planAttachmentPreview = ref<{ name: string; url: string; kind: "image" | "video" } | null>(null);
 const planMarkdownPreview = ref<{ name: string; url: string; html: string; error: string; loading: boolean } | null>(null);
 const memoryDetailPreview = ref<{ memory: RoleMemory; kind: RoleMemoryKind } | null>(null);
@@ -142,9 +138,8 @@ const planPageCounts = ref<RolePlanPageCounts>({
     executing: 0,
     qa: 0,
     waitingPackage: 0,
-    waitingExternal: 0,
     approval: 0,
-    pending: 0,
+    manualVerification: 0,
     paused: 0,
     completed: 0,
     archived: 0
@@ -160,6 +155,7 @@ const memoryRenderLimit = ref(24);
 const memoryClock = ref(Date.now());
 const knowledgeToolbar = ref<HTMLElement | null>(null);
 const planDirectoryList = ref<HTMLElement | null>(null);
+const planLoadPreviousSentinel = ref<HTMLElement | null>(null);
 const planLoadMoreSentinel = ref<HTMLElement | null>(null);
 const memoryLoadMoreSentinel = ref<HTMLElement | null>(null);
 let requestVersion = 0;
@@ -173,6 +169,8 @@ let planDirectorySyncFrame = 0;
 let planObserverRefreshFrame = 0;
 let planDirectoryMounted = false;
 let usesPlanScrollFallback = false;
+let knowledgeScrollDirection: "up" | "down" | "" = "";
+let lastKnowledgeScrollY = 0;
 let directoryJumpTargetId = "";
 let directoryJumpSettleTimer = 0;
 let planMarkdownPreviewAbort: AbortController | null = null;
@@ -181,7 +179,7 @@ let planDetailQueue: Array<{ planId: string; request: number }> = [];
 const queuedPlanDetailIds = new Set<string>();
 const pendingPlanAgentStatusIds = new Set<string>();
 let activePlanDetailRequests = 0;
-const MAX_CONCURRENT_PLAN_DETAILS = 2;
+const MAX_CONCURRENT_PLAN_DETAILS = 10;
 let knowledgeFilterTimer = 0;
 let memoryClockTimer = 0;
 let planPageBackgroundRequest = 0;
@@ -216,7 +214,8 @@ function currentPlanPageFilter(): RolePlanPageFilter {
     view: planRequestView.value,
     query: normalizedQuery.value,
     sort: planListSortMode.value,
-    statuses
+    statuses,
+    tags: planListSelectedTags.value.length ? [...planListSelectedTags.value] : undefined
   };
 }
 
@@ -254,6 +253,7 @@ const hasMoreRenderedPlans = computed(() => hasMoreKnowledgeAfterWindow(
   planRenderStart.value,
   planRenderLimit.value
 ));
+const hasMoreRenderedPlansBefore = computed(() => hasMoreKnowledgeBeforeWindow(planRenderStart.value));
 const hasPendingPlanDetails = computed(() => Object.values(planDetailsLoading).some(Boolean));
 const hasMoreMemory = computed(() => Boolean(memoryNextCursor.value));
 const hasMoreRenderedMemory = computed(() => renderedMemoryForView.value.length < visibleMemoryForView.value.length);
@@ -323,6 +323,7 @@ function releaseDirectoryJumpTarget(syncCurrentPlan = true, refreshSentinel = tr
   }
   directoryJumpSettleTimer = 0;
   directoryJumpTargetId = "";
+  knowledgeScrollDirection = "";
   if (syncCurrentPlan) scheduleActiveDirectoryPlanSync();
   if (refreshSentinel) scheduleProgressiveSentinelRefresh();
 }
@@ -401,6 +402,18 @@ function keepActiveDirectoryLinkVisible(): void {
   if (nextScrollTop !== null) list.scrollTop = nextScrollTop;
 }
 
+function handleKnowledgeWindowScroll(): void {
+  const nextScrollY = Math.max(0, window.scrollY);
+  if (directoryJumpTargetId) {
+    lastKnowledgeScrollY = nextScrollY;
+    knowledgeScrollDirection = "";
+    return;
+  }
+  if (nextScrollY < lastKnowledgeScrollY - 1) knowledgeScrollDirection = "up";
+  else if (nextScrollY > lastKnowledgeScrollY + 1) knowledgeScrollDirection = "down";
+  lastKnowledgeScrollY = nextScrollY;
+}
+
 function setPlanDirectoryMarquee(event: Event, active: boolean): void {
   const link = event.currentTarget as HTMLElement | null;
   const title = link?.querySelector<HTMLElement>(".knowledge-plan-directory-title");
@@ -438,12 +451,22 @@ watch(
   }
 );
 
+watch(
+  () => planListTagOptions.value.map((option) => option.tag).join("\u001f"),
+  () => {
+    const available = new Set(planListTagOptions.value.map((option) => option.tag));
+    planListSelectedTags.value = planListSelectedTags.value.filter((tag) => available.has(tag));
+    planListDraftSelectedTags.value = planListDraftSelectedTags.value.filter((tag) => available.has(tag));
+  }
+);
+
 watch(activeView, () => {
   planListHiddenStatuses.value = [];
+  planListSelectedTags.value = [];
   planListDialogOpen.value = false;
 });
 
-watch([activeView, query, planListSortMode, () => planListHiddenStatuses.value.join("\u001f")], () => {
+watch([activeView, query, planListSortMode, () => planListHiddenStatuses.value.join("\u001f"), () => planListSelectedTags.value.join("\u001f")], () => {
   planRenderStart.value = 0;
   planRenderLimit.value = 8;
   memoryRenderLimit.value = 24;
@@ -466,9 +489,8 @@ function resetPlanPageCounts(): void {
       executing: 0,
       qa: 0,
       waitingPackage: 0,
-      waitingExternal: 0,
       approval: 0,
-      pending: 0,
+      manualVerification: 0,
       paused: 0,
       completed: 0,
       archived: 0
@@ -574,6 +596,13 @@ async function refreshPlanAgentStatuses(planIds: string[], force = false): Promi
       }
     }
   }
+}
+
+function refreshExpandedPlanAgentStatuses(): void {
+  const ids = plans.value
+    .filter((plan) => expandedPlans[plan.id])
+    .map((plan) => plan.id);
+  if (ids.length) void refreshPlanAgentStatuses(ids);
 }
 
 function planAgentStatusFor(plan: RolePlan): PlanAgentStatus {
@@ -732,7 +761,7 @@ function rebuildPlanDetailObserver(): void {
   planDetailObserver = new IntersectionObserver((entries) => {
     const visibleIds = new Set(entries.filter((entry) => entry.isIntersecting)
       .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)
-      .slice(0, 2)
+      .slice(0, 10)
       .map((entry) => (entry.target as HTMLElement).dataset.planId || "")
       .filter(Boolean));
     queuePlanDetails(pendingPlans.filter((plan) => visibleIds.has(plan.id)), requestVersion, true);
@@ -760,16 +789,32 @@ function observeProgressiveSentinels(): void {
   planPageObserver?.disconnect();
   memoryPageObserver?.disconnect();
   if (typeof IntersectionObserver === "undefined" || !knowledgePageWorkAllowed()) return;
-  if (planLoadMoreSentinel.value && (hasMorePlans.value || hasMoreRenderedPlans.value)) {
+  const observesPreviousPlans = Boolean(planLoadPreviousSentinel.value && hasMoreRenderedPlansBefore.value);
+  const observesNextPlans = Boolean(planLoadMoreSentinel.value && (hasMorePlans.value || hasMoreRenderedPlans.value));
+  if (observesPreviousPlans || observesNextPlans) {
     planPageObserver = new IntersectionObserver((entries) => {
+      const previousPlansIntersect = entries.some((entry) => (
+        entry.target === planLoadPreviousSentinel.value && entry.isIntersecting
+      ));
+      if (previousPlansIntersect && knowledgeScrollDirection === "up" && !directoryJumpTargetId) {
+        loadPreviousRenderedPlans();
+      }
+      const nextPlansIntersect = entries.some((entry) => (
+        entry.target === planLoadMoreSentinel.value && entry.isIntersecting
+      ));
       if (!shouldAutoLoadNextKnowledgeBatch(
-        entries.some((entry) => entry.isIntersecting),
+        nextPlansIntersect,
         Boolean(directoryJumpTargetId)
       )) return;
       if (hasMoreRenderedPlans.value) loadMoreRenderedPlans();
       if (hasMorePlans.value) void loadMorePlans();
     }, { rootMargin: "700px 0px" });
-    planPageObserver.observe(planLoadMoreSentinel.value);
+    if (observesPreviousPlans && planLoadPreviousSentinel.value) {
+      planPageObserver.observe(planLoadPreviousSentinel.value);
+    }
+    if (observesNextPlans && planLoadMoreSentinel.value) {
+      planPageObserver.observe(planLoadMoreSentinel.value);
+    }
   }
   if (memoryLoadMoreSentinel.value && (hasMoreMemory.value || hasMoreRenderedMemory.value)) {
     memoryPageObserver = new IntersectionObserver((entries) => {
@@ -819,6 +864,26 @@ async function loadMoreMemory(limit = 24): Promise<void> {
   }
 }
 
+function loadPreviousRenderedPlans(): void {
+  if (!hasMoreRenderedPlansBefore.value) return;
+  const anchorPlanId = renderedPlansForView.value[0]?.id || "";
+  const anchor = anchorPlanId ? document.getElementById(planCardDomId(anchorPlanId)) : null;
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  const previousWindow = previousKnowledgeRenderWindow(planRenderStart.value, planRenderLimit.value, 8);
+  planRenderStart.value = previousWindow.start;
+  planRenderLimit.value = previousWindow.count;
+  knowledgeScrollDirection = "";
+  void nextTick(() => {
+    if (anchor && anchorTop !== undefined) {
+      const nextAnchorTop = anchor.getBoundingClientRect().top;
+      window.scrollBy({ top: nextAnchorTop - anchorTop, behavior: "auto" });
+    }
+    schedulePlanCardObserverRefresh();
+    schedulePlanDetailObserverRefresh();
+    scheduleProgressiveSentinelRefresh();
+  });
+}
+
 function loadMoreRenderedPlans(): void {
   const remainingPlans = Math.max(0, visiblePlansForView.value.length - planRenderStart.value);
   planRenderLimit.value = nextKnowledgeRenderLimit(
@@ -828,7 +893,6 @@ function loadMoreRenderedPlans(): void {
   );
   schedulePlanCardObserverRefresh();
   schedulePlanDetailObserverRefresh();
-  scheduleProgressiveSentinelRefresh();
 }
 
 async function loadMorePlans(limit = 8): Promise<void> {
@@ -838,12 +902,14 @@ async function loadMorePlans(limit = 8): Promise<void> {
   if (!selectedRoleId || !cursor || loadingMorePlans.value || !knowledgePageWorkAllowed()) return;
   loadingMorePlans.value = true;
   try {
-    const page = await loadRolePlanPage(selectedRoleId, cursor, limit, currentPlanPageFilter());
+    const page = await loadRolePlanPage(selectedRoleId, cursor, limit, {
+      ...currentPlanPageFilter(),
+      includeFacets: false
+    });
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(page.items, false, currentRequest);
     planPageCounts.value = page.counts;
     planListResultTotal.value = page.total;
-    planListStatusOptions.value = page.facets?.statuses || [];
     planNextCursor.value = page.nextCursor;
   } catch (loadError) {
     if (currentRequest === requestVersion) {
@@ -861,7 +927,6 @@ function loadMoreRenderedMemory(): void {
     visibleMemoryForView.value.length,
     24
   );
-  scheduleProgressiveSentinelRefresh();
 }
 
 async function yieldToKnowledgePaint(): Promise<void> {
@@ -898,7 +963,7 @@ async function loadAllRemainingPlans(): Promise<void> {
     });
     if (backgroundRequest === requestVersion && !planNextCursor.value && knowledgePageWorkAllowed()) {
       await yieldToKnowledgePaint();
-      void refreshPlanAgentStatuses(plans.value.map((plan) => plan.id));
+      refreshExpandedPlanAgentStatuses();
     }
   } finally {
     if (planPageBackgroundRequest === backgroundRequest) planPageBackgroundRequest = 0;
@@ -940,6 +1005,7 @@ async function refreshKnowledge(): Promise<void> {
     planNextCursor.value = "";
     planListResultTotal.value = 0;
     planListStatusOptions.value = [];
+    planListTagOptions.value = [];
     memoryNextCursor.value = "";
     planRenderStart.value = 0;
     resetPlanPageCounts();
@@ -969,7 +1035,7 @@ async function refreshKnowledge(): Promise<void> {
   void refreshPendingMemoryConsolidationRuns(selectedRoleId).catch(() => undefined);
   if (showsPlanList.value) {
     try {
-      const result = await loadRolePlanPageWithPriorityDetails(selectedRoleId, "", 8, currentPlanPageFilter(), 2);
+      const result = await loadRolePlanPageWithPriorityDetails(selectedRoleId, "", 8, currentPlanPageFilter(), 8);
       if (currentRequest !== requestVersion) return;
       applyPlanSnapshots(result.items, true, currentRequest);
       const detailPlanIds = new Set(result.detailPlanIds);
@@ -982,6 +1048,7 @@ async function refreshKnowledge(): Promise<void> {
       planPageCounts.value = result.counts;
       planListResultTotal.value = result.total;
       planListStatusOptions.value = result.facets?.statuses || [];
+      planListTagOptions.value = result.facets?.tags || [];
       planNextCursor.value = result.nextCursor;
     } catch (loadError) {
       if (currentRequest !== requestVersion) return;
@@ -991,11 +1058,12 @@ async function refreshKnowledge(): Promise<void> {
       scheduleProgressiveSentinelRefresh();
     }
     if (currentRequest === requestVersion && planNextCursor.value) void loadAllRemainingPlans();
-    else if (currentRequest === requestVersion) void refreshPlanAgentStatuses(plans.value.map((plan) => plan.id));
+    else if (currentRequest === requestVersion) refreshExpandedPlanAgentStatuses();
   } else {
     plans.value = [];
     planListResultTotal.value = 0;
     planListStatusOptions.value = [];
+    planListTagOptions.value = [];
     loading.value = false;
   }
   if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
@@ -1051,7 +1119,7 @@ watch([activeView, query], () => {
   knowledgeFilterTimer = window.setTimeout(() => void refreshKnowledge(), 180);
 });
 
-watch([planNextCursor, hasMoreMemory], () => {
+watch([hasMorePlans, hasMoreMemory, hasMoreRenderedPlansBefore, hasMoreRenderedPlans, hasMoreRenderedMemory], () => {
   scheduleProgressiveSentinelRefresh();
 });
 
@@ -1064,8 +1132,11 @@ watch(
     if (previous && nextRoleId !== previousRoleId) {
       planListSortMode.value = "status";
       planListHiddenStatuses.value = [];
+      planListSelectedTags.value = [];
       planListDraftSortMode.value = "status";
       planListDraftHiddenStatuses.value = [];
+      planListDraftSelectedTags.value = [];
+      planListTagQuery.value = "";
       planListDialogOpen.value = false;
       resetApprovalAttachmentState();
       resetMemoryPageCounts();
@@ -1165,8 +1236,28 @@ const recentMemoryConsolidationNotice = computed(() => {
     : `距离触发还剩 ${formatMemoryRemaining(remaining)}`;
 });
 
-function planRelativeTime(value: string): string {
-  return formatPlanRelativeTime(value, Date.now(), isEnglish.value ? "en" : "zh");
+function planDirectorySortValue(plan: RolePlan): string {
+  return formatPlanDirectorySortLabel(
+    plan,
+    planListSortMode.value,
+    Date.now(),
+    isEnglish.value ? "en" : "zh",
+    t(plan.presentation.status)
+  );
+}
+
+function planDirectorySortTitle(plan: RolePlan): string {
+  return formatPlanDirectorySortLabelTitle(
+    plan,
+    planListSortMode.value,
+    Date.now(),
+    isEnglish.value ? "en" : "zh",
+    t(plan.presentation.status)
+  );
+}
+
+function planDirectorySortStyle(plan: RolePlan): Record<string, string> {
+  return planStatusStyle(planDirectorySortPalette(plan, planListSortMode.value));
 }
 
 function planAttachmentUrl(planId: string, attachmentId: string): string {
@@ -1384,20 +1475,44 @@ function planDirectoryStyle(plan: RolePlan): Record<string, string> {
   return { "--plan-tone": plan.presentation.palette.accent };
 }
 
-const planListSortLabel = computed(() => t(planListSortMode.value === "status" ? "状态排序" : "时间排序"));
-const planListHasFilters = computed(() => planListHiddenStatuses.value.length > 0);
-const planListDraftSortLabel = computed(() => t(planListDraftSortMode.value === "status" ? "状态排序" : "时间排序"));
-const planListDraftHasFilters = computed(() => planListDraftHiddenStatuses.value.length > 0);
+function planListSortLabelFor(mode: PlanListSortMode): string {
+  if (mode === "updated") return t("时间排序");
+  if (mode === "importance") return t("重要程度");
+  if (mode === "urgency") return t("紧急程度");
+  return t("状态排序");
+}
+
+function planListSortIconFor(mode: PlanListSortMode): string {
+  if (mode === "updated") return "mdi-clock-outline";
+  if (mode === "importance") return "mdi-star-outline";
+  if (mode === "urgency") return "mdi-calendar-clock-outline";
+  return "mdi-sort-variant";
+}
+
+const planListSortLabel = computed(() => planListSortLabelFor(planListSortMode.value));
+const planListHasFilters = computed(() => planListHiddenStatuses.value.length > 0 || planListSelectedTags.value.length > 0);
+const planListDraftSortLabel = computed(() => planListSortLabelFor(planListDraftSortMode.value));
+const planListDraftHasFilters = computed(() => planListDraftHiddenStatuses.value.length > 0 || planListDraftSelectedTags.value.length > 0);
+const planListActiveFilterCount = computed(() => (planListHiddenStatuses.value.length ? 1 : 0) + planListSelectedTags.value.length);
+const planListDraftActiveFilterCount = computed(() => (planListDraftHiddenStatuses.value.length ? 1 : 0) + planListDraftSelectedTags.value.length);
+const normalizedPlanListTagQuery = computed(() => planListTagQuery.value.trim().toLocaleLowerCase());
+const visiblePlanListTagOptions = computed(() => {
+  if (!normalizedPlanListTagQuery.value) return planListTagOptions.value;
+  return planListTagOptions.value.filter((option) => option.tag.toLocaleLowerCase().includes(normalizedPlanListTagQuery.value));
+});
 
 function openPlanListDialog(): void {
   planListDraftSortMode.value = planListSortMode.value;
   planListDraftHiddenStatuses.value = [...planListHiddenStatuses.value];
+  planListDraftSelectedTags.value = [...planListSelectedTags.value];
+  planListTagQuery.value = "";
   planListDialogOpen.value = true;
 }
 
 function applyPlanListDialog(): void {
   planListSortMode.value = planListDraftSortMode.value;
   planListHiddenStatuses.value = [...planListDraftHiddenStatuses.value];
+  planListSelectedTags.value = [...planListDraftSelectedTags.value];
   planListDialogOpen.value = false;
   if (knowledgeFilterTimer) {
     window.clearTimeout(knowledgeFilterTimer);
@@ -1417,6 +1532,14 @@ function togglePlanListStatus(status: string): void {
 
 function clearPlanListFilters(): void {
   planListDraftHiddenStatuses.value = [];
+  planListDraftSelectedTags.value = [];
+  planListTagQuery.value = "";
+}
+
+function togglePlanListTag(tag: string): void {
+  planListDraftSelectedTags.value = planListDraftSelectedTags.value.includes(tag)
+    ? planListDraftSelectedTags.value.filter((item) => item !== tag)
+    : [...planListDraftSelectedTags.value, tag];
 }
 
 function planListStatusIsOnlyVisible(status: string): boolean {
@@ -1442,11 +1565,6 @@ function jumpToPlan(event: MouseEvent, plan: RolePlan): void {
     schedulePlanCardObserverRefresh();
     schedulePlanDetailObserverRefresh();
   });
-}
-
-function planSequence(plan: RolePlan): number {
-  const index = visiblePlansForView.value.findIndex((item) => item.id === plan.id);
-  return index >= 0 ? index + 1 : 0;
 }
 
 function isApprovalStep(plan: RolePlan, step: RolePlanStep): boolean {
@@ -1554,34 +1672,6 @@ function addApprovalFiles(planId: string, files: File[], fromClipboard = false):
   if (approvalNotices[planId]?.tone === "error") delete approvalNotices[planId];
 }
 
-function openApprovalAttachmentPicker(planId: string): void {
-  if (approvalPending[planId]) return;
-  attachmentTargetPlanId.value = planId;
-  if (approvalFileInput.value) {
-    approvalFileInput.value.value = "";
-    approvalFileInput.value.click();
-  }
-}
-
-function handleApprovalFileSelection(event: Event): void {
-  const input = event.target as HTMLInputElement;
-  const planId = attachmentTargetPlanId.value;
-  if (planId) addApprovalFiles(planId, Array.from(input.files || []));
-  input.value = "";
-}
-
-function handleApprovalPaste(planId: string, event: ClipboardEvent): void {
-  const files = Array.from(event.clipboardData?.items || [])
-    .filter((item) => item.kind === "file")
-    .flatMap((item) => {
-      const file = item.getAsFile();
-      return file ? [file] : [];
-    });
-  if (!files.length) return;
-  if (!event.clipboardData?.getData("text/plain")) event.preventDefault();
-  addApprovalFiles(planId, files, true);
-}
-
 function releaseAttachmentDrafts(drafts: ApprovalAttachmentDraft[]): void {
   for (const draft of drafts) {
     if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
@@ -1627,9 +1717,6 @@ function resetApprovalAttachmentState(): void {
   for (const key of Object.keys(approvalRequestIds)) delete approvalRequestIds[key];
   submittedApprovalTexts.clear();
   submittedApprovalAttachments.clear();
-  attachmentTargetPlanId.value = "";
-  for (const key of Object.keys(approvalMentionMenus)) delete approvalMentionMenus[key];
-  approvalTextareaElements.clear();
 }
 
 function formatAttachmentSize(size: number): string {
@@ -1638,179 +1725,8 @@ function formatAttachmentSize(size: number): string {
   return `${Math.round(size / 1024 / 102.4) / 10} MB`;
 }
 
-function approvalMentionState(planId: string): ApprovalMentionMenuState {
-  if (!approvalMentionMenus[planId]) {
-    approvalMentionMenus[planId] = { open: false, query: "", start: 0, end: 0, activeIndex: 0 };
-  }
-  return approvalMentionMenus[planId]!;
-}
-
-function setApprovalTextareaRef(planId: string, value: unknown): void {
-  const root = value && typeof value === "object" && "$el" in value
-    ? (value as { $el?: HTMLElement }).$el
-    : value instanceof HTMLElement
-      ? value
-      : undefined;
-  const textarea = root instanceof HTMLTextAreaElement ? root : root?.querySelector<HTMLTextAreaElement>("textarea");
-  if (textarea) approvalTextareaElements.set(planId, textarea);
-  else approvalTextareaElements.delete(planId);
-}
-
-function allApprovalMentionCandidates(plan: RolePlan): PlanAttachmentMentionCandidate[] {
+function allApprovalMentionCandidates(plan: RolePlan) {
   return planAttachmentMentionCandidates(plan.attachments);
-}
-
-function approvalMentionResults(plan: RolePlan): PlanAttachmentMentionCandidate[] {
-  const query = approvalMentionState(plan.id).query.trim().toLocaleLowerCase();
-  if (!query) return allApprovalMentionCandidates(plan);
-  return allApprovalMentionCandidates(plan).filter((candidate) => (
-    candidate.name.toLocaleLowerCase().includes(query)
-    || candidate.id.toLocaleLowerCase().includes(query)
-  ));
-}
-
-function approvalMentionOptionId(planId: string, index: number): string {
-  return `plan-attachment-mention-${planId.replace(/[^\p{L}\p{N}_-]+/gu, "-")}-${index}`;
-}
-
-function approvalMentionListId(planId: string): string {
-  return `${approvalMentionOptionId(planId, 0)}-list`;
-}
-
-function approvalMentioned(plan: RolePlan, candidate: PlanAttachmentMentionCandidate): boolean {
-  return referencedPlanAttachmentIds(String(approvalDrafts[plan.id] || ""), allApprovalMentionCandidates(plan))
-    .includes(candidate.id);
-}
-
-function approvalMentionAttachment(
-  plan: RolePlan,
-  candidate: PlanAttachmentMentionCandidate
-): PlanAttachmentPresentation | undefined {
-  return plan.attachments.find((attachment) => attachment.id === candidate.id);
-}
-
-function approvalMentionAttachmentIcon(plan: RolePlan, candidate: PlanAttachmentMentionCandidate): string {
-  const kind = approvalMentionAttachment(plan, candidate)?.kind;
-  return kind === "image" ? "mdi-image-outline" : kind === "video" ? "mdi-video-outline" : "mdi-file-outline";
-}
-
-function handleApprovalMentionPreviewError(event: Event): void {
-  if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.hidden = true;
-}
-
-function updateApprovalMentionMenu(plan: RolePlan, textarea: HTMLTextAreaElement): void {
-  approvalTextareaElements.set(plan.id, textarea);
-  const mention = findPlanAttachmentMentionQuery(textarea.value, textarea.selectionStart ?? textarea.value.length);
-  const state = approvalMentionState(plan.id);
-  if (!mention || !canEditApprovalFeedback(plan)) {
-    state.open = false;
-    return;
-  }
-  state.open = true;
-  state.query = mention.query;
-  state.start = mention.start;
-  state.end = mention.end;
-  state.activeIndex = 0;
-}
-
-function handleApprovalInput(event: Event, plan: RolePlan): void {
-  const textarea = event.target instanceof HTMLTextAreaElement
-    ? event.target
-    : approvalTextareaElements.get(plan.id);
-  if (textarea) updateApprovalMentionMenu(plan, textarea);
-}
-
-function handleApprovalCaretChange(event: Event, plan: RolePlan): void {
-  const textarea = event.target instanceof HTMLTextAreaElement
-    ? event.target
-    : approvalTextareaElements.get(plan.id);
-  if (textarea) updateApprovalMentionMenu(plan, textarea);
-}
-
-function closeApprovalMentionMenu(planId: string): void {
-  const state = approvalMentionState(planId);
-  state.open = false;
-  state.query = "";
-  state.activeIndex = 0;
-}
-
-function handleApprovalBlur(planId: string): void {
-  window.setTimeout(() => closeApprovalMentionMenu(planId), 120);
-}
-
-function selectApprovalMention(plan: RolePlan, candidate: PlanAttachmentMentionCandidate): void {
-  const state = approvalMentionState(plan.id);
-  const inserted = insertPlanAttachmentMention(String(approvalDrafts[plan.id] || ""), state, candidate.token);
-  if (Array.from(inserted.text).length > 2_000) {
-    approvalNotices[plan.id] = { tone: "error", text: t("引用附件后会超过 2000 字，请先精简审批建议。") };
-    return;
-  }
-  approvalDrafts[plan.id] = inserted.text;
-  closeApprovalMentionMenu(plan.id);
-  void nextTick(() => {
-    const textarea = approvalTextareaElements.get(plan.id);
-    textarea?.focus();
-    textarea?.setSelectionRange(inserted.caret, inserted.caret);
-  });
-}
-
-function handleApprovalKeydown(event: KeyboardEvent, plan: RolePlan): void {
-  const state = approvalMentionState(plan.id);
-  if (state.open) {
-    const results = approvalMentionResults(plan);
-    if (event.key === "ArrowDown" && results.length) {
-      event.preventDefault();
-      state.activeIndex = (state.activeIndex + 1) % results.length;
-      return;
-    }
-    if (event.key === "ArrowUp" && results.length) {
-      event.preventDefault();
-      state.activeIndex = (state.activeIndex - 1 + results.length) % results.length;
-      return;
-    }
-    if (event.key === "Home" && results.length) {
-      event.preventDefault();
-      state.activeIndex = 0;
-      return;
-    }
-    if (event.key === "End" && results.length) {
-      event.preventDefault();
-      state.activeIndex = results.length - 1;
-      return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeApprovalMentionMenu(plan.id);
-      return;
-    }
-    if (
-      event.key === "Enter"
-      && results.length
-      && !event.isComposing
-      && event.keyCode !== 229
-      && !event.shiftKey
-      && !event.ctrlKey
-      && !event.altKey
-      && !event.metaKey
-    ) {
-      event.preventDefault();
-      selectApprovalMention(plan, results[Math.min(state.activeIndex, results.length - 1)]!);
-      return;
-    }
-    if (
-      event.key === "Enter"
-      && !event.isComposing
-      && event.keyCode !== 229
-      && !event.shiftKey
-      && !event.ctrlKey
-      && !event.altKey
-      && !event.metaKey
-    ) {
-      event.preventDefault();
-      return;
-    }
-  }
-  if (event.key === "Enter") handleApprovalEnter(event, plan);
 }
 
 function attachmentContentBase64(file: File): Promise<string> {
@@ -1976,20 +1892,6 @@ function approvalSubmitLabel(plan: RolePlan): string {
   return t(plan.presentation.approval.state === "incomplete" ? "审批已禁用" : "提交审批意见");
 }
 
-function handleApprovalEnter(event: KeyboardEvent, plan: RolePlan): void {
-  if (event.isComposing || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
-  event.preventDefault();
-  if (!canSubmitApproval(plan)) return;
-  void sendApprovalSuggestion(plan);
-}
-
-function handleGuidanceEnter(event: KeyboardEvent, plan: RolePlan): void {
-  if (event.isComposing || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
-  event.preventDefault();
-  if (!canSubmitPlanGuidance(plan)) return;
-  void sendPlanGuidance(plan);
-}
-
 function applyPlanApproval(planId: string, approval: RolePlan["approval"]): void {
   const index = plans.value.findIndex((plan) => plan.id === planId);
   if (index < 0) return;
@@ -2132,7 +2034,9 @@ function handleKnowledgeVisibilityChange(): void {
 
 onMounted(() => {
   planDirectoryMounted = true;
+  lastKnowledgeScrollY = Math.max(0, window.scrollY);
   document.addEventListener("visibilitychange", handleKnowledgeVisibilityChange);
+  window.addEventListener("scroll", handleKnowledgeWindowScroll, { passive: true });
   window.addEventListener("resize", schedulePlanCardObserverRefresh, { passive: true });
   if (typeof ResizeObserver !== "undefined" && knowledgeToolbar.value) {
     toolbarResizeObserver = new ResizeObserver(schedulePlanCardObserverRefresh);
@@ -2149,6 +2053,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   planDirectoryMounted = false;
   document.removeEventListener("visibilitychange", handleKnowledgeVisibilityChange);
+  window.removeEventListener("scroll", handleKnowledgeWindowScroll);
   releaseDirectoryJumpTarget(false, false);
   planCardObserver?.disconnect();
   toolbarResizeObserver?.disconnect();
@@ -2248,13 +2153,6 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
 
 <template>
   <div class="page-shell knowledge-page">
-    <input
-      ref="approvalFileInput"
-      class="knowledge-approval-file-input"
-      type="file"
-      multiple
-      @change="handleApprovalFileSelection"
-    >
     <section class="knowledge-hero app-card">
       <div class="knowledge-hero-copy">
         <div class="eyebrow">ROLE KNOWLEDGE LEDGER</div>
@@ -2295,16 +2193,17 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
             :class="{ filtered: planListHasFilters }"
             size="x-small"
             variant="tonal"
-            :prepend-icon="planListSortMode === 'status' ? 'mdi-sort-variant' : 'mdi-clock-outline'"
+            :prepend-icon="planListSortIconFor(planListSortMode)"
             append-icon="mdi-tune-variant"
             :aria-label="isEnglish ? `Open plan list sorting and filters: ${planListSortLabel}` : `打开列表排序与筛选：${planListSortLabel}`"
             @click="openPlanListDialog"
           >
             {{ planListSortLabel }}
+            <span v-if="planListActiveFilterCount" class="knowledge-plan-directory-filter-count">{{ planListActiveFilterCount }}</span>
           </v-btn>
           <v-dialog
             v-model="planListDialogOpen"
-            max-width="640"
+            max-width="820"
             scrollable
             scrim="rgba(9, 22, 36, 0.56)"
             aria-labelledby="plan-list-dialog-title"
@@ -2335,48 +2234,80 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     <span>{{ t("当前结果") }}</span>
                     <b>{{ visiblePlansForView.length }} / {{ planListResultTotal }}</b>
                   </div>
-                  <span class="knowledge-plan-list-current-mode">
-                    <v-icon size="15">{{ planListDraftSortMode === "status" ? "mdi-sort-variant" : "mdi-clock-outline" }}</v-icon>
-                    {{ planListDraftSortLabel }}
-                  </span>
+                  <div class="knowledge-plan-list-summary-actions">
+                    <span class="knowledge-plan-list-current-mode">
+                      <v-icon size="15">{{ planListSortIconFor(planListDraftSortMode) }}</v-icon>
+                      {{ planListDraftSortLabel }}
+                    </span>
+                    <span v-if="planListDraftActiveFilterCount" class="knowledge-plan-list-filter-summary">
+                      {{ isEnglish ? `${planListDraftActiveFilterCount} filters` : `${planListDraftActiveFilterCount} 项筛选` }}
+                    </span>
+                    <v-btn
+                      class="knowledge-plan-list-clear-all"
+                      size="small"
+                      variant="text"
+                      :disabled="!planListDraftHasFilters"
+                      @click="clearPlanListFilters"
+                    >{{ t("清除筛选") }}</v-btn>
+                  </div>
                 </div>
+                <fieldset class="knowledge-plan-list-panel knowledge-plan-list-sort-panel">
+                  <legend>{{ t("排序方式") }}</legend>
+                  <p>{{ t("选择整个计划列表的排列方式") }}</p>
+                  <div class="knowledge-plan-list-sort-options">
+                    <button
+                      type="button"
+                      :class="{ selected: planListDraftSortMode === 'status' }"
+                      :aria-pressed="planListDraftSortMode === 'status'"
+                      @click="planListDraftSortMode = 'status'"
+                    >
+                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-sort-variant</v-icon></span>
+                      <span><b>{{ t("状态排序") }}</b><small>{{ t("相同工作阶段集中显示") }}</small></span>
+                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "status" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                    </button>
+                    <button
+                      type="button"
+                      :class="{ selected: planListDraftSortMode === 'updated' }"
+                      :aria-pressed="planListDraftSortMode === 'updated'"
+                      @click="planListDraftSortMode = 'updated'"
+                    >
+                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-clock-outline</v-icon></span>
+                      <span><b>{{ t("时间排序") }}</b><small>{{ t("最近更新的计划优先") }}</small></span>
+                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "updated" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                    </button>
+                    <button
+                      type="button"
+                      :class="{ selected: planListDraftSortMode === 'importance' }"
+                      :aria-pressed="planListDraftSortMode === 'importance'"
+                      @click="planListDraftSortMode = 'importance'"
+                    >
+                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-star-outline</v-icon></span>
+                      <span><b>{{ t("重要程度") }}</b><small>{{ t("重要程度高的计划优先") }}</small></span>
+                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "importance" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                    </button>
+                    <button
+                      type="button"
+                      :class="{ selected: planListDraftSortMode === 'urgency' }"
+                      :aria-pressed="planListDraftSortMode === 'urgency'"
+                      @click="planListDraftSortMode = 'urgency'"
+                    >
+                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-calendar-clock-outline</v-icon></span>
+                      <span><b>{{ t("紧急程度") }}</b><small>{{ t("截止时间近的计划优先") }}</small></span>
+                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "urgency" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                    </button>
+                  </div>
+                </fieldset>
                 <div class="knowledge-plan-list-dialog-grid">
-                  <fieldset class="knowledge-plan-list-panel knowledge-plan-list-sort-panel">
-                    <legend>{{ t("排序方式") }}</legend>
-                    <p>{{ t("选择整个计划列表的排列方式") }}</p>
-                    <div class="knowledge-plan-list-sort-options">
-                      <button
-                        type="button"
-                        :class="{ selected: planListDraftSortMode === 'status' }"
-                        :aria-pressed="planListDraftSortMode === 'status'"
-                        @click="planListDraftSortMode = 'status'"
-                      >
-                        <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-sort-variant</v-icon></span>
-                        <span><b>{{ t("状态排序") }}</b><small>{{ t("相同工作阶段集中显示") }}</small></span>
-                        <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "status" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                      </button>
-                      <button
-                        type="button"
-                        :class="{ selected: planListDraftSortMode === 'updated' }"
-                        :aria-pressed="planListDraftSortMode === 'updated'"
-                        @click="planListDraftSortMode = 'updated'"
-                      >
-                        <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-clock-outline</v-icon></span>
-                        <span><b>{{ t("时间排序") }}</b><small>{{ t("最近更新的计划优先") }}</small></span>
-                        <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "updated" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                      </button>
-                    </div>
-                  </fieldset>
                   <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel">
                     <legend>{{ t("筛选状态") }}</legend>
                     <div class="knowledge-plan-list-filter-head">
-                      <p>{{ t("选择需要同时显示的计划状态") }}</p>
+                      <p>{{ t("可多选，同组匹配任一状态") }}</p>
                       <v-btn
                         class="knowledge-plan-list-show-all"
                         size="small"
                         variant="text"
-                        :disabled="!planListDraftHasFilters"
-                        @click="clearPlanListFilters"
+                        :disabled="!planListDraftHiddenStatuses.length"
+                        @click="planListDraftHiddenStatuses = []"
                       >
                         {{ t("显示全部") }}
                       </v-btn>
@@ -2402,7 +2333,51 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       </label>
                     </div>
                   </fieldset>
+                  <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel knowledge-plan-list-tag-panel">
+                    <legend>{{ t("筛选标签") }}</legend>
+                    <div class="knowledge-plan-list-filter-head">
+                      <p>{{ t("可多选，同组匹配任一标签") }}</p>
+                      <v-btn
+                        class="knowledge-plan-list-show-all"
+                        size="small"
+                        variant="text"
+                        :disabled="!planListDraftSelectedTags.length"
+                        @click="planListDraftSelectedTags = []"
+                      >{{ t("清除") }}</v-btn>
+                    </div>
+                    <v-text-field
+                      v-model="planListTagQuery"
+                      class="knowledge-plan-list-tag-search"
+                      density="compact"
+                      variant="outlined"
+                      prepend-inner-icon="mdi-magnify"
+                      :placeholder="t('搜索标签')"
+                      :aria-label="t('搜索标签')"
+                      clearable
+                      hide-details
+                    />
+                    <div class="knowledge-plan-list-filter-options knowledge-plan-list-tag-options">
+                      <label
+                        v-for="option in visiblePlanListTagOptions"
+                        :key="option.tag"
+                        :class="{ selected: planListDraftSelectedTags.includes(option.tag) }"
+                      >
+                        <input
+                          type="checkbox"
+                          :checked="planListDraftSelectedTags.includes(option.tag)"
+                          @change="togglePlanListTag(option.tag)"
+                        >
+                        <v-icon class="knowledge-plan-list-tag-icon" size="15">mdi-tag-outline</v-icon>
+                        <span data-no-i18n>{{ option.tag }}</span>
+                        <b>{{ option.count }}</b>
+                      </label>
+                      <div v-if="!visiblePlanListTagOptions.length" class="knowledge-plan-list-no-tags">
+                        {{ planListTagOptions.length ? t("没有匹配的标签") : t("当前计划没有标签") }}
+                      </div>
+                    </div>
+                  </fieldset>
                 </div>
+                <p class="knowledge-plan-list-filter-rule">{{ t("状态与标签同时满足时，计划才会显示。") }}</p>
               </v-card-text>
               <v-divider />
               <v-card-actions class="knowledge-plan-list-dialog-actions">
@@ -2430,33 +2405,19 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
             @focus="setPlanDirectoryMarquee($event, true)"
             @blur="setPlanDirectoryMarquee($event, false)"
           >
-            <span
-              class="knowledge-plan-directory-status"
-              :style="planStatusStyle(plan.presentation.palette)"
-              :title="t(plan.presentation.status)"
-            >{{ t(plan.presentation.status) }}</span>
             <span class="knowledge-plan-directory-copy">
               <b class="knowledge-plan-directory-title" :title="plan.title" data-no-i18n>
                 <span>{{ planTitleForDirectory(plan.title) }}</span>
               </b>
             </span>
             <span
-              v-if="planTaskAgentWorking(plan)"
-              class="knowledge-plan-directory-working"
-              :title="isEnglish ? 'Task Agent is working' : '任务 Agent 工作中'"
+              class="knowledge-plan-directory-sort-label"
+              :style="planDirectorySortStyle(plan)"
+              :title="planDirectorySortTitle(plan)"
               role="status"
-              :aria-label="isEnglish ? 'Task Agent is working' : '任务 Agent 工作中'"
-            >
-              <v-icon size="14" aria-hidden="true">mdi-loading</v-icon>
-            </span>
-            <time
-              v-else
-              class="knowledge-plan-directory-updated"
-              :datetime="plan.updatedAt"
-              :title="formatDate(plan.updatedAt)"
-              :aria-label="isEnglish ? `Last updated ${planRelativeTime(plan.updatedAt)}` : `最后更新：${planRelativeTime(plan.updatedAt)}`"
+              :aria-label="planDirectorySortTitle(plan)"
               data-no-i18n
-            >{{ planRelativeTime(plan.updatedAt) }}</time>
+            >{{ planDirectorySortValue(plan) }}</span>
           </a>
           <div v-if="!visiblePlansForView.length" class="knowledge-plan-directory-empty">
             {{ t("没有符合当前筛选的计划") }}
@@ -2504,6 +2465,15 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
             <v-skeleton-loader type="heading, paragraph, paragraph, actions" />
           </div>
         </div>
+        <div
+          v-if="hasMoreRenderedPlansBefore"
+          ref="planLoadPreviousSentinel"
+          class="knowledge-load-more"
+          aria-live="polite"
+        >
+          <span>{{ t("继续向上滚动加载上方计划卡片") }}</span>
+          <v-btn size="small" variant="text" @click="loadPreviousRenderedPlans">{{ t("加载上方计划") }}</v-btn>
+        </div>
         <div v-if="renderedPlansForView.length" class="knowledge-plan-cards">
             <article
               v-for="plan in renderedPlansForView"
@@ -2519,15 +2489,9 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <div class="knowledge-plan-accent" />
           <div class="knowledge-plan-main">
             <div class="knowledge-plan-head">
-              <div class="knowledge-plan-identity-row">
-                <div class="knowledge-plan-sequence" aria-hidden="true">
-                  <span>{{ t("计划项") }}</span>
-                  <b>{{ String(planSequence(plan)).padStart(2, "0") }}</b>
-                </div>
-                <div class="knowledge-plan-title-copy">
-                  <div class="knowledge-kicker" data-no-i18n>{{ plan.project?.name || plan.kind || "PLAN" }}</div>
-                  <h2 data-no-i18n>{{ plan.title }}</h2>
-                </div>
+              <div class="knowledge-plan-title-copy">
+                <div class="knowledge-kicker" data-no-i18n>{{ plan.project?.name || plan.kind || "PLAN" }}</div>
+                <h2 data-no-i18n>{{ plan.title }}</h2>
               </div>
               <div class="knowledge-plan-head-actions">
                 <v-chip :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.presentation.status) }}</v-chip>
@@ -2698,14 +2662,17 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               <div class="knowledge-plan-current" :class="{ blocked: Boolean(blocker(plan)) }">
                 <v-icon size="19">{{ blocker(plan) ? "mdi-alert-circle-outline" : "mdi-progress-wrench" }}</v-icon>
                 <div class="knowledge-plan-current-copy">
-                  <span>{{ blocker(plan) ? "当前阻塞" : "当前步骤" }}</span>
+                  <div class="knowledge-plan-current-heading">
+                    <span>{{ blocker(plan) ? "当前阻塞" : "当前步骤" }}</span>
+                    <small v-if="plan.steps.length">{{ currentStepPosition(plan) || "—" }}/{{ plan.steps.length }} · {{ t("执行步骤") }}</small>
+                  </div>
                   <b
                     v-if="currentStep(plan)?.title || plan.currentStep"
                     data-no-i18n
                     :title="currentStep(plan)?.title || plan.currentStep"
                   >{{ currentStep(plan)?.title || plan.currentStep }}</b>
                   <b v-else>{{ t("暂无进行中的步骤") }}</b>
-                  <small v-if="plan.steps.length">{{ currentStepPosition(plan) || "—" }}/{{ plan.steps.length }} · {{ t("执行步骤") }}</small>
+                  <p v-if="currentStep(plan)?.detail" class="knowledge-plan-current-detail" data-no-i18n>{{ currentStep(plan)?.detail }}</p>
                 </div>
               </div>
               <div class="knowledge-plan-timing">
@@ -2890,81 +2857,27 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     <span>{{ guidanceComposeStatus(plan)?.text }}</span>
                   </span>
                 </div>
-                <div class="knowledge-approval-composer">
-                  <v-textarea
-                    v-model="approvalDrafts[plan.id]"
-                    :label="t('计划引导')"
-                    :placeholder="t('例如：先确认入口关闭后的整体体验，再根据结果调整后续未开始步骤。')"
-                    persistent-hint
-                    :hint="t('Enter 直接提交，Shift+Enter 换行。引导会投递给当前计划绑定的 Agent，不会作为步骤审批。')"
-                    variant="outlined"
-                    rows="3"
-                    :counter="2000"
-                    :maxlength="2000"
-                    :disabled="!canEditPlanGuidance(plan)"
-                    @keydown.enter="handleGuidanceEnter($event, plan)"
-                    @paste="handleApprovalPaste(plan.id, $event)"
-                  />
-                </div>
-                <div class="knowledge-approval-attachment-tools">
-                  <v-btn
-                    prepend-icon="mdi-paperclip-plus"
-                    variant="tonal"
-                    size="small"
-                    :disabled="!canEditPlanGuidance(plan)"
-                    @click="openApprovalAttachmentPicker(plan.id)"
-                  >
-                    {{ t("添加附件") }}
-                  </v-btn>
-                  <span>{{ t("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴文件或图片。") }}</span>
-                  <small>{{ t("最多 8 个，单个不超过 10 MB，总计不超过 25 MB。") }}</small>
-                </div>
-                <div v-if="approvalAttachmentsFor(plan.id).length" class="knowledge-approval-attachments">
-                  <article
-                    v-for="attachment in approvalAttachmentsFor(plan.id)"
-                    :key="attachment.id"
-                    class="knowledge-approval-attachment"
-                    :class="{ image: attachment.kind === 'image' }"
-                  >
-                    <img v-if="attachment.previewUrl" :src="attachment.previewUrl" alt="">
-                    <div v-else class="knowledge-approval-attachment-icon">
-                      <v-icon size="22">mdi-file-outline</v-icon>
-                    </div>
-                    <div class="knowledge-approval-attachment-copy">
-                      <b data-no-i18n>{{ attachment.name }}</b>
-                      <span data-no-i18n>{{ formatAttachmentSize(attachment.size) }}</span>
-                    </div>
-                    <v-btn
-                      icon="mdi-close"
-                      variant="text"
-                      size="x-small"
-                      :aria-label="t('删除附件')"
-                      :disabled="approvalPending[plan.id]"
-                      @click="removeApprovalAttachment(plan.id, attachment.id)"
-                    />
-                  </article>
-                </div>
-                <v-alert
-                  v-if="approvalNotices[plan.id]"
-                  :type="approvalNotices[plan.id].tone"
-                  variant="tonal"
-                  density="compact"
-                  data-no-i18n
-                >
-                  {{ approvalNotices[plan.id].text }}
-                </v-alert>
-                <div class="knowledge-approval-actions">
-                  <span>{{ t("引导只关联当前 planId；Agent 可据此更新计划说明和未开始步骤。") }}</span>
-                  <v-btn
-                    color="primary"
-                    prepend-icon="mdi-send-outline"
-                    :loading="approvalPending[plan.id]"
-                    :disabled="!canSubmitPlanGuidance(plan)"
-                    @click="sendPlanGuidance(plan)"
-                  >
-                    {{ t("提交计划引导") }}
-                  </v-btn>
-                </div>
+                <PlanFeedbackComposer
+                  :composer-id="`guidance-${plan.id}`"
+                  :model-value="approvalDrafts[plan.id] || ''"
+                  :plan-attachments="plan.attachments"
+                  :attachments="approvalAttachmentsFor(plan.id)"
+                  :attachment-url="(attachmentId) => planAttachmentUrl(plan.id, attachmentId)"
+                  :label="t('计划引导')"
+                  :placeholder="t('例如：先确认入口关闭后的整体体验，再根据结果调整后续未开始步骤。')"
+                  :hint="t('输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。引导会投递给当前计划绑定的 Agent，不会作为步骤审批。')"
+                  :disabled="!canEditPlanGuidance(plan)"
+                  :submit-disabled="!canSubmitPlanGuidance(plan)"
+                  :pending="Boolean(approvalPending[plan.id])"
+                  :notice="approvalNotices[plan.id]"
+                  :submit-label="t('提交计划引导')"
+                  submit-icon="mdi-send-outline"
+                  :footer-text="t('引导只关联当前 planId；Agent 可据此更新计划说明和未开始步骤。')"
+                  @update:model-value="approvalDrafts[plan.id] = $event"
+                  @add-files="addApprovalFiles(plan.id, $event.files, $event.fromClipboard)"
+                  @remove-attachment="removeApprovalAttachment(plan.id, $event)"
+                  @submit="sendPlanGuidance(plan)"
+                />
               </section>
               <div v-if="plan.steps.length" class="knowledge-steps">
                 <div class="knowledge-steps-head">
@@ -3154,146 +3067,27 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       <span>{{ approvalComposeStatus(plan)?.text }}</span>
                     </span>
                   </div>
-                  <div class="knowledge-approval-composer">
-                    <v-textarea
-                      :ref="(value) => setApprovalTextareaRef(plan.id, value)"
-                      v-model="approvalDrafts[plan.id]"
-                      :label="approvalFeedbackLabel(plan)"
-                      :placeholder="approvalFeedbackPlaceholder(plan)"
-                      persistent-hint
-                      :hint="approvalFeedbackHint(plan)"
-                      variant="outlined"
-                      rows="3"
-                      :counter="2000"
-                      :maxlength="2000"
-                      :disabled="!canEditApprovalFeedback(plan)"
-                      aria-autocomplete="list"
-                      :aria-controls="approvalMentionListId(plan.id)"
-                      :aria-expanded="approvalMentionState(plan.id).open"
-                      :aria-activedescendant="approvalMentionState(plan.id).open && approvalMentionResults(plan).length ? approvalMentionOptionId(plan.id, approvalMentionState(plan.id).activeIndex) : undefined"
-                      @input="handleApprovalInput($event, plan)"
-                      @click="handleApprovalCaretChange($event, plan)"
-                      @keydown="handleApprovalKeydown($event, plan)"
-                      @blur="handleApprovalBlur(plan.id)"
-                      @paste="handleApprovalPaste(plan.id, $event)"
-                    />
-                    <div
-                      v-if="approvalMentionState(plan.id).open"
-                      :id="approvalMentionListId(plan.id)"
-                      class="knowledge-approval-mention-menu"
-                      role="listbox"
-                      :aria-label="t('引用计划附件')"
-                    >
-                      <div class="knowledge-approval-mention-head">
-                        <span><v-icon size="16">mdi-at</v-icon>{{ t("引用计划附件") }}</span>
-                        <small>{{ t("输入文件名筛选，方向键选择，Enter 确认") }}</small>
-                      </div>
-                      <button
-                        v-for="(candidate, candidateIndex) in approvalMentionResults(plan)"
-                        :id="approvalMentionOptionId(plan.id, candidateIndex)"
-                        :key="candidate.id"
-                        class="knowledge-approval-mention-option"
-                        :data-active="candidateIndex === approvalMentionState(plan.id).activeIndex"
-                        :data-selected="approvalMentioned(plan, candidate)"
-                        type="button"
-                        role="option"
-                        :aria-selected="approvalMentioned(plan, candidate)"
-                        @mouseenter="approvalMentionState(plan.id).activeIndex = candidateIndex"
-                        @mousedown.prevent
-                        @click="selectApprovalMention(plan, candidate)"
-                      >
-                        <span
-                          class="knowledge-approval-mention-preview"
-                          :data-kind="approvalMentionAttachment(plan, candidate)?.kind || 'file'"
-                        >
-                          <span class="knowledge-approval-mention-preview-fallback">
-                            <v-icon size="21">{{ approvalMentionAttachmentIcon(plan, candidate) }}</v-icon>
-                          </span>
-                          <img
-                            v-if="approvalMentionAttachment(plan, candidate)?.kind === 'image'"
-                            :src="planAttachmentUrl(plan.id, candidate.id)"
-                            alt=""
-                            width="88"
-                            height="50"
-                            loading="lazy"
-                            decoding="async"
-                            fetchpriority="low"
-                            @error="handleApprovalMentionPreviewError"
-                          >
-                        </span>
-                        <span class="knowledge-approval-mention-copy">
-                          <b data-no-i18n>{{ candidate.name }}</b>
-                          <small data-no-i18n>
-                            {{ candidate.duplicateCount ? `${candidate.duplicateIndex}/${candidate.duplicateCount} · ` : "" }}{{ formatAttachmentSize(approvalMentionAttachment(plan, candidate)?.size || 0) }}
-                          </small>
-                        </span>
-                        <v-icon v-if="approvalMentioned(plan, candidate)" size="18" color="primary">mdi-check-circle</v-icon>
-                      </button>
-                      <div v-if="!approvalMentionResults(plan).length" class="knowledge-approval-mention-empty" role="status">
-                        <v-icon size="20">mdi-file-search-outline</v-icon>
-                        <span>{{ plan.attachments.length ? t("没有匹配的计划附件") : t("当前计划没有可引用的附件") }}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="knowledge-approval-attachment-tools">
-                    <v-btn
-                      prepend-icon="mdi-paperclip-plus"
-                      variant="tonal"
-                      size="small"
-                      :disabled="!canEditApprovalFeedback(plan)"
-                      @click="openApprovalAttachmentPicker(plan.id)"
-                    >
-                      {{ t("添加附件") }}
-                    </v-btn>
-                    <span>{{ t("支持选择文件，也可以在输入框中按 Ctrl+V 粘贴文件或图片。") }}</span>
-                    <small>{{ t("最多 8 个，单个不超过 10 MB，总计不超过 25 MB。") }}</small>
-                  </div>
-                  <div v-if="approvalAttachmentsFor(plan.id).length" class="knowledge-approval-attachments">
-                    <article
-                      v-for="attachment in approvalAttachmentsFor(plan.id)"
-                      :key="attachment.id"
-                      class="knowledge-approval-attachment"
-                      :class="{ image: attachment.kind === 'image' }"
-                    >
-                      <img v-if="attachment.previewUrl" :src="attachment.previewUrl" alt="">
-                      <div v-else class="knowledge-approval-attachment-icon">
-                        <v-icon size="22">mdi-file-outline</v-icon>
-                      </div>
-                      <div class="knowledge-approval-attachment-copy">
-                        <b data-no-i18n>{{ attachment.name }}</b>
-                        <span data-no-i18n>{{ formatAttachmentSize(attachment.size) }}</span>
-                      </div>
-                      <v-btn
-                        icon="mdi-close"
-                        variant="text"
-                        size="x-small"
-                        :aria-label="t('删除附件')"
-                        :disabled="approvalPending[plan.id]"
-                        @click="removeApprovalAttachment(plan.id, attachment.id)"
-                      />
-                    </article>
-                  </div>
-                  <v-alert
-                    v-if="approvalNotices[plan.id]"
-                    :type="approvalNotices[plan.id].tone"
-                    variant="tonal"
-                    density="compact"
-                    data-no-i18n
-                  >
-                    {{ approvalNotices[plan.id].text }}
-                  </v-alert>
-                  <div class="knowledge-approval-actions">
-                    <span>意见会关联当前 planId 与 stepId，QQ 和本页面可使用同一记录接口。</span>
-                    <v-btn
-                      color="primary"
-                      prepend-icon="mdi-send-check-outline"
-                      :loading="approvalPending[plan.id]"
-                      :disabled="!canSubmitApproval(plan)"
-                      @click="sendApprovalSuggestion(plan)"
-                    >
-                      {{ approvalSubmitLabel(plan) }}
-                    </v-btn>
-                  </div>
+                  <PlanFeedbackComposer
+                    :composer-id="`approval-${plan.id}`"
+                    :model-value="approvalDrafts[plan.id] || ''"
+                    :plan-attachments="plan.attachments"
+                    :attachments="approvalAttachmentsFor(plan.id)"
+                    :attachment-url="(attachmentId) => planAttachmentUrl(plan.id, attachmentId)"
+                    :label="approvalFeedbackLabel(plan)"
+                    :placeholder="approvalFeedbackPlaceholder(plan)"
+                    :hint="approvalFeedbackHint(plan)"
+                    :disabled="!canEditApprovalFeedback(plan)"
+                    :submit-disabled="!canSubmitApproval(plan)"
+                    :pending="Boolean(approvalPending[plan.id])"
+                    :notice="approvalNotices[plan.id]"
+                    :submit-label="approvalSubmitLabel(plan)"
+                    submit-icon="mdi-send-check-outline"
+                    footer-text="意见会关联当前 planId 与 stepId，QQ 和本页面可使用同一记录接口。"
+                    @update:model-value="approvalDrafts[plan.id] = $event"
+                    @add-files="addApprovalFiles(plan.id, $event.files, $event.fromClipboard)"
+                    @remove-attachment="removeApprovalAttachment(plan.id, $event)"
+                    @submit="sendApprovalSuggestion(plan)"
+                  />
                     </section>
                 </div>
               </div>
@@ -3316,7 +3110,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         <div v-if="!loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length" class="knowledge-empty">
           <v-icon size="32">mdi-clipboard-text-off-outline</v-icon>
           <b>没有匹配的计划</b>
-          <span>{{ planListHasFilters ? t("可以调整状态筛选，恢复其它计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>
+          <span>{{ planListHasFilters ? t("可以调整筛选条件，恢复其它计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>
         </div>
       </div>
 

@@ -73,9 +73,26 @@ foreach ($candidate in $pythonCandidates | Select-Object -Unique) {
 if (-not $venvPy) { throw "No usable Python was found. Install Python 3.10+ or create a local venv." }
 Write-Step "Using Python: $venvPy"
 
-# ── 3. 确保 PyInstaller 已安装 ───────────────────────────────────────────────
+# ── 3. 确保托盘依赖与 PyInstaller 已安装 ────────────────────────────────────
 # Use the module entry point so the Windows py.exe launcher and ordinary
 # python.exe/venv interpreters all follow the same path.
+$trayDependencyProbe = 1
+$previousErrorAction = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    & $venvPy -c "import PySide6, uiautomation" 2>$null
+    $trayDependencyProbe = $LASTEXITCODE
+} catch {
+    $trayDependencyProbe = 1
+} finally {
+    $ErrorActionPreference = $previousErrorAction
+}
+if ($trayDependencyProbe -ne 0) {
+    Write-Step "Tray dependencies are missing. Installing requirements..."
+    & $venvPy -m pip install -r "$repo\desktop\tray-task-window\requirements.txt"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install tray requirements." }
+}
+
 $pyInstallerProbe = 1
 $previousErrorAction = $ErrorActionPreference
 try {

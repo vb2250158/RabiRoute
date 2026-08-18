@@ -29,6 +29,45 @@ function binaryResponse(): LocalSpeechResponse {
   };
 }
 
+test("Manager speech control shares concurrent runtime status probes", async () => {
+  let inspectCalls = 0;
+  let releaseFirstInspection = () => {};
+  const firstInspection = new Promise<SpeechRuntimeStatus>(resolve => {
+    releaseFirstInspection = () => resolve(onlineStatus);
+  });
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => {
+      inspectCalls += 1;
+      return inspectCalls === 1 ? firstInspection : onlineStatus;
+    },
+    requestBinary: async () => binaryResponse(),
+    requestJson: async () => ({ status: 200, data: {} })
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    rolesRoot: () => "Z:/missing-roles",
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech,
+    statusCacheTtlMs: 5
+  });
+
+  const concurrent = Array.from({ length: 6 }, () => control.status());
+  await new Promise(resolve => setImmediate(resolve));
+  const callsBeforeRelease = inspectCalls;
+  releaseFirstInspection();
+  await Promise.all(concurrent);
+
+  assert.equal(callsBeforeRelease, 1);
+  await control.status();
+  assert.equal(inspectCalls, 1);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await control.status();
+  assert.equal(inspectCalls, 2);
+});
+
 test("Manager speech control owns camelCase microphone and model contracts", async () => {
   const localSpeech: ManagerSpeechLocalAdapter = {
     inspect: async () => onlineStatus,
@@ -284,16 +323,19 @@ test("Manager speech control maps resident microphone settings to broadcast mode
   assert.equal(upstreamBody.record_threshold, 0.01);
   assert.equal(upstreamBody.barge_in_mode, "echo_protected");
   assert.equal(upstreamBody.barge_in_confirm_ms, 200);
+  assert.equal(upstreamBody.streaming_enabled, true);
   assert.equal("routeId" in upstreamBody, false);
   assert.equal(status.config.routeId, null);
   assert.equal(status.config.bargeInMode, "echo_protected");
+  assert.equal(status.config.streamingEnabled, true);
 });
 
-test("Manager speech reconciliation keeps capture alive until the last Route unsubscribes", async () => {
+test("Manager speech reconciliation keeps capture independent from Route subscriptions", async () => {
   let subscribedRoutes = [
     { id: "Xinghai", speechEnabled: true },
     { id: "Rabi", speechEnabled: true }
   ];
+  let running = true;
   const requests: Array<{ pathname: string; method: string }> = [];
   const localSpeech: ManagerSpeechLocalAdapter = {
     inspect: async () => onlineStatus,
@@ -303,10 +345,11 @@ test("Manager speech reconciliation keeps capture alive until the last Route uns
       return {
         status: 200,
         data: {
-          running: pathname !== "/v1/microphone/stop",
-          state: pathname === "/v1/microphone/stop" ? "stopped" : "listening",
+          running: pathname === "/v1/microphone/start" ? true : running,
+          state: pathname === "/v1/microphone/start" || running ? "listening" : "stopped",
           config: {
-            enabled: pathname !== "/v1/microphone/stop",
+            enabled: pathname === "/v1/microphone/start" || running,
+            streaming_enabled: true,
             auto_submit: true,
             route_id: null,
             session_id: "rabispeech-microphone"
@@ -330,12 +373,96 @@ test("Manager speech reconciliation keeps capture alive until the last Route uns
   await control.reconcileMicrophone();
   subscribedRoutes = [];
   await control.reconcileMicrophone();
+  running = false;
+  await control.reconcileMicrophone();
 
   assert.deepEqual(requests, [
     { pathname: "/v1/microphone/status", method: "GET" },
     { pathname: "/v1/microphone/status", method: "GET" },
     { pathname: "/v1/microphone/status", method: "GET" },
-    { pathname: "/v1/microphone/stop", method: "POST" }
+    { pathname: "/v1/microphone/status", method: "GET" },
+    { pathname: "/v1/microphone/start", method: "POST" }
+  ]);
+});
+
+test("Manager speech reconciliation respects the host ASR streaming switch", async () => {
+  let running = true;
+  let streamingEnabled = false;
+  const requests: Array<{ pathname: string; method: string; body: Record<string, unknown> }> = [];
+  const localSpeech: ManagerSpeechLocalAdapter = {
+    inspect: async () => onlineStatus,
+    requestBinary: async () => binaryResponse(),
+    requestJson: async (_serviceUrl, pathname, init = {}) => {
+      const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+      requests.push({ pathname, method: init.method || "GET", body });
+      if (pathname === "/v1/microphone/stop") running = false;
+      if (pathname === "/v1/microphone/settings") {
+        streamingEnabled = body.streaming_enabled === true;
+        running = false;
+      }
+      if (pathname === "/v1/microphone/start") {
+        streamingEnabled = body.streaming_enabled === true;
+        running = true;
+      }
+      return {
+        status: 200,
+        data: {
+          running,
+          state: running ? "listening" : "stopped",
+          config: {
+            enabled: running,
+            streaming_enabled: streamingEnabled,
+            auto_submit: true,
+            route_id: null,
+            session_id: "rabispeech-microphone",
+            ...body
+          }
+        }
+      };
+    }
+  };
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    rolesRoot: () => "Z:/missing-roles",
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {},
+    localSpeech
+  });
+
+  const stopped = await control.reconcileMicrophone();
+  assert.equal(stopped.running, false);
+  assert.equal(stopped.config.streamingEnabled, false);
+
+  const restarted = await control.updateMicrophoneSettings({
+    device: null,
+    sampleRate: 16_000,
+    chunkMs: 100,
+    preRollMs: 1_500,
+    recordThreshold: 0.01,
+    transcribeThreshold: 0.015,
+    adaptiveThreshold: true,
+    adaptiveMultiplier: 2.5,
+    adaptiveMargin: 0.004,
+    silenceMs: 500,
+    minUtteranceMs: 1_000,
+    maxUtteranceMs: 60_000,
+    inputGain: 1,
+    asrModel: "faster-whisper/small",
+    language: "zh",
+    prompt: null,
+    suppressDuringPlayback: true,
+    streamingEnabled: true
+  });
+
+  assert.equal(restarted.running, true);
+  assert.equal(restarted.config.streamingEnabled, true);
+  assert.deepEqual(requests.map(item => [item.pathname, item.method]), [
+    ["/v1/microphone/status", "GET"],
+    ["/v1/microphone/stop", "POST"],
+    ["/v1/microphone/settings", "PUT"],
+    ["/v1/microphone/start", "POST"]
   ]);
 });
 

@@ -5,11 +5,14 @@ import test from "node:test";
 import { approvalSubmissionErrorMessage } from "../src/approvalFeedbackUi";
 import {
   FALLBACK_PLAN_PRESENTATION_PALETTE,
+  formatPlanDirectorySortLabel,
+  formatPlanDirectorySortLabelTitle,
   formatPlanRelativeTime,
   formatPlanVideoDuration,
   normalizePlanPresentationPalette,
   planCardStyle,
   planDescriptionForDisplay,
+  planDirectorySortPalette,
   planStatusStyle,
   planTitleForDirectory,
   plansForKnowledgeView
@@ -77,6 +80,46 @@ test("plan directory relative time uses one largest suitable unit", () => {
   assert.equal(formatPlanRelativeTime(new Date(now - 60 * 60_000).toISOString(), now, "en"), "1 hr ago");
 });
 
+test("plan directory shows one trailing label for the active sort mode", () => {
+  const now = Date.UTC(2026, 7, 14, 12, 0, 0);
+  const plan = {
+    updatedAt: new Date(now - 4 * 60 * 60_000).toISOString(),
+    presentation: {
+      status: "待审批",
+      palette: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" },
+      importance: {
+        level: 0,
+        label: "最高",
+        labelEn: "Highest",
+        palette: { accent: "#dc2626", background: "#fef2f2", foreground: "#b91c1c" }
+      },
+      urgency: {
+        level: 1,
+        label: "高",
+        labelEn: "High",
+        palette: { accent: "#f97316", background: "#fff1ed", foreground: "#c2410c" }
+      }
+    }
+  } as RolePlan;
+
+  assert.equal(formatPlanDirectorySortLabel(plan, "status", now), "待审批");
+  assert.equal(formatPlanDirectorySortLabel(plan, "updated", now), "4小时前");
+  assert.equal(formatPlanDirectorySortLabel(plan, "importance", now), "最高");
+  assert.equal(formatPlanDirectorySortLabel(plan, "urgency", now), "高");
+  assert.equal(formatPlanDirectorySortLabel({ ...plan, presentation: { ...plan.presentation, importance: undefined } }, "importance", now), "未设置");
+  assert.equal(formatPlanDirectorySortLabel({ ...plan, presentation: { ...plan.presentation, urgency: undefined } }, "urgency", now), "未设置");
+  assert.equal(formatPlanDirectorySortLabelTitle(plan, "importance", now), "重要程度：最高");
+  assert.equal(formatPlanDirectorySortLabelTitle(plan, "urgency", now, "en"), "Urgency: High");
+  assert.deepEqual(planDirectorySortPalette(plan, "status"), plan.presentation.palette);
+  assert.deepEqual(planDirectorySortPalette(plan, "importance"), plan.presentation.importance?.palette);
+  assert.deepEqual(planDirectorySortPalette(plan, "urgency"), plan.presentation.urgency?.palette);
+  assert.deepEqual(planDirectorySortPalette(plan, "updated"), {
+    accent: "#0891b2",
+    background: "#ecfeff",
+    foreground: "#0e7490"
+  });
+});
+
 test("plan video durations use compact player-style timestamps", () => {
   assert.equal(formatPlanVideoDuration(undefined), "--:--");
   assert.equal(formatPlanVideoDuration(Number.NaN), "--:--");
@@ -95,6 +138,7 @@ test("approval submission turns browser fetch failures into an actionable retry 
 test("knowledge page avoids full-list refresh after feedback and keeps details animation-free", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const composer = fs.readFileSync(path.join(root, "src", "components", "PlanFeedbackComposer.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
   const client = fs.readFileSync(path.join(root, "src", "roleKnowledgeClient.ts"), "utf8");
   const submitBody = page.match(/async function sendApprovalSuggestion[\s\S]*?\n}\n<\/script>/)?.[0] || "";
@@ -106,10 +150,10 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /<section v-if="isApprovalStep\(plan, step\)" class="knowledge-approval-panel"/);
   assert.doesNotMatch(page, /<section v-if="plan\.presentation\.approval\.state !== 'none'" class="knowledge-approval-panel"/);
   assert.match(styles, /\.knowledge-step \.knowledge-approval-panel\s*\{[\s\S]*?grid-column:\s*1 \/ -1/);
-  assert.match(page, /@keydown="handleApprovalKeydown\(\$event, plan\)"/);
-  assert.match(page, /function handleApprovalKeydown[\s\S]*?if \(event\.key === "Enter"\) handleApprovalEnter\(event, plan\)/);
-  assert.match(page, /event\.isComposing[\s\S]*?event\.shiftKey[\s\S]*?event\.preventDefault\(\)/);
-  assert.match(page, /:disabled="!canSubmitApproval\(plan\)"/);
+  assert.match(composer, /@keydown="handleKeydown"/);
+  assert.match(composer, /function handleKeydown[\s\S]*?if \(!plainEnter\(event\)\) return;[\s\S]*?emit\("submit"\)/);
+  assert.match(composer, /event\.isComposing[\s\S]*?event\.shiftKey/);
+  assert.match(page, /:submit-disabled="!canSubmitApproval\(plan\)"/);
   assert.match(page, /function approvalFeedbackBaseAvailable[\s\S]*?Boolean\(approval\.stepId\) && approval\.enabled/);
   assert.doesNotMatch(page, /approval\.state === "incomplete" \|\| approval\.enabled/);
   assert.match(page, /function canEditApprovalFeedback[\s\S]*?approvalFeedbackBaseAvailable\(plan\)/);
@@ -118,7 +162,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   const editPolicyBody = page.match(/function canEditApprovalFeedback[\s\S]*?\n}/)?.[0] || "";
   const submitPolicyBody = page.match(/function canSubmitApproval[\s\S]*?\n}/)?.[0] || "";
   const addAttachmentBody = page.match(/function addApprovalFiles[\s\S]*?\n}/)?.[0] || "";
-  const openAttachmentPickerBody = page.match(/function openApprovalAttachmentPicker[\s\S]*?\n}/)?.[0] || "";
+  const openAttachmentPickerBody = composer.match(/function openFilePicker[\s\S]*?\n}/)?.[0] || "";
   const removeAttachmentBody = page.match(/function removeApprovalAttachment[\s\S]*?\n}/)?.[0] || "";
   assert.doesNotMatch(editPolicyBody, /approvalDeliveryPending/);
   assert.match(submitPolicyBody, /approvalDeliveryPending/);
@@ -148,8 +192,8 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /最近请求时间/);
   assert.match(page, /来源消息 \/ Feedback/);
   assert.match(page, /当前回执状态/);
-  assert.match(page, /@paste="handleApprovalPaste\(plan\.id, \$event\)"/);
-  assert.match(page, /function handleApprovalPaste[\s\S]*?\.filter\(\(item\) => item\.kind === "file"\)[\s\S]*?addApprovalFiles\(planId, files, true\)/);
+  assert.match(composer, /@paste="handlePaste"/);
+  assert.match(composer, /function handlePaste[\s\S]*?\.filter\(\(item\) => item\.kind === "file"\)[\s\S]*?emit\("add-files", \{ files, fromClipboard: true \}\)/);
   assert.match(page, /function clipboardAttachmentName[\s\S]*?if \(kind === "image"\)[\s\S]*?return file\.name/);
   assert.match(page, /function approvalRecordsForDisplay[\s\S]*?feedback\.kind === "approval_suggestion"[\s\S]*?\.reverse\(\)/);
   assert.match(page, /v-for="feedback in approvalRecordsForDisplay\(plan\)"/);
@@ -159,7 +203,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(client, /latest:\s*data\.latest \|\| records\[0\],[\s\S]*?\r?\n\s*records\r?\n/);
   assert.match(styles, /\.knowledge-approval-history\s*\{[\s\S]*?display:\s*grid[\s\S]*?gap:\s*8px/);
   assert.match(styles, /\.knowledge-approval-record\s*\{[\s\S]*?display:\s*grid[\s\S]*?border-left:\s*3px solid/);
-  assert.match(page, /openApprovalAttachmentPicker\(plan\.id\)/);
+  assert.match(composer, /@click="openFilePicker"/);
   assert.match(page, /contentBase64: await attachmentContentBase64\(attachment\.file\)/);
   assert.match(page, /submittedApprovalAttachments\.set\(plan\.id, takeApprovalAttachments\(plan\.id\)\)/);
   assert.match(page, /function resetApprovalAttachmentState\(\): void\s*\{/);
@@ -169,17 +213,34 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)" class="knowledge-approval-panel" data-state="guidance">/);
   assert.match(page, /引导属于整个计划，不绑定某个步骤/);
   assert.match(page, /调整尚未开始的步骤/);
-  assert.match(page, /@keydown\.enter="handleGuidanceEnter\(\$event, plan\)"/);
+  assert.match(page, /:composer-id="`guidance-\$\{plan\.id\}`"[\s\S]*?@submit="sendPlanGuidance\(plan\)"/);
   assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance"\)/);
   assert.match(page, /stepId: guidance \? undefined : plan\.presentation\.approval\.stepId/);
   assert.match(page, /const attachments = await approvalAttachmentUploads\(plan\.id\)/);
   assert.match(page, /const planAttachmentIds = referencedPlanAttachmentIds\(text, allApprovalMentionCandidates\(plan\)\)/);
   assert.match(page, /submittedApprovalAttachments\.set\(plan\.id, takeApprovalAttachments\(plan\.id\)\)/);
   assert.doesNotMatch(page, /guidance \? \[\] : await approvalAttachmentUploads/);
-  assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)"[\s\S]*?@paste="handleApprovalPaste\(plan\.id, \$event\)"[\s\S]*?openApprovalAttachmentPicker\(plan\.id\)[\s\S]*?approvalAttachmentsFor\(plan\.id\)\.length/);
+  assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)"[\s\S]*?<PlanFeedbackComposer[\s\S]*?:attachments="approvalAttachmentsFor\(plan\.id\)"[\s\S]*?@add-files="addApprovalFiles\(plan\.id, \$event\.files, \$event\.fromClipboard\)"/);
   assert.match(page, /v-for="feedback in guidanceRecordsForDisplay\(plan\)"[\s\S]*?feedback\.attachments[\s\S]*?feedback\.planAttachments/);
   assert.match(client, /kind: input\.kind/);
   assert.match(page, /提交计划引导/);
+});
+
+test("plan guidance and approval reuse one feedback composer", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const composer = fs.readFileSync(path.join(root, "src", "components", "PlanFeedbackComposer.vue"), "utf8");
+
+  assert.equal((page.match(/<PlanFeedbackComposer\b/g) || []).length, 2);
+  assert.match(page, /<PlanFeedbackComposer[\s\S]*?:composer-id="`guidance-\$\{plan\.id\}`"/);
+  assert.match(page, /<PlanFeedbackComposer[\s\S]*?:composer-id="`approval-\$\{plan\.id\}`"/);
+  assert.doesNotMatch(page, /<v-textarea[\s\S]*?handleGuidanceEnter/);
+  assert.match(composer, /findPlanAttachmentMentionQuery/);
+  assert.match(composer, /insertPlanAttachmentMention/);
+  assert.match(composer, /@keydown="handleKeydown"/);
+  assert.match(composer, /@paste="handlePaste"/);
+  assert.match(composer, /type="file"[\s\S]*?@change="handleFileSelection"/);
+  assert.match(composer, /emit\("submit"\)/);
 });
 
 test("plan views expose a floating directory outside the plan browser", () => {
@@ -192,22 +253,28 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /class="knowledge-plan-directory"[\s\S]*?<\/nav>\s*<v-card class="app-card knowledge-browser"/);
   assert.match(page, /v-for="plan in visiblePlansForView"/);
   assert.match(page, /const renderedPlansForView = computed\(\(\) => knowledgeRenderWindow\(\s*visiblePlansForView\.value/);
-  assert.match(page, /function currentPlanPageFilter[\s\S]*?sort:\s*planListSortMode\.value[\s\S]*?statuses/);
-  assert.match(page, /v-model="planListDialogOpen"[\s\S]*?max-width="640"[\s\S]*?scrollable[\s\S]*?aria-labelledby="plan-list-dialog-title"/);
+  assert.match(page, /function currentPlanPageFilter[\s\S]*?sort:\s*planListSortMode\.value[\s\S]*?statuses[\s\S]*?tags/);
+  assert.match(page, /v-model="planListDialogOpen"[\s\S]*?max-width="820"[\s\S]*?scrollable[\s\S]*?aria-labelledby="plan-list-dialog-title"/);
   assert.doesNotMatch(page, /<v-menu v-model="planList/);
   assert.match(page, /@click="openPlanListDialog"/);
   assert.match(page, /icon="mdi-close"[\s\S]*?@click="planListDialogOpen = false"/);
   assert.match(page, /class="knowledge-plan-list-dialog-grid"/);
   assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-sort-panel"/);
   assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-filter-panel"/);
+  assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-filter-panel knowledge-plan-list-tag-panel"/);
   assert.match(page, /:aria-pressed="planListDraftSortMode === 'updated'"/);
+  assert.match(page, /:aria-pressed="planListDraftSortMode === 'importance'"/);
+  assert.match(page, /:aria-pressed="planListDraftSortMode === 'urgency'"/);
   assert.match(page, /class="knowledge-plan-directory-count"/);
   assert.match(page, /class="knowledge-plan-directory-sort-trigger"/);
   assert.match(page, /@click="planListDraftSortMode = 'status'"/);
   assert.match(page, /@click="planListDraftSortMode = 'updated'"/);
-  assert.match(page, /function applyPlanListDialog[\s\S]*?planListSortMode\.value = planListDraftSortMode\.value[\s\S]*?planListHiddenStatuses\.value = \[\.\.\.planListDraftHiddenStatuses\.value\]/);
+  assert.match(page, /@click="planListDraftSortMode = 'importance'"/);
+  assert.match(page, /@click="planListDraftSortMode = 'urgency'"/);
+  assert.match(page, /function applyPlanListDialog[\s\S]*?planListSortMode\.value = planListDraftSortMode\.value[\s\S]*?planListHiddenStatuses\.value = \[\.\.\.planListDraftHiddenStatuses\.value\][\s\S]*?planListSelectedTags\.value = \[\.\.\.planListDraftSelectedTags\.value\]/);
   assert.match(page, /@click="applyPlanListDialog"/);
   assert.match(page, /@change="togglePlanListStatus\(option\.status\)"/);
+  assert.match(page, /@change="togglePlanListTag\(option\.tag\)"/);
   assert.match(page, /planListResultTotal\.value = result\.total/);
   assert.match(page, /@click="jumpToPlan\(\$event, plan\)"/);
   assert.match(page, /new IntersectionObserver\(scheduleActiveDirectoryPlanSync/);
@@ -222,7 +289,11 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /:id="planCardDomId\(plan\.id\)"/);
   assert.match(page, /tabindex="-1"/);
   assert.doesNotMatch(page, /knowledge-plan-directory-index/);
-  assert.match(page, /class="knowledge-plan-directory-status"/);
+  assert.doesNotMatch(page, /class="knowledge-plan-directory-status"/);
+  assert.doesNotMatch(page, /class="knowledge-plan-directory-working"/);
+  assert.match(page, /class="knowledge-plan-directory-sort-label"/);
+  assert.match(page, /:style="planDirectorySortStyle\(plan\)"/);
+  assert.match(page, /formatPlanDirectorySortLabel\([\s\S]*?plan,[\s\S]*?planListSortMode\.value/);
   assert.match(page, /<v-chip[^>]*>\{\{ t\(plan\.presentation\.status\) \}\}<\/v-chip>/);
   assert.match(page, /planTitleForDirectory\(plan\.title\)/);
   assert.doesNotMatch(page, /knowledge-plan-toc|jumpToPlanStep|planStepDomId|activePlanSteps/);
@@ -236,14 +307,13 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?scroll-margin-top:\s*152px/);
   assert.match(styles, /\.knowledge-plan-directory-link\s*\{[\s\S]*?min-height:\s*44px/);
   assert.match(styles, /\.knowledge-plan-directory-link\s*\{[\s\S]*?overflow:\s*hidden/);
-  assert.match(styles, /\.knowledge-plan-directory-status\s*\{[\s\S]*?white-space:\s*nowrap/);
+  assert.doesNotMatch(styles, /\.knowledge-plan-directory-status\s*\{/);
   assert.match(styles, /\.knowledge-plan-directory-count\s*\{[\s\S]*?font-variant-numeric:\s*tabular-nums/);
   assert.match(styles, /\.knowledge-plan-list-dialog\s*\{[\s\S]*?max-height:\s*min\(720px/);
-  assert.match(styles, /\.knowledge-plan-list-dialog-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, \.88fr\) minmax\(0, 1\.12fr\)/);
+  assert.match(styles, /\.knowledge-plan-list-dialog-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(styles, /@media \(max-width: 600px\)[\s\S]*?\.knowledge-plan-list-dialog-grid\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
-  assert.match(page, /class="knowledge-plan-directory-updated"/);
-  assert.match(page, /\{\{ planRelativeTime\(plan\.updatedAt\) \}\}/);
-  assert.match(styles, /\.knowledge-plan-directory-updated\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?white-space:\s*nowrap/);
+  assert.doesNotMatch(page, /class="knowledge-plan-directory-updated"/);
+  assert.match(styles, /\.knowledge-plan-directory-sort-label\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?white-space:\s*nowrap/);
   assert.match(page, /@mouseenter="setPlanDirectoryMarquee\(\$event, true\)"/);
   assert.match(page, /@focus="setPlanDirectoryMarquee\(\$event, true\)"/);
   assert.match(page, /class="knowledge-plan-directory-title"/);
@@ -263,18 +333,22 @@ test("plan cards use isolated work-item framing and a three-level execution hier
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
 
   assert.match(page, /v-for="plan in renderedPlansForView"/);
-  assert.match(page, /String\(planSequence\(plan\)\)\.padStart\(2, "0"\)/);
-  assert.match(page, /class="knowledge-plan-sequence"/);
+  assert.doesNotMatch(page, /planSequence\(/);
+  assert.doesNotMatch(page, /class="knowledge-plan-sequence"/);
+  assert.doesNotMatch(styles, /\.knowledge-plan-sequence/);
   assert.match(page, /class="knowledge-plan-current"/);
   assert.match(page, /class="knowledge-plan-current-copy"/);
+  assert.match(page, /class="knowledge-plan-current-heading"/);
+  assert.match(page, /v-if="currentStep\(plan\)\?\.detail" class="knowledge-plan-current-detail"/);
   assert.match(page, /class="knowledge-plan-timing-item"/);
   assert.match(page, /class="knowledge-steps-head"/);
   assert.match(page, /currentStepPosition\(plan\)/);
   assert.match(styles, /\.knowledge-plan-cards\s*\{[\s\S]*?gap:\s*18px[\s\S]*?background:\s*#edf2f4/);
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?border-radius:\s*14px[\s\S]*?box-shadow:/);
   assert.match(styles, /\.knowledge-plan-summary\s*\{[\s\S]*?grid-template-columns:\s*minmax\(280px, 1fr\) max-content/);
-  assert.match(styles, /\.knowledge-plan-current-copy\s*\{[\s\S]*?display:\s*flex[\s\S]*?align-items:\s*center/);
-  assert.match(styles, /\.knowledge-plan-summary \.knowledge-plan-current-copy > b\s*\{[\s\S]*?text-overflow:\s*ellipsis[\s\S]*?white-space:\s*nowrap/);
+  assert.match(styles, /\.knowledge-plan-current-copy\s*\{[\s\S]*?display:\s*grid[\s\S]*?gap:/);
+  assert.match(styles, /\.knowledge-plan-current-heading\s*\{[\s\S]*?display:\s*flex[\s\S]*?justify-content:\s*space-between/);
+  assert.match(styles, /\.knowledge-plan-current-detail\s*\{[\s\S]*?white-space:\s*normal[\s\S]*?overflow-wrap:\s*anywhere/);
   assert.match(styles, /\.knowledge-plan-timing-item\s*\{[\s\S]*?display:\s*flex[\s\S]*?align-items:\s*center/);
   assert.match(styles, /\.knowledge-steps\s*\{[\s\S]*?border-radius:\s*12px[\s\S]*?background:/);
   assert.match(styles, /@media \(max-width:\s*720px\)[\s\S]*?\.knowledge-plan-head\s*\{[\s\S]*?margin:\s*-12px -12px 0/);

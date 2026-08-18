@@ -10,7 +10,7 @@ This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not
 
 ## Non-negotiable product contract
 
-1. Deliver to the saved task when the full task ID exists in the configured workspace and the owner record is not archived. A mutable Desktop/SQLite title does not invalidate that identity. When the saved ID is archived, first look for active same-name tasks in the same workspace: reuse the unique latest candidate, or return an actionable restore/reselect error when none exists. Never create a replacement for an archived binding.
+1. Deliver to the saved task when the full task ID exists in the configured workspace and the owner record is not archived. A mutable Desktop/SQLite title does not invalidate that identity. When the saved ID is archived, do not locate or reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist the replacement binding, and deliver there.
 2. If the ID is empty, invalid, or actually missing, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
 3. A Desktop-side rename or automatic title-metadata rewrite keeps the same ID target. Explicitly typing a new Rabi name clears the old ID before lookup/create and persists the selected replacement target.
 4. Real prompts go only to the current Desktop task owner. RabiRoute must not resume the same ID in another Runtime or silently switch execution paths.
@@ -43,13 +43,14 @@ flowchart TD
     P["RabiRoute AgentPacket"] --> R["Shared session resolver"]
     R --> I{"Saved ID exists in the configured workspace?"}
     I -->|"Active"| B["Reuse binding"]
-    I -->|"Archived or missing"| N["Find active tasks by visible name + workspace"]
+    I -->|"Archived"| C2["Create a new task with an old-ID-scoped idempotency key"]
+    I -->|"Missing"| N["Find active tasks by visible name + workspace"]
     N -->|"One or more"| L{"Unique latest updatedAt?"}
     L -->|"Yes"| S["Persist latest matched ID"]
     L -->|"Tied / unusable"| A["Stop and ask the user"]
     N -->|"None and saved ID missing"| C["Create one empty task"]
-    N -->|"None and saved ID archived"| E["Stop; restore or reselect"]
     C --> W["Wait for Desktop index to expose the same ID"]
+    C2 --> W
     W --> S
     B --> D["Desktop IPC / target task owner"]
     S --> D
@@ -102,8 +103,8 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 | --- | --- |
 | Valid ID + workspace after SQLite title mutation | Direct delivery to the same ID; task count unchanged |
 | UI name differs from SQLite `title` | Find and display the original task by app-server `thread.name`; do not create |
-| Saved ID points to an archived duplicate and an active same-name task exists | Rebind the unique latest active task; task count unchanged |
-| Saved ID points to an archived task with no active same-name task | Block and require restore/reselection; task count unchanged |
+| Saved ID points to an archived task and an active same-name task exists | Create a new task and persist its ID; do not reuse the same-name task |
+| Saved ID points to an archived task with no active same-name task | Create a new task, persist the replacement binding, and deliver there |
 | Deleted/invalid ID, unique name match | Rebind; task count unchanged |
 | No name match | Create one task, persist ID, deliver to it |
 | Desktop index is briefly delayed | Wait for the same ID; do not create a duplicate |
@@ -128,7 +129,7 @@ Mocks and unit tests prove resolver and failure behavior only. Release acceptanc
 1. Define the user-visible destination, unique owner, session identity, and forbidden fallbacks.
 2. Test independent lifecycle and port-4510 safety before polishing the session UI.
 3. Reuse one resolver for settings save, normal delivery, and automatic initialization.
-4. Lock stable ID/workspace reuse, title-mutation continuity, archived-duplicate recovery, archived no-match blocking, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
+4. Lock stable ID/workspace reuse, title-mutation continuity, archived-binding replacement and persistence, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
 5. Mark Codex `verified` only after a real Desktop task receives and executes the prompt visibly.
 
 See [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) for the general contract and [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) for the failed designs and their root causes.

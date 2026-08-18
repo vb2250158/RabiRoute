@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AgentAdapterType } from "./types.js";
 import { resolvePersistedProjectPath } from "../shared/projectPaths.js";
+import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { CodexDesktopBridge } from "../codexDesktopBridge.js";
 import { listCodexThreads } from "../codexRuntime.js";
 
@@ -16,6 +17,33 @@ type AgentScanSession = {
   projectId?: string;
   updatedAt?: string;
   userNamed?: boolean;
+};
+
+export type AgentSessionPageQuery = {
+  limit: number;
+  offset: number;
+  query?: string;
+};
+
+export type AgentSessionPage = {
+  offset: number;
+  limit: number;
+  returned: number;
+  hasMore: boolean;
+  nextOffset?: number;
+};
+
+export type AgentScanOptions = {
+  codexLimit?: number;
+  codexOffset?: number;
+  codexQuery?: string;
+  codexCatalogTimeoutMs?: number;
+};
+
+export type AgentScanPerformanceOperation = {
+  operation: string;
+  durationMs: number;
+  error: boolean;
 };
 
 type AgentScanProject = {
@@ -35,13 +63,14 @@ export type AgentScanResult = {
   endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
+  sessionPage?: AgentSessionPage;
   plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
   warnings?: string[];
   transport?: { protocol: string; mode: string };
   host?: { name: string; required: boolean };
 };
 
-type GatewayDefinitionLike = {
+export type GatewayDefinitionLike = {
   id?: string;
   name?: string;
   routeName?: string;
@@ -56,7 +85,7 @@ type GatewayDefinitionLike = {
   astrbotPassword?: string;
 };
 
-type RuntimeLike = {
+export type AgentScanRuntimeSnapshot = {
   definition: GatewayDefinitionLike;
 };
 
@@ -89,8 +118,8 @@ export type MarvisOpenRequest = {
 
 export type AgentManagerApiContext = {
   rootDir: string;
-  runtimes?: Iterable<RuntimeLike>;
-  getRuntimes?: () => Iterable<RuntimeLike>;
+  runtimes?: Iterable<AgentScanRuntimeSnapshot>;
+  getRuntimes?: () => Iterable<AgentScanRuntimeSnapshot>;
   projects?: AgentScanProject[];
   codexSessions?: AgentScanSession[];
   codexBins?: string[];
@@ -101,7 +130,10 @@ export type AgentManagerApiContext = {
   marvisAppIds?: string[];
   checkHttpEndpoint?: (url: string, timeoutMs?: number) => Promise<boolean>;
   resolveWingetCopilot?: () => string | null;
-  listCodexSessions?: () => Promise<AgentScanSession[]>;
+  listCodexSessions?: (
+    query: AgentSessionPageQuery,
+    options?: { signal?: AbortSignal }
+  ) => Promise<AgentScanSession[]>;
 };
 
 export type ManagerApiResponse<T extends Record<string, unknown> = Record<string, unknown>> = {
@@ -109,38 +141,95 @@ export type ManagerApiResponse<T extends Record<string, unknown> = Record<string
   body: T;
 };
 
-export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Record<string, unknown>> {
+export async function scanAgentAdapters(
+  ctx: AgentManagerApiContext,
+  options: AgentScanOptions = {}
+): Promise<Record<string, unknown>> {
+  const codexLimit = Math.max(1, Math.min(500, Math.floor(options.codexLimit ?? 200)));
+  const codexOffset = Math.max(0, Math.floor(options.codexOffset ?? 0));
+  const codexQuery = String(options.codexQuery || "").trim() || undefined;
+  const codexCatalogTimeoutMs = Math.max(100, Math.min(30_000, Math.floor(options.codexCatalogTimeoutMs ?? 8_000)));
+  const performanceOperations: AgentScanPerformanceOperation[] = [];
   const runtimes = getRuntimeList(ctx);
   const copilotSessions = ctx.copilotSessions ?? readCopilotSessions();
   const copilotSessionNames = [...new Set(copilotSessions.map((s) => s.name))];
   const cwdOptions = ctx.cwdOptions ?? collectCwdOptions(ctx.rootDir, runtimes, copilotSessions);
   let codexDesktopReady = false;
   const desktopBridge = new CodexDesktopBridge({ requestTimeoutMs: 1_200 });
+  const desktopReadyStartedAt = performance.now();
+  let desktopReadyFailed = false;
   try {
     codexDesktopReady = await desktopBridge.isReady();
+    desktopReadyFailed = !codexDesktopReady;
   } finally {
     desktopBridge.close();
+    performanceOperations.push({
+      operation: PERFORMANCE_OPERATIONS.managerAgentScanDesktopReady,
+      durationMs: performance.now() - desktopReadyStartedAt,
+      error: desktopReadyFailed
+    });
   }
   let codexSessionWarning = "";
   let discoveredCodexSessions: AgentScanSession[] = [];
   if (!ctx.codexSessions) {
+    const catalogStartedAt = performance.now();
+    let catalogFailed = false;
+    const catalogController = new AbortController();
+    let catalogTimer: NodeJS.Timeout | undefined;
     try {
-      const listSessions = ctx.listCodexSessions ?? (async () => (await listCodexThreads({
-        limit: 10_000,
-        offset: 0,
-        allowedWorkspaces: []
+      const listSessions = ctx.listCodexSessions ?? (async (
+        query: AgentSessionPageQuery,
+        listOptions?: { signal?: AbortSignal }
+      ) => (await listCodexThreads({
+        query: query.query,
+        limit: query.limit,
+        offset: query.offset,
+        allowedWorkspaces: [],
+        signal: listOptions?.signal
       })).map((thread) => ({
         id: thread.id,
         name: thread.title,
         projectPath: thread.cwd,
         updatedAt: thread.updatedAt
       })));
-      discoveredCodexSessions = await listSessions();
+      const timeout = new Promise<never>((_resolve, reject) => {
+        catalogTimer = setTimeout(() => {
+          catalogController.abort();
+          reject(new Error(`Codex Desktop task catalog timed out after ${codexCatalogTimeoutMs} ms.`));
+        }, codexCatalogTimeoutMs);
+      });
+      discoveredCodexSessions = await Promise.race([
+        listSessions({
+          limit: codexLimit + 1,
+          offset: codexOffset,
+          query: codexQuery
+        }, { signal: catalogController.signal }),
+        timeout
+      ]);
     } catch (error) {
-      codexSessionWarning = `读取 Codex Desktop 任务失败：${error instanceof Error ? error.message : String(error)}`;
+      catalogFailed = true;
+      codexSessionWarning = catalogController.signal.aborted
+        ? `读取 Codex Desktop 任务目录超时（${codexCatalogTimeoutMs} ms）；页面已继续加载，请稍后点击扫描重试。`
+        : `读取 Codex Desktop 任务失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      if (catalogTimer) clearTimeout(catalogTimer);
+      performanceOperations.push({
+        operation: PERFORMANCE_OPERATIONS.managerAgentScanCodexCatalog,
+        durationMs: performance.now() - catalogStartedAt,
+        error: catalogFailed
+      });
     }
   }
-  const codexSessions = ctx.codexSessions ?? discoveredCodexSessions;
+  const rawCodexSessions = ctx.codexSessions ?? discoveredCodexSessions;
+  const codexHasMore = rawCodexSessions.length > codexLimit;
+  const codexSessions = rawCodexSessions.slice(0, codexLimit);
+  const codexSessionPage: AgentSessionPage = {
+    offset: codexOffset,
+    limit: codexLimit,
+    returned: codexSessions.length,
+    hasMore: codexHasMore,
+    ...(codexHasMore ? { nextOffset: codexOffset + codexSessions.length } : {})
+  };
   const codexSessionNames = [...new Set(codexSessions.map((session) => session.name))];
   const configThreadNames = runtimes.flatMap((runtime) => {
     const adapters = runtime.definition.agentAdapters ?? ["codex"];
@@ -223,6 +312,7 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
       codexBins,
       projects,
       sessions: codexSessions,
+      sessionPage: codexSessionPage,
       desktopReady: codexDesktopReady,
       sessionWarning: codexSessionWarning
     }),
@@ -282,10 +372,26 @@ export async function scanAgentAdapters(ctx: AgentManagerApiContext): Promise<Re
         "尚未自动执行真实消息注入烟测；同会话连续两次发送需用户确认后再测。",
         ...(astrbotPluginInstalled ? [] : [`插件未安装到 ${astrbotPluginDir}。`])
       ]
+    },
+    dsh: {
+      type: "dsh",
+      label: "DSH（DeepSeek Harness 会话）",
+      maturity: "experimental",
+      installed: true,
+      transport: { protocol: "http", mode: "session.prompt" },
+      host: { name: "DSH apiproxy (127.0.0.1:3080)", required: true },
+      projects: [],
+      sessions: [],
+      warnings: [
+        "DSH 会话是主人格投递目标：通过 DSH apiproxy session.prompt（mode=queue）注入消息。",
+        "DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。",
+        "仍为实验性：尚未自动执行真实消息注入烟测。"
+      ]
     }
   };
 
   return {
+    __performanceOperations: performanceOperations,
     agents,
     legacy: {
       threadNames,
@@ -306,6 +412,7 @@ export function buildCodexAgentScan(input: {
   codexBins: string[];
   projects: AgentScanProject[];
   sessions: AgentScanSession[];
+  sessionPage?: AgentSessionPage;
   desktopReady?: boolean;
   sessionWarning?: string;
 }): AgentScanResult {
@@ -325,6 +432,7 @@ export function buildCodexAgentScan(input: {
     // Desktop state supplies task identity; delivery is accepted only by the
     // Desktop owner for the exact opaque task id.
     sessions: input.sessions,
+    ...(input.sessionPage ? { sessionPage: input.sessionPage } : {}),
     warnings: [
       ...(input.desktopReady === false ? ["Codex/ChatGPT Desktop 未就绪；RabiRoute 不会启动备用 Runtime，请先打开 Desktop。"] : []),
       ...(codexBins.length === 0 ? ["未发现项目锁定的 @openai/codex；已有 Desktop 任务仍可投递，但无法从新名称创建空任务。"] : []),
@@ -457,7 +565,7 @@ export async function deployAstrbotAdapter(ctx: AgentManagerApiContext): Promise
   }
 }
 
-function getRuntimeList(ctx: AgentManagerApiContext): RuntimeLike[] {
+function getRuntimeList(ctx: AgentManagerApiContext): AgentScanRuntimeSnapshot[] {
   const source = ctx.getRuntimes ? ctx.getRuntimes() : ctx.runtimes;
   return source ? [...source] : [];
 }
@@ -496,7 +604,7 @@ function readCopilotSessions(): CopilotSessionEntry[] {
   return sessions;
 }
 
-function collectCwdOptions(rootDir: string, runtimes: RuntimeLike[], copilotSessions: CopilotSessionEntry[]): string[] {
+function collectCwdOptions(rootDir: string, runtimes: AgentScanRuntimeSnapshot[], copilotSessions: CopilotSessionEntry[]): string[] {
   const copilotCwds = [...new Set(copilotSessions.map((s) => s.cwd).filter(Boolean) as string[])].filter(fs.existsSync);
   const cwdSet = new Set<string>(copilotCwds);
   if (fs.existsSync(rootDir)) cwdSet.add(rootDir);

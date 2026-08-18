@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deliverPlanApprovalFeedback,
+  PlanFeedbackDeliveryPendingError,
   type PlanApprovalFeedbackPersonaRequest,
   type PlanApprovalFeedbackSecretaryTarget
 } from "./planApprovalFeedbackDelivery.js";
@@ -83,9 +84,9 @@ test("enabled plan secretary receives the control notice while the bound task re
 
   assert.equal(result.mode, "bound_task");
   assert.equal(taskRequests.length, 1);
-  assert.match(taskRequests[0]?.prompt || "", /业务进展、状态变化和本轮结果优先回到秘书/);
+  assert.match(taskRequests[0]?.prompt || "", /秘书同步跟进控制面/);
   assert.deepEqual(secretaryRequests.map((request) => request.kind), ["auto_delivered_notice"]);
-  assert.match(secretaryRequests[0]?.text || "", /只在确需决策、授权、补充输入或计划完整收尾时通知主人格/);
+  assert.match(secretaryRequests[0]?.text || "", /需要决定、授权、输入或最终复核时通知主人格/);
   assert.equal(personaRequests.length, 0);
 });
 
@@ -133,8 +134,8 @@ test("approval is delivered to the bound Codex task and persona only receives an
   assert.match(taskRequests[0]?.prompt || "", /approval_response/);
   assert.equal(personaRequests.length, 1);
   assert.equal(personaRequests[0]?.kind, "auto_delivered_notice");
-  assert.match(personaRequests[0]?.text || "", /已自动投递到绑定业务会话/);
-  assert.match(personaRequests[0]?.text || "", /无需再次转发/);
+  assert.match(personaRequests[0]?.text || "", /系统已自动投递到绑定业务会话/);
+  assert.match(personaRequests[0]?.text || "", /人格 Agent 只需复核后续结果/);
 });
 
 test("approval falls back to the persona when the plan has no complete task binding", async () => {
@@ -153,7 +154,7 @@ test("approval falls back to the persona when the plan has no complete task bind
   assert.equal(taskCalls, 0);
   assert.equal(personaRequests.length, 1);
   assert.equal(personaRequests[0]?.kind, "full_feedback");
-  assert.match(personaRequests[0]?.text || "", /按原流程处理/);
+  assert.match(personaRequests[0]?.text || "", /记录失败并续投原任务/);
 });
 
 test("plan guidance reaches the bound task without pretending to approve a step", async () => {
@@ -172,10 +173,11 @@ test("plan guidance reaches the bound task without pretending to approve a step"
   });
 
   assert.equal(taskRequests.length, 1);
-  assert.match(taskRequests[0]?.prompt || "", /引导属于整个计划，不绑定某个步骤/);
-  assert.match(taskRequests[0]?.prompt || "", /同步调整尚未开始的步骤/);
+  assert.match(taskRequests[0]?.prompt || "", /引导影响范围、优先级或路径时/);
+  assert.match(taskRequests[0]?.prompt || "", /PATCH 计划和未开始步骤/);
   assert.match(taskRequests[0]?.prompt || "", /kind=guidance_response/);
-  assert.match(taskRequests[0]?.prompt || "", /不要携带 stepId/);
+  assert.match(taskRequests[0]?.prompt || "", /feedbackId=response-feedback-plan-guidance/);
+  assert.match(taskRequests[0]?.prompt || "", /只写当前 planId/);
   assert.doesNotMatch(taskRequests[0]?.prompt || "", /批准按推荐方案/);
 });
 
@@ -237,8 +239,8 @@ test("a persistent bound-task owner failure is recorded as failed instead of del
     "auto_delivery_failed_notice"
   ]);
   assert.ok(personaRequests.every((request) => request.kind !== "full_feedback"));
-  assert.match(personaRequests[0]?.text || "", /自动重试|无需代为转发/);
-  assert.match(personaRequests[1]?.text || "", /仍未成功|未标记为已投递/);
+  assert.match(personaRequests[0]?.text || "", /系统重试同一会话|保持 pending/);
+  assert.match(personaRequests[1]?.text || "", /仍未交给 Desktop owner|未投递/);
 });
 
 test("an ambiguous IPC timeout is not replayed because the owner may already have accepted the feedback", async () => {
@@ -266,6 +268,72 @@ test("an ambiguous IPC timeout is not replayed because the owner may already hav
   assert.equal(taskCalls, 1);
   assert.deepEqual(personaRequests.map((request) => request.kind), ["auto_delivery_failed_notice"]);
   assert.ok(personaRequests.every((request) => request.kind !== "full_feedback"));
+});
+
+test("an ambiguous IPC timeout is completed when feedbackId readback proves acceptance", async () => {
+  let taskCalls = 0;
+  let reads = 0;
+  const personaRequests: PlanApprovalFeedbackPersonaRequest[] = [];
+
+  const result = await deliverPlanApprovalFeedback({
+    roleId: "Rabi",
+    managerBaseUrl: "http://127.0.0.1:8790",
+    plan: plan({
+      agentType: "codex",
+      sessionId: "019f0000-0000-7000-8000-000000000006",
+      workspace: "C:\\Data\\CottonProject\\PangHu"
+    }),
+    feedback: guidance,
+    directRetryAttempts: 3,
+    directRetryDelayMs: 1,
+    sendToTask: async () => {
+      taskCalls += 1;
+      throw new Error("Codex Desktop IPC thread-follower-start-turn failed: thread-follower-start-turn-timeout");
+    },
+    readTaskDelivery: async (request) => {
+      assert.equal(request.deliveryId, guidance.id);
+      reads += 1;
+      return reads === 1 ? "in_progress" : "accepted";
+    },
+    sendToPersona: async (request) => { personaRequests.push(request); }
+  });
+
+  assert.equal(result.mode, "bound_task");
+  assert.equal(taskCalls, 1);
+  assert.equal(reads, 2);
+  assert.deepEqual(personaRequests.map((request) => request.kind), ["auto_delivered_notice"]);
+});
+
+test("an active readback stays pending without replay or a false failed notice", async () => {
+  let taskCalls = 0;
+  let reads = 0;
+  const personaRequests: PlanApprovalFeedbackPersonaRequest[] = [];
+
+  await assert.rejects(deliverPlanApprovalFeedback({
+    roleId: "Rabi",
+    managerBaseUrl: "http://127.0.0.1:8790",
+    plan: plan({
+      agentType: "codex",
+      sessionId: "019f0000-0000-7000-8000-000000000007",
+      workspace: "C:\\Data\\CottonProject\\PangHu"
+    }),
+    feedback: guidance,
+    directRetryAttempts: 3,
+    directRetryDelayMs: 1,
+    sendToTask: async () => {
+      taskCalls += 1;
+      throw new Error("Codex Desktop IPC thread-follower-start-turn failed: thread-follower-start-turn-timeout");
+    },
+    readTaskDelivery: async () => {
+      reads += 1;
+      return "in_progress";
+    },
+    sendToPersona: async (request) => { personaRequests.push(request); }
+  }), (error: unknown) => error instanceof PlanFeedbackDeliveryPendingError);
+
+  assert.equal(taskCalls, 1);
+  assert.equal(reads, 3);
+  assert.deepEqual(personaRequests, []);
 });
 
 test("a persona notice failure does not resend approval to the already-started business task", async () => {

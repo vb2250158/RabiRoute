@@ -224,62 +224,50 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
 
   const intro = isPlanGuidance
     ? [
-        "本次是计划引导处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
-        "先读取当前计划与反馈记录，再根据引导继续推进。引导属于整个计划，不绑定某个步骤；如果范围、优先级、执行方式或后续路径变化，必须 PATCH 计划并同步调整尚未开始的步骤。引导本身不代表审批，也不自动改变计划状态。",
-        "更新完成后，把处理说明 POST 到明确发送 API；RabiRoute 会将其保存为当前 planId 下、不带 stepId 的 guidance_response。"
+        "读取计划与反馈，按引导推进。范围、优先级或路径变化时 PATCH 计划和未开始步骤。",
+        "处理说明通过明确发送 API 写入当前 planId 的 guidance_response。"
       ]
     : isPlanFeedback
     ? [
-        "本次是计划审批意见处理，面向用户的回复必须回到当前计划记录，不能只在 Codex 任务里输出正文。",
-        "先按审批意见读取并 PATCH 更新对应计划或步骤；批准、否决、要求调整或取消后必须同轮更新 approvalRequest.responseStatus。isBlocked 由 Manager 根据完整且待决的审批合同自动派生，不要手写。计划说明要具体到审批人、决定、推荐与备选、reason、实际文件、完整命令、外部变更、验证、回退、排除范围、附件、请求来源和回执状态。",
-        "更新完成后，把处理说明 POST 到明确发送 API；RabiRoute 会将其保存为当前 planId / stepId 的 approval_response。"
+        "读取审批记录并 PATCH 计划或步骤，同轮更新 approvalRequest.responseStatus。isBlocked 由 Manager 派生。",
+        "处理说明通过明确发送 API 写入当前 planId / stepId 的 approval_response。"
       ]
     : forceMessagePipeline
     ? [
-        "当前路由未绑定人格。凡是要对消息来源说出的自然语言回复，都必须先 POST 到明确发送 API，并填写渠道与目标参数；不能只在 Codex 线程里写最终文本。",
-        "不要扮演角色，也不要把当前 Codex 可见最终文本当成已经发回消息端。"
+        "当前路由未绑定人格。自然语言回复通过明确发送 API 投递到指定渠道和目标。"
       ]
     : routeKind === "rabilink"
       ? [
-          "本次来自 RabiLink Relay，不能只在 Codex 线程里写最终文本。",
-          "如果判断需要回应，请把要写回 Rokid/灵珠侧的短句 POST 到明确发送 API，并指定 channel=rabilink 与目标设备；RabiRoute 会把它放入 RabiLink 下行消息队列。"
+          "RabiLink 回复通过明确发送 API 投递，使用 channel=rabilink 和目标设备。"
         ]
       : characterTtsDialogue
       ? [
-          "本次由语音消息端触发，进入 character-tts-dialogue 回复状态；不能只在 Codex 线程里写最终文本。",
-          "请生成同义的屏幕文本与适合朗读的语音文本，并保持当前 Rabi 人格；普通情况下两者使用同一句短而自然的回复。",
-          "把要播出的语音文本 POST 到明确发送 API，并指定 channel=speech 与 sessionId；RabiRoute 会冻结当前 Route 的人格、声线和模型，再交给 RabiSpeech 主机级 FIFO 播放队列。不要绕过 Outbox 直连 worker，也不要重复调用 TTS。"
+          "生成同义的屏幕文本和朗读文本，保持当前人格；通常使用同一句短回复。",
+          "语音通过明确发送 API 投递，使用 channel=speech 和 sessionId。"
         ]
       : outputAdapter === "fennenote" && routeKind === "voice_transcript"
       ? [
-          "本次是语音对话回复，不能只在 Codex 线程里写最终文本。",
-          "如果判断需要回应，请把要播出的短句 POST 到明确发送 API，并指定 channel=fennenote、sessionId 和 mode；RabiRoute 会转给 FenneNote/OumuQ。"
+          "语音回复通过明确发送 API 投递，使用 channel=fennenote、sessionId 和 mode。"
         ]
       : [
-          "如果判断需要回应消息来源，请把正文 POST 到明确发送 API，并使用下面给出的 channel 与 params；RabiRoute 只向这个明确目标投递。"
+          "需要回复时，使用下面的 channel 与 params 调用明确发送 API。"
         ];
 
   const processingOutcomeLines = messageProcessingRequirementId
     ? [
-        `本消息组的处理需求 ID 是 ${messageProcessingRequirementId}。RabiManager 会在消息处理看板中持续跟踪它。`,
-        `先 GET ${messageProcessingOutcomeUrl.replace(/\/outcome$/, "")} 读取本需求的 knowledgeMatches；不要只依赖提示词里可能被截断的召回摘要。`,
-        `关闭或准备回复前，必须 POST ${messageProcessingOutcomeUrl}。由消息处理 Agent 提交 projectFactAssessment：status=none/critical、reviewedMessageIds、replyChainChecked=true、具体 evidence、assessedAt、assessedByThreadId；critical 时还要提交 facts，并在完成计划/记忆/文档记录后提交 criticalFactDisposition。`,
-        "消息处理需求中如有 knowledgeMatches，必须逐项读取并提交 knowledgeMatchDispositions：相关性、证据和实际 actions。相关命中不能只写 no_action；更新或新建计划/记忆必须提供真实 recordId、核对时间，并让目标记录包含原消息 ID。回复或讨论必须进入实际发送流程。RabiManager 负责召回、校验和跟踪，不替 Agent 决定语义。",
-        "如果 knowledgeMatches 为空，Agent 仍须根据原消息、附件和回复链自行提取对象与同义词，至少用两组关键词查询计划/记忆；不能把“未命中”当成“无需响应”。",
-        `如果最终决定不回复，还要提交 decision=no_reply、reasonCode 和具体 reason。明确 @、直接回复、私聊等必须回复消息只允许使用结束语、重复、自身消息、他人已完整回答、消息撤回或来源失效作为免回复原因。`,
-        `如果需要转交秘书、计划 Agent 或主人格，调用线程桥时同时传 messageProcessing={"requirementId":"${messageProcessingRequirementId}","outcome":"handoff","targetAgentType":"实际类型","planId":"如已关联计划"}。线程桥接受不代表本需求完成；结果仍要返回当前消息处理任务。`,
-        `决定回复并完成 outcome 后，先 GET ${messageProcessingSendContextUrl}。它返回当前会话从来源消息和回复链开始的最新双向消息、contextVersion、requiredReviewIds、priorReplies 和 alreadyReplied；必须实际检查是否已经有人回复、是否出现了改变结论的新消息，以及拟发送正文是否仍适合当前上下文。`,
-        `然后 POST ${messageProcessingSendContextUrl}，提交 contextVersion、完整 reviewedContextIds、当前完整会话 ID reviewedByThreadId、具体 reason，以及不含真实 sendContextReviewToken 的 proposedSend。审核通过后，把返回的 sendContextReviewToken 写进 tracking，再原样发送同一目标和正文。`,
-        "如果审核结果显示已有回复，不要换一种说法重复发送；如果审核后群里又出现新消息、发送者会话变化、目标或正文变化，Manager 会拒绝发送并要求重新读取上下文。",
-        "如果 params.replyToMessageId 引用的 QQ 消息包含图片，必须按原图顺序在 params.replyImageDescriptions 中逐张写明实际看到的内容及图片想表达的意思。数组缺失、数量不符、图片不可读或只写‘已查看’时，发送接口会报错；发送成功后，RabiRoute 会在每张本机图片旁写入同名 .md 说明。",
-        "明确发送 API 只有在需求处于 awaiting_send、上下文审核仍是最新、渠道与原消息端一致且带该渠道回执时才会完成发送需求；只在 Codex 最终文本中写了回复不算完成。"
+        `需求 ID：${messageProcessingRequirementId}。GET ${messageProcessingOutcomeUrl.replace(/\/outcome$/, "")} 读取完整 knowledgeMatches。`,
+        `准备关闭或回复前 POST ${messageProcessingOutcomeUrl}，提交 projectFactAssessment、knowledgeMatchDispositions 和必要的 criticalFactDisposition。`,
+        "无命中时用两组同义关键词查询。no_reply 需提交 reasonCode 和具体 reason。handoff 需带 messageProcessing.requirementId。",
+        `决定回复后 GET 并 POST ${messageProcessingSendContextUrl}，核对最新消息，取得 sendContextReviewToken。`,
+        "发送目标或正文变化时重新审核。QQ 图片引用需逐张填写 params.replyImageDescriptions。",
+        "awaiting_send、最新上下文、原渠道和渠道回执齐全后，需求才完成。"
       ]
     : [];
 
   return [
     ...intro,
-    "请求体必须使用下面的明确发送模板。不要把来源上下文原样传入，也不要让 RabiRoute 根据来源猜测渠道。",
-    "NapCat 群聊引用消息含图片时，params.replyImageDescriptions 必须与原消息图片逐张对应；没有图片时保持空数组。",
+    "使用下面的明确发送模板。来源上下文只用于核对。",
+    "NapCat 图片引用按原图填写 params.replyImageDescriptions。",
     `POST ${sendApiUrl}`,
     "示例：",
     "```json",
@@ -287,10 +275,10 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
     "```",
     ...processingOutcomeLines,
     isPlanFeedback
-      ? "API 调用成功后，Codex 可见最终文本只需简短说明计划已更新且回复已回写；不要重复输出计划回复正文。"
+      ? "成功后简短说明计划已更新、回复已回写。"
       : characterTtsDialogue
-      ? "API 调用成功后，把同一人格回复作为可见最终文本；不能只显示“已投递”之类的状态。如果决定不回应，请说明保持安静的原因且不要调用 API。"
-      : "API 调用成功后，可见最终回复只需同步已投递的简短结果；如果决定不对消息来源回复，请说明保持安静或不回传的原因。"
+      ? "成功后显示同一人格回复；保持安静时记录原因。"
+      : "成功后简短记录投递结果；保持安静时记录原因。"
   ];
 }
 
@@ -1227,17 +1215,15 @@ function buildAgentMessage(
       matchedIndex
     ]) : "",
     hasPersona && planAssistantLines.length > 0 ? section("计划协助会话", [
-      "下列 Codex Desktop 任务是当前主会话的持久计划管理秘书槽，属于控制面，不是一次性子 Agent，也不是计划的业务执行任务。",
+      "下列任务是持久计划秘书，只管理控制面。",
       `全部秘书统一使用 Manager 配置的模型：${config.codexPlanAssistantModel}`,
-      "Manager 为每个计划单独保存 secretaryBinding，记录当前负责秘书；业务 taskBinding 仍只指向独立业务任务。主人格分配新计划时使用 /api/agent/threads 的 send 动作投给秘书的精确 threadId，不得把秘书 ID 写入 taskBinding。Agent 间投递必须填写 sourceThreadId、sourceAgentType 和 responsePolicy=required 或 none；要求回复时填写 responseInstruction，回复已有请求时填写 inReplyToRequestId、result 和 nextAction。",
-      "每个计划的 taskBinding.sessionId + workspace 必须指向独立业务任务会话。调查、实现、测试、Unity/SVN/构建/发布和外部系统操作只能在业务任务中执行。",
-      "秘书负责计划/记忆维护、业务任务查重与绑定、真实状态巡检、结果消费、提醒和续投。秘书可以开临时子 Agent 做控制面盘点，但秘书及其子 Agent不得直接修改业务文件。",
-      "主人格是秘书槽调度者和关键决策者，不是计划管理员。WebGUI 提交的计划引导/审批会同时投给业务 taskBinding 和负责秘书；业务任务完成提醒、计划进展和状态变化也优先直达负责秘书，不再默认唤醒主人格。",
-      "发出秘书消息不等于委派完成。主人格必须核对精确 threadId + workspace、秘书真实任务状态和阶段回执；秘书开始后等待其结果，不得并行执行同一份日志/截图读取、查重、计划 PATCH、记忆/账本写入或任务续投，也不得先自己做一遍再只把剩余部分交给秘书。",
-      "秘书必须在同一轮消费结果、更新计划和记忆，并按计划自身 taskBinding 精确续投业务任务。普通进展、状态变化和等待条件由秘书直接处理；只有需要用户/主人格做决定、批准、授权、补充输入，或者计划完整收尾需要最终复核/对外说明时，秘书才升级给主人格。",
-      "计划暂停或秘书轮转不能清空业务 taskBinding；只有业务任务确实失效并完成受控迁移时才改绑。计划完成后仍可保留 taskBinding 作为历史证据。",
-      "有多个计划时并行使用秘书槽管理不同计划分片；同一 planId 同时只能有一个控制面 writer，不同计划不能被某个 active cycle 全局阻塞。共享账本只合并目标记录并原子写入。本轮结束前校验：可推进但无人管理的计划数 = 0，且可推进但空闲的业务任务数 = 0。active/in-progress 业务任务不要重复投递。",
-      "只有当前步骤具有完整、可提交且 responseStatus=pending 的 approvalRequest 时，Manager 才自动派生审批阻塞；isBlocked 是兼容投影，不得手写。审批合同不完整时计划保持进行中，由秘书继续调查、补证据和补齐合同；待 QA、缺资料、执行失败、工具超时、外部产物或普通负责人等待必须通过询问、重试、改道、拆分、升级或替代路径继续推进，不能占用阻塞。",
+      "secretaryBinding 记录秘书；taskBinding.sessionId + workspace 只指向独立业务任务。",
+      "秘书维护计划和记忆、查重、巡检、消费结果和续投；业务任务执行调查、实现、测试、构建、发布和外部操作。",
+      "计划引导、审批和业务结果优先送达负责秘书。委派完成以精确 threadId、workspace 和阶段回执为准。",
+      "秘书同轮更新计划与记忆并续投。仅把决定、批准、授权、缺少输入或最终复核升级给主人格。",
+      "秘书轮转或计划暂停不清空 taskBinding；业务任务失效并迁移后才改绑。",
+      "同一 planId 只有一个控制面 writer；运行中任务不重复投递。结束前确认没有无人管理或可推进但空闲的计划。",
+      "approvalRequest 完整且 responseStatus=pending 时由 Manager 派生阻塞；其他等待继续询问、重试、改道、拆分或补证据。",
       ...planAssistantLines
     ]) : "",
     hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",
@@ -1269,12 +1255,10 @@ function buildAgentMessage(
     routeKind === "manual_trigger" || routeKind === "heartbeat" ? section("事件执行要求", [
       routeKind === "manual_trigger"
         ? isManualTriggerRecord(record) && record.triggerSource === "auto"
-          ? "这是近期记忆到达 72 小时后的自动沉淀触发，不要只把消息写入线程后结束。"
-          : "这是一条人工点击的手动触发，不要只把消息写入线程后结束。"
-        : "这是一条定时心跳触发，不要只把消息写入线程后结束。",
-      "请在当前 Codex 会话中按事件和模板执行，并输出可见结果。",
-      "如果没有需要继续处理的新事项，也请明确说明已检查范围、当前无新事项和下一步。",
-      "如果因为规则限制不能执行，请明确说明不能执行的具体限制和下一步。"
+          ? "近期记忆到达 72 小时，执行自动沉淀。"
+          : "执行本次手动触发。"
+        : "执行本次定时心跳。",
+      "按事件和模板执行并输出结果。无新事项时写明检查范围和下一步；受限时写明限制和下一步。"
     ]) : "",
     userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
   ];

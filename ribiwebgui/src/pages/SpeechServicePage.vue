@@ -11,6 +11,10 @@ import {
   type SpeechRecord,
   type SpeechRouteDeliveryHistory
 } from "@shared/speechControlContract";
+import {
+  resolveSelectionSpeechModel,
+  type SelectionSpeechSettings
+} from "@shared/selectionSpeechContract";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
 import SpeechHostMonitor from "../components/SpeechHostMonitor.vue";
@@ -20,7 +24,7 @@ import { useSpeechStore } from "../stores/speechStore";
 import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
 import { copyTextToClipboard } from "../clipboard";
 import { personaOptionDisplayName } from "../personaPresentation";
-import { speechControlClient } from "../speech/speechControlClient";
+import { SpeechControlRequestError, speechControlClient } from "../speech/speechControlClient";
 import { transcriptSpeakerPresentation } from "../speech/speechSpeakerPresentation";
 
 const ModelManagementPage = defineAsyncComponent(() => import("./ModelManagementPage.vue"));
@@ -44,6 +48,8 @@ const modelManagementDialog = ref(false);
 const AUDIO_LOG_EXPANDED_STORAGE_KEY = "rabiroute:speech:audio-log-expanded";
 const audioLogExpanded = ref(loadAudioLogExpanded());
 const requestError = ref("");
+const requestErrorDetail = ref("");
+const requestErrorResolution = ref("");
 const ttsModel = ref("");
 const asrModel = ref("");
 const voice = ref(DEFAULT_SPEECH_ROUTE_PROFILE.voice);
@@ -54,6 +60,11 @@ const instructions = ref("");
 const speed = ref(1);
 const queuePlayback = ref(true);
 const ttsBusy = ref(false);
+const selectionSpeechEnabled = ref(false);
+const selectionSpeechAdvanced = ref(false);
+const selectionSpeechModel = ref("");
+const selectionSpeechSettingsLoaded = ref(false);
+const selectionSpeechSettingsSaving = ref(false);
 const asrBusy = ref(false);
 const actionMessage = ref("");
 const transcript = ref("");
@@ -70,6 +81,7 @@ const adaptiveThreshold = ref(DEFAULT_SPEECH_ROUTE_PROFILE.adaptiveThreshold);
 const inputGain = ref(DEFAULT_SPEECH_ROUTE_PROFILE.inputGain);
 const preRollMs = ref(DEFAULT_SPEECH_ROUTE_PROFILE.preRollMs);
 const bargeInMode = ref<"off" | "echo_protected">("off");
+const asrStreamingEnabled = ref(false);
 const audioInputs = ref<AudioInput[]>([]);
 const selectedAudioInput = ref<number | null>(null);
 const microphoneConfigLoaded = ref(false);
@@ -93,6 +105,20 @@ let pendingPlaybackVolume: number | null = null;
 let microphoneSettingsTimer = 0;
 let microphoneSettingsPending = false;
 let applyingMicrophoneConfig = false;
+let selectionSpeechSettingsTimer = 0;
+let selectionSpeechSettingsVersion = 0;
+
+function clearRequestError(): void {
+  requestError.value = "";
+  requestErrorDetail.value = "";
+  requestErrorResolution.value = "";
+}
+
+function recordRequestError(error: unknown): void {
+  requestError.value = error instanceof Error ? error.message : String(error);
+  requestErrorDetail.value = error instanceof SpeechControlRequestError ? error.detail : "";
+  requestErrorResolution.value = error instanceof SpeechControlRequestError ? error.resolution : "";
+}
 
 function loadAudioLogExpanded(): boolean {
   try {
@@ -288,7 +314,7 @@ async function loadAudioHistory(options: { earlierEvents?: boolean; earlierTrans
     audioTranscriptsHaveMore.value = transcriptPayload.records.length === 200;
     retainedAsrRecords.value = Object.fromEntries(retainedPayload.records.map(record => [record.id, record]));
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
   } finally {
     audioHistoryLoading.value = false;
   }
@@ -348,12 +374,12 @@ function checkedAtLabel(value: string | undefined): string {
 }
 
 async function refreshStatus(): Promise<void> {
-  requestError.value = "";
+  clearRequestError();
   try {
     await speech.refreshStatus();
     if (serviceEnabled.value) await hydrateRuntimeUi();
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
   }
 }
 
@@ -364,7 +390,7 @@ async function hydrateRuntimeUi(): Promise<void> {
 async function toggleRuntime(enabled: boolean | null): Promise<void> {
   if (runtimeToggling.value || Boolean(enabled) === serviceEnabled.value) return;
   runtimeToggling.value = true;
-  requestError.value = "";
+  clearRequestError();
   actionMessage.value = enabled ? "正在启动本机 RabiSpeech，并等待健康检查……" : "正在停止本机 RabiSpeech……";
   try {
     if (enabled) {
@@ -380,7 +406,7 @@ async function toggleRuntime(enabled: boolean | null): Promise<void> {
         : "RabiSpeech 已关闭，语音服务参数已收起。";
     }
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
     actionMessage.value = "";
   } finally {
     runtimeToggling.value = false;
@@ -394,6 +420,13 @@ function syncModelSelections(): void {
       || ttsModels.value[0]?.id
       || "tts-local";
   }
+  if (selectionSpeechAdvanced.value && ttsModels.value.some(item => item.available)) {
+    selectionSpeechModel.value = resolveSelectionSpeechModel({
+      enabled: selectionSpeechEnabled.value,
+      advanced: true,
+      model: selectionSpeechModel.value
+    }, ttsModels.value);
+  }
   if (!asrModels.value.some(item => item.id === asrModel.value)) {
     asrModel.value = asrModels.value.find(item => item.available && item.id.endsWith("/paraformer-v2"))?.id
       || asrModels.value.find(item => item.available && item.id.includes("faster-whisper/small"))?.id
@@ -406,6 +439,49 @@ function syncModelSelections(): void {
 async function refreshModels(): Promise<void> {
   await speech.refreshModels();
   syncModelSelections();
+}
+
+function currentSelectionSpeechSettings(): SelectionSpeechSettings {
+  return {
+    enabled: selectionSpeechEnabled.value,
+    advanced: selectionSpeechAdvanced.value,
+    model: selectionSpeechModel.value
+  };
+}
+
+async function loadSelectionSpeechSettings(): Promise<void> {
+  try {
+    const settings = await speechControlClient.selectionReaderSettings();
+    selectionSpeechEnabled.value = settings.enabled;
+    selectionSpeechAdvanced.value = settings.advanced;
+    selectionSpeechModel.value = settings.model;
+    syncModelSelections();
+    selectionSpeechSettingsLoaded.value = true;
+  } catch (error) {
+    recordRequestError(error);
+  }
+}
+
+async function flushSelectionSpeechSettings(version: number): Promise<void> {
+  selectionSpeechSettingsTimer = 0;
+  selectionSpeechSettingsSaving.value = true;
+  try {
+    await speechControlClient.updateSelectionReaderSettings(currentSelectionSpeechSettings());
+  } catch (error) {
+    recordRequestError(error);
+  } finally {
+    if (version === selectionSpeechSettingsVersion) selectionSpeechSettingsSaving.value = false;
+  }
+}
+
+function scheduleSelectionSpeechSettingsSave(): void {
+  if (!selectionSpeechSettingsLoaded.value) return;
+  selectionSpeechSettingsVersion += 1;
+  const version = selectionSpeechSettingsVersion;
+  window.clearTimeout(selectionSpeechSettingsTimer);
+  selectionSpeechSettingsTimer = window.setTimeout(() => {
+    void flushSelectionSpeechSettings(version);
+  }, 120);
 }
 
 function syncPersonaSelection(): void {
@@ -428,7 +504,7 @@ async function refreshPlayback(): Promise<void> {
 async function synthesize(): Promise<void> {
   if (!ttsText.value.trim() || ttsBusy.value) return;
   ttsBusy.value = true;
-  requestError.value = "";
+  clearRequestError();
   actionMessage.value = "首次调用可能需要加载模型，请稍候。";
   try {
     const result = await speech.synthesize({
@@ -455,7 +531,7 @@ async function synthesize(): Promise<void> {
       actionMessage.value = "正在当前浏览器试听（未进入主机队列）。";
     }
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
     actionMessage.value = "";
   } finally {
     ttsBusy.value = false;
@@ -465,7 +541,7 @@ async function synthesize(): Promise<void> {
 async function transcribeBlob(blob: Blob, name = "speech.wav"): Promise<void> {
   if (!asrModel.value) throw new Error("没有可用 ASR 模型。");
   asrBusy.value = true;
-  requestError.value = "";
+  clearRequestError();
   actionMessage.value = "正在使用所选 ASR 模型识别……";
   try {
     const result = await speech.transcribe(
@@ -493,7 +569,7 @@ async function onAudioFile(event: Event): Promise<void> {
   try {
     await transcribeBlob(file, file.name);
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
   } finally {
     input.value = "";
   }
@@ -516,6 +592,7 @@ async function refreshAudioInputs(): Promise<void> {
 }
 
 function applyMicrophoneConfig(config: SpeechMicrophoneConfig): void {
+  asrStreamingEnabled.value = config.streamingEnabled;
   if (typeof config.device === "number") selectedAudioInput.value = config.device;
   if (config.asrModel) asrModel.value = config.asrModel;
   if (typeof config.language === "string") asrLanguage.value = config.language;
@@ -561,13 +638,14 @@ async function refreshMicrophone(): Promise<void> {
     await syncMicrophoneFromStore();
   } catch (error) {
     applyingMicrophoneConfig = false;
-    if (listening.value) requestError.value = error instanceof Error ? error.message : String(error);
+    if (listening.value) recordRequestError(error);
   }
 }
 
 function microphoneSettingsCommand() {
   const previous = microphoneStatus.value?.config;
   return {
+    streamingEnabled: asrStreamingEnabled.value,
     device: selectedAudioInput.value,
     sampleRate: previous?.sampleRate ?? 16_000,
     chunkMs: previous?.chunkMs ?? 100,
@@ -590,6 +668,28 @@ function microphoneSettingsCommand() {
   };
 }
 
+async function changeAsrStreamingEnabled(value: boolean | null): Promise<void> {
+  if (microphoneSettingsSaving.value) return;
+  const previous = asrStreamingEnabled.value;
+  asrStreamingEnabled.value = value === true;
+  microphoneSettingsPending = false;
+  window.clearTimeout(microphoneSettingsTimer);
+  microphoneSettingsTimer = 0;
+  microphoneSettingsSaving.value = true;
+  clearRequestError();
+  try {
+    await speech.updateMicrophoneSettings(microphoneSettingsCommand());
+    actionMessage.value = asrStreamingEnabled.value
+      ? "ASR 串流已开启，麦克风会持续录音和识别。"
+      : "ASR 串流已关闭，麦克风不会持续录音；手动上传音频识别仍可使用。";
+  } catch (error) {
+    asrStreamingEnabled.value = previous;
+    recordRequestError(error);
+  } finally {
+    microphoneSettingsSaving.value = false;
+  }
+}
+
 function changeBargeInMode(value: "off" | "echo_protected" | null): void {
   const next = value === "echo_protected" ? "echo_protected" : "off";
   if (
@@ -606,12 +706,12 @@ async function flushMicrophoneSettings(): Promise<void> {
   microphoneSettingsSaving.value = true;
   try {
     await speech.updateMicrophoneSettings(microphoneSettingsCommand());
-    requestError.value = "";
+    clearRequestError();
     actionMessage.value = listening.value
       ? "主机语音设置已保存，常驻监听已按新参数恢复。"
       : "主机语音设置已保存；开启任意 Route 的语音消息端后会自动开始监听。";
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
   } finally {
     microphoneSettingsSaving.value = false;
     if (microphoneSettingsPending) void flushMicrophoneSettings();
@@ -621,7 +721,7 @@ async function flushMicrophoneSettings(): Promise<void> {
 async function chooseAudioStream(value: string | null): Promise<void> {
   if (!value || audioStreamSaving.value || value === selectedAudioStream.value) return;
   audioStreamSaving.value = true;
-  requestError.value = "";
+  clearRequestError();
   try {
     if (value === "local") {
       await speech.selectAudioStream({ source: "local" });
@@ -632,20 +732,20 @@ async function chooseAudioStream(value: string | null): Promise<void> {
       ? "音频流已切换到本机麦克风和扬声器。"
       : "音频流已切换到远程 Rabi 语音客户端；VAD、ASR、Route 广播和 TTS 队列仍由本机控制。";
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
   } finally {
     audioStreamSaving.value = false;
   }
 }
 
 async function copyAudioStreamToken(): Promise<void> {
-  requestError.value = "";
+  clearRequestError();
   try {
     const token = await speech.audioStreamToken();
     await copyTextToClipboard(token);
     actionMessage.value = "客户端连接密钥已复制；只粘贴到会议室电脑的私有 config.json。";
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
   }
 }
 
@@ -676,9 +776,9 @@ async function flushPlaybackVolume(): Promise<void> {
   try {
     const next = await speech.setPlaybackVolume(nextVolume);
     if (pendingPlaybackVolume == null) playbackVolume.value = normalizePlaybackVolume(next.volume);
-    requestError.value = "";
+    clearRequestError();
   } catch (error) {
-    requestError.value = error instanceof Error ? error.message : String(error);
+    recordRequestError(error);
   } finally {
     playbackVolumeSaving.value = false;
     if (pendingPlaybackVolume != null) void flushPlaybackVolume();
@@ -707,6 +807,7 @@ watch(selectedPersona, persona => {
   instructions.value = persona.instructions || persona.voiceStyleSummary || "";
   speed.value = persona.speed ?? 1;
 });
+watch([selectionSpeechEnabled, selectionSpeechAdvanced, selectionSpeechModel], scheduleSelectionSpeechSettingsSave);
 watch(
   () => selectedAudioStreamClient.value?.sourceDeviceId || "",
   () => {
@@ -740,11 +841,15 @@ watch([
 let releaseSpeech: (() => void) | undefined;
 onMounted(async () => {
   releaseSpeech = await speech.acquire();
-  await syncRuntimeUiFromStore();
+  await Promise.all([syncRuntimeUiFromStore(), loadSelectionSpeechSettings()]);
 });
 onBeforeUnmount(() => {
   window.clearTimeout(playbackVolumeTimer);
   window.clearTimeout(microphoneSettingsTimer);
+  if (selectionSpeechSettingsTimer) {
+    window.clearTimeout(selectionSpeechSettingsTimer);
+    void flushSelectionSpeechSettings(selectionSpeechSettingsVersion);
+  }
   releaseSpeech?.();
 });
 </script>
@@ -780,7 +885,11 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <v-alert v-if="requestError || speech.error" type="error" variant="tonal" class="mb-4">语音服务操作失败：{{ requestError || speech.error }}</v-alert>
+    <v-alert v-if="requestError || speech.error" type="error" variant="tonal" class="mb-4">
+      <div>语音服务操作失败：{{ requestError || speech.error }}</div>
+      <div v-if="requestErrorDetail" class="mt-2"><strong>具体原因：</strong>{{ requestErrorDetail }}</div>
+      <div v-if="requestErrorResolution" class="mt-2"><strong>处理方法：</strong>{{ requestErrorResolution }}</div>
+    </v-alert>
     <v-alert v-if="actionMessage" class="mb-4" type="success" variant="tonal" closable @click:close="actionMessage = ''">{{ actionMessage }}</v-alert>
 
     <v-dialog v-model="modelManagementDialog" max-width="1480" scrollable>
@@ -1022,6 +1131,39 @@ onBeforeUnmount(() => {
           </div>
           <v-chip color="primary" variant="tonal">{{ ttsModels.filter(item => item.available).length }} 个可用模型</v-chip>
         </div>
+        <div class="speech-selection-reader mb-4">
+          <div class="speech-action-row">
+            <v-switch
+              v-model="selectionSpeechEnabled"
+              color="primary"
+              label="划词朗读"
+              :loading="!selectionSpeechSettingsLoaded || selectionSpeechSettingsSaving"
+              :disabled="!selectionSpeechSettingsLoaded"
+              hide-details
+            />
+            <v-switch
+              v-model="selectionSpeechAdvanced"
+              color="primary"
+              label="高级选项"
+              :disabled="!selectionSpeechEnabled || !selectionSpeechSettingsLoaded"
+              hide-details
+            />
+          </div>
+          <div class="section-note mb-3">开启后，在 Windows 任意支持文本选区的软件中划选文字，旁边会显示“朗读”和“投递至当前人格”按钮。划选时不会自动朗读或投递；默认使用当前可用的默认 TTS 模型。</div>
+          <v-select
+            v-if="selectionSpeechEnabled && selectionSpeechAdvanced"
+            v-model="selectionSpeechModel"
+            label="划词朗读模型"
+            :items="ttsModels.filter(item => item.available)"
+            item-title="name"
+            item-value="id"
+            :disabled="ttsBusy || !selectionSpeechSettingsLoaded"
+          >
+            <template #item="{ props, item }">
+              <v-list-item v-bind="props" :subtitle="item.raw.id" />
+            </template>
+          </v-select>
+        </div>
         <v-textarea v-model="ttsText" label="要说的话" rows="4" counter="10000" :disabled="ttsBusy" />
         <div class="speech-form-grid">
           <v-select v-model="voice" label="人格 / 声线" :items="personaOptions" :disabled="ttsBusy">
@@ -1083,6 +1225,15 @@ onBeforeUnmount(() => {
         </div>
         <div class="speech-action-row">
           <div class="speech-inline-switches">
+            <v-switch
+              :model-value="asrStreamingEnabled"
+              color="success"
+              label="开启 ASR 串流"
+              hide-details
+              :loading="microphoneSettingsSaving"
+              :disabled="microphoneSettingsSaving"
+              @update:model-value="changeAsrStreamingEnabled"
+            />
             <v-switch v-model="adaptiveThreshold" color="primary" label="动态底噪阈值" hide-details :disabled="microphoneSettingsSaving" />
             <v-select
               :model-value="bargeInMode"
@@ -1097,12 +1248,12 @@ onBeforeUnmount(() => {
               @update:model-value="changeBargeInMode"
             />
           </div>
-          <v-chip :color="listening ? 'success' : speechSubscriberRoutes.length ? 'warning' : 'grey'" variant="tonal">
-            {{ microphoneSettingsSaving ? "正在应用主机语音设置" : listening ? `常驻监听中 · ${speechSubscriberRoutes.length} 个 Route 已订阅` : speechSubscriberRoutes.length ? "等待 RabiSpeech 恢复监听" : "没有 Route 订阅语音消息" }}
+          <v-chip :color="!asrStreamingEnabled ? 'grey' : listening ? 'success' : 'warning'" variant="tonal">
+            {{ microphoneSettingsSaving ? "正在应用主机语音设置" : !asrStreamingEnabled ? "ASR 串流已关闭" : listening ? `持续录音中 · ${speechSubscriberRoutes.length} 个 Route 已订阅` : "等待 RabiSpeech 恢复串流" }}
           </v-chip>
         </div>
         <div class="section-note mt-3">
-          Route 的语音消息端开关是订阅真源；同一段 ASR 会广播给全部 {{ speechSubscriberRoutes.length }} 个已启用 Route，各自再执行热投递或人格关键词判断。
+          主机 ASR 串流开关独立控制是否持续录音和识别；Route 的语音消息端开关只控制分发订阅。没有 Route 订阅时只保存主机记录；有订阅时，同一段 ASR 会广播给全部 {{ speechSubscriberRoutes.length }} 个已启用 Route，各自再执行热投递或人格关键词判断。
           待识别 {{ microphoneStatus?.pending || 0 }} 段 · 丢弃 {{ microphoneStatus?.dropped || 0 }} 段<span v-if="microphoneStatus?.lastSubmitError"> · 广播异常：{{ microphoneStatus.lastSubmitError }}</span>
         </div>
         <v-alert v-if="microphoneStatus?.error" class="mt-4" type="error" variant="tonal" density="compact">{{ microphoneStatus.error }}</v-alert>

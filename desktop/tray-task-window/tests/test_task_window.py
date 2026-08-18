@@ -224,42 +224,42 @@ class TaskWindowLayoutTest(unittest.TestCase):
 
         self.assertEqual(_plan_status_presentation(plan, plan.status), ("状态未知", "unknown"))
 
-    def test_waiting_package_card_uses_manager_status_and_blue_palette(self) -> None:
+    def test_waiting_package_card_uses_manager_status_and_green_palette(self) -> None:
         plan = PlanItem(
             title="等待目标包",
             status="进行中",
-            display_status="待统一打包",
+            display_status="等待打包",
             display_tone="waiting_package",
-            display_accent="#2563eb",
-            display_background="#eff6ff",
-            display_foreground="#1d4ed8",
+            display_accent="#16a34a",
+            display_background="#eaf8ef",
+            display_foreground="#15803d",
         )
         card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：待统一打包")
+        self.assertEqual(card.status_label.text(), "状态：等待打包")
         self.assertEqual(card.status_label.property("statusTone"), "waiting_package")
-        self.assertIn("border-left: 4px solid #2563eb", card.styleSheet())
-        self.assertIn("background: #eff6ff", card.status_label.styleSheet())
-        self.assertIn("color: #1d4ed8", card.status_label.styleSheet())
+        self.assertIn("border-left: 4px solid #16a34a", card.styleSheet())
+        self.assertIn("background: #eaf8ef", card.status_label.styleSheet())
+        self.assertIn("color: #15803d", card.status_label.styleSheet())
 
     def test_external_wait_card_uses_manager_status_without_local_classification(self) -> None:
         plan = PlanItem(
-            title="等待资料",
+            title="内部等待条件",
             status="进行中",
-            display_status="待资料",
-            display_tone="waiting_external",
-            display_accent="#f59e0b",
-            display_background="#fff7e6",
-            display_foreground="#a96008",
+            display_status="暂停",
+            display_tone="paused",
+            display_accent="#ef6c52",
+            display_background="#fff1ed",
+            display_foreground="#b42318",
         )
         card = ExpandableCard("计划", plan.title, [], "plan", [], status=plan.status, plan=plan)
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：待资料")
-        self.assertEqual(card.status_label.property("statusTone"), "waiting_external")
+        self.assertEqual(card.status_label.text(), "状态：暂停")
+        self.assertEqual(card.status_label.property("statusTone"), "paused")
         card.close()
 
     def test_overflow_menu_contains_actions_not_duplicate_views(self) -> None:
@@ -445,11 +445,11 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertEqual(blocked_rows, [])
         card.close()
 
-    def test_waiting_qa_plan_uses_purple_status_badge(self) -> None:
+    def test_waiting_qa_plan_uses_manager_status_badge(self) -> None:
         plan = PlanItem(
             title="等待 QA 的计划",
             status="进行中",
-            display_status="等待 QA 验收",
+            display_status="等待 QA",
             display_tone="qa",
             current_step="修复已完成，等待 QA 真机结果",
             current_step_id="verify",
@@ -462,7 +462,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：等待 QA 验收")
+        self.assertEqual(card.status_label.text(), "状态：等待 QA")
         self.assertEqual(card.status_label.property("statusTone"), "qa")
         card.close()
 
@@ -472,9 +472,9 @@ class TaskWindowLayoutTest(unittest.TestCase):
             status="暂停",
             display_status="暂停",
             display_tone="paused",
-            display_accent="#64748b",
-            display_background="#f1f5f9",
-            display_foreground="#475569",
+            display_accent="#ef6c52",
+            display_background="#fff1ed",
+            display_foreground="#b42318",
             current_step_id="hold",
             blocked_by="用户要求暂时跳过",
             steps=[PlanStep("保留恢复位置", "进行中", step_id="hold", blocked_by="用户要求暂时跳过")],
@@ -583,7 +583,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         plan = PlanItem(
             title="仍在开发的计划",
             status="进行中",
-            display_status="正在执行",
+            display_status="进行中",
             display_tone="running",
             current_step="正在实现已批准方案",
             current_step_id="implement",
@@ -596,7 +596,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：正在执行")
+        self.assertEqual(card.status_label.text(), "状态：进行中")
         self.assertEqual(card.status_label.property("statusTone"), "running")
         card.close()
 

@@ -3,6 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
+  measurePerformanceOperation,
+  recordPerformanceOperation
+} from "./performance/performanceInstrumentation.js";
+import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
+import {
   normalizeStoredPlanAttachments,
   storePlanAttachments
 } from "./planAttachments.js";
@@ -1654,7 +1659,7 @@ async function refreshPlanListCacheFromDirtyFiles(roleDir: string): Promise<void
   planListDirtyFiles.delete(cacheKey);
   planListDirtyAt.delete(cacheKey);
   planListRefreshInFlight.add(cacheKey);
-  try {
+  await measurePerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogRefresh, async () => {
     const results = await Promise.all([...dirtyFiles].map((filePath) => readChangedPlanFile(filePath)));
     for (const result of results) {
       if (result.missing) cachedFiles.delete(result.filePath);
@@ -1669,12 +1674,12 @@ async function refreshPlanListCacheFromDirtyFiles(roleDir: string): Promise<void
         plans: uniquePlans(refreshed.items)
       });
     }
-  } finally {
+  }).finally(() => {
     planListRefreshInFlight.delete(cacheKey);
     if (planListDirtyFiles.get(cacheKey) instanceof Set && !planListRefreshTimers.has(cacheKey)) {
       schedulePlanListCacheRefresh(roleDir);
     }
-  }
+  });
 }
 
 function updatePlanListCacheAfterWrite(
@@ -1832,17 +1837,24 @@ export async function listPlansAsync(roleDir: string): Promise<PlanItem[]> {
   const cached = planListCache.get(cacheKey);
   const watchBacked = ensurePlanListWatchers(roleDir);
   const dirtyAt = planListDirtyAt.get(cacheKey);
-  if (cached && watchBacked && dirtyAt === undefined) return cached.plans;
-  if (cached && watchBacked && dirtyAt !== undefined && planListDirtyFiles.get(cacheKey) instanceof Set) {
-    if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
+  if (cached && watchBacked && dirtyAt === undefined) {
+    recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
     return cached.plans;
   }
-  if (cached && !watchBacked && cached.validUntil > Date.now()) return cached.plans;
+  if (cached && watchBacked && dirtyAt !== undefined && planListDirtyFiles.get(cacheKey) instanceof Set) {
+    if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
+    recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
+    return cached.plans;
+  }
+  if (cached && !watchBacked && cached.validUntil > Date.now()) {
+    recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
+    return cached.plans;
+  }
 
   const existingLoad = planListLoadInFlight.get(cacheKey);
   if (existingLoad) return existingLoad;
   let load!: Promise<PlanItem[]>;
-  load = (async () => {
+  load = measurePerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogColdLoad, async () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const generation = planListGeneration.get(cacheKey) ?? 0;
       const loadStartedAt = Date.now();
@@ -1874,7 +1886,7 @@ export async function listPlansAsync(roleDir: string): Promise<PlanItem[]> {
       return plans;
     }
     throw new Error("Plan catalog kept changing while loading; retry shortly.");
-  })().finally(() => {
+  }).finally(() => {
     if (planListLoadInFlight.get(cacheKey) === load) planListLoadInFlight.delete(cacheKey);
   });
   planListLoadInFlight.set(cacheKey, load);

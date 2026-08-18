@@ -1,4 +1,4 @@
-export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot";
+export type AgentAdapterType = "codex" | "copilotCli" | "marvis" | "astrbot" | "dsh";
 
 export type ManagedTaskAgentFeature =
   | "messageProcessingAgent"
@@ -25,7 +25,10 @@ const capabilitiesByAgentType: Readonly<Record<AgentAdapterType, AgentAdapterCap
   codex: codexManagedTaskCapabilities,
   copilotCli: baseAgentCapabilities,
   marvis: baseAgentCapabilities,
-  astrbot: baseAgentCapabilities
+  astrbot: baseAgentCapabilities,
+  // DSH sessions are delivery targets only; managed tasks (message-processing
+  // pool, plan secretaries, memory consolidation) stay Codex-owned.
+  dsh: baseAgentCapabilities
 });
 
 export function agentAdapterCapabilities(type: AgentAdapterType): AgentAdapterCapabilities {

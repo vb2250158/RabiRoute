@@ -18,7 +18,7 @@ description: 新增、改造或排障 RabiRoute Agent 端适配器时使用。�
 
 所有带会话概念的 Agent 端还必须满足以下 P0 合同，缺一项都不能标记为 `verified`：
 
-1. 已保存的完整线程 ID 存在、workspace 一致且 owner 记录未归档时，直接投递到该会话，不创建新会话。owner 标题或 SQLite `title` 是可变展示元数据，不能否定有效 ID。保存 ID 指向已归档会话时，先查找同 workspace 的未归档同名会话；存在唯一最新候选就复用，没有候选才阻止投递并要求恢复/重选。归档绑定在任何情况下都不得触发创建替代会话。
+1. 已保存的完整线程 ID 存在、workspace 一致且 owner 记录未归档时，直接投递到该会话，不创建新会话。owner 标题或 SQLite `title` 是可变展示元数据，不能否定有效 ID。保存 ID 指向已归档会话时，真实投递或保存提交点幂等创建新会话并持久化新 ID；不查找或复用其它同名会话。扫描、刷新和失焦仍只报告归档状态。
 2. 目标不存在时，先按 RabiPC Manager 保存的明确名称 + workspace 查找；存在一个或多个匹配时按 `updatedAt` 降序绑定唯一最新任务，只有最新时间并列时才要求用户选择；零匹配才幂等创建一个会话，再把真实消息投给新会话，并发、重试和索引延迟期间仍只能创建一次。允许提供用户显式点击的“自动初始化会话”：它必须先完成同一保存/解析事务，再通过唯一 owner 投递一条携带角色文件、记忆、计划和必读项的人格初始化消息。
 3. 真实消息必须通过 Agent 桌面应用实际使用的 owner 接口执行，保证桌面端统一可见并沿用同一任务的模型、工具、权限和状态；不得用第二 Runtime 冒充。
 4. 用户在 Rabi 设置中选择已有会话或输入新名称后，点击保存必须完成解析/创建并持久化新的名称、完整 ID 和 workspace。
@@ -339,7 +339,7 @@ WebGUI 读取 `agents[type]` 优先；旧字段只作为迁移兼容。
 - Codex 的 `name` 必须来自 Desktop app-server `thread/list` 的 `thread.name`；本地状态库只按完整 ID 补充 cwd、归档、时间和 owner/rollout 定位。禁止直接用 SQLite `threads.title` 建立用户可见名称索引。
 - 会话绑定同时持久化可见名称、完整 ID 和 workspace，但身份由完整 ID + workspace 决定。名称和时间是展示/查找元数据，不能因自动变化而让有效 ID 失效。
 - 投递前必须通过实际 owner 的合同验证精确 ID，并校验规范化 cwd。Codex 还必须验证 Desktop IPC 及目标任务 owner。
-- 统一 resolver 先读取有效 ID；ID 存在、cwd 匹配且未归档就精确绑定，不比较 owner 的可变标题。ID 已归档时先按保存名称 + 规范化 cwd 查找未归档任务：一个或多个匹配按 `updatedAt` 降序重绑唯一最新者，零匹配停止且不得创建。ID 为空、非法或确实失效时走同一名称查找，但零匹配才按用户输入的新名称创建；最新时间并列才要求选择。
+- 统一 resolver 先读取有效 ID；ID 存在、cwd 匹配且未归档就精确绑定，不比较 owner 的可变标题。ID 已归档时，真实投递或保存提交点按旧 ID 隔离的幂等键创建新任务并更新绑定，不复用其它同名任务。ID 为空、非法或确实失效时走名称查找，零匹配才按用户输入的新名称创建；最新时间并列才要求选择。
 - 扫描、刷新、输入和 `blur` 只能 lookup，禁止创建；保存/应用、第一条真实投递或用户显式点击“自动初始化会话”才是 create 提交点。
 - 保存提交必须调用和真实投递相同的 resolver，成功前写回完整 ID、名称和 workspace；连续保存不得再次创建。
 - create 必须按 `agentProfile + normalizedWorkspace + requestedName` single-flight；create 已返回但索引尚未刷新时，立即重试仍返回同一个 ID。
@@ -470,7 +470,7 @@ npm run build
 - Agent/Desktop 缺席时 Manager 独立启动；Codex 显示 Desktop 未就绪且不启动 fallback。
 - 分别关闭、重启两端，不互相拖死。
 - 用户环境残留旧 endpoint 时不产生隐藏依赖。
-- 重名会话和精确 ID 的错误 cwd fail closed；非法/失效 ID 按名称 + cwd 自动解析，一个或多个匹配选择唯一最新者，零匹配创建，最新时间并列要求选择；已归档 ID 只允许重绑现有未归档同名会话，零匹配必须停止且绝不创建替代会话。
+- 重名会话和精确 ID 的错误 cwd fail closed；非法/失效 ID 按名称 + cwd 自动解析，一个或多个匹配选择唯一最新者，零匹配创建，最新时间并列要求选择；已归档 ID 必须创建新任务、更新绑定且不复用同名任务。
 - Desktop/Agent 端改名或 SQLite 标题在首投后变化时，连续两次真实投递仍使用同一 ID；Rabi 端明确输入新名称时先清空旧 ID，再按新名称查找/创建并保存新 ID。
 - Codex 下拉和无 ID lookup 能按 app-server `thread.name` 找到 UI 可见任务，即使同一 ID 的 SQLite `threads.title` 已变成首条 prompt；该场景不得创建新任务。
 - 自动初始化按钮先持久化名称 + ID，再投递包含角色文件、记忆/计划索引和必读项的初始化消息；Desktop 中真实可见，初始化失败不产生第二会话。

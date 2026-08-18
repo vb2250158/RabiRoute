@@ -367,16 +367,26 @@ function validateSourceEvidenceReview(
   if (requirement.kind !== "message_reply" || input.decision === "handoff" || !requirement.source.evidenceReviewRequired) return undefined;
   const review = normalizeSourceEvidenceReview(input.sourceEvidenceReview) || requirement.sourceEvidenceReview;
   if (!review) throw new Error("Message Agent must submit sourceEvidenceReview before closing or replying.");
+  if (!review.replyChainChecked || !review.evidence || !review.reviewedAt) {
+    throw new Error("sourceEvidenceReview requires replyChainChecked=true, evidence, and reviewedAt.");
+  }
   const reviewed = new Set(review.reviewedMessageIds);
   const requiredMessageIds = [...requirement.source.messageIds, ...(requirement.source.replyChainMessageIds || [])];
+  const unknownMessages = review.reviewedMessageIds.filter((messageId) => !requiredMessageIds.includes(messageId));
+  if (unknownMessages.length > 0) {
+    throw new Error(`sourceEvidenceReview contains messageIds outside this requirement: ${unknownMessages.join(", ")}`);
+  }
+  const attachments = requirement.source.attachments || [];
+  const attachmentById = new Map(attachments.map((attachment) => [attachment.id, attachment]));
+  const unknownAttachments = review.attachmentReviews.filter((item) => !attachmentById.has(item.attachmentId));
+  if (unknownAttachments.length > 0) {
+    throw new Error(`sourceEvidenceReview contains attachments outside this requirement: ${unknownAttachments.map((item) => item.attachmentId).join(", ")}`);
+  }
+  if (input.decision === "reply") return review;
   const missingMessages = requiredMessageIds.filter((messageId) => !reviewed.has(messageId));
   if (missingMessages.length > 0) {
     throw new Error(`sourceEvidenceReview must cover every source and reply-chain messageId. Missing: ${missingMessages.join(", ")}`);
   }
-  if (!review.replyChainChecked || !review.evidence || !review.reviewedAt) {
-    throw new Error("sourceEvidenceReview requires replyChainChecked=true, evidence, and reviewedAt.");
-  }
-  const attachments = requirement.source.attachments || [];
   const reviewById = new Map(review.attachmentReviews.map((item) => [item.attachmentId, item]));
   const missingAttachments = attachments.filter((attachment) => !reviewById.has(attachment.id));
   if (missingAttachments.length > 0) {
@@ -400,11 +410,16 @@ function validateProjectFactAssessment(
   if (requirement.kind !== "message_reply" || input.decision === "handoff" || !requirement.factAssessmentRequired) return undefined;
   const assessment = normalizeProjectFactAssessment(input.projectFactAssessment) || requirement.projectFactAssessment;
   if (!assessment) throw new Error("Message Agent must submit projectFactAssessment before closing or replying.");
-  const reviewed = new Set(assessment.reviewedMessageIds);
-  const missing = requirement.source.messageIds.filter((messageId) => !reviewed.has(messageId));
-  if (missing.length) throw new Error(`projectFactAssessment must cover every source messageId. Missing: ${missing.join(", ")}`);
   if (!assessment.replyChainChecked || !assessment.evidence || !assessment.assessedAt) {
     throw new Error("projectFactAssessment requires replyChainChecked=true, evidence, and assessedAt.");
+  }
+  const allowedMessageIds = new Set([...requirement.source.messageIds, ...(requirement.source.replyChainMessageIds || [])]);
+  const unknown = assessment.reviewedMessageIds.filter((messageId) => !allowedMessageIds.has(messageId));
+  if (unknown.length) throw new Error(`projectFactAssessment contains messageIds outside this requirement: ${unknown.join(", ")}`);
+  if (input.decision !== "reply") {
+    const reviewed = new Set(assessment.reviewedMessageIds);
+    const missing = requirement.source.messageIds.filter((messageId) => !reviewed.has(messageId));
+    if (missing.length) throw new Error(`projectFactAssessment must cover every source messageId. Missing: ${missing.join(", ")}`);
   }
   if (assessment.status === "critical" && !assessment.facts?.length) {
     throw new Error("A critical projectFactAssessment requires at least one Agent-classified fact.");
@@ -916,6 +931,40 @@ export class MessageProcessingBoardStore {
     return structuredClone(requirement);
   }
 
+  recordWorkerReference(requirementId: string, worker: MessageProcessingWorker): MessageProcessingRequirement {
+    const requirement = this.required(requirementId);
+    const normalized = normalizedWorker(worker);
+    if (!normalized) throw new Error("Invalid message-processing worker.");
+    requirement.worker = normalized;
+    requirement.updatedAt = nowIso(this.now);
+    this.persist();
+    return structuredClone(requirement);
+  }
+
+  replaceWorkerReferences(previousThreadId: string, worker: MessageProcessingWorker): {
+    requirements: number;
+    planOrigins: number;
+  } {
+    const normalized = normalizedWorker(worker);
+    if (!normalized) throw new Error("Invalid message-processing worker.");
+    let requirements = 0;
+    let planOrigins = 0;
+    const updatedAt = nowIso(this.now);
+    for (const requirement of this.requirements.values()) {
+      if (requirement.worker?.threadId !== previousThreadId) continue;
+      requirement.worker = structuredClone(normalized);
+      requirement.updatedAt = updatedAt;
+      requirements += 1;
+    }
+    for (const origin of this.planOrigins.values()) {
+      if (origin.worker?.threadId !== previousThreadId) continue;
+      origin.worker = structuredClone(normalized);
+      planOrigins += 1;
+    }
+    if (requirements || planOrigins) this.persist();
+    return { requirements, planOrigins };
+  }
+
   recordDispatchFailure(requirementId: string, error: unknown): MessageProcessingRequirement {
     const requirement = this.required(requirementId);
     requirement.status = "send_failed";
@@ -1261,24 +1310,116 @@ export class MessageProcessingBoardStore {
   }
 
   findLatestBySourceMessage(routeId: string, messageId: string): MessageProcessingRequirement | undefined {
+    return this.findBySourceMessage(routeId, messageId)[0];
+  }
+
+  findBySourceMessage(routeId: string, messageId: string): MessageProcessingRequirement[] {
     const normalizedRouteId = String(routeId || "").trim();
     const normalizedMessageId = String(messageId || "").trim();
-    if (!normalizedRouteId || !normalizedMessageId) return undefined;
-    const value = [...this.requirements.values()]
+    if (!normalizedRouteId || !normalizedMessageId) return [];
+    return [...this.requirements.values()]
       .filter((item) =>
         (item.source.routeId === normalizedRouteId || item.source.routeProfileId === normalizedRouteId)
         && item.source.messageIds.includes(normalizedMessageId))
-      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
-    return value ? structuredClone(value) : undefined;
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .map((item) => structuredClone(item));
   }
 
   list(options: { routeId?: string; limit?: number } = {}): MessageProcessingRequirement[] {
+    return this.selectRequirements(options)
+      .map((item) => structuredClone(item));
+  }
+
+  private selectRequirements(options: { routeId?: string; limit?: number }): MessageProcessingRequirement[] {
     const limit = Math.max(1, Math.min(500, Math.floor(options.limit || 100)));
     return [...this.requirements.values()]
       .filter((item) => !options.routeId || item.source.routeId === options.routeId || item.source.routeProfileId === options.routeId)
       .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
-      .slice(0, limit)
-      .map((item) => structuredClone(item));
+      .slice(0, limit);
+  }
+
+  boardSummary(
+    options: { routeId?: string; limit?: number } = {},
+    workerRuntime: ReadonlyMap<string, MessageProcessingWorkerRuntimeObservation> = new Map()
+  ): Record<string, unknown> {
+    const requirements = this.selectRequirements(options).map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      replyPolicy: item.replyPolicy,
+      status: item.status,
+      source: {
+        routeId: item.source.routeId,
+        routeProfileId: item.source.routeProfileId,
+        roleId: item.source.roleId,
+        endpoint: item.source.endpoint,
+        conversationKey: item.source.conversationKey,
+        sender: item.source.sender,
+        routeKinds: [...item.source.routeKinds],
+        messageIds: [...item.source.messageIds],
+        summary: item.source.summary
+      },
+      messageGroupId: item.messageGroupId,
+      plan: item.plan ? structuredClone(item.plan) : undefined,
+      worker: item.worker ? structuredClone(item.worker) : undefined,
+      decision: item.decision ? structuredClone(item.decision) : undefined,
+      handoff: item.handoff ? structuredClone(item.handoff) : undefined,
+      delivery: item.delivery ? structuredClone(item.delivery) : undefined,
+      factAssessmentRequired: item.factAssessmentRequired,
+      projectFactAssessed: Boolean(item.projectFactAssessment),
+      knowledgeMatches: item.knowledgeMatches ? structuredClone(item.knowledgeMatches) : undefined,
+      knowledgeCallbacks: item.knowledgeCallbacks ? structuredClone(item.knowledgeCallbacks) : undefined,
+      knowledgeCallbackDueAt: item.knowledgeCallbackDueAt,
+      criticalFacts: item.criticalFacts ? structuredClone(item.criticalFacts) : undefined,
+      criticalFactDisposition: item.criticalFactDisposition ? structuredClone(item.criticalFactDisposition) : undefined,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      dueAt: item.dueAt,
+      lastError: item.lastError
+    }));
+    const now = this.now().getTime();
+    const terminal = new Set<MessageProcessingRequirementStatus>(["sent", "not_required"]);
+    const items = requirements.map((item) => {
+      const overdueMs = terminal.has(item.status) ? 0 : Math.max(0, now - Date.parse(item.dueAt));
+      const observation = item.worker ? workerRuntime.get(item.worker.threadId) : undefined;
+      const worker = item.worker
+        ? {
+            ...item.worker,
+            ...(observation?.threadName ? { threadName: observation.threadName } : {}),
+            ...(observation?.workspace ? { workspace: observation.workspace } : {}),
+            ...(observation ? {
+              runtimeStatus: observation.status,
+              active: observation.status === "active" ? true : observation.status === "idle" ? false : undefined,
+              observedAt: observation.observedAt
+            } : {})
+          }
+        : undefined;
+      return {
+        ...item,
+        worker,
+        overdueMs,
+        missingOutcome: item.status === "processing" && observation?.status === "idle"
+      };
+    });
+    return {
+      updatedAt: nowIso(this.now),
+      counts: {
+        total: items.length,
+        requiredOpen: items.filter((item) => item.replyPolicy === "required" && !terminal.has(item.status)).length,
+        agentDecisionOpen: items.filter((item) => item.replyPolicy === "agent_decides" && !terminal.has(item.status)).length,
+        handedOff: items.filter((item) => item.status === "handed_off").length,
+        overdue: items.filter((item) => item.overdueMs > 0).length,
+        sendFailed: items.filter((item) => item.status === "send_failed").length,
+        missingOutcome: items.filter((item) => item.missingOutcome).length,
+        factAssessmentOpen: items.filter((item) => item.factAssessmentRequired && !item.projectFactAssessed).length,
+        knowledgeCallbackOpen: items.filter((item) => {
+          const callbacks = new Map((item.knowledgeCallbacks || []).map((callback) => [`${callback.knowledgeType}:${callback.knowledgeId}`, callback]));
+          return (item.knowledgeMatches || []).some((match) => !callbackIsFinal(callbacks.get(`${match.type}:${match.id}`)));
+        }).length,
+        criticalFactOpen: items.filter((item) => item.criticalFacts?.length && !item.criticalFactDisposition).length,
+        sent24h: items.filter((item) => item.status === "sent" && now - Date.parse(item.updatedAt) <= 24 * 60 * 60 * 1_000).length
+      },
+      items
+    };
   }
 
   board(
@@ -1361,6 +1502,11 @@ export class MessageProcessingBoardStore {
   }
 
   private persist(): void {
-    this.persistence.write(this.snapshot());
+    this.persistence.write({
+      schemaVersion: MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION,
+      updatedAt: nowIso(this.now),
+      requirements: [...this.requirements.values()],
+      planOrigins: [...this.planOrigins.values()]
+    } satisfies MessageProcessingBoardState);
   }
 }

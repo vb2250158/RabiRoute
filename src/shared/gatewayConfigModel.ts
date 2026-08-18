@@ -27,6 +27,10 @@ import {
   agentAdapterSupportsManagedTaskFeature,
   type AgentAdapterType
 } from "./agentAdapterCapabilities.js";
+import {
+  normalizeLanguageStyleBinding,
+  type LanguageStyleBinding
+} from "./languageStyle.js";
 
 export type { CodexPlanAssistantSession } from "./codexPlanAssistantSessions.js";
 export {
@@ -214,6 +218,7 @@ export type RouteProfileDefinition = {
   recentMessageLimits?: RecentMessageLimits;
   speechPushMode?: SpeechPushMode;
   speechTriggerKeywords?: string[];
+  languageStyle?: LanguageStyleBinding;
   pipelinePreset?: string;
   pipeline?: PipelineDefinition;
   agentRoleId?: string;
@@ -230,6 +235,7 @@ export type NapCatInstanceDefinition = {
   id: string;
   name?: string;
   enabled?: boolean;
+  autoLoginOnRabiStart?: boolean;
   gatewayPort: number;
   httpUrl: string;
   webuiUrl?: string;
@@ -312,6 +318,10 @@ export type GatewayDefinition = {
   codexThreadId?: string;
   codexThreadName?: string;
   codexCwd?: string;
+  dshSessionId?: string;
+  dshSessionName?: string;
+  dshCwd?: string;
+  dshBaseUrl?: string;
   codexPlanAssistantEnabled?: boolean;
   codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
@@ -350,6 +360,7 @@ export type GatewayDefinition = {
   recentMessageLimits?: RecentMessageLimits;
   speechPushMode?: SpeechPushMode;
   speechTriggerKeywords?: string[];
+  languageStyle?: LanguageStyleBinding;
   automationRules?: PersonaAutomationRuleDefinition[];
   notificationRules?: NotificationRuleDefinition[];
   roleNotificationRules?: Record<string, NotificationRuleDefinition[]>;
@@ -388,10 +399,16 @@ export type GatewayConfigModelOptions = {
 };
 
 const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu", "disabled"]);
-const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot"]);
+const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot", "dsh"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
 const codexReasoningEffortValues = new Set<CodexReasoningEffort>(["low", "medium", "high", "xhigh", "max"]);
+const dshSessionIdPattern = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeDshSessionId(value: unknown): string | undefined {
+  const raw = String(value || "").trim();
+  return raw && dshSessionIdPattern.test(raw) ? raw : undefined;
+}
 
 export function normalizeCodexReasoningEffort(value: unknown): CodexReasoningEffort | undefined {
   return codexReasoningEffortValues.has(value as CodexReasoningEffort)
@@ -1044,6 +1061,7 @@ export function normalizeNapCatInstances(definition: GatewayDefinition): NapCatI
       id,
       name: item.name?.trim() || id,
       enabled: item.enabled !== false,
+      autoLoginOnRabiStart: item.autoLoginOnRabiStart !== false,
       gatewayPort,
       httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
       webuiUrl: item.webuiUrl?.trim() || definition.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
@@ -1230,6 +1248,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const recentMessageLimits = normalizeRecentMessageLimits(definition.recentMessageLimits, definition.recentMessageLimit);
   const speechPushMode = normalizeSpeechPushMode(definition.speechPushMode);
   const speechTriggerKeywords = normalizeSpeechTriggerKeywords(definition.speechTriggerKeywords);
+  const languageStyle = normalizeLanguageStyleBinding(definition.languageStyle);
   const rawCodexThreadId = definition.codexThreadId?.trim() || "";
   const legacyCodexThreadName = rawCodexThreadId && !isCodexTaskId(rawCodexThreadId)
     ? rawCodexThreadId
@@ -1291,6 +1310,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
     codexCwd: normalizeCodexCwd(definition.codexCwd),
+    dshSessionId: normalizeDshSessionId(definition.dshSessionId),
+    dshSessionName: definition.dshSessionName?.trim() || undefined,
+    dshCwd: normalizeCodexCwd(definition.dshCwd),
+    dshBaseUrl: definition.dshBaseUrl?.trim() || undefined,
     codexPlanAssistantEnabled: agentAdapters.includes("codex")
       ? codexPlanAssistantEnabled
       : undefined,
@@ -1321,6 +1344,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     recentMessageLimits,
     speechPushMode,
     speechTriggerKeywords,
+    languageStyle,
     automationRules,
     notificationRules,
     dataDir,
@@ -1341,6 +1365,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
       recentMessageLimits,
       speechPushMode,
       speechTriggerKeywords,
+      languageStyle,
       pipelinePreset,
       pipeline,
       routeVariables,

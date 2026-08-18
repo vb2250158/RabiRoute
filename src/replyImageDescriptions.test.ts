@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   archiveReplyImageDescriptions,
   prepareReplyImageDescriptions,
+  type ReviewedReplySourceEvidence,
   type ReplyImageDescriptionSend
 } from "./replyImageDescriptions.js";
 import type { AgentReplyOptions } from "./outbox.js";
@@ -139,4 +140,93 @@ test("an unquoted send does not require or archive image descriptions", (t) => {
   const input = send([]);
   input.target.replyToMessageId = "";
   assert.equal(prepareReplyImageDescriptions(input, replyOptions), undefined);
+});
+
+test("tracked reviewed evidence can restore the exact quoted source when route history lookup misses it", (t) => {
+  const { routeDataDir, replyOptions } = fixture(t, { imageCount: 1 });
+  const historyPath = path.join(routeDataDir, "group-messages.jsonl");
+  const record = JSON.parse(fs.readFileSync(historyPath, "utf8").trim()) as Record<string, unknown>;
+  fs.rmSync(historyPath);
+  const reviewed: ReviewedReplySourceEvidence = {
+    routeId: "route-main",
+    sourceMessageId: "source-1",
+    groupId: "456",
+    instanceId: "qq-main",
+    record,
+    dataDirs: [routeDataDir],
+    reviewedAttachmentIds: ["source-1:image:1"]
+  };
+
+  const plan = prepareReplyImageDescriptions(
+    send(["截图展示配置表中的文字出现乱码，回复需要说明已按该图片核对问题。"]),
+    replyOptions,
+    reviewed
+  );
+  assert.equal(plan?.sourceMessageId, "source-1");
+  assert.equal(plan?.items[0]?.attachmentId, "source-1:image:1");
+});
+
+test("reviewed fallback evidence cannot cross the requested group or skip attachment review", (t) => {
+  const { routeDataDir, replyOptions } = fixture(t, { imageCount: 1 });
+  const historyPath = path.join(routeDataDir, "group-messages.jsonl");
+  const record = JSON.parse(fs.readFileSync(historyPath, "utf8").trim()) as Record<string, unknown>;
+  fs.rmSync(historyPath);
+  const reviewed: ReviewedReplySourceEvidence = {
+    routeId: "route-main",
+    sourceMessageId: "source-1",
+    groupId: "474222421",
+    instanceId: "qq-main",
+    record,
+    dataDirs: [routeDataDir],
+    reviewedAttachmentIds: ["source-1:image:1"]
+  };
+  assert.throws(
+    () => prepareReplyImageDescriptions(send(["截图展示配置文字乱码。"]), replyOptions, reviewed),
+    /reviewed source group 474222421 does not match target group 456/i
+  );
+  reviewed.groupId = "456";
+  reviewed.reviewedAttachmentIds = [];
+  assert.throws(
+    () => prepareReplyImageDescriptions(send(["截图展示配置文字乱码。"]), replyOptions, reviewed),
+    /image attachment source-1:image:1 was not reviewed/i
+  );
+});
+
+test("tracked reviewed evidence is authoritative over an unrelated same-id Route history copy", (t) => {
+  const { routeDataDir, mediaDir, replyOptions } = fixture(t, { imageCount: 2 });
+  const reviewedImage = path.join(mediaDir, "reviewed-image.png");
+  fs.writeFileSync(reviewedImage, Buffer.from([0x89, 0x50, 0x01]));
+  const record: Record<string, unknown> = {
+    time: 1,
+    messageId: "source-1",
+    groupId: 456,
+    userId: 789,
+    instanceId: "qq-main",
+    adapterType: "napcat",
+    rawMessage: "[CQ:image,file=reviewed-image.png]",
+    attachments: [{
+      id: "source-1:image:reviewed",
+      kind: "image",
+      name: "reviewed-image.png",
+      status: "ready",
+      path: reviewedImage,
+      sourceMessageId: "source-1"
+    }]
+  };
+  const reviewed: ReviewedReplySourceEvidence = {
+    routeId: "route-main",
+    sourceMessageId: "source-1",
+    groupId: "456",
+    instanceId: "qq-main",
+    record,
+    dataDirs: [routeDataDir],
+    reviewedAttachmentIds: ["source-1:image:reviewed"]
+  };
+  const plan = prepareReplyImageDescriptions(
+    send(["已审核截图显示配置文字乱码。"]),
+    replyOptions,
+    reviewed
+  );
+  assert.equal(plan?.items.length, 1);
+  assert.equal(plan?.items[0]?.attachmentId, "source-1:image:reviewed");
 });

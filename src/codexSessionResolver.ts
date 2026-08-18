@@ -26,7 +26,10 @@ export type CodexSessionResolverDependencies<TThread extends CodexSessionThread>
   scope: object;
   read: (threadId: string) => Promise<TThread | null>;
   list: (params: { title: string; cwd: string }) => Promise<TThread[]>;
-  create: () => Promise<TThread>;
+  create: (context?: {
+    reason: "missing" | "archived";
+    previousThread?: TThread;
+  }) => Promise<TThread>;
 };
 
 export type CodexSessionDeliveryDependencies<TThread extends CodexSessionThread> =
@@ -41,8 +44,8 @@ type IdempotentCreation = {
 
 const creationsByScope = new WeakMap<object, Map<string, IdempotentCreation>>();
 
-function creationKey(title: string, cwd: string): string {
-  return JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(cwd), title]);
+function creationKey(title: string, cwd: string, replacementForThreadId = ""): string {
+  return JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(cwd), title, replacementForThreadId]);
 }
 
 function uniquelyLatestThread<TThread extends CodexSessionThread>(matches: TThread[]): TThread | null {
@@ -66,9 +69,10 @@ function uniquelyLatestThread<TThread extends CodexSessionThread>(matches: TThre
 async function createIdempotently<TThread extends CodexSessionThread>(
   title: string,
   cwd: string,
-  dependencies: CodexSessionResolverDependencies<TThread>
+  dependencies: CodexSessionResolverDependencies<TThread>,
+  context: { reason: "missing" | "archived"; previousThread?: TThread }
 ): Promise<TThread> {
-  const key = creationKey(title, cwd);
+  const key = creationKey(title, cwd, context.previousThread?.id);
   let creations = creationsByScope.get(dependencies.scope);
   if (!creations) {
     creations = new Map();
@@ -81,7 +85,7 @@ async function createIdempotently<TThread extends CodexSessionThread>(
   }
   if (existing) creations.delete(key);
 
-  const entry: IdempotentCreation = { promise: Promise.resolve().then(dependencies.create) };
+  const entry: IdempotentCreation = { promise: Promise.resolve().then(() => dependencies.create(context)) };
   creations.set(key, entry);
   entry.promise.then(
     () => { entry.settledAt = Date.now(); },
@@ -107,7 +111,6 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   dependencies: CodexSessionResolverDependencies<TThread>
 ): Promise<CodexSessionResolution<TThread>> {
   const threadId = params.threadId?.trim() || "";
-  let archivedBinding: TThread | null = null;
   if (isCodexTaskId(threadId)) {
     const exact = await dependencies.read(threadId);
     // Desktop's SQLite title is mutable metadata: after a routed turn it can
@@ -118,12 +121,18 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
       if (exact.cwd && !sameCodexWorkspace(exact.cwd, params.cwd)) {
         return { kind: "workspace-mismatch", thread: exact };
       }
-      // An archived persisted binding must never cause a replacement task to
-      // be created. It may, however, be an obsolete duplicate that the user
-      // archived after an earlier bad binding. In that case continue with the
-      // normal same-name lookup and reuse an existing active task.
-      if (exact.archived) archivedBinding = exact;
-      else return { kind: "id", thread: exact };
+      if (!exact.archived) return { kind: "id", thread: exact };
+      // Archived chat tasks are terminal history. Read-only lookup reports the
+      // archived binding, while a real delivery/save point creates one new
+      // task and lets the caller persist that replacement id.
+      if (!params.createIfMissing) return { kind: "archived", thread: exact };
+      return {
+        kind: "created",
+        thread: await createIdempotently(params.title, params.cwd, dependencies, {
+          reason: "archived",
+          previousThread: exact
+        })
+      };
     }
   }
 
@@ -136,12 +145,11 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
     return { kind: "ambiguous", candidates: matches };
   }
   if (matches[0]) return { kind: "name", thread: matches[0] };
-  if (archivedBinding) return { kind: "archived", thread: archivedBinding };
   if (!params.createIfMissing) return { kind: "missing" };
 
   return {
     kind: "created",
-    thread: await createIdempotently(params.title, params.cwd, dependencies)
+    thread: await createIdempotently(params.title, params.cwd, dependencies, { reason: "missing" })
   };
 }
 

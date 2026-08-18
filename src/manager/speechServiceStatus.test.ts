@@ -53,7 +53,7 @@ test("speech status exposes only normalized runtime capabilities", async () => {
   assert.equal(result.speakerIdentity?.storesRawEnrollmentAudio, false);
 });
 
-test("speech status probes health and capabilities concurrently", async () => {
+test("speech status confirms health before requesting expensive capabilities", async () => {
   let capabilityRequested = false;
   let releaseHealth = (_response: Response) => {};
   const healthResponse = new Promise<Response>(resolve => {
@@ -82,7 +82,28 @@ test("speech status probes health and capabilities concurrently", async () => {
   }));
   await inspection;
 
-  assert.equal(capabilityStartedBeforeHealthResolved, true);
+  assert.equal(capabilityStartedBeforeHealthResolved, false);
+  assert.equal(capabilityRequested, true);
+});
+
+test("speech runtime readiness can skip capability discovery", async () => {
+  let capabilityRequested = false;
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/v1/capabilities")) capabilityRequested = true;
+    return new Response(JSON.stringify({ ok: true, service: "RabiSpeech" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+
+  const result = await inspectLocalSpeechService("http://127.0.0.1:8781", {
+    fetchImpl,
+    includeCapabilities: false
+  });
+
+  assert.equal(result.state, "online");
+  assert.equal(capabilityRequested, false);
 });
 
 test("speech status keeps offline state inspectable", async () => {
@@ -91,4 +112,20 @@ test("speech status keeps offline state inspectable", async () => {
   assert.equal(result.state, "offline");
   assert.match(result.error || "", /connect refused/);
   assert.deepEqual(result.providers, { tts: [], asr: [] });
+});
+
+test("speech status explains which readiness endpoint timed out", async () => {
+  const fetchImpl = ((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+  })) as typeof fetch;
+
+  const result = await inspectLocalSpeechService("http://127.0.0.1:8781", {
+    fetchImpl,
+    timeoutMs: 1,
+    includeCapabilities: false
+  });
+
+  assert.equal(result.state, "offline");
+  assert.match(result.error || "", /\/health/);
+  assert.match(result.error || "", /1 毫秒/);
 });

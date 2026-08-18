@@ -45,6 +45,16 @@ export type ReplyImageDescriptionPlan = {
   }>;
 };
 
+export type ReviewedReplySourceEvidence = {
+  routeId: string;
+  sourceMessageId: string;
+  groupId: string;
+  instanceId?: string;
+  record: Record<string, unknown>;
+  dataDirs: string[];
+  reviewedAttachmentIds: string[];
+};
+
 type ResolvedRoute = {
   runtime: AgentReplyRuntime;
   profile?: AgentReplyRouteProfile;
@@ -53,6 +63,7 @@ type ResolvedRoute = {
 type LocatedMessage = {
   record: Record<string, unknown>;
   dataDirs: string[];
+  reviewedFallback?: ReviewedReplySourceEvidence;
 };
 
 function text(value: unknown): string {
@@ -141,6 +152,37 @@ function locateMessage(
   return found ? { record: found.record, dataDirs } : undefined;
 }
 
+function locateReviewedMessage(
+  evidence: ReviewedReplySourceEvidence | undefined,
+  routeId: string,
+  messageId: string,
+  groupId: string,
+  instanceId: string
+): LocatedMessage | undefined {
+  if (!evidence) return undefined;
+  if (text(evidence.routeId) !== routeId) {
+    throw new Error(`Reviewed source Route ${text(evidence.routeId) || "(missing)"} does not match selected Route ${routeId}.`);
+  }
+  if (text(evidence.sourceMessageId) !== messageId) {
+    throw new Error(`Reviewed source message ${text(evidence.sourceMessageId) || "(missing)"} does not match quoted message ${messageId}.`);
+  }
+  if (text(evidence.groupId) !== groupId) {
+    throw new Error(`Reviewed source group ${text(evidence.groupId) || "(missing)"} does not match target group ${groupId}.`);
+  }
+  if (instanceId && text(evidence.instanceId) !== instanceId) {
+    throw new Error(`Reviewed source instance ${text(evidence.instanceId) || "(missing)"} does not match target instance ${instanceId}.`);
+  }
+  if (text(evidence.record.messageId ?? evidence.record.message_id) !== messageId
+    || text(evidence.record.groupId ?? evidence.record.group_id) !== groupId
+    || (instanceId && text(evidence.record.instanceId) !== instanceId)) {
+    throw new Error(`Reviewed source record does not match the quoted message target.`);
+  }
+  if (!Array.isArray(evidence.dataDirs) || evidence.dataDirs.length === 0) {
+    throw new Error(`Reviewed source record has no managed data directory.`);
+  }
+  return { record: evidence.record, dataDirs: evidence.dataDirs, reviewedFallback: evidence };
+}
+
 function imageSegmentCount(record: Record<string, unknown>): number {
   const structured = Array.isArray(record.segments)
     ? record.segments.filter((segment) => segment && typeof segment === "object" && !Array.isArray(segment)
@@ -206,7 +248,8 @@ function concreteDescription(value: string, index: number): string {
 
 export function prepareReplyImageDescriptions(
   input: ReplyImageDescriptionSend,
-  options: AgentReplyOptions
+  options: AgentReplyOptions,
+  reviewedSource?: ReviewedReplySourceEvidence
 ): ReplyImageDescriptionPlan | undefined {
   if (input.channel !== "napcat" || text(input.target.target) !== "group") return undefined;
   const replyToMessageId = text(input.target.replyToMessageId);
@@ -218,7 +261,9 @@ export function prepareReplyImageDescriptions(
   }
   const groupId = text(input.target.groupId);
   const instanceId = text(input.target.instanceId);
-  const located = locateMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
+  const located = reviewedSource
+    ? locateReviewedMessage(reviewedSource, input.routeId, replyToMessageId, groupId, instanceId)
+    : locateMessage(options, input.routeId, replyToMessageId, groupId, instanceId);
   if (!located) {
     throw new Error(
       `Referenced QQ message ${replyToMessageId} was not found in the selected Route history. `
@@ -237,6 +282,23 @@ export function prepareReplyImageDescriptions(
       `params.replyImageDescriptions must contain ${imageCount} descriptions, one for each image in the referenced QQ message; `
       + `received ${input.replyImageDescriptions.length}. Preserve the original image order.`
     );
+  }
+  if (located.reviewedFallback) {
+    const reviewedIds = new Set(located.reviewedFallback.reviewedAttachmentIds.map(text));
+    const imageAttachments = (Array.isArray(located.record.attachments) ? located.record.attachments : [])
+      .flatMap((raw) => raw && typeof raw === "object" && !Array.isArray(raw)
+        ? [raw as Record<string, unknown>]
+        : [])
+      .filter((item) => text(item.kind).toLowerCase() === "image");
+    for (const attachment of imageAttachments) {
+      const attachmentId = text(attachment.id);
+      if (!attachmentId || !reviewedIds.has(attachmentId)) {
+        throw new Error(`Reviewed source image attachment ${attachmentId || "(missing)"} was not reviewed.`);
+      }
+    }
+    if (imageAttachments.length !== imageCount || reviewedIds.size !== imageAttachments.length) {
+      throw new Error(`Reviewed source image evidence conflicts with the formal image count.`);
+    }
   }
   const images = readableImages(located.record, located.dataDirs, imageCount);
   return {

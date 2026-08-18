@@ -6,7 +6,16 @@ export function slashPath(value: string): string {
 }
 
 export function normalizePathForComparison(value: string): string {
-  const resolved = path.resolve(value);
+  let comparable = value;
+  if (process.platform === "win32") {
+    const windowsPath = value.replace(/\//g, "\\");
+    comparable = /^\\\\\?\\UNC\\/i.test(windowsPath)
+      ? `\\\\${windowsPath.slice(8)}`
+      : /^\\\\\?\\/i.test(windowsPath)
+        ? windowsPath.slice(4)
+        : windowsPath;
+  }
+  const resolved = path.resolve(comparable);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 

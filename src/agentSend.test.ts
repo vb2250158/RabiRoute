@@ -92,6 +92,15 @@ test("strict send contract rejects missing explicit channel parameters", () => {
     payload: { type: "text", text: "hello" },
     replyContext: { targetType: "group" }
   } as unknown as AgentSendRequest), /unsupported fields: replyContext/);
+  assert.throws(() => prepareAgentSendRequest({
+    deliveryId: "send-invalid-style-mode",
+    sender: { agentType: "codex", sessionId: "thread-invalid-style-mode" },
+    routeId: "route-main",
+    channel: "napcat",
+    styleValidation: 2,
+    params: { target: "group", groupId: "456", replyToMessageId: "" },
+    payload: { type: "text", text: "hello" }
+  }), /styleValidation must be 1 .* or 0/);
 });
 
 test("NapCat group sends require an explicit reply choice", () => {

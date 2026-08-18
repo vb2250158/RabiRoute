@@ -368,6 +368,7 @@ def create_app(
     tts_cleanup_deadline: asyncio.TimerHandle | None = None
     tts_cleanup_task: asyncio.Task[None] | None = None
     tts_cleanup_closed = False
+    provider_warmup_gate = asyncio.Event()
 
     def cancel_virtual_audio_expiry(stream_id: str | None = None) -> None:
         targets = [stream_id] if stream_id else list(virtual_audio_expiry)
@@ -456,13 +457,18 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_api: FastAPI):
-        nonlocal tts_cleanup_closed
+        nonlocal tts_cleanup_closed, tts_cleanup_task
         async def warmup_providers() -> None:
             try:
+                await provider_warmup_gate.wait()
+                # Let the health response flush before Python/model imports can
+                # briefly hold the GIL on a cold Windows filesystem.
+                await asyncio.sleep(1.0)
                 await providers.warmup()
             except Exception:
                 logger.exception("RabiSpeech provider warmup failed; providers remain available for a later request.")
 
+        fallback_warmup = asyncio.get_running_loop().call_later(30.0, provider_warmup_gate.set)
         provider_warmup_task = asyncio.create_task(
             warmup_providers(),
             name="rabispeech-provider-warmup",
@@ -470,12 +476,15 @@ def create_app(
         await remote_audio.start()
         mixer_keepalive.start()
         await microphone.restore()
-        await asyncio.to_thread(tts_audio_stores.cleanup)
-        arm_tts_cleanup_deadline()
+        tts_cleanup_task = asyncio.create_task(
+            run_tts_cleanup(),
+            name="rabispeech-tts-cache-initial-cleanup",
+        )
         try:
             yield
         finally:
             tts_cleanup_closed = True
+            fallback_warmup.cancel()
             cancel_virtual_audio_expiry()
             cancel_tts_cleanup_deadline()
             if tts_cleanup_task is not None:
@@ -497,14 +506,10 @@ def create_app(
 
     @api.get("/health")
     async def health() -> dict[str, object]:
+        provider_warmup_gate.set()
         return {
             "ok": True,
             "service": "RabiSpeech",
-            "local_only": current.server.host in {"127.0.0.1", "localhost", "::1"} and providers.local_only(),
-            "providers": public_capabilities(providers.capabilities()),
-            "microphone": {"running": microphone.snapshot()["running"], "state": microphone.snapshot()["state"]},
-            "playback": {"mixer_session_active": mixer_keepalive.active},
-            "audio_stream": remote_audio.snapshot(),
         }
 
     @api.get("/v1/events")
@@ -514,11 +519,12 @@ def create_app(
 
     @api.get("/v1/capabilities")
     async def capabilities() -> dict[str, object]:
+        provider_capabilities = providers.capabilities()
         return {
             "object": "rabispeech.capabilities",
-            "providers": public_capabilities(providers.capabilities()),
+            "providers": public_capabilities(provider_capabilities),
             "api": api_index(),
-            "relay_safe": providers.local_only(),
+            "relay_safe": _provider_capabilities_are_local(provider_capabilities),
             "streaming": False,
             "microphone": {"running": microphone.snapshot()["running"], "state": microphone.snapshot()["state"], "scope": "loopback-only"},
             "audio_stream": remote_audio.snapshot(),
@@ -1083,6 +1089,19 @@ def create_app(
         )
 
     return api
+
+
+def _provider_capabilities_are_local(capabilities: dict[str, object]) -> bool:
+    for kind in ("tts", "asr"):
+        providers = capabilities.get(kind)
+        if not isinstance(providers, dict):
+            continue
+        for detail in providers.values():
+            if not isinstance(detail, dict) or detail.get("enabled", True) is False:
+                continue
+            if detail.get("local_only") is False:
+                return False
+    return True
 
 
 def _persona_tts_cache_dirs(roles_root: Path) -> list[Path]:

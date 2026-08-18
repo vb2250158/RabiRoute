@@ -31,6 +31,7 @@
 ## 本机安装、配置与恢复
 
 - [配置与接入](configuration.md) — 配置字段、消息端和处理端的现行说明。
+- [常驻性能记录与查看](performance-monitoring.md) — **现行指南**。按开关持续记录 Manager、Gateway 和 WebGUI 的近期性能，查看趋势、慢操作和独立 JSONL 文件。
 - [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — Windows 安装、启动和打包方式。
 - [NapCat 无值守](napcat-unattended.md) — QQ 登录状态、快速登录、Manager 恢复和守护边界。
@@ -66,7 +67,7 @@
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [飞书独立消息端接入](feishu-integration.md) — 飞书应用事件订阅、签名/加密回调、持久去重与来源 chat 回发。
 - [语音交互工作站](voice-interaction-workstation.md) — 历史工作站接线记录；FenneNote/OumuQ 已停止维护，现行入口是 RabiPC + RabiSpeech。
-- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、热投递/人格关键词唤醒、人格声线与语言、双向 ASR/TTS 记录、不透明声纹/聚类证据和 RabiLink 中转。
+- [RabiSpeech 本机 TTS / ASR 服务](rabispeech-plugin.md) — 本机直接 API、Windows 系统划词朗读、热投递/人格关键词唤醒、人格声线与语言、双向 ASR/TTS 记录、不透明声纹/聚类证据和 RabiLink 中转。
 - [远端调用 TTS 与 ASR](user-guide/speech-api.md) — 应用 token、目标 PC、可复制命令、验收与错误恢复。
 - [Rabi 语音客户端](../desktop/rabi-voice-client/README.md) — 把会议室 Windows 电脑作为局域网远程麦克风和喇叭，切句与模型仍留在 RabiSpeech 主机。
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 使用模型管理页按需下载，并查看每个 TTS/ASR 模型的来源、隔离环境与验证要求。

@@ -31,6 +31,7 @@ This directory contains current guides, experimental integrations, designs, rese
 ## Local installation, configuration, and recovery
 
 - [Configuration](configuration_en.md) — Current fields, message inputs, and handler settings.
+- [Resident performance recording and inspection](performance-monitoring_en.md) — **Current guide** for optional continuous Manager, Gateway, and WebGUI metrics, trends, slow operations, and independent JSONL files.
 - [Troubleshooting](troubleshooting_en.md) — NapCat, encoding, Codex Desktop task ownership, models, and approval boundaries.
 - [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — Windows installation, startup, and packaging.
 - [Unattended NapCat](napcat-unattended_en.md) — QQ login state, quick login, Manager recovery, and supervision boundaries.
@@ -66,7 +67,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [WeCom integration](wecom-integration_en.md)
 - [Feishu endpoint integration](feishu-integration_en.md) — enterprise-app event callbacks, signature/encryption checks, durable deduplication, and source-chat text replies.
 - [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.
-- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, opaque voiceprint/cluster evidence, RabiPC, and RabiLink relay.
+- [RabiSpeech local TTS / ASR service](rabispeech-plugin_en.md) — direct APIs, Windows system-level selected-text reading, hot/persona-keyword delivery, persona voice and language, bidirectional ASR/TTS records, opaque voiceprint/cluster evidence, RabiPC, and RabiLink relay.
 - [Call TTS and ASR remotely](user-guide/speech-api_en.md) — application token, target PC, copyable commands, acceptance, and error recovery.
 - [Rabi Voice Client](../desktop/rabi-voice-client/README_en.md) — use a meeting-room Windows PC as a LAN microphone and speaker while segmentation and models stay on the RabiSpeech host.
 - [Local speech model downloads](local-speech-model-downloads_en.md) — use Model Management for on-demand weights and review each TTS/ASR model's source, isolated runtime, and validation requirements.

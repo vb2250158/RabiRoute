@@ -15,9 +15,8 @@ export type RolePlanPageCounts = {
     executing: number;
     qa: number;
     waitingPackage: number;
-    waitingExternal: number;
     approval: number;
-    pending: number;
+    manualVerification: number;
     paused: number;
     completed: number;
     archived: number;
@@ -34,6 +33,10 @@ export type RolePlanPage = {
       status: string;
       count: number;
       palette: RolePlan["presentation"]["palette"];
+    }>;
+    tags: Array<{
+      tag: string;
+      count: number;
     }>;
   };
 };
@@ -100,19 +103,21 @@ export type RoleMemoryPage = {
 };
 
 export const ROLE_PLAN_PAGE_SIZE = 8;
-export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 50;
+export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 250;
 export const ROLE_MEMORY_BACKGROUND_PAGE_SIZE = 100;
 
 export type RolePlanPageFilter = {
   view?: "current" | "plans" | "archived";
   query?: string;
-  sort?: "status" | "updated";
+  sort?: "status" | "updated" | "importance" | "urgency";
   statuses?: string[];
+  tags?: string[];
+  includeFacets?: boolean;
 };
 
 type RolePlanSummary = Pick<
   RolePlan,
-  "id" | "title" | "status" | "priority" | "kind" | "project" | "secretaryBinding" | "taskBinding" | "createdAt" | "updatedAt" | "keywords" | "presentation"
+  "id" | "title" | "status" | "importance" | "urgency" | "priority" | "kind" | "project" | "secretaryBinding" | "taskBinding" | "createdAt" | "updatedAt" | "keywords" | "presentation"
 > & {
   attachmentCount: number;
   stepCount: number;
@@ -139,9 +144,20 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
       ...plan,
       presentation: {
         ...plan.presentation,
+        statusLevel: Number.isFinite(plan.presentation.statusLevel)
+          ? plan.presentation.statusLevel
+          : plan.presentation.sortBucket,
         sortBucket: Number.isFinite(plan.presentation.sortBucket) ? plan.presentation.sortBucket : -1,
         views: Array.isArray(plan.presentation.views) ? plan.presentation.views : [],
         palette: normalizePlanPresentationPalette(plan.presentation.palette),
+        importance: plan.presentation.importance ? {
+          ...plan.presentation.importance,
+          palette: normalizePlanPresentationPalette(plan.presentation.importance.palette)
+        } : undefined,
+        urgency: plan.presentation.urgency ? {
+          ...plan.presentation.urgency,
+          palette: normalizePlanPresentationPalette(plan.presentation.urgency.palette)
+        } : undefined,
         approval: {
           ...plan.presentation.approval,
           state: plan.presentation.approval.state || (plan.presentation.approval.enabled ? "ready" : "none"),
@@ -214,6 +230,8 @@ export async function loadRolePlanPage(
   if (filter.query?.trim()) params.set("query", filter.query.trim());
   if (filter.sort && filter.sort !== "status") params.set("sort", filter.sort);
   for (const status of filter.statuses || []) params.append("status", status);
+  for (const tag of filter.tags || []) params.append("tag", tag);
+  if (filter.includeFacets === false) params.set("facets", "0");
   const page = await managerData<Omit<RolePlanPage, "items"> & { items: RolePlanSummary[] }>(
     `/api/roles/${encodeURIComponent(roleId)}/plans?${params.toString()}`
   );

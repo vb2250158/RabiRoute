@@ -72,7 +72,7 @@ PUT  /v1/playback/settings
 POST /v1/playback/stop
 ```
 
-`/v1/microphone/*` 是主机设备控制面，只供回环 RabiPC/Manager 使用，不在 RabiLink 公网语音 allowlist 中。启动后录音流由 RabiSpeech 进程持有；关闭浏览器不会停止。`microphone.json` 持久保存主机设备、阈值、ASR 模型和内部会话；旧 `route_id` 会迁移为 `null`。Manager 根据 Route 订阅协调启停：任意订阅存在时保持监听，最后一个订阅关闭后才停止。运行中可通过 `PUT /v1/microphone/settings` 更新并恢复监听。
+`/v1/microphone/*` 是主机设备控制面，只供回环 RabiPC/Manager 使用，不在 RabiLink 公网语音 allowlist 中。启动后录音流由 RabiSpeech 进程持有；关闭浏览器不会停止。`microphone.json` 持久保存主机设备、阈值、ASR 模型、ASR 串流开关和内部会话；旧 `route_id` 会迁移为 `null`。语音服务 ASR 页的“开启 ASR 串流”是主机级总开关；开启后持续录音和识别，关闭后立即停止持续采集，手动上传音频识别仍可使用。Route 订阅不控制录音，只决定识别结果分发给哪些 Route；没有订阅时仍持续识别并保存主机记录。运行中可通过 `PUT /v1/microphone/settings` 更新设置。
 
 `barge_in_mode` 默认是 `off`。默认模式继续在主机播放期间抑制 VAD，避免夜雨自己的 TTS 回流。只有当前输入链已经用真实设备验证 AEC，或麦克风与播放输出有可靠物理隔离时，才可显式设置为 `echo_protected`。该模式在输入连续超过 VAD 阈值达到 `barge_in_confirm_ms`（默认 `200 ms`）时同步调用全局播放队列的 `stop(clear_pending=true)`：当前音频立即停止、旧队列全部取消，但触发打断的 PCM 不会被丢弃，仍会在语段结束后完成完整 ASR、声纹分析与 Route 投递。停止播放失败时会发出 `barge_in_failed`，丢弃这个不可信候选片段并恢复防回流抑制。
 

@@ -22,7 +22,7 @@ function plan(patch: Partial<PlanItem>): PlanItem {
       {
         id: "matching-tests",
         title: "完成匹配测试与同步提交",
-        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        detail: "匹配测试 1/1 通过；Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
         status: "已完成"
       },
       { id: "package", title: "等待打包", status: "进行中" }
@@ -95,7 +95,7 @@ test("PangHu package lifecycle stays running until formal sync, submit, and conf
     waitingFor: "等待本轮目标包构建完成；需回读版本、渠道、构建编号和Release r225253纳入证明。",
     steps: [
       { id: "implement", title: "完成实现", status: "已完成" },
-      { id: "development-validation-release", title: "完成Release验证与提交", status: "已完成" },
+      { id: "development-validation-release", title: "完成Release验证与提交", detail: "Release matching test 1/1 passed。", status: "已完成" },
       {
         id: "package",
         title: "等待目标包并证明纳入 Release r225253",
@@ -105,6 +105,54 @@ test("PangHu package lifecycle stays running until formal sync, submit, and conf
     ]
   });
   assert.equal(planIsWaitingForPackage(realPlanShape), true);
+});
+
+test("a completed delivery remains waiting for a target package when a prior package step was closed by a failed reconcile", () => {
+  const reconciled = plan({
+    currentStepId: "program-verify-freeze-evidence",
+    currentStep: "补齐冻结包前交付合同的机器可识别字段。",
+    nextAction: "原任务补齐严格审计可识别字段；满足门槛后再等待目标包。",
+    steps: [
+      { id: "implement", title: "完成实现", status: "已完成" },
+      {
+        id: "delivery-closure",
+        title: "完成 Main/Release 同步、SVN 提交与无冲突回读",
+        detail: "Main r225142；Release r225143；Art 不适用。精确 changed paths 已回读；EditMode 6/6 通过；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
+      {
+        id: "package-onparser-target",
+        title: "等待目标包纳入",
+        detail: "目标包需提供版本、渠道、构建编号和包含 Release r225143 的纳入证明。",
+        status: "未开始"
+      },
+      { id: "program-verify-freeze-evidence", title: "补齐冻结包前交付合同", status: "进行中" }
+    ]
+  });
+
+  assert.equal(planIsWaitingForPackage(reconciled), true);
+});
+
+test("a current package step ignores a stale QA step once the delivery closure is complete", () => {
+  const accountIsolation = plan({
+    currentStepId: "package-account-save-identity-target",
+    currentStep: "等待账号隔离目标包纳入。",
+    nextAction: "记录目标包版本、渠道、构建编号及包含 Release r226352 的纳入证明。",
+    waitingFor: "目标包版本、渠道、构建编号及包含 Release r226352 的构建输入或 manifest 纳入证明。",
+    steps: [
+      { id: "implement-test", title: "实施账号归属保护并完成非Unity回归", detail: "Main与Release目标筛选均 matched=8、passed=8、failed=0。", status: "已完成" },
+      {
+        id: "svn-release-package",
+        title: "完成Main/Release同步提交与无冲突回读",
+        detail: "Main r226349；Release r226352；Art不适用。精确十文件范围无本地diff、无文本/属性/树冲突或obstruction；svn status --show-updates 无 *。",
+        status: "已完成"
+      },
+      { id: "qa-acceptance", title: "目标包交付QA并等待双账号验收", status: "未开始" },
+      { id: "package-account-save-identity-target", title: "等待账号隔离目标包纳入", status: "进行中" }
+    ]
+  });
+
+  assert.equal(planIsWaitingForPackage(accountIsolation), true);
 });
 
 test("package waiting requires the complete machine-readable conflict readback contract", () => {
@@ -128,11 +176,53 @@ test("package waiting requires the complete machine-readable conflict readback c
     steps: ambiguous.steps.map((step) => step.id === "matching-tests"
       ? {
           ...step,
-          detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。"
+          detail: "匹配测试 1/1 通过；Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。"
         }
       : step)
   });
   assert.equal(planIsWaitingForPackage(complete), true);
+});
+
+test("package waiting keeps a missing matching-test result in progress even when sync and readback are complete", () => {
+  const noTestResult = plan({
+    waitingFor: "等待目标包身份",
+    steps: [
+      { id: "implement", title: "完成实现", status: "已完成" },
+      {
+        id: "delivery-closure",
+        title: "完成 Main/Release 同步、SVN 提交与无冲突回读",
+        detail: "Main r225142；Release r225143；Art 不适用。精确 changed paths 已回读；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
+      { id: "package", title: "等待目标包", status: "进行中" }
+    ]
+  });
+
+  assert.equal(planIsWaitingForPackage(noTestResult), false);
+});
+
+test("package waiting accepts an EditMode passed/failed result recorded with a run identifier", () => {
+  const editModeResult = plan({
+    waitingFor: "等待目标包身份",
+    steps: [
+      { id: "implement", title: "完成实现", status: "已完成" },
+      {
+        id: "validate-main-release",
+        title: "完成Main/Release匹配测试与Unity编译检查",
+        detail: "Main EditMode runId=display-main：1 passed/0 failed；Release EditMode：1 passed/0 failed。",
+        status: "已完成"
+      },
+      {
+        id: "sync-submit-readback",
+        title: "完成Main/Release同步、SVN提交与无冲突回读",
+        detail: "Main r225928、Release r225929；Art不适用；精确四路径已回读；无文本/属性/树冲突或obstruction，svn status --show-updates 无 *。",
+        status: "已完成"
+      },
+      { id: "package", title: "等待目标包", status: "进行中" }
+    ]
+  });
+
+  assert.equal(planIsWaitingForPackage(editModeResult), true);
 });
 
 test("non-Unity logic and deferred UI runtime acceptance do not block package waiting after delivery closure", () => {
@@ -180,7 +270,7 @@ test("target package inclusion moves the structured QA phase from package waitin
       {
         id: "matching-tests",
         title: "完成同步提交",
-        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        detail: "匹配测试 1/1 通过；Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
         status: "已完成"
       },
       {

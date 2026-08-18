@@ -177,29 +177,29 @@ test("plan presentation blocks only complete pending approvals and keeps other o
     foreground: "#b42318"
   });
   assert.equal(planPresentation(blocked).approval.enabled, true);
-  assert.equal(planPresentation(executableFailure).status, "正在执行");
+  assert.equal(planPresentation(executableFailure).status, "进行中");
   assert.equal(planPresentation(executableFailure).tone, "running");
   assert.equal(planPresentation(executableFailure).approval.enabled, false);
   assert.equal(planPresentation(awaitingOwnerAnswer).status, "待审批");
   assert.equal(planPresentation(awaitingOwnerAnswer).tone, "blocked");
   assert.equal(planPresentation(awaitingOwnerAnswer).approval.state, "ready");
-  assert.equal(planPresentation(qa).status, "等待 QA 验收");
+  assert.equal(planPresentation(qa).status, "等待 QA");
   assert.equal(planPresentation(qa).tone, "qa");
   assert.deepEqual(planPresentation(qa).palette, {
-    accent: "#8e63c7",
+    accent: "#7c3aed",
     background: "#f3e8ff",
-    foreground: "#7e22ce"
+    foreground: "#6d28d9"
   });
   assert.equal(planPresentation(qa).approval.state, "none");
   assert.equal(planPresentation(qa).approval.enabled, false);
-  assert.equal(planPresentation(qaWithLegacyBlocker).status, "等待 QA 验收");
+  assert.equal(planPresentation(qaWithLegacyBlocker).status, "等待 QA");
   assert.equal(planPresentation(qaWithLegacyBlocker).tone, "qa");
   assert.equal(planPresentation(qaWithLegacyBlocker).approval.enabled, false);
-  assert.equal(planPresentation(approvedImplementation).status, "正在执行");
+  assert.equal(planPresentation(approvedImplementation).status, "进行中");
   assert.equal(planPresentation(approvedImplementation).approval.state, "none");
-  assert.equal(planPresentation(implementationMentioningQa).status, "正在执行");
+  assert.equal(planPresentation(implementationMentioningQa).status, "进行中");
   assert.equal(planPresentation(implementationMentioningQa).tone, "running");
-  assert.equal(planPresentation(developmentValidation).status, "正在执行");
+  assert.equal(planPresentation(developmentValidation).status, "进行中");
   assert.equal(planPresentation(developmentValidation).tone, "running");
   assert.equal(planPresentation(awaitingPackage).status, "等待打包");
   assert.equal(planPresentation(awaitingPackage).tone, "waiting_package");
@@ -209,6 +209,40 @@ test("plan presentation blocks only complete pending approvals and keeps other o
     background: "#eff6ff",
     foreground: "#1d4ed8"
   });
+  const manualVerification = plan({
+    id: "manual-verification",
+    title: "UI 人工核验",
+    currentStepId: "manual-verify-window-layout",
+    currentStep: "待人工核验：确认窗口布局与交互。",
+    waitingFor: "人工视觉与交互核验结果",
+    steps: [{ id: "delivery-closure", title: "完成开发侧实现、测试与无冲突回读", status: "已完成" }, {
+      id: "manual-verify-window-layout",
+      title: "待人工核验：确认窗口布局与交互",
+      status: "进行中"
+    }]
+  });
+  assert.equal(planPresentation(manualVerification).status, "待人工核验");
+  assert.equal(planPresentation(manualVerification).tone, "manual_verification");
+  assert.deepEqual(planPresentation(manualVerification).palette, {
+    accent: "#f97316",
+    background: "#fff7ed",
+    foreground: "#c2410c"
+  });
+  const futureManualVerification = plan({
+    id: "future-manual-verification",
+    title: "开发侧验证仍在进行",
+    currentStepId: "program-verify-delivery",
+    currentStep: "继续完成代码、静态检查与交付证据回读。",
+    nextAction: "满足交付门槛后转等待打包或待人工核验。",
+    steps: [{
+      id: "program-verify-delivery",
+      title: "完成开发侧交付验证",
+      detail: "当前仍需执行非 Unity 回归与提交回读。",
+      status: "进行中"
+    }]
+  });
+  assert.equal(planPresentation(futureManualVerification).status, "进行中");
+  assert.equal(planPresentation(futureManualVerification).tone, "running");
   assert.equal(planPresentation(completed).status, "已完成");
   assert.equal(planPresentation(completed).tone, "done");
   assert.deepEqual(planPresentation(completed).views, ["plans"]);
@@ -222,14 +256,14 @@ test("plan presentation blocks only complete pending approvals and keeps other o
   assert.equal(planPresentation(paused).tone, "paused");
   assert.deepEqual(planPresentation(paused).views, ["plans"]);
   assert.deepEqual(planPresentation(paused).palette, {
-    accent: "#64748b",
-    background: "#f1f5f9",
-    foreground: "#475569"
+    accent: "#8795a1",
+    background: "#eef1f4",
+    foreground: "#687786"
   });
   assert.equal(planPresentation(paused).approval.enabled, false);
 });
 
-test("plan presentation derives an environment wait from the authoritative current wait fields", () => {
+test("plan presentation hides an environment reason behind the public paused state", () => {
   const item = plan({
     id: "waiting-environment",
     title: "Waiting environment",
@@ -243,8 +277,25 @@ test("plan presentation derives an environment wait from the authoritative curre
     }]
   });
 
-  assert.equal(planPresentation(item).status, "等待测试环境");
-  assert.equal(planPresentation(item).tone, "waiting_external");
+  assert.equal(planPresentation(item).status, "暂停");
+  assert.equal(planPresentation(item).tone, "paused");
+  assert.deepEqual(planPresentation(item).palette, {
+    accent: "#8795a1",
+    background: "#eef1f4",
+    foreground: "#687786"
+  });
+});
+
+test("unstarted plans use the public paused state and gray palette", () => {
+  const item = plan({ id: "pending-red", title: "Pending", status: "未开始" });
+
+  assert.equal(planPresentation(item).status, "暂停");
+  assert.equal(planPresentation(item).tone, "paused");
+  assert.deepEqual(planPresentation(item).palette, {
+    accent: "#8795a1",
+    background: "#eef1f4",
+    foreground: "#687786"
+  });
 });
 
 test("plan presentation keeps a busy Main Unity owner actionable", () => {
@@ -261,7 +312,7 @@ test("plan presentation keeps a busy Main Unity owner actionable", () => {
     }]
   });
 
-  assert.equal(planPresentation(item).status, "正在执行");
+  assert.equal(planPresentation(item).status, "进行中");
   assert.equal(planPresentation(item).tone, "running");
 });
 
@@ -280,7 +331,7 @@ test("plan presentation keeps shared Unity queues and MCP contention actionable"
       steps: [{ id: "verify-runtime", title: "继续实现并补运行验收", status: "进行中", waitingFor }]
     });
 
-    assert.equal(planPresentation(item).status, "正在执行");
+    assert.equal(planPresentation(item).status, "进行中");
     assert.equal(planPresentation(item).tone, "running");
   }
 });
@@ -298,8 +349,64 @@ test("plan presentation distinguishes a material wait from active execution", ()
     }]
   });
 
-  assert.equal(planPresentation(item).status, "待素材");
-  assert.equal(planPresentation(item).tone, "waiting_external");
+  assert.equal(planPresentation(item).status, "暂停");
+  assert.equal(planPresentation(item).tone, "paused");
+});
+
+test("plan presentation hides legacy external-wait labels while preserving waitingFor", () => {
+  const actionable = plan({
+    id: "external-cli-action",
+    title: "External wait with CLI action",
+    currentStepId: "collect-evidence",
+    waitingFor: "等待负责人补充日志与复现步骤",
+    nextAction: "先运行 node --import tsx --test 核对现有合同，再请求负责人补充日志。",
+    steps: [{ id: "collect-evidence", title: "核对现有证据并请求补充", status: "进行中" }]
+  });
+  const paused = plan({
+    id: "external-no-action",
+    title: "External wait without action",
+    currentStepId: "collect-evidence",
+    waitingFor: "等待负责人补充日志与复现步骤",
+    steps: [{ id: "collect-evidence", title: "等待负责人回复", status: "进行中" }]
+  });
+
+  assert.equal(planPresentation(actionable).status, "进行中");
+  assert.equal(planPresentation(actionable).tone, "running");
+  assert.equal(planPresentation(paused).status, "暂停");
+  assert.equal(planPresentation(paused).tone, "paused");
+  assert.match(paused.waitingFor || "", /负责人补充日志/);
+});
+
+test("manual verification requires completed development steps", () => {
+  const incomplete = plan({
+    id: "manual-before-delivery-closure",
+    title: "Manual verification before delivery closure",
+    currentStepId: "manual-verify-layout",
+    steps: [{ id: "manual-verify-layout", title: "待人工核验布局", status: "进行中" }]
+  });
+
+  assert.equal(planPresentation(incomplete).status, "进行中");
+  assert.equal(planPresentation(incomplete).tone, "running");
+});
+
+test("a freeze matrix step stays running when its detail mentions later manual verification", () => {
+  const freeze = plan({
+    id: "unified-android-freeze",
+    title: "Unified Android input freeze",
+    currentStepId: "freeze-unified-android-inputs",
+    currentStep: "继续执行 CLI 静态检查并合并逐路径冻结证据。",
+    nextAction: "继续执行 CLI 静态检查并完成逐路径核对。",
+    waitingFor: "矩阵中仍有路径和测试证据需要核对；后续待人工核验。",
+    steps: [{ id: "deduplicate", title: "完成范围查重", status: "已完成" }, {
+      id: "freeze-unified-android-inputs",
+      title: "合并统一 Android 输入冻结证据",
+      detail: "继续逐路径核对；包后待人工核验不在当前步骤。",
+      status: "进行中"
+    }]
+  });
+
+  assert.equal(planPresentation(freeze).status, "进行中");
+  assert.equal(planPresentation(freeze).tone, "running");
 });
 
 test("plan presentation distinguishes a data wait from active execution", () => {
@@ -311,8 +418,8 @@ test("plan presentation distinguishes a data wait from active execution", () => 
     steps: [{ id: "collect-evidence", title: "收集诊断资料", status: "进行中" }]
   });
 
-  assert.equal(planPresentation(item).status, "待资料");
-  assert.equal(planPresentation(item).tone, "waiting_external");
+  assert.equal(planPresentation(item).status, "暂停");
+  assert.equal(planPresentation(item).tone, "paused");
 });
 
 test("plan presentation uses external receipt as the fallback for an explicit ordinary wait", () => {
@@ -324,8 +431,8 @@ test("plan presentation uses external receipt as the fallback for an explicit or
     steps: [{ id: "implement-validation", title: "实施并验证", status: "进行中" }]
   });
 
-  assert.equal(planPresentation(item).status, "待外部回执");
-  assert.equal(planPresentation(item).tone, "waiting_external");
+  assert.equal(planPresentation(item).status, "暂停");
+  assert.equal(planPresentation(item).tone, "paused");
 });
 
 test("plan presentation does not treat historical sent screenshot evidence as a current action", () => {
@@ -345,8 +452,8 @@ test("plan presentation does not treat historical sent screenshot evidence as a 
     }]
   });
 
-  assert.equal(planPresentation(item).status, "待外部回执");
-  assert.equal(planPresentation(item).tone, "waiting_external");
+  assert.equal(planPresentation(item).status, "暂停");
+  assert.equal(planPresentation(item).tone, "paused");
 });
 
 test("plan presentation keeps an explicit run-and-send instruction actionable", () => {
@@ -364,7 +471,7 @@ test("plan presentation keeps an explicit run-and-send instruction actionable", 
     }]
   });
 
-  assert.equal(planPresentation(item).status, "正在执行");
+  assert.equal(planPresentation(item).status, "进行中");
   assert.equal(planPresentation(item).tone, "running");
 });
 
@@ -398,7 +505,7 @@ test("plan presentation enters QA after target-package inclusion even before the
     ]
   });
 
-  assert.equal(planPresentation(item).status, "等待 QA 验收");
+  assert.equal(planPresentation(item).status, "等待 QA");
   assert.equal(planPresentation(item).tone, "qa");
 });
 
@@ -419,7 +526,7 @@ test("plan presentation stays blue package waiting when a QA step has no target-
       {
         id: "sync-submit",
         title: "完成同步提交",
-        detail: "Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+        detail: "匹配测试 1/1 通过；Main→Release 已同步，Art 不适用；SVN 提交 r225253；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
         status: "已完成"
       },
       {
@@ -482,11 +589,11 @@ test("plan presentation keeps an available CLI fallback actionable instead of ca
     }]
   });
 
-  assert.equal(planPresentation(item).status, "正在执行");
+  assert.equal(planPresentation(item).status, "进行中");
   assert.equal(planPresentation(item).tone, "running");
 });
 
-test("plan presentation describes an explicit Unity prohibition as waiting for renewed authorization", () => {
+test("plan presentation keeps renewed authorization as an internal reason behind paused", () => {
   const item = plan({
     id: "unity-authorization",
     title: "Unity use requires renewed authorization",
@@ -500,8 +607,8 @@ test("plan presentation describes an explicit Unity prohibition as waiting for r
     }]
   });
 
-  assert.equal(planPresentation(item).status, "等待重新授权");
-  assert.equal(planPresentation(item).tone, "waiting_external");
+  assert.equal(planPresentation(item).status, "暂停");
+  assert.equal(planPresentation(item).tone, "paused");
 });
 
 test("non-content-changing plans keep their real workflow instead of entering package or QA stages", () => {
@@ -554,12 +661,12 @@ test("non-content-changing plans keep their real workflow instead of entering pa
   ];
 
   assert.deepEqual(cases.map((item) => planPresentation(item).status), [
-    "正在执行",
-    "待外部回执",
-    "正在执行",
-    "待资料",
-    "待外部回执",
-    "正在执行"
+    "进行中",
+    "暂停",
+    "进行中",
+    "暂停",
+    "暂停",
+    "进行中"
   ]);
   assert.equal(cases.some((item) => ["qa", "waiting_package"].includes(planPresentation(item).tone)), false);
 });
@@ -614,7 +721,7 @@ test("incomplete approvals stay running and disabled until the contract becomes 
     }]
   });
   const incompletePresentation = planPresentation(incomplete);
-  assert.equal(incompletePresentation.status, "正在执行");
+  assert.equal(incompletePresentation.status, "进行中");
   assert.equal(incompletePresentation.tone, "running");
   assert.equal(incompletePresentation.approval.state, "incomplete");
   assert.equal(incompletePresentation.approval.enabled, false);
@@ -627,7 +734,7 @@ test("incomplete approvals stay running and disabled until the contract becomes 
     currentStepId: "implement",
     steps: [{ id: "implement", title: "执行已批准方案", status: "进行中" }]
   });
-  assert.equal(planPresentation(resolved).status, "正在执行");
+  assert.equal(planPresentation(resolved).status, "进行中");
   assert.equal(planPresentation(resolved).approval.state, "none");
 });
 
@@ -644,7 +751,7 @@ test("plans awaiting approval sort first, then by Manager presentation status an
         {
           id: "matching-tests",
           title: "完成匹配测试",
-          detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+          detail: "匹配测试 1/1 通过；Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
           status: "已完成"
         },
         { id: "package", title: "等待目标包", status: "进行中" }
@@ -689,14 +796,14 @@ test("plans awaiting approval sort first, then by Manager presentation status an
     "blocked-new",
     "blocked-old",
     "waiting-package",
-    "pending",
     "completed",
     "archived",
-    "paused-ready"
+    "paused-ready",
+    "pending"
   ]);
   assert.deepEqual(
     sorted.map((item) => item.presentation.sortBucket),
-    [0, 1, 2, 2, 2, 4, 5, 6, 7, 9]
+    [0, 1, 2, 2, 2, 4, 6, 7, 9, 9]
   );
 });
 
@@ -737,32 +844,43 @@ test("plan pages preserve Manager ordering and expose stable counts while advanc
   const presented = presentPlans([
     plan({ id: "running", title: "Running" }),
     plan({ id: "qa", title: "QA", currentStepId: "qa", currentStep: "QA 已真实发送，sentMessageId=1003。", steps: [{ id: "qa", title: "等待 QA 验收", status: "进行中" }] }),
+    plan({
+      id: "manual-verification",
+      title: "Manual verification",
+      currentStepId: "manual-verify-visual",
+      steps: [
+        { id: "delivery", title: "Delivery", status: "已完成" },
+        { id: "manual-verify-visual", title: "Manual verification", status: "进行中" }
+      ]
+    }),
     plan({ id: "done", title: "Done", status: "已完成" }),
     plan({ id: "archived", title: "Archived", status: "已归档" })
   ]);
 
   const first = paginateRolePlans(presented, "", 2);
   const second = paginateRolePlans(presented, first.nextCursor, 2);
+  const third = paginateRolePlans(presented, second.nextCursor, 2);
 
   assert.deepEqual(first.items.map((item) => item.id), presented.slice(0, 2).map((item) => item.id));
-  assert.deepEqual(second.items.map((item) => item.id), presented.slice(2).map((item) => item.id));
+  assert.deepEqual(second.items.map((item) => item.id), presented.slice(2, 4).map((item) => item.id));
+  assert.deepEqual(third.items.map((item) => item.id), presented.slice(4).map((item) => item.id));
   assert.equal(first.nextCursor, "2");
-  assert.equal(second.nextCursor, "");
+  assert.equal(second.nextCursor, "4");
+  assert.equal(third.nextCursor, "");
   assert.deepEqual(first.counts, {
-    total: 4,
-    current: 2,
-    plans: 3,
+    total: 5,
+    current: 3,
+    plans: 4,
     archived: 1,
     blocked: 0,
     qa: 1,
-    active: 2,
+    active: 3,
     stages: {
       executing: 1,
       qa: 1,
       waitingPackage: 0,
-      waitingExternal: 0,
       approval: 0,
-      pending: 0,
+      manualVerification: 1,
       paused: 0,
       completed: 1,
       archived: 1
@@ -811,7 +929,7 @@ test("plan pages apply Manager-side status filters and update-time sorting befor
   const runningOnly = paginateRolePlans(presented, "", 8, {
     view: "plans",
     sort: "updated",
-    statuses: ["正在执行"],
+    statuses: ["进行中"],
     tags: ["performance"]
   });
 
@@ -819,7 +937,7 @@ test("plan pages apply Manager-side status filters and update-time sorting befor
   assert.deepEqual(runningOnly.items.map((item) => item.id), ["running-new"]);
   assert.equal(runningOnly.total, 1);
   assert.deepEqual(byTime.facets.statuses.map((item) => [item.status, item.count]), [
-    ["正在执行", 2],
+    ["进行中", 2],
     ["已完成", 1]
   ]);
   assert.deepEqual(byTime.facets.tags, [
@@ -912,7 +1030,7 @@ test("plan page counts summarize the Manager-derived presentation stages", () =>
         {
           id: "implement",
           title: "Implement",
-          detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
+          detail: "Matching test 1/1 passed; Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
           status: "已完成"
         },
         { id: "package", title: "Package", status: "进行中" }
@@ -941,10 +1059,9 @@ test("plan page counts summarize the Manager-derived presentation stages", () =>
     executing: 1,
     qa: 1,
     waitingPackage: 1,
-    waitingExternal: 1,
     approval: 1,
-    pending: 1,
-    paused: 1,
+    manualVerification: 0,
+    paused: 3,
     completed: 1,
     archived: 1
   });

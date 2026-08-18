@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rabi GitHub Submit"
+  short_description: "Submit RabiRoute with example persona updates."
+  default_prompt: "Use this when preparing RabiRoute changes for GitHub submission."

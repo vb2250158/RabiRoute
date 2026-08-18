@@ -535,6 +535,13 @@ function setSpeechTriggerKeywords(value: unknown): void {
   store.touch();
 }
 
+function setLanguageStyleSkillUrl(value: unknown): void {
+  if (!gateway.value) return;
+  const styleSkillUrl = String(value || "").trim();
+  gateway.value.languageStyle = styleSkillUrl ? { styleSkillUrl } : undefined;
+  store.touch();
+}
+
 function recentMessageLimitFor(endpoint: RecentMessageEndpoint): number {
   return normalizeRecentMessageLimit(gateway.value?.recentMessageLimits?.[endpoint]);
 }
@@ -1033,6 +1040,27 @@ watch(() => store.selectedGatewayId, (id) => {
       </div>
 
       <div v-if="hasPersona" class="two-column">
+        <v-card class="app-card glass-card section-card">
+          <div class="section-title-row">
+            <div>
+              <div class="section-title">语言风格风控</div>
+              <div class="section-note">人格外发消息默认按目标 Skill 校验。</div>
+            </div>
+          </div>
+          <v-text-field
+            :model-value="gateway.languageStyle?.styleSkillUrl || ''"
+            label="目标语言风格 Skill URL"
+            placeholder="file:///.../Skill 或 https://.../Skill"
+            hint="可填写 Skill 目录、SKILL.md 或 references/style-data.json。留空表示不校验。"
+            persistent-hint
+            clearable
+            @update:model-value="setLanguageStyleSkillUrl"
+          />
+          <v-alert class="mt-3" type="info" variant="tonal" density="compact">
+            styleValidation 默认为 1。校验失败先返回原因；确认原文合适后，使用同一 deliveryId 并传 styleValidation=0。
+          </v-alert>
+        </v-card>
+
         <v-card class="app-card glass-card section-card">
           <div class="section-title-row">
             <div>

@@ -7,6 +7,7 @@ import {
   executeDurableDelivery,
   normalizeDurableDeliveryId,
   readDurableDeliveryReceipt,
+  type DurableDeliveryOptions,
   type DurableDeliveryReceipt
 } from "./durableDeliveryIdempotency.js";
 
@@ -27,7 +28,7 @@ export type AgentSendTraceQuery = {
 
 export type AgentSendIdempotencyInfo = {
   deliveryId: string;
-  state: "completed" | "in_progress" | "uncertain" | "conflict";
+  state: "completed" | "missing" | "in_progress" | "uncertain" | "conflict";
   duplicate: boolean;
 };
 
@@ -43,6 +44,7 @@ export type IdempotentAgentSendResponse = {
 type ExecuteOptions = {
   rootDir: string;
   deliver: () => Promise<AgentSendResult>;
+  recover?: DurableDeliveryOptions<AgentSendResult>["recover"];
   waitForCompletionMs?: number;
 };
 
@@ -299,7 +301,7 @@ function completedResponse(deliveryId: string, result: AgentSendResult, duplicat
 
 function nonTerminalResponse(
   deliveryId: string,
-  state: "in_progress" | "uncertain" | "conflict",
+  state: "missing" | "in_progress" | "uncertain" | "conflict",
   reason: string,
   statusCode: number,
   duplicate = true
@@ -364,6 +366,7 @@ export async function executeIdempotentAgentSend(
         target: prepared.target
       };
     },
+    recover: options.recover,
     waitForCompletionMs: options.waitForCompletionMs
   });
   if (outcome.state === "completed") {
@@ -382,7 +385,7 @@ export async function executeIdempotentAgentSend(
 export function agentSendReceiptResponse(rootDir: string, deliveryId: string): IdempotentAgentSendResponse {
   const normalized = normalizeDurableDeliveryId(deliveryId);
   const receipt = readAgentSendReceipt(rootDir, normalized);
-  if (!receipt) return nonTerminalResponse(normalized, "uncertain", "No idempotency receipt exists for this deliveryId.", 404);
+  if (!receipt) return nonTerminalResponse(normalized, "missing", "No idempotency receipt exists for this deliveryId.", 404, false);
   if (receipt.state === "completed") {
     const result = receipt.result ?? {
       ok: false,

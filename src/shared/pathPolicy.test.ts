@@ -7,8 +7,24 @@ import {
   assertExistingPathWithinRoots,
   assertPathWithinRoot,
   isPathWithinRoot,
+  normalizePathForComparison,
   resolveRelativePathWithinRoot
 } from "./pathPolicy.js";
+
+test("path comparison treats Windows extended paths as the same workspace", (t) => {
+  if (process.platform !== "win32") {
+    t.skip("Windows extended path prefixes are Windows-specific.");
+    return;
+  }
+  assert.equal(
+    normalizePathForComparison("C:\\Data\\CottonProject\\PangHu"),
+    normalizePathForComparison("\\\\?\\C:\\Data\\CottonProject\\PangHu")
+  );
+  assert.equal(
+    normalizePathForComparison("\\\\server\\share\\project"),
+    normalizePathForComparison("\\\\?\\UNC\\server\\share\\project")
+  );
+});
 
 test("path policy accepts paths inside a configured root and rejects sibling prefixes", () => {
   const root = path.resolve("C:/Projects/RabiRoute/data");

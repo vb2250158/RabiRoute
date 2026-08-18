@@ -32,7 +32,9 @@ export type AgentRequestRecord = {
   deliveryId: string;
   status: AgentRequestStatus;
   source: AgentRequestParty;
+  sourceHistory?: AgentRequestParty[];
   target: AgentRequestParty;
+  targetHistory?: AgentRequestParty[];
   responseInstruction: string;
   messageProcessingRequirementId?: string;
   planId?: string;
@@ -113,7 +115,17 @@ function parseRecord(value: unknown): AgentRequestRecord | undefined {
       deliveryId: cleanText(record.deliveryId, 100),
       status: record.status as AgentRequestStatus,
       source: normalizedParty(record.source),
+      sourceHistory: Array.isArray(record.sourceHistory)
+        ? record.sourceHistory.flatMap((party) => {
+            try { return [normalizedParty(party)]; } catch { return []; }
+          })
+        : undefined,
       target: normalizedParty(record.target),
+      targetHistory: Array.isArray(record.targetHistory)
+        ? record.targetHistory.flatMap((party) => {
+            try { return [normalizedParty(party)]; } catch { return []; }
+          })
+        : undefined,
       responseInstruction: cleanText(record.responseInstruction, 4_000),
       messageProcessingRequirementId: cleanText(record.messageProcessingRequirementId, 300) || undefined,
       planId: cleanText(record.planId, 300) || undefined,
@@ -169,6 +181,75 @@ export class AgentRequestStore {
       (record.source.threadId === id && workspaceMatches(record.source.workspace, workspace))
       || (record.target.threadId === id && workspaceMatches(record.target.workspace, workspace))
     ));
+  }
+
+  reconcileOpenParties(
+    resolve: (
+      party: AgentRequestParty,
+      record: AgentRequestRecord,
+      role: "source" | "target"
+    ) => AgentRequestParty | null | undefined
+  ): { reassigned: AgentRequestRecord[]; cancelled: AgentRequestRecord[] } {
+    const reassigned: AgentRequestRecord[] = [];
+    const cancelled: AgentRequestRecord[] = [];
+    const timestamp = nowIso(this.now);
+    for (const record of this.requests.values()) {
+      if (record.status !== "pending_delivery" && record.status !== "awaiting_response") continue;
+      const source = resolve(structuredClone(record.source), structuredClone(record), "source");
+      const target = resolve(structuredClone(record.target), structuredClone(record), "target");
+      if (source === undefined && target === undefined) continue;
+      if (record.status === "pending_delivery" || source === null || target === null) {
+        record.status = "cancelled";
+        record.cancelledAt = timestamp;
+        record.cancelReason = "Message Agent pool changed before this tracked delivery completed; the stale task binding was cancelled.";
+        record.nextReminderAt = undefined;
+        record.pendingResponseDeliveryId = undefined;
+        record.updatedAt = timestamp;
+        cancelled.push(structuredClone(record));
+        continue;
+      }
+      let changed = false;
+      if (source && source.threadId !== record.source.threadId) {
+        record.sourceHistory = appendPartyHistory(record.sourceHistory, record.source);
+        record.source = normalizedParty(source);
+        changed = true;
+      }
+      if (target && target.threadId !== record.target.threadId) {
+        record.targetHistory = appendPartyHistory(record.targetHistory, record.target);
+        record.target = normalizedParty(target);
+        record.nextReminderAt = timestamp;
+        record.lastReminderError = undefined;
+        changed = true;
+      }
+      if (!changed) continue;
+      record.pendingResponseDeliveryId = undefined;
+      record.updatedAt = timestamp;
+      reassigned.push(structuredClone(record));
+    }
+    if (reassigned.length || cancelled.length) this.persist();
+    return { reassigned, cancelled };
+  }
+
+  resolveReplyDestination(
+    requestId: string,
+    respondingParty: AgentRequestParty,
+    requestedTarget: AgentRequestParty
+  ): AgentRequestParty | undefined {
+    const record = this.requests.get(cleanText(requestId, 100));
+    if (!record || record.status !== "awaiting_response") return undefined;
+    const source = normalizedParty(respondingParty);
+    const target = normalizedParty(requestedTarget);
+    if (source.threadId !== record.target.threadId || !workspaceMatches(source.workspace, record.target.workspace)) {
+      return undefined;
+    }
+    const requestedMatchesCurrent = target.threadId === record.source.threadId
+      && workspaceMatches(target.workspace, record.source.workspace);
+    const requestedMatchesHistory = (record.sourceHistory ?? []).some((party) =>
+      target.threadId === party.threadId && workspaceMatches(target.workspace, party.workspace)
+    );
+    return requestedMatchesCurrent || requestedMatchesHistory
+      ? structuredClone(record.source)
+      : undefined;
   }
 
   prepare(input: PrepareAgentCommunicationInput): AgentCommunicationPreparation {
@@ -375,4 +456,14 @@ export class AgentRequestStore {
     this.persist();
     return structuredClone(record);
   }
+}
+
+function appendPartyHistory(
+  history: AgentRequestParty[] | undefined,
+  party: AgentRequestParty
+): AgentRequestParty[] {
+  const rows = [...(history ?? []), normalizedParty(party)];
+  const unique = new Map<string, AgentRequestParty>();
+  for (const row of rows) unique.set(`${row.threadId}\n${row.workspace || ""}`, row);
+  return [...unique.values()].slice(-20);
 }

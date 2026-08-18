@@ -9,6 +9,7 @@ const LEGACY_GLOBAL_PACKAGE_GATE = /(?:等待|依赖|尚待)[^\n]{0,32}(?:正式
 const MAIN_DELIVERY_EVIDENCE = /(?:Main[^\n]{0,80}(?:r\d+|revision|已提交|已同步)|Main[\s/、→-]+Release[^\n]{0,80}(?:同步|提交|r\d+))/i;
 const RELEASE_DELIVERY_EVIDENCE = /(?:Release[^\n]{0,80}(?:r\d+|revision|已提交|已同步|不适用|无需)|Main[\s/、→-]+Release[^\n]{0,80}(?:同步|提交|r\d+)|(?:不适用|无需)[^\n]{0,40}Release)/i;
 const ART_DELIVERY_EVIDENCE = /(?:Art[^\n]{0,80}(?:r\d+|revision|已提交|已同步|不适用|无需|无[^\n]{0,20}目标)|(?:无|没有)[^\n]{0,24}Art[^\n]{0,24}目标|(?:不适用|无需)[^\n]{0,40}Art)/i;
+const MATCHING_TEST_EVIDENCE = /(?:测试|test|EditMode|PlayMode|静态|CLI|非\s*Unity|TRX)[^\n]{0,80}(?:\b\d+\s*\/\s*\d+\b|\b\d+\s+passed\b|passed\s*=\s*\d+|matched\s*=\s*\d+|通过|failed\s*=\s*0)/i;
 const SVN_COMMIT_EVIDENCE = /(?:SVN[^\n]{0,80}(?:提交|commit|r\d+)|(?:提交|commit)[^\n]{0,80}(?:SVN|r\d+)|r\d+[^\n]{0,80}(?:SVN|提交|commit))/i;
 const CONFLICT_TYPES_CLEAR_EVIDENCE = /(?:(?:无|没有)[^\n]{0,12}文本[\s/、，和及、]*属性[\s/、，和及、]*树冲突[^\n]{0,24}(?:obstruction|阻碍|障碍)|文本[\s/、，和及、]*属性[\s/、，和及、]*树冲突[^\n]{0,24}(?:均无|都无|不存在)[^\n]{0,24}(?:obstruction|阻碍|障碍)[^\n]{0,12}(?:也无|不存在|无))/i;
 const SHOW_UPDATES_CLEAR_EVIDENCE = /(?:svn\s+status\s+--show-updates|show-updates)[^\n]{0,48}(?:无|没有|no)[^\n]{0,12}\*/i;
@@ -41,11 +42,10 @@ function completedDeliveryEvidence(plan: PlanItem, step: PlanStep): string {
   return [
     plan.currentStep,
     plan.nextAction,
-    step.title,
-    step.detail,
+    [step.title, step.detail, step.waitingFor].map(text).filter(Boolean).join(" "),
     ...plan.steps
       .filter((item) => item.id !== step.id && item.status === "已完成")
-      .flatMap((item) => [item.title, item.detail, item.waitingFor])
+      .map((item) => [item.title, item.detail, item.waitingFor].map(text).filter(Boolean).join(" "))
   ].map(text).filter(Boolean).join("\n");
 }
 
@@ -54,6 +54,7 @@ function hasCompletedDeliverySync(plan: PlanItem, step: PlanStep): boolean {
   return MAIN_DELIVERY_EVIDENCE.test(evidence)
     && RELEASE_DELIVERY_EVIDENCE.test(evidence)
     && ART_DELIVERY_EVIDENCE.test(evidence)
+    && MATCHING_TEST_EVIDENCE.test(evidence)
     && SVN_COMMIT_EVIDENCE.test(evidence)
     && CONFLICT_TYPES_CLEAR_EVIDENCE.test(evidence)
     && SHOW_UPDATES_CLEAR_EVIDENCE.test(evidence);
@@ -75,6 +76,20 @@ function isStructuredQaStep(plan: PlanItem, step: PlanStep): boolean {
 
 function packageLifecycleSteps(plan: PlanItem): PlanStep[] {
   return plan.steps.filter((step) => PACKAGE_STEP_ID.test(text(step.id)) && !QA_STEP_TOKEN.test(text(step.id)));
+}
+
+function isDeliveryEvidenceReconcileStep(step: PlanStep): boolean {
+  return /^program-verify-(?:[\w-]*(?:delivery|freeze|package|contract)[\w-]*)$/i.test(text(step.id));
+}
+
+function hasUnresolvedPackageWait(plan: PlanItem): boolean {
+  return packageLifecycleSteps(plan)
+    .some((step) => {
+      const evidence = [step.title, step.detail, step.waitingFor].map(text).filter(Boolean).join("\n");
+      return PACKAGE_WAIT.test(evidence)
+        && !NEGATED_PACKAGE_PROOF.test(evidence)
+        && !TARGET_PACKAGE_COMPLETED.test(evidence);
+    });
 }
 
 export function planHasPackageLifecycle(plan: PlanItem): boolean {
@@ -124,7 +139,13 @@ export function planIsWaitingForPackage(plan: PlanItem): boolean {
       && !planHasTargetPackageInclusionEvidence(plan);
   }
   if (isStructuredQaStep(plan, step)) return false;
-  if (!PACKAGE_STEP_ID.test(text(step.id)) || !priorStepsAreComplete(plan, step)) return false;
+  if (isDeliveryEvidenceReconcileStep(step)
+    && hasCompletedDeliverySync(plan, step)
+    && hasUnresolvedPackageWait(plan)
+    && !planHasTargetPackageInclusionEvidence(plan)) {
+    return true;
+  }
+  if (!PACKAGE_STEP_ID.test(text(step.id))) return false;
   if (!hasCompletedDeliverySync(plan, step)) return false;
   const waiting = packageWaitingText(plan, step);
   if (waiting.length === 0 || waiting.some((value) => NON_PACKAGE_WAIT.test(value))) return false;

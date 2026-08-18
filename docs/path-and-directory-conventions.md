@@ -34,6 +34,7 @@
 | `data/route/` | 每条消息路线（Route）的本机配置和运行数据 | 否 |
 | `data/roles/` | 人格资料、计划、记忆、聊天记录和人格级附件 | 否 |
 | `data/.runtime/` | Manager 可重建或恢复所需的内部状态 | 否 |
+| `data/.runtime/performance/` | 按小时分片的本机性能 JSONL，受保留时间和空间上限管理 | 否 |
 | `data/.runtime/imports/` | 有时限的导入暂存文件 | 否；处理完成或过期后清理 |
 | `logs/manager/` | Manager 结构化运行日志 | 否；用于排障，不是业务真源 |
 

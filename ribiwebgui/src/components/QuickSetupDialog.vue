@@ -144,6 +144,39 @@ async function runAgentScan(): Promise<void> {
   }
 }
 
+async function loadMoreCodexSessions(): Promise<void> {
+  const page = agentScan.value.agents.codex?.sessionPage;
+  if (agentScan.value.loading || !page?.hasMore || page.nextOffset == null) return;
+  agentScan.value.loading = true;
+  try {
+    const params = new URLSearchParams({
+      codexOffset: String(page.nextOffset),
+      codexLimit: String(page.limit)
+    });
+    const res = await fetch(`/api/scan/agents?${params}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || `Agent 扫描失败（HTTP ${res.status}）`);
+    const currentCodex = agentScan.value.agents.codex;
+    const nextCodex = data.agents?.codex as AgentScanResult | undefined;
+    const sessions = [...(currentCodex?.sessions ?? []), ...(nextCodex?.sessions ?? [])];
+    const uniqueSessions = [...new Map(sessions.map(session => [
+      session.id || `${session.name}:${session.projectPath || ""}:${session.updatedAt || ""}`,
+      session
+    ])).values()];
+    agentScan.value.agents = {
+      ...agentScan.value.agents,
+      ...(data.agents ?? {}),
+      codex: nextCodex ? { ...nextCodex, sessions: uniqueSessions } : currentCodex
+    };
+    agentScan.value.threadNames = [...new Set([...agentScan.value.threadNames, ...(data.threadNames ?? [])])];
+    agentScan.value.cwdOptions = [...new Set([...agentScan.value.cwdOptions, ...(data.cwdOptions ?? [])])];
+  } catch {
+    // Keep the already loaded task page available.
+  } finally {
+    agentScan.value.loading = false;
+  }
+}
+
 const runtime = computed(() => store.selectedRuntime);
 const selectedAgent = computed<AgentAdapterType>(() => form.agentAdapters[0] ?? "codex");
 const selectedSessionName = computed(() => {
@@ -1367,7 +1400,7 @@ async function apply() {
                     :return-object="false"
                     :label="selectedAgent === 'codex' ? '会话名 + 最后会话时间' : '会话线程名'"
                     placeholder="选择已有会话，或输入新会话名"
-                    :hint="selectedAgent === 'codex' ? '显示全部 Desktop 会话；输入名称后先自动查找，只有不存在时才创建' : '没有扫到时也可以手动填写'"
+                    :hint="selectedAgent === 'codex' ? '每次读取 200 个 Desktop 任务；可继续加载，输入名称后先自动查找，只有不存在时才创建' : '没有扫到时也可以手动填写'"
                     persistent-hint
                     @update:model-value="selectSession"
                   >
@@ -1376,6 +1409,17 @@ async function apply() {
                       <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
                     </template>
                   </v-combobox>
+                  <v-btn
+                    v-if="selectedAgent === 'codex' && agentScanFor('codex')?.sessionPage?.hasMore"
+                    class="full-span"
+                    size="small"
+                    variant="text"
+                    prepend-icon="mdi-chevron-down"
+                    :loading="agentScan.loading"
+                    @click="loadMoreCodexSessions"
+                  >
+                    加载更多 Desktop 任务
+                  </v-btn>
                   </div>
                 </div>
               </v-window-item>

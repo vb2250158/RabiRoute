@@ -61,6 +61,67 @@ test("agent send idempotency stores one result for one explicit send request", a
   }]);
 });
 
+test("agent send receipt reports an absent delivery as missing", () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-send-missing-"));
+  try {
+    const response = agentSendReceiptResponse(rootDir, "delivery-missing-1");
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.body.idempotency.state, "missing");
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("agent send retries once only after authoritative missing recovery", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-send-recovery-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  let sends = 0;
+  const response = await executeIdempotentAgentSend({
+    deliveryId: "delivery-recover-missing-1",
+    sender: { agentType: "plan_agent", sessionId: "thread-recover-1" },
+    routeId: "route-main",
+    channel: "napcat",
+    params: { target: "group", groupId: "456", replyToMessageId: "" },
+    payload: { type: "text", text: "same payload" }
+  }, {
+    rootDir,
+    deliver: async () => {
+      sends += 1;
+      if (sends === 1) throw new Error("Manager connection closed before receipt commit");
+      return { ok: true, status: "sent", channel: "napcat", sentMessageId: "qq-recovered-1" };
+    },
+    recover: async () => ({ state: "retry" })
+  });
+
+  assert.equal(response.body.status, "sent");
+  assert.equal(response.body.sentMessageId, "qq-recovered-1");
+  assert.equal(sends, 2);
+});
+
+test("agent send keeps uncertain recovery terminal without replay", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-send-uncertain-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  let sends = 0;
+  const response = await executeIdempotentAgentSend({
+    deliveryId: "delivery-recover-uncertain-1",
+    sender: { agentType: "plan_agent", sessionId: "thread-recover-2" },
+    routeId: "route-main",
+    channel: "napcat",
+    params: { target: "group", groupId: "456", replyToMessageId: "" },
+    payload: { type: "text", text: "same payload" }
+  }, {
+    rootDir,
+    deliver: async () => {
+      sends += 1;
+      throw new Error("Manager connection closed after request dispatch");
+    },
+    recover: async () => ({ state: "uncertain", reason: "Outbox request exists without a terminal result." })
+  });
+
+  assert.equal(response.body.idempotency.state, "uncertain");
+  assert.equal(sends, 1);
+});
+
 test("invalid send requests are rejected before an idempotency reservation is written", async (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-send-invalid-"));
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));

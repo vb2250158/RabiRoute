@@ -199,3 +199,18 @@ test("the plugin registers entry, reasoning, and turn-completion lifecycle hooks
   const hooks = JSON.parse(await fs.readFile(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));
   assert.deepEqual(Object.keys(hooks.hooks).sort(), ["PostToolUse", "PreToolUse", "SessionStart", "Stop", "UserPromptSubmit"]);
 });
+
+test("the plugin stays self-contained and does not replace unrelated Codex hooks", async () => {
+  const pluginRoot = path.resolve(new URL("..", import.meta.url).pathname.replace(/^\/(?:([A-Za-z]:))/, "$1"));
+  const hooks = JSON.parse(await fs.readFile(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));
+  const commands = Object.values(hooks.hooks)
+    .flatMap((groups) => groups)
+    .flatMap((group) => group.hooks)
+    .map((hook) => hook.command);
+
+  assert.ok(commands.length > 0);
+  for (const command of commands) {
+    assert.match(command, /PLUGIN_ROOT/);
+    assert.doesNotMatch(command, /\.codex|\.agents|config\.toml|marketplace\.json|codex-language-style/i);
+  }
+});

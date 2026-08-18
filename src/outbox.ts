@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { sendGroupMessage, sendPrivateMessage, uploadGroupFile, type NapCatEndpoint, type OneBotMessage } from "./napcat.js";
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wecom.js";
@@ -19,6 +19,7 @@ import {
   type MessageAdapterPolicy,
   type MessagePayloadKind
 } from "./shared/gatewayConfigModel.js";
+import type { LanguageStyleBinding } from "./shared/languageStyle.js";
 import { resolveSpeechRouteProfile } from "./shared/speechControlContract.js";
 import { publishRabiLinkRelayMessage, uploadRabiLinkRelayAttachment } from "./adapters/rabilinkRelayWorker.js";
 import { requestLocalSpeech } from "./speech/localSpeechClient.js";
@@ -104,6 +105,7 @@ export type AgentReplyRouteProfile = {
   pipeline?: PipelineDefinition;
   dataDir?: string;
   agentRoleId?: string;
+  languageStyle?: LanguageStyleBinding;
   rolesDir?: string;
   routeVariables?: Record<string, string>;
 };
@@ -118,6 +120,7 @@ export type AgentReplyRuntime = {
   pipeline?: PipelineDefinition;
   dataDir?: string;
   agentRoleId?: string;
+  languageStyle?: LanguageStyleBinding;
   rolesDir?: string;
   routeVariables?: Record<string, string>;
   napcatInstances?: AgentReplyNapCatInstance[];
@@ -171,6 +174,11 @@ export type AgentReplyResult = {
     userId?: string;
   };
 };
+
+export type AgentReplyDeliveryInspection =
+  | { state: "completed"; result: AgentReplyResult }
+  | { state: "missing" }
+  | { state: "uncertain"; reason: string };
 
 type SourceRecord = {
   messageId?: string;
@@ -777,6 +785,97 @@ function hasNapCatReplySegment(message: OneBotMessage): boolean {
   return message.some((segment) => segment.type.toLowerCase() === "reply");
 }
 
+function stableDeliveryJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableDeliveryJson).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableDeliveryJson(item)}`)
+    .join(",")}}`;
+}
+
+function agentReplyDeliveryTrace(request: AgentReplyRequest): { deliveryId?: string; deliveryRequestDigest?: string } {
+  const deliveryId = requestField(request, "deliveryId");
+  if (!deliveryId) return {};
+  return {
+    deliveryId,
+    deliveryRequestDigest: createHash("sha256").update(stableDeliveryJson(request), "utf8").digest("hex")
+  };
+}
+
+function outboxData(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+export async function inspectAgentReplyDelivery(
+  request: AgentReplyRequest,
+  options: AgentReplyOptions
+): Promise<AgentReplyDeliveryInspection> {
+  const trace = agentReplyDeliveryTrace(request);
+  if (!trace.deliveryId || !trace.deliveryRequestDigest) {
+    return { state: "uncertain", reason: "Delivery readback requires a stable deliveryId." };
+  }
+  const route = resolveExplicitSendRoute(options, requestField(request, "routeProfileId"));
+  if (!route) {
+    return { state: "uncertain", reason: "The explicit route cannot be resolved for authoritative Outbox readback." };
+  }
+  const logPath = path.join(dataDirsForRoute(options, route)[0], "outbox-adapter.log.jsonl");
+  if (!fs.existsSync(logPath)) return { state: "missing" };
+
+  let logText: string;
+  try {
+    logText = await fs.promises.readFile(logPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "missing" };
+    return {
+      state: "uncertain",
+      reason: `The Outbox log could not be read authoritatively: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+
+  let requestSeen = false;
+  let mismatchedPayload = false;
+  let completed: AgentReplyResult | undefined;
+  for (const line of logText.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const data = outboxData(entry.data);
+    if (!data) continue;
+    const nestedRequest = outboxData(data.request);
+    const recordedDeliveryId = String(data.deliveryId ?? nestedRequest?.deliveryId ?? "").trim();
+    if (recordedDeliveryId !== trace.deliveryId) continue;
+    const recordedDigest = String(data.deliveryRequestDigest ?? "").trim()
+      || (nestedRequest ? agentReplyDeliveryTrace(nestedRequest).deliveryRequestDigest : "");
+    if (recordedDigest !== trace.deliveryRequestDigest) {
+      mismatchedPayload = true;
+      continue;
+    }
+    if (entry.event === "send_requested") requestSeen = true;
+    const status = String(data.status ?? "");
+    if (["sent", "failed", "blocked", "draft"].includes(status)) {
+      if (status === "sent" && !String(data.sentMessageId ?? data.sentFileId ?? "").trim()) {
+        requestSeen = true;
+        continue;
+      }
+      completed = data as unknown as AgentReplyResult;
+    }
+  }
+  if (completed) return { state: "completed", result: completed };
+  if (mismatchedPayload) {
+    return { state: "uncertain", reason: "The deliveryId exists in Outbox with a different payload digest." };
+  }
+  if (requestSeen) {
+    return { state: "uncertain", reason: "Outbox recorded the send request without an authoritative terminal result." };
+  }
+  return { state: "missing" };
+}
+
 function normalizedNapCatUserId(value: string | undefined): string | undefined {
   const userId = value?.trim();
   return userId && /^\d+$/.test(userId) ? userId : undefined;
@@ -1319,7 +1418,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
   const withConversation = (data: Record<string, unknown>): Record<string, unknown> => route
     ? outboundConversationData(route, contextTarget, context, text, data)
     : data;
-  appendOutboxLog(options, route, "info", explicitTarget ? "send_requested" : "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request });
+  const deliveryTrace = agentReplyDeliveryTrace(request);
+  const withDeliveryTrace = (data: Record<string, unknown>): Record<string, unknown> => ({ ...data, ...deliveryTrace });
+  appendOutboxLog(options, route, "info", explicitTarget ? "send_requested" : "reply_requested", text.slice(0, 500), { routeProfileId, messageId, payloadKind: content.kind, request, ...deliveryTrace });
 
   if (!route) {
     const result: AgentReplyResult = { ok: false, status: "blocked", reason: explicitTarget ? "An exact enabled routeId is required for sending." : "Route source context is required when multiple routes are configured.", routeProfileId, messageId, draft: { text } };
@@ -1796,10 +1897,10 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
           sentFileId: valueString(uploaded.fileId),
           sentFileName: uploaded.fileName || fileName
         };
-        appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, withConversation({
+        appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, withConversation(withDeliveryTrace({
           ...result,
           attachments: [{ kind: "file", name: fileName, size: fs.statSync(filePath).size }]
-        }));
+        })));
 
         if (content.explicitText) {
           try {
@@ -1808,7 +1909,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
               message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource, target.userId)
             }, endpoint);
             result.sentMessageId = valueString(caption.messageId);
-            appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), withConversation({ ...result, text: content.explicitText }));
+            appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), withConversation(withDeliveryTrace({ ...result, text: content.explicitText })));
           } catch (captionError) {
             result.reason = `File uploaded, but the follow-up text failed: ${captionError instanceof Error ? captionError.message : String(captionError)}`;
             appendOutboxLog(options, route, "warning", "group_file_caption_failed", result.reason, result);
@@ -1828,7 +1929,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
         )
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: target.groupId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
-      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation({ ...result }));
+      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation(withDeliveryTrace({ ...result })));
       return result;
     }
     if (target.targetType === "private" && target.userId) {
@@ -1839,7 +1940,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
           : content.message
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "private", userId: target.userId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
-      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation({ ...result }));
+      appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation(withDeliveryTrace({ ...result })));
       return result;
     }
     const result: AgentReplyResult = { ...draft("Only current QQ group/private source replies can be sent automatically.", text, target, route.profile?.id ?? route.runtime.id), status: "blocked" };
@@ -1847,7 +1948,7 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     return result;
   } catch (error) {
     const result: AgentReplyResult = { ok: false, status: "failed", reason: error instanceof Error ? error.message : String(error), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: endpoint.id, draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId } };
-    appendOutboxLog(options, route, "error", "reply_failed", result.reason ?? "failed", result);
+    appendOutboxLog(options, route, "error", "reply_failed", result.reason ?? "failed", withDeliveryTrace(result));
     return result;
   }
 }

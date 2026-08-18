@@ -86,7 +86,7 @@ Typical causes are name-as-identity, delayed indexing treated as absence, concur
 
 ### The first message works and the second creates a duplicate
 
-Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Building the name index directly from SQLite is equally unsafe: lookup returns zero even though the sidebar still shows the task, then creates a duplicate. Reuse a valid unarchived ID in the same workspace regardless of title metadata. For no-ID lookup and dropdown labels, use Desktop app-server `thread/list` and its `thread.name`; merge local ID/cwd/archive/time/owner state by exact ID. If the saved ID is archived, search active same-name tasks in the same workspace and reuse the unique latest candidate; if none exists, stop without creating a replacement. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
+Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Building the name index directly from SQLite is equally unsafe: lookup returns zero even though the sidebar still shows the task, then creates a duplicate. Reuse a valid unarchived ID in the same workspace regardless of title metadata. For no-ID lookup and dropdown labels, use Desktop app-server `thread/list` and its `thread.name`; merge local ID/cwd/archive/time/owner state by exact ID. If the saved ID is archived, a real delivery creates a new task and persists the replacement binding without locating or reusing another same-name task. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
 
 ### The settings page becomes slow or scans continuously
 
@@ -112,12 +112,14 @@ flowchart TD
     S --> I{"Read saved ID state"}
     I -->|"Exists, same workspace, unarchived"| B["Reuse exact binding despite title mutation"]
     I -->|"Empty / invalid / genuinely missing"| N["Find by saved name + workspace"]
-    I -->|"Archived / workspace mismatch"| F["Stop with actionable error"]
+    I -->|"Archived"| C2["Create a new task with an old-ID-scoped idempotency key"]
+    I -->|"Workspace mismatch"| F["Stop with actionable error"]
     N -->|"One or more"| L{"Unique latest updatedAt?"}
     L -->|"Yes"| P["Persist latest matched ID"]
     L -->|"Tied / unusable"| A["Require user selection"]
     N -->|"None"| C["Create one empty task"]
     C --> W["Wait for owner/index to expose same ID"]
+    C2 --> W
     W --> P
     B --> D["Desktop IPC / real owner"]
     P --> D
@@ -185,7 +187,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 ## Release test matrix
 
 - Independent cold start and shutdown.
-- Valid ID reuse after title mutation, archived-duplicate recovery, archived no-match blocking, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
+- Valid ID reuse after title mutation, archived-binding replacement and persistence, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
 - Desktop rename continuity and explicit Rabi-side target switching after clearing the old ID.
 - Delayed index and concurrent single-flight creation.
 - Full pagination and bounded scan count.

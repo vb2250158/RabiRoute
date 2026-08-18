@@ -7,12 +7,18 @@ import {
   normalizeWebguiLanAccessConfig,
   type WebguiLanAccessConfig
 } from "./webguiLanAccess.js";
+import {
+  defaultPerformanceMonitoringConfig,
+  normalizePerformanceMonitoringConfig,
+  type PerformanceMonitoringConfig
+} from "../shared/performanceContract.js";
 
 export type RabiGlobalConfig = {
   rabiGuid: string;
   rabiName: string;
   rabiLinkRelay: RabiLinkRelayGlobalConfig;
   webguiLan: WebguiLanAccessConfig;
+  performance: PerformanceMonitoringConfig;
   createdAt: string;
   updatedAt: string;
 };
@@ -47,6 +53,7 @@ export class RabiGlobalConfigStore {
       rabiName: os.hostname() || "RabiRoute",
       rabiLinkRelay: defaultRabiLinkRelayConfig(),
       webguiLan: defaultWebguiLanAccessConfig(),
+      performance: defaultPerformanceMonitoringConfig(),
       createdAt: now,
       updatedAt: now
     };
@@ -57,6 +64,7 @@ export class RabiGlobalConfigStore {
   patch(patch: Partial<Pick<RabiGlobalConfig, "rabiName">> & {
     rabiLinkRelay?: Partial<RabiLinkRelayGlobalConfig>;
     webguiLan?: Partial<WebguiLanAccessConfig>;
+    performance?: Partial<PerformanceMonitoringConfig>;
   }): RabiGlobalConfig {
     const current = this.read();
     const next: RabiGlobalConfig = {
@@ -70,6 +78,9 @@ export class RabiGlobalConfigStore {
       webguiLan: patch.webguiLan
         ? normalizeWebguiLanAccessConfig({ ...current.webguiLan, ...patch.webguiLan })
         : current.webguiLan,
+      performance: patch.performance
+        ? normalizePerformanceMonitoringConfig({ ...current.performance, ...patch.performance })
+        : current.performance,
       updatedAt: new Date().toISOString()
     };
     this.write(next);
@@ -86,6 +97,7 @@ export class RabiGlobalConfigStore {
         rabiName: typeof parsed.rabiName === "string" && parsed.rabiName.trim() ? parsed.rabiName.trim() : os.hostname() || "RabiRoute",
         rabiLinkRelay: normalizeRabiLinkRelayConfig(parsed.rabiLinkRelay),
         webguiLan: normalizeWebguiLanAccessConfig(parsed.webguiLan),
+        performance: normalizePerformanceMonitoringConfig(parsed.performance),
         createdAt: typeof parsed.createdAt === "string" && parsed.createdAt.trim() ? parsed.createdAt.trim() : now,
         updatedAt: typeof parsed.updatedAt === "string" && parsed.updatedAt.trim() ? parsed.updatedAt.trim() : now
       };
@@ -94,6 +106,7 @@ export class RabiGlobalConfigStore {
         || normalized.rabiName !== parsed.rabiName
         || JSON.stringify(normalized.rabiLinkRelay) !== JSON.stringify(parsed.rabiLinkRelay)
         || JSON.stringify(normalized.webguiLan) !== JSON.stringify(parsed.webguiLan)
+        || JSON.stringify(normalized.performance) !== JSON.stringify(parsed.performance)
         || normalized.createdAt !== parsed.createdAt
         || normalized.updatedAt !== parsed.updatedAt
       ) {

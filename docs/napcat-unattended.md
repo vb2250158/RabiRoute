@@ -8,12 +8,12 @@
 
 > 状态：现行指南。RabiRoute 可管理、扫描和启动 NapCat 实例，但 QQ 登录验证仍由 NapCat/QQNT 负责。
 
-RabiRoute 负责接收 NapCat / OneBot 事件、记录消息、路由和投递处理端，也可以在用户点击“打开 NapCat”时编排本机 NapCat 的启动、快捷登录和 OneBot 连接修复；QQ 登录凭据和安全校验仍属于 NapCat / QQNT。不要把 QQ 密码、Cookie、token 写进 `data/route`、`data/roles`、示例文件或仓库。
+RabiRoute 负责接收 NapCat / OneBot 事件、记录消息、路由和投递处理端，也可以在 Manager 启动后或用户点击“打开 NapCat”时编排本机 NapCat 的启动、快捷登录和 OneBot 连接修复；QQ 登录凭据和安全校验仍属于 NapCat / QQNT。不要把 QQ 密码、Cookie、token 写进 `data/route`、`data/roles`、示例文件或仓库。
 
 ## 推荐职责划分
 
 - NapCat：启动 QQNT、维护 QQ 登录态、提供 WebUI、WebSocket Client 和 HTTP Server。
-- RabiRoute：监听 WebSocket、调用 OneBot HTTP、展示连接状态、记录消息和路由事件；用户明确点击“打开 NapCat”后，按绑定实例自动启动、选择已有 quick login 账号，并补齐 OneBot HTTP / WebSocket 配置。
+- RabiRoute：监听 WebSocket、调用 OneBot HTTP、展示连接状态、记录消息和路由事件；实例启用“启动 Rabi 时自动登录”后，Manager 监听成功即在后台执行启动、quick login 和 OneBot 修复。用户也可以点击“打开 NapCat”立即执行同一流程。
 - Windows：负责进程守护，例如开机自启 NapCat 和 RabiRoute manager。
 
 RabiRoute 不自动输入 QQ 密码，也不绕过验证码、新设备验证或风控确认。遇到这些情况时，一键流程只打开正确实例的已鉴权 WebUI，并给出一句需要用户完成的动作；确认完成后页面会继续复查连接。
@@ -30,7 +30,7 @@ RabiRoute 不自动输入 QQ 密码，也不绕过验证码、新设备验证或
 6. QQ 已登录但 OneBot 未连通：自动写入并应用该实例的 HTTP / WebSocket 配置。
 7. 只有验证码、新设备确认、扫码或无法安全判断的账号冲突，才把正确页面交给用户处理。
 
-健康检查接口保持只读；登录、启动和配置修复只发生在用户明确点击按钮后，由 manager 的 `napcat-ensure-ready` 动作接口编排。
+健康检查接口保持只读；登录、启动和配置修复由 manager 的 `napcat-ensure-ready` 动作编排。启动时自动登录在 Manager 开始监听后异步执行，Manager 不等待 NapCat 检查或登录完成。
 
 同一绑定 QQ 的启动、重启和停止动作会按账号串行执行。即使用户双击按钮、两个入口同时触发，或映射盘路径与 UNC 路径同时指向同一套 NapCat，也只允许一条生命周期操作进入；真正启动前还会再次读取 OneBot 登录状态，已就绪时直接复用，不创建第二棵 QQNT/NapCat 进程。该防重只保护进程生命周期，不会绕过扫码、验证码、设备确认或其他 QQ 安全验证。
 
@@ -72,9 +72,15 @@ setx NAPCAT_QUICK_PASSWORD "<qq-password>"
 
 不要在命令行截图、日志、Issue、PR、文档示例或 RibiWebGUI 配置里保留真实值。需要排障时只说变量是否存在和值长度，不打印密码。
 
+## 启动时自动登录
+
+每个 QQ 实例都有“启动 Rabi 时自动登录”开关，默认开启。开启后，Manager 监听成功即提交后台任务：先复用已在线的正确账号，否则启动绑定的 NapCat Shell、选择已有 quick login，并修复 OneBot HTTP / WebSocket 配置。不同账号或实例并发处理；绑定同一 QQ 的任务按账号串行。Manager 启动和 WebGUI 访问不等待这些步骤。
+
+关闭开关只跳过该实例的启动时自动登录；“打开 NapCat”、健康检查、手动启动和重启仍可使用。需要扫码、验证码、新设备确认或其他安全操作时，后台任务记录实际状态，用户之后从对应实例打开 WebUI 完成验证。
+
 ## 进程守护
 
-RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。它不会在后台无条件重启 NapCat；只有用户点击实例的“打开 NapCat”或明确执行启动/重启动作时，才控制该实例。
+RabiRoute manager 会守护自己启动的路由子进程，并在 `data/route/*/adapterConfig.json` 或 `data/roles/*/personaConfig.json` 改动后自动重载受影响路由。NapCat 的启动时自动登录只运行一次；运行期间退出、掉线或登录失效后，仍由健康状态提示和用户操作处理。
 
 NapCat 本体建议用以下方式之一守护：
 

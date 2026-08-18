@@ -11,6 +11,12 @@ import {
 import { codexThreadTitleMaxLength, normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
+import { executeDurableDelivery } from "./manager/durableDeliveryIdempotency.js";
+import {
+  buildManagedMessageImageBatches,
+  stageManagedMessageImages,
+  type ManagedMessageImageInput
+} from "./messageProcessing/managedAttachmentDelivery.js";
 import type { MessageAgentReferencedSender } from "./messageProcessing/referencedAgentSender.js";
 
 export const MESSAGE_AGENT_POOL_SCHEMA_VERSION = 2;
@@ -37,6 +43,8 @@ export type MessageAgentWorker = {
 };
 
 export type PersistedMessageAgentWorker = Omit<MessageAgentWorker, "affinities">;
+
+export type MessageAgentWorkerReference = Pick<MessageAgentWorker, "threadId" | "threadName" | "workspace">;
 
 export type MessageAgentPoolState = {
   schemaVersion: 2;
@@ -76,7 +84,13 @@ export type MessageAgentDeliveryRouting = {
   requirementId?: string;
   referencedSenders?: MessageAgentReferencedSender[];
   imagePaths?: string[];
+  imageAttachments?: ManagedMessageImageInput[];
 };
+
+export type MessageAgentPriorityContext = Pick<
+  PendingMessageGroup,
+  "groupId" | "endpoint" | "conversationKey" | "sender" | "replyToMessageId"
+>;
 
 const managerResponseLimitBytes = 1024 * 1024;
 const REFERENCED_AGENT_SESSION_WEIGHT = 6_000;
@@ -270,6 +284,61 @@ function readPoolState(statePath: string): { updatedAt: string; workers: Message
   }
 }
 
+function messageAgentWorkerOrder(
+  left: MessageAgentWorker,
+  right: MessageAgentWorker,
+  group?: MessageAgentPriorityContext,
+  routing: MessageAgentDeliveryRouting = {}
+): number {
+  const leftScore = group ? affinityScore(left, group, routing) : 0;
+  const rightScore = group ? affinityScore(right, group, routing) : 0;
+  return rightScore - leftScore
+    || latestAffinityTime(right) - latestAffinityTime(left)
+    || left.index - right.index
+    || (Date.parse(left.createdAt) || 0) - (Date.parse(right.createdAt) || 0)
+    || left.threadId.localeCompare(right.threadId);
+}
+
+export function rankMessageAgentWorkers(
+  workers: readonly MessageAgentWorker[],
+  group?: MessageAgentPriorityContext,
+  routing: MessageAgentDeliveryRouting = {}
+): MessageAgentWorker[] {
+  return [...workers].sort((left, right) => messageAgentWorkerOrder(left, right, group, routing));
+}
+
+export function readCurrentMessageAgentWorkers(
+  statePath: string,
+  maxAgents?: number
+): MessageAgentWorker[] {
+  const workers = readPoolState(statePath).workers;
+  const affinityByThreadId = readAffinityState(affinityStatePathForPoolState(statePath));
+  for (const worker of workers) mergeWorkerAffinities(worker, affinityByThreadId.get(worker.threadId) ?? []);
+  const ranked = rankMessageAgentWorkers(workers);
+  const normalizedLimit = Number.isFinite(maxAgents) && Number(maxAgents) > 0
+    ? Math.max(1, Math.floor(Number(maxAgents)))
+    : Number.POSITIVE_INFINITY;
+  return ranked.slice(0, normalizedLimit);
+}
+
+export function resolveCurrentMessageAgentWorker(
+  statePath: string,
+  historicalWorker?: MessageAgentWorkerReference,
+  maxAgents?: number,
+  context?: MessageAgentPriorityContext,
+  routing: MessageAgentDeliveryRouting = {}
+): MessageAgentWorkerReference | undefined {
+  const currentWorkers = readCurrentMessageAgentWorkers(statePath, maxAgents);
+  if (currentWorkers.length === 0) return undefined;
+  const current = rankMessageAgentWorkers(currentWorkers, context, routing)[0];
+  if (!current) return undefined;
+  return {
+    threadId: current.threadId,
+    threadName: current.threadName,
+    workspace: current.workspace
+  };
+}
+
 function affinityStatePathForPoolState(statePath: string): string {
   return path.join(path.dirname(path.resolve(statePath)), "routing-affinity.json");
 }
@@ -302,6 +371,57 @@ function readAffinityState(statePath: string): Map<string, MessageAgentAffinity[
   return result;
 }
 
+export function replacePersistedMessageAgentWorker(
+  statePath: string,
+  previousThreadId: string,
+  replacement: MessageAgentWorkerReference,
+  now = new Date()
+): boolean {
+  const pool = readPoolState(statePath);
+  if (!pool.workers.some((worker) => worker.threadId === previousThreadId)) return false;
+  const workers = mergeWorkersByThreadId(pool.workers.map((worker) => worker.threadId === previousThreadId
+    ? {
+        ...worker,
+        threadId: replacement.threadId,
+        threadName: replacement.threadName,
+        workspace: replacement.workspace,
+        initializedAt: undefined
+      }
+    : worker));
+  const updatedAt = now.toISOString();
+  atomicWriteFileSync(statePath, `${JSON.stringify({
+    schemaVersion: MESSAGE_AGENT_POOL_SCHEMA_VERSION,
+    updatedAt,
+    workers: workers.map(({ affinities: _affinities, ...worker }) => worker)
+  }, null, 2)}\n`);
+
+  const affinityPath = affinityStatePathForPoolState(statePath);
+  const affinities = readAffinityState(affinityPath);
+  const previousAffinities = affinities.get(previousThreadId) ?? [];
+  const replacementAffinities = affinities.get(replacement.threadId) ?? [];
+  affinities.delete(previousThreadId);
+  const affinityWorker: MessageAgentWorker = {
+    threadId: replacement.threadId,
+    threadName: replacement.threadName,
+    workspace: replacement.workspace,
+    index: 1,
+    createdAt: new Date(0).toISOString(),
+    affinities: []
+  };
+  mergeWorkerAffinities(affinityWorker, replacementAffinities);
+  mergeWorkerAffinities(affinityWorker, previousAffinities);
+  affinities.set(replacement.threadId, affinityWorker.affinities);
+  atomicWriteFileSync(affinityPath, `${JSON.stringify({
+    schemaVersion: MESSAGE_AGENT_AFFINITY_SCHEMA_VERSION,
+    updatedAt,
+    workers: [...affinities.entries()].map(([threadId, workerAffinities]) => ({
+      threadId,
+      affinities: workerAffinities
+    }))
+  }, null, 2)}\n`);
+  return true;
+}
+
 function mergeWorkerAffinities(worker: MessageAgentWorker, affinities: MessageAgentAffinity[]): void {
   const merged = new Map<string, MessageAgentAffinity>();
   for (const affinity of [...worker.affinities, ...affinities]) {
@@ -317,7 +437,7 @@ function mergeWorkerAffinities(worker: MessageAgentWorker, affinities: MessageAg
 
 function affinityScore(
   worker: MessageAgentWorker,
-  group: PendingMessageGroup,
+  group: MessageAgentPriorityContext,
   routing: MessageAgentDeliveryRouting = {}
 ): number {
   const affinityWeight = worker.affinities.reduce((best, affinity) => {
@@ -340,7 +460,7 @@ function latestAffinityTime(worker: MessageAgentWorker): number {
   return worker.affinities.reduce((latest, affinity) => Math.max(latest, Date.parse(affinity.lastUsedAt) || 0), 0);
 }
 
-function affinityForGroup(worker: MessageAgentWorker, group: PendingMessageGroup): MessageAgentAffinity | undefined {
+function affinityForGroup(worker: MessageAgentWorker, group: MessageAgentPriorityContext): MessageAgentAffinity | undefined {
   return [...worker.affinities]
     .reverse()
     .sort((left, right) => {
@@ -378,7 +498,7 @@ type ActiveContinuationCandidate = {
   affinity?: MessageAgentAffinity;
 };
 
-type MessageAgentWorkerAvailability = "active" | "idle" | "notLoaded" | "unavailable" | "missing";
+type MessageAgentWorkerAvailability = "active" | "idle" | "notLoaded" | "archived" | "unavailable" | "missing";
 
 function continuationCheckPrompt(
   candidate: ActiveContinuationCandidate,
@@ -414,38 +534,27 @@ function workerHandoffPrompt(
   const criticalFactInstructions = [
     "",
     "[项目事实判断由 Agent 负责]",
-    "RabiManager 不根据关键词猜测消息含义。你必须读取原消息、附件和必要的回复链，判断它是否包含需要长期保留的项目事实。",
-    "RabiManager 会把本消息按计划和记忆的标题、ID、关键词召回，并把命中项写入消息处理需求。命中只是候选关联，不代表一定相关；但每个命中的计划或记忆都必须读取并逐项处理，不能看见后直接忽略。",
-    "在 outcome 中为每个命中项提交 knowledgeMatchDispositions：knowledgeId、knowledgeType、relevance、判断证据和 actions。相关项至少选择一项实际动作：reply、discuss、update_plan、update_memory、create_plan、create_memory；不相关时只能使用 no_action 并说明为什么是误命中。",
-    "update/create 动作必须写 recordType、recordId、包含原消息 ID 的写回证据和 verifiedAt；Manager 会读取目标计划或记忆核验。reply/discuss 必须实际进入回复发送流程并取得 Outbox 回执。需要秘书或原计划任务继续处理时先 handoff，不能伪写成已经更新。",
-    "普通群消息也适用这套处理：它可能只是需要简短确认或参与讨论，也可能是既有计划的新证据、范围调整、反馈或新的可复用记忆。不要把“不是关键事实”误解成“无需处理”。",
-    "如果 knowledgeMatches 为空，不能直接认为无关。请从消息和回复链提取具体对象、功能名、页面名、人物、版本和动作，至少换两组同义关键词查询计划与记忆；仍无命中时，由你判断应当回复/讨论、创建新计划、形成新记忆，还是确属结束语/重复/他人已完整回答。",
-    "对图片、文件或短句，先结合被回复消息和同组上下文理解；不能因为正文缺少关键词而跳过。无法取得附件或回复链时明确 handoff/追问，不得当作无事项。",
-    "消息要求“查一下”“核对”“定位”“谁写的”“是否实装”时，把它当作行动请求：先完成调查，再回复查到的事实。未完成调查不得发送猜测、调查步骤、验收模板或长篇说明；若消息直接 @ 且确需即时确认，最多一句“我去查具体位置和实现，查完回”。",
-    "消息含图片或附件时，准备外发前必须实际查看附件内容；只看到 [CQ:image]、文件名或下载链接不算已查看。无法查看时不要推断图片内容，先内部取图或转交。",
-    "需求 source.evidenceReviewRequired=true 时，关闭或准备回复前还必须提交 sourceEvidenceReview：reviewedMessageIds 要覆盖 source.messageIds 和 replyChainMessageIds；attachmentReviews 要逐个覆盖 source.attachments，并写明实际看到的内容。附件 status=unavailable 时只能重试取图或 handoff，Manager 不允许进入发送状态。",
-    "引用 QQ 图片消息回复时，明确发送请求还必须在 params.replyImageDescriptions 中按原图顺序逐张写明图片内容和它想表达的意思。缺少任一张、描述为空或只写‘已查看’都会被发送接口拒绝；发送成功后说明会保存到图片旁的同名 .md。",
-    "如果发起人和被询问者已经完成问答或确认，例如“我这边改 ok”后对方回复“ok”，该话题已闭合，本角色没有新增事实时必须保持安静，不得补总结、建议或验收要求。",
-    "群内可见回复默认只写一到两句，直接回答对方的问题；内部计划、任务归类、调查过程、代码层级和测试步骤只留在任务内，除非对方明确追问技术细节。",
-    "项目事实包括但不限于：上线/公测的内部目标或正式日期、版本范围、批准/否决、负责人变化、取消/延期、发布版本。必须区分候选目标、正式决定和公开公告，不能只看到日期就自行定性。",
-    "在关闭或准备回复前，先 POST 消息处理 outcome，并提交 projectFactAssessment：status=none/critical、reviewedMessageIds、replyChainChecked=true、具体 evidence、assessedAt、assessedByThreadId；critical 时还要提交 facts(kind/evidence)。",
-    "判断为 critical 时，先交原计划秘书更新计划、绑定记忆或项目文档；没有唯一计划时交计划秘书查重，跨计划或无法判断时交给主人格。完成后再提交 criticalFactDisposition 的记录类型、记录 ID、核对证据和核对时间。",
-    "没有完成项目事实判断或召回项处理时只能 handoff，不能用 no_reply、准备回复或普通最终文本关闭需求。RabiManager 只召回、保存、核验证据和跟踪状态，不替你决定消息语义或业务动作。",
-    "回答排期、上线日期、版本范围、负责人或审批状态前，必须先查本群最新消息与已登记的项目事实；公开公告和旧会议材料只能作为补充，不能覆盖更新的内部决定。"
+    "读取原消息、回复链和附件；Manager 的召回结果只算候选。",
+    "逐项提交 knowledgeMatchDispositions。相关项执行 reply、discuss、update/create_plan 或 update/create_memory；不相关项写 no_action 和证据。",
+    "写计划或记忆时提交 recordType、recordId、原消息 ID 和 verifiedAt；转交时使用 handoff。",
+    "没有召回结果时，从对象、页面、人物、版本和动作中换两组关键词查询，再判断回复、讨论、建计划、记忆或结束。",
+    "调查类请求先查清事实。附件必须实际查看；无法查看时取图、追问或 handoff。",
+    "source.evidenceReviewRequired=true 时提交 sourceEvidenceReview；聚合需求保留全部证据，回复时只核对本次 sourceMessageId、明确回复链和正文实际引用的附件。",
+    "回复 QQ 图片时，params.replyImageDescriptions 按原图顺序说明内容和含义。",
+    "群内回复默认一至两句，只回答问题；内部调查和计划细节留在任务内。",
+    "版本、日期、审批、负责人、取消、延期和发布版本属于项目事实；区分候选、决定和公告。",
+    "关闭或准备回复前提交 projectFactAssessment；critical 时先完成记录，再提交 criticalFactDisposition。",
+    "回答排期、版本、负责人或审批状态前，核对本群最新消息和已登记事实。"
   ];
   const heartbeatInstructions = group.endpoint === "heartbeat"
     ? [
         "",
         "[Heartbeat 专用职责]",
-        "heartbeat 巡检由当前消息处理 Agent 自己执行，不先交给主人格，也不把定时巡检本身判断为“重要、跨计划事项”。",
-        "按巡检游标增量读取群消息并与计划摘要、问题映射和发送回执对比；只在证据不足时按 messageId、planId 或 taskBinding 查询更早记录，不默认读取全部历史。",
-        "增量消息中若出现上线/公测日期、版本范围、批准/否决、负责人变更、取消/延期或发布版本，必须逐条核对是否已经写入对应计划、绑定记忆或项目文档；未记录项优先于普通遗漏处理，并交秘书完成记录后回传证据。",
-        "同时检查消息处理看板中尚无 projectFactAssessment，或已判断为 critical 但尚无 criticalFactDisposition 的需求；语义复核仍由 heartbeat Agent 完成，Manager 只列出缺失项。",
-        "你只负责只读比对、遗漏识别、进展汇总和分诊：已有计划的新证据交原计划 Agent；漏建、漏关联、漏绑或需要维护计划的事项交计划秘书；不得自己修改计划或实施业务。",
-        "不得把 heartbeat 任务本身投给主人格。先完成比对，并等待秘书或计划 Agent 把处理结果送回当前消息处理任务。",
-        "把自上次群汇报后出现的真实工作进展整理成可直接发送的简短正文；没有状态变化时不得重复汇报。",
-        "只有形成需要主人格用户决定的具体问题、跨计划冲突或已经准备好的群进展/提醒正文，才把精简结果投给主人格；投递内容必须写明引用消息、planId、变化证据和拟发送正文，不能再次转发整项巡检。",
-        "没有遗漏、没有真实新进展且只完成内部控制面更新时保持安静，最终写“处理结果：仅更新控制面，无需外部通知”。"
+        "按游标增量比对群消息、计划、问题映射和回执；证据不足时再查历史。",
+        "项目事实缺失、projectFactAssessment 缺失或 criticalFactDisposition 缺失时优先处理。",
+        "只做只读比对、遗漏识别、汇总和分诊。新证据交原计划 Agent；计划维护交秘书。",
+        "需要决定、跨计划冲突或已有可发送正文时才交给主人格，并附消息、planId、证据和正文。",
+        "没有遗漏或新进展时写：处理结果：仅更新控制面，无需外部通知。"
       ]
     : [];
   return [
@@ -457,11 +566,11 @@ function workerHandoffPrompt(
     `工作目录：${worker.workspace}`,
     `当前主人格任务：${options.sourceThreadName}`,
     `当前主人格任务 ID：${options.sourceThreadId}`,
-    `本任务向其它 Agent 投递时必须填写 sourceThreadId=${worker.threadId}、sourceAgentType=message_processing，并显式填写 responsePolicy=required 或 none；要求对方返回结果时还必须填写 responseInstruction。`,
-    "把事项交给秘书、原计划 Agent 或主人格时，委托消息必须写明上述消息组 ID、消息处理任务 ID 和工作目录；本轮存在消息处理需求 ID 时也必须带上。",
-    `要求对方完成后调用 POST ${threadsApi}，以 action=send、threadId=${worker.threadId}、cwd=${worker.workspace}、sourceThreadId=对方自己的完整任务 ID、sourceAgentType=plan_secretary 或 plan_agent 或 primary_persona、inReplyToRequestId=投递中给出的 requestId、result=结果、nextAction=下一步，并重新填写 responsePolicy=required 或 none，把计划 ID、进展或判断结果送回本消息处理任务。只有这次正式接口投递算回复，普通 Codex 最终输出不算。`,
-    "Agent 间投递只认本次 HTTP 响应：code=0、status=delivered、delivery.status=delivered 表示目标 Codex 任务已接收；带消息处理需求时还应有 handoff.status=recorded。code=-1 或 status=failed 时按 error.field 和 error.message 修正后再请求；status=delivered_tracking_failed 表示目标已接收但看板记录失败，不得重复投递。",
-    "对方的结果回到这里后，由你结合原消息、最新上下文和发送权限决定是否回复；不要让秘书、计划 Agent 或主人格绕过本消息组直接猜测发送对象。",
+    `向其它 Agent 投递时填写 sourceThreadId=${worker.threadId}、sourceAgentType=message_processing 和 responsePolicy；要求回复时填写 responseInstruction。`,
+    "交接内容保留消息组 ID、任务 ID、工作目录和需求 ID。",
+    `对方通过 POST ${threadsApi} 回复本任务，填写 inReplyToRequestId、result、nextAction 和 responsePolicy。`,
+    "code=0、status=delivered、delivery.status=delivered 才表示任务已接收；delivered_tracking_failed 不得重投。",
+    "收到结果后，由本任务结合最新上下文决定是否外发。",
     ...heartbeatInstructions,
     ...criticalFactInstructions,
     "",
@@ -469,12 +578,11 @@ function workerHandoffPrompt(
     ...proactiveCommunicationPolicyLines(communicationMode),
     "",
     "[本轮可见性与结束条件]",
-    "当前消息处理任务的 Codex 最终输出只供内部查看；原群成员、私聊对象和主人格都不会自动看到。",
-    "不得把“请用户确认”或待审批问题只写在当前任务的最终输出里，也不得把准备发送的群聊/私聊文案当成已经送达。",
-    "如果当前人格允许直接使用注入的明确发送接口，必须按注入模板填写 channel、params 和 payload，实际调用并取得对应渠道的发送回执；如果人格规则要求主人格复核或使用专用发送 Skill，则必须把消息组 ID、原消息目标、引用消息 ID、计划 ID、拟发送正文和所需决定实际投递给主人格。Heartbeat 必须先满足上面的专用例外条件，不能因为巡检本身无法直接发群就提前唤醒主人格。",
-    `投递给主人格时调用 POST ${threadsApi}，填写 action=send、threadId=${options.sourceThreadId}、cwd=${options.workspace}、sourceThreadId=${worker.threadId}、sourceAgentType=message_processing、responsePolicy=required、responseInstruction=执行外发或取得用户决定后把回执或决定返回消息处理任务${requirementId ? `、messageProcessing={"requirementId":"${requirementId}","outcome":"handoff","targetAgentType":"primary_persona"}` : ""}；prompt 必须是重新编写的“主人格交接”，只保留消息组 ID、原消息目标、引用消息 ID、计划 ID、变化证据、需要决定的问题或拟发送正文，本轮存在消息处理需求 ID 时一并保留，并明确写出“这不是让你只在 Codex 输出，请按原消息端发送规则执行或向当前主人格用户提问，并把发送回执或用户决定送回消息处理任务”。禁止复制消息处理 Agent 初始化、当前消息处理归属或整份注入上下文。投递给主人格并取得 Manager 接受回执后，才可以结束本轮。`,
-    "如果不需要任何人看到或回答，最终输出必须明确写“处理结果：无需对外回复”，再写明命中了纯结束语/重复消息/机器人自身消息/他人已完整回答且无新增价值中的哪一种；不得只写“无需计划操作”或“暂无实施动作”。",
-    "秘书、计划 Agent 或主人格返回的新结果也必须重新经过本段判断；不能把它改写成一段面向用户的话后只留在当前 Codex 最终输出。"
+    "当前任务输出只供内部查看。外部消息必须取得渠道回执；待决定事项必须实际交给主人格。",
+    "直接发送时使用注入的 channel、params 和 payload。人格要求复核时，交接消息组、目标、引用消息、planId、正文和待决定项。",
+    `交给主人格时 POST ${threadsApi}，目标 threadId=${options.sourceThreadId}，sourceThreadId=${worker.threadId}，sourceAgentType=message_processing，responsePolicy=required${requirementId ? `，并带 messageProcessing.requirementId=${requirementId}` : ""}。只保留必要上下文，要求回传发送回执或决定。`,
+    "无需外发时写“处理结果：无需对外回复”，并注明结束语、重复、自身消息或他人已完整回答。",
+    "任何 Agent 返回的新结果都要重新判断是否外发。"
   ].join("\n");
 }
 
@@ -486,16 +594,15 @@ export function messageAgentInitializationPrompt(options: MessageAgentPoolOption
     `主人格任务 ID：${options.sourceThreadId}`,
     `工作目录：${options.workspace}`,
     "",
-    "你是专职消息处理 Agent，不是主人格、计划秘书或计划执行 Agent。你处理 RabiRoute 已合并好的消息组，并保留该消息端、会话、说话人和回复链的有限相关上下文。",
-    "先判断消息组是否需要回复、是否属于已有计划、是否形成新需求，以及是否重要、跨计划或仍然不确定。普通对话和必要澄清由你处理；已有计划的增量交给原 taskBinding 对应的计划 Agent；新需求或计划维护交给计划秘书；重要、跨计划或无法可靠判断的事项交给主人格任务。",
+    "你是消息处理 Agent，负责判断消息、关联计划和选择出口。",
+    "普通对话由本任务处理；已有计划增量交原计划 Agent；新需求或计划维护交秘书；关键决定、跨计划冲突或无法判断的事项交主人格。",
     ...proactiveCommunicationPolicyLines("internal"),
-    "明确 @、直接回复、私聊和其它明确面向本角色的消息默认需要可见回应；是否需要计划操作与是否需要回复必须分开判断。",
-    "Heartbeat 是例外：定时巡检本身不算需要主人格处理的“重要、跨计划事项”。收到 heartbeat 时由你完成增量群消息与计划的只读比对，并汇总自上次通知后的真实进展；具体遗漏交秘书或原计划 Agent，只有最终出现需要人决定或已经准备好对外发送的内容才找主人格。",
-    "不要自己实施计划业务，不要把本消息处理任务写入计划 taskBinding，不要代替计划秘书维护计划，也不要为了速度猜测不确定的计划关联。信息不足时扩大查询或向原消息端澄清。",
-    "你负责判断并准备沟通，但只有明确发送接口返回的目标渠道回执或 Manager 线程桥接受回执能证明消息已进入正确出口。语音合成成功不能证明 QQ 已发送，Codex 最终文本也不等于消息已经发出。",
-    "Manager 线程桥的成功回执必须同时包含 code=0、status=delivered 和 delivery.status=delivered；缺参数或投递失败会在同一响应的 error.field、error.message、error.retryable 中说明。不要把 HTTP 请求已发起或 Codex 命令已执行当成投递成功。",
-    "你向其它 Agent 任务投递消息时，必须填写 sourceThreadId=当前消息处理任务的完整 ID、sourceAgentType=message_processing 和 responsePolicy=required 或 none。要求对方回复时还必须填写 responseInstruction；回复已有请求时必须填写 inReplyToRequestId、result 和 nextAction。Manager 会按 ID 核对并显示真实的来源任务名和会话 ID。",
-    "同一消息组的后续补充可能在当前轮次工作中到达；把它作为同一上下文的新增材料处理。若收到的消息组明显与当前事项无关，明确返回需要重新分配，不要混入原结论。"
+    "明确 @、回复和私聊默认需要回应；计划操作与外部回复分开判断。",
+    "Heartbeat 只做增量比对和汇总；遗漏交秘书或原计划 Agent，需要决定或已有正文时再找主人格。",
+    "不实施计划业务，不写 taskBinding，不代替秘书维护计划。信息不足时查询或澄清。",
+    "渠道回执证明外发，Manager 接受回执证明 Agent 投递；Codex 最终文本不算送达。",
+    "Agent 投递填写 sourceThreadId、sourceAgentType 和 responsePolicy；要求回复时补 responseInstruction，回复请求时补 inReplyToRequestId、result 和 nextAction。",
+    "同组补充并入当前上下文；无关消息返回重新分配。"
   ].join("\n");
 }
 
@@ -520,13 +627,13 @@ export class MessageAgentPool {
     this.maxAgents = Number.isFinite(options.maxAgents) && Number(options.maxAgents) > 0
       ? Math.max(1, Math.floor(Number(options.maxAgents)))
       : Number.POSITIVE_INFINITY;
-    const restoredWorkers = restored.workers
-      .filter((worker) => worker.threadId !== options.sourceThreadId)
-      .sort((left, right) => left.index - right.index || (Date.parse(left.createdAt) || 0) - (Date.parse(right.createdAt) || 0));
+    const restoredWorkers = restored.workers.filter((worker) => worker.threadId !== options.sourceThreadId);
     for (const worker of restoredWorkers) mergeWorkerAffinities(worker, affinityByThreadId.get(worker.threadId) ?? []);
-    this.workers = restoredWorkers.slice(0, this.maxAgents);
+    const rankedWorkers = rankMessageAgentWorkers(restoredWorkers);
+    this.workers = rankedWorkers.slice(0, this.maxAgents);
     if (this.workers.length === 1 && restoredWorkers.length > 1) {
-      for (const detached of restoredWorkers.slice(1)) mergeWorkerAffinities(this.workers[0], detached.affinities);
+      for (const detached of rankedWorkers.slice(1)) mergeWorkerAffinities(this.workers[0], detached.affinities);
+      this.workers[0].index = 1;
     }
     this.now = dependencies.now ?? (() => new Date());
     this.request = dependencies.request ?? ((payload) => this.managerRequest(payload));
@@ -546,6 +653,7 @@ export class MessageAgentPool {
       await this.ensureWorkerTitles();
       const selection = await this.selectWorker(group, routing);
       const worker = selection.worker;
+      if (selection.replaceArchived) await this.replaceArchivedWorker(worker);
       const currentOptions = { ...this.options, sourceThreadName: this.sourceThreadName };
       const ownership = workerHandoffPrompt(worker, group, this.options.managerBaseUrl, currentOptions, routing.requirementId);
       const promptWithContinuationCheck = selection.activeCandidate
@@ -565,16 +673,87 @@ export class MessageAgentPool {
       };
     });
     try {
-      await this.request({
-        action: "send",
-        threadId: allocation.worker.threadId,
-        cwd: allocation.worker.workspace,
-        sandbox: "workspace-write",
-        prompt: allocation.prompt,
-        model: this.options.model,
-        reasoningEffort: this.options.reasoningEffort,
-        imagePaths: routing.imagePaths
+      const staged = routing.requirementId && routing.imageAttachments
+        ? stageManagedMessageImages({
+            workspace: allocation.worker.workspace,
+            requirementId: routing.requirementId,
+            attachments: routing.imageAttachments
+          })
+        : {
+            ready: (routing.imagePaths || []).map((imagePath, index) => ({
+              id: `legacy-image-${index + 1}`,
+              path: imagePath,
+              contentHash: imagePath
+            })),
+            unavailable: []
+          };
+      const unavailablePrompt = staged.unavailable.length
+        ? `\n\n[不可用图片附件]\n${staged.unavailable.map((item) => `${item.id}：${item.error}`).join("\n")}\n这些图片未成功附带。需要查看图片才能判断时，保持等待附件恢复或交接，不得推断内容。`
+        : "";
+      const batches = buildManagedMessageImageBatches({
+        requirementId: routing.requirementId || `${group.groupId}:${allocation.worker.threadId}`,
+        prompt: `${allocation.prompt}${unavailablePrompt}`,
+        images: staged.ready
       });
+      for (const batch of batches) {
+        if (!routing.requirementId) {
+          const response = await this.request({
+            action: "send",
+            threadId: allocation.worker.threadId,
+            title: allocation.worker.threadName,
+            createIfMissing: true,
+            cwd: allocation.worker.workspace,
+            sandbox: "workspace-write",
+            prompt: batch.prompt,
+            model: this.options.model,
+            reasoningEffort: this.options.reasoningEffort,
+            imagePaths: batch.imagePaths
+          });
+          this.adoptResolvedWorker(allocation.worker, response);
+          continue;
+        }
+        const outcome = await executeDurableDelivery({
+          rootDir: path.dirname(path.resolve(this.options.statePath)),
+          namespace: "message-requirement-delivery",
+          deliveryId: batch.deliveryId,
+          payload: {
+            threadId: allocation.worker.threadId,
+            requirementId: routing.requirementId,
+            batchIndex: batch.batchIndex,
+            batchCount: batch.batchCount,
+            imagePaths: batch.imagePaths
+          },
+          deliver: () => this.request({
+            action: "send",
+            threadId: allocation.worker.threadId,
+            title: allocation.worker.threadName,
+            createIfMissing: true,
+            cwd: allocation.worker.workspace,
+            sandbox: "workspace-write",
+            prompt: batch.prompt,
+            model: this.options.model,
+            reasoningEffort: this.options.reasoningEffort,
+            imagePaths: batch.imagePaths,
+            messageDelivery: {
+              requirementId: routing.requirementId,
+              deliveryId: batch.deliveryId,
+              batchIndex: batch.batchIndex,
+              batchCount: batch.batchCount
+            }
+          }),
+          recover: async (error) => {
+            if (!/timeout|timed out|aborted|connection closed|EPIPE/i.test(error instanceof Error ? error.message : String(error))) throw error;
+            const readback = await this.request({ action: "read", threadId: allocation.worker.threadId, deliveryId: batch.deliveryId });
+            const state = String(readback.delivery?.state || "uncertain");
+            if (state === "accepted" || state === "completed") return { state: "completed", result: readback };
+            if (state === "missing") return { state: "retry" };
+            if (state === "in_progress") return { state: "in_progress", reason: "The target task is still processing this delivery." };
+            return { state: "uncertain", reason: "The target task could not authoritatively confirm this delivery; do not resend automatically." };
+          }
+        });
+        if (outcome.state !== "completed") throw new Error(outcome.reason);
+        this.adoptResolvedWorker(allocation.worker, outcome.result as Record<string, any> | undefined);
+      }
       if (allocation.shouldInitialize) allocation.worker.initializedAt = this.now().toISOString();
       this.persist();
       return structuredClone(allocation.worker);
@@ -606,11 +785,12 @@ export class MessageAgentPool {
   private async selectWorker(group: PendingMessageGroup, routing: MessageAgentDeliveryRouting): Promise<{
     worker: MessageAgentWorker;
     activeCandidate?: ActiveContinuationCandidate;
+    replaceArchived?: boolean;
   }> {
-    const ranked = this.workers
+    const ranked = rankMessageAgentWorkers(this.workers, group, routing)
       .map((worker) => ({ worker, score: affinityScore(worker, group, routing) }))
       .filter((candidate) => candidate.score > 0)
-      .sort((left, right) => right.score - left.score || latestAffinityTime(right.worker) - latestAffinityTime(left.worker));
+      .filter((candidate) => Boolean(candidate.worker));
     // Heartbeat is one continuing control-plane responsibility, not a new
     // conversation every time the timer fires. Always steer the next tick to
     // the most familiar heartbeat worker, even while its current turn is
@@ -627,8 +807,7 @@ export class MessageAgentPool {
     const activeCandidate = activeCandidateRow
       ? { worker: activeCandidateRow.worker, affinity: affinityForGroup(activeCandidateRow.worker, group) }
       : undefined;
-    const idleFallbacks = [...this.workers]
-      .sort((left, right) => latestAffinityTime(left) - latestAffinityTime(right) || left.index - right.index);
+    const idleFallbacks = rankMessageAgentWorkers(this.workers, group, routing);
     for (const worker of idleFallbacks) {
       if (availability.get(worker.threadId) === "idle") return { worker, activeCandidate };
     }
@@ -641,6 +820,11 @@ export class MessageAgentPool {
     }
     for (const worker of idleFallbacks) {
       if (availability.get(worker.threadId) === "notLoaded") return { worker, activeCandidate };
+    }
+    for (const worker of idleFallbacks) {
+      if (availability.get(worker.threadId) === "archived") {
+        return { worker, activeCandidate, replaceArchived: true };
+      }
     }
 
     if (this.workers.length >= this.maxAgents && this.workers.length > 0) {
@@ -784,6 +968,7 @@ export class MessageAgentPool {
   }
 
   private availabilityFromResponse(response: Record<string, any>): MessageAgentWorkerAvailability {
+    if (response.thread?.archived === true) return "archived";
     const type = String(response.thread?.status?.type || "").trim();
     if (type === "active" || type === "idle" || type === "notLoaded" || type === "unavailable") return type;
     // Compatibility with an older Manager during a rolling restart. The new
@@ -791,6 +976,36 @@ export class MessageAgentPool {
     if (response.thread?.active === true) return "active";
     if (response.thread?.active === false) return "idle";
     return "unavailable";
+  }
+
+  private async replaceArchivedWorker(worker: MessageAgentWorker): Promise<void> {
+    const response = await this.request({
+      action: "resolve",
+      threadId: worker.threadId,
+      title: worker.threadName,
+      cwd: worker.workspace,
+      createIfMissing: true,
+      lookupMode: "state_db"
+    });
+    if (!this.adoptResolvedWorker(worker, response)) {
+      throw new Error(`Archived Message Agent task did not return a replacement task: ${worker.threadName}`);
+    }
+  }
+
+  private adoptResolvedWorker(worker: MessageAgentWorker, response?: Record<string, any>): boolean {
+    const thread = response?.thread as { id?: unknown; title?: unknown; cwd?: unknown } | undefined;
+    const nextThreadId = String(thread?.id || response?.threadId || "").trim();
+    if (!nextThreadId) return false;
+    if (nextThreadId === this.options.sourceThreadId) {
+      throw new Error("Message Agent task resolution returned the Primary Persona task id; refusing role crossover.");
+    }
+    if (nextThreadId === worker.threadId) return true;
+    worker.threadId = nextThreadId;
+    worker.threadName = String(thread?.title || worker.threadName);
+    worker.workspace = String(thread?.cwd || worker.workspace);
+    worker.initializedAt = undefined;
+    this.persist();
+    return true;
   }
 
   private remember(worker: MessageAgentWorker, group: PendingMessageGroup): void {

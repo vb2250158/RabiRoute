@@ -74,15 +74,14 @@ export function planTaskCompletionAgentText(delivery: PlanTaskCompletionDelivery
   const boundWorkspace = String(delivery.plan.taskBinding?.workspace || delivery.sourceCwd || "").trim();
   return [
     ...planTaskCompletionSourceLines(delivery),
-    "这条结果已经直接投递给负责该计划的秘书，不需要主人格先转发。秘书必须在同一轮完成控制面闭环：",
-    "1. GET 读取该计划、当前步骤、记忆和绑定任务的真实状态并消费阶段结果；不要仅因本轮结束就把整个计划标为完成。",
-    "2. PATCH 更新计划步骤、状态、nextAction、waitingFor、必要的 approvalRequest 和记忆；只有完整、可提交且 responseStatus=pending 的审批合同会由 Manager 自动派生阻塞，isBlocked 不得手写。其它困难继续询问、重试、改道、拆分或补证据。",
-    `3. 若计划仍未终态、未暂停且没有真实阻塞，通过 POST /api/agent/threads，action=send，精确续投 plan.taskBinding.sessionId=${delivery.sourceSessionId}${boundWorkspace ? `、workspace=${boundWorkspace}` : ""} 对应的原业务任务；填写当前秘书自己的 sourceThreadId、sourceAgentType=plan_secretary、responsePolicy=required 和 responseInstruction=完成下一步后返回结果与后续动作，续投正文必须给出一个可验证的下一步。`,
-    "4. 普通进展、状态变化、等待条件和可继续执行的下一步由秘书直接处理，不要转给主人格。只有确实需要用户或主人格做决定、批准、授权、补充输入，或者计划已经完整收尾并需要最终复核/对外说明时，才通过 Manager 线程桥升级给主人格。",
-    "5. 不得把任何“协助处理计划”秘书会话写入 taskBinding，也不得因秘书轮转或计划暂停清空业务 taskBinding。只有业务任务确实失效并完成受控迁移时才改绑；计划完成后可保留绑定作为历史证据。",
-    "6. 秘书负责计划/记忆更新、任务查重、结果消费和续投，禁止亲自执行调查、代码/Prefab/配置、Unity/SVN/构建/发布或外部系统操作。",
-    "7. 本轮结束前检查是否还有可推进但无人管理的计划，以及可推进但空闲的业务任务；active/in-progress 业务任务不要重复投递。",
-    "秘书可以创建临时子 Agent 加快计划盘点、任务查重、状态核对和结果摘要；秘书及其子 Agent 都不是业务 owner，业务执行仍由 plan.taskBinding 指向的独立任务负责。"
+    "结果已直达计划秘书。本轮完成以下事项：",
+    "1. 读取计划、步骤、记忆和业务任务状态，消费本次结果；单轮结束不等于计划完成。",
+    "2. 更新状态、nextAction、waitingFor、必要的 approvalRequest 和记忆。isBlocked 只由 Manager 派生。",
+    `3. 计划仍可推进时，通过 POST /api/agent/threads 续投原业务任务 ${delivery.sourceSessionId}${boundWorkspace ? `（${boundWorkspace}）` : ""}；使用 sourceAgentType=plan_secretary、responsePolicy=required，并给出可验证的下一步。`,
+    "4. 仅把决定、批准、授权、缺少输入或计划最终复核升级给主人格。",
+    "5. taskBinding 只指向业务任务；秘书只维护控制面，不执行调查、代码、构建、发布或外部操作。",
+    "6. PangHu 正式 Main 的 Editor 占用、导入、MCP 不可用或共享测试排队不构成全局等待；不得停止 Editor 或取消他人测试，原任务继续实现、静态资源/序列化合同、非 Unity runner、CLI 与收窄 SVN 工作，剩余运行交互转人工或后续验收。",
+    "7. 检查可推进计划均有人管理，空闲业务任务已续投，运行中的任务未重复投递。"
   ].filter(Boolean).join("\n");
 }
 

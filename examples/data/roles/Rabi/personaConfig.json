@@ -114,7 +114,7 @@
       "action": {
         "type": "deliver_agent",
         "message": "执行全计划效率巡检。",
-        "template": "这是全计划效率巡检。先完整读取角色目录 skills/one-plan-one-task-tracking.md；枚举全部未终态计划，读取每个绑定会话任务的真实状态。所有未暂停且没有 Manager 派生审批阻塞的计划都必须确保任务处于 starting/active/in-progress；idle、failed 或 systemError 时在本轮立即续接或恢复。先由领域 Skill 判定当前动作是否真的需要审批；确需审批时补齐完整 approvalRequest 并设 responseStatus=pending，由 Manager 自动派生阻塞，isBlocked 不得手写。待 QA、缺资料、执行失败、工具超时都必须继续询问、重试、改道、拆分、升级或补证据；目标产物身份、owner 回执或外部产物不自动变成审批。领域 Skill 确认命中默认授权时，必须同轮清除旧审批阻塞、更新回执并续投原任务；审批通过、否决、要求调整或取消后也同轮更新回执并推进。结束前校验可推进但空闲的计划数为 0，且所有等待项都有本轮推进动作或失败证据。"
+        "template": "执行全计划巡检。先读 skills/one-plan-one-task-tracking.md。读取未终态计划和绑定任务状态，恢复可推进但空闲的任务。先由领域 Skill 判定当前动作是否真的需要审批；approvalRequest 完整且 responseStatus=pending 时由 Manager 派生阻塞。领域 Skill 确认命中默认授权时，必须同轮清除旧审批阻塞、更新回执并续投原任务。目标产物身份、owner 回执或外部产物不自动变成审批；其他等待继续询问、重试、改道或补证据。结束前确认没有可推进但空闲的计划。"
       }
     },
     {
@@ -152,7 +152,7 @@
       "action": {
         "type": "deliver_agent",
         "message": "",
-        "template": "WeCom group message\nTarget: {messageTarget}\nGroup: {groupId}\nSender: {sender} ({userId})\nMessageId: {messageId}\nReqId: {wecomReqId}\nChatId: {wecomChatId}\n\n{message}\n\nWhen a WeCom response is allowed, POST {sendRequestJson} to {sendApiUrl}; keep channel=wecom and the explicit chatId."
+        "template": "WeCom 群消息\n群：{groupId}\n发送者：{sender}（{userId}）\n消息：{messageId}\n\n{message}\n\n需要回复时，将 {sendRequestJson} POST 到 {sendApiUrl}；保留 channel=wecom 和 chatId。"
       }
     },
     {

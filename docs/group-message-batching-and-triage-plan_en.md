@@ -215,7 +215,7 @@ A Message Agent normally receives:
 
 Full chat logs, all plans, and full Agent histories are not default input. When evidence is insufficient, the Agent queries older records by message, group, or plan ID. Messages already present in the current batch are excluded from recent history to prevent duplication.
 
-NapCat images are downloaded into runtime storage as soon as the message arrives and recorded as `ready` or `unavailable`. Ready images, including saved images from the reply ancestry, are delivered as Desktop `localImage` inputs. Every new requirement lists mandatory source-message, reply-chain, and attachment IDs. The Agent must submit `sourceEvidenceReview` before reply or closure. An unreadable attachment blocks an inferred reply and permits only retrieval retry or handoff.
+NapCat images are downloaded into runtime storage as soon as the message arrives and recorded as `ready` or `unavailable`. Ready images, including saved images from the reply ancestry, are delivered as Desktop `localImage` inputs. Every new requirement retains its complete source-message, reply-chain, and attachment evidence. For a single reply, the Agent submits `sourceEvidenceReview` for the selected `sourceMessageId`, its explicit reply chain, and attachments actually referenced by the body; only unreadable attachments in that subset block the send. Closing the aggregate requirement still requires complete evidence coverage.
 
 When a Message Agent finally sends a quoted QQ reply, it must also provide `params.replyImageDescriptions`. The array follows the quoted message's image order and states what each image contains and communicates. The send boundary checks this again against the stored source instead of trusting `sourceEvidenceReview` alone. After a successful send, each description is appended to a same-name `.md` beside its image, allowing later work to trace the interpretation to a delivery and complete Agent session.
 
@@ -291,7 +291,7 @@ Entry policy and Agent eligibility are configured separately:
 | Agent orchestration | Same-group concurrency | Fixed at one |
 | Delivery and safety | Auto-send categories | Continue using existing Route output and approval policy |
 
-Disabling Message Agent mode stops new group assignments. Existing work must finish or be explicitly migrated; it cannot be discarded. Re-enabling makes the Agent eligible again. The switch changes scheduling eligibility only and does not modify persona identity, plan bindings, or existing session data.
+Disabling Message Agent mode sends new chat messages to the current Route's Primary Persona. Plan-progress notifications, plan/memory callback reminders, and pending Agent-to-Agent replies created from linked message groups also migrate to the Primary Persona instead of waking an old Message Agent task. Existing tasks, completed records, and audit links remain. If the Primary Persona is not Codex or lacks a complete task binding, delivery fails closed instead of silently selecting another task. Re-enabling restores Message Agent affinity scheduling. The switch does not modify persona identity, plan bindings, or existing session data.
 
 Runtime status should show collecting batches, pending groups, oldest wait, running Message Agents, each Agent's recent endpoint/conversation/speaker familiarity, takeover records, recent failures, and Outbox state.
 
@@ -348,7 +348,7 @@ At minimum:
 8. A different group in the same chat may create another Message Agent.
 9. Affinity falls back through endpoint+conversation+speaker, endpoint+conversation, then endpoint.
 10. No affinity match dynamically creates a Message Agent.
-11. Disabling Message Agent mode blocks new assignments without losing existing work.
+11. Disabling Message Agent mode sends new messages and unfinished follow-up work to the current Route's Primary Persona without reopening old Message Agent tasks; existing tasks and audit records remain.
 12. An unanchored “okay” does not mutate a plan.
 13. Existing-plan updates retain the original `taskBinding`.
 14. New requirements go to the Secretary for deduplication and plan creation.

@@ -173,6 +173,8 @@ export type SpeechAudioInput = {
 
 export type SpeechMicrophoneConfig = {
   enabled: boolean;
+  /** Host-level preference for continuous ASR capture. */
+  streamingEnabled: boolean;
   device: number | string | null;
   sampleRate: number;
   chunkMs: number;
@@ -420,8 +422,10 @@ export type SpeechPlaybackVolumeCommand = {
 
 export type SpeechMicrophoneSettingsCommand = Omit<
   SpeechMicrophoneConfig,
-  "enabled" | "autoSubmit" | "routeId" | "sessionId" | "bargeInMode" | "bargeInConfirmMs"
+  "enabled" | "streamingEnabled" | "autoSubmit" | "routeId" | "sessionId" | "bargeInMode" | "bargeInConfirmMs"
 > & {
+  /** Defaults to enabled for clients that predate the host ASR streaming switch. */
+  streamingEnabled?: boolean;
   /** Optional for backward compatibility; omission is fail-closed (`off`). */
   bargeInMode?: "off" | "echo_protected";
   bargeInConfirmMs?: number;
@@ -563,6 +567,8 @@ export type SpeechControlEnvelope<T> = {
 } | {
   code: -1;
   message: string;
+  detail?: string;
+  resolution?: string;
 };
 
 export type SpeechRouteProfile = {

@@ -12,7 +12,8 @@ import { inspectLocalSpeechService } from "./speechServiceStatus.js";
 
 const execFileAsync = promisify(execFile);
 
-type RuntimeChild = Pick<ChildProcess, "exitCode" | "pid" | "unref">;
+type RuntimeChild = Pick<ChildProcess, "exitCode" | "pid" | "unref"> &
+  Partial<Pick<ChildProcess, "stdout" | "stderr">>;
 
 type RuntimeOwner = {
   pid: number;
@@ -20,7 +21,12 @@ type RuntimeOwner = {
 };
 
 export class SpeechRuntimeControlError extends Error {
-  constructor(message: string, readonly status = 502) {
+  constructor(
+    message: string,
+    readonly status = 502,
+    readonly detail = "",
+    readonly resolution = ""
+  ) {
     super(message);
     this.name = "SpeechRuntimeControlError";
   }
@@ -36,6 +42,7 @@ export type SpeechRuntimeControlOptions = {
   inspectOwner?: (port: number, expectedExecutable: string, expectedHostScript: string) => Promise<RuntimeOwner | null>;
   killProcessTree?: (pid: number) => Promise<void>;
   wait?: (milliseconds: number) => Promise<void>;
+  now?: () => number;
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
 };
@@ -113,20 +120,25 @@ export class SpeechRuntimeControl {
   private readonly inspectOwner: NonNullable<SpeechRuntimeControlOptions["inspectOwner"]>;
   private readonly killProcessTree: NonNullable<SpeechRuntimeControlOptions["killProcessTree"]>;
   private readonly wait: (milliseconds: number) => Promise<void>;
+  private readonly now: () => number;
   private readonly startTimeoutMs: number;
   private readonly stopTimeoutMs: number;
   private transition: Promise<void> = Promise.resolve();
   private launchChild: RuntimeChild | null = null;
+  private launchOutput = "";
 
   constructor(private readonly options: SpeechRuntimeControlOptions) {
     this.platform = options.platform ?? process.platform;
     this.existsSync = options.existsSync ?? fs.existsSync;
-    this.inspect = options.inspect ?? (serviceUrl => inspectLocalSpeechService(serviceUrl));
+    this.inspect = options.inspect ?? (serviceUrl => inspectLocalSpeechService(serviceUrl, {
+      includeCapabilities: false
+    }));
     this.spawnRuntime = options.spawnRuntime ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
     this.inspectOwner = options.inspectOwner ?? inspectWindowsRuntimeOwner;
     this.killProcessTree = options.killProcessTree ?? killWindowsProcessTree;
     this.wait = options.wait ?? wait;
-    this.startTimeoutMs = options.startTimeoutMs ?? 60_000;
+    this.now = options.now ?? Date.now;
+    this.startTimeoutMs = options.startTimeoutMs ?? 120_000;
     this.stopTimeoutMs = options.stopTimeoutMs ?? 15_000;
   }
 
@@ -148,12 +160,14 @@ export class SpeechRuntimeControl {
     serviceRoot: string;
     runtimeExecutable: string;
     hostScript: string;
+    startScript: string;
   } {
     const serviceRoot = path.join(this.options.rootDir, "plugin-adapters", "rabi-speech");
     return {
       serviceRoot,
       runtimeExecutable: path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
-      hostScript: path.join(serviceRoot, "scripts", "windows_host.py")
+      hostScript: path.join(serviceRoot, "scripts", "windows_host.py"),
+      startScript: path.join(serviceRoot, "scripts", "start.ps1")
     };
   }
 
@@ -170,6 +184,9 @@ export class SpeechRuntimeControl {
     if (!this.existsSync(paths.hostScript)) {
       throw new SpeechRuntimeControlError("RabiSpeech Windows host 脚本不存在。", 409);
     }
+    if (!this.existsSync(paths.startScript)) {
+      throw new SpeechRuntimeControlError("RabiSpeech 启动脚本不存在，请重新安装语音运行环境。", 409);
+    }
   }
 
   private async startUnlocked(): Promise<SpeechRuntimeControlResult> {
@@ -185,26 +202,57 @@ export class SpeechRuntimeControl {
 
     const paths = this.runtimePaths();
     this.assertWindowsRuntimeInstalled(paths);
-    if (!this.launchChild || this.launchChild.exitCode !== null) {
-      this.launchChild = this.spawnRuntime(
-        paths.runtimeExecutable,
-        [paths.hostScript],
-        {
-          cwd: paths.serviceRoot,
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true
-        }
-      );
-      this.launchChild.unref();
-    }
-
-    const status = await this.waitForState(serviceUrl, "online", this.startTimeoutMs, () => {
-      if (this.launchChild?.exitCode != null) {
-        throw new SpeechRuntimeControlError(`RabiSpeech 启动进程提前退出（code ${this.launchChild.exitCode}）。`);
+    let recoveredOwnedBindConflict = false;
+    while (true) {
+      if (!this.launchChild || this.launchChild.exitCode !== null) {
+        this.launchOutput = "";
+        this.launchChild = this.spawnRuntime(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", paths.startScript],
+          {
+            cwd: paths.serviceRoot,
+            detached: false,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+            env: {
+              ...process.env,
+              PYTHONUTF8: "1",
+              PYTHONIOENCODING: "utf-8"
+            }
+          }
+        );
+        this.captureLaunchOutput(this.launchChild);
+        this.launchChild.unref();
       }
-    });
-    return { action: "started", status };
+
+      try {
+        const status = await this.waitForState(serviceUrl, "online", this.startTimeoutMs, () => {
+          if (this.launchChild?.exitCode != null) {
+            throw new SpeechRuntimeControlError(
+              `RabiSpeech 启动进程提前退出（code ${this.launchChild.exitCode}）。`,
+              502,
+              this.launchDetail(),
+              this.launchResolution()
+            );
+          }
+        });
+        return { action: "started", status };
+      } catch (error) {
+        const latest = await this.inspect(serviceUrl);
+        if (latest.state === "online") {
+          return { action: "already_online", status: latest };
+        }
+        if (
+          !recoveredOwnedBindConflict
+          && error instanceof SpeechRuntimeControlError
+          && await this.recoverOwnedBindConflict(paths)
+        ) {
+          recoveredOwnedBindConflict = true;
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   private async stopUnlocked(): Promise<SpeechRuntimeControlResult> {
@@ -240,16 +288,93 @@ export class SpeechRuntimeControl {
     timeoutMs: number,
     beforeInspect?: () => void
   ): Promise<SpeechRuntimeStatus> {
-    const deadline = Date.now() + timeoutMs;
+    const deadline = this.now() + timeoutMs;
     let latest = await this.inspect(serviceUrl);
-    while (latest.state !== expected && Date.now() < deadline) {
+    while (latest.state !== expected && this.now() < deadline) {
       beforeInspect?.();
       await this.wait(500);
       latest = await this.inspect(serviceUrl);
     }
     if (latest.state === expected) return latest;
-    throw new SpeechRuntimeControlError(expected === "online"
-      ? "RabiSpeech 启动后未在时限内通过健康检查。"
-      : "RabiSpeech 停止后语音端口仍未释放。");
+    if (expected === "online") {
+      throw new SpeechRuntimeControlError(
+        "RabiSpeech 启动超时。",
+        502,
+        this.launchDetail(latest.error),
+        this.launchResolution()
+      );
+    }
+    throw new SpeechRuntimeControlError(
+      "RabiSpeech 停止超时。",
+      502,
+      latest.error || "语音端口仍未释放。",
+      "等待几秒后重新关闭；仍失败时检查 8781 端口占用。"
+    );
+  }
+
+  private captureLaunchOutput(child: RuntimeChild): void {
+    const capture = (chunk: unknown) => {
+      const text = String(chunk || "");
+      if (!text) return;
+      this.launchOutput = `${this.launchOutput}${text}`.slice(-8_000);
+    };
+    child.stdout?.on("data", capture);
+    child.stderr?.on("data", capture);
+  }
+
+  private launchDetail(latestError = ""): string {
+    const output = this.redactLaunchOutput(this.launchOutput).trim();
+    const health = latestError.trim();
+    if (output && health) return `${health}\n启动日志：${output}`;
+    if (output) return `启动日志：${output}`;
+    return health || "启动进程仍在运行，但语音服务没有完成健康检查。";
+  }
+
+  private launchResolution(): string {
+    const output = this.launchOutput;
+    if (/ModuleNotFoundError|dependencies are missing|No module named/i.test(output)) {
+      return "在“模型管理”中重新安装语音运行环境，或运行 plugin-adapters\\rabi-speech\\scripts\\install.ps1，然后重新启动。";
+    }
+    if (/address already in use|WinError 10048|only one usage of each socket/i.test(output)) {
+      const port = this.launchBindPort();
+      return `关闭占用 ${port ?? servicePort(this.options.serviceUrl())} 端口的旧进程，再重新启动语音服务。`;
+    }
+    if (/config(?:uration)? .*missing|JSONDecodeError|invalid.*config/i.test(output)) {
+      return "检查 plugin-adapters\\rabi-speech\\config.json，修正配置后重新启动。";
+    }
+    return "关闭语音服务后重新启动；仍失败时运行 plugin-adapters\\rabi-speech\\scripts\\start.ps1 查看启动日志。";
+  }
+
+  private launchBindPort(): number | null {
+    const matches = [
+      /bind on address\s*\([^)]*?,\s*(\d{1,5})\s*\)/i,
+      /(?:0\.0\.0\.0|127\.0\.0\.1|localhost|\[::\])[:'",\s]+(\d{1,5})\b/i
+    ];
+    for (const pattern of matches) {
+      const value = Number(this.launchOutput.match(pattern)?.[1]);
+      if (Number.isInteger(value) && value > 0 && value <= 65_535) return value;
+    }
+    return null;
+  }
+
+  private async recoverOwnedBindConflict(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>): Promise<boolean> {
+    if (!/address already in use|WinError 10048|only one usage of each socket/i.test(this.launchOutput)) {
+      return false;
+    }
+    const port = this.launchBindPort();
+    if (!port) return false;
+    const owner = await this.inspectOwner(port, paths.runtimeExecutable, paths.hostScript);
+    if (!owner?.owned || owner.pid === this.launchChild?.pid) return false;
+    await this.killProcessTree(owner.pid);
+    this.launchChild = null;
+    this.launchOutput = "";
+    await this.wait(500);
+    return true;
+  }
+
+  private redactLaunchOutput(value: string): string {
+    let result = value.replaceAll(this.options.rootDir, "<RabiRoute>");
+    result = result.replace(/[A-Z]:\\Users\\[^\\\r\n]+/gi, "<user>");
+    return result.split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-8).join("\n");
   }
 }

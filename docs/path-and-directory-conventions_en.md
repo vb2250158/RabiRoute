@@ -34,6 +34,7 @@ Feature tests normally live beside the TypeScript source under the same module. 
 | `data/route/` | Local configuration and runtime data for each Route | No |
 | `data/roles/` | Persona files, plans, memory, conversation records, and persona attachments | No |
 | `data/.runtime/` | Internal Manager state needed for recovery or reconstruction | No |
+| `data/.runtime/performance/` | Hourly local performance JSONL managed by retention and disk limits | No |
 | `data/.runtime/imports/` | Time-bounded import staging | No; remove after completion or expiry |
 | `logs/manager/` | Structured Manager operational logs | No; diagnostic evidence, not a business source of truth |
 

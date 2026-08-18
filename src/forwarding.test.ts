@@ -254,7 +254,7 @@ test("a grouped packet is delivered to a dynamically resolved Luna Message Agent
     assert.equal(requests[3]?.model, "gpt-5.6-luna");
     assert.equal(requests[3]?.reasoningEffort, "medium");
     assert.match(String(requests[3]?.prompt), /\[消息组 message-group-integration\]/);
-    assert.match(String(requests[3]?.prompt), /你是专职消息处理 Agent/);
+    assert.match(String(requests[3]?.prompt), /你是消息处理 Agent/);
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;

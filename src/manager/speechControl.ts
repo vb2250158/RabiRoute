@@ -53,6 +53,8 @@ import {
   type LocalSpeechResponse
 } from "../speech/localSpeechClient.js";
 import { inspectLocalSpeechService } from "./speechServiceStatus.js";
+import { recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
+import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 
 type JsonRequestResult = { status: number; data: Record<string, unknown> };
 
@@ -102,6 +104,7 @@ export type ManagerSpeechControlDependencies = {
   speechIngressStore?: ManagerSpeechIngressStore;
   localSpeech?: ManagerSpeechLocalAdapter;
   createMessageId?: () => string;
+  statusCacheTtlMs?: number;
 };
 
 export class SpeechControlError extends Error {
@@ -247,6 +250,10 @@ function normalizeMicrophoneConfig(value: unknown): SpeechMicrophoneConfig {
   );
   return {
     enabled: booleanValue(config.enabled),
+    streamingEnabled: booleanValue(
+      config.streaming_enabled ?? config.streamingEnabled,
+      booleanValue(config.enabled)
+    ),
     device: typeof config.device === "number" || typeof config.device === "string" ? config.device : null,
     sampleRate: numberValue(config.sample_rate ?? config.sampleRate, 16_000),
     chunkMs: numberValue(config.chunk_ms ?? config.chunkMs, 100),
@@ -579,8 +586,13 @@ function normalizePlaybackStatus(value: Record<string, unknown>): SpeechPlayback
   };
 }
 
-function microphoneStartPayload(command: SpeechMicrophoneStartCommand): Record<string, unknown> {
+function microphonePayload(
+  command: SpeechMicrophoneStartCommand,
+  defaultStreamingEnabled?: boolean
+): Record<string, unknown> {
+  const streamingEnabled = command.streamingEnabled ?? defaultStreamingEnabled;
   return {
+    ...(streamingEnabled == null ? {} : { streaming_enabled: streamingEnabled }),
     device: command.device,
     sample_rate: command.sampleRate,
     chunk_ms: command.chunkMs,
@@ -607,6 +619,7 @@ function microphoneStartPayload(command: SpeechMicrophoneStartCommand): Record<s
 
 function microphoneSettingsFromConfig(config: SpeechMicrophoneConfig): SpeechMicrophoneSettingsCommand {
   return {
+    streamingEnabled: config.streamingEnabled,
     device: config.device,
     sampleRate: config.sampleRate,
     chunkMs: config.chunkMs,
@@ -648,15 +661,41 @@ function synthesisPayload(command: SpeechSynthesisCommand): Record<string, unkno
 export class ManagerSpeechControl {
   private readonly localSpeech: ManagerSpeechLocalAdapter;
   private readonly createMessageId: () => string;
+  private readonly statusCacheTtlMs: number;
   private readonly deliveryFlights = new Map<string, Promise<SpeechRouteDeliveryResult>>();
+  private statusFlight: { serviceUrl: string; promise: Promise<SpeechRuntimeStatus> } | null = null;
+  private statusCache: { serviceUrl: string; status: SpeechRuntimeStatus; expiresAt: number } | null = null;
 
   constructor(private readonly dependencies: ManagerSpeechControlDependencies) {
     this.localSpeech = dependencies.localSpeech ?? defaultLocalSpeechAdapter;
     this.createMessageId = dependencies.createMessageId ?? (() => `speech-user-${randomUUID()}`);
+    this.statusCacheTtlMs = Math.min(5_000, Math.max(0, Math.floor(dependencies.statusCacheTtlMs ?? 500)));
   }
 
   status(): Promise<SpeechRuntimeStatus> {
-    return this.localSpeech.inspect(this.dependencies.serviceUrl());
+    const serviceUrl = this.dependencies.serviceUrl();
+    if (this.statusCache?.serviceUrl === serviceUrl && this.statusCache.expiresAt > Date.now()) {
+      recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerSpeechStatusCacheHit, 0);
+      return Promise.resolve(this.statusCache.status);
+    }
+    if (this.statusFlight?.serviceUrl === serviceUrl) {
+      recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerSpeechStatusSharedFlight, 0);
+      return this.statusFlight.promise;
+    }
+    const promise = this.localSpeech.inspect(serviceUrl)
+      .then(status => {
+        this.statusCache = {
+          serviceUrl,
+          status,
+          expiresAt: Date.now() + this.statusCacheTtlMs
+        };
+        return status;
+      })
+      .finally(() => {
+        if (this.statusFlight?.promise === promise) this.statusFlight = null;
+      });
+    this.statusFlight = { serviceUrl, promise };
+    return promise;
   }
 
   eventStream(signal: AbortSignal): Promise<Response> {
@@ -1026,7 +1065,7 @@ export class ManagerSpeechControl {
       {
         method: "POST",
         headers: { "content-type": "application/json; charset=utf-8" },
-        body: JSON.stringify(microphoneStartPayload(command))
+        body: JSON.stringify(microphonePayload(command, true))
       },
       30_000
     ));
@@ -1040,17 +1079,20 @@ export class ManagerSpeechControl {
       {
         method: "PUT",
         headers: { "content-type": "application/json; charset=utf-8" },
-        body: JSON.stringify(microphoneStartPayload(command))
+        body: JSON.stringify(microphonePayload(command))
       },
       30_000
     ));
-    return normalizeMicrophoneStatus(raw);
+    const updated = normalizeMicrophoneStatus(raw);
+    if (updated.config.streamingEnabled && !updated.running) {
+      return this.startMicrophone(microphoneSettingsFromConfig(updated.config));
+    }
+    return updated;
   }
 
   async reconcileMicrophone(): Promise<SpeechMicrophoneStatus> {
     const current = await this.microphoneStatus();
-    const enabledRoutes = this.enabledSpeechRoutes();
-    if (enabledRoutes.length === 0) {
+    if (!current.config.streamingEnabled) {
       return current.running ? this.stopMicrophone() : current;
     }
     const settings = microphoneSettingsFromConfig(current.config);
@@ -1188,14 +1230,6 @@ export class ManagerSpeechControl {
       detail: `Broadcast result: ${delivered} delivered, ${recorded} recorded, ${failed} failed.`,
       deliveries
     };
-  }
-
-  private enabledSpeechRoutes(): ManagerSpeechRoute[] {
-    const unique = new Map<string, ManagerSpeechRoute>();
-    for (const route of this.dependencies.routes()) {
-      if (route.speechEnabled && route.id) unique.set(route.id, route);
-    }
-    return [...unique.values()];
   }
 
   private routeAcceptsRecord(route: ManagerSpeechRoute, record: SpeechIngressRecord): boolean {

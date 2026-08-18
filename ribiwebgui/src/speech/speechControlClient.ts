@@ -26,6 +26,7 @@ import type {
   SpeechSpeakerRegistry,
   SpeechSynthesisCommand
 } from "@shared/speechControlContract";
+import type { SelectionSpeechSettings } from "@shared/selectionSpeechContract";
 
 export type SpeechRecordsQuery = {
   limit?: number;
@@ -67,6 +68,17 @@ export type SpeechSynthesisResult = {
   playbackJob?: string;
 };
 
+export class SpeechControlRequestError extends Error {
+  constructor(
+    message: string,
+    readonly detail = "",
+    readonly resolution = ""
+  ) {
+    super(message);
+    this.name = "SpeechControlRequestError";
+  }
+}
+
 async function responseError(response: Response): Promise<Error> {
   const text = await response.text();
   if (!text) return new Error(`HTTP ${response.status}`);
@@ -94,7 +106,9 @@ async function managerData<T>(pathname: string, init: RequestInit = {}): Promise
     throw new Error(text || `HTTP ${response.status}`);
   }
   if (!response.ok || body.code !== 0) {
-    throw new Error(body.code === -1 ? body.message : `HTTP ${response.status}`);
+    throw body.code === -1
+      ? new SpeechControlRequestError(body.message, body.detail || "", body.resolution || "")
+      : new Error(`HTTP ${response.status}`);
   }
   return body.data;
 }
@@ -110,6 +124,17 @@ export const speechControlClient = {
     { method: "POST" }
   ),
   models: (): Promise<SpeechModelsPayload> => managerData("/api/speech/models"),
+  selectionReaderSettings: (): Promise<SelectionSpeechSettings> => managerData(
+    "/api/speech/selection-reader/settings"
+  ),
+  updateSelectionReaderSettings: (settings: SelectionSpeechSettings): Promise<SelectionSpeechSettings> => managerData(
+    "/api/speech/selection-reader/settings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(settings)
+    }
+  ),
   personas: (): Promise<SpeechPersonasPayload> => managerData("/api/speech/personas"),
   records: (query: SpeechRecordsQuery = {}): Promise<SpeechRecordsPayload> => {
     const search = new URLSearchParams();

@@ -89,7 +89,7 @@ data/roles/<RoleId>/plans/
 plans/items/active/*.json
 ```
 
-用于放所有未归档计划，包括 `未开始`、`进行中`、`暂停`、`已完成`。计划不再按短期、长期、项目关联拆目录；这些信息应写入 `kind`、`project`、`priority`、`dueAt`、`nextAction` 等字段，由视图筛选。
+用于放所有未归档计划，包括 `未开始`、`进行中`、`暂停`、`已完成`。计划不再按短期、长期、项目关联拆目录；这些信息应写入 `kind`、`project`、`importance`、`urgency`、`dueAt`、`nextAction` 等字段，由视图筛选。
 
 归档计划：
 
@@ -129,7 +129,8 @@ completedArchiveAfterHours = 72
   "title": "完善 RabiRoute 计划和记忆机制文档",
   "focus": "计划和记忆机制文档",
   "status": "进行中",
-  "priority": "medium",
+  "importance": 2,
+  "urgency": 2,
   "kind": "documentation",
   "currentStepId": "confirm-contract",
   "currentStep": "确认机制说明口径",
@@ -243,6 +244,8 @@ Manager 提供只读批量状态接口 `GET /api/roles/:roleId/plan-agents/statu
 `taskBinding` 只绑定计划的独立业务执行会话，不绑定“协助处理计划”秘书。计划管理秘书属于控制面：维护计划与记忆、查重和绑定业务任务、读取真实状态、消费结果、提醒并续投；调查、实现、测试、Unity/SVN/构建/发布和外部系统操作由业务任务负责。秘书可以开临时子 Agent 做计划盘点、查重、状态核对和结果摘要，但秘书及其子 Agent不得修改业务文件。
 
 收到业务任务完成提醒后，负责秘书直接消费结果、PATCH 计划步骤与记忆，并在计划仍可推进时通过 `/api/agent/threads` 的 `action=send` 向该计划自身 `taskBinding.sessionId + workspace` 精确续投业务任务。普通进展、状态变化、等待条件和下一步由秘书直接处理；只有需要用户/主人格决策、批准、授权、补充输入、跨计划裁决、完整收尾或安全外发复核时才升级给主人格。计划暂停或秘书轮转不能清空业务 `taskBinding`；只有业务任务确实失效并完成受控迁移时才改绑，计划完成后可保留绑定作为历史证据。每次完成回传、heartbeat 或恢复巡检都应并行使用秘书槽管理不同计划分片，并在结束前满足 `可推进但无人管理的计划数 = 0` 与 `可推进但空闲的业务任务数 = 0`；已处于 `active/in-progress` 的业务任务不重复投递。等待审批或负责人时只执行已有授权范围内的询问、追问和补证据，不越过动作门禁。
+
+PangHu 正式 Main 的 Unity Editor 正在打开、导入、运行其它测试、MCP 暂不可用或共享测试排队时，计划仍继续执行。秘书不得把这些条件写成全局冻结或等待工作位，也不得停止 Editor、取消他人测试或覆盖无关改动。原业务任务继续实现、收窄 SVN 更新与合并、静态资源/Prefab/配置和直接序列化合同、非 Unity runner 与 CLI 验证；确实无法并行完成的 GameView、PlayMode 或交互项单列为人工或后续运行验收。无关全量测试失败不阻断匹配验证和功能开发，但必须保留失败事实与未运行项。
 
 计划管理写入按 `planId` 隔离：同一计划同时只有一个控制面 writer，不同计划可以并行。共享 ledger、问题账本和发送回执在短文件锁内读取最新状态、只合并目标记录并原子替换，不能用旧的全量快照覆盖其它计划。锁元数据先完整写入候选文件，再以同卷 hard-link 原子发布；运行热路径不自动删除 stale 或损坏锁，遇到此类锁时失败关闭，只允许在已暂停 writer、确认 quiescent 的维护窗口显式修复。`claim` / `clarify` 以来源消息和稳定 key 获取独立 lease，并在外发前保存 reservation；发送结果不明确或已发送但验证失败时保留 `uncertain` / `sent_unverified`，禁止自动重发。
 
@@ -540,7 +543,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 这些接口已由 Manager 实现。Agent adapter、角色面板或其它本机工作台可以按需查询和更新；`/roles/...` 与 `/api/roles/...` 两种路径前缀均可解析，公开示例优先使用 `/api/roles/...`。
 
-长计划列表可使用 `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary&view=<current|plans|archived>&query=<text>` 分页读取当前分类和搜索条件下的轻量摘要，再按 ID 调用 `GET /api/roles/:roleId/plans/:planId` 获取正文、步骤、审批与附件元数据。WebGUI 首屏只读取 8 条摘要，不再在后台自动扫完其余计划；用户滚动到加载位置时才继续取下一页。左侧目录消费已经返回的摘要，右侧正文只挂载一个有界窗口并随滚动向后追加。目录跳转会把窗口起点移到目标计划，既不要求先创建全部前置正文，也不在后续加载时把旧卡片插回当前阅读位置上方。WebGUI 让视口附近详情进入最多两个并发请求的队列；只有真实请求中的卡片显示加载动画，离屏卡片使用紧凑未加载状态和浏览器 `content-visibility`，避免几十个 Vuetify 骨架同时占用主线程。Manager 对计划列表使用两层增量缓存，并对同一份未变化的计划目录复用已经整理和排序的展示结果；目录 watcher 合并短时间内连续的文件写入事件，逐文件缓存按 `size + mtimeMs` 在后台异步读取和归一化发生变化的计划 JSON。规范的 POST/PATCH 写入会直接更新对应缓存项并立即可见；文件系统不支持 watcher 时回退到短 TTL 校验。缓存只保存派生读取结果，计划文件仍是唯一事实源。
+长计划列表可使用 `GET /api/roles/:roleId/plans?limit=8&cursor=<offset>&detail=summary&view=<current|plans|archived>&query=<text>` 分页读取当前分类和搜索条件下的轻量摘要，再按 ID 调用 `GET /api/roles/:roleId/plans/:planId` 获取正文、步骤、审批与附件元数据。WebGUI 首屏先读取 8 条摘要并并行补齐这 8 张卡片的详情，页面可见时再用最多 250 条的分页补齐当前计划分类。后续页使用 `facets=0` 省略已在首页取得的状态和标签统计，接口 JSON 使用紧凑编码。左侧目录消费已经返回的摘要，右侧正文只挂载一个有界窗口并随滚动向后追加。目录跳转会把窗口起点移到目标计划，既不要求先创建全部前置正文，也不在后续加载时把旧卡片插回当前阅读位置上方。WebGUI 让视口附近详情进入最多 10 个并发请求的队列；只有真实请求中的卡片显示加载动画，离屏卡片使用紧凑未加载状态和浏览器 `content-visibility`，避免几十个 Vuetify 骨架同时占用主线程。Manager 对计划列表使用两层增量缓存，并对同一份未变化的计划目录复用已经整理和排序的展示结果。单计划详情优先复用已预热的列表缓存；目录 watcher 合并短时间内连续的文件写入事件，逐文件缓存按 `size + mtimeMs` 在后台异步读取和归一化发生变化的计划 JSON。规范的 POST/PATCH 写入会直接更新对应缓存项并立即可见；文件系统不支持 watcher 时回退到短 TTL 校验。缓存只保存派生读取结果，计划文件仍是唯一事实源。
 
 记忆列表可使用 `GET /api/roles/:roleId/memory?kind=<recent|consolidated|archived>&limit=24&cursor=<offset>&query=<text>` 分页读取。WebGUI 只请求当前可见的近期、沉淀或已归档记忆分类，首屏最多 24 条，滚动后再继续读取；不会在打开页面时同时传回全部记忆。Manager 对未变化的记忆目录复用解析结果，文件变化后立即使对应缓存失效。浏览器标签页隐藏时，知识页停止继续加载、断开自己的 Manager 事件连接并忽略旧请求结果；标签页重新可见后只补查一次当前分类。
 
@@ -605,7 +608,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 对没有进入审批步骤的进行中计划额外提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和未开始步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。
 
-计划分页接口还支持 `sort=<status|updated>` 和可重复的 `status=<展示状态>`。默认 `sort=status` 保持 Manager 统一展示顺序，`sort=updated` 按 `updatedAt` 从新到旧排列；状态筛选与排序都在分页前执行。响应的 `facets.statuses` 返回当前分类和搜索条件下可选的展示状态、数量与色板，供 WebGUI 在不丢失其它筛选项的情况下绘制筛选菜单。
+计划分页接口还支持 `sort=<status|updated|importance|urgency>`、可重复的 `status=<展示状态>`、可重复的 `tag=<keywords 标签>` 和 `facets=0`。`updated` 比较 `updatedAt` 时间戳；其余三种排序比较 Manager 生成的整数等级。状态等级沿用 `statusLevel`；重要程度 `importance` 和紧急程度 `urgency` 都使用 `0–4`：`0` 最高，`1` 高，`2` 中，`3` 低，`4` 未设置。旧 `priority` 字符串只在读取边界转换为重要程度整数；旧计划没有 `urgency` 时，可由 `dueAt` 转为兼容等级。排序过程不比较标签文字。响应同时返回等级对应的中英文文字和色板，WebGUI 只负责显示。筛选与排序都在分页前执行。
 
 ## 计划引导与审批意见
 
@@ -618,7 +621,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批输入复用同一套附件上传能力：可以选择文件，也可以从剪贴板粘贴文件或图片；审批正文继续支持使用 `@` 引用计划已有附件。新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
+RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
 
 Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视为整个计划的方向输入；如果范围、优先级、方法或后续路径变化，显式 `PATCH` 计划并同步调整尚未开始的步骤，随后以 `kind=guidance_response`、`author=agent`、`notifyAgent=false` 回写同一 `planId`，且不带 `stepId`。收到 `approval_suggestion` 时仍更新对应计划/步骤与审批回执，并以 `approval_response` 回写同一 `planId / stepId`。两种记录本身都不会自动推进计划。
 
@@ -628,19 +631,19 @@ Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视�
 
 Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批门真源：合同完整、可提交且 `responseStatus=pending` 时，同时派生 `presentation.approval.state=ready`、`enabled=true`、内部 `blocked` tone 和用户可见“待审批”；因此每个待审批项都存在可用审批入口。合同缺项时派生 `incomplete`，计划保持进行中，由 Agent 继续调查和补齐。旧 `isBlocked` 仅为兼容投影，`blockedBy` 仅为说明，二者都不能独立制造展示阶段。
 
-进行中计划的真实展示阶段由 Manager 按优先级统一派生：结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”；结构化 package/build 当前步骤只有在前序工作全部完成且 `waitingFor` 明确等待合包、构建、进包、目标包身份或用户开始打包时，才显示蓝色“待统一打包”；其余权威 `waitingFor` 按内容显示“待环境”“待素材”“待资料”或“待外部回执”；没有真实等待时显示“正在执行”。实施步骤正文里的 QA 字样、旧 `blockedBy`、未来步骤和普通说明不会自行改变阶段。顶层 `status` 仍只保存 `未开始 / 进行中 / 暂停 / 已完成 / 已归档` 生命周期。
+Manager 为未终态计划只公开“进行中、等待打包、等待 QA、暂停、待审批、待人工核验”六种展示状态，分别使用绿色、蓝色、紫色、灰色、红色、橙色。外部资料、素材、owner、账号、设备、授权和回执只保留在 `waitingFor` 等内部字段，不进入状态文案。顶层生命周期仍保存 `未开始 / 进行中 / 暂停 / 已完成 / 已归档`。
 
-当前细分规则是：真实 runner、MCP、设备或监听不可用且没有 CLI、替代验证或重试路径时派生“等待测试环境”；明确禁止 Unity GUI、MCP、菜单或 PlayMode 时派生“等待重新授权”。结构化 QA 步骤还必须有本轮真实发送回执且只等待结论；缺回执但仍可发送或修复时保持“正在执行”。目标包身份或纳入证明仍属于 `waiting_package`，素材、文档和负责人答复不与测试环境混用。
+存在 CLI、静态检查、替代验证、重试、发送或协调动作时显示绿色“进行中”。开发闭环后只缺目标包身份或纳入证明时显示蓝色“等待打包”；目标包纳入后显示紫色“等待 QA”。完整审批合同显示红色“待审批”。开发闭环后只剩人工视觉或交互确认的 `manual-verify-*` 步骤显示橙色“待人工核验”。完全没有安全动作时显示灰色“暂停”，内部 reconcile 仍保留测试环境、重新授权、外部资料和回执等精确分类。
 
 展示层只把 `nextAction` 和当前步骤标题中的明确执行句当作当前替代动作。`currentStep` 或步骤 `detail` 中“运行截图已发送”“测试已完成”“禁止重复发送”等历史完成证据不能把只等结果的计划重新显示为“正在执行”；相反，“先运行 CLI 并发送校对请求”这类仍未完成的明确动作继续保持可执行。
 
-“实施/开发验证 → 待统一打包 → 等待 QA 验收 → QA 通过完成；QA 失败回到同一计划继续调查和实施”只适用于代码、Prefab、资源、配置等会产生项目内容变动的计划。调查、设计评审、运营、资料收集、外部依赖和控制面维护必须保留自身真实步骤与 `waitingFor`，不得为了套用四步状态机而补造 package 或 `qa-* / verify-*` 步骤。Manager 只呈现结构化当前步骤，不按标题、正文或 `kind` 猜测并强制补齐流程。
+“实施/开发验证及适用 Main/Release/Art 同步、SVN 提交和无冲突回读 → 等待打包 → 等待 QA 验收 → QA 通过完成；QA 失败回到同一计划继续调查和实施”只适用于代码、Prefab、资源、配置等会产生项目内容变动的计划。只改 Main、适用同步未完成、未提交或无冲突回读不完整时保持“正在执行”。Manager 从结构化当前步骤和已完成交付步骤的组合记录判断：同一次交付的修订、适用性、匹配测试结果、提交和无冲突回读都齐全，而目标包身份或纳入证明仍缺失时，reconcile 后的交付核对步骤继续派生“等待打包”。目标包完成并证明纳入后进入 QA 步骤；QA 发送回执是该步骤的证据，不创建“打包完成，待发送 QA”主阶段。调查、设计评审、运营、资料收集、外部依赖和控制面维护必须保留自身真实步骤与 `waitingFor`，不得为了套用流程而补造 package 或 QA 步骤。Manager 不按计划标题、正文或 `kind` 猜测并强制补齐流程。
 
-`presentation` 返回 `status`、`tone`、`sortBucket`、统一色板和审批合同；分页摘要额外返回 `counts.stages`，汇总 `executing / qa / waitingPackage / waitingExternal / approval / pending / paused / completed / archived`。除暂停外，`ready` 待审批计划优先，`incomplete` 合同其次，再按“待审批 → 等待 QA 验收 → 正在执行 → 待环境/素材/资料/外部回执 → 待统一打包 → 未开始 → 完成 → 已归档”与 `updatedAt` 排序；暂停绝对末尾。
+`presentation` 返回 `status`、`tone`、`statusLevel`、`sortBucket`、统一色板和审批合同；`counts.stages` 只汇总上述公开阶段，其中橙色“待人工核验”使用 `manualVerification`。未终态展示按“待审批、等待 QA、待人工核验、进行中、等待打包、暂停”排序，暂停绝对末尾。
 
 秘书执行 `reconcile-thread-statuses` 时也消费同一份 Manager `presentation`，再与问题账本和最近闭环中的结构化发送/环境证据交叉核对。终态与完整待审批分别归为 `terminal / blocked`；暂停计划归为 `frozen + paused`，且固定 `implementationDispatchAllowed=false`；`waiting_package` 和具有当前、未被同一 PID/工程权威 release 证据覆盖的 `waiting_environment* + environment-owner` 唯一环境占用归为 `frozen`。结构化 dependency 当前步骤或 tracking 状态只有在明确等待其它计划原 owner 完成、同时 plan/issue/cycle 明确当前没有独立 CLI、控制面或业务动作时，才进入 `frozen_until_dependencies`；仍需联系或协调 owner、补合同、取得回复，或仍有 CLI、重试和替代路径时继续 `actionable`。QA 或普通询问已有真实 `status=sent / sentMessageId` 回执，且 issue/cycle 明确当前只等待结果、无独立本地动作、没有另一个待发送或待结果的校对/确认请求并禁止重发时，归为稳定 `waiting_result`；旧 QA 回执不能覆盖后来新增的负责人校对或位置确认。回执可来自结构化 issue evidence 或最近 cycle summary，不受后续计划更新时间和普通去重窗口影响。普通询问仅有近期发送证据时仍使用 `waiting_result_dedup`。只有仍有本地动作、缺真实发送/回执、已到追问时间且明确需要追问、存在另一项独立询问、可重试或存在替代路径的空闲计划保留为 `actionable`；已发送但仍有本地动作时不重复询问。对账结果分别返回 `frozenIdle`、`waitingResultIdle` 和 `actionableIdle`。`implementationDispatchAllowed` 只在当前仍允许实施任务继续运行时为 `true`；终态、暂停、审批阻塞以及没有实施动作可做的包、跨计划依赖、测试环境、重新授权和 QA 结论等待都返回 `false`。
 
-对新增细分状态，`waiting_package` 返回 `frozen_until_package + wait_for_target_package`，无独立动作的跨计划依赖返回 `frozen_until_dependencies` 且 `requiredAction=null`，真实测试环境等待返回 `frozen_until_test_environment + wait_for_test_environment`，等待重新授权返回 `waiting_for_authorization + request_authorization`；这些等待的 `implementationDispatchAllowed` 都是 `false`。已有真实 QA 回执且只等结论时返回 `waiting_result + wait_for_qa_result` 并禁止实施投递；缺回执但仍可发送或修复时返回 `actionable + send_qa_request`。CLI 或替代验证仍可执行时保持 `actionable`；普通外部资料继续使用 `inquire_until_result`。
+对新增细分状态，`waiting_package` 返回 `frozen_until_package + wait_for_target_package`，无独立动作的跨计划依赖返回 `frozen_until_dependencies` 且 `requiredAction=null`，真实测试环境等待返回 `frozen_until_test_environment + wait_for_test_environment`，等待重新授权返回 `waiting_for_authorization + request_authorization`；这些等待的 `implementationDispatchAllowed` 都是 `false`。绿色 QA 阶段同样禁止实施投递：缺回执但仍可发送或修复时返回 `actionable + send_qa_request`；已有真实 QA 回执且只等结论时返回 `waiting_result + wait_for_qa_result`。strict audit 会拒绝“QA 步骤已写只等结论但没有本轮真实回执”的矛盾计划。CLI 或替代验证仍可执行时保持 `actionable`；普通外部资料继续使用 `inquire_until_result`。
 
 Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶段汇总、视图分类、状态色板和既有顺序。RibiWebGUI 使用“当前计划 / 近期记忆 / 沉淀记忆 / 已归档”四个标签；已归档同时包含归档计划和带 `consolidatedAt` 的来源记忆。Qt 托盘继续使用自身的紧凑分类，但两端都不直接读取 `data/`，也不各自维护状态识别、状态颜色或排序规则；缺失 `presentation` 时只显示中性“状态未知”，不根据生命周期字段猜测真实阶段。
 
@@ -649,7 +652,7 @@ Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶�
 当前：
 
 ```text
-“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划，其中暂停计划使用灰蓝色状态并绝对排在最后。计划标题下显示与标题不同的 `focus` 描述，兼容读取时由标题回填的同值 `focus` 不重复显示。搜索会检查 Manager 返回的计划或记忆全部内容值，包括计划步骤、当前动作、等待/阻塞说明、审批合同、附件信息、记忆正文和来源摘要，而不再只检查标题、主题与关键词。没有审批状态的进行中计划在详情顶部显示计划级引导；审批合同则按照 `presentation.approval.stepId` 直接嵌入对应步骤卡片，说明不完整时禁用审批输入与提交，补齐为 `ready/enabled=true` 后才允许批准、拒绝或要求调整。计划面板外侧的页面级目录粘性悬浮，只展示当前页签与搜索结果中的计划，并在视口高度内自行滚动；计划卡片保持正常页面流，详情展开不做高度过渡，输入保持固定高度。
+“当前”展示 status=进行中 的计划；“计划”按 Manager 顺序展示全部未归档计划，其中暂停计划使用红色色板并绝对排在最后。计划标题下显示与标题不同的 `focus` 描述，兼容读取时由标题回填的同值 `focus` 不重复显示。搜索会检查 Manager 返回的计划或记忆全部内容值，包括计划步骤、当前动作、内部等待说明、审批合同、附件信息、记忆正文和来源摘要。客户端只显示 Manager 返回的五种未终态状态，不从内部等待原因创建新徽标。
 ```
 
 近期记忆：

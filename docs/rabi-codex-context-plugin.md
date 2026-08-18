@@ -8,6 +8,8 @@
 
 > 状态：0.4 统一上下文与计划任务完成 Hook 版本。计划完成提醒仍为实验能力；源码位于 `plugins/rabi-codex-context/`。
 
+该插件只注册并执行自身 `PLUGIN_ROOT` 下的 Hook。安装、升级和运行均不改写其他插件的 `hooks.json`、市场条目或启用状态，可与独立的语言风格 Hook 同时加载。
+
 ## 唯一边界
 
 Rabi PC / RabiRoute Manager 是以下事实的唯一管理者：

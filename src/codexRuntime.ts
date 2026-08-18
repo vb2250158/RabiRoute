@@ -94,6 +94,11 @@ type CodexState = {
   lastDeliveryAcceptedAt?: string;
   lastDeliveryDeliveredAt?: string;
   lastDeliveryFailedAt?: string;
+  bindingUpdateRequestedAt?: string;
+  bindingPreviousThreadId?: string;
+  bindingThreadId?: string;
+  bindingThreadName?: string;
+  bindingWorkspace?: string;
   desktopHostRequired?: boolean;
 };
 
@@ -275,14 +280,19 @@ async function listCodexDesktopThreadsWithMetadata(options: {
   offset?: number;
   allowedWorkspaces?: string[];
   stateDbOnly?: boolean;
+  signal?: AbortSignal;
 } = {}): Promise<CodexDesktopThread[]> {
+  if (options.signal?.aborted) throw new Error("Codex Desktop task catalog request was aborted.");
   const client = createCodexMetadataClient(config.codexCwd || process.cwd());
+  const abortListener = options.signal ? () => client.close() : undefined;
+  if (abortListener) options.signal!.addEventListener("abort", abortListener, { once: true });
   const metadataThreads: CodexAppServerThreadMetadata[] = [];
   const requestedCount = Math.max(1, Math.floor(options.offset ?? 0) + Math.floor(options.limit ?? 20));
   const query = options.query?.trim().toLocaleLowerCase() ?? "";
   try {
     let cursor: string | null = null;
     for (let page = 0; page < 100; page += 1) {
+      if (options.signal?.aborted) throw new Error("Codex Desktop task catalog request was aborted.");
       const discovery = codexThreadDiscoveryRequestForTest(
         query,
         cursor,
@@ -298,6 +308,7 @@ async function listCodexDesktopThreadsWithMetadata(options: {
       if (!cursor || eligibleCount >= requestedCount) break;
     }
   } finally {
+    if (abortListener) options.signal?.removeEventListener("abort", abortListener);
     client.close();
   }
 
@@ -422,6 +433,7 @@ export async function listCodexThreads(options: {
   offset?: number;
   allowedWorkspaces: string[];
   stateDbOnly?: boolean;
+  signal?: AbortSignal;
 }): Promise<CodexThreadSummary[]> {
   if (options.stateDbOnly) {
     return listCodexDesktopThreads({
@@ -645,9 +657,13 @@ function codexSessionDependencies(): CodexSessionResolverDependencies<CodexDeskt
   };
 }
 
-async function resolveMonitorThread(createIfMissing: boolean): Promise<CodexDesktopThread | null> {
+async function resolveMonitorThread(createIfMissing: boolean): Promise<{
+  thread: CodexDesktopThread;
+  replacementForThreadId?: string;
+} | null> {
+  const previousThreadId = currentCodexThreadId();
   const resolution = await resolveCodexSession({
-    threadId: currentCodexThreadId(),
+    threadId: previousThreadId,
     title: config.codexThreadName,
     cwd: config.codexCwd,
     createIfMissing
@@ -663,17 +679,28 @@ async function resolveMonitorThread(createIfMissing: boolean): Promise<CodexDesk
     throw new Error(`Codex Desktop task is archived; restore it or select another task in RibiWebGUI: ${config.codexThreadName}`);
   }
   if (resolution.kind === "missing") return null;
-  return resolution.thread;
+  if (resolution.kind === "created") config.codexThreadId = resolution.thread.id;
+  return {
+    thread: resolution.thread,
+    ...(resolution.kind === "created" && previousThreadId !== resolution.thread.id
+      ? { replacementForThreadId: previousThreadId }
+      : {})
+  };
 }
 
 export async function isCodexMonitorThreadActive(): Promise<boolean> {
-  const thread = await resolveMonitorThread(false);
-  if (!thread) return false;
-  bindDesktopThread(thread);
-  return codexDesktopThreadIsActive(thread);
+  const resolved = await resolveMonitorThread(false);
+  if (!resolved) return false;
+  bindDesktopThread(resolved.thread);
+  return codexDesktopThreadIsActive(resolved.thread);
 }
 
-function recordDeliveredNotification(thread: CodexDesktopThread, now: Date, deliveryId: string): CodexMonitorThread {
+function recordDeliveredNotification(
+  thread: CodexDesktopThread,
+  now: Date,
+  deliveryId: string,
+  replacementForThreadId?: string
+): CodexMonitorThread {
   const nextState: CodexState = {
     ...readState(),
     monitorThreadId: thread.id,
@@ -689,7 +716,14 @@ function recordDeliveredNotification(thread: CodexDesktopThread, now: Date, deli
     lastDeliveryDeliveredAt: now.toISOString(),
     lastNotificationError: "",
     lastNotificationErrorAt: "",
-    desktopHostRequired: true
+    desktopHostRequired: true,
+    ...(replacementForThreadId !== undefined ? {
+      bindingUpdateRequestedAt: now.toISOString(),
+      bindingPreviousThreadId: replacementForThreadId,
+      bindingThreadId: thread.id,
+      bindingThreadName: thread.title,
+      bindingWorkspace: thread.cwd
+    } : {})
   };
   writeState(nextState);
   return {
@@ -703,6 +737,7 @@ function recordDeliveredNotification(thread: CodexDesktopThread, now: Date, deli
 
 async function deliverNotification(message: string, deliveryId: string): Promise<CodexMonitorThread> {
   const turnOptions = resolvePrimaryCodexTurnOptions(config);
+  const previousThreadId = currentCodexThreadId();
   const resolution = await resolveAndDeliverCodexSession({
     threadId: currentCodexThreadId(),
     title: config.codexThreadName,
@@ -717,9 +752,15 @@ async function deliverNotification(message: string, deliveryId: string): Promise
       ...turnOptions
     }).then(() => undefined)
   }, ({ thread }) => {
+    config.codexThreadId = thread.id;
     bindDesktopThread(thread);
   });
-  return recordDeliveredNotification(resolution.thread, new Date(), deliveryId);
+  return recordDeliveredNotification(
+    resolution.thread,
+    new Date(),
+    deliveryId,
+    resolution.kind === "created" && previousThreadId !== resolution.thread.id ? previousThreadId : undefined
+  );
 }
 
 export async function notifyCodex(message: string): Promise<CodexMonitorThread> {
@@ -739,24 +780,29 @@ export async function notifyCodex(message: string): Promise<CodexMonitorThread> 
 
 export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNotificationResult> {
   const result = notificationQueue.catch(() => undefined).then(async () => {
-    const thread = await resolveMonitorThread(true);
-    if (!thread) throw new Error("Codex Desktop task could not be resolved.");
-    bindDesktopThread(thread);
-    if (await codexDesktopThreadIsActive(thread)) {
-      return { status: "busy", thread: monitorThreadFromDesktop(thread) } satisfies CodexIdleNotificationResult;
+    const resolved = await resolveMonitorThread(true);
+    if (!resolved) throw new Error("Codex Desktop task could not be resolved.");
+    bindDesktopThread(resolved.thread);
+    if (await codexDesktopThreadIsActive(resolved.thread)) {
+      return { status: "busy", thread: monitorThreadFromDesktop(resolved.thread) } satisfies CodexIdleNotificationResult;
     }
     const deliveryId = randomUUID();
     recordAcceptedDelivery(deliveryId);
     try {
       await deliverDesktopMessage({
-        thread,
+        thread: resolved.thread,
         prompt: message,
         sandbox: "workspace-write",
         ...resolvePrimaryCodexTurnOptions(config)
       });
       return {
         status: "delivered",
-        thread: recordDeliveredNotification(thread, new Date(), deliveryId)
+        thread: recordDeliveredNotification(
+          resolved.thread,
+          new Date(),
+          deliveryId,
+          resolved.replacementForThreadId
+        )
       } satisfies CodexIdleNotificationResult;
     } catch (error) {
       recordCodexFailure(error, deliveryId);

@@ -13,6 +13,13 @@ test("RabiLink Relay uses an explicit global enabled switch", () => {
   const store = new RabiGlobalConfigStore(tempRoot());
   assert.equal(store.read().rabiLinkRelay.enabled, false);
   assert.deepEqual(store.read().webguiLan, { enabled: false, accessToken: "" });
+  assert.deepEqual(store.read().performance, {
+    enabled: false,
+    sampleIntervalMs: 5000,
+    retentionHours: 48,
+    maxDiskMb: 256,
+    slowOperationMs: 2000
+  });
   assert.equal(store.read().rabiLinkRelay.speechProxyEnabled, false);
   assert.equal(store.read().rabiLinkRelay.speechServiceUrl, "http://127.0.0.1:8781");
 
@@ -35,6 +42,27 @@ test("LAN WebGUI access is persisted in the Rabi PC global config", () => {
   const configured = store.patch({ webguiLan: { enabled: true, accessToken: "lan-secret" } });
   assert.deepEqual(configured.webguiLan, { enabled: true, accessToken: "lan-secret" });
   assert.deepEqual(new RabiGlobalConfigStore(store.rootDir).read().webguiLan, configured.webguiLan);
+});
+
+test("performance monitoring settings are normalized and persisted", () => {
+  const store = new RabiGlobalConfigStore(tempRoot());
+  const configured = store.patch({
+    performance: {
+      enabled: true,
+      sampleIntervalMs: 100,
+      retentionHours: 9999,
+      maxDiskMb: 1,
+      slowOperationMs: 20
+    }
+  });
+  assert.deepEqual(configured.performance, {
+    enabled: true,
+    sampleIntervalMs: 1000,
+    retentionHours: 720,
+    maxDiskMb: 16,
+    slowOperationMs: 100
+  });
+  assert.deepEqual(new RabiGlobalConfigStore(store.rootDir).read().performance, configured.performance);
 });
 
 test("legacy Relay config without enabled keeps its previous automatic behavior", () => {

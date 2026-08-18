@@ -2,7 +2,7 @@ import type { RolePlan } from "./types";
 
 export type PlanPresentationPalette = RolePlan["presentation"]["palette"];
 export type PlanKnowledgeView = "plans" | "recent_memory" | "consolidated_memory" | "archived";
-export type PlanListSortMode = "status" | "updated";
+export type PlanListSortMode = "status" | "updated" | "importance" | "urgency";
 
 export const FALLBACK_PLAN_PRESENTATION_PALETTE: PlanPresentationPalette = {
   accent: "#8795a1",
@@ -71,6 +71,59 @@ export function formatPlanRelativeTime(value: string, now = Date.now(), locale: 
   }
   const years = Math.floor(days / 365);
   return locale === "en" ? `${years} yr ago` : `${years}年前`;
+}
+
+type PlanDirectorySortSource = Pick<RolePlan, "updatedAt" | "presentation">;
+
+const UPDATED_SORT_PALETTE: PlanPresentationPalette = {
+  accent: "#0891b2",
+  background: "#ecfeff",
+  foreground: "#0e7490"
+};
+
+function levelLabel(
+  presentation: { label: string; labelEn: string } | undefined,
+  locale: "zh" | "en"
+): string {
+  if (!presentation) return locale === "en" ? "Not set" : "未设置";
+  return locale === "en" ? presentation.labelEn : presentation.label;
+}
+
+export function formatPlanDirectorySortLabel(
+  plan: PlanDirectorySortSource,
+  mode: PlanListSortMode,
+  now = Date.now(),
+  locale: "zh" | "en" = "zh",
+  statusLabel = plan.presentation.status
+): string {
+  if (mode === "updated") return formatPlanRelativeTime(plan.updatedAt, now, locale);
+  if (mode === "importance") return levelLabel(plan.presentation.importance, locale);
+  if (mode === "urgency") return levelLabel(plan.presentation.urgency, locale);
+  return statusLabel;
+}
+
+export function planDirectorySortPalette(
+  plan: PlanDirectorySortSource,
+  mode: PlanListSortMode
+): PlanPresentationPalette {
+  if (mode === "status") return normalizePlanPresentationPalette(plan.presentation.palette);
+  if (mode === "importance") return normalizePlanPresentationPalette(plan.presentation.importance?.palette);
+  if (mode === "urgency") return normalizePlanPresentationPalette(plan.presentation.urgency?.palette);
+  return UPDATED_SORT_PALETTE;
+}
+
+export function formatPlanDirectorySortLabelTitle(
+  plan: PlanDirectorySortSource,
+  mode: PlanListSortMode,
+  now = Date.now(),
+  locale: "zh" | "en" = "zh",
+  statusLabel = plan.presentation.status
+): string {
+  const label = formatPlanDirectorySortLabel(plan, mode, now, locale, statusLabel);
+  if (mode === "updated") return locale === "en" ? `Last updated: ${label}` : `最后更新：${label}`;
+  if (mode === "importance") return locale === "en" ? `Importance: ${label}` : `重要程度：${label}`;
+  if (mode === "urgency") return locale === "en" ? `Urgency: ${label}` : `紧急程度：${label}`;
+  return locale === "en" ? `Status: ${label}` : `状态：${label}`;
 }
 
 export function formatPlanVideoDuration(duration: number | undefined): string {

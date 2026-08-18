@@ -236,7 +236,8 @@ test("repository migration preserves existing personaConfig fields and rules", (
 
   repo.writePersonaConfig("Rabi", {
     recentMessageLimits: { speech: 42 },
-    speechTriggerKeywords: ["Rabi"]
+    speechTriggerKeywords: ["Rabi"],
+    languageStyle: { styleSkillUrl: "file:///styles/rabi" }
   });
   const updated = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition & { routeVariables?: Record<string, string> };
   assert.deepEqual(updated.routeVariables, { tone: "warm" });
@@ -250,6 +251,7 @@ test("repository migration preserves existing personaConfig fields and rules", (
   assert.equal(updated.recentMessageLimits?.speech, 42);
   assert.equal(updated.recentMessageLimits?.napcat, DEFAULT_RECENT_MESSAGE_LIMIT);
   assert.deepEqual(updated.speechTriggerKeywords, ["Rabi"]);
+  assert.deepEqual(updated.languageStyle, { styleSkillUrl: "file:///styles/rabi" });
 });
 
 test("repository writes normalized configs and removes renamed route files", () => {

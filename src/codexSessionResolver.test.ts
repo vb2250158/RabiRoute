@@ -125,7 +125,7 @@ test("explicitly clearing the id before changing the Rabi name rebinds by the ne
   assert.deepEqual(delivered, [renamedTarget.id]);
 });
 
-test("an archived saved binding rebinds to the latest active same-name task without creating", async () => {
+test("an archived saved binding creates a new task even when an active same-name task exists", async () => {
   const archived = {
     id: "019f0000-0000-7000-8000-000000000046",
     title: "MonsterGirl / 伊莉娅 策划美术",
@@ -139,6 +139,12 @@ test("an archived saved binding rebinds to the latest active same-name task with
     cwd: archived.cwd,
     updatedAt: "2026-07-18T03:00:00Z"
   };
+  const created = {
+    id: "019f0000-0000-7000-8000-000000000049",
+    title: archived.title,
+    cwd: archived.cwd,
+    updatedAt: "2026-07-18T05:00:00Z"
+  };
   let createCount = 0;
   const delivered: string[] = [];
 
@@ -146,22 +152,22 @@ test("an archived saved binding rebinds to the latest active same-name task with
     threadId: archived.id,
     title: archived.title,
     cwd: archived.cwd,
-    prompt: "回到同名有效任务"
+    prompt: "归档后投递到新任务"
   }, {
     scope: {},
     read: async () => archived,
     list: async () => [active],
-    create: async () => { createCount += 1; return archived; },
+    create: async () => { createCount += 1; return created; },
     deliver: async ({ thread }) => { delivered.push(thread.id); }
   });
 
-  assert.equal(result.kind, "name");
-  assert.equal(result.thread.id, active.id);
-  assert.equal(createCount, 0);
-  assert.deepEqual(delivered, [active.id]);
+  assert.equal(result.kind, "created");
+  assert.equal(result.thread.id, created.id);
+  assert.equal(createCount, 1);
+  assert.deepEqual(delivered, [created.id]);
 });
 
-test("an archived saved binding with no active same-name task fails closed without creating", async () => {
+test("an archived saved binding with no active same-name task creates and delivers to a new task", async () => {
   const archived = {
     id: "019f0000-0000-7000-8000-000000000048",
     title: "已归档且没有替代任务",
@@ -169,24 +175,81 @@ test("an archived saved binding with no active same-name task fails closed witho
     updatedAt: "2026-07-18T04:00:00Z",
     archived: true
   };
+  const created = {
+    id: "019f0000-0000-7000-8000-000000000050",
+    title: archived.title,
+    cwd: archived.cwd,
+    updatedAt: "2026-07-18T05:00:00Z"
+  };
   let createCount = 0;
   let deliverCount = 0;
 
-  await assert.rejects(resolveAndDeliverCodexSession({
+  const result = await resolveAndDeliverCodexSession({
     threadId: archived.id,
     title: archived.title,
     cwd: archived.cwd,
-    prompt: "不得创建替代任务"
+    prompt: "创建替代任务"
   }, {
     scope: {},
     read: async () => archived,
     list: async () => [],
-    create: async () => { createCount += 1; return archived; },
+    create: async () => { createCount += 1; return created; },
     deliver: async () => { deliverCount += 1; }
-  }), /archived/);
+  });
 
-  assert.equal(createCount, 0);
-  assert.equal(deliverCount, 0);
+  assert.equal(result.kind, "created");
+  assert.equal(result.thread.id, created.id);
+  assert.equal(createCount, 1);
+  assert.equal(deliverCount, 1);
+});
+
+test("concurrent deliveries from one archived binding create one replacement task", async () => {
+  const archived = {
+    id: "019f0000-0000-7000-8000-000000000051",
+    title: "并发归档绑定",
+    cwd: process.cwd(),
+    updatedAt: "2026-07-18T04:00:00Z",
+    archived: true
+  };
+  const created = {
+    id: "019f0000-0000-7000-8000-000000000052",
+    title: archived.title,
+    cwd: archived.cwd,
+    updatedAt: "2026-07-18T05:00:00Z"
+  };
+  const scope = {};
+  let createCount = 0;
+  const delivered: string[] = [];
+  const dependencies = {
+    scope,
+    read: async () => archived,
+    list: async () => [],
+    create: async () => {
+      createCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return created;
+    },
+    deliver: async ({ thread }: { thread: typeof created }) => { delivered.push(thread.id); }
+  };
+
+  const results = await Promise.all([
+    resolveAndDeliverCodexSession({
+      threadId: archived.id,
+      title: archived.title,
+      cwd: archived.cwd,
+      prompt: "第一条"
+    }, dependencies),
+    resolveAndDeliverCodexSession({
+      threadId: archived.id,
+      title: archived.title,
+      cwd: archived.cwd,
+      prompt: "第二条"
+    }, dependencies)
+  ]);
+
+  assert.equal(createCount, 1);
+  assert.deepEqual(results.map((result) => result.thread.id), [created.id, created.id]);
+  assert.deepEqual(delivered, [created.id, created.id]);
 });
 
 test("multiple same-name Desktop tasks rebind to the most recently updated task without creating", async () => {

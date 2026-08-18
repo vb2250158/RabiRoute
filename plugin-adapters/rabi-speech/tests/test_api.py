@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import threading
 import time
 import wave
 from dataclasses import replace
@@ -24,6 +26,7 @@ from rabispeech.contracts import (
     TranscriptionResult,
 )
 from rabispeech.registry import ProviderRegistry
+from rabispeech.tts_audio_store import TtsAudioStoreRegistry
 from rabispeech.windows_audio_session import WindowsAudioSessionKeepalive
 
 
@@ -77,6 +80,17 @@ class SlowWarmupAsr(FakeAsr):
     async def warmup(self) -> None:
         self.warmup_started = True
         await asyncio.Event().wait()
+
+
+class SlowCapabilitiesAsr(FakeAsr):
+    def __init__(self) -> None:
+        super().__init__()
+        self.capability_reads = 0
+
+    def capabilities(self) -> dict[str, object]:
+        self.capability_reads += 1
+        time.sleep(0.2)
+        return super().capabilities()
 
 
 def wav_file(path: Path) -> Path:
@@ -142,6 +156,7 @@ def test_loopback_microphone_status_and_contract_are_discoverable(tmp_path: Path
     assert status.status_code == 200
     assert status.json()["mode"] == "host_resident"
     assert status.json()["running"] is False
+    assert status.json()["config"]["streaming_enabled"] is False
     assert status.json()["config"]["barge_in_mode"] == "off"
     assert status.json()["config"]["barge_in_confirm_ms"] == 200
     models = client.get("/v1/models").json()
@@ -152,6 +167,7 @@ def test_loopback_microphone_status_and_contract_are_discoverable(tmp_path: Path
         "route_id": "legacy-route",
         "barge_in_mode": "echo_protected",
         "barge_in_confirm_ms": 250,
+        "streaming_enabled": False,
     })
     assert updated.status_code == 200
     assert updated.json()["config"]["record_threshold"] == 0.02
@@ -159,9 +175,12 @@ def test_loopback_microphone_status_and_contract_are_discoverable(tmp_path: Path
     assert updated.json()["config"]["route_id"] is None
     assert updated.json()["config"]["barge_in_mode"] == "echo_protected"
     assert updated.json()["config"]["barge_in_confirm_ms"] == 250
+    assert updated.json()["config"]["streaming_enabled"] is False
+    assert updated.json()["running"] is False
     invalid = client.put("/v1/microphone/settings", json={"barge_in_mode": "unsupported"})
     assert invalid.status_code == 200
     assert invalid.json()["config"]["barge_in_mode"] == "off"
+    assert invalid.json()["config"]["streaming_enabled"] is False
 
 
 def test_health_is_available_while_provider_warmup_continues(tmp_path: Path) -> None:
@@ -193,10 +212,48 @@ def test_health_is_available_while_provider_warmup_continues(tmp_path: Path) -> 
 
     with client:
         assert client.get("/health").status_code == 200
-        deadline = time.time() + 1
+        deadline = time.time() + 2
         while not asr.warmup_started and time.time() < deadline:
             time.sleep(0.01)
         assert asr.warmup_started
+
+
+def test_health_does_not_wait_for_full_provider_discovery(tmp_path: Path) -> None:
+    settings = load_settings(Path(__file__).parents[1] / "config.example.json")
+    settings = replace(
+        settings,
+        speaker_recognition=replace(settings.speaker_recognition, enabled=False),
+        server=replace(
+            settings.server,
+            temp_dir=tmp_path / "temp",
+            playback_dir=tmp_path / "playback",
+            records_dir=tmp_path / "records",
+            tts_audio_dir=tmp_path / "tts-audio",
+            ffmpeg="",
+        ),
+        remote_audio=replace(settings.remote_audio, settings_path=tmp_path / "audio-stream-settings.json"),
+    )
+    tts = FakeTts(wav_file(tmp_path / "speech.wav"))
+    asr = SlowCapabilitiesAsr()
+    registry = ProviderRegistry(tts.provider_id, asr.provider_id)
+    registry.register_tts(tts)
+    registry.register_asr(asr)
+    client = TestClient(create_app(
+        settings,
+        registry,
+        audio_session_keepalive=WindowsAudioSessionKeepalive(enabled=False),
+        roles_root=tmp_path / "roles",
+    ))
+
+    started = time.perf_counter()
+    response = client.get("/health")
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert set(response.json()) == {"ok", "service"}
+    assert asr.capability_reads == 0
+    assert elapsed < 0.2
 
 
 def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_path: Path) -> None:
@@ -450,6 +507,37 @@ def test_existing_persona_tts_cache_is_cleaned_at_service_start(tmp_path: Path) 
     assert not expired.exists()
 
 
+def test_health_does_not_wait_for_initial_tts_cache_cleanup(tmp_path: Path, monkeypatch) -> None:
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+
+    def blocked_cleanup(_registry: TtsAudioStoreRegistry, _now: float | None = None) -> list[Path]:
+        cleanup_started.set()
+        assert release_cleanup.wait(timeout=5)
+        return []
+
+    monkeypatch.setattr(TtsAudioStoreRegistry, "cleanup", blocked_cleanup)
+    client, _tts, _asr = fixture(tmp_path)
+    response_ready = threading.Event()
+    responses = []
+
+    def health_request():
+        with client:
+            responses.append(client.get("/health"))
+            response_ready.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        request = executor.submit(health_request)
+        assert cleanup_started.wait(timeout=10)
+        try:
+            assert response_ready.wait(timeout=0.5)
+        finally:
+            release_cleanup.set()
+        request.result(timeout=5)
+
+    assert responses[0].status_code == 200
+
+
 def test_deadline_tts_cleanup_covers_registered_caches_and_stops_with_lifespan(tmp_path: Path) -> None:
     fallback_cache = tmp_path / "tts-audio"
     fallback_cache.mkdir(parents=True)
@@ -468,9 +556,8 @@ def test_deadline_tts_cleanup_covers_registered_caches_and_stops_with_lifespan(t
         tts_audio_retention_minutes=1.0,
     )
     persona = tmp_path / "roles" / "XinghaiBuilder" / "voice" / "cache" / "tts-audio" / "persona-near-expiry.wav"
-    # Arm both registered stores only after create_app's eager cleanup has
-    # completed. Source trees on a NAS can make app construction exceed the
-    # two-second expiry margin used by this deadline-focused test.
+    # Keep both files just inside the retention window during initial cleanup,
+    # then let the scheduled deadline remove them.
     near_expiry = time.time() - 58.0
     os.utime(fallback, (near_expiry, near_expiry))
     os.utime(persona, (near_expiry, near_expiry))

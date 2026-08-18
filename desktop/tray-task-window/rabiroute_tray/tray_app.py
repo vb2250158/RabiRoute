@@ -27,6 +27,7 @@ from .manager_client import (
     RolePanelSendResult,
 )
 from .qt_async import QtAsyncTask, start_qt_task, wait_for_qt_tasks
+from .system_selection import SystemSelectionController
 from .task_window import TaskWindow
 from .theme import apply_rabi_menu_theme
 from .tray_menu_controller import TrayMenuController, show_tray_menu_for_activation
@@ -431,6 +432,31 @@ def run(
     refresh_action.triggered.connect(refresh)
     webgui_action.triggered.connect(lambda: desktop.open_url(manager.manager_url))
     quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle, manager_proc))
+
+    def selection_gateway_context() -> tuple[str, str]:
+        gateway = _gateway_by_id(state["manager"].gateways, selected_gateway_id) or state["manager"].selected_gateway
+        if gateway is None:
+            return "", "当前人格"
+        return str(gateway.get("id") or ""), route_menu_label(gateway)
+
+    def notify_selection_action(title: str, message: str, is_error: bool) -> None:
+        _show_message(
+            tray,
+            tray_available,
+            title,
+            message,
+            QSystemTrayIcon.Warning if is_error else QSystemTrayIcon.Information,
+            5000 if is_error else 2200,
+        )
+
+    system_selection = SystemSelectionController(
+        manager,
+        selection_gateway_context,
+        notify_selection_action,
+        settings_path=project_root / "data" / "speech" / "selection-reader-settings.json",
+    )
+    app.aboutToQuit.connect(system_selection.stop)
+    system_selection.start()
 
     timer = QTimer()
     timer.timeout.connect(lambda: refresh(auto=True))

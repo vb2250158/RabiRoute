@@ -29,3 +29,11 @@ test("Codex exposes an opt-in dedicated memory consolidation Agent with the Terr
   assert.match(source, /DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL/);
   assert.match(source, /记忆整理/);
 });
+
+test("message-processing board opens on demand instead of mounting with the Route configuration page", () => {
+  assert.match(source, /defineAsyncComponent\(\(\) => import\("\.\.\/components\/MessageProcessingBoard\.vue"\)\)/);
+  assert.match(source, /const messageProcessingBoardOpen = ref\(false\)/);
+  assert.match(source, /打开消息处理看板/);
+  assert.match(source, /<v-dialog v-model="messageProcessingBoardOpen" max-width="1200" scrollable>/);
+  assert.match(source, /v-if="messageProcessingBoardOpen && messageProcessingAgentPolicy\(agent\.type\)\.enabled"/);
+});

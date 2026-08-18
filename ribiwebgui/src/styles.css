@@ -3630,6 +3630,21 @@ body::before {
   box-shadow: inset 0 0 0 1px rgba(15, 139, 141, .24);
 }
 
+.knowledge-plan-directory-filter-count {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  place-items: center;
+  border-radius: 999px;
+  padding: 0 5px;
+  background: #0f8b8d;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
 .knowledge-plan-list-dialog {
   width: 100%;
   max-height: min(720px, calc(100dvh - 32px));
@@ -3713,22 +3728,30 @@ body::before {
   background: linear-gradient(135deg, #e8f8f7, #f7fbfc 72%);
 }
 
-.knowledge-plan-list-summary > div {
+.knowledge-plan-list-summary > div:first-child {
   display: grid;
   gap: 1px;
 }
 
-.knowledge-plan-list-summary > div > span {
+.knowledge-plan-list-summary > div:first-child > span {
   color: #637585;
   font-size: 11px;
   font-weight: 750;
 }
 
-.knowledge-plan-list-summary > div > b {
+.knowledge-plan-list-summary > div:first-child > b {
   color: #123b55;
   font-size: 20px;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
+}
+
+.knowledge-plan-list-summary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
 }
 
 .knowledge-plan-list-current-mode {
@@ -3744,9 +3767,25 @@ body::before {
   font-weight: 850;
 }
 
+.knowledge-plan-list-filter-summary {
+  min-height: 32px;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: #fff;
+  color: #40586c;
+  font-size: 11px;
+  font-weight: 850;
+  box-shadow: inset 0 0 0 1px rgba(17, 50, 70, .1);
+  white-space: nowrap;
+}
+
+.knowledge-plan-list-clear-all {
+  min-height: 44px;
+}
+
 .knowledge-plan-list-dialog-grid {
   display: grid;
-  grid-template-columns: minmax(0, .88fr) minmax(0, 1.12fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
   gap: 16px;
 }
@@ -3782,6 +3821,7 @@ body::before {
 
 .knowledge-plan-list-sort-options {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -3902,6 +3942,46 @@ body::before {
   scrollbar-width: thin;
 }
 
+.knowledge-plan-list-tag-search {
+  margin-bottom: 10px;
+}
+
+.knowledge-plan-list-tag-search .v-field {
+  min-height: 44px;
+  border-radius: 10px;
+}
+
+.knowledge-plan-list-tag-options label {
+  grid-template-columns: 16px 16px minmax(0, 1fr) max-content;
+}
+
+.knowledge-plan-list-tag-icon {
+  color: #718190;
+}
+
+.knowledge-plan-list-tag-options label.selected .knowledge-plan-list-tag-icon {
+  color: #0f8b8d;
+}
+
+.knowledge-plan-list-no-tags {
+  display: grid;
+  min-height: 88px;
+  place-items: center;
+  border: 1px dashed rgba(82, 103, 122, .2);
+  border-radius: 10px;
+  padding: 16px;
+  color: #718190;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.knowledge-plan-list-filter-rule {
+  margin: -4px 2px 0 !important;
+  color: #637585 !important;
+  font-size: 11px !important;
+}
+
 .knowledge-plan-list-filter-options label {
   display: grid;
   grid-template-columns: 16px 8px minmax(0, 1fr) max-content;
@@ -3980,7 +4060,19 @@ body::before {
   }
 
   .knowledge-plan-list-summary {
+    align-items: flex-start;
+    flex-direction: column;
     min-height: 56px;
+  }
+
+  .knowledge-plan-list-summary-actions {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .knowledge-plan-list-sort-options {
+    grid-template-columns: 1fr;
   }
 
   .knowledge-plan-list-dialog-actions {
@@ -3990,6 +4082,10 @@ body::before {
 
   .knowledge-plan-list-dialog-actions > span {
     max-width: 190px;
+  }
+
+  .knowledge-plan-list-dialog-actions .v-btn {
+    min-width: 88px;
   }
 }
 
@@ -4085,21 +4181,9 @@ body::before {
   overflow: hidden;
 }
 
-.knowledge-plan-directory-status {
+.knowledge-plan-directory-sort-label {
   flex: 0 0 auto;
-  max-width: 76px;
-  overflow: hidden;
-  border-radius: 999px;
-  padding: 3px 6px;
-  font-size: 9px;
-  font-weight: 850;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.knowledge-plan-directory-updated {
-  flex: 0 0 auto;
+  max-width: 84px;
   overflow: hidden;
   border: 1px solid rgba(82, 103, 122, .1);
   border-radius: 999px;
@@ -4115,19 +4199,6 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
-.knowledge-plan-directory-working {
-  display: inline-grid;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 22px;
-  place-items: center;
-  border: 1px solid rgba(15, 139, 141, .18);
-  border-radius: 999px;
-  background: #e5f6f4;
-  color: #087b7d;
-}
-
-.knowledge-plan-directory-working .v-icon,
 .knowledge-plan-agent-working-icon {
   animation: knowledge-plan-agent-spin .9s linear infinite;
 }
@@ -4270,38 +4341,6 @@ body::before {
 .knowledge-plan-agent-inline-notice[data-tone="error"] {
   background: #fff0ee;
   color: #a44137;
-}
-
-.knowledge-plan-identity-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.knowledge-plan-sequence {
-  display: grid;
-  flex: 0 0 50px;
-  min-height: 48px;
-  place-content: center;
-  border: 1px solid color-mix(in srgb, var(--plan-tone) 28%, rgba(17, 32, 51, .08));
-  border-radius: 10px;
-  background: rgba(255, 255, 255, .82);
-  text-align: center;
-}
-
-.knowledge-plan-sequence span {
-  color: #758695;
-  font-size: 8px;
-  font-weight: 900;
-  letter-spacing: .04em;
-}
-
-.knowledge-plan-sequence b {
-  color: var(--plan-tone);
-  font-size: 18px;
-  line-height: 1.1;
-  font-weight: 950;
-  font-variant-numeric: tabular-nums;
 }
 
 .knowledge-plan-title-copy {
@@ -4970,7 +5009,7 @@ button.knowledge-plan-attachment.file {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) max-content;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
   margin-top: 10px;
 }
 
@@ -4987,7 +5026,7 @@ button.knowledge-plan-attachment.file {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 8px;
-  align-items: center;
+  align-items: start;
   border-color: color-mix(in srgb, var(--plan-tone) 24%, rgba(17, 32, 51, .08));
   padding: 7px 10px;
   background: color-mix(in srgb, var(--plan-tone) 7%, white);
@@ -5013,34 +5052,47 @@ button.knowledge-plan-attachment.file {
 }
 
 .knowledge-plan-current-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.knowledge-plan-current-heading {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.knowledge-plan-current-copy > span {
-  flex: 0 0 auto;
+.knowledge-plan-current-heading > span {
   white-space: nowrap;
 }
 
 .knowledge-plan-summary .knowledge-plan-current-copy > b {
   min-width: 0;
-  flex: 1 1 auto;
   margin-top: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: #263f53;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: normal;
 }
 
-.knowledge-plan-current-copy > small {
+.knowledge-plan-current-heading > small {
   flex: 0 0 auto;
-  border-left: 1px solid rgba(17, 32, 51, .12);
-  padding-left: 8px;
   color: #7b8997;
   font-size: 10px;
   font-weight: 750;
   white-space: nowrap;
+}
+
+.knowledge-plan-current-detail {
+  margin: 1px 0 0;
+  color: #687b8b;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .knowledge-plan-timing {
@@ -5152,7 +5204,6 @@ button.knowledge-plan-attachment.file {
     animation: none;
   }
 
-  .knowledge-plan-directory-working .v-icon,
   .knowledge-plan-agent-working-icon {
     animation: none;
   }
@@ -6748,11 +6799,6 @@ button.knowledge-plan-attachment.file {
     padding: 5px;
   }
 
-  .knowledge-plan-sequence {
-    flex-basis: 44px;
-    min-height: 44px;
-  }
-
   .knowledge-plan-current {
     grid-template-columns: 30px minmax(0, 1fr);
     padding: 9px;
@@ -6764,19 +6810,16 @@ button.knowledge-plan-attachment.file {
   }
 
   .knowledge-plan-current-copy {
-    flex-wrap: wrap;
-    gap: 2px 6px;
+    gap: 4px;
   }
 
   .knowledge-plan-summary .knowledge-plan-current-copy > b {
-    order: 3;
-    flex-basis: 100%;
     overflow: visible;
     white-space: normal;
   }
 
-  .knowledge-plan-current-copy > small {
-    margin-left: auto;
+  .knowledge-plan-current-heading {
+    gap: 6px;
   }
 
   .knowledge-plan-focus {

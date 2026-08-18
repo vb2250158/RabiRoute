@@ -19,6 +19,7 @@ from .contracts import TranscriptionResult
 @dataclass(frozen=True)
 class MicrophoneConfig:
     enabled: bool = False
+    streaming_enabled: bool = False
     device: int | str | None = None
     sample_rate: int = 16_000
     chunk_ms: int = 100
@@ -59,6 +60,10 @@ class MicrophoneConfig:
             session_id = cls().session_id
         config = cls(
             enabled=_boolean(data.get("enabled"), current.enabled),
+            streaming_enabled=_boolean(
+                data.get("streaming_enabled"),
+                _boolean(data.get("enabled"), current.streaming_enabled),
+            ),
             device=device if isinstance(device, (int, str)) else None,
             sample_rate=_integer(data.get("sample_rate"), current.sample_rate, 8_000, 48_000),
             chunk_ms=_integer(data.get("chunk_ms"), current.chunk_ms, 20, 1_000),
@@ -215,7 +220,7 @@ class MicrophoneService:
         self._dropped = 0
 
     async def restore(self) -> None:
-        if not self.config.enabled:
+        if not self.config.enabled or not self.config.streaming_enabled:
             return
         try:
             await self.start({}, persist=False)
@@ -229,7 +234,11 @@ class MicrophoneService:
                 if updates:
                     raise RuntimeError("Stop the resident microphone before changing its configuration.")
                 return self.snapshot()
-            self.config = replace(MicrophoneConfig.from_mapping(updates, self.config), enabled=True)
+            self.config = replace(
+                MicrophoneConfig.from_mapping(updates, self.config),
+                enabled=True,
+                streaming_enabled=True,
+            )
             self._reset_segment()
             self._display_level = 0.0
             self._level_history.clear()
@@ -270,12 +279,14 @@ class MicrophoneService:
 
     async def update_settings(self, updates: object = None) -> dict[str, object]:
         was_running = self._running
+        next_config = replace(MicrophoneConfig.from_mapping(updates, self.config), enabled=False)
         if was_running:
             await self.stop(persist=False)
-            await self.start(updates or {}, persist=True)
+        if was_running and next_config.streaming_enabled:
+            await self.start(next_config.public(), persist=True)
         else:
             async with self._lock:
-                self.config = replace(MicrophoneConfig.from_mapping(updates, self.config), enabled=False)
+                self.config = next_config
                 self._write_config()
         self._emit_event(
             "microphone",
@@ -283,6 +294,7 @@ class MicrophoneService:
             "主机语音设置已更新",
             running=self._running,
             asr_model=self.config.asr_model,
+            streaming_enabled=self.config.streaming_enabled,
         )
         return self.snapshot()
 

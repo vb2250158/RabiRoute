@@ -6,19 +6,35 @@ import { createPinia } from "pinia";
 import { createApp } from "vue";
 import App from "./App.vue";
 import { installDomLocalizer } from "./i18n/domLocalizer";
-import { createLazyRouteRecovery } from "./lazyRouteRecovery";
 import { installManagerFetchPrefix } from "./managerApi";
-import { router } from "./router";
+import {
+  installFrontendPerformanceReporter,
+  recordFrontendPerformanceOperation
+} from "./performance/frontendPerformanceReporter";
+import { webguiRouteRenderOperation } from "@shared/performanceOperations";
+import { lazyRouteRecovery, router } from "./router";
 import { vuetify } from "./plugins/vuetify";
 import { redirectLoopbackWebguiToLan } from "./webguiLanRedirect";
 
-const lazyRouteRecovery = createLazyRouteRecovery();
+let routeRenderStartedAt = performance.now();
+router.beforeEach(() => {
+  routeRenderStartedAt = performance.now();
+});
+router.afterEach((to) => {
+  window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+    recordFrontendPerformanceOperation(
+      webguiRouteRenderOperation(to.path),
+      performance.now() - routeRenderStartedAt
+    );
+  }));
+});
 router.onError((error, target) => {
   lazyRouteRecovery.recover(error, target.fullPath);
 });
 
 async function bootstrap(): Promise<void> {
   installManagerFetchPrefix();
+  installFrontendPerformanceReporter();
   if (await redirectLoopbackWebguiToLan()) return;
 
   createApp(App)
@@ -28,7 +44,6 @@ async function bootstrap(): Promise<void> {
     .mount("#app");
 
   installDomLocalizer();
-  void router.isReady().then(() => lazyRouteRecovery.markReady()).catch(() => undefined);
 }
 
 void bootstrap();

@@ -702,3 +702,50 @@ def test_legacy_single_route_config_migrates_to_broadcast_mode(tmp_path: Path) -
         await service.stop()
 
     asyncio.run(scenario())
+
+
+def test_asr_streaming_switch_stops_capture_and_persists_preference(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        streams: list[FakeStream] = []
+
+        def stream_factory(_config, _callback) -> FakeStream:
+            stream = FakeStream()
+            streams.append(stream)
+            return stream
+
+        state_path = tmp_path / "microphone.json"
+        service = MicrophoneService(
+            state_path=state_path,
+            temp_dir=tmp_path / "temp",
+            transcriber=lambda _path, _config: None,  # type: ignore[arg-type]
+            submitter=lambda _result, _session, _utterance, _source: None,  # type: ignore[arg-type]
+            playback_active=lambda: False,
+            stream_factory=stream_factory,
+        )
+
+        started = await service.start({"streaming_enabled": True})
+        assert started["running"] is True
+        assert started["config"]["streaming_enabled"] is True
+
+        disabled = await service.update_settings({"streaming_enabled": False})
+        assert disabled["running"] is False
+        assert disabled["config"]["enabled"] is False
+        assert disabled["config"]["streaming_enabled"] is False
+        assert streams[0].stopped and streams[0].closed
+
+        enabled = await service.update_settings({"streaming_enabled": True})
+        assert enabled["running"] is False
+        assert enabled["config"]["streaming_enabled"] is True
+
+        restored = MicrophoneService(
+            state_path=state_path,
+            temp_dir=tmp_path / "restored-temp",
+            transcriber=lambda _path, _config: None,  # type: ignore[arg-type]
+            submitter=lambda _result, _session, _utterance, _source: None,  # type: ignore[arg-type]
+            playback_active=lambda: False,
+            stream_factory=stream_factory,
+        )
+        assert restored.config.enabled is False
+        assert restored.config.streaming_enabled is True
+
+    asyncio.run(scenario())

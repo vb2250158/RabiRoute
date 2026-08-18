@@ -26,6 +26,11 @@ export type DurableDeliveryOptions<TResult> = {
   deliveryId: unknown;
   payload: unknown;
   deliver: () => Promise<TResult>;
+  recover?: (error: unknown) => Promise<
+    | { state: "completed"; result: TResult }
+    | { state: "retry" }
+    | { state: "in_progress" | "uncertain"; reason: string }
+  >;
   waitForCompletionMs?: number;
 };
 
@@ -182,6 +187,38 @@ export async function executeDurableDelivery<TResult>(
     if (settled?.state === "uncertain") {
       return pendingOutcome(deliveryId, "uncertain", settled.error || "The earlier delivery result is uncertain; do not resend automatically.");
     }
+    if (options.recover) {
+      const recovery = await options.recover(new Error("Desktop request timed out while the earlier delivery receipt remained sending."));
+      if (recovery.state === "completed") {
+        const completed = { ...(settled || existing), state: "completed" as const, updatedAt: new Date().toISOString(), result: recovery.result };
+        writeReceipt(options.rootDir, options.namespace, completed);
+        return { state: "completed", deliveryId, duplicate: true, result: recovery.result };
+      }
+      if (recovery.state === "retry") {
+        try {
+          const result = await options.deliver();
+          const completed = { ...(settled || existing), state: "completed" as const, updatedAt: new Date().toISOString(), result };
+          writeReceipt(options.rootDir, options.namespace, completed);
+          return { state: "completed", deliveryId, duplicate: false, result };
+        } catch (retryError) {
+          const reason = retryError instanceof Error ? retryError.message : String(retryError);
+          writeReceipt(options.rootDir, options.namespace, {
+            ...(settled || existing),
+            state: "uncertain",
+            updatedAt: new Date().toISOString(),
+            error: reason
+          });
+          return pendingOutcome(deliveryId, "uncertain", `${reason} The one authorized recovery retry did not produce a terminal receipt; do not resend automatically.`, false);
+        }
+      }
+      if (recovery.state === "in_progress") {
+        return pendingOutcome(deliveryId, "in_progress", recovery.reason);
+      }
+      if (recovery.state === "uncertain") {
+        writeReceipt(options.rootDir, options.namespace, { ...(settled || existing), state: "uncertain", updatedAt: new Date().toISOString(), error: recovery.reason });
+        return pendingOutcome(deliveryId, "uncertain", recovery.reason);
+      }
+    }
     return pendingOutcome(deliveryId, "in_progress", "The delivery is already reserved or sending; query its receipt before retrying.");
   }
 
@@ -197,6 +234,27 @@ export async function executeDurableDelivery<TResult>(
     });
     return { state: "completed", deliveryId, duplicate: false, result };
   } catch (error) {
+    if (options.recover) {
+      const recovery = await options.recover(error);
+      if (recovery.state === "completed") {
+        writeReceipt(options.rootDir, options.namespace, { ...reserved, state: "completed", updatedAt: new Date().toISOString(), result: recovery.result });
+        return { state: "completed", deliveryId, duplicate: false, result: recovery.result };
+      }
+      if (recovery.state === "retry") {
+        try {
+          const result = await options.deliver();
+          writeReceipt(options.rootDir, options.namespace, { ...reserved, state: "completed", updatedAt: new Date().toISOString(), result });
+          return { state: "completed", deliveryId, duplicate: false, result };
+        } catch (retryError) {
+          error = retryError;
+        }
+      } else if (recovery.state === "in_progress") {
+        return pendingOutcome(deliveryId, "in_progress", recovery.reason, false);
+      } else {
+        writeReceipt(options.rootDir, options.namespace, { ...reserved, state: "uncertain", updatedAt: new Date().toISOString(), error: recovery.reason });
+        return pendingOutcome(deliveryId, "uncertain", recovery.reason, false);
+      }
+    }
     const message = error instanceof Error ? error.message : String(error);
     writeReceipt(options.rootDir, options.namespace, {
       ...reserved,

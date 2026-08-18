@@ -133,7 +133,7 @@ export class ManagerConfigRepository {
     roleId: string,
     fragment: Pick<
       GatewayDefinition,
-      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle"
     >
   ): void {
     writePersonaConfigFile(this.personaConfigPath(roleId), {
@@ -211,7 +211,7 @@ export class ManagerConfigRepository {
     const activeConfigNames = new Set<string>();
     const groupedByRole = new Map<string, Pick<
       GatewayDefinition,
-      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords"
+      "automationRules" | "notificationRules" | "recentMessageLimit" | "recentMessageLimits" | "speechTriggerKeywords" | "languageStyle"
     >>();
     for (let i = 0; i < normalized.gateways.length; i += 1) {
       const definition = normalized.gateways[i];
@@ -235,6 +235,7 @@ export class ManagerConfigRepository {
           recentMessageLimit: previous?.recentMessageLimit ?? definition.recentMessageLimit,
           recentMessageLimits: previous?.recentMessageLimits ?? definition.recentMessageLimits,
           speechTriggerKeywords: previous?.speechTriggerKeywords ?? definition.speechTriggerKeywords,
+          languageStyle: previous?.languageStyle ?? definition.languageStyle,
           automationRules: mergePersonaAutomationRules(previous?.automationRules, definition.automationRules),
           notificationRules: mergeNotificationRules(previous?.notificationRules, definition.notificationRules)
         });
@@ -258,6 +259,7 @@ export class ManagerConfigRepository {
       recentMessageLimit: _recentMessageLimit,
       recentMessageLimits: _recentMessageLimits,
       speechTriggerKeywords: _speechTriggerKeywords,
+      languageStyle: _languageStyle,
       rabiLinkRelayEnabled: _rabiLinkRelayEnabled,
       rabiLinkRelayUrl: _rabiLinkRelayUrl,
       rabiLinkRelayToken: _rabiLinkRelayToken,

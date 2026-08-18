@@ -226,6 +226,7 @@ POST /api/agent/send
   },
   "routeId": "main",
   "channel": "napcat",
+  "styleValidation": 1,
   "params": {
     "target": "group",
     "groupId": "example-group-id",
@@ -245,6 +246,27 @@ POST /api/agent/send
   }
 }
 ```
+
+`styleValidation` is the enum `1 | 0` and defaults to `1`. A persona may bind its own style Skill through `personaConfig.json.languageStyle.styleSkillUrl`; different personas may use different URLs. The URL may point to a Skill directory, `SKILL.md`, or `references/style-data.json`.
+
+With `styleValidation=1`, a failed check returns `409` with `status=style_confirmation_required`, rule IDs, paragraphs, reasons, and evidence. No Outbox send has started. After confirming that the wording is intentional for this message, the Agent may retry the same `deliveryId` with `styleValidation=0`. This bypass applies only to that request and does not remove the persona binding.
+
+The generic analysis endpoint does not send a message:
+
+```http
+POST /api/language-style/validate
+```
+
+```json
+{
+  "text": "text to inspect",
+  "styleSkillUrl": "file:///path/to/style-skill",
+  "scope": "outbound_message",
+  "prompt": "optional source prompt"
+}
+```
+
+The response contains `passed`, `status`, `violations`, `checkedRuleIds`, and `skippedRuleIds`. The Codex Stop Hook uses the same endpoint only for a failure notice; it never blocks or rewrites Codex output.
 
 `deliveryId`, `sender.agentType`, `sender.sessionId`, and the exact enabled `routeId` are required. `sender.agentType` names the calling Agent product, such as `codex`, while `sender.sessionId` is that Agent's complete session ID. `channel` selects the only delivery adapter, while `params` carries the channel-specific destination. Supported channels are `napcat`, `wecom`, `weixin`, `feishu`, `rabilink`, `speech`, `fennenote`, `role_panel`, and `plan_feedback`. The injected request template contains the correct shape for the current source. Source context remains available for auditing, but it cannot override `channel` or `params`. A reply associated with a message-processing requirement also carries `tracking.requirementId` and a short-lived `tracking.sendContextReviewToken` obtained for that exact sender session, destination, and payload.
 
@@ -270,10 +292,12 @@ For a reply, submit the decision first so the requirement enters `awaiting_send`
 The Agent must not rely only on the recent messages captured when AgentPacket was created. During processing, another person or Agent may already have answered. Read Manager's current bounded bidirectional context first:
 
 ```http
-GET /api/message-processing/requirements/:requirementId/send-context
+GET /api/message-processing/requirements/:requirementId/send-context?sourceMessageId=:sourceMessageId
 ```
 
-The response contains `contextVersion`, all `requiredReviewIds`, the context items, prior Agent replies in `priorReplies`, and `alreadyReplied`. After deciding that the exact proposed reply still fits the conversation, submit that request for approval:
+A single reply must pass the `sourceMessageId` it will quote. The response retains bounded context while narrowing `requiredReviewIds` to that main message and the explicit reply chain derived from message records. Other messages in the aggregate requirement still contribute to the context version but do not need to be declared as evidence for this body. After deciding that the exact proposed reply still fits the conversation, submit that request for approval:
+
+If an older source has fallen outside the recent window, Manager may recover only one record with the same Route and `sourceMessageId` from the formal `group-messages.jsonl` for that requirement's persona. A missing record, duplicate records, or conflicting Route evidence fails the GET instead of expanding to another group or historical requirement.
 
 ```http
 POST /api/message-processing/requirements/:requirementId/send-context
@@ -282,7 +306,7 @@ POST /api/message-processing/requirements/:requirementId/send-context
 ```json
 {
   "contextVersion": "<version returned by GET>",
-  "reviewedContextIds": ["<every requiredReviewId>"],
+  "reviewedContextIds": ["<requiredReviewIds for this sourceMessageId and explicit reply chain>"],
   "reviewedByThreadId": "<complete current session ID>",
   "reason": "No one has answered yet and the proposed text still addresses the current question.",
   "proposedSend": {
@@ -312,13 +336,15 @@ POST /api/message-processing/requirements/:requirementId/send-context
 
 Add the returned `sendContextReviewToken` to `tracking` and send the unchanged request. The token expires after two minutes. A new conversation item, a changed requirement state, sender session, destination, quoted message, or payload invalidates the approval and requires another read. A paraphrase is still a duplicate when another Agent already replied to the same source. A genuine follow-up with new facts must explicitly use `allowAdditionalReply=true` and explain why.
 
+During reference and image validation, a tracked send uses only the exact formal source evidence bound to this approval. A stale requirement `conversationKey` or `replyContext.groupId` cannot redirect the source to another group. A mismatch between the formal group, Route, instance, and send target, a non-unique source record, or an image attachment not marked reviewed blocks the send. Ordinary untracked sends keep the original Route-history lookup and do not use this recovery.
+
 This gate applies to every Agent type. When `replyToMessageId` points to the source of a known message-processing requirement, a Primary Persona or another Agent cannot omit `tracking.requirementId` to bypass the board and context review.
 
 Ordinary group discussion may use `no_reply` with a reason. Explicit mentions, direct replies, private messages, and plan-progress notifications cannot be closed by a generic `agent_judgement`; only constrained reasons such as duplicate, already answered, withdrawn, or invalid source are accepted.
 
 Before replying or closing any new requirement, the Message Agent must inspect the source messages, attachments, and necessary reply chain and submit `projectFactAssessment`. First read `GET /api/message-processing/requirements/{requirementId}`. Its `knowledgeMatches` are plan and memory candidates derived by Manager; the Agent reads each candidate and reports the result through `POST /api/message-processing/requirements/{requirementId}/knowledge-callback`. An `updated` or `created` callback still carries `recordType`, `recordId`, and `verifiedAt`, and the referenced plan or memory must contain the original message ID.
 
-New requirements also carry `source.evidenceReviewRequired=true`. Manager lists the mandatory source messages, reply ancestry, and attachments in `source.messageIds`, `source.replyChainMessageIds`, and `source.attachments`. NapCat images are saved immediately at ingress and delivered to the Desktop turn as `localImage` input. A CQ marker, filename, or URL alone is not an image review. Before reply or closure, the outcome also submits:
+New requirements also carry `source.evidenceReviewRequired=true`. Manager retains the aggregate requirement's complete evidence in `source.messageIds`, `source.replyChainMessageIds`, and `source.attachments`. NapCat images are saved immediately at ingress and delivered to the Desktop turn as `localImage` input. A CQ marker, filename, or URL alone is not an image review. Before reply or closure, the outcome also submits:
 
 ```json
 {
@@ -339,7 +365,7 @@ New requirements also carry `source.evidenceReviewRequired=true`. Manager lists 
 }
 ```
 
-`reviewedMessageIds` covers both source and reply-chain IDs, and every attachment needs a concrete observation. If an attachment is `unavailable`, missing locally, or failed to download, Manager rejects `reply` and `no_reply`; the Agent must retry retrieval or hand off instead of inferring image content. This source-evidence review is stored separately from project-fact classification.
+A `reply` outcome may submit the evidence already reviewed and enter `awaiting_send`. POST send-context recalculates the exact subset from `proposedSend.params.replyToMessageId`: the selected main message, its explicit reply chain, and attachments carried by that quoted message or explicitly referenced by the body. `sourceEvidenceReview` and `projectFactAssessment` must cover that subset. Quoted group-reply ownership is calculated only among requirements with `kind=message_reply`; derived notifications such as `plan_progress_notification` do not own the right to quote-reply to the original group message. Historical duplicates with the same Route, message group, and source message allow only the canonical `message_reply` with the latest `createdAt` to continue. If no `message_reply` exists, ownership fails closed instead of falling through to a plan notification. Different groups or Routes, a non-unique newest item, a missing reply-chain record, an unavailable relevant attachment, or body evidence outside the fact assessment also fails closed. An unavailable attachment on an unrelated message in the same aggregate requirement does not block this reply. Closing the whole requirement with `no_reply` still requires complete message and attachment coverage. Source-evidence review remains separate from project-fact classification.
 
 When the source contains a durable schedule, scope, approval, ownership, or release fact, `criticalFactDisposition` uses a typed record reference:
 
@@ -425,7 +451,7 @@ Items expose the stage, source message group, worker task, handoff, decision, se
 
 `deliveryId`, `sender.agentType`, and `sender.sessionId` are required. Before entering Outbox, Manager persists a reservation under runtime `data/agent-send-idempotency/`, and the completed result preserves the sender identity. The same ID with the same request executes once, and later POSTs return the original `sent/draft/blocked/failed` result. Reusing the ID with a different sender or any other changed request returns `409 conflict`; `reserved/sending/uncertain` states also fail closed and are never auto-replayed.
 
-After a POST timeout or an empty receipt, query the original ID first:
+After a POST timeout or an empty receipt, query the original ID first. An absent receipt returns HTTP `404` with `idempotency.state=missing`; keep reading `in_progress`, and never automatically resend `uncertain` or `conflict`. One controlled retry is allowed only when the original `deliveryId` and payload are unchanged and Manager authoritatively finds neither a request record nor a terminal record in the same Route's Outbox. A request record without a terminal result, a different payload digest, or a recovery retry without a terminal result becomes `uncertain`:
 
 ```http
 GET /api/agent/send/receipts/:deliveryId
@@ -601,7 +627,7 @@ POST actions:
 - `read`: read a thread by `threadId`. The returned task name always comes from the Codex left-sidebar index; SQLite `threads.title`, an initialization prompt, or a stale Route-cached name cannot override it.
 - `resolve`: reuse a valid saved ID when its workspace matches and the task is unarchived; mutable Desktop/SQLite title metadata is not identity, and an overlong display title cannot invalidate that binding. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
 - `create`: idempotently resolve by task name plus configured workspace, bootstrap one empty task only when no match exists, then deliver any initial prompt to that task's Desktop owner through Desktop IPC. Concurrent calls and retries after an HTTP timeout share or reuse the same creation result instead of creating duplicate tasks. The response uses `resolution=created` for a new task and `resolution=name` for an existing same-name task. Codex task names are limited to 240 JavaScript code units; RabiRoute safely truncates longer inputs with an ellipsis and returns the actual created name for persistence.
-- Manager persists the create reservation under runtime `data/.runtime/codex-thread-creations/`. It advances through `reserved → creating → thread_created → naming → initial_turn → completed`. If `thread/start` may have run but its result cannot be confirmed, the reservation becomes `uncertain`, later requests return `409`, and automatic recreation is forbidden. Only `failed_before_create`, which proves `thread/start` was not called, may retry creation.
+- Manager persists the create reservation under runtime `data/.runtime/codex-thread-creations/`. It advances through `reserved → creating → thread_created → naming → initial_turn → completed`. A `creating` reservation may move through `failed_before_create` and retry with the same key only after it is older than five minutes, has no `threadId`, and a second `action=list + lookupMode=state_db` check authoritatively finds no task with the same name and workspace. An existing `threadId`, a failed index query, a candidate task, or any other insufficient evidence changes the reservation to `uncertain`; later requests return `409` and automatic recreation is forbidden.
 - `rename`: rename a Desktop task by full `threadId` plus configured cwd without changing its identity. Persistent plan-assistant slots use this when expanding from one unnumbered assistant to multiple numbered assistants.
 - `send`: ask the existing Desktop task owner to start or steer the real turn through Desktop IPC.
 
@@ -737,11 +763,11 @@ PATCH /api/roles/:roleId/plans/:planId
 }
 ```
 
-New plans must provide an ordered `steps` array. Write APIs still accept only the five top-level lifecycle states above; Manager derives `presentation.status / tone / sortBucket / views / palette` and list-level `counts.stages`, so Agents and clients must not write presentation stages. A current step waiting for approval, plan confirmation, or authorization remains in progress and carries a structured `approvalRequest` plus `waitingFor`. Only a complete actionable contract with `responseStatus=pending` makes Manager derive the `isBlocked=true` compatibility projection and `Awaiting approval`. A structured current `qa-* / verify-*` step becomes `Awaiting QA acceptance`; authoritative wait fields may become `Awaiting environment`, `Awaiting assets`, `Awaiting information`, or `Awaiting external response`; a package/build current step with completed prior work and an explicit package wait becomes `Awaiting shared package`; other in-progress plans become `Executing`. Missing contract fields produce `incomplete/enabled=false`; the plan remains in progress and formal approval stays disabled.
+New plans must provide ordered `steps`. Manager exposes only green `In progress`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification` for non-terminal plans. Agents and clients must not write presentation stages. External information, assets, owners, accounts, devices, authorization, and receipts remain internal wait details.
 
-Manager also owns the refined display rules. A real runner, MCP service, device, or listener outage becomes `Waiting for test environment` only when no CLI, fallback validation, or retry remains. An explicit prohibition on Unity GUI, MCP, menus, or PlayMode becomes `Waiting for renewed authorization`. A QA stage additionally requires a real receipt for the current send and no remaining action except the verdict; a missing receipt with a send or repair path stays `Executing`. Target-package identity or inclusion evidence remains blue `Awaiting shared package`, while assets, information, and owner replies do not become test-environment waits.
+Manager retains precise internal reconcile reasons. Available CLI, fallback validation, retries, sending, or coordination are public green `In progress`; delivery closure with only package proof missing is blue `Awaiting package`; proven inclusion is purple `Awaiting QA`; a development-closed `manual-verify-*` step is orange `Awaiting manual verification`; a complete approval contract is red `Awaiting approval`; no safe action is gray `Paused`.
 
-Only plans that change project content, such as code, prefabs, assets, or configuration, should be forced through `implementation/development validation → Awaiting shared package → Awaiting QA acceptance → complete on QA pass; return to implementation on failure`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or `qa-* / verify-*` steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
+Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 
 `attachments` is optional. A new item may provide a Manager-readable local `path`, or `name`, optional `mimeType`, and `contentBase64`. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager copies content into the persona-private `plans/attachments/<planId>/` directory; the plan file retains safe metadata only and never Base64. Omitting `attachments` from PATCH preserves the list, while an empty array clears it. To keep selected existing items in a PATCH, send back the corresponding attachment objects returned by GET. The public plan DTO does not expose the local `path`.
 
@@ -804,6 +830,8 @@ Approval feedback remains associated with its approval step:
 `attachments` is optional. Each item uses `name`, optional `mimeType`, and `contentBase64`; a request may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Manager validates and materializes the content under the persona-private `plans/feedback/attachments/<feedbackId>/` directory. The audit record and Agent notification retain only safe metadata and the local path. A retry with the same `feedbackId` must keep the same text, step, and attachment content.
 
 `planAttachmentIds` is also optional and references managed files already present in the current plan's top-level `attachments`. It accepts up to 8 unique IDs. Typing `@` in RibiWebGUI's approval field opens a list of the current plan attachments; choosing one inserts a readable `@attachment` token and submits its stable ID. Manager verifies that every ID belongs to the current plan, stores the referenced metadata and local path as an audit snapshot for this feedback, and delivers the files through the same `plan_feedback` event. WebGUI never reads or submits an arbitrary local path. A retry with the same `feedbackId` must keep the same plan-attachment references.
+
+When feedback targets the current structured `qa-* / verify-*` step, Manager treats only a user or external-source `approval_suggestion` as a QA-verdict candidate. `guidance`, `guidance_response`, `approval_response`, `author=agent` execution reports, and bare `passed / verified` test counters remain ordinary feedback records and cannot complete or reopen QA. An explicit failure or reproduction reuses or inserts `investigate-<qaStepId>` on the same plan, resets the QA step to not started, writes the issue-type-specific minimum missing evidence to `waitingFor`, and continues the original `taskBinding.sessionId + workspace` after the evidence is complete. Only an explicit verdict such as `QA passed`, `acceptance passed`, or `confirmed no longer reproducible` completes the current QA step.
 
 With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`. Guidance and approval feedback reuse the same exact `taskBinding` delivery path. A complete binding uses `/api/agent/threads` and Desktop IPC to the original business task; only an incomplete binding sends the full feedback to the persona Agent. An unloaded owner remains `pending` under bounded retries, and only an accepted `start/steer` becomes `delivered`. The event does not enter the role-panel timeline or unified conversation ledger, and terminal state is announced as `plan_feedback_changed`.
 

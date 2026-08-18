@@ -123,8 +123,8 @@ test("enabled plan secretary receives the business result directly without wakin
   assert.equal(readRolePanelTimeline(roleDir).length, 0);
   assert.equal(secretaryHandoffs.length, 1);
   assert.equal(secretaryHandoffs[0]?.sourceSessionId, "source-session");
-  assert.match(secretaryHandoffs[0]?.prompt || "", /已经直接投递给负责该计划的秘书/);
-  assert.match(secretaryHandoffs[0]?.prompt || "", /只有确实需要用户或主人格做决定/);
+  assert.match(secretaryHandoffs[0]?.prompt || "", /结果已直达计划秘书/);
+  assert.match(secretaryHandoffs[0]?.prompt || "", /仅把决定、批准、授权、缺少输入或计划最终复核升级给主人格/);
   assert.equal(events[0]?.data.recipient, "secretary");
   assert.equal(events[0]?.data.secretaryThreadId, selected.definition.codexPlanAssistantSessions[0]?.threadId);
 });
@@ -132,23 +132,24 @@ test("enabled plan secretary receives the business result directly without wakin
 test("plan task completion reminder keeps the secretary control-only and continues the business task", () => {
   const text = planTaskCompletionAgentText(delivery("C:\\role"));
 
-  assert.match(text, /已经直接投递给负责该计划的秘书/);
+  assert.match(text, /结果已直达计划秘书/);
   assert.match(text, /\[Agent 任务投递来源\]/);
   assert.match(text, /来源 Agent：计划执行 Agent/);
   assert.match(text, /来源会话 ID：source-session/);
   assert.match(text, /\[投递内容\]/);
-  assert.match(text, /同一轮完成控制面闭环/);
-  assert.match(text, /action=send/);
-  assert.match(text, /plan\.taskBinding\.sessionId=source-session/);
+  assert.match(text, /本轮完成以下事项/);
+  assert.match(text, /POST \/api\/agent\/threads/);
+  assert.match(text, /续投原业务任务 source-session/);
   assert.match(text, /原业务任务/);
-  assert.match(text, /不得把任何“协助处理计划”秘书会话写入 taskBinding/);
-  assert.match(text, /不得因秘书轮转或计划暂停清空业务 taskBinding/);
-  assert.match(text, /禁止亲自执行调查、代码\/Prefab\/配置/);
-  assert.match(text, /可推进但无人管理的计划/);
-  assert.match(text, /可推进但空闲的业务任务/);
-  assert.match(text, /active\/in-progress 业务任务不要重复投递/);
-  assert.match(text, /普通进展、状态变化、等待条件和可继续执行的下一步由秘书直接处理/);
-  assert.match(text, /计划已经完整收尾/);
+  assert.match(text, /taskBinding 只指向业务任务/);
+  assert.match(text, /不执行调查、代码、构建、发布或外部操作/);
+  assert.match(text, /PangHu 正式 Main 的 Editor 占用/);
+  assert.match(text, /静态资源\/序列化合同、非 Unity runner、CLI/);
+  assert.match(text, /不得停止 Editor 或取消他人测试/);
+  assert.match(text, /可推进计划均有人管理/);
+  assert.match(text, /空闲业务任务已续投/);
+  assert.match(text, /运行中的任务未重复投递/);
+  assert.match(text, /仅把决定、批准、授权、缺少输入或计划最终复核升级给主人格/);
 });
 
 test("plan task completion fails closed for missing or conflicting route bindings", async (t) => {

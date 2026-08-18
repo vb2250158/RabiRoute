@@ -21,6 +21,11 @@ const currentCodexReportKeys = [
   "lastDeliveryAcceptedAt",
   "lastDeliveryDeliveredAt",
   "lastDeliveryFailedAt",
+  "bindingUpdateRequestedAt",
+  "bindingPreviousThreadId",
+  "bindingThreadId",
+  "bindingThreadName",
+  "bindingWorkspace",
   "reportGeneration",
   "reportSequence",
   "updatedAt"

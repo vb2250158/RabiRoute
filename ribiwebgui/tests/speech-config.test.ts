@@ -62,14 +62,25 @@ test("keeps the legacy Route auto-submit field enabled so keyword mode can recor
 
 test("speech workbench exposes exact VAD inputs and one host playback volume control", () => {
   const source = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
+  const controlPlane = fs.readFileSync(new URL("../../src/manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /投递 Route|会话 ID|送入所选 Route|selectedGatewayId|v-model="autoSubmit"/);
   assert.equal(source.match(/<SpeechParameterSlider\b/g)?.length, 8);
   assert.equal(source.match(/label="主机播放音量"/g)?.length, 1);
   assert.match(source, /:min="0"[\s\S]*:max="100"[\s\S]*@update:model-value="schedulePlaybackVolume"/);
   assert.match(source, /speech\.setPlaybackVolume\(nextVolume\)/);
   assert.match(source, /speech\.updateMicrophoneSettings\(microphoneSettingsCommand\(\)\)/);
+  assert.match(source, /具体原因：/);
+  assert.match(source, /处理方法：/);
+  assert.match(source, /label="开启 ASR 串流"/);
+  assert.match(source, /@update:model-value="changeAsrStreamingEnabled"/);
+  assert.match(source, /streamingEnabled: asrStreamingEnabled\.value/);
+  assert.match(source, /麦克风不会持续录音/);
+  assert.match(source, /没有 Route 订阅时只保存主机记录/);
   assert.match(source, /同一段 ASR 会广播给全部/);
   assert.match(source, /<SpeechHostMonitor[^>]+:subscriber-count="speechSubscriberRoutes\.length"/);
+  assert.match(controlPlane, /reconcileSpeechMicrophone\("manager startup"\)/);
+  assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("gateway save"\)/);
+  assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("manual reload"\)/);
   const monitorSource = fs.readFileSync(new URL("../src/components/SpeechHostMonitor.vue", import.meta.url), "utf8");
   assert.match(monitorSource, /主机语音链路/);
   assert.match(monitorSource, /运行日志与转写预览/);

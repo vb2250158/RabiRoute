@@ -198,8 +198,8 @@ test("insufficient account QA evidence becomes an actionable inquiry and later e
   assert.match(plan.waitingFor || "", /北京时间/);
   assert.match(plan.waitingFor || "", /前后状态/);
   assert.doesNotMatch(plan.waitingFor || "", /版本|渠道|截图|视频|日志/);
-  assert.equal(planPresentation(plan).tone, "waiting_external");
-  assert.equal(planPresentation(plan).status, "等待测试环境");
+  assert.equal(planPresentation(plan).tone, "paused");
+  assert.equal(planPresentation(plan).status, "暂停");
   assert.equal(sendCount, 0);
 
   const evidence = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
@@ -335,4 +335,196 @@ test("QA wording does not close a plan when its structured current step is imple
   });
   assert.equal(result.outcome, "ignored");
   assert.equal(listPlans(roleDir)[0].currentStepId, "implement");
+});
+
+test("plan guidance cannot act as a QA verdict even on a structured QA step", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-qa-guidance-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  createPlan(roleDir, {
+    id: "plan-qa-guidance",
+    title: "继续验证产品修复",
+    focus: "产品验证",
+    status: "进行中",
+    currentStepId: "verify-guidance",
+    steps: [{ id: "verify-guidance", title: "QA 验收", status: "进行中" }],
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "019f0000-0000-7000-8000-000000000006",
+      workspace: "C:\\workspace\\RabiRoute"
+    },
+    keywords: ["QA"]
+  });
+  const feedback = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+    id: "qa-guidance-explicit-pass",
+    roleId: "Rabi",
+    planId: "plan-qa-guidance",
+    planTitle: "继续验证产品修复",
+    stepId: "verify-guidance",
+    kind: "guidance_response",
+    text: "QA 明确通过，后续继续整理文档。",
+    author: "user",
+    source: "webgui",
+    notifyAgent: false
+  }));
+
+  const result = await consumePlanQaFeedback({
+    roleDir,
+    feedback,
+    sendToTask: async () => { throw new Error("must not send"); }
+  });
+
+  assert.equal(result.outcome, "ignored");
+  assert.equal(listPlans(roleDir)[0].status, "进行中");
+  assert.equal(listPlans(roleDir)[0].currentStepId, "verify-guidance");
+  assert.equal(listPlanFeedback(roleDir, feedback.planId)[0]?.qaHandling, undefined);
+});
+
+test("agent test summaries and bare English pass words are not QA verdicts", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-qa-agent-summary-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  createPlan(roleDir, {
+    id: "plan-qa-agent-summary",
+    title: "验证测试结果",
+    focus: "测试结果",
+    status: "进行中",
+    currentStepId: "verify-runtime",
+    steps: [{ id: "verify-runtime", title: "QA 验收", status: "进行中" }],
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "019f0000-0000-7000-8000-000000000007",
+      workspace: "C:\\workspace\\RabiRoute"
+    },
+    keywords: ["QA"]
+  });
+  const agentSummary = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+    id: "qa-agent-summary",
+    roleId: "Rabi",
+    planId: "plan-qa-agent-summary",
+    planTitle: "验证测试结果",
+    stepId: "verify-runtime",
+    text: "定向测试 matched=10 passed=10 failed=0；运行时验收仍待执行。",
+    author: "agent",
+    source: "agent",
+    notifyAgent: false
+  }));
+  const barePassed = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+    id: "qa-bare-passed",
+    roleId: "Rabi",
+    planId: "plan-qa-agent-summary",
+    planTitle: "验证测试结果",
+    stepId: "verify-runtime",
+    text: "passed",
+    author: "user",
+    source: "webgui",
+    notifyAgent: false
+  }));
+  const bareVerified = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+    id: "qa-bare-verified",
+    roleId: "Rabi",
+    planId: "plan-qa-agent-summary",
+    planTitle: "验证测试结果",
+    stepId: "verify-runtime",
+    text: "verified",
+    author: "user",
+    source: "webgui",
+    notifyAgent: false
+  }));
+
+  for (const feedback of [agentSummary, barePassed, bareVerified]) {
+    const result = await consumePlanQaFeedback({
+      roleDir,
+      feedback,
+      sendToTask: async () => { throw new Error("must not send"); }
+    });
+    assert.equal(result.outcome, "ignored");
+  }
+  assert.equal(listPlans(roleDir)[0].status, "进行中");
+  assert.equal(listPlans(roleDir)[0].currentStepId, "verify-runtime");
+});
+
+test("approval responses are audit records and cannot reopen or complete QA", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-qa-approval-response-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  createPlan(roleDir, {
+    id: "plan-qa-approval-response",
+    title: "验证审批回执隔离",
+    focus: "QA 验收",
+    status: "进行中",
+    currentStepId: "qa-approval-response",
+    steps: [{ id: "qa-approval-response", title: "QA 验收", status: "进行中" }],
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "019f0000-0000-7000-8000-000000000009",
+      workspace: "C:\\workspace\\RabiRoute"
+    },
+    keywords: ["QA"]
+  });
+  for (const [id, kind, text] of [
+    ["qa-guidance", "guidance", "QA 明确通过。"],
+    ["qa-approval-response", "approval_response", "问题仍存在，验收失败。"]
+  ] as const) {
+    const feedback = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+      id,
+      roleId: "Rabi",
+      planId: "plan-qa-approval-response",
+      planTitle: "验证审批回执隔离",
+      stepId: "qa-approval-response",
+      kind,
+      text,
+      author: kind === "approval_response" ? "agent" : "user",
+      source: kind === "approval_response" ? "agent" : "webgui",
+      notifyAgent: false
+    }));
+    const result = await consumePlanQaFeedback({
+      roleDir,
+      feedback,
+      sendToTask: async () => { throw new Error("must not send"); }
+    });
+    assert.equal(result.outcome, "ignored");
+  }
+  assert.equal(listPlans(roleDir)[0].status, "进行中");
+  assert.equal(listPlans(roleDir)[0].currentStepId, "qa-approval-response");
+});
+
+test("an explicit English QA failure is consumed", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-qa-english-failure-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  createPlan(roleDir, {
+    id: "plan-qa-english-failure",
+    title: "Verify the QA verdict gate",
+    focus: "QA acceptance",
+    status: "进行中",
+    currentStepId: "qa-english-failure",
+    steps: [{ id: "qa-english-failure", title: "QA acceptance", status: "进行中" }],
+    taskBinding: {
+      agentType: "codex",
+      sessionId: "019f0000-0000-7000-8000-000000000010",
+      workspace: "C:\\workspace\\RabiRoute"
+    },
+    keywords: ["QA"]
+  });
+  const feedback = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+    id: "qa-explicit-english-failure",
+    roleId: "Rabi",
+    planId: "plan-qa-english-failure",
+    planTitle: "Verify the QA verdict gate",
+    stepId: "qa-english-failure",
+    kind: "approval_suggestion",
+    text: "QA failed. Reproduction steps: open the plan page. Actual: old status. Expected: new status.",
+    author: "user",
+    source: "webgui",
+    notifyAgent: false
+  }));
+  const sends: Array<{ threadId: string; cwd: string; prompt: string }> = [];
+
+  const result = await consumePlanQaFeedback({
+    roleDir,
+    feedback,
+    sendToTask: async (request) => { sends.push(request); }
+  });
+
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.status, "dispatched");
+  assert.equal(sends.length, 1);
+  assert.equal(listPlans(roleDir)[0].currentStepId, "investigate-qa-english-failure");
 });

@@ -2,6 +2,11 @@ import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { createHash } from "node:crypto";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
+import {
+  measurePerformanceOperation,
+  measureSyncPerformanceOperation
+} from "./performance/performanceInstrumentation.js";
+import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
 import { isCodexMonitorThreadActive } from "./codexRuntime.js";
 import { config, rolePathsForRoute, type RouteProfile } from "./config.js";
 import {
@@ -261,7 +266,7 @@ function messageGroupPrompt(
     ...(evidence.attachments.length ? evidence.attachments.map((attachment) =>
       `附件 ${attachment.id}｜消息 ${attachment.messageId}｜${attachment.status}｜${attachment.name}${attachment.path ? `｜本地文件 ${attachment.path}` : `｜${attachment.error || "不可读"}`}`
     ) : ["附件：无"]),
-    "先围绕上面这组原消息、引用链和附件理解当前讨论；不要让较早的最近消息覆盖它。图片已作为本轮 Desktop 图片输入附带时，必须实际查看后再填写 sourceEvidenceReview；引用含图片的 QQ 消息回复时，还要按图片顺序填写 params.replyImageDescriptions。"
+    "先围绕上面这组原消息、引用链和附件理解当前讨论；不要让较早的最近消息覆盖它。聚合需求保留全部证据；准备回复时，sourceEvidenceReview 和 projectFactAssessment 只声明本次 sourceMessageId、它的明确回复链和正文实际引用的附件。图片已作为本轮 Desktop 图片输入附带时，必须实际查看；引用含图片的 QQ 消息回复时，还要按图片顺序填写 params.replyImageDescriptions。"
   ] : [];
   return [
     `[消息组 ${group.groupId}]`,
@@ -287,7 +292,10 @@ async function deliverPacketToMessageAgent(
 ): Promise<ForwardAdapterOutcome[]> {
   if (group.endpoint === "heartbeat") {
     try {
-      await activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packet));
+      await measurePerformanceOperation(
+        `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
+        () => activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packet))
+      );
       return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
     } catch (error) {
       return [{
@@ -311,8 +319,10 @@ async function deliverPacketToMessageAgent(
     // AgentPacket will expose the malformed context; board registration can still retain the source metadata.
   }
   try {
-    const registration = await sendMessageProcessingManagerCommand(managerBaseUrl(), {
-      action: "register_group",
+    const registration = await measurePerformanceOperation(
+      PERFORMANCE_OPERATIONS.gatewayMessageRegister,
+      () => sendMessageProcessingManagerCommand(managerBaseUrl(), {
+        action: "register_group",
       requirementId,
       messageGroupId: group.groupId,
       source: {
@@ -329,8 +339,9 @@ async function deliverPacketToMessageAgent(
         attachments: sourceEvidence.attachments,
         summary: messageGroupSummary(group),
         replyContext
-      }
-    });
+        }
+      })
+    );
     const registered = registration.data && typeof registration.data === "object"
       ? registration.data as Record<string, unknown>
       : {};
@@ -346,10 +357,19 @@ async function deliverPacketToMessageAgent(
       return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
     }
     const referencedSenders = await referencedAgentSendersForMessageGroup(routeId, group);
-    const worker = await activeMessageAgentPool().deliver(
-      group,
-      messageGroupPrompt(group, packet, canonicalRequirementId, sourceEvidence),
-      { requirementId: canonicalRequirementId, referencedSenders, imagePaths: sourceEvidence.readyImagePaths }
+    const worker = await measurePerformanceOperation(
+      `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
+      () => activeMessageAgentPool().deliver(
+        group,
+        messageGroupPrompt(group, packet, canonicalRequirementId, sourceEvidence),
+        {
+          requirementId: canonicalRequirementId,
+          referencedSenders,
+          imageAttachments: sourceEvidence.attachments
+            .filter((attachment) => attachment.kind === "image" && attachment.status === "ready" && attachment.path)
+            .map((attachment) => ({ id: attachment.id, path: attachment.path! }))
+        }
+      )
     );
     if (referencedSenders.length > 0) {
       appendAdapterLogToDir("router", {
@@ -548,7 +568,10 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
 
 function dispatchToAgentAdapter(type: AgentAdapterType, message: string): Promise<void> {
   const adapter = createAgentAdapter(type);
-  return adapter.deliver(message);
+  return measurePerformanceOperation(
+    `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
+    () => adapter.deliver(message)
+  );
 }
 
 export async function deliverPacketToPrimaryAgentAdapter(
@@ -584,7 +607,10 @@ async function deliverPacketToMemoryConsolidationAgent(
   message: string
 ): Promise<ForwardAdapterOutcome[]> {
   try {
-    await activeMemoryConsolidationAgent().deliver(message);
+    await measurePerformanceOperation(
+      `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.memory_agent`,
+      () => activeMemoryConsolidationAgent().deliver(message)
+    );
     return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
   } catch (error) {
     return [{
@@ -862,9 +888,12 @@ async function forwardMessageToRoute(
   const processingRequirementId = options.messageGroup && options.messageGroup.endpoint !== "heartbeat"
     ? messageProcessingRequirementId(options.messageGroup, route.id)
     : undefined;
-  const decision = createRouteDecision(route, routeKind, record, processingRequirementId
-    ? { ...extraValues, messageProcessingRequirementId: processingRequirementId }
-    : extraValues);
+  const decision = measureSyncPerformanceOperation(
+    PERFORMANCE_OPERATIONS.gatewayRouteDecision,
+    () => createRouteDecision(route, routeKind, record, processingRequirementId
+      ? { ...extraValues, messageProcessingRequirementId: processingRequirementId }
+      : extraValues)
+  );
   if (!decision) {
     logRouteMiss(routeKind, record, "no_matching_rule", route);
     return routeResult(route, "missed", { reason: "no_matching_rule" });
@@ -926,7 +955,10 @@ async function forwardMessageToRoute(
   let sentPacketCount = 0;
   let situationRecorded = false;
   for (const rule of decision.matchedRules) {
-    const packet = buildAgentPacket(decision, rule, roleContext);
+    const packet = measureSyncPerformanceOperation(
+      PERFORMANCE_OPERATIONS.gatewayPacketBuild,
+      () => buildAgentPacket(decision, rule, roleContext)
+    );
     if (packet.conversationSituation && !situationRecorded) {
       try {
         recordConversationSituation(roleContext.personaDataDir, route.id, routeKind, packet.conversationSituation);
@@ -978,7 +1010,7 @@ async function forwardMessageToRoute(
   });
 }
 
-export async function forwardMessageAndWait(
+async function forwardMessageAndWaitInternal(
   routeKind: ForwardRouteKind,
   record: ForwardRecord,
   extraValues: ForwardTemplateValues = {},
@@ -1040,6 +1072,18 @@ export async function forwardMessageAndWait(
     logDeliveryReplayAttempt(routeKind, record, extraValues, result, packets, options);
   }
   return result;
+}
+
+export function forwardMessageAndWait(
+  routeKind: ForwardRouteKind,
+  record: ForwardRecord,
+  extraValues: ForwardTemplateValues = {},
+  options: ForwardMessageOptions = {}
+): Promise<ForwardDeliveryResult> {
+  return measurePerformanceOperation(
+    PERFORMANCE_OPERATIONS.gatewayForwardTotal,
+    () => forwardMessageAndWaitInternal(routeKind, record, extraValues, options)
+  );
 }
 
 function logDeliveryReplayAttempt(

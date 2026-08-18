@@ -6,7 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { MessageAgentPool, requestMessageAgentManager } from "./messageAgentPool.js";
+import {
+  MessageAgentPool,
+  rankMessageAgentWorkers,
+  replacePersistedMessageAgentWorker,
+  requestMessageAgentManager,
+  resolveCurrentMessageAgentWorker
+} from "./messageAgentPool.js";
+import type { MessageAgentPoolState } from "./messageAgentPool.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
 
 function group(groupId: string, patch: Partial<PendingMessageGroup> = {}): PendingMessageGroup {
@@ -128,29 +135,86 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
   assert.equal(sendCall?.model, "gpt-5.6-luna");
   assert.equal(sendCall?.reasoningEffort, "medium");
   assert.deepEqual(sendCall?.imagePaths, [imagePath]);
-  assert.match(String(sendCall?.prompt), /你是专职消息处理 Agent/);
+  assert.match(String(sendCall?.prompt), /你是消息处理 Agent/);
   assert.match(String(sendCall?.prompt), /\[消息组 g1\]/);
   assert.match(String(sendCall?.prompt), /\[当前消息处理归属\]/);
-  assert.match(String(sendCall?.prompt), new RegExp(`threadId=${worker.threadId}`));
-  assert.match(String(sendCall?.prompt), /把计划 ID、进展或判断结果送回本消息处理任务/);
-  assert.match(String(sendCall?.prompt), /sourceThreadId=对方自己的完整任务 ID/);
-  assert.match(String(sendCall?.prompt), /sourceAgentType=plan_secretary 或 plan_agent 或 primary_persona/);
+  assert.match(String(sendCall?.prompt), new RegExp(`消息处理任务 ID：${worker.threadId}`));
+  assert.match(String(sendCall?.prompt), /对方通过 POST .* 回复本任务/);
   assert.match(String(sendCall?.prompt), new RegExp(`sourceThreadId=${worker.threadId}`));
   assert.match(String(sendCall?.prompt), /sourceAgentType=message_processing/);
-  assert.match(String(sendCall?.prompt), /当前消息处理任务的 Codex 最终输出只供内部查看/);
-  assert.match(String(sendCall?.prompt), /原群成员、私聊对象和主人格都不会自动看到/);
-  assert.match(String(sendCall?.prompt), /不得把“请用户确认”或待审批问题只写在当前任务的最终输出里/);
+  assert.match(String(sendCall?.prompt), /当前任务输出只供内部查看/);
+  assert.match(String(sendCall?.prompt), /待决定事项必须实际交给主人格/);
   assert.match(String(sendCall?.prompt), new RegExp(`threadId=${options(path.join(root, "unused.json")).sourceThreadId}`));
-  assert.match(String(sendCall?.prompt), /投递给主人格并取得 Manager 接受回执/);
+  assert.match(String(sendCall?.prompt), /要求回传发送回执或决定/);
   assert.match(String(sendCall?.prompt), /处理结果：无需对外回复/);
-  assert.match(String(sendCall?.prompt), /是否需要计划操作与是否需要回复必须分开判断/);
-  assert.match(String(sendCall?.prompt), /普通群聊不要求逐条发言/);
-  assert.match(String(sendCall?.prompt), /先完成调查，再回复查到的事实/);
-  assert.match(String(sendCall?.prompt), /实际查看附件内容/);
+  assert.match(String(sendCall?.prompt), /计划操作与外部回复分开判断/);
+  assert.match(String(sendCall?.prompt), /没有新增价值时保持安静/);
+  assert.match(String(sendCall?.prompt), /调查类请求先查清事实/);
+  assert.match(String(sendCall?.prompt), /附件必须实际查看/);
   assert.match(String(sendCall?.prompt), /params\.replyImageDescriptions/);
-  assert.match(String(sendCall?.prompt), /按原图顺序逐张写明图片内容/);
-  assert.match(String(sendCall?.prompt), /“我这边改 ok”.*“ok”.*保持安静/);
-  assert.match(String(sendCall?.prompt), /群内可见回复默认只写一到两句/);
+  assert.match(String(sendCall?.prompt), /按原图顺序说明内容和含义/);
+  assert.match(String(sendCall?.prompt), /群内回复默认一至两句/);
+});
+
+test("Message Agent pool stages seventeen source images in the worker workspace and sends stable 8+8+1 batches", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-image-batches-"));
+  const workspace = path.join(root, "worker");
+  fs.mkdirSync(workspace);
+  const calls: Array<Record<string, any>> = [];
+  const pool = new MessageAgentPool({ ...options(path.join(root, "agents.json")), workspace }, {
+    request: async (payload) => {
+      calls.push(payload);
+      if (payload.action === "read") return { thread: { status: { type: "idle" }, active: false } };
+      if (payload.action === "resolve") return { thread: { id: "019f0000-0000-7000-8000-000000000017", title: payload.title, cwd: workspace } };
+      return { status: "delivered", delivery: { status: "delivered" } };
+    }
+  });
+  const attachments = Array.from({ length: 17 }, (_, index) => {
+    const imagePath = path.join(root, `source-${index + 1}.png`);
+    fs.writeFileSync(imagePath, Buffer.from([index + 1]));
+    return { id: `message:image:${index + 1}`, path: imagePath };
+  });
+
+  await pool.deliver(group("g17"), "正文只发一次", { requirementId: "requirement-17", imageAttachments: attachments });
+
+  const sends = calls.filter((call) => call.action === "send");
+  assert.deepEqual(sends.map((call) => call.imagePaths.length), [8, 8, 1]);
+  assert.match(String(sends[0]?.prompt), /正文只发一次/);
+  assert.doesNotMatch(String(sends[1]?.prompt), /正文只发一次/);
+  assert.deepEqual(sends.map((call) => call.messageDelivery?.batchIndex), [1, 2, 3]);
+  assert.ok(sends.every((call) => call.messageDelivery?.batchCount === 3));
+  assert.ok(sends.flatMap((call) => call.imagePaths).every((imagePath: string) => imagePath.startsWith(workspace + path.sep)));
+
+  calls.length = 0;
+  await pool.deliver(group("g17"), "正文只发一次", { requirementId: "requirement-17", imageAttachments: attachments });
+  assert.equal(calls.filter((call) => call.action === "send").length, 0);
+});
+
+test("Message Agent pool sends the body once with explicit attachment recovery guidance when staging fails", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-image-fallback-"));
+  const workspace = path.join(root, "worker");
+  fs.mkdirSync(workspace);
+  const calls: Array<Record<string, any>> = [];
+  const pool = new MessageAgentPool({ ...options(path.join(root, "agents.json")), workspace }, {
+    request: async (payload) => {
+      calls.push(payload);
+      if (payload.action === "read") return { thread: { status: { type: "idle" }, active: false } };
+      if (payload.action === "resolve") return { thread: { id: "019f0000-0000-7000-8000-000000000018", title: payload.title, cwd: workspace } };
+      return { status: "delivered", delivery: { status: "delivered" } };
+    }
+  });
+
+  await pool.deliver(group("gfallback"), "请判断图片中的问题", {
+    requirementId: "requirement-fallback",
+    imageAttachments: [{ id: "message:image:missing", path: path.join(root, "missing.png") }]
+  });
+
+  const sends = calls.filter((call) => call.action === "send");
+  assert.equal(sends.length, 1);
+  assert.deepEqual(sends[0]?.imagePaths, []);
+  assert.match(String(sends[0]?.prompt), /message:image:missing/);
+  assert.match(String(sends[0]?.prompt), /等待附件恢复或交接/);
+  assert.match(String(sends[0]?.prompt), /不得推断内容/);
 });
 
 test("direct replies default to a visible acknowledgement even when no plan changes", async () => {
@@ -177,9 +241,9 @@ test("direct replies default to a visible acknowledgement even when no plan chan
   }), "[消息组 direct-reply]\n我先搭效果，你之后再关联。");
 
   const prompt = String(calls.find((call) => call.action === "send")?.prompt || "");
-  assert.match(prompt, /当前消息明确面向本角色，默认必须让对方看到回应/);
-  assert.match(prompt, /不得用“无需新建计划”“无需实施”“只是澄清”直接推出“无需回复”/);
-  assert.match(prompt, /纯结束语\/重复消息\/机器人自身消息\/他人已完整回答且无新增价值/);
+  assert.match(prompt, /明确面向本角色的消息默认回复/);
+  assert.match(prompt, /明确面向本角色的消息默认回复/);
+  assert.match(prompt, /纯结束语、重复消息、自身消息/);
 });
 
 test("Message Agent initialization resolves the current Primary Persona title by complete task id", async () => {
@@ -259,14 +323,12 @@ test("heartbeat Message Agent performs the omission scan itself and does not for
   }), "[heartbeat 巡检]");
 
   const prompt = String(calls.find((call) => call.action === "send")?.prompt || "");
-  assert.match(prompt, /heartbeat 巡检由当前消息处理 Agent 自己执行/);
-  assert.match(prompt, /增量读取群消息并与计划摘要、问题映射和发送回执对比/);
-  assert.match(prompt, /上线\/公测日期、版本范围、批准\/否决、负责人变更、取消\/延期或发布版本/);
+  assert.match(prompt, /按游标增量比对群消息/);
+  assert.match(prompt, /按游标增量比对群消息、计划、问题映射和回执/);
+  assert.match(prompt, /项目事实缺失/);
   assert.match(prompt, /criticalFactDisposition/);
-  assert.match(prompt, /不得把 heartbeat 任务本身投给主人格/);
-  assert.match(prompt, /把自上次群汇报后出现的真实工作进展整理成可直接发送的简短正文/);
-  assert.match(prompt, /只有形成需要主人格用户决定的具体问题、跨计划冲突或已经准备好的群进展\/提醒正文/);
-  assert.match(prompt, /没有遗漏、没有真实新进展且只完成内部控制面更新时保持安静/);
+  assert.match(prompt, /需要决定、跨计划冲突或已有可发送正文时才交给主人格/);
+  assert.match(prompt, /没有遗漏或新进展时写/);
 });
 
 test("repeated heartbeat ticks always reuse the existing heartbeat worker even while it is active", async () => {
@@ -475,6 +537,173 @@ test("Message Agent pool creates a numbered task 1 when its configured limit is 
   assert.deepEqual(resolvedTitles, ["星海建造师 策划 程序 协助处理消息1"]);
 });
 
+test("historical message-processing follow-ups move to the surviving current pool worker", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-current-worker-"));
+  const statePath = path.join(root, "agents.json");
+  fs.writeFileSync(statePath, JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-08-13T03:00:00.000Z",
+    workers: [{
+      threadId: "current-worker-1",
+      threadName: "星海建造师 策划 程序 协助处理消息1",
+      workspace: process.cwd(),
+      index: 1,
+      createdAt: "2026-08-04T06:00:00.000Z",
+      initializedAt: "2026-08-04T06:00:01.000Z"
+    }]
+  }), "utf8");
+
+  assert.deepEqual(resolveCurrentMessageAgentWorker(statePath, {
+    threadId: "archived-worker-3",
+    threadName: "星海建造师 策划 程序 协助处理消息3",
+    workspace: process.cwd()
+  }), {
+    threadId: "current-worker-1",
+    threadName: "星海建造师 策划 程序 协助处理消息1",
+    workspace: process.cwd()
+  });
+});
+
+test("a Manager-owned replacement updates the persisted Message Agent worker and affinity id", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-manager-replacement-"));
+  const statePath = path.join(root, "agents.json");
+  const affinityPath = path.join(root, "routing-affinity.json");
+  fs.writeFileSync(statePath, JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-08-18T01:00:00.000Z",
+    workers: [{
+      threadId: "old-worker",
+      threadName: "消息1",
+      workspace: process.cwd(),
+      index: 1,
+      createdAt: "2026-08-17T01:00:00.000Z",
+      initializedAt: "2026-08-17T01:00:01.000Z"
+    }]
+  }), "utf8");
+  fs.writeFileSync(affinityPath, JSON.stringify({
+    schemaVersion: 1,
+    updatedAt: "2026-08-18T01:00:00.000Z",
+    workers: [{
+      threadId: "old-worker",
+      affinities: [{
+        groupId: "group-1",
+        endpoint: "napcat",
+        conversationKey: "napcat:group:1",
+        sender: "1",
+        lastUsedAt: "2026-08-18T01:00:00.000Z"
+      }]
+    }]
+  }), "utf8");
+
+  assert.equal(replacePersistedMessageAgentWorker(statePath, "old-worker", {
+    threadId: "new-worker",
+    threadName: "消息1",
+    workspace: process.cwd()
+  }, new Date("2026-08-18T02:00:00.000Z")), true);
+
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8")) as MessageAgentPoolState;
+  assert.equal(state.workers[0]?.threadId, "new-worker");
+  assert.equal(state.workers[0]?.initializedAt, undefined);
+  const affinity = JSON.parse(fs.readFileSync(affinityPath, "utf8")) as { workers: Array<{ threadId: string; affinities: unknown[] }> };
+  assert.equal(affinity.workers[0]?.threadId, "new-worker");
+  assert.equal(affinity.workers[0]?.affinities.length, 1);
+});
+
+test("Message Agent pool replaces an archived worker and persists the new task id", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-archived-worker-"));
+  const statePath = path.join(root, "agents.json");
+  const archivedThreadId = "019f0000-0000-7000-8000-000000000107";
+  const replacementThreadId = "019f0000-0000-7000-8000-000000000108";
+  const threadName = "星海建造师 策划 程序 协助处理消息";
+  fs.writeFileSync(statePath, JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-08-18T01:00:00.000Z",
+    workers: [{
+      threadId: archivedThreadId,
+      threadName,
+      workspace: process.cwd(),
+      index: 1,
+      createdAt: "2026-08-17T01:00:00.000Z",
+      initializedAt: "2026-08-17T01:00:01.000Z"
+    }]
+  }), "utf8");
+  const sent: string[] = [];
+  const pool = new MessageAgentPool(options(statePath), {
+    request: async (payload) => {
+      if (payload.action === "read") {
+        if (payload.threadId === archivedThreadId) {
+          return { thread: { id: archivedThreadId, title: threadName, cwd: process.cwd(), archived: true } };
+        }
+        return { thread: { id: replacementThreadId, title: threadName, cwd: process.cwd(), status: { type: "idle" } } };
+      }
+      if (payload.action === "resolve") {
+        assert.equal(payload.threadId, archivedThreadId);
+        assert.equal(payload.title, threadName);
+        return {
+          resolution: "created",
+          previousThreadId: archivedThreadId,
+          thread: { id: replacementThreadId, title: threadName, cwd: process.cwd() }
+        };
+      }
+      if (payload.action === "send") {
+        sent.push(String(payload.threadId));
+        return {
+          resolution: "id",
+          threadId: replacementThreadId,
+          thread: { id: replacementThreadId, title: threadName, cwd: process.cwd() }
+        };
+      }
+      return {};
+    }
+  });
+
+  const worker = await pool.deliver(group("archived-worker-replacement"), "继续处理");
+
+  assert.equal(worker.threadId, replacementThreadId);
+  assert.equal(worker.initializedAt != null, true);
+  assert.deepEqual(sent, [replacementThreadId]);
+  const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as MessageAgentPoolState;
+  assert.equal(persisted.workers[0]?.threadId, replacementThreadId);
+});
+
+test("Message Agent list, cap, and delivery use the same weighted order", () => {
+  const groupContext = group("current-group", {
+    endpoint: "napcat",
+    conversationKey: "napcat:group:100",
+    sender: "42",
+    replyToMessageId: "quoted-message"
+  });
+  const workers = [
+    {
+      threadId: "worker-1",
+      threadName: "消息1",
+      workspace: process.cwd(),
+      index: 1,
+      createdAt: "2026-08-04T00:00:00.000Z",
+      affinities: []
+    },
+    {
+      threadId: "worker-2",
+      threadName: "消息2",
+      workspace: process.cwd(),
+      index: 2,
+      createdAt: "2026-08-04T00:01:00.000Z",
+      affinities: [{
+        groupId: "older-group",
+        endpoint: "napcat",
+        conversationKey: "napcat:group:100",
+        sender: "42",
+        lastUsedAt: "2026-08-13T05:00:00.000Z"
+      }]
+    }
+  ];
+
+  assert.deepEqual(rankMessageAgentWorkers(workers, groupContext).map((worker) => worker.threadId), ["worker-2", "worker-1"]);
+  assert.deepEqual(rankMessageAgentWorkers(workers, groupContext, {
+    referencedSenders: [{ agentType: "message_processing", sessionId: "worker-1" }]
+  }).map((worker) => worker.threadId), ["worker-1", "worker-2"]);
+});
+
 test("Message Agent prompt forces schedule decisions to be verified and recorded before closure", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-critical-fact-"));
   const calls: Array<Record<string, any>> = [];
@@ -504,11 +733,11 @@ test("Message Agent prompt forces schedule decisions to be verified and recorded
 
   const prompt = String(calls.find((call) => call.action === "send")?.prompt || "");
   assert.match(prompt, /项目事实判断由 Agent 负责/);
-  assert.match(prompt, /RabiManager 不根据关键词猜测消息含义/);
+  assert.match(prompt, /Manager 的召回结果只算候选/);
   assert.match(prompt, /projectFactAssessment/);
   assert.match(prompt, /criticalFactDisposition/);
-  assert.match(prompt, /回答排期、上线日期、版本范围、负责人或审批状态前/);
-  assert.match(prompt, /公开公告和旧会议材料只能作为补充/);
+  assert.match(prompt, /回答排期、版本、负责人或审批状态前/);
+  assert.match(prompt, /核对本群最新消息和已登记事实/);
 });
 
 test("Message Agent pool loads an existing notLoaded task instead of creating another one", async () => {

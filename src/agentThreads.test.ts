@@ -13,12 +13,33 @@ import {
 import { listCodexDesktopThreadsFromRowsForTest } from "./codexDesktopBridge.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import { AgentRequestStore, type AgentRequestPersistence } from "./agentRequests/store.js";
+import { codexThreadCreationReservationPathForTest } from "./codexThreadCreationReservations.js";
+import { canonicalCodexWorkspacePath } from "./codexTaskIdentity.js";
 
 class MemoryAgentRequestPersistence implements AgentRequestPersistence {
   value: unknown;
   read(): unknown { return this.value; }
   write(state: unknown): void { this.value = structuredClone(state); }
 }
+
+test("Agent task read reports an exact delivery marker without treating idle as accepted", async () => {
+  const deliveryId = "12345678-1234-4567-8123-123456789abc";
+  const baseDriver: AgentThreadDriver = {
+    read: async () => ({ active: false, turns: [{ text: `本批投递 deliveryId：${deliveryId}` }] }),
+    create: async () => { throw new Error("not used"); },
+    send: async () => undefined
+  };
+  const threadId = "019f0000-0000-7000-8000-000000000001";
+  const accepted = await handleAgentThreadRequest({ action: "read", threadId, deliveryId }, {
+    allowedWorkspaces: [process.cwd()]
+  }, baseDriver);
+  assert.deepEqual(accepted.data.delivery, { deliveryId, state: "accepted" });
+
+  const missing = await handleAgentThreadRequest({ action: "read", threadId, deliveryId }, {
+    allowedWorkspaces: [process.cwd()]
+  }, { ...baseDriver, read: async () => ({ active: false, turns: [] }) });
+  assert.deepEqual(missing.data.delivery, { deliveryId, state: "missing" });
+});
 
 test("Agent thread list deduplicates session index entries and filters by title", () => {
   const result = listAgentThreadsFromIndexForTest([
@@ -339,7 +360,7 @@ test("Agent task resolver ignores archived duplicates during name lookup and bin
   assert.equal(createCount, 0);
 });
 
-test("Agent task resolver never creates a replacement for an archived saved binding", async () => {
+test("Agent task resolver creates a replacement for an archived saved binding", async () => {
   const archived = {
     id: "019f0000-0000-7000-8000-000000000044",
     title: "已归档的固定任务",
@@ -347,13 +368,21 @@ test("Agent task resolver never creates a replacement for an archived saved bind
     updatedAt: "2026-07-18T04:00:00Z",
     archived: true
   };
+  const replacement = {
+    id: "019f0000-0000-7000-8000-000000000045",
+    title: archived.title,
+    cwd: archived.cwd,
+    updatedAt: "2026-07-18T05:00:00Z",
+    source: "test",
+    initialTurnStatus: "not-requested" as const
+  };
   let createCount = 0;
   const driver: AgentThreadDriver = {
     list: async () => [],
     read: async () => archived,
     create: async () => {
       createCount += 1;
-      throw new Error("must not create");
+      return replacement;
     },
     send: async () => undefined
   };
@@ -365,14 +394,13 @@ test("Agent task resolver never creates a replacement for an archived saved bind
     cwd: archived.cwd,
     createIfMissing: true
   }, {
-    allowedWorkspaces: [archived.cwd],
-    defaultWorkspace: archived.cwd
+    allowedWorkspaces: [archived.cwd]
   }, driver);
 
-  assert.equal(result.statusCode, 409);
-  assert.equal(result.data.resolution, "archived");
-  assert.equal((result.data.thread as { id: string }).id, archived.id);
-  assert.equal(createCount, 0);
+  assert.equal(result.statusCode, 201);
+  assert.equal(result.data.resolution, "created");
+  assert.equal((result.data.thread as { id: string }).id, replacement.id);
+  assert.equal(createCount, 1);
 });
 
 test("Agent thread create uses a configured workspace and fixed investigation instructions", async () => {
@@ -414,9 +442,9 @@ test("Agent thread create uses a configured workspace and fixed investigation in
       "运行沙箱权限不等于业务修改授权；没有明确授权时，只做读取、调查、证据整理和方案输出。",
       "开始工作前先读取当前任务的完整相关历史和已有结论，不得只看标题、摘要或最后一条消息。",
       ...proactiveCommunicationPolicyLines("internal"),
-      "除非当前用户明确授权，禁止新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区中的 AGENTS.md 如有更严格限制，以其为准。",
-      "只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”；临时目录、其他分支、服务器提交或测试工程结果不能替代用户入口。",
-      "PangHu 任务没有创建旁路工作副本的例外：只使用正式 Main、Release 和 Art；旧任务或历史记录中的隔离、稀疏、clean working copy 安排已经撤销。",
+      "只在目标工作区执行，并遵守工作区 AGENTS.md。",
+      "改动进入目标工作区并完成适用验证后，才能报告已修复或可验收。",
+      "PangHu 只使用正式 Main、Release 和 Art。PangHu 任务没有创建旁路工作副本的例外；禁止新建、复制、checkout、switch、稀疏检出或使用旁路目录进行调查、修改、测试、构建或冲突处理。",
       "多步任务开始后要让当前任务中的人看得出你准备做什么；取得阶段结果、遇到风险或进入等待时主动更新，不要等别人追问。"
     ].join("\n"),
     sandbox: "danger-full-access"
@@ -474,7 +502,7 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
   assert.equal(sent.cwd, path.resolve(process.cwd()));
   assert.equal(sent.sandbox, "workspace-write");
   assert.match(sent.prompt, /^\[协作要求\]/);
-  assert.match(sent.prompt, /PangHu 任务没有创建旁路工作副本的例外/);
+  assert.match(sent.prompt, /PangHu 只使用正式 Main、Release 和 Art/);
   assert.match(sent.prompt, /\[投递内容\]\n补充新证据$/);
 });
 
@@ -572,7 +600,7 @@ test("Agent thread send forwards the Message Agent model independently", async (
   assert.equal(sent.model, "gpt-5.6-luna");
   assert.equal(sent.reasoningEffort, "medium");
   assert.match(sent.prompt, /^\[协作要求\]/);
-  assert.match(sent.prompt, /PangHu 任务没有创建旁路工作副本的例外/);
+  assert.match(sent.prompt, /PangHu 只使用正式 Main、Release 和 Art/);
   assert.match(sent.prompt, /\[投递内容\]\n处理这个消息组$/);
 });
 
@@ -639,10 +667,57 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
   assert.match(sent.prompt, /\[Agent 回复合同\]/);
   assert.match(sent.prompt, /是否要求回复：否/);
   assert.match(sent.prompt, /本次投递不要求回复/);
-  assert.match(sent.prompt, /禁止新建额外工作副本、稀疏检出、复制工程或旁路目录/);
-  assert.match(sent.prompt, /临时目录、其他分支、服务器提交或测试工程结果不能替代用户入口/);
   assert.match(sent.prompt, /PangHu 任务没有创建旁路工作副本的例外/);
+  assert.match(sent.prompt, /禁止新建、复制、checkout、switch、稀疏检出或使用旁路目录/);
+  assert.match(sent.prompt, /改动进入目标工作区并完成适用验证/);
+  assert.match(sent.prompt, /PangHu 只使用正式 Main、Release 和 Art/);
   assert.match(sent.prompt, /\[投递内容\]\n计划已经完成，请决定是否回复群消息。$/);
+});
+
+test("Agent thread send replaces an archived bound task before delivery", async () => {
+  const archivedThreadId = "019f0000-0000-7000-8000-000000000105";
+  const replacementThreadId = "019f0000-0000-7000-8000-000000000106";
+  const title = "星海建造师 协助处理消息1";
+  const sent: string[] = [];
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async (threadId) => ({
+      id: threadId,
+      title,
+      cwd: process.cwd(),
+      updatedAt: "2026-08-18T01:00:00.000Z",
+      archived: threadId === archivedThreadId
+    }),
+    create: async (params) => {
+      createCount += 1;
+      return {
+        id: replacementThreadId,
+        title: params.title,
+        cwd: params.cwd,
+        updatedAt: "2026-08-18T02:00:00.000Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async ({ threadId }) => { sent.push(threadId); }
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId: archivedThreadId,
+    title,
+    createIfMissing: true,
+    prompt: "归档后继续处理",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(createCount, 1);
+  assert.deepEqual(sent, [replacementThreadId]);
+  assert.equal(result.data.threadId, replacementThreadId);
+  assert.equal(result.data.resolution, "created");
+  assert.equal(result.data.previousThreadId, archivedThreadId);
+  assert.deepEqual((result.data.thread as { id: string }).id, replacementThreadId);
 });
 
 test("message-processing handoff reports a structured requirement after the target owner accepts it", async () => {
@@ -721,6 +796,57 @@ test("message-processing handoff reports a structured requirement after the targ
     planId: "plan-1",
     planTitle: "实现选择界面"
   }]);
+});
+
+test("a reply addressed to a detached Message Agent alias is delivered to its current successor", async () => {
+  const oldMessageThreadId = "019f0000-0000-7000-8000-000000000086";
+  const currentMessageThreadId = "019f0000-0000-7000-8000-000000000087";
+  const targetThreadId = "019f0000-0000-7000-8000-000000000088";
+  const agentRequests = new AgentRequestStore(new MemoryAgentRequestPersistence());
+  const tracked = agentRequests.prepare({
+    source: { threadId: oldMessageThreadId, agentType: "message_processing", workspace: process.cwd() },
+    target: { threadId: targetThreadId, agentType: "plan_agent", workspace: process.cwd() },
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+  agentRequests.commit(tracked);
+  agentRequests.reconcileOpenParties((party, _record, role) => role === "source" && party.threadId === oldMessageThreadId
+    ? { threadId: currentMessageThreadId, agentType: "message_processing", workspace: process.cwd() }
+    : undefined);
+  const deliveries: string[] = [];
+  const driver: AgentThreadDriver = {
+    read: async (threadId) => ({
+      id: threadId,
+      title: threadId === targetThreadId ? "计划 Agent" : "消息处理 Agent",
+      cwd: process.cwd(),
+      updatedAt: "2026-08-13T06:00:00.000Z"
+    }),
+    create: async () => { throw new Error("not used"); },
+    send: async ({ threadId }) => {
+      deliveries.push(threadId);
+      return { threadId, action: "steered", openedThread: false, transport: "desktop-ipc" };
+    }
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId: oldMessageThreadId,
+    cwd: process.cwd(),
+    prompt: "已完成，返回结果。",
+    sourceThreadId: targetThreadId,
+    sourceAgentType: "plan_agent",
+    inReplyToRequestId: tracked.requestId,
+    result: "done",
+    nextAction: "none",
+    responsePolicy: "none"
+  }, {
+    allowedWorkspaces: [process.cwd()],
+    agentRequests
+  }, driver);
+
+  assert.deepEqual(deliveries, [currentMessageThreadId]);
+  assert.equal(result.data.threadId, currentMessageThreadId);
+  assert.equal(agentRequests.get(tracked.requestId || "")?.status, "responded");
 });
 
 test("message-processing handoff returns a partial failure without hiding the accepted target delivery", async () => {
@@ -870,6 +996,138 @@ test("Agent thread create shares one in-flight creation across caller retries", 
     (results[0].data.thread as { id: string }).id,
     (results[1].data.thread as { id: string }).id
   );
+});
+
+test("Agent thread create retries a stale creating reservation only after state_db confirms missing", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-thread-stale-creating-"));
+  const title = "[PangHu][Bug] 初始商店 - 未弹主动引导";
+  const cwd = process.cwd();
+  const reservationPath = codexThreadCreationReservationPathForTest(rootDir, title, cwd);
+  fs.mkdirSync(path.dirname(reservationPath), { recursive: true });
+  fs.writeFileSync(reservationPath, `${JSON.stringify({
+    version: 1,
+    key: JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(cwd), title, ""]),
+    title,
+    workspace: path.resolve(cwd),
+    state: "creating",
+    createdAt: "2026-08-14T11:34:17.000Z",
+    updatedAt: "2026-08-14T11:34:17.000Z"
+  }, null, 2)}\n`, "utf8");
+  let listCount = 0;
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async ({ stateDbOnly }) => {
+      assert.equal(stateDbOnly, true);
+      listCount += 1;
+      return [];
+    },
+    read: async () => { throw new Error("not used"); },
+    create: async (params) => {
+      createCount += 1;
+      return {
+        id: "019f0000-0000-7000-8000-000000000073",
+        title: params.title,
+        updatedAt: "2026-08-14T12:00:00.000Z",
+        source: "test",
+        initialTurnStatus: "started"
+      };
+    },
+    send: async () => undefined
+  };
+  try {
+    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd }, {
+      allowedWorkspaces: [cwd],
+      defaultWorkspace: rootDir
+    }, driver);
+    assert.equal(result.statusCode, 201);
+    assert.equal(createCount, 1);
+    assert.equal(listCount, 2);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("Agent thread create keeps stale creating uncertain when a threadId exists", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-thread-stale-thread-id-"));
+  const title = "[PangHu][Bug] 初始商店 - 未弹主动引导";
+  const cwd = process.cwd();
+  const reservationPath = codexThreadCreationReservationPathForTest(rootDir, title, cwd);
+  fs.mkdirSync(path.dirname(reservationPath), { recursive: true });
+  fs.writeFileSync(reservationPath, `${JSON.stringify({
+    version: 1,
+    key: JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(cwd), title, ""]),
+    title,
+    workspace: path.resolve(cwd),
+    state: "creating",
+    createdAt: "2026-08-14T11:34:17.000Z",
+    updatedAt: "2026-08-14T11:34:17.000Z",
+    threadId: "019f0000-0000-7000-8000-000000000074"
+  }, null, 2)}\n`, "utf8");
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async () => { throw new Error("not used"); },
+    create: async () => {
+      createCount += 1;
+      throw new Error("must not create");
+    },
+    send: async () => undefined
+  };
+  try {
+    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd }, {
+      allowedWorkspaces: [cwd],
+      defaultWorkspace: rootDir
+    }, driver);
+    assert.equal(result.statusCode, 409);
+    assert.equal(result.data.resolution, "uncertain");
+    assert.equal(createCount, 0);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("Agent thread create keeps stale creating uncertain when state_db evidence fails", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-thread-stale-evidence-failed-"));
+  const title = "[PangHu][Bug] 初始商店 - 未弹主动引导";
+  const cwd = process.cwd();
+  const reservationPath = codexThreadCreationReservationPathForTest(rootDir, title, cwd);
+  fs.mkdirSync(path.dirname(reservationPath), { recursive: true });
+  fs.writeFileSync(reservationPath, `${JSON.stringify({
+    version: 1,
+    key: JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(cwd), title, ""]),
+    title,
+    workspace: path.resolve(cwd),
+    state: "creating",
+    createdAt: "2026-08-14T11:34:17.000Z",
+    updatedAt: "2026-08-14T11:34:17.000Z"
+  }, null, 2)}\n`, "utf8");
+  let listCount = 0;
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async () => {
+      listCount += 1;
+      if (listCount === 1) return [];
+      throw new Error("state_db unavailable");
+    },
+    read: async () => { throw new Error("not used"); },
+    create: async () => {
+      createCount += 1;
+      throw new Error("must not create");
+    },
+    send: async () => undefined
+  };
+  try {
+    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd }, {
+      allowedWorkspaces: [cwd],
+      defaultWorkspace: rootDir
+    }, driver);
+    assert.equal(result.statusCode, 409);
+    assert.equal(result.data.resolution, "uncertain");
+    assert.match(String(result.data.message), /uncertain/i);
+    assert.equal(createCount, 0);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
 });
 
 test("Agent thread list can use the fast local state index for timeout readback", async () => {

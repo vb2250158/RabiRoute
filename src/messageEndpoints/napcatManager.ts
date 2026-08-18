@@ -14,6 +14,7 @@ type NapCatInstanceDefinition = {
   id: string;
   name?: string;
   enabled?: boolean;
+  autoLoginOnRabiStart?: boolean;
   gatewayPort: number;
   httpUrl: string;
   webuiUrl?: string;
@@ -26,6 +27,7 @@ type NapCatInstanceDefinition = {
 
 type GatewayDefinition = {
   id: string;
+  enabled?: boolean;
   messageAdapterType?: string;
   messageAdapters?: string[];
   messageAdaptersDisabled?: string[];
@@ -418,14 +420,14 @@ export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, root
   };
 }
 
-function launchOnWindows(plan: NapcatLaunchPlan, visible = false): void {
+function launchOnWindows(plan: NapcatLaunchPlan): void {
   const commandExt = path.extname(plan.commandPath).toLowerCase();
   if (commandExt === ".bat" || commandExt === ".cmd") {
-    const child = spawn("cmd.exe", ["/d", visible ? "/k" : "/c", plan.commandPath, ...plan.args], {
+    const child = spawn("cmd.exe", ["/d", "/c", plan.commandPath, ...plan.args], {
       cwd: plan.cwd,
       detached: true,
       stdio: "ignore",
-      windowsHide: !visible
+      windowsHide: true
     });
     child.unref();
     return;
@@ -434,7 +436,7 @@ function launchOnWindows(plan: NapcatLaunchPlan, visible = false): void {
     cwd: plan.cwd,
     detached: true,
     stdio: "ignore",
-    windowsHide: !visible
+    windowsHide: true
   });
   child.unref();
 }
@@ -676,6 +678,7 @@ export function prepareManagedNapcatInstance(ctx: NapcatManagerContext, request:
     id: request.id,
     name: request.name,
     enabled: true,
+    autoLoginOnRabiStart: true,
     gatewayPort: request.gatewayPort,
     httpUrl: localUrl(request.httpPort),
     webuiUrl: localUrl(request.webuiPort, "/webui"),
@@ -2192,7 +2195,7 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
   if (ctx.launchNapcatProcess) {
     ctx.launchNapcatProcess(plan, request.visible === true);
   } else if (process.platform === "win32") {
-    launchOnWindows(plan, request.visible === true);
+    launchOnWindows(plan);
   } else {
     const child = spawn(plan.commandLine, [], {
       cwd: plan.cwd,
@@ -2208,7 +2211,6 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
   const steps = [
     ...preflightSteps,
     ...(stopped.length ? [`已停止旧 NapCat 进程：${stopped.join(", ")}`] : []),
-    ...(request.visible ? ["已使用可交互窗口启动，便于完成 QQ 扫码或前台登录确认。"] : []),
     ...(plan.redirectedFromOuterShell ? [`已识别外层 NapCat Shell，改用内层启动器：${plan.commandPath}`] : []),
     ...(plan.botUserId && plan.redirectedFromOuterShell ? [`已追加 quick login 参数：-q ${plan.botUserId}`] : []),
     ...plan.warnings,
@@ -2540,6 +2542,71 @@ export async function ensureNapcatInstanceReady(
     health,
     steps
   };
+}
+
+export type NapcatStartupAutoLoginResult = {
+  gatewayId: string;
+  instanceId: string;
+  ok: boolean;
+  state: string;
+  message?: string;
+};
+
+type NapcatEnsureReadyRunner = (
+  ctx: NapcatManagerContext,
+  request: NapcatEnsureReadyRequest
+) => Promise<Record<string, unknown>>;
+
+export async function autoLoginNapcatInstancesOnRabiStart(
+  ctx: NapcatManagerContext,
+  ensureReady: NapcatEnsureReadyRunner = ensureNapcatInstanceReady
+): Promise<NapcatStartupAutoLoginResult[]> {
+  const groups = new Map<string, Array<{ runtime: GatewayRuntime; instance: NapCatInstanceDefinition }>>();
+  for (const runtime of napcatRuntimes(ctx)) {
+    if (runtime.definition.enabled === false) continue;
+    for (const instance of napcatInstancesFor(ctx, runtime)) {
+      if (instance.enabled === false || instance.autoLoginOnRabiStart === false) continue;
+      const botUserId = String(instance.botUserId || "").trim();
+      const key = botUserId ? `qq:${botUserId}` : `instance:${runtime.definition.id}:${instance.id}`;
+      const group = groups.get(key) ?? [];
+      group.push({ runtime, instance });
+      groups.set(key, group);
+    }
+  }
+
+  const groupedResults = await Promise.all([...groups.values()].map(async (group) => {
+    const results: NapcatStartupAutoLoginResult[] = [];
+    for (const { runtime, instance } of group) {
+      try {
+        const result = await ensureReady(ctx, {
+          gatewayId: runtime.definition.id,
+          instanceId: instance.id
+        });
+        const state = String(result.state || (result.ok === true ? "ready" : "unknown"));
+        const message = typeof result.message === "string" ? result.message : undefined;
+        ctx.appendLog(runtime, `startup auto login instance ${instance.id}: ${state}${message ? ` (${message})` : ""}`);
+        results.push({
+          gatewayId: runtime.definition.id,
+          instanceId: instance.id,
+          ok: result.ok === true,
+          state,
+          message
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.appendLog(runtime, `startup auto login instance ${instance.id}: error (${message})`);
+        results.push({
+          gatewayId: runtime.definition.id,
+          instanceId: instance.id,
+          ok: false,
+          state: "error",
+          message
+        });
+      }
+    }
+    return results;
+  }));
+  return groupedResults.flat();
 }
 
 async function restartNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: NapcatLaunchRequest): Promise<Record<string, unknown>> {

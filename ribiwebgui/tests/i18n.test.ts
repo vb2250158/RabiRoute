@@ -11,6 +11,10 @@ test("translates exact interface copy and preserves surrounding whitespace", () 
   assert.equal(translateText("人格文件变化", "en"), "Persona file changes");
   assert.equal(translateText("拉取并同步", "en"), "Pull and synchronize");
   assert.equal(translateText("语音服务", "en"), "Speech service");
+  assert.equal(translateText("划词朗读", "en"), "Read selected text aloud");
+  assert.equal(translateText("划词朗读模型", "en"), "Selected-text voice model");
+  assert.equal(translateText("朗读", "en"), "Read aloud");
+  assert.equal(translateText("投递至", "en"), "Send to");
   assert.equal(translateText("当前 Route 已订阅主机 ASR", "en"), "Current Route is subscribed to host ASR");
   assert.equal(translateText("没有 Route 订阅语音消息", "en"), "No Route subscribes to speech messages");
   assert.equal(translateText("目标测试机报告", "en"), "Target-machine report");
@@ -199,6 +203,13 @@ test("translates plan directory and step-local approval copy", () => {
   assert.equal(translateText("状态排序", "en"), "Status order");
   assert.equal(translateText("时间排序", "en"), "Update time");
   assert.equal(translateText("筛选状态", "en"), "Filter statuses");
+  assert.equal(translateText("筛选标签", "en"), "Filter tags");
+  assert.equal(translateText("搜索标签", "en"), "Search tags");
+  assert.equal(translateText("清除筛选", "en"), "Clear filters");
+  assert.equal(
+    translateText("状态与标签同时满足时，计划才会显示。", "en"),
+    "Plans must match both the status and tag filters."
+  );
   assert.equal(
     translateText("点击完成后更新目录和计划卡片", "en"),
     "Select Done to update the directory and plan cards"
@@ -219,6 +230,14 @@ test("translates plan directory and step-local approval copy", () => {
   assert.equal(
     translateText("输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。提交后由 Agent 判断如何处理，不会直接改变计划状态。", "en"),
     "Type @ to reference a plan attachment. Press Enter to submit or Shift+Enter for a new line. The Agent decides how to handle the feedback; submitting it does not directly change plan status."
+  );
+  assert.equal(
+    translateText("输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。引导会投递给当前计划绑定的 Agent，不会作为步骤审批。", "en"),
+    "Type @ to reference a plan attachment. Press Enter to submit or Shift+Enter for a new line. Guidance is delivered to the Agent bound to this plan and is not treated as step approval."
+  );
+  assert.equal(
+    translateText("引用附件后会超过 2000 字，请先精简内容。", "en"),
+    "Referencing this attachment would exceed 2,000 characters. Shorten the feedback first."
   );
   assert.equal(
     translateText("当前不能正式批准；可提交补充资料或调整建议，输入 @ 可引用计划附件。Enter 提交，Shift+Enter 换行。", "en"),

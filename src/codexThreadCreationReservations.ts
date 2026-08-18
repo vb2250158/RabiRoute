@@ -29,6 +29,8 @@ export type CodexThreadCreationReservation = {
   error?: string;
 };
 
+const DEFAULT_STALE_CREATING_MS = 5 * 60 * 1_000;
+
 export class CodexThreadCreationBlockedError extends Error {
   constructor(readonly reservation: CodexThreadCreationReservation) {
     super(
@@ -40,8 +42,8 @@ export class CodexThreadCreationBlockedError extends Error {
   }
 }
 
-function creationKey(title: string, workspace: string): string {
-  return JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(workspace), title]);
+function creationKey(title: string, workspace: string, replacementForThreadId = ""): string {
+  return JSON.stringify(["codex-desktop", canonicalCodexWorkspacePath(workspace), title, replacementForThreadId]);
 }
 
 function reservationPath(rootDir: string, key: string): string {
@@ -72,11 +74,11 @@ function writeReservation(rootDir: string, reservation: CodexThreadCreationReser
   );
 }
 
-function reserveCreation(rootDir: string, title: string, workspace: string): {
+function reserveCreation(rootDir: string, title: string, workspace: string, replacementForThreadId = ""): {
   created: boolean;
   reservation: CodexThreadCreationReservation;
 } {
-  const key = creationKey(title, workspace);
+  const key = creationKey(title, workspace, replacementForThreadId);
   const filePath = reservationPath(rootDir, key);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const existing = parseReservation(filePath);
@@ -132,14 +134,58 @@ export async function createCodexThreadWithReservation(
     title: string;
     workspace: string;
     create: (onStage: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void) => Promise<CodexThreadCreateResult>;
+    confirmMissing?: () => Promise<boolean>;
+    replacementForThreadId?: string;
+    staleCreatingMs?: number;
+    now?: () => Date;
   }
 ): Promise<CodexThreadCreateResult> {
-  const reserved = reserveCreation(params.rootDir, params.title, params.workspace);
+  let reserved = reserveCreation(params.rootDir, params.title, params.workspace, params.replacementForThreadId);
   if (!reserved.created) {
     if (reserved.reservation.state === "completed" && reserved.reservation.result) {
       return reserved.reservation.result;
     }
-    throw new CodexThreadCreationBlockedError(reserved.reservation);
+    const now = params.now?.() ?? new Date();
+    const lastUpdated = Date.parse(reserved.reservation.updatedAt || reserved.reservation.createdAt);
+    const stale = reserved.reservation.state === "creating"
+      && Number.isFinite(lastUpdated)
+      && now.getTime() - lastUpdated >= (params.staleCreatingMs ?? DEFAULT_STALE_CREATING_MS);
+    if (stale) {
+      let missingConfirmed = false;
+      let evidenceError = "";
+      if (!reserved.reservation.threadId && params.confirmMissing) {
+        try {
+          missingConfirmed = await params.confirmMissing();
+        } catch (error) {
+          evidenceError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      if (missingConfirmed) {
+        writeReservation(params.rootDir, {
+          ...reserved.reservation,
+          state: "failed_before_create",
+          error: "The stale creating reservation had no threadId and the Desktop state database confirmed that no matching task exists.",
+          updatedAt: now.toISOString()
+        });
+        reserved = reserveCreation(params.rootDir, params.title, params.workspace, params.replacementForThreadId);
+      } else {
+        const uncertain: CodexThreadCreationReservation = {
+          ...reserved.reservation,
+          state: "uncertain",
+          error: reserved.reservation.threadId
+            ? "The stale creation reservation already contains a threadId; do not create another task automatically."
+            : evidenceError
+              ? `The Desktop state database could not confirm that the task is missing: ${evidenceError}`
+              : "The Desktop state database did not authoritatively confirm that the task is missing.",
+          updatedAt: now.toISOString()
+        };
+        writeReservation(params.rootDir, uncertain);
+        throw new CodexThreadCreationBlockedError(uncertain);
+      }
+    }
+    if (!reserved.created) {
+      throw new CodexThreadCreationBlockedError(reserved.reservation);
+    }
   }
 
   let current: CodexThreadCreationReservation = {

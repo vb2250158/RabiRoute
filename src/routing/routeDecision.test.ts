@@ -280,7 +280,7 @@ test("AgentPacket migrates legacy FenneNote transcripts to RabiSpeech TTS output
   assert.equal(replyContext.replyToSource, false);
   assert.equal(packet.templateValues.promptOutputMode, "voice_short");
   assert.match(packet.message, /发送要求/);
-  assert.match(packet.message, /不能只在 Codex 线程里写最终文本/);
+  assert.match(packet.message, /自然语言回复通过明确发送 API 投递/);
   assert.match(packet.message, /明确发送 API/);
   assert.match(packet.message, /"channel": "speech"/);
 });
@@ -331,9 +331,8 @@ test("AgentPacket enters character TTS dialogue for RabiSpeech message endpoint 
   assert.equal(packet.templateValues.promptOutputMode, "voice_short");
   assert.equal(packet.templateValues.ttsVoice, "Ilias");
   assert.equal(packet.templateValues.ttsPlay, "true");
-  assert.match(packet.message, /character-tts-dialogue/);
-  assert.match(packet.message, /不能只在 Codex 线程里写最终文本/);
-  assert.match(packet.message, /主机级 FIFO/);
+  assert.match(packet.message, /生成同义的屏幕文本和朗读文本/);
+  assert.match(packet.message, /语音通过明确发送 API 投递/);
   assert.match(packet.message, /明确发送 API/);
   assert.match(packet.message, /"sessionId": "speech-main"/);
 });

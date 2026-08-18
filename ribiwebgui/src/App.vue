@@ -71,6 +71,7 @@ const navItems = computed(() => [
   { title: "人格配置", icon: "mdi-account-heart-outline", to: routeScopedPersonaPath(selectedRouteKey.value) },
   { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: routeScopedKnowledgePath(selectedRouteKey.value) },
   { title: "语音服务", icon: "mdi-waveform", to: routeScopedSpeechPath(selectedRouteKey.value) },
+  { title: "性能监控", icon: "mdi-chart-timeline-variant", to: "/performance" },
   { title: "日志诊断", icon: "mdi-console-line", to: routeScopedRuntimePath(selectedRouteKey.value) }
 ].map(item => ({ ...item, title: t(item.title) })));
 

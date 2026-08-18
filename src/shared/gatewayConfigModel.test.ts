@@ -132,6 +132,24 @@ test("managed task capabilities keep Codex-only settings off unsupported Agent a
   });
 });
 
+test("NapCat auto login on Rabi start defaults on and preserves an explicit off switch", () => {
+  const normalized = normalizeNapCatInstances(gateway({
+    napcatInstances: [{
+      id: "default-on",
+      gatewayPort: 8789,
+      httpUrl: localUrl(3000)
+    }, {
+      id: "explicit-off",
+      gatewayPort: 8791,
+      httpUrl: localUrl(3001),
+      autoLoginOnRabiStart: false
+    }]
+  }));
+
+  assert.equal(normalized[0]?.autoLoginOnRabiStart, true);
+  assert.equal(normalized[1]?.autoLoginOnRabiStart, false);
+});
+
 test("Message Agent limit is optional and ignores invalid values", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     agentAdapters: ["codex"],

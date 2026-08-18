@@ -17,6 +17,12 @@ import {
   type CodexSessionResolution
 } from "./codexSessionResolver.js";
 import {
+  isDshSessionId,
+  readDshSession,
+  readDshPrimaryBinding,
+  sendDshSessionMessage
+} from "./dshSessionBridge.js";
+import {
   CodexThreadCreationBlockedError,
   createCodexThreadWithReservation
 } from "./codexThreadCreationReservations.js";
@@ -43,6 +49,7 @@ export type AgentThreadRequest = {
   limit?: number;
   offset?: number;
   threadId?: string;
+  deliveryId?: string;
   title?: string;
   prompt?: string;
   cwd?: string;
@@ -113,7 +120,7 @@ export type AgentThreadDriver = {
     threadId: string;
     action: "started" | "steered";
     openedThread: boolean;
-    transport: "desktop-ipc";
+    transport: "desktop-ipc" | "http";
     warning?: string;
   }>;
 };
@@ -187,12 +194,26 @@ export function agentThreadRequestFailureData(
   };
 }
 
+function dshBaseUrlFor(): string {
+  return readDshPrimaryBinding()?.baseUrl || "http://127.0.0.1:3080";
+}
+
 const defaultDriver: AgentThreadDriver = {
   list: listCodexThreads,
-  read: readCodexThread,
+  read: async (threadId) => isDshSessionId(threadId)
+    ? readDshSession(threadId, dshBaseUrlFor())
+    : readCodexThread(threadId),
   create: createCodexThread,
   rename: renameCodexThread,
-  send: sendCodexThreadMessage
+  send: async (params) => isDshSessionId(params.threadId)
+    ? sendDshSessionMessage({
+        sessionId: params.threadId,
+        prompt: params.prompt,
+        cwd: params.cwd,
+        baseUrl: dshBaseUrlFor(),
+        imagePaths: params.imagePaths
+      })
+    : sendCodexThreadMessage(params)
 };
 
 function normalizeSandbox(value: unknown, fallback: CodexTurnSandbox = "workspace-write"): CodexTurnSandbox {
@@ -217,9 +238,9 @@ const agentThreadSourceLabels: Record<AgentThreadSourceType, string> = {
 };
 
 const workspaceDeliveryPolicyLines = [
-  "除非当前用户明确授权，禁止新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区中的 AGENTS.md 如有更严格限制，以其为准。",
-  "只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”；临时目录、其他分支、服务器提交或测试工程结果不能替代用户入口。",
-  "PangHu 任务没有创建旁路工作副本的例外：只使用正式 Main、Release 和 Art；旧任务或历史记录中的隔离、稀疏、clean working copy 安排已经撤销。"
+  "只在目标工作区执行，并遵守工作区 AGENTS.md。",
+  "改动进入目标工作区并完成适用验证后，才能报告已修复或可验收。",
+  "PangHu 只使用正式 Main、Release 和 Art。PangHu 任务没有创建旁路工作副本的例外；禁止新建、复制、checkout、switch、稀疏检出或使用旁路目录进行调查、修改、测试、构建或冲突处理。"
 ];
 
 function standaloneWorkspacePolicyPrompt(rawPrompt: string): string {
@@ -294,7 +315,7 @@ function optionalText(value: unknown, name: string, maxLength: number): string {
 
 function normalizeThreadId(value: unknown): string {
   const threadId = requiredText(value, "threadId", 80);
-  if (!isCodexTaskId(threadId)) {
+  if (!isCodexTaskId(threadId) && !isDshSessionId(threadId)) {
     throw new Error("Invalid threadId.");
   }
   return threadId;
@@ -327,13 +348,11 @@ function agentResponseContractLines(preparation: AgentCommunicationPreparation):
     lines.push(
       `必须回复的 requestId：${preparation.requestId}`,
       `需要回答：${preparation.responseInstruction}`,
-      "回复必须通过 RabiRoute Agent 任务桥 POST /api/agent/threads，不能只写在 Codex 最终回答里。",
-      `回复时填写 action=send、threadId=${preparation.source.threadId}、cwd=${sourceWorkspace}、sourceThreadId=当前任务完整 ID、sourceAgentType=当前 Agent 类型、inReplyToRequestId=${preparation.requestId}、result=本次结果、nextAction=下一步，并且仍须显式填写 responsePolicy=required 或 none。`,
-      "如果新的下一步还需要对方完成后返回结果，填写 responsePolicy=required 和 responseInstruction；如果这次回复结束往返，填写 responsePolicy=none。",
-      "本轮迭代结束仍未正式回复时，Manager 会在五分钟后向本任务投递提醒，并在后续每轮结束后继续检查。"
+      `通过 POST /api/agent/threads 回复：action=send，threadId=${preparation.source.threadId}，cwd=${sourceWorkspace}，sourceThreadId=当前任务完整 ID，sourceAgentType=当前类型，inReplyToRequestId=${preparation.requestId}，result=结果，nextAction=下一步。`,
+      "继续往返时填写 responsePolicy=required 和 responseInstruction；结束往返时填写 responsePolicy=none。"
     );
   } else {
-    lines.push("本次投递不要求回复；如果你之后向其它 Agent 投递消息，仍必须显式填写 responsePolicy=required 或 none。");
+    lines.push("本次投递不要求回复。后续投递仍需填写 responsePolicy=required 或 none。");
   }
   return lines;
 }
@@ -533,7 +552,8 @@ async function createThreadDurably(
   options: AgentThreadRequestOptions,
   driver: AgentThreadDriver,
   title: string,
-  cwd: string
+  cwd: string,
+  replacementForThreadId?: string
 ): Promise<CodexThreadCreateResult> {
   const rootDir = options.defaultWorkspace;
   if (!rootDir) return createThread({ ...request, title, cwd }, options, driver, title);
@@ -541,6 +561,16 @@ async function createThreadDurably(
     rootDir,
     title,
     workspace: cwd,
+    replacementForThreadId,
+    confirmMissing: async () => {
+      if (replacementForThreadId) return true;
+      const matches = await listThreads(title, maxResolveCandidates, 0, [cwd], options, driver, true);
+      const canonicalTitle = normalizeCodexThreadTitle(title);
+      const canonicalCwd = canonicalWorkspace(cwd);
+      return !matches.some((thread) => !thread.archived
+        && normalizeCodexThreadTitle(thread.title) === canonicalTitle
+        && (!thread.cwd || canonicalWorkspace(thread.cwd) === canonicalCwd));
+    },
     create: (onStage) => createThread({ ...request, title, cwd }, options, driver, title, onStage)
   });
 }
@@ -601,9 +631,21 @@ export async function handleAgentThreadRequest(
   if (action === "read") {
     const threadId = normalizeThreadId(request.threadId);
     const thread = await readAgentThread(threadId, driver);
+    const deliveryId = optionalText(request.deliveryId, "deliveryId", 200) || undefined;
+    const serializedThread = deliveryId ? JSON.stringify(thread.value) : "";
+    const delivery = deliveryId
+      ? {
+          deliveryId,
+          state: serializedThread.includes(deliveryId)
+            ? "accepted"
+            : (thread.value as { active?: unknown })?.active === true
+              ? "in_progress"
+              : "missing"
+        }
+      : undefined;
     return {
       statusCode: 200,
-      data: { action, threadId, thread: thread.value }
+      data: { action, threadId, thread: thread.value, ...(delivery ? { delivery } : {}) }
     };
   }
 
@@ -638,7 +680,14 @@ export async function handleAgentThreadRequest(
           driver,
           request.lookupMode === "state_db"
         ),
-        create: () => createThreadDurably(request, options, driver, title, requestedWorkspace)
+        create: (context) => createThreadDurably(
+          request,
+          options,
+          driver,
+          title,
+          requestedWorkspace,
+          context?.reason === "archived" ? context.previousThread?.id : undefined
+        )
       });
     } catch (error) {
       if (!(error instanceof CodexThreadCreationBlockedError)) throw error;
@@ -801,16 +850,89 @@ export async function handleAgentThreadRequest(
   }
 
   if (action === "send") {
-    const threadId = normalizeThreadId(request.threadId);
+    let threadId = normalizeThreadId(request.threadId);
     const rawPrompt = requiredText(request.prompt, "prompt", maxPromptLength);
     const sendSource = await resolveAgentThreadSendSource(request, options, driver);
+    let cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
+    const inReplyToRequestId = optionalText(request.inReplyToRequestId, "inReplyToRequestId", 100) || undefined;
+    let redirectedReply = false;
+    if (sendSource && inReplyToRequestId && options.agentRequests) {
+      const destination = options.agentRequests.resolveReplyDestination(
+        inReplyToRequestId,
+        {
+          threadId: sendSource.source.threadId,
+          agentType: sendSource.source.agentType,
+          threadName: sendSource.source.threadName,
+          workspace: sendSource.source.workspace
+        },
+        { threadId, agentType: "agent", workspace: cwd }
+      );
+      if (destination) {
+        threadId = normalizeThreadId(destination.threadId);
+        cwd = resolveAgentThreadWorkspaceForTest(destination.workspace, options);
+        redirectedReply = true;
+      }
+    }
+    const requestedTitle = optionalText(request.title, "title", maxTitleInputLength);
+    const previousThreadId = threadId;
+    let targetResolution: Extract<CodexSessionResolution<AgentThreadSummary>, { thread: AgentThreadSummary }> | undefined;
+    if (requestedTitle && !redirectedReply && !isDshSessionId(threadId)) {
+      const title = normalizeCodexThreadTitle(requestedTitle);
+      const resolution = await resolveCodexSession({
+        threadId,
+        title,
+        cwd,
+        createIfMissing: request.createIfMissing !== false
+      }, {
+        scope: driver,
+        read: async (candidateId) => {
+          try {
+            return threadSummary(await driver.read(candidateId));
+          } catch (error) {
+            if (missingThreadError(error)) return null;
+            throw error;
+          }
+        },
+        list: ({ title: query, cwd: requestedWorkspace }) => listThreads(
+          query,
+          maxResolveCandidates,
+          0,
+          [requestedWorkspace],
+          options,
+          driver,
+          true
+        ),
+        create: (context) => createThreadDurably(
+          { ...request, prompt: "" },
+          options,
+          driver,
+          title,
+          cwd,
+          context?.reason === "archived" ? context.previousThread?.id : undefined
+        )
+      });
+      if (resolution.kind === "ambiguous") {
+        throw new Error(`Codex Desktop task name is ambiguous: ${title}`);
+      }
+      if (resolution.kind === "workspace-mismatch") {
+        throw new Error(`Codex Desktop task belongs to another workspace: ${resolution.thread.cwd || "unknown"}`);
+      }
+      if (resolution.kind === "archived") {
+        throw new Error(`Codex Desktop task is archived: ${title}`);
+      }
+      if (resolution.kind === "missing") {
+        throw new Error(`Codex Desktop task could not be resolved: ${title}`);
+      }
+      targetResolution = resolution;
+      threadId = resolution.thread.id;
+      cwd = resolveAgentThreadWorkspaceForTest(resolution.thread.cwd || cwd, options);
+    }
     if (sendSource) {
       if (sendSource.source.threadId === threadId) {
         throw new Error("Agent-to-Agent handoff source and target task must be different.");
       }
       validateAgentThreadHandoffPromptForTest(rawPrompt);
     }
-    const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const sandbox = normalizeSandbox(request.sandbox);
     const model = optionalText(request.model, "model", 120) || undefined;
     const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort);
@@ -823,7 +945,6 @@ export async function handleAgentThreadRequest(
         throw new Error("messageProcessing handoff requires responsePolicy=required.");
       }
       const responseInstruction = optionalText(request.responseInstruction, "responseInstruction", 4_000) || undefined;
-      const inReplyToRequestId = optionalText(request.inReplyToRequestId, "inReplyToRequestId", 100) || undefined;
       const result = optionalText(request.result, "result", 12_000) || undefined;
       const nextAction = optionalText(request.nextAction, "nextAction", 4_000) || undefined;
       if ((responsePolicy === "required" || inReplyToRequestId) && !options.agentRequests) {
@@ -934,11 +1055,16 @@ export async function handleAgentThreadRequest(
         action,
         ok: !messageProcessingWarning && !agentRequestWarning,
         threadId,
+        ...(targetResolution ? {
+          resolution: targetResolution.kind,
+          thread: targetResolution.thread,
+          ...(previousThreadId !== threadId ? { previousThreadId } : {})
+        } : {}),
         status: messageProcessingWarning || agentRequestWarning ? "delivered_tracking_failed" : "delivered",
         delivery: {
           status: "delivered",
           targetThreadId: threadId,
-          acceptedBy: "codex_desktop_owner",
+          acceptedBy: isDshSessionId(threadId) ? "dsh_session_owner" : "codex_desktop_owner",
           action: acceptedReceipt?.action ?? "accepted",
           transport: acceptedReceipt?.transport ?? "desktop-ipc",
           ...(acceptedReceipt ? { openedThread: acceptedReceipt.openedThread } : {}),

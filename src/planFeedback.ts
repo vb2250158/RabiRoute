@@ -65,6 +65,11 @@ export type CreatePlanFeedbackInput = {
   notifyAgent?: unknown;
 };
 
+export function planFeedbackResponseId(feedback: Pick<PlanFeedbackRecord, "id"> | string): string {
+  const feedbackId = typeof feedback === "string" ? feedback : feedback.id;
+  return `response-${feedbackId}`;
+}
+
 const MAX_FEEDBACK_CHARS = 2_000;
 
 function safeIdPart(value: string): string {

@@ -8,6 +8,8 @@ English | <a href="./rabi-codex-context-plugin.md">简体中文</a>
 
 > Status: 0.4 unified-context and plan-task completion Hook version. Completion reminders remain experimental. Source lives in `plugins/rabi-codex-context/`.
 
+The plugin registers and executes only hooks under its own `PLUGIN_ROOT`. Installation, upgrades, and runtime do not rewrite another plugin's `hooks.json`, marketplace entry, or enabled state, so an independent language-style hook can load alongside it.
+
 ## Single ownership boundary
 
 Rabi PC / RabiRoute Manager is the sole owner of persona configuration, Codex session bindings, plans, recent and consolidated memory, role skills, recall scoring, `viewedAt`, plan archival, memory edit windows, and consolidation.

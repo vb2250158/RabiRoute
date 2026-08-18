@@ -229,7 +229,7 @@ GET /api/personas/messages/receipts/:deliveryId
 
 ```text
 明确发送 API：http://127.0.0.1:8790/api/agent/send
-明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"codex","sessionId":"<当前完整会话 ID>"},"routeId":"main","channel":"napcat","params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
+明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"codex","sessionId":"<当前完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
 来源上下文（只用于核对来源，不可直接作为发送参数）：{"routeKind":"direct_at","messageId":"123","groupId":"456"}
 ```
 
@@ -250,6 +250,7 @@ POST /api/agent/send
 - `channel`：发送渠道；
 - `params`：该渠道的目标参数；
 - `payload`：`text`、`image`、`voice` 或 `file`；
+- `styleValidation`：枚举值 `1 | 0`，默认 `1`。`1` 使用人格绑定的目标语言风格 Skill 校验文本；`0` 跳过本次校验；
 - `tracking.requirementId`：可选，用于关联消息处理看板，不能决定发送目标；回复已登记的消息处理需求时必须填写；
 - `tracking.sendContextReviewToken`：消息处理需求在发送前完成最新群聊上下文核对后取得的短期凭证，只对同一需求、发送者会话、目标和正文有效。
 
@@ -264,6 +265,7 @@ QQ 群文本示例：
   },
   "routeId": "main",
   "channel": "napcat",
+  "styleValidation": 1,
   "params": {
     "target": "group",
     "groupId": "456",
@@ -283,6 +285,27 @@ QQ 群文本示例：
   }
 }
 ```
+
+人格可在 `personaConfig.json.languageStyle.styleSkillUrl` 绑定自己的语言风格 Skill。不同人格可以绑定不同 URL。URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`；Manager 从其中读取程序化 JSON 规则。
+
+`styleValidation=1` 且校验不通过时，Manager 返回 `409` 和 `status=style_confirmation_required`，附带规则编号、段落、原因和命中证据，消息尚未进入 Outbox。Agent 确认原文符合本次需求后，使用同一 `deliveryId` 重发，并把 `styleValidation` 改为 `0`。这次跳过不修改人格绑定，后续发送恢复默认校验。
+
+通用校验接口只分析文本，不发送消息：
+
+```http
+POST /api/language-style/validate
+```
+
+```json
+{
+  "text": "待检查正文",
+  "styleSkillUrl": "file:///path/to/style-skill",
+  "scope": "outbound_message",
+  "prompt": "可选的来源问题"
+}
+```
+
+接口返回 `passed`、`status`、`violations`、`checkedRuleIds` 和 `skippedRuleIds`。Codex Stop Hook 使用同一接口，只在校验不通过时提示，不阻止或改写 Codex 输出。
 
 当前渠道和必填目标：
 
@@ -320,10 +343,12 @@ POST /api/message-processing/requirements/:requirementId/outcome
 发送前不能只依赖 AgentPacket 创建时附带的最近消息，因为处理期间群里可能已经有人回答，或者另一名 Agent 已经发过同义回复。先读取 Manager 当前保存的有界双向消息：
 
 ```http
-GET /api/message-processing/requirements/:requirementId/send-context
+GET /api/message-processing/requirements/:requirementId/send-context?sourceMessageId=:sourceMessageId
 ```
 
-响应会返回 `contextVersion`、必须逐条核对的 `requiredReviewIds`、上下文消息、已有 Agent 回复 `priorReplies` 和 `alreadyReplied`。Agent 判断拟发送内容仍合适后，把这次精确发送请求作为 `proposedSend` 提交审核：
+单条回复必须传本次准备引用的 `sourceMessageId`。响应保留有界上下文，并把 `requiredReviewIds` 缩小为该主消息和从消息记录解析出的明确回复链；同一聚合需求里的其它消息仍参与上下文版本计算，但不要求逐条声明为本次正文依据。Agent 判断拟发送内容仍合适后，把这次精确发送请求作为 `proposedSend` 提交审核：
+
+来源消息较早、已超出近期窗口时，Manager 只会从该需求所属人格的正式 `group-messages.jsonl` 恢复同 Route、同 `sourceMessageId` 的唯一记录。找不到、出现重复记录或 Route 证据冲突时，GET 失败关闭，不会扩大到其它群或其它历史需求。
 
 ```http
 POST /api/message-processing/requirements/:requirementId/send-context
@@ -332,7 +357,7 @@ POST /api/message-processing/requirements/:requirementId/send-context
 ```json
 {
   "contextVersion": "<GET 返回的版本>",
-  "reviewedContextIds": ["<requiredReviewIds 中的全部 ID>"],
+  "reviewedContextIds": ["<本次 sourceMessageId 和明确回复链对应的 requiredReviewIds>"],
   "reviewedByThreadId": "<当前完整会话 ID>",
   "reason": "群里尚无人回答，拟发送内容仍对应当前问题。",
   "proposedSend": {
@@ -362,6 +387,8 @@ POST /api/message-processing/requirements/:requirementId/send-context
 
 审核通过后，把返回的 `sendContextReviewToken` 加入 `tracking`，并原样发送同一请求。凭证两分钟后失效；审核后出现新消息、需求状态改变、发送者会话改变，或目标、引用消息、正文发生变化时，Manager 都会拒绝发送并要求重新读取上下文。已有 Agent 回复同一来源消息时，改写措辞仍视为重复；确有新增事实的后续说明必须显式填写 `allowAdditionalReply=true` 和原因。
 
+受跟踪发送在引用和图片检查阶段只使用本次审批绑定的精确正式来源证据。需求里过时的 `conversationKey` 或 `replyContext.groupId` 不能把来源改到另一群；正式群、Route、实例与发送目标不一致，来源记录不唯一，或图片附件没有标为已审核时都会拒绝发送。普通未跟踪发送仍按原 Route 历史查找，不使用这项恢复。
+
 这项检查适用于所有 Agent 类型。只要 `replyToMessageId` 指向已登记消息处理需求的来源消息，主人格或其它 Agent 也不能省略 `tracking.requirementId` 绕过看板和发送前核对。
 
 普通群讨论可以决定不回复，但必须说明原因。直接 @、直接回复、私聊和计划进展通知不能用泛化的 `agent_judgement` 关闭，只接受重复、他人已回答、消息撤回、来源无效等受限原因：
@@ -380,7 +407,7 @@ POST /api/message-processing/requirements/:requirementId/send-context
 
 Manager 不判断群消息的业务含义。每个新消息需求在关闭或准备回复前，消息处理 Agent 都必须核对原消息、附件和必要的回复链，并提交 `projectFactAssessment`：
 
-新登记的消息需求还带有 `source.evidenceReviewRequired=true`。Manager 会在 `source.messageIds`、`source.replyChainMessageIds` 和 `source.attachments` 中列出必须核对的原消息、引用链和附件。NapCat 图片会在收到时立即保存到运行目录，并通过 Desktop IPC 作为 `localImage` 随当前任务输入；只看到 CQ 代码、文件名或 URL 不算看过图片。准备回复或关闭前，outcome 必须同时提交：
+新登记的消息需求还带有 `source.evidenceReviewRequired=true`。Manager 会在 `source.messageIds`、`source.replyChainMessageIds` 和 `source.attachments` 中保留聚合需求的完整证据。NapCat 图片会在收到时立即保存到运行目录，并通过 Desktop IPC 作为 `localImage` 随当前任务输入；只看到 CQ 代码、文件名或 URL 不算看过图片。准备回复或关闭前，outcome 必须同时提交：
 
 ```json
 {
@@ -401,7 +428,7 @@ Manager 不判断群消息的业务含义。每个新消息需求在关闭或准
 }
 ```
 
-`reviewedMessageIds` 必须覆盖原消息和引用链；`attachmentReviews` 必须逐个覆盖附件并写实际观察。附件为 `unavailable`、本地文件不存在或下载失败时，Manager 拒绝 `reply` / `no_reply`，Agent 只能重试取图或 `handoff`，不能根据文字占位猜图片内容。这个证据核对与下面的项目事实判断分开保存：前者证明 Agent 看了什么，后者记录 Agent 如何判断长期项目事实。
+`reply` outcome 可以先提交已经核对的证据并进入 `awaiting_send`。POST send-context 会根据 `proposedSend.params.replyToMessageId` 重新计算精确子集：本次主消息、它的明确回复链，以及被引用消息自带或被正文明确提到的附件。`sourceEvidenceReview` 和 `projectFactAssessment` 必须覆盖这个子集。群引用回复的来源归属只在 `kind=message_reply` 中计算；`plan_progress_notification` 等派生通知不拥有原群消息的引用回复权。同一 Route、同一消息组和同一来源消息的历史重复只允许 `createdAt` 最新的 canonical `message_reply` 继续审批；没有 `message_reply` 时失败关闭，不能由计划通知承接。不同消息组、不同 Route、最新项不唯一、回复链记录缺失、相关附件为 `unavailable`，或正文依赖了未纳入事实核验的消息时同样失败关闭。同一聚合需求中无关消息的不可用附件不会阻止这条回复。`no_reply` 关闭整个需求时仍必须覆盖全部消息和附件。这个证据核对与项目事实判断分开保存：前者证明 Agent 看了什么，后者记录 Agent 如何判断长期项目事实。
 
 先通过 `GET /api/message-processing/requirements/{requirementId}` 读取需求。响应里的 `knowledgeMatches` 是 Manager 根据角色计划和记忆的标题、ID、关键词生成的候选关联。Agent 必须读取每个候选项，并逐项调用 `POST /api/message-processing/requirements/{requirementId}/knowledge-callback`。
 
@@ -503,7 +530,7 @@ GET /api/message-processing/board?routeId=<gateway-id>&limit=100
 
 NapCat 群回复另按 `routeId + groupId + replyToMessageId` 做短时保护。某条被引用消息在 10 分钟内已经成功收到回复时，换 `deliveryId`、换 Agent 或换一种说法再次发送都会被拒绝；Manager 重启后仍从近期成功回执恢复这项判断。确有新证据必须补充时，调用方可以显式提交 `params.allowAdditionalReply=true`，并对这次额外回复负责。这个字段不能用于绕过普通重复发送保护。
 
-调用方在 POST 超时或收到空回执后，应先查询原 ID：
+调用方在 POST 超时或收到空回执后，应先查询原 ID。不存在的回执返回 HTTP `404` 和 `idempotency.state=missing`；`in_progress` 继续回读，`uncertain` 或 `conflict` 禁止自动重发。只有原 `deliveryId`、原 payload 完全不变，并且 Manager 从同一 Route 的 Outbox 明确确认没有请求记录和终态记录时，才允许一次受控重试。Outbox 已记录请求但没有终态、记录的 payload 摘要不同，或受控重试仍没有终态时，都转为 `uncertain`：
 
 ```http
 GET /api/agent/send/receipts/:deliveryId
@@ -844,7 +871,7 @@ Manager 先按来源 ID 读取 Desktop 状态并核对任务存在、ID 一致�
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
 - `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束，包括没有来源 Agent 字段的普通续投：未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。PangHu 没有任务级例外，只能使用正式 Main、Release 和 Art，旧任务或历史记录里的隔离、稀疏、clean working copy 安排已经撤销。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
 - `create` 按“任务名 + 工作目录”幂等解析。相同创建请求并发到达、调用方等待超时后重试，或任务刚创建但 Desktop 索引尚未及时显示时，都会复用同一次创建结果；不得因为第一次 HTTP 超时再次创建同名任务。返回 `resolution=created` 表示本次新建，`resolution=name` 表示复用了同名同工作目录任务。
-- Manager 在运行期 `data/.runtime/codex-thread-creations/` 持久保存创建 reservation。状态按 `reserved → creating → thread_created → naming → initial_turn → completed` 推进；一旦 `thread/start` 可能已经执行但结果无法确认，记录转为 `uncertain`，后续请求返回 `409` 并禁止自动再次创建。只有能够证明尚未调用 `thread/start` 的 `failed_before_create` 才允许重新创建。
+- Manager 在运行期 `data/.runtime/codex-thread-creations/` 持久保存创建 reservation。状态按 `reserved → creating → thread_created → naming → initial_turn → completed` 推进。`creating` 超过 5 分钟、没有 `threadId`，并且第二次 `action=list + lookupMode=state_db` 明确确认同名同工作目录任务不存在时，Manager 才先转为 `failed_before_create`，再允许同键重试。记录已有 `threadId`、索引查询失败、查到候选任务或其它证据不足时转为 `uncertain`，后续请求返回 `409` 并禁止自动再次创建。
 - `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。
 - 创建调用超时后，先用 `action=list + lookupMode=state_db + 原任务名` 从本地任务索引回读。这个模式不启动 app-server 元数据扫描，适合判断慢创建是否稍后产生了任务；完整任务列表仍使用默认 `lookupMode=complete`。
 - Agent 正式回复中的 workspace 使用与 Codex 任务身份相同的规范化规则比较；Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式不会因为字符串写法不同而被误判为其它工作区。
@@ -917,11 +944,11 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。写入 API 仍只接受上方五种顶层生命周期状态；`presentation.status / tone / sortBucket / views / palette` 和列表响应的 `counts.stages` 都由 Manager 派生，Agent 与客户端不得手写。等待审批、方案确认或授权的当前步骤保持 `进行中`，并补齐结构化 `approvalRequest` 与 `waitingFor`；只有合同完整、可提交且 `responseStatus=pending` 时，Manager 才自动派生 `isBlocked=true` 兼容投影与“待审批”。结构化 `qa-* / verify-*` 当前步骤显示“等待 QA 验收”；权威等待字段可派生“待环境 / 待素材 / 待资料 / 待外部回执”；前序工作完成且明确等待合包、构建、进包或目标包身份的 package/build 当前步骤显示“待统一打包”；其它进行中计划显示“正在执行”。Agent 不得手写 `isBlocked` 或展示阶段。审批合同缺项时 Manager 返回 `incomplete/enabled=false`，计划保持进行中并禁止正式审批。
+新增计划必须提供有序的 `steps`。写入 API 仍只接受五种顶层生命周期状态；Manager 为未终态计划只派生绿色“进行中”、蓝色“等待打包”、紫色“等待 QA”、灰色“暂停”、红色“待审批”、橙色“待人工核验”。Agent 与客户端不得手写展示阶段。外部资料、素材、owner、账号、设备、授权和回执只保留在 `waitingFor` 等内部字段。
 
-展示细分由 Manager 继续统一判断：真实 runner、MCP、设备或监听不可用且没有 CLI、替代验证或重试路径时返回“等待测试环境”；明确禁止 Unity GUI、MCP、菜单或 PlayMode 时返回“等待重新授权”。QA 阶段还需要本轮真实发送回执且只等待结论；缺回执但仍可发送或修复时保持“正在执行”。目标包身份或纳入证明继续返回蓝色“待统一打包”，素材、资料和负责人答复不会被归入测试环境。
+Manager 仍使用精确内部分类驱动 reconcile：存在 CLI、替代验证、重试、发送或协调动作时公开显示“进行中”；开发闭环后只缺目标包时显示“等待打包”；目标包已纳入时显示“等待 QA”；开发闭环后只剩人工视觉或交互确认的 `manual-verify-*` 步骤显示“待人工核验”；完整审批合同显示“待审批”；完全没有安全动作时显示“暂停”。内部原因不得成为新的公开状态。
 
-只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应强制采用“实施/开发验证 → 待统一打包 → 等待 QA 验收 → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 `qa-* / verify-*` 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
+只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
 `attachments` 可选。新附件可提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 把内容复制到人格私有 `plans/attachments/<planId>/`，计划文件只保留安全元数据，不保存 Base64。PATCH 未提供 `attachments` 时保留原列表，提供空数组时清空记录；如需在 PATCH 中保留指定旧附件，可把 GET 返回的对应附件对象原样带回。Manager 对外计划 DTO 不返回本机 `path`。
 
@@ -984,6 +1011,8 @@ RibiWebGUI 用该接口记录非审批中进行中计划的计划级引导；Web
 `attachments` 可选。每项使用 `name`、可选 `mimeType` 和 `contentBase64`；最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。Manager 校验后把内容保存到人格私有的 `plans/feedback/attachments/<feedbackId>/`，记录与 Agent 通知只携带安全元数据和本地路径。同一 `feedbackId` 重试必须保持相同文字、步骤和附件内容。
 
 `planAttachmentIds` 也可选，用于引用当前计划顶层 `attachments` 中已有的受管附件；最多 8 个且必须唯一。RibiWebGUI 在审批输入框键入 `@` 时显示当前计划附件候选，选中后插入可读的 `@附件「文件名」` 标记，并提交对应附件 ID。Manager 以 ID 校验附件确实属于当前计划，把附件元数据与本地路径作为本次审批审计快照保存，并随同一 `plan_feedback` 投递给 Agent；WebGUI 不读取或提交任意本机路径。同一 `feedbackId` 重试也必须保持相同的计划附件引用。
+
+当反馈关联当前结构化 `qa-* / verify-*` 步骤时，Manager 只把用户或外部入口提交的 `approval_suggestion` 视为 QA 判定候选。`guidance`、`guidance_response`、`approval_response`、`author=agent` 的执行报告，以及正文里的裸 `passed / verified` 测试计数都只作普通反馈记录，不会完成或回退 QA。候选正文明确表示失败或仍复现时，Manager 在同一计划插入或复用 `investigate-<qaStepId>`，把 QA 步骤改回未开始，按问题类型把最小缺失证据写入 `waitingFor`；证据齐全后继续原 `taskBinding.sessionId + workspace`。只有“QA 明确通过”“验收通过”“确认未再复现”等明确结论才完成当前 QA 步骤。
 
 当 `notifyAgent=true` 时，POST 在反馈成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`。计划引导与审批意见复用同一 `taskBinding` 投递链：存在完整绑定时，Manager 只通过 `/api/agent/threads` 的 Desktop IPC 主链投向原业务任务；绑定不完整时才把完整反馈交给人格 Agent。owner 未加载时保持 `pending` 并有界重试，只有目标 owner 接受 `start/steer` 才记录 `delivered`。事件不写角色面板 timeline 或统一会话账本，也不注入最近消息；终态通过 `plan_feedback_changed` 通知。
 

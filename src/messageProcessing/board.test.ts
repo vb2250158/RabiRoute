@@ -72,7 +72,65 @@ test("message requirements can be found by exact Route and source message withou
   assert.equal(store.findLatestBySourceMessage("main", "missing"), undefined);
 });
 
-test("image-bearing requirements cannot reply until the exact source, reply chain, and attachment are reviewed", () => {
+test("archived task replacement updates requirement and linked plan worker references", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-worker-replacement-"));
+  const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
+  store.registerMessageGroup({ requirementId: "req-worker", messageGroupId: "group-worker", source: source(["direct_at"]) });
+  store.recordDispatch("req-worker", {
+    threadId: "archived-worker",
+    threadName: "消息处理 Agent 1",
+    workspace: "C:/workspace"
+  });
+  store.submitOutcome("req-worker", {
+    decision: "handoff",
+    targetAgentType: "plan_agent",
+    roleId: "DemoPersona",
+    planId: "plan-worker",
+    planTitle: "测试计划",
+    projectFactAssessment: noneAssessment()
+  });
+
+  assert.deepEqual(store.replaceWorkerReferences("archived-worker", {
+    threadId: "replacement-worker",
+    threadName: "消息处理 Agent 1",
+    workspace: "C:/workspace"
+  }), { requirements: 1, planOrigins: 1 });
+  assert.equal(store.getRequirement("req-worker")?.worker?.threadId, "replacement-worker");
+  assert.equal(store.planOriginList()[0]?.worker?.threadId, "replacement-worker");
+});
+
+test("message board summaries omit heavy source evidence while preserving visible status fields", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-summary-"));
+  const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
+  store.registerMessageGroup({
+    requirementId: "req-summary",
+    messageGroupId: "group-summary",
+    source: {
+      ...source(["direct_at"]),
+      replyContext: { rawMessages: "x".repeat(1_000_000) },
+      attachments: [{
+        id: "attachment-1",
+        messageId: "300",
+        kind: "image",
+        name: "large-image.png",
+        path: "C:/private/large-image.png",
+        status: "ready",
+        error: "x".repeat(100_000)
+      }]
+    }
+  });
+
+  const board = store.boardSummary({ routeId: "main", limit: 100 }) as {
+    items: Array<{ id: string; source: Record<string, unknown>; overdueMs: number; missingOutcome: boolean }>;
+  };
+  assert.equal(board.items[0]?.id, "req-summary");
+  assert.equal(board.items[0]?.source.summary, "@示例助手 这个界面怎么命名");
+  assert.equal("replyContext" in (board.items[0]?.source ?? {}), false);
+  assert.equal("attachments" in (board.items[0]?.source ?? {}), false);
+  assert.ok(JSON.stringify(board).length < 20_000);
+});
+
+test("the board stores partial aggregate evidence until the exact proposed send is reviewed", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-source-evidence-"));
   const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
   store.registerMessageGroup({
@@ -96,7 +154,7 @@ test("image-bearing requirements cannot reply until the exact source, reply chai
     decision: "reply",
     projectFactAssessment: noneAssessment()
   }), /sourceEvidenceReview/);
-  assert.throws(() => store.submitOutcome("req-source-evidence", {
+  const partiallyReviewed = store.submitOutcome("req-source-evidence", {
     decision: "reply",
     sourceEvidenceReview: {
       reviewedMessageIds: ["300"],
@@ -107,7 +165,9 @@ test("image-bearing requirements cannot reply until the exact source, reply chai
       reviewedByThreadId: "message-agent-1"
     },
     projectFactAssessment: noneAssessment()
-  }), /Missing: 299/);
+  });
+  assert.equal(partiallyReviewed.status, "awaiting_send");
+  assert.deepEqual(partiallyReviewed.sourceEvidenceReview?.reviewedMessageIds, ["300"]);
   const accepted = store.submitOutcome("req-source-evidence", {
     decision: "reply",
     sourceEvidenceReview: {
@@ -124,7 +184,46 @@ test("image-bearing requirements cannot reply until the exact source, reply chai
   assert.equal(accepted.sourceEvidenceReview?.attachmentReviews[0]?.attachmentId, "300:image:1");
 });
 
-test("an unavailable source image blocks an inferred reply and leaves handoff available", () => {
+test("a reply outcome may defer aggregate evidence coverage until the exact proposed send is known", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-evidence-subset-"));
+  const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
+  store.registerMessageGroup({
+    requirementId: "req-evidence-subset",
+    messageGroupId: "group-evidence-subset",
+    source: {
+      ...source(["direct_reply"]),
+      messageIds: ["target-text", "unrelated-image"],
+      evidenceReviewRequired: true,
+      attachments: [{
+        id: "unrelated-image:image:1",
+        messageId: "unrelated-image",
+        kind: "image",
+        name: "expired.png",
+        status: "unavailable",
+        error: "HTTP 403"
+      }]
+    }
+  });
+
+  const accepted = store.submitOutcome("req-evidence-subset", {
+    decision: "reply",
+    sourceEvidenceReview: {
+      reviewedMessageIds: ["target-text"],
+      replyChainChecked: true,
+      attachmentReviews: [],
+      evidence: "核对了本次准备引用的纯文本消息。",
+      reviewedAt: "2026-08-11T12:00:00.000Z",
+      reviewedByThreadId: "message-agent-1"
+    },
+    projectFactAssessment: noneAssessment(["target-text"])
+  });
+
+  assert.equal(accepted.status, "awaiting_send");
+  assert.deepEqual(accepted.sourceEvidenceReview?.reviewedMessageIds, ["target-text"]);
+  assert.equal(accepted.source.attachments?.[0]?.status, "unavailable");
+});
+
+test("an unavailable source image is deferred to exact send review and leaves handoff available", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-unavailable-image-"));
   const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
   store.registerMessageGroup({
@@ -143,7 +242,7 @@ test("an unavailable source image blocks an inferred reply and leaves handoff av
       }]
     }
   });
-  assert.throws(() => store.submitOutcome("req-unavailable-image", {
+  const awaitingReview = store.submitOutcome("req-unavailable-image", {
     decision: "reply",
     sourceEvidenceReview: {
       reviewedMessageIds: ["300"],
@@ -154,7 +253,8 @@ test("an unavailable source image blocks an inferred reply and leaves handoff av
       reviewedByThreadId: "message-agent-1"
     },
     projectFactAssessment: noneAssessment()
-  }), /cannot be answered by inference/);
+  });
+  assert.equal(awaitingReview.status, "awaiting_send");
   const handedOff = store.submitOutcome("req-unavailable-image", {
     decision: "handoff",
     targetAgentType: "primary_persona",

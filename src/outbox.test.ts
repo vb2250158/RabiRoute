@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentReply, napcatGroupReplyMessage, type AgentReplyOptions } from "./outbox.js";
+import { handleAgentReply, inspectAgentReplyDelivery, napcatGroupReplyMessage, type AgentReplyOptions } from "./outbox.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 import { recentMessageContextItems } from "./messageContextStore.js";
@@ -400,6 +400,50 @@ test("QQ group local file upload is blocked outside allowedFileRoots", async () 
   assert.equal(result.ok, false);
   assert.equal(result.status, "failed");
   assert.match(result.reason ?? "", /outside the configured allowedFileRoots/);
+});
+
+test("Outbox delivery readback distinguishes missing, completed, and payload mismatch", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-delivery-readback-"));
+  const request = {
+    deliveryId: "delivery-outbox-readback-1",
+    senderAgentType: "plan_agent",
+    senderSessionId: "thread-outbox-readback-1",
+    explicitTarget: true,
+    routeProfileId: "main",
+    targetType: "group",
+    groupId: "20002",
+    text: "same payload"
+  };
+  try {
+    await withJsonServer(() => ({ status: "ok", retcode: 0, data: { message_id: "outbox-sent-1" } }), async (url) => {
+      const options: AgentReplyOptions = {
+        rootDir,
+        routeRoot: path.join(rootDir, "data", "route"),
+        rolesRoot: path.join(rootDir, "data", "roles"),
+        runtimes: [{
+          id: "main",
+          pipeline: { outputAdapter: "qq", outputPipeline: "qq" },
+          messageAdapterPolicies: {
+            napcat: { outputEnabled: true, supportedOutputs: ["text"] }
+          },
+          napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+        }]
+      };
+
+      assert.deepEqual(await inspectAgentReplyDelivery(request, options), { state: "missing" });
+      const result = await handleAgentReply(request, options);
+      assert.equal(result.sentMessageId, "outbox-sent-1");
+
+      const completed = await inspectAgentReplyDelivery(request, options);
+      assert.equal(completed.state, "completed");
+      if (completed.state === "completed") assert.equal(completed.result.sentMessageId, "outbox-sent-1");
+
+      const mismatch = await inspectAgentReplyDelivery({ ...request, text: "changed payload" }, options);
+      assert.equal(mismatch.state, "uncertain");
+    });
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
 });
 
 test("QQ group image replies keep explanatory text and a validated local image in one message", async () => {

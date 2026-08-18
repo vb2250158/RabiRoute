@@ -7,20 +7,24 @@ const routerSource = fs.readFileSync(
   "utf8"
 );
 
-test("WebGUI route pages are split into lazy chunks", () => {
-  assert.doesNotMatch(routerSource, /import\s+\w+Page\s+from\s+"\.\/pages\//);
+test("WebGUI route pages switch immediately and load page chunks asynchronously", () => {
+  assert.match(routerSource, /createImmediateRouteComponent/);
+  assert.match(routerSource, /RouteLoadingPage/);
   for (const page of [
     "OverviewPage",
     "RouteConfigPage",
     "PersonaTemplatePage",
     "PersonaDocumentPage",
+    "PersonaSyncPage",
     "ProjectDocsPage",
     "RoleKnowledgePage",
     "RuntimeLogPage",
+    "PerformancePage",
     "SpeechServicePage"
   ]) {
     assert.match(routerSource, new RegExp(
-      `const ${page} = \\(\\) => import\\("\\.\\/pages\\/${page}\\.vue"\\)`
+      `const ${page} = immediatePage\\(\\(\\) => import\\("\\.\\/pages\\/${page}\\.vue"\\)\\)`
     ));
   }
+  assert.doesNotMatch(routerSource, /const\s+\w+Page\s*=\s*\(\)\s*=>\s*import\(/);
 });

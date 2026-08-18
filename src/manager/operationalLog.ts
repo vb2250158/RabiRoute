@@ -36,6 +36,7 @@ export type ManagerOperationalLog = {
     event: string,
     detail?: Omit<ManagerOperationalEvent, "schemaVersion" | "eventId" | "time" | "level" | "event" | "pid">
   ): ManagerOperationalEvent | null;
+  flush(): Promise<void>;
 };
 
 function redactProjectRoot(value: unknown, projectRoot: string): string {
@@ -66,6 +67,48 @@ export function createManagerOperationalLog(options: {
   const logDirectory = projectDirectoryLayout(projectRoot).managerLogRoot;
   const now = options.now ?? (() => new Date());
   const pid = options.pid ?? process.pid;
+  const pending = new Map<string, string[]>();
+  let flushTimer: NodeJS.Timeout | undefined;
+  let activeFlush: Promise<void> | undefined;
+
+  const scheduleFlush = (): void => {
+    if (flushTimer || activeFlush || pending.size === 0) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = undefined;
+      void startFlush();
+    }, 25);
+  };
+
+  const startFlush = (): Promise<void> | undefined => {
+    if (activeFlush || pending.size === 0) return activeFlush;
+    const batch = new Map(pending);
+    pending.clear();
+    const operation = (async () => {
+      await fs.promises.mkdir(logDirectory, { recursive: true });
+      for (const [shard, lines] of batch) {
+        await fs.promises.appendFile(path.join(logDirectory, shard), lines.join(""), "utf8");
+      }
+    })().catch((writeError) => {
+      const message = writeError instanceof Error ? writeError.message : String(writeError);
+      process.stderr.write(`[RabiRoute Manager operations] failed to persist batch: ${message}\n`);
+    }).finally(() => {
+      activeFlush = undefined;
+      if (pending.size > 0) scheduleFlush();
+    });
+    activeFlush = operation;
+    return operation;
+  };
+
+  const flush = async (): Promise<void> => {
+    while (pending.size > 0 || activeFlush) {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = undefined;
+      }
+      const active = activeFlush ?? startFlush();
+      if (active) await active;
+    }
+  };
 
   return {
     logDirectory,
@@ -81,15 +124,12 @@ export function createManagerOperationalLog(options: {
         ...detail
       };
       const shard = `manager-operations-${recordedAt.toISOString().slice(0, 10)}.jsonl`;
-      try {
-        fs.mkdirSync(logDirectory, { recursive: true });
-        fs.appendFileSync(path.join(logDirectory, shard), `${JSON.stringify(record)}\n`, "utf8");
-        return record;
-      } catch (writeError) {
-        const message = writeError instanceof Error ? writeError.message : String(writeError);
-        process.stderr.write(`[RabiRoute Manager operations] failed to persist ${event}: ${message}\n`);
-        return null;
-      }
-    }
+      const lines = pending.get(shard) ?? [];
+      lines.push(`${JSON.stringify(record)}\n`);
+      pending.set(shard, lines);
+      scheduleFlush();
+      return record;
+    },
+    flush
   };
 }
