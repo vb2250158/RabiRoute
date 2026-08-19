@@ -4,12 +4,14 @@ export const SELECTION_SPEECH_MAX_LENGTH = 10_000;
 
 export type SelectionSpeechSettings = {
   enabled: boolean;
+  readAloudEnabled: boolean;
   advanced: boolean;
   model: string;
 };
 
 export const DEFAULT_SELECTION_SPEECH_SETTINGS: SelectionSpeechSettings = {
   enabled: false,
+  readAloudEnabled: true,
   advanced: false,
   model: ""
 };
@@ -20,6 +22,7 @@ export function normalizeSelectionSpeechSettings(value: unknown): SelectionSpeec
     : {};
   return {
     enabled: row.enabled === true,
+    readAloudEnabled: row.readAloudEnabled !== false,
     advanced: row.advanced === true,
     model: typeof row.model === "string" ? row.model.trim().slice(0, 200) : ""
   };

@@ -30,6 +30,7 @@ import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 import { normalizePathForComparison } from "./shared/pathPolicy.js";
+import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
 import {
   AgentRequestStore,
   type AgentCommunicationPreparation,
@@ -59,6 +60,7 @@ export type AgentThreadRequest = {
   model?: string;
   reasoningEffort?: CodexReasoningEffort;
   imagePaths?: string[];
+  deliverySource?: AgentThreadDeliverySource;
   sourceThreadId?: string;
   sourceAgentType?: AgentThreadSourceType;
   responsePolicy?: AgentResponsePolicy;
@@ -73,6 +75,12 @@ export type AgentThreadRequest = {
     planId?: string;
     planTitle?: string;
   };
+};
+
+export type AgentThreadDeliverySource = {
+  agentAdapter: AgentAdapterType;
+  sessionId: string;
+  sessionName?: string;
 };
 
 export type AgentThreadSourceType =
@@ -157,8 +165,10 @@ export function agentThreadRequestFailureData(
   request: Pick<AgentThreadRequest, "action"> = {}
 ): Record<string, unknown> {
   const message = error instanceof Error ? error.message : String(error);
-  const missingField = /^Missing ([^.]+)\.$/.exec(message)?.[1];
+  const missingField = /^Missing ((?:deliverySource\.)?(?:agentAdapter|sessionId|sessionName)|[^.]+)\.$/.exec(message)?.[1];
   const relatedField = missingField
+    || (/^Invalid deliverySource\.agentAdapter/.test(message) ? "deliverySource.agentAdapter" : undefined)
+    || (/deliverySource\.sessionId/.test(message) ? "deliverySource.sessionId" : undefined)
     || (message === "sourceAgentType requires sourceThreadId." ? "sourceThreadId" : undefined)
     || (/^responsePolicy /.test(message) ? "responsePolicy" : undefined)
     || (/^responseInstruction /.test(message) ? "responseInstruction" : undefined)
@@ -169,7 +179,7 @@ export function agentThreadRequestFailureData(
     || (/imagePaths|Image attachment|image attachment/.test(message) ? "imagePaths" : undefined)
     || (/^messageProcessing\.outcome /.test(message) ? "messageProcessing.outcome" : undefined)
     || (/verified message_processing source task/.test(message) ? "sourceAgentType" : undefined);
-  const sourceVerification = /来源任务|sourceAgentType requires sourceThreadId|verified .* source task/i.test(message);
+  const sourceVerification = /来源任务|deliverySource\.sessionId|sourceAgentType requires sourceThreadId|verified .* source task/i.test(message);
   const deliveryFailure = error instanceof AgentThreadDeliveryError;
   const validationFailure = Boolean(missingField)
     || Boolean(relatedField)
@@ -243,8 +253,24 @@ const workspaceDeliveryPolicyLines = [
   "PangHu 只使用正式 Main、Release 和 Art。PangHu 任务没有创建旁路工作副本的例外；禁止新建、复制、checkout、switch、稀疏检出或使用旁路目录进行调查、修改、测试、构建或冲突处理。"
 ];
 
-function standaloneWorkspacePolicyPrompt(rawPrompt: string): string {
+function deliverySourceLines(
+  source: AgentThreadDeliverySource,
+  extras: { sourceAgentLabel?: string; workspace?: string } = {}
+): string[] {
   return [
+    "[投递源]",
+    `Agent 端：${source.agentAdapter}`,
+    `来源会话：${source.sessionName || source.sessionId}`,
+    `来源会话 ID：${source.sessionId}`,
+    extras.sourceAgentLabel ? `来源 Agent：${extras.sourceAgentLabel}` : undefined,
+    extras.workspace ? `来源工作目录：${extras.workspace}` : undefined
+  ].filter((line): line is string => Boolean(line));
+}
+
+function standaloneWorkspacePolicyPrompt(rawPrompt: string, deliverySource: AgentThreadDeliverySource, sourceAgentLabel?: string): string {
+  return [
+    ...deliverySourceLines(deliverySource, { sourceAgentLabel }),
+    "",
     "[协作要求]",
     ...workspaceDeliveryPolicyLines,
     "",
@@ -279,6 +305,25 @@ function normalizeAgentThreadSourceType(value: unknown): AgentThreadSourceType {
   const normalized = optionalText(value, "sourceAgentType", 40) || "agent";
   if (normalized in agentThreadSourceLabels) return normalized as AgentThreadSourceType;
   throw new Error("Invalid sourceAgentType. Expected primary_persona, message_processing, plan_secretary, plan_agent, or agent.");
+}
+
+function normalizeAgentThreadDeliverySource(value: unknown): AgentThreadDeliverySource {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Missing deliverySource.");
+  }
+  const raw = value as Record<string, unknown>;
+  const rawAdapter = requiredText(raw.agentAdapter, "deliverySource.agentAdapter", 40);
+  const agentAdapter = parseAgentAdapterType(rawAdapter);
+  if (!agentAdapter) {
+    throw new Error("Invalid deliverySource.agentAdapter. Expected codex, copilotCli, marvis, astrbot, or dsh.");
+  }
+  const sessionId = requiredText(raw.sessionId, "deliverySource.sessionId", 200);
+  const sessionName = optionalText(raw.sessionName, "deliverySource.sessionName", 500) || undefined;
+  return {
+    agentAdapter,
+    sessionId,
+    ...(sessionName ? { sessionName } : {})
+  };
 }
 
 const forbiddenAgentHandoffRoleMarkers = [
@@ -348,7 +393,7 @@ function agentResponseContractLines(preparation: AgentCommunicationPreparation):
     lines.push(
       `必须回复的 requestId：${preparation.requestId}`,
       `需要回答：${preparation.responseInstruction}`,
-      `通过 POST /api/agent/threads 回复：action=send，threadId=${preparation.source.threadId}，cwd=${sourceWorkspace}，sourceThreadId=当前任务完整 ID，sourceAgentType=当前类型，inReplyToRequestId=${preparation.requestId}，result=结果，nextAction=下一步。`,
+      `通过 POST /api/agent/threads 回复：action=send，threadId=${preparation.source.threadId}，cwd=${sourceWorkspace}，deliverySource={agentAdapter=当前 Agent 端，sessionId=当前任务完整 ID，sessionName=当前任务名称}，sourceThreadId=当前任务完整 ID，sourceAgentType=当前类型，inReplyToRequestId=${preparation.requestId}，result=结果，nextAction=下一步。`,
       "继续往返时填写 responsePolicy=required 和 responseInstruction；结束往返时填写 responsePolicy=none。"
     );
   } else {
@@ -459,9 +504,11 @@ async function readAgentThread(
 async function resolveAgentThreadSendSource(
   request: AgentThreadRequest,
   options: AgentThreadRequestOptions,
-  driver: AgentThreadDriver
+  driver: AgentThreadDriver,
+  deliverySource: AgentThreadDeliverySource
 ): Promise<{
   promptPrefix: string;
+  deliverySource: AgentThreadDeliverySource;
   source: {
     agentType: AgentThreadSourceType;
     agentLabel: string;
@@ -479,7 +526,10 @@ async function resolveAgentThreadSendSource(
   }
 
   const sourceThreadId = normalizeThreadId(rawSourceThreadId);
-  const agentType = normalizeAgentThreadSourceType(request.sourceAgentType);
+  if (deliverySource.sessionId !== sourceThreadId) {
+    throw new Error("deliverySource.sessionId must match sourceThreadId for Agent-to-Agent delivery.");
+  }
+  const agentType = normalizeAgentThreadSourceType(requiredText(request.sourceAgentType, "sourceAgentType", 40));
   let sourceThread: AgentThreadSummary | null = null;
   try {
     sourceThread = (await readAgentThread(sourceThreadId, driver)).summary;
@@ -497,19 +547,20 @@ async function resolveAgentThreadSendSource(
     threadName: sourceThread.title,
     ...(sourceThread.cwd ? { workspace: sourceThread.cwd } : {})
   };
+  const resolvedDeliverySource: AgentThreadDeliverySource = {
+    ...deliverySource,
+    sessionId: sourceThreadId,
+    sessionName: sourceThread.title
+  };
   const promptPrefix = [
-    "[Agent 任务投递来源]",
-    `来源 Agent：${source.agentLabel}`,
-    `来源任务：${source.threadName}`,
-    `来源会话 ID：${source.threadId}`,
-    source.workspace ? `来源工作目录：${source.workspace}` : undefined,
+    ...deliverySourceLines(resolvedDeliverySource, { sourceAgentLabel: source.agentLabel, workspace: source.workspace }),
     "",
     "[协作要求]",
     ...proactiveCommunicationPolicyLines("internal"),
     ...workspaceDeliveryPolicyLines,
     ""
   ].filter((line): line is string => line !== undefined).join("\n");
-  return { promptPrefix, source };
+  return { promptPrefix, deliverySource: resolvedDeliverySource, source };
 }
 
 function missingThreadError(error: unknown): boolean {
@@ -525,7 +576,10 @@ async function createThread(
   onCreationStage?: (state: "thread_created" | "naming" | "initial_turn", threadId: string) => void
 ): Promise<CodexThreadCreateResult> {
   const title = normalizeCodexThreadTitle(requestedTitle);
-  const prompt = optionalText(request.prompt, "prompt", maxPromptLength);
+  const rawPrompt = optionalText(request.prompt, "prompt", maxPromptLength);
+  const prompt = rawPrompt
+    ? standaloneWorkspacePolicyPrompt(rawPrompt, normalizeAgentThreadDeliverySource(request.deliverySource))
+    : "";
   const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
   const sandbox = normalizeSandbox(request.sandbox);
   const createParams: Parameters<AgentThreadDriver["create"]>[0] = {
@@ -749,6 +803,10 @@ export async function handleAgentThreadRequest(
 
   if (action === "create") {
     const sandbox = normalizeSandbox(request.sandbox);
+    const initialPrompt = optionalText(request.prompt, "prompt", maxPromptLength);
+    const deliverySource = initialPrompt
+      ? normalizeAgentThreadDeliverySource(request.deliverySource)
+      : undefined;
     const title = normalizeCodexThreadTitle(requiredText(request.title, "title", maxTitleInputLength));
     const cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     let resolution: CodexSessionResolution<AgentThreadSummary>;
@@ -787,7 +845,8 @@ export async function handleAgentThreadRequest(
           resolution: error.reservation.state,
           message: error.message,
           reservation: error.reservation,
-          sandbox
+          sandbox,
+          ...(deliverySource ? { deliverySource } : {})
         }
       };
     }
@@ -800,7 +859,8 @@ export async function handleAgentThreadRequest(
           resolution: "ambiguous",
           message: `存在 ${resolution.candidates.length} 个同名 Codex Desktop 任务，请按最后会话时间选择。`,
           candidates: resolution.candidates,
-          sandbox
+          sandbox,
+          ...(deliverySource ? { deliverySource } : {})
         }
       };
     }
@@ -812,7 +872,8 @@ export async function handleAgentThreadRequest(
           resolution: "archived",
           message: `同名 Codex Desktop 任务已归档，请恢复或改名后再创建：${title}`,
           thread: resolution.thread,
-          sandbox
+          sandbox,
+          ...(deliverySource ? { deliverySource } : {})
         }
       };
     }
@@ -824,19 +885,32 @@ export async function handleAgentThreadRequest(
           resolution: "workspace-mismatch",
           message: `Codex Desktop task belongs to another workspace. Task: ${resolution.thread.cwd}; configured: ${cwd}`,
           thread: resolution.thread,
-          sandbox
+          sandbox,
+          ...(deliverySource ? { deliverySource } : {})
         }
       };
     }
     if (resolution.kind === "missing") {
       return {
         statusCode: 404,
-        data: { action, resolution: "missing", message: `没有找到或创建 Codex Desktop 任务：${title}`, sandbox }
+        data: {
+          action,
+          resolution: "missing",
+          message: `没有找到或创建 Codex Desktop 任务：${title}`,
+          sandbox,
+          ...(deliverySource ? { deliverySource } : {})
+        }
       };
     }
     return {
       statusCode: resolution.kind === "created" ? 201 : 200,
-      data: { action, resolution: resolution.kind, thread: resolution.thread, sandbox }
+      data: {
+        action,
+        resolution: resolution.kind,
+        thread: resolution.thread,
+        sandbox,
+        ...(deliverySource ? { deliverySource } : {})
+      }
     };
   }
 
@@ -852,7 +926,8 @@ export async function handleAgentThreadRequest(
   if (action === "send") {
     let threadId = normalizeThreadId(request.threadId);
     const rawPrompt = requiredText(request.prompt, "prompt", maxPromptLength);
-    const sendSource = await resolveAgentThreadSendSource(request, options, driver);
+    const deliverySource = normalizeAgentThreadDeliverySource(request.deliverySource);
+    const sendSource = await resolveAgentThreadSendSource(request, options, driver, deliverySource);
     let cwd = resolveAgentThreadWorkspaceForTest(request.cwd, options);
     const inReplyToRequestId = optionalText(request.inReplyToRequestId, "inReplyToRequestId", 100) || undefined;
     let redirectedReply = false;
@@ -989,7 +1064,7 @@ export async function handleAgentThreadRequest(
     }
     const prompt = sendSource && agentCommunication
       ? `${sendSource.promptPrefix}${agentResponseContractLines(agentCommunication).join("\n")}\n\n[投递内容]\n${rawPrompt}`
-      : standaloneWorkspacePolicyPrompt(rawPrompt);
+      : standaloneWorkspacePolicyPrompt(rawPrompt, deliverySource);
     let messageProcessingEvent: {
       requirementId: string;
       sourceThreadId: string;
@@ -1073,6 +1148,7 @@ export async function handleAgentThreadRequest(
         sandbox,
         model,
         reasoningEffort,
+        deliverySource: sendSource?.deliverySource ?? deliverySource,
         ...(sendSource ? { source: sendSource.source } : {}),
         ...(agentCommunication ? {
           communication: {

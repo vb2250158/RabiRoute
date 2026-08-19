@@ -140,6 +140,7 @@ import {
 import {
   DEFAULT_CODEX_HOOK_SETTINGS,
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
+  codexMessageProcessingAgentEnabled,
   definitionUsesNapcat as sharedDefinitionUsesNapcat,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   normalizeCodexHookSettings,
@@ -273,6 +274,11 @@ import {
   SelectionSpeechSettingsStore,
   selectionSpeechSettingsPath
 } from "./selectionSpeechSettings.js";
+import {
+  DesktopSettingsStore,
+  desktopSettingsPath
+} from "./desktopSettings.js";
+import type { DesktopSettings } from "../shared/desktopSettingsContract.js";
 import {
   SpeechRuntimeControl,
   SpeechRuntimeControlError
@@ -549,6 +555,34 @@ type GatewayRuntime = {
   } | null;
   log: string[];
 };
+
+type AgentDeliverySource = NonNullable<AgentThreadRequest["deliverySource"]>;
+
+function agentDeliverySourceForSession(
+  sessionIdInput: unknown,
+  sessionNameInput?: unknown,
+  agentAdapter: AgentAdapterType = "codex"
+): AgentDeliverySource {
+  const sessionId = String(sessionIdInput || "").trim();
+  if (!sessionId) throw new Error("Agent delivery source requires a source session id.");
+  const sessionName = String(sessionNameInput || "").trim();
+  return {
+    agentAdapter: isDshSessionId(sessionId) ? "dsh" : agentAdapter,
+    sessionId,
+    ...(sessionName ? { sessionName } : {})
+  };
+}
+
+function primaryAgentDeliverySource(definition: GatewayDefinition): AgentDeliverySource {
+  const agentAdapter = definition.primaryAgentAdapter
+    || normalizeAgentAdapters(definition.agentAdapters)[0]
+    || "codex";
+  const sessionId = agentAdapter === "dsh" ? definition.dshSessionId : definition.codexThreadId;
+  const sessionName = agentAdapter === "dsh"
+    ? definition.dshSessionName
+    : definition.codexThreadName || definition.routeName || definition.name;
+  return agentDeliverySourceForSession(sessionId, sessionName, agentAdapter);
+}
 
 type AgentRuntimeState = Record<string, unknown> & {
   agentAdapterType: AgentAdapterType;
@@ -904,6 +938,7 @@ const personaSyncLanServer = new PersonaSyncLanServer(personaSyncRouteContext(),
   onStatus: status => publishManagerEvent("persona_sync_lan_status", status)
 });
 const selectionSpeechSettings = new SelectionSpeechSettingsStore(selectionSpeechSettingsPath(rootDir));
+const desktopSettings = new DesktopSettingsStore(desktopSettingsPath(rootDir));
 const speechControl = new ManagerSpeechControl({
   serviceUrl: () => speechServiceUrl(),
   rolesRoot: () => rolesRoot,
@@ -3915,7 +3950,7 @@ function agentRequestReminderPrompt(request: AgentRequestRecord): string {
     `需要回答：${request.responseInstruction}`,
     "上一轮迭代结束时没有检测到通过 RabiRoute 接口提交的正式回复。普通 Codex 最终文字不算回复。",
     "请完成判断后调用 POST /api/agent/threads，并填写：",
-    `action=send、threadId=${request.source.threadId}、cwd=${sourceWorkspace}、sourceThreadId=当前任务完整 ID、sourceAgentType=当前 Agent 类型、inReplyToRequestId=${request.id}、result=结果或决定、nextAction=下一步、responsePolicy=required 或 none、prompt=重新编写的回复内容。`,
+    `action=send、threadId=${request.source.threadId}、cwd=${sourceWorkspace}、deliverySource={agentAdapter=当前 Agent 端，sessionId=当前任务完整 ID，sessionName=当前任务名称}、sourceThreadId=当前任务完整 ID、sourceAgentType=当前 Agent 类型、inReplyToRequestId=${request.id}、result=结果或决定、nextAction=下一步、responsePolicy=required 或 none、prompt=重新编写的回复内容。`,
     "如果下一步仍要求原请求方处理完再返回，填写 responsePolicy=required 和 responseInstruction；如果本次回复结束往返，填写 responsePolicy=none。"
   ].join("\n");
 }
@@ -3961,6 +3996,7 @@ async function deliverAgentRequestReminder(requestId: string): Promise<void> {
       threadId: target.threadId,
       ...(target.threadName ? { title: target.threadName, createIfMissing: true } : {}),
       cwd: target.workspace,
+      deliverySource: agentDeliverySourceForSession(request.source.threadId, request.source.threadName),
       prompt: agentRequestReminderPrompt(request)
     }, {
       allowedWorkspaces: agentThreadAllowedWorkspaces(),
@@ -4096,6 +4132,13 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "send_failed" });
     return;
   }
+  const runtime = runtimeForMessageProcessingRequirement(requirement);
+  if (!runtime) {
+    messageProcessingBoard.recordDispatchFailure(requirement.id, "当前 Route 没有可核对的主人格来源会话，未投递计划进展通知。");
+    publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "send_failed" });
+    return;
+  }
+  const deliverySource = primaryAgentDeliverySource(runtime.definition);
   const outcomeUrl = `http://127.0.0.1:${managerPort}/api/message-processing/requirements/${encodeURIComponent(requirement.id)}/outcome`;
   const sendContextUrl = `http://127.0.0.1:${managerPort}/api/message-processing/requirements/${encodeURIComponent(requirement.id)}/send-context`;
   const sendApiUrl = `http://127.0.0.1:${managerPort}/api/agent/send`;
@@ -4132,6 +4175,7 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
       createIfMissing: true,
       cwd: worker.workspace,
       sandbox: "workspace-write",
+      deliverySource,
       prompt
     }, {
       allowedWorkspaces: agentThreadAllowedWorkspaces(),
@@ -4143,7 +4187,7 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     const resolved = persistResolvedMessageProcessingTarget(
       target,
       result.data,
-      runtimeForMessageProcessingRequirement(requirement)
+      runtime
     );
     messageProcessingBoard.recordDispatch(requirement.id, resolved.worker);
     publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "processing" });
@@ -4178,7 +4222,8 @@ function currentMessageProcessingTarget(requirement: MessageProcessingRequiremen
       : undefined;
   }
   const maxAgents = runtime.definition.messageProcessingAgents?.codex?.maxAgents;
-  const managedWorker = runtime.definition.messageProcessingAgents?.codex?.enabled === true
+  const messageAgentModeEnabled = codexMessageProcessingAgentEnabled(runtime.definition);
+  const managedWorker = messageAgentModeEnabled
     ? resolveCurrentMessageAgentWorker(
       messageAgentPoolStatePath(dataDirFor(runtime.definition)),
       requirement.worker,
@@ -4309,7 +4354,7 @@ function currentMessageProcessingTargetByThreadId(threadId: string): MessageProc
   if (uniqueHistoricalTargets.length === 1) return uniqueHistoricalTargets[0];
   if (uniqueHistoricalTargets.length > 1) return undefined;
   const candidates = [...runtimes.values()].flatMap((runtime) => {
-    const modeEnabled = runtime.definition.messageProcessingAgents?.codex?.enabled === true;
+    const modeEnabled = codexMessageProcessingAgentEnabled(runtime.definition);
     const workers = readCurrentMessageAgentWorkers(
       messageAgentPoolStatePath(dataDirFor(runtime.definition)),
       modeEnabled ? runtime.definition.messageProcessingAgents?.codex?.maxAgents : undefined
@@ -4415,6 +4460,12 @@ async function sendKnowledgeCallbackReminder(requirementId: string): Promise<voi
     scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
     return;
   }
+  const runtime = runtimeForMessageProcessingRequirement(requirement);
+  if (!runtime) {
+    scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
+    return;
+  }
+  const deliverySource = primaryAgentDeliverySource(runtime.definition);
   const prompt = buildKnowledgeCallbackReminderPrompt(requirement, pending);
   try {
     const result = await handleAgentThreadRequest({
@@ -4424,7 +4475,8 @@ async function sendKnowledgeCallbackReminder(requirementId: string): Promise<voi
       createIfMissing: true,
       cwd: worker.workspace,
       prompt,
-      sandbox: "workspace-write"
+      sandbox: "workspace-write",
+      deliverySource
     }, {
       allowedWorkspaces: agentThreadAllowedWorkspaces(),
       defaultWorkspace: rootDir
@@ -4435,7 +4487,7 @@ async function sendKnowledgeCallbackReminder(requirementId: string): Promise<voi
     const resolved = persistResolvedMessageProcessingTarget(
       target,
       result.data,
-      runtimeForMessageProcessingRequirement(requirement)
+      runtime
     );
     messageProcessingBoard.recordWorkerReference(requirement.id, resolved.worker);
   } catch (error) {
@@ -4552,10 +4604,14 @@ async function handleMessageProcessingPlanUpdate(roleDir: string, plan: ReturnTy
 }
 
 async function sendPlanQaFeedbackToTask(request: PlanQaTaskRequest): Promise<void> {
+  if (!request.deliverySource) {
+    throw new Error("Plan QA feedback delivery requires an explicit Agent delivery source.");
+  }
   const result = await handleAgentThreadRequest({
     action: "send",
     threadId: request.threadId,
     cwd: request.cwd,
+    deliverySource: request.deliverySource,
     prompt: request.prompt,
     sandbox: "workspace-write"
   }, {
@@ -4601,6 +4657,7 @@ async function sendPlanFeedbackToSecretary(
     title: resolved.target.threadName,
     createIfMissing: true,
     cwd: resolved.target.workspace,
+    deliverySource: primaryAgentDeliverySource(runtime.definition),
     prompt: resolved.initializationPrompt
       ? `${resolved.initializationPrompt}\n\n${request.text}`
       : request.text,
@@ -4634,6 +4691,11 @@ async function sendPlanTaskCompletionToSecretary(
       : prompt,
     model: resolved.target.model,
     sandbox: "workspace-write",
+    deliverySource: agentDeliverySourceForSession(
+      delivery.sourceSessionId,
+      delivery.plan.taskBinding?.sessionTitle,
+      delivery.plan.taskBinding?.agentType || "codex"
+    ),
     sourceThreadId: delivery.sourceSessionId,
     sourceAgentType: "plan_agent",
     responsePolicy: "required",
@@ -5689,6 +5751,39 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
   return false;
 }
 
+function handleDesktopSettingsApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  if (requestUrl.pathname !== "/api/desktop/settings") return false;
+  if (request.method === "GET") {
+    jsonResponse(response, 200, { code: 0, data: desktopSettings.read() });
+    return true;
+  }
+  if (request.method === "PATCH" || request.method === "PUT") {
+    if (managerReadOnly) {
+      jsonResponse(response, 403, { code: -1, message: "Manager is read-only." });
+      return true;
+    }
+    void readJsonBody<Partial<DesktopSettings>>(request)
+      .then((body) => {
+        const current = desktopSettings.read();
+        const screenshot = body && typeof body.screenshot === "object" && !Array.isArray(body.screenshot)
+          ? body.screenshot
+          : {};
+        return desktopSettings.write({
+          ...current,
+          ...body,
+          screenshot: { ...current.screenshot, ...screenshot }
+        });
+      })
+      .then((data) => jsonResponse(response, 200, { code: 0, data }))
+      .catch((error) => jsonResponse(response, 400, {
+        code: -1,
+        message: error instanceof Error ? error.message : String(error)
+      }));
+    return true;
+  }
+  return false;
+}
+
 function roleDirForApi(roleId: string): string {
   const safeRoleId = sanitizeRoleId(roleId);
   if (!safeRoleId) {
@@ -6157,7 +6252,16 @@ function handleRoleKnowledgeApi(
             const qaResult = await consumePlanQaFeedback({
               roleDir,
               feedback: record,
-              sendToTask: sendPlanQaFeedbackToTask
+              sendToTask: (request) => {
+                const runtime = runtimeForRoleDelivery(
+                  roleId,
+                  String(record.gatewayId || body.gatewayId || "").trim()
+                );
+                return sendPlanQaFeedbackToTask({
+                  ...request,
+                  deliverySource: primaryAgentDeliverySource(runtime.definition)
+                });
+              }
             });
             if (qaResult.outcome !== "ignored") {
               const consumed = listPlanFeedback(roleDir, planId).find((item) => item.id === record.id) || record;
@@ -6967,6 +7071,7 @@ export function handleManagerPersonaDomainApi(
   if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
   if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
+  if (handleDesktopSettingsApi(request, requestUrl, response)) return true;
   if (handleSpeechApi(request, requestUrl, response)) return true;
   return handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir);
 }

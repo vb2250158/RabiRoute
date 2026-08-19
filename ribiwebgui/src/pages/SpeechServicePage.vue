@@ -11,10 +11,6 @@ import {
   type SpeechRecord,
   type SpeechRouteDeliveryHistory
 } from "@shared/speechControlContract";
-import {
-  resolveSelectionSpeechModel,
-  type SelectionSpeechSettings
-} from "@shared/selectionSpeechContract";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
 import SpeechHostMonitor from "../components/SpeechHostMonitor.vue";
@@ -60,11 +56,6 @@ const instructions = ref("");
 const speed = ref(1);
 const queuePlayback = ref(true);
 const ttsBusy = ref(false);
-const selectionSpeechEnabled = ref(false);
-const selectionSpeechAdvanced = ref(false);
-const selectionSpeechModel = ref("");
-const selectionSpeechSettingsLoaded = ref(false);
-const selectionSpeechSettingsSaving = ref(false);
 const asrBusy = ref(false);
 const actionMessage = ref("");
 const transcript = ref("");
@@ -105,8 +96,6 @@ let pendingPlaybackVolume: number | null = null;
 let microphoneSettingsTimer = 0;
 let microphoneSettingsPending = false;
 let applyingMicrophoneConfig = false;
-let selectionSpeechSettingsTimer = 0;
-let selectionSpeechSettingsVersion = 0;
 
 function clearRequestError(): void {
   requestError.value = "";
@@ -420,13 +409,6 @@ function syncModelSelections(): void {
       || ttsModels.value[0]?.id
       || "tts-local";
   }
-  if (selectionSpeechAdvanced.value && ttsModels.value.some(item => item.available)) {
-    selectionSpeechModel.value = resolveSelectionSpeechModel({
-      enabled: selectionSpeechEnabled.value,
-      advanced: true,
-      model: selectionSpeechModel.value
-    }, ttsModels.value);
-  }
   if (!asrModels.value.some(item => item.id === asrModel.value)) {
     asrModel.value = asrModels.value.find(item => item.available && item.id.endsWith("/paraformer-v2"))?.id
       || asrModels.value.find(item => item.available && item.id.includes("faster-whisper/small"))?.id
@@ -439,49 +421,6 @@ function syncModelSelections(): void {
 async function refreshModels(): Promise<void> {
   await speech.refreshModels();
   syncModelSelections();
-}
-
-function currentSelectionSpeechSettings(): SelectionSpeechSettings {
-  return {
-    enabled: selectionSpeechEnabled.value,
-    advanced: selectionSpeechAdvanced.value,
-    model: selectionSpeechModel.value
-  };
-}
-
-async function loadSelectionSpeechSettings(): Promise<void> {
-  try {
-    const settings = await speechControlClient.selectionReaderSettings();
-    selectionSpeechEnabled.value = settings.enabled;
-    selectionSpeechAdvanced.value = settings.advanced;
-    selectionSpeechModel.value = settings.model;
-    syncModelSelections();
-    selectionSpeechSettingsLoaded.value = true;
-  } catch (error) {
-    recordRequestError(error);
-  }
-}
-
-async function flushSelectionSpeechSettings(version: number): Promise<void> {
-  selectionSpeechSettingsTimer = 0;
-  selectionSpeechSettingsSaving.value = true;
-  try {
-    await speechControlClient.updateSelectionReaderSettings(currentSelectionSpeechSettings());
-  } catch (error) {
-    recordRequestError(error);
-  } finally {
-    if (version === selectionSpeechSettingsVersion) selectionSpeechSettingsSaving.value = false;
-  }
-}
-
-function scheduleSelectionSpeechSettingsSave(): void {
-  if (!selectionSpeechSettingsLoaded.value) return;
-  selectionSpeechSettingsVersion += 1;
-  const version = selectionSpeechSettingsVersion;
-  window.clearTimeout(selectionSpeechSettingsTimer);
-  selectionSpeechSettingsTimer = window.setTimeout(() => {
-    void flushSelectionSpeechSettings(version);
-  }, 120);
 }
 
 function syncPersonaSelection(): void {
@@ -807,7 +746,6 @@ watch(selectedPersona, persona => {
   instructions.value = persona.instructions || persona.voiceStyleSummary || "";
   speed.value = persona.speed ?? 1;
 });
-watch([selectionSpeechEnabled, selectionSpeechAdvanced, selectionSpeechModel], scheduleSelectionSpeechSettingsSave);
 watch(
   () => selectedAudioStreamClient.value?.sourceDeviceId || "",
   () => {
@@ -841,15 +779,11 @@ watch([
 let releaseSpeech: (() => void) | undefined;
 onMounted(async () => {
   releaseSpeech = await speech.acquire();
-  await Promise.all([syncRuntimeUiFromStore(), loadSelectionSpeechSettings()]);
+  await syncRuntimeUiFromStore();
 });
 onBeforeUnmount(() => {
   window.clearTimeout(playbackVolumeTimer);
   window.clearTimeout(microphoneSettingsTimer);
-  if (selectionSpeechSettingsTimer) {
-    window.clearTimeout(selectionSpeechSettingsTimer);
-    void flushSelectionSpeechSettings(selectionSpeechSettingsVersion);
-  }
   releaseSpeech?.();
 });
 </script>
@@ -1130,39 +1064,6 @@ onBeforeUnmount(() => {
             <p>不需要配置 Route 或接入 Agent；人格名会解析到 <code>data/roles/&lt;人格&gt;/voice</code>。</p>
           </div>
           <v-chip color="primary" variant="tonal">{{ ttsModels.filter(item => item.available).length }} 个可用模型</v-chip>
-        </div>
-        <div class="speech-selection-reader mb-4">
-          <div class="speech-action-row">
-            <v-switch
-              v-model="selectionSpeechEnabled"
-              color="primary"
-              label="划词朗读"
-              :loading="!selectionSpeechSettingsLoaded || selectionSpeechSettingsSaving"
-              :disabled="!selectionSpeechSettingsLoaded"
-              hide-details
-            />
-            <v-switch
-              v-model="selectionSpeechAdvanced"
-              color="primary"
-              label="高级选项"
-              :disabled="!selectionSpeechEnabled || !selectionSpeechSettingsLoaded"
-              hide-details
-            />
-          </div>
-          <div class="section-note mb-3">开启后，在 Windows 任意支持文本选区的软件中划选文字，旁边会显示“朗读”和“投递至当前人格”按钮。划选时不会自动朗读或投递；默认使用当前可用的默认 TTS 模型。</div>
-          <v-select
-            v-if="selectionSpeechEnabled && selectionSpeechAdvanced"
-            v-model="selectionSpeechModel"
-            label="划词朗读模型"
-            :items="ttsModels.filter(item => item.available)"
-            item-title="name"
-            item-value="id"
-            :disabled="ttsBusy || !selectionSpeechSettingsLoaded"
-          >
-            <template #item="{ props, item }">
-              <v-list-item v-bind="props" :subtitle="item.raw.id" />
-            </template>
-          </v-select>
         </div>
         <v-textarea v-model="ttsText" label="要说的话" rows="4" counter="10000" :disabled="ttsBusy" />
         <div class="speech-form-grid">

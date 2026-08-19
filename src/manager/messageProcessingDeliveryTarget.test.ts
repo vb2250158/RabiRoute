@@ -63,6 +63,30 @@ test("enabled message processing keeps follow-up work on the managed worker", ()
   });
 });
 
+test("a DSH primary never reuses a persisted Codex message-processing worker", () => {
+  assert.deepEqual(resolveMessageProcessingDeliveryTarget(gateway({
+    agentAdapters: ["codex", "dsh"],
+    primaryAgentAdapter: "dsh",
+    dshSessionId: "session-b9a5c9bf-8e96-4fad-9035-9c6d3d25b682",
+    dshSessionName: "DSH 主人格",
+    dshCwd: "C:/workspace",
+    messageProcessingAgents: {
+      codex: {
+        enabled: true,
+        model: "gpt-5.6-luna",
+        reasoningEffort: "medium"
+      }
+    }
+  }), messageWorker), {
+    agentType: "primary_persona",
+    worker: {
+      threadId: "session-b9a5c9bf-8e96-4fad-9035-9c6d3d25b682",
+      threadName: "DSH 主人格",
+      workspace: "C:/workspace"
+    }
+  });
+});
+
 test("disabled message processing does not silently select a non-Codex primary adapter", () => {
   assert.equal(resolveMessageProcessingDeliveryTarget(gateway({
     agentAdapters: ["codex", "copilotCli"],

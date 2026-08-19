@@ -23,6 +23,7 @@ const RoleKnowledgePage = immediatePage(() => import("./pages/RoleKnowledgePage.
 const RuntimeLogPage = immediatePage(() => import("./pages/RuntimeLogPage.vue"));
 const PerformancePage = immediatePage(() => import("./pages/PerformancePage.vue"));
 const SpeechServicePage = immediatePage(() => import("./pages/SpeechServicePage.vue"));
+const SettingsPage = immediatePage(() => import("./pages/SettingsPage.vue"));
 
 export const router = createRouter({
   history: createWebHashHistory(),
@@ -44,6 +45,7 @@ export const router = createRouter({
     { path: "/knowledge", component: RoleKnowledgePage, meta: { title: "计划与记忆" } },
     { path: "/docs", component: ProjectDocsPage, meta: { title: "使用手册" } },
     { path: "/performance", component: PerformancePage, meta: { title: "性能监控" } },
-    { path: "/runtime", component: RuntimeLogPage, meta: { title: "日志诊断" } }
+    { path: "/runtime", component: RuntimeLogPage, meta: { title: "日志诊断" } },
+    { path: "/settings", component: SettingsPage, meta: { title: "设置" } }
   ]
 });

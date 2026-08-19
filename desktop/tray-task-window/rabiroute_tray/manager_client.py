@@ -46,6 +46,14 @@ class SelectionSpeechSettings:
     enabled: bool = False
     advanced: bool = False
     model: str = ""
+    read_aloud_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class DesktopSettings:
+    screenshot_enabled: bool = False
+    screenshot_shortcut: str = "Ctrl+Shift+S"
+    autostart: bool = False
 
 
 @dataclass(frozen=True)
@@ -201,6 +209,18 @@ class ManagerClient:
             enabled=row.get("enabled") is True,
             advanced=row.get("advanced") is True,
             model=str(row.get("model") or "").strip()[:200],
+            read_aloud_enabled=row.get("readAloudEnabled", True) is True,
+        )
+
+    def desktop_settings(self) -> DesktopSettings:
+        payload = self._get_json("/api/desktop/settings")
+        data = payload.get("data")
+        row = data if isinstance(data, dict) else {}
+        screenshot = row.get("screenshot") if isinstance(row.get("screenshot"), dict) else {}
+        return DesktopSettings(
+            screenshot_enabled=screenshot.get("enabled") is True,
+            screenshot_shortcut=str(screenshot.get("shortcut") or "Ctrl+Shift+S").strip()[:80],
+            autostart=row.get("autostart") is True,
         )
 
     def speech_models(self) -> list[dict[str, Any]]:

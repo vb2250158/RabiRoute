@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   agentAdapterSupportsManagedTaskFeature,
   autoAssignGatewayPorts,
+  codexMessageProcessingAgentEnabled,
   collectGatewayPortClaims,
   DEFAULT_RECENT_MESSAGE_LIMIT,
   defaultMessageAdapterNotificationRules,
@@ -130,6 +131,22 @@ test("managed task capabilities keep Codex-only settings off unsupported Agent a
   assert.deepEqual(normalized.messageProcessingAgents, {
     codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium", maxAgents: 32 }
   });
+});
+
+test("Codex message processing requires Codex to be the selected primary Agent", () => {
+  const messageProcessingAgents: GatewayDefinition["messageProcessingAgents"] = {
+    codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" }
+  };
+  assert.equal(codexMessageProcessingAgentEnabled({
+    agentAdapters: ["codex", "dsh"],
+    primaryAgentAdapter: "dsh",
+    messageProcessingAgents
+  }), false);
+  assert.equal(codexMessageProcessingAgentEnabled({
+    agentAdapters: ["codex", "dsh"],
+    primaryAgentAdapter: "codex",
+    messageProcessingAgents
+  }), true);
 });
 
 test("NapCat auto login on Rabi start defaults on and preserves an explicit off switch", () => {

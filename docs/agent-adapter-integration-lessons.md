@@ -6,7 +6,7 @@
 
 # Agent 端接入：历史问题、正确边界与验证手册
 
-这份文档总结 RabiRoute 接入 Codex、Copilot CLI、Marvis、AstrBot 和远程 Agent 时出现过的典型问题，并给出统一设计规则。重点不是某个端口或某段脚本，而是把 **Agent 所有权、会话身份、工具能力和 RabiRoute 路由职责** 分开。
+这份文档总结 RabiRoute 接入 Codex、Copilot CLI、Marvis、AstrBot、DSH 和远程 Agent 时出现过的典型问题，并给出统一设计规则。重点不是某个端口或某段脚本，而是把 **Agent 所有权、会话身份、工具能力和 RabiRoute 路由职责** 分开。
 
 ## 先给结论
 

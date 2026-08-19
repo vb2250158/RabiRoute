@@ -102,7 +102,7 @@ flowchart TB
 | 路由 | Route profile、人格规则、直接 @、回复链、私聊、关键词、正则、定时规则和每 Route 独立模板。 |
 | 上下文 | 人格级双向会话账本、最近消息额度、计划/记忆/技能引用、回复上下文和安全附件元数据。 |
 | 已验证处理端 | 通过选定 Codex/ChatGPT Desktop 任务 owner 投递的 Codex。 |
-| 控制面 | Node.js Manager 与 RibiWebGUI，负责 Route、适配器、人格、状态、日志、诊断和进程生命周期。 |
+| 控制面 | Node.js Manager 与 RibiWebGUI，负责 Route、适配器、人格、语音、性能、日志、设置、诊断和进程生命周期。 |
 | 安全与证据 | Route 自己的 Outbox policy，以及事件、数据包、投递、回复、Heartbeat 和 replay 的 JSONL 记录。 |
 | 实验集成 | Remote Agent、RabiSpeech、RabiLink、小爱、Webhook、WeCom、飞书、个人微信、穿戴设备、Copilot CLI 和 AstrBot。 |
 

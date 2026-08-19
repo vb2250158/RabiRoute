@@ -18,7 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const DEFAULT_DSH_BASE_URL = "http://127.0.0.1:3080";
-export const DEFAULT_DSH_SESSION_NAME = "星海建造师（DSH 主人格）";
+export const DEFAULT_DSH_SESSION_NAME = "DSH CottonGame Luna Max";
 export const DSH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
 const dshSessionIdPattern = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -264,14 +264,15 @@ function buildImagePathDegradedPrompt(prompt: string, imagePaths: string[]): str
  * Deliver a plain message to the route's bound DSH primary session. Used by
  * the agent-adapter fallback path (`createAgentAdapter("dsh").deliver`).
  */
-export async function notifyDshSession(message: string): Promise<{ sessionId: string }> {
+export async function notifyDshSession(message: string, imagePaths: string[] = []): Promise<{ sessionId: string }> {
   const binding = readDshPrimaryBinding();
   if (!binding) throw new Error("XinghaiBuilder route has no DSH primary binding.");
   await sendDshSessionMessage({
     sessionId: binding.sessionId,
     prompt: message,
     cwd: binding.cwd,
-    baseUrl: binding.baseUrl
+    baseUrl: binding.baseUrl,
+    imagePaths
   });
   return { sessionId: binding.sessionId };
 }

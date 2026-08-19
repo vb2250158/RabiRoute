@@ -22,8 +22,19 @@
 /recordings/
 /transcripts/
 /voice-cache/
+/.rabiroute-message-images/
 /.codex-logs/
 /gateways.json
+
+# Temporary scratch from interactive/automation sessions (not project artifacts).
+/Temp/
+/@AutomationLog.txt
+/tmp-finish-*.json
+/tmp-freeze-*.json
+/tmp-rejudge-*.mjs
+/tmp_rank_image_path.txt
+/tmp-finish-*.package.json
+.tmp-clarify-*.json
 /docs/rokid-rabilink-plugin.*.openapi.json
 /RabiRoute-Tray.exe
 /RabiRoute-Tray.new.exe

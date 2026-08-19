@@ -30,7 +30,9 @@ Qt 面板本身尽量保持跨平台。Windows 启动器与打包边界以 [`doc
 - Manager 判定当前计划/步骤需要审批时，展开卡片展示 Manager 返回的审批合同和缺项。`incomplete/enabled=false` 时显示“审批资料不完整/禁止审批”并禁用输入与提交；只有 `ready/enabled=true` 才允许提交。提交只等待 Manager 落盘，默认 5 秒请求边界；返回 `pending` 后立即结束 loading，Agent 通知在后台继续。意见关联 `planId` 与 `stepId`，记录失败时可用同一 `feedbackId` 重试。该入口不直接推进步骤或改变计划状态。
 - 读取角色面板聊天记录，并向当前 Route 发送文字或文件附件；聊天视图按日期分组，每条气泡内显示发送者和时间，文件附件使用紧凑文件行，避免时间戳和嵌套卡片打断对话阅读。输入框会随内容在有限高度内增长，`Enter` 发送，`Shift+Enter` 换行。投递在后台线程等待 Manager 和 Agent adapter 确认，期间窗口仍可切换和查看其它内容；失败时保留输入草稿。
 - 角色面板把输入标记为“本地用户”，不会让 Agent 误以为角色在对自己说话；只有 Route 匹配且 Agent adapter 确认 `delivered` 后才显示发送成功，禁用 Route、规则未命中或没有处理端都会明确报失败。
-- 语音服务 TTS 页开启“划词朗读”后，Windows 任意支持 UI Automation 文本选区的软件都可使用系统悬浮条。拖动划选后左侧“朗读”进入 RabiSpeech 主机 FIFO，右侧“投递至当前人格”复用角色面板消息投给托盘当前选中的 Route；划选本身不执行动作。密码控件和无法读取的选区直接忽略，不模拟 `Ctrl+C`，不改变剪贴板。
+- WebGUI“设置”页打开“开启滑词菜单”后，Windows 任意支持 UI Automation 文本选区的软件都可使用系统悬浮条。把光标移到“投递至”，会显示当前已启用且运行中的人格列表，点击其中一项后复用角色面板消息投递到对应 Route。划选本身不执行动作。密码控件和无法读取的选区直接忽略，不模拟 `Ctrl+C`，不改变剪贴板。“滑词朗读”是滑词菜单的子功能：开启时左侧显示“朗读”，点击后进入 RabiSpeech 主机 FIFO；关闭后悬浮条只保留“投递至”。只有同时开启“滑词朗读”和“高级选项”，才可选择 TTS 模型。
+- 在 WebGUI“设置”中启用系统截图并配置快捷键后，任意软件都可以使用该系统级快捷键截图。截图会打开预览、文字输入和已激活人格选择；点击“发送”后，图片和文字通过同一个角色面板入口投递，Codex/DSH 会把图片作为真实图片输入接收。截图保存在项目私有 `.rabiroute-message-images/`，不会写入公开示例。
+- “设置 → Windows 登录启动”会同步当前用户的 Startup 快捷方式；关闭后移除该快捷方式。快捷键、截图开关和登录启动配置修改后由托盘监听文件变化，不需要重启托盘。
 - 计划主体和记忆保持只读；进行中/未归档/已归档计划均可展示，只有 Manager 声明的审批步骤允许追加审批意见。
 - 从更多菜单打开人格、计划、记忆、项目和运行状态目录。
 - 触发人格规则中声明的 `manual_trigger` 或 `heartbeat` 手动动作。
@@ -118,7 +120,8 @@ Manager 暂时离线时，面板保留托盘图标、显示离线状态并继续
 - `DesktopRefreshService`：无 Qt 依赖的 API 快照编排，只产出只读 DTO，不读取本地角色文件。
 - `desktop_models` / `desktop_read_model`：Manager DTO 到托盘表现模型的转换与可重建缓存。
 - `qt_async`：通用 Qt 线程池桥，只负责后台 callable 和主线程结果通知，不包含 Manager 或角色业务逻辑。
-- `system_selection`：Windows 全局拖选检测、UI Automation 选区读取、无焦点双按钮和系统划词动作编排；只经 Manager 调用 TTS 与角色面板消息接口。
+- `system_selection`：Windows 全局拖选检测、UI Automation 选区读取、无焦点悬浮条、激活人格悬停菜单和滑词动作编排；`readAloudEnabled` 为 false 时隐藏“朗读”；只经 Manager 调用 TTS 与角色面板消息接口。
+- `system_screenshot`：Windows 全局截图快捷键、跨显示器截图拼接、预览输入窗口和角色面板图片附件发送；持久化配置由 Manager 的 `/api/desktop/settings` 管理。
 - `LifecycleController`：只处理用户明确退出；Manager 在线状态属于展示快照，不决定托盘生死。
 - `TaskWindow`：Route 导航、六个视图、聊天输入和渲染。
 - `DesktopAdapter`：通过 Qt 打开 URL、文件和目录。

@@ -8,11 +8,15 @@ import { translateText } from "../src/i18n/index";
 
 test("translates exact interface copy and preserves surrounding whitespace", () => {
   assert.equal(translateText("人格配置", "en"), "Persona configuration");
+  assert.equal(translateText("设置", "en"), "Settings");
   assert.equal(translateText("人格文件变化", "en"), "Persona file changes");
   assert.equal(translateText("拉取并同步", "en"), "Pull and synchronize");
   assert.equal(translateText("语音服务", "en"), "Speech service");
   assert.equal(translateText("划词朗读", "en"), "Read selected text aloud");
+  assert.equal(translateText("开启滑词菜单", "en"), "Enable selected-text menu");
+  assert.equal(translateText("滑词朗读", "en"), "Selected-text reading");
   assert.equal(translateText("划词朗读模型", "en"), "Selected-text voice model");
+  assert.equal(translateText("滑词朗读模型", "en"), "Selected-text voice model");
   assert.equal(translateText("朗读", "en"), "Read aloud");
   assert.equal(translateText("投递至", "en"), "Send to");
   assert.equal(translateText("当前 Route 已订阅主机 ASR", "en"), "Current Route is subscribed to host ASR");

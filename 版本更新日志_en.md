@@ -8,16 +8,21 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased - 2026-08-12
 
+### Agent deliveries must name their source
+
+- Every Agent `create` / `send` with a body must start with `[投递源]` and include `deliverySource.agentAdapter` plus `deliverySource.sessionId`.
+- The body shows the Agent endpoint (`codex`, `dsh`, `copilotCli`, and others) and the source session. Agent-to-Agent delivery also shows the source Agent and workspace, and `deliverySource.sessionId` must equal `sourceThreadId`.
+
 ### Archived Agent tasks are replaced automatically
 
 - When the bound Primary Persona, Message Agent, or plan secretary task is archived, the next real delivery creates a new Desktop task, persists the replacement binding, and delivers to the new task. RabiRoute does not deliver into archived history or reuse another same-name task.
 - Message Agents keep their slot number, affinity history, and message associations while resetting initialization for the new task. Plan secretaries update both the Route `codexPlanAssistantSessions` entry and the plan `secretaryBinding`.
 - Scans, status refreshes, and input blur remain read-only and never create tasks. Real prompts still use only `RabiRoute -> Desktop IPC -> target task owner`; no fallback Runtime is introduced.
 
-### Windows supports system-wide selected-text actions
+### Windows supports a system-wide selected-text menu and screenshots
 
-- After Speech Service is enabled, the TTS page can turn on **Read selected text aloud**. Drag-selecting text in any Windows app that exposes text selection shows two system-level actions: the left action reads it aloud, and the right action sends it to the persona Route currently selected in the tray.
-- Selection alone never reads or sends text. The feature follows the current available default TTS model, while **Advanced options** reveals a fixed model selector. Manager persists one host setting shared by the tray and WebGUI.
+- The WebGUI **Settings** page can enable **Enable selected-text menu**. Drag-selecting text in any Windows app that exposes text selection shows system floating buttons. Hovering over **Send to** lists every enabled and running persona, and clicking one sends the text to that Route. **Selected-text reading** is a sub-feature: when it is on, the left button reads the text after a click; when it is off, the bar keeps only **Send to**. The TTS model selector appears only when both **Selected-text reading** and **Advanced options** are on. Selection alone never reads or sends text.
+- The same page can enable **System screenshot** and configure a global shortcut. Pressing it in any application opens a screenshot preview where the user can enter text, choose an active persona, and click **Send**. The image and text reuse role-panel delivery, and Codex/DSH receive real image input. Screenshots stay in the private `.rabiroute-message-images/` directory; the tray watches configuration changes, so restarting the tray is not required.
 
 ### WebGUI page labels switch immediately
 

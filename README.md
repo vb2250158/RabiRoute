@@ -102,7 +102,7 @@ Each Route separates ingress, policy, portable context, handler delivery, and ou
 | Routing | Route profiles, persona rules, direct mentions, reply chains, private messages, keywords, regexes, schedules, and per-Route templates. |
 | Context | Persona-scoped bidirectional ledgers, bounded recent-message injection, plan/memory/skill references, reply context, and safe attachment metadata. |
 | Verified handler | Codex through the selected Codex/ChatGPT Desktop task owner. |
-| Control plane | Node.js Manager and RibiWebGUI for Routes, adapters, personas, runtime status, logs, diagnostics, and process lifecycle. |
+| Control plane | Node.js Manager and RibiWebGUI for Routes, adapters, personas, speech, performance, logs, settings, diagnostics, and process lifecycle. |
 | Safety and evidence | Route-owned Outbox policy plus JSONL records for events, packets, deliveries, replies, heartbeats, and replay evidence. |
 | Experimental integrations | Remote Agent, RabiSpeech, RabiLink, XiaoAI, Webhook, WeCom, Feishu, personal Weixin, wearables, Copilot CLI, and AstrBot. |
 

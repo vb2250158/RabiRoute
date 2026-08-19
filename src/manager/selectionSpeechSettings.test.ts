@@ -9,13 +9,20 @@ test("selection speech settings are host-scoped and fail closed by default", () 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-selection-speech-"));
   const store = new SelectionSpeechSettingsStore(selectionSpeechSettingsPath(root));
 
-  assert.deepEqual(store.read(), { enabled: false, advanced: false, model: "" });
+  assert.deepEqual(store.read(), { enabled: false, readAloudEnabled: true, advanced: false, model: "" });
   assert.deepEqual(store.write({ enabled: true, advanced: true, model: " local/gpt-sovits " }), {
     enabled: true,
+    readAloudEnabled: true,
     advanced: true,
     model: "local/gpt-sovits"
   });
-  assert.deepEqual(store.read(), { enabled: true, advanced: true, model: "local/gpt-sovits" });
+  assert.deepEqual(store.read(), { enabled: true, readAloudEnabled: true, advanced: true, model: "local/gpt-sovits" });
+  assert.deepEqual(store.write({ enabled: true, readAloudEnabled: false, advanced: true, model: "local/gpt-sovits" }), {
+    enabled: true,
+    readAloudEnabled: false,
+    advanced: true,
+    model: "local/gpt-sovits"
+  });
 });
 
 test("selection speech settings ignore malformed persisted data", () => {
@@ -26,6 +33,7 @@ test("selection speech settings ignore malformed persisted data", () => {
 
   assert.deepEqual(new SelectionSpeechSettingsStore(filePath).read(), {
     enabled: false,
+    readAloudEnabled: true,
     advanced: false,
     model: ""
   });

@@ -10,11 +10,13 @@ import {
   type PlanItem,
   type PlanStep
 } from "../roleKnowledge.js";
+import type { AgentThreadRequest } from "../agentThreads.js";
 
 export type PlanQaTaskRequest = {
   threadId: string;
   cwd: string;
   prompt: string;
+  deliverySource?: NonNullable<AgentThreadRequest["deliverySource"]>;
 };
 
 export type ConsumePlanQaFeedbackOptions = {

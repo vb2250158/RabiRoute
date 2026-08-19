@@ -134,6 +134,11 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
   assert.equal(resolveCall?.lookupMode, "state_db");
   assert.equal(sendCall?.model, "gpt-5.6-luna");
   assert.equal(sendCall?.reasoningEffort, "medium");
+  assert.deepEqual(sendCall?.deliverySource, {
+    agentAdapter: "codex",
+    sessionId: "019f0000-0000-7000-8000-999999999999",
+    sessionName: "星海主任务"
+  });
   assert.deepEqual(sendCall?.imagePaths, [imagePath]);
   assert.match(String(sendCall?.prompt), /你是消息处理 Agent/);
   assert.match(String(sendCall?.prompt), /\[消息组 g1\]/);

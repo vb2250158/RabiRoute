@@ -1,299 +1,21 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
-import { managerEventSource } from "../managerApi";
-import {
-  routeScopedAdaptersPath,
-  routeScopedKnowledgeUrl,
-  routeScopedOverviewPath,
-  routeScopedOverviewUrl
-} from "../routeScopedNavigation";
+import { routeScopedAdaptersPath, routeScopedOverviewPath } from "../routeScopedNavigation";
 import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
-import { redirectCurrentWebguiToLan } from "../webguiLanRedirect";
-import { copyTextToClipboard } from "../clipboard";
 
 const store = useGatewayStore();
 const router = useRouter();
-
-const routeDir = ref("");
-const rolesDir = ref("");
-const dirSaving = ref(false);
-const dirSaved = ref(false);
-const dirError = ref("");
-const rabiName = ref("");
-const rabiSaving = ref(false);
-const rabiSaved = ref(false);
-const rabiError = ref("");
-const rabiLinkRelayEnabled = ref(false);
-const rabiLinkRelayUrl = ref("");
-const rabiLinkRelayAppToken = ref("");
-const rabiLinkRelayTokenConfigured = ref(false);
-const rabiLinkRelayDeviceId = ref("");
-const rabiLinkRelayClaimWaitMs = ref(60000);
-const rabiLinkRelayReplyIdleTimeoutMs = ref(60000);
-const rabiLinkSpeechProxyEnabled = ref(false);
-const rabiLinkSpeechServiceUrl = ref("http://127.0.0.1:8781");
 const gatewayActionId = ref("");
 const gatewayActionError = ref("");
 const deletingGatewayId = ref("");
-type WebguiLanUrl = { name?: string; address: string; cidr?: string; url: string };
-type WebguiLanAccess = {
-  enabled: boolean;
-  tokenConfigured: boolean;
-  token: string;
-  canManage: boolean;
-  managerHost: string;
-  managerPort: number;
-  listeningOnLan: boolean;
-  restartRequired: boolean;
-  hostManagedByEnvironment: boolean;
-  urls: WebguiLanUrl[];
-};
-const webguiLanAccess = ref<WebguiLanAccess>({
-  enabled: false,
-  tokenConfigured: false,
-  token: "",
-  canManage: true,
-  managerHost: "127.0.0.1",
-  managerPort: 8790,
-  listeningOnLan: false,
-  restartRequired: false,
-  hostManagedByEnvironment: false,
-  urls: []
-});
-const webguiLanSaving = ref(false);
-const webguiLanError = ref("");
-const webguiLanNotice = ref("");
 
 function avatarUrlForGateway(gatewayId: string, roleId?: string): string {
   const options = store.runtimeFor(gatewayId).roleInfo?.options || [];
   return options.find(option => option.value === roleId)?.avatarUrl || "";
 }
-
-async function loadDirConfig() {
-  try {
-    const res = await fetch("/manager-config");
-    const data = await res.json();
-    routeDir.value = data.routeDir ?? "";
-    rolesDir.value = data.rolesDir ?? "";
-  } catch { /* ignore */ }
-  rabiName.value = store.meta.rabiName || store.meta.computerName || "";
-  loadRabiLinkRelayForm();
-  await loadWebguiLanAccess();
-}
-
-async function loadWebguiLanAccess(): Promise<void> {
-  try {
-    const response = await fetch("/api/webgui-access");
-    const body = await response.json();
-    if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || "读取局域网 WebGUI 配置失败");
-    webguiLanAccess.value = body.data as WebguiLanAccess;
-    webguiLanError.value = "";
-  } catch (error) {
-    webguiLanError.value = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function updateWebguiLanAccess(patch: { enabled?: boolean; regenerateToken?: boolean }): Promise<boolean> {
-  if (webguiLanSaving.value || !webguiLanAccess.value.canManage) return false;
-  webguiLanSaving.value = true;
-  webguiLanError.value = "";
-  webguiLanNotice.value = "";
-  try {
-    const response = await fetch("/api/webgui-access", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(patch)
-    });
-    const body = await response.json();
-    if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || "保存局域网 WebGUI 配置失败");
-    webguiLanAccess.value = body.data as WebguiLanAccess;
-    if (redirectCurrentWebguiToLan(webguiLanAccess.value)) return true;
-    webguiLanNotice.value = webguiLanAccess.value.restartRequired
-      ? "配置已保存；重启 Manager 后监听范围才会改变。"
-      : "局域网 WebGUI 配置已更新。";
-    return true;
-  } catch (error) {
-    webguiLanError.value = error instanceof Error ? error.message : String(error);
-    return false;
-  } finally {
-    webguiLanSaving.value = false;
-  }
-}
-
-async function toggleWebguiLanAccess(enabled: boolean | null): Promise<void> {
-  if (typeof enabled !== "boolean") return;
-  await updateWebguiLanAccess({ enabled });
-}
-
-async function regenerateWebguiLanToken(): Promise<void> {
-  if (webguiLanAccess.value.tokenConfigured && !window.confirm("轮换访问密钥会立即使旧链接失效。确定继续吗？")) return;
-  await updateWebguiLanAccess({ regenerateToken: true });
-}
-
-const primaryWebguiLanUrl = computed(() => webguiLanAccess.value.urls[0]?.url || "");
-const selectedRouteOverviewLanUrl = computed(() => {
-  const gateway = store.selectedGateway;
-  return gateway
-    ? routeScopedOverviewUrl(primaryWebguiLanUrl.value, configNameFor(gateway))
-    : primaryWebguiLanUrl.value;
-});
-const selectedRouteKnowledgeLanUrl = computed(() => {
-  const gateway = store.selectedGateway;
-  return gateway
-    ? routeScopedKnowledgeUrl(primaryWebguiLanUrl.value, configNameFor(gateway))
-    : "";
-});
-const webguiLanStatusText = computed(() => {
-  const access = webguiLanAccess.value;
-  if (access.hostManagedByEnvironment) return `监听地址由 GATEWAY_MANAGER_HOST=${access.managerHost} 管理。`;
-  if (access.restartRequired) return access.enabled
-    ? "已允许局域网访问；重启 Manager 后开始监听局域网。"
-    : "已关闭局域网访问；重启 Manager 后恢复为仅本机监听。";
-  if (access.listeningOnLan) return "Manager 正在监听局域网；非本机请求必须携带访问密钥。";
-  return "Manager 当前只监听本机回环地址，局域网设备无法连接。";
-});
-
-async function copyWebguiLanText(value: string, successMessage: string): Promise<void> {
-  if (!value) {
-    webguiLanError.value = "当前没有可复制的局域网地址。";
-    return;
-  }
-  try {
-    await copyTextToClipboard(value);
-    webguiLanNotice.value = successMessage;
-    webguiLanError.value = "";
-  } catch (error) {
-    webguiLanError.value = `复制失败：${error instanceof Error ? error.message : String(error)}`;
-  }
-}
-
-function loadRabiLinkRelayForm(): void {
-  const relay = store.meta.rabiLinkRelay || {};
-  rabiLinkRelayEnabled.value = relay.enabled === true;
-  rabiLinkRelayUrl.value = relay.url || "";
-  rabiLinkRelayAppToken.value = relay.token || "";
-  rabiLinkRelayTokenConfigured.value = relay.tokenConfigured === true || Boolean(relay.token);
-  rabiLinkRelayDeviceId.value = relay.deviceId || store.meta.computerName || "";
-  rabiLinkRelayClaimWaitMs.value = Number(relay.claimWaitMs || 60000);
-  rabiLinkRelayReplyIdleTimeoutMs.value = Number(relay.replyIdleTimeoutMs || 60000);
-  rabiLinkSpeechProxyEnabled.value = relay.speechProxyEnabled === true;
-  rabiLinkSpeechServiceUrl.value = relay.speechServiceUrl || "http://127.0.0.1:8781";
-}
-
-async function saveDirConfig() {
-  dirSaving.value = true;
-  dirSaved.value = false;
-  dirError.value = "";
-  try {
-    const res = await fetch("/manager-config", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ routeDir: routeDir.value || undefined, rolesDir: rolesDir.value || undefined })
-    });
-    const data = await res.json();
-    if (data.code !== 0) throw new Error(data.message || "保存失败");
-    routeDir.value = data.routeDir ?? "";
-    rolesDir.value = data.rolesDir ?? "";
-    dirSaved.value = true;
-  } catch (e) {
-    dirError.value = String(e);
-  } finally {
-    dirSaving.value = false;
-  }
-}
-
-async function saveRabiIdentity(): Promise<boolean> {
-  rabiSaving.value = true;
-  rabiSaved.value = false;
-  rabiError.value = "";
-  try {
-    const relayPatch: Record<string, unknown> = {
-      enabled: rabiLinkRelayEnabled.value,
-      url: rabiLinkRelayUrl.value,
-      deviceId: rabiLinkRelayDeviceId.value,
-      claimWaitMs: Number(rabiLinkRelayClaimWaitMs.value || 60000),
-      replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000),
-      speechProxyEnabled: rabiLinkSpeechProxyEnabled.value,
-      speechServiceUrl: rabiLinkSpeechServiceUrl.value
-    };
-    if (rabiLinkRelayAppToken.value.trim()) relayPatch.token = rabiLinkRelayAppToken.value.trim();
-    const res = await fetch("/api/rabi/identity", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        rabiName: rabiName.value,
-        rabiLinkRelay: relayPatch
-      })
-    });
-    const data = await res.json();
-    if (data.code !== 0) throw new Error(data.message || "保存失败");
-    await store.load({ replaceDirtyConfig: true });
-    rabiName.value = store.meta.rabiName || "";
-    loadRabiLinkRelayForm();
-    rabiSaved.value = true;
-    return true;
-  } catch (e) {
-    rabiError.value = e instanceof Error ? e.message : String(e);
-    return false;
-  } finally {
-    rabiSaving.value = false;
-  }
-}
-
-async function toggleRabiLinkRelay(enabled: boolean | null): Promise<void> {
-  if (typeof enabled !== "boolean" || rabiSaving.value) return;
-  const previous = rabiLinkRelayEnabled.value;
-  rabiLinkRelayEnabled.value = enabled;
-  if (!await saveRabiIdentity()) {
-    rabiLinkRelayEnabled.value = previous;
-  }
-}
-
-const relayRuntimeState = computed(() => store.meta.rabiLinkRelayRuntime?.state || "disabled");
-const relayRuntimeMessage = computed(() => store.meta.rabiLinkRelayRuntime?.message || "RabiLink Relay 全局连接已关闭。");
-const relayRuntimeLabel = computed(() => ({
-  disabled: "已关闭",
-  incomplete: "配置不完整",
-  connecting: "连接中",
-  online: "已连接",
-  error: "连接失败"
-}[relayRuntimeState.value] || "未知"));
-const relayRuntimeColor = computed(() => ({
-  disabled: "grey",
-  incomplete: "warning",
-  connecting: "info",
-  online: "success",
-  error: "error"
-}[relayRuntimeState.value] || "grey"));
-
-async function refreshRelayRuntime(): Promise<void> {
-  try {
-    const response = await fetch("/meta");
-    if (!response.ok) return;
-    const meta = await response.json();
-    store.meta.rabiLinkRelayRuntime = meta.rabiLinkRelayRuntime;
-  } catch {
-    // Keep the most recent status while Manager is restarting.
-  }
-}
-
-let managerEvents: EventSource | null = null;
-onMounted(async () => {
-  await loadDirConfig();
-  await refreshRelayRuntime();
-  managerEvents = managerEventSource("/api/events");
-  managerEvents.addEventListener("rabilink_status", (raw) => {
-    try {
-      store.meta.rabiLinkRelayRuntime = JSON.parse((raw as MessageEvent).data || "{}");
-    } catch {
-      // Keep the latest valid status.
-    }
-  });
-});
-onBeforeUnmount(() => managerEvents?.close());
 
 function goToRoute(id: string): void {
   store.selectGateway(id);
@@ -343,18 +65,6 @@ async function deleteGatewayFromConsole(gateway: any): Promise<void> {
   }
 }
 
-function napcatRuntimeRows(raw: any): Record<string, any>[] {
-  const instances = raw?.gatewayStatus?.napcatInstances;
-  if (Array.isArray(instances)) return instances;
-  if (instances && typeof instances === "object") return Object.values(instances) as Record<string, any>[];
-  const napcat = raw?.gatewayStatus?.napcat;
-  return napcat ? [napcat] : [];
-}
-
-function napcatIsOffline(row: Record<string, any>): boolean {
-  return row.online === false || row.good === false || /online:false|已离线/.test(String(row.loginInfoError || ""));
-}
-
 function gatewayNeedsRuntime(gateway: any): boolean {
   return adaptersNeedGatewayRuntime(gatewayAdapterTypes(gateway));
 }
@@ -372,362 +82,104 @@ function gatewayRuntimeColor(gateway: any): string {
   if (!gatewayNeedsRuntime(gateway)) return "success";
   return runtime.running ? "success" : "error";
 }
-
-const selectedRuntime = computed(() => store.selectedRuntime);
-const adapterHealth = computed(() => {
-  const gateway = store.selectedGateway;
-  if (!gateway) return "未选择";
-  const runtime = selectedRuntime.value;
-  const adapters = gatewayAdapterTypes(gateway);
-  const napcatRows = napcatRuntimeRows(runtime);
-  const napcat = runtime.gatewayStatus?.napcat || {};
-  if (gateway.enabled === false || runtime.enabled === false) return "禁用中";
-  if (isMessageInputsDisabled(gateway)) return "禁用中";
-  if (!adaptersNeedGatewayRuntime(adapters)) return "启用中";
-  if (!runtime.running) return "已停止";
-  if (adapters.includes("napcat") && napcatRows.some(napcatIsOffline)) return "QQ 已离线";
-  if (adapters.includes("napcat") && napcatRows.length && napcatRows.every(row => !row.connected)) return "WS 未连接";
-  if (adapters.includes("napcat") && !napcatRows.length && !napcat.connected) return "WS 未连接";
-  if (adapters.includes("napcat") && napcat.loginInfoError) return "HTTP 异常";
-  return "已启用";
-});
-const selectedAdapters = computed(() => {
-  if (!store.selectedGateway) return "尚未选择消息入口";
-  const text = gatewayAdapterTypes(store.selectedGateway).map(adapterLabel).join(" + ");
-  return isMessageInputsDisabled(store.selectedGateway) ? `已禁用 · ${text}` : text;
-});
-const selectedAgentType = computed(() => store.selectedGateway?.agentAdapters?.[0]);
-const selectedConfiguredThreadName = computed(() => {
-  if (selectedAgentType.value === "codex") return store.selectedGateway?.codexThreadName || "";
-  if (selectedAgentType.value === "copilotCli") return store.selectedGateway?.copilotThreadName || "";
-  return "";
-});
-const selectedAgentState = computed(() => {
-  const type = selectedAgentType.value;
-  return type ? selectedRuntime.value.agentStates?.[type] ?? {} : {};
-});
-const selectedAgentTitle = computed(() => {
-  if (selectedAgentType.value === "codex") return "Codex Agent";
-  if (selectedAgentType.value === "copilotCli") return "Copilot CLI";
-  if (selectedAgentType.value === "astrbot") return "AstrBot";
-  if (selectedAgentType.value === "marvis") return "Marvis";
-  return "Agent";
-});
-const selectedAgentStatus = computed(() => {
-  if (!selectedAgentType.value) return "未配置";
-  return selectedAgentState.value.monitorThreadId || selectedAgentState.value.lastNotificationAt ? "已连接" : "未绑定";
-});
-const selectedAgentNote = computed(() => {
-  if (!selectedAgentType.value) return "等待选择处理端";
-  const thread = selectedAgentState.value.monitorThreadName || selectedConfiguredThreadName.value;
-  if (selectedAgentType.value === "codex") return `${thread || "等待会话线程"} · Desktop IPC`;
-  return thread || selectedAgentTitle.value;
-});
 </script>
 
 <template>
   <div class="page-shell">
-    <div class="overview-grid">
-      <v-card class="app-card glass-card stat-card">
-        <div class="stat-label">路由配置</div>
-        <div class="stat-value">{{ store.gateways.length }}</div>
-        <div class="stat-note">当前 manager 管理的 gateway 数量</div>
-      </v-card>
-      <v-card class="app-card glass-card stat-card">
-        <div class="stat-label">可用入口</div>
-        <div class="stat-value">{{ store.runningCount }}/{{ store.gateways.length }}</div>
-        <div class="stat-note">子进程运行或入口已启用</div>
-      </v-card>
-      <v-card class="app-card glass-card stat-card">
-        <div class="stat-label">消息端健康</div>
-        <div class="stat-value">{{ adapterHealth }}</div>
-        <div class="stat-note">{{ selectedAdapters }}</div>
-      </v-card>
-      <v-card class="app-card glass-card stat-card">
-        <div class="stat-label">{{ selectedAgentTitle }}</div>
-        <div class="stat-value">{{ selectedAgentStatus }}</div>
-        <div class="stat-note">{{ selectedAgentNote }}</div>
-      </v-card>
+    <div class="page-header">
+      <div>
+        <div class="eyebrow">ROUTES</div>
+        <h1 class="page-title">控制台</h1>
+        <div class="page-subtitle">查看并操作当前 Manager 管理的各个 Route。</div>
+      </div>
+      <div class="page-actions">
+        <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="store.addGatewayAndOpenQuickSetup">新增路由</v-btn>
+      </div>
     </div>
 
-    <div class="two-column">
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">路由列表</div>
-            <div class="section-note">选择一条路由后，其余页面会编辑同一条配置。</div>
-          </div>
-          <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="store.addGatewayAndOpenQuickSetup">新增</v-btn>
-        </div>
-        <v-alert v-if="gatewayActionError" type="error" variant="tonal" density="compact" class="mb-3">{{ gatewayActionError }}</v-alert>
-        <v-list bg-color="transparent">
-          <v-list-item
-            v-for="gw in store.gateways"
-            :key="gw.id"
-            rounded="lg"
-            :active="gw.id === store.selectedGatewayId"
-            @click="selectRouteOverview(gw.id)"
-          >
-            <template #prepend>
-              <PersonaAvatar :role-id="gw.agentRoleId || ''" :avatar-url="avatarUrlForGateway(gw.id, gw.agentRoleId)" :size="36" />
-            </template>
-            <v-list-item-title class="font-weight-bold">{{ store.configNameFor(gw) }}</v-list-item-title>
-            <v-list-item-subtitle>
-              人格 {{ gw.agentRoleId || "未选择" }} · {{ gatewayAdapterTypes(gw).map(adapterLabel).join(" + ") }}
-            </v-list-item-subtitle>
-            <template #append>
-              <div class="route-list-actions">
-                <v-chip size="small" :color="gatewayRuntimeColor(gw)" variant="tonal">
-                  {{ gatewayRuntimeLabel(gw) }}
-                </v-chip>
-                <v-switch
-                  :model-value="gw.enabled !== false"
-                  color="success"
-                  density="compact"
-                  inset
-                  hide-details
-                  title="启用 / 禁用此路由"
-                  @click.stop
-                  @update:model-value="() => toggleGatewayEnabled(gw)"
-                />
-                <v-btn
-                  icon="mdi-restart"
-                  size="small"
-                  variant="text"
-                  title="重启此路由"
-                  :loading="gatewayActionId === `${gw.id}:restart`"
-                  :disabled="Boolean(gatewayActionId)"
-                  @click.stop="runGatewayAction(gw.id, 'restart')"
-                />
-                <v-btn
-                  icon="mdi-arrow-right"
-                  size="small"
-                  variant="text"
-                  title="跳转到消息适配器配置"
-                  @click.stop="goToRoute(gw.id)"
-                />
-                <v-btn
-                  icon="mdi-delete"
-                  size="small"
-                  variant="text"
-                  color="error"
-                  title="删除路由配置"
-                  :loading="deletingGatewayId === gw.id"
-                  :disabled="Boolean(deletingGatewayId)"
-                  @click.stop="deleteGatewayFromConsole(gw)"
-                />
-              </div>
-            </template>
-          </v-list-item>
-        </v-list>
-      </v-card>
+    <v-alert v-if="gatewayActionError" type="error" variant="tonal">{{ gatewayActionError }}</v-alert>
 
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">当前链路</div>
-            <div class="section-note">RabiRoute 只负责入口、分诊、模板和投递边界。</div>
+    <div v-if="store.gateways.length" class="route-card-grid">
+      <v-card
+        v-for="gw in store.gateways"
+        :key="gw.id"
+        class="app-card glass-card route-card"
+        :class="{ 'route-card-selected': gw.id === store.selectedGatewayId }"
+        role="button"
+        tabindex="0"
+        :aria-label="`打开 ${store.configNameFor(gw)} 控制台`"
+        @click="selectRouteOverview(gw.id)"
+        @keydown.enter="selectRouteOverview(gw.id)"
+      >
+        <div class="route-card-head">
+          <div class="route-card-identity">
+            <PersonaAvatar :role-id="gw.agentRoleId || ''" :avatar-url="avatarUrlForGateway(gw.id, gw.agentRoleId)" :size="42" />
+            <div class="min-w-0">
+              <div class="route-card-title">{{ store.configNameFor(gw) }}</div>
+              <div class="route-card-subtitle">人格 {{ gw.agentRoleId || "未选择" }}</div>
+            </div>
           </div>
+          <v-chip size="small" :color="gatewayRuntimeColor(gw)" variant="tonal">
+            {{ gatewayRuntimeLabel(gw) }}
+          </v-chip>
         </div>
-        <div class="status-row"><span>Manager</span><b>{{ store.managerError || "已连接" }}</b></div>
-        <div class="status-row"><span>路由</span><b>{{ store.selectedGateway ? store.configNameFor(store.selectedGateway) : "-" }}</b></div>
-        <div class="status-row"><span>人格</span><b>{{ store.selectedGateway?.agentRoleId || "-" }}</b></div>
-        <div class="status-row"><span>Agent 线程</span><b>{{ selectedConfiguredThreadName || "-" }}</b></div>
-        <div class="status-row"><span>配置目录</span><b>{{ store.configFiles.routeDir || "data/route" }}</b></div>
-      </v-card>
-    </div>
 
-    <div class="two-column">
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">Rabi 实例</div>
-            <div class="section-note">保存到 data/Config.json，作为这台 Rabi PC 的全局身份。</div>
+        <div class="route-card-meta">
+          <div class="status-row">
+            <span>消息端</span>
+            <b>{{ gatewayAdapterTypes(gw).map(adapterLabel).join(" + ") || "未配置" }}</b>
           </div>
-          <v-btn color="primary" size="small" :loading="rabiSaving" @click="saveRabiIdentity">保存</v-btn>
-        </div>
-        <v-alert v-if="rabiError" type="error" variant="tonal" density="compact" class="mb-3">{{ rabiError }}</v-alert>
-        <v-alert v-if="rabiSaved" type="success" variant="tonal" density="compact" class="mb-3">
-          {{ rabiLinkRelayEnabled ? "已保存，Manager 正在维护全局 Relay 连接。" : "已保存，RabiLink Relay 已全局关闭。" }}
-        </v-alert>
-        <div class="form-grid">
-          <v-text-field v-model="rabiName" label="RabiRoute 实例名" :placeholder="store.meta.computerName || 'RabiRoute'" density="compact" hide-details />
-          <v-text-field :model-value="store.meta.rabiGuid || '-'" label="RabiRoute GUID" density="compact" readonly hide-details />
-        </div>
-        <v-divider class="my-4" />
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">RabiLink 系统转接服务</div>
-            <div class="section-note">全局内置服务，不是消息端。开启后由 Manager 常驻登记本机，可被 WebGUI、语音服务和眼镜端共同使用。</div>
-          </div>
-          <div class="relay-global-controls">
-            <v-chip :color="relayRuntimeColor" size="small" variant="tonal">{{ relayRuntimeLabel }}</v-chip>
-            <v-switch
-              :model-value="rabiLinkRelayEnabled"
-              label="连接服务器"
-              color="success"
-              density="compact"
-              inset
-              hide-details
-              :disabled="rabiSaving"
-              @update:model-value="toggleRabiLinkRelay"
-            />
+          <div class="status-row">
+            <span>状态</span>
+            <b>{{ gw.enabled === false || store.runtimeFor(gw.id).enabled === false ? "已禁用" : isMessageInputsDisabled(gw) ? "入口已禁用" : "可接收消息" }}</b>
           </div>
         </div>
-        <v-alert
-          :type="relayRuntimeState === 'error' ? 'error' : relayRuntimeState === 'incomplete' ? 'warning' : 'info'"
-          variant="tonal"
-          density="compact"
-          class="mb-3"
-        >
-          {{ relayRuntimeMessage }}
-        </v-alert>
-        <div class="form-grid">
-          <v-text-field v-model="rabiLinkRelayDeviceId" label="本机 Rabi PC 标识" :placeholder="store.meta.computerName || 'rabilink-pc'" density="compact" hide-details />
-          <v-text-field v-model="rabiLinkRelayUrl" label="Relay 服务器地址" placeholder="https://rabiroute.example.com" density="compact" hide-details />
-          <v-text-field
-            v-model="rabiLinkRelayAppToken"
-            label="Relay 应用 token"
-            :placeholder="rabiLinkRelayTokenConfigured ? '已安全保存；留空保持不变' : 'X-RabiLink-Token'"
-            type="password"
-            density="compact"
-            hide-details
-          />
-          <v-text-field v-model.number="rabiLinkRelayClaimWaitMs" label="领取任务等待毫秒" type="number" min="0" max="60000" step="1000" density="compact" hide-details />
-          <v-text-field v-model.number="rabiLinkRelayReplyIdleTimeoutMs" label="回复空闲超时毫秒" type="number" min="1000" max="120000" step="1000" density="compact" hide-details />
-        </div>
-        <v-divider class="my-4" />
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">转接本机 TTS / ASR API</div>
-            <div class="section-note">启用后，外部可用 Relay 应用 token 直接调用本机语音服务；本机仍只监听回环地址。</div>
-          </div>
+
+        <div class="route-card-actions">
           <v-switch
-            v-model="rabiLinkSpeechProxyEnabled"
-            label="允许语音中转"
+            :model-value="gw.enabled !== false"
             color="success"
             density="compact"
             inset
             hide-details
+            title="启用 / 禁用此路由"
+            @click.stop
+            @update:model-value="() => toggleGatewayEnabled(gw)"
           />
-        </div>
-        <div class="form-grid">
-          <v-text-field v-model="rabiLinkSpeechServiceUrl" label="本机语音服务地址" placeholder="http://127.0.0.1:8781" density="compact" hide-details />
-        </div>
-      </v-card>
-
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">目录配置</div>
-            <div class="section-note">全局目录设置，影响所有路由。修改后重启 Manager 生效。</div>
-          </div>
-          <v-btn color="primary" size="small" :loading="dirSaving" @click="saveDirConfig">保存</v-btn>
-        </div>
-        <v-alert v-if="dirError" type="error" variant="tonal" density="compact" class="mb-3">{{ dirError }}</v-alert>
-        <v-alert v-if="dirSaved" type="success" variant="tonal" density="compact" class="mb-3">已保存，重启生效。</v-alert>
-        <div class="form-grid">
-          <v-text-field v-model="routeDir" label="路由数据目录" placeholder="data/route" density="compact" hide-details />
-          <v-text-field v-model="rolesDir" label="角色目录" placeholder="data/roles" density="compact" hide-details />
-        </div>
-        <v-divider class="my-4" />
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">局域网访问 WebGUI</div>
-            <div class="section-note">让同一局域网中的手机或电脑直接访问这台 Rabi PC；访问密钥由 Manager 统一校验。</div>
-          </div>
-          <v-switch
-            :model-value="webguiLanAccess.enabled"
-            label="允许局域网访问"
-            color="success"
-            density="compact"
-            inset
-            hide-details
-            :loading="webguiLanSaving"
-            :disabled="webguiLanSaving || !webguiLanAccess.canManage || webguiLanAccess.hostManagedByEnvironment"
-            @update:model-value="toggleWebguiLanAccess"
-          />
-        </div>
-        <v-alert v-if="webguiLanError" type="error" variant="tonal" density="compact" class="mb-3">{{ webguiLanError }}</v-alert>
-        <v-alert v-if="webguiLanNotice" type="success" variant="tonal" density="compact" class="mb-3">{{ webguiLanNotice }}</v-alert>
-        <v-alert
-          :type="webguiLanAccess.restartRequired ? 'warning' : webguiLanAccess.listeningOnLan ? 'success' : 'info'"
-          variant="tonal"
-          density="compact"
-          class="mb-3"
-        >
-          {{ webguiLanStatusText }}
-        </v-alert>
-        <v-alert v-if="!webguiLanAccess.canManage" type="info" variant="tonal" density="compact" class="mb-3">
-          开关和密钥只能在运行 Manager 的 Rabi PC 本机管理。
-        </v-alert>
-        <div class="form-grid">
-          <v-text-field
-            :model-value="webguiLanAccess.token"
-            label="WebGUI 局域网访问密钥"
-            :placeholder="webguiLanAccess.tokenConfigured ? '已配置；仅本机显示明文' : '点击生成访问密钥'"
-            type="password"
-            density="compact"
-            readonly
-            hide-details
-          />
-          <v-text-field
-            :model-value="selectedRouteOverviewLanUrl"
-            :label="store.selectedGateway ? `当前 Route 控制台链接 · ${configNameFor(store.selectedGateway)}` : '局域网访问链接'"
-            placeholder="启用并生成密钥后显示"
-            density="compact"
-            readonly
-            hide-details
-          />
-          <v-text-field
-            :model-value="selectedRouteKnowledgeLanUrl"
-            :label="store.selectedGateway ? `当前 Route 知识库链接 · ${configNameFor(store.selectedGateway)}` : '当前 Route 知识库链接'"
-            placeholder="请先选择 Route"
-            density="compact"
-            readonly
-            hide-details
-          />
-        </div>
-        <div class="hero-actions mt-3">
+          <v-spacer />
           <v-btn
-            prepend-icon="mdi-key-plus"
-            variant="tonal"
-            color="primary"
-            :loading="webguiLanSaving"
-            :disabled="!webguiLanAccess.canManage"
-            @click="regenerateWebguiLanToken"
-          >
-            {{ webguiLanAccess.tokenConfigured ? "轮换访问密钥" : "生成访问密钥" }}
-          </v-btn>
-          <v-btn
-            prepend-icon="mdi-link-variant"
-            variant="tonal"
-            :disabled="!selectedRouteOverviewLanUrl || !webguiLanAccess.token"
-            @click="copyWebguiLanText(selectedRouteOverviewLanUrl, '已复制局域网访问链接')"
-          >
-            复制访问链接
-          </v-btn>
-          <v-btn
-            prepend-icon="mdi-content-copy"
+            icon="mdi-restart"
+            size="small"
             variant="text"
-            :disabled="!webguiLanAccess.token"
-            @click="copyWebguiLanText(webguiLanAccess.token, '已复制 WebGUI 访问密钥')"
-          >
-            复制密钥
-          </v-btn>
+            title="重启此路由"
+            :loading="gatewayActionId === `${gw.id}:restart`"
+            :disabled="Boolean(gatewayActionId)"
+            @click.stop="runGatewayAction(gw.id, 'restart')"
+          />
           <v-btn
-            prepend-icon="mdi-notebook-check-outline"
-            variant="tonal"
-            :disabled="!selectedRouteKnowledgeLanUrl || !webguiLanAccess.token"
-            @click="copyWebguiLanText(selectedRouteKnowledgeLanUrl, '已复制当前 Route 知识库链接')"
-          >
-            复制 Route 知识库链接
-          </v-btn>
-        </div>
-        <div class="section-note mt-3">
-          其他设备必须使用这台 Rabi PC 的局域网 IP，不能使用 127.0.0.1。若重启后仍无法连接，请检查 Windows 防火墙是否允许 RabiRoute/Node.js 的 8790 端口。
+            icon="mdi-arrow-right"
+            size="small"
+            variant="text"
+            title="打开消息适配器配置"
+            @click.stop="goToRoute(gw.id)"
+          />
+          <v-btn
+            icon="mdi-delete"
+            size="small"
+            variant="text"
+            color="error"
+            title="删除路由配置"
+            :loading="deletingGatewayId === gw.id"
+            :disabled="Boolean(deletingGatewayId)"
+            @click.stop="deleteGatewayFromConsole(gw)"
+          />
         </div>
       </v-card>
     </div>
+
+    <v-card v-else class="app-card glass-card empty-state">
+      <strong>还没有路由配置</strong>
+      <span>点击“新增路由”开始配置第一条消息路线。</span>
+    </v-card>
   </div>
 </template>

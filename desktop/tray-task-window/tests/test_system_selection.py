@@ -5,6 +5,7 @@ import unittest
 from rabiroute_tray.manager_client import SelectionSpeechSettings
 from rabiroute_tray.system_selection import (
     WindowsSelectionReader,
+    active_selection_delivery_targets,
     calculate_overlay_position,
     normalize_selected_text,
     resolve_selection_speech_model,
@@ -95,6 +96,22 @@ class SystemSelectionTest(unittest.TestCase):
 
     def test_selection_text_is_bounded(self) -> None:
         self.assertEqual(normalize_selected_text(" a\n b ", 3), "a b")
+
+    def test_delivery_targets_include_only_running_enabled_personas(self) -> None:
+        targets = active_selection_delivery_targets(
+            [
+                {"id": "disabled", "configName": "Disabled", "enabled": False, "running": True},
+                {"id": "stopped", "configName": "Stopped", "enabled": True, "running": False},
+                {"id": "other", "configName": "Other", "enabled": True, "running": True},
+                {"id": "preferred", "configName": "Preferred", "enabled": True, "running": True},
+            ],
+            preferred_gateway_id="preferred",
+        )
+
+        self.assertEqual(
+            [(target.gateway_id, target.label) for target in targets],
+            [("preferred", "Preferred"), ("other", "Other")],
+        )
 
 
 if __name__ == "__main__":

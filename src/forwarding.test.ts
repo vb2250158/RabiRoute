@@ -140,6 +140,24 @@ test("primary Agent delivery reports a failure without trying another Agent", as
   });
 });
 
+test("primary Agent delivery forwards verified image paths as a separate delivery option", async () => {
+  const dispatched: Array<{ adapter: AgentAdapterType; imagePaths?: string[] }> = [];
+  await withForwardingConfig({
+    agentAdapters: ["codex"],
+    primaryAgentAdapter: "codex"
+  }, async () => {
+    const outcomes = await deliverPacketToPrimaryAgentAdapter(
+      "main",
+      "screenshot",
+      "请查看截图。",
+      async (adapter, _message, imagePaths) => { dispatched.push({ adapter, imagePaths }); },
+      ["C:\\workspace\\screenshot.png"]
+    );
+    assert.deepEqual(dispatched, [{ adapter: "codex", imagePaths: ["C:\\workspace\\screenshot.png"] }]);
+    assert.equal(outcomes[0].status, "delivered");
+  });
+});
+
 async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => Promise<T> | T): Promise<T> {
   const previous: ForwardingConfigPatch = {
     agentAdapters: config.agentAdapters,

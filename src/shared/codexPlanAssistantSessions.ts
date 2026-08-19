@@ -122,7 +122,7 @@ export function codexPlanAssistantInitializationPrompt(input: {
     "同一 planId 只有一个控制面 writer；不同计划可并行。共享记录只合并目标项。",
     "消费业务结果、更新计划与记忆并续投。仅把决定、批准、授权、缺少输入或最终复核升级给主人格。",
     "升级内容写明计划更新、taskBinding 状态、已发续投、下一动作、风险、等待对象和待决定问题。",
-    `Agent 投递使用 Manager 线程桥，填写 sourceThreadId=${input.assistantThreadId}、sourceAgentType=plan_secretary 和 responsePolicy；要求回复时补 responseInstruction。`,
+    `Agent 投递使用 Manager 线程桥，填写 deliverySource={"agentAdapter":"codex","sessionId":"${input.assistantThreadId}","sessionName":"${input.assistantThreadName}"}、sourceThreadId=${input.assistantThreadId}、sourceAgentType=plan_secretary 和 responsePolicy；要求回复时补 responseInstruction。`,
     `需要主人格处理时投递到 threadId=${input.sourceThreadId} 并取得回执。`,
     "如果本轮没有需要主人格或用户处理的内容，最终输出明确写“处理结果：仅更新控制面，无需外部通知”，不要生成像是已经对用户说过的话。",
     "阶段回传后继续保留秘书职责。",

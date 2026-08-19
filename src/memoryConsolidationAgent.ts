@@ -123,6 +123,11 @@ export class MemoryConsolidationAgent {
         action: "send",
         threadId: binding.threadId,
         cwd: binding.workspace,
+        deliverySource: {
+          agentAdapter: "codex",
+          sessionId: this.options.sourceThreadId,
+          sessionName: this.options.sourceThreadName
+        },
         sandbox: "workspace-write",
         model: normalizeCodexMemoryConsolidationAgentModel(this.options.model),
         prompt: shouldInitialize

@@ -399,7 +399,7 @@ export type GatewayConfigModelOptions = {
 };
 
 const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu", "disabled"]);
-const agentAdapterValues = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot", "dsh"]);
+export const agentAdapterValues: ReadonlySet<AgentAdapterType> = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot", "dsh"]);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
 const codexReasoningEffortValues = new Set<CodexReasoningEffort>(["low", "medium", "high", "xhigh", "max"]);
@@ -1126,6 +1126,19 @@ export function resolvePrimaryAgentAdapter(
     ? requestedPrimary as AgentAdapterType
     : undefined;
   return requested && adapters.includes(requested) ? requested : adapters[0];
+}
+
+/**
+ * Message processing workers are a Codex-only managed-task feature. They run
+ * only when Codex is the Route's selected primary Agent; a configured secondary
+ * Codex adapter remains available for explicit Agent-to-Agent delivery.
+ */
+export function codexMessageProcessingAgentEnabled(definition: Pick<
+  GatewayDefinition,
+  "agentAdapters" | "primaryAgentAdapter" | "messageProcessingAgents"
+>): boolean {
+  return resolvePrimaryAgentAdapter(definition.agentAdapters, definition.primaryAgentAdapter) === "codex"
+    && definition.messageProcessingAgents?.codex?.enabled === true;
 }
 
 function normalizePipelineFallback(pipeline: PipelineDefinition | undefined): PipelineDefinition | undefined {

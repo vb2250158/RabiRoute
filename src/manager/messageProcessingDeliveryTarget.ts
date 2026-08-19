@@ -1,5 +1,8 @@
 import type { MessageProcessingRequirement } from "../messageProcessing/board.js";
-import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import {
+  codexMessageProcessingAgentEnabled,
+  type GatewayDefinition
+} from "../shared/gatewayConfigModel.js";
 
 export type MessageProcessingDeliveryAgentType = "message_processing" | "primary_persona";
 
@@ -46,7 +49,7 @@ export function resolveMessageProcessingDeliveryTarget(
   definition: GatewayDefinition,
   managedWorker: MessageProcessingRequirement["worker"]
 ): MessageProcessingDeliveryTarget | undefined {
-  if (definition.messageProcessingAgents?.codex?.enabled === true) {
+  if (codexMessageProcessingAgentEnabled(definition)) {
     return managedWorker
       ? { agentType: "message_processing", worker: managedWorker }
       : undefined;

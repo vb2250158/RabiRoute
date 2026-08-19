@@ -17,7 +17,7 @@ test("primary Agent selector belongs to the Agent section before the Agent list"
 });
 
 test("Codex managed-task controls are rendered through capability gates", () => {
-  assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'messageProcessingAgent'\)/);
+  assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'messageProcessingAgent'\) && primaryAgentType === agent\.type/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'memoryConsolidationAgent'\)/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'planAssistantSessions'\)/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'hooks'\)/);
@@ -33,7 +33,8 @@ test("Codex exposes an opt-in dedicated memory consolidation Agent with the Terr
 test("message-processing board opens on demand instead of mounting with the Route configuration page", () => {
   assert.match(source, /defineAsyncComponent\(\(\) => import\("\.\.\/components\/MessageProcessingBoard\.vue"\)\)/);
   assert.match(source, /const messageProcessingBoardOpen = ref\(false\)/);
+  assert.match(source, /codexMessageProcessingAgentEnabled\(gateway\.value\)/);
   assert.match(source, /打开消息处理看板/);
   assert.match(source, /<v-dialog v-model="messageProcessingBoardOpen" max-width="1200" scrollable>/);
-  assert.match(source, /v-if="messageProcessingBoardOpen && messageProcessingAgentPolicy\(agent\.type\)\.enabled"/);
+  assert.match(source, /v-if="messageProcessingBoardOpen && codexMessageAgentModeEnabled"/);
 });

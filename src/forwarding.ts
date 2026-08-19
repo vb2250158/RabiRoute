@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import {
   measurePerformanceOperation,
@@ -78,6 +79,7 @@ import { collectMessageGroupSourceEvidence, type MessageGroupSourceEvidence } fr
 import {
   DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
   DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
+  codexMessageProcessingAgentEnabled,
   normalizeMessageGroupingPolicy,
   type MessageGroupingPolicy,
   type RecentMessageEndpoint
@@ -147,8 +149,7 @@ function codexMessageAgentPolicy() {
 }
 
 function messageAgentModeEnabled(): boolean {
-  return config.agentAdapters.includes("codex")
-    && codexMessageAgentPolicy()?.enabled === true
+  return codexMessageProcessingAgentEnabled(config)
     && Boolean(config.codexThreadId && config.codexCwd);
 }
 
@@ -566,24 +567,37 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   return routeKind === "private" ? "private" : "group_mention";
 }
 
-function dispatchToAgentAdapter(type: AgentAdapterType, message: string): Promise<void> {
+function dispatchToAgentAdapter(type: AgentAdapterType, message: string, imagePaths: string[] = []): Promise<void> {
   const adapter = createAgentAdapter(type);
   return measurePerformanceOperation(
     `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
-    () => adapter.deliver(message)
+    () => adapter.deliver(message, imagePaths.length ? { imagePaths } : undefined)
   );
+}
+
+function imagePathsForRecord(record: ForwardRecord): string[] {
+  if (!("attachments" in record) || !Array.isArray(record.attachments)) return [];
+  return [...new Set(record.attachments.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const attachment = item as { kind?: unknown; path?: unknown };
+    if (attachment.kind !== "image" || typeof attachment.path !== "string") return [];
+    const imagePath = attachment.path.trim();
+    if (!path.isAbsolute(imagePath) || !fs.existsSync(imagePath) || !/\.(?:png|jpe?g|gif|webp|bmp)$/i.test(imagePath)) return [];
+    return [path.resolve(imagePath)];
+  }))];
 }
 
 export async function deliverPacketToPrimaryAgentAdapter(
   routeId: string,
   ruleId: string,
   message: string,
-  dispatch: (type: AgentAdapterType, message: string) => Promise<void> = dispatchToAgentAdapter
+  dispatch: (type: AgentAdapterType, message: string, imagePaths?: string[]) => Promise<void> = dispatchToAgentAdapter,
+  imagePaths: string[] = []
 ): Promise<ForwardAdapterOutcome[]> {
   const adapter = configuredPrimaryAgentAdapter();
   if (!adapter) return [];
   try {
-    await dispatch(adapter, message);
+    await dispatch(adapter, message, imagePaths);
     return [{
       routeId,
       ruleId,
@@ -952,6 +966,7 @@ async function forwardMessageToRoute(
   );
 
   const adapterOutcomes: ForwardAdapterOutcome[] = [];
+  const imagePaths = imagePathsForRecord(record);
   let sentPacketCount = 0;
   let situationRecorded = false;
   for (const rule of decision.matchedRules) {
@@ -997,7 +1012,7 @@ async function forwardMessageToRoute(
           roleContext.roleId,
           messageAgentGroup
         )
-        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.message)));
+        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.message, undefined, imagePaths)));
   }
 
   const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");

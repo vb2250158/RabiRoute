@@ -516,7 +516,7 @@ function continuationCheckPrompt(
     affinity ? `消息端 / 会话 / 说话人：${affinity.endpoint} / ${affinity.conversationKey} / ${affinity.sender}` : undefined,
     affinity?.messageIds?.length ? `原始消息编号：${affinity.messageIds.join(", ")}` : undefined,
     affinity?.preview ? `正在处理的内容：\n${affinity.preview}` : undefined,
-    `如果当前消息明显是上述内容的接续，不要重复处理。调用 POST ${managerBaseUrl.replace(/\/+$/, "")}/api/agent/threads，把 action=send、threadId=正在处理的任务 ID、cwd=当前工作目录、sourceThreadId=${currentWorker.threadId}、sourceAgentType=message_processing、responsePolicy=required、responseInstruction=完成接续处理后把处理结果和下一步返回当前消息处理任务${requirementId ? `、messageProcessing={"requirementId":"${requirementId}","outcome":"handoff","targetAgentType":"message_processing"}` : ""}，并重新编写一段“消息处理接续”交接：只包含当前消息组 ID、消息端/会话/说话人、引用消息 ID和本组新增原始消息。不得复制 [rabi:bind]、消息处理 Agent 初始化、当前消息处理归属、计划/记忆索引、角色路径、回传说明或整份当前输入。然后结束本轮并等待。`,
+    `如果当前消息明显是上述内容的接续，不要重复处理。调用 POST ${managerBaseUrl.replace(/\/+$/, "")}/api/agent/threads，把 action=send、threadId=正在处理的任务 ID、cwd=当前工作目录、deliverySource={"agentAdapter":"codex","sessionId":"${currentWorker.threadId}","sessionName":"当前消息处理任务名称"}、sourceThreadId=${currentWorker.threadId}、sourceAgentType=message_processing、responsePolicy=required、responseInstruction=完成接续处理后把处理结果和下一步返回当前消息处理任务${requirementId ? `、messageProcessing={"requirementId":"${requirementId}","outcome":"handoff","targetAgentType":"message_processing"}` : ""}，并重新编写一段“消息处理接续”交接：只包含当前消息组 ID、消息端/会话/说话人、引用消息 ID和本组新增原始消息。不得复制 [rabi:bind]、消息处理 Agent 初始化、当前消息处理归属、计划/记忆索引、角色路径、回传说明或整份当前输入。然后结束本轮并等待。`,
     "只有响应同时满足 code=0、status=delivered、delivery.status=delivered，才表示目标 Codex 任务已经接收。若响应为 code=-1 或 status=failed，按 error.field 和 error.message 补正；若 status=delivered_tracking_failed，目标已经接收，不得重复投递，只报告看板记录失败。",
     "如果不是同一话题，或者无法可靠确认是接续，则继续独立处理；不得为了少开一个 Agent 而强行合并。"
   ].filter((line): line is string => Boolean(line)).join("\n");
@@ -566,7 +566,7 @@ function workerHandoffPrompt(
     `工作目录：${worker.workspace}`,
     `当前主人格任务：${options.sourceThreadName}`,
     `当前主人格任务 ID：${options.sourceThreadId}`,
-    `向其它 Agent 投递时填写 sourceThreadId=${worker.threadId}、sourceAgentType=message_processing 和 responsePolicy；要求回复时填写 responseInstruction。`,
+    `向其它 Agent 投递时填写 deliverySource={"agentAdapter":"codex","sessionId":"${worker.threadId}","sessionName":"当前消息处理任务名称"}、sourceThreadId=${worker.threadId}、sourceAgentType=message_processing 和 responsePolicy；要求回复时填写 responseInstruction。`,
     "交接内容保留消息组 ID、任务 ID、工作目录和需求 ID。",
     `对方通过 POST ${threadsApi} 回复本任务，填写 inReplyToRequestId、result、nextAction 和 responsePolicy。`,
     "code=0、status=delivered、delivery.status=delivered 才表示任务已接收；delivered_tracking_failed 不得重投。",
@@ -580,7 +580,7 @@ function workerHandoffPrompt(
     "[本轮可见性与结束条件]",
     "当前任务输出只供内部查看。外部消息必须取得渠道回执；待决定事项必须实际交给主人格。",
     "直接发送时使用注入的 channel、params 和 payload。人格要求复核时，交接消息组、目标、引用消息、planId、正文和待决定项。",
-    `交给主人格时 POST ${threadsApi}，目标 threadId=${options.sourceThreadId}，sourceThreadId=${worker.threadId}，sourceAgentType=message_processing，responsePolicy=required${requirementId ? `，并带 messageProcessing.requirementId=${requirementId}` : ""}。只保留必要上下文，要求回传发送回执或决定。`,
+    `交给主人格时 POST ${threadsApi}，目标 threadId=${options.sourceThreadId}，deliverySource={"agentAdapter":"codex","sessionId":"${worker.threadId}","sessionName":"当前消息处理任务名称"}，sourceThreadId=${worker.threadId}，sourceAgentType=message_processing，responsePolicy=required${requirementId ? `，并带 messageProcessing.requirementId=${requirementId}` : ""}。只保留必要上下文，要求回传发送回执或决定。`,
     "无需外发时写“处理结果：无需对外回复”，并注明结束语、重复、自身消息或他人已完整回答。",
     "任何 Agent 返回的新结果都要重新判断是否外发。"
   ].join("\n");
@@ -601,7 +601,7 @@ export function messageAgentInitializationPrompt(options: MessageAgentPoolOption
     "Heartbeat 只做增量比对和汇总；遗漏交秘书或原计划 Agent，需要决定或已有正文时再找主人格。",
     "不实施计划业务，不写 taskBinding，不代替秘书维护计划。信息不足时查询或澄清。",
     "渠道回执证明外发，Manager 接受回执证明 Agent 投递；Codex 最终文本不算送达。",
-    "Agent 投递填写 sourceThreadId、sourceAgentType 和 responsePolicy；要求回复时补 responseInstruction，回复请求时补 inReplyToRequestId、result 和 nextAction。",
+    "Agent 投递必须填写 deliverySource.agentAdapter、deliverySource.sessionId；Agent 间投递还要填写 sourceThreadId、sourceAgentType 和 responsePolicy。要求回复时补 responseInstruction，回复请求时补 inReplyToRequestId、result 和 nextAction。",
     "同组补充并入当前上下文；无关消息返回重新分配。"
   ].join("\n");
 }
@@ -703,6 +703,11 @@ export class MessageAgentPool {
             title: allocation.worker.threadName,
             createIfMissing: true,
             cwd: allocation.worker.workspace,
+            deliverySource: {
+              agentAdapter: "codex",
+              sessionId: this.options.sourceThreadId,
+              sessionName: this.sourceThreadName
+            },
             sandbox: "workspace-write",
             prompt: batch.prompt,
             model: this.options.model,
@@ -729,6 +734,11 @@ export class MessageAgentPool {
             title: allocation.worker.threadName,
             createIfMissing: true,
             cwd: allocation.worker.workspace,
+            deliverySource: {
+              agentAdapter: "codex",
+              sessionId: this.options.sourceThreadId,
+              sessionName: this.sourceThreadName
+            },
             sandbox: "workspace-write",
             prompt: batch.prompt,
             model: this.options.model,

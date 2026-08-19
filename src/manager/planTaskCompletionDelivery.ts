@@ -48,11 +48,13 @@ export type PlanTaskCompletionDeliveryOptions<TRuntime extends PlanTaskCompletio
 function planTaskCompletionSourceLines(delivery: PlanTaskCompletionDelivery): string[] {
   const boundWorkspace = String(delivery.plan.taskBinding?.workspace || delivery.sourceCwd || "").trim();
   const sourceTitle = String(delivery.plan.taskBinding?.sessionTitle || delivery.sourceSessionId).trim();
+  const sourceAgentAdapter = String(delivery.plan.taskBinding?.agentType || "codex").trim() || "codex";
   return [
-    "[Agent 任务投递来源]",
-    "来源 Agent：计划执行 Agent",
-    `来源任务：${sourceTitle}`,
+    "[投递源]",
+    `Agent 端：${sourceAgentAdapter}`,
+    `来源会话：${sourceTitle}`,
     `来源会话 ID：${delivery.sourceSessionId}`,
+    "来源 Agent：计划执行 Agent",
     delivery.sourceCwd ? `来源工作目录：${delivery.sourceCwd}` : "",
     "",
     "[投递内容]",
@@ -72,12 +74,13 @@ function planTaskCompletionSourceLines(delivery: PlanTaskCompletionDelivery): st
 
 export function planTaskCompletionAgentText(delivery: PlanTaskCompletionDelivery): string {
   const boundWorkspace = String(delivery.plan.taskBinding?.workspace || delivery.sourceCwd || "").trim();
+  const sourceAgentAdapter = String(delivery.plan.taskBinding?.agentType || "codex").trim() || "codex";
   return [
     ...planTaskCompletionSourceLines(delivery),
     "结果已直达计划秘书。本轮完成以下事项：",
     "1. 读取计划、步骤、记忆和业务任务状态，消费本次结果；单轮结束不等于计划完成。",
     "2. 更新状态、nextAction、waitingFor、必要的 approvalRequest 和记忆。isBlocked 只由 Manager 派生。",
-    `3. 计划仍可推进时，通过 POST /api/agent/threads 续投原业务任务 ${delivery.sourceSessionId}${boundWorkspace ? `（${boundWorkspace}）` : ""}；使用 sourceAgentType=plan_secretary、responsePolicy=required，并给出可验证的下一步。`,
+    `3. 计划仍可推进时，通过 POST /api/agent/threads 续投原业务任务 ${delivery.sourceSessionId}${boundWorkspace ? `（${boundWorkspace}）` : ""}；填写 deliverySource={"agentAdapter":"${sourceAgentAdapter}","sessionId":"当前秘书会话 ID","sessionName":"当前秘书会话名称"}、sourceThreadId=当前秘书会话 ID、sourceAgentType=plan_secretary、responsePolicy=required，并给出可验证的下一步。`,
     "4. 仅把决定、批准、授权、缺少输入或计划最终复核升级给主人格。",
     "5. taskBinding 只指向业务任务；秘书只维护控制面，不执行调查、代码、构建、发布或外部操作。",
     "6. PangHu 正式 Main 的 Editor 占用、导入、MCP 不可用或共享测试排队不构成全局等待；不得停止 Editor 或取消他人测试，原任务继续实现、静态资源/序列化合同、非 Unity runner、CLI 与收窄 SVN 工作，剩余运行交互转人工或后续验收。",

@@ -57,6 +57,36 @@ def ensure_start_menu_shortcut(project_root: Path) -> None:
         print(f"[RabiRoute] Failed to register Windows shortcut identity: {error}", file=sys.stderr)
 
 
+def sync_startup_shortcut(project_root: Path, enabled: bool) -> None:
+    """Keep the per-user Windows login shortcut in sync with the desktop setting."""
+    if sys.platform != "win32":
+        return
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return
+    startup_dir = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    shortcut_path = startup_dir / f"{APP_NAME}.lnk"
+    if not enabled:
+        try:
+            shortcut_path.unlink(missing_ok=True)
+        except OSError as error:
+            print(f"[RabiRoute] Failed to remove Windows startup shortcut: {error}", file=sys.stderr)
+        return
+    target_path, arguments = _shortcut_target(project_root)
+    try:
+        startup_dir.mkdir(parents=True, exist_ok=True)
+        _create_windows_shortcut(
+            shortcut_path=shortcut_path,
+            target_path=target_path,
+            arguments=arguments,
+            working_dir=project_root,
+            icon_path=_shortcut_icon(project_root, target_path),
+            app_user_model_id=APP_USER_MODEL_ID,
+        )
+    except Exception as error:
+        print(f"[RabiRoute] Failed to register Windows startup shortcut: {error}", file=sys.stderr)
+
+
 def _shortcut_target(project_root: Path) -> tuple[Path, str]:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve(), ""

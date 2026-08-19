@@ -140,6 +140,21 @@ function relativeWorkspacePath(filePath: string | undefined): string | undefined
   return toProjectRelativePath(filePath, process.cwd());
 }
 
+function attachmentLines(record: RouteDecision["record"]): string[] {
+  if (!("attachments" in record) || !Array.isArray(record.attachments) || record.attachments.length === 0) {
+    return [];
+  }
+  return record.attachments.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const attachment = item as { kind?: unknown; name?: unknown; path?: unknown; url?: unknown };
+    const kind = String(attachment.kind || "file");
+    const name = String(attachment.name || "附件").trim();
+    const filePath = typeof attachment.path === "string" ? relativeWorkspacePath(attachment.path) : undefined;
+    const url = typeof attachment.url === "string" ? attachment.url.trim() : "";
+    return [`- ${kind}：${name}${filePath ? `｜本地路径=${filePath}` : url ? `｜地址=${url}` : ""}`];
+  });
+}
+
 function currentTimeValues(now = new Date()): ForwardTemplateValues {
   const year = now.getFullYear();
   const month = pad2(now.getMonth() + 1);
@@ -1164,6 +1179,7 @@ function buildAgentMessage(
       String(values.recentMessages || "- 暂无")
     ]) : "",
     section("消息", [String(values.message || record.rawMessage || "")]),
+    attachmentLines(record).length > 0 ? section("消息附件", attachmentLines(record)) : "",
     focusedConversationContext.length > 0 ? section("当前讨论片段", focusedConversationContext) : "",
     immediateAddressedContext.length > 0 ? section("紧邻对话", immediateAddressedContext) : "",
     routeKind === "plan_feedback" ? "" : section("消息代码解析", [messageCodeParseText(record, dataDir)]),

@@ -20,7 +20,8 @@ test("WebGUI route pages switch immediately and load page chunks asynchronously"
     "RoleKnowledgePage",
     "RuntimeLogPage",
     "PerformancePage",
-    "SpeechServicePage"
+    "SpeechServicePage",
+    "SettingsPage"
   ]) {
     assert.match(routerSource, new RegExp(
       `const ${page} = immediatePage\\(\\(\\) => import\\("\\.\\/pages\\/${page}\\.vue"\\)\\)`

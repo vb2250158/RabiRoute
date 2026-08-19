@@ -51,6 +51,11 @@ test("dedicated memory consolidation reuses one Desktop task and defaults to GPT
   const firstSend = calls.find((call) => call.action === "send");
   assert.equal(firstSend?.threadId, worker.id);
   assert.equal(firstSend?.model, "gpt-5.6-terra");
+  assert.deepEqual(firstSend?.deliverySource, {
+    agentAdapter: "codex",
+    sessionId: "019f0000-0000-7000-8000-000000000001",
+    sessionName: "主人格"
+  });
   assert.match(String(firstSend?.prompt), /记忆整理 Agent 初始化/);
   assert.match(String(firstSend?.prompt), /first consolidation request/);
   assert.equal(fs.existsSync(statePath), true);

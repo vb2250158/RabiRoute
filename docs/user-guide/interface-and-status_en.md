@@ -20,9 +20,9 @@ An HTTP LAN page may not receive secure browser clipboard permission. Copy-link,
 http://192.168.0.57:8790/#/routes/<Route-config-name>/overview?webgui_token=<access-key>
 ```
 
-The sidebar **Current Route** selector is the only selection source. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, and Runtime Diagnostics all use `#/routes/<Route-config-name>/<page>`, with `overview`, `adapters`, `persona`, `knowledge`, `speech`, and `runtime` respectively. Changing Current Route preserves the page type and immediately redirects the URL. To open that Route's **Plans & Memory** directly, use the same Route configuration name with the `knowledge` page, or click **Copy Route knowledge link**:
+The sidebar **Current Route** selector is the only selection source. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, and Runtime Diagnostics all use `#/routes/<Route-config-name>/<page>`, with `overview`, `adapters`, `persona`, `knowledge`, `speech`, and `runtime` respectively. Changing Current Route preserves the page type and immediately redirects the URL. **Performance** and **Settings** are host-wide pages and do not change with the selected Route. To open that Route's **Plans & Memory** directly, use the same Route configuration name with the `knowledge` page, or click **Copy Route knowledge link**:
 
-Clicking any sidebar page label updates the selected state, top title, and URL first, then immediately shows **Page switched. Loading content…**. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, Performance, and Runtime Diagnostics load their page code and data asynchronously instead of delaying the tab switch until the complete page is ready. If a page chunk fails to load, WebGUI refreshes once and restores the intended page.
+Clicking any sidebar page label updates the selected state, top title, and URL first, then immediately shows **Page switched. Loading content…**. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, Performance, Runtime Diagnostics, and Settings load their page code and data asynchronously instead of delaying the tab switch until the complete page is ready. If a page chunk fails to load, WebGUI refreshes once and restores the intended page.
 
 ```text
 http://192.168.0.57:8790/#/routes/<Route-config-name>/knowledge?webgui_token=<access-key>
@@ -42,19 +42,22 @@ When the Rabi PC has the global RabiLink Relay connection enabled and belongs to
 https://rabiroute.cottongame.com/manage/<account>/<RabiGUID>/#/routes/<Route-config-name>/knowledge
 ```
 
-The remote entry uses the same page names. Replace `knowledge` with `overview`, `adapters`, `persona`, `speech`, or `runtime` as needed.
+The remote entry uses the same Route page names. Replace `knowledge` with `overview`, `adapters`, `persona`, `speech`, or `runtime` as needed. Settings uses the host-wide `#/settings` path, and Performance uses the host-wide `/performance` path.
 
 Replace the final page with `overview` or another WebGUI route when needed. This remote entry does not use the LAN `webgui_token`; it uses the browser's Relay management login cookie, while the PC worker separately authenticates with its application token. Ordinary APIs, images, attachments, audio, downloads, and byte-range video playback return to the selected PC's loopback Manager, and Manager events refresh through remote SSE. If the shell opens but data, attachments, or live status do not, verify that the target PC is online in Relay, the RabiGUID is correct, and the Relay script plus `ribiwebgui/dist` were published together. Restarting only the local Manager does not update the public Relay.
 
-## The six main areas
+## The main pages
 
 | Area | Primary purpose | Common actions |
 | --- | --- | --- |
-| Console | Routes, current path, Rabi identity, and directories | Add, quick-configure, start, or stop a Route |
+| Console | View and operate each Route | Add, enable, restart, or delete a Route |
 | Message Adapters | Message sources and Agent handlers | Scan, add, connect, and bind tasks |
 | Persona Configuration | Persona, Route variables, and message rules | Add rules, regexes, and schedules |
 | Plans & Memory | Plans, recent memory, consolidated memory, plan guidance, and approval records for the current persona | Search, guide running plans, expand steps, review execution contracts, submit approval feedback, and refresh Manager data |
+| Speech Service | Host TTS, ASR, microphone, and playback | Inspect status, adjust parameters, and test speech |
+| Performance | Manager, Route, and speech-service runtime metrics | Inspect live state and history |
 | Log Diagnostics | Find path breaks and run real tests | Start, restart, trigger, and inspect logs |
+| Settings | Host identity, RabiLink, directories, LAN access, and desktop entry points | Configure screenshots, the selected-text menu, login startup, access keys, and access links |
 | User Guide | Task-based product instructions | Search, change page, and open deeper material |
 
 When Plans & Memory opens, it first requests eight lightweight plan summaries and fetches the complete details for the first two visible cards in parallel before mounting those cards, so the first screen does not pause on `Loading plan details`. Without requiring scroll, it then completes the selected plan category in background pages of up to 50 summaries and completes the visible memory category in pages of up to 100 items. The page keeps the loaded and total counts visible. These background requests pause while the tab is hidden; when the tab becomes visible again, the page refreshes and resumes completion. The left directory retains every returned title, while the content area initially mounts only eight plan cards and 24 memory cards, then appends bounded batches while scrolling. Clicking a directory item that is not mounted creates a bounded forward window starting at that target and gives that plan's detail request highest priority; the current Manager and LAN environment uses a one-second interactive detail budget. The page does not create every preceding body card at once. Scrolling down renders later plans, while scrolling up restores earlier plans in bounded batches and keeps the current card at the same viewport position. Other body text, steps, approvals, and attachment metadata hydrate only when cards are genuinely near the viewport; each observer turn promotes only the nearest two cards and runs at most two concurrent detail requests. Each later summary page yields one rendering frame without waiting for body hydration, so heavy cards or attachments cannot delay directory completion. Only cards with a real in-flight detail request show the loading animation; cards that have not approached the viewport use a compact hint instead of instantiating a large skeleton for every plan, and the browser skips layout and paint for off-screen cards. Image and video cards show a light `Loading attachment` placeholder instead of a black block until media is ready.
@@ -96,6 +99,29 @@ After plan guidance or approval feedback is durably recorded, Agent notification
 **Current Route** determines which configuration most pages display and edit. If changes are unsaved, the interface asks before switching.
 
 The count beside the selector is the number of configurations. The selected value and menu items prefer the persona title, while the Route configuration name, disabled state, and adapter combination remain secondary details so multiple Routes for one persona stay distinguishable. When no persona title is available, WebGUI falls back to the Route display name, persona ID, and then configuration name. The status below does not prove that every external platform is authenticated.
+
+The secondary navigation above the footer contains **Speech Service**, **Performance**, **Log Diagnostics**, and **Settings**; these entries sit above **User Guide**.
+
+## System screenshots and persona delivery
+
+Open **Settings** in WebGUI and find **Desktop shortcuts**:
+
+1. Enable **System screenshot**, enter a shortcut, and click **Save**. Use `Ctrl`, `Alt`, `Shift`, or `Win` plus one letter or function key, for example `Ctrl+Shift+S`.
+2. Press the shortcut in any Windows application. The tray captures the desktop and opens a preview window.
+3. Enter the text to send with the screenshot, choose an active persona in **Send to persona**, and click **Send**. The text may be empty; the screenshot is still sent as an image.
+
+The screenshot and text use the role-panel delivery entry. Codex and DSH receive the screenshot as image input. The file is kept temporarily in the private project directory `.rabiroute-message-images/`. After changing the screenshot toggle, shortcut, or **Windows login startup**, the tray reads the new settings automatically; restarting is not required.
+
+## Enable selected-text menu
+
+Open **Settings** in WebGUI and find **Enable selected-text menu**:
+
+1. Turn on **Enable selected-text menu** and click **Save**. Drag-selecting text in any Windows app that exposes a text selection shows the system floating buttons.
+2. Move the cursor to **Send to** to list currently enabled and running personas. Click one item to deliver the selected text to that Route.
+3. **Selected-text reading** is a sub-feature of the selected-text menu. When it is on, the left button is **Read aloud** and only a click enqueues host speech. When it is off, the bar keeps only **Send to**.
+4. The **Selected-text voice model** selector appears only when both **Selected-text reading** and **Advanced options** are on.
+
+Selection alone does not read or send. Password controls and unreadable selections are ignored; the tray never simulates `Ctrl+C` or changes the clipboard. After saving, the tray reads the new settings; restarting is not required.
 
 The footer contains four supporting actions:
 

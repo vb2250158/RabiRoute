@@ -22,6 +22,20 @@ class MemoryAgentRequestPersistence implements AgentRequestPersistence {
   write(state: unknown): void { this.value = structuredClone(state); }
 }
 
+const defaultDeliverySource = {
+  agentAdapter: "codex" as const,
+  sessionId: "019f0000-0000-7000-8000-000000000001",
+  sessionName: "测试来源任务"
+};
+
+function deliverySourceFor(sessionId: string, sessionName = "测试来源任务") {
+  return {
+    agentAdapter: "codex" as const,
+    sessionId,
+    sessionName
+  };
+}
+
 test("Agent task read reports an exact delivery marker without treating idle as accepted", async () => {
   const deliveryId = "12345678-1234-4567-8123-123456789abc";
   const baseDriver: AgentThreadDriver = {
@@ -425,6 +439,7 @@ test("Agent thread create uses a configured workspace and fixed investigation in
     title: " [Example][Bug] 功能入口 ",
     prompt: " 只读调查功能入口。 ",
     cwd: process.cwd(),
+    deliverySource: defaultDeliverySource,
     sandbox: "danger-full-access"
   }, {
     allowedWorkspaces: [process.cwd()]
@@ -432,9 +447,10 @@ test("Agent thread create uses a configured workspace and fixed investigation in
 
   assert.equal(result.statusCode, 201);
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], {
+  const createCall = calls[0] as Record<string, unknown>;
+  assert.deepEqual({ ...createCall, prompt: undefined }, {
     title: "[Example][Bug] 功能入口",
-    prompt: "只读调查功能入口。",
+    prompt: undefined,
     cwd: path.resolve(process.cwd()),
     developerInstructions: [
       "这是由 RabiRoute 会话管理层创建的独立 Codex 任务。",
@@ -449,6 +465,8 @@ test("Agent thread create uses a configured workspace and fixed investigation in
     ].join("\n"),
     sandbox: "danger-full-access"
   });
+  assert.match(String(createCall.prompt), /^\[投递源\]\nAgent 端：codex\n来源会话：测试来源任务\n来源会话 ID：019f0000-0000-7000-8000-000000000001/);
+  assert.match(String(createCall.prompt), /\[投递内容\]\n只读调查功能入口。$/);
 });
 
 test("Agent thread create rejects workspaces outside configured Codex projects", async () => {
@@ -465,7 +483,8 @@ test("Agent thread create rejects workspaces outside configured Codex projects",
       action: "create",
       title: "任务",
       prompt: "调查",
-      cwd: path.dirname(process.cwd())
+      cwd: path.dirname(process.cwd()),
+      deliverySource: defaultDeliverySource
     }, {
       allowedWorkspaces: [process.cwd()]
     }, driver),
@@ -490,7 +509,8 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
     action: "send",
     threadId,
     prompt: "补充新证据",
-    cwd: process.cwd()
+    cwd: process.cwd(),
+    deliverySource: defaultDeliverySource
   }, {
     allowedWorkspaces: [process.cwd()]
   }, driver);
@@ -501,9 +521,100 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
   assert.equal(sent.threadId, threadId);
   assert.equal(sent.cwd, path.resolve(process.cwd()));
   assert.equal(sent.sandbox, "workspace-write");
-  assert.match(sent.prompt, /^\[协作要求\]/);
+  assert.match(sent.prompt, /^\[投递源\]\nAgent 端：codex\n来源会话：测试来源任务\n来源会话 ID：019f0000-0000-7000-8000-000000000001/);
   assert.match(sent.prompt, /PangHu 只使用正式 Main、Release 和 Art/);
   assert.match(sent.prompt, /\[投递内容\]\n补充新证据$/);
+});
+
+test("Agent thread send rejects a missing delivery source", async () => {
+  let sendCount = 0;
+  const driver: AgentThreadDriver = {
+    read: async () => ({}),
+    create: async () => { throw new Error("not used"); },
+    send: async () => { sendCount += 1; }
+  };
+
+  await assert.rejects(handleAgentThreadRequest({
+    action: "send",
+    threadId: "019f0000-0000-7000-8000-000000000002",
+    prompt: "补充新证据",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver), /Missing deliverySource/);
+  assert.equal(sendCount, 0);
+});
+
+test("Agent thread create with prompt rejects a missing delivery source", async () => {
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    read: async () => ({}),
+    create: async () => {
+      createCount += 1;
+      throw new Error("not used");
+    },
+    send: async () => undefined
+  };
+
+  await assert.rejects(handleAgentThreadRequest({
+    action: "create",
+    title: "调查任务",
+    prompt: "只读调查。",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver), /Missing deliverySource/);
+  assert.equal(createCount, 0);
+});
+
+test("Agent thread create without prompt does not require deliverySource", async () => {
+  const calls: unknown[] = [];
+  const driver: AgentThreadDriver = {
+    read: async () => ({}),
+    create: async (params) => {
+      calls.push(params);
+      return {
+        id: "019f0000-0000-7000-8000-000000000201",
+        title: params.title,
+        updatedAt: "2026-08-19T00:00:00Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async () => undefined
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "create",
+    title: "空任务",
+    cwd: process.cwd()
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 201);
+  assert.equal((calls[0] as { prompt: string }).prompt, "");
+});
+
+test("Agent-to-Agent send rejects a deliverySource session that does not match sourceThreadId", async () => {
+  let sendCount = 0;
+  const sourceThreadId = "019f0000-0000-7000-8000-000000000003";
+  const driver: AgentThreadDriver = {
+    read: async () => ({
+      id: sourceThreadId,
+      title: "计划任务",
+      cwd: process.cwd(),
+      updatedAt: "2026-08-04T08:01:00.000Z"
+    }),
+    create: async () => { throw new Error("not used"); },
+    send: async () => { sendCount += 1; }
+  };
+
+  await assert.rejects(handleAgentThreadRequest({
+    action: "send",
+    threadId: "019f0000-0000-7000-8000-000000000002",
+    prompt: "结果",
+    cwd: process.cwd(),
+    deliverySource: defaultDeliverySource,
+    sourceThreadId,
+    sourceAgentType: "plan_secretary",
+    responsePolicy: "none"
+  }, { allowedWorkspaces: [process.cwd()] }, driver), /deliverySource.sessionId must match sourceThreadId/);
+  assert.equal(sendCount, 0);
 });
 
 test("Agent thread send forwards validated workspace image paths to Desktop", async () => {
@@ -522,6 +633,7 @@ test("Agent thread send forwards validated workspace image paths to Desktop", as
     threadId: "019f0000-0000-7000-8000-000000000091",
     prompt: "查看图片",
     cwd: root,
+    deliverySource: defaultDeliverySource,
     imagePaths: [imagePath]
   }, { allowedWorkspaces: [root] }, driver);
 
@@ -531,6 +643,7 @@ test("Agent thread send forwards validated workspace image paths to Desktop", as
     threadId: "019f0000-0000-7000-8000-000000000091",
     prompt: "查看图片",
     cwd: root,
+    deliverySource: defaultDeliverySource,
     imagePaths: [path.join(os.tmpdir(), "outside.png")]
   }, { allowedWorkspaces: [root] }, driver), /inside the target workspace/);
 });
@@ -588,6 +701,7 @@ test("Agent thread send forwards the Message Agent model independently", async (
     threadId,
     prompt: "处理这个消息组",
     cwd: process.cwd(),
+    deliverySource: defaultDeliverySource,
     model: "gpt-5.6-luna",
     reasoningEffort: "medium"
   }, { allowedWorkspaces: [process.cwd()] }, driver);
@@ -599,7 +713,7 @@ test("Agent thread send forwards the Message Agent model independently", async (
   assert.equal(sent.sandbox, "workspace-write");
   assert.equal(sent.model, "gpt-5.6-luna");
   assert.equal(sent.reasoningEffort, "medium");
-  assert.match(sent.prompt, /^\[协作要求\]/);
+  assert.match(sent.prompt, /^\[投递源\]/);
   assert.match(sent.prompt, /PangHu 只使用正式 Main、Release 和 Art/);
   assert.match(sent.prompt, /\[投递内容\]\n处理这个消息组$/);
 });
@@ -635,6 +749,7 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
     threadId: targetThreadId,
     prompt: "计划已经完成，请决定是否回复群消息。",
     cwd: process.cwd(),
+    deliverySource: deliverySourceFor(sourceThreadId, "星海建造师 策划 程序 协助处理计划4"),
     sourceThreadId,
     sourceAgentType: "plan_secretary",
     responsePolicy: "none"
@@ -663,7 +778,12 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
   assert.equal(sent.threadId, targetThreadId);
   assert.equal(sent.cwd, path.resolve(process.cwd()));
   assert.equal(sent.sandbox, "workspace-write");
-  assert.match(sent.prompt, /\[Agent 任务投递来源\]/);
+  assert.match(sent.prompt, /^\[投递源\]/);
+  assert.match(sent.prompt, /Agent 端：codex/);
+  assert.match(sent.prompt, /来源会话：星海建造师 策划 程序 协助处理计划4/);
+  assert.match(sent.prompt, /来源会话 ID：019f0000-0000-7000-8000-000000000003/);
+  assert.match(sent.prompt, /来源 Agent：计划秘书 Agent/);
+  assert.ok(sent.prompt.includes(`来源工作目录：${process.cwd()}`));
   assert.match(sent.prompt, /\[Agent 回复合同\]/);
   assert.match(sent.prompt, /是否要求回复：否/);
   assert.match(sent.prompt, /本次投递不要求回复/);
@@ -709,7 +829,8 @@ test("Agent thread send replaces an archived bound task before delivery", async 
     title,
     createIfMissing: true,
     prompt: "归档后继续处理",
-    cwd: process.cwd()
+    cwd: process.cwd(),
+    deliverySource: defaultDeliverySource
   }, { allowedWorkspaces: [process.cwd()] }, driver);
 
   assert.equal(createCount, 1);
@@ -750,6 +871,7 @@ test("message-processing handoff reports a structured requirement after the targ
     threadId: targetThreadId,
     prompt: "请核对 plan-1 的最新进展并把结果返回消息处理任务。",
     cwd: process.cwd(),
+    deliverySource: deliverySourceFor(sourceThreadId, "星海建造师 协助处理消息2"),
     sourceThreadId,
     sourceAgentType: "message_processing",
     responsePolicy: "required",
@@ -833,6 +955,7 @@ test("a reply addressed to a detached Message Agent alias is delivered to its cu
     threadId: oldMessageThreadId,
     cwd: process.cwd(),
     prompt: "已完成，返回结果。",
+    deliverySource: deliverySourceFor(targetThreadId, "计划 Agent"),
     sourceThreadId: targetThreadId,
     sourceAgentType: "plan_agent",
     inReplyToRequestId: tracked.requestId,
@@ -878,6 +1001,7 @@ test("message-processing handoff returns a partial failure without hiding the ac
     threadId: targetThreadId,
     prompt: "请处理并返回。",
     cwd: process.cwd(),
+    deliverySource: deliverySourceFor(sourceThreadId, "消息处理任务"),
     sourceThreadId,
     sourceAgentType: "message_processing",
     responsePolicy: "required",
@@ -944,7 +1068,8 @@ test("Agent thread create reuses the same title and workspace instead of creatin
     action: "create",
     title: existing.title,
     prompt: "只读调查。",
-    cwd: existing.cwd
+    cwd: existing.cwd,
+    deliverySource: defaultDeliverySource
   }, {
     allowedWorkspaces: [existing.cwd]
   }, driver);
@@ -980,7 +1105,8 @@ test("Agent thread create shares one in-flight creation across caller retries", 
     action: "create" as const,
     title: "[PangHu][Bug] 摆放系统 - 建筑或物件位置重叠",
     prompt: "只读调查。",
-    cwd: process.cwd()
+    cwd: process.cwd(),
+    deliverySource: defaultDeliverySource
   };
   const options = { allowedWorkspaces: [process.cwd()] };
 
@@ -1035,7 +1161,7 @@ test("Agent thread create retries a stale creating reservation only after state_
     send: async () => undefined
   };
   try {
-    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd }, {
+    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd, deliverySource: defaultDeliverySource }, {
       allowedWorkspaces: [cwd],
       defaultWorkspace: rootDir
     }, driver);
@@ -1074,7 +1200,7 @@ test("Agent thread create keeps stale creating uncertain when a threadId exists"
     send: async () => undefined
   };
   try {
-    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd }, {
+    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd, deliverySource: defaultDeliverySource }, {
       allowedWorkspaces: [cwd],
       defaultWorkspace: rootDir
     }, driver);
@@ -1117,7 +1243,7 @@ test("Agent thread create keeps stale creating uncertain when state_db evidence 
     send: async () => undefined
   };
   try {
-    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd }, {
+    const result = await handleAgentThreadRequest({ action: "create", title, prompt: "继续处理。", cwd, deliverySource: defaultDeliverySource }, {
       allowedWorkspaces: [cwd],
       defaultWorkspace: rootDir
     }, driver);
@@ -1168,6 +1294,31 @@ test("Agent thread failures expose the action, missing field, and retry guidance
       retryable: false
     }
   });
+  assert.deepEqual(agentThreadRequestFailureData(new Error("Missing deliverySource."), { action: "send" }), {
+    action: "send",
+    status: "failed",
+    message: "Missing deliverySource.",
+    error: {
+      stage: "validation",
+      field: "deliverySource",
+      message: "Missing deliverySource.",
+      retryable: false
+    }
+  });
+  assert.deepEqual(agentThreadRequestFailureData(
+    new Error("deliverySource.sessionId must match sourceThreadId for Agent-to-Agent delivery."),
+    { action: "send" }
+  ), {
+    action: "send",
+    status: "failed",
+    message: "deliverySource.sessionId must match sourceThreadId for Agent-to-Agent delivery.",
+    error: {
+      stage: "source_verification",
+      field: "deliverySource.sessionId",
+      message: "deliverySource.sessionId must match sourceThreadId for Agent-to-Agent delivery.",
+      retryable: false
+    }
+  });
   assert.deepEqual(agentThreadRequestFailureData(
     new Error("sourceAgentType requires sourceThreadId."),
     { action: "send" }
@@ -1211,6 +1362,7 @@ test("Agent-to-Agent send requires an explicit response policy", async () => {
     threadId: "019f0000-0000-7000-8000-000000000092",
     prompt: "调查结果",
     cwd: process.cwd(),
+    deliverySource: deliverySourceFor(sourceThreadId, "计划任务"),
     sourceThreadId,
     sourceAgentType: "plan_agent"
   }, { allowedWorkspaces: [process.cwd()] }, driver), /responsePolicy is required/);
@@ -1230,6 +1382,7 @@ test("Agent-to-Agent send refuses an unknown source task", async () => {
     threadId: "019f0000-0000-7000-8000-000000000002",
     prompt: "结果",
     cwd: process.cwd(),
+    deliverySource: deliverySourceFor("019f0000-0000-7000-8000-000000000003", "未知来源任务"),
     sourceThreadId: "019f0000-0000-7000-8000-000000000003",
     sourceAgentType: "plan_agent"
   }, { allowedWorkspaces: [process.cwd()] }, driver), /无法核对来源任务/);
@@ -1255,6 +1408,7 @@ test("Agent-to-Agent send rejects leaked role initialization before it reaches t
     threadId: "019f0000-0000-7000-8000-000000000072",
     prompt: "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]\n你是专职消息处理 Agent，不是主人格。",
     cwd: process.cwd(),
+    deliverySource: deliverySourceFor(sourceThreadId, "星海建造师 策划 程序 协助处理消息2"),
     sourceThreadId,
     sourceAgentType: "message_processing"
   }, { allowedWorkspaces: [process.cwd()] }, driver), /only the newly composed handoff content/);
@@ -1282,6 +1436,7 @@ test("Agent-to-Agent send rejects a self-targeted handoff", async () => {
     threadId,
     prompt: "内部结果",
     cwd: process.cwd(),
+    deliverySource: deliverySourceFor(threadId, "消息处理任务"),
     sourceThreadId: threadId,
     sourceAgentType: "message_processing"
   }, { allowedWorkspaces: [process.cwd()] }, driver), /source and target task must be different/);
@@ -1329,6 +1484,7 @@ test("Agent thread send accepts danger-full-access for Windows sandbox recovery"
     threadId: "019f0000-0000-7000-8000-000000000003",
     prompt: "恢复调查",
     cwd: process.cwd(),
+    deliverySource: defaultDeliverySource,
     sandbox: "danger-full-access"
   }, { allowedWorkspaces: [process.cwd()] }, driver);
 

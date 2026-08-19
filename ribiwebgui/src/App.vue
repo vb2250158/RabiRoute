@@ -15,7 +15,7 @@ import {
 } from "./routeScopedNavigation";
 import { gatewayPersonaDisplayName } from "./personaPresentation";
 import { useGatewayStore } from "./stores/gatewayStore";
-import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "./utils/gatewayHelpers";
+import { configNameFor } from "./utils/gatewayHelpers";
 
 const store = useGatewayStore();
 const route = useRoute();
@@ -69,10 +69,13 @@ const navItems = computed(() => [
   { title: "控制台", icon: "mdi-view-dashboard-outline", to: routeScopedOverviewPath(selectedRouteKey.value) },
   { title: "消息适配器", icon: "mdi-puzzle-outline", to: routeScopedAdaptersPath(selectedRouteKey.value) },
   { title: "人格配置", icon: "mdi-account-heart-outline", to: routeScopedPersonaPath(selectedRouteKey.value) },
-  { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: routeScopedKnowledgePath(selectedRouteKey.value) },
+  { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: routeScopedKnowledgePath(selectedRouteKey.value) }
+].map(item => ({ ...item, title: t(item.title) })));
+const utilityNavItems = computed(() => [
   { title: "语音服务", icon: "mdi-waveform", to: routeScopedSpeechPath(selectedRouteKey.value) },
   { title: "性能监控", icon: "mdi-chart-timeline-variant", to: "/performance" },
-  { title: "日志诊断", icon: "mdi-console-line", to: routeScopedRuntimePath(selectedRouteKey.value) }
+  { title: "日志诊断", icon: "mdi-console-line", to: routeScopedRuntimePath(selectedRouteKey.value) },
+  { title: "设置", icon: "mdi-cog-outline", to: "/settings" }
 ].map(item => ({ ...item, title: t(item.title) })));
 
 const managerConnected = computed(() => !store.managerError);
@@ -80,29 +83,11 @@ const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
 const routeOptions = computed(() => store.gateways.map(gateway => {
   const runtime = store.runtimeFor(gateway.id);
   const title = gatewayPersonaDisplayName(gateway, runtime.roleInfo);
-  const configName = store.configNameFor(gateway);
-  const adapters = gatewayAdapterTypes(gateway).map(adapterLabel).join(" + ");
-  const subtitle = [
-    title !== configName ? configName : "",
-    isMessageInputsDisabled(gateway) ? "已禁用" : "",
-    adapters
-  ].filter(Boolean).join(" · ");
-  return { title, subtitle, value: gateway.id };
+  return { title, value: gateway.id };
 }));
 const selectedGatewayName = computed(() => store.selectedGateway
   ? store.configNameFor(store.selectedGateway)
   : "未选择路由");
-const selectedGatewayAdapters = computed(() => {
-  if (!store.selectedGateway) return "等待配置";
-  const text = gatewayAdapterTypes(store.selectedGateway).map(adapterLabel).join(" + ");
-  return isMessageInputsDisabled(store.selectedGateway) ? `已禁用 · ${text}` : text;
-});
-const selectedRuntimeLabel = computed(() => {
-  if (!store.selectedGateway) return "未配置";
-  if (store.selectedGateway.enabled === false || store.selectedRuntime.enabled === false) return "禁用中";
-  if (!adaptersNeedGatewayRuntime(gatewayAdapterTypes(store.selectedGateway))) return "启用中";
-  return store.selectedRuntime.running ? "运行中" : "已停止";
-});
 
 onMounted(async () => {
   await store.load();
@@ -178,7 +163,7 @@ function selectGateway(id: string) {
         </v-avatar>
         <div class="min-w-0">
           <div class="font-weight-black text-primary text-h6 lh-1">RabiRoute</div>
-          <div class="section-note">星海消息分诊台 · v{{ store.meta.version }}</div>
+          <div class="section-note">v{{ store.meta.version }}</div>
         </div>
       </div>
 
@@ -186,34 +171,38 @@ function selectGateway(id: string) {
 
       <div class="sidebar-body">
         <v-card class="route-picker mb-3" variant="flat">
-          <v-card-text>
-            <div class="d-flex justify-space-between align-center mb-2">
-              <span class="section-note">当前航线</span>
-              <v-chip size="small" color="secondary" variant="tonal">{{ store.gateways.length }}</v-chip>
-            </div>
+          <v-card-text class="pa-3">
             <v-select
               :model-value="store.selectedGatewayId"
               :items="routeOptions"
-              label="当前路由"
+              aria-label="选择航线"
+              hide-details
               @update:model-value="value => selectGateway(String(value || ''))"
             >
               <template #item="{ props: itemProps, item }">
-                <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle" />
+                <v-list-item v-bind="itemProps" />
               </template>
               <template #selection="{ item }">
                 <span class="text-truncate">{{ item.raw.title }}</span>
               </template>
             </v-select>
-            <div class="route-picker-status">
-              <span>{{ selectedRuntimeLabel }}</span>
-              <b>{{ selectedGatewayAdapters }}</b>
-            </div>
           </v-card-text>
         </v-card>
 
         <v-list nav density="comfortable" bg-color="transparent" class="sidebar-list">
           <v-list-item
             v-for="item in navItems"
+            :key="item.to"
+            :to="item.to"
+            :prepend-icon="item.icon"
+            :title="item.title"
+            rounded="lg"
+          />
+        </v-list>
+        <v-divider class="sidebar-nav-divider" />
+        <v-list nav density="comfortable" bg-color="transparent" class="sidebar-list">
+          <v-list-item
+            v-for="item in utilityNavItems"
             :key="item.to"
             :to="item.to"
             :prepend-icon="item.icon"

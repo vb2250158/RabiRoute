@@ -735,7 +735,7 @@ function recordDeliveredNotification(
   };
 }
 
-async function deliverNotification(message: string, deliveryId: string): Promise<CodexMonitorThread> {
+async function deliverNotification(message: string, deliveryId: string, imagePaths: string[] = []): Promise<CodexMonitorThread> {
   const turnOptions = resolvePrimaryCodexTurnOptions(config);
   const previousThreadId = currentCodexThreadId();
   const resolution = await resolveAndDeliverCodexSession({
@@ -749,6 +749,7 @@ async function deliverNotification(message: string, deliveryId: string): Promise
       thread,
       prompt,
       sandbox: "workspace-write",
+      imagePaths,
       ...turnOptions
     }).then(() => undefined)
   }, ({ thread }) => {
@@ -763,12 +764,12 @@ async function deliverNotification(message: string, deliveryId: string): Promise
   );
 }
 
-export async function notifyCodex(message: string): Promise<CodexMonitorThread> {
+export async function notifyCodex(message: string, imagePaths: string[] = []): Promise<CodexMonitorThread> {
   const result = notificationQueue.catch(() => undefined).then(async () => {
     const deliveryId = randomUUID();
     recordAcceptedDelivery(deliveryId);
     try {
-      return await deliverNotification(message, deliveryId);
+      return await deliverNotification(message, deliveryId, imagePaths);
     } catch (error) {
       recordCodexFailure(error, deliveryId);
       throw error;

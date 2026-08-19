@@ -39,6 +39,10 @@ const form = reactive({
   astrbotPassword: "",
   astrbotProjectId: "",
   astrbotSessionId: "",
+  dshSessionId: "",
+  dshSessionName: "",
+  dshCwd: "",
+  dshBaseUrl: "http://127.0.0.1:3080",
   gatewayPort: 8790,
   napcatHttpUrl: "http://127.0.0.1:3000",
   napcatWebuiUrl: "http://127.0.0.1:6099/webui",
@@ -79,7 +83,8 @@ const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: st
   { type: "codex", title: "Codex Agent", note: "真实消息由 Codex/ChatGPT Desktop 当前任务执行", icon: "mdi-monitor-dashboard" },
   { type: "copilotCli", title: "Copilot CLI", note: "实验支持，需要本机登录状态", icon: "mdi-robot-outline" },
   { type: "marvis", title: "Marvis", note: "占位支持，人工接力模式", icon: "mdi-message-processing-outline" },
-  { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" }
+  { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" },
+  { type: "dsh", title: "DSH（DeepSeek Harness）", note: "实验支持，通过 session.prompt API 投递消息", icon: "mdi-brain" }
 ];
 
 const agentModelChoices: string[] = [
@@ -182,6 +187,7 @@ const selectedAgent = computed<AgentAdapterType>(() => form.agentAdapters[0] ?? 
 const selectedSessionName = computed(() => {
   if (selectedAgent.value === "codex") return form.codexThreadId || form.codexThreadName;
   if (selectedAgent.value === "copilotCli") return form.copilotThreadName;
+  if (selectedAgent.value === "dsh") return form.dshSessionId || form.dshSessionName;
   return "";
 });
 const roleOptions = computed(() => [
@@ -197,17 +203,21 @@ const agentNeedsCodexProject = computed(() => selectedAgent.value === "codex");
 const agentNeedsCopilotProject = computed(() => selectedAgent.value === "copilotCli");
 const agentNeedsAstrbotEndpoint = computed(() => selectedAgent.value === "astrbot");
 const agentNeedsMarvisApp = computed(() => selectedAgent.value === "marvis");
+const agentNeedsDshSession = computed(() => selectedAgent.value === "dsh");
 
 function selectAgent(type: AgentAdapterType): void {
   form.agentAdapters = [type];
   if (type === "copilotCli" && !form.copilotCwd && form.codexCwd) {
     form.copilotCwd = form.codexCwd;
   }
+  if (type === "dsh" && !form.dshCwd && form.codexCwd) {
+    form.dshCwd = form.codexCwd;
+  }
 }
 
 function normalizeAgentAdapterValue(value: unknown): AgentAdapterType | null {
   const text = String(value || "");
-  if (text === "codex" || text === "copilotCli" || text === "marvis" || text === "astrbot") {
+  if (text === "codex" || text === "copilotCli" || text === "marvis" || text === "astrbot" || text === "dsh") {
     return text;
   }
   return null;
@@ -286,6 +296,7 @@ function maturityColor(value?: AgentMaturity): string {
 function currentProject(): string {
   if (agentNeedsAstrbotEndpoint.value) return astrbotProjectItems().find(project => project.value === form.astrbotProjectId)?.title || form.astrbotUrl;
   if (agentNeedsMarvisApp.value) return form.marvisAppId || "Tencent.Marvis";
+  if (agentNeedsDshSession.value) return form.dshCwd || form.codexCwd;
   return agentNeedsCopilotProject.value ? form.copilotCwd : form.codexCwd;
 }
 
@@ -304,12 +315,14 @@ function codexBindingSummary(): string {
 function agentPrimaryLabel(): string {
   if (agentNeedsAstrbotEndpoint.value) return "AstrBot 地址/项目";
   if (agentNeedsMarvisApp.value) return "应用 ID";
+  if (agentNeedsDshSession.value) return "DSH 会话 ID";
   return agentNeedsCopilotProject.value ? "项目目录 (-C)" : "项目目录";
 }
 
 function agentSessionLabel(): string {
   if (agentNeedsAstrbotEndpoint.value) return "AstrBot 会话";
   if (agentNeedsMarvisApp.value) return "接力模式";
+  if (agentNeedsDshSession.value) return "DSH 会话";
   return "线程";
 }
 
@@ -318,6 +331,7 @@ function agentSessionSummary(): string {
     return astrbotSessionItems().find(session => session.value === form.astrbotSessionId)?.title || "未选择，使用插件默认管线";
   }
   if (agentNeedsMarvisApp.value) return "不绑定会话";
+  if (agentNeedsDshSession.value) return form.dshSessionId || "未填写 DSH 会话 ID";
   if (selectedAgent.value === "codex") return form.codexThreadName || `自动：${fallbackCodexThreadName()}`;
   if (selectedAgent.value === "copilotCli") return form.copilotThreadName || "未填写";
   return "未填写";
@@ -720,6 +734,7 @@ const agentReady = computed(() => {
   if (!form.agentAdapters.length) return false;
   if (agentNeedsAstrbotEndpoint.value) return Boolean(form.astrbotUrl.trim());
   if (agentNeedsMarvisApp.value) return true;
+  if (agentNeedsDshSession.value) return Boolean(form.dshSessionId.trim() && form.dshCwd.trim());
   if (agentNeedsCopilotProject.value) return Boolean(form.copilotThreadName.trim() && form.copilotCwd.trim());
   if (agentNeedsCodexProject.value) return true;
   return true;
@@ -729,6 +744,9 @@ const canSave = computed(() => messageReady.value && agentReady.value && persona
 const completedSteps = computed(() => [messageReady.value, agentReady.value, personaReady.value].filter(Boolean).length);
 const saveBlockReason = computed(() => {
   if (!messageReady.value) return "消息入口还有必要字段没有填写，请回到第一步补全端口、地址或路径。";
+  if (agentNeedsDshSession.value && (!form.dshSessionId.trim() || !form.dshCwd.trim())) {
+    return "DSH 需要填写完整的 session-<uuid> 会话 ID 和工作目录；会话请先在 DSH WebGUI 中创建。";
+  }
   if (!agentReady.value) return "Agent 绑定还有必要字段没有填写，请回到第二步补全项目目录、会话或服务地址。";
   return "";
 });
@@ -801,6 +819,10 @@ function syncFromGateway() {
   form.wecomBotId = gateway?.wecomBotId || "";
   form.wecomBotSecret = gateway?.wecomBotSecret || "";
   form.wecomWsUrl = gateway?.wecomWsUrl || "";
+  form.dshSessionId = gateway?.dshSessionId || "";
+  form.dshSessionName = gateway?.dshSessionName || "";
+  form.dshCwd = gateway?.dshCwd || gateway?.codexCwd || "";
+  form.dshBaseUrl = gateway?.dshBaseUrl || "http://127.0.0.1:3080";
   napcatHealthResult.value = null;
   astrbotLoginResult.value = null;
   marvisOpenResult.value = null;
@@ -1179,6 +1201,9 @@ async function apply() {
                   <v-alert v-if="selectedAgent === 'marvis'" type="info" variant="tonal" density="compact" class="mb-3">
                     Marvis 当前是人工接力模式：RabiRoute 会打开应用并复制 prompt，不会绑定会话线程。
                   </v-alert>
+                  <v-alert v-if="selectedAgent === 'dsh'" type="info" variant="tonal" density="compact" class="mb-3">
+                    DSH 会话是主人格投递目标：通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。仍为实验性：尚未自动执行真实消息注入烟测。
+                  </v-alert>
 
                   <div class="catalog-param-grid">
                   <template v-if="selectedAgent === 'marvis'">
@@ -1227,6 +1252,53 @@ async function apply() {
                       >
                         {{ marvisOpenResult.message }}
                       </v-alert>
+                    </div>
+                  </template>
+
+                  <template v-if="selectedAgent === 'dsh'">
+                    <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                      DSH 会话是主人格投递目标；通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。
+                      DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。
+                      仍为实验性：尚未自动执行真实消息注入烟测。
+                    </v-alert>
+                    <div class="catalog-param-grid">
+                      <v-text-field
+                        v-model="form.dshSessionId"
+                        label="DSH 会话 ID"
+                        placeholder="session-<uuid>"
+                        hint="在 DeepSeek Harness Web GUI 的会话页复制。格式固定：session-<uuid>"
+                        persistent-hint
+                        data-no-i18n
+                      />
+                      <v-text-field
+                        v-model="form.dshSessionName"
+                        label="DSH 会话名称"
+                        placeholder="DSH CottonGame Luna Max"
+                        hint="可选标识，只用于显示，不改变 Harness 的会话名"
+                        persistent-hint
+                        data-no-i18n
+                      />
+                      <v-combobox
+                        v-model="form.dshCwd"
+                        :items="projectItems()"
+                        label="工作目录"
+                        placeholder="C:/Path/To/Project"
+                        hint="DSH 绑定需要明确工作目录；应与 DSH 会话的 cwd 一致"
+                        persistent-hint
+                      >
+                        <template #append-inner>
+                          <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                          <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
+                        </template>
+                      </v-combobox>
+                      <v-text-field
+                        v-model="form.dshBaseUrl"
+                        label="DSH API 基地址"
+                        placeholder="http://127.0.0.1:3080"
+                        hint="本机 DeepSeek Harness 的 apiproxy 入口；默认 http://127.0.0.1:3080"
+                        persistent-hint
+                        data-no-i18n
+                      />
                     </div>
                   </template>
 

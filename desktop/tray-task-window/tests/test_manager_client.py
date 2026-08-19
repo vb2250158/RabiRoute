@@ -135,6 +135,7 @@ class ManagerSnapshotTest(unittest.TestCase):
 
         self.assertTrue(settings.enabled)
         self.assertTrue(settings.advanced)
+        self.assertTrue(settings.read_aloud_enabled)
         self.assertEqual(settings.model, "tts/test")
         self.assertEqual(models, [{"id": "tts/test", "capability": "tts"}])
         self.assertTrue(result.ok)
@@ -142,6 +143,26 @@ class ManagerSnapshotTest(unittest.TestCase):
         self.assertEqual(client.binary_posts[0][1]["input"], "划选文字")
         self.assertTrue(client.binary_posts[0][1]["play"])
         self.assertEqual(client.binary_posts[0][2], 120)
+
+    def test_screenshot_message_keeps_text_and_image_on_role_panel_endpoint(self) -> None:
+        client = _RecordingManagerClient()
+
+        result = client.send_role_panel_message(
+            "route-screenshot",
+            "请查看这张截图。",
+            [{"kind": "image", "name": "screenshot.png", "path": "C:/tmp/screenshot.png", "size": 128}],
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(client.posts[0], (
+            "/api/role-panel/messages",
+            {
+                "gatewayId": "route-screenshot",
+                "text": "请查看这张截图。",
+                "attachments": [{"kind": "image", "name": "screenshot.png", "path": "C:/tmp/screenshot.png", "size": 128}],
+            },
+        ))
+        self.assertEqual(client.post_timeouts, [45])
 
 
 if __name__ == "__main__":

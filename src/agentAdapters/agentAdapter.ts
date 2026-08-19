@@ -7,14 +7,18 @@ import type { AgentAdapterType } from "./types.js";
 
 export type AgentAdapter = {
   type: AgentAdapterType;
-  deliver(message: string): Promise<void>;
+  deliver(message: string, options?: AgentDeliveryOptions): Promise<void>;
+};
+
+export type AgentDeliveryOptions = {
+  imagePaths?: string[];
 };
 
 export function createAgentAdapter(type: AgentAdapterType): AgentAdapter {
   if (type === "codex") {
     return {
       type,
-      deliver: async (message) => { await notifyCodex(message); }
+      deliver: async (message, options) => { await notifyCodex(message, options?.imagePaths); }
     };
   }
 
@@ -42,8 +46,8 @@ export function createAgentAdapter(type: AgentAdapterType): AgentAdapter {
   if (type === "dsh") {
     return {
       type,
-      deliver: async (message) => {
-        await notifyDshSession(message);
+      deliver: async (message, options) => {
+        await notifyDshSession(message, options?.imagePaths);
       }
     };
   }

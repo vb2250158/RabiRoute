@@ -6,7 +6,7 @@ English | <a href="./agent-adapter-integration-lessons.md">简体中文</a>
 
 # Agent Adapter Integration Lessons
 
-This guide distills recurring failures from the Codex, Copilot CLI, Marvis, AstrBot, and Remote Agent integrations. The durable lesson is not about one port or one script. It is about separating handler ownership, session identity, tool capability, and RabiRoute's routing responsibility.
+This guide distills recurring failures from the Codex, Copilot CLI, Marvis, AstrBot, DSH, and Remote Agent integrations. The durable lesson is not about one port or one script. It is about separating handler ownership, session identity, tool capability, and RabiRoute's routing responsibility.
 
 ## Conclusions first
 

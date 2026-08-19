@@ -480,9 +480,14 @@ Manager 还会按 `record` 的类型读取对应计划、记忆或项目文档�
 {
   "action": "send",
   "threadId": "<target-task-id>",
+  "cwd": "C:/Path/To/Project",
+  "deliverySource": {
+    "agentAdapter": "codex",
+    "sessionId": "<message-agent-task-id>",
+    "sessionName": "当前消息处理任务名称"
+  },
   "sourceThreadId": "<message-agent-task-id>",
   "sourceAgentType": "message_processing",
-  "cwd": "C:/Path/To/Project",
   "prompt": "请处理这个计划事项，并把结果返回来源消息处理任务。",
   "messageProcessing": {
     "requirementId": "<requirement-id>",
@@ -816,6 +821,11 @@ POST http://127.0.0.1:8790/api/agent/threads
   "action": "create",
   "title": "[Example][Research] 比较两种接入方案",
   "cwd": "C:\\Path\\To\\Your\\Project",
+  "deliverySource": {
+    "agentAdapter": "codex",
+    "sessionId": "019f0000-0000-7000-8000-000000000010",
+    "sessionName": "当前调查会话"
+  },
   "prompt": "读取现有实现和项目规范，比较两种方案并给出验证计划；未经明确授权不要修改文件。",
   "sandbox": "workspace-write"
 }
@@ -829,6 +839,11 @@ POST http://127.0.0.1:8790/api/agent/threads
   "threadId": "019f0000-0000-7000-8000-000000000001",
   "cwd": "C:\\Path\\To\\Your\\Project",
   "sandbox": "workspace-write",
+  "deliverySource": {
+    "agentAdapter": "codex",
+    "sessionId": "019f0000-0000-7000-8000-000000000002",
+    "sessionName": "计划秘书会话"
+  },
   "sourceThreadId": "019f0000-0000-7000-8000-000000000002",
   "sourceAgentType": "plan_secretary",
   "responsePolicy": "required",
@@ -837,7 +852,7 @@ POST http://127.0.0.1:8790/api/agent/threads
 }
 ```
 
-Agent 向另一个 Agent 任务发送消息时，必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
+所有带有非空 `prompt` 的 `create` 和 `send` 都必须提供 `deliverySource`，不能省略。`deliverySource.agentAdapter` 填实际 Agent 端，例如 `codex`、`dsh`、`copilotCli`、`marvis` 或 `astrbot`；`deliverySource.sessionId` 填实际来源会话完整 ID，`sessionName` 填当前会话名称，无法取得名称时可省略，界面会回退显示会话 ID。Agent 间投递还必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`，且 `deliverySource.sessionId` 必须等于 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
 
 正式回复仍使用同一个 `send` 动作。回复方必须把 `inReplyToRequestId`、`result` 和 `nextAction` 送回原请求任务，并再次填写 `responsePolicy`：如果新的下一步还要求原请求方处理后返回，使用 `required` 并填写新的 `responseInstruction`；如果本次往返到此结束，使用 `none`。
 
@@ -846,6 +861,11 @@ Agent 向另一个 Agent 任务发送消息时，必须提供自己的完整 `so
   "action": "send",
   "threadId": "019f0000-0000-7000-8000-000000000002",
   "cwd": "C:\\Path\\To\\Your\\Project",
+  "deliverySource": {
+    "agentAdapter": "codex",
+    "sessionId": "019f0000-0000-7000-8000-000000000001",
+    "sessionName": "计划业务会话"
+  },
   "sourceThreadId": "019f0000-0000-7000-8000-000000000001",
   "sourceAgentType": "plan_agent",
   "inReplyToRequestId": "请求中给出的 requestId",
@@ -860,16 +880,16 @@ Agent 向另一个 Agent 任务发送消息时，必须提供自己的完整 `so
 
 Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认该标记已经写入时，仍按送达成功提交请求/回复状态；没有标记时才返回可重试失败。调用方遇到超时不得立即重复发送，应先读取请求状态和目标任务最近一轮。
 
-Manager 先按来源 ID 读取 Desktop 状态并核对任务存在、ID 一致且未归档，再通过 `codexDesktopBridge.ts` 的统一任务读取模型取得左侧聊天栏当前名称。`agentThreads.ts`、消息处理 Agent、心跳和来源模板不得各自读取或覆盖另一份任务名。正文前会显示“来源 Agent、来源任务、来源会话 ID、来源工作目录”；任务名不由发送方填写。RabiRoute 自己产生的普通消息、初始化消息、提醒和系统通知不属于 Agent 互投，可以不带来源与回复字段。
+Agent 间投递时，Manager 先按 `sourceThreadId` 读取 Desktop 状态并核对任务存在、ID 一致且未归档，再通过 `codexDesktopBridge.ts` 的统一任务读取模型取得左侧聊天栏当前名称。`agentThreads.ts`、消息处理 Agent、心跳和来源模板不得各自读取或覆盖另一份任务名。所有带有非空 `prompt` 的投递正文前都会显示“投递源、Agent 端、来源会话、来源会话 ID”；Agent 间投递还会显示来源 Agent 和来源工作目录。RabiRoute 自动生成的提醒、初始化消息和系统通知也必须携带对应的来源会话，不能省略 `deliverySource`。
 
 安全边界：
 
 - `create` / `send` 的 `cwd` 必须属于当前 RabiRoute 配置中已有的 Codex 工作区；不能用该接口在任意路径启动任务。
-- Agent 互投必须提供可核对的来源任务 ID；`sourceAgentType` 只声明发送方当前职责，任务名和会话 ID 仍以 Desktop 查询结果为准。
+- 所有带有非空 `prompt` 的 `create` / `send` 都必须提供 `deliverySource.agentAdapter` 和 `deliverySource.sessionId`；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `deliverySource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以 Desktop 查询结果或来源端填写的 `sessionName` 为准。
 - Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主人格 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
-- `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束，包括没有来源 Agent 字段的普通续投：未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。PangHu 没有任务级例外，只能使用正式 Main、Release 和 Art，旧任务或历史记录里的隔离、稀疏、clean working copy 安排已经撤销。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
+- `create` 的固定开发说明和所有 `send` 续投都会追加工作区交付约束；未经当前用户明确授权，不得新建额外工作副本、稀疏检出、复制工程或旁路目录；工作区 `AGENTS.md` 有更严格限制时以它为准。PangHu 没有任务级例外，只能使用正式 Main、Release 和 Art，旧任务或历史记录里的隔离、稀疏、clean working copy 安排已经撤销。只有改动已经进入用户实际运行或验收的目标工作区，并完成适用的资源关联、构建或编译及运行验证，才能称为“已修复”或“可验收”。
 - `create` 按“任务名 + 工作目录”幂等解析。相同创建请求并发到达、调用方等待超时后重试，或任务刚创建但 Desktop 索引尚未及时显示时，都会复用同一次创建结果；不得因为第一次 HTTP 超时再次创建同名任务。返回 `resolution=created` 表示本次新建，`resolution=name` 表示复用了同名同工作目录任务。
 - Manager 在运行期 `data/.runtime/codex-thread-creations/` 持久保存创建 reservation。状态按 `reserved → creating → thread_created → naming → initial_turn → completed` 推进。`creating` 超过 5 分钟、没有 `threadId`，并且第二次 `action=list + lookupMode=state_db` 明确确认同名同工作目录任务不存在时，Manager 才先转为 `failed_before_create`，再允许同键重试。记录已有 `threadId`、索引查询失败、查到候选任务或其它证据不足时转为 `uncertain`，后续请求返回 `409` 并禁止自动再次创建。
 - `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。

@@ -11,7 +11,7 @@ import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSour
 import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
-import { agentAdapterSupportsManagedTaskFeature, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
+import { agentAdapterSupportsManagedTaskFeature, codexMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
 import {
   DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
   codexPlanAssistantInitializationPrompt,
@@ -3078,6 +3078,7 @@ const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; ic
   { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
+  { type: "dsh",         title: "DSH（DeepSeek Harness 会话）", note: "通过 session.prompt API 投递到本机 DSH 会话", icon: "mdi-brain", hasCwd: true, hasThread: false },
 ];
 
 const addAgentMenu = ref(false);
@@ -3092,6 +3093,9 @@ const availableAgentsToAdd = computed(() => agentDefs.filter(a => !agentTypes.va
 const primaryAgentType = computed(() => resolvePrimaryAgentAdapter(
   agentTypes.value,
   gateway.value?.primaryAgentAdapter
+));
+const codexMessageAgentModeEnabled = computed(() => (
+  gateway.value ? codexMessageProcessingAgentEnabled(gateway.value) : false
 ));
 const primaryAgentItems = computed(() => visibleAgentItems.value.map(agent => ({
   title: agent.title,
@@ -3924,7 +3928,7 @@ watch(
                     <div class="section-title small-title">消息组等待</div>
                     <div class="section-note">聊天消息默认使用消息组，不需要单独开启。这里仅调整等待一句话说完的时间。</div>
                     <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                      Codex Agent 开启消息处理模式后，聊天消息会先立即记录，再按这些参数合并。ASR、心跳和结构化事件不在这里等待。
+                      主控选择 Codex 且开启消息处理模式后，聊天消息会先立即记录，再按这些参数合并。ASR、心跳和结构化事件不在这里等待。
                     </v-alert>
                     <div class="catalog-param-grid mt-2">
                       <v-text-field
@@ -4513,14 +4517,14 @@ watch(
                     </div>
                   </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
-                    <v-alert v-if="messageProcessingAgentPolicy('codex').enabled" class="full-span" type="success" variant="tonal" density="compact">
+                    <v-alert v-if="codexMessageAgentModeEnabled" class="full-span" type="success" variant="tonal" density="compact">
                       Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
                     </v-alert>
                     <v-alert v-else class="full-span" type="info" variant="tonal" density="compact">
                       定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
                     </v-alert>
                     <v-switch
-                      v-if="!messageProcessingAgentPolicy('codex').enabled"
+                      v-if="!codexMessageAgentModeEnabled"
                       v-model="gateway.heartbeatSkipWhenAgentBusy"
                       class="full-span"
                       color="primary"
@@ -5052,7 +5056,7 @@ watch(
                 >
                   {{ warning }}
                 </v-alert>
-                <div v-if="supportsManagedTaskFeature(agent.type, 'messageProcessingAgent')" class="dependency-panel mb-3">
+                <div v-if="supportsManagedTaskFeature(agent.type, 'messageProcessingAgent') && primaryAgentType === agent.type" class="dependency-panel mb-3">
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">消息处理 Agent 模式</div>
@@ -5117,7 +5121,7 @@ watch(
                       </v-card-title>
                       <v-card-text>
                         <MessageProcessingBoard
-                          v-if="messageProcessingBoardOpen && messageProcessingAgentPolicy(agent.type).enabled"
+                          v-if="messageProcessingBoardOpen && codexMessageAgentModeEnabled"
                           :gateway-id="gateway.id"
                           :enabled="true"
                         />
@@ -5484,6 +5488,56 @@ watch(
                   >
                     {{ marvisOpenResult.message }}
                   </v-alert>
+                </template>
+                <template v-else-if="agent.type === 'dsh'">
+                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                    DSH 会话是主人格投递目标：通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。
+                    DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。
+                    仍为实验性：尚未自动执行真实消息注入烟测。
+                  </v-alert>
+                  <div class="catalog-param-grid">
+                    <v-text-field
+                      v-model="gateway.dshSessionId"
+                      label="DSH 会话 ID"
+                      placeholder="session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                      hint="在 DeepSeek Harness Web GUI 的会话页面复制。格式固定：session-<uuid>"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
+                    <v-text-field
+                      v-model="gateway.dshSessionName"
+                      label="DSH 会话名称"
+                      placeholder="DSH CottonGame Luna Max"
+                      hint="可选标识，只用于显示，不会改变 DSH 内的会话名"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
+                    <v-combobox
+                      v-model="gateway.dshCwd"
+                      :items="agentProjectItems('dsh')"
+                      label="工作目录"
+                      placeholder="C:/Path/To/Project"
+                      hint="DSH 绑定需要明确工作目录；应与 DSH 会话的 cwd 一致"
+                      persistent-hint
+                      @update:model-value="touch"
+                    >
+                      <template #append-inner>
+                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                        <v-icon v-else-if="agentProjectItems('dsh').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runAgentScan" />
+                      </template>
+                    </v-combobox>
+                    <v-text-field
+                      v-model="gateway.dshBaseUrl"
+                      label="DSH API 基地址"
+                      placeholder="http://127.0.0.1:3080"
+                      hint="本机 DeepSeek Harness 的 apiproxy 入口；默认 http://127.0.0.1:3080"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
+                  </div>
                 </template>
                 <template v-else-if="agent.type === 'astrbot'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">

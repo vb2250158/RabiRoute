@@ -536,28 +536,6 @@ body::before {
   box-shadow: none !important;
 }
 
-.route-picker-status {
-  display: grid;
-  gap: 2px;
-  border-top: 1px solid rgba(17, 32, 51, .08);
-  margin-top: 10px;
-  padding-top: 10px;
-}
-
-.route-picker-status span {
-  color: #0f8b8d;
-  font-size: 12px;
-  font-weight: 850;
-}
-
-.route-picker-status b {
-  color: #667586;
-  font-size: 12px;
-  font-weight: 750;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
 .sidebar-list .v-list-item {
   min-height: 40px;
   margin-bottom: 4px;
@@ -572,6 +550,11 @@ body::before {
 .sidebar-list .v-list-item-title {
   font-size: 14px;
   font-weight: 650;
+}
+
+.sidebar-nav-divider {
+  margin: 10px 4px 8px;
+  opacity: .55;
 }
 
 .sidebar-footer {
@@ -761,6 +744,81 @@ body::before {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
+}
+
+.route-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr));
+  gap: 18px;
+}
+
+.route-card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px 22px !important;
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+.route-card:hover,
+.route-card:focus-visible {
+  border-color: rgba(25, 191, 193, .42) !important;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, .1) !important;
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.route-card-selected {
+  border-color: rgba(25, 191, 193, .58) !important;
+  background: linear-gradient(135deg, rgba(239, 253, 255, .96), rgba(255, 255, 255, .94)) !important;
+}
+
+.route-card-head,
+.route-card-identity,
+.route-card-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.route-card-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.route-card-identity {
+  gap: 12px;
+}
+
+.route-card-title {
+  color: #0c2a4a;
+  font-size: 16px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.route-card-subtitle {
+  margin-top: 3px;
+  color: #667586;
+  font-size: 12px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.route-card-meta {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid rgba(17, 32, 51, .1);
+  border-bottom: 1px solid rgba(17, 32, 51, .1);
+}
+
+.route-card-meta .status-row {
+  padding-inline: 0;
+}
+
+.route-card-actions {
+  gap: 4px;
 }
 
 .stat-card {

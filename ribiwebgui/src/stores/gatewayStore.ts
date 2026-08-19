@@ -20,6 +20,7 @@ import {
 } from "../utils/gatewayHelpers";
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
 import {
+  agentAdapterValues,
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   resolvePrimaryAgentAdapter,
   validateGatewayPortConflicts
@@ -171,7 +172,7 @@ function autoAssignGatewayPorts(items: GatewayDefinition[], managerPort: number)
 }
 
 function isAgentAdapterType(value: unknown): value is AgentAdapterType {
-  return value === "codex" || value === "copilotCli" || value === "marvis" || value === "astrbot";
+  return typeof value === "string" && agentAdapterValues.has(value as AgentAdapterType);
 }
 
 function normalizeAgentAdapterType(value: unknown): AgentAdapterType | null {
@@ -823,6 +824,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     astrbotPassword?: string;
     astrbotProjectId?: string;
     astrbotSessionId?: string;
+    dshSessionId?: string;
+    dshSessionName?: string;
+    dshCwd?: string;
+    dshBaseUrl?: string;
     gatewayPort: number;
     napcatHttpUrl: string;
     napcatWebuiUrl?: string;
@@ -883,6 +888,12 @@ export const useGatewayStore = defineStore("gateway", () => {
       gateway.astrbotPassword = values.astrbotPassword || gateway.astrbotPassword;
       gateway.astrbotProjectId = values.astrbotProjectId || gateway.astrbotProjectId;
       gateway.astrbotSessionId = values.astrbotSessionId || gateway.astrbotSessionId;
+    }
+    if (gateway.agentAdapters?.includes("dsh")) {
+      gateway.dshSessionId = values.dshSessionId || gateway.dshSessionId;
+      gateway.dshSessionName = values.dshSessionName || gateway.dshSessionName;
+      gateway.dshCwd = values.dshCwd || values.codexCwd;
+      gateway.dshBaseUrl = values.dshBaseUrl || gateway.dshBaseUrl;
     }
     gateway.gatewayPort = values.gatewayPort;
     gateway.napcatHttpUrl = values.napcatHttpUrl;

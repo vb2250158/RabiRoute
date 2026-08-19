@@ -9,10 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QFileSystemWatcher, QObject, QPoint, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QPushButton, QMenu, QVBoxLayout, QWidget
 
+from .display_helpers import route_menu_label
 from .manager_client import (
     ManagerClient,
     RolePanelSendResult,
@@ -37,6 +38,31 @@ class ScreenRect:
 class SelectedText:
     text: str
     rect: ScreenRect | None = None
+
+
+@dataclass(frozen=True)
+class SelectionDeliveryTarget:
+    gateway_id: str
+    label: str
+
+
+def active_selection_delivery_targets(
+    gateways: list[dict[str, Any]],
+    preferred_gateway_id: str = "",
+) -> list[SelectionDeliveryTarget]:
+    targets = [
+        SelectionDeliveryTarget(
+            gateway_id=str(gateway.get("id") or "").strip(),
+            label=route_menu_label(gateway),
+        )
+        for gateway in gateways
+        if isinstance(gateway, dict)
+        and gateway.get("enabled") is True
+        and gateway.get("running") is True
+        and str(gateway.get("id") or "").strip()
+    ]
+    targets.sort(key=lambda target: 0 if target.gateway_id == preferred_gateway_id else 1)
+    return targets
 
 
 def normalize_selected_text(value: str, max_length: int = SELECTION_TEXT_MAX_LENGTH) -> str:
@@ -165,9 +191,9 @@ class _NullContext:
 
 class SelectionActionBar(QWidget):
     read_requested = Signal()
-    deliver_requested = Signal()
+    deliver_requested = Signal(str)
 
-    def __init__(self) -> None:
+    def __init__(self, delivery_targets_provider: Callable[[], list[SelectionDeliveryTarget]]) -> None:
         flags = Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
         super().__init__(None, flags)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
@@ -181,8 +207,9 @@ class SelectionActionBar(QWidget):
 
         self.read_button = QPushButton("朗读")
         self.read_button.setObjectName("selectionReadButton")
-        self.deliver_button = QPushButton("投递至当前人格")
+        self.deliver_button = QPushButton("投递至")
         self.deliver_button.setObjectName("selectionDeliverButton")
+        self.deliver_button.setToolTip("移动到这里查看所有激活人格")
         layout.addWidget(self.read_button)
         layout.addWidget(self.deliver_button)
 
@@ -199,16 +226,30 @@ class SelectionActionBar(QWidget):
             "QPushButton:disabled { color: #94a3b8; background: #f8fafc; }"
         )
         self.read_button.clicked.connect(self.read_requested.emit)
-        self.deliver_button.clicked.connect(self.deliver_requested.emit)
+        self.deliver_button.clicked.connect(self._show_delivery_menu)
+        self.deliver_button.installEventFilter(self)
+        self._delivery_targets_provider = delivery_targets_provider
+        self._delivery_targets: dict[str, SelectionDeliveryTarget] = {}
+        self._delivery_menu = QMenu(self)
+        self._delivery_menu.setObjectName("selectionDeliveryMenu")
+        self._delivery_menu.setStyleSheet(
+            "QMenu { background: white; border: 1px solid #cbd5e1; padding: 4px; }"
+            "QMenu::item { min-height: 30px; padding: 4px 18px; color: #0f172a; border-radius: 6px; }"
+            "QMenu::item:selected { background: #ecfeff; color: #0f172a; }"
+            "QMenu::item:disabled { color: #94a3b8; }"
+        )
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
 
-    def show_for(self, anchor: QPoint, target_label: str, can_deliver: bool) -> None:
-        compact_label = target_label.strip() or "当前人格"
-        if len(compact_label) > 18:
-            compact_label = f"{compact_label[:17]}…"
-        self.deliver_button.setText(f"投递至 {compact_label}")
+    def set_read_visible(self, can_read: bool) -> None:
+        self.read_button.setVisible(can_read)
+        self.read_button.setEnabled(can_read)
+        if self.isVisible():
+            self.adjustSize()
+
+    def show_for(self, anchor: QPoint, can_deliver: bool, can_read: bool = True) -> None:
+        self.set_read_visible(can_read)
         self.deliver_button.setEnabled(can_deliver)
         self.adjustSize()
         screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
@@ -231,10 +272,52 @@ class SelectionActionBar(QWidget):
         self._hide_timer.start(10_000)
 
     def contains_cursor(self) -> bool:
-        return self.isVisible() and self.geometry().contains(QCursor.pos())
+        if not self.isVisible():
+            return False
+        cursor = QCursor.pos()
+        return self.geometry().contains(cursor) or (
+            self._delivery_menu.isVisible() and self._delivery_menu.frameGeometry().contains(cursor)
+        )
+
+    def delivery_target_label(self, gateway_id: str) -> str:
+        target = self._delivery_targets.get(gateway_id)
+        return target.label if target is not None else ""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.deliver_button and event.type() == QEvent.Type.Enter:
+            self._show_delivery_menu()
+        return super().eventFilter(watched, event)
+
+    @Slot()
+    def _show_delivery_menu(self) -> None:
+        if not self.isVisible() or not self.deliver_button.isEnabled():
+            return
+        targets = self._delivery_targets_provider()
+        self._delivery_targets = {target.gateway_id: target for target in targets}
+        self._delivery_menu.clear()
+        if not targets:
+            empty_action = self._delivery_menu.addAction("暂无激活人格")
+            empty_action.setEnabled(False)
+        else:
+            for target in targets:
+                action = self._delivery_menu.addAction(target.label)
+                action.triggered.connect(
+                    lambda _checked=False, gateway_id=target.gateway_id: self.deliver_requested.emit(gateway_id)
+                )
+        self._delivery_menu.adjustSize()
+        screen = QApplication.screenAt(self.deliver_button.mapToGlobal(QPoint(0, 0))) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        button_origin = self.deliver_button.mapToGlobal(QPoint(0, self.deliver_button.height()))
+        x = max(available.left() + 8, min(button_origin.x(), available.right() - self._delivery_menu.width() - 8))
+        y = max(available.top() + 8, min(button_origin.y(), available.bottom() - self._delivery_menu.height() - 8))
+        self._delivery_menu.popup(QPoint(x, y))
 
     def hide(self) -> None:
         self._hide_timer.stop()
+        self._delivery_menu.hide()
+        self._delivery_targets = {}
         super().hide()
 
 
@@ -337,7 +420,7 @@ class SystemSelectionController(QObject):
     def __init__(
         self,
         manager: ManagerClient,
-        gateway_context: Callable[[], tuple[str, str]],
+        delivery_targets_provider: Callable[[], list[SelectionDeliveryTarget]],
         notify: Callable[[str, str, bool], None],
         settings_path: Path | None = None,
         reader: WindowsSelectionReader | None = None,
@@ -345,12 +428,11 @@ class SystemSelectionController(QObject):
     ) -> None:
         super().__init__()
         self._manager = manager
-        self._gateway_context = gateway_context
         self._notify = notify
         self._settings_path = settings_path
         self._reader = reader or WindowsSelectionReader()
         self._hook = hook or WindowsGlobalSelectionHook()
-        self._toolbar = SelectionActionBar()
+        self._toolbar = SelectionActionBar(delivery_targets_provider)
         self._settings = SelectionSpeechSettings()
         self._selected: SelectedText | None = None
         self._selection_generation = 0
@@ -421,6 +503,8 @@ class SystemSelectionController(QObject):
                 self._settings = result
                 if not result.enabled:
                     self.dismiss()
+                elif self._toolbar.isVisible():
+                    self._toolbar.set_read_visible(result.read_aloud_enabled)
 
         self._settings_task = start_qt_task(
             self._manager.selection_speech_settings,
@@ -457,8 +541,7 @@ class SystemSelectionController(QObject):
                 return
             self._selection_error_notified = False
             self._selected = result
-            gateway_id, label = self._gateway_context()
-            self._toolbar.show_for(anchor, label, bool(gateway_id))
+            self._toolbar.show_for(anchor, bool(delivery_targets_provider()), self._settings.read_aloud_enabled)
 
         self._selection_task = start_qt_task(
             self._reader.read,
@@ -477,7 +560,7 @@ class SystemSelectionController(QObject):
         selected = self._selected
         settings = self._settings
         self._toolbar.hide()
-        if selected is None or self._action_task is not None:
+        if selected is None or not settings.read_aloud_enabled or self._action_task is not None:
             return
 
         def operation() -> SpeechActionResult:
@@ -501,14 +584,14 @@ class SystemSelectionController(QObject):
         )
 
     @Slot()
-    def _deliver_selected(self) -> None:
+    def _deliver_selected(self, gateway_id: str) -> None:
         selected = self._selected
-        gateway_id, label = self._gateway_context()
+        label = self._toolbar.delivery_target_label(gateway_id)
         self._toolbar.hide()
         if selected is None or self._action_task is not None:
             return
-        if not gateway_id:
-            self._notify("系统划词", "请先在托盘中选择人格 Route。", True)
+        if not gateway_id or not label:
+            self._notify("系统划词", "激活人格列表已更新，请重新划词后选择。", True)
             return
 
         def completed(task: QtAsyncTask, result: RolePanelSendResult) -> None:

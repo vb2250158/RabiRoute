@@ -133,12 +133,15 @@ test("plan task completion reminder keeps the secretary control-only and continu
   const text = planTaskCompletionAgentText(delivery("C:\\role"));
 
   assert.match(text, /结果已直达计划秘书/);
-  assert.match(text, /\[Agent 任务投递来源\]/);
+  assert.match(text, /^\[投递源\]/);
+  assert.match(text, /Agent 端：codex/);
+  assert.match(text, /来源会话 ID：source-session/);
   assert.match(text, /来源 Agent：计划执行 Agent/);
   assert.match(text, /来源会话 ID：source-session/);
   assert.match(text, /\[投递内容\]/);
   assert.match(text, /本轮完成以下事项/);
   assert.match(text, /POST \/api\/agent\/threads/);
+  assert.match(text, /sourceThreadId=当前秘书会话 ID/);
   assert.match(text, /续投原业务任务 source-session/);
   assert.match(text, /原业务任务/);
   assert.match(text, /taskBinding 只指向业务任务/);
