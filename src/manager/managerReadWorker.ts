@@ -29,6 +29,7 @@ import type {
   PerformanceStoreStatus
 } from "../shared/performanceContract.js";
 import { buildPerformanceSummary, isPerformanceSample } from "./performanceStore.js";
+import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecovery.js";
 
 export type ManagerReadWorkerTask =
   | {
@@ -41,6 +42,10 @@ export type ManagerReadWorkerTask =
       rolesRoot: string;
       stateRoot: string;
       roleId?: string;
+    }
+  | {
+      type: "plan_feedback_recovery_candidates";
+      rolesRoot: string;
     }
   | {
       type: "role_memory_catalog";
@@ -165,6 +170,8 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
         pauseMs: 10
       });
     }
+    case "plan_feedback_recovery_candidates":
+      return listOpenPlanFeedbackRecoveryCandidates(task.rolesRoot);
     case "role_memory_catalog": {
       if (task.kind === "recent" || task.kind === "archived") {
         if (task.memoryId && !getRecentMemory(task.roleDir, task.memoryId)) return null;

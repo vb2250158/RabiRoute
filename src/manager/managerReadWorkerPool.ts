@@ -16,6 +16,7 @@ import type {
   AgentScanOptions,
   AgentScanRuntimeSnapshot
 } from "../agentAdapters/managerApi.js";
+import type { PlanFeedbackRecoveryCandidate } from "./planFeedbackRecovery.js";
 import type {
   PerformanceMonitoringConfig,
   PerformanceStoreStatus
@@ -209,6 +210,16 @@ export class ManagerReadWorkerPool {
       rolesRoot,
       stateRoot,
       roleId
+    }, options);
+  }
+
+  queryPlanFeedbackRecoveryCandidates(
+    rolesRoot: string,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<PlanFeedbackRecoveryCandidate[]> {
+    return this.run<PlanFeedbackRecoveryCandidate[]>({
+      type: "plan_feedback_recovery_candidates",
+      rolesRoot
     }, options);
   }
 

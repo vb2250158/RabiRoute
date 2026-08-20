@@ -5385,7 +5385,20 @@ function queuePlanFeedbackRecoverySweep(reason: string, delayMs = PLAN_FEEDBACK_
 
 async function runPlanFeedbackRecoverySweep(reason: string): Promise<void> {
   if (managerReadOnly) return;
-  const candidates = listOpenPlanFeedbackRecoveryCandidates(rolesRoot);
+  let candidates: ReturnType<typeof listOpenPlanFeedbackRecoveryCandidates>;
+  try {
+    // Role data can be stored on a NAS. Keep its synchronous legacy scan out of
+    // the Manager event loop so a slow share cannot stall every HTTP endpoint.
+    candidates = await managerReadWorkerPool.queryPlanFeedbackRecoveryCandidates(rolesRoot);
+  } catch (error) {
+    managerOperationalLog.record("warn", "plan_feedback_recovery_scan_failed", {
+      action: reason,
+      error: managerOperationalError(error, rootDir),
+      result: error instanceof ManagerReadWorkerError ? error.code : "failed"
+    });
+    queuePlanFeedbackRecoverySweep("recovery scan retry");
+    return;
+  }
   let delivered = 0;
   let scheduled = 0;
   let deferred = 0;
