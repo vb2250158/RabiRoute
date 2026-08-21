@@ -93,7 +93,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | AstrBot | 实验支持 | 支持 Dashboard 登录验证、项目/会话扫描、RabiRoute 插件部署和 ChatUI 会话投递；扫描接口明确提示仍需真实连续发送验收。 |
 | Marvis | 人工接力 | 写 prompt、复制剪贴板并打开/聚焦 Marvis；不能可靠列出、创建或重复注入同一会话。 |
 
-处理端创建已接入首个 Cordis 运行时切片：五个内置 Agent Adapter 由独立 Fiber 注册到同一清单，类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入读取同一 manifest；兼容入口和原投递路径保持不变。单个 Fiber 与根 Context 的撤销已通过自动化测试。Gateway Host 和表现端贡献目录仍在迁移。
+处理端创建已接入首个 Cordis 运行时切片：五个内置 Agent Adapter 由独立 Fiber 注册到同一清单，类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入读取同一 manifest；兼容入口和原投递路径保持不变。单个 Fiber 与根 Context 的撤销已通过自动化测试。声明式 Contribution Registry 已能按 WebGUI/Desktop 宿主筛选、排序并随 Fiber 自动撤销，但 Manager 尚未发布该目录，现有界面也未改为从目录生成。
 
 目标 Desktop 任务的命令、文件、网络、权限和工具审批与 RabiRoute 的外部消息 Outbox policy 是两层不同边界。
 

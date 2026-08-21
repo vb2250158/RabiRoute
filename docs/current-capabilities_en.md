@@ -93,7 +93,7 @@ The repository also provides a local voiceprint preflight that composes several 
 | AstrBot | `experimental` | Supports Dashboard login checks, project/session scans, RabiRoute plugin deployment, and ChatUI-session delivery. The scan API explicitly reports that real repeated-send acceptance remains pending. |
 | Marvis | `stub` | Writes a prompt, copies it to the clipboard, and opens or focuses Marvis. It cannot reliably list, create, or repeatedly inject into one session. |
 
-Handler creation now uses the first Cordis runtime slice: all five built-in Agent Adapters register as independent Fibers in one catalog, while type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input read one manifest. The compatibility entry and existing delivery paths remain unchanged. Automated tests cover disposal of one Fiber and the root Context. The Gateway Host and presentation contribution catalogs are still being migrated.
+Handler creation now uses the first Cordis runtime slice: all five built-in Agent Adapters register as independent Fibers in one catalog, while type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input read one manifest. The compatibility entry and existing delivery paths remain unchanged. Automated tests cover disposal of one Fiber and the root Context. A declarative Contribution Registry can filter and order one catalog for WebGUI/Desktop and automatically removes Fiber-owned entries, but Manager does not publish it yet and current UI entries are not generated from it.
 
 Command, file, network, permission, and tool approval in the target Desktop task remains separate from RabiRoute's external-message Outbox policies.
 

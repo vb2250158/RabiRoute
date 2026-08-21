@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0 和阶段 1 的首个运行时切片已实施，Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1 首个切片和 Contribution Registry 合同已实施，消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -409,7 +409,7 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 6. 定义 Contribution Registry 合同，但不改 WebGUI/Desktop；
 7. 增加真实 Context 组合、销毁和重复挂载测试。
 
-当前已完成第 1、2、3、4、5、7 项：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据和 Fiber 生命周期测试已经存在。第 6 项 Contribution Registry 仍待完成。
+当前七项均已完成：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据、声明式 Contribution Registry 合同和 Fiber 生命周期测试已经存在。Contribution Registry 目前只在运行时合同和测试中，尚未由 Manager API 发布，也未驱动 WebGUI/Desktop。
 
 这个切片不修改消息模板、Desktop IPC、DSH 投递、Route 配置、Outbox 或现有界面交互。
 

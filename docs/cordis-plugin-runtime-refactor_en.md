@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0 and the first Stage 1 runtime slice are implemented; full Manager/Gateway migration remains in progress.
+> Status: selected design direction. Stage 0, the first Stage 1 slice, and the Contribution Registry contract are implemented; message-side and full Manager/Gateway migration remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -409,7 +409,7 @@ Rollback changes runtime selection only and never creates duplicate business fac
 6. define the Contribution Registry contract without changing WebGUI/Desktop yet;
 7. add real Context composition, disposal, and repeated-mount tests.
 
-Items 1, 2, 3, 4, 5, and 7 are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, and Fiber lifecycle tests. Item 6, the Contribution Registry, is still pending.
+All seven items are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, a declarative Contribution Registry contract, and Fiber lifecycle tests. The Contribution Registry currently exists only as a runtime contract with tests; Manager does not publish it yet, and WebGUI/Desktop do not render from it yet.
 
 This slice does not change message templates, Desktop IPC, DSH delivery, Route configuration, Outbox, or current UI behavior.
 

@@ -12,7 +12,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Added exact `cordis@4.0.0-rc.8`, with all Cordis compatibility code contained under `src/runtime/`.
 - `codex`, `dsh`, `copilotCli`, `marvis`, and `astrbot` register as independent Fibers in one Agent Adapter catalog. `createAgentAdapter()`, message templates, Desktop IPC, and DSH delivery remain compatible.
-- Lifecycle tests cover unloading one adapter Fiber, disposing the root Context, rejecting duplicate types, and matching the built-in manifest catalog. Type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input now read the same manifest; the Gateway Host and WebGUI/Desktop contribution catalogs continue as staged work.
+- Lifecycle tests cover unloading one adapter Fiber, disposing the root Context, rejecting duplicate types, and matching the built-in manifest catalog. Type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input now read the same manifest. A declarative Contribution Registry contract filters navigation, settings sections, status cards, commands, tray menus, hotkeys, and themes for WebGUI/Desktop and removes entries when the owning Fiber unloads; Manager publication and UI consumption continue as staged work.
 
 ### DSH can own the full Primary Agent and Plan Secretary path
 
