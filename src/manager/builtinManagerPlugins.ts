@@ -424,6 +424,8 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
     plugin("gateway-runtime", "RabiRoute Gateway Runtime", []),
     plugin("rabilink-relay", "RabiLink Relay", []),
     plugin("memory-consolidation", "Memory Consolidation", []),
+    plugin("fennenote-output", "FenneNote Output", []),
+    plugin("message-processing-control", "Message Processing Control", []),
     plugin("message-processing-automation", "Message Processing Automation", []),
     plugin("plan-feedback-delivery", "Plan Feedback Delivery", []),
     plugin("napcat-supervisor", "NapCat Supervisor", [])

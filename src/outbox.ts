@@ -37,6 +37,7 @@ import {
   listPlanFeedback
 } from "./planFeedback.js";
 import { listPlans } from "./roleKnowledge.js";
+import { postFenneNoteOutput } from "./fenneNoteOutput.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -1287,47 +1288,6 @@ function shouldUseFenneNotePlayback(
     || Array.isArray(payload.emotion_vector);
 }
 
-async function postFenneNoteOutput(
-  options: AgentReplyOptions,
-  body: Record<string, unknown>,
-  mode: "reply" | "playback"
-): Promise<Record<string, unknown>> {
-  const targetUrl = mode === "playback"
-    ? options.fenneNotePlaybackUrl ?? process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback"
-    : options.fenneNoteReplyUrl ?? process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
-  const token = mode === "playback"
-    ? options.fenneNotePlaybackToken ?? process.env.FENNOTE_PLAYBACK_TOKEN ?? ""
-    : options.fenneNoteReplyToken ?? process.env.FENNOTE_REPLY_TOKEN ?? process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
-  const headers: Record<string, string> = {
-    "content-type": "application/json; charset=utf-8",
-    "user-agent": "RabiRoute"
-  };
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
-  }
-  const response = await fetch(targetUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  });
-  const text = await response.text();
-  let parsed: unknown = {};
-  try {
-    parsed = text ? JSON.parse(text) as unknown : {};
-  } catch {
-    parsed = { raw: text };
-  }
-  if (!response.ok) {
-    throw new Error(`FenneNote reply endpoint returned ${response.status}: ${text || response.statusText}`);
-  }
-  return {
-    mode,
-    status: response.status,
-    target: targetUrl,
-    response: parsed
-  };
-}
-
 function routeVariable(route: ResolvedRoute, key: string): string {
   return String(route.profile?.routeVariables?.[key] ?? route.runtime.routeVariables?.[key] ?? "").trim();
 }
@@ -1711,7 +1671,16 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
 
     try {
       const outputMode = shouldUseFenneNotePlayback(request, target, pipeline) ? "playback" : "reply";
-      const forwarded = await postFenneNoteOutput(options, fenneNoteReplyPayload(options, request, route, target, content), outputMode);
+      const forwarded = await postFenneNoteOutput(
+        fenneNoteReplyPayload(options, request, route, target, content),
+        {
+          mode: outputMode,
+          playbackUrl: options.fenneNotePlaybackUrl,
+          playbackToken: options.fenneNotePlaybackToken,
+          replyUrl: options.fenneNoteReplyUrl,
+          replyToken: options.fenneNoteReplyToken
+        }
+      );
       const result: AgentReplyResult = {
         ok: true,
         status: "sent",

@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, declarative WebGUI/Desktop surfaces, configuration reconciliation, local reload, isolated-process contract, and six Manager background-service lifecycles are implemented. Remaining centralized optional API dispatch and post-restart runtime acceptance are still pending.
+> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, declarative WebGUI/Desktop surfaces, configuration reconciliation, local reload, and isolated-process contract are implemented. Thirteen built-in Manager instances now appear in the unified catalog, including eight service instances with no UI contributions and explicit lifecycle boundaries. Remaining centralized optional API dispatch and post-restart runtime acceptance are still pending.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -381,17 +381,19 @@ Current-slice exit criterion: the catalog can show or hide host-owned entries, f
 
 ### Stage 6: reconciliation and local reload
 
-Current status: configuration-driven enable, disable, revision recreation, and failed-update rollback are implemented without source-code HMR. Six service instances with no UI contributions now participate in the same reconciliation flow.
+Current status: configuration-driven enable, disable, revision recreation, and failed-update rollback are implemented without source-code HMR. Thirteen built-in Manager instances share the catalog, including eight service instances with no UI contributions.
 
 - `manager:gateway-runtime` enables the `ManagerGatewayRuntimeService` coordinator on activation; deactivation stops every Gateway and closes later manual lifecycle entry points.
 - `manager:rabilink-relay` synchronizes Relay after the listener is ready; deactivation stops the Relay runtime and persona-sync LAN service.
 - `manager:memory-consolidation` creates a fresh scheduler per activation; deactivation stops instance-owned one-shot processes and waits for the scheduler, while read-only Manager does not start it.
+- `manager:fennenote-output` exposes only the Manager output endpoints `/api/playback/request`, `/api/fennenote/playback`, and `/api/fennenote/reply`. Existing configuration boundaries still own the FenneNote endpoints and token, while Outbox still owns send policy, outbound records, and receipts. Deactivation removes this instance's route batch, rejects new requests, then aborts and waits for its in-flight requests without affecting inbound FenneNote Routes, history, or other Outbox channels. The instance publishes no UI contributions.
+- `manager:message-processing-control` exposes only the message-processing board's HTTP queries, commands, and event wiring. `MessageProcessingBoardStore` and its business modules still own message-processing records, send-context review, and persistence. Deactivation removes the route batch and permits already-started record writes to finish; it neither deletes records nor stops `manager:message-processing-automation`. The instance publishes no UI contributions.
 - `manager:message-processing-automation` owns the plan-change subscription, knowledge-callback timers, and Agent-response reminders. Knowledge callbacks use instance generations, per-record revisions, and the Node timer ceiling, and reread the due time when triggered. Deactivation clears timers, prevents stale callbacks from rescheduling, and waits for started reminder deliveries.
 - `manager:plan-feedback-delivery` owns recovery scans, retry timers, and active feedback deliveries; new feedback remains pending while it is inactive.
 - `manager:napcat-supervisor` runs one login check during Manager autostart; deactivation cancels the remaining account queue, waits for the current atomic check, and suppresses stale callbacks.
 - `manager:performance` creates a fresh `PerformanceApi` and route batch per activation; deactivation closes sample subscriptions, SSE clients, and the monitoring service.
 
-Targeted tests now cover reloading only changed instances, releasing instance-owned effects on disable, and restoring the previous definition after activation failure. Migration of remaining centralized optional API dispatch and post-restart runtime acceptance remains in progress.
+This slice now defines catalog and reconciliation boundaries for all thirteen built-in instances. Remaining migration covers message-adapter scans and NapCat control, Agent Adapter discovery and install/login actions, Agent task and outbound communication, Remote Agent connections, diagnostic queries, and Gateway-management APIs still dispatched directly by `controlPlaneRoutes.ts`. Independent reload still requires explicit ownership, cancellation, drain, and generation guards for external processes, Workers, WebSockets, UDP, and in-flight deliveries. Post-restart runtime acceptance also remains pending.
 
 ### Stage 7: out-of-tree code plugins and isolation
 

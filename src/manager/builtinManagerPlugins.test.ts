@@ -13,6 +13,8 @@ test("built-in Manager plugins publish the current WebGUI and Desktop contributi
     "manager:gateway-runtime",
     "manager:rabilink-relay",
     "manager:memory-consolidation",
+    "manager:fennenote-output",
+    "manager:message-processing-control",
     "manager:message-processing-automation",
     "manager:plan-feedback-delivery",
     "manager:napcat-supervisor"
@@ -102,6 +104,8 @@ test("builtin Manager service plugins publish no UI contributions", () => {
     "manager:gateway-runtime",
     "manager:rabilink-relay",
     "manager:memory-consolidation",
+    "manager:fennenote-output",
+    "manager:message-processing-control",
     "manager:message-processing-automation",
     "manager:plan-feedback-delivery",
     "manager:napcat-supervisor"

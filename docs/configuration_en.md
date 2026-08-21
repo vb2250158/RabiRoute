@@ -25,6 +25,8 @@ English | <a href="./configuration.md">简体中文</a>
     "manager:gateway-runtime": { "enabled": true },
     "manager:rabilink-relay": { "enabled": true },
     "manager:memory-consolidation": { "enabled": true },
+    "manager:fennenote-output": { "enabled": true },
+    "manager:message-processing-control": { "enabled": true },
     "manager:message-processing-automation": { "enabled": true },
     "manager:plan-feedback-delivery": { "enabled": true },
     "manager:napcat-supervisor": { "enabled": true }
@@ -38,13 +40,15 @@ After `manager.json` changes, the file watcher reconciles only changed plugins. 
 
 ### Background-service plugin lifecycle
 
-The following six built-in instances publish no UI contributions, but each Fiber still owns its reversible effects:
+The following eight built-in instances publish no UI contributions. Each Fiber owns its HTTP entry points and reversible effects:
 
 | Instance | Activation | Deactivation |
 | --- | --- | --- |
 | `manager:gateway-runtime` | Enables the Gateway service coordinator; after Manager services are ready, it loads Route definitions and starts, stops, or restarts Gateways from current state | Stops all Gateways in order and makes later Gateway lifecycle requests fail closed |
 | `manager:rabilink-relay` | Synchronizes RabiLink Relay from global configuration after the Manager HTTP listener is ready | Stops the Relay runtime and persona-sync LAN service, then removes the active synchronization callback |
 | `manager:memory-consolidation` | Creates a fresh memory-consolidation scheduler for this activation outside read-only mode; starts its one-shot deadline schedule after the listener is ready | Stops that scheduler, terminates instance-owned one-shot processes, and waits for the active run |
+| `manager:fennenote-output` | Registers the FenneNote playback and reply compatibility APIs and reuses the shared Outbox output service | Removes all three APIs, aborts instance-owned requests, and waits for them to finish without changing Route send policies |
+| `manager:message-processing-control` | Registers message-processing board, requirement, send-context, outcome, and knowledge-callback APIs | Removes that API batch while preserving records and the background automation instance |
 | `manager:message-processing-automation` | Restores Agent-response reminders, subscribes to plan changes, and starts knowledge-callback reminders | Removes the plan subscription, clears reminder timers, prevents stale callbacks from rescheduling, and waits for started reminder deliveries |
 | `manager:plan-feedback-delivery` | Scans recoverable plan feedback after the listener is ready; new feedback continues through the existing delivery module | Rejects new delivery scheduling, clears retry timers, and waits for active scans and deliveries |
 | `manager:napcat-supervisor` | Runs one NapCat startup-login check when Manager autostart is enabled | Cancels the remaining account queue, waits for the current atomic check, and suppresses stale completion callbacks after deactivation |

@@ -26,6 +26,12 @@
     "manager:memory-consolidation": {
       "enabled": true
     },
+    "manager:fennenote-output": {
+      "enabled": true
+    },
+    "manager:message-processing-control": {
+      "enabled": true
+    },
     "manager:message-processing-automation": {
       "enabled": true
     },

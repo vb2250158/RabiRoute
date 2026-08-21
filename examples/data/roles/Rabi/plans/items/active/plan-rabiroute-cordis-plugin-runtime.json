@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "migrate-manager-background-services",
-  "currentStep": "六个 Manager 后台服务已进入可停用、可重新启用的 Cordis 生命周期；知识回调使用可撤销代次，计划反馈恢复等待真实投递结果，NapCat 停用会取消剩余账号队列。",
-  "nextAction": "迁移剩余中心化可选 API 分发，并继续完成插件化覆盖审计和长时间运行验收。",
+  "currentStep": "Manager 已有十三个内置插件；FenneNote 输出和消息处理控制 API 已从中央分发链迁入独立 Cordis Fiber，停用实例会撤销对应路由。",
+  "nextAction": "继续迁移消息端与 Agent Adapter 扫描、Gateway 管理、NapCat 控制、Agent 安装登录、Agent 通信和 Remote Agent；每批检查中央分发链不再保留旧入口。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -93,7 +93,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T22:49:16+08:00",
+  "updatedAt": "2026-08-21T23:19:08+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -160,6 +160,10 @@
     "NapcatSupervisorService",
     "KnowledgeCallbackReminderService",
     "plan feedback delivery flight",
-    "NapCat AbortSignal"
+    "NapCat AbortSignal",
+    "manager:fennenote-output",
+    "manager:message-processing-control",
+    "FenneNoteOutputService",
+    "MessageProcessingApi"
   ]
 }

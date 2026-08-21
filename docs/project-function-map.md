@@ -54,17 +54,21 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 
 ## Manager 后台插件生命周期
 
-| 实例 | 拥有的运行副作用 | 激活/停用边界 | 表现贡献 |
-| --- | --- | --- | --- |
-| `manager:gateway-runtime` | Gateway 定义加载、运行状态对账和子进程启停协调 | 激活时启用 `ManagerGatewayRuntimeService`；停用时 `stopAll()` 并关闭手动 Gateway 控制入口 | 无 |
-| `manager:rabilink-relay` | 全局 RabiLink Relay 与人格同步局域网服务 | listener 就绪后同步；停用时停止两项运行资源并撤销同步回调 | 无 |
-| `manager:memory-consolidation` | 最早截止时间的一次性记忆整理调度器和本实例一次性进程 | 非只读模式下每次激活创建；停用时终止进程并等待当前调度 | 无 |
-| `manager:message-processing-automation` | 计划变化订阅、知识回调计时器和 Agent 回复提醒 | 激活时恢复待处理提醒；停用时取消订阅、清除计时器并等待已开始的提醒投递 | 无 |
-| `manager:plan-feedback-delivery` | 计划反馈恢复扫描、重试计时器和当前投递 | listener 就绪后启动扫描；停用时禁止新投递并等待当前扫描和投递 | 无 |
-| `manager:napcat-supervisor` | NapCat 启动登录检查 | Manager 自动启动时执行一次；停用时取消剩余账号队列、等待当前原子检查并屏蔽旧回调 | 无 |
-| `manager:performance` | 性能 HTTP API、样本订阅、SSE 客户端和监控服务 | 每次激活创建新的 `PerformanceApi`；停用时 `close()` 并停止监控 | 页面、导航和状态卡保持原贡献 |
+当前目录包含十三个内置 Manager 实例；下表列出八个无 UI contribution 的服务实例，并保留 `manager:performance` 的可见入口边界。
 
-这些插件只接管可撤销的运行生命周期。Route、GatewayRuntime、性能配置、记忆内容、Relay 配置、计划反馈记录和消息处理记录仍由原有配置、Registry 和业务模块拥有。
+| 实例 | 拥有的运行副作用 | 事实 owner | 激活/停用边界 | 表现贡献 |
+| --- | --- | --- | --- | --- |
+| `manager:gateway-runtime` | Gateway 定义加载、运行状态对账和子进程启停协调 | Route 配置由配置仓库拥有，运行状态由 `RuntimeRegistry` 拥有 | 激活时启用 `ManagerGatewayRuntimeService`；停用时 `stopAll()` 并关闭手动 Gateway 控制入口 | 无 |
+| `manager:rabilink-relay` | 全局 RabiLink Relay 与人格同步局域网服务 | Relay 与同步配置仍由原有配置模块拥有 | listener 就绪后同步；停用时停止两项运行资源并撤销同步回调 | 无 |
+| `manager:memory-consolidation` | 最早截止时间的一次性记忆整理调度器和本实例一次性进程 | 记忆内容与整理记录仍由 Role Knowledge 拥有 | 非只读模式下每次激活创建；停用时终止进程并等待当前调度 | 无 |
+| `manager:fennenote-output` | FenneNote 播放、回复 HTTP 入口和在途请求 | endpoint 与 token 由现有配置边界拥有；发送规则、外发记录和回执由 Outbox 拥有 | 停用时撤销路由批次、拒绝新请求，中止并等待在途请求；不影响入站 Route、历史记录和其他 Outbox channel | 无 |
+| `manager:message-processing-control` | 消息处理看板 HTTP 查询、命令和事件接线 | 消息处理记录、发送上下文审批和持久化由 `MessageProcessingBoardStore` 及其业务模块拥有 | 停用时撤销路由批次，已开始的记录写入可以完成；不删除记录，不停止自动提醒插件 | 无 |
+| `manager:message-processing-automation` | 计划变化订阅、知识回调计时器和 Agent 回复提醒 | 消息处理记录仍由看板 Store 拥有 | 激活时恢复待处理提醒；停用时取消订阅、清除计时器并等待已开始的提醒投递 | 无 |
+| `manager:plan-feedback-delivery` | 计划反馈恢复扫描、重试计时器和当前投递 | 计划反馈记录仍由计划反馈模块拥有 | listener 就绪后启动扫描；停用时禁止新投递并等待当前扫描和投递 | 无 |
+| `manager:napcat-supervisor` | NapCat 启动登录检查 | NapCat、QQ 和 Route 配置事实仍由外部进程与配置模块拥有 | Manager 自动启动时执行一次；停用时取消剩余账号队列、等待当前原子检查并屏蔽旧回调 | 无 |
+| `manager:performance` | 性能 HTTP API、样本订阅、SSE 客户端和监控服务 | 性能配置与记录仍由性能模块拥有 | 每次激活创建新的 `PerformanceApi`；停用时 `close()` 并停止监控 | 页面、导航和状态卡保持原贡献 |
+
+这些插件只接管 HTTP 入口和可撤销运行生命周期，不复制业务事实。剩余迁移包括消息端与 Agent Adapter 扫描、NapCat 和 Agent 安装登录控制、Agent 任务与外发、Remote Agent、诊断及 Gateway 管理 API。涉及外部进程、Worker、WebSocket、UDP 或已开始投递的分组，需要先补齐实例 owner、取消和 drain。
 
 ## 功能索引
 

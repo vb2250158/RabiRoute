@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI/Desktop 声明式表现入口、配置对账、局部重载、独立进程插件合同，以及六个 Manager 后台服务生命周期已实现；剩余中心化可选 API 分发和重启后运行验收仍待完成。
+> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI/Desktop 声明式表现入口、配置对账、局部重载、独立进程插件合同，以及十三个内置 Manager 实例已进入统一目录；其中八个无 UI contribution 的服务实例已明确生命周期。剩余中心化可选 API 分发和重启后运行验收仍待完成。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -381,17 +381,19 @@ RabiRoute：
 
 ### 阶段 6：配置对账与局部重载
 
-当前状态：配置驱动的启用、停用、revision 重建和失败回滚已实现，不支持源代码 HMR。六个无 UI contribution 的服务实例已进入同一对账流程。
+当前状态：配置驱动的启用、停用、revision 重建和失败回滚已实现，不支持源代码 HMR。十三个内置 Manager 实例进入同一目录，其中八个服务实例没有 UI contribution。
 
 - `manager:gateway-runtime` 激活后启用 `ManagerGatewayRuntimeService` 协调器；停用时停止全部 Gateway，并关闭后续手动启停入口。
 - `manager:rabilink-relay` 在 listener 就绪后同步 Relay；停用时停止 Relay Runtime 和人格同步局域网服务。
 - `manager:memory-consolidation` 每次激活创建新的调度器；停用时停止本实例的一次性进程并等待调度结束，只读 Manager 不启动它。
+- `manager:fennenote-output` 只提供 `/api/playback/request`、`/api/fennenote/playback` 和 `/api/fennenote/reply` 的 Manager 输出入口。FenneNote endpoint 与 token 仍由现有配置边界拥有，发送规则、外发记录和回执仍由 Outbox 拥有。停用时撤销该实例的路由批次、拒绝新请求，中止并等待本实例的在途请求；不影响 FenneNote 入站 Route、历史记录或其他 Outbox channel。该实例没有 UI contribution。
+- `manager:message-processing-control` 只提供消息处理看板的 HTTP 查询、命令和事件接线。消息处理记录、发送上下文审批和持久化仍由 `MessageProcessingBoardStore` 及其业务模块拥有。停用时撤销路由批次，已开始的记录写入可以完成；不删除记录，也不连带停止 `manager:message-processing-automation`。该实例没有 UI contribution。
 - `manager:message-processing-automation` 持有计划变化订阅、知识回调计时器和 Agent 回复提醒；知识回调使用实例代次、单项修订和 Node 定时器上限，触发时重新读取截止时间。停用时清除计时器、阻止旧回调重新排程，并等待已开始的提醒投递。
 - `manager:plan-feedback-delivery` 持有恢复扫描、重试计时器和当前反馈投递；停用后新的反馈保留为待投递。
 - `manager:napcat-supervisor` 在 Manager 自动启动时执行一次登录检查；停用时取消剩余账号队列，等待当前原子检查结束，并屏蔽旧回调。
 - `manager:performance` 每次激活创建新的 `PerformanceApi` 和路由批次；停用时关闭样本订阅、SSE 客户端和性能监控服务。
 
-当前切片已满足“只重载变化实例、停用释放本实例副作用、失败恢复旧定义”的定向测试。剩余中心化可选 API 分发和重启后的运行验收仍属于进行中工作。
+当前切片已覆盖十三个内置实例的目录与对账边界。剩余迁移集中在消息端扫描和 NapCat 控制、Agent Adapter 扫描与安装登录、Agent 任务与外发、Remote Agent 连接、诊断查询，以及仍由 `controlPlaneRoutes.ts` 直接分发的 Gateway 管理 API。独立重载前仍需为外部进程、Worker、WebSocket、UDP 和在途投递补齐 owner、取消、drain 与代次防护；重启后的运行验收仍待完成。
 
 ### 阶段 7：树外代码插件与隔离
 

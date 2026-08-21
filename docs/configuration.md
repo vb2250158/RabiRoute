@@ -25,6 +25,8 @@
     "manager:gateway-runtime": { "enabled": true },
     "manager:rabilink-relay": { "enabled": true },
     "manager:memory-consolidation": { "enabled": true },
+    "manager:fennenote-output": { "enabled": true },
+    "manager:message-processing-control": { "enabled": true },
     "manager:message-processing-automation": { "enabled": true },
     "manager:plan-feedback-delivery": { "enabled": true },
     "manager:napcat-supervisor": { "enabled": true }
@@ -38,13 +40,15 @@
 
 ### 后台服务插件生命周期
 
-以下六个内置实例不发布 UI contribution，但它们的副作用仍由各自 Fiber 持有：
+以下八个内置实例不发布 UI contribution；HTTP 入口和后台副作用都由各自 Fiber 持有：
 
 | 实例 | 激活 | 停用 |
 | --- | --- | --- |
 | `manager:gateway-runtime` | 启用 Gateway 服务协调器；Manager 服务就绪后读取 Route 定义并按当前状态启动、停止或重启 Gateway | 顺序停止全部 Gateway，并让后续 Gateway 启停请求失败关闭 |
 | `manager:rabilink-relay` | Manager HTTP listener 就绪后按全局配置同步 RabiLink Relay | 停止 Relay Runtime 和人格同步局域网服务，并移除活动同步回调 |
 | `manager:memory-consolidation` | 非只读模式下为本次激活创建新的记忆整理调度器；listener 就绪后启动一次性截止时间调度 | 停止本次调度器、终止本实例的一次性进程并等待当前调度结束 |
+| `manager:fennenote-output` | 注册 FenneNote playback 和 reply 兼容 API，并复用 Outbox 的统一输出服务 | 撤销三个 API，取消本实例在途请求并等待结束；不改变 Route 发送规则 |
+| `manager:message-processing-control` | 注册消息处理看板、要求、发送上下文、结果和知识回调 API | 撤销该批 API；保留现有消息处理记录和后台提醒实例 |
 | `manager:message-processing-automation` | 恢复 Agent 回复提醒，订阅计划变化，并启动知识回调提醒 | 取消计划订阅、清除提醒计时器、阻止旧回调重新排程，并等待已开始的提醒投递结束 |
 | `manager:plan-feedback-delivery` | listener 就绪后扫描待恢复的计划反馈；新的反馈继续走现有投递模块 | 禁止新的反馈投递，清除重试计时器，并等待当前扫描和投递结束 |
 | `manager:napcat-supervisor` | Manager 自动启动时执行一次 NapCat 启动登录检查 | 取消剩余账号队列，等待当前原子检查结束，并忽略停用后的旧完成回调 |

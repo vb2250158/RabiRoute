@@ -28,17 +28,21 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 
 ## Manager background-plugin lifecycle
 
-| Instance | Owned runtime effects | Activation/deactivation boundary | Presentation contributions |
-| --- | --- | --- | --- |
-| `manager:gateway-runtime` | Gateway-definition loading, runtime reconciliation, and child-process lifecycle coordination | Activation enables `ManagerGatewayRuntimeService`; deactivation calls `stopAll()` and closes manual Gateway controls | None |
-| `manager:rabilink-relay` | Global RabiLink Relay and persona-sync LAN service | Synchronizes after the listener is ready; deactivation stops both runtime resources and removes the synchronization callback | None |
-| `manager:memory-consolidation` | One-shot memory-consolidation scheduling and instance-owned one-shot processes | Creates a fresh scheduler per activation outside read-only mode; deactivation stops processes and waits for the active schedule | None |
-| `manager:message-processing-automation` | Plan-change subscription, knowledge-callback timers, and Agent-response reminders | Activation restores pending reminders; deactivation removes the subscription, clears timers, and waits for started reminder deliveries | None |
-| `manager:plan-feedback-delivery` | Plan-feedback recovery scans, retry timers, and active deliveries | Starts recovery after the listener is ready; deactivation rejects new scheduling and waits for active scans and deliveries | None |
-| `manager:napcat-supervisor` | NapCat startup-login check | Runs once during Manager autostart; deactivation cancels the remaining account queue, waits for the current atomic check, and suppresses stale callbacks | None |
-| `manager:performance` | Performance HTTP API, sample subscription, SSE clients, and monitoring service | Creates a fresh `PerformanceApi` per activation; deactivation calls `close()` and stops monitoring | Existing page, navigation, and status-card contributions remain unchanged |
+The catalog contains thirteen built-in Manager instances. The table lists the eight service instances with no UI contributions and retains the visible boundary of `manager:performance`.
 
-These plugins own reversible runtime lifecycles only. Route, GatewayRuntime, performance configuration, memory content, Relay configuration, plan-feedback records, and message-processing records remain owned by their existing configuration, Registry, and business modules.
+| Instance | Owned runtime effects | Fact owner | Activation/deactivation boundary | Presentation contributions |
+| --- | --- | --- | --- | --- |
+| `manager:gateway-runtime` | Gateway-definition loading, runtime reconciliation, and child-process lifecycle coordination | The configuration repository owns Route configuration; `RuntimeRegistry` owns runtime state | Activation enables `ManagerGatewayRuntimeService`; deactivation calls `stopAll()` and closes manual Gateway controls | None |
+| `manager:rabilink-relay` | Global RabiLink Relay and persona-sync LAN service | Existing configuration modules continue to own Relay and synchronization configuration | Synchronizes after the listener is ready; deactivation stops both runtime resources and removes the synchronization callback | None |
+| `manager:memory-consolidation` | One-shot memory-consolidation scheduling and instance-owned one-shot processes | Role Knowledge continues to own memory content and consolidation records | Creates a fresh scheduler per activation outside read-only mode; deactivation stops processes and waits for the active schedule | None |
+| `manager:fennenote-output` | FenneNote playback/reply HTTP entries and in-flight requests | Existing configuration boundaries own the endpoints and token; Outbox owns send policy, outbound records, and receipts | Deactivation removes the route batch, rejects new requests, then aborts and waits for in-flight requests without affecting inbound Routes, history, or other Outbox channels | None |
+| `manager:message-processing-control` | Message-processing board HTTP queries, commands, and event wiring | `MessageProcessingBoardStore` and its business modules own records, send-context review, and persistence | Deactivation removes the route batch and permits started record writes to finish; it neither deletes records nor stops the automation plugin | None |
+| `manager:message-processing-automation` | Plan-change subscription, knowledge-callback timers, and Agent-response reminders | The board Store continues to own message-processing records | Activation restores pending reminders; deactivation removes the subscription, clears timers, and waits for started reminder deliveries | None |
+| `manager:plan-feedback-delivery` | Plan-feedback recovery scans, retry timers, and active deliveries | The plan-feedback module continues to own feedback records | Starts recovery after the listener is ready; deactivation rejects new scheduling and waits for active scans and deliveries | None |
+| `manager:napcat-supervisor` | NapCat startup-login check | External processes and configuration modules continue to own NapCat, QQ, and Route facts | Runs once during Manager autostart; deactivation cancels the remaining account queue, waits for the current atomic check, and suppresses stale callbacks | None |
+| `manager:performance` | Performance HTTP API, sample subscription, SSE clients, and monitoring service | The performance module continues to own performance configuration and records | Creates a fresh `PerformanceApi` per activation; deactivation calls `close()` and stops monitoring | Existing page, navigation, and status-card contributions remain unchanged |
+
+These plugins own HTTP entries and reversible runtime lifecycles without copying business facts. Remaining migration covers message-side and Agent Adapter scans, NapCat and Agent install/login controls, Agent task and outbound communication, Remote Agent, diagnostics, and Gateway-management APIs. Groups that own external processes, Workers, WebSockets, UDP, or started deliveries require instance ownership, cancellation, and drain first.
 
 ## Current function index
 

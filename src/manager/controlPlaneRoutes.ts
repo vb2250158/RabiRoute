@@ -109,8 +109,6 @@ import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import { assertAgentSendPermission } from "./agentSendPermission.js";
 import {
   MessageProcessingBoardStore,
-  type MessageProcessingOutcomeInput,
-  type KnowledgeMatchCallbackInput,
   type KnowledgeRecallMatch,
   type MessageProcessingRequirement,
   type MessageProcessingWorkerRuntimeObservation,
@@ -121,10 +119,7 @@ import {
   CoalescingMessageProcessingBoardPersistence,
   messageProcessingBoardStatePath
 } from "../messageProcessing/persistence.js";
-import {
-  MessageProcessingSendContextReview,
-  type MessageProcessingSendContextApprovalInput
-} from "../messageProcessing/sendContextReview.js";
+import { MessageProcessingSendContextReview } from "../messageProcessing/sendContextReview.js";
 import {
   loadMessageProcessingContext,
   recoverReviewedMessageProcessingSourceRecord
@@ -207,6 +202,8 @@ import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
 import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
 import { composeBuiltinManagerPluginDefinitions } from "./builtinManagerPluginComposition.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { FenneNoteOutputService } from "./fenneNoteOutputService.js";
+import { handleMessageProcessingApi } from "./messageProcessingRoutes.js";
 import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
 import { MessageProcessingAutomationService } from "./messageProcessingAutomationService.js";
@@ -6914,46 +6911,6 @@ function handleRoleKnowledgeApi(
   }
 }
 
-async function forwardFenneNoteRequest(
-  body: unknown,
-  targetUrl: string,
-  token: string
-): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = {
-    "content-type": "application/json; charset=utf-8",
-    "user-agent": "RabiRoute"
-  };
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
-  }
-  const forwarded = await fetch(targetUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body ?? {})
-  });
-  const text = await forwarded.text();
-  let data: unknown = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-  return {
-    ok: forwarded.ok,
-    status: forwarded.status,
-    target: targetUrl,
-    response: data
-  };
-}
-
-async function forwardPlaybackRequest(body: unknown): Promise<Record<string, unknown>> {
-  return forwardFenneNoteRequest(body, fenneNotePlaybackUrl, fenneNotePlaybackToken);
-}
-
-async function forwardFenneNoteReply(body: unknown): Promise<Record<string, unknown>> {
-  return forwardFenneNoteRequest(body, fenneNoteReplyUrl, fenneNoteReplyToken);
-}
-
 function standaloneGatewayPayload(
   includeDiagnostics = true,
   includeConfigDefinitions = includeDiagnostics
@@ -7559,6 +7516,44 @@ export async function startManager(): Promise<void> {
         }, "stop Manager memory consolidation plugin");
         if (managerListenerReady) scheduler.start();
       },
+      "manager:fennenote-output": ctx => {
+        const service = new FenneNoteOutputService({
+          playbackUrl: fenneNotePlaybackUrl,
+          playbackToken: fenneNotePlaybackToken,
+          replyUrl: fenneNoteReplyUrl,
+          replyToken: fenneNoteReplyToken
+        });
+        ctx.effect(() => () => service.stop(), "stop Manager FenneNote output plugin");
+        ctx.effect(
+          () => managerPluginRoutes.register("manager:fennenote-output", [
+            (request, requestUrl, response) => service.handle(request, requestUrl, response)
+          ]),
+          "register Manager FenneNote output routes"
+        );
+      },
+      "manager:message-processing-control": ctx => {
+        ctx.effect(
+          () => managerPluginRoutes.register("manager:message-processing-control", [
+            (request, requestUrl, response) => handleMessageProcessingApi(request, requestUrl, response, {
+              boardPayload: messageProcessingBoardPayload,
+              board: messageProcessingBoard,
+              sendContextReview: messageProcessingSendContextReview,
+              operationalLog: managerOperationalLog,
+              recallKnowledge: recalledKnowledgeForMessage,
+              verifyCriticalFactRecord: ({ roleId, requirement, disposition }) => verifyCriticalProjectFactRecord({
+                workspaceRoot: rootDir,
+                roleDir: roleId ? roleDirForApi(roleId) : undefined,
+                requirement,
+                disposition
+              }),
+              setPlanBaseline: setMessageProcessingPlanBaseline,
+              scheduleKnowledgeCallbackReminder,
+              publishEvent: publishManagerEvent
+            })
+          ]),
+          "register Manager message processing control routes"
+        );
+      },
       "manager:message-processing-automation": async ctx => {
         if (managerReadOnly) return;
         const automation = new MessageProcessingAutomationService({
@@ -7961,186 +7956,6 @@ export async function startManager(): Promise<void> {
           .catch((error) => {
             jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
           });
-        return;
-      }
-      if (request.method === "POST" && (requestUrl.pathname === "/api/playback/request" || requestUrl.pathname === "/api/fennenote/playback")) {
-        void readJsonBody<unknown>(request)
-          .then((body) => forwardPlaybackRequest(body))
-          .then((result) => {
-            jsonResponse(response, result.ok ? 202 : 502, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 502, { ok: false, error: error instanceof Error ? error.message : String(error), target: fenneNotePlaybackUrl });
-        });
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/api/fennenote/reply") {
-        void readJsonBody<unknown>(request)
-          .then((body) => forwardFenneNoteReply(body))
-          .then((result) => {
-            jsonResponse(response, result.ok ? 202 : 502, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 502, { ok: false, error: error instanceof Error ? error.message : String(error), target: fenneNoteReplyUrl });
-          });
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/api/message-processing/board") {
-        const routeId = requestUrl.searchParams.get("routeId")?.trim() || undefined;
-        const limit = Number(requestUrl.searchParams.get("limit") || "100");
-        void messageProcessingBoardPayload(routeId, limit)
-          .then((data) => jsonResponse(response, 200, { code: 0, data }))
-          .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-        return;
-      }
-      const messageProcessingRequirementMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)$/);
-      if (request.method === "GET" && messageProcessingRequirementMatch) {
-        const requirementId = decodeURIComponent(messageProcessingRequirementMatch[1]);
-        const requirement = messageProcessingBoard.getRequirement(requirementId);
-        if (!requirement) {
-          jsonResponse(response, 404, { code: -1, message: `Message processing requirement not found: ${requirementId}` });
-          return;
-        }
-        jsonResponse(response, 200, { code: 0, data: requirement });
-        return;
-      }
-      const messageProcessingSendContextMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)\/send-context$/);
-      if (request.method === "GET" && messageProcessingSendContextMatch) {
-        const requirementId = decodeURIComponent(messageProcessingSendContextMatch[1]);
-        const sourceMessageId = requestUrl.searchParams.get("sourceMessageId")?.trim() || undefined;
-        try {
-          const data = messageProcessingSendContextReview.snapshot(requirementId, sourceMessageId);
-          jsonResponse(response, 200, { code: 0, data });
-        } catch (error) {
-          jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-        }
-        return;
-      }
-      if (request.method === "POST" && messageProcessingSendContextMatch) {
-        const requirementId = decodeURIComponent(messageProcessingSendContextMatch[1]);
-        void readJsonBody<MessageProcessingSendContextApprovalInput>(request)
-          .then((body) => messageProcessingSendContextReview.approve(requirementId, body))
-          .then((data) => {
-            managerOperationalLog.record("info", "message_processing_send_context_review_approved", {
-              action: requirementId,
-              result: `expiresAt=${data.expiresAt}`
-            });
-            jsonResponse(response, 200, { code: 0, data });
-          })
-          .catch((error) => jsonResponse(response, 400, {
-            code: -1,
-            message: error instanceof Error ? error.message : String(error)
-          }));
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/api/message-processing/requirements") {
-        void readJsonBody<{
-          action?: "register_group" | "dispatch" | "dispatch_failed";
-          requirementId?: string;
-          messageGroupId?: string;
-          source?: RegisterMessageGroupRequirementInput["source"];
-          worker?: MessageProcessingRequirement["worker"];
-          error?: string;
-        }>(request)
-          .then((body) => {
-            const requirementId = String(body.requirementId || "").trim();
-            if (!requirementId) throw new Error("Missing requirementId.");
-            const item = body.action === "register_group"
-              ? messageProcessingBoard.registerMessageGroup({
-                  requirementId,
-                  messageGroupId: String(body.messageGroupId || "").trim(),
-                  source: body.source as RegisterMessageGroupRequirementInput["source"],
-                  knowledgeMatches: recalledKnowledgeForMessage(body.source as RegisterMessageGroupRequirementInput["source"])
-                })
-              : body.action === "dispatch"
-                ? messageProcessingBoard.recordDispatch(requirementId, body.worker as NonNullable<MessageProcessingRequirement["worker"]>)
-                : body.action === "dispatch_failed"
-                  ? messageProcessingBoard.recordDispatchFailure(requirementId, body.error || "Message Agent dispatch failed.")
-                  : (() => { throw new Error("Unsupported message-processing action."); })();
-            scheduleKnowledgeCallbackReminder(item);
-            publishManagerEvent("message_processing_board_changed", { requirementId: item.id, status: item.status });
-            return item;
-          })
-          .then((data) => jsonResponse(response, 200, { code: 0, data }))
-          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-        return;
-      }
-      const messageProcessingOutcomeMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)\/outcome$/);
-      if (request.method === "POST" && messageProcessingOutcomeMatch) {
-        const requirementId = decodeURIComponent(messageProcessingOutcomeMatch[1]);
-        void readJsonBody<MessageProcessingOutcomeInput>(request)
-          .then((body) => {
-            const requirement = messageProcessingBoard.getRequirement(requirementId);
-            const roleId = String(body.roleId || requirement?.source.roleId || "").trim();
-            const assessedRequirement = requirement && body.projectFactAssessment?.status === "critical"
-              ? { ...requirement, criticalFacts: body.projectFactAssessment.facts }
-              : requirement;
-            for (const disposition of body.knowledgeMatchDispositions || []) {
-              for (const action of disposition.actions || []) {
-                if (!action.recordType || !action.recordId || !action.verifiedAt) continue;
-                verifyCriticalProjectFactRecord({
-                  workspaceRoot: rootDir,
-                  roleDir: roleId ? roleDirForApi(roleId) : undefined,
-                  requirement: requirement ? { ...requirement, criticalFacts: [{ kind: "scope", evidence: action.evidence }] } : requirement,
-                  disposition: {
-                    status: "recorded",
-                    record: action.recordType === "memory"
-                      ? { type: "memory", memoryId: action.recordId }
-                      : { type: "plan", planId: action.recordId },
-                    evidence: action.evidence,
-                    verifiedAt: action.verifiedAt
-                  }
-                });
-              }
-            }
-            verifyCriticalProjectFactRecord({
-              workspaceRoot: rootDir,
-              roleDir: roleId ? roleDirForApi(roleId) : undefined,
-              requirement: assessedRequirement,
-              disposition: body.criticalFactDisposition
-            });
-            return { body, data: messageProcessingBoard.submitOutcome(requirementId, body) };
-          })
-          .then(({ body, data }) => {
-            setMessageProcessingPlanBaseline(data, body.roleId, body.planId);
-            scheduleKnowledgeCallbackReminder(data);
-            publishManagerEvent("message_processing_board_changed", { requirementId: data.id, status: data.status });
-            jsonResponse(response, 200, { code: 0, data });
-          })
-          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-        return;
-      }
-      const knowledgeCallbackMatch = requestUrl.pathname.match(/^\/api\/message-processing\/requirements\/([^/]+)\/knowledge-callback$/);
-      if (request.method === "POST" && knowledgeCallbackMatch) {
-        const requirementId = decodeURIComponent(knowledgeCallbackMatch[1]);
-        void readJsonBody<KnowledgeMatchCallbackInput>(request)
-          .then((body) => {
-            const requirement = messageProcessingBoard.getRequirement(requirementId);
-            if (!requirement) throw new Error(`Message processing requirement not found: ${requirementId}`);
-            const roleId = String(requirement.source.roleId || "").trim();
-            if ((body.result === "updated" || body.result === "created") && body.recordType && body.recordId) {
-              verifyCriticalProjectFactRecord({
-                workspaceRoot: rootDir,
-                roleDir: roleId ? roleDirForApi(roleId) : undefined,
-                requirement: { ...requirement, criticalFacts: [{ kind: "scope", evidence: body.evidence }] },
-                disposition: {
-                  status: "recorded",
-                  record: body.recordType === "memory"
-                    ? { type: "memory", memoryId: body.recordId }
-                    : { type: "plan", planId: body.recordId },
-                  evidence: body.evidence,
-                  verifiedAt: body.verifiedAt
-                }
-              });
-            }
-            return messageProcessingBoard.recordKnowledgeCallback(requirementId, body);
-          })
-          .then((data) => {
-            scheduleKnowledgeCallbackReminder(data);
-            publishManagerEvent("message_processing_board_changed", { requirementId: data.id, status: data.status });
-            jsonResponse(response, 200, { code: 0, data });
-          })
-          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/agent/requests") {
