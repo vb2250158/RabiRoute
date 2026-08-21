@@ -33,7 +33,11 @@ from .manager_client import (
 )
 from .desktop_models import ContextEntry, PlanItem, PlanSnapshot, PlanStep, RoleContextSnapshot
 from .display_helpers import route_enabled_label, route_running_label, route_state, route_status_label, route_subtitle, route_title
-from .plugin_catalog import DesktopPluginSettingsSection, SUPPORTED_DESKTOP_SETTINGS_SECTIONS
+from .plugin_catalog import (
+    DesktopExtensionRegistry,
+    DesktopPluginSettingsSection,
+    create_builtin_desktop_extension_registry,
+)
 from .qt_async import QtAsyncTask, start_qt_task
 from .theme import apply_rabi_menu_theme, normalize_theme, theme_stylesheet
 
@@ -1014,7 +1018,8 @@ class TaskWindow(QWidget):
         self,
         app_icon: QIcon | None = None,
         theme: object = "light",
-        plugin_manager_factory=ManagerClient,
+        plugin_manager_factory=None,
+        extension_registry: DesktopExtensionRegistry | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("RabiRoute 角色面板")
@@ -1035,7 +1040,10 @@ class TaskWindow(QWidget):
         self._message_send_pending = False
         self._sidebar_collapsed = False
         self.theme = normalize_theme(theme)
-        self._plugin_manager_factory = plugin_manager_factory
+        self._desktop_extensions = extension_registry or create_builtin_desktop_extension_registry()
+        self._plugin_manager_factory = plugin_manager_factory or (
+            lambda manager_url: ManagerClient(manager_url, extension_registry=self._desktop_extensions)
+        )
         self._plugin_surface_task: QtAsyncTask | None = None
         self._plugin_surface_snapshot: DesktopPluginSurfaceSnapshot | None = None
         self._plugin_surface_manager_url = ""
@@ -1726,25 +1734,7 @@ class TaskWindow(QWidget):
         if result.error:
             return [("状态", "读取失败"), ("错误", result.error)]
         payload = result.payload or {}
-        data = payload.get("data")
-        row = data if isinstance(data, dict) else {}
-        if result.card.renderer_id == "builtin.speech-status.v1":
-            fields = [
-                ("状态", str(row.get("state") or "未知")),
-                ("服务", str(row.get("service") or "RabiSpeech")),
-                ("地址", str(row.get("configuredUrl") or "未配置")),
-            ]
-            if row.get("latencyMs") is not None:
-                fields.append(("延迟", f"{row.get('latencyMs')} ms"))
-            return fields
-        if result.card.renderer_id == "builtin.performance-status.v1":
-            return [
-                ("采集", "已启用" if row.get("enabled") is True else "未启用"),
-                ("数据", "已加载" if row.get("loaded") is True else "未加载"),
-                ("保留记录", str(row.get("retainedRecords") or 0)),
-                ("待写记录", str(row.get("pendingRecords") or 0)),
-            ]
-        return []
+        return self._desktop_extensions.render_status(result.card, payload)
 
     def _add_plugin_settings_section(self, result: DesktopPluginSettingsResult) -> None:
         if result.error:
@@ -1752,12 +1742,7 @@ class TaskWindow(QWidget):
         elif result.settings is None:
             fields = [("状态", "未返回设置") ]
         else:
-            fields = [
-                ("界面主题", result.settings.theme),
-                ("开机启动", "已启用" if result.settings.autostart else "未启用"),
-                ("截图", "已启用" if result.settings.screenshot_enabled else "未启用"),
-                ("截图快捷键", result.settings.screenshot_shortcut),
-            ]
+            fields = self._desktop_extensions.render_settings(result.section, result.settings)
         self._add_info_card("插件设置", result.section.label, fields, "neutral" if not result.error else "empty")
         button = QPushButton("打开设置")
         button.setObjectName("pluginSettingsButton")
@@ -1768,15 +1753,16 @@ class TaskWindow(QWidget):
         self.content_layout.addWidget(button, 0, Qt.AlignLeft)
 
     def _open_plugin_settings(self, section: DesktopPluginSettingsSection) -> None:
-        contract = (
-            section.renderer_id,
-            section.schema_id,
-            section.read_command_id,
-            section.write_command_id,
-        )
-        if contract not in SUPPORTED_DESKTOP_SETTINGS_SECTIONS or self.manager is None:
+        if self.manager is None:
             return
-        QDesktopServices.openUrl(QUrl(f"{self.manager.manager_url.rstrip('/')}/#/settings"))
+        try:
+            self._desktop_extensions.open_settings(
+                section,
+                self.manager.manager_url,
+                lambda url: QDesktopServices.openUrl(QUrl(url)),
+            )
+        except LookupError:
+            return
 
     def _render_context_group(self, title: str, entries: list[ContextEntry]) -> None:
         assert self.context is not None

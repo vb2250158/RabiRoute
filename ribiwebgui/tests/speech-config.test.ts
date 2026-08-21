@@ -78,7 +78,9 @@ test("speech workbench exposes exact VAD inputs and one host playback volume con
   assert.match(source, /没有 Route 订阅时只保存主机记录/);
   assert.match(source, /同一段 ASR 会广播给全部/);
   assert.match(source, /<SpeechHostMonitor[^>]+:subscriber-count="speechSubscriberRoutes\.length"/);
-  assert.match(controlPlane, /reconcileSpeechMicrophone\("manager startup"\)/);
+  assert.match(controlPlane, /"manager:speech": ctx =>[\s\S]*reconcileActiveSpeech = reconcile/);
+  assert.match(controlPlane, /managerPluginActive\("manager:speech"\)[\s\S]*reconcileActiveSpeech\(\)/);
+  assert.match(controlPlane, /active = false[\s\S]*speechRuntimeControl\.stop\(\)/);
   assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("gateway save"\)/);
   assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("manual reload"\)/);
   const monitorSource = fs.readFileSync(new URL("../src/components/SpeechHostMonitor.vue", import.meta.url), "utf8");

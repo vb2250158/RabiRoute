@@ -9,8 +9,7 @@ import {
   validateGatewayPortConflicts,
   type GatewayConfigFile,
   type GatewayDefinition,
-  type NotificationRuleDefinition,
-  type PersonaAutomationRuleDefinition
+  type NotificationRuleDefinition
 } from "../shared/gatewayConfigModel.js";
 import { toPersistedProjectPath } from "../shared/projectPaths.js";
 import {

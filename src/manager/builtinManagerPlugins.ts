@@ -1,12 +1,39 @@
 import { rabiRoutePackageVersion } from "../packageInfo.js";
 import type { ManagerPluginDefinition } from "../runtime/managerPluginRuntime.js";
 import type { RabiUiContribution } from "../runtime/contributionRegistry.js";
+import { MESSAGE_ADAPTER_CONTROL_CONTRIBUTIONS } from "./messageAdapterControl.js";
+
+const DIAGNOSTICS_CONTRIBUTIONS: readonly RabiUiContribution[] = [
+  {
+    kind: "page",
+    surface: "web.pages",
+    id: "runtime-page",
+    label: { fallback: "日志诊断" },
+    routeId: "route.runtime",
+    rendererId: "builtin.web-page.runtime.v1",
+    slot: "route",
+    hosts: ["web"],
+    order: 70
+  },
+  {
+    kind: "navigation",
+    surface: "web.navigation",
+    id: "runtime",
+    label: { fallback: "日志诊断" },
+    routeId: "route.runtime",
+    icon: "mdi-console-line",
+    slot: "utility",
+    hosts: ["web"],
+    order: 70
+  }
+];
 
 function plugin(
   id: string,
   name: string,
   contributions: readonly RabiUiContribution[]
 ): ManagerPluginDefinition {
+  const contributionHosts = new Set(contributions.flatMap(contribution => contribution.hosts));
   return {
     instanceId: `manager:${id}`,
     manifest: {
@@ -14,8 +41,12 @@ function plugin(
       name,
       version: rabiRoutePackageVersion(),
       kind: "builtin",
-      hosts: ["manager", "web", "desktop"],
-      capabilities: ["manager.plugin-catalog", "manager.contributions"]
+      hosts: [
+        "manager",
+        ...(contributionHosts.has("web") ? ["web" as const] : []),
+        ...(contributionHosts.has("desktop") ? ["desktop" as const] : [])
+      ],
+      ...(contributions.length ? { capabilities: ["manager.contributions"] } : {})
     },
     scope: "global",
     contributions
@@ -46,50 +77,6 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "route-primary",
         hosts: ["web"],
         order: 10
-      },
-      {
-        kind: "page",
-        surface: "web.pages",
-        id: "message-adapters-page",
-        label: { fallback: "消息适配器" },
-        routeId: "route.adapters",
-        rendererId: "builtin.web-page.adapters.v1",
-        slot: "route",
-        hosts: ["web"],
-        order: 20
-      },
-      {
-        kind: "navigation",
-        surface: "web.navigation",
-        id: "message-adapters",
-        label: { fallback: "消息适配器" },
-        routeId: "route.adapters",
-        icon: "mdi-puzzle-outline",
-        slot: "route-primary",
-        hosts: ["web"],
-        order: 20
-      },
-      {
-        kind: "page",
-        surface: "web.pages",
-        id: "runtime-page",
-        label: { fallback: "日志诊断" },
-        routeId: "route.runtime",
-        rendererId: "builtin.web-page.runtime.v1",
-        slot: "route",
-        hosts: ["web"],
-        order: 70
-      },
-      {
-        kind: "navigation",
-        surface: "web.navigation",
-        id: "runtime",
-        label: { fallback: "日志诊断" },
-        routeId: "route.runtime",
-        icon: "mdi-console-line",
-        slot: "utility",
-        hosts: ["web"],
-        order: 70
       },
       {
         kind: "page",
@@ -422,12 +409,25 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
       }
     ]),
     plugin("gateway-runtime", "RabiRoute Gateway Runtime", []),
+    plugin("bilibili-history", "Bilibili History", []),
+    plugin("route-control", "Route Control", []),
+    plugin("message-adapter-control", "Message Adapter Control", MESSAGE_ADAPTER_CONTROL_CONTRIBUTIONS),
+    plugin("agent-adapter-catalog", "Agent Adapter Catalog", []),
+    plugin("agent-state-control", "Agent State Control", []),
+    plugin("agent-thread-control", "Agent Thread Control", []),
+    plugin("agent-communication", "Agent Communication", []),
+    plugin("copilot-control", "GitHub Copilot Control", []),
+    plugin("astrbot-control", "AstrBot Control", []),
+    plugin("marvis-control", "Marvis Control", []),
+    plugin("remote-agent", "Remote Agent", []),
+    plugin("diagnostics", "Manager Diagnostics", DIAGNOSTICS_CONTRIBUTIONS),
     plugin("rabilink-relay", "RabiLink Relay", []),
     plugin("memory-consolidation", "Memory Consolidation", []),
     plugin("fennenote-output", "FenneNote Output", []),
     plugin("message-processing-control", "Message Processing Control", []),
     plugin("message-processing-automation", "Message Processing Automation", []),
     plugin("plan-feedback-delivery", "Plan Feedback Delivery", []),
+    plugin("napcat-control", "NapCat Control", []),
     plugin("napcat-supervisor", "NapCat Supervisor", [])
   ];
 }

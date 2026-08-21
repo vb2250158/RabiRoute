@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { pluginCatalogStore } from "../pluginCatalogStore";
-import { isWebPageRouteActive, type ControlledWebPageRouteId } from "../pluginPages";
+import { isWebPageRouteActive } from "../pluginPages";
 
 const route = useRoute();
 const router = useRouter();
@@ -18,7 +18,7 @@ async function retry(): Promise<void> {
   try {
     await pluginCatalogStore.refresh();
     const target = router.resolve(requestedPath.value);
-    const routeId = target.meta.pluginRouteId as ControlledWebPageRouteId | undefined;
+    const routeId = typeof target.meta.pluginRouteId === "string" ? target.meta.pluginRouteId : "";
     if (routeId && isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
       await router.replace(target.fullPath);
     }

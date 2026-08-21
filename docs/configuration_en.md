@@ -23,12 +23,25 @@ English | <a href="./configuration.md">简体中文</a>
     "manager:performance": { "enabled": true },
     "manager:desktop": { "enabled": true },
     "manager:gateway-runtime": { "enabled": true },
+    "manager:bilibili-history": { "enabled": true },
+    "manager:route-control": { "enabled": true },
+    "manager:message-adapter-control": { "enabled": true },
+    "manager:agent-adapter-catalog": { "enabled": true },
+    "manager:agent-state-control": { "enabled": true },
+    "manager:agent-thread-control": { "enabled": true },
+    "manager:agent-communication": { "enabled": true },
+    "manager:copilot-control": { "enabled": true },
+    "manager:astrbot-control": { "enabled": true },
+    "manager:marvis-control": { "enabled": true },
+    "manager:remote-agent": { "enabled": true },
+    "manager:diagnostics": { "enabled": true },
     "manager:rabilink-relay": { "enabled": true },
     "manager:memory-consolidation": { "enabled": true },
     "manager:fennenote-output": { "enabled": true },
     "manager:message-processing-control": { "enabled": true },
     "manager:message-processing-automation": { "enabled": true },
     "manager:plan-feedback-delivery": { "enabled": true },
+    "manager:napcat-control": { "enabled": true },
     "manager:napcat-supervisor": { "enabled": true }
   }
 }
@@ -38,22 +51,40 @@ English | <a href="./configuration.md">简体中文</a>
 
 After `manager.json` changes, the file watcher reconciles only changed plugins. Disabling disposes the target Fiber. A revision change reloads the target instance. Failed activation restores the previous definition when possible. `GET /api/plugins/reconciliation` returns desired, active, changed, rolled-back, and diagnostic state. `POST /api/plugins/reconcile` rereads local configuration. WebGUI refreshes its catalog from the `plugin_catalog_changed` event on `/api/events`.
 
-### Background-service plugin lifecycle
+### Plugin entry-point and resource ownership
 
-The following eight built-in instances publish no UI contributions. Each Fiber owns its HTTP entry points and reversible effects:
+The built-in catalog registers 26 Manager plugins. `manager:core` retains recovery, catalog, and basic-page contributions, while optional business entry points are registered by their plugins. The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths. Manager plugin `apply` hooks register business HTTP routes in `ManagerPluginRouteRegistry`.
 
-| Instance | Activation | Deactivation |
+The presentation Contribution Catalog publishes only `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`. WebGUI and Desktop consume only active presentation contributions; HTTP routes are not catalog contributions. Host-owned trusted registries can register new renderer, route, handler, and resource contracts. Unknown or unregistered contributions fail closed. Fixed recovery entries only reopen WebGUI or Settings when the catalog is unavailable. A controlled Extension Host for arbitrary third-party presentation code remains future work.
+
+Trusted WebGUI page extensions call `registerTrustedWebPage()` at frontend build time to register a `routeId`, `rendererId`, asynchronous component loader, page paths, and allowed navigation slots and icons. The plugin catalog may reference only registered contracts; it cannot provide remote module URLs or arbitrary scripts.
+
+Trusted Desktop Python extensions expose the `rabiroute.desktop_extensions` entry point group and are allowed individually at startup:
+
+```powershell
+RabiRoute-Desktop.exe --trusted-desktop-extension my_extension
+```
+
+The option may be repeated. The default list is empty, so Desktop imports no third-party package automatically. Desktop freezes the registry after registration. Entry-point code runs in the Desktop process and is only for explicitly installed trusted extensions; unknown, untrusted, or high-risk code uses the separate-process plugin protocol.
+Routes using `ManagerPluginRequestTracker` follow one deactivation order: unregister routes, reject new requests, then wait for accepted responses to emit `finish` or `close`. Both synchronous and asynchronous handlers are counted. The default drain deadline is 30 seconds. On timeout, unfinished responses are destroyed before remaining plugin resources are released.
+
+| Instance | Owned entry points or resources | Deactivation |
 | --- | --- | --- |
-| `manager:gateway-runtime` | Enables the Gateway service coordinator; after Manager services are ready, it loads Route definitions and starts, stops, or restarts Gateways from current state | Stops all Gateways in order and makes later Gateway lifecycle requests fail closed |
-| `manager:rabilink-relay` | Synchronizes RabiLink Relay from global configuration after the Manager HTTP listener is ready | Stops the Relay runtime and persona-sync LAN service, then removes the active synchronization callback |
-| `manager:memory-consolidation` | Creates a fresh memory-consolidation scheduler for this activation outside read-only mode; starts its one-shot deadline schedule after the listener is ready | Stops that scheduler, terminates instance-owned one-shot processes, and waits for the active run |
-| `manager:fennenote-output` | Registers the FenneNote playback and reply compatibility APIs and reuses the shared Outbox output service | Removes all three APIs, aborts instance-owned requests, and waits for them to finish without changing Route send policies |
-| `manager:message-processing-control` | Registers message-processing board, requirement, send-context, outcome, and knowledge-callback APIs | Removes that API batch while preserving records and the background automation instance |
-| `manager:message-processing-automation` | Restores Agent-response reminders, subscribes to plan changes, and starts knowledge-callback reminders | Removes the plan subscription, clears reminder timers, prevents stale callbacks from rescheduling, and waits for started reminder deliveries |
-| `manager:plan-feedback-delivery` | Scans recoverable plan feedback after the listener is ready; new feedback continues through the existing delivery module | Rejects new delivery scheduling, clears retry timers, and waits for active scans and deliveries |
-| `manager:napcat-supervisor` | Runs one NapCat startup-login check when Manager autostart is enabled | Cancels the remaining account queue, waits for the current atomic check, and suppresses stale completion callbacks after deactivation |
+| `manager:diagnostics` | `GET /meta`, `GET /api/gateways`, and the WebGUI Log Diagnostics page/navigation | Removes diagnostics routes and drains accepted requests; reads other plugin state without starting or restoring disabled plugins |
+| `manager:desktop` | `/api/desktop/settings`, `/open-config-file`, `/manager/start`, `/manager/desktop-lifecycle/start`, `/manager/shutdown`, plus Desktop/WebGUI settings, commands, tray entries, and hotkey contributions | Removes routes and drains requests, then clears delayed shutdown timers that have not run |
+| `manager:gateway-runtime` | Gateway configuration, lifecycle, deletion, manual trigger, replay, network-options, and reload routes; Gateway and manual-trigger child processes | Removes routes, drains requests, stops instance-owned manual triggers, then stops and waits for Gateway process trees |
+| `manager:agent-adapter-catalog` | Agent Adapter catalog, availability, and scan routes; bounded scan Worker Pool | Removes routes, cancels queued or active scans, and stops Worker process trees |
+| `manager:agent-thread-control` | Agent task creation, lookup, and binding routes | Removes routes and drains requests; stable business modules retain task and record ownership |
+| `manager:agent-communication` | Agent request, send, receipt, and trace routes | Removes routes and drains requests while reusing the existing Outbox, approval, receipt, and message-processing owners |
+| `manager:remote-agent` | Remote Agent scan, connection, task, and event routes; active WebSockets and Hub callbacks | Removes routes and drains requests; marks unfinished tasks `interrupted`, closes WebSockets, and waits for started callbacks |
+| `manager:napcat-control` | NapCat repair, health, OneBot configuration, add, launch, restart, and removal routes | Stops acceptance and drains requests, stops the supervisor, then stops only instances explicitly launched and still owned by this plugin; port-scan discoveries and externally started instances are not claimed |
+| `manager:napcat-supervisor` | NapCat login-check queue after Manager autostart | Cancels the remaining account queue, waits for the active check, and suppresses stale completion callbacks |
+| `manager:rabilink-relay` | RabiLink Relay runtime and persona-sync LAN service | Stops Relay, the sync listener, and active callbacks |
+| `manager:memory-consolidation` | Memory-consolidation scheduler and instance-owned one-shot processes | Stops the scheduler, terminates those processes, and waits for the active consolidation run |
+| `manager:message-processing-automation` | Agent-response reminders, plan subscription, and knowledge-callback reminders | Removes subscriptions and timers, prevents stale callbacks from rescheduling, and waits for started delivery |
+| `manager:plan-feedback-delivery` | Plan-feedback recovery scans, delivery, and retry timers | Rejects new delivery, clears retry timers, and waits for active scans and delivery |
 
-`manager:performance` creates a fresh `PerformanceApi` and registers that batch of HTTP handlers on every activation. Deactivation calls `close()` to unsubscribe from performance samples and end SSE streams, then stops the monitoring service. Reactivation never reuses the closed API instance.
+`manager:performance` creates a fresh `PerformanceApi` and HTTP handler batch on each activation. Deactivation unsubscribes performance samples, ends SSE streams, then stops monitoring. Reactivation never reuses a closed API instance.
 
 ## Codex terminology
 
@@ -142,7 +173,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 
 ## Core fields
 
-- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, and `weixin`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
+- `messageAdapters`: configurable input types. Current IDs include `napcat`, `remoteAgent`, `heartbeat`, `speech`, `webhook`, `fennenote`, `xiaoai`, `rabilink`, `wearable`, `wecom`, `weixin`, and `feishu`. Legacy `rolePanel` entries remain compatible, but WebGUI no longer presents them as configurable because Manager provides role-panel messaging by default.
 - `personaAutomationScriptsEnabled`: Route-local permission for persona automation to run local scripts. It defaults to `false`, is not stored in or synchronized with the persona, and gates script actions triggered by either messages or schedules.
 - `messageAdapterPolicies`: `inputEnabled`, `outputEnabled`, `supportedOutputs`, and adapter-specific restrictions. QQ, Weixin, Feishu, WeCom, role-panel, and RabiLink text chats use message groups automatically without an off switch. `messageGrouping` exposes only ordinary settle, unfinished-fragment settle, and maximum wait values, defaulting to `6 / 12 / 20` seconds. ASR/voice transcripts, heartbeat, commands, approvals, health alerts, and structured events continue direct delivery without this wait. Chat dispatch changes only when Codex Message Agent mode is also enabled; otherwise delivery remains per-message. Legacy allow-group/user and output-mode fields are no longer active fine-grained filters.
 - `supportedOutputs`: outbound payload kinds. NapCat supports `text`, `image`, `voice`, and `file` in the current policy model.
@@ -289,3 +320,5 @@ When adding a new platform, create a module under `src/adapters/` and normalize 
 ## RibiWebGUI and plugins
 
 RibiWebGUI edits runtime configuration through Manager APIs. Plugin and external integration pages should show actual scan maturity and requirements rather than treating the presence of configuration fields as proof of a verified end-to-end integration.
+
+The optional NapCat-side entry lives under `plugin-adapters/napcat-rabiroute/`. It is not the main WebGUI or a handler gateway. It adds a NapCat plugin page that can open `http://127.0.0.1:8790/` and request local Manager startup. Direct RibiWebGUI use does not require this NapCat plugin.

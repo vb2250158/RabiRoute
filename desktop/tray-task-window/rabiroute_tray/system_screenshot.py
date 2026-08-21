@@ -31,6 +31,11 @@ from PySide6.QtWidgets import (
 )
 
 from .manager_client import DesktopSettings, ManagerClient, RolePanelSendResult
+from .plugin_catalog import (
+    DesktopExtensionRegistry,
+    DesktopPluginHotkey,
+    create_builtin_desktop_extension_registry,
+)
 from .qt_async import QtAsyncTask, start_qt_task
 from .system_selection import SelectionDeliveryTarget
 from .windows_app_identity import sync_startup_shortcut
@@ -40,6 +45,13 @@ DEFAULT_SCREENSHOT_SHORTCUT = "Ctrl+Shift+S"
 DEFAULT_CLIPBOARD_PIN_SHORTCUT = "F3"
 _HISTORY_LIMIT = 30
 _SETTINGS_RETRY_DELAY_MS = 2_000
+_PLUGIN_HOTKEY_ID_RANGE = range(0x5300, 0x5400)
+
+
+def _next_plugin_hotkey_id(used_ids: set[int]) -> int | None:
+    return next((candidate for candidate in _PLUGIN_HOTKEY_ID_RANGE if candidate not in used_ids), None)
+
+
 def _screenshot_theme_colors() -> dict[str, str]:
     app = QApplication.instance()
     dark = bool(app and app.palette().color(QPalette.ColorRole.Window).lightness() < 128)
@@ -1359,6 +1371,8 @@ class SystemScreenshotController(QObject):
         settings_path: Path | None = None,
         hotkey: WindowsGlobalHotkey | None = None,
         clipboard_hotkey: WindowsGlobalHotkey | None = None,
+        extension_registry: DesktopExtensionRegistry | None = None,
+        execute_command: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -1368,8 +1382,15 @@ class SystemScreenshotController(QObject):
         self._settings_path = settings_path
         self._hotkey = hotkey or WindowsGlobalScreenshotHotkey()
         self._clipboard_hotkey = clipboard_hotkey or WindowsGlobalClipboardPinHotkey()
+        self._desktop_extensions = extension_registry or create_builtin_desktop_extension_registry()
+        self._execute_command = execute_command or self._execute_builtin_command
         self._settings = ScreenshotSettings()
-        self._plugin_hotkey_handlers: frozenset[str] = frozenset()
+        self._plugin_hotkeys: tuple[DesktopPluginHotkey, ...] = ()
+        self._plugin_hotkey_instances: dict[tuple[str, str, str], WindowsGlobalHotkey] = {}
+        self._reserved_hotkeys = {
+            "desktop.capture-screenshot": self._hotkey,
+            "desktop.pin-clipboard-image": self._clipboard_hotkey,
+        }
         self._settings_task: QtAsyncTask | None = None
         self._capture_task: QtAsyncTask | None = None
         self._window_candidates_task: QtAsyncTask | None = None
@@ -1388,12 +1409,52 @@ class SystemScreenshotController(QObject):
         self._settings_watcher = QFileSystemWatcher(self)
         self._settings_watcher.fileChanged.connect(self._settings_changed)
         self._settings_watcher.directoryChanged.connect(self._settings_changed)
-        self._hotkey.activated.connect(self.request_capture)
-        self._clipboard_hotkey.activated.connect(self.request_clipboard_pin)
+        self._connect_plugin_hotkey(self._hotkey, "desktop.capture-screenshot")
+        self._connect_plugin_hotkey(self._clipboard_hotkey, "desktop.pin-clipboard-image")
 
-    def set_plugin_hotkey_handlers(self, handler_ids: frozenset[str]) -> None:
-        self._plugin_hotkey_handlers = frozenset(handler_ids)
+    def set_plugin_hotkeys(self, items: tuple[DesktopPluginHotkey, ...]) -> None:
+        accepted = tuple(item for item in items if self._desktop_extensions.has_hotkey_contract(item))
+        accepted_keys = {self._plugin_hotkey_key(item) for item in accepted}
+        for key, hotkey_instance in tuple(self._plugin_hotkey_instances.items()):
+            if key in accepted_keys:
+                continue
+            hotkey_instance.configure(False, "")
+            if hotkey_instance not in self._reserved_hotkeys.values():
+                hotkey_instance.stop()
+            self._plugin_hotkey_instances.pop(key, None)
+        self._plugin_hotkeys = accepted
         self._apply_hotkey_configuration()
+
+    def _connect_plugin_hotkey(self, hotkey: WindowsGlobalHotkey, handler_id: str) -> None:
+        hotkey.activated.connect(lambda target=handler_id: self._execute_command(target))
+
+    def _execute_builtin_command(self, handler_id: str) -> None:
+        if handler_id == "desktop.capture-screenshot":
+            self.request_capture()
+        elif handler_id == "desktop.pin-clipboard-image":
+            self.request_clipboard_pin()
+
+    @staticmethod
+    def _plugin_hotkey_key(item: DesktopPluginHotkey) -> tuple[str, str, str]:
+        return item.plugin_id, item.instance_id, item.contribution_id
+
+    def _plugin_hotkey_instance(self, item: DesktopPluginHotkey) -> WindowsGlobalHotkey | None:
+        key = self._plugin_hotkey_key(item)
+        existing = self._plugin_hotkey_instances.get(key)
+        if existing is not None:
+            return existing
+        reserved = self._reserved_hotkeys.get(item.handler_id)
+        if reserved is not None and reserved not in self._plugin_hotkey_instances.values():
+            instance = reserved
+        else:
+            used_ids = {getattr(value, "_hotkey_id", 0) for value in self._plugin_hotkey_instances.values()}
+            hotkey_id = _next_plugin_hotkey_id(used_ids)
+            if hotkey_id is None:
+                return None
+            instance = WindowsGlobalHotkey(hotkey_id, f"RabiRoutePluginHotkey:{item.contribution_id}")
+            self._connect_plugin_hotkey(instance, item.handler_id)
+        self._plugin_hotkey_instances[key] = instance
+        return instance
 
     @Slot()
     def request_capture(self) -> None:
@@ -1404,18 +1465,23 @@ class SystemScreenshotController(QObject):
         self._pin_requested()
 
     def _apply_hotkey_configuration(self) -> None:
-        self._hotkey.configure(
-            self._started
-            and self._settings.enabled
-            and "desktop.capture-screenshot" in self._plugin_hotkey_handlers,
-            self._settings.shortcut,
-        )
-        self._clipboard_hotkey.configure(
-            self._started
-            and self._settings.enabled
-            and "desktop.pin-clipboard-image" in self._plugin_hotkey_handlers,
-            self._settings.clipboard_shortcut,
-        )
+        configured: set[WindowsGlobalHotkey] = set()
+        for item in self._plugin_hotkeys:
+            instance = self._plugin_hotkey_instance(item)
+            if instance is None:
+                continue
+            configured.add(instance)
+            instance.configure(
+                self._started and self._desktop_extensions.hotkey_enabled(item, self._settings),
+                self._desktop_extensions.hotkey_binding(item, self._settings),
+            )
+        reserved_bindings = {
+            self._hotkey: self._settings.shortcut,
+            self._clipboard_hotkey: self._settings.clipboard_shortcut,
+        }
+        for instance in self._reserved_hotkeys.values():
+            if instance not in configured:
+                instance.configure(False, reserved_bindings.get(instance, ""))
 
     def start(self) -> None:
         self._started = True
@@ -1426,8 +1492,9 @@ class SystemScreenshotController(QObject):
 
     def stop(self) -> None:
         self._started = False
-        self._hotkey.stop()
-        self._clipboard_hotkey.stop()
+        for hotkey_instance in set(self._plugin_hotkey_instances.values()) | set(self._reserved_hotkeys.values()):
+            hotkey_instance.stop()
+        self._plugin_hotkey_instances.clear()
         if self._composer is not None:
             self._composer.close()
             self._composer = None

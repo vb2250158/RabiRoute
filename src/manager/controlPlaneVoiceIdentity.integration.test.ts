@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   handleManagerEventApi,
-  handleManagerPersonaDomainApi
+  handlePersonaPluginApi
 } from "./controlPlaneRoutes.js";
 import { updateIdentityRelation } from "../identityRelations.js";
 
@@ -76,7 +76,7 @@ test("Manager persona-domain HTTP route accepts voice identity PUT and publishes
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
     if (handleManagerEventApi(request, requestUrl, response)) return;
-    if (handleManagerPersonaDomainApi(request, requestUrl, response, {
+    if (handlePersonaPluginApi(request, requestUrl, response, {
       rolesRoot: root,
       roleDir: roleId => path.join(root, roleId)
     })) return;

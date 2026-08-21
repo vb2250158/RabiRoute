@@ -57,6 +57,14 @@ class LauncherNodeResolutionTest(unittest.TestCase):
             for name in legacy_names:
                 self.assertFalse((project_root / name).exists())
 
+    def test_trusted_desktop_extensions_require_explicit_cli_entries(self) -> None:
+        source = (TRAY_ROOT / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn('"--trusted-desktop-extension"', source)
+        self.assertIn('action="append"', source)
+        self.assertIn("default=[]", source)
+        self.assertIn("trusted_extension_entry_points=tuple(args.trusted_desktop_extension)", source)
+
     def test_packaged_runtime_prefers_project_portable_node_over_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)

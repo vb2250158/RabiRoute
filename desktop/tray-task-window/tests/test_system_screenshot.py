@@ -18,6 +18,7 @@ from PySide6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from rabiroute_tray.manager_client import DesktopSettings  # noqa: E402
+from rabiroute_tray.plugin_catalog import DesktopPluginHotkey  # noqa: E402
 from rabiroute_tray.system_selection import SelectionDeliveryTarget  # noqa: E402
 from rabiroute_tray.system_screenshot import (  # noqa: E402
     ScreenshotCaptureOverlay,
@@ -28,6 +29,7 @@ from rabiroute_tray.system_screenshot import (  # noqa: E402
     ScreenshotRegionStore,
     ScreenshotSettings,
     SystemScreenshotController,
+    _next_plugin_hotkey_id,
     parse_hotkey,
     save_screenshot_image,
     screenshot_history,
@@ -35,10 +37,27 @@ from rabiroute_tray.system_screenshot import (  # noqa: E402
 )
 
 
+def _plugin_hotkey(command_id: str, handler_id: str, binding: str) -> DesktopPluginHotkey:
+    return DesktopPluginHotkey(
+        plugin_id="builtin:manager/desktop",
+        instance_id="manager:desktop",
+        contribution_id=f"{command_id}-hotkey",
+        command_id=command_id,
+        handler_id=handler_id,
+        default_binding=binding,
+        label=command_id,
+        order=10,
+    )
+
+
 class SystemScreenshotTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_plugin_hotkey_id_capacity_fails_closed(self) -> None:
+        self.assertEqual(_next_plugin_hotkey_id(set(range(0x5300, 0x53FF))), 0x53FF)
+        self.assertIsNone(_next_plugin_hotkey_id(set(range(0x5300, 0x5400))))
 
     def test_hotkey_parser_accepts_common_windows_shortcuts(self) -> None:
         modifiers, key = parse_hotkey("Ctrl + Shift + S") or (0, 0)
@@ -784,11 +803,15 @@ class SystemScreenshotTest(unittest.TestCase):
         controller._started = True
         controller._settings = ScreenshotSettings(True, "Ctrl+Alt+S", "F4", False)
 
-        controller.set_plugin_hotkey_handlers(frozenset({"desktop.capture-screenshot"}))
+        controller.set_plugin_hotkeys((
+            _plugin_hotkey("capture-screenshot", "desktop.capture-screenshot", "Ctrl+Shift+S"),
+        ))
 
         self.assertEqual(screenshot_hotkey.configurations[-1], (True, "Ctrl+Alt+S"))
         self.assertEqual(clipboard_hotkey.configurations[-1], (False, "F4"))
-        controller.set_plugin_hotkey_handlers(frozenset({"desktop.pin-clipboard-image"}))
+        controller.set_plugin_hotkeys((
+            _plugin_hotkey("pin-clipboard-image", "desktop.pin-clipboard-image", "F3"),
+        ))
         self.assertEqual(screenshot_hotkey.configurations[-1], (False, "Ctrl+Alt+S"))
         self.assertEqual(clipboard_hotkey.configurations[-1], (True, "F4"))
         controller.stop()
@@ -846,9 +869,10 @@ class SystemScreenshotTest(unittest.TestCase):
                 clipboard_hotkey=clipboard_hotkey,  # type: ignore[arg-type]
             )
             controller._settings_retry_delay_ms = 1
-            controller.set_plugin_hotkey_handlers(
-                frozenset({"desktop.capture-screenshot", "desktop.pin-clipboard-image"})
-            )
+            controller.set_plugin_hotkeys((
+                _plugin_hotkey("capture-screenshot", "desktop.capture-screenshot", "Ctrl+Shift+S"),
+                _plugin_hotkey("pin-clipboard-image", "desktop.pin-clipboard-image", "F3"),
+            ))
             controller.start()
             deadline = time.monotonic() + 2
             while (

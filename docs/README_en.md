@@ -31,7 +31,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Local installation, configuration, and recovery
 
-- [Configuration](configuration_en.md) — Current fields, message inputs, and handler settings.
+- [Configuration](configuration_en.md) — **Current guide** for the 26 built-in Manager plugins, WebGUI/Desktop extension entries, route ownership, the 30-second request-drain deadline, and Remote Agent/NapCat deactivation boundaries.
 - [Resident performance recording and inspection](performance-monitoring_en.md) — **Current guide** for optional continuous Manager, Gateway, and WebGUI metrics, trends, slow operations, and independent JSONL files.
 - [Troubleshooting](troubleshooting_en.md) — NapCat, encoding, Codex Desktop task ownership, models, and approval boundaries.
 - [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — Windows installation, startup, and packaging.
@@ -55,9 +55,9 @@ This directory contains current guides, experimental integrations, designs, rese
 ## Architecture and maintenance
 
 - [Architecture](architecture_en.md) — **Current fact**. Product boundaries, the Codex Desktop owner, current Outbox, and future Action Queue are separated.
-- [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Design research**. Applies Cordis dependency, lifecycle, reconciliation, and recovery principles to a staged RabiRoute direction.
+- [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Research and implementation summary; unified validation pending**. Covers the completed migration of 26 built-in Manager plugins, WebGUI/Desktop minimal extension hosts, contribution points, process-isolation boundaries, and the future third-party presentation Extension Host.
 - [How DSH uses Cordis](dsh-cordis-runtime-analysis_en.md) — **Implementation research**. Explains profiles, Loader, Fibers, service realms, the browser plugin tree, dynamic code, and process-sandbox boundaries.
-- [Cordis-based plugin runtime refactor](cordis-plugin-runtime-refactor_en.md) — **Selected design**. Defines the composition kernel, Rabi adaptation layer, multi-host extension protocol, migration stages, and verification contract.
+- [Cordis-based plugin runtime refactor](cordis-plugin-runtime-refactor_en.md) — **Current implementation guide; unified validation pending**. Defines the 26 built-in Manager plugins, the minimal central HTTP host, WebGUI/Desktop extension protocol, plugin resource ownership, and deactivation order.
 - [Code architecture](code-architecture_en.md) — **Current fact**. Backend, Manager, endpoint, Role Knowledge, WebGUI, and desktop module map.
 - [Project function map](project-function-map_en.md) — **Current fact**. Locate behavior by maturity, side effect, API, and code owner.
 - [Path and directory conventions](path-and-directory-conventions_en.md) — **Current maintainer guide**. Separates software, public samples, local runtime data, and logs, and defines relative-path and business-ID interfaces.

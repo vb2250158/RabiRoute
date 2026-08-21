@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import unittest
+from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMenu
 
 from rabiroute_tray.manager_client import ManagerClient
 from rabiroute_tray.plugin_catalog import (
+    DesktopCommandContext,
     DesktopPluginCatalog,
     DesktopPluginCatalogCache,
     DesktopPluginHotkey,
@@ -19,13 +21,14 @@ from rabiroute_tray.plugin_catalog import (
     DesktopPluginTheme,
     DesktopPluginSettingsSection,
     DesktopPluginStatusCard,
+    create_builtin_desktop_extension_registry,
     empty_desktop_plugin_catalog,
+    load_trusted_desktop_extensions,
     parse_desktop_plugin_catalog,
 )
 from rabiroute_tray.tray_app import (
-    _desktop_plugin_handler_url,
-    _desktop_plugin_hotkey_handlers,
-    _desktop_plugin_theme_id,
+    _desktop_plugin_hotkeys,
+    _desktop_plugin_theme,
     _rebuild_plugin_menu,
     _start_desktop_plugin_catalog,
 )
@@ -578,12 +581,119 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            _desktop_plugin_hotkey_handlers(catalog),
-            frozenset({"desktop.capture-screenshot", "desktop.pin-clipboard-image"}),
+            tuple(item.handler_id for item in _desktop_plugin_hotkeys(
+                catalog, create_builtin_desktop_extension_registry()
+            )),
+            ("desktop.capture-screenshot", "desktop.pin-clipboard-image"),
         )
-        self.assertEqual(_desktop_plugin_theme_id(catalog, "dark"), "dark")
-        self.assertEqual(_desktop_plugin_theme_id(catalog, "unknown"), "system")
+        registry = create_builtin_desktop_extension_registry()
+        self.assertEqual(_desktop_plugin_theme(catalog, "dark", registry).theme_id, "dark")
+        self.assertIsNone(_desktop_plugin_theme(catalog, "unknown", registry))
 
+    def test_trusted_registry_accepts_registered_extension_contracts(self) -> None:
+        registry = create_builtin_desktop_extension_registry(freeze=False)
+        executed: list[str] = []
+        registry.register_command_handler(
+            "trusted.open-panel",
+            lambda context: executed.append(context.manager_url),
+        )
+        registry.register_hotkey_contract(
+            "open-trusted-panel",
+            "trusted.open-panel",
+            "Ctrl+Alt+T",
+        )
+        registry.register_theme_resource("trusted", "trusted.theme.v1", lambda _context: "dark")
+        registry.register_status_contract(
+            "manager.trusted-status",
+            "trusted.status.v1",
+            query=lambda get_json: get_json("/api/trusted/status"),
+            render=lambda payload: [("状态", str(payload["data"]["state"]))],
+        )
+        registry.register_settings_contract(
+            "trusted.settings.v1",
+            "trusted.settings.schema.v1",
+            "manager.trusted-settings.read",
+            "manager.trusted-settings.write",
+            read=lambda _reader: {"enabled": True},
+            render=lambda value: [("启用", "是" if value["enabled"] else "否")],
+            open=lambda manager_url, open_url: open_url(f"{manager_url}/#/trusted"),
+        )
+        registry.freeze()
+        catalog = parse_desktop_plugin_catalog(
+            _payload(contributions=[
+                _command("open-trusted-panel", "trusted.open-panel"),
+                _tray("trusted-panel-menu", "open-trusted-panel"),
+                _hotkey("trusted-panel-hotkey", "open-trusted-panel", "Ctrl+Alt+T"),
+                _theme("trusted", "trusted.theme.v1"),
+                _status("trusted-status", "manager.trusted-status", "trusted.status.v1"),
+                _settings(
+                    "trusted-settings",
+                    rendererId="trusted.settings.v1",
+                    schemaId="trusted.settings.schema.v1",
+                    readCommandId="manager.trusted-settings.read",
+                    writeCommandId="manager.trusted-settings.write",
+                ),
+            ]),
+            registry,
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertEqual([item.handler_id for item in catalog.menu_items], ["trusted.open-panel"])
+        self.assertEqual([item.handler_id for item in catalog.hotkeys], ["trusted.open-panel"])
+        self.assertEqual([item.desktop_resource_id for item in catalog.themes], ["trusted.theme.v1"])
+        self.assertEqual([item.renderer_id for item in catalog.status_cards], ["trusted.status.v1"])
+        self.assertEqual([item.renderer_id for item in catalog.settings_sections], ["trusted.settings.v1"])
+        registry.invoke_command(
+            "trusted.open-panel",
+            DesktopCommandContext("http://127.0.0.1:8790", lambda _url: None, {}),
+        )
+        self.assertEqual(executed, ["http://127.0.0.1:8790"])
+
+    def test_trusted_extension_entry_points_are_explicit_and_loaded_before_freeze(self) -> None:
+        registry = create_builtin_desktop_extension_registry(freeze=False)
+        entry_point = MagicMock()
+        entry_point.name = "trusted-example"
+        entry_point.load.return_value = lambda target: target.register_command_handler(
+            "trusted.entry-command",
+            lambda _context: None,
+        )
+
+        with patch(
+            "rabiroute_tray.plugin_catalog.metadata.entry_points",
+            return_value=[entry_point],
+        ) as entry_points:
+            self.assertEqual(load_trusted_desktop_extensions(registry, ()), ())
+            entry_points.assert_not_called()
+            self.assertEqual(
+                load_trusted_desktop_extensions(registry, ("trusted-example", "trusted-example")),
+                ("trusted-example",),
+            )
+
+        self.assertTrue(registry.has_command_handler("trusted.entry-command"))
+        registry.freeze()
+        with self.assertRaises(RuntimeError):
+            load_trusted_desktop_extensions(registry, ("trusted-example",))
+
+    def test_duplicate_trusted_extension_entry_point_fails_closed(self) -> None:
+        registry = create_builtin_desktop_extension_registry(freeze=False)
+        first = MagicMock()
+        first.name = "duplicate-extension"
+        second = MagicMock()
+        second.name = "duplicate-extension"
+        with patch(
+            "rabiroute_tray.plugin_catalog.metadata.entry_points",
+            return_value=[first, second],
+        ):
+            with self.assertRaises(LookupError):
+                load_trusted_desktop_extensions(registry, ("duplicate-extension",))
+        first.load.assert_not_called()
+        second.load.assert_not_called()
+    def test_missing_trusted_extension_entry_point_fails_closed(self) -> None:
+        registry = create_builtin_desktop_extension_registry(freeze=False)
+        with patch("rabiroute_tray.plugin_catalog.metadata.entry_points", return_value=[]):
+            with self.assertRaises(LookupError):
+                load_trusted_desktop_extensions(registry, ("missing-extension",))
     def test_rejects_unknown_or_cross_instance_hotkey_contracts(self) -> None:
         catalog = parse_desktop_plugin_catalog(
             _payload(
@@ -665,8 +775,9 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(_desktop_plugin_hotkey_handlers(catalog), frozenset())
-        self.assertEqual(_desktop_plugin_theme_id(catalog, "dark"), "system")
+        registry = create_builtin_desktop_extension_registry()
+        self.assertEqual(_desktop_plugin_hotkeys(catalog, registry), ())
+        self.assertIsNone(_desktop_plugin_theme(catalog, "dark", registry))
 
     def test_plugin_menu_keeps_fixed_recovery_entries_and_executes_whitelist(self) -> None:
         root = QMenu()
@@ -678,7 +789,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         executed: list[str] = []
         catalog = parse_desktop_plugin_catalog(_builtin_payload())
 
-        _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, executed.append)
+        _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, executed.append, create_builtin_desktop_extension_registry())
 
         self.assertEqual(root.actions(), [webgui, plugin_menu.menuAction(), refresh, separator, quit_action])
         self.assertEqual([action.text() for action in plugin_menu.actions()], ["打开 WebGUI", "打开设置"])
@@ -694,9 +805,9 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         quit_action = root.addAction("退出")
         plugin_menu = QMenu("插件", root)
 
-        _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None)
+        _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None, create_builtin_desktop_extension_registry())
         first_actions = list(plugin_menu.actions())
-        _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None)
+        _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None, create_builtin_desktop_extension_registry())
 
         self.assertEqual(root.actions(), [webgui, plugin_menu.menuAction(), refresh, quit_action])
         self.assertEqual(root.actions().count(plugin_menu.menuAction()), 1)
@@ -710,7 +821,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         quit_action = root.addAction("退出")
         plugin_menu = QMenu("插件", root)
 
-        _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None)
+        _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None, create_builtin_desktop_extension_registry())
 
         self.assertEqual(root.actions(), [webgui, refresh, quit_action])
 
@@ -735,20 +846,21 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             ),
         )
 
-        _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, lambda _handler: None)
+        _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, lambda _handler: None, create_builtin_desktop_extension_registry())
 
         self.assertNotIn(plugin_menu.menuAction(), root.actions())
 
-    def test_handler_urls_are_local_fixed_mappings(self) -> None:
-        self.assertEqual(
-            _desktop_plugin_handler_url("http://127.0.0.1:8790/", "desktop.open-webgui"),
-            "http://127.0.0.1:8790",
-        )
-        self.assertEqual(
-            _desktop_plugin_handler_url("http://127.0.0.1:8790", "desktop.open-settings"),
-            "http://127.0.0.1:8790/#/settings",
-        )
-        self.assertIsNone(_desktop_plugin_handler_url("http://127.0.0.1:8790", "desktop.run-shell"))
+    def test_registered_command_handlers_fail_closed(self) -> None:
+        registry = create_builtin_desktop_extension_registry()
+        opened: list[str] = []
+        context = DesktopCommandContext("http://127.0.0.1:8790/", opened.append, {})
+
+        registry.invoke_command("desktop.open-webgui", context)
+        registry.invoke_command("desktop.open-settings", context)
+
+        self.assertEqual(opened, ["http://127.0.0.1:8790", "http://127.0.0.1:8790/#/settings"])
+        with self.assertRaises(LookupError):
+            registry.invoke_command("desktop.run-shell", context)
 
     def test_catalog_fetch_does_not_block_qt_thread(self) -> None:
         results: list[DesktopPluginCatalog | None] = []

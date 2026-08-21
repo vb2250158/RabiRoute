@@ -23,7 +23,7 @@ function requirement(sourceMessageId = "source-old"): MessageProcessingRequireme
       routeProfileId: "route-main",
       roleId: "RoleMain",
       endpoint: "napcat",
-      conversationKey: "napcat:gateway:route-main:instance:qq-main:group:798776701",
+      conversationKey: "napcat:gateway:route-main:instance:qq-main:group:100200301",
       sender: "user-1",
       routeKinds: ["group_message"],
       messageIds: [sourceMessageId],
@@ -31,7 +31,7 @@ function requirement(sourceMessageId = "source-old"): MessageProcessingRequireme
         runtimeRouteId: "route-main",
         gatewayId: "route-main",
         routeProfileId: "route-main",
-        groupId: 798776701,
+        groupId: 100200301,
         instanceId: "qq-main"
       }
     },
@@ -49,7 +49,7 @@ function writeFormalRecord(
 ): void {
   fs.writeFileSync(path.join(roleDir, "group-messages.jsonl"), `${JSON.stringify({
     time: 1,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 10001,
     rawMessage: "较早但仍属于当前 requirement 的来源",
     messageId: "source-old",
@@ -64,7 +64,7 @@ function writeFormalRecord(
 test("an exact registered source beyond the recent window is recovered from formal group history", (t) => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-source-context-"));
   t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
-  const conversationKey = "napcat:gateway:route-main:instance:qq-main:group:798776701";
+  const conversationKey = "napcat:gateway:route-main:instance:qq-main:group:100200301";
   appendMessageContextToDir(roleDir, {
     time: 1,
     direction: "inbound",
@@ -72,7 +72,7 @@ test("an exact registered source beyond the recent window is recovered from form
     channel: "napcat",
     conversationKey,
     sender: "user-1",
-    target: "798776701",
+    target: "100200301",
     text: "较早但仍属于当前 requirement 的来源",
     messageId: "source-old"
   });
@@ -84,7 +84,7 @@ test("an exact registered source beyond the recent window is recovered from form
       channel: "napcat",
       conversationKey,
       sender: "user-2",
-      target: "798776701",
+      target: "100200301",
       text: `较新的消息 ${index}`,
       messageId: `newer-${index}`
     });
@@ -106,7 +106,7 @@ test("an exact registered source beyond the recent window is recovered from form
   });
 
   assert.equal(recovered.filter((item) => String(item.messageId) === "source-old").length, 1);
-  assert.equal(recovered.find((item) => String(item.messageId) === "source-old")?.target, "798776701");
+  assert.equal(recovered.find((item) => String(item.messageId) === "source-old")?.target, "100200301");
 });
 
 test("formal group truth overrides a stale requirement conversationKey but must match the send target", (t) => {
@@ -114,26 +114,26 @@ test("formal group truth overrides a stale requirement conversationKey but must 
   t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
   writeFormalRecord(roleDir);
   const stale = requirement();
-  stale.source.conversationKey = "napcat:gateway:route-main:instance:qq-main:group:474222421";
+  stale.source.conversationKey = "napcat:gateway:route-main:instance:qq-main:group:100200300";
   stale.source.replyContext = {
     runtimeRouteId: "route-main",
     gatewayId: "route-main",
     routeProfileId: "route-main",
-    groupId: 474222421,
+    groupId: 100200300,
     instanceId: "qq-main"
   };
 
   const recovered = recoverMessageProcessingSourceRecord(roleDir, stale, "source-old", {
-    expectedGroupId: "798776701",
+    expectedGroupId: "100200301",
     expectedInstanceId: "qq-main"
   });
-  assert.equal(recovered.groupId, "798776701");
+  assert.equal(recovered.groupId, "100200301");
   assert.throws(
     () => recoverMessageProcessingSourceRecord(roleDir, stale, "source-old", {
-      expectedGroupId: "474222421",
+      expectedGroupId: "100200300",
       expectedInstanceId: "qq-main"
     }),
-    /formal group 798776701 does not match target group 474222421/i
+    /formal group 100200301 does not match target group 100200300/i
   );
 });
 
@@ -148,29 +148,29 @@ test("duplicate formal source records fail closed", (t) => {
   );
 });
 
-test("configuration source 1242330522 cannot be redirected from formal group 474222421 to 798776701", (t) => {
-  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-source-1242330522-"));
+test("configuration source 100200302 cannot be redirected from formal group 100200300 to 100200301", (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-source-100200302-"));
   t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
   writeFormalRecord(roleDir, {
-    messageId: "1242330522",
-    groupId: 474222421,
+    messageId: "100200302",
+    groupId: 100200300,
     rawMessage: "[CQ:image,file=config.png]"
   });
-  const source124 = requirement("1242330522");
-  source124.source.conversationKey = "napcat:gateway:route-main:instance:qq-main:group:474222421";
+  const source124 = requirement("100200302");
+  source124.source.conversationKey = "napcat:gateway:route-main:instance:qq-main:group:100200300";
   source124.source.replyContext = {
     runtimeRouteId: "route-main",
     gatewayId: "route-main",
     routeProfileId: "route-main",
-    groupId: 474222421,
+    groupId: 100200300,
     instanceId: "qq-main"
   };
   assert.throws(
-    () => recoverMessageProcessingSourceRecord(roleDir, source124, "1242330522", {
-      expectedGroupId: "798776701",
+    () => recoverMessageProcessingSourceRecord(roleDir, source124, "100200302", {
+      expectedGroupId: "100200301",
       expectedInstanceId: "qq-main"
     }),
-    /formal group 474222421 does not match target group 798776701/i
+    /formal group 100200300 does not match target group 100200301/i
   );
 });
 
@@ -228,7 +228,7 @@ test("reviewed recovery rejects image evidence that was not explicitly reviewed"
 
   assert.throws(
     () => recoverReviewedMessageProcessingSourceRecord(roleDir, withImage, "source-old", {
-      expectedGroupId: "798776701",
+      expectedGroupId: "100200301",
       expectedInstanceId: "qq-main"
     }),
     /attachment source-old:image:1.*not reviewed/i
@@ -236,7 +236,7 @@ test("reviewed recovery rejects image evidence that was not explicitly reviewed"
   withImage.sourceEvidenceReview.attachmentReviews[0]!.status = "reviewed";
   assert.equal(
     recoverReviewedMessageProcessingSourceRecord(roleDir, withImage, "source-old", {
-      expectedGroupId: "798776701",
+      expectedGroupId: "100200301",
       expectedInstanceId: "qq-main"
     }).reviewedAttachmentIds[0],
     "source-old:image:1"

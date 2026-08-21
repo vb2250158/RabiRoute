@@ -117,6 +117,14 @@ flowchart TB
 
 每条 Route 都把消息进入、策略判断、可迁移上下文、处理端投递和外发控制分开。事件和投递结果会留下可检查的证据，不会消失在某个一体化集成里。
 
+### 插件化 Manager
+
+26 个内置 Manager 插件迁移已经完成，并在同一个 Cordis 根 Context 下注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务 HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。统一验证已于 2026-08-21 通过。
+
+表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；HTTP 路由不属于表现贡献。WebGUI 和 Desktop 是最小扩展宿主。宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract；未知或未注册贡献失败关闭。`manager:diagnostics` 拥有 `GET /meta` 和 `GET /api/gateways`；`manager:desktop` 拥有桌面设置、打开配置、启动/生命周期和关闭接口。Cordis `isolate` 不是安全沙箱。第三方任意表现代码的受控 Extension Host 属于后续路线。
+
+插件停用时先撤销路由并拒绝新请求，已接收的响应最多等待 30 秒，然后关闭剩余资源。仍在运行的 Remote Agent 任务记为 `interrupted`。NapCat 只停止 `manager:napcat-control` 明确启动的实例，不认领扫描发现的外部实例。
+
 ## 当前能力
 
 | 领域 | 当前能力 |
@@ -128,7 +136,7 @@ flowchart TB
 | 已验证处理端 | 通过选定 Codex/ChatGPT Desktop 任务 owner 投递的 Codex。 |
 | 实验性的主人格处理端 | DSH 可以承担主人格和受管辅助会话；真实 profile 的连续投递与重启验收仍待完成。 |
 | Windows 桌面交互 | RabiRoute Desktop 提供滑词操作和系统级截图投递；Windows 真机闭环仍待验收。 |
-| 控制面 | Node.js Manager、RibiWebGUI 与 RabiRoute Desktop，负责 Route、适配器、人格、语音、性能、日志、设置、诊断和进程生命周期。 |
+| 控制面 | Node.js Manager 组合 26 个内置 Cordis 插件；RibiWebGUI 与 RabiRoute Desktop 按活动插件目录显示 Route、适配器、人格、语音、性能、日志、设置、诊断和生命周期入口。 |
 | 安全与证据 | Route 自己的 Outbox policy，以及事件、数据包、投递、回复、Heartbeat 和 replay 的 JSONL 记录。 |
 | 实验集成 | Remote Agent、RabiSpeech、RabiLink、小爱、Webhook、WeCom、飞书、个人微信、穿戴设备、Copilot CLI 和 AstrBot。 |
 

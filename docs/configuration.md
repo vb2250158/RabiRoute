@@ -6,7 +6,7 @@
 
 # 配置与接入
 
-> 状态：现行指南。字段和成熟度以当前配置模型、Manager API 和扫描结果为准。
+> 状态：现行指南。字段和成熟度以当前配置模型、Manager API 和扫描结果为准；验收状态见[当前能力与成熟度](current-capabilities.md)。
 
 ## Manager 插件组合
 
@@ -23,12 +23,25 @@
     "manager:performance": { "enabled": true },
     "manager:desktop": { "enabled": true },
     "manager:gateway-runtime": { "enabled": true },
+    "manager:bilibili-history": { "enabled": true },
+    "manager:route-control": { "enabled": true },
+    "manager:message-adapter-control": { "enabled": true },
+    "manager:agent-adapter-catalog": { "enabled": true },
+    "manager:agent-state-control": { "enabled": true },
+    "manager:agent-thread-control": { "enabled": true },
+    "manager:agent-communication": { "enabled": true },
+    "manager:copilot-control": { "enabled": true },
+    "manager:astrbot-control": { "enabled": true },
+    "manager:marvis-control": { "enabled": true },
+    "manager:remote-agent": { "enabled": true },
+    "manager:diagnostics": { "enabled": true },
     "manager:rabilink-relay": { "enabled": true },
     "manager:memory-consolidation": { "enabled": true },
     "manager:fennenote-output": { "enabled": true },
     "manager:message-processing-control": { "enabled": true },
     "manager:message-processing-automation": { "enabled": true },
     "manager:plan-feedback-delivery": { "enabled": true },
+    "manager:napcat-control": { "enabled": true },
     "manager:napcat-supervisor": { "enabled": true }
   }
 }
@@ -38,22 +51,40 @@
 
 保存 `manager.json` 后，文件 watcher 只对账发生变化的插件。停用会销毁目标 Fiber；revision 变化会重载目标实例；新定义失败时恢复旧定义。`GET /api/plugins/reconciliation` 返回期望、活动、变化、回滚和诊断状态，`POST /api/plugins/reconcile` 重新读取本机配置。WebGUI 通过 `/api/events` 的 `plugin_catalog_changed` 事件刷新目录。
 
-### 后台服务插件生命周期
+### 插件入口与资源所有权
 
-以下八个内置实例不发布 UI contribution；HTTP 入口和后台副作用都由各自 Fiber 持有：
+当前内置目录注册 26 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务 HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。
 
-| 实例 | 激活 | 停用 |
+表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 和 Desktop 只消费活动插件的表现贡献；HTTP 路由不属于该目录。宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract；未知或未注册贡献失败关闭。固定恢复入口只用于目录不可用时重新打开 WebGUI 或设置。第三方任意表现代码的受控 Extension Host 属于后续路线。
+
+WebGUI 的可信页面扩展在前端构建时调用 `registerTrustedWebPage()`，注册 `routeId`、`rendererId`、异步组件 loader、页面路径和允许的导航位置/图标。插件目录只能引用已经注册的合同，不能提供远程模块 URL 或任意脚本。
+
+Desktop 的可信 Python 扩展通过 `rabiroute.desktop_extensions` entry point group 安装，并由启动参数逐个允许：
+
+```powershell
+RabiRoute-Desktop.exe --trusted-desktop-extension my_extension
+```
+
+参数可以重复。默认列表为空，因此不会自动导入任何第三方包。扩展注册完成后，Desktop 冻结注册表。该入口中的代码与 Desktop 在同一进程运行，只适用于明确安装并信任的扩展；未知、不可信或高风险代码使用独立进程插件协议。
+所有使用 `ManagerPluginRequestTracker` 的路由都执行同一停用顺序：先撤销路由，再拒绝新请求，然后等待已接收响应触发 `finish` 或 `close`。同步和异步 handler 都纳入统计。默认 drain 截止时间为 30 秒；超时后销毁仍未结束的响应，再继续释放插件资源。
+
+| 实例 | 拥有的入口或资源 | 停用行为 |
 | --- | --- | --- |
-| `manager:gateway-runtime` | 启用 Gateway 服务协调器；Manager 服务就绪后读取 Route 定义并按当前状态启动、停止或重启 Gateway | 顺序停止全部 Gateway，并让后续 Gateway 启停请求失败关闭 |
-| `manager:rabilink-relay` | Manager HTTP listener 就绪后按全局配置同步 RabiLink Relay | 停止 Relay Runtime 和人格同步局域网服务，并移除活动同步回调 |
-| `manager:memory-consolidation` | 非只读模式下为本次激活创建新的记忆整理调度器；listener 就绪后启动一次性截止时间调度 | 停止本次调度器、终止本实例的一次性进程并等待当前调度结束 |
-| `manager:fennenote-output` | 注册 FenneNote playback 和 reply 兼容 API，并复用 Outbox 的统一输出服务 | 撤销三个 API，取消本实例在途请求并等待结束；不改变 Route 发送规则 |
-| `manager:message-processing-control` | 注册消息处理看板、要求、发送上下文、结果和知识回调 API | 撤销该批 API；保留现有消息处理记录和后台提醒实例 |
-| `manager:message-processing-automation` | 恢复 Agent 回复提醒，订阅计划变化，并启动知识回调提醒 | 取消计划订阅、清除提醒计时器、阻止旧回调重新排程，并等待已开始的提醒投递结束 |
-| `manager:plan-feedback-delivery` | listener 就绪后扫描待恢复的计划反馈；新的反馈继续走现有投递模块 | 禁止新的反馈投递，清除重试计时器，并等待当前扫描和投递结束 |
-| `manager:napcat-supervisor` | Manager 自动启动时执行一次 NapCat 启动登录检查 | 取消剩余账号队列，等待当前原子检查结束，并忽略停用后的旧完成回调 |
+| `manager:diagnostics` | `GET /meta`、`GET /api/gateways`，以及 WebGUI“日志诊断”页面和导航 | 撤销诊断入口并 drain 已接收请求；只读取其他插件状态，不启动或恢复已停用插件 |
+| `manager:desktop` | `/api/desktop/settings`、`/open-config-file`、`/manager/start`、`/manager/desktop-lifecycle/start`、`/manager/shutdown`，以及 Desktop/WebGUI 的桌面设置、命令、托盘和快捷键贡献 | 撤销入口并 drain 请求，然后清除本实例尚未执行的延迟关闭计时器 |
+| `manager:gateway-runtime` | Gateway 配置、启停、重启、删除、手动触发、回放、网络选项和重载入口；Gateway 与手动触发子进程 | 撤销入口并 drain 请求，停止本实例的手动触发进程，再停止并等待 Gateway 进程树退出 |
+| `manager:agent-adapter-catalog` | Agent Adapter 目录、可用性和扫描入口；受控扫描 Worker Pool | 撤销入口、取消排队或活动扫描，并停止 Worker 进程树 |
+| `manager:agent-thread-control` | Agent 任务创建、查询和绑定入口 | 撤销入口并 drain 请求；任务和业务记录继续由稳定业务模块拥有 |
+| `manager:agent-communication` | Agent 请求、发送、回执和追踪入口 | 撤销入口并 drain 请求；继续复用 Outbox、审批、回执和消息处理业务模块 |
+| `manager:remote-agent` | Remote Agent 扫描、连接、任务和事件入口；活动 WebSocket 与 Hub 回调 | 撤销入口并 drain 请求；未完成任务改为 `interrupted`，关闭 WebSocket 并等待已开始的回调结束 |
+| `manager:napcat-control` | NapCat 修复、健康检查、OneBot 配置、添加、启动、重启和删除入口 | 停止接收并 drain 请求，停止 supervisor，然后只停止本插件明确启动且仍归它所有的实例；端口扫描发现或由外部程序启动的实例不归本插件所有 |
+| `manager:napcat-supervisor` | Manager 自动启动后的 NapCat 登录检查队列 | 取消剩余账号队列，等待当前检查结束，并忽略停用后的旧完成回调 |
+| `manager:rabilink-relay` | RabiLink Relay Runtime 和人格同步局域网服务 | 停止 Relay、同步 listener 和活动回调 |
+| `manager:memory-consolidation` | 记忆整理调度器和本实例启动的一次性进程 | 停止调度器、终止进程并等待当前整理结束 |
+| `manager:message-processing-automation` | Agent 回复提醒、计划订阅和知识回调提醒 | 取消订阅和计时器，阻止旧回调重新排程，并等待已开始的投递 |
+| `manager:plan-feedback-delivery` | 计划反馈恢复扫描、投递和重试计时器 | 拒绝新投递，清除重试计时器，并等待当前扫描和投递结束 |
 
-`manager:performance` 每次激活都会创建新的 `PerformanceApi` 并注册该批 HTTP handler；停用会调用 `close()` 取消性能样本订阅、结束 SSE 连接，再停止性能监控服务。重新激活不会复用已关闭的 API 实例。
+`manager:performance` 每次激活都会创建新的 `PerformanceApi` 和 HTTP handler；停用时取消性能样本订阅、结束 SSE，再停止监控服务。重新激活不会复用已关闭的 API 实例。
 
 ## OpenAI / Codex 术语边界
 
@@ -69,7 +100,7 @@ RabiRoute 配置把 provider、agent、transport、host 和 model 分开表达�
 
 Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的名称。不要把 adapter 改名为 `chatgpt`。RabiRoute 的正式投递协议是 Desktop IPC；app-server 只保留短生命周期元数据用途，不进入真实消息主链。
 
-## 路由配置
+## 运行时文件
 
 运行期配置现在按文件夹拆在 `data/route` 和 `data/roles`：
 
@@ -78,6 +109,8 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `data/roles/<角色名>/personaConfig.json`：人格自动化规则、语音唤醒关键词和各消息端最近上下文额度。一个人格可以服务多个路由配置。
 
 如果运行期 data 不存在，manager 会优先复制整包 `examples/data`，让默认 Rabi 路由与 RabiLink 主动智能模板一起落地。只有 `main` 默认启用；其他接入均以禁用模板出现，填写凭据、工作目录并检查端口后再逐条启用。`examples/data` 不是运行依赖；缺少 examples 时，manager 也能创建最小 QQ / NapCat 到 Codex 配置。RabiLink 模板不包含 Relay 地址或 token，仍需在本机全局设置中显式配置并开启连接。
+
+## 代表性 Route 配置
 
 ```json
 {
@@ -134,7 +167,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 }
 ```
 
-重要字段：
+## 核心字段
 
 - `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`heartbeat`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`、`weixin`、`feishu`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
 - `personaAutomationScriptsEnabled`：当前 Route 是否允许人格自动化运行本机脚本，默认关闭。它是本机权限，不写入人格目录，也不会随人格同步到其它电脑；收到消息和定时触发的脚本动作都受同一个开关约束。
@@ -242,6 +275,22 @@ NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。每�
 
 新增平台时，优先在 `src/adapters/` 新增 adapter，并输出统一消息记录和路由事件，不要把新平台逻辑塞进 NapCat adapter。
 
+## RabiLink 全局配置
+
+`data/Config.json` 持有本机 `rabiGuid`、全局 Relay 开关、地址、应用 token、设备身份和 LAN WebGUI 设置。它是 Manager 级配置，不属于任何单条 Route；公开示例不包含 Relay 地址或 token。
+
+## 企业微信
+
+`wecomBotId`、`wecomBotSecret` 和可选 `wecomWsUrl` 配置智能机器人 WebSocket。真实凭据优先使用 `WECOM_BOT_ID`、`WECOM_BOT_SECRET` 和 `WECOM_WS_URL`；详见[企业微信接入](wecom-integration.md)。
+
+## 个人微信实验
+
+`weixinBaseUrl` 和 `weixinBotType` 配置 OpenClaw/iLink 实验入口。登录 token、账号标识、同步游标和会话 context token 只保存在运行期 `data/`；临时网络失败不会清除已有会话，明确的凭据拒绝才会失效。
+
+## 飞书企业应用消息端
+
+`feishuAppId`、`feishuAppSecret`、`feishuVerificationToken` 和 `feishuEncryptKey` 配置企业应用，`feishuWebhookPort` 与 `feishuWebhookPath` 配置回调。平台 HTTPS 回调和 `im.message.receive_v1` 未确认前保持 `feishuEventSubscriptionEnabled=false`；详见[飞书消息端接入](feishu-integration.md)。
+
 ## 多路由与人格复用
 
 每个 `data/route/<配置名>/adapterConfig.json` 是一条可启动路由。它可以有自己的消息端、端口和 Agent 工作目录：
@@ -288,6 +337,8 @@ URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`。`/api
 - `copilotCli`：通过本机 Copilot CLI 命令投递一次性 prompt，输出写入 `copilot-output.jsonl`，运行态上报给 Manager。它不会注入已有 VS Code Copilot 面板线程；如需后台调用，请确保 CLI 可执行文件在 PATH 中，或设置 `COPILOT_CLI_BIN`。
 - `astrbot`：通过 AstrBot Dashboard / ChatUI API 绑定项目和会话，支持登录验证、扫描和插件部署；当前仍是实验支持，真实连续发送需要环境验收。
 - `marvis`：通过本机 handoff 方式接入 Marvis 桌面端。RabiRoute 会把 prompt 写入 `marvis-prompts/`、复制到剪贴板，并优先启动/聚焦 Windows 桌面应用 `Tencent.Marvis`；由于 Marvis 当前未提供稳定公开后台 API，这个适配器不会自动点击发送。
+
+## Desktop owner 要求
 
 Codex adapter 的默认安全边界：
 

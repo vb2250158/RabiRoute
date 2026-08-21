@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { recordConversationSituation } from "../conversationSituationStore.js";
 import { conversationSituationForIdentity } from "../routing/conversationSituation.js";
-import { handleManagerPersonaDomainApi } from "./controlPlaneRoutes.js";
+import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -24,7 +24,7 @@ test("Manager identity-relation API stores a confirmed endpoint mapping and reso
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handleManagerPersonaDomainApi(request, requestUrl, response, { rolesRoot: root, roleDir: roleId => path.join(root, roleId) })) return;
+    if (handlePersonaPluginApi(request, requestUrl, response, { rolesRoot: root, roleDir: roleId => path.join(root, roleId) })) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -76,7 +76,7 @@ test("Manager returns persisted conversation situation records for the persona p
   }));
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handleManagerPersonaDomainApi(request, requestUrl, response, { rolesRoot: root, roleDir: roleId => path.join(root, roleId) })) return;
+    if (handlePersonaPluginApi(request, requestUrl, response, { rolesRoot: root, roleDir: roleId => path.join(root, roleId) })) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);

@@ -2,7 +2,7 @@ English | <a href="./dsh-plugin-architecture-lessons.md">简体中文</a>
 
 # Plugin Architecture Lessons for RabiRoute from DSH
 
-> Status: architecture research with phased implementation. Cordis composition roots, Adapter Registries, the Manager Plugin Runtime, and controlled presentation contributions are implemented; configuration reconciliation, third-party presentation code, and isolated-process plugins remain later stages.
+> Status: architecture research and implementation summary. Migration of all 26 built-in Manager plugins is complete, with configuration reconciliation, controlled presentation contributions, and a separate-process extension contract implemented. Unified validation passed on August 21, 2026.
 >
 > Primary audience: RabiRoute maintainers and developers of message-side and Agent-side integrations.
 
@@ -23,9 +23,9 @@ These changes can reduce the files touched when adding a platform and prevent st
 
 This document is based on these official versions:
 
-- [DeepSeek Harness `141eb6f`](https://github.com/deepseek-ai/deepseek-harness/tree/141eb6fef83422698aef7a981029e843e8161534), the `dsh@0.1.0-rc.8` release commit dated August 19, 2026.
+- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006), the `dsh@0.1.1-rc.1` commit from August 21, 2026 at 14:21:44 +08:00.
 - [A Programming Paradigm for Spatiotemporal Composability, v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf), committed August 13, 2026.
-- The [DSH architecture guide](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/architecture.md) and [Cordis primer](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/cordis-primer.md).
+- The [DSH architecture guide](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/architecture.md) and [Cordis primer](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/cordis-primer.md).
 
 DSH is still a developer preview. RabiRoute should learn from its design rather than treat the current APIs as a compatibility target.
 
@@ -45,9 +45,11 @@ Startup order therefore follows capability relationships instead of a manually m
 
 ### 3. Effects are disposable
 
-Cordis treats registration as an effect with an inverse. Event listeners, services, tools, prompt sections, and providers belong to the lifecycle of the plugin that installed them. The host withdraws them in reverse order when the plugin stops.
+Cordis treats registration as an effect with an inverse. Event listeners, services, tools, prompt sections, and providers belong to the Fiber of the plugin that installed them.
 
-The paper calls this temporal composability: the system should remove a component's internal changes when that component leaves.
+Cordis runs multiple disposers in one Fiber concurrently through `Promise.all(...)`. It does not guarantee reverse-order serial teardown across several `ctx.effect()` calls. A plugin that needs ordering performs `unregister → stop accepting → drain → stop resources → await exit` inside one disposer.
+
+The paper calls reversible internal change temporal composability: when a component leaves, the system should remove the internal changes owned by that component.
 
 ### 4. Configuration describes desired state
 
@@ -71,24 +73,18 @@ The paper places these emissions outside the recoverable system boundary and req
 
 ## RabiRoute's current base
 
-RabiRoute already has useful ownership boundaries:
+The current implementation has these boundaries:
 
-- `src/forwarding.ts` owns route decisions, context assembly, and handler delivery.
-- `src/adapters/`, `src/agentAdapters/`, and `src/messageEndpoints/` separate integration types.
-- `src/manager/controlPlaneRoutes.ts` owns configuration, processes, and control-plane APIs.
-- JSONL records, Outbox, and delivery replay separate facts, send requests, and outcomes.
-- `scripts/check-event-driven-architecture.mjs` requires owner events for business-state changes.
+- Manager and Gateway use independent Cordis root Contexts.
+- `builtinManagerPlugins.ts` declares 26 built-in Manager instances, and `controlPlaneRoutes.ts` supplies a hook for every instance.
+- The presentation Contribution Catalog publishes only `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`; Manager plugin `apply` hooks register business HTTP routes in `ManagerPluginRouteRegistry`.
+- The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths.
+- Seven Manager plugins contribute pages, navigation, settings sections, status cards, commands, hotkeys, tray menus, or themes. Nineteen provide runtime capabilities only.
+- WebGUI and Desktop consume one controlled contribution catalog rather than maintaining a second extension truth.
+- Each plugin keeps ordered teardown in one disposer and uses `ManagerPluginRequestTracker` to remove routes, reject new requests, and drain accepted work.
+- The separate-process protocol is reserved for unknown, untrusted, or high-risk extensions. Trusted built-in plugins run in the Manager process.
 
-Extensions still require coordinated edits to static entrypoints:
-
-| Location | Current behavior | Future owner |
-|---|---|---|
-| `src/adapters/messageAdapter.ts` | Message adapter types are a fixed union | Message-plugin catalog |
-| `src/index.ts` | Imports and creates every message adapter | Gateway plugin composer |
-| `src/agentAdapters/agentAdapter.ts` | Selects implementations with `if` branches | Agent Adapter registry |
-| `src/agentAdapters/managerApi.ts` | Builds scan results from known types | Plugin catalog and capability reports |
-| WebGUI types and copy | New integrations often require catalog edits | Controlled catalog returned by Manager |
-| `MessageAdapter` | Defines only `start()` | Unified activation and disposal lifecycle |
+Stable business modules continue to own Route configuration, message records, routing decisions, `AgentPacket`, Outbox, plans, memories, and message-processing records. Unified validation passed on August 21, 2026.
 
 ## Principles for RabiRoute
 
@@ -114,7 +110,7 @@ Prioritize these capabilities:
 - context sections, template variables, and diagnostic contributions;
 - replaceable speech, storage, or remote-call providers.
 
-Manager, Gateway, WebGUI, and Desktop remain product hosts. A plugin must not redefine the router or Outbox boundary.
+Manager and Gateway retain minimal composition kernels, while WebGUI and Desktop retain minimal presentation hosts. Plugins contribute pages, settings, commands, navigation, status, and lifecycle entries, but cannot redefine the router or Outbox boundary.
 
 ### Principle 3: services perform work; events report facts
 
@@ -128,13 +124,23 @@ Each activated plugin receives a lifecycle scope that owns:
 
 - service and Adapter registrations;
 - event listeners;
-- HTTP, WebSocket, and IPC listeners;
+- HTTP, WebSocket, and IPC entries;
 - timers and one-shot deadlines;
 - file watchers;
 - child processes and temporary directories;
 - status and diagnostic catalog contributions.
 
-On deactivation, configuration replacement, or startup failure, the scope withdraws completed operations in reverse order. Resources without a registered disposer are not eligible for hot reload.
+Cordis runs multiple disposers in the same Fiber concurrently. When teardown phases depend on one another, the plugin registers one critical disposer and completes:
+
+```text
+unregister routes
+→ stop accepting new requests
+→ drain accepted requests
+→ stop plugin-owned resources
+→ await resource exit
+```
+
+A resource without a disposer is not eligible for local reload.
 
 ### Principle 5: plugins declare capabilities, not manual startup order
 
@@ -195,7 +201,7 @@ Manager / Gateway Host
 ├─ Plugin Composer       reconciles desired config with instances
 ├─ Service Registry      publishes and resolves stable capabilities
 ├─ Event Bus             broadcasts typed facts and controlled policy events
-├─ Lifecycle Scope       collects and runs disposers in reverse order
+├─ Lifecycle Scope       owns plugin disposers; plugins order dependent teardown internally
 ├─ Plugin Catalog        supplies one catalog to Manager API and WebGUI
 └─ Core Services
    ├─ Route Config
@@ -227,31 +233,14 @@ interface RabiPluginContext {
 
 Every registration helper should ultimately attach to the same lifecycle scope.
 
-## Adoption stages
+## Current adoption
 
-### Stage 1: internal registries
-
-Keep built-in compilation and the existing configuration format. Consolidate Agent Adapter creation, scanning, capabilities, and display metadata into one registry. Then add complete `stop/dispose` behavior to one message adapter to prove that listeners, ports, and timers can be withdrawn.
-
-Success criterion: adding a built-in Agent Adapter no longer requires edits to multiple central `if` branches, scan tables, and WebGUI enums.
-
-### Stage 2: shared plugin contract
-
-Add manifests, lifecycle scopes, a service registry, and the plugin-catalog API. Migrate existing adapters one by one without changing ownership of `forwarding.ts`, Route configuration, or Outbox.
-
-Success criterion: Manager reports each plugin's source, dependencies, scope, state, and failure phase.
-
-### Stage 3: reconciliation and local reload
-
-Represent built-in plugin instances as desired configuration with stable IDs. Replace only affected instances after a configuration change and restore the previous instance after failure.
-
-Success criterion: repeated enable, disable, reconfigure, and recovery operations on one Gateway leave no duplicate listeners or sends.
-
-### Stage 4: external plugins and isolation
-
-Support out-of-tree packages only after the contract stabilizes. Untrusted or high-risk plugins run in separate processes and receive a versioned protocol with the smallest required capability set.
-
-Success criterion: plugin upgrades, crashes, and protocol incompatibility do not terminate Manager or unrelated Routes.
+1. Agent Adapter and Message Adapter capabilities now use controlled registration and composition boundaries.
+2. Manager has 26 built-in plugin definitions with matching hooks and configuration-driven local reconciliation.
+3. WebGUI and Desktop consume presentation contributions through host-owned trusted registries that can register new renderer, route, handler, and resource contracts. Unknown or unregistered contributions fail closed; HTTP routes are not presentation contributions.
+4. Unknown, untrusted, or high-risk third-party extensions must use a separate process and versioned protocol. This is RabiRoute hardening, not the default execution model for ordinary DSH plugins.
+5. Third-party custom presentation code still requires a controlled Extension Host and a clearer permission boundary.
+6. Unified validation passed on August 21, 2026.
 
 ## Rejected approaches
 
@@ -262,13 +251,8 @@ Success criterion: plugin upgrades, crashes, and protocol incompatibility do not
 - Do not enable hot reload before disposal tests and delivery draining exist.
 - Do not make every code unit a replaceable plugin. Product-facing pages, menus, commands, settings, status, themes, and device capabilities enter plugin or contribution contracts, while minimal hosts and business fact owners keep stable boundaries.
 
-## Recommended starting slice
+## Remaining work
 
-The first implementation slice should prove two different benefits:
-
-1. Use one Agent Adapter registry to remove duplicate creation, scan, capability, and UI catalog sources.
-2. Give one built-in message adapter a complete lifecycle scope and prove that deactivation leaves no listener, port, or timer behind.
-
-Decide on configuration trees, dynamic package loading, and hot reload only after these two slices pass.
-
-See the selected implementation direction in [Cordis-Based Plugin Runtime Refactor for RabiRoute](cordis-plugin-runtime-refactor_en.md).
+- Define a controlled Extension Host and permission model for third-party custom Web/Desktop code.
+- Run one unified validation pass for teardown ordering, request draining, resource exit, and real composition across all 26 Manager plugins.
+- Unified validation passed on August 21, 2026.

@@ -11,6 +11,7 @@ import {
   REMOTE_AGENT_FILE_SINGLE_LIMIT_BYTES,
   REMOTE_AGENT_FILE_TOTAL_LIMIT_BYTES,
   RemoteAgentHub,
+  type RemoteAgentTask,
   remoteAgentTaskEventContextRecord,
   remoteAgentTaskRequestContextRecord
 } from "./remoteAgentManager.js";
@@ -119,8 +120,145 @@ test("RemoteAgentHub rejects task events from devices that do not own the task",
   assert.equal(duplicate.status, "completed");
   assert.equal(duplicate.events.length, terminalEventCount);
   assert.equal(sentPayloads.length, 1);
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(conversationRecords.map((record) => record.direction), ["outbound", "inbound"]);
   assert.equal(conversationRecords[0].text, "Run the remote build.");
+});
+
+test("RemoteAgentHub keeps shutdown interruption when a late task callback fails", async () => {
+  let callbackStartedResolve!: () => void;
+  let rejectCallback!: (reason?: unknown) => void;
+  const callbackStarted = new Promise<void>((resolve) => {
+    callbackStartedResolve = resolve;
+  });
+  const callbackFailure = new Promise<void>((_resolve, reject) => {
+    rejectCallback = reject;
+  });
+  const hub = new RemoteAgentHub({
+    managerPort: 8790,
+    passwordStorePath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-remote-agent-test-")), "connections.json"),
+    getDefaultGatewayId: () => "main",
+    onTaskEvent: async () => {
+      callbackStartedResolve();
+      await callbackFailure;
+    }
+  });
+  const now = new Date().toISOString();
+  const task: RemoteAgentTask = {
+    taskId: "task-late-callback",
+    deviceId: "builder-device",
+    message: "Run the remote build.",
+    taskKind: "build",
+    files: [],
+    originGatewayId: "main",
+    status: "started",
+    createdAt: now,
+    updatedAt: now,
+    events: []
+  };
+  (hub as unknown as { tasks: Map<string, RemoteAgentTask> }).tasks.set(task.taskId, task);
+
+  hub.receiveTaskEvent({
+    taskId: task.taskId,
+    status: "progress",
+    device: { deviceId: task.deviceId },
+    message: "Still running."
+  });
+  await callbackStarted;
+
+  const shutdown = hub.shutdown("Remote Agent plugin stopped.");
+  rejectCallback(new Error("late callback failure"));
+  await shutdown;
+
+  const stored = hub.listTasks().find((item) => item.taskId === task.taskId);
+  assert.equal(stored?.status, "interrupted");
+  assert.equal(stored?.events.at(-1)?.status, "interrupted");
+  assert.equal(stored?.events.some((event) => event.status === "failed"), false);
+});
+
+test("RemoteAgentHub aborts active callbacks and waits for them to finish during shutdown", async () => {
+  let taskCallbackStartedResolve!: () => void;
+  let conversationCallbackStartedResolve!: () => void;
+  let taskCallbackRelease!: () => void;
+  let conversationCallbackRelease!: () => void;
+  const taskCallbackStarted = new Promise<void>(resolve => { taskCallbackStartedResolve = resolve; });
+  const conversationCallbackStarted = new Promise<void>(resolve => { conversationCallbackStartedResolve = resolve; });
+  const taskCallbackGate = new Promise<void>(resolve => { taskCallbackRelease = resolve; });
+  const conversationCallbackGate = new Promise<void>(resolve => { conversationCallbackRelease = resolve; });
+  const taskSignals: AbortSignal[] = [];
+  const conversationSignals: AbortSignal[] = [];
+  const waitForAbort = (signal: AbortSignal): Promise<void> => new Promise(resolve => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+  const hub = new RemoteAgentHub({
+    managerPort: 8790,
+    passwordStorePath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-remote-agent-test-")), "connections.json"),
+    getDefaultGatewayId: () => "main",
+    onTaskEvent: async (_task, _event, signal) => {
+      taskSignals.push(signal);
+      taskCallbackStartedResolve();
+      await waitForAbort(signal);
+      await taskCallbackGate;
+    },
+    onConversationRecord: async (_record, signal) => {
+      conversationSignals.push(signal);
+      conversationCallbackStartedResolve();
+      await waitForAbort(signal);
+      await conversationCallbackGate;
+    }
+  });
+  const now = new Date().toISOString();
+  const completedTask: RemoteAgentTask = {
+    taskId: "task-callback-shutdown",
+    deviceId: "builder-device",
+    message: "Run the remote build.",
+    taskKind: "build",
+    files: [],
+    originGatewayId: "main",
+    status: "started",
+    createdAt: now,
+    updatedAt: now,
+    events: []
+  };
+  const interruptedTask: RemoteAgentTask = {
+    ...completedTask,
+    taskId: "task-interrupted-shutdown"
+  };
+  const tasks = (hub as unknown as { tasks: Map<string, RemoteAgentTask> }).tasks;
+  tasks.set(completedTask.taskId, completedTask);
+  tasks.set(interruptedTask.taskId, interruptedTask);
+
+  hub.receiveTaskEvent({
+    taskId: completedTask.taskId,
+    status: "completed",
+    device: { deviceId: completedTask.deviceId }
+  });
+  await Promise.all([taskCallbackStarted, conversationCallbackStarted]);
+
+  hub.stopAccepting("plugin disabled");
+  assert.equal(taskSignals[0]?.aborted, true);
+  assert.equal(conversationSignals[0]?.aborted, true);
+  assert.throws(() => hub.receiveTaskEvent({
+    taskId: interruptedTask.taskId,
+    status: "completed",
+    device: { deviceId: interruptedTask.deviceId }
+  }), /stopping or inactive/);
+
+  let shutdownSettled = false;
+  const shutdown = hub.shutdown("plugin disabled").then(() => { shutdownSettled = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(shutdownSettled, false);
+  taskCallbackRelease();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(shutdownSettled, false);
+  conversationCallbackRelease();
+  await shutdown;
+
+  assert.equal(hub.listTasks().find(item => item.taskId === interruptedTask.taskId)?.status, "interrupted");
 });
 
 test("RemoteAgentHub sends local files with remote tasks", async () => {

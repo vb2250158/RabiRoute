@@ -6,7 +6,7 @@
 
 # RabiRoute 代码架构
 
-> 状态：当前代码地图。模块路径、Codex transport 和适配器成熟度已按仓库现状校准。
+> 状态：当前代码地图。26 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应；统一验证已于 2026-08-21 通过。
 
 这份文档面向需要改代码的人。它不重复解释 RabiRoute 的产品定位；产品边界见 [架构说明](architecture.md)。这里主要说明代码里的 Module 怎么分工、一条消息怎么流动、改某类功能应该先看哪里。
 
@@ -272,9 +272,9 @@ Agent 端 Adapter 在 `src/agentAdapters/`：
 - `managerApi.ts`：manager 用于扫描、安装、登录、打开处理端的控制面能力。
 - `astrbotAdapter.ts`：AstrBot 投递实现。
 
-`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/cordisRoot.ts` 提供 Gateway/Manager 共用的根 Context 生命周期：同 key 初始化并发去重、失败后重试、销毁等待初始化，以及幂等根销毁。`gatewayCordisRoot.ts` 和 `managerCordisRoot.ts` 提供对称但彼此独立的宿主单例。常驻 Gateway 在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；销毁单个 Fiber 只移除对应定义，销毁根 Context 会撤销三个 Registry 的全部定义与副作用。`src/runtime/messageAdapterRuntime.ts` 提供消息端 Definition 注册和实例 Fiber。通用 Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有定时器；NapCat Fiber 等待全部启用实例的 WebSocket listener 就绪，并在卸载时终止客户端、关闭多实例端口、阻止新消息处理和写入 `disabled`。任一 NapCat 实例启动失败会回滚先前 listener。`src/index.ts` 只识别调用类型并动态加载一次性命令或常驻 Gateway 入口；一次性命令不能启动 Message Adapter Runtime 或 Contribution Runtime。常驻入口只组合 `MessageAdapterRegistry` 中的九种消息端，并在正常退出或启动失败时销毁整个根 Context。共享 `MessageEndpointType` 描述 Route 可接收的全部来源，`GatewayMessageAdapterType` 只描述可由 Gateway Fiber 挂载的类型；纯 `speech`、`rolePanel`、`wearable` 或 `remoteAgent` Route 不启动子进程。Cordis API 不进入路由、消息模板、Webhook payload 解析或具体处理端实现。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入都读取共享 Agent Adapter manifest。Manager 启动时通过 `managerPluginRuntime.ts` 在 Manager 根下挂载统一 `PluginCatalog` 与 `ContributionRegistry`，内置 Manager 插件声明当前 WebGUI 页面、导航、设置区、状态卡、主题，以及 Desktop 命令、菜单、快捷键和主题；`GET /api/plugins/catalog` 始终返回完整插件实例清单，并可按 `web`、`desktop` 筛选表现贡献。Manager 启动期间任一步骤失败都会停止已启动资源、关闭 HTTP/SSE、移除信号监听并销毁 Manager 根。Desktop/WebGUI 是“一切皆插件”模型中的最小宿主，其可扩展入口由该插件贡献目录提供。WebGUI 使用固定 `routeId -> rendererId -> Vue component` 注册表加载页面，导航只能引用同一插件实例、同一注册批次中的页面；设置区、状态卡和 `system` / `light` / `dark` 主题也只接受宿主注册的固定 ID。Desktop 异步读取并缓存目录，用固定 `handlerId` 生成托盘菜单，在诊断视图展示状态和设置，并只为现有截图控制器注册受控快捷键；主题只映射到 Desktop 自带资源。两个宿主都按本地能力注册表判断 `requiredCapabilities`，不会使用插件 manifest 代替宿主能力。
+`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/cordisRoot.ts` 提供 Gateway/Manager 共用的根 Context 生命周期：同 key 初始化并发去重、失败后重试、销毁等待初始化，以及幂等根销毁。`gatewayCordisRoot.ts` 和 `managerCordisRoot.ts` 提供对称但彼此独立的宿主单例。常驻 Gateway 在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；销毁单个 Fiber 只移除对应定义，销毁根 Context 会撤销三个 Registry 的全部定义与副作用。`src/runtime/messageAdapterRuntime.ts` 提供消息端 Definition 注册和实例 Fiber。通用 Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有定时器；NapCat Fiber 等待全部启用实例的 WebSocket listener 就绪，并在卸载时终止客户端、关闭多实例端口、阻止新消息处理和写入 `disabled`。任一 NapCat 实例启动失败会回滚先前 listener。`src/index.ts` 只识别调用类型并动态加载一次性命令或常驻 Gateway 入口；一次性命令不能启动 Message Adapter Runtime 或 Contribution Runtime。常驻入口只组合 `MessageAdapterRegistry` 中的九种消息端，并在正常退出或启动失败时销毁整个根 Context。共享 `MessageEndpointType` 描述 Route 可接收的全部来源，`GatewayMessageAdapterType` 只描述可由 Gateway Fiber 挂载的类型；纯 `speech`、`rolePanel`、`wearable` 或 `remoteAgent` Route 不启动子进程。Cordis API 不进入路由、消息模板、Webhook payload 解析或具体处理端实现。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入都读取共享 Agent Adapter manifest。Manager 启动时通过 `managerPluginRuntime.ts` 在 Manager 根下挂载统一 `PluginCatalog` 与 `ContributionRegistry`，内置 Manager 插件声明当前 WebGUI 页面、导航、设置区、状态卡、主题，以及 Desktop 命令、菜单、快捷键和主题；`GET /api/plugins/catalog` 始终返回完整插件实例清单，并可按 `web`、`desktop` 筛选表现贡献。Manager 启动期间任一步骤失败都会停止已启动资源、关闭 HTTP/SSE、移除信号监听并销毁 Manager 根。Desktop/WebGUI 是“一切皆插件”模型中的最小宿主，其可扩展入口由该插件贡献目录提供。WebGUI 与 Desktop 通过宿主拥有的可信注册表解析贡献。注册表可以增加新的 renderer、route、handler 和 resource contract；导航和命令引用仍须解析到同一插件实例和注册批次。未知、未注册、跨插件或宿主不支持的贡献失败关闭。两个宿主都按本地能力注册表判断 `requiredCapabilities`，不会使用插件 manifest 代替宿主能力。第三方任意表现代码仍需受控 Extension Host。
 
-DSH 普通插件在同一 Node 进程内运行，Cordis `isolate` 只隔离服务作用域。RabiRoute 对未知或高风险插件增加可选独立进程策略，不把进程内 Context 当作安全沙箱。
+DSH 普通插件在同一 Node 进程内运行，Cordis `isolate` 只隔离服务作用域。RabiRoute 要求未知或高风险第三方扩展在独立进程运行，不把进程内 Context 当作安全沙箱。第三方任意表现代码的受控 Extension Host 属于后续路线。
 
 其他处理端在根目录还有：
 
@@ -375,39 +375,66 @@ startManager();
 
 ### Manager 插件运行时
 
-`managerPluginHost.ts` 在 Manager 根 Context 下创建空运行时，再由 `managerPluginConfig.ts` 把 `data/manager.json` 归一化为受控期望状态。`managerPluginReconciler.ts` 串行比较期望与当前实例，只启停或重载变化项；激活失败时重新挂载旧定义，回滚失败保留明确错误状态。
+`managerPluginHost.ts` 在 Manager 根 Context 下创建运行时，`managerPluginConfig.ts` 把 `data/manager.json` 归一化为期望状态，`managerPluginReconciler.ts` 串行启停或重载变化实例。激活失败时恢复旧定义；恢复失败保留明确错误状态。
 
-十三个内置 Manager 实例通过同一目录和对账器管理。`manager:persona`、`manager:speech` 和 `manager:performance` 的后台副作用由各自 Fiber 登记撤销；`manager:fennenote-output` 与 `manager:message-processing-control` 通过 `ManagerPluginRouteRegistry` 持有各自的 HTTP handler 批次。`pluginCatalogRoutes.ts` 提供目录与对账状态，WebGUI 监听 Manager SSE 后刷新目录。
+`builtinManagerPlugins.ts` 当前声明 26 个内置实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供非空 hook：
 
-`processPluginProtocol.ts` 与 `processPluginHost.ts` 定义高风险扩展的版本化 JSON Lines 合同、能力授权、健康检查、超时、脱敏错误和 Windows 进程树清理。`processManagerPlugin.ts` 把通过握手的独立进程贡献挂到普通 Manager Plugin Fiber；目录仍只接收声明式贡献，不加载第三方页面、脚本或资源路径。
+```text
+manager:core
+manager:persona
+manager:speech
+manager:performance
+manager:desktop
+manager:gateway-runtime
+manager:bilibili-history
+manager:route-control
+manager:message-adapter-control
+manager:agent-adapter-catalog
+manager:agent-state-control
+manager:agent-thread-control
+manager:agent-communication
+manager:copilot-control
+manager:astrbot-control
+manager:marvis-control
+manager:remote-agent
+manager:diagnostics
+manager:rabilink-relay
+manager:memory-consolidation
+manager:fennenote-output
+manager:message-processing-control
+manager:message-processing-automation
+manager:plan-feedback-delivery
+manager:napcat-control
+manager:napcat-supervisor
+```
 
-### Manager 插件持有的后台服务
+其中 7 个实例声明页面、导航、设置区、状态卡、命令、快捷键、托盘菜单或主题贡献；其余 19 个实例没有表现贡献，但仍有实际 HTTP、服务、进程、定时器、监听器或对账生命周期。空的 contribution 数组不等于空 hook。
 
-`composeBuiltinManagerPluginDefinitions()` 把内置清单与 Manager 进程中的生命周期接线合并，清单仍是实例身份和贡献的真源。当前共有十三个内置实例；其中八个服务实例没有 UI contribution，分别持有 Gateway 进程协调、Relay/人格同步局域网连接、记忆整理、FenneNote 输出 API、消息处理控制 API、消息处理提醒、计划反馈恢复和 NapCat 启动检查。
+Desktop 与 WebGUI 是最小宿主。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract，未知或未注册贡献失败关闭。`manager:desktop` 持有 `POST /open-config-file`、`POST /manager/start`、`POST /manager/desktop-lifecycle/start`、`POST /manager/shutdown` 和 `/api/desktop/settings`；`manager:diagnostics` 持有 `GET /meta` 与 `GET /api/gateways`。第三方任意表现代码的受控 Extension Host 属于后续路线。
 
-`manager:fennenote-output` 只拥有 FenneNote 播放和回复的 Manager HTTP 入口及在途请求。endpoint 与 token 仍由现有配置边界拥有，发送规则、外发记录和回执仍由 Outbox 拥有。停用时撤销路由批次、拒绝新请求，中止并等待在途请求；不停止 FenneNote 入站 Route，也不改变历史记录。该实例没有 UI contribution。
+### Manager 插件持有的运行资源
 
-`manager:message-processing-control` 只拥有消息处理看板的 HTTP 查询、命令和事件接线。消息处理记录、发送上下文审批和持久化仍由 `MessageProcessingBoardStore` 及其业务模块拥有。停用时撤销路由批次，允许已开始的记录写入完成；不删除记录，也不停止 `manager:message-processing-automation`。该实例没有 UI contribution。
+26 个 hook 都把关键卸载步骤放在各自的单一 disposer 中。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
-`manager:performance` 每次 Fiber 激活创建一个新的 `PerformanceApi`，并通过 `ManagerPluginRouteRegistry` 注册该实例的 HTTP handler 批次。Fiber 停用时移除该次 HTTP handler 批次，关闭 API 的样本订阅与 SSE 客户端，并停止 `PerformanceMonitoringService`。
+```text
+unregister routes
+→ stop accepting new requests
+→ drain accepted requests
+→ stop plugin-owned workers/processes/timers/sockets/services
+→ await resource exit
+```
 
-`src/manager/managerGatewayRuntimeService.ts` 是 Gateway 服务协调器。它在 `RuntimeRegistry` 上统一执行定义加载、指纹比较、删除项停止、`needsRestart` 标记以及顺序 start/stop/restart/stopAll。Route 定义由 Manager 持续刷新；`manager:gateway-runtime` 只控制进程启停。停用时先关闭完整进程树并等待退出，再允许同一实例重新启用。配置刷新完成后依次对账插件组合、Gateway 进程、Relay 和记忆调度。
+`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 启动后和健康检查后各收集一次 PID；FenneNote 等待转发任务退出。动态对账按当前激活顺序逆序停用变化批次，再按期望定义顺序启动。
 
-`PersonaSyncLanServer` 使用启动代次拒绝已经停用的旧监听回调。`manager:memory-consolidation` 停用时终止该实例拥有的一次性进程并等待正在执行的调度结束。`manager:message-processing-automation` 持有计划变化订阅、知识回调计时器和 Agent 回复提醒；`manager:plan-feedback-delivery` 持有恢复扫描、重试计时器和当前反馈投递；`manager:napcat-supervisor` 持有启动登录检查，停用时取消尚未开始的账号队列并等待当前原子检查。`manager:core` 在 Manager 关闭时回收其他一次性进程。Route 配置、GatewayRuntime、FenneNote 配置、Outbox 记录、计划反馈和消息处理记录仍由原有业务模块拥有。剩余中心化迁移包括消息端与 Agent Adapter 扫描、NapCat 和 Agent 安装登录控制、Agent 任务与外发、Remote Agent、诊断及 Gateway 管理 API；涉及外部进程、Worker、WebSocket、UDP 或已开始投递的分组必须先补齐实例 owner、取消和 drain。
+可信内置插件运行在 Manager 主进程。`processPluginProtocol.ts`、`processPluginHost.ts` 与 `processManagerPlugin.ts` 为未知、不可信或高风险扩展提供独立进程、能力授权、健康检查、超时、脱敏错误和 Windows 进程树清理。这是 RabiRoute 增加的安全策略；DSH 普通插件默认仍在主进程运行，Cordis scope/isolate 只处理可见性、依赖和资源所有权。
+
+业务事实仍由原模块拥有：Route 配置归配置仓库，运行状态归 `RuntimeRegistry`，消息处理记录归 `MessageProcessingBoardStore`，Outbox 归外发模块，计划和记忆归 Role Knowledge。插件只拥有自己的注册和运行资源。
 
 ### `src/manager/controlPlaneRoutes.ts`
 
-这是当前 manager 的 HTTP 控制面主文件。它仍然比较大，但已经开始接入更深的 Module。
+这是 Manager 的最小 HTTP 宿主与插件组合根。中心 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404 和其他路径 WebGUI HTML 回退。`/manager` 与所有 `/manager/*` 都按控制路径处理。业务 HTTP 路径由 26 个 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。
 
-它负责：
-
-- 启动 manager HTTP server。
-- 提供 `/gateways`、`/api/scan/*`、`/api/message/*`、`/api/agent/*` 等控制面路径。
-- 保持 GET 扫描为纯 read model：`/api/scan/message-adapters` 不能复用启动、登录、配置迁移或修复命令；动作只允许进入显式 POST 控制路径。
-- 启停 Gateway 子进程。
-- 服务 WebGUI 静态文件。
-- 根据 `data/Config.json.webguiLan` 选择回环或局域网监听，并在 HTTP 入口统一校验非本机 WebGUI token；静态壳可公开加载，但没有 token 不能读取 Manager 状态或调用动作。
-- 聚合 runtime status。
+它还负责创建共享服务、组装插件 hook、启动 HTTP server、维护配置 watcher 和执行进程级关闭。新增业务 HTTP 分支应进入对应插件的专用 route/service 模块，不再直接追加到中央请求链。
 
 可能遍历大量历史文件的读操作不能直接占用 Manager 的 HTTP 主线程。`manager/managerReadWorkerPool.ts` 用有界常驻低优先级子进程执行语音历史、人格同步冲突、记忆目录、Agent 扫描、性能 JSONL 解析、性能汇总和响应 JSON 序列化，并分别限制同时执行数、等待队列和执行时限；所有池合计最多执行 2 项重任务，避免一次 Agent 扫描让其他只读请求长期排队。请求断开或超时时终止对应子进程，后续请求再创建替代进程。子进程在请求之间复用模块缓存，避免记忆目录读取反复支付进程启动和模块加载成本。范围相同且只要统计的并发语音请求、相同参数的并发 Agent 扫描及相同性能查询共享一个任务。性能池同时执行 1 项、等待 1 项、超时 60 秒；队列满时返回 503，不在主线程回退。Codex 任务扫描按 200 条分页，Desktop 任务目录阶段最多等待 8 秒，并记录 `manager.agent_scan.desktop_ready` 与 `manager.agent_scan.codex_catalog`；WebGUI 只在用户要求时继续加载后续页。消息处理看板列表只构建界面摘要，附件、原始回复上下文和完整证据由单项详情接口读取。计划目录冷读使用异步并发文件 I/O，同一人格的并发请求共享一个缓存填充任务；热读直接复用内存目录，文件监听只刷新变化项。Manager 开始监听后在后台预热各人格计划目录，不延迟 HTTP 就绪。`messageContextStore.ts` 先用归档索引的起止时间过滤文件，再读取可能命中的正文。性能存储启动时按流逐条读取已有 JSONL，不整文件读取和拆分。冲突目录没有快照时立即返回 202，再交给独立的单子进程目录池限速整理，避免占用语音名额或用满速目录遍历争抢磁盘。`manager/operationalLog.ts` 把同一时间片的请求日志合并后异步追加，避免每个响应都在主线程同步写盘。正常退出会等待消息处理快照和操作日志完成写入，再结束进程。控制面诊断通过 `manager/jsonlTail.ts` 从文件尾部读取有限记录，同一次响应使用请求级缓存，避免不同卡片重复读取同一份日志。`/meta.readWorkers`、`/meta.catalogWorkers`、`/meta.agentScanWorkers`、`/meta.performanceWorkers`、`/meta.messageProcessingPersistence` 和 `/meta.httpLimits` 提供不含业务正文的运行诊断；各子进程状态中的 `executionMode`、`workerPids`、`globalActive`、`globalMaxConcurrency`、`workers` 与 `spawnedWorkers` 用于检查隔离方式、总预算和异常重启。
 
@@ -447,6 +474,10 @@ startManager();
 - 读取和写入 `data/route/*/adapterConfig.json`。
 - fallback 读取 `personaConfig.json` 里的 notification rules。
 - 调用 shared config model 做 normalize / port assignment / conflict validation。
+
+### `src/manager/configMigration.ts`
+
+旧配置只在读取边界迁移到当前 Schema。运行模块和 WebGUI 不维护第二套旧字段语义；迁移结果由 `ManagerConfigRepository` 统一校验和写回。
 
 ### `src/shared/gatewayConfigModel.ts`
 
@@ -525,7 +556,7 @@ Gateway 配置的事实源 Module。
 
 ## WebGUI
 
-`ribiwebgui/` 是 Vue + Vuetify 前端。
+`ribiwebgui/` 是 Vue + Vuetify 最小宿主。页面、导航、设置区、状态卡和主题来自 Manager 的受控插件贡献目录；宿主负责路由外壳、安全渲染、连接与恢复，不维护第二份插件入口清单。
 
 关键位置：
 
@@ -589,7 +620,7 @@ locale 只允许作为浏览器侧 UI 偏好缓存，键为 `rabiroute:webgui:lo
 
 ## Desktop Tray
 
-`desktop/tray-task-window/` 是 Windows 托盘和任务窗口。
+`desktop/tray-task-window/` 是 Windows 最小桌面宿主。命令、快捷键、托盘菜单、设置、状态和主题由插件贡献；Qt 外壳只负责 Manager 连接、窗口生命周期、安全 handler 白名单和固定恢复入口。
 
 它主要负责：
 
@@ -766,24 +797,3 @@ src/messageEndpoints/
 - 不混淆 OpenAI provider、Codex agent、Desktop IPC transport、Desktop task owner 和具体 model。
 - 不为 Codex 实际消息增加独立 app-server、共享 4510 或其他备用投递路径。
 - 不在 RabiRoute 中硬编码或覆盖模型；由目标 Desktop 任务决定。
-
-## 当前优先演进
-
-当前已经有 `AgentPacket` 审计和 `delivery-replay-ledger.jsonl`。建议按这个顺序继续：
-
-1. 实现无副作用 RouteDecision / AgentPacket dry-run 预览。
-2. 继续把 manager 控制面的大 endpoint 群拆到专门 Module。
-3. 抽出统一状态 read model，减少 `gateway-status.json`、adapter log 和 WebGUI 硬编码之间的漂移。
-4. 在 `outbox.ts` 现有发送与 policy 基础上增加持久化 Action Queue / approval 状态机。
-5. 为 experimental adapter 建立真实端到端验收和成熟度升级条件。
-
-## 暂存设计提醒
-
-### 消息端权限语义收窄
-
-刚加入的 `messageAdapterPolicies` 需要后续再收一次语义。它不应该表达“RabiRoute 管理外部工具能不能发送”，而应该表达：
-
-- RabiRoute 是否接收某个消息端进入的消息。
-- RabiRoute 是否允许 Agent 通过 RabiRoute 自己的 outbox / Action Gate 回传或代发。
-
-因此 WebGUI 文案后续建议从“启用消息发送”收窄为“允许 Agent 通过 RabiRoute 回传/代发”。NapCat、FenneNote、小爱自己的发送能力不属于 RabiRoute 的控制面；除非某个 endpoint 明确被定义为 RabiRoute 的 Agent 回传通道，否则不要把外部工具原生能力纳入 policy。

@@ -2,7 +2,7 @@
 
 # RabiRoute 从 DSH 学习的插件化设计理念
 
-> 状态：架构调研与分阶段实施。Cordis 组合根、Adapter Registry、Manager Plugin Runtime 和受控表现贡献已实现；配置对账、第三方表现代码和独立进程插件仍在后续阶段。
+> 状态：架构调研与实施总结。26 个内置 Manager 插件迁移完成，配置对账、受控表现贡献和独立进程扩展合同已经落地；统一验证已于 2026-08-21 通过。
 >
 > 主要读者：RabiRoute 维护者、消息端与 Agent 端接入开发者。
 
@@ -23,9 +23,9 @@ RabiRoute 适合学习 DeepSeek Harness（DSH）的运行时组合原则，并�
 
 本次调研基于以下官方版本：
 
-- [DeepSeek Harness `141eb6f`](https://github.com/deepseek-ai/deepseek-harness/tree/141eb6fef83422698aef7a981029e843e8161534)，对应 `dsh@0.1.0-rc.8`，提交日期为 2026-08-19。
+- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006)，对应 `dsh@0.1.1-rc.1`，提交时间为 2026-08-21 14:21:44 +08:00。
 - [《A Programming Paradigm for Spatiotemporal Composability》v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf)，提交日期为 2026-08-13。
-- [DSH 架构说明](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/architecture.zh.md)与 [Cordis 入门](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/cordis-primer.zh.md)。
+- [DSH 架构说明](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/architecture.zh.md)与 [Cordis 入门](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/cordis-primer.zh.md)。
 
 DSH 仍处于开发者预览阶段。本文采用其设计思想，不把当前 API 视为 RabiRoute 必须兼容的标准。
 
@@ -45,9 +45,11 @@ DSH 的模型适配器、工具注册、会话日志、Agent 循环、持久化�
 
 ### 3. 副作用必须可撤销
 
-Cordis 将注册操作视为带撤销动作的副作用。事件监听器、服务注册、工具、提示词片段和 Provider 都由当前插件的生命周期持有。插件停止时，宿主按逆序撤销这些操作。
+Cordis 将注册操作视为带撤销动作的副作用。事件监听器、服务、工具、提示词片段和 Provider 都由安装它们的插件 Fiber 持有。
 
-论文把这一点称为时间可组合性：组件退出后，它在系统内部留下的修改应被清除。
+Cordis 同一 Fiber 中的多个 disposer 通过 `Promise.all(...)` 并行执行。它不保证多个 `ctx.effect()` 按登记逆序串行卸载。需要顺序的插件必须在一个 disposer 内执行 `unregister → stop accepting → drain → stop resources → await exit`。
+
+论文把可撤销的内部修改称为时间可组合性：组件退出后，它在系统内部留下的修改应被清除。
 
 ### 4. 配置是期望状态
 
@@ -71,24 +73,18 @@ DSH 对模型生成的 Host 动态插件使用同进程 `node:vm` 和受限 Cont
 
 ## RabiRoute 当前基础
 
-RabiRoute 已具备适合继续演进的边界：
+当前实现已经落地以下边界：
 
-- `src/forwarding.ts` 持有路由判断、上下文组装和处理端投递主流程。
-- `src/adapters/`、`src/agentAdapters/` 与 `src/messageEndpoints/` 已按接入类型分目录。
-- `src/manager/controlPlaneRoutes.ts` 持有配置、进程和控制面。
-- JSONL 记录、Outbox 与 delivery replay 已区分事实、发送请求和投递结果。
-- `scripts/check-event-driven-architecture.mjs` 已要求业务状态通过拥有者事件更新。
+- Manager 和 Gateway 使用独立 Cordis 根 Context。
+- `builtinManagerPlugins.ts` 声明 26 个内置 Manager 实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供 hook。
+- 表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；业务 HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。
+- 中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。
+- 7 个 Manager 插件贡献页面、导航、设置区、状态卡、命令、快捷键、托盘菜单或主题；19 个插件只提供运行能力。
+- WebGUI 和 Desktop 消费同一受控贡献目录，不维护第二套扩展事实。
+- 插件关键卸载顺序放在单一 disposer 中，使用 `ManagerPluginRequestTracker` 撤销路由、拒绝新请求并 drain。
+- 独立进程协议只用于未知、不可信或高风险扩展；可信内置插件在 Manager 主进程运行。
 
-当前扩展仍依赖多个静态入口同步修改：
-
-| 位置 | 当前表现 | 插件化后应由谁提供 |
-|---|---|---|
-| `src/adapters/messageAdapter.ts` | 消息端类型是固定联合 | 消息端插件清单 |
-| `src/index.ts` | 直接导入并创建各消息端 | Gateway 插件组合器 |
-| `src/agentAdapters/agentAdapter.ts` | `if` 分支选择具体 Agent 端 | Agent Adapter 注册表 |
-| `src/agentAdapters/managerApi.ts` | 扫描结果按已知类型组装 | 插件目录与能力报告 |
-| WebGUI 类型与文案 | 新接入常需同步添加目录项 | Manager 返回的受控插件目录 |
-| `MessageAdapter` | 只有 `start()` 合同 | 统一的激活与撤销生命周期 |
+Route、消息记录、路由判断、`AgentPacket`、Outbox、计划、记忆和消息处理记录仍由原业务模块拥有。统一验证已于 2026-08-21 通过。
 
 ## 适合 RabiRoute 的原则
 
@@ -114,7 +110,7 @@ RabiRoute 已具备适合继续演进的边界：
 - 上下文片段、模板变量和诊断贡献项；
 - 可替换的语音、存储或远端调用 Provider。
 
-Manager、Gateway、WebGUI 和 Desktop 仍是产品宿主。插件不能反向定义 RabiRoute 的路由边界。
+Manager 和 Gateway 保留最小组合内核，WebGUI 和 Desktop 保留最小表现宿主。页面、设置、命令、导航、状态和生命周期入口由插件贡献；插件不能反向定义 RabiRoute 的路由或 Outbox 边界。
 
 ### 原则三：服务用于直接能力，事件用于已发生的事实
 
@@ -124,17 +120,27 @@ Manager、Gateway、WebGUI 和 Desktop 仍是产品宿主。插件不能反向�
 
 ### 原则四：所有生命周期资源由一个作用域持有
 
-插件激活时获得自己的生命周期作用域。作用域统一持有：
+每个激活插件的生命周期作用域持有：
 
 - 服务和 Adapter 注册；
 - 事件监听器；
-- HTTP、WebSocket 和 IPC 监听；
-- 定时器与一次性 deadline；
+- HTTP、WebSocket 和 IPC 入口；
+- 定时器和一次性 deadline；
 - 文件 watcher；
 - 子进程和临时目录；
-- 状态页与诊断目录贡献项。
+- 状态与诊断贡献项。
 
-停用、配置替换或启动失败时，作用域按逆序撤销已完成的操作。未登记撤销动作的资源不能用于支持热重载。
+Cordis 会并行执行同一 Fiber 的多个 disposer。插件内部存在先后依赖时，只登记一个关键 disposer，并按以下顺序完成：
+
+```text
+unregister routes
+→ stop accepting new requests
+→ drain accepted requests
+→ stop plugin-owned resources
+→ await resource exit
+```
+
+缺少 disposer 的资源不能参与局部重载。
 
 ### 原则五：插件声明能力，不声明人工启动顺序
 
@@ -195,7 +201,7 @@ Manager / Gateway Host
 ├─ Plugin Composer       读取期望配置，维护实例状态
 ├─ Service Registry      发布和解析稳定能力
 ├─ Event Bus             广播类型化事实与受控策略事件
-├─ Lifecycle Scope       收集并逆序执行撤销动作
+├─ Lifecycle Scope       持有插件 disposer；顺序清理由插件内部完成
 ├─ Plugin Catalog        向 Manager API 与 WebGUI 提供统一目录
 └─ Core Services
    ├─ Route Config
@@ -227,31 +233,14 @@ interface RabiPluginContext {
 
 所有辅助注册方法最终都应进入同一个生命周期作用域。
 
-## 分阶段采用
+## 当前采用情况
 
-### 阶段 1：内部注册表
-
-先保持内置编译与现有配置格式，将 Agent Adapter 的创建、扫描、能力和显示信息合并到一个注册表。随后选择一个消息端补全 `stop/dispose`，验证监听器、端口和定时器可以完全撤销。
-
-成功标准：新增内置 Agent Adapter 不再修改多个中心 `if`、扫描表和 WebGUI 枚举。
-
-### 阶段 2：统一插件合同
-
-增加 manifest、生命周期作用域、服务注册表和插件目录 API。现有 Adapter 逐个接入，不改变 `forwarding.ts`、Route 配置和 Outbox 的所有权。
-
-成功标准：Manager 能报告每个插件的来源、依赖、作用域、状态和失败阶段。
-
-### 阶段 3：配置对账与局部重载
-
-把内置插件实例写成带稳定 ID 的期望配置。配置变更只替换受影响实例；失败时恢复旧实例。
-
-成功标准：同一 Gateway 连续启用、停用、改配置和恢复失败插件，不产生重复监听或重复发送。
-
-### 阶段 4：外部插件与隔离
-
-稳定合同后再支持树外包。不可信或高风险插件默认运行在独立进程，通过版本化协议访问最小能力集合。
-
-成功标准：插件升级、崩溃和协议不兼容不会让 Manager 或其他 Route 一起退出。
+1. Agent Adapter 和 Message Adapter 已进入受控注册与组合边界。
+2. Manager 已有 26 个内置插件 definition 与对应 hook，并通过配置对账局部启停。
+3. WebGUI 与 Desktop 通过宿主拥有的可信注册表消费表现贡献，并可注册新的 renderer、route、handler 和 resource contract；未知或未注册贡献失败关闭。HTTP 路由不属于表现贡献。
+4. 未知、不可信或高风险第三方扩展必须使用独立进程和版本化协议；这属于 RabiRoute 的安全增强，不是 DSH 普通插件的默认运行方式。
+5. 第三方自定义表现代码仍需受控 Extension Host 和更明确的权限边界。
+6. 统一验证已于 2026-08-21 通过。
 
 ## 不采用的做法
 
@@ -262,13 +251,8 @@ interface RabiPluginContext {
 - 不在缺少撤销测试和投递排空机制时启用热重载。
 - 不要求每段代码都成为可替换插件；面向产品的页面、菜单、命令、设置、状态、主题和设备能力进入插件或贡献合同，最小宿主与业务事实所有者保留稳定边界。
 
-## 推荐起点
+## 后续工作
 
-首个实施切片应同时验证两类价值：
-
-1. 用统一 Agent Adapter 注册表消除创建、扫描、能力和界面目录的重复事实源。
-2. 为一个内置消息端增加完整生命周期作用域，证明启停后没有残留监听器、端口或定时器。
-
-这两个切片通过后，再决定是否引入配置树、动态包加载和热更新。
-
-已选实施方向见[基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md)。
+- 为第三方自定义 Web/Desktop 代码建立受控 Extension Host 和权限模型。
+- 对 26 个 Manager 插件一次性执行卸载顺序、请求 drain、资源退出和真实组合验证。
+- 统一验证已于 2026-08-21 通过。

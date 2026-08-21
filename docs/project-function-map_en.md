@@ -6,11 +6,23 @@ English | <a href="./project-function-map.md">简体中文</a>
 
 # RabiRoute Project Function Map
 
-> Status: current fact map. Modules and maturity are checked against the code; external-system acceptance still follows [Current Capabilities](current-capabilities_en.md).
+> Status: current fact map. Manager has 26 built-in plugin definitions with matching hooks. Unified validation passed on August 21, 2026; external-system acceptance still follows [Current Capabilities](current-capabilities_en.md).
 
 Use this page to locate the owner of a behavior before editing code. RabiRoute is the triage/dispatch layer: endpoints bring messages in, routing chooses what should happen, handlers do the work, and Outbox controls how results return.
 
 RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide/`. This developer fact map remains available through deeper-reading links and the repository documentation index.
+
+## How to use this map
+
+- To find the owner of a capability, start with **Current function index**.
+- To design UI, read **Boundary rules** and the function row's source, consumer, timing, and side effects.
+- To change code, use **Layer map** and **Change-entry map**.
+- To diagnose runtime behavior, use **Runtime data**.
+- To confirm maturity, check [Current Capabilities](current-capabilities_en.md) first.
+
+## One-sentence positioning
+
+RabiRoute is a message gateway and policy router. It owns message ingress, event records, route decisions, context packaging, handler delivery, outbound approval, and observable status; handlers own task execution, tool use, and their sessions.
 
 ## Layer map
 
@@ -23,26 +35,40 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 | Handler adapter | Deliver a packet to the Route's selected Primary Agent | Platform route semantics, external output policy, or fallback to another Agent | `src/agentAdapters/*`, runtime modules |
 | Outbox / Send | Validate the calling Agent type/session, explicit Route, channel, target parameters, payload, and policy before sending, then retain traceable receipts | Handler reasoning or destination inference from source context | `src/agentSend.ts`, `src/outbox.ts` |
 | Manager | Configuration, processes, scans, APIs, shared services | Platform-specific live parsing | `src/manager.ts`, `src/manager/*` |
-| Manager plugin composition | `data/manager.json`, built-in definitions, reconciliation state, instance Fiber lifecycles, and isolated-process lifecycle | Load arbitrary configured code or let presentation hosts execute third-party resources directly | `src/runtime/managerPluginReconciler.ts`, `src/runtime/processPluginHost.ts`, `src/runtime/processManagerPlugin.ts`, `src/manager/managerPluginConfig.ts`, `src/manager/managerPluginRouteRegistry.ts`, `src/manager/managerGatewayRuntimeService.ts`, `src/manager/pluginCatalogRoutes.ts` |
+| Manager plugin composition | 26 built-in definitions, 26 matching hooks, `data/manager.json` desired state, Plugin Catalog, route batches, and instance Fiber lifecycles | Load arbitrary configured code or let presentation hosts execute third-party resources directly | `src/manager/builtinManagerPlugins.ts`, `src/manager/controlPlaneRoutes.ts`, `src/runtime/managerPluginReconciler.ts`, `src/manager/managerPluginRouteRegistry.ts` |
+| WebGUI / Desktop minimal hosts | Connect to Manager, consume the contribution catalog, render safely, and maintain window/page shells plus fixed recovery entries | Maintain a second catalog of pages, settings, commands, navigation, status, or lifecycle entries | `ribiwebgui/src/*`, `desktop/tray-task-window/*`, `src/manager/pluginCatalogRoutes.ts` |
 | Role knowledge | Plans, memories, skills, recall, validation, Manager-owned presentation ordering, and exact bound-task status reads | Decide whether an event matches a route or infer Codex work state from plan lifecycle | `src/roleKnowledge.ts`, `src/roleKnowledgePresentation.ts`, `src/manager/planAgentStatus.ts` |
 
 ## Manager background-plugin lifecycle
 
-The catalog contains thirteen built-in Manager instances. The table lists the eight service instances with no UI contributions and retains the visible boundary of `manager:performance`.
+The catalog contains 26 built-in Manager instances. The 26 definitions in `builtinManagerPlugins.ts` map one-to-one to 26 non-empty hooks in `controlPlaneRoutes.ts`.
 
-| Instance | Owned runtime effects | Fact owner | Activation/deactivation boundary | Presentation contributions |
-| --- | --- | --- | --- | --- |
-| `manager:gateway-runtime` | Gateway-definition loading, runtime reconciliation, and child-process lifecycle coordination | The configuration repository owns Route configuration; `RuntimeRegistry` owns runtime state | Activation enables `ManagerGatewayRuntimeService`; deactivation calls `stopAll()` and closes manual Gateway controls | None |
-| `manager:rabilink-relay` | Global RabiLink Relay and persona-sync LAN service | Existing configuration modules continue to own Relay and synchronization configuration | Synchronizes after the listener is ready; deactivation stops both runtime resources and removes the synchronization callback | None |
-| `manager:memory-consolidation` | One-shot memory-consolidation scheduling and instance-owned one-shot processes | Role Knowledge continues to own memory content and consolidation records | Creates a fresh scheduler per activation outside read-only mode; deactivation stops processes and waits for the active schedule | None |
-| `manager:fennenote-output` | FenneNote playback/reply HTTP entries and in-flight requests | Existing configuration boundaries own the endpoints and token; Outbox owns send policy, outbound records, and receipts | Deactivation removes the route batch, rejects new requests, then aborts and waits for in-flight requests without affecting inbound Routes, history, or other Outbox channels | None |
-| `manager:message-processing-control` | Message-processing board HTTP queries, commands, and event wiring | `MessageProcessingBoardStore` and its business modules own records, send-context review, and persistence | Deactivation removes the route batch and permits started record writes to finish; it neither deletes records nor stops the automation plugin | None |
-| `manager:message-processing-automation` | Plan-change subscription, knowledge-callback timers, and Agent-response reminders | The board Store continues to own message-processing records | Activation restores pending reminders; deactivation removes the subscription, clears timers, and waits for started reminder deliveries | None |
-| `manager:plan-feedback-delivery` | Plan-feedback recovery scans, retry timers, and active deliveries | The plan-feedback module continues to own feedback records | Starts recovery after the listener is ready; deactivation rejects new scheduling and waits for active scans and deliveries | None |
-| `manager:napcat-supervisor` | NapCat startup-login check | External processes and configuration modules continue to own NapCat, QQ, and Route facts | Runs once during Manager autostart; deactivation cancels the remaining account queue, waits for the current atomic check, and suppresses stale callbacks | None |
-| `manager:performance` | Performance HTTP API, sample subscription, SSE clients, and monitoring service | The performance module continues to own performance configuration and records | Creates a fresh `PerformanceApi` per activation; deactivation calls `close()` and stops monitoring | Existing page, navigation, and status-card contributions remain unchanged |
+| Group | Instances | Main responsibility |
+| --- | --- | --- |
+| Host and presentation | `manager:core`, `manager:desktop`, `manager:diagnostics` | WebGUI LAN configuration entry, Desktop lifecycle/settings, Manager metadata, and Gateway diagnostics |
+| Persona and runtime observation | `manager:persona`, `manager:speech`, `manager:performance` | Persona/sync/language style, speech services, and performance collection/query |
+| Gateway and external connections | `manager:gateway-runtime`, `manager:bilibili-history`, `manager:rabilink-relay`, `manager:napcat-control`, `manager:napcat-supervisor`, `manager:remote-agent` | Gateway processes, Bilibili history bridge, Relay/LAN, NapCat control/startup checks, and Remote Agent Hub |
+| Route and Adapter control | `manager:route-control`, `manager:message-adapter-control`, `manager:agent-adapter-catalog`, `manager:agent-state-control`, `manager:agent-thread-control`, `manager:agent-communication` | Route/Gateway APIs, message-adapter control, and Agent catalog/state/thread/communication APIs |
+| Agent provider control | `manager:copilot-control`, `manager:astrbot-control`, `manager:marvis-control` | Installation, login, process, or connection control |
+| Background business services | `manager:memory-consolidation`, `manager:fennenote-output`, `manager:message-processing-control`, `manager:message-processing-automation`, `manager:plan-feedback-delivery` | Memory consolidation, FenneNote output, message-processing board/reminders, and plan-feedback recovery delivery |
 
-These plugins own HTTP entries and reversible runtime lifecycles without copying business facts. Remaining migration covers message-side and Agent Adapter scans, NapCat and Agent install/login controls, Agent task and outbound communication, Remote Agent, diagnostics, and Gateway-management APIs. Groups that own external processes, Workers, WebSockets, UDP, or started deliveries require instance ownership, cancellation, and drain first.
+Seven instances publish presentation contributions; nineteen have no presentation contribution but still own real lifecycle work. The presentation Contribution Catalog publishes only `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`. Manager plugin `apply` hooks register HTTP routes in `ManagerPluginRouteRegistry`. Desktop and WebGUI are minimal hosts. Host-owned trusted registries can register new renderer, route, handler, and resource contracts, while unknown or unregistered contributions fail closed. A controlled Extension Host for arbitrary third-party presentation code remains future work.
+
+Each plugin performs ordered teardown in one disposer:
+
+```text
+unregister routes
+→ stop accepting new requests
+→ drain accepted requests
+→ stop plugin-owned workers/processes/timers/sockets/services
+→ await resource exit
+```
+
+Cordis runs multiple disposers in one Fiber concurrently through `Promise.all(...)`, so ordered teardown cannot be split across several `ctx.effect()` calls. Current Manager hooks keep the critical sequence in one disposer; `ManagerPluginRequestTracker.trackOperation()` waits for business Promises beyond the response lifetime, Remote Agent callbacks receive cancellation and must finish, NapCat records PIDs in two phases, and batch reconciliation deactivates in reverse order before ordered activation. Unified validation passed on August 21, 2026.
+
+The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths. `/manager` and every `/manager/*` path remain control-plane responses.
+
+Trusted built-in plugins run in the Manager process. Unknown, untrusted, or high-risk extensions use a separate process and a least-capability protocol as additional RabiRoute hardening. Ordinary DSH plugins also run in the main process; Cordis scope/isolate is not a process sandbox.
 
 ## Current function index
 
@@ -110,7 +136,7 @@ These plugins own HTTP entries and reversible runtime lifecycles without copying
 - `sent`, `draft`, `blocked`, and `failed` are results, not a persistent approval queue.
 - Packet construction may refresh memory `viewedAt`; explicit memory consolidation can create a run. A future preview must avoid these side effects.
 - Persistent plan-secretary control uses one writer per `planId` and allows different plans to proceed in parallel. Shared ledgers merge under a short lock with atomic replacement. Complete lock metadata is atomically published; stale or corrupt locks fail closed and require quiescent maintenance repair. Same-key claims and clarifications persist a reservation before delivery and never auto-resend an uncertain result. Audit compares before/after snapshots to distinguish stable invalid data from concurrent incomplete observations, so one active cycle never becomes a global barrier for audit or reconciliation.
-- Tencent Sheet sources, direct or generic user requests, and work-group issues with a verified quoted claim all use the managed `register-external` action before secretary `begin → finish`. Work-group registration is restricted to group `474222421` and requires the real `sourceMessageId` plus a matching claim receipt with `status=sent` and `sentMessageId`; it also validates unique plan/task bindings, at least two deduplication passes, and the same workspace across input, plan, and business task before producing a `governanceVersion=3` mapping. Tencent stable-row keys and user-request canonical signatures keep their existing semantics, and `issue-threads.json` must not be edited manually.
+- Tencent Sheet sources, direct or generic user requests, and work-group issues with a verified quoted claim all use the managed `register-external` action before secretary `begin → finish`. Work-group registration is restricted to the configured work group `<WORK_GROUP_ID>` and requires the real `sourceMessageId` plus a matching claim receipt with `status=sent` and `sentMessageId`; it also validates unique plan/task bindings, at least two deduplication passes, and the same workspace across input, plan, and business task before producing a `governanceVersion=3` mapping. Tencent stable-row keys and user-request canonical signatures keep their existing semantics, and `issue-threads.json` must not be edited manually.
 - When a legacy claim used the unified Outbox but did not populate the dedicated receipt ledger, registration recovers it only if both the local outbound conversation record and a live NapCat message readback prove the same group, sent message, and quoted source. Input alone or one-sided logs cannot create a receipt, and recovery never resends the group message.
 - Work-group `begin` identifies the business task through the registration mapping, plan binding, and the full Desktop task ID plus workspace. PangHu accepts `[PangHu][explicit task type] ...`; RabiRoute governance tasks currently accept only `[RabiRoute][Bug] ...`. New registrations reject an invalid live title. An invalid legacy title is migrated atomically under the issue-ledger lock only when the live title is valid for the same task and workspace. Titles do not replace stable identity, source, claim-receipt, deduplication, or uniqueness checks.
 - WebGUI locale is only a browser UI preference. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values are not translated; User Guide selects the matching file under `docs/user-guide/`.
@@ -172,3 +198,15 @@ The conversation ledger is the automatic recent-context source. It is scoped by 
 6. Which logs and status fields make failure diagnosable?
 7. Which bilingual public guides/examples must change?
 8. Could preview or scan accidentally trigger live work or touch role memory?
+
+## Search keywords
+
+- persona / role / `agentRoleId`: persona binding, automation, plans, memories, and skills.
+- automation / `automationRules` / schedule / `run_script`: persona automation, RouteDecision, Heartbeat, and script runtime.
+- QQ / NapCat / OneBot: QQ ingress, route kinds, and Outbox replies.
+- RabiLink / Relay / Rokid: Relay worker, observation input, and device output.
+- WeCom / Weixin / Feishu: platform adapters and Outbox return paths.
+- Codex / DSH / Copilot / AstrBot / Marvis: handler adapters.
+- reply / outbound / approval: Outbox and Action Gate.
+- memory / plan / skill / consolidation: Role Knowledge.
+- replay / logs / delivery: evidence and runtime diagnostics.

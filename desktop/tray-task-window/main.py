@@ -256,6 +256,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="RabiRoute Desktop")
     parser.add_argument("--manager-url", default="http://127.0.0.1:8790")
     parser.add_argument("--owns-manager", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--trusted-desktop-extension",
+        action="append",
+        default=[],
+        metavar="ENTRY_POINT",
+        help=(
+            "Load this explicitly trusted Python entry point from the "
+            "rabiroute.desktop_extensions group. May be repeated."
+        ),
+    )
     args = parser.parse_args()
 
     project_root = _resolve_project_root()
@@ -291,7 +301,12 @@ def main() -> int:
             )
             return 1
         raise
-    return run(project_root, manager_url=args.manager_url, manager_proc=proc)
+    return run(
+        project_root,
+        manager_url=args.manager_url,
+        manager_proc=proc,
+        trusted_extension_entry_points=tuple(args.trusted_desktop_extension),
+    )
 
 
 if __name__ == "__main__":

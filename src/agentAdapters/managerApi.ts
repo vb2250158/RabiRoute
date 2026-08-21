@@ -586,7 +586,9 @@ export function buildCodexAgentScan(input: {
   };
 }
 
-export async function testAstrbotLogin(request: AstrbotLoginTestRequest): Promise<Record<string, unknown>> {
+export async function testAstrbotLogin(
+  request: AstrbotLoginTestRequest
+): Promise<Record<string, unknown> & { ok: boolean }> {
   const baseUrl = (request.url?.trim() || process.env.ASTRBOT_URL || "http://127.0.0.1:6185").replace(/\/+$/, "");
   const username = request.username?.trim() || process.env.ASTRBOT_USERNAME || "";
   const password = request.password?.trim() || process.env.ASTRBOT_PASSWORD || "";
@@ -677,7 +679,10 @@ export function openMarvis(_ctx: AgentManagerApiContext, request: MarvisOpenRequ
   return { ok: true, mode: "url", target: url, message: `已尝试打开 Marvis 页面：${url}` };
 }
 
-export async function deployAstrbotAdapter(ctx: AgentManagerApiContext): Promise<ManagerApiResponse> {
+export async function deployAstrbotAdapter(
+  ctx: AgentManagerApiContext,
+  options: { signal?: AbortSignal; onChild?: (child: import("node:child_process").ChildProcess) => void } = {}
+): Promise<ManagerApiResponse> {
   try {
     const scriptPath = path.resolve(ctx.rootDir, "scripts", "deploy-astrbot-adapter.cmd");
     if (!fs.existsSync(scriptPath)) {
@@ -690,18 +695,28 @@ export async function deployAstrbotAdapter(ctx: AgentManagerApiContext): Promise
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"]
       });
+      options.onChild?.(child);
+      const abort = (): void => {
+        if (child.exitCode === null) child.kill();
+      };
+      if (options.signal?.aborted) abort();
+      else options.signal?.addEventListener("abort", abort, { once: true });
       let stdout = "";
       let stderr = "";
       child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
       child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
       child.on("exit", (code) => {
-        if (code === 0) {
+        options.signal?.removeEventListener("abort", abort);
+        if (options.signal?.aborted) {
+          resolve({ status: 499, body: { ok: false, error: "AstrBot Adapter deployment was cancelled." } });
+        } else if (code === 0) {
           resolve({ status: 200, body: { ok: true, message: "AstrBot Adapter 部署成功", stdout: stdout.slice(0, 2000) } });
         } else {
           resolve({ status: 500, body: { ok: false, error: `部署失败 (exit ${code})`, stderr: stderr.slice(0, 2000) } });
         }
       });
       child.on("error", (error) => {
+        options.signal?.removeEventListener("abort", abort);
         resolve({ status: 500, body: { ok: false, error: String(error) } });
       });
     });

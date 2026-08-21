@@ -499,9 +499,12 @@ test("launch suppresses a duplicate process tree when both configured endpoints 
   }
 });
 
-test("launch reports WebUI-only readiness as onebot-not-ready instead of success", async () => {
+test("launch records instance PIDs before and after a failed OneBot readiness check", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-webui-only-"));
   let launchCount = 0;
+  let pidQueryCount = 0;
+  const recordedPidSnapshots: string[][] = [];
+  const lifecycleEvents: string[] = [];
   const instance = {
     id: "bot",
     name: "QQ bot",
@@ -518,15 +521,40 @@ test("launch reports WebUI-only readiness as onebot-not-ready instead of success
       getRuntimes: () => [runtime],
       normalizeNapCatInstances: () => [instance],
       appendLog: () => undefined,
-      checkHttpEndpoint: async (url) => url === instance.webuiUrl,
-      findNapcatInstanceProcessPids: async () => [],
-      launchNapcatProcess: () => { launchCount += 1; }
+      checkHttpEndpoint: async (url) => {
+        if (launchCount > 0) lifecycleEvents.push("health");
+        return url === instance.webuiUrl;
+      },
+      findNapcatInstanceProcessPids: async () => {
+        pidQueryCount += 1;
+        if (launchCount === 0) return [];
+        lifecycleEvents.push("pid-query");
+        return pidQueryCount === 2 ? ["4242"] : ["4242", "4343"];
+      },
+      launchNapcatProcess: () => {
+        launchCount += 1;
+        lifecycleEvents.push("launch");
+      },
+      recordNapcatLaunchPids: (_request, pids) => {
+        recordedPidSnapshots.push([...pids]);
+        lifecycleEvents.push(`record:${pids.join(",")}`);
+      }
     }, { gatewayId: "route", instanceId: "bot" });
 
     assert.equal(result.ok, false);
     assert.equal(result.state, "onebot-not-ready");
     assert.equal(result.needsUserAction, true);
     assert.equal(launchCount, 1);
+    assert.equal(pidQueryCount, 3);
+    assert.deepEqual(recordedPidSnapshots, [["4242"], ["4242", "4343"]]);
+    assert.deepEqual(lifecycleEvents, [
+      "launch",
+      "pid-query",
+      "record:4242",
+      "health",
+      "pid-query",
+      "record:4242,4343"
+    ]);
     assert.match(String(result.message), /OneBot 尚未就绪/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

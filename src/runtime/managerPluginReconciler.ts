@@ -32,11 +32,6 @@ type AppliedManagerPlugin = {
   revision: string;
 };
 
-type ReconciliationFailure = {
-  error: RabiPluginErrorSummary;
-  rolledBack: boolean;
-};
-
 function normalizedInstanceId(definition: ManagerPluginDefinition): string {
   const instanceId = definition.instanceId.trim();
   if (!instanceId) throw new Error("Manager plugin instanceId is required.");
@@ -142,29 +137,20 @@ export class ManagerPluginReconciler {
       startedAt
     };
 
-    let failure: RabiPluginErrorSummary | undefined;
     const desiredById = new Map(desired.map(item => [item.definition.instanceId, item]));
     const orderedIds = [
       ...desired.map(item => item.definition.instanceId),
       ...[...this.applied.keys()].filter(instanceId => !desiredById.has(instanceId))
     ];
-
-    for (const instanceId of orderedIds) {
+    const changedIds = orderedIds.filter(instanceId => {
       const target = desiredById.get(instanceId);
       const current = this.applied.get(instanceId);
       const targetEnabled = target?.enabled ?? false;
-
-      if (!current && !targetEnabled) continue;
-      if (current && targetEnabled && current.revision === target?.revision) continue;
-
-      changed.push(instanceId);
-      const result = await this.applyChange(instanceId, current, targetEnabled ? target : undefined);
-      if (result) {
-        if (result.rolledBack) rolledBack.push(instanceId);
-        failure = result.error;
-        break;
-      }
-    }
+      if (!current && !targetEnabled) return false;
+      return !current || !targetEnabled || current.revision !== target?.revision;
+    });
+    changed.push(...changedIds);
+    const failure = await this.applyBatch(changedIds, desiredById, rolledBack);
 
     this.currentStatus = {
       revision,
@@ -196,76 +182,107 @@ export class ManagerPluginReconciler {
     });
   }
 
-  private async applyChange(
-    instanceId: string,
-    current: AppliedManagerPlugin | undefined,
-    target: DesiredManagerPlugin | undefined
-  ): Promise<ReconciliationFailure | undefined> {
-    if (!current && target) {
+  private async applyBatch(
+    changedIds: readonly string[],
+    desiredById: ReadonlyMap<string, DesiredManagerPlugin>,
+    rolledBack: string[]
+  ): Promise<RabiPluginErrorSummary | undefined> {
+    if (changedIds.length === 0) return undefined;
+
+    const changed = new Set(changedIds);
+    const previousOrder = [...this.applied.keys()];
+    const previousById = new Map(
+      previousOrder.flatMap(instanceId => {
+        const current = this.applied.get(instanceId);
+        return current ? [[instanceId, current] as const] : [];
+      })
+    );
+    const deactivated: string[] = [];
+    const activated: string[] = [];
+
+    const rollbackActivated = async (): Promise<unknown | undefined> => {
+      let firstError: unknown;
+      for (const instanceId of [...activated].reverse()) {
+        try {
+          await this.runtime.plugins.get(instanceId)?.unmount();
+        } catch (error) {
+          firstError ??= error;
+        }
+        if (!this.runtime.plugins.has(instanceId)) {
+          this.applied.delete(instanceId);
+        }
+      }
+      return firstError;
+    };
+
+    const rollbackPrevious = async (): Promise<unknown | undefined> => {
+      let firstError: unknown;
+      const deactivatedSet = new Set(deactivated);
+      for (const instanceId of previousOrder) {
+        if (!deactivatedSet.has(instanceId)) continue;
+        const previous = previousById.get(instanceId);
+        if (!previous) continue;
+        if (this.runtime.plugins.has(instanceId)) {
+          firstError ??= new Error(
+            `Manager plugin rollback blocked by active replacement: ${instanceId}`
+          );
+          continue;
+        }
+        try {
+          await this.runtime.mount(previous.definition);
+          this.applied.set(instanceId, previous);
+          rolledBack.push(instanceId);
+        } catch (error) {
+          if (!this.runtime.plugins.has(instanceId)) {
+            this.applied.delete(instanceId);
+          }
+          firstError ??= error;
+        }
+      }
+      return firstError;
+    };
+
+    for (const instanceId of [...previousOrder].reverse()) {
+      if (!changed.has(instanceId)) continue;
+      const current = previousById.get(instanceId);
+      if (!current) continue;
+      try {
+        await this.runtime.plugins.get(instanceId)?.unmount();
+        this.applied.delete(instanceId);
+        deactivated.push(instanceId);
+      } catch (error) {
+        if (!this.runtime.plugins.has(instanceId)) {
+          this.applied.delete(instanceId);
+          deactivated.push(instanceId);
+        }
+        const rollbackError = await rollbackPrevious();
+        return rollbackError
+          ? combinedRollbackError(error, rollbackError)
+          : errorSummary("deactivation_failed", error);
+      }
+    }
+
+    for (const target of desiredById.values()) {
+      const instanceId = target.definition.instanceId;
+      if (!target.enabled || !changed.has(instanceId)) continue;
       try {
         await this.runtime.mount(target.definition);
         this.applied.set(instanceId, {
           definition: target.definition,
           revision: target.revision
         });
-        return undefined;
+        activated.push(instanceId);
       } catch (error) {
-        return { error: errorSummary("activation_failed", error), rolledBack: false };
+        const activationRollbackError = await rollbackActivated();
+        const previousRollbackError = await rollbackPrevious();
+        const rollbackError = activationRollbackError ?? previousRollbackError;
+        return rollbackError
+          ? combinedRollbackError(error, rollbackError)
+          : errorSummary("activation_failed", error);
       }
     }
 
-    if (current && !target) {
-      try {
-        await this.runtime.plugins.get(instanceId)?.unmount();
-        this.applied.delete(instanceId);
-        return undefined;
-      } catch (error) {
-        if (this.runtime.plugins.has(instanceId)) {
-          return { error: errorSummary("deactivation_failed", error), rolledBack: false };
-        }
-        try {
-          await this.runtime.mount(current.definition);
-          return { error: errorSummary("deactivation_failed", error), rolledBack: true };
-        } catch (rollbackError) {
-          this.applied.delete(instanceId);
-          return { error: combinedRollbackError(error, rollbackError), rolledBack: false };
-        }
-      }
-    }
-
-    if (!current || !target) return undefined;
-
-    try {
-      await this.runtime.plugins.get(instanceId)?.unmount();
-    } catch (error) {
-      if (this.runtime.plugins.has(instanceId)) {
-        return { error: errorSummary("deactivation_failed", error), rolledBack: false };
-      }
-      try {
-        await this.runtime.mount(current.definition);
-        return { error: errorSummary("deactivation_failed", error), rolledBack: true };
-      } catch (rollbackError) {
-        this.applied.delete(instanceId);
-        return { error: combinedRollbackError(error, rollbackError), rolledBack: false };
-      }
-    }
-
-    try {
-      await this.runtime.mount(target.definition);
-      this.applied.set(instanceId, {
-        definition: target.definition,
-        revision: target.revision
-      });
-      return undefined;
-    } catch (activationError) {
-      try {
-        await this.runtime.mount(current.definition);
-        return { error: errorSummary("activation_failed", activationError), rolledBack: true };
-      } catch (rollbackError) {
-        this.applied.delete(instanceId);
-        return { error: combinedRollbackError(activationError, rollbackError), rolledBack: false };
-      }
-    }
+    return undefined;
   }
 
   private activeInstanceIds(preferredOrder: readonly string[]): string[] {

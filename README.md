@@ -117,6 +117,14 @@ flowchart TB
 
 Each Route separates ingress, policy, portable context, handler delivery, and outbound control. Events and delivery outcomes remain inspectable instead of disappearing inside one integration.
 
+### Plugin-composed Manager
+
+Migration of all 26 built-in Manager plugins is complete. Manager registers them under one Cordis root. The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths. Manager plugin `apply` hooks register business HTTP routes in `ManagerPluginRouteRegistry`. Unified validation passed on August 21, 2026.
+
+The presentation Contribution Catalog publishes only `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`; HTTP routes are not presentation contributions. WebGUI and Desktop are minimal extension hosts. Host-owned trusted registries can register new renderer, route, handler, and resource contracts. Unknown or unregistered contributions fail closed. `manager:diagnostics` owns `GET /meta` and `GET /api/gateways`; `manager:desktop` owns Desktop settings, configuration opening, start/lifecycle, and shutdown routes. Cordis `isolate` is not a security sandbox. A controlled Extension Host for arbitrary third-party presentation code remains a future route.
+
+Plugin deactivation removes routes first, rejects new requests, and gives accepted responses up to 30 seconds to finish before remaining resources close. Running Remote Agent tasks become `interrupted`. NapCat shutdown stops only instances explicitly started by `manager:napcat-control`; discovered external instances are not claimed.
+
 ## What works today
 
 | Area | Current capability |
@@ -128,7 +136,7 @@ Each Route separates ingress, policy, portable context, handler delivery, and ou
 | Verified handler | Codex through the selected Codex/ChatGPT Desktop task owner. |
 | Experimental primary Agent | DSH can own the Primary Persona and managed helper sessions; a real-profile repeated-delivery and restart acceptance run is still pending. |
 | Windows desktop interaction | RabiRoute Desktop provides selected-text actions and system screenshot handoffs. The Windows device loop still needs acceptance. |
-| Control plane | Node.js Manager, RibiWebGUI, and RabiRoute Desktop for Routes, adapters, personas, speech, performance, logs, settings, diagnostics, and process lifecycle. |
+| Control plane | Node.js Manager composes 26 built-in Cordis plugins. RibiWebGUI and RabiRoute Desktop render active plugin contributions for Routes, adapters, personas, speech, performance, logs, settings, diagnostics, and lifecycle controls. |
 | Safety and evidence | Route-owned Outbox policy plus JSONL records for events, packets, deliveries, replies, heartbeats, and replay evidence. |
 | Experimental integrations | Remote Agent, RabiSpeech, RabiLink, XiaoAI, Webhook, WeCom, Feishu, personal Weixin, wearables, Copilot CLI, and AstrBot. |
 

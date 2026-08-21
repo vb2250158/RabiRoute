@@ -2,12 +2,12 @@
   "id": "plan-rabiroute-cordis-plugin-runtime",
   "title": "按 Cordis 组合内核重构 RabiRoute 插件运行时",
   "focus": "Cordis 组合内核、Rabi 业务适配层和多宿主扩展协议",
-  "status": "进行中",
+  "status": "已完成",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "migrate-manager-background-services",
-  "currentStep": "Manager 已有十三个内置插件；FenneNote 输出和消息处理控制 API 已从中央分发链迁入独立 Cordis Fiber，停用实例会撤销对应路由。",
-  "nextAction": "继续迁移消息端与 Agent Adapter 扫描、Gateway 管理、NapCat 控制、Agent 安装登录、Agent 通信和 Remote Agent；每批检查中央分发链不再保留旧入口。",
+  "currentStepId": "complete-plugin-runtime-acceptance",
+  "currentStep": "26 个内置 Manager 插件、WebGUI/Desktop 可信扩展宿主、配置对账、独立进程合同和停用生命周期均已完成；统一验证于 2026-08-21 通过。",
+  "nextAction": "",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -72,12 +72,14 @@
     {
       "id": "migrate-manager-background-services",
       "title": "迁移剩余 Manager 后台服务和中心化 API 组合",
-      "status": "进行中"
+      "status": "已完成",
+      "completedAt": "2026-08-21T23:50:00+08:00"
     },
     {
       "id": "complete-plugin-runtime-acceptance",
       "title": "完成插件化覆盖审计、运行验收和公开交接",
-      "status": "未开始"
+      "status": "已完成",
+      "completedAt": "2026-08-21T23:59:00+08:00"
     }
   ],
   "waitingFor": "",
@@ -90,10 +92,10 @@
     "summary": "公开示例计划：分阶段完成 RabiRoute Cordis 插件运行时重构"
   },
   "dueAt": "",
-  "completedAt": "",
+  "completedAt": "2026-08-21T23:59:00+08:00",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T23:19:08+08:00",
+  "updatedAt": "2026-08-21T23:59:00+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -164,6 +166,13 @@
     "manager:fennenote-output",
     "manager:message-processing-control",
     "FenneNoteOutputService",
-    "MessageProcessingApi"
+    "MessageProcessingApi",
+    "26 Manager instances",
+    "central dispatch minimized",
+    "ManagerPluginRequestTracker.trackOperation",
+    "Remote Agent callback drain",
+    "NapCat two-phase PID ownership",
+    "reverse-order batch deactivation",
+    "unified verification passed"
   ]
 }

@@ -6,6 +6,8 @@ type DesktopLifecycleApiOptions = {
   rootDir: string;
   shutdownManager: (reason: string) => void | Promise<void>;
   shutdownDelayMs?: number;
+  scheduleShutdown?: (task: () => void, delayMs: number) => void;
+  trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, payload: unknown): void {
@@ -64,7 +66,7 @@ export function handleDesktopLifecycleApi(
   }
 
   if (isStart) {
-    void readJsonBody(request)
+    const operation = readJsonBody(request)
       .then((body) => {
         const requestedSource = typeof body.source === "string" ? body.source : "desktop-start";
         const source = requestedSource === "packaged-desktop" || requestedSource === "windows-desktop"
@@ -76,19 +78,24 @@ export function handleDesktopLifecycleApi(
       .catch((error) => {
         jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
       });
+    void (options.trackOperation ? options.trackOperation(operation) : operation);
     return true;
   }
 
-  void readJsonBody(request)
+  const operation = readJsonBody(request)
     .then((body) => {
       if (body.desktopExit === true) {
         writeDesktopLifecycleIntent(options.rootDir, "stopped", "desktop-exit");
       }
       jsonResponse(response, 200, { code: 0, message: "manager shutdown requested" });
-      setTimeout(() => { void options.shutdownManager("api"); }, Math.max(0, options.shutdownDelayMs ?? 20));
+      const task = (): void => { void options.shutdownManager("api"); };
+      const delayMs = Math.max(0, options.shutdownDelayMs ?? 20);
+      if (options.scheduleShutdown) options.scheduleShutdown(task, delayMs);
+      else setTimeout(task, delayMs);
     })
     .catch((error) => {
       jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
     });
+  void (options.trackOperation ? options.trackOperation(operation) : operation);
   return true;
 }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createPlan, updatePlan } from "../roleKnowledge.js";
-import { handleManagerPersonaDomainApi } from "./controlPlaneRoutes.js";
+import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -37,7 +37,7 @@ test("plan history endpoint keeps completed-plan revisions readable", async (t) 
   });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handleManagerPersonaDomainApi(request, requestUrl, response, { roleDir: () => roleDir })) return;
+    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir })) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);

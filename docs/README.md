@@ -31,7 +31,7 @@
 
 ## 本机安装、配置与恢复
 
-- [配置与接入](configuration.md) — 配置字段、消息端和处理端的现行说明。
+- [配置与接入](configuration.md) — **现行指南**。查看 26 个内置 Manager 插件、WebGUI/Desktop 扩展入口、路由所有权、30 秒请求 drain 截止时间，以及 Remote Agent 与 NapCat 的停用边界。
 - [常驻性能记录与查看](performance-monitoring.md) — **现行指南**。按开关持续记录 Manager、Gateway 和 WebGUI 的近期性能，查看趋势、慢操作和独立 JSONL 文件。
 - [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — Windows 安装、启动和打包方式。
@@ -55,9 +55,9 @@
 ## 架构与维护
 
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
-- [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **设计调研**。提炼 Cordis 的依赖、生命周期、配置对账和恢复原则，并给出适合 RabiRoute 的分阶段采用边界。
+- [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结，统一验证已通过**。说明 26 个内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
 - [DSH 如何使用 Cordis](dsh-cordis-runtime-analysis.md) — **实现调查**。说明 profile、Loader、Fiber、服务 realm、浏览器插件树、动态代码和进程沙箱的真实边界。
-- [基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md) — **已选设计**。定义组合内核、Rabi 业务适配层、多宿主扩展协议、迁移阶段和验证合同。
+- [基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md) — **当前实现说明，统一验证已通过**。定义 26 个内置 Manager 插件、中央 HTTP 最小宿主、WebGUI/Desktop 扩展协议、插件资源所有权和停用顺序。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
 - [路径与目录规范](path-and-directory-conventions.md) — **当前维护规范**。区分软件目录、公开示例、本机运行数据和日志，并规定 API 中相对路径与业务 ID 的写法。

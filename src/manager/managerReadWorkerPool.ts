@@ -12,10 +12,6 @@ import type {
   MemoryLifecyclePresentation,
   RecentMemoryItem
 } from "../roleKnowledge.js";
-import type {
-  AgentScanOptions,
-  AgentScanRuntimeSnapshot
-} from "../agentAdapters/managerApi.js";
 import type { PlanFeedbackRecoveryCandidate } from "./planFeedbackRecovery.js";
 import type {
   PerformanceMonitoringConfig,
@@ -113,7 +109,6 @@ export class ManagerReadWorkerPool {
   private readonly timeoutMs: number;
   private readonly queue: PendingRead[] = [];
   private readonly voiceSummaryInFlight = new Map<string, SharedRead<PersonaVoiceTranscriptQueryResult>>();
-  private readonly agentScanInFlight = new Map<string, SharedRead<Record<string, unknown>>>();
   private readonly performanceInFlight = new Map<string, SharedRead<string>>();
   private readonly workers = new Set<WorkerSlot>();
   private active = 0;
@@ -275,40 +270,6 @@ export class ManagerReadWorkerPool {
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<T> {
     return this.run<T>({ type: "role_memory_counts", roleDir }, options);
-  }
-
-  queryAgentScan<T>(
-    rootDir: string,
-    runtimes: AgentScanRuntimeSnapshot[],
-    scanOptions: AgentScanOptions,
-    options: { signal?: AbortSignal; timeoutMs?: number } = {}
-  ): Promise<T> {
-    const key = JSON.stringify([rootDir, runtimes, scanOptions]);
-    let shared = this.agentScanInFlight.get(key);
-    if (!shared) {
-      const controller = new AbortController();
-      shared = {
-        controller,
-        promise: Promise.resolve(undefined as never),
-        subscribers: 0,
-        completed: false
-      };
-      const current = shared;
-      current.promise = this.run<Record<string, unknown>>({
-        type: "agent_scan",
-        rootDir,
-        runtimes,
-        options: scanOptions
-      }, {
-        signal: controller.signal,
-        timeoutMs: options.timeoutMs
-      }).finally(() => {
-        current.completed = true;
-        if (this.agentScanInFlight.get(key) === current) this.agentScanInFlight.delete(key);
-      });
-      this.agentScanInFlight.set(key, current);
-    }
-    return this.subscribe(shared, options.signal) as Promise<T>;
   }
 
   queryPerformanceSummaryJson(
@@ -573,11 +534,6 @@ export class ManagerReadWorkerPool {
 
 export const managerReadWorkerPool = new ManagerReadWorkerPool();
 export const managerCatalogWorkerPool = new ManagerReadWorkerPool({
-  maxConcurrency: 1,
-  maxQueue: 1,
-  timeoutMs: 5 * 60_000
-});
-export const managerAgentScanWorkerPool = new ManagerReadWorkerPool({
   maxConcurrency: 1,
   maxQueue: 1,
   timeoutMs: 5 * 60_000

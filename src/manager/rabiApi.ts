@@ -2,8 +2,6 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentManagerApiContext } from "../agentAdapters/managerApi.js";
-import { scanAgentAdapters } from "../agentAdapters/managerApi.js";
 import { gatewayAdapterTypes, type GatewayDefinition, type GatewayConfigFile } from "../shared/gatewayConfigModel.js";
 import { isAgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 import { sanitizeConfigName } from "../shared/routeIdentity.js";
@@ -26,7 +24,7 @@ export type RabiApiContext = {
   loadRuntimes: () => void;
   syncRunningGateways: () => void;
   syncRabiLinkRelay: () => void;
-  agentManagerApiCtx: () => AgentManagerApiContext;
+  scanAgentAdapters: () => Promise<Record<string, unknown>>;
 };
 
 type RabiInstance = {
@@ -423,7 +421,7 @@ async function localAgentOptions(ctx: RabiApiContext, routeId: string): Promise<
   const config = ctx.readConfig();
   const route = findGateway(config, routeId);
   if (!route) return { code: -1, message: `Route not found: ${routeId}` };
-  const scan = await scanAgentAdapters(ctx.agentManagerApiCtx()) as Record<string, any>;
+  const scan = await ctx.scanAgentAdapters() as Record<string, any>;
   return { code: 0, data: routeOptionsFromAgentScan(route, scan) };
 }
 
@@ -444,6 +442,11 @@ function readJsonlTail(filePath: string, limit: number, afterId: string): Record
   const afterIndex = afterId ? rows.findIndex((item) => String(item.id ?? "") === afterId) : -1;
   const selected = afterIndex >= 0 ? rows.slice(afterIndex + 1) : rows.slice(-limit);
   return selected.slice(-limit);
+}
+
+function apiErrorStatus(error: unknown, fallback = 500): number {
+  const statusCode = Number((error as { statusCode?: unknown } | null)?.statusCode);
+  return Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599 ? statusCode : fallback;
 }
 
 function localRabiLinkReplies(ctx: RabiApiContext, routeId: string, requestUrl: URL): Record<string, unknown> {
@@ -672,7 +675,7 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
     if (isSelfGuid(ctx, guid)) {
       void localAgentOptions(ctx, routeId)
         .then((result) => jsonResponse(response, result.code === 0 ? 200 : 404, result))
-        .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        .catch((error) => jsonResponse(response, apiErrorStatus(error), { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
     void findInstance(ctx, request, requestUrl, guid)

@@ -23,7 +23,7 @@
 - 演示本地路由配置的 `rolesDir` 应该指向 `./data/roles`。
 - 让用户复制后可以直接在 WebUI 里选择并预览示例人格。
 
-`manager.json` 默认列出十三个内置实例。其中八个服务实例没有 UI contribution：`manager:gateway-runtime`、`manager:rabilink-relay`、`manager:memory-consolidation`、`manager:fennenote-output`、`manager:message-processing-control`、`manager:message-processing-automation`、`manager:plan-feedback-delivery` 和 `manager:napcat-supervisor`。它们分别持有 Gateway 进程、Relay 连接、记忆整理、FenneNote 输出 API、消息处理控制 API、消息处理提醒、计划反馈恢复和 NapCat 启动检查的生命周期；停用实例会撤销对应入口并释放本实例持有的资源。剩余中心化可选 API 仍在迁移。
+`manager.json` 默认列出当前 26 个内置 Manager 插件。7 个插件发布表现贡献，其他 19 个插件仍拥有 HTTP、服务、进程、定时器、监听器或对账生命周期。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；业务 HTTP 路由由 Manager 插件的 `apply` hook 注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。WebGUI/Desktop 通过宿主拥有的可信注册表解析新的 renderer、route、handler 和 resource contract，未知或未注册贡献失败关闭。第三方任意表现代码的受控 Extension Host 属于后续路线。统一验证尚未执行。
 
 整包复制后只有 `main` 默认 Route 启用。RabiLink、voice-chat、Rokid 原生语音、XiaoAI、WeCom 和个人微信 Weixin 均为禁用模板。填写凭据或完成扫码、检查工作目录和端口后再逐条启用。
 

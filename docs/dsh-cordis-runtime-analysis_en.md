@@ -2,7 +2,7 @@ English | <a href="./dsh-cordis-runtime-analysis.md">简体中文</a>
 
 # How DSH Uses Cordis: Runtime, UI, and Isolation Analysis
 
-> Status: implementation research based on DSH `141eb6f`, `dsh@0.1.0-rc.8`.
+> Status: implementation research based on DSH `528c682e06`, `dsh@0.1.1-rc.1`.
 >
 > Primary audience: RabiRoute maintainers, plugin-runtime designers, and WebGUI/Desktop extension developers.
 
@@ -21,11 +21,11 @@ RabiRoute's decision to place high-risk or untrusted plugins in separate process
 
 ## Research snapshot
 
-On August 21, 2026, the official DSH `master` and the inspected local checkout both point to:
+After 14:21:44 +08:00 on August 21, 2026, the official DSH `master` and the inspected local checkout both point to:
 
-- [DeepSeek Harness `141eb6f`](https://github.com/deepseek-ai/deepseek-harness/tree/141eb6fef83422698aef7a981029e843e8161534), `dsh@0.1.0-rc.8`;
-- vendored [`@deepseek-ai/cordis` 4.0.0-rc.7](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/README.md#manifest);
-- vendored [`@deepseek-ai/cordis-plugin-loader` 1.0.0-rc.5](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/README.md#manifest);
+- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006), `dsh@0.1.1-rc.1`;
+- vendored [`@deepseek-ai/cordis` 4.0.0-rc.7](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest);
+- vendored [`@deepseek-ai/cordis-plugin-loader` 1.0.0-rc.5](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest);
 - [Cordis composability paper v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf).
 
 DSH does not consume the public upstream npm packages directly. It pins Cordis, Loader, Include, Group, HMR, Timer, and related sources under `vendor/`, renames them into the `@deepseek-ai` scope, and maintains a local modification log.
@@ -337,15 +337,15 @@ See [Cordis-Based Plugin Runtime Refactor for RabiRoute](cordis-plugin-runtime-r
 
 ## Primary evidence paths
 
-- [DSH architecture](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/architecture.md)
-- [DSH Cordis primer](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/cordis-primer.md)
-- [Profiles and plugin installation](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/apps/cli/reference/README.md)
-- [Vendored Cordis versions and local modifications](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/README.md)
-- [Loader Entry import and update](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/loader/src/config/entry.ts)
-- [`isolate` service-realm implementation](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/loader/src/config/isolate.ts)
-- [Web client Cordis boot](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/client/web/README.md)
-- [UI Slot lifecycle](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/client/ui-slots/README.md)
-- [Dynamic Host VM and non-containment statement](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/extensions/cordis-host-runner/src/sandbox.ts)
-- [Dynamic Host Context facade](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/extensions/cordis-host-runner/src/guard.ts)
-- [Dynamic browser plugin evaluation](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/extensions/cordis-client-runner/src/client/evaluator.ts)
-- [DSH process sandbox](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/subsystems/sandbox.md)
+- [DSH architecture](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/architecture.md)
+- [DSH Cordis primer](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/cordis-primer.md)
+- [Profiles and plugin installation](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/apps/cli/reference/README.md)
+- [Vendored Cordis versions and local modifications](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md)
+- [Loader Entry import and update](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/loader/src/config/entry.ts)
+- [`isolate` service-realm implementation](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/loader/src/config/isolate.ts)
+- [Web client Cordis boot](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/client/web/README.md)
+- [UI Slot lifecycle](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/client/ui-slots/README.md)
+- [Dynamic Host VM and non-containment statement](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/extensions/cordis-host-runner/src/sandbox.ts)
+- [Dynamic Host Context facade](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/extensions/cordis-host-runner/src/guard.ts)
+- [Dynamic browser plugin evaluation](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/extensions/cordis-client-runner/src/client/evaluator.ts)
+- [DSH process sandbox](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/subsystems/sandbox.md)

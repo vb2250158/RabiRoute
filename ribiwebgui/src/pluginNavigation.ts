@@ -1,19 +1,13 @@
 import {
-  routeScopedAdaptersPath,
-  routeScopedKnowledgePath,
-  routeScopedOverviewPath,
-  routeScopedPersonaPath,
-  routeScopedPersonaSyncPath,
-  routeScopedRuntimePath,
-  routeScopedSpeechPath
-} from "./routeScopedNavigation";
-import {
   isWebNavigationPageActive,
+  resolveRegisteredWebPagePath,
   resolveWebPageCatalog,
-  type ControlledWebPageRouteId
+  webPageAllowsNavigation,
+  webPageRenderer,
+  type WebPageRouteId
 } from "./pluginPages";
 
-export type WebNavigationSlot = "route-primary" | "persona-secondary" | "utility" | "footer";
+export type WebNavigationSlot = string;
 
 export type WebNavigationItem = Readonly<{
   key: string;
@@ -38,46 +32,15 @@ type NavigationTemplate = Readonly<{
   instanceId: string;
   title: string;
   icon: string;
-  routeId: ControlledWebPageRouteId;
+  routeId: WebPageRouteId;
   slot: WebNavigationSlot;
   order: number;
   sequence: number;
 }>;
 
 type JsonRecord = Record<string, unknown>;
-type RouteResolver = (selectedRouteId: string) => string;
 
-type ControlledRoute = Readonly<{
-  resolve: RouteResolver;
-  slots: readonly WebNavigationSlot[];
-}>;
-
-const allowedSlots = new Set<WebNavigationSlot>(["route-primary", "persona-secondary", "utility", "footer"]);
-const allowedIcons = new Set([
-  "mdi-account-heart-outline",
-  "mdi-book-open-page-variant-outline",
-  "mdi-chart-timeline-variant",
-  "mdi-cog-outline",
-  "mdi-console-line",
-  "mdi-folder-sync-outline",
-  "mdi-notebook-check-outline",
-  "mdi-puzzle-outline",
-  "mdi-view-dashboard-outline",
-  "mdi-waveform"
-]);
-
-const controlledRoutes = new Map<ControlledWebPageRouteId, ControlledRoute>([
-  ["route.overview", { resolve: routeScopedOverviewPath, slots: ["route-primary"] }],
-  ["route.adapters", { resolve: routeScopedAdaptersPath, slots: ["route-primary"] }],
-  ["route.persona", { resolve: routeScopedPersonaPath, slots: ["route-primary"] }],
-  ["route.knowledge", { resolve: routeScopedKnowledgePath, slots: ["route-primary"] }],
-  ["route.persona-sync", { resolve: routeScopedPersonaSyncPath, slots: ["persona-secondary"] }],
-  ["route.speech", { resolve: routeScopedSpeechPath, slots: ["utility"] }],
-  ["global.performance", { resolve: () => "/performance", slots: ["utility"] }],
-  ["route.runtime", { resolve: routeScopedRuntimePath, slots: ["utility"] }],
-  ["global.settings", { resolve: () => "/settings", slots: ["utility"] }],
-  ["global.docs", { resolve: () => "/docs", slots: ["footer"] }]
-]);
+const renderedSlots = new Set(["route-primary", "persona-secondary", "utility", "footer"]);
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -90,6 +53,11 @@ function controlledText(value: unknown, maximumLength: number): string {
   return normalized;
 }
 
+function controlledSymbol(value: unknown, maximumLength: number): string {
+  const normalized = controlledText(value, maximumLength);
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(normalized) ? normalized : "";
+}
+
 function controlledOrder(value: unknown): number | undefined {
   if (value === undefined) return 0;
   return Number.isSafeInteger(value) && (value as number) >= -10_000 && (value as number) <= 10_000
@@ -97,9 +65,15 @@ function controlledOrder(value: unknown): number | undefined {
     : undefined;
 }
 
-function controlledRouteId(value: unknown): ControlledWebPageRouteId | undefined {
-  const routeId = controlledText(value, 80) as ControlledWebPageRouteId;
-  return controlledRoutes.has(routeId) ? routeId : undefined;
+function controlledRouteId(value: unknown): WebPageRouteId | undefined {
+  const routeId = controlledSymbol(value, 160);
+  if (!routeId) return undefined;
+  try {
+    webPageRenderer(routeId);
+    return routeId;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseNavigationContribution(value: unknown, sequence: number): NavigationTemplate | undefined {
@@ -108,23 +82,23 @@ function parseNavigationContribution(value: unknown, sequence: number): Navigati
     return undefined;
   }
 
-  const id = controlledText(value.id, 128);
-  const instanceId = controlledText(value.instanceId, 160);
+  const id = controlledSymbol(value.id, 128);
+  const instanceId = controlledSymbol(value.instanceId, 160);
   const label = isRecord(value.label) ? controlledText(value.label.fallback, 80) : "";
-  const icon = controlledText(value.icon, 80);
-  const slot = controlledText(value.slot, 40) as WebNavigationSlot;
+  const icon = controlledSymbol(value.icon, 80);
+  const slotValue = controlledSymbol(value.slot, 40);
+  const slot = renderedSlots.has(slotValue) ? slotValue : undefined;
   const routeId = controlledRouteId(value.routeId);
   const order = controlledOrder(value.order);
-  const route = routeId ? controlledRoutes.get(routeId) : undefined;
 
   if (
     !id
     || !instanceId
     || !label
-    || !allowedIcons.has(icon)
-    || !allowedSlots.has(slot)
+    || !icon
+    || !slot
     || !routeId
-    || !route?.slots.includes(slot)
+    || !webPageAllowsNavigation(routeId, slot, icon)
     || order === undefined
   ) {
     return undefined;
@@ -155,7 +129,12 @@ export function buildWebNavigation(
     .filter(item => isWebNavigationPageActive(pageCatalog, item.instanceId, item.routeId))
     .sort((left, right) => left.order - right.order || left.sequence - right.sequence)
     .flatMap((item): WebNavigationItem[] => {
-      const to = controlledRoutes.get(item.routeId)?.resolve(selectedRouteId.trim()) ?? "";
+      let to = "";
+      try {
+        to = resolveRegisteredWebPagePath(item.routeId, selectedRouteId.trim());
+      } catch {
+        return [];
+      }
       if (!to || seenPaths.has(to)) return [];
       seenPaths.add(to);
       return [{

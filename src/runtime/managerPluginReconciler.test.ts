@@ -120,6 +120,149 @@ test("Manager Plugin Reconciler reloads and disables only changed instances", as
   await fixture.dispose();
 });
 
+test("Manager Plugin Reconciler deactivates a changed batch in reverse activation order", async () => {
+  const fixture = await setup();
+  const lifecycle: string[] = [];
+  const first = definition("manager:first", "1.0.0", (ctx) => {
+    lifecycle.push("first:start");
+    ctx.effect(() => () => { lifecycle.push("first:stop"); });
+  });
+  const second = definition("manager:second", "1.0.0", (ctx) => {
+    lifecycle.push("second:start");
+    ctx.effect(() => () => { lifecycle.push("second:stop"); });
+  });
+  const third = definition("manager:third", "1.0.0", (ctx) => {
+    lifecycle.push("third:start");
+    ctx.effect(() => () => { lifecycle.push("third:stop"); });
+  });
+
+  await fixture.reconciler.reconcile([
+    desired(first, "first@1"),
+    desired(second, "second@1"),
+    desired(third, "third@1")
+  ]);
+  const disabled = await fixture.reconciler.reconcile([]);
+
+  assert.deepEqual(disabled.changed, [
+    "manager:first",
+    "manager:second",
+    "manager:third"
+  ]);
+  assert.deepEqual(disabled.active, []);
+  assert.deepEqual(lifecycle, [
+    "first:start",
+    "second:start",
+    "third:start",
+    "third:stop",
+    "second:stop",
+    "first:stop"
+  ]);
+
+  await fixture.dispose();
+});
+
+test("Manager Plugin Reconciler stops the reload batch before starting definitions in desired order", async () => {
+  const fixture = await setup();
+  const lifecycle: string[] = [];
+  const firstV1 = definition("manager:first", "1.0.0", (ctx) => {
+    lifecycle.push("first:v1:start");
+    ctx.effect(() => () => { lifecycle.push("first:v1:stop"); });
+  });
+  const secondV1 = definition("manager:second", "1.0.0", (ctx) => {
+    lifecycle.push("second:v1:start");
+    ctx.effect(() => () => { lifecycle.push("second:v1:stop"); });
+  });
+  const firstV2 = definition("manager:first", "2.0.0", () => {
+    lifecycle.push("first:v2:start");
+  });
+  const secondV2 = definition("manager:second", "2.0.0", () => {
+    lifecycle.push("second:v2:start");
+  });
+
+  await fixture.reconciler.reconcile([
+    desired(firstV1, "first@1"),
+    desired(secondV1, "second@1")
+  ]);
+  const reloaded = await fixture.reconciler.reconcile([
+    desired(secondV2, "second@2"),
+    desired(firstV2, "first@2")
+  ]);
+
+  assert.deepEqual(reloaded.changed, ["manager:second", "manager:first"]);
+  assert.deepEqual(reloaded.active, ["manager:second", "manager:first"]);
+  assert.deepEqual(lifecycle, [
+    "first:v1:start",
+    "second:v1:start",
+    "second:v1:stop",
+    "first:v1:stop",
+    "second:v2:start",
+    "first:v2:start"
+  ]);
+
+  await fixture.dispose();
+});
+
+test("Manager Plugin Reconciler removes new batch instances and restores the old batch after activation failure", async () => {
+  const fixture = await setup();
+  const lifecycle: string[] = [];
+  const firstV1 = definition("manager:first", "1.0.0", (ctx) => {
+    lifecycle.push("first:v1:start");
+    ctx.effect(() => () => { lifecycle.push("first:v1:stop"); });
+  });
+  const secondV1 = definition("manager:second", "1.0.0", (ctx) => {
+    lifecycle.push("second:v1:start");
+    ctx.effect(() => () => { lifecycle.push("second:v1:stop"); });
+  });
+  const firstV2 = definition("manager:first", "2.0.0", (ctx) => {
+    lifecycle.push("first:v2:start");
+    ctx.effect(() => () => { lifecycle.push("first:v2:stop"); });
+  });
+  const third = definition("manager:third", "1.0.0", (ctx) => {
+    lifecycle.push("third:start");
+    ctx.effect(() => () => { lifecycle.push("third:stop"); });
+  });
+  const brokenSecond = definition("manager:second", "2.0.0", () => {
+    lifecycle.push("second:v2:start");
+    throw new Error("second activation failed");
+  });
+
+  await fixture.reconciler.reconcile([
+    desired(firstV1, "first@1"),
+    desired(secondV1, "second@1")
+  ]);
+  const failed = await fixture.reconciler.reconcile([
+    desired(firstV2, "first@2"),
+    desired(third, "third@1"),
+    desired(brokenSecond, "second@2")
+  ]);
+
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.error?.code, "activation_failed");
+  assert.deepEqual(failed.changed, [
+    "manager:first",
+    "manager:third",
+    "manager:second"
+  ]);
+  assert.deepEqual(failed.rolledBack, ["manager:first", "manager:second"]);
+  assert.deepEqual(failed.active, ["manager:first", "manager:second"]);
+  assert.equal(fixture.runtime.plugins.has("manager:third"), false);
+  assert.deepEqual(lifecycle, [
+    "first:v1:start",
+    "second:v1:start",
+    "second:v1:stop",
+    "first:v1:stop",
+    "first:v2:start",
+    "third:start",
+    "second:v2:start",
+    "third:stop",
+    "first:v2:stop",
+    "first:v1:start",
+    "second:v1:start"
+  ]);
+
+  await fixture.dispose();
+});
+
 test("Manager Plugin Reconciler serializes concurrent reconciliation requests", async () => {
   const fixture = await setup();
   const lifecycle: string[] = [];

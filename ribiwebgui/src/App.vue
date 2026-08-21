@@ -15,7 +15,7 @@ import { pageSaveAction } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
 import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
-import { isWebPageRouteActive, type ControlledWebPageRouteId } from "./pluginPages";
+import { isWebPageRouteActive } from "./pluginPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
 
@@ -30,7 +30,7 @@ let managerEvents: EventSource | null = null;
 
 async function handlePluginCatalogChanged(): Promise<void> {
   await pluginCatalogStore.refresh();
-  const routeId = route.meta.pluginRouteId as ControlledWebPageRouteId | undefined;
+  const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
   }
@@ -184,7 +184,7 @@ async function save() {
 
 async function refresh() {
   await Promise.all([store.load(), pluginCatalogStore.refresh()]);
-  const routeId = route.meta.pluginRouteId as ControlledWebPageRouteId | undefined;
+  const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
     return;

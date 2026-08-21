@@ -6,7 +6,7 @@
 
 # RabiRoute 项目功能手册
 
-> 状态：当前事实地图。模块和成熟度已按当前代码复核；涉及外部系统的真实环境验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
+> 状态：当前事实地图。Manager 已有 26 个内置插件定义及对应 hook；统一验证已于 2026-08-21 通过，外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
 
 本文是 RabiRoute 的通用项目功能手册。它面向产品设计、GUI 改造、代码维护、排障和新 Agent 交接，不只服务某一个页面或某一次需求。
 
@@ -48,27 +48,40 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | Outbox / Send | 接收带发送 Agent 类型与会话 ID 的明确请求，校验 Route、渠道、目标参数、内容和策略后发送并保存追溯回执 | 让处理端绕过 RabiRoute 写平台，或从来源上下文猜测目标 | `src/agentSend.ts`、`src/outbox.ts` |
 | 消息处理看板 | 保存消息发送需求、处理阶段、转交、决定和 Outbox 回执；把计划进展重新通知来源会话 | 代替 Agent 回答、从日志猜测状态、把普通群消息全部设为必须回复 | `src/messageProcessing/board.ts`、`src/messageProcessing/persistence.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/components/MessageProcessingBoard.vue` |
 | Manager 控制面 | 管配置、进程、扫描、状态、WebGUI 静态资源和 HTTP API | 具体平台实时消息处理 | `src/manager/*`、`src/manager.ts` |
-| Manager 插件组合 | `data/manager.json`、内置 definition、当前 Plugin Catalog 和实例 Fiber 生命周期 | 加载任意配置代码或让表现端直接执行第三方资源 | `src/runtime/managerPluginReconciler.ts`、`src/runtime/processPluginHost.ts`、`src/runtime/processManagerPlugin.ts`、`src/manager/managerPluginConfig.ts`、`src/manager/managerPluginRouteRegistry.ts`、`src/manager/managerGatewayRuntimeService.ts`、`src/manager/pluginCatalogRoutes.ts` |
-| WebGUI | 展示和编辑配置、状态、日志和人格规则 | 成为配置唯一真源 | `ribiwebgui/src/*` |
+| Manager 插件组合 | 26 个内置 definition、26 个对应 hook、`data/manager.json` 期望状态、Plugin Catalog、路由批次和实例 Fiber 生命周期 | 加载任意配置代码或让表现端直接执行第三方资源 | `src/manager/builtinManagerPlugins.ts`、`src/manager/controlPlaneRoutes.ts`、`src/runtime/managerPluginReconciler.ts`、`src/manager/managerPluginRouteRegistry.ts` |
+| WebGUI / Desktop 最小宿主 | 连接 Manager、消费贡献目录、安全渲染、维护窗口/页面外壳和固定恢复入口 | 维护第二套页面、设置、命令、导航、状态或生命周期入口清单 | `ribiwebgui/src/*`、`desktop/tray-task-window/*`、`src/manager/pluginCatalogRoutes.ts` |
 | Role Knowledge | 管角色计划、记忆、技能和上下文快照；Manager 展示层统一派生状态和排序，并按精确绑定读取任务 Agent 状态 | 决定消息是否路由命中，或根据计划生命周期猜测 Codex 是否工作 | `src/roleKnowledge.ts`、`src/roleKnowledgePresentation.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/planAgentStatus.ts`、`src/manager/controlPlaneRoutes.ts` |
 
 ## Manager 后台插件生命周期
 
-当前目录包含十三个内置 Manager 实例；下表列出八个无 UI contribution 的服务实例，并保留 `manager:performance` 的可见入口边界。
+当前目录包含 26 个内置 Manager 实例。`builtinManagerPlugins.ts` 的 26 个 definition 与 `controlPlaneRoutes.ts` 的 26 个 hook 一一对应，没有空 hook。
 
-| 实例 | 拥有的运行副作用 | 事实 owner | 激活/停用边界 | 表现贡献 |
-| --- | --- | --- | --- | --- |
-| `manager:gateway-runtime` | Gateway 定义加载、运行状态对账和子进程启停协调 | Route 配置由配置仓库拥有，运行状态由 `RuntimeRegistry` 拥有 | 激活时启用 `ManagerGatewayRuntimeService`；停用时 `stopAll()` 并关闭手动 Gateway 控制入口 | 无 |
-| `manager:rabilink-relay` | 全局 RabiLink Relay 与人格同步局域网服务 | Relay 与同步配置仍由原有配置模块拥有 | listener 就绪后同步；停用时停止两项运行资源并撤销同步回调 | 无 |
-| `manager:memory-consolidation` | 最早截止时间的一次性记忆整理调度器和本实例一次性进程 | 记忆内容与整理记录仍由 Role Knowledge 拥有 | 非只读模式下每次激活创建；停用时终止进程并等待当前调度 | 无 |
-| `manager:fennenote-output` | FenneNote 播放、回复 HTTP 入口和在途请求 | endpoint 与 token 由现有配置边界拥有；发送规则、外发记录和回执由 Outbox 拥有 | 停用时撤销路由批次、拒绝新请求，中止并等待在途请求；不影响入站 Route、历史记录和其他 Outbox channel | 无 |
-| `manager:message-processing-control` | 消息处理看板 HTTP 查询、命令和事件接线 | 消息处理记录、发送上下文审批和持久化由 `MessageProcessingBoardStore` 及其业务模块拥有 | 停用时撤销路由批次，已开始的记录写入可以完成；不删除记录，不停止自动提醒插件 | 无 |
-| `manager:message-processing-automation` | 计划变化订阅、知识回调计时器和 Agent 回复提醒 | 消息处理记录仍由看板 Store 拥有 | 激活时恢复待处理提醒；停用时取消订阅、清除计时器并等待已开始的提醒投递 | 无 |
-| `manager:plan-feedback-delivery` | 计划反馈恢复扫描、重试计时器和当前投递 | 计划反馈记录仍由计划反馈模块拥有 | listener 就绪后启动扫描；停用时禁止新投递并等待当前扫描和投递 | 无 |
-| `manager:napcat-supervisor` | NapCat 启动登录检查 | NapCat、QQ 和 Route 配置事实仍由外部进程与配置模块拥有 | Manager 自动启动时执行一次；停用时取消剩余账号队列、等待当前原子检查并屏蔽旧回调 | 无 |
-| `manager:performance` | 性能 HTTP API、样本订阅、SSE 客户端和监控服务 | 性能配置与记录仍由性能模块拥有 | 每次激活创建新的 `PerformanceApi`；停用时 `close()` 并停止监控 | 页面、导航和状态卡保持原贡献 |
+| 分组 | 实例 | 主要责任 |
+| --- | --- | --- |
+| 宿主与表现 | `manager:core`、`manager:desktop`、`manager:diagnostics` | WebGUI LAN 配置入口、Desktop 生命周期/设置、Manager 元信息与 Gateway 诊断 |
+| 人格与运行观测 | `manager:persona`、`manager:speech`、`manager:performance` | 人格/同步/语言风格、语音服务、性能采集与查询 |
+| Gateway 与外部连接 | `manager:gateway-runtime`、`manager:bilibili-history`、`manager:rabilink-relay`、`manager:napcat-control`、`manager:napcat-supervisor`、`manager:remote-agent` | Gateway 进程、Bilibili 历史桥、Relay/LAN、NapCat 控制与启动检查、Remote Agent Hub |
+| Route 与 Adapter 控制 | `manager:route-control`、`manager:message-adapter-control`、`manager:agent-adapter-catalog`、`manager:agent-state-control`、`manager:agent-thread-control`、`manager:agent-communication` | Route/Gateway API、消息端控制、Agent 目录/状态/任务/通信 |
+| Agent Provider 控制 | `manager:copilot-control`、`manager:astrbot-control`、`manager:marvis-control` | 安装、登录、进程或连接控制 |
+| 后台业务服务 | `manager:memory-consolidation`、`manager:fennenote-output`、`manager:message-processing-control`、`manager:message-processing-automation`、`manager:plan-feedback-delivery` | 记忆整理、FenneNote 输出、消息处理看板与提醒、计划反馈恢复投递 |
 
-这些插件只接管 HTTP 入口和可撤销运行生命周期，不复制业务事实。剩余迁移包括消息端与 Agent Adapter 扫描、NapCat 和 Agent 安装登录控制、Agent 任务与外发、Remote Agent、诊断及 Gateway 管理 API。涉及外部进程、Worker、WebSocket、UDP 或已开始投递的分组，需要先补齐实例 owner、取消和 drain。
+7 个实例发布表现贡献；19 个实例没有表现贡献，但仍拥有实际生命周期。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。Desktop/WebGUI 是最小宿主；宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract，未知或未注册贡献失败关闭。第三方任意表现代码的受控 Extension Host 属于后续路线。
+
+每个插件在一个 disposer 内执行：
+
+```text
+unregister routes
+→ stop accepting new requests
+→ drain accepted requests
+→ stop plugin-owned workers/processes/timers/sockets/services
+→ await resource exit
+```
+
+Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，因此有顺序要求的停用流程不能拆成多个 `ctx.effect()`。当前 Manager hook 把关键停止顺序放在一个 disposer 中；`ManagerPluginRequestTracker.trackOperation()` 等待 response 之外的实际业务 Promise，Remote Agent 回调按取消信号停止并等待完成，NapCat 两阶段记录 PID，批量对账逆序停用后再顺序启动。统一验证已于 2026-08-21 通过。
+
+中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404 和其他路径 WebGUI HTML 回退。`/manager` 与所有 `/manager/*` 都返回控制面响应。
+
+可信内置插件在 Manager 主进程运行。未知、不可信或高风险扩展使用独立进程和最小能力协议，这是 RabiRoute 的额外安全策略；DSH 普通插件默认也在主进程运行，Cordis scope/isolate 不是进程沙箱。
 
 ## 功能索引
 
@@ -149,7 +162,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 - 预览能力目前是拟新增设计，应走后端 dry-run，不能调用 `forwardMessageAndWait`。
 - 真实外发必须经过 Outbox / Action Gate。处理端不要绕过 RabiRoute 直接写 QQ、WeCom、RabiLink 或外部系统。
 - 持久计划秘书控制面按 `planId` 保持单 writer，不同计划可并行推进；共享账本在短锁内合并并原子替换。锁元数据完整写入后原子发布，stale/损坏锁失败关闭并只允许 quiescent 维护修复；同 key 的认领/澄清先记 reservation，结果不明确时不自动重发。audit 使用前后快照区分稳定 invalid 与并发 incomplete，一个 active cycle 不会成为 audit 或 reconcile 的全局屏障。
-- 腾讯表、direct/generic 用户请求和已有效引用认领的工作群问题，都通过受管 `register-external` 登记后进入秘书 `begin → finish`。工作群来源固定为群 `474222421`，要求真实 `sourceMessageId` 以及同一问题键下 `status=sent` 且含 `sentMessageId` 的认领回执；登记同时校验计划/任务唯一性、至少两轮查重和输入/计划/任务三方 workspace，生成 `governanceVersion=3` 映射。腾讯表稳定行键和用户请求规范签名语义保持不变；不允许手改 `issue-threads.json`。
+- 腾讯表、direct/generic 用户请求和已有效引用认领的工作群问题，都通过受管 `register-external` 登记后进入秘书 `begin → finish`。工作群来源固定为配置的工作群 `<WORK_GROUP_ID>`，要求真实 `sourceMessageId` 以及同一问题键下 `status=sent` 且含 `sentMessageId` 的认领回执；登记同时校验计划/任务唯一性、至少两轮查重和输入/计划/任务三方 workspace，生成 `governanceVersion=3` 映射。腾讯表稳定行键和用户请求规范签名语义保持不变；不允许手改 `issue-threads.json`。
 - 旧版统一 Outbox 认领没有写入专用回执账本时，登记器只在本地会话出站记录与 NapCat 实时消息回读同时证明同群、同发送消息和同引用目标后恢复回执；单凭登记输入或单侧日志不能补账，恢复过程不重发群消息。
 - 工作群 `begin` 使用登记映射、计划绑定和 Desktop 回读的完整任务 ID + workspace 作为业务任务身份；PangHu 接受 `[PangHu][明确任务类型] ...`，RabiRoute 治理任务当前只接受 `[RabiRoute][Bug] ...`。新登记拒绝非法 live 标题；既有映射的非法旧标题只在同一任务和工作目录的 live 标题合法时，通过问题账本锁原子迁移。标题不能替代稳定身份、来源、认领回执、查重和唯一性校验。
 - Codex adapter id 保持 `codex`；Codex/ChatGPT Desktop 是实际任务 owner，Desktop IPC 是唯一真实消息 transport。

@@ -20,6 +20,42 @@
     "manager:gateway-runtime": {
       "enabled": true
     },
+    "manager:bilibili-history": {
+      "enabled": true
+    },
+    "manager:route-control": {
+      "enabled": true
+    },
+    "manager:message-adapter-control": {
+      "enabled": true
+    },
+    "manager:agent-adapter-catalog": {
+      "enabled": true
+    },
+    "manager:agent-state-control": {
+      "enabled": true
+    },
+    "manager:agent-thread-control": {
+      "enabled": true
+    },
+    "manager:agent-communication": {
+      "enabled": true
+    },
+    "manager:copilot-control": {
+      "enabled": true
+    },
+    "manager:astrbot-control": {
+      "enabled": true
+    },
+    "manager:marvis-control": {
+      "enabled": true
+    },
+    "manager:remote-agent": {
+      "enabled": true
+    },
+    "manager:diagnostics": {
+      "enabled": true
+    },
     "manager:rabilink-relay": {
       "enabled": true
     },
@@ -36,6 +72,9 @@
       "enabled": true
     },
     "manager:plan-feedback-delivery": {
+      "enabled": true
+    },
+    "manager:napcat-control": {
       "enabled": true
     },
     "manager:napcat-supervisor": {

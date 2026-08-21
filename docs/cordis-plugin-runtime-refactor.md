@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI/Desktop 声明式表现入口、配置对账、局部重载、独立进程插件合同，以及十三个内置 Manager 实例已进入统一目录；其中八个无 UI contribution 的服务实例已明确生命周期。剩余中心化可选 API 分发和重启后运行验收仍待完成。
+> 状态：26 个内置 Manager 插件迁移完成。业务 HTTP 路由由插件注册，WebGUI/Desktop 作为最小扩展宿主消费声明式贡献。统一验证已于 2026-08-21 通过；第三方任意表现代码的受控 Extension Host 属于后续路线。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -12,9 +12,9 @@ RabiRoute 采用“Cordis 组合内核 + Rabi 业务适配层 + 多宿主扩展�
 
 - Manager 和 Gateway 使用 Cordis 管理插件依赖、Fiber 生命周期和副作用撤销。
 - RabiRoute 提供自己的服务 key、事件、插件清单、配置和状态目录，不让业务代码直接依赖 Cordis API。
-- WebGUI 与 Desktop 是最小宿主；统一插件/贡献目录当前只控制宿主预先注册的页面、状态卡片、命令、菜单、设置项、快捷键和主题是否出现，不加载第三方表现代码。WebGUI 已消费页面、导航、设置区、状态卡和主题，Desktop 已消费命令、托盘菜单、快捷键、状态、设置和主题。
+- WebGUI 与 Desktop 是最小宿主；插件贡献页面、设置区、命令、导航、状态卡、生命周期入口、菜单、快捷键和主题。宿主只负责连接、目录装载、安全渲染、页面/窗口外壳和固定恢复入口，不加载目录提供的任意第三方表现代码。
 - Route、事件记录、路由判断、`AgentPacket`、投递证据和 Outbox 继续由稳定模块拥有。
-- 现有能力按 Agent Adapter、消息端生命周期、Gateway 组合、Manager 目录、表现端扩展、配置对账的顺序迁移。
+- 内置能力已按 Agent Adapter、消息端生命周期、Gateway 组合、Manager 目录、表现端扩展和配置对账的顺序完成迁移。
 
 设计来源见[从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md)。
 
@@ -31,7 +31,7 @@ RabiRoute 的最小宿主只负责：
 5. 加载基础组合包；
 6. 在插件失败时隔离、回退和报告。
 
-路由、Adapter、设置页、状态页、托盘菜单、快捷键、主题和设备能力属于可组合产品能力，应逐步变成内置插件或插件贡献项。
+路由、Adapter、设置页、状态页、托盘菜单、快捷键、主题和设备能力属于可组合产品能力；所有可扩展入口通过内置插件或受控插件贡献点提供。
 
 无法做成插件的只有“负责加载插件的最小内核”及操作系统/运行时边界。Desktop/WebGUI 不维护第二套扩展事实；它们作为宿主，只渲染插件贡献目录中声明并受当前平台支持的入口。
 
@@ -56,7 +56,7 @@ DSH 使用固定、改名并带本地修改的 Cordis 源码。普通 DSH 插件
 - 让依赖关系决定插件何时启动、等待、停止和重新激活。
 - 让 Manager 提供唯一插件目录，WebGUI 与 Desktop 从目录生成对应入口。
 - 保持消息路由、投递和外部发送的现有业务语义。
-- 支持后续配置对账、局部重载、树外插件和独立进程插件。
+- 配置对账、局部重载和独立进程合同已经落地；树外插件和第三方任意表现代码的受控 Extension Host 属于后续路线。
 
 ### 非目标
 
@@ -69,14 +69,18 @@ DSH 使用固定、改名并带本地修改的 Cordis 源码。普通 DSH 插件
 
 ## 产品宿主与插件范围
 
-| 宿主 | 最小内核 | 可插件化能力 |
+| 宿主 | 最小内核 | 插件贡献 |
 |---|---|---|
-| Manager | HTTP 启动、实例锁、插件加载、安全和配置持久化入口 | API 路由、Gateway 管理、扫描、诊断、知识、计划、语音、同步等能力 |
+| Manager | HTTP server、局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404、其他路径 WebGUI HTML 回退和进程级关闭 | 业务 API、Gateway 控制、扫描、诊断、知识、计划、语音、同步和生命周期入口 |
 | Gateway | 进程启动、配置读取、根 Context 和退出处理 | 消息端、Agent 端、上下文贡献、Provider、回复端和路由扩展 |
-| WebGUI | Vue 应用壳、登录/连接、扩展加载、安全渲染和错误边界 | 页面、导航、设置区、状态卡片、命令、表单、主题和资源 |
-| Desktop | 桌面应用壳、Manager 连接、扩展目录、安全边界和窗口生命周期 | 托盘菜单、快捷键、命令、设置区、状态卡片、选择菜单、通知和主题 |
+| WebGUI | Vue 应用壳、Manager 连接、目录装载、安全渲染和恢复页 | 页面、导航、设置区、状态卡、命令、表单、主题和资源 |
+| Desktop | Qt 应用壳、Manager 连接、目录装载、宿主可信 handler/resource 注册表、窗口生命周期和恢复入口 | 托盘菜单、快捷键、命令、设置区、状态、选择菜单、通知和主题 |
 
-目标状态下，基础发行版也通过“基础组合包”挂载内置插件。用户将可以替换、停用或增加可扩展能力，但启动内核、安全入口和事实所有者不能被普通插件覆盖。
+Desktop/WebGUI 不是固定业务入口。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract，未知或未注册贡献失败关闭。
+
+当前 26 个 Manager 实例均有 hook。7 个实例有表现贡献，19 个实例只提供运行能力。实例清单以 `src/manager/builtinManagerPlugins.ts` 为真源，生命周期接线以 `src/manager/controlPlaneRoutes.ts` 为当前组合根。
+
+基础发行版也通过内置插件挂载可扩展能力。启动内核、安全入口和业务事实所有者保留稳定边界，普通插件不能覆盖。
 
 ## 进程与运行时模型
 
@@ -102,7 +106,7 @@ Manager Process
 
 第一阶段沿用“一条 Route 对应一个 Gateway 子进程”。每个常驻 Gateway 只创建一个根 Context，并在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry，不再为三个注册表创建彼此独立的 Host。
 
-WebGUI 是独立 JavaScript Runtime，Desktop 是独立 Python/Qt Runtime，两者都不强制移植 Cordis。Manager 现在通过 `GET /api/plugins/catalog` 发布共享 Plugin/Contribution Catalog，并支持 `host=web|desktop` 筛选；WebGUI 与 Desktop 尚未读取该接口，当前入口仍由各自固定实现生成。
+WebGUI 是独立 JavaScript Runtime，Desktop 是独立 Python/Qt Runtime，两者不强制移植 Cordis。Manager 通过 `GET /api/plugins/catalog` 发布共享 Plugin/Contribution Catalog，并支持 `host=web|desktop` 筛选；WebGUI 与 Desktop 通过宿主拥有的可信注册表解析页面、命令、快捷键、主题、状态卡和设置区。内置功能与明确安装并信任的扩展使用同一注册入口；未注册合同失败关闭。
 
 ## Rabi 适配层
 
@@ -200,24 +204,19 @@ export interface RabiPluginContext {
 
 ```ts
 type RabiUiContribution =
+  | { kind: "page"; routeId: string; rendererId: string }
   | { kind: "navigation"; routeId: string }
-  | {
-      kind: "settings-section";
-      rendererId: string;
-      schemaId: string;
-      readCommandId: string;
-      writeCommandId: string;
-    }
-  | { kind: "status-card"; queryId: string; rendererId: string }
-  | { kind: "command"; handlerId: string; dangerLevel: "safe" | "confirm" | "dangerous" }
+  | { kind: "settings-section"; rendererId: string; schemaId: string }
+  | { kind: "status-card"; rendererId: string }
+  | { kind: "command"; handlerId: string }
   | { kind: "tray-menu"; commandId: string }
   | { kind: "hotkey"; commandId: string; defaultBinding?: string }
-  | { kind: "theme"; themeId: string; webResourceId?: string; desktopResourceId?: string };
+  | { kind: "theme"; themeId: string };
 ```
 
-Schema v2 只发布宿主白名单 ID，不发布任意 `target`、`endpoint`、`query`、`body` 或 `resourceRoot`。Plugin manifest 与 Contribution 都由 Registry 按字段白名单重新构造；额外运行时字段不会进入公开目录。`tray-menu` 与 `hotkey` 必须引用同一插件实例、同一注册批次中的 `command`。
+Schema v2 不发布任意 `target`、`endpoint`、`query`、`body` 或 `resourceRoot`。Plugin manifest 与 Contribution 由 Registry 按公开字段重新构造；额外运行时字段不会进入目录。引用必须解析到同一插件实例和注册批次。
 
-Manager 通过 `GET /api/plugins/catalog` 发布同一个 Plugin/Contribution Catalog，并可按 `web` 或 `desktop` 返回对应贡献项。WebGUI 使用固定 `routeId`、图标和位置映射生成侧栏、使用手册和人格同步入口；Desktop 在后台读取目录，按 `pluginId + instanceId + commandId` 解析托盘菜单，并只执行宿主支持的 `handlerId`。目录不可用时，两端保留固定恢复入口。
+Manager 通过 `GET /api/plugins/catalog` 发布同一个 Plugin/Contribution Catalog，并可按 `web` 或 `desktop` 返回表现贡献。WebGUI 与 Desktop 通过宿主拥有的可信注册表解析 renderer、route、handler 和 resource contract；注册表可以增加新合同，未知、未注册、跨插件或宿主不支持的贡献失败关闭。目录不可用时保留恢复入口。第三方任意表现代码的受控 Extension Host 属于后续路线。
 
 ### 自定义界面代码
 
@@ -231,7 +230,7 @@ Manager 通过 `GET /api/plugins/catalog` 发布同一个 Plugin/Contribution Ca
 - 加载失败时保留宿主壳和其他扩展；
 - 第三方扩展不能覆盖登录、安全、更新和故障恢复入口。
 
-DSH 的普通 profile 插件通过 Node ESM 在主进程内运行；Cordis `isolate` 隔离服务作用域，不提供进程隔离，模型动态 Host 插件使用的 `node:vm` 也不是安全沙箱。RabiRoute 对未知或高风险插件增加可选独立进程策略，证据见[DSH 如何使用 Cordis：运行时、界面与隔离分析](dsh-cordis-runtime-analysis.md)。
+DSH 的普通 profile 插件通过 Node ESM 在主进程内运行；Cordis `isolate` 隔离服务作用域，不提供进程隔离，模型动态 Host 插件使用的 `node:vm` 也不是安全沙箱。RabiRoute 要求未知或高风险第三方扩展在独立进程运行，证据见[DSH 如何使用 Cordis：运行时、界面与隔离分析](dsh-cordis-runtime-analysis.md)。
 
 这样保留“一切产品能力皆可扩展”，同时避免第一阶段把任意代码注入关键宿主。
 
@@ -263,7 +262,29 @@ active ── config/provider change ─► deactivating
 
 插件目录至少报告实例 ID、插件 ID、宿主、作用域、状态、缺失能力、开始/停止时间和安全错误摘要。
 
-插件不单独实现 `stop()`。所有需要停止的资源在激活时登记 disposer，由 Fiber 统一销毁。外部进程的终止和协议关闭也属于 effect。
+Cordis 同一 Fiber 中的多个 disposer 通过 `Promise.all(...)` 并行执行。多个 `ctx.effect()` 只能表达彼此独立的清理，不能承担有先后依赖的停止流程。每个 RabiRoute 插件必须在一个 disposer 内执行：
+
+```text
+unregister routes
+→ stop accepting new requests
+→ drain accepted requests
+→ stop plugin-owned workers/processes/timers/sockets/services
+→ await resource exit
+```
+
+`ManagerPluginRequestTracker` 同时等待 HTTP response 和通过 `trackOperation()` 登记的实际业务 Promise；即使客户端提前断开，插件停用也不会越过已接受的发送、任务、配置写入或扫描操作。Remote Agent 停用会取消回调信号并等待回调真正结束，FenneNote 会等待转发任务，NapCat 会在启动后和健康检查后各记录一次实例 PID。动态批量对账先按当前激活顺序逆序停用整批变化，再按期望定义顺序启动；激活失败时卸载本批新实例并恢复旧批次。当前 26 个 Manager hook 已按单一关键 disposer 组织；统一验证已于 2026-08-21 通过。
+
+## 统一验证
+
+2026-08-21 完成以下验证：
+
+- `git diff --check`
+- `npx tsc -p tsconfig.json --noEmit`
+- `npm run build:backend`
+- `npm test`：源码测试 1339 项，1338 项通过、1 项跳过；脚本测试 55 项全部通过
+- `npm run webgui:build`
+- `npm run check:config`
+- `.\.venv-tray\Scripts\python.exe -m unittest discover -s desktop\tray-task-window\tests -p test_*.py`：197 项通过
 
 ## 服务、事件与贡献项
 
@@ -279,7 +300,7 @@ Fiber 可以撤销服务注册、监听器、端口、定时器、watcher、子�
 
 Fiber 无法撤销已经发送的消息、远端 API 写入、设备指令或其他系统已读取的数据。这些操作继续经过 Outbox、幂等 reservation、投递 receipt 和业务补偿。
 
-插件停用前停止接收新工作，并等待当前投递进入明确终态。disposer 只清理本机生命周期资源。
+插件停用前停止接收新工作，并等待当前投递进入明确终态。`/manager` 和所有 `/manager/*` 始终属于控制路径；未知或拼错路径返回 Manager JSON 404，不进入 WebGUI HTML 回退。disposer 只清理本机生命周期资源。
 
 ## 配置模型
 
@@ -375,25 +396,19 @@ RabiRoute：
 
 ### 阶段 5：WebGUI 与 Desktop 声明式扩展
 
-当前状态：受控内置表现入口已实现。Plugin Catalog 决定宿主预先注册的页面、菜单、状态、设置、快捷键和主题是否出现，不加载插件提供的 Vue 组件、CSS、脚本或命令处理器。WebGUI 使用固定 `routeId -> rendererId -> Vue component` 注册表，导航只引用同一插件实例、同一批次中的已激活页面；首次目录失败进入固定恢复页，后续失败保留最近成功目录。Desktop 只执行固定处理器并复用现有截图控制器和用户保存的按键配置。目录带 Manager 运行代次；Desktop 定时重试首次失败，并在 Manager 重启后接受新代次的较低修订号。
+当前状态：表现 Contribution Catalog 发布八类声明式贡献。WebGUI 与 Desktop 通过宿主拥有的可信注册表解析新的 renderer、route、handler 和 resource contract；未知、未注册、跨插件或宿主不支持的贡献失败关闭。目录不可用时保留恢复入口；第三方任意表现代码的受控 Extension Host 属于后续路线。
 
 当前切片退出条件：目录可控制宿主内置入口出现或消失，失败时保留恢复入口，Manager 重启后不会永久保留旧目录。允许第三方插件提供新的页面组件、主题资源或命令处理器属于阶段 7。
 
 ### 阶段 6：配置对账与局部重载
 
-当前状态：配置驱动的启用、停用、revision 重建和失败回滚已实现，不支持源代码 HMR。十三个内置 Manager 实例进入同一目录，其中八个服务实例没有 UI contribution。
+当前状态：配置驱动的启用、停用、revision 重建和失败回滚已实现，不支持源代码 HMR。26 个内置 Manager 实例共享同一目录和对账器；7 个实例有表现贡献，19 个实例只提供运行能力。
 
-- `manager:gateway-runtime` 激活后启用 `ManagerGatewayRuntimeService` 协调器；停用时停止全部 Gateway，并关闭后续手动启停入口。
-- `manager:rabilink-relay` 在 listener 就绪后同步 Relay；停用时停止 Relay Runtime 和人格同步局域网服务。
-- `manager:memory-consolidation` 每次激活创建新的调度器；停用时停止本实例的一次性进程并等待调度结束，只读 Manager 不启动它。
-- `manager:fennenote-output` 只提供 `/api/playback/request`、`/api/fennenote/playback` 和 `/api/fennenote/reply` 的 Manager 输出入口。FenneNote endpoint 与 token 仍由现有配置边界拥有，发送规则、外发记录和回执仍由 Outbox 拥有。停用时撤销该实例的路由批次、拒绝新请求，中止并等待本实例的在途请求；不影响 FenneNote 入站 Route、历史记录或其他 Outbox channel。该实例没有 UI contribution。
-- `manager:message-processing-control` 只提供消息处理看板的 HTTP 查询、命令和事件接线。消息处理记录、发送上下文审批和持久化仍由 `MessageProcessingBoardStore` 及其业务模块拥有。停用时撤销路由批次，已开始的记录写入可以完成；不删除记录，也不连带停止 `manager:message-processing-automation`。该实例没有 UI contribution。
-- `manager:message-processing-automation` 持有计划变化订阅、知识回调计时器和 Agent 回复提醒；知识回调使用实例代次、单项修订和 Node 定时器上限，触发时重新读取截止时间。停用时清除计时器、阻止旧回调重新排程，并等待已开始的提醒投递。
-- `manager:plan-feedback-delivery` 持有恢复扫描、重试计时器和当前反馈投递；停用后新的反馈保留为待投递。
-- `manager:napcat-supervisor` 在 Manager 自动启动时执行一次登录检查；停用时取消剩余账号队列，等待当前原子检查结束，并屏蔽旧回调。
-- `manager:performance` 每次激活创建新的 `PerformanceApi` 和路由批次；停用时关闭样本订阅、SSE 客户端和性能监控服务。
+26 个 definition 均有对应 hook。业务 HTTP 路由由插件 `apply` hook 注册到 `ManagerPluginRouteRegistry`；中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。Desktop 生命周期与设置、诊断、Gateway 管理、扫描、Agent 控制、Remote Agent、NapCat、消息处理、计划反馈和后台服务都随所属实例启停。
 
-当前切片已覆盖十三个内置实例的目录与对账边界。剩余迁移集中在消息端扫描和 NapCat 控制、Agent Adapter 扫描与安装登录、Agent 任务与外发、Remote Agent 连接、诊断查询，以及仍由 `controlPlaneRoutes.ts` 直接分发的 Gateway 管理 API。独立重载前仍需为外部进程、Worker、WebSocket、UDP 和在途投递补齐 owner、取消、drain 与代次防护；重启后的运行验收仍待完成。
+每个 hook 使用一个关键 disposer 执行 `unregister → stop accepting → drain → stop resources → await exit`。Cordis 会并行执行同一 Fiber 的多个 disposer，因此有顺序依赖的步骤不拆到多个 `ctx.effect()`。
+
+剩余工作是第三方自定义表现代码的受控 Extension Host、权限边界和统一验证；统一验证已于 2026-08-21 通过。
 
 ### 阶段 7：树外代码插件与隔离
 
@@ -559,26 +574,21 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 
 ## 第十二个实施切片：Manager Plugin Runtime 与统一目录
 
-1. 将 Gateway 根中的并发初始化去重、失败重试、等待初始化销毁和幂等销毁提取为通用 `RabiCordisRoot`，Gateway 与 Manager 使用对称的独立根 API；
-2. Manager 启动时在单一 Manager 根 Context 下挂载 `PluginCatalog`、`ContributionRegistry` 和内置 Manager 插件；
-3. Plugin Catalog 记录稳定实例 ID、manifest、宿主、作用域、状态、缺失能力、启动/停止时间和脱敏错误；
-4. 每个 Manager 插件使用独立 Fiber，激活失败回滚自身贡献，卸载只清理自身注册，根销毁清空整个 Manager 目录；
-5. `GET /api/plugins/catalog` 统一返回插件与贡献修订号、实例状态及声明式贡献，并支持 `host=web|desktop`；
-6. 内置 Manager 插件已声明当前 WebGUI 导航、设置区、状态卡片、Desktop 命令和托盘菜单；WebGUI 与 Desktop 使用各自的本地能力注册表和固定 ID 白名单消费这些贡献。
+1. Manager 根 Context 挂载 `PluginCatalog`、`ContributionRegistry` 和 26 个内置 Manager 插件；
+2. 每个插件使用独立 Fiber，激活失败回滚自身贡献，卸载只清理自身注册；
+3. `GET /api/plugins/catalog` 返回实例状态和表现贡献；
+4. 表现目录只包含八类 contribution，业务 HTTP 路由由插件 `apply` hook 注册。
 
 `create-manager-contribution-catalog` 已完成。
 
 ## 第十三个实施切片：Schema v2 与表现端目录消费
 
-1. Plugin manifest 和 Contribution 使用字段白名单，公开目录不携带任意 URL、接口、请求正文或资源路径；
-2. WebGUI 请求 `host=web`，使用宿主固定的 `routeId`、图标和位置映射生成侧栏、使用手册和人格同步入口；
-3. Desktop 请求 `host=desktop`，缓存最近成功目录，异步生成“插件”托盘菜单；
-4. `navigation.routeId` 只能引用同一插件实例、同一批次中的 `page.routeId`；WebGUI 只加载固定 `rendererId` 对应的内置 Vue 组件；
-5. `tray-menu.commandId` 与 `hotkey.commandId` 只能引用同一插件实例、同一批次中的安全 `command.id`；Desktop 只执行固定 handler，截图与剪贴板贴图快捷键复用现有控制器；
-6. WebGUI 与 Desktop 只接受 `system`、`light`、`dark` 及对应宿主内置资源 ID，不接受插件目录或资源路径；
-7. 未知 Schema、未知 ID、跨插件引用、危险命令和宿主不支持的能力被拒绝或忽略。WebGUI 首次目录失败进入固定恢复页，Desktop 保留固定恢复入口；后续失败继续使用最近成功目录。
+1. WebGUI 与 Desktop 使用宿主拥有的可信注册表解析新的 renderer、route、handler 和 resource contract；
+2. 同实例、同批次引用必须可解析；未知、未注册、跨插件和不支持的贡献失败关闭；
+3. 目录不携带任意 URL、请求正文或资源路径；
+4. 第三方任意表现代码的受控 Extension Host 属于后续路线。
 
-`extend-webgui-desktop` 已完成。`requiredCapabilities` 由目标宿主的本地能力注册表按 AND 语义判断，插件 manifest 不能替宿主声明渲染或执行能力。下一阶段增加配置对账、局部重载与独立进程插件。
+`extend-webgui-desktop` 已完成。统一验证已于 2026-08-21 通过。
 
 ## 第十四个实施切片：配置对账与局部重载
 
@@ -586,7 +596,7 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 2. Manager watcher 同时跟踪 `manager.json`、Route 配置和人格配置；
 3. `ManagerPluginReconciler` 串行比较期望 revision，只启停或重载变化实例；
 4. 新定义激活失败后恢复旧定义，回滚失败保留 `rollback_failed`；
-5. persona、speech、performance 的后台副作用和 HTTP 入口跟随插件活动状态；
+5. 26 个内置 Manager 插件的 HTTP、服务和后台副作用跟随各自实例活动状态；
 6. `GET /api/plugins/reconciliation` 和 `POST /api/plugins/reconcile` 提供状态与手动对账；
 7. WebGUI 监听 `plugin_catalog_changed`，不增加业务轮询。
 
@@ -610,4 +620,5 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 - 核心事实所有者没有变化；
 - WebGUI 与 Desktop 的扩展入口已纳入长期设计；
 - 第一阶段兼容入口和验收矩阵已固定；
+- 26 个 Manager 插件的统一验证已于 2026-08-21 通过；
 - 未关联工作区修改保持不变。

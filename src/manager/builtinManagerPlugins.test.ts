@@ -11,12 +11,25 @@ test("built-in Manager plugins publish the current WebGUI and Desktop contributi
     "manager:performance",
     "manager:desktop",
     "manager:gateway-runtime",
+    "manager:bilibili-history",
+    "manager:route-control",
+    "manager:message-adapter-control",
+    "manager:agent-adapter-catalog",
+    "manager:agent-state-control",
+    "manager:agent-thread-control",
+    "manager:agent-communication",
+    "manager:copilot-control",
+    "manager:astrbot-control",
+    "manager:marvis-control",
+    "manager:remote-agent",
+    "manager:diagnostics",
     "manager:rabilink-relay",
     "manager:memory-consolidation",
     "manager:fennenote-output",
     "manager:message-processing-control",
     "manager:message-processing-automation",
     "manager:plan-feedback-delivery",
+    "manager:napcat-control",
     "manager:napcat-supervisor"
   ]);
   const contributions = definitions.flatMap(item => item.contributions ?? []);
@@ -24,7 +37,7 @@ test("built-in Manager plugins publish the current WebGUI and Desktop contributi
   assert.equal(new Set(keys).size, keys.length);
   assert.deepEqual(
     contributions.filter(item => item.kind === "navigation").map(item => item.id),
-    ["overview", "message-adapters", "runtime", "settings", "docs", "persona", "knowledge", "persona-sync", "speech", "performance"]
+    ["overview", "settings", "docs", "persona", "knowledge", "persona-sync", "speech", "performance", "message-adapters", "runtime"]
   );
   assert.equal(contributions.some(item => item.hosts.includes("desktop")), true);
   const desktopCommands = new Set(
@@ -98,16 +111,27 @@ test("builtin Desktop hotkeys reference commands from the same plugin instance",
   );
 });
 
-test("builtin Manager service plugins publish no UI contributions", () => {
+test("builtin Manager plugins without presentation entries publish no UI contributions", () => {
   const definitions = builtinManagerPluginDefinitions();
   const serviceInstanceIds = [
     "manager:gateway-runtime",
+    "manager:bilibili-history",
+    "manager:route-control",
+    "manager:agent-adapter-catalog",
+    "manager:agent-state-control",
+    "manager:agent-thread-control",
+    "manager:agent-communication",
+    "manager:copilot-control",
+    "manager:astrbot-control",
+    "manager:marvis-control",
+    "manager:remote-agent",
     "manager:rabilink-relay",
     "manager:memory-consolidation",
     "manager:fennenote-output",
     "manager:message-processing-control",
     "manager:message-processing-automation",
     "manager:plan-feedback-delivery",
+    "manager:napcat-control",
     "manager:napcat-supervisor"
   ];
 
@@ -120,4 +144,21 @@ test("builtin Manager service plugins publish no UI contributions", () => {
       })),
     serviceInstanceIds.map(instanceId => ({ instanceId, contributions: [] }))
   );
+});
+
+
+test("built-in Manager manifests expose only actual target hosts and contribution capability", () => {
+  const definitions = builtinManagerPluginDefinitions();
+  for (const definition of definitions) {
+    const contributionHosts = new Set((definition.contributions ?? []).flatMap(item => item.hosts));
+    assert.deepEqual(definition.manifest.hosts, [
+      "manager",
+      ...(contributionHosts.has("web") ? ["web"] : []),
+      ...(contributionHosts.has("desktop") ? ["desktop"] : [])
+    ]);
+    assert.deepEqual(
+      definition.manifest.capabilities ?? [],
+      definition.contributions?.length ? ["manager.contributions"] : []
+    );
+  }
 });

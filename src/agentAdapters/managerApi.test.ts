@@ -70,6 +70,12 @@ test("Codex settings scan uses the Desktop user-facing task catalog", async () =
   });
 
   const codex = (result.agents as Record<string, { sessions?: Array<{ id?: string; name: string }> }>).codex;
+  const legacy = result.legacy as Record<string, unknown>;
+  assert.deepEqual(legacy.threadNames, result.threadNames);
+  assert.deepEqual(legacy.cwdOptions, result.cwdOptions);
+  assert.deepEqual(legacy.copilotSessions, result.copilotSessions);
+  assert.deepEqual(legacy.copilotBins, result.copilotBins);
+  assert.deepEqual(legacy.marvisAppIds, result.marvisAppIds);
   assert.equal(catalogCalls, 1);
   assert.deepEqual(codex.sessions, [{
     id: expectedId,

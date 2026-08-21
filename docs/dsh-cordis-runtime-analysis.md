@@ -2,7 +2,7 @@
 
 # DSH 如何使用 Cordis：运行时、界面与隔离分析
 
-> 状态：基于 DSH `141eb6f`、`dsh@0.1.0-rc.8` 的实现调查。
+> 状态：基于 DSH `528c682e06`、`dsh@0.1.1-rc.1` 的实现调查。
 >
 > 主要读者：RabiRoute 维护者、插件运行时设计者与 WebGUI/Desktop 扩展开发者。
 
@@ -21,11 +21,11 @@ DSH 没有把所有插件放进独立进程。
 
 ## 调查快照
 
-2026-08-21 核对的 DSH 官方 `master` 与本地调查副本均指向：
+2026-08-21 14:21:44 +08:00 后核对的 DSH 官方 `master` 与本地调查副本均指向：
 
-- [DeepSeek Harness `141eb6f`](https://github.com/deepseek-ai/deepseek-harness/tree/141eb6fef83422698aef7a981029e843e8161534)，`dsh@0.1.0-rc.8`；
-- DSH vendored [`@deepseek-ai/cordis` 4.0.0-rc.7](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/README.md#manifest)；
-- DSH vendored [`@deepseek-ai/cordis-plugin-loader` 1.0.0-rc.5](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/README.md#manifest)；
+- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006)，`dsh@0.1.1-rc.1`；
+- DSH vendored [`@deepseek-ai/cordis` 4.0.0-rc.7](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest)；
+- DSH vendored [`@deepseek-ai/cordis-plugin-loader` 1.0.0-rc.5](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest)；
 - [Cordis 组合性论文 v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf)。
 
 DSH 没有直接消费公开 npm 上游包。它把 Cordis、Loader、Include、Group、HMR、Timer 等源码固定在 `vendor/`，改名到 `@deepseek-ai`，并维护本地修改清单。
@@ -337,15 +337,15 @@ Cordis 适合组合能力和生命周期。RabiRoute 的 Route、事件记录、
 
 ## 主要证据路径
 
-- [DSH 架构](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/architecture.md)
-- [DSH Cordis 入门](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/cordis-primer.md)
-- [profile 与插件安装](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/apps/cli/reference/README.md)
-- [vendored Cordis 版本和本地修改](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/README.md)
-- [Loader Entry 导入与更新](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/loader/src/config/entry.ts)
-- [服务 realm 的 `isolate` 实现](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/vendor/loader/src/config/isolate.ts)
-- [Web 客户端 Cordis 启动](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/client/web/README.md)
-- [UI Slot 生命周期](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/client/ui-slots/README.md)
-- [动态 Host 插件 VM 与非封闭说明](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/extensions/cordis-host-runner/src/sandbox.ts)
-- [动态 Host Context façade](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/extensions/cordis-host-runner/src/guard.ts)
-- [动态浏览器插件求值](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/packages/extensions/cordis-client-runner/src/client/evaluator.ts)
-- [DSH 进程沙箱](https://github.com/deepseek-ai/deepseek-harness/blob/141eb6fef83422698aef7a981029e843e8161534/docs/subsystems/sandbox.md)
+- [DSH 架构](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/architecture.md)
+- [DSH Cordis 入门](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/cordis-primer.md)
+- [profile 与插件安装](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/apps/cli/reference/README.md)
+- [vendored Cordis 版本和本地修改](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md)
+- [Loader Entry 导入与更新](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/loader/src/config/entry.ts)
+- [服务 realm 的 `isolate` 实现](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/loader/src/config/isolate.ts)
+- [Web 客户端 Cordis 启动](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/client/web/README.md)
+- [UI Slot 生命周期](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/client/ui-slots/README.md)
+- [动态 Host 插件 VM 与非封闭说明](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/extensions/cordis-host-runner/src/sandbox.ts)
+- [动态 Host Context façade](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/extensions/cordis-host-runner/src/guard.ts)
+- [动态浏览器插件求值](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/packages/extensions/cordis-client-runner/src/client/evaluator.ts)
+- [DSH 进程沙箱](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/subsystems/sandbox.md)

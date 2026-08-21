@@ -174,7 +174,7 @@ test("reviewed fallback evidence cannot cross the requested group or skip attach
   const reviewed: ReviewedReplySourceEvidence = {
     routeId: "route-main",
     sourceMessageId: "source-1",
-    groupId: "474222421",
+    groupId: "100200300",
     instanceId: "qq-main",
     record,
     dataDirs: [routeDataDir],
@@ -182,7 +182,7 @@ test("reviewed fallback evidence cannot cross the requested group or skip attach
   };
   assert.throws(
     () => prepareReplyImageDescriptions(send(["截图展示配置文字乱码。"]), replyOptions, reviewed),
-    /reviewed source group 474222421 does not match target group 456/i
+    /reviewed source group 100200300 does not match target group 456/i
   );
   reviewed.groupId = "456";
   reviewed.reviewedAttachmentIds = [];

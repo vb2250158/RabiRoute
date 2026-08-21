@@ -1,6 +1,5 @@
 import dgram from "node:dgram";
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
@@ -29,6 +28,27 @@ function closeWebSocketSafely(socket: WebSocket): void {
     socket.off("close", release);
     release();
   }
+}
+
+async function closeWebSocketAndWait(socket: WebSocket): Promise<void> {
+  if (socket.readyState === WebSocket.CLOSED) return;
+  await new Promise<void>(resolve => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.off("close", finish);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      try { socket.terminate(); } catch {}
+      finish();
+    }, 2_000);
+    timer.unref?.();
+    socket.once("close", finish);
+    closeWebSocketSafely(socket);
+  });
 }
 
 export type RemoteAgentDeviceInfo = {
@@ -70,7 +90,7 @@ export type RemoteAgentFileTransfer = {
 
 export type RemoteAgentTaskEvent = {
   taskId?: string;
-  status?: "queued" | "delivered" | "started" | "progress" | "completed" | "failed";
+  status?: "queued" | "delivered" | "started" | "progress" | "completed" | "failed" | "interrupted";
   summary?: string;
   message?: string;
   artifactPath?: string;
@@ -92,7 +112,7 @@ export type RemoteAgentTask = {
   files: RemoteAgentFileTransfer[];
   originGatewayId: string;
   originReplyContext?: Record<string, unknown>;
-  status: "queued" | "delivered" | "started" | "progress" | "completed" | "failed";
+  status: "queued" | "delivered" | "started" | "progress" | "completed" | "failed" | "interrupted";
   createdAt: string;
   updatedAt: string;
   events: RemoteAgentTaskEvent[];
@@ -153,9 +173,9 @@ export type RemoteAgentHubOptions = {
   fileStoreDir?: string;
   connectionTimeoutMs?: number;
   getDefaultGatewayId: () => string | undefined;
-  onTaskEvent?: (task: RemoteAgentTask, event: RemoteAgentTaskEvent) => void | Promise<void>;
+  onTaskEvent?: (task: RemoteAgentTask, event: RemoteAgentTaskEvent, signal: AbortSignal) => void | Promise<void>;
   /** Manager-owned persistence hook for the persona conversation ledger. */
-  onConversationRecord?: (record: MessageContextRecord) => void | Promise<void>;
+  onConversationRecord?: (record: MessageContextRecord, signal: AbortSignal) => void | Promise<void>;
 };
 
 type PasswordStore = {
@@ -391,19 +411,32 @@ export class RemoteAgentHub {
   private readonly devices = new Map<string, RemoteAgentDeviceRecord>();
   private readonly tasks = new Map<string, RemoteAgentTask>();
   private readonly options: RemoteAgentHubOptions;
+  private readonly activeCallbacks = new Set<Promise<void>>();
+  private readonly callbackAbortController = new AbortController();
+  private accepting = true;
   private lastScanError = "";
 
   constructor(options: RemoteAgentHubOptions) {
     this.options = options;
   }
 
-  attach(_server: http.Server): void {
-    // Remote Agent v3 uses Rabi as the outbound controller. This method is kept
-    // so older manager wiring can call it without exposing an inbound token API.
+  stopAccepting(reason = "Remote Agent plugin stopped."): void {
+    if (!this.accepting) return;
+    this.accepting = false;
+    this.callbackAbortController.abort(reason);
+    for (const task of this.tasks.values()) {
+      if (task.status === "completed" || task.status === "failed" || task.status === "interrupted") continue;
+      this.patchTask(task.taskId, { status: "interrupted", error: reason });
+    }
   }
 
-  startDiscoveryResponder(): void {
-    console.log("Remote Agent manager discovery responder is not used in v3; RabiGUI scans remote clients instead.");
+  async shutdown(reason = "Remote Agent plugin stopped."): Promise<void> {
+    this.stopAccepting(reason);
+    const sockets = [...this.devices.values()].map(record => record.socket);
+    this.devices.clear();
+    await Promise.allSettled(sockets.map(closeWebSocketAndWait));
+    await this.drainCallbacks();
+    this.discovered.clear();
   }
 
   localScanResult(): {
@@ -457,6 +490,7 @@ export class RemoteAgentHub {
   }
 
   async scanLan(timeoutMs = 1400): Promise<RemoteAgentDeviceStatus[]> {
+    this.assertAccepting();
     const found = await this.discoverRemoteAgents(timeoutMs);
     for (const item of found) {
       this.discovered.set(item.deviceId, item);
@@ -465,6 +499,7 @@ export class RemoteAgentHub {
   }
 
   async connectDevice(request: RemoteAgentConnectRequest): Promise<RemoteAgentDeviceStatus> {
+    this.assertAccepting();
     const deviceId = String(request.deviceId || "").trim();
     if (!deviceId) throw new Error("Missing remote Agent device id.");
     const discovered = this.discovered.get(deviceId);
@@ -582,6 +617,7 @@ export class RemoteAgentHub {
     });
 
     socket.on("message", (data) => {
+      if (!this.accepting) return;
       try {
         const message = safeJsonParse(data) as RemoteAgentSocketMessage;
         record.lastSeenAt = nowIso();
@@ -646,6 +682,7 @@ export class RemoteAgentHub {
   }
 
   async createTask(request: RemoteAgentTaskRequest): Promise<RemoteAgentTask> {
+    this.assertAccepting();
     const devices = this.listDevices().filter((device) => device.connected);
     const targetDevice = request.deviceId
       ? devices.find((device) => device.deviceId === request.deviceId)
@@ -698,6 +735,7 @@ export class RemoteAgentHub {
   }
 
   receiveTaskEvent(event: RemoteAgentTaskEvent, sourceDeviceId = event.device?.deviceId): RemoteAgentTask {
+    this.assertAccepting();
     if (!event.taskId) {
       throw new Error("Remote Agent task event is missing taskId.");
     }
@@ -712,7 +750,7 @@ export class RemoteAgentHub {
     if (normalizedSourceDeviceId !== existing.deviceId) {
       throw new Error(`Remote Agent device ${normalizedSourceDeviceId} does not own task ${event.taskId}.`);
     }
-    if (existing.status === "completed" || existing.status === "failed") {
+    if (existing.status === "completed" || existing.status === "failed" || existing.status === "interrupted") {
       return existing;
     }
     const storedEvent = event.files?.length
@@ -721,21 +759,50 @@ export class RemoteAgentHub {
     const task = this.patchTask(event.taskId, storedEvent);
     const contextRecord = remoteAgentTaskEventContextRecord(task, storedEvent);
     if (contextRecord) this.emitConversationRecord(contextRecord);
-    void Promise.resolve(this.options.onTaskEvent?.(task, storedEvent))
-      .catch((error) => {
-        this.patchTask(task.taskId, {
-          status: "failed",
-          error: `Remote Agent task event handler failed: ${error instanceof Error ? error.message : String(error)}`
-        });
-      });
+    this.trackCallback(
+      Promise.resolve()
+        .then(async () => {
+          await this.options.onTaskEvent?.(task, storedEvent, this.callbackAbortController.signal);
+        })
+        .catch((error) => {
+          if (this.callbackAbortController.signal.aborted) return;
+          const latest = this.tasks.get(task.taskId);
+          if (!latest || latest.status === "interrupted") return;
+          this.patchTask(task.taskId, {
+            status: "failed",
+            error: `Remote Agent task event handler failed: ${error instanceof Error ? error.message : String(error)}`
+          });
+        })
+    );
     return task;
   }
 
   private emitConversationRecord(record: MessageContextRecord): void {
-    void Promise.resolve(this.options.onConversationRecord?.(record))
-      .catch((error) => {
-        console.warn(`Remote Agent conversation record failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
+    this.trackCallback(
+      Promise.resolve()
+        .then(async () => {
+          await this.options.onConversationRecord?.(record, this.callbackAbortController.signal);
+        })
+        .catch((error) => {
+          if (this.callbackAbortController.signal.aborted) return;
+          console.warn(`Remote Agent conversation record failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+    );
+  }
+
+  private async drainCallbacks(): Promise<void> {
+    while (this.activeCallbacks.size > 0) {
+      await Promise.allSettled([...this.activeCallbacks]);
+    }
+  }
+
+  private trackCallback(callback: Promise<void>): void {
+    this.activeCallbacks.add(callback);
+    void callback.finally(() => this.activeCallbacks.delete(callback));
+  }
+
+  private assertAccepting(): void {
+    if (!this.accepting) throw new Error("Remote Agent plugin is stopping or inactive.");
   }
 
   private async discoverRemoteAgents(timeoutMs: number): Promise<RemoteAgentDiscoveredDevice[]> {

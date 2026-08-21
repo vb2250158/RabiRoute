@@ -7,11 +7,6 @@ import {
 } from "../personaVoiceTranscriptView.js";
 import { PersonaSyncService } from "../personaSync.js";
 import {
-  scanAgentAdapters,
-  type AgentScanOptions,
-  type AgentScanRuntimeSnapshot
-} from "../agentAdapters/managerApi.js";
-import {
   getConsolidatedMemory,
   getRecentMemory,
   listActiveRecentMemories,
@@ -68,12 +63,6 @@ export type ManagerReadWorkerTask =
   | {
       type: "role_memory_counts";
       roleDir: string;
-    }
-  | {
-      type: "agent_scan";
-      rootDir: string;
-      runtimes: AgentScanRuntimeSnapshot[];
-      options: AgentScanOptions;
     }
   | {
       type: "performance_summary";
@@ -215,8 +204,6 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
       };
     case "role_memory_counts":
       return roleMemoryCounts(task.roleDir);
-    case "agent_scan":
-      return scanAgentAdapters({ rootDir: task.rootDir, runtimes: task.runtimes }, task.options);
     case "performance_summary": {
       const samples = await readPerformanceSummarySamples(task.logDirectory, task.rangeMs);
       return JSON.stringify({

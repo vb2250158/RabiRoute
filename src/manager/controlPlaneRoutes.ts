@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
@@ -19,11 +19,8 @@ import {
   deployAstrbotAdapter,
   getCopilotStatus,
   openMarvis,
-  scanDshAgentAdapter,
   testAstrbotLogin as testAstrbotLoginEndpoint,
-  type AgentManagerApiContext,
-  type AstrbotLoginTestRequest,
-  type MarvisOpenRequest
+  type AgentManagerApiContext
 } from "../agentAdapters/managerApi.js";
 import type { MessageAdapterType } from "../adapters/messageAdapter.js";
 import type { ForwardRouteKind } from "../forwarding.js";
@@ -40,38 +37,34 @@ import {
   type MessageProcessingDeliveryTarget
 } from "./messageProcessingDeliveryTarget.js";
 import { listDeliveryReplayAttempts } from "../deliveryReplayLedger.js";
+import type { DeliveryReplayRequest } from "../deliveryReplay.js";
 import {
   autoLoginNapcatInstancesOnRabiStart,
   configureNapcatOneBot,
   ensureNapcatInstanceReady,
   launchNapcatInstance as launchNapcatInstanceEndpoint,
+  launchNapcatProcess as launchManagedNapcatProcess,
   nextFreeLocalPort,
   prepareManagedNapcatInstance,
   restartNapcatInstance as restartNapcatInstanceEndpoint,
   scanNapcatEndpoint,
   stopNapcatInstance as stopNapcatInstanceEndpoint,
-  testNapcatHealth as testNapcatHealthEndpoint
+  testNapcatHealth as testNapcatHealthEndpoint,
+  type NapcatLaunchPlan,
+  type NapcatLaunchRequest as ManagedNapcatLaunchRequest
 } from "../messageEndpoints/napcatManager.js";
 import {
   scanNapcatHealthReadOnly,
   type NapcatHealthScanPayload
 } from "../messageEndpoints/napcatHealthScan.js";
-import {
-  scanFenneNoteEndpoint,
-  scanRabiLinkEndpoint,
-  scanWearableEndpoint,
-  scanWebhookEndpoint,
-  scanXiaoAiEndpoint
-} from "../messageEndpoints/webhookLikeScans.js";
-import { scanWeComEndpoint } from "../messageEndpoints/wecomManager.js";
 import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type RemoteAgentTaskRequest } from "../messageEndpoints/remoteAgentManager.js";
-import { appendMessageContextToDir, recentMessageContextItems } from "../messageContextStore.js";
+import { appendMessageContextToDir } from "../messageContextStore.js";
 import { SpeechIngressStore } from "../speechIngressStore.js";
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
 import { createManagerOperationalLog, managerOperationalError } from "./operationalLog.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
 import { PerformanceApi } from "./performanceRoutes.js";
-import { measureSyncPerformanceOperation, recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
+import { measureSyncPerformanceOperation } from "../performance/performanceInstrumentation.js";
 import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { readJsonlTail } from "./jsonlTail.js";
 import { requestWeixinLogin } from "../weixinLoginRequest.js";
@@ -142,8 +135,9 @@ import {
   gatewayMessageAdapterTypes as sharedGatewayMessageAdapterTypes,
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   primaryMessageProcessingAgentAdapter,
-  primaryMessageProcessingAgentEnabled,
   definitionUsesNapcat as sharedDefinitionUsesNapcat,
+  normalizeNapCatInstances as sharedNormalizeNapCatInstances,
+  sanitizeInstanceId,
   gatewayAdapterTypes as sharedGatewayAdapterTypes,
   normalizeCodexHookSettings,
   normalizeGatewayDefinition as sharedNormalizeGatewayDefinition,
@@ -177,7 +171,6 @@ import {
 } from "../shared/routeIdentity.js";
 import {
   adapterConfigPath as resolveAdapterConfigPath,
-  roleFilePath,
   roleFolderPath,
   routeFolderPath,
   personaConfigPath as resolvePersonaConfigPath
@@ -187,7 +180,6 @@ import { collectWatchedConfigFiles, configFilesSnapshot } from "./configWatchSna
 import { configWatchDirectoryRules, configWatchEventMatches } from "./configWatchPolicy.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
 import { resolveReportedCodexBindingUpdate } from "./codexBindingUpdate.js";
-import { handleDesktopLifecycleApi } from "./desktopLifecycleRoutes.js";
 import { proxySpeechEventStream } from "./speechEventProxy.js";
 import {
   CodexHookContextService,
@@ -202,6 +194,32 @@ import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
 import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
 import { composeBuiltinManagerPluginDefinitions } from "./builtinManagerPluginComposition.js";
 import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { isManagerControlRequestPath } from "./managerHttpRequestClassification.js";
+import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
+import { createDesktopControlRoutes, desktopConfigFilePayload } from "./desktopControlRoutes.js";
+import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
+import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
+import { handleRemoteAgentApi as handleRemoteAgentPluginApi } from "./remoteAgentRoutes.js";
+import { createAgentThreadControlRoutes } from "./agentThreadControlRoutes.js";
+import { createAgentCommunicationRoutes, type AgentCommunicationHttpResponse } from "./agentCommunicationRoutes.js";
+import { createAgentProviderControlRouteHandler } from "./agentProviderControlRoutes.js";
+import { AgentProviderProcessScope, CopilotControlService } from "./agentProviderControlService.js";
+import { AgentAdapterCatalogService, mountAgentAdapterCatalogPlugin } from "./agentAdapterCatalog.js";
+import {
+  MessageAdapterControlService,
+  MessageAdapterScanProviderRegistry,
+  handleMessageAdapterControlApi,
+  registerBuiltinMessageAdapterScanProviders,
+  type MessageAdapterEndpoint,
+  type MessageAdapterScanResult as PluginMessageAdapterScanResult
+} from "./messageAdapterControl.js";
+import {
+  handleNapcatControlApi,
+  type NapcatAddRequest,
+  type NapcatHealthRequest,
+  type NapcatLaunchRequest,
+  type NapcatRemoveRequest
+} from "./napcatControlRoutes.js";
 import { FenneNoteOutputService } from "./fenneNoteOutputService.js";
 import { handleMessageProcessingApi } from "./messageProcessingRoutes.js";
 import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";
@@ -209,7 +227,7 @@ import { NapcatSupervisorService } from "./napcatSupervisorService.js";
 import { MessageProcessingAutomationService } from "./messageProcessingAutomationService.js";
 import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderService.js";
 import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
-import { stopChildProcessTree } from "../runtime/windowsProcessTree.js";
+import { runWindowsTaskkill, stopChildProcessTree } from "../runtime/windowsProcessTree.js";
 import {
   normalizeManagerPluginConfig,
   type ManagerPluginConfigDiagnostic
@@ -225,7 +243,6 @@ import {
   type PlanApprovalFeedbackTaskRequest
 } from "./planApprovalFeedbackDelivery.js";
 import {
-  listOpenPlanFeedbackRecoveryCandidates,
   recoverPlanFeedbackCandidate,
   type PlanFeedbackRecoveryTaskRequest
 } from "./planFeedbackRecovery.js";
@@ -279,14 +296,12 @@ import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
 import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
-import { summarizeIndependentAdapterHealth, type AdapterOperationalHealth } from "./messageAdapterHealth.js";
-import { runBoundedScans, type ScanDiagnostic } from "./scanController.js";
+import type { ScanDiagnostic } from "./scanController.js";
 import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
 import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
 import {
   ManagerReadWorkerError,
-  managerAgentScanWorkerPool,
   managerCatalogWorkerPool,
   managerPerformanceWorkerPool,
   managerReadWorkerPool
@@ -340,11 +355,7 @@ import type {
   SpeechSynthesisCommand
 } from "../shared/speechControlContract.js";
 import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
-import {
-  gatewayPayloadIncludesConfigDefinitions,
-  gatewayPayloadIncludesDiagnostics,
-  standaloneGatewayPayload as buildStandaloneGatewayPayload
-} from "./statusPayload.js";
+import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import { handlePersonaDocumentApi } from "./personaDocumentRoutes.js";
 import {
   applyMemoryConsolidationResult,
@@ -371,11 +382,7 @@ import {
   updateRecentMemory,
   validateRoleKnowledge
 } from "../roleKnowledge.js";
-import {
-  presentPlan,
-  presentPlans,
-  sortKnowledgeByUpdatedAt
-} from "../roleKnowledgePresentation.js";
+import { presentPlan, presentPlans } from "../roleKnowledgePresentation.js";
 import {
   normalizeRoleMemoryPageLimit,
   normalizeRolePlanPageLimit,
@@ -745,68 +752,6 @@ type NapCatInstanceDefinition = {
   botNickname?: string;
 };
 
-type AgentMaturity = "verified" | "experimental" | "stub";
-
-type AgentScanSession = {
-  id?: string;
-  name: string;
-  projectPath?: string;
-  projectId?: string;
-  updatedAt?: string;
-  userNamed?: boolean;
-};
-
-type AgentScanProject = {
-  id?: string;
-  label: string;
-  path: string;
-  exists: boolean;
-};
-
-type AgentScanResult = {
-  type: AgentAdapterType;
-  label: string;
-  maturity: AgentMaturity;
-  installed: boolean;
-  installCandidates?: Array<{ label: string; path?: string; url?: string }>;
-  auth?: { required: boolean; loggedIn?: boolean; loginUrl?: string; message?: string };
-  endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
-  projects?: AgentScanProject[];
-  sessions?: AgentScanSession[];
-  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
-  warnings?: string[];
-};
-
-type AdapterRequirement = {
-  id: string;
-  label: string;
-  required?: boolean;
-  ok?: boolean;
-  detail?: string;
-  actionLabel?: string;
-  url?: string;
-  path?: string;
-};
-
-type AdapterEndpoint = {
-  label: string;
-  url: string;
-  healthy?: boolean;
-};
-
-type MessageAdapterScanResult = {
-  type: Exclude<MessageAdapterType, "disabled">;
-  label: string;
-  maturity: AgentMaturity;
-  installed: boolean;
-  installCandidates?: Array<{ label: string; path?: string; url?: string }>;
-  endpoints?: AdapterEndpoint[];
-  requirements?: AdapterRequirement[];
-  warnings?: string[];
-  scan?: ScanDiagnostic;
-  health?: AdapterOperationalHealth;
-};
-
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
 const managerHttpLimits = {
@@ -836,13 +781,8 @@ const managerHostOverride = process.env.GATEWAY_MANAGER_HOST?.trim() || "";
 const managerHost = managerHostOverride || (!managerReadOnly && rabiGlobalConfig.read().webguiLan.enabled ? "0.0.0.0" : "127.0.0.1");
 const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
-const remoteAgentDiscoverable = process.env.REMOTE_AGENT_DISCOVERABLE !== "0";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
-const bilibiliHistoryBridge = new BilibiliHistoryBridge(
-  path.join(rootDir, "data", "runtime", "bilibili-history-bridge.json"),
-  () => configRepository.rolesRoot,
-  { readOnly: managerReadOnly }
-);
+let bilibiliHistoryBridge: BilibiliHistoryBridge | undefined;
 const managerEventClients = new Map<http.ServerResponse, NodeJS.Timeout>();
 
 function removeManagerEventClient(response: http.ServerResponse): void {
@@ -1170,28 +1110,8 @@ const speechRuntimeControl = new SpeechRuntimeControl({
 });
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
 const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
-const remoteAgentHub = new RemoteAgentHub({
-  managerPort,
-  managerHost,
-  publicHost: remoteAgentPublicHost,
-  discoveryPort: Number(process.env.REMOTE_AGENT_DISCOVERY_PORT ?? "8798"),
-  passwordStorePath: path.join(rootDir, "data", "remote-agent-connections.json"),
-  fileStoreDir: path.join(rootDir, "data", "remote-agent-files"),
-  getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,
-  onTaskEvent: handleRemoteAgentTaskEvent,
-  onConversationRecord: (record) => {
-    const runtime = record.gatewayId ? runtimes.get(record.gatewayId) : undefined;
-    if (!runtime) {
-      console.warn(`Remote Agent conversation record skipped: Gateway not found (${record.gatewayId || "missing"})`);
-      return;
-    }
-    try {
-      appendMessageContextToDir(roleDirForDefinition(runtime.definition), record);
-    } catch (error) {
-      appendLog(runtime, `remote agent conversation record failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-});
+let remoteAgentHub: RemoteAgentHub | undefined;
+let agentAdapterCatalogService: AgentAdapterCatalogService | undefined;
 let watchedConfigSnapshot = "";
 
 function headerValue(value: string | string[] | undefined): string {
@@ -1364,49 +1284,6 @@ function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
   }) as GatewayDefinition;
 }
 
-function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
-  const adapters = items
-    .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "wearable" || item === "webhook" || item === "wecom" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
-  const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
-  return unique.length > 0 ? unique : ["napcat"];
-}
-
-function sanitizeInstanceId(value: unknown, fallback: string): string {
-  const raw = String(value || "").trim();
-  return raw.replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/-+/g, "-").replace(/^[-_]+|[-_]+$/g, "") || fallback;
-}
-
-function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[] {
-  const source = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
-
-  const used = new Set<string>();
-  return source.map((item, index) => {
-    const baseId = sanitizeInstanceId(item.id, `napcat-${index + 1}`);
-    let id = baseId;
-    let suffix = 2;
-    while (used.has(id)) {
-      id = `${baseId}-${suffix++}`;
-    }
-    used.add(id);
-    const gatewayPort = Number(item.gatewayPort || definition.gatewayPort || 8790 + index);
-    assertValidPort(gatewayPort, `NapCat instance port for ${definition.id}/${id}`);
-    return {
-      id,
-      name: item.name?.trim() || id,
-      enabled: item.enabled !== false,
-      autoLoginOnRabiStart: item.autoLoginOnRabiStart !== false,
-      gatewayPort,
-      httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
-      webuiUrl: item.webuiUrl?.trim() || definition.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
-      accessToken: item.accessToken ?? definition.napcatAccessToken ?? "",
-      webuiToken: item.webuiToken ?? definition.napcatWebuiToken ?? "",
-      launchCommand: item.launchCommand?.trim() || undefined,
-      workingDir: item.workingDir?.trim() || undefined
-    };
-  });
-}
-
 function normalizeCodexCwd(value: unknown): string | undefined {
   return resolvePersistedProjectPath(value, rootDir);
 }
@@ -1433,13 +1310,6 @@ function normalizeIgnoredNapcatInstanceIds(raw: unknown): string[] {
   return [...new Set(raw.map(item => String(item || "").trim()).filter(Boolean))];
 }
 
-function assertValidPort(value: unknown, label: string): void {
-  const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid ${label}: ${value}. Port must be an integer from 1 to 65535.`);
-  }
-}
-
 function personaConfigPath(roleId: string): string {
   return resolvePersonaConfigPath(rolesRoot, roleId);
 }
@@ -1448,16 +1318,12 @@ function adapterConfigPath(configName: string): string {
   return resolveAdapterConfigPath(routeRoot, configName);
 }
 
-function definitionUsesNapcat(definition: GatewayDefinition): boolean {
-  return sharedDefinitionUsesNapcat(definition);
-}
-
 function configPathValue(value: unknown): string | undefined {
   return toPersistedProjectPath(value, rootDir);
 }
 
 export function adapterConfigItem(definition: GatewayDefinition): Record<string, unknown> {
-  const usesNapcat = definitionUsesNapcat(definition);
+  const usesNapcat = sharedDefinitionUsesNapcat(definition);
   return {
     configName: sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName,
     name: definition.name,
@@ -1622,36 +1488,10 @@ function writeAdapterConfigFile(definition: GatewayDefinition): void {
   fs.writeFileSync(configPath, JSON.stringify(adapterConfigItem(definition), null, 2), "utf8");
 }
 
-function backfillNapcatInstanceWebuiToken(definition: GatewayDefinition, instanceId: string, token: unknown): string | null {
-  const value = String(token || "").trim();
-  if (!value) return null;
-  const instances = normalizeNapCatInstances(definition);
-  const target = instances.find((item) => item.id === instanceId);
-  if (!target) return null;
-  let changed = false;
-  if (target.webuiToken !== value) {
-    target.webuiToken = value;
-    changed = true;
-  }
-  if (target.accessToken === value) {
-    target.accessToken = "";
-    changed = true;
-  }
-  if (!changed) return null;
-  definition.napcatInstances = instances;
-  const primary = instances.find((item) => item.enabled !== false) ?? instances[0];
-  if (primary) {
-    definition.napcatAccessToken = primary.accessToken ?? "";
-    definition.napcatWebuiToken = primary.webuiToken ?? "";
-  }
-  writeAdapterConfigFile(definition);
-  return value;
-}
-
 function backfillNapcatInstanceWebuiUrl(definition: GatewayDefinition, instanceId: string, webuiUrl: unknown): string | null {
   const value = String(webuiUrl || "").trim();
   if (!value) return null;
-  const instances = normalizeNapCatInstances(definition);
+  const instances = sharedNormalizeNapCatInstances(definition);
   const target = instances.find((item) => item.id === instanceId);
   if (!target || target.webuiUrl === value) return null;
   target.webuiUrl = value;
@@ -1701,13 +1541,16 @@ function ignoreNapcatInstance(definition: GatewayDefinition, instance: Partial<N
   definition.ignoredNapcatInstanceIds = [...next];
 }
 
-async function addManagedNapcatInstance(request: NapcatAddRequest): Promise<Record<string, unknown>> {
+async function addManagedNapcatInstance(
+  request: NapcatAddRequest,
+  context: ReturnType<typeof napcatManagerCtx>
+): Promise<Record<string, unknown>> {
   const gatewayId = request.gatewayId?.trim();
   if (!gatewayId) throw new Error("缺少 gatewayId。");
   const runtime = runtimes.get(gatewayId);
   if (!runtime) throw new Error(`未找到路由：${gatewayId}`);
   const definition = runtime.definition;
-  const instances = normalizeNapCatInstances(definition);
+  const instances = sharedNormalizeNapCatInstances(definition);
   const index = instances.length + 1;
   const usedIds = new Set(instances.map((item) => item.id));
   let id = sanitizeInstanceId(`napcat-${index}`, `napcat-${index}`);
@@ -1718,7 +1561,7 @@ async function addManagedNapcatInstance(request: NapcatAddRequest): Promise<Reco
   }
   const used = new Set<number>();
   for (const runtimeItem of runtimes.values()) {
-    for (const item of normalizeNapCatInstances(runtimeItem.definition)) {
+    for (const item of sharedNormalizeNapCatInstances(runtimeItem.definition)) {
       used.add(Number(item.gatewayPort || 0));
       try { used.add(Number(new URL(item.httpUrl).port || 0)); } catch { /* ignore */ }
       try { used.add(Number(new URL(item.webuiUrl || "").port || 0)); } catch { /* ignore */ }
@@ -1731,7 +1574,7 @@ async function addManagedNapcatInstance(request: NapcatAddRequest): Promise<Reco
   const wsPort = await nextFreeLocalPort(Number(definition.gatewayPort || 8789) + instances.length, used);
   steps.push(`已分配端口：WebUI ${webuiPort} / HTTP ${httpPort} / WS ${wsPort}`);
 
-  const prepared = prepareManagedNapcatInstance(napcatManagerCtx(), {
+  const prepared = prepareManagedNapcatInstance(context, {
     id,
     name: `QQ ${index}`,
     gatewayPort: wsPort,
@@ -1753,7 +1596,7 @@ async function addManagedNapcatInstance(request: NapcatAddRequest): Promise<Reco
   loadRuntimes();
 
   steps.push("正在执行启动命令...");
-  const launchResult = await launchNapcatInstanceEndpoint(napcatManagerCtx(), { gatewayId, instanceId: id });
+  const launchResult = await launchNapcatInstanceEndpoint(context, { gatewayId, instanceId: id });
   steps.push(String(launchResult.message || "已尝试启动 NapCat 后台。"));
   return {
     ok: launchResult.ok !== false,
@@ -1774,16 +1617,8 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
   if (!gatewayId || !instanceId) throw new Error("缺少 gatewayId 或 instanceId。");
   const runtime = runtimes.get(gatewayId);
   if (!runtime) throw new Error(`未找到路由：${gatewayId}`);
-  const instances = normalizeNapCatInstances(runtime.definition);
+  const instances = sharedNormalizeNapCatInstances(runtime.definition);
   const existing = instances.find((item) => item.id === instanceId);
-  ignoreNapcatInstance(runtime.definition, {
-    ...(existing || {}),
-    id: instanceId,
-    gatewayPort: request.gatewayPort ?? existing?.gatewayPort,
-    httpUrl: request.httpUrl ?? existing?.httpUrl,
-    webuiUrl: request.webuiUrl ?? existing?.webuiUrl,
-    botUserId: request.botUserId
-  });
   const stop = await stopNapcatInstanceEndpoint(napcatManagerCtx(), {
     gatewayId,
     instanceId,
@@ -1795,6 +1630,22 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
     webuiToken: request.webuiToken,
     launchCommand: request.launchCommand,
     workingDir: request.workingDir
+  });
+  if (stop.ok !== true) {
+    return {
+      ok: false,
+      message: "NapCat 后台仍在运行，已保留实例配置和插件进程所有权。",
+      stop
+    };
+  }
+
+  ignoreNapcatInstance(runtime.definition, {
+    ...(existing || {}),
+    id: instanceId,
+    gatewayPort: request.gatewayPort ?? existing?.gatewayPort,
+    httpUrl: request.httpUrl ?? existing?.httpUrl,
+    webuiUrl: request.webuiUrl ?? existing?.webuiUrl,
+    botUserId: existing?.botUserId
   });
   if (!existing) {
     writeAdapterConfigFile(runtime.definition);
@@ -1862,98 +1713,6 @@ function ensurePersonaConfigFile(roleId: string): string {
   }
 
   return configPath;
-}
-
-function openFileWithDefaultApp(filePath: string): void {
-  const target = path.resolve(filePath);
-  const platform = process.platform;
-  let command: string;
-  let args: string[];
-  if (platform === "win32") {
-    command = "cmd";
-    args = ["/c", "explorer", target];
-  } else if (platform === "darwin") {
-    command = "open";
-    args = [target];
-  } else {
-    command = "xdg-open";
-    args = [target];
-  }
-  const child = spawn(command, args, { detached: true, stdio: "ignore" });
-  child.unref();
-}
-
-function openConfigFilePayload(type: string | null, gatewayId: string | null, roleId: string | null): Record<string, unknown> {
-  if (type === "manager") {
-    ensureDataDirs();
-    openFileWithDefaultApp(routeRoot);
-    return { code: 0, data: { path: routeRoot } };
-  }
-
-  if (type === "role" || type === "persona") {
-    const runtime = gatewayId ? runtimes.get(gatewayId) : null;
-    const safeRoleId = sanitizeRoleId(roleId ?? runtime?.definition.agentRoleId);
-    if (!safeRoleId) {
-      throw new Error("请先选择一个路由人格，再打开 persona.md。");
-    }
-    const roleFileName = runtime?.definition.agentRoleFile ?? "persona.md";
-    const rolePath = roleFilePath(rolesRoot, safeRoleId, roleFileName);
-    if (!fs.existsSync(rolePath)) {
-      fs.mkdirSync(path.dirname(rolePath), { recursive: true });
-      fs.writeFileSync(rolePath, "", "utf8");
-    }
-    openFileWithDefaultApp(rolePath);
-    return { code: 0, data: { path: rolePath } };
-  }
-
-  if (type === "role-folder") {
-    const runtime = gatewayId ? runtimes.get(gatewayId) : null;
-    const safeRoleId = sanitizeRoleId(roleId ?? runtime?.definition.agentRoleId);
-    if (!safeRoleId) {
-      throw new Error("请先选择一个路由人格，再打开人格文件夹。");
-    }
-    const roleDirectory = path.join(rolesRoot, safeRoleId);
-    fs.mkdirSync(roleDirectory, { recursive: true });
-    openFileWithDefaultApp(roleDirectory);
-    return { code: 0, data: { path: roleDirectory } };
-  }
-
-  if (type === "role-message-config") {
-    const runtime = gatewayId ? runtimes.get(gatewayId) : null;
-    const safeRoleId = sanitizeRoleId(roleId ?? runtime?.definition.agentRoleId);
-    if (!safeRoleId) {
-      throw new Error("请先选择一个路由人格，再打开 personaConfig.json。");
-    }
-    const configPath = ensurePersonaConfigFile(safeRoleId);
-    openFileWithDefaultApp(configPath);
-    return { code: 0, data: { path: configPath } };
-  }
-
-  if (type !== "routes" && type !== "route-folder") {
-    throw new Error(`Unsupported config file type: ${type || ""}`);
-  }
-
-  if (!gatewayId) {
-    openFileWithDefaultApp(routeRoot);
-    return { code: 0, data: { path: routeRoot } };
-  }
-
-  const runtime = runtimes.get(gatewayId);
-  if (!runtime) {
-    // fallback: open routeRoot if runtime not found (e.g. unsaved configName change)
-    openFileWithDefaultApp(routeRoot);
-    return { code: 0, data: { path: routeRoot } };
-  }
-
-  const configName = sanitizeConfigName(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
-  const configPath = adapterConfigPath(configName);
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  if (!fs.existsSync(configPath)) {
-    writeAdapterConfigFile(runtime.definition);
-  }
-  const targetPath = type === "route-folder" ? path.dirname(configPath) : configPath;
-  openFileWithDefaultApp(targetPath);
-  return { code: 0, data: { path: targetPath } };
 }
 
 function reconcilePersistedPlanSecretaryWorkspaces(): void {
@@ -2173,10 +1932,11 @@ function childCommand(extraArgs: string[] = []) {
   return resolveGatewayChildCommand(rootDir, extraArgs);
 }
 
-function reconcileSpeechMicrophone(reason: string): void {
+function reconcileSpeechMicrophone(reason: string, isActive: () => boolean = () => true): void {
   void speechRuntimeControl.start()
-    .then(() => speechControl.reconcileMicrophone())
+    .then(() => isActive() ? speechControl.reconcileMicrophone() : undefined)
     .catch(error => {
+      if (!isActive()) return;
       console.warn(
         `Speech runtime/microphone reconciliation failed after ${reason}:`,
         error instanceof Error ? error.message : String(error)
@@ -2233,7 +1993,7 @@ function envFor(
     NAPCAT_WEBUI_URL: definition.napcatWebuiUrl ?? process.env.NAPCAT_WEBUI_URL ?? "http://127.0.0.1:6099/webui",
     NAPCAT_ACCESS_TOKEN: definition.napcatAccessToken ?? process.env.NAPCAT_ACCESS_TOKEN ?? "",
     NAPCAT_WEBUI_TOKEN: definition.napcatWebuiToken ?? process.env.NAPCAT_WEBUI_TOKEN ?? "",
-    NAPCAT_INSTANCES: JSON.stringify(definition.napcatInstances ?? normalizeNapCatInstances(definition)),
+    NAPCAT_INSTANCES: JSON.stringify(definition.napcatInstances ?? sharedNormalizeNapCatInstances(definition)),
     GATEWAY_PORT: String(definition.gatewayPort),
     WEBHOOK_PORT: String(definition.webhookPort ?? definition.gatewayPort),
     WEBHOOK_PATH: definition.webhookPath ?? "/webhook",
@@ -2564,12 +2324,6 @@ function defaultAgentState(definition: GatewayDefinition, adapterType: AgentAdap
   };
 }
 
-function normalizeComparablePath(value: string | undefined): string {
-  if (!value) return "";
-  const normalized = path.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 async function checkHttpEndpoint(url: string, timeoutMs = 1200): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -2621,7 +2375,7 @@ function callbackUrlForCopy(url: string, type: MessageAdapterType): string {
   }
 }
 
-function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType): AdapterEndpoint | null {
+function routeCallbackEndpoint(runtime: GatewayRuntime, type: MessageAdapterType): MessageAdapterEndpoint | null {
   if (type !== "webhook" && type !== "fennenote" && type !== "xiaoai" && type !== "rabilink") return null;
   const definition = runtime.definition;
   const status = readGatewayStatus(definition) as Record<string, any>;
@@ -2659,16 +2413,27 @@ function routeHasRecentMessages(runtime: GatewayRuntime, type: MessageAdapterTyp
   }
 }
 
-function napcatManagerCtx() {
+function napcatManagerCtx(
+  onLaunch?: (request: ManagedNapcatLaunchRequest, child?: ChildProcess) => void,
+  recordLaunchPids?: (request: ManagedNapcatLaunchRequest, pids: readonly string[]) => void,
+  beforeLaunch?: () => void
+) {
   return {
     rootDir,
     getRuntimes: () => [...runtimes.values()].map((runtime) => ({
       ...runtime,
       status: readGatewayStatus(runtime.definition) as Record<string, unknown>
     })),
-    normalizeNapCatInstances,
+    normalizeNapCatInstances: sharedNormalizeNapCatInstances,
     appendLog,
-    checkHttpEndpoint
+    checkHttpEndpoint,
+    launchNapcatProcess: (plan: NapcatLaunchPlan, visible: boolean, request: ManagedNapcatLaunchRequest) => {
+      beforeLaunch?.();
+      const child = launchManagedNapcatProcess(plan, visible);
+      onLaunch?.(request, child);
+      return child;
+    },
+    recordNapcatLaunchPids: recordLaunchPids
   };
 }
 
@@ -2686,7 +2451,7 @@ function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: bool
   const messages: string[] = [];
   const managedNapcatRoot = path.resolve(rootDir, "data", "napcat");
   const normalized = original.map((definition) => {
-    if (!definitionUsesNapcat(definition) && Array.isArray(definition.napcatInstances) && definition.napcatInstances.length > 0) {
+    if (!sharedDefinitionUsesNapcat(definition) && Array.isArray(definition.napcatInstances) && definition.napcatInstances.length > 0) {
       messages.push(`已移除 ${definition.id} 中残留的 NapCat 实例配置。`);
     }
     const cleanedDefinition = { ...definition };
@@ -2739,7 +2504,7 @@ function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: bool
     if (before.xiaoaiWebhookPort !== repaired.xiaoaiWebhookPort && repaired.xiaoaiWebhookPort) {
       messages.push(`已为 ${repaired.id} 重新分配 XiaoAI 端口：${before.xiaoaiWebhookPort || "-"} -> ${repaired.xiaoaiWebhookPort}。`);
     }
-    if (definitionUsesNapcat(repaired)) {
+    if (sharedDefinitionUsesNapcat(repaired)) {
       const beforeInstances = before.napcatInstances ?? [];
       const repairedInstances = repaired.napcatInstances ?? [];
       for (const instance of repairedInstances) {
@@ -2767,197 +2532,113 @@ function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: bool
 const MESSAGE_ADAPTER_SCAN_DEADLINE_MS = 6_000;
 const NAPCAT_HEALTH_SCAN_DEADLINE_MS = 6_500;
 
-function messageAdapterScanFallback(
-  type: Exclude<MessageAdapterType, "disabled">,
-  label: string,
-  maturity: AgentMaturity,
-  diagnostic: ScanDiagnostic
-): MessageAdapterScanResult {
-  return {
-    type,
-    label,
-    maturity,
+function remoteAgentMessageAdapterScanResult(): PluginMessageAdapterScanResult {
+  return remoteAgentHub?.localScanResult() ?? {
+    type: "remoteAgent",
+    label: "远端 Agent",
+    maturity: "experimental",
     installed: false,
-    scan: diagnostic,
-    warnings: [
-      diagnostic.state === "timeout"
-        ? `${label} 检查超过本轮 ${MESSAGE_ADAPTER_SCAN_DEADLINE_MS} ms 截止时间；没有把超时推断为离线。`
-        : `${label} 检查失败：${diagnostic.message || "未知错误"}`
-    ]
+    requirements: [{
+      id: "plugin",
+      label: "Remote Agent 插件",
+      required: true,
+      ok: false,
+      detail: "manager:remote-agent 未启用。"
+    }],
+    endpoints: [],
+    warnings: ["启用 manager:remote-agent 后才会扫描和连接远端设备。"]
   };
 }
 
-type MessageAdapterScanBundle = {
-  adapters: Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterScanResult>;
-  diagnostics: Record<string, ScanDiagnostic>;
-  partial: boolean;
-  durationMs: number;
-  deadlineMs: number;
-};
-
-async function messageAdapterScanPayload(): Promise<MessageAdapterScanBundle> {
-  const webhookLikeScanCtx = {
-    rootDir,
-    adapterRuntimes,
-    routeCallbackEndpoint,
-    routeHasRecentMessages,
-    checkHttpEndpoint,
-    fenneNotePlaybackUrl
-  };
-  const bounded = await runBoundedScans([
-    {
-      key: "napcat",
-      run: () => scanNapcatEndpoint(napcatManagerCtx()),
-      fallback: (diagnostic) => messageAdapterScanFallback("napcat", "NapCat / OneBot", "verified", diagnostic)
-    },
-    {
-      key: "fennenote",
-      run: () => scanFenneNoteEndpoint(webhookLikeScanCtx),
-      fallback: (diagnostic) => messageAdapterScanFallback("fennenote", "FenneNote / 芬妮笔记", "experimental", diagnostic)
-    },
-    {
-      key: "xiaoai",
-      run: () => scanXiaoAiEndpoint(webhookLikeScanCtx),
-      fallback: (diagnostic) => messageAdapterScanFallback("xiaoai", "小米音箱 / 小爱", "experimental", diagnostic)
-    },
-    {
-      key: "rabilink",
-      run: () => scanRabiLinkEndpoint(webhookLikeScanCtx),
-      fallback: (diagnostic) => messageAdapterScanFallback("rabilink", "RabiLink / Relay 直连", "experimental", diagnostic)
-    },
-    {
-      key: "wearable",
-      run: () => scanWearableEndpoint(webhookLikeScanCtx),
-      fallback: (diagnostic) => messageAdapterScanFallback("wearable", "智能手表/手环", "experimental", diagnostic)
-    },
-    {
-      key: "webhook",
-      run: () => scanWebhookEndpoint(webhookLikeScanCtx),
-      fallback: (diagnostic) => messageAdapterScanFallback("webhook", "通用 Webhook", "experimental", diagnostic)
-    },
-    {
-      key: "wecom",
-      run: () => scanWeComEndpoint({
-        rootDir,
-        adapterRuntimes,
-        routeHasRecentMessages
-      }),
-      fallback: (diagnostic) => messageAdapterScanFallback("wecom", "企业微信 / WeCom", "experimental", diagnostic)
-    },
-    {
-      key: "speech",
-      run: async (): Promise<MessageAdapterScanResult> => {
-        const speechStatus = await speechControl.status();
-        return {
-          type: "speech",
-          label: "语音消息端",
-          maturity: "verified",
-          installed: speechStatus.state === "online",
-          endpoints: [{ label: "RabiSpeech 本机服务", url: speechStatus.configuredUrl, healthy: speechStatus.state === "online" }],
-          requirements: [
-            { id: "builtin", label: "RabiPC 内置语音消息端", required: true, ok: true, detail: "麦克风、阈值、常驻转录和 Route 投递由 RabiPC 提供。" },
-            { id: "runtime", label: "RabiSpeech 本地模型服务", required: true, ok: speechStatus.state === "online", detail: speechStatus.error || `${speechStatus.providers.tts.length} 个 TTS provider，${speechStatus.providers.asr.length} 个 ASR provider。` },
-            { id: "provider-mode", label: "语音 Provider 模式", required: true, ok: true, detail: speechStatus.localOnly === true ? "当前仅启用本地 TTS/ASR Provider。" : "已显式启用 API Provider；密钥由 RabiSpeech 进程环境持有。" }
-          ],
-          warnings: speechStatus.state === "online" ? [] : ["先启动 RabiSpeech，再做麦克风实机 ASR 和 TTS 排队播放测试。"]
-        };
-      },
-      fallback: (diagnostic) => messageAdapterScanFallback("speech", "语音消息端", "verified", diagnostic)
+async function repairAllNapcatInstances(): Promise<Record<string, unknown>> {
+  const scanRepair = repairGatewayConfigsForScan();
+  const context = napcatManagerCtx();
+  const results: Array<Record<string, unknown>> = [];
+  for (const runtime of runtimes.values()) {
+    if (!sharedDefinitionUsesNapcat(runtime.definition)) continue;
+    for (const instance of runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition)) {
+      const health = await testNapcatHealthEndpoint(context, {
+        httpUrl: instance.httpUrl,
+        webuiUrl: instance.webuiUrl,
+        accessToken: instance.accessToken,
+        webuiToken: instance.webuiToken,
+        gatewayPort: instance.gatewayPort
+      });
+      if (health.fixAvailable) {
+        try {
+          const fixed = await configureNapcatOneBot(context, {
+            httpUrl: instance.httpUrl,
+            webuiUrl: instance.webuiUrl,
+            accessToken: instance.accessToken,
+            webuiToken: instance.webuiToken,
+            gatewayPort: instance.gatewayPort
+          });
+          results.push({
+            gatewayId: runtime.definition.id,
+            instanceId: instance.id,
+            ok: true,
+            action: "configure-onebot",
+            ...fixed
+          });
+        } catch (error) {
+          results.push({
+            gatewayId: runtime.definition.id,
+            instanceId: instance.id,
+            ok: false,
+            action: "configure-onebot",
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+      } else {
+        results.push({
+          gatewayId: runtime.definition.id,
+          instanceId: instance.id,
+          ok: Boolean(health.ok),
+          action: "health-check",
+          message: health.ok ? "已连通，无需修复。" : String(health.message || "没有可自动修复项。")
+        });
+      }
     }
-  ] as const, { deadlineMs: MESSAGE_ADAPTER_SCAN_DEADLINE_MS });
-  const { napcat, fennenote, xiaoai, rabilink, wearable, webhook, wecom, speech } = bounded.values;
-  const weixinRuntimes = adapterRuntimes("weixin");
-  const feishuRuntimes = adapterRuntimes("feishu");
-  const weixinStatuses = weixinRuntimes.map(runtime => {
-    const status = readGatewayStatus(runtime.definition) as Record<string, any>;
-    return status.messageAdapters?.weixin ?? {};
-  });
-  const weixinLoggedIn = weixinStatuses.some(status => status.loggedIn === true && status.sessionPhase === "restored");
-  const weixinRestoring = weixinStatuses.some(status => status.sessionPhase === "restoring");
-  const weixinCredentialsRetained = weixinStatuses.some(status =>
-    status.credentialsRetained === true
-    && (status.sessionPhase === "restoring" || status.sessionPhase === "temporarily_unreachable"));
-  const weixinLoginDetail = weixinLoggedIn
-    ? "当前个人微信会话已由服务端确认并完成恢复。"
-    : weixinRestoring
-      ? "正在从安全存储恢复会话；这不影响 Manager 或其它消息入口。"
-      : weixinCredentialsRetained
-        ? "外部 API 暂时不可达，但会话凭据仍保留，不要求扫码。"
-        : "当前没有可用会话；请明确点击生成二维码后扫码。";
-  const weixinHasRecentMessages = weixinRuntimes.some((runtime) => routeHasRecentMessages(runtime, "weixin"));
-
-  const adapters: Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterScanResult> = {
-    napcat,
-    remoteAgent: remoteAgentHub.localScanResult(),
-    heartbeat: {
-      type: "heartbeat",
-      label: "定时触发",
-      maturity: "verified",
-      installed: true,
-      requirements: [
-        { id: "route", label: "RabiRoute 内部定时器", required: true, ok: true, detail: "无需额外安装。" },
-        { id: "agent", label: "Agent 端可接收消息", required: true, ok: undefined, detail: "保存后用“立即触发”或日志页验证投递。" }
-      ],
-      warnings: ["定时触发不会证明外部平台可用，只能验证路由到 Agent 的链路。"]
-    },
-    rolePanel: {
-      type: "rolePanel",
-      label: "角色面板",
-      maturity: "verified",
-      installed: true,
-      requirements: [
-        { id: "builtin", label: "RabiRoute 内置角色面板", required: true, ok: true, detail: "无需安装；托盘打开后可作为本地消息端使用。" },
-        { id: "timeline", label: "角色聊天记录", required: true, ok: true, detail: "按角色写入 data/roles/<RoleId>/role-panel/messages.jsonl。" }
-      ],
-      warnings: ["角色面板是固定内置消息端，不能删除或禁用；自由聊天使用 role_panel_message 路由类型。"]
-    },
-    speech,
-    fennenote,
-    xiaoai,
-    rabilink,
-    wearable,
-    wecom,
-    weixin: {
-      type: "weixin",
-      label: "个人微信 / Weixin",
-      maturity: "experimental",
-      installed: true,
-      endpoints: [{ label: "OpenClaw iLink API", url: weixinRuntimes[0]?.definition.weixinBaseUrl || process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com", healthy: weixinLoggedIn }],
-      requirements: [
-        { id: "route", label: "已配置个人微信消息端", required: true, ok: weixinRuntimes.length > 0, detail: weixinRuntimes.length > 0 ? "已存在使用 weixin adapter 的 Route。" : "在 Route 中启用个人微信消息端。" },
-        { id: "login", label: "个人微信当前会话", required: true, ok: weixinLoggedIn, detail: weixinLoginDetail },
-        { id: "recent-message", label: "历史个人微信消息证据", required: false, ok: weixinHasRecentMessages, detail: weixinHasRecentMessages ? "存在历史消息记录；它不代表当前登录。" : "尚无历史消息记录；它与当前登录状态相互独立。" }
-      ],
-      warnings: [
-        "个人微信接入仍是实验能力，依赖 OpenClaw iLink API；单入口故障不会升级为 Manager 或 QQ 全局故障。",
-        "二维码只在管理面明确请求后生成；临时网络失败会保留安全会话，不要求重新扫码。"
-      ]
-    },
-    feishu: {
-      type: "feishu",
-      label: "飞书 / Feishu",
-      maturity: "experimental",
-      installed: feishuRuntimes.length > 0,
-      requirements: [
-        { id: "route", label: "已配置飞书消息端", required: true, ok: feishuRuntimes.length > 0, detail: feishuRuntimes.length > 0 ? "Route 已启用独立 feishu adapter。" : "在 Route 中启用 feishu adapter。" },
-        { id: "app", label: "飞书应用凭据", required: true, ok: feishuRuntimes.some((runtime) => Boolean(runtime.definition.feishuAppId && runtime.definition.feishuAppSecret)), detail: "需要 App ID 和 App Secret，群机器人 webhook 不能替代。" },
-        { id: "event", label: "事件订阅与签名", required: true, ok: feishuRuntimes.some((runtime) => runtime.definition.feishuEventSubscriptionEnabled === true && Boolean(runtime.definition.feishuVerificationToken && runtime.definition.feishuEncryptKey)), detail: "需要配置公网 HTTPS 回调、Verification Token、Encrypt Key，订阅 im.message.receive_v1 后再显式确认。" }
-      ],
-      warnings: ["飞书是独立消息端；通用 webhook 不会作为飞书入站或出站替代。"]
-    },
-    webhook
-  };
-  for (const [type, diagnostic] of Object.entries(bounded.diagnostics)) {
-    const adapter = adapters[type as Exclude<MessageAdapterType, "disabled">];
-    if (adapter) adapter.scan = diagnostic;
   }
   return {
-    adapters,
-    diagnostics: bounded.diagnostics,
-    partial: bounded.partial,
-    durationMs: bounded.durationMs,
-    deadlineMs: bounded.deadlineMs
+    ok: true,
+    repair: scanRepair,
+    results,
+    napcatHealth: (await napcatScanHealthPayload()).payload,
+    gatewayPayload: standaloneGatewayPayload()
   };
+}
+
+async function checkNapcatHealthWithBackfill(body: NapcatHealthRequest): Promise<Record<string, unknown>> {
+  let result = await testNapcatHealthEndpoint(napcatManagerCtx(), body) as Record<string, unknown>;
+  const correctedWebuiUrl = correctedNapcatWebuiUrlFromHealth(result);
+  if (!correctedWebuiUrl) return result;
+
+  const runtime = body.gatewayId
+    ? runtimes.get(body.gatewayId)
+    : [...runtimes.values()].find(item => {
+        const instances = item.definition.napcatInstances ?? sharedNormalizeNapCatInstances(item.definition);
+        return instances.some(instance =>
+          (body.instanceId && instance.id === body.instanceId)
+          || (body.httpUrl && instance.httpUrl === body.httpUrl)
+          || (body.webuiUrl && instance.webuiUrl === body.webuiUrl)
+        );
+      });
+  const instances = runtime
+    ? runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition)
+    : [];
+  const instance = runtime
+    ? instances.find(item => item.id === body.instanceId)
+      ?? instances.find(item => body.httpUrl && item.httpUrl === body.httpUrl)
+      ?? instances.find(item => body.webuiUrl && item.webuiUrl === body.webuiUrl)
+    : undefined;
+  if (!runtime || !instance) return result;
+
+  const backfilled = backfillNapcatInstanceWebuiUrl(runtime.definition, instance.id, correctedWebuiUrl);
+  if (!backfilled) return result;
+  instance.webuiUrl = backfilled;
+  result = addHealthDiagnostic(result, `已根据 NapCat webui.json 自动修正 WebUI 地址：${backfilled}`);
+  return result;
 }
 
 async function napcatScanHealthPayload(): Promise<{
@@ -2968,11 +2649,11 @@ async function napcatScanHealthPayload(): Promise<{
   deadlineMs: number;
 }> {
   const ctx = napcatManagerCtx();
-  const napcatRuntimes = [...runtimes.values()].filter((runtime) => definitionUsesNapcat(runtime.definition));
+  const napcatRuntimes = [...runtimes.values()].filter((runtime) => sharedDefinitionUsesNapcat(runtime.definition));
   return scanNapcatHealthReadOnly({
     runtimes: napcatRuntimes,
     gatewayId: (runtime) => runtime.definition.id,
-    instances: (runtime) => runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition),
+    instances: (runtime) => runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition),
     instanceId: (instance) => instance.id,
     instanceEnabled: (instance) => instance.enabled !== false,
     instanceMetadata: (instance) => ({
@@ -2999,44 +2680,13 @@ async function napcatScanHealthPayload(): Promise<{
   }, { deadlineMs: NAPCAT_HEALTH_SCAN_DEADLINE_MS });
 }
 
-type NapcatHealthRequest = {
-  gatewayId?: string;
-  instanceId?: string;
-  httpUrl?: string;
-  webuiUrl?: string;
-  accessToken?: string;
-  webuiToken?: string;
-  gatewayPort?: number;
-  readWebuiLoginInfo?: boolean;
-  botUserId?: string | number;
-  botNickname?: string;
-};
 
-type NapcatAddRequest = {
-  gatewayId?: string;
-};
 
-type NapcatRemoveRequest = {
-  gatewayId?: string;
-  instanceId?: string;
-  name?: string;
-  gatewayPort?: number;
-  httpUrl?: string;
-  webuiUrl?: string;
-  accessToken?: string;
-  webuiToken?: string;
-  launchCommand?: string;
-  workingDir?: string;
-  botUserId?: string | number;
-  botNickname?: string;
-};
 
-type NapcatLaunchRequest = {
-  gatewayId?: string;
-  instanceId?: string;
-  forceRestart?: boolean;
-  visible?: boolean;
-};
+
+
+
+
 function readGatewayStatus(definition: GatewayDefinition): Record<string, unknown> {
   const statusPath = path.join(dataDirFor(definition), "gateway-status.json");
   if (!fs.existsSync(statusPath)) {
@@ -3092,12 +2742,12 @@ function collectStartedNapcatInstances(): Array<Record<string, unknown>> {
   const seen = new Set<string>();
 
   for (const runtime of runtimes.values()) {
-    if (!runtime.process || !definitionUsesNapcat(runtime.definition)) {
+    if (!runtime.process || !sharedDefinitionUsesNapcat(runtime.definition)) {
       continue;
     }
 
     const configName = sanitizeConfigName(runtime.definition.configName) || routeRuntimeParts(runtime.definition.id).configName;
-    const configuredInstances = runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition);
+    const configuredInstances = runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition);
     const status = readGatewayStatus(runtime.definition);
     const statusInstances = napcatStatusRows(status.napcatInstances);
     const sourceRows = statusInstances.length > 0
@@ -3603,7 +3253,7 @@ function runtimeStatusWithRoleInfoCache(
   roleInfoCatalogCache?: Map<string, Array<Record<string, unknown>>>,
   tailCache?: JsonlTailCache
 ): Record<string, unknown> {
-  const usesNapcat = definitionUsesNapcat(runtime.definition);
+  const usesNapcat = sharedDefinitionUsesNapcat(runtime.definition);
   const gatewayStatus = gatewayStatusForRuntime(runtime);
   const rabiLinkRelay = rabiLinkRelayConfigFor(runtime.definition);
   return {
@@ -3660,7 +3310,7 @@ function runtimeStatusWithRoleInfoCache(
     napcatWebuiUrl: runtime.definition.napcatWebuiUrl ?? "http://127.0.0.1:6099/webui",
     napcatAccessToken: runtime.definition.napcatAccessToken ?? "",
     napcatWebuiToken: runtime.definition.napcatWebuiToken ?? "",
-    napcatInstances: usesNapcat ? (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)) : [],
+    napcatInstances: usesNapcat ? (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition)) : [],
     targetGroupId: runtime.definition.targetGroupId ?? "",
     routeVariables: runtime.definition.routeVariables,
     routeName: runtime.definition.routeName,
@@ -3715,18 +3365,14 @@ function runtimeStatusWithRoleInfoCache(
   };
 }
 
-function runtimeSummaryStatus(runtime: GatewayRuntime): Record<string, unknown> {
-  return runtimeSummaryStatusWithRoleInfoCache(runtime);
-}
-
 function runtimeSummaryStatusWithRoleInfoCache(
   runtime: GatewayRuntime,
   roleInfoCatalogCache?: Map<string, Array<Record<string, unknown>>>
 ): Record<string, unknown> {
   const definition = runtime.definition;
-  const usesNapcat = definitionUsesNapcat(definition);
+  const usesNapcat = sharedDefinitionUsesNapcat(definition);
   const napcatInstances = usesNapcat
-    ? (definition.napcatInstances ?? normalizeNapCatInstances(definition)).map((instance) => ({
+    ? (definition.napcatInstances ?? sharedNormalizeNapCatInstances(definition)).map((instance) => ({
       id: instance.id,
       name: instance.name,
       enabled: instance.enabled,
@@ -3835,13 +3481,6 @@ type ManualTriggerRequest = {
   triggerSource?: "manual" | "auto";
 };
 
-type DeliveryReplayRequest = {
-  attemptId?: string;
-  attemptIds?: string[];
-  routeKind?: string;
-  messageId?: string;
-  mode?: "single" | "merge";
-};
 
 type RolePanelMessageRequest = {
   gatewayId?: string;
@@ -4407,6 +4046,113 @@ function recordMessageProcessingSend(request: AgentSendRequest, result: AgentSen
     });
   }
 }
+
+async function performAgentSend(request: AgentSendRequest): Promise<AgentCommunicationHttpResponse> {
+  const receiptBeforeValidation = readAgentSendReceipt(rootDir, String(request.deliveryId || ""));
+  const prepared = prepareAgentSendRequest(request);
+  if (!receiptBeforeValidation) {
+    assertAgentSendPermission(prepared.sender, runtimeForAgentSendRoute(prepared.routeId)?.definition);
+  }
+  const validatedSendContext = !receiptBeforeValidation
+    ? messageProcessingSendContextReview.validateSend(request)
+    : undefined;
+  let reviewedReplySource: ReviewedReplySourceEvidence | undefined;
+  if (validatedSendContext?.sourceMessageId
+    && prepared.channel === "napcat"
+    && prepared.target.target === "group") {
+    const roleId = String(validatedSendContext.requirement.source.roleId || "").trim();
+    if (!roleId) {
+      throw new Error(`Cannot recover reviewed source ${validatedSendContext.sourceMessageId}: requirement has no roleId.`);
+    }
+    const recovered = recoverReviewedMessageProcessingSourceRecord(
+      roleDirForApi(roleId),
+      validatedSendContext.requirement,
+      validatedSendContext.sourceMessageId,
+      {
+        expectedGroupId: String(prepared.target.groupId || ""),
+        expectedInstanceId: String(prepared.target.instanceId || "")
+      }
+    );
+    reviewedReplySource = {
+      routeId: recovered.routeId,
+      sourceMessageId: recovered.sourceMessageId,
+      groupId: recovered.groupId,
+      instanceId: recovered.instanceId,
+      record: recovered.record,
+      dataDirs: [recovered.roleDir],
+      reviewedAttachmentIds: recovered.reviewedAttachmentIds
+    };
+  }
+
+  const replyOptions = {
+    rootDir,
+    routeRoot,
+    rolesRoot,
+    speechServiceUrl: speechServiceUrl(),
+    publishEvent: publishManagerEvent,
+    runtimes: [...runtimes.values()].map(runtime => {
+      const relay = rabiLinkRelayConfigFor(runtime.definition);
+      return {
+        ...runtime.definition,
+        rabiLinkRelay: relay,
+        napcatInstances: (runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition)).map(instance => ({
+          ...instance,
+          accessToken: instance.accessToken ?? ""
+        }))
+      };
+    })
+  };
+  if (!receiptBeforeValidation) {
+    validateAgentSendReplyImageDescriptions(request, replyOptions, reviewedReplySource);
+  }
+
+  const existingReceipt = readAgentSendReceipt(rootDir, String(request.deliveryId || ""));
+  let languageStyleValidation: AgentSendResult["languageStyleValidation"];
+  if (!existingReceipt) {
+    const styleDecision = await evaluateAgentSendLanguageStyle(request, replyOptions, languageStyleValidator);
+    languageStyleValidation = styleDecision.metadata;
+    if (styleDecision.blocked) {
+      return {
+        statusCode: 409,
+        body: {
+          ok: false,
+          status: "style_confirmation_required",
+          reason: "Language style validation failed. Review the reasons, then resend the same deliveryId with styleValidation=0 only after confirming the text is intentional.",
+          deliveryId: prepared.deliveryId,
+          sender: prepared.sender,
+          channel: prepared.channel,
+          routeId: prepared.routeId,
+          target: prepared.target,
+          languageStyleValidation
+        }
+      };
+    }
+  }
+
+  const deliver = async () => ({
+    ...await handleAgentSend(request, replyOptions, reviewedReplySource),
+    ...(languageStyleValidation ? { languageStyleValidation } : {})
+  });
+  const result = await executeIdempotentAgentSend(request, {
+    rootDir,
+    deliver,
+    recover: async () => {
+      const inspection = await inspectAgentSendDelivery(request, replyOptions);
+      if (inspection.state === "completed") return inspection;
+      if (inspection.state === "missing") return { state: "retry" };
+      return { state: "uncertain", reason: inspection.reason };
+    }
+  });
+  if (result.body.replyImageDescriptionArchive && result.body.idempotency.duplicate === false) {
+    managerOperationalLog.record("info", "agent_reply_image_descriptions_archived", {
+      action: String(request.deliveryId || ""),
+      result: `sourceMessageId=${result.body.replyImageDescriptionArchive.sourceMessageId}; files=${result.body.replyImageDescriptionArchive.files.length}`
+    });
+  }
+  recordMessageProcessingSend(request, result.body);
+  return result;
+}
+
 
 async function dispatchPlanNotificationRequirement(requirement: MessageProcessingRequirement): Promise<void> {
   if (requirement.kind !== "plan_progress_notification") return;
@@ -5497,12 +5243,25 @@ function triggerGatewayDirectAgentMessage(id: string, envelope: RabiDeliveryEnve
   const command = childCommand(args);
   appendLog(runtime, "remote agent result requested direct delivery");
   return new Promise((resolve, reject) => {
+    let settled = false;
     const child = spawn(command.command, command.args, {
       cwd: rootDir,
       env: envFor(runtime.definition),
       shell: command.shell,
       windowsHide: true
     });
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      action();
+    };
+    const deadline = setTimeout(() => {
+      void stopChildProcessTree(child)
+        .catch(() => { child.kill(); })
+        .finally(() => finish(() => reject(new Error("remote agent result delivery timed out after 30000 ms"))));
+    }, 30_000);
+    deadline.unref?.();
     child.stdout.on("data", (data) => {
       for (const line of data.toString("utf8").split(/\r?\n/).filter(Boolean)) {
         appendLog(runtime, `remote agent result: ${line}`);
@@ -5513,15 +5272,15 @@ function triggerGatewayDirectAgentMessage(id: string, envelope: RabiDeliveryEnve
         appendLog(runtime, `remote agent result error: ${line}`);
       }
     });
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
+    child.on("error", error => finish(() => reject(error)));
+    child.on("exit", (code, signal) => finish(() => {
       if (code === 0) {
         appendLog(runtime, "remote agent result delivered to local agent");
         resolve();
         return;
       }
       reject(new Error(`remote agent result delivery failed: code=${code ?? "null"} signal=${signal ?? "null"}`));
-    });
+    }));
   });
 }
 
@@ -5555,7 +5314,12 @@ function remoteAgentResultEnvelope(task: RemoteAgentTask, event: RemoteAgentTask
   };
 }
 
-async function handleRemoteAgentTaskEvent(task: RemoteAgentTask, event: RemoteAgentTaskEvent): Promise<void> {
+async function handleRemoteAgentTaskEvent(
+  task: RemoteAgentTask,
+  event: RemoteAgentTaskEvent,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) return;
   const runtime = runtimes.get(task.originGatewayId);
   if (runtime) {
     appendLog(runtime, `remote agent task ${task.taskId} ${event.status ?? task.status}: ${event.summary || event.message || event.error || ""}`.trim());
@@ -5565,6 +5329,7 @@ async function handleRemoteAgentTaskEvent(task: RemoteAgentTask, event: RemoteAg
       console.warn(`Remote Agent task ${task.taskId} finished but origin gateway was not found: ${task.originGatewayId}`);
       return;
     }
+    if (signal.aborted) return;
     await triggerGatewayDirectAgentMessage(task.originGatewayId, remoteAgentResultEnvelope(task, event));
   }
 }
@@ -5590,67 +5355,6 @@ function remoteAgentTaskWithGatewayDefaults(request: RemoteAgentTaskRequest): Re
     cwd: request.cwd || definition.remoteAgentDefaultCwd,
     threadName: request.threadName || definition.remoteAgentDefaultThreadName
   };
-}
-
-function handleRemoteAgentApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
-  if (request.method === "GET" && requestUrl.pathname === "/api/remote-agent/devices") {
-    jsonResponse(response, 200, {
-      code: 0,
-      devices: remoteAgentHub.listDevices(),
-      tasks: remoteAgentHub.listTasks(20)
-    });
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/scan") {
-    void remoteAgentHub.scanLan()
-      .then((devices) => jsonResponse(response, 200, {
-        code: 0,
-        devices,
-        tasks: remoteAgentHub.listTasks(20)
-      }))
-      .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/connect") {
-    void readJsonBody<{ deviceId?: string; password?: string }>(request)
-      .then((body) => remoteAgentHub.connectDevice(body))
-      .then((device) => jsonResponse(response, 200, { code: 0, device, devices: remoteAgentHub.listDevices() }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/disconnect") {
-    void readJsonBody<{ deviceId?: string }>(request)
-      .then((body) => remoteAgentHub.disconnectDevice(String(body.deviceId || "")))
-      .then((device) => jsonResponse(response, 200, { code: 0, device, devices: remoteAgentHub.listDevices() }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "GET" && requestUrl.pathname === "/api/remote-agent/tasks") {
-    jsonResponse(response, 200, { code: 0, tasks: remoteAgentHub.listTasks(100) });
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/tasks") {
-    void readJsonBody<RemoteAgentTaskRequest>(request)
-      .then((body) => remoteAgentHub.createTask(remoteAgentTaskWithGatewayDefaults(body)))
-      .then((task) => jsonResponse(response, 202, { code: 0, task }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/remote-agent/task-events") {
-    void readJsonBody<RemoteAgentTaskEvent>(request)
-      .then((event) => remoteAgentHub.receiveTaskEvent(event))
-      .then((task) => jsonResponse(response, 202, { code: 0, task }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-    return true;
-  }
-
-  return false;
 }
 
 function handleRolePanelApi(
@@ -7081,7 +6785,20 @@ function metaPayload(): Record<string, unknown> {
     messageProcessingPersistence: messageProcessingBoardPersistence.status(),
     readWorkers: managerReadWorkerPool.status(),
     catalogWorkers: managerCatalogWorkerPool.status(),
-    agentScanWorkers: managerAgentScanWorkerPool.status(),
+    agentScanWorkers: agentAdapterCatalogService?.workerStatus() ?? {
+      executionMode: "child_process",
+      state: "stopped",
+      active: 0,
+      queued: 0,
+      workers: 0,
+      workerPids: [],
+      spawnedWorkers: 0,
+      globalActive: 0,
+      globalMaxConcurrency: 0,
+      maxConcurrency: 0,
+      maxQueue: 0,
+      timeoutMs: 0
+    },
     performanceWorkers: managerPerformanceWorkerPool.status(),
     httpLimits: managerHttpLimits,
     personaSyncLan: personaSyncLanServer.status(),
@@ -7184,121 +6901,6 @@ function assetResponse(pathname: string, response: http.ServerResponse): boolean
   return true;
 }
 
-function handleAction(pathname: string, response: http.ServerResponse): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/(start|stop|restart|delete)$/);
-  if (!match) {
-    return false;
-  }
-
-  const [, encodedId, action] = match;
-  const id = decodeURIComponent(encodedId);
-  try {
-    if (action === "start") {
-      startGateway(id);
-    } else if (action === "stop") {
-      stopGateway(id);
-    } else if (action === "restart") {
-      restartGateway(id);
-    } else {
-      removeGatewayConfig(id);
-      loadRuntimes();
-      syncRunningGateways();
-      jsonResponse(response, 200, standaloneGatewayPayload());
-      return true;
-    }
-  } catch (error) {
-    jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    return true;
-  }
-
-  jsonResponse(response, 200, { code: 0, message: `requested ${action}`, data: [...runtimes.values()].map(runtimeStatus) });
-  return true;
-}
-
-function handleWeixinLoginAction(pathname: string, response: http.ServerResponse): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/weixin-login$/);
-  if (!match) return false;
-  const id = decodeURIComponent(match[1]);
-  const runtime = runtimes.get(id);
-  if (!runtime) {
-    jsonResponse(response, 404, { code: -1, message: `Gateway not found: ${id}` });
-    return true;
-  }
-  if (!sharedGatewayAdapterTypes(runtime.definition).includes("weixin")) {
-    jsonResponse(response, 400, { code: -1, message: "该 Route 未启用个人微信消息端。" });
-    return true;
-  }
-  try {
-    requestWeixinLogin(dataDirFor(runtime.definition));
-    jsonResponse(response, 202, {
-      code: 0,
-      message: "已明确请求生成个人微信登录二维码；不会发送消息或修改账号配置。"
-    });
-  } catch (error) {
-    jsonResponse(response, 500, {
-      code: -1,
-      message: error instanceof Error ? error.message : String(error)
-    });
-  }
-  return true;
-}
-
-function handleTriggerAction(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
-  const match = pathname.match(/^\/gateways\/([^/]+)\/manual-trigger$/);
-  if (!match) {
-    return false;
-  }
-
-  const [, id] = match;
-  void readJsonBody<ManualTriggerRequest>(request)
-    .then((body) => {
-      const result = triggerGatewayManualRule(decodeURIComponent(id), body);
-      jsonResponse(response, 202, {
-        code: 0,
-        message: result.alreadyRunning ? "manual trigger already running" : "manual trigger accepted",
-        data: result
-      });
-    })
-    .catch((error) => {
-      jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    });
-  return true;
-}
-
-function handleDeliveryReplayAction(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
-  const match = requestUrl.pathname.match(/^\/gateways\/([^/]+)\/delivery-replay$/);
-  if (!match) {
-    return false;
-  }
-
-  const id = decodeURIComponent(match[1]);
-  if (request.method === "GET") {
-    try {
-      const limit = Number(requestUrl.searchParams.get("limit") ?? "50") || 50;
-      const status = requestUrl.searchParams.get("status");
-      jsonResponse(response, 200, { code: 0, ...listGatewayDeliveryReplayAttempts(id, limit, status) });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-    }
-    return true;
-  }
-
-  if (request.method === "POST") {
-    void readJsonBody<DeliveryReplayRequest>(request)
-      .then((body) => replayGatewayDelivery(id, body))
-      .then(() => {
-        jsonResponse(response, 202, { code: 0, message: "delivery replay requested", data: [...runtimes.values()].map(runtimeStatus) });
-      })
-      .catch((error) => {
-        jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
-      });
-    return true;
-  }
-
-  jsonResponse(response, 405, { code: -1, message: "Method not allowed" });
-  return true;
-}
-
 function handleAgentStateReport(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
   if (pathname !== "/api/agent-state") {
     return false;
@@ -7360,10 +6962,9 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
   return true;
 }
 
-export type ManagerPersonaDomainApiContext = {
+export type PersonaPluginApiContext = {
   rolesRoot?: string;
   roleDir?: (roleId: string) => string;
-  pluginActive?: (instanceId: string) => boolean;
 };
 
 export function handleManagerEventApi(
@@ -7376,16 +6977,15 @@ export function handleManagerEventApi(
   return true;
 }
 
-export function handleManagerPersonaDomainApi(
+export function handlePersonaPluginApi(
   request: http.IncomingMessage,
   requestUrl: URL,
   response: http.ServerResponse,
-  context: ManagerPersonaDomainApiContext = {}
+  context: PersonaPluginApiContext = {}
 ): boolean {
   const activeRolesRoot = context.rolesRoot ?? rolesRoot;
   const resolveRoleDir = context.roleDir ?? roleDirForApi;
-  const pluginActive = context.pluginActive ?? (() => true);
-  if (pluginActive("manager:persona") && handlePersonaMessagingApi(request, requestUrl, response, {
+  if (handlePersonaMessagingApi(request, requestUrl, response, {
     rootDir,
     rolesRoot: activeRolesRoot,
     catalog: personaCatalog,
@@ -7393,19 +6993,15 @@ export function handleManagerPersonaDomainApi(
     authorizeSource: (routeId, personaId, capability) => currentPersonaMessageAuthority().verify(routeId, personaId, capability),
     deliver: triggerGatewayRolePanelMessage
   })) return true;
-  if (pluginActive("manager:persona") && handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot, change => {
+  if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot, change => {
     // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
     publishManagerEvent("persona_avatar_changed", change);
   })) return true;
-  if (pluginActive("manager:persona") && handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
-  if (pluginActive("manager:persona") && handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
-  if (pluginActive("manager:persona") && handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
-  if (pluginActive("manager:persona") && handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
-  if (pluginActive("manager:desktop") && handleDesktopSettingsApi(request, requestUrl, response)) return true;
-  if (pluginActive("manager:speech") && handleSpeechApi(request, requestUrl, response)) return true;
-  return pluginActive("manager:persona")
-    ? handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir)
-    : false;
+  if (handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
+  if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
+  if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
+  if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
+  return handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir);
 }
 
 export async function startManager(): Promise<void> {
@@ -7417,53 +7013,78 @@ export async function startManager(): Promise<void> {
   let managerServicesReady = false;
   let managerListenerReady = false;
   let syncActiveRabiLinkRelay = (): void => {};
+  let reconcileActiveSpeech = (): void => {};
   let startActiveNapcatSupervisor = (): void => {};
+  let stopActiveNapcatSupervisor = async (): Promise<void> => {};
+  let activeNapcatControlContext: ReturnType<typeof napcatManagerCtx> | undefined;
   let startActivePlanFeedbackRecovery = (): void => {};
+  let shutdownManager = (_reason: string): void => {
+    throw new Error("Manager shutdown is not ready.");
+  };
   const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.plugins.has(instanceId);
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
-  const pluginRoute = (instanceId: string) => (
-    request: http.IncomingMessage,
-    requestUrl: URL,
-    response: http.ServerResponse
-  ): boolean => handleManagerPersonaDomainApi(request, requestUrl, response, {
-    pluginActive: candidate => candidate === instanceId
-  });
   const managerPluginDefinitions = composeBuiltinManagerPluginDefinitions(
     builtinManagerPluginDefinitions(),
     {
       "manager:core": ctx => {
-        ctx.effect(
-          () => () => manualTriggerProcesses.stopAll(),
-          "stop Manager one-shot processes"
-        );
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:core", [
+            requestTracker.wrap(handleWebguiLanAccessApi)
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+          };
+        }, "activate Manager core recovery routes");
       },
       "manager:persona": async ctx => {
-        ctx.effect(() => () => {
-          personaSyncAutoReconciler?.stop();
-          personaSyncService.stopManifestIndex();
-        }, "stop Manager persona plugin");
         personaSyncAutoReconciler?.start();
         await personaSyncService.startManifestIndex()
           .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
-        ctx.effect(
-          () => managerPluginRoutes.register("manager:persona", [pluginRoute("manager:persona")]),
-          "register Manager persona routes"
-        );
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:persona", [
+            requestTracker.wrap((request, requestUrl, response) => (
+              handlePersonaPluginApi(request, requestUrl, response)
+              || handleLanguageStyleApi(request, requestUrl, response, languageStyleValidator)
+              || handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext(true))
+            ))
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+            personaSyncAutoReconciler?.stop();
+            personaSyncService.stopManifestIndex();
+          };
+        }, "activate Manager persona plugin");
       },
       "manager:speech": ctx => {
-        ctx.effect(() => async () => {
-          await Promise.allSettled([
-            speechControl.stopMicrophone(),
-            speechControl.stopPlayback(),
-            speechRuntimeControl.stop()
-          ]);
-          speechModelManager.stop();
-        }, "stop Manager speech plugin");
-        if (managerServicesReady && !managerReadOnly) reconcileSpeechMicrophone("speech plugin activation");
-        ctx.effect(
-          () => managerPluginRoutes.register("manager:speech", [pluginRoute("manager:speech")]),
-          "register Manager speech routes"
+        let active = true;
+        const reconcile = (): void => reconcileSpeechMicrophone(
+          managerServicesReady ? "speech plugin activation" : "manager startup",
+          () => active
         );
+        reconcileActiveSpeech = reconcile;
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:speech", [
+            requestTracker.wrap((request, requestUrl, response) => handleSpeechApi(request, requestUrl, response))
+          ]);
+          return async () => {
+            active = false;
+            if (reconcileActiveSpeech === reconcile) reconcileActiveSpeech = (): void => {};
+            unregister();
+            await requestTracker.stop();
+            await Promise.allSettled([
+              speechControl.stopMicrophone(),
+              speechControl.stopPlayback(),
+              speechRuntimeControl.stop()
+            ]);
+            speechModelManager.stop();
+          };
+        }, "activate Manager speech plugin");
+        if (managerServicesReady && !managerReadOnly) reconcile();
       },
       "manager:performance": async ctx => {
         const api = new PerformanceApi({
@@ -7472,25 +7093,179 @@ export async function startManager(): Promise<void> {
           gatewayExists: gatewayId => Boolean(runtimes.get(gatewayId)),
           readWorkerPool: managerPerformanceWorkerPool
         });
-        ctx.effect(() => async () => {
-          api.close();
-          await performanceMonitoring.stop();
-        }, "stop Manager performance plugin");
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:performance", [
+            requestTracker.wrap((request, requestUrl, response) => api.handle(request, requestUrl, response))
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+            api.close();
+            await performanceMonitoring.stop();
+          };
+        }, "activate Manager performance plugin");
         if (!managerReadOnly) await performanceMonitoring.start();
-        ctx.effect(
-          () => managerPluginRoutes.register("manager:performance", [
-            (request, requestUrl, response) => api.handle(request, requestUrl, response)
-          ]),
-          "register Manager performance routes"
+      },
+      "manager:bilibili-history": ctx => {
+        const bridge = new BilibiliHistoryBridge(
+          path.join(rootDir, "data", "runtime", "bilibili-history-bridge.json"),
+          () => configRepository.rolesRoot,
+          { readOnly: managerReadOnly }
         );
+        const requestTracker = new ManagerPluginRequestTracker();
+        bilibiliHistoryBridge = bridge;
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:bilibili-history", [
+            requestTracker.wrap((request, requestUrl, response) => bridge.handle(request, requestUrl, response))
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+            if (bilibiliHistoryBridge === bridge) bilibiliHistoryBridge = undefined;
+          };
+        }, "activate Manager Bilibili history plugin");
+      },
+      "manager:route-control": ctx => {
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:route-control", [
+            requestTracker.wrap((request, requestUrl, response) => {
+              if (handleRabiApi(request, requestUrl, response, {
+                rootDir,
+                routeRoot,
+                managerPort,
+                managerHost,
+                version: rabiRoutePackageVersion,
+                globalConfig: rabiGlobalConfig,
+                runtimes: () => runtimes.values(),
+                runtimeStatus,
+                readConfig,
+                writeConfig,
+                loadRuntimes,
+                syncRunningGateways,
+                syncRabiLinkRelay: syncActiveRabiLinkRelay,
+                scanAgentAdapters: () => {
+                  const service = agentAdapterCatalogService;
+                  if (!service) {
+                    throw Object.assign(new Error("Agent adapter catalog plugin is inactive."), { statusCode: 503 });
+                  }
+                  return service.scanAll();
+                }
+              })) return true;
+              if (request.method === "GET" && requestUrl.pathname === "/manager-config") {
+                jsonResponse(response, 200, {
+                  code: 0,
+                  routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+                  rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+                });
+                return true;
+              }
+              if (request.method === "POST" && requestUrl.pathname === "/manager-config") {
+                void readJsonBody<ManagerConfig>(request)
+                  .then(body => {
+                    const cfg = readManagerConfig();
+                    if (body.routeDir !== undefined) cfg.routeDir = body.routeDir || undefined;
+                    if (body.rolesDir !== undefined) cfg.rolesDir = body.rolesDir || undefined;
+                    writeManagerConfig(cfg);
+                    ensureDataDirs();
+                    jsonResponse(response, 200, {
+                      code: 0,
+                      routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
+                      rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
+                    });
+                  })
+                  .catch(error => jsonResponse(response, 400, {
+                    code: -1,
+                    message: error instanceof Error ? error.message : String(error)
+                  }));
+                return true;
+              }
+              return false;
+            })
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+          };
+        }, "activate Manager Route control plugin");
+      },
+      "manager:agent-state-control": ctx => {
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:agent-state-control", [
+            requestTracker.wrap((request, requestUrl, response) => (
+              request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)
+            ))
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+          };
+        }, "activate Manager Agent state control plugin");
       },
       "manager:gateway-runtime": ctx => {
-        gatewayRuntimePluginActive = true;
-        ctx.effect(() => async () => {
-          gatewayRuntimePluginActive = false;
-          await stopAllGatewaysAndWait();
-        }, "stop Manager Gateway runtime plugin");
-        if (managerServicesReady && !managerReadOnly) syncRunningGateways();
+        ctx.effect(() => {
+          gatewayRuntimePluginActive = true;
+          const requestTracker = new ManagerPluginRequestTracker();
+          const unregisterRoutes = managerPluginRoutes.register("manager:gateway-runtime", [
+            requestTracker.wrap((request, requestUrl, response) => handleGatewayControlApi(
+              request,
+              requestUrl,
+              response,
+              {
+                readJsonBody,
+                jsonResponse,
+                redirectResponse: (target, statusCode, location) => {
+                  target.writeHead(statusCode, { location });
+                  target.end();
+                },
+                gatewayPayload: options => standaloneGatewayPayload(
+                  options?.includeDiagnostics ?? true,
+                  options?.includeConfigDefinitions ?? (options?.includeDiagnostics ?? true)
+                ),
+                writeConfig,
+                loadRuntimes,
+                syncRunningGateways,
+                runtimeStatuses: () => [...runtimes.values()].map(runtimeStatus),
+                networkOptionsPayload,
+                startGateway,
+                stopGateway,
+                restartGateway,
+                removeGatewayConfig,
+                weixinLoginTarget: id => {
+                  const runtime = runtimes.get(id);
+                  return runtime
+                    ? {
+                        enabled: sharedGatewayAdapterTypes(runtime.definition).includes("weixin"),
+                        dataDir: dataDirFor(runtime.definition)
+                      }
+                    : undefined;
+                },
+                requestWeixinLogin,
+                triggerManualRule: (id, request) => triggerGatewayManualRule(
+                  id,
+                  request,
+                  {},
+                  "manager:gateway-runtime"
+                ),
+                listDeliveryReplayAttempts: listGatewayDeliveryReplayAttempts,
+                replayDelivery: replayGatewayDelivery,
+                trackOperation: operation => requestTracker.trackOperation(operation)
+              }
+            ))
+          ]);
+          if (managerServicesReady && !managerReadOnly) syncRunningGateways();
+          return async () => {
+            unregisterRoutes();
+            await requestTracker.stop();
+            gatewayRuntimePluginActive = false;
+            await Promise.all([
+              manualTriggerProcesses.stopOwner("manager:gateway-runtime"),
+              stopAllGatewaysAndWait()
+            ]);
+          };
+        }, "activate Manager Gateway runtime plugin");
       },
       "manager:rabilink-relay": ctx => {
         const sync = (): void => syncRabiLinkRelayRuntime(
@@ -7523,18 +7298,23 @@ export async function startManager(): Promise<void> {
           replyUrl: fenneNoteReplyUrl,
           replyToken: fenneNoteReplyToken
         });
-        ctx.effect(() => () => service.stop(), "stop Manager FenneNote output plugin");
-        ctx.effect(
-          () => managerPluginRoutes.register("manager:fennenote-output", [
-            (request, requestUrl, response) => service.handle(request, requestUrl, response)
-          ]),
-          "register Manager FenneNote output routes"
-        );
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:fennenote-output", [
+            requestTracker.wrap((request, requestUrl, response) => service.handle(request, requestUrl, response))
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+            await service.stop();
+          };
+        }, "activate Manager FenneNote output plugin");
       },
       "manager:message-processing-control": ctx => {
-        ctx.effect(
-          () => managerPluginRoutes.register("manager:message-processing-control", [
-            (request, requestUrl, response) => handleMessageProcessingApi(request, requestUrl, response, {
+        const requestTracker = new ManagerPluginRequestTracker();
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:message-processing-control", [
+            requestTracker.wrap((request, requestUrl, response) => handleMessageProcessingApi(request, requestUrl, response, {
               boardPayload: messageProcessingBoardPayload,
               board: messageProcessingBoard,
               sendContextReview: messageProcessingSendContextReview,
@@ -7548,11 +7328,15 @@ export async function startManager(): Promise<void> {
               }),
               setPlanBaseline: setMessageProcessingPlanBaseline,
               scheduleKnowledgeCallbackReminder,
-              publishEvent: publishManagerEvent
-            })
-          ]),
-          "register Manager message processing control routes"
-        );
+              publishEvent: publishManagerEvent,
+              trackOperation: operation => requestTracker.trackOperation(operation)
+            }))
+          ]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+          };
+        }, "activate Manager message processing control plugin");
       },
       "manager:message-processing-automation": async ctx => {
         if (managerReadOnly) return;
@@ -7659,25 +7443,407 @@ export async function startManager(): Promise<void> {
         }, "stop Manager plan feedback delivery plugin");
         if (managerListenerReady) start();
       },
+      "manager:message-adapter-control": ctx => {
+        ctx.effect(() => {
+          const providers = new MessageAdapterScanProviderRegistry();
+          const service = new MessageAdapterControlService(providers);
+          const unregisterProviders = registerBuiltinMessageAdapterScanProviders(providers, {
+            rootDir,
+            adapterRuntimes,
+            routeCallbackEndpoint,
+            routeHasRecentMessages,
+            checkHttpEndpoint,
+            fenneNotePlaybackUrl,
+            scanNapcatEndpoint: () => scanNapcatEndpoint(napcatManagerCtx()),
+            remoteAgentScanResult: remoteAgentMessageAdapterScanResult,
+            speechStatus: () => speechControl.status(),
+            readGatewayStatus,
+            weixinDefaultBaseUrl: () => process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com"
+          });
+          const requestTracker = new ManagerPluginRequestTracker();
+          const unregisterRoutes = managerPluginRoutes.register("manager:message-adapter-control", [
+            requestTracker.wrap((request, requestUrl, response) => handleMessageAdapterControlApi(
+              request,
+              requestUrl,
+              response,
+              {
+                service,
+                scanNapcatHealth: napcatScanHealthPayload,
+                gatewayPayload: () => standaloneGatewayPayload(),
+                jsonResponse,
+                trackOperation: operation => requestTracker.trackOperation(operation)
+              }
+            ))
+          ]);
+          return async () => {
+            unregisterRoutes();
+            await Promise.all([
+              requestTracker.stop(),
+              service.stop()
+            ]);
+            unregisterProviders();
+          };
+        }, "activate Manager message adapter control plugin");
+      },
+      "manager:agent-adapter-catalog": ctx => {
+        const mount = mountAgentAdapterCatalogPlugin({
+          rootDir,
+          getRuntimes: () => runtimes.values(),
+          jsonResponse,
+          registerRoutes: (instanceId, handlers) => managerPluginRoutes.register(instanceId, handlers)
+        });
+        agentAdapterCatalogService = mount.service;
+        ctx.effect(() => async () => {
+          if (agentAdapterCatalogService === mount.service) agentAdapterCatalogService = undefined;
+          await mount.stop("Manager Agent adapter catalog plugin stopped.");
+        }, "stop Manager Agent adapter catalog plugin");
+      },
+      "manager:agent-communication": ctx => {
+        const codexHookRequestTracker = new ManagerPluginRequestTracker();
+        const routes = createAgentCommunicationRoutes({
+          readJsonBody,
+          jsonResponse,
+          receiptResponse: deliveryId => agentSendReceiptResponse(rootDir, deliveryId),
+          findSendTraces: query => findAgentSendTraces(rootDir, query),
+          send: performAgentSend,
+          agentRequests,
+          refreshAgentRequestReminderTimers,
+          publishManagerEvent
+        });
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:agent-communication", [
+            routes.handler,
+            codexHookRequestTracker.wrap((request, requestUrl, response) => (
+              handleCodexHookApi(request, requestUrl, response, codexHookContextService)
+            ))
+          ]);
+          return async () => {
+            unregister();
+            await Promise.all([
+              routes.stopAcceptingAndDrain(),
+              codexHookRequestTracker.stop()
+            ]);
+          };
+        }, "activate Manager Agent communication plugin");
+      },
+      "manager:copilot-control": ctx => {
+        const service = new CopilotControlService();
+        const requestTracker = new ManagerPluginRequestTracker();
+        const handler = createAgentProviderControlRouteHandler("copilot", {
+          jsonResponse,
+          installCopilot: () => service.install(),
+          startCopilotLogin: callbacks => service.login(callbacks),
+          getCopilotStatus: () => getCopilotStatus(agentManagerApiCtx()),
+          publishEvent: publishManagerEvent
+        }, operation => requestTracker.trackOperation(operation));
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:copilot-control", [requestTracker.wrap(handler)]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+            await service.stop();
+          };
+        }, "activate Manager Copilot control plugin");
+      },
+      "manager:astrbot-control": ctx => {
+        const processScope = new AgentProviderProcessScope();
+        const requestTracker = new ManagerPluginRequestTracker();
+        const handler = createAgentProviderControlRouteHandler("astrbot", {
+          readJsonBody,
+          jsonResponse,
+          testAstrbotLogin: testAstrbotLoginEndpoint,
+          deployAstrbotAdapter: () => {
+            processScope.assertAccepting();
+            return deployAstrbotAdapter(agentManagerApiCtx(), {
+              onChild: child => { processScope.track(child); }
+            });
+          }
+        }, operation => requestTracker.trackOperation(operation));
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:astrbot-control", [requestTracker.wrap(handler)]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+            await processScope.stop();
+          };
+        }, "activate Manager AstrBot control plugin");
+      },
+      "manager:marvis-control": ctx => {
+        const requestTracker = new ManagerPluginRequestTracker();
+        const handler = createAgentProviderControlRouteHandler("marvis", {
+          readJsonBody,
+          jsonResponse,
+          openMarvis: body => openMarvis(agentManagerApiCtx(), body)
+        }, operation => requestTracker.trackOperation(operation));
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:marvis-control", [requestTracker.wrap(handler)]);
+          return async () => {
+            unregister();
+            await requestTracker.stop();
+          };
+        }, "activate Manager Marvis control plugin");
+      },
+      "manager:agent-thread-control": ctx => {
+        const routes = createAgentThreadControlRoutes({
+          readJsonBody,
+          jsonResponse,
+          agentRequests,
+          messageProcessingBoard,
+          applyManagedAgentThreadDefaults,
+          agentThreadRequestOptions,
+          handleAgentThreadRequest,
+          agentThreadRequestFailureData,
+          setMessageProcessingPlanBaseline,
+          refreshAgentRequestReminderTimers,
+          publishManagerEvent,
+          operationalLog: managerOperationalLog,
+          operationalError: error => managerOperationalError(error, rootDir)
+        });
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:agent-thread-control", [routes.handler]);
+          return async () => {
+            unregister();
+            await routes.stopAcceptingAndDrain();
+          };
+        }, "activate Manager Agent thread control plugin");
+      },
+      "manager:napcat-control": ctx => {
+        const requestTracker = new ManagerPluginRequestTracker();
+        const ownedInstances = new Map<string, {
+          request: ManagedNapcatLaunchRequest;
+          child?: ChildProcess;
+          pids: Set<string>;
+        }>();
+        let accepting = true;
+        const activeOperations = new Set<Promise<unknown>>();
+        const assertAccepting = (): void => {
+          if (!accepting) throw new Error("NapCat control plugin is stopping.");
+        };
+        const runOperation = <T>(action: () => T | Promise<T>): Promise<T> => {
+          const operation = Promise.resolve().then(() => {
+            assertAccepting();
+            return action();
+          });
+          activeOperations.add(operation);
+          void operation.then(
+            () => activeOperations.delete(operation),
+            () => activeOperations.delete(operation)
+          );
+          return operation;
+        };
+        const drainOperations = async (): Promise<void> => {
+          while (activeOperations.size > 0) {
+            await Promise.allSettled([...activeOperations]);
+          }
+        };
+        const rememberLaunch = (request: ManagedNapcatLaunchRequest, child?: ChildProcess): void => {
+          assertAccepting();
+          const gatewayId = request.gatewayId?.trim();
+          const instanceId = request.instanceId?.trim();
+          if (gatewayId && instanceId) {
+            const key = `${gatewayId}:${instanceId}`;
+            const current = ownedInstances.get(key);
+            ownedInstances.set(key, {
+              request: { gatewayId, instanceId },
+              child,
+              pids: current?.pids ?? new Set<string>()
+            });
+          }
+        };
+        const rememberLaunchPids = (request: ManagedNapcatLaunchRequest, pids: readonly string[]): void => {
+          const gatewayId = request.gatewayId?.trim();
+          const instanceId = request.instanceId?.trim();
+          if (!gatewayId || !instanceId) return;
+          const key = `${gatewayId}:${instanceId}`;
+          const current = ownedInstances.get(key);
+          if (!current) return;
+          for (const pid of pids) if (/^\d+$/.test(pid)) current.pids.add(pid);
+        };
+        const controlContext = napcatManagerCtx(rememberLaunch, rememberLaunchPids, assertAccepting);
+        activeNapcatControlContext = controlContext;
+        const releaseOwnership = (request: { gatewayId?: string; instanceId?: string }): void => {
+          const gatewayId = request.gatewayId?.trim();
+          const instanceId = request.instanceId?.trim();
+          if (gatewayId && instanceId) ownedInstances.delete(`${gatewayId}:${instanceId}`);
+        };
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:napcat-control", [
+            requestTracker.wrap((request, requestUrl, response) => handleNapcatControlApi(
+              request,
+              requestUrl,
+              response,
+              {
+                readJsonBody,
+                jsonResponse,
+                repairAll: () => runOperation(repairAllNapcatInstances),
+                ensureReady: body => runOperation(() => ensureNapcatInstanceReady(controlContext, body)),
+                health: body => runOperation(() => checkNapcatHealthWithBackfill(body)),
+                configureOneBot: body => runOperation(() => configureNapcatOneBot(controlContext, body)),
+                add: body => runOperation(() => addManagedNapcatInstance(body, controlContext)),
+                launch: body => runOperation(() => launchNapcatInstanceEndpoint(controlContext, body)),
+                restart: body => runOperation(() => restartNapcatInstanceEndpoint(controlContext, body)),
+                remove: body => runOperation(async () => {
+                  const result = await removeManagedNapcatInstance(body);
+                  if (result.ok === true) releaseOwnership(body);
+                  return result;
+                })
+              }
+            ))
+          ]);
+          if (managerListenerReady) startActiveNapcatSupervisor();
+          return async () => {
+            unregister();
+            accepting = false;
+            await Promise.all([
+              requestTracker.stop(),
+              stopActiveNapcatSupervisor()
+            ]);
+            await drainOperations();
+            const owned = [...ownedInstances.values()];
+            ownedInstances.clear();
+            await Promise.allSettled(owned.flatMap(({ child, pids }) => {
+              const stops: Promise<unknown>[] = [];
+              if (child && child.exitCode === null) {
+                stops.push(stopChildProcessTree(child).catch(() => { child.kill(); }));
+              }
+              for (const pid of pids) {
+                const numericPid = Number(pid);
+                if (!Number.isInteger(numericPid) || numericPid <= 0 || numericPid === child?.pid) continue;
+                stops.push(process.platform === "win32"
+                  ? runWindowsTaskkill(numericPid).catch(() => undefined)
+                  : Promise.resolve().then(() => { try { process.kill(numericPid, "SIGTERM"); } catch {} }));
+              }
+              return stops;
+            }));
+            if (activeNapcatControlContext === controlContext) activeNapcatControlContext = undefined;
+          };
+        }, "activate Manager NapCat control plugin");
+      },
+      "manager:remote-agent": ctx => {
+        ctx.effect(() => {
+          const hub = new RemoteAgentHub({
+            managerPort,
+            managerHost,
+            publicHost: remoteAgentPublicHost,
+            discoveryPort: Number(process.env.REMOTE_AGENT_DISCOVERY_PORT ?? "8798"),
+            passwordStorePath: path.join(rootDir, "data", "remote-agent-connections.json"),
+            fileStoreDir: path.join(rootDir, "data", "remote-agent-files"),
+            getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,
+            onTaskEvent: handleRemoteAgentTaskEvent,
+            onConversationRecord: (record, signal) => {
+              if (signal.aborted) return;
+              const runtime = record.gatewayId ? runtimes.get(record.gatewayId) : undefined;
+              if (!runtime) {
+                console.warn(`Remote Agent conversation record skipped: Gateway not found (${record.gatewayId || "missing"})`);
+                return;
+              }
+              try {
+                appendMessageContextToDir(roleDirForDefinition(runtime.definition), record);
+              } catch (error) {
+                appendLog(runtime, `remote agent conversation record failed: ${error instanceof Error ? error.message : String(error)}`);
+              }
+            }
+          });
+          const requestTracker = new ManagerPluginRequestTracker();
+          remoteAgentHub = hub;
+          const unregisterRoutes = managerPluginRoutes.register("manager:remote-agent", [
+            requestTracker.wrap((request, requestUrl, response) => handleRemoteAgentPluginApi(
+              request,
+              requestUrl,
+              response,
+              {
+                readJsonBody,
+                jsonResponse,
+                listDevices: () => hub.listDevices(),
+                listTasks: limit => hub.listTasks(limit),
+                scanLan: () => hub.scanLan(),
+                connectDevice: body => hub.connectDevice(body),
+                disconnectDevice: deviceId => hub.disconnectDevice(deviceId),
+                createTask: body => hub.createTask(body),
+                receiveTaskEvent: event => hub.receiveTaskEvent(event),
+                applyTaskDefaults: remoteAgentTaskWithGatewayDefaults,
+                trackOperation: operation => requestTracker.trackOperation(operation)
+              }
+            ))
+          ]);
+          return async () => {
+            unregisterRoutes();
+            hub.stopAccepting();
+            await requestTracker.stop();
+            if (remoteAgentHub === hub) remoteAgentHub = undefined;
+            await hub.shutdown();
+          };
+        }, "activate Manager Remote Agent plugin");
+      },
       "manager:napcat-supervisor": ctx => {
         if (managerReadOnly || !managerShouldAutostart) return;
         const supervisor = new NapcatSupervisorService({
-          run: signal => autoLoginNapcatInstancesOnRabiStart(napcatManagerCtx(), undefined, signal),
+          run: async signal => {
+            if (activeNapcatControlContext) {
+              await autoLoginNapcatInstancesOnRabiStart(activeNapcatControlContext, undefined, signal);
+            }
+          },
           onError: error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`)
         });
         const start = (): void => { void supervisor.start(); };
+        const stop = async (): Promise<void> => { await supervisor.stop(); };
         startActiveNapcatSupervisor = start;
+        stopActiveNapcatSupervisor = stop;
         ctx.effect(() => async () => {
           if (startActiveNapcatSupervisor === start) startActiveNapcatSupervisor = (): void => {};
-          await supervisor.stop();
+          if (stopActiveNapcatSupervisor === stop) stopActiveNapcatSupervisor = async (): Promise<void> => {};
+          await stop();
         }, "stop Manager NapCat supervisor plugin");
         if (managerListenerReady) start();
       },
+      "manager:diagnostics": ctx => {
+        const routes = createDiagnosticsRoutes({
+          jsonResponse,
+          metaPayload: () => measureSyncPerformanceOperation(
+            PERFORMANCE_OPERATIONS.managerMetaBuild,
+            metaPayload
+          ),
+          gatewayDiagnosticsPayload: () => measureSyncPerformanceOperation(
+            PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics,
+            () => {
+              const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
+              const tailCache: JsonlTailCache = new Map();
+              return [...runtimes.values()]
+                .map(runtime => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache));
+            }
+          )
+        });
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:diagnostics", [routes.handler]);
+          return async () => {
+            unregister();
+            await routes.stopAcceptingAndDrain();
+          };
+        }, "activate Manager diagnostics plugin");
+      },
       "manager:desktop": ctx => {
-        ctx.effect(
-          () => managerPluginRoutes.register("manager:desktop", [pluginRoute("manager:desktop")]),
-          "register Manager desktop routes"
-        );
+        const routes = createDesktopControlRoutes({
+          rootDir,
+          shutdownManager: reason => shutdownManager(reason),
+          jsonResponse,
+          openConfigFilePayload: (type, gatewayId, roleId) => desktopConfigFilePayload(type, gatewayId, roleId, {
+            routeRoot,
+            rolesRoot,
+            ensureDataDirs,
+            findRoute: gatewayId => runtimes.get(gatewayId)?.definition,
+            ensurePersonaConfigFile,
+            adapterConfigPath,
+            writeAdapterConfigFile: route => writeAdapterConfigFile(route as GatewayDefinition)
+          }),
+          settingsHandler: (request, requestUrl, response) => handleDesktopSettingsApi(request, requestUrl, response)
+        });
+        ctx.effect(() => {
+          const unregister = managerPluginRoutes.register("manager:desktop", [routes.handler]);
+          return async () => {
+            unregister();
+            await routes.stopAcceptingAndDrain();
+          };
+        }, "activate Manager desktop plugin");
       }
     }
   );
@@ -7727,7 +7893,7 @@ export async function startManager(): Promise<void> {
   if (managerReadOnly) {
     console.log("Manager read-only mode enabled: startup reconciliation and mutating HTTP methods are disabled.");
   } else if (managerPluginActive("manager:speech")) {
-    reconcileSpeechMicrophone("manager startup");
+    reconcileActiveSpeech();
   }
 
   const activeServer = http.createServer((request, response) => {
@@ -7788,12 +7954,6 @@ export async function startManager(): Promise<void> {
         });
         return;
       }
-      if (bilibiliHistoryBridge.handle(request, requestUrl, response)) {
-        return;
-      }
-      if (handleWebguiLanAccessApi(request, requestUrl, response)) {
-        return;
-      }
       if (managerPluginRoutes.handle(request, requestUrl, response)) {
         return;
       }
@@ -7816,770 +7976,7 @@ export async function startManager(): Promise<void> {
       if (request.method === "GET" && assetResponse(requestUrl.pathname, response)) {
         return;
       }
-      if (request.method === "POST" && handleAction(requestUrl.pathname, response)) {
-        return;
-      }
-      if (request.method === "POST" && handleWeixinLoginAction(requestUrl.pathname, response)) {
-        return;
-      }
-      if (request.method === "POST" && handleTriggerAction(request, requestUrl.pathname, response)) {
-        return;
-      }
-      if ((request.method === "GET" || request.method === "POST") && handleDeliveryReplayAction(request, requestUrl, response)) {
-        return;
-      }
-      if (request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)) {
-        return;
-      }
-      if (handleCodexHookApi(request, requestUrl, response, codexHookContextService)) {
-        return;
-      }
-      if (handleLanguageStyleApi(request, requestUrl, response, languageStyleValidator)) {
-        return;
-      }
-      if (handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext(true))) {
-        return;
-      }
-      if (handleRabiApi(request, requestUrl, response, {
-        rootDir,
-        routeRoot,
-        managerPort,
-        managerHost,
-        version: rabiRoutePackageVersion,
-        globalConfig: rabiGlobalConfig,
-        runtimes: () => runtimes.values(),
-        runtimeStatus,
-        readConfig,
-        writeConfig,
-        loadRuntimes,
-        syncRunningGateways,
-        syncRabiLinkRelay: syncActiveRabiLinkRelay,
-        agentManagerApiCtx
-      })) {
-        return;
-      }
-      if (handleRemoteAgentApi(request, requestUrl, response)) {
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/gateways") {
-        jsonResponse(response, 200, standaloneGatewayPayload(
-          gatewayPayloadIncludesDiagnostics(requestUrl.searchParams),
-          gatewayPayloadIncludesConfigDefinitions(requestUrl.searchParams)
-        ));
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/gateways") {
-        void readJsonBody<GatewayConfigFile>(request)
-          .then((body) => {
-            writeConfig(body);
-            loadRuntimes();
-            syncRunningGateways();
-            jsonResponse(response, 200, standaloneGatewayPayload());
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/network-options") {
-        jsonResponse(response, 200, networkOptionsPayload());
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/manager-config") {
-        jsonResponse(response, 200, {
-          code: 0,
-          routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
-          rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
-        });
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/manager-config") {
-        void readJsonBody<ManagerConfig>(request)
-          .then((body) => {
-            const cfg = readManagerConfig();
-            if (body.routeDir !== undefined) cfg.routeDir = body.routeDir || undefined;
-            if (body.rolesDir !== undefined) cfg.rolesDir = body.rolesDir || undefined;
-            writeManagerConfig(cfg);
-            ensureDataDirs();
-            jsonResponse(response, 200, { code: 0, routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"), rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/") });
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/meta") {
-        jsonResponse(response, 200, measureSyncPerformanceOperation(
-          PERFORMANCE_OPERATIONS.managerMetaBuild,
-          metaPayload
-        ));
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/api/scan/message-adapters") {
-        void Promise.resolve()
-          .then(async () => {
-            const gatewayId = requestUrl.searchParams.get("gatewayId") || undefined;
-            const [adapterScan, napcatScan] = await Promise.all([
-              messageAdapterScanPayload(),
-              napcatScanHealthPayload()
-            ]);
-            const health = summarizeIndependentAdapterHealth({
-              adapters: adapterScan.adapters,
-              napcatHealth: napcatScan.payload
-            });
-            for (const [type, adapterHealth] of Object.entries(health.adapters)) {
-              const adapter = adapterScan.adapters[type as Exclude<MessageAdapterType, "disabled">];
-              if (adapter) adapter.health = adapterHealth;
-            }
-            return {
-              adapters: adapterScan.adapters,
-              health,
-              scan: {
-                requestedGatewayId: gatewayId,
-                partial: adapterScan.partial || napcatScan.partial,
-                durationMs: Math.max(adapterScan.durationMs, napcatScan.durationMs),
-                deadlineMs: Math.max(adapterScan.deadlineMs, napcatScan.deadlineMs),
-                adapters: adapterScan.diagnostics,
-                napcatInstances: napcatScan.diagnostics
-              },
-              repair: {
-                changed: false,
-                messages: ["本轮扫描只读取状态；未启动进程、未修改配置、未触发登录或修复。"]
-              },
-              napcatHealth: napcatScan.payload,
-              gatewayPayload: standaloneGatewayPayload()
-            };
-          })
-          .then((payload) => {
-            jsonResponse(response, 200, payload);
-          })
-          .catch((error) => {
-            jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/api/agent/requests") {
-        const status = requestUrl.searchParams.get("status")?.trim();
-        const requests = agentRequests.list().filter((item) => !status || item.status === status);
-        jsonResponse(response, 200, { code: 0, data: { requests } });
-        return;
-      }
-      const agentRequestMatch = requestUrl.pathname.match(/^\/api\/agent\/requests\/([^/]+)$/);
-      if (request.method === "GET" && agentRequestMatch) {
-        const requestId = decodeURIComponent(agentRequestMatch[1]);
-        const item = agentRequests.get(requestId);
-        if (!item) {
-          jsonResponse(response, 404, { code: -1, message: `Agent request not found: ${requestId}` });
-          return;
-        }
-        jsonResponse(response, 200, { code: 0, data: item });
-        return;
-      }
-      const agentRequestCancelMatch = requestUrl.pathname.match(/^\/api\/agent\/requests\/([^/]+)\/cancel$/);
-      if (request.method === "POST" && agentRequestCancelMatch) {
-        const requestId = decodeURIComponent(agentRequestCancelMatch[1]);
-        void readJsonBody<{ reason?: string }>(request)
-          .then((body) => agentRequests.cancel(requestId, body.reason))
-          .then((data) => {
-            refreshAgentRequestReminderTimers();
-            publishManagerEvent("agent_requests_changed", { requestId: data.id, status: data.status });
-            jsonResponse(response, 200, { code: 0, data });
-          })
-          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
-        return;
-      }
-      if (requestUrl.pathname === "/api/agent/threads" && (request.method === "GET" || request.method === "POST")) {
-        const requestBody = request.method === "GET"
-          ? Promise.resolve<AgentThreadRequest>({
-              action: "list",
-              query: requestUrl.searchParams.get("query") ?? "",
-              limit: Number(requestUrl.searchParams.get("limit") ?? "100"),
-              offset: Number(requestUrl.searchParams.get("offset") ?? "0")
-            })
-          : readJsonBody<AgentThreadRequest>(request);
-        void requestBody
-          .then(async (body) => {
-            const managedBody = applyManagedAgentThreadDefaults(body);
-            try {
-              const result = await handleAgentThreadRequest(managedBody, agentThreadRequestOptions(managedBody, {
-                agentRequests,
-                onMessageProcessingHandoff: (event) => {
-                  const item = messageProcessingBoard.submitOutcome(event.requirementId, {
-                    decision: "handoff",
-                    decidedByThreadId: event.sourceThreadId,
-                    targetAgentType: event.targetAgentType,
-                    targetThreadId: event.targetThreadId,
-                    planId: event.planId,
-                    planTitle: event.planTitle
-                  });
-                  setMessageProcessingPlanBaseline(item, item.source.roleId, event.planId);
-                  publishManagerEvent("message_processing_board_changed", { requirementId: item.id, status: item.status });
-                }
-              }));
-              const communication = result.data.communication && typeof result.data.communication === "object"
-                ? result.data.communication as Record<string, unknown>
-                : undefined;
-              const repliedRequestId = String(communication?.inReplyToRequestId || "").trim();
-              let handoffReturnWarning = "";
-              if (repliedRequestId) {
-                const repliedRequest = agentRequests.get(repliedRequestId);
-                if (repliedRequest?.status === "responded" && repliedRequest.messageProcessingRequirementId) {
-                  try {
-                    const item = messageProcessingBoard.recordHandoffReturned(
-                      repliedRequest.messageProcessingRequirementId,
-                      repliedRequest.target.threadId
-                    );
-                    publishManagerEvent("message_processing_board_changed", { requirementId: item.id, status: item.status });
-                  } catch (error) {
-                    handoffReturnWarning = `Agent response was accepted, but the message-processing publisher could not be resumed: ${error instanceof Error ? error.message : String(error)}`;
-                    managerOperationalLog.record("warn", "agent_response_handoff_return_failed", {
-                      result: "tracking_failed",
-                      requestId: repliedRequestId,
-                      action: repliedRequest.messageProcessingRequirementId,
-                      error: managerOperationalError(error, rootDir)
-                    });
-                  }
-                }
-              }
-              refreshAgentRequestReminderTimers();
-              if (communication) publishManagerEvent("agent_requests_changed", communication);
-              if (handoffReturnWarning) {
-                result.data.ok = false;
-                result.data.status = "delivered_tracking_failed";
-                result.data.warning = [String(result.data.warning || "").trim(), handoffReturnWarning].filter(Boolean).join(" ");
-                result.data.handoffReturn = {
-                  status: "tracking_failed",
-                  error: {
-                    stage: "message_processing_return_tracking",
-                    message: handoffReturnWarning,
-                    retryable: true
-                  }
-                };
-              }
-              jsonResponse(response, result.statusCode, {
-                code: result.data.ok === false ? -1 : 0,
-                ...result.data
-              });
-            } catch (error) {
-              jsonResponse(response, 400, { code: -1, ...agentThreadRequestFailureData(error, managedBody) });
-            }
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, {
-              code: -1,
-              status: "failed",
-              message: error instanceof Error ? error.message : String(error),
-              error: {
-                stage: "request_body",
-                message: error instanceof Error ? error.message : String(error),
-                retryable: false
-              }
-            });
-          });
-        return;
-      }
-      const agentSendReceiptMatch = requestUrl.pathname.match(/^\/api\/agent\/send\/receipts\/([^/]+)$/);
-      if (request.method === "GET" && agentSendReceiptMatch) {
-        const receipt = agentSendReceiptResponse(rootDir, decodeURIComponent(agentSendReceiptMatch[1]));
-        jsonResponse(response, receipt.statusCode, { code: receipt.statusCode < 400 ? 0 : -1, ...receipt.body });
-        return;
-      }
-      if (request.method === "GET" && requestUrl.pathname === "/api/agent/send/traces") {
-        try {
-          const matches = findAgentSendTraces(rootDir, {
-            channel: requestUrl.searchParams.get("channel"),
-            sentMessageId: requestUrl.searchParams.get("sentMessageId"),
-            routeId: requestUrl.searchParams.get("routeId")
-          });
-          jsonResponse(response, 200, { code: 0, data: { matches } });
-        } catch (error) {
-          jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
-        }
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/api/agent/send") {
-        void readJsonBody<AgentSendRequest>(request)
-          .then(async (body) => {
-            const receiptBeforeValidation = readAgentSendReceipt(rootDir, String(body.deliveryId || ""));
-            const prepared = prepareAgentSendRequest(body);
-            if (!receiptBeforeValidation) assertAgentSendPermission(prepared.sender, runtimeForAgentSendRoute(prepared.routeId)?.definition);
-            const validatedSendContext = !receiptBeforeValidation
-              ? messageProcessingSendContextReview.validateSend(body)
-              : undefined;
-            let reviewedReplySource: ReviewedReplySourceEvidence | undefined;
-            if (validatedSendContext?.sourceMessageId) {
-              if (prepared.channel === "napcat" && prepared.target.target === "group") {
-                const roleId = String(validatedSendContext.requirement.source.roleId || "").trim();
-                if (!roleId) {
-                  throw new Error(`Cannot recover reviewed source ${validatedSendContext.sourceMessageId}: requirement has no roleId.`);
-                }
-                const recovered = recoverReviewedMessageProcessingSourceRecord(
-                  roleDirForApi(roleId),
-                  validatedSendContext.requirement,
-                  validatedSendContext.sourceMessageId,
-                  {
-                    expectedGroupId: String(prepared.target.groupId || ""),
-                    expectedInstanceId: String(prepared.target.instanceId || "")
-                  }
-                );
-                reviewedReplySource = {
-                  routeId: recovered.routeId,
-                  sourceMessageId: recovered.sourceMessageId,
-                  groupId: recovered.groupId,
-                  instanceId: recovered.instanceId,
-                  record: recovered.record,
-                  dataDirs: [recovered.roleDir],
-                  reviewedAttachmentIds: recovered.reviewedAttachmentIds
-                };
-              }
-            }
-            const replyOptions = {
-              rootDir,
-              routeRoot,
-              rolesRoot,
-              speechServiceUrl: speechServiceUrl(),
-              publishEvent: publishManagerEvent,
-              runtimes: [...runtimes.values()].map((runtime) => {
-                const relay = rabiLinkRelayConfigFor(runtime.definition);
-                return {
-                  ...runtime.definition,
-                  rabiLinkRelay: relay,
-                  napcatInstances: (runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)).map((instance) => ({
-                    ...instance,
-                    accessToken: instance.accessToken ?? ""
-                  }))
-                };
-              })
-            };
-            if (!receiptBeforeValidation) {
-              validateAgentSendReplyImageDescriptions(body, replyOptions, reviewedReplySource);
-            }
-            const existingReceipt = readAgentSendReceipt(rootDir, String(body.deliveryId || ""));
-            let languageStyleValidation: AgentSendResult["languageStyleValidation"];
-            if (!existingReceipt) {
-              const styleDecision = await evaluateAgentSendLanguageStyle(body, replyOptions, languageStyleValidator);
-              languageStyleValidation = styleDecision.metadata;
-              if (styleDecision.blocked) {
-                const prepared = prepareAgentSendRequest(body);
-                jsonResponse(response, 409, {
-                  code: -1,
-                  ok: false,
-                  status: "style_confirmation_required",
-                  reason: "Language style validation failed. Review the reasons, then resend the same deliveryId with styleValidation=0 only after confirming the text is intentional.",
-                  deliveryId: prepared.deliveryId,
-                  sender: prepared.sender,
-                  channel: prepared.channel,
-                  routeId: prepared.routeId,
-                  target: prepared.target,
-                  languageStyleValidation
-                });
-                return null;
-              }
-            }
-            const deliver = async () => ({
-              ...await handleAgentSend(body, replyOptions, reviewedReplySource),
-              ...(languageStyleValidation ? { languageStyleValidation } : {})
-            });
-            const result = await executeIdempotentAgentSend(body, {
-              rootDir,
-              deliver,
-              recover: async () => {
-                const inspection = await inspectAgentSendDelivery(body, replyOptions);
-                if (inspection.state === "completed") return inspection;
-                if (inspection.state === "missing") return { state: "retry" };
-                return { state: "uncertain", reason: inspection.reason };
-              }
-            });
-            if (result.body.replyImageDescriptionArchive && result.body.idempotency.duplicate === false) {
-              managerOperationalLog.record("info", "agent_reply_image_descriptions_archived", {
-                action: String(body.deliveryId || ""),
-                result: `sourceMessageId=${result.body.replyImageDescriptionArchive.sourceMessageId}; files=${result.body.replyImageDescriptionArchive.files.length}`
-              });
-            }
-            recordMessageProcessingSend(body, result.body);
-            return result;
-          })
-          .then((result) => {
-            if (!result) return;
-            jsonResponse(response, result.statusCode, { code: result.body.ok ? 0 : -1, ...result.body });
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { code: -1, ok: false, status: "blocked", message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/open-config-file") {
-        jsonResponse(response, 200, openConfigFilePayload(
-          requestUrl.searchParams.get("type"),
-          requestUrl.searchParams.get("gatewayId"),
-          requestUrl.searchParams.get("roleId")
-        ));
-        return;
-      }
-      if (request.method === "POST" && requestUrl.pathname === "/manager/start") {
-        jsonResponse(response, 200, { code: 0, message: "manager is already running" });
-        return;
-      }
-      if (managerPluginActive("manager:desktop")
-        && handleDesktopLifecycleApi(request, requestUrl, response, { rootDir, shutdownManager })) {
-        return;
-      }
-      if (requestUrl.pathname === "/api/gateways") {
-        jsonResponse(response, 200, measureSyncPerformanceOperation(
-          PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics,
-          () => {
-            const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
-            const tailCache: JsonlTailCache = new Map();
-            return [...runtimes.values()]
-              .map((runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache));
-          }
-        ));
-        return;
-      }
-      if (requestUrl.pathname === "/api/scan/agents" && request.method === "GET") {
-        const codexLimit = Number(requestUrl.searchParams.get("codexLimit") || "200");
-        const codexOffset = Number(requestUrl.searchParams.get("codexOffset") || "0");
-        const codexQuery = requestUrl.searchParams.get("codexQuery") || undefined;
-        const dshLimit = Number(requestUrl.searchParams.get("dshLimit") || "200");
-        const dshOffset = Number(requestUrl.searchParams.get("dshOffset") || "0");
-        const dshQuery = requestUrl.searchParams.get("dshQuery") || undefined;
-        const dshBaseUrl = requestUrl.searchParams.get("dshBaseUrl") || undefined;
-        const runtimeSnapshots = [...runtimes.values()].map((runtime) => ({ definition: runtime.definition }));
-        void managerAgentScanWorkerPool.queryAgentScan<Record<string, unknown>>(
-          rootDir,
-          runtimeSnapshots,
-          { codexLimit, codexOffset, codexQuery, dshLimit, dshOffset, dshQuery, dshBaseUrl }
-        )
-          .then((data) => {
-            const operations = Array.isArray(data.__performanceOperations)
-              ? data.__performanceOperations as Array<{ operation?: unknown; durationMs?: unknown; error?: unknown }>
-              : [];
-            for (const operation of operations) {
-              recordPerformanceOperation(
-                String(operation.operation || "manager.agent_scan.unknown"),
-                Number(operation.durationMs || 0),
-                operation.error === true
-              );
-            }
-            const responseData = { ...data };
-            delete responseData.__performanceOperations;
-            jsonResponse(response, 200, responseData);
-          })
-          .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
-            code: -1,
-            message: error instanceof Error ? error.message : String(error)
-          }));
-        return;
-      }
-      if (requestUrl.pathname === "/api/scan/agents/dsh" && request.method === "GET") {
-        const dshLimit = Number(requestUrl.searchParams.get("dshLimit") || "200");
-        const dshOffset = Number(requestUrl.searchParams.get("dshOffset") || "0");
-        const dshQuery = requestUrl.searchParams.get("dshQuery") || undefined;
-        const dshBaseUrl = requestUrl.searchParams.get("dshBaseUrl") || undefined;
-        void scanDshAgentAdapter(agentManagerApiCtx(), { dshLimit, dshOffset, dshQuery, dshBaseUrl })
-          .then((data) => jsonResponse(response, 200, data))
-          .catch((error) => jsonResponse(response, 500, {
-            code: -1,
-            message: error instanceof Error ? error.message : String(error)
-          }));
-        return;
-      }
-      if (requestUrl.pathname === "/api/agent/copilot-install" && request.method === "POST") {
-        void (async () => {
-          const { execFile } = await import("node:child_process");
-          const { promisify } = await import("node:util");
-          const execFileAsync = promisify(execFile);
-          try {
-            const { stdout, stderr } = await execFileAsync("npm", ["install", "-g", "@github/copilot"], {
-              shell: true,
-              timeout: 120_000,
-              env: { ...process.env }
-            });
-            jsonResponse(response, 200, { ok: true, stdout: stdout.trim(), stderr: stderr.trim() });
-          } catch (err: unknown) {
-            const e = err as { message?: string; stdout?: string; stderr?: string };
-            jsonResponse(response, 500, { ok: false, error: e.message, stderr: e.stderr });
-          }
-        })();
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/agent/copilot-login" && request.method === "POST") {
-        void (async () => {
-          const { spawn } = await import("node:child_process");
-          try {
-            // Find copilot bin
-            const { execFile } = await import("node:child_process");
-            const { promisify } = await import("node:util");
-            const execFileAsync = promisify(execFile);
-            let copilotBin = "copilot";
-            try {
-              const { stdout } = await execFileAsync(process.platform === "win32" ? "where.exe" : "which", ["copilot"], { timeout: 2000 });
-              const first = stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0];
-              if (first) copilotBin = first;
-            } catch { /* use default */ }
-
-            // Spawn copilot login, capture device code from stdout
-            const child = spawn(copilotBin, ["login"], {
-              env: { ...process.env },
-              shell: process.platform === "win32",
-              windowsHide: true
-            });
-
-            let output = "";
-            let code: string | null = null;
-            let url: string | null = null;
-
-            const codeTimer = setTimeout(() => {
-              if (!code) {
-                child.kill();
-                jsonResponse(response, 408, { ok: false, error: "Timeout waiting for device code" });
-              }
-            }, 15_000);
-
-            child.stdout?.on("data", (d: Buffer) => {
-              output += d.toString();
-              const codeMatch = output.match(/code\s+([A-Z0-9]{4}-[A-Z0-9]{4})/i);
-              const urlMatch = output.match(/https:\/\/github\.com\/login\/device/);
-              if (codeMatch && !code) {
-                code = codeMatch[1];
-                url = urlMatch ? "https://github.com/login/device" : null;
-                clearTimeout(codeTimer);
-                jsonResponse(response, 200, { ok: true, code, url, pid: child.pid });
-              }
-            });
-
-            child.stderr?.on("data", (d: Buffer) => { output += d.toString(); });
-
-            child.on("exit", (exitCode) => {
-              clearTimeout(codeTimer);
-              publishManagerEvent("copilot_login_status", {
-                done: exitCode === 0,
-                exitCode,
-                error: exitCode === 0 ? "" : output.trim()
-              });
-              if (exitCode === 0 && !code) {
-                jsonResponse(response, 200, { ok: true, done: true });
-              } else if (exitCode !== 0 && !code) {
-                jsonResponse(response, 500, { ok: false, error: output.trim() });
-              }
-            });
-          } catch (err: unknown) {
-            jsonResponse(response, 500, { ok: false, error: String(err) });
-          }
-        })();
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/agent/copilot-status" && request.method === "GET") {
-        void (async () => {
-          jsonResponse(response, 200, await getCopilotStatus(agentManagerApiCtx()));
-        })();
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/agent/astrbot-login-test" && request.method === "POST") {
-        void readJsonBody<AstrbotLoginTestRequest>(request)
-          .then((body) => testAstrbotLoginEndpoint(body))
-          .then((result) => {
-            jsonResponse(response, result.ok ? 200 : 400, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-repair-all" && request.method === "POST") {
-        void (async () => {
-          const scanRepair = repairGatewayConfigsForScan();
-          const ctx = napcatManagerCtx();
-          const results: Array<Record<string, unknown>> = [];
-          for (const runtime of runtimes.values()) {
-            if (!definitionUsesNapcat(runtime.definition)) continue;
-            for (const instance of runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition)) {
-              const health = await testNapcatHealthEndpoint(ctx, {
-                httpUrl: instance.httpUrl,
-                webuiUrl: instance.webuiUrl,
-                accessToken: instance.accessToken,
-                webuiToken: instance.webuiToken,
-                gatewayPort: instance.gatewayPort
-              });
-              if (health.fixAvailable) {
-                try {
-                  const fixed = await configureNapcatOneBot(ctx, {
-                    httpUrl: instance.httpUrl,
-                    webuiUrl: instance.webuiUrl,
-                    accessToken: instance.accessToken,
-                    webuiToken: instance.webuiToken,
-                    gatewayPort: instance.gatewayPort
-                  });
-                  results.push({ gatewayId: runtime.definition.id, instanceId: instance.id, ok: true, action: "configure-onebot", ...fixed });
-                } catch (error) {
-                  results.push({ gatewayId: runtime.definition.id, instanceId: instance.id, ok: false, action: "configure-onebot", message: error instanceof Error ? error.message : String(error) });
-                }
-              } else {
-                results.push({ gatewayId: runtime.definition.id, instanceId: instance.id, ok: Boolean(health.ok), action: "health-check", message: health.ok ? "已连通，无需修复。" : String(health.message || "没有可自动修复项。") });
-              }
-            }
-          }
-          jsonResponse(response, 200, {
-            ok: true,
-            repair: scanRepair,
-            results,
-            napcatHealth: (await napcatScanHealthPayload()).payload,
-            gatewayPayload: standaloneGatewayPayload()
-          });
-        })().catch((error) => {
-          jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-        });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-ensure-ready" && request.method === "POST") {
-        void readJsonBody<NapcatLaunchRequest>(request)
-          .then((body) => ensureNapcatInstanceReady(napcatManagerCtx(), body))
-          .then((result) => {
-            jsonResponse(response, 200, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-health" && request.method === "POST") {
-        void (async () => {
-          const body = await readJsonBody<NapcatHealthRequest>(request);
-          let result = await testNapcatHealthEndpoint(napcatManagerCtx(), body) as Record<string, unknown>;
-          const correctedWebuiUrl = correctedNapcatWebuiUrlFromHealth(result);
-          if (correctedWebuiUrl) {
-            const runtime = body.gatewayId
-              ? runtimes.get(body.gatewayId)
-              : [...runtimes.values()].find((item) => {
-                  const instances = item.definition.napcatInstances ?? normalizeNapCatInstances(item.definition);
-                  return instances.some((instance) =>
-                    (body.instanceId && instance.id === body.instanceId)
-                    || (body.httpUrl && instance.httpUrl === body.httpUrl)
-                    || (body.webuiUrl && instance.webuiUrl === body.webuiUrl)
-                  );
-                });
-            const instances = runtime ? runtime.definition.napcatInstances ?? normalizeNapCatInstances(runtime.definition) : [];
-            const instance = runtime
-              ? instances.find((item) => item.id === body.instanceId)
-                ?? instances.find((item) => body.httpUrl && item.httpUrl === body.httpUrl)
-                ?? instances.find((item) => body.webuiUrl && item.webuiUrl === body.webuiUrl)
-              : undefined;
-            if (runtime && instance) {
-              const backfilled = backfillNapcatInstanceWebuiUrl(runtime.definition, instance.id, correctedWebuiUrl);
-              if (backfilled) {
-                instance.webuiUrl = backfilled;
-                result = addHealthDiagnostic(result, `已根据 NapCat webui.json 自动修正 WebUI 地址：${backfilled}`);
-              }
-            }
-          }
-          jsonResponse(response, 200, result);
-        })().catch((error) => {
-          jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-        });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-configure-onebot" && request.method === "POST") {
-        void readJsonBody<NapcatHealthRequest>(request)
-          .then((body) => configureNapcatOneBot(napcatManagerCtx(), body))
-          .then((result) => {
-            jsonResponse(response, result.ok ? 200 : 400, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-add" && request.method === "POST") {
-        void readJsonBody<NapcatAddRequest>(request)
-          .then((body) => addManagedNapcatInstance(body))
-          .then((result) => {
-            jsonResponse(response, result.ok ? 200 : 400, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-launch" && request.method === "POST") {
-        void readJsonBody<NapcatLaunchRequest>(request)
-          .then((body) => launchNapcatInstanceEndpoint(napcatManagerCtx(), body))
-          .then((result) => {
-            jsonResponse(response, result.ok !== false ? 200 : 400, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-restart" && request.method === "POST") {
-        void readJsonBody<NapcatLaunchRequest>(request)
-          .then((body) => restartNapcatInstanceEndpoint(napcatManagerCtx(), body))
-          .then((result) => {
-            jsonResponse(response, result.ok ? 200 : 400, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/message/napcat-remove" && request.method === "POST") {
-        void readJsonBody<NapcatRemoveRequest>(request)
-          .then((body) => removeManagedNapcatInstance(body))
-          .then((result) => {
-            jsonResponse(response, result.ok ? 200 : 400, result);
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/agent/marvis-open" && request.method === "POST") {
-        void readJsonBody<MarvisOpenRequest>(request)
-          .then((body) => {
-            jsonResponse(response, 200, openMarvis(agentManagerApiCtx(), body));
-          })
-          .catch((error) => {
-            jsonResponse(response, 400, { ok: false, message: error instanceof Error ? error.message : String(error) });
-          });
-        return;
-      }
-
-      if (requestUrl.pathname === "/api/deploy-astrbot-adapter" && request.method === "POST") {
-        void (async () => {
-          try {
-            const result = await deployAstrbotAdapter(agentManagerApiCtx());
-            jsonResponse(response, result.status, result.body);
-          } catch (err: unknown) {
-            jsonResponse(response, 500, { ok: false, error: String(err) });
-          }
-        })();
-        return;
-      }
-
-      if (requestUrl.pathname === "/reload") {
-        loadRuntimes();
-        syncRunningGateways();
-        if (request.headers.accept?.includes("application/json")) {
-          jsonResponse(response, 200, { ok: true, gateways: [...runtimes.values()].map(runtimeStatus) });
-        } else {
-          response.writeHead(303, { location: "/" });
-          response.end();
-        }
-        return;
-      }
-      if (requestUrl.pathname.startsWith("/api/")) {
+      if (isManagerControlRequestPath(requestUrl.pathname)) {
         jsonResponse(response, 404, { code: -1, message: "Manager API route not found." });
         return;
       }
@@ -8598,18 +7995,10 @@ export async function startManager(): Promise<void> {
     }
   });
 
-  remoteAgentHub.attach(activeServer);
   activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
-  if (managerShouldAutostart && remoteAgentDiscoverable) {
-    remoteAgentHub.startDiscoveryResponder();
-  } else if (!managerShouldAutostart) {
-    console.log("Remote Agent LAN discovery responder disabled by RABIROUTE_MANAGER_AUTOSTART=0");
-  } else {
-    console.log("Remote Agent LAN discovery responder disabled by REMOTE_AGENT_DISCOVERABLE=0");
-  }
 
   await listenManagerServer(activeServer, managerPort, managerHost);
 
@@ -8634,7 +8023,7 @@ export async function startManager(): Promise<void> {
 
   let shuttingDown = false;
 
-  function shutdownManager(reason: string): void {
+  shutdownManager = (reason: string): void => {
     if (shuttingDown) {
       return;
     }
@@ -8642,7 +8031,8 @@ export async function startManager(): Promise<void> {
     console.log(`gateway-manager shutting down: ${reason}`);
     managerOperationalLog.record("info", "manager_shutdown_requested", { result: reason });
     stopManagerResources();
-    const managerCordisDispose = managerCordisRoot.dispose();
+    const managerCordisDispose = managerCordisRoot.dispose()
+      .then(() => manualTriggerProcesses.stopAll());
     activeServer.close(() => {
       void Promise.allSettled([
         messageProcessingBoardPersistence.flush(),
@@ -8650,8 +8040,8 @@ export async function startManager(): Promise<void> {
         managerCordisDispose
       ]).finally(() => process.exit(0));
     });
-    setTimeout(() => process.exit(0), 10_000).unref();
-  }
+    setTimeout(() => process.exit(0), 15 * 60_000).unref();
+  };
 
   removeSignalHandlers = installManagerSignalHandlers(shutdownManager);
   } catch (error) {
@@ -8662,7 +8052,7 @@ export async function startManager(): Promise<void> {
     await Promise.allSettled([
       messageProcessingBoardPersistence.flush(),
       managerOperationalLog.flush(),
-      managerCordisRoot.dispose()
+      managerCordisRoot.dispose().then(() => manualTriggerProcesses.stopAll())
     ]);
     throw error;
   }

@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { KeyedAsyncLock } from "../shared/keyedAsyncLock.js";
 
@@ -73,18 +73,19 @@ type MessageAdapterScanResult = {
   warnings?: string[];
 };
 
-type NapcatManagerContext = {
+export type NapcatManagerContext = {
   rootDir: string;
   getRuntimes(): Iterable<GatewayRuntime>;
   normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[];
   appendLog(runtime: GatewayRuntime, line: string): void;
   checkHttpEndpoint(url: string, timeoutMs?: number): Promise<boolean>;
-  launchNapcatProcess?(plan: NapcatLaunchPlan, visible: boolean): void;
+  launchNapcatProcess?(plan: NapcatLaunchPlan, visible: boolean, request: NapcatLaunchRequest): ChildProcess | void;
+  recordNapcatLaunchPids?(request: NapcatLaunchRequest, pids: readonly string[]): void;
   /** Test seam; production uses the scoped port / command-line lookup below. */
   findNapcatInstanceProcessPids?(instance: NapCatInstanceDefinition, ports: number[]): Promise<string[]>;
 };
 
-type NapcatHealthRequest = {
+export type NapcatHealthRequest = {
   gatewayId?: string;
   instanceId?: string;
   httpUrl?: string;
@@ -112,7 +113,7 @@ type NapcatWebuiTokenInfo = {
   source?: "provided" | "config";
 };
 
-type NapcatLaunchRequest = {
+export type NapcatLaunchRequest = {
   gatewayId?: string;
   instanceId?: string;
   forceRestart?: boolean;
@@ -121,7 +122,7 @@ type NapcatLaunchRequest = {
 
 type NapcatEnsureReadyRequest = NapcatLaunchRequest;
 
-type NapcatLaunchPlan = {
+export type NapcatLaunchPlan = {
   command: string;
   cwd: string;
   commandPath: string;
@@ -132,7 +133,7 @@ type NapcatLaunchPlan = {
   warnings: string[];
 };
 
-type NapcatStopRequest = {
+export type NapcatStopRequest = {
   gatewayId?: string;
   instanceId?: string;
   name?: string;
@@ -420,25 +421,33 @@ export function resolveNapcatLaunchPlan(instance: NapCatInstanceDefinition, root
   };
 }
 
-function launchOnWindows(plan: NapcatLaunchPlan): void {
-  const commandExt = path.extname(plan.commandPath).toLowerCase();
-  if (commandExt === ".bat" || commandExt === ".cmd") {
-    const child = spawn("cmd.exe", ["/d", "/c", plan.commandPath, ...plan.args], {
-      cwd: plan.cwd,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true
-    });
+export function launchNapcatProcess(plan: NapcatLaunchPlan, _visible = false): ChildProcess {
+  if (process.platform === "win32") {
+    const commandExt = path.extname(plan.commandPath).toLowerCase();
+    const child = commandExt === ".bat" || commandExt === ".cmd"
+      ? spawn("cmd.exe", ["/d", "/c", plan.commandPath, ...plan.args], {
+          cwd: plan.cwd,
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true
+        })
+      : spawn(plan.commandPath, plan.args, {
+          cwd: plan.cwd,
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true
+        });
     child.unref();
-    return;
+    return child;
   }
-  const child = spawn(plan.commandPath, plan.args, {
+  const child = spawn(plan.commandLine, [], {
     cwd: plan.cwd,
     detached: true,
-    stdio: "ignore",
-    windowsHide: true
+    shell: true,
+    stdio: "ignore"
   });
   child.unref();
+  return child;
 }
 
 function newToken(): string {
@@ -2193,20 +2202,18 @@ async function launchNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: 
     }
   }
   if (ctx.launchNapcatProcess) {
-    ctx.launchNapcatProcess(plan, request.visible === true);
-  } else if (process.platform === "win32") {
-    launchOnWindows(plan);
+    ctx.launchNapcatProcess(plan, request.visible === true, request);
   } else {
-    const child = spawn(plan.commandLine, [], {
-      cwd: plan.cwd,
-      detached: true,
-      shell: true,
-      stdio: "ignore"
-    });
-    child.unref();
+    launchNapcatProcess(plan, request.visible === true);
   }
+  const recordLaunchPids = async (): Promise<void> => {
+    if (!ctx.recordNapcatLaunchPids) return;
+    ctx.recordNapcatLaunchPids(request, await napcatInstanceProcessPids(ctx, instance, ports));
+  };
+  await recordLaunchPids();
   const ready = await waitForNapcatReady(ctx, instance);
   const readyOk = ready.ok !== false;
+  await recordLaunchPids();
   ctx.appendLog(runtime, `launch NapCat instance ${instance.name || instance.id}: ${plan.commandLine} ready=${readyOk ? String(ready.kind || "ok") : "timeout"}`);
   const steps = [
     ...preflightSteps,
@@ -2770,7 +2777,11 @@ async function stopNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: Na
   }
   const remainingPids = await napcatInstanceProcessPids(ctx, instance, ports);
   if (remainingPids.length > 0) failed.push(...remainingPids.filter((pid) => !failed.includes(pid)));
-  steps.push(...removeManagedNapcatFiles(ctx, instance));
+  if (remainingPids.length === 0) {
+    steps.push(...removeManagedNapcatFiles(ctx, instance));
+  } else {
+    steps.push("后台进程仍在运行，未删除受管 NapCat 文件。");
+  }
   ctx.appendLog(runtime, `stop NapCat instance ${instance.name || instance.id}: ports=${ports.join(",")} stopped=${stopped.join(",") || "none"} remaining=${remainingPids.join(",") || "none"}`);
   return {
     ok: remainingPids.length === 0,

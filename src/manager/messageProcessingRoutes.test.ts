@@ -40,6 +40,7 @@ function requirement(
 
 function createFixture() {
   const calls: RecordedCall[] = [];
+  const trackedOperations: Promise<unknown>[] = [];
   const requirements = new Map<string, MessageProcessingRequirement>([
     ["req/1", requirement("req/1")],
     ["req-outcome", requirement("req-outcome", "processing")],
@@ -134,9 +135,13 @@ function createFixture() {
     verifyCriticalFactRecord: (input) => remember("verify", input),
     setPlanBaseline: (item, roleId, planId) => remember("baseline", item, roleId, planId),
     scheduleKnowledgeCallbackReminder: (item) => remember("schedule", item),
-    publishEvent: (eventType, data) => remember("event", eventType, data)
+    publishEvent: (eventType, data) => remember("event", eventType, data),
+    trackOperation(operation) {
+      trackedOperations.push(operation);
+      return operation;
+    }
   };
-  return { calls, context };
+  return { calls, context, trackedOperations };
 }
 
 async function startServer(context: MessageProcessingApiContext) {
@@ -360,6 +365,52 @@ test("returns 400 for invalid JSON and false for unrelated routes", async () => 
     const unrelated = await fetch(`${app.baseUrl}/api/unrelated`);
     assert.equal(unrelated.status, 404);
     assert.deepEqual(await json(unrelated), { fallback: true });
+  } finally {
+    await app.close();
+  }
+});
+
+
+test("registers complete asynchronous message-processing request chains", async () => {
+  const fixture = createFixture();
+  const app = await startServer(fixture.context);
+  const source = requirement("source").source;
+  const callback = {
+    knowledgeId: "memory-old",
+    knowledgeType: "recent_memory" as const,
+    result: "updated" as const,
+    responseAction: "reply" as const,
+    evidence: "message-1",
+    recordType: "memory" as const,
+    recordId: "memory-new",
+    verifiedAt: "2026-08-21T01:00:00.000Z"
+  };
+  try {
+    await fetch(`${app.baseUrl}/api/message-processing/board`);
+    await post(app.baseUrl, "/api/message-processing/requirements/req-outcome/send-context", {
+      reviewedByThreadId: "thread-1",
+      sendRequest: { text: "reply" }
+    });
+    await post(app.baseUrl, "/api/message-processing/requirements", {
+      action: "register_group",
+      requirementId: "req-tracked",
+      messageGroupId: "group-tracked",
+      source
+    });
+    await post(app.baseUrl, "/api/message-processing/requirements/req-outcome/outcome", {
+      decision: "reply"
+    });
+    await post(
+      app.baseUrl,
+      "/api/message-processing/requirements/req-callback/knowledge-callback",
+      callback
+    );
+
+    assert.equal(fixture.trackedOperations.length, 5);
+    assert.deepEqual(
+      (await Promise.allSettled(fixture.trackedOperations)).map((result) => result.status),
+      ["fulfilled", "fulfilled", "fulfilled", "fulfilled", "fulfilled"]
+    );
   } finally {
     await app.close();
   }

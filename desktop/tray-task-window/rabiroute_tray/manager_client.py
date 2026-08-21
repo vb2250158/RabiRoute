@@ -10,10 +10,10 @@ from urllib.request import Request, urlopen
 from .plugin_catalog import (
     DesktopPluginCatalog,
     DesktopPluginCatalogCache,
+    DesktopExtensionRegistry,
     DesktopPluginSettingsSection,
     DesktopPluginStatusCard,
-    SUPPORTED_DESKTOP_SETTINGS_SECTIONS,
-    SUPPORTED_DESKTOP_STATUS_CARDS,
+    create_builtin_desktop_extension_registry,
 )
 
 
@@ -78,7 +78,7 @@ class DesktopPluginStatusResult:
 @dataclass(frozen=True)
 class DesktopPluginSettingsResult:
     section: DesktopPluginSettingsSection
-    settings: DesktopSettings | None = None
+    settings: object | None = None
     error: str = ""
 
 
@@ -89,10 +89,6 @@ class DesktopPluginSurfaceSnapshot:
     settings: tuple[DesktopPluginSettingsResult, ...] = ()
 
 
-_DESKTOP_STATUS_QUERY_PATHS = {
-    "manager.speech-status": "/api/speech/status",
-    "manager.performance-status": "/api/performance/status",
-}
 
 
 @dataclass(frozen=True)
@@ -109,10 +105,16 @@ class PlanFeedbackSubmitResult:
 
 
 class ManagerClient:
-    def __init__(self, manager_url: str = "http://127.0.0.1:8790", timeout_seconds: float = 3.0) -> None:
+    def __init__(
+        self,
+        manager_url: str = "http://127.0.0.1:8790",
+        timeout_seconds: float = 3.0,
+        extension_registry: DesktopExtensionRegistry | None = None,
+    ) -> None:
         self.manager_url = manager_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self._desktop_plugin_catalog_cache = DesktopPluginCatalogCache()
+        self.desktop_extension_registry = extension_registry or create_builtin_desktop_extension_registry()
+        self._desktop_plugin_catalog_cache = DesktopPluginCatalogCache(self.desktop_extension_registry)
 
     def snapshot(self) -> ManagerSnapshot:
         try:
@@ -266,26 +268,19 @@ class ManagerClient:
         return self._desktop_plugin_catalog_cache.accept_payload(payload, identity_revision)
 
     def desktop_plugin_status_payload(self, card: DesktopPluginStatusCard) -> dict[str, Any]:
-        if (card.query_id, card.renderer_id) not in SUPPORTED_DESKTOP_STATUS_CARDS:
-            raise ValueError(f"Unsupported desktop plugin status contract: {card.query_id} / {card.renderer_id}")
-        path = _DESKTOP_STATUS_QUERY_PATHS.get(card.query_id)
-        if path is None:
-            raise ValueError(f"Unsupported desktop plugin query: {card.query_id}")
-        payload = self._get_json(path)
+        try:
+            payload = self.desktop_extension_registry.query_status(card, self._get_json)
+        except LookupError as error:
+            raise ValueError(str(error)) from error
         if payload.get("code") != 0 or not isinstance(payload.get("data"), dict):
             raise ValueError(f"Manager plugin query returned an invalid response: {card.query_id}")
         return payload
 
-    def desktop_plugin_settings_value(self, section: DesktopPluginSettingsSection) -> DesktopSettings:
-        contract = (
-            section.renderer_id,
-            section.schema_id,
-            section.read_command_id,
-            section.write_command_id,
-        )
-        if contract not in SUPPORTED_DESKTOP_SETTINGS_SECTIONS:
-            raise ValueError(f"Unsupported desktop plugin settings contract: {section.contribution_id}")
-        return self.desktop_settings()
+    def desktop_plugin_settings_value(self, section: DesktopPluginSettingsSection) -> object:
+        try:
+            return self.desktop_extension_registry.read_settings(section, self.desktop_settings)
+        except LookupError as error:
+            raise ValueError(str(error)) from error
 
     def desktop_plugin_surface_snapshot(self) -> DesktopPluginSurfaceSnapshot:
         catalog = self.desktop_plugin_catalog()
@@ -302,7 +297,7 @@ class ManagerClient:
             payload, error = cached
             statuses.append(DesktopPluginStatusResult(card=card, payload=payload, error=error))
 
-        settings_cache: dict[str, tuple[DesktopSettings | None, str]] = {}
+        settings_cache: dict[str, tuple[object | None, str]] = {}
         settings: list[DesktopPluginSettingsResult] = []
         for section in catalog.settings_sections:
             cached = settings_cache.get(section.read_command_id)

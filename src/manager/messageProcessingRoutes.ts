@@ -61,6 +61,7 @@ export type MessageProcessingApiContext = {
   ) => void;
   scheduleKnowledgeCallbackReminder: (requirement: MessageProcessingRequirement) => void;
   publishEvent: (eventType: string, data: unknown) => void;
+  trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
@@ -86,6 +87,12 @@ function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+function runTrackedOperation<T>(
+  context: Pick<MessageProcessingApiContext, "trackOperation">,
+  operation: Promise<T>
+): void {
+  void (context.trackOperation?.(operation) ?? operation);
 }
 
 function publishBoardChange(
@@ -141,9 +148,9 @@ export function handleMessageProcessingApi(
   if (request.method === "GET" && requestUrl.pathname === "/api/message-processing/board") {
     const routeId = requestUrl.searchParams.get("routeId")?.trim() || undefined;
     const limit = Number(requestUrl.searchParams.get("limit") || "100");
-    void context.boardPayload(routeId, limit)
+    runTrackedOperation(context, context.boardPayload(routeId, limit)
       .then((data) => jsonResponse(response, 200, { code: 0, data }))
-      .catch((error) => jsonResponse(response, 500, { code: -1, message: errorMessage(error) }));
+      .catch((error) => jsonResponse(response, 500, { code: -1, message: errorMessage(error) })));
     return true;
   }
 
@@ -178,7 +185,7 @@ export function handleMessageProcessingApi(
   }
   if (request.method === "POST" && sendContextMatch) {
     const requirementId = decodeURIComponent(sendContextMatch[1]);
-    void readJsonBody<MessageProcessingSendContextApprovalInput>(request)
+    runTrackedOperation(context, readJsonBody<MessageProcessingSendContextApprovalInput>(request)
       .then((body) => context.sendContextReview.approve(requirementId, body))
       .then((data) => {
         context.operationalLog.record("info", "message_processing_send_context_review_approved", {
@@ -187,12 +194,12 @@ export function handleMessageProcessingApi(
         });
         jsonResponse(response, 200, { code: 0, data });
       })
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
     return true;
   }
 
   if (request.method === "POST" && requestUrl.pathname === "/api/message-processing/requirements") {
-    void readJsonBody<MessageProcessingRegistrationInput>(request)
+    runTrackedOperation(context, readJsonBody<MessageProcessingRegistrationInput>(request)
       .then((body) => {
         const requirementId = String(body.requirementId || "").trim();
         if (!requirementId) throw new Error("Missing requirementId.");
@@ -219,7 +226,7 @@ export function handleMessageProcessingApi(
         return item;
       })
       .then((data) => jsonResponse(response, 200, { code: 0, data }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
     return true;
   }
 
@@ -228,7 +235,7 @@ export function handleMessageProcessingApi(
   );
   if (request.method === "POST" && outcomeMatch) {
     const requirementId = decodeURIComponent(outcomeMatch[1]);
-    void readJsonBody<MessageProcessingOutcomeInput>(request)
+    runTrackedOperation(context, readJsonBody<MessageProcessingOutcomeInput>(request)
       .then((body) => {
         const requirement = context.board.getRequirement(requirementId);
         verifyOutcomeRecords(context, requirement, body);
@@ -240,7 +247,7 @@ export function handleMessageProcessingApi(
         publishBoardChange(context, data);
         jsonResponse(response, 200, { code: 0, data });
       })
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
     return true;
   }
 
@@ -249,7 +256,7 @@ export function handleMessageProcessingApi(
   );
   if (request.method === "POST" && knowledgeCallbackMatch) {
     const requirementId = decodeURIComponent(knowledgeCallbackMatch[1]);
-    void readJsonBody<KnowledgeMatchCallbackInput>(request)
+    runTrackedOperation(context, readJsonBody<KnowledgeMatchCallbackInput>(request)
       .then((body) => {
         const requirement = context.board.getRequirement(requirementId);
         if (!requirement) throw new Error(`Message processing requirement not found: ${requirementId}`);
@@ -278,7 +285,7 @@ export function handleMessageProcessingApi(
         publishBoardChange(context, data);
         jsonResponse(response, 200, { code: 0, data });
       })
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) }));
+      .catch((error) => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
     return true;
   }
 

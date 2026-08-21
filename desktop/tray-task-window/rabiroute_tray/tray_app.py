@@ -27,11 +27,15 @@ from .manager_client import (
     RolePanelSendResult,
 )
 from .plugin_catalog import (
+    DesktopCommandContext,
+    DesktopExtensionRegistry,
     DesktopPluginCatalog,
-    SUPPORTED_DESKTOP_HANDLERS,
-    SUPPORTED_DESKTOP_HOTKEYS,
-    SUPPORTED_DESKTOP_THEMES,
+    DesktopPluginHotkey,
+    DesktopPluginTheme,
+    DesktopThemeContext,
+    create_builtin_desktop_extension_registry,
     empty_desktop_plugin_catalog,
+    load_trusted_desktop_extensions,
 )
 from .qt_async import QtAsyncTask, start_qt_task, wait_for_qt_tasks
 from .system_selection import (
@@ -201,7 +205,11 @@ def run(
     project_root: Path,
     manager_url: str = "http://127.0.0.1:8790",
     manager_proc: "subprocess.Popen[bytes] | None" = None,
+    trusted_extension_entry_points: tuple[str, ...] = (),
 ) -> int:
+    desktop_extensions = create_builtin_desktop_extension_registry(freeze=False)
+    load_trusted_desktop_extensions(desktop_extensions, trusted_extension_entry_points)
+    desktop_extensions.freeze()
     app = QApplication(sys.argv)
     apply_qt_app_metadata(app)
     app.aboutToQuit.connect(_wait_for_background_tasks)
@@ -217,7 +225,7 @@ def run(
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
     app.setQuitOnLastWindowClosed(not tray_available)
 
-    manager = ManagerClient(manager_url=manager_url)
+    manager = ManagerClient(manager_url=manager_url, extension_registry=desktop_extensions)
     lifecycle = LifecycleController(manager=manager)
     desktop = DesktopAdapter(project_root)
     refresh_service = DesktopRefreshService(manager, project_root)
@@ -282,8 +290,18 @@ def run(
     lifecycle.observe(initial_manager)
 
     def apply_desktop_theme(theme: object) -> None:
-        selected_theme = _desktop_plugin_theme_id(state["plugin_catalog"], theme)
-        resolved = apply_rabi_application_theme(app, selected_theme)
+        selected = _desktop_plugin_theme(state["plugin_catalog"], theme, desktop_extensions)
+        context = DesktopThemeContext(app, apply_rabi_application_theme)
+        try:
+            resolved = (
+                desktop_extensions.apply_theme(selected, context)
+                if selected is not None
+                else desktop_extensions.apply_registered_theme(
+                    "system", "builtin.desktop-theme.system.v1", context
+                )
+            )
+        except LookupError:
+            resolved = apply_rabi_application_theme(app, "system")
         state["theme"] = theme if isinstance(theme, str) else "system"
         state["resolved_theme"] = resolved
         apply_rabi_menu_theme(menu, more_personas_menu, plugin_menu, theme=resolved)
@@ -310,7 +328,12 @@ def run(
         nonlocal panel
         if panel is not None:
             return panel
-        panel = TaskWindow(app_icon, state["resolved_theme"])
+        panel = TaskWindow(
+            app_icon,
+            state["resolved_theme"],
+            plugin_manager_factory=lambda url: ManagerClient(url, extension_registry=desktop_extensions),
+            extension_registry=desktop_extensions,
+        )
         panel.refresh_button.clicked.connect(refresh)
         panel.route_selected.connect(lambda item_id: open_panel(_gateway_by_id(state["manager"].gateways, item_id)))
         panel.send_message_requested.connect(lambda text, attachments: _send_role_panel_message(
@@ -453,9 +476,27 @@ def run(
             )
 
     def execute_plugin_handler(handler_id: str) -> None:
-        target = _desktop_plugin_handler_url(manager.manager_url, handler_id)
-        if target is not None:
-            desktop.open_url(target)
+        try:
+            desktop_extensions.invoke_command(
+                handler_id,
+                DesktopCommandContext(
+                    manager_url=manager.manager_url,
+                    open_url=desktop.open_url,
+                    services={
+                        "desktop.capture-screenshot": system_screenshot.request_capture,
+                        "desktop.pin-clipboard-image": system_screenshot.request_clipboard_pin,
+                    },
+                ),
+            )
+        except Exception as error:
+            _show_message(
+                tray,
+                tray_available,
+                "插件操作失败",
+                str(error) or error.__class__.__name__,
+                QSystemTrayIcon.Warning,
+                5000,
+            )
 
     def refresh_plugin_catalog() -> None:
         nonlocal plugin_catalog_task
@@ -476,7 +517,9 @@ def run(
                     return
                 try:
                     state["plugin_catalog"] = catalog
-                    system_screenshot.set_plugin_hotkey_handlers(_desktop_plugin_hotkey_handlers(catalog))
+                    system_screenshot.set_plugin_hotkeys(
+                        _desktop_plugin_hotkeys(catalog, desktop_extensions)
+                    )
                     apply_desktop_theme(state["theme"])
                     _rebuild_plugin_menu(
                         menu,
@@ -484,6 +527,7 @@ def run(
                         refresh_action,
                         catalog,
                         execute_plugin_handler,
+                        desktop_extensions,
                     )
                     _warm_menu_layout(menu)
                 finally:
@@ -559,6 +603,8 @@ def run(
         selection_delivery_targets,
         notify_selection_action,
         settings_path=project_root / "data" / "desktop" / "settings.json",
+        extension_registry=desktop_extensions,
+        execute_command=execute_plugin_handler,
     )
     app.aboutToQuit.connect(system_screenshot.stop)
     system_screenshot.start()
@@ -646,31 +692,27 @@ def _run_when_menu_idle(menu: QMenu, callback, retry_ms: int = 25) -> None:
     callback()
 
 
-def _desktop_plugin_hotkey_handlers(catalog: DesktopPluginCatalog) -> frozenset[str]:
-    return frozenset(
-        item.handler_id
-        for item in catalog.hotkeys
-        if (item.command_id, item.handler_id, item.default_binding) in SUPPORTED_DESKTOP_HOTKEYS
-    )
+def _desktop_plugin_hotkeys(
+    catalog: DesktopPluginCatalog,
+    registry: DesktopExtensionRegistry,
+) -> tuple[DesktopPluginHotkey, ...]:
+    return tuple(item for item in catalog.hotkeys if registry.has_hotkey_contract(item))
 
 
-def _desktop_plugin_theme_id(catalog: DesktopPluginCatalog, requested_theme: object) -> str:
+def _desktop_plugin_theme(
+    catalog: DesktopPluginCatalog,
+    requested_theme: object,
+    registry: DesktopExtensionRegistry,
+) -> DesktopPluginTheme | None:
     theme_id = requested_theme if isinstance(requested_theme, str) else "system"
-    available = {
-        item.theme_id
-        for item in catalog.themes
-        if (item.theme_id, item.desktop_resource_id) in SUPPORTED_DESKTOP_THEMES
-    }
-    return theme_id if theme_id in available else "system"
-
-
-def _desktop_plugin_handler_url(manager_url: str, handler_id: str) -> str | None:
-    base_url = manager_url.rstrip("/")
-    if handler_id == "desktop.open-webgui":
-        return base_url
-    if handler_id == "desktop.open-settings":
-        return f"{base_url}/#/settings"
-    return None
+    return next(
+        (
+            item for item in catalog.themes
+            if item.theme_id == theme_id
+            and registry.has_theme_resource(item.theme_id, item.desktop_resource_id)
+        ),
+        None,
+    )
 
 
 def _rebuild_plugin_menu(
@@ -679,11 +721,9 @@ def _rebuild_plugin_menu(
     insert_before: QAction,
     catalog: DesktopPluginCatalog,
     execute_handler,
+    registry: DesktopExtensionRegistry,
 ) -> None:
-    items = tuple(
-        item for item in catalog.menu_items
-        if item.handler_id in SUPPORTED_DESKTOP_HANDLERS
-    )
+    items = tuple(item for item in catalog.menu_items if registry.has_command_handler(item.handler_id))
     signature = tuple(
         (item.plugin_id, item.instance_id, item.contribution_id, item.handler_id, item.label)
         for item in items
@@ -692,7 +732,6 @@ def _rebuild_plugin_menu(
     is_inserted = menu_action in root_menu.actions()
     if signature == getattr(plugin_menu, "_rabiroute_plugin_signature", ()) and is_inserted == bool(items):
         return
-
     root_menu.removeAction(menu_action)
     plugin_menu.clear()
     plugin_menu._rabiroute_plugin_signature = signature

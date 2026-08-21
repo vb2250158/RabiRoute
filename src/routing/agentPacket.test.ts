@@ -451,7 +451,7 @@ test("AgentPacket highlights the immediate addressed context before interpreting
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-addressed-context-"));
   appendGroupMessage(dataDir, {
     time: 90,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 30001,
     rawMessage: "另一个较早的话题",
     messageId: 8000,
@@ -459,7 +459,7 @@ test("AgentPacket highlights the immediate addressed context before interpreting
   });
   appendGroupMessage(dataDir, {
     time: 100,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 2324411326,
     rawMessage: "序号36自己操作测试一下，我无法搞定",
     messageId: 870690296,
@@ -467,7 +467,7 @@ test("AgentPacket highlights the immediate addressed context before interpreting
   });
   appendGroupMessage(dataDir, {
     time: 106,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 2324411326,
     rawMessage: "[CQ:at,qq=1050739541]",
     messageId: 2115680539,
@@ -476,7 +476,7 @@ test("AgentPacket highlights the immediate addressed context before interpreting
 
   const record: GroupMessageRecord = {
     time: 112,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 1050739541,
     rawMessage: "1",
     messageId: 828490779,
@@ -524,7 +524,7 @@ test("AgentPacket presents broad history before the current message and keeps fo
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-focused-discussion-"));
   appendGroupMessage(dataDir, {
     time: 100,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 10001,
     rawMessage: "[CQ:image,file=dynamic.png] 改动原因是为了更长的底框？为啥？",
     messageId: 1000,
@@ -532,7 +532,7 @@ test("AgentPacket presents broad history before the current message and keeps fo
   });
   appendGroupMessage(dataDir, {
     time: 110,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 99999,
     rawMessage: "不是为了单纯把底框做长，而是文字可能超出。",
     messageId: 1001,
@@ -541,7 +541,7 @@ test("AgentPacket presents broad history before the current message and keeps fo
   });
   const record: GroupMessageRecord = {
     time: 120,
-    groupId: 798776701,
+    groupId: 100200301,
     userId: 10002,
     rawMessage: "动态显示的",
     messageId: 1002,

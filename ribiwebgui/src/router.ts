@@ -1,4 +1,4 @@
-import type { AsyncComponentLoader, Component } from "vue";
+import type { AsyncComponentLoader } from "vue";
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 import RouteLoadingPage from "./components/RouteLoadingPage.vue";
 import PluginCatalogRecoveryPage from "./pages/PluginCatalogRecoveryPage.vue";
@@ -7,8 +7,10 @@ import { createLazyRouteRecovery } from "./lazyRouteRecovery";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import {
   isWebPageRouteActive,
-  webPageRenderer,
-  type ControlledWebPageRouteId
+  onTrustedWebPageRegistrationChange,
+  registeredWebPages,
+  type TrustedWebPageRegistration,
+  type WebPageRouteId
 } from "./pluginPages";
 
 export const lazyRouteRecovery = createLazyRouteRecovery();
@@ -21,29 +23,14 @@ function immediatePage(loader: AsyncComponentLoader) {
   });
 }
 
-function registeredPage(routeId: ControlledWebPageRouteId) {
-  return immediatePage(webPageRenderer(routeId).loader);
-}
-
-const OverviewPage = registeredPage("route.overview");
-const RouteConfigPage = registeredPage("route.adapters");
-const PersonaTemplatePage = registeredPage("route.persona");
-const PersonaDocumentPage = registeredPage("route.persona-document");
-const PersonaSyncPage = registeredPage("route.persona-sync");
-const ProjectDocsPage = registeredPage("global.docs");
-const RoleKnowledgePage = registeredPage("route.knowledge");
-const RuntimeLogPage = registeredPage("route.runtime");
-const PerformancePage = registeredPage("global.performance");
-const SpeechServicePage = registeredPage("route.speech");
-const SettingsPage = registeredPage("global.settings");
-
-function pageRoute(
-  path: string,
-  routeId: ControlledWebPageRouteId,
-  component: Component,
-  title: string
-): RouteRecordRaw {
-  return { path, component, meta: { title, pluginRouteId: routeId } };
+function registeredPageRoutes(registration: TrustedWebPageRegistration): RouteRecordRaw[] {
+  const component = immediatePage(registration.loader);
+  return registration.paths.map((entry, index) => ({
+    path: entry.path,
+    name: `trusted-web-page:${registration.routeId}:${index}`,
+    component,
+    meta: { title: entry.title, pluginRouteId: registration.routeId }
+  }));
 }
 
 export const router = createRouter({
@@ -56,30 +43,53 @@ export const router = createRouter({
       component: PluginCatalogRecoveryPage,
       meta: { title: "插件恢复" }
     },
-    pageRoute("/overview", "route.overview", OverviewPage, "控制台"),
-    pageRoute("/speech", "route.speech", SpeechServicePage, "语音服务"),
     { path: "/models", redirect: "/speech" },
-    pageRoute("/routes/:id/overview", "route.overview", OverviewPage, "控制台"),
-    pageRoute("/routes/:id/adapters", "route.adapters", RouteConfigPage, "消息适配器"),
-    pageRoute("/routes/:id/persona/document", "route.persona-document", PersonaDocumentPage, "人格正文"),
-    pageRoute("/routes/:id/persona/sync", "route.persona-sync", PersonaSyncPage, "多电脑人格同步"),
-    pageRoute("/routes/:id/persona", "route.persona", PersonaTemplatePage, "人格配置"),
-    pageRoute("/routes/:id/knowledge", "route.knowledge", RoleKnowledgePage, "计划与记忆"),
-    pageRoute("/routes/:id/speech", "route.speech", SpeechServicePage, "语音服务"),
-    pageRoute("/routes/:id/runtime", "route.runtime", RuntimeLogPage, "日志诊断"),
-    pageRoute("/routes/:id?", "route.adapters", RouteConfigPage, "消息适配器"),
-    pageRoute("/persona/:id?", "route.persona", PersonaTemplatePage, "人格配置"),
-    pageRoute("/knowledge", "route.knowledge", RoleKnowledgePage, "计划与记忆"),
-    pageRoute("/docs", "global.docs", ProjectDocsPage, "使用手册"),
-    pageRoute("/performance", "global.performance", PerformancePage, "性能监控"),
-    pageRoute("/runtime", "route.runtime", RuntimeLogPage, "日志诊断"),
-    pageRoute("/settings", "global.settings", SettingsPage, "设置"),
     { path: "/:pathMatch(.*)*", redirect: { name: PLUGIN_RECOVERY_ROUTE_NAME } }
   ]
 });
 
+const trustedRouteDisposers = new Map<WebPageRouteId, readonly (() => void)[]>();
+
+function mountTrustedWebPageRoutes(registration: TrustedWebPageRegistration): void {
+  if (trustedRouteDisposers.has(registration.routeId)) {
+    throw new Error(`Trusted Web page routes are already mounted: ${registration.routeId}`);
+  }
+  const disposers: Array<() => void> = [];
+  try {
+    for (const route of registeredPageRoutes(registration)) disposers.push(router.addRoute(route));
+    trustedRouteDisposers.set(registration.routeId, Object.freeze(disposers));
+  } catch (error) {
+    for (const dispose of disposers.reverse()) dispose();
+    throw error;
+  }
+}
+
+function unmountTrustedWebPageRoutes(routeId: WebPageRouteId): void {
+  const disposers = trustedRouteDisposers.get(routeId);
+  if (!disposers) return;
+  trustedRouteDisposers.delete(routeId);
+  for (const dispose of disposers) dispose();
+}
+
+for (const registration of registeredWebPages()) mountTrustedWebPageRoutes(registration);
+
+onTrustedWebPageRegistrationChange(change => {
+  if (change.type === "registered") {
+    mountTrustedWebPageRoutes(change.registration);
+    return;
+  }
+  const activeRouteId = router.currentRoute.value.meta.pluginRouteId;
+  unmountTrustedWebPageRoutes(change.registration.routeId);
+  if (activeRouteId === change.registration.routeId) {
+    void router.replace({
+      name: PLUGIN_RECOVERY_ROUTE_NAME,
+      query: { from: router.currentRoute.value.fullPath }
+    });
+  }
+});
+
 router.beforeEach((to) => {
-  const routeId = to.meta.pluginRouteId as ControlledWebPageRouteId | undefined;
+  const routeId = typeof to.meta.pluginRouteId === "string" ? to.meta.pluginRouteId : "";
   if (!routeId || isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return true;
   return {
     name: PLUGIN_RECOVERY_ROUTE_NAME,
