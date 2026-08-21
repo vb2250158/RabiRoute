@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, and declarative WebGUI/Desktop presentation entries are implemented. Configuration reconciliation, local reload, and isolated-process plugins are not complete.
+> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, declarative WebGUI/Desktop surfaces, configuration reconciliation, local reload, isolated-process contract, and six Manager background-service lifecycles are implemented. Remaining centralized optional API dispatch and post-restart runtime acceptance are still pending.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -312,6 +312,31 @@ plugins:
 
 `id` is the instance identity; `plugin` is the implementation identity. Display name, array position, and file path do not replace the instance ID.
 
+## Check before continuing the refactor
+
+After every context compaction, and before starting a new implementation slice, reread this minimum evidence set:
+
+DSH:
+
+- `deepseek-harness/AGENTS.md`
+- `deepseek-harness/docs/architecture.md`
+- `deepseek-harness/packages/boot/app-boot/src/index.ts`
+- `deepseek-harness/packages/core/scope/README.zh.md`
+
+RabiRoute:
+
+- `docs/dsh-plugin-architecture-lessons.md`
+- `docs/cordis-plugin-runtime-refactor.md`
+- `docs/code-architecture.md`
+- `docs/project-function-map.md`
+
+Confirm these four conditions before changing code:
+
+1. Every listener, timer, port, process, and registration owned by a new plugin can be revoked with that instance.
+2. Route definitions, message records, route decisions, `AgentPacket`, Outbox, plan feedback, and message-processing records still have one business owner each.
+3. Cordis scope or isolate is not described or used as process, filesystem, network, or permission isolation.
+4. New capabilities cooperate through public services, events, commands, or query APIs instead of mutating another module's internal state.
+
 ## Migration stages
 
 ### Stage 0: Cordis boundary validation
@@ -356,9 +381,17 @@ Current-slice exit criterion: the catalog can show or hide host-owned entries, f
 
 ### Stage 6: reconciliation and local reload
 
-Add stable instance IDs and Loader. The first version supports configuration-driven enable, disable, and recreation without source-code HMR.
+Current status: configuration-driven enable, disable, revision recreation, and failed-update rollback are implemented without source-code HMR. Six service instances with no UI contributions now participate in the same reconciliation flow.
 
-Exit criterion: failed configuration restores the old instance without duplicate listeners or sends.
+- `manager:gateway-runtime` enables the `ManagerGatewayRuntimeService` coordinator on activation; deactivation stops every Gateway and closes later manual lifecycle entry points.
+- `manager:rabilink-relay` synchronizes Relay after the listener is ready; deactivation stops the Relay runtime and persona-sync LAN service.
+- `manager:memory-consolidation` creates a fresh scheduler per activation; deactivation stops instance-owned one-shot processes and waits for the scheduler, while read-only Manager does not start it.
+- `manager:message-processing-automation` owns the plan-change subscription, knowledge-callback timers, and Agent-response reminders. Knowledge callbacks use instance generations, per-record revisions, and the Node timer ceiling, and reread the due time when triggered. Deactivation clears timers, prevents stale callbacks from rescheduling, and waits for started reminder deliveries.
+- `manager:plan-feedback-delivery` owns recovery scans, retry timers, and active feedback deliveries; new feedback remains pending while it is inactive.
+- `manager:napcat-supervisor` runs one login check during Manager autostart; deactivation cancels the remaining account queue, waits for the current atomic check, and suppresses stale callbacks.
+- `manager:performance` creates a fresh `PerformanceApi` and route batch per activation; deactivation closes sample subscriptions, SSE clients, and the monitoring service.
+
+Targeted tests now cover reloading only changed instances, releasing instance-owned effects on disable, and restoring the previous definition after activation failure. Migration of remaining centralized optional API dispatch and post-restart runtime acceptance remains in progress.
 
 ### Stage 7: out-of-tree code plugins and isolation
 
@@ -544,6 +577,29 @@ This split gives message-source facts and resident plugin lifecycles separate co
 7. reject or ignore unknown schemas, IDs, cross-plugin references, dangerous commands, and unsupported host capabilities. The first WebGUI catalog failure opens a fixed recovery page, Desktop keeps fixed recovery entries, and later failures retain the latest successful catalog.
 
 `extend-webgui-desktop` is complete. Each target host evaluates `requiredCapabilities` with AND semantics against its local capability registry; plugin manifests cannot declare rendering or execution support on behalf of a host. The next stage adds configuration reconciliation, local reload, and isolated-process plugins.
+
+## Slice 14: configuration reconciliation and local reload
+
+1. `data/manager.json.managerPlugins` accepts only registered built-in instance IDs and a boolean `enabled`; `manager:core` is required.
+2. The Manager watcher tracks `manager.json`, Route configuration, and persona configuration.
+3. `ManagerPluginReconciler` serializes desired-revision comparisons and starts, stops, or reloads only changed instances.
+4. Failed activation restores the previous definition when possible; failed rollback records `rollback_failed`.
+5. Persona, speech, and performance background effects and HTTP entries follow active plugin state.
+6. `GET /api/plugins/reconciliation` and `POST /api/plugins/reconcile` expose state and a controlled manual reread.
+7. WebGUI listens for `plugin_catalog_changed` without adding business polling.
+
+This slice is complete.
+
+## Slice 15: isolated-process plugin contract
+
+1. Isolated processes exchange versioned JSON Lines manifest, handshake, request, response, health, and stop messages.
+2. The current grant is limited to `ui.contributions`; contributions still pass existing field, host, and reference validation.
+3. Deadlines, protocol errors, unexpected exits, and stderr produce sanitized errors.
+4. Windows shutdown uses an injectable process-tree cleaner.
+5. `processManagerPlugin.ts` mounts a handshaken process through a normal Manager Plugin Fiber; disposal removes contributions before stopping the process.
+6. `manager.json` rejects commands, paths, package names, URLs, and environment variables. Only trusted host composition code can construct a process instance.
+
+This slice is complete.
 
 ## Readiness criteria
 

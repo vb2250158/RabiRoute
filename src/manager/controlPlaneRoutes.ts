@@ -187,7 +187,7 @@ import {
   routeFolderPath,
   personaConfigPath as resolvePersonaConfigPath
 } from "../shared/routePaths.js";
-import { ManagerConfigRepository } from "./configRepository.js";
+import { ManagerConfigRepository, type ManagerConfig } from "./configRepository.js";
 import { collectWatchedConfigFiles, configFilesSnapshot } from "./configWatchSnapshot.js";
 import { configWatchDirectoryRules, configWatchEventMatches } from "./configWatchPolicy.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
@@ -203,7 +203,20 @@ import {
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
-import { getBuiltinManagerPluginRuntime } from "./managerPluginHost.js";
+import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
+import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
+import { composeBuiltinManagerPluginDefinitions } from "./builtinManagerPluginComposition.js";
+import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";
+import { NapcatSupervisorService } from "./napcatSupervisorService.js";
+import { MessageProcessingAutomationService } from "./messageProcessingAutomationService.js";
+import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderService.js";
+import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
+import { stopChildProcessTree } from "../runtime/windowsProcessTree.js";
+import {
+  normalizeManagerPluginConfig,
+  type ManagerPluginConfigDiagnostic
+} from "./managerPluginConfig.js";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
 import { LanguageStyleValidator } from "../languageStyleValidation.js";
 import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
@@ -811,7 +824,8 @@ const messageProcessingBoardPersistence = new CoalescingMessageProcessingBoardPe
 );
 const messageProcessingBoard = new MessageProcessingBoardStore(messageProcessingBoardPersistence);
 const agentRequests = new AgentRequestStore(agentRequestStatePath(rootDir));
-const agentRequestReminderTimers = new Map<string, NodeJS.Timeout>();
+let messageProcessingAutomationService: MessageProcessingAutomationService | undefined;
+let knowledgeCallbackReminderService: KnowledgeCallbackReminderService<MessageProcessingRequirement> | undefined;
 const managerRequestContexts = new WeakMap<http.ServerResponse, {
   requestId: string;
   method: string;
@@ -988,8 +1002,6 @@ const rabiLinkRelayRuntime = new RabiLinkRelayRuntime({
   }
 });
 
-type ManagerConfig = { routeDir?: string; rolesDir?: string };
-
 function readManagerConfig(): ManagerConfig {
   return configRepository.readManagerConfig();
 }
@@ -1043,12 +1055,6 @@ const persistedPerformanceConfig = rabiGlobalConfig.read().performance;
 const performanceMonitoring = new PerformanceMonitoringService(rootDir, managerReadOnly
   ? { ...persistedPerformanceConfig, enabled: false }
   : persistedPerformanceConfig);
-const performanceApi = new PerformanceApi({
-  service: performanceMonitoring,
-  globalConfig: rabiGlobalConfig,
-  gatewayExists: gatewayId => Boolean(runtimes.get(gatewayId)),
-  readWorkerPool: managerPerformanceWorkerPool
-});
 let memoryConsolidationScheduler: MemoryConsolidationScheduler | undefined;
 const planTaskCompletionDelivery = createPlanTaskCompletionDelivery<GatewayRuntime>({
   getRuntime: gatewayId => runtimes.get(gatewayId),
@@ -1586,7 +1592,7 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
   return firstRouteLevelRabiLinkRelayConfig() || globalRelay;
 }
 
-function syncRabiLinkRelayRuntime(): void {
+function syncRabiLinkRelayRuntime(onLanReady?: () => void): void {
   if (!managerShouldAutostart) {
     personaSyncLanServer.stop();
     rabiLinkRelayRuntime.stop();
@@ -1607,7 +1613,7 @@ function syncRabiLinkRelayRuntime(): void {
   });
   if (lanEnabled && personaSyncLanServer.status().state !== "listening") {
     void personaSyncLanServer.start()
-      .then(() => syncRabiLinkRelayRuntime())
+      .then(() => onLanReady?.())
       .catch(error => console.warn(`Persona sync LAN listener unavailable; Relay fallback remains active: ${error instanceof Error ? error.message : String(error)}`));
   }
 }
@@ -1985,91 +1991,98 @@ function reconcilePersistedPlanSecretaryWorkspaces(): void {
   }
 }
 
+let gatewayRuntimePluginActive = false;
+
+const gatewayRuntimeService = new ManagerGatewayRuntimeService<GatewayDefinition, GatewayRuntime>(runtimes, {
+  loadDefinitions: () => readConfig().gateways,
+  normalizeDefinition,
+  definitionFingerprint,
+  createRuntime: definition => ({
+    definition,
+    process: null,
+    needsRestart: false,
+    startedAt: null,
+    stoppedAt: null,
+    lastExit: null,
+    log: []
+  }),
+  isRunning: runtime => Boolean(runtime.process),
+  reconcileAction: runtime => gatewayRuntimeSyncAction({
+    managerShouldAutostart,
+    enabled: runtime.definition.enabled === true,
+    runtimeRequired: sharedGatewayMessageAdapterTypes(runtime.definition).length > 0,
+    running: Boolean(runtime.process),
+    needsRestart: runtime.needsRestart
+  }),
+  startRuntime: runtime => startGatewayRuntime(runtime.definition.id),
+  stopRuntime: runtime => stopGatewayRuntime(runtime.definition.id),
+  restartRuntime: runtime => {
+    if (!runtime.process) {
+      startGatewayRuntime(runtime.definition.id);
+      return;
+    }
+    runtime.needsRestart = true;
+    appendLog(runtime, "restarting because gateway config changed");
+    runtime.process.kill();
+  }
+});
+
 function loadRuntimes(): void {
-  const config = readConfig();
-  const seen = new Set<string>();
-
-  for (const rawDefinition of config.gateways) {
-    const definition = normalizeDefinition(rawDefinition);
-    seen.add(definition.id);
-    const existing = runtimes.get(definition.id);
-    if (existing) {
-      if (definitionFingerprint(existing.definition) !== definitionFingerprint(definition)) {
-        existing.needsRestart = true;
-      }
-      existing.definition = definition;
-      continue;
-    }
-
-    runtimes.set(definition.id, {
-      definition,
-      process: null,
-      needsRestart: false,
-      startedAt: null,
-      stoppedAt: null,
-      lastExit: null,
-      log: []
-    });
-  }
-
-  for (const id of [...runtimes.keys()]) {
-    if (!seen.has(id)) {
-      const runtime = runtimes.get(id);
-      if (runtime?.process) {
-        runtime.process.kill();
-      }
-      runtimes.delete(id);
-    }
-  }
+  gatewayRuntimeService.load();
   reconcilePersistedPlanSecretaryWorkspaces();
   memoryConsolidationScheduler?.reschedule();
   reconcileMessageProcessingAgentRequests();
 }
 
 function syncRunningGateways(): void {
-  for (const runtime of runtimes.values()) {
-    const runtimeRequired = sharedGatewayMessageAdapterTypes(runtime.definition).length > 0;
-    const action = gatewayRuntimeSyncAction({
-      managerShouldAutostart,
-      enabled: runtime.definition.enabled === true,
-      runtimeRequired,
-      running: Boolean(runtime.process),
-      needsRestart: runtime.needsRestart
-    });
-    if (action === "restart") {
-      appendLog(runtime, "restarting because gateway config changed");
-      runtime.process?.kill();
-      continue;
-    }
-    if (action === "start") {
-      startGateway(runtime.definition.id);
-    }
-    if (action === "stop") {
-      runtime.needsRestart = false;
-      stopGateway(runtime.definition.id);
-    }
-  }
+  if (!gatewayRuntimePluginActive) return;
+  gatewayRuntimeService.reconcile();
 }
 
-function reloadChangedConfig(reason: string): void {
+async function reloadChangedConfig(
+  reason: string,
+  reconcileManagerPlugins?: (reason: string) => Promise<void>,
+  afterReload?: () => void
+): Promise<void> {
   try {
-    personaCatalog.invalidate(rolesRoot);
+    configRepository.refreshManagerConfig();
+    routeRoot = configRepository.routeRoot;
+    rolesRoot = configRepository.rolesRoot;
+    personaCatalog.invalidate();
     loadRuntimes();
-    syncRunningGateways();
-    console.log(`gateway-manager reloaded ${reason}`);
   } catch (error) {
     console.error(`Failed to reload gateway config ${reason}`, error);
   }
+  if (reconcileManagerPlugins) {
+    try {
+      await reconcileManagerPlugins(reason);
+    } catch (error) {
+      console.error(`Failed to reconcile Manager plugins ${reason}`, error);
+    }
+  }
+  try {
+    syncRunningGateways();
+    afterReload?.();
+    memoryConsolidationScheduler?.reschedule();
+    console.log(`gateway-manager reloaded ${reason}`);
+  } catch (error) {
+    console.error(`Failed to apply reloaded Manager config ${reason}`, error);
+  }
+
 }
 
 type ConfigWatcher = { close(): void };
 
-function startConfigWatcher(): ConfigWatcher {
+function startConfigWatcher(
+  reconcileManagerPlugins?: (reason: string) => Promise<void>,
+  afterReload?: () => void
+): ConfigWatcher {
   const watchers = new Map<string, { watcher: fs.FSWatcher; signature: string }>();
   let debounceTimer: NodeJS.Timeout | null = null;
   let closed = false;
   let initialized = false;
   let refreshInFlight = false;
+  let refreshQueued = false;
 
   const armDirectories = (files: string[]): void => {
     const rules = configWatchDirectoryRules(routeRoot, rolesRoot, files);
@@ -2103,7 +2116,11 @@ function startConfigWatcher(): ConfigWatcher {
   };
 
   const refreshSnapshot = async (reason: string): Promise<void> => {
-    if (closed || refreshInFlight) return;
+    if (closed) return;
+    if (refreshInFlight) {
+      refreshQueued = true;
+      return;
+    }
     refreshInFlight = true;
     try {
       const discovered = await collectWatchedConfigFiles({
@@ -2112,6 +2129,7 @@ function startConfigWatcher(): ConfigWatcher {
         timeoutMs: 1500,
         adapterConfigPath,
         personaConfigPath,
+        explicitFiles: [configRepository.managerConfigPath],
         includeDirectory: name => Boolean(sanitizeRoleId(name))
       });
       const snapshot = await configFilesSnapshot(discovered.files, 1500);
@@ -2121,7 +2139,8 @@ function startConfigWatcher(): ConfigWatcher {
       }
       if (initialized && snapshot.snapshot !== watchedConfigSnapshot) {
         watchedConfigSnapshot = snapshot.snapshot;
-        reloadChangedConfig(reason);
+        await reloadChangedConfig(reason, reconcileManagerPlugins, afterReload);
+        refreshQueued = true;
       } else {
         watchedConfigSnapshot = snapshot.snapshot;
         initialized = true;
@@ -2131,6 +2150,10 @@ function startConfigWatcher(): ConfigWatcher {
       console.warn("Config watch refresh failed; Manager remains online.", error);
     } finally {
       refreshInFlight = false;
+      if (refreshQueued && !closed) {
+        refreshQueued = false;
+        queueMicrotask(() => { void refreshSnapshot("after config root refresh"); });
+      }
     }
   };
   void refreshSnapshot("during config watch initialization");
@@ -2292,7 +2315,7 @@ function envFor(
   };
 }
 
-function startGateway(id: string): void {
+function startGatewayRuntime(id: string): void {
   const runtime = runtimes.get(id);
   if (!runtime) {
     throw new Error(`Gateway not found: ${id}`);
@@ -2353,6 +2376,7 @@ function startGateway(id: string): void {
   });
 
   child.on("exit", (code, signal) => {
+    if (runtime.process !== child) return;
     runtime.process = null;
     runtime.agentStateGeneration = undefined;
     agentStateByGateway.delete(runtime.definition.id);
@@ -2369,12 +2393,12 @@ function startGateway(id: string): void {
       result: `code=${code ?? "null"}; signal=${signal ?? "null"}`
     });
     if (runtime.needsRestart && runtime.definition.enabled) {
-      startGateway(runtime.definition.id);
+      startGatewayRuntime(runtime.definition.id);
     }
   });
 }
 
-function stopGateway(id: string): void {
+function stopGatewayRuntime(id: string): void {
   const runtime = runtimes.get(id);
   if (!runtime) {
     throw new Error(`Gateway not found: ${id}`);
@@ -2391,19 +2415,54 @@ function stopGateway(id: string): void {
   });
   runtime.agentStateGeneration = undefined;
   agentStateByGateway.delete(runtime.definition.id);
-  runtime.process.kill();
+  const child = runtime.process;
+  void stopChildProcessTree(child).catch(() => { child.kill(); });
+}
+
+function startGateway(id: string): void {
+  if (!gatewayRuntimePluginActive) throw new Error("Manager Gateway runtime plugin is inactive.");
+  gatewayRuntimeService.start(id);
+}
+
+function stopGateway(id: string): void {
+  if (!gatewayRuntimePluginActive) throw new Error("Manager Gateway runtime plugin is inactive.");
+  gatewayRuntimeService.stop(id);
+}
+
+function restartGateway(id: string): void {
+  if (!gatewayRuntimePluginActive) throw new Error("Manager Gateway runtime plugin is inactive.");
+  gatewayRuntimeService.restart(id);
 }
 
 function stopAllGateways(): void {
-  for (const runtime of runtimes.values()) {
-    runtime.needsRestart = false;
-    if (runtime.process) {
-      appendLog(runtime, "stopping because manager is shutting down");
-      runtime.agentStateGeneration = undefined;
-      agentStateByGateway.delete(runtime.definition.id);
-      runtime.process.kill();
-    }
-  }
+  gatewayRuntimeService.stopAll();
+}
+
+function waitForGatewayChildExit(child: ChildProcessWithoutNullStreams, timeoutMs = 5_000): Promise<void> {
+  if (child.exitCode !== null) return Promise.resolve();
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("exit", finish);
+      child.off("error", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref?.();
+    child.once("exit", finish);
+    child.once("error", finish);
+  });
+}
+
+async function stopAllGatewaysAndWait(): Promise<void> {
+  const children = runtimes.values()
+    .map(runtime => runtime.process)
+    .filter((child): child is ChildProcessWithoutNullStreams => Boolean(child));
+  stopAllGateways();
+  await Promise.all(children.map(child => waitForGatewayChildExit(child)));
 }
 
 function dataDirFor(definition: GatewayDefinition): string {
@@ -3816,7 +3875,8 @@ type ManualTriggerCompletionCallbacks = {
 function triggerGatewayManualRule(
   id: string,
   request: ManualTriggerRequest = {},
-  completion: ManualTriggerCompletionCallbacks = {}
+  completion: ManualTriggerCompletionCallbacks = {},
+  owner?: string
 ): ManualTriggerLaunchResult {
   const runtime = runtimes.get(id);
   if (!runtime) {
@@ -3877,7 +3937,8 @@ function triggerGatewayManualRule(
         appendLog(runtime, error.message);
         completion.onFailure?.(error);
       }
-    }
+    },
+    owner
   );
   if (result.alreadyRunning) {
     appendLog(runtime, `manual trigger already running: ${triggerName}`);
@@ -4040,7 +4101,7 @@ function deliverAutomaticMemoryConsolidation(
         }
       },
       onFailure: reject
-    });
+    }, "manager:memory-consolidation");
     if (result.alreadyRunning) resolve();
   });
 }
@@ -4198,105 +4259,82 @@ function agentRequestReminderPrompt(request: AgentRequestRecord): string {
 }
 
 function scheduleAgentRequestReminder(request: AgentRequestRecord): void {
-  const existing = agentRequestReminderTimers.get(request.id);
-  if (existing) clearTimeout(existing);
-  agentRequestReminderTimers.delete(request.id);
-  if (request.status !== "awaiting_response" || !request.nextReminderAt) return;
-  const delay = Math.max(0, Date.parse(request.nextReminderAt) - Date.now());
-  const timer = setTimeout(() => {
-    agentRequestReminderTimers.delete(request.id);
-    void deliverAgentRequestReminder(request.id);
-  }, Math.min(delay, 2_147_000_000));
-  timer.unref();
-  agentRequestReminderTimers.set(request.id, timer);
+  messageProcessingAutomationService?.schedule(request);
 }
 
-async function deliverAgentRequestReminder(requestId: string): Promise<void> {
-  const request = agentRequests.get(requestId);
-  if (!request || request.status !== "awaiting_response" || !request.nextReminderAt) return;
-  if (Date.parse(request.nextReminderAt) > Date.now()) {
-    scheduleAgentRequestReminder(request);
-    return;
+async function deliverAgentRequestReminder(request: AgentRequestRecord): Promise<void> {
+  const requestId = request.id;
+  const messageProcessingTarget = currentMessageProcessingTargetByThreadId(request.target.threadId)
+    ?? ((request.target.agentType === "message_processing" || request.target.agentType === "primary_persona")
+      && request.target.threadName
+      && request.target.workspace
+      ? {
+          agentType: request.target.agentType,
+          worker: {
+            threadId: request.target.threadId,
+            threadName: request.target.threadName,
+            workspace: request.target.workspace
+          }
+        } as MessageProcessingDeliveryTarget
+      : undefined);
+  const target = messageProcessingTarget?.worker ?? request.target;
+  const reminderRequest: AgentThreadRequest = {
+    action: "send",
+    agentAdapter: target.agentAdapter ?? (isDshSessionId(target.threadId) ? "dsh" : "codex"),
+    threadId: target.threadId,
+    ...(target.threadName ? { title: target.threadName, createIfMissing: true } : {}),
+    cwd: target.workspace,
+    messageSource: {
+      type: "system",
+      eventType: "agent_request_reminder",
+      eventName: "Agent 回复提醒",
+      eventId: request.id
+    },
+    prompt: agentRequestReminderPrompt(request)
+  };
+  const result = await handleAgentThreadRequest(
+    reminderRequest,
+    agentThreadRequestOptions(reminderRequest, { agentRequests })
+  );
+  if (result.data.status !== "delivered") {
+    throw new Error(String(result.data.warning || result.data.message || "Agent request reminder was not accepted."));
   }
-  try {
-    const messageProcessingTarget = currentMessageProcessingTargetByThreadId(request.target.threadId)
-      ?? ((request.target.agentType === "message_processing" || request.target.agentType === "primary_persona")
-        && request.target.threadName
-        && request.target.workspace
-        ? {
-            agentType: request.target.agentType,
-            worker: {
-              threadId: request.target.threadId,
-              threadName: request.target.threadName,
-              workspace: request.target.workspace
-            }
-          } as MessageProcessingDeliveryTarget
-        : undefined);
-    const target = messageProcessingTarget?.worker ?? request.target;
-    const reminderRequest: AgentThreadRequest = {
-      action: "send",
-      agentAdapter: target.agentAdapter ?? (isDshSessionId(target.threadId) ? "dsh" : "codex"),
-      threadId: target.threadId,
-      ...(target.threadName ? { title: target.threadName, createIfMissing: true } : {}),
-      cwd: target.workspace,
-      messageSource: {
-        type: "system",
-        eventType: "agent_request_reminder",
-        eventName: "Agent 回复提醒",
-        eventId: request.id
-      },
-      prompt: agentRequestReminderPrompt(request)
-    };
-    const result = await handleAgentThreadRequest(
-      reminderRequest,
-      agentThreadRequestOptions(reminderRequest, { agentRequests })
+  if (messageProcessingTarget) {
+    persistResolvedMessageProcessingTarget(
+      messageProcessingTarget,
+      result.data,
+      runtimeForMessageProcessingTarget(messageProcessingTarget)
     );
-    if (result.data.status !== "delivered") {
-      throw new Error(String(result.data.warning || result.data.message || "Agent request reminder was not accepted."));
-    }
-    if (messageProcessingTarget) {
-      persistResolvedMessageProcessingTarget(
-        messageProcessingTarget,
-        result.data,
-        runtimeForMessageProcessingTarget(messageProcessingTarget)
-      );
-    } else {
-      persistResolvedAgentRequestTarget(target, result.data);
-    }
-    const updated = agentRequests.recordReminderResult(requestId, true);
-    publishManagerEvent("agent_requests_changed", {
-      requestId,
-      status: updated.status,
-      reminderCount: updated.reminderCount,
-      lastReminderAt: updated.lastReminderAt
-    });
-  } catch (error) {
-    const updated = agentRequests.recordReminderResult(requestId, false, error);
-    managerOperationalLog.record("warn", "agent_request_reminder_failed", {
-      result: "failed",
-      requestId,
-      error: managerOperationalError(error, rootDir)
-    });
-    publishManagerEvent("agent_requests_changed", {
-      requestId,
-      status: updated.status,
-      reminderCount: updated.reminderCount,
-      lastReminderError: updated.lastReminderError,
-      nextReminderAt: updated.nextReminderAt
-    });
-    scheduleAgentRequestReminder(updated);
+  } else {
+    persistResolvedAgentRequestTarget(target, result.data);
   }
+  const updated = agentRequests.recordReminderResult(requestId, true);
+  publishManagerEvent("agent_requests_changed", {
+    requestId,
+    status: updated.status,
+    reminderCount: updated.reminderCount,
+    lastReminderAt: updated.lastReminderAt
+  });
+}
+
+function recordAgentRequestReminderFailure(request: AgentRequestRecord, error: unknown): void {
+  const updated = agentRequests.recordReminderResult(request.id, false, error);
+  managerOperationalLog.record("warn", "agent_request_reminder_failed", {
+    result: "failed",
+    requestId: request.id,
+    error: managerOperationalError(error, rootDir)
+  });
+  publishManagerEvent("agent_requests_changed", {
+    requestId: request.id,
+    status: updated.status,
+    reminderCount: updated.reminderCount,
+    lastReminderError: updated.lastReminderError,
+    nextReminderAt: updated.nextReminderAt
+  });
 }
 
 function refreshAgentRequestReminderTimers(): void {
-  const current = new Map(agentRequests.list().map((request) => [request.id, request]));
-  for (const [requestId, timer] of agentRequestReminderTimers) {
-    const request = current.get(requestId);
-    if (request?.status === "awaiting_response" && request.nextReminderAt) continue;
-    clearTimeout(timer);
-    agentRequestReminderTimers.delete(requestId);
-  }
-  for (const request of current.values()) scheduleAgentRequestReminder(request);
+  messageProcessingAutomationService?.refresh();
 }
 
 function agentThreadAllowedWorkspaces(): string[] {
@@ -4451,8 +4489,6 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     publishManagerEvent("message_processing_board_changed", { requirementId: requirement.id, status: "send_failed" });
   }
 }
-
-const knowledgeCallbackReminderTimers = new Map<string, NodeJS.Timeout>();
 
 function runtimeForMessageProcessingRequirement(requirement: MessageProcessingRequirement): GatewayRuntime | undefined {
   const routeIds = [requirement.source.routeId, requirement.source.routeProfileId].filter(Boolean);
@@ -4718,33 +4754,27 @@ export function buildKnowledgeCallbackReminderPrompt(
 }
 
 function scheduleKnowledgeCallbackReminder(requirement: MessageProcessingRequirement): void {
-  const existing = knowledgeCallbackReminderTimers.get(requirement.id);
-  if (existing) clearTimeout(existing);
-  knowledgeCallbackReminderTimers.delete(requirement.id);
-  const pending = messageProcessingBoard.pendingKnowledgeMatches(requirement.id);
-  if (!pending.length || !requirement.knowledgeCallbackDueAt) return;
-  const delay = Math.max(1_000, Date.parse(requirement.knowledgeCallbackDueAt) - Date.now());
-  const timer = setTimeout(() => { void sendKnowledgeCallbackReminder(requirement.id); }, delay);
-  timer.unref?.();
-  knowledgeCallbackReminderTimers.set(requirement.id, timer);
+  const service = knowledgeCallbackReminderService;
+  if (!service) return;
+  void service.schedule(requirement).catch(error => {
+    managerOperationalLog.record("warn", "knowledge_callback_reminder_schedule_failed", {
+      action: requirement.id,
+      error: managerOperationalError(error, rootDir)
+    });
+  });
 }
 
-async function sendKnowledgeCallbackReminder(requirementId: string): Promise<void> {
-  knowledgeCallbackReminderTimers.delete(requirementId);
-  const requirement = messageProcessingBoard.getRequirement(requirementId);
-  if (!requirement) return;
-  const pending = messageProcessingBoard.pendingKnowledgeMatches(requirementId);
+async function deliverKnowledgeCallbackReminder(requirement: MessageProcessingRequirement): Promise<void> {
+  const pending = messageProcessingBoard.pendingKnowledgeMatches(requirement.id);
   if (!pending.length) return;
   const target = currentMessageProcessingTarget(requirement);
   const worker = target?.worker;
   if (!target || !worker?.threadId || !worker.workspace) {
-    scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
-    return;
+    throw new Error("Knowledge callback reminder has no active Agent target.");
   }
   const runtime = runtimeForMessageProcessingRequirement(requirement);
   if (!runtime) {
-    scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
-    return;
+    throw new Error("Knowledge callback reminder has no active Route runtime.");
   }
   const messageSource: RabiMessageSource = {
     type: "system",
@@ -4755,39 +4785,30 @@ async function sendKnowledgeCallbackReminder(requirementId: string): Promise<voi
     routeId: runtime.definition.id
   };
   const prompt = buildKnowledgeCallbackReminderPrompt(requirement, pending);
-  try {
-    const result = await handleAgentThreadRequest({
-      action: "send",
-      agentAdapter: worker.agentAdapter ?? (isDshSessionId(worker.threadId) ? "dsh" : "codex"),
-      threadId: worker.threadId,
-      title: worker.threadName,
-      createIfMissing: true,
-      cwd: worker.workspace,
-      prompt,
-      sandbox: "workspace-write",
-      messageSource
-    }, {
-      allowedWorkspaces: agentThreadAllowedWorkspaces(),
-      defaultWorkspace: rootDir,
-      dshBaseUrl: runtime.definition.dshBaseUrl
-    });
-    if (result.data.status !== "delivered") {
-      throw new Error(String(result.data.warning || result.data.message || "Knowledge callback reminder was not accepted."));
-    }
-    const resolved = persistResolvedMessageProcessingTarget(
-      target,
-      result.data,
-      runtime
-    );
-    messageProcessingBoard.recordWorkerReference(requirement.id, resolved.worker);
-  } catch (error) {
-    managerOperationalLog.record("warn", "knowledge_callback_reminder_failed", {
-      action: requirementId,
-      error: managerOperationalError(error, rootDir)
-    });
-  } finally {
-    scheduleKnowledgeCallbackReminder(messageProcessingBoard.recordKnowledgeReminder(requirementId));
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    agentAdapter: worker.agentAdapter ?? (isDshSessionId(worker.threadId) ? "dsh" : "codex"),
+    threadId: worker.threadId,
+    title: worker.threadName,
+    createIfMissing: true,
+    cwd: worker.workspace,
+    prompt,
+    sandbox: "workspace-write",
+    messageSource
+  }, {
+    allowedWorkspaces: agentThreadAllowedWorkspaces(),
+    defaultWorkspace: rootDir,
+    dshBaseUrl: runtime.definition.dshBaseUrl
+  });
+  if (result.data.status !== "delivered") {
+    throw new Error(String(result.data.warning || result.data.message || "Knowledge callback reminder was not accepted."));
   }
+  const resolved = persistResolvedMessageProcessingTarget(
+    target,
+    result.data,
+    runtime
+  );
+  messageProcessingBoard.recordWorkerReference(requirement.id, resolved.worker);
 }
 
 async function messageProcessingBoardPayload(routeId?: string, limit?: number): Promise<Record<string, unknown>> {
@@ -5157,9 +5178,13 @@ function deliverPlanTaskCompletion(delivery: PlanTaskCompletionDelivery): Promis
 }
 
 const activePlanFeedbackDeliveries = new Set<string>();
-const attemptedPlanFeedbackRecoveries = new Set<string>();
-const PLAN_FEEDBACK_RECOVERY_RECHECK_MS = 15_000;
-let planFeedbackRecoveryTimer: NodeJS.Timeout | undefined;
+const activePlanFeedbackDeliveryFlights = new Map<string, Promise<void>>();
+let planFeedbackRecoveryService: PlanFeedbackRecoveryService | undefined;
+let planFeedbackDeliveryActive = false;
+
+function planFeedbackDeliveryKey(roleId: string, planId: string, feedbackId: string): string {
+  return `${roleId}:${planId}:${feedbackId}`;
+}
 
 function schedulePlanFeedbackDelivery(
   roleDir: string,
@@ -5169,10 +5194,18 @@ function schedulePlanFeedbackDelivery(
   inputRecord: PlanFeedbackRecord
 ): PlanFeedbackRecord {
   if (inputRecord.deliveryStatus === "record_only" || inputRecord.deliveryStatus === "delivered") return inputRecord;
+  if (!planFeedbackDeliveryActive) {
+    return updatePlanFeedbackDelivery(
+      roleDir,
+      inputRecord,
+      "pending",
+      "Manager plan feedback delivery plugin is inactive."
+    );
+  }
   let record = inputRecord.deliveryStatus === "failed"
     ? updatePlanFeedbackDelivery(roleDir, inputRecord, "pending")
     : inputRecord;
-  const deliveryKey = `${roleId}:${record.planId}:${record.id}`;
+  const deliveryKey = planFeedbackDeliveryKey(roleId, record.planId, record.id);
   if (activePlanFeedbackDeliveries.has(deliveryKey)) return record;
 
   try {
@@ -5180,7 +5213,7 @@ function schedulePlanFeedbackDelivery(
     const runtime = runtimeForRoleDelivery(roleId, gatewayId || String(record.gatewayId || "").trim());
     const secretaryAssignment = ensurePlanSecretaryTarget(runtime, roleDir, plan);
     publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
-    void deliverPlanApprovalFeedback({
+    const flight = deliverPlanApprovalFeedback({
       roleId,
       managerBaseUrl: `http://127.0.0.1:${managerPort}`,
       plan: secretaryAssignment.plan,
@@ -5248,8 +5281,8 @@ function schedulePlanFeedbackDelivery(
       .catch((error) => {
         const pending = error instanceof PlanFeedbackDeliveryPendingError;
         if (pending) {
-          attemptedPlanFeedbackRecoveries.delete(deliveryKey);
-          queuePlanFeedbackRecoverySweep("pending delivery readback");
+          planFeedbackRecoveryService?.allowRetry(roleId, plan.id, record.id);
+          planFeedbackRecoveryService?.queue("pending delivery readback");
         }
         return updatePlanFeedbackDelivery(
           roleDir,
@@ -5262,7 +5295,11 @@ function schedulePlanFeedbackDelivery(
         record = terminalRecord;
         publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
       })
-      .finally(() => activePlanFeedbackDeliveries.delete(deliveryKey));
+      .finally(() => {
+        activePlanFeedbackDeliveries.delete(deliveryKey);
+        activePlanFeedbackDeliveryFlights.delete(deliveryKey);
+      });
+    activePlanFeedbackDeliveryFlights.set(deliveryKey, flight);
     return record;
   } catch (error) {
     record = updatePlanFeedbackDelivery(
@@ -5274,6 +5311,23 @@ function schedulePlanFeedbackDelivery(
     publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
     return record;
   }
+}
+
+async function scheduleAndWaitForPlanFeedbackDelivery(
+  roleDir: string,
+  roleId: string,
+  gatewayId: string,
+  plan: ReturnType<typeof listPlans>[number],
+  feedback: PlanFeedbackRecord
+): Promise<void> {
+  const scheduled = schedulePlanFeedbackDelivery(roleDir, roleId, gatewayId, plan, feedback);
+  const deliveryKey = planFeedbackDeliveryKey(roleId, scheduled.planId, scheduled.id);
+  const flight = activePlanFeedbackDeliveryFlights.get(deliveryKey);
+  if (flight) await flight;
+
+  const latest = listPlanFeedback(roleDir, plan.id).find(record => record.id === scheduled.id) ?? scheduled;
+  if (latest.deliveryStatus === "delivered" || latest.deliveryStatus === "record_only") return;
+  throw new Error(latest.deliveryMessage || "Plan feedback delivery did not complete.");
 }
 
 function presentedPlanWithFeedback(roleDir: string, plan: ReturnType<typeof listPlans>[number]) {
@@ -5718,74 +5772,6 @@ async function inspectPlanFeedbackDelivery(
   const state = (result.data.delivery as { state?: unknown } | undefined)?.state;
   if (state === "accepted" || state === "in_progress" || state === "missing") return state;
   throw new Error("Plan feedback readback returned no authoritative delivery state.");
-}
-
-function queuePlanFeedbackRecoverySweep(reason: string, delayMs = PLAN_FEEDBACK_RECOVERY_RECHECK_MS): void {
-  if (managerReadOnly || planFeedbackRecoveryTimer) return;
-  planFeedbackRecoveryTimer = setTimeout(() => {
-    planFeedbackRecoveryTimer = undefined;
-    void runPlanFeedbackRecoverySweep(reason);
-  }, Math.max(0, delayMs));
-  planFeedbackRecoveryTimer.unref();
-}
-
-async function runPlanFeedbackRecoverySweep(reason: string): Promise<void> {
-  if (managerReadOnly) return;
-  let candidates: ReturnType<typeof listOpenPlanFeedbackRecoveryCandidates>;
-  try {
-    // Role data can be stored on a NAS. Keep its synchronous legacy scan out of
-    // the Manager event loop so a slow share cannot stall every HTTP endpoint.
-    candidates = await managerReadWorkerPool.queryPlanFeedbackRecoveryCandidates(rolesRoot);
-  } catch (error) {
-    managerOperationalLog.record("warn", "plan_feedback_recovery_scan_failed", {
-      action: reason,
-      error: managerOperationalError(error, rootDir),
-      result: error instanceof ManagerReadWorkerError ? error.code : "failed"
-    });
-    queuePlanFeedbackRecoverySweep("recovery scan retry");
-    return;
-  }
-  let delivered = 0;
-  let scheduled = 0;
-  let deferred = 0;
-  let alreadyAttempted = 0;
-  for (const candidate of candidates) {
-    const recoveryKey = `${candidate.roleId}:${candidate.plan.id}:${candidate.feedback.id}`;
-    if (attemptedPlanFeedbackRecoveries.has(recoveryKey)) {
-      alreadyAttempted += 1;
-      continue;
-    }
-    const outcome = await recoverPlanFeedbackCandidate(candidate, {
-      inspect: inspectPlanFeedbackDelivery,
-      schedule: async (current) => {
-        attemptedPlanFeedbackRecoveries.add(recoveryKey);
-        schedulePlanFeedbackDelivery(
-          current.roleDir,
-          current.roleId,
-          String(current.feedback.gatewayId || "").trim(),
-          current.plan,
-          current.feedback
-        );
-      }
-    });
-    if (outcome.state === "delivered") {
-      delivered += 1;
-      publishManagerEvent("plan_feedback_changed", {
-        roleId: candidate.roleId,
-        planId: candidate.plan.id,
-        feedbackId: outcome.record.id
-      });
-    } else if (outcome.state === "scheduled") {
-      scheduled += 1;
-    } else {
-      deferred += 1;
-    }
-  }
-  managerOperationalLog.record("info", "plan_feedback_recovery_sweep", {
-    action: reason,
-    result: `candidates=${candidates.length}; delivered=${delivered}; scheduled=${scheduled}; deferred=${deferred}; alreadyAttempted=${alreadyAttempted}`
-  });
-  if (deferred > 0) queuePlanFeedbackRecoverySweep("deferred delivery readback");
 }
 
 function writeSpeechModelManagerJson(
@@ -7255,8 +7241,7 @@ function handleAction(pathname: string, response: http.ServerResponse): boolean 
     } else if (action === "stop") {
       stopGateway(id);
     } else if (action === "restart") {
-      stopGateway(id);
-      setTimeout(() => startGateway(id), 1000);
+      restartGateway(id);
     } else {
       removeGatewayConfig(id);
       loadRuntimes();
@@ -7421,6 +7406,7 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
 export type ManagerPersonaDomainApiContext = {
   rolesRoot?: string;
   roleDir?: (roleId: string) => string;
+  pluginActive?: (instanceId: string) => boolean;
 };
 
 export function handleManagerEventApi(
@@ -7441,7 +7427,8 @@ export function handleManagerPersonaDomainApi(
 ): boolean {
   const activeRolesRoot = context.rolesRoot ?? rolesRoot;
   const resolveRoleDir = context.roleDir ?? roleDirForApi;
-  if (handlePersonaMessagingApi(request, requestUrl, response, {
+  const pluginActive = context.pluginActive ?? (() => true);
+  if (pluginActive("manager:persona") && handlePersonaMessagingApi(request, requestUrl, response, {
     rootDir,
     rolesRoot: activeRolesRoot,
     catalog: personaCatalog,
@@ -7449,23 +7436,277 @@ export function handleManagerPersonaDomainApi(
     authorizeSource: (routeId, personaId, capability) => currentPersonaMessageAuthority().verify(routeId, personaId, capability),
     deliver: triggerGatewayRolePanelMessage
   })) return true;
-  if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot, change => {
+  if (pluginActive("manager:persona") && handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot, change => {
     // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
     publishManagerEvent("persona_avatar_changed", change);
   })) return true;
-  if (handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
-  if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
-  if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
-  if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
-  if (handleDesktopSettingsApi(request, requestUrl, response)) return true;
-  if (handleSpeechApi(request, requestUrl, response)) return true;
-  return handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir);
+  if (pluginActive("manager:persona") && handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
+  if (pluginActive("manager:persona") && handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
+  if (pluginActive("manager:persona") && handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
+  if (pluginActive("manager:persona") && handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
+  if (pluginActive("manager:desktop") && handleDesktopSettingsApi(request, requestUrl, response)) return true;
+  if (pluginActive("manager:speech") && handleSpeechApi(request, requestUrl, response)) return true;
+  return pluginActive("manager:persona")
+    ? handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir)
+    : false;
 }
 
 export async function startManager(): Promise<void> {
-  const managerPluginRuntime = await getBuiltinManagerPluginRuntime();
+  const managerPluginHost = await getBuiltinManagerPluginHost();
+  const managerPluginRuntime = managerPluginHost.runtime;
+  const managerPluginReconciler = managerPluginHost.reconciler;
   const managerCordisRoot = getBuiltinManagerCordisRoot();
-  let unsubscribeMessageProcessingPlanUpdates: (() => void) | undefined;
+  let managerPluginDiagnostics: ManagerPluginConfigDiagnostic[] = [];
+  let managerServicesReady = false;
+  let managerListenerReady = false;
+  let syncActiveRabiLinkRelay = (): void => {};
+  let startActiveNapcatSupervisor = (): void => {};
+  let startActivePlanFeedbackRecovery = (): void => {};
+  const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.plugins.has(instanceId);
+  const managerPluginRoutes = new ManagerPluginRouteRegistry();
+  const pluginRoute = (instanceId: string) => (
+    request: http.IncomingMessage,
+    requestUrl: URL,
+    response: http.ServerResponse
+  ): boolean => handleManagerPersonaDomainApi(request, requestUrl, response, {
+    pluginActive: candidate => candidate === instanceId
+  });
+  const managerPluginDefinitions = composeBuiltinManagerPluginDefinitions(
+    builtinManagerPluginDefinitions(),
+    {
+      "manager:core": ctx => {
+        ctx.effect(
+          () => () => manualTriggerProcesses.stopAll(),
+          "stop Manager one-shot processes"
+        );
+      },
+      "manager:persona": async ctx => {
+        ctx.effect(() => () => {
+          personaSyncAutoReconciler?.stop();
+          personaSyncService.stopManifestIndex();
+        }, "stop Manager persona plugin");
+        personaSyncAutoReconciler?.start();
+        await personaSyncService.startManifestIndex()
+          .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
+        ctx.effect(
+          () => managerPluginRoutes.register("manager:persona", [pluginRoute("manager:persona")]),
+          "register Manager persona routes"
+        );
+      },
+      "manager:speech": ctx => {
+        ctx.effect(() => async () => {
+          await Promise.allSettled([
+            speechControl.stopMicrophone(),
+            speechControl.stopPlayback(),
+            speechRuntimeControl.stop()
+          ]);
+          speechModelManager.stop();
+        }, "stop Manager speech plugin");
+        if (managerServicesReady && !managerReadOnly) reconcileSpeechMicrophone("speech plugin activation");
+        ctx.effect(
+          () => managerPluginRoutes.register("manager:speech", [pluginRoute("manager:speech")]),
+          "register Manager speech routes"
+        );
+      },
+      "manager:performance": async ctx => {
+        const api = new PerformanceApi({
+          service: performanceMonitoring,
+          globalConfig: rabiGlobalConfig,
+          gatewayExists: gatewayId => Boolean(runtimes.get(gatewayId)),
+          readWorkerPool: managerPerformanceWorkerPool
+        });
+        ctx.effect(() => async () => {
+          api.close();
+          await performanceMonitoring.stop();
+        }, "stop Manager performance plugin");
+        if (!managerReadOnly) await performanceMonitoring.start();
+        ctx.effect(
+          () => managerPluginRoutes.register("manager:performance", [
+            (request, requestUrl, response) => api.handle(request, requestUrl, response)
+          ]),
+          "register Manager performance routes"
+        );
+      },
+      "manager:gateway-runtime": ctx => {
+        gatewayRuntimePluginActive = true;
+        ctx.effect(() => async () => {
+          gatewayRuntimePluginActive = false;
+          await stopAllGatewaysAndWait();
+        }, "stop Manager Gateway runtime plugin");
+        if (managerServicesReady && !managerReadOnly) syncRunningGateways();
+      },
+      "manager:rabilink-relay": ctx => {
+        const sync = (): void => syncRabiLinkRelayRuntime(
+          () => { if (syncActiveRabiLinkRelay === sync) sync(); }
+        );
+        syncActiveRabiLinkRelay = sync;
+        ctx.effect(() => () => {
+          if (syncActiveRabiLinkRelay === sync) syncActiveRabiLinkRelay = (): void => {};
+          personaSyncLanServer.stop();
+          rabiLinkRelayRuntime.stop();
+        }, "stop Manager RabiLink Relay plugin");
+        if (managerListenerReady) sync();
+      },
+      "manager:memory-consolidation": ctx => {
+        if (managerReadOnly) return;
+        const scheduler = createMemoryConsolidationScheduler();
+        memoryConsolidationScheduler = scheduler;
+        ctx.effect(() => async () => {
+          const schedulerStopped = scheduler.stop();
+          await manualTriggerProcesses.stopOwner("manager:memory-consolidation");
+          await schedulerStopped;
+          if (memoryConsolidationScheduler === scheduler) memoryConsolidationScheduler = undefined;
+        }, "stop Manager memory consolidation plugin");
+        if (managerListenerReady) scheduler.start();
+      },
+      "manager:message-processing-automation": async ctx => {
+        if (managerReadOnly) return;
+        const automation = new MessageProcessingAutomationService({
+          listExistingRequests: () => agentRequests.list(),
+          getRequest: requestId => agentRequests.get(requestId),
+          deliverReminder: deliverAgentRequestReminder,
+          onError: recordAgentRequestReminderFailure
+        });
+        const knowledgeReminders = new KnowledgeCallbackReminderService<MessageProcessingRequirement>({
+          listExisting: () => messageProcessingBoard.list({ limit: 500 }),
+          getRecord: requirementId => messageProcessingBoard.getRequirement(requirementId),
+          isPending: requirement => Boolean(
+            requirement.knowledgeCallbackDueAt
+            && messageProcessingBoard.pendingKnowledgeMatches(requirement.id).length
+          ),
+          deliverReminder: deliverKnowledgeCallbackReminder,
+          completeAttempt: requirement => messageProcessingBoard.pendingKnowledgeMatches(requirement.id).length
+            ? messageProcessingBoard.recordKnowledgeReminder(requirement.id)
+            : undefined,
+          onError: (error, requirement) => {
+            managerOperationalLog.record("warn", "knowledge_callback_reminder_failed", {
+              action: requirement?.id ?? "unknown",
+              error: managerOperationalError(error, rootDir)
+            });
+          }
+        });
+        let unsubscribePlanUpdates = (): void => {};
+        let disposed = false;
+        const dispose = async (): Promise<void> => {
+          if (disposed) return;
+          disposed = true;
+          unsubscribePlanUpdates();
+          if (messageProcessingAutomationService === automation) messageProcessingAutomationService = undefined;
+          if (knowledgeCallbackReminderService === knowledgeReminders) knowledgeCallbackReminderService = undefined;
+          await Promise.all([automation.stop(), knowledgeReminders.stop()]);
+        };
+        ctx.effect(() => dispose, "stop Manager message processing automation plugin");
+        messageProcessingAutomationService = automation;
+        knowledgeCallbackReminderService = knowledgeReminders;
+        try {
+          unsubscribePlanUpdates = subscribePlanUpdates(event => {
+            void handleMessageProcessingPlanUpdate(event.roleDir, event.after);
+          });
+          automation.start();
+          await knowledgeReminders.start();
+        } catch (error) {
+          await dispose();
+          throw error;
+        }
+      },
+      "manager:plan-feedback-delivery": ctx => {
+        if (managerReadOnly) return;
+        planFeedbackDeliveryActive = true;
+        const recovery = new PlanFeedbackRecoveryService({
+          listCandidates: () => managerReadWorkerPool.queryPlanFeedbackRecoveryCandidates(rolesRoot),
+          recoverCandidate: async (candidate, controls) => {
+            const outcome = await recoverPlanFeedbackCandidate(candidate, {
+              inspect: inspectPlanFeedbackDelivery,
+              schedule: async current => {
+                await controls.scheduleOnce(() => scheduleAndWaitForPlanFeedbackDelivery(
+                  current.roleDir,
+                  current.roleId,
+                  String(current.feedback.gatewayId || "").trim(),
+                  current.plan,
+                  current.feedback
+                ));
+              }
+            });
+            if (outcome.state === "delivered") {
+              publishManagerEvent("plan_feedback_changed", {
+                roleId: candidate.roleId,
+                planId: candidate.plan.id,
+                feedbackId: outcome.record.id
+              });
+            }
+            return outcome;
+          },
+          onSummary: summary => {
+            managerOperationalLog.record("info", "plan_feedback_recovery_sweep", {
+              action: summary.reason,
+              result: `candidates=${summary.candidates}; delivered=${summary.delivered}; scheduled=${summary.scheduled}; deferred=${summary.deferred}; alreadyAttempted=${summary.alreadyAttempted}`
+            });
+          },
+          onError: event => {
+            managerOperationalLog.record("warn", "plan_feedback_recovery_failed", {
+              action: event.recoveryKey ? `${event.reason}:${event.recoveryKey}` : event.reason,
+              error: managerOperationalError(event.error, rootDir),
+              result: event.stage === "scan" && event.error instanceof ManagerReadWorkerError
+                ? event.error.code
+                : event.stage
+            });
+          }
+        });
+        planFeedbackRecoveryService = recovery;
+        const start = (): void => { void recovery.start("manager plugin activation"); };
+        startActivePlanFeedbackRecovery = start;
+        ctx.effect(() => async () => {
+          planFeedbackDeliveryActive = false;
+          if (startActivePlanFeedbackRecovery === start) startActivePlanFeedbackRecovery = (): void => {};
+          await recovery.stop();
+          await Promise.allSettled([...activePlanFeedbackDeliveryFlights.values()]);
+          if (planFeedbackRecoveryService === recovery) planFeedbackRecoveryService = undefined;
+        }, "stop Manager plan feedback delivery plugin");
+        if (managerListenerReady) start();
+      },
+      "manager:napcat-supervisor": ctx => {
+        if (managerReadOnly || !managerShouldAutostart) return;
+        const supervisor = new NapcatSupervisorService({
+          run: signal => autoLoginNapcatInstancesOnRabiStart(napcatManagerCtx(), undefined, signal),
+          onError: error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`)
+        });
+        const start = (): void => { void supervisor.start(); };
+        startActiveNapcatSupervisor = start;
+        ctx.effect(() => async () => {
+          if (startActiveNapcatSupervisor === start) startActiveNapcatSupervisor = (): void => {};
+          await supervisor.stop();
+        }, "stop Manager NapCat supervisor plugin");
+        if (managerListenerReady) start();
+      },
+      "manager:desktop": ctx => {
+        ctx.effect(
+          () => managerPluginRoutes.register("manager:desktop", [pluginRoute("manager:desktop")]),
+          "register Manager desktop routes"
+        );
+      }
+    }
+  );
+
+  const reconcileManagerPlugins = async (reason: string): Promise<void> => {
+    const normalized = normalizeManagerPluginConfig(readManagerConfig(), managerPluginDefinitions);
+    managerPluginDiagnostics = normalized.diagnostics;
+    const status = await managerPluginReconciler.reconcile(normalized.desired);
+    publishManagerEvent("plugin_reconciliation_changed", { reason, ...status, diagnostics: managerPluginDiagnostics });
+    publishManagerEvent("plugin_catalog_changed", {
+      reason,
+      generation: managerPluginRuntime.generation,
+      revision: {
+        plugins: managerPluginRuntime.catalog.snapshot().revision,
+        contributions: managerPluginRuntime.contributions.catalog().revision
+      }
+    });
+    for (const diagnostic of managerPluginDiagnostics) console.warn(diagnostic.message);
+  };
+
+  await reconcileManagerPlugins("manager startup");
+  if (!managerPluginRuntime.plugins.has("manager:core")) {
+    throw new Error("Required Manager plugin failed to activate: manager:core");
+  }
   let configWatcher: ConfigWatcher | null = null;
   let removeSignalHandlers = (): void => {};
   let managerResourcesStopped = false;
@@ -7475,61 +7716,24 @@ export async function startManager(): Promise<void> {
     if (managerResourcesStopped) return;
     managerResourcesStopped = true;
     removeSignalHandlers();
-    unsubscribeMessageProcessingPlanUpdates?.();
-    for (const timer of knowledgeCallbackReminderTimers.values()) clearTimeout(timer);
-    knowledgeCallbackReminderTimers.clear();
-    for (const timer of agentRequestReminderTimers.values()) clearTimeout(timer);
-    agentRequestReminderTimers.clear();
-    if (planFeedbackRecoveryTimer) clearTimeout(planFeedbackRecoveryTimer);
-    planFeedbackRecoveryTimer = undefined;
-    memoryConsolidationScheduler?.stop();
     configWatcher?.close();
-    personaSyncAutoReconciler?.stop();
-    personaSyncService.stopManifestIndex();
-    personaSyncLanServer.stop();
-    rabiLinkRelayRuntime.stop();
-    speechModelManager.stop();
-    performanceApi.close();
-    stopAllGateways();
     closeManagerEventClients();
   }
 
   try {
-  if (!managerReadOnly) {
-    await performanceMonitoring.start().catch((error) => {
-      managerOperationalLog.record("warn", "performance_monitor_start_failed", {
-        error: managerOperationalError(error, rootDir)
-      });
-    });
-  }
   // Built-artifact acceptance is a control-plane liveness/read-boundary check.
   // Do not let a transient NAS route scan delay the isolated Manager listener;
   // normal installed runtime still loads and owns its configured Routes.
-  if (!managerReadOnly) loadRuntimes();
-  if (!managerReadOnly) memoryConsolidationScheduler = createMemoryConsolidationScheduler();
-  personaSyncAutoReconciler?.start();
-  void personaSyncService.startManifestIndex()
-    .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
-  if (managerShouldAutostart) {
-    for (const runtime of runtimes.values()) {
-      if (runtime.definition.enabled && sharedGatewayMessageAdapterTypes(runtime.definition).length > 0) {
-        startGateway(runtime.definition.id);
-      }
-    }
+  if (!managerReadOnly) {
+    loadRuntimes();
+    syncRunningGateways();
   }
+  managerServicesReady = true;
   if (managerReadOnly) {
     console.log("Manager read-only mode enabled: startup reconciliation and mutating HTTP methods are disabled.");
-  } else {
+  } else if (managerPluginActive("manager:speech")) {
     reconcileSpeechMicrophone("manager startup");
   }
-  unsubscribeMessageProcessingPlanUpdates = managerReadOnly
-    ? undefined
-    : subscribePlanUpdates((event) => { void handleMessageProcessingPlanUpdate(event.roleDir, event.after); });
-  if (!managerReadOnly) {
-    for (const requirement of messageProcessingBoard.list({ limit: 500 })) scheduleKnowledgeCallbackReminder(requirement);
-    refreshAgentRequestReminderTimers();
-  }
-
 
   const activeServer = http.createServer((request, response) => {
   server = activeServer;
@@ -7550,13 +7754,15 @@ export async function startManager(): Promise<void> {
       const failed = response.statusCode >= 400;
       const slow = durationMs >= 2_000;
       const context = managerRequestContexts.get(response);
-      performanceMonitoring.recordHttpRequest(
-        pathname,
-        response.statusCode,
-        durationMs,
-        requestId,
-        context?.responseBytes
-      );
+      if (managerPluginActive("manager:performance")) {
+        performanceMonitoring.recordHttpRequest(
+          pathname,
+          response.statusCode,
+          durationMs,
+          requestId,
+          context?.responseBytes
+        );
+      }
       if (!mutating && !failed && !slow) return;
       managerOperationalLog.record(failed ? "warn" : slow ? "warn" : "info", "http_request_completed", {
         requestId,
@@ -7593,13 +7799,23 @@ export async function startManager(): Promise<void> {
       if (handleWebguiLanAccessApi(request, requestUrl, response)) {
         return;
       }
-      if (performanceApi.handle(request, requestUrl, response)) {
+      if (managerPluginRoutes.handle(request, requestUrl, response)) {
         return;
       }
       if (handleManagerEventApi(request, requestUrl, response)) {
         return;
       }
-      if (handlePluginCatalogApi(request, requestUrl, response, { runtime: managerPluginRuntime })) {
+      if (handlePluginCatalogApi(request, requestUrl, response, {
+        runtime: managerPluginRuntime,
+        reconciliation: {
+          reconciler: managerPluginReconciler,
+          diagnostics: () => managerPluginDiagnostics,
+          reconcile: async () => {
+            await reconcileManagerPlugins("manual API request");
+            return managerPluginReconciler.status();
+          }
+        }
+      })) {
         return;
       }
       if (request.method === "GET" && assetResponse(requestUrl.pathname, response)) {
@@ -7642,15 +7858,12 @@ export async function startManager(): Promise<void> {
         writeConfig,
         loadRuntimes,
         syncRunningGateways,
-        syncRabiLinkRelay: syncRabiLinkRelayRuntime,
+        syncRabiLinkRelay: syncActiveRabiLinkRelay,
         agentManagerApiCtx
       })) {
         return;
       }
       if (handleRemoteAgentApi(request, requestUrl, response)) {
-        return;
-      }
-      if (handleManagerPersonaDomainApi(request, requestUrl, response)) {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/gateways") {
@@ -8192,7 +8405,8 @@ export async function startManager(): Promise<void> {
         jsonResponse(response, 200, { code: 0, message: "manager is already running" });
         return;
       }
-      if (handleDesktopLifecycleApi(request, requestUrl, response, { rootDir, shutdownManager })) {
+      if (managerPluginActive("manager:desktop")
+        && handleDesktopLifecycleApi(request, requestUrl, response, { rootDir, shutdownManager })) {
         return;
       }
       if (requestUrl.pathname === "/api/gateways") {
@@ -8550,6 +8764,10 @@ export async function startManager(): Promise<void> {
         }
         return;
       }
+      if (requestUrl.pathname.startsWith("/api/")) {
+        jsonResponse(response, 404, { code: -1, message: "Manager API route not found." });
+        return;
+      }
       htmlResponse(requestUrl.pathname, response);
     } catch (error) {
       managerOperationalLog.record("error", "http_request_exception", {
@@ -8586,18 +8804,15 @@ export async function startManager(): Promise<void> {
   managerOperationalLog.record("info", "manager_listening", {
     result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
   });
-  syncRabiLinkRelayRuntime();
+  managerListenerReady = true;
+  syncActiveRabiLinkRelay();
   memoryConsolidationScheduler?.start();
+  startActiveNapcatSupervisor();
+  startActivePlanFeedbackRecovery();
   setImmediate(() => { void prewarmRolePlanCatalogs(); });
-  setImmediate(() => { void runPlanFeedbackRecoverySweep("manager startup"); });
-  if (managerShouldAutostart) {
-    setImmediate(() => {
-      void autoLoginNapcatInstancesOnRabiStart(napcatManagerCtx())
-        .catch(error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`));
-    });
-  }
-
-  configWatcher = managerShouldAutostart && managerConfigWatcherEnabled() ? startConfigWatcher() : null;
+  configWatcher = managerShouldAutostart && managerConfigWatcherEnabled()
+    ? startConfigWatcher(reconcileManagerPlugins, () => syncActiveRabiLinkRelay())
+    : null;
   if (!configWatcher) {
     console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
   }
@@ -8617,7 +8832,6 @@ export async function startManager(): Promise<void> {
       void Promise.allSettled([
         messageProcessingBoardPersistence.flush(),
         managerOperationalLog.flush(),
-        performanceMonitoring.stop(),
         managerCordisDispose
       ]).finally(() => process.exit(0));
     });
@@ -8633,7 +8847,6 @@ export async function startManager(): Promise<void> {
     await Promise.allSettled([
       messageProcessingBoardPersistence.flush(),
       managerOperationalLog.flush(),
-      performanceMonitoring.stop(),
       managerCordisRoot.dispose()
     ]);
     throw error;

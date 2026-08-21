@@ -60,3 +60,27 @@ test("dedicated persona sync LAN listener exposes only the merge data plane", as
   assert.equal(statuses.some(item => item.state === "starting"), true);
   assert.equal(statuses.some(item => item.state === "listening"), true);
 });
+
+
+test("stopping an in-flight LAN listener cannot revive it after a new generation starts", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-lan-generation-"));
+  const rolesRoot = path.join(root, "roles");
+  fs.mkdirSync(rolesRoot, { recursive: true });
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"));
+  const coordinator = new PersonaSyncCoordinator(service, path.join(root, "state"), () => ({
+    url: "http://127.0.0.1:1", token: "token", deviceId: "pc-a", deviceGuid: "guid-a"
+  }));
+  const server = new PersonaSyncLanServer({
+    service, coordinator, token: () => "token",
+    relay: () => ({ url: "http://127.0.0.1:1", token: "token", deviceId: "pc-a", deviceGuid: "guid-a" })
+  }, { host: "127.0.0.1", port: 0, addresses: () => ["127.0.0.1"] });
+  t.after(() => server.stop());
+
+  const staleStart = server.start();
+  server.stop();
+  await staleStart;
+  assert.equal(server.status().state, "disabled");
+
+  await server.start();
+  assert.equal(server.status().state, "listening");
+});

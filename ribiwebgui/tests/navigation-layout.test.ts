@@ -68,3 +68,11 @@ test("selected-text reading, screenshots, and login startup stay on Settings", (
   assert.match(settingsSource, /desktopAutostart/);
   assert.doesNotMatch(speechSource, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);
 });
+
+
+test("WebGUI refreshes plugin contributions from Manager events", () => {
+  assert.match(appSource, /managerEventSource\("\/api\/events"\)/);
+  assert.match(appSource, /addEventListener\("plugin_catalog_changed"/);
+  assert.match(appSource, /pluginCatalogStore\.refresh\(\)/);
+  assert.match(appSource, /managerEvents\?\.close\(\)/);
+});

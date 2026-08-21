@@ -17,6 +17,7 @@ import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interface
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import { isWebPageRouteActive, type ControlledWebPageRouteId } from "./pluginPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
+import { managerEventSource } from "./managerApi";
 
 const store = useGatewayStore();
 const route = useRoute();
@@ -25,6 +26,15 @@ const { t } = useI18n();
 const vuetifyTheme = useTheme();
 const interfaceThemePreference = ref<DesktopTheme>("system");
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+let managerEvents: EventSource | null = null;
+
+async function handlePluginCatalogChanged(): Promise<void> {
+  await pluginCatalogStore.refresh();
+  const routeId = route.meta.pluginRouteId as ControlledWebPageRouteId | undefined;
+  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+    await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
+  }
+}
 
 function refreshInterfaceTheme(): void {
   const resolved = applyCatalogInterfaceTheme(pluginCatalogStore.themes.value, interfaceThemePreference.value, systemThemeQuery.matches);
@@ -126,6 +136,8 @@ onMounted(async () => {
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
+  managerEvents = managerEventSource("/api/events");
+  managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
 });
 
 watch(
@@ -155,6 +167,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", beforeUnload);
   window.removeEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.removeEventListener("change", onSystemThemeChanged);
+  managerEvents?.close();
+  managerEvents = null;
 });
 
 async function save() {

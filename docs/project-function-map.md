@@ -48,8 +48,23 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | Outbox / Send | 接收带发送 Agent 类型与会话 ID 的明确请求，校验 Route、渠道、目标参数、内容和策略后发送并保存追溯回执 | 让处理端绕过 RabiRoute 写平台，或从来源上下文猜测目标 | `src/agentSend.ts`、`src/outbox.ts` |
 | 消息处理看板 | 保存消息发送需求、处理阶段、转交、决定和 Outbox 回执；把计划进展重新通知来源会话 | 代替 Agent 回答、从日志猜测状态、把普通群消息全部设为必须回复 | `src/messageProcessing/board.ts`、`src/messageProcessing/persistence.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/components/MessageProcessingBoard.vue` |
 | Manager 控制面 | 管配置、进程、扫描、状态、WebGUI 静态资源和 HTTP API | 具体平台实时消息处理 | `src/manager/*`、`src/manager.ts` |
+| Manager 插件组合 | `data/manager.json`、内置 definition、当前 Plugin Catalog 和实例 Fiber 生命周期 | 加载任意配置代码或让表现端直接执行第三方资源 | `src/runtime/managerPluginReconciler.ts`、`src/runtime/processPluginHost.ts`、`src/runtime/processManagerPlugin.ts`、`src/manager/managerPluginConfig.ts`、`src/manager/managerPluginRouteRegistry.ts`、`src/manager/managerGatewayRuntimeService.ts`、`src/manager/pluginCatalogRoutes.ts` |
 | WebGUI | 展示和编辑配置、状态、日志和人格规则 | 成为配置唯一真源 | `ribiwebgui/src/*` |
 | Role Knowledge | 管角色计划、记忆、技能和上下文快照；Manager 展示层统一派生状态和排序，并按精确绑定读取任务 Agent 状态 | 决定消息是否路由命中，或根据计划生命周期猜测 Codex 是否工作 | `src/roleKnowledge.ts`、`src/roleKnowledgePresentation.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/planAgentStatus.ts`、`src/manager/controlPlaneRoutes.ts` |
+
+## Manager 后台插件生命周期
+
+| 实例 | 拥有的运行副作用 | 激活/停用边界 | 表现贡献 |
+| --- | --- | --- | --- |
+| `manager:gateway-runtime` | Gateway 定义加载、运行状态对账和子进程启停协调 | 激活时启用 `ManagerGatewayRuntimeService`；停用时 `stopAll()` 并关闭手动 Gateway 控制入口 | 无 |
+| `manager:rabilink-relay` | 全局 RabiLink Relay 与人格同步局域网服务 | listener 就绪后同步；停用时停止两项运行资源并撤销同步回调 | 无 |
+| `manager:memory-consolidation` | 最早截止时间的一次性记忆整理调度器和本实例一次性进程 | 非只读模式下每次激活创建；停用时终止进程并等待当前调度 | 无 |
+| `manager:message-processing-automation` | 计划变化订阅、知识回调计时器和 Agent 回复提醒 | 激活时恢复待处理提醒；停用时取消订阅、清除计时器并等待已开始的提醒投递 | 无 |
+| `manager:plan-feedback-delivery` | 计划反馈恢复扫描、重试计时器和当前投递 | listener 就绪后启动扫描；停用时禁止新投递并等待当前扫描和投递 | 无 |
+| `manager:napcat-supervisor` | NapCat 启动登录检查 | Manager 自动启动时执行一次；停用时取消剩余账号队列、等待当前原子检查并屏蔽旧回调 | 无 |
+| `manager:performance` | 性能 HTTP API、样本订阅、SSE 客户端和监控服务 | 每次激活创建新的 `PerformanceApi`；停用时 `close()` 并停止监控 | 页面、导航和状态卡保持原贡献 |
+
+这些插件只接管可撤销的运行生命周期。Route、GatewayRuntime、性能配置、记忆内容、Relay 配置、计划反馈记录和消息处理记录仍由原有配置、Registry 和业务模块拥有。
 
 ## 功能索引
 

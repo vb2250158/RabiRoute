@@ -1,0 +1,39 @@
+{
+  "routeDir": "data/route",
+  "rolesDir": "data/roles",
+  "managerPlugins": {
+    "manager:core": {
+      "enabled": true
+    },
+    "manager:persona": {
+      "enabled": true
+    },
+    "manager:speech": {
+      "enabled": true
+    },
+    "manager:performance": {
+      "enabled": true
+    },
+    "manager:desktop": {
+      "enabled": true
+    },
+    "manager:gateway-runtime": {
+      "enabled": true
+    },
+    "manager:rabilink-relay": {
+      "enabled": true
+    },
+    "manager:memory-consolidation": {
+      "enabled": true
+    },
+    "manager:message-processing-automation": {
+      "enabled": true
+    },
+    "manager:plan-feedback-delivery": {
+      "enabled": true
+    },
+    "manager:napcat-supervisor": {
+      "enabled": true
+    }
+  }
+}

@@ -13,6 +13,7 @@ export type ConfigWatchDirectoryReader = (
 type CollectWatchedConfigFilesOptions = {
   routeRoot: string;
   rolesRoot: string;
+  explicitFiles?: readonly string[];
   timeoutMs?: number;
   readDirectory?: ConfigWatchDirectoryReader;
   fileExists?: (filePath: string) => Promise<boolean>;
@@ -82,6 +83,7 @@ export async function collectWatchedConfigFiles(
     read(options.routeRoot),
     read(options.rolesRoot)
   ]);
+  for (const file of options.explicitFiles ?? []) files.add(path.resolve(file));
   for (const entry of routeEntries) {
     if (entry.isDirectory() && (options.includeDirectory?.(entry.name) ?? true)) {
       files.add(options.adapterConfigPath(entry.name));

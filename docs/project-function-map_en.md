@@ -23,7 +23,22 @@ RibiWebGUI `/#/docs` is now the task-based User Guide backed by `docs/user-guide
 | Handler adapter | Deliver a packet to the Route's selected Primary Agent | Platform route semantics, external output policy, or fallback to another Agent | `src/agentAdapters/*`, runtime modules |
 | Outbox / Send | Validate the calling Agent type/session, explicit Route, channel, target parameters, payload, and policy before sending, then retain traceable receipts | Handler reasoning or destination inference from source context | `src/agentSend.ts`, `src/outbox.ts` |
 | Manager | Configuration, processes, scans, APIs, shared services | Platform-specific live parsing | `src/manager.ts`, `src/manager/*` |
+| Manager plugin composition | `data/manager.json`, built-in definitions, reconciliation state, instance Fiber lifecycles, and isolated-process lifecycle | Load arbitrary configured code or let presentation hosts execute third-party resources directly | `src/runtime/managerPluginReconciler.ts`, `src/runtime/processPluginHost.ts`, `src/runtime/processManagerPlugin.ts`, `src/manager/managerPluginConfig.ts`, `src/manager/managerPluginRouteRegistry.ts`, `src/manager/managerGatewayRuntimeService.ts`, `src/manager/pluginCatalogRoutes.ts` |
 | Role knowledge | Plans, memories, skills, recall, validation, Manager-owned presentation ordering, and exact bound-task status reads | Decide whether an event matches a route or infer Codex work state from plan lifecycle | `src/roleKnowledge.ts`, `src/roleKnowledgePresentation.ts`, `src/manager/planAgentStatus.ts` |
+
+## Manager background-plugin lifecycle
+
+| Instance | Owned runtime effects | Activation/deactivation boundary | Presentation contributions |
+| --- | --- | --- | --- |
+| `manager:gateway-runtime` | Gateway-definition loading, runtime reconciliation, and child-process lifecycle coordination | Activation enables `ManagerGatewayRuntimeService`; deactivation calls `stopAll()` and closes manual Gateway controls | None |
+| `manager:rabilink-relay` | Global RabiLink Relay and persona-sync LAN service | Synchronizes after the listener is ready; deactivation stops both runtime resources and removes the synchronization callback | None |
+| `manager:memory-consolidation` | One-shot memory-consolidation scheduling and instance-owned one-shot processes | Creates a fresh scheduler per activation outside read-only mode; deactivation stops processes and waits for the active schedule | None |
+| `manager:message-processing-automation` | Plan-change subscription, knowledge-callback timers, and Agent-response reminders | Activation restores pending reminders; deactivation removes the subscription, clears timers, and waits for started reminder deliveries | None |
+| `manager:plan-feedback-delivery` | Plan-feedback recovery scans, retry timers, and active deliveries | Starts recovery after the listener is ready; deactivation rejects new scheduling and waits for active scans and deliveries | None |
+| `manager:napcat-supervisor` | NapCat startup-login check | Runs once during Manager autostart; deactivation cancels the remaining account queue, waits for the current atomic check, and suppresses stale callbacks | None |
+| `manager:performance` | Performance HTTP API, sample subscription, SSE clients, and monitoring service | Creates a fresh `PerformanceApi` per activation; deactivation calls `close()` and stops monitoring | Existing page, navigation, and status-card contributions remain unchanged |
+
+These plugins own reversible runtime lifecycles only. Route, GatewayRuntime, performance configuration, memory content, Relay configuration, plan-feedback records, and message-processing records remain owned by their existing configuration, Registry, and business modules.
 
 ## Current function index
 

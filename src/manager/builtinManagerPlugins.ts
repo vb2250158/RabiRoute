@@ -420,6 +420,12 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         hosts: ["desktop"],
         order: 20
       }
-    ])
+    ]),
+    plugin("gateway-runtime", "RabiRoute Gateway Runtime", []),
+    plugin("rabilink-relay", "RabiLink Relay", []),
+    plugin("memory-consolidation", "Memory Consolidation", []),
+    plugin("message-processing-automation", "Message Processing Automation", []),
+    plugin("plan-feedback-delivery", "Plan Feedback Delivery", []),
+    plugin("napcat-supervisor", "NapCat Supervisor", [])
   ];
 }

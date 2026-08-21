@@ -42,6 +42,8 @@ function dataPlaneRequest(method: string | undefined, pathname: string): boolean
 export class PersonaSyncLanServer {
   private server: http.Server | null = null;
   private startFlight: Promise<void> | null = null;
+  private startGeneration = 0;
+  private cancelStart: (() => void) | null = null;
   private runtimeStatus: PersonaSyncLanStatus = { state: "disabled", urls: [] };
   private readonly host: string;
   private readonly port: number;
@@ -68,8 +70,18 @@ export class PersonaSyncLanServer {
   start(): Promise<void> {
     if (this.runtimeStatus.state === "listening") return Promise.resolve();
     if (this.startFlight) return this.startFlight;
+    const generation = ++this.startGeneration;
     this.updateStatus({ state: "starting", urls: [] });
-    this.startFlight = new Promise<void>((resolve, reject) => {
+    let cancel = (): void => {};
+    const flight = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve();
+      };
+      cancel = () => finish();
       const server = http.createServer((request, response) => {
         const requestUrl = new URL(request.url || "/", "http://persona-sync.local");
         if (!dataPlaneRequest(request.method, requestUrl.pathname)) {
@@ -88,32 +100,51 @@ export class PersonaSyncLanServer {
         }
       });
       this.server = server;
+      const current = (): boolean => generation === this.startGeneration && this.server === server;
       const fail = (error: Error) => {
-        if (this.server === server) this.server = null;
+        if (!current()) {
+          finish();
+          return;
+        }
+        this.server = null;
         this.updateStatus({ state: "error", urls: [], error: error.message });
-        reject(error);
+        finish(error);
       };
       server.once("error", fail);
       server.listen(this.port, this.host, () => {
         server.off("error", fail);
+        if (!current()) {
+          server.close();
+          finish();
+          return;
+        }
         server.on("error", error => {
+          if (!current()) return;
           this.updateStatus({ state: "error", urls: [], error: error.message });
         });
         const address = server.address();
         const port = address && typeof address === "object" ? address.port : 0;
         const urls = port > 0 ? this.addresses().map(host => `http://${host}:${port}`) : [];
         this.updateStatus({ state: "listening", port, urls });
-        resolve();
+        finish();
       });
-    }).finally(() => {
-      this.startFlight = null;
     });
-    return this.startFlight;
+    this.startFlight = flight;
+    this.cancelStart = cancel;
+    void flight.finally(() => {
+      if (generation !== this.startGeneration) return;
+      if (this.startFlight === flight) this.startFlight = null;
+      if (this.cancelStart === cancel) this.cancelStart = null;
+    }).catch(() => {});
+    return flight;
   }
 
   stop(): void {
+    this.startGeneration += 1;
     const server = this.server;
     this.server = null;
+    this.cancelStart?.();
+    this.cancelStart = null;
     this.startFlight = null;
     if (server) server.close();
     this.updateStatus({ state: "disabled", urls: [] });

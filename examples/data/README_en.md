@@ -8,10 +8,11 @@ English | <a href="./README.md">简体中文</a>
 
 This is a public `data/` starter pack that can be copied to the repository root.
 
-When either `data/route` or `data/roles` is missing, the Manager copies the corresponding example tree from here. Existing directories are not replaced wholesale.
+When `data/manager.json`, `data/route`, or `data/roles` is missing, the Manager copies the corresponding safe example. Existing files and directories are not replaced wholesale.
 
 The pack provides:
 
+- A `manager.json` built-in plugin composition. `manager:core` is required; other instances can be disabled and reloaded independently.
 - A complete `route/main/adapterConfig.json` named **Rabi Demo** for QQ/NapCat and heartbeat input. Its `agentRoleId: "Rabi"` binds the Rabi persona.
 - The default `roles/Rabi` persona and the RabiLink-specific `roles/RabiActive` persona.
 - `personaConfig.json` automation rules and recent-message limits. The example includes message-to-Agent and schedule-to-Agent rules and does not run scripts by default.
@@ -20,6 +21,8 @@ The pack provides:
 - A disabled RabiLink Route that demonstrates a record-first observation ledger, idle or periodic review, and proactive downstream replies.
 - A disabled personal-Weixin Route prototype. Login tokens, sync cursors, and context tokens are created only under local runtime `data/` after opt-in; the public example contains no real account or credential.
 - Relative `rolesDir` configuration suitable for a copied workspace.
+
+`manager.json` lists eleven built-in instances by default. Six service instances publish no UI contributions: `manager:gateway-runtime`, `manager:rabilink-relay`, `manager:memory-consolidation`, `manager:message-processing-automation`, `manager:plan-feedback-delivery`, and `manager:napcat-supervisor`. They own the lifecycles of Gateway processes, Relay connections, memory consolidation, message-processing reminders, plan-feedback recovery, and NapCat startup checks. Disabling an instance releases its owned resources. Remaining centralized optional API dispatch is still being migrated.
 
 Only `main` is enabled after copying the full pack. RabiLink, voice-chat, native Rokid voice, XiaoAI, WeCom, and personal Weixin remain disabled until credentials or QR login, working directories, and ports have been checked.
 

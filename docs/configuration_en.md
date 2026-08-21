@@ -8,6 +8,49 @@ English | <a href="./configuration.md">简体中文</a>
 
 > Status: current reference. Fields and maturity are based on the active configuration model, Manager APIs, and scan results. See [Current Capabilities](current-capabilities_en.md) for acceptance status.
 
+## Manager plugin composition
+
+`data/manager.json` owns Manager directory locations and built-in plugin enablement. First-time initialization copies the safe `examples/data/manager.json` example.
+
+```json
+{
+  "routeDir": "data/route",
+  "rolesDir": "data/roles",
+  "managerPlugins": {
+    "manager:core": { "enabled": true },
+    "manager:persona": { "enabled": true },
+    "manager:speech": { "enabled": true },
+    "manager:performance": { "enabled": true },
+    "manager:desktop": { "enabled": true },
+    "manager:gateway-runtime": { "enabled": true },
+    "manager:rabilink-relay": { "enabled": true },
+    "manager:memory-consolidation": { "enabled": true },
+    "manager:message-processing-automation": { "enabled": true },
+    "manager:plan-feedback-delivery": { "enabled": true },
+    "manager:napcat-supervisor": { "enabled": true }
+  }
+}
+```
+
+`manager:core` is required for recovery and catalog APIs and cannot be disabled. Other built-ins are enabled by default. Manager accepts only registered instance IDs and a boolean `enabled` field. Paths, package names, commands, URLs, environment variables, unknown instances, and unknown fields are ignored and reported as diagnostics.
+
+After `manager.json` changes, the file watcher reconciles only changed plugins. Disabling disposes the target Fiber. A revision change reloads the target instance. Failed activation restores the previous definition when possible. `GET /api/plugins/reconciliation` returns desired, active, changed, rolled-back, and diagnostic state. `POST /api/plugins/reconcile` rereads local configuration. WebGUI refreshes its catalog from the `plugin_catalog_changed` event on `/api/events`.
+
+### Background-service plugin lifecycle
+
+The following six built-in instances publish no UI contributions, but each Fiber still owns its reversible effects:
+
+| Instance | Activation | Deactivation |
+| --- | --- | --- |
+| `manager:gateway-runtime` | Enables the Gateway service coordinator; after Manager services are ready, it loads Route definitions and starts, stops, or restarts Gateways from current state | Stops all Gateways in order and makes later Gateway lifecycle requests fail closed |
+| `manager:rabilink-relay` | Synchronizes RabiLink Relay from global configuration after the Manager HTTP listener is ready | Stops the Relay runtime and persona-sync LAN service, then removes the active synchronization callback |
+| `manager:memory-consolidation` | Creates a fresh memory-consolidation scheduler for this activation outside read-only mode; starts its one-shot deadline schedule after the listener is ready | Stops that scheduler, terminates instance-owned one-shot processes, and waits for the active run |
+| `manager:message-processing-automation` | Restores Agent-response reminders, subscribes to plan changes, and starts knowledge-callback reminders | Removes the plan subscription, clears reminder timers, prevents stale callbacks from rescheduling, and waits for started reminder deliveries |
+| `manager:plan-feedback-delivery` | Scans recoverable plan feedback after the listener is ready; new feedback continues through the existing delivery module | Rejects new delivery scheduling, clears retry timers, and waits for active scans and deliveries |
+| `manager:napcat-supervisor` | Runs one NapCat startup-login check when Manager autostart is enabled | Cancels the remaining account queue, waits for the current atomic check, and suppresses stale completion callbacks after deactivation |
+
+`manager:performance` creates a fresh `PerformanceApi` and registers that batch of HTTP handlers on every activation. Deactivation calls `close()` to unsubscribe from performance samples and end SSE streams, then stops the monitoring service. Reactivation never reuses the closed API instance.
+
 ## Codex terminology
 
 RabiRoute keeps provider, agent/runtime, transport, host, and model separate:
@@ -104,7 +147,7 @@ On a clean start, the Manager copies the public `examples/data` package when ava
 - `napcatHttpUrl`: OneBot HTTP endpoint called by RabiRoute. Multiple Routes may explicitly share one NapCat instance and the same HTTP URL. Automatic port assignment applies only to listeners owned by RabiRoute and does not move an existing NapCat endpoint to an unstarted port.
 - `webhookPort` / `webhookPath`: generic webhook endpoint; the port falls back to `gatewayPort`, and the default path is `/webhook`.
 - `agentAdapters`: handler IDs. The current IDs are `codex`, `copilotCli`, `astrbot`, `marvis`, and `dsh`. Codex is verified; Copilot CLI, AstrBot, and DSH are experimental; Marvis is a manual handoff.
-- `dshSessionId` / `dshSessionName` / `dshCwd` / `dshBaseUrl`: DSH (DeepSeek Harness) Primary Persona binding. WebGUI scans in **API address → workspace → session** order. The user may select an existing session or type a new name; save resolves by name plus workspace and creates idempotently only when there is no match. Before creation, RabiRoute calls DSH `workspace.create` to register or reuse that directory and passes the returned `workspaceId` to `session.create`; Primary Persona, Message Agent, Plan Secretary, and Memory Consolidation sessions created by RabiRoute therefore appear directly under the matching workspace group. The saved binding contains the complete `session-<uuid>`, visible name, and workspace. When the Primary Persona already has a complete ID and workspace, the configuration page shows **Locate session**. Manager reads that exact ID, verifies it is unarchived and belongs to the configured workspace, then opens the Codex Desktop task or DSH Web with `rabiSessionId`. It sends no prompt, creates no session, and does not change the binding. **Automatically initialize session** appears only when the Primary Persona has no complete binding; it saves and resolves the stable binding before delivering the role, plan, memory, and required-reading context to the same owner. Real messages continue through `POST /api/session.prompt` queue mode and never fall back to Codex. Enable `RabiRoute Agent` under DSH **Settings → My plugins** to expose thread, outbound-send, plan, Message Agent, memory, and Agent-communication tools. DSH refresh and session pagination use the dedicated `GET /api/scan/agents/dsh` endpoint, so they do not wait for the shared Codex, Copilot CLI, AstrBot, or Marvis scan. The local XinghaiBuilder Route has passed repeated delivery, Manager/DSH restart readback, six Plan Secretaries, Message Agent routing, a dedicated Memory Consolidation Agent, a `required` formal reply, and invalid-endpoint fail-closed checks. The dedicated scan also reads the live `RabiRoute Agent` state, version, Manager address, communication enforcement, and three model tools. Missing, inactive, or mismatched versions receive an update-and-restart diagnostic. The adapter remains experimental pending packaged/fresh-environment regression.
+- `dshSessionId` / `dshSessionName` / `dshCwd` / `dshBaseUrl`: DSH (DeepSeek Harness) Primary Persona binding. WebGUI scans in **API address → workspace → session** order. The user may select an existing session or type a new name; save resolves by name plus workspace and creates idempotently only when there is no match. Before creation, RabiRoute calls DSH `workspace.create` to register or reuse that directory and passes the returned `workspaceId` to `session.create`; Primary Persona, Message Agent, Plan Secretary, and Memory Consolidation sessions created by RabiRoute therefore appear directly under the matching workspace group. The saved binding contains the complete `session-<uuid>`, visible name, and workspace. When the Primary Persona already has a complete ID and workspace, the configuration page shows **Locate session**. Manager reads that exact ID, verifies it is unarchived and belongs to the configured workspace, then opens the Codex Desktop task or DSH Web with `rabiSessionId`. It sends no prompt, creates no session, and does not change the binding. **Automatically initialize session** appears only when the Primary Persona has no complete binding; it saves and resolves the stable binding before delivering the role, plan, memory, and required-reading context to the same owner. Real messages continue through `POST /api/session.prompt` queue mode and never fall back to Codex. Enable `RabiRoute Agent` under DSH **Settings → My plugins** to expose thread, outbound-send, plan, Message Agent, memory, and Agent-communication tools. DSH refresh and session pagination use the dedicated `GET /api/scan/agents/dsh` endpoint, so they do not wait for the shared Codex, Copilot CLI, AstrBot, or Marvis scan. An anonymized test Route has passed repeated delivery, Manager/DSH restart readback, Plan Secretary delivery, Message Agent routing, a dedicated Memory Consolidation Agent, a `required` formal reply, and invalid-endpoint fail-closed checks. The dedicated scan also reads the live `RabiRoute Agent` state, version, Manager address, communication enforcement, and three model tools. Missing, inactive, or mismatched versions receive an update-and-restart diagnostic. The adapter remains experimental pending packaged/fresh-environment regression.
 - `primaryAgentAdapter`: the Route's Primary Agent. It must be one of `agentAdapters`. A matched message is delivered only to this handler, not broadcast to the other configured Agents. Older configurations use the first listed Agent; removing the current Primary Agent selects the first remaining Agent.
 - Agent handlers use a base capability layer for installation, authentication, project, session, and delivery support, then explicitly opt into managed-task extensions. Codex and DSH both declare **Message Agent mode**, **Dedicated Memory Consolidation Agent**, **Plan assistant sessions**, and **Hook management**. These settings belong only to the selected Primary Agent; switching the primary filters out auxiliary bindings owned by the other adapter. DSH receives the tools through the `RabiRoute Agent` plugin. Other handlers continue to expose only capabilities they actually implement.
 - `messageProcessingAgents.codex` / `messageProcessingAgents.dsh`: Message Agent eligibility, worker limit, and runtime settings for the selected Primary Agent. Only the entry matching `primaryAgentAdapter` is active. Codex uses its configured model and reasoning effort; DSH sessions keep the model configured by DSH. The feature defaults off. When enabled, chat messages form message groups and reuse or create worker sessions by topic, while ASR and structured events remain direct. Ranking and delivery share one order based on quoted Agent messages, original group, endpoint, conversation, sender, and recent use. Optional `maxAgents` accepts `1–32`; reaching the limit reuses a ranked worker instead of creating another. Lowering the limit detaches excess workers without deleting owner sessions. Message, plan, memory, and pending-reply follow-ups stay on the selected Primary Agent and do not fall back to another adapter.

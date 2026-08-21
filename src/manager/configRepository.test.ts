@@ -437,3 +437,58 @@ test("repository removes deleted route config files but preserves route history"
   assert.equal(fs.existsSync(removedConfigPath), false);
   assert.equal(fs.existsSync(removedHistoryPath), true);
 });
+
+test("repository preserves controlled Manager plugin enablement settings", () => {
+  const rootDir = makeTempRoot();
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+
+  repo.writeManagerConfig({
+    routeDir: "data/route",
+    rolesDir: "data/roles",
+    managerPlugins: {
+      "manager:desktop": { enabled: false },
+      "manager:speech": { enabled: true }
+    }
+  });
+
+  assert.deepEqual(repo.readManagerConfig().managerPlugins, {
+    "manager:desktop": { enabled: false },
+    "manager:speech": { enabled: true }
+  });
+});
+
+
+test("repository refreshes Manager roots after an external manager.json change", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-config-manager-refresh-"));
+  const repository = new ManagerConfigRepository({ rootDir: root, managerPort: 8790 });
+  fs.mkdirSync(path.join(root, "data"), { recursive: true });
+  fs.writeFileSync(path.join(root, "data", "manager.json"), JSON.stringify({
+    routeDir: "runtime/routes",
+    rolesDir: "runtime/roles",
+    managerPlugins: { "manager:desktop": { enabled: false } }
+  }), "utf8");
+
+  const config = repository.refreshManagerConfig();
+
+  assert.equal(repository.routeRoot, path.join(root, "runtime", "routes"));
+  assert.equal(repository.rolesRoot, path.join(root, "runtime", "roles"));
+  assert.equal(config.managerPlugins?.["manager:desktop"]?.enabled, false);
+});
+
+
+test("repository copies the public Manager plugin composition on first data initialization", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-config-manager-example-"));
+  const exampleData = path.join(root, "examples", "data");
+  fs.mkdirSync(exampleData, { recursive: true });
+  fs.writeFileSync(path.join(exampleData, "manager.json"), JSON.stringify({
+    routeDir: "data/route",
+    rolesDir: "data/roles",
+    managerPlugins: { "manager:desktop": { enabled: false } }
+  }), "utf8");
+  const repository = new ManagerConfigRepository({ rootDir: root, managerPort: 8790 });
+
+  repository.ensureDataDirs();
+
+  assert.equal(repository.readManagerConfig().managerPlugins?.["manager:desktop"]?.enabled, false);
+  assert.equal(fs.existsSync(repository.managerConfigPath), true);
+});

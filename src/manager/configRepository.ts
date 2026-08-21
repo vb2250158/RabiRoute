@@ -33,9 +33,14 @@ import {
   writePersonaRules
 } from "./configMigration.js";
 
+export type ManagerPluginConfigEntry = {
+  enabled?: boolean;
+};
+
 export type ManagerConfig = {
   routeDir?: string;
   rolesDir?: string;
+  managerPlugins?: Record<string, ManagerPluginConfigEntry>;
 };
 
 export type ManagerConfigRepositoryOptions = {
@@ -89,6 +94,13 @@ export class ManagerConfigRepository {
     }
   }
 
+  refreshManagerConfig(): ManagerConfig {
+    const cfg = this.readManagerConfig();
+    this.routeRoot = path.resolve(this.rootDir, cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
+    this.rolesRoot = path.resolve(this.rootDir, cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
+    return cfg;
+  }
+
   writeManagerConfig(cfg: ManagerConfig): void {
     fs.mkdirSync(path.dirname(this.managerConfigPath), { recursive: true });
     fs.writeFileSync(this.managerConfigPath, JSON.stringify(cfg, null, 2), "utf8");
@@ -98,6 +110,12 @@ export class ManagerConfigRepository {
 
   ensureDataDirs(): void {
     const exampleDataDir = path.join(this.rootDir, "examples", "data");
+    const exampleManagerConfig = path.join(exampleDataDir, "manager.json");
+    if (!fs.existsSync(this.managerConfigPath) && fs.existsSync(exampleManagerConfig)) {
+      fs.mkdirSync(path.dirname(this.managerConfigPath), { recursive: true });
+      fs.copyFileSync(exampleManagerConfig, this.managerConfigPath, fs.constants.COPYFILE_EXCL);
+      this.refreshManagerConfig();
+    }
     if (!fs.existsSync(this.rolesRoot) && fs.existsSync(path.join(exampleDataDir, "roles"))) {
       fs.mkdirSync(path.dirname(this.rolesRoot), { recursive: true });
       fs.cpSync(path.join(exampleDataDir, "roles"), this.rolesRoot, { recursive: true, force: false, errorOnExist: false });

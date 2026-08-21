@@ -372,6 +372,25 @@ startManager();
 
 不要再把控制面逻辑塞回这个文件。
 
+
+### Manager 插件运行时
+
+`managerPluginHost.ts` 在 Manager 根 Context 下创建空运行时，再由 `managerPluginConfig.ts` 把 `data/manager.json` 归一化为受控期望状态。`managerPluginReconciler.ts` 串行比较期望与当前实例，只启停或重载变化项；激活失败时重新挂载旧定义，回滚失败保留明确错误状态。
+
+`manager:persona`、`manager:speech` 和 `manager:performance` 的后台副作用由各自 Fiber 登记撤销。对应 HTTP 路径也检查插件活动状态。`pluginCatalogRoutes.ts` 提供目录与对账状态，WebGUI 监听 Manager SSE 后刷新目录。
+
+`processPluginProtocol.ts` 与 `processPluginHost.ts` 定义高风险扩展的版本化 JSON Lines 合同、能力授权、健康检查、超时、脱敏错误和 Windows 进程树清理。`processManagerPlugin.ts` 把通过握手的独立进程贡献挂到普通 Manager Plugin Fiber；目录仍只接收声明式贡献，不加载第三方页面、脚本或资源路径。
+
+### Manager 插件持有的后台服务
+
+`composeBuiltinManagerPluginDefinitions()` 把内置清单与 Manager 进程中的生命周期接线合并，清单仍是实例身份和贡献的真源。六个无 UI contribution 的服务实例分别持有 Gateway 进程协调、Relay/人格同步局域网连接、记忆整理、消息处理提醒、计划反馈恢复和 NapCat 启动检查。
+
+`manager:performance` 每次 Fiber 激活创建一个新的 `PerformanceApi`，并通过 `ManagerPluginRouteRegistry` 注册该实例的 HTTP handler 批次。Fiber 停用时移除该次 HTTP handler 批次，关闭 API 的样本订阅与 SSE 客户端，并停止 `PerformanceMonitoringService`。
+
+`src/manager/managerGatewayRuntimeService.ts` 是 Gateway 服务协调器。它在 `RuntimeRegistry` 上统一执行定义加载、指纹比较、删除项停止、`needsRestart` 标记以及顺序 start/stop/restart/stopAll。Route 定义由 Manager 持续刷新；`manager:gateway-runtime` 只控制进程启停。停用时先关闭完整进程树并等待退出，再允许同一实例重新启用。配置刷新完成后依次对账插件组合、Gateway 进程、Relay 和记忆调度。
+
+`PersonaSyncLanServer` 使用启动代次拒绝已经停用的旧监听回调。`manager:memory-consolidation` 停用时终止该实例拥有的一次性进程并等待正在执行的调度结束。`manager:message-processing-automation` 持有计划变化订阅、知识回调计时器和 Agent 回复提醒；`manager:plan-feedback-delivery` 持有恢复扫描、重试计时器和当前反馈投递；`manager:napcat-supervisor` 持有启动登录检查，停用时取消尚未开始的账号队列并等待当前原子检查。`manager:core` 在 Manager 关闭时回收其他一次性进程。Route 配置、GatewayRuntime、计划反馈和消息处理记录仍由原有业务模块拥有。
+
 ### `src/manager/controlPlaneRoutes.ts`
 
 这是当前 manager 的 HTTP 控制面主文件。它仍然比较大，但已经开始接入更深的 Module。

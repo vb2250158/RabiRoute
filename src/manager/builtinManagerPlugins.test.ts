@@ -9,7 +9,13 @@ test("built-in Manager plugins publish the current WebGUI and Desktop contributi
     "manager:persona",
     "manager:speech",
     "manager:performance",
-    "manager:desktop"
+    "manager:desktop",
+    "manager:gateway-runtime",
+    "manager:rabilink-relay",
+    "manager:memory-consolidation",
+    "manager:message-processing-automation",
+    "manager:plan-feedback-delivery",
+    "manager:napcat-supervisor"
   ]);
   const contributions = definitions.flatMap(item => item.contributions ?? []);
   const keys = contributions.map(item => `${item.kind}:${item.id}`);
@@ -87,5 +93,27 @@ test("builtin Desktop hotkeys reference commands from the same plugin instance",
       ["capture-screenshot", "Ctrl+Shift+S", "desktop.capture-screenshot"],
       ["pin-clipboard-image", "F3", "desktop.pin-clipboard-image"]
     ]
+  );
+});
+
+test("builtin Manager service plugins publish no UI contributions", () => {
+  const definitions = builtinManagerPluginDefinitions();
+  const serviceInstanceIds = [
+    "manager:gateway-runtime",
+    "manager:rabilink-relay",
+    "manager:memory-consolidation",
+    "manager:message-processing-automation",
+    "manager:plan-feedback-delivery",
+    "manager:napcat-supervisor"
+  ];
+
+  assert.deepEqual(
+    definitions
+      .filter(definition => serviceInstanceIds.includes(definition.instanceId))
+      .map(definition => ({
+        instanceId: definition.instanceId,
+        contributions: definition.contributions ?? []
+      })),
+    serviceInstanceIds.map(instanceId => ({ instanceId, contributions: [] }))
   );
 });

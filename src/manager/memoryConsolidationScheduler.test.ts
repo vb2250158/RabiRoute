@@ -75,3 +75,31 @@ test("memory consolidation scheduler does not redeliver a run already accepted b
 
   assert.equal(attempts, 0);
 });
+
+
+test("stop waits for the active delivery and prevents later targets from starting", async () => {
+  let release!: () => void;
+  const delivered: string[] = [];
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [
+      { gatewayId: "a", roleKey: "a", roleDir: "/a" },
+      { gatewayId: "b", roleKey: "b", roleDir: "/b" }
+    ],
+    requestDueRun: target => ({ runId: `run-${target.gatewayId}` }),
+    nextTriggerAt: () => undefined,
+    deliver: async target => {
+      delivered.push(target.gatewayId);
+      await new Promise<void>(resolve => { release = resolve; });
+    }
+  });
+
+  scheduler.start();
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  let stopped = false;
+  const stop = scheduler.stop().then(() => { stopped = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stopped, false);
+  release();
+  await stop;
+  assert.deepEqual(delivered, ["a"]);
+});

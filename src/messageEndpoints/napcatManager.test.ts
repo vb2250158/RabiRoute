@@ -874,3 +874,55 @@ test("Rabi startup auto login keeps the same QQ serialized while other accounts 
   await pending;
   assert.deepEqual(calls, ["same-qq-first", "other-qq", "same-qq-second"]);
 });
+
+test("Rabi startup auto login stops a same-QQ serial queue after abort", async () => {
+  const controller = new AbortController();
+  const calls: string[] = [];
+  let releaseFirst!: () => void;
+  let markFirstStarted!: () => void;
+  const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+  const instances = [{
+    id: "same-qq-first",
+    botUserId: "10000",
+    gatewayPort: 8789,
+    httpUrl: "http://127.0.0.1:3000"
+  }, {
+    id: "same-qq-second",
+    botUserId: "10000",
+    gatewayPort: 8791,
+    httpUrl: "http://127.0.0.1:3001"
+  }];
+  const runtime = {
+    definition: {
+      id: "route",
+      enabled: true,
+      messageAdapters: ["napcat"],
+      gatewayPort: 8789,
+      napcatInstances: instances
+    }
+  };
+
+  const pending = autoLoginNapcatInstancesOnRabiStart({
+    rootDir: process.cwd(),
+    getRuntimes: () => [runtime],
+    normalizeNapCatInstances: () => instances,
+    appendLog: () => undefined,
+    checkHttpEndpoint: async () => false
+  }, async (_ctx, request) => {
+    calls.push(String(request.instanceId));
+    if (request.instanceId === "same-qq-first") {
+      markFirstStarted();
+      await firstReleased;
+    }
+    return { ok: true, state: "ready" };
+  }, controller.signal);
+
+  await firstStarted;
+  controller.abort();
+  releaseFirst();
+
+  const results = await pending;
+  assert.deepEqual(calls, ["same-qq-first"]);
+  assert.deepEqual(results.map((result) => result.instanceId), ["same-qq-first"]);
+});

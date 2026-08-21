@@ -2559,12 +2559,16 @@ type NapcatEnsureReadyRunner = (
 
 export async function autoLoginNapcatInstancesOnRabiStart(
   ctx: NapcatManagerContext,
-  ensureReady: NapcatEnsureReadyRunner = ensureNapcatInstanceReady
+  ensureReady: NapcatEnsureReadyRunner = ensureNapcatInstanceReady,
+  signal?: AbortSignal
 ): Promise<NapcatStartupAutoLoginResult[]> {
+  if (signal?.aborted) return [];
   const groups = new Map<string, Array<{ runtime: GatewayRuntime; instance: NapCatInstanceDefinition }>>();
-  for (const runtime of napcatRuntimes(ctx)) {
-    if (runtime.definition.enabled === false) continue;
+  for (const runtime of ctx.getRuntimes()) {
+    if (signal?.aborted) break;
+    if (!runtimeUsesNapcat(runtime.definition) || runtime.definition.enabled === false) continue;
     for (const instance of napcatInstancesFor(ctx, runtime)) {
+      if (signal?.aborted) break;
       if (instance.enabled === false || instance.autoLoginOnRabiStart === false) continue;
       const botUserId = String(instance.botUserId || "").trim();
       const key = botUserId ? `qq:${botUserId}` : `instance:${runtime.definition.id}:${instance.id}`;
@@ -2576,8 +2580,11 @@ export async function autoLoginNapcatInstancesOnRabiStart(
 
   const groupedResults = await Promise.all([...groups.values()].map(async (group) => {
     const results: NapcatStartupAutoLoginResult[] = [];
+    if (signal?.aborted) return results;
     for (const { runtime, instance } of group) {
+      if (signal?.aborted) break;
       try {
+        if (signal?.aborted) break;
         const result = await ensureReady(ctx, {
           gatewayId: runtime.definition.id,
           instanceId: instance.id

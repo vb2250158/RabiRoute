@@ -44,9 +44,11 @@ export class MemoryConsolidationScheduler {
     void this.runOnce();
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     this.stopped = true;
+    this.rerunRequested = false;
     this.cancelDeadline();
+    return this.running ?? Promise.resolve();
   }
 
   reschedule(): void {
@@ -83,6 +85,7 @@ export class MemoryConsolidationScheduler {
     let retryAt: number | undefined;
 
     for (const target of targets) {
+      if (this.stopped) break;
       let pending: DueMemoryConsolidationRun | null = null;
       try {
         pending = this.options.requestDueRun(target);
@@ -102,6 +105,7 @@ export class MemoryConsolidationScheduler {
       this.deliveredRunIds.add(pending.runId);
       try {
         await this.options.deliver(target, pending);
+        if (this.stopped) break;
       } catch (error) {
         this.deliveredRunIds.delete(pending.runId);
         this.options.onError?.(target, error);

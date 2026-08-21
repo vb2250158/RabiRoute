@@ -3,15 +3,31 @@ import http from "node:http";
 import test from "node:test";
 import { RabiCordisHost } from "../runtime/cordisHost.js";
 import { mountManagerPluginRuntime } from "../runtime/managerPluginRuntime.js";
+import { ManagerPluginReconciler } from "../runtime/managerPluginReconciler.js";
 import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
+import { normalizeManagerPluginConfig } from "./managerPluginConfig.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 
 async function startCatalogServer() {
   const host = new RabiCordisHost();
-  const runtime = await mountManagerPluginRuntime(host, builtinManagerPluginDefinitions());
+  const runtime = await mountManagerPluginRuntime(host);
+  const reconciler = new ManagerPluginReconciler(runtime);
+  const normalized = normalizeManagerPluginConfig({});
+  await reconciler.reconcile(normalized.desired);
+  let reconcileCount = 0;
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (!handlePluginCatalogApi(request, url, response, { runtime })) {
+    if (!handlePluginCatalogApi(request, url, response, {
+      runtime,
+      reconciliation: {
+        reconciler,
+        diagnostics: () => normalized.diagnostics,
+        reconcile: async () => {
+          reconcileCount += 1;
+          return reconciler.reconcile(normalized.desired);
+        }
+      }
+    })) {
       response.writeHead(404).end();
     }
   });
@@ -23,6 +39,8 @@ async function startCatalogServer() {
   if (!address || typeof address === "string") throw new Error("Catalog test server did not bind.");
   return {
     runtime,
+    reconciler,
+    reconcileCount: () => reconcileCount,
     baseUrl: `http://127.0.0.1:${address.port}`,
     async close() {
       await runtime.unmount();
@@ -97,6 +115,30 @@ test("Plugin Catalog API rejects unsupported hosts and ignores unrelated paths",
     assert.equal(invalid.status, 400);
     const missing = await fetch(`${app.baseUrl}/api/plugins/other`);
     assert.equal(missing.status, 404);
+  } finally {
+    await app.close();
+  }
+});
+
+
+test("Plugin reconciliation API publishes state and triggers a controlled reread", async () => {
+  const app = await startCatalogServer();
+  try {
+    const current = await fetch(`${app.baseUrl}/api/plugins/reconciliation`);
+    assert.equal(current.status, 200);
+    const currentBody = await current.json() as {
+      data: { schemaVersion: number; state: string; active: string[]; diagnostics: unknown[] };
+    };
+    assert.equal(currentBody.data.schemaVersion, 1);
+    assert.equal(currentBody.data.state, "idle");
+    assert.equal(currentBody.data.active.includes("manager:core"), true);
+    assert.deepEqual(currentBody.data.diagnostics, []);
+
+    const reconciled = await fetch(`${app.baseUrl}/api/plugins/reconciliation`, { method: "POST" });
+    assert.equal(reconciled.status, 200);
+    assert.equal(app.reconcileCount(), 1);
+    const reconciledBody = await reconciled.json() as { data: { changed: string[] } };
+    assert.deepEqual(reconciledBody.data.changed, []);
   } finally {
     await app.close();
   }

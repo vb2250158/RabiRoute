@@ -51,3 +51,21 @@ test("config watcher treats a transient directory read error as partial instead 
   assert.deepEqual(result.files, []);
   assert.match(result.errors.join("\n"), /UNKNOWN/);
 });
+
+
+test("config watcher includes explicit Manager configuration files", async () => {
+  const routeRoot = path.resolve("runtime", "routes");
+  const rolesRoot = path.resolve("runtime", "roles");
+  const managerConfig = path.resolve("runtime", "manager.json");
+  const result = await collectWatchedConfigFiles({
+    routeRoot,
+    rolesRoot,
+    explicitFiles: [managerConfig],
+    readDirectory: async () => [],
+    adapterConfigPath: name => path.join(routeRoot, name, "adapterConfig.json"),
+    personaConfigPath: name => path.join(rolesRoot, name, "personaConfig.json"),
+    fileExists: async () => true
+  });
+
+  assert.deepEqual(result.files, [managerConfig]);
+});

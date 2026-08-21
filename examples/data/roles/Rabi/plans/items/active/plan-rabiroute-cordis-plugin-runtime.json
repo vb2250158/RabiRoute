@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "add-reconciliation-and-isolation",
-  "currentStep": "正在增加配置对账、局部重载和独立进程插件合同。",
-  "nextAction": "增加配置对账和局部重载，再实现独立进程插件合同。",
+  "currentStepId": "migrate-manager-background-services",
+  "currentStep": "六个 Manager 后台服务已进入可停用、可重新启用的 Cordis 生命周期；知识回调使用可撤销代次，计划反馈恢复等待真实投递结果，NapCat 停用会取消剩余账号队列。",
+  "nextAction": "迁移剩余中心化可选 API 分发，并继续完成插件化覆盖审计和长时间运行验收。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -66,7 +66,18 @@
     {
       "id": "add-reconciliation-and-isolation",
       "title": "增加配置对账、局部重载和独立进程插件",
+      "status": "已完成",
+      "completedAt": "2026-08-21T20:45:00+08:00"
+    },
+    {
+      "id": "migrate-manager-background-services",
+      "title": "迁移剩余 Manager 后台服务和中心化 API 组合",
       "status": "进行中"
+    },
+    {
+      "id": "complete-plugin-runtime-acceptance",
+      "title": "完成插件化覆盖审计、运行验收和公开交接",
+      "status": "未开始"
     }
   ],
   "waitingFor": "",
@@ -82,7 +93,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T19:50:00+08:00",
+  "updatedAt": "2026-08-21T22:49:16+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -122,6 +133,33 @@
     "rendererId",
     "hotkey contribution",
     "theme resource ID",
-    "WebGUI recovery page"
+    "WebGUI recovery page",
+    "managerPlugins",
+    "ManagerPluginReconciler",
+    "plugin_catalog_changed",
+    "process plugin protocol",
+    "isolated process host",
+    "/api/plugins/reconciliation",
+    "manager:gateway-runtime",
+    "manager:rabilink-relay",
+    "manager:memory-consolidation",
+    "PerformanceApi",
+    "ManagerGatewayRuntimeService",
+    "ManagerPluginRouteRegistry",
+    "Gateway coordinator",
+    "background service lifecycle",
+    "process tree stop-and-drain",
+    "Persona Sync LAN generation",
+    "owned one-shot process cleanup",
+    "config reload ordering",
+    "manager:message-processing-automation",
+    "manager:plan-feedback-delivery",
+    "manager:napcat-supervisor",
+    "MessageProcessingAutomationService",
+    "PlanFeedbackRecoveryService",
+    "NapcatSupervisorService",
+    "KnowledgeCallbackReminderService",
+    "plan feedback delivery flight",
+    "NapCat AbortSignal"
   ]
 }

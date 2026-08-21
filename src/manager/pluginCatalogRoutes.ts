@@ -1,9 +1,20 @@
 import type http from "node:http";
 import type { RabiContributionHost } from "../runtime/contributionRegistry.js";
 import type { ManagerPluginRuntimeMount } from "../runtime/managerPluginRuntime.js";
+import type {
+  ManagerPluginReconciliationStatus,
+  ManagerPluginReconciler
+} from "../runtime/managerPluginReconciler.js";
+
+export type PluginReconciliationApiContext = {
+  reconciler: ManagerPluginReconciler;
+  diagnostics?: () => readonly unknown[];
+  reconcile?: () => Promise<ManagerPluginReconciliationStatus>;
+};
 
 export type PluginCatalogApiContext = {
   runtime: ManagerPluginRuntimeMount;
+  reconciliation?: PluginReconciliationApiContext;
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
@@ -18,12 +29,48 @@ function contributionHost(value: string | null): RabiContributionHost | undefine
   return null;
 }
 
+function reconciliationPayload(context: PluginReconciliationApiContext): object {
+  return {
+    schemaVersion: 1,
+    ...context.reconciler.status(),
+    diagnostics: [...(context.diagnostics?.() ?? [])]
+  };
+}
+
 export function handlePluginCatalogApi(
   request: http.IncomingMessage,
   requestUrl: URL,
   response: http.ServerResponse,
   context: PluginCatalogApiContext
 ): boolean {
+  const reconciliationRoute = requestUrl.pathname === "/api/plugins/reconciliation"
+    || requestUrl.pathname === "/api/plugins/reconcile";
+  if (reconciliationRoute) {
+    if (!context.reconciliation) {
+      jsonResponse(response, 503, { code: -1, message: "Plugin reconciliation is unavailable." });
+      return true;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/plugins/reconciliation") {
+      jsonResponse(response, 200, { code: 0, data: reconciliationPayload(context.reconciliation) });
+      return true;
+    }
+    if (request.method === "POST") {
+      if (!context.reconciliation.reconcile) {
+        jsonResponse(response, 405, { code: -1, message: "Plugin reconciliation cannot be triggered." });
+        return true;
+      }
+      void context.reconciliation.reconcile()
+        .then(() => jsonResponse(response, 200, { code: 0, data: reconciliationPayload(context.reconciliation!) }))
+        .catch(error => jsonResponse(response, 500, {
+          code: -1,
+          message: error instanceof Error ? error.message : String(error)
+        }));
+      return true;
+    }
+    jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+    return true;
+  }
+
   if (request.method !== "GET" || requestUrl.pathname !== "/api/plugins/catalog") return false;
   const host = contributionHost(requestUrl.searchParams.get("host"));
   if (host === null) {

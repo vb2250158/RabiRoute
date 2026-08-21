@@ -215,6 +215,25 @@ There is no persistent generic Action Queue. Future approval/retry work should b
 
 Starts the loopback Manager, loads route/role configuration, serves WebGUI/API, and coordinates route subprocesses and shared services.
 
+
+### Manager plugin runtime
+
+`managerPluginHost.ts` creates an empty runtime under the Manager root Context. `managerPluginConfig.ts` normalizes `data/manager.json` into a controlled desired state. `managerPluginReconciler.ts` serializes comparisons between desired and current instances and starts, stops, or reloads only changed entries. Failed activation remounts the previous definition when possible; rollback failure remains explicit.
+
+Background effects for `manager:persona`, `manager:speech`, and `manager:performance` are disposed by their owning Fibers. Their HTTP routes also check active plugin state. `pluginCatalogRoutes.ts` publishes catalog and reconciliation state, and WebGUI refreshes the catalog after Manager SSE events.
+
+`processPluginProtocol.ts` and `processPluginHost.ts` define the versioned JSON Lines contract for higher-risk extensions: capability grants, health checks, deadlines, sanitized errors, and Windows process-tree cleanup. `processManagerPlugin.ts` mounts a handshaken process contribution through a normal Manager Plugin Fiber. The catalog still accepts declarative contributions only and does not load third-party pages, scripts, or resource paths.
+
+### Manager plugin-owned background services
+
+`composeBuiltinManagerPluginDefinitions()` combines the built-in catalog with lifecycle wiring from the Manager process, while the catalog remains the source of instance identity and contributions. Six service instances publish no UI contributions. Their Fibers own Gateway-process coordination, Relay/persona-sync LAN connections, memory consolidation, message-processing reminders, plan-feedback recovery, and NapCat startup checks.
+
+`manager:performance` creates a fresh `PerformanceApi` for every Fiber activation and registers that instance's HTTP-handler batch through `ManagerPluginRouteRegistry`. Deactivation removes that activation's HTTP-handler batch, closes sample subscriptions and SSE clients, and stops `PerformanceMonitoringService`.
+
+`src/manager/managerGatewayRuntimeService.ts` is the Gateway service coordinator. Over `RuntimeRegistry`, it centralizes definition loading, fingerprint comparison, removed-runtime shutdown, `needsRestart` marking, and ordered start/stop/restart/stopAll actions. Manager keeps Route definitions refreshed while `manager:gateway-runtime` controls process lifecycle only. Deactivation stops the complete process tree and waits for exit before the same instance can reactivate. Configuration refresh then reconciles the plugin composition, Gateway processes, Relay, and memory scheduling in order.
+
+`PersonaSyncLanServer` uses a start generation to reject callbacks from a listener that was already disabled. Deactivating `manager:memory-consolidation` stops its owned one-shot processes and waits for the running scheduler. `manager:message-processing-automation` owns the plan-change subscription, knowledge-callback timers, and Agent-response reminders; `manager:plan-feedback-delivery` owns recovery scans, retry timers, and active feedback deliveries; `manager:napcat-supervisor` owns the startup-login check, cancels accounts that have not started on deactivation, and waits for the current atomic check. `manager:core` reclaims other one-shot processes during Manager shutdown. Route configuration, GatewayRuntime, plan-feedback records, and message-processing records remain owned by the existing business modules.
+
 ### `src/manager/controlPlaneRoutes.ts`
 
 The current broad HTTP control-plane router. It handles gateway operations, scans, Agent replies/threads, role knowledge, shutdown, and endpoint-specific actions. Continue extracting stable domain helpers instead of growing unrelated inline logic indefinitely.

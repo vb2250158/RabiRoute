@@ -8,13 +8,15 @@ type FakeChild = EventEmitter & {
   stdout: EventEmitter;
   stderr: EventEmitter;
   exitCode: number | null;
+  kill: () => boolean;
 };
 
 function fakeChild(): FakeChild {
   return Object.assign(new EventEmitter(), {
     stdout: new EventEmitter(),
     stderr: new EventEmitter(),
-    exitCode: null as number | null
+    exitCode: null as number | null,
+    kill: () => true
   });
 }
 
@@ -66,4 +68,25 @@ test("manual trigger child output and terminal failure remain observable after a
   assert.deepEqual(stderr, ["delivery failed\n"]);
   assert.deepEqual(exits, [[1, null]]);
   assert.equal(registry.isRunning("route:manual"), false);
+});
+
+
+test("stopping one owner waits for its children and preserves other owners", async () => {
+  const stopped: FakeChild[] = [];
+  const registry = new ManualTriggerProcessRegistry(async child => {
+    const fake = child as unknown as FakeChild;
+    stopped.push(fake);
+    fake.exitCode = 0;
+    fake.emit("exit", 0, null);
+  });
+  const memory = fakeChild();
+  const manual = fakeChild();
+  registry.launch("route:memory", () => memory as unknown as ChildProcess, {}, "manager:memory-consolidation");
+  registry.launch("route:manual", () => manual as unknown as ChildProcess, {}, "manager:manual");
+
+  await registry.stopOwner("manager:memory-consolidation");
+
+  assert.deepEqual(stopped, [memory]);
+  assert.equal(registry.isRunning("route:memory"), false);
+  assert.equal(registry.isRunning("route:manual"), true);
 });

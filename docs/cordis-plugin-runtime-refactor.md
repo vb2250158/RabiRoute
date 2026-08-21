@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录和 WebGUI/Desktop 声明式表现入口已实现；配置对账、局部重载和独立进程插件尚未完成。
+> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI/Desktop 声明式表现入口、配置对账、局部重载、独立进程插件合同，以及六个 Manager 后台服务生命周期已实现；剩余中心化可选 API 分发和重启后运行验收仍待完成。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -312,6 +312,31 @@ plugins:
 
 `id` 是实例身份，`plugin` 是实现身份。显示名、数组位置和文件路径不能代替实例 ID。
 
+## 继续重构前检查
+
+每次上下文压缩后或开始新的实施切片前，重新读取以下最小证据集：
+
+DSH：
+
+- `deepseek-harness/AGENTS.md`
+- `deepseek-harness/docs/architecture.md`
+- `deepseek-harness/packages/boot/app-boot/src/index.ts`
+- `deepseek-harness/packages/core/scope/README.zh.md`
+
+RabiRoute：
+
+- `docs/dsh-plugin-architecture-lessons.md`
+- `docs/cordis-plugin-runtime-refactor.md`
+- `docs/code-architecture.md`
+- `docs/project-function-map.md`
+
+继续修改前确认四项：
+
+1. 新插件拥有的监听器、定时器、端口、进程和注册项是否都能随实例撤销。
+2. Route、消息记录、路由判断、`AgentPacket`、Outbox、计划反馈和消息处理记录是否仍各自只有一个业务拥有者。
+3. Cordis scope 或 isolate 是否被误写成进程、文件系统、网络或权限隔离。
+4. 新能力是否通过公开服务、事件、命令或查询接口协作，而不是直接修改其他模块的内部状态。
+
 ## 迁移阶段
 
 ### 阶段 0：Cordis 边界验证
@@ -356,9 +381,17 @@ plugins:
 
 ### 阶段 6：配置对账与局部重载
 
-接入稳定实例 ID 和 Loader。第一版支持配置驱动的启用、停用和重新创建，不支持源代码 HMR。
+当前状态：配置驱动的启用、停用、revision 重建和失败回滚已实现，不支持源代码 HMR。六个无 UI contribution 的服务实例已进入同一对账流程。
 
-退出条件：配置失败恢复旧实例，不产生重复监听或发送。
+- `manager:gateway-runtime` 激活后启用 `ManagerGatewayRuntimeService` 协调器；停用时停止全部 Gateway，并关闭后续手动启停入口。
+- `manager:rabilink-relay` 在 listener 就绪后同步 Relay；停用时停止 Relay Runtime 和人格同步局域网服务。
+- `manager:memory-consolidation` 每次激活创建新的调度器；停用时停止本实例的一次性进程并等待调度结束，只读 Manager 不启动它。
+- `manager:message-processing-automation` 持有计划变化订阅、知识回调计时器和 Agent 回复提醒；知识回调使用实例代次、单项修订和 Node 定时器上限，触发时重新读取截止时间。停用时清除计时器、阻止旧回调重新排程，并等待已开始的提醒投递。
+- `manager:plan-feedback-delivery` 持有恢复扫描、重试计时器和当前反馈投递；停用后新的反馈保留为待投递。
+- `manager:napcat-supervisor` 在 Manager 自动启动时执行一次登录检查；停用时取消剩余账号队列，等待当前原子检查结束，并屏蔽旧回调。
+- `manager:performance` 每次激活创建新的 `PerformanceApi` 和路由批次；停用时关闭样本订阅、SSE 客户端和性能监控服务。
+
+当前切片已满足“只重载变化实例、停用释放本实例副作用、失败恢复旧定义”的定向测试。剩余中心化可选 API 分发和重启后的运行验收仍属于进行中工作。
 
 ### 阶段 7：树外代码插件与隔离
 
@@ -544,6 +577,29 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 7. 未知 Schema、未知 ID、跨插件引用、危险命令和宿主不支持的能力被拒绝或忽略。WebGUI 首次目录失败进入固定恢复页，Desktop 保留固定恢复入口；后续失败继续使用最近成功目录。
 
 `extend-webgui-desktop` 已完成。`requiredCapabilities` 由目标宿主的本地能力注册表按 AND 语义判断，插件 manifest 不能替宿主声明渲染或执行能力。下一阶段增加配置对账、局部重载与独立进程插件。
+
+## 第十四个实施切片：配置对账与局部重载
+
+1. `data/manager.json.managerPlugins` 只接受已注册内置实例和布尔 `enabled`；`manager:core` 必须启用；
+2. Manager watcher 同时跟踪 `manager.json`、Route 配置和人格配置；
+3. `ManagerPluginReconciler` 串行比较期望 revision，只启停或重载变化实例；
+4. 新定义激活失败后恢复旧定义，回滚失败保留 `rollback_failed`；
+5. persona、speech、performance 的后台副作用和 HTTP 入口跟随插件活动状态；
+6. `GET /api/plugins/reconciliation` 和 `POST /api/plugins/reconcile` 提供状态与手动对账；
+7. WebGUI 监听 `plugin_catalog_changed`，不增加业务轮询。
+
+该切片已完成。
+
+## 第十五个实施切片：独立进程插件合同
+
+1. 独立进程使用版本化 JSON Lines 交换 manifest、握手、请求、响应、健康和停止消息；
+2. 当前只授权 `ui.contributions`，贡献继续经过现有字段、宿主和引用校验；
+3. 超时、协议错误、异常退出和 stderr 使用脱敏错误；
+4. Windows 停止通过可测试的进程树清理器终止子进程；
+5. `processManagerPlugin.ts` 将通过握手的进程挂到普通 Manager Plugin Fiber，卸载先撤销贡献再停止进程；
+6. `manager.json` 不接受命令、路径、包名、URL 或环境变量。独立进程实例只能由受信任的宿主组合代码创建。
+
+该切片已完成。
 
 ## 完成标准
 
