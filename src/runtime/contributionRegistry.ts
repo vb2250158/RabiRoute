@@ -19,6 +19,12 @@ export type RabiCommandDangerLevel = "safe" | "confirm" | "dangerous";
 
 export type RabiUiContribution =
   | (RabiContributionBase & {
+    kind: "page";
+    label: RabiContributionLabel;
+    routeId: string;
+    rendererId: string;
+  })
+  | (RabiContributionBase & {
     kind: "navigation";
     label: RabiContributionLabel;
     routeId: string;
@@ -138,6 +144,13 @@ function normalizeContribution(value: RabiUiContribution): RabiUiContribution {
   };
 
   switch (value.kind) {
+    case "page":
+      return {
+        ...base,
+        kind: "page",
+        routeId: normalizeSymbol(value.routeId, `Contribution routeId (${id})`),
+        rendererId: normalizeSymbol(value.rendererId, `Contribution rendererId (${id})`)
+      };
     case "navigation":
       return {
         ...base,
@@ -215,11 +228,32 @@ function validateContribution(value: RabiUiContribution): void {
   if (value.kind === "command" && !["safe", "confirm", "dangerous"].includes(value.dangerLevel ?? "safe")) {
     throw new Error(`Contribution danger level is unsupported: ${value.id}`);
   }
+  if (value.kind === "theme") {
+    const supportsWeb = value.hosts.includes("web");
+    const supportsDesktop = value.hosts.includes("desktop");
+    if (supportsWeb !== Boolean(value.webResourceId)) {
+      throw new Error(`Contribution web theme resource is incompatible with hosts: ${value.id}`);
+    }
+    if (supportsDesktop !== Boolean(value.desktopResourceId)) {
+      throw new Error(`Contribution desktop theme resource is incompatible with hosts: ${value.id}`);
+    }
+  }
+}
+
+function contractIdentityKey(value: RabiUiContribution): string | undefined {
+  if (value.kind === "page") return `page-route:${value.routeId}`;
+  if (value.kind === "theme") return `theme:${value.themeId}`;
+  return undefined;
 }
 
 function validateContributionRelationships(contributions: readonly RabiUiContribution[]): void {
   const commandIds = new Set(
     contributions.filter(contribution => contribution.kind === "command").map(contribution => contribution.id)
+  );
+  const pagesByRouteId = new Map(
+    contributions
+      .filter((contribution): contribution is Extract<RabiUiContribution, { kind: "page" }> => contribution.kind === "page")
+      .map(contribution => [contribution.routeId, contribution])
   );
   for (const contribution of contributions) {
     if ((contribution.kind === "tray-menu" || contribution.kind === "hotkey")
@@ -227,6 +261,19 @@ function validateContributionRelationships(contributions: readonly RabiUiContrib
       throw new Error(
         `Contribution command reference is missing from the same registration batch: ${contribution.kind}:${contribution.id} -> ${contribution.commandId}`
       );
+    }
+    if (contribution.kind === "navigation") {
+      const page = pagesByRouteId.get(contribution.routeId);
+      if (!page) {
+        throw new Error(
+          `Contribution page reference is missing from the same registration batch: navigation:${contribution.id} -> ${contribution.routeId}`
+        );
+      }
+      if (contribution.hosts.some(host => !page.hosts.includes(host))) {
+        throw new Error(
+          `Contribution page reference is incompatible with hosts: navigation:${contribution.id} -> ${contribution.routeId}`
+        );
+      }
     }
   }
 }
@@ -252,15 +299,26 @@ export class ContributionRegistry {
     const owner = normalizeIdentity(pluginId, "Contribution pluginId");
     const ownerInstance = normalizeIdentity(instanceId, "Contribution instanceId");
     const normalizedContributions = contributions.map(normalizeContribution);
+    normalizedContributions.forEach(validateContribution);
     validateContributionRelationships(normalizedContributions);
     const keys = new Set<string>();
+    const contractKeys = new Set<string>();
+    const registeredContractKeys = new Set(
+      [...this.records.values()]
+        .map(contractIdentityKey)
+        .filter((key): key is string => key !== undefined)
+    );
     for (const contribution of normalizedContributions) {
-      validateContribution(contribution);
       const key = contributionKey(contribution);
       if (keys.has(key) || this.records.has(key)) {
         throw new Error(`Contribution already registered: ${key}`);
       }
       keys.add(key);
+      const contractKey = contractIdentityKey(contribution);
+      if (contractKey && (contractKeys.has(contractKey) || registeredContractKeys.has(contractKey))) {
+        throw new Error(`Contribution contract already registered: ${contractKey}`);
+      }
+      if (contractKey) contractKeys.add(contractKey);
     }
 
     const inserted: string[] = [];
