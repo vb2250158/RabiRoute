@@ -2,144 +2,106 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildWebNavigation } from "../src/pluginNavigation";
 
-type NavigationOverrides = Partial<{
-  id: string;
-  instanceId: string;
-  kind: string;
-  surface: string;
-  label: unknown;
-  routeId: string;
-  icon: string;
-  slot: string;
-  hosts: unknown;
-  order: number;
-}>;
+const rendererByRoute = {
+  "route.overview": "builtin.web-page.overview.v1",
+  "route.adapters": "builtin.web-page.adapters.v1",
+  "route.persona": "builtin.web-page.persona.v1",
+  "route.knowledge": "builtin.web-page.knowledge.v1",
+  "route.persona-sync": "builtin.web-page.persona-sync.v1",
+  "route.speech": "builtin.web-page.speech.v1",
+  "global.performance": "builtin.web-page.performance.v1",
+  "route.runtime": "builtin.web-page.runtime.v1",
+  "global.settings": "builtin.web-page.settings.v1",
+  "global.docs": "builtin.web-page.docs.v1"
+} as const;
 
-function navigation(overrides: NavigationOverrides = {}): unknown {
+type RouteId = keyof typeof rendererByRoute;
+
+function page(routeId: RouteId, instanceId: string, rendererId = rendererByRoute[routeId]): unknown {
   return {
-    kind: "navigation",
-    surface: "web.navigation",
-    id: "plugin-link",
-    instanceId: "manager:plugin-link",
-    pluginId: "package:plugin-link",
-    label: { fallback: "插件入口" },
-    routeId: "global.performance",
-    icon: "mdi-chart-timeline-variant",
-    slot: "utility",
-    hosts: ["web"],
-    order: 60,
-    ...overrides
+    kind: "page",
+    id: `${routeId}-page`,
+    instanceId,
+    pluginId: `package:${instanceId}`,
+    routeId,
+    rendererId,
+    hosts: ["web"]
   };
 }
 
-test("Web navigation falls back to the existing primary, utility, and guide entries", () => {
-  const groups = buildWebNavigation(null, "main route");
+function navigation(options: {
+  id: string;
+  instanceId: string;
+  routeId: RouteId | string;
+  label: string;
+  icon: string;
+  slot: string;
+  order: number;
+  kind?: string;
+}): unknown {
+  return {
+    kind: options.kind ?? "navigation",
+    surface: "web.navigation",
+    id: options.id,
+    instanceId: options.instanceId,
+    pluginId: `package:${options.instanceId}`,
+    label: { fallback: options.label },
+    routeId: options.routeId,
+    icon: options.icon,
+    slot: options.slot,
+    hosts: ["web"],
+    order: options.order
+  };
+}
 
-  assert.deepEqual(groups.routePrimary.map(item => item.id), [
-    "overview",
-    "message-adapters",
-    "persona",
-    "knowledge"
-  ]);
-  assert.deepEqual(groups.personaSecondary.map(item => [item.id, item.to]), [
-    ["persona-sync", "/routes/main%20route/persona/sync"]
-  ]);
-  assert.deepEqual(groups.utility.map(item => item.id), [
-    "speech",
-    "performance",
-    "runtime",
-    "settings"
-  ]);
-  assert.deepEqual(groups.footer.map(item => [item.id, item.to]), [["docs", "/docs"]]);
-  assert.equal(groups.routePrimary[0]?.to, "/routes/main%20route/overview");
+function pair(options: Parameters<typeof navigation>[0]): unknown[] {
+  return [page(options.routeId as RouteId, options.instanceId), navigation(options)];
+}
+
+test("Web navigation is empty before a successful plugin catalog", () => {
+  assert.deepEqual(buildWebNavigation(null, "main"), {
+    routePrimary: [],
+    personaSecondary: [],
+    utility: [],
+    footer: []
+  });
 });
 
-test("Web navigation resolves the controlled v2 routeId whitelist", () => {
-  const selectedRouteId = "Main /../?route=#one";
-  const encodedRouteId = encodeURIComponent(selectedRouteId);
+test("Web navigation resolves activated page routes and controlled slots", () => {
+  const selected = "Main /../?route=#one";
   const groups = buildWebNavigation([
-    navigation({ id: "catalog-overview", instanceId: "manager:core", label: { fallback: "控制台" }, routeId: "route.overview", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 }),
-    navigation({ id: "catalog-adapters", instanceId: "manager:core", label: { fallback: "消息适配器" }, routeId: "route.adapters", icon: "mdi-puzzle-outline", slot: "route-primary", order: 20 }),
-    navigation({ id: "catalog-persona", instanceId: "manager:persona", label: { fallback: "人格配置" }, routeId: "route.persona", icon: "mdi-account-heart-outline", slot: "route-primary", order: 30 }),
-    navigation({ id: "catalog-persona-sync", instanceId: "manager:persona", label: { fallback: "人格同步" }, routeId: "route.persona-sync", icon: "mdi-folder-sync-outline", slot: "persona-secondary", order: 35 }),
-    navigation({ id: "catalog-knowledge", instanceId: "manager:persona", label: { fallback: "计划与记忆" }, routeId: "route.knowledge", icon: "mdi-notebook-check-outline", slot: "route-primary", order: 40 }),
-    navigation({ id: "catalog-settings", instanceId: "manager:core", label: { fallback: "目录设置" }, routeId: "global.settings", icon: "mdi-cog-outline", slot: "utility", order: 5 }),
-    navigation({ id: "catalog-speech", instanceId: "manager:speech", label: { fallback: "语音服务" }, routeId: "route.speech", icon: "mdi-waveform", slot: "utility", order: 50 }),
-    navigation({ id: "catalog-performance", instanceId: "manager:performance", label: { fallback: "性能监控" }, routeId: "global.performance", icon: "mdi-chart-timeline-variant", slot: "utility", order: 60 }),
-    navigation({ id: "catalog-runtime", instanceId: "manager:core", label: { fallback: "日志诊断" }, routeId: "route.runtime", icon: "mdi-console-line", slot: "utility", order: 70 }),
-    navigation({ id: "catalog-docs", instanceId: "manager:core", label: { fallback: "目录手册" }, routeId: "global.docs", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 1 })
-  ], selectedRouteId);
+    ...pair({ id: "overview", instanceId: "manager:core", routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 }),
+    ...pair({ id: "persona-sync", instanceId: "manager:persona", routeId: "route.persona-sync", label: "人格同步", icon: "mdi-folder-sync-outline", slot: "persona-secondary", order: 40 }),
+    ...pair({ id: "settings", instanceId: "manager:core", routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 80 }),
+    ...pair({ id: "docs", instanceId: "manager:core", routeId: "global.docs", label: "手册", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 90 })
+  ], selected);
 
-  assert.deepEqual(
-    [...groups.routePrimary, ...groups.personaSecondary, ...groups.utility, ...groups.footer]
-      .map(item => [item.id, item.to])
-      .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
-    [
-      ["catalog-settings", "/settings"],
-      ["catalog-docs", "/docs"],
-      ["catalog-overview", `/routes/${encodedRouteId}/overview`],
-      ["catalog-adapters", `/routes/${encodedRouteId}/adapters`],
-      ["catalog-persona", `/routes/${encodedRouteId}/persona`],
-      ["catalog-persona-sync", `/routes/${encodedRouteId}/persona/sync`],
-      ["catalog-knowledge", `/routes/${encodedRouteId}/knowledge`],
-      ["catalog-speech", `/routes/${encodedRouteId}/speech`],
-      ["catalog-performance", "/performance"],
-      ["catalog-runtime", `/routes/${encodedRouteId}/runtime`]
-    ].sort((left, right) => String(left[0]).localeCompare(String(right[0])))
-  );
+  assert.deepEqual(groups.routePrimary.map(item => item.to), [`/routes/${encodeURIComponent(selected)}/overview`]);
+  assert.deepEqual(groups.personaSecondary.map(item => item.to), [`/routes/${encodeURIComponent(selected)}/persona/sync`]);
+  assert.deepEqual(groups.utility.map(item => item.to), ["/settings"]);
+  assert.deepEqual(groups.footer.map(item => item.to), ["/docs"]);
 });
 
-test("Web navigation orders accepted entries inside each controlled slot", () => {
+test("Web navigation requires a fixed renderer and the same active plugin instance", () => {
   const groups = buildWebNavigation([
-    navigation({ id: "settings-from-catalog", instanceId: "manager:settings", label: { fallback: "目录设置" }, routeId: "global.settings", icon: "mdi-cog-outline", slot: "utility", order: 5 }),
-    navigation({ id: "docs-from-catalog", instanceId: "manager:core", label: { fallback: "目录手册" }, routeId: "global.docs", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 1 })
+    page("global.performance", "manager:other"),
+    navigation({ id: "owner-mismatch", instanceId: "manager:performance", routeId: "global.performance", label: "性能", icon: "mdi-chart-timeline-variant", slot: "utility", order: 10 }),
+    page("global.settings", "manager:core", "plugin.remote-component.v1" as never),
+    navigation({ id: "unknown-renderer", instanceId: "manager:core", routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 20 }),
+    navigation({ id: "unknown-route", instanceId: "manager:core", routeId: "plugin.remote-route", label: "远程", icon: "mdi-cog-outline", slot: "utility", order: 30 })
   ], "main");
 
-  assert.deepEqual(groups.utility.map(item => item.id), [
-    "settings-from-catalog",
-    "speech",
-    "performance",
-    "runtime"
-  ]);
-  assert.deepEqual(groups.footer.map(item => [item.id, item.title]), [
-    ["docs-from-catalog", "目录手册"]
-  ]);
+  assert.equal(groups.utility.length, 0);
 });
 
-test("Web navigation ignores unknown kinds, route IDs, icons, and slot combinations", () => {
+test("accepted navigation keeps catalog ordering and unscoped Route recovery paths", () => {
   const groups = buildWebNavigation([
-    { kind: "command", surface: "web.navigation", endpoint: "/api/admin", action: { module: "remote" } },
-    navigation({ id: "wrong-surface", surface: "desktop.navigation" }),
-    navigation({ id: "external-route", routeId: "https://example.com/plugin.js" }),
-    navigation({ id: "api-route", routeId: "/api/private/action" }),
-    navigation({ id: "unknown-route", routeId: "plugin.arbitrary-module" }),
-    navigation({ id: "unknown-icon", icon: "mdi-script-text<script>" }),
-    navigation({ id: "unknown-slot", slot: "plugin-panel" }),
-    navigation({ id: "wrong-docs-slot", routeId: "global.docs", icon: "mdi-book-open-page-variant-outline", slot: "utility" }),
-    navigation({ id: "wrong-overview-slot", routeId: "route.overview", icon: "mdi-view-dashboard-outline", slot: "utility" }),
-    navigation({ id: "wrong-persona-sync-slot", routeId: "route.persona-sync", icon: "mdi-folder-sync-outline", slot: "route-primary" })
-  ], "main");
-
-  assert.equal(groups.routePrimary.length, 4);
-  assert.equal(groups.personaSecondary.length, 1);
-  assert.equal(groups.utility.length, 4);
-  assert.deepEqual(groups.footer.map(item => item.id), ["docs"]);
-  assert.equal(groups.utility.some(item => item.id.includes("route")), false);
-  assert.equal(groups.utility.find(item => item.id === "settings")?.to, "/settings");
-});
-
-test("Route routeIds use unscoped recovery paths when no Route is selected", () => {
-  const groups = buildWebNavigation([
-    navigation({
-      id: "overview-from-catalog",
-      instanceId: "manager:core",
-      label: { fallback: "控制台" },
-      routeId: "route.overview",
-      icon: "mdi-view-dashboard-outline",
-      slot: "route-primary",
-      order: 10
-    })
+    ...pair({ id: "adapters", instanceId: "manager:core", routeId: "route.adapters", label: "适配器", icon: "mdi-puzzle-outline", slot: "route-primary", order: 20 }),
+    ...pair({ id: "overview", instanceId: "manager:core", routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 })
   ], "");
 
-  assert.equal(groups.routePrimary[0]?.to, "/overview");
+  assert.deepEqual(groups.routePrimary.map(item => [item.id, item.to]), [
+    ["overview", "/overview"],
+    ["adapters", "/routes"]
+  ]);
 });

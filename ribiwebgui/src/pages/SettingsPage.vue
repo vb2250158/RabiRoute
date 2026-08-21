@@ -14,9 +14,11 @@ import type { SpeechModel } from "@shared/speechControlContract";
 import { speechControlClient } from "../speech/speechControlClient";
 import { registerPageSaveAction } from "../pageSaveAction";
 import { pluginCatalogStore } from "../pluginCatalogStore";
+import { resolveWebThemeResource } from "../pluginThemes";
 
 const store = useGatewayStore();
 const desktopSettingsVisible = computed(() => pluginCatalogStore.visibility.value.desktopSettings);
+const desktopThemeOptions = computed(() => pluginCatalogStore.themes.value.options);
 
 const routeDir = ref("");
 const rolesDir = ref("");
@@ -118,7 +120,7 @@ async function loadDesktopSettings(): Promise<void> {
       desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
       desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
       desktopAutostart.value = settings.autostart;
-      desktopTheme.value = settings.theme;
+      desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, settings.theme).theme;
       desktopSettingsLoaded.value = true;
       desktopSettingsError.value = "";
       await nextTick();
@@ -156,8 +158,8 @@ async function saveDesktopSettings(): Promise<void> {
     desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
     desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
     desktopAutostart.value = settings.autostart;
-    desktopTheme.value = settings.theme;
-    publishInterfaceTheme(settings.theme);
+    desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, settings.theme).theme;
+    publishInterfaceTheme(desktopTheme.value);
   } catch (error) {
     desktopSettingsError.value = error instanceof Error ? error.message : String(error);
     throw error;
@@ -566,9 +568,14 @@ onBeforeUnmount(() => {
             <div class="section-note">同时影响当前 WebGUI、托盘菜单、角色面板、滑词操作条和截图窗口。</div>
           </div>
           <v-btn-toggle v-model="desktopTheme" color="secondary" density="compact" mandatory divided :disabled="!desktopSettingsLoaded">
-            <v-btn value="system" prepend-icon="mdi-theme-light-dark">跟随系统</v-btn>
-            <v-btn value="light" prepend-icon="mdi-weather-sunny">浅色</v-btn>
-            <v-btn value="dark" prepend-icon="mdi-weather-night">深色</v-btn>
+            <v-btn
+              v-for="option in desktopThemeOptions"
+              :key="option.webResourceId"
+              :value="option.themeId"
+              :prepend-icon="option.icon"
+            >
+              {{ option.label }}
+            </v-btn>
           </v-btn-toggle>
         </div>
         <v-divider class="my-4" />

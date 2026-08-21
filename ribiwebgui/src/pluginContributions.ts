@@ -24,6 +24,8 @@ type ControlledContributionDefinition = Readonly<{
 
 const webHostCapabilities = new Set([
   "web.navigation",
+  "web.page",
+  "web.theme",
   "web.settings.desktop",
   "web.status.speech",
   "web.status.performance"

@@ -1,10 +1,18 @@
-import type { AsyncComponentLoader } from "vue";
-import { createRouter, createWebHashHistory } from "vue-router";
+import type { AsyncComponentLoader, Component } from "vue";
+import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 import RouteLoadingPage from "./components/RouteLoadingPage.vue";
+import PluginCatalogRecoveryPage from "./pages/PluginCatalogRecoveryPage.vue";
 import { createImmediateRouteComponent } from "./immediateRouteComponent";
 import { createLazyRouteRecovery } from "./lazyRouteRecovery";
+import { pluginCatalogStore } from "./pluginCatalogStore";
+import {
+  isWebPageRouteActive,
+  webPageRenderer,
+  type ControlledWebPageRouteId
+} from "./pluginPages";
 
 export const lazyRouteRecovery = createLazyRouteRecovery();
+export const PLUGIN_RECOVERY_ROUTE_NAME = "plugin-recovery";
 
 function immediatePage(loader: AsyncComponentLoader) {
   return createImmediateRouteComponent(loader, RouteLoadingPage, {
@@ -13,39 +21,68 @@ function immediatePage(loader: AsyncComponentLoader) {
   });
 }
 
-const OverviewPage = immediatePage(() => import("./pages/OverviewPage.vue"));
-const RouteConfigPage = immediatePage(() => import("./pages/RouteConfigPage.vue"));
-const PersonaTemplatePage = immediatePage(() => import("./pages/PersonaTemplatePage.vue"));
-const PersonaDocumentPage = immediatePage(() => import("./pages/PersonaDocumentPage.vue"));
-const PersonaSyncPage = immediatePage(() => import("./pages/PersonaSyncPage.vue"));
-const ProjectDocsPage = immediatePage(() => import("./pages/ProjectDocsPage.vue"));
-const RoleKnowledgePage = immediatePage(() => import("./pages/RoleKnowledgePage.vue"));
-const RuntimeLogPage = immediatePage(() => import("./pages/RuntimeLogPage.vue"));
-const PerformancePage = immediatePage(() => import("./pages/PerformancePage.vue"));
-const SpeechServicePage = immediatePage(() => import("./pages/SpeechServicePage.vue"));
-const SettingsPage = immediatePage(() => import("./pages/SettingsPage.vue"));
+function registeredPage(routeId: ControlledWebPageRouteId) {
+  return immediatePage(webPageRenderer(routeId).loader);
+}
+
+const OverviewPage = registeredPage("route.overview");
+const RouteConfigPage = registeredPage("route.adapters");
+const PersonaTemplatePage = registeredPage("route.persona");
+const PersonaDocumentPage = registeredPage("route.persona-document");
+const PersonaSyncPage = registeredPage("route.persona-sync");
+const ProjectDocsPage = registeredPage("global.docs");
+const RoleKnowledgePage = registeredPage("route.knowledge");
+const RuntimeLogPage = registeredPage("route.runtime");
+const PerformancePage = registeredPage("global.performance");
+const SpeechServicePage = registeredPage("route.speech");
+const SettingsPage = registeredPage("global.settings");
+
+function pageRoute(
+  path: string,
+  routeId: ControlledWebPageRouteId,
+  component: Component,
+  title: string
+): RouteRecordRaw {
+  return { path, component, meta: { title, pluginRouteId: routeId } };
+}
 
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     { path: "/", redirect: "/overview" },
-    { path: "/overview", component: OverviewPage, meta: { title: "控制台" } },
-    { path: "/speech", component: SpeechServicePage, meta: { title: "语音服务" } },
+    {
+      path: "/plugin-recovery",
+      name: PLUGIN_RECOVERY_ROUTE_NAME,
+      component: PluginCatalogRecoveryPage,
+      meta: { title: "插件恢复" }
+    },
+    pageRoute("/overview", "route.overview", OverviewPage, "控制台"),
+    pageRoute("/speech", "route.speech", SpeechServicePage, "语音服务"),
     { path: "/models", redirect: "/speech" },
-    { path: "/routes/:id/overview", component: OverviewPage, meta: { title: "控制台" } },
-    { path: "/routes/:id/adapters", component: RouteConfigPage, meta: { title: "消息适配器" } },
-    { path: "/routes/:id/persona/document", component: PersonaDocumentPage, meta: { title: "人格正文" } },
-    { path: "/routes/:id/persona/sync", component: PersonaSyncPage, meta: { title: "多电脑人格同步" } },
-    { path: "/routes/:id/persona", component: PersonaTemplatePage, meta: { title: "人格配置" } },
-    { path: "/routes/:id/knowledge", component: RoleKnowledgePage, meta: { title: "计划与记忆" } },
-    { path: "/routes/:id/speech", component: SpeechServicePage, meta: { title: "语音服务" } },
-    { path: "/routes/:id/runtime", component: RuntimeLogPage, meta: { title: "日志诊断" } },
-    { path: "/routes/:id?", component: RouteConfigPage, meta: { title: "消息适配器" } },
-    { path: "/persona/:id?", component: PersonaTemplatePage, meta: { title: "人格配置" } },
-    { path: "/knowledge", component: RoleKnowledgePage, meta: { title: "计划与记忆" } },
-    { path: "/docs", component: ProjectDocsPage, meta: { title: "使用手册" } },
-    { path: "/performance", component: PerformancePage, meta: { title: "性能监控" } },
-    { path: "/runtime", component: RuntimeLogPage, meta: { title: "日志诊断" } },
-    { path: "/settings", component: SettingsPage, meta: { title: "设置" } }
+    pageRoute("/routes/:id/overview", "route.overview", OverviewPage, "控制台"),
+    pageRoute("/routes/:id/adapters", "route.adapters", RouteConfigPage, "消息适配器"),
+    pageRoute("/routes/:id/persona/document", "route.persona-document", PersonaDocumentPage, "人格正文"),
+    pageRoute("/routes/:id/persona/sync", "route.persona-sync", PersonaSyncPage, "多电脑人格同步"),
+    pageRoute("/routes/:id/persona", "route.persona", PersonaTemplatePage, "人格配置"),
+    pageRoute("/routes/:id/knowledge", "route.knowledge", RoleKnowledgePage, "计划与记忆"),
+    pageRoute("/routes/:id/speech", "route.speech", SpeechServicePage, "语音服务"),
+    pageRoute("/routes/:id/runtime", "route.runtime", RuntimeLogPage, "日志诊断"),
+    pageRoute("/routes/:id?", "route.adapters", RouteConfigPage, "消息适配器"),
+    pageRoute("/persona/:id?", "route.persona", PersonaTemplatePage, "人格配置"),
+    pageRoute("/knowledge", "route.knowledge", RoleKnowledgePage, "计划与记忆"),
+    pageRoute("/docs", "global.docs", ProjectDocsPage, "使用手册"),
+    pageRoute("/performance", "global.performance", PerformancePage, "性能监控"),
+    pageRoute("/runtime", "route.runtime", RuntimeLogPage, "日志诊断"),
+    pageRoute("/settings", "global.settings", SettingsPage, "设置"),
+    { path: "/:pathMatch(.*)*", redirect: { name: PLUGIN_RECOVERY_ROUTE_NAME } }
   ]
+});
+
+router.beforeEach((to) => {
+  const routeId = to.meta.pluginRouteId as ControlledWebPageRouteId | undefined;
+  if (!routeId || isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return true;
+  return {
+    name: PLUGIN_RECOVERY_ROUTE_NAME,
+    query: to.name === PLUGIN_RECOVERY_ROUTE_NAME ? {} : { from: to.fullPath }
+  };
 });

@@ -13,8 +13,10 @@ import { useGatewayStore } from "./stores/gatewayStore";
 import { configNameFor } from "./utils/gatewayHelpers";
 import { pageSaveAction } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
-import { applyInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
+import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
+import { isWebPageRouteActive, type ControlledWebPageRouteId } from "./pluginPages";
+import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 
 const store = useGatewayStore();
 const route = useRoute();
@@ -25,7 +27,7 @@ const interfaceThemePreference = ref<DesktopTheme>("system");
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 
 function refreshInterfaceTheme(): void {
-  const resolved = applyInterfaceTheme(interfaceThemePreference.value, systemThemeQuery.matches);
+  const resolved = applyCatalogInterfaceTheme(pluginCatalogStore.themes.value, interfaceThemePreference.value, systemThemeQuery.matches);
   vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
 }
 
@@ -114,7 +116,6 @@ const selectedGatewayName = computed(() => store.selectedGateway
 
 onMounted(async () => {
   await loadInterfaceTheme();
-  void pluginCatalogStore.refresh();
   await store.load();
   if (store.gateways.length === 0) store.openQuickSetup();
   else if (selectedRouteKey.value) {
@@ -126,6 +127,11 @@ onMounted(async () => {
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
 });
+
+watch(
+  () => pluginCatalogStore.themes.value.options.map(option => option.webResourceId).join("|"),
+  () => refreshInterfaceTheme()
+);
 
 watch(
   () => route.path,
@@ -164,6 +170,11 @@ async function save() {
 
 async function refresh() {
   await Promise.all([store.load(), pluginCatalogStore.refresh()]);
+  const routeId = route.meta.pluginRouteId as ControlledWebPageRouteId | undefined;
+  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+    await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
+    return;
+  }
   await ensurePageDiagnostics(route.path, true);
   snackbar.value = "状态已刷新";
 }

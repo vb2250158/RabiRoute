@@ -3,14 +3,16 @@ import fs from "node:fs";
 import test from "node:test";
 
 const appSource = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+const mainSource = fs.readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const pluginNavigationSource = fs.readFileSync(new URL("../src/pluginNavigation.ts", import.meta.url), "utf8");
 const pluginCatalogStoreSource = fs.readFileSync(new URL("../src/pluginCatalogStore.ts", import.meta.url), "utf8");
+const pluginPagesSource = fs.readFileSync(new URL("../src/pluginPages.ts", import.meta.url), "utf8");
 const personaSource = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
 const overviewSource = fs.readFileSync(new URL("../src/pages/OverviewPage.vue", import.meta.url), "utf8");
 const settingsSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
 const speechSource = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
 
-test("sidebar keeps Route pages above utilities and renders catalog footer entries", () => {
+test("sidebar renders only catalog navigation backed by activated pages", () => {
   const primaryIndex = appSource.indexOf("const navItems = computed");
   const utilityIndex = appSource.indexOf("const utilityNavItems = computed");
   const footerIndex = appSource.indexOf("const footerNavItems = computed");
@@ -24,13 +26,12 @@ test("sidebar keeps Route pages above utilities and renders catalog footer entri
   assert.ok(utilityRenderIndex > footerIndex);
   assert.ok(footerRenderIndex > utilityRenderIndex);
   assert.ok(configDirectoryIndex > footerRenderIndex);
-  assert.match(appSource, /pluginCatalogStore\.refresh\(\)/);
+  assert.match(mainSource, /await pluginCatalogStore\.refresh\(\)/);
   assert.match(pluginCatalogStoreSource, /pluginCatalogClient\.readWeb\(\)/);
-  assert.match(pluginCatalogStoreSource, /availableWebContributions\(catalog\.value\)/);
-  assert.match(pluginCatalogStoreSource, /status\.value = "unavailable"/);
-  assert.match(pluginNavigationSource, /id: "settings"[^\n]+routeId: "global\.settings"/);
-  assert.match(pluginNavigationSource, /id: "docs"[^\n]+routeId: "global\.docs"[^\n]+slot: "footer"/);
-  assert.match(pluginNavigationSource, /id: "persona-sync"[^\n]+routeId: "route\.persona-sync"[^\n]+slot: "persona-secondary"/);
+  assert.match(pluginCatalogStoreSource, /resolveWebPageCatalog/);
+  assert.match(pluginCatalogStoreSource, /resolveWebThemeCatalog/);
+  assert.match(pluginNavigationSource, /isWebNavigationPageActive/);
+  assert.match(pluginPagesSource, /webPageRendererRegistry/);
   assert.match(personaSource, /personaSecondaryNavItems/);
   assert.match(appSource, /store\.openQuickSetup/);
   assert.match(appSource, /store\.meta\.githubUrl/);
@@ -60,12 +61,10 @@ test("selected-text reading, screenshots, and login startup stay on Settings", (
   assert.match(settingsSource, /small-title">滑词朗读/);
   assert.match(settingsSource, /系统级截图/);
   assert.match(settingsSource, /Windows 登录启动/);
-  assert.match(settingsSource, /RabiRoute 在 Windows 中提供截图、滑词和登录启动设置。/);
-  assert.match(settingsSource, /登录 Windows 后自动启动 RabiRoute Desktop；后台运行时保留系统托盘入口。/);
-  assert.doesNotMatch(settingsSource, /Manager 仍按自己的运行开关管理/);
+  assert.match(settingsSource, /desktopThemeOptions/);
+  assert.match(settingsSource, /option\.webResourceId/);
   assert.match(settingsSource, /selectionSpeechAdvanced/);
   assert.match(settingsSource, /desktopScreenshotShortcut/);
   assert.match(settingsSource, /desktopAutostart/);
   assert.doesNotMatch(speechSource, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);
-  assert.doesNotMatch(speechSource, /划词朗读模型/);
 });

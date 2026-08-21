@@ -7,6 +7,11 @@ import {
   routeScopedRuntimePath,
   routeScopedSpeechPath
 } from "./routeScopedNavigation";
+import {
+  isWebNavigationPageActive,
+  resolveWebPageCatalog,
+  type ControlledWebPageRouteId
+} from "./pluginPages";
 
 export type WebNavigationSlot = "route-primary" | "persona-secondary" | "utility" | "footer";
 
@@ -27,24 +32,13 @@ export type WebNavigationGroups = Readonly<{
   footer: readonly WebNavigationItem[];
 }>;
 
-type ControlledRouteId =
-  | "route.overview"
-  | "route.adapters"
-  | "route.persona"
-  | "route.knowledge"
-  | "route.persona-sync"
-  | "route.speech"
-  | "global.performance"
-  | "route.runtime"
-  | "global.settings"
-  | "global.docs";
-
 type NavigationTemplate = Readonly<{
   key: string;
   id: string;
+  instanceId: string;
   title: string;
   icon: string;
-  routeId: ControlledRouteId;
+  routeId: ControlledWebPageRouteId;
   slot: WebNavigationSlot;
   order: number;
   sequence: number;
@@ -72,7 +66,7 @@ const allowedIcons = new Set([
   "mdi-waveform"
 ]);
 
-const controlledRoutes = new Map<ControlledRouteId, ControlledRoute>([
+const controlledRoutes = new Map<ControlledWebPageRouteId, ControlledRoute>([
   ["route.overview", { resolve: routeScopedOverviewPath, slots: ["route-primary"] }],
   ["route.adapters", { resolve: routeScopedAdaptersPath, slots: ["route-primary"] }],
   ["route.persona", { resolve: routeScopedPersonaPath, slots: ["route-primary"] }],
@@ -84,19 +78,6 @@ const controlledRoutes = new Map<ControlledRouteId, ControlledRoute>([
   ["global.settings", { resolve: () => "/settings", slots: ["utility"] }],
   ["global.docs", { resolve: () => "/docs", slots: ["footer"] }]
 ]);
-
-const fallbackNavigation: readonly Omit<NavigationTemplate, "sequence">[] = [
-  { key: "fallback:overview", id: "overview", title: "控制台", icon: "mdi-view-dashboard-outline", routeId: "route.overview", slot: "route-primary", order: 10 },
-  { key: "fallback:message-adapters", id: "message-adapters", title: "消息适配器", icon: "mdi-puzzle-outline", routeId: "route.adapters", slot: "route-primary", order: 20 },
-  { key: "fallback:persona", id: "persona", title: "人格配置", icon: "mdi-account-heart-outline", routeId: "route.persona", slot: "route-primary", order: 30 },
-  { key: "fallback:knowledge", id: "knowledge", title: "计划与记忆", icon: "mdi-notebook-check-outline", routeId: "route.knowledge", slot: "route-primary", order: 40 },
-  { key: "fallback:persona-sync", id: "persona-sync", title: "多电脑人格同步", icon: "mdi-folder-sync-outline", routeId: "route.persona-sync", slot: "persona-secondary", order: 45 },
-  { key: "fallback:speech", id: "speech", title: "语音服务", icon: "mdi-waveform", routeId: "route.speech", slot: "utility", order: 50 },
-  { key: "fallback:performance", id: "performance", title: "性能监控", icon: "mdi-chart-timeline-variant", routeId: "global.performance", slot: "utility", order: 60 },
-  { key: "fallback:runtime", id: "runtime", title: "日志诊断", icon: "mdi-console-line", routeId: "route.runtime", slot: "utility", order: 70 },
-  { key: "fallback:settings", id: "settings", title: "设置", icon: "mdi-cog-outline", routeId: "global.settings", slot: "utility", order: 80 },
-  { key: "fallback:docs", id: "docs", title: "使用手册", icon: "mdi-book-open-page-variant-outline", routeId: "global.docs", slot: "footer", order: 90 }
-];
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -116,8 +97,8 @@ function controlledOrder(value: unknown): number | undefined {
     : undefined;
 }
 
-function controlledRouteId(value: unknown): ControlledRouteId | undefined {
-  const routeId = controlledText(value, 80) as ControlledRouteId;
+function controlledRouteId(value: unknown): ControlledWebPageRouteId | undefined {
+  const routeId = controlledText(value, 80) as ControlledWebPageRouteId;
   return controlledRoutes.has(routeId) ? routeId : undefined;
 }
 
@@ -152,6 +133,7 @@ function parseNavigationContribution(value: unknown, sequence: number): Navigati
   return {
     key: `${instanceId}:${id}`,
     id,
+    instanceId,
     title: label,
     icon,
     routeId,
@@ -161,41 +143,31 @@ function parseNavigationContribution(value: unknown, sequence: number): Navigati
   };
 }
 
-function navigationTemplates(contributions: readonly unknown[] | null): NavigationTemplate[] {
-  const accepted = (contributions ?? [])
-    .map((value, sequence) => parseNavigationContribution(value, sequence))
-    .filter((value): value is NavigationTemplate => value !== undefined);
-  const controlledRouteIds = new Set(accepted.map(item => item.routeId));
-  const merged = [...accepted];
-  const fallbackSequenceStart = contributions?.length ?? 0;
-  let fallbackSequence = 0;
-  for (const fallback of fallbackNavigation) {
-    if (controlledRouteIds.has(fallback.routeId)) continue;
-    merged.push({ ...fallback, sequence: fallbackSequenceStart + fallbackSequence });
-    fallbackSequence += 1;
-  }
-  return merged.sort((left, right) => left.order - right.order || left.sequence - right.sequence);
-}
-
 export function buildWebNavigation(
   contributions: readonly unknown[] | null,
   selectedRouteId: string
 ): WebNavigationGroups {
+  const pageCatalog = resolveWebPageCatalog(contributions, contributions === null ? "loading" : "ready");
   const seenPaths = new Set<string>();
-  const items = navigationTemplates(contributions).flatMap((item): WebNavigationItem[] => {
-    const to = controlledRoutes.get(item.routeId)?.resolve(selectedRouteId.trim()) ?? "";
-    if (!to || seenPaths.has(to)) return [];
-    seenPaths.add(to);
-    return [{
-      key: item.key,
-      id: item.id,
-      title: item.title,
-      icon: item.icon,
-      to,
-      slot: item.slot,
-      order: item.order
-    }];
-  });
+  const items = (contributions ?? [])
+    .map((value, sequence) => parseNavigationContribution(value, sequence))
+    .filter((value): value is NavigationTemplate => value !== undefined)
+    .filter(item => isWebNavigationPageActive(pageCatalog, item.instanceId, item.routeId))
+    .sort((left, right) => left.order - right.order || left.sequence - right.sequence)
+    .flatMap((item): WebNavigationItem[] => {
+      const to = controlledRoutes.get(item.routeId)?.resolve(selectedRouteId.trim()) ?? "";
+      if (!to || seenPaths.has(to)) return [];
+      seenPaths.add(to);
+      return [{
+        key: item.key,
+        id: item.id,
+        title: item.title,
+        icon: item.icon,
+        to,
+        slot: item.slot,
+        order: item.order
+      }];
+    });
 
   return {
     routePrimary: items.filter(item => item.slot === "route-primary"),
