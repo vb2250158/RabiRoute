@@ -7,12 +7,13 @@ import sys
 import uuid
 import threading
 import time
+from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from PIL import ImageGrab
-from PySide6.QtCore import QFileSystemWatcher, QObject, QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -96,6 +97,60 @@ class ScreenshotSettings:
     shortcut: str = DEFAULT_SCREENSHOT_SHORTCUT
     clipboard_shortcut: str = DEFAULT_CLIPBOARD_PIN_SHORTCUT
     auto_copy: bool = True
+
+
+@dataclass(frozen=True)
+class ScreenshotWindowCandidate:
+    rectangle: QRect
+
+
+def screenshot_window_candidates(ignore_handles: tuple[int, ...] = ()) -> tuple[ScreenshotWindowCandidate, ...]:
+    """Return visible top-level application windows in front-to-back order."""
+    if sys.platform != "win32":
+        return ()
+    ignored = {handle for handle in ignore_handles if handle}
+    user32 = ctypes.windll.user32
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.IsIconic.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    candidates: list[ScreenshotWindowCandidate] = []
+    ws_ex_toolwindow = 0x00000080
+    ws_ex_noactivate = 0x08000000
+
+    @callback_type
+    def inspect_window(handle, _lparam):
+        if int(handle) in ignored or not user32.IsWindowVisible(handle) or user32.IsIconic(handle):
+            return True
+        ex_style = int(user32.GetWindowLongPtrW(handle, -20))
+        if ex_style & ws_ex_toolwindow and ex_style & ws_ex_noactivate:
+            return True
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(handle, ctypes.byref(rect)):
+            return True
+        width = int(rect.right - rect.left)
+        height = int(rect.bottom - rect.top)
+        if width < 24 or height < 24:
+            return True
+        candidates.append(ScreenshotWindowCandidate(QRect(int(rect.left), int(rect.top), width, height)))
+        return True
+
+    user32.EnumWindows(inspect_window, 0)
+    return tuple(candidates)
+
+
+def screenshot_window_candidate_at(
+    candidates: tuple[ScreenshotWindowCandidate, ...],
+    screen_point: QPoint,
+) -> ScreenshotWindowCandidate | None:
+    return next((candidate for candidate in candidates if candidate.rectangle.contains(screen_point)), None)
 
 
 @dataclass(frozen=True)
@@ -443,10 +498,74 @@ def capture_desktop(project_root: Path, screens: list[Any] | None = None) -> Pat
     return save_screenshot_image(project_root, capture_desktop_image(screens), "capture")
 
 
+class ScreenshotColorPreviewWindow(QFrame):
+    """Mouse-transparent color magnifier rendered independently from the capture overlay."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._magnifier_pixmap = QPixmap()
+        self._color_name = ""
+        self.magnifier = QLabel(self)
+        self.swatch = QLabel(self)
+        self.hex_label = QLabel(self)
+        self._configure_window()
+        self._configure_layout()
+
+    def _configure_window(self) -> None:
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFixedSize(126, 150)
+        colors = _screenshot_theme_colors()
+        self.setStyleSheet(
+            f"background: {colors['toolbar']}; color: white; border: 1px solid {colors['selection']}; border-radius: 6px;"
+        )
+
+    def _configure_layout(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 7, 5)
+        layout.setSpacing(6)
+        self.magnifier.setFixedSize(110, 110)
+        self.magnifier.setStyleSheet("border: 0;")
+        self.swatch.setFixedSize(34, 24)
+        self.hex_label.setStyleSheet("border: 0; font-family: Consolas, 'Courier New', monospace; font-weight: 600;")
+        details = QHBoxLayout()
+        details.setContentsMargins(0, 0, 0, 0)
+        details.setSpacing(6)
+        details.addWidget(self.swatch)
+        details.addWidget(self.hex_label)
+        details.addStretch(1)
+        layout.addWidget(self.magnifier, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addLayout(details)
+
+    def present(self, position: QPoint, magnifier: QImage, color: QColor) -> None:
+        self.move(position)
+        if not self.isVisible():
+            self.show()
+            self.raise_()
+        self._magnifier_pixmap.convertFromImage(magnifier)
+        self.magnifier.setPixmap(self._magnifier_pixmap)
+        color_name = color.name().upper()
+        if color_name != self._color_name:
+            self._color_name = color_name
+            self.swatch.setStyleSheet(
+                f"background: {color_name}; border: 1px solid rgba(255, 255, 255, 180); border-radius: 3px;"
+            )
+            self.hex_label.setText(color_name)
+
+
 class ScreenshotCaptureOverlay(QWidget):
     copy_requested = Signal(QImage)
     pin_requested = Signal(QImage, QRect)
     send_requested = Signal(QImage)
+    color_copy_requested = Signal(str)
 
     def __init__(
         self,
@@ -467,8 +586,17 @@ class ScreenshotCaptureOverlay(QWidget):
         self._selection = QRect()
         self._drag_start: QPoint | None = None
         self._selection_move_offset: QPoint | None = None
+        self._window_candidates: tuple[ScreenshotWindowCandidate, ...] = ()
+        self._hover_window_candidate: ScreenshotWindowCandidate | None = None
+        self._candidate_click_pending = False
+        self._pointer_position: QPoint | None = None
+        self._color_preview: QColor | None = None
         self._toolbar = QFrame(self)
         self._history_label = QLabel(self)
+        self._color_tip = ScreenshotColorPreviewWindow()
+        self._color_magnifier = self._color_tip.magnifier
+        self._color_swatch = self._color_tip.swatch
+        self._color_hex_label = self._color_tip.hex_label
         self._copy_button = QPushButton("复制", self._toolbar)
         self._pin_button = QPushButton("贴图", self._toolbar)
         self._send_button = QPushButton("发送", self._toolbar)
@@ -493,6 +621,7 @@ class ScreenshotCaptureOverlay(QWidget):
             f"background: {colors['toolbar']}; color: white; border-radius: 6px; padding: 5px 8px;"
         )
         self._history_label.move(14, 14)
+        self._color_tip.hide()
 
     def _configure_toolbar(self) -> None:
         colors = _screenshot_theme_colors()
@@ -508,6 +637,8 @@ class ScreenshotCaptureOverlay(QWidget):
         layout.addWidget(self._pin_button)
         layout.addWidget(self._send_button)
         self._toolbar.hide()
+        for widget in (self._history_label, self._toolbar, self._copy_button, self._pin_button, self._send_button):
+            widget.installEventFilter(self)
         self._copy_button.clicked.connect(self._copy)
         self._pin_button.clicked.connect(self._pin)
         self._send_button.clicked.connect(self._send)
@@ -551,6 +682,7 @@ class ScreenshotCaptureOverlay(QWidget):
         if image.isNull():
             return
         self._image = image
+        self._update_color_preview()
         self._history_label.setText("正在保存截图…")
         self._history_label.adjustSize()
         self.update()
@@ -599,6 +731,7 @@ class ScreenshotCaptureOverlay(QWidget):
         self._toolbar.raise_()
 
     def _complete_selection(self) -> None:
+        self._candidate_click_pending = False
         if self._selection.width() < 2 or self._selection.height() < 2:
             self._selection = QRect()
             self._toolbar.hide()
@@ -629,6 +762,125 @@ class ScreenshotCaptureOverlay(QWidget):
         except OSError:
             pass
 
+    def set_window_candidates(self, candidates: tuple[ScreenshotWindowCandidate, ...]) -> None:
+        self._window_candidates = candidates
+        self._pointer_position = self._pointer_position or self.mapFromGlobal(QCursor.pos())
+        self._update_window_hover(self._pointer_position)
+        self._update_color_preview()
+        self.update()
+
+    def _selection_from_window_candidate(self, candidate: ScreenshotWindowCandidate) -> QRect:
+        top_left = candidate.rectangle.topLeft() - self.geometry().topLeft()
+        return QRect(top_left, candidate.rectangle.size()).intersected(self.rect())
+
+    def _update_window_hover(self, point: QPoint) -> None:
+        if not self._selection.isEmpty() or self._drag_start is not None:
+            self._hover_window_candidate = None
+            return
+        self._hover_window_candidate = screenshot_window_candidate_at(
+            self._window_candidates,
+            self.mapToGlobal(point),
+        )
+
+    def _update_color_preview(self) -> None:
+        if not self._selection.isEmpty() or self._drag_start is not None:
+            self._color_preview = None
+        else:
+            self._color_preview = self._color_at(self._pointer_position)
+        self._update_color_tip()
+
+    def _update_color_tip(self) -> None:
+        if self._color_preview is None or self._pointer_position is None:
+            self._color_tip.hide()
+            return
+        magnifier = self._color_magnifier_image(self._pointer_position)
+        if magnifier.isNull():
+            self._color_tip.hide()
+            return
+        self._color_tip.present(
+            self.mapToGlobal(self._color_tip_position(self._pointer_position)),
+            magnifier,
+            self._color_preview,
+        )
+    def _color_tip_position(self, cursor: QPoint) -> QPoint:
+        margin = 14
+        size = self._color_tip.size()
+        candidates = (
+            QPoint(cursor.x() + margin, cursor.y() + margin),
+            QPoint(cursor.x() - size.width() - margin, cursor.y() + margin),
+            QPoint(cursor.x() + margin, cursor.y() - size.height() - margin),
+            QPoint(cursor.x() - size.width() - margin, cursor.y() - size.height() - margin),
+        )
+        bounds = self.rect().adjusted(8, 8, -8, -8)
+        for position in candidates:
+            if bounds.contains(QRect(position, size)):
+                return position
+        return QPoint(
+            max(bounds.left(), min(cursor.x() + margin, bounds.right() - size.width() + 1)),
+            max(bounds.top(), min(cursor.y() + margin, bounds.bottom() - size.height() + 1)),
+        )
+
+    def _color_magnifier_image(self, point: QPoint) -> QImage:
+        if self._image.isNull():
+            return QImage()
+        source = self._source_rect(QRect(point, QSize(1, 1)))
+        if source.isEmpty():
+            return QImage()
+        sample_size = 11
+        sample_radius = sample_size // 2
+        center = source.topLeft()
+        requested = QRect(
+            center.x() - sample_radius,
+            center.y() - sample_radius,
+            sample_size,
+            sample_size,
+        )
+        if self._image.rect().contains(requested):
+            sample = self._image.copy(requested)
+        else:
+            visible = requested.intersected(self._image.rect())
+            sample = QImage(sample_size, sample_size, QImage.Format.Format_ARGB32)
+            sample.fill(self._image.pixelColor(center))
+            painter = QPainter(sample)
+            try:
+                painter.drawImage(visible.topLeft() - requested.topLeft(), self._image, visible)
+            finally:
+                painter.end()
+        magnifier = sample.scaled(
+            sample_size * 10,
+            sample_size * 10,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        painter = QPainter(magnifier)
+        try:
+            center_offset = sample_radius * 10
+            painter.setPen(QPen(QColor("black"), 3))
+            painter.drawRect(center_offset, center_offset, 10, 10)
+            painter.setPen(QPen(QColor("white"), 1))
+            painter.drawRect(center_offset, center_offset, 10, 10)
+        finally:
+            painter.end()
+        return magnifier
+
+    def _color_at(self, point: QPoint | None) -> QColor | None:
+        if point is None or self._image.isNull() or not self.rect().contains(point):
+            return None
+        source = self._source_rect(QRect(point, QSize(1, 1)))
+        if source.isEmpty():
+            return None
+        return self._image.pixelColor(source.topLeft())
+
+    def copy_current_color(self) -> bool:
+        color = self._color_preview or self._color_at(self._pointer_position)
+        if color is None:
+            return False
+        self._color_preview = color
+        self.color_copy_requested.emit(color.name().upper())
+        self._update_color_tip()
+        self.update()
+        return True
+
     def _copy(self) -> None:
         self._run_selection_action("copy")
 
@@ -641,8 +893,22 @@ class ScreenshotCaptureOverlay(QWidget):
     def _send(self) -> None:
         self._run_selection_action("send")
 
+    def _focus_hovered_window_candidate(self) -> bool:
+        if not self._selection.isEmpty() or self._drag_start is not None or self._hover_window_candidate is None:
+            return not self._selection.isEmpty()
+        selection = self._selection_from_window_candidate(self._hover_window_candidate)
+        if selection.isEmpty():
+            return False
+        self._selection = selection
+        self._hover_window_candidate = None
+        self._candidate_click_pending = False
+        self._position_toolbar()
+        self._update_color_preview()
+        self.update()
+        return True
+
     def _run_selection_action(self, action: str) -> bool:
-        if self._selection.isEmpty():
+        if self._selection.isEmpty() and not self._focus_hovered_window_candidate():
             return False
         if not self._capture_ready:
             self._pending_action = action
@@ -694,6 +960,22 @@ class ScreenshotCaptureOverlay(QWidget):
                 painter.drawRoundedRect(label_rect, 4, 4)
                 painter.setPen(QColor("white"))
                 painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
+            elif self._hover_window_candidate is not None:
+                candidate_rect = self._selection_from_window_candidate(self._hover_window_candidate)
+                if not candidate_rect.isEmpty():
+                    if not self._image.isNull():
+                        painter.fillRect(self.rect(), QColor(15, 23, 42, 132))
+                        painter.drawImage(candidate_rect, self._image, self._source_rect(candidate_rect))
+                    painter.setPen(QPen(QColor(_screenshot_theme_colors()["selection"]), 2, Qt.PenStyle.DashLine))
+                    painter.drawRect(candidate_rect.adjusted(0, 0, -1, -1))
+                    label = f"窗口 {candidate_rect.width()} × {candidate_rect.height()} · 回车复制 / F3 贴图 / F2 发送"
+                    metrics = painter.fontMetrics()
+                    label_rect = QRect(candidate_rect.left(), max(0, candidate_rect.top() - metrics.height() - 9), metrics.horizontalAdvance(label) + 14, metrics.height() + 7)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(13, 148, 136, 230))
+                    painter.drawRoundedRect(label_rect, 4, 4)
+                    painter.setPen(QColor("white"))
+                    painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
         finally:
             painter.end()
 
@@ -717,38 +999,78 @@ class ScreenshotCaptureOverlay(QWidget):
             max(1, round(source.height() * self.height() / self._image.height())),
         ).intersected(self.rect())
 
+    def eventFilter(self, watched: QObject, event) -> bool:
+        if event.type() == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.RightButton:
+            self.close()
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.RightButton:
+            self.close()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             point = event.position().toPoint()
+            self._pointer_position = point
+            if self._selection.isEmpty() and self._hover_window_candidate is not None:
+                selection = self._selection_from_window_candidate(self._hover_window_candidate)
+                if not selection.isEmpty():
+                    self._selection = selection
+                    self._drag_start = point
+                    self._candidate_click_pending = True
+                    self._selection_move_offset = None
+                    self._toolbar.hide()
+                    self.update()
+                    event.accept()
+                    return
             if not self._selection.isEmpty() and self._selection.contains(point):
                 self._selection_move_offset = point - self._selection.topLeft()
                 event.accept()
                 return
+            self._hover_window_candidate = None
             self._drag_start = point
             self._selection_move_offset = None
+            self._candidate_click_pending = False
             self._selection = QRect(self._drag_start, self._drag_start)
             self._toolbar.hide()
+            self._update_color_preview()
             self.update()
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        point = event.position().toPoint()
+        self._pointer_position = point
         if self._selection_move_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            point = event.position().toPoint() - self._selection_move_offset
+            point -= self._selection_move_offset
             x = max(0, min(point.x(), self.width() - self._selection.width()))
             y = max(0, min(point.y(), self.height() - self._selection.height()))
             self._selection.moveTo(x, y)
             self._position_toolbar()
+            self._update_color_preview()
             self.update()
             event.accept()
             return
         if self._drag_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self._selection = QRect(self._drag_start, event.position().toPoint()).normalized()
+            if self._candidate_click_pending and (point - self._drag_start).manhattanLength() <= 4:
+                event.accept()
+                return
+            self._candidate_click_pending = False
+            self._hover_window_candidate = None
+            self._selection = QRect(self._drag_start, point).normalized()
+            self._update_color_preview()
             self.update()
             event.accept()
             return
-        super().mouseMoveEvent(event)
+        previous_hover = self._hover_window_candidate
+        self._update_window_hover(point)
+        self._update_color_preview()
+        if self._hover_window_candidate != previous_hover:
+            self.update()
+        event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._selection_move_offset is not None:
@@ -758,14 +1080,18 @@ class ScreenshotCaptureOverlay(QWidget):
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
-            self._selection = QRect(self._drag_start, event.position().toPoint()).normalized()
+            if not self._candidate_click_pending:
+                self._selection = QRect(self._drag_start, event.position().toPoint()).normalized()
             self._drag_start = None
             self._complete_selection()
+            self._update_color_preview()
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def closeEvent(self, event) -> None:
+        self._color_tip.close()
+        self._color_tip.deleteLater()
         for path in tuple(self._transient_paths):
             try:
                 path.unlink(missing_ok=True)
@@ -777,6 +1103,9 @@ class ScreenshotCaptureOverlay(QWidget):
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Escape:
             self.close()
+            return
+        if event.key() == Qt.Key.Key_C and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            self.copy_current_color()
             return
         if event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self._selection = self.rect()
@@ -1040,8 +1369,10 @@ class SystemScreenshotController(QObject):
         self._hotkey = hotkey or WindowsGlobalScreenshotHotkey()
         self._clipboard_hotkey = clipboard_hotkey or WindowsGlobalClipboardPinHotkey()
         self._settings = ScreenshotSettings()
+        self._plugin_hotkey_handlers: frozenset[str] = frozenset()
         self._settings_task: QtAsyncTask | None = None
         self._capture_task: QtAsyncTask | None = None
+        self._window_candidates_task: QtAsyncTask | None = None
         self._capture_save_task: QtAsyncTask | None = None
         self._send_task: QtAsyncTask | None = None
         self._composer: ScreenshotComposer | None = None
@@ -1057,13 +1388,40 @@ class SystemScreenshotController(QObject):
         self._settings_watcher = QFileSystemWatcher(self)
         self._settings_watcher.fileChanged.connect(self._settings_changed)
         self._settings_watcher.directoryChanged.connect(self._settings_changed)
-        self._hotkey.activated.connect(self._capture_requested)
-        self._clipboard_hotkey.activated.connect(self._pin_requested)
+        self._hotkey.activated.connect(self.request_capture)
+        self._clipboard_hotkey.activated.connect(self.request_clipboard_pin)
+
+    def set_plugin_hotkey_handlers(self, handler_ids: frozenset[str]) -> None:
+        self._plugin_hotkey_handlers = frozenset(handler_ids)
+        self._apply_hotkey_configuration()
+
+    @Slot()
+    def request_capture(self) -> None:
+        self._capture_requested()
+
+    @Slot()
+    def request_clipboard_pin(self) -> None:
+        self._pin_requested()
+
+    def _apply_hotkey_configuration(self) -> None:
+        self._hotkey.configure(
+            self._started
+            and self._settings.enabled
+            and "desktop.capture-screenshot" in self._plugin_hotkey_handlers,
+            self._settings.shortcut,
+        )
+        self._clipboard_hotkey.configure(
+            self._started
+            and self._settings.enabled
+            and "desktop.pin-clipboard-image" in self._plugin_hotkey_handlers,
+            self._settings.clipboard_shortcut,
+        )
 
     def start(self) -> None:
         self._started = True
         self._arm_settings_watcher()
         self._restore_pinned_images()
+        self._apply_hotkey_configuration()
         self.refresh_settings()
 
     def stop(self) -> None:
@@ -1147,8 +1505,7 @@ class SystemScreenshotController(QObject):
                 result.screenshot_clipboard_shortcut,
                 result.screenshot_auto_copy,
             )
-            self._hotkey.configure(self._settings.enabled, self._settings.shortcut)
-            self._clipboard_hotkey.configure(self._settings.enabled, self._settings.clipboard_shortcut)
+            self._apply_hotkey_configuration()
             sync_startup_shortcut(self._project_root, result.autostart)
 
         self._settings_task = start_qt_task(
@@ -1170,6 +1527,7 @@ class SystemScreenshotController(QObject):
         overlay.copy_requested.connect(self._copy_capture_image)
         overlay.pin_requested.connect(self._pin_image)
         overlay.send_requested.connect(self._send_capture_image)
+        overlay.color_copy_requested.connect(self._copy_color_text)
         overlay.destroyed.connect(lambda *_: self._clear_capture_overlay(overlay))
         overlay.show()
         overlay.raise_()
@@ -1181,6 +1539,18 @@ class SystemScreenshotController(QObject):
             lambda task, result: self._capture_image_ready(task, overlay, result),
             on_error=lambda error: error,
         )
+        overlay_handle = int(overlay.winId())
+        self._window_candidates_task = start_qt_task(
+            lambda: screenshot_window_candidates((overlay_handle,)),
+            lambda task, result: self._window_candidates_ready(task, overlay, result),
+            on_error=lambda error: error,
+        )
+
+    def _window_candidates_ready(self, task: QtAsyncTask, overlay: ScreenshotCaptureOverlay, result: object) -> None:
+        if self._window_candidates_task is task:
+            self._window_candidates_task = None
+        if self._capture_overlay is overlay and isinstance(result, tuple):
+            overlay.set_window_candidates(tuple(item for item in result if isinstance(item, ScreenshotWindowCandidate)))
 
     def _capture_image_ready(self, task: QtAsyncTask, overlay: ScreenshotCaptureOverlay, result: object) -> None:
         if self._capture_task is task:
@@ -1238,6 +1608,10 @@ class SystemScreenshotController(QObject):
     @Slot(QImage)
     def _copy_capture_image(self, image: QImage) -> None:
         QApplication.clipboard().setImage(image)
+
+    @Slot(str)
+    def _copy_color_text(self, value: str) -> None:
+        QApplication.clipboard().setText(value)
 
     @Slot(QImage, QRect)
     def _pin_image(self, image: QImage, origin: QRect | None = None) -> None:

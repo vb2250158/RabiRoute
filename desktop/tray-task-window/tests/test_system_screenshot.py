@@ -22,6 +22,7 @@ from rabiroute_tray.system_selection import SelectionDeliveryTarget  # noqa: E40
 from rabiroute_tray.system_screenshot import (  # noqa: E402
     ScreenshotCaptureOverlay,
     ScreenshotComposer,
+    ScreenshotWindowCandidate,
     PinnedScreenshotStore,
     ScreenshotHistory,
     ScreenshotRegionStore,
@@ -30,6 +31,7 @@ from rabiroute_tray.system_screenshot import (  # noqa: E402
     parse_hotkey,
     save_screenshot_image,
     screenshot_history,
+    screenshot_window_candidate_at,
 )
 
 
@@ -69,6 +71,13 @@ class SystemScreenshotTest(unittest.TestCase):
         self.assertEqual(history.move(1).current, previous)
         self.assertEqual(history.move(1).move(1).current, previous)
         self.assertEqual(history.move(-1).current, current)
+
+    def test_window_candidate_at_prefers_the_frontmost_matching_window(self) -> None:
+        front = ScreenshotWindowCandidate(QRect(10, 8, 40, 30))
+        behind = ScreenshotWindowCandidate(QRect(0, 0, 80, 50))
+
+        self.assertEqual(screenshot_window_candidate_at((front, behind), QPoint(15, 12)), front)
+        self.assertIsNone(screenshot_window_candidate_at((front, behind), QPoint(100, 80)))
 
     def test_saved_screenshots_are_ordered_with_current_screen_first(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -116,6 +125,7 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertTrue(image.save(str(path), "PNG"))
             overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
             overlay._selection = QRect(40, 40, 30, 20)
+            overlay._color_tip.hide()
             rendered = QImage(100, 60, QImage.Format.Format_ARGB32)
             rendered.fill(Qt.GlobalColor.black)
 
@@ -124,6 +134,72 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertEqual(rendered.pixelColor(55, 55), QColor(Qt.GlobalColor.white))
             self.assertLess(rendered.pixelColor(90, 55).red(), 200)
             overlay.close()
+
+    def test_hovered_window_candidate_dims_only_the_area_outside_the_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            candidate_rect = QRect(40, 40, 30, 20)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(candidate_rect.topLeft()), candidate_rect.size()))
+            overlay.set_window_candidates((candidate,))
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(55, 55), QPointF(55, 55), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+            overlay._color_tip.hide()
+            rendered = QImage(100, 60, QImage.Format.Format_ARGB32)
+            rendered.fill(Qt.GlobalColor.black)
+
+            overlay.render(rendered)
+
+            self.assertEqual(rendered.pixelColor(55, 55), QColor(Qt.GlobalColor.white))
+            self.assertLess(rendered.pixelColor(90, 55).red(), 200)
+            overlay.close()
+
+    def test_right_click_cancels_the_open_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            destroyed: list[bool] = []
+            overlay.destroyed.connect(lambda *_: destroyed.append(True))
+            overlay.show()
+            QApplication.processEvents()
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(20, 18), QPointF(20, 18), Qt.MouseButton.RightButton, Qt.MouseButton.RightButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.processEvents()
+
+            self.assertEqual(destroyed, [True])
+
+    def test_right_click_on_the_capture_toolbar_cancels_the_open_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            overlay._selection = QRect(10, 8, 30, 20)
+            overlay._complete_selection()
+            destroyed: list[bool] = []
+            overlay.destroyed.connect(lambda *_: destroyed.append(True))
+            overlay.show()
+            QApplication.processEvents()
+
+            QApplication.sendEvent(
+                overlay._copy_button,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(5, 5), QPointF(5, 5), Qt.MouseButton.RightButton, Qt.MouseButton.RightButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.processEvents()
+
+            self.assertEqual(destroyed, [True])
 
     def test_dragging_only_creates_a_selection_until_it_is_confirmed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -197,9 +273,225 @@ class SystemScreenshotTest(unittest.TestCase):
             controller._capture_requested()
 
         self.assertIsNotNone(controller._capture_overlay)
-        self.assertEqual(start_task.call_count, 1)
-        self.assertEqual(start_task.call_args.args[0].__name__, "capture_desktop_image_async")
+        self.assertEqual(start_task.call_count, 2)
+        self.assertEqual(start_task.call_args_list[0].args[0].__name__, "capture_desktop_image_async")
         controller.stop()
+
+    def test_window_candidate_hover_uses_the_current_cursor_without_mouse_move(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            local_point = QPoint(15, 12)
+            selection = QRect(10, 8, 50, 30)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(selection.topLeft()), selection.size()))
+
+            with patch("rabiroute_tray.system_screenshot.QCursor.pos", return_value=overlay.mapToGlobal(local_point)):
+                overlay.set_window_candidates((candidate,))
+
+            self.assertEqual(overlay._pointer_position, local_point)
+            self.assertEqual(overlay._hover_window_candidate, candidate)
+            overlay.close()
+
+    def test_hovered_window_candidate_is_focused_by_a_confirm_action_without_a_click(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            selection = QRect(10, 8, 50, 30)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(selection.topLeft()), selection.size()))
+            copied: list[QImage] = []
+            overlay.copy_requested.connect(copied.append)
+            overlay.set_window_candidates((candidate,))
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(15, 12), QPointF(15, 12), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+            self.assertEqual(overlay._hover_window_candidate, candidate)
+            QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
+
+            self.assertEqual(len(copied), 1)
+            self.assertEqual(copied[0].size(), QSize(50, 30))
+            self.assertEqual(overlay._selection, selection)
+            overlay.close()
+
+    def test_color_follow_does_not_repaint_the_full_overlay_while_staying_on_one_candidate(self) -> None:
+        class CountingOverlay(ScreenshotCaptureOverlay):
+            def __init__(self, *args, **kwargs) -> None:
+                self.update_calls = 0
+                super().__init__(*args, **kwargs)
+
+            def update(self, *args) -> None:
+                self.update_calls += 1
+                super().update(*args)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = CountingOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            candidate_rect = QRect(10, 8, 50, 30)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(candidate_rect.topLeft()), candidate_rect.size()))
+            overlay.set_window_candidates((candidate,))
+            overlay.update_calls = 0
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(15, 12), QPointF(15, 12), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(25, 18), QPointF(25, 18), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertEqual(overlay.update_calls, 0)
+            overlay.close()
+
+    def test_hovered_window_click_selects_the_window_without_confirming_an_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            selection = QRect(10, 8, 50, 30)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(selection.topLeft()), selection.size()))
+            copied: list[QImage] = []
+            pinned: list[QImage] = []
+            sent: list[QImage] = []
+            overlay.copy_requested.connect(copied.append)
+            overlay.pin_requested.connect(lambda image, _origin: pinned.append(image))
+            overlay.send_requested.connect(sent.append)
+            overlay.set_window_candidates((candidate,))
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(15, 12), QPointF(15, 12), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+            self.assertEqual(overlay._hover_window_candidate, candidate)
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(15, 12), QPointF(15, 12), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(15, 12), QPointF(15, 12), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertEqual(overlay._selection, selection)
+            self.assertEqual(copied, [])
+            self.assertEqual(pinned, [])
+            self.assertEqual(sent, [])
+            overlay.close()
+
+    def test_dragging_after_a_window_candidate_click_returns_to_manual_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            candidate_selection = QRect(10, 8, 50, 30)
+            candidate = ScreenshotWindowCandidate(QRect(overlay.mapToGlobal(candidate_selection.topLeft()), candidate_selection.size()))
+            overlay.set_window_candidates((candidate,))
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(15, 12), QPointF(15, 12), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(15, 12), QPointF(15, 12), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(70, 45), QPointF(70, 45), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(70, 45), QPointF(70, 45), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertFalse(overlay._candidate_click_pending)
+            self.assertEqual(overlay._selection.topLeft(), QPoint(15, 12))
+            self.assertNotEqual(overlay._selection, candidate_selection)
+            overlay.close()
+
+    def test_c_copies_the_current_color_without_entering_a_separate_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(QColor("#12ab34"))
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            copied: list[QImage] = []
+            colors: list[str] = []
+            overlay.copy_requested.connect(copied.append)
+            overlay.color_copy_requested.connect(colors.append)
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(20, 18), QPointF(20, 18), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+            self.assertEqual(overlay._color_hex_label.text(), "#12AB34")
+            self.assertTrue(overlay._color_tip.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+            self.assertEqual(overlay._color_tip.size(), QSize(126, 150))
+            self.assertGreater(overlay._color_swatch.geometry().top(), overlay._color_magnifier.geometry().bottom())
+            self.assertIn("#12AB34", overlay._color_swatch.styleSheet())
+            magnifier = overlay._color_magnifier.pixmap().toImage()
+            self.assertEqual(magnifier.size(), QSize(110, 110))
+            self.assertEqual(magnifier.pixelColor(5, 5), QColor("#12ab34"))
+            QApplication.sendEvent(overlay, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_C, Qt.KeyboardModifier.NoModifier))
+
+            self.assertEqual(colors, ["#12AB34"])
+            self.assertEqual(copied, [])
+            self.assertTrue(overlay._selection.isEmpty())
+            self.assertTrue(overlay.copy_current_color())
+            overlay.close()
+
+    def test_color_tip_is_an_independent_mouse_transparent_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(500, 400, QImage.Format.Format_ARGB32)
+            image.fill(QColor("#12ab34"))
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(120, 80, 500, 400))
+            cursor = QPoint(32, 380)
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(cursor), QPointF(cursor), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            tip = overlay._color_tip
+            self.assertIsNone(tip.parentWidget())
+            self.assertTrue(tip.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+            self.assertTrue(tip.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+            self.assertLess(tip.geometry().bottom(), overlay.mapToGlobal(cursor).y())
+            overlay.close()
+            self.assertFalse(tip.isVisible())
+
+    def test_color_tip_moves_above_the_cursor_near_the_bottom_edge(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(500, 400, QImage.Format.Format_ARGB32)
+            image.fill(QColor("#12ab34"))
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 500, 400))
+            cursor = QPoint(32, 380)
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(cursor), QPointF(cursor), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertLess(overlay._color_tip.geometry().bottom(), cursor.y())
+            overlay.close()
 
     def test_existing_selection_can_be_dragged_without_changing_its_size(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -465,6 +757,57 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertEqual(PinnedScreenshotStore(root).load(), ())
             restored.stop()
 
+    def test_plugin_catalog_controls_existing_screenshot_hotkeys(self) -> None:
+        class FakeHotkey(QObject):
+            activated = Signal()
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.configurations: list[tuple[bool, str]] = []
+
+            def configure(self, enabled: bool, shortcut: str) -> None:
+                self.configurations.append((enabled, shortcut))
+
+            def stop(self) -> None:
+                pass
+
+        screenshot_hotkey = FakeHotkey()
+        clipboard_hotkey = FakeHotkey()
+        controller = SystemScreenshotController(
+            None,  # type: ignore[arg-type]
+            Path(tempfile.gettempdir()),
+            lambda: [],
+            lambda _title, _message, _is_error: None,
+            hotkey=screenshot_hotkey,  # type: ignore[arg-type]
+            clipboard_hotkey=clipboard_hotkey,  # type: ignore[arg-type]
+        )
+        controller._started = True
+        controller._settings = ScreenshotSettings(True, "Ctrl+Alt+S", "F4", False)
+
+        controller.set_plugin_hotkey_handlers(frozenset({"desktop.capture-screenshot"}))
+
+        self.assertEqual(screenshot_hotkey.configurations[-1], (True, "Ctrl+Alt+S"))
+        self.assertEqual(clipboard_hotkey.configurations[-1], (False, "F4"))
+        controller.set_plugin_hotkey_handlers(frozenset({"desktop.pin-clipboard-image"}))
+        self.assertEqual(screenshot_hotkey.configurations[-1], (False, "Ctrl+Alt+S"))
+        self.assertEqual(clipboard_hotkey.configurations[-1], (True, "F4"))
+        controller.stop()
+
+    def test_public_plugin_actions_reuse_existing_capture_and_pin_paths(self) -> None:
+        controller = SystemScreenshotController(
+            None,  # type: ignore[arg-type]
+            Path(tempfile.gettempdir()),
+            lambda: [],
+            lambda _title, _message, _is_error: None,
+        )
+        with patch.object(controller, "_capture_requested") as capture, patch.object(controller, "_pin_requested") as pin:
+            controller.request_capture()
+            controller.request_clipboard_pin()
+
+        capture.assert_called_once_with()
+        pin.assert_called_once_with()
+        controller.stop()
+
     def test_settings_refresh_retries_after_a_transient_manager_error(self) -> None:
         class RetryManager:
             def __init__(self) -> None:
@@ -503,15 +846,21 @@ class SystemScreenshotTest(unittest.TestCase):
                 clipboard_hotkey=clipboard_hotkey,  # type: ignore[arg-type]
             )
             controller._settings_retry_delay_ms = 1
+            controller.set_plugin_hotkey_handlers(
+                frozenset({"desktop.capture-screenshot", "desktop.pin-clipboard-image"})
+            )
             controller.start()
             deadline = time.monotonic() + 2
-            while time.monotonic() < deadline and not screenshot_hotkey.configurations:
+            while (
+                time.monotonic() < deadline
+                and (not screenshot_hotkey.configurations or screenshot_hotkey.configurations[-1] != (True, "F1"))
+            ):
                 QApplication.processEvents()
                 time.sleep(0.01)
 
             self.assertGreaterEqual(manager.calls, 2)
-            self.assertEqual(screenshot_hotkey.configurations, [(True, "F1")])
-            self.assertEqual(clipboard_hotkey.configurations, [(True, "F3")])
+            self.assertEqual(screenshot_hotkey.configurations[-1], (True, "F1"))
+            self.assertEqual(clipboard_hotkey.configurations[-1], (True, "F3"))
             controller.stop()
             self.assertTrue(screenshot_hotkey.stopped)
             self.assertTrue(clipboard_hotkey.stopped)
