@@ -119,6 +119,7 @@ Completion reminders are deduplicated by `sessionId + turnId`, but they do not u
 - Pause only after an explicit user, owner, or policy instruction. Keep the current `进行中` step and `currentStepId` as the recovery point, and stop task dispatches.
 - Resume by PATCHing only the top-level status back to `进行中`, rereading the recovery point, and continuing the original bound task.
 - Mark the plan `已完成` only after every acceptance criterion has evidence. Keep failed validation in the same plan and task.
+- For bulk cleanup, migration, or synchronization, record a `completionCoverage` evidence block with `baselineTotal`, `processed`, `deleted`, `alreadyAbsent`, `retained`, `blocked`, and `remaining`. Before completion, verify `processed + remaining = baselineTotal` and `deleted + alreadyAbsent + retained + blocked = processed`; `remaining`, `retained`, and `blocked` must all be zero. A clean working copy, a commit revision, or a few exact paths only proves that level. A screenshot, later message, or temporary path list that narrows work must be recorded as `仅完成子范围`; keep the original plan active or split an independent subgoal. Without `baselineTotal`, report `目标清单待恢复`, not plan completion.
 - Close or replace a plan only for explicit cancellation, confirmed invalidity, or a recorded successor. Preserve the old/new mapping and reason when a successor takes over.
 
 ## Prevent duplicate delivery
