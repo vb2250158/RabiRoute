@@ -3,24 +3,29 @@ import path from "node:path";
 import type { BaseMessage, WsFrame } from "@wecom/aibot-node-sdk";
 import { config } from "../config.js";
 import { forwardMessage, recordMessageContextOnly } from "../forwarding.js";
-import { appendAdapterLog, appendWeComMessage, type WeComMessageRecord } from "../history.js";
+import { appendAdapterLogToDir, appendWeComMessageToDir, type WeComMessageRecord } from "../history.js";
 import type { ForwardTemplateValues } from "../routing/types.js";
 import {
   createWeComClient,
   normalizeWeComError,
   quoteTextFromWeComMessage,
-  textFromWeComMessage
+  textFromWeComMessage,
+  type WeComClientLike,
+  type WeComEndpoint
 } from "../wecom.js";
-import type { MessageAdapter } from "./messageAdapter.js";
+import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
 
 type GatewayStatus = {
   messageAdapters?: Record<string, Record<string, unknown>>;
   wecom?: Record<string, unknown>;
 };
 
-const statusPath = path.join(config.dataDir, "gateway-status.json");
+function gatewayStatusPath(dataDir: string): string {
+  return path.join(dataDir, "gateway-status.json");
+}
 
-function readGatewayStatus(): GatewayStatus {
+function readGatewayStatus(dataDir = config.dataDir): GatewayStatus {
+  const statusPath = gatewayStatusPath(dataDir);
   if (!fs.existsSync(statusPath)) {
     return {};
   }
@@ -32,19 +37,24 @@ function readGatewayStatus(): GatewayStatus {
   }
 }
 
-function writeGatewayStatus(nextStatus: GatewayStatus): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
+function writeGatewayStatus(nextStatus: GatewayStatus, dataDir = config.dataDir): void {
+  const statusPath = gatewayStatusPath(dataDir);
+  fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
 }
 
-function patchWeComStatus(patch: Record<string, unknown>): void {
-  const status = readGatewayStatus();
+function patchWeComStatus(
+  patch: Record<string, unknown>,
+  dataDir = config.dataDir,
+  now = new Date()
+): void {
+  const status = readGatewayStatus(dataDir);
   const current = status.messageAdapters?.wecom ?? {};
   const next = {
     ...current,
     ...patch,
     type: "wecom",
-    updatedAt: new Date().toISOString()
+    updatedAt: now.toISOString()
   };
   writeGatewayStatus({
     ...status,
@@ -56,7 +66,7 @@ function patchWeComStatus(patch: Record<string, unknown>): void {
       ...status.messageAdapters,
       wecom: next
     }
-  });
+  }, dataDir);
 }
 
 function segmentsFromMessage(message: BaseMessage): unknown[] {
@@ -140,64 +150,101 @@ export function dispatchWeComRecord(
   return "forwarded";
 }
 
-export function createWeComAdapter(): MessageAdapter {
+export type WeComAdapterDependencies = {
+  endpoint?: () => WeComEndpoint;
+  dataDir?: () => string;
+  memoryDataDir?: () => string;
+  now?: () => Date;
+  createClient?: typeof createWeComClient;
+};
+
+type WeComLifecycle = {
+  active: boolean;
+  dataDir(): string;
+  memoryDataDir(): string;
+  now(): Date;
+};
+
+function appendWeComRuntimeLog(
+  lifecycle: Pick<WeComLifecycle, "dataDir">,
+  record: Parameters<typeof appendAdapterLogToDir>[1]
+): void {
+  appendAdapterLogToDir("wecom", record, lifecycle.dataDir());
+}
+
+export function createWeComAdapter(
+  dependencies: WeComAdapterDependencies = {}
+): MessageAdapter {
   return {
     type: "wecom",
     start() {
-      const endpoint = {
+      const endpoint = dependencies.endpoint?.() ?? {
         botId: config.wecomBotId,
         secret: config.wecomBotSecret,
         wsUrl: config.wecomWsUrl
       };
+      const lifecycle: WeComLifecycle = {
+        active: true,
+        dataDir: dependencies.dataDir ?? (() => config.dataDir),
+        memoryDataDir: dependencies.memoryDataDir ?? (() => config.memoryDataDir),
+        now: dependencies.now ?? (() => new Date())
+      };
       if (!endpoint.botId || !endpoint.secret) {
+        lifecycle.active = false;
         const message = "企业微信消息端缺少 WECOM_BOT_ID / WECOM_BOT_SECRET。";
-        patchWeComStatus({ status: "error", connected: false, authenticated: false, message, lastError: message });
-        appendAdapterLog("wecom", { level: "error", event: "missing_config", message });
+        patchWeComStatus({ status: "error", connected: false, authenticated: false, message, lastError: message }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { level: "error", event: "missing_config", message });
         console.error(message);
-        return;
+        return () => {};
       }
 
-      const client = createWeComClient(endpoint, {
+      const client = (dependencies.createClient ?? createWeComClient)(endpoint, {
         logger: {
-          debug: (message, ...args) => appendAdapterLog("wecom", { event: "sdk_debug", message, data: args }),
-          info: (message, ...args) => appendAdapterLog("wecom", { event: "sdk_info", message, data: args }),
-          warn: (message, ...args) => appendAdapterLog("wecom", { level: "warning", event: "sdk_warning", message, data: args }),
-          error: (message, ...args) => appendAdapterLog("wecom", { level: "error", event: "sdk_error", message, data: args })
+          debug: (message, ...args) => appendWeComRuntimeLog(lifecycle, { event: "sdk_debug", message, data: args }),
+          info: (message, ...args) => appendWeComRuntimeLog(lifecycle, { event: "sdk_info", message, data: args }),
+          warn: (message, ...args) => appendWeComRuntimeLog(lifecycle, { level: "warning", event: "sdk_warning", message, data: args }),
+          error: (message, ...args) => appendWeComRuntimeLog(lifecycle, { level: "error", event: "sdk_error", message, data: args })
         }
       });
-
       client.on("connected", () => {
-        patchWeComStatus({ status: "running", connected: true, message: "企业微信 WebSocket 已连接。", lastError: "" });
-        appendAdapterLog("wecom", { event: "connected", message: "WeCom WebSocket connected" });
+        if (!lifecycle.active) return;
+        patchWeComStatus({ status: "running", connected: true, message: "企业微信 WebSocket 已连接。", lastError: "" }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { event: "connected", message: "WeCom WebSocket connected" });
       });
       client.on("authenticated", () => {
-        patchWeComStatus({ status: "running", connected: true, authenticated: true, message: "企业微信智能机器人已认证。", lastError: "" });
-        appendAdapterLog("wecom", { event: "authenticated", message: "WeCom bot authenticated" });
+        if (!lifecycle.active) return;
+        patchWeComStatus({ status: "running", connected: true, authenticated: true, message: "企业微信智能机器人已认证。", lastError: "" }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { event: "authenticated", message: "WeCom bot authenticated" });
       });
       client.on("disconnected", (reason) => {
-        patchWeComStatus({ status: "running", connected: false, authenticated: false, message: `企业微信 WebSocket 已断开：${reason}` });
-        appendAdapterLog("wecom", { level: "warning", event: "disconnected", message: reason });
+        if (!lifecycle.active) return;
+        patchWeComStatus({ status: "running", connected: false, authenticated: false, message: `企业微信 WebSocket 已断开：${reason}` }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { level: "warning", event: "disconnected", message: reason });
       });
       client.on("reconnecting", (attempt) => {
-        patchWeComStatus({ status: "running", connected: false, reconnectAttempt: attempt, message: `企业微信 WebSocket 重连中：${attempt}` });
-        appendAdapterLog("wecom", { level: "warning", event: "reconnecting", message: String(attempt) });
+        if (!lifecycle.active) return;
+        patchWeComStatus({ status: "running", connected: false, reconnectAttempt: attempt, message: `企业微信 WebSocket 重连中：${attempt}` }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { level: "warning", event: "reconnecting", message: String(attempt) });
       });
       client.on("error", (error) => {
+        if (!lifecycle.active) return;
         const message = normalizeWeComError(error);
-        patchWeComStatus({ status: "error", lastError: message, message });
-        appendAdapterLog("wecom", { level: "error", event: "error", message });
+        patchWeComStatus({ status: "error", lastError: message, message }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { level: "error", event: "error", message });
       });
       client.on("event", (frame) => {
-        appendAdapterLog("wecom", {
+        if (!lifecycle.active) return;
+        appendWeComRuntimeLog(lifecycle, {
           event: "inbound_event",
           message: frame.body?.event?.eventtype,
           data: frame
         });
       });
       client.on("message", (frame) => {
+        if (!lifecycle.active) return;
         const record = recordFromFrame(frame);
         if (!record) return;
-        appendAdapterLog("wecom", {
+        appendWeComRuntimeLog(lifecycle, {
           event: "inbound_message",
           message: record.rawMessage.slice(0, 500),
           data: {
@@ -208,14 +255,14 @@ export function createWeComAdapter(): MessageAdapter {
             messageType: record.messageType
           }
         });
-        appendWeComMessage(record);
-        const current = readGatewayStatus().messageAdapters?.wecom as Record<string, unknown> | undefined;
+        appendWeComMessageToDir(record, lifecycle.memoryDataDir());
+        const current = readGatewayStatus(lifecycle.dataDir()).messageAdapters?.wecom as Record<string, unknown> | undefined;
         patchWeComStatus({
           status: "running",
-          lastMessageAt: new Date().toISOString(),
+          lastMessageAt: lifecycle.now().toISOString(),
           messageCount: Number(current?.messageCount ?? 0) + 1,
           connected: client.isConnected
-        });
+        }, lifecycle.dataDir(), lifecycle.now());
         dispatchWeComRecord(record, {
           wecomReqId: record.reqId,
           wecomConversationId: record.conversationId,
@@ -227,9 +274,43 @@ export function createWeComAdapter(): MessageAdapter {
         });
       });
 
-      patchWeComStatus({ status: "running", connected: false, authenticated: false, message: "企业微信消息端启动中。" });
-      appendAdapterLog("wecom", { event: "starting", message: "Starting WeCom adapter" });
-      client.connect();
+      const dispose: MessageAdapterDispose = () => {
+        if (!lifecycle.active) return;
+        lifecycle.active = false;
+        try {
+          client.disconnect();
+        } catch (error) {
+          const message = normalizeWeComError(error);
+          patchWeComStatus({ status: "error", connected: false, authenticated: false, lastError: message, message }, lifecycle.dataDir(), lifecycle.now());
+          appendWeComRuntimeLog(lifecycle, { level: "error", event: "disconnect_error", message });
+          throw error;
+        }
+        patchWeComStatus({
+          status: "disabled",
+          connected: false,
+          authenticated: false,
+          message: "企业微信消息端已停止。"
+        }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { event: "disabled", message: "WeCom adapter disabled" });
+      };
+
+      patchWeComStatus({ status: "running", connected: false, authenticated: false, message: "企业微信消息端启动中。" }, lifecycle.dataDir(), lifecycle.now());
+      appendWeComRuntimeLog(lifecycle, { event: "starting", message: "Starting WeCom adapter" });
+      try {
+        client.connect();
+        return dispose;
+      } catch (error) {
+        lifecycle.active = false;
+        try {
+          client.disconnect();
+        } catch {
+          // The original connection failure remains the activation result.
+        }
+        const message = normalizeWeComError(error);
+        patchWeComStatus({ status: "error", connected: false, authenticated: false, lastError: message, message }, lifecycle.dataDir(), lifecycle.now());
+        appendWeComRuntimeLog(lifecycle, { level: "error", event: "activation_failed", message });
+        throw error;
+      }
     }
   };
 }

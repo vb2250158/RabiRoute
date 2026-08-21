@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat 和 NapCat 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat、NapCat 和 WeCom 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -324,9 +324,9 @@ plugins:
 
 ### 阶段 2：消息端完整生命周期
 
-通用 Webhook、Heartbeat 和 NapCat 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 等待全部 OneBot WebSocket listener 就绪，持有多实例 listener 和已连接客户端。卸载会关闭对应端口、阻止新消息处理并写入 `disabled`；启动中途失败会回滚先前实例。`src/index.ts` 优先挂载已注册消息端，WeCom、Weixin、Feishu 和其他消息端继续走兼容创建入口。
+通用 Webhook、Heartbeat、NapCat 和 WeCom 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 每次挂载创建并持有一个入站 SDK 客户端。卸载会释放对应资源、阻止新消息处理并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，Weixin、Feishu 和其他消息端继续走兼容创建入口。
 
-测试已覆盖 Webhook 的端口生命周期、Heartbeat 的定时器生命周期，以及 NapCat 的多实例启动、客户端关闭、端口释放、同端口重新挂载和后续实例失败回滚。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 下一步迁移 WeCom、Weixin、Feishu 和其余消息端。
+测试已覆盖 Webhook 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收，以及 WeCom 的单客户端创建、卸载断开、迟到事件失效、重复挂载和连接失败回滚。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 下一步迁移 Weixin、Feishu 和其余消息端。
 
 ### 阶段 3：Gateway Host
 
@@ -442,6 +442,16 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 5. 同一端口可以在卸载后重新挂载，不累积连接和监听器。
 
 QQ 消息解析、回复链、媒体保存、Route 判断、Forwarding 和 Outbox 继续由现有 NapCat 业务模块拥有。
+
+## 第五个实施切片：WeCom SDK WebSocket 生命周期
+
+1. 将 WeCom 注册为 `websocket` 类型的 Message Adapter Definition；
+2. 每次 Fiber 挂载创建一个入站 SDK 客户端，调用一次 `connect()`；
+3. Fiber 卸载时调用 `disconnect()`、写入 `disabled`，并让迟到的连接、认证和消息事件失效；
+4. `connect()` 同步失败时断开已创建客户端并写入 `error`；
+5. 缺少 Bot ID 或 secret 时保持失败关闭，不创建 SDK 客户端。
+
+企业微信消息解析、消息记录、Route 判断、Forwarding 和 Outbox 继续由现有业务模块拥有。`src/wecom.ts` 的出站客户端缓存仍服务于 Outbox，不并入入站 Fiber。
 
 ## 完成标准
 

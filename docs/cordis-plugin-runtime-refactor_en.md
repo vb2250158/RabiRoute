@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, Heartbeat, and NapCat slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
+> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, Heartbeat, NapCat, and WeCom slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -324,9 +324,9 @@ Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
 ### Stage 2: complete message-side lifecycle
 
-Generic Webhook, Heartbeat, and NapCat now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, and the NapCat Fiber waits for all OneBot WebSocket listeners before activation and owns every multi-instance listener and connected client. Disposal closes ports, rejects new message work, and records `disabled`; partial NapCat activation rolls back earlier instances. `src/index.ts` mounts registered message adapters first, while WeCom, Weixin, Feishu, and the remaining adapters keep the compatibility creation entry.
+Generic Webhook, Heartbeat, NapCat, and WeCom now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, the NapCat Fiber owns all multi-instance OneBot WebSocket listeners and connected clients, and each WeCom Fiber owns one inbound SDK client. Disposal releases the corresponding resources, rejects new message work, and records `disabled`; partial activation rolls back created resources and records `error`. `src/index.ts` mounts registered message adapters first, while Weixin, Feishu, and the remaining adapters keep the compatibility creation entry.
 
-Tests cover Webhook port lifecycle, Heartbeat timer lifecycle, and NapCat multi-instance activation, client teardown, port release, same-port remounting, and rollback when a later instance fails. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` and port release. Stage 2 continues with WeCom, Weixin, Feishu, and the remaining message adapters.
+Tests cover Webhook port lifecycle, Heartbeat timer lifecycle, NapCat multi-instance resource cleanup, and WeCom single-client creation, disconnect on disposal, stale-event rejection, repeated mounting, and connection-failure rollback. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` and port release. Stage 2 continues with Weixin, Feishu, and the remaining message adapters.
 
 ### Stage 3: Gateway Host
 
@@ -442,6 +442,16 @@ Route selection, Forwarding, AgentPacket creation, script execution, and deliver
 5. remount the same port after disposal without accumulating connections or listeners.
 
 QQ message parsing, reply-chain resolution, media persistence, Route decisions, Forwarding, and Outbox remain owned by the existing NapCat business modules.
+
+## Fifth implementation slice: WeCom SDK WebSocket lifecycle
+
+1. register WeCom as a `websocket` Message Adapter Definition;
+2. create one inbound SDK client per Fiber mount and call `connect()` once;
+3. call `disconnect()` and record `disabled` on disposal, while ignoring late connection, authentication, and message events;
+4. disconnect the created client and record `error` when `connect()` fails synchronously;
+5. keep the adapter fail-closed and avoid client creation when the Bot ID or secret is missing.
+
+WeCom message parsing, message records, Route decisions, Forwarding, and Outbox remain owned by the existing business modules. The outbound client cache in `src/wecom.ts` still serves Outbox and is not folded into the inbound Fiber.
 
 ## Readiness criteria
 

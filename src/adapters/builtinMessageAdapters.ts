@@ -1,6 +1,7 @@
 import { createHeartbeatAdapter } from "./heartbeatAdapter.js";
 import { createNapCatAdapter } from "./napcatAdapter.js";
 import { createWebhookAdapter } from "./webhookAdapter.js";
+import { createWeComAdapter } from "./wecomAdapter.js";
 import type { MessageAdapterDefinition } from "./messageAdapter.js";
 
 export const webhookMessageAdapterDefinition: MessageAdapterDefinition = {
@@ -36,6 +37,22 @@ export const napcatMessageAdapterDefinition: MessageAdapterDefinition = {
   create: () => createNapCatAdapter()
 };
 
+export const wecomMessageAdapterDefinition: MessageAdapterDefinition = {
+  manifest: {
+    type: "wecom",
+    label: "企业微信",
+    host: "gateway",
+    transport: "websocket",
+    lifecycle: "fiber"
+  },
+  create: () => createWeComAdapter()
+};
+
 export function builtinMessageAdapterDefinitions(): MessageAdapterDefinition[] {
-  return [webhookMessageAdapterDefinition, heartbeatMessageAdapterDefinition, napcatMessageAdapterDefinition];
+  return [
+    webhookMessageAdapterDefinition,
+    heartbeatMessageAdapterDefinition,
+    napcatMessageAdapterDefinition,
+    wecomMessageAdapterDefinition
+  ];
 }
