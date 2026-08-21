@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the first Stage 2 generic-Webhook slice are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
+> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook and Heartbeat slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -324,9 +324,9 @@ Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
 ### Stage 2: complete message-side lifecycle
 
-Generic Webhook now registers through `MessageAdapterDefinition`, a manifest, and `MessageAdapterRegistry`. Startup completes only after the listener is ready. Port conflicts or `onListening` initialization failures close created resources and fail activation. Fiber disposal awaits `server.close()` and records `disabled`. `src/index.ts` mounts registered message adapters first; Heartbeat, NapCat, and the remaining adapters still use the compatibility creation entry.
+Generic Webhook and Heartbeat now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns HTTP-listener startup, rollback, and teardown. The Heartbeat Fiber owns all instance timers; disposal clears future triggers, prevents stale callbacks from running or rearming, and records `disabled`. Deliveries or scripts that already started continue through their existing business flow. `src/index.ts` mounts registered message adapters first, while NapCat and the remaining adapters keep the compatibility creation entry.
 
-The first exit criterion is met. Tests cover repeated mount/dispose/remount on one port, port conflicts, and post-listen initialization failure. A real `dist/index.js` process verified `ready -> SIGINT -> disabled` and port release. Stage 2 continues with Heartbeat, NapCat, and the remaining message adapters.
+Tests cover Webhook remounting, port conflicts, and partial-start rollback, plus Heartbeat callback rearming, complete timer cleanup, stale-callback rejection, repeated mounting, and activation-failure rollback. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` and port release. Stage 2 continues with NapCat, WeCom, Weixin, Feishu, and the remaining message adapters.
 
 ### Stage 3: Gateway Host
 
@@ -422,6 +422,16 @@ This slice does not change message templates, Desktop IPC, DSH delivery, Route c
 5. verify repeated mounting, port conflicts, post-listen initialization failure, process-exit status, and port release.
 
 This slice keeps Webhook payload, recording, Forwarding, and HTTP response contracts unchanged.
+
+## Third implementation slice: Heartbeat timer lifecycle
+
+1. register Heartbeat as a `timer` Message Adapter Definition;
+2. let each instance Fiber own every timer created by that instance;
+3. clear timers and `nextTickAt` on disposal, and prevent queued stale callbacks from running or scheduling again;
+4. clean timers created before an activation failure and record `error`;
+5. keep timer counts constant across repeated mount/dispose cycles and record `disabled` after a normal stop.
+
+Route selection, Forwarding, AgentPacket creation, script execution, and delivery evidence after a scheduled trigger remain owned by the existing business modules. Fiber disposal stops future scheduling and does not undo work that already started.
 
 ## Readiness criteria
 

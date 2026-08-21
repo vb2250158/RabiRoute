@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { forwardMessageAndWait, type ForwardDeliveryResult } from "../forwarding.js";
-import { appendAdapterLog, appendHeartbeatEvent, type HeartbeatEventRecord } from "../history.js";
+import { appendAdapterLogToDir, appendHeartbeatEventToDir, type HeartbeatEventRecord } from "../history.js";
 import {
   nextHeartbeatScheduleTime,
 } from "../scheduling/heartbeatSchedules.js";
@@ -15,11 +15,11 @@ import {
   type ScriptAutomationTask,
   type ScheduledAutomationTask
 } from "../automation/personaAutomationRuntime.js";
-import type { MessageAdapter } from "./messageAdapter.js";
+import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
 
 type GatewayStatus = {
   messageAdapters?: Record<string, {
-    status?: "running" | "error";
+    status?: "running" | "disabled" | "error";
     message?: string;
     updatedAt?: string;
     intervalSeconds?: number;
@@ -70,10 +70,35 @@ type RunningHeartbeatTask = ScheduledAutomationTask & {
   timer?: NodeJS.Timeout;
 };
 
-const maxTimeoutMs = 2_147_483_647;
-const statusPath = path.join(config.dataDir, "gateway-status.json");
+export type HeartbeatAdapterDependencies = {
+  collectTasks?: () => ScheduledAutomationTask[];
+  dataDir?: () => string;
+  now?: () => Date;
+  nextScheduleTime?: typeof nextHeartbeatScheduleTime;
+  setTimer?: (callback: () => void, delayMs: number) => NodeJS.Timeout;
+  clearTimer?: (timer: NodeJS.Timeout) => void;
+  runTask?: (task: ScheduledAutomationTask, scheduledAt: Date) => void;
+};
 
-function readGatewayStatus(): GatewayStatus {
+type HeartbeatLifecycle = {
+  active: boolean;
+  tasks: RunningHeartbeatTask[];
+  dataDir(): string;
+  now(): Date;
+  nextScheduleTime: typeof nextHeartbeatScheduleTime;
+  setTimer(callback: () => void, delayMs: number): NodeJS.Timeout;
+  clearTimer(timer: NodeJS.Timeout): void;
+  runTask(task: RunningHeartbeatTask, scheduledAt: Date): void;
+};
+
+const maxTimeoutMs = 2_147_483_647;
+
+function gatewayStatusPath(dataDir: string): string {
+  return path.join(dataDir, "gateway-status.json");
+}
+
+function readGatewayStatus(dataDir = config.dataDir): GatewayStatus {
+  const statusPath = gatewayStatusPath(dataDir);
   if (!fs.existsSync(statusPath)) {
     return {};
   }
@@ -85,22 +110,30 @@ function readGatewayStatus(): GatewayStatus {
   }
 }
 
-function writeGatewayStatus(nextStatus: GatewayStatus): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
+function writeGatewayStatus(nextStatus: GatewayStatus, dataDir = config.dataDir): void {
+  const statusPath = gatewayStatusPath(dataDir);
+  fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
 }
 
-function patchHeartbeatStatus(patch: NonNullable<GatewayStatus["heartbeat"]>): void {
-  const status = readGatewayStatus();
+function patchHeartbeatStatus(
+  lifecycle: Pick<HeartbeatLifecycle, "dataDir" | "now">,
+  patch: NonNullable<GatewayStatus["heartbeat"]>,
+  lifecycleStatus?: "running" | "disabled" | "error"
+): void {
+  const dataDir = lifecycle.dataDir();
+  const status = readGatewayStatus(dataDir);
   const current = status.messageAdapters?.heartbeat ?? {};
+  const statusValue = lifecycleStatus
+    ?? (current.status === "disabled" ? "disabled" : "running");
   writeGatewayStatus({
     ...status,
     messageAdapters: {
       ...status.messageAdapters,
       heartbeat: {
         ...current,
-        status: "running",
-        updatedAt: new Date().toISOString(),
+        status: statusValue,
+        updatedAt: lifecycle.now().toISOString(),
         ...patch
       }
     },
@@ -108,7 +141,14 @@ function patchHeartbeatStatus(patch: NonNullable<GatewayStatus["heartbeat"]>): v
       ...status.heartbeat,
       ...patch
     }
-  });
+  }, dataDir);
+}
+
+function appendHeartbeatLog(
+  lifecycle: Pick<HeartbeatLifecycle, "dataDir">,
+  record: Parameters<typeof appendAdapterLogToDir>[1]
+): void {
+  appendAdapterLogToDir("heartbeat", record, lifecycle.dataDir());
 }
 
 function activeRouteProfiles() {
@@ -123,11 +163,11 @@ function minNextTick(tasks: RunningHeartbeatTask[]): string | undefined {
   return next?.toISOString();
 }
 
-function patchScheduleSummary(tasks: RunningHeartbeatTask[]): void {
-  patchHeartbeatStatus({
+function patchScheduleSummary(lifecycle: HeartbeatLifecycle): void {
+  patchHeartbeatStatus(lifecycle, {
     enabled: true,
-    scheduleCount: tasks.length,
-    nextTickAt: minNextTick(tasks)
+    scheduleCount: lifecycle.tasks.length,
+    nextTickAt: minNextTick(lifecycle.tasks)
   });
 }
 
@@ -147,15 +187,15 @@ function deliveryLogLevel(result: ForwardDeliveryResult): "info" | "warning" | "
   return "info";
 }
 
-function recordHeartbeatDelivery(record: HeartbeatEventRecord, result: ForwardDeliveryResult): void {
-  appendAdapterLog("heartbeat", {
+function recordHeartbeatDelivery(lifecycle: HeartbeatLifecycle, record: HeartbeatEventRecord, result: ForwardDeliveryResult): void {
+  appendHeartbeatLog(lifecycle, {
     event: "delivery_result",
     level: deliveryLogLevel(result),
     message: `Heartbeat delivery ${result.status} messageId=${record.messageId} matched=${result.matchedRuleCount} sent=${result.sentPacketCount}`,
     data: result
   });
-  patchHeartbeatStatus({
-    lastDeliveryAt: new Date().toISOString(),
+  patchHeartbeatStatus(lifecycle, {
+    lastDeliveryAt: lifecycle.now().toISOString(),
     lastDeliveryStatus: result.status,
     lastDeliveryMessageId: String(record.messageId ?? result.messageId),
     lastDeliveryMatchedRuleCount: result.matchedRuleCount,
@@ -164,9 +204,9 @@ function recordHeartbeatDelivery(record: HeartbeatEventRecord, result: ForwardDe
   });
 }
 
-function recordHeartbeatDeliveryError(record: HeartbeatEventRecord, error: unknown): void {
+function recordHeartbeatDeliveryError(lifecycle: HeartbeatLifecycle, record: HeartbeatEventRecord, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  appendAdapterLog("heartbeat", {
+  appendHeartbeatLog(lifecycle, {
     event: "delivery_error",
     level: "error",
     message: `Heartbeat delivery failed messageId=${record.messageId}: ${message}`,
@@ -175,8 +215,8 @@ function recordHeartbeatDeliveryError(record: HeartbeatEventRecord, error: unkno
       error: message
     }
   });
-  patchHeartbeatStatus({
-    lastDeliveryAt: new Date().toISOString(),
+  patchHeartbeatStatus(lifecycle, {
+    lastDeliveryAt: lifecycle.now().toISOString(),
     lastDeliveryStatus: "failed",
     lastDeliveryMessageId: String(record.messageId ?? ""),
     lastDeliveryMatchedRuleCount: 0,
@@ -185,7 +225,7 @@ function recordHeartbeatDeliveryError(record: HeartbeatEventRecord, error: unkno
   });
 }
 
-function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: RunningHeartbeatTask[]): void {
+function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, lifecycle: HeartbeatLifecycle): void {
   const schedule = task.rule.trigger.schedule;
   const routeId = task.route.id;
   const routeName = task.route.name;
@@ -198,7 +238,7 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
     scheduledAt: scheduledAt.toISOString(),
     actionType: task.rule.action.type
   })) {
-    appendAdapterLog("heartbeat", {
+    appendHeartbeatLog(lifecycle, {
       event: "automation_duplicate_skipped",
       level: "warning",
       message: `Scheduled automation already claimed route=${routeId} rule=${task.rule.id}`,
@@ -208,20 +248,20 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
   }
 
   if (task.rule.action.type === "run_script") {
-    appendAdapterLog("heartbeat", {
+    appendHeartbeatLog(lifecycle, {
       event: "script_started",
       message: `Scheduled persona script started route=${routeId} rule=${task.rule.id}`,
       data: { runId, routeId, routeName, automationRuleId: task.rule.id, taskName, scheduledAt: scheduledAt.toISOString() }
     });
-    patchHeartbeatStatus({
+    patchHeartbeatStatus(lifecycle, {
       enabled: true,
-      lastTickAt: new Date().toISOString(),
+      lastTickAt: lifecycle.now().toISOString(),
       lastScheduleId: schedule.id,
       lastScheduleName: schedule.name?.trim() || schedule.id,
       lastTaskId: task.rule.id,
       lastTaskName: taskName,
       lastActionType: task.rule.action.type,
-      scheduleCount: tasks.length
+      scheduleCount: lifecycle.tasks.length
     });
     void executeScriptAutomation({ route: task.route, rule: task.rule as ScriptAutomationTask["rule"] }).then((result) => {
       finishAutomationRun(runId, result.status, {
@@ -231,14 +271,14 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
         exitCode: result.exitCode,
         durationMs: result.durationMs
       });
-      appendAdapterLog("heartbeat", {
+      appendHeartbeatLog(lifecycle, {
         event: "script_result",
         level: result.status === "completed" ? "info" : result.status === "skipped" ? "warning" : "error",
         message: `Scheduled persona script ${result.status} route=${routeId} rule=${task.rule.id}`,
         data: { runId, routeId, routeName, automationRuleId: task.rule.id, taskName, ...result }
       });
-      patchHeartbeatStatus({
-        lastDeliveryAt: new Date().toISOString(),
+      patchHeartbeatStatus(lifecycle, {
+        lastDeliveryAt: lifecycle.now().toISOString(),
         lastDeliveryStatus: result.status,
         lastDeliveryMessageId: runId,
         lastDeliveryMatchedRuleCount: 1,
@@ -252,10 +292,10 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
     return;
   }
 
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(lifecycle.now().getTime() / 1000);
   const scheduleName = schedule.name?.trim() || schedule.id;
   const rawMessage = scheduleMessage(task);
-  const status = readGatewayStatus().heartbeat;
+  const status = readGatewayStatus(lifecycle.dataDir()).heartbeat;
   const record: HeartbeatEventRecord = {
     time: now,
     rawMessage,
@@ -264,8 +304,8 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
     intervalSeconds: schedule.type === "interval" ? schedule.intervalSeconds : undefined
   };
 
-  appendHeartbeatEvent(record);
-  appendAdapterLog("heartbeat", {
+  appendHeartbeatEventToDir(record, lifecycle.dataDir());
+  appendHeartbeatLog(lifecycle, {
     event: "tick",
     message: rawMessage.slice(0, 500),
     data: {
@@ -282,18 +322,18 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
     }
   });
   const tickCount = (status?.tickCount ?? 0) + 1;
-  patchHeartbeatStatus({
+  patchHeartbeatStatus(lifecycle, {
     enabled: true,
     intervalSeconds: schedule.type === "interval" ? schedule.intervalSeconds : undefined,
     message: rawMessage,
-    lastTickAt: new Date().toISOString(),
+    lastTickAt: lifecycle.now().toISOString(),
     lastScheduleId: schedule.id,
     lastScheduleName: scheduleName,
     lastTaskId: task.rule.id,
     lastTaskName: taskName,
     lastActionType: task.rule.action.type,
     tickCount,
-    scheduleCount: tasks.length
+    scheduleCount: lifecycle.tasks.length
   });
   void forwardMessageAndWait("heartbeat", record, {
     triggerRouteId: routeId,
@@ -310,7 +350,7 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
         matchedRuleCount: result.matchedRuleCount,
         sentPacketCount: result.sentPacketCount
       });
-      recordHeartbeatDelivery(record, result);
+      recordHeartbeatDelivery(lifecycle, record, result);
     })
     .catch((error) => {
       finishAutomationRun(runId, "failed", {
@@ -318,42 +358,99 @@ function tickHeartbeat(task: RunningHeartbeatTask, scheduledAt: Date, tasks: Run
         automationRuleId: task.rule.id,
         error: error instanceof Error ? error.message : String(error)
       });
-      recordHeartbeatDeliveryError(record, error);
+      recordHeartbeatDeliveryError(lifecycle, record, error);
     });
 }
 
-function armTask(task: RunningHeartbeatTask, tasks: RunningHeartbeatTask[], lastScheduledAt?: Date): void {
-  const nextAt = nextHeartbeatScheduleTime(task.rule.trigger.schedule, new Date(), { lastScheduledAt });
+function armTask(
+  task: RunningHeartbeatTask,
+  lifecycle: HeartbeatLifecycle,
+  lastScheduledAt?: Date
+): void {
+  if (!lifecycle.active) return;
+  const now = lifecycle.now();
+  const nextAt = lifecycle.nextScheduleTime(task.rule.trigger.schedule, now, { lastScheduledAt });
   task.nextAt = nextAt ?? undefined;
   if (!nextAt) {
-    patchScheduleSummary(tasks);
+    patchScheduleSummary(lifecycle);
     return;
   }
 
-  const delay = Math.max(0, Math.min(maxTimeoutMs, nextAt.getTime() - Date.now()));
-  task.timer = setTimeout(() => {
-    if (Date.now() + 1000 < nextAt.getTime()) {
-      armTask(task, tasks, lastScheduledAt);
+  const delay = Math.max(0, Math.min(maxTimeoutMs, nextAt.getTime() - now.getTime()));
+  task.timer = lifecycle.setTimer(() => {
+    task.timer = undefined;
+    if (!lifecycle.active) return;
+    if (lifecycle.now().getTime() + 1000 < nextAt.getTime()) {
+      armTask(task, lifecycle, lastScheduledAt);
       return;
     }
-    tickHeartbeat(task, nextAt, tasks);
-    armTask(task, tasks, nextAt);
+    lifecycle.runTask(task, nextAt);
+    if (!lifecycle.active) return;
+    armTask(task, lifecycle, nextAt);
   }, delay);
-  patchScheduleSummary(tasks);
+  patchScheduleSummary(lifecycle);
 }
 
-export function createHeartbeatAdapter(): MessageAdapter {
+function clearHeartbeatTimers(lifecycle: HeartbeatLifecycle): void {
+  for (const task of lifecycle.tasks) {
+    if (task.timer) {
+      lifecycle.clearTimer(task.timer);
+      task.timer = undefined;
+    }
+    task.nextAt = undefined;
+  }
+}
+
+export function createHeartbeatAdapter(
+  dependencies: HeartbeatAdapterDependencies = {}
+): MessageAdapter {
   return {
     type: "heartbeat",
     start() {
-      const tasks = collectScheduledAutomationTasks(activeRouteProfiles());
-      patchHeartbeatStatus({
+      const tasks = (dependencies.collectTasks?.()
+        ?? collectScheduledAutomationTasks(activeRouteProfiles()))
+        .map((task) => ({ ...task }));
+      let lifecycle!: HeartbeatLifecycle;
+      lifecycle = {
+        active: true,
+        tasks,
+        dataDir: dependencies.dataDir ?? (() => config.dataDir),
+        now: dependencies.now ?? (() => new Date()),
+        nextScheduleTime: dependencies.nextScheduleTime ?? nextHeartbeatScheduleTime,
+        setTimer: dependencies.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
+        clearTimer: dependencies.clearTimer ?? ((timer) => clearTimeout(timer)),
+        runTask(task, scheduledAt) {
+          if (dependencies.runTask) {
+            dependencies.runTask(task, scheduledAt);
+            return;
+          }
+          tickHeartbeat(task, scheduledAt, lifecycle);
+        }
+      };
+
+      const dispose: MessageAdapterDispose = () => {
+        if (!lifecycle.active) return;
+        lifecycle.active = false;
+        clearHeartbeatTimers(lifecycle);
+        patchHeartbeatStatus(lifecycle, {
+          enabled: false,
+          scheduleCount: lifecycle.tasks.length,
+          nextTickAt: undefined
+        }, "disabled");
+        appendHeartbeatLog(lifecycle, {
+          event: "disabled",
+          message: `Heartbeat disabled, schedules=${lifecycle.tasks.length}`,
+          data: { scheduleCount: lifecycle.tasks.length }
+        });
+      };
+
+      patchHeartbeatStatus(lifecycle, {
         enabled: true,
         intervalSeconds: config.heartbeatIntervalSeconds,
         message: config.heartbeatMessage,
         scheduleCount: tasks.length
-      });
-      appendAdapterLog("heartbeat", {
+      }, "running");
+      appendHeartbeatLog(lifecycle, {
         event: "enabled",
         message: `Heartbeat enabled, schedules=${tasks.length}`,
         data: {
@@ -375,8 +472,29 @@ export function createHeartbeatAdapter(): MessageAdapter {
         }
       });
       console.log(`RabiRoute heartbeat adapter enabled, schedules=${tasks.length}`);
-      tasks.forEach((task) => armTask(task, tasks));
-      patchScheduleSummary(tasks);
+
+      try {
+        tasks.forEach((task) => armTask(task, lifecycle));
+        patchScheduleSummary(lifecycle);
+        return dispose;
+      } catch (error) {
+        lifecycle.active = false;
+        clearHeartbeatTimers(lifecycle);
+        const message = error instanceof Error ? error.message : String(error);
+        patchHeartbeatStatus(lifecycle, {
+          enabled: false,
+          scheduleCount: tasks.length,
+          nextTickAt: undefined,
+          lastDeliveryError: message
+        }, "error");
+        appendHeartbeatLog(lifecycle, {
+          event: "activation_failed",
+          level: "error",
+          message: `Heartbeat activation failed: ${message}`,
+          data: { scheduleCount: tasks.length, error: message }
+        });
+        throw error;
+      }
     }
   };
 }

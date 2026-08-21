@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同和阶段 2 的首个通用 Webhook 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook 和 Heartbeat 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -324,9 +324,9 @@ plugins:
 
 ### 阶段 2：消息端完整生命周期
 
-通用 Webhook 已通过 `MessageAdapterDefinition` 和 manifest 注册到 `MessageAdapterRegistry`。启动会等待 listener 成功后才完成；端口占用或 `onListening` 初始化失败会关闭已创建资源并返回失败；Fiber 销毁会等待 `server.close()`，把状态改为 `disabled`。`src/index.ts` 优先挂载已注册消息端，Heartbeat、NapCat 和其他消息端仍走兼容创建入口。
+通用 Webhook 和 Heartbeat 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener 的启动、失败回滚和关闭动作。Heartbeat Fiber 持有全部定时器，卸载时清除未来触发、阻止旧回调继续执行或重排，并把状态改为 `disabled`；已开始的投递或脚本仍按原业务流程完成。`src/index.ts` 优先挂载已注册消息端，NapCat 和其他消息端继续走兼容创建入口。
 
-当前退出条件已满足：测试覆盖同一端口重复挂载、卸载、重新挂载、端口占用和监听后初始化失败；真实 `dist/index.js` 进程验证了 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 继续迁移 Heartbeat、NapCat 和其他消息端。
+测试已覆盖 Webhook 的重复挂载、端口冲突和部分启动回滚，以及 Heartbeat 的回调重排、全部定时器清理、旧回调失效、重复挂载和启动失败回滚。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 下一步迁移 NapCat、WeCom、Weixin、Feishu 和其余消息端。
 
 ### 阶段 3：Gateway Host
 
@@ -422,6 +422,16 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 5. 验证重复挂载、端口占用、监听后初始化失败、进程退出状态和端口释放。
 
 这个切片保持 Webhook payload、记录、Forwarding 和 HTTP 响应合同不变。
+
+## 第三个实施切片：Heartbeat 定时器生命周期
+
+1. 将 Heartbeat 注册为 `timer` 类型的 Message Adapter Definition；
+2. 让每个实例 Fiber 持有该实例创建的全部定时器；
+3. 卸载时清除定时器和 `nextTickAt`，并阻止已经排队的旧回调执行或重新安排；
+4. 启动中途失败时清理已创建的定时器并写入 `error`；
+5. 重复挂载和卸载不增加定时器数量，正常停止写入 `disabled`。
+
+定时触发后的 Route、Forwarding、AgentPacket、脚本执行和投递证据继续由原业务模块处理。Fiber 只停止未来调度，不撤销已经开始的远端动作。
 
 ## 完成标准
 

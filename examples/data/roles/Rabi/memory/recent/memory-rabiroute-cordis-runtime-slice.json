@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-cordis-runtime-slice",
   "title": "Cordis 负责组合与生命周期，Rabi 模块继续拥有业务事实",
-  "content": "RabiRoute 采用 Cordis 组合内核、Rabi 业务适配层和多宿主扩展协议。Cordis API 集中在 src/runtime；Route、事件、路由判断、AgentPacket、投递证据和 Outbox 继续由现有模块拥有。五个内置 Agent Adapter 通过独立 Fiber 注册。通用 Webhook 是首个完成消息端生命周期迁移的实例：Definition 和 manifest 进入 MessageAdapterRegistry，启动等待 listener 就绪，激活失败回滚，Fiber 销毁关闭端口并写 disabled。未迁移消息端继续使用兼容创建入口。DSH 的普通插件也在同一 Node 进程运行，Cordis isolate 只是服务作用域；RabiRoute 对未知或高风险代码使用独立进程属于额外安全设计。",
+  "content": "RabiRoute 采用 Cordis 组合内核、Rabi 业务适配层和多宿主扩展协议。Cordis API 集中在 src/runtime；Route、事件、路由判断、AgentPacket、投递证据和 Outbox 继续由现有模块拥有。五个内置 Agent Adapter 通过独立 Fiber 注册。通用 Webhook 和 Heartbeat 已进入 MessageAdapterRegistry：Webhook Fiber 管理 listener 启动、失败回滚和关闭；Heartbeat Fiber 管理全部定时器，卸载时清除未来触发、阻止旧回调执行或重排，并写 disabled，启动失败也会清理已经创建的定时器。已经开始的投递或脚本继续由原业务模块完成。未迁移消息端继续使用兼容创建入口。DSH 的普通插件也在同一 Node 进程运行，Cordis isolate 只是服务作用域；RabiRoute 对未知或高风险代码使用独立进程属于额外安全设计。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：Cordis 插件运行时的事实所有权和隔离边界"
   },
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T12:10:25+08:00",
+  "updatedAt": "2026-08-21T12:29:24+08:00",
   "keywords": [
     "Cordis",
     "Fiber",
@@ -18,6 +18,7 @@
     "Webhook",
     "DSH",
     "isolate",
-    "独立进程"
+    "独立进程",
+    "Heartbeat"
   ]
 }

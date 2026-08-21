@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "migrate-message-adapter-lifecycle",
-  "currentStep": "通用 Webhook 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移；重复挂载、端口占用、监听后初始化失败、SIGINT 状态回写和端口释放已验证。Heartbeat、NapCat 与其他消息端仍使用兼容创建入口。",
-  "nextAction": "迁移 Heartbeat 的定时器创建与清理生命周期，再迁移 NapCat 连接和其他消息端。",
+  "currentStep": "通用 Webhook 和 Heartbeat 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。Webhook 已验证端口回滚与释放；Heartbeat 已验证定时器重排、卸载清理、旧回调失效、重复挂载和启动失败回滚。NapCat 与其他消息端仍使用兼容创建入口。",
+  "nextAction": "迁移 NapCat 连接和状态生命周期，再迁移 WeCom、Weixin、Feishu 与其他消息端。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -78,7 +78,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T12:10:25+08:00",
+  "updatedAt": "2026-08-21T12:29:24+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -89,6 +89,7 @@
     "WebGUI",
     "Desktop",
     "独立进程",
-    "生命周期"
+    "生命周期",
+    "Heartbeat"
   ]
 }
