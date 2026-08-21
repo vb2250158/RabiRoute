@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
 import { createCipheriv, createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { appendFeishuMessageToDir } from "../history.js";
+import { createMessageAdapterRuntime } from "../runtime/messageAdapterRuntime.js";
+import { builtinMessageAdapterDefinitions } from "./builtinMessageAdapters.js";
+import type { MessageAdapterDefinition, MessageAdapterDispose } from "./messageAdapter.js";
 import {
+  createFeishuAdapter,
   decryptFeishuCallback,
   handleFeishuCallback,
-  verifyFeishuCallbackSignature
+  verifyFeishuCallbackSignature,
+  type FeishuAdapterDependencies,
+  type FeishuAdapterSettings
 } from "./feishuAdapter.js";
 
 const verificationToken = "verification-token-for-test";
@@ -143,4 +151,324 @@ test("encrypted Feishu callbacks are verified and decrypted before dispatch", ()
   });
   assert.equal(result.disposition, "accepted");
   assert.equal(result.record?.messageId, "om-message");
+});
+
+function settings(port: number): FeishuAdapterSettings {
+  return {
+    appId: "cli_test_app",
+    appSecret: "app-secret-for-test",
+    verificationToken,
+    encryptKey,
+    eventSubscriptionEnabled: true,
+    webhookPath: "/callbacks/feishu",
+    webhookPort: port
+  };
+}
+
+function readStatus(dataDir: string) {
+  return JSON.parse(fs.readFileSync(path.join(dataDir, "gateway-status.json"), "utf8"));
+}
+
+function listen(server: http.Server, port = 0): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("Expected TCP server address."));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+function close(server: http.Server): Promise<void> {
+  server.closeAllConnections?.();
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+function request(input: {
+  port: number;
+  path: string;
+  body: Buffer;
+  headers?: Record<string, string>;
+}): Promise<{ statusCode: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: "127.0.0.1",
+      port: input.port,
+      path: input.path,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(input.body.length),
+        ...input.headers
+      }
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolve({
+        statusCode: response.statusCode ?? 0,
+        body: Buffer.concat(chunks).toString("utf8")
+      }));
+    });
+    req.once("error", reject);
+    req.end(input.body);
+  });
+}
+
+function definition(dependencies: FeishuAdapterDependencies): MessageAdapterDefinition {
+  return {
+    manifest: {
+      type: "feishu",
+      label: "飞书",
+      host: "gateway",
+      transport: "http",
+      lifecycle: "fiber"
+    },
+    create: () => createFeishuAdapter(dependencies)
+  };
+}
+
+test("Feishu Fiber waits for listener readiness, forwards messages, and releases the port", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-runtime-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const probe = http.createServer();
+  const port = await listen(probe);
+  await close(probe);
+  const forwarded: string[] = [];
+  const dependencies: FeishuAdapterDependencies = {
+    settings: () => settings(port),
+    dataDir: () => dataDir,
+    memoryDataDir: () => dataDir,
+    now: () => new Date(nowSeconds * 1000),
+    forward: (_kind, record) => forwarded.push(String((record as { messageId?: string }).messageId))
+  };
+  const runtime = await createMessageAdapterRuntime([definition(dependencies)]);
+  t.after(() => runtime.dispose());
+
+  const first = await runtime.mount("feishu");
+  assert.equal(readStatus(dataDir).messageAdapters.feishu.listenerReady, true);
+  const rawBody = Buffer.from(JSON.stringify(callbackBody()));
+  const headers = signed(rawBody);
+  const response = await request({
+    port,
+    path: settings(port).webhookPath,
+    body: rawBody,
+    headers: {
+      "x-lark-request-timestamp": headers.timestamp,
+      "x-lark-request-nonce": headers.nonce,
+      "x-lark-signature": headers.signature
+    }
+  });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(forwarded, ["om-message"]);
+  assert.equal(fs.existsSync(path.join(dataDir, "feishu-messages.jsonl")), true);
+
+  await first.dispose();
+  assert.equal(readStatus(dataDir).messageAdapters.feishu.status, "disabled");
+  await assert.rejects(request({
+    port,
+    path: settings(port).webhookPath,
+    body: Buffer.from("{}")
+  }));
+
+  const second = await runtime.mount("feishu");
+  assert.equal(readStatus(dataDir).messageAdapters.feishu.listenerReady, true);
+  await second.dispose();
+});
+
+test("Feishu listener conflict rejects Cordis mount and records failure", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-conflict-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const blocker = http.createServer();
+  const port = await listen(blocker);
+  t.after(() => close(blocker));
+  const runtime = await createMessageAdapterRuntime([definition({
+    settings: () => settings(port),
+    dataDir: () => dataDir,
+    memoryDataDir: () => dataDir
+  })]);
+  t.after(() => runtime.dispose());
+
+  await assert.rejects(runtime.mount("feishu"), /EADDRINUSE/);
+  const status = readStatus(dataDir).messageAdapters.feishu;
+  assert.equal(status.status, "failed");
+  assert.equal(status.listenerReady, false);
+  assert.match(status.lastError, /EADDRINUSE/);
+});
+
+test("Feishu disposal cancels an incomplete callback before persistence or forwarding", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-late-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const probe = http.createServer();
+  const port = await listen(probe);
+  await close(probe);
+  const forwarded: string[] = [];
+  const adapter = createFeishuAdapter({
+    settings: () => settings(port),
+    dataDir: () => dataDir,
+    memoryDataDir: () => dataDir,
+    now: () => new Date(nowSeconds * 1000),
+    forward: () => forwarded.push("forwarded")
+  });
+  const dispose = await adapter.start() as MessageAdapterDispose;
+
+  const requestError = new Promise<Error>((resolve) => {
+    const req = http.request({
+      host: "127.0.0.1",
+      port,
+      path: settings(port).webhookPath,
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": "4096" }
+    });
+    req.once("error", resolve);
+    req.flushHeaders();
+    req.write("{");
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await dispose();
+  await requestError;
+
+  assert.deepEqual(forwarded, []);
+  assert.equal(fs.existsSync(path.join(dataDir, "feishu-messages.jsonl")), false);
+  assert.equal(readStatus(dataDir).messageAdapters.feishu.status, "disabled");
+});
+
+test("Feishu missing configuration does not create a server", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-missing-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  let createServerCalls = 0;
+  const adapter = createFeishuAdapter({
+    settings: () => ({ ...settings(0), appSecret: "", eventSubscriptionEnabled: false }),
+    dataDir: () => dataDir,
+    memoryDataDir: () => dataDir,
+    createServer: (listener) => {
+      createServerCalls += 1;
+      return http.createServer(listener);
+    }
+  });
+
+  const dispose = await adapter.start();
+  assert.equal(createServerCalls, 0);
+  assert.equal(readStatus(dataDir).messageAdapters.feishu.status, "blocked");
+  await dispose?.();
+});
+
+test("built-in Message Adapter manifests include Feishu", () => {
+  assert.deepEqual(
+    builtinMessageAdapterDefinitions().find((item) => item.manifest.type === "feishu")?.manifest,
+    {
+      type: "feishu",
+      label: "飞书",
+      host: "gateway",
+      transport: "http",
+      lifecycle: "fiber"
+    }
+  );
+});
+
+
+test("Feishu status write failure does not suppress an accepted message", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-status-failure-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const probe = http.createServer();
+  const port = await listen(probe);
+  await close(probe);
+  const forwarded: string[] = [];
+  const previousConsoleError = console.error;
+  console.error = () => {};
+  t.after(() => { console.error = previousConsoleError; });
+  const adapter = createFeishuAdapter({
+    settings: () => settings(port),
+    dataDir: () => dataDir,
+    memoryDataDir: () => dataDir,
+    now: () => new Date(nowSeconds * 1000),
+    forward: (_kind, record) => forwarded.push(String((record as { messageId?: string }).messageId))
+  });
+  const dispose = await adapter.start() as MessageAdapterDispose;
+  const statusPath = path.join(dataDir, "gateway-status.json");
+  fs.rmSync(statusPath, { force: true });
+  fs.mkdirSync(statusPath);
+
+  const rawBody = Buffer.from(JSON.stringify(callbackBody({
+    header: {
+      ...callbackBody().header as Record<string, unknown>,
+      event_id: "evt-status-failure"
+    },
+    event: {
+      ...callbackBody().event as Record<string, unknown>,
+      message: {
+        ...((callbackBody().event as Record<string, unknown>).message as Record<string, unknown>),
+        message_id: "om-status-failure"
+      }
+    }
+  })));
+  const headers = signed(rawBody);
+  const response = await request({
+    port,
+    path: settings(port).webhookPath,
+    body: rawBody,
+    headers: {
+      "x-lark-request-timestamp": headers.timestamp,
+      "x-lark-request-nonce": headers.nonce,
+      "x-lark-signature": headers.signature
+    }
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(forwarded, ["om-status-failure"]);
+  assert.equal(fs.readFileSync(path.join(dataDir, "feishu-messages.jsonl"), "utf8").trim().length > 0, true);
+  fs.rmSync(statusPath, { recursive: true, force: true });
+  await dispose();
+});
+
+test("concurrent Feishu disposal callers await the same listener close", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-concurrent-dispose-"));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+
+  class DelayedCloseServer extends EventEmitter {
+    listening = false;
+
+    listen(...args: unknown[]): this {
+      this.listening = true;
+      const candidate = args[args.length - 1];
+      const callback = typeof candidate === "function" ? candidate as () => void : undefined;
+      queueMicrotask(() => callback?.());
+      return this;
+    }
+
+    close(callback?: (error?: Error) => void): this {
+      setTimeout(() => {
+        this.listening = false;
+        callback?.();
+      }, 40);
+      return this;
+    }
+
+    closeAllConnections(): void {}
+  }
+
+  const server = new DelayedCloseServer();
+  const adapter = createFeishuAdapter({
+    settings: () => settings(0),
+    dataDir: () => dataDir,
+    memoryDataDir: () => dataDir,
+    createServer: () => server as unknown as http.Server
+  });
+  const dispose = await adapter.start() as MessageAdapterDispose;
+
+  const first = dispose() as Promise<void>;
+  const second = dispose() as Promise<void>;
+  assert.equal(first, second);
+  let secondCompleted = false;
+  void second.then(() => { secondCompleted = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(secondCompleted, false);
+  assert.equal(server.listening, true);
+  await Promise.all([first, second]);
+  assert.equal(server.listening, false);
 });

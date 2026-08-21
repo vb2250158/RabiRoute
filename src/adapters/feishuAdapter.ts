@@ -4,12 +4,14 @@ import http from "node:http";
 import path from "node:path";
 import { config } from "../config.js";
 import {
-  appendAdapterLog,
+  appendAdapterLogToDir,
   appendFeishuMessage,
+  appendFeishuMessageToDir,
+  type AdapterLogRecord,
   type FeishuMessageRecord
 } from "../history.js";
 import { forwardMessage } from "../forwarding.js";
-import type { MessageAdapter } from "./messageAdapter.js";
+import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
 
 const MAX_CALLBACK_BYTES = 1024 * 1024;
 const MAX_SIGNATURE_AGE_SECONDS = 5 * 60;
@@ -40,9 +42,16 @@ export type FeishuCallbackResult = {
   record?: FeishuMessageRecord;
 };
 
-const statusPath = path.join(config.dataDir, "gateway-status.json");
+function gatewayStatusPath(dataDir: string): string {
+  return path.join(dataDir, "gateway-status.json");
+}
 
-function patchFeishuStatus(patch: Record<string, unknown>): void {
+function patchFeishuStatus(
+  patch: Record<string, unknown>,
+  dataDir = config.dataDir,
+  now = new Date()
+): void {
+  const statusPath = gatewayStatusPath(dataDir);
   let status: GatewayStatus = {};
   try {
     if (fs.existsSync(statusPath)) {
@@ -55,16 +64,15 @@ function patchFeishuStatus(patch: Record<string, unknown>): void {
     ...(status.messageAdapters?.feishu ?? {}),
     ...patch,
     type: "feishu",
-    updatedAt: new Date().toISOString()
+    updatedAt: now.toISOString()
   };
-  fs.mkdirSync(config.dataDir, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(statusPath, JSON.stringify({
     ...status,
     feishu: { ...status.feishu, ...next },
     messageAdapters: { ...status.messageAdapters, feishu: next }
   }, null, 2), "utf8");
 }
-
 function safeEqual(left: string, right: string): boolean {
   const leftBytes = Buffer.from(left, "utf8");
   const rightBytes = Buffer.from(right, "utf8");
@@ -246,17 +254,92 @@ export function handleFeishuCallback(input: {
  * off until the app credentials, signed callback secrets, and explicit event
  * subscription confirmation are all present.
  */
-export function createFeishuAdapter(): MessageAdapter {
+export type FeishuAdapterSettings = {
+  appId: string;
+  appSecret: string;
+  verificationToken: string;
+  encryptKey: string;
+  eventSubscriptionEnabled: boolean;
+  webhookPath: string;
+  webhookPort: number;
+  host?: string;
+};
+
+export type FeishuAdapterDependencies = {
+  settings?: () => FeishuAdapterSettings;
+  dataDir?: () => string;
+  memoryDataDir?: () => string;
+  now?: () => Date;
+  createServer?: (requestListener: http.RequestListener) => http.Server;
+  persist?: (record: FeishuMessageRecord, memoryDataDir: string) => boolean;
+  forward?: typeof forwardMessage;
+  appendLog?: (
+    record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>,
+    dataDir: string
+  ) => void;
+};
+
+type FeishuLifecycle = {
+  active: boolean;
+  dataDir: string;
+  memoryDataDir: string;
+  now(): Date;
+};
+
+function closeFeishuServer(server: http.Server): Promise<void> {
+  server.closeAllConnections?.();
+  if (!server.listening) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+}
+
+export function createFeishuAdapter(
+  dependencies: FeishuAdapterDependencies = {}
+): MessageAdapter {
   return {
     type: "feishu",
-    start() {
+    start(): Promise<MessageAdapterDispose> {
+      const settings = dependencies.settings?.() ?? {
+        appId: config.feishuAppId,
+        appSecret: config.feishuAppSecret,
+        verificationToken: config.feishuVerificationToken,
+        encryptKey: config.feishuEncryptKey,
+        eventSubscriptionEnabled: config.feishuEventSubscriptionEnabled,
+        webhookPath: config.feishuWebhookPath,
+        webhookPort: config.feishuWebhookPort
+      };
+      const lifecycle: FeishuLifecycle = {
+        active: true,
+        dataDir: dependencies.dataDir?.() ?? config.dataDir,
+        memoryDataDir: dependencies.memoryDataDir?.() ?? config.memoryDataDir,
+        now: dependencies.now ?? (() => new Date())
+      };
+      const appendLog = (record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>) => {
+        (dependencies.appendLog ?? ((entry, dataDir) => appendAdapterLogToDir("feishu", entry, dataDir)))(record, lifecycle.dataDir);
+      };
+      const patchRuntimeStatus = (patch: Record<string, unknown>, now = lifecycle.now()) => {
+        try {
+          patchFeishuStatus(patch, lifecycle.dataDir, now);
+        } catch (error) {
+          console.error("Failed to update Feishu runtime status", error);
+        }
+      };
+      const appendRuntimeLog = (record: Omit<AdapterLogRecord, "adapter" | "time"> & Partial<AdapterLogRecord>) => {
+        try {
+          appendLog(record);
+        } catch (error) {
+          console.error("Failed to append Feishu runtime log", error);
+        }
+      };
       const missing = [
-        !(config.feishuAppId && config.feishuAppSecret) ? "app_credentials" : "",
-        !config.feishuVerificationToken ? "verification_token" : "",
-        !config.feishuEncryptKey ? "encrypt_key" : "",
-        !config.feishuEventSubscriptionEnabled ? "event_subscription" : ""
+        !(settings.appId && settings.appSecret) ? "app_credentials" : "",
+        !settings.verificationToken ? "verification_token" : "",
+        !settings.encryptKey ? "encrypt_key" : "",
+        !settings.eventSubscriptionEnabled ? "event_subscription" : ""
       ].filter(Boolean);
       if (missing.length > 0) {
+        lifecycle.active = false;
         const message = "飞书消息端保持关闭：需要独立应用凭据、Verification Token、Encrypt Key，并明确确认事件订阅已配置；群机器人 webhook 不能替代。";
         patchFeishuStatus({
           status: "blocked",
@@ -265,113 +348,205 @@ export function createFeishuAdapter(): MessageAdapter {
           listenerReady: false,
           message,
           missing
-        });
-        appendAdapterLog("feishu", {
+        }, lifecycle.dataDir, lifecycle.now());
+        appendLog({
           level: "warning",
           event: "missing_config",
           message,
           data: { missing }
         });
-        return;
+        return Promise.resolve(() => {});
       }
 
-      const server = http.createServer(async (request, response) => {
+      const persist = dependencies.persist ?? appendFeishuMessageToDir;
+      const deliver = dependencies.forward ?? forwardMessage;
+      const server = (dependencies.createServer ?? http.createServer)(async (request, response) => {
+        if (!lifecycle.active) {
+          response.writeHead(503).end();
+          return;
+        }
         const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-        if (request.method !== "POST" || requestPath !== config.feishuWebhookPath) {
-          response.writeHead(404);
-          response.end();
+        if (request.method !== "POST" || requestPath !== settings.webhookPath) {
+          response.writeHead(404).end();
           return;
         }
         const chunks: Buffer[] = [];
         let size = 0;
-        for await (const chunk of request) {
-          const bytes = Buffer.from(chunk);
-          size += bytes.length;
-          if (size > MAX_CALLBACK_BYTES) {
-            response.writeHead(413);
-            response.end();
-            return;
+        try {
+          for await (const chunk of request) {
+            if (!lifecycle.active) return;
+            const bytes = Buffer.from(chunk);
+            size += bytes.length;
+            if (size > MAX_CALLBACK_BYTES) {
+              response.writeHead(413).end();
+              return;
+            }
+            chunks.push(bytes);
           }
-          chunks.push(bytes);
+        } catch (error) {
+          if (!lifecycle.active) return;
+          const message = error instanceof Error ? error.message : String(error);
+          appendLog({ level: "warning", event: "request_aborted", message });
+          if (!response.headersSent) response.writeHead(400).end();
+          return;
         }
-        const result = handleFeishuCallback({
-          rawBody: Buffer.concat(chunks),
-          headers: {
-            timestamp: request.headers["x-lark-request-timestamp"] as string | undefined,
-            nonce: request.headers["x-lark-request-nonce"] as string | undefined,
-            signature: request.headers["x-lark-signature"] as string | undefined
-          },
-          verificationToken: config.feishuVerificationToken,
-          encryptKey: config.feishuEncryptKey,
-          identityNamespace: config.feishuAppId
-        });
-        if (result.disposition === "challenge") {
-          patchFeishuStatus({
-            status: "ready",
-            connected: true,
-            authenticated: true,
-            listenerReady: true,
-            subscriptionVerified: true,
-            lastChallengeAt: new Date().toISOString()
+        if (!lifecycle.active) return;
+        const now = lifecycle.now();
+        try {
+          const result = handleFeishuCallback({
+            rawBody: Buffer.concat(chunks),
+            headers: {
+              timestamp: request.headers["x-lark-request-timestamp"] as string | undefined,
+              nonce: request.headers["x-lark-request-nonce"] as string | undefined,
+              signature: request.headers["x-lark-signature"] as string | undefined
+            },
+            verificationToken: settings.verificationToken,
+            encryptKey: settings.encryptKey,
+            nowSeconds: Math.floor(now.getTime() / 1000),
+            persist: (record) => lifecycle.active && persist(record, lifecycle.memoryDataDir),
+            identityNamespace: settings.appId
           });
-        } else if (result.disposition === "accepted" && result.record) {
-          patchFeishuStatus({
-            status: "ready",
-            connected: true,
-            authenticated: true,
-            listenerReady: true,
-            subscriptionVerified: true,
-            lastMessageAt: new Date().toISOString(),
-            lastEventId: result.record.eventId
+          if (!lifecycle.active) return;
+          if (result.disposition === "challenge") {
+            patchRuntimeStatus({
+              status: "ready",
+              connected: true,
+              authenticated: true,
+              listenerReady: true,
+              subscriptionVerified: true,
+              lastChallengeAt: now.toISOString()
+            }, now);
+          } else if (result.disposition === "accepted" && result.record) {
+            patchRuntimeStatus({
+              status: "ready",
+              connected: true,
+              authenticated: true,
+              listenerReady: true,
+              subscriptionVerified: true,
+              lastMessageAt: now.toISOString(),
+              lastEventId: result.record.eventId
+            }, now);
+            deliver("feishu_message", result.record, {
+              feishuChatId: result.record.chatId,
+              feishuMessageId: result.record.messageId
+            });
+          } else if (result.disposition === "duplicate") {
+            appendRuntimeLog({
+              event: "duplicate_event_ignored",
+              message: "Ignored an already persisted Feishu event."
+            });
+          } else if (result.statusCode >= 400) {
+            appendRuntimeLog({
+              level: "warning",
+              event: "callback_rejected",
+              message: `Rejected Feishu callback: ${result.disposition}.`
+            });
+          }
+          response.writeHead(result.statusCode, {
+            "content-type": "application/json; charset=utf-8"
           });
-          forwardMessage("feishu_message", result.record, {
-            feishuChatId: result.record.chatId,
-            feishuMessageId: result.record.messageId
+          response.end(JSON.stringify(result.responseBody ?? {}));
+        } catch (error) {
+          if (!lifecycle.active) return;
+          const message = error instanceof Error ? error.message : String(error);
+          patchRuntimeStatus({
+            status: "failed",
+            listenerReady: server.listening,
+            lastError: message,
+            message: `飞书回调处理失败：${message}`
           });
-        } else if (result.disposition === "duplicate") {
-          appendAdapterLog("feishu", {
-            event: "duplicate_event_ignored",
-            message: "Ignored an already persisted Feishu event."
-          });
-        } else if (result.statusCode >= 400) {
-          appendAdapterLog("feishu", {
-            level: "warning",
-            event: "callback_rejected",
-            message: `Rejected Feishu callback: ${result.disposition}.`
-          });
+          appendRuntimeLog({ level: "error", event: "callback_failed", message });
+          if (!response.headersSent) response.writeHead(500).end();
         }
-        response.writeHead(result.statusCode, {
-          "content-type": "application/json; charset=utf-8"
-        });
-        response.end(JSON.stringify(result.responseBody ?? {}));
       });
-      server.listen(config.feishuWebhookPort, "127.0.0.1", () => {
-        const message = "飞书独立事件入口已监听，等待已配置的飞书应用完成 URL challenge 或投递事件。";
-        patchFeishuStatus({
-          status: "listening",
-          connected: false,
-          authenticated: true,
-          listenerReady: true,
-          subscriptionVerified: false,
-          message,
-          callbackPath: config.feishuWebhookPath,
-          callbackPort: config.feishuWebhookPort
-        });
-        appendAdapterLog("feishu", { event: "listening", message });
-      });
-      server.on("error", (error) => {
-        const message = `飞书事件入口未启动：${error.message}`;
-        patchFeishuStatus({
-          status: "failed",
-          connected: false,
-          authenticated: true,
-          listenerReady: false,
-          message
-        });
-        appendAdapterLog("feishu", {
-          level: "error",
-          event: "listener_failed",
-          message
+      const host = settings.host || "127.0.0.1";
+
+      return new Promise<MessageAdapterDispose>((resolve, reject) => {
+        let startupSettled = false;
+
+        const reportServerError = (error: Error, event: "listen_error" | "server_error") => {
+          if (!lifecycle.active && event === "server_error") return;
+          const message = event === "listen_error"
+            ? `飞书事件入口未启动：${error.message}`
+            : `飞书事件入口错误：${error.message}`;
+          try {
+            patchFeishuStatus({
+              status: "failed",
+              connected: false,
+              authenticated: true,
+              listenerReady: false,
+              lastError: error.message,
+              message
+            }, lifecycle.dataDir, lifecycle.now());
+          } catch (statusError) {
+            console.error("Failed to update Feishu status", statusError);
+          }
+          try {
+            appendLog({ level: "error", event, message });
+          } catch (logError) {
+            console.error("Failed to append Feishu error log", logError);
+          }
+        };
+
+        const onStartupError = (error: Error) => {
+          if (startupSettled) return;
+          startupSettled = true;
+          lifecycle.active = false;
+          reportServerError(error, "listen_error");
+          void closeFeishuServer(server).finally(() => reject(error));
+        };
+
+        server.once("error", onStartupError);
+        server.listen(settings.webhookPort, host, async () => {
+          if (startupSettled) return;
+          server.off("error", onStartupError);
+          const onServerError = (error: Error) => reportServerError(error, "server_error");
+          server.on("error", onServerError);
+          try {
+            const message = "飞书独立事件入口已监听，等待已配置的飞书应用完成 URL challenge 或投递事件。";
+            patchFeishuStatus({
+              status: "listening",
+              connected: false,
+              authenticated: true,
+              listenerReady: true,
+              subscriptionVerified: false,
+              message,
+              callbackPath: settings.webhookPath,
+              callbackPort: settings.webhookPort
+            }, lifecycle.dataDir, lifecycle.now());
+            appendLog({ event: "listening", message });
+            startupSettled = true;
+            let disposalPromise: Promise<void> | undefined;
+            resolve(() => {
+              if (!disposalPromise) {
+                disposalPromise = (async () => {
+                  lifecycle.active = false;
+                  server.off("error", onServerError);
+                  await closeFeishuServer(server);
+                  patchRuntimeStatus({
+                    status: "disabled",
+                    connected: false,
+                    authenticated: false,
+                    listenerReady: false,
+                    subscriptionVerified: false,
+                    message: "飞书消息端已停止。",
+                    callbackPath: settings.webhookPath,
+                    callbackPort: settings.webhookPort
+                  });
+                  appendRuntimeLog({ event: "disabled", message: "Feishu adapter disabled" });
+                })();
+              }
+              return disposalPromise;
+            });
+          } catch (error) {
+            startupSettled = true;
+            lifecycle.active = false;
+            server.off("error", onServerError);
+            await closeFeishuServer(server).catch(() => {});
+            const startupError = error instanceof Error ? error : new Error(String(error));
+            reportServerError(startupError, "listen_error");
+            reject(startupError);
+          }
         });
       });
     }

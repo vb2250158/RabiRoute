@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "migrate-message-adapter-lifecycle",
-  "currentStep": "通用 Webhook、Heartbeat、NapCat、WeCom 和 Weixin 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。Weixin 已验证长轮询取消、迟到结果失效、重复挂载，以及真实构建进程从 not_requested 经 Ctrl+C 写入 disabled。Feishu 与其他消息端仍使用兼容创建入口。",
-  "nextAction": "迁移 Feishu HTTP listener 生命周期，再处理其余兼容消息端和 Gateway 组合入口。",
+  "currentStep": "通用 Webhook、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。Feishu Fiber 持有 HTTP listener 与连接；启动等待 listener ready；端口冲突时拒绝挂载；卸载后阻止迟到请求写入状态、消息记录或触发 Forwarding，并释放端口；缺少配置时不创建 server。真实构建进程已验证 Feishu 从 listening 经 Ctrl+C 写入 disabled，并释放监听端口。",
+  "nextAction": "迁移其余兼容消息端，再处理 Gateway 组合入口。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -78,7 +78,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T13:16:37+08:00",
+  "updatedAt": "2026-08-21T13:49:00+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -93,6 +93,8 @@
     "Heartbeat",
     "NapCat",
     "WeCom",
-    "Weixin"
+    "Weixin",
+    "Feishu",
+    "HTTP listener"
   ]
 }

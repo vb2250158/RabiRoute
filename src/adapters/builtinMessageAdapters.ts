@@ -1,3 +1,4 @@
+import { createFeishuAdapter } from "./feishuAdapter.js";
 import { createHeartbeatAdapter } from "./heartbeatAdapter.js";
 import { createNapCatAdapter } from "./napcatAdapter.js";
 import { createWebhookAdapter } from "./webhookAdapter.js";
@@ -60,12 +61,24 @@ export const weixinMessageAdapterDefinition: MessageAdapterDefinition = {
   create: () => createWeixinAdapter()
 };
 
+export const feishuMessageAdapterDefinition: MessageAdapterDefinition = {
+  manifest: {
+    type: "feishu",
+    label: "飞书",
+    host: "gateway",
+    transport: "http",
+    lifecycle: "fiber"
+  },
+  create: () => createFeishuAdapter()
+};
+
 export function builtinMessageAdapterDefinitions(): MessageAdapterDefinition[] {
   return [
     webhookMessageAdapterDefinition,
     heartbeatMessageAdapterDefinition,
     napcatMessageAdapterDefinition,
     wecomMessageAdapterDefinition,
-    weixinMessageAdapterDefinition
+    weixinMessageAdapterDefinition,
+    feishuMessageAdapterDefinition
   ];
 }

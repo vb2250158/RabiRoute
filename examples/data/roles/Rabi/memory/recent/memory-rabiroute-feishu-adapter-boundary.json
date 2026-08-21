@@ -2,12 +2,29 @@
   "id": "memory-rabiroute-feishu-adapter-boundary",
   "title": "飞书使用独立企业应用消息端而不是通用 Webhook",
   "focus": "飞书事件验证、去重、上下文和回传边界",
-  "content": "飞书入口使用企业自建应用事件回调，处理 URL challenge，校验原始请求体签名和 Verification Token，并在配置 Encrypt Key 时解密。`im.message.receive_v1` 文本事件按 `event_id` 持久去重、按来源 `chat_id` 隔离上下文，Outbox 只在消息端策略允许时向来源 chat 回发文本。凭据或事件订阅确认缺失时监听与出站失败关闭，不回退到群机器人 Webhook。",
+  "content": "飞书入口使用企业自建应用事件回调，处理 URL challenge，校验原始请求体签名和 Verification Token，并在配置 Encrypt Key 时解密。`im.message.receive_v1` 文本事件按 `event_id` 持久去重、按来源 `chat_id` 隔离上下文，Outbox 只在消息端策略允许时向来源 chat 回发文本。飞书已进入 MessageAdapterRegistry，由 Fiber 持有 HTTP listener 与连接；启动等待 listener ready；端口冲突时拒绝挂载；卸载后阻止迟到请求写入状态、消息记录或触发 Forwarding，并关闭连接和 listener 释放端口；缺少配置时不创建 server。凭据或事件订阅确认缺失时监听与出站失败关闭，不回退到群机器人 Webhook。",
   "source": {
     "kind": "example",
     "summary": "公开示例近期记忆：飞书独立消息端的安全边界"
   },
   "createdAt": "2026-07-31T14:30:00+08:00",
-  "updatedAt": "2026-07-31T14:30:00+08:00",
-  "keywords": ["feishu", "飞书", "企业应用", "签名校验", "Verification Token", "Encrypt Key", "event_id", "chat_id", "持久去重", "Outbox", "失败关闭"]
+  "updatedAt": "2026-08-21T13:37:10+08:00",
+  "keywords": [
+    "feishu",
+    "飞书",
+    "企业应用",
+    "签名校验",
+    "Verification Token",
+    "Encrypt Key",
+    "event_id",
+    "chat_id",
+    "持久去重",
+    "Outbox",
+    "失败关闭",
+    "MessageAdapterRegistry",
+    "Fiber",
+    "HTTP listener",
+    "端口释放",
+    "迟到请求"
+  ]
 }

@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, Heartbeat, NapCat, WeCom, and Weixin slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
+> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, Heartbeat, NapCat, WeCom, Weixin, and Feishu slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -76,7 +76,7 @@ DSH uses pinned, renamed, and locally modified Cordis sources. RabiRoute does no
 | WebGUI | Vue application shell, login/connection, extension loading, safe rendering, and error boundaries | Pages, navigation, settings sections, status cards, commands, forms, themes, and resources |
 | Desktop | Desktop shell, Manager connection, extension catalog, security boundary, and window lifecycle | Tray menus, hotkeys, commands, settings sections, status cards, selection actions, notifications, and themes |
 
-The base distribution also mounts built-in plugins through a base bundle. Users can replace, disable, or add extensible features, while the boot kernel, security entrypoints, and fact owners remain protected from ordinary plugins.
+In the target state, the base distribution also mounts built-in plugins through a base bundle. Users will be able to replace, disable, or add extensible features, while the boot kernel, security entrypoints, and fact owners remain protected from ordinary plugins.
 
 ## Process and runtime model
 
@@ -209,7 +209,7 @@ type RabiUiContribution =
   | { kind: "theme"; id: string; resourceRoot: string };
 ```
 
-WebGUI and Desktop read the same Manager Contribution Catalog and render the entries supported by each platform. When a plugin unloads, its page entries, menus, hotkeys, and status cards disappear automatically.
+After Stages 4 and 5, WebGUI and Desktop will read the same Manager Contribution Catalog and render the entries supported by each platform. When a plugin unloads, its page entries, menus, hotkeys, and status cards will disappear automatically.
 
 ### Custom presentation code
 
@@ -324,9 +324,9 @@ Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
 ### Stage 2: complete message-side lifecycle
 
-Generic Webhook, Heartbeat, NapCat, WeCom, and Weixin now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, the NapCat Fiber owns all multi-instance OneBot WebSocket listeners and connected clients, the WeCom Fiber owns its inbound SDK client, and the Weixin Fiber owns one cancellation signal for QR requests, long polling, waits, and inbound media downloads. Disposal releases or aborts the corresponding resources, rejects stale results before they update state or deliver messages, and records `disabled`; partial activation rolls back created resources and records `error`. `src/index.ts` mounts registered message adapters first, while Feishu and the remaining adapters keep the compatibility creation entry.
+Generic Webhook, Heartbeat, NapCat, WeCom, Weixin, and Feishu now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, the NapCat Fiber owns all multi-instance OneBot WebSocket listeners and connected clients, the WeCom Fiber owns its inbound SDK client, the Weixin Fiber owns one cancellation signal for QR requests, long polling, waits, and inbound media downloads, and the Feishu Fiber owns its dedicated event-callback listener and active connections. Disposal releases or aborts the corresponding resources, rejects stale results before they update state, append messages, or deliver work, and records `disabled`; partial activation rolls back created resources and records `error`. `src/index.ts` mounts registered message adapters first, while the remaining adapters keep the compatibility creation entry.
 
-Tests cover Webhook port lifecycle, Heartbeat timer lifecycle, NapCat multi-instance resource cleanup, the WeCom SDK client lifecycle, and Weixin long-poll cancellation, stale-result rejection, and repeated mounting. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` and port release, and also verified Weixin `not_requested -> Ctrl+C -> disabled`. Stage 2 continues with Feishu and the remaining message adapters.
+Tests cover Webhook and Feishu port lifecycle, Heartbeat timer lifecycle, NapCat multi-instance resource cleanup, the WeCom SDK client lifecycle, and Weixin long-poll cancellation, stale-result rejection, and repeated mounting. Feishu also covers listener readiness, port conflicts, incomplete-request disposal, missing configuration, and same-port remounting. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` with port release, Weixin `not_requested -> Ctrl+C -> disabled`, and Feishu `listening -> Ctrl+C -> disabled` with port release. Stage 2 continues with the remaining compatibility adapters.
 
 ### Stage 3: Gateway Host
 
@@ -462,6 +462,17 @@ WeCom message parsing, message records, Route decisions, Forwarding, and Outbox 
 5. clear QR presentation state and record `disabled` on normal stop, while each remount creates a new long poll.
 
 Personal-Weixin secure sessions, login requests, sync cursors, message parsing, media decryption, Route decisions, Forwarding, and Outbox remain owned by the existing business modules. The Fiber owns only the runtime loop and reversible effects.
+
+## Seventh implementation slice: Feishu HTTP listener lifecycle
+
+1. register Feishu as an `http` Message Adapter Definition;
+2. complete `start()` only after the listener is ready, and reject Cordis mounting on a port conflict;
+3. invalidate the lifecycle before closing active connections and the listener on Fiber disposal, then record `disabled`;
+4. prevent incomplete requests from updating status, appending message records, or triggering Forwarding during disposal;
+5. remain `blocked` without creating an HTTP server when app credentials, Verification Token, Encrypt Key, or event-subscription confirmation is missing;
+6. write status and Adapter logs to the instance `dataDir`, and message records to `memoryDataDir`.
+
+Feishu signature verification, URL challenge, encrypted-callback decryption, persistent `event_id` deduplication, source `chat_id`, Route decisions, Forwarding, and Outbox remain owned by the existing business modules. The Fiber owns only the event listener and reversible effects.
 
 ## Readiness criteria
 

@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat、NapCat、WeCom 和 Weixin 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -76,7 +76,7 @@ DSH 使用固定、改名并带本地修改的 Cordis 源码。RabiRoute 不依�
 | WebGUI | Vue 应用壳、登录/连接、扩展加载、安全渲染和错误边界 | 页面、导航、设置区、状态卡片、命令、表单、主题和资源 |
 | Desktop | 桌面应用壳、Manager 连接、扩展目录、安全边界和窗口生命周期 | 托盘菜单、快捷键、命令、设置区、状态卡片、选择菜单、通知和主题 |
 
-基础发行版也通过“基础组合包”挂载内置插件。用户可以替换、停用或增加可扩展能力，但启动内核、安全入口和事实所有者不能被普通插件覆盖。
+目标状态下，基础发行版也通过“基础组合包”挂载内置插件。用户将可以替换、停用或增加可扩展能力，但启动内核、安全入口和事实所有者不能被普通插件覆盖。
 
 ## 进程与运行时模型
 
@@ -209,7 +209,7 @@ type RabiUiContribution =
   | { kind: "theme"; id: string; resourceRoot: string };
 ```
 
-WebGUI 和 Desktop 读取同一个 Manager Contribution Catalog，再按各自平台能力渲染。插件卸载后，相应页面入口、菜单、快捷键和状态卡片自动消失。
+阶段 4 和阶段 5 完成后，WebGUI 与 Desktop 将读取同一个 Manager Contribution Catalog，再按各自平台能力渲染。插件卸载后，相应页面入口、菜单、快捷键和状态卡片会自动消失。
 
 ### 自定义界面代码
 
@@ -324,9 +324,9 @@ plugins:
 
 ### 阶段 2：消息端完整生命周期
 
-通用 Webhook、Heartbeat、NapCat、WeCom 和 Weixin 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 持有入站 SDK 客户端；Weixin Fiber 持有二维码请求、长轮询、等待和入站媒体下载的取消信号。卸载会释放或中止对应资源、阻止迟到结果继续写状态或投递消息，并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，Feishu 和其他消息端继续走兼容创建入口。
+通用 Webhook、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 持有入站 SDK 客户端；Weixin Fiber 持有二维码请求、长轮询、等待和入站媒体下载的取消信号；Feishu Fiber 持有独立事件回调 listener 和现有连接。卸载会释放或中止对应资源、阻止迟到结果继续写状态、消息记录或投递，并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，其余消息端继续走兼容创建入口。
 
-测试已覆盖 Webhook 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收、WeCom 的 SDK 客户端生命周期，以及 Weixin 的长轮询取消、迟到结果失效和重复挂载。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放，也验证 Weixin 的 `not_requested -> Ctrl+C -> disabled`。阶段 2 下一步迁移 Feishu 和其余消息端。
+测试已覆盖 Webhook 和 Feishu 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收、WeCom 的 SDK 客户端生命周期，以及 Weixin 的长轮询取消、迟到结果失效和重复挂载。Feishu 还覆盖 listener 就绪、端口冲突、未完成请求卸载、缺少配置和同端口重新挂载。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放、Weixin 的 `not_requested -> Ctrl+C -> disabled`，以及 Feishu 的 `listening -> Ctrl+C -> disabled` 和端口释放。阶段 2 下一步迁移其余兼容消息端。
 
 ### 阶段 3：Gateway Host
 
@@ -462,6 +462,17 @@ QQ 消息解析、回复链、媒体保存、Route 判断、Forwarding 和 Outbo
 5. 正常停止清除二维码展示状态并写入 `disabled`，重新挂载创建新的长轮询。
 
 个人微信的安全会话、登录请求、同步游标、消息解析、媒体解密、Route 判断、Forwarding 和 Outbox 继续由现有业务模块拥有。Fiber 只管理运行循环和可撤销副作用。
+
+## 第七个实施切片：Feishu HTTP listener 生命周期
+
+1. 将 Feishu 注册为 `http` 类型的 Message Adapter Definition；
+2. `start()` 等待 listener 成功后才完成，端口冲突会拒绝 Cordis 挂载；
+3. Fiber 卸载先使生命周期失效，再关闭现有连接和 listener，并写入 `disabled`；
+4. 卸载期间未完成的请求不能写状态、消息记录或触发 Forwarding；
+5. 缺少应用凭据、Verification Token、Encrypt Key 或事件订阅确认时保持 `blocked`，不创建 HTTP server；
+6. 状态和 Adapter 日志写入该实例的 `dataDir`，消息记录写入 `memoryDataDir`。
+
+飞书签名校验、URL challenge、加密回调解密、`event_id` 持久去重、来源 `chat_id`、Route 判断、Forwarding 和 Outbox 继续由现有业务模块拥有。Fiber 只管理事件入口和可撤销副作用。
 
 ## 完成标准
 
