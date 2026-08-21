@@ -6,8 +6,10 @@ import {
   type RabiCordisFiber,
   type RabiCordisPlugin
 } from "./cordisHost.js";
+import { getBuiltinGatewayCordisRoot, type GatewayCordisRoot } from "./gatewayCordisRoot.js";
 
-const AGENT_ADAPTER_REGISTRY_SERVICE = "rabi.agentAdapters";
+export const AGENT_ADAPTER_REGISTRY_SERVICE = "rabi.agentAdapters";
+export const BUILTIN_AGENT_ADAPTER_RUNTIME_KEY = "rabi.runtime.agentAdapters.builtin";
 
 export class AgentAdapterRegistry {
   private readonly definitions = new Map<AgentAdapterType, AgentAdapterDefinition>();
@@ -48,6 +50,12 @@ export type AgentAdapterRuntime = {
   dispose(): Promise<void>;
 };
 
+export type AgentAdapterRuntimeMount = {
+  registry: AgentAdapterRegistry;
+  fibers: ReadonlyMap<AgentAdapterType, RabiCordisFiber>;
+  unmount(): Promise<void>;
+};
+
 const registryServicePlugin: RabiCordisPlugin = {
   name: "rabi:agent-adapter-registry",
   apply(ctx) {
@@ -66,22 +74,64 @@ function definitionPlugin(definition: AgentAdapterDefinition): RabiCordisPlugin 
   };
 }
 
+async function disposeFibers(fibers: readonly RabiCordisFiber[]): Promise<void> {
+  let firstError: unknown;
+  for (const fiber of [...fibers].reverse()) {
+    try {
+      await fiber.dispose();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+export async function mountAgentAdapterRuntime(
+  host: RabiCordisHost,
+  definitions: AgentAdapterDefinition[] = builtinAgentAdapterDefinitions()
+): Promise<AgentAdapterRuntimeMount> {
+  const ownedFibers: RabiCordisFiber[] = [];
+  try {
+    const registryFiber = await host.mount(registryServicePlugin);
+    ownedFibers.push(registryFiber);
+    const registry = host.context.get(AGENT_ADAPTER_REGISTRY_SERVICE, true) as AgentAdapterRegistry;
+    const fibers = new Map<AgentAdapterType, RabiCordisFiber>();
+    for (const definition of definitions) {
+      const fiber = await host.mount(definitionPlugin(definition));
+      ownedFibers.push(fiber);
+      fibers.set(definition.manifest.type, fiber);
+    }
+
+    let active = true;
+    return {
+      registry,
+      fibers,
+      async unmount() {
+        if (!active) return;
+        active = false;
+        await disposeFibers(ownedFibers);
+      }
+    };
+  } catch (error) {
+    await disposeFibers(ownedFibers).catch(() => {});
+    throw error;
+  }
+}
+
 export async function createAgentAdapterRuntime(
   definitions: AgentAdapterDefinition[] = builtinAgentAdapterDefinitions()
 ): Promise<AgentAdapterRuntime> {
   const host = new RabiCordisHost();
   try {
-    await host.mount(registryServicePlugin);
-    const registry = host.context.get(AGENT_ADAPTER_REGISTRY_SERVICE, true) as AgentAdapterRegistry;
-    const fibers = new Map<AgentAdapterType, RabiCordisFiber>();
-    for (const definition of definitions) {
-      const fiber = await host.mount(definitionPlugin(definition));
-      fibers.set(definition.manifest.type, fiber);
-    }
+    const mounted = await mountAgentAdapterRuntime(host, definitions);
+    let disposePromise: Promise<void> | undefined;
     return {
-      registry,
-      fibers,
-      dispose: () => host.dispose()
+      registry: mounted.registry,
+      fibers: mounted.fibers,
+      dispose() {
+        disposePromise ??= host.dispose();
+        return disposePromise;
+      }
     };
   } catch (error) {
     await host.dispose();
@@ -89,14 +139,15 @@ export async function createAgentAdapterRuntime(
   }
 }
 
-let builtinRuntimePromise: Promise<AgentAdapterRuntime> | undefined;
+export function ensureAgentAdapterRuntime(
+  root: GatewayCordisRoot
+): Promise<AgentAdapterRuntimeMount> {
+  return root.ensure(
+    BUILTIN_AGENT_ADAPTER_RUNTIME_KEY,
+    (host) => mountAgentAdapterRuntime(host)
+  );
+}
 
-export function getBuiltinAgentAdapterRuntime(): Promise<AgentAdapterRuntime> {
-  if (!builtinRuntimePromise) {
-    builtinRuntimePromise = createAgentAdapterRuntime().catch((error) => {
-      builtinRuntimePromise = undefined;
-      throw error;
-    });
-  }
-  return builtinRuntimePromise;
+export function getBuiltinAgentAdapterRuntime(): Promise<AgentAdapterRuntimeMount> {
+  return ensureAgentAdapterRuntime(getBuiltinGatewayCordisRoot());
 }

@@ -89,3 +89,30 @@ test("root Context disposal removes every plugin contribution", async () => {
   await host.dispose();
   assert.deepEqual(registry.catalog().contributions, []);
 });
+
+test("mounted Contribution runtime unmount preserves sibling Fibers", async () => {
+  const host = new RabiCordisHost();
+  let siblingActive = 0;
+  await host.mount({
+    name: "test:contribution-runtime-sibling",
+    apply(ctx) {
+      ctx.effect(() => {
+        siblingActive += 1;
+        return () => { siblingActive -= 1; };
+      });
+    }
+  });
+
+  const { mountContributionRuntime } = await import("./contributionRuntime.js");
+  const runtime = await mountContributionRuntime(host, [
+    contributionPlugin("builtin:mounted", sharedContributions)
+  ]);
+  assert.equal(runtime.registry.catalog().contributions.length, 3);
+
+  await runtime.unmount();
+  assert.deepEqual(runtime.registry.catalog().contributions, []);
+  assert.equal(siblingActive, 1);
+
+  await host.dispose();
+  assert.equal(siblingActive, 0);
+});

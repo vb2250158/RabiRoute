@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的全部常驻 Gateway 消息端生命周期和宿主类型拆分已实施；单一 Gateway 根 Context、Manager 插件目录与多宿主表现扩展仍在进行。
+> 状态：重构进行中。阶段 0、阶段 1、Contribution Registry 合同、全部常驻 Gateway 消息端生命周期、宿主类型拆分，以及单一 Gateway 根 Context 与命令分发切片已完成；Manager Plugin Runtime、统一 Plugin Catalog API 与多宿主表现扩展待实施。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -100,7 +100,7 @@ Manager Process
           └─ Gateway Cordis Context
 ```
 
-第一阶段沿用“一条 Route 对应一个 Gateway 子进程”。Gateway 根 Context 已隔离 Route，不增加无用的 Route 子 Context。
+第一阶段沿用“一条 Route 对应一个 Gateway 子进程”。每个常驻 Gateway 只创建一个根 Context，并在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry，不再为三个注册表创建彼此独立的 Host。
 
 WebGUI 是独立 JavaScript 运行时，可以在后续阶段拥有客户端 Extension Host。Desktop 当前是独立 Python/Qt 运行时，不强行移植 Cordis；它通过与 Manager 共享的插件清单和贡献协议实现相同组合语义。
 
@@ -223,7 +223,7 @@ type RabiUiContribution =
 - 加载失败时保留宿主壳和其他扩展；
 - 第三方扩展不能覆盖登录、安全、更新和故障恢复入口。
 
-DSH 的普通 profile 插件实际以 Node ESM 进入主进程；其 `isolate` 是服务 realm，模型动态 Host 插件使用的 `node:vm` 也明确不是安全封闭。这里的独立进程策略是 RabiRoute 对未知或高风险代码增加的安全设计，证据见[DSH 如何使用 Cordis：运行时、界面与隔离分析](dsh-cordis-runtime-analysis.md)。
+DSH 的普通 profile 插件通过 Node ESM 在主进程内运行；Cordis `isolate` 隔离服务作用域，不提供进程隔离，模型动态 Host 插件使用的 `node:vm` 也不是安全沙箱。RabiRoute 对未知或高风险插件增加可选独立进程策略，证据见[DSH 如何使用 Cordis：运行时、界面与隔离分析](dsh-cordis-runtime-analysis.md)。
 
 这样保留“一切产品能力皆可扩展”，同时避免第一阶段把任意代码注入关键宿主。
 
@@ -503,6 +503,16 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 6. 一次性 `speech`、`rolePanel`、`wearable` 和 Remote Agent 投递仍读取完整 Route 入口与策略。
 
 该拆分固定“消息来源事实”与“常驻插件生命周期”两个不同合同。WebGUI 使用同一 Gateway 类型判断，不再把 Wearable 状态误判为等待 Gateway 进程。
+
+## 第十一个实施切片：单一 Gateway 根 Context 与命令分发
+
+1. `src/index.ts` 只识别调用类型并动态加载对应模块，不再同时承担一次性命令和常驻 Gateway 生命周期；
+2. 常驻 Gateway 使用单一 Cordis 根 Context，在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；
+3. 一次性告警、回放、手动触发、角色面板、计划反馈、语音和 Direct Agent Envelope 命令直接进入命令实现，不能启动 Message Adapter Runtime 或 Contribution Runtime；
+4. 常驻 Gateway 的正常退出和启动失败都销毁整个根 Context，由各 Registry Fiber 撤销自身监听器、定时器和注册项；
+5. WebGUI 与 Desktop 是可扩展的最小宿主。扩展者通过贡献插件增加页面、操作、状态或设置，表现入口仍属于插件体系。
+
+`create-gateway-host` 已完成。下一阶段建立 Manager Plugin Runtime 和统一 Plugin Catalog API。
 
 ## 完成标准
 

@@ -3,12 +3,12 @@ import type { AgentAdapterType } from "./types.js";
 
 export type { AgentAdapter, AgentDeliveryOptions } from "./contracts.js";
 
-const builtinRuntime = await getBuiltinAgentAdapterRuntime();
-
-export function createAgentAdapter(type: AgentAdapterType) {
-  return builtinRuntime.registry.create(type);
+export async function createAgentAdapter(type: AgentAdapterType) {
+  const runtime = await getBuiltinAgentAdapterRuntime();
+  return runtime.registry.create(type);
 }
 
-export function listRegisteredAgentAdapterManifests() {
-  return builtinRuntime.registry.listManifests();
+export async function listRegisteredAgentAdapterManifests() {
+  const runtime = await getBuiltinAgentAdapterRuntime();
+  return runtime.registry.listManifests();
 }

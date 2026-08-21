@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "create-gateway-host",
-  "currentStep": "全部九种常驻 Gateway 消息端已进入 MessageAdapterRegistry。MessageEndpointType 负责 Route、记录、扫描和一次性投递的完整来源合同；GatewayMessageAdapterType 只负责可由 Fiber 挂载的常驻插件。Gateway 已删除占位工厂、兼容创建工厂和 legacyDisposers。纯 speech、rolePanel、wearable 或 remoteAgent Route 不再启动子进程，混合 Route 只向常驻进程传入 Gateway 子集。",
-  "nextAction": "建立单一 Gateway 根 Context，让 Agent Adapter Registry、MessageAdapterRegistry 和 Contribution Registry 由同一组合入口挂载、查询和销毁，并把 src/index.ts 拆成命令分发与 gatewayMain。",
+  "currentStepId": "create-manager-contribution-catalog",
+  "currentStep": "create-gateway-host 已完成：常驻 Gateway 使用单一 Cordis 根 Context，在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；src/index.ts 只分发一次性命令与常驻入口，一次性命令不启动 Message Adapter Runtime 或 Contribution Runtime。",
+  "nextAction": "建立 Manager Plugin Runtime 和统一 Plugin Catalog API。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -48,12 +48,13 @@
     {
       "id": "create-gateway-host",
       "title": "让 Gateway 入口只组合插件和管理根 Context",
-      "status": "进行中"
+      "status": "已完成",
+      "completedAt": "2026-08-21T16:16:43+08:00"
     },
     {
       "id": "create-manager-contribution-catalog",
-      "title": "建立 Manager 插件与多宿主贡献目录",
-      "status": "未开始"
+      "title": "建立 Manager Plugin Runtime 和统一 Plugin Catalog API",
+      "status": "进行中"
     },
     {
       "id": "extend-webgui-desktop",
@@ -79,7 +80,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T15:44:54+08:00",
+  "updatedAt": "2026-08-21T16:16:43+08:00",
   "keywords": [
     "Cordis",
     "plugin",

@@ -12,7 +12,7 @@ import {
   type RabiCordisPlugin
 } from "./cordisHost.js";
 
-const MESSAGE_ADAPTER_REGISTRY_SERVICE = "rabi.messageAdapters";
+export const MESSAGE_ADAPTER_REGISTRY_SERVICE = "rabi.messageAdapters";
 
 export class MessageAdapterRegistry {
   private readonly definitions = new Map<GatewayMessageAdapterType, MessageAdapterDefinition>();
@@ -60,6 +60,13 @@ export type MessageAdapterRuntime = {
   dispose(): Promise<void>;
 };
 
+export type MessageAdapterRuntimeMount = {
+  registry: MessageAdapterRegistry;
+  definitionFibers: ReadonlyMap<GatewayMessageAdapterType, RabiCordisFiber>;
+  mount(type: GatewayMessageAdapterType): Promise<MountedMessageAdapter>;
+  unmount(): Promise<void>;
+};
+
 const registryServicePlugin: RabiCordisPlugin = {
   name: "rabi:message-adapter-registry",
   apply(ctx) {
@@ -98,34 +105,55 @@ function instancePlugin(type: GatewayMessageAdapterType): RabiCordisPlugin {
   };
 }
 
-export async function createMessageAdapterRuntime(
+async function disposeFibers(fibers: readonly RabiCordisFiber[]): Promise<void> {
+  let firstError: unknown;
+  for (const fiber of [...fibers].reverse()) {
+    try {
+      await fiber.dispose();
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+export async function mountMessageAdapterRuntime(
+  host: RabiCordisHost,
   definitions: MessageAdapterDefinition[] = builtinMessageAdapterDefinitions()
-): Promise<MessageAdapterRuntime> {
-  const host = new RabiCordisHost();
+): Promise<MessageAdapterRuntimeMount> {
+  const ownedFibers: RabiCordisFiber[] = [];
   const mounted = new Map<GatewayMessageAdapterType, MountedMessageAdapter>();
+  let active = true;
+
   try {
-    await host.mount(registryServicePlugin);
+    const registryFiber = await host.mount(registryServicePlugin);
+    ownedFibers.push(registryFiber);
     const registry = host.context.get(MESSAGE_ADAPTER_REGISTRY_SERVICE, true) as MessageAdapterRegistry;
     const definitionFibers = new Map<GatewayMessageAdapterType, RabiCordisFiber>();
     for (const definition of definitions) {
       const fiber = await host.mount(definitionPlugin(definition));
+      ownedFibers.push(fiber);
       definitionFibers.set(definition.manifest.type, fiber);
     }
+
     return {
       registry,
       definitionFibers,
       async mount(type) {
+        if (!active) {
+          throw new Error("Message adapter runtime is unmounted.");
+        }
         if (mounted.has(type)) {
           throw new Error(`Message adapter already mounted: ${type}`);
         }
         const fiber = await host.mount(instancePlugin(type));
-        let active = true;
+        let instanceActive = true;
         const instance: MountedMessageAdapter = {
           type,
           fiber,
           async dispose() {
-            if (!active) return;
-            active = false;
+            if (!instanceActive) return;
+            instanceActive = false;
             if (mounted.get(type) === instance) {
               mounted.delete(type);
             }
@@ -135,9 +163,45 @@ export async function createMessageAdapterRuntime(
         mounted.set(type, instance);
         return instance;
       },
-      async dispose() {
+      async unmount() {
+        if (!active) return;
+        active = false;
+        let firstError: unknown;
+        try {
+          await disposeFibers([...mounted.values()].map((instance) => instance.fiber));
+        } catch (error) {
+          firstError = error;
+        }
         mounted.clear();
-        await host.dispose();
+        try {
+          await disposeFibers(ownedFibers);
+        } catch (error) {
+          firstError ??= error;
+        }
+        if (firstError) throw firstError;
+      }
+    };
+  } catch (error) {
+    active = false;
+    await disposeFibers(ownedFibers).catch(() => {});
+    throw error;
+  }
+}
+
+export async function createMessageAdapterRuntime(
+  definitions: MessageAdapterDefinition[] = builtinMessageAdapterDefinitions()
+): Promise<MessageAdapterRuntime> {
+  const host = new RabiCordisHost();
+  try {
+    const mounted = await mountMessageAdapterRuntime(host, definitions);
+    let disposePromise: Promise<void> | undefined;
+    return {
+      registry: mounted.registry,
+      definitionFibers: mounted.definitionFibers,
+      mount: mounted.mount,
+      dispose() {
+        disposePromise ??= host.dispose();
+        return disposePromise;
       }
     };
   } catch (error) {

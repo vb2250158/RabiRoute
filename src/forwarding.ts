@@ -588,8 +588,8 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   return routeKind === "private" ? "private" : "group_mention";
 }
 
-function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = []): Promise<void> {
-  const adapter = createAgentAdapter(type);
+async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = []): Promise<void> {
+  const adapter = await createAgentAdapter(type);
   return measurePerformanceOperation(
     `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
     () => adapter.deliver(envelope, imagePaths.length ? { imagePaths } : undefined)

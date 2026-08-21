@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, all resident Gateway message-adapter lifecycles, and the host-type split in Stage 2 are implemented. The single Gateway root Context, Manager plugin catalog, and multi-host presentation extensions remain in progress.
+> Status: refactor in progress. Stage 0, Stage 1, the Contribution Registry contract, all resident Gateway message-adapter lifecycles, the host-type split, and the single Gateway root Context plus command-dispatch slice are complete. Manager Plugin Runtime, the unified Plugin Catalog API, and multi-host presentation extensions remain to be implemented.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -100,7 +100,7 @@ Manager Process
           └─ Gateway Cordis Context
 ```
 
-Stage 1 preserves the current one-Route-per-Gateway process model. The Gateway root Context already isolates the Route, so it does not add a redundant Route child Context.
+Stage 1 preserves the current one-Route-per-Gateway process model. Each resident Gateway creates one root Context and mounts the Agent Adapter Registry, Message Adapter Registry, and Contribution Registry under that same root instead of creating separate Hosts for the three registries.
 
 WebGUI is an independent JavaScript runtime and may gain a client Extension Host later. Desktop is currently an independent Python/Qt runtime and is not forced to port Cordis. It implements the same composition semantics through the shared manifest and contribution protocol exposed by Manager.
 
@@ -223,7 +223,7 @@ When declarative contributions are insufficient, later stages support `web-exten
 - a load failure preserves the host shell and other extensions;
 - third-party extensions cannot replace login, security, update, or recovery entrypoints.
 
-Ordinary DSH profile plugins enter the main process through Node ESM. Its `isolate` is a service realm, and the `node:vm` used for model-written Host plugins is explicitly not containment. The separate-process policy here is RabiRoute security hardening for unknown or high-risk code. See [How DSH Uses Cordis: Runtime, UI, and Isolation Analysis](dsh-cordis-runtime-analysis_en.md) for the evidence.
+Ordinary DSH profile plugins run in the main process through Node ESM. Cordis `isolate` separates service scope rather than processes, and the `node:vm` used for model-written Host plugins is not a security sandbox. RabiRoute adds an optional separate-process policy for unknown or high-risk plugins. See [How DSH Uses Cordis: Runtime, UI, and Isolation Analysis](dsh-cordis-runtime-analysis_en.md) for the evidence.
 
 This preserves extensibility for all product capabilities without injecting arbitrary code into critical hosts during the first stage.
 
@@ -503,6 +503,16 @@ RabiLink message parsing, conversation records, health observations, Route decis
 6. one-shot `speech`, `rolePanel`, `wearable`, and Remote Agent delivery still reads the complete Route endpoint set and policies.
 
 This split gives message-source facts and resident plugin lifecycles separate contracts. WebGUI uses the same Gateway type predicate and no longer treats Wearable status as waiting for a Gateway process.
+
+## Eleventh implementation slice: single Gateway root Context and command dispatch
+
+1. `src/index.ts` only classifies the invocation and dynamically loads the matching module; it no longer owns both one-shot commands and the resident Gateway lifecycle;
+2. the resident Gateway uses one Cordis root Context and mounts the Agent Adapter Registry, Message Adapter Registry, and Contribution Registry under that root;
+3. one-shot alert, replay, manual-trigger, role-panel, plan-feedback, speech, and Direct Agent Envelope commands enter their command implementation without starting the Message Adapter Runtime or Contribution Runtime;
+4. normal resident shutdown and startup failure both dispose the whole root Context, allowing each Registry Fiber to remove its listeners, timers, and registrations;
+5. WebGUI and Desktop are extensible minimal hosts. Extension authors add pages, actions, status, or settings through contribution plugins, so presentation entries remain inside the plugin model.
+
+`create-gateway-host` is complete. The next stage establishes the Manager Plugin Runtime and unified Plugin Catalog API.
 
 ## Readiness criteria
 

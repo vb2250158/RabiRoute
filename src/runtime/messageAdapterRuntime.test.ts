@@ -248,3 +248,62 @@ test("duplicate Message Adapter definitions fail registration", async () => {
     /Message adapter already registered: webhook/
   );
 });
+
+test("shared Host Message runtime unmount releases adapters and preserves sibling Fibers", async () => {
+  const { RabiCordisHost } = await import("./cordisHost.js");
+  const { mountMessageAdapterRuntime } = await import("./messageAdapterRuntime.js");
+  resetGatewayStatus();
+  const host = new RabiCordisHost();
+  let siblingActive = 0;
+  await host.mount({
+    name: "test:message-runtime-sibling",
+    apply(ctx) {
+      ctx.effect(() => {
+        siblingActive += 1;
+        return () => { siblingActive -= 1; };
+      });
+    }
+  });
+
+  const port = await freePort();
+  const runtime = await mountMessageAdapterRuntime(host, [definition(profile(port))]);
+  await runtime.mount("webhook");
+  assert.equal((await get(port, "/runtime-test")).statusCode, 200);
+
+  await runtime.unmount();
+  const portProbe = http.createServer();
+  await listen(portProbe, port);
+  await close(portProbe);
+  assert.deepEqual(runtime.registry.listManifests(), []);
+  assert.equal(siblingActive, 1);
+
+  await host.dispose();
+  assert.equal(siblingActive, 0);
+});
+
+test("shared Host Message registration failure rolls back only the Message slice", async () => {
+  const { RabiCordisHost } = await import("./cordisHost.js");
+  const {
+    MESSAGE_ADAPTER_REGISTRY_SERVICE,
+    mountMessageAdapterRuntime
+  } = await import("./messageAdapterRuntime.js");
+  const host = new RabiCordisHost();
+  let siblingActive = true;
+  await host.mount({
+    name: "test:message-runtime-rollback-sibling",
+    apply(ctx) {
+      ctx.effect(() => () => { siblingActive = false; });
+    }
+  });
+
+  const port = await freePort();
+  const duplicate = definition(profile(port));
+  await assert.rejects(
+    mountMessageAdapterRuntime(host, [duplicate, duplicate]),
+    /Message adapter already registered: webhook/
+  );
+  assert.equal(host.context.get(MESSAGE_ADAPTER_REGISTRY_SERVICE), undefined);
+  assert.equal(siblingActive, true);
+  await host.dispose();
+  assert.equal(siblingActive, false);
+});
