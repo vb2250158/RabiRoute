@@ -15,35 +15,33 @@ export type RabiContributionBase = {
   requiredCapabilities?: readonly string[];
 };
 
-export type RabiManagerAction = {
-  method: "POST" | "PUT" | "PATCH" | "DELETE";
-  endpoint: string;
-  body?: Record<string, unknown>;
-};
+export type RabiCommandDangerLevel = "safe" | "confirm" | "dangerous";
 
 export type RabiUiContribution =
   | (RabiContributionBase & {
     kind: "navigation";
     label: RabiContributionLabel;
-    target: string;
-    routeScoped?: boolean;
+    routeId: string;
   })
   | (RabiContributionBase & {
     kind: "settings-section";
     label: RabiContributionLabel;
-    schema: Record<string, unknown>;
-    endpoint: string;
+    rendererId: string;
+    schemaId: string;
+    readCommandId: string;
+    writeCommandId: string;
   })
   | (RabiContributionBase & {
     kind: "status-card";
     label: RabiContributionLabel;
-    query: string;
-    renderer: string;
+    queryId: string;
+    rendererId: string;
   })
   | (RabiContributionBase & {
     kind: "command";
     label: RabiContributionLabel;
-    action: RabiManagerAction;
+    handlerId: string;
+    dangerLevel?: RabiCommandDangerLevel;
   })
   | (RabiContributionBase & {
     kind: "tray-menu";
@@ -59,7 +57,9 @@ export type RabiUiContribution =
   | (RabiContributionBase & {
     kind: "theme";
     label: RabiContributionLabel;
-    resourceRoot: string;
+    themeId: string;
+    webResourceId?: string;
+    desktopResourceId?: string;
   });
 
 export type RabiContributionRecord = RabiUiContribution & {
@@ -96,26 +96,108 @@ function cloneContribution<T extends RabiUiContribution | RabiContributionRecord
   return cloneValue(value);
 }
 
-function normalizeContribution(value: RabiUiContribution): RabiUiContribution {
-  const normalized = cloneContribution(value);
-  normalized.id = normalizeIdentity(normalized.id, "Contribution id");
-  normalized.surface = normalizeIdentity(normalized.surface, `Contribution surface (${normalized.id})`);
-  normalized.slot = normalizeIdentity(normalized.slot, `Contribution slot (${normalized.id})`);
-  normalized.label = {
-    key: normalized.label.key?.trim() || undefined,
-    fallback: normalizeIdentity(normalized.label.fallback, `Contribution label fallback (${normalized.id})`)
-  };
-  normalized.requiredCapabilities = normalized.requiredCapabilities?.map(capability => capability.trim());
+function normalizeSymbol(value: string, field: string): string {
+  const normalized = normalizeIdentity(value, field);
+  if (!/^[a-z0-9][a-z0-9._:-]*$/i.test(normalized)) {
+    throw new Error(`${field} contains unsupported characters.`);
+  }
   return normalized;
 }
 
-function validateContribution(value: RabiUiContribution): void {
-  normalizeIdentity(value.id, "Contribution id");
-  normalizeIdentity(value.surface, `Contribution surface (${value.id})`);
-  normalizeIdentity(value.slot, `Contribution slot (${value.id})`);
-  if (!value.label.fallback.trim()) {
-    throw new Error(`Contribution label fallback is required: ${value.id}`);
+function normalizeOptionalSymbol(value: string | undefined, field: string): string | undefined {
+  return value === undefined ? undefined : normalizeSymbol(value, field);
+}
+
+function normalizeOptionalText(value: string | undefined, field: string, maximumLength: number): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = normalizeIdentity(value, field);
+  if (normalized.length > maximumLength || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error(`${field} contains unsupported characters.`);
   }
+  return normalized;
+}
+
+function normalizeContribution(value: RabiUiContribution): RabiUiContribution {
+  const id = normalizeSymbol(value.id, "Contribution id");
+  const base = {
+    id,
+    label: {
+      key: normalizeOptionalSymbol(value.label.key, `Contribution label key (${id})`),
+      fallback: normalizeIdentity(value.label.fallback, `Contribution label fallback (${id})`)
+    },
+    hosts: value.hosts.map(host => normalizeIdentity(host, `Contribution host (${id})`) as RabiContributionHost),
+    surface: normalizeSymbol(value.surface, `Contribution surface (${id})`),
+    slot: normalizeSymbol(value.slot, `Contribution slot (${id})`),
+    ...(value.order === undefined ? {} : { order: value.order }),
+    ...(value.icon === undefined ? {} : { icon: normalizeSymbol(value.icon, `Contribution icon (${id})`) }),
+    ...(value.requiredCapabilities === undefined ? {} : {
+      requiredCapabilities: value.requiredCapabilities.map(capability =>
+        normalizeSymbol(capability, `Contribution required capability (${id})`)
+      )
+    })
+  };
+
+  switch (value.kind) {
+    case "navigation":
+      return {
+        ...base,
+        kind: "navigation",
+        routeId: normalizeSymbol(value.routeId, `Contribution routeId (${id})`)
+      };
+    case "settings-section":
+      return {
+        ...base,
+        kind: "settings-section",
+        rendererId: normalizeSymbol(value.rendererId, `Contribution rendererId (${id})`),
+        schemaId: normalizeSymbol(value.schemaId, `Contribution schemaId (${id})`),
+        readCommandId: normalizeSymbol(value.readCommandId, `Contribution readCommandId (${id})`),
+        writeCommandId: normalizeSymbol(value.writeCommandId, `Contribution writeCommandId (${id})`)
+      };
+    case "status-card":
+      return {
+        ...base,
+        kind: "status-card",
+        queryId: normalizeSymbol(value.queryId, `Contribution queryId (${id})`),
+        rendererId: normalizeSymbol(value.rendererId, `Contribution rendererId (${id})`)
+      };
+    case "command":
+      return {
+        ...base,
+        kind: "command",
+        handlerId: normalizeSymbol(value.handlerId, `Contribution handlerId (${id})`),
+        dangerLevel: value.dangerLevel ?? "safe"
+      };
+    case "tray-menu":
+      return {
+        ...base,
+        kind: "tray-menu",
+        commandId: normalizeSymbol(value.commandId, `Contribution commandId (${id})`)
+      };
+    case "hotkey":
+      return {
+        ...base,
+        kind: "hotkey",
+        commandId: normalizeSymbol(value.commandId, `Contribution commandId (${id})`),
+        ...(value.defaultBinding === undefined ? {} : {
+          defaultBinding: normalizeOptionalText(value.defaultBinding, `Contribution defaultBinding (${id})`, 80)
+        })
+      };
+    case "theme":
+      return {
+        ...base,
+        kind: "theme",
+        themeId: normalizeSymbol(value.themeId, `Contribution themeId (${id})`),
+        ...(value.webResourceId === undefined ? {} : {
+          webResourceId: normalizeSymbol(value.webResourceId, `Contribution webResourceId (${id})`)
+        }),
+        ...(value.desktopResourceId === undefined ? {} : {
+          desktopResourceId: normalizeSymbol(value.desktopResourceId, `Contribution desktopResourceId (${id})`)
+        })
+      };
+  }
+}
+
+function validateContribution(value: RabiUiContribution): void {
   if (value.hosts.length === 0) throw new Error(`Contribution hosts are required: ${value.id}`);
   if (value.hosts.some(host => host !== "web" && host !== "desktop")) {
     throw new Error(`Contribution host is unsupported: ${value.id}`);
@@ -123,12 +205,29 @@ function validateContribution(value: RabiUiContribution): void {
   if (new Set(value.hosts).size !== value.hosts.length) {
     throw new Error(`Contribution hosts contain duplicates: ${value.id}`);
   }
-  const capabilities = value.requiredCapabilities ?? [];
-  if (capabilities.some(capability => !capability.trim())) {
-    throw new Error(`Contribution required capability is empty: ${value.id}`);
+  if (value.order !== undefined && !Number.isSafeInteger(value.order)) {
+    throw new Error(`Contribution order is unsupported: ${value.id}`);
   }
+  const capabilities = value.requiredCapabilities ?? [];
   if (new Set(capabilities).size !== capabilities.length) {
     throw new Error(`Contribution required capabilities contain duplicates: ${value.id}`);
+  }
+  if (value.kind === "command" && !["safe", "confirm", "dangerous"].includes(value.dangerLevel ?? "safe")) {
+    throw new Error(`Contribution danger level is unsupported: ${value.id}`);
+  }
+}
+
+function validateContributionRelationships(contributions: readonly RabiUiContribution[]): void {
+  const commandIds = new Set(
+    contributions.filter(contribution => contribution.kind === "command").map(contribution => contribution.id)
+  );
+  for (const contribution of contributions) {
+    if ((contribution.kind === "tray-menu" || contribution.kind === "hotkey")
+      && !commandIds.has(contribution.commandId)) {
+      throw new Error(
+        `Contribution command reference is missing from the same registration batch: ${contribution.kind}:${contribution.id} -> ${contribution.commandId}`
+      );
+    }
   }
 }
 
@@ -153,6 +252,7 @@ export class ContributionRegistry {
     const owner = normalizeIdentity(pluginId, "Contribution pluginId");
     const ownerInstance = normalizeIdentity(instanceId, "Contribution instanceId");
     const normalizedContributions = contributions.map(normalizeContribution);
+    validateContributionRelationships(normalizedContributions);
     const keys = new Set<string>();
     for (const contribution of normalizedContributions) {
       validateContribution(contribution);

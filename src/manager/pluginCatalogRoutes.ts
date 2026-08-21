@@ -39,7 +39,7 @@ export function handlePluginCatalogApi(
   jsonResponse(response, 200, {
     code: 0,
     data: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       host: host ?? "all",
       revision: {
         plugins: plugins.revision,

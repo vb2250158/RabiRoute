@@ -62,25 +62,48 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))];
 }
 
+const PLUGIN_HOSTS = new Set<RabiPluginHost>(["manager", "gateway", "web", "desktop", "worker"]);
+const PLUGIN_KINDS = new Set<RabiPluginKind>(["builtin", "package", "external-process"]);
+
+function normalizePluginHost(value: string, field: string): RabiPluginHost {
+  const normalized = required(value, field) as RabiPluginHost;
+  if (!PLUGIN_HOSTS.has(normalized)) throw new Error(`${field} is unsupported: ${normalized}`);
+  return normalized;
+}
+
+function normalizePluginKind(value: string, field: string): RabiPluginKind {
+  const normalized = required(value, field) as RabiPluginKind;
+  if (!PLUGIN_KINDS.has(normalized)) throw new Error(`${field} is unsupported: ${normalized}`);
+  return normalized;
+}
+
 function uniqueHosts(values: readonly RabiPluginHost[]): RabiPluginHost[] {
-  return [...new Set(values)];
+  return [...new Set(values.map(value => normalizePluginHost(value, "Plugin manifest host")))];
 }
 
 function cloneManifest(manifest: RabiPluginManifest): RabiPluginManifest {
   return {
-    ...manifest,
-    hosts: [...manifest.hosts],
-    capabilities: manifest.capabilities ? [...manifest.capabilities] : undefined
+    id: required(manifest.id, "Plugin manifest id"),
+    name: required(manifest.name, "Plugin manifest name"),
+    version: required(manifest.version, "Plugin manifest version"),
+    kind: normalizePluginKind(manifest.kind, "Plugin manifest kind"),
+    hosts: uniqueHosts(manifest.hosts),
+    ...(manifest.capabilities ? { capabilities: unique(manifest.capabilities) } : {})
   };
 }
 
 function cloneRecord(record: RabiPluginInstanceRecord): RabiPluginCatalogEntry {
-  const { sequence: _sequence, ...value } = record;
   return {
-    ...value,
-    manifest: cloneManifest(value.manifest),
-    missingCapabilities: [...value.missingCapabilities],
-    error: value.error ? { ...value.error } : undefined
+    instanceId: record.instanceId,
+    pluginId: record.pluginId,
+    manifest: cloneManifest(record.manifest),
+    host: record.host,
+    scope: record.scope,
+    status: record.status,
+    missingCapabilities: [...record.missingCapabilities],
+    ...(record.startedAt ? { startedAt: record.startedAt } : {}),
+    ...(record.stoppedAt ? { stoppedAt: record.stoppedAt } : {}),
+    ...(record.error ? { error: { ...record.error } } : {})
   };
 }
 
@@ -131,31 +154,23 @@ export class PluginCatalog {
 
   declare(declaration: RabiPluginInstanceDeclaration): RabiPluginCatalogEntry {
     const instanceId = required(declaration.instanceId, "Plugin instanceId");
-    const pluginId = required(declaration.manifest.id, "Plugin manifest id");
+    const manifest = cloneManifest(declaration.manifest);
+    const pluginId = manifest.id;
+    const host = normalizePluginHost(declaration.host, "Plugin host");
     if (this.records.has(instanceId)) {
       throw new Error(`Plugin instance already declared: ${instanceId}`);
     }
 
-    const hosts = uniqueHosts(declaration.manifest.hosts);
-    if (!hosts.includes(declaration.host)) {
-      throw new Error(`Plugin manifest does not support host ${declaration.host}: ${pluginId}`);
+    if (!manifest.hosts.includes(host)) {
+      throw new Error(`Plugin manifest does not support host ${host}: ${pluginId}`);
     }
 
     const missingCapabilities = unique(declaration.missingCapabilities ?? []);
     const record: RabiPluginInstanceRecord = {
       instanceId,
       pluginId,
-      manifest: cloneManifest({
-        ...declaration.manifest,
-        id: pluginId,
-        name: required(declaration.manifest.name, "Plugin manifest name"),
-        version: required(declaration.manifest.version, "Plugin manifest version"),
-        hosts,
-        capabilities: declaration.manifest.capabilities
-          ? unique(declaration.manifest.capabilities)
-          : undefined
-      }),
-      host: declaration.host,
+      manifest,
+      host,
       scope: required(declaration.scope ?? "global", "Plugin scope"),
       status: missingCapabilities.length ? "waiting_dependency" : "inactive",
       missingCapabilities,

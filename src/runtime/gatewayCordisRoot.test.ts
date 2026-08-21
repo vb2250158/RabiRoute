@@ -51,7 +51,7 @@ const testContribution = {
   label: { key: "nav.sharedRoot", fallback: "Shared root" },
   surface: "web.navigation",
   slot: "utility",
-  target: "/shared-root",
+  routeId: "route.shared-root",
   hosts: ["web"] as const
 };
 

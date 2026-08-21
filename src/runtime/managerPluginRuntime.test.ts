@@ -15,7 +15,7 @@ type DefinitionOptions = {
 
 function definition(
   id: string,
-  target: string,
+  routeId: string,
   options: DefinitionOptions = {}
 ): ManagerPluginDefinition {
   return {
@@ -34,7 +34,7 @@ function definition(
         key: `navigation.${id}`,
         fallback: id
       },
-      target,
+      routeId,
       hosts: ["web"],
       surface: "manager",
       slot: "primary"
@@ -46,8 +46,8 @@ function definition(
 test("Manager Plugin Runtime publishes plugin state and rolls one plugin back to inactive", async () => {
   const host = new RabiCordisHost();
   const runtime = await mountManagerPluginRuntime(host, [
-    definition("overview", "/overview"),
-    definition("performance", "/performance")
+    definition("overview", "route.overview"),
+    definition("performance", "route.performance")
   ]);
 
   assert.deepEqual(
@@ -60,10 +60,10 @@ test("Manager Plugin Runtime publishes plugin state and rolls one plugin back to
   assert.deepEqual(
     runtime.contributions.catalog("web").contributions
       .filter(item => item.kind === "navigation")
-      .map(item => [item.target, item.pluginId, item.instanceId]),
+      .map(item => [item.routeId, item.pluginId, item.instanceId]),
     [
-      ["/overview", "builtin:manager/overview", "manager:overview"],
-      ["/performance", "builtin:manager/performance", "manager:performance"]
+      ["route.overview", "builtin:manager/overview", "manager:overview"],
+      ["route.performance", "builtin:manager/performance", "manager:performance"]
     ]
   );
 
@@ -73,8 +73,8 @@ test("Manager Plugin Runtime publishes plugin state and rolls one plugin back to
   assert.deepEqual(
     runtime.contributions.catalog("web").contributions
       .filter(item => item.kind === "navigation")
-      .map(item => item.target),
-    ["/performance"]
+      .map(item => item.routeId),
+    ["route.performance"]
   );
   assert.equal(runtime.catalog.get("manager:performance")?.status, "active");
 
@@ -88,7 +88,7 @@ test("Manager Plugin Runtime rolls back contributions and effects after activati
   let effectActive = 0;
 
   await assert.rejects(
-    runtime.mount(definition("broken", "/broken", {
+    runtime.mount(definition("broken", "route.broken", {
       apply(ctx) {
         ctx.effect(() => {
           effectActive += 1;
@@ -119,7 +119,7 @@ test("Manager Plugin Runtime rolls back contributions and effects after activati
 test("Manager Plugin Runtime retries failed and inactive instances without redeclaring them", async () => {
   const host = new RabiCordisHost();
   let attempts = 0;
-  const retryable = definition("retryable", "/retryable", {
+  const retryable = definition("retryable", "route.retryable", {
     apply() {
       attempts += 1;
       if (attempts === 1) throw new Error("first activation failed");
@@ -149,7 +149,7 @@ test("Manager Plugin Runtime rolls back earlier definitions when initial activat
 
   await assert.rejects(
     mountManagerPluginRuntime(host, [
-      definition("first", "/first", {
+      definition("first", "route.first", {
         apply(ctx) {
           ctx.effect(() => {
             firstActive += 1;
@@ -157,7 +157,7 @@ test("Manager Plugin Runtime rolls back earlier definitions when initial activat
           });
         }
       }),
-      definition("second", "/second", {
+      definition("second", "route.second", {
         apply() {
           throw new Error("second activation failed");
         }
@@ -174,12 +174,12 @@ test("Manager Plugin Runtime keeps instance IDs separate for two instances of on
   const host = new RabiCordisHost();
   const sharedPluginId = "package:manager/shared";
   const runtime = await mountManagerPluginRuntime(host, [
-    definition("shared-primary", "/primary", {
+    definition("shared-primary", "route.primary", {
       instanceId: "manager:shared:primary",
       pluginId: sharedPluginId,
       contributionId: "shared-primary"
     }),
-    definition("shared-secondary", "/secondary", {
+    definition("shared-secondary", "route.secondary", {
       instanceId: "manager:shared:secondary",
       pluginId: sharedPluginId,
       contributionId: "shared-secondary"
@@ -215,7 +215,7 @@ test("Manager Plugin Runtime keeps missing dependencies visible without applying
   const host = new RabiCordisHost();
   let applied = false;
   const runtime = await mountManagerPluginRuntime(host, [{
-    ...definition("speech", "/speech", { apply: () => { applied = true; } }),
+    ...definition("speech", "route.speech", { apply: () => { applied = true; } }),
     missingCapabilities: ["speech.runtime"]
   }]);
 
@@ -242,7 +242,7 @@ test("Manager Plugin Runtime unmount clears its services and preserves sibling F
       });
     }
   });
-  const runtime = await mountManagerPluginRuntime(host, [definition("settings", "/settings")]);
+  const runtime = await mountManagerPluginRuntime(host, [definition("settings", "route.settings")]);
 
   await runtime.unmount();
   assert.equal(siblingActive, 1);

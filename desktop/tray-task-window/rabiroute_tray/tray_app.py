@@ -26,6 +26,7 @@ from .manager_client import (
     PlanFeedbackSubmitResult,
     RolePanelSendResult,
 )
+from .plugin_catalog import DesktopPluginCatalog, SUPPORTED_DESKTOP_HANDLERS
 from .qt_async import QtAsyncTask, start_qt_task, wait_for_qt_tasks
 from .system_selection import (
     SelectionDeliveryTarget,
@@ -96,6 +97,19 @@ def _start_manager_snapshot(
             gateways=[],
             error=f"unexpected snapshot failure: {error}",
         ),
+        started_callback=started_callback,
+    )
+
+
+def _start_desktop_plugin_catalog(
+    manager: ManagerClient,
+    completed_callback,
+    started_callback=None,
+) -> QtAsyncTask:
+    return start_qt_task(
+        manager.desktop_plugin_catalog,
+        completed_callback,
+        on_error=lambda _error: None,
         started_callback=started_callback,
     )
 
@@ -216,7 +230,8 @@ def run(
     persona_heading_action.setEnabled(False)
 
     menu = QMenu()
-    apply_rabi_menu_theme(menu, more_personas_menu)
+    plugin_menu = QMenu("插件", menu)
+    apply_rabi_menu_theme(menu, more_personas_menu, plugin_menu)
     menu.addAction(status_action)
     menu.addSeparator()
     menu.addAction(persona_heading_action)
@@ -253,6 +268,7 @@ def run(
         "resolved_theme": "light",
     }
     theme_refresh_task: QtAsyncTask | None = None
+    plugin_catalog_task: QtAsyncTask | None = None
     pending_role_panel_sends: set[QtAsyncTask] = set()
     pending_plan_feedback_sends: set[QtAsyncTask] = set()
     refresh_gate = _SnapshotRefreshGate()
@@ -262,7 +278,7 @@ def run(
         resolved = apply_rabi_application_theme(app, theme)
         state["theme"] = theme if isinstance(theme, str) else "system"
         state["resolved_theme"] = resolved
-        apply_rabi_menu_theme(menu, more_personas_menu, theme=resolved)
+        apply_rabi_menu_theme(menu, more_personas_menu, plugin_menu, theme=resolved)
         if panel is not None:
             panel.apply_theme(resolved)
 
@@ -428,6 +444,37 @@ def run(
                 open_chat,
             )
 
+    def execute_plugin_handler(handler_id: str) -> None:
+        target = _desktop_plugin_handler_url(manager.manager_url, handler_id)
+        if target is not None:
+            desktop.open_url(target)
+
+    def refresh_plugin_catalog() -> None:
+        nonlocal plugin_catalog_task
+        if plugin_catalog_task is not None:
+            return
+
+        def completed(completed_task: QtAsyncTask, catalog: DesktopPluginCatalog | None) -> None:
+            nonlocal plugin_catalog_task
+            if plugin_catalog_task is completed_task:
+                plugin_catalog_task = None
+            if catalog is None:
+                return
+
+            def apply_catalog() -> None:
+                _rebuild_plugin_menu(
+                    menu,
+                    plugin_menu,
+                    refresh_action,
+                    catalog,
+                    execute_plugin_handler,
+                )
+                _warm_menu_layout(menu)
+
+            _run_when_menu_idle(menu, apply_catalog)
+
+        plugin_catalog_task = _start_desktop_plugin_catalog(manager, completed)
+
     def refresh(auto: bool = False) -> None:
         if not refresh_gate.request(auto):
             return
@@ -462,6 +509,7 @@ def run(
         )
 
     refresh_action.triggered.connect(refresh)
+    refresh_action.triggered.connect(lambda _checked=False: refresh_plugin_catalog())
     webgui_action.triggered.connect(lambda: desktop.open_url(manager.manager_url))
     quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle, manager_proc))
 
@@ -509,6 +557,7 @@ def run(
     apply_desktop_theme("system")
     _prewarm_panel(ensure_panel(), app)
     refresh()
+    refresh_plugin_catalog()
     refresh_desktop_theme()
     if tray_available:
         tray.show()
@@ -576,6 +625,48 @@ def _run_when_menu_idle(menu: QMenu, callback, retry_ms: int = 25) -> None:
         QTimer.singleShot(retry_ms, lambda: _run_when_menu_idle(menu, callback, retry_ms))
         return
     callback()
+
+
+def _desktop_plugin_handler_url(manager_url: str, handler_id: str) -> str | None:
+    base_url = manager_url.rstrip("/")
+    if handler_id == "desktop.open-webgui":
+        return base_url
+    if handler_id == "desktop.open-settings":
+        return f"{base_url}/#/settings"
+    return None
+
+
+def _rebuild_plugin_menu(
+    root_menu: QMenu,
+    plugin_menu: QMenu,
+    insert_before: QAction,
+    catalog: DesktopPluginCatalog,
+    execute_handler,
+) -> None:
+    items = tuple(
+        item for item in catalog.menu_items
+        if item.handler_id in SUPPORTED_DESKTOP_HANDLERS
+    )
+    signature = tuple(
+        (item.plugin_id, item.instance_id, item.contribution_id, item.handler_id, item.label)
+        for item in items
+    )
+    menu_action = plugin_menu.menuAction()
+    is_inserted = menu_action in root_menu.actions()
+    if signature == getattr(plugin_menu, "_rabiroute_plugin_signature", ()) and is_inserted == bool(items):
+        return
+
+    root_menu.removeAction(menu_action)
+    plugin_menu.clear()
+    plugin_menu._rabiroute_plugin_signature = signature
+    for item in items:
+        action = plugin_menu.addAction(item.label)
+        action.setObjectName(f"rabiroutePluginAction:{item.contribution_id}")
+        action.triggered.connect(
+            lambda checked=False, handler_id=item.handler_id: execute_handler(handler_id)
+        )
+    if items:
+        root_menu.insertMenu(insert_before, plugin_menu)
 
 
 def _quit(

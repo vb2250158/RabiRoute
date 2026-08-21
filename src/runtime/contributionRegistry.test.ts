@@ -13,7 +13,7 @@ const sharedContributions = [
     kind: "navigation" as const,
     id: "diagnostics",
     label: { key: "nav.diagnostics", fallback: "Diagnostics" },
-    target: "/diagnostics",
+    routeId: "route.diagnostics",
     hosts: ["web"] as const,
     surface: "web.navigation",
     slot: "utility",
@@ -23,11 +23,8 @@ const sharedContributions = [
     kind: "command" as const,
     id: "restart-gateway",
     label: { key: "command.restartGateway", fallback: "Restart gateway" },
-    action: {
-      method: "POST" as const,
-      endpoint: "/api/gateways/restart",
-      body: { options: { force: false } }
-    },
+    handlerId: "gateway.restart",
+    dangerLevel: "confirm" as const,
     hosts: ["web", "desktop"] as const,
     surface: "manager.commands",
     slot: "gateway",
@@ -89,7 +86,7 @@ test("Contribution Registry rejects duplicate keys atomically", () => {
       kind: "navigation",
       id: "diagnostics",
       label: { fallback: "Other" },
-      target: "/other",
+      routeId: "route.other",
       hosts: ["web"],
       surface: "web.navigation",
       slot: "utility"
@@ -138,18 +135,48 @@ test("Contribution Registry deep-clones nested contribution data", () => {
 
   const first = registry.catalog().contributions.find(item => item.kind === "command");
   assert.ok(first?.kind === "command");
-  (first.action.body as { options: { force: boolean } }).options.force = true;
   first.label.fallback = "Changed";
   (first.requiredCapabilities as string[]).push("private.capability");
 
   const second = registry.catalog().contributions.find(item => item.kind === "command");
   assert.ok(second?.kind === "command");
-  assert.deepEqual(second.action.body, { options: { force: false } });
   assert.equal(second.label.fallback, "Restart gateway");
   assert.deepEqual(second.requiredCapabilities, ["gateway.manage"]);
-  assert.deepEqual(source.action.body, { options: { force: false } });
 });
 
+test("Contribution Registry publishes only the schema v2 allowlist", () => {
+  const registry = new ContributionRegistry();
+  registry.register("builtin:allowlist", {
+    ...sharedContributions[0],
+    target: "https://example.com/plugin.js",
+    endpoint: "/api/manager/shutdown",
+    query: "/api/private",
+    body: { command: "shutdown" },
+    resourceRoot: "C:/private/plugin"
+  } as unknown as Parameters<ContributionRegistry["register"]>[1]);
+
+  const contribution = registry.catalog("web").contributions[0] as unknown as Record<string, unknown>;
+  assert.equal(contribution.routeId, "route.diagnostics");
+  for (const forbidden of ["target", "endpoint", "query", "body", "resourceRoot"]) {
+    assert.equal(Object.hasOwn(contribution, forbidden), false);
+  }
+});
+
+test("Contribution Registry requires tray and hotkey commands in the same registration batch", () => {
+  const registry = new ContributionRegistry();
+  assert.throws(() => registry.register("builtin:orphan", sharedContributions[2]), /same registration batch/);
+  assert.throws(() => registry.registerMany("builtin:orphan-hotkey", [{
+    kind: "hotkey",
+    id: "restart-hotkey",
+    label: { fallback: "Restart gateway" },
+    commandId: "restart-gateway",
+    defaultBinding: "Ctrl+Shift+R",
+    hosts: ["desktop"],
+    surface: "desktop.hotkeys",
+    slot: "actions"
+  }]), /same registration batch/);
+  assert.deepEqual(registry.catalog().contributions, []);
+});
 test("Contribution Registry requires stable placement and fallback labels", () => {
   const registry = new ContributionRegistry();
   assert.throws(() => registry.register("builtin:invalid", {

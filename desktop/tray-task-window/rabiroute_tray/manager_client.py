@@ -7,6 +7,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .plugin_catalog import DesktopPluginCatalog, DesktopPluginCatalogCache
+
 
 @dataclass(frozen=True)
 class ManagerSnapshot:
@@ -76,6 +78,7 @@ class ManagerClient:
     def __init__(self, manager_url: str = "http://127.0.0.1:8790", timeout_seconds: float = 3.0) -> None:
         self.manager_url = manager_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self._desktop_plugin_catalog_cache = DesktopPluginCatalogCache()
 
     def snapshot(self) -> ManagerSnapshot:
         try:
@@ -214,6 +217,13 @@ class ManagerClient:
             model=str(row.get("model") or "").strip()[:200],
             read_aloud_enabled=row.get("readAloudEnabled", True) is True,
         )
+
+    def desktop_plugin_catalog(self) -> DesktopPluginCatalog:
+        try:
+            payload = self._get_json("/api/plugins/catalog?host=desktop")
+        except (OSError, URLError, TimeoutError, json.JSONDecodeError):
+            return self._desktop_plugin_catalog_cache.fallback()
+        return self._desktop_plugin_catalog_cache.accept_payload(payload)
 
     def desktop_settings(self) -> DesktopSettings:
         payload = self._get_json("/api/desktop/settings")

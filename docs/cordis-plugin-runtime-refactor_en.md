@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, and unified Plugin/Contribution Catalog API are implemented. WebGUI/Desktop catalog consumption, configuration reconciliation, and isolated-process plugins are not complete.
+> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, WebGUI navigation entries, and Desktop tray commands are implemented. Settings sections, status cards, themes, configuration reconciliation, and isolated-process plugins are not complete.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -12,7 +12,7 @@ RabiRoute adopts a Cordis composition kernel, a Rabi business adaptation layer, 
 
 - Manager and Gateway use Cordis for plugin dependencies, Fiber lifecycle, and effect disposal.
 - RabiRoute supplies its own service keys, events, manifests, configuration, and status catalog so business code does not depend directly on Cordis APIs.
-- WebGUI and Desktop are minimal hosts. Pages, status cards, commands, menus, settings, themes, and other extensible entries come from the unified plugin/contribution catalog. Manager publishes the catalog, while both presentation hosts still need to consume it.
+- WebGUI and Desktop are minimal hosts. Pages, status cards, commands, menus, settings, themes, and other extensible entries come from the unified plugin/contribution catalog. WebGUI consumes navigation and the persona-page secondary entry; Desktop consumes controlled commands and tray menus.
 - Route configuration, event records, routing decisions, `AgentPacket`, delivery evidence, and Outbox remain owned by stable modules.
 - Existing capabilities migrate in this order: Agent Adapters, message-side lifecycle, Gateway composition, Manager catalog, presentation extensions, and configuration reconciliation.
 
@@ -200,16 +200,24 @@ The first version accepts controlled declarative contributions without executing
 
 ```ts
 type RabiUiContribution =
-  | { kind: "navigation"; id: string; labelKey: string; target: string }
-  | { kind: "settings-section"; id: string; schema: JsonSchema; endpoint: string }
-  | { kind: "status-card"; id: string; query: string; renderer: BuiltinRenderer }
-  | { kind: "command"; id: string; labelKey: string; action: ManagerAction }
-  | { kind: "tray-menu"; id: string; commandId: string }
-  | { kind: "hotkey"; id: string; commandId: string; defaultBinding?: string }
-  | { kind: "theme"; id: string; resourceRoot: string };
+  | { kind: "navigation"; routeId: string }
+  | {
+      kind: "settings-section";
+      rendererId: string;
+      schemaId: string;
+      readCommandId: string;
+      writeCommandId: string;
+    }
+  | { kind: "status-card"; queryId: string; rendererId: string }
+  | { kind: "command"; handlerId: string; dangerLevel: "safe" | "confirm" | "dangerous" }
+  | { kind: "tray-menu"; commandId: string }
+  | { kind: "hotkey"; commandId: string; defaultBinding?: string }
+  | { kind: "theme"; themeId: string; webResourceId?: string; desktopResourceId?: string };
 ```
 
-Manager now publishes one Plugin/Contribution Catalog through `GET /api/plugins/catalog` and can filter contributions for `web` or `desktop`. WebGUI and Desktop consumption is still pending. Once connected, catalog revisions caused by plugin unload will remove the corresponding page entries, menus, hotkeys, and status cards.
+Schema v2 publishes host-controlled IDs rather than arbitrary `target`, `endpoint`, `query`, `body`, or `resourceRoot` values. Both plugin manifests and contributions are rebuilt from explicit field allowlists before entering the public catalog. A `tray-menu` or `hotkey` must reference a `command` from the same plugin instance and registration batch.
+
+Manager publishes one Plugin/Contribution Catalog through `GET /api/plugins/catalog` and can filter contributions for `web` or `desktop`. WebGUI uses fixed `routeId`, icon, and slot mappings for its sidebar, User Guide, and persona-sync entry. Desktop reads the catalog in the background, resolves tray items through `pluginId + instanceId + commandId`, and executes only host-supported `handlerId` values. Both hosts retain fixed recovery entries when the catalog is unavailable.
 
 ### Custom presentation code
 
@@ -342,7 +350,7 @@ Exit criterion: Manager publishes plugins and contributions through one API. Thi
 
 ### Stage 5: declarative WebGUI and Desktop extensions
 
-Current status: not complete. WebGUI will generate navigation, page templates, settings sections, status cards, commands, and themes from the unified catalog. Desktop will generate tray menus, hotkeys, commands, settings sections, status cards, and themes from the same catalog.
+Current status: partially complete. WebGUI generates primary navigation, utility navigation, the User Guide, and the persona-page secondary entry from the unified catalog. Desktop generates a controlled tray submenu. Page templates, settings sections, status cards, hotkeys, and themes remain pending.
 
 Exit criterion: installing a backend plugin makes its declared entries appear on supported hosts and unloading it removes them.
 
@@ -409,7 +417,7 @@ Rollback changes runtime selection only and never creates duplicate business fac
 6. define the Contribution Registry contract without changing WebGUI/Desktop yet;
 7. add real Context composition, disposal, and repeated-mount tests.
 
-All seven items are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, a declarative Contribution Registry contract, and Fiber lifecycle tests. A later slice now publishes the Contribution Registry through Manager API; WebGUI/Desktop still do not generate their interfaces from that catalog.
+All seven items are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, a declarative Contribution Registry contract, and Fiber lifecycle tests. Later slices publish the catalog through Manager API and connect the first controlled WebGUI and Desktop entries.
 
 This slice does not change message templates, Desktop IPC, DSH delivery, Route configuration, Outbox, or current UI behavior.
 
@@ -521,9 +529,19 @@ This split gives message-source facts and resident plugin lifecycles separate co
 3. record stable instance IDs, manifests, hosts, scopes, status, missing capabilities, start/stop timestamps, and sanitized failures in Plugin Catalog;
 4. give each Manager plugin its own Fiber so activation failure rolls back its contributions, plugin unload removes only its registrations, and root disposal clears the complete Manager catalog;
 5. publish plugin and contribution revisions, instance state, and declarative contributions through `GET /api/plugins/catalog`, with `host=web|desktop` filtering;
-6. declare the current WebGUI navigation, settings sections, status cards, and Desktop settings entry as built-in Manager plugin contributions, while leaving WebGUI/Desktop catalog consumption for the next slice.
+6. declare current WebGUI navigation, settings sections, status cards, Desktop commands, and tray menus as built-in Manager plugin contributions; presentation consumption is completed by the next slice.
 
-`create-manager-contribution-catalog` is complete. The next stage makes WebGUI and Desktop generate extension entries from the unified catalog.
+`create-manager-contribution-catalog` is complete.
+
+## Thirteenth implementation slice: Schema v2 and presentation catalog consumption
+
+1. rebuild plugin manifests and contributions from field allowlists so the public catalog contains no arbitrary URLs, endpoints, request bodies, or resource paths;
+2. have WebGUI request `host=web` and generate its sidebar, User Guide, and persona-sync entry through fixed host mappings for `routeId`, icons, and slots;
+3. have Desktop request `host=desktop`, cache the latest successful catalog, and generate the Plugin tray submenu asynchronously;
+4. require `tray-menu.commandId` to reference a `command.id` from the same plugin instance and registration batch; Desktop supports only `desktop.open-webgui` and `desktop.open-settings`;
+5. reject or ignore unknown schemas, unknown IDs, cross-plugin references, and dangerous commands while preserving fixed recovery entries when catalog loading fails.
+
+The first `extend-webgui-desktop` entries are complete. The next stage connects settings sections, status cards, hotkeys, and themes, then adds configuration reconciliation, local reload, and isolated-process plugins.
 
 ## Readiness criteria
 

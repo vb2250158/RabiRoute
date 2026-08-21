@@ -5,6 +5,9 @@ import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
 import { managerEventSource } from "../managerApi";
+import { useI18n } from "../i18n";
+import { pluginCatalogStore } from "../pluginCatalogStore";
+import { buildWebNavigation } from "../pluginNavigation";
 import { personaAvatarClient } from "../persona/personaAvatarClient";
 import { loadPersonaDocument } from "../persona/personaDocumentClient";
 import type { IdentityEndpointAccount, IdentityParticipant } from "../persona/personaIdentityRelationClient";
@@ -37,7 +40,7 @@ import { isSpeechRouteVariableKey } from "@shared/speechControlContract";
 import { PERSONA_AVATAR_ACCEPT } from "@shared/personaAvatarContract";
 import { copyTextToClipboard } from "../clipboard";
 import { markdownPreviewExcerpt } from "../markdownPreview";
-import { routeScopedPersonaDocumentPath, routeScopedPersonaPath, routeScopedPersonaSyncPath } from "../routeScopedNavigation";
+import { routeScopedPersonaDocumentPath, routeScopedPersonaPath } from "../routeScopedNavigation";
 import {
   adapterLabel,
   automationRulesForGateway,
@@ -59,6 +62,7 @@ const store = useGatewayStore();
 const speech = useSpeechStore();
 const route = useRoute();
 const router = useRouter();
+const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
 const automationWorkspaceTab = ref<"messages" | "schedule">("messages");
@@ -102,6 +106,10 @@ const PERSONA_SUMMARY_MAX_CHARACTERS = 420;
 const recentMessageEndpoints: RecentMessageEndpoint[] = RECENT_MESSAGE_ENDPOINTS.filter(endpoint => endpoint !== "heartbeat");
 
 const gateway = computed(() => store.selectedGateway);
+const personaSecondaryNavItems = computed(() => buildWebNavigation(
+  pluginCatalogStore.contributions.value,
+  gateway.value ? configNameFor(gateway.value) : ""
+).personaSecondary.map(item => ({ ...item, title: t(item.title) })));
 const runtime = computed(() => store.selectedRuntime);
 const roleOptions = computed(() => [
   { title: "不注入人格", subtitle: "", value: "", avatarUrl: "" },
@@ -912,7 +920,9 @@ watch(() => store.selectedGatewayId, (id) => {
         <div class="page-subtitle">人格可以留空；留空时只使用消息入口默认包装和回传 API。</div>
       </div>
       <div class="page-actions" v-if="gateway">
-        <v-btn v-if="hasPersona" :to="routeScopedPersonaSyncPath(configNameFor(gateway))" prepend-icon="mdi-folder-sync-outline" color="secondary" variant="tonal">多电脑人格同步</v-btn>
+        <template v-if="hasPersona">
+          <v-btn v-for="item in personaSecondaryNavItems" :key="item.key" :to="item.to" :prepend-icon="item.icon" color="secondary" variant="tonal">{{ item.title }}</v-btn>
+        </template>
         <v-btn v-if="hasPersona" prepend-icon="mdi-account-edit-outline" variant="tonal" @click="store.openConfigFile('role', gateway.id, gateway.agentRoleId || '')">打开人格配置</v-btn>
         <v-btn v-if="hasPersona" prepend-icon="mdi-file-code-outline" variant="tonal" @click="store.openConfigFile('role-message-config', gateway.id, gateway.agentRoleId || '')">打开人格自动化配置</v-btn>
       </div>

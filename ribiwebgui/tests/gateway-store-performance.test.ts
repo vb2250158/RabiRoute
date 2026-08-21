@@ -33,7 +33,7 @@ test("persona sync leaves the unbounded conflict catalog behind an explicit acti
 
 test("persona sync opens as an independent Changed Files workspace", () => {
   assert.doesNotMatch(personaPageSource, /<PersonaSyncCard/);
-  assert.match(personaPageSource, /多电脑人格同步/);
+  assert.match(personaPageSource, /personaSecondaryNavItems/);
   assert.match(personaSyncPageSource, /<PersonaSyncCard/);
   assert.match(personaSyncSource, /CHANGED FILES/);
   assert.match(personaSyncSource, /拉取并同步/);

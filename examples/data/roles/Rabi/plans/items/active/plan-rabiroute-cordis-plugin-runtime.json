@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "extend-webgui-desktop",
-  "currentStep": "create-manager-contribution-catalog 已完成：Manager 使用独立 Cordis 根 Context 挂载 Plugin Catalog、Contribution Registry 和内置 Manager 插件；GET /api/plugins/catalog 统一发布插件状态与 WebGUI/Desktop 贡献，并支持按宿主筛选。",
-  "nextAction": "让 WebGUI 和 Desktop 消费统一 Plugin/Contribution Catalog，移除各自维护的固定扩展目录。",
+  "currentStepId": "add-reconciliation-and-isolation",
+  "currentStep": "extend-webgui-desktop 已完成第一批入口：Catalog 升级为 Schema v2；WebGUI 从统一目录生成侧栏、使用手册和人格同步入口；Desktop 异步生成受控托盘菜单并保留最近成功目录。",
+  "nextAction": "接入设置区、状态卡、快捷键和主题，随后增加配置对账、局部重载和独立进程插件。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -60,12 +60,13 @@
     {
       "id": "extend-webgui-desktop",
       "title": "让 WebGUI 和 Desktop 从同一目录生成扩展入口",
-      "status": "进行中"
+      "status": "已完成",
+      "completedAt": "2026-08-21T18:00:00+08:00"
     },
     {
       "id": "add-reconciliation-and-isolation",
       "title": "增加配置对账、局部重载和独立进程插件",
-      "status": "未开始"
+      "status": "进行中"
     }
   ],
   "waitingFor": "",
@@ -81,7 +82,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T16:57:34+08:00",
+  "updatedAt": "2026-08-21T18:00:00+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -112,6 +113,10 @@
     "Manager Plugin Runtime",
     "Plugin Catalog",
     "Contribution Catalog",
-    "/api/plugins/catalog"
+    "/api/plugins/catalog",
+    "Schema v2",
+    "routeId",
+    "handlerId",
+    "托盘插件菜单"
   ]
 }

@@ -5,15 +5,9 @@ import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
 import { useI18n } from "./i18n";
-import {
-  routeScopedAdaptersPath,
-  routeScopedKnowledgePath,
-  routeScopedOverviewPath,
-  routeScopedPathForCurrentPage,
-  routeScopedPersonaPath,
-  routeScopedRuntimePath,
-  routeScopedSpeechPath
-} from "./routeScopedNavigation";
+import { routeScopedPathForCurrentPage } from "./routeScopedNavigation";
+import { pluginCatalogStore } from "./pluginCatalogStore";
+import { buildWebNavigation } from "./pluginNavigation";
 import { gatewayPersonaDisplayName } from "./personaPresentation";
 import { useGatewayStore } from "./stores/gatewayStore";
 import { configNameFor } from "./utils/gatewayHelpers";
@@ -98,18 +92,10 @@ const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPrefe
 const snackbar = ref("");
 
 const selectedRouteKey = computed(() => store.selectedGateway ? configNameFor(store.selectedGateway) : "");
-const navItems = computed(() => [
-  { title: "控制台", icon: "mdi-view-dashboard-outline", to: routeScopedOverviewPath(selectedRouteKey.value) },
-  { title: "消息适配器", icon: "mdi-puzzle-outline", to: routeScopedAdaptersPath(selectedRouteKey.value) },
-  { title: "人格配置", icon: "mdi-account-heart-outline", to: routeScopedPersonaPath(selectedRouteKey.value) },
-  { title: "计划与记忆", icon: "mdi-notebook-check-outline", to: routeScopedKnowledgePath(selectedRouteKey.value) }
-].map(item => ({ ...item, title: t(item.title) })));
-const utilityNavItems = computed(() => [
-  { title: "语音服务", icon: "mdi-waveform", to: routeScopedSpeechPath(selectedRouteKey.value) },
-  { title: "性能监控", icon: "mdi-chart-timeline-variant", to: "/performance" },
-  { title: "日志诊断", icon: "mdi-console-line", to: routeScopedRuntimePath(selectedRouteKey.value) },
-  { title: "设置", icon: "mdi-cog-outline", to: "/settings" }
-].map(item => ({ ...item, title: t(item.title) })));
+const navigationGroups = computed(() => buildWebNavigation(pluginCatalogStore.contributions.value, selectedRouteKey.value));
+const navItems = computed(() => navigationGroups.value.routePrimary.map(item => ({ ...item, title: t(item.title) })));
+const utilityNavItems = computed(() => navigationGroups.value.utility.map(item => ({ ...item, title: t(item.title) })));
+const footerNavItems = computed(() => navigationGroups.value.footer.map(item => ({ ...item, title: t(item.title) })));
 
 const managerConnected = computed(() => !store.managerError);
 const activePageSaveAction = computed(() => pageSaveAction.value);
@@ -128,6 +114,7 @@ const selectedGatewayName = computed(() => store.selectedGateway
 
 onMounted(async () => {
   await loadInterfaceTheme();
+  void pluginCatalogStore.refresh();
   await store.load();
   if (store.gateways.length === 0) store.openQuickSetup();
   else if (selectedRouteKey.value) {
@@ -176,7 +163,7 @@ async function save() {
 }
 
 async function refresh() {
-  await store.load();
+  await Promise.all([store.load(), pluginCatalogStore.refresh()]);
   await ensurePageDiagnostics(route.path, true);
   snackbar.value = "状态已刷新";
 }
@@ -240,7 +227,7 @@ function selectGateway(id: string) {
         <v-list nav density="comfortable" bg-color="transparent" class="sidebar-list">
           <v-list-item
             v-for="item in navItems"
-            :key="item.to"
+            :key="item.key"
             :to="item.to"
             :prepend-icon="item.icon"
             :title="item.title"
@@ -251,7 +238,7 @@ function selectGateway(id: string) {
         <v-list nav density="comfortable" bg-color="transparent" class="sidebar-list">
           <v-list-item
             v-for="item in utilityNavItems"
-            :key="item.to"
+            :key="item.key"
             :to="item.to"
             :prepend-icon="item.icon"
             :title="item.title"
@@ -268,8 +255,16 @@ function selectGateway(id: string) {
           <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-github" :href="store.meta.githubUrl" target="_blank">
             GitHub
           </v-btn>
-          <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-book-open-page-variant-outline" to="/docs">
-            使用手册
+          <v-btn
+            v-for="item in footerNavItems"
+            :key="item.key"
+            block
+            class="sidebar-footer-btn"
+            variant="text"
+            :prepend-icon="item.icon"
+            :to="item.to"
+          >
+            {{ item.title }}
           </v-btn>
           <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-folder-cog-outline" @click="store.openConfigFile('manager')">
             打开配置目录

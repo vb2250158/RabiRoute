@@ -48,11 +48,15 @@ test("Plugin Catalog API publishes one unified plugin and contribution snapshot"
       };
     };
     assert.equal(body.code, 0);
-    assert.equal(body.data.schemaVersion, 1);
+    assert.equal(body.data.schemaVersion, 2);
     assert.equal(body.data.host, "all");
     assert.equal(body.data.plugins.every(item => item.status === "active"), true);
     assert.equal(body.data.contributions.some(item => item.id === "overview"), true);
     assert.equal(body.data.contributions.some(item => item.id === "desktop-settings"), true);
+    const serialized = JSON.stringify(body.data);
+    for (const forbidden of ["target", "endpoint", "query", "body", "resourceRoot"]) {
+      assert.equal(serialized.includes(`"${forbidden}"`), false);
+    }
   } finally {
     await app.close();
   }

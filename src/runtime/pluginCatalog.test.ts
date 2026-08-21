@@ -42,6 +42,52 @@ test("Plugin Catalog records valid lifecycle transitions without exposing mutabl
   assert.deepEqual(catalog.get(declared.instanceId)?.manifest.hosts, ["manager", "web"]);
 });
 
+test("Plugin Catalog publishes only the manifest and record allowlists", () => {
+  const catalog = new PluginCatalog();
+  catalog.declare({
+    instanceId: "manager:allowlist",
+    manifest: {
+      ...manifest,
+      target: "https://example.com/plugin.js",
+      endpoint: "/api/manager/shutdown",
+      query: "/api/private",
+      body: { command: "shutdown" },
+      resourceRoot: "C:/private/plugin"
+    } as unknown as RabiPluginManifest,
+    host: "manager"
+  });
+
+  const record = catalog.snapshot().plugins[0] as unknown as Record<string, unknown>;
+  const publishedManifest = record.manifest as Record<string, unknown>;
+  assert.deepEqual(Object.keys(publishedManifest).sort(), [
+    "capabilities",
+    "hosts",
+    "id",
+    "kind",
+    "name",
+    "version"
+  ]);
+  for (const forbidden of ["target", "endpoint", "query", "body", "resourceRoot"]) {
+    assert.equal(Object.hasOwn(publishedManifest, forbidden), false);
+    assert.equal(Object.hasOwn(record, forbidden), false);
+  }
+});
+
+test("Plugin Catalog rejects unsupported manifest kinds and hosts", () => {
+  const catalog = new PluginCatalog();
+  assert.throws(() => catalog.declare({
+    instanceId: "manager:invalid-kind",
+    manifest: { ...manifest, kind: "script" } as unknown as RabiPluginManifest,
+    host: "manager"
+  }), /kind is unsupported/);
+  assert.throws(() => catalog.declare({
+    instanceId: "manager:invalid-host",
+    manifest: { ...manifest, hosts: ["browser"] } as unknown as RabiPluginManifest,
+    host: "browser" as RabiPluginHost
+  }), /host is unsupported/);
+  assert.deepEqual(catalog.snapshot().plugins, []);
+});
+
 test("Plugin Catalog rejects invalid status transitions and allows a failed activation retry", () => {
   const catalog = new PluginCatalog();
   catalog.declare({ instanceId: "manager:performance", manifest, host: "manager" });

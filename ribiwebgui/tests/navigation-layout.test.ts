@@ -3,21 +3,36 @@ import fs from "node:fs";
 import test from "node:test";
 
 const appSource = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+const pluginNavigationSource = fs.readFileSync(new URL("../src/pluginNavigation.ts", import.meta.url), "utf8");
+const pluginCatalogStoreSource = fs.readFileSync(new URL("../src/pluginCatalogStore.ts", import.meta.url), "utf8");
+const personaSource = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.vue", import.meta.url), "utf8");
 const overviewSource = fs.readFileSync(new URL("../src/pages/OverviewPage.vue", import.meta.url), "utf8");
 const settingsSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
 const speechSource = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
 
-test("sidebar keeps Route pages above the utility pages and settings above the guide footer", () => {
+test("sidebar keeps Route pages above utilities and renders catalog footer entries", () => {
   const primaryIndex = appSource.indexOf("const navItems = computed");
   const utilityIndex = appSource.indexOf("const utilityNavItems = computed");
+  const footerIndex = appSource.indexOf("const footerNavItems = computed");
   const utilityRenderIndex = appSource.indexOf("v-for=\"item in utilityNavItems\"");
-  const guideIndex = appSource.indexOf('to="/docs"');
+  const footerRenderIndex = appSource.indexOf("v-for=\"item in footerNavItems\"");
+  const configDirectoryIndex = appSource.indexOf("store.openConfigFile('manager')");
 
   assert.ok(primaryIndex >= 0);
   assert.ok(utilityIndex > primaryIndex);
-  assert.ok(utilityRenderIndex > utilityIndex);
-  assert.ok(guideIndex > utilityRenderIndex);
-  assert.match(appSource, /\{ title: "设置", icon: "mdi-cog-outline", to: "\/settings" \}/);
+  assert.ok(footerIndex > utilityIndex);
+  assert.ok(utilityRenderIndex > footerIndex);
+  assert.ok(footerRenderIndex > utilityRenderIndex);
+  assert.ok(configDirectoryIndex > footerRenderIndex);
+  assert.match(appSource, /pluginCatalogStore\.refresh\(\)/);
+  assert.match(pluginCatalogStoreSource, /pluginCatalogClient\.readWeb\(\)/);
+  assert.match(pluginCatalogStoreSource, /contributions\.value = null/);
+  assert.match(pluginNavigationSource, /id: "settings"[^\n]+routeId: "global\.settings"/);
+  assert.match(pluginNavigationSource, /id: "docs"[^\n]+routeId: "global\.docs"[^\n]+slot: "footer"/);
+  assert.match(pluginNavigationSource, /id: "persona-sync"[^\n]+routeId: "route\.persona-sync"[^\n]+slot: "persona-secondary"/);
+  assert.match(personaSource, /personaSecondaryNavItems/);
+  assert.match(appSource, /store\.openQuickSetup/);
+  assert.match(appSource, /store\.meta\.githubUrl/);
   assert.doesNotMatch(appSource, /route-picker-status|selectedRuntimeLabel|selectedGatewayAdapters/);
 });
 

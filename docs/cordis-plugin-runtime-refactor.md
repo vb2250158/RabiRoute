@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime 与统一 Plugin/Contribution Catalog API 已实现；WebGUI/Desktop 消费统一目录、配置对账和独立进程插件尚未完成。
+> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI 导航入口和 Desktop 托盘命令已实现；设置区、状态卡、主题、配置对账和独立进程插件尚未完成。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -12,7 +12,7 @@ RabiRoute 采用“Cordis 组合内核 + Rabi 业务适配层 + 多宿主扩展�
 
 - Manager 和 Gateway 使用 Cordis 管理插件依赖、Fiber 生命周期和副作用撤销。
 - RabiRoute 提供自己的服务 key、事件、插件清单、配置和状态目录，不让业务代码直接依赖 Cordis API。
-- WebGUI 与 Desktop 是最小宿主；页面、状态卡片、命令、菜单、设置项、主题和其他可扩展入口由统一插件/贡献目录提供。Manager 已发布目录，两个表现端尚未接入消费。
+- WebGUI 与 Desktop 是最小宿主；页面、状态卡片、命令、菜单、设置项、主题和其他可扩展入口由统一插件/贡献目录提供。WebGUI 已消费导航与人格页次级入口，Desktop 已消费受控命令和托盘菜单。
 - Route、事件记录、路由判断、`AgentPacket`、投递证据和 Outbox 继续由稳定模块拥有。
 - 现有能力按 Agent Adapter、消息端生命周期、Gateway 组合、Manager 目录、表现端扩展、配置对账的顺序迁移。
 
@@ -200,16 +200,24 @@ export interface RabiPluginContext {
 
 ```ts
 type RabiUiContribution =
-  | { kind: "navigation"; id: string; labelKey: string; target: string }
-  | { kind: "settings-section"; id: string; schema: JsonSchema; endpoint: string }
-  | { kind: "status-card"; id: string; query: string; renderer: BuiltinRenderer }
-  | { kind: "command"; id: string; labelKey: string; action: ManagerAction }
-  | { kind: "tray-menu"; id: string; commandId: string }
-  | { kind: "hotkey"; id: string; commandId: string; defaultBinding?: string }
-  | { kind: "theme"; id: string; resourceRoot: string };
+  | { kind: "navigation"; routeId: string }
+  | {
+      kind: "settings-section";
+      rendererId: string;
+      schemaId: string;
+      readCommandId: string;
+      writeCommandId: string;
+    }
+  | { kind: "status-card"; queryId: string; rendererId: string }
+  | { kind: "command"; handlerId: string; dangerLevel: "safe" | "confirm" | "dangerous" }
+  | { kind: "tray-menu"; commandId: string }
+  | { kind: "hotkey"; commandId: string; defaultBinding?: string }
+  | { kind: "theme"; themeId: string; webResourceId?: string; desktopResourceId?: string };
 ```
 
-Manager 已通过 `GET /api/plugins/catalog` 发布同一个 Plugin/Contribution Catalog，并可按 `web` 或 `desktop` 返回对应贡献项。WebGUI 与 Desktop 的消费尚未完成；接入后，插件卸载引起的目录修订会使相应页面入口、菜单、快捷键和状态卡片一并消失。
+Schema v2 只发布宿主白名单 ID，不发布任意 `target`、`endpoint`、`query`、`body` 或 `resourceRoot`。Plugin manifest 与 Contribution 都由 Registry 按字段白名单重新构造；额外运行时字段不会进入公开目录。`tray-menu` 与 `hotkey` 必须引用同一插件实例、同一注册批次中的 `command`。
+
+Manager 通过 `GET /api/plugins/catalog` 发布同一个 Plugin/Contribution Catalog，并可按 `web` 或 `desktop` 返回对应贡献项。WebGUI 使用固定 `routeId`、图标和位置映射生成侧栏、使用手册和人格同步入口；Desktop 在后台读取目录，按 `pluginId + instanceId + commandId` 解析托盘菜单，并只执行宿主支持的 `handlerId`。目录不可用时，两端保留固定恢复入口。
 
 ### 自定义界面代码
 
@@ -342,7 +350,7 @@ plugins:
 
 ### 阶段 5：WebGUI 与 Desktop 声明式扩展
 
-当前状态：尚未完成。WebGUI 后续从统一目录生成导航、页面模板、设置区、状态卡片、命令和主题；Desktop 后续从同一目录生成托盘菜单、快捷键、命令、设置区、状态卡片和主题。
+当前状态：部分完成。WebGUI 已从统一目录生成主导航、工具导航、使用手册和人格页次级入口；Desktop 已生成受控托盘菜单。页面模板、设置区、状态卡片、快捷键和主题仍待接入。
 
 退出条件：安装一个后端插件后，其声明入口可以在支持的平台自动出现并在卸载后消失。
 
@@ -409,7 +417,7 @@ plugins:
 6. 定义 Contribution Registry 合同，但不改 WebGUI/Desktop；
 7. 增加真实 Context 组合、销毁和重复挂载测试。
 
-当前七项均已完成：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据、声明式 Contribution Registry 合同和 Fiber 生命周期测试已经存在。后续切片已让 Manager API 发布 Contribution Registry；WebGUI/Desktop 仍未从该目录生成界面。
+当前七项均已完成：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据、声明式 Contribution Registry 合同和 Fiber 生命周期测试已经存在。后续切片已让 Manager API 发布目录，WebGUI 与 Desktop 也已消费第一批受控入口。
 
 这个切片不修改消息模板、Desktop IPC、DSH 投递、Route 配置、Outbox 或现有界面交互。
 
@@ -521,9 +529,19 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 3. Plugin Catalog 记录稳定实例 ID、manifest、宿主、作用域、状态、缺失能力、启动/停止时间和脱敏错误；
 4. 每个 Manager 插件使用独立 Fiber，激活失败回滚自身贡献，卸载只清理自身注册，根销毁清空整个 Manager 目录；
 5. `GET /api/plugins/catalog` 统一返回插件与贡献修订号、实例状态及声明式贡献，并支持 `host=web|desktop`；
-6. 内置 Manager 插件已声明当前 WebGUI 导航、设置区、状态卡片和 Desktop 设置入口，但 WebGUI/Desktop 尚未消费该目录。
+6. 内置 Manager 插件已声明当前 WebGUI 导航、设置区、状态卡片、Desktop 命令和托盘菜单；表现端消费由下一切片完成。
 
-`create-manager-contribution-catalog` 已完成。下一阶段是让 WebGUI 与 Desktop 从统一目录生成扩展入口。
+`create-manager-contribution-catalog` 已完成。
+
+## 第十三个实施切片：Schema v2 与表现端目录消费
+
+1. Plugin manifest 和 Contribution 使用字段白名单，公开目录不携带任意 URL、接口、请求正文或资源路径；
+2. WebGUI 请求 `host=web`，使用宿主固定的 `routeId`、图标和位置映射生成侧栏、使用手册和人格同步入口；
+3. Desktop 请求 `host=desktop`，缓存最近成功目录，异步生成“插件”托盘菜单；
+4. `tray-menu.commandId` 只能引用同一插件实例、同一批次中的 `command.id`；Desktop 只执行 `desktop.open-webgui` 与 `desktop.open-settings`；
+5. 未知 Schema、未知 ID、跨插件引用和危险命令被拒绝或忽略；目录失败时保留 WebGUI 快速配置、设置、使用手册，以及 Desktop 打开 WebGUI、刷新、退出等恢复入口。
+
+`extend-webgui-desktop` 已完成第一批入口。下一阶段接入设置区、状态卡、快捷键和主题，并增加配置对账、局部重载与独立进程插件。
 
 ## 完成标准
 
