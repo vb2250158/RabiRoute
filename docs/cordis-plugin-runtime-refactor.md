@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：重构进行中。阶段 0、阶段 1、Contribution Registry 合同、全部常驻 Gateway 消息端生命周期、宿主类型拆分，以及单一 Gateway 根 Context 与命令分发切片已完成；Manager Plugin Runtime、统一 Plugin Catalog API 与多宿主表现扩展待实施。
+> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime 与统一 Plugin/Contribution Catalog API 已实现；WebGUI/Desktop 消费统一目录、配置对账和独立进程插件尚未完成。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -12,7 +12,7 @@ RabiRoute 采用“Cordis 组合内核 + Rabi 业务适配层 + 多宿主扩展�
 
 - Manager 和 Gateway 使用 Cordis 管理插件依赖、Fiber 生命周期和副作用撤销。
 - RabiRoute 提供自己的服务 key、事件、插件清单、配置和状态目录，不让业务代码直接依赖 Cordis API。
-- WebGUI 与 Desktop 保留最小宿主，但页面、状态卡片、命令、菜单、设置项、主题和其他产品能力都可以由插件贡献。
+- WebGUI 与 Desktop 是最小宿主；页面、状态卡片、命令、菜单、设置项、主题和其他可扩展入口由统一插件/贡献目录提供。Manager 已发布目录，两个表现端尚未接入消费。
 - Route、事件记录、路由判断、`AgentPacket`、投递证据和 Outbox 继续由稳定模块拥有。
 - 现有能力按 Agent Adapter、消息端生命周期、Gateway 组合、Manager 目录、表现端扩展、配置对账的顺序迁移。
 
@@ -33,7 +33,7 @@ RabiRoute 的最小宿主只负责：
 
 路由、Adapter、设置页、状态页、托盘菜单、快捷键、主题和设备能力属于可组合产品能力，应逐步变成内置插件或插件贡献项。
 
-无法做成插件的只有“负责加载插件的最小内核”及操作系统/运行时边界。
+无法做成插件的只有“负责加载插件的最小内核”及操作系统/运行时边界。Desktop/WebGUI 不维护第二套扩展事实；它们作为宿主，只渲染插件贡献目录中声明并受当前平台支持的入口。
 
 ## 依赖基线
 
@@ -45,7 +45,7 @@ RabiRoute 的最小宿主只负责：
 
 Cordis 4 仍是预发布版本。后续升级或引入 Loader 前必须重新核对最新版本、变更记录和 Loader API，并继续使用精确版本和锁文件。
 
-DSH 使用固定、改名并带本地修改的 Cordis 源码。RabiRoute 不依赖 DSH 的 `@deepseek-ai/cordis`，也不复制其补丁。初始迁移使用上游 `cordis`，所有调用封装在 `src/runtime/`；上游缺陷阻塞生产需求时，优先提交上游修复，其次才维护最小补丁。
+DSH 使用固定、改名并带本地修改的 Cordis 源码。普通 DSH 插件由 Loader 导入同一 Node 进程并挂载为 Fiber；Cordis `isolate` 只改变服务查找作用域。子进程与 Worker 由 subprocess、workflow 等专用能力显式创建，不是所有插件的默认运行方式。RabiRoute 不依赖 DSH 的 `@deepseek-ai/cordis`，也不复制其补丁；上游缺陷阻塞生产需求时，优先提交上游修复，其次才维护最小补丁。
 
 ## 目标与非目标
 
@@ -102,7 +102,7 @@ Manager Process
 
 第一阶段沿用“一条 Route 对应一个 Gateway 子进程”。每个常驻 Gateway 只创建一个根 Context，并在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry，不再为三个注册表创建彼此独立的 Host。
 
-WebGUI 是独立 JavaScript 运行时，可以在后续阶段拥有客户端 Extension Host。Desktop 当前是独立 Python/Qt 运行时，不强行移植 Cordis；它通过与 Manager 共享的插件清单和贡献协议实现相同组合语义。
+WebGUI 是独立 JavaScript Runtime，Desktop 是独立 Python/Qt Runtime，两者都不强制移植 Cordis。Manager 现在通过 `GET /api/plugins/catalog` 发布共享 Plugin/Contribution Catalog，并支持 `host=web|desktop` 筛选；WebGUI 与 Desktop 尚未读取该接口，当前入口仍由各自固定实现生成。
 
 ## Rabi 适配层
 
@@ -209,7 +209,7 @@ type RabiUiContribution =
   | { kind: "theme"; id: string; resourceRoot: string };
 ```
 
-阶段 4 和阶段 5 完成后，WebGUI 与 Desktop 将读取同一个 Manager Contribution Catalog，再按各自平台能力渲染。插件卸载后，相应页面入口、菜单、快捷键和状态卡片会自动消失。
+Manager 已通过 `GET /api/plugins/catalog` 发布同一个 Plugin/Contribution Catalog，并可按 `web` 或 `desktop` 返回对应贡献项。WebGUI 与 Desktop 的消费尚未完成；接入后，插件卸载引起的目录修订会使相应页面入口、菜单、快捷键和状态卡片一并消失。
 
 ### 自定义界面代码
 
@@ -336,13 +336,13 @@ plugins:
 
 ### 阶段 4：Manager Plugin/Contribution Catalog
 
-Manager 汇总清单、实例状态、缺失依赖、安装要求、诊断动作以及 WebGUI/Desktop 贡献项。现有扫描 API 先保持兼容。
+当前状态：已实现。`src/runtime/managerPluginRuntime.ts` 在 Manager 根 Context 下提供 Plugin Catalog 与 Contribution Registry 服务，记录插件 manifest、宿主、作用域、生命周期状态、缺失能力和脱敏错误，并在 Fiber 卸载时撤销贡献。`src/manager/builtinManagerPlugins.ts` 将现有 WebGUI 导航、设置区、状态卡片和 Desktop 设置入口声明为内置插件贡献。`GET /api/plugins/catalog` 返回统一快照；`host=web|desktop` 只筛选表现贡献，插件实例清单保持完整。失败或已卸载实例可复用同一实例 ID 重新激活。Manager 启动使用统一失败回滚，端口监听失败或后续初始化失败都会停止已启动资源、关闭 HTTP/SSE、移除信号监听并销毁 Manager 根。现有扫描 API 保持兼容。
 
-退出条件：后端、WebGUI 和 Desktop 不再维护独立 Adapter 与扩展目录。
+退出条件：Manager 只通过一个 API 发布插件与贡献目录。该条件已完成；表现端移除固定目录属于阶段 5。
 
 ### 阶段 5：WebGUI 与 Desktop 声明式扩展
 
-WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题。Desktop 支持托盘菜单、快捷键、命令、设置区、状态卡片和主题。
+当前状态：尚未完成。WebGUI 后续从统一目录生成导航、页面模板、设置区、状态卡片、命令和主题；Desktop 后续从同一目录生成托盘菜单、快捷键、命令、设置区、状态卡片和主题。
 
 退出条件：安装一个后端插件后，其声明入口可以在支持的平台自动出现并在卸载后消失。
 
@@ -409,7 +409,7 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 6. 定义 Contribution Registry 合同，但不改 WebGUI/Desktop；
 7. 增加真实 Context 组合、销毁和重复挂载测试。
 
-当前七项均已完成：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据、声明式 Contribution Registry 合同和 Fiber 生命周期测试已经存在。Contribution Registry 目前只在运行时合同和测试中，尚未由 Manager API 发布，也未驱动 WebGUI/Desktop。
+当前七项均已完成：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据、声明式 Contribution Registry 合同和 Fiber 生命周期测试已经存在。后续切片已让 Manager API 发布 Contribution Registry；WebGUI/Desktop 仍未从该目录生成界面。
 
 这个切片不修改消息模板、Desktop IPC、DSH 投递、Route 配置、Outbox 或现有界面交互。
 
@@ -512,7 +512,18 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 4. 常驻 Gateway 的正常退出和启动失败都销毁整个根 Context，由各 Registry Fiber 撤销自身监听器、定时器和注册项；
 5. WebGUI 与 Desktop 是可扩展的最小宿主。扩展者通过贡献插件增加页面、操作、状态或设置，表现入口仍属于插件体系。
 
-`create-gateway-host` 已完成。下一阶段建立 Manager Plugin Runtime 和统一 Plugin Catalog API。
+`create-gateway-host` 已完成。
+
+## 第十二个实施切片：Manager Plugin Runtime 与统一目录
+
+1. 将 Gateway 根中的并发初始化去重、失败重试、等待初始化销毁和幂等销毁提取为通用 `RabiCordisRoot`，Gateway 与 Manager 使用对称的独立根 API；
+2. Manager 启动时在单一 Manager 根 Context 下挂载 `PluginCatalog`、`ContributionRegistry` 和内置 Manager 插件；
+3. Plugin Catalog 记录稳定实例 ID、manifest、宿主、作用域、状态、缺失能力、启动/停止时间和脱敏错误；
+4. 每个 Manager 插件使用独立 Fiber，激活失败回滚自身贡献，卸载只清理自身注册，根销毁清空整个 Manager 目录；
+5. `GET /api/plugins/catalog` 统一返回插件与贡献修订号、实例状态及声明式贡献，并支持 `host=web|desktop`；
+6. 内置 Manager 插件已声明当前 WebGUI 导航、设置区、状态卡片和 Desktop 设置入口，但 WebGUI/Desktop 尚未消费该目录。
+
+`create-manager-contribution-catalog` 已完成。下一阶段是让 WebGUI 与 Desktop 从统一目录生成扩展入口。
 
 ## 完成标准
 

@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: refactor in progress. Stage 0, Stage 1, the Contribution Registry contract, all resident Gateway message-adapter lifecycles, the host-type split, and the single Gateway root Context plus command-dispatch slice are complete. Manager Plugin Runtime, the unified Plugin Catalog API, and multi-host presentation extensions remain to be implemented.
+> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, and unified Plugin/Contribution Catalog API are implemented. WebGUI/Desktop catalog consumption, configuration reconciliation, and isolated-process plugins are not complete.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -12,7 +12,7 @@ RabiRoute adopts a Cordis composition kernel, a Rabi business adaptation layer, 
 
 - Manager and Gateway use Cordis for plugin dependencies, Fiber lifecycle, and effect disposal.
 - RabiRoute supplies its own service keys, events, manifests, configuration, and status catalog so business code does not depend directly on Cordis APIs.
-- WebGUI and Desktop retain minimal hosts, while pages, status cards, commands, menus, settings, themes, and other product capabilities can be contributed by plugins.
+- WebGUI and Desktop are minimal hosts. Pages, status cards, commands, menus, settings, themes, and other extensible entries come from the unified plugin/contribution catalog. Manager publishes the catalog, while both presentation hosts still need to consume it.
 - Route configuration, event records, routing decisions, `AgentPacket`, delivery evidence, and Outbox remain owned by stable modules.
 - Existing capabilities migrate in this order: Agent Adapters, message-side lifecycle, Gateway composition, Manager catalog, presentation extensions, and configuration reconciliation.
 
@@ -33,7 +33,7 @@ The RabiRoute minimal host only:
 
 Routing, Adapters, settings pages, status pages, tray menus, shortcuts, themes, and device capabilities are composable product features and should become built-in plugins or plugin contributions over time.
 
-Only the minimal loader kernel and operating-system/runtime boundaries remain outside the plugin model.
+Only the minimal loader kernel and operating-system/runtime boundaries remain outside the plugin model. Desktop and WebGUI do not own a second extension truth; as hosts, they render entries declared by the plugin contribution catalog and supported by the current platform.
 
 ## Dependency baseline
 
@@ -45,7 +45,7 @@ As of August 21, 2026, the initial validation uses:
 
 Cordis 4 is still a prerelease. Before any upgrade or Loader adoption, refresh the current version, changelog, and Loader API, and continue using an exact version and lockfile.
 
-DSH uses pinned, renamed, and locally modified Cordis sources. RabiRoute does not depend on DSH's `@deepseek-ai/cordis` or copy its patches. The initial migration uses upstream `cordis`, with every import contained under `src/runtime/`. Prefer an upstream fix when a defect blocks production; maintain a minimal patch only when necessary.
+DSH uses pinned, renamed, and locally modified Cordis sources. Its Loader imports ordinary plugins into the same Node process and mounts them as Fibers; Cordis `isolate` changes service lookup scope only. Subprocesses and Workers are created explicitly by dedicated capabilities such as subprocess and workflow providers, not by every plugin. RabiRoute does not depend on DSH's `@deepseek-ai/cordis` or copy its patches. Prefer an upstream fix when a defect blocks production; maintain a minimal patch only when necessary.
 
 ## Goals and non-goals
 
@@ -102,7 +102,7 @@ Manager Process
 
 Stage 1 preserves the current one-Route-per-Gateway process model. Each resident Gateway creates one root Context and mounts the Agent Adapter Registry, Message Adapter Registry, and Contribution Registry under that same root instead of creating separate Hosts for the three registries.
 
-WebGUI is an independent JavaScript runtime and may gain a client Extension Host later. Desktop is currently an independent Python/Qt runtime and is not forced to port Cordis. It implements the same composition semantics through the shared manifest and contribution protocol exposed by Manager.
+WebGUI is an independent JavaScript runtime and Desktop is an independent Python/Qt runtime; neither is required to port Cordis. Manager now publishes the shared Plugin/Contribution Catalog through `GET /api/plugins/catalog`, with `host=web|desktop` filtering. WebGUI and Desktop do not consume that endpoint yet, so their current entries still come from fixed host implementations.
 
 ## Rabi adaptation layer
 
@@ -209,7 +209,7 @@ type RabiUiContribution =
   | { kind: "theme"; id: string; resourceRoot: string };
 ```
 
-After Stages 4 and 5, WebGUI and Desktop will read the same Manager Contribution Catalog and render the entries supported by each platform. When a plugin unloads, its page entries, menus, hotkeys, and status cards will disappear automatically.
+Manager now publishes one Plugin/Contribution Catalog through `GET /api/plugins/catalog` and can filter contributions for `web` or `desktop`. WebGUI and Desktop consumption is still pending. Once connected, catalog revisions caused by plugin unload will remove the corresponding page entries, menus, hotkeys, and status cards.
 
 ### Custom presentation code
 
@@ -336,13 +336,13 @@ Exit criterion: current Gateway behavior and records remain unchanged.
 
 ### Stage 4: Manager Plugin/Contribution Catalog
 
-Manager combines manifests, instance state, missing dependencies, install requirements, diagnostic actions, and WebGUI/Desktop contributions. Existing scan APIs remain compatible first.
+Current status: implemented. `src/runtime/managerPluginRuntime.ts` provides Plugin Catalog and Contribution Registry services under the Manager root Context. It records plugin manifests, hosts, scopes, lifecycle state, missing capabilities, and sanitized failures, and removes contributions with the owning Fiber. `src/manager/builtinManagerPlugins.ts` declares current WebGUI navigation, settings sections, status cards, and the Desktop settings entry as built-in plugin contributions. `GET /api/plugins/catalog` returns one snapshot; `host=web|desktop` filters presentation contributions only, while the plugin-instance list remains complete. Failed or unmounted instances can reactivate under the same instance ID. Manager startup uses one rollback path, so listener failure or later initialization failure stops started resources, closes HTTP/SSE, removes signal handlers, and disposes the Manager root. Existing scan APIs remain compatible.
 
-Exit criterion: backend, WebGUI, and Desktop no longer maintain separate Adapter and extension catalogs.
+Exit criterion: Manager publishes plugins and contributions through one API. This is complete; removing fixed presentation-host catalogs belongs to Stage 5.
 
 ### Stage 5: declarative WebGUI and Desktop extensions
 
-WebGUI supports navigation, page templates, settings sections, status cards, commands, and themes. Desktop supports tray menus, hotkeys, commands, settings sections, status cards, and themes.
+Current status: not complete. WebGUI will generate navigation, page templates, settings sections, status cards, commands, and themes from the unified catalog. Desktop will generate tray menus, hotkeys, commands, settings sections, status cards, and themes from the same catalog.
 
 Exit criterion: installing a backend plugin makes its declared entries appear on supported hosts and unloading it removes them.
 
@@ -409,7 +409,7 @@ Rollback changes runtime selection only and never creates duplicate business fac
 6. define the Contribution Registry contract without changing WebGUI/Desktop yet;
 7. add real Context composition, disposal, and repeated-mount tests.
 
-All seven items are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, a declarative Contribution Registry contract, and Fiber lifecycle tests. The Contribution Registry currently exists only as a runtime contract with tests; Manager does not publish it yet, and WebGUI/Desktop do not render from it yet.
+All seven items are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, a declarative Contribution Registry contract, and Fiber lifecycle tests. A later slice now publishes the Contribution Registry through Manager API; WebGUI/Desktop still do not generate their interfaces from that catalog.
 
 This slice does not change message templates, Desktop IPC, DSH delivery, Route configuration, Outbox, or current UI behavior.
 
@@ -512,7 +512,18 @@ This split gives message-source facts and resident plugin lifecycles separate co
 4. normal resident shutdown and startup failure both dispose the whole root Context, allowing each Registry Fiber to remove its listeners, timers, and registrations;
 5. WebGUI and Desktop are extensible minimal hosts. Extension authors add pages, actions, status, or settings through contribution plugins, so presentation entries remain inside the plugin model.
 
-`create-gateway-host` is complete. The next stage establishes the Manager Plugin Runtime and unified Plugin Catalog API.
+`create-gateway-host` is complete.
+
+## Twelfth implementation slice: Manager Plugin Runtime and unified catalog
+
+1. extract Gateway root initialization deduplication, failure retry, initialization-aware disposal, and idempotent disposal into the reusable `RabiCordisRoot`, with symmetric but separate Gateway and Manager root APIs;
+2. mount `PluginCatalog`, `ContributionRegistry`, and built-in Manager plugins under one Manager root Context during startup;
+3. record stable instance IDs, manifests, hosts, scopes, status, missing capabilities, start/stop timestamps, and sanitized failures in Plugin Catalog;
+4. give each Manager plugin its own Fiber so activation failure rolls back its contributions, plugin unload removes only its registrations, and root disposal clears the complete Manager catalog;
+5. publish plugin and contribution revisions, instance state, and declarative contributions through `GET /api/plugins/catalog`, with `host=web|desktop` filtering;
+6. declare the current WebGUI navigation, settings sections, status cards, and Desktop settings entry as built-in Manager plugin contributions, while leaving WebGUI/Desktop catalog consumption for the next slice.
+
+`create-manager-contribution-catalog` is complete. The next stage makes WebGUI and Desktop generate extension entries from the unified catalog.
 
 ## Readiness criteria
 

@@ -48,7 +48,9 @@ function messageDefinition(onStart: () => void, onDispose: () => void): MessageA
 const testContribution = {
   kind: "navigation" as const,
   id: "shared-root",
-  labelKey: "nav.sharedRoot",
+  label: { key: "nav.sharedRoot", fallback: "Shared root" },
+  surface: "web.navigation",
+  slot: "utility",
   target: "/shared-root",
   hosts: ["web"] as const
 };

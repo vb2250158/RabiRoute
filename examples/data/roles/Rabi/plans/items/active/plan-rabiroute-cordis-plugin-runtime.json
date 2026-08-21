@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "create-manager-contribution-catalog",
-  "currentStep": "create-gateway-host 已完成：常驻 Gateway 使用单一 Cordis 根 Context，在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；src/index.ts 只分发一次性命令与常驻入口，一次性命令不启动 Message Adapter Runtime 或 Contribution Runtime。",
-  "nextAction": "建立 Manager Plugin Runtime 和统一 Plugin Catalog API。",
+  "currentStepId": "extend-webgui-desktop",
+  "currentStep": "create-manager-contribution-catalog 已完成：Manager 使用独立 Cordis 根 Context 挂载 Plugin Catalog、Contribution Registry 和内置 Manager 插件；GET /api/plugins/catalog 统一发布插件状态与 WebGUI/Desktop 贡献，并支持按宿主筛选。",
+  "nextAction": "让 WebGUI 和 Desktop 消费统一 Plugin/Contribution Catalog，移除各自维护的固定扩展目录。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -54,12 +54,13 @@
     {
       "id": "create-manager-contribution-catalog",
       "title": "建立 Manager Plugin Runtime 和统一 Plugin Catalog API",
-      "status": "进行中"
+      "status": "已完成",
+      "completedAt": "2026-08-21T16:57:34+08:00"
     },
     {
       "id": "extend-webgui-desktop",
       "title": "让 WebGUI 和 Desktop 从同一目录生成扩展入口",
-      "status": "未开始"
+      "status": "进行中"
     },
     {
       "id": "add-reconciliation-and-isolation",
@@ -80,7 +81,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T16:16:43+08:00",
+  "updatedAt": "2026-08-21T16:57:34+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -106,6 +107,11 @@
     "Wearable",
     "MessageEndpointType",
     "GatewayMessageAdapterType",
-    "Gateway root Context"
+    "Gateway root Context",
+    "Manager root Context",
+    "Manager Plugin Runtime",
+    "Plugin Catalog",
+    "Contribution Catalog",
+    "/api/plugins/catalog"
   ]
 }

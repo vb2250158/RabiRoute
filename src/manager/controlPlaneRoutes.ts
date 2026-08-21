@@ -202,6 +202,9 @@ import {
 } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
+import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
+import { getBuiltinManagerPluginRuntime } from "./managerPluginHost.js";
+import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
 import { LanguageStyleValidator } from "../languageStyleValidation.js";
 import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
 import {
@@ -829,13 +832,26 @@ const bilibiliHistoryBridge = new BilibiliHistoryBridge(
   () => configRepository.rolesRoot,
   { readOnly: managerReadOnly }
 );
-const managerEventStreams = new Set<http.ServerResponse>();
+const managerEventClients = new Map<http.ServerResponse, NodeJS.Timeout>();
+
+function removeManagerEventClient(response: http.ServerResponse): void {
+  const keepAlive = managerEventClients.get(response);
+  if (keepAlive) clearInterval(keepAlive);
+  managerEventClients.delete(response);
+}
+
+export function closeManagerEventClients(): void {
+  for (const response of [...managerEventClients.keys()]) {
+    removeManagerEventClient(response);
+    if (!response.writableEnded && !response.destroyed) response.end();
+  }
+}
 
 function publishManagerEvent(eventType: string, data: unknown): void {
   const frame = `event: ${eventType.replace(/[^a-zA-Z0-9_.:-]/g, "_")}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const stream of [...managerEventStreams]) {
-    if (stream.writableEnded || stream.destroyed) managerEventStreams.delete(stream);
-    else stream.write(frame);
+  for (const response of [...managerEventClients.keys()]) {
+    if (response.writableEnded || response.destroyed) removeManagerEventClient(response);
+    else response.write(frame);
   }
 }
 
@@ -847,15 +863,61 @@ function openManagerEventStream(request: http.IncomingMessage, response: http.Se
     "x-accel-buffering": "no"
   });
   response.write("retry: 3000\n\nevent: ready\ndata: {}\n\n");
-  managerEventStreams.add(response);
   // event-driven-allow: SSE protocol keepalive; no business state is queried.
   const keepAlive = setInterval(() => {
     if (!response.writableEnded) response.write(`: keepalive ${Date.now()}\n\n`);
   }, 15000);
   keepAlive.unref();
-  request.once("close", () => {
-    clearInterval(keepAlive);
-    managerEventStreams.delete(response);
+  managerEventClients.set(response, keepAlive);
+  const removeClient = () => removeManagerEventClient(response);
+  request.once("close", removeClient);
+  response.once("close", removeClient);
+}
+
+export type ManagerSignalTarget = {
+  on(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  removeListener(event: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+};
+
+export function installManagerSignalHandlers(
+  shutdown: (reason: "SIGINT" | "SIGTERM") => void,
+  target: ManagerSignalTarget = process
+): () => void {
+  const onSigint = () => shutdown("SIGINT");
+  const onSigterm = () => shutdown("SIGTERM");
+  target.on("SIGINT", onSigint);
+  target.on("SIGTERM", onSigterm);
+  let installed = true;
+  return () => {
+    if (!installed) return;
+    installed = false;
+    target.removeListener("SIGINT", onSigint);
+    target.removeListener("SIGTERM", onSigterm);
+  };
+}
+
+export function listenManagerServer(server: http.Server, port: number, host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      server.removeListener("error", onError);
+      server.removeListener("listening", onListening);
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    const onListening = (): void => {
+      cleanup();
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    try {
+      server.listen(port, host);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }
 
@@ -7401,6 +7463,38 @@ export function handleManagerPersonaDomainApi(
 }
 
 export async function startManager(): Promise<void> {
+  const managerPluginRuntime = await getBuiltinManagerPluginRuntime();
+  const managerCordisRoot = getBuiltinManagerCordisRoot();
+  let unsubscribeMessageProcessingPlanUpdates: (() => void) | undefined;
+  let configWatcher: ConfigWatcher | null = null;
+  let removeSignalHandlers = (): void => {};
+  let managerResourcesStopped = false;
+  let server: http.Server | undefined;
+
+  function stopManagerResources(): void {
+    if (managerResourcesStopped) return;
+    managerResourcesStopped = true;
+    removeSignalHandlers();
+    unsubscribeMessageProcessingPlanUpdates?.();
+    for (const timer of knowledgeCallbackReminderTimers.values()) clearTimeout(timer);
+    knowledgeCallbackReminderTimers.clear();
+    for (const timer of agentRequestReminderTimers.values()) clearTimeout(timer);
+    agentRequestReminderTimers.clear();
+    if (planFeedbackRecoveryTimer) clearTimeout(planFeedbackRecoveryTimer);
+    planFeedbackRecoveryTimer = undefined;
+    memoryConsolidationScheduler?.stop();
+    configWatcher?.close();
+    personaSyncAutoReconciler?.stop();
+    personaSyncService.stopManifestIndex();
+    personaSyncLanServer.stop();
+    rabiLinkRelayRuntime.stop();
+    speechModelManager.stop();
+    performanceApi.close();
+    stopAllGateways();
+    closeManagerEventClients();
+  }
+
+  try {
   if (!managerReadOnly) {
     await performanceMonitoring.start().catch((error) => {
       managerOperationalLog.record("warn", "performance_monitor_start_failed", {
@@ -7428,7 +7522,7 @@ export async function startManager(): Promise<void> {
   } else {
     reconcileSpeechMicrophone("manager startup");
   }
-  const unsubscribeMessageProcessingPlanUpdates = managerReadOnly
+  unsubscribeMessageProcessingPlanUpdates = managerReadOnly
     ? undefined
     : subscribePlanUpdates((event) => { void handleMessageProcessingPlanUpdate(event.roleDir, event.after); });
   if (!managerReadOnly) {
@@ -7436,7 +7530,9 @@ export async function startManager(): Promise<void> {
     refreshAgentRequestReminderTimers();
   }
 
-  const server = http.createServer((request, response) => {
+
+  const activeServer = http.createServer((request, response) => {
+  server = activeServer;
     const requestId = randomUUID();
     const requestStartedAt = Date.now();
     const method = request.method ?? "UNKNOWN";
@@ -7501,6 +7597,9 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (handleManagerEventApi(request, requestUrl, response)) {
+        return;
+      }
+      if (handlePluginCatalogApi(request, requestUrl, response, { runtime: managerPluginRuntime })) {
         return;
       }
       if (request.method === "GET" && assetResponse(requestUrl.pathname, response)) {
@@ -8466,11 +8565,11 @@ export async function startManager(): Promise<void> {
     }
   });
 
-  remoteAgentHub.attach(server);
-  server.requestTimeout = managerHttpLimits.requestTimeoutMs;
-  server.headersTimeout = managerHttpLimits.headersTimeoutMs;
-  server.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
-  server.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
+  remoteAgentHub.attach(activeServer);
+  activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
+  activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
+  activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
+  activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
   if (managerShouldAutostart && remoteAgentDiscoverable) {
     remoteAgentHub.startDiscoveryResponder();
   } else if (!managerShouldAutostart) {
@@ -8479,26 +8578,26 @@ export async function startManager(): Promise<void> {
     console.log("Remote Agent LAN discovery responder disabled by REMOTE_AGENT_DISCOVERABLE=0");
   }
 
-  server.listen(managerPort, managerHost, () => {
-    console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
-    console.log(`roles: ${rolesRoot}`);
-    console.log(`route: ${routeRoot}`);
-    managerOperationalLog.record("info", "manager_listening", {
-      result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
-    });
-    syncRabiLinkRelayRuntime();
-    memoryConsolidationScheduler?.start();
-    setImmediate(() => { void prewarmRolePlanCatalogs(); });
-    setImmediate(() => { void runPlanFeedbackRecoverySweep("manager startup"); });
-    if (managerShouldAutostart) {
-      setImmediate(() => {
-        void autoLoginNapcatInstancesOnRabiStart(napcatManagerCtx())
-          .catch(error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`));
-      });
-    }
-  });
+  await listenManagerServer(activeServer, managerPort, managerHost);
 
-  const configWatcher = managerShouldAutostart && managerConfigWatcherEnabled() ? startConfigWatcher() : null;
+  console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
+  console.log(`roles: ${rolesRoot}`);
+  console.log(`route: ${routeRoot}`);
+  managerOperationalLog.record("info", "manager_listening", {
+    result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
+  });
+  syncRabiLinkRelayRuntime();
+  memoryConsolidationScheduler?.start();
+  setImmediate(() => { void prewarmRolePlanCatalogs(); });
+  setImmediate(() => { void runPlanFeedbackRecoverySweep("manager startup"); });
+  if (managerShouldAutostart) {
+    setImmediate(() => {
+      void autoLoginNapcatInstancesOnRabiStart(napcatManagerCtx())
+        .catch(error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`));
+    });
+  }
+
+  configWatcher = managerShouldAutostart && managerConfigWatcherEnabled() ? startConfigWatcher() : null;
   if (!configWatcher) {
     console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
   }
@@ -8512,32 +8611,31 @@ export async function startManager(): Promise<void> {
     shuttingDown = true;
     console.log(`gateway-manager shutting down: ${reason}`);
     managerOperationalLog.record("info", "manager_shutdown_requested", { result: reason });
-    unsubscribeMessageProcessingPlanUpdates?.();
-    for (const timer of knowledgeCallbackReminderTimers.values()) clearTimeout(timer);
-    knowledgeCallbackReminderTimers.clear();
-    for (const timer of agentRequestReminderTimers.values()) clearTimeout(timer);
-    agentRequestReminderTimers.clear();
-    if (planFeedbackRecoveryTimer) clearTimeout(planFeedbackRecoveryTimer);
-    planFeedbackRecoveryTimer = undefined;
-    memoryConsolidationScheduler?.stop();
-    configWatcher?.close();
-    personaSyncAutoReconciler?.stop();
-    personaSyncService.stopManifestIndex();
-    personaSyncLanServer.stop();
-    rabiLinkRelayRuntime.stop();
-    speechModelManager.stop();
-    performanceApi.close();
-    stopAllGateways();
-    server.close(() => {
+    stopManagerResources();
+    const managerCordisDispose = managerCordisRoot.dispose();
+    activeServer.close(() => {
       void Promise.allSettled([
         messageProcessingBoardPersistence.flush(),
         managerOperationalLog.flush(),
-        performanceMonitoring.stop()
+        performanceMonitoring.stop(),
+        managerCordisDispose
       ]).finally(() => process.exit(0));
     });
     setTimeout(() => process.exit(0), 10_000).unref();
   }
 
-  process.on("SIGINT", () => shutdownManager("SIGINT"));
-  process.on("SIGTERM", () => shutdownManager("SIGTERM"));
+  removeSignalHandlers = installManagerSignalHandlers(shutdownManager);
+  } catch (error) {
+    stopManagerResources();
+    if (server?.listening) {
+      await new Promise<void>(resolve => server?.close(() => resolve()));
+    }
+    await Promise.allSettled([
+      messageProcessingBoardPersistence.flush(),
+      managerOperationalLog.flush(),
+      performanceMonitoring.stop(),
+      managerCordisRoot.dispose()
+    ]);
+    throw error;
+  }
 }
