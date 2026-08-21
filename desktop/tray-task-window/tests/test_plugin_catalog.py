@@ -15,6 +15,8 @@ from rabiroute_tray.plugin_catalog import (
     DesktopPluginCatalog,
     DesktopPluginCatalogCache,
     DesktopPluginMenuItem,
+    DesktopPluginSettingsSection,
+    DesktopPluginStatusCard,
     empty_desktop_plugin_catalog,
     parse_desktop_plugin_catalog,
 )
@@ -51,15 +53,82 @@ def _tray(contribution_id: str, command_id: str, **overrides) -> dict:
     return _base("tray-menu", contribution_id, commandId=command_id, **overrides)
 
 
-def _payload(revision: int = 1, contributions: list[object] | None = None) -> dict:
+def _status(contribution_id: str, query_id: str, renderer_id: str, **overrides) -> dict:
+    return _base(
+        "status-card",
+        contribution_id,
+        surface="shared.status",
+        slot="runtime-status",
+        queryId=query_id,
+        rendererId=renderer_id,
+        **overrides,
+    )
+
+
+def _settings(contribution_id: str = "desktop-settings", **overrides) -> dict:
+    values = {
+        "surface": "shared.settings",
+        "slot": "desktop",
+        "rendererId": "builtin.desktop-settings.v1",
+        "schemaId": "desktop.settings.v1",
+        "readCommandId": "manager.desktop-settings.read",
+        "writeCommandId": "manager.desktop-settings.write",
+    }
+    values.update(overrides)
+    return _base("settings-section", contribution_id, **values)
+
+
+def _plugin(
+    plugin_id: str,
+    instance_id: str,
+    *,
+    status: str = "active",
+    capabilities: list[str] | None = None,
+    hosts: list[str] | None = None,
+    manifest_id: str | None = None,
+) -> dict:
+    return {
+        "instanceId": instance_id,
+        "pluginId": plugin_id,
+        "host": "manager",
+        "scope": "global",
+        "status": status,
+        "missingCapabilities": [],
+        "manifest": {
+            "id": manifest_id or plugin_id,
+            "name": plugin_id,
+            "version": "1.0.0",
+            "kind": "builtin",
+            "hosts": hosts or ["manager", "desktop"],
+            "capabilities": capabilities or [],
+        },
+    }
+
+
+def _payload(
+    revision: int = 1,
+    contributions: list[object] | None = None,
+    plugins: list[object] | None = None,
+) -> dict:
+    contribution_rows = contributions if contributions is not None else []
+    if plugins is None:
+        owners: dict[tuple[str, str], dict] = {}
+        for row in contribution_rows:
+            if not isinstance(row, dict):
+                continue
+            plugin_id = row.get("pluginId")
+            instance_id = row.get("instanceId")
+            if isinstance(plugin_id, str) and isinstance(instance_id, str):
+                owners[(plugin_id, instance_id)] = _plugin(plugin_id, instance_id)
+        plugins = list(owners.values())
     return {
         "code": 0,
         "data": {
             "schemaVersion": 2,
             "host": "desktop",
             "revision": {"plugins": revision, "contributions": revision},
-            "plugins": [],
-            "contributions": contributions if contributions is not None else [],
+            "plugins": plugins,
+            "contributions": contribution_rows,
         },
     }
 
@@ -90,6 +159,42 @@ class _CatalogManagerClient(ManagerClient):
         return response  # type: ignore[return-value]
 
 
+class _SurfaceManagerClient(ManagerClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.paths: list[str] = []
+        self.catalog_payload = _payload(
+            contributions=[
+                _status(
+                    "speech-status",
+                    "manager.speech-status",
+                    "builtin.speech-status.v1",
+                    label={"fallback": "语音服务"},
+                ),
+                _status(
+                    "performance-status",
+                    "manager.performance-status",
+                    "builtin.performance-status.v1",
+                    label={"fallback": "性能监控"},
+                ),
+                _status("private-status", "manager.private", "package.private.v1"),
+                _settings(label={"fallback": "桌面设置"}),
+            ]
+        )
+
+    def _get_json(self, path: str) -> dict:
+        self.paths.append(path)
+        if path == "/api/plugins/catalog?host=desktop":
+            return self.catalog_payload
+        if path == "/api/speech/status":
+            return {"code": 0, "data": {"state": "online", "service": "RabiSpeech"}}
+        if path == "/api/performance/status":
+            return {"code": 0, "data": {"enabled": True, "loaded": True}}
+        if path == "/api/desktop/settings":
+            return {"code": 0, "data": {"theme": "dark", "screenshot": {"enabled": True}}}
+        raise AssertionError(f"Unexpected path: {path}")
+
+
 class _SlowCatalogManager:
     def desktop_plugin_catalog(self) -> DesktopPluginCatalog:
         time.sleep(0.15)
@@ -114,6 +219,130 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 ("打开设置", "open-settings", "desktop.open-settings"),
             ],
         )
+
+    def test_resolves_controlled_status_and_settings_contributions(self) -> None:
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _status(
+                        "speech-status",
+                        "manager.speech-status",
+                        "builtin.speech-status.v1",
+                        label={"fallback": "语音服务"},
+                        order=20,
+                    ),
+                    _status(
+                        "performance-status",
+                        "manager.performance-status",
+                        "builtin.performance-status.v1",
+                        label={"fallback": "性能监控"},
+                        order=30,
+                    ),
+                    _settings(label={"fallback": "桌面设置"}, order=40),
+                ]
+            )
+        )
+
+        self.assertEqual(
+            [(item.label, item.query_id, item.renderer_id) for item in catalog.status_cards],
+            [
+                ("语音服务", "manager.speech-status", "builtin.speech-status.v1"),
+                ("性能监控", "manager.performance-status", "builtin.performance-status.v1"),
+            ],
+        )
+        self.assertEqual(len(catalog.settings_sections), 1)
+        self.assertEqual(catalog.settings_sections[0].schema_id, "desktop.settings.v1")
+
+    def test_required_capabilities_use_desktop_host_registry_with_and_semantics(self) -> None:
+        plugin_id = "builtin:manager/speech"
+        instance_id = "manager:speech"
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _status(
+                        "supported",
+                        "manager.speech-status",
+                        "builtin.speech-status.v1",
+                        plugin_id=plugin_id,
+                        instance_id=instance_id,
+                        requiredCapabilities=["desktop.status-card"],
+                    ),
+                    _status(
+                        "missing-one",
+                        "manager.performance-status",
+                        "builtin.performance-status.v1",
+                        plugin_id=plugin_id,
+                        instance_id=instance_id,
+                        requiredCapabilities=["desktop.status-card", "manager.contributions"],
+                    ),
+                ],
+                plugins=[
+                    _plugin(
+                        plugin_id,
+                        instance_id,
+                        capabilities=["manager.contributions"],
+                    )
+                ],
+            )
+        )
+
+        self.assertEqual([item.contribution_id for item in catalog.status_cards], ["supported"])
+
+    def test_inactive_or_mismatched_plugin_owner_is_not_consumed(self) -> None:
+        contribution = _status(
+            "speech-status",
+            "manager.speech-status",
+            "builtin.speech-status.v1",
+        )
+        inactive = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[contribution],
+                plugins=[_plugin("builtin:manager/desktop", "manager:desktop", status="inactive")],
+            )
+        )
+        mismatched = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[contribution],
+                plugins=[
+                    _plugin(
+                        "builtin:manager/desktop",
+                        "manager:desktop",
+                        manifest_id="builtin:manager/other",
+                    )
+                ],
+            )
+        )
+        unsupported_host = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[contribution],
+                plugins=[
+                    _plugin(
+                        "builtin:manager/desktop",
+                        "manager:desktop",
+                        hosts=["manager", "web"],
+                    )
+                ],
+            )
+        )
+
+        self.assertEqual(inactive.status_cards, ())
+        self.assertEqual(mismatched.status_cards, ())
+        self.assertEqual(unsupported_host.status_cards, ())
+
+    def test_unknown_status_and_settings_contracts_are_not_consumed(self) -> None:
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _status("unknown-query", "manager.private", "builtin.speech-status.v1"),
+                    _status("unknown-renderer", "manager.speech-status", "package.custom.v1"),
+                    _settings("unknown-schema", schemaId="package.settings.v1"),
+                    _settings("unknown-read", readCommandId="manager.private.read"),
+                ]
+            )
+        )
+
+        self.assertEqual(catalog.status_cards, ())
+        self.assertEqual(catalog.settings_sections, ())
 
     def test_unknown_or_dangerous_handler_is_not_output(self) -> None:
         catalog = parse_desktop_plugin_catalog(
@@ -170,6 +399,57 @@ class DesktopPluginCatalogTest(unittest.TestCase):
 
         self.assertEqual(catalog.contribution_revision, 2)
         self.assertEqual(client.paths, ["/api/plugins/catalog?host=desktop"])
+
+    def test_manager_client_consumes_only_resolved_status_and_settings_contracts(self) -> None:
+        client = _SurfaceManagerClient()
+
+        snapshot = client.desktop_plugin_surface_snapshot()
+
+        self.assertEqual(
+            [result.card.query_id for result in snapshot.statuses],
+            ["manager.speech-status", "manager.performance-status"],
+        )
+        self.assertEqual(snapshot.statuses[0].payload["data"]["state"], "online")
+        self.assertEqual(len(snapshot.settings), 1)
+        self.assertEqual(snapshot.settings[0].settings.theme, "dark")
+        self.assertEqual(
+            client.paths,
+            [
+                "/api/plugins/catalog?host=desktop",
+                "/api/speech/status",
+                "/api/performance/status",
+                "/api/desktop/settings",
+            ],
+        )
+
+    def test_manager_client_rejects_unknown_fixed_ids_before_request(self) -> None:
+        client = _SurfaceManagerClient()
+        unknown_card = DesktopPluginStatusCard(
+            plugin_id="package:private",
+            instance_id="manager:private",
+            contribution_id="private-status",
+            query_id="manager.private",
+            renderer_id="package.private.v1",
+            label="私有状态",
+            order=1,
+        )
+        unknown_settings = DesktopPluginSettingsSection(
+            plugin_id="package:private",
+            instance_id="manager:private",
+            contribution_id="private-settings",
+            renderer_id="package.private.v1",
+            schema_id="package.private.v1",
+            read_command_id="manager.private.read",
+            write_command_id="manager.private.write",
+            label="私有设置",
+            order=1,
+        )
+
+        with self.assertRaises(ValueError):
+            client.desktop_plugin_status_payload(unknown_card)
+        with self.assertRaises(ValueError):
+            client.desktop_plugin_settings_value(unknown_settings)
+        self.assertEqual(client.paths, [])
 
     def test_first_request_failure_returns_empty_catalog(self) -> None:
         client = _CatalogManagerClient([URLError("offline")])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -14,10 +15,23 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QProgressBar, QPushButton, QTextEdit
 
-from rabiroute_tray.manager_client import ManagerSnapshot
+from rabiroute_tray.manager_client import (
+    DesktopPluginSettingsResult,
+    DesktopPluginStatusResult,
+    DesktopPluginSurfaceSnapshot,
+    DesktopSettings,
+    ManagerSnapshot,
+)
 from rabiroute_tray.desktop_models import PlanApprovalCommand, PlanApprovalContract, PlanApprovalFileChange
 from rabiroute_tray.role_context_repository import ContextEntry, RoleContextSnapshot
 from rabiroute_tray.task_repository import PlanItem, PlanSnapshot, PlanStep
+from rabiroute_tray.plugin_catalog import (
+    DesktopPluginCatalog,
+    DesktopPluginSettingsSection,
+    DesktopPluginStatusCard,
+    empty_desktop_plugin_catalog,
+)
+from rabiroute_tray.qt_async import wait_for_qt_tasks
 from rabiroute_tray.task_window import (
     ExpandableCard,
     KeywordPanel,
@@ -30,6 +44,22 @@ from rabiroute_tray.task_window import (
     _plan_status_palette_stylesheet,
 )
 from rabiroute_tray.theme import RABI_MENU_STYLESHEET, apply_rabi_menu_theme
+
+
+class _EmptyPluginManager:
+    def __init__(self, _manager_url: str) -> None:
+        pass
+
+    def desktop_plugin_surface_snapshot(self) -> DesktopPluginSurfaceSnapshot:
+        return DesktopPluginSurfaceSnapshot(empty_desktop_plugin_catalog())
+
+
+class _StaticPluginManager:
+    def __init__(self, snapshot: DesktopPluginSurfaceSnapshot) -> None:
+        self.snapshot = snapshot
+
+    def desktop_plugin_surface_snapshot(self) -> DesktopPluginSurfaceSnapshot:
+        return self.snapshot
 
 
 class TaskWindowLayoutTest(unittest.TestCase):
@@ -81,12 +111,14 @@ class TaskWindowLayoutTest(unittest.TestCase):
             consolidated_memory=[ContextEntry(title="桌面入口原则", keywords=["只读"])],
             status_lines=["NapCat 已连接：True"],
         )
-        self.window = TaskWindow()
+        self.window = TaskWindow(plugin_manager_factory=_EmptyPluginManager)
         self.window.render(self.manager, gateway, self.plans, self.context, [])
         self.window.show()
         self.app.processEvents()
 
     def tearDown(self) -> None:
+        wait_for_qt_tasks(1_000)
+        self.app.processEvents()
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()
@@ -200,6 +232,84 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertIn("Manager", keys)
         self.assertIn("Manager 地址", keys)
         self.assertIn("运行状态文件", keys)
+
+    def test_status_view_consumes_controlled_plugin_status_and_settings(self) -> None:
+        speech_card = DesktopPluginStatusCard(
+            plugin_id="builtin:manager/speech",
+            instance_id="manager:speech",
+            contribution_id="speech-status",
+            query_id="manager.speech-status",
+            renderer_id="builtin.speech-status.v1",
+            label="语音服务",
+            order=20,
+        )
+        performance_card = DesktopPluginStatusCard(
+            plugin_id="builtin:manager/performance",
+            instance_id="manager:performance",
+            contribution_id="performance-status",
+            query_id="manager.performance-status",
+            renderer_id="builtin.performance-status.v1",
+            label="性能监控",
+            order=30,
+        )
+        settings_section = DesktopPluginSettingsSection(
+            plugin_id="builtin:manager/desktop",
+            instance_id="manager:desktop",
+            contribution_id="desktop-settings",
+            renderer_id="builtin.desktop-settings.v1",
+            schema_id="desktop.settings.v1",
+            read_command_id="manager.desktop-settings.read",
+            write_command_id="manager.desktop-settings.write",
+            label="桌面设置",
+            order=40,
+        )
+        catalog = DesktopPluginCatalog(
+            schema_version=2,
+            plugin_revision=1,
+            contribution_revision=1,
+            menu_items=(),
+            status_cards=(speech_card, performance_card),
+            settings_sections=(settings_section,),
+        )
+        surface_snapshot = DesktopPluginSurfaceSnapshot(
+            catalog=catalog,
+            statuses=(
+                DesktopPluginStatusResult(
+                    speech_card,
+                    {"code": 0, "data": {"state": "online", "service": "RabiSpeech", "configuredUrl": "http://127.0.0.1:28090"}},
+                ),
+                DesktopPluginStatusResult(
+                    performance_card,
+                    {"code": 0, "data": {"enabled": True, "loaded": True, "retainedRecords": 12, "pendingRecords": 1}},
+                ),
+            ),
+            settings=(
+                DesktopPluginSettingsResult(
+                    settings_section,
+                    DesktopSettings(theme="dark", autostart=True, screenshot_enabled=True),
+                ),
+            ),
+        )
+        self.window._plugin_surface_snapshot = None
+        self.window._plugin_surface_manager_url = ""
+        self.window._plugin_manager_factory = lambda _url: _StaticPluginManager(surface_snapshot)
+
+        self.window.set_view("status")
+        deadline = time.perf_counter() + 1.0
+        titles: list[str] = []
+        while time.perf_counter() < deadline:
+            self.app.processEvents()
+            titles = [label.text() for label in self.window.findChildren(QLabel, "cardTitle")]
+            if "语音服务" in titles:
+                break
+            time.sleep(0.01)
+
+        self.assertIn("语音服务", titles)
+        self.assertIn("性能监控", titles)
+        self.assertIn("桌面设置", titles)
+        settings_button = self.window.findChild(QPushButton, "pluginSettingsButton")
+        self.assertIsNotNone(settings_button)
+        self.assertEqual(settings_button.property("pluginContributionId"), "desktop-settings")
 
     def test_runtime_chip_exposes_semantic_status_tone(self) -> None:
         self.assertEqual(self.window.status_chip.property("statusTone"), "running")

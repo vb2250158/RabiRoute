@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QIcon, QKeyEvent, QMouseEvent, QPixmap
+from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont, QIcon, QKeyEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -24,9 +24,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .manager_client import ManagerSnapshot
+from .manager_client import (
+    DesktopPluginSettingsResult,
+    DesktopPluginStatusResult,
+    DesktopPluginSurfaceSnapshot,
+    ManagerClient,
+    ManagerSnapshot,
+)
 from .desktop_models import ContextEntry, PlanItem, PlanSnapshot, PlanStep, RoleContextSnapshot
 from .display_helpers import route_enabled_label, route_running_label, route_state, route_status_label, route_subtitle, route_title
+from .plugin_catalog import DesktopPluginSettingsSection, SUPPORTED_DESKTOP_SETTINGS_SECTIONS
+from .qt_async import QtAsyncTask, start_qt_task
 from .theme import apply_rabi_menu_theme, normalize_theme, theme_stylesheet
 
 
@@ -1002,7 +1010,12 @@ class TaskWindow(QWidget):
     send_message_requested = Signal(str, object)
     plan_feedback_requested = Signal(str, str, str, str)
 
-    def __init__(self, app_icon: QIcon | None = None, theme: object = "light") -> None:
+    def __init__(
+        self,
+        app_icon: QIcon | None = None,
+        theme: object = "light",
+        plugin_manager_factory=ManagerClient,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("RabiRoute 角色面板")
         self.setWindowFlags(Qt.Window)
@@ -1022,6 +1035,12 @@ class TaskWindow(QWidget):
         self._message_send_pending = False
         self._sidebar_collapsed = False
         self.theme = normalize_theme(theme)
+        self._plugin_manager_factory = plugin_manager_factory
+        self._plugin_surface_task: QtAsyncTask | None = None
+        self._plugin_surface_snapshot: DesktopPluginSurfaceSnapshot | None = None
+        self._plugin_surface_manager_url = ""
+        self._plugin_surface_loading = False
+        self._plugin_surface_error = ""
 
         self.header = QFrame()
         self.header.setObjectName("header")
@@ -1172,6 +1191,9 @@ class TaskWindow(QWidget):
         self.refresh_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.refresh_button.setToolTip("刷新")
         self.refresh_button.setAccessibleName("刷新记忆与计划")
+        self.refresh_button.clicked.connect(
+            lambda _checked=False: self._refresh_plugin_surfaces(force=True)
+        )
 
         self.footer_frame = QFrame()
         self.footer_frame.setObjectName("footerBar")
@@ -1219,6 +1241,8 @@ class TaskWindow(QWidget):
         self.active_view = view_key
         self._sync_buttons()
         self._render_active_view()
+        if view_key == "status":
+            self._refresh_plugin_surfaces()
 
     def set_actions(self, actions: list[tuple[str, object, bool]]) -> None:
         while self.action_buttons:
@@ -1255,7 +1279,12 @@ class TaskWindow(QWidget):
     ) -> None:
         scroll_bar = self.content.verticalScrollBar()
         scroll_value = scroll_bar.value()
+        previous_manager_url = self.manager.manager_url if self.manager is not None else ""
         self.manager = manager
+        if previous_manager_url and previous_manager_url != manager.manager_url:
+            self._plugin_surface_snapshot = None
+            self._plugin_surface_manager_url = ""
+            self._plugin_surface_error = ""
         self.selected_gateway = selected_gateway or manager.selected_gateway
         self.plans = plans
         self.context = context
@@ -1279,6 +1308,8 @@ class TaskWindow(QWidget):
         self.status_detail.setText(f"当前航线：{self._gateway_label(gateway) if gateway else '未选择'}")
         self._render_route_buttons()
         self._render_active_view()
+        if self.active_view == "status":
+            self._refresh_plugin_surfaces()
         QTimer.singleShot(0, lambda value=scroll_value: self._restore_scroll(value))
 
     def _persona_avatar_pixmap(self, size: int) -> QPixmap:
@@ -1619,6 +1650,133 @@ class TaskWindow(QWidget):
             fields.append(("运行状态文件", line))
         self._add_section_header("诊断 / 路由状态", "manager、gateway 和角色目录的只读状态。", "status")
         self.content_layout.addWidget(StatusTable(fields))
+        self._render_plugin_surfaces()
+
+    def _refresh_plugin_surfaces(self, force: bool = False) -> None:
+        if self.active_view != "status" or self.manager is None or not self.manager.connected:
+            return
+        manager_url = self.manager.manager_url
+        if self._plugin_surface_task is not None:
+            return
+        if (
+            not force
+            and self._plugin_surface_snapshot is not None
+            and self._plugin_surface_manager_url == manager_url
+        ):
+            return
+
+        self._plugin_surface_loading = True
+        self._plugin_surface_error = ""
+        self._render_active_view()
+        client = self._plugin_manager_factory(manager_url)
+
+        def completed(task: QtAsyncTask, result: object) -> None:
+            if self._plugin_surface_task is task:
+                self._plugin_surface_task = None
+            if self.manager is None or self.manager.manager_url != manager_url:
+                return
+            self._plugin_surface_loading = False
+            if isinstance(result, DesktopPluginSurfaceSnapshot):
+                self._plugin_surface_snapshot = result
+                self._plugin_surface_manager_url = manager_url
+                self._plugin_surface_error = ""
+            else:
+                self._plugin_surface_error = str(result)
+            if self.active_view == "status":
+                self._render_active_view()
+
+        self._plugin_surface_task = start_qt_task(
+            client.desktop_plugin_surface_snapshot,
+            completed,
+            on_error=lambda error: error,
+        )
+
+    def _render_plugin_surfaces(self) -> None:
+        snapshot = self._plugin_surface_snapshot
+        if self._plugin_surface_loading and snapshot is None:
+            self._add_section_header("插件状态", "正在读取 Desktop 插件目录和受控状态。", "status")
+            self._add_info_card("插件", "正在加载", [], "neutral")
+            return
+        if self._plugin_surface_error and snapshot is None:
+            self._add_section_header("插件状态", "插件目录暂不可用，可使用托盘固定入口刷新或打开 WebGUI。", "status")
+            self._add_info_card("插件", "读取失败", [("错误", self._plugin_surface_error)], "empty")
+            return
+        if snapshot is None:
+            return
+        if not snapshot.catalog.status_cards and not snapshot.catalog.settings_sections:
+            self._add_section_header("插件状态", "插件目录暂不可用，可使用托盘固定入口刷新或打开 WebGUI。", "status")
+            return
+
+        if snapshot.statuses:
+            self._add_section_header("插件状态", "由 Desktop 固定查询和渲染器读取，只读展示。", "status")
+            for result in snapshot.statuses:
+                self._add_info_card(
+                    "插件状态",
+                    result.card.label,
+                    self._plugin_status_fields(result),
+                    "neutral" if not result.error else "empty",
+                )
+
+        if snapshot.settings:
+            self._add_section_header("插件设置", "设置值由 Manager 读取，修改仍进入统一设置页。", "status")
+            for result in snapshot.settings:
+                self._add_plugin_settings_section(result)
+
+    def _plugin_status_fields(self, result: DesktopPluginStatusResult) -> list[tuple[str, str]]:
+        if result.error:
+            return [("状态", "读取失败"), ("错误", result.error)]
+        payload = result.payload or {}
+        data = payload.get("data")
+        row = data if isinstance(data, dict) else {}
+        if result.card.renderer_id == "builtin.speech-status.v1":
+            fields = [
+                ("状态", str(row.get("state") or "未知")),
+                ("服务", str(row.get("service") or "RabiSpeech")),
+                ("地址", str(row.get("configuredUrl") or "未配置")),
+            ]
+            if row.get("latencyMs") is not None:
+                fields.append(("延迟", f"{row.get('latencyMs')} ms"))
+            return fields
+        if result.card.renderer_id == "builtin.performance-status.v1":
+            return [
+                ("采集", "已启用" if row.get("enabled") is True else "未启用"),
+                ("数据", "已加载" if row.get("loaded") is True else "未加载"),
+                ("保留记录", str(row.get("retainedRecords") or 0)),
+                ("待写记录", str(row.get("pendingRecords") or 0)),
+            ]
+        return []
+
+    def _add_plugin_settings_section(self, result: DesktopPluginSettingsResult) -> None:
+        if result.error:
+            fields = [("状态", "读取失败"), ("错误", result.error)]
+        elif result.settings is None:
+            fields = [("状态", "未返回设置") ]
+        else:
+            fields = [
+                ("界面主题", result.settings.theme),
+                ("开机启动", "已启用" if result.settings.autostart else "未启用"),
+                ("截图", "已启用" if result.settings.screenshot_enabled else "未启用"),
+                ("截图快捷键", result.settings.screenshot_shortcut),
+            ]
+        self._add_info_card("插件设置", result.section.label, fields, "neutral" if not result.error else "empty")
+        button = QPushButton("打开设置")
+        button.setObjectName("pluginSettingsButton")
+        button.setProperty("pluginContributionId", result.section.contribution_id)
+        button.clicked.connect(
+            lambda _checked=False, section=result.section: self._open_plugin_settings(section)
+        )
+        self.content_layout.addWidget(button, 0, Qt.AlignLeft)
+
+    def _open_plugin_settings(self, section: DesktopPluginSettingsSection) -> None:
+        contract = (
+            section.renderer_id,
+            section.schema_id,
+            section.read_command_id,
+            section.write_command_id,
+        )
+        if contract not in SUPPORTED_DESKTOP_SETTINGS_SECTIONS or self.manager is None:
+            return
+        QDesktopServices.openUrl(QUrl(f"{self.manager.manager_url.rstrip('/')}/#/settings"))
 
     def _render_context_group(self, title: str, entries: list[ContextEntry]) -> None:
         assert self.context is not None

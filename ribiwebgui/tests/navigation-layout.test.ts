@@ -26,7 +26,8 @@ test("sidebar keeps Route pages above utilities and renders catalog footer entri
   assert.ok(configDirectoryIndex > footerRenderIndex);
   assert.match(appSource, /pluginCatalogStore\.refresh\(\)/);
   assert.match(pluginCatalogStoreSource, /pluginCatalogClient\.readWeb\(\)/);
-  assert.match(pluginCatalogStoreSource, /contributions\.value = null/);
+  assert.match(pluginCatalogStoreSource, /availableWebContributions\(catalog\.value\)/);
+  assert.match(pluginCatalogStoreSource, /status\.value = "unavailable"/);
   assert.match(pluginNavigationSource, /id: "settings"[^\n]+routeId: "global\.settings"/);
   assert.match(pluginNavigationSource, /id: "docs"[^\n]+routeId: "global\.docs"[^\n]+slot: "footer"/);
   assert.match(pluginNavigationSource, /id: "persona-sync"[^\n]+routeId: "route\.persona-sync"[^\n]+slot: "persona-secondary"/);

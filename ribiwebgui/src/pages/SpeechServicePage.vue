@@ -22,6 +22,7 @@ import { copyTextToClipboard } from "../clipboard";
 import { personaOptionDisplayName } from "../personaPresentation";
 import { SpeechControlRequestError, speechControlClient } from "../speech/speechControlClient";
 import { transcriptSpeakerPresentation } from "../speech/speechSpeakerPresentation";
+import { pluginCatalogStore } from "../pluginCatalogStore";
 
 const ModelManagementPage = defineAsyncComponent(() => import("./ModelManagementPage.vue"));
 
@@ -29,6 +30,7 @@ type AudioInput = { title: string; value: number; default?: boolean };
 
 const store = useGatewayStore();
 const speech = useSpeechStore();
+const speechStatusVisible = computed(() => pluginCatalogStore.visibility.value.speechStatus);
 const {
   status,
   models,
@@ -1025,7 +1027,7 @@ onBeforeUnmount(() => {
       </v-tabs>
     </v-card>
 
-    <section class="speech-status-grid" aria-label="语音服务摘要">
+    <section v-if="speechStatusVisible" class="speech-status-grid" aria-label="语音服务摘要">
       <v-card class="app-card glass-card speech-stat-card">
         <div class="stat-label">当前电脑</div>
         <div class="stat-value speech-stat-value">{{ computerName }}</div>

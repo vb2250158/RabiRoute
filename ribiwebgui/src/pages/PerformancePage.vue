@@ -6,6 +6,7 @@ import { updateFrontendPerformanceConfig } from "../performance/frontendPerforma
 import { loadPerformanceConfig, loadPerformanceLogs, loadPerformanceSummary, savePerformanceConfig } from "../performance/performanceClient";
 import { defaultPerformanceMonitoringConfig, type PerformanceMonitoringConfig, type PerformanceSample, type PerformanceSeriesPoint, type PerformanceSummary } from "@shared/performanceContract";
 import { registerPageSaveAction } from "../pageSaveAction";
+import { pluginCatalogStore } from "../pluginCatalogStore";
 
 type PerformanceChartSeries = {
   id: string;
@@ -15,6 +16,7 @@ type PerformanceChartSeries = {
 };
 
 const summary = ref<PerformanceSummary>();
+const performanceStatusVisible = computed(() => pluginCatalogStore.visibility.value.performanceStatus);
 const recentLogs = ref<PerformanceSample[]>([]);
 const config = ref<PerformanceMonitoringConfig>(defaultPerformanceMonitoringConfig());
 const rangeMs = ref(60 * 60 * 1000);
@@ -187,7 +189,7 @@ onBeforeUnmount(() => {
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
     <v-alert v-if="saved" type="success" variant="tonal" class="mb-4">{{ saved }}</v-alert>
 
-    <section class="performance-grid performance-overview">
+    <section v-if="performanceStatusVisible" class="performance-grid performance-overview">
       <article class="performance-stat primary">
         <span>在线采集器</span>
         <strong>{{ onlineSources }}<small>/{{ totalSources }}</small></strong>

@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "add-reconciliation-and-isolation",
-  "currentStep": "extend-webgui-desktop 已完成第一批入口：Catalog 升级为 Schema v2；WebGUI 从统一目录生成侧栏、使用手册和人格同步入口；Desktop 异步生成受控托盘菜单并保留最近成功目录。",
-  "nextAction": "接入设置区、状态卡、快捷键和主题，随后增加配置对账、局部重载和独立进程插件。",
+  "currentStepId": "extend-webgui-desktop",
+  "currentStep": "extend-webgui-desktop 已完成第二批入口：WebGUI 由目录控制桌面设置区、语音摘要和性能摘要；Desktop 诊断视图消费语音状态、性能状态和桌面设置。",
+  "nextAction": "接入页面模板、快捷键和主题；完成表现端后再增加配置对账、局部重载和独立进程插件。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -60,13 +60,12 @@
     {
       "id": "extend-webgui-desktop",
       "title": "让 WebGUI 和 Desktop 从同一目录生成扩展入口",
-      "status": "已完成",
-      "completedAt": "2026-08-21T18:00:00+08:00"
+      "status": "进行中"
     },
     {
       "id": "add-reconciliation-and-isolation",
       "title": "增加配置对账、局部重载和独立进程插件",
-      "status": "进行中"
+      "status": "待开始"
     }
   ],
   "waitingFor": "",
@@ -82,7 +81,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T18:00:00+08:00",
+  "updatedAt": "2026-08-21T18:44:40+08:00",
   "keywords": [
     "Cordis",
     "plugin",

@@ -12,7 +12,16 @@ function catalogEnvelope() {
       schemaVersion: 2,
       host: "web",
       revision: { plugins: 3, contributions: 7 },
-      plugins: [],
+      plugins: [{
+        instanceId: "manager:core",
+        pluginId: "builtin:manager/core",
+        status: "active",
+        manifest: {
+          id: "builtin:manager/core",
+          hosts: ["manager", "web", "desktop"],
+          capabilities: ["manager.plugin-catalog", "manager.contributions"]
+        }
+      }],
       contributions: [{
         kind: "navigation",
         surface: "web.navigation",
@@ -39,6 +48,16 @@ test("plugin catalog client performs the fixed Web catalog GET request", async (
     assert.equal(catalog.host, "web");
     assert.deepEqual(catalog.revision, { plugins: 3, contributions: 7 });
     assert.equal(catalog.contributions.length, 1);
+    assert.deepEqual(catalog.plugins, [{
+      instanceId: "manager:core",
+      pluginId: "builtin:manager/core",
+      status: "active",
+      manifest: {
+        id: "builtin:manager/core",
+        hosts: ["manager", "web", "desktop"],
+        capabilities: ["manager.plugin-catalog", "manager.contributions"]
+      }
+    }]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -67,5 +86,50 @@ test("plugin catalog client rejects unsupported or incomplete payloads", () => {
   assert.throws(
     () => parseWebPluginCatalogResponse({ code: -1, message: "catalog unavailable" }),
     /catalog unavailable/
+  );
+  assert.throws(
+    () => parseWebPluginCatalogResponse({
+      ...catalogEnvelope(),
+      data: {
+        ...catalogEnvelope().data,
+        plugins: [{
+          instanceId: "manager:core",
+          pluginId: "builtin:manager/core",
+          status: "unknown",
+          manifest: { id: "builtin:manager/core", hosts: ["web"], capabilities: [] }
+        }]
+      }
+    }),
+    /status is invalid/
+  );
+  assert.throws(
+    () => parseWebPluginCatalogResponse({
+      ...catalogEnvelope(),
+      data: {
+        ...catalogEnvelope().data,
+        plugins: [{
+          instanceId: "manager:core",
+          pluginId: "builtin:manager/core",
+          status: "active",
+          manifest: { id: "builtin:manager/core", hosts: ["browser"], capabilities: [] }
+        }]
+      }
+    }),
+    /manifest\.hosts is invalid/
+  );
+  assert.throws(
+    () => parseWebPluginCatalogResponse({
+      ...catalogEnvelope(),
+      data: {
+        ...catalogEnvelope().data,
+        plugins: [{
+          instanceId: "manager:core",
+          pluginId: "builtin:manager/core",
+          status: "active",
+          manifest: { id: "builtin:manager/core", hosts: ["web"], capabilities: [" duplicated "] }
+        }]
+      }
+    }),
+    /manifest\.capabilities\[0\] is invalid/
   );
 });

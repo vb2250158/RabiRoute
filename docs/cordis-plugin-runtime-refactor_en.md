@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, WebGUI navigation entries, and Desktop tray commands are implemented. Settings sections, status cards, themes, configuration reconciliation, and isolated-process plugins are not complete.
+> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, WebGUI navigation/settings/status entries, and Desktop tray/diagnostic entries are implemented. Page templates, hotkeys, themes, configuration reconciliation, and isolated-process plugins are not complete.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -350,7 +350,7 @@ Exit criterion: Manager publishes plugins and contributions through one API. Thi
 
 ### Stage 5: declarative WebGUI and Desktop extensions
 
-Current status: partially complete. WebGUI generates primary navigation, utility navigation, the User Guide, and the persona-page secondary entry from the unified catalog. Desktop generates a controlled tray submenu. Page templates, settings sections, status cards, hotkeys, and themes remain pending.
+Current status: partially complete. WebGUI generates primary navigation, utility navigation, the User Guide, and the persona-page secondary entry from the unified catalog, then uses a fixed registry to control the Desktop settings section, speech summary, and performance summary. Desktop generates a controlled tray submenu and reads catalog-declared speech status, performance status, and Desktop settings in its Diagnostics view. Page templates, hotkeys, and themes remain pending.
 
 Exit criterion: installing a backend plugin makes its declared entries appear on supported hosts and unloading it removes them.
 
@@ -529,7 +529,7 @@ This split gives message-source facts and resident plugin lifecycles separate co
 3. record stable instance IDs, manifests, hosts, scopes, status, missing capabilities, start/stop timestamps, and sanitized failures in Plugin Catalog;
 4. give each Manager plugin its own Fiber so activation failure rolls back its contributions, plugin unload removes only its registrations, and root disposal clears the complete Manager catalog;
 5. publish plugin and contribution revisions, instance state, and declarative contributions through `GET /api/plugins/catalog`, with `host=web|desktop` filtering;
-6. declare current WebGUI navigation, settings sections, status cards, Desktop commands, and tray menus as built-in Manager plugin contributions; presentation consumption is completed by the next slice.
+6. declare current WebGUI navigation, settings sections, status cards, Desktop commands, and tray menus as built-in Manager plugin contributions; WebGUI and Desktop consume them through host-local capability registries and fixed ID allowlists.
 
 `create-manager-contribution-catalog` is complete.
 
@@ -541,7 +541,7 @@ This split gives message-source facts and resident plugin lifecycles separate co
 4. require `tray-menu.commandId` to reference a `command.id` from the same plugin instance and registration batch; Desktop supports only `desktop.open-webgui` and `desktop.open-settings`;
 5. reject or ignore unknown schemas, unknown IDs, cross-plugin references, and dangerous commands while preserving fixed recovery entries when catalog loading fails.
 
-The first `extend-webgui-desktop` entries are complete. The next stage connects settings sections, status cards, hotkeys, and themes, then adds configuration reconciliation, local reload, and isolated-process plugins.
+The navigation, tray-menu, settings-section, and status-card batches of `extend-webgui-desktop` are complete. Each target host evaluates `requiredCapabilities` with AND semantics against its local capability registry; plugin manifests cannot declare rendering or execution support on behalf of a host. The next stage connects page templates, hotkeys, and themes, then adds configuration reconciliation, local reload, and isolated-process plugins.
 
 ## Readiness criteria
 

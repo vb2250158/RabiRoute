@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI 导航入口和 Desktop 托盘命令已实现；设置区、状态卡、主题、配置对账和独立进程插件尚未完成。
+> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI 导航/设置区/状态卡和 Desktop 托盘/诊断入口已实现；页面模板、快捷键、主题、配置对账和独立进程插件尚未完成。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -350,7 +350,7 @@ plugins:
 
 ### 阶段 5：WebGUI 与 Desktop 声明式扩展
 
-当前状态：部分完成。WebGUI 已从统一目录生成主导航、工具导航、使用手册和人格页次级入口；Desktop 已生成受控托盘菜单。页面模板、设置区、状态卡片、快捷键和主题仍待接入。
+当前状态：部分完成。WebGUI 已从统一目录生成主导航、工具导航、使用手册和人格页次级入口，并由固定注册表控制桌面设置区、语音摘要和性能摘要。Desktop 已生成受控托盘菜单，并在诊断视图中读取目录声明的语音状态、性能状态和桌面设置。页面模板、快捷键和主题仍待接入。
 
 退出条件：安装一个后端插件后，其声明入口可以在支持的平台自动出现并在卸载后消失。
 
@@ -529,7 +529,7 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 3. Plugin Catalog 记录稳定实例 ID、manifest、宿主、作用域、状态、缺失能力、启动/停止时间和脱敏错误；
 4. 每个 Manager 插件使用独立 Fiber，激活失败回滚自身贡献，卸载只清理自身注册，根销毁清空整个 Manager 目录；
 5. `GET /api/plugins/catalog` 统一返回插件与贡献修订号、实例状态及声明式贡献，并支持 `host=web|desktop`；
-6. 内置 Manager 插件已声明当前 WebGUI 导航、设置区、状态卡片、Desktop 命令和托盘菜单；表现端消费由下一切片完成。
+6. 内置 Manager 插件已声明当前 WebGUI 导航、设置区、状态卡片、Desktop 命令和托盘菜单；WebGUI 与 Desktop 使用各自的本地能力注册表和固定 ID 白名单消费这些贡献。
 
 `create-manager-contribution-catalog` 已完成。
 
@@ -541,7 +541,7 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 4. `tray-menu.commandId` 只能引用同一插件实例、同一批次中的 `command.id`；Desktop 只执行 `desktop.open-webgui` 与 `desktop.open-settings`；
 5. 未知 Schema、未知 ID、跨插件引用和危险命令被拒绝或忽略；目录失败时保留 WebGUI 快速配置、设置、使用手册，以及 Desktop 打开 WebGUI、刷新、退出等恢复入口。
 
-`extend-webgui-desktop` 已完成第一批入口。下一阶段接入设置区、状态卡、快捷键和主题，并增加配置对账、局部重载与独立进程插件。
+`extend-webgui-desktop` 已完成导航、托盘菜单、设置区和状态卡两批入口。`requiredCapabilities` 由目标宿主的本地能力注册表按 AND 语义判断，插件 manifest 不能替宿主声明渲染或执行能力。下一阶段接入页面模板、快捷键和主题；完成表现端后再增加配置对账、局部重载与独立进程插件。
 
 ## 完成标准
 

@@ -13,8 +13,10 @@ import { resolveSelectionSpeechModel, type SelectionSpeechSettings } from "@shar
 import type { SpeechModel } from "@shared/speechControlContract";
 import { speechControlClient } from "../speech/speechControlClient";
 import { registerPageSaveAction } from "../pageSaveAction";
+import { pluginCatalogStore } from "../pluginCatalogStore";
 
 const store = useGatewayStore();
+const desktopSettingsVisible = computed(() => pluginCatalogStore.visibility.value.desktopSettings);
 
 const routeDir = ref("");
 const rolesDir = ref("");
@@ -49,12 +51,13 @@ const desktopAutostart = ref(false);
 const desktopTheme = ref<DesktopTheme>("system");
 
 const desktopSettingsLoaded = ref(false);
+const desktopSettingsHydrating = ref(false);
 const desktopSettingsSaving = ref(false);
 const desktopSettingsError = ref("");
 const settingsDirty = ref(false);
 const settingsSaving = ref(false);
 const settingsHydrating = ref(true);
-const settingsReady = computed(() => desktopSettingsLoaded.value && selectionSpeechLoaded.value);
+const settingsReady = computed(() => (!desktopSettingsVisible.value || desktopSettingsLoaded.value) && selectionSpeechLoaded.value);
 type WebguiLanUrl = { name?: string; address: string; cidr?: string; url: string };
 type WebguiLanAccess = {
   enabled: boolean;
@@ -93,24 +96,43 @@ async function loadDirConfig() {
   } catch { /* ignore */ }
   rabiName.value = store.meta.rabiName || store.meta.computerName || "";
   loadRabiLinkRelayForm();
-  await Promise.all([loadWebguiLanAccess(), loadDesktopSettings(), loadSelectionSpeechSettings()]);
+  await Promise.all([
+    loadWebguiLanAccess(),
+    desktopSettingsVisible.value ? loadDesktopSettings() : Promise.resolve(),
+    loadSelectionSpeechSettings()
+  ]);
   await nextTick();
   settingsHydrating.value = false;
 }
 
+let desktopSettingsLoadPromise: Promise<void> | undefined;
 async function loadDesktopSettings(): Promise<void> {
+  if (desktopSettingsLoaded.value) return;
+  if (desktopSettingsLoadPromise) return desktopSettingsLoadPromise;
+  const current = (async () => {
+    desktopSettingsHydrating.value = true;
+    try {
+      const settings = await desktopSettingsClient.read();
+      desktopScreenshotEnabled.value = settings.screenshot.enabled;
+      desktopScreenshotShortcut.value = settings.screenshot.shortcut;
+      desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
+      desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
+      desktopAutostart.value = settings.autostart;
+      desktopTheme.value = settings.theme;
+      desktopSettingsLoaded.value = true;
+      desktopSettingsError.value = "";
+      await nextTick();
+    } catch (error) {
+      desktopSettingsError.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      desktopSettingsHydrating.value = false;
+    }
+  })();
+  desktopSettingsLoadPromise = current;
   try {
-    const settings = await desktopSettingsClient.read();
-    desktopScreenshotEnabled.value = settings.screenshot.enabled;
-    desktopScreenshotShortcut.value = settings.screenshot.shortcut;
-    desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
-    desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
-    desktopAutostart.value = settings.autostart;
-    desktopTheme.value = settings.theme;
-    desktopSettingsLoaded.value = true;
-    desktopSettingsError.value = "";
-  } catch (error) {
-    desktopSettingsError.value = error instanceof Error ? error.message : String(error);
+    await current;
+  } finally {
+    if (desktopSettingsLoadPromise === current) desktopSettingsLoadPromise = undefined;
   }
 }
 
@@ -459,8 +481,12 @@ const trackedSettingValues = [
 ];
 
 watch(trackedSettingValues, () => {
-  if (!settingsHydrating.value) settingsDirty.value = true;
+  if (!settingsHydrating.value && !desktopSettingsHydrating.value) settingsDirty.value = true;
 });
+
+watch(desktopSettingsVisible, (visible) => {
+  if (visible && !desktopSettingsLoaded.value) void loadDesktopSettings();
+}, { immediate: true });
 
 async function saveSettings(): Promise<void> {
   if (!settingsReady.value || settingsSaving.value) return;
@@ -468,7 +494,7 @@ async function saveSettings(): Promise<void> {
   settingsHydrating.value = true;
   try {
     const results = await Promise.allSettled([
-      saveDesktopSettings(),
+      desktopSettingsVisible.value ? saveDesktopSettings() : Promise.resolve(),
       saveSelectionSpeechSettings(),
       saveRabiIdentity(),
       saveDirConfig(),
@@ -526,7 +552,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="two-column">
-      <v-card class="app-card glass-card section-card">
+      <v-card v-if="desktopSettingsVisible" class="app-card glass-card section-card">
         <div class="section-title-row">
           <div>
             <div class="section-title">RabiRoute 桌面功能</div>

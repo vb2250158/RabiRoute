@@ -7,7 +7,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from .plugin_catalog import DesktopPluginCatalog, DesktopPluginCatalogCache
+from .plugin_catalog import (
+    DesktopPluginCatalog,
+    DesktopPluginCatalogCache,
+    DesktopPluginSettingsSection,
+    DesktopPluginStatusCard,
+    SUPPORTED_DESKTOP_SETTINGS_SECTIONS,
+    SUPPORTED_DESKTOP_STATUS_CARDS,
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,33 @@ class DesktopSettings:
     screenshot_auto_copy: bool = True
     autostart: bool = False
     theme: str = "system"
+
+
+@dataclass(frozen=True)
+class DesktopPluginStatusResult:
+    card: DesktopPluginStatusCard
+    payload: dict[str, Any] | None = None
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class DesktopPluginSettingsResult:
+    section: DesktopPluginSettingsSection
+    settings: DesktopSettings | None = None
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class DesktopPluginSurfaceSnapshot:
+    catalog: DesktopPluginCatalog
+    statuses: tuple[DesktopPluginStatusResult, ...] = ()
+    settings: tuple[DesktopPluginSettingsResult, ...] = ()
+
+
+_DESKTOP_STATUS_QUERY_PATHS = {
+    "manager.speech-status": "/api/speech/status",
+    "manager.performance-status": "/api/performance/status",
+}
 
 
 @dataclass(frozen=True)
@@ -224,6 +258,62 @@ class ManagerClient:
         except (OSError, URLError, TimeoutError, json.JSONDecodeError):
             return self._desktop_plugin_catalog_cache.fallback()
         return self._desktop_plugin_catalog_cache.accept_payload(payload)
+
+    def desktop_plugin_status_payload(self, card: DesktopPluginStatusCard) -> dict[str, Any]:
+        if (card.query_id, card.renderer_id) not in SUPPORTED_DESKTOP_STATUS_CARDS:
+            raise ValueError(f"Unsupported desktop plugin status contract: {card.query_id} / {card.renderer_id}")
+        path = _DESKTOP_STATUS_QUERY_PATHS.get(card.query_id)
+        if path is None:
+            raise ValueError(f"Unsupported desktop plugin query: {card.query_id}")
+        payload = self._get_json(path)
+        if payload.get("code") != 0 or not isinstance(payload.get("data"), dict):
+            raise ValueError(f"Manager plugin query returned an invalid response: {card.query_id}")
+        return payload
+
+    def desktop_plugin_settings_value(self, section: DesktopPluginSettingsSection) -> DesktopSettings:
+        contract = (
+            section.renderer_id,
+            section.schema_id,
+            section.read_command_id,
+            section.write_command_id,
+        )
+        if contract not in SUPPORTED_DESKTOP_SETTINGS_SECTIONS:
+            raise ValueError(f"Unsupported desktop plugin settings contract: {section.contribution_id}")
+        return self.desktop_settings()
+
+    def desktop_plugin_surface_snapshot(self) -> DesktopPluginSurfaceSnapshot:
+        catalog = self.desktop_plugin_catalog()
+        status_cache: dict[str, tuple[dict[str, Any] | None, str]] = {}
+        statuses: list[DesktopPluginStatusResult] = []
+        for card in catalog.status_cards:
+            cached = status_cache.get(card.query_id)
+            if cached is None:
+                try:
+                    cached = (self.desktop_plugin_status_payload(card), "")
+                except (OSError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as error:
+                    cached = (None, str(error))
+                status_cache[card.query_id] = cached
+            payload, error = cached
+            statuses.append(DesktopPluginStatusResult(card=card, payload=payload, error=error))
+
+        settings_cache: dict[str, tuple[DesktopSettings | None, str]] = {}
+        settings: list[DesktopPluginSettingsResult] = []
+        for section in catalog.settings_sections:
+            cached = settings_cache.get(section.read_command_id)
+            if cached is None:
+                try:
+                    cached = (self.desktop_plugin_settings_value(section), "")
+                except (OSError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as error:
+                    cached = (None, str(error))
+                settings_cache[section.read_command_id] = cached
+            value, error = cached
+            settings.append(DesktopPluginSettingsResult(section=section, settings=value, error=error))
+
+        return DesktopPluginSurfaceSnapshot(
+            catalog=catalog,
+            statuses=tuple(statuses),
+            settings=tuple(settings),
+        )
 
     def desktop_settings(self) -> DesktopSettings:
         payload = self._get_json("/api/desktop/settings")
