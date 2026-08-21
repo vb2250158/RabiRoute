@@ -16,7 +16,7 @@ class _RecordingManagerClient(ManagerClient):
     def _get_json(self, path: str) -> dict:
         self.paths.append(path)
         if path == "/meta":
-            return {"version": "test"}
+            return {"version": "test", "health": {"pid": 321}}
         if path.endswith("/plans"):
             return {"code": 0, "data": [{"id": "plan-1"}]}
         if path.endswith("/memory"):
@@ -66,6 +66,15 @@ class ManagerSnapshotTest(unittest.TestCase):
 
         self.assertEqual(client.paths, ["/meta", "/gateways?summary=1"])
         self.assertEqual(snapshot.gateways, [{"id": "route-1"}])
+
+    def test_snapshot_observes_manager_pid_for_legacy_catalog_restart_detection(self) -> None:
+        client = _RecordingManagerClient()
+        identities: list[object] = []
+        client._desktop_plugin_catalog_cache.observe_manager_identity = identities.append  # type: ignore[method-assign]
+
+        client.snapshot()
+
+        self.assertEqual(identities, ["pid:321"])
 
     def test_desktop_read_models_use_manager_role_apis(self) -> None:
         client = _RecordingManagerClient()

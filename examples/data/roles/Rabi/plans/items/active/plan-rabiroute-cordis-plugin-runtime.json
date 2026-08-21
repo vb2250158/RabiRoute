@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "extend-webgui-desktop",
-  "currentStep": "extend-webgui-desktop 已完成第二批入口：WebGUI 由目录控制桌面设置区、语音摘要和性能摘要；Desktop 诊断视图消费语音状态、性能状态和桌面设置。",
-  "nextAction": "接入页面模板、快捷键和主题；完成表现端后再增加配置对账、局部重载和独立进程插件。",
+  "currentStepId": "add-reconciliation-and-isolation",
+  "currentStep": "正在增加配置对账、局部重载和独立进程插件合同。",
+  "nextAction": "增加配置对账和局部重载，再实现独立进程插件合同。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -60,12 +60,13 @@
     {
       "id": "extend-webgui-desktop",
       "title": "让 WebGUI 和 Desktop 从同一目录生成扩展入口",
-      "status": "进行中"
+      "status": "已完成",
+      "completedAt": "2026-08-21T19:30:00+08:00"
     },
     {
       "id": "add-reconciliation-and-isolation",
       "title": "增加配置对账、局部重载和独立进程插件",
-      "status": "待开始"
+      "status": "进行中"
     }
   ],
   "waitingFor": "",
@@ -81,7 +82,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T18:44:40+08:00",
+  "updatedAt": "2026-08-21T19:50:00+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -116,6 +117,11 @@
     "Schema v2",
     "routeId",
     "handlerId",
-    "托盘插件菜单"
+    "托盘插件菜单",
+    "page contribution",
+    "rendererId",
+    "hotkey contribution",
+    "theme resource ID",
+    "WebGUI recovery page"
   ]
 }

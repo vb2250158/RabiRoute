@@ -8,6 +8,7 @@ function catalogResponse(): Response {
     code: 0,
     data: {
       schemaVersion: 2,
+      generation: "manager-generation-a",
       host: "web",
       revision: { plugins: 1, contributions: 2 },
       plugins: [{

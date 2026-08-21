@@ -2,7 +2,7 @@
 
 # RabiRoute 从 DSH 学习的插件化设计理念
 
-> 状态：架构调研与设计原则。插件运行时尚未实现。
+> 状态：架构调研与分阶段实施。Cordis 组合根、Adapter Registry、Manager Plugin Runtime 和受控表现贡献已实现；配置对账、第三方表现代码和独立进程插件仍在后续阶段。
 >
 > 主要读者：RabiRoute 维护者、消息端与 Agent 端接入开发者。
 

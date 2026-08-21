@@ -27,18 +27,33 @@ function definition(
       kind: "builtin",
       hosts: ["manager", "web", "desktop"]
     },
-    contributions: [{
-      kind: "navigation",
-      id: options.contributionId ?? id,
-      label: {
-        key: `navigation.${id}`,
-        fallback: id
+    contributions: [
+      {
+        kind: "page",
+        id: `${options.contributionId ?? id}-page`,
+        label: {
+          key: `page.${id}`,
+          fallback: id
+        },
+        routeId,
+        rendererId: `builtin.page.${id}.v1`,
+        hosts: ["web"],
+        surface: "manager.pages",
+        slot: "main"
       },
-      routeId,
-      hosts: ["web"],
-      surface: "manager",
-      slot: "primary"
-    }],
+      {
+        kind: "navigation",
+        id: options.contributionId ?? id,
+        label: {
+          key: `navigation.${id}`,
+          fallback: id
+        },
+        routeId,
+        hosts: ["web"],
+        surface: "manager",
+        slot: "primary"
+      }
+    ],
     apply: options.apply
   };
 }
@@ -203,7 +218,9 @@ test("Manager Plugin Runtime keeps instance IDs separate for two instances of on
   assert.equal(runtime.catalog.get("manager:shared:primary")?.status, "inactive");
   assert.equal(runtime.catalog.get("manager:shared:secondary")?.status, "active");
   assert.deepEqual(
-    runtime.contributions.catalog("web").contributions.map(item => item.id),
+    runtime.contributions.catalog("web").contributions
+      .filter(item => item.kind === "navigation")
+      .map(item => item.id),
     ["shared-secondary"]
   );
 

@@ -10,6 +10,7 @@ function catalogEnvelope() {
     code: 0,
     data: {
       schemaVersion: 2,
+      generation: "manager-generation-a",
       host: "web",
       revision: { plugins: 3, contributions: 7 },
       plugins: [{
@@ -45,6 +46,7 @@ test("plugin catalog client performs the fixed Web catalog GET request", async (
   try {
     const catalog = await pluginCatalogClient.readWeb();
     assert.equal(catalog.schemaVersion, 2);
+    assert.equal(catalog.generation, "manager-generation-a");
     assert.equal(catalog.host, "web");
     assert.deepEqual(catalog.revision, { plugins: 3, contributions: 7 });
     assert.equal(catalog.contributions.length, 1);
@@ -66,6 +68,15 @@ test("plugin catalog client performs the fixed Web catalog GET request", async (
   assert.equal(requests[0]?.input, "/api/plugins/catalog?host=web");
   assert.equal(requests[0]?.init?.method, "GET");
   assert.deepEqual(requests[0]?.init?.headers, { accept: "application/json" });
+});
+
+test("plugin catalog client accepts an older Schema v2 catalog without generation", () => {
+  const envelope = catalogEnvelope();
+  delete (envelope.data as { generation?: string }).generation;
+
+  const catalog = parseWebPluginCatalogResponse(envelope);
+
+  assert.equal(catalog.generation, "");
 });
 
 test("plugin catalog client rejects unsupported or incomplete payloads", () => {

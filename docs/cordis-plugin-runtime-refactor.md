@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录、WebGUI 导航/设置区/状态卡和 Desktop 托盘/诊断入口已实现；页面模板、快捷键、主题、配置对账和独立进程插件尚未完成。
+> 状态：重构进行中。Gateway 单一根 Context、Manager Plugin Runtime、Schema v2 目录和 WebGUI/Desktop 声明式表现入口已实现；配置对账、局部重载和独立进程插件尚未完成。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -12,7 +12,7 @@ RabiRoute 采用“Cordis 组合内核 + Rabi 业务适配层 + 多宿主扩展�
 
 - Manager 和 Gateway 使用 Cordis 管理插件依赖、Fiber 生命周期和副作用撤销。
 - RabiRoute 提供自己的服务 key、事件、插件清单、配置和状态目录，不让业务代码直接依赖 Cordis API。
-- WebGUI 与 Desktop 是最小宿主；页面、状态卡片、命令、菜单、设置项、主题和其他可扩展入口由统一插件/贡献目录提供。WebGUI 已消费导航与人格页次级入口，Desktop 已消费受控命令和托盘菜单。
+- WebGUI 与 Desktop 是最小宿主；统一插件/贡献目录当前只控制宿主预先注册的页面、状态卡片、命令、菜单、设置项、快捷键和主题是否出现，不加载第三方表现代码。WebGUI 已消费页面、导航、设置区、状态卡和主题，Desktop 已消费命令、托盘菜单、快捷键、状态、设置和主题。
 - Route、事件记录、路由判断、`AgentPacket`、投递证据和 Outbox 继续由稳定模块拥有。
 - 现有能力按 Agent Adapter、消息端生命周期、Gateway 组合、Manager 目录、表现端扩展、配置对账的顺序迁移。
 
@@ -350,9 +350,9 @@ plugins:
 
 ### 阶段 5：WebGUI 与 Desktop 声明式扩展
 
-当前状态：部分完成。WebGUI 已从统一目录生成主导航、工具导航、使用手册和人格页次级入口，并由固定注册表控制桌面设置区、语音摘要和性能摘要。Desktop 已生成受控托盘菜单，并在诊断视图中读取目录声明的语音状态、性能状态和桌面设置。页面模板、快捷键和主题仍待接入。
+当前状态：受控内置表现入口已实现。Plugin Catalog 决定宿主预先注册的页面、菜单、状态、设置、快捷键和主题是否出现，不加载插件提供的 Vue 组件、CSS、脚本或命令处理器。WebGUI 使用固定 `routeId -> rendererId -> Vue component` 注册表，导航只引用同一插件实例、同一批次中的已激活页面；首次目录失败进入固定恢复页，后续失败保留最近成功目录。Desktop 只执行固定处理器并复用现有截图控制器和用户保存的按键配置。目录带 Manager 运行代次；Desktop 定时重试首次失败，并在 Manager 重启后接受新代次的较低修订号。
 
-退出条件：安装一个后端插件后，其声明入口可以在支持的平台自动出现并在卸载后消失。
+当前切片退出条件：目录可控制宿主内置入口出现或消失，失败时保留恢复入口，Manager 重启后不会永久保留旧目录。允许第三方插件提供新的页面组件、主题资源或命令处理器属于阶段 7。
 
 ### 阶段 6：配置对账与局部重载
 
@@ -518,7 +518,7 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 2. 常驻 Gateway 使用单一 Cordis 根 Context，在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；
 3. 一次性告警、回放、手动触发、角色面板、计划反馈、语音和 Direct Agent Envelope 命令直接进入命令实现，不能启动 Message Adapter Runtime 或 Contribution Runtime；
 4. 常驻 Gateway 的正常退出和启动失败都销毁整个根 Context，由各 Registry Fiber 撤销自身监听器、定时器和注册项；
-5. WebGUI 与 Desktop 是可扩展的最小宿主。扩展者通过贡献插件增加页面、操作、状态或设置，表现入口仍属于插件体系。
+5. WebGUI 与 Desktop 是最小宿主。当前贡献目录只控制宿主预先注册的页面、操作、状态和设置；第三方表现代码待合同与隔离边界稳定后接入。
 
 `create-gateway-host` 已完成。
 
@@ -538,10 +538,12 @@ RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwardi
 1. Plugin manifest 和 Contribution 使用字段白名单，公开目录不携带任意 URL、接口、请求正文或资源路径；
 2. WebGUI 请求 `host=web`，使用宿主固定的 `routeId`、图标和位置映射生成侧栏、使用手册和人格同步入口；
 3. Desktop 请求 `host=desktop`，缓存最近成功目录，异步生成“插件”托盘菜单；
-4. `tray-menu.commandId` 只能引用同一插件实例、同一批次中的 `command.id`；Desktop 只执行 `desktop.open-webgui` 与 `desktop.open-settings`；
-5. 未知 Schema、未知 ID、跨插件引用和危险命令被拒绝或忽略；目录失败时保留 WebGUI 快速配置、设置、使用手册，以及 Desktop 打开 WebGUI、刷新、退出等恢复入口。
+4. `navigation.routeId` 只能引用同一插件实例、同一批次中的 `page.routeId`；WebGUI 只加载固定 `rendererId` 对应的内置 Vue 组件；
+5. `tray-menu.commandId` 与 `hotkey.commandId` 只能引用同一插件实例、同一批次中的安全 `command.id`；Desktop 只执行固定 handler，截图与剪贴板贴图快捷键复用现有控制器；
+6. WebGUI 与 Desktop 只接受 `system`、`light`、`dark` 及对应宿主内置资源 ID，不接受插件目录或资源路径；
+7. 未知 Schema、未知 ID、跨插件引用、危险命令和宿主不支持的能力被拒绝或忽略。WebGUI 首次目录失败进入固定恢复页，Desktop 保留固定恢复入口；后续失败继续使用最近成功目录。
 
-`extend-webgui-desktop` 已完成导航、托盘菜单、设置区和状态卡两批入口。`requiredCapabilities` 由目标宿主的本地能力注册表按 AND 语义判断，插件 manifest 不能替宿主声明渲染或执行能力。下一阶段接入页面模板、快捷键和主题；完成表现端后再增加配置对账、局部重载与独立进程插件。
+`extend-webgui-desktop` 已完成。`requiredCapabilities` 由目标宿主的本地能力注册表按 AND 语义判断，插件 manifest 不能替宿主声明渲染或执行能力。下一阶段增加配置对账、局部重载与独立进程插件。
 
 ## 完成标准
 

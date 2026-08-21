@@ -25,6 +25,7 @@ function catalog(
 ): WebPluginCatalog {
   return {
     schemaVersion: 2,
+    generation: "manager-generation-a",
     host: "web",
     revision: { plugins: 1, contributions: 1 },
     plugins,

@@ -45,15 +45,27 @@ function messageDefinition(onStart: () => void, onDispose: () => void): MessageA
   };
 }
 
-const testContribution = {
-  kind: "navigation" as const,
-  id: "shared-root",
-  label: { key: "nav.sharedRoot", fallback: "Shared root" },
-  surface: "web.navigation",
-  slot: "utility",
-  routeId: "route.shared-root",
-  hosts: ["web"] as const
-};
+const testContributions = [
+  {
+    kind: "page" as const,
+    id: "shared-root-page",
+    label: { key: "page.sharedRoot", fallback: "Shared root" },
+    surface: "web.pages",
+    slot: "main",
+    routeId: "route.shared-root",
+    rendererId: "builtin.web-page.shared-root.v1",
+    hosts: ["web"] as const
+  },
+  {
+    kind: "navigation" as const,
+    id: "shared-root",
+    label: { key: "nav.sharedRoot", fallback: "Shared root" },
+    surface: "web.navigation",
+    slot: "utility",
+    routeId: "route.shared-root",
+    hosts: ["web"] as const
+  }
+];
 
 test("Gateway Cordis root initializes one runtime per key", async () => {
   const root = createGatewayCordisRoot();
@@ -102,7 +114,7 @@ test("Agent, Message, and Contribution registries share one Gateway root Context
 
   const agentRuntime = await root.ensure("agent", (host) => mountAgentAdapterRuntime(host, [agentDefinition]));
   const contributionRuntime = await root.ensure("contribution", (host) => mountContributionRuntime(host, [
-    contributionPlugin("test:shared-root", [testContribution])
+    contributionPlugin("test:shared-root", testContributions)
   ]));
   const messageRuntime = await root.ensure("message", (host) => mountMessageAdapterRuntime(host, [
     messageDefinition(
@@ -129,7 +141,7 @@ test("Agent, Message, and Contribution registries share one Gateway root Context
 
   assert.equal(probeMatched, true);
   assert.equal(activeMessageAdapters, 1);
-  assert.equal(contributionRuntime.registry.catalog().contributions.length, 1);
+  assert.equal(contributionRuntime.registry.catalog().contributions.length, 2);
 
   await root.dispose();
   assert.equal(activeMessageAdapters, 0);

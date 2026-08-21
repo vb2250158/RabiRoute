@@ -126,6 +126,11 @@ class ManagerClient:
                 error=str(error),
             )
 
+        health = meta.get("health") if isinstance(meta, dict) else None
+        manager_pid = health.get("pid") if isinstance(health, dict) else None
+        if isinstance(manager_pid, int) and not isinstance(manager_pid, bool) and manager_pid > 0:
+            self._desktop_plugin_catalog_cache.observe_manager_identity(f"pid:{manager_pid}")
+
         try:
             gateway_payload = self._get_json("/gateways?summary=1")
             manager_rows = gateway_payload.get("data", {}).get("manager", [])
@@ -253,11 +258,12 @@ class ManagerClient:
         )
 
     def desktop_plugin_catalog(self) -> DesktopPluginCatalog:
+        identity_revision = self._desktop_plugin_catalog_cache.request_identity_revision()
         try:
             payload = self._get_json("/api/plugins/catalog?host=desktop")
         except (OSError, URLError, TimeoutError, json.JSONDecodeError):
             return self._desktop_plugin_catalog_cache.fallback()
-        return self._desktop_plugin_catalog_cache.accept_payload(payload)
+        return self._desktop_plugin_catalog_cache.accept_payload(payload, identity_revision)
 
     def desktop_plugin_status_payload(self, card: DesktopPluginStatusCard) -> dict[str, Any]:
         if (card.query_id, card.renderer_id) not in SUPPORTED_DESKTOP_STATUS_CARDS:

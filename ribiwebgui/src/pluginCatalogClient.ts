@@ -18,6 +18,7 @@ export type WebPluginCatalogPlugin = Readonly<{
 
 export type WebPluginCatalog = Readonly<{
   schemaVersion: 2;
+  generation: string;
   host: "web";
   revision: WebPluginCatalogRevision;
   plugins: readonly WebPluginCatalogPlugin[];
@@ -111,6 +112,7 @@ export function parseWebPluginCatalogResponse(value: unknown): WebPluginCatalog 
 
   return {
     schemaVersion: 2,
+    generation: data.generation === undefined ? "" : controlledSymbol(data.generation, "generation"),
     host: "web",
     revision: {
       plugins: nonNegativeInteger(data.revision.plugins, "plugin revision"),

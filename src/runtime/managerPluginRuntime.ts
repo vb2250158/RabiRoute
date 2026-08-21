@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { RabiUiContribution } from "./contributionRegistry.js";
 import { ContributionRegistry } from "./contributionRegistry.js";
 import {
@@ -44,6 +45,7 @@ export type MountedManagerPlugin = {
 };
 
 export type ManagerPluginRuntimeMount = {
+  generation: string;
   catalog: PluginCatalog;
   contributions: ContributionRegistry;
   plugins: ReadonlyMap<string, MountedManagerPlugin>;
@@ -97,6 +99,7 @@ export async function mountManagerPluginRuntime(
 ): Promise<ManagerPluginRuntimeMount> {
   const serviceFibers: RabiCordisFiber[] = [];
   const plugins = new Map<string, MountedManagerPlugin>();
+  const generation = randomUUID();
   let active = true;
 
   try {
@@ -187,6 +190,7 @@ export async function mountManagerPluginRuntime(
     }
 
     return {
+      generation,
       catalog,
       contributions,
       plugins,

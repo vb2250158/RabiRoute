@@ -28,7 +28,7 @@ test("built-in Manager plugins publish the current WebGUI and Desktop contributi
     contributions
       .filter(item => item.kind === "tray-menu" || item.kind === "hotkey")
       .map(item => item.commandId),
-    ["open-webgui", "open-settings"]
+    ["capture-screenshot", "pin-clipboard-image", "open-webgui", "open-settings"]
   );
   assert.equal(
     contributions
@@ -38,4 +38,54 @@ test("built-in Manager plugins publish the current WebGUI and Desktop contributi
   );
   assert.equal(contributions.every(item => Boolean(item.surface) && Boolean(item.slot)), true);
   assert.equal(contributions.every(item => Boolean(item.label.fallback)), true);
+});
+
+test("builtin Manager plugins pair every navigation with a page in the same instance", () => {
+  for (const plugin of builtinManagerPluginDefinitions()) {
+    const pages = new Map(
+      (plugin.contributions ?? [])
+        .filter(contribution => contribution.kind === "page")
+        .map(contribution => [contribution.routeId, contribution])
+    );
+    for (const navigation of (plugin.contributions ?? []).filter(contribution => contribution.kind === "navigation")) {
+      const page = pages.get(navigation.routeId);
+      assert.ok(page, `${plugin.instanceId}:${navigation.id} is missing page ${navigation.routeId}`);
+      assert.equal(page.hosts.includes("web"), true);
+    }
+  }
+});
+
+test("builtin Manager plugins publish only controlled interface themes", () => {
+  const themes = builtinManagerPluginDefinitions()
+    .flatMap(plugin => plugin.contributions ?? [])
+    .filter(contribution => contribution.kind === "theme");
+
+  assert.deepEqual(themes.map(theme => theme.themeId), ["system", "light", "dark"]);
+  assert.deepEqual(
+    themes.map(theme => [theme.webResourceId, theme.desktopResourceId]),
+    [
+      ["builtin.web-theme.system.v1", "builtin.desktop-theme.system.v1"],
+      ["builtin.web-theme.light.v1", "builtin.desktop-theme.light.v1"],
+      ["builtin.web-theme.dark.v1", "builtin.desktop-theme.dark.v1"]
+    ]
+  );
+});
+
+test("builtin Desktop hotkeys reference commands from the same plugin instance", () => {
+  const desktop = builtinManagerPluginDefinitions().find(plugin => plugin.instanceId === "manager:desktop");
+  assert.ok(desktop);
+  const commands = new Map(
+    (desktop.contributions ?? [])
+      .filter(contribution => contribution.kind === "command")
+      .map(contribution => [contribution.id, contribution.handlerId])
+  );
+  const hotkeys = (desktop.contributions ?? []).filter(contribution => contribution.kind === "hotkey");
+
+  assert.deepEqual(
+    hotkeys.map(hotkey => [hotkey.commandId, hotkey.defaultBinding, commands.get(hotkey.commandId)]),
+    [
+      ["capture-screenshot", "Ctrl+Shift+S", "desktop.capture-screenshot"],
+      ["pin-clipboard-image", "F3", "desktop.pin-clipboard-image"]
+    ]
+  );
 });

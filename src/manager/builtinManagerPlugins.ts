@@ -26,6 +26,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
   return [
     plugin("core", "RabiRoute Manager Core", [
       {
+        kind: "page",
+        surface: "web.pages",
+        id: "overview-page",
+        label: { fallback: "控制台" },
+        routeId: "route.overview",
+        rendererId: "builtin.web-page.overview.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 10
+      },
+      {
         kind: "navigation",
         surface: "web.navigation",
         id: "overview",
@@ -35,6 +46,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "route-primary",
         hosts: ["web"],
         order: 10
+      },
+      {
+        kind: "page",
+        surface: "web.pages",
+        id: "message-adapters-page",
+        label: { fallback: "消息适配器" },
+        routeId: "route.adapters",
+        rendererId: "builtin.web-page.adapters.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 20
       },
       {
         kind: "navigation",
@@ -48,6 +70,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         order: 20
       },
       {
+        kind: "page",
+        surface: "web.pages",
+        id: "runtime-page",
+        label: { fallback: "日志诊断" },
+        routeId: "route.runtime",
+        rendererId: "builtin.web-page.runtime.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 70
+      },
+      {
         kind: "navigation",
         surface: "web.navigation",
         id: "runtime",
@@ -57,6 +90,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "utility",
         hosts: ["web"],
         order: 70
+      },
+      {
+        kind: "page",
+        surface: "web.pages",
+        id: "settings-page",
+        label: { fallback: "设置" },
+        routeId: "global.settings",
+        rendererId: "builtin.web-page.settings.v1",
+        slot: "global",
+        hosts: ["web"],
+        order: 80
       },
       {
         kind: "navigation",
@@ -70,6 +114,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         order: 80
       },
       {
+        kind: "page",
+        surface: "web.pages",
+        id: "docs-page",
+        label: { fallback: "使用手册" },
+        routeId: "global.docs",
+        rendererId: "builtin.web-page.docs.v1",
+        slot: "global",
+        hosts: ["web"],
+        order: 90
+      },
+      {
         kind: "navigation",
         surface: "web.navigation",
         id: "docs",
@@ -79,9 +134,56 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "footer",
         hosts: ["web"],
         order: 90
+      },
+      {
+        kind: "theme",
+        surface: "shared.themes",
+        id: "system-theme",
+        label: { fallback: "跟随系统" },
+        themeId: "system",
+        webResourceId: "builtin.web-theme.system.v1",
+        desktopResourceId: "builtin.desktop-theme.system.v1",
+        slot: "interface",
+        hosts: ["web", "desktop"],
+        order: 10
+      },
+      {
+        kind: "theme",
+        surface: "shared.themes",
+        id: "light-theme",
+        label: { fallback: "浅色" },
+        themeId: "light",
+        webResourceId: "builtin.web-theme.light.v1",
+        desktopResourceId: "builtin.desktop-theme.light.v1",
+        slot: "interface",
+        hosts: ["web", "desktop"],
+        order: 20
+      },
+      {
+        kind: "theme",
+        surface: "shared.themes",
+        id: "dark-theme",
+        label: { fallback: "深色" },
+        themeId: "dark",
+        webResourceId: "builtin.web-theme.dark.v1",
+        desktopResourceId: "builtin.desktop-theme.dark.v1",
+        slot: "interface",
+        hosts: ["web", "desktop"],
+        order: 30
       }
     ]),
     plugin("persona", "Rabi Persona Management", [
+      {
+        kind: "page",
+        surface: "web.pages",
+        id: "persona-page",
+        label: { fallback: "人格配置" },
+        routeId: "route.persona",
+        rendererId: "builtin.web-page.persona.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 30
+      },
       {
         kind: "navigation",
         surface: "web.navigation",
@@ -92,6 +194,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "route-primary",
         hosts: ["web"],
         order: 30
+      },
+      {
+        kind: "page",
+        surface: "web.pages",
+        id: "knowledge-page",
+        label: { fallback: "计划与记忆" },
+        routeId: "route.knowledge",
+        rendererId: "builtin.web-page.knowledge.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 40
       },
       {
         kind: "navigation",
@@ -105,6 +218,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         order: 40
       },
       {
+        kind: "page",
+        surface: "web.pages",
+        id: "persona-sync-page",
+        label: { fallback: "多电脑人格同步" },
+        routeId: "route.persona-sync",
+        rendererId: "builtin.web-page.persona-sync.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 45
+      },
+      {
         kind: "navigation",
         surface: "web.navigation",
         id: "persona-sync",
@@ -114,9 +238,31 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "persona-secondary",
         hosts: ["web"],
         order: 45
+      },
+      {
+        kind: "page",
+        surface: "web.pages",
+        id: "persona-document-page",
+        label: { fallback: "人格正文" },
+        routeId: "route.persona-document",
+        rendererId: "builtin.web-page.persona-document.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 46
       }
     ]),
     plugin("speech", "RabiSpeech Manager", [
+      {
+        kind: "page",
+        surface: "web.pages",
+        id: "speech-page",
+        label: { fallback: "语音服务" },
+        routeId: "route.speech",
+        rendererId: "builtin.web-page.speech.v1",
+        slot: "route",
+        hosts: ["web"],
+        order: 50
+      },
       {
         kind: "navigation",
         surface: "web.navigation",
@@ -142,6 +288,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
       }
     ]),
     plugin("performance", "Performance Monitoring", [
+      {
+        kind: "page",
+        surface: "web.pages",
+        id: "performance-page",
+        label: { fallback: "性能监控" },
+        routeId: "global.performance",
+        rendererId: "builtin.web-page.performance.v1",
+        slot: "global",
+        hosts: ["web"],
+        order: 60
+      },
       {
         kind: "navigation",
         surface: "web.navigation",
@@ -200,6 +357,48 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "system",
         hosts: ["desktop"],
         order: 20
+      },
+      {
+        kind: "command",
+        surface: "desktop.commands",
+        id: "capture-screenshot",
+        label: { fallback: "系统截图" },
+        handlerId: "desktop.capture-screenshot",
+        slot: "capture",
+        hosts: ["desktop"],
+        order: 30
+      },
+      {
+        kind: "hotkey",
+        surface: "desktop.hotkeys",
+        id: "capture-screenshot-hotkey",
+        label: { fallback: "系统截图" },
+        commandId: "capture-screenshot",
+        defaultBinding: "Ctrl+Shift+S",
+        slot: "capture",
+        hosts: ["desktop"],
+        order: 30
+      },
+      {
+        kind: "command",
+        surface: "desktop.commands",
+        id: "pin-clipboard-image",
+        label: { fallback: "贴出剪贴板图片" },
+        handlerId: "desktop.pin-clipboard-image",
+        slot: "capture",
+        hosts: ["desktop"],
+        order: 40
+      },
+      {
+        kind: "hotkey",
+        surface: "desktop.hotkeys",
+        id: "pin-clipboard-image-hotkey",
+        label: { fallback: "贴出剪贴板图片" },
+        commandId: "pin-clipboard-image",
+        defaultBinding: "F3",
+        slot: "capture",
+        hosts: ["desktop"],
+        order: 40
       },
       {
         kind: "tray-menu",

@@ -53,6 +53,9 @@ test("Plugin Catalog API publishes one unified plugin and contribution snapshot"
     assert.equal(body.data.plugins.every(item => item.status === "active"), true);
     assert.equal(body.data.contributions.some(item => item.id === "overview"), true);
     assert.equal(body.data.contributions.some(item => item.id === "desktop-settings"), true);
+    assert.equal(body.data.contributions.some(item => item.kind === "page" && item.id === "overview-page"), true);
+    assert.equal(body.data.contributions.some(item => item.kind === "theme" && item.id === "system-theme"), true);
+    assert.equal(body.data.contributions.some(item => item.kind === "hotkey" && item.id === "capture-screenshot-hotkey"), true);
     const serialized = JSON.stringify(body.data);
     for (const forbidden of ["target", "endpoint", "query", "body", "resourceRoot"]) {
       assert.equal(serialized.includes(`"${forbidden}"`), false);
@@ -70,11 +73,14 @@ test("Plugin Catalog API filters contributions for Desktop", async () => {
     const body = await response.json() as {
       data: {
         host: string;
+        generation: string;
         plugins: Array<{ instanceId: string; host: string }>;
         contributions: Array<{ hosts: string[]; instanceId: string }>;
       };
     };
     assert.equal(body.data.host, "desktop");
+    assert.equal(body.data.generation, app.runtime.generation);
+    assert.match(body.data.generation, /^[0-9a-f-]{36}$/);
     assert.equal(body.data.plugins.some(item => item.instanceId === "manager:core" && item.host === "manager"), true);
     assert.equal(body.data.contributions.length > 0, true);
     assert.equal(body.data.contributions.every(item => item.hosts.includes("desktop")), true);

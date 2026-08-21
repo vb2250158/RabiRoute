@@ -14,7 +14,9 @@ from rabiroute_tray.manager_client import ManagerClient
 from rabiroute_tray.plugin_catalog import (
     DesktopPluginCatalog,
     DesktopPluginCatalogCache,
+    DesktopPluginHotkey,
     DesktopPluginMenuItem,
+    DesktopPluginTheme,
     DesktopPluginSettingsSection,
     DesktopPluginStatusCard,
     empty_desktop_plugin_catalog,
@@ -22,6 +24,8 @@ from rabiroute_tray.plugin_catalog import (
 )
 from rabiroute_tray.tray_app import (
     _desktop_plugin_handler_url,
+    _desktop_plugin_hotkey_handlers,
+    _desktop_plugin_theme_id,
     _rebuild_plugin_menu,
     _start_desktop_plugin_catalog,
 )
@@ -51,6 +55,32 @@ def _command(command_id: str, handler_id: str, **overrides) -> dict:
 
 def _tray(contribution_id: str, command_id: str, **overrides) -> dict:
     return _base("tray-menu", contribution_id, commandId=command_id, **overrides)
+
+
+def _hotkey(contribution_id: str, command_id: str, default_binding: str, **overrides) -> dict:
+    return _base(
+        "hotkey",
+        contribution_id,
+        surface="desktop.hotkeys",
+        slot="capture",
+        commandId=command_id,
+        defaultBinding=default_binding,
+        **overrides,
+    )
+
+
+def _theme(theme_id: str, desktop_resource_id: str, **overrides) -> dict:
+    return _base(
+        "theme",
+        f"{theme_id}-theme",
+        plugin_id="builtin:manager/core",
+        instance_id="manager:core",
+        surface="shared.themes",
+        slot="interface",
+        themeId=theme_id,
+        desktopResourceId=desktop_resource_id,
+        **overrides,
+    )
 
 
 def _status(contribution_id: str, query_id: str, renderer_id: str, **overrides) -> dict:
@@ -109,6 +139,7 @@ def _payload(
     revision: int = 1,
     contributions: list[object] | None = None,
     plugins: list[object] | None = None,
+    generation: str = "manager-generation-a",
 ) -> dict:
     contribution_rows = contributions if contributions is not None else []
     if plugins is None:
@@ -125,6 +156,7 @@ def _payload(
         "code": 0,
         "data": {
             "schemaVersion": 2,
+            "generation": generation,
             "host": "desktop",
             "revision": {"plugins": revision, "contributions": revision},
             "plugins": plugins,
@@ -479,6 +511,162 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         result = cache.accept_payload(_payload(7, []))
 
         self.assertEqual(result, newer)
+
+    def test_new_manager_generation_accepts_lower_revision(self) -> None:
+        cache = DesktopPluginCatalogCache()
+        cache.accept_payload(_payload(8, [], generation="manager-generation-a"))
+
+        restarted = cache.accept_payload(_payload(1, [], generation="manager-generation-b"))
+
+        self.assertEqual(restarted.generation, "manager-generation-b")
+        self.assertEqual(restarted.contribution_revision, 1)
+
+    def test_legacy_manager_pid_change_clears_revision_cache(self) -> None:
+        cache = DesktopPluginCatalogCache()
+        cache.observe_manager_identity("pid:100")
+        cache.accept_payload(_payload(8, [], generation=""))
+
+        cache.observe_manager_identity("pid:200")
+        restarted = cache.accept_payload(_payload(1, [], generation=""))
+
+        self.assertEqual(restarted.contribution_revision, 1)
+
+    def test_old_catalog_response_cannot_repopulate_after_manager_pid_changes(self) -> None:
+        cache = DesktopPluginCatalogCache()
+        cache.observe_manager_identity("pid:100")
+        old_request_revision = cache.request_identity_revision()
+        cache.accept_payload(_payload(8, [], generation=""), old_request_revision)
+
+        cache.observe_manager_identity("pid:200")
+        stale = cache.accept_payload(_payload(9, [], generation=""), old_request_revision)
+        new_request_revision = cache.request_identity_revision()
+        restarted = cache.accept_payload(_payload(1, [], generation=""), new_request_revision)
+
+        self.assertEqual(stale, empty_desktop_plugin_catalog())
+        self.assertEqual(restarted.contribution_revision, 1)
+
+    def test_resolves_controlled_hotkeys_and_themes(self) -> None:
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _command("capture-screenshot", "desktop.capture-screenshot"),
+                    _hotkey("capture-screenshot-hotkey", "capture-screenshot", "Ctrl+Shift+S"),
+                    _command("pin-clipboard-image", "desktop.pin-clipboard-image"),
+                    _hotkey("pin-clipboard-image-hotkey", "pin-clipboard-image", "F3"),
+                    _theme("system", "builtin.desktop-theme.system.v1"),
+                    _theme("light", "builtin.desktop-theme.light.v1"),
+                    _theme("dark", "builtin.desktop-theme.dark.v1"),
+                ]
+            )
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertEqual(
+            [(item.command_id, item.handler_id, item.default_binding) for item in catalog.hotkeys],
+            [
+                ("capture-screenshot", "desktop.capture-screenshot", "Ctrl+Shift+S"),
+                ("pin-clipboard-image", "desktop.pin-clipboard-image", "F3"),
+            ],
+        )
+        self.assertEqual(
+            [(item.theme_id, item.desktop_resource_id) for item in catalog.themes],
+            [
+                ("system", "builtin.desktop-theme.system.v1"),
+                ("light", "builtin.desktop-theme.light.v1"),
+                ("dark", "builtin.desktop-theme.dark.v1"),
+            ],
+        )
+        self.assertEqual(
+            _desktop_plugin_hotkey_handlers(catalog),
+            frozenset({"desktop.capture-screenshot", "desktop.pin-clipboard-image"}),
+        )
+        self.assertEqual(_desktop_plugin_theme_id(catalog, "dark"), "dark")
+        self.assertEqual(_desktop_plugin_theme_id(catalog, "unknown"), "system")
+
+    def test_rejects_unknown_or_cross_instance_hotkey_contracts(self) -> None:
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _command("capture-screenshot", "desktop.capture-screenshot"),
+                    _hotkey("wrong-binding", "capture-screenshot", "Ctrl+Alt+S"),
+                    _hotkey("unknown-command", "missing-command", "Ctrl+Shift+S"),
+                    _hotkey(
+                        "cross-instance",
+                        "capture-screenshot",
+                        "Ctrl+Shift+S",
+                        plugin_id="third-party:desktop",
+                        instance_id="manager:third-party",
+                    ),
+                    _command("unsafe", "desktop.run-shell"),
+                    _hotkey("unsafe-hotkey", "unsafe", "F3"),
+                ]
+            )
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertEqual(catalog.hotkeys, ())
+
+    def test_rejects_unknown_theme_resources_and_missing_host_capabilities(self) -> None:
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _theme("dark", "third-party.theme.dark"),
+                    _theme(
+                        "light",
+                        "builtin.desktop-theme.light.v1",
+                        requiredCapabilities=["desktop.unknown"],
+                    ),
+                    _command("capture-screenshot", "desktop.capture-screenshot"),
+                    _hotkey(
+                        "capture-screenshot-hotkey",
+                        "capture-screenshot",
+                        "Ctrl+Shift+S",
+                        requiredCapabilities=["desktop.unknown"],
+                    ),
+                ]
+            )
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertEqual(catalog.themes, ())
+        self.assertEqual(catalog.hotkeys, ())
+
+    def test_tray_host_rechecks_hotkey_and_theme_whitelists(self) -> None:
+        catalog = DesktopPluginCatalog(
+            schema_version=2,
+            plugin_revision=1,
+            contribution_revision=1,
+            menu_items=(),
+            hotkeys=(
+                DesktopPluginHotkey(
+                    plugin_id="third-party:desktop",
+                    instance_id="manager:third-party",
+                    contribution_id="unsafe",
+                    command_id="capture-screenshot",
+                    handler_id="desktop.run-shell",
+                    default_binding="Ctrl+Shift+S",
+                    label="unsafe",
+                    order=1,
+                ),
+            ),
+            themes=(
+                DesktopPluginTheme(
+                    plugin_id="third-party:desktop",
+                    instance_id="manager:third-party",
+                    contribution_id="unsafe-theme",
+                    theme_id="dark",
+                    desktop_resource_id="third-party.theme.dark",
+                    label="unsafe",
+                    order=1,
+                ),
+            ),
+        )
+
+        self.assertEqual(_desktop_plugin_hotkey_handlers(catalog), frozenset())
+        self.assertEqual(_desktop_plugin_theme_id(catalog, "dark"), "system")
 
     def test_plugin_menu_keeps_fixed_recovery_entries_and_executes_whitelist(self) -> None:
         root = QMenu()

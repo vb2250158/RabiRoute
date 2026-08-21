@@ -74,6 +74,16 @@ class TrayArchitectureTest(unittest.TestCase):
         self.assertNotIn(".terminate()", quit_helper)
         self.assertNotIn("taskkill", quit_helper)
 
+    def test_periodic_refresh_retries_plugin_catalog_after_manager_recovery(self) -> None:
+        source = (TRAY_ROOT / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
+
+        refresh_tick = source[source.index("    def refresh_tick() -> None:"):source.index("    timer.timeout.connect(refresh_tick)")]
+        self.assertIn("refresh_plugin_catalog()", refresh_tick)
+
+        catalog_refresh = source[source.index("    def refresh_plugin_catalog() -> None:"):source.index("    def refresh(auto: bool = False) -> None:")]
+        self.assertIn("if plugin_catalog_task is not completed_task", catalog_refresh)
+        self.assertIn("finally:\n                    plugin_catalog_task = None", catalog_refresh)
+
     def test_role_panel_is_prewarmed_before_the_tray_becomes_clickable(self) -> None:
         source = (TRAY_ROOT / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
 

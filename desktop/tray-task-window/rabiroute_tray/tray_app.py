@@ -26,7 +26,13 @@ from .manager_client import (
     PlanFeedbackSubmitResult,
     RolePanelSendResult,
 )
-from .plugin_catalog import DesktopPluginCatalog, SUPPORTED_DESKTOP_HANDLERS
+from .plugin_catalog import (
+    DesktopPluginCatalog,
+    SUPPORTED_DESKTOP_HANDLERS,
+    SUPPORTED_DESKTOP_HOTKEYS,
+    SUPPORTED_DESKTOP_THEMES,
+    empty_desktop_plugin_catalog,
+)
 from .qt_async import QtAsyncTask, start_qt_task, wait_for_qt_tasks
 from .system_selection import (
     SelectionDeliveryTarget,
@@ -266,6 +272,7 @@ def run(
         "loaded_gateway_id": selected_gateway_id,
         "theme": "system",
         "resolved_theme": "light",
+        "plugin_catalog": empty_desktop_plugin_catalog(),
     }
     theme_refresh_task: QtAsyncTask | None = None
     plugin_catalog_task: QtAsyncTask | None = None
@@ -275,7 +282,8 @@ def run(
     lifecycle.observe(initial_manager)
 
     def apply_desktop_theme(theme: object) -> None:
-        resolved = apply_rabi_application_theme(app, theme)
+        selected_theme = _desktop_plugin_theme_id(state["plugin_catalog"], theme)
+        resolved = apply_rabi_application_theme(app, selected_theme)
         state["theme"] = theme if isinstance(theme, str) else "system"
         state["resolved_theme"] = resolved
         apply_rabi_menu_theme(menu, more_personas_menu, plugin_menu, theme=resolved)
@@ -456,20 +464,30 @@ def run(
 
         def completed(completed_task: QtAsyncTask, catalog: DesktopPluginCatalog | None) -> None:
             nonlocal plugin_catalog_task
-            if plugin_catalog_task is completed_task:
-                plugin_catalog_task = None
+            if plugin_catalog_task is not completed_task:
+                return
             if catalog is None:
+                plugin_catalog_task = None
                 return
 
             def apply_catalog() -> None:
-                _rebuild_plugin_menu(
-                    menu,
-                    plugin_menu,
-                    refresh_action,
-                    catalog,
-                    execute_plugin_handler,
-                )
-                _warm_menu_layout(menu)
+                nonlocal plugin_catalog_task
+                if plugin_catalog_task is not completed_task:
+                    return
+                try:
+                    state["plugin_catalog"] = catalog
+                    system_screenshot.set_plugin_hotkey_handlers(_desktop_plugin_hotkey_handlers(catalog))
+                    apply_desktop_theme(state["theme"])
+                    _rebuild_plugin_menu(
+                        menu,
+                        plugin_menu,
+                        refresh_action,
+                        catalog,
+                        execute_plugin_handler,
+                    )
+                    _warm_menu_layout(menu)
+                finally:
+                    plugin_catalog_task = None
 
             _run_when_menu_idle(menu, apply_catalog)
 
@@ -549,6 +567,7 @@ def run(
 
     def refresh_tick() -> None:
         refresh(auto=True)
+        refresh_plugin_catalog()
         refresh_desktop_theme()
 
     timer.timeout.connect(refresh_tick)
@@ -625,6 +644,24 @@ def _run_when_menu_idle(menu: QMenu, callback, retry_ms: int = 25) -> None:
         QTimer.singleShot(retry_ms, lambda: _run_when_menu_idle(menu, callback, retry_ms))
         return
     callback()
+
+
+def _desktop_plugin_hotkey_handlers(catalog: DesktopPluginCatalog) -> frozenset[str]:
+    return frozenset(
+        item.handler_id
+        for item in catalog.hotkeys
+        if (item.command_id, item.handler_id, item.default_binding) in SUPPORTED_DESKTOP_HOTKEYS
+    )
+
+
+def _desktop_plugin_theme_id(catalog: DesktopPluginCatalog, requested_theme: object) -> str:
+    theme_id = requested_theme if isinstance(requested_theme, str) else "system"
+    available = {
+        item.theme_id
+        for item in catalog.themes
+        if (item.theme_id, item.desktop_resource_id) in SUPPORTED_DESKTOP_THEMES
+    }
+    return theme_id if theme_id in available else "system"
 
 
 def _desktop_plugin_handler_url(manager_url: str, handler_id: str) -> str | None:

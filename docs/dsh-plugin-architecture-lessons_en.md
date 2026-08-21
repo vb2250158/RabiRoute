@@ -2,7 +2,7 @@ English | <a href="./dsh-plugin-architecture-lessons.md">简体中文</a>
 
 # Plugin Architecture Lessons for RabiRoute from DSH
 
-> Status: architecture research and design principles. The plugin runtime has not been implemented.
+> Status: architecture research with phased implementation. Cordis composition roots, Adapter Registries, the Manager Plugin Runtime, and controlled presentation contributions are implemented; configuration reconciliation, third-party presentation code, and isolated-process plugins remain later stages.
 >
 > Primary audience: RabiRoute maintainers and developers of message-side and Agent-side integrations.
 

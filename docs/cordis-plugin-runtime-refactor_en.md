@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, WebGUI navigation/settings/status entries, and Desktop tray/diagnostic entries are implemented. Page templates, hotkeys, themes, configuration reconciliation, and isolated-process plugins are not complete.
+> Status: refactor in progress. The single Gateway root Context, Manager Plugin Runtime, Schema v2 catalog, and declarative WebGUI/Desktop presentation entries are implemented. Configuration reconciliation, local reload, and isolated-process plugins are not complete.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -12,7 +12,7 @@ RabiRoute adopts a Cordis composition kernel, a Rabi business adaptation layer, 
 
 - Manager and Gateway use Cordis for plugin dependencies, Fiber lifecycle, and effect disposal.
 - RabiRoute supplies its own service keys, events, manifests, configuration, and status catalog so business code does not depend directly on Cordis APIs.
-- WebGUI and Desktop are minimal hosts. Pages, status cards, commands, menus, settings, themes, and other extensible entries come from the unified plugin/contribution catalog. WebGUI consumes navigation and the persona-page secondary entry; Desktop consumes controlled commands and tray menus.
+- WebGUI and Desktop are minimal hosts. The unified plugin/contribution catalog currently controls whether host-pre-registered pages, status cards, commands, menus, settings, hotkeys, and themes appear; it does not load third-party presentation code. WebGUI consumes pages, navigation, settings sections, status cards, and themes; Desktop consumes commands, tray menus, hotkeys, status, settings, and themes.
 - Route configuration, event records, routing decisions, `AgentPacket`, delivery evidence, and Outbox remain owned by stable modules.
 - Existing capabilities migrate in this order: Agent Adapters, message-side lifecycle, Gateway composition, Manager catalog, presentation extensions, and configuration reconciliation.
 
@@ -350,9 +350,9 @@ Exit criterion: Manager publishes plugins and contributions through one API. Thi
 
 ### Stage 5: declarative WebGUI and Desktop extensions
 
-Current status: partially complete. WebGUI generates primary navigation, utility navigation, the User Guide, and the persona-page secondary entry from the unified catalog, then uses a fixed registry to control the Desktop settings section, speech summary, and performance summary. Desktop generates a controlled tray submenu and reads catalog-declared speech status, performance status, and Desktop settings in its Diagnostics view. Page templates, hotkeys, and themes remain pending.
+Current status: controlled built-in presentation entries are implemented. Plugin Catalog decides whether host-pre-registered pages, menus, status, settings, hotkeys, and themes appear; it does not load plugin-supplied Vue components, CSS, scripts, or command handlers. WebGUI uses a fixed `routeId -> rendererId -> Vue component` registry, and navigation can reference only an active page from the same plugin instance and registration batch. Desktop executes only fixed handlers and reuses the existing screenshot controller and user-saved bindings. The catalog carries a Manager runtime generation; Desktop retries an initial failure and accepts lower revisions after a Manager restart when the generation changes.
 
-Exit criterion: installing a backend plugin makes its declared entries appear on supported hosts and unloading it removes them.
+Current-slice exit criterion: the catalog can show or hide host-owned entries, fixed recovery remains available, and a Manager restart cannot preserve an obsolete catalog indefinitely. Third-party page components, theme resources, and command handlers belong to Stage 7.
 
 ### Stage 6: reconciliation and local reload
 
@@ -518,7 +518,7 @@ This split gives message-source facts and resident plugin lifecycles separate co
 2. the resident Gateway uses one Cordis root Context and mounts the Agent Adapter Registry, Message Adapter Registry, and Contribution Registry under that root;
 3. one-shot alert, replay, manual-trigger, role-panel, plan-feedback, speech, and Direct Agent Envelope commands enter their command implementation without starting the Message Adapter Runtime or Contribution Runtime;
 4. normal resident shutdown and startup failure both dispose the whole root Context, allowing each Registry Fiber to remove its listeners, timers, and registrations;
-5. WebGUI and Desktop are extensible minimal hosts. Extension authors add pages, actions, status, or settings through contribution plugins, so presentation entries remain inside the plugin model.
+5. WebGUI and Desktop are minimal hosts. The current contribution catalog controls only host-pre-registered pages, actions, status, and settings; third-party presentation code waits for stable contracts and isolation boundaries.
 
 `create-gateway-host` is complete.
 
@@ -538,10 +538,12 @@ This split gives message-source facts and resident plugin lifecycles separate co
 1. rebuild plugin manifests and contributions from field allowlists so the public catalog contains no arbitrary URLs, endpoints, request bodies, or resource paths;
 2. have WebGUI request `host=web` and generate its sidebar, User Guide, and persona-sync entry through fixed host mappings for `routeId`, icons, and slots;
 3. have Desktop request `host=desktop`, cache the latest successful catalog, and generate the Plugin tray submenu asynchronously;
-4. require `tray-menu.commandId` to reference a `command.id` from the same plugin instance and registration batch; Desktop supports only `desktop.open-webgui` and `desktop.open-settings`;
-5. reject or ignore unknown schemas, unknown IDs, cross-plugin references, and dangerous commands while preserving fixed recovery entries when catalog loading fails.
+4. require `navigation.routeId` to reference a `page.routeId` from the same plugin instance and registration batch; WebGUI loads only fixed built-in Vue components for known `rendererId` values;
+5. require `tray-menu.commandId` and `hotkey.commandId` to reference a safe `command.id` from the same plugin instance and batch; Desktop executes only fixed handlers, while screenshot and clipboard-pin hotkeys reuse the existing controller;
+6. accept only `system`, `light`, and `dark` with matching host-owned resource IDs; the catalog cannot provide directories or resource paths;
+7. reject or ignore unknown schemas, IDs, cross-plugin references, dangerous commands, and unsupported host capabilities. The first WebGUI catalog failure opens a fixed recovery page, Desktop keeps fixed recovery entries, and later failures retain the latest successful catalog.
 
-The navigation, tray-menu, settings-section, and status-card batches of `extend-webgui-desktop` are complete. Each target host evaluates `requiredCapabilities` with AND semantics against its local capability registry; plugin manifests cannot declare rendering or execution support on behalf of a host. The next stage connects page templates, hotkeys, and themes, then adds configuration reconciliation, local reload, and isolated-process plugins.
+`extend-webgui-desktop` is complete. Each target host evaluates `requiredCapabilities` with AND semantics against its local capability registry; plugin manifests cannot declare rendering or execution support on behalf of a host. The next stage adds configuration reconciliation, local reload, and isolated-process plugins.
 
 ## Readiness criteria
 

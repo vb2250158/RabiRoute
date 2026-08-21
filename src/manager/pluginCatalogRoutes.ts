@@ -40,6 +40,7 @@ export function handlePluginCatalogApi(
     code: 0,
     data: {
       schemaVersion: 2,
+      generation: context.runtime.generation,
       host: host ?? "all",
       revision: {
         plugins: plugins.revision,
