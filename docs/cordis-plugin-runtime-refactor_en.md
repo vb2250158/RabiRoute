@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, the first Stage 1 slice, and the Contribution Registry contract are implemented; message-side and full Manager/Gateway migration remain in progress.
+> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the first Stage 2 generic-Webhook slice are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -318,15 +318,15 @@ Exit criterion: Cordis APIs appear only under `src/runtime/` and its tests.
 
 Combine Adapter creation, `deliver()`, capabilities, Manager scanning, display name, maturity, and diagnostic actions. Keep `createAgentAdapter(type)` as a compatibility entry. Do not change routing decisions or templates in `forwarding.ts`.
 
-`codex`, `dsh`, `copilotCli`, `marvis`, and `astrbot` now use one Cordis registry. `createAgentAdapter(type)` is retained as a compatibility entry, while message rendering and real delivery functions keep their existing paths. Type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input now read the same manifest; the Contribution Registry is still pending.
+`codex`, `dsh`, `copilotCli`, `marvis`, and `astrbot` now use one Cordis registry. `createAgentAdapter(type)` is retained as a compatibility entry, while message rendering and real delivery functions keep their existing paths. Type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input now read the same manifest; the Contribution Registry contract is also in place.
 
 Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
 ### Stage 2: complete message-side lifecycle
 
-Migrate the generic Webhook first and prove that Fiber owns its port, listeners, status, and failure rollback. Then migrate Heartbeat, NapCat, and the remaining message adapters.
+Generic Webhook now registers through `MessageAdapterDefinition`, a manifest, and `MessageAdapterRegistry`. Startup completes only after the listener is ready. Port conflicts or `onListening` initialization failures close created resources and fail activation. Fiber disposal awaits `server.close()` and records `disabled`. `src/index.ts` mounts registered message adapters first; Heartbeat, NapCat, and the remaining adapters still use the compatibility creation entry.
 
-Exit criterion: the first message adapter supports repeated activation and deactivation without resource residue.
+The first exit criterion is met. Tests cover repeated mount/dispose/remount on one port, port conflicts, and post-listen initialization failure. A real `dist/index.js` process verified `ready -> SIGINT -> disabled` and port release. Stage 2 continues with Heartbeat, NapCat, and the remaining message adapters.
 
 ### Stage 3: Gateway Host
 
@@ -412,6 +412,16 @@ Rollback changes runtime selection only and never creates duplicate business fac
 All seven items are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, a declarative Contribution Registry contract, and Fiber lifecycle tests. The Contribution Registry currently exists only as a runtime contract with tests; Manager does not publish it yet, and WebGUI/Desktop do not render from it yet.
 
 This slice does not change message templates, Desktop IPC, DSH delivery, Route configuration, Outbox, or current UI behavior.
+
+## Second implementation slice: generic Webhook lifecycle
+
+1. define the Message Adapter manifest, Definition, and Registry;
+2. make generic Webhook `start()` return an awaitable close action after the listener is ready;
+3. let a Cordis Fiber own startup and teardown;
+4. mount registered message adapters first while retaining the compatibility creation entry for unmigrated adapters;
+5. verify repeated mounting, port conflicts, post-listen initialization failure, process-exit status, and port release.
+
+This slice keeps Webhook payload, recording, Forwarding, and HTTP response contracts unchanged.
 
 ## Readiness criteria
 

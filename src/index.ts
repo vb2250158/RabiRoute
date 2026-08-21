@@ -39,6 +39,7 @@ import {
 import type { WearableHealthAlert } from "./wearableHealth.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
 import { renderRabiDelivery, type RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
+import { createMessageAdapterRuntime } from "./runtime/messageAdapterRuntime.js";
 
 type GatewayStatus = {
   messageAdapter?: {
@@ -428,39 +429,6 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
   };
 }
 
-function createMessageAdapter(): MessageAdapter {
-  if (config.messageAdapterType === "napcat") {
-    return createNapCatAdapter();
-  }
-  if (config.messageAdapterType === "heartbeat") {
-    return createHeartbeatAdapter();
-  }
-  if (config.messageAdapterType === "fennenote") {
-    return createFenneNoteAdapter();
-  }
-  if (config.messageAdapterType === "xiaoai") {
-    return createXiaoAiAdapter();
-  }
-  if (config.messageAdapterType === "rabilink") {
-    return createRabiLinkAdapter();
-  }
-  if (config.messageAdapterType === "wearable") {
-    return createWearableAdapter();
-  }
-  if (config.messageAdapterType === "webhook") {
-    return createWebhookAdapter();
-  }
-  if (config.messageAdapterType === "wecom") {
-    return createWeComAdapter();
-  }
-  if (config.messageAdapterType === "weixin") {
-    return createWeixinAdapter();
-  }
-  if (config.messageAdapterType === "feishu") return createFeishuAdapter();
-
-  return createPlaceholderAdapter(config.messageAdapterType);
-}
-
 function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   if (type === "napcat") {
     return createNapCatAdapter();
@@ -493,20 +461,50 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   return createPlaceholderAdapter(type);
 }
 
-const adapters = config.messageAdapterTypes.length > 0
-  ? config.messageAdapterTypes.map(createMessageAdapterByType)
-  : [createMessageAdapter()];
-
+const adapterTypes = config.messageAdapterTypes.length > 0
+  ? config.messageAdapterTypes
+  : [config.messageAdapterType];
+const messageAdapterRuntime = await createMessageAdapterRuntime();
+const legacyDisposers: Array<() => void | Promise<void>> = [];
 const stopPerformanceReporter = startGatewayPerformanceReporter();
-process.once("SIGINT", stopPerformanceReporter);
-process.once("SIGTERM", stopPerformanceReporter);
-process.once("beforeExit", stopPerformanceReporter);
+let gatewayDisposePromise: Promise<void> | undefined;
 
-for (const adapter of adapters) {
-  patchMessageAdapterStatus({
-    type: adapter.type,
-    status: "running",
-    message: `Starting ${adapter.type} message adapter.`
-  });
-  void adapter.start();
+function disposeGatewayRuntime(): Promise<void> {
+  if (!gatewayDisposePromise) {
+    gatewayDisposePromise = (async () => {
+      stopPerformanceReporter();
+      for (const dispose of legacyDisposers.splice(0).reverse()) {
+        await dispose();
+      }
+      await messageAdapterRuntime.dispose();
+    })();
+  }
+  return gatewayDisposePromise;
+}
+
+process.once("SIGINT", () => void disposeGatewayRuntime());
+process.once("SIGTERM", () => void disposeGatewayRuntime());
+process.once("beforeExit", () => void disposeGatewayRuntime());
+
+try {
+  for (const type of adapterTypes) {
+    if (messageAdapterRuntime.registry.manifest(type)) {
+      await messageAdapterRuntime.mount(type);
+      continue;
+    }
+
+    const adapter = createMessageAdapterByType(type);
+    patchMessageAdapterStatus({
+      type: adapter.type,
+      status: "running",
+      message: `Starting ${adapter.type} message adapter.`
+    });
+    const dispose = await adapter.start();
+    if (typeof dispose === "function") {
+      legacyDisposers.push(dispose);
+    }
+  }
+} catch (error) {
+  await disposeGatewayRuntime();
+  throw error;
 }

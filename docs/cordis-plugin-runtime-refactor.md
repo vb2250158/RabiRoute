@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1 首个切片和 Contribution Registry 合同已实施，消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同和阶段 2 的首个通用 Webhook 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -318,15 +318,15 @@ plugins:
 
 合并 Adapter 创建、`deliver()`、能力、Manager 扫描、显示名、成熟度和诊断动作。保留 `createAgentAdapter(type)` 兼容入口，`forwarding.ts` 的路由判断和模板不改。
 
-`codex`、`dsh`、`copilotCli`、`marvis` 和 `astrbot` 已进入同一个 Cordis 注册表。`createAgentAdapter(type)` 已改为兼容入口，消息渲染与真实投递函数保持原路径。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入已读取同一 manifest；Contribution Registry 仍待建立。
+`codex`、`dsh`、`copilotCli`、`marvis` 和 `astrbot` 已进入同一个 Cordis 注册表。`createAgentAdapter(type)` 已改为兼容入口，消息渲染与真实投递函数保持原路径。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入已读取同一 manifest；Contribution Registry 合同也已建立。
 
 退出条件：新增内置 Agent Adapter 只增加插件与清单。
 
 ### 阶段 2：消息端完整生命周期
 
-先迁移通用 Webhook，证明端口、监听器、状态和失败回退均由 Fiber 持有。随后迁移 Heartbeat、NapCat 和其他消息端。
+通用 Webhook 已通过 `MessageAdapterDefinition` 和 manifest 注册到 `MessageAdapterRegistry`。启动会等待 listener 成功后才完成；端口占用或 `onListening` 初始化失败会关闭已创建资源并返回失败；Fiber 销毁会等待 `server.close()`，把状态改为 `disabled`。`src/index.ts` 优先挂载已注册消息端，Heartbeat、NapCat 和其他消息端仍走兼容创建入口。
 
-退出条件：首个消息端可以重复启停且没有资源残留。
+当前退出条件已满足：测试覆盖同一端口重复挂载、卸载、重新挂载、端口占用和监听后初始化失败；真实 `dist/index.js` 进程验证了 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 继续迁移 Heartbeat、NapCat 和其他消息端。
 
 ### 阶段 3：Gateway Host
 
@@ -412,6 +412,16 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 当前七项均已完成：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据、声明式 Contribution Registry 合同和 Fiber 生命周期测试已经存在。Contribution Registry 目前只在运行时合同和测试中，尚未由 Manager API 发布，也未驱动 WebGUI/Desktop。
 
 这个切片不修改消息模板、Desktop IPC、DSH 投递、Route 配置、Outbox 或现有界面交互。
+
+## 第二个实施切片：通用 Webhook 生命周期
+
+1. 定义 Message Adapter manifest、Definition 和 Registry；
+2. 让通用 Webhook `start()` 在 listener 成功后返回可等待的关闭动作；
+3. 由 Cordis Fiber 持有启动和关闭动作；
+4. Gateway 入口优先挂载已注册消息端，未迁移消息端保留兼容创建入口；
+5. 验证重复挂载、端口占用、监听后初始化失败、进程退出状态和端口释放。
+
+这个切片保持 Webhook payload、记录、Forwarding 和 HTTP 响应合同不变。
 
 ## 完成标准
 

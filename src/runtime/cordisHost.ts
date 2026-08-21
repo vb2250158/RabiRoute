@@ -5,12 +5,19 @@ export type RabiCordisFiber = {
   dispose(): Promise<void>;
 };
 
+export type RabiCordisDisposer = () => void | Promise<void>;
+
+export type RabiCordisEffect = RabiCordisDisposer & PromiseLike<RabiCordisDisposer>;
+
 export type RabiCordisContext = {
   fiber: RabiCordisFiber;
   plugin(plugin: RabiCordisPlugin): RabiCordisFiber;
   get(name: string, strict?: boolean): unknown;
   provide(name: string, value?: unknown): () => void;
-  effect(execute: () => () => void, label?: string): unknown;
+  effect(
+    execute: () => RabiCordisDisposer | Promise<RabiCordisDisposer>,
+    label?: string
+  ): RabiCordisEffect;
 };
 
 export type RabiCordisPlugin = {
@@ -33,8 +40,13 @@ export class RabiCordisHost {
 
   async mount(plugin: RabiCordisPlugin): Promise<RabiCordisFiber> {
     const fiber = this.context.plugin(plugin);
-    await fiber.await();
-    return fiber;
+    try {
+      await fiber.await();
+      return fiber;
+    } catch (error) {
+      await fiber.dispose();
+      throw error;
+    }
   }
 
   async dispose(): Promise<void> {

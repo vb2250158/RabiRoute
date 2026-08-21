@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "migrate-message-adapter-lifecycle",
-  "currentStep": "Agent Adapter manifest 已统一到运行时、配置、Manager 扫描、Rabi 本机绑定和 WebGUI 快速配置。声明式 Contribution Registry 合同已支持 WebGUI/Desktop 宿主筛选、排序、重复拒绝、原子批量注册和 Fiber 自动撤销；Manager 发布和界面消费尚未接入。",
-  "nextAction": "迁移首个消息端的监听器、状态和销毁生命周期，验证重复启停没有端口、监听器或定时器残留。",
+  "currentStep": "通用 Webhook 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移；重复挂载、端口占用、监听后初始化失败、SIGINT 状态回写和端口释放已验证。Heartbeat、NapCat 与其他消息端仍使用兼容创建入口。",
+  "nextAction": "迁移 Heartbeat 的定时器创建与清理生命周期，再迁移 NapCat 连接和其他消息端。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -78,7 +78,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T12:10:00+08:00",
+  "updatedAt": "2026-08-21T12:10:25+08:00",
   "keywords": [
     "Cordis",
     "plugin",

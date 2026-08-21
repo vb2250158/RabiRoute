@@ -6,13 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased - 2026-08-20
+## Unreleased - 2026-08-21
 
 ### First Cordis plugin-runtime slice
 
 - Added exact `cordis@4.0.0-rc.8`, with all Cordis compatibility code contained under `src/runtime/`.
 - `codex`, `dsh`, `copilotCli`, `marvis`, and `astrbot` register as independent Fibers in one Agent Adapter catalog. `createAgentAdapter()`, message templates, Desktop IPC, and DSH delivery remain compatible.
 - Lifecycle tests cover unloading one adapter Fiber, disposing the root Context, rejecting duplicate types, and matching the built-in manifest catalog. Type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input now read the same manifest. A declarative Contribution Registry contract filters navigation, settings sections, status cards, commands, tray menus, hotkeys, and themes for WebGUI/Desktop and removes entries when the owning Fiber unloads; Manager publication and UI consumption continue as staged work.
+- Generic Webhook is the first message adapter with a complete Fiber-owned lifecycle. It registers through a Definition and manifest, waits for the HTTP listener to become ready, rolls back port conflicts or post-listen initialization failures, closes the listener on Fiber disposal, and records `disabled` after a normal stop. The Gateway entry mounts registered message adapters first and keeps the compatibility factory for adapters that have not migrated yet.
 
 ### DSH can own the full Primary Agent and Plan Secretary path
 

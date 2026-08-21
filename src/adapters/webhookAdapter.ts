@@ -6,7 +6,7 @@ import { forwardMessage, recordMessageContextOnly } from "../forwarding.js";
 import { appendAdapterLog, appendVoiceTranscriptEventForAdapter, type VoiceTranscriptEventRecord } from "../history.js";
 import { isRabiLinkRecordFirstSource, recordRabiLinkVoiceObservation } from "../rabilinkObservationRecorder.js";
 import type { ForwardRouteKind } from "../routing/types.js";
-import type { MessageAdapter, MessageAdapterType } from "./messageAdapter.js";
+import type { MessageAdapter, MessageAdapterDispose, MessageAdapterType } from "./messageAdapter.js";
 
 export type WebhookPayload = {
   type?: string;
@@ -61,7 +61,7 @@ export type WebhookPayload = {
 type GatewayStatus = {
   messageAdapters?: Record<string, {
     type?: MessageAdapterType;
-    status?: "running" | "error";
+    status?: "running" | "error" | "disabled";
     message?: string;
     updatedAt?: string;
     path?: string;
@@ -126,15 +126,17 @@ type WebhookAdapterOptions = {
   onListening?(context: WebhookAdapterListeningContext): void;
 };
 
-const statusPath = path.join(config.dataDir, "gateway-status.json");
+function gatewayStatusPath(): string {
+  return path.join(config.dataDir, "gateway-status.json");
+}
 
 function readGatewayStatus(): GatewayStatus {
-  if (!fs.existsSync(statusPath)) {
+  if (!fs.existsSync(gatewayStatusPath())) {
     return {};
   }
 
   try {
-    return JSON.parse(fs.readFileSync(statusPath, "utf8")) as GatewayStatus;
+    return JSON.parse(fs.readFileSync(gatewayStatusPath(), "utf8")) as GatewayStatus;
   } catch {
     return {};
   }
@@ -142,10 +144,10 @@ function readGatewayStatus(): GatewayStatus {
 
 function writeGatewayStatus(nextStatus: GatewayStatus): void {
   fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
+  fs.writeFileSync(gatewayStatusPath(), JSON.stringify(nextStatus, null, 2), "utf8");
 }
 
-function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<GatewayStatus["webhook"]> & { status?: "running" | "error"; message?: string }): void {
+function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<GatewayStatus["webhook"]> & { status?: "running" | "error" | "disabled"; message?: string }): void {
   const status = readGatewayStatus();
   const current = status.messageAdapters?.[profile.type] ?? {};
   const shouldKeepGenericWebhook = profile.type === "webhook" || config.messageAdapterTypes.includes("webhook");
@@ -463,10 +465,18 @@ export function createXiaoAiAdapter(): MessageAdapter {
   });
 }
 
+function closeWebhookServer(server: http.Server): Promise<void> {
+  server.closeAllConnections();
+  if (!server.listening) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  });
+}
+
 export function createWebhookAdapter(profile = defaultWebhookProfile(), options: WebhookAdapterOptions = {}): MessageAdapter {
   return {
     type: profile.type,
-    start() {
+    start(): Promise<MessageAdapterDispose> {
       const webhookPath = normalizeWebhookPath(profile.path);
       const server = http.createServer(async (request, response) => {
         const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -531,26 +541,92 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
       });
 
       const host = profile.host || "127.0.0.1";
-      server.listen(profile.port, host, () => {
-        patchWebhookStatus(profile, {
-          status: "running",
-          message: `${profile.label} 消息端已启动。`,
-          path: webhookPath,
-          port: profile.port
-        });
-        options.onListening?.({ webhookPath, profile });
-        const url = `http://${host}:${profile.port}${webhookPath}`;
-        appendAdapterLog(profile.type, {
-          event: "listening",
-          message: `${profile.label} listening on ${url}`,
-          data: {
-            path: webhookPath,
-            port: profile.port,
-            host,
-            url
+      return new Promise<MessageAdapterDispose>((resolve, reject) => {
+        let startupSettled = false;
+
+        const reportServerError = (error: Error) => {
+          const message = error.message;
+          try {
+            patchWebhookStatus(profile, {
+              status: "error",
+              message,
+              path: webhookPath,
+              port: profile.port
+            });
+          } catch (statusError) {
+            console.error(`Failed to update ${profile.label} status`, statusError);
+          }
+          try {
+            appendAdapterLog(profile.type, {
+              level: "error",
+              event: startupSettled ? "server_error" : "listen_error",
+              message,
+              data: {
+                path: webhookPath,
+                port: profile.port,
+                host
+              }
+            });
+          } catch (logError) {
+            console.error(`Failed to append ${profile.label} error log`, logError);
+          }
+        };
+
+        const onStartupError = (error: Error) => {
+          reportServerError(error);
+          if (startupSettled) return;
+          startupSettled = true;
+          void closeWebhookServer(server).finally(() => reject(error));
+        };
+
+        server.once("error", onStartupError);
+        server.listen(profile.port, host, async () => {
+          if (startupSettled) return;
+          server.off("error", onStartupError);
+          server.on("error", reportServerError);
+          try {
+            patchWebhookStatus(profile, {
+              status: "running",
+              message: `${profile.label} 消息端已启动。`,
+              path: webhookPath,
+              port: profile.port
+            });
+            options.onListening?.({ webhookPath, profile });
+            const url = `http://${host}:${profile.port}${webhookPath}`;
+            appendAdapterLog(profile.type, {
+              event: "listening",
+              message: `${profile.label} listening on ${url}`,
+              data: {
+                path: webhookPath,
+                port: profile.port,
+                host,
+                url
+              }
+            });
+            console.log(`RabiRoute ${profile.label} adapter listening on ${url}`);
+            startupSettled = true;
+            let disposed = false;
+            resolve(async () => {
+              if (disposed) return;
+              disposed = true;
+              server.off("error", reportServerError);
+              await closeWebhookServer(server);
+              patchWebhookStatus(profile, {
+                status: "disabled",
+                message: `${profile.label} 消息端已停止。`,
+                path: webhookPath,
+                port: profile.port
+              });
+            });
+          } catch (error) {
+            startupSettled = true;
+            server.off("error", reportServerError);
+            await closeWebhookServer(server).catch(() => {});
+            const startupError = error instanceof Error ? error : new Error(String(error));
+            reportServerError(startupError);
+            reject(startupError);
           }
         });
-        console.log(`RabiRoute ${profile.label} adapter listening on ${url}`);
       });
     }
   };
