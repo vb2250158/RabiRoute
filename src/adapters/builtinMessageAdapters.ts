@@ -1,4 +1,5 @@
 import { createHeartbeatAdapter } from "./heartbeatAdapter.js";
+import { createNapCatAdapter } from "./napcatAdapter.js";
 import { createWebhookAdapter } from "./webhookAdapter.js";
 import type { MessageAdapterDefinition } from "./messageAdapter.js";
 
@@ -24,6 +25,17 @@ export const heartbeatMessageAdapterDefinition: MessageAdapterDefinition = {
   create: () => createHeartbeatAdapter()
 };
 
+export const napcatMessageAdapterDefinition: MessageAdapterDefinition = {
+  manifest: {
+    type: "napcat",
+    label: "NapCat / OneBot",
+    host: "gateway",
+    transport: "websocket",
+    lifecycle: "fiber"
+  },
+  create: () => createNapCatAdapter()
+};
+
 export function builtinMessageAdapterDefinitions(): MessageAdapterDefinition[] {
-  return [webhookMessageAdapterDefinition, heartbeatMessageAdapterDefinition];
+  return [webhookMessageAdapterDefinition, heartbeatMessageAdapterDefinition, napcatMessageAdapterDefinition];
 }

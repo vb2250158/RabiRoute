@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { createNapCatAdapter } from "./adapters/napcatAdapter.js";
 import { createRabiLinkAdapter } from "./adapters/rabilinkAdapter.js";
 import { createWearableAdapter } from "./adapters/wearableAdapter.js";
 import { createWeComAdapter } from "./adapters/wecomAdapter.js";
@@ -429,11 +428,8 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
 }
 
 function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
-  if (type === "heartbeat") {
-    throw new Error("Heartbeat message adapter must be mounted through the Cordis registry.");
-  }
-  if (type === "napcat") {
-    return createNapCatAdapter();
+  if (type === "heartbeat" || type === "napcat") {
+    throw new Error(`${type} message adapter must be mounted through the Cordis registry.`);
   }
   if (type === "fennenote") {
     return createFenneNoteAdapter();

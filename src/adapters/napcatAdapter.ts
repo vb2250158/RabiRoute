@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type ServerOptions, type WebSocket } from "ws";
 import { buildReply } from "../commands.js";
 import { config, setBotProfile, type NapCatInstanceConfig } from "../config.js";
 import { forwardMessage, recordMessageContextOnly, type ForwardRouteKind } from "../forwarding.js";
-import { appendAdapterLog, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "../history.js";
+import { appendAdapterLog, appendAdapterLogToDir, appendGroupMessage, appendPrivateMessage, readGroupMessages, type GroupMessageRecord, type PrivateMessageRecord } from "../history.js";
 import { getLoginInfo, getStatus, sendGroupMessage, sendPrivateMessage, type NapCatEndpoint } from "../napcat.js";
 import { enrichNapCatMessage } from "../napcatForwardMessages.js";
 import { materializeNapCatAttachments } from "../napcatMedia.js";
 import { resolveNapCatReplyChain } from "../napcatReplyMessages.js";
-import type { MessageAdapter } from "./messageAdapter.js";
+import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
 
 type OneBotEvent = {
   post_type?: string;
@@ -39,10 +39,16 @@ type GroupRoute = {
 type GatewayStatus = {
   messageAdapter?: {
     type?: "napcat";
-    status?: "running" | "error";
+    status?: "running" | "disabled" | "error";
     message?: string;
     updatedAt?: string;
   };
+  messageAdapters?: Record<string, {
+    type?: "napcat";
+    status?: "running" | "disabled" | "error";
+    message?: string;
+    updatedAt?: string;
+  }>;
   napcat?: {
     connected?: boolean;
     activeConnections?: number;
@@ -69,9 +75,12 @@ type GatewayStatus = {
   }>;
 };
 
-const statusPath = path.join(config.dataDir, "gateway-status.json");
+function gatewayStatusPath(dataDir: string): string {
+  return path.join(dataDir, "gateway-status.json");
+}
 
-function readGatewayStatus(): GatewayStatus {
+function readGatewayStatus(dataDir = config.dataDir): GatewayStatus {
+  const statusPath = gatewayStatusPath(dataDir);
   if (!fs.existsSync(statusPath)) {
     return {};
   }
@@ -83,43 +92,54 @@ function readGatewayStatus(): GatewayStatus {
   }
 }
 
-function writeGatewayStatus(nextStatus: GatewayStatus): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
+function writeGatewayStatus(nextStatus: GatewayStatus, dataDir = config.dataDir): void {
+  const statusPath = gatewayStatusPath(dataDir);
+  fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
 }
 
-function configuredNapcatInstanceIds(): Set<string> {
-  return new Set(config.napcatInstances.map((instance) => instance.id));
+function configuredNapcatInstanceIds(instances = config.napcatInstances): Set<string> {
+  return new Set(instances.map((instance) => instance.id));
 }
 
 function pruneNapcatInstanceStatus(
-  instances: GatewayStatus["napcatInstances"] | undefined
+  statuses: GatewayStatus["napcatInstances"] | undefined,
+  configuredInstances = config.napcatInstances
 ): GatewayStatus["napcatInstances"] | undefined {
-  if (!instances) {
+  if (!statuses) {
     return undefined;
   }
 
-  const configuredIds = configuredNapcatInstanceIds();
+  const configuredIds = configuredNapcatInstanceIds(configuredInstances);
   const kept = Object.fromEntries(
-    Object.entries(instances).filter(([id]) => configuredIds.has(id))
+    Object.entries(statuses).filter(([id]) => configuredIds.has(id))
   ) as NonNullable<GatewayStatus["napcatInstances"]>;
   return Object.keys(kept).length > 0 ? kept : undefined;
 }
 
-function patchNapcatStatus(patch: NonNullable<GatewayStatus["napcat"]>): void {
-  const status = readGatewayStatus();
+function patchNapcatStatus(
+  patch: NonNullable<GatewayStatus["napcat"]>,
+  dataDir = config.dataDir,
+  configuredInstances = config.napcatInstances
+): void {
+  const status = readGatewayStatus(dataDir);
   writeGatewayStatus({
     ...status,
-    napcatInstances: pruneNapcatInstanceStatus(status.napcatInstances),
+    napcatInstances: pruneNapcatInstanceStatus(status.napcatInstances, configuredInstances),
     napcat: {
       ...status.napcat,
       ...patch
     }
-  });
+  }, dataDir);
 }
 
-function patchNapcatInstanceStatus(instance: NapCatInstanceConfig, patch: NonNullable<GatewayStatus["napcat"]>): void {
-  const status = readGatewayStatus();
+function patchNapcatInstanceStatus(
+  instance: NapCatInstanceConfig,
+  patch: NonNullable<GatewayStatus["napcat"]>,
+  dataDir = config.dataDir,
+  configuredInstances = config.napcatInstances
+): void {
+  const status = readGatewayStatus(dataDir);
   const current = status.napcatInstances?.[instance.id] ?? {};
   const next = {
     ...current,
@@ -134,22 +154,32 @@ function patchNapcatInstanceStatus(instance: NapCatInstanceConfig, patch: NonNul
     ...status,
     napcat: instance.id === "default" ? { ...status.napcat, ...patch } : status.napcat,
     napcatInstances: {
-      ...pruneNapcatInstanceStatus(status.napcatInstances),
+      ...pruneNapcatInstanceStatus(status.napcatInstances, configuredInstances),
       [instance.id]: next
     }
-  });
+  }, dataDir);
 }
 
-function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdapter"]>): void {
-  const status = readGatewayStatus();
+function patchMessageAdapterStatus(
+  patch: NonNullable<GatewayStatus["messageAdapter"]>,
+  dataDir = config.dataDir,
+  now = new Date()
+): void {
+  const status = readGatewayStatus(dataDir);
+  const next = {
+    ...status.messageAdapters?.napcat,
+    ...status.messageAdapter,
+    ...patch,
+    updatedAt: now.toISOString()
+  };
   writeGatewayStatus({
     ...status,
-    messageAdapter: {
-      ...status.messageAdapter,
-      ...patch,
-      updatedAt: new Date().toISOString()
+    messageAdapter: next,
+    messageAdapters: {
+      ...status.messageAdapters,
+      napcat: next
     }
-  });
+  }, dataDir);
 }
 
 function textFromEvent(event: OneBotEvent): string {
@@ -595,149 +625,339 @@ async function handlePrivateMessage(event: OneBotEvent, instance: NapCatInstance
   }
 }
 
-export function createNapCatAdapter(): MessageAdapter {
-  return {
-    type: "napcat",
-    start() {
-      const instances = config.napcatInstances.filter((instance) => instance.enabled);
-      const startedInstanceIds = new Set<string>();
-      const status = readGatewayStatus();
-      writeGatewayStatus({
-        ...status,
-        napcatInstances: pruneNapcatInstanceStatus(status.napcatInstances)
-      });
-      for (const instance of instances) {
-        const activeSockets = new Set<object>();
-        const server = new WebSocketServer({
-          host: "127.0.0.1",
-          port: instance.gatewayPort
-        });
+export type NapCatAdapterDependencies = {
+  instances?: () => NapCatInstanceConfig[];
+  dataDir?: () => string;
+  now?: () => Date;
+  createServer?: (options: ServerOptions) => WebSocketServer;
+  refreshProfile?: (instance: NapCatInstanceConfig) => void | Promise<void>;
+};
 
-      server.on("connection", (socket, request) => {
-        activeSockets.add(socket);
-        console.log(`[${instance.name}] NapCat connected from ${request.socket.remoteAddress}`);
-        const connectedAt = new Date().toISOString();
-        const currentStatus = readGatewayStatus().napcatInstances?.[instance.id] ?? readGatewayStatus().napcat;
-        const patch = {
-          connected: true,
-          activeConnections: activeSockets.size,
-          remoteAddress: request.socket.remoteAddress,
-          lastConnectedAt: connectedAt,
-          connectionCount: (currentStatus?.connectionCount ?? 0) + 1
-        };
-        patchNapcatInstanceStatus(instance, patch);
-        if (instance.id === "default" || config.napcatInstances[0]?.id === instance.id) {
-          patchNapcatStatus(patch);
+type NapCatLifecycle = {
+  active: boolean;
+  configuredInstances: NapCatInstanceConfig[];
+  instances: NapCatInstanceConfig[];
+  servers: Array<{ instance: NapCatInstanceConfig; server: WebSocketServer }>;
+  dataDir(): string;
+  now(): Date;
+  createServer(options: ServerOptions): WebSocketServer;
+  refreshProfile(instance: NapCatInstanceConfig): void | Promise<void>;
+};
+
+function appendNapCatRuntimeLog(
+  lifecycle: Pick<NapCatLifecycle, "dataDir">,
+  record: Parameters<typeof appendAdapterLogToDir>[1]
+): void {
+  appendAdapterLogToDir("napcat", record, lifecycle.dataDir());
+}
+
+function isPrimaryNapCatInstance(
+  instance: NapCatInstanceConfig,
+  configuredInstances: NapCatInstanceConfig[]
+): boolean {
+  return instance.id === "default" || configuredInstances[0]?.id === instance.id;
+}
+
+function waitForNapCatListening(server: WebSocketServer): Promise<void> {
+  if (server.address()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    const onError = (error: Error) => {
+      server.off("listening", onListening);
+      reject(error);
+    };
+    server.once("listening", onListening);
+    server.once("error", onError);
+  });
+}
+
+async function closeNapCatServer(server: WebSocketServer): Promise<void> {
+  for (const client of server.clients) {
+    client.terminate();
+  }
+  await new Promise<void>((resolve) => {
+    try {
+      server.close(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function setupNapCatServer(
+  lifecycle: NapCatLifecycle,
+  instance: NapCatInstanceConfig,
+  server: WebSocketServer
+): void {
+  const activeSockets = new Set<WebSocket>();
+  server.on("connection", (socket, request) => {
+    if (!lifecycle.active) {
+      socket.terminate();
+      return;
+    }
+    activeSockets.add(socket);
+    console.log(`[${instance.name}] NapCat connected from ${request.socket.remoteAddress}`);
+    const connectedAt = lifecycle.now().toISOString();
+    const currentStatus = readGatewayStatus(lifecycle.dataDir()).napcatInstances?.[instance.id]
+      ?? readGatewayStatus(lifecycle.dataDir()).napcat;
+    const patch = {
+      connected: true,
+      activeConnections: activeSockets.size,
+      remoteAddress: request.socket.remoteAddress,
+      lastConnectedAt: connectedAt,
+      connectionCount: (currentStatus?.connectionCount ?? 0) + 1
+    };
+    patchNapcatInstanceStatus(instance, patch, lifecycle.dataDir(), lifecycle.configuredInstances);
+    if (isPrimaryNapCatInstance(instance, lifecycle.configuredInstances)) {
+      patchNapcatStatus(patch, lifecycle.dataDir(), lifecycle.configuredInstances);
+    }
+    appendNapCatRuntimeLog(lifecycle, {
+      event: "ws_connected",
+      instanceId: instance.id,
+      message: `${instance.name} WebSocket connected`,
+      data: {
+        name: instance.name,
+        gatewayPort: instance.gatewayPort,
+        remoteAddress: request.socket.remoteAddress,
+        activeConnections: activeSockets.size
+      }
+    });
+    void lifecycle.refreshProfile(instance);
+
+    socket.on("close", () => {
+      activeSockets.delete(socket);
+      if (!lifecycle.active) return;
+      const disconnectedPatch = {
+        connected: activeSockets.size > 0,
+        activeConnections: activeSockets.size,
+        lastDisconnectedAt: lifecycle.now().toISOString()
+      };
+      patchNapcatInstanceStatus(
+        instance,
+        disconnectedPatch,
+        lifecycle.dataDir(),
+        lifecycle.configuredInstances
+      );
+      if (isPrimaryNapCatInstance(instance, lifecycle.configuredInstances)) {
+        patchNapcatStatus(disconnectedPatch, lifecycle.dataDir(), lifecycle.configuredInstances);
+      }
+      appendNapCatRuntimeLog(lifecycle, {
+        event: "ws_disconnected",
+        instanceId: instance.id,
+        message: `${instance.name} WebSocket disconnected`,
+        data: {
+          name: instance.name,
+          gatewayPort: instance.gatewayPort,
+          activeConnections: activeSockets.size
         }
-        appendAdapterLog("napcat", {
-          event: "ws_connected",
+      });
+      console.log(`[${instance.name}] NapCat disconnected`);
+    });
+
+    socket.on("message", async (data) => {
+      if (!lifecycle.active) return;
+      try {
+        const event = JSON.parse(data.toString()) as OneBotEvent;
+        const currentMessageStatus = readGatewayStatus(lifecycle.dataDir()).napcatInstances?.[instance.id]
+          ?? readGatewayStatus(lifecycle.dataDir()).napcat;
+        const messagePatch = {
+          lastMessageAt: lifecycle.now().toISOString(),
+          messageCount: (currentMessageStatus?.messageCount ?? 0) + 1
+        };
+        patchNapcatInstanceStatus(
+          instance,
+          messagePatch,
+          lifecycle.dataDir(),
+          lifecycle.configuredInstances
+        );
+        if (isPrimaryNapCatInstance(instance, lifecycle.configuredInstances)) {
+          patchNapcatStatus(messagePatch, lifecycle.dataDir(), lifecycle.configuredInstances);
+        }
+        appendNapCatRuntimeLog(lifecycle, {
+          event: "inbound_event",
           instanceId: instance.id,
-          message: `${instance.name} WebSocket connected`,
+          message: textFromEvent(event).slice(0, 500),
           data: {
             name: instance.name,
-            gatewayPort: instance.gatewayPort,
-            remoteAddress: request.socket.remoteAddress,
-            activeConnections: activeSockets.size
+            ...eventSummary(event)
           }
         });
-        void refreshBotProfile(instance);
-
-        socket.on("close", () => {
-          activeSockets.delete(socket);
-          const patch = {
-            connected: activeSockets.size > 0,
-            activeConnections: activeSockets.size,
-            lastDisconnectedAt: new Date().toISOString()
-          };
-          patchNapcatInstanceStatus(instance, patch);
-          if (instance.id === "default" || config.napcatInstances[0]?.id === instance.id) {
-            patchNapcatStatus(patch);
+        if (event.post_type === "message" && event.message_type === "group") {
+          await handleGroupMessage(event, instance);
+        }
+        if (event.post_type === "message" && event.message_type === "private") {
+          await handlePrivateMessage(event, instance);
+        }
+      } catch (error) {
+        appendNapCatRuntimeLog(lifecycle, {
+          level: "error",
+          event: "inbound_error",
+          instanceId: instance.id,
+          message: error instanceof Error ? error.message : String(error),
+          data: {
+            name: instance.name,
+            raw: data.toString().slice(0, 4000)
           }
-          appendAdapterLog("napcat", {
-            event: "ws_disconnected",
+        });
+        console.error(`[${instance.name}] Failed to handle event`, error);
+      }
+    });
+  });
+}
+
+export function createNapCatAdapter(
+  dependencies: NapCatAdapterDependencies = {}
+): MessageAdapter {
+  return {
+    type: "napcat",
+    async start() {
+      const configuredInstances = dependencies.instances?.() ?? config.napcatInstances;
+      const instances = configuredInstances.filter((instance) => instance.enabled);
+      const lifecycle: NapCatLifecycle = {
+        active: true,
+        configuredInstances,
+        instances,
+        servers: [],
+        dataDir: dependencies.dataDir ?? (() => config.dataDir),
+        now: dependencies.now ?? (() => new Date()),
+        createServer: dependencies.createServer ?? ((options) => new WebSocketServer(options)),
+        refreshProfile: dependencies.refreshProfile ?? refreshBotProfile
+      };
+      const status = readGatewayStatus(lifecycle.dataDir());
+      writeGatewayStatus({
+        ...status,
+        napcatInstances: pruneNapcatInstanceStatus(status.napcatInstances, configuredInstances)
+      }, lifecycle.dataDir());
+
+      const dispose: MessageAdapterDispose = async () => {
+        if (!lifecycle.active) return;
+        lifecycle.active = false;
+        for (const item of [...lifecycle.servers].reverse()) {
+          await closeNapCatServer(item.server);
+          const patch = {
+            connected: false,
+            activeConnections: 0,
+            lastDisconnectedAt: lifecycle.now().toISOString()
+          };
+          patchNapcatInstanceStatus(
+            item.instance,
+            patch,
+            lifecycle.dataDir(),
+            lifecycle.configuredInstances
+          );
+          if (isPrimaryNapCatInstance(item.instance, lifecycle.configuredInstances)) {
+            patchNapcatStatus(patch, lifecycle.dataDir(), lifecycle.configuredInstances);
+          }
+        }
+        patchMessageAdapterStatus({
+          type: "napcat",
+          status: "disabled",
+          message: "NapCat / OneBot 消息适配端已停止。"
+        }, lifecycle.dataDir(), lifecycle.now());
+        appendNapCatRuntimeLog(lifecycle, {
+          event: "disabled",
+          message: `NapCat adapter disabled, instances=${lifecycle.servers.length}`,
+          data: { instanceCount: lifecycle.servers.length }
+        });
+      };
+
+      if (instances.length === 0) {
+        lifecycle.active = false;
+        patchMessageAdapterStatus({
+          type: "napcat",
+          status: "disabled",
+          message: "NapCat / OneBot 没有启用的实例。"
+        }, lifecycle.dataDir(), lifecycle.now());
+        return () => {};
+      }
+
+      try {
+        for (const instance of instances) {
+          const server = lifecycle.createServer({
+            host: "127.0.0.1",
+            port: instance.gatewayPort
+          });
+          lifecycle.servers.push({ instance, server });
+          setupNapCatServer(lifecycle, instance, server);
+          await waitForNapCatListening(server);
+          server.on("error", (error) => {
+            if (!lifecycle.active) return;
+            const message = `${instance.name} WebSocket listener failed: ${error.message}`;
+            patchMessageAdapterStatus({
+              type: "napcat",
+              status: "error",
+              message
+            }, lifecycle.dataDir(), lifecycle.now());
+            appendNapCatRuntimeLog(lifecycle, {
+              event: "listener_error",
+              level: "error",
+              instanceId: instance.id,
+              message
+            });
+          });
+          appendNapCatRuntimeLog(lifecycle, {
+            event: "listening",
             instanceId: instance.id,
-            message: `${instance.name} WebSocket disconnected`,
+            message: `${instance.name} listening on ws://127.0.0.1:${instance.gatewayPort}`,
             data: {
               name: instance.name,
               gatewayPort: instance.gatewayPort,
-              activeConnections: activeSockets.size
+              wsUrl: `ws://127.0.0.1:${instance.gatewayPort}`,
+              httpUrl: instance.httpUrl,
+              webuiUrl: instance.webuiUrl
             }
           });
-          console.log(`[${instance.name}] NapCat disconnected`);
-        });
-
-        socket.on("message", async (data) => {
-          try {
-            const event = JSON.parse(data.toString()) as OneBotEvent;
-            const currentMessageStatus = readGatewayStatus().napcatInstances?.[instance.id] ?? readGatewayStatus().napcat;
-            const patch = {
-              lastMessageAt: new Date().toISOString(),
-              messageCount: (currentMessageStatus?.messageCount ?? 0) + 1
-            };
-            patchNapcatInstanceStatus(instance, patch);
-            if (instance.id === "default" || config.napcatInstances[0]?.id === instance.id) {
-              patchNapcatStatus(patch);
-            }
-            appendAdapterLog("napcat", {
-              event: "inbound_event",
-              instanceId: instance.id,
-              message: textFromEvent(event).slice(0, 500),
-              data: {
-                name: instance.name,
-                ...eventSummary(event)
-              }
-            });
-            if (event.post_type === "message" && event.message_type === "group") {
-              await handleGroupMessage(event, instance);
-            }
-            if (event.post_type === "message" && event.message_type === "private") {
-              await handlePrivateMessage(event, instance);
-            }
-          } catch (error) {
-            appendAdapterLog("napcat", {
-              level: "error",
-              event: "inbound_error",
-              instanceId: instance.id,
-              message: error instanceof Error ? error.message : String(error),
-              data: {
-                name: instance.name,
-                raw: data.toString().slice(0, 4000)
-              }
-            });
-            console.error(`[${instance.name}] Failed to handle event`, error);
-          }
-        });
-      });
-
-      server.on("listening", () => {
-        startedInstanceIds.add(instance.id);
-        appendAdapterLog("napcat", {
-          event: "listening",
-          instanceId: instance.id,
-          message: `${instance.name} listening on ws://127.0.0.1:${instance.gatewayPort}`,
-          data: {
-            name: instance.name,
-            gatewayPort: instance.gatewayPort,
-            wsUrl: `ws://127.0.0.1:${instance.gatewayPort}`,
-            httpUrl: instance.httpUrl,
-            webuiUrl: instance.webuiUrl
-          }
-        });
-        console.log(`[${instance.name}] RabiRoute NapCat adapter listening on ws://127.0.0.1:${instance.gatewayPort}`);
-        console.log(`[${instance.name}] NapCat HTTP API: ${instance.httpUrl}`);
-        console.log("Target group: controlled by notification rules");
+          console.log(`[${instance.name}] RabiRoute NapCat adapter listening on ws://127.0.0.1:${instance.gatewayPort}`);
+          console.log(`[${instance.name}] NapCat HTTP API: ${instance.httpUrl}`);
+          console.log("Target group: controlled by notification rules");
+          patchNapcatInstanceStatus(instance, {
+            connected: false,
+            activeConnections: 0,
+            loginInfoError: ""
+          }, lifecycle.dataDir(), lifecycle.configuredInstances);
+          void lifecycle.refreshProfile(instance);
+        }
         patchMessageAdapterStatus({
           type: "napcat",
           status: "running",
-          message: `NapCat / OneBot 消息适配端已启动：${startedInstanceIds.size} 个实例。`
+          message: `NapCat / OneBot 消息适配端已启动：${instances.length} 个实例。`
+        }, lifecycle.dataDir(), lifecycle.now());
+        return dispose;
+      } catch (error) {
+        lifecycle.active = false;
+        for (const item of [...lifecycle.servers].reverse()) {
+          await closeNapCatServer(item.server);
+          const patch = {
+            connected: false,
+            activeConnections: 0,
+            lastDisconnectedAt: lifecycle.now().toISOString()
+          };
+          patchNapcatInstanceStatus(
+            item.instance,
+            patch,
+            lifecycle.dataDir(),
+            lifecycle.configuredInstances
+          );
+          if (isPrimaryNapCatInstance(item.instance, lifecycle.configuredInstances)) {
+            patchNapcatStatus(patch, lifecycle.dataDir(), lifecycle.configuredInstances);
+          }
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        patchMessageAdapterStatus({
+          type: "napcat",
+          status: "error",
+          message: `NapCat / OneBot 消息适配端启动失败：${message}`
+        }, lifecycle.dataDir(), lifecycle.now());
+        appendNapCatRuntimeLog(lifecycle, {
+          event: "activation_failed",
+          level: "error",
+          message,
+          data: { instanceCount: lifecycle.servers.length }
         });
-        patchNapcatInstanceStatus(instance, {
-          connected: false,
-          activeConnections: 0,
-          loginInfoError: ""
-        });
-        void refreshBotProfile(instance);
-      });
+        throw error;
       }
     }
   };

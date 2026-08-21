@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook 和 Heartbeat 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat 和 NapCat 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -324,9 +324,9 @@ plugins:
 
 ### 阶段 2：消息端完整生命周期
 
-通用 Webhook 和 Heartbeat 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener 的启动、失败回滚和关闭动作。Heartbeat Fiber 持有全部定时器，卸载时清除未来触发、阻止旧回调继续执行或重排，并把状态改为 `disabled`；已开始的投递或脚本仍按原业务流程完成。`src/index.ts` 优先挂载已注册消息端，NapCat 和其他消息端继续走兼容创建入口。
+通用 Webhook、Heartbeat 和 NapCat 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 等待全部 OneBot WebSocket listener 就绪，持有多实例 listener 和已连接客户端。卸载会关闭对应端口、阻止新消息处理并写入 `disabled`；启动中途失败会回滚先前实例。`src/index.ts` 优先挂载已注册消息端，WeCom、Weixin、Feishu 和其他消息端继续走兼容创建入口。
 
-测试已覆盖 Webhook 的重复挂载、端口冲突和部分启动回滚，以及 Heartbeat 的回调重排、全部定时器清理、旧回调失效、重复挂载和启动失败回滚。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 下一步迁移 NapCat、WeCom、Weixin、Feishu 和其余消息端。
+测试已覆盖 Webhook 的端口生命周期、Heartbeat 的定时器生命周期，以及 NapCat 的多实例启动、客户端关闭、端口释放、同端口重新挂载和后续实例失败回滚。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 下一步迁移 WeCom、Weixin、Feishu 和其余消息端。
 
 ### 阶段 3：Gateway Host
 
@@ -432,6 +432,16 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 5. 重复挂载和卸载不增加定时器数量，正常停止写入 `disabled`。
 
 定时触发后的 Route、Forwarding、AgentPacket、脚本执行和投递证据继续由原业务模块处理。Fiber 只停止未来调度，不撤销已经开始的远端动作。
+
+## 第四个实施切片：NapCat 多实例 WebSocket 生命周期
+
+1. 将 NapCat 注册为 `websocket` 类型的 Message Adapter Definition；
+2. 启动等待所有启用实例的 listener 就绪后才报告 `running`；
+3. 一个实例启动失败时关闭已创建的其他 listener，并写入 `error`；
+4. Fiber 卸载时终止已连接客户端、关闭全部 listener、释放端口并写入 `disabled`；
+5. 同一端口可以在卸载后重新挂载，不累积连接和监听器。
+
+QQ 消息解析、回复链、媒体保存、Route 判断、Forwarding 和 Outbox 继续由现有 NapCat 业务模块拥有。
 
 ## 完成标准
 

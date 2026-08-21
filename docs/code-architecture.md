@@ -272,7 +272,7 @@ Agent 端 Adapter 在 `src/agentAdapters/`：
 - `managerApi.ts`：manager 用于扫描、安装、登录、打开处理端的控制面能力。
 - `astrbotAdapter.ts`：AstrBot 投递实现。
 
-`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/agentAdapterRuntime.ts` 用 Cordis Fiber 挂载注册表服务和每个 Adapter 定义。销毁某个 Adapter Fiber 只移除对应定义；销毁根 Context 会撤销全部定义。`src/runtime/messageAdapterRuntime.ts` 提供消息端 Definition 注册和实例 Fiber。通用 Webhook Fiber 持有 HTTP listener 的启动、失败回滚和关闭动作；Heartbeat Fiber 持有定时器，卸载时清除未来触发、阻止旧回调重新安排并写入 `disabled`。`src/index.ts` 优先挂载已注册消息端，其他消息端继续走兼容创建入口。Cordis API 不进入路由、消息模板、Webhook payload 解析或具体处理端实现。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入都读取共享 Agent Adapter manifest。`src/runtime/contributionRegistry.ts` 定义 WebGUI/Desktop 共用的声明式导航、设置区、状态卡片、命令、托盘菜单、快捷键和主题贡献；`contributionRuntime.ts` 让每个插件通过 Fiber 注册并在卸载时自动移除。该目录尚未由 Manager API 发布，也未替代现有表现入口。
+`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/agentAdapterRuntime.ts` 用 Cordis Fiber 挂载注册表服务和每个 Adapter 定义。销毁某个 Adapter Fiber 只移除对应定义；销毁根 Context 会撤销全部定义。`src/runtime/messageAdapterRuntime.ts` 提供消息端 Definition 注册和实例 Fiber。通用 Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有定时器；NapCat Fiber 等待全部启用实例的 WebSocket listener 就绪，并在卸载时终止客户端、关闭多实例端口、阻止新消息处理和写入 `disabled`。任一 NapCat 实例启动失败会回滚先前 listener。`src/index.ts` 优先挂载已注册消息端，其他消息端继续走兼容创建入口。Cordis API 不进入路由、消息模板、Webhook payload 解析或具体处理端实现。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入都读取共享 Agent Adapter manifest。`src/runtime/contributionRegistry.ts` 定义 WebGUI/Desktop 共用的声明式导航、设置区、状态卡片、命令、托盘菜单、快捷键和主题贡献；`contributionRuntime.ts` 让每个插件通过 Fiber 注册并在卸载时自动移除。该目录尚未由 Manager API 发布，也未替代现有表现入口。
 
 其他处理端在根目录还有：
 

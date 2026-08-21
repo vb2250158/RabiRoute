@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook and Heartbeat slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
+> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, Heartbeat, and NapCat slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -324,9 +324,9 @@ Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
 ### Stage 2: complete message-side lifecycle
 
-Generic Webhook and Heartbeat now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns HTTP-listener startup, rollback, and teardown. The Heartbeat Fiber owns all instance timers; disposal clears future triggers, prevents stale callbacks from running or rearming, and records `disabled`. Deliveries or scripts that already started continue through their existing business flow. `src/index.ts` mounts registered message adapters first, while NapCat and the remaining adapters keep the compatibility creation entry.
+Generic Webhook, Heartbeat, and NapCat now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, and the NapCat Fiber waits for all OneBot WebSocket listeners before activation and owns every multi-instance listener and connected client. Disposal closes ports, rejects new message work, and records `disabled`; partial NapCat activation rolls back earlier instances. `src/index.ts` mounts registered message adapters first, while WeCom, Weixin, Feishu, and the remaining adapters keep the compatibility creation entry.
 
-Tests cover Webhook remounting, port conflicts, and partial-start rollback, plus Heartbeat callback rearming, complete timer cleanup, stale-callback rejection, repeated mounting, and activation-failure rollback. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` and port release. Stage 2 continues with NapCat, WeCom, Weixin, Feishu, and the remaining message adapters.
+Tests cover Webhook port lifecycle, Heartbeat timer lifecycle, and NapCat multi-instance activation, client teardown, port release, same-port remounting, and rollback when a later instance fails. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` and port release. Stage 2 continues with WeCom, Weixin, Feishu, and the remaining message adapters.
 
 ### Stage 3: Gateway Host
 
@@ -432,6 +432,16 @@ This slice keeps Webhook payload, recording, Forwarding, and HTTP response contr
 5. keep timer counts constant across repeated mount/dispose cycles and record `disabled` after a normal stop.
 
 Route selection, Forwarding, AgentPacket creation, script execution, and delivery evidence after a scheduled trigger remain owned by the existing business modules. Fiber disposal stops future scheduling and does not undo work that already started.
+
+## Fourth implementation slice: NapCat multi-instance WebSocket lifecycle
+
+1. register NapCat as a `websocket` Message Adapter Definition;
+2. wait for every enabled instance listener before reporting `running`;
+3. close listeners created earlier and record `error` when a later instance fails to start;
+4. terminate connected clients, close every listener, release ports, and record `disabled` on Fiber disposal;
+5. remount the same port after disposal without accumulating connections or listeners.
+
+QQ message parsing, reply-chain resolution, media persistence, Route decisions, Forwarding, and Outbox remain owned by the existing NapCat business modules.
 
 ## Readiness criteria
 
