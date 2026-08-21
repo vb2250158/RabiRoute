@@ -35,14 +35,68 @@ export function rabiLinkRelayTaskNeedsReviewWake(disposition: RabiLinkRelayTaskD
   return disposition !== "direct";
 }
 
-const runningRelayWorkers = new Set<string>();
+export type RabiLinkRelayWorkerLease = {
+  workerKey: string;
+  release(): Promise<void>;
+};
+
+type RelayWorkerStatusPatch = Parameters<typeof patchRelayStatus>[1];
+type RelayWorkerLogEntry = Parameters<typeof appendAdapterLog>[1];
+
+type RabiLinkRelayWorkerDependencies = {
+  consumeEvents(signal: AbortSignal, onEvent: (eventType: string) => void): Promise<void>;
+  claimTask(signal: AbortSignal): Promise<RelayTask | null>;
+  handleTask(profile: WebhookAdapterProfile, webhookPath: string, task: RelayTask, signal: AbortSignal): Promise<void>;
+  delay(ms: number, signal: AbortSignal): Promise<void>;
+  patchStatus(profile: WebhookAdapterProfile, patch: RelayWorkerStatusPatch): void;
+  appendLog(adapterType: WebhookAdapterProfile["type"], entry: RelayWorkerLogEntry): void;
+  startReviewer(): void;
+};
+
+type RelayWorkerState = {
+  workerKey: string;
+  profile: WebhookAdapterProfile;
+  webhookPath: string;
+  controller: AbortController;
+  leases: Set<symbol>;
+  dependencies: RabiLinkRelayWorkerDependencies;
+  loopPromise: Promise<void>;
+  drainPromise: Promise<void> | null;
+  stoppingPromise: Promise<void> | null;
+};
+
+const runningRelayWorkers = new Map<string, RelayWorkerState>();
 const acceptedRelayTasks = new Map<string, number>();
 const MAX_ACCEPTED_RELAY_TASKS = 2048;
 const RELAY_WRITE_ATTEMPTS = 4;
 const RELAY_WRITE_TIMEOUT_MS = 5000;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error("RabiLink Relay worker stopped.");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError(signal);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function normalizedRelayBaseUrl(): string {
@@ -85,28 +139,28 @@ async function fetchRelayJson(
   const timer = controller
     ? setTimeout(() => controller.abort(new Error(`RabiLink Relay request timed out after ${timeoutMs} ms.`)), timeoutMs)
     : null;
-  let response: Response;
   try {
-    response = await fetch(`${baseUrl}${pathname}`, {
+    const response = await fetch(`${baseUrl}${pathname}`, {
       ...init,
       signal: controller?.signal || upstreamSignal
     });
+    if (response.status === 404 && fallbackPathname) {
+      await response.body?.cancel().catch(() => {});
+      return fetchRelayJson(fallbackPathname, init, undefined, baseUrl, timeoutMs);
+    }
+    const text = await response.text();
+    const body = text.trim() ? JSON.parse(text) as Record<string, unknown> : {};
+    if (!response.ok) {
+      throw new Error(String(body.message || body.error || `${response.status} ${response.statusText}`));
+    }
+    return body;
   } finally {
     if (timer) clearTimeout(timer);
     upstreamSignal?.removeEventListener("abort", abortFromUpstream);
   }
-  if (response.status === 404 && fallbackPathname) {
-    return fetchRelayJson(fallbackPathname, init, undefined, baseUrl, timeoutMs);
-  }
-  const text = await response.text();
-  const body = text.trim() ? JSON.parse(text) as Record<string, unknown> : {};
-  if (!response.ok) {
-    throw new Error(String(body.message || body.error || `${response.status} ${response.statusText}`));
-  }
-  return body;
 }
 
-async function consumeRelayEvents(onEvent: (eventType: string) => void): Promise<void> {
+async function consumeRelayEvents(signal: AbortSignal, onEvent: (eventType: string) => void): Promise<void> {
   const params = new URLSearchParams({
     deviceId: config.rabiLinkRelayDeviceId,
     deviceGuid: config.rabiLinkRelayDeviceGuid,
@@ -115,7 +169,8 @@ async function consumeRelayEvents(onEvent: (eventType: string) => void): Promise
   });
   const response = await fetch(`${normalizedRelayBaseUrl()}/api/rabilink/events?${params}`, {
     method: "GET",
-    headers: { ...relayHeaders(), accept: "text/event-stream" }
+    headers: { ...relayHeaders(), accept: "text/event-stream" },
+    signal
   });
   if (!response.ok || !response.body) {
     throw new Error(`RabiLink Relay event stream failed: ${response.status} ${response.statusText}`);
@@ -146,15 +201,19 @@ async function consumeRelayEvents(onEvent: (eventType: string) => void): Promise
 async function fetchRelayJsonReliably(
   pathname: string,
   init: RequestInit,
-  relayBaseUrl = ""
+  relayBaseUrl = "",
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
+  const requestSignal = signal ?? init.signal ?? undefined;
   let lastError: unknown;
   for (let attempt = 1; attempt <= RELAY_WRITE_ATTEMPTS; attempt += 1) {
+    throwIfAborted(requestSignal ?? new AbortController().signal);
     try {
-      return await fetchRelayJson(pathname, init, undefined, relayBaseUrl, RELAY_WRITE_TIMEOUT_MS);
+      return await fetchRelayJson(pathname, { ...init, signal: requestSignal }, undefined, relayBaseUrl, RELAY_WRITE_TIMEOUT_MS);
     } catch (error) {
       lastError = error;
-      if (attempt < RELAY_WRITE_ATTEMPTS) await sleep(150 * attempt);
+      if (requestSignal?.aborted) throw abortError(requestSignal);
+      if (attempt < RELAY_WRITE_ATTEMPTS) await sleep(150 * attempt, requestSignal);
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError || "RabiLink Relay request failed."));
@@ -234,31 +293,35 @@ export function rabiLinkRelayPayloadFromTask(task: Record<string, unknown>, task
 
 type RelayAttachment = Record<string, unknown>;
 
-async function materializeRelayAttachments(task: RelayTask, taskId: string): Promise<RelayAttachment[]> {
+async function materializeRelayAttachments(task: RelayTask, taskId: string, signal: AbortSignal): Promise<RelayAttachment[]> {
+  throwIfAborted(signal);
   const input = Array.isArray(task.attachments) ? task.attachments.slice(0, 8) as RelayAttachment[] : [];
   if (!input.length) return [];
   const directory = path.join(config.memoryDataDir, "rabilink-media", taskId.replace(/[^a-zA-Z0-9._-]+/g, "_"));
   fs.mkdirSync(directory, { recursive: true });
   const output: RelayAttachment[] = [];
   for (const item of input) {
+    throwIfAborted(signal);
     const downloadPath = stringPayloadField(item.downloadPath);
     const fileName = path.basename(stringPayloadField(item.fileName) || `${stringPayloadField(item.id) || randomUUID()}.bin`).replace(/[^a-zA-Z0-9._-]+/g, "_");
     if (!downloadPath.startsWith("/api/rabilink/devices/media/")) continue;
-    const response = await fetch(`${normalizedRelayBaseUrl()}${downloadPath}`, { headers: relayHeaders() });
+    const response = await fetch(`${normalizedRelayBaseUrl()}${downloadPath}`, { headers: relayHeaders(), signal });
     if (!response.ok) throw new Error(`RabiLink media download failed: ${response.status} ${response.statusText}`);
     const localPath = path.join(directory, fileName);
-    fs.writeFileSync(localPath, Buffer.from(await response.arrayBuffer()));
+    const data = Buffer.from(await response.arrayBuffer());
+    throwIfAborted(signal);
+    fs.writeFileSync(localPath, data);
     output.push({ ...item, fileName, localPath, downloadPath: undefined });
   }
   return output;
 }
 
-async function finishRelayTask(taskId: string, body: Record<string, unknown>): Promise<void> {
+async function finishRelayTask(taskId: string, body: Record<string, unknown>, signal: AbortSignal): Promise<void> {
   await fetchRelayJsonReliably(`/worker/tasks/${encodeURIComponent(taskId)}/finish`, {
     method: "POST",
     headers: relayHeaders(true),
     body: JSON.stringify({ ...body, ...relayWorkerIdentityPayload() })
-  });
+  }, "", signal);
 }
 
 function relayTaskField(task: RelayTask, key: string): string {
@@ -475,7 +538,8 @@ export async function uploadRabiLinkRelayAttachment(
   return body.attachment as Record<string, unknown>;
 }
 
-async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: string, task: RelayTask): Promise<void> {
+async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: string, task: RelayTask, signal: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
   const taskId = relayTaskId(task);
   if (!taskId) {
     throw new Error("Relay task has no id.");
@@ -487,11 +551,12 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
         ok: true,
         status: "done",
         accepted: true
-      });
+      }, signal);
       return;
     }
-    const attachments = await materializeRelayAttachments(task, taskId);
+    const attachments = await materializeRelayAttachments(task, taskId, signal);
     if (attachments.length) task.attachments = attachments;
+    throwIfAborted(signal);
     const text = relayTaskText(task);
     const clientMessageId = relayTaskField(task, "clientMessageId");
     const disposition = rabiLinkRelayTaskDisposition(task);
@@ -566,10 +631,10 @@ async function handleRelayTask(profile: WebhookAdapterProfile, webhookPath: stri
     ok: true,
     status: "done",
     accepted: true
-  });
+  }, signal);
 }
 
-async function claimRelayTask(): Promise<RelayTask | null> {
+async function claimRelayTask(signal: AbortSignal): Promise<RelayTask | null> {
   const params = new URLSearchParams({
     limit: "1",
     deviceId: config.rabiLinkRelayDeviceId,
@@ -579,70 +644,82 @@ async function claimRelayTask(): Promise<RelayTask | null> {
   });
   const body = await fetchRelayJson(`/worker/tasks?${params}`, {
     method: "GET",
-    headers: relayHeaders()
+    headers: relayHeaders(),
+    signal
   });
   return taskFromClaimResponse(body);
 }
 
-export function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhookPath: string): void {
-  if (!config.rabiLinkRelayEnabled || !normalizedRelayBaseUrl()) {
-    patchRelayStatus(profile, { relayWorker: "disabled", message: "RabiLink Relay worker is disabled." });
-    return;
-  }
-  const workerKey = `${normalizedRelayBaseUrl()}:${config.rabiLinkRelayDeviceId}`;
-  if (runningRelayWorkers.has(workerKey)) {
-    patchRelayStatus(profile, {
-      relayWorker: "running",
-      relayUrl: normalizedRelayBaseUrl(),
-      relayDeviceId: config.rabiLinkRelayDeviceId,
-      message: "RabiLink Relay worker is shared with another device message adapter."
-    });
-    return;
-  }
-  runningRelayWorkers.add(workerKey);
-  startDefaultRabiLinkConversationReviewer();
-  let draining: Promise<void> | null = null;
-  const drainAvailableTasks = (): Promise<void> => {
-    if (draining) return draining;
-    draining = (async () => {
-      while (true) {
-        const task = await claimRelayTask();
-        if (!task) return;
-        await handleRelayTask(profile, webhookPath, task);
-      }
-    })().finally(() => {
-      draining = null;
-    });
-    return draining;
+let relayWorkerDependencyOverrides: Partial<RabiLinkRelayWorkerDependencies> = {};
+
+function relayWorkerDependencies(): RabiLinkRelayWorkerDependencies {
+  return {
+    consumeEvents: consumeRelayEvents,
+    claimTask: claimRelayTask,
+    handleTask: handleRelayTask,
+    delay: (ms, signal) => sleep(ms, signal),
+    patchStatus: patchRelayStatus,
+    appendLog: appendAdapterLog,
+    startReviewer: () => { startDefaultRabiLinkConversationReviewer(); },
+    ...relayWorkerDependencyOverrides
   };
-  const connectEventStream = async (): Promise<void> => {
-    patchRelayStatus(profile, {
+}
+
+function workerIsActive(state: RelayWorkerState): boolean {
+  return !state.controller.signal.aborted && runningRelayWorkers.get(state.workerKey) === state;
+}
+
+function drainAvailableTasks(state: RelayWorkerState): Promise<void> {
+  if (state.drainPromise) return state.drainPromise;
+  const drain = (async () => {
+    while (workerIsActive(state)) {
+      const task = await state.dependencies.claimTask(state.controller.signal);
+      if (!task || !workerIsActive(state)) return;
+      await state.dependencies.handleTask(state.profile, state.webhookPath, task, state.controller.signal);
+    }
+  })();
+  const trackedDrain = drain.finally(() => {
+    if (state.drainPromise === trackedDrain) state.drainPromise = null;
+  });
+  state.drainPromise = trackedDrain;
+  return trackedDrain;
+}
+
+async function runRelayWorker(state: RelayWorkerState): Promise<void> {
+  const { profile, dependencies, controller } = state;
+  const signal = controller.signal;
+  while (workerIsActive(state)) {
+    dependencies.patchStatus(profile, {
       relayWorker: "connecting",
       relayUrl: normalizedRelayBaseUrl(),
       relayDeviceId: config.rabiLinkRelayDeviceId,
       message: "RabiLink Relay worker 正在连接事件流。"
     });
     try {
-      await consumeRelayEvents((eventType) => {
+      await dependencies.consumeEvents(signal, (eventType) => {
+        if (!workerIsActive(state)) return;
         if (eventType !== "ready" && eventType !== "task_available") return;
-        patchRelayStatus(profile, {
+        dependencies.patchStatus(profile, {
           status: "running",
           relayWorker: "running",
           message: "RabiLink Relay 事件流已连接。"
         });
-        void drainAvailableTasks().catch((error) => {
-          appendAdapterLog(profile.type, {
+        void drainAvailableTasks(state).catch((error) => {
+          if (!workerIsActive(state)) return;
+          dependencies.appendLog(profile.type, {
             level: "error",
             event: "relay_event_drain_failed",
             message: error instanceof Error ? error.message : String(error)
           });
         });
       });
+      if (!workerIsActive(state)) break;
       throw new Error("RabiLink Relay event stream closed.");
     } catch (error) {
+      if (!workerIsActive(state) || signal.aborted) break;
       const message = error instanceof Error ? error.message : String(error);
-      patchRelayStatus(profile, { status: "error", relayWorker: "error", message });
-      appendAdapterLog(profile.type, {
+      dependencies.patchStatus(profile, { status: "error", relayWorker: "error", message });
+      dependencies.appendLog(profile.type, {
         level: "error",
         event: "relay_event_stream_error",
         message,
@@ -651,9 +728,146 @@ export function startRabiLinkRelayWorker(profile: WebhookAdapterProfile, webhook
           relayDeviceId: config.rabiLinkRelayDeviceId
         }
       });
-      await sleep(3000);
-      void connectEventStream();
+      try {
+        await dependencies.delay(3000, signal);
+      } catch (delayError) {
+        if (signal.aborted) break;
+        throw delayError;
+      }
+    }
+  }
+}
+
+async function stopRelayWorker(state: RelayWorkerState): Promise<void> {
+  if (state.stoppingPromise) return state.stoppingPromise;
+  state.stoppingPromise = (async () => {
+    const errors: unknown[] = [];
+    state.controller.abort();
+    try {
+      await state.loopPromise;
+    } catch (error) {
+      if (!state.controller.signal.aborted) errors.push(error);
+    }
+    while (state.drainPromise) {
+      try {
+        await state.drainPromise;
+      } catch (error) {
+        if (!state.controller.signal.aborted) errors.push(error);
+      }
+    }
+    if (runningRelayWorkers.get(state.workerKey) === state) {
+      runningRelayWorkers.delete(state.workerKey);
+    }
+    try {
+      state.dependencies.patchStatus(state.profile, {
+        relayWorker: "disabled",
+        message: "RabiLink Relay worker 已停止。"
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "RabiLink Relay worker cleanup failed.");
+  })();
+  return state.stoppingPromise;
+}
+
+function createRelayWorkerLease(state: RelayWorkerState): RabiLinkRelayWorkerLease {
+  const leaseId = Symbol(state.workerKey);
+  state.leases.add(leaseId);
+  let releasePromise: Promise<void> | null = null;
+  return {
+    workerKey: state.workerKey,
+    release(): Promise<void> {
+      if (releasePromise) return releasePromise;
+      releasePromise = (async () => {
+        if (!state.leases.delete(leaseId)) return;
+        if (state.leases.size > 0) return;
+        await stopRelayWorker(state);
+      })();
+      return releasePromise;
     }
   };
-  void connectEventStream();
+}
+
+export async function acquireRabiLinkRelayWorker(
+  profile: WebhookAdapterProfile,
+  webhookPath: string
+): Promise<RabiLinkRelayWorkerLease> {
+  const relayBaseUrl = normalizedRelayBaseUrl();
+  const workerKey = relayBaseUrl
+    ? `${relayBaseUrl}:${config.rabiLinkRelayDeviceId}`
+    : `disabled:${config.rabiLinkRelayDeviceId}`;
+  if (!config.rabiLinkRelayEnabled || !relayBaseUrl) {
+    relayWorkerDependencies().patchStatus(profile, {
+      relayWorker: "disabled",
+      message: "RabiLink Relay worker is disabled."
+    });
+    const released = Promise.resolve();
+    return { workerKey, release: () => released };
+  }
+
+  const existing = runningRelayWorkers.get(workerKey);
+  if (existing?.stoppingPromise) {
+    await existing.stoppingPromise;
+    return acquireRabiLinkRelayWorker(profile, webhookPath);
+  }
+  if (existing) return createRelayWorkerLease(existing);
+  if (profile.type !== "rabilink" || profile.routeKind !== "rabilink") {
+    throw new Error("The first RabiLink Relay worker lease must use the rabilink profile.");
+  }
+
+  const state: RelayWorkerState = {
+    workerKey,
+    profile,
+    webhookPath,
+    controller: new AbortController(),
+    leases: new Set<symbol>(),
+    dependencies: relayWorkerDependencies(),
+    loopPromise: Promise.resolve(),
+    drainPromise: null,
+    stoppingPromise: null
+  };
+  runningRelayWorkers.set(workerKey, state);
+  try {
+    state.dependencies.startReviewer();
+    state.loopPromise = runRelayWorker(state);
+    return createRelayWorkerLease(state);
+  } catch (error) {
+    state.controller.abort();
+    if (runningRelayWorkers.get(workerKey) === state) runningRelayWorkers.delete(workerKey);
+    throw error;
+  }
+}
+
+export type RabiLinkRelayWorkerTestOverrides = Partial<RabiLinkRelayWorkerDependencies>;
+
+export function setRabiLinkRelayWorkerTestOverrides(
+  overrides: RabiLinkRelayWorkerTestOverrides
+): () => void {
+  if (runningRelayWorkers.size > 0) {
+    throw new Error("Cannot replace RabiLink Relay worker dependencies while a worker is running.");
+  }
+  const previous = relayWorkerDependencyOverrides;
+  relayWorkerDependencyOverrides = { ...overrides };
+  return () => {
+    if (runningRelayWorkers.size > 0) {
+      throw new Error("Cannot restore RabiLink Relay worker dependencies while a worker is running.");
+    }
+    relayWorkerDependencyOverrides = previous;
+  };
+}
+
+export function rabiLinkRelayWorkerSnapshotForTests(): Array<{
+  workerKey: string;
+  leaseCount: number;
+  aborted: boolean;
+  profileType: WebhookAdapterProfile["type"];
+}> {
+  return Array.from(runningRelayWorkers.values(), (state) => ({
+    workerKey: state.workerKey,
+    leaseCount: state.leases.size,
+    aborted: state.controller.signal.aborted,
+    profileType: state.profile.type
+  }));
 }

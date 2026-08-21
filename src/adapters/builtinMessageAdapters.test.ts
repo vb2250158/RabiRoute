@@ -18,6 +18,13 @@ test("built-in Message Adapter manifests include only Gateway-owned adapters", (
     transport: "http",
     lifecycle: "fiber"
   });
+  assert.deepEqual(manifests.find((manifest) => manifest.type === "rabilink"), {
+    type: "rabilink",
+    label: "RabiLink / Relay 直连",
+    host: "gateway",
+    transport: "http",
+    lifecycle: "fiber"
+  });
   const registeredTypes = new Set(manifests.map((manifest) => manifest.type));
   for (const type of ["wearable", "remoteAgent", "speech", "rolePanel", "disabled"] as const) {
     assert.equal(registeredTypes.has(type), false, `${type} must not be registered as a Gateway adapter`);

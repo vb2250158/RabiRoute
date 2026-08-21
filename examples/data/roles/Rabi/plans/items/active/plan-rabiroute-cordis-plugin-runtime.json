@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "migrate-message-adapter-lifecycle",
-  "currentStep": "通用 Webhook、FenneNote、XiaoAI、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。FenneNote 与 XiaoAI 复用通用 Webhook 的 listener 生命周期，Gateway 已删除这三个 HTTP 消息端的兼容创建分支。 真实构建进程已验证两者同时进入 running，Ctrl+C 后均写入 disabled 并释放端口。",
-  "nextAction": "收敛 RabiLink 的 HTTP listener 与共享 Relay worker 生命周期；移除 Wearable 启动共享 worker 的副作用，并将 Wearable 登记为 Manager 内部入口。",
+  "currentStep": "通用 Webhook、FenneNote、XiaoAI、RabiLink、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。RabiLink Fiber 持有 HTTP listener 与可取消 Relay worker 租约；最后一个租约释放后停止 SSE、任务领取、附件下载、完成确认和重连。Wearable 已移除 Gateway Adapter 和共享 worker 启动副作用，健康数据继续由 Manager API 持有。 真实构建进程已验证 RabiLink ready 到 Ctrl+C 后写入 disabled、relayWorker=disabled 并释放端口。",
+  "nextAction": "拆分 Gateway 可启动消息端类型与 Manager/Desktop 内部消息入口类型，删除 createMessageAdapterByType、createPlaceholderAdapter 和 legacyDisposers。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -78,7 +78,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T14:15:00+08:00",
+  "updatedAt": "2026-08-21T15:07:33+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -97,6 +97,10 @@
     "Feishu",
     "HTTP listener",
     "FenneNote",
-    "XiaoAI"
+    "XiaoAI",
+    "RabiLink",
+    "Relay lease",
+    "AbortSignal",
+    "Wearable"
   ]
 }

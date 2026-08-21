@@ -1,10 +1,10 @@
 import { config } from "../config.js";
 import type { MessageAdapter } from "./messageAdapter.js";
 import { localRabiLinkReplies } from "./rabilinkReplies.js";
-import { startRabiLinkRelayWorker } from "./rabilinkRelayWorker.js";
+import { acquireRabiLinkRelayWorker } from "./rabilinkRelayWorker.js";
 import { createWebhookAdapter, type WebhookAdapterProfile } from "./webhookAdapter.js";
 
-function rabiLinkProfile(): WebhookAdapterProfile {
+export function rabiLinkAdapterProfile(): WebhookAdapterProfile {
   return {
     type: "rabilink",
     label: "RabiLink / Relay 直连",
@@ -19,7 +19,7 @@ function rabiLinkProfile(): WebhookAdapterProfile {
 }
 
 export function createRabiLinkAdapter(): MessageAdapter {
-  return createWebhookAdapter(rabiLinkProfile(), {
+  return createWebhookAdapter(rabiLinkAdapterProfile(), {
     handleRequest({ request, response, requestUrl, requestPath, webhookPath }) {
       if (request.method !== "GET" || requestPath !== `${webhookPath}/replies`) {
         return false;
@@ -43,8 +43,9 @@ export function createRabiLinkAdapter(): MessageAdapter {
         })
       };
     },
-    onListening({ profile, webhookPath }) {
-      startRabiLinkRelayWorker(profile, webhookPath);
+    async onListening({ profile, webhookPath }) {
+      const lease = await acquireRabiLinkRelayWorker(profile, webhookPath);
+      return () => lease.release();
     }
   });
 }

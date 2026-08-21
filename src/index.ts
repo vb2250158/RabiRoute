@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
-import { createRabiLinkAdapter } from "./adapters/rabilinkAdapter.js";
-import { createWearableAdapter } from "./adapters/wearableAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
@@ -424,14 +422,11 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
 }
 
 function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
-  if (type === "heartbeat" || type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "webhook" || type === "fennenote" || type === "xiaoai") {
-    throw new Error(`${type} message adapter must be mounted through the Cordis registry.`);
-  }
-  if (type === "rabilink") {
-    return createRabiLinkAdapter();
-  }
   if (type === "wearable") {
-    return createWearableAdapter();
+    throw new Error("wearable is a Manager-owned message entry and cannot create a Gateway adapter.");
+  }
+  if (type === "heartbeat" || type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "webhook" || type === "fennenote" || type === "xiaoai" || type === "rabilink") {
+    throw new Error(`${type} message adapter must be mounted through the Cordis registry.`);
   }
   return createPlaceholderAdapter(type);
 }
@@ -463,6 +458,14 @@ process.once("beforeExit", () => void disposeGatewayRuntime());
 
 try {
   for (const type of adapterTypes) {
+    if (type === "wearable") {
+      patchMessageAdapterStatus({
+        type,
+        status: "running",
+        message: "智能穿戴健康数据由 Manager API 接收；Gateway 不创建 Wearable Adapter。"
+      });
+      continue;
+    }
     if (messageAdapterRuntime.registry.manifest(type)) {
       await messageAdapterRuntime.mount(type);
       continue;

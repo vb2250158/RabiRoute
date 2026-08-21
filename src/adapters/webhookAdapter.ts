@@ -123,7 +123,7 @@ type WebhookAdapterListeningContext = {
 type WebhookAdapterOptions = {
   handleRequest?(context: WebhookAdapterRequestContext): boolean | Promise<boolean>;
   acceptedResponse?(record: VoiceTranscriptEventRecord, payload: WebhookPayload): AcceptedWebhookResponse;
-  onListening?(context: WebhookAdapterListeningContext): void;
+  onListening?(context: WebhookAdapterListeningContext): void | MessageAdapterDispose | Promise<void | MessageAdapterDispose>;
 };
 
 function gatewayStatusPath(): string {
@@ -478,7 +478,12 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
     type: profile.type,
     start(): Promise<MessageAdapterDispose> {
       const webhookPath = normalizeWebhookPath(profile.path);
+      let acceptingRequests = true;
       const server = http.createServer(async (request, response) => {
+        if (!acceptingRequests) {
+          response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(`${profile.label} is stopping.`);
+          return;
+        }
         const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
         const requestPath = requestUrl.pathname;
         const handled = await options.handleRequest?.({ request, response, requestUrl, requestPath, webhookPath, profile });
@@ -515,11 +520,21 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
 
         try {
           const body = await readRequestBody(request);
+          if (!acceptingRequests) {
+            response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(`${profile.label} is stopping.`);
+            return;
+          }
           const payload = JSON.parse(body || "{}") as WebhookPayload;
           const record = acceptWebhookPayload(profile, webhookPath, payload, Buffer.byteLength(body));
           const acceptedResponse = options.acceptedResponse?.(record, payload) ?? { statusCode: 204 };
           response.writeHead(acceptedResponse.statusCode, acceptedResponse.headers).end(acceptedResponse.body);
         } catch (error) {
+          if (!acceptingRequests) {
+            if (!response.headersSent && !response.destroyed) {
+              response.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(`${profile.label} is stopping.`);
+            }
+            return;
+          }
           const message = error instanceof Error ? error.message : String(error);
           patchWebhookStatus(profile, {
             status: "error",
@@ -584,6 +599,7 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
           if (startupSettled) return;
           server.off("error", onStartupError);
           server.on("error", reportServerError);
+          let listeningDispose: MessageAdapterDispose | undefined;
           try {
             patchWebhookStatus(profile, {
               status: "running",
@@ -591,7 +607,8 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
               path: webhookPath,
               port: profile.port
             });
-            options.onListening?.({ webhookPath, profile });
+            const acquiredDispose = await options.onListening?.({ webhookPath, profile });
+            if (typeof acquiredDispose === "function") listeningDispose = acquiredDispose;
             const url = `http://${host}:${profile.port}${webhookPath}`;
             appendAdapterLog(profile.type, {
               event: "listening",
@@ -609,19 +626,38 @@ export function createWebhookAdapter(profile = defaultWebhookProfile(), options:
             resolve(async () => {
               if (disposed) return;
               disposed = true;
+              acceptingRequests = false;
               server.off("error", reportServerError);
-              await closeWebhookServer(server);
+              const disposeErrors: unknown[] = [];
+              try {
+                await closeWebhookServer(server);
+              } catch (error) {
+                disposeErrors.push(error);
+              }
+              if (typeof listeningDispose === "function") {
+                try {
+                  await listeningDispose();
+                } catch (error) {
+                  disposeErrors.push(error);
+                }
+              }
               patchWebhookStatus(profile, {
                 status: "disabled",
                 message: `${profile.label} 消息端已停止。`,
                 path: webhookPath,
                 port: profile.port
               });
+              if (disposeErrors.length === 1) throw disposeErrors[0];
+              if (disposeErrors.length > 1) throw new AggregateError(disposeErrors, `${profile.label} cleanup failed.`);
             });
           } catch (error) {
             startupSettled = true;
+            acceptingRequests = false;
             server.off("error", reportServerError);
             await closeWebhookServer(server).catch(() => {});
+            if (typeof listeningDispose === "function") {
+              await Promise.resolve(listeningDispose()).catch(() => {});
+            }
             const startupError = error instanceof Error ? error : new Error(String(error));
             reportServerError(startupError);
             reject(startupError);

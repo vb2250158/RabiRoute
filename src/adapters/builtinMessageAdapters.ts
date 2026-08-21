@@ -1,6 +1,7 @@
 import { createFeishuAdapter } from "./feishuAdapter.js";
 import { createHeartbeatAdapter } from "./heartbeatAdapter.js";
 import { createNapCatAdapter } from "./napcatAdapter.js";
+import { createRabiLinkAdapter } from "./rabilinkAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./webhookAdapter.js";
 import { createWeComAdapter } from "./wecomAdapter.js";
 import { createWeixinAdapter } from "./weixinAdapter.js";
@@ -37,6 +38,17 @@ export const xiaoAiMessageAdapterDefinition: MessageAdapterDefinition = {
     lifecycle: "fiber"
   },
   create: () => createXiaoAiAdapter()
+};
+
+export const rabiLinkMessageAdapterDefinition: MessageAdapterDefinition = {
+  manifest: {
+    type: "rabilink",
+    label: "RabiLink / Relay 直连",
+    host: "gateway",
+    transport: "http",
+    lifecycle: "fiber"
+  },
+  create: () => createRabiLinkAdapter()
 };
 
 export const heartbeatMessageAdapterDefinition: MessageAdapterDefinition = {
@@ -99,6 +111,7 @@ export function builtinMessageAdapterDefinitions(): MessageAdapterDefinition[] {
     webhookMessageAdapterDefinition,
     fenneNoteMessageAdapterDefinition,
     xiaoAiMessageAdapterDefinition,
+    rabiLinkMessageAdapterDefinition,
     heartbeatMessageAdapterDefinition,
     napcatMessageAdapterDefinition,
     wecomMessageAdapterDefinition,
