@@ -3,7 +3,6 @@ import path from "node:path";
 import { config } from "./config.js";
 import { createRabiLinkAdapter } from "./adapters/rabilinkAdapter.js";
 import { createWearableAdapter } from "./adapters/wearableAdapter.js";
-import { createWeixinAdapter } from "./adapters/weixinAdapter.js";
 import { createFeishuAdapter } from "./adapters/feishuAdapter.js";
 import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
@@ -427,7 +426,7 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
 }
 
 function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
-  if (type === "heartbeat" || type === "napcat" || type === "wecom") {
+  if (type === "heartbeat" || type === "napcat" || type === "wecom" || type === "weixin") {
     throw new Error(`${type} message adapter must be mounted through the Cordis registry.`);
   }
   if (type === "fennenote") {
@@ -444,9 +443,6 @@ function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
   }
   if (type === "webhook") {
     return createWebhookAdapter();
-  }
-  if (type === "weixin") {
-    return createWeixinAdapter();
   }
   if (type === "feishu") return createFeishuAdapter();
   return createPlaceholderAdapter(type);

@@ -103,11 +103,13 @@ export async function downloadWeixinImages(
   items: unknown,
   dataDir: string,
   messageId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<WeixinDownloadedImage[]> {
   if (!Array.isArray(items)) return [];
   const output: WeixinDownloadedImage[] = [];
   for (const [index, raw] of items.entries()) {
+    if (signal?.aborted) break;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const item = raw as Record<string, unknown>;
     if (Number(item.type || 0) !== 2) continue;
@@ -124,6 +126,9 @@ export async function downloadWeixinImages(
     try { url = new URL(urlText); } catch { continue; }
     if (url.protocol !== "https:" || !url.hostname.endsWith(".weixin.qq.com")) continue;
     const controller = new AbortController();
+    const abortFromParent = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", abortFromParent, { once: true });
     const timeout = setTimeout(() => controller.abort(), 20_000);
     try {
       const response = await fetchImpl(url, { signal: controller.signal });
@@ -148,6 +153,7 @@ export async function downloadWeixinImages(
       output.push({ path: filePath, name, mimeType: format.mimeType, size: bytes.length });
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", abortFromParent);
     }
   }
   return output;
@@ -398,11 +404,14 @@ async function requestJson(
   state: Pick<WeixinOpenClawState, "baseUrl" | "token">,
   method: "GET" | "POST",
   endpoint: string,
-  options: { params?: Record<string, string>; payload?: unknown; tokenRequired?: boolean; timeoutMs?: number; headers?: Record<string, string> } = {}
+  options: { params?: Record<string, string>; payload?: unknown; tokenRequired?: boolean; timeoutMs?: number; headers?: Record<string, string>; signal?: AbortSignal } = {}
 ): Promise<Record<string, unknown>> {
   const url = new URL(endpoint.replace(/^\//, ""), `${state.baseUrl.replace(/\/$/, "")}/`);
   for (const [key, value] of Object.entries(options.params ?? {})) url.searchParams.set(key, value);
   const controller = new AbortController();
+  const abortFromParent = () => controller.abort();
+  if (options.signal?.aborted) controller.abort();
+  else options.signal?.addEventListener("abort", abortFromParent, { once: true });
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 35000);
   try {
     const response = await fetch(url, {
@@ -416,6 +425,7 @@ async function requestJson(
     return text ? JSON.parse(text) as Record<string, unknown> : {};
   } finally {
     clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromParent);
   }
 }
 
@@ -427,10 +437,11 @@ export function weixinApiError(payload: Record<string, unknown>): string {
   return `ret=${Number(payload.ret || 0)}, errcode=${Number(payload.errcode || 0)}, errmsg=${String(payload.errmsg || "")}`;
 }
 
-export async function requestWeixinQrSession(baseUrl: string, botType = "3"): Promise<WeixinQrSession> {
+export async function requestWeixinQrSession(baseUrl: string, botType = "3", signal?: AbortSignal): Promise<WeixinQrSession> {
   const data = await requestJson({ baseUrl }, "GET", "ilink/bot/get_bot_qrcode", {
     params: { bot_type: botType },
-    timeoutMs: 15000
+    timeoutMs: 15000,
+    signal
   });
   const qrcode = String(data.qrcode || "").trim();
   const qrcodeImageContent = String(data.qrcode_img_content || "").trim();
@@ -440,20 +451,23 @@ export async function requestWeixinQrSession(baseUrl: string, botType = "3"): Pr
 
 export async function pollWeixinQrSession(
   baseUrl: string,
-  session: WeixinQrSession
+  session: WeixinQrSession,
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   return requestJson({ baseUrl }, "GET", "ilink/bot/get_qrcode_status", {
     params: { qrcode: session.qrcode },
     timeoutMs: 35000,
-    headers: { "iLink-App-ClientVersion": "1" }
+    headers: { "iLink-App-ClientVersion": "1" },
+    signal
   });
 }
 
-export async function pollWeixinUpdates(state: WeixinOpenClawState): Promise<Record<string, unknown>> {
+export async function pollWeixinUpdates(state: WeixinOpenClawState, signal?: AbortSignal): Promise<Record<string, unknown>> {
   if (!state.token) throw new Error("微信尚未登录。 ");
   return requestJson(state, "POST", "ilink/bot/getupdates", {
     tokenRequired: true,
     timeoutMs: 35000,
+    signal,
     payload: {
       base_info: { channel_version: "rabiroute" },
       get_updates_buf: state.syncBuf || ""

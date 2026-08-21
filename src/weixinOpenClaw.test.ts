@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   downloadWeixinImages,
+  pollWeixinUpdates,
   readWeixinState,
   sendWeixinFile,
   sendWeixinImage,
@@ -143,6 +144,37 @@ test("Windows default personal Weixin storage uses current-user DPAPI", {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("personal Weixin long polling accepts Fiber cancellation", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestSignal: AbortSignal | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestSignal = init?.signal ?? undefined;
+    return new Promise((_resolve, reject) => {
+      requestSignal?.addEventListener("abort", () => reject(new Error("aborted by Fiber")), { once: true });
+    });
+  };
+  try {
+    const controller = new AbortController();
+    const polling = pollWeixinUpdates(recoverableStateForPoll(), controller.signal);
+    controller.abort();
+    await assert.rejects(polling, /aborted by Fiber/);
+    assert.equal(requestSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+function recoverableStateForPoll() {
+  return {
+    token: "runtime-token",
+    baseUrl: "https://api.example.invalid",
+    contextTokens: {},
+    authState: "recoverable" as const,
+    credentialsRetained: true,
+    updatedAt: new Date(0).toISOString()
+  };
+}
 
 test("personal Weixin API status uses both ret and errcode", () => {
   assert.equal(weixinApiSucceeded({ ret: 0, errcode: 0 }), true);

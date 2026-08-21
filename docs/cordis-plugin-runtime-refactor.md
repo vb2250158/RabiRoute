@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat、NapCat 和 WeCom 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat、NapCat、WeCom 和 Weixin 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -324,9 +324,9 @@ plugins:
 
 ### 阶段 2：消息端完整生命周期
 
-通用 Webhook、Heartbeat、NapCat 和 WeCom 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 每次挂载创建并持有一个入站 SDK 客户端。卸载会释放对应资源、阻止新消息处理并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，Weixin、Feishu 和其他消息端继续走兼容创建入口。
+通用 Webhook、Heartbeat、NapCat、WeCom 和 Weixin 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 持有入站 SDK 客户端；Weixin Fiber 持有二维码请求、长轮询、等待和入站媒体下载的取消信号。卸载会释放或中止对应资源、阻止迟到结果继续写状态或投递消息，并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，Feishu 和其他消息端继续走兼容创建入口。
 
-测试已覆盖 Webhook 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收，以及 WeCom 的单客户端创建、卸载断开、迟到事件失效、重复挂载和连接失败回滚。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放。阶段 2 下一步迁移 Weixin、Feishu 和其余消息端。
+测试已覆盖 Webhook 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收、WeCom 的 SDK 客户端生命周期，以及 Weixin 的长轮询取消、迟到结果失效和重复挂载。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放，也验证 Weixin 的 `not_requested -> Ctrl+C -> disabled`。阶段 2 下一步迁移 Feishu 和其余消息端。
 
 ### 阶段 3：Gateway Host
 
@@ -452,6 +452,16 @@ QQ 消息解析、回复链、媒体保存、Route 判断、Forwarding 和 Outbo
 5. 缺少 Bot ID 或 secret 时保持失败关闭，不创建 SDK 客户端。
 
 企业微信消息解析、消息记录、Route 判断、Forwarding 和 Outbox 继续由现有业务模块拥有。`src/wecom.ts` 的出站客户端缓存仍服务于 Outbox，不并入入站 Fiber。
+
+## 第六个实施切片：Weixin 登录与长轮询生命周期
+
+1. 将 Weixin 注册为 `http` 类型的 Message Adapter Definition；
+2. 每次 Fiber 挂载创建独立的取消信号和消息去重集合；
+3. 二维码请求、二维码状态轮询、消息长轮询、等待和入站图片下载都接收同一取消信号；
+4. Fiber 卸载时中止当前请求并等待循环退出，迟到结果不能写会话状态、消息记录或触发 Forwarding；
+5. 正常停止清除二维码展示状态并写入 `disabled`，重新挂载创建新的长轮询。
+
+个人微信的安全会话、登录请求、同步游标、消息解析、媒体解密、Route 判断、Forwarding 和 Outbox 继续由现有业务模块拥有。Fiber 只管理运行循环和可撤销副作用。
 
 ## 完成标准
 
