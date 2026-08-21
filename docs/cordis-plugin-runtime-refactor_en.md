@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, Heartbeat, NapCat, WeCom, Weixin, and Feishu slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
+> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, FenneNote, XiaoAI, Heartbeat, NapCat, WeCom, Weixin, and Feishu slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -324,9 +324,9 @@ Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
 ### Stage 2: complete message-side lifecycle
 
-Generic Webhook, Heartbeat, NapCat, WeCom, Weixin, and Feishu now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, the NapCat Fiber owns all multi-instance OneBot WebSocket listeners and connected clients, the WeCom Fiber owns its inbound SDK client, the Weixin Fiber owns one cancellation signal for QR requests, long polling, waits, and inbound media downloads, and the Feishu Fiber owns its dedicated event-callback listener and active connections. Disposal releases or aborts the corresponding resources, rejects stale results before they update state, append messages, or deliver work, and records `disabled`; partial activation rolls back created resources and records `error`. `src/index.ts` mounts registered message adapters first, while the remaining adapters keep the compatibility creation entry.
+Generic Webhook, FenneNote, XiaoAI, Heartbeat, NapCat, WeCom, Weixin, and Feishu now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. FenneNote and XiaoAI reuse the generic Webhook listener lifecycle while retaining their own ports, paths, event types, message records, and Route sources. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, the NapCat Fiber owns all multi-instance OneBot WebSocket listeners and connected clients, the WeCom Fiber owns its inbound SDK client, the Weixin Fiber owns one cancellation signal for QR requests, long polling, waits, and inbound media downloads, and the Feishu Fiber owns its dedicated event-callback listener and active connections. Disposal releases or aborts the corresponding resources, rejects stale results before they update state, append messages, or deliver work, and records `disabled`; partial activation rolls back created resources and records `error`. `src/index.ts` mounts registered message adapters first, while the remaining adapters keep the compatibility creation entry.
 
-Tests cover Webhook and Feishu port lifecycle, Heartbeat timer lifecycle, NapCat multi-instance resource cleanup, the WeCom SDK client lifecycle, and Weixin long-poll cancellation, stale-result rejection, and repeated mounting. Feishu also covers listener readiness, port conflicts, incomplete-request disposal, missing configuration, and same-port remounting. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` with port release, Weixin `not_requested -> Ctrl+C -> disabled`, and Feishu `listening -> Ctrl+C -> disabled` with port release. Stage 2 continues with the remaining compatibility adapters.
+Tests cover Webhook and Feishu port lifecycle, Heartbeat timer lifecycle, NapCat multi-instance resource cleanup, the WeCom SDK client lifecycle, and Weixin long-poll cancellation, stale-result rejection, and repeated mounting. Feishu also covers listener readiness, port conflicts, incomplete-request disposal, missing configuration, and same-port remounting. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` with port release, Weixin `not_requested -> Ctrl+C -> disabled`, Feishu `listening -> Ctrl+C -> disabled` with port release, and simultaneous FenneNote/XiaoAI mounting from `running -> Ctrl+C -> disabled` with both ports released. Stage 2 continues by consolidating RabiLink HTTP-listener and shared Relay-worker lifecycles. The formal Wearable health-data entry belongs to Manager; later work only removes its side effect of starting the shared Relay worker and registers it as a Manager-internal entry.
 
 ### Stage 3: Gateway Host
 
@@ -473,6 +473,14 @@ Personal-Weixin secure sessions, login requests, sync cursors, message parsing, 
 6. write status and Adapter logs to the instance `dataDir`, and message records to `memoryDataDir`.
 
 Feishu signature verification, URL challenge, encrypted-callback decryption, persistent `event_id` deduplication, source `chat_id`, Route decisions, Forwarding, and Outbox remain owned by the existing business modules. The Fiber owns only the event listener and reversible effects.
+
+## Eighth implementation slice: FenneNote and XiaoAI Webhook profiles
+
+1. register FenneNote and XiaoAI as separate `http` Message Adapter Definitions;
+2. reuse generic Webhook listener readiness, port-conflict rollback, connection closure, and same-port remounting;
+3. remove the FenneNote, XiaoAI, and generic Webhook compatibility creation branches from the Gateway entry;
+4. preserve separate manifest labels and existing path and port configuration;
+5. preserve FenneNote record-first behavior and the XiaoAI transcript event contract.
 
 ## Readiness criteria
 

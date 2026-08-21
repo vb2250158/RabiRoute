@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、FenneNote、XiaoAI、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -324,9 +324,9 @@ plugins:
 
 ### 阶段 2：消息端完整生命周期
 
-通用 Webhook、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 持有入站 SDK 客户端；Weixin Fiber 持有二维码请求、长轮询、等待和入站媒体下载的取消信号；Feishu Fiber 持有独立事件回调 listener 和现有连接。卸载会释放或中止对应资源、阻止迟到结果继续写状态、消息记录或投递，并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，其余消息端继续走兼容创建入口。
+通用 Webhook、FenneNote、XiaoAI、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。FenneNote 和 XiaoAI 复用通用 Webhook 的 listener 生命周期，但保留各自的端口、路径、事件类型、消息记录和 Route 来源。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 持有入站 SDK 客户端；Weixin Fiber 持有二维码请求、长轮询、等待和入站媒体下载的取消信号；Feishu Fiber 持有独立事件回调 listener 和现有连接。卸载会释放或中止对应资源、阻止迟到结果继续写状态、消息记录或投递，并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，其余消息端继续走兼容创建入口。
 
-测试已覆盖 Webhook 和 Feishu 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收、WeCom 的 SDK 客户端生命周期，以及 Weixin 的长轮询取消、迟到结果失效和重复挂载。Feishu 还覆盖 listener 就绪、端口冲突、未完成请求卸载、缺少配置和同端口重新挂载。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放、Weixin 的 `not_requested -> Ctrl+C -> disabled`，以及 Feishu 的 `listening -> Ctrl+C -> disabled` 和端口释放。阶段 2 下一步迁移其余兼容消息端。
+测试已覆盖 Webhook 和 Feishu 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收、WeCom 的 SDK 客户端生命周期，以及 Weixin 的长轮询取消、迟到结果失效和重复挂载。Feishu 还覆盖 listener 就绪、端口冲突、未完成请求卸载、缺少配置和同端口重新挂载。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放、Weixin 的 `not_requested -> Ctrl+C -> disabled`，Feishu 的 `listening -> Ctrl+C -> disabled` 和端口释放，以及 FenneNote/XiaoAI 同时挂载后的 `running -> Ctrl+C -> disabled` 和双端口释放。阶段 2 下一步收敛 RabiLink 的 HTTP listener 与共享 Relay worker 生命周期。Wearable 的正式健康数据入口归 Manager；后续只迁出它对共享 Relay worker 的启动副作用，并将其登记为 Manager 内部入口。
 
 ### 阶段 3：Gateway Host
 
@@ -473,6 +473,14 @@ QQ 消息解析、回复链、媒体保存、Route 判断、Forwarding 和 Outbo
 6. 状态和 Adapter 日志写入该实例的 `dataDir`，消息记录写入 `memoryDataDir`。
 
 飞书签名校验、URL challenge、加密回调解密、`event_id` 持久去重、来源 `chat_id`、Route 判断、Forwarding 和 Outbox 继续由现有业务模块拥有。Fiber 只管理事件入口和可撤销副作用。
+
+## 第八个实施切片：FenneNote 与 XiaoAI Webhook profile
+
+1. 将 FenneNote 和 XiaoAI 分别注册为 `http` 类型的 Message Adapter Definition；
+2. 两个消息端复用通用 Webhook 的 listener 就绪、端口冲突回滚、关闭连接和同端口重新挂载能力；
+3. Gateway 入口删除 FenneNote、XiaoAI 和通用 Webhook 的兼容创建分支；
+4. manifest 保留各自显示名，配置继续使用各自的 path 和 port；
+5. FenneNote 的常驻记录优先策略和 XiaoAI 的转写事件合同保持不变。
 
 ## 完成标准
 

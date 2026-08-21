@@ -3,7 +3,6 @@ import path from "node:path";
 import { config } from "./config.js";
 import { createRabiLinkAdapter } from "./adapters/rabilinkAdapter.js";
 import { createWearableAdapter } from "./adapters/wearableAdapter.js";
-import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./adapters/webhookAdapter.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
@@ -425,23 +424,14 @@ function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "
 }
 
 function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
-  if (type === "heartbeat" || type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu") {
+  if (type === "heartbeat" || type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "webhook" || type === "fennenote" || type === "xiaoai") {
     throw new Error(`${type} message adapter must be mounted through the Cordis registry.`);
-  }
-  if (type === "fennenote") {
-    return createFenneNoteAdapter();
-  }
-  if (type === "xiaoai") {
-    return createXiaoAiAdapter();
   }
   if (type === "rabilink") {
     return createRabiLinkAdapter();
   }
   if (type === "wearable") {
     return createWearableAdapter();
-  }
-  if (type === "webhook") {
-    return createWebhookAdapter();
   }
   return createPlaceholderAdapter(type);
 }

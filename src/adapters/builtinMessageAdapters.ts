@@ -1,7 +1,7 @@
 import { createFeishuAdapter } from "./feishuAdapter.js";
 import { createHeartbeatAdapter } from "./heartbeatAdapter.js";
 import { createNapCatAdapter } from "./napcatAdapter.js";
-import { createWebhookAdapter } from "./webhookAdapter.js";
+import { createFenneNoteAdapter, createWebhookAdapter, createXiaoAiAdapter } from "./webhookAdapter.js";
 import { createWeComAdapter } from "./wecomAdapter.js";
 import { createWeixinAdapter } from "./weixinAdapter.js";
 import type { MessageAdapterDefinition } from "./messageAdapter.js";
@@ -15,6 +15,28 @@ export const webhookMessageAdapterDefinition: MessageAdapterDefinition = {
     lifecycle: "fiber"
   },
   create: () => createWebhookAdapter()
+};
+
+export const fenneNoteMessageAdapterDefinition: MessageAdapterDefinition = {
+  manifest: {
+    type: "fennenote",
+    label: "FenneNote / 芬妮笔记",
+    host: "gateway",
+    transport: "http",
+    lifecycle: "fiber"
+  },
+  create: () => createFenneNoteAdapter()
+};
+
+export const xiaoAiMessageAdapterDefinition: MessageAdapterDefinition = {
+  manifest: {
+    type: "xiaoai",
+    label: "小米音箱 / 小爱",
+    host: "gateway",
+    transport: "http",
+    lifecycle: "fiber"
+  },
+  create: () => createXiaoAiAdapter()
 };
 
 export const heartbeatMessageAdapterDefinition: MessageAdapterDefinition = {
@@ -75,6 +97,8 @@ export const feishuMessageAdapterDefinition: MessageAdapterDefinition = {
 export function builtinMessageAdapterDefinitions(): MessageAdapterDefinition[] {
   return [
     webhookMessageAdapterDefinition,
+    fenneNoteMessageAdapterDefinition,
+    xiaoAiMessageAdapterDefinition,
     heartbeatMessageAdapterDefinition,
     napcatMessageAdapterDefinition,
     wecomMessageAdapterDefinition,

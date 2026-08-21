@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "migrate-message-adapter-lifecycle",
-  "currentStep": "通用 Webhook、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。Feishu Fiber 持有 HTTP listener 与连接；启动等待 listener ready；端口冲突时拒绝挂载；卸载后阻止迟到请求写入状态、消息记录或触发 Forwarding，并释放端口；缺少配置时不创建 server。真实构建进程已验证 Feishu 从 listening 经 Ctrl+C 写入 disabled，并释放监听端口。",
-  "nextAction": "迁移其余兼容消息端，再处理 Gateway 组合入口。",
+  "currentStep": "通用 Webhook、FenneNote、XiaoAI、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。FenneNote 与 XiaoAI 复用通用 Webhook 的 listener 生命周期，Gateway 已删除这三个 HTTP 消息端的兼容创建分支。 真实构建进程已验证两者同时进入 running，Ctrl+C 后均写入 disabled 并释放端口。",
+  "nextAction": "收敛 RabiLink 的 HTTP listener 与共享 Relay worker 生命周期；移除 Wearable 启动共享 worker 的副作用，并将 Wearable 登记为 Manager 内部入口。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -78,7 +78,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T13:49:00+08:00",
+  "updatedAt": "2026-08-21T14:15:00+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -95,6 +95,8 @@
     "WeCom",
     "Weixin",
     "Feishu",
-    "HTTP listener"
+    "HTTP listener",
+    "FenneNote",
+    "XiaoAI"
   ]
 }
