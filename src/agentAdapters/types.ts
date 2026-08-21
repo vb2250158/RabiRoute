@@ -1,11 +1,12 @@
-import type { AgentAdapterType } from "../shared/agentAdapterCapabilities.js";
+import {
+  isAgentAdapterType,
+  type AgentAdapterType
+} from "../shared/agentAdapterCapabilities.js";
 
 export type { AgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 
 export function parseAgentAdapterType(value: string | undefined): AgentAdapterType | null {
-  return value === "codex" || value === "copilotCli" || value === "marvis" || value === "astrbot" || value === "dsh"
-    ? value
-    : null;
+  return isAgentAdapterType(value) ? value : null;
 }
 
 function migrateConfiguredAgentAdapterType(value: string | undefined): AgentAdapterType | null {

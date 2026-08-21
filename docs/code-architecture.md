@@ -272,7 +272,7 @@ Agent 端 Adapter 在 `src/agentAdapters/`：
 - `managerApi.ts`：manager 用于扫描、安装、登录、打开处理端的控制面能力。
 - `astrbotAdapter.ts`：AstrBot 投递实现。
 
-`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/agentAdapterRuntime.ts` 用 Cordis Fiber 挂载注册表服务和每个 Adapter 定义。销毁某个 Adapter Fiber 只移除对应定义；销毁根 Context 会撤销全部定义。Cordis API 不进入路由、消息模板或具体处理端实现。Manager 扫描与配置枚举尚未全部改为读取该注册表。
+`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/agentAdapterRuntime.ts` 用 Cordis Fiber 挂载注册表服务和每个 Adapter 定义。销毁某个 Adapter Fiber 只移除对应定义；销毁根 Context 会撤销全部定义。Cordis API 不进入路由、消息模板或具体处理端实现。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入都读取共享 manifest；表现端贡献目录尚未建立。
 
 其他处理端在根目录还有：
 

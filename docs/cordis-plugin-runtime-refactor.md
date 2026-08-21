@@ -318,7 +318,7 @@ plugins:
 
 合并 Adapter 创建、`deliver()`、能力、Manager 扫描、显示名、成熟度和诊断动作。保留 `createAgentAdapter(type)` 兼容入口，`forwarding.ts` 的路由判断和模板不改。
 
-`codex`、`dsh`、`copilotCli`、`marvis` 和 `astrbot` 已进入同一个 Cordis 注册表。`createAgentAdapter(type)` 已改为兼容入口，消息渲染与真实投递函数保持原路径。Manager 扫描、配置枚举和贡献目录仍需改为读取同一清单。
+`codex`、`dsh`、`copilotCli`、`marvis` 和 `astrbot` 已进入同一个 Cordis 注册表。`createAgentAdapter(type)` 已改为兼容入口，消息渲染与真实投递函数保持原路径。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入已读取同一 manifest；Contribution Registry 仍待建立。
 
 退出条件：新增内置 Agent Adapter 只增加插件与清单。
 
@@ -409,7 +409,7 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 6. 定义 Contribution Registry 合同，但不改 WebGUI/Desktop；
 7. 增加真实 Context 组合、销毁和重复挂载测试。
 
-当前已完成第 1、2、3、4、7 项中的运行时部分：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口和 Fiber 生命周期测试已经存在。第 5、6 项以及静态类型/配置目录收敛仍待完成。
+当前已完成第 1、2、3、4、5、7 项：精确依赖、Cordis 包装、Agent Adapter Registry、五个内置 Adapter、兼容创建入口、统一扫描元数据和 Fiber 生命周期测试已经存在。第 6 项 Contribution Registry 仍待完成。
 
 这个切片不修改消息模板、Desktop IPC、DSH 投递、Route 配置、Outbox 或现有界面交互。
 

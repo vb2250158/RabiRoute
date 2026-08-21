@@ -5,6 +5,7 @@ import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterType } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
 import { bindAgentSessionsForSave } from "@shared/codexSessionBinding";
+import { agentAdapterValues } from "@shared/gatewayConfigModel";
 import PersonaAvatar from "./PersonaAvatar.vue";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { copyTextToClipboard } from "../clipboard";
@@ -216,11 +217,8 @@ function selectAgent(type: AgentAdapterType): void {
 }
 
 function normalizeAgentAdapterValue(value: unknown): AgentAdapterType | null {
-  const text = String(value || "");
-  if (text === "codex" || text === "copilotCli" || text === "marvis" || text === "astrbot" || text === "dsh") {
-    return text;
-  }
-  return null;
+  const text = String(value || "") as AgentAdapterType;
+  return agentAdapterValues.has(text) ? text : null;
 }
 
 function selectAgentValue(value: unknown): void {

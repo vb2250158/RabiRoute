@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AgentAdapterType } from "./types.js";
+import {
+  agentAdapterManifest,
+  type AgentAdapterMaturity
+} from "../shared/agentAdapterCapabilities.js";
 import { resolvePersistedProjectPath } from "../shared/projectPaths.js";
 import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { CodexDesktopBridge } from "../codexDesktopBridge.js";
@@ -16,7 +20,7 @@ import {
   type DshRabiRoutePluginStatus
 } from "../dshSessionBridge.js";
 
-type AgentMaturity = "verified" | "experimental" | "stub";
+type AgentMaturity = AgentAdapterMaturity;
 
 type AgentScanSession = {
   id?: string;
@@ -81,6 +85,20 @@ export type AgentScanResult = {
   transport?: { protocol: string; mode: string };
   host?: { name: string; required: boolean };
 };
+
+function agentScanManifestFields(type: AgentAdapterType): Pick<
+  AgentScanResult,
+  "type" | "label" | "maturity" | "transport" | "host"
+> {
+  const manifest = agentAdapterManifest(type);
+  return {
+    type: manifest.type,
+    label: manifest.label,
+    maturity: manifest.maturity,
+    transport: { ...manifest.transport },
+    ...(manifest.host ? { host: { ...manifest.host } } : {})
+  };
+}
 
 export type GatewayDefinitionLike = {
   id?: string;
@@ -261,13 +279,9 @@ export async function scanDshAgentAdapter(
   ];
   return {
     agents: { dsh: {
-      type: "dsh",
-      label: "DSH（DeepSeek Harness）",
-      maturity: "experimental",
+      ...agentScanManifestFields("dsh"),
       installed: dshEndpoints.some((endpoint) => endpoint.healthy),
       endpoints: dshEndpoints,
-      transport: { protocol: "http", mode: "session.list/create/rename/prompt" },
-      host: { name: `DSH apiproxy (${dshBaseUrl})`, required: true },
       projects: dshProjects,
       sessions: dshSessions,
       sessionPage: dshSessionPage,
@@ -472,9 +486,7 @@ export async function scanAgentAdapters(
       sessionWarning: codexSessionWarning
     }),
     copilotCli: {
-      type: "copilotCli",
-      label: "Copilot CLI",
-      maturity: "experimental",
+      ...agentScanManifestFields("copilotCli"),
       installed: copilotBins.length > 0,
       installCandidates: copilotBins.map((binPath) => ({ label: path.basename(binPath), path: binPath })),
       auth: {
@@ -491,9 +503,7 @@ export async function scanAgentAdapters(
       ]
     },
     marvis: {
-      type: "marvis",
-      label: "Marvis",
-      maturity: "stub",
+      ...agentScanManifestFields("marvis"),
       installed: marvisAppIds.length > 0,
       installCandidates: marvisAppIds.map((id) => ({ label: id })),
       warnings: [
@@ -502,9 +512,7 @@ export async function scanAgentAdapters(
       ]
     },
     astrbot: {
-      type: "astrbot",
-      label: "AstrBot",
-      maturity: "experimental",
+      ...agentScanManifestFields("astrbot"),
       installed: astrbotEndpoints.some((endpoint) => endpoint.healthy),
       auth: {
         required: true,
@@ -559,16 +567,12 @@ export function buildCodexAgentScan(input: {
 }): AgentScanResult {
   const codexBins = [...new Set(input.codexBins.filter(Boolean))];
   return {
-    type: "codex",
-    label: "Codex（ChatGPT 中的编码 Agent）",
-    maturity: "verified",
+    ...agentScanManifestFields("codex"),
     installed: input.desktopReady === true || codexBins.length > 0,
     installCandidates: codexBins.map((binPath) => ({
       label: binPath.endsWith("codex.js") ? "@openai/codex" : path.basename(binPath),
       path: binPath
     })),
-    transport: { protocol: "Codex Desktop IPC", mode: "desktop-owner" },
-    host: { name: "Codex/ChatGPT Desktop", required: true },
     projects: input.projects,
     // Desktop state supplies task identity; delivery is accepted only by the
     // Desktop owner for the exact opaque task id.

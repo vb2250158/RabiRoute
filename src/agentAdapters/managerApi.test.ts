@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCodexAgentScan, scanAgentAdapters, scanDshAgentAdapter } from "./managerApi.js";
+import {
+  agentAdapterManifest,
+  agentAdapterTypes
+} from "../shared/agentAdapterCapabilities.js";
 
 test("Codex scan requires the Desktop owner for delivery", () => {
   const scan = buildCodexAgentScan({
@@ -73,6 +77,22 @@ test("Codex settings scan uses the Desktop user-facing task catalog", async () =
     projectPath: "D:/MonsterGirl",
     updatedAt: "2026-07-18T08:01:05.000Z"
   }]);
+
+  const agents = result.agents as Record<string, {
+    type: string;
+    label: string;
+    maturity: string;
+    transport?: { protocol: string; mode: string };
+    host?: { name: string; required: boolean };
+  }>;
+  for (const type of agentAdapterTypes) {
+    const manifest = agentAdapterManifest(type);
+    assert.equal(agents[type]?.type, manifest.type);
+    assert.equal(agents[type]?.label, manifest.label);
+    assert.equal(agents[type]?.maturity, manifest.maturity);
+    assert.deepEqual(agents[type]?.transport, manifest.transport);
+    assert.deepEqual(agents[type]?.host, manifest.host);
+  }
 });
 
 test("Codex settings scan returns a bounded task page with a continuation offset", async () => {

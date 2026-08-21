@@ -27,6 +27,7 @@ import { normalizeCodexMemoryConsolidationAgentModel } from "./codexMemoryConsol
 import { applySpeechRouteVariableDefaults } from "./speechControlContract.js";
 import {
   agentAdapterSupportsManagedTaskFeature,
+  agentAdapterTypes,
   type AgentAdapterType
 } from "./agentAdapterCapabilities.js";
 import {
@@ -38,6 +39,7 @@ export type { CodexPlanAssistantSession } from "./codexPlanAssistantSessions.js"
 export {
   agentAdapterCapabilities,
   agentAdapterSupportsManagedTaskFeature,
+  agentAdapterTypes,
   type AgentAdapterCapabilities,
   type AgentAdapterType,
   type ManagedTaskAgentFeature
@@ -404,7 +406,7 @@ export type GatewayConfigModelOptions = {
 };
 
 const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu", "disabled"]);
-export const agentAdapterValues: ReadonlySet<AgentAdapterType> = new Set<AgentAdapterType>(["codex", "copilotCli", "marvis", "astrbot", "dsh"]);
+export const agentAdapterValues: ReadonlySet<AgentAdapterType> = new Set(agentAdapterTypes);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
 const codexReasoningEffortValues = new Set<CodexReasoningEffort>(["low", "medium", "high", "xhigh", "max"]);

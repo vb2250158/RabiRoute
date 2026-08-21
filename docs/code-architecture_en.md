@@ -144,7 +144,7 @@ Common route-event and decision types shared by forwarding and tests.
 - `managerApi.ts`: scan, login, deployment, and adapter-control read models.
 - `stateReporter.ts` and ordering helpers: runtime status reporting.
 
-`src/runtime/cordisHost.ts` is the Cordis compatibility boundary. `src/runtime/agentAdapterRuntime.ts` mounts the registry service and each adapter definition as Cordis Fibers. Disposing one adapter Fiber removes only that definition; disposing the root Context removes all definitions. Cordis APIs do not enter routing, message templates, or concrete handler implementations. Manager scans and configuration enums do not yet read the registry everywhere.
+`src/runtime/cordisHost.ts` is the Cordis compatibility boundary. `src/runtime/agentAdapterRuntime.ts` mounts the registry service and each adapter definition as Cordis Fibers. Disposing one adapter Fiber removes only that definition; disposing the root Context removes all definitions. Cordis APIs do not enter routing, message templates, or concrete handler implementations. Type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input read the shared manifest; the presentation contribution catalog is not yet implemented.
 
 Copilot CLI and Marvis use their dedicated modules outside this folder where appropriate.
 

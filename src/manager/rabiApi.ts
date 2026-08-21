@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AgentManagerApiContext } from "../agentAdapters/managerApi.js";
 import { scanAgentAdapters } from "../agentAdapters/managerApi.js";
 import { gatewayAdapterTypes, type GatewayDefinition, type GatewayConfigFile } from "../shared/gatewayConfigModel.js";
+import { isAgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 import { sanitizeConfigName } from "../shared/routeIdentity.js";
 import { routeFolderPath } from "../shared/routePaths.js";
 import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
@@ -63,6 +64,10 @@ type AgentBindingPatch = {
   astrbotPassword?: string;
   astrbotProjectId?: string;
   astrbotSessionId?: string;
+  dshSessionId?: string;
+  dshSessionName?: string;
+  dshCwd?: string;
+  dshBaseUrl?: string;
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
@@ -469,7 +474,7 @@ function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: Agent
   const route = findGateway(config, routeId);
   if (!route) return { code: -1, message: `Route not found: ${routeId}` };
   if (patch.agentAdapter) {
-    if (patch.agentAdapter !== "codex" && patch.agentAdapter !== "copilotCli" && patch.agentAdapter !== "marvis" && patch.agentAdapter !== "astrbot") {
+    if (!isAgentAdapterType(patch.agentAdapter)) {
       return { code: -1, message: `Unsupported agent adapter: ${patch.agentAdapter}` };
     }
     route.agentAdapters = [patch.agentAdapter];
@@ -487,6 +492,10 @@ function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: Agent
   if (patch.astrbotPassword !== undefined) route.astrbotPassword = String(patch.astrbotPassword || "");
   if (patch.astrbotProjectId !== undefined) route.astrbotProjectId = String(patch.astrbotProjectId || "");
   if (patch.astrbotSessionId !== undefined) route.astrbotSessionId = String(patch.astrbotSessionId || "");
+  if (patch.dshSessionId !== undefined) route.dshSessionId = String(patch.dshSessionId || "");
+  if (patch.dshSessionName !== undefined) route.dshSessionName = String(patch.dshSessionName || "");
+  if (patch.dshCwd !== undefined) route.dshCwd = String(patch.dshCwd || "");
+  if (patch.dshBaseUrl !== undefined) route.dshBaseUrl = String(patch.dshBaseUrl || "");
   const normalized = ctx.writeConfig(config);
   ctx.loadRuntimes();
   ctx.syncRunningGateways();

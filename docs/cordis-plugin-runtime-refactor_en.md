@@ -318,7 +318,7 @@ Exit criterion: Cordis APIs appear only under `src/runtime/` and its tests.
 
 Combine Adapter creation, `deliver()`, capabilities, Manager scanning, display name, maturity, and diagnostic actions. Keep `createAgentAdapter(type)` as a compatibility entry. Do not change routing decisions or templates in `forwarding.ts`.
 
-`codex`, `dsh`, `copilotCli`, `marvis`, and `astrbot` now use one Cordis registry. `createAgentAdapter(type)` is retained as a compatibility entry, while message rendering and real delivery functions keep their existing paths. Manager scanning, configuration enums, and the contribution catalog still need to read the same manifest.
+`codex`, `dsh`, `copilotCli`, `marvis`, and `astrbot` now use one Cordis registry. `createAgentAdapter(type)` is retained as a compatibility entry, while message rendering and real delivery functions keep their existing paths. Type parsing, Gateway configuration enums, Manager scan metadata, and Quick Setup input now read the same manifest; the Contribution Registry is still pending.
 
 Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
@@ -409,7 +409,7 @@ Rollback changes runtime selection only and never creates duplicate business fac
 6. define the Contribution Registry contract without changing WebGUI/Desktop yet;
 7. add real Context composition, disposal, and repeated-mount tests.
 
-The runtime portions of items 1, 2, 3, 4, and 7 are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, and Fiber lifecycle tests. Items 5 and 6, plus remaining static type/config catalogs, are still pending.
+Items 1, 2, 3, 4, 5, and 7 are now implemented: exact dependency, Cordis wrapper, Agent Adapter Registry, all five built-in adapters, the compatibility creation entry, unified scan metadata, and Fiber lifecycle tests. Item 6, the Contribution Registry, is still pending.
 
 This slice does not change message templates, Desktop IPC, DSH delivery, Route configuration, Outbox, or current UI behavior.
 
