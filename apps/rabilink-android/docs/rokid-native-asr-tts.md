@@ -772,7 +772,6 @@ cd <repo>\apps\rabilink-android
 | 路径 | 用途 |
 | --- | --- |
 | `/api/fennenote/playback` | 兼容 RabiRoute / FenneNote playback |
-| `/api/playback/request` | 兼容 RabiRoute manager 旧播放请求路径 |
 | `/api/rokid/tts` | Rokid 专用 TTS 测试入口 |
 
 它会从请求 JSON 里按顺序读取 `ttsText`、`text`、`message`、`content`、`visibleText`，也兼容 `payload.text` / `payload.ttsText`。读取到文本后调用：

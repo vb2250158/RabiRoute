@@ -14,6 +14,8 @@ from PySide6.QtWidgets import QApplication, QMenu
 from rabiroute_tray.manager_client import ManagerClient
 from rabiroute_tray.plugin_catalog import (
     DesktopCommandContext,
+    DesktopPanelAction,
+    DesktopPanelActionContext,
     DesktopPluginCatalog,
     DesktopPluginCatalogCache,
     DesktopPluginHotkey,
@@ -31,7 +33,16 @@ from rabiroute_tray.tray_app import (
     _desktop_plugin_theme,
     _rebuild_plugin_menu,
     _start_desktop_plugin_catalog,
+    _sync_recovery_webgui_action,
 )
+
+DESKTOP_OWNER = {"plugin_id": "builtin:manager/desktop", "instance_id": "manager:desktop"}
+CORE_OWNER = {"plugin_id": "builtin:manager/core", "instance_id": "manager:core"}
+PERSONA_OWNER = {"plugin_id": "builtin:manager/persona", "instance_id": "manager:persona"}
+GATEWAY_RUNTIME_OWNER = {"plugin_id": "builtin:manager/gateway-runtime", "instance_id": "manager:gateway-runtime"}
+SPEECH_OWNER = {"plugin_id": "builtin:manager/speech", "instance_id": "manager:speech"}
+PERFORMANCE_OWNER = {"plugin_id": "builtin:manager/performance", "instance_id": "manager:performance"}
+TRUSTED_OWNER = {"plugin_id": "package:trusted-desktop", "instance_id": "manager:trusted-desktop"}
 
 
 def _base(kind: str, contribution_id: str, *, plugin_id: str = "builtin:manager/desktop", instance_id: str = "manager:desktop", **overrides) -> dict:
@@ -72,12 +83,19 @@ def _hotkey(contribution_id: str, command_id: str, default_binding: str, **overr
     )
 
 
-def _theme(theme_id: str, desktop_resource_id: str, **overrides) -> dict:
+def _theme(
+    theme_id: str,
+    desktop_resource_id: str,
+    *,
+    plugin_id: str = "builtin:manager/core",
+    instance_id: str = "manager:core",
+    **overrides,
+) -> dict:
     return _base(
         "theme",
         f"{theme_id}-theme",
-        plugin_id="builtin:manager/core",
-        instance_id="manager:core",
+        plugin_id=plugin_id,
+        instance_id=instance_id,
         surface="shared.themes",
         slot="interface",
         themeId=theme_id,
@@ -205,12 +223,14 @@ class _SurfaceManagerClient(ManagerClient):
                     "manager.speech-status",
                     "builtin.speech-status.v1",
                     label={"fallback": "语音服务"},
+                    **SPEECH_OWNER,
                 ),
                 _status(
                     "performance-status",
                     "manager.performance-status",
                     "builtin.performance-status.v1",
                     label={"fallback": "性能监控"},
+                    **PERFORMANCE_OWNER,
                 ),
                 _status("private-status", "manager.private", "package.private.v1"),
                 _settings(label={"fallback": "桌面设置"}),
@@ -236,6 +256,11 @@ class _SlowCatalogManager:
         return empty_desktop_plugin_catalog()
 
 
+class _RuntimeErrorCatalogManager:
+    def desktop_plugin_catalog(self) -> DesktopPluginCatalog:
+        raise RuntimeError("catalog worker failed")
+
+
 class DesktopPluginCatalogTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -255,6 +280,80 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             ],
         )
 
+    def test_valid_catalog_exposes_active_commands_capabilities_and_availability(self) -> None:
+        registry = create_builtin_desktop_extension_registry()
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _command(
+                        "system-selection",
+                        "desktop.system-selection",
+                        surface="desktop.lifecycle",
+                        slot="selection",
+                        requiredCapabilities=["desktop.lifecycle"],
+                    ),
+                ],
+                plugins=[
+                    _plugin(
+                        "builtin:manager/desktop",
+                        "manager:desktop",
+                        capabilities=["desktop.system-selection"],
+                    )
+                ],
+            ),
+            registry,
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertTrue(catalog.available)
+        self.assertEqual([command.handler_id for command in catalog.commands], ["desktop.system-selection"])
+        self.assertIn("desktop.system-selection", catalog.capabilities)
+        self.assertTrue(registry.lifecycle_capability_active(catalog, "desktop.system-selection"))
+
+    def test_panel_actions_are_resolved_only_from_active_catalog_commands(self) -> None:
+        registry = create_builtin_desktop_extension_registry()
+        catalog = parse_desktop_plugin_catalog(
+            _payload(contributions=[
+                _command(
+                    "open-role-directory",
+                    "desktop.open-role-directory",
+                    surface="desktop.panel",
+                    slot="directories",
+                    order=10,
+                    requiredCapabilities=["desktop.panel-action"],
+                    label={"fallback": "人格目录"},
+                    **PERSONA_OWNER,
+                ),
+                _command(
+                    "manual-trigger",
+                    "desktop.manual-trigger",
+                    surface="desktop.panel",
+                    slot="actions",
+                    order=20,
+                    requiredCapabilities=["desktop.panel-action"],
+                    label={"fallback": "手动触发"},
+                    **GATEWAY_RUNTIME_OWNER,
+                ),
+            ]),
+            registry,
+        )
+        assert catalog is not None
+        invoked: list[str] = []
+        actions = registry.panel_actions(
+            catalog,
+            DesktopPanelActionContext(
+                invoke=invoked.append,
+                action_groups={
+                    "desktop.manual-trigger": (DesktopPanelAction("触发：巡检", lambda: None),),
+                },
+            ),
+        )
+
+        self.assertEqual([action.label for action in actions], ["人格目录", "触发：巡检"])
+        actions[0].callback()
+        self.assertEqual(invoked, ["desktop.open-role-directory"])
+
     def test_resolves_controlled_status_and_settings_contributions(self) -> None:
         catalog = parse_desktop_plugin_catalog(
             _payload(
@@ -265,6 +364,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                         "builtin.speech-status.v1",
                         label={"fallback": "语音服务"},
                         order=20,
+                        **SPEECH_OWNER,
                     ),
                     _status(
                         "performance-status",
@@ -272,6 +372,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                         "builtin.performance-status.v1",
                         label={"fallback": "性能监控"},
                         order=30,
+                        **PERFORMANCE_OWNER,
                     ),
                     _settings(label={"fallback": "桌面设置"}, order=40),
                 ]
@@ -304,8 +405,8 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                     ),
                     _status(
                         "missing-one",
-                        "manager.performance-status",
-                        "builtin.performance-status.v1",
+                        "manager.speech-status",
+                        "builtin.speech-status.v1",
                         plugin_id=plugin_id,
                         instance_id=instance_id,
                         requiredCapabilities=["desktop.status-card", "manager.contributions"],
@@ -328,11 +429,12 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             "speech-status",
             "manager.speech-status",
             "builtin.speech-status.v1",
+            **SPEECH_OWNER,
         )
         inactive = parse_desktop_plugin_catalog(
             _payload(
                 contributions=[contribution],
-                plugins=[_plugin("builtin:manager/desktop", "manager:desktop", status="inactive")],
+                plugins=[_plugin("builtin:manager/speech", "manager:speech", status="inactive")],
             )
         )
         mismatched = parse_desktop_plugin_catalog(
@@ -340,8 +442,8 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 contributions=[contribution],
                 plugins=[
                     _plugin(
-                        "builtin:manager/desktop",
-                        "manager:desktop",
+                        "builtin:manager/speech",
+                        "manager:speech",
                         manifest_id="builtin:manager/other",
                     )
                 ],
@@ -352,8 +454,8 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 contributions=[contribution],
                 plugins=[
                     _plugin(
-                        "builtin:manager/desktop",
-                        "manager:desktop",
+                        "builtin:manager/speech",
+                        "manager:speech",
                         hosts=["manager", "web"],
                     )
                 ],
@@ -368,8 +470,8 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         catalog = parse_desktop_plugin_catalog(
             _payload(
                 contributions=[
-                    _status("unknown-query", "manager.private", "builtin.speech-status.v1"),
-                    _status("unknown-renderer", "manager.speech-status", "package.custom.v1"),
+                    _status("unknown-query", "manager.private", "builtin.speech-status.v1", **SPEECH_OWNER),
+                    _status("unknown-renderer", "manager.speech-status", "package.custom.v1", **SPEECH_OWNER),
                     _settings("unknown-schema", schemaId="package.settings.v1"),
                     _settings("unknown-read", readCommandId="manager.private.read"),
                 ]
@@ -491,21 +593,23 @@ class DesktopPluginCatalogTest(unittest.TestCase):
 
         self.assertEqual(client.desktop_plugin_catalog(), empty_desktop_plugin_catalog())
 
-    def test_request_failure_returns_last_successful_catalog(self) -> None:
+    def test_request_failure_removes_last_successful_catalog(self) -> None:
         client = _CatalogManagerClient([_builtin_payload(4), URLError("offline")])
 
         accepted = client.desktop_plugin_catalog()
         fallback = client.desktop_plugin_catalog()
 
-        self.assertEqual(fallback, accepted)
+        self.assertTrue(accepted.available)
+        self.assertEqual(fallback, empty_desktop_plugin_catalog())
 
-    def test_invalid_payload_returns_last_successful_catalog(self) -> None:
+    def test_invalid_payload_removes_last_successful_catalog(self) -> None:
         cache = DesktopPluginCatalogCache()
         accepted = cache.accept_payload(_builtin_payload(3))
 
         fallback = cache.accept_payload({"code": 0, "data": {"schemaVersion": 99}})
 
-        self.assertEqual(fallback, accepted)
+        self.assertTrue(accepted.available)
+        self.assertEqual(fallback, empty_desktop_plugin_catalog())
 
     def test_older_revision_does_not_replace_newer_cache(self) -> None:
         cache = DesktopPluginCatalogCache()
@@ -596,18 +700,26 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         registry.register_command_handler(
             "trusted.open-panel",
             lambda context: executed.append(context.manager_url),
+            **TRUSTED_OWNER,
         )
         registry.register_hotkey_contract(
             "open-trusted-panel",
             "trusted.open-panel",
             "Ctrl+Alt+T",
+            **TRUSTED_OWNER,
         )
-        registry.register_theme_resource("trusted", "trusted.theme.v1", lambda _context: "dark")
+        registry.register_theme_resource(
+            "trusted",
+            "trusted.theme.v1",
+            lambda _context: "dark",
+            **TRUSTED_OWNER,
+        )
         registry.register_status_contract(
             "manager.trusted-status",
             "trusted.status.v1",
             query=lambda get_json: get_json("/api/trusted/status"),
             render=lambda payload: [("状态", str(payload["data"]["state"]))],
+            **TRUSTED_OWNER,
         )
         registry.register_settings_contract(
             "trusted.settings.v1",
@@ -617,21 +729,23 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             read=lambda _reader: {"enabled": True},
             render=lambda value: [("启用", "是" if value["enabled"] else "否")],
             open=lambda manager_url, open_url: open_url(f"{manager_url}/#/trusted"),
+            **TRUSTED_OWNER,
         )
         registry.freeze()
         catalog = parse_desktop_plugin_catalog(
             _payload(contributions=[
-                _command("open-trusted-panel", "trusted.open-panel"),
-                _tray("trusted-panel-menu", "open-trusted-panel"),
-                _hotkey("trusted-panel-hotkey", "open-trusted-panel", "Ctrl+Alt+T"),
-                _theme("trusted", "trusted.theme.v1"),
-                _status("trusted-status", "manager.trusted-status", "trusted.status.v1"),
+                _command("open-trusted-panel", "trusted.open-panel", **TRUSTED_OWNER),
+                _tray("trusted-panel-menu", "open-trusted-panel", **TRUSTED_OWNER),
+                _hotkey("trusted-panel-hotkey", "open-trusted-panel", "Ctrl+Alt+T", **TRUSTED_OWNER),
+                _theme("trusted", "trusted.theme.v1", **TRUSTED_OWNER),
+                _status("trusted-status", "manager.trusted-status", "trusted.status.v1", **TRUSTED_OWNER),
                 _settings(
                     "trusted-settings",
                     rendererId="trusted.settings.v1",
                     schemaId="trusted.settings.schema.v1",
                     readCommandId="manager.trusted-settings.read",
                     writeCommandId="manager.trusted-settings.write",
+                    **TRUSTED_OWNER,
                 ),
             ]),
             registry,
@@ -650,6 +764,29 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         )
         self.assertEqual(executed, ["http://127.0.0.1:8790"])
 
+    def test_trusted_registry_rejects_cross_plugin_contract_references(self) -> None:
+        attacker = {"plugin_id": "package:attacker", "instance_id": "manager:attacker"}
+        catalog = parse_desktop_plugin_catalog(
+            _payload(contributions=[
+                _command("borrow-open-webgui", "desktop.open-webgui", **attacker),
+                _tray("borrow-open-webgui-menu", "borrow-open-webgui", **attacker),
+                _hotkey("borrow-screenshot", "borrow-open-webgui", "Ctrl+Shift+S", **attacker),
+                _theme("dark", "builtin.desktop-theme.dark.v1", **attacker),
+                _status("borrow-speech", "manager.speech-status", "builtin.speech-status.v1", **attacker),
+                _settings("borrow-settings", **attacker),
+            ]),
+            create_builtin_desktop_extension_registry(),
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertEqual(catalog.commands, ())
+        self.assertEqual(catalog.menu_items, ())
+        self.assertEqual(catalog.hotkeys, ())
+        self.assertEqual(catalog.themes, ())
+        self.assertEqual(catalog.status_cards, ())
+        self.assertEqual(catalog.settings_sections, ())
+
     def test_trusted_extension_entry_points_are_explicit_and_loaded_before_freeze(self) -> None:
         registry = create_builtin_desktop_extension_registry(freeze=False)
         entry_point = MagicMock()
@@ -657,6 +794,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         entry_point.load.return_value = lambda target: target.register_command_handler(
             "trusted.entry-command",
             lambda _context: None,
+            **TRUSTED_OWNER,
         )
 
         with patch(
@@ -670,7 +808,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 ("trusted-example",),
             )
 
-        self.assertTrue(registry.has_command_handler("trusted.entry-command"))
+        self.assertTrue(registry.has_command_handler("trusted.entry-command", **TRUSTED_OWNER))
         registry.freeze()
         with self.assertRaises(RuntimeError):
             load_trusted_desktop_extensions(registry, ("trusted-example",))
@@ -797,7 +935,26 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         plugin_menu.actions()[1].trigger()
         self.assertEqual(executed, ["desktop.open-webgui", "desktop.open-settings"])
 
-    def test_catalog_failure_reuses_cached_menu_without_duplicates(self) -> None:
+    def test_fixed_webgui_action_is_only_present_while_catalog_is_unavailable(self) -> None:
+        root = QMenu()
+        recovery = root.addAction("打开 RabiRoute WebGUI")
+        refresh = root.addAction("刷新")
+
+        _sync_recovery_webgui_action(root, recovery, refresh, empty_desktop_plugin_catalog())
+        self.assertIn(recovery, root.actions())
+
+        _sync_recovery_webgui_action(
+            root,
+            recovery,
+            refresh,
+            DesktopPluginCatalog(2, 1, 1, (), available=True),
+        )
+        self.assertNotIn(recovery, root.actions())
+
+        _sync_recovery_webgui_action(root, recovery, refresh, empty_desktop_plugin_catalog())
+        self.assertEqual(root.actions(), [recovery, refresh])
+
+    def test_catalog_failure_removes_cached_plugin_menu(self) -> None:
         client = _CatalogManagerClient([_builtin_payload(4), URLError("offline")])
         root = QMenu()
         webgui = root.addAction("打开 RabiRoute WebGUI")
@@ -806,12 +963,13 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         plugin_menu = QMenu("插件", root)
 
         _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None, create_builtin_desktop_extension_registry())
-        first_actions = list(plugin_menu.actions())
-        _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None, create_builtin_desktop_extension_registry())
+        self.assertIn(plugin_menu.menuAction(), root.actions())
+        failed_catalog = client.desktop_plugin_catalog()
+        _sync_recovery_webgui_action(root, webgui, refresh, failed_catalog)
+        _rebuild_plugin_menu(root, plugin_menu, refresh, failed_catalog, lambda _handler: None, create_builtin_desktop_extension_registry())
 
-        self.assertEqual(root.actions(), [webgui, plugin_menu.menuAction(), refresh, quit_action])
-        self.assertEqual(root.actions().count(plugin_menu.menuAction()), 1)
-        self.assertEqual(plugin_menu.actions(), first_actions)
+        self.assertEqual(root.actions(), [webgui, refresh, quit_action])
+        self.assertEqual(plugin_menu.actions(), [])
 
     def test_first_failure_does_not_insert_plugin_menu(self) -> None:
         client = _CatalogManagerClient([URLError("offline")])
@@ -882,6 +1040,41 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(results, [empty_desktop_plugin_catalog()])
         self.assertEqual(callback_threads, [self.app.thread()])
+
+    def test_catalog_runtime_error_returns_empty_catalog_and_revokes_old_contributions(self) -> None:
+        registry = create_builtin_desktop_extension_registry()
+        root = QMenu()
+        recovery = root.addAction("打开 RabiRoute WebGUI")
+        refresh = root.addAction("刷新")
+        quit_action = root.addAction("退出")
+        plugin_menu = QMenu("插件", root)
+        old_catalog = parse_desktop_plugin_catalog(_builtin_payload(4), registry)
+        assert old_catalog is not None
+        applied: list[DesktopPluginCatalog] = []
+
+        _sync_recovery_webgui_action(root, recovery, refresh, old_catalog)
+        _rebuild_plugin_menu(root, plugin_menu, refresh, old_catalog, lambda _handler: None, registry)
+        self.assertIn(plugin_menu.menuAction(), root.actions())
+        self.assertNotIn(recovery, root.actions())
+
+        def completed(_task, catalog: DesktopPluginCatalog) -> None:
+            applied.append(catalog)
+            _sync_recovery_webgui_action(root, recovery, refresh, catalog)
+            _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, lambda _handler: None, registry)
+
+        _start_desktop_plugin_catalog(
+            _RuntimeErrorCatalogManager(),  # type: ignore[arg-type]
+            completed,
+        )
+
+        deadline = time.perf_counter() + 1.0
+        while not applied and time.perf_counter() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+
+        self.assertEqual(applied, [empty_desktop_plugin_catalog()])
+        self.assertEqual(root.actions(), [recovery, refresh, quit_action])
+        self.assertEqual(plugin_menu.actions(), [])
 
 
 if __name__ == "__main__":

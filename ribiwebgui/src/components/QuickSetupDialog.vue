@@ -1199,7 +1199,7 @@ async function apply() {
                     Copilot CLI 仍是实验适配；同一会话重复注入还需要单独烟测确认。
                   </v-alert>
                   <v-alert v-if="selectedAgent === 'astrbot'" type="info" variant="tonal" density="compact" class="mb-3">
-                    AstrBot 会优先绑定 ChatUI 项目和会话；未选择会话时才回退到 rabiroute_agent 插件默认管线。
+                    AstrBot 必须绑定 ChatUI 项目和会话；消息只通过 /api/chat/send 投递。
                   </v-alert>
                   <v-alert v-if="selectedAgent === 'marvis'" type="info" variant="tonal" density="compact" class="mb-3">
                     Marvis 当前是人工接力模式：RabiRoute 会打开应用并复制 prompt，不会绑定会话线程。

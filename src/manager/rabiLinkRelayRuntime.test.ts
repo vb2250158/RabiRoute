@@ -132,7 +132,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
   assert.equal(finishedBody?.statusCode, 200);
   assert.deepEqual(JSON.parse(Buffer.from(String(finishedBody?.bodyBase64), "base64").toString("utf8")), { local: true });
 
-  runtime.stop();
+  await runtime.stop();
   assert.equal(runtime.status().state, "disabled");
 });
 
@@ -645,4 +645,96 @@ test("global Relay runtime reports incomplete configuration without making a req
     localSpeechUrl: "http://127.0.0.1:8781"
   });
   assert.equal(runtime.status().state, "incomplete");
+});
+
+
+test("stop aborts active local proxies, suppresses completion writes, and permits restart", async (t) => {
+  let slowRequestStarted = false;
+  let slowRequestClosed = false;
+  const localWebgui = http.createServer((request, response) => {
+    if (request.url === "/slow") {
+      slowRequestStarted = true;
+      response.once("close", () => { slowRequestClosed = true; });
+      return;
+    }
+    if (request.url === "/fast") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ restarted: true }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const localPort = await listen(localWebgui);
+  t.after(() => close(localWebgui));
+
+  let phase: "stopping" | "restarted" = "stopping";
+  let slowClaimed = false;
+  let fastClaimed = false;
+  const completionIds: string[] = [];
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/api/rabilink/events") {
+      openRelayEvents(response);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
+      let requests: Array<{ id: string; method: string; path: string }> = [];
+      if (phase === "stopping" && !slowClaimed) {
+        slowClaimed = true;
+        requests = [{ id: "request-stop", method: "GET", path: "/slow" }];
+      } else if (phase === "restarted" && !fastClaimed) {
+        fastClaimed = true;
+        requests = [{ id: "request-restart", method: "GET", path: "/fast" }];
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, requests }));
+      return;
+    }
+    const completion = /^\/worker\/webgui-requests\/([^/]+)\/response$/.exec(url.pathname);
+    if (request.method === "POST" && completion) {
+      completionIds.push(decodeURIComponent(completion[1]));
+      request.resume();
+      request.on("end", () => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+
+  const runtime = new RabiLinkRelayRuntime({ localRequestTimeoutMs: 10_000 });
+  t.after(() => runtime.stop());
+  const config = {
+    enabled: true,
+    url: `http://127.0.0.1:${relayPort}`,
+    token: "relay-app-token",
+    deviceId: "pc-stop",
+    deviceGuid: "guid-stop",
+    deviceName: "Stop PC",
+    claimWaitMs: 60_000,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`,
+    speechProxyEnabled: false,
+    localSpeechUrl: "http://127.0.0.1:8781"
+  };
+  await runtime.sync(config);
+  await waitFor(() => slowRequestStarted);
+
+  const firstStop = runtime.stop();
+  const queuedSync = runtime.sync(config);
+  const secondStop = runtime.stop();
+  assert.strictEqual(firstStop, secondStop);
+  await Promise.all([firstStop, queuedSync]);
+  assert.equal(runtime.status().state, "disabled");
+  await waitFor(() => slowRequestClosed);
+  assert.equal(completionIds.length, 0);
+
+  phase = "restarted";
+  await runtime.sync(config);
+  await waitFor(() => completionIds.includes("request-restart"));
+  assert.equal(completionIds.includes("request-stop"), false);
+  assert.equal(runtime.status().state, "online");
+  await runtime.stop();
 });

@@ -4,8 +4,8 @@
  * Bridges RabiRoute notifications into AstrBot's LLM pipeline,
  * analogous to how codexRuntime.ts bridges to Codex.
  *
- * Requires the `rabiroute_agent` AstrBot plugin to be installed
- * (places it in %USERPROFILE%\.astrbot\data\plugins\rabiroute_agent\ on Windows).
+ * Requires an explicit AstrBot ChatUI session ID. Delivery fails closed when
+ * the new `/api/chat/send` contract is not configured.
  */
 
 import { config } from "../config.js";
@@ -138,14 +138,17 @@ async function deliverOnce(message: string): Promise<void> {
     const token = await login();
     const baseUrl = getAstrBotUrl().replace(/\/$/, "");
     const sessionId = getAstrBotSessionId().trim();
-    const reply = sessionId
-      ? await deliverToChatUiSession(baseUrl, token, sessionId, message)
-      : await deliverToLegacyPlugin(baseUrl, token, message);
+    if (!sessionId) {
+      throw new Error(
+        "ASTRBOT_SESSION_ID is required. Bind an AstrBot ChatUI session before sending messages."
+      );
+    }
+    const reply = await deliverToChatUiSession(baseUrl, token, sessionId, message);
 
     writeState({
       ...state,
-      monitorThreadId: sessionId ? `astrbot-chatui:${sessionId}` : "astrbot-plugin:rabiroute_agent",
-      monitorThreadName: sessionId ? `AstrBot ChatUI ${sessionId}` : "AstrBot rabiroute_agent",
+      monitorThreadId: `astrbot-chatui:${sessionId}`,
+      monitorThreadName: `AstrBot ChatUI ${sessionId}`,
       monitorThreadSource: baseUrl,
       notificationCount: (state.notificationCount ?? 0) + 1,
       lastNotificationAt: new Date().toISOString(),
@@ -171,34 +174,6 @@ async function deliverOnce(message: string): Promise<void> {
     });
     throw error;
   }
-}
-
-async function deliverToLegacyPlugin(baseUrl: string, token: string, message: string): Promise<string> {
-  const chatUrl = `${baseUrl}/api/plug/rabiroute_agent/chat`;
-  const response = await fetch(chatUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ message }),
-  });
-
-  const text = await response.text();
-  let body: { response?: string; error?: string } = {};
-  try {
-    body = JSON.parse(text);
-  } catch {
-    // keep as raw text
-  }
-
-  if (!response.ok || body.error) {
-    throw new Error(
-      body.error || `AstrBot plugin chat failed (HTTP ${response.status}): ${text}`
-    );
-  }
-
-  return body.response ?? "";
 }
 
 async function deliverToChatUiSession(baseUrl: string, token: string, sessionId: string, message: string): Promise<string> {

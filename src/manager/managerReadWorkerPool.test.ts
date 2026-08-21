@@ -293,3 +293,54 @@ test("manager read workers build performance summaries and JSON outside the main
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("manager read worker pools stop active and queued work, reject new work, and restart", async () => {
+  const roleDir = voiceArchiveFixture(4, 250);
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });
+  try {
+    const active = pool.queryPersonaVoiceTranscripts(roleDir, {
+      includeArchives: true,
+      includeDetails: true,
+      limit: 200
+    });
+    const queued = pool.queryPersonaVoiceTranscripts(roleDir, {
+      includeArchives: true,
+      includeDetails: true,
+      from: 1,
+      limit: 200
+    });
+    assert.equal(pool.status().active, 1);
+    assert.equal(pool.status().queued, 1);
+
+    const firstStop = pool.stop();
+    const secondStop = pool.stop();
+    assert.strictEqual(secondStop, firstStop);
+    await assert.rejects(
+      active,
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
+    );
+    await assert.rejects(
+      queued,
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
+    );
+    await firstStop;
+    assert.equal(pool.status().active, 0);
+    assert.equal(pool.status().queued, 0);
+    assert.equal(pool.status().workers, 0);
+    await assert.rejects(
+      pool.queryPersonaVoiceTranscripts(roleDir, { includeArchives: true, includeDetails: false }),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
+    );
+
+    pool.start();
+    const restarted = await pool.queryPersonaVoiceTranscripts(roleDir, {
+      includeArchives: true,
+      includeDetails: false,
+      limit: 20
+    });
+    assert.equal(restarted.matchedCount, 1_000);
+  } finally {
+    await pool.stop();
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
+});

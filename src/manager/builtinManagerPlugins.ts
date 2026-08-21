@@ -3,6 +3,34 @@ import type { ManagerPluginDefinition } from "../runtime/managerPluginRuntime.js
 import type { RabiUiContribution } from "../runtime/contributionRegistry.js";
 import { MESSAGE_ADAPTER_CONTROL_CONTRIBUTIONS } from "./messageAdapterControl.js";
 
+
+type ManagerPluginDependencyContract = {
+  requires?: readonly string[];
+  optional?: readonly string[];
+};
+
+const MANAGER_PLUGIN_DEPENDENCIES: Readonly<Record<string, ManagerPluginDependencyContract>> = {
+  "bilibili-history": { requires: ["manager.core", "manager.persona"] },
+  "route-control": { requires: ["manager.core", "manager.gateway-runtime"] },
+  "message-adapter-control": { requires: ["manager.core", "manager.gateway-runtime"] },
+  "agent-state-control": { requires: ["manager.core", "manager.gateway-runtime"] },
+  "agent-thread-control": { requires: ["manager.core", "manager.agent-adapter-catalog"] },
+  "agent-communication": { requires: ["manager.core", "manager.agent-adapter-catalog"] },
+  "rabilink-relay": { requires: ["manager.core", "manager.persona"] },
+  "memory-consolidation": { requires: ["manager.core", "manager.persona"] },
+  "message-processing-automation": { requires: ["manager.core", "manager.message-processing-control"] },
+  "plan-feedback-delivery": { requires: ["manager.core", "manager.message-processing-control"] },
+  "napcat-supervisor": { requires: ["manager.core", "manager.napcat-control"] },
+  diagnostics: {
+    requires: ["manager.core"],
+    optional: [
+      "manager.gateway-runtime",
+      "manager.performance",
+      "manager.message-processing-control"
+    ]
+  }
+};
+
 const DIAGNOSTICS_CONTRIBUTIONS: readonly RabiUiContribution[] = [
   {
     kind: "page",
@@ -34,6 +62,12 @@ function plugin(
   contributions: readonly RabiUiContribution[]
 ): ManagerPluginDefinition {
   const contributionHosts = new Set(contributions.flatMap(contribution => contribution.hosts));
+  const provides = [`manager.${id}`];
+  const dependency = MANAGER_PLUGIN_DEPENDENCIES[id];
+  const requires = id === "core"
+    ? []
+    : [...new Set(dependency?.requires ?? ["manager.core"])];
+  const optional = [...new Set(dependency?.optional ?? [])];
   return {
     instanceId: `manager:${id}`,
     manifest: {
@@ -46,9 +80,15 @@ function plugin(
         ...(contributionHosts.has("web") ? ["web" as const] : []),
         ...(contributionHosts.has("desktop") ? ["desktop" as const] : [])
       ],
-      ...(contributions.length ? { capabilities: ["manager.contributions"] } : {})
+      capabilities: [
+        ...provides,
+        ...(contributions.length ? ["manager.contributions"] : [])
+      ]
     },
     scope: "global",
+    provides,
+    requires,
+    optional,
     contributions
   };
 }
@@ -119,6 +159,18 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         routeId: "global.docs",
         icon: "mdi-book-open-page-variant-outline",
         slot: "footer",
+        hosts: ["web"],
+        order: 90
+      },
+      {
+        kind: "command",
+        surface: "web.commands",
+        id: "save-page",
+        label: { fallback: "保存" },
+        handlerId: "web.save-page",
+        requiredCapabilities: ["web.command"],
+        icon: "mdi-content-save",
+        slot: "topbar-primary",
         hosts: ["web"],
         order: 90
       },
@@ -236,6 +288,39 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         slot: "route",
         hosts: ["web"],
         order: 46
+      },
+      {
+        kind: "command",
+        surface: "desktop.panel",
+        id: "open-role-directory",
+        label: { fallback: "人格目录" },
+        handlerId: "desktop.open-role-directory",
+        slot: "persona",
+        hosts: ["desktop"],
+        requiredCapabilities: ["desktop.panel-action"],
+        order: 10
+      },
+      {
+        kind: "command",
+        surface: "desktop.panel",
+        id: "open-plan-directory",
+        label: { fallback: "计划目录" },
+        handlerId: "desktop.open-plan-directory",
+        slot: "persona",
+        hosts: ["desktop"],
+        requiredCapabilities: ["desktop.panel-action"],
+        order: 20
+      },
+      {
+        kind: "command",
+        surface: "desktop.panel",
+        id: "open-memory-directory",
+        label: { fallback: "记忆目录" },
+        handlerId: "desktop.open-memory-directory",
+        slot: "persona",
+        hosts: ["desktop"],
+        requiredCapabilities: ["desktop.panel-action"],
+        order: 30
       }
     ]),
     plugin("speech", "RabiSpeech Manager", [
@@ -368,6 +453,17 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
       },
       {
         kind: "command",
+        surface: "desktop.lifecycle",
+        id: "system-selection",
+        label: { fallback: "系统选中文本" },
+        handlerId: "desktop.system-selection",
+        slot: "selection",
+        hosts: ["desktop"],
+        requiredCapabilities: ["desktop.lifecycle"],
+        order: 35
+      },
+      {
+        kind: "command",
         surface: "desktop.commands",
         id: "pin-clipboard-image",
         label: { fallback: "贴出剪贴板图片" },
@@ -408,9 +504,80 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         order: 20
       }
     ]),
-    plugin("gateway-runtime", "RabiRoute Gateway Runtime", []),
+    plugin("gateway-runtime", "RabiRoute Gateway Runtime", [
+      {
+        kind: "command",
+        surface: "desktop.panel",
+        id: "open-runtime-directory",
+        label: { fallback: "状态目录" },
+        handlerId: "desktop.open-runtime-directory",
+        slot: "runtime",
+        hosts: ["desktop"],
+        requiredCapabilities: ["desktop.panel-action"],
+        order: 40
+      },
+      {
+        kind: "command",
+        surface: "desktop.panel",
+        id: "manual-trigger",
+        label: { fallback: "手动触发" },
+        handlerId: "desktop.manual-trigger",
+        slot: "runtime",
+        hosts: ["desktop"],
+        requiredCapabilities: ["desktop.panel-action"],
+        order: 60
+      }
+    ]),
     plugin("bilibili-history", "Bilibili History", []),
-    plugin("route-control", "Route Control", []),
+    plugin("route-control", "Route Control", [
+      {
+        kind: "command",
+        surface: "web.commands",
+        id: "quick-setup",
+        label: { fallback: "快速配置" },
+        handlerId: "web.quick-setup",
+        requiredCapabilities: ["web.command"],
+        icon: "mdi-lightning-bolt-outline",
+        slot: "sidebar-footer-primary",
+        hosts: ["web"],
+        order: 10
+      },
+      {
+        kind: "command",
+        surface: "web.commands",
+        id: "add-route",
+        label: { fallback: "新增航线" },
+        handlerId: "web.add-route",
+        requiredCapabilities: ["web.command"],
+        icon: "mdi-plus",
+        slot: "topbar-primary",
+        hosts: ["web"],
+        order: 20
+      },
+      {
+        kind: "command",
+        surface: "web.commands",
+        id: "open-manager-config",
+        label: { fallback: "打开配置目录" },
+        handlerId: "web.open-manager-config",
+        requiredCapabilities: ["web.command"],
+        icon: "mdi-folder-cog-outline",
+        slot: "sidebar-footer",
+        hosts: ["web"],
+        order: 30
+      },
+      {
+        kind: "command",
+        surface: "desktop.panel",
+        id: "open-project-directory",
+        label: { fallback: "项目目录" },
+        handlerId: "desktop.open-project-directory",
+        slot: "route",
+        hosts: ["desktop"],
+        requiredCapabilities: ["desktop.panel-action"],
+        order: 35
+      }
+    ]),
     plugin("message-adapter-control", "Message Adapter Control", MESSAGE_ADAPTER_CONTROL_CONTRIBUTIONS),
     plugin("agent-adapter-catalog", "Agent Adapter Catalog", []),
     plugin("agent-state-control", "Agent State Control", []),

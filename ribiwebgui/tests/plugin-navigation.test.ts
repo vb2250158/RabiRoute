@@ -17,12 +17,26 @@ const rendererByRoute: Readonly<Record<string, string>> = {
   "global.docs": "builtin.web-page.docs.v1"
 };
 
-function page(routeId: string, instanceId: string, rendererId = rendererByRoute[routeId] ?? "unknown.renderer"): unknown {
+type PluginOwner = Readonly<{
+  instanceId: string;
+  pluginId: string;
+}>;
+
+function builtinOwner(id: string): PluginOwner {
+  return { instanceId: `manager:${id}`, pluginId: `builtin:manager/${id}` };
+}
+
+function page(
+  routeId: string,
+  owner: PluginOwner,
+  rendererId = rendererByRoute[routeId] ?? "unknown.renderer"
+): unknown {
   return {
     kind: "page",
+    surface: "web.pages",
     id: `${routeId}-page`,
-    instanceId,
-    pluginId: `package:${instanceId}`,
+    instanceId: owner.instanceId,
+    pluginId: owner.pluginId,
     routeId,
     rendererId,
     hosts: ["web"]
@@ -31,7 +45,7 @@ function page(routeId: string, instanceId: string, rendererId = rendererByRoute[
 
 function navigation(options: {
   id: string;
-  instanceId: string;
+  owner: PluginOwner;
   routeId: string;
   label: string;
   icon: string;
@@ -43,8 +57,8 @@ function navigation(options: {
     kind: options.kind ?? "navigation",
     surface: "web.navigation",
     id: options.id,
-    instanceId: options.instanceId,
-    pluginId: `package:${options.instanceId}`,
+    instanceId: options.owner.instanceId,
+    pluginId: options.owner.pluginId,
     label: { fallback: options.label },
     routeId: options.routeId,
     icon: options.icon,
@@ -55,7 +69,7 @@ function navigation(options: {
 }
 
 function pair(options: Parameters<typeof navigation>[0]): unknown[] {
-  return [page(options.routeId, options.instanceId), navigation(options)];
+  return [page(options.routeId, options.owner), navigation(options)];
 }
 
 test("Web navigation is empty before a successful plugin catalog", () => {
@@ -70,10 +84,10 @@ test("Web navigation is empty before a successful plugin catalog", () => {
 test("Web navigation resolves activated page routes and registered slots", () => {
   const selected = "Main /../?route=#one";
   const groups = buildWebNavigation([
-    ...pair({ id: "overview", instanceId: "manager:core", routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 }),
-    ...pair({ id: "persona-sync", instanceId: "manager:persona", routeId: "route.persona-sync", label: "人格同步", icon: "mdi-folder-sync-outline", slot: "persona-secondary", order: 40 }),
-    ...pair({ id: "settings", instanceId: "manager:core", routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 80 }),
-    ...pair({ id: "docs", instanceId: "manager:core", routeId: "global.docs", label: "手册", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 90 })
+    ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 }),
+    ...pair({ id: "persona-sync", owner: builtinOwner("persona"), routeId: "route.persona-sync", label: "人格同步", icon: "mdi-folder-sync-outline", slot: "persona-secondary", order: 40 }),
+    ...pair({ id: "settings", owner: builtinOwner("core"), routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 80 }),
+    ...pair({ id: "docs", owner: builtinOwner("core"), routeId: "global.docs", label: "手册", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 90 })
   ], selected);
 
   assert.deepEqual(groups.routePrimary.map(item => item.to), [`/routes/${encodeURIComponent(selected)}/overview`]);
@@ -84,13 +98,14 @@ test("Web navigation resolves activated page routes and registered slots", () =>
 
 test("Web navigation requires an exact registered page owner, renderer, slot, and icon", () => {
   const groups = buildWebNavigation([
-    page("global.performance", "manager:other"),
-    navigation({ id: "owner-mismatch", instanceId: "manager:performance", routeId: "global.performance", label: "性能", icon: "mdi-chart-timeline-variant", slot: "utility", order: 10 }),
-    page("global.settings", "manager:core", "plugin.remote-component.v1"),
-    navigation({ id: "unknown-renderer", instanceId: "manager:core", routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 20 }),
-    page("global.docs", "manager:docs"),
-    navigation({ id: "unknown-icon", instanceId: "manager:docs", routeId: "global.docs", label: "手册", icon: "mdi-remote-plugin", slot: "footer", order: 30 }),
-    navigation({ id: "unknown-route", instanceId: "manager:core", routeId: "plugin.remote-route", label: "远程", icon: "mdi-cog-outline", slot: "utility", order: 40 })
+    page("global.performance", builtinOwner("other")),
+    navigation({ id: "owner-mismatch", owner: builtinOwner("performance"), routeId: "global.performance", label: "性能", icon: "mdi-chart-timeline-variant", slot: "utility", order: 10 }),
+    page("global.settings", builtinOwner("core"), "plugin.remote-component.v1"),
+    navigation({ id: "unknown-renderer", owner: builtinOwner("core"), routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 20 }),
+    page("global.docs", builtinOwner("core")),
+    navigation({ id: "cross-plugin", owner: { instanceId: "manager:core", pluginId: "package:other" }, routeId: "global.docs", label: "手册", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 25 }),
+    navigation({ id: "unknown-icon", owner: builtinOwner("core"), routeId: "global.docs", label: "手册", icon: "mdi-remote-plugin", slot: "footer", order: 30 }),
+    navigation({ id: "unknown-route", owner: builtinOwner("core"), routeId: "plugin.remote-route", label: "远程", icon: "mdi-cog-outline", slot: "utility", order: 40 })
   ], "main");
 
   assert.equal(groups.utility.length, 0);
@@ -100,8 +115,9 @@ test("Web navigation requires an exact registered page owner, renderer, slot, an
 test("trusted extensions can register a new route, renderer, path resolver, slot, and icon", () => {
   const routeId = "trusted.analytics";
   const rendererId = "trusted.web-page.analytics.v1";
-  const instanceId = "manager:trusted-analytics";
+  const owner = { instanceId: "manager:trusted-analytics", pluginId: "package:trusted-analytics" };
   const dispose = registerTrustedWebPage({
+    ...owner,
     routeId,
     rendererId,
     loader: async () => defineComponent({ template: "<div>analytics</div>" }),
@@ -120,10 +136,10 @@ test("trusted extensions can register a new route, renderer, path resolver, slot
 
   try {
     const groups = buildWebNavigation([
-      page(routeId, instanceId, rendererId),
+      page(routeId, owner, rendererId),
       navigation({
         id: "trusted-analytics",
-        instanceId,
+        owner,
         routeId,
         label: "可信分析",
         icon: "mdi-flask-outline",
@@ -142,8 +158,8 @@ test("trusted extensions can register a new route, renderer, path resolver, slot
 
 test("accepted navigation keeps catalog ordering and unscoped Route recovery paths", () => {
   const groups = buildWebNavigation([
-    ...pair({ id: "adapters", instanceId: "manager:core", routeId: "route.adapters", label: "适配器", icon: "mdi-puzzle-outline", slot: "route-primary", order: 20 }),
-    ...pair({ id: "overview", instanceId: "manager:core", routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 })
+    ...pair({ id: "adapters", owner: builtinOwner("message-adapter-control"), routeId: "route.adapters", label: "适配器", icon: "mdi-puzzle-outline", slot: "route-primary", order: 20 }),
+    ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 })
   ], "");
 
   assert.deepEqual(groups.routePrimary.map(item => [item.id, item.to]), [

@@ -114,9 +114,7 @@ test("builtin Desktop hotkeys reference commands from the same plugin instance",
 test("builtin Manager plugins without presentation entries publish no UI contributions", () => {
   const definitions = builtinManagerPluginDefinitions();
   const serviceInstanceIds = [
-    "manager:gateway-runtime",
     "manager:bilibili-history",
-    "manager:route-control",
     "manager:agent-adapter-catalog",
     "manager:agent-state-control",
     "manager:agent-thread-control",
@@ -147,7 +145,7 @@ test("builtin Manager plugins without presentation entries publish no UI contrib
 });
 
 
-test("built-in Manager manifests expose only actual target hosts and contribution capability", () => {
+test("built-in Manager manifests expose target hosts and declared capabilities", () => {
   const definitions = builtinManagerPluginDefinitions();
   for (const definition of definitions) {
     const contributionHosts = new Set((definition.contributions ?? []).flatMap(item => item.hosts));
@@ -158,7 +156,10 @@ test("built-in Manager manifests expose only actual target hosts and contributio
     ]);
     assert.deepEqual(
       definition.manifest.capabilities ?? [],
-      definition.contributions?.length ? ["manager.contributions"] : []
+      [
+        ...(definition.provides ?? []),
+        ...(definition.contributions?.length ? ["manager.contributions"] : [])
+      ]
     );
   }
 });

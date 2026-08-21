@@ -38,6 +38,9 @@ function desiredRevision(definition: ManagerPluginDefinition, enabled: boolean):
       instanceId: definition.instanceId,
       manifest: definition.manifest,
       scope: definition.scope ?? "global",
+      provides: definition.provides ?? [],
+      requires: definition.requires ?? [],
+      optional: definition.optional ?? [],
       missingCapabilities: definition.missingCapabilities ?? [],
       contributions: definition.contributions ?? [],
       enabled

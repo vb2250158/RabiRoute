@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import sys
 import unittest
 from pathlib import Path
+
+TRAY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TRAY_ROOT))
 
 from rabiroute_tray.desktop_refresh import DesktopRefreshService
 from rabiroute_tray.manager_client import ManagerSnapshot

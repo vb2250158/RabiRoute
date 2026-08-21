@@ -23,7 +23,7 @@ export type RabiApiContext = {
   writeConfig: (config: GatewayConfigFile) => GatewayConfigFile;
   loadRuntimes: () => void;
   syncRunningGateways: () => void;
-  syncRabiLinkRelay: () => void;
+  syncRabiLinkRelay: () => Promise<void>;
   scanAgentAdapters: () => Promise<Record<string, unknown>>;
 };
 
@@ -605,7 +605,7 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
   }
   if (request.method === "PATCH" && pathname === "/api/rabi/identity") {
     void readJsonBody<Partial<{ rabiName: string; rabiLinkRelay: unknown }>>(request)
-      .then((body) => {
+      .then(async (body) => {
         const current = ctx.globalConfig.read();
         const relayPatch = body.rabiLinkRelay && typeof body.rabiLinkRelay === "object" && !Array.isArray(body.rabiLinkRelay)
           ? body.rabiLinkRelay as Record<string, unknown>
@@ -617,7 +617,7 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
         const beforeRelay = JSON.stringify(current.rabiLinkRelay);
         const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any });
         const relayChanged = beforeRelay !== JSON.stringify(config.rabiLinkRelay);
-        ctx.syncRabiLinkRelay();
+        await ctx.syncRabiLinkRelay();
         if (relayChanged) {
           for (const runtime of ctx.runtimes()) {
             if (gatewayAdapterTypes(runtime.definition).includes("rabilink")) {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ManagerPluginDefinition,
   ManagerPluginRuntimeMount
@@ -58,6 +59,120 @@ function combinedRollbackError(activationError: unknown, rollbackError: unknown)
       `Activation failed: ${sanitizePluginErrorMessage(activationError)}; rollback failed: ${sanitizePluginErrorMessage(rollbackError)}`
     )
   };
+}
+
+function normalizedCapabilities(
+  values: readonly string[] | undefined,
+  field: string,
+  instanceId: string
+): string[] {
+  const normalized = (values ?? []).map(value => value.trim()).filter(Boolean);
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error(`Duplicate ${field} capability in Manager plugin ${instanceId}.`);
+  }
+  return normalized;
+}
+
+function planDesiredDependencies(desired: readonly DesiredManagerPlugin[]): DesiredManagerPlugin[] {
+  const enabled = desired.filter(item => item.enabled);
+  const disabled = desired.filter(item => !item.enabled);
+  const providerByCapability = new Map<string, DesiredManagerPlugin>();
+
+  for (const item of enabled) {
+    const instanceId = item.definition.instanceId;
+    for (const capability of normalizedCapabilities(item.definition.provides, "provided", instanceId)) {
+      const previous = providerByCapability.get(capability);
+      if (previous) {
+        throw new Error(
+          `Manager capability ${capability} has multiple enabled providers: ${previous.definition.instanceId}, ${instanceId}`
+        );
+      }
+      providerByCapability.set(capability, item);
+    }
+  }
+
+  const dependencyRevisionByInstance = new Map<string, string>();
+  const dependencyRevision = (
+    item: DesiredManagerPlugin,
+    stack: ReadonlySet<string> = new Set()
+  ): string => {
+    const instanceId = item.definition.instanceId;
+    const cached = dependencyRevisionByInstance.get(instanceId);
+    if (cached) return cached;
+    if (stack.has(instanceId)) return `cycle:${instanceId}@${item.revision}`;
+
+    const nextStack = new Set(stack);
+    nextStack.add(instanceId);
+    const dependencyTokens = [
+      ...normalizedCapabilities(item.definition.requires, "required", instanceId)
+        .map(capability => {
+          const provider = providerByCapability.get(capability);
+          return `required:${capability}@${provider ? dependencyRevision(provider, nextStack) : "missing"}`;
+        }),
+      ...normalizedCapabilities(item.definition.optional, "optional", instanceId)
+        .map(capability => {
+          const provider = providerByCapability.get(capability);
+          return `optional:${capability}@${provider ? dependencyRevision(provider, nextStack) : "missing"}`;
+        })
+    ];
+    const digest = createHash("sha256")
+      .update(JSON.stringify({
+        revision: item.revision,
+        missingCapabilities: item.definition.missingCapabilities ?? [],
+        dependencies: dependencyTokens
+      }))
+      .digest("hex");
+    const resolved = `${item.revision}:dependency-sha256:${digest}`;
+    dependencyRevisionByInstance.set(instanceId, resolved);
+    return resolved;
+  };
+
+  const pending = [...enabled];
+  const available = new Set<string>();
+  const ordered: DesiredManagerPlugin[] = [];
+
+  while (pending.length) {
+    const findReady = (respectOptional: boolean): number => pending.findIndex(item => {
+      const definition = item.definition;
+      if ((definition.missingCapabilities ?? []).length) return false;
+      const requirements = normalizedCapabilities(definition.requires, "required", definition.instanceId);
+      if (!requirements.every(capability => available.has(capability))) return false;
+      if (!respectOptional) return true;
+      return normalizedCapabilities(definition.optional, "optional", definition.instanceId)
+        .every(capability => !providerByCapability.has(capability) || available.has(capability));
+    });
+    let readyIndex = findReady(true);
+    if (readyIndex < 0) readyIndex = findReady(false);
+    if (readyIndex < 0) break;
+    const [item] = pending.splice(readyIndex, 1);
+    const definition = item!.definition;
+    ordered.push({
+      ...item!,
+      definition: { ...definition, missingCapabilities: [] },
+      revision: dependencyRevision(item!)
+    });
+    for (const capability of normalizedCapabilities(definition.provides, "provided", definition.instanceId)) {
+      available.add(capability);
+    }
+  }
+
+  const waiting = pending.map(item => {
+    const definition = item.definition;
+    const requirements = normalizedCapabilities(definition.requires, "required", definition.instanceId);
+    const missingCapabilities = [
+      ...new Set([
+        ...(definition.missingCapabilities ?? []).map(value => value.trim()).filter(Boolean),
+        ...requirements.filter(capability => !available.has(capability))
+      ])
+    ];
+    return {
+      ...item,
+      definition: { ...definition, missingCapabilities },
+      revision: `${dependencyRevision(item)}:missing:${missingCapabilities.join(",")}`
+    };
+  });
+
+  return [...ordered, ...waiting, ...disabled];
 }
 
 function cloneStatus(status: ManagerPluginReconciliationStatus): ManagerPluginReconciliationStatus {
@@ -168,18 +283,22 @@ export class ManagerPluginReconciler {
 
   private normalizeDesired(requested: readonly DesiredManagerPlugin[]): DesiredManagerPlugin[] {
     const seen = new Set<string>();
-    return requested.map(item => {
+    const normalized = requested.map(item => {
       const instanceId = normalizedInstanceId(item.definition);
       if (seen.has(instanceId)) {
         throw new Error(`Duplicate desired manager plugin instance: ${instanceId}`);
       }
       seen.add(instanceId);
+      const provides = normalizedCapabilities(item.definition.provides, "provided", instanceId);
+      const requires = normalizedCapabilities(item.definition.requires, "required", instanceId);
+      const optional = normalizedCapabilities(item.definition.optional, "optional", instanceId);
       return {
-        definition: { ...item.definition, instanceId },
+        definition: { ...item.definition, instanceId, provides, requires, optional },
         enabled: item.enabled,
         revision: normalizedRevision(item.revision, instanceId)
       };
     });
+    return planDesiredDependencies(normalized);
   }
 
   private async applyBatch(

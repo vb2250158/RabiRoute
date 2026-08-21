@@ -6,7 +6,7 @@
 
 # RabiRoute 项目功能手册
 
-> 状态：当前事实地图。Manager 已有 26 个内置插件定义及对应 hook；统一验证已于 2026-08-21 通过，外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
+> 状态：当前事实地图。Manager 已有 26 个内置插件定义及对应 hook；外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
 
 本文是 RabiRoute 的通用项目功能手册。它面向产品设计、GUI 改造、代码维护、排障和新 Agent 交接，不只服务某一个页面或某一次需求。
 
@@ -48,13 +48,13 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | Outbox / Send | 接收带发送 Agent 类型与会话 ID 的明确请求，校验 Route、渠道、目标参数、内容和策略后发送并保存追溯回执 | 让处理端绕过 RabiRoute 写平台，或从来源上下文猜测目标 | `src/agentSend.ts`、`src/outbox.ts` |
 | 消息处理看板 | 保存消息发送需求、处理阶段、转交、决定和 Outbox 回执；把计划进展重新通知来源会话 | 代替 Agent 回答、从日志猜测状态、把普通群消息全部设为必须回复 | `src/messageProcessing/board.ts`、`src/messageProcessing/persistence.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/components/MessageProcessingBoard.vue` |
 | Manager 控制面 | 管配置、进程、扫描、状态、WebGUI 静态资源和 HTTP API | 具体平台实时消息处理 | `src/manager/*`、`src/manager.ts` |
-| Manager 插件组合 | 26 个内置 definition、26 个对应 hook、`data/manager.json` 期望状态、Plugin Catalog、路由批次和实例 Fiber 生命周期 | 加载任意配置代码或让表现端直接执行第三方资源 | `src/manager/builtinManagerPlugins.ts`、`src/manager/controlPlaneRoutes.ts`、`src/runtime/managerPluginReconciler.ts`、`src/manager/managerPluginRouteRegistry.ts` |
+| Manager 插件组合 | 单一 `startManager()` 初始化、26 个 definition/hook、`provides/requires/optional` 能力图、`data/manager.json` 期望状态、Plugin Catalog、声明式路由和实例 Fiber 生命周期 | 加载任意配置代码或让表现端直接执行第三方资源 | `src/manager/builtinManagerPlugins.ts`、`src/manager/controlPlaneRoutes.ts`、`src/runtime/managerPluginReconciler.ts`、`src/manager/managerPluginRouteRegistry.ts`、`src/manager/managerSharedResourcesRuntime.ts` |
 | WebGUI / Desktop 最小宿主 | 连接 Manager、消费贡献目录、安全渲染、维护窗口/页面外壳和固定恢复入口 | 维护第二套页面、设置、命令、导航、状态或生命周期入口清单 | `ribiwebgui/src/*`、`desktop/tray-task-window/*`、`src/manager/pluginCatalogRoutes.ts` |
 | Role Knowledge | 管角色计划、记忆、技能和上下文快照；Manager 展示层统一派生状态和排序，并按精确绑定读取任务 Agent 状态 | 决定消息是否路由命中，或根据计划生命周期猜测 Codex 是否工作 | `src/roleKnowledge.ts`、`src/roleKnowledgePresentation.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/planAgentStatus.ts`、`src/manager/controlPlaneRoutes.ts` |
 
 ## Manager 后台插件生命周期
 
-当前目录包含 26 个内置 Manager 实例。`builtinManagerPlugins.ts` 的 26 个 definition 与 `controlPlaneRoutes.ts` 的 26 个 hook 一一对应，没有空 hook。
+当前目录包含 26 个内置 Manager 实例。正式入口只通过 `startManager()` 挂载共享资源、合成 26 个 definition 与 26 个业务 hook，再执行首次对账。每个 definition 发布 `provides`，并用 `requires` 与 `optional` 声明依赖。缺少必需能力时进入 `waiting_dependency`；依赖 revision 递归包含直接和传递 Provider，因此上游 revision 或启停变化会沿能力链把全部真实消费者纳入重启批次；`refreshDeclaration()` 更新 manifest 与缺失能力，支持 `active -> waiting_dependency -> active`；重复 Provider 拒绝对账。
 
 | 分组 | 实例 | 主要责任 |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | Agent Provider 控制 | `manager:copilot-control`、`manager:astrbot-control`、`manager:marvis-control` | 安装、登录、进程或连接控制 |
 | 后台业务服务 | `manager:memory-consolidation`、`manager:fennenote-output`、`manager:message-processing-control`、`manager:message-processing-automation`、`manager:plan-feedback-delivery` | 记忆整理、FenneNote 输出、消息处理看板与提醒、计划反馈恢复投递 |
 
-7 个实例发布表现贡献；19 个实例没有表现贡献，但仍拥有实际生命周期。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。Desktop/WebGUI 是最小宿主；宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract，未知或未注册贡献失败关闭。第三方任意表现代码的受控 Extension Host 属于后续路线。
+7 个实例发布表现贡献；19 个实例没有表现贡献，但仍拥有实际生命周期。生产业务路由使用稳定 `routeId` 与真实 `exact` 或 `prefix` matcher；重复 ID，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突会被拒绝。WebGUI 与 Desktop 的可信合同绑定 `pluginId + instanceId`，跨插件目录引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动贡献还控制人格/计划/记忆/项目/运行目录和手动触发。目录不可用或刷新失败时清空旧贡献，Desktop 停止系统监听，只保留固定 WebGUI 恢复入口。
 
 每个插件在一个 disposer 内执行：
 
@@ -77,7 +77,7 @@ unregister routes
 → await resource exit
 ```
 
-Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，因此有顺序要求的停用流程不能拆成多个 `ctx.effect()`。当前 Manager hook 把关键停止顺序放在一个 disposer 中；`ManagerPluginRequestTracker.trackOperation()` 等待 response 之外的实际业务 Promise，Remote Agent 回调按取消信号停止并等待完成，NapCat 两阶段记录 PID，批量对账逆序停用后再顺序启动。统一验证已于 2026-08-21 通过。
+Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，因此有顺序要求的停用流程不能拆成多个 `ctx.effect()`。当前 Manager hook 把关键停止顺序放在一个 disposer 中；`ManagerPluginRequestTracker.trackOperation()` 等待 response 之外的实际业务 Promise。Manager 退出和启动失败回收按 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()` 串行执行。共享资源 Runtime 停止时取消排队/共享请求、flush 写入、终止 Worker 并等待退出；任一停止失败时仍继续清理其余资源。RabiLink abort 后等待活动 run、LAN listener、Socket、Relay、SSE、WebGUI 和 Speech drain；第二次 `stop()` 可以取消停止期间排队的重启，配置 watcher 与 Rabi 身份配置 PATCH 都等待异步 Relay 同步。批量对账逆序停用后再按依赖顺序启动。
 
 中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404 和其他路径 WebGUI HTML 回退。`/manager` 与所有 `/manager/*` 都返回控制面响应。
 
@@ -132,7 +132,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | Agent Codex 任务桥与必回复请求 | 已有；五分钟提醒仍需本机 Hook 纵向验收 | Desktop 任务状态、已配置的工作区、统一 `messageSource`、`data/.runtime/agent-requests.json` | 主人格、计划 Agent、计划秘书、消息处理 Agent、Codex/DSH 任务 owner | Agent 调用 `/api/agent/threads`、目标轮次触发 `Stop`，或绕过投递触发 `PreToolUse` 时 | 带正文的 `create` / `send` 必须传完整 `messageSource`。Agent 来源必须包含 Agent 端、会话名称和完整会话 ID；Agent 互投还要核对 `sourceThreadId`。正文固定以 `[消息源]`、`[消息内容]` 开头，并可建立必回复请求 | `POST /api/agent/threads`、`GET /api/agent/requests` | `src/shared/rabiMessage.ts`、`src/agentThreads.ts`、`src/agentRequests/`、`src/manager/agentCommunicationHookPolicy.ts`、`src/manager/controlPlaneRoutes.ts` | `docs/rabi-agent-interfaces.md` |
 | 消息处理看板与发送需求 | 实验支持，状态机、接口和 WebGUI 已构建测试 | `data/.runtime/message-processing-board.json`、消息组来源、引用链与附件证据、结构化转交、计划变动和 Outbox 回执 | 消息处理 Agent、heartbeat、WebGUI | 消息组进入处理、Agent 转交/提交判断、计划统一写入、Outbox 返回结果时 | 直接 @、直接回复、私聊和计划进展生成必须处理项；普通群讨论保留 Agent 判断；NapCat 图片收到后立即保存并作为 Desktop 图片输入，当前讨论片段优先于宽泛历史；原消息、引用链或附件核对不完整时不能回复，附件不可读时只能重试或转交；群消息引用 Agent 外发消息时按发送回执会话增加池内任务权重；回复前读取最新双向上下文并把短期审核绑定到上下文版本、完整会话、目标和正文，精确来源超出近期窗口时只从该人格正式群消息记录恢复唯一同 Route 消息；新消息、已有回复、记录缺失/重复/冲突或请求变化时失败关闭；显示处理任务、转交、不回复原因、发送失败、超时和空闲无结果；计划通知通过写入事件触发，不扫描目录 | `GET /api/message-processing/board`、`POST /api/message-processing/requirements/:id/outcome`、`GET/POST /api/message-processing/requirements/:id/send-context`、`POST /api/agent/threads`、`POST /api/agent/send`、`GET /api/agent/send/traces` | `src/napcatMedia.ts`、`src/messageProcessing/sourceEvidence.ts`、`src/messageProcessing/board.ts`、`src/messageProcessing/persistence.ts`、`src/messageProcessing/sendContextReview.ts`、`src/messageProcessing/sourceContextRecovery.ts`、`src/messageProcessing/managerClient.ts`、`src/messageAgentPool.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/components/MessageProcessingBoard.vue` | `docs/group-message-batching-and-triage-plan.md`、`docs/rabi-agent-interfaces.md` |
 | Copilot CLI adapter | 实验支持 | route agent config、Copilot CLI | Copilot CLI | AgentPacket 投递时 | 启动 / 调用 CLI | route Agent 端 | `src/copilotCli.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
-| AstrBot adapter | 实验支持 | AstrBot dashboard / plugin API | AstrBot | AgentPacket 投递时 | 调用 AstrBot API | route Agent 端 | `src/agentAdapters/astrbotAdapter.ts`、`scripts/rabiroute_agent/` | `docs/code-architecture.md` |
+| AstrBot adapter | 实验支持 | `ASTRBOT_URL`、Dashboard 凭据、必需的 `ASTRBOT_SESSION_ID` | AstrBot ChatUI | AgentPacket 投递时 | 登录后只调用 `POST /api/chat/send`；缺少 Session ID 时失败关闭 | route Agent 端 | `src/agentAdapters/astrbotAdapter.ts`、`src/agentAdapters/managerApi.ts` | `docs/configuration.md` |
 | Marvis adapter | 人工接力 | Marvis 本地能力 | Marvis | AgentPacket 投递时 | 写 prompt、复制剪贴板、打开应用；不能保证后台会话注入 | route Agent 端 | `src/marvis.ts`、`src/agentAdapters/managerApi.ts` | `docs/code-architecture.md` |
 | Outbox / Send | 已有 | 必填稳定 `deliveryId`、`sender.agentType + sender.sessionId`、精确 `routeId`、`channel`、渠道专用 `params` 和 `payload` 的明确发送请求 | QQ / WeCom / RabiLink / speech / role panel 等发送出口 | Agent、定时器或规划器调用 `/api/agent/send` 时 | 可能写 draft、阻止、外发、写发送日志；发送前持久化 reservation，同 ID 同请求只执行一次，超时/重启先查询 `/api/agent/send/receipts/:deliveryId`，也可按渠道和 `sentMessageId` 反查发送会话，uncertain 不自动重发；来源上下文不参与目标推断；NapCat 群聊必须显式提交 `replyToMessageId`，真实 ID 引用消息，空字符串表示明确不引用，省略则向 Agent 返回可行动错误；引用消息含图片时，发送前按来源图片数量和顺序校验 `replyImageDescriptions`，成功后在图片旁写同名 `.md` 并返回会话映射；本地群文件校验 `allowedFileRoots` 后走 `upload_group_file`；RabiLink 必须明确目标设备 | `POST /api/agent/send`、`GET /api/agent/send/receipts/:deliveryId`、`GET /api/agent/send/traces` | `src/agentSend.ts`、`src/replyImageDescriptions.ts`、`src/manager/agentSendIdempotency.ts`、`src/outbox.ts`、`src/napcat.ts` | `docs/rabi-agent-interfaces.md` |
 | Pipeline presets | 已有 | route `pipelinePreset` / `pipeline` | AgentPacket、Outbox | route 配置生效后 | 影响输出模式和自动回复策略 | route 配置页 | `src/pipelines.ts` | `docs/pipeline-presets.md` |
@@ -152,6 +152,8 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | 人格路由工作台预览 | 拟新增 | route profile + simulated record | dry-run RouteDecision / AgentPacket / roleKnowledge | 用户点击生成预览时 | 必须无副作用：不投递 Agent、不写日志、不刷新 viewedAt | 未来人格页 | `docs/persona-route-workbench-plan.md` | `docs/persona-route-workbench-plan.md` |
 
 ## 边界规则
+
+- 当前兼容入口只保留 `GET/POST /api/plugins/reconciliation`、`/api/scan/agents`、`/api/scan/agents/dsh` 和 `/api/fennenote/playback`。旧的 `/api/plugins/reconcile`、Agent availability 接口、`/api/playback/request`、AstrBot 插件回退和部署接口已经删除。
 
 - 没有“智能命中人格”。Route 通过 `agentRoleId` 固定绑定人格；`createRouteDecision` 只匹配当前 Route 中由消息触发、动作是通知 Agent 的自动化规则。脚本动作由自动化运行时单独执行。
 - 真实投递会遍历 gateway 子进程里的 active routeProfiles；如果某个 UI 只选定单 route，就只能称为“单 route profile 试算”。

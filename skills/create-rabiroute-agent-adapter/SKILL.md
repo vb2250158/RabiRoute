@@ -27,7 +27,7 @@ description: 新增、改造或排障 RabiRoute Agent 端适配器时使用。�
 
 Codex 目前的产品基线是 Desktop owner：RabiRoute 用短生命周期 app-server `thread/list` 读取 Desktop 用户可见的 `thread.name`，再按完整 ID 合并本地 cwd、归档、时间和 owner/rollout 状态，以“完整 ID + 工作目录”稳定绑定，并通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 当前任务。SQLite `threads.title` 可能是首条 prompt，不得用于下拉名称或同名查找。Desktop 必须在线；任务无法加载就失败，禁止启动备用执行 Runtime。
 
-AstrBot 这类服务型 Agent 不能只给“地址 + 部署”按钮；至少要补上服务健康、插件健康、认证状态、可选会话/工作区发现，或者明确显示“该后端无会话概念”。
+AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选会话。当前 AstrBot 合同只允许绑定明确的 ChatUI 会话并调用 `/api/chat/send`；没有 `ASTRBOT_SESSION_ID` 时失败，不再部署或回退到 `rabiroute_agent` 插件。
 
 先读 `../../docs/agent-adapter-standard-requirements.md` 和 `../../docs/agent-adapter-integration-lessons.md`。前者定义标准 Agent 端应达到的能力与验收合同；后者记录 Desktop IPC 未唤醒 owner、隔离 app-server 不实时/缺桌面工具，以及共享 4510 导致 Desktop `ECONNREFUSED` 的历史。涉及 Codex/Desktop、会话绑定或工具注册时，还必须读 `../../docs/codex-desktop-agent-acceptance.md`，不能跳过。
 
@@ -119,7 +119,7 @@ type AgentAdapterCapability = {
 | Codex Desktop | `verified` | 只读发现 Desktop 任务，按完整 ID + cwd 绑定，通过 Desktop IPC 唤醒并向任务 owner start/steer；无 fallback。 |
 | Copilot CLI | `experimental` | 需要验证安装检测、登录、`-C` 项目目录、`--resume` 会话和 Windows 长 prompt 路径。 |
 | Marvis | `stub`/`experimental` | 目前更像打开 App/复制 prompt，不应宣称有可靠会话绑定或回传。 |
-| AstrBot | `experimental` | 必须补服务、认证、插件、默认会话/管线说明后才能接近可用。 |
+| AstrBot | `experimental` | 只使用 ChatUI `/api/chat/send`；必须配置明确的 `ASTRBOT_SESSION_ID`，缺失时失败关闭。 |
 
 新增或改造时，不要靠口头记忆这些等级；让 Manager scan/status API 返回 `maturity` 和 `warnings`，让 WebGUI 显示出来。
 
@@ -213,7 +213,7 @@ RabiRoute Agent 端适配烟测消息 #2。请在同一个会话里回复：Rabi
 
 `src/manager.ts` 是 Agent 端编排层，不是某个 Agent 的实现层。新增或改造 Agent 端时，遵守这个边界：
 
-- Agent 专属逻辑放在 `src/agentAdapters/`：安装/登录检测、Dashboard/API 探测、项目/会话扫描、插件部署、打开外部 app、scan payload 组装。
+- Agent 专属逻辑放在 `src/agentAdapters/`：安装/登录检测、Dashboard/API 探测、项目/会话扫描、受支持的外部安装动作、打开外部 app、scan payload 组装。不要保留已经删除的部署协议或兼容回退。
 - `manager.ts` 只构造上下文 `ctx` 并接 HTTP API：`rootDir`、runtime 读取器、通用 HTTP 检查、通用安装路径 helper。会话发现优先使用 owner 的稳定协议；Codex Desktop 的状态数据库只允许只读，不能直接写或代替 owner 接受投递。
 - 通用 runtime 管理、配置 normalize、env 注入和状态文件读取可以暂留 `manager.ts`；不要为了新增一个 Agent 把专属逻辑塞进 manager。
 - 新模块不能 import `src/manager.ts`，也不能依赖 `ribiwebgui`、浏览器 `window/document` 或前端状态。
@@ -221,7 +221,7 @@ RabiRoute Agent 端适配烟测消息 #2。请在同一个会话里回复：Rabi
 
 当前参考模块：
 
-- `src/agentAdapters/managerApi.ts`：Codex/Copilot/Marvis/AstrBot 的 manager-facing scan、status、login、deploy、open 动作。
+- `src/agentAdapters/managerApi.ts`：Codex/Copilot/Marvis/AstrBot 的 manager-facing scan、status、login、open 等受支持动作。AstrBot 不再提供 adapter deploy 动作。
 
 如果某个 Agent 后续变复杂，优先新增 `src/agentAdapters/<type>ManagerApi.ts` 并由 `managerApi.ts` 聚合，不要继续扩大 `src/manager.ts`。
 
@@ -428,13 +428,13 @@ WebGUI 诊断区至少显示：连接/绑定状态、目标来源、最后成功
 
 ## AstrBot 改造特别要求
 
-AstrBot 不应只有“地址”和“部署”：
+AstrBot 当前只支持 ChatUI 会话合同：
 
 - 扫描默认 dashboard：`http://127.0.0.1:6185`，并允许发现最近配置的 URL。
-- 检查 dashboard 是否在线、登录是否可用、`rabiroute_agent` 插件是否安装且 endpoint 健康。
-- 部署按钮旁要显示部署目标目录和部署结果，不要只弹 alert。
-- 如果 AstrBot API 能列会话、bot、平台账号、群/私聊 channel，就做下拉选择。
-- 如果它没有 RabiRoute 可用的会话 API，UI 必须明确写“当前 AstrBot 适配器使用插件默认会话/管线，无可选会话”，并给出下一步：配置插件默认会话或升级插件 API。
+- 检查 dashboard 是否在线、登录是否可用，并发现可绑定的 ChatUI 会话。
+- 配置必须保存明确的 `ASTRBOT_SESSION_ID`；没有会话 ID 时禁止保存为可投递状态，并显示缺失字段。
+- 投递只调用 `/api/chat/send`。不得调用 `/api/plug/rabiroute_agent/chat`，不得部署 `rabiroute_agent`，不得在会话缺失时切换到默认管线。
+- 如果 AstrBot API 能列 bot、平台账号、群/私聊 channel，可继续提供辅助筛选，但最终投递身份仍是已保存的 ChatUI 会话 ID。
 - 密码/token 缺失时显示缺失字段和重启/保存要求，不要等投递时才失败。
 
 ## 验证清单

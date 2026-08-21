@@ -3,7 +3,7 @@ from __future__ import annotations
 import ctypes
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -458,6 +458,30 @@ class SystemSelectionTest(unittest.TestCase):
         self.assertFalse(bar.deliver_button.isEnabled())
         self.assertEqual(bar.deliver_button.toolTip(), "暂无激活人格")
         bar.hide()
+
+    def test_controller_start_and_stop_are_idempotent(self) -> None:
+        hook = MagicMock()
+        controller = SystemSelectionController(
+            manager=object(),
+            delivery_targets_provider=lambda: [],
+            notify=lambda _title, _message, _is_error: None,
+            reader=_SelectionReader(),
+            hook=hook,
+            clipboard_reader=_ClipboardReader(),
+        )
+
+        with patch.object(controller, "refresh_settings") as refresh_settings:
+            controller.start()
+            controller.start()
+            self.assertTrue(controller.running)
+            controller.stop()
+            controller.stop()
+
+        self.assertFalse(controller.running)
+        hook.start.assert_called_once_with()
+        hook.stop.assert_called_once_with()
+        refresh_settings.assert_called_once_with()
+        self.assertFalse(controller._toolbar.isVisible())
 
     def test_controller_passes_selection_geometry_and_direction_to_toolbar(self) -> None:
         targets = [SelectionDeliveryTarget("default-main", "默认人格")]

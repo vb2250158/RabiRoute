@@ -11,6 +11,8 @@ DESKTOP_HOST_CAPABILITIES = frozenset(
     {
         "desktop.command",
         "desktop.hotkey",
+        "desktop.lifecycle",
+        "desktop.panel-action",
         "desktop.settings-section",
         "desktop.status-card",
         "desktop.theme",
@@ -18,7 +20,33 @@ DESKTOP_HOST_CAPABILITIES = frozenset(
     }
 )
 TRUSTED_DESKTOP_EXTENSION_ENTRY_POINT_GROUP = "rabiroute.desktop_extensions"
-_SYMBOL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:-]*$", re.IGNORECASE)
+_SYMBOL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class DesktopPluginCommand:
+    plugin_id: str
+    instance_id: str
+    command_id: str
+    handler_id: str
+    label: str
+    surface: str
+    slot: str
+    order: int
+
+
+@dataclass(frozen=True)
+class DesktopPanelAction:
+    label: str
+    callback: Callable[[], None]
+    enabled: bool = True
+    order: int = 0
+
+
+@dataclass(frozen=True)
+class DesktopPanelActionContext:
+    invoke: Callable[[str], None]
+    action_groups: Mapping[str, tuple[DesktopPanelAction, ...]]
 
 
 @dataclass(frozen=True)
@@ -86,6 +114,9 @@ class DesktopPluginCatalog:
     contribution_revision: int
     menu_items: tuple[DesktopPluginMenuItem, ...]
     generation: str = ""
+    available: bool = False
+    commands: tuple[DesktopPluginCommand, ...] = ()
+    capabilities: frozenset[str] = frozenset()
     hotkeys: tuple[DesktopPluginHotkey, ...] = ()
     themes: tuple[DesktopPluginTheme, ...] = ()
     status_cards: tuple[DesktopPluginStatusCard, ...] = ()
@@ -112,33 +143,71 @@ class DesktopThemeContext:
 
 
 @dataclass(frozen=True)
+class _ContractOwner:
+    plugin_id: str
+    instance_id: str
+
+    def matches(self, plugin_id: str, instance_id: str) -> bool:
+        return self.plugin_id == plugin_id and self.instance_id == instance_id
+
+
+@dataclass(frozen=True)
+class _CommandContract:
+    owner: _ContractOwner
+    handler: Callable[[DesktopCommandContext], None]
+
+
+@dataclass(frozen=True)
 class _HotkeyContract:
+    owner: _ContractOwner
     binding: Callable[[DesktopPluginHotkey, object], str]
     enabled: Callable[[DesktopPluginHotkey, object], bool]
 
 
 @dataclass(frozen=True)
+class _ThemeContract:
+    owner: _ContractOwner
+    apply: Callable[[DesktopThemeContext], str]
+
+
+@dataclass(frozen=True)
 class _StatusContract:
+    owner: _ContractOwner
     query: Callable[[Callable[[str], dict]], dict]
     render: Callable[[dict], list[tuple[str, str]]]
 
 
 @dataclass(frozen=True)
 class _SettingsContract:
+    owner: _ContractOwner
     read: Callable[[Callable[[], object]], object]
     render: Callable[[object], list[tuple[str, str]]]
     open: Callable[[str, Callable[[str], None]], None]
 
 
+@dataclass(frozen=True)
+class _PanelActionContract:
+    owner: _ContractOwner
+    provider: Callable[[DesktopPluginCommand, DesktopPanelActionContext], tuple[DesktopPanelAction, ...]]
+
+
+@dataclass(frozen=True)
+class _LifecycleContract:
+    owner: _ContractOwner
+    handlers: frozenset[str]
+
+
 class DesktopExtensionRegistry:
-    """Host-owned contracts and handlers for built-in and explicitly trusted extensions."""
+    """Host-owned contracts bound to one Manager plugin instance."""
 
     def __init__(self) -> None:
-        self._commands: dict[str, Callable[[DesktopCommandContext], None]] = {}
+        self._commands: dict[str, _CommandContract] = {}
         self._hotkeys: dict[tuple[str, str, str], _HotkeyContract] = {}
-        self._themes: dict[tuple[str, str], Callable[[DesktopThemeContext], str]] = {}
+        self._themes: dict[tuple[str, str], _ThemeContract] = {}
         self._statuses: dict[tuple[str, str], _StatusContract] = {}
         self._settings: dict[tuple[str, str, str, str], _SettingsContract] = {}
+        self._panel_actions: dict[str, _PanelActionContract] = {}
+        self._lifecycle_capabilities: dict[str, _LifecycleContract] = {}
         self._frozen = False
 
     @property
@@ -156,11 +225,25 @@ class DesktopExtensionRegistry:
             raise ValueError(f"Desktop extension contract is already registered: {key}")
         collection[key] = value
 
-    def register_command_handler(self, handler_id: str, handler: Callable[[DesktopCommandContext], None]) -> None:
+    @staticmethod
+    def _owner(plugin_id: str, instance_id: str) -> _ContractOwner:
+        return _ContractOwner(
+            _required_symbol(plugin_id, "plugin_id"),
+            _required_symbol(instance_id, "instance_id"),
+        )
+
+    def register_command_handler(
+        self,
+        handler_id: str,
+        handler: Callable[[DesktopCommandContext], None],
+        *,
+        plugin_id: str,
+        instance_id: str,
+    ) -> None:
         key = _required_symbol(handler_id, "handler_id")
         if not callable(handler):
             raise TypeError("Desktop command handler must be callable.")
-        self._register(self._commands, key, handler)
+        self._register(self._commands, key, _CommandContract(self._owner(plugin_id, instance_id), handler))
 
     def register_hotkey_contract(
         self,
@@ -168,20 +251,24 @@ class DesktopExtensionRegistry:
         handler_id: str,
         default_binding: str,
         *,
+        plugin_id: str,
+        instance_id: str,
         binding: Callable[[DesktopPluginHotkey, object], str] | None = None,
         enabled: Callable[[DesktopPluginHotkey, object], bool] | None = None,
     ) -> None:
+        owner = self._owner(plugin_id, instance_id)
         key = (
             _required_symbol(command_id, "command_id"),
             _required_symbol(handler_id, "handler_id"),
             _required_text(default_binding, "default_binding", limit=80),
         )
-        if key[1] not in self._commands:
-            raise ValueError(f"Desktop hotkey handler is not registered: {key[1]}")
+        if not self.has_command_handler(key[1], owner.plugin_id, owner.instance_id):
+            raise ValueError(f"Desktop hotkey handler is not registered for {owner.plugin_id}/{owner.instance_id}: {key[1]}")
         self._register(
             self._hotkeys,
             key,
             _HotkeyContract(
+                owner,
                 binding or (lambda contribution, _settings: contribution.default_binding),
                 enabled or (lambda _contribution, _settings: True),
             ),
@@ -192,24 +279,29 @@ class DesktopExtensionRegistry:
         theme_id: str,
         desktop_resource_id: str,
         apply: Callable[[DesktopThemeContext], str],
+        *,
+        plugin_id: str,
+        instance_id: str,
     ) -> None:
         if not callable(apply):
             raise TypeError("Desktop theme resource handler must be callable.")
         key = (_required_symbol(theme_id, "theme_id"), _required_symbol(desktop_resource_id, "desktop_resource_id"))
-        self._register(self._themes, key, apply)
+        self._register(self._themes, key, _ThemeContract(self._owner(plugin_id, instance_id), apply))
 
     def register_status_contract(
         self,
         query_id: str,
         renderer_id: str,
         *,
+        plugin_id: str,
+        instance_id: str,
         query: Callable[[Callable[[str], dict]], dict],
         render: Callable[[dict], list[tuple[str, str]]],
     ) -> None:
         if not callable(query) or not callable(render):
             raise TypeError("Desktop status query and renderer must be callable.")
         key = (_required_symbol(query_id, "query_id"), _required_symbol(renderer_id, "renderer_id"))
-        self._register(self._statuses, key, _StatusContract(query, render))
+        self._register(self._statuses, key, _StatusContract(self._owner(plugin_id, instance_id), query, render))
 
     def register_settings_contract(
         self,
@@ -218,6 +310,8 @@ class DesktopExtensionRegistry:
         read_command_id: str,
         write_command_id: str,
         *,
+        plugin_id: str,
+        instance_id: str,
         read: Callable[[Callable[[], object]], object],
         render: Callable[[object], list[tuple[str, str]]],
         open: Callable[[str, Callable[[str], None]], None],
@@ -230,74 +324,147 @@ class DesktopExtensionRegistry:
             (read_command_id, "read_command_id"),
             (write_command_id, "write_command_id"),
         ))
-        self._register(self._settings, key, _SettingsContract(read, render, open))
+        self._register(self._settings, key, _SettingsContract(self._owner(plugin_id, instance_id), read, render, open))
 
-    def has_command_handler(self, handler_id: str) -> bool:
-        return handler_id in self._commands
+    def register_panel_action_provider(
+        self,
+        handler_id: str,
+        provider: Callable[[DesktopPluginCommand, DesktopPanelActionContext], tuple[DesktopPanelAction, ...]],
+        *,
+        plugin_id: str,
+        instance_id: str,
+    ) -> None:
+        key = _required_symbol(handler_id, "handler_id")
+        owner = self._owner(plugin_id, instance_id)
+        if not self.has_command_handler(key, owner.plugin_id, owner.instance_id):
+            raise ValueError(f"Desktop panel action handler is not registered for {owner.plugin_id}/{owner.instance_id}: {key}")
+        if not callable(provider):
+            raise TypeError("Desktop panel action provider must be callable.")
+        self._register(self._panel_actions, key, _PanelActionContract(owner, provider))
+
+    def register_lifecycle_capability(
+        self,
+        capability_id: str,
+        *,
+        plugin_id: str,
+        instance_id: str,
+        command_handler_ids: tuple[str, ...] = (),
+    ) -> None:
+        capability = _required_symbol(capability_id, "capability_id")
+        owner = self._owner(plugin_id, instance_id)
+        handlers = frozenset(_required_symbol(value, "command_handler_id") for value in command_handler_ids)
+        missing = sorted(
+            handler for handler in handlers
+            if not self.has_command_handler(handler, owner.plugin_id, owner.instance_id)
+        )
+        if missing:
+            raise ValueError(f"Desktop lifecycle command handlers are not registered for {owner.plugin_id}/{owner.instance_id}: {', '.join(missing)}")
+        self._register(self._lifecycle_capabilities, capability, _LifecycleContract(owner, handlers))
+
+    def has_command_handler(self, handler_id: str, plugin_id: str, instance_id: str) -> bool:
+        contract = self._commands.get(handler_id)
+        return contract is not None and contract.owner.matches(plugin_id, instance_id)
 
     def has_hotkey_contract(self, item: DesktopPluginHotkey) -> bool:
-        return (item.command_id, item.handler_id, item.default_binding) in self._hotkeys
+        contract = self._hotkeys.get((item.command_id, item.handler_id, item.default_binding))
+        return contract is not None and contract.owner.matches(item.plugin_id, item.instance_id)
 
-    def has_theme_resource(self, theme_id: str, resource_id: str) -> bool:
-        return (theme_id, resource_id) in self._themes
+    def has_theme_resource(self, theme_id: str, resource_id: str, plugin_id: str, instance_id: str) -> bool:
+        contract = self._themes.get((theme_id, resource_id))
+        return contract is not None and contract.owner.matches(plugin_id, instance_id)
 
-    def has_status_contract(self, query_id: str, renderer_id: str) -> bool:
-        return (query_id, renderer_id) in self._statuses
+    def has_status_contract(self, query_id: str, renderer_id: str, plugin_id: str, instance_id: str) -> bool:
+        contract = self._statuses.get((query_id, renderer_id))
+        return contract is not None and contract.owner.matches(plugin_id, instance_id)
 
     def has_settings_contract(self, section: DesktopPluginSettingsSection) -> bool:
-        return self._settings_key(section) in self._settings
+        contract = self._settings.get(self._settings_key(section))
+        return contract is not None and contract.owner.matches(section.plugin_id, section.instance_id)
 
     def invoke_command(self, handler_id: str, context: DesktopCommandContext) -> None:
-        handler = self._commands.get(handler_id)
-        if handler is None:
+        contract = self._commands.get(handler_id)
+        if contract is None:
             raise LookupError(f"Desktop command handler is not registered: {handler_id}")
-        handler(context)
+        contract.handler(context)
+
+    def panel_actions(self, catalog: DesktopPluginCatalog, context: DesktopPanelActionContext) -> tuple[DesktopPanelAction, ...]:
+        resolved: list[tuple[int, int, DesktopPanelAction]] = []
+        sequence = 0
+        for command in catalog.commands:
+            if command.surface != "desktop.panel":
+                continue
+            registered = self._panel_actions.get(command.handler_id)
+            provider = registered.provider if registered is not None and registered.owner.matches(command.plugin_id, command.instance_id) else None
+            actions = provider(command, context) if provider is not None else (DesktopPanelAction(
+                command.label,
+                lambda handler_id=command.handler_id: context.invoke(handler_id),
+                True,
+                command.order,
+            ),)
+            for action in actions:
+                resolved.append((action.order, sequence, action))
+                sequence += 1
+        resolved.sort(key=lambda item: (item[0], item[1]))
+        return tuple(item for _order, _sequence, item in resolved)
+
+    def lifecycle_capability_active(self, catalog: DesktopPluginCatalog, capability_id: str) -> bool:
+        contract = self._lifecycle_capabilities.get(_symbol(capability_id))
+        if contract is None:
+            return False
+        return any(
+            command.handler_id in contract.handlers and contract.owner.matches(command.plugin_id, command.instance_id)
+            for command in catalog.commands
+        )
 
     def hotkey_binding(self, item: DesktopPluginHotkey, settings: object) -> str:
         contract = self._hotkeys.get((item.command_id, item.handler_id, item.default_binding))
-        if contract is None:
+        if contract is None or not contract.owner.matches(item.plugin_id, item.instance_id):
             raise LookupError(f"Desktop hotkey contract is not registered: {item.contribution_id}")
         return _required_text(contract.binding(item, settings), "resolved hotkey binding", limit=80)
 
     def hotkey_enabled(self, item: DesktopPluginHotkey, settings: object) -> bool:
         contract = self._hotkeys.get((item.command_id, item.handler_id, item.default_binding))
-        return contract is not None and contract.enabled(item, settings) is True
+        return contract is not None and contract.owner.matches(item.plugin_id, item.instance_id) and contract.enabled(item, settings) is True
 
     def apply_theme(self, item: DesktopPluginTheme, context: DesktopThemeContext) -> str:
-        apply = self._themes.get((item.theme_id, item.desktop_resource_id))
-        if apply is None:
+        contract = self._themes.get((item.theme_id, item.desktop_resource_id))
+        if contract is None or not contract.owner.matches(item.plugin_id, item.instance_id):
             raise LookupError(f"Desktop theme resource is not registered: {item.desktop_resource_id}")
-        return apply(context)
+        return contract.apply(context)
 
     def apply_registered_theme(self, theme_id: str, resource_id: str, context: DesktopThemeContext) -> str:
-        apply = self._themes.get((theme_id, resource_id))
-        if apply is None:
+        contract = self._themes.get((theme_id, resource_id))
+        if contract is None:
             raise LookupError(f"Desktop theme resource is not registered: {resource_id}")
-        return apply(context)
+        return contract.apply(context)
 
     def query_status(self, card: DesktopPluginStatusCard, get_json: Callable[[str], dict]) -> dict:
         contract = self._statuses.get((card.query_id, card.renderer_id))
-        if contract is None:
+        if contract is None or not contract.owner.matches(card.plugin_id, card.instance_id):
             raise LookupError(f"Desktop status contract is not registered: {card.query_id} / {card.renderer_id}")
         return contract.query(get_json)
 
     def render_status(self, card: DesktopPluginStatusCard, payload: dict) -> list[tuple[str, str]]:
         contract = self._statuses.get((card.query_id, card.renderer_id))
-        return contract.render(payload) if contract is not None else []
+        if contract is None or not contract.owner.matches(card.plugin_id, card.instance_id):
+            return []
+        return contract.render(payload)
 
     def read_settings(self, section: DesktopPluginSettingsSection, reader: Callable[[], object]) -> object:
         contract = self._settings.get(self._settings_key(section))
-        if contract is None:
+        if contract is None or not contract.owner.matches(section.plugin_id, section.instance_id):
             raise LookupError(f"Desktop settings contract is not registered: {section.contribution_id}")
         return contract.read(reader)
 
     def render_settings(self, section: DesktopPluginSettingsSection, value: object) -> list[tuple[str, str]]:
         contract = self._settings.get(self._settings_key(section))
-        return contract.render(value) if contract is not None else []
+        if contract is None or not contract.owner.matches(section.plugin_id, section.instance_id):
+            return []
+        return contract.render(value)
 
     def open_settings(self, section: DesktopPluginSettingsSection, manager_url: str, open_url: Callable[[str], None]) -> None:
         contract = self._settings.get(self._settings_key(section))
-        if contract is None:
+        if contract is None or not contract.owner.matches(section.plugin_id, section.instance_id):
             raise LookupError(f"Desktop settings contract is not registered: {section.contribution_id}")
         contract.open(manager_url, open_url)
 
@@ -312,20 +479,15 @@ class _ContributionBase:
     instance_id: str
     contribution_id: str
     label: str
+    surface: str
+    slot: str
     order: int
-
-
-@dataclass(frozen=True)
-class _CommandContribution:
-    plugin_id: str
-    instance_id: str
-    command_id: str
-    handler_id: str
 
 
 @dataclass(frozen=True)
 class _ActivePlugin:
     plugin_id: str
+    capabilities: frozenset[str]
 
 
 def empty_desktop_plugin_catalog() -> DesktopPluginCatalog:
@@ -335,6 +497,9 @@ def empty_desktop_plugin_catalog() -> DesktopPluginCatalog:
         contribution_revision=0,
         menu_items=(),
         generation="",
+        available=False,
+        commands=(),
+        capabilities=frozenset(),
         hotkeys=(),
         themes=(),
         status_cards=(),
@@ -403,23 +568,72 @@ def _render_desktop_settings(value: object) -> list[tuple[str, str]]:
     ]
 
 
+def _manual_trigger_panel_actions(
+    command: DesktopPluginCommand,
+    context: DesktopPanelActionContext,
+) -> tuple[DesktopPanelAction, ...]:
+    actions = context.action_groups.get("desktop.manual-trigger", ())
+    if not actions:
+        return (DesktopPanelAction("暂无手动触发", lambda: None, False, command.order),)
+    return tuple(
+        DesktopPanelAction(action.label, action.callback, action.enabled, command.order + index)
+        for index, action in enumerate(actions)
+    )
+
+
 def create_builtin_desktop_extension_registry(*, freeze: bool = True) -> DesktopExtensionRegistry:
     registry = DesktopExtensionRegistry()
+    desktop_owner = {"plugin_id": "builtin:manager/desktop", "instance_id": "manager:desktop"}
+    persona_owner = {"plugin_id": "builtin:manager/persona", "instance_id": "manager:persona"}
+    route_control_owner = {"plugin_id": "builtin:manager/route-control", "instance_id": "manager:route-control"}
+    gateway_runtime_owner = {"plugin_id": "builtin:manager/gateway-runtime", "instance_id": "manager:gateway-runtime"}
+    core_owner = {"plugin_id": "builtin:manager/core", "instance_id": "manager:core"}
+    speech_owner = {"plugin_id": "builtin:manager/speech", "instance_id": "manager:speech"}
+    performance_owner = {"plugin_id": "builtin:manager/performance", "instance_id": "manager:performance"}
+
     registry.register_command_handler(
         "desktop.open-webgui",
         lambda context: context.open_url(context.manager_url.rstrip("/")),
+        **desktop_owner,
     )
     registry.register_command_handler(
         "desktop.open-settings",
         lambda context: context.open_url(f"{context.manager_url.rstrip('/')}/#/settings"),
+        **desktop_owner,
     )
     registry.register_command_handler(
         "desktop.capture-screenshot",
         lambda context: context.invoke_service("desktop.capture-screenshot"),
+        **desktop_owner,
     )
     registry.register_command_handler(
         "desktop.pin-clipboard-image",
         lambda context: context.invoke_service("desktop.pin-clipboard-image"),
+        **desktop_owner,
+    )
+    for service_id, owner in (
+        ("desktop.open-role-directory", persona_owner),
+        ("desktop.open-plan-directory", persona_owner),
+        ("desktop.open-memory-directory", persona_owner),
+        ("desktop.open-project-directory", route_control_owner),
+        ("desktop.open-runtime-directory", gateway_runtime_owner),
+        ("desktop.manual-trigger", gateway_runtime_owner),
+        ("desktop.system-selection", desktop_owner),
+    ):
+        registry.register_command_handler(
+            service_id,
+            lambda context, selected=service_id: context.invoke_service(selected),
+            **owner,
+        )
+    registry.register_panel_action_provider(
+        "desktop.manual-trigger",
+        _manual_trigger_panel_actions,
+        **gateway_runtime_owner,
+    )
+    registry.register_lifecycle_capability(
+        "desktop.system-selection",
+        command_handler_ids=("desktop.system-selection",),
+        **desktop_owner,
     )
     registry.register_hotkey_contract(
         "capture-screenshot",
@@ -427,6 +641,7 @@ def create_builtin_desktop_extension_registry(*, freeze: bool = True) -> Desktop
         "Ctrl+Shift+S",
         binding=lambda _item, settings: str(getattr(settings, "shortcut", "Ctrl+Shift+S")),
         enabled=lambda _item, settings: getattr(settings, "enabled", False) is True,
+        **desktop_owner,
     )
     registry.register_hotkey_contract(
         "pin-clipboard-image",
@@ -434,24 +649,28 @@ def create_builtin_desktop_extension_registry(*, freeze: bool = True) -> Desktop
         "F3",
         binding=lambda _item, settings: str(getattr(settings, "clipboard_shortcut", "F3")),
         enabled=lambda _item, settings: getattr(settings, "enabled", False) is True,
+        **desktop_owner,
     )
     for theme_id in ("system", "light", "dark"):
         registry.register_theme_resource(
             theme_id,
             f"builtin.desktop-theme.{theme_id}.v1",
             lambda context, selected=theme_id: context.apply_builtin_theme(context.application, selected),
+            **core_owner,
         )
     registry.register_status_contract(
         "manager.speech-status",
         "builtin.speech-status.v1",
         query=lambda get_json: get_json("/api/speech/status"),
         render=_render_speech_status,
+        **speech_owner,
     )
     registry.register_status_contract(
         "manager.performance-status",
         "builtin.performance-status.v1",
         query=lambda get_json: get_json("/api/performance/status"),
         render=_render_performance_status,
+        **performance_owner,
     )
     registry.register_settings_contract(
         "builtin.desktop-settings.v1",
@@ -461,6 +680,7 @@ def create_builtin_desktop_extension_registry(*, freeze: bool = True) -> Desktop
         read=lambda reader: reader(),
         render=_render_desktop_settings,
         open=lambda manager_url, open_url: open_url(f"{manager_url.rstrip('/')}/#/settings"),
+        **desktop_owner,
     )
     return registry.freeze() if freeze else registry
 
@@ -469,7 +689,10 @@ def load_trusted_desktop_extensions(
     registry: DesktopExtensionRegistry,
     entry_point_names: tuple[str, ...] | list[str],
 ) -> tuple[str, ...]:
-    """Import only explicitly allowed entry points; an empty allowlist imports nothing."""
+    """Load explicitly allowed, trusted in-process extensions before Registry freeze.
+
+    Process isolation for untrusted extensions belongs to a future Extension Host.
+    """
     requested = tuple(dict.fromkeys(
         _required_text(name, "entry point name", limit=160) for name in entry_point_names
     ))
@@ -532,7 +755,10 @@ def _active_plugins(rows: object) -> dict[str, _ActivePlugin] | None:
         hosts = manifest.get("hosts")
         if not isinstance(hosts, list) or "desktop" not in hosts:
             continue
-        plugins[instance_id] = _ActivePlugin(plugin_id=plugin_id)
+        capabilities = _symbols(manifest.get("capabilities"))
+        if capabilities is None:
+            continue
+        plugins[instance_id] = _ActivePlugin(plugin_id=plugin_id, capabilities=capabilities)
     return plugins
 
 
@@ -569,6 +795,8 @@ def _contribution_base(
         instance_id=instance_id,
         contribution_id=contribution_id,
         label=label,
+        surface=surface,
+        slot=slot,
         order=order,
     )
 
@@ -578,8 +806,8 @@ def _command_contributions(
     active_plugins: dict[str, _ActivePlugin],
     host_capabilities: frozenset[str],
     registry: DesktopExtensionRegistry,
-) -> dict[tuple[str, str, str], _CommandContribution]:
-    commands: dict[tuple[str, str, str], _CommandContribution] = {}
+) -> dict[tuple[str, str, str], DesktopPluginCommand]:
+    commands: dict[tuple[str, str, str], DesktopPluginCommand] = {}
     duplicate_keys: set[tuple[str, str, str]] = set()
     for row in rows:
         base = _contribution_base(row, "command", active_plugins, host_capabilities)
@@ -587,7 +815,7 @@ def _command_contributions(
             continue
         handler_id = _symbol(row.get("handlerId"))
         danger_level = _text(row.get("dangerLevel") or "safe", limit=40)
-        if not registry.has_command_handler(handler_id) or danger_level != "safe":
+        if not registry.has_command_handler(handler_id, base.plugin_id, base.instance_id) or danger_level != "safe":
             continue
         key = (base.plugin_id, base.instance_id, base.contribution_id)
         if key in commands:
@@ -595,8 +823,27 @@ def _command_contributions(
             commands.pop(key, None)
             continue
         if key not in duplicate_keys:
-            commands[key] = _CommandContribution(base.plugin_id, base.instance_id, base.contribution_id, handler_id)
+            commands[key] = DesktopPluginCommand(
+                base.plugin_id,
+                base.instance_id,
+                base.contribution_id,
+                handler_id,
+                base.label,
+                base.surface,
+                base.slot,
+                base.order,
+            )
     return commands
+
+
+def _resolved_commands(
+    rows: list[object],
+    active_plugins: dict[str, _ActivePlugin],
+    host_capabilities: frozenset[str],
+    registry: DesktopExtensionRegistry,
+) -> tuple[DesktopPluginCommand, ...]:
+    commands = tuple(_command_contributions(rows, active_plugins, host_capabilities, registry).values())
+    return tuple(sorted(commands, key=lambda item: item.order))
 
 
 def _resolved_menu_items(
@@ -671,7 +918,7 @@ def _resolved_themes(
         theme_id = _symbol(row.get("themeId"))
         resource_id = _symbol(row.get("desktopResourceId"))
         key = (base.plugin_id, base.instance_id, base.contribution_id)
-        if not registry.has_theme_resource(theme_id, resource_id):
+        if not registry.has_theme_resource(theme_id, resource_id, base.plugin_id, base.instance_id):
             continue
         if key in seen_contributions or theme_id in seen_themes:
             continue
@@ -700,7 +947,7 @@ def _resolved_status_cards(
         query_id = _symbol(row.get("queryId"))
         renderer_id = _symbol(row.get("rendererId"))
         key = (base.plugin_id, base.instance_id, base.contribution_id)
-        if not registry.has_status_contract(query_id, renderer_id) or key in seen:
+        if not registry.has_status_contract(query_id, renderer_id, base.plugin_id, base.instance_id) or key in seen:
             continue
         seen.add(key)
         resolved.append((base.order, sequence, DesktopPluginStatusCard(
@@ -763,6 +1010,13 @@ def parse_desktop_plugin_catalog(
         contribution_revision=contribution_revision,
         menu_items=_resolved_menu_items(rows, active_plugins, DESKTOP_HOST_CAPABILITIES, registry),
         generation=_symbol(data.get("generation")),
+        available=True,
+        commands=_resolved_commands(rows, active_plugins, DESKTOP_HOST_CAPABILITIES, registry),
+        capabilities=frozenset(
+            capability
+            for plugin in active_plugins.values()
+            for capability in plugin.capabilities
+        ),
         hotkeys=_resolved_hotkeys(rows, active_plugins, DESKTOP_HOST_CAPABILITIES, registry),
         themes=_resolved_themes(rows, active_plugins, DESKTOP_HOST_CAPABILITIES, registry),
         status_cards=_resolved_status_cards(rows, active_plugins, DESKTOP_HOST_CAPABILITIES, registry),
@@ -820,4 +1074,5 @@ class DesktopPluginCatalogCache:
 
     def fallback(self) -> DesktopPluginCatalog:
         with self._lock:
-            return self._latest or empty_desktop_plugin_catalog()
+            self._latest = None
+            return empty_desktop_plugin_catalog()

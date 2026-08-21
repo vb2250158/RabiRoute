@@ -2,7 +2,7 @@
 
 # DSH 如何使用 Cordis：运行时、界面与隔离分析
 
-> 状态：基于 DSH `528c682e06`、`dsh@0.1.1-rc.1` 的实现调查。
+> 状态：实现调查基线为本地 DSH `528c682e06`、`dsh@0.1.1-rc.1`；远端 `master` 已前进，本文未审计后续提交。
 >
 > 主要读者：RabiRoute 维护者、插件运行时设计者与 WebGUI/Desktop 扩展开发者。
 
@@ -21,9 +21,9 @@ DSH 没有把所有插件放进独立进程。
 
 ## 调查快照
 
-2026-08-21 14:21:44 +08:00 后核对的 DSH 官方 `master` 与本地调查副本均指向：
+本地调查副本固定在 [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006)，对应 `dsh@0.1.1-rc.1`。2026-08-21 复核时，远端 `master` 已前进至 `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`。本文所有源码判断和行号仍只适用于本地 `528c682e06`，没有把远端新提交视为已审计实现。
 
-- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006)，`dsh@0.1.1-rc.1`；
+本地基线还包含：
 - DSH vendored [`@deepseek-ai/cordis` 4.0.0-rc.7](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest)；
 - DSH vendored [`@deepseek-ai/cordis-plugin-loader` 1.0.0-rc.5](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest)；
 - [Cordis 组合性论文 v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf)。
@@ -35,7 +35,7 @@ DSH 没有直接消费公开 npm 上游包。它把 Cordis、Loader、Include、
 | 代码类型 | 运行位置 | Cordis 的作用 | 当前隔离强度 |
 |---|---|---|---|
 | 内置与 profile npm 插件 | DSH Node 主进程 | Loader、服务注入、Fiber、effect、HMR | 受信任，同进程 |
-| Agent preset 插件 | Node 主进程中的会话子树 | 每个 Agent 独立组合和卸载 | 服务作用域隔离，同进程 |
+| Agent preset 插件 | Node 主进程中的 preset standing mount | 每个 preset 挂载一次；Agent 通过 scope 父链共享 | 服务作用域隔离，同进程 |
 | Web 客户端插件 | 当前浏览器页面 | 浏览器 Cordis Context、Loader、UI slots | 受信任，同页面 |
 | 模型生成的 Host 动态插件 | Node 主进程的 `node:vm` realm | 动态 Fiber、受限 Context façade | 协作式限制，不是安全封闭 |
 | 模型生成的浏览器动态插件 | 当前页面的 `new Function` closure | 动态浏览器 Fiber、受限 Context façade | 协作式限制，需要页面确认 |
@@ -153,9 +153,9 @@ ctx.provide(name, service)
 ctx.plugin(childPlugin)
 ```
 
-Fiber 停止时按生命周期撤销这些资源。DSH 还要求启动失败时释放已经挂载的部分 Context，避免终端模式、端口、监听器或 UI 注册残留。
+Fiber 停止时按生命周期撤销这些资源。Fiber 顶层登记的多个 effect disposer 会按登记逆序取出，再由 `Promise.all(...)` 启动并等待，因此异步清理可以并发。单个 `ctx.effect()` 内返回的多个 disposer 也按登记逆序处理，但通过 Promise 链串行执行。存在先后依赖的业务停用仍应放进一个关键 effect/disposer。
 
-这正是 RabiRoute 最值得先学习的部分：先让每个 Adapter 的监听器、端口、定时器、watcher 和子进程拥有统一 disposer，再讨论动态安装。
+DSH 还要求启动失败时释放已经挂载的部分 Context，避免终端模式、端口、监听器或 UI 注册残留。这正是 RabiRoute 最值得先学习的部分：先让每个 Adapter 的监听器、端口、定时器、watcher 和子进程拥有统一 disposer，再讨论动态安装。
 
 ## 6. Cordis `isolate` 是服务 realm
 
@@ -168,6 +168,8 @@ isolate:
 ```
 
 同一 label 的 Provider 和 Consumer 会解析到同一个服务实例；不同 label 可以在同一 Node 进程中同时拥有同名服务。
+
+服务 realm 还带有明确所有权：每个服务实现由注册它的 Fiber 持有，同一 realm 不允许重复 Provider，只有服务拥有者 Fiber 可以修改该服务值。DSH 的 Agent preset 会检查 preset 子树是否把服务发布到 root realm；preset 服务必须位于 `isolate` realm，或明确移到宿主组合层。RabiRoute 也应拒绝插件作用域服务意外成为宿主全局服务。
 
 它适合：
 
@@ -190,19 +192,21 @@ Include 监听 `cordis.patch.yml`，重新计算 Entry 列表，再通过事务�
 
 HMR 找到受影响模块和依赖者，备份 ESM/CJS 缓存，清除缓存后重新导入。若新模块加载或激活失败，它恢复缓存并重新挂载旧插件。
 
+配置变更由 Loader Entry transaction 处理：Entry 更新销毁旧 Fiber、启动新 Fiber，并在失败时恢复旧插件。源码 HMR 是另一条路径，负责备份和恢复 ESM/CJS cache。两条路径只共享 Fiber 销毁与重新挂载语义，不是同一个更新机制。
+
 DSH 为这两条路径补了串行化、失败聚合、异步写入排空和启动审计。RabiRoute 第一阶段只需要配置驱动的停用、启用和重建；源码 HMR 可以等生命周期测试成熟后再考虑。
 
-## 8. Agent preset 是每个会话的插件子树
+## 8. Agent preset 是每个 preset 的 standing mount
 
 DSH 把宿主级能力和每个 Agent 的能力分开：
 
 - 宿主树拥有会话、持久化、模型路由、设置、凭据、沙箱、审批和跨会话注册表；
-- Agent preset 为一个会话贡献工具、人格、提示词、压缩策略和其他会话级插件；
-- 会话结束时，preset 子树随 Agent scope 一起撤销。
+- 每个 preset 的 `cordis.yml` 在进程中只挂载一次，形成 standing mount；
+- 使用同一 preset 的多个 Agent 通过 scope 父链加入该 standing mount；
+- 插件实例、工具注册、提示词片段和 projection unit 只存在一份，插件内部再按 Session/Agent key 隔离状态；
+- preset 文件变化会为当前及后续 Agent 创建新 generation，已经加入旧 generation 的 Agent 继续使用旧挂载。
 
-这让同一进程中的不同 Agent 拥有不同工具和提示词，而不需要复制整个服务进程。
-
-RabiRoute 可以学习这种“Route/任务级插件子树”，但 Route、事件记录、投递证据和 Outbox 仍应由 Manager/Gateway 的稳定模块拥有。
+当前 DSH 留有明确 TODO：旧 generation 尚未在最后一个 Agent 离开后自动回收。RabiRoute 可以学习这种共享组合与作用域父链，但不能把它误写成“每会话独立挂载和卸载”。Route、事件记录、投递证据和 Outbox 仍由 Manager/Gateway 的稳定模块拥有。
 
 ## 9. DSH 的 Web UI 本身也是插件树
 
@@ -328,9 +332,15 @@ Cordis 适合组合能力和生命周期。RabiRoute 的 Route、事件记录、
 ## 对现有重构方案的修正
 
 - 保留 Cordis 组合内核、Rabi 业务适配层和多宿主扩展协议。
+- Gateway 性能采样与上报已迁入 Gateway 根 Context 下的 Fiber；根 Context 销毁时通过 effect disposer 撤销 reporter 资源，不再由根 Context 外的独立生命周期入口持有。
+- Manager definition 使用 `provides`、`requires` 和 `optional` 建立能力图。依赖 revision 递归包含直接和传递 Provider，上游变化会沿能力链重启真实消费者；`PluginCatalog.refreshDeclaration()` 在重载时刷新 manifest 与 `missingCapabilities`，支持 `active -> waiting_dependency -> active`，对应 DSH“配置、实际状态和诊断分开”的做法。
+- Manager 退出和启动失败回收显式串行执行 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`。这是针对 Cordis 同层 disposer 并发语义增加的宿主顺序，不依赖 Fiber 同层销毁顺序。
 - 把 DSH 作为组合与生命周期参考，不把其普通插件加载方式当作安全范例。
-- WebGUI 长期可以像 DSH 一样拥有客户端插件树；第一阶段仍先做声明式 Contribution Catalog。
-- Desktop 通过同一贡献协议扩展；代码插件优先独立进程，不要求 Python/Qt 直接运行 Cordis。
+- 生产 Manager 业务路由已使用稳定 `routeId` 与真实 `exact/prefix` 声明；Registry 拒绝重复 ID 和相交静态路径。
+- WebGUI 长期可以像 DSH 一样拥有客户端插件树；当前先用可信 command/renderer 注册表消费声明式 Contribution Catalog。合同绑定 `pluginId + instanceId`，跨插件目录引用失败关闭。
+- Desktop 通过同一贡献协议和冻结 Registry 扩展 lifecycle、panel action、菜单、快捷键、设置与状态；`manager:desktop` 设置区负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置。
+- 可信 Python entry point 在 Desktop 进程内执行并接收完整 Registry；owner-scoped registrar、权限模型和更强进程隔离属于后续 Extension Host。
+- RabiLink 第二次 `stop()` 可以取消停止期间排队的重启；配置 watcher 与 Rabi 身份配置 PATCH 都等待异步 Relay 同步。
 - 文档中“独立进程或更强隔离”标记为 RabiRoute 的安全选择，不再描述为 DSH 的现有做法。
 
 实施设计见[基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md)，原则摘要见[从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md)。

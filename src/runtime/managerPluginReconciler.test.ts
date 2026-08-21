@@ -353,3 +353,251 @@ test("Manager Plugin Reconciler reports rollback failure without claiming recove
 
   await fixture.dispose();
 });
+
+test("Manager Plugin Reconciler orders providers before consumers and keeps missing dependencies waiting", async () => {
+  const fixture = await setup();
+  const lifecycle: string[] = [];
+  const provider = {
+    ...definition("manager:provider", "1.0.0", () => { lifecycle.push("provider:start"); }),
+    provides: ["manager.example"]
+  } satisfies ManagerPluginDefinition;
+  const consumer = {
+    ...definition("manager:consumer", "1.0.0", () => { lifecycle.push("consumer:start"); }),
+    requires: ["manager.example"]
+  } satisfies ManagerPluginDefinition;
+  const waiting = {
+    ...definition("manager:waiting", "1.0.0", () => { lifecycle.push("waiting:start"); }),
+    requires: ["manager.missing"]
+  } satisfies ManagerPluginDefinition;
+
+  const status = await fixture.reconciler.reconcile([
+    desired(consumer, "consumer@1"),
+    desired(waiting, "waiting@1"),
+    desired(provider, "provider@1")
+  ]);
+
+  assert.equal(status.state, "idle");
+  assert.deepEqual(status.desired, ["manager:provider", "manager:consumer", "manager:waiting"]);
+  assert.deepEqual(status.active, ["manager:provider", "manager:consumer"]);
+  assert.deepEqual(lifecycle, ["provider:start", "consumer:start"]);
+  assert.deepEqual(
+    fixture.runtime.catalog.get("manager:waiting"),
+    {
+      instanceId: "manager:waiting",
+      pluginId: "builtin:manager:waiting",
+      manifest: waiting.manifest,
+      host: "manager",
+      scope: "global",
+      status: "waiting_dependency",
+      missingCapabilities: ["manager.missing"]
+    }
+  );
+
+  await fixture.dispose();
+});
+
+test("Manager Plugin Reconciler restarts consumers when a provider revision changes", async () => {
+  const fixture = await setup();
+  const lifecycle: string[] = [];
+  const providerV1 = {
+    ...definition("manager:provider", "1.0.0", (ctx) => {
+      lifecycle.push("provider:v1:start");
+      ctx.effect(() => () => { lifecycle.push("provider:v1:stop"); });
+    }),
+    provides: ["manager.example"]
+  } satisfies ManagerPluginDefinition;
+  const providerV2 = {
+    ...definition("manager:provider", "2.0.0", (ctx) => {
+      lifecycle.push("provider:v2:start");
+      ctx.effect(() => () => { lifecycle.push("provider:v2:stop"); });
+    }),
+    provides: ["manager.example"]
+  } satisfies ManagerPluginDefinition;
+  const consumer = {
+    ...definition("manager:consumer", "1.0.0", (ctx) => {
+      lifecycle.push("consumer:start");
+      ctx.effect(() => () => { lifecycle.push("consumer:stop"); });
+    }),
+    requires: ["manager.example"]
+  } satisfies ManagerPluginDefinition;
+
+  await fixture.reconciler.reconcile([
+    desired(consumer, "consumer@1"),
+    desired(providerV1, "provider@1")
+  ]);
+  const reloaded = await fixture.reconciler.reconcile([
+    desired(consumer, "consumer@1"),
+    desired(providerV2, "provider@2")
+  ]);
+
+  assert.deepEqual(reloaded.changed, ["manager:provider", "manager:consumer"]);
+  assert.deepEqual(reloaded.active, ["manager:provider", "manager:consumer"]);
+  assert.deepEqual(lifecycle, [
+    "provider:v1:start",
+    "consumer:start",
+    "consumer:stop",
+    "provider:v1:stop",
+    "provider:v2:start",
+    "consumer:start"
+  ]);
+
+  await fixture.dispose();
+});
+
+test("Manager Plugin Reconciler propagates provider revisions through capability chains", async () => {
+  const fixture = await setup();
+  const lifecycle: string[] = [];
+  const rootV1 = {
+    ...definition("manager:root-provider", "1.0.0", (ctx) => {
+      lifecycle.push("root:v1:start");
+      ctx.effect(() => () => { lifecycle.push("root:v1:stop"); });
+    }),
+    provides: ["manager.root"]
+  } satisfies ManagerPluginDefinition;
+  const rootV2 = {
+    ...definition("manager:root-provider", "2.0.0", (ctx) => {
+      lifecycle.push("root:v2:start");
+      ctx.effect(() => () => { lifecycle.push("root:v2:stop"); });
+    }),
+    provides: ["manager.root"]
+  } satisfies ManagerPluginDefinition;
+  const middle = {
+    ...definition("manager:middle-provider", "1.0.0", (ctx) => {
+      lifecycle.push("middle:start");
+      ctx.effect(() => () => { lifecycle.push("middle:stop"); });
+    }),
+    requires: ["manager.root"],
+    provides: ["manager.middle"]
+  } satisfies ManagerPluginDefinition;
+  const leaf = {
+    ...definition("manager:leaf-consumer", "1.0.0", (ctx) => {
+      lifecycle.push("leaf:start");
+      ctx.effect(() => () => { lifecycle.push("leaf:stop"); });
+    }),
+    requires: ["manager.middle"]
+  } satisfies ManagerPluginDefinition;
+
+  await fixture.reconciler.reconcile([
+    desired(leaf, "leaf@1"),
+    desired(middle, "middle@1"),
+    desired(rootV1, "root@1")
+  ]);
+  const reloaded = await fixture.reconciler.reconcile([
+    desired(leaf, "leaf@1"),
+    desired(middle, "middle@1"),
+    desired(rootV2, "root@2")
+  ]);
+
+  assert.deepEqual(reloaded.changed, [
+    "manager:root-provider",
+    "manager:middle-provider",
+    "manager:leaf-consumer"
+  ]);
+  assert.deepEqual(lifecycle, [
+    "root:v1:start",
+    "middle:start",
+    "leaf:start",
+    "leaf:stop",
+    "middle:stop",
+    "root:v1:stop",
+    "root:v2:start",
+    "middle:start",
+    "leaf:start"
+  ]);
+
+  await fixture.dispose();
+});
+
+test("Manager Plugin Reconciler rejects duplicate enabled capability providers", async () => {
+  const fixture = await setup();
+  let applyCount = 0;
+  const first = {
+    ...definition("manager:first-provider", "1.0.0", () => { applyCount += 1; }),
+    provides: ["manager.shared"]
+  } satisfies ManagerPluginDefinition;
+  const second = {
+    ...definition("manager:second-provider", "1.0.0", () => { applyCount += 1; }),
+    provides: ["manager.shared"]
+  } satisfies ManagerPluginDefinition;
+
+  const status = await fixture.reconciler.reconcile([
+    desired(first, "first@1"),
+    desired(second, "second@1")
+  ]);
+
+  assert.equal(status.state, "failed");
+  assert.equal(status.error?.code, "invalid_desired_state");
+  assert.match(status.error?.message ?? "", /multiple enabled providers/);
+  assert.deepEqual(status.active, []);
+  assert.equal(applyCount, 0);
+
+  await fixture.dispose();
+});
+
+test("Manager Plugin Reconciler does not block plugins on optional capabilities", async () => {
+  const fixture = await setup();
+  let applyCount = 0;
+  const plugin = {
+    ...definition("manager:optional-consumer", "1.0.0", () => { applyCount += 1; }),
+    optional: ["manager.optional-provider"]
+  } satisfies ManagerPluginDefinition;
+
+  const status = await fixture.reconciler.reconcile([desired(plugin, "optional@1")]);
+
+  assert.equal(status.state, "idle");
+  assert.deepEqual(status.active, ["manager:optional-consumer"]);
+  assert.equal(fixture.runtime.catalog.get("manager:optional-consumer")?.status, "active");
+  assert.equal(applyCount, 1);
+
+  await fixture.dispose();
+});
+
+test("Manager Plugin Reconciler moves consumers to waiting when a provider is disabled and reactivates them when it returns", async () => {
+  const fixture = await setup();
+  const lifecycle: string[] = [];
+  const provider = {
+    ...definition("manager:provider", "1.0.0", (ctx) => {
+      lifecycle.push("provider:start");
+      ctx.effect(() => () => { lifecycle.push("provider:stop"); });
+    }),
+    provides: ["manager.example"]
+  } satisfies ManagerPluginDefinition;
+  const consumer = {
+    ...definition("manager:consumer", "1.0.0", (ctx) => {
+      lifecycle.push("consumer:start");
+      ctx.effect(() => () => { lifecycle.push("consumer:stop"); });
+    }),
+    requires: ["manager.example"]
+  } satisfies ManagerPluginDefinition;
+
+  await fixture.reconciler.reconcile([
+    desired(consumer, "consumer@1"),
+    desired(provider, "provider@1")
+  ]);
+  const waiting = await fixture.reconciler.reconcile([
+    desired(consumer, "consumer@1"),
+    desired(provider, "provider@1", false)
+  ]);
+
+  assert.deepEqual(waiting.active, []);
+  assert.equal(fixture.runtime.catalog.get("manager:consumer")?.status, "waiting_dependency");
+  assert.deepEqual(fixture.runtime.catalog.get("manager:consumer")?.missingCapabilities, ["manager.example"]);
+
+  const restored = await fixture.reconciler.reconcile([
+    desired(consumer, "consumer@1"),
+    desired(provider, "provider@1")
+  ]);
+
+  assert.deepEqual(restored.active, ["manager:provider", "manager:consumer"]);
+  assert.equal(fixture.runtime.catalog.get("manager:consumer")?.status, "active");
+  assert.deepEqual(lifecycle, [
+    "provider:start",
+    "consumer:start",
+    "consumer:stop",
+    "provider:stop",
+    "provider:start",
+    "consumer:start"
+  ]);
+
+  await fixture.dispose();
+});

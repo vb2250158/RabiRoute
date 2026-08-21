@@ -2,7 +2,7 @@
 
 # RabiRoute 从 DSH 学习的插件化设计理念
 
-> 状态：架构调研与实施总结。26 个内置 Manager 插件迁移完成，配置对账、受控表现贡献和独立进程扩展合同已经落地；统一验证已于 2026-08-21 通过。
+> 状态：架构调研、26 个内置 Manager 插件迁移和统一验证已经完成，配置对账、受控表现贡献和独立进程扩展合同已经落地。
 >
 > 主要读者：RabiRoute 维护者、消息端与 Agent 端接入开发者。
 
@@ -21,9 +21,9 @@ RabiRoute 适合学习 DeepSeek Harness（DSH）的运行时组合原则，并�
 
 ## 资料快照
 
-本次调研基于以下官方版本：
+本次调研的实现基线是本地 [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006)，对应 `dsh@0.1.1-rc.1`，提交时间为 2026-08-21 14:21:44 +08:00。2026-08-21 复核时，远端 `master` 已前进至 `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`；本文没有审计该远端新提交，源码判断仍只适用于本地 `528c682e06`。
 
-- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006)，对应 `dsh@0.1.1-rc.1`，提交时间为 2026-08-21 14:21:44 +08:00。
+其他资料：
 - [《A Programming Paradigm for Spatiotemporal Composability》v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf)，提交日期为 2026-08-13。
 - [DSH 架构说明](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/architecture.zh.md)与 [Cordis 入门](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/cordis-primer.zh.md)。
 
@@ -43,11 +43,13 @@ DSH 的模型适配器、工具注册、会话日志、Agent 循环、持久化�
 
 加载顺序因此来自能力关系，不再依赖入口文件中的人工启动顺序。
 
+服务实例同时受 realm 和 Fiber 所有权约束：同一 realm 只能有一个 Provider，只有注册该服务的 Fiber 可以修改服务值。DSH Agent preset 会拒绝把 preset 服务泄漏到 root realm；RabiRoute 也应让插件作用域服务留在自己的 realm，宿主全局服务只能由明确的宿主组合层发布。
+
 ### 3. 副作用必须可撤销
 
 Cordis 将注册操作视为带撤销动作的副作用。事件监听器、服务、工具、提示词片段和 Provider 都由安装它们的插件 Fiber 持有。
 
-Cordis 同一 Fiber 中的多个 disposer 通过 `Promise.all(...)` 并行执行。它不保证多个 `ctx.effect()` 按登记逆序串行卸载。需要顺序的插件必须在一个 disposer 内执行 `unregister → stop accepting → drain → stop resources → await exit`。
+Fiber 顶层的多个 effect disposer 会按登记逆序取出，再由 `Promise.all(...)` 启动并等待，异步清理可以并发。单个 `ctx.effect()` 内返回的多个 disposer 也按登记逆序处理，但通过 Promise 链串行执行。需要业务顺序的插件必须把 `unregister → stop accepting → drain → stop resources → await exit` 放进一个关键 effect/disposer。
 
 论文把可撤销的内部修改称为时间可组合性：组件退出后，它在系统内部留下的修改应被清除。
 
@@ -55,9 +57,13 @@ Cordis 同一 Fiber 中的多个 disposer 通过 `Promise.all(...)` 并行执行
 
 DSH 用 profile、组合包和 patch 形成插件树。每个配置项有稳定 ID、插件入口、配置、隔离信息和启用状态。Loader 对比配置与现有实例，只替换受影响的部分。
 
-热更新建立在同一机制上：先撤销旧实例，再载入新实例；新模块失败时恢复旧模块和旧实例，避免系统停在只更新了一半的状态。
+配置变更由 Loader Entry transaction 处理：Entry 更新销毁旧 Fiber、启动新 Fiber，失败时恢复旧插件。源码 HMR 是独立路径，负责备份和恢复 ESM/CJS cache。两条路径只共享 Fiber 销毁与重新挂载语义，不能视为同一个更新机制。
 
-### 5. 插件边界不等于安全沙箱
+### 5. Agent preset 使用每 preset standing mount
+
+每个 preset 的 `cordis.yml` 在进程中只挂载一次。使用同一 preset 的多个 Agent 通过 scope 父链共享该 standing mount，因此插件实例、工具注册、提示词片段和 projection unit 只存在一份；插件内部再按 Session/Agent key 隔离状态。preset 文件变化会创建新 generation，当前 DSH 仍有旧 generation 在最后一个 Agent 离开后自动回收的 TODO。
+
+### 6. 插件边界不等于安全沙箱
 
 DSH 的普通 profile 插件通过 Node ESM 进入主进程，属于受信任代码。Cordis `isolate` 只改变服务实例的解析 realm，不限制进程、文件系统或网络。
 
@@ -65,7 +71,7 @@ DSH 对模型生成的 Host 动态插件使用同进程 `node:vm` 和受限 Cont
 
 因此，RabiRoute 对未知或高风险插件采用独立进程，是在 DSH 组合模型之上增加的安全设计。完整证据见[DSH 如何使用 Cordis：运行时、界面与隔离分析](dsh-cordis-runtime-analysis.md)。
 
-### 6. 外部发送不能靠卸载撤销
+### 7. 外部发送不能靠卸载撤销
 
 监听器、端口、定时器和本机注册通常可以撤销。已经发出的 QQ 消息、远端 API 写入和设备指令已进入系统外部，卸载插件不能恢复原状。
 
@@ -76,15 +82,16 @@ DSH 对模型生成的 Host 动态插件使用同进程 `node:vm` 和受限 Cont
 当前实现已经落地以下边界：
 
 - Manager 和 Gateway 使用独立 Cordis 根 Context。
-- `builtinManagerPlugins.ts` 声明 26 个内置 Manager 实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供 hook。
+- Gateway 性能采样与上报已迁入 Gateway 根 Context 下的 Fiber；根 Context 销毁时由 effect disposer 撤销 reporter 资源。
+- 正式 Manager 只通过 `startManager()` 初始化：先挂共享资源，再合成 26 个 definition 与对应 hook，随后首次对账。definition 使用 `provides`、`requires` 和 `optional` 建立能力图。
 - 表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；业务 HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。
 - 中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。
 - 7 个 Manager 插件贡献页面、导航、设置区、状态卡、命令、快捷键、托盘菜单或主题；19 个插件只提供运行能力。
-- WebGUI 和 Desktop 消费同一受控贡献目录，不维护第二套扩展事实。
-- 插件关键卸载顺序放在单一 disposer 中，使用 `ManagerPluginRequestTracker` 撤销路由、拒绝新请求并 drain。
+- WebGUI 通过可信 command/renderer 注册表消费目录；Desktop 通过冻结 Registry 消费 lifecycle 与 panel action。两者不维护第二套扩展事实。
+- 插件关键卸载顺序放在单一 disposer 中，使用 `ManagerPluginRequestTracker` 撤销路由、拒绝新请求并 drain。Manager 宿主另按 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()` 串行退出，避免共享 Worker/Persistence 先停。
 - 独立进程协议只用于未知、不可信或高风险扩展；可信内置插件在 Manager 主进程运行。
 
-Route、消息记录、路由判断、`AgentPacket`、Outbox、计划、记忆和消息处理记录仍由原业务模块拥有。统一验证已于 2026-08-21 通过。
+Route、消息记录、路由判断、`AgentPacket`、Outbox、计划、记忆和消息处理记录仍由原业务模块拥有。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，支持 `active -> waiting_dependency -> active`。
 
 ## 适合 RabiRoute 的原则
 
@@ -130,7 +137,7 @@ Manager 和 Gateway 保留最小组合内核，WebGUI 和 Desktop 保留最小�
 - 子进程和临时目录；
 - 状态与诊断贡献项。
 
-Cordis 会并行执行同一 Fiber 的多个 disposer。插件内部存在先后依赖时，只登记一个关键 disposer，并按以下顺序完成：
+Fiber 顶层多个 effect disposer 按登记逆序取出后并发启动和等待；单个 `ctx.effect()` 内的多个 disposer 按登记逆序串行执行。插件内部存在先后依赖时，只登记一个关键 effect/disposer，并按以下顺序完成：
 
 ```text
 unregister routes
@@ -236,11 +243,15 @@ interface RabiPluginContext {
 ## 当前采用情况
 
 1. Agent Adapter 和 Message Adapter 已进入受控注册与组合边界。
-2. Manager 已有 26 个内置插件 definition 与对应 hook，并通过配置对账局部启停。
-3. WebGUI 与 Desktop 通过宿主拥有的可信注册表消费表现贡献，并可注册新的 renderer、route、handler 和 resource contract；未知或未注册贡献失败关闭。HTTP 路由不属于表现贡献。
-4. 未知、不可信或高风险第三方扩展必须使用独立进程和版本化协议；这属于 RabiRoute 的安全增强，不是 DSH 普通插件的默认运行方式。
-5. 第三方自定义表现代码仍需受控 Extension Host 和更明确的权限边界。
-6. 统一验证已于 2026-08-21 通过。
+2. Manager 已有 26 个内置插件 definition 与对应 hook，并通过配置对账局部启停。依赖 revision 递归包含直接和传递 Provider，上游变化会沿能力链重启真实消费者。
+3. 生产 Manager 业务路由使用稳定 `routeId` 与真实 `exact/prefix` 声明；重复 ID 和相交静态路径会被拒绝。HTTP 路由不属于表现贡献。
+4. WebGUI 与 Desktop 通过宿主拥有的可信注册表消费表现贡献。合同绑定 `pluginId + instanceId`，跨插件目录引用失败关闭；`manager:desktop` 的设置区负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置。
+5. 未知、不可信或高风险第三方扩展必须使用独立进程和版本化协议；这属于 RabiRoute 的安全增强，不是 DSH 普通插件的默认运行方式。
+6. Gateway 性能采样与上报由根 Context Fiber 持有。
+7. RabiLink 第二次 `stop()` 可以取消停止期间排队的重启；配置 watcher 与 Rabi 身份配置 PATCH 都等待异步 Relay 同步。
+8. AstrBot 只使用 ChatUI `/api/chat/send`，并要求 `ASTRBOT_SESSION_ID`；旧插件回退、部署 API 和部署脚本已经删除。
+9. 可信 Python entry point 是 Desktop 进程内扩展；owner-scoped registrar、权限模型和更强隔离仍需受控 Extension Host。
+10. 统一验证已完成：TypeScript 类型检查、后端构建、1360 项 TypeScript 测试、55 项脚本合同测试、WebGUI 构建、配置检查和 202 项 Desktop Python 测试均通过；TypeScript 测试中 1 项按合同跳过。
 
 ## 不采用的做法
 
@@ -254,5 +265,3 @@ interface RabiPluginContext {
 ## 后续工作
 
 - 为第三方自定义 Web/Desktop 代码建立受控 Extension Host 和权限模型。
-- 对 26 个 Manager 插件一次性执行卸载顺序、请求 drain、资源退出和真实组合验证。
-- 统一验证已于 2026-08-21 通过。

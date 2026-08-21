@@ -7,6 +7,8 @@ import { loadPerformanceConfig, loadPerformanceLogs, loadPerformanceSummary, sav
 import { defaultPerformanceMonitoringConfig, type PerformanceMonitoringConfig, type PerformanceSample, type PerformanceSeriesPoint, type PerformanceSummary } from "@shared/performanceContract";
 import { registerPageSaveAction } from "../pageSaveAction";
 import { pluginCatalogStore } from "../pluginCatalogStore";
+import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
+import { webRenderersAt } from "../pluginRenderers";
 
 type PerformanceChartSeries = {
   id: string;
@@ -16,7 +18,7 @@ type PerformanceChartSeries = {
 };
 
 const summary = ref<PerformanceSummary>();
-const performanceStatusVisible = computed(() => pluginCatalogStore.visibility.value.performanceStatus);
+const performanceStatusRenderers = computed(() => webRenderersAt(pluginCatalogStore.statusRenderers.value, "global.performance.summary"));
 const recentLogs = ref<PerformanceSample[]>([]);
 const config = ref<PerformanceMonitoringConfig>(defaultPerformanceMonitoringConfig());
 const rangeMs = ref(60 * 60 * 1000);
@@ -44,6 +46,14 @@ const managerSource = computed(() => summary.value?.sources.find(item => item.so
 const latestRequestP95 = computed(() => Math.max(0, ...(summary.value?.sources.map(item => item.latest?.requestP95Ms ?? 0) ?? [])));
 const totalDiskMb = computed(() => (summary.value?.status.diskBytes ?? 0) / 1024 / 1024);
 const logText = computed(() => recentLogs.value.slice(-30).reverse().map(item => JSON.stringify(item)).join("\n"));
+const performanceStatusContext = computed(() => ({
+  onlineSources: onlineSources.value,
+  totalSources: totalSources.value,
+  managerCpuPercent: managerSource.value?.latest?.cpuPercent ?? 0,
+  latestRequestP95: latestRequestP95.value,
+  totalDiskMb: totalDiskMb.value,
+  logDirectory: summary.value?.status.logDirectory || "data/.runtime/performance"
+}));
 
 function sourceLabel(point: { source: { kind: string; id: string } }): string {
   if (point.source.kind === "manager") return "Manager";
@@ -189,28 +199,7 @@ onBeforeUnmount(() => {
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
     <v-alert v-if="saved" type="success" variant="tonal" class="mb-4">{{ saved }}</v-alert>
 
-    <section v-if="performanceStatusVisible" class="performance-grid performance-overview">
-      <article class="performance-stat primary">
-        <span>在线采集器</span>
-        <strong>{{ onlineSources }}<small>/{{ totalSources }}</small></strong>
-        <p>Manager、Gateway 与已打开的 WebGUI</p>
-      </article>
-      <article class="performance-stat">
-        <span>Manager CPU</span>
-        <strong>{{ (managerSource?.latest?.cpuPercent ?? 0).toFixed(1) }}<small>%</small></strong>
-        <p>100% 表示占满一个逻辑核心</p>
-      </article>
-      <article class="performance-stat">
-        <span>请求 P95</span>
-        <strong>{{ latestRequestP95.toFixed(1) }}<small>ms</small></strong>
-        <p>最近采样区间内的接口耗时</p>
-      </article>
-      <article class="performance-stat">
-        <span>性能日志</span>
-        <strong>{{ totalDiskMb.toFixed(1) }}<small>MB</small></strong>
-        <p>{{ summary?.status.logDirectory || "data/.runtime/performance" }}</p>
-      </article>
-    </section>
+    <TrustedWebRendererHost :renderers="performanceStatusRenderers" :context="performanceStatusContext" />
 
     <section class="performance-config">
       <div class="performance-config-copy">

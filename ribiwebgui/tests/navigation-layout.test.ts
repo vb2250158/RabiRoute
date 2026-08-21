@@ -11,6 +11,7 @@ const personaSource = fs.readFileSync(new URL("../src/pages/PersonaTemplatePage.
 const overviewSource = fs.readFileSync(new URL("../src/pages/OverviewPage.vue", import.meta.url), "utf8");
 const settingsSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
 const speechSource = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
+const desktopSettingsRendererSource = fs.readFileSync(new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
 
 test("sidebar renders only catalog navigation backed by activated pages", () => {
   const primaryIndex = appSource.indexOf("const navItems = computed");
@@ -18,7 +19,7 @@ test("sidebar renders only catalog navigation backed by activated pages", () => 
   const footerIndex = appSource.indexOf("const footerNavItems = computed");
   const utilityRenderIndex = appSource.indexOf("v-for=\"item in utilityNavItems\"");
   const footerRenderIndex = appSource.indexOf("v-for=\"item in footerNavItems\"");
-  const configDirectoryIndex = appSource.indexOf("store.openConfigFile('manager')");
+  const configDirectoryIndex = appSource.indexOf("v-for=\"command in sidebarCommands\"");
 
   assert.ok(primaryIndex >= 0);
   assert.ok(utilityIndex > primaryIndex);
@@ -56,16 +57,17 @@ test("console is route-card-only while host settings live on the Settings page",
   assert.match(settingsSource, /class="section-title small-title">局域网访问 WebGUI<\/div>/);
 });
 
-test("selected-text reading, screenshots, and login startup stay on Settings", () => {
+test("selected-text reading stays on Settings while trusted desktop settings render in the same placement", () => {
   assert.match(settingsSource, /开启滑词菜单/);
   assert.match(settingsSource, /small-title">滑词朗读/);
-  assert.match(settingsSource, /系统级截图/);
-  assert.match(settingsSource, /Windows 登录启动/);
-  assert.match(settingsSource, /desktopThemeOptions/);
-  assert.match(settingsSource, /option\.webResourceId/);
+  assert.match(settingsSource, /TrustedWebRendererHost/);
+  assert.match(desktopSettingsRendererSource, /系统级截图/);
+  assert.match(desktopSettingsRendererSource, /Windows 登录启动/);
+  assert.match(desktopSettingsRendererSource, /themeOptions/);
+  assert.match(desktopSettingsRendererSource, /option\.webResourceId/);
   assert.match(settingsSource, /selectionSpeechAdvanced/);
-  assert.match(settingsSource, /desktopScreenshotShortcut/);
-  assert.match(settingsSource, /desktopAutostart/);
+  assert.match(desktopSettingsRendererSource, /desktopScreenshotShortcut/);
+  assert.match(desktopSettingsRendererSource, /desktopAutostart/);
   assert.doesNotMatch(speechSource, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);
 });
 

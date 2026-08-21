@@ -143,3 +143,14 @@ test("Plugin reconciliation API publishes state and triggers a controlled reread
     await app.close();
   }
 });
+
+test("Plugin reconciliation API leaves the removed reconcile alias unhandled", async () => {
+  const app = await startCatalogServer();
+  try {
+    const response = await fetch(app.baseUrl + "/api/plugins/reconcile", { method: "POST" });
+    assert.equal(response.status, 404);
+    assert.equal(app.reconcileCount(), 0);
+  } finally {
+    await app.close();
+  }
+});

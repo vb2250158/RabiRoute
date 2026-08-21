@@ -16,8 +16,6 @@ type TimeOfDay = {
 };
 
 const secondMs = 1000;
-const minuteMs = 60 * secondMs;
-const dayMs = 24 * 60 * minuteMs;
 
 export function parseTimeOfDay(value: string | undefined): TimeOfDay | null {
   const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(value || "").trim());

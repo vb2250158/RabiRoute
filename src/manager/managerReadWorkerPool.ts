@@ -72,6 +72,8 @@ type WorkerSlot = {
   worker: ChildProcess;
   active?: ActiveRead;
   closed: boolean;
+  closedPromise: Promise<void>;
+  resolveClosed(): void;
 };
 
 export class ManagerReadWorkerError extends Error {
@@ -114,6 +116,9 @@ export class ManagerReadWorkerPool {
   private active = 0;
   private spawnedWorkers = 0;
   private nextRequestId = 1;
+  private accepting = true;
+  private stopped = false;
+  private stopPromise?: Promise<void>;
 
   constructor(options: ManagerReadWorkerPoolOptions = {}) {
     this.maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? 2));
@@ -122,7 +127,56 @@ export class ManagerReadWorkerPool {
     ManagerReadWorkerPool.instances.add(this);
   }
 
+  start(): void {
+    if (!this.stopped) return;
+    if (this.active || this.queue.length || this.workers.size) {
+      throw new Error("Manager read worker pool cannot restart while resources are still active.");
+    }
+    this.accepting = true;
+    this.stopped = false;
+    this.stopPromise = undefined;
+    ManagerReadWorkerPool.instances.add(this);
+  }
+
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    this.accepting = false;
+    ManagerReadWorkerPool.instances.delete(this);
+    const stoppingError = new ManagerReadWorkerError("Manager read worker pool stopped.", "aborted");
+    for (const pending of this.queue.splice(0)) {
+      if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
+      pending.reject(stoppingError);
+    }
+    for (const shared of this.voiceSummaryInFlight.values()) shared.controller.abort();
+    for (const shared of this.performanceInFlight.values()) shared.controller.abort();
+    const slots = [...this.workers];
+    this.stopPromise = (async () => {
+      for (const slot of slots) this.discardWorker(slot, stoppingError);
+      await Promise.all(slots.map(async slot => {
+        if (slot.worker.exitCode !== null || slot.worker.signalCode !== null) return;
+        await Promise.race([
+          slot.closedPromise,
+          new Promise<void>(resolve => setTimeout(resolve, 2_000))
+        ]);
+        if (slot.worker.exitCode === null && slot.worker.signalCode === null) {
+          slot.worker.kill("SIGKILL");
+          await Promise.race([
+            slot.closedPromise,
+            new Promise<void>(resolve => setTimeout(resolve, 2_000))
+          ]);
+        }
+      }));
+      this.voiceSummaryInFlight.clear();
+      this.performanceInFlight.clear();
+      this.stopped = true;
+    })();
+    return this.stopPromise;
+  }
+
   run<T>(task: ManagerReadWorkerTask, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+    if (!this.accepting) {
+      return Promise.reject(new ManagerReadWorkerError("Manager read worker pool is stopped.", "aborted"));
+    }
     if (options.signal?.aborted) {
       return Promise.reject(new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));
     }
@@ -371,7 +425,8 @@ export class ManagerReadWorkerPool {
 
   private drain(): void {
     while (
-      this.active < this.maxConcurrency
+      this.accepting
+      && this.active < this.maxConcurrency
       && ManagerReadWorkerPool.globalActive < ManagerReadWorkerPool.globalMaxConcurrency
       && this.queue.length > 0
     ) {
@@ -387,7 +442,7 @@ export class ManagerReadWorkerPool {
         pending.reject(new ManagerReadWorkerError("Manager read worker could not start.", "worker_failed"));
         continue;
       }
-      this.start(slot, pending);
+      this.startPending(slot, pending);
     }
   }
 
@@ -406,7 +461,10 @@ export class ManagerReadWorkerPool {
     } catch {
       return undefined;
     }
-    const slot: WorkerSlot = { worker, closed: false };
+    let resolveClosed = (): void => {};
+    const closedPromise = new Promise<void>(resolve => { resolveClosed = resolve; });
+    const slot: WorkerSlot = { worker, closed: false, closedPromise, resolveClosed };
+    worker.once("close", () => resolveClosed());
     if (!worker.pid) {
       if (worker.connected) worker.disconnect();
       worker.kill();
@@ -439,7 +497,7 @@ export class ManagerReadWorkerPool {
     return slot;
   }
 
-  private start(slot: WorkerSlot, pending: PendingRead): void {
+  private startPending(slot: WorkerSlot, pending: PendingRead): void {
     this.active += 1;
     ManagerReadWorkerPool.globalActive += 1;
     recordPerformanceOperation(
@@ -543,3 +601,17 @@ export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({
   maxQueue: 1,
   timeoutMs: 60_000
 });
+
+const builtinManagerReadWorkerPools = [
+  managerReadWorkerPool,
+  managerCatalogWorkerPool,
+  managerPerformanceWorkerPool
+] as const;
+
+export function startBuiltinManagerReadWorkerPools(): void {
+  for (const pool of builtinManagerReadWorkerPools) pool.start();
+}
+
+export async function stopBuiltinManagerReadWorkerPools(): Promise<void> {
+  await Promise.all(builtinManagerReadWorkerPools.map(pool => pool.stop()));
+}

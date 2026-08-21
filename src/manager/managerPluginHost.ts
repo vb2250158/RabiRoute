@@ -4,7 +4,6 @@ import {
   type ManagerPluginRuntimeMount
 } from "../runtime/managerPluginRuntime.js";
 import { ManagerPluginReconciler } from "../runtime/managerPluginReconciler.js";
-import { normalizeManagerPluginConfig } from "./managerPluginConfig.js";
 
 export const BUILTIN_MANAGER_PLUGIN_RUNTIME_KEY = "rabi.runtime.managerPlugins.builtin";
 
@@ -22,12 +21,4 @@ export function getBuiltinManagerPluginHost(): Promise<BuiltinManagerPluginHost>
       return { runtime, reconciler: new ManagerPluginReconciler(runtime) };
     }
   );
-}
-
-export async function getBuiltinManagerPluginRuntime(): Promise<ManagerPluginRuntimeMount> {
-  const pluginHost = await getBuiltinManagerPluginHost();
-  if (pluginHost.reconciler.status().revision === 0) {
-    await pluginHost.reconciler.reconcile(normalizeManagerPluginConfig({}).desired);
-  }
-  return pluginHost.runtime;
 }

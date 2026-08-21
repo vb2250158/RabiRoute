@@ -43,8 +43,7 @@ export function handlePluginCatalogApi(
   response: http.ServerResponse,
   context: PluginCatalogApiContext
 ): boolean {
-  const reconciliationRoute = requestUrl.pathname === "/api/plugins/reconciliation"
-    || requestUrl.pathname === "/api/plugins/reconcile";
+  const reconciliationRoute = requestUrl.pathname === "/api/plugins/reconciliation";
   if (reconciliationRoute) {
     if (!context.reconciliation) {
       jsonResponse(response, 503, { code: -1, message: "Plugin reconciliation is unavailable." });

@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: migration of all 26 built-in Manager plugins is complete. Plugins register business HTTP routes, and WebGUI/Desktop consume declarative contributions as minimal extension hosts. Unified validation passed on August 21, 2026; a controlled Extension Host for arbitrary third-party presentation code remains a future route.
+> Status: migration and unified validation of all 26 built-in Manager plugins are complete. Plugins register business HTTP routes, and WebGUI/Desktop consume declarative contributions as minimal extension hosts; a controlled Extension Host for arbitrary third-party presentation code remains a future route.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -17,6 +17,17 @@ RabiRoute adopts a Cordis composition kernel, a Rabi business adaptation layer, 
 - Built-in capabilities completed migration in this order: Agent Adapters, message-side lifecycle, Gateway composition, Manager catalog, presentation extensions, and configuration reconciliation.
 
 The design follows [Plugin Architecture Lessons for RabiRoute from DSH](dsh-plugin-architecture-lessons_en.md).
+
+## Current Manager implementation
+
+- Production startup has one initialization path through `startManager()`: the root Context owns shared Worker/Persistence resources, mounts the single Manager Plugin Runtime, composes definitions with business `apply` hooks, and then performs initial reconciliation.
+- Definitions build the capability graph through `provides`, `requires`, and `optional`. Missing requirements produce `waiting_dependency`; available optional providers affect ordering; dependency revisions recursively include direct and transitive providers, so upstream revision or active-state changes restart every real downstream consumer; duplicate providers reject reconciliation.
+- `PluginCatalog.refreshDeclaration()` updates the manifest and `missingCapabilities` during reload, so one instance can move `active -> waiting_dependency -> active` without keeping stale catalog declarations.
+- Production business routes declare stable `routeId` values with real `exact` or `prefix` matchers; `dynamic` remains only as an extension contract. The Registry rejects duplicate IDs and, when methods overlap, `exact/exact`, `exact/prefix`, and `prefix/prefix` path conflicts.
+- Manager shutdown and startup-failure cleanup explicitly run `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`. This prevents Cordis sibling-disposer concurrency from stopping shared Workers/Persistence before plugin consumers. Shared-resource stop cancels queued/shared requests, flushes writes, terminates Workers, and waits for exit. If one shared resource fails to stop, cleanup continues for the others and rethrows the first error afterward. RabiLink stop waits for the LAN listener, sockets, Relay, SSE, WebGUI, and speech drains.
+- WebGUI uses trusted command/renderer registries. Desktop uses one frozen Registry for lifecycle and panel actions. Contracts are bound to `pluginId + instanceId`, so cross-plugin catalog references fail closed. The `manager:desktop` `settings-section` owns system-selection, system-screenshot, clipboard-image hotkey, and login-startup settings; active plugins decide whether quick setup, save, system listeners, directory actions, and manual trigger exist.
+- AstrBot requires `ASTRBOT_SESSION_ID` and calls only `POST /api/chat/send`. The old plugin fallback, deployment endpoint, and deployment script are removed.
+- Compatibility APIs are reduced to `GET/POST /api/plugins/reconciliation`, `/api/scan/agents`, `/api/scan/agents/dsh`, and `/api/fennenote/playback`.
 
 ## What “everything is a plugin” means
 
@@ -104,7 +115,7 @@ Manager Process
           └─ Gateway Cordis Context
 ```
 
-Stage 1 preserves the current one-Route-per-Gateway process model. Each resident Gateway creates one root Context and mounts the Agent Adapter Registry, Message Adapter Registry, and Contribution Registry under that same root instead of creating separate Hosts for the three registries.
+Stage 1 preserves the current one-Route-per-Gateway process model. Each resident Gateway creates one root Context and mounts the Agent Adapter Registry, Message Adapter Registry, Contribution Registry, and Gateway performance-reporting Fiber under that same root instead of creating separate Hosts for these runtimes. The root-Context Fiber owns performance sampling and reporting; disposing the root withdraws reporter resources through the effect disposer.
 
 WebGUI is an independent JavaScript runtime and Desktop is an independent Python/Qt runtime; neither is required to port Cordis. Manager publishes the shared Plugin/Contribution Catalog through `GET /api/plugins/catalog`, with `host=web|desktop` filtering. WebGUI and Desktop resolve pages, commands, hotkeys, themes, status cards, and settings sections through host-owned trusted registries. Built-ins and explicitly installed trusted extensions use the same registration entry points; unregistered contracts fail closed.
 
@@ -151,6 +162,12 @@ export const RABI_SERVICES = {
 ```
 
 Business API versions belong to Rabi contracts and do not follow the Cordis package version.
+
+### Service realms and provider ownership
+
+Each service implementation belongs to the Fiber that registered it. One realm cannot contain duplicate providers, and only the owning Fiber may change a service value. Plugin-scoped services must stay in their own realm instead of leaking into the host-global realm; only explicit Manager/Gateway host composition may publish host-global services.
+
+Cordis `isolate` changes only the service-resolution realm and is not a security sandbox. DSH Agent presets audit service leakage into the root realm and require preset services to sit behind an `isolate` realm or move to host composition. RabiRoute keeps the same ownership and leakage rule.
 
 ### Plugin manifest
 
@@ -221,7 +238,7 @@ type RabiUiContribution =
 
 Schema v2 publishes host-controlled IDs rather than arbitrary `target`, `endpoint`, `query`, `body`, or `resourceRoot` values. Both plugin manifests and contributions are rebuilt from explicit field allowlists before entering the public catalog. A `tray-menu` or `hotkey` must reference a `command` from the same plugin instance and registration batch.
 
-Manager publishes one Plugin/Contribution Catalog through `GET /api/plugins/catalog` and can filter contributions for `web` or `desktop`. WebGUI uses fixed `routeId`, icon, and slot mappings for its sidebar, User Guide, and persona-sync entry. Desktop reads the catalog in the background, resolves tray items through `pluginId + instanceId + commandId`, and executes only host-supported `handlerId` values. Both hosts retain fixed recovery entries when the catalog is unavailable.
+Manager publishes one Plugin/Contribution Catalog through `GET /api/plugins/catalog` and can filter contributions for `web` or `desktop`. WebGUI and Desktop resolve renderer, route, handler, and resource contracts through host-owned trusted registries. Every contract records `pluginId + instanceId`, and catalog references must resolve within the same plugin instance and registration batch. Unknown, unregistered, cross-plugin, and host-unsupported contributions fail closed. Catalog outages or refresh failures withdraw stale contributions and leave only fixed recovery entries.
 
 ### Custom presentation code
 
@@ -230,7 +247,7 @@ When declarative contributions are insufficient, later stages support `web-exten
 - the package declares entrypoint, version, hash, permissions, and compatibility range;
 - trusted extensions require explicit user enablement;
 - Web extensions use a controlled bridge to Manager and do not directly read local files or credentials;
-- Desktop extensions prefer a separate process or controlled script runtime;
+- current trusted Python entry points execute inside the Desktop process and receive the complete Registry; the future Extension Host provides an owner-scoped registrar, permission model, and stronger process isolation;
 - the plugin API exposes only declared capabilities;
 - a load failure preserves the host shell and other extensions;
 - third-party extensions cannot replace login, security, update, or recovery entrypoints.
@@ -267,7 +284,7 @@ active ── config/provider change ─► deactivating
 
 The catalog reports at least instance ID, plugin ID, host, scope, state, missing capabilities, start/stop times, and a safe error summary.
 
-Cordis runs multiple disposers in the same Fiber concurrently through `Promise.all(...)`. Several `ctx.effect()` calls may describe independent cleanup, but they cannot encode teardown phases that depend on one another. Every RabiRoute plugin performs this sequence in one disposer:
+Top-level effect disposers on a Fiber are taken in reverse registration order and then started and awaited through `Promise.all(...)`, so asynchronous cleanup can overlap. Multiple disposers returned inside one `ctx.effect()` are also taken in reverse order, but run serially through a Promise chain. Separate effects describe independent cleanup only; teardown with ordering dependencies belongs in one critical effect/disposer:
 
 ```text
 unregister routes
@@ -277,19 +294,19 @@ unregister routes
 → await resource exit
 ```
 
-`ManagerPluginRequestTracker` waits for both HTTP responses and actual business Promises registered through `trackOperation()`. An early client disconnect therefore cannot let plugin disposal overtake an accepted send, task, configuration write, or scan. Remote Agent disposal aborts callback signals and waits for callbacks to finish, FenneNote waits for forwarding tasks, and NapCat records instance PIDs once after launch and again after the readiness check. Dynamic batch reconciliation first deactivates the whole changed batch in reverse current activation order, then activates definitions in desired order; activation failure removes the new batch and restores the previous batch. Current hooks for all 26 Manager plugins use one critical disposer. Unified validation passed on August 21, 2026.
+`ManagerPluginRequestTracker` waits for both HTTP responses and actual business Promises registered through `trackOperation()`. An early client disconnect therefore cannot let plugin disposal overtake an accepted send, task, configuration write, or scan. Remote Agent disposal aborts callback signals and waits for callbacks to finish, FenneNote waits for forwarding tasks, and NapCat records instance PIDs once after launch and again after the readiness check. RabiLink may receive one desired restart configuration during the first stop; a second `stop()` clears the desired signature before returning the existing stop Promise, cancelling that queued restart. The configuration watcher's `afterReload` callback and Rabi identity PATCH both await asynchronous Relay synchronization. Dynamic batch reconciliation first deactivates the whole changed batch in reverse current activation order, then activates definitions in desired order; activation failure removes the new batch and restores the previous batch. Current hooks for all 26 Manager plugins use one critical disposer. Unified validation is complete.
 
 ## Unified validation
 
-The following checks passed on August 21, 2026:
+Unified validation completed on 2026-08-21:
 
-- `git diff --check`
-- `npx tsc -p tsconfig.json --noEmit`
-- `npm run build:backend`
-- `npm test`: 1,339 source tests with 1,338 passed and 1 skipped; all 55 script tests passed
-- `npm run webgui:build`
-- `npm run check:config`
-- `.\.venv-tray\Scripts\python.exe -m unittest discover -s desktop\tray-task-window\tests -p test_*.py`: all 197 tests passed
+- `git diff --check`: passed;
+- `npx tsc -p tsconfig.json --noEmit`: passed;
+- `npm run build:backend`: passed, including the Codex Desktop delivery contract and event-driven architecture checks;
+- `npm test`: 1,360 TypeScript tests with 1,359 passed and 1 skipped, followed by 55 passing script-contract tests;
+- `npm run webgui:build`: passed;
+- `npm run check:config`: passed;
+- `.\.venv-tray\Scripts\python.exe -m unittest discover -s desktop\tray-task-window\tests -p test_*.py`: 202 tests passed.
 
 ## Services, events, and contributions
 
@@ -409,11 +426,13 @@ Current-slice exit criterion: the catalog can show or hide host-owned entries, f
 
 Current status: configuration-driven enable, disable, revision recreation, and failed-update rollback are implemented without source-code HMR. All 26 built-in Manager instances share one catalog and reconciler. Seven declare presentation contributions; nineteen provide runtime capabilities only.
 
+This reconciliation and DSH Loader Entry transactions are desired-state updates: dispose the old Fiber, start the new Fiber, and restore the old instance on failure. Source HMR is a separate mechanism that backs up and restores ESM/CJS caches. The two paths share only Fiber disposal and remount semantics.
+
 Every definition has a matching hook. Plugin `apply` hooks register business HTTP routes in `ManagerPluginRouteRegistry`. The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths. Desktop lifecycle/settings, diagnostics, Gateway management, scanning, Agent control, Remote Agent, NapCat, message processing, plan feedback, and background services follow the state of their owning instances.
 
 Each hook uses one critical disposer for `unregister → stop accepting → drain → stop resources → await exit`. Cordis runs multiple disposers in one Fiber concurrently, so teardown phases with ordering dependencies are not split across several `ctx.effect()` calls.
 
-Remaining work covers a controlled Extension Host for third-party custom presentation code and a clearer permission boundary. Unified validation passed on August 21, 2026.
+Remaining work covers a controlled Extension Host for third-party custom presentation code and a clearer permission boundary.
 
 ### Stage 7: out-of-tree code plugins and isolation
 
@@ -573,7 +592,8 @@ This split gives message-source facts and resident plugin lifecycles separate co
 2. the resident Gateway uses one Cordis root Context and mounts the Agent Adapter Registry, Message Adapter Registry, and Contribution Registry under that root;
 3. one-shot alert, replay, manual-trigger, role-panel, plan-feedback, speech, and Direct Agent Envelope commands enter their command implementation without starting the Message Adapter Runtime or Contribution Runtime;
 4. normal resident shutdown and startup failure both dispose the whole root Context, allowing each Registry Fiber to remove its listeners, timers, and registrations;
-5. WebGUI and Desktop are minimal hosts. The current contribution catalog controls only host-pre-registered pages, actions, status, and settings; third-party presentation code waits for stable contracts and isolation boundaries.
+5. Gateway performance sampling and reporting have moved into a root-Context Fiber, whose effect disposer stops the reporter when the root is disposed;
+6. WebGUI and Desktop are minimal hosts. The current contribution catalog controls only host-pre-registered pages, actions, status, and settings; third-party presentation code waits for stable contracts and isolation boundaries.
 
 `create-gateway-host` is complete.
 
@@ -593,16 +613,16 @@ This split gives message-source facts and resident plugin lifecycles separate co
 3. The catalog carries no arbitrary URLs, request bodies, or resource paths.
 4. A controlled Extension Host for arbitrary third-party presentation code remains future work.
 
-`extend-webgui-desktop` is complete. Unified validation passed on August 21, 2026.
+`extend-webgui-desktop` is complete.
 
 ## Slice 14: configuration reconciliation and local reload
 
 1. `data/manager.json.managerPlugins` accepts only registered built-in instance IDs and a boolean `enabled`; `manager:core` is required.
 2. The Manager watcher tracks `manager.json`, Route configuration, and persona configuration.
-3. `ManagerPluginReconciler` serializes desired-revision comparisons and starts, stops, or reloads only changed instances.
+3. `ManagerPluginReconciler` serializes desired-revision comparisons; dependency revisions recursively include direct and transitive providers, so an upstream change places every real downstream consumer in the restart batch.
 4. Failed activation restores the previous definition when possible; failed rollback records `rollback_failed`.
 5. HTTP routes, services, and background effects for all 26 built-in Manager plugins follow their instance state.
-6. `GET /api/plugins/reconciliation` and `POST /api/plugins/reconcile` expose state and a controlled manual reread.
+6. `GET/POST /api/plugins/reconciliation` expose state and a controlled manual reread.
 7. WebGUI listens for `plugin_catalog_changed` without adding business polling.
 
 This slice is complete.
@@ -625,5 +645,5 @@ This slice is complete.
 - core fact ownership remains unchanged;
 - WebGUI and Desktop extension points are included in the long-term design;
 - Stage 1 compatibility entries and acceptance matrix are fixed;
-- unified validation of the 26 Manager plugins has not been run;
+- unified validation completed successfully under this document's contract;
 - unrelated working-tree changes remain untouched.

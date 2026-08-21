@@ -1,5 +1,5 @@
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
-import type { WebThemeCatalog, WebThemeResourceId } from "./pluginThemes";
+import type { WebThemeCatalog, WebThemeId, WebThemeResourceId } from "./pluginThemes";
 import { resolveWebThemeResource } from "./pluginThemes";
 
 export type EffectiveInterfaceTheme = "light" | "dark";
@@ -24,13 +24,17 @@ export function applyInterfaceTheme(
 
 export function applyCatalogInterfaceTheme(
   catalog: WebThemeCatalog,
-  preference: DesktopTheme,
+  preference: WebThemeId,
   systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches
 ): EffectiveInterfaceTheme {
   const selected = resolveWebThemeResource(catalog, preference);
-  return applyInterfaceTheme(selected.theme, systemDark, selected.webResourceId);
+  const resolved = selected.apply(systemDark);
+  document.documentElement.dataset.rabirouteTheme = resolved;
+  document.documentElement.dataset.rabirouteThemeResource = selected.webResourceId;
+  document.documentElement.style.colorScheme = resolved;
+  return resolved;
 }
 
-export function publishInterfaceTheme(theme: DesktopTheme): void {
-  window.dispatchEvent(new CustomEvent<DesktopTheme>(INTERFACE_THEME_CHANGED, { detail: theme }));
+export function publishInterfaceTheme(theme: WebThemeId): void {
+  window.dispatchEvent(new CustomEvent<WebThemeId>(INTERFACE_THEME_CHANGED, { detail: theme }));
 }

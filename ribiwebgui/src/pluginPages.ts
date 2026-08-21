@@ -11,6 +11,7 @@ import {
 
 export type WebPageRouteId = string;
 export type WebPageRendererId = string;
+export type WebPageDataRequirement = "gateway.diagnostics";
 
 export type WebPagePathRegistration = Readonly<{
   path: string;
@@ -24,10 +25,13 @@ export type WebPageNavigationRegistration = Readonly<{
 }>;
 
 export type TrustedWebPageRegistration = Readonly<{
+  instanceId: string;
+  pluginId: string;
   routeId: WebPageRouteId;
   rendererId: WebPageRendererId;
   loader: AsyncComponentLoader;
   paths: readonly WebPagePathRegistration[];
+  requirements?: readonly WebPageDataRequirement[];
   navigation?: WebPageNavigationRegistration;
 }>;
 
@@ -59,6 +63,7 @@ const webPageRoutePaths = new Map<string, WebPageRouteId>();
 const registrationListeners = new Set<RegistrationListener>();
 const webPageRegistrationRevision = ref(0);
 const reservedRoutePaths = new Set(["/", "/plugin-recovery", "/models", "/:pathMatch(.*)*"]);
+const controlledPageRequirements = new Set<WebPageDataRequirement>(["gateway.diagnostics"]);
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -124,6 +129,8 @@ function normalizeRegistration(input: TrustedWebPageRegistration): TrustedWebPag
     throw new Error("Trusted Web page paths are invalid.");
   }
 
+  const instanceId = controlledSymbol(input.instanceId, "instanceId");
+  const pluginId = controlledSymbol(input.pluginId, "pluginId");
   const routeId = controlledSymbol(input.routeId, "routeId");
   const rendererId = controlledSymbol(input.rendererId, "rendererId");
   const paths = input.paths.map((entry, index) => Object.freeze({
@@ -132,6 +139,13 @@ function normalizeRegistration(input: TrustedWebPageRegistration): TrustedWebPag
   }));
   if (new Set(paths.map(entry => entry.path)).size !== paths.length) {
     throw new Error(`Trusted Web page paths contain duplicates: ${routeId}`);
+  }
+
+  const requirements = input.requirements === undefined
+    ? []
+    : controlledSymbols(input.requirements, "requirements") as readonly WebPageDataRequirement[];
+  if (requirements.some(requirement => !controlledPageRequirements.has(requirement))) {
+    throw new Error(`Trusted Web page requirements are invalid: ${routeId}`);
   }
 
   const navigation = input.navigation
@@ -146,10 +160,13 @@ function normalizeRegistration(input: TrustedWebPageRegistration): TrustedWebPag
   }
 
   const registration = {
+    instanceId,
+    pluginId,
     routeId,
     rendererId,
     loader: input.loader,
-    paths: Object.freeze(paths)
+    paths: Object.freeze(paths),
+    requirements: Object.freeze(requirements)
   };
   return navigation
     ? Object.freeze({ ...registration, navigation })
@@ -221,6 +238,10 @@ export function onTrustedWebPageRegistrationChange(listener: RegistrationListene
   return () => registrationListeners.delete(listener);
 }
 
+export function webPageDataRequirements(routeId: WebPageRouteId): readonly WebPageDataRequirement[] {
+  return webPageRendererRegistry.get(routeId)?.requirements ?? [];
+}
+
 export function webPageRenderer(routeId: WebPageRouteId): TrustedWebPageRegistration {
   const renderer = webPageRendererRegistry.get(routeId);
   if (!renderer) throw new Error(`Web page route is not registered: ${routeId}`);
@@ -251,7 +272,7 @@ function webHosted(value: JsonRecord): boolean {
 }
 
 export function parseWebPageContribution(value: unknown): WebPageContribution | undefined {
-  if (!isRecord(value) || value.kind !== "page" || !webHosted(value)) return undefined;
+  if (!isRecord(value) || value.kind !== "page" || value.surface !== "web.pages" || !webHosted(value)) return undefined;
   let instanceId = "";
   let pluginId = "";
   let routeId = "";
@@ -265,7 +286,12 @@ export function parseWebPageContribution(value: unknown): WebPageContribution | 
     return undefined;
   }
   const registered = webPageRendererRegistry.get(routeId);
-  if (!registered || registered.rendererId !== rendererId) return undefined;
+  if (
+    !registered
+    || registered.rendererId !== rendererId
+    || registered.instanceId !== instanceId
+    || registered.pluginId !== pluginId
+  ) return undefined;
   return { instanceId, pluginId, routeId, rendererId };
 }
 
@@ -296,14 +322,21 @@ export function isWebPageRouteActive(
 export function isWebNavigationPageActive(
   catalog: WebPageCatalogState,
   instanceId: string,
+  pluginId: string,
   routeId: WebPageRouteId
 ): boolean {
   return catalog.mode === "catalog"
-    && catalog.pages.some(page => page.instanceId === instanceId && page.routeId === routeId);
+    && catalog.pages.some(page => (
+      page.instanceId === instanceId
+      && page.pluginId === pluginId
+      && page.routeId === routeId
+    ));
 }
 
 const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   {
+    instanceId: "manager:core",
+    pluginId: "builtin:manager/core",
     routeId: "route.overview",
     rendererId: "builtin.web-page.overview.v1",
     loader: () => import("./pages/OverviewPage.vue"),
@@ -311,6 +344,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
       { path: "/overview", title: "控制台" },
       { path: "/routes/:id/overview", title: "控制台" }
     ],
+    requirements: ["gateway.diagnostics"],
     navigation: {
       resolvePath: routeScopedOverviewPath,
       allowedSlots: ["route-primary"],
@@ -318,6 +352,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:message-adapter-control",
+    pluginId: "builtin:manager/message-adapter-control",
     routeId: "route.adapters",
     rendererId: "builtin.web-page.adapters.v1",
     loader: () => import("./pages/RouteConfigPage.vue"),
@@ -325,6 +361,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
       { path: "/routes/:id/adapters", title: "消息适配器" },
       { path: "/routes/:id?", title: "消息适配器" }
     ],
+    requirements: ["gateway.diagnostics"],
     navigation: {
       resolvePath: routeScopedAdaptersPath,
       allowedSlots: ["route-primary"],
@@ -332,6 +369,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:persona",
+    pluginId: "builtin:manager/persona",
     routeId: "route.persona",
     rendererId: "builtin.web-page.persona.v1",
     loader: () => import("./pages/PersonaTemplatePage.vue"),
@@ -346,12 +385,16 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:persona",
+    pluginId: "builtin:manager/persona",
     routeId: "route.persona-document",
     rendererId: "builtin.web-page.persona-document.v1",
     loader: () => import("./pages/PersonaDocumentPage.vue"),
     paths: [{ path: "/routes/:id/persona/document", title: "人格正文" }]
   },
   {
+    instanceId: "manager:persona",
+    pluginId: "builtin:manager/persona",
     routeId: "route.knowledge",
     rendererId: "builtin.web-page.knowledge.v1",
     loader: () => import("./pages/RoleKnowledgePage.vue"),
@@ -366,6 +409,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:persona",
+    pluginId: "builtin:manager/persona",
     routeId: "route.persona-sync",
     rendererId: "builtin.web-page.persona-sync.v1",
     loader: () => import("./pages/PersonaSyncPage.vue"),
@@ -377,6 +422,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:speech",
+    pluginId: "builtin:manager/speech",
     routeId: "route.speech",
     rendererId: "builtin.web-page.speech.v1",
     loader: () => import("./pages/SpeechServicePage.vue"),
@@ -391,6 +438,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:performance",
+    pluginId: "builtin:manager/performance",
     routeId: "global.performance",
     rendererId: "builtin.web-page.performance.v1",
     loader: () => import("./pages/PerformancePage.vue"),
@@ -402,6 +451,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:diagnostics",
+    pluginId: "builtin:manager/diagnostics",
     routeId: "route.runtime",
     rendererId: "builtin.web-page.runtime.v1",
     loader: () => import("./pages/RuntimeLogPage.vue"),
@@ -409,6 +460,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
       { path: "/routes/:id/runtime", title: "日志诊断" },
       { path: "/runtime", title: "日志诊断" }
     ],
+    requirements: ["gateway.diagnostics"],
     navigation: {
       resolvePath: routeScopedRuntimePath,
       allowedSlots: ["utility"],
@@ -416,6 +468,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:core",
+    pluginId: "builtin:manager/core",
     routeId: "global.settings",
     rendererId: "builtin.web-page.settings.v1",
     loader: () => import("./pages/SettingsPage.vue"),
@@ -427,6 +481,8 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
     }
   },
   {
+    instanceId: "manager:core",
+    pluginId: "builtin:manager/core",
     routeId: "global.docs",
     rendererId: "builtin.web-page.docs.v1",
     loader: () => import("./pages/ProjectDocsPage.vue"),

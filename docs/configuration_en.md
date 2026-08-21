@@ -47,15 +47,17 @@ English | <a href="./configuration.md">简体中文</a>
 }
 ```
 
-`manager:core` is required for recovery and catalog APIs and cannot be disabled. Other built-ins are enabled by default. Manager accepts only registered instance IDs and a boolean `enabled` field. Paths, package names, commands, URLs, environment variables, unknown instances, and unknown fields are ignored and reported as diagnostics.
+`manager:core` is required for recovery and catalog APIs and cannot be disabled. Other built-ins are enabled by default. Manager accepts only registered instance IDs and a boolean `enabled` field. Paths, package names, commands, URLs, environment variables, unknown instances, and unknown fields are ignored and reported as diagnostics. Production startup uses only `startManager()`: mount shared resources, compose every definition with its business hook, then perform initial reconciliation.
 
-After `manager.json` changes, the file watcher reconciles only changed plugins. Disabling disposes the target Fiber. A revision change reloads the target instance. Failed activation restores the previous definition when possible. `GET /api/plugins/reconciliation` returns desired, active, changed, rolled-back, and diagnostic state. `POST /api/plugins/reconcile` rereads local configuration. WebGUI refreshes its catalog from the `plugin_catalog_changed` event on `/api/events`.
+Built-in definitions declare `provides`, `requires`, and `optional`. Missing `requires` produces `waiting_dependency`; an available optional provider starts before the consumer; dependency revisions recursively include direct and transitive providers, so an upstream revision or active-state change places every real downstream consumer in the restart batch. `PluginCatalog.refreshDeclaration()` updates the manifest and `missingCapabilities` during reload, so one instance can move from `active` to `waiting_dependency` and back to `active`. Multiple enabled providers for one capability reject reconciliation.
+
+After `manager.json` changes, the file watcher reconciles only changed plugins. Disabling disposes the target Fiber. A revision change reloads the target instance. Failed activation restores the previous definition when possible. `GET /api/plugins/reconciliation` returns desired, active, changed, rolled-back, and diagnostic state. `POST /api/plugins/reconciliation` rereads local configuration. WebGUI refreshes its catalog from the `plugin_catalog_changed` event on `/api/events`.
 
 ### Plugin entry-point and resource ownership
 
-The built-in catalog registers 26 Manager plugins. `manager:core` retains recovery, catalog, and basic-page contributions, while optional business entry points are registered by their plugins. The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths. Manager plugin `apply` hooks register business HTTP routes in `ManagerPluginRouteRegistry`.
+The built-in catalog registers 26 Manager plugins. `manager:core` retains recovery, catalog, and basic-page contributions, while optional business entry points are registered by their plugins. The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths. Production business routes declare stable `routeId` values with real `exact` or `prefix` matchers; `dynamic` remains only as an extension contract. The Registry rejects duplicate route IDs and, when methods overlap, `exact/exact`, `exact/prefix`, and `prefix/prefix` path conflicts. Non-`/api` paths such as `/meta` and `/manager-config` also use explicit static declarations.
 
-The presentation Contribution Catalog publishes only `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`. WebGUI and Desktop consume only active presentation contributions; HTTP routes are not catalog contributions. Host-owned trusted registries can register new renderer, route, handler, and resource contracts. Unknown or unregistered contributions fail closed. Fixed recovery entries only reopen WebGUI or Settings when the catalog is unavailable. A controlled Extension Host for arbitrary third-party presentation code remains future work.
+The presentation Contribution Catalog publishes `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`. WebGUI uses a trusted command registry for quick setup, Route creation, Manager-configuration opening, and page save, plus trusted renderer registries for settings sections and status cards. Desktop uses one frozen Registry for built-ins and explicitly allowed trusted extensions. Every contract is bound to `pluginId + instanceId`; catalog references must resolve within the same plugin instance, and cross-plugin references fail closed. The `manager:desktop` `settings-section` owns system-selection, system-screenshot, clipboard-image hotkey, and login-startup settings; active lifecycle and command contributions control system listeners, directory actions, and manual trigger. Catalog outages or refresh failures withdraw stale contributions and leave only the fixed WebGUI recovery entry.
 
 Trusted WebGUI page extensions call `registerTrustedWebPage()` at frontend build time to register a `routeId`, `rendererId`, asynchronous component loader, page paths, and allowed navigation slots and icons. The plugin catalog may reference only registered contracts; it cannot provide remote module URLs or arbitrary scripts.
 
@@ -65,7 +67,9 @@ Trusted Desktop Python extensions expose the `rabiroute.desktop_extensions` entr
 RabiRoute-Desktop.exe --trusted-desktop-extension my_extension
 ```
 
-The option may be repeated. The default list is empty, so Desktop imports no third-party package automatically. Desktop freezes the registry after registration. Entry-point code runs in the Desktop process and is only for explicitly installed trusted extensions; unknown, untrusted, or high-risk code uses the separate-process plugin protocol.
+The option may be repeated. The default list is empty, so Desktop imports no third-party package automatically. Desktop freezes the registry after registration. Entry-point code runs in the Desktop process and is only for explicitly installed trusted extensions. Catalog contributions must match contracts through the same `pluginId + instanceId`, so cross-plugin borrowing fails closed. An owner-scoped registrar, permission model, and stronger isolation for third-party Desktop code belong to the future Extension Host.
+The Manager root Fiber owns three shared read Worker Pools and `CoalescingMessageProcessingBoardPersistence`. On stop, persistence rejects new writes, clears timers, flushes, and waits for its active Worker. Read pools cancel queued/shared requests, terminate active and idle Workers, and wait for child exit. If one stop fails, cleanup still runs for the remaining resources before the first error is returned. Stopped resources can start again.
+
 Routes using `ManagerPluginRequestTracker` follow one deactivation order: unregister routes, reject new requests, then wait for accepted responses to emit `finish` or `close`. Both synchronous and asynchronous handlers are counted. The default drain deadline is 30 seconds. On timeout, unfinished responses are destroyed before remaining plugin resources are released.
 
 | Instance | Owned entry points or resources | Deactivation |
@@ -73,7 +77,7 @@ Routes using `ManagerPluginRequestTracker` follow one deactivation order: unregi
 | `manager:diagnostics` | `GET /meta`, `GET /api/gateways`, and the WebGUI Log Diagnostics page/navigation | Removes diagnostics routes and drains accepted requests; reads other plugin state without starting or restoring disabled plugins |
 | `manager:desktop` | `/api/desktop/settings`, `/open-config-file`, `/manager/start`, `/manager/desktop-lifecycle/start`, `/manager/shutdown`, plus Desktop/WebGUI settings, commands, tray entries, and hotkey contributions | Removes routes and drains requests, then clears delayed shutdown timers that have not run |
 | `manager:gateway-runtime` | Gateway configuration, lifecycle, deletion, manual trigger, replay, network-options, and reload routes; Gateway and manual-trigger child processes | Removes routes, drains requests, stops instance-owned manual triggers, then stops and waits for Gateway process trees |
-| `manager:agent-adapter-catalog` | Agent Adapter catalog, availability, and scan routes; bounded scan Worker Pool | Removes routes, cancels queued or active scans, and stops Worker process trees |
+| `manager:agent-adapter-catalog` | Agent Adapter catalog plus `/api/scan/agents` and `/api/scan/agents/dsh`; bounded scan Worker Pool | Removes routes, cancels queued or active scans, and stops Worker process trees |
 | `manager:agent-thread-control` | Agent task creation, lookup, and binding routes | Removes routes and drains requests; stable business modules retain task and record ownership |
 | `manager:agent-communication` | Agent request, send, receipt, and trace routes | Removes routes and drains requests while reusing the existing Outbox, approval, receipt, and message-processing owners |
 | `manager:remote-agent` | Remote Agent scan, connection, task, and event routes; active WebSockets and Hub callbacks | Removes routes and drains requests; marks unfinished tasks `interrupted`, closes WebSockets, and waits for started callbacks |
@@ -276,8 +280,15 @@ NapCat credentials and Tencent security verification never belong in RabiRoute c
 
 - `codex`: reads user-visible names from short-lived app-server `thread/list`, merges local cwd/archive/time/owner state by full ID, binds by full task ID and workspace, and asks the Desktop owner to start or steer the real turn through Desktop IPC. SQLite `threads.title` is mutable prompt metadata and is never the same-name lookup source.
 - `copilotCli`: calls a local Copilot CLI with a dedicated session name/cwd and records output. It does not inject into an existing VS Code Copilot panel thread.
-- `astrbot`: supports Dashboard login checks, project/session scans, plugin deployment, and ChatUI delivery; continuous real-session acceptance remains pending.
+- `astrbot`: uses `ASTRBOT_URL`, Dashboard credentials, and required `ASTRBOT_SESSION_ID`. Delivery calls only ChatUI `POST /api/chat/send`; a missing Session ID fails closed. The old AstrBot plugin fallback and deployment entry are removed.
 - `marvis`: writes prompt files, copies text, and opens/focuses the desktop application. It cannot reliably inject into a background session.
+
+### Removed compatibility APIs
+
+- Plugin reconciliation keeps only `GET/POST /api/plugins/reconciliation`; `POST /api/plugins/reconcile` is removed.
+- Agent scanning uses `/api/scan/agents` and `/api/scan/agents/dsh`; `/api/agent-adapters/availability` and `/api/agent-adapters/dsh/availability` are removed.
+- FenneNote playback uses `/api/fennenote/playback`; `/api/playback/request` is removed.
+- AstrBot no longer exposes `/api/plug/rabiroute_agent/chat`, `/api/deploy-astrbot-adapter`, or the repository deployment script.
 
 ## Desktop-owner requirement
 

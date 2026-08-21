@@ -166,6 +166,38 @@ test("Plugin Catalog reports missing dependencies without entering activation", 
   assert.equal(catalog.get("manager:missing")?.status, "waiting_dependency");
 });
 
+test("Plugin Catalog refreshes an inactive declaration without changing instance order", () => {
+  const catalog = new PluginCatalog();
+  catalog.declare({ instanceId: "manager:first", manifest, host: "manager" });
+  catalog.declare({
+    instanceId: "manager:second",
+    manifest: { ...manifest, id: "builtin:manager/second", name: "Second" },
+    host: "manager"
+  });
+
+  const waiting = catalog.refreshDeclaration({
+    instanceId: "manager:first",
+    manifest: { ...manifest, version: "2.0.0" },
+    host: "manager",
+    missingCapabilities: ["manager.gateway-runtime"]
+  });
+  assert.equal(waiting.status, "waiting_dependency");
+  assert.equal(waiting.manifest.version, "2.0.0");
+  assert.deepEqual(waiting.missingCapabilities, ["manager.gateway-runtime"]);
+  assert.deepEqual(catalog.snapshot().plugins.map(item => item.instanceId), [
+    "manager:first",
+    "manager:second"
+  ]);
+
+  const ready = catalog.refreshDeclaration({
+    instanceId: "manager:first",
+    manifest: { ...manifest, version: "2.0.0" },
+    host: "manager"
+  });
+  assert.equal(ready.status, "inactive");
+  assert.deepEqual(ready.missingCapabilities, []);
+});
+
 test("Plugin Catalog sanitizes failures before they enter a public snapshot", () => {
   const catalog = new PluginCatalog();
   catalog.declare({ instanceId: "manager:failed", manifest, host: "manager" });

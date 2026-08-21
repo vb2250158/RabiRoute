@@ -43,11 +43,10 @@ test("agent provider handlers register every asynchronous response chain", async
   const astrbot = createAgentProviderControlRouteHandler("astrbot", {
     readJsonBody,
     jsonResponse,
-    testAstrbotLogin: async () => ({ ok: true }),
-    deployAstrbotAdapter: async () => ({ status: 200, body: { ok: true } })
+    testAstrbotLogin: async () => ({ ok: true })
   }, trackOperation);
   assert.equal(astrbot(request("POST"), new URL("http://localhost/api/agent/astrbot-login-test"), response), true);
-  assert.equal(astrbot(request("POST"), new URL("http://localhost/api/deploy-astrbot-adapter"), response), true);
+  assert.equal(astrbot(request("POST"), new URL("http://localhost/api/deploy-astrbot-adapter"), response), false);
 
   const marvis = createAgentProviderControlRouteHandler("marvis", {
     readJsonBody,
@@ -56,10 +55,10 @@ test("agent provider handlers register every asynchronous response chain", async
   }, trackOperation);
   assert.equal(marvis(request("POST"), new URL("http://localhost/api/agent/marvis-open"), response), true);
 
-  assert.equal(trackedOperations.length, 6);
+  assert.equal(trackedOperations.length, 5);
   assert.deepEqual(
     (await Promise.allSettled(trackedOperations)).map((result) => result.status),
-    ["fulfilled", "fulfilled", "fulfilled", "fulfilled", "fulfilled", "fulfilled"]
+    ["fulfilled", "fulfilled", "fulfilled", "fulfilled", "fulfilled"]
   );
-  assert.equal(responses.length, 6);
+  assert.equal(responses.length, 5);
 });

@@ -76,3 +76,54 @@ test("message-processing persistence writes compact atomic JSON off the caller p
   assert.deepEqual(JSON.parse(text), state);
   assert.equal(text.includes("\n  "), false);
 });
+
+test("message-processing persistence stop flushes the latest snapshot and allows restart", async () => {
+  const writes: unknown[] = [];
+  const persistence = new CoalescingMessageProcessingBoardPersistence("unused.json", {
+    flushDelayMs: 60_000,
+    writer: async (_statePath, state) => { writes.push(state); }
+  });
+
+  persistence.write({ revision: 1 });
+  persistence.write({ revision: 2 });
+  const firstStop = persistence.stop();
+  const secondStop = persistence.stop();
+  assert.strictEqual(secondStop, firstStop);
+  await firstStop;
+  assert.deepEqual(writes, [{ revision: 2 }]);
+  assert.throws(() => persistence.write({ revision: 3 }), /persistence is stopped/);
+
+  persistence.start();
+  persistence.write({ revision: 3 });
+  await persistence.stop();
+  assert.deepEqual(writes, [{ revision: 2 }, { revision: 3 }]);
+});
+
+test("message-processing persistence stop waits for an active write and its coalesced successor", async () => {
+  const writes: unknown[] = [];
+  let releaseFirst!: () => void;
+  let firstStarted!: () => void;
+  const started = new Promise<void>(resolve => { firstStarted = resolve; });
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const persistence = new CoalescingMessageProcessingBoardPersistence("unused.json", {
+    flushDelayMs: 0,
+    writer: async (_statePath, state) => {
+      writes.push(state);
+      if (writes.length === 1) {
+        firstStarted();
+        await firstGate;
+      }
+    }
+  });
+
+  persistence.write({ revision: 1 });
+  await started;
+  persistence.write({ revision: 2 });
+  const stopping = persistence.stop();
+  assert.throws(() => persistence.write({ revision: 3 }), /persistence is stopped/);
+  releaseFirst();
+  await stopping;
+
+  assert.deepEqual(writes, [{ revision: 1 }, { revision: 2 }]);
+  assert.equal(persistence.status().state, "idle");
+});

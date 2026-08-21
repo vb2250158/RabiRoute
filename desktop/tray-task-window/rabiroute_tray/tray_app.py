@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QDir, QEventLoop, QLockFile, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
@@ -29,6 +30,8 @@ from .manager_client import (
 from .plugin_catalog import (
     DesktopCommandContext,
     DesktopExtensionRegistry,
+    DesktopPanelAction,
+    DesktopPanelActionContext,
     DesktopPluginCatalog,
     DesktopPluginHotkey,
     DesktopPluginTheme,
@@ -119,7 +122,7 @@ def _start_desktop_plugin_catalog(
     return start_qt_task(
         manager.desktop_plugin_catalog,
         completed_callback,
-        on_error=lambda _error: None,
+        on_error=lambda _error: empty_desktop_plugin_catalog(),
         started_callback=started_callback,
     )
 
@@ -384,7 +387,18 @@ def run(
                 state["role_messages"] = []
                 state["loaded_gateway_id"] = active_gateway_id
             active_panel.set_actions(
-                _panel_actions(gateway, project_root, desktop, manager, tray, tray_available, refresh)
+                _panel_actions(
+                    gateway,
+                    project_root,
+                    desktop,
+                    manager,
+                    tray,
+                    tray_available,
+                    refresh,
+                    state["plugin_catalog"],
+                    desktop_extensions,
+                    execute_plugin_handler,
+                )
             )
             _render_panel(
                 active_panel,
@@ -451,7 +465,18 @@ def run(
                 or previous_role_messages != state["role_messages"]
             )
             if panel_changed:
-                panel.set_actions(_panel_actions(selected_gateway, project_root, desktop, manager, tray, tray_available, refresh))
+                panel.set_actions(_panel_actions(
+                    selected_gateway,
+                    project_root,
+                    desktop,
+                    manager,
+                    tray,
+                    tray_available,
+                    refresh,
+                    state["plugin_catalog"],
+                    desktop_extensions,
+                    execute_plugin_handler,
+                ))
                 _render_panel(
                     panel,
                     state["manager"],
@@ -475,17 +500,24 @@ def run(
                 open_chat,
             )
 
-    def execute_plugin_handler(handler_id: str) -> None:
+    def execute_plugin_handler(
+        handler_id: str,
+        services: dict[str, Callable[[], None]] | None = None,
+    ) -> None:
+        command_services = {
+            "desktop.capture-screenshot": system_screenshot.request_capture,
+            "desktop.pin-clipboard-image": system_screenshot.request_clipboard_pin,
+            "desktop.system-selection": system_selection.start,
+        }
+        if services:
+            command_services.update(services)
         try:
             desktop_extensions.invoke_command(
                 handler_id,
                 DesktopCommandContext(
                     manager_url=manager.manager_url,
                     open_url=desktop.open_url,
-                    services={
-                        "desktop.capture-screenshot": system_screenshot.request_capture,
-                        "desktop.pin-clipboard-image": system_screenshot.request_clipboard_pin,
-                    },
+                    services=command_services,
                 ),
             )
         except Exception as error:
@@ -503,20 +535,21 @@ def run(
         if plugin_catalog_task is not None:
             return
 
-        def completed(completed_task: QtAsyncTask, catalog: DesktopPluginCatalog | None) -> None:
+        def completed(completed_task: QtAsyncTask, catalog: DesktopPluginCatalog) -> None:
             nonlocal plugin_catalog_task
             if plugin_catalog_task is not completed_task:
                 return
-            if catalog is None:
-                plugin_catalog_task = None
-                return
-
             def apply_catalog() -> None:
                 nonlocal plugin_catalog_task
                 if plugin_catalog_task is not completed_task:
                     return
                 try:
                     state["plugin_catalog"] = catalog
+                    _sync_recovery_webgui_action(menu, webgui_action, refresh_action, catalog)
+                    if desktop_extensions.lifecycle_capability_active(catalog, "desktop.system-selection"):
+                        system_selection.start()
+                    else:
+                        system_selection.stop()
                     system_screenshot.set_plugin_hotkeys(
                         _desktop_plugin_hotkeys(catalog, desktop_extensions)
                     )
@@ -529,6 +562,23 @@ def run(
                         execute_plugin_handler,
                         desktop_extensions,
                     )
+                    selected_gateway = (
+                        _gateway_by_id(state["manager"].gateways, selected_gateway_id)
+                        or state["manager"].selected_gateway
+                    )
+                    if _panel_is_active(panel) and selected_gateway is not None:
+                        panel.set_actions(_panel_actions(
+                            selected_gateway,
+                            project_root,
+                            desktop,
+                            manager,
+                            tray,
+                            tray_available,
+                            refresh,
+                            catalog,
+                            desktop_extensions,
+                            execute_plugin_handler,
+                        ))
                     _warm_menu_layout(menu)
                 finally:
                     plugin_catalog_task = None
@@ -595,7 +645,6 @@ def run(
         settings_path=project_root / "data" / "speech" / "selection-reader-settings.json",
     )
     app.aboutToQuit.connect(system_selection.stop)
-    system_selection.start()
 
     system_screenshot = SystemScreenshotController(
         manager,
@@ -709,10 +758,27 @@ def _desktop_plugin_theme(
         (
             item for item in catalog.themes
             if item.theme_id == theme_id
-            and registry.has_theme_resource(item.theme_id, item.desktop_resource_id)
+            and registry.has_theme_resource(
+                item.theme_id, item.desktop_resource_id, item.plugin_id, item.instance_id
+            )
         ),
         None,
     )
+
+
+def _sync_recovery_webgui_action(
+    root_menu: QMenu,
+    recovery_action: QAction,
+    insert_before: QAction,
+    catalog: DesktopPluginCatalog,
+) -> None:
+    should_show = not catalog.available
+    is_inserted = recovery_action in root_menu.actions()
+    if should_show == is_inserted:
+        return
+    root_menu.removeAction(recovery_action)
+    if should_show:
+        root_menu.insertAction(insert_before, recovery_action)
 
 
 def _rebuild_plugin_menu(
@@ -723,7 +789,10 @@ def _rebuild_plugin_menu(
     execute_handler,
     registry: DesktopExtensionRegistry,
 ) -> None:
-    items = tuple(item for item in catalog.menu_items if registry.has_command_handler(item.handler_id))
+    items = tuple(
+        item for item in catalog.menu_items
+        if registry.has_command_handler(item.handler_id, item.plugin_id, item.instance_id)
+    )
     signature = tuple(
         (item.plugin_id, item.instance_id, item.contribution_id, item.handler_id, item.label)
         for item in items
@@ -880,41 +949,53 @@ def _panel_actions(
     tray: QSystemTrayIcon,
     tray_available: bool,
     refresh_callback,
+    catalog: DesktopPluginCatalog,
+    registry: DesktopExtensionRegistry,
+    execute_handler,
 ) -> list[tuple[str, object, bool]]:
     role_id = role_id_from_gateway(gateway, "未指定人格")
     role_dir = role_dir_from_gateway(project_root, gateway, role_id)
-    actions: list[tuple[str, object, bool]] = [
-        ("人格目录", lambda checked=False: desktop.open_path(role_dir), True),
-        ("计划目录", lambda checked=False: desktop.open_path(role_dir / "plans"), True),
-        ("记忆目录", lambda checked=False: desktop.open_path(role_dir / "memory"), True),
-        ("项目目录", lambda checked=False: desktop.open_path(project_dir_from_gateway(project_root, gateway)), True),
-        ("状态目录", lambda checked=False: desktop.open_path(runtime_dir_from_gateway(project_root, gateway)), True),
+    services = {
+        "desktop.open-role-directory": lambda: desktop.open_path(role_dir),
+        "desktop.open-plan-directory": lambda: desktop.open_path(role_dir / "plans"),
+        "desktop.open-memory-directory": lambda: desktop.open_path(role_dir / "memory"),
+        "desktop.open-project-directory": lambda: desktop.open_path(project_dir_from_gateway(project_root, gateway)),
+        "desktop.open-runtime-directory": lambda: desktop.open_path(runtime_dir_from_gateway(project_root, gateway)),
+    }
+    manual_actions: list[DesktopPanelAction] = []
+    for index, rule in enumerate(_manual_trigger_rules(gateway)):
+        rule_name = str(rule.get("name") or rule.get("id") or "未命名手动规则")
+        rule_id = str(rule.get("id") or rule_name)
+        route_kind = _manual_trigger_route_kind(rule)
+        enabled = rule.get("enabled") is not False
+        manual_actions.append(DesktopPanelAction(
+            f"触发：{rule_name}",
+            lambda item=gateway, rid=rule_id, name=rule_name, kind=route_kind: _manual_trigger(
+                manager,
+                item,
+                rid,
+                name,
+                kind,
+                _manual_trigger_message(name, rid),
+                tray,
+                tray_available,
+                refresh_callback,
+            ),
+            enabled,
+            index,
+        ))
+    context = DesktopPanelActionContext(
+        invoke=lambda handler_id: execute_handler(handler_id, services),
+        action_groups={"desktop.manual-trigger": tuple(manual_actions)},
+    )
+    return [
+        (
+            action.label,
+            lambda checked=False, callback=action.callback: callback(),
+            action.enabled,
+        )
+        for action in registry.panel_actions(catalog, context)
     ]
-    rules = _manual_trigger_rules(gateway)
-    if rules:
-        for rule in rules:
-            rule_name = str(rule.get("name") or rule.get("id") or "未命名手动规则")
-            rule_id = str(rule.get("id") or rule_name)
-            route_kind = _manual_trigger_route_kind(rule)
-            enabled = rule.get("enabled") is not False
-            actions.append((
-                f"触发：{rule_name}",
-                lambda checked=False, item=gateway, rid=rule_id, name=rule_name, kind=route_kind: _manual_trigger(
-                    manager,
-                    item,
-                    rid,
-                    name,
-                    kind,
-                    _manual_trigger_message(name, rid),
-                    tray,
-                    tray_available,
-                    refresh_callback,
-                ),
-                enabled,
-            ))
-    else:
-        actions.append(("暂无手动触发", lambda checked=False: None, False))
-    return actions
 
 
 def _rebuild_persona_chat_menu(

@@ -2,7 +2,7 @@ English | <a href="./dsh-plugin-architecture-lessons.md">简体中文</a>
 
 # Plugin Architecture Lessons for RabiRoute from DSH
 
-> Status: architecture research and implementation summary. Migration of all 26 built-in Manager plugins is complete, with configuration reconciliation, controlled presentation contributions, and a separate-process extension contract implemented. Unified validation passed on August 21, 2026.
+> Status: architecture research, migration of all 26 built-in Manager plugins, and unified validation are complete, with configuration reconciliation, controlled presentation contributions, and a separate-process extension contract implemented.
 >
 > Primary audience: RabiRoute maintainers and developers of message-side and Agent-side integrations.
 
@@ -21,9 +21,9 @@ These changes can reduce the files touched when adding a platform and prevent st
 
 ## Research snapshot
 
-This document is based on these official versions:
+The implementation baseline is the local [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006), the `dsh@0.1.1-rc.1` commit from August 21, 2026 at 14:21:44 +08:00. At the August 21, 2026 review, remote `master` had advanced to `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`; that newer remote commit is not audited here, and source claims still apply only to local `528c682e06`.
 
-- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006), the `dsh@0.1.1-rc.1` commit from August 21, 2026 at 14:21:44 +08:00.
+Other sources:
 - [A Programming Paradigm for Spatiotemporal Composability, v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf), committed August 13, 2026.
 - The [DSH architecture guide](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/architecture.md) and [Cordis primer](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/docs/cordis-primer.md).
 
@@ -43,11 +43,13 @@ A plugin declares required services through `inject`. It remains inactive while 
 
 Startup order therefore follows capability relationships instead of a manually maintained sequence in an entrypoint.
 
+Service instances are also constrained by realm and Fiber ownership: one realm can contain only one provider, and only the Fiber that registered a service may change its value. DSH Agent presets reject preset services that leak into the root realm. RabiRoute should likewise keep plugin-scoped services in their own realm and reserve host-global services for explicit host composition.
+
 ### 3. Effects are disposable
 
 Cordis treats registration as an effect with an inverse. Event listeners, services, tools, prompt sections, and providers belong to the Fiber of the plugin that installed them.
 
-Cordis runs multiple disposers in one Fiber concurrently through `Promise.all(...)`. It does not guarantee reverse-order serial teardown across several `ctx.effect()` calls. A plugin that needs ordering performs `unregister → stop accepting → drain → stop resources → await exit` inside one disposer.
+Top-level effect disposers on a Fiber are taken in reverse registration order and then started and awaited through `Promise.all(...)`, so asynchronous cleanup can overlap. Multiple disposers returned inside one `ctx.effect()` are also taken in reverse order, but run serially through a Promise chain. A plugin that needs business ordering keeps `unregister → stop accepting → drain → stop resources → await exit` inside one critical effect/disposer.
 
 The paper calls reversible internal change temporal composability: when a component leaves, the system should remove the internal changes owned by that component.
 
@@ -55,9 +57,13 @@ The paper calls reversible internal change temporal composability: when a compon
 
 DSH combines profiles, bundles, and patches into a plugin tree. Each entry has a stable ID, module entry, configuration, isolation data, and enabled state. The Loader compares this specification with live instances and replaces only affected parts.
 
-Hot reload uses the same mechanism. It disposes the old instances before loading new ones and restores the previous modules and instances when loading fails.
+Configuration changes use Loader Entry transactions: an Entry update disposes the old Fiber, starts the new Fiber, and restores the old plugin on failure. Source HMR is a separate path that backs up and restores ESM/CJS caches. The two paths share only Fiber disposal and remount semantics; they are not one update mechanism.
 
-### 5. A plugin boundary is not a security sandbox
+### 5. Agent presets use one standing mount per preset
+
+Each preset `cordis.yml` is mounted once in the process. Multiple Agents naming the same preset share that standing mount through the scope parent chain, so plugin instances, tool registrations, prompt sections, and projection units exist once; plugins isolate state by Session/Agent key. A preset file change creates a new generation. DSH still has a TODO to reclaim a superseded generation after its last Agent leaves.
+
+### 6. A plugin boundary is not a security sandbox
 
 Ordinary DSH profile plugins enter the main process through Node ESM and are trusted code. Cordis `isolate` changes service-instance resolution realms; it does not restrict process, filesystem, or network access.
 
@@ -65,7 +71,7 @@ DSH evaluates model-written dynamic Host plugins in an in-process `node:vm` with
 
 RabiRoute's separate-process rule for unknown or high-risk plugins is additional security hardening over the DSH composition model. See [How DSH Uses Cordis: Runtime, UI, and Isolation Analysis](dsh-cordis-runtime-analysis_en.md) for the evidence.
 
-### 6. External emissions cannot be undone by unload
+### 7. External emissions cannot be undone by unload
 
 Listeners, ports, timers, and local registrations are usually reversible. A QQ message, remote API write, or device command has already left the process and cannot be recalled by unloading a plugin.
 
@@ -76,15 +82,16 @@ The paper places these emissions outside the recoverable system boundary and req
 The current implementation has these boundaries:
 
 - Manager and Gateway use independent Cordis root Contexts.
-- `builtinManagerPlugins.ts` declares 26 built-in Manager instances, and `controlPlaneRoutes.ts` supplies a hook for every instance.
+- Gateway performance sampling and reporting have moved into a Fiber under the Gateway root Context; disposing the root withdraws reporter resources through the effect disposer.
+- Production Manager initialization runs only through `startManager()`: mount shared resources, compose the 26 definitions with their hooks, then perform initial reconciliation. Definitions use `provides`, `requires`, and `optional` to build the capability graph.
 - The presentation Contribution Catalog publishes only `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`; Manager plugin `apply` hooks register business HTTP routes in `ManagerPluginRouteRegistry`.
 - The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths.
 - Seven Manager plugins contribute pages, navigation, settings sections, status cards, commands, hotkeys, tray menus, or themes. Nineteen provide runtime capabilities only.
-- WebGUI and Desktop consume one controlled contribution catalog rather than maintaining a second extension truth.
-- Each plugin keeps ordered teardown in one disposer and uses `ManagerPluginRequestTracker` to remove routes, reject new requests, and drain accepted work.
+- WebGUI consumes the catalog through trusted command/renderer registries. Desktop consumes lifecycle and panel actions through one frozen Registry. Neither maintains a second extension truth.
+- Each plugin keeps ordered teardown in one disposer and uses `ManagerPluginRequestTracker` to remove routes, reject new requests, and drain accepted work. The Manager host separately shuts down through `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()` so shared Workers/Persistence do not stop first.
 - The separate-process protocol is reserved for unknown, untrusted, or high-risk extensions. Trusted built-in plugins run in the Manager process.
 
-Stable business modules continue to own Route configuration, message records, routing decisions, `AgentPacket`, Outbox, plans, memories, and message-processing records. Unified validation passed on August 21, 2026.
+Stable business modules continue to own Route configuration, message records, routing decisions, `AgentPacket`, Outbox, plans, memories, and message-processing records. `PluginCatalog.refreshDeclaration()` updates the manifest and `missingCapabilities` during reload and supports `active -> waiting_dependency -> active`.
 
 ## Principles for RabiRoute
 
@@ -130,7 +137,7 @@ Each activated plugin receives a lifecycle scope that owns:
 - child processes and temporary directories;
 - status and diagnostic catalog contributions.
 
-Cordis runs multiple disposers in the same Fiber concurrently. When teardown phases depend on one another, the plugin registers one critical disposer and completes:
+Top-level effect disposers on a Fiber are taken in reverse registration order and then started and awaited concurrently. Multiple disposers inside one `ctx.effect()` run serially in reverse registration order. When teardown phases depend on one another, the plugin registers one critical effect/disposer and completes:
 
 ```text
 unregister routes
@@ -236,11 +243,15 @@ Every registration helper should ultimately attach to the same lifecycle scope.
 ## Current adoption
 
 1. Agent Adapter and Message Adapter capabilities now use controlled registration and composition boundaries.
-2. Manager has 26 built-in plugin definitions with matching hooks and configuration-driven local reconciliation.
-3. WebGUI and Desktop consume presentation contributions through host-owned trusted registries that can register new renderer, route, handler, and resource contracts. Unknown or unregistered contributions fail closed; HTTP routes are not presentation contributions.
-4. Unknown, untrusted, or high-risk third-party extensions must use a separate process and versioned protocol. This is RabiRoute hardening, not the default execution model for ordinary DSH plugins.
-5. Third-party custom presentation code still requires a controlled Extension Host and a clearer permission boundary.
-6. Unified validation passed on August 21, 2026.
+2. Manager has 26 built-in plugin definitions with matching hooks and configuration-driven local reconciliation. Dependency revisions recursively include direct and transitive providers, so upstream changes restart real downstream consumers.
+3. Production Manager business routes use stable `routeId` values with real `exact/prefix` declarations; duplicate IDs and intersecting static paths are rejected. HTTP routes are not presentation contributions.
+4. WebGUI and Desktop consume presentation contributions through host-owned trusted registries. Contracts are bound to `pluginId + instanceId`, so cross-plugin catalog references fail closed. The `manager:desktop` settings section owns system-selection, system-screenshot, clipboard-image hotkey, and login-startup settings.
+5. Unknown, untrusted, or high-risk third-party extensions must use a separate process and versioned protocol. This is RabiRoute hardening, not the default execution model for ordinary DSH plugins.
+6. Gateway performance sampling and reporting are owned by a root-Context Fiber.
+7. A second RabiLink `stop()` cancels a restart queued during shutdown; the configuration watcher and Rabi identity PATCH both await asynchronous Relay synchronization.
+8. AstrBot uses only ChatUI `/api/chat/send` and requires `ASTRBOT_SESSION_ID`; the old plugin fallback, deployment API, and deployment script are removed.
+9. Trusted Python entry points are in-process Desktop extensions; an owner-scoped registrar, permission model, and stronger isolation still require the controlled Extension Host.
+10. Unified validation is complete: TypeScript type checking, backend build, 1,360 TypeScript tests, 55 script-contract tests, WebGUI build, configuration checks, and 202 Desktop Python tests passed; one TypeScript test was skipped by contract.
 
 ## Rejected approaches
 
@@ -254,5 +265,3 @@ Every registration helper should ultimately attach to the same lifecycle scope.
 ## Remaining work
 
 - Define a controlled Extension Host and permission model for third-party custom Web/Desktop code.
-- Run one unified validation pass for teardown ordering, request draining, resource exit, and real composition across all 26 Manager plugins.
-- Unified validation passed on August 21, 2026.

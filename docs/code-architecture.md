@@ -6,7 +6,7 @@
 
 # RabiRoute 代码架构
 
-> 状态：当前代码地图。26 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应；统一验证已于 2026-08-21 通过。
+> 状态：当前代码地图。26 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应。
 
 这份文档面向需要改代码的人。它不重复解释 RabiRoute 的产品定位；产品边界见 [架构说明](architecture.md)。这里主要说明代码里的 Module 怎么分工、一条消息怎么流动、改某类功能应该先看哪里。
 
@@ -375,7 +375,9 @@ startManager();
 
 ### Manager 插件运行时
 
-`managerPluginHost.ts` 在 Manager 根 Context 下创建运行时，`managerPluginConfig.ts` 把 `data/manager.json` 归一化为期望状态，`managerPluginReconciler.ts` 串行启停或重载变化实例。激活失败时恢复旧定义；恢复失败保留明确错误状态。
+正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts`，再创建唯一的 `managerPluginHost.ts`，把 26 个内置 definition 与 `controlPlaneRoutes.ts` 的业务 `apply` hook 合成后执行首次对账。旧的独立内置 Runtime 初始化入口已经删除，避免原始 definition 提前对账。`managerPluginConfig.ts` 把 `data/manager.json` 归一化为期望状态，`managerPluginReconciler.ts` 串行启停或重载变化实例。激活失败时恢复旧定义；恢复失败保留明确错误状态。
+
+每个 definition 声明 `provides`、`requires` 和 `optional`。Reconciler 先拒绝同一能力的多个已启用 Provider，再按必需依赖排序；缺少 `requires` 的实例进入 `waiting_dependency`。可选 Provider 存在时先于消费者启动。每个实例的依赖 revision 会递归包含直接和传递 Provider 的 revision、启用状态、能力关系与缺失能力摘要，因此 `root -> middle -> leaf` 中的 root 变化会把 middle 和 leaf 都纳入同一重启批次，同时不影响无依赖实例。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，支持同一实例 `active -> waiting_dependency -> active`。停用按当前应用顺序逆序执行。
 
 `builtinManagerPlugins.ts` 当前声明 26 个内置实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供非空 hook：
 
@@ -410,11 +412,11 @@ manager:napcat-supervisor
 
 其中 7 个实例声明页面、导航、设置区、状态卡、命令、快捷键、托盘菜单或主题贡献；其余 19 个实例没有表现贡献，但仍有实际 HTTP、服务、进程、定时器、监听器或对账生命周期。空的 contribution 数组不等于空 hook。
 
-Desktop 与 WebGUI 是最小宿主。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract，未知或未注册贡献失败关闭。`manager:desktop` 持有 `POST /open-config-file`、`POST /manager/start`、`POST /manager/desktop-lifecycle/start`、`POST /manager/shutdown` 和 `/api/desktop/settings`；`manager:diagnostics` 持有 `GET /meta` 与 `GET /api/gateways`。第三方任意表现代码的受控 Extension Host 属于后续路线。
+Desktop 与 WebGUI 是最小宿主。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command 注册表执行快速配置、新增 Route、打开 Manager 配置和保存页面；可信 renderer 注册表挂载设置区与状态卡。Desktop 的冻结 Registry 同时解析内置合同和显式允许的可信扩展。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 挂载系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动贡献同时控制系统划词、角色/计划/记忆/项目/运行目录和手动触发面板操作。目录不可用或刷新失败时清空旧目录，撤销命令、renderer、面板操作和系统监听，只保留固定 WebGUI 恢复入口。可信 Python entry point 仍在 Desktop 进程内执行；owner-scoped registrar 与更强隔离属于后续 Extension Host。
 
 ### Manager 插件持有的运行资源
 
-26 个 hook 都把关键卸载步骤放在各自的单一 disposer 中。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
+26 个 hook 都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`，避免同层 Cordis disposer 并发时共享资源先停。共享资源 Runtime 内先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。停止完成后这些资源可以重新启动。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
 ```text
 unregister routes
@@ -424,7 +426,7 @@ unregister routes
 → await resource exit
 ```
 
-`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 启动后和健康检查后各收集一次 PID；FenneNote 等待转发任务退出。动态对账按当前激活顺序逆序停用变化批次，再按期望定义顺序启动。
+`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 启动后和健康检查后各收集一次 PID；FenneNote 等待转发任务退出。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。人格同步 LAN Server 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。动态对账按当前激活顺序逆序停用变化批次，再按期望定义顺序启动。
 
 可信内置插件运行在 Manager 主进程。`processPluginProtocol.ts`、`processPluginHost.ts` 与 `processManagerPlugin.ts` 为未知、不可信或高风险扩展提供独立进程、能力授权、健康检查、超时、脱敏错误和 Windows 进程树清理。这是 RabiRoute 增加的安全策略；DSH 普通插件默认仍在主进程运行，Cordis scope/isolate 只处理可见性、依赖和资源所有权。
 
@@ -432,7 +434,7 @@ unregister routes
 
 ### `src/manager/controlPlaneRoutes.ts`
 
-这是 Manager 的最小 HTTP 宿主与插件组合根。中心 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404 和其他路径 WebGUI HTML 回退。`/manager` 与所有 `/manager/*` 都按控制路径处理。业务 HTTP 路径由 26 个 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。
+这是 Manager 的最小 HTTP 宿主与插件组合根。中心 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404 和其他路径 WebGUI HTML 回退。`/manager` 与所有 `/manager/*` 都按控制路径处理。生产业务路由使用稳定 `routeId` 和真实 `exact` 或 `prefix` matcher；`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，也拒绝 method 重叠时的 `exact/exact`、`exact/prefix` 与 `prefix/prefix` 路径冲突。`/meta`、`/manager-config` 等非 `/api` 路径也使用显式静态声明。
 
 它还负责创建共享服务、组装插件 hook、启动 HTTP server、维护配置 watcher 和执行进程级关闭。新增业务 HTTP 分支应进入对应插件的专用 route/service 模块，不再直接追加到中央请求链。
 

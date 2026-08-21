@@ -470,7 +470,6 @@ const WEBGUI_TOOL_PATHS = {
   copilotInstall: "/api/agent/copilot-install",
   copilotLogin: "/api/agent/copilot-login",
   marvisOpen: "/api/agent/marvis-open",
-  astrbotDeploy: "/api/deploy-astrbot-adapter",
   remoteAgentDevices: "/api/remote-agent/devices",
   remoteAgentScan: "/api/remote-agent/scan",
   remoteAgentConnect: "/api/remote-agent/connect",
@@ -2732,15 +2731,6 @@ export default {
       () => this.runWebguiTool("打开 Marvis", WEBGUI_TOOL_PATHS.marvisOpen, {
         appId: this.data.marvisAppId || this.selectedGatewayConfig()?.marvisAppId || ""
       })
-    );
-  },
-
-  deployAstrbotAdapter() {
-    this.confirmDangerousTool(
-      "部署 AstrBot",
-      "确认让 PC 运行 AstrBot Adapter 部署脚本？",
-      "部署",
-      () => this.runWebguiTool("部署 AstrBot", WEBGUI_TOOL_PATHS.astrbotDeploy)
     );
   },
 

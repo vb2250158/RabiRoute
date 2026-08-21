@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { ManagerPluginDefinition } from "../runtime/managerPluginRuntime.js";
 import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
 import type { ManagerConfig } from "./configRepository.js";
 import { normalizeManagerPluginConfig } from "./managerPluginConfig.js";
@@ -133,5 +134,62 @@ test("Manager plugin config accepts only boolean enabled values", () => {
       instanceId: "manager:speech",
       message: "Unsupported Manager plugin config fields for manager:speech: enabled"
     }
+  ]);
+});
+
+test("Manager plugin config revisions include dependency contracts", () => {
+  const base = {
+    instanceId: "manager:consumer",
+    manifest: {
+      id: "builtin:manager/consumer",
+      name: "Consumer",
+      version: "1.0.0",
+      kind: "builtin",
+      hosts: ["manager"]
+    },
+    provides: ["manager.consumer"],
+    requires: ["manager.provider"],
+    optional: ["manager.optional"]
+  } satisfies ManagerPluginDefinition;
+  const first = normalizeManagerPluginConfig({}, [base]).desired[0]!;
+  const changedProvides = normalizeManagerPluginConfig({}, [{
+    ...base,
+    provides: ["manager.consumer.v2"]
+  }]).desired[0]!;
+  const changedRequires = normalizeManagerPluginConfig({}, [{
+    ...base,
+    requires: ["manager.provider.v2"]
+  }]).desired[0]!;
+  const changedOptional = normalizeManagerPluginConfig({}, [{
+    ...base,
+    optional: ["manager.optional.v2"]
+  }]).desired[0]!;
+
+  assert.notEqual(changedProvides.revision, first.revision);
+  assert.notEqual(changedRequires.revision, first.revision);
+  assert.notEqual(changedOptional.revision, first.revision);
+});
+
+test("builtin Manager plugins declare one provider per capability and explicit critical dependencies", () => {
+  const definitions = builtinManagerPluginDefinitions();
+  const providerByCapability = new Map<string, string>();
+  for (const definition of definitions) {
+    for (const capability of definition.provides ?? []) {
+      assert.equal(providerByCapability.has(capability), false, capability);
+      providerByCapability.set(capability, definition.instanceId);
+    }
+  }
+  const byId = new Map(definitions.map(definition => [definition.instanceId, definition]));
+
+  assert.deepEqual(byId.get("manager:rabilink-relay")?.requires, ["manager.core", "manager.persona"]);
+  assert.deepEqual(byId.get("manager:napcat-supervisor")?.requires, ["manager.core", "manager.napcat-control"]);
+  assert.deepEqual(byId.get("manager:message-processing-automation")?.requires, [
+    "manager.core",
+    "manager.message-processing-control"
+  ]);
+  assert.deepEqual(byId.get("manager:diagnostics")?.optional, [
+    "manager.gateway-runtime",
+    "manager.performance",
+    "manager.message-processing-control"
   ]);
 });

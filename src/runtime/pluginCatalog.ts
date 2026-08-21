@@ -181,6 +181,32 @@ export class PluginCatalog {
     return cloneRecord(record);
   }
 
+  refreshDeclaration(declaration: RabiPluginInstanceDeclaration): RabiPluginCatalogEntry {
+    const instanceId = required(declaration.instanceId, "Plugin instanceId");
+    const record = this.require(instanceId);
+    const manifest = cloneManifest(declaration.manifest);
+    const host = normalizePluginHost(declaration.host, "Plugin host");
+    const scope = required(declaration.scope ?? "global", "Plugin scope");
+    if (!(record.status === "inactive" || record.status === "failed" || record.status === "waiting_dependency")) {
+      throw new Error(`Plugin declaration cannot refresh from status ${record.status}: ${instanceId}`);
+    }
+    if (record.pluginId !== manifest.id || record.host !== host || record.scope !== scope) {
+      throw new Error(`Plugin instance declaration changed: ${instanceId}`);
+    }
+    if (!manifest.hosts.includes(host)) {
+      throw new Error(`Plugin manifest does not support host ${host}: ${manifest.id}`);
+    }
+
+    const missingCapabilities = unique(declaration.missingCapabilities ?? []);
+    record.manifest = manifest;
+    record.status = missingCapabilities.length ? "waiting_dependency" : "inactive";
+    record.missingCapabilities = missingCapabilities;
+    record.startedAt = undefined;
+    record.error = undefined;
+    this.revision += 1;
+    return cloneRecord(record);
+  }
+
   activating(instanceId: string): void {
     const record = this.require(instanceId);
     if (record.missingCapabilities.length) {

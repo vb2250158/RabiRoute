@@ -597,7 +597,6 @@ for (const path of [
   "/api/agent/copilot-install",
   "/api/agent/copilot-login",
   "/api/agent/marvis-open",
-  "/api/deploy-astrbot-adapter",
   "/api/remote-agent/scan",
   "/api/remote-agent/connect",
   "/api/remote-agent/disconnect"

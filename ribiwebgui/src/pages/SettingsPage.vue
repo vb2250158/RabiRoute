@@ -6,19 +6,13 @@ import { routeScopedKnowledgeUrl, routeScopedOverviewUrl } from "../routeScopedN
 import { configNameFor } from "../utils/gatewayHelpers";
 import { redirectCurrentWebguiToLan } from "../webguiLanRedirect";
 import { copyTextToClipboard } from "../clipboard";
-import { desktopSettingsClient } from "../desktopSettingsClient";
-import { publishInterfaceTheme } from "../interfaceTheme";
-import type { DesktopTheme } from "@shared/desktopSettingsContract";
-import { resolveSelectionSpeechModel, type SelectionSpeechSettings } from "@shared/selectionSpeechContract";
-import type { SpeechModel } from "@shared/speechControlContract";
-import { speechControlClient } from "../speech/speechControlClient";
 import { registerPageSaveAction } from "../pageSaveAction";
 import { pluginCatalogStore } from "../pluginCatalogStore";
-import { resolveWebThemeResource } from "../pluginThemes";
+import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
+import { webRenderersAt } from "../pluginRenderers";
 
 const store = useGatewayStore();
-const desktopSettingsVisible = computed(() => pluginCatalogStore.visibility.value.desktopSettings);
-const desktopThemeOptions = computed(() => pluginCatalogStore.themes.value.options);
+const settingsRenderers = computed(() => webRenderersAt(pluginCatalogStore.settingsRenderers.value, "global.settings.sections"));
 
 const routeDir = ref("");
 const rolesDir = ref("");
@@ -36,30 +30,10 @@ const rabiLinkRelayClaimWaitMs = ref(60000);
 const rabiLinkRelayReplyIdleTimeoutMs = ref(60000);
 const rabiLinkSpeechProxyEnabled = ref(false);
 const rabiLinkSpeechServiceUrl = ref("http://127.0.0.1:8781");
-const selectionSpeechEnabled = ref(false);
-const selectionReadAloudEnabled = ref(true);
-const selectionSpeechAdvanced = ref(false);
-const selectionSpeechModel = ref("");
-const selectionSpeechModels = ref<SpeechModel[]>([]);
-const selectionSpeechLoaded = ref(false);
-const selectionSpeechSaving = ref(false);
-const desktopScreenshotEnabled = ref(false);
-const desktopScreenshotShortcut = ref("Ctrl+Shift+S");
-const desktopScreenshotShortcutCapturing = ref(false);
-const desktopScreenshotClipboardShortcut = ref("F3");
-const desktopScreenshotClipboardShortcutCapturing = ref(false);
-const desktopScreenshotAutoCopy = ref(true);
-const desktopAutostart = ref(false);
-const desktopTheme = ref<DesktopTheme>("system");
-
-const desktopSettingsLoaded = ref(false);
-const desktopSettingsHydrating = ref(false);
-const desktopSettingsSaving = ref(false);
-const desktopSettingsError = ref("");
 const settingsDirty = ref(false);
 const settingsSaving = ref(false);
 const settingsHydrating = ref(true);
-const settingsReady = computed(() => (!desktopSettingsVisible.value || desktopSettingsLoaded.value) && selectionSpeechLoaded.value);
+const settingsReady = computed(() => !settingsHydrating.value);
 type WebguiLanUrl = { name?: string; address: string; cidr?: string; url: string };
 type WebguiLanAccess = {
   enabled: boolean;
@@ -98,168 +72,9 @@ async function loadDirConfig() {
   } catch { /* ignore */ }
   rabiName.value = store.meta.rabiName || store.meta.computerName || "";
   loadRabiLinkRelayForm();
-  await Promise.all([
-    loadWebguiLanAccess(),
-    desktopSettingsVisible.value ? loadDesktopSettings() : Promise.resolve(),
-    loadSelectionSpeechSettings()
-  ]);
+  await loadWebguiLanAccess();
   await nextTick();
   settingsHydrating.value = false;
-}
-
-let desktopSettingsLoadPromise: Promise<void> | undefined;
-async function loadDesktopSettings(): Promise<void> {
-  if (desktopSettingsLoaded.value) return;
-  if (desktopSettingsLoadPromise) return desktopSettingsLoadPromise;
-  const current = (async () => {
-    desktopSettingsHydrating.value = true;
-    try {
-      const settings = await desktopSettingsClient.read();
-      desktopScreenshotEnabled.value = settings.screenshot.enabled;
-      desktopScreenshotShortcut.value = settings.screenshot.shortcut;
-      desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
-      desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
-      desktopAutostart.value = settings.autostart;
-      desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, settings.theme).theme;
-      desktopSettingsLoaded.value = true;
-      desktopSettingsError.value = "";
-      await nextTick();
-    } catch (error) {
-      desktopSettingsError.value = error instanceof Error ? error.message : String(error);
-    } finally {
-      desktopSettingsHydrating.value = false;
-    }
-  })();
-  desktopSettingsLoadPromise = current;
-  try {
-    await current;
-  } finally {
-    if (desktopSettingsLoadPromise === current) desktopSettingsLoadPromise = undefined;
-  }
-}
-
-async function saveDesktopSettings(): Promise<void> {
-  if (!desktopSettingsLoaded.value || desktopSettingsSaving.value) throw new Error("桌面设置尚未加载完成。");
-  desktopSettingsSaving.value = true;
-  desktopSettingsError.value = "";
-  try {
-    const settings = await desktopSettingsClient.update({
-      screenshot: {
-        enabled: desktopScreenshotEnabled.value,
-        shortcut: desktopScreenshotShortcut.value,
-        clipboardShortcut: desktopScreenshotClipboardShortcut.value,
-        autoCopy: desktopScreenshotAutoCopy.value
-      },
-      autostart: desktopAutostart.value,
-      theme: desktopTheme.value
-    });
-    desktopScreenshotEnabled.value = settings.screenshot.enabled;
-    desktopScreenshotShortcut.value = settings.screenshot.shortcut;
-    desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
-    desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
-    desktopAutostart.value = settings.autostart;
-    desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, settings.theme).theme;
-    publishInterfaceTheme(desktopTheme.value);
-  } catch (error) {
-    desktopSettingsError.value = error instanceof Error ? error.message : String(error);
-    throw error;
-  } finally {
-    desktopSettingsSaving.value = false;
-  }
-}
-
-async function loadSelectionSpeechSettings(): Promise<void> {
-  try {
-    const [settings, modelPayload] = await Promise.all([
-      speechControlClient.selectionReaderSettings(),
-      speechControlClient.models()
-    ]);
-    selectionSpeechEnabled.value = settings.enabled;
-    selectionReadAloudEnabled.value = settings.readAloudEnabled;
-    selectionSpeechAdvanced.value = settings.advanced;
-    selectionSpeechModel.value = settings.model;
-    selectionSpeechModels.value = modelPayload.models || [];
-    if (selectionSpeechAdvanced.value) {
-      selectionSpeechModel.value = resolveSelectionSpeechModel(settings, selectionSpeechModels.value);
-    }
-    selectionSpeechLoaded.value = true;
-  } catch (error) {
-    desktopSettingsError.value = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function saveSelectionSpeechSettings(): Promise<void> {
-  if (!selectionSpeechLoaded.value || selectionSpeechSaving.value) throw new Error("滑词菜单设置尚未加载完成。");
-  selectionSpeechSaving.value = true;
-  try {
-    const settings: SelectionSpeechSettings = {
-      enabled: selectionSpeechEnabled.value,
-      readAloudEnabled: selectionReadAloudEnabled.value,
-      advanced: selectionSpeechAdvanced.value,
-      model: selectionSpeechModel.value
-    };
-    const saved = await speechControlClient.updateSelectionReaderSettings(settings);
-    selectionSpeechEnabled.value = saved.enabled;
-    selectionReadAloudEnabled.value = saved.readAloudEnabled;
-    selectionSpeechAdvanced.value = saved.advanced;
-    selectionSpeechModel.value = saved.model;
-  } catch (error) {
-    desktopSettingsError.value = error instanceof Error ? error.message : String(error);
-    throw error;
-  } finally {
-    selectionSpeechSaving.value = false;
-  }
-}
-
-function normalizeScreenshotShortcut(): void {
-  desktopScreenshotShortcut.value = desktopScreenshotShortcut.value.trim().replace(/\s*\+\s*/g, "+");
-}
-
-function normalizeScreenshotClipboardShortcut(): void {
-  desktopScreenshotClipboardShortcut.value = desktopScreenshotClipboardShortcut.value.trim().replace(/\s*\+\s*/g, "+");
-}
-
-function screenshotShortcutFromKeyEvent(event: KeyboardEvent): string | null {
-  const key = event.key === " " ? "SPACE" : event.key.toUpperCase();
-  const functionKey = /^(F[1-9]|F1[0-2])$/.test(key);
-  const validKey = /^[A-Z0-9]$/.test(key)
-    || functionKey
-    || /^(SPACE|TAB|ENTER|ESCAPE)$/.test(key);
-  if (!validKey) return null;
-  const modifiers = [
-    event.ctrlKey ? "Ctrl" : "",
-    event.altKey ? "Alt" : "",
-    event.shiftKey ? "Shift" : "",
-    event.metaKey ? "Win" : ""
-  ].filter(Boolean);
-  if (!modifiers.length && !functionKey) return null;
-  return [...modifiers, key === "ESCAPE" ? "Esc" : key[0] + key.slice(1).toLowerCase()].join("+");
-}
-
-function beginScreenshotShortcutCapture(): void {
-  desktopScreenshotShortcutCapturing.value = true;
-}
-
-function captureScreenshotShortcut(event: KeyboardEvent): void {
-  const shortcut = screenshotShortcutFromKeyEvent(event);
-  if (!shortcut) return;
-  event.preventDefault();
-  event.stopPropagation();
-  desktopScreenshotShortcut.value = shortcut;
-  desktopScreenshotShortcutCapturing.value = false;
-}
-
-function beginScreenshotClipboardShortcutCapture(): void {
-  desktopScreenshotClipboardShortcutCapturing.value = true;
-}
-
-function captureScreenshotClipboardShortcut(event: KeyboardEvent): void {
-  const shortcut = screenshotShortcutFromKeyEvent(event);
-  if (!shortcut) return;
-  event.preventDefault();
-  event.stopPropagation();
-  desktopScreenshotClipboardShortcut.value = shortcut;
-  desktopScreenshotClipboardShortcutCapturing.value = false;
 }
 
 async function loadWebguiLanAccess(): Promise<void> {
@@ -469,26 +284,13 @@ const trackedSettingValues = [
   rabiLinkRelayReplyIdleTimeoutMs,
   rabiLinkSpeechProxyEnabled,
   rabiLinkSpeechServiceUrl,
-  selectionSpeechEnabled,
-  selectionReadAloudEnabled,
-  selectionSpeechAdvanced,
-  selectionSpeechModel,
-  desktopScreenshotEnabled,
-  desktopScreenshotShortcut,
-  desktopScreenshotClipboardShortcut,
-  desktopScreenshotAutoCopy,
-  desktopAutostart,
-  desktopTheme,
   () => webguiLanAccess.value.enabled
 ];
 
 watch(trackedSettingValues, () => {
-  if (!settingsHydrating.value && !desktopSettingsHydrating.value) settingsDirty.value = true;
+  if (!settingsHydrating.value) settingsDirty.value = true;
 });
 
-watch(desktopSettingsVisible, (visible) => {
-  if (visible && !desktopSettingsLoaded.value) void loadDesktopSettings();
-}, { immediate: true });
 
 async function saveSettings(): Promise<void> {
   if (!settingsReady.value || settingsSaving.value) return;
@@ -496,8 +298,6 @@ async function saveSettings(): Promise<void> {
   settingsHydrating.value = true;
   try {
     const results = await Promise.allSettled([
-      desktopSettingsVisible.value ? saveDesktopSettings() : Promise.resolve(),
-      saveSelectionSpeechSettings(),
       saveRabiIdentity(),
       saveDirConfig(),
       webguiLanAccess.value.canManage && !webguiLanAccess.value.hostManagedByEnvironment
@@ -554,120 +354,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="two-column">
-      <v-card v-if="desktopSettingsVisible" class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">RabiRoute 桌面功能</div>
-            <div class="section-note">RabiRoute 在 Windows 中提供截图、滑词和登录启动设置。</div>
-          </div>
-        </div>
-        <v-alert v-if="desktopSettingsError" type="error" variant="tonal" density="compact" class="mb-3">{{ desktopSettingsError }}</v-alert>
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">界面主题</div>
-            <div class="section-note">同时影响当前 WebGUI、托盘菜单、角色面板、滑词操作条和截图窗口。</div>
-          </div>
-          <v-btn-toggle v-model="desktopTheme" color="secondary" density="compact" mandatory divided :disabled="!desktopSettingsLoaded">
-            <v-btn
-              v-for="option in desktopThemeOptions"
-              :key="option.webResourceId"
-              :value="option.themeId"
-              :prepend-icon="option.icon"
-            >
-              {{ option.label }}
-            </v-btn>
-          </v-btn-toggle>
-        </div>
-        <v-divider class="my-4" />
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">系统级截图</div>
-            <div class="section-note">框选截图后可复制到剪贴板、贴到屏幕或发送给已激活人格；在截图窗口按 F2 发送，按 &lt; / &gt; 切换上一张和下一张。</div>
-          </div>
-          <v-switch v-model="desktopScreenshotEnabled" label="启用截图" color="success" density="compact" inset hide-details :disabled="!desktopSettingsLoaded" />
-        </div>
-        <v-text-field
-          v-model="desktopScreenshotShortcut"
-          label="截图快捷键"
-          placeholder="Ctrl+Shift+S"
-          :hint="desktopScreenshotShortcutCapturing ? '正在录入，按下要绑定的按键。' : '点击输入框后按下快捷键；可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。'"
-          persistent-hint
-          density="compact"
-          readonly
-          :disabled="!desktopSettingsLoaded || !desktopScreenshotEnabled"
-          @click="beginScreenshotShortcutCapture"
-          @focus="beginScreenshotShortcutCapture"
-          @keydown="captureScreenshotShortcut"
-          @blur="desktopScreenshotShortcutCapturing = false; normalizeScreenshotShortcut()"
-        />
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">自动复制选区</div>
-            <div class="section-note">确认选区时自动复制到剪贴板；关闭后可按 Ctrl+C 或点击“复制”。</div>
-          </div>
-          <v-switch v-model="desktopScreenshotAutoCopy" label="自动复制" color="success" density="compact" inset hide-details :disabled="!desktopSettingsLoaded || !desktopScreenshotEnabled" />
-        </div>
-        <v-text-field
-          v-model="desktopScreenshotClipboardShortcut"
-          label="贴图快捷键"
-          placeholder="F3"
-          :hint="desktopScreenshotClipboardShortcutCapturing ? '正在录入，按下要绑定的按键。' : '截图窗口打开时，直接贴出框选区域；其他时候贴出剪贴板图片。默认 F3；可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。'"
-          persistent-hint
-          density="compact"
-          readonly
-          :disabled="!desktopSettingsLoaded || !desktopScreenshotEnabled"
-          @click="beginScreenshotClipboardShortcutCapture"
-          @focus="beginScreenshotClipboardShortcutCapture"
-          @keydown="captureScreenshotClipboardShortcut"
-          @blur="desktopScreenshotClipboardShortcutCapturing = false; normalizeScreenshotClipboardShortcut()"
-        />
-        <v-divider class="my-4" />
-        <div class="section-title-row compact-row">
-          <div>
-            <div class="section-title small-title">Windows 登录启动</div>
-            <div class="section-note">登录 Windows 后自动启动 RabiRoute Desktop；后台运行时保留系统托盘入口。</div>
-          </div>
-          <v-switch v-model="desktopAutostart" label="登录后启动" color="success" density="compact" inset hide-details :disabled="!desktopSettingsLoaded" />
-        </div>
-      </v-card>
-
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">开启滑词菜单</div>
-            <div class="section-note">在 Windows 任意支持文本选区的软件中划选文字，再点击悬浮按钮执行朗读或投递。</div>
-          </div>
-        </div>
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">滑词菜单</div>
-            <div class="section-note">划选后显示「朗读」和「投递至」；划选本身不执行动作。</div>
-          </div>
-          <v-switch v-model="selectionSpeechEnabled" label="开启滑词菜单" color="success" density="compact" inset hide-details :disabled="!selectionSpeechLoaded" />
-        </div>
-        <template v-if="selectionSpeechEnabled">
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">滑词朗读</div>
-            <div class="section-note">点击左侧“朗读”才会播放；关闭后悬浮条只保留“投递至”。</div>
-          </div>
-          <v-switch v-model="selectionReadAloudEnabled" label="滑词朗读" color="success" density="compact" inset hide-details :disabled="!selectionSpeechLoaded" />
-        </div>
-        <v-switch v-model="selectionSpeechAdvanced" label="高级选项" color="primary" density="compact" hide-details :disabled="!selectionSpeechLoaded || !selectionReadAloudEnabled" />
-        <v-select
-          v-if="selectionSpeechEnabled && selectionReadAloudEnabled && selectionSpeechAdvanced"
-          v-model="selectionSpeechModel"
-          class="mt-3"
-          label="滑词朗读模型"
-          :items="selectionSpeechModels.filter(item => item.capability === 'tts' && item.available)"
-          item-title="name"
-          item-value="id"
-          :disabled="!selectionSpeechLoaded"
-        >
-          <template #item="{ props, item }"><v-list-item v-bind="props" :subtitle="item.raw.id" /></template>
-        </v-select>
-        </template>
-      </v-card>
+      <TrustedWebRendererHost :renderers="settingsRenderers" />
 
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">

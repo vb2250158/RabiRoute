@@ -19,7 +19,7 @@ async function listen(service: FenneNoteOutputService): Promise<{ baseUrl: strin
   };
 }
 
-test("FenneNote service registers reply and playback aliases", async () => {
+test("FenneNote service registers only the reply and playback routes", async () => {
   const upstream = http.createServer((request, response) => {
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ path: request.url }));
@@ -33,7 +33,7 @@ test("FenneNote service registers reply and playback aliases", async () => {
   });
   const app = await listen(service);
   try {
-    for (const [route, path] of [["/api/fennenote/reply", "/reply"], ["/api/fennenote/playback", "/playback"], ["/api/playback/request", "/playback"]]) {
+    for (const [route, path] of [["/api/fennenote/reply", "/reply"], ["/api/fennenote/playback", "/playback"]]) {
       const response = await fetch(app.baseUrl + route, { method: "POST", body: "{}", headers: { "content-type": "application/json" } });
       assert.equal(response.status, 202);
       assert.equal((await response.json() as { response: { path: string } }).response.path, path);
@@ -51,6 +51,7 @@ test("FenneNote service returns false for unrelated routes and stops accepting w
   const app = await listen(service);
   try {
     assert.equal((await fetch(app.baseUrl + "/api/unrelated")).status, 404);
+    assert.equal((await fetch(app.baseUrl + "/api/playback/request", { method: "POST", body: "{}" })).status, 404);
     const stopped = await fetch(app.baseUrl + "/api/fennenote/reply", { method: "POST", body: "{}" });
     assert.equal(stopped.status, 503);
   } finally {

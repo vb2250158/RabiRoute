@@ -145,6 +145,9 @@ export class CoalescingMessageProcessingBoardPersistence implements MessageProce
   private lastCompletedAt?: string;
   private lastErrorAt?: string;
   private lastError?: string;
+  private accepting = true;
+  private stopped = false;
+  private stopPromise?: Promise<void>;
 
   constructor(
     readonly statePath: string,
@@ -165,7 +168,20 @@ export class CoalescingMessageProcessingBoardPersistence implements MessageProce
     }
   }
 
+  start(): void {
+    if (!this.stopped) return;
+    if (this.activeWrite || this.flushTimer) {
+      throw new Error("Message-processing board persistence cannot restart while a write is active.");
+    }
+    this.accepting = true;
+    this.stopped = false;
+    this.stopPromise = undefined;
+  }
+
   write(state: unknown): void {
+    if (!this.accepting) {
+      throw new Error("Message-processing board persistence is stopped.");
+    }
     this.pendingState = state;
     this.hasPendingState = true;
     this.scheduleWrite(this.flushDelayMs);
@@ -186,6 +202,19 @@ export class CoalescingMessageProcessingBoardPersistence implements MessageProce
     };
   }
 
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    this.accepting = false;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    this.stopPromise = this.flush().finally(() => {
+      this.stopped = true;
+    });
+    return this.stopPromise;
+  }
+
   async flush(): Promise<void> {
     while (this.hasPendingState || this.activeWrite) {
       if (this.flushTimer) {
@@ -198,7 +227,7 @@ export class CoalescingMessageProcessingBoardPersistence implements MessageProce
   }
 
   private scheduleWrite(delayMs: number): void {
-    if (this.flushTimer || this.activeWrite || !this.hasPendingState) return;
+    if (!this.accepting || this.flushTimer || this.activeWrite || !this.hasPendingState) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = undefined;
       const active = this.startWrite();

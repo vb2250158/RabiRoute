@@ -2,14 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import type { WebPluginCatalog, WebPluginCatalogPlugin } from "../src/pluginCatalogClient";
-import {
-  availableWebContributions,
-  resolveWebContributionVisibility
-} from "../src/pluginContributions";
+import { availableWebContributions } from "../src/pluginContributions";
+import { resolveWebCommandCatalog } from "../src/pluginCommands";
 
-const pluginId = "builtin:manager/test";
+const pluginId = "builtin:manager/route-control";
 const activePlugin: WebPluginCatalogPlugin = {
-  instanceId: "manager:test",
+  instanceId: "manager:route-control",
   pluginId,
   status: "active",
   manifest: {
@@ -33,165 +31,68 @@ function catalog(
   };
 }
 
-function desktopSettings(overrides: Record<string, unknown> = {}) {
+function quickSetup(overrides: Record<string, unknown> = {}): unknown {
   return {
-    kind: "settings-section",
-    surface: "shared.settings",
-    id: "desktop-settings",
-    instanceId: "manager:test",
+    kind: "command",
+    surface: "web.commands",
+    id: "quick-setup",
+    instanceId: "manager:route-control",
     pluginId,
-    hosts: ["web", "desktop"],
-    slot: "desktop",
-    rendererId: "builtin.desktop-settings.v1",
-    schemaId: "desktop.settings.v1",
-    readCommandId: "manager.desktop-settings.read",
-    writeCommandId: "manager.desktop-settings.write",
+    hosts: ["web"],
+    handlerId: "web.quick-setup",
+    slot: "sidebar-footer-primary",
+    icon: "mdi-lightning-bolt-outline",
+    label: { fallback: "快速配置" },
+    order: 10,
     ...overrides
   };
 }
 
-function speechStatus(overrides: Record<string, unknown> = {}) {
-  return {
-    kind: "status-card",
-    surface: "shared.status",
-    id: "speech-status",
-    instanceId: "manager:test",
-    pluginId,
-    hosts: ["web", "desktop"],
-    slot: "runtime-status",
-    queryId: "manager.speech-status",
-    rendererId: "builtin.speech-status.v1",
-    ...overrides
-  };
-}
-
-function performanceStatus(overrides: Record<string, unknown> = {}) {
-  return {
-    kind: "status-card",
-    surface: "shared.status",
-    id: "performance-status",
-    instanceId: "manager:test",
-    pluginId,
-    hosts: ["web", "desktop"],
-    slot: "runtime-status",
-    queryId: "manager.performance-status",
-    rendererId: "builtin.performance-status.v1",
-    ...overrides
-  };
-}
-
-test("controlled Web contributions expose only registered renderer, query, schema, and command contracts", () => {
-  const contributions = availableWebContributions(catalog([
-    desktopSettings(),
-    speechStatus(),
-    performanceStatus()
-  ]));
-
-  assert.deepEqual(resolveWebContributionVisibility(contributions, "ready"), {
-    desktopSettings: true,
-    speechStatus: true,
-    performanceStatus: true
-  });
-
-  const unknownContracts = availableWebContributions(catalog([
-    desktopSettings({ rendererId: "plugin.desktop-settings.v2" }),
-    desktopSettings({ schemaId: "plugin.desktop.v2" }),
-    desktopSettings({ readCommandId: "plugin.desktop.read" }),
-    desktopSettings({ writeCommandId: "plugin.desktop.write" }),
-    speechStatus({ queryId: "plugin.speech-status" }),
-    speechStatus({ rendererId: "plugin.speech-status.v2" }),
-    performanceStatus({ queryId: "plugin.performance-status" }),
-    performanceStatus({ rendererId: "plugin.performance-status.v2" })
-  ]));
-
-  assert.deepEqual(resolveWebContributionVisibility(unknownContracts, "ready"), {
-    desktopSettings: false,
-    speechStatus: false,
-    performanceStatus: false
-  });
-});
-
-test("requiredCapabilities use the fixed Web host registry instead of plugin manifest capabilities", () => {
-  const supported = availableWebContributions(catalog([
-    speechStatus({ requiredCapabilities: ["web.status.speech"] })
-  ]));
-  assert.equal(resolveWebContributionVisibility(supported, "ready").speechStatus, true);
-
-  const unrelatedManifestCapability = availableWebContributions(catalog([
-    speechStatus({ requiredCapabilities: ["plugin.unrelated-capability"] })
-  ]));
-  assert.equal(unrelatedManifestCapability.length, 0);
-
-  const missingCapability = availableWebContributions(catalog([
-    speechStatus({ requiredCapabilities: ["web.status.unknown"] })
-  ]));
-  assert.equal(missingCapability.length, 0);
-
-  const invalidCapabilityList = availableWebContributions(catalog([
-    speechStatus({ requiredCapabilities: ["web.status.speech", "web.status.speech"] })
-  ]));
-  assert.equal(invalidCapabilityList.length, 0);
-});
-
-test("contributions require an active matching owner whose manifest supports Web", () => {
-  assert.equal(availableWebContributions(catalog(
-    [speechStatus()],
-    [{ ...activePlugin, status: "failed" }]
-  )).length, 0);
-  assert.equal(availableWebContributions(catalog([
-    speechStatus({ pluginId: "builtin:manager/other" })
+test("Web contributions require an active matching owner whose manifest supports Web", () => {
+  assert.equal(availableWebContributions(catalog([quickSetup()])).length, 1);
+  assert.equal(availableWebContributions(catalog([quickSetup()], [{ ...activePlugin, status: "failed" }])).length, 0);
+  assert.equal(availableWebContributions(catalog([quickSetup({ pluginId: "builtin:manager/other" })])).length, 0);
+  assert.equal(availableWebContributions(catalog([quickSetup()], [{ ...activePlugin, manifest: { ...activePlugin.manifest, hosts: ["manager"] } }])).length, 0);
+  assert.equal(availableWebContributions(catalog([quickSetup()], [
+    activePlugin,
+    { ...activePlugin, pluginId: "package:other", manifest: { ...activePlugin.manifest, id: "package:other" } }
   ])).length, 0);
-  assert.equal(availableWebContributions(catalog(
-    [speechStatus()],
-    [{ ...activePlugin, pluginId: "builtin:manager/other" }]
-  )).length, 0);
-  assert.equal(availableWebContributions(catalog(
-    [speechStatus()],
-    [{ ...activePlugin, manifest: { ...activePlugin.manifest, hosts: ["manager", "desktop"] } }]
-  )).length, 0);
 });
 
-test("the first unavailable catalog keeps only the desktop recovery settings", () => {
-  assert.deepEqual(resolveWebContributionVisibility(null, "idle"), {
-    desktopSettings: false,
-    speechStatus: false,
-    performanceStatus: false
-  });
-  assert.deepEqual(resolveWebContributionVisibility(null, "loading"), {
-    desktopSettings: false,
-    speechStatus: false,
-    performanceStatus: false
-  });
-  assert.deepEqual(resolveWebContributionVisibility(null, "unavailable"), {
-    desktopSettings: true,
-    speechStatus: false,
-    performanceStatus: false
-  });
-  assert.deepEqual(resolveWebContributionVisibility([], "ready"), {
-    desktopSettings: false,
-    speechStatus: false,
-    performanceStatus: false
-  });
+test("required capabilities use the Web host registry", () => {
+  assert.equal(availableWebContributions(catalog([
+    quickSetup({ requiredCapabilities: ["web.command"] })
+  ])).length, 1);
+  assert.equal(availableWebContributions(catalog([
+    quickSetup({ requiredCapabilities: ["plugin.unrelated-capability"] })
+  ])).length, 0);
+  assert.equal(availableWebContributions(catalog([
+    quickSetup({ requiredCapabilities: ["web.command", "web.command"] })
+  ])).length, 0);
 });
 
-test("pages hide only controlled summary blocks and keep existing API clients", () => {
-  const settings = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
-  const speech = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
-  const performance = fs.readFileSync(new URL("../src/pages/PerformancePage.vue", import.meta.url), "utf8");
+test("command entry disappears when its owner is revoked", () => {
+  const active = resolveWebCommandCatalog(availableWebContributions(catalog([quickSetup()])));
+  const revoked = resolveWebCommandCatalog(availableWebContributions(catalog(
+    [quickSetup()],
+    [{ ...activePlugin, status: "inactive" }]
+  )));
+  assert.deepEqual(active.map(command => command.handlerId), ["web.quick-setup"]);
+  assert.deepEqual(revoked, []);
+});
 
-  assert.match(settings, /v-if="desktopSettingsVisible"/);
-  assert.match(settings, /desktopSettingsLoadPromise/);
-  assert.match(settings, /desktopSettingsHydrating/);
-  assert.match(settings, /if \(desktopSettingsLoadPromise\) return desktopSettingsLoadPromise/);
-  assert.match(settings, /desktopSettingsClient\.read\(\)/);
-  assert.match(settings, /desktopSettingsClient\.update\(/);
-  assert.match(speech, /v-if="speechStatusVisible" class="speech-status-grid"/);
-  assert.match(speech, /releaseSpeech = await speech\.acquire\(\)/);
-  assert.match(speech, /await syncRuntimeUiFromStore\(\)/);
-  assert.match(performance, /v-if="performanceStatusVisible" class="performance-grid performance-overview"/);
-  assert.match(performance, /loadPerformanceSummary\(rangeMs\.value\)/);
-  assert.match(performance, /loadPerformanceConfig\(\)/);
-  assert.match(performance, /managerEventSource\("\/api\/performance\/events"\)/);
-  assert.doesNotMatch(speech, /pluginContributionLifecycle|createVisibilityLifecycle/);
-  assert.doesNotMatch(performance, /pluginContributionLifecycle|createVisibilityLifecycle/);
+test("App keeps only refresh, connection state, and recovery as fixed host controls", () => {
+  const source = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+  const overview = fs.readFileSync(new URL("../src/pages/OverviewPage.vue", import.meta.url), "utf8");
+  assert.match(source, /webCommandsInSlot/);
+  assert.match(source, /webCommandForHandler/);
+  assert.doesNotMatch(source, /@click="store\.openQuickSetup"/);
+  assert.doesNotMatch(source, /@click="store\.addGatewayAndOpenQuickSetup"/);
+  assert.doesNotMatch(overview, /addGatewayAndOpenQuickSetup/);
+  assert.doesNotMatch(source, /@click="store\.openConfigFile\('manager'\)"/);
+  assert.match(source, /aria-label="刷新状态"/);
+  assert.match(source, /Manager \{\{ managerConnected/);
+  assert.match(source, /PLUGIN_RECOVERY_ROUTE_NAME/);
+  assert.match(source, /webPageDataRequirements/);
+  assert.doesNotMatch(source, /pageNeedsGatewayDiagnostics|\^\\/routes/);
 });

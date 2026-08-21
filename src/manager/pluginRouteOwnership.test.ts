@@ -67,7 +67,6 @@ test("plugin-owned Manager APIs have no legacy central dispatch branches", () =>
 
 test("plugin route modules retain every migrated endpoint family", () => {
   assertSourceRetainsRoutes("src/manager/fenneNoteOutputService.ts", [
-    "/api/playback/request",
     "/api/fennenote/playback",
     "/api/fennenote/reply"
   ]);
@@ -89,9 +88,7 @@ test("plugin route modules retain every migrated endpoint family", () => {
   assertSourceRetainsRoutes("src/manager/agentAdapterCatalog.ts", [
     "/api/scan/agents",
     "/api/scan/agents/dsh",
-    "/api/agent-adapters/catalog",
-    "/api/agent-adapters/availability",
-    "/api/agent-adapters/dsh/availability"
+    "/api/agent-adapters/catalog"
   ]);
   assertSourceRetainsRoutes("src/manager/agentThreadControlRoutes.ts", [
     "/api/agent/threads"
@@ -107,7 +104,6 @@ test("plugin route modules retain every migrated endpoint family", () => {
     "/api/agent/copilot-login",
     "/api/agent/copilot-status",
     "/api/agent/astrbot-login-test",
-    "/api/deploy-astrbot-adapter",
     "/api/agent/marvis-open"
   ]);
   assertSourceRetainsRoutes("src/manager/remoteAgentRoutes.ts", [
@@ -148,7 +144,7 @@ test("Agent state reporting is registered by the Agent state plugin hook", () =>
   const hookEnd = central.indexOf('"manager:gateway-runtime": ctx =>', hookStart);
   const hook = central.slice(hookStart, hookEnd);
   assert.ok(hookStart >= 0 && hookEnd > hookStart);
-  assert.match(hook, /managerPluginRoutes\.register\("manager:agent-state-control"/);
+  assert.match(hook, /registerManagerPluginHandlerRoutes\(managerPluginRoutes, "manager:agent-state-control"/);
   assert.match(hook, /handleAgentStateReport\(request, requestUrl\.pathname, response\)/);
   assert.match(central, /function handleAgentStateReport[\s\S]*pathname !== "\/api\/agent-state"/);
 });
@@ -188,4 +184,25 @@ test("Remote Agent rejects WebSocket work before HTTP request drain", () => {
 test("Manager forced shutdown allows the full plugin drain budget", () => {
   const central = source("src/manager/controlPlaneRoutes.ts");
   assert.match(central, /setTimeout\(\(\) => process\.exit\(0\), 15 \* 60_000\)/);
+});
+
+test("Manager stops plugin Fibers before shared workers and the root Context", () => {
+  const central = source("src/manager/controlPlaneRoutes.ts");
+  const helperStart = central.indexOf("const disposeManagerCordisRuntime");
+  const helperEnd = central.indexOf("let managerPluginDiagnostics", helperStart);
+  const helper = central.slice(helperStart, helperEnd);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const pluginStop = helper.indexOf("await managerPluginRuntime.unmount()");
+  const sharedStop = helper.indexOf("await managerSharedResourcesRuntime.unmount()");
+  const rootStop = helper.indexOf("await managerCordisRoot.dispose()");
+  assert.ok(pluginStop >= 0 && sharedStop > pluginStop && rootStop > sharedStop);
+  assert.match(central, /const managerCordisDispose = disposeManagerCordisRuntime\(\)/);
+});
+
+test("removed compatibility APIs stay absent from their former owners", () => {
+  assert.doesNotMatch(source("src/manager/pluginCatalogRoutes.ts"), /\/api\/plugins\/reconcile(?:["/])/);
+  assert.doesNotMatch(source("src/manager/agentAdapterCatalog.ts"), /\/api\/agent-adapters\/(?:dsh\/)?availability/);
+  assert.doesNotMatch(source("src/manager/fenneNoteOutputService.ts"), /\/api\/playback\/request/);
+  assert.doesNotMatch(source("src/manager/agentProviderControlRoutes.ts"), /\/api\/deploy-astrbot-adapter/);
+  assert.doesNotMatch(source("src/agentAdapters/astrbotAdapter.ts"), /rabiroute_agent|\/api\/plug\//);
 });

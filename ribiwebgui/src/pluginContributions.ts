@@ -2,63 +2,19 @@ import type { WebPluginCatalog, WebPluginCatalogPlugin } from "./pluginCatalogCl
 
 export type WebPluginCatalogStatus = "idle" | "loading" | "ready" | "unavailable";
 
-export type WebContributionVisibility = Readonly<{
-  desktopSettings: boolean;
-  speechStatus: boolean;
-  performanceStatus: boolean;
-}>;
-
 type JsonRecord = Record<string, unknown>;
-
-type ControlledContributionDefinition = Readonly<{
-  kind: "settings-section" | "status-card";
-  surface: "shared.settings" | "shared.status";
-  id: string;
-  slot: string;
-  rendererId: string;
-  queryId?: string;
-  schemaId?: string;
-  readCommandId?: string;
-  writeCommandId?: string;
-}>;
 
 const webHostCapabilities = new Set([
   "web.navigation",
   "web.page",
+  "web.command",
   "web.theme",
+  "web.settings.renderer",
+  "web.status.renderer",
   "web.settings.desktop",
   "web.status.speech",
   "web.status.performance"
 ]);
-
-const controlledContributions = {
-  desktopSettings: {
-    kind: "settings-section",
-    surface: "shared.settings",
-    id: "desktop-settings",
-    slot: "desktop",
-    rendererId: "builtin.desktop-settings.v1",
-    schemaId: "desktop.settings.v1",
-    readCommandId: "manager.desktop-settings.read",
-    writeCommandId: "manager.desktop-settings.write"
-  },
-  speechStatus: {
-    kind: "status-card",
-    surface: "shared.status",
-    id: "speech-status",
-    slot: "runtime-status",
-    rendererId: "builtin.speech-status.v1",
-    queryId: "manager.speech-status"
-  },
-  performanceStatus: {
-    kind: "status-card",
-    surface: "shared.status",
-    id: "performance-status",
-    slot: "runtime-status",
-    rendererId: "builtin.performance-status.v1",
-    queryId: "manager.performance-status"
-  }
-} as const satisfies Record<keyof WebContributionVisibility, ControlledContributionDefinition>;
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -82,15 +38,26 @@ function requiredCapabilities(value: JsonRecord): readonly string[] | undefined 
 
 function activeWebPlugins(catalog: WebPluginCatalog): ReadonlyMap<string, WebPluginCatalogPlugin> {
   const plugins = new Map<string, WebPluginCatalogPlugin>();
+  const ambiguousInstances = new Set<string>();
   for (const plugin of catalog.plugins) {
+    const instanceId = controlledSymbol(plugin.instanceId);
+    const pluginId = controlledSymbol(plugin.pluginId);
     if (
-      plugin.status !== "active"
-      || plugin.pluginId !== plugin.manifest.id
+      !instanceId
+      || !pluginId
+      || plugin.status !== "active"
+      || pluginId !== controlledSymbol(plugin.manifest.id)
       || !plugin.manifest.hosts.includes("web")
+      || ambiguousInstances.has(instanceId)
     ) {
       continue;
     }
-    plugins.set(plugin.instanceId, plugin);
+    if (plugins.has(instanceId)) {
+      plugins.delete(instanceId);
+      ambiguousInstances.add(instanceId);
+      continue;
+    }
+    plugins.set(instanceId, plugin);
   }
   return plugins;
 }
@@ -103,46 +70,8 @@ export function availableWebContributions(catalog: WebPluginCatalog): readonly u
     const pluginId = controlledSymbol(value.pluginId);
     const owner = instanceId ? activePlugins.get(instanceId) : undefined;
     if (!owner || !pluginId || owner.pluginId !== pluginId) return false;
-    if (!Array.isArray(value.hosts) || !value.hosts.includes("web")) return false;
+    if (!Array.isArray(value.hosts) || !value.hosts.every(host => typeof host === "string") || !value.hosts.includes("web")) return false;
     const required = requiredCapabilities(value);
     return required !== undefined && required.every(capability => webHostCapabilities.has(capability));
   });
-}
-
-function matchesControlledContribution(value: unknown, expected: ControlledContributionDefinition): boolean {
-  if (!isRecord(value)) return false;
-  if (
-    value.kind !== expected.kind
-    || value.surface !== expected.surface
-    || value.id !== expected.id
-    || value.slot !== expected.slot
-    || value.rendererId !== expected.rendererId
-  ) {
-    return false;
-  }
-  if (expected.kind === "status-card") {
-    return value.queryId === expected.queryId;
-  }
-  return value.schemaId === expected.schemaId
-    && value.readCommandId === expected.readCommandId
-    && value.writeCommandId === expected.writeCommandId;
-}
-
-export function resolveWebContributionVisibility(
-  contributions: readonly unknown[] | null,
-  status: WebPluginCatalogStatus
-): WebContributionVisibility {
-  if (contributions === null) {
-    return {
-      desktopSettings: status === "unavailable",
-      speechStatus: false,
-      performanceStatus: false
-    };
-  }
-
-  return {
-    desktopSettings: contributions.some(value => matchesControlledContribution(value, controlledContributions.desktopSettings)),
-    speechStatus: contributions.some(value => matchesControlledContribution(value, controlledContributions.speechStatus)),
-    performanceStatus: contributions.some(value => matchesControlledContribution(value, controlledContributions.performanceStatus))
-  };
 }

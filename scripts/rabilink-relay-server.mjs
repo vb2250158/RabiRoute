@@ -5235,7 +5235,6 @@ function mobileWebguiPathAllowed(method, rawPath) {
       || pathname === "/api/agent/copilot-login"
       || pathname === "/api/agent/marvis-open"
       || pathname === "/api/agent/astrbot-login-test"
-      || pathname === "/api/deploy-astrbot-adapter"
       || pathname === "/api/remote-agent/scan"
       || pathname === "/api/remote-agent/connect"
       || pathname === "/api/remote-agent/disconnect";

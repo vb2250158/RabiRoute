@@ -41,7 +41,7 @@ export class FenneNoteOutputService {
     if (request.method !== "POST") return false;
     const mode: FenneNoteOutputMode | undefined = requestUrl.pathname === "/api/fennenote/reply"
       ? "reply"
-      : requestUrl.pathname === "/api/playback/request" || requestUrl.pathname === "/api/fennenote/playback"
+      : requestUrl.pathname === "/api/fennenote/playback"
         ? "playback"
         : undefined;
     if (!mode) return false;

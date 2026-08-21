@@ -3138,8 +3138,6 @@ const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; ic
 ];
 
 const addAgentMenu = ref(false);
-const deployingAstrbot = ref(false);
-const astrbotDeployResult = ref<{ ok: boolean; message: string; detail?: string } | null>(null);
 const testingAstrbotLogin = ref(false);
 const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
 
@@ -3742,25 +3740,6 @@ function selectPrimaryAgent(value: unknown): void {
   if (!gateway.value) return;
   gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(agentTypes.value, value);
   store.touch();
-}
-
-async function deployAstrbotAdapter(): Promise<void> {
-  deployingAstrbot.value = true;
-  astrbotDeployResult.value = null;
-  try {
-    const resp = await fetch("/api/deploy-astrbot-adapter", { method: "POST" });
-    const body = await resp.json();
-    if (body.ok) {
-      astrbotDeployResult.value = { ok: true, message: body.message || "AstrBot Adapter 部署成功", detail: body.stdout };
-    } else {
-      astrbotDeployResult.value = { ok: false, message: body.error || "部署失败", detail: body.stderr };
-    }
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    astrbotDeployResult.value = { ok: false, message: "部署请求失败", detail: msg };
-  } finally {
-    deployingAstrbot.value = false;
-  }
 }
 
 async function testAstrbotLogin(): Promise<void> {
@@ -5325,10 +5304,6 @@ watch(
                       @update:model-value="touch"
                     />
                     <v-combobox v-model="gateway.codexCwd" :items="agentProjectItems('codex')" label="工作目录" placeholder="留空，使用 RabiRoute 根目录" hint="用于同名任务的自动查找和新建；选择已有任务时会自动采用任务自己的目录" persistent-hint @update:model-value="touch">
-                      <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('codex').length === 0" icon="mdi-magnify" size="18" class="scan-btn" @click.stop="runAgentScan" title="扫描" />
-                      </template>
                     </v-combobox>
                     <v-combobox :model-value="gateway.codexThreadId || gateway.codexThreadName" :items="codexSessionItems()" item-title="title" item-value="value" :return-object="false" label="会话名 + 最后会话时间" placeholder="选择已有会话，或输入新会话名" hint="每次读取 200 个 Desktop 任务且不显示 ID；可继续加载，输入名称后只查找，唯一匹配就绑定，没有匹配则在点击保存时创建" persistent-hint @update:model-value="selectCodexSession" @blur="lookupCodexThreadBinding">
                       <template #append-inner>
@@ -5632,7 +5607,7 @@ watch(
                 </template>
                 <template v-else-if="agent.type === 'astrbot'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    AstrBot 会优先绑定 ChatUI 项目和会话；未选择会话时才回退到 rabiroute_agent 插件默认管线。
+                    AstrBot 必须绑定 ChatUI 项目和会话；消息只通过 /api/chat/send 投递。
                   </v-alert>
                   <div class="catalog-param-grid">
                     <v-combobox
@@ -5640,24 +5615,10 @@ watch(
                       :items="agentScanFor('astrbot')?.endpoints?.map(endpoint => endpoint.url) ?? []"
                       label="AstrBot 地址"
                       placeholder="http://127.0.0.1:6185"
-                      hint="AstrBot 仪表盘地址，需安装 rabiroute_agent 插件"
+                      hint="AstrBot ChatUI 地址；消息只通过 /api/chat/send 投递"
                       persistent-hint
                       @update:model-value="touch"
                     >
-                      <template #append-inner>
-                        <v-btn
-                          size="x-small"
-                          variant="tonal"
-                          color="primary"
-                          :loading="deployingAstrbot"
-                          :disabled="deployingAstrbot"
-                          @click="deployAstrbotAdapter"
-                          title="一键部署/更新 AstrBot Adapter"
-                        >
-                          <v-icon start>mdi-rocket-launch</v-icon>
-                          部署
-                        </v-btn>
-                      </template>
                     </v-combobox>
                     <v-text-field
                       v-model="gateway.astrbotUsername"
@@ -5700,7 +5661,7 @@ watch(
                       item-value="value"
                       label="AstrBot 会话"
                       placeholder="选择一个 ChatUI 会话"
-                      hint="选择后消息会投递到同一个会话；不选则使用旧插件默认管线"
+                      hint="选择后消息通过 /api/chat/send 投递；未选择时不可用"
                       persistent-hint
                       clearable
                       @update:model-value="selectAstrbotSession"
@@ -5768,16 +5729,6 @@ watch(
                     class="mt-2"
                   >
                     {{ astrbotLoginResult.message }}
-                  </v-alert>
-                  <v-alert
-                    v-if="astrbotDeployResult"
-                    :type="astrbotDeployResult.ok ? 'success' : 'error'"
-                    variant="tonal"
-                    density="compact"
-                    class="mt-2"
-                  >
-                    <div>{{ astrbotDeployResult.message }}</div>
-                    <pre v-if="astrbotDeployResult.detail" class="deploy-output">{{ astrbotDeployResult.detail }}</pre>
                   </v-alert>
                 </template>
                   <div v-if="primaryAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'memoryConsolidationAgent')" class="dependency-panel mt-3">

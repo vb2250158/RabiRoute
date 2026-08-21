@@ -173,10 +173,7 @@ export type AgentManagerApiContext = {
   readDshRabiRoutePluginStatus?: (baseUrl: string) => Promise<DshRabiRoutePluginStatus>;
 };
 
-export type ManagerApiResponse<T extends Record<string, unknown> = Record<string, unknown>> = {
-  status: number;
-  body: T;
-};
+
 
 export async function scanDshAgentAdapter(
   ctx: AgentManagerApiContext,
@@ -442,11 +439,6 @@ export async function scanAgentAdapters(
     healthy: await checkEndpoint(url)
   })));
 
-  const astrbotPluginDir = path.join(os.homedir(), ".astrbot", "data", "plugins", "rabiroute_agent");
-  const astrbotPluginInstalled = fs.existsSync(path.join(astrbotPluginDir, "main.py"))
-    && fs.existsSync(path.join(astrbotPluginDir, "metadata.yaml"));
-  const astrbotPluginSourceReady = fs.existsSync(path.join(ctx.rootDir, "scripts", "rabiroute_agent", "main.py"))
-    && fs.existsSync(path.join(ctx.rootDir, "scripts", "rabiroute_agent", "metadata.yaml"));
   const astrbotPasswordPresent = Boolean(process.env.ASTRBOT_PASSWORD?.trim() || configuredAstrbotPasswords.length > 0);
   const astrbotBaseUrl = (configuredAstrbotUrls[0] || process.env.ASTRBOT_URL || "http://127.0.0.1:6185").replace(/\/+$/, "");
   const astrbotUsername = configuredAstrbotUsernames[0] || process.env.ASTRBOT_USERNAME || "";
@@ -522,18 +514,10 @@ export async function scanAgentAdapters(
       endpoints: astrbotEndpoints,
       projects: astrbotSessionScan.projects,
       sessions: astrbotSessionScan.sessions,
-      plugins: [{
-        id: "rabiroute_agent",
-        name: "RabiRoute Agent 插件",
-        installed: astrbotPluginInstalled,
-        healthy: astrbotPluginInstalled,
-        version: astrbotPluginSourceReady ? "source-ready" : undefined
-      }],
       warnings: [
         ...(astrbotSessionScan.source === "local-db" ? ["已从本机 AstrBot 数据库读取项目/会话；发送前仍需 Dashboard 登录或 API Key 验证。"] : []),
         ...(astrbotSessionScan.sessions.length === 0 ? ["未读取到 AstrBot WebChat 会话；可以在 AstrBot ChatUI 创建对话后重新扫描。"] : []),
         "尚未自动执行真实消息注入烟测；同会话连续两次发送需用户确认后再测。",
-        ...(astrbotPluginInstalled ? [] : [`插件未安装到 ${astrbotPluginDir}。`])
       ]
     },
     dsh: dshAgent
@@ -677,52 +661,6 @@ export function openMarvis(_ctx: AgentManagerApiContext, request: MarvisOpenRequ
 
   openUrlWithDefaultApp(url);
   return { ok: true, mode: "url", target: url, message: `已尝试打开 Marvis 页面：${url}` };
-}
-
-export async function deployAstrbotAdapter(
-  ctx: AgentManagerApiContext,
-  options: { signal?: AbortSignal; onChild?: (child: import("node:child_process").ChildProcess) => void } = {}
-): Promise<ManagerApiResponse> {
-  try {
-    const scriptPath = path.resolve(ctx.rootDir, "scripts", "deploy-astrbot-adapter.cmd");
-    if (!fs.existsSync(scriptPath)) {
-      return { status: 404, body: { ok: false, error: `部署脚本未找到: ${scriptPath}` } };
-    }
-    return await new Promise<ManagerApiResponse>((resolve) => {
-      const child = spawn(scriptPath, [], {
-        cwd: ctx.rootDir,
-        shell: true,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"]
-      });
-      options.onChild?.(child);
-      const abort = (): void => {
-        if (child.exitCode === null) child.kill();
-      };
-      if (options.signal?.aborted) abort();
-      else options.signal?.addEventListener("abort", abort, { once: true });
-      let stdout = "";
-      let stderr = "";
-      child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-      child.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-      child.on("exit", (code) => {
-        options.signal?.removeEventListener("abort", abort);
-        if (options.signal?.aborted) {
-          resolve({ status: 499, body: { ok: false, error: "AstrBot Adapter deployment was cancelled." } });
-        } else if (code === 0) {
-          resolve({ status: 200, body: { ok: true, message: "AstrBot Adapter 部署成功", stdout: stdout.slice(0, 2000) } });
-        } else {
-          resolve({ status: 500, body: { ok: false, error: `部署失败 (exit ${code})`, stderr: stderr.slice(0, 2000) } });
-        }
-      });
-      child.on("error", (error) => {
-        options.signal?.removeEventListener("abort", abort);
-        resolve({ status: 500, body: { ok: false, error: String(error) } });
-      });
-    });
-  } catch (err: unknown) {
-    return { status: 500, body: { ok: false, error: String(err) } };
-  }
 }
 
 function getRuntimeList(ctx: AgentManagerApiContext): AgentScanRuntimeSnapshot[] {

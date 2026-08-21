@@ -182,13 +182,14 @@ async function publishWebguiEvent(
   streamPath: string,
   eventType: string,
   data: Record<string, unknown>,
-  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>
+  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>,
+  signal: AbortSignal
 ): Promise<void> {
   await relayJsonReliably(config, "/worker/webgui-events", {
     method: "POST",
     headers: relayHeaders(config, true),
     body: JSON.stringify({ streamPath, eventType, data, ...workerIdentity(config) })
-  }, options.relayWriteAttempts, options.relayWriteTimeoutMs);
+  }, options.relayWriteAttempts, options.relayWriteTimeoutMs, signal);
 }
 
 function parseEventData(value: string): Record<string, unknown> {
@@ -273,7 +274,7 @@ async function forwardLocalWebguiEvents(
         config,
         streamPath,
         signal,
-        (eventType, data) => publishWebguiEvent(config, streamPath, eventType, data, options)
+        (eventType, data) => publishWebguiEvent(config, streamPath, eventType, data, options, signal)
       );
       if (!signal.aborted) throw new Error("Local Manager event stream closed.");
     } catch (error) {
@@ -291,15 +292,18 @@ async function relayJsonReliably(
   pathname: string,
   init: RequestInit,
   attempts: number,
-  timeoutMs: number
+  timeoutMs: number,
+  signal: AbortSignal
 ): Promise<Record<string, unknown>> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (signal.aborted) throw signal.reason ?? new Error("RabiLink Relay runtime stopped.");
     try {
-      return await relayJson(config, pathname, init, timeoutMs);
+      return await relayJson(config, pathname, { ...init, signal }, timeoutMs);
     } catch (error) {
       lastError = error;
-      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+      if (signal.aborted) throw error;
+      if (attempt < attempts) await delay(150 * attempt, signal);
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError || "RabiLink Relay request failed."));
@@ -307,11 +311,16 @@ async function relayJsonReliably(
 
 async function localFetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, label: string): Promise<Response> {
   const controller = new AbortController();
+  const upstreamSignal = init.signal;
+  const abortFromUpstream = (): void => controller.abort(upstreamSignal?.reason);
+  if (upstreamSignal?.aborted) abortFromUpstream();
+  else upstreamSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   const timer = setTimeout(() => controller.abort(new Error(`Local ${label} request timed out after ${timeoutMs} ms.`)), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+    upstreamSignal?.removeEventListener("abort", abortFromUpstream);
   }
 }
 
@@ -392,22 +401,24 @@ async function finishWebguiRequest(
   config: RabiLinkRelayRuntimeConfig,
   requestId: string,
   body: Record<string, unknown>,
-  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>
+  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>,
+  signal: AbortSignal
 ): Promise<void> {
   await relayJsonReliably(config, `/worker/webgui-requests/${encodeURIComponent(requestId)}/response`, {
     method: "POST",
     headers: relayHeaders(config, true),
     body: JSON.stringify({ ...body, ...workerIdentity(config) })
-  }, options.relayWriteAttempts, options.relayWriteTimeoutMs);
+  }, options.relayWriteAttempts, options.relayWriteTimeoutMs, signal);
 }
 
 async function proxyWebguiRequest(
   config: RabiLinkRelayRuntimeConfig,
   request: RelayProxyRequest,
-  options: Required<RabiLinkRelayRuntimeOptions>
+  options: Required<RabiLinkRelayRuntimeOptions>,
+  signal: AbortSignal
 ): Promise<void> {
   const requestId = stringValue(request.id);
-  if (!requestId) return;
+  if (!requestId || signal.aborted) return;
   try {
     const method = stringValue(request.method).toUpperCase() || "GET";
     const localPath = stringValue(request.path) || "/";
@@ -430,17 +441,20 @@ async function proxyWebguiRequest(
         response = await localFetchWithTimeout(safeLocalUrl(config, localPath), {
           method,
           headers,
-          body: method === "GET" || method === "HEAD" ? undefined : requestBody
+          body: method === "GET" || method === "HEAD" ? undefined : requestBody,
+          signal
         }, localTimeoutMs, personaSyncRequest ? "persona sync" : "Rabi WebGUI");
         break;
       } catch (error) {
         lastError = error;
-        if (attempt < requestAttempts) await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+        if (signal.aborted) return;
+        if (attempt < requestAttempts) await delay(100 * attempt, signal);
       }
     }
     if (!response) {
       throw lastError instanceof Error ? lastError : new Error("Local Rabi WebGUI request failed.");
     }
+    if (signal.aborted) return;
     const responseContentType = response.headers.get("content-type") || "";
     if (responseContentType.toLowerCase().startsWith("text/event-stream")) {
       try {
@@ -451,6 +465,7 @@ async function proxyWebguiRequest(
       throw new Error("SSE event streams must use the Relay event channel instead of the finite WebGUI response proxy.");
     }
     const rawBody = Buffer.from(await response.arrayBuffer());
+    if (signal.aborted) return;
     const responseBody = compactResponse(method, localPath, response.status, rawBody);
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
@@ -463,15 +478,16 @@ async function proxyWebguiRequest(
       bodyBase64: responseBody.toString("base64")
     }, personaSyncRequest
       ? { ...options, relayWriteTimeoutMs: Math.max(options.relayWriteTimeoutMs, 30_000) }
-      : options);
+      : options, signal);
   } catch (error) {
+    if (signal.aborted) return;
     await finishWebguiRequest(config, requestId, {
       ok: false,
       statusCode: 502,
       headers: { "content-type": "text/plain; charset=utf-8" },
       bodyBase64: Buffer.from(error instanceof Error ? error.message : String(error), "utf8").toString("base64"),
       error: error instanceof Error ? error.message : String(error)
-    }, options);
+    }, options, signal);
   }
 }
 
@@ -501,22 +517,24 @@ async function finishSpeechRequest(
   config: RabiLinkRelayRuntimeConfig,
   requestId: string,
   body: Record<string, unknown>,
-  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>
+  options: Required<Pick<RabiLinkRelayRuntimeOptions, "relayWriteAttempts" | "relayWriteTimeoutMs">>,
+  signal: AbortSignal
 ): Promise<void> {
   await relayJsonReliably(config, `/worker/speech-requests/${encodeURIComponent(requestId)}/response`, {
     method: "POST",
     headers: relayHeaders(config, true),
     body: JSON.stringify({ ...body, ...workerIdentity(config) })
-  }, options.relayWriteAttempts, options.relayWriteTimeoutMs);
+  }, options.relayWriteAttempts, options.relayWriteTimeoutMs, signal);
 }
 
 async function proxySpeechRequest(
   config: RabiLinkRelayRuntimeConfig,
   request: RelayProxyRequest,
-  options: Required<RabiLinkRelayRuntimeOptions>
+  options: Required<RabiLinkRelayRuntimeOptions>,
+  signal: AbortSignal
 ): Promise<void> {
   const requestId = stringValue(request.id);
-  if (!requestId) return;
+  if (!requestId || signal.aborted) return;
   try {
     const method = stringValue(request.method).toUpperCase() || "GET";
     const localPath = stringValue(request.path) || "/";
@@ -531,8 +549,10 @@ async function proxySpeechRequest(
       managerSpeechIngress ? safeLocalUrl(config, localPath) : safeSpeechUrl(config, localPath), {
       method,
       headers,
-      body: method === "GET" || method === "HEAD" ? undefined : requestBody
+      body: method === "GET" || method === "HEAD" ? undefined : requestBody,
+      signal
     }, options.localSpeechRequestTimeoutMs, managerSpeechIngress ? "Rabi Manager speech ingress" : "RabiSpeech");
+    if (signal.aborted) return;
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       responseHeaders[key] = value;
@@ -542,8 +562,9 @@ async function proxySpeechRequest(
       statusCode: response.status,
       headers: responseHeaders,
       bodyBase64: Buffer.from(await response.arrayBuffer()).toString("base64")
-    }, options);
+    }, options, signal);
   } catch (error) {
+    if (signal.aborted) return;
     const message = error instanceof Error ? error.message : String(error);
     await finishSpeechRequest(config, requestId, {
       ok: false,
@@ -551,7 +572,7 @@ async function proxySpeechRequest(
       headers: { "content-type": "application/json; charset=utf-8" },
       bodyBase64: Buffer.from(JSON.stringify({ error: { message, type: "local_speech_proxy_error" } }), "utf8").toString("base64"),
       error: message
-    }, options);
+    }, options, signal);
   }
 }
 
@@ -597,6 +618,8 @@ export class RabiLinkRelayRuntime {
   private signature = "";
   private generation = 0;
   private controller: AbortController | null = null;
+  private runFlight: Promise<void> | null = null;
+  private stopFlight: Promise<void> | null = null;
   private runtimeStatus: RabiLinkRelayRuntimeStatus = {
     state: "disabled",
     message: "RabiLink Relay 全局连接已关闭。"
@@ -628,47 +651,77 @@ export class RabiLinkRelayRuntime {
     return { ...this.runtimeStatus };
   }
 
-  sync(input: RabiLinkRelayRuntimeConfig): void {
+  sync(input: RabiLinkRelayRuntimeConfig): Promise<void> {
     const config = normalizeConfig(input);
     const signature = JSON.stringify(config);
-    if (signature === this.signature) return;
+    if (signature === this.signature) {
+      return this.stopFlight?.then(() => undefined) ?? Promise.resolve();
+    }
     this.signature = signature;
-    this.stopLoop();
+    if (this.stopFlight) {
+      return this.stopFlight.then(async () => {
+        if (this.signature === signature) await this.applyConfig(config);
+      });
+    }
+    return this.applyConfig(config);
+  }
 
+  stop(): Promise<void> {
+    this.signature = "";
+    if (this.stopFlight) return this.stopFlight;
+    const runFlight = this.stopLoop();
+    const stopFlight = (async () => {
+      await runFlight?.catch(() => {});
+      this.setStatus({ state: "disabled", message: "RabiLink Relay 全局连接已关闭。" });
+    })();
+    const tracked = stopFlight.finally(() => {
+      if (this.stopFlight === tracked) this.stopFlight = null;
+    });
+    this.stopFlight = tracked;
+    return tracked;
+  }
+
+  private applyConfig(config: RabiLinkRelayRuntimeConfig): Promise<void> {
+    const previousRun = this.stopLoop();
+    const previousDone = previousRun?.catch(() => {}) ?? Promise.resolve();
     if (!config.enabled) {
       this.setStatus({ state: "disabled", message: "RabiLink Relay 全局连接已关闭。" });
-      return;
+      return previousDone;
     }
     if (!config.url || !config.token) {
       this.setStatus({ state: "incomplete", message: "开启 Relay 前需要填写服务器地址和应用 token。" });
-      return;
+      return previousDone;
     }
     if (!isLoopbackUrl(config.localWebguiUrl)) {
       this.setStatus({ state: "incomplete", message: "本机 Rabi WebGUI 地址必须使用 127.0.0.1、localhost 或 ::1。" });
-      return;
+      return previousDone;
     }
     if (config.speechProxyEnabled && !isLoopbackUrl(config.localSpeechUrl)) {
       this.setStatus({ state: "incomplete", message: "本机语音服务地址必须使用 127.0.0.1、localhost 或 ::1。" });
-      return;
+      return previousDone;
     }
 
     const generation = this.generation;
     const controller = new AbortController();
     this.controller = controller;
     this.setStatus({ state: "connecting", message: "正在连接 RabiLink Relay..." });
-    void this.run(config, generation, controller.signal);
+    const runFlight = previousDone
+      .then(() => {
+        if (!this.active(generation, controller.signal)) return;
+        return this.run(config, generation, controller.signal);
+      });
+    const tracked = runFlight.finally(() => {
+      if (this.runFlight === tracked) this.runFlight = null;
+    });
+    this.runFlight = tracked;
+    return previousDone;
   }
 
-  stop(): void {
-    this.signature = "";
-    this.stopLoop();
-    this.setStatus({ state: "disabled", message: "RabiLink Relay 全局连接已关闭。" });
-  }
-
-  private stopLoop(): void {
+  private stopLoop(): Promise<void> | null {
     this.generation += 1;
-    this.controller?.abort();
+    this.controller?.abort(new Error("RabiLink Relay runtime stopped."));
     this.controller = null;
+    return this.runFlight;
   }
 
   private active(generation: number, signal: AbortSignal): boolean {
@@ -717,7 +770,7 @@ export class RabiLinkRelayRuntime {
       webguiDrain = this.drainChannel(
         signal,
         (waitMs, channelSignal) => claimWebguiRequests(config, waitMs, channelSignal),
-        (request) => proxyWebguiRequest(config, request, this.options)
+        (request) => proxyWebguiRequest(config, request, this.options, signal)
       ).then(() => {
         if (!signal.aborted) this.markOnline(config.speechProxyEnabled);
       }).catch(error => {
@@ -737,7 +790,7 @@ export class RabiLinkRelayRuntime {
       speechDrain = this.drainChannel(
         signal,
         (waitMs, channelSignal) => claimSpeechRequests(config, waitMs, channelSignal),
-        (request) => proxySpeechRequest(config, request, this.options)
+        (request) => proxySpeechRequest(config, request, this.options, signal)
       ).then(() => {
         if (!signal.aborted) this.markOnline(config.speechProxyEnabled);
       }).catch(error => {
@@ -787,7 +840,11 @@ export class RabiLinkRelayRuntime {
         }
       }
     } finally {
-      await Promise.allSettled([...webguiEvents.values()]);
+      await Promise.allSettled([
+        ...webguiEvents.values(),
+        ...(webguiDrain ? [webguiDrain] : []),
+        ...(speechDrain ? [speechDrain] : [])
+      ]);
     }
   }
 }

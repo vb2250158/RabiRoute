@@ -1,4 +1,5 @@
 import http from "node:http";
+import type { Socket } from "node:net";
 import os from "node:os";
 import type { PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaSyncApi } from "./personaSyncRoutes.js";
@@ -44,6 +45,9 @@ export class PersonaSyncLanServer {
   private startFlight: Promise<void> | null = null;
   private startGeneration = 0;
   private cancelStart: (() => void) | null = null;
+  private stopFlight: Promise<void> | null = null;
+  private readonly connections = new Set<Socket>();
+  private readonly connectionDrainWaiters = new Set<() => void>();
   private runtimeStatus: PersonaSyncLanStatus = { state: "disabled", urls: [] };
   private readonly host: string;
   private readonly port: number;
@@ -68,6 +72,7 @@ export class PersonaSyncLanServer {
   }
 
   start(): Promise<void> {
+    if (this.stopFlight) return this.stopFlight.then(() => this.start());
     if (this.runtimeStatus.state === "listening") return Promise.resolve();
     if (this.startFlight) return this.startFlight;
     const generation = ++this.startGeneration;
@@ -99,10 +104,21 @@ export class PersonaSyncLanServer {
           response.end(JSON.stringify({ code: -1, message: error instanceof Error ? error.message : String(error) }));
         }
       });
+      server.on("connection", socket => {
+        this.connections.add(socket);
+        socket.once("close", () => {
+          this.connections.delete(socket);
+          if (this.connections.size === 0) {
+            for (const resolve of this.connectionDrainWaiters) resolve();
+            this.connectionDrainWaiters.clear();
+          }
+        });
+      });
       this.server = server;
       const current = (): boolean => generation === this.startGeneration && this.server === server;
       const fail = (error: Error) => {
         if (!current()) {
+          server.close();
           finish();
           return;
         }
@@ -114,7 +130,6 @@ export class PersonaSyncLanServer {
       server.listen(this.port, this.host, () => {
         server.off("error", fail);
         if (!current()) {
-          server.close();
           finish();
           return;
         }
@@ -139,15 +154,49 @@ export class PersonaSyncLanServer {
     return flight;
   }
 
-  stop(): void {
+  stop(): Promise<void> {
+    if (this.stopFlight) return this.stopFlight;
     this.startGeneration += 1;
     const server = this.server;
+    const startFlight = this.startFlight;
     this.server = null;
     this.cancelStart?.();
     this.cancelStart = null;
     this.startFlight = null;
-    if (server) server.close();
     this.updateStatus({ state: "disabled", urls: [] });
+    const stopFlight = (async () => {
+      if (server) await this.closeServer(server);
+      await startFlight?.catch(() => {});
+      await this.waitForConnections();
+    })();
+    const tracked = stopFlight.finally(() => {
+      if (this.stopFlight === tracked) this.stopFlight = null;
+    });
+    this.stopFlight = tracked;
+    return tracked;
+  }
+
+  private closeServer(server: http.Server): Promise<void> {
+    return new Promise((resolve, reject) => {
+      try {
+        server.close(error => {
+          if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+        server.closeIdleConnections?.();
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ERR_SERVER_NOT_RUNNING") resolve();
+        else reject(error);
+      }
+    });
+  }
+
+  private waitForConnections(): Promise<void> {
+    if (this.connections.size === 0) return Promise.resolve();
+    return new Promise(resolve => this.connectionDrainWaiters.add(resolve));
   }
 
   private updateStatus(status: PersonaSyncLanStatus): void {

@@ -8,8 +8,14 @@ import {
   registeredWebPages,
   resolveRegisteredWebPagePath,
   webPageAllowsNavigation,
+  webPageDataRequirements,
   webPageRenderer
 } from "../src/pluginPages";
+
+const trustedOwner = {
+  instanceId: "manager:trusted",
+  pluginId: "package:trusted"
+} as const;
 
 test("built-in pages are installed through the trusted registration API", () => {
   const overview = webPageRenderer("route.overview");
@@ -17,6 +23,7 @@ test("built-in pages are installed through the trusted registration API", () => 
   assert.deepEqual(overview.paths.map(entry => entry.path), ["/overview", "/routes/:id/overview"]);
   assert.equal(webPageAllowsNavigation("route.overview", "route-primary", "mdi-view-dashboard-outline"), true);
   assert.equal(webPageAllowsNavigation("route.overview", "utility", "mdi-view-dashboard-outline"), false);
+  assert.deepEqual(webPageDataRequirements("route.overview"), ["gateway.diagnostics"]);
 });
 
 test("trusted registration publishes custom page contracts and removes them through its disposer", () => {
@@ -27,6 +34,7 @@ test("trusted registration publishes custom page contracts and removes them thro
     if (change.registration.routeId === routeId) changes.push(change.type);
   });
   const dispose = registerTrustedWebPage({
+    ...trustedOwner,
     routeId,
     rendererId,
     loader: async () => defineComponent({ template: "<div>trusted</div>" }),
@@ -34,6 +42,7 @@ test("trusted registration publishes custom page contracts and removes them thro
       { path: "/trusted-contract", title: "可信页面" },
       { path: "/trusted-contract/:id", title: "可信页面" }
     ],
+    requirements: ["gateway.diagnostics"],
     navigation: {
       resolvePath: selectedRouteId => selectedRouteId ? `/trusted-contract/${encodeURIComponent(selectedRouteId)}` : "/trusted-contract",
       allowedSlots: ["utility"],
@@ -44,9 +53,11 @@ test("trusted registration publishes custom page contracts and removes them thro
   try {
     assert.equal(registeredWebPages().some(entry => entry.routeId === routeId), true);
     assert.equal(resolveRegisteredWebPagePath(routeId, "main route"), "/trusted-contract/main%20route");
+    assert.deepEqual(webPageDataRequirements(routeId), ["gateway.diagnostics"]);
     assert.equal(webPageAllowsNavigation(routeId, "utility", "mdi-shield-check-outline"), true);
     assert.deepEqual(parseWebPageContribution({
       kind: "page",
+      surface: "web.pages",
       instanceId: "manager:trusted",
       pluginId: "package:trusted",
       hosts: ["web"],
@@ -60,6 +71,7 @@ test("trusted registration publishes custom page contracts and removes them thro
     });
     assert.equal(parseWebPageContribution({
       kind: "page",
+      surface: "web.pages",
       instanceId: "manager:trusted",
       pluginId: "package:trusted",
       hosts: ["web"],
@@ -74,6 +86,7 @@ test("trusted registration publishes custom page contracts and removes them thro
   assert.deepEqual(changes, ["registered", "unregistered"]);
   assert.equal(parseWebPageContribution({
     kind: "page",
+    surface: "web.pages",
     instanceId: "manager:trusted",
     pluginId: "package:trusted",
     hosts: ["web"],
@@ -97,6 +110,7 @@ test("trusted registration rolls back when a host listener rejects route install
 
   try {
     assert.throws(() => registerTrustedWebPage({
+      ...trustedOwner,
       routeId,
       rendererId,
       loader: async () => defineComponent({ template: "<div />" }),
@@ -109,6 +123,7 @@ test("trusted registration rolls back when a host listener rejects route install
   assert.deepEqual(changes, ["registered", "unregistered"]);
 
   const dispose = registerTrustedWebPage({
+    ...trustedOwner,
     routeId,
     rendererId,
     loader: async () => defineComponent({ template: "<div />" }),
@@ -119,6 +134,7 @@ test("trusted registration rolls back when a host listener rejects route install
 
 test("trusted registration rejects route, renderer, path, and resolver collisions", () => {
   assert.throws(() => registerTrustedWebPage({
+    ...trustedOwner,
     routeId: "route.overview",
     rendererId: "trusted.web-page.duplicate-route.v1",
     loader: async () => defineComponent({ template: "<div />" }),
@@ -126,6 +142,7 @@ test("trusted registration rejects route, renderer, path, and resolver collision
   }), /route is already registered/);
 
   assert.throws(() => registerTrustedWebPage({
+    ...trustedOwner,
     routeId: "trusted.duplicate-renderer",
     rendererId: "builtin.web-page.overview.v1",
     loader: async () => defineComponent({ template: "<div />" }),
@@ -133,6 +150,7 @@ test("trusted registration rejects route, renderer, path, and resolver collision
   }), /renderer is already registered/);
 
   assert.throws(() => registerTrustedWebPage({
+    ...trustedOwner,
     routeId: "trusted.duplicate-path",
     rendererId: "trusted.web-page.duplicate-path.v1",
     loader: async () => defineComponent({ template: "<div />" }),
@@ -140,9 +158,21 @@ test("trusted registration rejects route, renderer, path, and resolver collision
   }), /path is already registered/);
 
   assert.throws(() => registerTrustedWebPage({
+    ...trustedOwner,
     routeId: "trusted.reserved-path",
     rendererId: "trusted.web-page.reserved-path.v1",
     loader: async () => defineComponent({ template: "<div />" }),
     paths: [{ path: "/plugin-recovery", title: "保留路径" }]
   }), /path is invalid/);
+});
+
+test("trusted registration rejects unknown page data requirements", () => {
+  assert.throws(() => registerTrustedWebPage({
+    ...trustedOwner,
+    routeId: "trusted.unknown-requirement",
+    rendererId: "trusted.web-page.unknown-requirement.v1",
+    loader: async () => defineComponent({ template: "<div />" }),
+    paths: [{ path: "/trusted-unknown-requirement", title: "未知需求" }],
+    requirements: ["gateway.unknown" as never]
+  }), /requirements are invalid/);
 });

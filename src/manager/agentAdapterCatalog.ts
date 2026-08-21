@@ -44,7 +44,11 @@ export type AgentAdapterCatalogRoutesContext = {
 
 export type AgentAdapterCatalogPluginMountOptions = AgentAdapterCatalogServiceOptions & {
   jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void;
-  registerRoutes(instanceId: string, handlers: readonly ManagerPluginRouteHandler[]): () => void;
+  registerRoutes(
+    instanceId: string,
+    routeIdPrefix: string,
+    handlers: readonly ManagerPluginRouteHandler[]
+  ): () => void;
 };
 
 export type AgentAdapterCatalogPluginMount = {
@@ -288,10 +292,8 @@ export function handleAgentAdapterCatalogApi(
     return true;
   }
 
-  const allScan = requestUrl.pathname === "/api/scan/agents"
-    || requestUrl.pathname === "/api/agent-adapters/availability";
-  const dshScan = requestUrl.pathname === "/api/scan/agents/dsh"
-    || requestUrl.pathname === "/api/agent-adapters/dsh/availability";
+  const allScan = requestUrl.pathname === "/api/scan/agents";
+  const dshScan = requestUrl.pathname === "/api/scan/agents/dsh";
   if (request.method !== "GET" || (!allScan && !dshScan)) return false;
 
   const requestLifetime = responseAbortSignal(request, response);
@@ -325,7 +327,11 @@ export function mountAgentAdapterCatalogPlugin(
       jsonResponse: options.jsonResponse
     })
   ));
-  const unregister = options.registerRoutes(AGENT_ADAPTER_CATALOG_PLUGIN_INSTANCE_ID, [handler]);
+  const unregister = options.registerRoutes(
+    AGENT_ADAPTER_CATALOG_PLUGIN_INSTANCE_ID,
+    "manager.agent-adapter-catalog.api",
+    [handler]
+  );
   let registered = true;
   const unregisterOnce = (): void => {
     if (!registered) return;

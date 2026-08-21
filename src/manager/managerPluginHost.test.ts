@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
-import {
-  getBuiltinManagerPluginHost,
-  getBuiltinManagerPluginRuntime
-} from "./managerPluginHost.js";
-import { normalizeManagerPluginConfig } from "./managerPluginConfig.js";
+import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
 
-test("builtin Manager Plugin Host is deduplicated by the Manager root", async () => {
+test("builtin Manager Plugin Host is deduplicated by the Manager root without eager plugin activation", async () => {
   const [first, second] = await Promise.all([
     getBuiltinManagerPluginHost(),
     getBuiltinManagerPluginHost()
@@ -15,14 +14,7 @@ test("builtin Manager Plugin Host is deduplicated by the Manager root", async ()
   const root = getBuiltinManagerCordisRoot();
   assert.strictEqual(first, second);
   assert.deepEqual(first.runtime.catalog.snapshot().plugins, []);
-
-  const configured = normalizeManagerPluginConfig({
-    managerPlugins: { "manager:desktop": { enabled: false } }
-  });
-  const status = await first.reconciler.reconcile(configured.desired);
-  assert.equal(status.state, "idle");
-  assert.equal(first.runtime.plugins.has("manager:desktop"), false);
-  assert.equal(first.runtime.plugins.has("manager:core"), true);
+  assert.deepEqual(first.runtime.contributions.catalog().contributions, []);
 
   await root.dispose();
   assert.deepEqual(first.runtime.catalog.snapshot().plugins, []);
@@ -32,12 +24,14 @@ test("builtin Manager Plugin Host is deduplicated by the Manager root", async ()
   const replacementRoot = getBuiltinManagerCordisRoot();
   assert.notStrictEqual(replacement, first);
   assert.notStrictEqual(replacementRoot, root);
+  assert.deepEqual(replacement.runtime.catalog.snapshot().plugins, []);
   await replacementRoot.dispose();
 });
 
-test("legacy runtime accessor mounts the default builtin composition", async () => {
-  const runtime = await getBuiltinManagerPluginRuntime();
-  assert.equal(runtime.catalog.snapshot().plugins.every(item => item.status === "active"), true);
-  assert.equal(runtime.plugins.has("manager:core"), true);
-  await getBuiltinManagerCordisRoot().dispose();
+test("Manager Plugin Host exposes no legacy eager-runtime accessor", () => {
+  const sourcePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "managerPluginHost.ts");
+  const source = fs.readFileSync(sourcePath, "utf8");
+
+  assert.doesNotMatch(source, /getBuiltinManagerPluginRuntime/);
+  assert.doesNotMatch(source, /builtinManagerPluginDefinitions/);
 });

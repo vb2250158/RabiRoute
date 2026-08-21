@@ -1,7 +1,6 @@
 import type http from "node:http";
 import type {
   AstrbotLoginTestRequest,
-  ManagerApiResponse,
   MarvisOpenRequest
 } from "../agentAdapters/managerApi.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
@@ -61,7 +60,6 @@ export type CopilotControlRoutesContext = AgentProviderHttpRoutesContext & {
 export type AstrbotControlRoutesContext = AgentProviderHttpRoutesContext & {
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   testAstrbotLogin: (request: AstrbotLoginTestRequest) => Promise<AstrbotLoginTestResult>;
-  deployAstrbotAdapter: () => Promise<ManagerApiResponse>;
 };
 
 export type MarvisControlRoutesContext = AgentProviderHttpRoutesContext & {
@@ -206,16 +204,6 @@ function handleAstrbotControlApi(
       .catch((error) => context.jsonResponse(response, 400, {
         ok: false,
         message: errorMessage(error)
-      })));
-    return true;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/deploy-astrbot-adapter") {
-    runTrackedOperation(context, context.deployAstrbotAdapter()
-      .then((result) => context.jsonResponse(response, result.status, result.body))
-      .catch((error) => context.jsonResponse(response, 500, {
-        ok: false,
-        error: String(error)
       })));
     return true;
   }

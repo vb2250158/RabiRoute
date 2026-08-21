@@ -47,15 +47,17 @@
 }
 ```
 
-`manager:core` 是恢复和目录 API 的必需插件，配置不能关闭。其他内置插件默认启用。Manager 只接受已注册实例 ID 和布尔 `enabled`；路径、包名、命令、URL、环境变量和未知字段会被忽略并写入诊断。
+`manager:core` 是恢复和目录 API 的必需插件，配置不能关闭。其他内置插件默认启用。Manager 只接受已注册实例 ID 和布尔 `enabled`；路径、包名、命令、URL、环境变量和未知字段会被忽略并写入诊断。正式启动只走 `startManager()`：先挂载共享资源，再合成全部 definition 与业务 hook，最后首次对账。
 
-保存 `manager.json` 后，文件 watcher 只对账发生变化的插件。停用会销毁目标 Fiber；revision 变化会重载目标实例；新定义失败时恢复旧定义。`GET /api/plugins/reconciliation` 返回期望、活动、变化、回滚和诊断状态，`POST /api/plugins/reconcile` 重新读取本机配置。WebGUI 通过 `/api/events` 的 `plugin_catalog_changed` 事件刷新目录。
+内置 definition 声明 `provides`、`requires` 和 `optional`。缺少 `requires` 时实例显示 `waiting_dependency`；可选 Provider 存在时先启动 Provider；依赖 revision 递归包含直接和传递 Provider，因此上游 revision 或启停变化会沿能力链把全部真实消费者纳入重启批次。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，因此同一实例可以从 `active` 进入 `waiting_dependency`，依赖恢复后再回到 `active`。同一能力出现多个已启用 Provider 时，对账直接失败。
+
+保存 `manager.json` 后，文件 watcher 只对账发生变化的插件。停用会销毁目标 Fiber；revision 变化会重载目标实例；新定义失败时恢复旧定义。`GET /api/plugins/reconciliation` 返回期望、活动、变化、回滚和诊断状态，`POST /api/plugins/reconciliation` 重新读取本机配置。WebGUI 通过 `/api/events` 的 `plugin_catalog_changed` 事件刷新目录。
 
 ### 插件入口与资源所有权
 
-当前内置目录注册 26 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务 HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。
+当前内置目录注册 26 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
 
-表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 和 Desktop 只消费活动插件的表现贡献；HTTP 路由不属于该目录。宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract；未知或未注册贡献失败关闭。固定恢复入口只用于目录不可用时重新打开 WebGUI 或设置。第三方任意表现代码的受控 Extension Host 属于后续路线。
+表现 Contribution Catalog 发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command 注册表处理快速配置、新增 Route、打开 Manager 配置和保存页面；可信 renderer 注册表处理设置区与状态卡。Desktop 的冻结 Registry 同时处理内置合同和显式允许的可信扩展。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动 lifecycle/command 贡献控制系统监听、目录操作和手动触发。目录不可用或刷新失败时撤销旧贡献，只保留固定 WebGUI 恢复入口。
 
 WebGUI 的可信页面扩展在前端构建时调用 `registerTrustedWebPage()`，注册 `routeId`、`rendererId`、异步组件 loader、页面路径和允许的导航位置/图标。插件目录只能引用已经注册的合同，不能提供远程模块 URL 或任意脚本。
 
@@ -65,7 +67,9 @@ Desktop 的可信 Python 扩展通过 `rabiroute.desktop_extensions` entry point
 RabiRoute-Desktop.exe --trusted-desktop-extension my_extension
 ```
 
-参数可以重复。默认列表为空，因此不会自动导入任何第三方包。扩展注册完成后，Desktop 冻结注册表。该入口中的代码与 Desktop 在同一进程运行，只适用于明确安装并信任的扩展；未知、不可信或高风险代码使用独立进程插件协议。
+参数可以重复。默认列表为空，因此不会自动导入任何第三方包。扩展注册完成后，Desktop 冻结注册表。该入口中的代码与 Desktop 在同一进程运行，只适用于明确安装并信任的扩展。目录贡献必须用相同 `pluginId + instanceId` 命中合同，跨插件借用失败关闭；面向第三方 Desktop 自定义代码的 owner-scoped registrar、权限模型和更强隔离属于后续 Extension Host。
+Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessageProcessingBoardPersistence`。停止时持久化服务拒绝新写入、清理 timer、flush 并等待活动 Worker；读取池取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。任一停止失败时仍继续清理其余资源，最后返回第一个错误。停止完成后可以重新启动。
+
 所有使用 `ManagerPluginRequestTracker` 的路由都执行同一停用顺序：先撤销路由，再拒绝新请求，然后等待已接收响应触发 `finish` 或 `close`。同步和异步 handler 都纳入统计。默认 drain 截止时间为 30 秒；超时后销毁仍未结束的响应，再继续释放插件资源。
 
 | 实例 | 拥有的入口或资源 | 停用行为 |
@@ -73,7 +77,7 @@ RabiRoute-Desktop.exe --trusted-desktop-extension my_extension
 | `manager:diagnostics` | `GET /meta`、`GET /api/gateways`，以及 WebGUI“日志诊断”页面和导航 | 撤销诊断入口并 drain 已接收请求；只读取其他插件状态，不启动或恢复已停用插件 |
 | `manager:desktop` | `/api/desktop/settings`、`/open-config-file`、`/manager/start`、`/manager/desktop-lifecycle/start`、`/manager/shutdown`，以及 Desktop/WebGUI 的桌面设置、命令、托盘和快捷键贡献 | 撤销入口并 drain 请求，然后清除本实例尚未执行的延迟关闭计时器 |
 | `manager:gateway-runtime` | Gateway 配置、启停、重启、删除、手动触发、回放、网络选项和重载入口；Gateway 与手动触发子进程 | 撤销入口并 drain 请求，停止本实例的手动触发进程，再停止并等待 Gateway 进程树退出 |
-| `manager:agent-adapter-catalog` | Agent Adapter 目录、可用性和扫描入口；受控扫描 Worker Pool | 撤销入口、取消排队或活动扫描，并停止 Worker 进程树 |
+| `manager:agent-adapter-catalog` | Agent Adapter 目录与 `/api/scan/agents`、`/api/scan/agents/dsh` 扫描入口；受控扫描 Worker Pool | 撤销入口、取消排队或活动扫描，并停止 Worker 进程树 |
 | `manager:agent-thread-control` | Agent 任务创建、查询和绑定入口 | 撤销入口并 drain 请求；任务和业务记录继续由稳定业务模块拥有 |
 | `manager:agent-communication` | Agent 请求、发送、回执和追踪入口 | 撤销入口并 drain 请求；继续复用 Outbox、审批、回执和消息处理业务模块 |
 | `manager:remote-agent` | Remote Agent 扫描、连接、任务和事件入口；活动 WebSocket 与 Hub 回调 | 撤销入口并 drain 请求；未完成任务改为 `interrupted`，关闭 WebSocket 并等待已开始的回调结束 |
@@ -335,8 +339,15 @@ URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`。`/api
 
 - `codex`：用短生命周期 app-server `thread/list` 读取 Desktop 用户可见的任务名称，并按完整 ID 合并本地 cwd、归档、时间和 owner/rollout 状态；以完整任务 ID 和工作目录绑定。投递时让 Desktop 加载目标任务，再通过 Desktop IPC start 或 steer，实际消息只由 Desktop owner 执行。
 - `copilotCli`：通过本机 Copilot CLI 命令投递一次性 prompt，输出写入 `copilot-output.jsonl`，运行态上报给 Manager。它不会注入已有 VS Code Copilot 面板线程；如需后台调用，请确保 CLI 可执行文件在 PATH 中，或设置 `COPILOT_CLI_BIN`。
-- `astrbot`：通过 AstrBot Dashboard / ChatUI API 绑定项目和会话，支持登录验证、扫描和插件部署；当前仍是实验支持，真实连续发送需要环境验收。
+- `astrbot`：使用 `ASTRBOT_URL`、Dashboard 登录凭据和必需的 `ASTRBOT_SESSION_ID`。发送时只调用 ChatUI `POST /api/chat/send`；缺少 Session ID 时失败关闭。旧 AstrBot 插件回退与部署入口已经删除。
 - `marvis`：通过本机 handoff 方式接入 Marvis 桌面端。RabiRoute 会把 prompt 写入 `marvis-prompts/`、复制到剪贴板，并优先启动/聚焦 Windows 桌面应用 `Tencent.Marvis`；由于 Marvis 当前未提供稳定公开后台 API，这个适配器不会自动点击发送。
+
+### 已删除的兼容 API
+
+- 插件对账只保留 `GET/POST /api/plugins/reconciliation`，不再提供 `POST /api/plugins/reconcile`。
+- Agent 扫描使用 `/api/scan/agents` 和 `/api/scan/agents/dsh`，不再提供 `/api/agent-adapters/availability` 与 `/api/agent-adapters/dsh/availability`。
+- FenneNote 播放使用 `/api/fennenote/playback`，不再提供 `/api/playback/request`。
+- AstrBot 不再提供 `/api/plug/rabiroute_agent/chat`、`/api/deploy-astrbot-adapter` 或仓库内部署脚本。
 
 ## Desktop owner 要求
 

@@ -92,9 +92,6 @@ function gatewayRuntimeColor(gateway: any): string {
         <h1 class="page-title">控制台</h1>
         <div class="page-subtitle">查看并操作当前 Manager 管理的各个 Route。</div>
       </div>
-      <div class="page-actions">
-        <v-btn color="primary" variant="tonal" prepend-icon="mdi-plus" @click="store.addGatewayAndOpenQuickSetup">新增路由</v-btn>
-      </div>
     </div>
 
     <v-alert v-if="gatewayActionError" type="error" variant="tonal">{{ gatewayActionError }}</v-alert>

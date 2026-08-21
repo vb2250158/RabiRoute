@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import type { GatewayMessageAdapterType } from "./adapters/messageAdapter.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
+import { mountGatewayPerformanceReporter } from "./runtime/gatewayPerformanceRuntime.js";
 import {
   ensureAgentAdapterRuntime,
   type AgentAdapterRuntimeMount
@@ -20,6 +21,7 @@ import {
 
 const GATEWAY_CONTRIBUTION_RUNTIME_KEY = "rabi.runtime.contributions.gateway";
 const GATEWAY_MESSAGE_ADAPTER_RUNTIME_KEY = "rabi.runtime.messageAdapters.gateway";
+const GATEWAY_PERFORMANCE_RUNTIME_KEY = "rabi.runtime.performance.gateway";
 
 type GatewayLifecycleEvent = "SIGINT" | "SIGTERM" | "beforeExit";
 type GatewayLifecycleListener = () => void;
@@ -52,7 +54,6 @@ async function initializeGatewayMain(
   const adapterTypes = options.adapterTypes ?? config.gatewayMessageAdapterTypes;
   const lifecycle = options.processLifecycle ?? process;
   const startReporter = options.startPerformanceReporter ?? startGatewayPerformanceReporter;
-  let stopPerformanceReporter: (() => void) | undefined;
   let gatewayDisposePromise: Promise<void> | undefined;
   const listeners = new Map<GatewayLifecycleEvent, GatewayLifecycleListener>();
 
@@ -67,11 +68,7 @@ async function initializeGatewayMain(
     if (!gatewayDisposePromise) {
       gatewayDisposePromise = (async () => {
         removeLifecycleListeners();
-        try {
-          stopPerformanceReporter?.();
-        } finally {
-          await root.dispose();
-        }
+        await root.dispose();
       })();
     }
     return gatewayDisposePromise;
@@ -92,7 +89,10 @@ async function initializeGatewayMain(
       await messageAdapters.mount(type);
     }
 
-    stopPerformanceReporter = startReporter();
+    await root.ensure(
+      GATEWAY_PERFORMANCE_RUNTIME_KEY,
+      (host) => mountGatewayPerformanceReporter(host, startReporter)
+    );
     for (const event of ["SIGINT", "SIGTERM", "beforeExit"] as const) {
       const listener = () => void disposeGatewayRuntime();
       listeners.set(event, listener);
@@ -108,11 +108,7 @@ async function initializeGatewayMain(
     };
   } catch (error) {
     removeLifecycleListeners();
-    try {
-      stopPerformanceReporter?.();
-    } finally {
-      await root.dispose();
-    }
+    await root.dispose();
     throw error;
   }
 }

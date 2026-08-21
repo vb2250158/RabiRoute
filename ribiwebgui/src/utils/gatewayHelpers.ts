@@ -649,7 +649,7 @@ export function agentConnectionReasons(gateway: GatewayDefinition, runtime: Runt
       } else if (adapter === "astrbot") {
         reasons.push(gateway.astrbotSessionId
           ? "AstrBot 已选择 ChatUI 会话，但尚未完成真实投递验证。"
-          : "AstrBot 未选择 ChatUI 会话；会回退到 rabiroute_agent 插件默认管线。");
+          : "AstrBot 未选择 ChatUI 会话，无法通过 /api/chat/send 投递。");
       } else if (adapter === "copilotCli") {
         reasons.push("Copilot CLI 尚未成功投递到目标 session；请完成同一会话连续两次注入烟测后再视为可用。");
       } else if (adapter === "codex") {

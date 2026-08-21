@@ -2,7 +2,7 @@ param(
     [string]$Serial = "",
     [string]$AdbPath = "",
     [int]$Port = 8794,
-    [string[]]$Paths = @("/api/fennenote/playback", "/api/playback/request", "/api/rokid/tts"),
+    [string[]]$Paths = @("/api/fennenote/playback", "/api/rokid/tts"),
     [string]$TtsCommand = "tts",
     [int]$CommandWaitSeconds = 3,
     [switch]$DryRun,

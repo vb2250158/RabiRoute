@@ -22,9 +22,16 @@ from rabiroute_tray.manager_client import (
     DesktopSettings,
     ManagerSnapshot,
 )
-from rabiroute_tray.desktop_models import PlanApprovalCommand, PlanApprovalContract, PlanApprovalFileChange
-from rabiroute_tray.role_context_repository import ContextEntry, RoleContextSnapshot
-from rabiroute_tray.task_repository import PlanItem, PlanSnapshot, PlanStep
+from rabiroute_tray.desktop_models import (
+    ContextEntry,
+    PlanApprovalCommand,
+    PlanApprovalContract,
+    PlanApprovalFileChange,
+    PlanItem,
+    PlanSnapshot,
+    PlanStep,
+    RoleContextSnapshot,
+)
 from rabiroute_tray.plugin_catalog import (
     DesktopPluginCatalog,
     DesktopPluginSettingsSection,

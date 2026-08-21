@@ -27,11 +27,12 @@ test("performance API enables recording, ingests WebGUI JSON, and rejects forged
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-performance-api-"));
   const globalConfig = new RabiGlobalConfigStore(root);
   const service = new PerformanceMonitoringService(root, globalConfig.read().performance);
+  const readWorkerPool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });
   const api = new PerformanceApi({
     service,
     globalConfig,
     gatewayExists: () => false,
-    readWorkerPool: new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 })
+    readWorkerPool
   });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -73,8 +74,14 @@ test("performance API enables recording, ingests WebGUI JSON, and rejects forged
     assert.equal(forgedResponse.status, 400);
 
     await service.store.flush();
-    const logsResponse = await fetch(`${baseUrl}/api/performance/logs?limit=10`);
-    const logs = await logsResponse.json() as { data: PerformanceSample[] };
+    let logs = { data: [] as PerformanceSample[] };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const logsResponse = await fetch(`${baseUrl}/api/performance/logs?limit=10`);
+      assert.equal(logsResponse.status, 200);
+      logs = await logsResponse.json() as { data: PerformanceSample[] };
+      if (logs.data.some(item => item.sampleId === sample.sampleId)) break;
+      await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+    }
     assert.equal(logs.data.filter(item => item.sampleId === sample.sampleId).length, 1);
     assert.equal(logs.data.some(item => item.sampleId === "forged-manager"), false);
     assert.equal(logs.data.find(item => item.sampleId === sample.sampleId)?.source.kind, "webgui");
@@ -82,6 +89,7 @@ test("performance API enables recording, ingests WebGUI JSON, and rejects forged
   } finally {
     api.close();
     await new Promise<void>(resolve => server.close(() => resolve()));
+    await readWorkerPool.stop();
     await service.stop();
     fs.rmSync(root, { recursive: true, force: true });
   }

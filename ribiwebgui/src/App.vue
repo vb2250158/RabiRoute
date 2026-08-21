@@ -14,22 +14,30 @@ import { configNameFor } from "./utils/gatewayHelpers";
 import { pageSaveAction } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
 import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
-import type { DesktopTheme } from "@shared/desktopSettingsContract";
-import { isWebPageRouteActive } from "./pluginPages";
+import { readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
+import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
+import {
+  webCommandForHandler,
+  webCommandsInSlot,
+  type WebCommandContext,
+  type WebCommandContribution,
+  type WebCommandState
+} from "./pluginCommands";
 
 const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const vuetifyTheme = useTheme();
-const interfaceThemePreference = ref<DesktopTheme>("system");
+const interfaceThemePreference = ref<WebThemeId>("system");
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 let managerEvents: EventSource | null = null;
 
 async function handlePluginCatalogChanged(): Promise<void> {
   await pluginCatalogStore.refresh();
+  if (!webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup")) store.quickSetupDialogOpen = false;
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
@@ -38,34 +46,38 @@ async function handlePluginCatalogChanged(): Promise<void> {
 
 function refreshInterfaceTheme(): void {
   const resolved = applyCatalogInterfaceTheme(pluginCatalogStore.themes.value, interfaceThemePreference.value, systemThemeQuery.matches);
+  const selected = resolveWebThemeResource(pluginCatalogStore.themes.value, interfaceThemePreference.value);
+  interfaceThemePreference.value = selected.themeId;
   vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
 }
 
 function onSystemThemeChanged(): void {
-  if (interfaceThemePreference.value === "system") refreshInterfaceTheme();
+  refreshInterfaceTheme();
 }
 
 function onInterfaceThemeChanged(event: Event): void {
-  const preference = (event as CustomEvent<DesktopTheme>).detail;
-  if (preference !== "system" && preference !== "light" && preference !== "dark") return;
-  interfaceThemePreference.value = preference;
+  const preference = (event as CustomEvent<WebThemeId>).detail;
+  if (typeof preference !== "string" || !preference.trim()) return;
+  interfaceThemePreference.value = resolveWebThemeResource(pluginCatalogStore.themes.value, preference).themeId;
   refreshInterfaceTheme();
 }
 
 async function loadInterfaceTheme(): Promise<void> {
+  let desktopTheme: WebThemeId = "system";
   try {
-    interfaceThemePreference.value = (await desktopSettingsClient.read()).theme;
+    desktopTheme = (await desktopSettingsClient.read()).theme;
   } catch {
-    interfaceThemePreference.value = "system";
+    desktopTheme = "system";
   }
+  const stored = readStoredWebThemePreference();
+  interfaceThemePreference.value = pluginCatalogStore.themes.value.options.some(option => option.themeId === stored)
+    ? stored
+    : desktopTheme;
   refreshInterfaceTheme();
 }
-const DRAWER_PREFERENCES_KEY = "rabiroute:webgui:drawer-preferences";
 
-type DrawerPreferences = {
-  default: boolean;
-  docs: boolean;
-};
+const DRAWER_PREFERENCES_KEY = "rabiroute:webgui:drawer-preferences";
+type DrawerPreferences = { default: boolean; docs: boolean };
 
 function readDrawerPreferences(): DrawerPreferences {
   const fallback = { default: window.innerWidth >= 960, docs: false };
@@ -88,31 +100,26 @@ function writeDrawerPreferences(preferences: DrawerPreferences): void {
   }
 }
 
-function pageNeedsGatewayDiagnostics(path: string): boolean {
-  return path === "/overview"
-    || path === "/routes"
-    || path === "/runtime"
-    || /^\/routes\/[^/]+\/(?:overview|adapters|runtime)$/.test(path);
-}
-
-function ensurePageDiagnostics(path: string, force = false): Promise<void> {
-  return pageNeedsGatewayDiagnostics(path) ? store.ensureDiagnostics(force) : Promise.resolve();
+function ensurePageDiagnostics(force = false): Promise<void> {
+  const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
+  return routeId && webPageDataRequirements(routeId).includes("gateway.diagnostics")
+    ? store.ensureDiagnostics(force)
+    : Promise.resolve();
 }
 
 const drawerPreferences = readDrawerPreferences();
 const drawer = ref(route.path === "/docs" ? drawerPreferences.docs : drawerPreferences.default);
 const snackbar = ref("");
-
 const selectedRouteKey = computed(() => store.selectedGateway ? configNameFor(store.selectedGateway) : "");
 const navigationGroups = computed(() => buildWebNavigation(pluginCatalogStore.contributions.value, selectedRouteKey.value));
 const navItems = computed(() => navigationGroups.value.routePrimary.map(item => ({ ...item, title: t(item.title) })));
 const utilityNavItems = computed(() => navigationGroups.value.utility.map(item => ({ ...item, title: t(item.title) })));
 const footerNavItems = computed(() => navigationGroups.value.footer.map(item => ({ ...item, title: t(item.title) })));
-
+const sidebarPrimaryCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer-primary"));
+const sidebarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "sidebar-footer"));
+const topbarCommands = computed(() => webCommandsInSlot(pluginCatalogStore.commands.value, "topbar-primary"));
 const managerConnected = computed(() => !store.managerError);
 const activePageSaveAction = computed(() => pageSaveAction.value);
-const saveBusy = computed(() => store.saving || activePageSaveAction.value?.saving.value === true);
-const saveDisabled = computed(() => activePageSaveAction.value != null && !activePageSaveAction.value.ready.value);
 const hasUnsavedChanges = computed(() => store.dirty || activePageSaveAction.value?.dirty.value === true);
 const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
 const routeOptions = computed(() => store.gateways.map(gateway => {
@@ -120,19 +127,56 @@ const routeOptions = computed(() => store.gateways.map(gateway => {
   const title = gatewayPersonaDisplayName(gateway, runtime.roleInfo);
   return { title, value: gateway.id };
 }));
-const selectedGatewayName = computed(() => store.selectedGateway
-  ? store.configNameFor(store.selectedGateway)
-  : "未选择路由");
+const selectedGatewayName = computed(() => store.selectedGateway ? store.configNameFor(store.selectedGateway) : "未选择路由");
+
+function pageSaveState(): WebCommandState {
+  return {
+    enabled: activePageSaveAction.value == null || activePageSaveAction.value.ready.value,
+    loading: store.saving || activePageSaveAction.value?.saving.value === true,
+    dirty: hasUnsavedChanges.value
+  };
+}
+
+async function savePage(): Promise<void> {
+  if (activePageSaveAction.value) {
+    if (!activePageSaveAction.value.ready.value) return;
+    await activePageSaveAction.value.save();
+    return;
+  }
+  await store.save();
+}
+
+function commandContext(): WebCommandContext {
+  return {
+    openQuickSetup: () => store.openQuickSetup(),
+    addRoute: () => store.addGatewayAndOpenQuickSetup(),
+    openManagerConfig: () => store.openConfigFile("manager"),
+    savePage,
+    pageSaveState,
+    notify: message => { snackbar.value = message; }
+  };
+}
+
+function commandState(command: WebCommandContribution): WebCommandState {
+  return command.state?.(commandContext()) ?? {};
+}
+
+async function executeCommand(command: WebCommandContribution): Promise<void> {
+  if (commandState(command).enabled === false) return;
+  await command.execute(commandContext());
+}
 
 onMounted(async () => {
   await loadInterfaceTheme();
   await store.load();
-  if (store.gateways.length === 0) store.openQuickSetup();
-  else if (selectedRouteKey.value) {
+  if (store.gateways.length === 0) {
+    const quickSetup = webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup");
+    if (quickSetup) await executeCommand(quickSetup);
+  } else if (selectedRouteKey.value) {
     const scopedPath = routeScopedPathForCurrentPage(selectedRouteKey.value, route.path);
     if (scopedPath && scopedPath !== route.path) await router.replace(scopedPath);
   }
-  void ensurePageDiagnostics(route.path);
+  void ensurePageDiagnostics();
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
@@ -146,9 +190,13 @@ watch(
 );
 
 watch(
+  () => route.meta.pluginRouteId,
+  () => { void ensurePageDiagnostics(); }
+);
+
+watch(
   () => route.path,
-  (path) => {
-    void ensurePageDiagnostics(path);
+  path => {
     if (path === "/docs") {
       drawer.value = false;
       return;
@@ -157,7 +205,7 @@ watch(
   }
 );
 
-watch(drawer, (value) => {
+watch(drawer, value => {
   if (route.path === "/docs") drawerPreferences.docs = value;
   else drawerPreferences.default = value;
   writeDrawerPreferences(drawerPreferences);
@@ -171,29 +219,18 @@ onBeforeUnmount(() => {
   managerEvents = null;
 });
 
-async function save() {
-  if (activePageSaveAction.value) {
-    if (!activePageSaveAction.value.ready.value) return;
-    await activePageSaveAction.value.save();
-    snackbar.value = "配置已保存";
-    return;
-  }
-  await store.save();
-  snackbar.value = "配置已保存";
-}
-
-async function refresh() {
+async function refresh(): Promise<void> {
   await Promise.all([store.load(), pluginCatalogStore.refresh()]);
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
     return;
   }
-  await ensurePageDiagnostics(route.path, true);
+  await ensurePageDiagnostics(true);
   snackbar.value = "状态已刷新";
 }
 
-function beforeUnload(event: BeforeUnloadEvent) {
+function beforeUnload(event: BeforeUnloadEvent): void {
   if (!hasUnsavedChanges.value) return;
   event.preventDefault();
   event.returnValue = "";
@@ -203,14 +240,13 @@ function canLeaveDirtyState(): boolean {
   return !hasUnsavedChanges.value || window.confirm(t("当前配置有未保存修改。确定要切换吗？"));
 }
 
-function selectGateway(id: string) {
+function selectGateway(id: string): void {
   if (!canLeaveDirtyState()) return;
   store.selectGateway(id);
-  // Route 相关页面始终把左侧当前 Route 同步进 URL。
-  const gw = store.gateways.find(g => g.id === id);
-  const name = gw ? configNameFor(gw) : id;
+  const gateway = store.gateways.find(candidate => candidate.id === id);
+  const name = gateway ? configNameFor(gateway) : id;
   const scopedPath = routeScopedPathForCurrentPage(name, route.path);
-  if (scopedPath && scopedPath !== route.path) router.replace(scopedPath);
+  if (scopedPath && scopedPath !== route.path) void router.replace(scopedPath);
 }
 </script>
 
@@ -274,8 +310,19 @@ function selectGateway(id: string) {
 
       <template #append>
         <div class="sidebar-footer">
-          <v-btn block class="sidebar-footer-btn" variant="tonal" color="primary" prepend-icon="mdi-lightning-bolt-outline" @click="store.openQuickSetup">
-            快速配置
+          <v-btn
+            v-for="command in sidebarPrimaryCommands"
+            :key="command.key"
+            block
+            class="sidebar-footer-btn"
+            variant="tonal"
+            :color="command.appearance === 'primary' ? 'primary' : undefined"
+            :prepend-icon="command.icon"
+            :loading="commandState(command).loading"
+            :disabled="commandState(command).enabled === false"
+            @click="executeCommand(command)"
+          >
+            {{ t(command.label) }}
           </v-btn>
           <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-github" :href="store.meta.githubUrl" target="_blank">
             GitHub
@@ -291,8 +338,18 @@ function selectGateway(id: string) {
           >
             {{ item.title }}
           </v-btn>
-          <v-btn block class="sidebar-footer-btn" variant="text" prepend-icon="mdi-folder-cog-outline" @click="store.openConfigFile('manager')">
-            打开配置目录
+          <v-btn
+            v-for="command in sidebarCommands"
+            :key="command.key"
+            block
+            class="sidebar-footer-btn"
+            variant="text"
+            :prepend-icon="command.icon"
+            :loading="commandState(command).loading"
+            :disabled="commandState(command).enabled === false"
+            @click="executeCommand(command)"
+          >
+            {{ t(command.label) }}
           </v-btn>
         </div>
       </template>
@@ -313,12 +370,29 @@ function selectGateway(id: string) {
           <span class="manager-chip-text">Manager {{ managerConnected ? "已连接" : "未连接" }}</span>
         </v-chip>
         <v-btn icon="mdi-refresh" :loading="store.loading" aria-label="刷新状态" @click="refresh" />
-        <v-btn class="desktop-action" prepend-icon="mdi-plus" variant="tonal" @click="store.addGatewayAndOpenQuickSetup">新增航线</v-btn>
-        <v-btn class="mobile-action" icon="mdi-plus" variant="tonal" aria-label="新增航线" @click="store.addGatewayAndOpenQuickSetup" />
-        <v-btn class="desktop-action" color="primary" prepend-icon="mdi-content-save" :loading="saveBusy" :disabled="saveDisabled" @click="save">
-          保存配置
-        </v-btn>
-        <v-btn class="mobile-action" color="primary" icon="mdi-content-save" :loading="saveBusy" :disabled="saveDisabled" aria-label="保存配置" @click="save" />
+        <template v-for="command in topbarCommands" :key="command.key">
+          <v-btn
+            class="desktop-action"
+            :color="command.appearance === 'primary' ? 'primary' : undefined"
+            :prepend-icon="command.icon"
+            :variant="command.appearance === 'primary' ? 'flat' : 'tonal'"
+            :loading="commandState(command).loading"
+            :disabled="commandState(command).enabled === false"
+            @click="executeCommand(command)"
+          >
+            {{ t(command.label) }}
+          </v-btn>
+          <v-btn
+            class="mobile-action"
+            :color="command.appearance === 'primary' ? 'primary' : undefined"
+            :icon="command.icon"
+            :variant="command.appearance === 'primary' ? 'flat' : 'tonal'"
+            :loading="commandState(command).loading"
+            :disabled="commandState(command).enabled === false"
+            :aria-label="t(command.label)"
+            @click="executeCommand(command)"
+          />
+        </template>
       </div>
     </v-app-bar>
 

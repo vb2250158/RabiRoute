@@ -1531,14 +1531,6 @@ body::before {
   flex-wrap: wrap;
 }
 
-.deploy-output {
-  margin-top: 8px;
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-}
 
 .route-kind-group {
   display: grid;

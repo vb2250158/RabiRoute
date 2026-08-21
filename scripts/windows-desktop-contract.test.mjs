@@ -5,7 +5,7 @@ import test from "node:test";
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const launcher = fs.readFileSync(new URL("../Start-RabiRoute-Desktop.bat", import.meta.url), "utf8");
 const lifecycle = fs.readFileSync(new URL("../src/manager/desktopLifecycleRoutes.ts", import.meta.url), "utf8");
-const settings = fs.readFileSync(new URL("../ribiwebgui/src/pages/SettingsPage.vue", import.meta.url), "utf8");
+const desktopSettingsRenderer = fs.readFileSync(new URL("../ribiwebgui/src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
 const windowsGuide = fs.readFileSync(new URL("../docs/windows-launcher-and-packaging.md", import.meta.url), "utf8");
 const windowsGuideEnglish = fs.readFileSync(new URL("../docs/windows-launcher-and-packaging_en.md", import.meta.url), "utf8");
 const troubleshootingGuide = fs.readFileSync(new URL("../docs/user-guide/operations-and-troubleshooting.md", import.meta.url), "utf8");
@@ -26,9 +26,9 @@ test("Windows desktop starts as one RabiRoute product runtime", () => {
 });
 
 test("Windows UI and public guides keep tray and Manager inside RabiRoute Desktop", () => {
-  assert.match(settings, /class="section-title">RabiRoute 桌面功能<\/div>/);
-  assert.match(settings, /登录 Windows 后自动启动 RabiRoute Desktop；后台运行时保留系统托盘入口。/);
-  assert.doesNotMatch(settings, /Manager 仍按自己的运行开关管理/);
+  assert.match(desktopSettingsRenderer, /class="section-title">RabiRoute 桌面功能<\/div>/);
+  assert.match(desktopSettingsRenderer, /登录 Windows 后自动启动 RabiRoute Desktop；后台运行时保留系统托盘入口。/);
+  assert.doesNotMatch(desktopSettingsRenderer, /Manager 仍按自己的运行开关管理/);
 
   assert.match(windowsGuide, /RabiRoute Desktop 是 Windows 上唯一的用户入口。/);
   assert.match(windowsGuide, /不单独作为另一款 Windows 软件出现。/);

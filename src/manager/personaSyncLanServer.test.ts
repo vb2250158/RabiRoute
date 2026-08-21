@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -77,10 +78,62 @@ test("stopping an in-flight LAN listener cannot revive it after a new generation
   t.after(() => server.stop());
 
   const staleStart = server.start();
-  server.stop();
+  await server.stop();
   await staleStart;
   assert.equal(server.status().state, "disabled");
 
   await server.start();
   assert.equal(server.status().state, "listening");
+});
+
+
+test("stop waits for active LAN connections, is idempotent, and permits restart", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-lan-stop-"));
+  const rolesRoot = path.join(root, "roles");
+  fs.mkdirSync(rolesRoot, { recursive: true });
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"));
+  const coordinator = new PersonaSyncCoordinator(service, path.join(root, "state"), () => ({
+    url: "http://127.0.0.1:1", token: "token", deviceId: "pc-a", deviceGuid: "guid-a"
+  }));
+  const server = new PersonaSyncLanServer({
+    service, coordinator, token: () => "token",
+    relay: () => ({ url: "http://127.0.0.1:1", token: "token", deviceId: "pc-a", deviceGuid: "guid-a" })
+  }, { host: "127.0.0.1", port: 0, addresses: () => ["127.0.0.1"] });
+  t.after(() => server.stop());
+
+  await server.start();
+  const port = server.status().port;
+  assert.ok(port);
+  const socket = net.connect(port, "127.0.0.1");
+  await new Promise<void>((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+  socket.write([
+    "POST /api/persona-sync/merge HTTP/1.1",
+    "Host: 127.0.0.1",
+    "Content-Type: application/json",
+    "X-RabiLink-Token: token",
+    "Content-Length: 100",
+    "",
+    "{"
+  ].join("\r\n"));
+  await new Promise<void>(resolve => setImmediate(resolve));
+
+  let stopped = false;
+  const firstStop = server.stop();
+  const secondStop = server.stop();
+  assert.strictEqual(firstStop, secondStop);
+  void firstStop.then(() => { stopped = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(stopped, false);
+
+  socket.destroy();
+  await firstStop;
+  assert.equal(stopped, true);
+  assert.equal(server.status().state, "disabled");
+
+  await server.start();
+  assert.equal(server.status().state, "listening");
+  await server.stop();
 });

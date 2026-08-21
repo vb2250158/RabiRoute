@@ -2,7 +2,7 @@ English | <a href="./dsh-cordis-runtime-analysis.md">简体中文</a>
 
 # How DSH Uses Cordis: Runtime, UI, and Isolation Analysis
 
-> Status: implementation research based on DSH `528c682e06`, `dsh@0.1.1-rc.1`.
+> Status: the implementation-audit baseline is the local DSH checkout at `528c682e06`, `dsh@0.1.1-rc.1`; remote `master` has advanced and later commits are not audited here.
 >
 > Primary audience: RabiRoute maintainers, plugin-runtime designers, and WebGUI/Desktop extension developers.
 
@@ -21,9 +21,9 @@ RabiRoute's decision to place high-risk or untrusted plugins in separate process
 
 ## Research snapshot
 
-After 14:21:44 +08:00 on August 21, 2026, the official DSH `master` and the inspected local checkout both point to:
+The local research checkout is fixed at [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006), corresponding to `dsh@0.1.1-rc.1`. At the August 21, 2026 review, remote `master` had advanced to `b150a551b8d465e31e418e1b2eaf5e79bbb7d28e`. All source claims and line references in this document still apply only to local `528c682e06`; the newer remote commit has not been implementation-audited here.
 
-- [DeepSeek Harness `528c682e06`](https://github.com/deepseek-ai/deepseek-harness/tree/528c682e061696f5a160f363f236ecbf53cbd006), `dsh@0.1.1-rc.1`;
+The local baseline also contains:
 - vendored [`@deepseek-ai/cordis` 4.0.0-rc.7](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest);
 - vendored [`@deepseek-ai/cordis-plugin-loader` 1.0.0-rc.5](https://github.com/deepseek-ai/deepseek-harness/blob/528c682e061696f5a160f363f236ecbf53cbd006/vendor/README.md#manifest);
 - [Cordis composability paper v8](https://github.com/cordiverse/paper/blob/948a07b369c62adb3b12e102458be5c18dfb69b9/paper.pdf).
@@ -35,7 +35,7 @@ DSH does not consume the public upstream npm packages directly. It pins Cordis, 
 | Code class | Location | Cordis role | Current isolation strength |
 |---|---|---|---|
 | Built-in and profile npm plugins | DSH Node main process | Loader, services, Fiber, effects, HMR | Trusted, same process |
-| Agent preset plugins | Per-session subtree in the Node process | Per-Agent composition and teardown | Service-scope isolation, same process |
+| Agent preset plugins | Preset standing mount in the Node process | One mount per preset; Agents share it through the scope parent chain | Service-scope isolation, same process |
 | Web client plugins | Current browser page | Browser Context, Loader, UI slots | Trusted, same page |
 | Model-written dynamic Host plugins | `node:vm` realm in the Node process | Dynamic Fiber and restricted Context facade | Cooperative restriction, not containment |
 | Model-written dynamic browser plugins | `new Function` closure in the current page | Dynamic browser Fiber and restricted Context facade | Cooperative restriction with page confirmation |
@@ -153,9 +153,9 @@ ctx.provide(name, service)
 ctx.plugin(childPlugin)
 ```
 
-Stopping the Fiber reverses these resources through the lifecycle. DSH also disposes partially mounted Contexts after startup failure so terminal state, ports, listeners, or UI contributions do not remain active.
+Stopping the Fiber reverses these resources through the lifecycle. Top-level effect disposers on a Fiber are taken in reverse registration order and then started and awaited through `Promise.all(...)`, so asynchronous cleanup can overlap. Multiple disposers returned inside one `ctx.effect()` are also taken in reverse order, but run serially through a Promise chain. Business teardown with ordering dependencies still belongs in one critical effect/disposer.
 
-This is the first DSH practice RabiRoute should adopt: give every Adapter listener, port, timer, watcher, and child process one disposal path before implementing dynamic installation.
+DSH also disposes partially mounted Contexts after startup failure so terminal state, ports, listeners, or UI contributions do not remain active. This is the first DSH practice RabiRoute should adopt: give every Adapter listener, port, timer, watcher, and child process one disposal path before implementing dynamic installation.
 
 ## 6. Cordis `isolate` is a service realm
 
@@ -168,6 +168,8 @@ isolate:
 ```
 
 Providers and consumers using one label resolve the same service instance. Different labels can host several implementations with the same service name inside one Node process.
+
+A service realm also has explicit ownership. Each implementation belongs to the Fiber that registered it, one realm cannot contain duplicate providers, and only the owning Fiber may change the service value. DSH Agent presets check whether a preset subtree leaks services into the root realm; preset services must sit behind an `isolate` realm or move explicitly to host composition. RabiRoute should likewise reject plugin-scoped services that accidentally become host-global services.
 
 It supports:
 
@@ -190,19 +192,21 @@ Include watches `cordis.patch.yml`, recalculates the Entry list, and uses transa
 
 HMR finds affected modules and consumers, backs up ESM/CJS caches, clears them, and imports the new modules. If import or activation fails, it restores caches and remounts the old plugins.
 
+Configuration changes use Loader Entry transactions: an Entry update disposes the old Fiber, starts the new Fiber, and restores the old plugin on failure. Source HMR is a separate path that backs up and restores ESM/CJS caches. The two paths share only Fiber disposal and remount semantics; they are not one update mechanism.
+
 DSH adds serialization, failure aggregation, asynchronous write draining, and startup audits around these paths. RabiRoute Stage 1 only needs configuration-driven disable, enable, and recreation. Source HMR can wait until lifecycle tests are mature.
 
-## 8. Agent presets are per-session plugin subtrees
+## 8. Agent presets use one standing mount per preset
 
 DSH separates host capabilities from per-Agent capabilities:
 
 - the host tree owns sessions, persistence, model routing, settings, credentials, sandbox, approval, and cross-session registries;
-- an Agent preset contributes tools, persona, prompt sections, compaction policy, and other session plugins;
-- the preset subtree is withdrawn with the Agent scope when the session ends.
+- each preset `cordis.yml` is mounted once in the process as a standing mount;
+- multiple Agents naming the same preset join that mount through the scope parent chain;
+- plugin instances, tool registrations, prompt sections, and projection units exist once, while each plugin isolates state by Session/Agent key;
+- a preset file change creates a new generation for current and later Agents, while Agents already joined to the old generation continue using it.
 
-Different Agents can therefore have different tools and prompts without duplicating the service process.
-
-RabiRoute can learn from Route- or task-level plugin subtrees, while Manager/Gateway stable modules continue owning Routes, event records, delivery evidence, and Outbox.
+DSH currently carries an explicit TODO: a superseded generation is not yet reclaimed automatically after its last Agent leaves. RabiRoute can learn from shared composition and scope ancestry, but should not describe this as per-session mounting and teardown. Manager/Gateway stable modules still own Routes, event records, delivery evidence, and Outbox.
 
 ## 9. The DSH Web UI is another plugin tree
 
@@ -328,9 +332,15 @@ Stage 1 needs only `builtin` and `declarative`. Open `installed-trusted` after p
 ## Adjustment to the current refactor design
 
 - Keep the Cordis composition kernel, Rabi adaptation layer, and multi-host extension protocol.
+- Gateway performance sampling and reporting have moved into a Fiber under the Gateway root Context. Disposing the root Context withdraws reporter resources through the effect disposer; the old lifecycle entry outside the root no longer owns them.
+- Manager definitions use `provides`, `requires`, and `optional` to build the capability graph. Dependency revisions recursively include direct and transitive providers, so upstream changes restart real downstream consumers. `PluginCatalog.refreshDeclaration()` refreshes the manifest and `missingCapabilities` during reload and supports `active -> waiting_dependency -> active`, matching DSH's separation of desired configuration, runtime state, and diagnostics.
+- Manager shutdown and startup-failure cleanup explicitly run `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`. This host ordering accounts for Cordis sibling-disposer concurrency instead of depending on sibling Fiber disposal order.
 - Use DSH as a composition and lifecycle reference, not as a security precedent for ordinary plugin loading.
-- WebGUI may eventually own a client plugin tree like DSH; Stage 1 still starts with the declarative Contribution Catalog.
-- Desktop consumes the same contribution protocol; code plugins prefer a separate process and do not require Python/Qt to run Cordis.
+- Production Manager business routes now use stable `routeId` values and real `exact/prefix` declarations; the Registry rejects duplicate IDs and intersecting static paths.
+- WebGUI may eventually own a client plugin tree like DSH; the current implementation uses trusted command/renderer registries to consume the declarative Contribution Catalog. Contracts are bound to `pluginId + instanceId`, so cross-plugin catalog references fail closed.
+- Desktop consumes the same contribution protocol through a frozen Registry for lifecycle, panel actions, menus, hotkeys, settings, and status. The `manager:desktop` settings section owns system-selection, system-screenshot, clipboard-image hotkey, and login-startup settings.
+- Trusted Python entry points execute inside the Desktop process and receive the complete Registry; an owner-scoped registrar, permission model, and stronger process isolation belong to the future Extension Host.
+- A second RabiLink `stop()` cancels a restart queued during shutdown; the configuration watcher and Rabi identity PATCH both await asynchronous Relay synchronization.
 - Label “separate process or stronger isolation” as a RabiRoute security choice, not current DSH behavior.
 
 See [Cordis-Based Plugin Runtime Refactor for RabiRoute](cordis-plugin-runtime-refactor_en.md) for implementation design and [Plugin Architecture Lessons for RabiRoute from DSH](dsh-plugin-architecture-lessons_en.md) for the principle summary.

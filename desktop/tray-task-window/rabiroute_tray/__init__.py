@@ -1,6 +1,6 @@
-"""RabiRoute Qt desktop plan and memory entry.
+"""RabiRoute Qt desktop entry.
 
-The Qt entry, manager client, plan repository, role context reader, and
-lifecycle controller are platform-neutral. Exiting the tray means exiting
-the local RabiRoute desktop runtime, including the manager.
+The Qt entry, Manager client, DTO read model, extension registry, and lifecycle
+controller are platform-neutral. Exiting the tray means exiting the local
+RabiRoute desktop runtime, including the Manager.
 """

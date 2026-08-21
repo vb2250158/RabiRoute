@@ -23,6 +23,7 @@ function catalogResponse(): Response {
       }],
       contributions: [{
         kind: "page",
+        surface: "web.pages",
         id: "settings-page",
         instanceId: "manager:core",
         pluginId: "builtin:manager/core",
@@ -31,6 +32,7 @@ function catalogResponse(): Response {
         hosts: ["web"]
       }, {
         kind: "theme",
+        surface: "shared.themes",
         id: "dark-theme",
         instanceId: "manager:core",
         pluginId: "builtin:manager/core",
@@ -43,7 +45,7 @@ function catalogResponse(): Response {
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
-test("catalog store keeps recovery on the first failure and the last success after later failures", async () => {
+test("catalog store removes plugin contributions after every catalog failure", async () => {
   const originalFetch = globalThis.fetch;
   let mode: "fail" | "success" = "fail";
   globalThis.fetch = (async () => {
@@ -64,9 +66,10 @@ test("catalog store keeps recovery on the first failure and the last success aft
 
     mode = "fail";
     await pluginCatalogStore.refresh();
-    assert.equal(pluginCatalogStore.status.value, "ready");
-    assert.equal(pluginCatalogStore.pages.value.pages[0]?.routeId, "global.settings");
-    assert.deepEqual(pluginCatalogStore.themes.value.options.map(option => option.themeId), ["dark"]);
+    assert.equal(pluginCatalogStore.status.value, "unavailable");
+    assert.equal(pluginCatalogStore.pages.value.mode, "recovery");
+    assert.deepEqual(pluginCatalogStore.commands.value, []);
+    assert.deepEqual(pluginCatalogStore.themes.value.options, []);
   } finally {
     globalThis.fetch = originalFetch;
   }

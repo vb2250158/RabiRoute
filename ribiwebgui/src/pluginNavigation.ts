@@ -30,6 +30,7 @@ type NavigationTemplate = Readonly<{
   key: string;
   id: string;
   instanceId: string;
+  pluginId: string;
   title: string;
   icon: string;
   routeId: WebPageRouteId;
@@ -84,6 +85,7 @@ function parseNavigationContribution(value: unknown, sequence: number): Navigati
 
   const id = controlledSymbol(value.id, 128);
   const instanceId = controlledSymbol(value.instanceId, 160);
+  const pluginId = controlledSymbol(value.pluginId, 160);
   const label = isRecord(value.label) ? controlledText(value.label.fallback, 80) : "";
   const icon = controlledSymbol(value.icon, 80);
   const slotValue = controlledSymbol(value.slot, 40);
@@ -94,6 +96,7 @@ function parseNavigationContribution(value: unknown, sequence: number): Navigati
   if (
     !id
     || !instanceId
+    || !pluginId
     || !label
     || !icon
     || !slot
@@ -108,6 +111,7 @@ function parseNavigationContribution(value: unknown, sequence: number): Navigati
     key: `${instanceId}:${id}`,
     id,
     instanceId,
+    pluginId,
     title: label,
     icon,
     routeId,
@@ -126,7 +130,7 @@ export function buildWebNavigation(
   const items = (contributions ?? [])
     .map((value, sequence) => parseNavigationContribution(value, sequence))
     .filter((value): value is NavigationTemplate => value !== undefined)
-    .filter(item => isWebNavigationPageActive(pageCatalog, item.instanceId, item.routeId))
+    .filter(item => isWebNavigationPageActive(pageCatalog, item.instanceId, item.pluginId, item.routeId))
     .sort((left, right) => left.order - right.order || left.sequence - right.sequence)
     .flatMap((item): WebNavigationItem[] => {
       let to = "";

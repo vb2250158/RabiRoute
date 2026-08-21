@@ -1169,6 +1169,7 @@ class SystemSelectionController(QObject):
         self._action_task: QtAsyncTask | None = None
         self._selection_error_notified = False
         self._settings_refresh_scheduled = False
+        self._running = False
 
         self._settings_watcher = QFileSystemWatcher(self)
         self._settings_watcher.fileChanged.connect(self._settings_changed)
@@ -1179,13 +1180,27 @@ class SystemSelectionController(QObject):
         self._toolbar.read_requested.connect(self._read_selected)
         self._toolbar.deliver_requested.connect(self._deliver_selected)
 
+    @property
+    def running(self) -> bool:
+        return self._running
+
     def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
         self._hook.start()
         self._arm_settings_watcher()
         self.refresh_settings()
 
     def stop(self) -> None:
+        if not self._running:
+            return
+        self._running = False
         self._hook.stop()
+        current_paths = self._settings_watcher.files() + self._settings_watcher.directories()
+        if current_paths:
+            self._settings_watcher.removePaths(current_paths)
+        self._settings_refresh_scheduled = False
         self.dismiss()
 
     def _arm_settings_watcher(self) -> None:
@@ -1207,6 +1222,8 @@ class SystemSelectionController(QObject):
 
     @Slot(str)
     def _settings_changed(self, _path: str) -> None:
+        if not self._running:
+            return
         self._arm_settings_watcher()
         if self._settings_refresh_scheduled:
             return
@@ -1216,17 +1233,21 @@ class SystemSelectionController(QObject):
     @Slot()
     def _refresh_settings_after_change(self) -> None:
         self._settings_refresh_scheduled = False
+        if not self._running:
+            return
         self._arm_settings_watcher()
         self.refresh_settings()
 
     @Slot()
     def refresh_settings(self) -> None:
-        if self._settings_task is not None:
+        if not self._running or self._settings_task is not None:
             return
 
         def completed(task: QtAsyncTask, result: object) -> None:
             if self._settings_task is task:
                 self._settings_task = None
+            if not self._running:
+                return
             if isinstance(result, SelectionSpeechSettings):
                 self._settings = result
                 if not result.enabled:

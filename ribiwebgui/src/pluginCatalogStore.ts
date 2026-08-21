@@ -1,11 +1,9 @@
 import { computed, readonly, ref } from "vue";
 import { pluginCatalogClient, type WebPluginCatalog } from "./pluginCatalogClient";
-import {
-  availableWebContributions,
-  resolveWebContributionVisibility,
-  type WebPluginCatalogStatus
-} from "./pluginContributions";
+import { availableWebContributions, type WebPluginCatalogStatus } from "./pluginContributions";
+import { resolveWebCommandCatalog } from "./pluginCommands";
 import { resolveWebPageCatalog } from "./pluginPages";
+import { resolveWebSettingsCatalog, resolveWebStatusCatalog } from "./pluginRenderers";
 import { resolveWebThemeCatalog } from "./pluginThemes";
 
 const catalog = ref<WebPluginCatalog | null>(null);
@@ -13,8 +11,10 @@ const status = ref<WebPluginCatalogStatus>("idle");
 const contributions = computed<readonly unknown[] | null>(() => (
   catalog.value ? availableWebContributions(catalog.value) : null
 ));
-const visibility = computed(() => resolveWebContributionVisibility(contributions.value, status.value));
+const commands = computed(() => resolveWebCommandCatalog(contributions.value));
 const pages = computed(() => resolveWebPageCatalog(contributions.value, status.value));
+const settingsRenderers = computed(() => resolveWebSettingsCatalog(contributions.value));
+const statusRenderers = computed(() => resolveWebStatusCatalog(contributions.value));
 const themes = computed(() => resolveWebThemeCatalog(contributions.value));
 
 async function refresh(): Promise<void> {
@@ -23,15 +23,18 @@ async function refresh(): Promise<void> {
     catalog.value = await pluginCatalogClient.readWeb();
     status.value = "ready";
   } catch {
-    if (!catalog.value) status.value = "unavailable";
+    catalog.value = null;
+    status.value = "unavailable";
   }
 }
 
 export const pluginCatalogStore = {
   contributions,
   status: readonly(status),
-  visibility,
+  commands,
   pages,
+  settingsRenderers,
+  statusRenderers,
   themes,
   refresh
 };

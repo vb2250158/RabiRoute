@@ -16,7 +16,6 @@ import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { selectAgentThreadRouteId } from "./agentThreadRouteSelection.js";
 import { agentStateReportDecision } from "../agentAdapters/stateReportOrder.js";
 import {
-  deployAstrbotAdapter,
   getCopilotStatus,
   openMarvis,
   testAstrbotLogin as testAstrbotLoginEndpoint,
@@ -193,7 +192,10 @@ import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
 import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
 import { composeBuiltinManagerPluginDefinitions } from "./builtinManagerPluginComposition.js";
-import { ManagerPluginRouteRegistry } from "./managerPluginRouteRegistry.js";
+import {
+  ManagerPluginRouteRegistry,
+  type ManagerPluginRouteHandler
+} from "./managerPluginRouteRegistry.js";
 import { isManagerControlRequestPath } from "./managerHttpRequestClassification.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import { createDesktopControlRoutes, desktopConfigFilePayload } from "./desktopControlRoutes.js";
@@ -233,6 +235,10 @@ import {
   type ManagerPluginConfigDiagnostic
 } from "./managerPluginConfig.js";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
+import {
+  MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
+  mountManagerSharedResourcesRuntime
+} from "./managerSharedResourcesRuntime.js";
 import { LanguageStyleValidator } from "../languageStyleValidation.js";
 import { createPlanTaskCompletionDelivery } from "./planTaskCompletionDelivery.js";
 import {
@@ -423,6 +429,44 @@ import {
   type WearableHealthAlertDeliveryContext
 } from "../wearableHealthAlertDelivery.js";
 import type { WearableHealthAlert } from "../wearableHealth.js";
+
+type ManagerPluginHandlerRouteSpec =
+  | {
+      routeId: string;
+      kind: "exact";
+      path: string;
+      methods?: readonly string[];
+      handlerIndex?: number;
+    }
+  | {
+      routeId: string;
+      kind: "prefix";
+      pathPrefix: string;
+      methods?: readonly string[];
+      handlerIndex?: number;
+    };
+
+function registerManagerPluginHandlerRoutes(
+  registry: ManagerPluginRouteRegistry,
+  instanceId: string,
+  routeIdPrefix: string,
+  handlers: readonly ManagerPluginRouteHandler[],
+  routes: readonly ManagerPluginHandlerRouteSpec[]
+): () => void {
+  return registry.register(instanceId, routes.map(route => {
+    const handler = handlers[route.handlerIndex ?? 0];
+    if (!handler) {
+      throw new Error(`Manager plugin route ${routeIdPrefix}.${route.routeId} references a missing handler.`);
+    }
+    return {
+      routeId: `${routeIdPrefix}.${route.routeId}`,
+      match: route.kind === "exact"
+        ? { kind: "exact" as const, path: route.path, methods: route.methods }
+        : { kind: "prefix" as const, pathPrefix: route.pathPrefix, methods: route.methods },
+      handler
+    };
+  }));
+}
 
 type GatewayDefinition = {
   id: string;
@@ -782,7 +826,6 @@ const managerHost = managerHostOverride || (!managerReadOnly && rabiGlobalConfig
 const managerShouldAutostart = !managerReadOnly && managerAutostartEnabled();
 const remoteAgentPublicHost = process.env.REMOTE_AGENT_PUBLIC_HOST || process.env.GATEWAY_MANAGER_PUBLIC_HOST || "";
 const configRepository = new ManagerConfigRepository({ rootDir, managerPort });
-let bilibiliHistoryBridge: BilibiliHistoryBridge | undefined;
 const managerEventClients = new Map<http.ServerResponse, NodeJS.Timeout>();
 
 function removeManagerEventClient(response: http.ServerResponse): void {
@@ -1455,17 +1498,19 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
   return firstRouteLevelRabiLinkRelayConfig() || globalRelay;
 }
 
-function syncRabiLinkRelayRuntime(onLanReady?: () => void): void {
+async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>): Promise<void> {
   if (!managerShouldAutostart) {
-    personaSyncLanServer.stop();
-    rabiLinkRelayRuntime.stop();
+    await Promise.all([
+      personaSyncLanServer.stop(),
+      rabiLinkRelayRuntime.stop()
+    ]);
     return;
   }
   const globalConfig = rabiGlobalConfig.read();
   const relay = rabiLinkRelayConfigForMeta();
   const lanEnabled = relay.enabled && Boolean(relay.url.trim()) && Boolean(relay.token.trim());
-  if (!lanEnabled) personaSyncLanServer.stop();
-  rabiLinkRelayRuntime.sync({
+  if (!lanEnabled) await personaSyncLanServer.stop();
+  await rabiLinkRelayRuntime.sync({
     ...relay,
     deviceGuid: globalConfig.rabiGuid,
     deviceName: globalConfig.rabiName || os.hostname(),
@@ -1475,9 +1520,13 @@ function syncRabiLinkRelayRuntime(onLanReady?: () => void): void {
     localSpeechUrl: relay.speechServiceUrl
   });
   if (lanEnabled && personaSyncLanServer.status().state !== "listening") {
-    void personaSyncLanServer.start()
-      .then(() => onLanReady?.())
-      .catch(error => console.warn(`Persona sync LAN listener unavailable; Relay fallback remains active: ${error instanceof Error ? error.message : String(error)}`));
+    try {
+      await personaSyncLanServer.start();
+    } catch (error) {
+      console.warn(`Persona sync LAN listener unavailable; Relay fallback remains active: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    await onLanReady?.();
   }
 }
 
@@ -1798,7 +1847,7 @@ function syncRunningGateways(): void {
 async function reloadChangedConfig(
   reason: string,
   reconcileManagerPlugins?: (reason: string) => Promise<void>,
-  afterReload?: () => void
+  afterReload?: () => void | Promise<void>
 ): Promise<void> {
   try {
     configRepository.refreshManagerConfig();
@@ -1818,7 +1867,7 @@ async function reloadChangedConfig(
   }
   try {
     syncRunningGateways();
-    afterReload?.();
+    await afterReload?.();
     memoryConsolidationScheduler?.reschedule();
     console.log(`gateway-manager reloaded ${reason}`);
   } catch (error) {
@@ -1831,7 +1880,7 @@ type ConfigWatcher = { close(): void };
 
 function startConfigWatcher(
   reconcileManagerPlugins?: (reason: string) => Promise<void>,
-  afterReload?: () => void
+  afterReload?: () => void | Promise<void>
 ): ConfigWatcher {
   const watchers = new Map<string, { watcher: fs.FSWatcher; signature: string }>();
   let debounceTimer: NodeJS.Timeout | null = null;
@@ -2529,7 +2578,6 @@ function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: bool
   return { changed, messages };
 }
 
-const MESSAGE_ADAPTER_SCAN_DEADLINE_MS = 6_000;
 const NAPCAT_HEALTH_SCAN_DEADLINE_MS = 6_500;
 
 function remoteAgentMessageAdapterScanResult(): PluginMessageAdapterScanResult {
@@ -7005,14 +7053,44 @@ export function handlePersonaPluginApi(
 }
 
 export async function startManager(): Promise<void> {
-  const managerPluginHost = await getBuiltinManagerPluginHost();
+  const managerCordisRoot = getBuiltinManagerCordisRoot();
+  const managerSharedResourcesRuntime = await managerCordisRoot.ensure(
+    MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
+    mountManagerSharedResourcesRuntime(messageProcessingBoardPersistence)
+  );
+  let managerPluginHost: Awaited<ReturnType<typeof getBuiltinManagerPluginHost>>;
+  try {
+    managerPluginHost = await getBuiltinManagerPluginHost();
+  } catch (error) {
+    await managerSharedResourcesRuntime.unmount().catch(() => {});
+    await managerCordisRoot.dispose().catch(() => {});
+    throw error;
+  }
   const managerPluginRuntime = managerPluginHost.runtime;
   const managerPluginReconciler = managerPluginHost.reconciler;
-  const managerCordisRoot = getBuiltinManagerCordisRoot();
+  const disposeManagerCordisRuntime = async (): Promise<void> => {
+    let firstError: unknown;
+    try {
+      await managerPluginRuntime.unmount();
+    } catch (error) {
+      firstError = error;
+    }
+    try {
+      await managerSharedResourcesRuntime.unmount();
+    } catch (error) {
+      firstError ??= error;
+    }
+    try {
+      await managerCordisRoot.dispose();
+    } catch (error) {
+      firstError ??= error;
+    }
+    if (firstError) throw firstError;
+  };
   let managerPluginDiagnostics: ManagerPluginConfigDiagnostic[] = [];
   let managerServicesReady = false;
   let managerListenerReady = false;
-  let syncActiveRabiLinkRelay = (): void => {};
+  let syncActiveRabiLinkRelay = async (): Promise<void> => {};
   let reconcileActiveSpeech = (): void => {};
   let startActiveNapcatSupervisor = (): void => {};
   let stopActiveNapcatSupervisor = async (): Promise<void> => {};
@@ -7021,16 +7099,20 @@ export async function startManager(): Promise<void> {
   let shutdownManager = (_reason: string): void => {
     throw new Error("Manager shutdown is not ready.");
   };
-  const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.plugins.has(instanceId);
+  const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.catalog.get(instanceId)?.status === "active";
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
-  const managerPluginDefinitions = composeBuiltinManagerPluginDefinitions(
-    builtinManagerPluginDefinitions(),
-    {
+  let managerPluginDefinitions: ReturnType<typeof composeBuiltinManagerPluginDefinitions>;
+  try {
+    managerPluginDefinitions = composeBuiltinManagerPluginDefinitions(
+      builtinManagerPluginDefinitions(),
+      {
       "manager:core": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:core", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:core", "manager.core.api", [
             requestTracker.wrap(handleWebguiLanAccessApi)
+          ], [
+            { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] }
           ]);
           return async () => {
             unregister();
@@ -7044,12 +7126,20 @@ export async function startManager(): Promise<void> {
           .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:persona", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:persona", "manager.persona.api", [
             requestTracker.wrap((request, requestUrl, response) => (
               handlePersonaPluginApi(request, requestUrl, response)
               || handleLanguageStyleApi(request, requestUrl, response, languageStyleValidator)
               || handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext(true))
             ))
+          ], [
+            { routeId: "personas", kind: "exact", path: "/api/personas", methods: ["GET"] },
+            { routeId: "personas-resource", kind: "prefix", pathPrefix: "/api/personas/" },
+            { routeId: "roles-api", kind: "prefix", pathPrefix: "/api/roles/" },
+            { routeId: "roles-static", kind: "prefix", pathPrefix: "/roles/" },
+            { routeId: "persona-sync", kind: "prefix", pathPrefix: "/api/persona-sync" },
+            { routeId: "language-style-validate", kind: "exact", path: "/api/language-style/validate", methods: ["POST"] },
+            { routeId: "role-panel-messages", kind: "exact", path: "/api/role-panel/messages", methods: ["POST"] }
           ]);
           return async () => {
             unregister();
@@ -7068,8 +7158,10 @@ export async function startManager(): Promise<void> {
         reconcileActiveSpeech = reconcile;
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:speech", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:speech", "manager.speech.api", [
             requestTracker.wrap((request, requestUrl, response) => handleSpeechApi(request, requestUrl, response))
+          ], [
+            { routeId: "speech", kind: "prefix", pathPrefix: "/api/speech/" }
           ]);
           return async () => {
             active = false;
@@ -7095,8 +7187,10 @@ export async function startManager(): Promise<void> {
         });
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:performance", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:performance", "manager.performance.api", [
             requestTracker.wrap((request, requestUrl, response) => api.handle(request, requestUrl, response))
+          ], [
+            { routeId: "performance", kind: "prefix", pathPrefix: "/api/performance/" }
           ]);
           return async () => {
             unregister();
@@ -7114,22 +7208,22 @@ export async function startManager(): Promise<void> {
           { readOnly: managerReadOnly }
         );
         const requestTracker = new ManagerPluginRequestTracker();
-        bilibiliHistoryBridge = bridge;
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:bilibili-history", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:bilibili-history", "manager.bilibili-history.api", [
             requestTracker.wrap((request, requestUrl, response) => bridge.handle(request, requestUrl, response))
+          ], [
+            { routeId: "bilibili-history", kind: "prefix", pathPrefix: "/api/bilibili-history/" }
           ]);
           return async () => {
             unregister();
             await requestTracker.stop();
-            if (bilibiliHistoryBridge === bridge) bilibiliHistoryBridge = undefined;
           };
         }, "activate Manager Bilibili history plugin");
       },
       "manager:route-control": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:route-control", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:route-control", "manager.route-control.api", [
             requestTracker.wrap((request, requestUrl, response) => {
               if (handleRabiApi(request, requestUrl, response, {
                 rootDir,
@@ -7144,7 +7238,7 @@ export async function startManager(): Promise<void> {
                 writeConfig,
                 loadRuntimes,
                 syncRunningGateways,
-                syncRabiLinkRelay: syncActiveRabiLinkRelay,
+                syncRabiLinkRelay: () => syncActiveRabiLinkRelay(),
                 scanAgentAdapters: () => {
                   const service = agentAdapterCatalogService;
                   if (!service) {
@@ -7183,6 +7277,11 @@ export async function startManager(): Promise<void> {
               }
               return false;
             })
+          ], [
+            { routeId: "rabi-identity", kind: "exact", path: "/api/rabi/identity", methods: ["GET", "PATCH"] },
+            { routeId: "rabi-instances", kind: "exact", path: "/api/rabi/instances", methods: ["GET"] },
+            { routeId: "rabi-instance-resource", kind: "prefix", pathPrefix: "/api/rabi/instances/" },
+            { routeId: "manager-config", kind: "exact", path: "/manager-config", methods: ["GET", "POST"] }
           ]);
           return async () => {
             unregister();
@@ -7193,10 +7292,12 @@ export async function startManager(): Promise<void> {
       "manager:agent-state-control": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:agent-state-control", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:agent-state-control", "manager.agent-state-control.api", [
             requestTracker.wrap((request, requestUrl, response) => (
               request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)
             ))
+          ], [
+            { routeId: "agent-state", kind: "exact", path: "/api/agent-state", methods: ["POST"] }
           ]);
           return async () => {
             unregister();
@@ -7208,7 +7309,7 @@ export async function startManager(): Promise<void> {
         ctx.effect(() => {
           gatewayRuntimePluginActive = true;
           const requestTracker = new ManagerPluginRequestTracker();
-          const unregisterRoutes = managerPluginRoutes.register("manager:gateway-runtime", [
+          const unregisterRoutes = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:gateway-runtime", "manager.gateway-runtime.api", [
             requestTracker.wrap((request, requestUrl, response) => handleGatewayControlApi(
               request,
               requestUrl,
@@ -7254,6 +7355,11 @@ export async function startManager(): Promise<void> {
                 trackOperation: operation => requestTracker.trackOperation(operation)
               }
             ))
+          ], [
+            { routeId: "gateways", kind: "exact", path: "/gateways", methods: ["GET", "POST"] },
+            { routeId: "gateway-resource", kind: "prefix", pathPrefix: "/gateways/" },
+            { routeId: "network-options", kind: "exact", path: "/network-options", methods: ["GET"] },
+            { routeId: "reload", kind: "exact", path: "/reload", methods: ["POST"] }
           ]);
           if (managerServicesReady && !managerReadOnly) syncRunningGateways();
           return async () => {
@@ -7267,17 +7373,21 @@ export async function startManager(): Promise<void> {
           };
         }, "activate Manager Gateway runtime plugin");
       },
-      "manager:rabilink-relay": ctx => {
-        const sync = (): void => syncRabiLinkRelayRuntime(
-          () => { if (syncActiveRabiLinkRelay === sync) sync(); }
+      "manager:rabilink-relay": async ctx => {
+        const sync = async (): Promise<void> => syncRabiLinkRelayRuntime(
+          () => syncActiveRabiLinkRelay === sync ? sync() : undefined
         );
         syncActiveRabiLinkRelay = sync;
-        ctx.effect(() => () => {
-          if (syncActiveRabiLinkRelay === sync) syncActiveRabiLinkRelay = (): void => {};
-          personaSyncLanServer.stop();
-          rabiLinkRelayRuntime.stop();
+        ctx.effect(() => async () => {
+          if (syncActiveRabiLinkRelay === sync) {
+            syncActiveRabiLinkRelay = async (): Promise<void> => {};
+          }
+          await Promise.all([
+            personaSyncLanServer.stop(),
+            rabiLinkRelayRuntime.stop()
+          ]);
         }, "stop Manager RabiLink Relay plugin");
-        if (managerListenerReady) sync();
+        if (managerListenerReady) await sync();
       },
       "manager:memory-consolidation": ctx => {
         if (managerReadOnly) return;
@@ -7300,8 +7410,11 @@ export async function startManager(): Promise<void> {
         });
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:fennenote-output", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:fennenote-output", "manager.fennenote-output.api", [
             requestTracker.wrap((request, requestUrl, response) => service.handle(request, requestUrl, response))
+          ], [
+            { routeId: "reply", kind: "exact", path: "/api/fennenote/reply", methods: ["POST"] },
+            { routeId: "playback", kind: "exact", path: "/api/fennenote/playback", methods: ["POST"] }
           ]);
           return async () => {
             unregister();
@@ -7313,7 +7426,7 @@ export async function startManager(): Promise<void> {
       "manager:message-processing-control": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:message-processing-control", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:message-processing-control", "manager.message-processing-control.api", [
             requestTracker.wrap((request, requestUrl, response) => handleMessageProcessingApi(request, requestUrl, response, {
               boardPayload: messageProcessingBoardPayload,
               board: messageProcessingBoard,
@@ -7331,6 +7444,10 @@ export async function startManager(): Promise<void> {
               publishEvent: publishManagerEvent,
               trackOperation: operation => requestTracker.trackOperation(operation)
             }))
+          ], [
+            { routeId: "board", kind: "exact", path: "/api/message-processing/board", methods: ["GET"] },
+            { routeId: "requirements", kind: "exact", path: "/api/message-processing/requirements", methods: ["POST"] },
+            { routeId: "requirement-resource", kind: "prefix", pathPrefix: "/api/message-processing/requirements/" }
           ]);
           return async () => {
             unregister();
@@ -7461,7 +7578,7 @@ export async function startManager(): Promise<void> {
             weixinDefaultBaseUrl: () => process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com"
           });
           const requestTracker = new ManagerPluginRequestTracker();
-          const unregisterRoutes = managerPluginRoutes.register("manager:message-adapter-control", [
+          const unregisterRoutes = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:message-adapter-control", "manager.message-adapter-control.api", [
             requestTracker.wrap((request, requestUrl, response) => handleMessageAdapterControlApi(
               request,
               requestUrl,
@@ -7474,6 +7591,8 @@ export async function startManager(): Promise<void> {
                 trackOperation: operation => requestTracker.trackOperation(operation)
               }
             ))
+          ], [
+            { routeId: "scan", kind: "exact", path: "/api/scan/message-adapters", methods: ["GET"] }
           ]);
           return async () => {
             unregisterRoutes();
@@ -7490,7 +7609,11 @@ export async function startManager(): Promise<void> {
           rootDir,
           getRuntimes: () => runtimes.values(),
           jsonResponse,
-          registerRoutes: (instanceId, handlers) => managerPluginRoutes.register(instanceId, handlers)
+          registerRoutes: (instanceId, routeIdPrefix, handlers) => registerManagerPluginHandlerRoutes(managerPluginRoutes, instanceId, routeIdPrefix, handlers, [
+            { routeId: "catalog", kind: "exact", path: "/api/agent-adapters/catalog", methods: ["GET"] },
+            { routeId: "scan-agents", kind: "exact", path: "/api/scan/agents", methods: ["GET"] },
+            { routeId: "scan-dsh", kind: "exact", path: "/api/scan/agents/dsh", methods: ["GET"] }
+          ])
         });
         agentAdapterCatalogService = mount.service;
         ctx.effect(() => async () => {
@@ -7511,11 +7634,22 @@ export async function startManager(): Promise<void> {
           publishManagerEvent
         });
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:agent-communication", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:agent-communication", "manager.agent-communication.api", [
             routes.handler,
             codexHookRequestTracker.wrap((request, requestUrl, response) => (
               handleCodexHookApi(request, requestUrl, response, codexHookContextService)
             ))
+          ], [
+            { routeId: "requests", kind: "exact", path: "/api/agent/requests", methods: ["GET"] },
+            { routeId: "request-resource", kind: "prefix", pathPrefix: "/api/agent/requests/" },
+            { routeId: "send", kind: "exact", path: "/api/agent/send", methods: ["POST"] },
+            { routeId: "send-traces", kind: "exact", path: "/api/agent/send/traces", methods: ["GET"] },
+            { routeId: "send-receipts", kind: "prefix", pathPrefix: "/api/agent/send/receipts/" },
+            { routeId: "codex-context", kind: "exact", path: "/api/codex-hook/context", methods: ["POST"], handlerIndex: 1 },
+            { routeId: "codex-roles", kind: "exact", path: "/api/codex-hook/roles", methods: ["GET"], handlerIndex: 1 },
+            { routeId: "codex-doctor", kind: "exact", path: "/api/codex-hook/doctor", methods: ["GET"], handlerIndex: 1 },
+            { routeId: "codex-sessions", kind: "exact", path: "/api/codex-hook/sessions", methods: ["GET"], handlerIndex: 1 },
+            { routeId: "codex-session-resource", kind: "prefix", pathPrefix: "/api/codex-hook/sessions/", handlerIndex: 1 }
           ]);
           return async () => {
             unregister();
@@ -7537,7 +7671,11 @@ export async function startManager(): Promise<void> {
           publishEvent: publishManagerEvent
         }, operation => requestTracker.trackOperation(operation));
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:copilot-control", [requestTracker.wrap(handler)]);
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:copilot-control", "manager.copilot-control.api", [requestTracker.wrap(handler)], [
+            { routeId: "install", kind: "exact", path: "/api/agent/copilot-install", methods: ["POST"] },
+            { routeId: "login", kind: "exact", path: "/api/agent/copilot-login", methods: ["POST"] },
+            { routeId: "status", kind: "exact", path: "/api/agent/copilot-status", methods: ["GET"] }
+          ]);
           return async () => {
             unregister();
             await requestTracker.stop();
@@ -7546,25 +7684,19 @@ export async function startManager(): Promise<void> {
         }, "activate Manager Copilot control plugin");
       },
       "manager:astrbot-control": ctx => {
-        const processScope = new AgentProviderProcessScope();
         const requestTracker = new ManagerPluginRequestTracker();
         const handler = createAgentProviderControlRouteHandler("astrbot", {
           readJsonBody,
           jsonResponse,
-          testAstrbotLogin: testAstrbotLoginEndpoint,
-          deployAstrbotAdapter: () => {
-            processScope.assertAccepting();
-            return deployAstrbotAdapter(agentManagerApiCtx(), {
-              onChild: child => { processScope.track(child); }
-            });
-          }
+          testAstrbotLogin: testAstrbotLoginEndpoint
         }, operation => requestTracker.trackOperation(operation));
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:astrbot-control", [requestTracker.wrap(handler)]);
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:astrbot-control", "manager.astrbot-control.api", [requestTracker.wrap(handler)], [
+            { routeId: "login-test", kind: "exact", path: "/api/agent/astrbot-login-test", methods: ["POST"] }
+          ]);
           return async () => {
             unregister();
             await requestTracker.stop();
-            await processScope.stop();
           };
         }, "activate Manager AstrBot control plugin");
       },
@@ -7576,7 +7708,9 @@ export async function startManager(): Promise<void> {
           openMarvis: body => openMarvis(agentManagerApiCtx(), body)
         }, operation => requestTracker.trackOperation(operation));
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:marvis-control", [requestTracker.wrap(handler)]);
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:marvis-control", "manager.marvis-control.api", [requestTracker.wrap(handler)], [
+            { routeId: "open", kind: "exact", path: "/api/agent/marvis-open", methods: ["POST"] }
+          ]);
           return async () => {
             unregister();
             await requestTracker.stop();
@@ -7600,7 +7734,9 @@ export async function startManager(): Promise<void> {
           operationalError: error => managerOperationalError(error, rootDir)
         });
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:agent-thread-control", [routes.handler]);
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:agent-thread-control", "manager.agent-thread-control.api", [routes.handler], [
+            { routeId: "threads", kind: "exact", path: "/api/agent/threads", methods: ["GET", "POST"] }
+          ]);
           return async () => {
             unregister();
             await routes.stopAcceptingAndDrain();
@@ -7667,7 +7803,7 @@ export async function startManager(): Promise<void> {
           if (gatewayId && instanceId) ownedInstances.delete(`${gatewayId}:${instanceId}`);
         };
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:napcat-control", [
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:napcat-control", "manager.napcat-control.api", [
             requestTracker.wrap((request, requestUrl, response) => handleNapcatControlApi(
               request,
               requestUrl,
@@ -7689,6 +7825,15 @@ export async function startManager(): Promise<void> {
                 })
               }
             ))
+          ], [
+            { routeId: "repair-all", kind: "exact", path: "/api/message/napcat-repair-all", methods: ["POST"] },
+            { routeId: "ensure-ready", kind: "exact", path: "/api/message/napcat-ensure-ready", methods: ["POST"] },
+            { routeId: "health", kind: "exact", path: "/api/message/napcat-health", methods: ["POST"] },
+            { routeId: "configure-onebot", kind: "exact", path: "/api/message/napcat-configure-onebot", methods: ["POST"] },
+            { routeId: "add", kind: "exact", path: "/api/message/napcat-add", methods: ["POST"] },
+            { routeId: "launch", kind: "exact", path: "/api/message/napcat-launch", methods: ["POST"] },
+            { routeId: "restart", kind: "exact", path: "/api/message/napcat-restart", methods: ["POST"] },
+            { routeId: "remove", kind: "exact", path: "/api/message/napcat-remove", methods: ["POST"] }
           ]);
           if (managerListenerReady) startActiveNapcatSupervisor();
           return async () => {
@@ -7746,7 +7891,7 @@ export async function startManager(): Promise<void> {
           });
           const requestTracker = new ManagerPluginRequestTracker();
           remoteAgentHub = hub;
-          const unregisterRoutes = managerPluginRoutes.register("manager:remote-agent", [
+          const unregisterRoutes = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:remote-agent", "manager.remote-agent.api", [
             requestTracker.wrap((request, requestUrl, response) => handleRemoteAgentPluginApi(
               request,
               requestUrl,
@@ -7765,6 +7910,13 @@ export async function startManager(): Promise<void> {
                 trackOperation: operation => requestTracker.trackOperation(operation)
               }
             ))
+          ], [
+            { routeId: "devices", kind: "exact", path: "/api/remote-agent/devices", methods: ["GET"] },
+            { routeId: "scan", kind: "exact", path: "/api/remote-agent/scan", methods: ["POST"] },
+            { routeId: "connect", kind: "exact", path: "/api/remote-agent/connect", methods: ["POST"] },
+            { routeId: "disconnect", kind: "exact", path: "/api/remote-agent/disconnect", methods: ["POST"] },
+            { routeId: "tasks", kind: "exact", path: "/api/remote-agent/tasks", methods: ["GET", "POST"] },
+            { routeId: "task-events", kind: "exact", path: "/api/remote-agent/task-events", methods: ["POST"] }
           ]);
           return async () => {
             unregisterRoutes();
@@ -7814,7 +7966,10 @@ export async function startManager(): Promise<void> {
           )
         });
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:diagnostics", [routes.handler]);
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:diagnostics", "manager.diagnostics.api", [routes.handler], [
+            { routeId: "meta", kind: "exact", path: "/meta", methods: ["GET"] },
+            { routeId: "gateways", kind: "exact", path: "/api/gateways", methods: ["GET"] }
+          ]);
           return async () => {
             unregister();
             await routes.stopAcceptingAndDrain();
@@ -7838,15 +7993,25 @@ export async function startManager(): Promise<void> {
           settingsHandler: (request, requestUrl, response) => handleDesktopSettingsApi(request, requestUrl, response)
         });
         ctx.effect(() => {
-          const unregister = managerPluginRoutes.register("manager:desktop", [routes.handler]);
+          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:desktop", "manager.desktop.api", [routes.handler], [
+            { routeId: "settings", kind: "exact", path: "/api/desktop/settings", methods: ["GET", "PATCH", "PUT"] },
+            { routeId: "open-config-file", kind: "exact", path: "/open-config-file", methods: ["POST"] },
+            { routeId: "manager-start", kind: "exact", path: "/manager/start", methods: ["POST"] },
+            { routeId: "desktop-lifecycle-start", kind: "exact", path: "/manager/desktop-lifecycle/start", methods: ["POST"] },
+            { routeId: "manager-shutdown", kind: "exact", path: "/manager/shutdown", methods: ["POST"] }
+          ]);
           return async () => {
             unregister();
             await routes.stopAcceptingAndDrain();
           };
         }, "activate Manager desktop plugin");
       }
-    }
-  );
+      }
+    );
+  } catch (error) {
+    await disposeManagerCordisRuntime().catch(() => {});
+    throw error;
+  }
 
   const reconcileManagerPlugins = async (reason: string): Promise<void> => {
     const normalized = normalizeManagerPluginConfig(readManagerConfig(), managerPluginDefinitions);
@@ -7864,9 +8029,14 @@ export async function startManager(): Promise<void> {
     for (const diagnostic of managerPluginDiagnostics) console.warn(diagnostic.message);
   };
 
-  await reconcileManagerPlugins("manager startup");
-  if (!managerPluginRuntime.plugins.has("manager:core")) {
-    throw new Error("Required Manager plugin failed to activate: manager:core");
+  try {
+    await reconcileManagerPlugins("manager startup");
+    if (!managerPluginActive("manager:core")) {
+      throw new Error("Required Manager plugin failed to activate: manager:core");
+    }
+  } catch (error) {
+    await disposeManagerCordisRuntime().catch(() => {});
+    throw error;
   }
   let configWatcher: ConfigWatcher | null = null;
   let removeSignalHandlers = (): void => {};
@@ -8009,7 +8179,7 @@ export async function startManager(): Promise<void> {
     result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
   });
   managerListenerReady = true;
-  syncActiveRabiLinkRelay();
+  await syncActiveRabiLinkRelay();
   memoryConsolidationScheduler?.start();
   startActiveNapcatSupervisor();
   startActivePlanFeedbackRecovery();
@@ -8031,11 +8201,10 @@ export async function startManager(): Promise<void> {
     console.log(`gateway-manager shutting down: ${reason}`);
     managerOperationalLog.record("info", "manager_shutdown_requested", { result: reason });
     stopManagerResources();
-    const managerCordisDispose = managerCordisRoot.dispose()
+    const managerCordisDispose = disposeManagerCordisRuntime()
       .then(() => manualTriggerProcesses.stopAll());
     activeServer.close(() => {
       void Promise.allSettled([
-        messageProcessingBoardPersistence.flush(),
         managerOperationalLog.flush(),
         managerCordisDispose
       ]).finally(() => process.exit(0));
@@ -8050,9 +8219,8 @@ export async function startManager(): Promise<void> {
       await new Promise<void>(resolve => server?.close(() => resolve()));
     }
     await Promise.allSettled([
-      messageProcessingBoardPersistence.flush(),
       managerOperationalLog.flush(),
-      managerCordisRoot.dispose().then(() => manualTriggerProcesses.stopAll())
+      disposeManagerCordisRuntime().then(() => manualTriggerProcesses.stopAll())
     ]);
     throw error;
   }

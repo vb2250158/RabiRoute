@@ -1,4 +1,4 @@
-import { computed, shallowRef, type Ref } from "vue";
+import { computed, ref, type Ref } from "vue";
 
 export type PageSaveAction = {
   dirty: Ref<boolean>;
@@ -7,13 +7,30 @@ export type PageSaveAction = {
   save: () => Promise<void>;
 };
 
-const activePageSaveAction = shallowRef<PageSaveAction | null>(null);
+const registeredActions = new Set<PageSaveAction>();
+const actionRevision = ref(0);
 
-export const pageSaveAction = computed(() => activePageSaveAction.value);
+export const pageSaveAction = computed<PageSaveAction | null>(() => {
+  void actionRevision.value;
+  const actions = [...registeredActions];
+  if (!actions.length) return null;
+  return {
+    dirty: computed(() => actions.some(action => action.dirty.value)),
+    ready: computed(() => actions.every(action => action.ready.value)),
+    saving: computed(() => actions.some(action => action.saving.value)),
+    save: async () => {
+      for (const action of actions) await action.save();
+    }
+  };
+});
 
 export function registerPageSaveAction(action: PageSaveAction): () => void {
-  activePageSaveAction.value = action;
+  registeredActions.add(action);
+  actionRevision.value += 1;
+  let active = true;
   return () => {
-    if (activePageSaveAction.value === action) activePageSaveAction.value = null;
+    if (!active) return;
+    active = false;
+    if (registeredActions.delete(action)) actionRevision.value += 1;
   };
 }

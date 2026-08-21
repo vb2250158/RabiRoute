@@ -23,6 +23,8 @@ import { personaOptionDisplayName } from "../personaPresentation";
 import { SpeechControlRequestError, speechControlClient } from "../speech/speechControlClient";
 import { transcriptSpeakerPresentation } from "../speech/speechSpeakerPresentation";
 import { pluginCatalogStore } from "../pluginCatalogStore";
+import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
+import { webRenderersAt } from "../pluginRenderers";
 
 const ModelManagementPage = defineAsyncComponent(() => import("./ModelManagementPage.vue"));
 
@@ -30,7 +32,7 @@ type AudioInput = { title: string; value: number; default?: boolean };
 
 const store = useGatewayStore();
 const speech = useSpeechStore();
-const speechStatusVisible = computed(() => pluginCatalogStore.visibility.value.speechStatus);
+const speechStatusRenderers = computed(() => webRenderersAt(pluginCatalogStore.statusRenderers.value, "route.speech.summary"));
 const {
   status,
   models,
@@ -142,6 +144,12 @@ const stateColor = computed(() => ({
   invalid: "error"
 }[status.value?.state || "offline"]));
 const currentDefault = computed(() => status.value?.defaults[activeKind.value] || "未设置");
+const speechStatusContext = computed(() => ({
+  computerName: computerName.value,
+  status: status.value,
+  stateLabel: stateLabel.value,
+  stateColor: stateColor.value
+}));
 const ttsModels = computed(() => models.value.filter(item => item.capability === "tts"));
 const asrModels = computed(() => models.value.filter(item => item.capability === "asr"));
 const personaNames = computed(() => {
@@ -1027,31 +1035,7 @@ onBeforeUnmount(() => {
       </v-tabs>
     </v-card>
 
-    <section v-if="speechStatusVisible" class="speech-status-grid" aria-label="语音服务摘要">
-      <v-card class="app-card glass-card speech-stat-card">
-        <div class="stat-label">当前电脑</div>
-        <div class="stat-value speech-stat-value">{{ computerName }}</div>
-        <div class="stat-note">每台 Rabi 独立探测</div>
-      </v-card>
-      <v-card class="app-card glass-card speech-stat-card">
-        <div class="stat-label">RabiSpeech</div>
-        <div class="speech-stat-line">
-          <div class="stat-value speech-stat-value">{{ stateLabel }}</div>
-          <v-chip size="small" :color="stateColor" variant="tonal">{{ status ? stateLabel : "检查中" }}</v-chip>
-        </div>
-        <div class="stat-note">{{ status?.latencyMs != null ? `${status.latencyMs} ms 状态检查` : "等待本机服务" }}</div>
-      </v-card>
-      <v-card class="app-card glass-card speech-stat-card">
-        <div class="stat-label">TTS provider</div>
-        <div class="stat-value speech-stat-value">{{ status?.providers.tts.length ?? "-" }}</div>
-        <div class="stat-note">默认 {{ status?.defaults.tts || "未发现" }}</div>
-      </v-card>
-      <v-card class="app-card glass-card speech-stat-card">
-        <div class="stat-label">ASR provider</div>
-        <div class="stat-value speech-stat-value">{{ status?.providers.asr.length ?? "-" }}</div>
-        <div class="stat-note">默认 {{ status?.defaults.asr || "未发现" }}</div>
-      </v-card>
-    </section>
+    <TrustedWebRendererHost :renderers="speechStatusRenderers" :context="speechStatusContext" />
 
     <v-alert class="speech-boundary" type="info" variant="tonal" icon="mdi-transit-connection-variant">
       <strong>边界：</strong>RabiLink 是整个系统内置的转接服务，不是消息端。语音 API 可在本机直接调用，也可由 RabiLink 中转；眼镜、手机或其他客户端才是消息来源/调用端。

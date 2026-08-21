@@ -119,11 +119,13 @@ flowchart TB
 
 ### 插件化 Manager
 
-26 个内置 Manager 插件迁移已经完成，并在同一个 Cordis 根 Context 下注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务 HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。统一验证已于 2026-08-21 通过。
+26 个内置 Manager 插件迁移已经完成。正式启动只有一条初始化路径：`startManager()` 先把共享资源挂到 Manager 根 Context，再把内置定义与业务 `apply` hook 合成，随后执行首次对账。插件定义声明 `provides`、`requires` 和 `optional`。缺少必需能力的消费者进入 `waiting_dependency`；可选 Provider 存在时参与启动排序；Provider revision 或活动状态变化会沿能力依赖链重启真实消费者；同一能力出现多个已启用 Provider 时拒绝对账。
 
-表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；HTTP 路由不属于表现贡献。WebGUI 和 Desktop 是最小扩展宿主。宿主拥有的可信注册表可以注册新的 renderer、route、handler 和 resource contract；未知或未注册贡献失败关闭。`manager:diagnostics` 拥有 `GET /meta` 和 `GET /api/gateways`；`manager:desktop` 拥有桌面设置、打开配置、启动/生命周期和关闭接口。Cordis `isolate` 不是安全沙箱。第三方任意表现代码的受控 Extension Host 属于后续路线。
+业务 HTTP 路由使用稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` 声明；`dynamic` 只保留为扩展合同。`ManagerPluginRouteRegistry` 拒绝重复路由 ID，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突。Manager 根 Fiber 持有三个共享读取 Worker Pool 和消息处理合并持久化服务。停止时拒绝新工作、取消排队和共享请求、刷新待写数据、终止 Worker 并等待退出。RabiLink 停止会中止 Relay 工作，关闭人格同步 listener 与 Socket，并等待 Relay、SSE、WebGUI 和语音 drain；停止期间若排队了重启，第二次 `stop()` 会清除目标配置并取消该重启。配置 watcher 和 Rabi 身份配置接口都会等待异步 Relay 同步完成后再结束重载或返回。
 
-插件停用时先撤销路由并拒绝新请求，已接收的响应最多等待 30 秒，然后关闭剩余资源。仍在运行的 Remote Agent 任务记为 `interrupted`。NapCat 只停止 `manager:napcat-control` 明确启动的实例，不认领扫描发现的外部实例。
+表现 Contribution Catalog 发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 与 Desktop 的可信合同都绑定 `pluginId + instanceId`，目录引用必须解析到同一插件实例；未知、未注册或跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动等桌面设置。插件停用后，系统划词、目录操作和手动触发入口随之撤销；目录读取失败时立即撤销旧命令、renderer、面板操作和系统监听，并只保留固定 WebGUI 恢复入口。
+
+AstrBot 现在必须配置 `ASTRBOT_SESSION_ID`，并且只调用 ChatUI `POST /api/chat/send`。已删除 `POST /api/plugins/reconcile`、两个 Agent availability 接口、`/api/playback/request`、AstrBot `/api/plug/rabiroute_agent/chat` 和 `/api/deploy-astrbot-adapter`。对应使用 `GET/POST /api/plugins/reconciliation`、`/api/scan/agents`、`/api/scan/agents/dsh` 和 `/api/fennenote/playback`。
 
 ## 当前能力
 

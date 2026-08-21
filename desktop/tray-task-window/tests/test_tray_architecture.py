@@ -25,9 +25,17 @@ class TrayArchitectureTest(unittest.TestCase):
         self.assertNotIn("manager.role_panel_messages", source)
         self.assertNotIn("setContextMenu(", source)
 
-    def test_packaged_tray_does_not_force_local_role_repositories_into_runtime(self) -> None:
-        spec = (TRAY_ROOT.parent.parent / "RabiRoute-Desktop.spec").read_text(encoding="utf-8")
+    def test_local_role_repositories_are_removed_from_runtime_and_imports(self) -> None:
+        package_root = TRAY_ROOT / "rabiroute_tray"
+        removed_modules = ("task_repository", "role_context_repository")
+        for module_name in removed_modules:
+            self.assertFalse((package_root / f"{module_name}.py").exists())
+        for source_path in package_root.glob("*.py"):
+            source = source_path.read_text(encoding="utf-8")
+            for module_name in removed_modules:
+                self.assertNotIn(module_name, source, source_path.name)
 
+        spec = (TRAY_ROOT.parent.parent / "RabiRoute-Desktop.spec").read_text(encoding="utf-8")
         self.assertNotIn('"rabiroute_tray.task_repository"', spec)
         self.assertNotIn('"rabiroute_tray.role_context_repository"', spec)
 

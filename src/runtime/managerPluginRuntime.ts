@@ -32,6 +32,9 @@ export type ManagerPluginDefinition = {
   instanceId: string;
   manifest: RabiPluginManifest;
   scope?: string;
+  provides?: readonly string[];
+  requires?: readonly string[];
+  optional?: readonly string[];
   missingCapabilities?: readonly string[];
   contributions?: readonly RabiUiContribution[];
   apply?(ctx: RabiCordisContext): void | Promise<void>;
@@ -60,6 +63,12 @@ function pluginErrorSummary(error: unknown): RabiPluginErrorSummary {
   };
 }
 
+export function managerCapabilityService(capability: string): string {
+  const normalized = capability.trim();
+  if (!normalized) throw new Error("Manager plugin capability is required.");
+  return `rabi.manager.capability.${normalized}`;
+}
+
 function definitionPlugin(
   definition: ManagerPluginDefinition,
   instanceId: string,
@@ -67,8 +76,15 @@ function definitionPlugin(
 ): RabiCordisPlugin {
   return {
     name: `rabi:manager-plugin/${instanceId}`,
-    inject: [PLUGIN_CATALOG_SERVICE, CONTRIBUTION_REGISTRY_SERVICE],
+    inject: [
+      PLUGIN_CATALOG_SERVICE,
+      CONTRIBUTION_REGISTRY_SERVICE,
+      ...(definition.requires ?? []).map(managerCapabilityService)
+    ],
     async apply(ctx) {
+      for (const capability of definition.provides ?? []) {
+        ctx.provide(managerCapabilityService(capability), { capability, instanceId });
+      }
       if (definition.contributions?.length) {
         const registry = ctx.get(CONTRIBUTION_REGISTRY_SERVICE, true) as ContributionRegistry;
         ctx.effect(
@@ -117,24 +133,17 @@ export async function mountManagerPluginRuntime(
       }
 
       const existing = catalog.get(requestedInstanceId);
-      const declaration = existing ?? catalog.declare({
+      const requestedDeclaration = {
         instanceId: requestedInstanceId,
         manifest: definition.manifest,
         host: "manager",
         scope: definition.scope,
         missingCapabilities: definition.missingCapabilities
-      });
+      } as const;
+      const declaration = existing
+        ? catalog.refreshDeclaration(requestedDeclaration)
+        : catalog.declare(requestedDeclaration);
       const { instanceId, pluginId } = declaration;
-      if (existing) {
-        const requestedPluginId = definition.manifest.id.trim();
-        const requestedScope = (definition.scope ?? "global").trim();
-        if (pluginId !== requestedPluginId || declaration.host !== "manager" || declaration.scope !== requestedScope) {
-          throw new Error(`Manager plugin instance declaration changed: ${instanceId}`);
-        }
-        if (!(["failed", "inactive", "waiting_dependency"] as const).includes(declaration.status as "failed" | "inactive" | "waiting_dependency")) {
-          throw new Error(`Manager plugin cannot be remounted from status ${declaration.status}: ${instanceId}`);
-        }
-      }
 
       let pluginMounted = true;
       let fiber: RabiCordisFiber | undefined;
