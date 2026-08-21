@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
 import { config } from "./config.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
-import type { MessageAdapter, MessageAdapterType } from "./adapters/messageAdapter.js";
 import { triggerManualRule } from "./manualTrigger.js";
 import { forwardMessageAndWait, recordMessageContextOnly, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
 import {
@@ -32,23 +29,6 @@ import type { WearableHealthAlert } from "./wearableHealth.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
 import { renderRabiDelivery, type RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
 import { createMessageAdapterRuntime } from "./runtime/messageAdapterRuntime.js";
-
-type GatewayStatus = {
-  messageAdapter?: {
-    type?: MessageAdapterType;
-    status?: "running" | "placeholder" | "disabled" | "error";
-    message?: string;
-    updatedAt?: string;
-  };
-  messageAdapters?: Record<string, {
-    type?: MessageAdapterType;
-    status?: "running" | "placeholder" | "disabled" | "error";
-    message?: string;
-    updatedAt?: string;
-  }>;
-};
-
-const statusPath = path.join(config.dataDir, "gateway-status.json");
 
 function deliverySummary(result: ForwardDeliveryResult): string {
   const failedAdapters = result.adapterOutcomes.filter((outcome) => outcome.status === "failed").length;
@@ -367,75 +347,8 @@ if (directAgentEnvelopeArg) {
   }
 }
 
-function readGatewayStatus(): GatewayStatus {
-  if (!fs.existsSync(statusPath)) {
-    return {};
-  }
-
-  try {
-    return JSON.parse(fs.readFileSync(statusPath, "utf8")) as GatewayStatus;
-  } catch {
-    return {};
-  }
-}
-
-function patchMessageAdapterStatus(patch: NonNullable<GatewayStatus["messageAdapter"]>): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  const status = readGatewayStatus();
-  const type = patch.type ?? status.messageAdapter?.type ?? "disabled";
-  fs.writeFileSync(statusPath, JSON.stringify({
-    ...status,
-    messageAdapter: {
-      ...status.messageAdapter,
-      ...patch,
-      updatedAt: new Date().toISOString()
-    },
-    messageAdapters: {
-      ...status.messageAdapters,
-      [type]: {
-        ...status.messageAdapters?.[type],
-        ...patch,
-        updatedAt: new Date().toISOString()
-      }
-    }
-  }, null, 2), "utf8");
-}
-
-function createPlaceholderAdapter(type: Exclude<MessageAdapterType, "napcat" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "feishu" | "heartbeat">): MessageAdapter {
-  return {
-    type,
-    start() {
-      const status = type === "disabled" ? "disabled" : type === "rolePanel" || type === "speech" ? "running" : "placeholder";
-      const message = type === "disabled"
-        ? "消息适配端已禁用。"
-        : type === "rolePanel"
-          ? "角色面板是 RabiRoute 内置本地消息端，由 manager/托盘窗口提供入口。"
-        : type === "speech"
-          ? "语音消息端是 RabiRoute 内置本地消息端，由 RabiPC 与 RabiSpeech 提供麦克风、ASR、TTS 和排队播放。"
-        : type === "remoteAgent"
-          ? "远端 Agent 消息端由 manager 的 /api/remote-agent 与 WebSocket bridge 提供入口；gateway 子进程不单独监听。"
-        : `${type} 消息适配端尚未实现，当前仅作为框架占位。`;
-      patchMessageAdapterStatus({ type, status, message });
-      console.log(message);
-    }
-  };
-}
-
-function createMessageAdapterByType(type: MessageAdapterType): MessageAdapter {
-  if (type === "wearable") {
-    throw new Error("wearable is a Manager-owned message entry and cannot create a Gateway adapter.");
-  }
-  if (type === "heartbeat" || type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "webhook" || type === "fennenote" || type === "xiaoai" || type === "rabilink") {
-    throw new Error(`${type} message adapter must be mounted through the Cordis registry.`);
-  }
-  return createPlaceholderAdapter(type);
-}
-
-const adapterTypes = config.messageAdapterTypes.length > 0
-  ? config.messageAdapterTypes
-  : [config.messageAdapterType];
+const adapterTypes = config.gatewayMessageAdapterTypes;
 const messageAdapterRuntime = await createMessageAdapterRuntime();
-const legacyDisposers: Array<() => void | Promise<void>> = [];
 const stopPerformanceReporter = startGatewayPerformanceReporter();
 let gatewayDisposePromise: Promise<void> | undefined;
 
@@ -443,9 +356,6 @@ function disposeGatewayRuntime(): Promise<void> {
   if (!gatewayDisposePromise) {
     gatewayDisposePromise = (async () => {
       stopPerformanceReporter();
-      for (const dispose of legacyDisposers.splice(0).reverse()) {
-        await dispose();
-      }
       await messageAdapterRuntime.dispose();
     })();
   }
@@ -458,29 +368,7 @@ process.once("beforeExit", () => void disposeGatewayRuntime());
 
 try {
   for (const type of adapterTypes) {
-    if (type === "wearable") {
-      patchMessageAdapterStatus({
-        type,
-        status: "running",
-        message: "智能穿戴健康数据由 Manager API 接收；Gateway 不创建 Wearable Adapter。"
-      });
-      continue;
-    }
-    if (messageAdapterRuntime.registry.manifest(type)) {
-      await messageAdapterRuntime.mount(type);
-      continue;
-    }
-
-    const adapter = createMessageAdapterByType(type);
-    patchMessageAdapterStatus({
-      type: adapter.type,
-      status: "running",
-      message: `Starting ${adapter.type} message adapter.`
-    });
-    const dispose = await adapter.start();
-    if (typeof dispose === "function") {
-      legacyDisposers.push(dispose);
-    }
+    await messageAdapterRuntime.mount(type);
   }
 } catch (error) {
   await disposeGatewayRuntime();

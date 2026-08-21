@@ -47,3 +47,10 @@ test("weixin_chat preset resolves to source-bound personal Weixin text", () => {
   assert.equal(pipeline.replyToSource, true);
   assert.equal(pipeline.preventFeedbackLoop, true);
 });
+
+
+test("pipeline inputs accept Manager-owned endpoints and reject the legacy disabled sentinel", () => {
+  assert.equal(normalizePipelineDefinition({ inputAdapter: "wearable" })?.inputAdapter, "wearable");
+  assert.equal(normalizePipelineDefinition({ inputAdapter: "speech" })?.inputAdapter, "speech");
+  assert.equal(normalizePipelineDefinition({ inputAdapter: "disabled" })?.inputAdapter, undefined);
+});

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { MessageAdapterType } from "../adapters/messageAdapter.js";
+import type { GatewayMessageAdapterType, MessageEndpointType } from "../adapters/messageAdapter.js";
 
 type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -22,7 +22,7 @@ export type AdapterEndpoint = {
 };
 
 export type MessageAdapterScanResult = {
-  type: Exclude<MessageAdapterType, "disabled">;
+  type: MessageEndpointType;
   label: string;
   maturity: AgentMaturity;
   installed: boolean;
@@ -34,14 +34,14 @@ export type MessageAdapterScanResult = {
 
 export type WebhookLikeScanContext<Runtime> = {
   rootDir: string;
-  adapterRuntimes: (type: MessageAdapterType) => Runtime[];
-  routeCallbackEndpoint: (runtime: Runtime, type: MessageAdapterType) => AdapterEndpoint | null;
-  routeHasRecentMessages: (runtime: Runtime, type: MessageAdapterType) => boolean;
+  adapterRuntimes: (type: MessageEndpointType) => Runtime[];
+  routeCallbackEndpoint: (runtime: Runtime, type: MessageEndpointType) => AdapterEndpoint | null;
+  routeHasRecentMessages: (runtime: Runtime, type: MessageEndpointType) => boolean;
   checkHttpEndpoint: (url: string, timeoutMs?: number) => Promise<boolean>;
   fenneNotePlaybackUrl: string;
 };
 
-function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<MessageAdapterType, "fennenote" | "xiaoai" | "rabilink" | "webhook">): {
+function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extract<GatewayMessageAdapterType, "fennenote" | "xiaoai" | "rabilink" | "webhook">): {
   runtimes: Runtime[];
   callbacks: AdapterEndpoint[];
   callbackReady: boolean;

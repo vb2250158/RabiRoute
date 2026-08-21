@@ -1327,7 +1327,7 @@ function buildAgentMessage(
     ]),
     section("主动协作要求", proactiveCommunicationPolicyLines(communicationModeForRouteKind(routeKind))),
     section("发送要求", replyDeliveryLines(values, !hasPersona)),
-    config.messageAdapterTypes.includes("remoteAgent")
+    config.messageEndpointTypes.includes("remoteAgent")
       ? section("远端 Agent 设备", remoteAgentApiHint(values))
       : "",
     pendingConsolidation ? section("待整理记忆", pendingConsolidationLines) : "",

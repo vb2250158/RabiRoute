@@ -402,7 +402,7 @@ export function handleWearableHealthRelayTask(
 ): boolean {
   const observation = wearableHealthObservationFromTask(task);
   if (!observation) return false;
-  const enabled = options.enabled ?? config.messageAdapterTypes.includes("wearable");
+  const enabled = options.enabled ?? config.messageEndpointTypes.includes("wearable");
   const appendLog = options.appendLog ?? appendAdapterLog;
   if (!enabled) {
     appendLog("wearable", {

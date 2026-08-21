@@ -14,7 +14,7 @@ import {
 } from "./rolePanelTimeline.js";
 import {
   messageAdapterPolicyFor,
-  type MessageAdapterType,
+  type MessageEndpointType,
   type MessageAdapterPolicies,
   type MessageAdapterPolicy,
   type MessagePayloadKind
@@ -994,7 +994,7 @@ function feishuEndpoint(route: ResolvedRoute): FeishuEndpoint | undefined {
 function appendAdapterReply(
   options: AgentReplyOptions,
   route: ResolvedRoute,
-  adapterType: MessageAdapterType,
+  adapterType: MessageEndpointType,
   target: SourceRecord,
   content: ReplyContent,
   request: AgentReplyRequest

@@ -2,7 +2,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
-import type { MessageAdapterType } from "./adapters/messageAdapter.js";
+import {
+  isGatewayMessageAdapterType,
+  isMessageEndpointType,
+  type GatewayMessageAdapterType,
+  type LegacyMessageAdapterType,
+  type MessageEndpointType
+} from "./shared/messageEndpointTypes.js";
+
+type MessageAdapterType = LegacyMessageAdapterType;
 import { normalizePipelineDefinition, resolvePipeline, type PipelineDefinition, type ResolvedPipeline } from "./pipelines.js";
 import {
   normalizeRecentMessageLimits,
@@ -171,12 +179,11 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
 
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {
   const adapters = items
-    .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)))
-    .filter((item): item is MessageAdapterType => item === "napcat" || item === "remoteAgent" || item === "speech" || item === "fennenote" || item === "xiaoai" || item === "rabilink" || item === "wearable" || item === "webhook" || item === "wecom" || item === "weixin" || item === "feishu" || item === "heartbeat" || item === "rolePanel" || item === "disabled");
+    .map((item) => parseMessageAdapterType(item == null ? undefined : String(item)));
   if (adapters.includes("disabled")) {
     return ["disabled"];
   }
-  return [...new Set(adapters)].filter((item) => item !== "disabled");
+  return [...new Set(adapters)].filter(isMessageEndpointType);
 }
 
 export function parseMessageAdapterTypes(rawTypes: string | undefined, rawType: string | undefined): MessageAdapterType[] {
@@ -462,9 +469,12 @@ const activeCodexPlanAssistantSessions: CodexPlanAssistantSession[] = codexPlanA
   ? configuredCodexPlanAssistantSessions.map((session) => ({ ...session, model: codexPlanAssistantModel }))
   : [];
 const messageAdapterTypes = parseMessageAdapterTypes(process.env.MESSAGE_ADAPTER_TYPES, process.env.MESSAGE_ADAPTER_TYPE);
+const messageEndpointTypes: MessageEndpointType[] = messageAdapterTypes.filter(isMessageEndpointType);
+const gatewayMessageAdapterTypes: GatewayMessageAdapterType[] = messageEndpointTypes.filter(isGatewayMessageAdapterType);
+const messageInputsDisabled = messageAdapterTypes.includes("disabled");
 const messageAdapterPolicies = normalizeMessageAdapterPolicies(
   parseJsonEnvironmentValue(process.env.MESSAGE_ADAPTER_POLICIES, "MESSAGE_ADAPTER_POLICIES"),
-  messageAdapterTypes
+  messageEndpointTypes
 );
 const defaultNapCatInstance: NapCatInstanceConfig = {
   id: "default",
@@ -485,6 +495,9 @@ const primaryNapcatInstance = napcatInstances.find((item) => item.enabled) ?? na
 export const config = {
   messageAdapterType: parseMessageAdapterType(process.env.MESSAGE_ADAPTER_TYPE),
   messageAdapterTypes,
+  messageEndpointTypes,
+  gatewayMessageAdapterTypes,
+  messageInputsDisabled,
   messageAdapterPolicies,
   heartbeatIntervalSeconds: parsePositiveNumber(process.env.HEARTBEAT_INTERVAL_SECONDS, 900),
   heartbeatMessage: process.env.HEARTBEAT_MESSAGE || "定时心跳巡检：请按当前计划、记忆和可用状态执行必要检查。",

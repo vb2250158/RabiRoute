@@ -2,7 +2,7 @@
 
 # RabiRoute 基于 Cordis 的插件运行时重构设计
 
-> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的通用 Webhook、FenneNote、XiaoAI、RabiLink、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 切片已实施；其余消息端与 Manager/Gateway 全量迁移仍在进行。
+> 状态：已选设计方向。阶段 0、阶段 1、Contribution Registry 合同，以及阶段 2 的全部常驻 Gateway 消息端生命周期和宿主类型拆分已实施；单一 Gateway 根 Context、Manager 插件目录与多宿主表现扩展仍在进行。
 >
 > 主要读者：RabiRoute 维护者、Manager/Gateway 开发者、WebGUI/Desktop 开发者与插件作者。
 
@@ -324,9 +324,9 @@ plugins:
 
 ### 阶段 2：消息端完整生命周期
 
-通用 Webhook、FenneNote、XiaoAI、RabiLink、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。FenneNote 和 XiaoAI 复用通用 Webhook 的 listener 生命周期，但保留各自的端口、路径、事件类型、消息记录和 Route 来源。RabiLink Fiber 同时持有 HTTP listener 与 Relay worker 租约；最后一个租约释放时取消 SSE、任务领取、附件下载、完成确认和重连等待。Wearable 不再创建 Gateway Adapter，也不再启动共享 Relay worker；健康数据入口继续由 Manager API 持有。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 持有入站 SDK 客户端；Weixin Fiber 持有二维码请求、长轮询、等待和入站媒体下载的取消信号；Feishu Fiber 持有独立事件回调 listener 和现有连接。卸载会释放或中止对应资源、阻止迟到结果继续写状态、消息记录或投递，并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 优先挂载已注册消息端，其余消息端继续走兼容创建入口。
+通用 Webhook、FenneNote、XiaoAI、RabiLink、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已通过 `MessageAdapterDefinition` 与 manifest 注册到 `MessageAdapterRegistry`。FenneNote 和 XiaoAI 复用通用 Webhook 的 listener 生命周期，但保留各自的端口、路径、事件类型、消息记录和 Route 来源。RabiLink Fiber 同时持有 HTTP listener 与 Relay worker 租约；最后一个租约释放时取消 SSE、任务领取、附件下载、完成确认和重连等待。Wearable 不再创建 Gateway Adapter，也不再启动共享 Relay worker；健康数据入口继续由 Manager API 持有。Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有全部定时器；NapCat Fiber 持有多实例 OneBot WebSocket listener 和已连接客户端；WeCom Fiber 持有入站 SDK 客户端；Weixin Fiber 持有二维码请求、长轮询、等待和入站媒体下载的取消信号；Feishu Fiber 持有独立事件回调 listener 和现有连接。卸载会释放或中止对应资源、阻止迟到结果继续写状态、消息记录或投递，并写入 `disabled`；启动中途失败会回滚已创建资源并写入 `error`。`src/index.ts` 只挂载注册为 Gateway 插件的消息端。`speech`、`rolePanel`、`wearable` 和 `remoteAgent` 继续由 Manager/Desktop 业务入口处理，不再创建占位 Adapter 或空 Gateway 子进程。
 
-测试已覆盖 Webhook 和 Feishu 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收、WeCom 的 SDK 客户端生命周期，以及 Weixin 的长轮询取消、迟到结果失效和重复挂载。Feishu 还覆盖 listener 就绪、端口冲突、未完成请求卸载、缺少配置和同端口重新挂载。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放、Weixin 的 `not_requested -> Ctrl+C -> disabled`，Feishu 的 `listening -> Ctrl+C -> disabled` 和端口释放，以及 FenneNote/XiaoAI 同时挂载后的 `running -> Ctrl+C -> disabled` 和双端口释放。RabiLink 的定向测试已覆盖 listener 端口生命周期、端口冲突、禁用 Relay、共享租约、最后释放取消、停止重连、迟到事件失效和重新取得 worker。真实 `dist/index.js` 进程已验证 `ready -> Ctrl+C -> disabled`、`relayWorker=disabled` 和端口释放。阶段 2 下一步拆分 Gateway 可启动类型与 Manager/Desktop 内部消息入口类型，并删除剩余兼容工厂。
+测试已覆盖 Webhook 和 Feishu 的端口生命周期、Heartbeat 的定时器生命周期、NapCat 的多实例资源回收、WeCom 的 SDK 客户端生命周期，以及 Weixin 的长轮询取消、迟到结果失效和重复挂载。Feishu 还覆盖 listener 就绪、端口冲突、未完成请求卸载、缺少配置和同端口重新挂载。真实 `dist/index.js` 进程已验证 Webhook 的 `ready -> SIGINT -> disabled` 和端口释放、Weixin 的 `not_requested -> Ctrl+C -> disabled`，Feishu 的 `listening -> Ctrl+C -> disabled` 和端口释放，以及 FenneNote/XiaoAI 同时挂载后的 `running -> Ctrl+C -> disabled` 和双端口释放。RabiLink 的定向测试已覆盖 listener 端口生命周期、端口冲突、禁用 Relay、共享租约、最后释放取消、停止重连、迟到事件失效和重新取得 worker。真实 `dist/index.js` 进程已验证 `ready -> Ctrl+C -> disabled`、`relayWorker=disabled` 和端口释放。阶段 2 已完成消息入口宿主类型拆分。下一步建立单一 Gateway 根 Context，并让 Agent、Message 与 Contribution Registry 由同一组合入口管理。
 
 ### 阶段 3：Gateway Host
 
@@ -392,7 +392,7 @@ WebGUI 支持导航、页面模板、设置区、状态卡片、命令和主题�
 每阶段保留兼容壳：
 
 - `createAgentAdapter()` 可以切回旧工厂；
-- 未迁移消息端继续使用旧启动路径；
+- 旧配置中的 `disabled` 哨兵继续在读取边界规范化，不进入插件注册表或运行时；
 - Cordis Gateway Host 通过受控配置启用；
 - Manager API 在统一目录成为事实源前保留旧响应；
 - WebGUI/Desktop 扩展目录失败时仍显示基础恢复界面。
@@ -492,6 +492,17 @@ QQ 消息解析、回复链、媒体保存、Route 判断、Forwarding 和 Outbo
 6. Wearable 删除 Gateway Adapter 和共享 worker 启动副作用，健康数据继续由 Manager API 与现有健康规则模块处理。
 
 RabiLink 的消息解析、会话记录、健康观察、Route 判断、Forwarding、投递去重和远端完成确认继续由原业务模块拥有。Fiber 与租约只管理 listener、SSE、请求、等待和销毁顺序。
+
+## 第十个实施切片：消息入口宿主类型拆分
+
+1. `MessageEndpointType` 表示 Route、记录、规则、扫描和一次性投递可使用的全部消息入口；
+2. `GatewayMessageAdapterType` 只包含由常驻 Gateway Fiber 挂载的九种消息端；
+3. `disabled` 只作为旧配置读取哨兵，不能注册、挂载或写成新运行时 Adapter 类型；
+4. Gateway 入口删除占位工厂、兼容创建工厂和 `legacyDisposers`，只组合 `MessageAdapterRegistry` 中的定义；
+5. Manager 只在 Route 含 Gateway 插件时启动子进程；Route 改为纯 Manager/Desktop 入口时停止原子进程；
+6. 一次性 `speech`、`rolePanel`、`wearable` 和 Remote Agent 投递仍读取完整 Route 入口与策略。
+
+该拆分固定“消息来源事实”与“常驻插件生命周期”两个不同合同。WebGUI 使用同一 Gateway 类型判断，不再把 Wearable 状态误判为等待 Gateway 进程。
 
 ## 完成标准
 

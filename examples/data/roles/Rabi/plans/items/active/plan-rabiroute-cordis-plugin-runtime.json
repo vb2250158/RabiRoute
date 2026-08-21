@@ -5,9 +5,9 @@
   "status": "进行中",
   "priority": "high",
   "kind": "architecture",
-  "currentStepId": "migrate-message-adapter-lifecycle",
-  "currentStep": "通用 Webhook、FenneNote、XiaoAI、RabiLink、Heartbeat、NapCat、WeCom、Weixin 和 Feishu 已完成 Definition、manifest、Registry 和 Fiber 生命周期迁移。RabiLink Fiber 持有 HTTP listener 与可取消 Relay worker 租约；最后一个租约释放后停止 SSE、任务领取、附件下载、完成确认和重连。Wearable 已移除 Gateway Adapter 和共享 worker 启动副作用，健康数据继续由 Manager API 持有。 真实构建进程已验证 RabiLink ready 到 Ctrl+C 后写入 disabled、relayWorker=disabled 并释放端口。",
-  "nextAction": "拆分 Gateway 可启动消息端类型与 Manager/Desktop 内部消息入口类型，删除 createMessageAdapterByType、createPlaceholderAdapter 和 legacyDisposers。",
+  "currentStepId": "create-gateway-host",
+  "currentStep": "全部九种常驻 Gateway 消息端已进入 MessageAdapterRegistry。MessageEndpointType 负责 Route、记录、扫描和一次性投递的完整来源合同；GatewayMessageAdapterType 只负责可由 Fiber 挂载的常驻插件。Gateway 已删除占位工厂、兼容创建工厂和 legacyDisposers。纯 speech、rolePanel、wearable 或 remoteAgent Route 不再启动子进程，混合 Route 只向常驻进程传入 Gateway 子集。",
+  "nextAction": "建立单一 Gateway 根 Context，让 Agent Adapter Registry、MessageAdapterRegistry 和 Contribution Registry 由同一组合入口挂载、查询和销毁，并把 src/index.ts 拆成命令分发与 gatewayMain。",
   "steps": [
     {
       "id": "research-dsh-cordis",
@@ -42,12 +42,13 @@
     {
       "id": "migrate-message-adapter-lifecycle",
       "title": "迁移消息端监听器、端口、状态和销毁生命周期",
-      "status": "进行中"
+      "status": "已完成",
+      "completedAt": "2026-08-21T15:44:54+08:00"
     },
     {
       "id": "create-gateway-host",
       "title": "让 Gateway 入口只组合插件和管理根 Context",
-      "status": "未开始"
+      "status": "进行中"
     },
     {
       "id": "create-manager-contribution-catalog",
@@ -78,7 +79,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T15:07:33+08:00",
+  "updatedAt": "2026-08-21T15:44:54+08:00",
   "keywords": [
     "Cordis",
     "plugin",
@@ -101,6 +102,9 @@
     "RabiLink",
     "Relay lease",
     "AbortSignal",
-    "Wearable"
+    "Wearable",
+    "MessageEndpointType",
+    "GatewayMessageAdapterType",
+    "Gateway root Context"
   ]
 }

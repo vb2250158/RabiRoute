@@ -34,6 +34,13 @@ import {
   normalizeLanguageStyleBinding,
   type LanguageStyleBinding
 } from "./languageStyle.js";
+import {
+  isMessageEndpointType,
+  selectGatewayMessageAdapterTypes,
+  type GatewayMessageAdapterType,
+  type LegacyMessageAdapterType,
+  type MessageEndpointType
+} from "./messageEndpointTypes.js";
 
 export type { CodexPlanAssistantSession } from "./codexPlanAssistantSessions.js";
 export {
@@ -57,7 +64,19 @@ export {
   type BuiltinPersonaRulePolicy
 } from "./personaRulePolicy.js";
 
-export type MessageAdapterType = "napcat" | "remoteAgent" | "heartbeat" | "rolePanel" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "feishu" | "disabled";
+export {
+  GATEWAY_MESSAGE_ADAPTER_TYPES,
+  MESSAGE_ENDPOINT_TYPES,
+  isGatewayMessageAdapterType,
+  isMessageEndpointType,
+  selectGatewayMessageAdapterTypes,
+  type GatewayMessageAdapterType,
+  type LegacyMessageAdapterType,
+  type MessageEndpointType
+} from "./messageEndpointTypes.js";
+
+/** @deprecated Use MessageEndpointType; `disabled` is accepted only for legacy configuration reads. */
+export type MessageAdapterType = LegacyMessageAdapterType;
 export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "feishu" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
@@ -78,7 +97,7 @@ export const DEFAULT_CODEX_HOOK_SETTINGS: CodexHookSettings = {
   agentCommunicationEnforcementEnabled: true,
   onlyPrimaryPersonaCanSendMessages: false
 };
-export type RecentMessageEndpoint = Exclude<MessageAdapterType, "disabled">;
+export type RecentMessageEndpoint = MessageEndpointType;
 export type RecentMessageLimits = Partial<Record<RecentMessageEndpoint, number>>;
 export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
   "napcat",
@@ -117,7 +136,7 @@ export type MessageAdapterPolicy = {
   messageGrouping?: MessageGroupingPolicy;
 };
 
-export type MessageAdapterPolicies = Partial<Record<Exclude<MessageAdapterType, "disabled">, MessageAdapterPolicy>>;
+export type MessageAdapterPolicies = Partial<Record<MessageEndpointType, MessageAdapterPolicy>>;
 
 export type MessageProcessingAgentPolicy = {
   enabled?: boolean;
@@ -144,7 +163,7 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
 export type PipelineDefinition = {
   id?: string;
   name?: string;
-  inputAdapter?: MessageAdapterType;
+  inputAdapter?: MessageEndpointType;
   /** `codex` is accepted only as a legacy input and normalizes to `agent`. */
   outputAdapter?: PipelineOutputAdapterInput;
   outputPipeline?: string;
@@ -405,7 +424,6 @@ export type GatewayConfigModelOptions = {
   normalizeAgentAdapters?: (adapters: AgentAdapterType[] | undefined) => AgentAdapterType[];
 };
 
-const messageAdapterValues = new Set<MessageAdapterType>(["napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai", "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu", "disabled"]);
 export const agentAdapterValues: ReadonlySet<AgentAdapterType> = new Set(agentAdapterTypes);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
@@ -423,7 +441,7 @@ export function normalizeCodexReasoningEffort(value: unknown): CodexReasoningEff
     : undefined;
 }
 
-export function messageAdapterUsesAutomaticGrouping(adapterType: Exclude<MessageAdapterType, "disabled">): boolean {
+export function messageAdapterUsesAutomaticGrouping(adapterType: MessageEndpointType): boolean {
   return adapterType === "napcat"
     || adapterType === "rolePanel"
     || adapterType === "rabilink"
@@ -432,7 +450,7 @@ export function messageAdapterUsesAutomaticGrouping(adapterType: Exclude<Message
     || adapterType === "feishu";
 }
 
-function defaultMessageGroupingPolicy(adapterType: Exclude<MessageAdapterType, "disabled">): Required<MessageGroupingPolicy> {
+function defaultMessageGroupingPolicy(adapterType: MessageEndpointType): Required<MessageGroupingPolicy> {
   const speechLike = adapterType === "speech"
     || adapterType === "fennenote"
     || adapterType === "xiaoai";
@@ -444,7 +462,7 @@ function defaultMessageGroupingPolicy(adapterType: Exclude<MessageAdapterType, "
 
 export function normalizeMessageGroupingPolicy(
   value: unknown,
-  adapterType: Exclude<MessageAdapterType, "disabled">
+  adapterType: MessageEndpointType
 ): Required<MessageGroupingPolicy> {
   const defaults = defaultMessageGroupingPolicy(adapterType);
   const raw = value && typeof value === "object" && !Array.isArray(value)
@@ -541,7 +559,7 @@ export function defaultRolePanelNotificationRule(): NotificationRuleDefinition {
   return createBuiltinRolePanelRule();
 }
 
-function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string[] {
+function defaultRouteKindsForMessageAdapter(adapter: MessageEndpointType): string[] {
   if (adapter === "napcat") return ["private", "direct_at", "direct_reply", "indirect_reply"];
   if (adapter === "remoteAgent") return ["manual_trigger"];
   if (adapter === "heartbeat") return ["heartbeat"];
@@ -556,7 +574,7 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageAdapterType): string
   return [];
 }
 
-function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
+function defaultRuleNameForMessageAdapter(adapter: MessageEndpointType): string {
   if (adapter === "napcat") return "QQ 默认消息";
   if (adapter === "heartbeat") return "定时默认消息";
   if (adapter === "rolePanel") return "面板默认消息";
@@ -572,7 +590,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageAdapterType): string {
   return "默认消息";
 }
 
-export function defaultMessageAdapterNotificationRules(adapters: MessageAdapterType[]): NotificationRuleDefinition[] {
+export function defaultMessageAdapterNotificationRules(adapters: MessageEndpointType[]): NotificationRuleDefinition[] {
   return adapters.flatMap((adapter) => {
     const routeKinds = defaultRouteKindsForMessageAdapter(adapter);
     if (routeKinds.length === 0) return [];
@@ -591,7 +609,7 @@ export function defaultMessageAdapterNotificationRules(adapters: MessageAdapterT
 
 export function ensureMessageAdapterNotificationRules(
   rules: NotificationRuleDefinition[] | undefined,
-  adapters: MessageAdapterType[]
+  adapters: MessageEndpointType[]
 ): NotificationRuleDefinition[] {
   const next = normalizeRuleDefinitions(rules) ?? [];
   const coveredRouteKinds = new Set(next.flatMap((rule) => rule.routeKinds ?? []));
@@ -825,7 +843,7 @@ export function ensureDefaultPersonaAutomations(
 
 export function ensureMessageAdapterAutomationRules(
   automations: PersonaAutomationRuleDefinition[] | undefined,
-  adapters: MessageAdapterType[],
+  adapters: MessageEndpointType[],
   options: { includeRolePanel?: boolean } = {}
 ): PersonaAutomationRuleDefinition[] {
   const normalized = options.includeRolePanel === false
@@ -840,22 +858,20 @@ export function ensureMessageAdapterAutomationRules(
   );
 }
 
-export function normalizeMessageAdapters(items: unknown[]): MessageAdapterType[] {
-  const adapters = items
+export function normalizeMessageAdapters(items: unknown[]): MessageEndpointType[] {
+  return [...new Set(items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => messageAdapterValues.has(item as MessageAdapterType));
-  const unique = [...new Set(adapters)].filter((item) => item !== "disabled");
-  return unique.length > 0 ? unique : ["napcat"];
+    .filter(isMessageEndpointType))];
 }
 
-function normalizeOptionalMessageAdapters(items: unknown): MessageAdapterType[] {
+function normalizeOptionalMessageAdapters(items: unknown): MessageEndpointType[] {
   if (!Array.isArray(items)) return [];
   return [...new Set(items
     .map((item) => item == null ? "" : String(item))
-    .filter((item): item is MessageAdapterType => messageAdapterValues.has(item as MessageAdapterType) && item !== "disabled"))];
+    .filter(isMessageEndpointType))];
 }
 
-function normalizePayloadKinds(value: unknown, adapterType: Exclude<MessageAdapterType, "disabled">): MessagePayloadKind[] {
+function normalizePayloadKinds(value: unknown, adapterType: MessageEndpointType): MessagePayloadKind[] {
   const defaults = adapterType === "feishu" ? ["text"] as MessagePayloadKind[] : defaultSupportedOutputs;
   if (!Array.isArray(value)) return defaults;
   const kinds = [...new Set(value
@@ -873,7 +889,7 @@ function normalizePathList(value: unknown): string[] {
 
 export function normalizeMessageAdapterPolicy(
   value: unknown,
-  adapterType: Exclude<MessageAdapterType, "disabled">,
+  adapterType: MessageEndpointType,
   options: { legacyInputDisabled?: boolean } = {}
 ): Required<MessageAdapterPolicy> {
   const raw = value && typeof value === "object" ? value as MessageAdapterPolicy : {};
@@ -888,14 +904,13 @@ export function normalizeMessageAdapterPolicy(
 
 export function normalizeMessageAdapterPolicies(
   value: unknown,
-  adapters: MessageAdapterType[],
-  disabledAdapters: MessageAdapterType[] = []
+  adapters: MessageEndpointType[],
+  disabledAdapters: MessageEndpointType[] = []
 ): MessageAdapterPolicies {
   const raw = value && typeof value === "object" ? value as MessageAdapterPolicies : {};
   const disabled = new Set(disabledAdapters);
   const result: MessageAdapterPolicies = {};
   for (const adapter of adapters) {
-    if (adapter === "disabled") continue;
     result[adapter] = normalizeMessageAdapterPolicy(raw[adapter], adapter, { legacyInputDisabled: disabled.has(adapter) });
   }
   return result;
@@ -918,25 +933,29 @@ export function messageAdapterOutputEnabled(gateway: GatewayDefinition, type: Me
   return type !== "disabled" && messageAdapterPolicyFor(gateway, type).outputEnabled;
 }
 
-export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageAdapterType[] {
+export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageEndpointType[] {
   if (gateway.messageInputsDisabled) return [];
-  const adapters = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
+  const configured = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
     ? gateway.messageAdapters
     : [gateway.messageAdapterType || "napcat"];
-  const disabled = new Set(gateway.messageAdaptersDisabled ?? []);
-  const next = [...new Set(adapters)]
-    .filter((type): type is MessageAdapterType => messageAdapterValues.has(type as MessageAdapterType) && type !== "disabled" && !disabled.has(type) && messageAdapterPolicyFor(gateway, type).inputEnabled);
-  return next.length > 0 ? next : [];
+  const adapters = configured.filter(isMessageEndpointType);
+  const disabled = new Set((gateway.messageAdaptersDisabled ?? []).filter(isMessageEndpointType));
+  return [...new Set(adapters)]
+    .filter((type) => !disabled.has(type) && messageAdapterPolicyFor(gateway, type).inputEnabled);
+}
+
+export function gatewayMessageAdapterTypes(gateway: GatewayDefinition): GatewayMessageAdapterType[] {
+  return selectGatewayMessageAdapterTypes(gatewayAdapterTypes(gateway));
 }
 
 export function setGatewayAdapters(gateway: GatewayDefinition, adapters: MessageAdapterType[]): void {
-  const next = [...new Set(adapters.filter(Boolean))].filter((type) => type !== "disabled");
+  const next = normalizeMessageAdapters(adapters);
   gateway.messageAdapters = next.length > 0 ? next : ["napcat"];
   gateway.messageAdapterType = gateway.messageAdapters[0];
-  if (gateway.messageAdaptersDisabled) {
-    gateway.messageAdaptersDisabled = gateway.messageAdaptersDisabled.filter((type) => gateway.messageAdapters!.includes(type));
-  }
-  gateway.messageAdapterPolicies = normalizeMessageAdapterPolicies(gateway.messageAdapterPolicies, gateway.messageAdapters, gateway.messageAdaptersDisabled);
+  const disabledAdapters = normalizeOptionalMessageAdapters(gateway.messageAdaptersDisabled)
+    .filter((type) => next.includes(type));
+  gateway.messageAdaptersDisabled = disabledAdapters;
+  gateway.messageAdapterPolicies = normalizeMessageAdapterPolicies(gateway.messageAdapterPolicies, next, disabledAdapters);
 }
 
 export function definitionUsesNapcat(definition: GatewayDefinition): boolean {
@@ -1244,7 +1263,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   };
   const rawMessageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
   const messageInputsDisabled = definition.messageInputsDisabled === true || rawMessageAdapters.includes("disabled");
-  const messageAdapters = normalizeMessageAdapters(rawMessageAdapters);
+  const normalizedMessageAdapters = normalizeMessageAdapters(rawMessageAdapters);
+  const messageAdapters = normalizedMessageAdapters.length > 0 ? normalizedMessageAdapters : ["napcat" as MessageEndpointType];
   const messageAdaptersDisabled = normalizeOptionalMessageAdapters(definition.messageAdaptersDisabled).filter((type) => messageAdapters.includes(type));
   const messageAdapterPolicies = normalizeMessageAdapterPolicies(definition.messageAdapterPolicies, messageAdapters, messageAdaptersDisabled);
   const activeMessageAdapters = gatewayAdapterTypes({

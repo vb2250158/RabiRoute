@@ -4,7 +4,7 @@ import type {
   MessageAdapterDefinition,
   MessageAdapterDispose,
   MessageAdapterManifest,
-  MessageAdapterType
+  GatewayMessageAdapterType
 } from "../adapters/messageAdapter.js";
 import {
   RabiCordisHost,
@@ -15,7 +15,7 @@ import {
 const MESSAGE_ADAPTER_REGISTRY_SERVICE = "rabi.messageAdapters";
 
 export class MessageAdapterRegistry {
-  private readonly definitions = new Map<MessageAdapterType, MessageAdapterDefinition>();
+  private readonly definitions = new Map<GatewayMessageAdapterType, MessageAdapterDefinition>();
 
   register(definition: MessageAdapterDefinition): () => void {
     const type = definition.manifest.type;
@@ -30,7 +30,7 @@ export class MessageAdapterRegistry {
     };
   }
 
-  create(type: MessageAdapterType): MessageAdapter {
+  create(type: GatewayMessageAdapterType): MessageAdapter {
     const definition = this.definitions.get(type);
     if (!definition) {
       throw new Error(`Unsupported message adapter: ${type}`);
@@ -38,7 +38,7 @@ export class MessageAdapterRegistry {
     return definition.create();
   }
 
-  manifest(type: MessageAdapterType): MessageAdapterManifest | undefined {
+  manifest(type: GatewayMessageAdapterType): MessageAdapterManifest | undefined {
     return this.definitions.get(type)?.manifest;
   }
 
@@ -48,15 +48,15 @@ export class MessageAdapterRegistry {
 }
 
 export type MountedMessageAdapter = {
-  type: MessageAdapterType;
+  type: GatewayMessageAdapterType;
   fiber: RabiCordisFiber;
   dispose(): Promise<void>;
 };
 
 export type MessageAdapterRuntime = {
   registry: MessageAdapterRegistry;
-  definitionFibers: ReadonlyMap<MessageAdapterType, RabiCordisFiber>;
-  mount(type: MessageAdapterType): Promise<MountedMessageAdapter>;
+  definitionFibers: ReadonlyMap<GatewayMessageAdapterType, RabiCordisFiber>;
+  mount(type: GatewayMessageAdapterType): Promise<MountedMessageAdapter>;
   dispose(): Promise<void>;
 };
 
@@ -81,7 +81,7 @@ function definitionPlugin(definition: MessageAdapterDefinition): RabiCordisPlugi
   };
 }
 
-function instancePlugin(type: MessageAdapterType): RabiCordisPlugin {
+function instancePlugin(type: GatewayMessageAdapterType): RabiCordisPlugin {
   return {
     name: `rabi:message-adapter-instance/${type}`,
     inject: [MESSAGE_ADAPTER_REGISTRY_SERVICE],
@@ -102,11 +102,11 @@ export async function createMessageAdapterRuntime(
   definitions: MessageAdapterDefinition[] = builtinMessageAdapterDefinitions()
 ): Promise<MessageAdapterRuntime> {
   const host = new RabiCordisHost();
-  const mounted = new Map<MessageAdapterType, MountedMessageAdapter>();
+  const mounted = new Map<GatewayMessageAdapterType, MountedMessageAdapter>();
   try {
     await host.mount(registryServicePlugin);
     const registry = host.context.get(MESSAGE_ADAPTER_REGISTRY_SERVICE, true) as MessageAdapterRegistry;
-    const definitionFibers = new Map<MessageAdapterType, RabiCordisFiber>();
+    const definitionFibers = new Map<GatewayMessageAdapterType, RabiCordisFiber>();
     for (const definition of definitions) {
       const fiber = await host.mount(definitionPlugin(definition));
       definitionFibers.set(definition.manifest.type, fiber);

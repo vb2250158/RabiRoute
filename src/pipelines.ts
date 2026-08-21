@@ -1,4 +1,4 @@
-import type { MessageAdapterType } from "./adapters/messageAdapter.js";
+import { isMessageEndpointType, type MessageEndpointType } from "./shared/messageEndpointTypes.js";
 
 export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "feishu" | "none";
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
@@ -9,7 +9,7 @@ export type PipelinePresetId = "qq_chat" | "wecom_chat" | "weixin_chat" | "feish
 export type PipelineDefinition = {
   id?: string;
   name?: string;
-  inputAdapter?: MessageAdapterType;
+  inputAdapter?: MessageEndpointType;
   /** `codex` is accepted only as a legacy input and normalizes to `agent`. */
   outputAdapter?: PipelineOutputAdapterInput;
   outputPipeline?: string;
@@ -29,7 +29,7 @@ export type NormalizedPipelineDefinition = Omit<PipelineDefinition, "outputAdapt
 export type ResolvedPipeline = {
   id: string;
   name: string;
-  inputAdapter?: MessageAdapterType;
+  inputAdapter?: MessageEndpointType;
   outputAdapter: OutputAdapterType;
   outputPipeline: string;
   promptOutputMode: PromptOutputMode;
@@ -143,10 +143,6 @@ const fallbackPipeline: ResolvedPipeline = {
   replyToSource: false
 };
 
-function isMessageAdapterType(value: string): value is MessageAdapterType {
-  return value === "napcat" || value === "remoteAgent" || value === "speech" || value === "fennenote" || value === "xiaoai" || value === "rabilink" || value === "webhook" || value === "wecom" || value === "weixin" || value === "feishu" || value === "heartbeat" || value === "rolePanel" || value === "disabled";
-}
-
 function isOutputAdapterType(value: string): value is OutputAdapterType {
   return value === "qq" || value === "agent" || value === "file" || value === "console" || value === "tts" || value === "webhook" || value === "fennenote" || value === "wecom" || value === "weixin" || value === "feishu" || value === "none";
 }
@@ -186,7 +182,7 @@ export function normalizePipelineDefinition(raw: unknown): NormalizedPipelineDef
   return {
     id: optionalString(item.id),
     name: optionalString(item.name),
-    inputAdapter: inputAdapter && isMessageAdapterType(inputAdapter) ? inputAdapter : undefined,
+    inputAdapter: inputAdapter && isMessageEndpointType(inputAdapter) ? inputAdapter : undefined,
     outputAdapter: normalizeOutputAdapter(item.outputAdapter),
     outputPipeline: normalizeOutputPipeline(item.outputPipeline),
     promptOutputMode: promptOutputMode && isPromptOutputMode(promptOutputMode) ? promptOutputMode : undefined,

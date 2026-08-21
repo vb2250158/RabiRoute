@@ -8,7 +8,10 @@ import {
   DEFAULT_RECENT_MESSAGE_LIMIT,
   defaultMessageAdapterNotificationRules,
   ensureDefaultPersonaRules,
+  GATEWAY_MESSAGE_ADAPTER_TYPES,
+  MESSAGE_ENDPOINT_TYPES,
   gatewayAdapterTypes,
+  gatewayMessageAdapterTypes,
   isBuiltinRolePanelNotificationRule,
   matchSpeechTriggerKeyword,
   messageAdapterPolicyFor,
@@ -56,6 +59,28 @@ test("route id and config names are normalized", () => {
   assert.equal(normalized.id, "main-route");
   assert.equal(normalized.agentRoleId, "Rabi");
   assert.equal(normalized.configName, "main-route");
+});
+
+test("message endpoint and Gateway adapter contracts have exact host-owned members", () => {
+  assert.deepEqual([...MESSAGE_ENDPOINT_TYPES], [
+    "napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai",
+    "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu"
+  ]);
+  assert.deepEqual([...GATEWAY_MESSAGE_ADAPTER_TYPES], [
+    "napcat", "heartbeat", "fennenote", "xiaoai", "rabilink", "webhook", "wecom", "weixin", "feishu"
+  ]);
+  assert.equal(MESSAGE_ENDPOINT_TYPES.includes("disabled" as never), false);
+  assert.equal(GATEWAY_MESSAGE_ADAPTER_TYPES.includes("wearable" as never), false);
+  assert.equal(GATEWAY_MESSAGE_ADAPTER_TYPES.includes("speech" as never), false);
+});
+
+test("legacy disabled selection normalizes to state instead of an endpoint type", () => {
+  const normalized = normalizeGatewayDefinition(gateway({ messageAdapters: ["disabled"] }));
+  assert.equal(normalized.messageInputsDisabled, true);
+  assert.equal(normalized.messageAdapterType, "napcat");
+  assert.deepEqual(normalized.messageAdapters, ["napcat"]);
+  assert.deepEqual(gatewayAdapterTypes(normalized), []);
+  assert.deepEqual(gatewayMessageAdapterTypes(normalized), []);
 });
 
 test("message adapters honor disabled input and disabled adapter lists", () => {
@@ -644,6 +669,7 @@ test("wearable health is a Relay-backed message adapter without its own listener
   }));
 
   assert.deepEqual(gatewayAdapterTypes(normalized), ["rabilink", "wearable"]);
+  assert.deepEqual(gatewayMessageAdapterTypes(normalized), ["rabilink"]);
   assert.deepEqual(normalized.notificationRules?.map(rule => rule.id), ["default-rabilink", "default-wearable"]);
   assert.deepEqual(normalized.notificationRules?.[1]?.routeKinds, ["wearable_health_alert"]);
   const claims = collectGatewayPortClaims([normalized], { managerPort: 8790 });

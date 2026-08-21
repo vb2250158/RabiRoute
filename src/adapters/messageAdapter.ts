@@ -1,14 +1,27 @@
-export type MessageAdapterType = "napcat" | "remoteAgent" | "speech" | "fennenote" | "xiaoai" | "rabilink" | "wearable" | "webhook" | "wecom" | "weixin" | "feishu" | "heartbeat" | "rolePanel" | "disabled";
+import type {
+  GatewayMessageAdapterType,
+  LegacyMessageAdapterType,
+  MessageEndpointType
+} from "../shared/messageEndpointTypes.js";
+
+export type {
+  GatewayMessageAdapterType,
+  LegacyMessageAdapterType,
+  MessageEndpointType
+} from "../shared/messageEndpointTypes.js";
+
+/** @deprecated Use MessageEndpointType or GatewayMessageAdapterType according to the owning host. */
+export type MessageAdapterType = LegacyMessageAdapterType;
 
 export type MessageAdapterDispose = () => void | Promise<void>;
 
 export type MessageAdapter = {
-  type: MessageAdapterType;
+  type: GatewayMessageAdapterType;
   start(): void | MessageAdapterDispose | Promise<void | MessageAdapterDispose>;
 };
 
 export type MessageAdapterManifest = {
-  type: MessageAdapterType;
+  type: GatewayMessageAdapterType;
   label: string;
   host: "gateway";
   transport: "http" | "websocket" | "timer" | "internal";

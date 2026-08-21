@@ -119,9 +119,10 @@ type MessageAdapterCapability = {
 
 新增一个消息端通常要改这些位置：
 
-- `src/adapters/messageAdapter.ts`：扩展 `MessageAdapterType`。
+- `src/shared/messageEndpointTypes.ts`：先判断它是完整消息入口还是常驻 Gateway 插件；新增常驻消息端时同时加入 `MessageEndpointType` 与 `GatewayMessageAdapterType`，Manager/Desktop 内部入口只加入前者。
+- `src/adapters/messageAdapter.ts`：复用共享类型合同，不在 Adapter 层维护另一份字符串联合。
 - `src/adapters/<name>Adapter.ts`：实现 `MessageAdapter.start()`，负责接收事件、规范化、落盘、路由。
-- `src/index.ts`：把 type 映射到 adapter，并支持多 adapter 并存。
+- `src/adapters/builtinMessageAdapters.ts`：把常驻 Gateway 消息端注册为 Definition 与 manifest；`src/index.ts` 只组合 Registry，不再增加 type 工厂分支。
 - `src/config.ts`：解析环境变量和结构化配置；多实例用 JSON 配置。
 - `src/messageEndpoints/<name>Manager.ts` 或同目录聚合模块：实现该消息端的扫描、健康检查、启动、打开管理页、实例发现和修复建议。
 - `src/manager.ts`：只扩展通用 `GatewayDefinition` 字段、normalize、env 注入和 HTTP 路由接线；不要把消息端专属扫描/启动/健康检查实现写进 manager。

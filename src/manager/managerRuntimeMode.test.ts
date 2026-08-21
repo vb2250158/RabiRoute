@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  gatewayRuntimeStartDecision,
   gatewayRuntimeSyncAction,
   managerAutostartEnabled,
   managerConfigWatcherEnabled,
@@ -12,6 +13,7 @@ test("explicit config reconciliation restarts an already running gateway when au
   assert.equal(gatewayRuntimeSyncAction({
     managerShouldAutostart: false,
     enabled: true,
+    runtimeRequired: true,
     running: true,
     needsRestart: true
   }), "restart");
@@ -21,6 +23,7 @@ test("disabled autostart does not start a stopped gateway", () => {
   assert.equal(gatewayRuntimeSyncAction({
     managerShouldAutostart: false,
     enabled: true,
+    runtimeRequired: true,
     running: false,
     needsRestart: false
   }), "none");
@@ -30,6 +33,7 @@ test("disabled autostart still stops a running gateway that was disabled explici
   assert.equal(gatewayRuntimeSyncAction({
     managerShouldAutostart: false,
     enabled: false,
+    runtimeRequired: true,
     running: true,
     needsRestart: false
   }), "stop");
@@ -39,15 +43,51 @@ test("enabled autostart starts a stopped gateway and leaves unchanged runtimes a
   assert.equal(gatewayRuntimeSyncAction({
     managerShouldAutostart: true,
     enabled: true,
+    runtimeRequired: true,
     running: false,
     needsRestart: false
   }), "start");
   assert.equal(gatewayRuntimeSyncAction({
     managerShouldAutostart: true,
     enabled: true,
+    runtimeRequired: true,
     running: true,
     needsRestart: false
   }), "none");
+});
+
+test("enabled internal-only routes do not start a resident Gateway", () => {
+  assert.equal(gatewayRuntimeSyncAction({
+    managerShouldAutostart: true,
+    enabled: true,
+    runtimeRequired: false,
+    running: false,
+    needsRestart: false
+  }), "none");
+});
+
+test("running Gateways stop when their Route becomes internal-only", () => {
+  assert.equal(gatewayRuntimeSyncAction({
+    managerShouldAutostart: true,
+    enabled: true,
+    runtimeRequired: false,
+    running: true,
+    needsRestart: true
+  }), "stop");
+});
+
+test("manual start skips internal-only Routes", () => {
+  assert.equal(gatewayRuntimeStartDecision({
+    enabled: true,
+    runtimeRequired: false,
+    running: false
+  }), "skip-not-required");
+});
+
+test("manual start only creates an enabled required Gateway process", () => {
+  assert.equal(gatewayRuntimeStartDecision({ enabled: false, runtimeRequired: true, running: false }), "skip-disabled");
+  assert.equal(gatewayRuntimeStartDecision({ enabled: true, runtimeRequired: true, running: true }), "already-running");
+  assert.equal(gatewayRuntimeStartDecision({ enabled: true, runtimeRequired: true, running: false }), "start");
 });
 
 test("Manager autostart is enabled by default and disabled only by explicit zero", () => {

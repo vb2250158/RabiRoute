@@ -2,7 +2,7 @@ English | <a href="./cordis-plugin-runtime-refactor.md">简体中文</a>
 
 # Cordis-Based Plugin Runtime Refactor for RabiRoute
 
-> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, and the Stage 2 Generic Webhook, FenneNote, XiaoAI, RabiLink, Heartbeat, NapCat, WeCom, Weixin, and Feishu slices are implemented; the remaining message adapters and full Manager/Gateway migration remain in progress.
+> Status: selected design direction. Stage 0, Stage 1, the Contribution Registry contract, all resident Gateway message-adapter lifecycles, and the host-type split in Stage 2 are implemented. The single Gateway root Context, Manager plugin catalog, and multi-host presentation extensions remain in progress.
 >
 > Primary audience: RabiRoute maintainers, Manager/Gateway developers, WebGUI/Desktop developers, and plugin authors.
 
@@ -324,9 +324,9 @@ Exit criterion: adding a built-in Agent Adapter adds one plugin and manifest.
 
 ### Stage 2: complete message-side lifecycle
 
-Generic Webhook, FenneNote, XiaoAI, RabiLink, Heartbeat, NapCat, WeCom, Weixin, and Feishu now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. FenneNote and XiaoAI reuse the generic Webhook listener lifecycle while retaining their own ports, paths, event types, message records, and Route sources. The RabiLink Fiber owns both its HTTP listener and a Relay-worker lease; releasing the last lease cancels SSE, task claims, attachment downloads, completion acknowledgements, and reconnect waits. Wearable no longer creates a Gateway Adapter or starts the shared Relay worker; Manager API remains the health-data entry. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, the NapCat Fiber owns all multi-instance OneBot WebSocket listeners and connected clients, the WeCom Fiber owns its inbound SDK client, the Weixin Fiber owns one cancellation signal for QR requests, long polling, waits, and inbound media downloads, and the Feishu Fiber owns its dedicated event-callback listener and active connections. Disposal releases or aborts the corresponding resources, rejects stale results before they update state, append messages, or deliver work, and records `disabled`; partial activation rolls back created resources and records `error`. `src/index.ts` mounts registered message adapters first, while the remaining adapters keep the compatibility creation entry.
+Generic Webhook, FenneNote, XiaoAI, RabiLink, Heartbeat, NapCat, WeCom, Weixin, and Feishu now register through `MessageAdapterDefinition`, manifests, and `MessageAdapterRegistry`. FenneNote and XiaoAI reuse the generic Webhook listener lifecycle while retaining their own ports, paths, event types, message records, and Route sources. The RabiLink Fiber owns both its HTTP listener and a Relay-worker lease; releasing the last lease cancels SSE, task claims, attachment downloads, completion acknowledgements, and reconnect waits. Wearable no longer creates a Gateway Adapter or starts the shared Relay worker; Manager API remains the health-data entry. The Webhook Fiber owns its HTTP listener, the Heartbeat Fiber owns every timer, the NapCat Fiber owns all multi-instance OneBot WebSocket listeners and connected clients, the WeCom Fiber owns its inbound SDK client, the Weixin Fiber owns one cancellation signal for QR requests, long polling, waits, and inbound media downloads, and the Feishu Fiber owns its dedicated event-callback listener and active connections. Disposal releases or aborts the corresponding resources, rejects stale results before they update state, append messages, or deliver work, and records `disabled`; partial activation rolls back created resources and records `error`. `src/index.ts` mounts only message endpoints registered as Gateway plugins. `speech`, `rolePanel`, `wearable`, and `remoteAgent` remain Manager/Desktop-owned business entries and no longer create placeholder adapters or empty Gateway child processes.
 
-Tests cover Webhook and Feishu port lifecycle, Heartbeat timer lifecycle, NapCat multi-instance resource cleanup, the WeCom SDK client lifecycle, and Weixin long-poll cancellation, stale-result rejection, and repeated mounting. Feishu also covers listener readiness, port conflicts, incomplete-request disposal, missing configuration, and same-port remounting. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` with port release, Weixin `not_requested -> Ctrl+C -> disabled`, Feishu `listening -> Ctrl+C -> disabled` with port release, and simultaneous FenneNote/XiaoAI mounting from `running -> Ctrl+C -> disabled` with both ports released. Targeted RabiLink tests cover listener port lifecycle, port conflicts, disabled Relay, shared leases, last-release cancellation, reconnect shutdown, stale-event rejection, and worker reacquisition. A real `dist/index.js` process verified `ready -> Ctrl+C -> disabled`, `relayWorker=disabled`, and port release. Stage 2 continues by separating Gateway-startable types from Manager/Desktop internal message-entry types and deleting the remaining compatibility factory.
+Tests cover Webhook and Feishu port lifecycle, Heartbeat timer lifecycle, NapCat multi-instance resource cleanup, the WeCom SDK client lifecycle, and Weixin long-poll cancellation, stale-result rejection, and repeated mounting. Feishu also covers listener readiness, port conflicts, incomplete-request disposal, missing configuration, and same-port remounting. A real `dist/index.js` process verified Webhook `ready -> SIGINT -> disabled` with port release, Weixin `not_requested -> Ctrl+C -> disabled`, Feishu `listening -> Ctrl+C -> disabled` with port release, and simultaneous FenneNote/XiaoAI mounting from `running -> Ctrl+C -> disabled` with both ports released. Targeted RabiLink tests cover listener port lifecycle, port conflicts, disabled Relay, shared leases, last-release cancellation, reconnect shutdown, stale-event rejection, and worker reacquisition. A real `dist/index.js` process verified `ready -> Ctrl+C -> disabled`, `relayWorker=disabled`, and port release. Stage 2 has completed the message-endpoint host type split. The next step is one Gateway root Context that composes the Agent, Message, and Contribution registries through the same entry.
 
 ### Stage 3: Gateway Host
 
@@ -392,7 +392,7 @@ Compare Manager/Gateway cold start, first and warm delivery, Context lookup over
 Each stage retains compatibility shells:
 
 - `createAgentAdapter()` can switch back to the old factory;
-- unmigrated message adapters keep the old startup path;
+- the legacy `disabled` sentinel remains normalized at the configuration-read boundary and never enters the plugin registry or runtime;
 - Cordis Gateway Host uses a controlled feature switch;
 - Manager API retains old responses until the catalog becomes authoritative;
 - WebGUI/Desktop retain their base recovery UI if the contribution catalog fails.
@@ -492,6 +492,17 @@ Feishu signature verification, URL challenge, encrypted-callback decryption, per
 6. remove the Wearable Gateway Adapter and its shared-worker startup side effect while Manager API and the existing health-rule modules retain health-data ownership.
 
 RabiLink message parsing, conversation records, health observations, Route decisions, Forwarding, delivery deduplication, and remote completion acknowledgements remain owned by the existing business modules. The Fiber and lease own only the listener, SSE, requests, waits, and disposal order.
+
+## Tenth implementation slice: message-endpoint host type split
+
+1. `MessageEndpointType` represents every message endpoint available to Route configuration, records, rules, scanning, and one-shot delivery;
+2. `GatewayMessageAdapterType` contains only the nine resident message adapters mounted by Gateway Fibers;
+3. `disabled` remains a legacy configuration-read sentinel and cannot be registered, mounted, or written as a new runtime adapter type;
+4. the Gateway entry removes placeholder factories, the compatibility creation factory, and `legacyDisposers`, then composes only definitions from `MessageAdapterRegistry`;
+5. Manager starts a child process only when the Route contains Gateway plugins and stops an existing process when the Route becomes Manager/Desktop-only;
+6. one-shot `speech`, `rolePanel`, `wearable`, and Remote Agent delivery still reads the complete Route endpoint set and policies.
+
+This split gives message-source facts and resident plugin lifecycles separate contracts. WebGUI uses the same Gateway type predicate and no longer treats Wearable status as waiting for a Gateway process.
 
 ## Readiness criteria
 

@@ -31,6 +31,8 @@ export type {
   PipelineDefinition
 } from "@shared/gatewayConfigModel";
 
+export type { GatewayMessageAdapterType, MessageEndpointType } from "@shared/messageEndpointTypes";
+
 export type NotificationRule = NotificationRuleDefinition;
 export type NapCatInstance = NapCatInstanceDefinition;
 export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "webhook" | "fennenote" | "wecom" | "weixin" | "feishu" | "none";

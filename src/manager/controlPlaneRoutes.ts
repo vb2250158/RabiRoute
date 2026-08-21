@@ -144,6 +144,7 @@ import {
 } from "../rolePanelTimeline.js";
 import {
   DEFAULT_CODEX_HOOK_SETTINGS,
+  gatewayMessageAdapterTypes as sharedGatewayMessageAdapterTypes,
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   primaryMessageProcessingAgentAdapter,
   primaryMessageProcessingAgentEnabled,
@@ -248,6 +249,7 @@ import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
+  gatewayRuntimeStartDecision,
   gatewayRuntimeSyncAction,
   managerAutostartEnabled,
   managerConfigWatcherEnabled,
@@ -255,6 +257,11 @@ import {
   managerReadOnlyRequestAllowed
 } from "./managerRuntimeMode.js";
 import { resolveGatewayChildCommand } from "./gatewayChildCommand.js";
+import {
+  gatewayMessageAdapterEnvironment,
+  routeMessageAdapterEnvironment,
+  type MessageAdapterEnvironment
+} from "./gatewayMessageAdapterEnvironment.js";
 import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
 import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
@@ -1959,9 +1966,11 @@ function loadRuntimes(): void {
 
 function syncRunningGateways(): void {
   for (const runtime of runtimes.values()) {
+    const runtimeRequired = sharedGatewayMessageAdapterTypes(runtime.definition).length > 0;
     const action = gatewayRuntimeSyncAction({
       managerShouldAutostart,
       enabled: runtime.definition.enabled === true,
+      runtimeRequired,
       running: Boolean(runtime.process),
       needsRestart: runtime.needsRestart
     });
@@ -1974,6 +1983,7 @@ function syncRunningGateways(): void {
       startGateway(runtime.definition.id);
     }
     if (action === "stop") {
+      runtime.needsRestart = false;
       stopGateway(runtime.definition.id);
     }
   }
@@ -2106,13 +2116,14 @@ function resolveWingetCopilot(): string | null {
   return null;
 }
 
-function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
+function envFor(
+  definition: GatewayDefinition,
+  adapterEnvironment: MessageAdapterEnvironment = routeMessageAdapterEnvironment(sharedGatewayAdapterTypes(definition))
+): NodeJS.ProcessEnv {
   const parts = routeRuntimeParts(definition.id);
   const configName = sanitizeConfigName(definition.configName) || parts.configName;
   const routeDataDir = path.relative(rootDir, routeFolderPath(routeRoot, configName)).replace(/\\/g, "/");
   const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
-  const activeAdapters = sharedGatewayAdapterTypes(definition);
-  const runtimeAdapters = activeAdapters.length > 0 ? activeAdapters : ["disabled" as MessageAdapterType];
   const rabiLinkRelay = rabiLinkRelayConfigFor(definition);
   const globalConfig = rabiGlobalConfig.read();
   return {
@@ -2122,8 +2133,7 @@ function envFor(definition: GatewayDefinition): NodeJS.ProcessEnv {
     GATEWAY_MANAGER_PORT: String(managerPort),
     GATEWAY_MANAGER_URL: `http://127.0.0.1:${managerPort}`,
     PERSONA_MESSAGING_CAPABILITY: currentPersonaMessageAuthority().issue(definition.id, roleIdForDefinition(definition)),
-    MESSAGE_ADAPTER_TYPE: runtimeAdapters[0] ?? "napcat",
-    MESSAGE_ADAPTER_TYPES: JSON.stringify(runtimeAdapters),
+    ...adapterEnvironment,
     MESSAGE_ADAPTER_POLICIES: JSON.stringify(definition.messageAdapterPolicies ?? {}),
     AGENT_MODEL: definition.agentModel?.trim() || "",
     AGENT_REASONING_EFFORT: definition.agentReasoningEffort ?? "",
@@ -2225,17 +2235,27 @@ function startGateway(id: string): void {
   if (!runtime) {
     throw new Error(`Gateway not found: ${id}`);
   }
-  if (!runtime.definition.enabled) {
+  const runtimeAdapters = sharedGatewayMessageAdapterTypes(runtime.definition);
+  const startDecision = gatewayRuntimeStartDecision({
+    enabled: runtime.definition.enabled === true,
+    runtimeRequired: runtimeAdapters.length > 0,
+    running: Boolean(runtime.process && !runtime.process.killed)
+  });
+  if (startDecision === "skip-disabled") {
     appendLog(runtime, "skip start because gateway is disabled");
     return;
   }
-  if (runtime.process && !runtime.process.killed) {
+  if (startDecision === "skip-not-required") {
+    appendLog(runtime, "skip start because Route has no Gateway-owned message adapters");
+    return;
+  }
+  if (startDecision === "already-running") {
     return;
   }
 
   const command = childCommand();
   const agentStateGeneration = randomUUID();
-  const childEnv = envFor(runtime.definition);
+  const childEnv = envFor(runtime.definition, gatewayMessageAdapterEnvironment(runtimeAdapters));
   childEnv.AGENT_STATE_GENERATION = agentStateGeneration;
   runtime.agentStateGeneration = agentStateGeneration;
   agentStateByGateway.delete(runtime.definition.id);
@@ -7398,7 +7418,7 @@ export async function startManager(): Promise<void> {
     .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
   if (managerShouldAutostart) {
     for (const runtime of runtimes.values()) {
-      if (runtime.definition.enabled) {
+      if (runtime.definition.enabled && sharedGatewayMessageAdapterTypes(runtime.definition).length > 0) {
         startGateway(runtime.definition.id);
       }
     }

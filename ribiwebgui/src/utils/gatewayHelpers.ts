@@ -1,4 +1,4 @@
-import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
+import type { AgentAdapterType, GatewayDefinition, MessageAdapterPolicy, MessageAdapterType, MessageEndpointType, NotificationRule, NotificationScheduleDefinition, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
 import {
   defaultRolePanelNotificationRule,
   defaultMessageAdapterNotificationRules,
@@ -17,6 +17,7 @@ import {
   sanitizeConfigName as sharedSanitizeConfigName,
   setGatewayAdapters as sharedSetGatewayAdapters
 } from "@shared/gatewayConfigModel";
+import { isGatewayMessageAdapterType, isMessageEndpointType } from "@shared/messageEndpointTypes";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 import { SPEECH_ROUTE_AUTO_SUBMIT } from "../speech/speechDeliveryMode";
 
@@ -162,7 +163,7 @@ export function cloneRules(rules: NotificationRule[] | undefined): NotificationR
   return JSON.parse(JSON.stringify(Array.isArray(rules) ? rules : [])).map((rule: NotificationRule, index: number) => normalizeRule(rule, index));
 }
 
-export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageAdapterType[] {
+export function gatewayAdapterTypes(gateway: GatewayDefinition): MessageEndpointType[] {
   return sharedGatewayAdapterTypes(gateway);
 }
 
@@ -240,7 +241,7 @@ export function isWebhookLikeAdapter(type: string): boolean {
 }
 
 export function adapterNeedsGatewayRuntime(type: MessageAdapterType): boolean {
-  return type === "napcat" || type === "wecom" || type === "weixin" || type === "feishu" || type === "heartbeat" || type === "wearable" || isWebhookLikeAdapter(type);
+  return isGatewayMessageAdapterType(type);
 }
 
 export function adaptersNeedGatewayRuntime(types: MessageAdapterType[]): boolean {
@@ -271,7 +272,9 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
   const configuredAdapters = Array.isArray(gateway.messageAdapters) && gateway.messageAdapters.length > 0
     ? gateway.messageAdapters
     : [gateway.messageAdapterType || "napcat"];
-  gateway.messageAdapterPolicies = normalizeMessageAdapterPolicies(gateway.messageAdapterPolicies, configuredAdapters, gateway.messageAdaptersDisabled);
+  const endpointAdapters = configuredAdapters.filter(isMessageEndpointType);
+  const disabledEndpointAdapters = (gateway.messageAdaptersDisabled ?? []).filter(isMessageEndpointType);
+  gateway.messageAdapterPolicies = normalizeMessageAdapterPolicies(gateway.messageAdapterPolicies, endpointAdapters, disabledEndpointAdapters);
   const adapters = gatewayAdapterTypes(gateway);
   if (adapters.includes("napcat")) {
     gateway.gatewayPort = Number(gateway.gatewayPort || 8790);

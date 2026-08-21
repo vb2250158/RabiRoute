@@ -6,7 +6,7 @@ import { forwardMessage, recordMessageContextOnly } from "../forwarding.js";
 import { appendAdapterLog, appendVoiceTranscriptEventForAdapter, type VoiceTranscriptEventRecord } from "../history.js";
 import { isRabiLinkRecordFirstSource, recordRabiLinkVoiceObservation } from "../rabilinkObservationRecorder.js";
 import type { ForwardRouteKind } from "../routing/types.js";
-import type { MessageAdapter, MessageAdapterDispose, MessageAdapterType } from "./messageAdapter.js";
+import type { GatewayMessageAdapterType, MessageAdapter, MessageAdapterDispose, MessageAdapterType } from "./messageAdapter.js";
 
 export type WebhookPayload = {
   type?: string;
@@ -89,7 +89,7 @@ type GatewayStatus = {
 };
 
 export type WebhookAdapterProfile = {
-  type: MessageAdapterType;
+  type: GatewayMessageAdapterType;
   label: string;
   source: string;
   path: string;
@@ -150,7 +150,7 @@ function writeGatewayStatus(nextStatus: GatewayStatus): void {
 function patchWebhookStatus(profile: WebhookAdapterProfile, patch: NonNullable<GatewayStatus["webhook"]> & { status?: "running" | "error" | "disabled"; message?: string }): void {
   const status = readGatewayStatus();
   const current = status.messageAdapters?.[profile.type] ?? {};
-  const shouldKeepGenericWebhook = profile.type === "webhook" || config.messageAdapterTypes.includes("webhook");
+  const shouldKeepGenericWebhook = profile.type === "webhook" || config.messageEndpointTypes.includes("webhook");
   const host = profile.host || "127.0.0.1";
   const nextCallback = {
     ...status.httpCallbacks?.[profile.type],

@@ -25,7 +25,7 @@ test("built-in Message Adapter manifests include only Gateway-owned adapters", (
     transport: "http",
     lifecycle: "fiber"
   });
-  const registeredTypes = new Set(manifests.map((manifest) => manifest.type));
+  const registeredTypes = new Set<string>(manifests.map((manifest) => manifest.type));
   for (const type of ["wearable", "remoteAgent", "speech", "rolePanel", "disabled"] as const) {
     assert.equal(registeredTypes.has(type), false, `${type} must not be registered as a Gateway adapter`);
   }

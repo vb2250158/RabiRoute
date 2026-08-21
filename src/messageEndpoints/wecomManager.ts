@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { MessageAdapterType } from "../adapters/messageAdapter.js";
+import type { MessageEndpointType } from "../adapters/messageAdapter.js";
 import type { MessageAdapterScanResult } from "./webhookLikeScans.js";
 
 export type WeComScanRuntime = {
@@ -16,8 +16,8 @@ export type WeComScanRuntime = {
 
 export type WeComScanContext<Runtime extends WeComScanRuntime = WeComScanRuntime> = {
   rootDir: string;
-  adapterRuntimes(type: MessageAdapterType): Runtime[];
-  routeHasRecentMessages(runtime: Runtime, type: MessageAdapterType): boolean;
+  adapterRuntimes(type: MessageEndpointType): Runtime[];
+  routeHasRecentMessages(runtime: Runtime, type: MessageEndpointType): boolean;
 };
 
 function packageInstalled(rootDir: string): boolean {

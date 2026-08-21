@@ -6,7 +6,7 @@ import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
-import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
+import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
@@ -339,7 +339,7 @@ const adapterParamOpen = ref<Record<string, boolean>>({
 });
 const addAdapterMenu = ref(false);
 const adapterCatalogCache = ref<Record<string, MessageAdapterType[]>>({});
-const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> }> = [
+const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type: MessageEndpointType; title: string; note: string; icon: string }> }> = [
   {
     title: "本地桌面",
     note: "由本机常驻服务提供的消息入口。",
