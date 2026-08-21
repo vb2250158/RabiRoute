@@ -34,7 +34,7 @@ Start-Sleep 1
 Start-Process "node" -ArgumentList "dist/manager.js" -WorkingDirectory "<repo>" -RedirectStandardOutput "rabiroute-manager-restart.log" -RedirectStandardError "rabiroute-manager-restart.err.log" -WindowStyle Hidden
 Start-Sleep 2; Invoke-RestMethod "http://localhost:8790/meta" -TimeoutSec 3
 # 4. 启动/复用托盘（-NoBuild 跳过重复构建，-NoOpen 不重复开浏览器）
-& "<repo>\Start-RabiRoute-Tray.bat" -NoBuild -NoOpen
+& "<repo>\Start-RabiRoute-Desktop.bat" -NoBuild -NoOpen
 ```
 
 ### 仅前端（明确指定时才用）
@@ -55,17 +55,17 @@ cmd /c "cd /d <repo> && npm run build:backend"
 
 启动方式（会自动检测是否需要 build）：
 ```powershell
-Start-Process "<repo>\Start-RabiRoute-Tray.bat"
+Start-Process "<repo>\Start-RabiRoute-Desktop.bat"
 ```
 
 也可以向 bat 入口传递参数：
 ```powershell
-& "<repo>\Start-RabiRoute-Tray.bat"
+& "<repo>\Start-RabiRoute-Desktop.bat"
 ```
 
 脚本参数：
 - `-NoBuild`：跳过自动构建（已有最新 dist）
-- `-NoTray`：只启动 manager，不启动 Qt 面板
+- `-NoDesktopShell`：只启动 manager，不启动 RabiRoute Desktop 界面
 - `-NoOpen`：不自动在浏览器打开 WebGUI
 - `-ManagerUrl`：默认 `http://127.0.0.1:8790`
 
@@ -79,10 +79,10 @@ Start-Process "<repo>\Start-RabiRoute-Tray.bat"
 
 **打包命令**（在 `<repo>` 目录下执行）：
 ```powershell
-.\scripts\build-tray-exe.ps1
+.\scripts\build-desktop-exe.ps1
 ```
 
-输出：`<repo>\RabiRoute-Tray.exe`
+输出：`<repo>\RabiRoute-Desktop.exe`
 
 参数：
 - `-SkipNodeBuild`：跳过 `npm run build`（已有最新 dist 时使用）
@@ -101,14 +101,14 @@ Start-Process "<repo>\Start-RabiRoute-Tray.bat"
 
 **实现文件**：
 - `desktop/tray-task-window/main.py`：冻结模式检测（`sys.frozen`），自动启动 manager
-- `RabiRoute-Tray.spec`：PyInstaller spec（onefile，`console=False`）
-- `scripts/build-tray-exe.ps1`：封装打包流程的脚本
+- `RabiRoute-Desktop.spec`：PyInstaller spec（onefile，`console=False`）
+- `scripts/build-desktop-exe.ps1`：封装打包流程的脚本
 
 **注意**：
 - `project_root` 在 exe 中通过 `Path(sys.executable).parent` 解析（exe 放在项目根目录）
 - exe 不捆绑 Node.js 和 `dist/manager.js`，这两项仍是外部依赖
 - exe 是本地打包产物，不提交到源码仓库；公开发布包暂不启用，除非先完成二进制脱敏和冒烟检查
-- 若有 `.ico` 图标，修改 `RabiRoute-Tray.spec` 中的 `icon=` 行
+- 若有 `.ico` 图标，修改 `RabiRoute-Desktop.spec` 中的 `icon=` 行
 
 ## 重启 manager（不重新构建）
 
@@ -133,7 +133,7 @@ Start-Sleep 2; Invoke-RestMethod "http://localhost:8790/meta" -TimeoutSec 3
 
 ## 自动构建判断
 
-`Start-RabiRoute-Tray.bat` 会比较 `dist/manager.js` 的修改时间与 `src/`、`ribiwebgui/src/` 下 `.ts/.vue` 文件的修改时间，若源文件更新则自动触发 `npm run build`。
+`Start-RabiRoute-Desktop.bat` 会比较 `dist/manager.js` 的修改时间与 `src/`、`ribiwebgui/src/` 下 `.ts/.vue` 文件的修改时间，若源文件更新则自动触发 `npm run build`。
 
 ## 部署顺序（完整启动）
 

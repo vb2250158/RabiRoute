@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "RabiRoute"
 APP_DISPLAY_NAME = "RabiRoute"
 APP_ORGANIZATION = "CottonProject"
-APP_USER_MODEL_ID = "CottonProject.RabiRoute.Tray"
+APP_USER_MODEL_ID = "CottonProject.RabiRoute.Desktop"
 
 
 def configure_process_app_identity() -> None:
@@ -90,7 +90,7 @@ def sync_startup_shortcut(project_root: Path, enabled: bool) -> None:
 def _shortcut_target(project_root: Path) -> tuple[Path, str]:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve(), ""
-    launcher = project_root / "Start-RabiRoute-Tray.bat"
+    launcher = project_root / "Start-RabiRoute-Desktop.bat"
     if launcher.exists():
         return launcher, ""
     tray_main = project_root / "desktop" / "tray-task-window" / "main.py"
@@ -101,7 +101,7 @@ def _shortcut_icon(project_root: Path, target_path: Path) -> Path:
     asset_icon = project_root / "assets" / "rabiroute-icon.ico"
     if asset_icon.exists():
         return asset_icon
-    exe_icon = project_root / "RabiRoute-Tray.exe"
+    exe_icon = project_root / "RabiRoute-Desktop.exe"
     if exe_icon.exists():
         return exe_icon
     return target_path

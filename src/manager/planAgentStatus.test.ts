@@ -122,3 +122,36 @@ test("opening a plan Agent only opens the exact verified Codex task", async () =
   assert.equal(result.opened, true);
   assert.equal(result.threadTitle, "Plan Agent");
 });
+
+
+test("plan Agent status reads and opens the exact DSH session through its bound adapter", async () => {
+  const reads: Array<{ sessionId: string; baseUrl?: string }> = [];
+  const opened: Array<{ sessionId: string; baseUrl?: string }> = [];
+  const service = createPlanAgentStatusService({
+    readDshSession: async (sessionId, baseUrl) => {
+      reads.push({ sessionId, baseUrl });
+      return thread({
+        id: sessionId,
+        title: "DSH 计划任务",
+        cwd: "C:\\work",
+        status: { type: "idle" }
+      });
+    },
+    openDshSession: async (sessionId, baseUrl) => { opened.push({ sessionId, baseUrl }); }
+  });
+  const dshBinding = {
+    agentType: "dsh" as const,
+    sessionId: "session-00000000-0000-4000-8000-000000000001",
+    sessionTitle: "DSH 计划任务",
+    workspace: "C:\\work",
+    baseUrl: "http://127.0.0.1:3080"
+  };
+  const [status] = await service.inspectPlans([plan({ taskBinding: dshBinding })]);
+  assert.equal(status?.taskAgent.agentType, "dsh");
+  assert.equal(status?.taskAgent.sessionStatus, "idle");
+  assert.deepEqual(reads, [{ sessionId: dshBinding.sessionId, baseUrl: dshBinding.baseUrl }]);
+
+  const result = await service.openPlanAgent(plan({ taskBinding: dshBinding }), "task");
+  assert.equal(result.agentType, "dsh");
+  assert.deepEqual(opened, [{ sessionId: dshBinding.sessionId, baseUrl: dshBinding.baseUrl }]);
+});

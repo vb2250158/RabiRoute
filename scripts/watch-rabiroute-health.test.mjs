@@ -110,7 +110,7 @@ test("watchdog reports an isolated NapCat failure as degraded, not a system erro
       "-DefaultRouteName", "watchdog-test",
       "-Once",
       "-NoRepair",
-      "-NoTrayRepair"
+      "-NoDesktopRepair"
     ]);
     assert.equal(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
 
@@ -170,7 +170,7 @@ test("watchdog retries a transient Manager probe failure before considering reco
       "-ManagerProbeAttempts", "2",
       "-ManagerProbeRetryDelayMilliseconds", "10",
       "-Once",
-      "-NoTrayRepair"
+      "-NoDesktopRepair"
     ]);
     assert.equal(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
     assert.equal(metaRequests >= 2, true);

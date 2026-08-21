@@ -60,7 +60,7 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
   return {
     deliveryId: "<为本次发送生成稳定 ID；重试时保持不变>",
     sender: {
-      agentType: "<当前 Agent 类型，例如 codex>",
+      agentType: "<当前 Agent 类型；仅在开启 Codex 主人格发送限制时，主人格填 primary_persona>",
       sessionId: "<当前 Agent 的完整会话 ID>"
     },
     routeId,

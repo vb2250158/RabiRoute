@@ -1,5 +1,6 @@
 import { openCodexDesktopThread } from "../codexDesktopBridge.js";
 import { readCodexThread } from "../codexRuntime.js";
+import { openDshSession, readDshSession } from "../dshSessionBridge.js";
 import type { PlanItem, PlanSecretaryBinding, PlanTaskBinding } from "../roleKnowledge.js";
 import { normalizePathForComparison } from "../shared/pathPolicy.js";
 
@@ -21,7 +22,7 @@ export type PlanAgentSessionStatus =
 export type PlanAgentBindingStatus = {
   role: PlanAgentRole;
   configured: boolean;
-  agentType: "codex";
+  agentType: "codex" | "dsh";
   threadId: string;
   threadTitle: string;
   workspace: string;
@@ -42,7 +43,7 @@ export type PlanAgentStatus = {
 
 type PlanAgentBinding = PlanTaskBinding | PlanSecretaryBinding;
 
-type CodexThreadReadModel = {
+type AgentSessionReadModel = {
   id: string;
   title: string;
   cwd: string;
@@ -55,6 +56,7 @@ export type PlanAgentStatusService = {
   openPlanAgent(plan: PlanItem, role: PlanAgentRole): Promise<{
     planId: string;
     role: PlanAgentRole;
+    agentType: "codex" | "dsh";
     threadId: string;
     threadTitle: string;
     workspace: string;
@@ -63,15 +65,21 @@ export type PlanAgentStatusService = {
 };
 
 export type PlanAgentStatusDependencies = {
+  /** Legacy Codex seam retained for existing callers and tests. */
   readThread?: (threadId: string) => Promise<unknown>;
+  /** Legacy Codex seam retained for existing callers and tests. */
   openThread?: (threadId: string) => Promise<void>;
+  readCodexThread?: (threadId: string) => Promise<unknown>;
+  openCodexThread?: (threadId: string) => Promise<void>;
+  readDshSession?: (sessionId: string, baseUrl?: string) => Promise<unknown>;
+  openDshSession?: (sessionId: string, baseUrl?: string) => Promise<void>;
   timeoutMs?: number;
   now?: () => Date;
 };
 
 class PlanAgentStatusTimeoutError extends Error {
   constructor() {
-    super("Codex task status query timed out.");
+    super("Plan Agent session status query timed out.");
     this.name = "PlanAgentStatusTimeoutError";
   }
 }
@@ -96,11 +104,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isMissingThreadError(error: unknown): boolean {
+function agentLabel(agentType: PlanAgentBinding["agentType"]): string {
+  return agentType === "dsh" ? "DSH" : "Codex Desktop";
+}
+
+function isMissingSessionError(error: unknown): boolean {
   return /not found|was not found|no rollout found/i.test(errorMessage(error));
 }
 
-function normalizeThread(value: unknown): CodexThreadReadModel | null {
+function normalizeSession(value: unknown): AgentSessionReadModel | null {
   if (!value || typeof value !== "object") return null;
   const item = value as Record<string, unknown>;
   const status = item.status && typeof item.status === "object"
@@ -140,7 +152,7 @@ function bindingIdentity(
   return {
     role,
     configured: true,
-    agentType: "codex",
+    agentType: binding.agentType,
     threadId: String(binding.sessionId || "").trim(),
     threadTitle: String(binding.sessionTitle || "").trim(),
     workspace: String(binding.workspace || "").trim(),
@@ -148,21 +160,22 @@ function bindingIdentity(
   };
 }
 
-function workspaceMatches(bindingWorkspace: string, threadWorkspace: string): boolean {
-  if (!bindingWorkspace || !threadWorkspace) return true;
-  return normalizePathForComparison(bindingWorkspace) === normalizePathForComparison(threadWorkspace);
+function workspaceMatches(bindingWorkspace: string, sessionWorkspace: string): boolean {
+  if (!bindingWorkspace || !sessionWorkspace) return true;
+  return normalizePathForComparison(bindingWorkspace) === normalizePathForComparison(sessionWorkspace);
 }
 
-function statusFromThread(
+function statusFromSession(
   role: PlanAgentRole,
   binding: PlanAgentBinding,
-  thread: CodexThreadReadModel,
+  session: AgentSessionReadModel,
   checkedAt: string
 ): PlanAgentBindingStatus {
   const identity = bindingIdentity(role, binding, checkedAt);
-  const threadTitle = thread.title || identity.threadTitle;
-  const workspace = thread.cwd || identity.workspace;
-  if (!workspaceMatches(identity.workspace, thread.cwd)) {
+  const threadTitle = session.title || identity.threadTitle;
+  const workspace = session.cwd || identity.workspace;
+  const label = agentLabel(binding.agentType);
+  if (!workspaceMatches(identity.workspace, session.cwd)) {
     return {
       ...identity,
       threadTitle,
@@ -171,10 +184,10 @@ function statusFromThread(
       agentStatus: "unknown",
       sessionStatus: "workspace_mismatch",
       canOpen: false,
-      message: `Bound workspace does not match the Codex task: ${identity.workspace} != ${thread.cwd}`
+      message: `Bound workspace does not match the ${label} session: ${identity.workspace} != ${session.cwd}`
     };
   }
-  if (thread.archived) {
+  if (session.archived) {
     return {
       ...identity,
       threadTitle,
@@ -185,49 +198,17 @@ function statusFromThread(
       canOpen: false
     };
   }
-  if (thread.status === "active") {
-    return {
-      ...identity,
-      threadTitle,
-      workspace,
-      working: true,
-      agentStatus: "working",
-      sessionStatus: "active",
-      canOpen: true
-    };
+  if (session.status === "active") {
+    return { ...identity, threadTitle, workspace, working: true, agentStatus: "working", sessionStatus: "active", canOpen: true };
   }
-  if (thread.status === "idle") {
-    return {
-      ...identity,
-      threadTitle,
-      workspace,
-      working: false,
-      agentStatus: "idle",
-      sessionStatus: "idle",
-      canOpen: true
-    };
+  if (session.status === "idle") {
+    return { ...identity, threadTitle, workspace, working: false, agentStatus: "idle", sessionStatus: "idle", canOpen: true };
   }
-  if (thread.status === "notLoaded") {
-    return {
-      ...identity,
-      threadTitle,
-      workspace,
-      working: false,
-      agentStatus: "idle",
-      sessionStatus: "not_loaded",
-      canOpen: true
-    };
+  if (session.status === "notLoaded") {
+    return { ...identity, threadTitle, workspace, working: false, agentStatus: "idle", sessionStatus: "not_loaded", canOpen: true };
   }
-  if (thread.status === "unavailable") {
-    return {
-      ...identity,
-      threadTitle,
-      workspace,
-      working: false,
-      agentStatus: "unknown",
-      sessionStatus: "unavailable",
-      canOpen: true
-    };
+  if (session.status === "unavailable") {
+    return { ...identity, threadTitle, workspace, working: false, agentStatus: "unknown", sessionStatus: "unavailable", canOpen: true };
   }
   return {
     ...identity,
@@ -237,7 +218,7 @@ function statusFromThread(
     agentStatus: "unknown",
     sessionStatus: "unknown",
     canOpen: true,
-    message: "Codex task status is unknown."
+    message: `${label} session status is unknown.`
   };
 }
 
@@ -248,28 +229,43 @@ function failedBindingStatus(
   error: unknown
 ): PlanAgentBindingStatus {
   const identity = bindingIdentity(role, binding, checkedAt);
-  const missing = isMissingThreadError(error);
+  const missing = isMissingSessionError(error);
+  const label = agentLabel(binding.agentType);
   return {
     ...identity,
     working: false,
     agentStatus: "unknown",
     sessionStatus: missing ? "missing" : "unknown",
     canOpen: false,
-    message: missing ? "Codex Desktop task was not found." : errorMessage(error)
+    message: missing ? `${label} session was not found.` : errorMessage(error)
   };
 }
 
 function bindingKey(binding: PlanAgentBinding): string {
-  return `${String(binding.sessionId || "").trim()}\u001f${normalizePathForComparison(String(binding.workspace || ""))}`;
+  return [
+    binding.agentType,
+    String(binding.sessionId || "").trim(),
+    normalizePathForComparison(String(binding.workspace || "")),
+    binding.agentType === "dsh" ? String(binding.baseUrl || "").trim().toLowerCase() : ""
+  ].join("\u001f");
 }
 
 export function createPlanAgentStatusService(
   dependencies: PlanAgentStatusDependencies = {}
 ): PlanAgentStatusService {
-  const readThread = dependencies.readThread ?? readCodexThread;
-  const openThread = dependencies.openThread ?? openCodexDesktopThread;
+  const readCodex = dependencies.readCodexThread ?? dependencies.readThread ?? readCodexThread;
+  const openCodex = dependencies.openCodexThread ?? dependencies.openThread ?? openCodexDesktopThread;
+  const readDsh = dependencies.readDshSession ?? readDshSession;
+  const openDsh = dependencies.openDshSession ?? openDshSession;
   const timeoutMs = Math.max(1, dependencies.timeoutMs ?? PLAN_AGENT_STATUS_TIMEOUT_MS);
   const now = dependencies.now ?? (() => new Date());
+
+  const readBinding = (binding: PlanAgentBinding): Promise<unknown> => binding.agentType === "dsh"
+    ? readDsh(binding.sessionId, binding.baseUrl)
+    : readCodex(binding.sessionId);
+  const openBinding = (binding: PlanAgentBinding, sessionId: string): Promise<void> => binding.agentType === "dsh"
+    ? openDsh(sessionId, binding.baseUrl)
+    : openCodex(sessionId);
 
   async function inspectBinding(
     role: PlanAgentRole,
@@ -277,10 +273,10 @@ export function createPlanAgentStatusService(
     checkedAt: string
   ): Promise<PlanAgentBindingStatus> {
     try {
-      const value = await withTimeout(readThread(binding.sessionId), timeoutMs);
-      const thread = normalizeThread(value);
-      if (!thread) throw new Error("Codex task status response is invalid.");
-      return statusFromThread(role, binding, thread, checkedAt);
+      const value = await withTimeout(readBinding(binding), timeoutMs);
+      const session = normalizeSession(value);
+      if (!session) throw new Error(`${agentLabel(binding.agentType)} session status response is invalid.`);
+      return statusFromSession(role, binding, session, checkedAt);
     } catch (error) {
       return failedBindingStatus(role, binding, checkedAt, error);
     }
@@ -293,9 +289,7 @@ export function createPlanAgentStatusService(
       const inspectShared = (role: PlanAgentRole, binding: PlanAgentBinding): Promise<PlanAgentBindingStatus> => {
         const key = bindingKey(binding);
         const existing = shared.get(key);
-        if (existing) {
-          return existing.then((status) => ({ ...status, role }));
-        }
+        if (existing) return existing.then((status) => ({ ...status, role }));
         const request = inspectBinding(role, binding, checkedAt);
         shared.set(key, request);
         return request;
@@ -303,32 +297,30 @@ export function createPlanAgentStatusService(
       return Promise.all(plans.map(async (plan) => ({
         planId: plan.id,
         checkedAt,
-        taskAgent: plan.taskBinding
-          ? await inspectShared("task", plan.taskBinding)
-          : emptyBindingStatus("task", checkedAt),
-        ...(plan.secretaryBinding
-          ? { secretaryAgent: await inspectShared("secretary", plan.secretaryBinding) }
-          : {})
+        taskAgent: plan.taskBinding ? await inspectShared("task", plan.taskBinding) : emptyBindingStatus("task", checkedAt),
+        ...(plan.secretaryBinding ? { secretaryAgent: await inspectShared("secretary", plan.secretaryBinding) } : {})
       })));
     },
 
     async openPlanAgent(plan, role) {
       const binding = role === "secretary" ? plan.secretaryBinding : plan.taskBinding;
       if (!binding) throw new Error(role === "secretary" ? "Plan secretary Agent is not configured." : "Plan task Agent is not configured.");
-      const value = await withTimeout(readThread(binding.sessionId), timeoutMs);
-      const thread = normalizeThread(value);
-      if (!thread) throw new Error("Codex task status response is invalid.");
-      if (!workspaceMatches(String(binding.workspace || "").trim(), thread.cwd)) {
-        throw new Error(`Bound workspace does not match the Codex task: ${binding.workspace || ""} != ${thread.cwd}`);
+      const value = await withTimeout(readBinding(binding), timeoutMs);
+      const session = normalizeSession(value);
+      const label = agentLabel(binding.agentType);
+      if (!session) throw new Error(`${label} session status response is invalid.`);
+      if (!workspaceMatches(String(binding.workspace || "").trim(), session.cwd)) {
+        throw new Error(`Bound workspace does not match the ${label} session: ${binding.workspace || ""} != ${session.cwd}`);
       }
-      if (thread.archived) throw new Error("Codex Desktop task is archived; restore it before opening from the plan.");
-      await openThread(thread.id);
+      if (session.archived) throw new Error(`${label} session is archived; restore it before opening from the plan.`);
+      await openBinding(binding, session.id);
       return {
         planId: plan.id,
         role,
-        threadId: thread.id,
-        threadTitle: thread.title || String(binding.sessionTitle || "").trim(),
-        workspace: thread.cwd || String(binding.workspace || "").trim(),
+        agentType: binding.agentType,
+        threadId: session.id,
+        threadTitle: session.title || String(binding.sessionTitle || "").trim(),
+        workspace: session.cwd || String(binding.workspace || "").trim(),
         opened: true
       };
     }

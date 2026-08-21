@@ -71,6 +71,8 @@ with the injected `sendRequestJson` template. Every request must provide a stabl
 
 The explicit `channel` selects QQ/NapCat, WeCom, RabiLink, speech, or another supported endpoint even when the Route's default pipeline differs. The adapter policy must allow output, and required target parameters must be present.
 
+By default, every persona may call this endpoint to send a message. Only a Route whose Primary Agent is Codex exposes `codexHooks.onlyPrimaryPersonaCanSendMessages` in Codex **Hook management**; it defaults to `false`. When enabled, Manager accepts new sends only from the currently bound Codex Primary Persona task: `sender.agentType` must be `primary_persona` and `sender.sessionId` must exactly match the Route's `codexThreadId`. Plan Agents, secretaries, and other personas are rejected; when Codex is a secondary Agent, this switch is neither shown nor applied. Other Agent adapters do not use this switch.
+
 There is no generic persistent Action Queue, WebGUI approval center, or automatic retry queue. `draft` is a result/audit state, not a pending item in a finished approval product.
 
 ## RabiSpeech speech message endpoint

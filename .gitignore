@@ -36,9 +36,11 @@
 /tmp-finish-*.package.json
 .tmp-clarify-*.json
 /docs/rokid-rabilink-plugin.*.openapi.json
+/RabiRoute-Desktop.exe
+/RabiRoute-Desktop.new.exe
 /RabiRoute-Tray.exe
 /RabiRoute-Tray.new.exe
-/RabiRoute-Tray.exe.bak-*
+/RabiRoute-Desktop.exe.bak-*
 /.idea/
 .venv/
 /.venv-tray/

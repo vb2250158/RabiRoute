@@ -94,18 +94,22 @@ export type PlanTaskCompletionHook = {
 };
 
 export type PlanTaskBinding = {
-  agentType: "codex";
+  agentType: "codex" | "dsh";
   sessionId: string;
   sessionTitle?: string;
   workspace?: string;
+  /** DSH apiproxy origin used to read and open this DSH session. */
+  baseUrl?: string;
   completionHook?: PlanTaskCompletionHook;
 };
 
 export type PlanSecretaryBinding = {
-  agentType: "codex";
+  agentType: "codex" | "dsh";
   sessionId: string;
   sessionTitle?: string;
   workspace: string;
+  /** DSH apiproxy origin used to read and open this DSH session. */
+  baseUrl?: string;
   assignedAt?: string;
 };
 
@@ -145,6 +149,15 @@ export type PlanItem = {
   createdAt: string;
   updatedAt: string;
   keywords: string[];
+};
+
+export type PlanHistoryRecord = {
+  id: string;
+  planId: string;
+  kind: "created" | "updated" | "archived";
+  recordedAt: string;
+  before?: PlanItem;
+  after: PlanItem;
 };
 
 export type PlanUpdatedEvent = {
@@ -820,11 +833,13 @@ function planTextTotal(plan: PlanItem): number {
     plan.secretaryBinding?.sessionId,
     plan.secretaryBinding?.sessionTitle,
     plan.secretaryBinding?.workspace,
+    plan.secretaryBinding?.baseUrl,
     plan.secretaryBinding?.assignedAt,
     plan.taskBinding?.agentType,
     plan.taskBinding?.sessionId,
     plan.taskBinding?.sessionTitle,
     plan.taskBinding?.workspace,
+    plan.taskBinding?.baseUrl,
     plan.taskBinding?.completionHook?.gatewayId,
     ...plan.steps.flatMap((step) => [
       step.id,
@@ -1226,14 +1241,26 @@ function recordPlanStepTimes(steps: PlanStep[], previousSteps: PlanStep[], recor
   });
 }
 
+function validatePlanBindingBaseUrl(value: unknown, label: string): void {
+  if (value == null) return;
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label}.baseUrl must be a non-empty HTTP URL when provided.`);
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("unsupported protocol");
+  } catch {
+    throw new Error(`${label}.baseUrl must be a non-empty HTTP URL when provided.`);
+  }
+}
+
 function validatePlanTaskBindingInput(value: unknown): void {
   if (value == null) return;
   const raw = recordValue(value);
-  if (Object.keys(raw).length === 0) throw new Error("Plan taskBinding must be an object with a Codex sessionId.");
-  if (raw.agentType != null && raw.agentType !== "codex") {
+  if (Object.keys(raw).length === 0) throw new Error("Plan taskBinding must be an object with an Agent sessionId.");
+  if (raw.agentType != null && raw.agentType !== "codex" && raw.agentType !== "dsh") {
     throw new Error(`Unsupported plan taskBinding agentType: ${String(raw.agentType)}`);
   }
   if (!String(raw.sessionId || "").trim()) throw new Error("Plan taskBinding.sessionId is required.");
+  validatePlanBindingBaseUrl(raw.baseUrl, "Plan taskBinding");
   if (raw.completionHook != null) {
     const hook = recordValue(raw.completionHook);
     if (Object.keys(hook).length === 0) throw new Error("Plan taskBinding.completionHook must be an object.");
@@ -1244,12 +1271,13 @@ function validatePlanTaskBindingInput(value: unknown): void {
 function validatePlanSecretaryBindingInput(value: unknown): void {
   if (value == null) return;
   const raw = recordValue(value);
-  if (Object.keys(raw).length === 0) throw new Error("Plan secretaryBinding must identify a configured Codex secretary task.");
-  if (raw.agentType != null && raw.agentType !== "codex") {
+  if (Object.keys(raw).length === 0) throw new Error("Plan secretaryBinding must identify a configured secretary session.");
+  if (raw.agentType != null && raw.agentType !== "codex" && raw.agentType !== "dsh") {
     throw new Error(`Unsupported plan secretaryBinding agentType: ${String(raw.agentType)}`);
   }
   if (!String(raw.sessionId || "").trim()) throw new Error("Plan secretaryBinding.sessionId is required.");
   if (!String(raw.workspace || "").trim()) throw new Error("Plan secretaryBinding.workspace is required.");
+  validatePlanBindingBaseUrl(raw.baseUrl, "Plan secretaryBinding");
 }
 
 function normalizePlanSecretaryBinding(value: unknown): PlanSecretaryBinding | undefined {
@@ -1259,10 +1287,11 @@ function normalizePlanSecretaryBinding(value: unknown): PlanSecretaryBinding | u
   const workspace = String(raw.workspace || "").trim();
   if (!sessionId || !workspace) return undefined;
   return {
-    agentType: "codex",
+    agentType: raw.agentType === "dsh" ? "dsh" : "codex",
     sessionId,
     sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
     workspace,
+    ...(typeof raw.baseUrl === "string" && raw.baseUrl.trim() ? { baseUrl: raw.baseUrl.trim() } : {}),
     assignedAt: typeof raw.assignedAt === "string" ? raw.assignedAt.trim() || undefined : undefined
   };
 }
@@ -1274,10 +1303,11 @@ function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
   if (!sessionId) return undefined;
   const hook = recordValue(raw.completionHook);
   return {
-    agentType: "codex",
+    agentType: raw.agentType === "dsh" ? "dsh" : "codex",
     sessionId,
     sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
     workspace: typeof raw.workspace === "string" ? raw.workspace.trim() || undefined : undefined,
+    ...(typeof raw.baseUrl === "string" && raw.baseUrl.trim() ? { baseUrl: raw.baseUrl.trim() } : {}),
     completionHook: {
       enabled: hook.enabled !== false,
       gatewayId: typeof hook.gatewayId === "string" ? hook.gatewayId.trim() || undefined : undefined
@@ -1428,6 +1458,56 @@ function skillsDir(roleDir: string): string {
 function planFile(roleDir: string, plan: PlanItem): string {
   const base = plan.status === "已归档" ? path.join(plansDir(roleDir), "archive") : path.join(plansDir(roleDir), "items", "active");
   return path.join(base, `${safeIdPart(plan.id) || "plan"}.json`);
+}
+
+function planHistoryFile(roleDir: string, planId: string): string {
+  return path.join(plansDir(roleDir), "history", `${safeIdPart(planId) || "plan"}.jsonl`);
+}
+
+function planHistoryKind(before: PlanItem | undefined, after: PlanItem): PlanHistoryRecord["kind"] {
+  if (!before) return "created";
+  if (before.status !== "已归档" && after.status === "已归档") return "archived";
+  return "updated";
+}
+
+function appendPlanHistory(roleDir: string, before: PlanItem | undefined, after: PlanItem): PlanHistoryRecord {
+  const recordedAt = after.updatedAt || nowIso();
+  const record: PlanHistoryRecord = {
+    id: generatedId("plan-history", `${after.id}-${recordedAt}`),
+    planId: after.id,
+    kind: planHistoryKind(before, after),
+    recordedAt,
+    ...(before ? { before } : {}),
+    after
+  };
+  const filePath = planHistoryFile(roleDir, after.id);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+  return record;
+}
+
+export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRecord[] {
+  const filePath = planHistoryFile(roleDir, planId);
+  if (!fs.existsSync(filePath)) return [];
+  const records: PlanHistoryRecord[] = [];
+  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
+    try {
+      const value = JSON.parse(line) as Partial<PlanHistoryRecord>;
+      if (!value.id || value.planId !== planId || !value.recordedAt || !value.after || typeof value.after !== "object") continue;
+      if (value.kind !== "created" && value.kind !== "updated" && value.kind !== "archived") continue;
+      records.push({
+        id: value.id,
+        planId,
+        kind: value.kind,
+        recordedAt: value.recordedAt,
+        ...(value.before && typeof value.before === "object" ? { before: value.before as PlanItem } : {}),
+        after: value.after as PlanItem
+      });
+    } catch {
+      // A damaged audit line must not hide later valid history entries.
+    }
+  }
+  return records;
 }
 
 function recentMemoryFile(roleDir: string, memory: RecentMemoryItem): string {
@@ -2131,6 +2211,7 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
   }
   const destination = planFile(roleDir, plan);
   writeJson(destination, plan);
+  appendPlanHistory(roleDir, undefined, plan);
   updatePlanListCacheAfterWrite(roleDir, destination, plan, [destination]);
   return plan;
 }
@@ -2156,6 +2237,7 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   }
   const destination = planFile(roleDir, next);
   writeJson(destination, next);
+  appendPlanHistory(roleDir, existing, next);
   for (const filePath of new Set([record.filePath, ...planCandidateFiles(roleDir, planId)])) {
     if (path.resolve(filePath) === path.resolve(destination)) continue;
     const raw = readJson<Record<string, unknown>>(filePath);

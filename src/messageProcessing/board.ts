@@ -156,6 +156,7 @@ export type MessageProcessingSource = {
 };
 
 export type MessageProcessingWorker = {
+  agentAdapter?: "codex" | "dsh";
   threadId: string;
   threadName: string;
   workspace: string;
@@ -717,6 +718,7 @@ function normalizedWorker(value: unknown): MessageProcessingWorker | undefined {
   const workspace = cleanText(worker.workspace, 2_000);
   if (!threadId || !threadName || !workspace) return undefined;
   return {
+    agentAdapter: worker.agentAdapter === "dsh" || threadId.startsWith("session-") ? "dsh" : "codex",
     threadId,
     threadName,
     workspace

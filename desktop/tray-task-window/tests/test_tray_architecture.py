@@ -26,7 +26,7 @@ class TrayArchitectureTest(unittest.TestCase):
         self.assertNotIn("setContextMenu(", source)
 
     def test_packaged_tray_does_not_force_local_role_repositories_into_runtime(self) -> None:
-        spec = (TRAY_ROOT.parent.parent / "RabiRoute-Tray.spec").read_text(encoding="utf-8")
+        spec = (TRAY_ROOT.parent.parent / "RabiRoute-Desktop.spec").read_text(encoding="utf-8")
 
         self.assertNotIn('"rabiroute_tray.task_repository"', spec)
         self.assertNotIn('"rabiroute_tray.role_context_repository"', spec)

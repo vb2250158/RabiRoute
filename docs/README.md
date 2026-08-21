@@ -24,6 +24,7 @@
 - [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。第一次使用时从这里开始，完成一条真实投递，并学会看状态、改规则和处理常见失败。
 - [快速上手](getting-started.md) — **现行指南**。完成安装，启动 Manager，并确认浏览器能打开控制台。
 - [界面与状态](user-guide/interface-and-status.md) — **现行指南**。看懂当前 Route、Manager 连接、未保存修改、运行状态，以及设置页的截图、滑词菜单和登录启动。
+- [界面主题](user-guide/interface-theme.md) — **现行指南**。统一 WebGUI 与 Windows 托盘的浅色、深色和跟随系统设置。
 - [运行、日志与排障](user-guide/operations-and-troubleshooting.md) — **现行指南**。消息没有送达时，从诊断摘要开始逐项找到断点。
 - [安全、回传与数据](user-guide/safety-and-data.md) — **现行指南**。在启用外部回复或共享诊断材料前，确认权限和隐私边界。
 - [当前能力与成熟度](current-capabilities.md) — **当前事实**。核对哪些能力已经验证，哪些仍需要真实账号、网络或设备验收。
@@ -54,11 +55,14 @@
 ## 架构与维护
 
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
+- [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **设计调研**。提炼 Cordis 的依赖、生命周期、配置对账和恢复原则，并给出适合 RabiRoute 的分阶段采用边界。
+- [DSH 如何使用 Cordis](dsh-cordis-runtime-analysis.md) — **实现调查**。说明 profile、Loader、Fiber、服务 realm、浏览器插件树、动态代码和进程沙箱的真实边界。
+- [基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md) — **已选设计**。定义组合内核、Rabi 业务适配层、多宿主扩展协议、迁移阶段和验证合同。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
 - [路径与目录规范](path-and-directory-conventions.md) — **当前维护规范**。区分软件目录、公开示例、本机运行数据和日志，并规定 API 中相对路径与业务 ID 的写法。
 - [PR 安全门禁](maintainer-security-gates.md) — **现行维护指南**。秘钥扫描、生产依赖审计、CodeQL、最小权限和合并保护要求。
-- [Windows 启动与打包](windows-launcher-and-packaging.md) — **现行指南**。Node/WebGUI 基线与 Qt/Windows 便利层。
+- [Windows 启动与打包](windows-launcher-and-packaging.md) — **现行指南**。RabiRoute Desktop 的用户入口、内部本机后端和打包边界。
 - [Manager 运行稳定性与故障证据](manager-runtime-resilience.md) — **现行指南**。崩溃日志、单实例、人格索引非致命持久化、watchdog 退避恢复与浸泡验收。
 - [NapCat 无值守](napcat-unattended.md) — **现行指南**。登录态、quick login、Manager 一键恢复和守护边界。
 

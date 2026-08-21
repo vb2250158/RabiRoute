@@ -135,7 +135,7 @@ WECOM_WS_URL=<可选：私有部署或调试 WebSocket 地址>
 请求 ID：{wecomReqId}
 消息类型：{wecomMessageType}
 
-[消息]
+[消息内容]
 {message}
 
 [上下文]
@@ -189,7 +189,7 @@ POST /api/agent/send
 ```json
 {
   "deliveryId": "wecom-msg-001-response",
-  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
   "routeId": "wecom",
   "channel": "wecom",
   "params": {
@@ -206,7 +206,7 @@ POST /api/agent/send
 ```json
 {
   "deliveryId": "wecom-reminder-2026-08-10-1800",
-  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
   "routeId": "wecom",
   "channel": "wecom",
   "params": { "chatId": "wrCHATID" },
@@ -214,7 +214,7 @@ POST /api/agent/send
 }
 ```
 
-`sender.agentType` 和当前完整 `sender.sessionId`、`routeId` 都必须填写，`routeId` 必须精确指向启用中的 Route，`params.chatId` 必须明确。回应当前消息时可带 `params.reqId`，主动发送时省略。发送前仍会检查 `messageAdapterPolicies.wecom.outputEnabled` 和 `supportedOutputs`。关闭发送、缺少明确目标、缺少企业微信 bot secret、SDK 返回发送限制或目标不可达时，outbox 返回 `blocked` / `failed`，并写入 `outbox-adapter.log.jsonl`。
+示例以 Codex 主人格为发送方：`sender.agentType`、当前完整 `sender.sessionId` 和 `routeId` 都必须填写。若开启 Codex 的“仅允许主人格发送消息”Hook，`sender.agentType` 必须为 `primary_persona`，且 `sender.sessionId` 必须与 Route 的 `codexThreadId` 完全一致。`routeId` 必须精确指向启用中的 Route，`params.chatId` 必须明确。回应当前消息时可带 `params.reqId`，主动发送时省略。发送前仍会检查 `messageAdapterPolicies.wecom.outputEnabled` 和 `supportedOutputs`。关闭发送、缺少明确目标、缺少企业微信 bot secret、SDK 返回发送限制或目标不可达时，outbox 返回 `blocked` / `failed`，并写入 `outbox-adapter.log.jsonl`。
 
 ## 日志与状态
 

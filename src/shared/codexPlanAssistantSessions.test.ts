@@ -67,6 +67,8 @@ test("plan assistant turns default to GPT-5.6 Terra without overriding an explic
 test("plan assistant initialization keeps the secretary control-only and preserves business task ownership", () => {
   const prompt = codexPlanAssistantInitializationPrompt({
     roleId: "XinghaiBuilder",
+    sourceAgentAdapter: "codex",
+    assistantAgentAdapter: "codex",
     sourceThreadId: "019fa314-2c07-7523-896f-9bb6b638054c",
     sourceThreadName: "建造师 策划 程序",
     assistantThreadId: "019fa314-2c07-7523-896f-9bb6b638054d",

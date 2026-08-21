@@ -11,10 +11,20 @@ import {
   rankMessageAgentWorkers,
   replacePersistedMessageAgentWorker,
   requestMessageAgentManager,
+  readCurrentMessageAgentWorkers,
   resolveCurrentMessageAgentWorker
 } from "./messageAgentPool.js";
-import type { MessageAgentPoolState } from "./messageAgentPool.js";
+import type { MessageAgentDeliveryRouting, MessageAgentPoolState } from "./messageAgentPool.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
+
+function deliveryPayloadText(payload: Record<string, any> | undefined): string {
+  if (!payload) return "";
+  return [
+    String(payload.prompt || ""),
+    ...(Array.isArray(payload.contextBlocks) ? payload.contextBlocks.map(String) : []),
+    ...(Array.isArray(payload.controlBlocks) ? payload.controlBlocks.map(String) : [])
+  ].filter(Boolean).join("\n\n");
+}
 
 function group(groupId: string, patch: Partial<PendingMessageGroup> = {}): PendingMessageGroup {
   return {
@@ -35,6 +45,31 @@ function group(groupId: string, patch: Partial<PendingMessageGroup> = {}): Pendi
   };
 }
 
+function messageSourceForGroup(messageGroup: PendingMessageGroup) {
+  return {
+    type: "message_adapter" as const,
+    messageAdapter: messageGroup.endpoint,
+    conversationType: messageGroup.items[0]?.payload.routeKind,
+    conversationName: messageGroup.conversationKey,
+    conversationId: messageGroup.conversationKey,
+    senderName: messageGroup.sender,
+    messageId: messageGroup.items[0]?.identity,
+    messageGroupId: messageGroup.groupId
+  };
+}
+
+function deliver(
+  pool: MessageAgentPool,
+  messageGroup: PendingMessageGroup,
+  prompt: string,
+  routing: Partial<MessageAgentDeliveryRouting> = {}
+) {
+  return pool.deliver(messageGroup, prompt, {
+    ...routing,
+    messageSource: routing.messageSource ?? messageSourceForGroup(messageGroup)
+  });
+}
+
 function options(statePath: string) {
   return {
     statePath,
@@ -48,6 +83,18 @@ function options(statePath: string) {
     reasoningEffort: "medium" as const
   };
 }
+
+test("Message Agent delivery rejects an omitted messageSource before allocation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-source-"));
+  const pool = new MessageAgentPool(options(path.join(root, "agents.json")), {
+    request: async () => { throw new Error("request must not run"); }
+  });
+
+  await assert.rejects(
+    pool.deliver(group("missing-source"), "消息", {} as MessageAgentDeliveryRouting),
+    /requires messageSource/
+  );
+});
 
 test("Message Agent Manager requests use a one-shot connection and close it after the response", async (t) => {
   let requestConnection = "";
@@ -112,6 +159,48 @@ test("a one-shot delivery child can exit immediately after its Manager request",
   assert.doesNotMatch(stderr, /Assertion failed|UV_HANDLE_CLOSING/);
 });
 
+test("Message Agent pool discards persisted workers from a previous Primary Persona workspace", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-workspace-"));
+  const statePath = path.join(root, "agents.json");
+  const primaryWorkspace = path.join(root, "primary");
+  const oldWorkspace = path.join(root, "old-primary");
+  fs.mkdirSync(primaryWorkspace);
+  fs.mkdirSync(oldWorkspace);
+  const oldThreadId = "019f0000-0000-7000-8000-000000000091";
+  const newThreadId = "019f0000-0000-7000-8000-000000000092";
+  fs.writeFileSync(statePath, JSON.stringify({
+    schemaVersion: 2,
+    updatedAt: "2026-08-20T00:00:00.000Z",
+    workers: [{
+      threadId: oldThreadId,
+      threadName: "旧主人格 协助处理消息1",
+      workspace: oldWorkspace,
+      index: 1,
+      createdAt: "2026-08-20T00:00:00.000Z",
+      affinities: []
+    }]
+  }), "utf8");
+  const calls: Array<Record<string, any>> = [];
+  const pool = new MessageAgentPool({ ...options(statePath), workspace: primaryWorkspace }, {
+    request: async (payload) => {
+      calls.push(structuredClone(payload));
+      if (payload.action === "read") return { thread: { status: { type: "idle" } } };
+      if (payload.action === "resolve") {
+        return { thread: { id: newThreadId, title: payload.title, cwd: primaryWorkspace } };
+      }
+      return {};
+    }
+  });
+
+  assert.deepEqual(readCurrentMessageAgentWorkers(statePath, undefined, primaryWorkspace), []);
+  await deliver(pool, group("new-workspace"), "新目录消息");
+
+  assert.equal(calls.some((call) => call.action === "send" && call.threadId === oldThreadId), false);
+  assert.equal(calls.find((call) => call.action === "resolve")?.cwd, primaryWorkspace);
+  assert.deepEqual(readCurrentMessageAgentWorkers(statePath, undefined, primaryWorkspace).map((worker) => worker.threadId), [newThreadId]);
+  assert.equal(readCurrentMessageAgentWorkers(statePath).some((worker) => worker.threadId === oldThreadId), false);
+});
+
 test("Message Agent pool creates a Desktop task and sends the first group with Luna initialization", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-"));
   const calls: Array<Record<string, any>> = [];
@@ -127,38 +216,44 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
 
   const imagePath = path.join(root, "message.png");
   fs.writeFileSync(imagePath, Buffer.from([1, 2, 3]));
-  const worker = await pool.deliver(group("g1"), "[消息组 g1]\n你好", { imagePaths: [imagePath] });
+  const worker = await deliver(pool, group("g1"), "[消息组 g1]\n你好", { imagePaths: [imagePath] });
   const resolveCall = calls.find((call) => call.action === "resolve");
   const sendCall = calls.find((call) => call.action === "send");
   assert.equal(worker.threadName, "星海建造师 策划 程序 协助处理消息");
   assert.equal(resolveCall?.lookupMode, "state_db");
   assert.equal(sendCall?.model, "gpt-5.6-luna");
   assert.equal(sendCall?.reasoningEffort, "medium");
-  assert.deepEqual(sendCall?.deliverySource, {
-    agentAdapter: "codex",
-    sessionId: "019f0000-0000-7000-8000-999999999999",
-    sessionName: "星海主任务"
+  assert.deepEqual(sendCall?.messageSource, {
+    type: "message_adapter",
+    messageAdapter: "napcat",
+    conversationType: "group_message",
+    conversationName: "napcat:group:100",
+    conversationId: "napcat:group:100",
+    senderName: "200",
+    messageId: "g1-m1",
+    messageGroupId: "g1"
   });
   assert.deepEqual(sendCall?.imagePaths, [imagePath]);
-  assert.match(String(sendCall?.prompt), /你是消息处理 Agent/);
-  assert.match(String(sendCall?.prompt), /\[消息组 g1\]/);
-  assert.match(String(sendCall?.prompt), /\[当前消息处理归属\]/);
-  assert.match(String(sendCall?.prompt), new RegExp(`消息处理任务 ID：${worker.threadId}`));
-  assert.match(String(sendCall?.prompt), /对方通过 POST .* 回复本任务/);
-  assert.match(String(sendCall?.prompt), new RegExp(`sourceThreadId=${worker.threadId}`));
-  assert.match(String(sendCall?.prompt), /sourceAgentType=message_processing/);
-  assert.match(String(sendCall?.prompt), /当前任务输出只供内部查看/);
-  assert.match(String(sendCall?.prompt), /待决定事项必须实际交给主人格/);
-  assert.match(String(sendCall?.prompt), new RegExp(`threadId=${options(path.join(root, "unused.json")).sourceThreadId}`));
-  assert.match(String(sendCall?.prompt), /要求回传发送回执或决定/);
-  assert.match(String(sendCall?.prompt), /处理结果：无需对外回复/);
-  assert.match(String(sendCall?.prompt), /计划操作与外部回复分开判断/);
-  assert.match(String(sendCall?.prompt), /没有新增价值时保持安静/);
-  assert.match(String(sendCall?.prompt), /调查类请求先查清事实/);
-  assert.match(String(sendCall?.prompt), /附件必须实际查看/);
-  assert.match(String(sendCall?.prompt), /params\.replyImageDescriptions/);
-  assert.match(String(sendCall?.prompt), /按原图顺序说明内容和含义/);
-  assert.match(String(sendCall?.prompt), /群内回复默认一至两句/);
+  const deliveryText = deliveryPayloadText(sendCall);
+  assert.match(deliveryText, /你是消息处理 Agent/);
+  assert.match(deliveryText, /\[消息组 g1\]/);
+  assert.match(deliveryText, /\[当前消息处理归属\]/);
+  assert.match(deliveryText, new RegExp(`消息处理任务 ID：${worker.threadId}`));
+  assert.match(deliveryText, /对方通过 POST .* 回复本任务/);
+  assert.match(deliveryText, new RegExp(`sourceThreadId=${worker.threadId}`));
+  assert.match(deliveryText, /sourceAgentType=message_processing/);
+  assert.match(deliveryText, /当前任务输出只供内部查看/);
+  assert.match(deliveryText, /待决定事项必须实际交给主人格/);
+  assert.match(deliveryText, new RegExp(`threadId=${options(path.join(root, "unused.json")).sourceThreadId}`));
+  assert.match(deliveryText, /要求回传发送回执或决定/);
+  assert.match(deliveryText, /处理结果：无需对外回复/);
+  assert.match(deliveryText, /计划操作与外部回复分开判断/);
+  assert.match(deliveryText, /没有新增价值时保持安静/);
+  assert.match(deliveryText, /调查类请求先查清事实/);
+  assert.match(deliveryText, /附件必须实际查看/);
+  assert.match(deliveryText, /params\.replyImageDescriptions/);
+  assert.match(deliveryText, /按原图顺序说明内容和含义/);
+  assert.match(deliveryText, /群内回复默认一至两句/);
 });
 
 test("Message Agent pool stages seventeen source images in the worker workspace and sends stable 8+8+1 batches", async () => {
@@ -180,18 +275,18 @@ test("Message Agent pool stages seventeen source images in the worker workspace 
     return { id: `message:image:${index + 1}`, path: imagePath };
   });
 
-  await pool.deliver(group("g17"), "正文只发一次", { requirementId: "requirement-17", imageAttachments: attachments });
+  await deliver(pool, group("g17"), "正文只发一次", { requirementId: "requirement-17", imageAttachments: attachments });
 
   const sends = calls.filter((call) => call.action === "send");
   assert.deepEqual(sends.map((call) => call.imagePaths.length), [8, 8, 1]);
-  assert.match(String(sends[0]?.prompt), /正文只发一次/);
-  assert.doesNotMatch(String(sends[1]?.prompt), /正文只发一次/);
+  assert.match(deliveryPayloadText(sends[0]), /正文只发一次/);
+  assert.doesNotMatch(deliveryPayloadText(sends[1]), /正文只发一次/);
   assert.deepEqual(sends.map((call) => call.messageDelivery?.batchIndex), [1, 2, 3]);
   assert.ok(sends.every((call) => call.messageDelivery?.batchCount === 3));
   assert.ok(sends.flatMap((call) => call.imagePaths).every((imagePath: string) => imagePath.startsWith(workspace + path.sep)));
 
   calls.length = 0;
-  await pool.deliver(group("g17"), "正文只发一次", { requirementId: "requirement-17", imageAttachments: attachments });
+  await deliver(pool, group("g17"), "正文只发一次", { requirementId: "requirement-17", imageAttachments: attachments });
   assert.equal(calls.filter((call) => call.action === "send").length, 0);
 });
 
@@ -209,7 +304,7 @@ test("Message Agent pool sends the body once with explicit attachment recovery g
     }
   });
 
-  await pool.deliver(group("gfallback"), "请判断图片中的问题", {
+  await deliver(pool, group("gfallback"), "请判断图片中的问题", {
     requirementId: "requirement-fallback",
     imageAttachments: [{ id: "message:image:missing", path: path.join(root, "missing.png") }]
   });
@@ -217,9 +312,9 @@ test("Message Agent pool sends the body once with explicit attachment recovery g
   const sends = calls.filter((call) => call.action === "send");
   assert.equal(sends.length, 1);
   assert.deepEqual(sends[0]?.imagePaths, []);
-  assert.match(String(sends[0]?.prompt), /message:image:missing/);
-  assert.match(String(sends[0]?.prompt), /等待附件恢复或交接/);
-  assert.match(String(sends[0]?.prompt), /不得推断内容/);
+  assert.match(deliveryPayloadText(sends[0]), /message:image:missing/);
+  assert.match(deliveryPayloadText(sends[0]), /等待附件恢复或交接/);
+  assert.match(deliveryPayloadText(sends[0]), /不得推断内容/);
 });
 
 test("direct replies default to a visible acknowledgement even when no plan changes", async () => {
@@ -236,7 +331,7 @@ test("direct replies default to a visible acknowledgement even when no plan chan
     }
   });
 
-  await pool.deliver(group("direct-reply", {
+  await deliver(pool, group("direct-reply", {
     items: [{
       identity: "direct-reply-m1",
       receivedAt: 1,
@@ -245,7 +340,7 @@ test("direct replies default to a visible acknowledgement even when no plan chan
     }]
   }), "[消息组 direct-reply]\n我先搭效果，你之后再关联。");
 
-  const prompt = String(calls.find((call) => call.action === "send")?.prompt || "");
+  const prompt = deliveryPayloadText(calls.find((call) => call.action === "send"));
   assert.match(prompt, /明确面向本角色的消息默认回复/);
   assert.match(prompt, /明确面向本角色的消息默认回复/);
   assert.match(prompt, /纯结束语、重复消息、自身消息/);
@@ -270,9 +365,9 @@ test("Message Agent initialization resolves the current Primary Persona title by
     }
   });
 
-  await pool.deliver(group("current-primary-title"), "检查名称");
+  await deliver(pool, group("current-primary-title"), "检查名称");
 
-  const prompt = String(calls.find((call) => call.action === "send")?.prompt || "");
+  const prompt = deliveryPayloadText(calls.find((call) => call.action === "send"));
   assert.match(prompt, /主人格任务：星海建造师 策划 程序/);
   assert.match(prompt, /当前主人格任务：星海建造师 策划 程序/);
   assert.doesNotMatch(prompt, /这个会话宕机了/);
@@ -291,7 +386,7 @@ test("Message Agent pool refuses to initialize inside the Primary Persona task",
     }
   });
 
-  await assert.rejects(pool.deliver(group("role-crossover"), "不得进入主人格"), /refusing role crossover/);
+  await assert.rejects(deliver(pool, group("role-crossover"), "不得进入主人格"), /refusing role crossover/);
   assert.equal(sendCount, 0);
   assert.equal(pool.snapshot().workers.length, 0);
 });
@@ -310,7 +405,7 @@ test("heartbeat Message Agent performs the omission scan itself and does not for
     }
   });
 
-  await pool.deliver(group("heartbeat-group", {
+  await deliver(pool, group("heartbeat-group", {
     baseKey: "heartbeat|main",
     endpoint: "heartbeat",
     conversationKey: "heartbeat:gateway:XinghaiBuilder-main:heartbeat:heartbeat",
@@ -327,7 +422,7 @@ test("heartbeat Message Agent performs the omission scan itself and does not for
     }]
   }), "[heartbeat 巡检]");
 
-  const prompt = String(calls.find((call) => call.action === "send")?.prompt || "");
+  const prompt = deliveryPayloadText(calls.find((call) => call.action === "send"));
   assert.match(prompt, /按游标增量比对群消息/);
   assert.match(prompt, /按游标增量比对群消息、计划、问题映射和回执/);
   assert.match(prompt, /项目事实缺失/);
@@ -364,8 +459,8 @@ test("repeated heartbeat ticks always reuse the existing heartbeat worker even w
     sender: "RabiRoute 定时触发"
   });
 
-  const first = await pool.deliver(heartbeat("heartbeat-one"), "first tick");
-  const second = await pool.deliver(heartbeat("heartbeat-two"), "second tick");
+  const first = await deliver(pool, heartbeat("heartbeat-one"), "first tick");
+  const second = await deliver(pool, heartbeat("heartbeat-two"), "second tick");
 
   assert.equal(created, 1);
   assert.equal(second.threadId, first.threadId);
@@ -395,17 +490,17 @@ test("Message Agent pool reuses an idle familiar worker but creates another when
       if (payload.action === "read") return { thread: { active } };
       if (payload.action === "send") {
         sends.push(String(payload.threadId));
-        prompts.push(String(payload.prompt));
+        prompts.push(deliveryPayloadText(payload));
       }
       return {};
     }
   });
 
-  const first = await pool.deliver(group("g1"), "first");
-  const second = await pool.deliver(group("g2"), "second");
+  const first = await deliver(pool, group("g1"), "first");
+  const second = await deliver(pool, group("g2"), "second");
   assert.equal(second.threadId, first.threadId);
   active = true;
-  const third = await pool.deliver(group("g3"), "third");
+  const third = await deliver(pool, group("g3"), "third");
   assert.notEqual(third.threadId, first.threadId);
   assert.equal(created, 2);
   assert.deepEqual(resolvedTitles, [
@@ -414,6 +509,7 @@ test("Message Agent pool reuses an idle familiar worker but creates another when
   ]);
   assert.deepEqual(renameCalls, [{
     action: "rename",
+    agentAdapter: "codex",
     threadId: first.threadId,
     title: "星海建造师 策划 程序 协助处理消息1",
     cwd: process.cwd()
@@ -464,7 +560,7 @@ test("Message Agent pool reuses an idle unfamiliar worker before creating anothe
     }
   });
 
-  const selected = await pool.deliver(group("new-chat", {
+  const selected = await deliver(pool, group("new-chat", {
     endpoint: "napcat",
     conversationKey: "napcat:group:200",
     sender: "new-speaker"
@@ -512,8 +608,8 @@ test("Message Agent pool with a limit of one keeps task 1 and reuses it while ac
     }
   });
 
-  const first = await pool.deliver(group("limited-one"), "one");
-  const second = await pool.deliver(group("limited-two", { conversationKey: "napcat:group:two" }), "two");
+  const first = await deliver(pool, group("limited-one"), "one");
+  const second = await deliver(pool, group("limited-two", { conversationKey: "napcat:group:two" }), "two");
 
   assert.equal(first.threadId, firstThreadId);
   assert.equal(second.threadId, firstThreadId);
@@ -537,7 +633,7 @@ test("Message Agent pool creates a numbered task 1 when its configured limit is 
     }
   });
 
-  await pool.deliver(group("limited-create"), "create");
+  await deliver(pool, group("limited-create"), "create");
 
   assert.deepEqual(resolvedTitles, ["星海建造师 策划 程序 协助处理消息1"]);
 });
@@ -662,7 +758,7 @@ test("Message Agent pool replaces an archived worker and persists the new task i
     }
   });
 
-  const worker = await pool.deliver(group("archived-worker-replacement"), "继续处理");
+  const worker = await deliver(pool, group("archived-worker-replacement"), "继续处理");
 
   assert.equal(worker.threadId, replacementThreadId);
   assert.equal(worker.initializedAt != null, true);
@@ -723,7 +819,7 @@ test("Message Agent prompt forces schedule decisions to be verified and recorded
     }
   });
 
-  await pool.deliver(group("critical-schedule", {
+  await deliver(pool, group("critical-schedule", {
     items: [{
       identity: "critical-schedule-message",
       receivedAt: 1,
@@ -736,7 +832,7 @@ test("Message Agent prompt forces schedule decisions to be verified and recorded
     }]
   }), "critical schedule");
 
-  const prompt = String(calls.find((call) => call.action === "send")?.prompt || "");
+  const prompt = deliveryPayloadText(calls.find((call) => call.action === "send"));
   assert.match(prompt, /项目事实判断由 Agent 负责/);
   assert.match(prompt, /Manager 的召回结果只算候选/);
   assert.match(prompt, /projectFactAssessment/);
@@ -770,7 +866,7 @@ test("Message Agent pool loads an existing notLoaded task instead of creating an
     }
   });
 
-  const selected = await pool.deliver(group("resume-existing"), "resume");
+  const selected = await deliver(pool, group("resume-existing"), "resume");
 
   assert.equal(selected.threadId, threadId);
   assert.equal(createCount, 0);
@@ -788,7 +884,7 @@ test("Message Agent pool keeps the message pending when Codex Desktop is unavail
   });
 
   await assert.rejects(
-    pool.deliver(group("desktop-offline"), "wait"),
+    deliver(pool, group("desktop-offline"), "wait"),
     /消息组已保留等待恢复/
   );
   assert.equal(createCount, 0);
@@ -856,8 +952,8 @@ test("concurrent Message Agent allocation never records duplicate rows for one t
   });
 
   await Promise.all([
-    pool.deliver(group("parallel-one", { conversationKey: "napcat:group:one" }), "one"),
-    pool.deliver(group("parallel-two", { conversationKey: "napcat:group:two" }), "two")
+    deliver(pool, group("parallel-one", { conversationKey: "napcat:group:one" }), "one"),
+    deliver(pool, group("parallel-two", { conversationKey: "napcat:group:two" }), "two")
   ]);
 
   const workers = pool.snapshot().workers;
@@ -905,7 +1001,7 @@ test("Message Agent pool renames existing workers to stable persona-owned titles
     }
   });
 
-  await pool.deliver(group("known"), "继续处理");
+  await deliver(pool, group("known"), "继续处理");
 
   assert.deepEqual(renameCalls.map((call) => ({
     threadId: call.threadId,
@@ -957,8 +1053,8 @@ test("Message Agent affinity has no short topic timeout and keeps a bounded prev
     createdAt: Date.parse("2026-08-04T06:00:00.000Z"),
     items: [{ identity: "earlier-m1", receivedAt: 1, incomplete: false, payload: { routeKind: "group_message", record: { messageId: "m-old", rawMessage: "旧话题内容" }, extraValues: {} } }]
   });
-  const first = await pool.deliver(earlier, "earlier");
-  const later = await pool.deliver(group("later"), "later");
+  const first = await deliver(pool, earlier, "earlier");
+  const later = await deliver(pool, group("later"), "later");
 
   assert.equal(later.threadId, first.threadId);
   assert.equal(created, 1);
@@ -983,8 +1079,8 @@ test("the exact same message group always supplements its original active worker
     }
   });
 
-  await pool.deliver(group("same"), "first");
-  await pool.deliver(group("same"), "supplement");
+  await deliver(pool, group("same"), "first");
+  await deliver(pool, group("same"), "supplement");
   assert.equal(created, 1);
   assert.equal(sent[0], sent[1]);
 });
@@ -1003,10 +1099,10 @@ test("an explicit reply to an older source message returns to its original activ
     }
   });
 
-  const first = await pool.deliver(group("old", {
+  const first = await deliver(pool, group("old", {
     items: [{ identity: "old-m1", receivedAt: 1, incomplete: false, payload: { routeKind: "group_message", record: { messageId: "source-old", rawMessage: "半小时前的消息" }, extraValues: {} } }]
   }), "old");
-  const reply = await pool.deliver(group("new", {
+  const reply = await deliver(pool, group("new", {
     sender: "another-speaker",
     replyToMessageId: "source-old"
   }), "reply");
@@ -1065,7 +1161,7 @@ test("a reply to an Agent-sent message boosts that exact Message Agent session i
     }
   });
 
-  const selected = await pool.deliver(group("reply-to-agent", {
+  const selected = await deliver(pool, group("reply-to-agent", {
     replyToMessageId: "qq-outbound-7788"
   }), "reply to Agent", {
     referencedSenders: [{
@@ -1077,4 +1173,41 @@ test("a reply to an Agent-sent message boosts that exact Message Agent session i
 
   assert.equal(selected.threadId, referencedThreadId);
   assert.deepEqual(sent, [referencedThreadId]);
+});
+
+test("DSH Message Agent creates once, persists its owner, and reuses the same session", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-dsh-"));
+  const statePath = path.join(root, "agents.json");
+  const calls: Array<Record<string, any>> = [];
+  const dshOptions = {
+    ...options(statePath),
+    agentAdapter: "dsh" as const,
+    sourceThreadId: "session-00000000-0000-4000-8000-000000000001"
+  };
+  const pool = new MessageAgentPool(dshOptions, {
+    request: async (payload) => {
+      calls.push(structuredClone(payload));
+      assert.notEqual(payload.agentAdapter, "codex");
+      if (payload.action === "read") return { thread: { status: { type: "idle" }, active: false } };
+      if (payload.action === "resolve") return {
+        thread: {
+          id: "session-00000000-0000-4000-8000-000000000002",
+          title: payload.title,
+          cwd: process.cwd()
+        }
+      };
+      if (payload.action === "send") return { status: "delivered" };
+      throw new Error(`Unexpected action: ${String(payload.action)}`);
+    }
+  });
+
+  const first = await deliver(pool, group("dsh-g1"), "first");
+  const second = await deliver(pool, group("dsh-g2"), "second");
+
+  assert.equal(first.agentAdapter, "dsh");
+  assert.equal(second.threadId, first.threadId);
+  assert.equal(calls.filter((call) => call.action === "resolve").length, 1);
+  assert.equal(calls.filter((call) => call.action === "send").length, 2);
+  assert.ok(calls.filter((call) => call.action === "send").every((call) => call.agentAdapter === "dsh"));
+  assert.equal(readCurrentMessageAgentWorkers(statePath)[0]?.agentAdapter, "dsh");
 });

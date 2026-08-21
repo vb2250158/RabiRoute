@@ -33,7 +33,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-public sealed class RabiRouteTrayLatencyProbe : IDisposable
+public sealed class RabiRouteDesktopMenuLatencyProbe : IDisposable
 {
     private const uint CallbackMessage = 0x8065;
     private const uint EventObjectShow = 0x8002;
@@ -110,13 +110,13 @@ public sealed class RabiRouteTrayLatencyProbe : IDisposable
     [DllImport("user32.dll")]
     private static extern bool UnhookWinEvent(IntPtr hook);
 
-    public RabiRouteTrayLatencyProbe(int requestedProcessId)
+    public RabiRouteDesktopMenuLatencyProbe(int requestedProcessId)
     {
         trayWindow = FindTrayWindow(requestedProcessId, out processId);
         if (trayWindow == IntPtr.Zero)
         {
             throw new InvalidOperationException(
-                "No RabiRoute-Tray Qt tray message window was found. Start the packaged tray first.");
+                "No RabiRoute Desktop notification window was found. Start RabiRoute Desktop first.");
         }
 
         eventCallback = OnWinEvent;
@@ -227,7 +227,7 @@ public sealed class RabiRouteTrayLatencyProbe : IDisposable
             try
             {
                 var process = Process.GetProcessById(checked((int)candidateProcessId));
-                if (!String.Equals(process.ProcessName, "RabiRoute-Tray", StringComparison.OrdinalIgnoreCase))
+                if (!String.Equals(process.ProcessName, "RabiRoute-Desktop", StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }
@@ -349,7 +349,7 @@ function Get-NearestRankPercentile {
     return [double]$sorted[$index]
 }
 
-$probe = [RabiRouteTrayLatencyProbe]::new($TrayProcessId)
+$probe = [RabiRouteDesktopMenuLatencyProbe]::new($TrayProcessId)
 try {
     $activations = if ($Activation -eq "both") { @("left", "right") } else { @($Activation) }
     $summaries = foreach ($activationKind in $activations) {
@@ -375,10 +375,10 @@ try {
         }
     }
 
-    "RabiRoute tray PID: $($probe.ProcessId)"
+    "RabiRoute Desktop PID: $($probe.ProcessId)"
     $summaries | Format-Table -AutoSize
     if ($summaries.Passed -contains $false) {
-        throw "Tray menu latency exceeded ${ThresholdMilliseconds}ms."
+        throw "RabiRoute Desktop menu latency exceeded ${ThresholdMilliseconds}ms."
     }
 }
 finally {

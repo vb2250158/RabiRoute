@@ -30,6 +30,7 @@ import {
   matchingMessageScriptAutomations
 } from "./automation/personaAutomationRuntime.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
+import { renderRabiDelivery, type RabiDeliveryEnvelope, type RabiMessageSource } from "./shared/rabiMessage.js";
 import { observeIdentityEndpoint } from "./identityRelations.js";
 import { identityEndpointsForForward } from "./routing/identityContext.js";
 import { recordConversationSituation } from "./conversationSituationStore.js";
@@ -79,7 +80,8 @@ import { collectMessageGroupSourceEvidence, type MessageGroupSourceEvidence } fr
 import {
   DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
   DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT,
-  codexMessageProcessingAgentEnabled,
+  agentAdapterSupportsManagedTaskFeature,
+  primaryMessageProcessingAgentAdapter,
   normalizeMessageGroupingPolicy,
   type MessageGroupingPolicy,
   type RecentMessageEndpoint
@@ -144,25 +146,48 @@ export function resetMessageProcessingRuntime(): void {
   memoryConsolidationAgent = undefined;
 }
 
-function codexMessageAgentPolicy() {
-  return config.messageProcessingAgents.codex;
+function primaryManagedAgentBinding(): {
+  agentAdapter: "codex" | "dsh";
+  sessionId: string;
+  sessionName: string;
+  workspace: string;
+} | undefined {
+  if (config.primaryAgentAdapter === "dsh" && config.dshSessionId && config.dshSessionName && config.dshCwd) {
+    return {
+      agentAdapter: "dsh",
+      sessionId: config.dshSessionId,
+      sessionName: config.dshSessionName,
+      workspace: config.dshCwd
+    };
+  }
+  if (config.primaryAgentAdapter === "codex" && config.codexThreadId && config.codexThreadName && config.codexCwd) {
+    return {
+      agentAdapter: "codex",
+      sessionId: config.codexThreadId,
+      sessionName: config.codexThreadName,
+      workspace: config.codexCwd
+    };
+  }
+  return undefined;
 }
 
 function messageAgentModeEnabled(): boolean {
-  return codexMessageProcessingAgentEnabled(config)
-    && Boolean(config.codexThreadId && config.codexCwd);
+  return Boolean(primaryMessageProcessingAgentAdapter(config) && primaryManagedAgentBinding());
 }
 
 function activeMessageAgentPool(): MessageAgentPool {
   if (messageAgentPool) return messageAgentPool;
-  const policy = codexMessageAgentPolicy();
-  if (!policy?.enabled) throw new Error("Codex Message Agent mode is not enabled.");
+  const binding = primaryManagedAgentBinding();
+  const adapter = primaryMessageProcessingAgentAdapter(config);
+  const policy = adapter ? config.messageProcessingAgents[adapter] : undefined;
+  if (!binding || !adapter || !policy?.enabled) throw new Error("Primary Agent Message Agent mode is not enabled.");
   messageAgentPool = new MessageAgentPool({
     statePath: messageAgentPoolStatePath(config.dataDir),
     managerBaseUrl: process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790",
-    sourceThreadName: config.codexThreadName,
-    sourceThreadId: config.codexThreadId,
-    workspace: config.codexCwd,
+    sourceThreadName: binding.sessionName,
+    sourceThreadId: binding.sessionId,
+    agentAdapter: binding.agentAdapter,
+    workspace: binding.workspace,
     roleId: config.agentRoleId,
     rolePath: config.agentRolePath,
     model: policy.model || DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL,
@@ -174,15 +199,17 @@ function activeMessageAgentPool(): MessageAgentPool {
 
 function activeMemoryConsolidationAgent(): MemoryConsolidationAgent {
   if (memoryConsolidationAgent) return memoryConsolidationAgent;
-  if (!config.codexThreadId || !config.codexCwd) {
-    throw new Error("Codex Primary Persona task id and workspace are required for the dedicated memory consolidation Agent.");
+  const binding = primaryManagedAgentBinding();
+  if (!binding) {
+    throw new Error("Primary Agent session id and workspace are required for the dedicated memory consolidation Agent.");
   }
   memoryConsolidationAgent = new MemoryConsolidationAgent({
     statePath: memoryConsolidationAgentStatePath(config.dataDir),
     managerBaseUrl: managerBaseUrl(),
-    sourceThreadName: config.codexThreadName,
-    sourceThreadId: config.codexThreadId,
-    workspace: config.codexCwd,
+    sourceThreadName: binding.sessionName,
+    sourceThreadId: binding.sessionId,
+    agentAdapter: binding.agentAdapter,
+    workspace: binding.workspace,
     roleId: config.agentRoleId,
     model: config.codexMemoryConsolidationAgentModel
   });
@@ -255,12 +282,11 @@ function messageGroupIds(group: PendingMessageGroup): string[] {
 
 function messageGroupPrompt(
   group: PendingMessageGroup,
-  packet: string,
+  packetContent: string,
   requirementId?: string,
   evidence?: MessageGroupSourceEvidence
 ): string {
   const evidenceLines = evidence ? [
-    "",
     "[本轮必须核对的原始证据]",
     `本组原消息 ID：${messageGroupIds(group).join(", ") || "无"}`,
     `直接和递归引用链 ID：${evidence.replyChainMessageIds.join(", ") || "无"}`,
@@ -270,23 +296,17 @@ function messageGroupPrompt(
     "先围绕上面这组原消息、引用链和附件理解当前讨论；不要让较早的最近消息覆盖它。聚合需求保留全部证据；准备回复时，sourceEvidenceReview 和 projectFactAssessment 只声明本次 sourceMessageId、它的明确回复链和正文实际引用的附件。图片已作为本轮 Desktop 图片输入附带时，必须实际查看；引用含图片的 QQ 消息回复时，还要按图片顺序填写 params.replyImageDescriptions。"
   ] : [];
   return [
-    `[消息组 ${group.groupId}]`,
-    requirementId ? `消息处理需求 ID：${requirementId}` : "",
-    `消息端：${group.endpoint}`,
-    `会话：${group.conversationKey}`,
-    `说话人：${group.sender}`,
-    group.replyToMessageId ? `回复消息：${group.replyToMessageId}` : "",
-    `本组新增消息：${group.items.length} 条`,
+    requirementId ? `[消息处理要求]\n消息处理需求 ID：${requirementId}` : "",
     ...evidenceLines,
-    "",
-    packet
-  ].filter((line) => line !== "").join("\n");
+    packetContent
+  ].filter(Boolean).join("\n\n");
 }
 
 async function deliverPacketToMessageAgent(
   routeId: string,
   ruleId: string,
-  packet: string,
+  packetContent: string,
+  messageSource: RabiMessageSource,
   replyContextJson: string,
   roleId: string,
   group: PendingMessageGroup
@@ -295,7 +315,7 @@ async function deliverPacketToMessageAgent(
     try {
       await measurePerformanceOperation(
         `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
-        () => activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packet))
+        () => activeMessageAgentPool().deliver(group, messageGroupPrompt(group, packetContent), { messageSource })
       );
       return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
     } catch (error) {
@@ -362,8 +382,9 @@ async function deliverPacketToMessageAgent(
       `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
       () => activeMessageAgentPool().deliver(
         group,
-        messageGroupPrompt(group, packet, canonicalRequirementId, sourceEvidence),
+        messageGroupPrompt(group, packetContent, canonicalRequirementId, sourceEvidence),
         {
+          messageSource,
           requirementId: canonicalRequirementId,
           referencedSenders,
           imageAttachments: sourceEvidence.attachments
@@ -494,7 +515,7 @@ export function memoryConsolidationAgentHandles(
   return routeKind === "manual_trigger"
     && triggerId === "memory-consolidation"
     && enabled
-    && primaryAdapter === "codex";
+    && Boolean(primaryAdapter && agentAdapterSupportsManagedTaskFeature(primaryAdapter, "memoryConsolidationAgent"));
 }
 
 export function shouldSkipHeartbeatDelivery(
@@ -567,11 +588,11 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   return routeKind === "private" ? "private" : "group_mention";
 }
 
-function dispatchToAgentAdapter(type: AgentAdapterType, message: string, imagePaths: string[] = []): Promise<void> {
+function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = []): Promise<void> {
   const adapter = createAgentAdapter(type);
   return measurePerformanceOperation(
     `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
-    () => adapter.deliver(message, imagePaths.length ? { imagePaths } : undefined)
+    () => adapter.deliver(envelope, imagePaths.length ? { imagePaths } : undefined)
   );
 }
 
@@ -590,14 +611,14 @@ function imagePathsForRecord(record: ForwardRecord): string[] {
 export async function deliverPacketToPrimaryAgentAdapter(
   routeId: string,
   ruleId: string,
-  message: string,
-  dispatch: (type: AgentAdapterType, message: string, imagePaths?: string[]) => Promise<void> = dispatchToAgentAdapter,
+  envelope: RabiDeliveryEnvelope,
+  dispatch: (type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths?: string[]) => Promise<void> = dispatchToAgentAdapter,
   imagePaths: string[] = []
 ): Promise<ForwardAdapterOutcome[]> {
   const adapter = configuredPrimaryAgentAdapter();
   if (!adapter) return [];
   try {
-    await dispatch(adapter, message, imagePaths);
+    await dispatch(adapter, envelope, imagePaths);
     return [{
       routeId,
       ruleId,
@@ -618,19 +639,21 @@ export async function deliverPacketToPrimaryAgentAdapter(
 async function deliverPacketToMemoryConsolidationAgent(
   routeId: string,
   ruleId: string,
-  message: string
+  content: string,
+  messageSource: RabiMessageSource
 ): Promise<ForwardAdapterOutcome[]> {
+  const adapter = primaryManagedAgentBinding()?.agentAdapter ?? configuredPrimaryAgentAdapter() ?? "codex";
   try {
-    await measurePerformanceOperation(
+    const binding = await measurePerformanceOperation(
       `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.memory_agent`,
-      () => activeMemoryConsolidationAgent().deliver(message)
+      () => activeMemoryConsolidationAgent().deliver(content, messageSource)
     );
-    return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+    return [{ routeId, ruleId, adapter: binding.agentAdapter, status: "delivered" }];
   } catch (error) {
     return [{
       routeId,
       ruleId,
-      adapter: "codex",
+      adapter,
       status: "failed",
       error: error instanceof Error ? error.message : String(error)
     }];
@@ -990,7 +1013,9 @@ async function forwardMessageToRoute(
     packets.push({
       routeId: route.id,
       ruleId: rule.id,
-      message: packet.message
+      message: packet.message,
+      messageSource: packet.messageSource,
+      content: packet.content
     });
 
     appendAgentPacketToDir({
@@ -1002,17 +1027,22 @@ async function forwardMessageToRoute(
 
     sentPacketCount += 1;
     adapterOutcomes.push(...(useMemoryConsolidationAgent
-      ? await deliverPacketToMemoryConsolidationAgent(route.id, rule.id, packet.message)
+      ? await deliverPacketToMemoryConsolidationAgent(route.id, rule.id, packet.content, packet.messageSource)
       : messageAgentGroup
         ? await deliverPacketToMessageAgent(
           route.id,
           rule.id,
-          packet.message,
+          packet.content,
+          packet.messageSource,
           String(packet.templateValues.replyContextJson || "{}"),
           roleContext.roleId,
           messageAgentGroup
         )
-        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, packet.message, undefined, imagePaths)));
+        : await deliverPacketToPrimaryAgentAdapter(route.id, rule.id, {
+            messageSource: packet.messageSource,
+            messageContent: packet.content,
+            escapeMessageContentHeaders: false
+          }, undefined, imagePaths)));
   }
 
   const failed = adapterOutcomes.some((outcome) => outcome.status === "failed");

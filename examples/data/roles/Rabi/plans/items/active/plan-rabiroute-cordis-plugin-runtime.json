@@ -1,0 +1,87 @@
+{
+  "id": "plan-rabiroute-cordis-plugin-runtime",
+  "title": "按 Cordis 组合内核重构 RabiRoute 插件运行时",
+  "focus": "Cordis 组合内核、Rabi 业务适配层和多宿主扩展协议",
+  "status": "进行中",
+  "priority": "high",
+  "kind": "architecture",
+  "currentStepId": "unify-agent-adapter-catalog",
+  "currentStep": "已精确引入 cordis@4.0.0-rc.8，并在 src/runtime 建立 Context/Fiber 兼容边界。五个内置 Agent Adapter 已通过独立 Fiber 注册到统一清单，createAgentAdapter 继续作为兼容入口；单个 Fiber、根 Context、重复类型和清单一致性已有自动化测试。",
+  "nextAction": "让 Agent Adapter 类型解析、Gateway 配置枚举和 Manager 扫描读取同一 manifest，然后迁移首个消息端的监听器、状态和销毁生命周期。",
+  "steps": [
+    {
+      "id": "research-dsh-cordis",
+      "title": "调查 DSH、Cordis 论文和真实隔离边界",
+      "status": "已完成",
+      "completedAt": "2026-08-21T02:00:00+08:00"
+    },
+    {
+      "id": "define-rabi-plugin-design",
+      "title": "确定 Cordis 组合内核、Rabi 适配层和多宿主扩展协议",
+      "status": "已完成",
+      "completedAt": "2026-08-21T02:00:00+08:00"
+    },
+    {
+      "id": "establish-cordis-boundary",
+      "title": "建立 src/runtime Cordis 边界和生命周期测试",
+      "status": "已完成",
+      "completedAt": "2026-08-21T02:00:00+08:00"
+    },
+    {
+      "id": "unify-agent-adapter-catalog",
+      "title": "统一 Agent Adapter 注册、manifest、扫描和配置目录",
+      "status": "进行中"
+    },
+    {
+      "id": "migrate-message-adapter-lifecycle",
+      "title": "迁移消息端监听器、端口、状态和销毁生命周期",
+      "status": "未开始"
+    },
+    {
+      "id": "create-gateway-host",
+      "title": "让 Gateway 入口只组合插件和管理根 Context",
+      "status": "未开始"
+    },
+    {
+      "id": "create-manager-contribution-catalog",
+      "title": "建立 Manager 插件与多宿主贡献目录",
+      "status": "未开始"
+    },
+    {
+      "id": "extend-webgui-desktop",
+      "title": "让 WebGUI 和 Desktop 从同一目录生成扩展入口",
+      "status": "未开始"
+    },
+    {
+      "id": "add-reconciliation-and-isolation",
+      "title": "增加配置对账、局部重载和独立进程插件",
+      "status": "未开始"
+    }
+  ],
+  "waitingFor": "",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划：分阶段完成 RabiRoute Cordis 插件运行时重构"
+  },
+  "dueAt": "",
+  "completedAt": "",
+  "archivedAt": "",
+  "createdAt": "2026-08-21T02:00:00+08:00",
+  "updatedAt": "2026-08-21T02:00:00+08:00",
+  "keywords": [
+    "Cordis",
+    "plugin",
+    "Fiber",
+    "Agent Adapter",
+    "Gateway Host",
+    "Manager Catalog",
+    "WebGUI",
+    "Desktop",
+    "独立进程",
+    "生命周期"
+  ]
+}

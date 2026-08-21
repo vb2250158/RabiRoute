@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,12 @@ import { fileURLToPath } from "node:url";
 export const DEFAULT_DSH_BASE_URL = "http://127.0.0.1:3080";
 export const DEFAULT_DSH_SESSION_NAME = "DSH CottonGame Luna Max";
 export const DSH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION = "0.1.2";
+export const DSH_RABIROUTE_TOOL_NAMES = [
+  "rabiroute_agent_threads",
+  "rabiroute_agent_send",
+  "rabiroute_manager_api"
+] as const;
 
 const dshSessionIdPattern = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -104,13 +111,338 @@ async function dshRpc<T>(baseUrl: string, method: string, payload: unknown): Pro
   return { ok: true, value: result.value as T };
 }
 
+export type DshRabiRoutePluginStatus = {
+  active: boolean;
+  version?: string;
+  managerBaseUrl?: string;
+  enforceAgentCommunication?: boolean;
+  requestTimeoutMs?: number;
+  tools: string[];
+};
+
+async function dshRemoteRpc<T>(
+  baseUrl: string,
+  endpoint: string,
+  args: Record<string, unknown> = {}
+): Promise<DshRpcOk<T> | DshRpcError> {
+  const rpcId = randomUUID();
+  const response = await fetch(`${baseUrl}/api/${endpoint}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type: "client-request", rpcId, method: endpoint, payload: { args } })
+  });
+  if (!response.ok) {
+    throw new Error(`DSH ${endpoint} transport failed with HTTP ${response.status}.`);
+  }
+  const full = await response.json() as {
+    rpcId?: unknown;
+    result?: { ok?: boolean; value?: unknown; error?: unknown };
+  };
+  if (full.rpcId !== rpcId) {
+    throw new Error(`DSH ${endpoint} rpcId mismatch (possible cross-talk).`);
+  }
+  const result = full.result;
+  if (!result || result.ok !== true) {
+    const error = result?.error && typeof result.error === "object"
+      ? result.error as Record<string, unknown>
+      : {};
+    return {
+      ok: false,
+      error: {
+        code: typeof error.code === "string" ? error.code : undefined,
+        message: typeof error.message === "string" ? error.message : JSON.stringify(error)
+      }
+    };
+  }
+  return { ok: true, value: result.value as T };
+}
+
+export async function readDshRabiRoutePluginStatus(
+  baseUrl: string = DEFAULT_DSH_BASE_URL
+): Promise<DshRabiRoutePluginStatus> {
+  const result = await dshRemoteRpc<Record<string, unknown>>(
+    normalizedDshBaseUrl(baseUrl),
+    "rabirouteAgent/status"
+  );
+  if (!result.ok) {
+    throw new Error(`DSH RabiRoute plugin status failed: ${result.error.message || result.error.code || "unknown error"}`);
+  }
+  const runtime = result.value;
+  const version = typeof runtime.version === "string" && runtime.version.trim()
+    ? runtime.version.trim()
+    : undefined;
+  return {
+    active: runtime.active === true,
+    ...(version ? { version } : {}),
+    ...(typeof runtime.managerBaseUrl === "string" && runtime.managerBaseUrl.trim()
+      ? { managerBaseUrl: runtime.managerBaseUrl.trim().replace(/\/+$/, "") }
+      : {}),
+    ...(typeof runtime.enforceAgentCommunication === "boolean"
+      ? { enforceAgentCommunication: runtime.enforceAgentCommunication }
+      : {}),
+    ...(typeof runtime.requestTimeoutMs === "number" && Number.isFinite(runtime.requestTimeoutMs)
+      ? { requestTimeoutMs: runtime.requestTimeoutMs }
+      : {}),
+    tools: Array.isArray(runtime.tools)
+      ? runtime.tools.filter((item): item is string => typeof item === "string")
+      : []
+  };
+}
+
 type DshSessionListItem = {
   sessionId?: string;
   updatedAt?: number;
   running?: boolean;
+  blank?: boolean;
   cwd?: string;
+  agentPreset?: string;
   projections?: { values?: { title?: string } };
 };
+
+export type DshSessionSummary = {
+  id: string;
+  title: string;
+  updatedAt: string;
+  cwd?: string;
+  archived: false;
+  active: boolean;
+  status: { type: "active" | "idle" };
+  source: "DSH session (apiproxy)";
+};
+
+export type DshSessionResolution =
+  | { kind: "id" | "name" | "created"; thread: DshSessionSummary }
+  | { kind: "missing" }
+  | { kind: "ambiguous"; candidates: DshSessionSummary[] }
+  | { kind: "workspace-mismatch"; thread: DshSessionSummary };
+
+const recentDshCreationTtlMs = 60_000;
+const dshCreations = new Map<string, { promise: Promise<DshSessionSummary>; settledAt?: number }>();
+
+function normalizedDshBaseUrl(value: string | undefined): string {
+  return (value?.trim() || DEFAULT_DSH_BASE_URL).replace(/\/+$/, "");
+}
+
+function canonicalDshWorkspace(value: string): string {
+  let normalized = String(value || "").trim();
+  if (!normalized) return "";
+  normalized = normalized.replace(/^\\\\\?\\UNC\\/i, "//").replace(/^\\\\\?\\/i, "");
+  normalized = normalized.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("//")) {
+    return normalized.toLocaleLowerCase();
+  }
+  return path.resolve(normalized).replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function sameDshWorkspace(left: string | undefined, right: string | undefined): boolean {
+  const leftKey = canonicalDshWorkspace(left || "");
+  const rightKey = canonicalDshWorkspace(right || "");
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+}
+
+function dshSessionSummary(item: DshSessionListItem): DshSessionSummary | null {
+  const id = typeof item.sessionId === "string" ? item.sessionId.trim() : "";
+  if (!isDshSessionId(id)) return null;
+  const updatedAtMs = typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt)
+    ? item.updatedAt
+    : 0;
+  const title = typeof item.projections?.values?.title === "string" && item.projections.values.title.trim()
+    ? item.projections.values.title.trim()
+    : id;
+  const cwd = typeof item.cwd === "string" && item.cwd.trim() ? item.cwd.trim() : undefined;
+  const active = item.running === true;
+  return {
+    id,
+    title,
+    updatedAt: updatedAtMs > 0 ? new Date(updatedAtMs).toISOString() : new Date(0).toISOString(),
+    cwd,
+    archived: false,
+    active,
+    status: { type: active ? "active" : "idle" },
+    source: "DSH session (apiproxy)"
+  };
+}
+
+async function readDshSessionCatalog(baseUrl: string): Promise<DshSessionSummary[]> {
+  const result = await dshRpc<{ items?: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session.list", {});
+  if (!result.ok) {
+    throw new Error(`DSH session list failed: ${result.error.message || result.error.code || "unknown error"}`);
+  }
+  return (result.value.items || [])
+    .map(dshSessionSummary)
+    .filter((item): item is DshSessionSummary => item !== null);
+}
+
+export async function listDshSessions(options: {
+  baseUrl?: string;
+  query?: string;
+  limit?: number;
+  offset?: number;
+  allowedWorkspaces?: string[];
+} = {}): Promise<DshSessionSummary[]> {
+  const query = String(options.query || "").trim().toLocaleLowerCase();
+  const workspaceKeys = new Set(
+    (options.allowedWorkspaces || []).map(canonicalDshWorkspace).filter(Boolean)
+  );
+  const offset = Math.max(0, Math.trunc(options.offset ?? 0));
+  const limit = Math.max(0, Math.trunc(options.limit ?? 100));
+  const rows = await readDshSessionCatalog(options.baseUrl || DEFAULT_DSH_BASE_URL);
+  return rows
+    .filter((item) => workspaceKeys.size === 0 || (item.cwd && workspaceKeys.has(canonicalDshWorkspace(item.cwd))))
+    .filter((item) => !query || `${item.title}\n${item.id}\n${item.cwd || ""}`.toLocaleLowerCase().includes(query))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.id.localeCompare(right.id))
+    .slice(offset, offset + limit);
+}
+
+export async function renameDshSession(params: {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  baseUrl?: string;
+}): Promise<DshSessionSummary> {
+  const sessionId = params.sessionId.trim();
+  const title = params.title.trim();
+  const cwd = params.cwd.trim();
+  if (!isDshSessionId(sessionId)) throw new Error(`Invalid DSH session id: ${params.sessionId}`);
+  if (!title) throw new Error("DSH session title is required.");
+  if (!cwd) throw new Error("DSH session workspace is required.");
+  const baseUrl = normalizedDshBaseUrl(params.baseUrl);
+  const existing = (await readDshSessionCatalog(baseUrl)).find((item) => item.id === sessionId);
+  if (!existing) throw new Error(`DSH session was not found: ${sessionId}`);
+  if (!existing.cwd || !sameDshWorkspace(existing.cwd, cwd)) {
+    throw new Error(`DSH session workspace different from requested workspace: ${existing.cwd || "unknown"} != ${cwd}`);
+  }
+  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session.rename", { sessionId, title });
+  if (!renamed.ok) {
+    throw new Error(`DSH session rename failed: ${renamed.error.message || renamed.error.code || "unknown error"}`);
+  }
+  return { ...existing, title, updatedAt: new Date().toISOString() };
+}
+
+export async function createDshSession(params: {
+  title: string;
+  cwd: string;
+  baseUrl?: string;
+  agentPreset?: string;
+  sessionId?: string;
+}): Promise<DshSessionSummary> {
+  const title = params.title.trim();
+  const cwd = params.cwd.trim();
+  const baseUrl = normalizedDshBaseUrl(params.baseUrl);
+  if (!title) throw new Error("DSH session title is required.");
+  if (!cwd) throw new Error("DSH session workspace is required.");
+  if (params.sessionId && !isDshSessionId(params.sessionId)) {
+    throw new Error(`Invalid DSH session id: ${params.sessionId}`);
+  }
+  const registered = await dshRpc<{ workspace?: { workspaceId?: string; path?: string } }>(
+    baseUrl,
+    "workspace.create",
+    { path: cwd }
+  );
+  if (!registered.ok) {
+    throw new Error(`DSH workspace registration failed: ${registered.error.message || registered.error.code || "unknown error"}`);
+  }
+  const workspaceId = typeof registered.value.workspace?.workspaceId === "string"
+    ? registered.value.workspace.workspaceId.trim()
+    : "";
+  const workspacePath = typeof registered.value.workspace?.path === "string"
+    ? registered.value.workspace.path.trim()
+    : "";
+  if (!workspaceId || !workspacePath || !sameDshWorkspace(workspacePath, cwd)) {
+    throw new Error(`DSH workspace registration returned an invalid workspace for requested path: ${workspacePath || "unknown"} != ${cwd}`);
+  }
+  const payload: Record<string, string> = { workspaceId };
+  if (params.agentPreset?.trim()) payload.agentPreset = params.agentPreset.trim();
+  if (params.sessionId?.trim()) payload.sessionId = params.sessionId.trim();
+  const created = await dshRpc<{ sessionId?: string }>(baseUrl, "session.create", payload);
+  if (!created.ok) {
+    throw new Error(`DSH session creation failed: ${created.error.message || created.error.code || "unknown error"}`);
+  }
+  const sessionId = typeof created.value.sessionId === "string" ? created.value.sessionId.trim() : "";
+  if (!isDshSessionId(sessionId)) throw new Error("DSH session creation returned an invalid sessionId.");
+  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session.rename", { sessionId, title });
+  if (!renamed.ok) {
+    throw new Error(`DSH session was created but rename failed: ${renamed.error.message || renamed.error.code || "unknown error"}`);
+  }
+  const listed = (await readDshSessionCatalog(baseUrl)).find((item) => item.id === sessionId);
+  if (!listed) throw new Error(`DSH session was created but is missing from the owner catalog: ${sessionId}`);
+  if (!listed.cwd || !sameDshWorkspace(listed.cwd, cwd)) {
+    throw new Error(`DSH session creation returned a workspace different from requested workspace: ${listed.cwd || "unknown"} != ${cwd}`);
+  }
+  return { ...listed, title };
+}
+
+function uniquelyLatestDshSession(matches: DshSessionSummary[]): DshSessionSummary | null {
+  if (matches.length === 0) return null;
+  const latestTime = Math.max(...matches.map((item) => Date.parse(item.updatedAt)));
+  const latest = matches.filter((item) => Date.parse(item.updatedAt) === latestTime);
+  return latest.length === 1 ? latest[0]! : null;
+}
+
+async function createDshSessionIdempotently(params: {
+  title: string;
+  cwd: string;
+  baseUrl: string;
+  agentPreset?: string;
+}): Promise<DshSessionSummary> {
+  const key = JSON.stringify([
+    normalizedDshBaseUrl(params.baseUrl),
+    canonicalDshWorkspace(params.cwd),
+    params.title.trim(),
+    params.agentPreset?.trim() || ""
+  ]);
+  const existing = dshCreations.get(key);
+  if (existing && (existing.settledAt === undefined || Date.now() - existing.settledAt <= recentDshCreationTtlMs)) {
+    return existing.promise;
+  }
+  if (existing) dshCreations.delete(key);
+  const entry = { promise: createDshSession(params), settledAt: undefined as number | undefined };
+  dshCreations.set(key, entry);
+  entry.promise.then(
+    () => { entry.settledAt = Date.now(); },
+    () => { if (dshCreations.get(key) === entry) dshCreations.delete(key); }
+  );
+  return entry.promise;
+}
+
+export async function resolveDshSession(params: {
+  sessionId?: string;
+  title: string;
+  cwd: string;
+  createIfMissing: boolean;
+  baseUrl?: string;
+  agentPreset?: string;
+}): Promise<DshSessionResolution> {
+  const title = params.title.trim();
+  const cwd = params.cwd.trim();
+  const baseUrl = normalizedDshBaseUrl(params.baseUrl);
+  if (!title) throw new Error("DSH session title is required.");
+  if (!cwd) throw new Error("DSH session workspace is required.");
+  const rows = await readDshSessionCatalog(baseUrl);
+  const sessionId = params.sessionId?.trim() || "";
+  if (isDshSessionId(sessionId)) {
+    const exact = rows.find((item) => item.id === sessionId);
+    if (exact) {
+      if (!exact.cwd || !sameDshWorkspace(exact.cwd, cwd)) {
+        return { kind: "workspace-mismatch", thread: exact };
+      }
+      return { kind: "id", thread: exact };
+    }
+  }
+  const matches = rows
+    .filter((item) => item.title === title)
+    .filter((item) => item.cwd && sameDshWorkspace(item.cwd, cwd));
+  if (matches.length > 1) {
+    const latest = uniquelyLatestDshSession(matches);
+    return latest ? { kind: "name", thread: latest } : { kind: "ambiguous", candidates: matches };
+  }
+  if (matches[0]) return { kind: "name", thread: matches[0] };
+  if (!params.createIfMissing) return { kind: "missing" };
+  return {
+    kind: "created",
+    thread: await createDshSessionIdempotently({ title, cwd, baseUrl, agentPreset: params.agentPreset })
+  };
+}
 
 /**
  * Read one DSH session through the apiproxy. The result shape mirrors
@@ -155,6 +487,26 @@ export async function readDshSession(
     active: running,
     status: { type: running ? "active" : "idle" }
   };
+}
+
+/** URL understood by DSH Web to select one exact session without sending it a prompt. */
+export function dshSessionFocusUrl(sessionId: string, baseUrl: string = DEFAULT_DSH_BASE_URL): string {
+  const id = sessionId.trim();
+  if (!isDshSessionId(id)) throw new Error(`Invalid DSH session id: ${sessionId}`);
+  const url = new URL(normalizedDshBaseUrl(baseUrl));
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`DSH session focus requires an HTTP(S) base URL: ${baseUrl}`);
+  }
+  url.searchParams.set("rabiSessionId", id);
+  return url.toString();
+}
+
+/** Open the DSH Web owner with an exact session-selection request. */
+export async function openDshSession(sessionId: string, baseUrl: string = DEFAULT_DSH_BASE_URL): Promise<void> {
+  const target = dshSessionFocusUrl(sessionId, baseUrl);
+  const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+  const child = spawn(command, [target], { detached: true, windowsHide: true, stdio: "ignore" });
+  child.unref();
 }
 
 function imageContentPart(imagePath: string): { type: "image"; mediaType: string; data: string; name: string } {

@@ -198,7 +198,12 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /function approvalRecordsForDisplay[\s\S]*?feedback\.kind === "approval_suggestion"[\s\S]*?\.reverse\(\)/);
   assert.match(page, /v-for="feedback in approvalRecordsForDisplay\(plan\)"/);
   assert.match(page, /class="knowledge-approval-record"/);
-  assert.match(page, /expanded && \(planAcceptsGuidance\(plan\) \|\| plan\.presentation\.approval\.state !== "none"\)[\s\S]*?refreshPlanApproval\(plan\.id\)/);
+  assert.match(page, /if \(expanded\) void refreshPlanApproval\(plan\.id\);/);
+  assert.match(page, /class="knowledge-work-history"[\s\S]*?togglePlanWorkHistory\(plan\)/);
+  assert.match(page, /loadPlanHistory[\s\S]*?function refreshPlanHistory/);
+  assert.match(page, /guidanceRecordsForDisplay\(plan\)[\s\S]*?approvalRecordsForDisplay\(plan\)[\s\S]*?步骤审批合同[\s\S]*?计划版本记录/);
+  assert.match(page, /function planApprovalContractsForHistory[\s\S]*?step\.approvalRequest/);
+  assert.match(styles, /\.knowledge-work-history\s*\{[\s\S]*?border:/);
   assert.doesNotMatch(page, /v-if="plan\.approval\.latest" class="knowledge-approval-latest"/);
   assert.match(client, /latest:\s*data\.latest \|\| records\[0\],[\s\S]*?\r?\n\s*records\r?\n/);
   assert.match(styles, /\.knowledge-approval-history\s*\{[\s\S]*?display:\s*grid[\s\S]*?gap:\s*8px/);

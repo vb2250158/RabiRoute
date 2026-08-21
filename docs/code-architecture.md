@@ -265,10 +265,14 @@ data/roles/<RoleId>/conversation/archive/index.json
 
 Agent 端 Adapter 在 `src/agentAdapters/`：
 
-- `agentAdapter.ts`：根据类型创建处理端 Adapter。
-- `types.ts`：Agent Adapter 类型与 normalize。
+- `agentAdapter.ts`：兼容创建入口，从运行时注册表取得处理端 Adapter。
+- `contracts.ts`：处理端 Adapter 与定义合同。
+- `builtinAgentAdapters.ts`：内置 Adapter 定义，保留既有消息渲染和真实投递入口。
+- `types.ts`：Agent Adapter 配置输入与兼容 normalize。
 - `managerApi.ts`：manager 用于扫描、安装、登录、打开处理端的控制面能力。
 - `astrbotAdapter.ts`：AstrBot 投递实现。
+
+`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/agentAdapterRuntime.ts` 用 Cordis Fiber 挂载注册表服务和每个 Adapter 定义。销毁某个 Adapter Fiber 只移除对应定义；销毁根 Context 会撤销全部定义。Cordis API 不进入路由、消息模板或具体处理端实现。Manager 扫描与配置枚举尚未全部改为读取该注册表。
 
 其他处理端在根目录还有：
 
@@ -501,9 +505,9 @@ Gateway 配置的事实源 Module。
 关键位置：
 
 - `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。首屏使用 `/gateways?summary=1&includeConfig=1`，保留完整可编辑 Route 定义，但只取轻量运行状态；控制台、消息适配器和日志诊断页通过 `ensureDiagnostics()` 按需补取完整诊断，避免人格页和知识页反复扫描日志、消息文件与所有人格全文。
-- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。`roleKnowledgeClient.ts` 的 `loadRolePlanPageWithPriorityDetails()` 先取首批 8 条摘要，再并行取这 8 张卡片的完整详情，页面一次性应用摘要与详情，避免目录批量渲染推迟首屏详情。随后在页面可见期间按最多 250 条自动补齐计划摘要，后续页用 `facets=0` 避免重复生成和传输首页筛选统计；记忆先取当前可见分类的 24 条，随后按最多 100 条自动补齐。Manager 的控制面 JSON 响应使用紧凑编码，单计划详情复用已预热的计划列表缓存。计划目录冷缓存通过异步并发文件读取建立；同一人格的并发请求共用一个填充任务。文件监听只重读变化文件，完整失效使用代次检查阻止旧快照覆盖新写入。目录跳转仍只挂载以目标为起点的有界窗口，并把目标详情移到现有 10 并发队列最前；不新增浏览器侧正式数据源。隐藏浏览器标签页停止继续加载并关闭自己的 Manager 事件连接，重新可见后补查并继续。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，只有 `ready/enabled=true` 可提交正式审批决定；没有审批状态的进行中计划在详情顶部显示计划级引导入口，引导只提交 `planId`，不提交 `stepId`。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；目录、渐进加载和无高度动画的详情展开保持现有边界。
+- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。`roleKnowledgeClient.ts` 的 `loadRolePlanPageWithPriorityDetails()` 先取首批 8 条摘要，再并行取这 8 张卡片的完整详情，页面一次性应用摘要与详情，避免目录批量渲染推迟首屏详情。随后在页面可见期间按最多 250 条自动补齐计划摘要，后续页用 `facets=0` 避免重复生成和传输首页筛选统计；记忆先取当前可见分类的 24 条，随后按最多 100 条自动补齐。Manager 的控制面 JSON 响应使用紧凑编码，单计划详情复用已预热的计划列表缓存。计划目录冷缓存通过异步并发文件读取建立；同一人格的并发请求共用一个填充任务。文件监听只重读变化文件，完整失效使用代次检查阻止旧快照覆盖新写入。目录跳转仍只挂载以目标为起点的有界窗口，并把目标详情移到现有 10 并发队列最前；不新增浏览器侧正式数据源。隐藏浏览器标签页停止继续加载并关闭自己的 Manager 事件连接，重新可见后补查并继续。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，只有 `ready/enabled=true` 可提交正式审批决定；没有审批状态的进行中计划在详情顶部显示计划级引导入口，引导只提交 `planId`，不提交 `stepId`。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；目录、渐进加载和无高度动画的详情展开保持现有边界。所有计划详情另有按需读取的折叠“工作留痕”：`plans/feedback/<planId>.jsonl` 提供计划级引导与 `planId / stepId` 审批意见，`plans/history/<planId>.jsonl` 提供每次创建、更新和归档后的完整计划快照；不依赖当前 `presentation.approval`，因此已批准、已完成和已归档计划仍可查看原审批合同和工作记录。
 - `src/components/PlanFeedbackComposer.vue`：计划引导与审批意见共用的输入组件。`@` 引用、Enter/Shift+Enter、文件选择、剪贴板粘贴、附件预览和删除只在此处实现；页面只传入两类反馈各自的可编辑条件、提交条件和文案。
-- 计划详情展开时，通过 `manager/planAgentStatusRoutes.ts` 按需读取该计划 `taskBinding` 与可选 `secretaryBinding` 的真实 Desktop 任务状态；页面刷新后只补查仍保持展开的计划，不在目录摘要加载完成后扫描全部绑定。`manager/planAgentStatus.ts` 负责 2.8 秒有界读取、同绑定请求去重、workspace 校验以及 Agent 工作状态与会话任务状态的分离；Windows 普通路径与 `\\?\\` 扩展路径先归一化再比较。WebGUI 的 3 秒请求预算只决定何时显示未知。打开动作只调用 `openCodexDesktopThread()` 定位已核对的精确任务，不走 prompt、任务创建或备用 Runtime。
+- 计划详情展开时，通过 `manager/planAgentStatusRoutes.ts` 按需读取该计划 `taskBinding` 与可选 `secretaryBinding` 的真实会话状态；页面刷新后只补查仍保持展开的计划，不在目录摘要加载完成后扫描全部绑定。`manager/planAgentStatus.ts` 按绑定的 `agentType` 分派：Codex 读取 Desktop 任务，DSH 通过 apiproxy 读取 DSH 会话；它负责 2.8 秒有界读取、同绑定请求去重、workspace 校验以及 Agent 工作状态与会话状态的分离。Windows 普通路径与 `\\?\\` 扩展路径先归一化再比较。WebGUI 的 3 秒请求预算只决定何时显示未知。打开动作只定位已核对的精确绑定：Codex 调用 `openCodexDesktopThread()`，DSH 打开带 `rabiSessionId` 的 DSH Web 页面；两者都不发送 prompt、不创建任务或会话，也不走备用 Runtime。
 - `src/roleKnowledge.ts` 为近期记忆列表生成并缓存沉淀投影。投影用 `updatedAt` / `recalledAt` 计算每条记忆的 24 小时候选时间和 72 小时触发时间，返回 `triggersNextConsolidation` 与 `willEnterNextConsolidation`；记忆目录写入或外部文件变化时与目录缓存一起失效。`src/manager/memoryConsolidationScheduler.ts` 读取最早截止时间并设置一次性任务，到点后重新核对活跃时间、创建 run 并投递 Manager 内置事件。最不活跃记忆到达 72 小时时，`recentMemoryConsolidationCohort()` 固定 `triggerAt` 与 `candidateCutoffAt`，列表投影和真实整理 request 共用该结果，避免晚执行时扩大候选范围。新记忆写入 `.md`，结构化字段保存在元数据区，正文保留标准 Markdown；旧 `.json` 继续读取，同 ID 时 `.md` 优先。`RoleKnowledgePage.vue` 只消费 Manager 结果，不在浏览器复制沉淀候选算法。
 - `src/memoryConsolidationAgent.ts` 只负责 Codex 独立记忆整理任务的精确 owner、持久绑定和 Desktop IPC 投递。配置开启时，`forwarding.ts` 只把 `manual_trigger + memory-consolidation` 投给“`<主人格任务名> 记忆整理`”；首次投递前确认主人格 Desktop 任务可读，默认模型为 `gpt-5.6-terra`。失败不回退给主人格或备用 Runtime。
 - `GET /api/roles/:roleId/memory?counts=1` 只返回近期、沉淀、已归档来源和整理 run 的数量。`RoleKnowledgePage.vue` 在任何顶层标签首次进入时都让该请求与计划首屏并行，避免默认停留在“当前计划”时记忆标签长期显示 0；记忆正文仍只按当前可见分类分页读取。
@@ -591,7 +595,9 @@ RabiSpeech 的模型基准仍归插件自身：`scripts/benchmark_models.py` 按
 
 实时能力页归控制面：`src/manager/speechServiceStatus.ts` 只允许探测回环 RabiSpeech，并删去配置路径、模型目录等私有字段；`src/manager/speechRuntimeControl.ts` 拥有 WebGUI 页级启停命令、同一时刻单次 transition、启动后的真实健康等待和停止前的 Windows 进程归属核验；`src/manager/speechControl.ts` 再把模型、麦克风、播放、音频流选择、持久化语音记录和消息命令统一映射到 `speechControlContract`。`GET /api/speech/status` 把规范化结果交给 frontend speech store，`POST /api/speech/runtime/start|stop` 只控制当前工作区本机运行时。WebGUI 顶部滑轨直接投影真实在线状态；关闭时除标题、状态、错误和滑轨外不渲染其余运行参数。音频流默认使用本机声卡；启用局域网 `remote_audio` 后，`remote_audio.py` 通过独立鉴权 WebSocket 把远端客户端当成纯麦克风/喇叭，客户端不拥有 VAD、切句或模型，断线也不自动回退。主机播放音量由 RabiSpeech 持久化并通过播放状态返回，WebGUI 的全局播放队列卡只经 Manager 更新该 `0–100` 值；每条音频开始播放时冻结当时的音量，因此调整会从下一条开始播放的音频生效，不属于 Route 或人格。主机麦克风、ASR 模型、VAD 和切句参数同样只归 RabiSpeech，语音服务页经 Manager 统一维护；ASR 页的持久串流开关独立决定是否持续录音和识别，Route 页的语音消息端总开关只决定分发订阅。Manager 对每段主机 ASR 只接收一次，然后广播给全部已订阅 Route；没有订阅时仍保存主机记录，各 Route 独立执行热投递/人格关键词与回复播放策略。关闭或新增 Route 不改变录音状态。人格目录下的 `voice/voice-profile.json` 是 TTS 模型、声线、语言、语速和表达指令的唯一真源，旧 Route TTS 字段只作兼容读取。因此左侧“语音服务”显示当前电脑事实，项目文档和静态 HTML 则保留某次目标测试机基准，两者不能混成同一数据源。
 
-Windows 系统级滑词菜单由托盘拥有。`system_selection.py` 用低级鼠标钩子识别真实拖选结束，再通过 Windows UI Automation 读取当前焦点控件的文本选区；密码控件、空选区和不提供 TextPattern 的软件直接忽略，不模拟 `Ctrl+C`，也不读取、覆盖或保存剪贴板。无焦点 Qt 悬浮条显示“投递至”，并在 `readAloudEnabled` 为 true 时显示“朗读”：朗读经 Manager 查询当前 TTS 模型并调用 `/api/speech/tts` 进入 RabiSpeech 主机 FIFO；光标移到“投递至”时，托盘从当前 Manager 快照筛出已启用且运行中的人格，显示悬停菜单，点击具体人格后复用 `/api/role-panel/messages` 投递到对应 Route。划选本身不触发网络或语音动作。`selectionSpeechSettings.ts` 把 `enabled`、`readAloudEnabled`、高级选项和固定模型保存到 `data/speech/selection-reader-settings.json`，WebGUI“设置”页通过 `/api/speech/selection-reader/settings` 修改同一主机设置，浏览器不再拥有选区监听或本地设置副本。
+Windows 系统级滑词菜单由托盘拥有。`system_selection.py` 用低级鼠标与键盘钩子识别鼠标拖选结束和 `Shift` 扩选结束，再通过 Windows UI Automation 读取当前焦点控件的文字及真实选区矩形。悬浮条优先按该矩形横向居中；鼠标向上拖选时放在上方，向下或同一行拖选时放在下方。键盘扩选合并扩选前后的系统插入符矩形；Unity 没有系统插入符时，使用同一前台窗口最近一次点击位置。普通软件不模拟 `Ctrl+C`；Unity 编辑器没有 TextPattern 时才发送带标记的临时复制输入，最多等待 900 ms，并恢复原剪贴板的完整 MIME 数据。密码控件、空选区和仍无法读取的文字直接忽略。无焦点 Qt 悬浮条显示“投递至”，并在 `readAloudEnabled` 为 true 时显示“朗读”：朗读经 Manager 查询当前 TTS 模型并调用 `/api/speech/tts` 进入 RabiSpeech 主机 FIFO；光标移到“投递至”时，托盘从当前 Manager 快照筛出已启用且运行中的人格，显示悬停菜单，点击具体人格后复用 `/api/role-panel/messages` 投递到对应 Route。划选本身不触发网络或语音动作。`selectionSpeechSettings.ts` 把 `enabled`、`readAloudEnabled`、高级选项和固定模型保存到 `data/speech/selection-reader-settings.json`，WebGUI“设置”页通过 `/api/speech/selection-reader/settings` 修改同一主机设置，浏览器不再拥有选区监听或本地设置副本。
+
+`desktopSettingsContract.ts` 定义主机级 `theme`。`data/desktop/settings.json` 与 Manager 的 `GET/PATCH /api/desktop/settings` 是唯一真源；WebGUI 从 `ribiwebgui/src/themes/<theme>/` 读取 Vuetify 色板和 CSS token；Windows 托盘从 `desktop/tray-task-window/rabiroute_tray/themes/<theme>/` 读取 Qt 调色板、颜色替换表和菜单样式。两端将 `system` 解析为实际浅色或深色后再刷新角色面板、滑词操作条和截图窗口。
 
 RabiSpeech 的 `speech_records.py` 是 ASR/TTS 文本记录唯一真源，参考芬妮笔记按日追加运行文件。`tts_audio_store.py` 单独拥有可重建的 TTS 音频缓存：已解析人格的成品进入 `data/roles/<RoleId>/voice/cache/tts-audio/`，非人格直接调用进入 RabiSpeech 私有 fallback；两者默认按各自 mtime 保留 24 小时。Manager 的 read model 只允许 POSIX 风格安全相对引用，兼容旧记录的单文件名，并省略绝对路径、父级穿越和反斜杠路径。WebGUI 在 ASR 页面内嵌最近持久化双向记录，显示相对缓存位置和预计过期时间；它不把路径做成文件链接，也不提供独立会议记录、选择或导出工作流。缓存超过保留窗口不改变文本记录，ASR 原始录音仍默认不复制。
 

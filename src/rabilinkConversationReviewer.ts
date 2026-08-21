@@ -18,6 +18,7 @@ import {
 } from "./rabilinkConversationLedger.js";
 import { observeIdentityEndpoint, resolveIdentityRelationContext, type IdentityEndpointLookup } from "./identityRelations.js";
 import { identityContextLines } from "./routing/identityContext.js";
+import { renderRabiDelivery } from "./shared/rabiMessage.js";
 
 const DEFAULT_REVIEW_INTERVAL_MS = 5000;
 const DEFAULT_REVIEW_SETTLE_MS = 4000;
@@ -408,7 +409,7 @@ export class RabiLinkConversationReviewer {
       .map((entry) => entry.routeProfileId?.trim())
       .find((value): value is string => Boolean(value));
     const pendingRouteProfileIds = routeProfileIds([...pendingUserEntries, ...pendingReviewRequests]);
-    const prompt = buildRabiLinkConversationReviewPrompt({
+    const reviewContent = buildRabiLinkConversationReviewPrompt({
       ledgerPath: rabiLinkConversationLedgerPath(this.dataDir),
       archiveDir: rabiLinkConversationArchiveDir(this.dataDir),
       archiveIndexPath: rabiLinkConversationArchiveIndexPath(this.dataDir),
@@ -424,6 +425,17 @@ export class RabiLinkConversationReviewer {
         : undefined,
       manual,
       reflection
+    });
+    const prompt = renderRabiDelivery({
+      messageSource: {
+        type: "system",
+        eventType: manual ? "rabilink_review_request" : reflection ? "rabilink_reflection" : "rabilink_auto_review",
+        eventName: manual ? "RabiLink 手动复盘" : reflection ? "RabiLink 定期复盘" : "RabiLink 自动复盘",
+        eventId: randomUUID(),
+        routeId: requestedRouteProfileId || this.routeProfileId
+      },
+      messageContent: reviewContent,
+      escapeMessageContentHeaders: false
     });
 
     let deliveryThread: CodexMonitorThread | undefined;

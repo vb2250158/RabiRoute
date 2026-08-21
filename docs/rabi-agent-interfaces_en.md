@@ -221,7 +221,7 @@ POST /api/agent/send
 {
   "deliveryId": "send-example-001",
   "sender": {
-    "agentType": "codex",
+    "agentType": "primary_persona",
     "sessionId": "019f0000-0000-7000-8000-000000000001"
   },
   "routeId": "main",
@@ -268,7 +268,7 @@ POST /api/language-style/validate
 
 The response contains `passed`, `status`, `violations`, `checkedRuleIds`, and `skippedRuleIds`. The Codex Stop Hook uses the same endpoint only for a failure notice; it never blocks or rewrites Codex output.
 
-`deliveryId`, `sender.agentType`, `sender.sessionId`, and the exact enabled `routeId` are required. `sender.agentType` names the calling Agent product, such as `codex`, while `sender.sessionId` is that Agent's complete session ID. `channel` selects the only delivery adapter, while `params` carries the channel-specific destination. Supported channels are `napcat`, `wecom`, `weixin`, `feishu`, `rabilink`, `speech`, `fennenote`, `role_panel`, and `plan_feedback`. The injected request template contains the correct shape for the current source. Source context remains available for auditing, but it cannot override `channel` or `params`. A reply associated with a message-processing requirement also carries `tracking.requirementId` and a short-lived `tracking.sendContextReviewToken` obtained for that exact sender session, destination, and payload.
+`deliveryId`, `sender.agentType`, `sender.sessionId`, and the exact enabled `routeId` are required. `sender.agentType` identifies the sending Agent role and `sender.sessionId` identifies its complete session. The injected request template is the source of truth. When a Codex Route enables **Only Primary Persona Can Send Messages**, the only accepted sender is its bound Primary Persona task: `sender.agentType=primary_persona` and `sender.sessionId` must exactly match `codexThreadId`. `channel` selects the only delivery adapter, while `params` carries the channel-specific destination. Supported channels are `napcat`, `wecom`, `weixin`, `feishu`, `rabilink`, `speech`, `fennenote`, `role_panel`, and `plan_feedback`. Source context remains available for auditing, but it cannot override `channel` or `params`. A reply associated with a message-processing requirement also carries `tracking.requirementId` and a short-lived `tracking.sendContextReviewToken` obtained for that exact sender session, destination, and payload.
 
 For NapCat, use `target=group + groupId` or `target=private + userId`. Every group send must explicitly include `replyToMessageId`: use the real source message ID whenever one is available, or use the empty string `""` for an intentional unquoted group message. When the quoted message contains images, `replyImageDescriptions` must contain one concrete description per image in original order, covering both visible content and intended meaning. A missing source record, unreadable image, count mismatch, empty description, or generic acknowledgement is rejected before idempotent delivery. WeCom and Feishu require `chatId`; Weixin requires `sessionId`; RabiLink requires `targetDeviceIds` or `targetDeviceKinds`; speech explicitly selects RabiSpeech and never proves a QQ send.
 
@@ -312,7 +312,7 @@ POST /api/message-processing/requirements/:requirementId/send-context
   "proposedSend": {
     "deliveryId": "send-example-001",
     "sender": {
-      "agentType": "codex",
+      "agentType": "primary_persona",
       "sessionId": "019f0000-0000-7000-8000-000000000001"
     },
     "routeId": "main",
@@ -404,7 +404,8 @@ A handoff to a Secretary, Plan Agent, or Primary Persona uses `/api/agent/thread
   "action": "send",
   "threadId": "<target-task-id>",
   "cwd": "C:/Path/To/Project",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "<message-agent-task-id>",
     "sessionName": "current Message Agent task name"
@@ -588,7 +589,7 @@ Set `channel=napcat`, name the group, and always provide `params.replyToMessageI
 ```json
 {
   "deliveryId": "send-qq-progress-001",
-  "sender": { "agentType": "codex", "sessionId": "<current complete session ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<current Codex Primary Persona session ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": {
@@ -659,11 +660,15 @@ Formal Agent response workspace validation uses the same canonical identity rule
   "action": "create",
   "title": "[Example][Research] Compare two integrations",
   "cwd": "C:/Path/To/Your/Project",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "019f0000-0000-7000-8000-000000000010",
     "sessionName": "current investigation session"
   },
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000010",
+  "sourceAgentType": "agent",
+  "responsePolicy": "none",
   "prompt": "Inspect the implementation and produce an evidence-backed comparison without modifying files.",
   "sandbox": "workspace-write"
 }
@@ -675,7 +680,8 @@ Formal Agent response workspace validation uses the same canonical identity rule
   "threadId": "019f0000-0000-7000-8000-000000000001",
   "cwd": "C:/Path/To/Your/Project",
   "sandbox": "workspace-write",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "019f0000-0000-7000-8000-000000000002",
     "sessionName": "Plan Secretary session"
@@ -688,16 +694,41 @@ Formal Agent response workspace validation uses the same canonical identity rule
 }
 ```
 
-Every `create` and `send` with a non-empty `prompt` must include `deliverySource`; it cannot be omitted. `deliverySource.agentAdapter` is the actual Agent endpoint, such as `codex`, `dsh`, `copilotCli`, `marvis`, or `astrbot`. `deliverySource.sessionId` is the complete source session ID. `sessionName` is the current session name and may be omitted when unavailable; the UI then falls back to the session ID. Agent-to-Agent delivery also requires the sender's complete `sourceThreadId`, `sourceAgentType`, and `responsePolicy`, and `deliverySource.sessionId` must equal `sourceThreadId`. `sourceAgentType` accepts `primary_persona`, `message_processing`, `plan_secretary`, `plan_agent`, or the generic `agent`. `responsePolicy` must be `required` or `none`. A required response also needs `responseInstruction`; Manager creates a `requestId` and includes the formal reply parameters in the target task's delivery. `none` means the target does not have to return a result for this delivery.
+Every `create` and `send` with a non-empty `prompt` must include `messageSource`. Its `type` is required and uses one of four source shapes:
 
-A formal response uses the same `send` action. The responder must send `inReplyToRequestId`, `result`, and `nextAction` back to the original requester and choose `responsePolicy` again. Use `required` plus a new `responseInstruction` when the requester must act and report back; use `none` when the exchange ends with this response.
+| `messageSource.type` | Required identity | Optional details |
+| --- | --- | --- |
+| `message_adapter` | `messageAdapter`, `conversationType`, `conversationId`, `messageId`, and either `senderName` or `senderId` | `conversationName`, `messageGroupId`, Route name/ID |
+| `agent` | `agentAdapter`, `sessionName`, complete `sessionId` | `agentType`, `workspace` |
+| `plan` | `planName`, `planId` | `sourceAgent` only when a real Agent initiated the delivery and Manager can verify it |
+| `system` | `eventType`, `eventName`, `eventId` | `actorType`, `actorName`, `actorId`, Route name/ID |
+
+Every rendered RabiRoute delivery starts with these two wire sections. Collaboration rules, response contracts, event details, and recent messages follow them:
+
+```text
+[消息源]
+消息源类型：<消息端 | Agent | 计划 | 系统>
+<type-specific name, complete ID, session, plan, or Route fields>
+
+[消息内容]
+<prompt>
+```
+
+Agent callers normally use `type=agent`. `agentAdapter` names the actual endpoint, such as `codex`, `dsh`, `copilotCli`, `marvis`, or `astrbot`; both `sessionName` and the complete `sessionId` are required. Agent-to-Agent delivery also requires the sender's complete `sourceThreadId`, `sourceAgentType`, and `responsePolicy`, and `messageSource.sessionId` must equal `sourceThreadId`. `sourceAgentType` accepts `primary_persona`, `message_processing`, `plan_secretary`, `plan_agent`, or the generic `agent`. `responsePolicy` must be `required` or `none`. A required response also needs `responseInstruction`; Manager creates a `requestId` and includes the formal reply parameters in the target task's delivery. `none` means the target does not have to return a result for this delivery.
+
+Non-empty `create` and `send` requests use the same source-verification rule. With `type=agent`, both require `sourceThreadId`; Manager reads the actual source name from the Codex Desktop or DSH owner and replaces a stale submitted name. Manager-owned plan progress, approval, and QA events show only the plan name and ID. `sourceAgent` is included only when the plan task itself returns a result and the source session is verified.
+
+`contextBlocks` follow the message content, and `controlBlocks` follow context. Initialization, response contracts, and collaboration rules belong in control blocks. Neither field may contain `[消息源]`, `[消息内容]`, or `[投递源]`. Legacy source wrappers, nested envelopes, and old Agent response wrappers are migrated automatically. A replay whose old record lacks structured provenance is labeled `历史投递记录`; RabiRoute does not guess the source identity.
+
+A formal response uses the same `send` action. The responder must send `inReplyToRequestId`, `result`, and `nextAction` back to the original requester and choose `responsePolicy` again. Use `required` plus a new `responseInstruction` when the requester must act and report back; use `none` when the exchange ends with this response. The reply's `messageSource.agentAdapter`, `messageSource.sessionId`, `sourceThreadId`, and workspace must identify the receiving session that is currently responding. `inReplyToRequestId` alone points to the original request; the requester or reply destination must not be presented as the reply source.
 
 ```json
 {
   "action": "send",
   "threadId": "019f0000-0000-7000-8000-000000000002",
   "cwd": "C:/Path/To/Your/Project",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "019f0000-0000-7000-8000-000000000001",
     "sessionName": "Plan Agent session"
@@ -712,19 +743,19 @@ A formal response uses the same `send` action. The responder must send `inReplyT
 }
 ```
 
-Ordinary Codex final text is not a formal response. At the end of each target turn, the `Stop` Hook checks unanswered requests. If the response is still missing, Manager reminds the same exact target task five minutes after that turn ends. If the reminder-triggered turn also ends without a response, the next reminder is scheduled five minutes after that later turn. Request state is available through `GET /api/agent/requests` and `GET /api/agent/requests/:requestId`; maintainers can cancel an obsolete request with `POST /api/agent/requests/:requestId/cancel`.
+Ordinary Agent final text is not a formal response. At the end of each target turn, the `Stop` Hook checks unanswered requests. If the response is still missing, Manager reminds the same exact target task five minutes after that turn ends. If the reminder-triggered turn also ends without a response, the next reminder is scheduled five minutes after that later turn. Request state is available through `GET /api/agent/requests` and `GET /api/agent/requests/:requestId`; maintainers can cancel an obsolete request with `POST /api/agent/requests/:requestId/cancel`.
 
 Desktop can occasionally report a start/steer timeout after the message has already been written to the target task. Manager reads the target rollout using the unique `deliveryId` in the prompt: when that marker is present, it commits the delivery and request/response state as successful; only an absent marker remains a retryable failure. Callers must read the request state and the target task's latest turn before retrying a timeout.
 
-For Agent-to-Agent delivery, Manager first verifies that Desktop still has the same unarchived source task ID, then obtains the current left-sidebar name through the single task read model in `codexDesktopBridge.ts`. `agentThreads.ts`, Message Agents, heartbeat, and source templates must not read or override a second task name. Every delivered body with a non-empty `prompt` starts with Delivery Source, Agent endpoint, source session, and source session ID; Agent-to-Agent delivery also shows the source Agent and source workspace. Reminders, initialization turns, and system notices generated by RabiRoute must also carry the corresponding source session and cannot omit `deliverySource`.
+For Agent-to-Agent `create` and `send`, Manager verifies the source through the actual owner selected by `messageSource.agentAdapter + sourceThreadId`. Codex reads Desktop task state and the current sidebar name; DSH reads session name, workspace, and running state through apiproxy `session.list`. A missing source, workspace conflict, or mismatch between `sourceThreadId` and `messageSource.sessionId` fails closed. Every non-empty RabiRoute delivery starts with `[消息源]`, followed by `[消息内容]`; reminders, initialization messages, RabiLink reviews, and replays use the same envelope.
 
-`create` and `send` accept only a workspace already configured in RabiRoute. Every `create` / `send` with a non-empty `prompt` must provide `deliverySource.agentAdapter` and `deliverySource.sessionId`. Agent-to-Agent sends also require a verifiable `sourceThreadId` that matches `deliverySource.sessionId`. `sourceAgentType` declares the sender's current responsibility; the task name comes from the Desktop lookup or the sender's `sessionName`. The `sandbox` field remains for interface compatibility; it does not override the target Desktop task's model, tools, sandbox, or approvals. Those capabilities belong to the Desktop owner. If Desktop is unavailable, IPC is not ready, or the task cannot be loaded, the call fails closed and does not fall back to app-server, CLI, or another Runtime.
+`create` and `send` accept only a Codex or DSH workspace already configured in RabiRoute. Every non-empty `prompt` requires a complete `messageSource`; `type=agent` also requires `agentAdapter`, `sessionName`, and the complete `sessionId`. Agent-to-Agent sends require a verifiable `sourceThreadId` equal to `messageSource.sessionId`. The `sandbox` field cannot override the target owner model, tools, sandbox, or approvals. Codex fails closed when Desktop, IPC, or the task owner is unavailable. DSH fails closed when its endpoint is unavailable, the session is missing, or the workspace conflicts. Neither adapter falls back to another Agent or Runtime.
 
 Agent-to-Agent prompt text must be a newly composed handoff for the target task. Manager rejects bodies containing `[rabi:bind]`, Message Agent initialization, or Plan Secretary initialization, and rejects a handoff whose source and target IDs are identical. A complete injected prompt must never be copied across tasks. The Message Agent pool also refuses to initialize or deliver when task resolution returns the Primary Persona task ID.
 
-The fixed developer instructions for `create` and every `send` follow-up add a workspace-delivery guard, including ordinary follow-ups that still must provide `deliverySource`. Unless the current user explicitly authorizes it, the Agent must not create an additional working copy, sparse checkout, copied project, or side workspace; stricter rules in the workspace `AGENTS.md` take precedence. PangHu has no task-level exception: only the official Main, Release, and Art working copies may be used, and old isolated, sparse, or clean-working-copy instructions are revoked. The Agent may say “fixed” or “ready for acceptance” only after the change is present in the workspace the user actually runs or reviews and the applicable resource binding, build or compilation, and runtime checks are complete.
+The fixed developer instructions for `create` and every `send` follow-up add a workspace-delivery guard, including ordinary follow-ups that still must provide `messageSource`. Unless the current user explicitly authorizes it, the Agent must not create an additional working copy, sparse checkout, copied project, or side workspace; stricter rules in the workspace `AGENTS.md` take precedence. PangHu has no task-level exception: only the official Main, Release, and Art working copies may be used, and old isolated, sparse, or clean-working-copy instructions are revoked. The Agent may say “fixed” or “ready for acceptance” only after the change is present in the workspace the user actually runs or reviews and the applicable resource binding, build or compilation, and runtime checks are complete.
 
-When the current Route enables **Require the RabiAgent message delivery API**, the `PreToolUse` Hook denies persistent Codex task tools such as `send_message_to_thread`, `handoff_thread`, `create_thread`, and `fork_thread` for that Route's Primary Persona, Plan Agents, Plan Secretaries, and Message Agents, and directs them to the Rabi parameters above. Ephemeral subagent collaboration tools are not covered. Turning the switch off disables only this bypass check; already tracked required-response requests continue their Stop checks and reminders. The bridge still reaches the same Desktop owner and is not a fallback Runtime.
+When the current Route enables **Require the RabiAgent message delivery API**, Codex Hooks deny persistent-task tools that bypass RabiRoute. The DSH `RabiRoute Agent` plugin denies Shell calls that directly access `/api/agent/threads`, `/api/agent/send`, or `session.prompt`. Both adapters must use the thread bridge with `sourceThreadId`, `sourceAgentType`, and `responsePolicy`. Ephemeral local subagent collaboration is not covered. Turning the switch off disables only the bypass check; existing required-response requests remain active. The bridge delivers to the same target owner and never starts a fallback Runtime.
 
 ## Plan API
 

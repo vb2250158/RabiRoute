@@ -11,7 +11,7 @@ param(
   [switch]$NoBuild,
   [switch]$UseExistingBuild,
   [switch]$ReuseHealthyManager,
-  [switch]$NoTray,
+  [switch]$NoDesktopShell,
   [switch]$NoDesktopSupervisor,
   [switch]$PauseAtEnd
 )
@@ -187,14 +187,14 @@ function Stop-StaleProjectManager {
   return $false
 }
 
-function Get-ExistingTrayProcesses {
+function Get-ExistingDesktopShellProcesses {
   param([string]$ProjectRoot)
   $needle = (Join-Path $ProjectRoot "desktop\tray-task-window\main.py").ToLowerInvariant()
-  $packagedTray = (Join-Path $ProjectRoot "RabiRoute-Tray.exe").ToLowerInvariant()
+  $packagedDesktop = (Join-Path $ProjectRoot "RabiRoute-Desktop.exe").ToLowerInvariant()
   try {
     $matches = @(Get-CimInstance Win32_Process | Where-Object {
       ($_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains($needle)) -or
-      ($_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant() -eq $packagedTray)
+      ($_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant() -eq $packagedDesktop)
     })
     $matchedPids = @{}
     foreach ($process in $matches) {
@@ -208,21 +208,21 @@ function Get-ExistingTrayProcesses {
   }
 }
 
-function Stop-DuplicateTrayProcesses {
+function Stop-DuplicateDesktopShellProcesses {
   param(
-    [array]$TrayProcesses,
+    [array]$DesktopShellProcesses,
     [string]$LauncherLog
   )
-  if ($TrayProcesses.Count -le 1) {
-    return @($TrayProcesses)
+  if ($DesktopShellProcesses.Count -le 1) {
+    return @($DesktopShellProcesses)
   }
 
-  $pids = ($TrayProcesses | ForEach-Object { $_.ProcessId }) -join ", "
-  $message = "Multiple Qt tray process groups were found. Leaving pid(s) running because the tray may use a parent/child process group: $pids"
+  $pids = ($DesktopShellProcesses | ForEach-Object { $_.ProcessId }) -join ", "
+  $message = "Multiple RabiRoute Desktop shell process groups were found. Leaving pid(s) running because the desktop shell may use a parent/child process group: $pids"
   Write-Info $message
   Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
 
-  return @($TrayProcesses)
+  return @($DesktopShellProcesses)
 }
 
 function Invoke-LoggedCommand {
@@ -246,7 +246,7 @@ function Invoke-LoggedCommand {
   }
 }
 
-function Resolve-TrayPython {
+function Resolve-DesktopPython {
   param([string]$ProjectRoot)
   $candidates = @(
     (Join-Path $ProjectRoot "desktop\tray-task-window\.venv\Scripts\python.exe"),
@@ -280,58 +280,58 @@ function Resolve-TrayPython {
   return $null
 }
 
-function Start-TrayWindow {
+function Start-DesktopShell {
   param(
     [string]$ProjectRoot,
     [string]$ManagerUrl,
     [string]$LauncherLog,
-    [string]$TrayOutLog,
-    [string]$TrayErrLog
+    [string]$DesktopOutLog,
+    [string]$DesktopErrLog
   )
 
-  $existingTray = Get-ExistingTrayProcesses -ProjectRoot $ProjectRoot
-  $existingTray = Stop-DuplicateTrayProcesses -TrayProcesses $existingTray -LauncherLog $LauncherLog
-  if ($existingTray.Count -gt 0) {
-    $pids = ($existingTray | ForEach-Object { $_.ProcessId }) -join ", "
-    $message = "Qt tray desktop entry is already running. Reusing existing process group root pid(s): $pids"
+  $existingDesktopShell = Get-ExistingDesktopShellProcesses -ProjectRoot $ProjectRoot
+  $existingDesktopShell = Stop-DuplicateDesktopShellProcesses -DesktopShellProcesses $existingDesktopShell -LauncherLog $LauncherLog
+  if ($existingDesktopShell.Count -gt 0) {
+    $pids = ($existingDesktopShell | ForEach-Object { $_.ProcessId }) -join ", "
+    $message = "RabiRoute Desktop shell is already running. Reusing existing process group root pid(s): $pids"
     Write-Info $message
     Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
-    return $existingTray[0]
+    return $existingDesktopShell[0]
   }
 
-  $python = Resolve-TrayPython -ProjectRoot $ProjectRoot
+  $python = Resolve-DesktopPython -ProjectRoot $ProjectRoot
   if (-not $python) {
-    $message = "Python was not found; skipping Qt tray desktop entry. Manager/WebGUI remain available."
+    $message = "RabiRoute Desktop cannot start because Python was not found. Install the desktop dependencies or run the Node-only Manager command explicitly."
     Write-Info $message
     Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
-    return $null
+    throw $message
   }
 
-  $trayMain = Join-Path $ProjectRoot "desktop\tray-task-window\main.py"
-  if (-not (Test-Path $trayMain)) {
-    $message = "Tray entry was not found at $trayMain; skipping Qt tray desktop entry."
+  $desktopMain = Join-Path $ProjectRoot "desktop\tray-task-window\main.py"
+  if (-not (Test-Path $desktopMain)) {
+    $message = "RabiRoute Desktop cannot start because its Windows shell was not found at $desktopMain."
     Write-Info $message
     Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] $message"
-    return $null
+    throw $message
   }
 
   $arguments = @()
   $arguments += $python.Prefix
-  $arguments += @($trayMain, "--manager-url", $ManagerUrl)
+  $arguments += @($desktopMain, "--manager-url", $ManagerUrl)
 
-  Write-Info "Starting Qt tray desktop entry..."
-  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Starting tray: $($python.FilePath) $($arguments -join ' ')"
-  $tray = Start-Process `
+  Write-Info "Starting RabiRoute Desktop..."
+  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Starting RabiRoute Desktop: $($python.FilePath) $($arguments -join ' ')"
+  $desktopProcess = Start-Process `
     -FilePath $python.FilePath `
     -ArgumentList $arguments `
     -WorkingDirectory $ProjectRoot `
-    -RedirectStandardOutput $TrayOutLog `
-    -RedirectStandardError $TrayErrLog `
+    -RedirectStandardOutput $DesktopOutLog `
+    -RedirectStandardError $DesktopErrLog `
     -WindowStyle Hidden `
     -PassThru
-  Write-Info "Qt tray desktop entry process started: pid=$($tray.Id)"
-  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Tray pid=$($tray.Id), exitClosesManager=true"
-  return $tray
+  Write-Info "RabiRoute Desktop started: pid=$($desktopProcess.Id)"
+  Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Desktop shell pid=$($desktopProcess.Id), desktopExitStopsManager=true"
+  return $desktopProcess
 }
 
 function Start-DesktopLifecycleSupervisor {
@@ -361,17 +361,17 @@ function Start-DesktopLifecycleSupervisor {
   Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Desktop lifecycle supervisor candidate pid=$($supervisor.Id); workspace mutex will keep one owner."
 }
 
-function Start-DesktopPair {
+function Start-RabiRouteDesktop {
   param(
     [string]$ProjectRoot,
     [string]$ManagerUrl,
     [string]$DefaultRouteName,
     [string]$LauncherLog,
-    [string]$TrayOutLog,
-    [string]$TrayErrLog,
+    [string]$DesktopOutLog,
+    [string]$DesktopErrLog,
     [bool]$SkipSupervisor
   )
-  $body = @{ source = "windows-launcher" } | ConvertTo-Json -Compress
+  $body = @{ source = "windows-desktop" } | ConvertTo-Json -Compress
   $intentMarked = $false
   $lastIntentError = $null
   for ($attempt = 1; $attempt -le 8; $attempt++) {
@@ -394,12 +394,12 @@ function Start-DesktopPair {
   }
   Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Desktop desired state=running was persisted by Manager."
 
-  Start-TrayWindow `
+  Start-DesktopShell `
     -ProjectRoot $ProjectRoot `
     -ManagerUrl $ManagerUrl `
     -LauncherLog $LauncherLog `
-    -TrayOutLog $TrayOutLog `
-    -TrayErrLog $TrayErrLog | Out-Null
+    -DesktopOutLog $DesktopOutLog `
+    -DesktopErrLog $DesktopErrLog | Out-Null
 
   if (-not $SkipSupervisor) {
     Start-DesktopLifecycleSupervisor `
@@ -561,8 +561,8 @@ try {
   $launcherLog = Join-Path $logsDir "launcher-$stamp.log"
   $managerOutLog = Join-Path $logsDir "manager-$stamp.stdout.log"
   $managerErrLog = Join-Path $logsDir "manager-$stamp.stderr.log"
-  $trayOutLog = Join-Path $logsDir "tray-$stamp.stdout.log"
-  $trayErrLog = Join-Path $logsDir "tray-$stamp.stderr.log"
+  $desktopOutLog = Join-Path $logsDir "desktop-$stamp.stdout.log"
+  $desktopErrLog = Join-Path $logsDir "desktop-$stamp.stderr.log"
 
   Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] RabiRoute Windows launcher"
   Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "ProjectRoot=$projectRoot"
@@ -608,14 +608,14 @@ try {
         Invoke-NpmScript -ProjectRoot $projectRoot -ScriptName "webgui:build" -LauncherLog $launcherLog
       }
     }
-    if (-not $NoTray) {
-      Start-DesktopPair `
+    if (-not $NoDesktopShell) {
+      Start-RabiRouteDesktop `
         -ProjectRoot $projectRoot `
         -ManagerUrl $ManagerUrl `
         -DefaultRouteName $DefaultRouteName `
         -LauncherLog $launcherLog `
-        -TrayOutLog $trayOutLog `
-        -TrayErrLog $trayErrLog `
+        -DesktopOutLog $desktopOutLog `
+        -DesktopErrLog $desktopErrLog `
         -SkipSupervisor ([bool]$NoDesktopSupervisor)
     }
     if (-not $NoOpen) {
@@ -716,19 +716,19 @@ try {
     Add-Content -LiteralPath $launcherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Gateway status fetch failed: $($_.Exception.Message)"
   }
 
-  if (-not $NoOpen) {
-    Start-Process $ManagerUrl
-  }
-
-  if (-not $NoTray) {
-    Start-DesktopPair `
+  if (-not $NoDesktopShell) {
+    Start-RabiRouteDesktop `
       -ProjectRoot $projectRoot `
       -ManagerUrl $ManagerUrl `
       -DefaultRouteName $DefaultRouteName `
       -LauncherLog $launcherLog `
-      -TrayOutLog $trayOutLog `
-      -TrayErrLog $trayErrLog `
+      -DesktopOutLog $desktopOutLog `
+      -DesktopErrLog $desktopErrLog `
       -SkipSupervisor ([bool]$NoDesktopSupervisor)
+  }
+
+  if (-not $NoOpen) {
+    Start-Process $ManagerUrl
   }
 
   Wait-ForEnter

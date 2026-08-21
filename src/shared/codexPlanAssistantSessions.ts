@@ -6,6 +6,8 @@ export const MAX_CODEX_PLAN_ASSISTANT_SESSIONS = 8;
 export const DEFAULT_CODEX_PLAN_ASSISTANT_MODEL = "gpt-5.6-terra";
 
 export type CodexPlanAssistantSession = {
+  /** Omitted on legacy Codex rows; DSH rows persist their owner explicitly. */
+  agentAdapter?: "codex" | "dsh";
   threadId: string;
   threadName: string;
   workspace: string;
@@ -14,6 +16,10 @@ export type CodexPlanAssistantSession = {
   model?: string;
   initializedAt?: string;
 };
+
+export function planAssistantSessionAgentAdapter(session: Pick<CodexPlanAssistantSession, "agentAdapter" | "threadId">): "codex" | "dsh" {
+  return session.agentAdapter === "dsh" || session.threadId.startsWith("session-") ? "dsh" : "codex";
+}
 
 export function normalizeCodexPlanAssistantModel(value: unknown): string {
   return typeof value === "string" && value.trim()
@@ -70,11 +76,19 @@ export function normalizeCodexPlanAssistantSessions(value: unknown): CodexPlanAs
     const threadId = String(raw.threadId || "").trim();
     const threadName = String(raw.threadName || "").trim();
     const workspace = String(raw.workspace || "").trim();
-    const supportedSessionId = isCodexTaskId(threadId)
-      || /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId);
-    if (!supportedSessionId || !threadName || !workspace || seen.has(threadId)) return [];
+    const inferredAgentAdapter = isCodexTaskId(threadId)
+      ? "codex"
+      : /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)
+        ? "dsh"
+        : undefined;
+    const explicitAgentAdapter = raw.agentAdapter === "codex" || raw.agentAdapter === "dsh"
+      ? raw.agentAdapter
+      : undefined;
+    if (!inferredAgentAdapter || (explicitAgentAdapter && explicitAgentAdapter !== inferredAgentAdapter)
+      || !threadName || !workspace || seen.has(threadId)) return [];
     seen.add(threadId);
     return [{
+      ...(inferredAgentAdapter === "dsh" ? { agentAdapter: "dsh" as const } : {}),
       threadId,
       threadName: normalizeCodexThreadTitle(threadName),
       workspace,
@@ -91,6 +105,8 @@ export function normalizeCodexPlanAssistantSessions(value: unknown): CodexPlanAs
 
 export function codexPlanAssistantInitializationPrompt(input: {
   roleId: string;
+  sourceAgentAdapter: "codex" | "dsh";
+  assistantAgentAdapter: "codex" | "dsh";
   sourceThreadId: string;
   sourceThreadName: string;
   assistantThreadId: string;
@@ -114,20 +130,17 @@ export function codexPlanAssistantInitializationPrompt(input: {
     `协助槽位：${index}/${count}`,
     `Rabi Manager：${managerBaseUrl}`,
     "",
-    "你是持久计划秘书，只管理控制面。",
-    "读取计划、记忆和业务任务状态，维护步骤与恢复点，消费结果，并查重、创建或续投独立业务任务。",
+    "你是持久计划秘书，只管理控制面：读取计划、记忆和业务任务状态，维护步骤与恢复点，消费结果，查重、创建或续投独立业务任务。",
     ...proactiveCommunicationPolicyLines("internal"),
     "存在可执行的询问、补证据、重试、改道、拆分、升级或续投时，本轮执行一项并更新计划与记忆。",
-    "taskBinding 只指向独立业务任务；secretaryBinding 记录秘书。秘书及其控制面子 Agent 不执行调查、代码、资源、构建、发布或外部操作。",
+    "taskBinding 只指向独立业务任务；secretaryBinding 记录秘书。秘书不执行调查、代码、资源、构建、发布或外部操作。",
     "同一 planId 只有一个控制面 writer；不同计划可并行。共享记录只合并目标项。",
-    "消费业务结果、更新计划与记忆并续投。仅把决定、批准、授权、缺少输入或最终复核升级给主人格。",
-    "升级内容写明计划更新、taskBinding 状态、已发续投、下一动作、风险、等待对象和待决定问题。",
-    `Agent 投递使用 Manager 线程桥，填写 deliverySource={"agentAdapter":"codex","sessionId":"${input.assistantThreadId}","sessionName":"${input.assistantThreadName}"}、sourceThreadId=${input.assistantThreadId}、sourceAgentType=plan_secretary 和 responsePolicy；要求回复时补 responseInstruction。`,
+    "消费业务结果、更新计划与记忆并续投。仅把决定、批准、授权、缺少输入或最终复核升级给主人格；写明计划更新、taskBinding 状态、续投、下一动作、风险和待决定问题。",
+    `Agent 投递使用 Manager 线程桥，填写 agentAdapter=${input.sourceAgentAdapter}、messageSource={"type":"agent","agentAdapter":"${input.assistantAgentAdapter}","sessionId":"${input.assistantThreadId}","sessionName":"${input.assistantThreadName}"}、sourceThreadId=${input.assistantThreadId}、sourceAgentType=plan_secretary 和 responsePolicy；要求回复时补 responseInstruction。`,
     `需要主人格处理时投递到 threadId=${input.sourceThreadId} 并取得回执。`,
     "如果本轮没有需要主人格或用户处理的内容，最终输出明确写“处理结果：仅更新控制面，无需外部通知”，不要生成像是已经对用户说过的话。",
-    "阶段回传后继续保留秘书职责。",
     `计划接口：${managerBaseUrl}/api/roles/${encodeURIComponent(input.roleId)}/plans`,
     `线程桥：${managerBaseUrl}/api/agent/threads`,
-    "收到任务后读取计划、记忆、taskBinding 和必读资料，完成控制面闭环。单轮结束不等于计划完成。"
+    "收到任务后读取计划、记忆、taskBinding 和必读资料；单轮结束不等于计划完成。"
   ].join("\n");
 }

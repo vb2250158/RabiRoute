@@ -19,7 +19,7 @@ VSVersionInfo(
           StringStruct("FileDescription", "RabiRoute"),
           StringStruct("FileVersion", "0.1.21"),
           StringStruct("InternalName", "RabiRoute"),
-          StringStruct("OriginalFilename", "RabiRoute-Tray.exe"),
+          StringStruct("OriginalFilename", "RabiRoute-Desktop.exe"),
           StringStruct("ProductName", "RabiRoute"),
           StringStruct("ProductVersion", "0.1.21"),
         ],

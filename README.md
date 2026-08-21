@@ -25,13 +25,14 @@ RabiRoute is an **agent-neutral message gateway, policy router, and action gate*
 
 The Agent or program answers and performs the task. RabiRoute decides **who receives the message, which recent messages travel with it, whether an external reply is allowed, and where the result returns**.
 
-[Use cases](#what-you-can-build) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Capabilities](#what-works-today) · [Documentation](#learn-more)
+[Use cases](#what-you-can-build) · [Quick start](#quick-start) · [Highlights](#highlights-in-the-current-update) · [How it works](#how-it-works) · [Capabilities](#what-works-today) · [Documentation](#learn-more)
 
 ## What you can build
 
 - 💬 **Chat-to-Agent routes.** Send QQ, role-panel, or scheduled events to a selected handler. Codex is the first end-to-end verified handler.
 - ⏱️ **Proactive routines.** Combine heartbeat schedules, persona rules, and project context to wake the right Desktop task for inspection, follow-up, or maintenance.
 - 🧳 **Handoffs with recent messages.** Keep message history per persona, attach only what the current task needs, and follow that Route's sending rules for any reply.
+- 🖼️ **Windows text and screenshots.** Select text in another app or capture an image region, then deliberately read it aloud or send it to a running persona. Selecting text alone never speaks or sends.
 
 The router stays independent from the handler. You can change the Agent, workflow, script, or human queue without giving it ownership of channel credentials or gateway policy.
 
@@ -39,7 +40,7 @@ The router stays independent from the handler. You can change the Agent, workflo
 
 ### Windows installer
 
-Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). It includes Node.js, Manager, RibiWebGUI, production dependencies, and the tray app.
+Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). It includes RabiRoute Desktop: the Windows desktop entry, Node.js, the local Manager backend, RibiWebGUI, and production dependencies.
 
 The release also provides a portable ZIP and `SHA256SUMS.txt`. Windows packages are currently unsigned, so verify the checksum before accepting a SmartScreen unknown-publisher warning.
 
@@ -66,6 +67,29 @@ Create your first message route (Route):
 > Success means the trigger completes and the selected Codex/ChatGPT Desktop task receives a RabiRoute message. This is a real delivery, not a side-effect-free preview.
 
 Continue with the [first Route guide](docs/user-guide/first-route_en.md). LAN access, external adapters, and remote speech each have separate setup and security steps.
+
+## Highlights in the current update
+
+### One Windows desktop runtime
+
+The Windows product entry is now **RabiRoute Desktop**: `Start-RabiRoute-Desktop.bat` and `RabiRoute-Desktop.exe` start the local Manager and desktop UI as one runtime. A lightweight supervisor restores a missing component only while the saved intent is running; **Exit RabiRoute** persists an intentional stop before shutting down the local backend.
+
+### System-wide text and image handoffs
+
+Settings can enable a selected-text menu and system screenshots. Select text with the mouse or keyboard, then choose **Read aloud** or **Send to**; the selection itself has no side effect. A screenshot can be copied, pinned, annotated, and sent with text to an enabled persona. Windows device acceptance is still pending.
+
+![RabiRoute Desktop settings showing system screenshots, shortcut controls, and the selected-text menu](assets/screenshots/webgui-desktop-features-en.png)
+
+*The screenshot uses a local sample and contains no account, access key, chat content, or private path.*
+
+### More reliable Agent work
+
+- **Codex remains the verified handler.** Real prompts go only to the selected Codex/ChatGPT Desktop task owner; unavailable Desktop, wrong workspace, or missing owner fails closed.
+- **DSH is an experimental primary-Agent option.** It can own the Primary Persona and managed helper sessions, but repeated real-profile delivery, restart readback, and tool-owner acceptance still need live evidence.
+- **Deliveries keep their source.** Handler messages distinguish the source from the actual content, and persona-to-persona delivery is explicit, authenticated, idempotent, and one-way unless the receiving persona sends a new reply.
+- **Archived bindings renew on the next real delivery.** Primary, Message Agent, and plan-secretary bindings are replaced by a new exact task instead of sending into archived history or reusing a same-name task.
+
+See [interface and status](docs/user-guide/interface-and-status_en.md) for the Windows controls, [current capabilities](docs/current-capabilities_en.md) for maturity, and the [version changelog](版本更新日志_en.md) for configuration and recovery details.
 
 ## How it works
 
@@ -102,7 +126,9 @@ Each Route separates ingress, policy, portable context, handler delivery, and ou
 | Routing | Route profiles, persona rules, direct mentions, reply chains, private messages, keywords, regexes, schedules, and per-Route templates. |
 | Context | Persona-scoped bidirectional ledgers, bounded recent-message injection, plan/memory/skill references, reply context, and safe attachment metadata. |
 | Verified handler | Codex through the selected Codex/ChatGPT Desktop task owner. |
-| Control plane | Node.js Manager and RibiWebGUI for Routes, adapters, personas, speech, performance, logs, settings, diagnostics, and process lifecycle. |
+| Experimental primary Agent | DSH can own the Primary Persona and managed helper sessions; a real-profile repeated-delivery and restart acceptance run is still pending. |
+| Windows desktop interaction | RabiRoute Desktop provides selected-text actions and system screenshot handoffs. The Windows device loop still needs acceptance. |
+| Control plane | Node.js Manager, RibiWebGUI, and RabiRoute Desktop for Routes, adapters, personas, speech, performance, logs, settings, diagnostics, and process lifecycle. |
 | Safety and evidence | Route-owned Outbox policy plus JSONL records for events, packets, deliveries, replies, heartbeats, and replay evidence. |
 | Experimental integrations | Remote Agent, RabiSpeech, RabiLink, XiaoAI, Webhook, WeCom, Feishu, personal Weixin, wearables, Copilot CLI, and AstrBot. |
 
@@ -130,7 +156,7 @@ RabiRoute is not a full Agent OS, a replacement chatbot framework, a workflow pl
 - Runtime `data/`, logs, tokens, recordings, transcripts, and private paths stay out of Git.
 - Unsupported ownership, workspace, or permission states fail closed.
 
-## Codex integration
+## Agent integrations
 
 Codex is the first fully verified handler, not the product boundary.
 
@@ -141,6 +167,8 @@ Codex is the first fully verified handler, not the product boundary.
 - The project-pinned `codex app-server` may create or name an empty task, but it never executes a routed prompt.
 
 This keeps the router independent while preserving reliable task delivery and visible ownership.
+
+DSH uses an explicit API address, workspace, and session binding. It does not fall back to Codex if its session, plugin, or owner is unavailable. The implementation and automated contracts exist, but the real DSH profile still needs repeated-delivery and restart acceptance before it can be presented as verified.
 
 ## Configuration model
 

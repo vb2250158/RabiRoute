@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
+import { parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
+import { normalizeRabiMessageContent } from "../shared/rabiMessage.js";
 import {
   JsonFileAgentRequestPersistence,
   type AgentRequestPersistence
@@ -13,6 +15,7 @@ export type AgentResponsePolicy = "required" | "none";
 export type AgentRequestStatus = "pending_delivery" | "awaiting_response" | "responded" | "cancelled";
 
 export type AgentRequestParty = {
+  agentAdapter?: AgentAdapterType;
   threadId: string;
   agentType: string;
   threadName?: string;
@@ -84,13 +87,19 @@ function cleanText(value: unknown, limit: number): string {
   return typeof value === "string" ? value.trim().slice(0, limit) : "";
 }
 
+function cleanMessageResult(value: unknown): string {
+  return normalizeRabiMessageContent(typeof value === "string" ? value : "", true).slice(0, 12_000);
+}
+
 function normalizedParty(value: AgentRequestParty): AgentRequestParty {
   const threadId = cleanText(value.threadId, 100);
   const agentType = cleanText(value.agentType, 80);
   if (!threadId) throw new Error("Agent request party requires threadId.");
   if (!agentType) throw new Error("Agent request party requires agentType.");
   const workspace = cleanText(value.workspace, 2_000);
+  const agentAdapter = parseAgentAdapterType(cleanText(value.agentAdapter, 40));
   return {
+    ...(agentAdapter ? { agentAdapter } : {}),
     threadId,
     agentType,
     threadName: cleanText(value.threadName, 500) || undefined,
@@ -127,6 +136,15 @@ function parseRecord(value: unknown): AgentRequestRecord | undefined {
           })
         : undefined,
       responseInstruction: cleanText(record.responseInstruction, 4_000),
+      response: record.response && typeof record.response === "object"
+        ? {
+            deliveryId: cleanText(record.response.deliveryId, 100),
+            by: normalizedParty(record.response.by),
+            result: cleanMessageResult(record.response.result),
+            nextAction: cleanText(record.response.nextAction, 4_000),
+            respondedAt: cleanText(record.response.respondedAt, 100) || new Date(0).toISOString()
+          }
+        : undefined,
       messageProcessingRequirementId: cleanText(record.messageProcessingRequirementId, 300) || undefined,
       planId: cleanText(record.planId, 300) || undefined,
       createdAt: cleanText(record.createdAt, 100) || new Date(0).toISOString(),
@@ -265,7 +283,7 @@ export class AgentRequestStore {
       throw new Error("responseInstruction is required when responsePolicy is required.");
     }
     const inReplyToRequestId = cleanText(input.inReplyToRequestId, 100) || undefined;
-    const result = cleanText(input.result, 12_000) || undefined;
+    const result = cleanMessageResult(input.result) || undefined;
     const nextAction = cleanText(input.nextAction, 4_000) || undefined;
     const deliveryId = randomUUID();
     let repliedRequest: AgentRequestRecord | undefined;

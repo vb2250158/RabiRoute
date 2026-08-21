@@ -15,13 +15,35 @@ from rabiroute_tray.windows_app_identity import configure_process_app_identity, 
 
 def _resolve_project_root() -> Path:
     """
-    Frozen (PyInstaller onefile/onedir): exe lives at <project_root>/RabiRoute-Tray.exe,
+    Frozen (PyInstaller onefile/onedir): exe lives at <project_root>/RabiRoute-Desktop.exe,
     so sys.executable.parent is the project root.
     Script mode: __file__ is desktop/tray-task-window/main.py — 3 levels up.
     """
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[2]
+
+
+LEGACY_DESKTOP_ARTIFACT_NAMES = (
+    "RabiRoute-Tray.exe",
+    "RabiRoute-Tray.new.exe",
+    "RabiRoute-Desktop.new.exe",
+)
+
+
+def _remove_legacy_desktop_artifacts(project_root: Path) -> tuple[str, ...]:
+    removed: list[str] = []
+    for name in LEGACY_DESKTOP_ARTIFACT_NAMES:
+        candidate = project_root / name
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            _append_startup_log(project_root, f"Unable to remove obsolete desktop artifact {candidate}: {error}")
+        else:
+            removed.append(name)
+    return tuple(removed)
 
 
 def _manager_alive(manager_url: str) -> bool:
@@ -34,7 +56,7 @@ def _manager_alive(manager_url: str) -> bool:
 
 def _mark_desktop_running(project_root: Path, manager_url: str) -> bool:
     try:
-        data = json.dumps({"source": "packaged-tray"}).encode("utf-8")
+        data = json.dumps({"source": "packaged-desktop"}).encode("utf-8")
         request = urllib.request.Request(
             f"{manager_url}/manager/desktop-lifecycle/start",
             data=data,
@@ -231,12 +253,13 @@ def _start_manager(project_root: Path, manager_url: str) -> "subprocess.Popen[by
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="RabiRoute Qt 计划与记忆面板")
+    parser = argparse.ArgumentParser(description="RabiRoute Desktop")
     parser.add_argument("--manager-url", default="http://127.0.0.1:8790")
     parser.add_argument("--owns-manager", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     project_root = _resolve_project_root()
+    _remove_legacy_desktop_artifacts(project_root)
     configure_process_app_identity()
     ensure_start_menu_shortcut(project_root)
 
@@ -258,11 +281,11 @@ def main() -> int:
     except ModuleNotFoundError as error:
         if error.name == "PySide6":
             print(
-                "RabiRoute Qt 计划与记忆面板需要 PySide6。\n"
+                "RabiRoute Desktop 需要 PySide6。\n"
                 "请手动安装：\n"
                 "  py -m pip install -r desktop\\tray-task-window\\requirements.txt\n"
                 "\n"
-                "RabiRoute manager / WebGUI 仍可通过跨平台 Node 入口启动：\n"
+                "如只需跨平台 Manager，可改用 Node 入口启动：\n"
                 "  npm run start:manager",
                 file=sys.stderr,
             )

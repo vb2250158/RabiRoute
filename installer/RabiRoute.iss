@@ -29,7 +29,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile=..\assets\rabiroute-icon.ico
-UninstallDisplayIcon={app}\RabiRoute-Tray.exe
+UninstallDisplayIcon={app}\RabiRoute-Desktop.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -49,13 +49,13 @@ Name: "autostart"; Description: "登录 Windows 后启动 RabiRoute"; GroupDescr
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\RabiRoute"; Filename: "{app}\RabiRoute-Tray.exe"; WorkingDir: "{app}"
+Name: "{group}\RabiRoute"; Filename: "{app}\RabiRoute-Desktop.exe"; WorkingDir: "{app}"
 Name: "{group}\卸载 RabiRoute"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\RabiRoute"; Filename: "{app}\RabiRoute-Tray.exe"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{userstartup}\RabiRoute"; Filename: "{app}\RabiRoute-Tray.exe"; WorkingDir: "{app}"; Tasks: autostart
+Name: "{autodesktop}\RabiRoute"; Filename: "{app}\RabiRoute-Desktop.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{userstartup}\RabiRoute"; Filename: "{app}\RabiRoute-Desktop.exe"; WorkingDir: "{app}"; Tasks: autostart
 
 [Run]
-Filename: "{app}\RabiRoute-Tray.exe"; Description: "启动 RabiRoute"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\RabiRoute-Desktop.exe"; Description: "启动 RabiRoute"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 procedure StopLocalManager;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ForwardDeliveryResult } from "./forwarding.js";
 import type { ForwardRecord, ForwardRouteKind, ForwardTemplateValues } from "./routing/types.js";
+import type { RabiMessageSource } from "./shared/rabiMessage.js";
 
 export const deliveryReplayLedgerFileName = "delivery-replay-ledger.jsonl";
 
@@ -21,6 +22,8 @@ export type DeliveryReplayPacket = {
   routeId: string;
   ruleId: string;
   message: string;
+  messageSource?: RabiMessageSource;
+  content?: string;
 };
 
 export type DeliveryReplayListOptions = {

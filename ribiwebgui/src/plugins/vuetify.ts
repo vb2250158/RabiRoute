@@ -2,6 +2,8 @@ import { createVuetify } from "vuetify";
 import * as components from "vuetify/components";
 import * as directives from "vuetify/directives";
 import { aliases, mdi } from "vuetify/iconsets/mdi";
+import { RABI_DARK_THEME } from "../themes/dark/vuetify";
+import { RABI_LIGHT_THEME } from "../themes/light/vuetify";
 
 export const vuetify = createVuetify({
   components,
@@ -16,20 +18,8 @@ export const vuetify = createVuetify({
   theme: {
     defaultTheme: "RabiLight",
     themes: {
-      RabiLight: {
-        dark: false,
-        colors: {
-          background: "#f6f8fb",
-          surface: "#ffffff",
-          primary: "#102a43",
-          secondary: "#19bfc1",
-          accent: "#ff6d9d",
-          success: "#16a34a",
-          warning: "#f59e0b",
-          error: "#dc2626",
-          info: "#087f91"
-        }
-      }
+      RabiLight: RABI_LIGHT_THEME,
+      RabiDark: RABI_DARK_THEME
     }
   },
   defaults: {

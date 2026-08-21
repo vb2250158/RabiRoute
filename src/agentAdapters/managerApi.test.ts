@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCodexAgentScan, scanAgentAdapters } from "./managerApi.js";
+import { buildCodexAgentScan, scanAgentAdapters, scanDshAgentAdapter } from "./managerApi.js";
 
 test("Codex scan requires the Desktop owner for delivery", () => {
   const scan = buildCodexAgentScan({
@@ -145,4 +145,206 @@ test("Codex settings scan stops a stalled task catalog and records the timed-out
   assert.match(codex.warnings?.join(" ") ?? "", /任务目录.*超时/);
   assert.equal(operations.length >= 1, true);
   assert.equal(operations.find(item => item.operation === "manager.agent_scan.codex_catalog")?.error, true);
+});
+
+
+test("DSH settings scan exposes endpoint, projects, sessions, and local pagination", async () => {
+  const requested: Array<{ baseUrl: string; limit: number; offset: number; query?: string }> = [];
+  const result = await scanAgentAdapters({
+    rootDir: process.cwd(),
+    runtimes: [{
+      definition: {
+        agentAdapters: ["dsh"],
+        dshBaseUrl: "http://127.0.0.1:3080/",
+        dshCwd: process.cwd(),
+        dshSessionName: "主人格"
+      }
+    }],
+    projects: [],
+    cwdOptions: [],
+    codexBins: [],
+    codexSessions: [],
+    copilotSessions: [],
+    copilotBins: [],
+    marvisAppIds: [],
+    checkHttpEndpoint: async (url) => url === "http://127.0.0.1:3080",
+    resolveWingetCopilot: () => null,
+    readDshRabiRoutePluginStatus: async () => ({
+      active: true,
+      version: "0.1.2",
+      managerBaseUrl: "http://127.0.0.1:8790",
+      enforceAgentCommunication: true,
+      requestTimeoutMs: 30000,
+      tools: ["rabiroute_agent_threads", "rabiroute_agent_send", "rabiroute_manager_api"]
+    }),
+    listDshSessions: async (query) => {
+      requested.push(query);
+      return [0, 1, 2].map((index) => ({
+        id: `session-00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+        name: `DSH 会话 ${index + 1}`,
+        projectPath: process.cwd(),
+        updatedAt: `2026-08-20T00:00:0${index}.000Z`
+      }));
+    }
+  }, { dshLimit: 2, dshOffset: 0, dshQuery: "DSH" });
+
+  const dsh = (result.agents as Record<string, {
+    installed: boolean;
+    endpoints?: Array<{ url: string; healthy?: boolean }>;
+    projects?: Array<{ path: string }>;
+    sessions?: Array<{ id?: string }>;
+    sessionPage?: { offset: number; limit: number; returned: number; hasMore: boolean; nextOffset?: number };
+  }>).dsh;
+  assert.deepEqual(requested, [{
+    baseUrl: "http://127.0.0.1:3080",
+    limit: 3,
+    offset: 0,
+    query: "DSH"
+  }]);
+  assert.equal(dsh.installed, true);
+  assert.equal(dsh.endpoints?.[0]?.healthy, true);
+  assert.equal(dsh.projects?.some((project) => project.path === process.cwd()), true);
+  assert.equal(dsh.sessions?.length, 2);
+  assert.deepEqual(dsh.sessionPage, {
+    offset: 0,
+    limit: 2,
+    returned: 2,
+    hasMore: true,
+    nextOffset: 2
+  });
+});
+
+
+test("dedicated DSH scan does not wait for the Codex catalog or other adapters", async () => {
+  let codexCatalogCalls = 0;
+  const startedAt = performance.now();
+  const result = await Promise.race([
+    scanDshAgentAdapter({
+      rootDir: process.cwd(),
+      runtimes: [{ definition: { dshBaseUrl: "http://127.0.0.1:3080", dshCwd: process.cwd() } }],
+      checkHttpEndpoint: async () => true,
+      listCodexSessions: async () => {
+        codexCatalogCalls += 1;
+        await new Promise(() => undefined);
+        return [];
+      },
+      readDshRabiRoutePluginStatus: async () => ({
+      active: true,
+      version: "0.1.2",
+      managerBaseUrl: "http://127.0.0.1:8790",
+      enforceAgentCommunication: true,
+      requestTimeoutMs: 30000,
+      tools: ["rabiroute_agent_threads", "rabiroute_agent_send", "rabiroute_manager_api"]
+    }),
+    listDshSessions: async () => [{
+        id: "session-00000000-0000-4000-8000-000000000001",
+        name: "DSH 主人格",
+        projectPath: process.cwd(),
+        updatedAt: "2026-08-20T00:00:00.000Z"
+      }]
+    }, { dshLimit: 20 }),
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("dedicated DSH scan timed out")), 200))
+  ]);
+
+  assert.equal(codexCatalogCalls, 0);
+  assert.ok(performance.now() - startedAt < 200);
+  assert.equal(result.agents.dsh.installed, true);
+  assert.deepEqual(result.agents.dsh.sessions?.map((session) => session.id), [
+    "session-00000000-0000-4000-8000-000000000001"
+  ]);
+  assert.equal(result.cwdOptions.includes(process.cwd()), true);
+});
+
+
+test("dedicated DSH scan retries one transient session.list 404", async () => {
+  let calls = 0;
+  const result = await scanDshAgentAdapter({
+    rootDir: process.cwd(),
+    runtimes: [],
+    checkHttpEndpoint: async () => true,
+    readDshRabiRoutePluginStatus: async () => ({
+      active: true,
+      version: "0.1.2",
+      managerBaseUrl: "http://127.0.0.1:8790",
+      enforceAgentCommunication: true,
+      requestTimeoutMs: 30000,
+      tools: ["rabiroute_agent_threads", "rabiroute_agent_send", "rabiroute_manager_api"]
+    }),
+    listDshSessions: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("DSH session.list transport failed with HTTP 404.");
+      return [{
+        id: "session-00000000-0000-4000-8000-000000000002",
+        name: "DSH 计划秘书",
+        projectPath: process.cwd()
+      }];
+    }
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.agents.dsh.sessions?.length, 1);
+  assert.doesNotMatch(result.agents.dsh.warnings?.join(" ") ?? "", /读取 DSH 会话失败/);
+});
+
+
+test("DSH scan reports live RabiRoute plugin status", async () => {
+  const result = await scanDshAgentAdapter({
+    rootDir: process.cwd(),
+    checkHttpEndpoint: async () => true,
+    dshSessions: [],
+    readDshRabiRoutePluginStatus: async () => ({
+      active: true,
+      version: "0.1.2",
+      managerBaseUrl: "http://127.0.0.1:8790",
+      enforceAgentCommunication: true,
+      requestTimeoutMs: 30000,
+      tools: ["rabiroute_agent_threads", "rabiroute_agent_send", "rabiroute_manager_api"]
+    })
+  });
+  const plugin = result.agents.dsh.plugins?.[0];
+  assert.deepEqual(plugin, {
+    id: "rabiroute-agent",
+    name: "RabiRoute Agent",
+    installed: true,
+    healthy: true,
+    version: "0.1.2",
+    details: [
+      "Manager：http://127.0.0.1:8790",
+      "Agent 通信约束：已启用",
+      "模型工具：3/3"
+    ]
+  });
+});
+
+test("DSH scan diagnoses a missing RabiRoute plugin", async () => {
+  const result = await scanDshAgentAdapter({
+    rootDir: process.cwd(),
+    checkHttpEndpoint: async () => true,
+    dshSessions: [],
+    readDshRabiRoutePluginStatus: async () => {
+      throw new Error("DSH rabirouteAgent/status transport failed with HTTP 404.");
+    }
+  });
+  assert.equal(result.agents.dsh.plugins?.[0]?.installed, false);
+  assert.equal(result.agents.dsh.plugins?.[0]?.healthy, false);
+  assert.match(result.agents.dsh.warnings?.join(" ") ?? "", /安装或更新 dsh-private-plugins.*重启 DSH/);
+});
+
+test("DSH scan rejects a mismatched RabiRoute plugin version", async () => {
+  const result = await scanDshAgentAdapter({
+    rootDir: process.cwd(),
+    checkHttpEndpoint: async () => true,
+    dshSessions: [],
+    readDshRabiRoutePluginStatus: async () => ({
+      active: true,
+      version: "0.0.9",
+      managerBaseUrl: "http://127.0.0.1:8790",
+      enforceAgentCommunication: true,
+      requestTimeoutMs: 30000,
+      tools: ["rabiroute_agent_threads", "rabiroute_agent_send", "rabiroute_manager_api"]
+    })
+  });
+  assert.equal(result.agents.dsh.plugins?.[0]?.installed, true);
+  assert.equal(result.agents.dsh.plugins?.[0]?.healthy, false);
+  assert.match(result.agents.dsh.warnings?.join(" ") ?? "", /版本为 0\.0\.9.*要求 0\.1\.2/);
 });

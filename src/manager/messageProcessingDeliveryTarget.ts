@@ -1,6 +1,7 @@
 import type { MessageProcessingRequirement } from "../messageProcessing/board.js";
+import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import {
-  codexMessageProcessingAgentEnabled,
+  primaryMessageProcessingAgentAdapter,
   type GatewayDefinition
 } from "../shared/gatewayConfigModel.js";
 
@@ -29,6 +30,7 @@ function primaryPersonaWorker(
     const workspace = definition.dshCwd?.trim();
     if (!sessionId || !workspace) return undefined;
     return {
+      agentAdapter: "dsh",
       threadId: sessionId,
       threadName: definition.dshSessionName?.trim() || "DSH 主人格",
       workspace
@@ -39,6 +41,7 @@ function primaryPersonaWorker(
   const workspace = definition.codexCwd?.trim();
   if (!threadId || !workspace) return undefined;
   return {
+    agentAdapter: "codex",
     threadId,
     threadName: definition.codexThreadName?.trim() || "Codex 主人格",
     workspace
@@ -49,9 +52,13 @@ export function resolveMessageProcessingDeliveryTarget(
   definition: GatewayDefinition,
   managedWorker: MessageProcessingRequirement["worker"]
 ): MessageProcessingDeliveryTarget | undefined {
-  if (codexMessageProcessingAgentEnabled(definition)) {
+  const managedAdapter = primaryMessageProcessingAgentAdapter(definition);
+  if (managedAdapter) {
+    const primaryWorkspace = managedAdapter === "dsh" ? definition.dshCwd : definition.codexCwd;
     return managedWorker
-      ? { agentType: "message_processing", worker: managedWorker }
+      && (managedWorker.agentAdapter ?? (managedWorker.threadId.startsWith("session-") ? "dsh" : "codex")) === managedAdapter
+      && sameCodexWorkspace(managedWorker.workspace, primaryWorkspace)
+      ? { agentType: "message_processing", worker: { ...managedWorker, agentAdapter: managedAdapter } }
       : undefined;
   }
   const worker = primaryPersonaWorker(definition);
@@ -75,6 +82,7 @@ export function resolveDeliveredMessageProcessingTarget(
     target: {
       agentType: target.agentType,
       worker: {
+        agentAdapter: target.worker.agentAdapter,
         threadId,
         threadName: String(thread?.title || target.worker.threadName),
         workspace: String(thread?.cwd || target.worker.workspace)

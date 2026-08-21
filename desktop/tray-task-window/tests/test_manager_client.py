@@ -50,6 +50,15 @@ class ManagerSnapshotTest(unittest.TestCase):
 
         self.assertEqual(client.posts, [("/manager/shutdown", {"desktopExit": True})])
 
+    def test_desktop_settings_reads_shared_theme(self) -> None:
+        client = _RecordingManagerClient()
+        client._get_json = lambda path: {"data": {"theme": "dark", "screenshot": {"enabled": True}}}  # type: ignore[method-assign]
+
+        settings = client.desktop_settings()
+
+        self.assertTrue(settings.screenshot_enabled)
+        self.assertEqual(settings.theme, "dark")
+
     def test_snapshot_requests_lightweight_gateway_summary(self) -> None:
         client = _RecordingManagerClient()
 

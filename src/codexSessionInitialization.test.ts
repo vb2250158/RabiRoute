@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initializeCodexSessionForRoute } from "./shared/codexSessionInitialization.js";
+import { initializeAgentSessionForRoute, initializeCodexSessionForRoute } from "./shared/codexSessionInitialization.js";
 
 test("automatic initialization saves the name-id binding before delivering persona context", async () => {
   const calls: string[] = [];
@@ -36,4 +36,25 @@ test("automatic initialization never delivers when binding save fails", async ()
     deliver: async () => { deliverCount += 1; }
   }), /binding failed/);
   assert.equal(deliverCount, 0);
+});
+
+
+test("DSH automatic initialization saves before delivering through the DSH owner contract", async () => {
+  const calls: string[] = [];
+  const deliveries: Array<{ gatewayId: string; text: string }> = [];
+  await initializeAgentSessionForRoute({
+    agentAdapter: "dsh",
+    save: async () => { calls.push("save"); },
+    currentGatewayId: () => "dsh-route",
+    deliver: async (message) => {
+      calls.push("deliver");
+      deliveries.push(message);
+    }
+  });
+
+  assert.deepEqual(calls, ["save", "deliver"]);
+  assert.equal(deliveries[0].gatewayId, "dsh-route");
+  assert.match(deliveries[0].text, /DSH 会话 owner/);
+  assert.match(deliveries[0].text, /RabiRoute Agent 插件/);
+  assert.match(deliveries[0].text, /不要改投其它 Agent 端/);
 });

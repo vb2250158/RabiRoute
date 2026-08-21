@@ -25,7 +25,7 @@ function Write-LifecycleRecord {
     $Intent = $null,
     $ManagerConnected = $null,
     $ManagerPresent = $null,
-    [int]$TrayCount = -1,
+    [int]$DesktopShellCount = -1,
     [bool]$RepairAttempted = $false
   )
   $record = [ordered]@{
@@ -36,7 +36,7 @@ function Write-LifecycleRecord {
     source = if ($Intent) { [string]$Intent.source } else { $null }
     managerConnected = $ManagerConnected
     managerPresent = $ManagerPresent
-    trayCount = $TrayCount
+    desktopShellCount = $DesktopShellCount
     repairAttempted = $RepairAttempted
   }
   Add-Content -LiteralPath $jsonlPath -Encoding UTF8 -Value ($record | ConvertTo-Json -Compress -Depth 4)
@@ -84,14 +84,14 @@ function Get-ProjectManagerProcesses {
   }
 }
 
-function Get-DesktopTrayProcesses {
+function Get-DesktopShellProcesses {
   $scriptNeedles = @(
     (Join-Path $projectRoot "desktop\tray-task-window\main.py").ToLowerInvariant(),
     (Join-Path $projectRootInput "desktop\tray-task-window\main.py").ToLowerInvariant()
   ) | Select-Object -Unique
   $packagedPaths = @(
-    (Join-Path $projectRoot "RabiRoute-Tray.exe").ToLowerInvariant(),
-    (Join-Path $projectRootInput "RabiRoute-Tray.exe").ToLowerInvariant()
+    (Join-Path $projectRoot "RabiRoute-Desktop.exe").ToLowerInvariant(),
+    (Join-Path $projectRootInput "RabiRoute-Desktop.exe").ToLowerInvariant()
   ) | Select-Object -Unique
   try {
     return @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
@@ -105,15 +105,15 @@ function Get-DesktopTrayProcesses {
   }
 }
 
-function Repair-DesktopPair {
+function Repair-RabiRouteDesktop {
   param($Intent)
-  $packagedTray = Join-Path $projectRoot "RabiRoute-Tray.exe"
-  if ([string]$Intent.source -eq "packaged-tray" -and (Test-Path -LiteralPath $packagedTray)) {
-    Start-Process -FilePath $packagedTray -ArgumentList @("--manager-url", $ManagerUrl) -WorkingDirectory $projectRoot -WindowStyle Hidden | Out-Null
+  $packagedDesktop = Join-Path $projectRoot "RabiRoute-Desktop.exe"
+  if ([string]$Intent.source -eq "packaged-desktop" -and (Test-Path -LiteralPath $packagedDesktop)) {
+    Start-Process -FilePath $packagedDesktop -ArgumentList @("--manager-url", $ManagerUrl) -WorkingDirectory $projectRoot -WindowStyle Hidden | Out-Null
     return
   }
 
-  $launcher = Join-Path $projectRoot "Start-RabiRoute-Tray.bat"
+  $launcher = Join-Path $projectRoot "Start-RabiRoute-Desktop.bat"
   if (-not (Test-Path -LiteralPath $launcher)) {
     throw "Desktop launcher is missing: $launcher"
   }
@@ -125,8 +125,9 @@ function Repair-DesktopPair {
     -UseExistingBuild `
     -ReuseHealthyManager `
     -NoDesktopSupervisor
-  if ($LASTEXITCODE -ne 0) {
-    throw "Desktop launcher exited with code $LASTEXITCODE"
+  $launcherExitCode = $LASTEXITCODE
+  if ($null -ne $launcherExitCode -and $launcherExitCode -ne 0) {
+    throw "Desktop launcher exited with code $launcherExitCode"
   }
 }
 
@@ -155,9 +156,9 @@ try {
 
     $managerConnected = Test-ManagerConnected
     $managerPresent = $managerConnected -or @(Get-ProjectManagerProcesses).Count -gt 0
-    $trayCount = @(Get-DesktopTrayProcesses).Count
+    $desktopShellCount = @(Get-DesktopShellProcesses).Count
     $managerFailures = if ($managerPresent) { 0 } else { $managerFailures + 1 }
-    $trayFailures = if ($trayCount -gt 0) { 0 } else { $trayFailures + 1 }
+    $trayFailures = if ($desktopShellCount -gt 0) { 0 } else { $trayFailures + 1 }
     $repairNeeded = $managerFailures -ge [Math]::Max(1, $FailureThreshold) -or $trayFailures -ge [Math]::Max(1, $FailureThreshold)
     $repairAttempted = $false
     $repairError = $null
@@ -165,24 +166,24 @@ try {
     if ($repairNeeded -and -not $NoRepair) {
       $repairAttempted = $true
       try {
-        Repair-DesktopPair -Intent $intent
+        Repair-RabiRouteDesktop -Intent $intent
       } catch {
         $repairError = $_.Exception.Message
       }
       Start-Sleep -Milliseconds 750
       $managerConnected = Test-ManagerConnected
       $managerPresent = $managerConnected -or @(Get-ProjectManagerProcesses).Count -gt 0
-      $trayCount = @(Get-DesktopTrayProcesses).Count
+      $desktopShellCount = @(Get-DesktopShellProcesses).Count
       $managerFailures = if ($managerPresent) { 0 } else { $managerFailures }
-      $trayFailures = if ($trayCount -gt 0) { 0 } else { $trayFailures }
-      if ($managerPresent -and $trayCount -gt 0) {
+      $trayFailures = if ($desktopShellCount -gt 0) { 0 } else { $trayFailures }
+      if ($managerPresent -and $desktopShellCount -gt 0) {
         # A launcher can time out while a newly created Manager is still warming.
         # Process-pair ownership is already restored, so do not enter a restart loop.
         $repairError = $null
       }
     }
 
-    $healthy = $managerConnected -and $trayCount -gt 0
+    $healthy = $managerConnected -and $desktopShellCount -gt 0
     $status = if ($healthy) { "ok" } elseif ($repairError) { "error" } else { "degraded" }
     $message = if ($repairError) {
       "Desktop pair repair failed: $repairError"
@@ -190,12 +191,12 @@ try {
       "Manager and tray were repaired and read back healthy."
     } elseif ($healthy) {
       "Manager and tray are associated and healthy."
-    } elseif ($managerPresent -and $trayCount -gt 0) {
-      "Manager and tray processes are paired; Manager control plane is still warming or degraded."
+    } elseif ($managerPresent -and $desktopShellCount -gt 0) {
+      "Manager and desktop shell processes are paired; Manager control plane is still warming or degraded."
     } else {
       "Manager/tray pair is incomplete; waiting for the bounded failure threshold or repair verification."
     }
-    Write-LifecycleRecord -Status $status -Message $message -Intent $intent -ManagerConnected $managerConnected -ManagerPresent $managerPresent -TrayCount $trayCount -RepairAttempted $repairAttempted
+    Write-LifecycleRecord -Status $status -Message $message -Intent $intent -ManagerConnected $managerConnected -ManagerPresent $managerPresent -DesktopShellCount $desktopShellCount -RepairAttempted $repairAttempted
 
     if (-not $Once) { Start-Sleep -Seconds ([Math]::Max(1, $IntervalSeconds)) }
   } while (-not $Once)

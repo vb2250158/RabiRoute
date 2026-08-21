@@ -41,6 +41,7 @@ test("disabled message processing routes follow-up work to the primary persona",
   assert.deepEqual(resolveMessageProcessingDeliveryTarget(gateway(), messageWorker), {
     agentType: "primary_persona",
     worker: {
+      agentAdapter: "codex",
       threadId: "primary-thread",
       threadName: "主人格",
       workspace: "C:/workspace"
@@ -59,10 +60,24 @@ test("enabled message processing keeps follow-up work on the managed worker", ()
     }
   }), messageWorker), {
     agentType: "message_processing",
-    worker: messageWorker
+    worker: { ...messageWorker, agentAdapter: "codex" }
   });
 });
 
+test("message processing rejects a worker outside the Primary Persona workspace", () => {
+  assert.equal(resolveMessageProcessingDeliveryTarget(gateway({
+    messageProcessingAgents: {
+      codex: {
+        enabled: true,
+        model: "gpt-5.6-luna",
+        reasoningEffort: "medium"
+      }
+    }
+  }), {
+    ...messageWorker,
+    workspace: "C:/other-workspace"
+  }), undefined);
+});
 test("a DSH primary never reuses a persisted Codex message-processing worker", () => {
   assert.deepEqual(resolveMessageProcessingDeliveryTarget(gateway({
     agentAdapters: ["codex", "dsh"],
@@ -80,6 +95,7 @@ test("a DSH primary never reuses a persisted Codex message-processing worker", (
   }), messageWorker), {
     agentType: "primary_persona",
     worker: {
+      agentAdapter: "dsh",
       threadId: "session-b9a5c9bf-8e96-4fad-9035-9c6d3d25b682",
       threadName: "DSH 主人格",
       workspace: "C:/workspace"
@@ -115,6 +131,7 @@ test("a delivered archived-task replacement keeps the role and adopts the new ta
     target: {
       agentType: "primary_persona",
       worker: {
+        agentAdapter: "codex",
         threadId: "replacement-thread",
         threadName: "主人格",
         workspace: "C:/workspace"

@@ -1,0 +1,29 @@
+/* Shared appearance tokens. The Manager-owned setting chooses the root theme attribute. */
+:root,
+html[data-rabiroute-theme="light"] {
+  --rr-page-canvas: #eef6f8;
+  --rr-canvas: #f6f8fb;
+  --rr-surface: #ffffff;
+  --rr-subtle: #f5f8fa;
+  --rr-input: #fbfdff;
+  --rr-border: #dbe5ea;
+  --rr-border-strong: #cad8e0;
+  --rr-text: #112033;
+  --rr-heading: #0c2a4a;
+  --rr-muted: #52677a;
+  --rr-muted-soft: #667586;
+  --rr-muted-faint: #718291;
+  --rr-disabled: #a4afb8;
+  --rr-accent: #19bfc1;
+  --rr-accent-strong: #0f8b8d;
+  --rr-accent-surface: #eaf8f9;
+  --rr-accent-border: #bde4e6;
+  --rr-success-surface: #eaf8ef;
+  --rr-success-border: #b9e3c8;
+  --rr-warning-surface: #fff7e6;
+  --rr-warning-border: #f4d293;
+  --rr-error-surface: #fff0f0;
+  --rr-error-border: #f0bcbc;
+  --rr-info-surface: #eef9ff;
+  --rr-info-border: #a9d5f7;
+}

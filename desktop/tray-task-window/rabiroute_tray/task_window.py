@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from .manager_client import ManagerSnapshot
 from .desktop_models import ContextEntry, PlanItem, PlanSnapshot, PlanStep, RoleContextSnapshot
 from .display_helpers import route_enabled_label, route_running_label, route_state, route_status_label, route_subtitle, route_title
-from .theme import apply_rabi_menu_theme
+from .theme import apply_rabi_menu_theme, normalize_theme, theme_stylesheet
 
 
 VIEW_LABELS = (
@@ -737,10 +737,10 @@ def _plan_status_presentation(plan: PlanItem, status: str) -> tuple[str, str]:
     return "状态未知", "unknown"
 
 
-def _plan_card_palette_stylesheet(plan: PlanItem) -> str:
+def _plan_card_palette_stylesheet(plan: PlanItem, theme: object = "light") -> str:
     if not plan.display_accent:
         return ""
-    return (
+    stylesheet = (
         "QFrame#itemCard[tone=\"plan\"] {"
         "background: #ffffff;"
         "border: 1px solid #dbe5ea;"
@@ -748,12 +748,13 @@ def _plan_card_palette_stylesheet(plan: PlanItem) -> str:
         "border-radius: 8px;"
         "}"
     )
+    return theme_stylesheet(stylesheet, theme)
 
 
-def _plan_status_palette_stylesheet(plan: PlanItem, status_tone: str) -> str:
+def _plan_status_palette_stylesheet(plan: PlanItem, status_tone: str, theme: object = "light") -> str:
     if not plan.display_background or not plan.display_foreground:
         return ""
-    return (
+    stylesheet = (
         f"QLabel#planStatus[statusTone=\"{status_tone}\"] {{"
         f"background: {plan.display_background};"
         f"color: {plan.display_foreground};"
@@ -763,6 +764,7 @@ def _plan_status_palette_stylesheet(plan: PlanItem, status_tone: str) -> str:
         "padding: 3px 7px;"
         "}"
     )
+    return theme_stylesheet(stylesheet, theme)
 
 
 class ExpandableCard(QFrame):
@@ -779,13 +781,14 @@ class ExpandableCard(QFrame):
         status: str = "",
         expanded: bool = False,
         plan: PlanItem | None = None,
+        theme: object = "light",
     ) -> None:
         super().__init__()
         self._expanded = False
         self.setObjectName("itemCard")
         self.setProperty("tone", tone)
         if plan is not None:
-            self.setStyleSheet(_plan_card_palette_stylesheet(plan))
+            self.setStyleSheet(_plan_card_palette_stylesheet(plan, theme))
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
         layout = QVBoxLayout()
@@ -827,7 +830,7 @@ class ExpandableCard(QFrame):
             self.status_label.setObjectName("planStatus")
             self.status_label.setProperty("statusTone", status_tone)
             if plan is not None:
-                self.status_label.setStyleSheet(_plan_status_palette_stylesheet(plan, status_tone))
+                self.status_label.setStyleSheet(_plan_status_palette_stylesheet(plan, status_tone, theme))
             title_row.addWidget(self.status_label, 0, Qt.AlignTop)
         else:
             self.status_label = None
@@ -999,7 +1002,7 @@ class TaskWindow(QWidget):
     send_message_requested = Signal(str, object)
     plan_feedback_requested = Signal(str, str, str, str)
 
-    def __init__(self, app_icon: QIcon | None = None) -> None:
+    def __init__(self, app_icon: QIcon | None = None, theme: object = "light") -> None:
         super().__init__()
         self.setWindowTitle("RabiRoute 角色面板")
         self.setWindowFlags(Qt.Window)
@@ -1018,6 +1021,7 @@ class TaskWindow(QWidget):
         self.pending_attachments: list[dict] = []
         self._message_send_pending = False
         self._sidebar_collapsed = False
+        self.theme = normalize_theme(theme)
 
         self.header = QFrame()
         self.header.setObjectName("header")
@@ -1200,9 +1204,16 @@ class TaskWindow(QWidget):
         layout.setSpacing(0)
         layout.addLayout(main, 1)
         self.setLayout(layout)
-        self.setStyleSheet(STYLESHEET)
+        self.apply_theme(self.theme)
         self.set_actions([])
         self._sync_buttons()
+
+    def apply_theme(self, theme: object) -> None:
+        self.theme = normalize_theme(theme)
+        self.setStyleSheet(theme_stylesheet(STYLESHEET, self.theme))
+        apply_rabi_menu_theme(self.more_menu, theme=self.theme)
+        if self.manager is not None:
+            self._render_active_view()
 
     def set_view(self, view_key: str) -> None:
         self.active_view = view_key
@@ -1688,6 +1699,7 @@ class TaskWindow(QWidget):
             status=status,
             expanded=key in self._expanded_cards,
             plan=plan,
+            theme=self.theme,
         )
         card.expanded_changed.connect(lambda expanded, item_key=key: self._set_card_expanded(item_key, expanded))
         if plan is not None:

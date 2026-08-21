@@ -60,7 +60,7 @@ const secretary: PlanApprovalFeedbackSecretaryTarget = {
 };
 
 test("enabled plan secretary receives the control notice while the bound task receives the full approval", async () => {
-  const taskRequests: Array<{ threadId: string; cwd: string; prompt: string }> = [];
+  const taskRequests: Array<{ threadId: string; title: string; cwd: string; createIfMissing: true; prompt: string }> = [];
   const secretaryRequests: PlanApprovalFeedbackPersonaRequest[] = [];
   const personaRequests: PlanApprovalFeedbackPersonaRequest[] = [];
   const result = await deliverPlanApprovalFeedback({
@@ -110,7 +110,7 @@ test("missing business binding falls back to the assigned secretary instead of t
 });
 
 test("approval is delivered to the bound Codex task and persona only receives an auto-delivered notice", async () => {
-  const taskRequests: Array<{ threadId: string; cwd: string; prompt: string }> = [];
+  const taskRequests: Array<{ threadId: string; title: string; cwd: string; createIfMissing: true; prompt: string }> = [];
   const personaRequests: PlanApprovalFeedbackPersonaRequest[] = [];
   const result = await deliverPlanApprovalFeedback({
     roleId: "XinghaiBuilder",
@@ -129,6 +129,8 @@ test("approval is delivered to the bound Codex task and persona only receives an
   assert.equal(result.mode, "bound_task");
   assert.equal(taskRequests.length, 1);
   assert.equal(taskRequests[0]?.threadId, "019f0000-0000-7000-8000-000000000001");
+  assert.equal(taskRequests[0]?.title, "原业务任务");
+  assert.equal(taskRequests[0]?.createIfMissing, true);
   assert.equal(taskRequests[0]?.cwd, "C:\\Data\\CottonProject\\PangHu");
   assert.match(taskRequests[0]?.prompt || "", /批准按推荐方案实施/);
   assert.match(taskRequests[0]?.prompt || "", /approval_response/);
@@ -158,7 +160,7 @@ test("approval falls back to the persona when the plan has no complete task bind
 });
 
 test("plan guidance reaches the bound task without pretending to approve a step", async () => {
-  const taskRequests: Array<{ threadId: string; cwd: string; prompt: string }> = [];
+  const taskRequests: Array<{ threadId: string; title: string; cwd: string; createIfMissing: true; prompt: string }> = [];
   await deliverPlanApprovalFeedback({
     roleId: "XinghaiBuilder",
     managerBaseUrl: "http://127.0.0.1:8790",
@@ -173,6 +175,8 @@ test("plan guidance reaches the bound task without pretending to approve a step"
   });
 
   assert.equal(taskRequests.length, 1);
+  assert.equal(taskRequests[0]?.title, "审批直达原业务任务");
+  assert.equal(taskRequests[0]?.createIfMissing, true);
   assert.match(taskRequests[0]?.prompt || "", /引导影响范围、优先级或路径时/);
   assert.match(taskRequests[0]?.prompt || "", /PATCH 计划和未开始步骤/);
   assert.match(taskRequests[0]?.prompt || "", /kind=guidance_response/);

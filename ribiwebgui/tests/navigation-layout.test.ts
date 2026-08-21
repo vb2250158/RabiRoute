@@ -44,6 +44,9 @@ test("selected-text reading, screenshots, and login startup stay on Settings", (
   assert.match(settingsSource, /small-title">滑词朗读/);
   assert.match(settingsSource, /系统级截图/);
   assert.match(settingsSource, /Windows 登录启动/);
+  assert.match(settingsSource, /RabiRoute 在 Windows 中提供截图、滑词和登录启动设置。/);
+  assert.match(settingsSource, /登录 Windows 后自动启动 RabiRoute Desktop；后台运行时保留系统托盘入口。/);
+  assert.doesNotMatch(settingsSource, /Manager 仍按自己的运行开关管理/);
   assert.match(settingsSource, /selectionSpeechAdvanced/);
   assert.match(settingsSource, /desktopScreenshotShortcut/);
   assert.match(settingsSource, /desktopAutostart/);

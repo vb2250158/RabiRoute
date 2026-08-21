@@ -3,7 +3,7 @@ param(
     [string]$NodeVersion = "22.17.1",
     [string]$OutputRoot,
     [switch]$SkipBuild,
-    [switch]$SkipTrayBuild,
+    [switch]$SkipDesktopBuild,
     [switch]$IncludeSpeech,
     [switch]$SkipInstaller,
     [switch]$SkipSmokeTest
@@ -62,10 +62,10 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "npm run build failed." }
 }
 
-if (-not $SkipTrayBuild) {
-    Write-Step "Building the PyInstaller tray executable"
-    & (Join-Path $repo "scripts\build-tray-exe.ps1") -SkipNodeBuild
-    if ($LASTEXITCODE -ne 0) { throw "Tray build failed." }
+if (-not $SkipDesktopBuild) {
+    Write-Step "Building the RabiRoute Desktop executable"
+    & (Join-Path $repo "scripts\build-desktop-exe.ps1") -SkipNodeBuild
+    if ($LASTEXITCODE -ne 0) { throw "Desktop build failed." }
 }
 
 if ($IncludeSpeech -and -not $SkipBuild) {
@@ -79,7 +79,7 @@ if ($IncludeSpeech -and -not $SkipBuild) {
 $required = @(
     "dist\manager.js",
     "ribiwebgui\dist\index.html",
-    "RabiRoute-Tray.exe"
+    "RabiRoute-Desktop.exe"
 )
 $speechHostRelative = "plugin-adapters\rabi-speech\runtime\RabiSpeech.exe"
 if ($IncludeSpeech) { $required += $speechHostRelative }
@@ -99,10 +99,10 @@ foreach ($relative in @("dist", "ribiwebgui\dist")) {
     Copy-Item -LiteralPath (Join-Path $repo $relative) -Destination $destination -Recurse -Force
 }
 
-# PyInstaller writes its tray EXE into dist beside the TypeScript output. The
+# PyInstaller writes the desktop EXE into dist beside the TypeScript output. The
 # release root receives the same EXE below, so do not ship a duplicate. Compiled
 # test files are useful in CI but are not runtime assets.
-Remove-Item -LiteralPath (Join-Path $payload "dist\RabiRoute-Tray.exe") -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $payload "dist\RabiRoute-Desktop.exe") -Force -ErrorAction SilentlyContinue
 Get-ChildItem -LiteralPath (Join-Path $payload "dist") -Recurse -File -Filter "*.test.js" |
     Remove-Item -Force
 
@@ -114,8 +114,8 @@ foreach ($relative in @(
     "README_zh.md",
     "版本更新日志.md",
     "版本更新日志_en.md",
-    "Start-RabiRoute-Tray.bat",
-    "RabiRoute-Tray.exe"
+    "Start-RabiRoute-Desktop.bat",
+    "RabiRoute-Desktop.exe"
 )) {
     Copy-Item -LiteralPath (Join-Path $repo $relative) -Destination (Join-Path $payload $relative) -Force
 }
@@ -163,7 +163,7 @@ if ($rg) {
         (Join-Path $payload "examples"),
         (Join-Path $payload "plugin-adapters"),
         (Join-Path $payload "scripts"),
-        (Join-Path $payload "RabiRoute-Tray.exe")
+        (Join-Path $payload "RabiRoute-Desktop.exe")
     ) | Where-Object { Test-Path -LiteralPath $_ }
     $leaks = & $rg.Source -a -l -F $repo @firstPartyRoots 2>$null
     if ($LASTEXITCODE -eq 0 -and $leaks) {

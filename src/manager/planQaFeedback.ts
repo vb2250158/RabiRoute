@@ -10,13 +10,15 @@ import {
   type PlanItem,
   type PlanStep
 } from "../roleKnowledge.js";
-import type { AgentThreadRequest } from "../agentThreads.js";
+import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 
 export type PlanQaTaskRequest = {
+  agentAdapter: "codex" | "dsh";
   threadId: string;
+  title: string;
   cwd: string;
+  createIfMissing: true;
   prompt: string;
-  deliverySource?: NonNullable<AgentThreadRequest["deliverySource"]>;
 };
 
 export type ConsumePlanQaFeedbackOptions = {
@@ -214,7 +216,7 @@ function taskPrompt(plan: PlanItem, feedback: PlanFeedbackRecord): string {
     "反馈 ID：" + feedback.id,
     "QA 反馈：" + feedback.text,
     "请基于这份新证据深化根因分析，完成最小修正与针对性验证后重新进入 QA。",
-    "必须复用当前计划与原 taskBinding，不得创建重复计划、重复业务任务或替代会话。",
+    "必须复用当前计划与原 taskBinding；绑定任务已归档时创建替代任务并更新同一 taskBinding，不得创建重复计划或重复业务任务。",
     "只有 QA 明确通过后才可进入验收完成。"
   ].join("\n");
 }
@@ -330,8 +332,8 @@ export async function consumePlanQaFeedback(
     });
     return { outcome: "failed", status: "waiting_for_evidence", missingEvidence, plan: updatedPlan };
   }
-  const binding = updatedPlan.taskBinding;
-  if (!binding?.sessionId || !binding.workspace) {
+  const taskTarget = planTaskDeliveryTarget(updatedPlan);
+  if (!taskTarget) {
     const message = "QA failure cannot continue because the original taskBinding sessionId/workspace is incomplete.";
     updatePlanFeedbackQaHandling(options.roleDir, latest, {
       outcome: "failed",
@@ -352,8 +354,7 @@ export async function consumePlanQaFeedback(
   });
   try {
     await options.sendToTask({
-      threadId: binding.sessionId,
-      cwd: binding.workspace,
+      ...taskTarget,
       prompt: taskPrompt(updatedPlan, effectiveFeedback)
     });
   } catch (error) {

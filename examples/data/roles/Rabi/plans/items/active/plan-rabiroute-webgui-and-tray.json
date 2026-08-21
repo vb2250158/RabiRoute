@@ -1,17 +1,17 @@
 {
   "id": "plan-rabiroute-webgui-and-tray",
-  "title": "让 RibiWebGUI 和托盘面板清楚展示路由状态与角色上下文",
-  "focus": "让 RibiWebGUI 和托盘面板清楚展示路由状态与角色上下文",
+  "title": "让 RibiWebGUI 和 RabiRoute Desktop 清楚展示路由状态与角色上下文",
+  "focus": "让 RibiWebGUI 和 RabiRoute Desktop 清楚展示路由状态与角色上下文",
   "status": "进行中",
   "priority": "medium",
   "kind": "ui",
-  "currentStepId": "add-real-screenshots",
-  "currentStep": "控制台已移除重复的顶部介绍卡片；计划与记忆页分为当前计划、近期记忆、沉淀记忆和已归档四类。Persona 页提供收到消息时与定时任务两类自动化规则，并把已识别人物、共用账号、说话习惯和关系集中到身份工作区。现有状态、分页、消息处理回执和 Route 健康仍由 Manager 提供。当前缺少这些新界面的真实脱敏截图和长期运行证据。",
-  "nextAction": "补齐人格自动化、身份工作区、四类计划与记忆、图片来源审核和发送回执的真实脱敏截图；在双实体 PC、真实账号和长时间会话中复核旧配置迁移、分页计数、部分保存失败、脚本权限提示和错误恢复。",
+  "currentStepId": "validate-windows-desktop-interactions",
+  "currentStep": "公开 README 已补充中英文的 RabiRoute Desktop 设置页截图，画面只展示主题、系统级截图、快捷键和滑词菜单，不包含账号、访问密钥、聊天内容或私有路径。WebGUI 已有统一保存入口、即时页面切换和中英文文案；当前仍缺系统级截图与滑词在真实 Windows 软件中的完整操作验收。",
+  "nextAction": "在普通 Windows 软件和 Unity 中分别验证鼠标/键盘划选、受保护剪贴板回退、人格列表、朗读、截图框选、贴图快捷键、文字与图片投递、关闭后无副作用，以及 Manager 短暂离线后的恢复；继续补充不含私密内容的界面截图。",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
     { "id": "speech-monitor", "title": "统一语音页与 Route 监视器状态读取", "status": "已完成" },
-    { "id": "tray-and-package", "title": "完成托盘六视图与 Windows 发布包", "status": "已完成" },
+    { "id": "tray-and-package", "title": "完成 RabiRoute Desktop、任务窗口与 Windows 发布包", "status": "已完成" },
     { "id": "structured-plan-steps", "title": "实现结构化计划步骤模型与完整步骤视图", "status": "已完成" },
     { "id": "tray-manager-api-boundary", "title": "让托盘只消费 Manager API 并移除本地 data 读取", "status": "已完成" },
     { "id": "plan-feedback-and-persona-tools", "title": "统一计划反馈并增加人格声纹、同步和知识界面", "status": "已完成" },
@@ -24,7 +24,8 @@
     { "id": "speech-runtime-toggle", "title": "按当前工作区进程归属与真实健康启停 RabiSpeech", "status": "已完成" },
     { "id": "independent-message-endpoint-health", "title": "独立展示各消息端健康并保持扫描只读、有界和可部分返回", "status": "已完成" },
     { "id": "persona-automation-and-identity-workspace", "title": "增加人格自动化、统一身份工作区和四类计划与记忆界面", "status": "已完成", "completedAt": "2026-08-12T00:00:00+08:00" },
-    { "id": "add-real-screenshots", "title": "补齐真实脱敏界面截图", "status": "进行中" },
+    { "id": "add-real-screenshots", "title": "补齐 RabiRoute Desktop 脱敏界面截图", "status": "已完成", "completedAt": "2026-08-20T21:45:00+08:00" },
+    { "id": "validate-windows-desktop-interactions", "title": "在真实 Windows 应用中验收系统截图和滑词投递", "status": "进行中", "blockedBy": "仍缺普通 Windows 软件与 Unity 的真实操作证据，以及关闭功能后不触发朗读或投递的回归记录" },
     { "id": "persona-route-preview", "title": "完善人格路由预览与跨端排障入口", "status": "未开始" },
     { "id": "cross-pc-speech", "title": "完成跨电脑、不同声卡与自然打断的真实语音重测", "status": "未开始" }
   ],
@@ -41,6 +42,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-08-12T20:21:06+08:00",
-  "keywords": ["RibiWebGUI", "Manager API", "人格自动化", "定时任务", "本机脚本", "身份工作区", "共用账号", "说话习惯", "当前计划", "近期记忆", "沉淀记忆", "已归档", "消息处理看板", "图片来源审核", "Outbox 回执", "Agent 状态", "真实截图"]
+  "updatedAt": "2026-08-20T21:45:00+08:00",
+  "keywords": ["RibiWebGUI", "Manager API", "人格自动化", "定时任务", "本机脚本", "身份工作区", "共用账号", "说话习惯", "当前计划", "近期记忆", "沉淀记忆", "已归档", "消息处理看板", "图片来源审核", "Outbox 回执", "Agent 状态", "真实截图", "RabiRoute Desktop", "系统级截图", "滑词菜单", "DSH", "脱敏截图"]
 }

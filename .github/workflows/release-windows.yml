@@ -35,7 +35,7 @@ jobs:
           cache: pip
           cache-dependency-path: desktop/tray-task-window/requirements.txt
 
-      - name: Install tray build dependencies
+      - name: Install desktop build dependencies
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check -r desktop/tray-task-window/requirements.txt pyinstaller

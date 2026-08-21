@@ -38,6 +38,7 @@ import {
 } from "./wearableHealthAlertDelivery.js";
 import type { WearableHealthAlert } from "./wearableHealth.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
+import { renderRabiDelivery, type RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
 
 type GatewayStatus = {
   messageAdapter?: {
@@ -353,16 +354,18 @@ if (speechMessageArg) {
   }
 }
 
-const directAgentMessageArg = process.argv.find((arg) => arg.startsWith("--direct-agent-message="));
-if (directAgentMessageArg) {
-  const message = decodeURIComponent(directAgentMessageArg.slice("--direct-agent-message=".length));
+const directAgentEnvelopeArg = process.argv.find((arg) => arg.startsWith("--direct-agent-envelope="));
+if (directAgentEnvelopeArg) {
+  const envelope = JSON.parse(decodeURIComponent(
+    directAgentEnvelopeArg.slice("--direct-agent-envelope=".length)
+  )) as RabiDeliveryEnvelope;
   const adapter = config.primaryAgentAdapter;
   if (!adapter) {
     console.error("RabiRoute direct agent message failed: no agent adapters configured");
     process.exit(1);
   }
   try {
-    await createAgentAdapter(adapter).deliver(message);
+    await createAgentAdapter(adapter).deliver(envelope);
     console.log("RabiRoute direct agent message completed");
     process.exit(0);
   } catch (error) {

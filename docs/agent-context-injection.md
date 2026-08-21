@@ -228,27 +228,33 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 ## 自动包装格式
 
-最终投递给 Agent 的消息由 RabiRoute 自动包装生成。每段用稳定标题，方便 Agent 识别，也方便不同 Agent adapter 做解析。普通消息先提供 `[最近消息]`，再提供本轮 `[消息]`；当前讨论片段、紧邻对话和引用解析继续跟在本轮消息后面。下面是现行结构的概览；空字段、未启用能力和没有人格绑定的段落会被省略或替换。
+最终投递给 Agent 的消息由 RabiRoute 自动包装生成。首段固定为 `[消息源]`，下一段固定为 `[消息内容]`。事件信息、最近消息、引用解析、角色路径和协作要求全部排在消息内容之后。空字段、未启用能力和没有人格绑定的段落会被省略或替换。
+
+四种来源分别使用不同身份字段：消息端必须提供 `messageAdapter`、`conversationType`、`conversationId`、`messageId`，以及 `senderName` 或 `senderId`；Agent 必须提供实际 `agentAdapter`、会话名称和完整会话 ID；计划必须提供计划名称和计划 ID；系统必须提供事件类型、名称和 ID，必要时可补充触发方类型、名称和 ID。
+
+`contextBlocks` 放事件、附件、最近消息等补充上下文，`controlBlocks` 放初始化、回复合同和协作要求。固定顺序是消息源、消息内容、上下文块、控制块。上下文块和控制块不得包含 `[消息源]`、`[消息内容]` 或 `[投递源]`，正文中的 `[标题]` 会被引用化，不能伪造同级控制板块。
+
+旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会在新信封渲染前移除。旧重放记录没有保存结构化来源时，系统明确标为“历史投递记录”，不猜原消息端、Agent 或会话。
 
 现行结构：
 
 ```text
-[RabiRoute 事件]
+[消息源]
+消息源类型：<消息端 | Agent | 计划 | 系统>
+<该类型的名称、完整 ID、会话、计划或路线字段>
+
+[消息内容]
+<message>
+
+[事件信息]
 事件：<事件说明>
 路由类型：<routeKind>
 事件时间：<time>
 当前时间：<currentTime>
-来源：<messageTarget>
-发送者：<sender>
 
 [最近消息]
-当前消息端：<recentMessageEndpoint>
-当前会话：<recentConversationKey>
-当前消息端、当前会话最近 <recentMessageLimit> 条双向消息：
+最近 <recentMessageLimit> 条双向消息：
 <recentMessages>
-
-[消息]
-<message>
 
 [消息代码解析]
 [CQ:reply,id=<messageId>] : <被引用消息摘要>
@@ -340,16 +346,26 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 ## 示例：QQ 群消息
 
 ```text
-[RabiRoute 事件]
+[消息源]
+消息源类型：消息端
+消息端：napcat
+会话类型：group
+会话名称：群 <group-id>
+会话 ID：napcat:group:<group-id>
+发送者名称：Alice
+发送者 ID：<sender-id>
+消息 ID：<message-id>
+消息路线：default-main
+消息路线 ID：default-main
+
+[消息内容]
+Rabi，帮我看看计划和记忆机制怎么设计。
+
+[事件信息]
 事件：QQ 群聊消息提醒
 路由类型：group_message
 事件时间：2026/6/8 20:12:00
 当前时间：2026/6/8 20:12:03
-来源：群 <group-id>
-发送者：Alice
-
-[消息]
-Rabi，帮我看看计划和记忆机制怎么设计。
 
 [角色和路径]
 角色：Rabi
@@ -388,7 +404,8 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 
 [发送]
 明确发送 API：http://127.0.0.1:8790/api/agent/send
-发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"codex","sessionId":"<当前完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
+发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主人格完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
+Codex 主人格 Route 开启“仅允许主人格发送消息”Hook 后，`sender.sessionId` 必须填写该 Route 绑定的 `codexThreadId`。
 来源上下文（仅供审计）：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id"}
 
 [用户模板补充]
@@ -402,14 +419,22 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 当前实现先创建可查询的 consolidation request 和 pending run；负责 outbox 或回复发送的链路可以随后把 request 投递给 Agent。Agent 返回结果后，RabiRoute 通过 result 接口落盘沉淀记忆并标记输入近期记忆。
 
 ```text
-[RabiRoute 事件]
-事件：内置记忆整理
+[消息源]
+消息源类型：系统
+事件类型：manual_trigger
+事件名称：自动到点触发
+事件 ID：memory-consolidation
+消息路线：default-main
+消息路线 ID：default-main
+
+[消息内容]
+执行本次记忆整理。
+
+[事件信息]
+事件：自动到点触发
 路由类型：manual_trigger
 触发 ID：memory-consolidation
 触发名称：记忆整理
-触发来源：auto
-触发阈值：存在 updatedAt 超过 72 小时的近期记忆
-整理范围：所有 updatedAt 超过 24 小时且尚未沉淀的近期记忆
 事件时间：2026/6/8 23:00:00
 当前时间：2026/6/8 23:00:00
 

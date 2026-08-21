@@ -7,6 +7,14 @@ import { resolvePersistedProjectPath } from "../shared/projectPaths.js";
 import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { CodexDesktopBridge } from "../codexDesktopBridge.js";
 import { listCodexThreads } from "../codexRuntime.js";
+import {
+  DEFAULT_DSH_BASE_URL,
+  DSH_RABIROUTE_TOOL_NAMES,
+  EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION,
+  listDshSessions,
+  readDshRabiRoutePluginStatus,
+  type DshRabiRoutePluginStatus
+} from "../dshSessionBridge.js";
 
 type AgentMaturity = "verified" | "experimental" | "stub";
 
@@ -38,6 +46,10 @@ export type AgentScanOptions = {
   codexOffset?: number;
   codexQuery?: string;
   codexCatalogTimeoutMs?: number;
+  dshLimit?: number;
+  dshOffset?: number;
+  dshQuery?: string;
+  dshBaseUrl?: string;
 };
 
 export type AgentScanPerformanceOperation = {
@@ -64,7 +76,7 @@ export type AgentScanResult = {
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
   sessionPage?: AgentSessionPage;
-  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
+  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean; details?: string[] }>;
   warnings?: string[];
   transport?: { protocol: string; mode: string };
   host?: { name: string; required: boolean };
@@ -78,6 +90,10 @@ export type GatewayDefinitionLike = {
   agentAdapters?: AgentAdapterType[];
   codexThreadName?: string;
   codexCwd?: string;
+  dshSessionId?: string;
+  dshSessionName?: string;
+  dshCwd?: string;
+  dshBaseUrl?: string;
   copilotThreadName?: string;
   copilotCwd?: string;
   astrbotUrl?: string;
@@ -134,12 +150,148 @@ export type AgentManagerApiContext = {
     query: AgentSessionPageQuery,
     options?: { signal?: AbortSignal }
   ) => Promise<AgentScanSession[]>;
+  dshSessions?: AgentScanSession[];
+  listDshSessions?: (query: AgentSessionPageQuery & { baseUrl: string }) => Promise<AgentScanSession[]>;
+  readDshRabiRoutePluginStatus?: (baseUrl: string) => Promise<DshRabiRoutePluginStatus>;
 };
 
 export type ManagerApiResponse<T extends Record<string, unknown> = Record<string, unknown>> = {
   status: number;
   body: T;
 };
+
+export async function scanDshAgentAdapter(
+  ctx: AgentManagerApiContext,
+  options: Pick<AgentScanOptions, "dshLimit" | "dshOffset" | "dshQuery" | "dshBaseUrl"> = {}
+): Promise<{ agents: { dsh: AgentScanResult }; cwdOptions: string[] }> {
+  const dshLimit = Math.max(1, Math.min(500, Math.floor(options.dshLimit ?? 200)));
+  const dshOffset = Math.max(0, Math.floor(options.dshOffset ?? 0));
+  const dshQuery = String(options.dshQuery || "").trim() || undefined;
+  const runtimes = getRuntimeList(ctx);
+  const checkEndpoint = ctx.checkHttpEndpoint ?? checkHttpEndpoint;
+  const configuredDshUrls = [
+    options.dshBaseUrl?.trim().replace(/\/+$/, ""),
+    ...runtimes.map((runtime) => runtime.definition.dshBaseUrl?.trim().replace(/\/+$/, ""))
+  ].filter(Boolean) as string[];
+  const dshUrls = [...new Set([...configuredDshUrls, DEFAULT_DSH_BASE_URL])];
+  const dshEndpoints = await Promise.all(dshUrls.map(async (url) => ({
+    label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 DSH apiproxy" : "DSH apiproxy",
+    url,
+    healthy: await checkEndpoint(url)
+  })));
+  const dshBaseUrl = configuredDshUrls[0] || DEFAULT_DSH_BASE_URL;
+  const dshEndpointHealthy = dshEndpoints.some((endpoint) => endpoint.url === dshBaseUrl && endpoint.healthy);
+  const pluginStatusPromise = dshEndpointHealthy
+    ? (ctx.readDshRabiRoutePluginStatus ?? readDshRabiRoutePluginStatus)(dshBaseUrl)
+        .then((status) => ({ status, error: "" }))
+        .catch((error) => ({ status: undefined, error: error instanceof Error ? error.message : String(error) }))
+    : Promise.resolve({ status: undefined, error: "" });
+  let dshSessionWarning = "";
+  let rawDshSessions: AgentScanSession[] = ctx.dshSessions ?? [];
+  if (!ctx.dshSessions && (ctx.listDshSessions || dshEndpointHealthy)) {
+    try {
+      const listSessions = ctx.listDshSessions ?? (async (query: AgentSessionPageQuery & { baseUrl: string }) => (
+        await listDshSessions({
+          baseUrl: query.baseUrl,
+          query: query.query,
+          limit: query.limit,
+          offset: query.offset
+        })
+      ).map((session) => ({
+        id: session.id,
+        name: session.title,
+        projectPath: session.cwd,
+        updatedAt: session.updatedAt
+      })));
+      const query = {
+        baseUrl: dshBaseUrl,
+        limit: dshLimit + 1,
+        offset: dshOffset,
+        query: dshQuery
+      };
+      try {
+        rawDshSessions = await listSessions(query);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/HTTP 404\b/i.test(message)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        rawDshSessions = await listSessions(query);
+      }
+    } catch (error) {
+      dshSessionWarning = `读取 DSH 会话失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  const dshHasMore = rawDshSessions.length > dshLimit;
+  const dshSessions = rawDshSessions.slice(0, dshLimit);
+  const dshSessionPage: AgentSessionPage = {
+    offset: dshOffset,
+    limit: dshLimit,
+    returned: dshSessions.length,
+    hasMore: dshHasMore,
+    ...(dshHasMore ? { nextOffset: dshOffset + dshSessions.length } : {})
+  };
+  const configuredDshCwds = runtimes
+    .map((runtime) => resolvePersistedProjectPath(runtime.definition.dshCwd, ctx.rootDir))
+    .filter((value): value is string => Boolean(value));
+  const dshProjects = projectOptionsFromPaths([
+    ...configuredDshCwds,
+    ...dshSessions.map((session) => session.projectPath).filter((value): value is string => Boolean(value))
+  ]);
+  const pluginRead = await pluginStatusPromise;
+  const pluginStatus = pluginRead.status;
+  const pluginVersionMatches = pluginStatus?.version === EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION;
+  const pluginToolCoverage = DSH_RABIROUTE_TOOL_NAMES.every((name) => pluginStatus?.tools.includes(name));
+  const pluginHealthy = Boolean(
+    pluginStatus?.active
+    && pluginVersionMatches
+    && pluginStatus.enforceAgentCommunication === true
+    && pluginToolCoverage
+  );
+  const pluginDetails = pluginStatus ? [
+    `Manager：${pluginStatus.managerBaseUrl || "未报告"}`,
+    `Agent 通信约束：${pluginStatus.enforceAgentCommunication === true ? "已启用" : "未启用"}`,
+    `模型工具：${pluginStatus.tools.length}/${DSH_RABIROUTE_TOOL_NAMES.length}`
+  ] : [];
+  const pluginWarnings = [
+    ...(pluginRead.error ? [`读取 DSH RabiRoute Agent 插件状态失败：${pluginRead.error}。请安装或更新 dsh-private-plugins，并重启 DSH。`] : []),
+    ...(pluginStatus && !pluginStatus.active ? ["DSH 已发现 RabiRoute Agent 插件，但运行组件尚未激活；请检查 tools/systemPrompt 依赖并重启 DSH。"] : []),
+    ...(pluginStatus?.version && !pluginVersionMatches ? [`DSH RabiRoute Agent 插件版本为 ${pluginStatus.version}，RabiRoute 当前要求 ${EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION}；请更新插件并重启 DSH。`] : []),
+    ...(pluginStatus && pluginStatus.enforceAgentCommunication !== true ? ["DSH RabiRoute Agent 的 Agent 通信约束未启用；请设置 enforceAgentCommunication=true 并重启 DSH。"] : []),
+    ...(pluginStatus && !pluginToolCoverage ? [`DSH RabiRoute Agent 模型工具不完整；应包含 ${DSH_RABIROUTE_TOOL_NAMES.join("、")}。`] : [])
+  ];
+  return {
+    agents: { dsh: {
+      type: "dsh",
+      label: "DSH（DeepSeek Harness）",
+      maturity: "experimental",
+      installed: dshEndpoints.some((endpoint) => endpoint.healthy),
+      endpoints: dshEndpoints,
+      transport: { protocol: "http", mode: "session.list/create/rename/prompt" },
+      host: { name: `DSH apiproxy (${dshBaseUrl})`, required: true },
+      projects: dshProjects,
+      sessions: dshSessions,
+      sessionPage: dshSessionPage,
+      plugins: [{
+        id: "rabiroute-agent",
+        name: "RabiRoute Agent",
+        installed: Boolean(pluginStatus),
+        healthy: pluginHealthy,
+        ...(pluginStatus?.version ? { version: pluginStatus.version } : {}),
+        ...(pluginDetails.length ? { details: pluginDetails } : {})
+      }],
+      warnings: [
+        ...pluginWarnings,
+        ...(dshSessionWarning ? [dshSessionWarning] : []),
+        ...(dshEndpoints.some((endpoint) => endpoint.healthy) ? [] : ["DSH apiproxy 不可用；请启动 DSH 并确认服务地址。"]),
+        ...(dshSessions.length === 0 && !dshSessionWarning ? ["未发现 DSH 会话；保存配置时可按名称和工作目录创建。"] : []),
+        "RabiRoute 可以发现、创建、重命名、绑定 DSH 会话，并通过 session.prompt（mode=queue）投递。",
+        "当前本机 XinghaiBuilder 路由已通过主人格、计划秘书、消息处理、独立记忆整理和正式回复运行态验证；发布包与全新环境回归待完成。"
+      ]
+    } },
+    cwdOptions: dshProjects.map((project) => project.path)
+  };
+}
+
 
 export async function scanAgentAdapters(
   ctx: AgentManagerApiContext,
@@ -151,6 +303,7 @@ export async function scanAgentAdapters(
   const codexCatalogTimeoutMs = Math.max(100, Math.min(30_000, Math.floor(options.codexCatalogTimeoutMs ?? 8_000)));
   const performanceOperations: AgentScanPerformanceOperation[] = [];
   const runtimes = getRuntimeList(ctx);
+  const checkEndpoint = ctx.checkHttpEndpoint ?? checkHttpEndpoint;
   const copilotSessions = ctx.copilotSessions ?? readCopilotSessions();
   const copilotSessionNames = [...new Set(copilotSessions.map((s) => s.name))];
   const cwdOptions = ctx.cwdOptions ?? collectCwdOptions(ctx.rootDir, runtimes, copilotSessions);
@@ -266,7 +419,9 @@ export async function scanAgentAdapters(
     process.env.ASTRBOT_URL,
     "http://127.0.0.1:6185"
   ].filter(Boolean) as string[])];
-  const checkEndpoint = ctx.checkHttpEndpoint ?? checkHttpEndpoint;
+  const dshScan = await scanDshAgentAdapter({ ...ctx, runtimes }, options);
+  const dshAgent = dshScan.agents.dsh;
+
   const astrbotEndpoints = await Promise.all(astrbotUrls.map(async (url) => ({
     label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 AstrBot" : "AstrBot",
     url,
@@ -373,21 +528,7 @@ export async function scanAgentAdapters(
         ...(astrbotPluginInstalled ? [] : [`插件未安装到 ${astrbotPluginDir}。`])
       ]
     },
-    dsh: {
-      type: "dsh",
-      label: "DSH（DeepSeek Harness 会话）",
-      maturity: "experimental",
-      installed: true,
-      transport: { protocol: "http", mode: "session.prompt" },
-      host: { name: "DSH apiproxy (127.0.0.1:3080)", required: true },
-      projects: [],
-      sessions: [],
-      warnings: [
-        "DSH 会话是主人格投递目标：通过 DSH apiproxy session.prompt（mode=queue）注入消息。",
-        "DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。",
-        "仍为实验性：尚未自动执行真实消息注入烟测。"
-      ]
-    }
+    dsh: dshAgent
   };
 
   return {

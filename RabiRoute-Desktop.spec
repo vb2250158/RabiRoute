@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for RabiRoute-Tray.exe
-# Build: cd <repo> && pyinstaller RabiRoute-Tray.spec
-# Output: dist/RabiRoute-Tray.exe  →  copy to <repo>/RabiRoute-Tray.exe
+# PyInstaller spec for RabiRoute-Desktop.exe
+# Build: cd <repo> && pyinstaller RabiRoute-Desktop.spec
+# Output: dist/RabiRoute-Desktop.exe  →  copy to <repo>/RabiRoute-Desktop.exe
 
 import sys
 from pathlib import Path
@@ -52,7 +52,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="RabiRoute-Tray",
+    name="RabiRoute-Desktop",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

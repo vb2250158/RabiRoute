@@ -24,7 +24,7 @@ async function startServer(rootDir: string, shutdownReasons: string[]) {
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
-test("desktop start and explicit tray exit persist intent before shutdown", async () => {
+test("desktop start and explicit desktop exit persist intent before shutdown", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-routes-"));
   const shutdownReasons: string[] = [];
   const app = await startServer(rootDir, shutdownReasons);
@@ -32,11 +32,11 @@ test("desktop start and explicit tray exit persist intent before shutdown", asyn
     const startResponse = await fetch(`${app.baseUrl}/manager/desktop-lifecycle/start`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ source: "windows-launcher" })
+      body: JSON.stringify({ source: "windows-desktop" })
     });
     assert.equal(startResponse.status, 200);
     assert.equal(readDesktopLifecycleIntent(rootDir)?.desiredState, "running");
-    assert.equal(readDesktopLifecycleIntent(rootDir)?.source, "windows-launcher");
+    assert.equal(readDesktopLifecycleIntent(rootDir)?.source, "windows-desktop");
 
     const exitResponse = await fetch(`${app.baseUrl}/manager/shutdown`, {
       method: "POST",

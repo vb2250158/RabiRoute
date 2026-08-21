@@ -185,6 +185,10 @@ test("managed task capability layer exposes the three Codex task features indepe
   assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "planAssistantSessions"), true);
   assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "memoryConsolidationAgent"), true);
   assert.equal(agentAdapterSupportsManagedTaskFeature("codex", "hooks"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("dsh", "messageProcessingAgent"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("dsh", "planAssistantSessions"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("dsh", "memoryConsolidationAgent"), true);
+  assert.equal(agentAdapterSupportsManagedTaskFeature("dsh", "hooks"), true);
   assert.equal(agentAdapterSupportsManagedTaskFeature("copilotCli", "messageProcessingAgent"), false);
   assert.equal(agentAdapterSupportsManagedTaskFeature("astrbot", "planAssistantSessions"), false);
   assert.equal(agentAdapterSupportsManagedTaskFeature("marvis", "hooks"), false);
@@ -209,7 +213,8 @@ test("Codex managed-task settings are removed when a route has no Codex adapter"
       sessionContextEnabled: true,
       reasoningContextEnabled: true,
       planTaskCompletionEnabled: true,
-      agentCommunicationEnforcementEnabled: true
+      agentCommunicationEnforcementEnabled: true,
+      onlyPrimaryPersonaCanSendMessages: false
     }
   }));
 
@@ -348,21 +353,24 @@ test("Codex Hook settings default enabled and preserve explicit opt-out", () => 
     sessionContextEnabled: true,
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: true,
-    agentCommunicationEnforcementEnabled: true
+    agentCommunicationEnforcementEnabled: true,
+    onlyPrimaryPersonaCanSendMessages: false
   });
   const normalized = normalizeGatewayDefinition(gateway({
     codexHooks: {
       sessionContextEnabled: false,
       reasoningContextEnabled: true,
       planTaskCompletionEnabled: false,
-      agentCommunicationEnforcementEnabled: false
+      agentCommunicationEnforcementEnabled: false,
+      onlyPrimaryPersonaCanSendMessages: true
     }
   }));
   assert.deepEqual(normalized.codexHooks, {
     sessionContextEnabled: false,
     reasoningContextEnabled: true,
     planTaskCompletionEnabled: false,
-    agentCommunicationEnforcementEnabled: false
+    agentCommunicationEnforcementEnabled: false,
+    onlyPrimaryPersonaCanSendMessages: true
   });
 });
 
@@ -404,6 +412,7 @@ test("persona recent message limits clamp each endpoint independently", () => {
 
 test("Codex plan assistant sessions keep exact Desktop task bindings", () => {
   const normalized = normalizeGatewayDefinition(gateway({
+    codexCwd: "C:\\workspace\\project",
     codexPlanAssistantSessions: [{
       threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
       threadName: "主任务 协助处理计划",
@@ -423,6 +432,27 @@ test("Codex plan assistant sessions keep exact Desktop task bindings", () => {
   assert.equal(normalized.codexPlanAssistantModel, "gpt-5.6-terra");
 });
 
+test("Codex plan assistant sessions retain only the Primary Persona workspace", () => {
+  const normalized = normalizeGatewayDefinition(gateway({
+    codexCwd: "C:\\workspace\\project",
+    codexPlanAssistantSessions: [{
+      threadId: "019fa314-2c07-7523-896f-9bb6b638054a",
+      threadName: "主任务 协助处理计划1",
+      workspace: "\\\\?\\C:\\workspace\\project\\",
+      index: 1
+    }, {
+      threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
+      threadName: "旧目录 协助处理计划2",
+      workspace: "C:\\workspace\\other-project",
+      index: 2
+    }]
+  }));
+
+  assert.deepEqual(normalized.codexPlanAssistantSessions?.map((session) => session.threadId), [
+    "019fa314-2c07-7523-896f-9bb6b638054a"
+  ]);
+});
+
 test("Primary Agent reasoning effort rejects unsupported values", () => {
   const normalized = normalizeGatewayDefinition(gateway({
     agentReasoningEffort: "unsupported" as never
@@ -432,6 +462,7 @@ test("Primary Agent reasoning effort rejects unsupported values", () => {
 
 test("Codex plan assistant model is one Manager-owned setting and overrides legacy per-session models", () => {
   const normalized = normalizeGatewayDefinition(gateway({
+    codexCwd: "C:\\workspace\\project",
     codexPlanAssistantModel: "gpt-5.6-terra",
     codexPlanAssistantSessions: [{
       threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
@@ -448,6 +479,7 @@ test("Codex plan assistant model is one Manager-owned setting and overrides lega
 
 test("legacy per-session secretary model migrates to the Manager-owned shared setting", () => {
   const normalized = normalizeGatewayDefinition(gateway({
+    codexCwd: "C:\\workspace\\project",
     codexPlanAssistantSessions: [{
       threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
       threadName: "主任务 协助处理计划",
@@ -463,6 +495,7 @@ test("legacy per-session secretary model migrates to the Manager-owned shared se
 
 test("Codex plan assistant switch can disable existing task bindings without deleting them", () => {
   const normalized = normalizeGatewayDefinition(gateway({
+    codexCwd: "C:\\workspace\\project",
     codexPlanAssistantEnabled: false,
     codexPlanAssistantSessions: [{
       threadId: "019fa314-2c07-7523-896f-9bb6b638054b",

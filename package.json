@@ -13,10 +13,10 @@
     "dev:hot:speech": "node scripts/start-hot-reload.mjs --speech",
     "start": "node dist/index.js",
     "start:manager": "node dist/manager.js",
-    "start:windows": "Start-RabiRoute-Tray.bat",
+    "start:windows": "Start-RabiRoute-Desktop.bat",
     "build": "npm run build:backend && npm run webgui:build",
     "build:backend": "node scripts/clean-backend-dist.mjs && tsc -p tsconfig.json && npm run check:codex-contract && npm run check:event-driven",
-    "test": "node --test-concurrency=8 --import tsx --test \"src/**/*.test.ts\" && node --test scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabi-persona-sync.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/watch-rabiroute-health.test.mjs scripts/watch-rabiroute-desktop-lifecycle.test.mjs scripts/windows-release-optional-speech.test.mjs",
+    "test": "node --test-concurrency=8 --import tsx --test \"src/**/*.test.ts\" && node --test scripts/work-cycle-send-contract.test.mjs scripts/work-cycle-agent-send-recovery.test.mjs scripts/start-hot-reload.test.mjs scripts/rabilink-event-hub.test.mjs scripts/rabilink-relay-mobile-workers.test.mjs scripts/rabilink-relay-peers.test.mjs scripts/rabilink-relay-speech-messages.test.mjs scripts/test-rabi-persona-sync.test.mjs scripts/test-rabispeech-tts-loop.test.mjs scripts/test-built-manager-readonly.test.mjs scripts/check-active-intelligence-physical-acceptance.test.mjs scripts/record-active-intelligence-physical-observation.test.mjs scripts/export-speech-transcript.test.mjs scripts/watch-rabiroute-health.test.mjs scripts/watch-rabiroute-desktop-lifecycle.test.mjs scripts/windows-release-optional-speech.test.mjs scripts/windows-desktop-contract.test.mjs",
     "check:codex-contract": "node scripts/check-codex-adapter-contract.mjs",
     "check:event-driven": "node scripts/check-event-driven-architecture.mjs",
     "check:active-intelligence:physical": "node scripts/check-active-intelligence-physical-acceptance.mjs",
@@ -50,6 +50,7 @@
   "dependencies": {
     "@openai/codex": "0.144.1",
     "@wecom/aibot-node-sdk": "^1.0.7",
+    "cordis": "4.0.0-rc.8",
     "dotenv": "^16.4.7",
     "qrcode": "^1.5.4",
     "ws": "^8.18.0"

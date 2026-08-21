@@ -72,7 +72,7 @@ POST /api/agent/send
 {
   "deliveryId": "qq-group-456-message-123",
   "sender": {
-    "agentType": "codex",
+    "agentType": "primary_persona",
     "sessionId": "019f0000-0000-7000-8000-000000000001"
   },
   "routeId": "main",
@@ -88,6 +88,8 @@ POST /api/agent/send
 ```
 
 `sender.agentType` 和 `sender.sessionId` 记录是哪类 Agent 的哪个完整会话发起本次发送；两者都必须填写。`channel` 决定唯一发送渠道，`params` 决定该渠道的具体目标；Route 的默认 pipeline 不再替请求猜测或改写渠道。NapCat 群聊还必须保留 `replyToMessageId`：能引用时填写来源消息 ID，明确不引用时填写空字符串 `""`，完全省略会向 Agent 返回可行动错误。发送仍经过对应 `messageAdapterPolicies`。NapCat 使用 `messageAdapterPolicies.napcat`，企业微信使用 `messageAdapterPolicies.wecom`，本机语音使用 `messageAdapterPolicies.speech`。
+
+默认所有人格都可以调用此接口发送消息。仅当 Route 的主 Agent 是 Codex 时，Codex 的“Hook 管理”才显示 `codexHooks.onlyPrimaryPersonaCanSendMessages`；默认 `false`。开启后，Manager 只允许当前绑定的 Codex 主人格任务发起新的发送请求：`sender.agentType` 必须为 `primary_persona`，且 `sender.sessionId` 必须与该 Route 的 `codexThreadId` 完全一致。计划 Agent、秘书和其它人格会被拒绝；Codex 作为辅助 Agent 时不显示也不应用此开关，其它 Agent 端不使用此开关。
 
 旧配置如果手写了 `allowedGroups` / `allowedUsers`、`outputMode`、`enabledPipelines` 或 `disabledPipelines`，这些具体过滤字段不再生效。发送关闭或消息类型不在 `supportedOutputs` 内时，会返回 `blocked`，不会调用对应消息端。
 

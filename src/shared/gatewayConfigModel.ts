@@ -16,9 +16,11 @@ import {
   isBuiltinRolePanelRule as sharedIsBuiltinRolePanelRule
 } from "./personaRulePolicy.js";
 import { isCodexTaskId } from "./codexTaskId.js";
+import { sameCodexWorkspaceSyntax } from "./codexWorkspaceIdentity.js";
 import {
   normalizeCodexPlanAssistantModel,
   normalizeCodexPlanAssistantSessions,
+  planAssistantSessionAgentAdapter,
   type CodexPlanAssistantSession
 } from "./codexPlanAssistantSessions.js";
 import { normalizeCodexMemoryConsolidationAgentModel } from "./codexMemoryConsolidationAgent.js";
@@ -65,12 +67,14 @@ export type CodexHookSettings = {
   reasoningContextEnabled: boolean;
   planTaskCompletionEnabled: boolean;
   agentCommunicationEnforcementEnabled: boolean;
+  onlyPrimaryPersonaCanSendMessages?: boolean;
 };
 export const DEFAULT_CODEX_HOOK_SETTINGS: CodexHookSettings = {
   sessionContextEnabled: true,
   reasoningContextEnabled: true,
   planTaskCompletionEnabled: true,
-  agentCommunicationEnforcementEnabled: true
+  agentCommunicationEnforcementEnabled: true,
+  onlyPrimaryPersonaCanSendMessages: false
 };
 export type RecentMessageEndpoint = Exclude<MessageAdapterType, "disabled">;
 export type RecentMessageLimits = Partial<Record<RecentMessageEndpoint, number>>;
@@ -130,7 +134,8 @@ export function normalizeCodexHookSettings(value: unknown): CodexHookSettings {
     sessionContextEnabled: raw.sessionContextEnabled !== false,
     reasoningContextEnabled: raw.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: raw.planTaskCompletionEnabled !== false,
-    agentCommunicationEnforcementEnabled: raw.agentCommunicationEnforcementEnabled !== false
+    agentCommunicationEnforcementEnabled: raw.agentCommunicationEnforcementEnabled !== false,
+    onlyPrimaryPersonaCanSendMessages: raw.onlyPrimaryPersonaCanSendMessages === true
   };
 }
 
@@ -1128,17 +1133,31 @@ export function resolvePrimaryAgentAdapter(
   return requested && adapters.includes(requested) ? requested : adapters[0];
 }
 
-/**
- * Message processing workers are a Codex-only managed-task feature. They run
- * only when Codex is the Route's selected primary Agent; a configured secondary
- * Codex adapter remains available for explicit Agent-to-Agent delivery.
- */
+export function primaryMessageProcessingAgentAdapter(definition: Pick<
+  GatewayDefinition,
+  "agentAdapters" | "primaryAgentAdapter" | "messageProcessingAgents"
+>): AgentAdapterType | undefined {
+  const primary = resolvePrimaryAgentAdapter(definition.agentAdapters, definition.primaryAgentAdapter);
+  return primary
+    && agentAdapterSupportsManagedTaskFeature(primary, "messageProcessingAgent")
+    && definition.messageProcessingAgents?.[primary]?.enabled === true
+    ? primary
+    : undefined;
+}
+
+export function primaryMessageProcessingAgentEnabled(definition: Pick<
+  GatewayDefinition,
+  "agentAdapters" | "primaryAgentAdapter" | "messageProcessingAgents"
+>): boolean {
+  return Boolean(primaryMessageProcessingAgentAdapter(definition));
+}
+
+/** Compatibility helper for callers that specifically require Codex ownership. */
 export function codexMessageProcessingAgentEnabled(definition: Pick<
   GatewayDefinition,
   "agentAdapters" | "primaryAgentAdapter" | "messageProcessingAgents"
 >): boolean {
-  return resolvePrimaryAgentAdapter(definition.agentAdapters, definition.primaryAgentAdapter) === "codex"
-    && definition.messageProcessingAgents?.codex?.enabled === true;
+  return primaryMessageProcessingAgentAdapter(definition) === "codex";
 }
 
 function normalizePipelineFallback(pipeline: PipelineDefinition | undefined): PipelineDefinition | undefined {
@@ -1213,7 +1232,14 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const dataDir = options.routeDataDir?.(configName) ?? `data/route/${configName}`;
   const rolesDir = options.rolesDir ?? definition.rolesDir ?? "data/roles";
   const routeName = definition.routeName?.trim() || definition.name?.trim() || configName;
-  const { botNickname: _legacyBotNickname, ...cleanDefinition } = definition as GatewayDefinition & { botNickname?: string };
+  const {
+    botNickname: _legacyBotNickname,
+    codexOnlyPrimaryPersonaCanSendMessages: _legacyCodexOnlyPrimaryPersonaCanSendMessages,
+    ...cleanDefinition
+  } = definition as GatewayDefinition & {
+    botNickname?: string;
+    codexOnlyPrimaryPersonaCanSendMessages?: boolean;
+  };
   const rawMessageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
   const messageInputsDisabled = definition.messageInputsDisabled === true || rawMessageAdapters.includes("disabled");
   const messageAdapters = normalizeMessageAdapters(rawMessageAdapters);
@@ -1266,7 +1292,24 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const legacyCodexThreadName = rawCodexThreadId && !isCodexTaskId(rawCodexThreadId)
     ? rawCodexThreadId
     : "";
-  const normalizedCodexPlanAssistantSessions = normalizeCodexPlanAssistantSessions(definition.codexPlanAssistantSessions);
+  const codexCwd = normalizeCodexCwd(definition.codexCwd);
+  const dshCwd = normalizeCodexCwd(definition.dshCwd);
+  const planAssistantSupported = primaryAgentAdapter
+    ? agentAdapterSupportsManagedTaskFeature(primaryAgentAdapter, "planAssistantSessions")
+    : false;
+  const memoryConsolidationSupported = primaryAgentAdapter
+    ? agentAdapterSupportsManagedTaskFeature(primaryAgentAdapter, "memoryConsolidationAgent")
+    : false;
+  const hooksSupported = primaryAgentAdapter
+    ? agentAdapterSupportsManagedTaskFeature(primaryAgentAdapter, "hooks")
+    : false;
+  const normalizedCodexPlanAssistantSessions = normalizeCodexPlanAssistantSessions(definition.codexPlanAssistantSessions)
+    .filter((session) => {
+      const adapter = planAssistantSessionAgentAdapter(session);
+      if (adapter !== primaryAgentAdapter || !planAssistantSupported) return false;
+      const ownerWorkspace = adapter === "dsh" ? dshCwd : codexCwd;
+      return Boolean(ownerWorkspace) && sameCodexWorkspaceSyntax(session.workspace, ownerWorkspace);
+    });
   const codexPlanAssistantModel = normalizeCodexPlanAssistantModel(
     definition.codexPlanAssistantModel
       ?? normalizedCodexPlanAssistantSessions.find((session) => session.model)?.model
@@ -1322,27 +1365,32 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
-    codexCwd: normalizeCodexCwd(definition.codexCwd),
     dshSessionId: normalizeDshSessionId(definition.dshSessionId),
     dshSessionName: definition.dshSessionName?.trim() || undefined,
-    dshCwd: normalizeCodexCwd(definition.dshCwd),
+    dshCwd,
     dshBaseUrl: definition.dshBaseUrl?.trim() || undefined,
-    codexPlanAssistantEnabled: agentAdapters.includes("codex")
+    codexPlanAssistantEnabled: planAssistantSupported
       ? codexPlanAssistantEnabled
       : undefined,
-    codexPlanAssistantModel: agentAdapters.includes("codex")
+    codexPlanAssistantModel: planAssistantSupported
       ? codexPlanAssistantModel
       : undefined,
-    codexPlanAssistantSessions: agentAdapters.includes("codex")
+    codexPlanAssistantSessions: codexPlanAssistantSessions.length > 0
       ? codexPlanAssistantSessions
       : undefined,
-    codexMemoryConsolidationAgentEnabled: agentAdapters.includes("codex")
+    codexMemoryConsolidationAgentEnabled: memoryConsolidationSupported
       ? definition.codexMemoryConsolidationAgentEnabled === true
       : undefined,
-    codexMemoryConsolidationAgentModel: agentAdapters.includes("codex")
+    codexMemoryConsolidationAgentModel: memoryConsolidationSupported
       ? normalizeCodexMemoryConsolidationAgentModel(definition.codexMemoryConsolidationAgentModel)
       : undefined,
-    codexHooks: agentAdapters.includes("codex") ? normalizeCodexHookSettings(definition.codexHooks) : undefined,
+    codexHooks: hooksSupported
+      ? {
+          ...normalizeCodexHookSettings(definition.codexHooks),
+          onlyPrimaryPersonaCanSendMessages: (primaryAgentAdapter === "codex" || primaryAgentAdapter === "dsh")
+            && definition.codexHooks?.onlyPrimaryPersonaCanSendMessages === true
+        }
+      : undefined,
     copilotThreadName: definition.copilotThreadName?.trim() || undefined,
     groupNotificationTemplate: normalizeOptionalTemplate(definition.groupNotificationTemplate),
     groupAtNotificationTemplate: normalizeOptionalTemplate(definition.groupAtNotificationTemplate),

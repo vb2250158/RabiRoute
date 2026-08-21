@@ -40,7 +40,7 @@ function makeRoot(desiredState, parentDir = os.tmpdir()) {
     schemaVersion: 1,
     desiredState,
     updatedAt: new Date().toISOString(),
-    source: "windows-launcher"
+    source: "windows-desktop"
   }, null, 2)}\n`, "utf8");
   return root;
 }
@@ -63,7 +63,7 @@ test("desktop lifecycle supervisor fails closed after an explicit stop intent", 
 
 test("desktop lifecycle supervisor invokes the non-recursive launcher when the tray is missing", async () => {
   const root = makeRoot("running");
-  const launcher = path.join(root, "Start-RabiRoute-Tray.bat");
+  const launcher = path.join(root, "Start-RabiRoute-Desktop.bat");
   fs.writeFileSync(launcher, "@echo off\r\necho %* > \"%~dp0repair-receipt.txt\"\r\nexit /b 0\r\n", "utf8");
   const server = http.createServer((request, response) => {
     response.setHeader("content-type", "application/json");
@@ -88,7 +88,7 @@ test("desktop lifecycle supervisor invokes the non-recursive launcher when the t
     assert.equal(record.repairAttempted, true);
     assert.equal(record.managerConnected, true);
     assert.equal(record.managerPresent, true);
-    assert.equal(record.trayCount, 0);
+    assert.equal(record.desktopShellCount, 0);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     fs.rmSync(root, { recursive: true, force: true });
@@ -119,7 +119,7 @@ test("desktop lifecycle supervisor does not restart a verified Manager process d
     const record = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
     assert.equal(record.managerConnected, false);
     assert.equal(record.managerPresent, true);
-    assert.equal(record.trayCount > 0, true);
+    assert.equal(record.desktopShellCount > 0, true);
     assert.equal(record.repairAttempted, false);
   } finally {
     manager.kill();

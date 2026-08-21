@@ -92,7 +92,7 @@ RabiLink remote WebGUI automatically preserves the `/manage/<account>/<RabiGUID>
 
 Long plan lists keep the normal page scroll, while only the external plan directory scrolls independently within the viewport. As the plan cards scroll, browser visibility observation updates the directory's current reading item; the directory adjusts its own scroll only when that highlighted item leaves the directory viewport, without continuously scanning the full list on every page-scroll event. A directory click temporarily locks the selected highlight and resumes reading-position observation after smooth scrolling settles, so intermediate cards do not make the cursor jump through the directory. On desktop widths, the plan-view tabs, search field, and refresh action stick immediately below the fixed app bar. Directory jumps reserve the sticky toolbar height so the destination card heading remains visible. Narrow layouts return the toolbar to normal page flow instead of letting a two-row control block occupy the viewport. Detail expansion remains animation-free, and the approval input does not repeatedly auto-grow.
 
-After plan guidance or approval feedback is durably recorded, Agent notification continues in the background. The next draft remains editable while another submission is temporarily disabled, and a nearby status row explains the reason and recovery condition.
+After plan guidance or approval feedback is durably recorded, Agent notification continues in the background. The next draft remains editable while another submission is temporarily disabled, and a nearby status row explains the reason and recovery condition. Each plan detail also has a collapsed **Work history** section. Open it to review plan guidance, step approval feedback, Agent replies, and plan revisions; the entry remains available for approved, completed, and archived plans.
 
 ## Sidebar: select the current Route first
 
@@ -102,26 +102,31 @@ The count beside the selector is the number of configurations. The selected valu
 
 The secondary navigation above the footer contains **Speech Service**, **Performance**, **Log Diagnostics**, and **Settings**; these entries sit above **User Guide**.
 
+## Interface theme
+
+In **Settings** > **RabiRoute desktop features**, choose **Follow system**, **Light**, or **Dark**, then use the top-bar **Save configuration** action. The current WebGUI changes immediately. The Windows tray, role panel, selected-text action bar, and screenshot windows change on the next settings refresh, usually within ten seconds. The theme changes colors and control appearance only. See [Interface theme](interface-theme_en.md) for the full guide.
+
 ## System screenshots and persona delivery
 
 Open **Settings** in WebGUI and find **Desktop shortcuts**:
 
-1. Enable **System screenshot**, enter a shortcut, and click **Save**. Use `Ctrl`, `Alt`, `Shift`, or `Win` plus one letter or function key, for example `Ctrl+Shift+S`.
-2. Press the shortcut in any Windows application. The tray captures the desktop and opens a preview window.
-3. Enter the text to send with the screenshot, choose an active persona in **Send to persona**, and click **Send**. The text may be empty; the screenshot is still sent as an image.
+1. Enable **System screenshot**, then set the screenshot shortcut, **Auto-copy selection**, and **Pin shortcut**. The default pin shortcut is `F3`. Every shortcut can use `F1` through `F12` alone, or `Ctrl`, `Alt`, `Shift`, or `Win` plus one letter or function key. When the other Settings edits are ready, use the single top-bar **Save configuration** action.
+2. Press the screenshot shortcut in any Windows application; the capture window opens first without dimming the screen so you can drag to select immediately. After dragging, everything outside the selection is dimmed while the selected area remains at its original brightness; drag inside the selection to reposition it without changing its size. If the image is still preparing, **Copy**, **Pin**, or **Send** continues when it is ready. Dragging only creates a selection awaiting confirmation: `Enter` / `Ctrl+C` copies it, `F2` sends it, and the pin shortcut confirms and pins it. By default, confirming a pin or send also copies the selection to the clipboard; turn that off in **Auto-copy selection** and use `Ctrl+C` or **Copy** when needed. `Ctrl+A` selects the full screen. Pressing `Esc` or closing the capture window cancels that capture without adding it to history; copying, pinning, or sending saves the screen capture and selected area.
+3. Press `<` / `>` in the capture window to view the previous / next saved screen capture. The last area used to copy, pin, or send that capture is restored. While a selected capture is open, press the pin shortcut to pin that selected area. Otherwise, it pins an image already on the clipboard. A pinned selection keeps its original screen position and size; its drag position, zoomed size, and opacity are restored after RabiRoute Desktop restarts. It can also be copied and saved. Closing that individual pin removes it.
+4. Click **Send**, add optional text, choose an active persona in **Send to persona**, and confirm. The image is sent even if the text is empty.
 
-The screenshot and text use the role-panel delivery entry. Codex and DSH receive the screenshot as image input. The file is kept temporarily in the private project directory `.rabiroute-message-images/`. After changing the screenshot toggle, shortcut, or **Windows login startup**, the tray reads the new settings automatically; restarting is not required.
+The screenshot and text use the role-panel delivery entry. Codex and DSH receive the screenshot as image input. The file is kept temporarily in the private project directory `.rabiroute-message-images/`; pinned images and selected-area records are stored in private `data/desktop/`. After changing the screenshot toggle, screenshot shortcut, auto-copy setting, pin shortcut, or **Windows login startup**, the tray reads the new settings automatically; restarting is not required.
 
 ## Enable selected-text menu
 
 Open **Settings** in WebGUI and find **Enable selected-text menu**:
 
-1. Turn on **Enable selected-text menu** and click **Save**. Drag-selecting text in any Windows app that exposes a text selection shows the system floating buttons.
+1. Turn on **Enable selected-text menu**. When the other Settings edits are ready, use the single top-bar **Save configuration** action. Select text with a mouse drag or with `Shift` plus an arrow key, `Home`, `End`, `PageUp`, or `PageDown`. The floating buttons are horizontally centered on the selection bounds. An upward mouse drag places them above; a downward or same-line drag places them below. Keyboard selection uses system caret bounds; when Unity has no system caret, the most recent click in the same window keeps the buttons near the text.
 2. Move the cursor to **Send to** to list currently enabled and running personas. Click one item to deliver the selected text to that Route.
 3. **Selected-text reading** is a sub-feature of the selected-text menu. When it is on, the left button is **Read aloud** and only a click enqueues host speech. When it is off, the bar keeps only **Send to**.
 4. The **Selected-text voice model** selector appears only when both **Selected-text reading** and **Advanced options** are on.
 
-Selection alone does not read or send. Password controls and unreadable selections are ignored; the tray never simulates `Ctrl+C` or changes the clipboard. After saving, the tray reads the new settings; restarting is not required.
+Selection alone does not read or send. Password controls and still-unreadable selections are ignored. Normal applications never receive a simulated `Ctrl+C`; only the Unity Editor sends a guarded temporary copy when UI Automation cannot read the selection, waits for the editor to update the clipboard, and restores the original clipboard afterward. After saving, the tray reads the new settings; restarting is not required.
 
 The footer contains four supporting actions:
 
@@ -139,7 +144,7 @@ The footer contains four supporting actions:
 | 中 / EN | Changes this browser's interface language only |
 | Refresh status | Reloads Manager, configuration, and runtime state; does not save edits |
 | Add Route | Creates a Route and opens Quick setup |
-| Save configuration | Writes the current edits and may synchronize or reload the Route |
+| Save configuration | Saves the current Route on Route pages; on **Settings**, saves desktop features, selected-text menu, Rabi instance, directories, and LAN WebGUI access together; on **Performance monitor**, saves the performance-recording settings |
 
 When the unsaved-changes notice appears, save before switching Routes or leaving. Refresh is not Save, and Restart does not save form edits.
 

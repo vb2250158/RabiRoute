@@ -93,19 +93,19 @@ Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自�
 
 不要用固定 4510、`CODEX_APP_SERVER_WS_URL` 或独立 stdio Runtime 修复真实投递；这些不是当前主链。
 
-## 托盘消失但 Manager 仍在
+## RabiRoute Desktop 界面未显示
 
-从 `Start-RabiRoute-Tray.bat` 或打包版托盘启动的完整桌面运行态，会在 `data/runtime/desktop-lifecycle-intent.json` 记录 `running`，并启动工作区唯一的 `watch-rabiroute-desktop-lifecycle.ps1`。监督器只检查本项目 Manager `/meta` 和托盘进程；连续两次确认任一侧缺失后，才通过原启动器的端口 owner、PID 和单实例门禁恢复配对。托盘遇到 Manager 暂时离线时会保持图标并继续重连。
+从 `Start-RabiRoute-Desktop.bat` 或打包版 RabiRoute Desktop 启动的完整桌面运行态，会在 `data/runtime/desktop-lifecycle-intent.json` 记录 `running`，并启动工作区唯一的 `watch-rabiroute-desktop-lifecycle.ps1`。监督器只检查本项目本机后端 `/meta` 和桌面界面进程；连续两次确认任一部分缺失后，才通过原启动器的端口 owner、PID 和单实例门禁恢复完整运行态。界面遇到本机后端暂时离线时会保留入口并继续重连。
 
-先重新运行一次 `Start-RabiRoute-Tray.bat -NoOpen`。然后检查 `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`：正常记录应同时满足 `desiredState=running`、`managerConnected=true`、`trayCount>0`。如果 `desiredState=stopped`，说明上次是明确退出，应由用户重新启动；文件缺失或损坏时监督器也会失败关闭，不会自行猜测。不要用半小时业务健康巡检替代这个轻量监督器，也不要单独循环拉起托盘。
+先重新运行一次 `Start-RabiRoute-Desktop.bat -NoOpen`。然后检查 `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`：正常记录应同时满足 `desiredState=running`、`managerConnected=true`、`desktopShellCount>0`。如果 `desiredState=stopped`，说明上次是明确退出，应由用户重新启动；文件缺失或损坏时监督器也会失败关闭，不会自行猜测。不要用半小时业务健康巡检替代这个轻量监督器，也不要单独循环拉起桌面界面。
 
-托盘菜单的 `退出 RabiRoute` 会先把意图写成 `stopped` 再关闭 Manager 和托盘，因此监督器不会反向复活。普通 Manager 构建重载、安装升级和 `SIGTERM` 不修改桌面意图；如果桌面仍标记 `running`，监督器会在重载后补齐托盘。
+RabiRoute Desktop 菜单的 `退出 RabiRoute` 会先把意图写成 `stopped` 再关闭本机后端和桌面界面，因此监督器不会反向复活。普通 Manager 构建重载、安装升级和 `SIGTERM` 不修改桌面意图；如果桌面仍标记 `running`，监督器会在重载后恢复完整运行态。
 
 ## 8790 被旧 Manager 占用
 
 如果启动器提示 `8790` 已监听，但 `/meta` 没有稳定响应，常见原因是同一项目的旧 Manager 仍占着端口。远程页面反复断线重连、Relay 或 SSE 异常不应该成为本地启动依赖；当前实现会让 Manager 先提供本机/局域网 WebGUI，再异步热连 Relay。
 
-重新运行 `Start-RabiRoute-Tray.bat`。启动器会核对端口 owner 的命令行，只对精确指向本项目 `dist/manager.js` 的旧实例执行有界接管：先请求优雅关闭，超时后才终止已核实的进程树。未知进程不会被停止。如果当前 `dist` 比健康运行实例更新，启动器也会重载当前构建。
+重新运行 `Start-RabiRoute-Desktop.bat`。启动器会核对端口 owner 的命令行，只对精确指向本项目 `dist/manager.js` 的旧实例执行有界接管：先请求优雅关闭，超时后才终止已核实的进程树。未知进程不会被停止。如果当前 `dist` 比健康运行实例更新，启动器也会重载当前构建。
 
 Manager 自身还会在加载控制面前取得工作区级实例锁。若第二条启动链返回退出码 `17`，说明已有同工作区 Manager 持有有效锁；不要反复拉起。先用 `/meta` 和端口 owner 确认现有实例，只有锁中 PID 已不存在时，下一次启动才会安全回收陈旧锁。
 

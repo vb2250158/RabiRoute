@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
 import QuickSetupDialog from "./components/QuickSetupDialog.vue";
@@ -16,11 +17,43 @@ import {
 import { gatewayPersonaDisplayName } from "./personaPresentation";
 import { useGatewayStore } from "./stores/gatewayStore";
 import { configNameFor } from "./utils/gatewayHelpers";
+import { pageSaveAction } from "./pageSaveAction";
+import { desktopSettingsClient } from "./desktopSettingsClient";
+import { applyInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
+import type { DesktopTheme } from "@shared/desktopSettingsContract";
 
 const store = useGatewayStore();
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
+const vuetifyTheme = useTheme();
+const interfaceThemePreference = ref<DesktopTheme>("system");
+const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+function refreshInterfaceTheme(): void {
+  const resolved = applyInterfaceTheme(interfaceThemePreference.value, systemThemeQuery.matches);
+  vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
+}
+
+function onSystemThemeChanged(): void {
+  if (interfaceThemePreference.value === "system") refreshInterfaceTheme();
+}
+
+function onInterfaceThemeChanged(event: Event): void {
+  const preference = (event as CustomEvent<DesktopTheme>).detail;
+  if (preference !== "system" && preference !== "light" && preference !== "dark") return;
+  interfaceThemePreference.value = preference;
+  refreshInterfaceTheme();
+}
+
+async function loadInterfaceTheme(): Promise<void> {
+  try {
+    interfaceThemePreference.value = (await desktopSettingsClient.read()).theme;
+  } catch {
+    interfaceThemePreference.value = "system";
+  }
+  refreshInterfaceTheme();
+}
 const DRAWER_PREFERENCES_KEY = "rabiroute:webgui:drawer-preferences";
 
 type DrawerPreferences = {
@@ -79,6 +112,10 @@ const utilityNavItems = computed(() => [
 ].map(item => ({ ...item, title: t(item.title) })));
 
 const managerConnected = computed(() => !store.managerError);
+const activePageSaveAction = computed(() => pageSaveAction.value);
+const saveBusy = computed(() => store.saving || activePageSaveAction.value?.saving.value === true);
+const saveDisabled = computed(() => activePageSaveAction.value != null && !activePageSaveAction.value.ready.value);
+const hasUnsavedChanges = computed(() => store.dirty || activePageSaveAction.value?.dirty.value === true);
 const pageTitle = computed(() => t(String(route.meta.title || "RibiWebGUI")));
 const routeOptions = computed(() => store.gateways.map(gateway => {
   const runtime = store.runtimeFor(gateway.id);
@@ -90,6 +127,7 @@ const selectedGatewayName = computed(() => store.selectedGateway
   : "未选择路由");
 
 onMounted(async () => {
+  await loadInterfaceTheme();
   await store.load();
   if (store.gateways.length === 0) store.openQuickSetup();
   else if (selectedRouteKey.value) {
@@ -98,6 +136,8 @@ onMounted(async () => {
   }
   void ensurePageDiagnostics(route.path);
   window.addEventListener("beforeunload", beforeUnload);
+  window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
+  systemThemeQuery.addEventListener("change", onSystemThemeChanged);
 });
 
 watch(
@@ -120,9 +160,17 @@ watch(drawer, (value) => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", beforeUnload);
+  window.removeEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
+  systemThemeQuery.removeEventListener("change", onSystemThemeChanged);
 });
 
 async function save() {
+  if (activePageSaveAction.value) {
+    if (!activePageSaveAction.value.ready.value) return;
+    await activePageSaveAction.value.save();
+    snackbar.value = "配置已保存";
+    return;
+  }
   await store.save();
   snackbar.value = "配置已保存";
 }
@@ -134,13 +182,13 @@ async function refresh() {
 }
 
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (!store.dirty) return;
+  if (!hasUnsavedChanges.value) return;
   event.preventDefault();
   event.returnValue = "";
 }
 
 function canLeaveDirtyState(): boolean {
-  return !store.dirty || window.confirm(t("当前配置有未保存修改。确定要切换吗？"));
+  return !hasUnsavedChanges.value || window.confirm(t("当前配置有未保存修改。确定要切换吗？"));
 }
 
 function selectGateway(id: string) {
@@ -238,7 +286,7 @@ function selectGateway(id: string) {
       </v-toolbar-title>
       <v-spacer />
       <div class="topbar-actions">
-        <span v-if="store.dirty" class="dirty-hint">有未保存的修改</span>
+        <span v-if="hasUnsavedChanges" class="dirty-hint">有未保存的修改</span>
         <LocaleSwitcher />
         <v-chip class="manager-chip" :color="managerConnected ? 'success' : 'error'" variant="tonal" size="small">
           <v-icon start size="14">mdi-circle</v-icon>
@@ -247,10 +295,10 @@ function selectGateway(id: string) {
         <v-btn icon="mdi-refresh" :loading="store.loading" aria-label="刷新状态" @click="refresh" />
         <v-btn class="desktop-action" prepend-icon="mdi-plus" variant="tonal" @click="store.addGatewayAndOpenQuickSetup">新增航线</v-btn>
         <v-btn class="mobile-action" icon="mdi-plus" variant="tonal" aria-label="新增航线" @click="store.addGatewayAndOpenQuickSetup" />
-        <v-btn class="desktop-action" color="primary" prepend-icon="mdi-content-save" :loading="store.saving" @click="save">
+        <v-btn class="desktop-action" color="primary" prepend-icon="mdi-content-save" :loading="saveBusy" :disabled="saveDisabled" @click="save">
           保存配置
         </v-btn>
-        <v-btn class="mobile-action" color="primary" icon="mdi-content-save" :loading="store.saving" aria-label="保存配置" @click="save" />
+        <v-btn class="mobile-action" color="primary" icon="mdi-content-save" :loading="saveBusy" :disabled="saveDisabled" aria-label="保存配置" @click="save" />
       </div>
     </v-app-bar>
 

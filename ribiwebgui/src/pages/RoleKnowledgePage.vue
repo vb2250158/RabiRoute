@@ -37,6 +37,7 @@ import {
 } from "../knowledgePagination";
 import {
   loadPlanFeedback,
+  loadPlanHistory,
   loadPlanAgentStatuses,
   loadRoleMemoryCounts,
   loadRoleMemoryPage,
@@ -61,7 +62,7 @@ import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, format
 import type { PlanKnowledgeView, PlanListSortMode } from "../planPresentationStyles";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract";
-import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, RolePlanStep } from "../types";
+import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, RolePlanHistoryRecord, RolePlanStep } from "../types";
 
 const store = useGatewayStore();
 const { isEnglish, t } = useI18n();
@@ -76,6 +77,9 @@ const error = ref("");
 const activeView = ref<PlanKnowledgeView>("plans");
 const query = ref<string | null>("");
 const expandedPlans = reactive<Record<string, boolean>>({});
+const planWorkHistoryExpanded = reactive<Record<string, boolean>>({});
+const planHistoryRecords = reactive<Record<string, RolePlanHistoryRecord[]>>({});
+const planHistoryLoading = reactive<Record<string, boolean>>({});
 const planVideoDurations = reactive<Record<string, number>>({});
 const activeDirectoryPlanId = ref("");
 const planListSortMode = ref<PlanListSortMode>("status");
@@ -505,6 +509,9 @@ function resetPlanDetailHydration(): void {
   queuedPlanDetailIds.clear();
   for (const key of Object.keys(planDetailsLoaded)) delete planDetailsLoaded[key];
   for (const key of Object.keys(planDetailsLoading)) delete planDetailsLoading[key];
+  for (const key of Object.keys(planWorkHistoryExpanded)) delete planWorkHistoryExpanded[key];
+  for (const key of Object.keys(planHistoryRecords)) delete planHistoryRecords[key];
+  for (const key of Object.keys(planHistoryLoading)) delete planHistoryLoading[key];
 }
 
 function resetPlanAgentStatusState(): void {
@@ -529,7 +536,7 @@ function fallbackPlanAgentBindingStatus(
   return {
     role,
     configured: Boolean(binding?.sessionId),
-    agentType: "codex",
+    agentType: binding?.agentType === "dsh" ? "dsh" : "codex",
     threadId: String(binding?.sessionId || ""),
     threadTitle: String(binding?.sessionTitle || ""),
     workspace: String(binding?.workspace || ""),
@@ -643,12 +650,12 @@ function planAgentSessionLabel(status: PlanAgentSessionStatus | undefined): stri
     active: ["会话任务正在运行", "Task is running"],
     idle: ["会话任务空闲", "Task is idle"],
     not_loaded: ["会话任务未载入", "Task is not loaded"],
-    unavailable: ["Codex Desktop 未就绪", "Codex Desktop is unavailable"],
-    archived: ["会话任务已归档", "Task is archived"],
-    missing: ["会话任务不存在", "Task is missing"],
-    workspace_mismatch: ["会话任务工作目录不一致", "Task workspace does not match"],
-    unbound: ["未关联会话任务", "No task is linked"],
-    unknown: ["会话任务状态未知", "Task status is unknown"]
+    unavailable: ["Agent 未就绪", "Agent is unavailable"],
+    archived: ["会话已归档", "Session is archived"],
+    missing: ["会话不存在", "Session is missing"],
+    workspace_mismatch: ["会话工作目录不一致", "Session workspace does not match"],
+    unbound: ["未关联会话", "No session is linked"],
+    unknown: ["会话状态未知", "Session status is unknown"]
   };
   const label = labels[status || "unknown"];
   return label[isEnglish.value ? 1 : 0];
@@ -685,10 +692,11 @@ async function openPlanAgent(plan: RolePlan, role: PlanAgentRole): Promise<void>
   planAgentOpenPending[key] = true;
   delete planAgentNotices[key];
   try {
-    await openPlanAgentTask(roleId.value, plan.id, role);
+    const opened = await openPlanAgentTask(roleId.value, plan.id, role);
+    const agentName = opened.agentType === "dsh" ? "DSH" : "Codex";
     planAgentNotices[key] = {
       tone: "success",
-      text: isEnglish.value ? "Opened the bound task in Codex." : "已在 Codex 中定位并唤醒绑定任务。"
+      text: isEnglish.value ? `Opened the bound session in ${agentName}.` : `已在 ${agentName} 中定位绑定会话。`
     };
   } catch (openError) {
     planAgentNotices[key] = {
@@ -1452,6 +1460,27 @@ function guidanceRecordsForDisplay(plan: RolePlan): RolePlanFeedback[] {
     .reverse();
 }
 
+function planHistoryLabel(record: RolePlanHistoryRecord): string {
+  if (record.kind === "created") return t("创建计划");
+  if (record.kind === "archived") return t("归档计划");
+  return t("更新计划");
+}
+
+function planHistoryApprovalSteps(record: RolePlanHistoryRecord): RolePlanStep[] {
+  return Array.isArray(record.after.steps)
+    ? record.after.steps.filter((step) => Boolean(step.approvalRequest))
+    : [];
+}
+
+function planApprovalContractsForHistory(plan: RolePlan): RolePlanStep[] {
+  return plan.steps.filter((step) => Boolean(step.approvalRequest));
+}
+
+function planHistoryCurrentStep(record: RolePlanHistoryRecord): RolePlanStep | undefined {
+  return record.after.steps.find((step) => step.id === record.after.currentStepId)
+    || record.after.steps.find((step) => step.status === "进行中");
+}
+
 function planAcceptsGuidance(plan: RolePlan): boolean {
   return plan.status === "进行中" && plan.presentation.approval.state === "none";
 }
@@ -1466,9 +1495,13 @@ function togglePlan(plan: RolePlan): void {
   if (expanded && !planAgentStatusIsFresh(plan.id)) {
     void refreshPlanAgentStatuses([plan.id], true);
   }
-  if (expanded && (planAcceptsGuidance(plan) || plan.presentation.approval.state !== "none")) {
-    void refreshPlanApproval(plan.id);
-  }
+  if (expanded) void refreshPlanApproval(plan.id);
+}
+
+function togglePlanWorkHistory(plan: RolePlan): void {
+  const expanded = !planWorkHistoryExpanded[plan.id];
+  planWorkHistoryExpanded[plan.id] = expanded;
+  if (expanded) void refreshPlanHistory(plan.id);
 }
 
 function planDirectoryStyle(plan: RolePlan): Record<string, string> {
@@ -1937,6 +1970,18 @@ async function refreshPlanApproval(planId: string): Promise<void> {
     applyFeedbackDeliveryState(planId, approval.latest);
   } catch {
     // The submission result remains visible; a later Manager event or manual refresh can reconcile it.
+  }
+}
+
+async function refreshPlanHistory(planId: string): Promise<void> {
+  const selectedRoleId = roleId.value;
+  if (!selectedRoleId || !plans.value.some((plan) => plan.id === planId) || planHistoryLoading[planId]) return;
+  planHistoryLoading[planId] = true;
+  try {
+    const records = await loadPlanHistory(selectedRoleId, planId);
+    if (selectedRoleId === roleId.value) planHistoryRecords[planId] = records;
+  } finally {
+    if (selectedRoleId === roleId.value) planHistoryLoading[planId] = false;
   }
 }
 
@@ -2503,7 +2548,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   color="primary"
                   prepend-icon="mdi-open-in-new"
                   :loading="planAgentOpenPending[planAgentOpenKey(plan.id, 'task')]"
-                  :aria-label="isEnglish ? `Open ${planAgentTitle(plan, 'task')} in Codex` : `在 Codex 中打开${planAgentTitle(plan, 'task')}`"
+                  :aria-label="isEnglish ? `Open ${planAgentTitle(plan, 'task')} in ${planAgentBindingStatus(plan, 'task')?.agentType === 'dsh' ? 'DSH' : 'Codex'}` : `在${planAgentBindingStatus(plan, 'task')?.agentType === 'dsh' ? 'DSH' : 'Codex'}中打开${planAgentTitle(plan, 'task')}`"
                   @click.stop="openPlanAgent(plan, 'task')"
                 >
                   {{ isEnglish ? "Open task" : "打开任务" }}
@@ -2719,7 +2764,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <div class="knowledge-plan-agents-head">
                   <div>
                     <span><v-icon size="17">mdi-robot-outline</v-icon>{{ t("计划关联 Agent") }}</span>
-                    <small>{{ t("状态来自对应 Codex Desktop 会话任务") }}</small>
+                    <small>{{ t("状态来自绑定 Agent 的对应会话") }}</small>
                   </div>
                   <v-btn
                     v-if="planAgentShouldRetry(plan)"
@@ -3090,6 +3135,132 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   />
                     </section>
                 </div>
+                <section class="knowledge-work-history" :data-expanded="Boolean(planWorkHistoryExpanded[plan.id])">
+                  <button
+                    class="knowledge-work-history-toggle"
+                    type="button"
+                    :aria-expanded="Boolean(planWorkHistoryExpanded[plan.id])"
+                    :aria-controls="`plan-work-history-${plan.id}`"
+                    @click="togglePlanWorkHistory(plan)"
+                  >
+                    <span>
+                      <v-icon size="18">mdi-history</v-icon>
+                      <b>{{ t("工作留痕") }}</b>
+                      <small>
+                        {{ plan.approval.count }} {{ t("条反馈") }}
+                        <template v-if="planHistoryRecords[plan.id]"> · {{ planHistoryRecords[plan.id].length }} {{ t("次计划记录") }}</template>
+                      </small>
+                    </span>
+                    <v-icon size="18">{{ planWorkHistoryExpanded[plan.id] ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
+                  </button>
+                  <div v-if="planWorkHistoryExpanded[plan.id]" :id="`plan-work-history-${plan.id}`" class="knowledge-work-history-body">
+                    <p>{{ t("这里保留整个计划的引导、审批意见、Agent 回复和计划版本；计划完成或归档后仍可查看。") }}</p>
+                    <div class="knowledge-work-history-groups">
+                      <section class="knowledge-work-history-group">
+                        <h4>{{ t("计划引导记录") }}</h4>
+                        <div v-if="guidanceRecordsForDisplay(plan).length" class="knowledge-approval-history">
+                          <article
+                            v-for="feedback in guidanceRecordsForDisplay(plan)"
+                            :key="`work-guidance-${feedback.id}`"
+                            class="knowledge-approval-record"
+                            :data-author="feedback.author"
+                          >
+                            <span>{{ feedbackRecordLabel(feedback) }} · <time data-no-i18n>{{ formatDate(feedback.createdAt) }}</time></span>
+                            <b data-no-i18n>{{ feedback.text }}</b>
+                            <small data-no-i18n>{{ feedback.deliveryStatus }}</small>
+                          </article>
+                        </div>
+                        <p v-else>{{ t("还没有计划引导记录。") }}</p>
+                      </section>
+                      <section class="knowledge-work-history-group">
+                        <h4>{{ t("审批意见记录") }}</h4>
+                        <div v-if="approvalRecordsForDisplay(plan).length" class="knowledge-approval-history">
+                          <article
+                            v-for="feedback in approvalRecordsForDisplay(plan)"
+                            :key="`work-approval-${feedback.id}`"
+                            class="knowledge-approval-record"
+                            :data-author="feedback.author"
+                          >
+                            <span>{{ feedbackRecordLabel(feedback) }} · <time data-no-i18n>{{ formatDate(feedback.createdAt) }}</time></span>
+                            <b data-no-i18n>{{ feedback.text }}</b>
+                            <small v-if="feedback.stepTitle || feedback.stepId" data-no-i18n>{{ feedback.stepTitle || feedback.stepId }}</small>
+                            <small data-no-i18n>{{ feedback.deliveryStatus }}</small>
+                          </article>
+                        </div>
+                        <p v-else>{{ t("还没有审批意见记录。") }}</p>
+                      </section>
+                    </div>
+                    <section class="knowledge-work-history-group knowledge-current-approval-history">
+                      <h4>{{ t("步骤审批合同") }}</h4>
+                      <p>{{ t("当前计划中的审批合同会保留在对应步骤；计划完成后仍可在这里查看。") }}</p>
+                      <div v-if="planApprovalContractsForHistory(plan).length" class="knowledge-plan-history-records">
+                        <details v-for="step in planApprovalContractsForHistory(plan)" :key="`current-contract-${step.id}`" class="knowledge-plan-history-record">
+                          <summary>
+                            <span>{{ step.title }}</span>
+                            <span>{{ approvalResponseStatusLabel(step.approvalRequest?.responseStatus) }}</span>
+                          </summary>
+                          <section class="knowledge-plan-history-approval">
+                            <p><b>{{ t("审批请求") }}：</b><span data-no-i18n>{{ step.approvalRequest?.request }}</span></p>
+                            <p><b>{{ t("推荐方案") }}：</b><span data-no-i18n>{{ step.approvalRequest?.recommendation || t("未填写") }}</span></p>
+                            <p><b>{{ t("审批原因") }}：</b><span data-no-i18n>{{ step.approvalRequest?.reason }}</span></p>
+                            <p><b>{{ t("审批回执") }}：</b><span>{{ approvalResponseStatusLabel(step.approvalRequest?.responseStatus) }}</span></p>
+                            <div class="knowledge-plan-history-contract-lists">
+                              <div v-if="step.approvalRequest?.validation.length"><b>{{ t("验证方式") }}</b><ul><li v-for="item in step.approvalRequest?.validation || []" :key="item" data-no-i18n>{{ item }}</li></ul></div>
+                              <div v-if="step.approvalRequest?.rollback.length"><b>{{ t("回退方案") }}</b><ul><li v-for="item in step.approvalRequest?.rollback || []" :key="item" data-no-i18n>{{ item }}</li></ul></div>
+                              <div v-if="step.approvalRequest?.outOfScope.length"><b>{{ t("范围外内容") }}</b><ul><li v-for="item in step.approvalRequest?.outOfScope || []" :key="item" data-no-i18n>{{ item }}</li></ul></div>
+                            </div>
+                          </section>
+                        </details>
+                      </div>
+                      <p v-else>{{ t("当前计划没有步骤审批合同。") }}</p>
+                    </section>
+                    <section class="knowledge-work-history-group knowledge-plan-version-history">
+                      <h4>{{ t("计划版本记录") }}</h4>
+                      <div v-if="planHistoryLoading[plan.id]" class="knowledge-plan-history-loading" role="status">
+                        <v-progress-circular indeterminate size="16" width="2" color="primary" />
+                        <span>{{ t("正在读取工作留痕…") }}</span>
+                      </div>
+                      <div v-else-if="planHistoryRecords[plan.id]?.length" class="knowledge-plan-history-records">
+                        <details v-for="record in planHistoryRecords[plan.id]" :key="record.id" class="knowledge-plan-history-record">
+                          <summary>
+                            <span>{{ planHistoryLabel(record) }}</span>
+                            <time data-no-i18n>{{ formatDate(record.recordedAt) }}</time>
+                          </summary>
+                          <div class="knowledge-plan-history-summary">
+                            <span>{{ t("计划状态") }}：{{ record.after.status }}</span>
+                            <span v-if="planHistoryCurrentStep(record)">{{ t("当前步骤") }}：{{ planHistoryCurrentStep(record)?.title }}</span>
+                            <span v-if="record.before">{{ t("变更前") }}：{{ record.before.status }}</span>
+                          </div>
+                          <section
+                            v-for="step in planHistoryApprovalSteps(record)"
+                            :key="`${record.id}-${step.id}`"
+                            class="knowledge-plan-history-approval"
+                          >
+                            <h5>{{ step.title }}</h5>
+                            <p><b>{{ t("审批请求") }}：</b><span data-no-i18n>{{ step.approvalRequest?.request }}</span></p>
+                            <p><b>{{ t("推荐方案") }}：</b><span data-no-i18n>{{ step.approvalRequest?.recommendation || t("未填写") }}</span></p>
+                            <p><b>{{ t("审批原因") }}：</b><span data-no-i18n>{{ step.approvalRequest?.reason }}</span></p>
+                            <p><b>{{ t("审批回执") }}：</b><span>{{ approvalResponseStatusLabel(step.approvalRequest?.responseStatus) }}</span></p>
+                            <div v-if="step.approvalRequest?.files.length || step.approvalRequest?.commands.length || step.approvalRequest?.changes.length" class="knowledge-plan-history-actions">
+                              <b>{{ t("涉及改动") }}</b>
+                              <ul>
+                                <li v-for="file in step.approvalRequest?.files || []" :key="`${file.action}-${file.path}`" data-no-i18n>{{ approvalFileAction(file.action) }} · {{ file.path }} · {{ file.change }}</li>
+                                <li v-for="command in step.approvalRequest?.commands || []" :key="command.command" data-no-i18n>{{ command.command }} · {{ command.purpose }}</li>
+                                <li v-for="change in step.approvalRequest?.changes || []" :key="change.target" data-no-i18n>{{ change.target }} · {{ change.change }}</li>
+                              </ul>
+                            </div>
+                            <div class="knowledge-plan-history-contract-lists">
+                              <div v-if="step.approvalRequest?.validation.length"><b>{{ t("验证方式") }}</b><ul><li v-for="item in step.approvalRequest?.validation || []" :key="item" data-no-i18n>{{ item }}</li></ul></div>
+                              <div v-if="step.approvalRequest?.rollback.length"><b>{{ t("回退方案") }}</b><ul><li v-for="item in step.approvalRequest?.rollback || []" :key="item" data-no-i18n>{{ item }}</li></ul></div>
+                              <div v-if="step.approvalRequest?.outOfScope.length"><b>{{ t("范围外内容") }}</b><ul><li v-for="item in step.approvalRequest?.outOfScope || []" :key="item" data-no-i18n>{{ item }}</li></ul></div>
+                            </div>
+                          </section>
+                        </details>
+                      </div>
+                      <p v-else>{{ t("当前计划没有可读取的版本记录。") }}</p>
+                    </section>
+                  </div>
+                </section>
               </div>
             </div>
               </div>

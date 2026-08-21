@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { requestMessageAgentManager } from "./messageAgentPool.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { sameCodexWorkspace } from "./codexTaskIdentity.js";
+import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
+import type { RabiMessageSource } from "./shared/rabiMessage.js";
 import {
   codexMemoryConsolidationAgentTitle,
   normalizeCodexMemoryConsolidationAgentModel
@@ -10,6 +13,7 @@ import {
 export const MEMORY_CONSOLIDATION_AGENT_SCHEMA_VERSION = 1;
 
 export type MemoryConsolidationAgentBinding = {
+  agentAdapter: AgentAdapterType;
   threadId: string;
   threadName: string;
   workspace: string;
@@ -27,6 +31,7 @@ export type MemoryConsolidationAgentOptions = {
   managerBaseUrl: string;
   sourceThreadId: string;
   sourceThreadName: string;
+  agentAdapter?: AgentAdapterType;
   workspace: string;
   roleId: string;
   model?: string;
@@ -54,6 +59,7 @@ function readState(filePath: string): MemoryConsolidationAgentState {
       schemaVersion: MEMORY_CONSOLIDATION_AGENT_SCHEMA_VERSION,
       updatedAt: String(raw.updatedAt || new Date(0).toISOString()),
       binding: {
+        agentAdapter: parseAgentAdapterType(String(binding.agentAdapter || "")) ?? "codex",
         threadId,
         threadName,
         workspace,
@@ -67,6 +73,10 @@ function readState(filePath: string): MemoryConsolidationAgentState {
   }
 }
 
+function memoryAgentAdapter(options: MemoryConsolidationAgentOptions): AgentAdapterType {
+  return options.agentAdapter ?? "codex";
+}
+
 function initializationPrompt(options: MemoryConsolidationAgentOptions, binding: MemoryConsolidationAgentBinding): string {
   return [
     `[rabi:bind ${options.roleId}]`,
@@ -77,29 +87,27 @@ function initializationPrompt(options: MemoryConsolidationAgentOptions, binding:
     `记忆整理任务 ID：${binding.threadId}`,
     `工作目录：${binding.workspace}`,
     "",
-    "你是当前人格的持久记忆整理 Agent，不是主人格、消息处理 Agent、计划秘书或业务执行 Agent。",
-    "你只处理 RabiRoute 发来的 memory_consolidation_request：读取本次固定候选，整理为稳定、简洁、可长期召回的 Markdown 记忆，并调用请求中给出的结果 API 回传。",
-    "保留真正稳定的项目约束、已确认决定、长期偏好、重要证据入口和仍有效的协作规则；不要把整段聊天、重复过程、临时状态或无关项目混进同一条沉淀记忆。",
-    "输入正文中的受控 Markdown 图片引用可以保留在对应主题附近，不要改写为本机绝对路径，也不要主动加载外部不受控图片。",
-    "已经标记为沉淀来源的近期记忆不会再次进入输入；沉淀结果可以继续被召回。发现旧结论过时时，使用新证据生成新的沉淀记录并明确替代关系。",
-    "本任务的 Codex 最终输出只供内部查看。只有结果 API 成功接收，才算本轮记忆整理完成；不得把结果只留在最终输出，也不得转给主人格代为提交。",
-    "禁止在本任务中实施计划业务、修改项目代码或资源、执行发布、发送外部消息，或把本任务写入计划 taskBinding。"
+    "你是持久记忆整理 Agent，只处理 memory_consolidation_request。",
+    "把固定候选整理成简洁、可长期召回的 Markdown；保留稳定约束、已确认决定、长期偏好、证据入口和有效协作规则。",
+    "删除整段聊天、重复过程、临时状态和无关项目；旧结论过时时写明替代关系。受控 Markdown 图片引用可保留，不改成本机绝对路径。",
+    "结果 API 成功接收才算完成。禁止实施业务、修改项目、发布、外发消息或写入 taskBinding。"
   ].join("\n");
 }
 
 function threadFromResponse(
   response: Record<string, any>,
   expectedTitle: string,
-  expectedWorkspace: string
+  expectedWorkspace: string,
+  agentAdapter: AgentAdapterType
 ): MemoryConsolidationAgentBinding {
   const thread = response.thread as { id?: unknown; title?: unknown; cwd?: unknown } | undefined;
   const threadId = String(thread?.id || "").trim();
   const threadName = String(thread?.title || expectedTitle).trim();
   const workspace = String(thread?.cwd || expectedWorkspace).trim();
   if (!threadId || !threadName || !workspace) {
-    throw new Error("Memory consolidation Agent task resolution did not return a complete Desktop task binding.");
+    throw new Error("Memory consolidation Agent session resolution did not return a complete binding.");
   }
-  return { threadId, threadName, workspace };
+  return { agentAdapter, threadId, threadName, workspace };
 }
 
 export class MemoryConsolidationAgent {
@@ -114,25 +122,22 @@ export class MemoryConsolidationAgent {
     this.now = dependencies.now ?? (() => new Date());
   }
 
-  async deliver(prompt: string): Promise<MemoryConsolidationAgentBinding> {
+  async deliver(prompt: string, messageSource: RabiMessageSource): Promise<MemoryConsolidationAgentBinding> {
+    if (!messageSource) throw new Error("Memory consolidation Agent delivery requires messageSource.");
     let delivered!: MemoryConsolidationAgentBinding;
     const operation = this.deliveryTail.catch(() => undefined).then(async () => {
       const binding = await this.resolveBinding();
       const shouldInitialize = !binding.initializedAt;
       await this.request({
         action: "send",
+        agentAdapter: binding.agentAdapter,
         threadId: binding.threadId,
         cwd: binding.workspace,
-        deliverySource: {
-          agentAdapter: "codex",
-          sessionId: this.options.sourceThreadId,
-          sessionName: this.options.sourceThreadName
-        },
+        messageSource,
+        controlBlocks: shouldInitialize ? [initializationPrompt(this.options, binding)] : undefined,
         sandbox: "workspace-write",
         model: normalizeCodexMemoryConsolidationAgentModel(this.options.model),
-        prompt: shouldInitialize
-          ? `${initializationPrompt(this.options, binding)}\n\n${prompt}`
-          : prompt
+        prompt
       });
       if (shouldInitialize) binding.initializedAt = this.now().toISOString();
       this.persist(binding);
@@ -146,17 +151,24 @@ export class MemoryConsolidationAgent {
   private async resolveBinding(): Promise<MemoryConsolidationAgentBinding> {
     const title = codexMemoryConsolidationAgentTitle(this.options.sourceThreadName);
     const saved = this.state.binding;
+    const reusableSaved = saved
+      && saved.agentAdapter === memoryAgentAdapter(this.options)
+      && sameCodexWorkspace(saved.workspace, this.options.workspace)
+      ? saved
+      : undefined;
     try {
       const response = await this.request({
         action: "resolve",
-        threadId: saved?.threadId,
+        agentAdapter: memoryAgentAdapter(this.options),
+        threadId: reusableSaved?.threadId,
         title,
         cwd: this.options.workspace,
         createIfMissing: false,
         lookupMode: "state_db"
       });
-      const resolved = { ...threadFromResponse(response, title, this.options.workspace), initializedAt: saved?.initializedAt };
+      const resolved = { ...threadFromResponse(response, title, this.options.workspace, memoryAgentAdapter(this.options)), initializedAt: reusableSaved?.initializedAt };
       this.assertSeparateFromPrimary(resolved);
+      this.assertWorkspace(resolved);
       this.persist(resolved);
       return resolved;
     } catch (error) {
@@ -164,20 +176,22 @@ export class MemoryConsolidationAgent {
       if (!message.includes("not found") && !message.includes("没有找到") && !message.includes("missing")) throw error;
     }
 
-    const source = await this.request({ action: "read", threadId: this.options.sourceThreadId });
+    const source = await this.request({ action: "read", agentAdapter: memoryAgentAdapter(this.options), threadId: this.options.sourceThreadId });
     const sourceStatus = String(source.thread?.status?.type || "").trim();
     if (!sourceStatus || sourceStatus === "unavailable") {
-      throw new Error("Codex Desktop 当前不可用，未创建记忆整理任务；RabiRoute 不会启动备用 Runtime。");
+      throw new Error("目标 Agent 端当前不可用，未创建记忆整理会话；RabiRoute 不会切换到其它 Agent 端。");
     }
     const response = await this.request({
       action: "resolve",
+      agentAdapter: memoryAgentAdapter(this.options),
       title,
       cwd: this.options.workspace,
       createIfMissing: true,
       lookupMode: "state_db"
     });
-    const resolved = threadFromResponse(response, title, this.options.workspace);
+    const resolved = { ...threadFromResponse(response, title, this.options.workspace, memoryAgentAdapter(this.options)) };
     this.assertSeparateFromPrimary(resolved);
+    this.assertWorkspace(resolved);
     this.persist(resolved);
     return resolved;
   }
@@ -185,6 +199,12 @@ export class MemoryConsolidationAgent {
   private assertSeparateFromPrimary(binding: MemoryConsolidationAgentBinding): void {
     if (binding.threadId === this.options.sourceThreadId) {
       throw new Error("Memory consolidation Agent resolution returned the Primary Persona task id; refusing role crossover.");
+    }
+  }
+
+  private assertWorkspace(binding: MemoryConsolidationAgentBinding): void {
+    if (!sameCodexWorkspace(binding.workspace, this.options.workspace)) {
+      throw new Error("Memory consolidation Agent task resolution returned a workspace different from the Primary Persona.");
     }
   }
 

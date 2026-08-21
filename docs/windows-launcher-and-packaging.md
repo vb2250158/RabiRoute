@@ -10,11 +10,11 @@
 
 本文是 Windows 桌面启动和打包的唯一真源。README、脚本注释和托盘 README 只应指向这里，不再各自维护另一套“exe 是否完整包”的解释。
 
-RabiRoute 的 Windows 完整桌面运行包不是单文件 exe，而是一组协作产物：
+RabiRoute Desktop 是 Windows 上唯一的用户入口。系统托盘和任务窗口只是它的界面；Manager 是它使用的本机后端，不单独作为另一款 Windows 软件出现。完整运行包由以下产物组成：
 
 ```text
-RabiRoute-Tray.exe          托盘/任务面板入口，负责桌面体验和启动监督
-scripts/watch-rabiroute-desktop-lifecycle.ps1  Manager/托盘进程配对监督器
+RabiRoute-Desktop.exe          托盘/任务面板入口，负责桌面体验和启动监督
+scripts/watch-rabiroute-desktop-lifecycle.ps1  桌面后端与界面共同监督器
 dist/manager.js             Node manager 后端入口
 dist/**/*.js                gateway、adapter、routing 等后端编译产物
 ribiwebgui/dist/            RibiWebGUI 前端静态产物
@@ -23,35 +23,35 @@ node.exe 或系统 Node.js      运行 manager 的 Node runtime
 node_modules/ 或等价依赖     manager 运行需要的 npm 依赖
 ```
 
-`RabiRoute-Tray.exe` 是完整桌面运行包里的托盘入口，不是唯一运行产物。不要把“生成了 exe”当成“完整发布包已经生成”。完整 Windows 桌面包的维护边界就是：托盘入口 + WebGUI 前端 + manager/gateway 后端 + 外置运行期数据。
+`RabiRoute-Desktop.exe` 是完整 Windows 桌面应用的启动入口。它负责拉起并监督本机后端、WebGUI 和桌面界面；启动时会删除同目录旧的 `RabiRoute-Tray.exe`、`RabiRoute-Tray.new.exe` 和未替换的 `RabiRoute-Desktop.new.exe`，避免旧入口继续出现。发布包必须同时带齐这些运行产物和外置运行期数据。
 
-RabiRoute 仍然从可移植的 Node manager 启动。Windows 启动器只是桌面便利入口：它会检测已有 manager，只在需要时启动一个新的 manager，把日志写到路由数据目录，打开 RibiWebGUI，并启动 PySide6/Qt 计划与记忆面板。
+Windows 用户始终从 RabiRoute Desktop 启动。它会检测并在需要时启动本机后端，把日志写到路由数据目录，打开 RibiWebGUI，并显示 PySide6/Qt 计划与记忆界面；直接运行 Node Manager 只用于开发或跨平台部署。
 
-Windows 启动器建立“Manager + 托盘”配对，并把长期进程修复交给唯一的轻量监督器：
+Windows 启动器建立一个 RabiRoute Desktop 运行态，并把缺失组件修复交给唯一的轻量监督器：
 
 ```text
-Start-RabiRoute-Tray.bat 或 RabiRoute-Tray.exe
+Start-RabiRoute-Desktop.bat 或 RabiRoute-Desktop.exe
   -> 检查/补齐 dist/manager.js 和 ribiwebgui/dist
   -> node dist/manager.js
      -> manager 提供 RibiWebGUI 静态文件和 HTTP API
      -> manager 管理 gateway 子进程
-  -> Qt 托盘/任务面板连接 http://127.0.0.1:8790
+  -> RabiRoute Desktop 界面（系统托盘与任务窗口）连接 http://127.0.0.1:8790
   -> data/runtime/desktop-lifecycle-intent.json = running
   -> watch-rabiroute-desktop-lifecycle.ps1
-     -> 任一侧缺失时通过同一启动器补齐 Manager + 托盘
+     -> 后端或界面缺失时通过同一启动器恢复完整桌面运行态
 ```
 
-托盘里的 `退出 RabiRoute` 始终表示退出本地 RabiRoute 桌面运行态。Manager 会先原子写入 `desiredState=stopped`，再停止受管 gateway、关闭 HTTP server 并退出，随后托盘退出。监督器看到 `stopped` 后自行结束，不能把用户明确关闭的进程重新拉起。普通 Manager 重载不改变该意图。
+RabiRoute Desktop 菜单里的 `退出 RabiRoute` 始终表示退出本地桌面运行态。Manager 会先原子写入 `desiredState=stopped`，再停止受管 gateway、关闭 HTTP server 并退出，随后桌面界面退出。监督器看到 `stopped` 后自行结束，不能把用户明确关闭的进程重新拉起。普通 Manager 重载不改变该意图。
 
 ## 双击启动
 
 在项目根目录双击：
 
 ```text
-Start-RabiRoute-Tray.bat
+Start-RabiRoute-Desktop.bat
 ```
 
-`Start-RabiRoute-Tray.bat` 是一个 batch/PowerShell 混合启动器。旧的拆分启动文件已经移除，现在 Windows 只有这一个需要维护的源码入口。
+`Start-RabiRoute-Desktop.bat` 是一个 batch/PowerShell 混合启动器。旧的拆分启动文件已经移除，现在 Windows 只有这一个需要维护的源码入口。
 
 默认行为：
 
@@ -65,10 +65,10 @@ Start-RabiRoute-Tray.bat
 - 如果 RibiWebGUI 前端产物 `ribiwebgui/dist/index.html` 或 `ribiwebgui/dist/assets` 缺失，或比前端源码更旧，会自动补构建；manager 已运行时只跑 `npm.cmd run webgui:build`，manager 未运行时跑完整 `npm.cmd run build`。
 - 没有 manager 运行时，在后台启动 `node dist\manager.js`。
 - manager 响应后打开 RibiWebGUI。
-- 除非传入 `-NoTray`，否则启动 PySide6/Qt 计划与记忆面板。
-- 如果 Qt 面板已经运行，会复用已有面板，不创建重复托盘窗口。
-- 完整桌面启动会由 Manager 原子记录 `running` 意图，并启动工作区唯一的轻量监督器。监督器每 5 秒只检查 Manager `/meta` 和本项目托盘进程，连续两次缺失才走同一启动器的 PID、端口和单实例门禁补齐；它不扫描或修复 QQ、NapCat、Route、Adapter 等业务状态。
-- 托盘探测到 Manager 暂时离线时保持运行并显示离线状态，不再因连续超时自行退出；Manager 或托盘任一侧真正消失时，由监督器恢复配对。
+- 除非传入 `-NoDesktopShell`，否则启动 RabiRoute Desktop 界面。
+- 如果 RabiRoute Desktop 界面已经运行，会复用已有界面，不创建重复窗口。
+- 完整桌面启动会由 Manager 原子记录 `running` 意图，并启动工作区唯一的轻量监督器。监督器每 5 秒只检查本机后端 `/meta` 和本项目桌面界面进程，连续两次缺失才走同一启动器的 PID、端口和单实例门禁恢复完整运行态；它不扫描或修复 QQ、NapCat、Route、Adapter 等业务状态。
+- 桌面界面探测到本机后端暂时离线时保持运行并显示离线状态，不再因连续超时自行退出；后端或界面真正消失时，由监督器恢复完整桌面运行态。
 
 日志写入：
 
@@ -91,11 +91,11 @@ desktop-lifecycle-supervisor.jsonl
 常用直接命令：
 
 ```powershell
-.\Start-RabiRoute-Tray.bat
-.\Start-RabiRoute-Tray.bat -NoOpen
-.\Start-RabiRoute-Tray.bat -NoBuild
-.\Start-RabiRoute-Tray.bat -NoTray
-.\Start-RabiRoute-Tray.bat -ManagerUrl http://127.0.0.1:8790
+.\Start-RabiRoute-Desktop.bat
+.\Start-RabiRoute-Desktop.bat -NoOpen
+.\Start-RabiRoute-Desktop.bat -NoBuild
+.\Start-RabiRoute-Desktop.bat -NoDesktopShell
+.\Start-RabiRoute-Desktop.bat -ManagerUrl http://127.0.0.1:8790
 ```
 
 ## 启动器不负责的事
@@ -122,9 +122,9 @@ POST http://127.0.0.1:8790/manager/desktop-lifecycle/start
 
 曾考虑但暂不采用的方案：
 
-- 从托盘直接杀 manager PID：MVP 阶段拒绝，因为它是 Windows 专属行为，也更容易留下子进程或不完整日志。
+- 从从 RabiRoute Desktop 直接杀 manager PID：MVP 阶段拒绝，因为它是 Windows 专属行为，也更容易留下子进程或不完整日志。
 - signal file：后续可以考虑，但观察延迟更高，也不如已有本地 HTTP API 直接。
-- 让托盘成为长期父进程：不采用。Node manager 保持可移植核心；Windows 的长期 owner 是只负责进程配对的独立监督器，托盘仍是表现层。
+- 让 Windows 界面成为长期父进程：不采用。Node manager 保持可移植核心；Windows 的长期 owner 是只负责 RabiRoute Desktop 运行态的独立监督器；桌面界面只负责表现。
 
 ## macOS 和 Linux
 
@@ -147,16 +147,16 @@ http://127.0.0.1:8790/
 当前只有便利启动器是 Windows 专属：
 
 ```text
-Start-RabiRoute-Tray.bat
+Start-RabiRoute-Desktop.bat
 ```
 
 未来 macOS/Linux 桌面入口应该是另一个平台启动器，而不是另一个 RabiRoute core。它应遵守同一组约定：
 
 1. 检测 `http://127.0.0.1:8790/meta`。
 2. 只有没有 manager 运行时，才启动 `node dist/manager.js`。
-3. 使用 `--manager-url` 启动托盘/浮动面板。
-4. 托盘退出始终调用 `POST /manager/shutdown`。
-5. shutdown 失败时，托盘不应静默退出，以免 Web 服务残留。
+3. 使用 `--manager-url` 启动 RabiRoute Desktop 的任务窗口。
+4. 用户从 RabiRoute Desktop 退出时始终调用 `POST /manager/shutdown`。
+5. shutdown 失败时，RabiRoute Desktop 保持可见并提示失败，以免本机后端残留。
 
 可能的平台启动器：
 
@@ -167,15 +167,15 @@ Start-RabiRoute-Tray.bat
 需要保持的代码边界：
 
 ```text
-可移植层：manager HTTP API、shutdown API、ManagerClient、DesktopRefreshService、desktop read-model DTO、通用 `qt_async`、LifecycleController、app_paths、Qt TaskWindow。托盘不直接加载角色文件仓储；它与 RibiWebGUI 共用 Manager 后端。
-平台适配层：启动脚本、打包、开机启动、OS 专属托盘可用性和启动行为。
+可移植层：manager HTTP API、shutdown API、ManagerClient、DesktopRefreshService、desktop read-model DTO、通用 `qt_async`、LifecycleController、app_paths、Qt TaskWindow。Windows 桌面界面不直接加载角色文件仓储；它与 RibiWebGUI 共用 Manager 后端。
+平台适配层：启动脚本、打包、登录启动、OS 专属系统托盘可用性和启动行为。
 ```
 
 ## Qt 计划与记忆面板
 
-`desktop/tray-task-window` 下的 PySide6/Qt 面板，对跨平台 Node manager 启动来说是可选的；但它属于 Windows “1+1” 桌面入口的一部分。Qt 是跨平台的，所以面板代码应继续可复用于 Windows、macOS 和 Linux。
+`desktop/tray-task-window` 下的 PySide6/Qt 面板，对跨平台 Node manager 启动来说是可选的；但它属于 RabiRoute Desktop 的内部界面模块。Qt 是跨平台的，所以面板代码应继续可复用于 Windows、macOS 和 Linux。
 
-需要托盘入口时，推荐本地准备方式：
+需要构建 RabiRoute Desktop 时，推荐本地准备方式：
 
 ```powershell
 py -m venv .venv-tray
@@ -192,7 +192,7 @@ py -m venv .venv-tray
 3. `py.exe -3`
 4. `python.exe`
 
-如果缺少 Python 或 PySide6，托盘进程会在 tray stderr 日志中给出清晰提示后退出；manager/WebGUI 仍保持可用。
+如果缺少 Python 或 PySide6，RabiRoute Desktop 启动会失败并留下明确日志；需要仅运行跨平台后端时，显式使用 `npm run start:manager`。
 
 没有系统托盘的桌面环境中，Qt app 应该仍然以普通窗口显示浮动面板。平台启动器负责判断这种体验对目标 OS/package 是否可接受。
 
@@ -205,10 +205,10 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 本地构建：
 
 ```powershell
-.\scripts\build-tray-exe.ps1
+.\scripts\build-desktop-exe.ps1
 ```
 
-这是 Windows 完整桌面运行包的唯一构建入口。脚本会运行 `npm run build`，确认后端 `dist/manager.js` 和前端 `ribiwebgui/dist/index.html` 都存在，再用 `RabiRoute-Tray.spec` 调用 PyInstaller，并把 `dist\RabiRoute-Tray.exe` 复制到仓库根目录方便本地测试。`RabiRoute-Tray.exe` 已被 Git 忽略。正式发布二进制前必须单独做一次发布脱敏检查，因为 PyInstaller 输出可能包含构建机路径。
+这是 Windows 完整桌面运行包的唯一构建入口。脚本会运行 `npm run build`，确认后端 `dist/manager.js` 和前端 `ribiwebgui/dist/index.html` 都存在，再用 `RabiRoute-Desktop.spec` 调用 PyInstaller，并把 `dist\RabiRoute-Desktop.exe` 复制到仓库根目录方便本地测试。`RabiRoute-Desktop.exe` 已被 Git 忽略。正式发布二进制前必须单独做一次发布脱敏检查，因为 PyInstaller 输出可能包含构建机路径。
 
 运行边界：
 
@@ -217,7 +217,7 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 - frozen 模式下，`desktop/tray-task-window/main.py` 会从 `Path(sys.executable).parent` 解析项目根目录。
 - 如果 manager 已经运行，exe 会复用它；如果 WebGUI 前端产物缺失或过期，exe 会尝试运行 `npm run webgui:build` 修复。
 - 如果 manager 没有运行，exe 会先确认/补齐后端和前端构建产物，再启动 `node dist/manager.js`，并拥有该进程的关闭权。
-- exe 确认 Manager 健康后会写入 `packaged-tray` 运行意图并启动同一个生命周期监督器；发布包中的托盘缺失时，监督器重新启动 packaged exe，而不是依赖系统 Python。
+- exe 确认 Manager 健康后会写入 `packaged-desktop` 运行意图并启动同一个生命周期监督器；发布包中的桌面界面缺失时，监督器重新启动 packaged exe，而不是依赖系统 Python。
 
 真实发布 Windows 桌面包前，需要确认：
 
@@ -232,7 +232,7 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 后续可能的打包方向：
 
 - GitHub Releases：`v*` tag 触发 `.github/workflows/release-windows.yml`，在干净的 Windows runner 上运行测试、构建、脱敏检查、安装包冒烟测试并发布资产。
-- Windows installer：`installer/RabiRoute.iss` 使用 Inno Setup 生成当前用户级 x64 安装器，内置 Node.js、托盘、Manager、WebGUI 和生产依赖；默认安装到 `%LOCALAPPDATA%\Programs\RabiRoute`。
+- Windows installer：`installer/RabiRoute.iss` 使用 Inno Setup 生成当前用户级 x64 安装器，内置 RabiRoute Desktop、Manager、WebGUI 和生产依赖；默认安装到 `%LOCALAPPDATA%\Programs\RabiRoute`。
 - Portable ZIP：和安装器使用同一份经过检查的 payload，适合免安装验证或手工迁移；发布时一并生成 `SHA256SUMS.txt`。
 - Electron shell：只有 WebGUI 真正需要桌面窗口能力时才值得考虑。
 
@@ -242,7 +242,7 @@ Qt 面板还按项目根目录实现了跨平台单实例锁。这个保护同�
 .\scripts\build-windows-release.ps1
 ```
 
-默认发布包只构建 RabiRoute 桌面运行所需的托盘、Manager、WebGUI、Node.js 和生产 npm 依赖，不构建或复制 RabiSpeech Windows 运行时，也不会安装 ASR/TTS Python 依赖或模型。语音插件的公开脚本仍保留在包内；需要语音功能的用户再进入 `plugin-adapters\rabi-speech` 运行 `scripts\install.ps1`，并按需选择模型。
+默认发布包只构建 RabiRoute 桌面运行所需的 RabiRoute Desktop、其 Manager 后端、WebGUI、Node.js 和生产 npm 依赖，不构建或复制 RabiSpeech Windows 运行时，也不会安装 ASR/TTS Python 依赖或模型。语音插件的公开脚本仍保留在包内；需要语音功能的用户再进入 `plugin-adapters\rabi-speech` 运行 `scripts\install.ps1`，并按需选择模型。
 
 维护者只有在明确要制作包含 RabiSpeech Windows 进程宿主的专用包时才传入：
 

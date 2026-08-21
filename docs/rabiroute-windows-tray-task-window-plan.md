@@ -6,7 +6,7 @@
 
 # RabiRoute Windows 托盘计划与记忆窗口方案
 
-> 状态：已实现边界记录。托盘的当前运行和打包事实以 [Windows 桌面启动与完整打包](windows-launcher-and-packaging.md) 及 `desktop/tray-task-window/` 为准。
+> 状态：已实现边界记录。RabiRoute Desktop 的当前运行和打包事实以 [Windows 桌面启动与完整打包](windows-launcher-and-packaging.md) 及 `desktop/tray-task-window/` 为准。
 
 本文档记录当前托盘窗口的产品边界。旧的任务目录结构已经废弃；文件事实源仍由 Manager 管理在角色目录下的 `plans/` 和 `memory/`，托盘不直接读文件，只消费与 RibiWebGUI 同源的 Manager API。
 

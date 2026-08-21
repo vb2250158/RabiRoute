@@ -10,7 +10,7 @@ param(
   [switch]$Once,
   [switch]$NoRepair,
   [switch]$IncludeDisabled,
-  [switch]$NoTrayRepair
+  [switch]$NoDesktopRepair
 )
 
 $ErrorActionPreference = "Stop"
@@ -243,7 +243,7 @@ function Start-ManagerIfNeeded {
   param([System.Collections.Generic.List[object]]$Issues)
   if ($NoRepair) { return }
   $managerJs = Join-Path $ProjectRoot "dist\manager.js"
-  $launcher = Join-Path $ProjectRoot "Start-RabiRoute-Tray.bat"
+  $launcher = Join-Path $ProjectRoot "Start-RabiRoute-Desktop.bat"
   if (-not (Test-Path $managerJs)) {
     Add-Issue $Issues "manager" "error" "Manager is unreachable and dist\manager.js is missing." "Cannot auto-start before build." $false $true
     return
@@ -276,7 +276,7 @@ function Start-ManagerIfNeeded {
   try {
     $recovery = Start-Process `
       -FilePath $launcher `
-      -ArgumentList @("-NoTray", "-NoOpen", "-NoBuild", "-UseExistingBuild", "-ReuseHealthyManager") `
+      -ArgumentList @("-NoDesktopShell", "-NoOpen", "-NoBuild", "-UseExistingBuild", "-ReuseHealthyManager") `
       -WorkingDirectory $ProjectRoot `
       -RedirectStandardOutput $managerOutLog `
       -RedirectStandardError $managerErrLog `
@@ -379,12 +379,12 @@ function Invoke-GatewayAction {
   }
 }
 
-function Get-TrayProcesses {
+function Get-DesktopShellProcesses {
   $scriptNeedle = "desktop\tray-task-window\main.py"
-  $exeNeedle = "rabiroute-tray.exe"
+  $exeNeedle = "rabiroute-desktop.exe"
   try {
     $matches = @(Get-CimInstance Win32_Process | Where-Object {
-      ($_.Name -eq "RabiRoute-Tray.exe") -or
+      ($_.Name -eq "RabiRoute-Desktop.exe") -or
       ($_.CommandLine -and ($_.CommandLine.ToLowerInvariant().Contains($scriptNeedle) -or $_.CommandLine.ToLowerInvariant().Contains($exeNeedle)))
     })
     $matchedPids = @{}
@@ -394,44 +394,44 @@ function Get-TrayProcesses {
     $roots = @($matches | Where-Object {
       -not $matchedPids.ContainsKey([int]$_.ParentProcessId)
     })
-    Write-HealthLog "Tray process query: matches=$($matches.Count) roots=$($roots.Count)"
+    Write-HealthLog "Desktop shell process query: matches=$($matches.Count) roots=$($roots.Count)"
     return $roots
   } catch {
-    Write-HealthLog "Tray process query failed: $($_.Exception.Message)"
+    Write-HealthLog "Desktop shell process query failed: $($_.Exception.Message)"
     return @()
   }
 }
 
-function Stop-DuplicateTrayProcesses {
+function Stop-DuplicateDesktopShellProcesses {
   param(
-    [array]$TrayProcesses,
+    [array]$DesktopShellProcesses,
     [System.Collections.Generic.List[object]]$Issues
   )
-  if ($TrayProcesses.Count -le 1) { return @($TrayProcesses) }
+  if ($DesktopShellProcesses.Count -le 1) { return @($DesktopShellProcesses) }
 
-  $pids = ($TrayProcesses | ForEach-Object { $_.ProcessId }) -join ", "
-  Add-Issue $Issues "tray" "warning" "Multiple tray processes were found." "Observed pid(s): $pids. Left them running because the tray may use a parent/child process group." $false $false
-  return @($TrayProcesses)
+  $pids = ($DesktopShellProcesses | ForEach-Object { $_.ProcessId }) -join ", "
+  Add-Issue $Issues "desktop" "warning" "Multiple RabiRoute Desktop processes were found." "Observed pid(s): $pids. Left them running because the desktop shell may use a parent/child process group." $false $false
+  return @($DesktopShellProcesses)
 }
 
-function Ensure-Tray {
+function Ensure-WindowsDesktop {
   param([System.Collections.Generic.List[object]]$Issues)
-  $trayProcesses = @(Get-TrayProcesses)
-  if ($trayProcesses.Count -gt 1 -and -not $NoRepair) {
-    $trayProcesses = Stop-DuplicateTrayProcesses $trayProcesses $Issues
+  $desktopShellProcesses = @(Get-DesktopShellProcesses)
+  if ($desktopShellProcesses.Count -gt 1 -and -not $NoRepair) {
+    $desktopShellProcesses = Stop-DuplicateDesktopShellProcesses $desktopShellProcesses $Issues
   }
-  if ($trayProcesses.Count -gt 0) {
+  if ($desktopShellProcesses.Count -gt 0) {
     return
   }
 
-  if ($NoRepair -or $NoTrayRepair) {
-    Add-Issue $Issues "tray" "warning" "RabiRoute tray process was not found." "NoRepair/NoTrayRepair mode; no auto-start." $false $false
+  if ($NoRepair -or $NoDesktopRepair) {
+    Add-Issue $Issues "desktop" "warning" "RabiRoute Desktop process was not found." "NoRepair/NoDesktopRepair mode; no auto-start." $false $false
     return
   }
 
-  $launcher = Join-Path $ProjectRoot "Start-RabiRoute-Tray.bat"
+  $launcher = Join-Path $ProjectRoot "Start-RabiRoute-Desktop.bat"
   if (-not (Test-Path $launcher)) {
-    Add-Issue $Issues "tray" "warning" "RabiRoute tray process was not found and launcher is missing." "" $false $true
+    Add-Issue $Issues "desktop" "warning" "RabiRoute Desktop process was not found and launcher is missing." "" $false $true
     return
   }
 
@@ -441,19 +441,19 @@ function Ensure-Tray {
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
       Start-Sleep -Seconds 2
-      $afterStart = @(Get-TrayProcesses)
+      $afterStart = @(Get-DesktopShellProcesses)
       if ($afterStart.Count -gt 0) { break }
     }
     if ($afterStart.Count -gt 1) {
-      $afterStart = Stop-DuplicateTrayProcesses $afterStart $Issues
+      $afterStart = Stop-DuplicateDesktopShellProcesses $afterStart $Issues
     }
     if ($afterStart.Count -gt 0) {
-      Add-Issue $Issues "tray" "warning" "RabiRoute tray process was not found." "Started Start-RabiRoute-Tray.bat -NoOpen -NoBuild." $true $false
+      Add-Issue $Issues "desktop" "warning" "RabiRoute Desktop process was not found." "Started Start-RabiRoute-Desktop.bat -NoOpen -NoBuild." $true $false
     } else {
-      Add-Issue $Issues "tray" "warning" "Tray process was still missing after auto-start." "Check the tray app manually." $false $true
+      Add-Issue $Issues "desktop" "warning" "RabiRoute Desktop process was still missing after auto-start." "Check RabiRoute Desktop manually." $false $true
     }
   } catch {
-    Add-Issue $Issues "tray" "warning" "Tray auto-start failed: $($_.Exception.Message)" "" $false $true
+    Add-Issue $Issues "desktop" "warning" "RabiRoute Desktop auto-start failed: $($_.Exception.Message)" "" $false $true
   }
 }
 
@@ -755,7 +755,7 @@ function Invoke-HealthCycle {
   $gateways = @()
   if ($meta) {
     Reset-ManagerRecoveryBackoff
-    Ensure-Tray -Issues $issues
+    Ensure-WindowsDesktop -Issues $issues
     try {
       $gateways = Get-Gateways
       Check-Gateways -Gateways $gateways -Issues $issues
@@ -791,7 +791,7 @@ try {
     exit 0
   }
 
-  Write-HealthLog "RabiRoute health watchdog started. manager=$ManagerUrl interval=${IntervalSeconds}s once=$Once noRepair=$NoRepair noTrayRepair=$NoTrayRepair"
+  Write-HealthLog "RabiRoute health watchdog started. manager=$ManagerUrl interval=${IntervalSeconds}s once=$Once noRepair=$NoRepair noDesktopRepair=$NoDesktopRepair"
 
   do {
     try {

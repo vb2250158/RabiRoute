@@ -229,7 +229,7 @@ GET /api/personas/messages/receipts/:deliveryId
 
 ```text
 明确发送 API：http://127.0.0.1:8790/api/agent/send
-明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"codex","sessionId":"<当前完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
+明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"primary_persona","sessionId":"<当前 Codex 主人格完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
 来源上下文（只用于核对来源，不可直接作为发送参数）：{"routeKind":"direct_at","messageId":"123","groupId":"456"}
 ```
 
@@ -244,7 +244,7 @@ POST /api/agent/send
 请求体固定包含：
 
 - `deliveryId`：本次业务发送的稳定 ID，重试时保持不变；
-- `sender.agentType`：调用发送接口的 Agent 产品类型，例如 `codex`；
+- `sender.agentType`：调用发送接口的 Agent 角色标识；
 - `sender.sessionId`：调用发送接口的 Agent 完整会话 ID；
 - `routeId`：精确的已启用 Route ID；
 - `channel`：发送渠道；
@@ -254,13 +254,15 @@ POST /api/agent/send
 - `tracking.requirementId`：可选，用于关联消息处理看板，不能决定发送目标；回复已登记的消息处理需求时必须填写；
 - `tracking.sendContextReviewToken`：消息处理需求在发送前完成最新群聊上下文核对后取得的短期凭证，只对同一需求、发送者会话、目标和正文有效。
 
+当主 Agent 为 Codex 且开启“仅允许主人格发送消息”Hook 时，唯一允许的发送方是绑定的 Codex 主人格任务：`sender.agentType=primary_persona`，且 `sender.sessionId` 必须与 `codexThreadId` 完全一致。其它情况下以注入的请求模板为准。
+
 QQ 群文本示例：
 
 ```json
 {
   "deliveryId": "send-example-001",
   "sender": {
-    "agentType": "codex",
+    "agentType": "primary_persona",
     "sessionId": "019f0000-0000-7000-8000-000000000001"
   },
   "routeId": "main",
@@ -363,7 +365,7 @@ POST /api/message-processing/requirements/:requirementId/send-context
   "proposedSend": {
     "deliveryId": "send-example-001",
     "sender": {
-      "agentType": "codex",
+      "agentType": "primary_persona",
       "sessionId": "019f0000-0000-7000-8000-000000000001"
     },
     "routeId": "main",
@@ -481,7 +483,8 @@ Manager 还会按 `record` 的类型读取对应计划、记忆或项目文档�
   "action": "send",
   "threadId": "<target-task-id>",
   "cwd": "C:/Path/To/Project",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "<message-agent-task-id>",
     "sessionName": "当前消息处理任务名称"
@@ -654,7 +657,7 @@ NapCat 群聊始终需要提交 `params.replyToMessageId`。能取得来源消�
 ```json
 {
   "deliveryId": "send-qq-progress-001",
-  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": {
@@ -680,7 +683,7 @@ Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息�
 ```json
 {
   "deliveryId": "send-qq-file-001",
-  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
   "routeId": "main",
   "channel": "napcat",
   "params": { "target": "group", "groupId": "456", "instanceId": "default", "replyToMessageId": "123" },
@@ -702,7 +705,7 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 ```json
 {
   "deliveryId": "send-rabilink-active-001",
-  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
   "routeId": "RabiLink",
   "channel": "rabilink",
   "params": { "proactive": true, "source": "scheduler", "targetDeviceKinds": ["glasses"] },
@@ -719,7 +722,7 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 ```json
 {
   "deliveryId": "send-wecom-001",
-  "sender": { "agentType": "codex", "sessionId": "<当前完整会话 ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<当前 Codex 主人格完整会话 ID>" },
   "routeId": "main",
   "channel": "wecom",
   "params": { "chatId": "wrCHATID", "userId": "zhangsan", "reqId": "REQ_ID" },
@@ -821,11 +824,15 @@ POST http://127.0.0.1:8790/api/agent/threads
   "action": "create",
   "title": "[Example][Research] 比较两种接入方案",
   "cwd": "C:\\Path\\To\\Your\\Project",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "019f0000-0000-7000-8000-000000000010",
     "sessionName": "当前调查会话"
   },
+  "sourceThreadId": "019f0000-0000-7000-8000-000000000010",
+  "sourceAgentType": "agent",
+  "responsePolicy": "none",
   "prompt": "读取现有实现和项目规范，比较两种方案并给出验证计划；未经明确授权不要修改文件。",
   "sandbox": "workspace-write"
 }
@@ -839,7 +846,8 @@ POST http://127.0.0.1:8790/api/agent/threads
   "threadId": "019f0000-0000-7000-8000-000000000001",
   "cwd": "C:\\Path\\To\\Your\\Project",
   "sandbox": "workspace-write",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "019f0000-0000-7000-8000-000000000002",
     "sessionName": "计划秘书会话"
@@ -852,16 +860,41 @@ POST http://127.0.0.1:8790/api/agent/threads
 }
 ```
 
-所有带有非空 `prompt` 的 `create` 和 `send` 都必须提供 `deliverySource`，不能省略。`deliverySource.agentAdapter` 填实际 Agent 端，例如 `codex`、`dsh`、`copilotCli`、`marvis` 或 `astrbot`；`deliverySource.sessionId` 填实际来源会话完整 ID，`sessionName` 填当前会话名称，无法取得名称时可省略，界面会回退显示会话 ID。Agent 间投递还必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`，且 `deliverySource.sessionId` 必须等于 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
+所有带有非空 `prompt` 的 `create` 和 `send` 都必须提供 `messageSource`。字段 `type` 必填，统一支持四种消息源：
 
-正式回复仍使用同一个 `send` 动作。回复方必须把 `inReplyToRequestId`、`result` 和 `nextAction` 送回原请求任务，并再次填写 `responsePolicy`：如果新的下一步还要求原请求方处理后返回，使用 `required` 并填写新的 `responseInstruction`；如果本次往返到此结束，使用 `none`。
+| `messageSource.type` | 必填身份 | 可选补充 |
+| --- | --- | --- |
+| `message_adapter` | `messageAdapter`、`conversationType`、`conversationId`、`messageId`，以及 `senderName` 或 `senderId` | `conversationName`、`messageGroupId`、消息路线名称/ID |
+| `agent` | `agentAdapter`、`sessionName`、完整 `sessionId` | `agentType`、`workspace` |
+| `plan` | `planName`、`planId` | 只有实际 Agent 发起且能核对时才附带 `sourceAgent` |
+| `system` | `eventType`、`eventName`、`eventId` | `actorType`、`actorName`、`actorId`、消息路线名称/ID |
+
+RabiRoute 渲染后的正文固定从以下两段开始，协作要求、回复合同、事件信息和最近消息只能放在它们之后：
+
+```text
+[消息源]
+消息源类型：<消息端 | Agent | 计划 | 系统>
+<该类型的名称、完整 ID、会话、计划或路线字段>
+
+[消息内容]
+<prompt>
+```
+
+Agent 调用线程桥时通常使用 `type=agent`。`agentAdapter` 填实际 Agent 端，例如 `codex`、`dsh`、`copilotCli`、`marvis` 或 `astrbot`；`sessionName` 和完整 `sessionId` 都不能省略。Agent 间投递还必须提供自己的完整 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`，且 `messageSource.sessionId` 必须等于 `sourceThreadId`。`sourceAgentType` 可为 `primary_persona`、`message_processing`、`plan_secretary`、`plan_agent` 或通用的 `agent`；`responsePolicy` 只能是 `required` 或 `none`。选择 `required` 时还必须填写 `responseInstruction`，Manager 会生成 `requestId` 并把正式回复参数写进目标任务收到的内容。选择 `none` 表示本次投递不要求目标返回。
+
+带正文的 `create` 与 `send` 使用同一来源核对规则。`type=agent` 时两者都必须提供 `sourceThreadId`；Manager 从实际 Codex Desktop 或 DSH owner 读取来源会话名称并覆盖调用方提交的旧名称。计划进展、审批和 QA 等 Manager 计划事件只显示计划名称和计划 ID；只有计划任务本人回传结果时才附带并核对 `sourceAgent`。
+
+`contextBlocks` 排在消息内容之后，`controlBlocks` 再排在上下文之后。初始化、回复合同和协作要求应放入控制块。两个字段都不能包含 `[消息源]`、`[消息内容]` 或 `[投递源]`。旧 `[投递源]`、旧嵌套信封和旧 Agent 回复会自动迁移；旧重放记录无法还原来源时显示“历史投递记录”，不猜来源身份。
+
+正式回复仍使用同一个 `send` 动作。回复方必须把 `inReplyToRequestId`、`result` 和 `nextAction` 送回原请求任务，并再次填写 `responsePolicy`：如果新的下一步还要求原请求方处理后返回，使用 `required` 并填写新的 `responseInstruction`；如果本次往返到此结束，使用 `none`。回复中的 `messageSource.agentAdapter`、`messageSource.sessionId`、`sourceThreadId` 和 workspace 必须描述当前正在回复的接收会话；`inReplyToRequestId` 单独指向原请求，不能把原请求会话或回复目标写成回复来源。
 
 ```json
 {
   "action": "send",
   "threadId": "019f0000-0000-7000-8000-000000000002",
   "cwd": "C:\\Path\\To\\Your\\Project",
-  "deliverySource": {
+  "messageSource": {
+    "type": "agent",
     "agentAdapter": "codex",
     "sessionId": "019f0000-0000-7000-8000-000000000001",
     "sessionName": "计划业务会话"
@@ -880,12 +913,12 @@ POST http://127.0.0.1:8790/api/agent/threads
 
 Desktop 偶尔会在消息已经写入目标任务后才返回启动或追加轮次超时。Manager 会用正文中的唯一 `deliveryId` 回读目标任务最近的 rollout：确认该标记已经写入时，仍按送达成功提交请求/回复状态；没有标记时才返回可重试失败。调用方遇到超时不得立即重复发送，应先读取请求状态和目标任务最近一轮。
 
-Agent 间投递时，Manager 先按 `sourceThreadId` 读取 Desktop 状态并核对任务存在、ID 一致且未归档，再通过 `codexDesktopBridge.ts` 的统一任务读取模型取得左侧聊天栏当前名称。`agentThreads.ts`、消息处理 Agent、心跳和来源模板不得各自读取或覆盖另一份任务名。所有带有非空 `prompt` 的投递正文前都会显示“投递源、Agent 端、来源会话、来源会话 ID”；Agent 间投递还会显示来源 Agent 和来源工作目录。RabiRoute 自动生成的提醒、初始化消息和系统通知也必须携带对应的来源会话，不能省略 `deliverySource`。
+Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapter + sourceThreadId` 向实际 owner 核对来源会话。Codex 读取 Desktop 任务状态和左侧聊天栏名称；DSH 通过 apiproxy `session.list` 读取会话名称、工作目录和运行状态。来源不存在、工作目录冲突或来源 ID 与 `messageSource.sessionId` 不一致时失败关闭。所有 RabiRoute 非空投递都先显示 `[消息源]`，再显示 `[消息内容]`。消息端来源显示消息端、会话、发送者和消息 ID；Agent 来源显示 Agent 端、会话名称和完整会话 ID；计划来源显示计划名称和计划 ID；系统来源显示事件类型、名称和 ID。提醒、初始化消息、RabiLink 复盘和重放也使用同一信封。
 
 安全边界：
 
-- `create` / `send` 的 `cwd` 必须属于当前 RabiRoute 配置中已有的 Codex 工作区；不能用该接口在任意路径启动任务。
-- 所有带有非空 `prompt` 的 `create` / `send` 都必须提供 `deliverySource.agentAdapter` 和 `deliverySource.sessionId`；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `deliverySource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以 Desktop 查询结果或来源端填写的 `sessionName` 为准。
+- `create` / `send` 的 `cwd` 必须属于当前 RabiRoute 已配置的 Codex 或 DSH 工作区；不能用线程桥在任意路径启动会话。
+- 所有带有非空 `prompt` 的 `create` / `send` 都必须提供完整 `messageSource`。`type=agent` 时，`agentAdapter`、`sessionName` 和完整 `sessionId` 都必填；Agent 互投还必须提供可核对的 `sourceThreadId`，并保证它与 `messageSource.sessionId` 相同。`sourceAgentType` 只声明发送方当前职责，任务名以 Desktop 查询结果为准。
 - Agent 互投正文必须是针对目标任务重新编写的交接内容。Manager 拒绝含 `[rabi:bind]`、消息处理 Agent 初始化或计划秘书初始化的正文，也拒绝来源与目标为同一任务；整份注入上下文不能跨任务复制。消息处理 Agent 的任务 ID如果与主人格 ID相同，消息池会拒绝初始化和投递。
 - `sandbox` 字段仅为接口兼容参数，不能覆盖目标 Desktop 任务的模型、工具、沙箱或审批；这些能力以 Desktop owner 为唯一真源。
 - 创建线程使用固定的调查边界；没有明确实施授权时，只能调查、整理证据和输出方案。
@@ -895,9 +928,9 @@ Agent 间投递时，Manager 先按 `sourceThreadId` 读取 Desktop 状态并核
 - `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。
 - 创建调用超时后，先用 `action=list + lookupMode=state_db + 原任务名` 从本地任务索引回读。这个模式不启动 app-server 元数据扫描，适合判断慢创建是否稍后产生了任务；完整任务列表仍使用默认 `lookupMode=complete`。
 - Agent 正式回复中的 workspace 使用与 Codex 任务身份相同的规范化规则比较；Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式不会因为字符串写法不同而被误判为其它工作区。
-- 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，主人格、计划 Agent、计划秘书和消息处理 Agent 使用 `send_message_to_thread`、`handoff_thread`、`create_thread` 或 `fork_thread` 等 Codex 持久任务工具时，`PreToolUse` Hook 会在执行前拒绝并说明上述 Rabi 参数。临时子 Agent 的协作工具不属于这项限制。关闭开关只停止这项绕过检查；已经通过 Rabi 建立的待回复请求仍继续检查和提醒。
-- Manager 线程桥最终仍投给同一个 Desktop owner，不是执行 fallback，也不是另一个 Runtime。
-- Desktop 未启动、IPC 不可用或目标任务无法加载时必须返回失败；不得转给隔离 app-server、Codex CLI 或共享端口继续执行。
+- 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，Codex Hook 会拒绝绕过 Rabi 的持久任务工具；DSH `RabiRoute Agent` 插件会拒绝 Shell 直接调用 `/api/agent/threads`、`/api/agent/send` 或 `session.prompt`。两端都必须使用线程桥并填写 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。临时子 Agent 的本地协作不属于这项限制；关闭开关只停止绕过检查，已有待回复请求仍继续检查和提醒。
+- Manager 线程桥最终投给目标会话的同一个 owner：Codex 使用 Desktop IPC，DSH 使用该会话的 apiproxy owner。两者都不启动或改投备用 Runtime。
+- Codex Desktop 未启动、IPC 不可用或目标任务无法加载时返回失败；DSH Endpoint 不可用、会话不存在或工作目录冲突时也返回失败。两端都不得转给另一 Agent adapter 或备用 Runtime。
 
 ## 计划接口
 

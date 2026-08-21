@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  archiveCompletedPlans,
   createPlan,
   createRecentMemory,
   completeMemoryConsolidation,
@@ -13,6 +14,7 @@ import {
   listActiveRecentMemories,
   listArchivedMemories,
   listConsolidatedMemories,
+  listPlanHistory,
   listPlans,
   listPlansAsync,
   listRecentMemories,
@@ -35,6 +37,7 @@ import {
   updateRecentMemory,
   validateRoleKnowledge
 } from "./roleKnowledge.js";
+import { appendPlanFeedback, listPlanFeedback} from "./planFeedback.js";
 
 function makeRoleDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-"));
@@ -77,6 +80,59 @@ test("plan list cache is invalidated by canonical create and update writes", () 
 
   updatePlan(roleDir, created.id, { title: "Updated cache plan" });
   assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "Updated cache plan");
+});
+
+test("plan history keeps snapshots after updates and archive moves", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    id: "history-plan",
+    title: "保留审批留痕",
+    focus: "验证计划版本记录",
+    status: "已完成",
+    steps: [{ id: "approve", title: "审批", status: "已完成", approvalRequest: {
+      approver: "负责人",
+      request: "批准计划留痕实现",
+      recommendation: "按步骤保留合同",
+      alternatives: ["只保留当前状态"],
+      reason: "后续 Agent 需要复核",
+      files: [{ path: "src/roleKnowledge.ts", action: "modify", change: "写入计划历史" }],
+      commands: [],
+      changes: [],
+      validation: ["检查历史接口返回"],
+      rollback: ["保留当前计划文件"],
+      outOfScope: ["删除旧记录"],
+      requestedAt: "2026-08-20T00:00:00.000Z",
+      responseStatus: "approved"
+    }}],
+    keywords: ["留痕"]
+  });
+  appendPlanFeedback(roleDir, {
+    id: "history-feedback",
+    roleId: "Role",
+    planId: plan.id,
+    planTitle: plan.title,
+    stepId: "approve",
+    stepTitle: "审批",
+    kind: "approval_suggestion",
+    author: "user",
+    source: "webgui",
+    text: "批准并保留完整记录。",
+    attachments: [],
+    planAttachments: [],
+    createdAt: "2026-08-20T00:00:00.000Z",
+    updatedAt: "2026-08-20T00:00:00.000Z",
+    deliveryStatus: "record_only"
+  });
+  updatePlan(roleDir, plan.id, { title: "保留审批和引导留痕" });
+  const archived = archiveCompletedPlans(roleDir, -1);
+
+  const history = listPlanHistory(roleDir, plan.id);
+  assert.deepEqual(history.map((item) => item.kind), ["created", "updated", "archived"]);
+  assert.equal(history[0]?.after.steps[0]?.approvalRequest?.request, "批准计划留痕实现");
+  assert.equal(history[1]?.before?.title, "保留审批留痕");
+  assert.equal(history[2]?.after.status, "已归档");
+  assert.equal(archived[0]?.id, plan.id);
+  assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.text, "批准并保留完整记录。");
 });
 
 test("plan writes reject presentation-only lifecycle labels as top-level status", () => {

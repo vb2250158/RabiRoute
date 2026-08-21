@@ -1,4 +1,4 @@
-import type { RoleMemory, RoleMemoryPayload, RolePlan, RolePlanFeedback } from "./types";
+import type { RoleMemory, RoleMemoryPayload, RolePlan, RolePlanFeedback, RolePlanHistoryRecord } from "./types";
 import type { PlanFeedbackAttachmentUpload } from "@shared/planFeedbackContract";
 import { FALLBACK_PLAN_PRESENTATION_PALETTE, normalizePlanPresentationPalette } from "./planPresentationStyles";
 import { knowledgeItemMatchesQuery } from "./knowledgeSearch";
@@ -61,7 +61,7 @@ export type PlanAgentSessionStatus =
 export type PlanAgentBindingStatus = {
   role: PlanAgentRole;
   configured: boolean;
-  agentType: "codex";
+  agentType: "codex" | "dsh";
   threadId: string;
   threadTitle: string;
   workspace: string;
@@ -196,6 +196,13 @@ export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePl
   return { plans: plans.map(normalizeRolePlanFromManager), memory };
 }
 
+export async function loadPlanHistory(roleId: string, planId: string): Promise<RolePlanHistoryRecord[]> {
+  const data = await managerData<{ records?: RolePlanHistoryRecord[] }>(
+    `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}/history`
+  );
+  return Array.isArray(data.records) ? data.records : [];
+}
+
 export async function loadPlanFeedback(roleId: string, planId: string): Promise<RolePlan["approval"]> {
   const data = await managerData<RolePlan["approval"] & { records?: RolePlanFeedback[] }>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}/feedback`
@@ -307,7 +314,7 @@ export async function openPlanAgentTask(
   roleId: string,
   planId: string,
   role: PlanAgentRole
-): Promise<{ opened: true; threadId: string; threadTitle: string; workspace: string }> {
+): Promise<{ opened: true; agentType: "codex" | "dsh"; threadId: string; threadTitle: string; workspace: string }> {
   return managerData(
     `/api/roles/${encodeURIComponent(roleId)}/plan-agents/${encodeURIComponent(planId)}/open`,
     {

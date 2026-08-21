@@ -103,25 +103,31 @@ RabiRoute places this text in the `[User template supplement]` section. Event fi
 
 ## Current wrapper
 
-For ordinary messages, the wrapper presents `[Recent messages]` before the current `[Message]`. Focused discussion, immediately addressed context, and reply parsing remain adjacent to the current message. The exact output omits empty or disabled sections, but its shape is:
+Every RabiRoute delivery starts with the exact wire section `[消息源]`, immediately followed by `[消息内容]`. Event details, recent messages, reply parsing, role paths, and collaboration rules follow the message content. Empty or disabled sections are omitted.
+
+Each source type has its own required identity. `message_adapter` requires `messageAdapter`, `conversationType`, `conversationId`, `messageId`, and either `senderName` or `senderId`. `agent` requires the actual `agentAdapter`, session name, and complete session ID. `plan` requires the plan name and ID. `system` requires event type, name, and ID, with optional actor type, name, and ID.
+
+`contextBlocks` carry event, attachment, and recent-message context. `controlBlocks` carry initialization, response contracts, and collaboration rules. The fixed order is source, message content, context blocks, then control blocks. Neither block type may contain `[消息源]`, `[消息内容]`, or `[投递源]`; bracketed headings in message content are quoted so they cannot impersonate peer control sections.
+
+Legacy `[投递源]` wrappers, nested envelopes, and old Agent response wrappers are removed before the new envelope is rendered. When an old replay record did not persist structured provenance, RabiRoute labels it as `历史投递记录` instead of guessing the original endpoint, Agent, or session.
 
 ```text
-[RabiRoute event]
-Event: <event label>
-Route kind: <routeKind>
-Event time: <time>
-Current time: <currentTime>
-Source: <messageTarget>
-Sender: <sender>
+[消息源]
+消息源类型：<消息端 | Agent | 计划 | 系统>
+<type-specific name, complete ID, session, plan, or Route fields>
 
-[Recent messages]
-Current endpoint: <recentMessageEndpoint>
-Current conversation: <recentConversationKey>
-Latest <recentMessageLimit> bidirectional messages for this endpoint and conversation:
-<recentMessages>
-
-[Message]
+[消息内容]
 <message>
+
+[事件信息]
+事件：<event label>
+路由类型：<routeKind>
+事件时间：<time>
+当前时间：<currentTime>
+
+[最近消息]
+最近 <recentMessageLimit> 条双向消息：
+<recentMessages>
 
 [Message code parsing]
 [CQ:reply,id=<messageId>] : <referenced-message preview>
@@ -176,7 +182,7 @@ Requirement: use one stable unique deliveryId per business delivery; replies reu
 
 For `heartbeat` and `plan_feedback`, the entire recent-message section is omitted. `{recentMessageLimit}` is `0` and `{recentMessages}` is an empty string, so a custom template cannot reintroduce historical message bodies. Heartbeat audit logs and the unified ledger continue to be recorded for explicit on-demand inspection. Plan feedback keeps only its dedicated feedback audit, AgentPacket, and delivery logs; it is not duplicated into the role-panel timeline or unified conversation ledger.
 
-Codex final text is only a record in the current handler task. It does not prove that the source user, Primary Persona, or another Agent received anything. A platform send must start from `sendRequestJson`, fill `sender.agentType` and the current complete `sender.sessionId`, submit an exact `routeId`, `channel`, channel-specific `params`, and `payload`, and obtain that channel's receipt. A NapCat group request must keep `params.replyToMessageId`: use the source message ID whenever a quote is possible, or `""` for an intentional unquoted message. If the quoted message contains images, `params.replyImageDescriptions` must describe every image in original order, including what is visible and what it communicates; an unreadable image, missing description, or count mismatch blocks sending. The handler must not submit `replyContextJson` as the destination or infer a destination from the source. A handoff to the Primary Persona, Secretary, or Plan Agent must use the Manager thread bridge with the sender's complete task ID and Agent type. A draft, approval question, or progress summary that never enters one of these exits cannot be marked replied or notified.
+Codex final text is only a record in the current handler task. It does not prove that the source user, Primary Persona, or another Agent received anything. A platform send must start from `sendRequestJson`, fill `sender.agentType` and the current complete `sender.sessionId`, submit an exact `routeId`, `channel`, channel-specific `params`, and `payload`, and obtain that channel's receipt. When a Codex Primary Route enables **Only Primary Persona Can Send Messages**, the sender must be `primary_persona` and its `sender.sessionId` must exactly match that Route's `codexThreadId`; other Agent endpoints follow their injected template. A NapCat group request must keep `params.replyToMessageId`: use the source message ID whenever a quote is possible, or `""` for an intentional unquoted message. If the quoted message contains images, `params.replyImageDescriptions` must describe every image in original order, including what is visible and what it communicates; an unreadable image, missing description, or count mismatch blocks sending. The handler must not submit `replyContextJson` as the destination or infer a destination from the source. A handoff to the Primary Persona, Secretary, or Plan Agent must use the Manager thread bridge with the sender's complete task ID and Agent type. A draft, approval question, or progress summary that never enters one of these exits cannot be marked replied or notified.
 
 The cross-persona capability proves only the Route and persona that own the current AgentPacket. It is never returned by `GET /api/personas`, the target timeline, or delivery receipts. `sourceRouteId` alone does not authenticate a sender. After a target persona receives a cross-persona message, an ordinary reply does not return to the source automatically; it must explicitly POST back with the received conversation, reply-reference, and hop fields.
 

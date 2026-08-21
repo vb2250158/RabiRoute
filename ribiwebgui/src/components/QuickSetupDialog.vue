@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterType } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
-import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
+import { bindAgentSessionsForSave } from "@shared/codexSessionBinding";
 import PersonaAvatar from "./PersonaAvatar.vue";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { copyTextToClipboard } from "../clipboard";
@@ -861,9 +861,14 @@ async function apply() {
   applySaving.value = true;
     applyError.value = "";
   try {
-    if (selectedAgent.value === "codex") {
-      if (!form.codexThreadName.trim()) form.codexThreadName = fallbackCodexThreadName();
-      await bindCodexSessionForSave(form, async (request) => {
+    if (selectedAgent.value === "codex" && !form.codexThreadName.trim()) {
+      form.codexThreadName = fallbackCodexThreadName();
+    }
+    if (selectedAgent.value === "dsh" && !form.dshSessionName.trim()) {
+      form.dshSessionName = fallbackCodexThreadName();
+    }
+    if (selectedAgent.value === "codex" || selectedAgent.value === "dsh") {
+      await bindAgentSessionsForSave(form, async (request) => {
         const response = await fetch("/api/agent/threads", {
           method: "POST",
           headers: { "content-type": "application/json" },

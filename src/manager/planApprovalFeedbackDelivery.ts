@@ -1,9 +1,13 @@
 import { planFeedbackResponseId, type PlanFeedbackRecord } from "../planFeedback.js";
 import type { PlanItem } from "../roleKnowledge.js";
+import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 
 export type PlanApprovalFeedbackTaskRequest = {
+  agentAdapter: "codex" | "dsh";
   threadId: string;
+  title: string;
   cwd: string;
+  createIfMissing: true;
   prompt: string;
 };
 
@@ -233,8 +237,8 @@ async function sendToControl(
 export async function deliverPlanApprovalFeedback(
   options: DeliverPlanApprovalFeedbackOptions
 ): Promise<PlanApprovalFeedbackDeliveryResult> {
-  const binding = options.plan.taskBinding;
-  if (!binding?.sessionId?.trim() || !binding.workspace?.trim()) {
+  const taskRequest = planTaskDeliveryTarget(options.plan);
+  if (!taskRequest) {
     await sendToControl(options, {
       kind: "full_feedback",
       text: controlFeedbackText(options)
@@ -245,9 +249,8 @@ export async function deliverPlanApprovalFeedback(
     };
   }
 
-  const taskRequest = {
-    threadId: binding.sessionId.trim(),
-    cwd: binding.workspace.trim(),
+  const deliveryTaskRequest: PlanApprovalFeedbackTaskRequest = {
+    ...taskRequest,
     prompt: boundTaskPrompt(options)
   };
   const retryAttempts = Math.max(1, Math.floor(options.directRetryAttempts ?? 12));
@@ -258,12 +261,12 @@ export async function deliverPlanApprovalFeedback(
 
   for (let attempt = 0; attempt < retryAttempts; attempt += 1) {
     try {
-      await options.sendToTask(taskRequest);
+      await options.sendToTask(deliveryTaskRequest);
       lastError = undefined;
       break;
     } catch (error) {
       lastError = error;
-      const readback = await readTaskDeliveryAfterError(options, taskRequest, readbackAttempts, retryDelayMs);
+      const readback = await readTaskDeliveryAfterError(options, deliveryTaskRequest, readbackAttempts, retryDelayMs);
       if (readback === "accepted") {
         lastError = undefined;
         break;

@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { registerPageSaveAction } from "../pageSaveAction";
 
 const routeDir = ref("");
 const rolesDir = ref("");
 const saving = ref(false);
 const saved = ref(false);
 const error = ref("");
+const loaded = ref(false);
+const dirty = ref(false);
+const hydrating = ref(true);
+let unregisterPageSaveAction: (() => void) | undefined;
 
 async function load() {
   try {
@@ -13,13 +18,19 @@ async function load() {
     const data = await res.json();
     routeDir.value = data.routeDir ?? "";
     rolesDir.value = data.rolesDir ?? "";
+    loaded.value = true;
+    await nextTick();
   } catch (e) {
     error.value = String(e);
+  } finally {
+    hydrating.value = false;
   }
 }
 
-async function save() {
+async function save(): Promise<void> {
+  if (!loaded.value || saving.value) return;
   saving.value = true;
+  hydrating.value = true;
   error.value = "";
   saved.value = false;
   try {
@@ -33,14 +44,26 @@ async function save() {
     routeDir.value = data.routeDir ?? "";
     rolesDir.value = data.rolesDir ?? "";
     saved.value = true;
+    await nextTick();
+    dirty.value = false;
   } catch (e) {
-    error.value = String(e);
+    error.value = e instanceof Error ? e.message : String(e);
+    throw e;
   } finally {
     saving.value = false;
+    hydrating.value = false;
   }
 }
 
-onMounted(load);
+watch([routeDir, rolesDir], () => {
+  if (loaded.value && !hydrating.value) dirty.value = true;
+});
+
+onMounted(() => {
+  unregisterPageSaveAction = registerPageSaveAction({ dirty, ready: loaded, saving, save });
+  void load();
+});
+onBeforeUnmount(() => unregisterPageSaveAction?.());
 </script>
 
 <template>
@@ -49,9 +72,6 @@ onMounted(load);
       <div>
         <h1 class="page-title">航线与目录</h1>
         <div class="page-subtitle">全局目录设置，影响所有路由。</div>
-      </div>
-      <div class="page-actions">
-        <v-btn color="primary" :loading="saving" @click="save">保存</v-btn>
       </div>
     </div>
 

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import PerformanceTimelineChart from "../components/PerformanceTimelineChart.vue";
 import { managerEventSource } from "../managerApi";
 import { updateFrontendPerformanceConfig } from "../performance/frontendPerformanceReporter";
 import { loadPerformanceConfig, loadPerformanceLogs, loadPerformanceSummary, savePerformanceConfig } from "../performance/performanceClient";
 import { defaultPerformanceMonitoringConfig, type PerformanceMonitoringConfig, type PerformanceSample, type PerformanceSeriesPoint, type PerformanceSummary } from "@shared/performanceContract";
+import { registerPageSaveAction } from "../pageSaveAction";
 
 type PerformanceChartSeries = {
   id: string;
@@ -21,6 +22,10 @@ const loading = ref(false);
 const saving = ref(false);
 const error = ref("");
 const saved = ref("");
+const configLoaded = ref(false);
+const configDirty = ref(false);
+const configHydrating = ref(true);
+let unregisterPageSaveAction: (() => void) | undefined;
 let events: EventSource | undefined;
 let refreshTimer: number | undefined;
 
@@ -94,7 +99,13 @@ async function refresh(): Promise<void> {
     ]);
     summary.value = nextSummary;
     recentLogs.value = logs;
-    config.value = { ...nextSummary.config };
+    if (!configLoaded.value) {
+      configHydrating.value = true;
+      config.value = { ...nextSummary.config };
+      configLoaded.value = true;
+      await nextTick();
+      configHydrating.value = false;
+    }
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : String(loadError);
   } finally {
@@ -103,7 +114,9 @@ async function refresh(): Promise<void> {
 }
 
 async function saveConfig(): Promise<void> {
+  if (!configLoaded.value || saving.value) return;
   saving.value = true;
+  configHydrating.value = true;
   error.value = "";
   saved.value = "";
   try {
@@ -112,20 +125,38 @@ async function saveConfig(): Promise<void> {
     updateFrontendPerformanceConfig(next);
     saved.value = next.enabled ? "性能记录已开启" : "性能记录已关闭";
     await refresh();
+    await nextTick();
+    configDirty.value = false;
   } catch (saveError) {
     error.value = saveError instanceof Error ? saveError.message : String(saveError);
+    throw saveError;
   } finally {
     saving.value = false;
+    configHydrating.value = false;
   }
 }
+
+watch(config, () => {
+  if (configLoaded.value && !configHydrating.value) configDirty.value = true;
+}, { deep: true });
 
 watch(rangeMs, () => { void refresh(); });
 
 onMounted(async () => {
+  unregisterPageSaveAction = registerPageSaveAction({
+    dirty: configDirty,
+    ready: configLoaded,
+    saving,
+    save: saveConfig
+  });
   try {
     config.value = { ...await loadPerformanceConfig() };
+    configLoaded.value = true;
+    await nextTick();
   } catch {
     // Summary request below reports the actionable error.
+  } finally {
+    configHydrating.value = false;
   }
   await refresh();
   events = managerEventSource("/api/performance/events");
@@ -135,6 +166,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   events?.close();
   if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+  unregisterPageSaveAction?.();
 });
 </script>
 
@@ -190,7 +222,6 @@ onBeforeUnmount(() => {
         <v-text-field v-model.number="config.retentionHours" type="number" min="1" max="720" label="保留时间（小时）" density="compact" />
         <v-text-field v-model.number="config.maxDiskMb" type="number" min="16" max="4096" label="最大空间（MB）" density="compact" />
         <v-text-field v-model.number="config.slowOperationMs" type="number" min="100" max="120000" label="慢操作阈值（毫秒）" density="compact" />
-        <v-btn color="primary" :loading="saving" prepend-icon="mdi-content-save-outline" @click="saveConfig">保存设置</v-btn>
       </div>
     </section>
 

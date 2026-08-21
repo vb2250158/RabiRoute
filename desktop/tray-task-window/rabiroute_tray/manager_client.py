@@ -53,7 +53,10 @@ class SelectionSpeechSettings:
 class DesktopSettings:
     screenshot_enabled: bool = False
     screenshot_shortcut: str = "Ctrl+Shift+S"
+    screenshot_clipboard_shortcut: str = "F3"
+    screenshot_auto_copy: bool = True
     autostart: bool = False
+    theme: str = "system"
 
 
 @dataclass(frozen=True)
@@ -220,7 +223,10 @@ class ManagerClient:
         return DesktopSettings(
             screenshot_enabled=screenshot.get("enabled") is True,
             screenshot_shortcut=str(screenshot.get("shortcut") or "Ctrl+Shift+S").strip()[:80],
+            screenshot_clipboard_shortcut=str(screenshot.get("clipboardShortcut") or "F3").strip()[:80],
+            screenshot_auto_copy=screenshot.get("autoCopy", True) is not False,
             autostart=row.get("autostart") is True,
+            theme=str(row.get("theme") or "system").strip().lower() if str(row.get("theme") or "system").strip().lower() in {"system", "light", "dark"} else "system",
         )
 
     def speech_models(self) -> list[dict[str, Any]]:

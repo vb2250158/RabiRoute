@@ -235,11 +235,11 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 旧计划无需批量迁移：Manager 在读取边界重新归一化阻塞事实。旧文件中没有完整待决审批合同的 `isBlocked=true` 会自动降级为进行中，并在下一次规范 POST/PATCH 时清理；已有 `blockedBy` 继续作为待确认说明保留。系统不会猜测审批人、来源、推荐方案、备选或请求时间，Agent 必须根据真实消息和调查结果补齐合同。
 
-`secretaryBinding` 是计划当前控制面负责人的精确绑定，和业务 `taskBinding` 分开。目前只支持 Codex 持久计划秘书，保存完整秘书任务 ID、展示名称、workspace 和分配时间。Manager 首次需要投递计划控制通知时从当前 Route 已启用的秘书池稳定选择一个并保存；秘书执行治理 `begin/finish` 时会把实际负责者更新为自己。已绑定秘书仍在当前池中时固定复用，只有绑定失效或秘书被移出配置后才重新分配。
+`secretaryBinding` 是计划当前控制面负责人的精确绑定，和业务 `taskBinding` 分开。它保存绑定 Agent 类型、完整会话 ID、展示名称、workspace、可选 DSH apiproxy 地址和分配时间。Manager 首次需要投递计划控制通知时从当前 Route 已启用的秘书池稳定选择一个并保存；秘书执行治理 `begin/finish` 时会把实际负责者更新为自己。已绑定秘书仍在当前池中时固定复用，只有绑定失效或秘书被移出配置后才重新分配。
 
-`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。目前只支持 `agentType=codex`。`sessionId` 是必填的完整执行任务 ID；`sessionTitle` 只用于展示，`workspace` 用于 Stop Hook 的安全校验。`completionHook.enabled=true` 时，Manager 在该会话完成一轮后处理官方最终回答：启用并绑定计划秘书时直接投给 `secretaryBinding`，不写主人格角色面板；没有可用秘书时才回退到同人格 Route。`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
+`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。`agentType` 决定会话所在的处理端：`codex` 使用 Codex Desktop 任务，`dsh` 使用 DSH 会话。`sessionId` 是必填的完整 ID；`sessionTitle` 只用于展示，`workspace` 用于安全校验；DSH 绑定可保存 `baseUrl` 指向实际 apiproxy。`completionHook.enabled=true` 仅适用于 Codex 完成回传：Manager 在该任务完成一轮后处理官方最终回答；启用并绑定计划秘书时直接投给 `secretaryBinding`，不写主人格角色面板；没有可用秘书时才回退到同人格 Route。`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
 
-Manager 提供只读批量状态接口 `GET /api/roles/:roleId/plan-agents/status?planId=...`，用完整 `sessionId + workspace` 查询 `taskBinding` 和可选 `secretaryBinding` 对应的真实 Codex Desktop 任务。结果把 Agent 是否工作与会话任务的 `active / idle / not_loaded / unavailable / archived / missing / workspace_mismatch` 分开返回；超时或读取失败是 `unknown`，不能从计划生命周期状态猜测。`POST /api/roles/:roleId/plan-agents/:planId/open` 只允许打开已核对、未归档且 workspace 一致的精确绑定；它不发送 prompt、不创建任务，也不切换绑定。
+Manager 提供只读批量状态接口 `GET /api/roles/:roleId/plan-agents/status?planId=...`，按每项绑定的 `agentType + sessionId + workspace` 查询 `taskBinding` 和可选 `secretaryBinding`。Codex 读取 Desktop 任务；DSH 通过绑定的 `baseUrl`（未保存时使用本机默认 apiproxy）读取会话。结果把 Agent 是否工作与会话的 `active / idle / not_loaded / unavailable / archived / missing / workspace_mismatch` 分开返回；超时或读取失败是 `unknown`，不能从计划生命周期状态猜测。`POST /api/roles/:roleId/plan-agents/:planId/open` 只允许定位已核对、未归档且 workspace 一致的精确绑定：Codex 打开目标任务，DSH 打开带精确会话选择参数的 DSH Web 页面。它不发送 prompt、不创建会话，也不切换绑定。
 
 `taskBinding` 只绑定计划的独立业务执行会话，不绑定“协助处理计划”秘书。计划管理秘书属于控制面：维护计划与记忆、查重和绑定业务任务、读取真实状态、消费结果、提醒并续投；调查、实现、测试、Unity/SVN/构建/发布和外部系统操作由业务任务负责。秘书可以开临时子 Agent 做计划盘点、查重、状态核对和结果摘要，但秘书及其子 Agent不得修改业务文件。
 
@@ -614,12 +614,22 @@ Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计�
 
 计划反馈是保存在 `plans/feedback/<planId>.jsonl` 的独立 JSONL 审计记录。`kind=guidance` 表示只关联 `planId` 的计划级引导，不能携带 `stepId`；`kind=approval_suggestion` 表示关联审批步骤的正式审批意见。它们都不是计划 JSON 的第二份副本，也不是通用 Outbox Action Queue。
 
-读取接口返回折叠同一 `feedbackId` 投递状态后的完整 `records`。RibiWebGUI 在展开可引导计划或审批步骤时按需读取这些记录，并分别展示计划引导历史和审批意见历史；`latest` 只用于轻量摘要与投递状态判断，不再替代完整意见历史。
+读取接口返回折叠同一 `feedbackId` 投递状态后的完整 `records`。RibiWebGUI 在任何计划的详情中都可以按需读取这些记录；已批准、已完成和已归档计划仍保留计划引导历史与审批意见历史。`latest` 只用于轻量摘要与投递状态判断，不再替代完整意见历史。
 
 ```http
 GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
+
+## 计划版本留痕
+
+计划 JSON 保存当前状态；每次创建、更新和归档还会向 `plans/history/<planId>.jsonl` 追加一次完整计划快照。快照保留当时的步骤、审批合同、状态和时间，因此后续 Agent 可以复核某次审批完成前后的真实计划内容。
+
+```http
+GET /api/roles/:roleId/plans/:planId/history
+```
+
+RibiWebGUI 在计划详情中提供默认折叠的“工作留痕”。其中分别显示计划引导、步骤审批意见和计划版本记录；计划完成、移动到 `archive/` 或不再处于待审批状态，都不会让这些记录从界面消失。归档只改变计划默认所在视图和计划 JSON 的目录，不删除反馈文件、反馈附件或版本留痕。删除本地运行数据仍属于单独的人工文件操作，不是计划生命周期动作。
 
 RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
 

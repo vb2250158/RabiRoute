@@ -70,7 +70,7 @@ export type AgentScanResult = {
     hasMore: boolean;
     nextOffset?: number;
   };
-  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean }>;
+  plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean; details?: string[] }>;
   warnings?: string[];
 };
 
@@ -278,17 +278,19 @@ export type RolePlan = {
   project?: { name?: string; path?: string };
   source?: { kind?: string; summary?: string };
   secretaryBinding?: {
-    agentType: "codex";
+    agentType: "codex" | "dsh";
     sessionId: string;
     sessionTitle?: string;
     workspace: string;
+    baseUrl?: string;
     assignedAt?: string;
   };
   taskBinding?: {
-    agentType: "codex";
+    agentType: "codex" | "dsh";
     sessionId: string;
     sessionTitle?: string;
     workspace?: string;
+    baseUrl?: string;
     completionHook?: { enabled: boolean; gatewayId?: string };
   };
   dueAt?: string;
@@ -343,6 +345,17 @@ export type RolePlan = {
     latest?: RolePlanFeedback;
     records?: RolePlanFeedback[];
   };
+};
+
+export type RolePlanHistorySnapshot = Omit<RolePlan, "presentation" | "approval">;
+
+export type RolePlanHistoryRecord = {
+  id: string;
+  planId: string;
+  kind: "created" | "updated" | "archived";
+  recordedAt: string;
+  before?: RolePlanHistorySnapshot;
+  after: RolePlanHistorySnapshot;
 };
 
 export type RolePlanFeedback = {

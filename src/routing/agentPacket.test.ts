@@ -160,9 +160,10 @@ test("AgentPacket keeps an explicit NapCat send target when a QQ route defaults 
 
   const sendRequest = JSON.parse(String(packet.templateValues.sendRequestJson));
   assert.deepEqual(sendRequest.sender, {
-    agentType: "<当前 Agent 类型，例如 codex>",
+    agentType: "<当前 Agent 类型；仅在开启 Codex 主人格发送限制时，主人格填 primary_persona>",
     sessionId: "<当前 Agent 的完整会话 ID>"
   });
+  assert.match(packet.message, /仅当当前 Route 在 Codex 的 Hook 管理中开启/);
   assert.equal(sendRequest.routeId, "route-tts-default");
   assert.equal(sendRequest.channel, "napcat");
   assert.deepEqual(sendRequest.params, { target: "group", groupId: 9001, replyToMessageId: "", replyImageDescriptions: [] });
@@ -230,8 +231,11 @@ test("AgentPacket reads a NapCat get_msg reply cached in the gateway history for
       dataDir: roleDataDir
     });
 
+    assert.equal(packet.messageSource.type, "message_adapter");
+    assert.match(packet.message, /^\[消息源\]\n消息源类型：消息端/);
+    assert.match(packet.message, /\n\[消息内容\]\n\[CQ:reply,id=3000\]继续追问/);
     assert.match(packet.message, /\[CQ:reply,id=3000\] : 通过 OneBot get_msg 补齐的原始问题/);
-    const currentMessageSectionIndex = packet.message.indexOf("[消息]");
+    const currentMessageSectionIndex = packet.message.indexOf("[消息内容]");
     const messageCodeSectionIndex = packet.message.indexOf("[消息代码解析]");
     const identitySectionIndex = packet.message.indexOf("[身份定位]");
     assert.ok(messageCodeSectionIndex > currentMessageSectionIndex);
@@ -435,9 +439,9 @@ test("AgentPacket excludes every fragment already merged into the current messag
   assert.doesNotMatch(String(packet.templateValues.recentMessages), /这个按钮/);
   assert.doesNotMatch(String(packet.templateValues.recentMessages), /再往下挪一点/);
   const recentMessagesSectionIndex = packet.message.indexOf("[最近消息]");
-  const currentMessageSectionIndex = packet.message.indexOf("[消息]");
-  assert.ok(recentMessagesSectionIndex >= 0);
-  assert.ok(currentMessageSectionIndex > recentMessagesSectionIndex);
+  const currentMessageSectionIndex = packet.message.indexOf("[消息内容]");
+  assert.ok(currentMessageSectionIndex >= 0);
+  assert.ok(recentMessagesSectionIndex > currentMessageSectionIndex);
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.equal(replyContext.messageGroupId, "message-group-1");
   assert.deepEqual(replyContext.messageGroupMessageIds, ["3001", "3002"]);
@@ -578,11 +582,11 @@ test("AgentPacket presents broad history before the current message and keeps fo
   assert.match(packet.message, /不是为了单纯把底框做长/);
   assert.match(packet.message, /“动态显示的”/);
   const recentMessagesSectionIndex = packet.message.indexOf("[最近消息]");
-  const currentMessageSectionIndex = packet.message.indexOf("[消息]");
+  const currentMessageSectionIndex = packet.message.indexOf("[消息内容]");
   const focusedDiscussionSectionIndex = packet.message.indexOf("[当前讨论片段]");
-  assert.ok(recentMessagesSectionIndex >= 0);
-  assert.ok(currentMessageSectionIndex > recentMessagesSectionIndex);
-  assert.ok(focusedDiscussionSectionIndex > currentMessageSectionIndex);
+  assert.ok(currentMessageSectionIndex >= 0);
+  assert.ok(recentMessagesSectionIndex > currentMessageSectionIndex);
+  assert.ok(focusedDiscussionSectionIndex > recentMessagesSectionIndex);
 });
 
 test("AgentPacket exposes exact plan secretary sessions without replacing business task ownership", () => {
@@ -636,6 +640,16 @@ test("AgentPacket exposes exact plan secretary sessions without replacing busine
       dataDir
     });
 
+    assert.deepEqual(packet.messageSource, {
+      type: "system",
+      eventType: "manual_trigger",
+      eventName: "手动触发提醒",
+      eventId: "1",
+      routeName: "plan assistant route",
+      routeId: "route-plan-assistant"
+    });
+    assert.match(packet.message, /^\[消息源\]\n消息源类型：系统/);
+    assert.match(packet.message, /\n\[消息内容\]\n推进计划/);
     assert.match(packet.message, /\[计划协助会话\]/);
     assert.match(packet.message, /threadId=019fa314-2c07-7523-896f-9bb6b638054b/);
     assert.match(packet.message, /持久计划秘书/);
@@ -818,6 +832,7 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
     replyContext: {
       targetType: "plan_feedback",
       planId: "plan-1",
+      planTitle: "消息源统一计划",
       planStepId: "approval",
       planFeedbackId: "feedback-1",
       planFeedbackResponseId: "response-feedback-1",
@@ -864,6 +879,12 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
   assert.equal(packet.templateValues.targetType, "plan_feedback");
   assert.equal(replyContext.planId, "plan-1");
   assert.equal(replyContext.planFeedbackResponseId, "response-feedback-1");
+  assert.deepEqual(packet.messageSource, {
+    type: "plan",
+    planName: "消息源统一计划",
+    planId: "plan-1"
+  });
+  assert.match(packet.message, /^\[消息源\]\n消息源类型：计划\n计划名称：消息源统一计划\n计划 ID：plan-1/);
   assert.match(packet.message, /事件：计划反馈/);
   assert.match(packet.message, /路由类型：plan_feedback/);
   assert.doesNotMatch(packet.message, /\[最近消息\]/);
@@ -886,6 +907,7 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
       replyContext: {
         targetType: "plan_feedback",
         planId: "plan-1",
+        planTitle: "消息源统一计划",
         planFeedbackId: "guidance-1",
         planFeedbackResponseId: "response-guidance-1",
         planFeedbackKind: "guidance"
@@ -921,6 +943,7 @@ test("AgentPacket treats an auto-delivered approval as a persona notice without 
     replyContext: {
       targetType: "plan_feedback_notice",
       planId: "plan-1",
+      planTitle: "消息源统一计划",
       planStepId: "approval",
       planFeedbackId: "feedback-1",
       planFeedbackAutoDelivered: true

@@ -51,11 +51,11 @@ for (const source of [overview, routeConfig, runtimeLog]) {
 }
 assert.match(routeConfig, /Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime/);
 assert.match(routeConfig, /createIfMissing:\s*false/);
-assert.match(routeConfig, /initializeCodexPlanAssistants[\s\S]*createIfMissing:\s*true/);
+assert.match(routeConfig, /initialize(?:Codex)?PlanAssistants[\s\S]*createIfMissing:\s*true/);
 assert.doesNotMatch(routeConfig, /@blur="ensureCodexThreadBinding"/);
-assert.match(gatewayStore, /await bindCodexSessionForSave\(selectedGateway\.value/);
+assert.match(gatewayStore, /await bindAgentSessionsForSave\(selectedGateway\.value/);
 assert.match(sessionBinding, /createIfMissing:\s*true/);
-assert.match(routeConfig, /initializeCodexSessionForRoute/);
+assert.match(routeConfig, /initializeAgentSessionForRoute/);
 assert.match(routeConfig, /\/api\/role-panel\/messages/);
 assert.match(routeConfig, /自动初始化会话/);
 assert.ok(sessionInitialization.indexOf("await params.save()") < sessionInitialization.indexOf("await params.deliver"),

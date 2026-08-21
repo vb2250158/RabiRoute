@@ -11,12 +11,13 @@ This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not
 ## Non-negotiable product contract
 
 1. Deliver to the saved task when the full task ID exists in the configured workspace and the owner record is not archived. A mutable Desktop/SQLite title does not invalidate that identity. When the saved ID is archived, do not locate or reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist the replacement binding, and deliver there.
-2. If the ID is empty, invalid, or actually missing, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
-3. A Desktop-side rename or automatic title-metadata rewrite keeps the same ID target. Explicitly typing a new Rabi name clears the old ID before lookup/create and persists the selected replacement target.
-4. Real prompts go only to the current Desktop task owner. RabiRoute must not resume the same ID in another Runtime or silently switch execution paths.
-5. Saving settings persists the visible name, complete task ID, and workspace as one binding. Selecting another task or typing a new name resolves and persists a new pair before later delivery.
-6. Automatic scanning runs once when the settings page opens. Later scans happen only after the user clicks scan/refresh—not on expand, input, blur, save, health polling, timers, or Manager restart.
-7. Automatic role initialization first saves and confirms the binding, then sends a normal role-panel `AgentPacket` to the same Desktop owner. If delivery fails after task creation, keep the ID and retry delivery; do not create again.
+2. Approval, execution guidance, and QA-failure continuation for a plan must reuse that same plan. When its bound task is archived, create a replacement using the saved title and, after delivery succeeds, update only that plan's existing `taskBinding`; do not reuse an active same-name task or create a duplicate plan.
+3. If the ID is empty, invalid, or actually missing, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
+4. A Desktop-side rename or automatic title-metadata rewrite keeps the same ID target. Explicitly typing a new Rabi name clears the old ID before lookup/create and persists the selected replacement target.
+5. Real prompts go only to the current Desktop task owner. RabiRoute must not resume the same ID in another Runtime or silently switch execution paths.
+6. Saving settings persists the visible name, complete task ID, and workspace as one binding. Selecting another task or typing a new name resolves and persists a new pair before later delivery.
+7. Automatic scanning runs once when the settings page opens. Later scans happen only after the user clicks scan/refresh—not on expand, input, blur, save, health polling, timers, or Manager restart.
+8. Automatic role initialization first saves and confirms the binding, then sends a normal role-panel `AgentPacket` to the same Desktop owner. If delivery fails after task creation, keep the ID and retry delivery; do not create again.
 
 ## Port 4510 safety gate
 

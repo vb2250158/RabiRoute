@@ -1,37 +1,64 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QMenu
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication, QMenu
+
+from .themes import theme_definition
 
 
-RABI_MENU_STYLESHEET = """
-QMenu {
-    background: #ffffff;
-    border: 1px solid #d6e2e8;
-    border-radius: 8px;
-    color: #112033;
-    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-    font-size: 13px;
-    padding: 6px;
-}
-QMenu::item {
-    border-radius: 6px;
-    padding: 8px 28px 8px 12px;
-}
-QMenu::item:selected {
-    background: #eaf8f9;
-    color: #0c2a4a;
-}
-QMenu::item:disabled {
-    color: #a9b4be;
-}
-QMenu::separator {
-    background: #e5ebef;
-    height: 1px;
-    margin: 5px 8px;
-}
-"""
+_THEME_OPTIONS = {"system", "light", "dark"}
 
 
-def apply_rabi_menu_theme(*menus: QMenu) -> None:
+def normalize_theme(value: object) -> str:
+    return value if isinstance(value, str) and value in _THEME_OPTIONS else "system"
+
+
+def system_theme_is_dark(app: QApplication) -> bool:
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return int(winreg.QueryValueEx(key, "AppsUseLightTheme")[0]) == 0
+    except (OSError, ImportError, ValueError, TypeError):
+        try:
+            return app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+        except (AttributeError, TypeError):
+            return app.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def resolve_theme(theme: object, app: QApplication) -> str:
+    normalized = normalize_theme(theme)
+    if normalized != "system":
+        return normalized
+    return "dark" if system_theme_is_dark(app) else "light"
+
+
+def theme_stylesheet(stylesheet: str, theme: object) -> str:
+    result = stylesheet
+    colors = theme_definition(normalize_theme(theme)).get("color_replacements", {})
+    for light, dark in colors.items():
+        result = result.replace(light, dark)
+    return result
+
+
+def rabi_menu_stylesheet(theme: object = "light") -> str:
+    return str(theme_definition(normalize_theme(theme))["menu_stylesheet"])
+
+
+RABI_MENU_STYLESHEET = rabi_menu_stylesheet()
+
+
+def apply_rabi_menu_theme(*menus: QMenu, theme: object = "light") -> None:
+    stylesheet = rabi_menu_stylesheet(theme)
     for menu in menus:
-        menu.setStyleSheet(RABI_MENU_STYLESHEET)
+        menu.setStyleSheet(stylesheet)
+
+
+def apply_rabi_application_theme(app: QApplication, theme: object) -> str:
+    resolved = resolve_theme(theme, app)
+    palette = QPalette(app.palette())
+    for role, color in theme_definition(resolved)["application_palette"].items():
+        palette.setColor(role, QColor(color))
+    app.setPalette(palette)
+    return resolved

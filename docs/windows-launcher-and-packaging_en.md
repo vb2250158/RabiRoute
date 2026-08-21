@@ -8,11 +8,11 @@ English | <a href="./windows-launcher-and-packaging.md">简体中文</a>
 
 > Status: current guide. Checked against the launcher, Manager shutdown endpoint, Qt tray code, and packaging scripts.
 
-This is the source of truth for Windows desktop startup and packaging. A complete desktop runtime is not a single executable. It is a coordinated set of artifacts:
+RabiRoute Desktop is the one Windows user entry. Its system tray and task window are views; Manager is its local backend and does not appear as a separate Windows application. A complete desktop runtime is a coordinated set of artifacts:
 
 ```text
-RabiRoute-Tray.exe          tray/task-panel entry and startup supervisor
-scripts/watch-rabiroute-desktop-lifecycle.ps1  Manager/tray process-pair supervisor
+RabiRoute-Desktop.exe          tray/task-panel entry and startup supervisor
+scripts/watch-rabiroute-desktop-lifecycle.ps1  desktop backend and UI supervisor
 dist/manager.js             Node Manager entry
 dist/**/*.js                gateway, adapter, routing, and backend output
 ribiwebgui/dist/            RibiWebGUI static build
@@ -21,30 +21,30 @@ node.exe or system Node.js  Node runtime
 node_modules/               runtime dependencies, or an equivalent bundle
 ```
 
-`RabiRoute-Tray.exe` is the desktop entry inside that bundle. It does not contain the Manager, WebGUI, Node.js, dependencies, or runtime data by itself.
+`RabiRoute-Desktop.exe` is the desktop entry inside that bundle. On startup it removes same-directory legacy `RabiRoute-Tray.exe`, `RabiRoute-Tray.new.exe`, and unreplaced `RabiRoute-Desktop.new.exe` artifacts so obsolete entry points cannot remain visible. It does not contain the Manager, WebGUI, Node.js, dependencies, or runtime data by itself.
 
-The portable Node Manager remains the product baseline. The Windows launcher detects an existing Manager, starts one only when required, writes logs outside bundled resources, opens RibiWebGUI, and optionally starts the PySide6/Qt plan-and-memory panel.
+Windows users always start RabiRoute Desktop. It detects and starts the local backend only when needed, writes logs outside bundled resources, opens RibiWebGUI, and shows the PySide6/Qt plan-and-memory interface. Running Node Manager directly is for development or cross-platform deployment.
 
 ```text
-Start-RabiRoute-Tray.bat or RabiRoute-Tray.exe
+Start-RabiRoute-Desktop.bat or RabiRoute-Desktop.exe
   -> verify/build dist/manager.js and ribiwebgui/dist
   -> node dist/manager.js
      -> static WebGUI and HTTP API
      -> managed gateway subprocesses
-  -> Qt tray/task panel connects to http://127.0.0.1:8790
+  -> RabiRoute Desktop UI (system tray and task window) connects to http://127.0.0.1:8790
   -> data/runtime/desktop-lifecycle-intent.json = running
   -> watch-rabiroute-desktop-lifecycle.ps1
-     -> repairs the Manager + tray pair through the same launcher
+     -> restores the complete desktop runtime through the same launcher when its backend or UI is missing
 ```
 
-Choosing **Exit RabiRoute** first makes Manager atomically persist `desiredState=stopped`, then stops managed gateways, closes HTTP, and exits before the tray exits. The supervisor observes `stopped` and terminates without resurrecting an intentional exit. An ordinary Manager reload does not change that intent.
+Choosing **Exit RabiRoute** from the RabiRoute Desktop menu first makes Manager atomically persist `desiredState=stopped`, then stops managed gateways, closes HTTP, and exits before the desktop UI exits. The supervisor observes `stopped` and terminates without resurrecting an intentional exit. An ordinary Manager reload does not change that intent.
 
 ## Double-click startup
 
 From the repository root:
 
 ```text
-Start-RabiRoute-Tray.bat
+Start-RabiRoute-Desktop.bat
 ```
 
 The batch/PowerShell hybrid launcher:
@@ -59,10 +59,10 @@ The batch/PowerShell hybrid launcher:
 - If the Manager already runs, repairs only the WebGUI with `npm.cmd run webgui:build` when needed.
 - Starts `node dist\manager.js` in the background when no Manager is running.
 - Opens RibiWebGUI unless `-NoOpen` is passed.
-- Starts the Qt panel unless `-NoTray` is passed.
-- Reuses an existing Qt panel instead of creating a duplicate.
-- Persists a `running` desktop intent and starts one lightweight supervisor per workspace. It checks only Manager `/meta` and this project's tray process every five seconds, requires two consecutive misses, and then reuses the launcher's PID, port-ownership, and single-instance gates to restore the pair. It does not scan or repair QQ, NapCat, Routes, or adapters.
-- Keeps the tray alive and visibly offline during a transient Manager outage. A genuinely missing Manager or tray is repaired by the supervisor instead of one process silently outliving the other.
+- Starts the RabiRoute Desktop interface unless `-NoDesktopShell` is passed.
+- Reuses an existing RabiRoute Desktop UI instead of creating a duplicate.
+- Persists a `running` desktop intent and starts one lightweight supervisor per workspace. It checks only the local backend `/meta` and this project's desktop UI process every five seconds, requires two consecutive misses, and then reuses the launcher's PID, port-ownership, and single-instance gates to restore the complete desktop runtime. It does not scan or repair QQ, NapCat, Routes, or adapters.
+- Keeps the desktop UI alive and visibly offline during a transient backend outage. A genuinely missing backend or UI is restored by the supervisor as one desktop runtime.
 
 Logs are written under:
 
@@ -85,11 +85,11 @@ desktop-lifecycle-supervisor.jsonl
 Useful commands:
 
 ```powershell
-.\Start-RabiRoute-Tray.bat
-.\Start-RabiRoute-Tray.bat -NoOpen
-.\Start-RabiRoute-Tray.bat -NoBuild
-.\Start-RabiRoute-Tray.bat -NoTray
-.\Start-RabiRoute-Tray.bat -ManagerUrl http://127.0.0.1:8790
+.\Start-RabiRoute-Desktop.bat
+.\Start-RabiRoute-Desktop.bat -NoOpen
+.\Start-RabiRoute-Desktop.bat -NoBuild
+.\Start-RabiRoute-Desktop.bat -NoDesktopShell
+.\Start-RabiRoute-Desktop.bat -ManagerUrl http://127.0.0.1:8790
 ```
 
 The launcher does not start or stop QQ, NapCat, or unrelated processes. An unknown port owner remains untouched. Only a precisely verified stale Manager from the same project may be shut down; forced process-tree termination is a bounded fallback after graceful shutdown times out. NapCat lifecycle remains an explicit action in RibiWebGUI.
@@ -126,7 +126,7 @@ Then open:
 http://127.0.0.1:8790/
 ```
 
-Manager APIs, gateways, WebGUI, storage layout, and shutdown semantics are cross-platform. Only `Start-RabiRoute-Tray.bat` is Windows-specific. A future macOS/Linux convenience launcher should follow the same contract: probe `/meta`, avoid duplicate Managers, pass `--manager-url` to the Qt panel, and use `POST /manager/shutdown` for exit.
+Manager APIs, gateways, WebGUI, storage layout, and shutdown semantics are cross-platform. Only `Start-RabiRoute-Desktop.bat` is Windows-specific. A future macOS/Linux convenience launcher should follow the same contract: probe `/meta`, avoid duplicate Managers, pass `--manager-url` to the Qt panel, and use `POST /manager/shutdown` for exit.
 
 ## Qt plan and memory panel
 
@@ -147,24 +147,24 @@ Python discovery order:
 3. `py.exe -3`
 4. `python.exe`
 
-If Python or PySide6 is unavailable, the tray process exits with a clear stderr message while the Manager and WebGUI remain usable. The panel uses a project-root single-instance lock and can fall back to a normal floating window when a system tray is unavailable.
+If Python or PySide6 is unavailable, the desktop shell process exits with a clear stderr message while the Manager and WebGUI remain usable. The panel uses a project-root single-instance lock and can fall back to a normal floating window when a system tray is unavailable.
 
 ## Building the Windows desktop bundle
 
 ```powershell
-.\scripts\build-tray-exe.ps1
+.\scripts\build-desktop-exe.ps1
 ```
 
-The wrapper runs `npm run build`, verifies the backend and WebGUI output, invokes PyInstaller with `RabiRoute-Tray.spec`, and copies `dist\RabiRoute-Tray.exe` to the repository root for local testing. The executable is ignored by Git.
+The wrapper runs `npm run build`, verifies the backend and WebGUI output, invokes PyInstaller with `RabiRoute-Desktop.spec`, and copies `dist\RabiRoute-Desktop.exe` to the repository root for local testing. The executable is ignored by Git.
 
 Packaging boundaries:
 
-- The executable bundles the PySide6 tray entry and Python tray code only.
+- The executable bundles the PySide6 RabiRoute Desktop entry and Python tray code only.
 - It does not bundle Node.js, `dist/manager.js`, `ribiwebgui/dist`, `node_modules`, or `data`.
 - Frozen mode resolves the project root from `Path(sys.executable).parent`.
 - It reuses a running Manager and may rebuild a stale WebGUI.
 - If no Manager is running, it verifies/builds backend and frontend output before starting `node dist/manager.js`.
-- Once Manager is healthy, it records a `packaged-tray` running intent and starts the same lifecycle supervisor. Package recovery relaunches the packaged executable and does not depend on system Python.
+- Once Manager is healthy, it records a `packaged-desktop` running intent and starts the same lifecycle supervisor. Package recovery relaunches the packaged executable and does not depend on system Python.
 
 Before publishing a Windows package, verify that the backend and WebGUI are built, Node and dependencies are available, runtime data remains writable and external, and the binary has passed a separate privacy review for embedded build-machine paths. The desktop entry must never become the only supported startup path.
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindCodexSessionForSave } from "./shared/codexSessionBinding.js";
+import { bindCodexSessionForSave, bindDshSessionForSave } from "./shared/codexSessionBinding.js";
 import { handleAgentThreadRequest, type AgentThreadDriver } from "./agentThreads.js";
 
 test("saving a Rabi route switches its binding to the selected existing Desktop task", async () => {
@@ -127,4 +127,45 @@ test("saving an explicitly typed Rabi name with its old id cleared creates the n
   assert.equal(createCount, 1);
   assert.equal(gateway.codexThreadId, createdId);
   assert.equal(gateway.codexThreadName, "Rabi 新名字");
+});
+
+test("saving a DSH route resolves or creates once and persists the complete session binding", async () => {
+  const gateway = {
+    id: "RabiDsh",
+    name: "Rabi DSH",
+    agentAdapters: ["dsh"],
+    dshSessionId: "",
+    dshSessionName: "Rabi DSH 主人格",
+    dshCwd: process.cwd(),
+    dshBaseUrl: "http://127.0.0.1:33080"
+  };
+  const requests: unknown[] = [];
+
+  await bindDshSessionForSave(gateway, async (request) => {
+    requests.push(request);
+    return {
+      statusCode: 201,
+      data: {
+        resolution: "created",
+        thread: {
+          id: "session-00000000-0000-4000-8000-000000000041",
+          title: request.title,
+          cwd: request.cwd
+        }
+      }
+    };
+  });
+
+  assert.deepEqual(requests, [{
+    action: "resolve",
+    agentAdapter: "dsh",
+    threadId: undefined,
+    title: "Rabi DSH 主人格",
+    cwd: process.cwd(),
+    createIfMissing: true,
+    dshBaseUrl: "http://127.0.0.1:33080"
+  }]);
+  assert.equal(gateway.dshSessionId, "session-00000000-0000-4000-8000-000000000041");
+  assert.equal(gateway.dshSessionName, "Rabi DSH 主人格");
+  assert.equal(gateway.dshCwd, process.cwd());
 });

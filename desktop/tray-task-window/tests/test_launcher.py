@@ -32,7 +32,30 @@ class LauncherNodeResolutionTest(unittest.TestCase):
             self.assertTrue(result)
             request = urlopen.call_args.args[0]
             self.assertEqual(request.full_url, "http://127.0.0.1:8790/manager/desktop-lifecycle/start")
-            self.assertIn(b'"source": "packaged-tray"', request.data)
+            self.assertIn(b'"source": "packaged-desktop"', request.data)
+
+    def test_desktop_startup_removes_only_obsolete_desktop_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            legacy_names = (
+                "RabiRoute-Tray.exe",
+                "RabiRoute-Tray.new.exe",
+                "RabiRoute-Desktop.new.exe",
+            )
+            for name in legacy_names:
+                (project_root / name).touch()
+            current_desktop = project_root / "RabiRoute-Desktop.exe"
+            unrelated_file = project_root / "unrelated.exe"
+            current_desktop.touch()
+            unrelated_file.touch()
+
+            removed = LAUNCHER._remove_legacy_desktop_artifacts(project_root)
+
+            self.assertEqual(removed, legacy_names)
+            self.assertTrue(current_desktop.exists())
+            self.assertTrue(unrelated_file.exists())
+            for name in legacy_names:
+                self.assertFalse((project_root / name).exists())
 
     def test_packaged_runtime_prefers_project_portable_node_over_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

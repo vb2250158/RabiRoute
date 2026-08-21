@@ -67,7 +67,7 @@ export function handleDesktopLifecycleApi(
     void readJsonBody(request)
       .then((body) => {
         const requestedSource = typeof body.source === "string" ? body.source : "desktop-start";
-        const source = requestedSource === "packaged-tray" || requestedSource === "windows-launcher"
+        const source = requestedSource === "packaged-desktop" || requestedSource === "windows-desktop"
           ? requestedSource
           : "desktop-start";
         const intent = writeDesktopLifecycleIntent(options.rootDir, "running", source);
@@ -82,7 +82,7 @@ export function handleDesktopLifecycleApi(
   void readJsonBody(request)
     .then((body) => {
       if (body.desktopExit === true) {
-        writeDesktopLifecycleIntent(options.rootDir, "stopped", "tray-exit");
+        writeDesktopLifecycleIntent(options.rootDir, "stopped", "desktop-exit");
       }
       jsonResponse(response, 200, { code: 0, message: "manager shutdown requested" });
       setTimeout(() => { void options.shutdownManager("api"); }, Math.max(0, options.shutdownDelayMs ?? 20));

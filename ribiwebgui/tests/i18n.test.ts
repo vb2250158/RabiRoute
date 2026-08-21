@@ -13,6 +13,11 @@ test("translates exact interface copy and preserves surrounding whitespace", () 
   assert.equal(translateText("拉取并同步", "en"), "Pull and synchronize");
   assert.equal(translateText("语音服务", "en"), "Speech service");
   assert.equal(translateText("划词朗读", "en"), "Read selected text aloud");
+  assert.equal(translateText("RabiRoute 桌面功能", "en"), "RabiRoute Desktop features");
+  assert.equal(translateText("系统级截图", "en"), "System screenshots");
+  assert.equal(translateText("截图快捷键", "en"), "Screenshot shortcut");
+  assert.equal(translateText("贴图快捷键", "en"), "Pin-image shortcut");
+  assert.equal(translateText("Windows 登录启动", "en"), "Start with Windows");
   assert.equal(translateText("开启滑词菜单", "en"), "Enable selected-text menu");
   assert.equal(translateText("滑词朗读", "en"), "Selected-text reading");
   assert.equal(translateText("划词朗读模型", "en"), "Selected-text voice model");

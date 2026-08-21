@@ -216,7 +216,7 @@ Manager 会扫描 `data/roles/*/personaConfig.json`。当前格式以文件根�
 用户：{userId}
 消息 ID：{messageId}
 
-[消息]
+[消息内容]
 {message}
 
 [上下文]

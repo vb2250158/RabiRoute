@@ -3,6 +3,7 @@ import test from "node:test";
 import type { RolePlan } from "../src/types.js";
 import {
   loadPlanAgentStatuses,
+  loadPlanHistory,
   loadRoleMemoryCounts,
   loadRoleMemoryPage,
   loadRolePlanPage,
@@ -26,6 +27,34 @@ function plan(presentation?: RolePlan["presentation"]): RolePlan {
     approval: { count: 0 }
   };
 }
+
+test("WebGUI loads a plan revision history by plan id", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    requests.push(String(input));
+    return new Response(JSON.stringify({
+      code: 0,
+      data: {
+        count: 1,
+        records: [{
+          id: "history-1",
+          planId: "plan",
+          kind: "archived",
+          recordedAt: "2026-08-20T00:00:00.000Z",
+          after: { id: "plan", title: "Plan", focus: "Plan", status: "已归档", attachments: [], steps: [], createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-20T00:00:00.000Z", keywords: [] }
+        }]
+      }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const records = await loadPlanHistory("Rabi", "plan");
+    assert.equal(records[0]?.kind, "archived");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(requests[0], "/api/roles/Rabi/plans/plan/history");
+});
 
 test("WebGUI preserves Manager stages and does not derive a second stage when presentation is absent", () => {
   const managerStage = normalizeRolePlanFromManager(plan({

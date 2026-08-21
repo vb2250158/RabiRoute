@@ -1,0 +1,27 @@
+html[data-rabiroute-theme="dark"] {
+  --rr-page-canvas: #10161d;
+  --rr-canvas: #121a22;
+  --rr-surface: #19242e;
+  --rr-subtle: #202c37;
+  --rr-input: #1d2934;
+  --rr-border: #31414f;
+  --rr-border-strong: #526779;
+  --rr-text: #e9f2f7;
+  --rr-heading: #f0f8fc;
+  --rr-muted: #c4d3dd;
+  --rr-muted-soft: #b1c3cf;
+  --rr-muted-faint: #9db1bf;
+  --rr-disabled: #708392;
+  --rr-accent: #43d4d7;
+  --rr-accent-strong: #88edef;
+  --rr-accent-surface: #1b3a40;
+  --rr-accent-border: #3e6c73;
+  --rr-success-surface: #1e3b2a;
+  --rr-success-border: #3d7453;
+  --rr-warning-surface: #443617;
+  --rr-warning-border: #80612a;
+  --rr-error-surface: #46292f;
+  --rr-error-border: #834451;
+  --rr-info-surface: #1b374b;
+  --rr-info-border: #3f7193;
+}

@@ -24,6 +24,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Start here on your first use to complete a real delivery, read status, change rules, and recover from common failures.
 - [Getting Started](getting-started_en.md) — **Current guide**. Install RabiRoute, start Manager, and confirm that the console opens.
 - [Interface and status](user-guide/interface-and-status_en.md) — **Current guide**. Understand the current Route, Manager connection, unsaved changes, runtime state, and Settings-page screenshots, selected-text menu, and login startup.
+- [Interface theme](user-guide/interface-theme_en.md) — **Current guide**. Shared light, dark, and follow-system settings for WebGUI and the Windows tray.
 - [Runtime, logs, and troubleshooting](user-guide/operations-and-troubleshooting_en.md) — **Current guide**. When a message does not arrive, start with the diagnosis summary and locate the break.
 - [Safety, replies, and data](user-guide/safety-and-data_en.md) — **Current guide**. Check permissions and privacy before enabling external replies or sharing diagnostics.
 - [Current Capabilities and Maturity](current-capabilities_en.md) — **Current fact**. Check what is verified and what still needs a real account, network, or device acceptance run.
@@ -54,11 +55,14 @@ This directory contains current guides, experimental integrations, designs, rese
 ## Architecture and maintenance
 
 - [Architecture](architecture_en.md) — **Current fact**. Product boundaries, the Codex Desktop owner, current Outbox, and future Action Queue are separated.
+- [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Design research**. Applies Cordis dependency, lifecycle, reconciliation, and recovery principles to a staged RabiRoute direction.
+- [How DSH uses Cordis](dsh-cordis-runtime-analysis_en.md) — **Implementation research**. Explains profiles, Loader, Fibers, service realms, the browser plugin tree, dynamic code, and process-sandbox boundaries.
+- [Cordis-based plugin runtime refactor](cordis-plugin-runtime-refactor_en.md) — **Selected design**. Defines the composition kernel, Rabi adaptation layer, multi-host extension protocol, migration stages, and verification contract.
 - [Code architecture](code-architecture_en.md) — **Current fact**. Backend, Manager, endpoint, Role Knowledge, WebGUI, and desktop module map.
 - [Project function map](project-function-map_en.md) — **Current fact**. Locate behavior by maturity, side effect, API, and code owner.
 - [Path and directory conventions](path-and-directory-conventions_en.md) — **Current maintainer guide**. Separates software, public samples, local runtime data, and logs, and defines relative-path and business-ID interfaces.
 - [Pull request security gates](maintainer-security-gates_en.md) — **Current maintainer guide** for secret scanning, production dependency auditing, CodeQL, least privilege, and merge protection.
-- [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — **Current guide** for the Node/WebGUI baseline and Qt/Windows convenience layer.
+- [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — **Current guide** for the RabiRoute Desktop user entry, its local backend, and packaging boundary.
 - [Manager runtime resilience and incident evidence](manager-runtime-resilience_en.md) — **Current guide** for crash logs, single-instance protection, non-fatal persona-index persistence, watchdog backoff, and soak acceptance.
 - [Unattended NapCat](napcat-unattended_en.md) — **Current guide** for login state, quick login, Manager recovery, and supervision boundaries.
 

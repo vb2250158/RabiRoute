@@ -57,7 +57,7 @@ test("QA failure reopens investigation and continues the exact bound task once",
     source: "webgui",
     notifyAgent: false
   }));
-  const sends: Array<{ threadId: string; cwd: string; prompt: string }> = [];
+  const sends: Array<{ threadId: string; title: string; cwd: string; createIfMissing: true; prompt: string }> = [];
 
   const result = await consumePlanQaFeedback({
     roleDir,
@@ -79,6 +79,9 @@ test("QA failure reopens investigation and continues the exact bound task once",
     { threadId: sends[0].threadId, cwd: sends[0].cwd },
     { threadId: binding.sessionId, cwd: binding.workspace }
   );
+  assert.equal(sends[0].title, binding.sessionTitle);
+  assert.equal(sends[0].createIfMissing, true);
+  assert.match(sends[0].prompt, /绑定任务已归档时创建替代任务/);
   assert.match(sends[0].prompt, /问题仍存在/);
   assert.match(sends[0].prompt, /深化根因分析/);
   assert.equal(listPlanFeedback(roleDir, feedback.planId)[0]?.qaHandling?.status, "dispatched");

@@ -11,7 +11,7 @@ import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecor
 import { ManagerSpeechControl } from "./manager/speechControl.js";
 import { handleAgentReply } from "./outbox.js";
 import { resolvePipeline } from "./pipelines.js";
-import { readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
+import { appendDeliveryReplayAttempt, readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
 import { listIdentityEndpointAccounts, listIdentityParticipants } from "./identityRelations.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
 import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
@@ -39,6 +39,15 @@ type ForwardingConfigPatch = Partial<Pick<typeof config,
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-forwarding-"));
+}
+
+function deliveryPayloadText(payload: Record<string, any> | undefined): string {
+  if (!payload) return "";
+  return [
+    String(payload.prompt || ""),
+    ...(Array.isArray(payload.contextBlocks) ? payload.contextBlocks.map(String) : []),
+    ...(Array.isArray(payload.controlBlocks) ? payload.controlBlocks.map(String) : [])
+  ].filter(Boolean).join("\n\n");
 }
 
 function groupMessage(patch: Partial<GroupMessageRecord> = {}): GroupMessageRecord {
@@ -88,8 +97,9 @@ test("chat routes group automatically while ASR and structured events stay direc
   assert.equal(routeKindUsesAutomaticMessageGrouping("wearable_health_alert"), false);
 });
 
-test("the dedicated memory Agent handles only the exact Codex consolidation trigger", () => {
+test("the dedicated memory Agent handles the exact consolidation trigger for managed Agent adapters", () => {
   assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "codex"), true);
+  assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "dsh"), true);
   assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", false, "codex"), false);
   assert.equal(memoryConsolidationAgentHandles("manual_trigger", "another-trigger", true, "codex"), false);
   assert.equal(memoryConsolidationAgentHandles("heartbeat", "memory-consolidation", true, "codex"), false);
@@ -105,8 +115,15 @@ test("AgentPacket delivery targets only the configured primary Agent", async () 
     const outcomes = await deliverPacketToPrimaryAgentAdapter(
       "main",
       "direct",
-      "hello",
-      async (adapter) => { dispatched.push(adapter); }
+      {
+        messageSource: { type: "system", eventType: "test", eventName: "测试投递", eventId: "direct" },
+        messageContent: "hello"
+      },
+      async (adapter, envelope) => {
+        dispatched.push(adapter);
+        assert.equal(envelope.messageSource.type, "system");
+        assert.equal(envelope.messageContent, "hello");
+      }
     );
     assert.deepEqual(dispatched, ["copilotCli"]);
     assert.deepEqual(outcomes, [{
@@ -127,9 +144,13 @@ test("primary Agent delivery reports a failure without trying another Agent", as
     const outcomes = await deliverPacketToPrimaryAgentAdapter(
       "main",
       "direct",
-      "hello",
-      async (adapter) => {
+      {
+        messageSource: { type: "system", eventType: "test", eventName: "测试投递", eventId: "direct" },
+        messageContent: "hello"
+      },
+      async (adapter, envelope) => {
         dispatched.push(adapter);
+        assert.equal(envelope.messageContent, "hello");
         throw new Error("primary unavailable");
       }
     );
@@ -149,8 +170,11 @@ test("primary Agent delivery forwards verified image paths as a separate deliver
     const outcomes = await deliverPacketToPrimaryAgentAdapter(
       "main",
       "screenshot",
-      "请查看截图。",
-      async (adapter, _message, imagePaths) => { dispatched.push({ adapter, imagePaths }); },
+      {
+        messageSource: { type: "system", eventType: "test", eventName: "截图投递", eventId: "screenshot" },
+        messageContent: "请查看截图。"
+      },
+      async (adapter, _envelope, imagePaths) => { dispatched.push({ adapter, imagePaths }); },
       ["C:\\workspace\\screenshot.png"]
     );
     assert.deepEqual(dispatched, [{ adapter: "codex", imagePaths: ["C:\\workspace\\screenshot.png"] }]);
@@ -271,8 +295,8 @@ test("a grouped packet is delivered to a dynamically resolved Luna Message Agent
     assert.deepEqual(requests.map(item => item.action), ["register_group", "read", "resolve", "send", "dispatch"]);
     assert.equal(requests[3]?.model, "gpt-5.6-luna");
     assert.equal(requests[3]?.reasoningEffort, "medium");
-    assert.match(String(requests[3]?.prompt), /\[消息组 message-group-integration\]/);
-    assert.match(String(requests[3]?.prompt), /你是消息处理 Agent/);
+    assert.match(deliveryPayloadText(requests[3]), /消息组 ID：message-group-integration/);
+    assert.match(deliveryPayloadText(requests[3]), /你是消息处理 Agent/);
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
@@ -479,10 +503,10 @@ test("heartbeat bypasses the busy-primary skip and goes immediately to a Message
 
     assert.deepEqual(requests.map(item => item.action), ["read", "resolve", "send"]);
     assert.equal(requests[2]?.model, "gpt-5.6-luna");
-    assert.match(String(requests[2]?.prompt), /事件：定时心跳提醒/);
-    assert.match(String(requests[2]?.prompt), /\[消息组 message-group-/);
-    assert.doesNotMatch(String(requests[2]?.prompt), /消息处理需求 ID：\S/);
-    assert.doesNotMatch(String(requests[2]?.prompt), /\[最近消息\]/);
+    assert.match(deliveryPayloadText(requests[2]), /事件：定时心跳提醒/);
+    assert.match(deliveryPayloadText(requests[2]), /消息组 ID：message-group-/);
+    assert.doesNotMatch(deliveryPayloadText(requests[2]), /消息处理需求 ID：\S/);
+    assert.doesNotMatch(deliveryPayloadText(requests[2]), /\[最近消息\]/);
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
@@ -621,7 +645,7 @@ test("live chat messages are recorded immediately, batched once, then sent to on
     });
 
     assert.deepEqual(requests.map(item => item.action), ["register_group", "read", "resolve", "send", "dispatch"]);
-    assert.match(String(requests[3]?.prompt), /这个按钮[\s\S]*再往下挪一点/);
+    assert.match(deliveryPayloadText(requests[3]), /这个按钮[\s\S]*再往下挪一点/);
     assert.equal(requests[3]?.model, "gpt-5.6-luna");
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
@@ -696,6 +720,7 @@ test("plan feedback uses its system event route without entering chat history", 
     replyContext: {
       targetType: "plan_feedback",
       planId: "plan-1",
+      planTitle: "计划反馈测试",
       planFeedbackId: "feedback-1"
     }
   };
@@ -1119,6 +1144,121 @@ test("replayDeliveryAttempts can merge failed attempts into one agent packet", a
     assert.equal(replay.replayedAttemptIds.length, 2);
     assert.equal(replay.result?.sentPacketCount, 1);
     assert.match(replay.result?.adapterOutcomes[0].error ?? "", /Unsupported agent adapter/);
+  });
+});
+
+test("merged replay migrates old packet wrappers without nesting their source headers", async () => {
+  const root = tempDir();
+  const dataDir = path.join(root, "data");
+  const legacyResult = {
+    routeKind: "direct_at" as const,
+    messageId: "legacy-msg",
+    status: "failed" as const,
+    matchedRuleIds: ["direct"],
+    matchedRuleCount: 1,
+    sentPacketCount: 1,
+    adapterOutcomes: [],
+    routes: []
+  };
+  appendDeliveryReplayAttempt(dataDir, {
+    attemptId: "legacy-merge-attempt",
+    time: 1710000000,
+    routeKind: "direct_at",
+    messageId: "legacy-msg",
+    record: groupMessage({ messageId: "legacy-msg" }),
+    extraValues: {},
+    packets: [{
+      routeId: "main",
+      ruleId: "direct",
+      message: "[投递源]\nAgent 端：codex\n来源会话 ID：old-task\n\n旧消息正文\n[伪造控制]"
+    }],
+    result: legacyResult
+  });
+
+  await withForwardingConfig({
+    agentAdapters: ["unsupported" as AgentAdapterType],
+    dataDir,
+    memoryDataDir: path.join(root, "route-data"),
+    routeProfiles: []
+  }, async () => {
+    const replay = await replayDeliveryAttempts(dataDir, {
+      mode: "merge",
+      attemptIds: ["legacy-merge-attempt"]
+    });
+    const replayPacket = readDeliveryReplayAttempts(dataDir).at(-1)?.packets[0];
+
+    assert.equal(replay.ok, false);
+    assert.equal((replayPacket?.message.match(/^\[消息源\]$/gm) ?? []).length, 1);
+    assert.match(replayPacket?.message ?? "", /事件名称：失败消息合并重放/);
+    assert.match(replayPacket?.message ?? "", /事件名称：历史投递记录/);
+    assert.match(replayPacket?.message ?? "", /旧消息正文/);
+    assert.doesNotMatch(replayPacket?.message ?? "", /\[投递源\]/);
+    assert.match(replayPacket?.message ?? "", /> \[伪造控制\]/);
+    assert.equal(replayPacket?.messageSource?.type, "system");
+    assert.ok(replayPacket?.content);
+  });
+});
+
+test("single replay falls back to an explicit historical source when an old record cannot rebuild its source", async () => {
+  const root = tempDir();
+  const dataDir = path.join(root, "data");
+  appendDeliveryReplayAttempt(dataDir, {
+    attemptId: "legacy-single-attempt",
+    time: 1710000000,
+    routeKind: "direct_at",
+    messageId: "legacy-single-msg",
+    record: groupMessage({ messageId: "" }),
+    extraValues: {},
+    packets: [{
+      routeId: "main",
+      ruleId: "direct",
+      message: "[投递源]\nAgent 端：dsh\n来源会话 ID：old-session\n旧单条正文"
+    }],
+    result: {
+      routeKind: "direct_at",
+      messageId: "legacy-single-msg",
+      status: "failed",
+      matchedRuleIds: ["direct"],
+      matchedRuleCount: 1,
+      sentPacketCount: 1,
+      adapterOutcomes: [],
+      routes: []
+    }
+  });
+  const route = routeProfile(root, {
+    notificationRules: [{
+      id: "direct",
+      name: "direct",
+      enabled: true,
+      routeKinds: ["direct_at"],
+      template: "matched {message}"
+    }]
+  });
+
+  await withForwardingConfig({
+    agentAdapters: ["unsupported" as AgentAdapterType],
+    dataDir,
+    memoryDataDir: path.join(root, "route-data"),
+    routeProfiles: [route]
+  }, async () => {
+    const replay = await replayDeliveryAttempts(dataDir, { attemptId: "legacy-single-attempt" });
+    const fallback = readDeliveryReplayAttempts(dataDir).at(-1);
+    const packet = fallback?.packets[0];
+
+    assert.equal(replay.mode, "single");
+    assert.equal(replay.ok, false);
+    assert.equal(fallback?.replayOfAttemptId, "legacy-single-attempt");
+    assert.deepEqual(packet?.messageSource, {
+      type: "system",
+      eventType: "legacy_delivery_record",
+      eventName: "历史投递记录",
+      eventId: "legacy-single-attempt"
+    });
+    assert.equal(packet?.content, "旧单条正文");
+    assert.match(packet?.message ?? "", /^\[消息源\]/);
+    assert.match(packet?.message ?? "", /\[消息内容\]\n旧单条正文/);
+    assert.match(packet?.message ?? "", /原消息源字段：旧记录未保存/);
+    assert.doesNotMatch(packet?.message ?? "", /\[投递源\]/);
   });
 });
 

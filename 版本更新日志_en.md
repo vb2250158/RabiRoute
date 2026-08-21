@@ -6,12 +6,33 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## Unreleased - 2026-08-12
+## Unreleased - 2026-08-20
 
-### Agent deliveries must name their source
+### First Cordis plugin-runtime slice
 
-- Every Agent `create` / `send` with a body must start with `[投递源]` and include `deliverySource.agentAdapter` plus `deliverySource.sessionId`.
-- The body shows the Agent endpoint (`codex`, `dsh`, `copilotCli`, and others) and the source session. Agent-to-Agent delivery also shows the source Agent and workspace, and `deliverySource.sessionId` must equal `sourceThreadId`.
+- Added exact `cordis@4.0.0-rc.8`, with all Cordis compatibility code contained under `src/runtime/`.
+- `codex`, `dsh`, `copilotCli`, `marvis`, and `astrbot` register as independent Fibers in one Agent Adapter catalog. `createAgentAdapter()`, message templates, Desktop IPC, and DSH delivery remain compatible.
+- Lifecycle tests cover unloading one adapter Fiber, disposing the root Context, rejecting duplicate types, and matching the built-in manifest catalog. Manager scans, configuration enums, the Gateway Host, and WebGUI/Desktop contribution catalogs continue as staged work.
+
+### DSH can own the full Primary Agent and Plan Secretary path
+
+- DSH setup now follows **API address → workspace → session**, with existing-session selection, typed-name resolution, idempotent create on save, complete-ID binding, automatic initialization, and session-list pagination.
+- A DSH Primary Agent can use Message Agents, Plan Secretaries, dedicated memory consolidation, Hook enforcement, and **only the Primary Persona may send**. Auxiliary sessions remain bound to the selected primary adapter and workspace, and DSH failures never fall back to Codex.
+- The DSH `RabiRoute Agent` plugin provides thread bridge, outbound send, plan, message-processing, memory, and Agent-communication tools and sends only the unified `messageSource` contract to Manager. Real-profile repeated delivery, restart readback, and tool-owner acceptance remain pending.
+
+### Unified Windows desktop entry
+
+- The Windows product entry is now `Start-RabiRoute-Desktop.bat` and `RabiRoute-Desktop.exe`. The system tray, task window, and local Manager backend form one RabiRoute Desktop runtime.
+- Normal startup records one desired state and supervises missing components; exiting RabiRoute Desktop stops the local backend. If desktop dependencies are missing, Windows desktop startup fails instead of presenting Manager/WebGUI alone as a complete desktop launch.
+
+### Unified message source and message content
+
+- Every non-empty RabiRoute handler delivery carries `messageSource`. Source types are message endpoint, Agent, plan, and system, each with its required endpoint, session, plan, event, Route, name, and complete-ID fields.
+- Every final body starts with `[消息源]`, immediately followed by `[消息内容]`; event details, recent messages, collaboration rules, and response contracts follow the message content.
+- Agent sources require the actual Agent endpoint (`codex`, `dsh`, `copilotCli`, and others), session name, and complete session ID. Agent-to-Agent delivery also requires `messageSource.sessionId === sourceThreadId`.
+- The Agent adapter interface now accepts only a structured envelope, never a bare string. `contextBlocks` and `controlBlocks` follow message content in that order and reject nested envelope headers.
+- Non-empty Agent `create` and `send` requests both verify `sourceThreadId`; the actual Codex Desktop or DSH owner name replaces stale submitted names. Manager-owned plan progress, approval, and QA events show plan identity only, while a verified plan-task return may include its source session.
+- Legacy `[投递源]` wrappers, nested envelopes, and old Agent response wrappers are migrated automatically. Old replays without structured provenance are labeled `历史投递记录`; a single replay that cannot rebuild its original source uses this controlled fallback without guessing an endpoint or Agent.
 
 ### Archived Agent tasks are replaced automatically
 
@@ -21,7 +42,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Windows supports a system-wide selected-text menu and screenshots
 
-- The WebGUI **Settings** page can enable **Enable selected-text menu**. Drag-selecting text in any Windows app that exposes text selection shows system floating buttons. Hovering over **Send to** lists every enabled and running persona, and clicking one sends the text to that Route. **Selected-text reading** is a sub-feature: when it is on, the left button reads the text after a click; when it is off, the bar keeps only **Send to**. The TTS model selector appears only when both **Selected-text reading** and **Advanced options** are on. Selection alone never reads or sends text.
+- The WebGUI **Settings** page can enable **Enable selected-text menu**. Windows applications support mouse dragging and `Shift` keyboard expansion. The bar is horizontally centered on the selection, above upward drags and below downward or same-line drags. Normal applications use UI Automation; when Unity lacks that interface, guarded temporary copy input is used and the clipboard is restored. Without a system caret, the most recent click in the same window anchors the bar. Hovering over **Send to** lists every enabled and running persona, and clicking one sends the text to that Route. **Selected-text reading** is a sub-feature: when it is on, the left button reads the text after a click; when it is off, the bar keeps only **Send to**. The TTS model selector appears only when both **Selected-text reading** and **Advanced options** are on. Selection alone never reads or sends text.
 - The same page can enable **System screenshot** and configure a global shortcut. Pressing it in any application opens a screenshot preview where the user can enter text, choose an active persona, and click **Send**. The image and text reuse role-panel delivery, and Codex/DSH receive real image input. Screenshots stay in the private `.rabiroute-message-images/` directory; the tray watches configuration changes, so restarting the tray is not required.
 
 ### WebGUI page labels switch immediately
@@ -1101,8 +1122,8 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ### Windows desktop startup and full package boundaries
 
 - Windows launcher, tray frozen mode and packaging scripts will check whether the backend `dist/manager.js` and `ribiwebgui/dist` are missing or expired, and automatically build them according to the scenario.
-- `docs/windows-launcher-and-packaging.md` is now the source of truth for Windows startup and packaging. It clarifies that `RabiRoute-Tray.exe` is the tray entry in a complete desktop bundle, not a self-contained single-file package.
-- The packaging script will output `RabiRoute-Tray.new.exe` when it cannot overwrite the running `RabiRoute-Tray.exe` to avoid the build result from directly failing or misleading users.
+- `docs/windows-launcher-and-packaging.md` is now the source of truth for Windows startup and packaging. It clarifies that `RabiRoute-Desktop.exe` is the entry for the complete desktop application, not a self-contained single-file package.
+- The packaging script will output `RabiRoute-Desktop.new.exe` when it cannot overwrite the running `RabiRoute-Desktop.exe` to avoid the build result from directly failing or misleading users.
 
 ### RabiLink Server Console and Remote PC WebGUI- The Relay management entrance is unified as `/manage`. After logging in, enter the "RabiLink Server Console"; the same server supports multiple accounts, and each browser session only maintains one current login account. The applications, tokens, PC Rabi connection records and session status between accounts are isolated from each other.
 - The server console displays the PC Rabi instances connected under the current account and provides an "Open PC WebGUI" entry. `/manage/<account>/<RabiGUID>/#/routes` loads the server-hosted RibiWebGUI static frontend and forwards reads and writes through the Relay worker to that PC's local Manager.
@@ -1479,7 +1500,7 @@ This supplement includes data format migration instructions in the README, Windo
 - README adds "Current Data Format" to clarify the responsibility boundaries of `data/route/<configName>/adapterConfig.json` and `data/roles/<RoleId>/personaConfig.json`.
 - README adds old file migration relationships: `routeConfig.json` moves to `adapterConfig.json`, `roleMessageConfig.json` moves to `personaConfig.json`.
 - README clarifies that `data/gateways.json` and `data/roles/<RoleId>/routes.json` are no longer used as new moderator configuration entries.
-- README adds Windows exe packaging command and runtime boundary: `RabiRoute-Tray.exe` only packages the PySide6 tray entry, and does not build in Node.js, manager/WebGUI build products or runtime `data/`.
+- README adds Windows exe packaging command and runtime boundary: `RabiRoute-Desktop.exe` only packages the PySide6 tray entry, and does not build in Node.js, manager/WebGUI build products or runtime `data/`.
 - README document index supplements plan/memory, Agent interface and code architecture entry.
 - Added `docs/plan-and-memory-model.md`, `docs/rabi-agent-interfaces.md` and `docs/agent-context-injection.md` to account for character planning, recent memory, sunk memory, context injection and Agent postback boundaries.
 - Added `docs/code-architecture.md` to sort out the modification entrances for the backend entrance, message main link, routing module, manager control plane, WebGUI, tray window and plug-in directory.
@@ -1513,7 +1534,7 @@ This supplement includes data format migration instructions in the README, Windo
 - The local runtime `data/` has been generated in the new format `adapterConfig.json` and `personaConfig.json`, the old files are retained for rollback reference.
 - `npm run check:config` passed.
 - `npm run build` passed.
-- `scripts/build-tray-exe.ps1 -SkipNodeBuild` Passed, local `RabiRoute-Tray.exe` has been generated.
+- `scripts/build-desktop-exe.ps1 -SkipNodeBuild` Passed, local `RabiRoute-Desktop.exe` has been generated.
 - The new version of manager has been restarted, and `http://127.0.0.1:8790/meta` is working normally.
 
 ## 2026-06-07
@@ -1547,7 +1568,7 @@ This update further expands RabiRoute from a single QQ/Codex routing to a multi-
 
 ### Windows Desktop Portal
 
-- Added and unified Windows startup entry to `Start-RabiRoute-Tray.bat`.
+- Added and unified Windows startup entry to `Start-RabiRoute-Desktop.bat`.
 - Added PySide6/Qt tray task panel, which read-only displays the current task, short-term/long-term plan, short-term/long-term memory, task list and running status.
 - The tray panel reads status through the manager API and can request graceful shutdown when the launcher has the manager life cycle.
 - The desktop layer maintains cross-platform boundaries: Qt panel, manager client, task repository, role context repository and life cycle control remain reusable, Windows only provides the first launcher.
@@ -1573,8 +1594,8 @@ This update further expands RabiRoute from a single QQ/Codex routing to a multi-
 
 ### Additional updates
 
-- Windows entry merged into `Start-RabiRoute-Tray.bat`, removed old `Start-RabiRoute-Windows.bat` forked with `scripts/start-rabiroute-windows.ps1`.
-- Added `RabiRoute-Tray.spec` and `scripts/build-tray-exe.ps1` to support PyInstaller local packaging root directory `RabiRoute-Tray.exe`; exe will not be submitted to the source code warehouse, and public release packages will not be enabled for the time being.
+- Windows entry merged into `Start-RabiRoute-Desktop.bat`, removed old `Start-RabiRoute-Windows.bat` forked with `scripts/start-rabiroute-windows.ps1`.
+- Added `RabiRoute-Desktop.spec` and `scripts/build-desktop-exe.ps1` to support PyInstaller local packaging root directory `RabiRoute-Desktop.exe`; exe will not be submitted to the source code warehouse, and public release packages will not be enabled for the time being.
 - The packaged tray exe locates the project root directory from its own directory in freeze mode and automatically starts `node dist/manager.js` when the manager is not running.
 - When the tray exits, manager shutdown will be called first, and the managed process will be terminated directly when it owns the manager process to reduce background residue.
 - Manager configuration is split into `data/route/<configName>/adapterConfig.json` and `data/roles/<RoleId>/personaConfig.json`, routing adapter and personality template rules are no longer mixed in the same file.

@@ -25,11 +25,11 @@ test("desktop lifecycle intent fails closed when state is missing or malformed",
 test("desktop lifecycle intent is written atomically and read back as the single desired state", () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-intent-"));
   try {
-    const running = writeDesktopLifecycleIntent(rootDir, "running", "windows-launcher");
+    const running = writeDesktopLifecycleIntent(rootDir, "running", "windows-desktop");
     assert.equal(running.desiredState, "running");
-    assert.equal(readDesktopLifecycleIntent(rootDir)?.source, "windows-launcher");
+    assert.equal(readDesktopLifecycleIntent(rootDir)?.source, "windows-desktop");
 
-    const stopped = writeDesktopLifecycleIntent(rootDir, "stopped", "tray-exit");
+    const stopped = writeDesktopLifecycleIntent(rootDir, "stopped", "desktop-exit");
     assert.equal(stopped.desiredState, "stopped");
     assert.deepEqual(readDesktopLifecycleIntent(rootDir), stopped);
 

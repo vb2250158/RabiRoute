@@ -47,9 +47,10 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 人格自动化 | 本机实现与自动化测试已验证；长期运行待继续观察 | 人格规则统一支持消息或定时触发，并可通知 Agent 或运行受限本机脚本。旧消息模板规则兼容迁移；脚本默认关闭，只能来自人格 `scripts/` 目录，Agent 与脚本结果分开记录。 |
 | 外发语言风格风控 | 本机实现与自动化测试已验证 | 人格可绑定语言风格 Skill。`/api/agent/send` 默认校验；失败时在 Outbox 前返回原因，同一 `deliveryId` 可用 `styleValidation=0` 二次确认。通用校验 API 与 Codex Hook 复用同一规则；Hook 只提示。 |
 | 定时任务运行入口 | 已验证 | Gateway 子进程承载定时人格自动化；支持间隔、时间窗口、每天指定时间和单次指定时间。通知 Agent 时可选在固定 Codex 线程忙碌时跳过；脚本动作使用独立本机权限。 |
-| 角色面板 | 已验证 | Manager/托盘提供的内置本地入口，不是独立网络 listener；使用固定 `role_panel_message` 规则，记录写入角色目录的 timeline。 |
-| 系统截图与人格投递 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页可保存系统截图开关、全局快捷键和 Windows 登录启动。截图预览支持附加文字并选择已激活人格，图片和文字复用角色面板入口；Codex/DSH 通过图片路径接收真实图片输入。 |
-| 滑词菜单 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页卡片“开启滑词菜单”。划选后显示悬浮按钮，点击才执行。“滑词朗读”是子功能，关闭后悬浮条只保留“投递至”。 |
+| 角色面板 | 已验证 | RabiRoute Desktop 与 WebGUI 共用的内置本地入口，不是独立网络 listener；使用固定 `role_panel_message` 规则，记录写入角色目录的 timeline。 |
+| 系统截图与人格投递 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页可保存 RabiRoute Desktop 的系统截图开关、全局快捷键和 Windows 登录启动。截图预览支持附加文字并选择已激活人格，图片和文字复用角色面板入口；Codex/DSH 通过图片路径接收真实图片输入。 |
+| 界面主题 | 代码与自动化测试已验证；Windows 实机验收待完成 | 主题保存在主机级 `data/desktop/settings.json`。WebGUI 与托盘读取同一 `system`、`light` 或 `dark` 设置；托盘菜单、角色面板、滑词操作条和截图窗口随之更新。 |
+| 滑词菜单 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页卡片“开启滑词菜单”。支持鼠标拖选和 `Shift` 键盘扩选；悬浮条按选区范围横向居中，向上拖选放上方，向下或同一行拖选放下方。Unity 编辑器在 UI Automation 不可用时发送受保护的临时复制并恢复原剪贴板；无系统插入符时使用同一窗口最近一次点击位置。点击才执行；关闭“滑词朗读”后只保留“投递至”。 |
 | 跨人格消息 | 自动化合同已验证；待真实双人格 Desktop 验收 | `GET /api/personas` 提供不含正文和本机目录的人格列表；`POST /api/personas/:personaId/messages` 校验 AgentPacket 注入的 Route + 人格绑定凭据，并复用目标 Route 的固定 `role_panel_message` 链。请求必须带稳定 `deliveryId`；同 ID 同内容复用回执，内容变化返回冲突。目标有多个已启用 Route 时必须明确选择，给自己发送和超过 8 跳都会拒绝。普通回复不会自动返回来源人格，回复时必须显式反向投递并沿用会话关联字段。 |
 | 计划审批事件 | 已验证 | 审批意见落盘后由 Manager 生成独立 `plan_feedback` 系统事件；不依赖可编辑消息规则，不写聊天 timeline/会话账本，不注入最近消息。 |
 | Manual trigger | 已验证 | Manager API 和日志诊断页可真实触发 `manual_trigger` 或 heartbeat 规则；它不是消息适配器。 |
@@ -87,10 +88,12 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 处理端 | 状态 | 实际边界 |
 | --- | --- | --- |
 | Codex | 已验证 | 真实消息只通过 Desktop IPC 投给 Codex/ChatGPT Desktop 任务 owner。有效任务 ID 与工作目录形成稳定绑定；Desktop 改名、索引标题滞后或 goal 完成都不会触发重复创建。任务未加载时用 deeplink 唤醒并重试，失败时不启动备用 Runtime。app-server 只用于空任务元数据 bootstrap。 |
-| DSH（DeepSeek Harness） | 实验支持 | RabiRoute 通过 DSH apiproxy 的 `POST /api/session.prompt` queue 模式，把消息投给用户在 DSH WebGUI 中预先创建并绑定的 `session-<uuid>`。配置支持会话 ID、显示名、工作目录和 API 基地址；RabiRoute 不创建、重命名或归档 DSH 会话。当前只作为 delivery target，消息处理 Agent、计划协助、记忆整理和 Hook 仍由 Codex 管理，真实连续注入仍需环境验收。 |
+| DSH（DeepSeek Harness） | 实验支持 | 已实现 apiproxy Endpoint、工作目录和会话扫描，支持按完整 ID 续投、按名称 + 工作目录解析、唯一最新同名会话选择、零匹配幂等创建、改名、保存绑定和自动初始化。DSH 可作为主人格、消息处理 Agent、计划秘书、独立记忆整理 Agent 或业务 Agent；`RabiRoute Agent` 插件提供线程桥、外发、计划、记忆、消息处理和 Agent 间通信工具，Hook 约束与“仅允许主人格发送消息”也适用于 DSH 主 Agent。代码、WebGUI 和插件测试已覆盖；当前本机 XinghaiBuilder profile 已通过连续投递、Manager/DSH 重启读回、六个计划秘书、消息处理、独立记忆整理、正式回复和无效 Endpoint 失败关闭。独立扫描可读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，并诊断插件缺失、未激活和版本不匹配。发布包与全新环境回归待完成。 |
 | Copilot CLI | 实验支持 | 调用本机 Copilot CLI，使用独立 session name 和 cwd，记录输出和状态；扫描接口明确提示尚未完成连续同会话端到端烟测。 |
 | AstrBot | 实验支持 | 支持 Dashboard 登录验证、项目/会话扫描、RabiRoute 插件部署和 ChatUI 会话投递；扫描接口明确提示仍需真实连续发送验收。 |
 | Marvis | 人工接力 | 写 prompt、复制剪贴板并打开/聚焦 Marvis；不能可靠列出、创建或重复注入同一会话。 |
+
+处理端创建已接入首个 Cordis 运行时切片：五个内置 Agent Adapter 由独立 Fiber 注册到同一清单，兼容入口和原投递路径保持不变；单个 Fiber 与根 Context 的撤销已通过自动化测试。Manager 扫描、配置枚举、Gateway Host 和表现端贡献目录仍在迁移。
 
 目标 Desktop 任务的命令、文件、网络、权限和工具审批与 RabiRoute 的外部消息 Outbox policy 是两层不同边界。
 
@@ -137,7 +140,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 计划、近期记忆、沉淀记忆、整理 run 和技能索引均有 Manager API 和文件真源；新记忆使用 Markdown，旧 JSON 继续兼容。
 - AgentPacket 的 `message_delivery` 与 Codex 的 session、prompt、PreToolUse、PostToolUse 都进入 `RabiContextManager`；生产代码只有这个入口执行角色知识快照。消息入口使用完整上下文，推理期只注入本 turn 新命中的增量。
 - Codex 处理端已有 Hook 管理：会话入口上下文在 `SessionStart` / `UserPromptSubmit` 触发，推理期上下文刷新在 `PreToolUse` / `PostToolUse` 触发，计划任务会话完成通知在计划绑定任务输出最终回答后的 `Stop` 触发；Route 还可开启“强制使用 RabiAgent 消息投递接口”，在 `PreToolUse` 拒绝主人格、计划 Agent、计划秘书和消息处理 Agent 绕过 Rabi 操作其它持久任务。四组默认开启，开关只控制 Manager 响应，不改插件注册。
-- Agent 必回复请求为实验能力。带正文的 `create` / `send` 必须提供 `deliverySource`，正文以 `[投递源]` 开头。Agent 互投必须明确 `responsePolicy=required|none`，且 `deliverySource.sessionId` 等于 `sourceThreadId`；必回复请求由 Manager 持久化，正式回复必须带 `requestId`、结果和下一步。目标轮次结束仍未正式回复时，Manager 从该轮结束起五分钟后提醒；消息处理转交的正式回复会把原发布任务恢复为继续处理。请求状态机、接口、Hook 拒绝/Stop 处理、插件输出和 WebGUI 构建已通过自动化测试，真实 Desktop 多任务下的持续五分钟提醒仍待纵向验收。
+- RabiRoute 投给处理端的非空消息统一携带 `messageSource`，并固定以 `[消息源]`、`[消息内容]` 开头；Agent adapter 接口本身只接收结构化信封。来源类型包括消息端、Agent、计划和系统，各类型必须提交自己的名称与完整 ID 字段。消息内容之后依次是 `contextBlocks` 和 `controlBlocks`，两者不能嵌套消息信封标题。旧 `[投递源]`、旧嵌套信封、旧 Agent 回复和旧重放记录有迁移路径；来源无法还原的旧重放明确显示“历史投递记录”。Agent 必回复请求为实验能力：Agent 互投必须明确 `responsePolicy=required|none`，带正文的 `create` 和 `send` 在 `type=agent` 时都必须提供 Agent 端、会话名称、完整会话 ID 和相同的 `sourceThreadId`，Manager 用实际 owner 名称覆盖旧名称。必回复请求由 Manager 持久化，正式回复必须带 `requestId`、结果和下一步。目标轮次结束仍未正式回复时，Manager 从该轮结束起五分钟后提醒；消息处理转交的正式回复会把原发布任务恢复为继续处理。请求状态机、接口、Hook 拒绝/Stop 处理、插件输出和 WebGUI 构建已通过自动化测试，真实 Desktop 多任务下的持续五分钟提醒仍待纵向验收。
 - 实验性的计划会话任务完成提醒已实现：计划用 `taskBinding` 精确绑定 Codex 执行会话，省略 `completionHook` 时默认开启，也可用 `completionHook.enabled=false` 单独关闭。`Stop` Hook 把官方最终回答交给 Manager，再经角色面板 / Forwarding / AgentPacket 提醒同人格 Route 的主人格会话。路由层按 session + turn 去重且不自行修改计划；提醒合同要求主人格在同一轮读取计划、更新计划和记忆、向原 `taskBinding.sessionId + workspace` 续投，或在完成/暂停时释放并重新分配槽位，结束前校验没有可推进但空闲的计划。冲突失败关闭；目前只有代码、HTTP、插件和 mock RolePanel 链测试，尚未完成双真实 Desktop 任务验收。
 - 命中记忆会按统一策略刷新 `viewedAt`；同一 turn 的相同条目修订不会重复刷新。只有显式 `memory-consolidation` 手动触发或 Manager API request 才会创建整理 run，提交结果后才标记输入并写入沉淀记忆；当前没有仅凭时间流逝自动启动的后台整理调度器。Codex Route 可把手动触发投给独立“`<主人格任务名> 记忆整理`”Desktop 任务，默认模型 `gpt-5.6-terra`，失败不回退给主人格。
 - Codex 插件只转发 lifecycle 事件和注入 Manager 返回值，不拥有绑定、触发策略或知识副本。内部 `preview` 策略无副作用，但当前仍没有 WebGUI 预览界面。

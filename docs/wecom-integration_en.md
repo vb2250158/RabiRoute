@@ -133,7 +133,7 @@ Send to the source group:
 ```json
 {
   "deliveryId": "wecom-msg-001-response",
-  "sender": { "agentType": "codex", "sessionId": "<current complete session ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<current Codex Primary Persona session ID>" },
   "routeId": "wecom",
   "channel": "wecom",
   "params": {
@@ -150,7 +150,7 @@ Proactive group send:
 ```json
 {
   "deliveryId": "wecom-reminder-2026-08-10-1800",
-  "sender": { "agentType": "codex", "sessionId": "<current complete session ID>" },
+  "sender": { "agentType": "primary_persona", "sessionId": "<current Codex Primary Persona session ID>" },
   "routeId": "wecom",
   "channel": "wecom",
   "params": { "chatId": "wrCHATID" },
@@ -158,7 +158,7 @@ Proactive group send:
 }
 ```
 
-`sender.agentType`, the current complete `sender.sessionId`, and `routeId` are required. `routeId` must select an enabled Route exactly, and `params.chatId` is mandatory. A source response may include `params.reqId`; a proactive send omits it. Outbox still checks `messageAdapterPolicies.wecom.outputEnabled`, `supportedOutputs`, and credentials. It returns `blocked` or `failed` when policy or delivery prevents sending and records the result in `outbox-adapter.log.jsonl`.
+The examples use a Codex Primary Persona sender: `sender.agentType`, the current complete `sender.sessionId`, and `routeId` are required. When the Codex **Only Primary Persona Can Send Messages** Hook is enabled, `sender.agentType` must be `primary_persona` and `sender.sessionId` must exactly match the Route's `codexThreadId`. `routeId` must select an enabled Route exactly, and `params.chatId` is mandatory. A source response may include `params.reqId`; a proactive send omits it. Outbox still checks `messageAdapterPolicies.wecom.outputEnabled`, `supportedOutputs`, and credentials. It returns `blocked` or `failed` when policy or delivery prevents sending and records the result in `outbox-adapter.log.jsonl`.
 
 ## Logs and health
 

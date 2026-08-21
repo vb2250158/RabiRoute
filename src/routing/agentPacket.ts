@@ -12,6 +12,7 @@ import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import { recentMessageLimitFor } from "../shared/gatewayConfigModel.js";
 import { communicationModeForRouteKind, proactiveCommunicationPolicyLines } from "../shared/agentCommunicationPolicy.js";
+import { normalizeRabiMessageContent, renderRabiMessage, type RabiMessageSource } from "../shared/rabiMessage.js";
 import {
   currentPlanStep,
   getPlan,
@@ -67,6 +68,8 @@ function personaDataDirFor(roleContext: AgentRoleContext): string {
 export type AgentPacket = {
   rule: NotificationRule;
   templateValues: ForwardTemplateValues;
+  messageSource: RabiMessageSource;
+  content: string;
   message: string;
   /** Shadow assessment persisted only after this packet enters the delivery path. */
   conversationSituation?: ConversationSituation;
@@ -282,6 +285,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
   return [
     ...intro,
     "使用下面的明确发送模板。来源上下文只用于核对。",
+    "仅当当前 Route 在 Codex 的 Hook 管理中开启“仅允许主人格发送消息”时，Codex 主人格发送必须填 sender.agentType=primary_persona，sender.sessionId 必须是绑定的主人格任务 ID；其它场景按模板中的实际发送方填写。",
     "NapCat 图片引用按原图填写 params.replyImageDescriptions。",
     `POST ${sendApiUrl}`,
     "示例：",
@@ -797,6 +801,69 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"], record?: Rout
   return "RabiRoute 消息提醒";
 }
 
+function sourceRecordId(record: RouteDecision["record"]): string {
+  const messageId = String(record.messageId ?? "").trim();
+  if (!messageId) throw new Error("Message source requires the original message id.");
+  return messageId;
+}
+
+function sourceSenderId(record: RouteDecision["record"]): string | undefined {
+  if ("senderStableId" in record && record.senderStableId) return String(record.senderStableId);
+  if ("senderId" in record && record.senderId) return String(record.senderId);
+  if ("userId" in record && record.userId != null) return String(record.userId);
+  if (isVoiceTranscriptRecord(record)) return String(record.voiceprintId || record.speakerId || "").trim() || undefined;
+  return undefined;
+}
+
+function planSourceIdentity(record: RouteDecision["record"], roleDir: string): { planId: string; planName: string } {
+  const replyContext = isPlanFeedbackRecord(record) && record.replyContext && typeof record.replyContext === "object"
+    ? record.replyContext
+    : {};
+  const planId = String(replyContext.planId || "").trim();
+  const planName = String(replyContext.planTitle || "").trim()
+    || (planId ? String(getPlan(roleDir, planId)?.title || "").trim() : "");
+  if (!planId || !planName) throw new Error("Plan message source requires the exact plan id and name.");
+  return { planId, planName };
+}
+
+function messageSourceForDecision(decision: RouteDecision, values: ForwardTemplateValues, roleDir: string): RabiMessageSource {
+  const record = decision.record;
+  const route = decision.route;
+  if (decision.routeKind === "plan_feedback") {
+    return { type: "plan", ...planSourceIdentity(record, roleDir) };
+  }
+  if (decision.routeKind === "heartbeat" || decision.routeKind === "manual_trigger") {
+    return {
+      type: "system",
+      eventType: decision.routeKind,
+      eventName: eventTitleForRoute(decision.routeKind, record),
+      eventId: String(values.triggerId || record.messageId || record.time),
+      routeName: route.name,
+      routeId: route.id
+    };
+  }
+  const messageAdapter = String(values.recentMessageEndpoint || values.inputAdapter || ("adapterType" in record ? record.adapterType : "")).trim();
+  const conversationId = String(values.recentConversationKey || values.targetId || "").trim();
+  const senderName = String(values.senderName || values.sender || "").trim() || undefined;
+  const senderId = sourceSenderId(record);
+  if (!messageAdapter) throw new Error("Message source requires the exact message adapter.");
+  if (!conversationId) throw new Error("Message source requires the exact conversation id.");
+  if (!senderName && !senderId) throw new Error("Message source requires the sender name or id.");
+  return {
+    type: "message_adapter",
+    messageAdapter,
+    conversationType: String(values.targetType || decision.routeKind),
+    conversationName: String(values.messageTarget || "").trim() || undefined,
+    conversationId,
+    senderName,
+    senderId,
+    messageId: sourceRecordId(record),
+    messageGroupId: String(record.messageGroupId || "").trim() || undefined,
+    routeName: route.name,
+    routeId: route.id
+  };
+}
+
 function outputPipelineForDecision(decision: RouteDecision): ResolvedPipeline {
   const record = decision.record;
   const pipeline = decision.route.resolvedPipeline ?? config.resolvedPipeline;
@@ -1046,7 +1113,7 @@ function buildAgentMessage(
   rolePath: string,
   roleDir: string,
   dataDir: string
-): { message: string; conversationSituation?: ConversationSituation } {
+): { messageSource: RabiMessageSource; content: string; message: string; conversationSituation?: ConversationSituation } {
   const record = decision.record;
   const routeKind = decision.routeKind;
   const shouldAttachMemoryConsolidation = routeKind === "manual_trigger" && String(values.triggerId || "") === "memory-consolidation";
@@ -1079,7 +1146,7 @@ function buildAgentMessage(
   const knowledgeAgentInterfaceDocPath = relativeWorkspacePath(knowledge?.agentInterfaceDocPath);
   const recentMessageLimit = Number(values.recentMessageLimit ?? 0);
   const capabilityIntentText = [
-    String(values.message || record.rawMessage || ""),
+    normalizeRabiMessageContent(String(values.message || record.rawMessage || ""), true),
     userTemplateText
   ].filter(Boolean).join("\n");
   const capabilityContext = {
@@ -1155,15 +1222,15 @@ function buildAgentMessage(
     `  workspace=${session.workspace}`
   ]);
 
+  const messageSource = messageSourceForDecision(decision, values, roleDir);
   const blocks = [
-    section("RabiRoute 事件", [
+    String(values.message || record.rawMessage || ""),
+    section("事件信息", [
       `事件：${eventTitleForRoute(routeKind, record)}`,
       `路由类型：${routeKind}`,
       optionalLine("事件时间", values.time),
       optionalLine("当前时间", values.currentTime),
-      optionalLine("来源", values.messageTarget),
       optionalLine("语音处理主机", values.voiceSourceHostName || values.voiceSourceHostId),
-      optionalLine("发送者", values.sender),
       optionalLine("声纹 ID", values.voiceprintId),
       optionalLine("本段声纹", values.voiceprintIds),
       optionalLine("语音账号兼容数据文件", values.voiceIdentitiesPath),
@@ -1173,12 +1240,9 @@ function buildAgentMessage(
       optionalLine("触发名称", values.triggerName)
     ]),
     recentMessageLimit > 0 ? section("最近消息", [
-      optionalLine("当前消息端", values.recentMessageEndpoint),
-      optionalLine("当前会话", values.recentConversationKey),
-      `当前消息端、当前会话最近 ${recentMessageLimit} 条双向消息：`,
+      `最近 ${recentMessageLimit} 条双向消息：`,
       String(values.recentMessages || "- 暂无")
     ]) : "",
-    section("消息", [String(values.message || record.rawMessage || "")]),
     attachmentLines(record).length > 0 ? section("消息附件", attachmentLines(record)) : "",
     focusedConversationContext.length > 0 ? section("当前讨论片段", focusedConversationContext) : "",
     immediateAddressedContext.length > 0 ? section("紧邻对话", immediateAddressedContext) : "",
@@ -1279,8 +1343,11 @@ function buildAgentMessage(
     userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
   ];
 
+  const content = appendAgentRoleReference(blocks.filter(Boolean).join("\n\n"), hasPersona ? rolePath : "");
   return {
-    message: appendAgentRoleReference(blocks.filter(Boolean).join("\n\n"), hasPersona ? rolePath : ""),
+    messageSource,
+    content,
+    message: renderRabiMessage(messageSource, content),
     conversationSituation
   };
 }
@@ -1299,6 +1366,8 @@ export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule
   return {
     rule,
     templateValues,
+    messageSource: built.messageSource,
+    content: built.content,
     message: built.message,
     conversationSituation: built.conversationSituation
   };

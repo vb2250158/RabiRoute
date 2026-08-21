@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { managerEventSource } from "../managerApi";
 import { routeScopedKnowledgeUrl, routeScopedOverviewUrl } from "../routeScopedNavigation";
@@ -7,20 +7,21 @@ import { configNameFor } from "../utils/gatewayHelpers";
 import { redirectCurrentWebguiToLan } from "../webguiLanRedirect";
 import { copyTextToClipboard } from "../clipboard";
 import { desktopSettingsClient } from "../desktopSettingsClient";
+import { publishInterfaceTheme } from "../interfaceTheme";
+import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import { resolveSelectionSpeechModel, type SelectionSpeechSettings } from "@shared/selectionSpeechContract";
 import type { SpeechModel } from "@shared/speechControlContract";
 import { speechControlClient } from "../speech/speechControlClient";
+import { registerPageSaveAction } from "../pageSaveAction";
 
 const store = useGatewayStore();
 
 const routeDir = ref("");
 const rolesDir = ref("");
 const dirSaving = ref(false);
-const dirSaved = ref(false);
 const dirError = ref("");
 const rabiName = ref("");
 const rabiSaving = ref(false);
-const rabiSaved = ref(false);
 const rabiError = ref("");
 const rabiLinkRelayEnabled = ref(false);
 const rabiLinkRelayUrl = ref("");
@@ -40,11 +41,20 @@ const selectionSpeechLoaded = ref(false);
 const selectionSpeechSaving = ref(false);
 const desktopScreenshotEnabled = ref(false);
 const desktopScreenshotShortcut = ref("Ctrl+Shift+S");
+const desktopScreenshotShortcutCapturing = ref(false);
+const desktopScreenshotClipboardShortcut = ref("F3");
+const desktopScreenshotClipboardShortcutCapturing = ref(false);
+const desktopScreenshotAutoCopy = ref(true);
 const desktopAutostart = ref(false);
+const desktopTheme = ref<DesktopTheme>("system");
+
 const desktopSettingsLoaded = ref(false);
 const desktopSettingsSaving = ref(false);
 const desktopSettingsError = ref("");
-const desktopSettingsNotice = ref("");
+const settingsDirty = ref(false);
+const settingsSaving = ref(false);
+const settingsHydrating = ref(true);
+const settingsReady = computed(() => desktopSettingsLoaded.value && selectionSpeechLoaded.value);
 type WebguiLanUrl = { name?: string; address: string; cidr?: string; url: string };
 type WebguiLanAccess = {
   enabled: boolean;
@@ -84,6 +94,8 @@ async function loadDirConfig() {
   rabiName.value = store.meta.rabiName || store.meta.computerName || "";
   loadRabiLinkRelayForm();
   await Promise.all([loadWebguiLanAccess(), loadDesktopSettings(), loadSelectionSpeechSettings()]);
+  await nextTick();
+  settingsHydrating.value = false;
 }
 
 async function loadDesktopSettings(): Promise<void> {
@@ -91,7 +103,10 @@ async function loadDesktopSettings(): Promise<void> {
     const settings = await desktopSettingsClient.read();
     desktopScreenshotEnabled.value = settings.screenshot.enabled;
     desktopScreenshotShortcut.value = settings.screenshot.shortcut;
+    desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
+    desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
     desktopAutostart.value = settings.autostart;
+    desktopTheme.value = settings.theme;
     desktopSettingsLoaded.value = true;
     desktopSettingsError.value = "";
   } catch (error) {
@@ -100,24 +115,30 @@ async function loadDesktopSettings(): Promise<void> {
 }
 
 async function saveDesktopSettings(): Promise<void> {
-  if (!desktopSettingsLoaded.value || desktopSettingsSaving.value) return;
+  if (!desktopSettingsLoaded.value || desktopSettingsSaving.value) throw new Error("桌面设置尚未加载完成。");
   desktopSettingsSaving.value = true;
   desktopSettingsError.value = "";
-  desktopSettingsNotice.value = "";
   try {
     const settings = await desktopSettingsClient.update({
       screenshot: {
         enabled: desktopScreenshotEnabled.value,
-        shortcut: desktopScreenshotShortcut.value
+        shortcut: desktopScreenshotShortcut.value,
+        clipboardShortcut: desktopScreenshotClipboardShortcut.value,
+        autoCopy: desktopScreenshotAutoCopy.value
       },
-      autostart: desktopAutostart.value
+      autostart: desktopAutostart.value,
+      theme: desktopTheme.value
     });
     desktopScreenshotEnabled.value = settings.screenshot.enabled;
     desktopScreenshotShortcut.value = settings.screenshot.shortcut;
+    desktopScreenshotClipboardShortcut.value = settings.screenshot.clipboardShortcut;
+    desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
     desktopAutostart.value = settings.autostart;
-    desktopSettingsNotice.value = "桌面设置已保存；托盘会自动读取新配置。";
+    desktopTheme.value = settings.theme;
+    publishInterfaceTheme(settings.theme);
   } catch (error) {
     desktopSettingsError.value = error instanceof Error ? error.message : String(error);
+    throw error;
   } finally {
     desktopSettingsSaving.value = false;
   }
@@ -144,7 +165,7 @@ async function loadSelectionSpeechSettings(): Promise<void> {
 }
 
 async function saveSelectionSpeechSettings(): Promise<void> {
-  if (!selectionSpeechLoaded.value || selectionSpeechSaving.value) return;
+  if (!selectionSpeechLoaded.value || selectionSpeechSaving.value) throw new Error("滑词菜单设置尚未加载完成。");
   selectionSpeechSaving.value = true;
   try {
     const settings: SelectionSpeechSettings = {
@@ -160,6 +181,7 @@ async function saveSelectionSpeechSettings(): Promise<void> {
     selectionSpeechModel.value = saved.model;
   } catch (error) {
     desktopSettingsError.value = error instanceof Error ? error.message : String(error);
+    throw error;
   } finally {
     selectionSpeechSaving.value = false;
   }
@@ -167,6 +189,53 @@ async function saveSelectionSpeechSettings(): Promise<void> {
 
 function normalizeScreenshotShortcut(): void {
   desktopScreenshotShortcut.value = desktopScreenshotShortcut.value.trim().replace(/\s*\+\s*/g, "+");
+}
+
+function normalizeScreenshotClipboardShortcut(): void {
+  desktopScreenshotClipboardShortcut.value = desktopScreenshotClipboardShortcut.value.trim().replace(/\s*\+\s*/g, "+");
+}
+
+function screenshotShortcutFromKeyEvent(event: KeyboardEvent): string | null {
+  const key = event.key === " " ? "SPACE" : event.key.toUpperCase();
+  const functionKey = /^(F[1-9]|F1[0-2])$/.test(key);
+  const validKey = /^[A-Z0-9]$/.test(key)
+    || functionKey
+    || /^(SPACE|TAB|ENTER|ESCAPE)$/.test(key);
+  if (!validKey) return null;
+  const modifiers = [
+    event.ctrlKey ? "Ctrl" : "",
+    event.altKey ? "Alt" : "",
+    event.shiftKey ? "Shift" : "",
+    event.metaKey ? "Win" : ""
+  ].filter(Boolean);
+  if (!modifiers.length && !functionKey) return null;
+  return [...modifiers, key === "ESCAPE" ? "Esc" : key[0] + key.slice(1).toLowerCase()].join("+");
+}
+
+function beginScreenshotShortcutCapture(): void {
+  desktopScreenshotShortcutCapturing.value = true;
+}
+
+function captureScreenshotShortcut(event: KeyboardEvent): void {
+  const shortcut = screenshotShortcutFromKeyEvent(event);
+  if (!shortcut) return;
+  event.preventDefault();
+  event.stopPropagation();
+  desktopScreenshotShortcut.value = shortcut;
+  desktopScreenshotShortcutCapturing.value = false;
+}
+
+function beginScreenshotClipboardShortcutCapture(): void {
+  desktopScreenshotClipboardShortcutCapturing.value = true;
+}
+
+function captureScreenshotClipboardShortcut(event: KeyboardEvent): void {
+  const shortcut = screenshotShortcutFromKeyEvent(event);
+  if (!shortcut) return;
+  event.preventDefault();
+  event.stopPropagation();
+  desktopScreenshotClipboardShortcut.value = shortcut;
+  desktopScreenshotClipboardShortcutCapturing.value = false;
 }
 
 async function loadWebguiLanAccess(): Promise<void> {
@@ -181,8 +250,11 @@ async function loadWebguiLanAccess(): Promise<void> {
   }
 }
 
-async function updateWebguiLanAccess(patch: { enabled?: boolean; regenerateToken?: boolean }): Promise<boolean> {
-  if (webguiLanSaving.value || !webguiLanAccess.value.canManage) return false;
+async function updateWebguiLanAccess(
+  patch: { enabled?: boolean; regenerateToken?: boolean },
+  redirectCurrent = true
+): Promise<void> {
+  if (webguiLanSaving.value || !webguiLanAccess.value.canManage) throw new Error("局域网 WebGUI 配置当前无法保存。");
   webguiLanSaving.value = true;
   webguiLanError.value = "";
   webguiLanNotice.value = "";
@@ -195,27 +267,30 @@ async function updateWebguiLanAccess(patch: { enabled?: boolean; regenerateToken
     const body = await response.json();
     if (!response.ok || body.code !== 0 || !body.data) throw new Error(body.message || "保存局域网 WebGUI 配置失败");
     webguiLanAccess.value = body.data as WebguiLanAccess;
-    if (redirectCurrentWebguiToLan(webguiLanAccess.value)) return true;
+    if (redirectCurrent && redirectCurrentWebguiToLan(webguiLanAccess.value)) return;
     webguiLanNotice.value = webguiLanAccess.value.restartRequired
       ? "配置已保存；重启 Manager 后监听范围才会改变。"
       : "局域网 WebGUI 配置已更新。";
-    return true;
   } catch (error) {
     webguiLanError.value = error instanceof Error ? error.message : String(error);
-    return false;
+    throw error;
   } finally {
     webguiLanSaving.value = false;
   }
 }
 
-async function toggleWebguiLanAccess(enabled: boolean | null): Promise<void> {
+function toggleWebguiLanAccess(enabled: boolean | null): void {
   if (typeof enabled !== "boolean") return;
-  await updateWebguiLanAccess({ enabled });
+  webguiLanAccess.value = { ...webguiLanAccess.value, enabled };
 }
 
 async function regenerateWebguiLanToken(): Promise<void> {
   if (webguiLanAccess.value.tokenConfigured && !window.confirm("轮换访问密钥会立即使旧链接失效。确定继续吗？")) return;
-  await updateWebguiLanAccess({ regenerateToken: true });
+  try {
+    await updateWebguiLanAccess({ regenerateToken: true });
+  } catch {
+    // The card shows the actionable error.
+  }
 }
 
 const primaryWebguiLanUrl = computed(() => webguiLanAccess.value.urls[0]?.url || "");
@@ -268,9 +343,8 @@ function loadRabiLinkRelayForm(): void {
   rabiLinkSpeechServiceUrl.value = relay.speechServiceUrl || "http://127.0.0.1:8781";
 }
 
-async function saveDirConfig() {
+async function saveDirConfig(): Promise<void> {
   dirSaving.value = true;
-  dirSaved.value = false;
   dirError.value = "";
   try {
     const res = await fetch("/manager-config", {
@@ -282,17 +356,16 @@ async function saveDirConfig() {
     if (data.code !== 0) throw new Error(data.message || "保存失败");
     routeDir.value = data.routeDir ?? "";
     rolesDir.value = data.rolesDir ?? "";
-    dirSaved.value = true;
   } catch (e) {
-    dirError.value = String(e);
+    dirError.value = e instanceof Error ? e.message : String(e);
+    throw e;
   } finally {
     dirSaving.value = false;
   }
 }
 
-async function saveRabiIdentity(): Promise<boolean> {
+async function saveRabiIdentity(): Promise<void> {
   rabiSaving.value = true;
-  rabiSaved.value = false;
   rabiError.value = "";
   try {
     const relayPatch: Record<string, unknown> = {
@@ -318,23 +391,17 @@ async function saveRabiIdentity(): Promise<boolean> {
     await store.load({ replaceDirtyConfig: true });
     rabiName.value = store.meta.rabiName || "";
     loadRabiLinkRelayForm();
-    rabiSaved.value = true;
-    return true;
   } catch (e) {
     rabiError.value = e instanceof Error ? e.message : String(e);
-    return false;
+    throw e;
   } finally {
     rabiSaving.value = false;
   }
 }
 
-async function toggleRabiLinkRelay(enabled: boolean | null): Promise<void> {
-  if (typeof enabled !== "boolean" || rabiSaving.value) return;
-  const previous = rabiLinkRelayEnabled.value;
+function toggleRabiLinkRelay(enabled: boolean | null): void {
+  if (typeof enabled !== "boolean") return;
   rabiLinkRelayEnabled.value = enabled;
-  if (!await saveRabiIdentity()) {
-    rabiLinkRelayEnabled.value = previous;
-  }
 }
 
 const relayRuntimeState = computed(() => store.meta.rabiLinkRelayRuntime?.state || "disabled");
@@ -366,7 +433,71 @@ async function refreshRelayRuntime(): Promise<void> {
 }
 
 let managerEvents: EventSource | null = null;
+const trackedSettingValues = [
+  routeDir,
+  rolesDir,
+  rabiName,
+  rabiLinkRelayEnabled,
+  rabiLinkRelayUrl,
+  rabiLinkRelayAppToken,
+  rabiLinkRelayDeviceId,
+  rabiLinkRelayClaimWaitMs,
+  rabiLinkRelayReplyIdleTimeoutMs,
+  rabiLinkSpeechProxyEnabled,
+  rabiLinkSpeechServiceUrl,
+  selectionSpeechEnabled,
+  selectionReadAloudEnabled,
+  selectionSpeechAdvanced,
+  selectionSpeechModel,
+  desktopScreenshotEnabled,
+  desktopScreenshotShortcut,
+  desktopScreenshotClipboardShortcut,
+  desktopScreenshotAutoCopy,
+  desktopAutostart,
+  desktopTheme,
+  () => webguiLanAccess.value.enabled
+];
+
+watch(trackedSettingValues, () => {
+  if (!settingsHydrating.value) settingsDirty.value = true;
+});
+
+async function saveSettings(): Promise<void> {
+  if (!settingsReady.value || settingsSaving.value) return;
+  settingsSaving.value = true;
+  settingsHydrating.value = true;
+  try {
+    const results = await Promise.allSettled([
+      saveDesktopSettings(),
+      saveSelectionSpeechSettings(),
+      saveRabiIdentity(),
+      saveDirConfig(),
+      webguiLanAccess.value.canManage && !webguiLanAccess.value.hostManagedByEnvironment
+        ? updateWebguiLanAccess({ enabled: webguiLanAccess.value.enabled }, false)
+        : Promise.resolve()
+    ]);
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map(result => result.reason instanceof Error ? result.reason.message : String(result.reason));
+    if (failures.length) throw new Error(failures.join("；"));
+    await nextTick();
+    settingsDirty.value = false;
+    redirectCurrentWebguiToLan(webguiLanAccess.value);
+  } finally {
+    settingsSaving.value = false;
+    settingsHydrating.value = false;
+  }
+}
+
+let unregisterPageSaveAction: (() => void) | undefined;
+
 onMounted(async () => {
+  unregisterPageSaveAction = registerPageSaveAction({
+    dirty: settingsDirty,
+    ready: settingsReady,
+    saving: settingsSaving,
+    save: saveSettings
+  });
   await loadDirConfig();
   await refreshRelayRuntime();
   managerEvents = managerEventSource("/api/events");
@@ -378,7 +509,10 @@ onMounted(async () => {
     }
   });
 });
-onBeforeUnmount(() => managerEvents?.close());
+onBeforeUnmount(() => {
+  managerEvents?.close();
+  unregisterPageSaveAction?.();
+});
 </script>
 
 <template>
@@ -395,17 +529,27 @@ onBeforeUnmount(() => managerEvents?.close());
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">
           <div>
-            <div class="section-title">桌面快捷功能</div>
-            <div class="section-note">由 RabiRoute 托盘负责系统级截图和滑词入口。配置保存后不需要重启托盘。</div>
+            <div class="section-title">RabiRoute 桌面功能</div>
+            <div class="section-note">RabiRoute 在 Windows 中提供截图、滑词和登录启动设置。</div>
           </div>
-          <v-btn color="primary" size="small" :loading="desktopSettingsSaving" :disabled="!desktopSettingsLoaded" @click="saveDesktopSettings">保存</v-btn>
         </div>
         <v-alert v-if="desktopSettingsError" type="error" variant="tonal" density="compact" class="mb-3">{{ desktopSettingsError }}</v-alert>
-        <v-alert v-if="desktopSettingsNotice" type="success" variant="tonal" density="compact" class="mb-3">{{ desktopSettingsNotice }}</v-alert>
+        <div class="section-title-row compact-row mb-2">
+          <div>
+            <div class="section-title small-title">界面主题</div>
+            <div class="section-note">同时影响当前 WebGUI、托盘菜单、角色面板、滑词操作条和截图窗口。</div>
+          </div>
+          <v-btn-toggle v-model="desktopTheme" color="secondary" density="compact" mandatory divided :disabled="!desktopSettingsLoaded">
+            <v-btn value="system" prepend-icon="mdi-theme-light-dark">跟随系统</v-btn>
+            <v-btn value="light" prepend-icon="mdi-weather-sunny">浅色</v-btn>
+            <v-btn value="dark" prepend-icon="mdi-weather-night">深色</v-btn>
+          </v-btn-toggle>
+        </div>
+        <v-divider class="my-4" />
         <div class="section-title-row compact-row mb-2">
           <div>
             <div class="section-title small-title">系统级截图</div>
-            <div class="section-note">按快捷键截取当前桌面，预览后输入文字并选择已激活人格发送图片和文字。</div>
+            <div class="section-note">框选截图后可复制到剪贴板、贴到屏幕或发送给已激活人格；在截图窗口按 F2 发送，按 &lt; / &gt; 切换上一张和下一张。</div>
           </div>
           <v-switch v-model="desktopScreenshotEnabled" label="启用截图" color="success" density="compact" inset hide-details :disabled="!desktopSettingsLoaded" />
         </div>
@@ -413,19 +557,44 @@ onBeforeUnmount(() => managerEvents?.close());
           v-model="desktopScreenshotShortcut"
           label="截图快捷键"
           placeholder="Ctrl+Shift+S"
-          hint="使用 Ctrl、Alt、Shift、Win 与一个字母或功能键，例如 Ctrl+Shift+S。"
+          :hint="desktopScreenshotShortcutCapturing ? '正在录入，按下要绑定的按键。' : '点击输入框后按下快捷键；可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。'"
           persistent-hint
           density="compact"
+          readonly
           :disabled="!desktopSettingsLoaded || !desktopScreenshotEnabled"
-          @blur="normalizeScreenshotShortcut"
+          @click="beginScreenshotShortcutCapture"
+          @focus="beginScreenshotShortcutCapture"
+          @keydown="captureScreenshotShortcut"
+          @blur="desktopScreenshotShortcutCapturing = false; normalizeScreenshotShortcut()"
+        />
+        <div class="section-title-row compact-row mb-2">
+          <div>
+            <div class="section-title small-title">自动复制选区</div>
+            <div class="section-note">确认选区时自动复制到剪贴板；关闭后可按 Ctrl+C 或点击“复制”。</div>
+          </div>
+          <v-switch v-model="desktopScreenshotAutoCopy" label="自动复制" color="success" density="compact" inset hide-details :disabled="!desktopSettingsLoaded || !desktopScreenshotEnabled" />
+        </div>
+        <v-text-field
+          v-model="desktopScreenshotClipboardShortcut"
+          label="贴图快捷键"
+          placeholder="F3"
+          :hint="desktopScreenshotClipboardShortcutCapturing ? '正在录入，按下要绑定的按键。' : '截图窗口打开时，直接贴出框选区域；其他时候贴出剪贴板图片。默认 F3；可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。'"
+          persistent-hint
+          density="compact"
+          readonly
+          :disabled="!desktopSettingsLoaded || !desktopScreenshotEnabled"
+          @click="beginScreenshotClipboardShortcutCapture"
+          @focus="beginScreenshotClipboardShortcutCapture"
+          @keydown="captureScreenshotClipboardShortcut"
+          @blur="desktopScreenshotClipboardShortcutCapturing = false; normalizeScreenshotClipboardShortcut()"
         />
         <v-divider class="my-4" />
         <div class="section-title-row compact-row">
           <div>
             <div class="section-title small-title">Windows 登录启动</div>
-            <div class="section-note">登录 Windows 后自动启动 RabiRoute 桌面托盘；Manager 仍按自己的运行开关管理。</div>
+            <div class="section-note">登录 Windows 后自动启动 RabiRoute Desktop；后台运行时保留系统托盘入口。</div>
           </div>
-          <v-switch v-model="desktopAutostart" label="开机启动" color="success" density="compact" inset hide-details :disabled="!desktopSettingsLoaded" />
+          <v-switch v-model="desktopAutostart" label="登录后启动" color="success" density="compact" inset hide-details :disabled="!desktopSettingsLoaded" />
         </div>
       </v-card>
 
@@ -435,7 +604,6 @@ onBeforeUnmount(() => managerEvents?.close());
             <div class="section-title">开启滑词菜单</div>
             <div class="section-note">在 Windows 任意支持文本选区的软件中划选文字，再点击悬浮按钮执行朗读或投递。</div>
           </div>
-          <v-btn color="primary" size="small" :loading="selectionSpeechSaving" :disabled="!selectionSpeechLoaded" @click="saveSelectionSpeechSettings">保存</v-btn>
         </div>
         <div class="section-title-row compact-row mb-2">
           <div>
@@ -474,12 +642,8 @@ onBeforeUnmount(() => managerEvents?.close());
             <div class="section-title">Rabi 实例</div>
             <div class="section-note">保存到 data/Config.json，作为这台 Rabi PC 的全局身份。</div>
           </div>
-          <v-btn color="primary" size="small" :loading="rabiSaving" @click="saveRabiIdentity">保存</v-btn>
         </div>
         <v-alert v-if="rabiError" type="error" variant="tonal" density="compact" class="mb-3">{{ rabiError }}</v-alert>
-        <v-alert v-if="rabiSaved" type="success" variant="tonal" density="compact" class="mb-3">
-          {{ rabiLinkRelayEnabled ? "已保存，Manager 正在维护全局 Relay 连接。" : "已保存，RabiLink Relay 已全局关闭。" }}
-        </v-alert>
         <div class="form-grid">
           <v-text-field v-model="rabiName" label="RabiRoute 实例名" :placeholder="store.meta.computerName || 'RabiRoute'" density="compact" hide-details />
           <v-text-field :model-value="store.meta.rabiGuid || '-'" label="RabiRoute GUID" density="compact" readonly hide-details />
@@ -552,10 +716,8 @@ onBeforeUnmount(() => managerEvents?.close());
             <div class="section-title">目录配置</div>
             <div class="section-note">全局目录设置，影响所有路由。修改后重启 Manager 生效。</div>
           </div>
-          <v-btn color="primary" size="small" :loading="dirSaving" @click="saveDirConfig">保存</v-btn>
         </div>
         <v-alert v-if="dirError" type="error" variant="tonal" density="compact" class="mb-3">{{ dirError }}</v-alert>
-        <v-alert v-if="dirSaved" type="success" variant="tonal" density="compact" class="mb-3">已保存，重启生效。</v-alert>
         <div class="form-grid">
           <v-text-field v-model="routeDir" label="路由数据目录" placeholder="data/route" density="compact" hide-details />
           <v-text-field v-model="rolesDir" label="角色目录" placeholder="data/roles" density="compact" hide-details />

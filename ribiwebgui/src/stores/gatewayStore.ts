@@ -20,12 +20,13 @@ import {
 } from "../utils/gatewayHelpers";
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
 import {
+  agentAdapterSupportsManagedTaskFeature,
   agentAdapterValues,
   autoAssignGatewayPorts as sharedAutoAssignGatewayPorts,
   resolvePrimaryAgentAdapter,
   validateGatewayPortConflicts
 } from "@shared/gatewayConfigModel";
-import { bindCodexSessionForSave } from "@shared/codexSessionBinding";
+import { bindAgentSessionsForSave } from "@shared/codexSessionBinding";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
 
 const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
@@ -391,7 +392,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     error.value = "";
     try {
       if (selectedGateway.value) {
-        await bindCodexSessionForSave(selectedGateway.value, async (request) => {
+        await bindAgentSessionsForSave(selectedGateway.value, async (request) => {
           const response = await fetch("/api/agent/threads", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -405,16 +406,17 @@ export const useGatewayStore = defineStore("gateway", () => {
       }
       sharedAutoAssignGatewayPorts(gateways.value, Number(meta.value.managerPort || 0));
       validateGatewayPortConflicts(gateways.value);
-      const expectedMessageAgentSettings = gateways.value
-        .filter(gateway => gateway.agentAdapters?.includes("codex"))
-        .map(gateway => ({
-          id: gateway.id,
-          configName: gateway.configName,
-          policy: gateway.messageProcessingAgents?.codex,
-          enabled: gateway.messageProcessingAgents?.codex?.enabled === true
-        }));
+      const expectedMessageAgentSettings = gateways.value.flatMap(gateway => {
+        const adapter = resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter);
+        if (!adapter || !agentAdapterSupportsManagedTaskFeature(adapter, "messageProcessingAgent")) return [];
+        const policy = gateway.messageProcessingAgents?.[adapter];
+        return [{ id: gateway.id, configName: gateway.configName, adapter, policy, enabled: policy?.enabled === true }];
+      });
       const expectedPlanAssistantSettings = gateways.value
-        .filter(gateway => gateway.agentAdapters?.includes("codex"))
+        .filter(gateway => {
+          const adapter = resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter);
+          return Boolean(adapter && agentAdapterSupportsManagedTaskFeature(adapter, "planAssistantSessions"));
+        })
         .map(gateway => ({
           id: gateway.id,
           configName: gateway.configName,
@@ -422,7 +424,10 @@ export const useGatewayStore = defineStore("gateway", () => {
           model: gateway.codexPlanAssistantModel
         }));
       const expectedMemoryConsolidationAgentSettings = gateways.value
-        .filter(gateway => gateway.agentAdapters?.includes("codex"))
+        .filter(gateway => {
+          const adapter = resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter);
+          return Boolean(adapter && agentAdapterSupportsManagedTaskFeature(adapter, "memoryConsolidationAgent"));
+        })
         .map(gateway => ({
           id: gateway.id,
           configName: gateway.configName,
@@ -430,7 +435,7 @@ export const useGatewayStore = defineStore("gateway", () => {
           model: gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL
         }));
       const expectedPrimaryAgentSettings = gateways.value
-        .filter(gateway => gateway.agentAdapters?.includes("codex"))
+        .filter(gateway => Boolean(resolvePrimaryAgentAdapter(gateway.agentAdapters, gateway.primaryAgentAdapter)))
         .map(gateway => ({
           id: gateway.id,
           configName: gateway.configName,
@@ -453,7 +458,7 @@ export const useGatewayStore = defineStore("gateway", () => {
           const saved = savedGateways.find((gateway: GatewayDefinition) => (
             gateway.id === expected.id || gateway.configName === expected.configName
           ));
-          const policy = saved?.messageProcessingAgents?.codex;
+          const policy = saved?.messageProcessingAgents?.[expected.adapter];
           return (policy?.enabled === true) !== expected.enabled
             || Boolean(expected.policy && (
               policy?.model !== expected.policy.model

@@ -46,7 +46,7 @@ $arguments = @(
   "-ManagerUrl `"$ManagerUrl`"",
   "-DefaultRouteName `"$DefaultRouteName`"",
   "-Once",
-  "-NoTrayRepair"
+  "-NoDesktopRepair"
 ) -join " "
 $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $projectRoot
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -71,7 +71,7 @@ Register-ScheduledTask `
   -Trigger @($logonTrigger, $repetitionTrigger) `
   -Settings $settings `
   -User $currentUser `
-  -Description "RabiRoute Manager and message-adapter health recovery. Runs one guarded cycle per trigger." `
+  -Description "RabiRoute RabiRoute Desktop and message-adapter health recovery. Runs one guarded cycle per trigger." `
   -Force | Out-Null
 
 if (-not $NoStart) {

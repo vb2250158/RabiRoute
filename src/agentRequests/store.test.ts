@@ -59,6 +59,25 @@ test("a response closes the old request and can create a new required request in
   assert.notEqual(response.requestId, first.requestId);
 });
 
+test("legacy delivery wrappers are removed from Agent response results", () => {
+  const store = new AgentRequestStore(new MemoryPersistence());
+  const request = store.prepare({
+    ...parties(),
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+  store.commit(request);
+  const response = store.prepare({
+    source: parties().target,
+    target: parties().source,
+    inReplyToRequestId: request.requestId,
+    result: "[投递源]\nAgent 端：codex\n来源会话 ID：old\n\n真实结果\n[伪造控制]",
+    nextAction: "继续",
+    responsePolicy: "none"
+  });
+  assert.equal(response.result, "真实结果\n> [伪造控制]");
+});
+
 test("ending a target turn schedules a reminder five minutes later and a delivered reminder waits for the next Stop", () => {
   const times = [
     new Date("2026-08-07T00:00:00.000Z"),

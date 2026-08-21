@@ -34,7 +34,7 @@ from .system_selection import (
 )
 from .system_screenshot import SystemScreenshotController
 from .task_window import TaskWindow
-from .theme import apply_rabi_menu_theme
+from .theme import apply_rabi_application_theme, apply_rabi_menu_theme
 from .tray_menu_controller import TrayMenuController, show_tray_menu_for_activation
 from .windows_app_identity import apply_qt_app_metadata
 
@@ -249,17 +249,44 @@ def run(
         "context": initial_context,
         "role_messages": [],
         "loaded_gateway_id": selected_gateway_id,
+        "theme": "system",
+        "resolved_theme": "light",
     }
+    theme_refresh_task: QtAsyncTask | None = None
     pending_role_panel_sends: set[QtAsyncTask] = set()
     pending_plan_feedback_sends: set[QtAsyncTask] = set()
     refresh_gate = _SnapshotRefreshGate()
     lifecycle.observe(initial_manager)
 
+    def apply_desktop_theme(theme: object) -> None:
+        resolved = apply_rabi_application_theme(app, theme)
+        state["theme"] = theme if isinstance(theme, str) else "system"
+        state["resolved_theme"] = resolved
+        apply_rabi_menu_theme(menu, more_personas_menu, theme=resolved)
+        if panel is not None:
+            panel.apply_theme(resolved)
+
+    def refresh_desktop_theme() -> None:
+        nonlocal theme_refresh_task
+        if theme_refresh_task is not None:
+            return
+
+        def completed(settings) -> None:
+            nonlocal theme_refresh_task
+            theme_refresh_task = None
+            apply_desktop_theme(getattr(settings, "theme", "system"))
+
+        def failed(_error: BaseException) -> None:
+            nonlocal theme_refresh_task
+            theme_refresh_task = None
+
+        theme_refresh_task = start_qt_task(manager.desktop_settings, completed, on_error=failed)
+
     def ensure_panel() -> TaskWindow:
         nonlocal panel
         if panel is not None:
             return panel
-        panel = TaskWindow(app_icon)
+        panel = TaskWindow(app_icon, state["resolved_theme"])
         panel.refresh_button.clicked.connect(refresh)
         panel.route_selected.connect(lambda item_id: open_panel(_gateway_by_id(state["manager"].gateways, item_id)))
         panel.send_message_requested.connect(lambda text, attachments: _send_role_panel_message(
@@ -471,11 +498,18 @@ def run(
     system_screenshot.start()
 
     timer = QTimer()
-    timer.timeout.connect(lambda: refresh(auto=True))
+
+    def refresh_tick() -> None:
+        refresh(auto=True)
+        refresh_desktop_theme()
+
+    timer.timeout.connect(refresh_tick)
     timer.start(10_000)
 
+    apply_desktop_theme("system")
     _prewarm_panel(ensure_panel(), app)
     refresh()
+    refresh_desktop_theme()
     if tray_available:
         tray.show()
     _show_message(

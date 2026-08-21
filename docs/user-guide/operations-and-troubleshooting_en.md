@@ -93,19 +93,19 @@ Check in order:
 
 Do not use fixed port 4510, `CODEX_APP_SERVER_WS_URL`, or a separate stdio Runtime for real delivery. They are not the current transport.
 
-## Tray missing while Manager remains online
+## RabiRoute Desktop UI is missing
 
-A full desktop runtime launched by `Start-RabiRoute-Tray.bat` or the packaged tray records `running` in `data/runtime/desktop-lifecycle-intent.json` and starts one `watch-rabiroute-desktop-lifecycle.ps1` owner per workspace. The supervisor checks only this project's Manager `/meta` and tray process. After two consecutive misses on either side, it restores the pair through the original launcher's port-owner, PID, and single-instance gates. A tray that temporarily loses Manager remains visible and keeps reconnecting.
+A full desktop runtime launched by `Start-RabiRoute-Desktop.bat` or packaged RabiRoute Desktop records `running` in `data/runtime/desktop-lifecycle-intent.json` and starts one `watch-rabiroute-desktop-lifecycle.ps1` owner per workspace. The supervisor checks only this project's local backend `/meta` and desktop UI process. After two consecutive misses, it restores the complete desktop runtime through the original launcher's port-owner, PID, and single-instance gates. The UI stays available and reconnects during a temporary local-backend outage.
 
-Run `Start-RabiRoute-Tray.bat -NoOpen` once, then inspect `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`. A healthy record has `desiredState=running`, `managerConnected=true`, and `trayCount>0`. `desiredState=stopped` means the previous exit was intentional and requires an explicit user start. Missing or malformed intent fails closed. Do not substitute the half-hour business-health patrol for this lightweight owner or create a separate tray relaunch loop.
+Run `Start-RabiRoute-Desktop.bat -NoOpen` once, then inspect `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`. A healthy record has `desiredState=running`, `managerConnected=true`, and `desktopShellCount>0`. `desiredState=stopped` means the previous exit was intentional and requires an explicit user start. Missing or malformed intent fails closed. Do not substitute the half-hour business-health patrol for this lightweight owner or create a separate desktop-UI relaunch loop.
 
-`Exit RabiRoute` persists `stopped` before shutting down Manager and tray, so supervision cannot undo a deliberate exit. Ordinary Manager build reloads, installer upgrades, and `SIGTERM` preserve desktop intent; when it remains `running`, supervision restores the tray after the reload.
+`Exit RabiRoute` from the RabiRoute Desktop menu persists `stopped` before shutting down the local backend and desktop UI, so supervision cannot undo a deliberate exit. Ordinary Manager build reloads, installer upgrades, and `SIGTERM` preserve desktop intent; when it remains `running`, supervision restores the complete desktop runtime after the reload.
 
 ## Port 8790 held by a stale Manager
 
 If the launcher reports a listener on port `8790` but `/meta` is not stably responsive, a stale Manager from the same project may still own the port. Remote-page reconnects, Relay outages, and SSE failures must not become local startup dependencies: Manager serves local/LAN WebGUI first and hot-connects to Relay asynchronously.
 
-Run `Start-RabiRoute-Tray.bat` again. The launcher inspects the port owner's command line and performs bounded takeover only for an old process that precisely references this project's `dist/manager.js`: graceful shutdown first, then the verified process tree only after timeout. Unknown processes remain untouched. The launcher also reloads a healthy Manager when the current `dist` is newer than the running process.
+Run `Start-RabiRoute-Desktop.bat` again. The launcher inspects the port owner's command line and performs bounded takeover only for an old process that precisely references this project's `dist/manager.js`: graceful shutdown first, then the verified process tree only after timeout. Unknown processes remain untouched. The launcher also reloads a healthy Manager when the current `dist` is newer than the running process.
 
 Manager also acquires a workspace-level instance lock before loading its control plane. Exit code `17` from a second startup path means a live Manager for that workspace still owns the lock; do not keep relaunching it. Check `/meta` and the port owner first. A later start reclaims the lock only after its recorded PID no longer exists.
 

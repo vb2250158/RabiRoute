@@ -8,15 +8,16 @@ import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
-import { initializeCodexSessionForRoute } from "@shared/codexSessionInitialization";
+import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
-import { agentAdapterSupportsManagedTaskFeature, codexMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
+import { agentAdapterSupportsManagedTaskFeature, primaryMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
 import {
   DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
   codexPlanAssistantInitializationPrompt,
   codexPlanAssistantSessionTitles,
-  normalizeCodexPlanAssistantCount
+  normalizeCodexPlanAssistantCount,
+  planAssistantSessionAgentAdapter
 } from "@shared/codexPlanAssistantSessions";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 import { copyTextToClipboard } from "../clipboard";
@@ -41,7 +42,7 @@ let speechConfigSaveTimer = 0;
 const adapterQuery = ref("");
 const configNameError = ref("");
 const codexBinding = ref({ loading: false, error: "", pending: false });
-const codexInitialization = ref({ loading: false, message: "", error: "" });
+const managedAgentSessionAction = ref({ loading: false, message: "", error: "" });
 const codexPlanAssistants = ref({ count: 1, loading: false, message: "", error: "" });
 const agentScan = ref({
   threadNames: [] as string[],
@@ -52,6 +53,8 @@ const agentScan = ref({
   agents: {} as Partial<Record<AgentAdapterType, AgentScanResult>>,
   loading: false,
 });
+const dshScanLoading = ref(false);
+const dshScanRevision = ref(0);
 
 const messageAdapterScan = ref({
   adapters: {} as Partial<Record<MessageAdapterType, MessageAdapterScanResult>>,
@@ -150,17 +153,64 @@ async function rescanNapcatInstances(): Promise<void> {
 async function runAgentScan(): Promise<void> {
   if (agentScan.value.loading) return;
   agentScan.value.loading = true;
+  const dshRevisionAtStart = dshScanRevision.value;
   try {
-    const res = await fetch("/api/scan/agents");
+    const params = new URLSearchParams();
+    const dshBaseUrl = gateway.value?.dshBaseUrl?.trim();
+    if (dshBaseUrl) params.set("dshBaseUrl", dshBaseUrl);
+    const res = await fetch(`/api/scan/agents${params.size ? `?${params}` : ""}`);
     const data = await res.json();
     agentScan.value.threadNames = data.threadNames ?? [];
-    agentScan.value.cwdOptions = data.cwdOptions ?? [];
+    agentScan.value.cwdOptions = [...new Set([...agentScan.value.cwdOptions, ...(data.cwdOptions ?? [])])];
     agentScan.value.copilotSessions = data.copilotSessions ?? [];
     agentScan.value.copilotBins = data.copilotBins ?? [];
     agentScan.value.marvisAppIds = data.marvisAppIds ?? [];
-    agentScan.value.agents = data.agents ?? {};
+    const currentDsh = agentScan.value.agents.dsh;
+    agentScan.value.agents = {
+      ...(data.agents ?? {}),
+      ...(dshScanRevision.value !== dshRevisionAtStart && currentDsh ? { dsh: currentDsh } : {})
+    };
   } catch { /* ignore */ }
   finally { agentScan.value.loading = false; }
+}
+
+function refreshAgentScan(type: AgentAdapterType): void {
+  const scan = type === "dsh" ? runDshAgentScan : runAgentScan;
+  void scan();
+}
+
+async function runDshAgentScan(options: { append?: boolean; offset?: number; limit?: number } = {}): Promise<void> {
+  if (dshScanLoading.value) return;
+  dshScanLoading.value = true;
+  try {
+    const params = new URLSearchParams();
+    if (options.offset != null) params.set("dshOffset", String(options.offset));
+    if (options.limit != null) params.set("dshLimit", String(options.limit));
+    const dshBaseUrl = gateway.value?.dshBaseUrl?.trim();
+    if (dshBaseUrl) params.set("dshBaseUrl", dshBaseUrl);
+    const res = await fetch(`/api/scan/agents/dsh${params.size ? `?${params}` : ""}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || `DSH 扫描失败（HTTP ${res.status}）`);
+    const currentDsh = agentScan.value.agents.dsh;
+    const nextDsh = data.agents?.dsh as AgentScanResult | undefined;
+    const sessions = options.append
+      ? [...(currentDsh?.sessions ?? []), ...(nextDsh?.sessions ?? [])]
+      : [...(nextDsh?.sessions ?? [])];
+    const uniqueSessions = [...new Map(sessions.map(session => [
+      session.id || `${session.name}:${session.projectPath || ""}:${session.updatedAt || ""}`,
+      session
+    ])).values()];
+    agentScan.value.agents = {
+      ...agentScan.value.agents,
+      dsh: nextDsh ? { ...nextDsh, sessions: uniqueSessions } : currentDsh
+    };
+    agentScan.value.cwdOptions = [...new Set([...agentScan.value.cwdOptions, ...(data.cwdOptions ?? [])])];
+    dshScanRevision.value += 1;
+  } catch {
+    // Keep the last successful DSH scan visible.
+  } finally {
+    dshScanLoading.value = false;
+  }
 }
 
 async function loadMoreCodexSessions(): Promise<void> {
@@ -194,6 +244,12 @@ async function loadMoreCodexSessions(): Promise<void> {
   } finally {
     agentScan.value.loading = false;
   }
+}
+
+async function loadMoreDshSessions(): Promise<void> {
+  const page = agentScan.value.agents.dsh?.sessionPage;
+  if (!page?.hasMore || page.nextOffset == null) return;
+  await runDshAgentScan({ append: true, offset: page.nextOffset, limit: page.limit });
 }
 
 // 会话/项目扫描只在进入设置页时自动执行一次；后续刷新必须由用户点击扫描按钮触发。
@@ -3078,7 +3134,7 @@ const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; ic
   { type: "copilotCli",  title: "Copilot CLI",   note: "通过 GitHub Copilot CLI 投递消息",  icon: "mdi-robot-outline", hasCwd: true, hasThread: true },
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
-  { type: "dsh",         title: "DSH（DeepSeek Harness 会话）", note: "通过 session.prompt API 投递到本机 DSH 会话", icon: "mdi-brain", hasCwd: true, hasThread: false },
+  { type: "dsh",         title: "DSH（DeepSeek Harness 会话）", note: "通过 session.prompt API 投递到本机 DSH 会话", icon: "mdi-brain", hasCwd: true, hasThread: true },
 ];
 
 const addAgentMenu = ref(false);
@@ -3094,8 +3150,8 @@ const primaryAgentType = computed(() => resolvePrimaryAgentAdapter(
   agentTypes.value,
   gateway.value?.primaryAgentAdapter
 ));
-const codexMessageAgentModeEnabled = computed(() => (
-  gateway.value ? codexMessageProcessingAgentEnabled(gateway.value) : false
+const managedMessageAgentModeEnabled = computed(() => (
+  gateway.value ? primaryMessageProcessingAgentEnabled(gateway.value) : false
 ));
 const primaryAgentItems = computed(() => visibleAgentItems.value.map(agent => ({
   title: agent.title,
@@ -3219,6 +3275,7 @@ function currentAgentProject(type: AgentAdapterType): string {
   if (!gateway.value) return "";
   if (type === "copilotCli") return gateway.value.copilotCwd || "";
   if (type === "codex") return gateway.value.codexCwd || "";
+  if (type === "dsh") return gateway.value.dshCwd || "";
   return "";
 }
 
@@ -3310,6 +3367,95 @@ function codexThreadSummaries(): CodexThreadSummary[] {
     }));
 }
 
+function dshSessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
+  return agentSessions("dsh")
+    .filter((session) => session.id)
+    .filter((session) => !gateway.value?.dshCwd || !session.projectPath || samePath(session.projectPath, gateway.value.dshCwd))
+    .map((session) => ({
+      title: session.name,
+      value: session.id!,
+      subtitle: [session.projectPath, session.updatedAt].filter(Boolean).join(" · ")
+    }));
+}
+
+function selectDshSession(value: unknown): void {
+  if (!gateway.value) return;
+  const raw = String(value || "").trim();
+  const selected = agentSessions("dsh").find((session) => session.id === raw);
+  if (selected?.id) {
+    gateway.value.dshSessionId = selected.id;
+    gateway.value.dshSessionName = selected.name;
+    if (selected.projectPath) gateway.value.dshCwd = selected.projectPath;
+  } else {
+    gateway.value.dshSessionId = "";
+    gateway.value.dshSessionName = raw;
+  }
+  codexBinding.value.error = "";
+  codexBinding.value.pending = false;
+  touch();
+}
+
+function managedAgentSessionContext(type: AgentAdapterType): {
+  agentAdapter: "codex" | "dsh";
+  sessionId: string;
+  sessionName: string;
+  workspace: string;
+  dshBaseUrl?: string;
+} | null {
+  if (!gateway.value || (type !== "codex" && type !== "dsh")) return null;
+  if (type === "dsh") {
+    return {
+      agentAdapter: "dsh",
+      sessionId: String(gateway.value.dshSessionId || "").trim(),
+      sessionName: String(gateway.value.dshSessionName || fallbackCodexThreadName()).trim(),
+      workspace: String(gateway.value.dshCwd || "").trim(),
+      dshBaseUrl: String(gateway.value.dshBaseUrl || "").trim() || undefined
+    };
+  }
+  return {
+    agentAdapter: "codex",
+    sessionId: String(gateway.value.codexThreadId || "").trim(),
+    sessionName: String(gateway.value.codexThreadName || fallbackCodexThreadName()).trim(),
+    workspace: String(gateway.value.codexCwd || "").trim()
+  };
+}
+
+function managedAgentLabel(type: AgentAdapterType): string {
+  return type === "dsh" ? "DSH" : "Codex Desktop";
+}
+
+function hasManagedAgentSessionBinding(type: "codex" | "dsh"): boolean {
+  const session = managedAgentSessionContext(type);
+  return Boolean(session?.sessionId && session.workspace);
+}
+
+async function openManagedAgentSession(agentAdapter: "codex" | "dsh"): Promise<void> {
+  if (managedAgentSessionAction.value.loading) return;
+  const session = managedAgentSessionContext(agentAdapter);
+  if (!session?.sessionId || !session.workspace) return;
+  managedAgentSessionAction.value = { loading: true, message: "", error: "" };
+  try {
+    await postAgentThreadAction({
+      action: "open",
+      agentAdapter: session.agentAdapter,
+      threadId: session.sessionId,
+      cwd: session.workspace,
+      ...(session.dshBaseUrl ? { dshBaseUrl: session.dshBaseUrl } : {})
+    });
+    managedAgentSessionAction.value = {
+      loading: false,
+      message: agentAdapter === "dsh" ? "已在 DSH 中定位主人格会话。" : "已在 Codex Desktop 中定位主人格任务。",
+      error: ""
+    };
+  } catch (error) {
+    managedAgentSessionAction.value = {
+      loading: false,
+      message: "",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 function selectCodexSession(value: unknown): void {
   if (!gateway.value) return;
   const selection = selectCodexThread(value, codexThreadSummaries());
@@ -3332,6 +3478,7 @@ function setCodexHookSetting(key: keyof CodexHookSettings, enabled: boolean | nu
     reasoningContextEnabled: gateway.value.codexHooks?.reasoningContextEnabled !== false,
     planTaskCompletionEnabled: gateway.value.codexHooks?.planTaskCompletionEnabled !== false,
     agentCommunicationEnforcementEnabled: gateway.value.codexHooks?.agentCommunicationEnforcementEnabled !== false,
+    onlyPrimaryPersonaCanSendMessages: gateway.value.codexHooks?.onlyPrimaryPersonaCanSendMessages === true,
     [key]: enabled === true
   };
   touch();
@@ -3374,11 +3521,12 @@ async function lookupCodexThreadBinding(): Promise<void> {
   }
 }
 
-async function initializeCodexSession(): Promise<void> {
-  if (!gateway.value || codexInitialization.value.loading) return;
-  codexInitialization.value = { loading: true, message: "", error: "" };
+async function initializeManagedAgentSession(agentAdapter: "codex" | "dsh"): Promise<void> {
+  if (!gateway.value || managedAgentSessionAction.value.loading) return;
+  managedAgentSessionAction.value = { loading: true, message: "", error: "" };
   try {
-    await initializeCodexSessionForRoute({
+    await initializeAgentSessionForRoute({
+      agentAdapter,
       save: () => store.save(),
       currentGatewayId: () => gateway.value?.id || "",
       deliver: async ({ gatewayId, text }) => {
@@ -3393,14 +3541,16 @@ async function initializeCodexSession(): Promise<void> {
         }
       }
     });
-    codexInitialization.value = {
+    managedAgentSessionAction.value = {
       loading: false,
-      message: "已保存名称 + 线程 ID，并通过 Desktop owner 投递人格初始化消息。",
+      message: agentAdapter === "dsh"
+        ? "已保存名称 + 会话 ID，并通过 DSH owner 投递人格初始化消息。"
+        : "已保存名称 + 线程 ID，并通过 Desktop owner 投递人格初始化消息。",
       error: ""
     };
     await store.load();
   } catch (error) {
-    codexInitialization.value = {
+    managedAgentSessionAction.value = {
       loading: false,
       message: "",
       error: error instanceof Error ? error.message : String(error)
@@ -3449,7 +3599,7 @@ function addAgent(type: AgentAdapterType): void {
     gateway.value.primaryAgentAdapter
   );
   agentParamOpen.value[type] = true;
-  if (type === "codex" && !gateway.value.codexHooks) {
+  if (supportsManagedTaskFeature(type, "hooks") && !gateway.value.codexHooks) {
     gateway.value.codexHooks = { ...DEFAULT_CODEX_HOOK_SETTINGS };
   }
   if (type === "copilotCli" && copilotStatus.value === null) void fetchCopilotStatus();
@@ -3463,11 +3613,11 @@ async function postAgentThreadAction(payload: Record<string, unknown>): Promise<
     body: JSON.stringify(payload)
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || body.code === -1) throw new Error(body.message || "Codex Desktop 任务操作失败。");
+  if (!response.ok || body.code === -1) throw new Error(body.message || "Agent 会话操作失败。");
   return body;
 }
 
-async function initializeCodexPlanAssistants(): Promise<void> {
+async function initializePlanAssistants(): Promise<void> {
   if (!gateway.value || codexPlanAssistants.value.loading) return;
   codexPlanAssistants.value = {
     count: normalizeCodexPlanAssistantCount(codexPlanAssistants.value.count),
@@ -3481,13 +3631,15 @@ async function initializeCodexPlanAssistants(): Promise<void> {
     }
     await store.save();
     const current = gateway.value;
-    if (!current?.codexThreadId || !current.codexCwd) {
-      throw new Error("主 Codex Desktop 会话尚未完成名称 + ID + workspace 绑定。");
+    const source = managedAgentSessionContext(primaryAgentType.value || "codex");
+    if (!source?.sessionId || !source.workspace) {
+      throw new Error(`主 ${managedAgentLabel(primaryAgentType.value || "codex")} 会话尚未完成名称 + ID + workspace 绑定。`);
     }
     const count = normalizeCodexPlanAssistantCount(codexPlanAssistants.value.count);
-    const sourceThreadName = current.codexThreadName?.trim() || fallbackCodexThreadName();
+    const sourceThreadName = source.sessionName || fallbackCodexThreadName();
     const titles = codexPlanAssistantSessionTitles(sourceThreadName, count);
-    const existing = current.codexPlanAssistantSessions ?? [];
+    const existing = (current.codexPlanAssistantSessions ?? [])
+      .filter((session) => planAssistantSessionAgentAdapter(session) === source.agentAdapter);
     const resolved = [] as NonNullable<typeof current.codexPlanAssistantSessions>;
 
     for (let index = 0; index < titles.length; index += 1) {
@@ -3495,18 +3647,21 @@ async function initializeCodexPlanAssistants(): Promise<void> {
       const previous = existing[index];
       const result = await postAgentThreadAction({
         action: "resolve",
+        agentAdapter: source.agentAdapter,
         threadId: previous?.threadId,
         title: desiredTitle,
-        cwd: previous?.workspace || current.codexCwd,
+        cwd: previous?.workspace || source.workspace,
         createIfMissing: true,
-        lookupMode: "state_db"
+        lookupMode: "state_db",
+        ...(source.dshBaseUrl ? { dshBaseUrl: source.dshBaseUrl } : {})
       });
       const thread = result.thread;
       if (!thread?.id) throw new Error(`计划协助会话 ${index + 1} 没有返回完整任务 ID。`);
       resolved.push({
+        ...(source.agentAdapter === "dsh" ? { agentAdapter: "dsh" as const } : {}),
         threadId: thread.id,
         threadName: thread.title || desiredTitle,
-        workspace: thread.cwd || previous?.workspace || current.codexCwd,
+        workspace: thread.cwd || previous?.workspace || source.workspace,
         index: index + 1,
         initializedAt: previous?.threadId === thread.id ? previous.initializedAt : undefined
       });
@@ -3520,20 +3675,35 @@ async function initializeCodexPlanAssistants(): Promise<void> {
       if (session.initializedAt) continue;
       await postAgentThreadAction({
         action: "send",
+        agentAdapter: source.agentAdapter,
         threadId: session.threadId,
         cwd: session.workspace,
         sandbox: "workspace-write",
         model: current.codexPlanAssistantModel || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
         prompt: codexPlanAssistantInitializationPrompt({
           roleId: current.agentRoleId || "",
-          sourceThreadId: current.codexThreadId,
+          sourceAgentAdapter: source.agentAdapter,
+          assistantAgentAdapter: source.agentAdapter,
+          sourceThreadId: source.sessionId,
           sourceThreadName,
           assistantThreadId: session.threadId,
           assistantThreadName: session.threadName,
-          workspace: current.codexCwd,
+          workspace: session.workspace,
           count,
           index: session.index
-        })
+        }),
+        messageSource: {
+          type: "agent",
+          agentAdapter: source.agentAdapter,
+          agentType: "primary_persona",
+          sessionId: source.sessionId,
+          sessionName: sourceThreadName,
+          workspace: source.workspace
+        },
+        sourceThreadId: source.sessionId,
+        sourceAgentType: "primary_persona",
+        responsePolicy: "none",
+        ...(source.dshBaseUrl ? { dshBaseUrl: source.dshBaseUrl } : {})
       });
       session.initializedAt = new Date().toISOString();
       touch();
@@ -4517,14 +4687,14 @@ watch(
                     </div>
                   </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
-                    <v-alert v-if="codexMessageAgentModeEnabled" class="full-span" type="success" variant="tonal" density="compact">
+                    <v-alert v-if="managedMessageAgentModeEnabled" class="full-span" type="success" variant="tonal" density="compact">
                       Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
                     </v-alert>
                     <v-alert v-else class="full-span" type="info" variant="tonal" density="compact">
                       定时计划在“人格配置 / 消息模板规则”的 heartbeat 规则里维护。下面的忙时策略只影响 heartbeat，普通群聊、私聊和其他消息仍按正常路由直接投递。
                     </v-alert>
                     <v-switch
-                      v-if="!codexMessageAgentModeEnabled"
+                      v-if="!managedMessageAgentModeEnabled"
                       v-model="gateway.heartbeatSkipWhenAgentBusy"
                       class="full-span"
                       color="primary"
@@ -4976,7 +5146,7 @@ watch(
                       <v-chip size="small" :color="agentConnectionColor(agent.type)" variant="tonal">
                         {{ agentConnectionLabel(agent.type) }}
                       </v-chip>
-                      <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="agentScan.loading" @click="runAgentScan">
+                      <v-btn size="small" variant="text" prepend-icon="mdi-refresh" :loading="agent.type === 'dsh' ? dshScanLoading : agentScan.loading" @click="refreshAgentScan(agent.type)">
                         重新扫描
                       </v-btn>
                     </div>
@@ -5014,12 +5184,13 @@ watch(
                       :key="plugin.id"
                       class="dependency-row"
                     >
-                      <v-chip size="x-small" :color="plugin.installed ? 'success' : 'warning'" variant="tonal">
-                        {{ plugin.installed ? "已安装" : "缺插件" }}
+                      <v-chip size="x-small" :color="plugin.installed && plugin.healthy !== false ? 'success' : 'warning'" variant="tonal">
+                        {{ !plugin.installed ? "缺插件" : plugin.healthy === false ? "未就绪" : "已加载" }}
                       </v-chip>
                       <div>
                         <strong>{{ plugin.name }}</strong>
-                        <span>{{ plugin.version ? `版本/状态：${plugin.version}` : "插件用于完成真实消息投递和会话绑定。" }}</span>
+                        <span>{{ plugin.version ? `版本：${plugin.version}` : "未读取到插件版本。" }}</span>
+                        <span v-for="detail in plugin.details ?? []" :key="`${plugin.id}-${detail}`">{{ detail }}</span>
                       </div>
                     </div>
                   </div>
@@ -5073,7 +5244,7 @@ watch(
                     />
                   </div>
                   <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                    开启后，聊天消息默认形成消息组，并动态创建或复用 Codex 消息处理 Agent；关闭后，新消息、计划进展通知、回调提醒和 Agent 间待回复改投给主人格，不再打开消息处理任务。ASR 和结构化事件照常直接投递。
+                    开启后，聊天消息默认形成消息组，并动态创建或复用当前主 Agent 端的消息处理 Agent；关闭后，新消息、计划进展通知、回调提醒和 Agent 间待回复改投给主人格，不再打开消息处理会话。ASR 和结构化事件照常直接投递。
                   </v-alert>
                   <div v-if="messageProcessingAgentPolicy(agent.type).enabled" class="catalog-param-grid mt-2">
                     <v-text-field
@@ -5121,7 +5292,7 @@ watch(
                       </v-card-title>
                       <v-card-text>
                         <MessageProcessingBoard
-                          v-if="messageProcessingBoardOpen && codexMessageAgentModeEnabled"
+                          v-if="messageProcessingBoardOpen && managedMessageAgentModeEnabled"
                           :gateway-id="gateway.id"
                           :enabled="true"
                         />
@@ -5178,22 +5349,34 @@ watch(
                   </div>
                   <div class="d-flex align-center ga-2 flex-wrap mt-2">
                     <v-btn
+                      v-if="hasManagedAgentSessionBinding('codex')"
+                      color="primary"
+                      variant="tonal"
+                      prepend-icon="mdi-crosshairs-gps"
+                      :loading="managedAgentSessionAction.loading"
+                      :disabled="managedAgentSessionAction.loading"
+                      @click="openManagedAgentSession('codex')"
+                    >
+                      定位会话
+                    </v-btn>
+                    <v-btn
+                      v-else
                       color="primary"
                       variant="tonal"
                       prepend-icon="mdi-account-sync-outline"
-                      :loading="codexInitialization.loading"
-                      :disabled="codexInitialization.loading"
-                      @click="initializeCodexSession"
+                      :loading="managedAgentSessionAction.loading"
+                      :disabled="managedAgentSessionAction.loading"
+                      @click="initializeManagedAgentSession('codex')"
                     >
                       自动初始化会话
                     </v-btn>
-                    <span class="section-note">先保存名称 + ID；按配置名称查找，零匹配只创建一次，再把人格资料投到同一个 Desktop 任务。</span>
+                    <span class="section-note">已有完整 ID 和工作目录时可定位原 Desktop 任务；未绑定时可初始化会话。</span>
                   </div>
-                  <v-alert v-if="codexInitialization.error" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
-                    {{ codexInitialization.error }}
+                  <v-alert v-if="managedAgentSessionAction.error" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
+                    {{ managedAgentSessionAction.error }}
                   </v-alert>
-                  <v-alert v-else-if="codexInitialization.message" type="success" variant="tonal" density="compact" class="mt-2 mb-1">
-                    {{ codexInitialization.message }}
+                  <v-alert v-else-if="managedAgentSessionAction.message" type="success" variant="tonal" density="compact" class="mt-2 mb-1">
+                    {{ managedAgentSessionAction.message }}
                   </v-alert>
                   <v-alert v-if="codexBinding.error" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
                     {{ codexBinding.error }}
@@ -5201,162 +5384,6 @@ watch(
                   <v-alert v-else-if="codexBinding.pending" type="info" variant="tonal" density="compact" class="mt-2 mb-1">
                     尚无同名 Desktop 会话；点击保存时会创建任务、写入完整 ID 并切换绑定。
                   </v-alert>
-                  <div v-if="supportsManagedTaskFeature(agent.type, 'memoryConsolidationAgent')" class="dependency-panel mt-3">
-                    <div class="section-title-row compact-row">
-                      <div>
-                        <div class="section-title small-title">独立记忆整理 Agent</div>
-                        <div class="section-note">开启后，记忆沉淀请求交给独立的 Codex Desktop 任务，不占用主人格当前上下文。</div>
-                      </div>
-                      <v-switch
-                        color="primary"
-                        density="compact"
-                        hide-details
-                        inset
-                        :model-value="gateway.codexMemoryConsolidationAgentEnabled === true"
-                        @update:model-value="value => { gateway.codexMemoryConsolidationAgentEnabled = value === true; touch(); }"
-                      />
-                    </div>
-                    <v-alert v-if="gateway.codexMemoryConsolidationAgentEnabled" type="info" variant="tonal" density="compact" class="mt-2 mb-2">
-                      触发沉淀时会创建或复用“{{ codexMemoryConsolidationAgentTitle(gateway.codexThreadName || fallbackCodexThreadName()) }}”。请求不会再投给主人格；Desktop 不可用或任务投递失败时，本轮会明确失败，不会切换到备用处理端。
-                    </v-alert>
-                    <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                      关闭时，记忆沉淀请求仍由当前主人格处理。
-                    </v-alert>
-                    <div v-if="gateway.codexMemoryConsolidationAgentEnabled" class="catalog-param-grid mt-2">
-                      <v-text-field
-                        :model-value="gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL"
-                        label="记忆整理模型"
-                        hint="默认使用 GPT-5.6 Terra；只影响独立记忆整理 Agent 的新轮次。"
-                        persistent-hint
-                        @update:model-value="value => { gateway.codexMemoryConsolidationAgentModel = String(value || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL); touch(); }"
-                      />
-                    </div>
-                  </div>
-                  <div v-if="supportsManagedTaskFeature(agent.type, 'planAssistantSessions')" class="dependency-panel mt-3">
-                    <div class="section-title-row compact-row">
-                      <div>
-                        <div class="section-title small-title">计划协助会话</div>
-                        <div class="section-note">持久秘书任务负责计划推进和结果汇总；全部秘书统一使用 Manager 配置的模型，并且不会随临时子 Agent 结束而失去 owner。</div>
-                      </div>
-                      <v-switch
-                        color="primary"
-                        density="compact"
-                        hide-details
-                        inset
-                        :model-value="gateway.codexPlanAssistantEnabled === true"
-                        @update:model-value="value => { gateway.codexPlanAssistantEnabled = value === true; touch(); }"
-                      />
-                    </div>
-                    <v-alert v-if="gateway.codexPlanAssistantEnabled" type="warning" variant="tonal" density="compact" class="mt-2 mb-2">
-                      实验能力：代码和契约测试已覆盖精确 ID、命名与复用；仍需在真实 Codex Desktop 中确认多任务可见、同 ID 续投和工具 owner。
-                    </v-alert>
-                    <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                      关闭后不再把计划交给秘书处理；已经绑定的秘书任务会保留，重新开启后继续复用。
-                    </v-alert>
-                    <div v-if="gateway.codexPlanAssistantEnabled" class="catalog-param-grid mt-2">
-                      <v-text-field
-                        :model-value="gateway.codexPlanAssistantModel || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL"
-                        label="计划秘书模型"
-                        hint="Manager 统一应用到当前 Route 的全部计划秘书；默认使用 GPT-5.6 Terra。"
-                        persistent-hint
-                        @update:model-value="value => { gateway.codexPlanAssistantModel = String(value || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL); touch(); }"
-                      />
-                      <v-text-field
-                        v-model.number="codexPlanAssistants.count"
-                        type="number"
-                        :min="1"
-                        :max="8"
-                        :step="1"
-                        label="协助会话数量"
-                        hint="1 个时命名为“主会话名 协助处理计划”；多个时依次命名为“…计划1、…计划2”"
-                        persistent-hint
-                      />
-                      <div class="d-flex align-center ga-2 flex-wrap">
-                        <v-btn
-                          color="secondary"
-                          variant="tonal"
-                          prepend-icon="mdi-account-multiple-plus-outline"
-                          :loading="codexPlanAssistants.loading"
-                          :disabled="codexPlanAssistants.loading"
-                          @click="initializeCodexPlanAssistants"
-                        >
-                          创建 / 同步协助会话
-                        </v-btn>
-                      </div>
-                    </div>
-                    <div v-if="gateway.codexPlanAssistantEnabled && gateway.codexPlanAssistantSessions?.length" class="d-flex ga-2 flex-wrap mt-2">
-                      <v-chip
-                        v-for="session in gateway.codexPlanAssistantSessions"
-                        :key="session.threadId"
-                        size="small"
-                        variant="tonal"
-                        color="secondary"
-                        data-no-i18n
-                      >
-                        {{ session.threadName }}
-                      </v-chip>
-                    </div>
-                    <v-alert v-if="codexPlanAssistants.error" type="error" variant="tonal" density="compact" class="mt-2 mb-0">
-                      {{ codexPlanAssistants.error }}
-                    </v-alert>
-                    <v-alert v-else-if="codexPlanAssistants.message" type="success" variant="tonal" density="compact" class="mt-2 mb-0">
-                      {{ codexPlanAssistants.message }}
-                    </v-alert>
-                  </div>
-                  <div v-if="supportsManagedTaskFeature(agent.type, 'hooks')" class="dependency-panel mt-3">
-                    <div class="section-title-row compact-row">
-                      <div>
-                        <div class="section-title small-title">Hook 管理</div>
-                        <div class="section-note">关闭开关只让 Manager 忽略对应 Hook；Codex 插件中的 Hook 注册保持不变。</div>
-                      </div>
-                    </div>
-                    <div class="catalog-param-grid mt-2">
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('sessionContextEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="会话入口上下文"
-                          @update:model-value="value => setCodexHookSetting('sessionContextEnabled', value)"
-                        />
-                        <div class="section-note">打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。Hook：<code>SessionStart</code> / <code>UserPromptSubmit</code>。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('reasoningContextEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="推理期上下文刷新"
-                          @update:model-value="value => setCodexHookSetting('reasoningContextEnabled', value)"
-                        />
-                        <div class="section-note">Codex 调用工具前后触发，只注入本轮新命中的计划、记忆或技能上下文。Hook：<code>PreToolUse</code> / <code>PostToolUse</code>。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('planTaskCompletionEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="计划任务会话完成通知"
-                          @update:model-value="value => setCodexHookSetting('planTaskCompletionEnabled', value)"
-                        />
-                        <div class="section-note">绑定计划的执行任务输出本轮最终回答后触发，经 Rabi 投递到该人格 Route 绑定的会话。Hook：<code>Stop</code>；默认开启。</div>
-                      </div>
-                      <div class="full-span">
-                        <v-switch
-                          :model-value="codexHookEnabled('agentCommunicationEnforcementEnabled')"
-                          color="primary"
-                          density="compact"
-                          hide-details
-                          label="强制使用 RabiAgent 消息投递接口"
-                          @update:model-value="value => setCodexHookSetting('agentCommunicationEnforcementEnabled', value)"
-                        />
-                        <div class="section-note">开启后，本 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能绕过 Rabi 直接操作其它 Codex 持久任务。通过 Rabi 投递时，发送方必须明确是否要求回复；要求回复后，目标 Agent 每轮结束仍未正式回复，Manager 会在五分钟后提醒。Hook：<code>PreToolUse</code> / <code>Stop</code>；默认开启。</div>
-                      </div>
-                    </div>
-                  </div>
                   <template v-if="runtime.running !== undefined">
                     <v-alert v-if="agentStateFor('codex').lastNotificationError" type="warning" variant="tonal" density="compact" class="mt-2 mb-1">
                       {{ agentStateFor('codex').lastNotificationError }}
@@ -5491,52 +5518,116 @@ watch(
                 </template>
                 <template v-else-if="agent.type === 'dsh'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    DSH 会话是主人格投递目标：通过 DSH apiproxy <code>session.prompt</code>（mode=queue）注入消息。
-                    DSH 会话在 DeepSeek Harness Web GUI 中创建和管理；RabiRoute 不创建、不重命名、不归档 DSH 会话。
-                    仍为实验性：尚未自动执行真实消息注入烟测。
+                    RabiRoute 通过 DSH apiproxy 发现、创建、重命名、绑定和续投会话。实际消息由同一个 DSH session owner 执行；失败时不会改投 Codex。
+                  </v-alert>
+                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                    DSH 扫描会读取 <code>RabiRoute Agent</code> 的运行状态、版本、Manager 地址、通信约束和模型工具。显示“未就绪”时按上方诊断更新插件并重启 DSH。
                   </v-alert>
                   <div class="catalog-param-grid">
-                    <v-text-field
-                      v-model="gateway.dshSessionId"
-                      label="DSH 会话 ID"
-                      placeholder="session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                      hint="在 DeepSeek Harness Web GUI 的会话页面复制。格式固定：session-<uuid>"
+                    <v-combobox
+                      v-model="gateway.dshBaseUrl"
+                      :items="agentScanFor('dsh')?.endpoints?.map(endpoint => endpoint.url) ?? []"
+                      label="DSH API 基地址"
+                      placeholder="http://127.0.0.1:3080"
+                      hint="先填写 apiproxy 地址，再扫描项目和会话；默认 http://127.0.0.1:3080"
                       persistent-hint
                       data-no-i18n
                       @update:model-value="touch"
-                    />
-                    <v-text-field
-                      v-model="gateway.dshSessionName"
-                      label="DSH 会话名称"
-                      placeholder="DSH CottonGame Luna Max"
-                      hint="可选标识，只用于显示，不会改变 DSH 内的会话名"
-                      persistent-hint
-                      data-no-i18n
-                      @update:model-value="touch"
-                    />
+                    >
+                      <template #append-inner>
+                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
+                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="按当前地址扫描" @click.stop="runDshAgentScan" />
+                      </template>
+                    </v-combobox>
                     <v-combobox
                       v-model="gateway.dshCwd"
                       :items="agentProjectItems('dsh')"
                       label="工作目录"
                       placeholder="C:/Path/To/Project"
-                      hint="DSH 绑定需要明确工作目录；应与 DSH 会话的 cwd 一致"
+                      hint="用于同名会话消歧和新建；选择已有会话时自动采用会话目录"
                       persistent-hint
                       @update:model-value="touch"
                     >
                       <template #append-inner>
-                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
-                        <v-icon v-else-if="agentProjectItems('dsh').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runAgentScan" />
+                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
+                        <v-icon v-else-if="agentProjectItems('dsh').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runDshAgentScan" />
                       </template>
                     </v-combobox>
-                    <v-text-field
-                      v-model="gateway.dshBaseUrl"
-                      label="DSH API 基地址"
-                      placeholder="http://127.0.0.1:3080"
-                      hint="本机 DeepSeek Harness 的 apiproxy 入口；默认 http://127.0.0.1:3080"
+                    <v-combobox
+                      :model-value="gateway.dshSessionId || gateway.dshSessionName"
+                      :items="dshSessionItems()"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
+                      label="DSH 会话"
+                      placeholder="选择已有会话，或输入新会话名"
+                      hint="选择后保存完整 ID、名称和工作目录；输入新名称会清空旧 ID，保存时查找或只创建一次"
                       persistent-hint
-                      data-no-i18n
-                      @update:model-value="touch"
-                    />
+                      @update:model-value="selectDshSession"
+                    >
+                      <template #item="{ props, item }">
+                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+                      </template>
+                      <template #append-inner>
+                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
+                        <v-icon v-else-if="dshSessionItems().length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runDshAgentScan" />
+                      </template>
+                    </v-combobox>
+                    <v-btn
+                      v-if="agentScanFor('dsh')?.sessionPage?.hasMore"
+                      size="small"
+                      variant="text"
+                      prepend-icon="mdi-chevron-down"
+                      :loading="dshScanLoading"
+                      @click="loadMoreDshSessions"
+                    >
+                      加载更多 DSH 会话
+                    </v-btn>
+                  </div>
+                  <div class="d-flex align-center ga-2 flex-wrap mt-2">
+                    <v-btn
+                      v-if="hasManagedAgentSessionBinding('dsh')"
+                      color="primary"
+                      variant="tonal"
+                      prepend-icon="mdi-crosshairs-gps"
+                      :loading="managedAgentSessionAction.loading"
+                      :disabled="managedAgentSessionAction.loading"
+                      @click="openManagedAgentSession('dsh')"
+                    >
+                      定位会话
+                    </v-btn>
+                    <v-btn
+                      v-else
+                      color="primary"
+                      variant="tonal"
+                      prepend-icon="mdi-account-sync-outline"
+                      :loading="managedAgentSessionAction.loading"
+                      :disabled="managedAgentSessionAction.loading"
+                      @click="initializeManagedAgentSession('dsh')"
+                    >
+                      自动初始化会话
+                    </v-btn>
+                    <span class="section-note">已有完整 ID 和工作目录时可定位原 DSH 会话；未绑定时可初始化会话。</span>
+                  </div>
+                  <v-alert v-if="managedAgentSessionAction.error" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
+                    {{ managedAgentSessionAction.error }}
+                  </v-alert>
+                  <v-alert v-else-if="managedAgentSessionAction.message" type="success" variant="tonal" density="compact" class="mt-2 mb-1">
+                    {{ managedAgentSessionAction.message }}
+                  </v-alert>
+                  <div class="mt-2">
+                    <div class="status-row">
+                      <span>会话发现</span>
+                      <b :class="dshSessionItems().length ? 'text-success' : 'text-warning'">{{ dshSessionItems().length ? `可选 ${dshSessionItems().length} 个` : '未读取到会话' }}</b>
+                    </div>
+                    <div class="status-row">
+                      <span>项目发现</span>
+                      <b :class="agentProjectItems('dsh').length ? 'text-success' : 'text-warning'">{{ agentProjectItems('dsh').length ? `可选 ${agentProjectItems('dsh').length} 个` : '未读取到项目目录' }}</b>
+                    </div>
+                    <div class="status-row">
+                      <span>投递协议</span>
+                      <b>session.prompt · mode=queue</b>
+                    </div>
                   </div>
                 </template>
                 <template v-else-if="agent.type === 'astrbot'">
@@ -5689,6 +5780,180 @@ watch(
                     <pre v-if="astrbotDeployResult.detail" class="deploy-output">{{ astrbotDeployResult.detail }}</pre>
                   </v-alert>
                 </template>
+                  <div v-if="primaryAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'memoryConsolidationAgent')" class="dependency-panel mt-3">
+                    <div class="section-title-row compact-row">
+                      <div>
+                        <div class="section-title small-title">独立记忆整理 Agent</div>
+                        <div class="section-note">开启后，记忆沉淀请求交给独立的 {{ managedAgentLabel(agent.type) }} 会话，不占用主人格当前上下文。</div>
+                      </div>
+                      <v-switch
+                        color="primary"
+                        density="compact"
+                        hide-details
+                        inset
+                        :model-value="gateway.codexMemoryConsolidationAgentEnabled === true"
+                        @update:model-value="value => { gateway.codexMemoryConsolidationAgentEnabled = value === true; touch(); }"
+                      />
+                    </div>
+                    <v-alert v-if="gateway.codexMemoryConsolidationAgentEnabled" type="info" variant="tonal" density="compact" class="mt-2 mb-2">
+                      触发沉淀时会创建或复用“{{ codexMemoryConsolidationAgentTitle(managedAgentSessionContext(agent.type)?.sessionName || fallbackCodexThreadName()) }}”。请求不会再投给主人格；目标 Agent 端不可用或会话投递失败时，本轮会明确失败，不会切换到备用处理端。
+                    </v-alert>
+                    <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2 mb-0">
+                      关闭时，记忆沉淀请求仍由当前主人格处理。
+                    </v-alert>
+                    <div v-if="gateway.codexMemoryConsolidationAgentEnabled" class="catalog-param-grid mt-2">
+                      <v-text-field
+                        v-if="agent.type === 'codex'"
+                        :model-value="gateway.codexMemoryConsolidationAgentModel || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL"
+                        label="记忆整理模型"
+                        hint="默认使用 GPT-5.6 Terra；只影响独立记忆整理 Agent 的新轮次。"
+                        persistent-hint
+                        @update:model-value="value => { gateway.codexMemoryConsolidationAgentModel = String(value || DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL); touch(); }"
+                      />
+                    </div>
+                  </div>
+                  <div v-if="primaryAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'planAssistantSessions')" class="dependency-panel mt-3">
+                    <div class="section-title-row compact-row">
+                      <div>
+                        <div class="section-title small-title">计划协助会话</div>
+                        <div class="section-note">持久秘书任务负责计划推进和结果汇总；全部秘书统一使用 Manager 配置的模型，并且不会随临时子 Agent 结束而失去 owner。</div>
+                      </div>
+                      <v-switch
+                        color="primary"
+                        density="compact"
+                        hide-details
+                        inset
+                        :model-value="gateway.codexPlanAssistantEnabled === true"
+                        @update:model-value="value => { gateway.codexPlanAssistantEnabled = value === true; touch(); }"
+                      />
+                    </div>
+                    <v-alert v-if="gateway.codexPlanAssistantEnabled" :type="agent.type === 'dsh' ? 'success' : 'warning'" variant="tonal" density="compact" class="mt-2 mb-2">
+                      <template v-if="agent.type === 'dsh'">
+                        当前本机已读回 6 个 DSH 计划协助会话，并验证同一秘书会话复用、计划绑定迁移和正式回复来源；发布包与全新环境回归待完成。
+                      </template>
+                      <template v-else>
+                        实验能力：代码和契约测试已覆盖精确 ID、命名与复用；仍需在真实 {{ managedAgentLabel(agent.type) }} 中确认多会话可见、同 ID 续投和工具 owner。
+                      </template>
+                    </v-alert>
+                    <v-alert v-else type="info" variant="tonal" density="compact" class="mt-2 mb-0">
+                      关闭后不再把计划交给秘书处理；已经绑定的秘书任务会保留，重新开启后继续复用。
+                    </v-alert>
+                    <div v-if="gateway.codexPlanAssistantEnabled" class="catalog-param-grid mt-2">
+                      <v-text-field
+                        v-if="agent.type === 'codex'"
+                        :model-value="gateway.codexPlanAssistantModel || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL"
+                        label="计划秘书模型"
+                        hint="Manager 统一应用到当前 Route 的全部计划秘书；默认使用 GPT-5.6 Terra。"
+                        persistent-hint
+                        @update:model-value="value => { gateway.codexPlanAssistantModel = String(value || DEFAULT_CODEX_PLAN_ASSISTANT_MODEL); touch(); }"
+                      />
+                      <v-text-field
+                        v-model.number="codexPlanAssistants.count"
+                        type="number"
+                        :min="1"
+                        :max="8"
+                        :step="1"
+                        label="协助会话数量"
+                        hint="1 个时命名为“主会话名 协助处理计划”；多个时依次命名为“…计划1、…计划2”"
+                        persistent-hint
+                      />
+                      <div class="d-flex align-center ga-2 flex-wrap">
+                        <v-btn
+                          color="secondary"
+                          variant="tonal"
+                          prepend-icon="mdi-account-multiple-plus-outline"
+                          :loading="codexPlanAssistants.loading"
+                          :disabled="codexPlanAssistants.loading"
+                          @click="initializePlanAssistants"
+                        >
+                          创建 / 同步协助会话
+                        </v-btn>
+                      </div>
+                    </div>
+                    <div v-if="gateway.codexPlanAssistantEnabled && gateway.codexPlanAssistantSessions?.length" class="d-flex ga-2 flex-wrap mt-2">
+                      <v-chip
+                        v-for="session in gateway.codexPlanAssistantSessions"
+                        :key="session.threadId"
+                        size="small"
+                        variant="tonal"
+                        color="secondary"
+                        data-no-i18n
+                      >
+                        {{ session.threadName }}
+                      </v-chip>
+                    </div>
+                    <v-alert v-if="codexPlanAssistants.error" type="error" variant="tonal" density="compact" class="mt-2 mb-0">
+                      {{ codexPlanAssistants.error }}
+                    </v-alert>
+                    <v-alert v-else-if="codexPlanAssistants.message" type="success" variant="tonal" density="compact" class="mt-2 mb-0">
+                      {{ codexPlanAssistants.message }}
+                    </v-alert>
+                  </div>
+                  <div v-if="primaryAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'hooks')" class="dependency-panel mt-3">
+                    <div class="section-title-row compact-row">
+                      <div>
+                        <div class="section-title small-title">Hook 管理</div>
+                        <div class="section-note">关闭开关只让 Manager 忽略对应 Hook；目标 Agent 端的插件注册保持不变。</div>
+                      </div>
+                    </div>
+                    <div class="catalog-param-grid mt-2">
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('sessionContextEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="会话入口上下文"
+                          @update:model-value="value => setCodexHookSetting('sessionContextEnabled', value)"
+                        />
+                        <div class="section-note">打开、恢复、清空或压缩 Agent 会话，以及用户提交新消息时触发。Hook：<code>SessionStart</code> / <code>UserPromptSubmit</code>。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('reasoningContextEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="推理期上下文刷新"
+                          @update:model-value="value => setCodexHookSetting('reasoningContextEnabled', value)"
+                        />
+                        <div class="section-note">Agent 调用工具前后触发，只注入本轮新命中的计划、记忆或技能上下文。Hook：<code>PreToolUse</code> / <code>PostToolUse</code>。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('planTaskCompletionEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="计划任务会话完成通知"
+                          @update:model-value="value => setCodexHookSetting('planTaskCompletionEnabled', value)"
+                        />
+                        <div class="section-note">绑定计划的执行任务输出本轮最终回答后触发，经 Rabi 投递到该人格 Route 绑定的会话。Hook：<code>Stop</code>；默认开启。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="codexHookEnabled('agentCommunicationEnforcementEnabled')"
+                          color="primary"
+                          density="compact"
+                          hide-details
+                          label="强制使用 RabiAgent 消息投递接口"
+                          @update:model-value="value => setCodexHookSetting('agentCommunicationEnforcementEnabled', value)"
+                        />
+                        <div class="section-note">开启后，本 Route 的主人格、计划 Agent、计划秘书和消息处理 Agent 不能绕过 Rabi 直接操作其它持久 Agent 会话。通过 Rabi 投递时，发送方必须明确是否要求回复；要求回复后，目标 Agent 每轮结束仍未正式回复，Manager 会在五分钟后提醒。Hook：<code>PreToolUse</code> / <code>Stop</code>；默认开启。</div>
+                      </div>
+                      <div class="full-span">
+                        <v-switch
+                          :model-value="gateway.codexHooks?.onlyPrimaryPersonaCanSendMessages === true"
+                          color="warning"
+                          density="compact"
+                          hide-details
+                          label="仅允许主人格发送消息"
+                          @update:model-value="value => setCodexHookSetting('onlyPrimaryPersonaCanSendMessages', value)"
+                        />
+                        <div class="section-note">默认关闭。开启后只有当前绑定的 {{ managedAgentLabel(agent.type) }} 主人格会话可发送；计划 Agent、计划秘书和消息处理 Agent 会被拒绝。</div>
+                      </div>
+                    </div>
+                  </div>
               </div>
             </v-expand-transition>
           </div>

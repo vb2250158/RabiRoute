@@ -4,11 +4,11 @@
 </div>
 <!-- /docs-language-switch -->
 
-# RabiRoute Qt 角色面板
+# RabiRoute Desktop
 
-> 状态：当前桌面便利入口。面板已实现并随 Windows 启动器使用，但不替代 Manager、RibiWebGUI 或 Codex/ChatGPT Desktop。
+> 状态：当前 Windows 桌面应用。系统托盘与任务窗口是 RabiRoute Desktop 的界面，Manager 是同一应用使用的本机后端。
 
-这是 RabiRoute 的 PySide6/Qt 托盘与浮动角色面板。它读取 Manager、Route、计划和记忆状态，也可以通过 `rolePanel` 消息端向当前 Route 绑定的 Agent 发送文字和文件附件。
+这是 RabiRoute Desktop 的 PySide6/Qt 界面。它读取 Manager、Route、计划和记忆状态，也可以通过 `rolePanel` 消息端向当前 Route 绑定的 Agent 发送文字和文件附件。
 
 Qt 面板本身尽量保持跨平台。Windows 启动器与打包边界以 [`docs/windows-launcher-and-packaging.md`](../../docs/windows-launcher-and-packaging.md) 为准。
 
@@ -30,9 +30,9 @@ Qt 面板本身尽量保持跨平台。Windows 启动器与打包边界以 [`doc
 - Manager 判定当前计划/步骤需要审批时，展开卡片展示 Manager 返回的审批合同和缺项。`incomplete/enabled=false` 时显示“审批资料不完整/禁止审批”并禁用输入与提交；只有 `ready/enabled=true` 才允许提交。提交只等待 Manager 落盘，默认 5 秒请求边界；返回 `pending` 后立即结束 loading，Agent 通知在后台继续。意见关联 `planId` 与 `stepId`，记录失败时可用同一 `feedbackId` 重试。该入口不直接推进步骤或改变计划状态。
 - 读取角色面板聊天记录，并向当前 Route 发送文字或文件附件；聊天视图按日期分组，每条气泡内显示发送者和时间，文件附件使用紧凑文件行，避免时间戳和嵌套卡片打断对话阅读。输入框会随内容在有限高度内增长，`Enter` 发送，`Shift+Enter` 换行。投递在后台线程等待 Manager 和 Agent adapter 确认，期间窗口仍可切换和查看其它内容；失败时保留输入草稿。
 - 角色面板把输入标记为“本地用户”，不会让 Agent 误以为角色在对自己说话；只有 Route 匹配且 Agent adapter 确认 `delivered` 后才显示发送成功，禁用 Route、规则未命中或没有处理端都会明确报失败。
-- WebGUI“设置”页打开“开启滑词菜单”后，Windows 任意支持 UI Automation 文本选区的软件都可使用系统悬浮条。把光标移到“投递至”，会显示当前已启用且运行中的人格列表，点击其中一项后复用角色面板消息投递到对应 Route。划选本身不执行动作。密码控件和无法读取的选区直接忽略，不模拟 `Ctrl+C`，不改变剪贴板。“滑词朗读”是滑词菜单的子功能：开启时左侧显示“朗读”，点击后进入 RabiSpeech 主机 FIFO；关闭后悬浮条只保留“投递至”。只有同时开启“滑词朗读”和“高级选项”，才可选择 TTS 模型。
-- 在 WebGUI“设置”中启用系统截图并配置快捷键后，任意软件都可以使用该系统级快捷键截图。截图会打开预览、文字输入和已激活人格选择；点击“发送”后，图片和文字通过同一个角色面板入口投递，Codex/DSH 会把图片作为真实图片输入接收。截图保存在项目私有 `.rabiroute-message-images/`，不会写入公开示例。
-- “设置 → Windows 登录启动”会同步当前用户的 Startup 快捷方式；关闭后移除该快捷方式。快捷键、截图开关和登录启动配置修改后由托盘监听文件变化，不需要重启托盘。
+- WebGUI“设置”页打开“开启滑词菜单”后，可在 Windows 软件中用鼠标拖选，或用 `Shift` + 方向键 / `Home` / `End` / `PageUp` / `PageDown` 扩选文字。悬浮条按选区范围横向居中：鼠标向上拖选时优先显示在上方，向下或同一行拖选时优先显示在下方。键盘扩选优先合并扩选前后的系统插入符范围；Unity 没有系统插入符时，使用同一窗口最近一次点击位置，避免悬浮条跑到窗口角落。把光标移到“投递至”，会显示当前已启用且运行中的人格列表，点击其中一项后复用角色面板消息投递到对应 Route。划选本身不执行动作。普通软件通过 UI Automation 读取文字和选区矩形；Unity 编辑器无法提供该选区时，才临时发送受保护的 `Ctrl+C`，等待编辑器更新剪贴板，读取后恢复原剪贴板。密码控件和仍无法读取的选区直接忽略。“滑词朗读”是滑词菜单的子功能：开启时左侧显示“朗读”，点击后进入 RabiSpeech 主机 FIFO；关闭后悬浮条只保留“投递至”。只有同时开启“滑词朗读”和“高级选项”，才可选择 TTS 模型。
+- 在 WebGUI“设置”中启用系统截图并配置快捷键后，任意软件都可以框选截图。截图窗口会先打开，画面不会整体变暗，可直接框选；拖拽后选区以外的画面变暗，选区内保持原亮度，可在选区内拖动调整位置，选区大小保持不变。图片尚未准备完时的复制、贴图或发送会在就绪后继续。拖拽只创建待确认选区：按 `Enter` 或 `Ctrl+C` 复制，按 `F2` 发送，按贴图快捷键确认并贴图；默认在确认贴图或发送时也复制到剪贴板，可在设置中关闭，关闭后仍可按 `Ctrl+C` 或点击“复制”。`Ctrl+A` 选择整个屏幕。按 `Esc` 或直接关闭截图窗口会取消本次截图，不写入截图历史。复制、贴图或发送才会保存这张截图和框选区域。截图窗口中 `<` / `>` 切换已保存的上一张和下一张屏幕截图；“贴图快捷键”默认 `F3`：截图窗口打开且已框选区域时，直接贴出该区域；其他时候贴出剪贴板中的图片。贴图会按框选区域的原位置和大小显示；拖动、缩放和透明度会在 RabiRoute Desktop 重启后恢复，关闭单个贴图才删除。截图窗口切换历史截图时，会恢复该截图最后一次用于复制、贴图或发送的框选区域。发送仍复用角色面板入口，Codex/DSH 会把图片作为真实图片输入接收。截图保存在项目私有 `.rabiroute-message-images/`，贴图和区域记录保存在私有 `data/desktop/`，不会写入公开示例。
+- “设置 → Windows 登录启动”会同步当前用户的 Startup 快捷方式；关闭后移除该快捷方式。截图开关、截图快捷键、贴图快捷键和登录启动配置修改后由托盘监听文件变化，不需要重启托盘。
 - 计划主体和记忆保持只读；进行中/未归档/已归档计划均可展示，只有 Manager 声明的审批步骤允许追加审批意见。
 - 从更多菜单打开人格、计划、记忆、项目和运行状态目录。
 - 触发人格规则中声明的 `manual_trigger` 或 `heartbeat` 手动动作。
@@ -67,7 +67,7 @@ py desktop\tray-task-window\main.py --manager-url http://127.0.0.1:8790
 Windows 的“Manager + 托盘”启动入口：
 
 ```powershell
-Start-RabiRoute-Tray.bat
+Start-RabiRoute-Desktop.bat
 ```
 
 项目本体仍可独立启动：
@@ -106,11 +106,11 @@ data/roles/<RoleId>/memory/consolidated/*.json
 
 ## 生命周期
 
-托盘菜单的 `退出 RabiRoute` 会请求 `POST /manager/shutdown` 并携带明确的桌面退出标记。Manager 先把私有运行期意图原子写成 `stopped`，再停止受管 Gateway 并关闭 HTTP 服务，随后托盘退出。写入失败时面板保持可见，不能留下仍标记为 `running` 的监督器去反向复活进程。
+RabiRoute Desktop 菜单的 `退出 RabiRoute` 会请求 `POST /manager/shutdown` 并携带明确的桌面退出标记。Manager 先把私有运行期意图原子写成 `stopped`，再停止受管 Gateway 并关闭 HTTP 服务，随后桌面界面退出。写入失败时界面保持可见，不能留下仍标记为 `running` 的监督器去反向复活进程。
 
-Manager 暂时离线时，面板保留托盘图标、显示离线状态并继续重连，不再因连续探测失败自行退出。由 Windows 启动器或打包版托盘建立的完整桌面运行态会同时启动 `scripts/watch-rabiroute-desktop-lifecycle.ps1`；它只维护 Manager 与托盘的进程配对，连续确认任一侧缺失后通过现有安全启动门禁补齐。QQ、NapCat、Route 和 Adapter 的巡检不属于这个监督器。
+Manager 暂时离线时，RabiRoute Desktop 界面保留入口、显示离线状态并继续重连，不再因连续探测失败自行退出。由 Windows 启动器或打包版 RabiRoute Desktop 建立的完整桌面运行态会同时启动 `scripts/watch-rabiroute-desktop-lifecycle.ps1`；它只维护桌面后端与界面的共同运行态，连续确认任一部分缺失后通过现有安全启动门禁恢复完整桌面运行态。QQ、NapCat、Route 和 Adapter 的巡检不属于这个监督器。
 
-如果优雅关闭失败，面板不会静默消失，也不会强杀 Manager。普通 `npm run start:manager` 仍是独立核心路径，不会隐式创建托盘或监督器。
+如果优雅关闭失败，界面不会静默消失，也不会强杀 Manager。普通 `npm run start:manager` 是开发或跨平台后端入口，不会隐式创建 RabiRoute Desktop 或监督器。
 
 ## 代码布局
 
@@ -120,8 +120,8 @@ Manager 暂时离线时，面板保留托盘图标、显示离线状态并继续
 - `DesktopRefreshService`：无 Qt 依赖的 API 快照编排，只产出只读 DTO，不读取本地角色文件。
 - `desktop_models` / `desktop_read_model`：Manager DTO 到托盘表现模型的转换与可重建缓存。
 - `qt_async`：通用 Qt 线程池桥，只负责后台 callable 和主线程结果通知，不包含 Manager 或角色业务逻辑。
-- `system_selection`：Windows 全局拖选检测、UI Automation 选区读取、无焦点悬浮条、激活人格悬停菜单和滑词动作编排；`readAloudEnabled` 为 false 时隐藏“朗读”；只经 Manager 调用 TTS 与角色面板消息接口。
-- `system_screenshot`：Windows 全局截图快捷键、跨显示器截图拼接、预览输入窗口和角色面板图片附件发送；持久化配置由 Manager 的 `/api/desktop/settings` 管理。
+- `system_selection`：Windows 全局鼠标拖选与键盘扩选检测、UI Automation 选区读取、Unity 专用剪贴板回退、选区外悬浮条、激活人格悬停菜单和滑词动作编排；`readAloudEnabled` 为 false 时隐藏“朗读”；只经 Manager 调用 TTS 与角色面板消息接口。
+- `system_screenshot`：Windows 全局框选截图、框选区域或剪贴板贴图、屏幕截图及区域历史、可跨重启恢复的贴图窗口和角色面板图片附件投递；持久化设置由 Manager 的 `/api/desktop/settings` 管理。
 - `LifecycleController`：只处理用户明确退出；Manager 在线状态属于展示快照，不决定托盘生死。
 - `TaskWindow`：Route 导航、六个视图、聊天输入和渲染。
 - `DesktopAdapter`：通过 Qt 打开 URL、文件和目录。

@@ -4,11 +4,11 @@ English | <a href="./rabiroute-windows-tray-task-window-plan.md">简体中文</a
 </div>
 <!-- /docs-language-switch -->
 
-# Windows Tray Plan and Memory Window
+# Windows RabiRoute Desktop Plan and Memory Window
 
 > Status: implemented-boundary record. Use [Windows Launch and Packaging](windows-launcher-and-packaging_en.md) and `desktop/tray-task-window/` for current runtime details.
 
-The Windows tray application is a lightweight frontend for viewing the selected role's plans, recent memory, consolidated memory, conversation, and runtime status. It uses the same Manager backend as RibiWebGUI and is not an Agent OS, executor, or full project-management application.
+RabiRoute Desktop is a lightweight Windows frontend for viewing the selected role's plans, recent memory, consolidated memory, conversation, and runtime status. It uses the same Manager backend as RibiWebGUI and is not an Agent OS, executor, or full project-management application.
 
 ## Sources of truth
 

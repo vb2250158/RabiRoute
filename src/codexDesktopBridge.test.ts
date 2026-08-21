@@ -232,7 +232,7 @@ test("Desktop bridge starts a new turn when the task is idle", async () => {
 });
 
 test("Desktop bridge accepts a timed-out start when the exact Agent delivery marker reached the rollout", async () => {
-  const prompt = "[Agent 回复合同]\n本次投递 deliveryId：11111111-2222-4333-8444-555555555555\n\n[投递内容]\ncontinue";
+  const prompt = "[Agent 回复合同]\n本次投递 deliveryId：11111111-2222-4333-8444-555555555555\n\n[消息内容]\ncontinue";
   const seen: Array<{ threadId: string; marker: string }> = [];
   const router = await createMockDesktopRouter((request) => {
     if (request.method === "initialize") {
