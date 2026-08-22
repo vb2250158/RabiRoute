@@ -6,7 +6,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## 0.1.24 - 2026-08-21
+## 0.2.0 - 2026-08-22
 
 ### Cordis plugin runtime and Manager plugin refactor
 
