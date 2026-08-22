@@ -17,6 +17,8 @@ English | <a href="./performance-monitoring.md">简体中文</a>
 
 Recording is disabled by default. Disabling it stops new samples; existing files remain subject to retention and disk cleanup.
 
+Performance pages read bounded Manager memory directly: recent raw records are capped at 1,000 rows and 16 MB total, while 10-second, 1-minute, and 5-minute incremental summaries cover at most 48 hours. Samples not yet flushed to JSONL appear immediately. A 720-hour retention setting affects disk files only; Manager does not restore or keep every raw sample resident.
+
 ## File location and format
 
 Performance records are separate from ordinary runtime logs:
@@ -45,6 +47,8 @@ Each hourly file contains one complete JSON object per line. These files are loc
 - WebGUI: route navigation through two completed animation frames.
 
 The page ranks internal phases and HTTP endpoints by accumulated time. HTTP rows also show accumulated response bytes, separating expensive computation from oversized responses. Recorder append, summary, file-write, and cleanup timings are shown separately so monitoring overhead remains visible.
+
+`/api/events` and `/api/speech/events` are persistent event streams. Their connection lifetime is excluded from HTTP latency, P95, and slow-request metrics because it does not represent Manager processing time. The top Manager cards use the most recently reporting Manager runtime; pre-restart runtimes remain only in the timeline and details.
 
 ## Performance risks to check first
 
@@ -75,7 +79,7 @@ Query strings are removed and common dynamic IDs are replaced before paths are r
 | Maximum disk use | 16–4096 MB | 256 MB |
 | Slow-operation threshold | 100–120000 ms | 2000 ms |
 
-Manager checks expired files and the disk limit every hour. When the limit is exceeded, it removes the oldest performance files first.
+Manager checks expired files and the disk limit every hour. When the limit is exceeded, it removes the oldest performance files first. Memory is separately capped at 20,000 time buckets and 50,000 operation entries per tier, 10,000 deduplication IDs, 1,024 source snapshots, and 100 slow operations. Operation names beyond 64 in one bucket are merged into `__other__`.
 
 ## APIs
 
@@ -98,9 +102,9 @@ These APIs use the existing Manager WebGUI LAN access checks. Gateway submission
 - Recent and consolidated memory enumeration, parsing, lifecycle projection, and viewed-time writes run in low-priority read child processes.
 - The message-processing board list omits attachments, local paths, raw reply context, and full evidence. The detail endpoint provides those fields when needed.
 - Concurrent status requests for the same RabiSpeech URL share one probe, and adjacent calls reuse a 500 ms status result, so multiple pages do not duplicate the same `/health` and `/v1/capabilities` batch.
-- Performance aggregation, raw JSONL parsing, and response JSON serialization run in a dedicated low-priority child process. Its pool runs one task, queues one task, and enforces a 60-second timeout; identical queries share one task, and a full queue returns 503.
-- Read child processes remain resident between requests and reuse module caches instead of restarting and reloading modules for every memory or performance read. All pools share a process-wide budget of two low-priority heavy tasks, so one Agent scan cannot leave memory and performance reads waiting for a minute. `executionMode`, `workerPids`, `globalActive`, and `globalMaxConcurrency` expose isolation and the shared budget, while `workers` and `spawnedWorkers` reveal unexpected restarts.
-- Manager streams existing performance JSONL during startup and parses one record at a time instead of loading and splitting whole files.
+- Performance summaries read 10-second, 1-minute, and 5-minute in-memory aggregates. Recent raw records are capped at 1,000 rows and 16 MB total; responses return at most 1,000 rows, and an invalid `limit` uses the default 100. Page queries do not flush or parse JSONL.
+- Read child processes for memory and Agent scans remain resident between requests and reuse module caches. All pools share a process-wide budget of two low-priority heavy tasks. `executionMode`, `workerPids`, `globalActive`, and `globalMaxConcurrency` expose isolation and the shared budget, while `workers` and `spawnedWorkers` reveal unexpected restarts.
+- During startup, Manager scans only JSONL shards intersecting the configured retention and the maximum 48-hour query range, then builds aggregates one line at a time. Older long-retention files are not parsed.
 - When child-process concurrency or queue limits are exhausted, Manager returns a retryable error instead of moving the work back onto the HTTP main thread.
 
 ## Diagnosing gaps

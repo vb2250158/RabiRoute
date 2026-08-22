@@ -167,8 +167,7 @@ async function executeCommand(command: WebCommandContribution): Promise<void> {
 }
 
 onMounted(async () => {
-  await loadInterfaceTheme();
-  await store.load();
+  await Promise.all([loadInterfaceTheme(), store.load()]);
   if (store.gateways.length === 0) {
     const quickSetup = webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup");
     if (quickSetup) await executeCommand(quickSetup);

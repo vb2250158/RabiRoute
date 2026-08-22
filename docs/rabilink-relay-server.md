@@ -35,6 +35,8 @@
 
 ## 启动
 
+Windows 部署脚本把 `RabiLinkRelay` 和 `RabiLinkCaddy` 注册为无运行时长上限的计划任务，并为异常退出配置重启。Relay 持久化文件替换兼容 Windows 已存在目标文件的行为；如果进程在“旧文件移到备份”和“新文件就位”之间退出，下次启动会恢复孤立备份并清理过期备份。服务连续运行不会因默认 72 小时计划任务上限停止，覆盖 `runtime-state.json` 返回 `EPERM` 时也会回滚或在下次启动恢复。
+
 ```powershell
 cd C:\Path\To\RabiRoute
 $env:RABILINK_RELAY_PORT="8788"

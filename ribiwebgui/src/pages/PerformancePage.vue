@@ -42,8 +42,10 @@ const rangeOptions = [
 const sourceColors = ["#55d6be", "#ffcc66", "#ef6f6c", "#75a7ff", "#d392ff", "#9be564"];
 const onlineSources = computed(() => summary.value?.sources.filter(item => item.online).length ?? 0);
 const totalSources = computed(() => summary.value?.sources.length ?? 0);
-const managerSource = computed(() => summary.value?.sources.find(item => item.source.kind === "manager"));
-const latestRequestP95 = computed(() => Math.max(0, ...(summary.value?.sources.map(item => item.latest?.requestP95Ms ?? 0) ?? [])));
+const managerSource = computed(() => summary.value?.sources
+  .filter(item => item.source.kind === "manager")
+  .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))[0]);
+const latestRequestP95 = computed(() => managerSource.value?.latest?.requestP95Ms ?? 0);
 const totalDiskMb = computed(() => (summary.value?.status.diskBytes ?? 0) / 1024 / 1024);
 const logText = computed(() => recentLogs.value.slice(-30).reverse().map(item => JSON.stringify(item)).join("\n"));
 const performanceStatusContext = computed(() => ({

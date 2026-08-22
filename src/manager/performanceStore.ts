@@ -3,7 +3,9 @@ import path from "node:path";
 import readline from "node:readline";
 import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
 import {
+  isMeasuredPerformanceHttpOperation,
   performanceOperationTotalMs,
+  type PerformanceHttpMetrics,
   type PerformanceMonitoringConfig,
   type PerformanceOperationAggregate,
   type PerformanceOperationSummary,
@@ -16,6 +18,11 @@ import {
 } from "../shared/performanceContract.js";
 import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
+import {
+  PERFORMANCE_STORE_MEMORY_LIMITS,
+  PerformanceAggregateIndex,
+  type PerformanceAggregateMemoryUsage
+} from "./performanceAggregateIndex.js";
 
 type Listener = (sample: PerformanceSample) => void;
 
@@ -27,6 +34,12 @@ function shardName(time: string): string {
   return `performance-${time.slice(0, 13).replace("T", "-")}.jsonl`;
 }
 
+function performanceShardStart(filename: string): number {
+  const match = filename.match(/^performance-(\d{4})-(\d{2})-(\d{2})-(\d{2})\.jsonl$/);
+  if (!match) return Number.NaN;
+  return Date.parse(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:00:00.000Z`);
+}
+
 export function isPerformanceSample(value: unknown): value is PerformanceSample {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const sample = value as Partial<PerformanceSample>;
@@ -34,7 +47,9 @@ export function isPerformanceSample(value: unknown): value is PerformanceSample 
     && sample.kind === "performance_sample"
     && typeof sample.sampleId === "string"
     && sample.sampleId.length > 0
+    && sample.sampleId.length <= 512
     && typeof sample.time === "string"
+    && sample.time.length <= 64
     && Number.isFinite(Date.parse(sample.time))
     && typeof sample.intervalMs === "number"
     && Number.isFinite(sample.intervalMs)
@@ -43,14 +58,42 @@ export function isPerformanceSample(value: unknown): value is PerformanceSample 
       && ["manager", "gateway", "webgui"].includes(sample.source.kind)
       && typeof sample.source.id === "string"
       && sample.source.id.length > 0
+      && sample.source.id.length <= 256
       && typeof sample.source.runtimeId === "string"
-      && sample.source.runtimeId.length > 0);
+      && sample.source.runtimeId.length > 0
+      && sample.source.runtimeId.length <= 256);
+}
+
+function measuredHttpMetrics(http: PerformanceHttpMetrics | undefined): PerformanceHttpMetrics | undefined {
+  if (!http) return undefined;
+  const operations = http.operations.filter(item => isMeasuredPerformanceHttpOperation(item.operation));
+  if (operations.length === http.operations.length) return http;
+  if (!operations.length) return undefined;
+  const count = operations.reduce((sum, item) => sum + item.count, 0);
+  const totalBytes = operations.reduce((sum, item) => sum + (item.totalBytes ?? 0), 0);
+  const maxBytes = Math.max(0, ...operations.map(item => item.maxBytes ?? 0));
+  return {
+    operation: "all",
+    count,
+    errorCount: operations.reduce((sum, item) => sum + item.errorCount, 0),
+    totalMs: Math.round(operations.reduce((sum, item) => sum + performanceOperationTotalMs(item), 0) * 10) / 10,
+    p50Ms: count > 0
+      ? Math.round((operations.reduce((sum, item) => sum + item.p50Ms * item.count, 0) / count) * 10) / 10
+      : 0,
+    p95Ms: Math.max(0, ...operations.map(item => item.p95Ms)),
+    maxMs: Math.max(0, ...operations.map(item => item.maxMs)),
+    ...(totalBytes > 0 ? { totalBytes, maxBytes } : {}),
+    operations
+  };
 }
 
 function aggregatePoint(samples: PerformanceSample[], bucketTime: number): PerformanceSeriesPoint {
   const source = samples[0].source;
   const systems = samples.flatMap(sample => sample.system ? [sample.system] : []);
-  const http = samples.flatMap(sample => sample.http ? [sample.http] : []);
+  const http = samples.flatMap(sample => {
+    const measured = measuredHttpMetrics(sample.http);
+    return measured ? [measured] : [];
+  });
   const frontend = samples.flatMap(sample => sample.frontend ? [sample.frontend] : []);
   const average = (values: number[]): number | undefined => values.length
     ? Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10
@@ -192,7 +235,9 @@ export function buildPerformanceSummary(
       .localeCompare(`${right.source.kind}:${right.source.id}:${right.source.runtimeId}`)
   );
   const slowOperations = matching
-    .flatMap(sample => (sample.slowOperations ?? []).map(operation => ({ ...operation, source: sample.source })))
+    .flatMap(sample => (sample.slowOperations ?? [])
+      .filter(operation => operation.kind !== "http" || isMeasuredPerformanceHttpOperation(operation.operation))
+      .map(operation => ({ ...operation, source: sample.source })))
     .sort((left, right) => right.time.localeCompare(left.time))
     .slice(0, 100);
   return {
@@ -203,7 +248,10 @@ export function buildPerformanceSummary(
     status,
     sources,
     points,
-    httpOperations: aggregateOperationSummaries(matching, sample => sample.http?.operations ?? []),
+    httpOperations: aggregateOperationSummaries(
+      matching,
+      sample => measuredHttpMetrics(sample.http)?.operations ?? []
+    ),
     hotOperations: aggregateOperationSummaries(matching, sample => sample.operations ?? []),
     slowOperations
   };
@@ -212,9 +260,14 @@ export function buildPerformanceSummary(
 export class PerformanceStore {
   readonly logDirectory: string;
   private config: PerformanceMonitoringConfig;
-  private samples: PerformanceSample[] = [];
+  private recentSamples: Array<{ sample: PerformanceSample; bytes: number }> = [];
+  private recentSampleBytes = 0;
   private sampleIds = new Set<string>();
+  private sampleIdOrder: string[] = [];
+  private aggregateIndex = new PerformanceAggregateIndex();
   private pending = new Map<string, string[]>();
+  private pendingRecordCount = 0;
+  private pendingBytes = 0;
   private flushTimer: NodeJS.Timeout | undefined;
   private cleanupTimer: NodeJS.Timeout | undefined;
   private activeFlush: Promise<void> | undefined;
@@ -232,6 +285,7 @@ export class PerformanceStore {
   private lastSummaryDurationMs: number | undefined;
   private lastFlushDurationMs: number | undefined;
   private lastCleanupDurationMs: number | undefined;
+  private lastAggregatePruneAt = 0;
 
   constructor(rootDir: string, config: PerformanceMonitoringConfig) {
     this.logDirectory = projectDirectoryLayout(rootDir).performanceLogRoot;
@@ -247,6 +301,7 @@ export class PerformanceStore {
 
   applyConfig(config: PerformanceMonitoringConfig): void {
     this.config = config;
+    this.lastAggregatePruneAt = 0;
     this.pruneMemory();
     this.sampleVersion += 1;
     this.summaryCache.clear();
@@ -257,22 +312,30 @@ export class PerformanceStore {
     const startedAt = performance.now();
     if (!this.config.enabled || !isPerformanceSample(sample)) return false;
     if (this.sampleIds.has(sample.sampleId)) return false;
-    const serialized = `${JSON.stringify(sample)}\n`;
-    const pendingCount = [...this.pending.values()].reduce((sum, lines) => sum + lines.length, 0);
-    if (pendingCount >= 1_000) {
-      const firstShard = this.pending.keys().next().value as string | undefined;
-      if (firstShard) {
-        const lines = this.pending.get(firstShard);
-        if (lines?.length) lines.shift();
-        if (!lines?.length) this.pending.delete(firstShard);
-      }
+    let serialized: string;
+    try {
+      serialized = `${JSON.stringify(sample)}\n`;
+    } catch {
+      this.droppedRecords += 1;
+      return false;
+    }
+    const serializedBytes = Buffer.byteLength(serialized);
+    if (serializedBytes > PERFORMANCE_STORE_MEMORY_LIMITS.serializedSampleBytes) {
+      this.droppedRecords += 1;
+      return false;
+    }
+    while (this.pendingRecordCount >= PERFORMANCE_STORE_MEMORY_LIMITS.recentSamples
+      || this.pendingBytes + serializedBytes > PERFORMANCE_STORE_MEMORY_LIMITS.recentSampleBytes) {
+      if (!this.dropOldestPending()) break;
       this.droppedRecords += 1;
     }
     const shard = shardName(sample.time);
     const lines = this.pending.get(shard) ?? [];
     lines.push(serialized);
     this.pending.set(shard, lines);
-    this.remember(sample);
+    this.pendingRecordCount += 1;
+    this.pendingBytes += serializedBytes;
+    this.remember(sample, serializedBytes);
     this.sampleVersion += 1;
     this.summaryCache.clear();
     this.scheduleFlush();
@@ -295,7 +358,7 @@ export class PerformanceStore {
       this.summaryCacheHits += 1;
       return cached.summary;
     }
-    const summary = buildPerformanceSummary(this.samples, safeRangeMs, this.config, this.status(), now);
+    const summary = this.aggregateIndex.summary(safeRangeMs, this.config, this.status(), now);
     this.lastSummaryDurationMs = Math.round((performance.now() - startedAt) * 10) / 10;
     summary.status = this.status();
     this.summaryCache.set(safeRangeMs, { version: this.sampleVersion, expiresAt: now + 1_000, summary });
@@ -304,7 +367,27 @@ export class PerformanceStore {
   }
 
   recent(limit = 100): PerformanceSample[] {
-    return this.samples.slice(-Math.min(1_000, Math.max(1, limit)));
+    const safeLimit = Number.isFinite(limit) ? Math.trunc(limit) : 100;
+    return this.recentSamples
+      .slice(-Math.min(PERFORMANCE_STORE_MEMORY_LIMITS.recentSamples, Math.max(1, safeLimit)))
+      .map(entry => entry.sample);
+  }
+
+  memoryUsage(): PerformanceAggregateMemoryUsage & {
+    recentSamples: number;
+    recentSampleBytes: number;
+    dedupeSampleIds: number;
+    pendingRecords: number;
+    pendingBytes: number;
+  } {
+    return {
+      ...this.aggregateIndex.memoryUsage(),
+      recentSamples: this.recentSamples.length,
+      recentSampleBytes: this.recentSampleBytes,
+      dedupeSampleIds: this.sampleIds.size,
+      pendingRecords: this.pendingRecordCount,
+      pendingBytes: this.pendingBytes
+    };
   }
 
   status(): PerformanceStoreStatus {
@@ -312,8 +395,8 @@ export class PerformanceStore {
       enabled: this.config.enabled,
       loaded: this.loaded,
       logDirectory: "data/.runtime/performance",
-      pendingRecords: [...this.pending.values()].reduce((sum, lines) => sum + lines.length, 0),
-      retainedRecords: this.samples.length,
+      pendingRecords: this.pendingRecordCount,
+      retainedRecords: this.recentSamples.length,
       fileCount: this.fileCount,
       diskBytes: this.diskBytes,
       lastPersistedAt: this.lastPersistedAt,
@@ -346,40 +429,63 @@ export class PerformanceStore {
     await this.flush();
   }
 
-  private remember(sample: PerformanceSample): void {
+  private remember(sample: PerformanceSample, serializedBytes = Buffer.byteLength(JSON.stringify(sample))): void {
     if (this.sampleIds.has(sample.sampleId)) return;
     this.sampleIds.add(sample.sampleId);
-    const last = this.samples[this.samples.length - 1];
-    if (!last || last.time <= sample.time) {
-      this.samples.push(sample);
+    this.sampleIdOrder.push(sample.sampleId);
+    while (this.sampleIdOrder.length > PERFORMANCE_STORE_MEMORY_LIMITS.dedupeSampleIds) {
+      const oldest = this.sampleIdOrder.shift();
+      if (oldest) this.sampleIds.delete(oldest);
+    }
+
+    const entry = { sample, bytes: serializedBytes };
+    const last = this.recentSamples[this.recentSamples.length - 1];
+    if (!last || last.sample.time <= sample.time) {
+      this.recentSamples.push(entry);
     } else {
       let low = 0;
-      let high = this.samples.length;
+      let high = this.recentSamples.length;
       while (low < high) {
         const middle = (low + high) >>> 1;
-        if (this.samples[middle].time <= sample.time) low = middle + 1;
+        if (this.recentSamples[middle].sample.time <= sample.time) low = middle + 1;
         else high = middle;
       }
-      this.samples.splice(low, 0, sample);
+      this.recentSamples.splice(low, 0, entry);
     }
+    this.recentSampleBytes += serializedBytes;
+    this.aggregateIndex.ingest(sample);
     this.pruneMemory();
   }
 
   private pruneMemory(): void {
-    const cutoff = Date.now() - this.config.retentionHours * 60 * 60 * 1_000;
-    let low = 0;
-    let high = this.samples.length;
-    while (low < high) {
-      const middle = (low + high) >>> 1;
-      if (sampleTime(this.samples[middle]) < cutoff) low = middle + 1;
-      else high = middle;
+    const cutoff = Date.now() - Math.min(48, this.config.retentionHours) * 60 * 60 * 1_000;
+    while (this.recentSamples.length
+      && (sampleTime(this.recentSamples[0].sample) < cutoff
+        || this.recentSamples.length > PERFORMANCE_STORE_MEMORY_LIMITS.recentSamples
+        || this.recentSampleBytes > PERFORMANCE_STORE_MEMORY_LIMITS.recentSampleBytes)) {
+      const removed = this.recentSamples.shift();
+      if (removed) this.recentSampleBytes -= removed.bytes;
     }
-    const removeCount = Math.max(low, this.samples.length - 100_000);
-    if (removeCount <= 0) return;
-    for (let index = 0; index < removeCount; index += 1) {
-      this.sampleIds.delete(this.samples[index].sampleId);
+    const now = Date.now();
+    if (now - this.lastAggregatePruneAt >= 60_000) {
+      this.aggregateIndex.prune(this.config, now);
+      this.lastAggregatePruneAt = now;
     }
-    this.samples = this.samples.slice(removeCount);
+  }
+
+  private dropOldestPending(): boolean {
+    const firstShard = this.pending.keys().next().value as string | undefined;
+    if (!firstShard) return false;
+    const lines = this.pending.get(firstShard);
+    const removed = lines?.shift();
+    if (!removed) {
+      this.pending.delete(firstShard);
+      return false;
+    }
+    this.pendingRecordCount -= 1;
+    this.pendingBytes -= Buffer.byteLength(removed);
+    if (!lines?.length) this.pending.delete(firstShard);
+    return true;
   }
 
   private scheduleFlush(): void {
@@ -395,6 +501,8 @@ export class PerformanceStore {
     if (this.activeFlush || !this.pending.size) return this.activeFlush;
     const batch = new Map(this.pending);
     this.pending.clear();
+    this.pendingRecordCount = 0;
+    this.pendingBytes = 0;
     const startedAt = performance.now();
     this.activeFlush = (async () => {
       await fs.promises.mkdir(this.logDirectory, { recursive: true });
@@ -418,10 +526,11 @@ export class PerformanceStore {
   private async loadRecent(): Promise<void> {
     try {
       const entries = await fs.promises.readdir(this.logDirectory, { withFileTypes: true });
-      const cutoff = Date.now() - this.config.retentionHours * 60 * 60 * 1_000;
+      const cutoff = Date.now() - Math.min(48, this.config.retentionHours) * 60 * 60 * 1_000;
       const files = entries
         .filter(entry => entry.isFile() && /^performance-\d{4}-\d{2}-\d{2}-\d{2}\.jsonl$/.test(entry.name))
         .map(entry => entry.name)
+        .filter(filename => performanceShardStart(filename) + 60 * 60 * 1_000 >= cutoff)
         .sort();
       for (const filename of files) {
         const input = fs.createReadStream(path.join(this.logDirectory, filename), { encoding: "utf8" });
@@ -429,8 +538,11 @@ export class PerformanceStore {
         for await (const line of lines) {
           if (!line.trim()) continue;
           try {
+            if (Buffer.byteLength(line) > PERFORMANCE_STORE_MEMORY_LIMITS.serializedSampleBytes) continue;
             const sample = JSON.parse(line) as unknown;
-            if (isPerformanceSample(sample) && sampleTime(sample) >= cutoff) this.remember(sample);
+            if (isPerformanceSample(sample) && sampleTime(sample) >= cutoff) {
+              this.remember(sample, Buffer.byteLength(line) + 1);
+            }
           } catch {
             // A partially written final line is ignored; later records remain readable.
           }

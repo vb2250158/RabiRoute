@@ -33,6 +33,8 @@ The phone owns glasses transport state, not the Agent, ledger, Route/Agent confi
 
 ## Start the Relay
 
+The Windows deployment script registers `RabiLinkRelay` and `RabiLinkCaddy` with no execution-time limit and with restart-on-failure settings. Relay state replacement handles an existing Windows destination file. If the process exits between moving the old file to a backup and installing the new file, the next startup restores the orphaned backup and removes stale backups. A long-running deployment is not stopped by the Scheduled Task default 72-hour limit, and an `EPERM` while replacing `runtime-state.json` is rolled back immediately or recovered at the next startup.
+
 ```powershell
 cd C:\Path\To\RabiRoute
 $env:RABILINK_RELAY_PORT="8788"

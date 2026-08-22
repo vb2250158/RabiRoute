@@ -331,8 +331,11 @@ export const useGatewayStore = defineStore("gateway", () => {
     loading.value = true;
     error.value = "";
     try {
-      await Promise.all([loadMeta(), loadNetworkOptions()]);
-      const response = await fetch(`${apiBase}/gateways?summary=1&includeConfig=1`);
+      const [response] = await Promise.all([
+        fetch(`${apiBase}/gateways?summary=1&includeConfig=1`),
+        loadMeta(),
+        loadNetworkOptions()
+      ]);
       const body = await response.json() as GatewayPayload;
       if (!response.ok || body.code !== 0 || !body.data?.config) {
         throw new Error(body.message || "插件 API 没有返回 gateway 配置");

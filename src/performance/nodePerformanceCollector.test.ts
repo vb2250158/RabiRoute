@@ -14,6 +14,8 @@ test("node performance collector reports system and normalized HTTP metrics", as
   collector.start(config);
   collector.recordHttpRequest("/api/roles/XinghaiBuilder/plans?limit=8", 200, 24, "req-1", 1200);
   collector.recordHttpRequest("/api/roles/XinghaiBuilder/plans/plan-a", 500, 2400, "req-2");
+  collector.recordHttpRequest("/api/events", 200, 493_776, "sse-manager");
+  collector.recordHttpRequest("/api/speech/events?routeId=main", 200, 12_000, "sse-speech");
   collector.recordOperation({
     operation: "manager.plan_catalog.cold_load",
     durationMs: 42,

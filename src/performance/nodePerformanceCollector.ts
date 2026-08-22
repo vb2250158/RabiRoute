@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { monitorEventLoopDelay, performance, PerformanceObserver } from "node:perf_hooks";
 import {
+  isMeasuredPerformanceHttpOperation,
   normalizePerformanceOperation,
   performancePercentile,
   type PerformanceHttpMetrics,
@@ -265,9 +266,10 @@ export function createNodePerformanceCollector(options: {
     },
     sampleNow,
     recordHttpRequest(pathname, statusCode, durationMs, requestId, responseBytes) {
-      if (!config?.enabled || pathname.startsWith("/api/performance/")) return;
+      const operation = normalizePerformanceOperation(pathname);
+      if (!config?.enabled || !isMeasuredPerformanceHttpOperation(operation)) return;
       requests.push({
-        operation: normalizePerformanceOperation(pathname),
+        operation,
         durationMs: Math.max(0, durationMs),
         statusCode,
         requestId,

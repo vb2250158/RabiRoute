@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## Unreleased
+
+### Runtime service fixes
+
+- RabiSpeech audio-stream events now use reverse limited reads over the current-file tail and archive index. File scans run in worker threads without holding the event-append lock, while live client snapshots remain on the event loop. Read-only capability, model, record, speaker, and microphone-device scans also run in worker threads, preventing roughly 90 MB of archived events from blocking health requests during concurrent Speech page loading.
+- Performance pages now read a bounded raw cache plus 10-second, 1-minute, and 5-minute incremental aggregates. A 720-hour disk retention no longer restores or keeps every raw sample resident, and 48-hour queries no longer synchronously scan large object arrays. Page queries no longer force a flush plus a second JSONL parse, and invalid recent-log limits fall back to the default. Persistent Manager and speech event streams no longer affect HTTP P95, top-level cards use the most recently reporting Manager runtime, and WebGUI starts theme, lightweight Route status, metadata, and network-option reads concurrently.
+- Windows Relay scheduled tasks no longer inherit the default 72-hour execution limit and restart after failure. Runtime-state replacement handles an existing Windows destination file and restores an orphaned backup after an interrupted replacement.
+
 ## 0.2.0 - 2026-08-22
 
 ### WebGUI themes and hardware display checks

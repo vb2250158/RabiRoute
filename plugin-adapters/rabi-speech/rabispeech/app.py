@@ -519,7 +519,7 @@ def create_app(
 
     @api.get("/v1/capabilities")
     async def capabilities() -> dict[str, object]:
-        provider_capabilities = providers.capabilities()
+        provider_capabilities = await asyncio.to_thread(providers.capabilities)
         return {
             "object": "rabispeech.capabilities",
             "providers": public_capabilities(provider_capabilities),
@@ -533,13 +533,14 @@ def create_app(
 
     @api.get("/v1/models")
     async def models() -> dict[str, object]:
-        rows = model_rows(providers.capabilities())
+        rows = await asyncio.to_thread(lambda: model_rows(providers.capabilities()))
         return {"object": "list", "data": rows, "api": api_index()}
 
     @api.get("/v1/models/{model_id:path}")
     async def model_detail(model_id: str) -> dict[str, object]:
         normalized = model_id.strip().strip("/").lower()
-        for row in model_rows(providers.capabilities()):
+        rows = await asyncio.to_thread(lambda: model_rows(providers.capabilities()))
+        for row in rows:
             if str(row.get("id") or "").lower() == normalized:
                 return row
         raise HTTPException(status_code=404, detail=f"Unknown local model: {model_id}")
@@ -562,14 +563,16 @@ def create_app(
         before_sequence: int | None = None,
     ) -> dict[str, object]:
         _require_loopback(request)
+        events = await asyncio.to_thread(
+            remote_audio.list_events,
+            limit=limit,
+            client_id=client_id,
+            source_device_id=source_device_id,
+            before_sequence=before_sequence,
+        )
         return {
             "ok": True,
-            "events": remote_audio.list_events(
-                limit=limit,
-                client_id=client_id,
-                source_device_id=source_device_id,
-                before_sequence=before_sequence,
-            ),
+            "events": events,
         }
 
     @api.post("/v1/audio-streams/token")
@@ -695,18 +698,20 @@ def create_app(
         source_device_id: str | None = None,
         before: float | None = None,
     ) -> dict[str, object]:
+        rows = await asyncio.to_thread(
+            records.list,
+            limit=limit,
+            kind=kind,
+            session_id=session_id,
+            route_id=route_id,
+            since=since,
+            until=until,
+            source_device_id=source_device_id,
+            before=before,
+        )
         return {
             "object": "list",
-            "data": records.list(
-                limit=limit,
-                kind=kind,
-                session_id=session_id,
-                route_id=route_id,
-                since=since,
-                until=until,
-                source_device_id=source_device_id,
-                before=before,
-            ),
+            "data": rows,
         }
 
     @api.get("/v1/records/{record_id}/audio")
@@ -735,8 +740,12 @@ def create_app(
     @api.get("/v1/speaker-profiles")
     async def speaker_profile_list(request: Request, session_id: str | None = None) -> dict[str, object]:
         _require_loopback(request)
-        snapshot = speaker_profiles.snapshot(session_id=session_id)
-        return {**snapshot, "capability": speaker_capability(), "clusters": speaker_recognizer.public_clusters()}
+        snapshot = await asyncio.to_thread(speaker_profiles.snapshot, session_id=session_id)
+        return {
+            **snapshot,
+            "capability": speaker_capability(),
+            "clusters": await asyncio.to_thread(speaker_recognizer.public_clusters),
+        }
 
     @api.post("/v1/speaker-profiles")
     async def speaker_profile_create(request: Request, body: SpeakerProfileCreateBody) -> dict[str, object]:
@@ -840,7 +849,8 @@ def create_app(
     @api.get("/v1/microphone/devices")
     async def microphone_devices() -> dict[str, object]:
         try:
-            return {"object": "list", "data": microphone.devices()}
+            devices = await asyncio.to_thread(microphone.devices)
+            return {"object": "list", "data": devices}
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Microphone device scan failed: {exc}") from exc
 

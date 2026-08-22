@@ -272,3 +272,39 @@ test("portable cursor replays retained messages after Relay state rollback inste
   }
   assert.equal(stderr.includes("SyntaxError"), false, stderr);
 });
+
+
+test("relay startup restores interrupted Windows-style state replacements", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-relay-state-recovery-"));
+  const runtimeBackup = path.join(directory, "runtime-state.json.1234.deadbeef.replace-backup");
+  const cursorBackup = path.join(directory, "outbox-cursor-state.json.1234.deadbeef.replace-backup");
+  fs.writeFileSync(runtimeBackup, JSON.stringify({
+    version: 1,
+    nextOutboxMessageSeq: 1,
+    tasks: [],
+    outboxMessages: []
+  }, null, 2));
+  fs.writeFileSync(cursorBackup, JSON.stringify({
+    version: 1,
+    generation: "recovered-generation",
+    highWater: 0
+  }, null, 2));
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = startRelay(directory, port);
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+  try {
+    await waitForHealth(baseUrl, child);
+    assert.equal(fs.existsSync(path.join(directory, "runtime-state.json")), true);
+    assert.equal(fs.existsSync(path.join(directory, "outbox-cursor-state.json")), true);
+    assert.equal(fs.existsSync(runtimeBackup), false);
+    assert.equal(fs.existsSync(cursorBackup), false);
+    const cursor = JSON.parse(fs.readFileSync(path.join(directory, "outbox-cursor-state.json"), "utf8"));
+    assert.equal(cursor.generation, "recovered-generation");
+  } finally {
+    await stopRelay(child);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  assert.equal(stderr.includes("SyntaxError"), false, stderr);
+});

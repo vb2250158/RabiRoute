@@ -445,7 +445,8 @@ Unregister-ScheduledTask -TaskName `$taskName -Confirm:`$false -ErrorAction Sile
 `$relayTaskArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f `$relayStartScript
 `$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument `$relayTaskArguments
 `$trigger = New-ScheduledTaskTrigger -AtStartup
-Register-ScheduledTask -TaskName `$taskName -Action `$action -Trigger `$trigger -User "SYSTEM" -RunLevel Highest -Description "RabiLink relay Node.js service" -Force | Out-Null
+`$serviceTaskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+Register-ScheduledTask -TaskName `$taskName -Action `$action -Trigger `$trigger -Settings `$serviceTaskSettings -User "SYSTEM" -RunLevel Highest -Description "RabiLink relay Node.js service" -Force | Out-Null
 Start-ScheduledTask -TaskName `$taskName
 
 `$localHealth = `$null
@@ -483,7 +484,7 @@ Unregister-ScheduledTask -TaskName `$caddyTaskName -Confirm:`$false -ErrorAction
 `$caddyTaskArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f `$caddyStartScript
 `$caddyAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument `$caddyTaskArguments
 `$caddyTrigger = New-ScheduledTaskTrigger -AtStartup
-Register-ScheduledTask -TaskName `$caddyTaskName -Action `$caddyAction -Trigger `$caddyTrigger -User "SYSTEM" -RunLevel Highest -Description "RabiLink Caddy reverse proxy" -Force | Out-Null
+Register-ScheduledTask -TaskName `$caddyTaskName -Action `$caddyAction -Trigger `$caddyTrigger -Settings `$serviceTaskSettings -User "SYSTEM" -RunLevel Highest -Description "RabiLink Caddy reverse proxy" -Force | Out-Null
 Start-ScheduledTask -TaskName `$caddyTaskName
 Start-Sleep -Seconds 5
 

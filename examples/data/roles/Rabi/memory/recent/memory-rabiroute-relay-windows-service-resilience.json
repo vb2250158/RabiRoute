@@ -1,0 +1,21 @@
+{
+  "id": "memory-rabiroute-relay-windows-service-resilience",
+  "title": "Windows Relay 常驻任务和状态替换必须可恢复",
+  "focus": "避免计划任务时限和 Windows 文件替换中断造成 Relay 502 或状态缺失",
+  "content": "Windows 计划任务默认运行时限会停止常驻 Relay，使反向代理返回 502。RabiLinkRelay 和 RabiLinkCaddy 应使用 ExecutionTimeLimit=PT0S，并配置异常退出重启。Windows 覆盖已有状态文件时采用临时文件、备份、替换和失败回滚；如果进程在两次重命名之间退出，下次启动恢复孤立备份并清理过期备份。该流程覆盖运行状态、Outbox 游标和移动设备状态。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：Relay Windows 常驻和状态恢复"
+  },
+  "createdAt": "2026-08-22T00:00:00+08:00",
+  "updatedAt": "2026-08-22T00:00:00+08:00",
+  "keywords": [
+    "RabiLink Relay",
+    "Windows 计划任务",
+    "ExecutionTimeLimit",
+    "502",
+    "状态文件",
+    "Outbox 游标",
+    "备份恢复"
+  ]
+}

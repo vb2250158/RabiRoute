@@ -332,6 +332,8 @@ provider 是本机插件扩展点，不是 Agent adapter。新增实现需：
 
 ## 性能、预热与硬件
 
+音频流事件历史先从 `current.jsonl` 尾部倒序读取，数量不足时才根据 `archive/index.json` 的序列范围读取必要归档，达到 `limit` 后立即停止。归档和当前文件扫描在工作线程中执行，扫描文件前已释放事件追加锁；能力、模型、记录、声纹和麦克风设备等只读文件或设备扫描也在工作线程中执行。实时音频客户端状态仍由 FastAPI 事件循环读取，避免跨线程遍历正在变化的连接表。
+
 首轮包含六个 TTS 和五个主要 ASR 的实机冷/热态测试，覆盖功能、模型体积、测试硬件、建议配置、效果代理指标、CUDA DLL 与 FireRed Windows 依赖问题：
 
 - [RabiSpeech 性能与功能报告](rabispeech-performance-report.md)

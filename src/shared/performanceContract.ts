@@ -186,6 +186,17 @@ export function normalizePerformanceOperation(value: string): string {
   return pathname.slice(0, 240);
 }
 
+const nonTerminatingPerformanceHttpOperations = new Set([
+  "/api/events",
+  "/api/speech/events"
+]);
+
+export function isMeasuredPerformanceHttpOperation(value: string): boolean {
+  const operation = normalizePerformanceOperation(value);
+  return !operation.startsWith("/api/performance/")
+    && !nonTerminatingPerformanceHttpOperations.has(operation);
+}
+
 export function performanceOperationTotalMs(summary: Pick<PerformanceOperationSummary, "count" | "p50Ms" | "totalMs">): number {
   return Number.isFinite(summary.totalMs) ? summary.totalMs : summary.p50Ms * summary.count;
 }

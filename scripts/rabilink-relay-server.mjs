@@ -137,8 +137,73 @@ const speechRequests = new RelayProxyRequestQueue({
 const manageSessions = new Map();
 /** @type {Map<string, Set<http.ServerResponse>>} */
 const accountLogStreams = new Map();
+recoverInterruptedFileReplacement(runtimeStatePath);
+recoverInterruptedFileReplacement(outboxCursorStatePath);
 loadRelayRuntimeState();
 ensureOutboxCursorState();
+
+function recoverInterruptedFileReplacement(targetPath) {
+  const directory = path.dirname(targetPath);
+  const basename = path.basename(targetPath);
+  if (!fs.existsSync(directory)) return;
+  const backups = fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile()
+      && entry.name.startsWith(`${basename}.`)
+      && entry.name.endsWith(".replace-backup"))
+    .map((entry) => {
+      const filePath = path.join(directory, entry.name);
+      let mtimeMs = 0;
+      try {
+        mtimeMs = fs.statSync(filePath).mtimeMs;
+      } catch {
+        // A concurrent cleanup may remove a stale backup.
+      }
+      return { filePath, mtimeMs };
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+  if (!backups.length) return;
+
+  if (!fs.existsSync(targetPath)) {
+    const recovery = backups.shift();
+    if (recovery && fs.existsSync(recovery.filePath)) {
+      fs.renameSync(recovery.filePath, targetPath);
+    }
+  }
+  for (const backup of backups) {
+    try {
+      fs.rmSync(backup.filePath, { force: true });
+    } catch {
+      // Stale backup cleanup is best effort.
+    }
+  }
+}
+
+function replaceFileSync(tmpPath, targetPath) {
+  try {
+    fs.renameSync(tmpPath, targetPath);
+    return;
+  } catch (error) {
+    if (process.platform !== "win32" || !fs.existsSync(targetPath)) throw error;
+  }
+
+  const backupPath = `${targetPath}.${process.pid}.${randomBytes(4).toString("hex")}.replace-backup`;
+  let existingMoved = false;
+  try {
+    fs.renameSync(targetPath, backupPath);
+    existingMoved = true;
+    fs.renameSync(tmpPath, targetPath);
+  } catch (error) {
+    if (!fs.existsSync(targetPath) && existingMoved && fs.existsSync(backupPath)) {
+      fs.renameSync(backupPath, targetPath);
+    }
+    throw error;
+  }
+  try {
+    fs.rmSync(backupPath, { force: true });
+  } catch {
+    // A stale backup is safer than reporting a failed state write after the target was replaced.
+  }
+}
 
 function replaceMapFromArray(map, items, idKey = "id") {
   map.clear();
@@ -180,7 +245,7 @@ function saveRelayRuntimeState() {
   try {
     fs.mkdirSync(path.dirname(runtimeStatePath), { recursive: true });
     fs.writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    fs.renameSync(tmpPath, runtimeStatePath);
+    replaceFileSync(tmpPath, runtimeStatePath);
     ensureOutboxCursorState();
   } catch (error) {
     try {
@@ -318,7 +383,7 @@ function writeOutboxCursorState(generation, highWater) {
   };
   try {
     fs.writeFileSync(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    fs.renameSync(tmpPath, outboxCursorStatePath);
+    replaceFileSync(tmpPath, outboxCursorStatePath);
   } catch (error) {
     try {
       if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
@@ -4949,7 +5014,9 @@ function publicMobileDeviceStatus(status) {
 
 function readMobileDeviceStatus(app) {
   const filePath = mobileDeviceStatusPath(app?.id || "");
-  if (!filePath || !fs.existsSync(filePath)) return null;
+  if (!filePath) return null;
+  recoverInterruptedFileReplacement(filePath);
+  if (!fs.existsSync(filePath)) return null;
   try {
     return publicMobileDeviceStatus(JSON.parse(fs.readFileSync(filePath, "utf8")));
   } catch (error) {
@@ -4974,12 +5041,7 @@ function writeMobileDeviceStatus(app, body = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   try {
     fs.writeFileSync(tmpPath, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
-    try {
-      fs.renameSync(tmpPath, filePath);
-    } catch (error) {
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      fs.renameSync(tmpPath, filePath);
-    }
+    replaceFileSync(tmpPath, filePath);
   } finally {
     if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
   }

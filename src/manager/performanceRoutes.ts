@@ -3,7 +3,7 @@ import { normalizePerformanceMonitoringConfig, type PerformanceSample } from "..
 import type { RabiGlobalConfigStore } from "./globalConfig.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
 import { isLoopbackRemoteAddress } from "./webguiLanAccess.js";
-import { ManagerReadWorkerError, type ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
+import type { ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, {
@@ -11,18 +11,6 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
     "cache-control": "no-store"
   });
   response.end(JSON.stringify(body));
-}
-
-function jsonTextResponse(response: http.ServerResponse, statusCode: number, body: string): void {
-  response.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store"
-  });
-  response.end(body);
-}
-
-function performanceReadErrorStatus(error: unknown): number {
-  return error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500;
 }
 
 function readJsonBody(request: http.IncomingMessage, maximumBytes = 1024 * 1024): Promise<unknown> {
@@ -124,34 +112,32 @@ export class PerformanceApi {
 
     if (request.method === "GET" && requestUrl.pathname === "/api/performance/summary") {
       const rangeMs = Number(requestUrl.searchParams.get("rangeMs") || 60 * 60 * 1_000);
-      void this.context.service.store.flush()
-        .then(() => this.context.readWorkerPool.queryPerformanceSummaryJson(
-          this.context.service.store.logDirectory,
-          rangeMs,
-          this.context.service.configSnapshot(),
-          this.context.service.store.status()
-        ))
-        .then(body => jsonTextResponse(response, 200, body))
-        .catch(error => jsonResponse(response, performanceReadErrorStatus(error), {
+      try {
+        jsonResponse(response, 200, { code: 0, data: this.context.service.summary(rangeMs) });
+      } catch (error) {
+        jsonResponse(response, 500, {
           code: -1,
           message: error instanceof Error ? error.message : String(error)
-        }));
+        });
+      }
       return true;
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/performance/logs") {
-      const limit = Number(requestUrl.searchParams.get("limit") || 100);
-      void this.context.service.store.flush()
-        .then(() => this.context.readWorkerPool.queryPerformanceLogsJson(
-          this.context.service.store.logDirectory,
-          limit,
-          this.context.service.store.status()
-        ))
-        .then(body => jsonTextResponse(response, 200, body))
-        .catch(error => jsonResponse(response, performanceReadErrorStatus(error), {
+      const requestedLimit = Number(requestUrl.searchParams.get("limit") || 100);
+      const limit = Number.isFinite(requestedLimit) ? Math.trunc(requestedLimit) : 100;
+      try {
+        jsonResponse(response, 200, {
+          code: 0,
+          data: this.context.service.store.recent(limit),
+          status: this.context.service.store.status()
+        });
+      } catch (error) {
+        jsonResponse(response, 500, {
           code: -1,
           message: error instanceof Error ? error.message : String(error)
-        }));
+        });
+      }
       return true;
     }
 

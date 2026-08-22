@@ -240,6 +240,8 @@ The API currently returns complete audio/results rather than a streaming first c
 
 ## Performance and Windows CUDA
 
+Audio-stream event history reads backward from the tail of `current.jsonl`, then consults only the required sequence ranges from `archive/index.json` until `limit` is satisfied. Current and archive files are scanned in a worker thread after releasing the event-append lock. Capability, model, record, speaker-profile, and microphone-device scans also run in worker threads. Live audio-client state remains on the FastAPI event loop so a worker never traverses connection maps while they are changing.
+
 The first report covers six TTS and five main ASR models, including cold start/warm-up, warmed requests, model size, capability, test hardware, recommended hardware, smoke accuracy, and Windows CUDA DLL issues:
 
 - [Performance and capability report](rabispeech-performance-report_en.md)
