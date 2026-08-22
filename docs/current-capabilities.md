@@ -49,7 +49,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 定时任务运行入口 | 已验证 | Gateway 子进程承载定时人格自动化；支持间隔、时间窗口、每天指定时间和单次指定时间。通知 Agent 时可选在固定 Codex 线程忙碌时跳过；脚本动作使用独立本机权限。 |
 | 角色面板 | 已验证 | RabiRoute Desktop 与 WebGUI 共用的内置本地入口，不是独立网络 listener；使用固定 `role_panel_message` 规则，记录写入角色目录的 timeline。 |
 | 系统截图与人格投递 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页可保存 RabiRoute Desktop 的系统截图开关、全局快捷键和 Windows 登录启动。截图预览支持附加文字并选择已激活人格，图片和文字复用角色面板入口；Codex/DSH 通过图片路径接收真实图片输入。 |
-| 界面主题 | 代码与自动化测试已验证；Windows 实机验收待完成 | 主题保存在主机级 `data/desktop/settings.json`。WebGUI 与托盘读取同一 `system`、`light` 或 `dark` 设置；托盘菜单、角色面板、滑词操作条和截图窗口随之更新。 |
+| 界面主题 | WebGUI 已完成 Windows 实机复测；托盘实机验收待完成 | 主题保存在主机级 `data/desktop/settings.json`。WebGUI 的 `system`、`light`、`dark` 选择会立即预览，保存后与托盘共用同一设置。浅色和深色界面已在 1600×900 与 390×844 视口检查主要页面、弹窗、语言切换和 Route 切换。 |
 | 滑词菜单 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页卡片“开启滑词菜单”。支持鼠标拖选和 `Shift` 键盘扩选；悬浮条按选区范围横向居中，向上拖选放上方，向下或同一行拖选放下方。Unity 编辑器在 UI Automation 不可用时发送受保护的临时复制并恢复原剪贴板；无系统插入符时使用同一窗口最近一次点击位置。点击才执行；关闭“滑词朗读”后只保留“投递至”。 |
 | 跨人格消息 | 自动化合同已验证；待真实双人格 Desktop 验收 | `GET /api/personas` 提供不含正文和本机目录的人格列表；`POST /api/personas/:personaId/messages` 校验 AgentPacket 注入的 Route + 人格绑定凭据，并复用目标 Route 的固定 `role_panel_message` 链。请求必须带稳定 `deliveryId`；同 ID 同内容复用回执，内容变化返回冲突。目标有多个已启用 Route 时必须明确选择，给自己发送和超过 8 跳都会拒绝。普通回复不会自动返回来源人格，回复时必须显式反向投递并沿用会话关联字段。 |
 | 计划审批事件 | 已验证 | 审批意见落盘后由 Manager 生成独立 `plan_feedback` 系统事件；不依赖可编辑消息规则，不写聊天 timeline/会话账本，不注入最近消息。 |

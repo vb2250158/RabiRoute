@@ -8,6 +8,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## 0.2.0 - 2026-08-22
 
+### WebGUI themes and hardware display checks
+
+- Fixed dark mode surfaces that still used light card, sidebar, app-bar, input, and dialog backgrounds. Settings, Plans & Memory, Speech, Performance, User Guide, and Model Management now use shared theme tokens.
+- Theme choices now preview immediately; Save persists the selected host setting.
+- Windows Chrome hardware checks covered 1600×900 and 390×844, light and dark modes, major pages, Quick setup, Add Route, Model Management, locale switching, Route switching, and the mobile drawer. No page-level JavaScript error or horizontal page overflow was observed.
+
 ### Cordis plugin runtime and Manager plugin refactor
 
 - Added exact `cordis@4.0.0-rc.8`, with all Cordis compatibility code contained under `src/runtime/`.

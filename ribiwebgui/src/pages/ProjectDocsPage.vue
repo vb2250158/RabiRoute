@@ -346,6 +346,7 @@ function handleArticleClick(event: MouseEvent): void {
 .user-guide-page {
   display: grid;
   gap: 18px;
+  color: var(--rr-text);
 }
 
 .guide-header {
@@ -355,14 +356,14 @@ function handleArticleClick(event: MouseEvent): void {
   justify-content: space-between;
   padding: 26px 28px;
   background:
-    radial-gradient(circle at 88% 18%, rgba(25, 191, 193, .16), transparent 31%),
-    linear-gradient(145deg, rgba(255, 255, 255, .99), rgba(240, 250, 251, .94));
+    radial-gradient(circle at 88% 18%, color-mix(in srgb, var(--rr-accent) 16%, transparent), transparent 31%),
+    linear-gradient(145deg, var(--rr-surface), var(--rr-accent-surface));
 }
 
 .guide-title {
   max-width: 760px;
   margin: 8px 0 8px;
-  color: #0c2a4a;
+  color: var(--rr-heading);
   font-size: clamp(30px, 4vw, 46px);
   font-weight: 900;
   letter-spacing: -.035em;
@@ -390,7 +391,7 @@ function handleArticleClick(event: MouseEvent): void {
 
 .guide-count {
   margin: -4px 2px 14px;
-  color: #789;
+  color: var(--rr-muted-faint);
   font-size: 11px;
   font-weight: 750;
 }
@@ -402,7 +403,7 @@ function handleArticleClick(event: MouseEvent): void {
 .guide-group h2,
 .guide-outline-title {
   margin: 0 0 7px;
-  color: #557084;
+  color: var(--rr-muted-soft);
   font-size: 11px;
   font-weight: 900;
   letter-spacing: .08em;
@@ -418,15 +419,15 @@ function handleArticleClick(event: MouseEvent): void {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #102a43;
+  color: var(--rr-text);
   text-align: left;
   cursor: pointer;
 }
 
 .guide-group button:hover,
 .guide-group button.active {
-  border-color: rgba(25, 191, 193, .25);
-  background: rgba(25, 191, 193, .09);
+  border-color: var(--rr-accent-border);
+  background: var(--rr-accent-surface);
 }
 
 .guide-group strong {
@@ -437,7 +438,7 @@ function handleArticleClick(event: MouseEvent): void {
 .guide-group span {
   display: -webkit-box;
   overflow: hidden;
-  color: #6b7f91;
+  color: var(--rr-muted-faint);
   font-size: 10px;
   line-height: 1.45;
   -webkit-box-orient: vertical;
@@ -446,7 +447,7 @@ function handleArticleClick(event: MouseEvent): void {
 
 .guide-empty {
   padding: 18px 8px;
-  color: #789;
+  color: var(--rr-muted-faint);
   font-size: 12px;
   text-align: center;
 }
@@ -461,7 +462,7 @@ function handleArticleClick(event: MouseEvent): void {
   gap: 10px;
   align-items: center;
   margin-bottom: 22px;
-  color: #6b7f91;
+  color: var(--rr-muted-faint);
   font-size: 11px;
 }
 
@@ -476,7 +477,7 @@ function handleArticleClick(event: MouseEvent): void {
   border: 0;
   border-left: 2px solid transparent;
   background: transparent;
-  color: #5d7284;
+  color: var(--rr-muted);
   font-size: 11px;
   line-height: 1.4;
   text-align: left;
@@ -484,8 +485,8 @@ function handleArticleClick(event: MouseEvent): void {
 }
 
 .guide-outline button:hover {
-  border-left-color: #19bfc1;
-  color: #087f91;
+  border-left-color: var(--rr-accent);
+  color: var(--rr-accent-strong);
 }
 
 .guide-outline button.nested {
@@ -497,7 +498,7 @@ function handleArticleClick(event: MouseEvent): void {
 .markdown-body :deep(h2),
 .markdown-body :deep(h3) {
   scroll-margin-top: 94px;
-  color: #0c2a4a;
+  color: var(--rr-heading);
   line-height: 1.25;
 }
 
@@ -510,7 +511,7 @@ function handleArticleClick(event: MouseEvent): void {
 .markdown-body :deep(h2) {
   margin: 38px 0 14px;
   padding-top: 9px;
-  border-top: 1px solid rgba(12, 42, 74, .1);
+  border-top: 1px solid var(--rr-border);
   font-size: 23px;
 }
 
@@ -521,7 +522,7 @@ function handleArticleClick(event: MouseEvent): void {
 
 .markdown-body :deep(p),
 .markdown-body :deep(li) {
-  color: #425c70;
+  color: var(--rr-muted);
   font-size: 14px;
   line-height: 1.75;
 }
@@ -531,7 +532,7 @@ function handleArticleClick(event: MouseEvent): void {
 }
 
 .markdown-body :deep(a) {
-  color: #087f91;
+  color: var(--rr-accent-strong);
   font-weight: 750;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
@@ -540,8 +541,8 @@ function handleArticleClick(event: MouseEvent): void {
 .markdown-body :deep(code) {
   padding: 2px 5px;
   border-radius: 4px;
-  background: #edf4f6;
-  color: #0c6470;
+  background: var(--rr-accent-surface);
+  color: var(--rr-accent-strong);
   font-family: "Cascadia Mono", Consolas, monospace;
 }
 
@@ -562,8 +563,8 @@ function handleArticleClick(event: MouseEvent): void {
 .markdown-body :deep(blockquote) {
   margin: 18px 0;
   padding: 12px 16px;
-  border-left: 3px solid #19bfc1;
-  background: rgba(25, 191, 193, .07);
+  border-left: 3px solid var(--rr-accent);
+  background: var(--rr-accent-surface);
 }
 
 .markdown-body :deep(table) {
@@ -579,14 +580,14 @@ function handleArticleClick(event: MouseEvent): void {
 .markdown-body :deep(td) {
   min-width: 120px;
   padding: 10px;
-  border: 1px solid rgba(12, 42, 74, .12);
+  border: 1px solid var(--rr-border);
   text-align: left;
   vertical-align: top;
 }
 
 .markdown-body :deep(th) {
-  background: #eef8f8;
-  color: #0c2a4a;
+  background: var(--rr-subtle);
+  color: var(--rr-heading);
 }
 
 .markdown-body :deep(.screenshot-placeholder) {
@@ -596,17 +597,17 @@ function handleArticleClick(event: MouseEvent): void {
   place-content: center;
   margin: 20px 0 26px;
   padding: 24px;
-  border: 2px dashed rgba(8, 127, 145, .32);
+  border: 2px dashed var(--rr-accent-border);
   border-radius: 10px;
   background:
-    linear-gradient(135deg, rgba(25, 191, 193, .06), rgba(12, 42, 74, .025)),
-    repeating-linear-gradient(45deg, transparent, transparent 12px, rgba(12, 42, 74, .018) 12px, rgba(12, 42, 74, .018) 24px);
-  color: #496579;
+    linear-gradient(135deg, var(--rr-accent-surface), var(--rr-subtle)),
+    repeating-linear-gradient(45deg, transparent, transparent 12px, color-mix(in srgb, var(--rr-border) 35%, transparent) 12px, color-mix(in srgb, var(--rr-border) 35%, transparent) 24px);
+  color: var(--rr-muted);
   text-align: center;
 }
 
 .markdown-body :deep(.screenshot-placeholder strong) {
-  color: #0c6470;
+  color: var(--rr-accent-strong);
   font-size: 15px;
 }
 

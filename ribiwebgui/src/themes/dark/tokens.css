@@ -24,4 +24,17 @@ html[data-rabiroute-theme="dark"] {
   --rr-error-border: #834451;
   --rr-info-surface: #1b374b;
   --rr-info-border: #3f7193;
+  --rr-border-soft: rgba(196, 211, 221, .14);
+  --rr-border-faint: rgba(196, 211, 221, .1);
+  --rr-grid-line: rgba(136, 237, 239, .05);
+  --rr-grid-line-soft: rgba(136, 237, 239, .035);
+  --rr-surface-glass: rgba(25, 36, 46, .94);
+  --rr-surface-chrome: rgba(18, 26, 34, .97);
+  --rr-surface-sidebar: linear-gradient(180deg, rgba(25, 36, 46, .99), rgba(18, 29, 38, .98));
+  --rr-surface-route: linear-gradient(135deg, rgba(27, 58, 64, .94), rgba(25, 36, 46, .96));
+  --rr-shadow-card: 0 12px 28px rgba(0, 0, 0, .28);
+  --rr-shadow-menu: 0 18px 45px rgba(0, 0, 0, .42);
+  --rr-switch-track: #526779;
+  --rr-switch-thumb: #e9f2f7;
+  --rr-warning-text: #fbbf24;
 }

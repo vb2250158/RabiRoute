@@ -160,32 +160,32 @@ const cases = [
 </template>
 
 <style scoped>
-.speech-docs-panel { display: grid; gap: 18px; }
-.speech-boundary { display: flex; gap: 12px; padding: 14px 16px; border: 1px solid rgba(74, 169, 255, .24); border-radius: 14px; background: rgba(74, 169, 255, .07); }
+.speech-docs-panel { display: grid; gap: 18px; color: var(--rr-text); }
+.speech-boundary { display: flex; gap: 12px; padding: 14px 16px; border: 1px solid var(--rr-info-border); border-radius: 14px; background: var(--rr-info-surface); }
 .speech-boundary strong, .speech-boundary span { display: block; }
-.speech-boundary span { margin-top: 3px; color: var(--text-muted, #9fb1c7); font-size: 13px; }
+.speech-boundary span { margin-top: 3px; color: var(--rr-muted); font-size: 13px; }
 .speech-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.speech-kpis > div { padding: 15px; border: 1px solid rgba(148, 181, 218, .18); border-radius: 14px; background: rgba(101, 169, 255, .055); }
+.speech-kpis > div { padding: 15px; border: 1px solid var(--rr-border); border-radius: 14px; background: var(--rr-subtle); }
 .speech-kpis span, .speech-kpis strong { display: block; }
-.speech-kpis span { color: var(--text-muted, #9fb1c7); font-size: 12px; }
+.speech-kpis span { color: var(--rr-muted); font-size: 12px; }
 .speech-kpis strong { margin-top: 5px; font-size: 17px; }
-.speech-block { padding: 18px; border: 1px solid rgba(148, 181, 218, .18); border-radius: 16px; background: rgba(13, 28, 45, .45); }
+.speech-block { padding: 18px; border: 1px solid var(--rr-border); border-radius: 16px; background: var(--rr-surface); }
 .speech-block h3, .speech-block p { margin-top: 0; }
-.speech-block p { color: var(--text-muted, #9fb1c7); }
+.speech-block p { color: var(--rr-muted); }
 .speech-block-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .speech-block-title h3, .speech-block-title p { margin-bottom: 0; }
 .endpoint-grid { display: grid; gap: 8px; margin: 12px 0; }
-.endpoint-grid code { padding: 9px 11px; overflow-wrap: anywhere; border-radius: 9px; background: rgba(101, 169, 255, .1); }
-.speech-table-wrap { width: 100%; overflow-x: auto; border: 1px solid rgba(148, 181, 218, .16); border-radius: 12px; }
+.endpoint-grid code { padding: 9px 11px; overflow-wrap: anywhere; border-radius: 9px; background: var(--rr-accent-surface); color: var(--rr-accent-strong); }
+.speech-table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--rr-border); border-radius: 12px; }
 table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 12px; }
-th, td { padding: 10px 11px; text-align: left; vertical-align: top; border-bottom: 1px solid rgba(148, 181, 218, .13); }
-th { background: rgba(101, 169, 255, .09); color: var(--text-muted, #b8c8da); }
+th, td { padding: 10px 11px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rr-border); }
+th { background: var(--rr-subtle); color: var(--rr-heading); }
 tr:last-child td { border-bottom: 0; }
 .case-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
-.case-card { padding: 14px; border-left: 3px solid rgb(var(--v-theme-secondary)); border-radius: 0 10px 10px 0; background: rgba(112, 220, 212, .055); }
+.case-card { padding: 14px; border-left: 3px solid var(--rr-success-border); border-radius: 0 10px 10px 0; background: var(--rr-success-surface); }
 .case-card span, .case-card strong { display: block; }
-.case-card span { margin-bottom: 5px; color: var(--text-muted, #9fb1c7); font-size: 11px; }
+.case-card span { margin-bottom: 5px; color: var(--rr-muted); font-size: 11px; }
 .case-card strong { font-size: 13px; font-weight: 600; }
-.report-frame { width: 100%; height: min(76vh, 920px); min-height: 680px; border: 1px solid rgba(148, 181, 218, .2); border-radius: 14px; background: #07111f; }
+.report-frame { width: 100%; height: min(76vh, 920px); min-height: 680px; border: 1px solid var(--rr-border); border-radius: 14px; background: #07111f; }
 @media (max-width: 900px) { .speech-kpis, .case-grid { grid-template-columns: 1fr; } .speech-block-title { align-items: flex-start; flex-direction: column; } .report-frame { min-height: 560px; } }
 </style>

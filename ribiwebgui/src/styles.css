@@ -20,8 +20,8 @@
   min-height: 88px;
   margin: 0 -32px;
   padding: 20px 32px;
-  border-bottom: 1px solid rgba(17, 32, 51, .1);
-  background: rgba(255, 255, 255, .7);
+  border-bottom: 1px solid var(--rr-border-soft);
+  background: var(--rr-surface-glass);
   backdrop-filter: blur(18px);
 }
 
@@ -40,11 +40,11 @@
 }
 
 .docs-page .docs-rail {
-  border-right: 1px solid rgba(17, 32, 51, .1);
+  border-right: 1px solid var(--rr-border-soft);
 }
 
 .docs-outline {
-  border-left: 1px solid rgba(17, 32, 51, .1);
+  border-left: 1px solid var(--rr-border-soft);
 }
 
 .docs-rail-inner,
@@ -131,7 +131,7 @@
   gap: 2px;
   margin-left: 10px;
   padding-left: 8px;
-  border-left: 1px solid rgba(17, 32, 51, .1);
+  border-left: 1px solid var(--rr-border-soft);
 }
 
 .docs-tree-title,
@@ -181,7 +181,7 @@
   align-items: center;
   gap: 4px;
   margin-bottom: 32px;
-  color: #687b8e;
+  color: var(--rr-muted);
   font-size: 12px;
   font-weight: 750;
 }
@@ -227,7 +227,7 @@
 }
 
 .docs-article .docs-lead {
-  color: #31515d;
+  color: var(--rr-muted);
   font-size: 18px;
   font-weight: 780;
   line-height: 1.55;
@@ -240,7 +240,7 @@
 .docs-rule-card,
 .docs-feature-card,
 .docs-table-card {
-  background: rgba(248, 251, 253, .82);
+  background: var(--rr-subtle);
 }
 
 .docs-reference-sections {
@@ -248,9 +248,9 @@
 }
 
 .docs-outline a {
-  border-left: 1px solid rgba(17, 32, 51, .12);
+  border-left: 1px solid var(--rr-border-soft);
   padding: 7px 10px;
-  color: #687b8e;
+  color: var(--rr-muted);
   font-size: 12px;
   font-weight: 720;
   text-decoration: none;
@@ -375,8 +375,8 @@ body {
   max-width: 100%;
   overflow-x: clip;
   background:
-    linear-gradient(90deg, rgba(12, 42, 74, .04) 1px, transparent 1px),
-    linear-gradient(0deg, rgba(12, 42, 74, .032) 1px, transparent 1px),
+    linear-gradient(90deg, var(--rr-grid-line) 1px, transparent 1px),
+    linear-gradient(0deg, var(--rr-grid-line-soft) 1px, transparent 1px),
     linear-gradient(180deg, var(--rr-input) 0%, var(--rr-canvas) 52%, var(--rr-subtle) 100%);
   background-size: 40px 40px, 40px 40px, auto;
   color: var(--rr-text);
@@ -406,13 +406,13 @@ body::before {
 }
 
 .app-card {
-  border: 1px solid rgba(17, 32, 51, .1) !important;
+  border: 1px solid var(--rr-border-soft) !important;
   border-radius: 8px !important;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, .07) !important;
+  box-shadow: var(--rr-shadow-card) !important;
 }
 
 .glass-card {
-  background: rgba(255, 255, 255, .92) !important;
+  background: var(--rr-surface-glass) !important;
   backdrop-filter: blur(14px);
 }
 
@@ -430,14 +430,14 @@ body::before {
   height: 28px;
   border-radius: 999px;
   opacity: 1;
-  background: rgba(17, 32, 51, .42);
+  background: var(--rr-switch-track);
   box-shadow: inset 0 1px 2px rgba(17, 32, 51, .14);
 }
 
 .v-switch .v-switch__thumb {
   width: 32px;
   height: 32px;
-  background: #fffaf0;
+  background: var(--rr-switch-thumb);
   box-shadow: 0 8px 18px rgba(17, 32, 51, .2);
 }
 
@@ -447,16 +447,15 @@ body::before {
 }
 
 .left-sidebar {
-  border-right: 1px solid rgba(12, 42, 74, .12) !important;
+  border-right: 1px solid var(--rr-border-soft) !important;
   box-shadow: none !important;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, .97), rgba(246, 252, 253, .95)) !important;
+  background: var(--rr-surface-sidebar) !important;
 }
 
 .top-app-bar {
-  border-bottom: 1px solid rgba(12, 42, 74, .1) !important;
+  border-bottom: 1px solid var(--rr-border-soft) !important;
   box-shadow: none !important;
-  background: rgba(255, 255, 255, .96) !important;
+  background: var(--rr-surface-chrome) !important;
   backdrop-filter: blur(16px);
 }
 
@@ -477,7 +476,7 @@ body::before {
 
 .topbar-subtitle {
   margin-top: 2px;
-  color: #789;
+  color: var(--rr-muted-faint);
   font-size: 11px;
   font-weight: 700;
   overflow: hidden;
@@ -506,8 +505,8 @@ body::before {
 }
 
 .locale-menu {
-  border: 1px solid rgba(12, 42, 74, .1) !important;
-  box-shadow: 0 18px 45px rgba(12, 42, 74, .16) !important;
+  border: 1px solid var(--rr-border-soft) !important;
+  box-shadow: var(--rr-shadow-menu) !important;
 }
 
 .mobile-action {
@@ -534,8 +533,7 @@ body::before {
 .route-picker {
   border: 1px solid rgba(25, 191, 193, .18) !important;
   border-radius: 8px !important;
-  background:
-    linear-gradient(135deg, rgba(239, 253, 255, .88), rgba(255, 255, 255, .86)) !important;
+  background: var(--rr-surface-route) !important;
   box-shadow: none !important;
 }
 
@@ -573,7 +571,7 @@ body::before {
 .dirty-hint {
   font-size: 12px;
   font-weight: 600;
-  color: #b45309;
+  color: var(--rr-warning-text);
   white-space: nowrap;
 }
 
@@ -687,7 +685,7 @@ body::before {
   border: 1px solid rgba(17, 32, 51, .1);
   border-radius: 8px;
   padding: 13px;
-  background: rgba(255, 255, 255, .78);
+  background: var(--rr-surface-glass);
 }
 
 .summary-tile span {
@@ -1304,7 +1302,7 @@ body::before {
 .health-diagnostics {
   margin: 8px 0 0;
   padding-left: 18px;
-  color: #31515d;
+  color: var(--rr-muted);
   font-size: 0.86rem;
   line-height: 1.6;
 }
@@ -1640,7 +1638,7 @@ body::before {
 
 .quick-setup-rail {
   min-width: 0;
-  border-right: 1px solid rgba(17, 32, 51, .1);
+  border-right: 1px solid var(--rr-border-soft);
   padding-right: 18px;
 }
 
@@ -2247,7 +2245,7 @@ body::before {
 }
 
 .docs-rule-card span {
-  color: #31515d;
+  color: var(--rr-muted);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.5;
@@ -2289,7 +2287,7 @@ body::before {
 }
 
 .docs-page-copy {
-  color: #31515d;
+  color: var(--rr-muted);
   font-size: 14px;
   font-weight: 700;
   line-height: 1.7;
@@ -2408,7 +2406,7 @@ body::before {
 
 .persona-speech-summary b {
   overflow-wrap: anywhere;
-  color: #29445a;
+  color: var(--rr-text);
   font-size: 12px;
 }
 
@@ -3038,7 +3036,7 @@ body::before {
 
 .identity-link-editor {
   padding: 12px;
-  background: rgba(255, 255, 255, .78);
+  background: var(--rr-surface-glass);
 }
 
 .identity-inline-editor-actions {
@@ -3239,14 +3237,14 @@ body::before {
   overflow-x: auto;
   border: 1px solid rgba(17, 32, 51, .12);
   border-radius: 10px;
-  background: rgba(255, 255, 255, .78);
+  background: var(--rr-surface-glass);
 }
 
 .docs-comparison-table {
   width: 100%;
   min-width: 820px;
   border-collapse: collapse;
-  color: #31515d;
+  color: var(--rr-muted);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -3467,10 +3465,10 @@ body::before {
   grid-template-columns: minmax(0, max-content) minmax(360px, 1fr);
   gap: 16px;
   align-items: center;
-  border-bottom: 1px solid rgba(17, 32, 51, .09);
+  border-bottom: 1px solid var(--rr-border-soft);
   padding: 14px 16px;
-  background: rgba(248, 251, 252, .98);
-  box-shadow: 0 10px 20px rgba(14, 46, 70, .06);
+  background: var(--rr-surface-glass);
+  box-shadow: var(--rr-shadow-card);
   backdrop-filter: blur(16px);
 }
 
@@ -3631,10 +3629,10 @@ body::before {
   gap: 8px;
   max-height: calc(100dvh - 104px);
   overflow: hidden;
-  border: 1px solid rgba(17, 32, 51, .1);
+  border: 1px solid var(--rr-border-soft);
   border-radius: 10px;
   padding: 11px;
-  background: rgba(247, 250, 251, .97);
+  background: var(--rr-surface-glass);
   box-shadow: 0 6px 18px rgba(14, 46, 70, .055);
 }
 
@@ -3672,15 +3670,15 @@ body::before {
 .knowledge-plan-directory-sort-trigger {
   flex: 0 0 auto;
   min-width: 94px;
-  color: #40586c;
+  color: var(--rr-muted);
   font-size: 10px;
   font-weight: 850;
   letter-spacing: 0;
 }
 
 .knowledge-plan-directory-sort-trigger.filtered {
-  color: #0c6970;
-  box-shadow: inset 0 0 0 1px rgba(15, 139, 141, .24);
+  color: var(--rr-accent-strong);
+  box-shadow: inset 0 0 0 1px var(--rr-accent-border);
 }
 
 .knowledge-plan-directory-filter-count {
@@ -4153,7 +4151,7 @@ body::before {
   border: 1px dashed rgba(82, 103, 122, .18);
   border-radius: 8px;
   padding: 18px 10px;
-  color: #7b8997;
+  color: var(--rr-muted-faint);
   font-size: 10px;
   font-weight: 700;
   text-align: center;
@@ -4161,7 +4159,7 @@ body::before {
 
 .knowledge-plan-directory > p {
   margin: -2px 0 0;
-  color: #7b8997;
+  color: var(--rr-muted-faint);
   font-size: 10px;
   font-weight: 650;
 }
@@ -4185,10 +4183,10 @@ body::before {
 .knowledge-plan-cards {
   align-content: start;
   gap: 18px;
-  border: 1px solid rgba(17, 32, 51, .06);
+  border: 1px solid var(--rr-border-faint);
   border-radius: 16px;
   padding: 8px;
-  background: #edf2f4;
+  background: var(--rr-subtle);
   box-shadow: inset 0 1px 2px rgba(14, 46, 70, .035);
 }
 
@@ -4211,9 +4209,9 @@ body::before {
 }
 
 .knowledge-plan-directory-link:hover {
-  border-color: rgba(15, 139, 141, .2);
-  background: rgba(236, 252, 255, .72);
-  color: #0c5f68;
+  border-color: var(--rr-accent-border);
+  background: var(--rr-accent-surface);
+  color: var(--rr-accent-strong);
 }
 
 .knowledge-plan-directory-link:focus-visible {
@@ -4223,8 +4221,8 @@ body::before {
 
 .knowledge-plan-directory-link.active {
   border-color: color-mix(in srgb, var(--plan-tone) 45%, transparent);
-  background: color-mix(in srgb, var(--plan-tone) 10%, white);
-  color: #173b52;
+  background: color-mix(in srgb, var(--plan-tone) 10%, var(--rr-surface));
+  color: var(--rr-heading);
   box-shadow: inset 3px 0 var(--plan-tone);
 }
 
@@ -4238,11 +4236,11 @@ body::before {
   flex: 0 0 auto;
   max-width: 84px;
   overflow: hidden;
-  border: 1px solid rgba(82, 103, 122, .1);
+  border: 1px solid var(--rr-border-soft);
   border-radius: 999px;
   padding: 3px 6px;
-  background: rgba(229, 235, 239, .82);
-  color: #687887;
+  background: var(--rr-subtle);
+  color: var(--rr-muted);
   font-size: 9px;
   font-style: normal;
   font-weight: 800;
@@ -4301,9 +4299,9 @@ body::before {
   min-width: 0;
   overflow: hidden;
   scroll-margin-top: 152px;
-  border: 1px solid color-mix(in srgb, var(--plan-tone) 24%, #c9d3da);
+  border: 1px solid color-mix(in srgb, var(--plan-tone) 24%, var(--rr-border));
   border-radius: 14px;
-  background: color-mix(in srgb, var(--plan-tone) 2.5%, white);
+  background: color-mix(in srgb, var(--plan-tone) 2.5%, var(--rr-surface));
   box-shadow: 0 8px 22px rgba(14, 46, 70, .09), 0 1px 2px rgba(14, 46, 70, .05);
 }
 
@@ -4412,7 +4410,7 @@ body::before {
 }
 
 .knowledge-plan-focus span {
-  color: #8795a1;
+  color: var(--rr-muted-faint);
   font-size: 10px;
   font-weight: 900;
 }
@@ -5069,10 +5067,10 @@ button.knowledge-plan-attachment.file {
 .knowledge-plan-current,
 .knowledge-plan-timing > div {
   min-width: 0;
-  border: 1px solid rgba(17, 32, 51, .07);
+  border: 1px solid var(--rr-border-faint);
   border-radius: 8px;
   padding: 8px 10px;
-  background: rgba(246, 248, 251, .7);
+  background: var(--rr-subtle);
 }
 
 .knowledge-plan-current {
@@ -5080,9 +5078,9 @@ button.knowledge-plan-attachment.file {
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 8px;
   align-items: start;
-  border-color: color-mix(in srgb, var(--plan-tone) 24%, rgba(17, 32, 51, .08));
+  border-color: color-mix(in srgb, var(--plan-tone) 24%, var(--rr-border));
   padding: 7px 10px;
-  background: color-mix(in srgb, var(--plan-tone) 7%, white);
+  background: color-mix(in srgb, var(--plan-tone) 7%, var(--rr-surface));
 }
 
 .knowledge-plan-current > .v-icon {
@@ -5092,12 +5090,12 @@ button.knowledge-plan-attachment.file {
   place-items: center;
   border-radius: 8px;
   color: var(--plan-tone);
-  background: rgba(255, 255, 255, .78);
+  background: var(--rr-surface-glass);
 }
 
 .knowledge-plan-current.blocked {
-  border-color: rgba(239, 108, 82, .28);
-  background: rgba(255, 241, 237, .82);
+  border-color: var(--rr-error-border);
+  background: var(--rr-error-surface);
 }
 
 .knowledge-plan-current.blocked > .v-icon {
@@ -5125,7 +5123,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-plan-summary .knowledge-plan-current-copy > b {
   min-width: 0;
   margin-top: 0;
-  color: #263f53;
+  color: var(--rr-text);
   font-size: 12px;
   line-height: 1.35;
   white-space: normal;
@@ -5133,7 +5131,7 @@ button.knowledge-plan-attachment.file {
 
 .knowledge-plan-current-heading > small {
   flex: 0 0 auto;
-  color: #7b8997;
+  color: var(--rr-muted-faint);
   font-size: 10px;
   font-weight: 750;
   white-space: nowrap;
@@ -5141,7 +5139,7 @@ button.knowledge-plan-attachment.file {
 
 .knowledge-plan-current-detail {
   margin: 1px 0 0;
-  color: #687b8b;
+  color: var(--rr-muted);
   font-size: 11px;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -5169,7 +5167,7 @@ button.knowledge-plan-attachment.file {
 
 .knowledge-plan-summary span {
   display: block;
-  color: #8795a1;
+  color: var(--rr-muted-faint);
   font-size: 10px;
   font-weight: 800;
 }
@@ -5177,7 +5175,7 @@ button.knowledge-plan-attachment.file {
 .knowledge-plan-summary b {
   display: block;
   margin-top: 3px;
-  color: #29445a;
+  color: var(--rr-text);
   font-size: 12px;
   font-weight: 800;
   overflow-wrap: anywhere;
@@ -5202,13 +5200,13 @@ button.knowledge-plan-attachment.file {
 }
 
 .knowledge-progress-copy span {
-  color: #637789;
+  color: var(--rr-muted);
   font-size: 10px;
   font-weight: 800;
 }
 
 .knowledge-progress-copy b {
-  color: #29445a;
+  color: var(--rr-text);
   font-size: 11px;
   font-weight: 950;
   font-variant-numeric: tabular-nums;
@@ -5543,7 +5541,7 @@ button.knowledge-plan-attachment.file {
 }
 
 .knowledge-step b {
-  color: #29445a;
+  color: var(--rr-text);
   font-size: 12px;
 }
 
@@ -5743,7 +5741,7 @@ button.knowledge-plan-attachment.file {
 
 .knowledge-approval-contract-item p {
   margin: 0;
-  color: #29445a;
+  color: var(--rr-text);
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -5835,7 +5833,7 @@ button.knowledge-plan-attachment.file {
 }
 
 .knowledge-approval-record b {
-  color: #29445a;
+  color: var(--rr-text);
   font-size: 12px;
   font-weight: 750;
   line-height: 1.55;
@@ -7141,4 +7139,137 @@ button.knowledge-plan-attachment.file {
   color: rgba(var(--v-theme-on-surface), 0.66);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+/* Dark-theme surfaces for legacy shared page sections. */
+html[data-rabiroute-theme="dark"] :is(
+  .workflow-step,
+  .summary-tile,
+  .empty-state,
+  .dependency-panel,
+  .dependency-row,
+  .adapter-message-file-panel,
+  .napcat-setup-strip,
+  .napcat-account-card,
+  .napcat-auto-summary,
+  .catalog-section,
+  .route-kind-chip,
+  .fold-section,
+  .automation-card,
+  .template-var,
+  .docs-hero,
+  .docs-flow span,
+  .docs-page-button,
+  .docs-rule-card,
+  .docs-feature-card,
+  .docs-table-card,
+  .persona-speech-summary > div,
+  .identity-panel,
+  .identity-person-card,
+  .identity-endpoint-card,
+  .identity-workspace-section,
+  .identity-link-editor,
+  .identity-workspace-actions,
+  .identity-workspace-card,
+  .docs-comparison-scroll,
+  .knowledge-hero,
+  .knowledge-metric,
+  .persona-summary-preview,
+  .knowledge-progressive-status,
+  .knowledge-plan-skeleton,
+  .knowledge-plan-list-dialog,
+  .knowledge-plan-list-dialog-title,
+  .knowledge-plan-list-filter-summary,
+  .knowledge-plan-list-panel,
+  .knowledge-plan-list-sort-options button,
+  .knowledge-plan-list-dialog-actions,
+  .knowledge-plan-attachment,
+  .knowledge-plan-markdown-paper,
+  .knowledge-plan-markdown-document,
+  .knowledge-plan-markdown-document blockquote,
+  .markdown-preview-image-placeholder,
+  .knowledge-plan-current > .v-icon,
+  .knowledge-plan-agent-query,
+  .knowledge-plan-agent-row,
+  .knowledge-approval-contract,
+  .knowledge-approval-record,
+  .knowledge-plan-history-record,
+  .knowledge-approval-mention-menu,
+  .knowledge-approval-attachment,
+  .knowledge-memory-card,
+  .knowledge-memory-actions,
+  .knowledge-memory-detail,
+  .knowledge-memory-detail-times
+) {
+  border-color: var(--rr-border-soft) !important;
+  background: var(--rr-surface) !important;
+  color: var(--rr-text);
+}
+
+html[data-rabiroute-theme="dark"] :is(
+  .workflow-step.active,
+  .route-card-selected,
+  .adapter-card.active,
+  .catalog-row.active,
+  .route-kind-chip.active,
+  .knowledge-plan-list-filter-options label.selected,
+  .knowledge-memory-detail-head
+) {
+  border-color: var(--rr-accent-border) !important;
+  background: var(--rr-accent-surface) !important;
+  color: var(--rr-heading);
+}
+
+html[data-rabiroute-theme="dark"] :is(
+  .danger-zone,
+  .knowledge-plan-agent-inline-notice[data-tone="error"],
+  .knowledge-plan-agent-missing,
+  .knowledge-plan-attachment-visual[data-load-state="error"] .knowledge-plan-attachment-loading
+) {
+  border-color: var(--rr-error-border) !important;
+  background: var(--rr-error-surface) !important;
+}
+
+html[data-rabiroute-theme="dark"] :is(
+  .knowledge-approval-panel[data-state="incomplete"],
+  .knowledge-memory-consolidation-panel,
+  .knowledge-memory-consolidation-panel > span
+) {
+  border-color: var(--rr-warning-border) !important;
+  background: var(--rr-warning-surface) !important;
+}
+
+html[data-rabiroute-theme="dark"] .knowledge-approval-panel:not([data-state="incomplete"]) {
+  border-color: var(--rr-accent-border) !important;
+  background: var(--rr-accent-surface) !important;
+}
+
+html[data-rabiroute-theme="dark"] .knowledge-plan-head {
+  background: color-mix(in srgb, var(--plan-tone) 14%, var(--rr-surface)) !important;
+}
+
+html[data-rabiroute-theme="dark"] :is(
+  .knowledge-plan-list-sort-options button:hover,
+  .knowledge-plan-list-filter-options label:hover,
+  .knowledge-plan-agent-row.actionable:hover
+) {
+  background: var(--rr-subtle) !important;
+}
+
+/* Theme compatibility for shared Vuetify shells and overlays. */
+html[data-rabiroute-theme="dark"] .v-overlay__content > .v-card,
+html[data-rabiroute-theme="dark"] .v-overlay__content > .v-list,
+html[data-rabiroute-theme="dark"] .v-menu > .v-overlay__content > .v-list {
+  border-color: var(--rr-border-soft) !important;
+  background: var(--rr-surface) !important;
+  color: var(--rr-text) !important;
+}
+
+html[data-rabiroute-theme="dark"] .v-field {
+  color: var(--rr-text);
+}
+
+html[data-rabiroute-theme="dark"] .v-field--disabled,
+html[data-rabiroute-theme="dark"] .v-input--disabled {
+  opacity: .7;
 }

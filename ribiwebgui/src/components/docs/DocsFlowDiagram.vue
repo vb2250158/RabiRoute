@@ -41,6 +41,7 @@ defineProps<{
 <style scoped>
 .flow-diagram {
   margin: 0;
+  color: var(--rr-text);
 }
 
 .flow-diagram-caption {
@@ -50,13 +51,13 @@ defineProps<{
 }
 
 .flow-diagram-caption strong {
-  color: #0c2a4a;
+  color: var(--rr-heading);
   font-size: 16px;
   font-weight: 800;
 }
 
 .flow-diagram-caption span {
-  color: #52677a;
+  color: var(--rr-muted);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.6;
@@ -73,7 +74,7 @@ defineProps<{
 
 .flow-diagram-lane-label {
   margin-bottom: 8px;
-  color: #687b8e;
+  color: var(--rr-muted-soft);
   font-size: 11px;
   font-weight: 800;
 }
@@ -99,14 +100,14 @@ defineProps<{
   align-items: start;
   min-height: 74px;
   padding: 12px;
-  border: 1px solid rgba(17, 32, 51, .12);
+  border: 1px solid var(--rr-border);
   border-radius: 6px;
-  background: rgba(248, 251, 253, .9);
+  background: var(--rr-surface);
 }
 
 .flow-diagram-node-icon {
   margin-top: 1px;
-  color: #0f8b8d;
+  color: var(--rr-accent-strong);
 }
 
 .flow-diagram-node strong,
@@ -116,7 +117,7 @@ defineProps<{
 }
 
 .flow-diagram-node strong {
-  color: #0c2a4a;
+  color: var(--rr-heading);
   font-size: 13px;
   font-weight: 800;
   line-height: 1.35;
@@ -124,7 +125,7 @@ defineProps<{
 
 .flow-diagram-node span {
   margin-top: 5px;
-  color: #687b8e;
+  color: var(--rr-muted-soft);
   font-size: 11px;
   font-weight: 600;
   line-height: 1.45;
@@ -132,30 +133,30 @@ defineProps<{
 
 .flow-diagram-node.is-mode,
 .flow-diagram-node.is-agent {
-  border-color: rgba(15, 139, 141, .34);
-  background: rgba(229, 249, 248, .74);
+  border-color: var(--rr-accent-border);
+  background: var(--rr-accent-surface);
 }
 
 .flow-diagram-node.is-decision {
-  border-color: rgba(62, 105, 170, .3);
-  background: rgba(235, 242, 252, .78);
+  border-color: var(--rr-info-border);
+  background: var(--rr-info-surface);
 }
 
 .flow-diagram-node.is-warning {
-  border-color: rgba(190, 125, 22, .34);
-  background: rgba(255, 248, 230, .82);
+  border-color: var(--rr-warning-border);
+  background: var(--rr-warning-surface);
 }
 
 .flow-diagram-node.is-result {
-  border-color: rgba(43, 126, 77, .3);
-  background: rgba(235, 249, 239, .82);
+  border-color: var(--rr-success-border);
+  background: var(--rr-success-surface);
 }
 
 .flow-diagram-arrow {
   position: absolute;
   top: 28px;
   right: -20px;
-  color: #8491a0;
+  color: var(--rr-disabled);
 }
 
 @media (max-width: 720px) {

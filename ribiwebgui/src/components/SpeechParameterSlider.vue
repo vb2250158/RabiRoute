@@ -81,13 +81,13 @@ function update(value: unknown): void {
   align-items: center;
   min-height: 58px;
   padding: 8px 12px;
-  border: 1px solid rgba(17, 32, 51, .08);
+  border: 1px solid var(--rr-border);
   border-radius: 12px;
-  background: rgba(255, 255, 255, .62);
+  background: var(--rr-subtle);
 }
 .speech-parameter-copy { display: grid; gap: 2px; }
-.speech-parameter-copy strong { color: #29445a; font-size: 12px; }
-.speech-parameter-copy span { color: #7b8c9b; font-size: 10px; line-height: 1.35; }
+.speech-parameter-copy strong { color: var(--rr-text); font-size: 12px; }
+.speech-parameter-copy span { color: var(--rr-muted-faint); font-size: 10px; line-height: 1.35; }
 .speech-parameter-track { min-width: 0; }
 .speech-parameter-input { min-width: 0; }
 @media (max-width: 880px) {

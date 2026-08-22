@@ -50,6 +50,7 @@ watch(() => props.avatarUrl, () => {
 }
 
 .persona-avatar__fallback {
+  color: #102431;
   font-weight: 900;
   letter-spacing: -0.04em;
 }

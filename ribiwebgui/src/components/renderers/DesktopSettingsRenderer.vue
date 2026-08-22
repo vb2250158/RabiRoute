@@ -223,6 +223,10 @@ watch([
   if (!hydrating.value) desktopDirty.value = true;
 });
 
+watch(desktopTheme, theme => {
+  if (!hydrating.value && loaded.value) publishInterfaceTheme(theme);
+});
+
 watch([
   selectionSpeechEnabled,
   selectionReadAloudEnabled,
