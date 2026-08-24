@@ -7122,8 +7122,14 @@ export async function startManager(): Promise<void> {
       },
       "manager:persona": async ctx => {
         personaSyncAutoReconciler?.start();
-        await personaSyncService.startManifestIndex()
-          .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
+        // A full NAS manifest walk may transiently exhaust SMB file handles. Do
+        // not make Manager availability depend on this rebuildable cache: let
+        // the control plane finish its synchronous configuration migration
+        // before indexing starts in the next event-loop turn.
+        setTimeout(() => {
+          void personaSyncService.startManifestIndex()
+            .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
+        }, 0).unref();
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
           const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:persona", "manager.persona.api", [

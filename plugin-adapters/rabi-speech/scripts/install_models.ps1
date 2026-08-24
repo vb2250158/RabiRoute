@@ -42,6 +42,8 @@ if (-not (Test-Path -LiteralPath $deps)) {
 if ([string]::IsNullOrWhiteSpace($ModelRoot)) {
   $ModelRoot = if ($env:RABISPEECH_MODEL_ROOT) {
     $env:RABISPEECH_MODEL_ROOT
+  } elseif ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "RabiPC\models\rabispeech"
   } else {
     Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $pluginRoot))) "models\rabispeech"
   }

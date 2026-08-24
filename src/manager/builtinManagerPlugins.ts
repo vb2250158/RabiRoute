@@ -478,7 +478,7 @@ export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
         id: "pin-clipboard-image-hotkey",
         label: { fallback: "贴出剪贴板图片" },
         commandId: "pin-clipboard-image",
-        defaultBinding: "F3",
+        defaultBinding: "Ctrl+Alt+V",
         slot: "capture",
         hosts: ["desktop"],
         order: 40

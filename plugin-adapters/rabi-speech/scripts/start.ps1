@@ -6,9 +6,19 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $deps = Join-Path $root ".deps"
-$config = Join-Path $root "config.json"
+$dataRoot = if ($env:RABISPEECH_DATA_ROOT) {
+  $env:RABISPEECH_DATA_ROOT
+} elseif ($env:LOCALAPPDATA) {
+  Join-Path $env:LOCALAPPDATA "RabiPC\RabiSpeech"
+} else {
+  $root
+}
+$config = if ($env:RABISPEECH_CONFIG) { $env:RABISPEECH_CONFIG } else { Join-Path $dataRoot "config.json" }
 if (!(Test-Path -LiteralPath $config)) {
-  Copy-Item -LiteralPath (Join-Path $root "config.example.json") -Destination $config
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $config) | Out-Null
+  $legacyConfig = Join-Path $root "config.json"
+  $configSource = if (Test-Path -LiteralPath $legacyConfig) { $legacyConfig } else { Join-Path $root "config.example.json" }
+  Copy-Item -LiteralPath $configSource -Destination $config
 }
 $depsAvailable = $false
 for ($attempt = 1; $attempt -le 5; $attempt++) {
@@ -34,8 +44,12 @@ if (Test-Path -LiteralPath $nvidiaRoot) {
     $env:PATH = (($nvidiaBins -join ";") + ";" + $env:PATH)
   }
 }
+$env:RABISPEECH_DATA_ROOT = (Split-Path -Parent $config)
 $env:RABISPEECH_CONFIG = $config
 $env:RABISPEECH_ROOT = $root
+$env:RABISPEECH_MODEL_ROOT = if ($env:RABISPEECH_MODEL_ROOT) { $env:RABISPEECH_MODEL_ROOT } else { Join-Path (Split-Path -Parent $env:RABISPEECH_DATA_ROOT) "models\rabispeech" }
+$env:RABISPEECH_WHISPER_MODEL_ROOT = if ($env:RABISPEECH_WHISPER_MODEL_ROOT) { $env:RABISPEECH_WHISPER_MODEL_ROOT } else { Join-Path $env:RABISPEECH_MODEL_ROOT "asr\faster-whisper-cache" }
+$env:RABISPEECH_SPEAKER_MODEL_PATH = if ($env:RABISPEECH_SPEAKER_MODEL_PATH) { $env:RABISPEECH_SPEAKER_MODEL_PATH } else { Join-Path $env:RABISPEECH_MODEL_ROOT "speaker\3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx" }
 $pythonArgs = $Python -split "\s+"
 $pythonExe = $pythonArgs[0]
 $prefixArgs = @($pythonArgs | Select-Object -Skip 1)

@@ -340,7 +340,7 @@ export class SpeechRuntimeControl {
       return `关闭占用 ${port ?? servicePort(this.options.serviceUrl())} 端口的旧进程，再重新启动语音服务。`;
     }
     if (/config(?:uration)? .*missing|JSONDecodeError|invalid.*config/i.test(output)) {
-      return "检查 plugin-adapters\\rabi-speech\\config.json，修正配置后重新启动。";
+      return "检查当前用户 RabiSpeech 运行目录中的 config.json，修正配置后重新启动。";
     }
     return "关闭语音服务后重新启动；仍失败时运行 plugin-adapters\\rabi-speech\\scripts\\start.ps1 查看启动日志。";
   }

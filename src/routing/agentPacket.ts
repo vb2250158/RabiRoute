@@ -319,6 +319,18 @@ function section(title: string, lines: string[]): string {
   return content ? `[${title}]\n${content}` : "";
 }
 
+function personaWorkContractLines(routeKind: string): string[] {
+  return [
+    "先把本轮材料分成已证实事实、合理推断、未知和待秋雨完成的最小一步；旧日志、工具成功、文件生成、退出码或 delivered 都不是现实完成。",
+    "只推进一个当前价值最高、权限内且可逆的动作；动作后用实际产物、真实回执或用户可见结果核验，失败就留下准确原因和恢复点。",
+    "没有新增事实、风险、承诺变化或足以覆盖打扰成本的陪伴价值时保持安静；计划/记忆只写稳定、未来有用且已证实的变化。",
+    "外部发送、设备控制、删除、支付、账号与第三方影响继续遵守 Action Gate；本地取证也只在当前入口明确允许的范围内短时读取、查看后清理原始材料。",
+    routeKind === "heartbeat"
+      ? "心跳不是考勤或项目巡检：先判断秋雨与夜雨当前场景，再决定是否取证、陪伴、推进或安静结束。"
+      : "模板只补充当前入口的判断重点，不重复这套收口契约。"
+  ];
+}
+
 function parseJsonlFile<T>(filePath: string): T[] {
   if (!fs.existsSync(filePath)) {
     return [];
@@ -1340,6 +1352,7 @@ function buildAgentMessage(
         : "执行本次定时心跳。",
       "按事件和模板执行并输出结果。无新事项时写明检查范围和下一步；受限时写明限制和下一步。"
     ]) : "",
+    hasPersona ? section("本轮工作契约", personaWorkContractLines(routeKind)) : "",
     userTemplateText.trim() ? section("用户模板补充", [userTemplateText.trim()]) : ""
   ];
 

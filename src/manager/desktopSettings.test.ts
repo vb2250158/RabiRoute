@@ -10,14 +10,14 @@ import {
 } from "../shared/desktopSettingsContract.js";
 import { DesktopSettingsStore } from "./desktopSettings.js";
 
-test("desktop settings keep screenshot defaults and normalize persisted values", () => {
+test("desktop settings keep screenshot defaults and migrate the game-conflicting legacy F3 binding", () => {
   assert.deepEqual(normalizeDesktopSettings({ screenshot: {
     enabled: true,
     shortcut: "  Ctrl+Alt+S  ",
     clipboardShortcut: " F3 ",
     autoCopy: false
   }, autostart: true }), {
-    screenshot: { enabled: true, shortcut: "Ctrl+Alt+S", clipboardShortcut: "F3", autoCopy: false },
+    screenshot: { enabled: true, shortcut: "Ctrl+Alt+S", clipboardShortcut: "Ctrl+Alt+V", autoCopy: false },
     autostart: true,
     theme: "system"
   });
@@ -41,7 +41,7 @@ test("desktop settings store writes and reads the single host settings file", ()
     assert.equal(store.read().screenshot.enabled, false);
     store.write({ screenshot: { enabled: true, shortcut: "Ctrl+Shift+S", clipboardShortcut: "F3", autoCopy: false }, autostart: true });
     assert.deepEqual(store.read(), {
-      screenshot: { enabled: true, shortcut: "Ctrl+Shift+S", clipboardShortcut: "F3", autoCopy: false },
+      screenshot: { enabled: true, shortcut: "Ctrl+Shift+S", clipboardShortcut: "Ctrl+Alt+V", autoCopy: false },
       autostart: true,
       theme: "system"
     });

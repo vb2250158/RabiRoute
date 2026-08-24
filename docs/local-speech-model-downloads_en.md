@@ -18,6 +18,18 @@ Open **Model Management** in the RibiWebGUI sidebar, or go directly to `/#/model
 
 The page and command line share the allowlist in `plugin-adapters/rabi-speech/model-catalog.json`. A browser cannot provide an arbitrary repository, URL, or local path. Licensed ONNX-VITS packages remain manual imports.
 
+## Private runtime layout
+
+Do not put model weights, virtual environments, real reference audio, or runtime configuration in a Git checkout or a directory replaced by an installer. On Windows the default current-user layout is:
+
+```text
+%LOCALAPPDATA%\RabiPC\
+  RabiSpeech\                 # config.json, microphone selection, temporary files, outputs
+  models\rabispeech\          # install manifest plus TTS / ASR / speaker weights
+```
+
+Updating RabiRoute or reinstalling RabiSpeech replaces only the code package. On first start, a legacy package-local `config.json` is copied once into this user directory and is never overwritten afterwards. To use another local drive, set both `RABISPEECH_DATA_ROOT` and `RABISPEECH_MODEL_ROOT` before launch; neither may point at Git or NAS-sync storage.
+
 ## Common downloader
 
 ```powershell

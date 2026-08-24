@@ -16,6 +16,7 @@ test("Windows desktop starts as one RabiRoute product runtime", () => {
   assert.equal(packageJson.scripts["start:windows"], "Start-RabiRoute-Desktop.bat");
   assert.match(launcher, /function Start-RabiRouteDesktop/);
   assert.match(launcher, /function Start-DesktopShell/);
+  assert.match(launcher, /Starting packaged RabiRoute Desktop/);
   assert.match(launcher, /RabiRoute Desktop cannot start because Python was not found/);
   assert.doesNotMatch(launcher, /Manager\/WebGUI remain available/);
   assert.match(lifecycle, /"packaged-desktop"/);

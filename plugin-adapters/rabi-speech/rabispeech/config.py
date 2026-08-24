@@ -175,6 +175,22 @@ def _resolve_path(base: Path, value: object, fallback: str) -> Path:
     return (base / path).resolve() if not path.is_absolute() else path.resolve()
 
 
+def _model_root(base: Path) -> Path | None:
+    configured = str(os.environ.get("RABISPEECH_MODEL_ROOT") or "").strip()
+    return _resolve_path(base, configured, ".") if configured else None
+
+
+def _model_path(base: Path, raw_path: str, model_root: Path | None) -> Path:
+    resolved = _resolve_path(base, raw_path, ".")
+    if model_root is None:
+        return resolved
+    legacy_root = _resolve_path(base, "../../../models/rabispeech", ".")
+    try:
+        return (model_root / resolved.relative_to(legacy_root)).resolve()
+    except ValueError:
+        return resolved
+
+
 def _env(name: str, fallback: object) -> str:
     return os.environ.get(name, str(fallback))
 
@@ -229,13 +245,17 @@ def load_settings(path: str | Path | None = None) -> Settings:
     roots = local_tts.get("allowed_output_roots") or ["./output"]
     if not isinstance(roots, list):
         roots = [roots]
-    whisper_model_root = _resolve_path(
-        base,
-        os.environ.get("RABISPEECH_WHISPER_MODEL_ROOT", whisper.get("model_root")),
-        "../../../models/rabispeech/asr/faster-whisper-cache",
+    model_root = _model_root(base)
+    whisper_root_override = str(os.environ.get("RABISPEECH_WHISPER_MODEL_ROOT") or "").strip()
+    whisper_model_root = (
+        _resolve_path(base, whisper_root_override, ".")
+        if whisper_root_override
+        else (model_root / "asr" / "faster-whisper-cache").resolve()
+        if model_root is not None
+        else _resolve_path(base, whisper.get("model_root"), "../../../models/rabispeech/asr/faster-whisper-cache")
     )
     whisper_model_id = _env("RABISPEECH_WHISPER_MODEL", whisper.get("model", "small")).strip()
-    whisper_models = _whisper_models(base, whisper.get("models"), whisper_model_id)
+    whisper_models = _whisper_models(base, whisper.get("models"), whisper_model_id, model_root)
     local_tts_model_id = _env("RABISPEECH_TTS_MODEL", local_tts.get("model", "onnx-vits")).strip()
     local_tts_models = _local_tts_models(base, local_tts.get("models"), local_tts_model_id, str(local_tts.get("default_worker_url") or ""))
     http_asr = _http_asr_providers(base, asr.get("http_providers"))
@@ -327,10 +347,16 @@ def load_settings(path: str | Path | None = None) -> Settings:
                 "RABISPEECH_SPEAKER_MODEL_ID",
                 speaker_recognition.get("model_id", "3dspeaker-eres2netv2-zh-16k"),
             ).strip(),
-            model_path=_resolve_path(
-                base,
-                os.environ.get("RABISPEECH_SPEAKER_MODEL_PATH", speaker_recognition.get("model_path")),
-                "../../../models/rabispeech/speaker/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+            model_path=(
+                _resolve_path(base, os.environ["RABISPEECH_SPEAKER_MODEL_PATH"], ".")
+                if str(os.environ.get("RABISPEECH_SPEAKER_MODEL_PATH") or "").strip()
+                else (model_root / "speaker" / "3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx").resolve()
+                if model_root is not None
+                else _resolve_path(
+                    base,
+                    speaker_recognition.get("model_path"),
+                    "../../../models/rabispeech/speaker/3dspeaker_speech_eres2netv2_sv_zh-cn_16k-common.onnx",
+                )
             ),
             provider=_env("RABISPEECH_SPEAKER_PROVIDER", speaker_recognition.get("provider", "cpu")).strip().lower(),
             num_threads=max(1, min(8, int(speaker_recognition.get("num_threads", 2)))),
@@ -359,7 +385,12 @@ def load_settings(path: str | Path | None = None) -> Settings:
     )
 
 
-def _whisper_models(base: Path, value: object, default_model: str) -> tuple[FasterWhisperModelSettings, ...]:
+def _whisper_models(
+    base: Path,
+    value: object,
+    default_model: str,
+    model_root: Path | None = None,
+) -> tuple[FasterWhisperModelSettings, ...]:
     rows = value if isinstance(value, list) else []
     models: list[FasterWhisperModelSettings] = []
     for row in rows:
@@ -379,7 +410,7 @@ def _whisper_models(base: Path, value: object, default_model: str) -> tuple[Fast
                 id=model_id,
                 name=str(detail.get("name") or f"faster-whisper {model_id}"),
                 source=str(detail.get("source") or f"Systran/faster-whisper-{model_id}"),
-                path=_resolve_path(base, raw_path, ".") if raw_path else None,
+                path=_model_path(base, raw_path, model_root) if raw_path else None,
             )
         )
     if not any(item.id.lower() == default_model.lower() for item in models):

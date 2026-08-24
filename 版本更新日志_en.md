@@ -14,6 +14,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Performance pages now read a bounded raw cache plus 10-second, 1-minute, and 5-minute incremental aggregates. A 720-hour disk retention no longer restores or keeps every raw sample resident, and 48-hour queries no longer synchronously scan large object arrays. Page queries no longer force a flush plus a second JSONL parse, and invalid recent-log limits fall back to the default. Persistent Manager and speech event streams no longer affect HTTP P95, top-level cards use the most recently reporting Manager runtime, and WebGUI starts theme, lightweight Route status, metadata, and network-option reads concurrently.
 - Windows Relay scheduled tasks no longer inherit the default 72-hour execution limit and restart after failure. Runtime-state replacement handles an existing Windows destination file and restores an orphaned backup after an interrupted replacement.
 
+### Local speech data and Windows desktop startup boundaries
+
+- RabiSpeech runtime configuration, temporary files, and outputs now default to `%LOCALAPPDATA%\RabiPC\RabiSpeech`, while models default to `%LOCALAPPDATA%\RabiPC\models\rabispeech`. First startup copies a legacy package-local configuration once. `RABISPEECH_DATA_ROOT`, `RABISPEECH_MODEL_ROOT`, and the existing narrower overrides can select another local location. Model downloads, the Windows speech host, and Manager now share this layout instead of binding private runtime data to a Git checkout or installer directory.
+- `Start-RabiRoute-Desktop.bat` now prefers the packaged `RabiRoute-Desktop.exe` when it exists at the project root and retains the Python desktop fallback for source environments. The clipboard-screenshot default moves from the game-conflicting bare `F3` to `Ctrl+Alt+V`, and normalization migrates the legacy default automatically.
+- Manager now starts the rebuildable persona-sync manifest index asynchronously after startup, so a NAS manifest walk cannot block control-plane configuration migration and availability.
+
+### Persona work contract and proactive-review evidence boundaries
+
+- Persona-bound AgentPackets now append a shared per-turn work contract: separate facts, inferences, unknowns, and the smallest user-owned step; advance one verifiable action; and keep external messages, device control, deletion, payment, and third-party effects behind the Action Gate. Heartbeats are explicitly not attendance checks or default project audits.
+- RabiLink proactive review prefers the role-specific `prompts/rabilink-proactive-review.md` and falls back to `prompts/proactive-review.md`. A reflection turn may briefly inspect local evidence only when the role supplies a bounded tool and the user has explicitly allowed it; raw evidence must then be deleted and cannot enter memory or outbound messages.
+
 ## 0.2.0 - 2026-08-22
 
 ### WebGUI themes and hardware display checks

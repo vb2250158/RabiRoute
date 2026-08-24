@@ -106,7 +106,7 @@ test("builtin Desktop hotkeys reference commands from the same plugin instance",
     hotkeys.map(hotkey => [hotkey.commandId, hotkey.defaultBinding, commands.get(hotkey.commandId)]),
     [
       ["capture-screenshot", "Ctrl+Shift+S", "desktop.capture-screenshot"],
-      ["pin-clipboard-image", "F3", "desktop.pin-clipboard-image"]
+      ["pin-clipboard-image", "Ctrl+Alt+V", "desktop.pin-clipboard-image"]
     ]
   );
 });

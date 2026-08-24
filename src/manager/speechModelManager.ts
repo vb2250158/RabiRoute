@@ -39,6 +39,13 @@ type InstallManifest = {
   }>;
 };
 
+function defaultModelRoot(rootDir: string): string {
+  const localAppData = String(process.env.LOCALAPPDATA || "").trim();
+  return localAppData
+    ? path.join(localAppData, "RabiPC", "models", "rabispeech")
+    : path.join(rootDir, "..", "models", "rabispeech");
+}
+
 export class SpeechModelManagerError extends Error {
   constructor(message: string, readonly status = 409) {
     super(message);
@@ -72,7 +79,7 @@ export class SpeechModelManager {
     this.modelRoot = path.resolve(
       options.modelRoot
         || process.env.RABISPEECH_MODEL_ROOT
-        || path.join(options.rootDir, "..", "models", "rabispeech")
+        || defaultModelRoot(options.rootDir)
     );
     this.catalog = this.readCatalog();
     this.spawnInstaller = options.spawnInstaller ?? spawn;

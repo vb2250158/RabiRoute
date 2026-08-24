@@ -178,6 +178,11 @@ test("a touchpad wake arriving during another review is checked again immediatel
 
 test("an idle Codex thread periodically reflects on user intent even without a new transcript", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-rabilink-reviewer-reflection-"));
+  const roleDir = path.join(dataDir, "roles", "YeYu");
+  fs.mkdirSync(path.join(roleDir, "prompts"), { recursive: true });
+  fs.mkdirSync(path.join(roleDir, "tools"), { recursive: true });
+  fs.writeFileSync(path.join(roleDir, "prompts", "proactive-review.md"), "# role review policy\n", "utf8");
+  fs.writeFileSync(path.join(roleDir, "tools", "collect-heartbeat-evidence.ps1"), "# bounded local evidence tool\n", "utf8");
   appendRabiLinkConversationEntry(dataDir, {
     entryId: "rabilink-agent:reflection-context",
     recordedAt: "2026-07-13T10:00:00.000Z",
@@ -191,6 +196,7 @@ test("an idle Codex thread periodically reflects on user intent even without a n
     dataDir,
     routeProfileId: "RabiLink",
     gatewayManagerUrl: "http://127.0.0.1:8790",
+    agentRolePath: path.join(roleDir, "persona.md"),
     autoReviewEnabled: false,
     continuousReflectionEnabled: true,
     reflectionIntervalMs: 30 * 60 * 1000,
@@ -210,6 +216,10 @@ test("an idle Codex thread periodically reflects on user intent even without a n
   assert.match(prompts[0], /连续反思/);
   assert.match(prompts[0], /当前活动、真正目标、阻碍、下一步/);
   assert.match(prompts[0], /计划、任务、记忆或最近工具结果/);
+  assert.match(prompts[0], /先完整读取并遵循主动审阅策略/);
+  assert.match(prompts[0], /\[本机现场取证\]/);
+  assert.match(prompts[0], /collect-heartbeat-evidence\.ps1 -CaptureScreen -CaptureCamera -IncludeWindowTitle/);
+  assert.match(prompts[0], /查看后删除 manifest、屏幕图、摄像头图和证据临时目录/);
 
   const second = await reviewer.check();
   assert.equal(second.status, "idle");

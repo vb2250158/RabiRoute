@@ -35,6 +35,44 @@ def resolve_service_root(
     return source.parents[1]
 
 
+def resolve_runtime_data_root(
+    service_root: str | Path,
+    *,
+    environment: MutableMapping[str, str] | None = None,
+) -> Path:
+    env = environment if environment is not None else os.environ
+    configured = str(env.get("RABISPEECH_DATA_ROOT") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    local_app_data = str(env.get("LOCALAPPDATA") or "").strip()
+    if local_app_data:
+        return (Path(local_app_data).expanduser() / "RabiPC" / "RabiSpeech").resolve()
+    return Path(service_root).expanduser().resolve()
+
+
+def resolve_runtime_config(
+    service_root: str | Path,
+    *,
+    environment: MutableMapping[str, str] | None = None,
+) -> Path:
+    root = Path(service_root).expanduser().resolve()
+    env = environment if environment is not None else os.environ
+    configured = str(env.get("RABISPEECH_CONFIG") or "").strip()
+    config = Path(configured).expanduser().resolve() if configured else resolve_runtime_data_root(root, environment=env) / "config.json"
+    if config.is_file():
+        return config
+    source = root / "config.json"
+    if not source.is_file():
+        source = root / "config.example.json"
+    if not source.is_file():
+        raise RuntimeError(f"RabiSpeech configuration is missing: {config}")
+    config.parent.mkdir(parents=True, exist_ok=True)
+    temporary = config.with_suffix(config.suffix + ".tmp")
+    temporary.write_bytes(source.read_bytes())
+    temporary.replace(config)
+    return config.resolve()
+
+
 def configure_runtime(
     service_root: str | Path,
     *,
@@ -43,16 +81,11 @@ def configure_runtime(
 ) -> dict[str, str]:
     root = Path(service_root).expanduser().resolve()
     dependencies = root / ".deps"
-    config = root / "config.json"
     if not dependencies.is_dir():
         raise RuntimeError(f"RabiSpeech dependencies are missing: {dependencies}")
-    if not config.is_file():
-        example = root / "config.example.json"
-        if not example.is_file():
-            raise RuntimeError(f"RabiSpeech configuration is missing: {config}")
-        config.write_bytes(example.read_bytes())
 
     env = environment if environment is not None else os.environ
+    config = resolve_runtime_config(root, environment=env)
     paths = module_paths if module_paths is not None else sys.path
     for item in (str(root), str(dependencies)):
         if item not in paths:
@@ -63,7 +96,8 @@ def configure_runtime(
         item for item in (str(dependencies), str(root), existing_python_path) if item
     )
     env["RABISPEECH_ROOT"] = str(root)
-    env.setdefault("RABISPEECH_CONFIG", str(config))
+    env["RABISPEECH_DATA_ROOT"] = str(config.parent)
+    env["RABISPEECH_CONFIG"] = str(config)
 
     nvidia_root = dependencies / "nvidia"
     nvidia_bins = sorted(

@@ -7,7 +7,7 @@ import { config, type NotificationRule, type RouteProfile } from "../config.js";
 import { updatePersonaVoiceIdentity } from "../personaVoiceIdentities.js";
 import { listIdentityEndpointAccounts, updateIdentityRelation } from "../identityRelations.js";
 import { resolvePipeline } from "../pipelines.js";
-import type { GroupMessageRecord, PlanFeedbackMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
+import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
 import { buildAgentPacket, type AgentRoleContext } from "./agentPacket.js";
 
@@ -1369,4 +1369,56 @@ test("AgentPacket requires a bound latest-context review before a message-proces
   assert.match(packet.message, /发送目标或正文变化时重新审核/);
   assert.match(packet.message, /replyImageDescriptions/);
   assert.match(packet.message, /逐张填写 params\.replyImageDescriptions/);
+  assert.match(packet.message, /\[本轮工作契约\]/);
+  assert.match(packet.message, /事实、合理推断、未知/);
+  assert.match(packet.message, /旧日志、工具成功、文件生成、退出码或 delivered 都不是现实完成/);
+});
+
+test("AgentPacket gives a persona heartbeat a local-first work contract", () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-heartbeat-contract-"));
+  const rule: NotificationRule = {
+    id: "heartbeat-contract",
+    name: "heartbeat contract",
+    enabled: true,
+    routeKinds: ["heartbeat"],
+    template: "先恢复当前场景，再决定是否读取本机现场。"
+  };
+  const route: RouteProfile = {
+    id: "heartbeat-contract-route",
+    name: "heartbeat contract",
+    enabled: true,
+    recentMessageLimit: 0,
+    resolvedPipeline: resolvePipeline("agent"),
+    agentRoleId: "YeYu",
+    agentRoleFile: "persona.md",
+    rolesDir: path.dirname(roleDir),
+    dataDir: roleDir,
+    routeVariables: {},
+    notificationRules: [rule]
+  };
+  const record: HeartbeatEventRecord = {
+    time: Date.now() / 1_000,
+    rawMessage: "定时心跳提醒",
+    messageId: "heartbeat-contract-1",
+    senderName: "RabiRoute 定时触发"
+  };
+
+  const packet = buildAgentPacket({
+    route,
+    routeKind: "heartbeat",
+    record,
+    extraValues: {},
+    matchedRules: [rule],
+    routeVariables: {},
+    routeText: record.rawMessage
+  }, rule, {
+    roleId: "YeYu",
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
+  });
+
+  assert.match(packet.message, /\[本轮工作契约\]/);
+  assert.match(packet.message, /心跳不是考勤或项目巡检/);
+  assert.match(packet.message, /先恢复当前场景，再决定是否读取本机现场/);
 });

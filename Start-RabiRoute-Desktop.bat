@@ -299,6 +299,23 @@ function Start-DesktopShell {
     return $existingDesktopShell[0]
   }
 
+  $packagedDesktop = Join-Path $ProjectRoot "RabiRoute-Desktop.exe"
+  if (Test-Path -LiteralPath $packagedDesktop -PathType Leaf) {
+    $arguments = @("--manager-url", $ManagerUrl)
+    Write-Info "Starting packaged RabiRoute Desktop..."
+    Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Starting packaged RabiRoute Desktop: $packagedDesktop $($arguments -join ' ')"
+    $desktopProcess = Start-Process `
+      -FilePath $packagedDesktop `
+      -ArgumentList $arguments `
+      -WorkingDirectory $ProjectRoot `
+      -RedirectStandardOutput $DesktopOutLog `
+      -RedirectStandardError $DesktopErrLog `
+      -PassThru
+    Write-Info "Packaged RabiRoute Desktop started: pid=$($desktopProcess.Id)"
+    Add-Content -LiteralPath $LauncherLog -Encoding UTF8 -Value "[$(Get-Date -Format o)] Packaged desktop shell pid=$($desktopProcess.Id), desktopExitStopsManager=true"
+    return $desktopProcess
+  }
+
   $python = Resolve-DesktopPython -ProjectRoot $ProjectRoot
   if (-not $python) {
     $message = "RabiRoute Desktop cannot start because Python was not found. Install the desktop dependencies or run the Node-only Manager command explicitly."

@@ -64,6 +64,22 @@ def test_runtime_configuration_uses_external_source_and_dependencies(tmp_path: P
     assert environment["PATH"].split(";")[:2] == [str(nvidia_bin.resolve()), "system-path"]
 
 
+def test_runtime_configuration_defaults_to_local_app_data_and_migrates_legacy_config(tmp_path: Path) -> None:
+    root = tmp_path / "rabi-speech"
+    (root / ".deps").mkdir(parents=True)
+    (root / "config.json").write_text('{"server": {"port": 8781}}\n', encoding="utf-8")
+    local_app_data = tmp_path / "local-app-data"
+    environment = {"LOCALAPPDATA": str(local_app_data)}
+
+    result = WINDOWS_HOST.configure_runtime(root, environment=environment, module_paths=[])
+
+    expected = local_app_data / "RabiPC" / "RabiSpeech" / "config.json"
+    assert Path(result["config"]) == expected.resolve()
+    assert expected.read_text(encoding="utf-8") == '{"server": {"port": 8781}}\n'
+    assert environment["RABISPEECH_DATA_ROOT"] == str(expected.parent.resolve())
+    assert environment["RABISPEECH_CONFIG"] == str(expected.resolve())
+
+
 def test_start_script_prefers_built_windows_host() -> None:
     source = (SCRIPT.parent / "start.ps1").read_text(encoding="utf-8")
 
@@ -71,6 +87,8 @@ def test_start_script_prefers_built_windows_host() -> None:
     assert "-not $Reload" in source
     assert '& $hostExe' in source
     assert '& $pythonExe @prefixArgs @hostArgs' in source
+    assert 'RabiPC\\RabiSpeech' in source
+    assert 'RABISPEECH_MODEL_ROOT' in source
 
 
 def test_reload_uses_uvicorn_factory_and_limits_watch_directory() -> None:

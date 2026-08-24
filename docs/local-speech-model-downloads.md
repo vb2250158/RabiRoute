@@ -20,7 +20,15 @@
 
 ## 1. 目录约定
 
-不要把模型权重、虚拟环境和真实参考音频放进 Git 仓库。以下示例自行替换：
+不要把模型权重、虚拟环境、真实参考音频或运行配置放进 Git 仓库或可被安装包覆盖的目录。Windows 默认把它们放在当前用户的本机运行区：
+
+```text
+%LOCALAPPDATA%\RabiPC\
+  RabiSpeech\                 # config.json、麦克风选择、临时文件与输出
+  models\rabispeech\          # 下载清单与 TTS / ASR / 声纹权重
+```
+
+更新 RabiRoute 或重新安装 RabiSpeech 只替换代码包；首次启动会把旧包内 `config.json` 复制到上述用户目录一次，之后不再覆盖。若必须使用另一块本机磁盘，可在启动前显式设置 `RABISPEECH_DATA_ROOT` 与 `RABISPEECH_MODEL_ROOT`；两者都必须指向非 Git、非 NAS 同步目录。以下示例自行替换：
 
 ```powershell
 $RABI_ROUTE_ROOT = 'C:\Path\To\RabiRoute'

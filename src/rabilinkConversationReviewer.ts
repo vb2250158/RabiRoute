@@ -142,6 +142,21 @@ function deliveredThread(value: unknown): CodexMonitorThread | undefined {
   return candidate as CodexMonitorThread;
 }
 
+function roleResourcePath(agentRolePath: string | undefined, ...relativeParts: string[]): string {
+  if (!agentRolePath) return "";
+  const candidate = path.join(path.dirname(path.resolve(agentRolePath)), ...relativeParts);
+  return fs.existsSync(candidate) ? candidate : "";
+}
+
+function resolveReviewPolicyPath(agentRolePath: string | undefined): string {
+  return roleResourcePath(agentRolePath, "prompts", "rabilink-proactive-review.md")
+    || roleResourcePath(agentRolePath, "prompts", "proactive-review.md");
+}
+
+function localEvidenceToolPath(agentRolePath: string | undefined): string {
+  return roleResourcePath(agentRolePath, "tools", "collect-heartbeat-evidence.ps1");
+}
+
 export function buildRabiLinkConversationReviewPrompt(input: {
   ledgerPath: string;
   archiveDir: string;
@@ -160,6 +175,18 @@ export function buildRabiLinkConversationReviewPrompt(input: {
   const first = input.pendingUserEntries[0];
   const last = latestEntry(input.pendingUserEntries);
   const sendApiUrl = `${input.gatewayManagerUrl.replace(/\/+$/, "")}/api/agent/send`;
+  const resolvedReviewPolicyPath = input.reviewPolicyPath || resolveReviewPolicyPath(input.agentRolePath);
+  const evidenceToolPath = input.reflection ? localEvidenceToolPath(input.agentRolePath) : "";
+  const localEvidenceLines = evidenceToolPath
+    ? [
+      "[本机现场取证]",
+      "本轮是主动智能反思；即使没有新增用户记录，也不能把静默当成秋雨不在场。当前人格已提供有界取证工具，且用户已明确允许每轮短时读取本机现场时，运行一次：",
+      `${evidenceToolPath} -CaptureScreen -CaptureCamera -IncludeWindowTitle -OutputPath <本机临时 manifest>。只使用本机临时目录，不把 manifest 或原始材料写回角色目录。`,
+      "实际查看 manifest 标出的成功屏幕/摄像头一帧；分别记录来源、采样时间、事实、推断、未知、自触发风险和置信度。前台窗口、进程、文件修改和本轮探针活动不等于秋雨正在操作；摄像头画面不用于身份、健康或情绪诊断。",
+      "本机语音只读取已运行的 RabiRoute speech/RabiLink 摘要；不启动第二个常驻录音器。探针失败时回退到低敏元数据并保留未知，不因单个传感器失败结束本轮。",
+      "查看后删除 manifest、屏幕图、摄像头图和证据临时目录，并核对已不存在；原始图像、音频和完整转写不得写入日记、记忆或任何外发消息。"
+    ]
+    : [];
   const proactiveSendBody = JSON.stringify({
     deliveryId: "<为本次发送生成稳定 ID；重试时保持不变>",
     routeId: input.routeProfileId,
@@ -195,7 +222,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     input.identityObservationUrl
       ? `本次若出现新的、可核对身份线索，只能 POST ${input.identityObservationUrl} 追加候选观察；说话习惯一致性可以辅助共用账号的本条消息归因，但不能单独确认身份。`
       : "",
-    input.reviewPolicyPath ? `主动审阅策略：${input.reviewPolicyPath}` : "主动审阅策略：使用本提示中的默认策略",
+    resolvedReviewPolicyPath ? `先完整读取并遵循主动审阅策略：${resolvedReviewPolicyPath}` : "主动审阅策略：使用本提示中的默认策略",
     "",
     "必须执行：",
     "1. 用结构化方式读取当前 JSONL。每行是一条 JSON；用户观察、Agent 已投递消息和手动审阅请求都在同一条时间线上。新增范围可能跨分卷；当前文件找不到起始 entryId 时，必须读取历史索引并在归档中找到它。",
@@ -206,6 +233,7 @@ export function buildRabiLinkConversationReviewPrompt(input: {
     "4. 建立或更新用户意图工作假设：当前活动、真正目标、阻碍、下一步、可利用机会、情绪/认知负荷、时效和用户希望你怎样参与。不要停在表面关键词，也不要把猜测写成事实。",
     "5. 想尽可用办法减轻用户负担。可以主动读取相关本地文件、计划和项目状态，做低风险分析、检索、草稿或预备工作；有价值时给出结果或最小下一步，不要只问泛泛的“需要我帮忙吗”。",
     "6. 只有在能带来明确帮助时才主动打断：直接问题、时间敏感提醒、风险、重要遗漏、可立即推进的下一步，或用户明确要求你介入。普通闲聊、重复、背景音和低置信片段保持安静。",
+    ...localEvidenceLines,
     "7. 任何外发、删除、购买、设备控制或配置高风险动作仍需遵守 RabiRoute 安全门；不要因为旁听到一句话就擅自执行。",
     `8. 需要对眼镜说话时，以 Content-Type=application/json POST ${sendApiUrl}。请求体示例：${proactiveSendBody}。必须明确 channel=rabilink、目标设备和呈现方式；下行不依赖上行 taskId，眼镜会按队列调用原生 TTS。若本次涉及多个 Route，必须根据对应记录的 routeProfileId 分别投递，不能把一个人格的结论发到另一个 Route。`,
     "9. 只有接口返回 ok=true 且 status=sent 才视为已投递；成功下行会自动写回同一账本。不要复述内部路径、entryId、JSON 字段或审阅过程，也不要重复已经投递过的内容。",
@@ -402,9 +430,7 @@ export class RabiLinkConversationReviewer {
       }
     }
 
-    const reviewPolicyPath = this.agentRolePath
-      ? path.join(path.dirname(this.agentRolePath), "prompts", "rabilink-proactive-review.md")
-      : "";
+    const reviewPolicyPath = resolveReviewPolicyPath(this.agentRolePath);
     const requestedRouteProfileId = [...(manual ? pendingReviewRequests : pendingUserEntries)].reverse()
       .map((entry) => entry.routeProfileId?.trim())
       .find((value): value is string => Boolean(value));

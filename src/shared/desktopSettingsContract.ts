@@ -1,5 +1,9 @@
 export const DEFAULT_SCREENSHOT_SHORTCUT = "Ctrl+Shift+S";
-export const DEFAULT_SCREENSHOT_CLIPBOARD_SHORTCUT = "F3";
+// Function keys are common game controls.  A bare F3 is especially unsafe:
+// it can steal the foreground game's daily/task shortcut and pin a screenshot
+// above the game.  Keep the desktop action global, but require a modifier.
+export const DEFAULT_SCREENSHOT_CLIPBOARD_SHORTCUT = "Ctrl+Alt+V";
+const LEGACY_GAME_CONFLICTING_CLIPBOARD_SHORTCUT = "F3";
 
 export type DesktopScreenshotSettings = {
   enabled: boolean;
@@ -32,6 +36,13 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim().slice(0, 80) : "";
 }
 
+function clipboardShortcut(value: unknown): string {
+  const normalized = text(value);
+  return normalized.toUpperCase() === LEGACY_GAME_CONFLICTING_CLIPBOARD_SHORTCUT
+    ? DEFAULT_SCREENSHOT_CLIPBOARD_SHORTCUT
+    : normalized || DEFAULT_SCREENSHOT_CLIPBOARD_SHORTCUT;
+}
+
 function desktopTheme(value: unknown): DesktopTheme {
   return typeof value === "string" && (DESKTOP_THEME_OPTIONS as readonly string[]).includes(value)
     ? value as DesktopTheme
@@ -49,7 +60,7 @@ export function normalizeDesktopSettings(value: unknown): DesktopSettings {
     screenshot: {
       enabled: screenshot.enabled === true,
       shortcut: text(screenshot.shortcut) || DEFAULT_SCREENSHOT_SHORTCUT,
-      clipboardShortcut: text(screenshot.clipboardShortcut) || DEFAULT_SCREENSHOT_CLIPBOARD_SHORTCUT,
+      clipboardShortcut: clipboardShortcut(screenshot.clipboardShortcut),
       autoCopy: screenshot.autoCopy !== false
     },
     autostart: row.autostart === true,
