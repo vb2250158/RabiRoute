@@ -4,8 +4,8 @@
   "status": "进行中",
   "priority": "high",
   "kind": "feature",
-  "currentStep": "QQ、WeCom、RabiLink 回复已进入统一 Outbox；NapCat 本地群文件会校验 allowedFileRoots 后上传，并分别审计文件与说明文本结果",
-  "nextAction": "继续把文件、审批和其他外部动作收敛为 draft、approval、send adapter、audit log 的通用 Action Gate",
+  "currentStep": "QQ、WeCom、RabiLink 回复已进入统一 Outbox；NapCat 本地群文件会校验 allowedFileRoots 后上传，并分别审计文件与说明文本结果。对正式项目任务的进展工作群通知只有在 Outbox 返回 sentMessageId 且平台引用回读成功时才允许通过；缺少映射或回执保持任务未完成。",
+  "nextAction": "继续把文件、审批和其他外部动作收敛为 draft、approval、send adapter、audit log 的通用 Action Gate，并补真实平台回读验收。",
   "waitingFor": "",
   "project": {
     "name": "RabiRoute",
@@ -19,6 +19,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-15T00:00:00+08:00",
+  "updatedAt": "2026-08-24T00:00:00+08:00",
   "keywords": ["Action Gate", "outbox", "draft", "approval", "外发", "审计"]
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import os
 import sys
 import uuid
@@ -9,12 +10,13 @@ import threading
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
 from PIL import ImageGrab
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent
+from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QFont, QFontMetrics, QBrush, QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -45,6 +47,126 @@ DEFAULT_SCREENSHOT_SHORTCUT = "Ctrl+Shift+S"
 DEFAULT_CLIPBOARD_PIN_SHORTCUT = "F3"
 _HISTORY_LIMIT = 30
 _SETTINGS_RETRY_DELAY_MS = 2_000
+_SELECTION_HANDLE_RADIUS = 5
+_SELECTION_HANDLE_HIT_SIZE = 4
+_SELECTION_MINIMUM_SIZE = 2
+_ANNOTATION_DEFAULT_COLOR = "#EF4444"
+_ANNOTATION_COLORS = ("#EF4444", "#F59E0B", "#22C55E", "#3B82F6")
+_ANNOTATION_DEFAULT_STROKE_WIDTH = 3
+_ANNOTATION_DEFAULT_FONT_SIZE = 18
+_TEXT_ANNOTATION_MINIMUM_SIZE = QSize(48, 30)
+_TEXT_ANNOTATION_DEFAULT_SIZE = QSize(260, 90)
+_TEXT_ANNOTATION_MINIMUM_FONT_SIZE = 10
+_TEXT_ANNOTATION_MAXIMUM_FONT_SIZE = 96
+_ANNOTATION_FONT_FAMILY = "Microsoft YaHei UI"
+
+_TOOLBAR_ICON_KINDS = {
+    "selection": "crop",
+    "rectangle": "rectangle",
+    "arrow": "arrow",
+    "text": "text",
+    "text-smaller": "text-smaller",
+    "text-larger": "text-larger",
+    "copy": "copy",
+    "pin": "pin",
+    "send": "send",
+}
+_TOOLBAR_LABELS = {
+    "selection": "调整选区",
+    "rectangle": "矩形框",
+    "arrow": "箭头",
+    "text": "文字标注",
+    "text-smaller": "减小文字字号",
+    "text-larger": "增大文字字号",
+    "copy": "复制截图",
+    "pin": "贴图",
+    "send": "发送截图",
+}
+
+
+def _toolbar_icon(kind: str, color: str, size: int = 24) -> QIcon:
+    """Create the small monochrome toolbar glyphs without adding an icon dependency."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor(color), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    center = size // 2
+    if kind == "crop":
+        painter.drawLine(QPoint(5, 9), QPoint(5, 5))
+        painter.drawLine(QPoint(5, 5), QPoint(9, 5))
+        painter.drawLine(QPoint(size - 9, 5), QPoint(size - 5, 5))
+        painter.drawLine(QPoint(size - 5, 5), QPoint(size - 5, 9))
+        painter.drawLine(QPoint(5, size - 9), QPoint(5, size - 5))
+        painter.drawLine(QPoint(5, size - 5), QPoint(9, size - 5))
+        painter.drawLine(QPoint(size - 9, size - 5), QPoint(size - 5, size - 5))
+        painter.drawLine(QPoint(size - 5, size - 5), QPoint(size - 5, size - 9))
+    elif kind == "rectangle":
+        painter.drawRect(QRect(5, 6, size - 10, size - 12))
+    elif kind == "arrow":
+        painter.drawLine(QPoint(5, size - 6), QPoint(size - 6, 5))
+        painter.drawLine(QPoint(size - 6, 5), QPoint(size - 13, 5))
+        painter.drawLine(QPoint(size - 6, 5), QPoint(size - 6, 12))
+    elif kind == "text":
+        font = QFont("Segoe UI", 14, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.drawText(QRect(2, 1, size - 4, size - 2), Qt.AlignmentFlag.AlignCenter, "T")
+    elif kind in ("text-smaller", "text-larger"):
+        font = QFont("Segoe UI", 12, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.drawText(QRect(2, 1, size - 4, size - 2), Qt.AlignmentFlag.AlignCenter, "T" + ("−" if kind == "text-smaller" else "+"))
+    elif kind == "copy":
+        painter.drawRect(QRect(8, 5, 11, 13))
+        painter.drawRect(QRect(5, 8, 11, 11))
+    elif kind == "pin":
+        painter.drawLine(QPoint(center, 5), QPoint(center, 14))
+        painter.drawLine(QPoint(8, 5), QPoint(size - 8, 5))
+        painter.drawLine(QPoint(9, 14), QPoint(size - 9, 14))
+        painter.drawLine(QPoint(center, 14), QPoint(7, size - 5))
+        painter.drawLine(QPoint(center, 14), QPoint(size - 7, size - 5))
+    elif kind == "color":
+        painter.setBrush(QBrush(QColor(color)))
+        painter.drawEllipse(QRect(5, 5, size - 10, size - 10))
+    elif kind == "send":
+        painter.drawLine(QPoint(4, size - 5), QPoint(size - 5, 4))
+        painter.drawLine(QPoint(size - 5, 4), QPoint(size - 8, size - 13))
+        painter.drawLine(QPoint(size - 5, 4), QPoint(size - 13, 7))
+        painter.drawLine(QPoint(4, size - 5), QPoint(size - 10, size - 7))
+        painter.drawLine(QPoint(4, size - 5), QPoint(size - 6, size - 5))
+    painter.end()
+    return QIcon(pixmap)
+
+
+class ScreenshotAnnotationTool(str, Enum):
+    SELECTION = "selection"
+    RECTANGLE = "rectangle"
+    ARROW = "arrow"
+    TEXT = "text"
+
+
+class ScreenshotSelectionHandle(str, Enum):
+    NONE = "none"
+    NORTH = "north"
+    NORTH_EAST = "north-east"
+    EAST = "east"
+    SOUTH_EAST = "south-east"
+    SOUTH = "south"
+    SOUTH_WEST = "south-west"
+    WEST = "west"
+    NORTH_WEST = "north-west"
+
+
+@dataclass(frozen=True)
+class ScreenshotAnnotation:
+    tool: ScreenshotAnnotationTool
+    start: QPoint
+    end: QPoint
+    color: str = _ANNOTATION_DEFAULT_COLOR
+    stroke_width: int = _ANNOTATION_DEFAULT_STROKE_WIDTH
+    text: str = ""
+    font_size: int = _ANNOTATION_DEFAULT_FONT_SIZE
 _PLUGIN_HOTKEY_ID_RANGE = range(0x5300, 0x5400)
 
 
@@ -593,25 +715,64 @@ class ScreenshotCaptureOverlay(QWidget):
         self._transient_paths = set(transient_paths)
         self._auto_copy_on_confirm = auto_copy_on_confirm
         self._image = QImage()
+        self._capture_pixmap = QPixmap()
+        self._dimmed_capture_pixmap = QPixmap()
         self._capture_ready = bool(history.paths)
         self._pending_action: str | None = None
         self._selection = QRect()
         self._drag_start: QPoint | None = None
         self._selection_move_offset: QPoint | None = None
+        self._selection_resize_handle = ScreenshotSelectionHandle.NONE
+        self._selection_resize_start = QRect()
+        self._annotation_tool = ScreenshotAnnotationTool.SELECTION
+        self._annotation_color = _ANNOTATION_DEFAULT_COLOR
+        self._annotation_font_size = _ANNOTATION_DEFAULT_FONT_SIZE
+        self._annotations: list[ScreenshotAnnotation] = []
+        self._active_annotation: ScreenshotAnnotation | None = None
+        self._selected_text_annotation: ScreenshotAnnotation | None = None
+        self._text_move_offset: QPoint | None = None
+        self._text_dragged = False
+        self._text_edit_on_release = False
+        self._text_resize_handle = ScreenshotSelectionHandle.NONE
+        self._text_resize_start = QRect()
+        self._text_editor: QPlainTextEdit | None = None
+        self._text_editor_source_bounds: QRect | None = None
+        self._text_editing_annotation: ScreenshotAnnotation | None = None
         self._window_candidates: tuple[ScreenshotWindowCandidate, ...] = ()
         self._hover_window_candidate: ScreenshotWindowCandidate | None = None
         self._candidate_click_pending = False
         self._pointer_position: QPoint | None = None
         self._color_preview: QColor | None = None
         self._toolbar = QFrame(self)
+        self._text_properties_bar = QFrame(self)
         self._history_label = QLabel(self)
         self._color_tip = ScreenshotColorPreviewWindow()
         self._color_magnifier = self._color_tip.magnifier
         self._color_swatch = self._color_tip.swatch
         self._color_hex_label = self._color_tip.hex_label
+        self._selection_tool_button = QPushButton("调整", self._toolbar)
+        self._rectangle_tool_button = QPushButton("框", self._toolbar)
+        self._arrow_tool_button = QPushButton("箭头", self._toolbar)
+        self._text_tool_button = QPushButton("文字", self._toolbar)
+        self._text_smaller_button = QPushButton(self._text_properties_bar)
+        self._text_font_size_label = QLabel(self._text_properties_bar)
+        self._text_larger_button = QPushButton(self._text_properties_bar)
+        self._annotation_tool_buttons = {
+            ScreenshotAnnotationTool.SELECTION: self._selection_tool_button,
+            ScreenshotAnnotationTool.RECTANGLE: self._rectangle_tool_button,
+            ScreenshotAnnotationTool.ARROW: self._arrow_tool_button,
+            ScreenshotAnnotationTool.TEXT: self._text_tool_button,
+        }
+        self._annotation_color_buttons = {
+            color: QPushButton(self._toolbar)
+            for color in _ANNOTATION_COLORS
+        }
         self._copy_button = QPushButton("复制", self._toolbar)
         self._pin_button = QPushButton("贴图", self._toolbar)
         self._send_button = QPushButton("发送", self._toolbar)
+        self._undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self._undo_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._undo_shortcut.activated.connect(self._undo_annotation)
         self._configure_window(virtual_geometry)
         self._configure_toolbar()
         self._show_history(self._history.index)
@@ -639,21 +800,658 @@ class ScreenshotCaptureOverlay(QWidget):
         colors = _screenshot_theme_colors()
         self._toolbar.setStyleSheet(
             f"QFrame {{ background: {colors['surface']}; border: 1px solid {colors['border']}; border-radius: 8px; }}"
-            f"QPushButton {{ border: 0; border-radius: 6px; padding: 6px 11px; color: {colors['text']}; }}"
-            f"QPushButton:hover {{ background: {colors['hover']}; }}"
+            f"QPushButton {{ border: 1px solid transparent; border-radius: 6px; padding: 4px; color: {colors['text']}; }}"
+            f"QPushButton:hover {{ background: {colors['hover']}; border-color: {colors['border']}; }}"
+            "QPushButton:pressed { background: #0f766e; color: white; }"
+            "QPushButton:checked { background: #0f766e; color: white; border: 2px solid #5eead4; }"
+            "QPushButton[selected=\"true\"] { background: rgba(20, 184, 166, 0.18); border: 2px solid #5eead4; }"
+            "QPushButton:disabled { color: #94a3b8; background: transparent; border-color: transparent; }"
         )
         layout = QHBoxLayout(self._toolbar)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(3)
-        layout.addWidget(self._copy_button)
-        layout.addWidget(self._pin_button)
-        layout.addWidget(self._send_button)
+        for tool, button in self._annotation_tool_buttons.items():
+            key = tool.value
+            button.setText("")
+            button.setCheckable(True)
+            button.setFixedSize(34, 34)
+            button.setIconSize(QSize(20, 20))
+            button.setToolTip(_TOOLBAR_LABELS[key])
+            button.setAccessibleName(_TOOLBAR_LABELS[key])
+            button.setObjectName("screenshotToolButton")
+            button.clicked.connect(lambda _checked=False, selected_tool=tool: self._set_annotation_tool(selected_tool))
+            layout.addWidget(button)
+        for color, button in self._annotation_color_buttons.items():
+            button.setFixedSize(30, 30)
+            button.setIconSize(QSize(18, 18))
+            button.setToolTip(f"标注颜色 {color}")
+            button.setAccessibleName(f"标注颜色 {color}")
+            button.setIcon(_toolbar_icon("color", color, 24))
+            button.clicked.connect(lambda _checked=False, selected_color=color: self._set_annotation_color(selected_color))
+            layout.addWidget(button)
+        for button, key in (
+            (self._copy_button, "copy"),
+            (self._pin_button, "pin"),
+            (self._send_button, "send"),
+        ):
+            button.setText("")
+            button.setFixedSize(34, 34)
+            button.setIconSize(QSize(20, 20))
+            button.setToolTip(_TOOLBAR_LABELS[key])
+            button.setAccessibleName(_TOOLBAR_LABELS[key])
+            button.setIcon(_toolbar_icon(_TOOLBAR_ICON_KINDS[key], colors["text"]))
+            layout.addWidget(button)
+        self._text_properties_bar.setStyleSheet(
+            f"QFrame {{ background: {colors['surface']}; border: 1px solid {colors['border']}; border-radius: 8px; }}"
+            f"QPushButton {{ border: 1px solid transparent; border-radius: 6px; padding: 4px; color: {colors['text']}; }}"
+            f"QPushButton:hover {{ background: {colors['hover']}; border-color: {colors['border']}; }}"
+            "QPushButton:pressed { background: #0f766e; color: white; }"
+            "QPushButton:disabled { color: #94a3b8; background: transparent; border-color: transparent; }"
+        )
+        properties_layout = QHBoxLayout(self._text_properties_bar)
+        properties_layout.setContentsMargins(5, 5, 5, 5)
+        properties_layout.setSpacing(3)
+        for button, key, delta in (
+            (self._text_smaller_button, "text-smaller", -2),
+            (self._text_larger_button, "text-larger", 2),
+        ):
+            button.setFixedSize(30, 34)
+            button.setIconSize(QSize(20, 20))
+            button.setToolTip(_TOOLBAR_LABELS[key])
+            button.setAccessibleName(_TOOLBAR_LABELS[key])
+            button.setIcon(_toolbar_icon(_TOOLBAR_ICON_KINDS[key], colors["text"]))
+            button.clicked.connect(lambda _checked=False, size_delta=delta: self._adjust_annotation_font_size(size_delta))
+        self._text_font_size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._text_font_size_label.setMinimumWidth(28)
+        self._text_font_size_label.setToolTip("当前文字字号")
+        self._text_font_size_label.setAccessibleName("当前文字字号")
+        properties_layout.addWidget(self._text_smaller_button)
+        properties_layout.addWidget(self._text_font_size_label)
+        properties_layout.addWidget(self._text_larger_button)
         self._toolbar.hide()
-        for widget in (self._history_label, self._toolbar, self._copy_button, self._pin_button, self._send_button):
+        self._text_properties_bar.hide()
+        for widget in (
+            self._history_label,
+            self._toolbar,
+            self._text_properties_bar,
+            *self._annotation_tool_buttons.values(),
+            self._text_smaller_button,
+            self._text_larger_button,
+            *self._annotation_color_buttons.values(),
+            self._copy_button,
+            self._pin_button,
+            self._send_button,
+        ):
             widget.installEventFilter(self)
         self._copy_button.clicked.connect(self._copy)
         self._pin_button.clicked.connect(self._pin)
         self._send_button.clicked.connect(self._send)
+        self._refresh_annotation_controls()
+
+    def _refresh_annotation_controls(self) -> None:
+        colors = _screenshot_theme_colors()
+        for tool, button in self._annotation_tool_buttons.items():
+            selected = tool == self._annotation_tool
+            button.setChecked(selected)
+            button.setIcon(_toolbar_icon(_TOOLBAR_ICON_KINDS[tool.value], "#ffffff" if selected else colors["text"]))
+        text_controls_visible = self._annotation_tool == ScreenshotAnnotationTool.TEXT or self._selected_text_annotation is not None
+        self._text_properties_bar.setVisible(text_controls_visible and self._toolbar.isVisible())
+        self._text_smaller_button.setEnabled(text_controls_visible and self._annotation_font_size > _TEXT_ANNOTATION_MINIMUM_FONT_SIZE)
+        self._text_larger_button.setEnabled(text_controls_visible and self._annotation_font_size < _TEXT_ANNOTATION_MAXIMUM_FONT_SIZE)
+        self._text_font_size_label.setText(str(self._annotation_font_size))
+        self._text_font_size_label.setStyleSheet(f"color: {colors['text']}; font-weight: 700;")
+        for color, button in self._annotation_color_buttons.items():
+            selected = color == self._annotation_color
+            button.setProperty("selected", selected)
+            button.setIcon(_toolbar_icon("color", color, 24))
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.update()
+
+    def _set_annotation_tool(self, tool: ScreenshotAnnotationTool) -> None:
+        self._commit_text_annotation()
+        self._annotation_tool = tool
+        self._refresh_annotation_controls()
+        if not self._selection.isEmpty():
+            self._position_text_properties_bar()
+            self.update(self._selection_paint_bounds(self._selection))
+
+    def _set_annotation_color(self, color: str) -> None:
+        self._annotation_color = color
+        self._refresh_annotation_controls()
+
+    def _adjust_annotation_font_size(self, delta: int) -> None:
+        target = max(_TEXT_ANNOTATION_MINIMUM_FONT_SIZE, min(_TEXT_ANNOTATION_MAXIMUM_FONT_SIZE, self._annotation_font_size + delta))
+        if target == self._annotation_font_size:
+            return
+        self._annotation_font_size = target
+        annotation = self._selected_text_annotation
+        if annotation is not None:
+            updated = ScreenshotAnnotation(
+                annotation.tool,
+                annotation.start,
+                annotation.end,
+                annotation.color,
+                annotation.stroke_width,
+                annotation.text,
+                target,
+            )
+            self._replace_annotation(annotation, updated)
+            self._selected_text_annotation = updated
+        self._refresh_annotation_controls()
+        self._position_toolbar()
+
+    def _clear_annotations(self) -> None:
+        self._cancel_text_annotation()
+        self._annotations.clear()
+        self._active_annotation = None
+        self._selected_text_annotation = None
+        self._text_move_offset = None
+        self._text_edit_on_release = False
+        self._text_resize_handle = ScreenshotSelectionHandle.NONE
+        self._annotation_tool = ScreenshotAnnotationTool.SELECTION
+        self._refresh_annotation_controls()
+
+    def _undo_annotation(self) -> None:
+        self._cancel_text_annotation()
+        if not self._annotations:
+            return
+        annotation = self._annotations.pop()
+        self._update_annotation_region(annotation, None)
+        self._refresh_annotation_controls()
+
+    def _source_point(self, point: QPoint) -> QPoint:
+        if self._image.isNull() or self.width() <= 0 or self.height() <= 0:
+            return QPoint(point)
+        source = self._source_rect(QRect(point, QSize(1, 1)))
+        return source.topLeft() if not source.isEmpty() else QPoint(point)
+
+    def _overlay_point_from_source(self, point: QPoint) -> QPoint:
+        if self._image.isNull() or self._image.width() <= 0 or self._image.height() <= 0:
+            return QPoint(point)
+        return QPoint(
+            max(0, min(self.width() - 1, round(point.x() * self.width() / self._image.width()))),
+            max(0, min(self.height() - 1, round(point.y() * self.height() / self._image.height()))),
+        )
+
+    def _annotation_display_scale(self) -> float:
+        if self._image.isNull() or self._image.width() <= 0 or self._image.height() <= 0:
+            return 1.0
+        return ((self.width() / self._image.width()) + (self.height() / self._image.height())) / 2
+
+    def _annotation_source_stroke_width(self) -> int:
+        return max(1, round(_ANNOTATION_DEFAULT_STROKE_WIDTH / max(self._annotation_display_scale(), 0.01)))
+
+    def _annotation_source_font_size(self) -> int:
+        return max(_TEXT_ANNOTATION_MINIMUM_FONT_SIZE, round(self._annotation_font_size / max(self._annotation_display_scale(), 0.01)))
+
+    @staticmethod
+    def _text_annotation_source_bounds(annotation: ScreenshotAnnotation) -> QRect:
+        explicit_bounds = QRect(annotation.start, annotation.end).normalized()
+        if annotation.start != annotation.end:
+            return explicit_bounds
+        font = QFont(_ANNOTATION_FONT_FAMILY)
+        font.setPixelSize(max(_TEXT_ANNOTATION_MINIMUM_FONT_SIZE, annotation.font_size))
+        metrics = QFontMetrics(font)
+        lines = annotation.text.splitlines() or [""]
+        return QRect(
+            annotation.start,
+            QSize(
+                max(_TEXT_ANNOTATION_MINIMUM_SIZE.width(), max(metrics.horizontalAdvance(line) for line in lines) + 10),
+                max(_TEXT_ANNOTATION_MINIMUM_SIZE.height(), metrics.lineSpacing() * len(lines) + 10),
+            ),
+        )
+
+    def _text_annotation_display_rect(self, annotation: ScreenshotAnnotation) -> QRect:
+        return self._selection_from_source(self._text_annotation_source_bounds(annotation))
+
+    def _annotation_display_bounds(self, annotation: ScreenshotAnnotation) -> QRect:
+        start = self._overlay_point_from_source(annotation.start)
+        end = self._overlay_point_from_source(annotation.end)
+        stroke = max(1, round(annotation.stroke_width * self._annotation_display_scale()))
+        bounds = self._text_annotation_display_rect(annotation) if annotation.tool == ScreenshotAnnotationTool.TEXT else QRect(start, end).normalized()
+        padding = max(6, stroke * 5)
+        return bounds.adjusted(-padding, -padding, padding, padding).intersected(self.rect())
+
+    def _replace_annotation(self, previous: ScreenshotAnnotation, current: ScreenshotAnnotation) -> bool:
+        try:
+            index = self._annotations.index(previous)
+        except ValueError:
+            return False
+        self._annotations[index] = current
+        self._update_annotation_region(previous, current)
+        return True
+
+    def _select_text_annotation(self, annotation: ScreenshotAnnotation | None) -> None:
+        previous = self._selected_text_annotation
+        self._selected_text_annotation = annotation
+        if annotation is not None:
+            self._annotation_font_size = annotation.font_size
+            self._annotation_color = annotation.color
+        self._refresh_annotation_controls()
+        self._update_annotation_region(previous, annotation)
+        if not self._selection.isEmpty():
+            self._position_toolbar()
+
+    def _text_annotation_at(self, point: QPoint) -> ScreenshotAnnotation | None:
+        for annotation in reversed(self._annotations):
+            if annotation.tool == ScreenshotAnnotationTool.TEXT and self._text_annotation_display_rect(annotation).contains(point):
+                return annotation
+        return None
+
+    def _text_annotation_handle_points(self, annotation: ScreenshotAnnotation) -> tuple[tuple[ScreenshotSelectionHandle, QPoint], ...]:
+        bounds = self._text_annotation_display_rect(annotation)
+        if bounds.isEmpty():
+            return ()
+        left, top, right, bottom = bounds.left(), bounds.top(), bounds.right(), bounds.bottom()
+        return (
+            (ScreenshotSelectionHandle.NORTH_WEST, QPoint(left, top)),
+            (ScreenshotSelectionHandle.NORTH, QPoint((left + right) // 2, top)),
+            (ScreenshotSelectionHandle.NORTH_EAST, QPoint(right, top)),
+            (ScreenshotSelectionHandle.EAST, QPoint(right, (top + bottom) // 2)),
+            (ScreenshotSelectionHandle.SOUTH_EAST, QPoint(right, bottom)),
+            (ScreenshotSelectionHandle.SOUTH, QPoint((left + right) // 2, bottom)),
+            (ScreenshotSelectionHandle.SOUTH_WEST, QPoint(left, bottom)),
+            (ScreenshotSelectionHandle.WEST, QPoint(left, (top + bottom) // 2)),
+        )
+
+    def _text_annotation_handle_at(self, point: QPoint) -> ScreenshotSelectionHandle:
+        annotation = self._selected_text_annotation
+        if annotation is None:
+            return ScreenshotSelectionHandle.NONE
+        for handle, handle_point in self._text_annotation_handle_points(annotation):
+            if abs(point.x() - handle_point.x()) <= _SELECTION_HANDLE_HIT_SIZE and abs(point.y() - handle_point.y()) <= _SELECTION_HANDLE_HIT_SIZE:
+                return handle
+        return ScreenshotSelectionHandle.NONE
+
+    def _resized_text_annotation_rect(self, point: QPoint) -> QRect:
+        bounds = QRect(self._text_resize_start)
+        limit = self._selection
+        left, top, right, bottom = bounds.left(), bounds.top(), bounds.right(), bounds.bottom()
+        handle = self._text_resize_handle
+        if handle in (ScreenshotSelectionHandle.NORTH_WEST, ScreenshotSelectionHandle.WEST, ScreenshotSelectionHandle.SOUTH_WEST):
+            left = max(limit.left(), min(point.x(), right - _TEXT_ANNOTATION_MINIMUM_SIZE.width() + 1))
+        if handle in (ScreenshotSelectionHandle.NORTH_EAST, ScreenshotSelectionHandle.EAST, ScreenshotSelectionHandle.SOUTH_EAST):
+            right = min(limit.right(), max(point.x(), left + _TEXT_ANNOTATION_MINIMUM_SIZE.width() - 1))
+        if handle in (ScreenshotSelectionHandle.NORTH_WEST, ScreenshotSelectionHandle.NORTH, ScreenshotSelectionHandle.NORTH_EAST):
+            top = max(limit.top(), min(point.y(), bottom - _TEXT_ANNOTATION_MINIMUM_SIZE.height() + 1))
+        if handle in (ScreenshotSelectionHandle.SOUTH_WEST, ScreenshotSelectionHandle.SOUTH, ScreenshotSelectionHandle.SOUTH_EAST):
+            bottom = min(limit.bottom(), max(point.y(), top + _TEXT_ANNOTATION_MINIMUM_SIZE.height() - 1))
+        return QRect(left, top, right - left + 1, bottom - top + 1)
+
+    def _update_selected_text_bounds(self, display_bounds: QRect) -> None:
+        previous = self._selected_text_annotation
+        if previous is None:
+            return
+        source_bounds = self._source_rect(display_bounds.intersected(self._selection))
+        current = ScreenshotAnnotation(
+            ScreenshotAnnotationTool.TEXT,
+            source_bounds.topLeft(),
+            source_bounds.bottomRight(),
+            previous.color,
+            previous.stroke_width,
+            previous.text,
+            previous.font_size,
+        )
+        if self._replace_annotation(previous, current):
+            self._selected_text_annotation = current
+
+    def _paint_selected_text_annotation(self, painter: QPainter) -> None:
+        annotation = self._selected_text_annotation
+        if annotation is None or annotation == self._text_editing_annotation:
+            return
+        bounds = self._text_annotation_display_rect(annotation)
+        if bounds.isEmpty():
+            return
+        painter.save()
+        try:
+            color = QColor(_screenshot_theme_colors()["selection"])
+            painter.setPen(QPen(color, 1, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(bounds.adjusted(0, 0, -1, -1))
+            painter.setPen(QPen(color, 1))
+            painter.setBrush(QColor("white"))
+            for _handle, point in self._text_annotation_handle_points(annotation):
+                painter.drawRect(QRect(point.x() - _SELECTION_HANDLE_RADIUS, point.y() - _SELECTION_HANDLE_RADIUS, _SELECTION_HANDLE_RADIUS * 2 + 1, _SELECTION_HANDLE_RADIUS * 2 + 1))
+        finally:
+            painter.restore()
+
+    def _update_annotation_region(
+        self,
+        previous: ScreenshotAnnotation | None,
+        current: ScreenshotAnnotation | None,
+    ) -> None:
+        dirty = QRect()
+        if previous is not None:
+            dirty = self._annotation_display_bounds(previous)
+        if current is not None:
+            bounds = self._annotation_display_bounds(current)
+            dirty = bounds if dirty.isEmpty() else dirty.united(bounds)
+        if not dirty.isEmpty():
+            self.update(dirty)
+
+    def _draw_annotation(
+        self,
+        painter: QPainter,
+        annotation: ScreenshotAnnotation,
+        source_origin: QPoint | None = None,
+    ) -> None:
+        if source_origin is None:
+            start = self._overlay_point_from_source(annotation.start)
+            end = self._overlay_point_from_source(annotation.end)
+            stroke = max(1, round(annotation.stroke_width * self._annotation_display_scale()))
+            font_size = max(10, round(annotation.font_size * self._annotation_display_scale()))
+        else:
+            start = annotation.start - source_origin
+            end = annotation.end - source_origin
+            stroke = annotation.stroke_width
+            font_size = annotation.font_size
+        painter.save()
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            color = QColor(annotation.color)
+            pen = QPen(color, stroke)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            if annotation.tool == ScreenshotAnnotationTool.RECTANGLE:
+                painter.drawRect(QRect(start, end).normalized())
+                return
+            if annotation.tool == ScreenshotAnnotationTool.ARROW:
+                painter.drawLine(start, end)
+                dx = end.x() - start.x()
+                dy = end.y() - start.y()
+                length = math.hypot(dx, dy)
+                if length > 0:
+                    angle = math.atan2(dy, dx)
+                    head_size = max(8, stroke * 4)
+                    for offset in (math.pi * 5 / 6, -math.pi * 5 / 6):
+                        point = QPoint(
+                            round(end.x() + math.cos(angle + offset) * head_size),
+                            round(end.y() + math.sin(angle + offset) * head_size),
+                        )
+                        painter.drawLine(end, point)
+                return
+            if annotation.tool == ScreenshotAnnotationTool.TEXT and annotation.text:
+                font = QFont(_ANNOTATION_FONT_FAMILY)
+                font.setPixelSize(font_size)
+                painter.setFont(font)
+                bounds = self._text_annotation_source_bounds(annotation)
+                text_bounds = QRect(bounds.topLeft() - source_origin, bounds.size()) if source_origin is not None else self._text_annotation_display_rect(annotation)
+                painter.drawText(text_bounds, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, annotation.text)
+        finally:
+            painter.restore()
+
+    def _paint_annotations(self, painter: QPainter) -> None:
+        if self._selection.isEmpty():
+            return
+        painter.save()
+        try:
+            painter.setClipRect(self._selection)
+            for annotation in self._annotations:
+                if annotation != self._text_editing_annotation:
+                    self._draw_annotation(painter, annotation)
+            if self._active_annotation is not None:
+                self._draw_annotation(painter, self._active_annotation)
+            self._paint_selected_text_annotation(painter)
+        finally:
+            painter.restore()
+
+    def _selection_handle_points(self) -> tuple[tuple[ScreenshotSelectionHandle, QPoint], ...]:
+        if self._selection.isEmpty():
+            return ()
+        left, top = self._selection.left(), self._selection.top()
+        right, bottom = self._selection.right(), self._selection.bottom()
+        center_x = (left + right) // 2
+        center_y = (top + bottom) // 2
+        return (
+            (ScreenshotSelectionHandle.NORTH_WEST, QPoint(left, top)),
+            (ScreenshotSelectionHandle.NORTH, QPoint(center_x, top)),
+            (ScreenshotSelectionHandle.NORTH_EAST, QPoint(right, top)),
+            (ScreenshotSelectionHandle.EAST, QPoint(right, center_y)),
+            (ScreenshotSelectionHandle.SOUTH_EAST, QPoint(right, bottom)),
+            (ScreenshotSelectionHandle.SOUTH, QPoint(center_x, bottom)),
+            (ScreenshotSelectionHandle.SOUTH_WEST, QPoint(left, bottom)),
+            (ScreenshotSelectionHandle.WEST, QPoint(left, center_y)),
+        )
+
+    def _clamp_point_to_selection(self, point: QPoint) -> QPoint:
+        if self._selection.isEmpty():
+            return QPoint(point)
+        return QPoint(
+            max(self._selection.left(), min(self._selection.right(), point.x())),
+            max(self._selection.top(), min(self._selection.bottom(), point.y())),
+        )
+
+    def _selection_handle_at(self, point: QPoint) -> ScreenshotSelectionHandle:
+        for handle, handle_point in self._selection_handle_points():
+            if abs(point.x() - handle_point.x()) <= _SELECTION_HANDLE_HIT_SIZE and abs(point.y() - handle_point.y()) <= _SELECTION_HANDLE_HIT_SIZE:
+                return handle
+        return ScreenshotSelectionHandle.NONE
+
+    @staticmethod
+    def _cursor_for_selection_handle(handle: ScreenshotSelectionHandle) -> Qt.CursorShape:
+        if handle in (ScreenshotSelectionHandle.NORTH, ScreenshotSelectionHandle.SOUTH):
+            return Qt.CursorShape.SizeVerCursor
+        if handle in (ScreenshotSelectionHandle.EAST, ScreenshotSelectionHandle.WEST):
+            return Qt.CursorShape.SizeHorCursor
+        if handle in (ScreenshotSelectionHandle.NORTH_WEST, ScreenshotSelectionHandle.SOUTH_EAST):
+            return Qt.CursorShape.SizeFDiagCursor
+        if handle in (ScreenshotSelectionHandle.NORTH_EAST, ScreenshotSelectionHandle.SOUTH_WEST):
+            return Qt.CursorShape.SizeBDiagCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def _resized_selection(self, point: QPoint) -> QRect:
+        start = self._selection_resize_start
+        left, top = start.left(), start.top()
+        right, bottom = start.right(), start.bottom()
+        handle = self._selection_resize_handle
+        if handle in (ScreenshotSelectionHandle.NORTH_WEST, ScreenshotSelectionHandle.WEST, ScreenshotSelectionHandle.SOUTH_WEST):
+            left = max(0, min(point.x(), right - _SELECTION_MINIMUM_SIZE + 1))
+        if handle in (ScreenshotSelectionHandle.NORTH_EAST, ScreenshotSelectionHandle.EAST, ScreenshotSelectionHandle.SOUTH_EAST):
+            right = min(self.width() - 1, max(point.x(), left + _SELECTION_MINIMUM_SIZE - 1))
+        if handle in (ScreenshotSelectionHandle.NORTH_WEST, ScreenshotSelectionHandle.NORTH, ScreenshotSelectionHandle.NORTH_EAST):
+            top = max(0, min(point.y(), bottom - _SELECTION_MINIMUM_SIZE + 1))
+        if handle in (ScreenshotSelectionHandle.SOUTH_WEST, ScreenshotSelectionHandle.SOUTH, ScreenshotSelectionHandle.SOUTH_EAST):
+            bottom = min(self.height() - 1, max(point.y(), top + _SELECTION_MINIMUM_SIZE - 1))
+        return QRect(left, top, right - left + 1, bottom - top + 1)
+
+    def _paint_selection_handles(self, painter: QPainter) -> None:
+        if self._selection.width() < _SELECTION_MINIMUM_SIZE or self._selection.height() < _SELECTION_MINIMUM_SIZE:
+            return
+        painter.save()
+        try:
+            painter.setPen(QPen(QColor(_screenshot_theme_colors()["selection"]), 1))
+            painter.setBrush(QColor("white"))
+            for _handle, point in self._selection_handle_points():
+                painter.drawRect(
+                    QRect(
+                        point.x() - _SELECTION_HANDLE_RADIUS,
+                        point.y() - _SELECTION_HANDLE_RADIUS,
+                        _SELECTION_HANDLE_RADIUS * 2 + 1,
+                        _SELECTION_HANDLE_RADIUS * 2 + 1,
+                    )
+                )
+        finally:
+            painter.restore()
+
+    def _begin_annotation(self, point: QPoint) -> bool:
+        if self._annotation_tool == ScreenshotAnnotationTool.SELECTION or not self._selection.contains(point):
+            return False
+        if self._annotation_tool == ScreenshotAnnotationTool.TEXT:
+            self._start_text_annotation(point)
+            return True
+        source_point = self._source_point(point)
+        self._active_annotation = ScreenshotAnnotation(
+            self._annotation_tool,
+            source_point,
+            source_point,
+            self._annotation_color,
+            self._annotation_source_stroke_width(),
+            font_size=self._annotation_source_font_size(),
+        )
+        self._toolbar.hide()
+        self._text_properties_bar.hide()
+        return True
+
+    def _update_active_annotation(self, point: QPoint) -> None:
+        if self._active_annotation is None:
+            return
+        previous = self._active_annotation
+        end = self._source_point(self._clamp_point_to_selection(point))
+        self._active_annotation = ScreenshotAnnotation(
+            previous.tool,
+            previous.start,
+            end,
+            previous.color,
+            previous.stroke_width,
+            previous.text,
+            previous.font_size,
+        )
+        self._update_annotation_region(previous, self._active_annotation)
+
+    def _finish_active_annotation(self, point: QPoint) -> None:
+        if self._active_annotation is None:
+            return
+        self._update_active_annotation(point)
+        annotation = self._active_annotation
+        self._active_annotation = None
+        if annotation.start != annotation.end:
+            self._annotations.append(annotation)
+            self._refresh_annotation_controls()
+        else:
+            self._update_annotation_region(annotation, None)
+        self._position_toolbar()
+
+    def _start_text_annotation(self, point: QPoint, annotation: ScreenshotAnnotation | None = None) -> None:
+        self._commit_text_annotation()
+        point = self._clamp_point_to_selection(point)
+        if annotation is not None:
+            display_bounds = self._text_annotation_display_rect(annotation)
+            source_bounds = self._text_annotation_source_bounds(annotation)
+            self._select_text_annotation(annotation)
+        else:
+            right = min(self._selection.right(), point.x() + _TEXT_ANNOTATION_DEFAULT_SIZE.width() - 1)
+            bottom = min(self._selection.bottom(), point.y() + _TEXT_ANNOTATION_DEFAULT_SIZE.height() - 1)
+            display_bounds = QRect(point, QPoint(max(point.x() + _TEXT_ANNOTATION_MINIMUM_SIZE.width() - 1, right), max(point.y() + _TEXT_ANNOTATION_MINIMUM_SIZE.height() - 1, bottom))).intersected(self._selection)
+            source_bounds = self._source_rect(display_bounds)
+        editor = QPlainTextEdit(self)
+        # Keep a real text editor for keyboard input and selection, but remove the
+        # visible input-box chrome so text is edited directly on the screenshot.
+        editor.setContentsMargins(0, 0, 0, 0)
+        editor.setViewportMargins(0, 0, 0, 0)
+        editor.document().setDocumentMargin(0.0)
+        editor.setPlaceholderText("")
+        editor.setPlainText(annotation.text if annotation is not None else "")
+        editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        editor.setFrameStyle(QFrame.Shape.NoFrame)
+        editor.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        editor.setStyleSheet(
+            f"background: transparent; color: {annotation.color if annotation is not None else self._annotation_color}; border: none; padding: 0; selection-background-color: rgba(20, 184, 166, 0.28);"
+        )
+        font = QFont(_ANNOTATION_FONT_FAMILY)
+        font.setPixelSize(max(_TEXT_ANNOTATION_MINIMUM_FONT_SIZE, round((annotation.font_size if annotation is not None else self._annotation_font_size) * self._annotation_display_scale())))
+        editor.setFont(font)
+        editor.setGeometry(display_bounds)
+        editor.installEventFilter(self)
+        self._text_editor = editor
+        self._text_editor_source_bounds = source_bounds
+        self._text_editing_annotation = annotation
+        editor.textChanged.connect(self._resize_text_editor_to_content)
+        self._undo_shortcut.setEnabled(False)
+        self._toolbar.hide()
+        self._text_properties_bar.hide()
+        self.update(self._annotation_display_bounds(annotation) if annotation is not None else display_bounds)
+        editor.show()
+        editor.raise_()
+        if annotation is None:
+            self._resize_text_editor_to_content()
+        editor.setFocus()
+
+    def _resize_text_editor_to_content(self) -> None:
+        editor = self._text_editor
+        if editor is None or self._selection.isEmpty():
+            return
+        text = editor.toPlainText()
+        lines = text.split("\n") or [""]
+        metrics = editor.fontMetrics()
+        width = max((metrics.horizontalAdvance(line) for line in lines), default=0) + 4
+        height = metrics.lineSpacing() * max(1, len(lines)) + 4
+        origin = editor.geometry().topLeft()
+        max_width = max(2, self._selection.right() - origin.x() + 1)
+        max_height = max(2, self._selection.bottom() - origin.y() + 1)
+        next_geometry = QRect(
+            origin,
+            QSize(
+                max(2, min(max_width, width)),
+                max(2, min(max_height, height)),
+            ),
+        )
+        previous_geometry = QRect(editor.geometry())
+        if next_geometry != previous_geometry:
+            editor.setGeometry(next_geometry)
+            self.update(previous_geometry.united(next_geometry))
+        self._text_editor_source_bounds = self._source_rect(next_geometry)
+
+    def _commit_text_annotation(self) -> None:
+        editor = self._text_editor
+        source_bounds = self._text_editor_source_bounds
+        previous = self._text_editing_annotation
+        if editor is None:
+            return
+        self._text_editor = None
+        self._text_editor_source_bounds = None
+        self._text_editing_annotation = None
+        self._undo_shortcut.setEnabled(True)
+        text = editor.toPlainText().strip()
+        color = previous.color if previous is not None else self._annotation_color
+        font_size = previous.font_size if previous is not None else self._annotation_source_font_size()
+        current = None
+        if text and source_bounds is not None:
+            current = ScreenshotAnnotation(
+                ScreenshotAnnotationTool.TEXT,
+                source_bounds.topLeft(),
+                source_bounds.bottomRight(),
+                color,
+                previous.stroke_width if previous is not None else self._annotation_source_stroke_width(),
+                text,
+                font_size,
+            )
+        editor.hide()
+        editor.deleteLater()
+        if previous is not None:
+            if current is None:
+                if previous in self._annotations:
+                    self._annotations.remove(previous)
+                    self._update_annotation_region(previous, None)
+                self._select_text_annotation(None)
+            elif self._replace_annotation(previous, current):
+                self._select_text_annotation(current)
+        elif current is not None:
+            self._annotations.append(current)
+            self._select_text_annotation(current)
+            self._update_annotation_region(None, current)
+        self._refresh_annotation_controls()
+        if not self._selection.isEmpty():
+            self._position_toolbar()
+
+    def _cancel_text_annotation(self) -> None:
+        if self._text_editor is None:
+            return
+        editor = self._text_editor
+        previous = self._text_editing_annotation
+        self._text_editor = None
+        self._text_editor_source_bounds = None
+        self._text_editing_annotation = None
+        self._undo_shortcut.setEnabled(True)
+        editor.hide()
+        editor.deleteLater()
+        self._select_text_annotation(previous)
+        if previous is not None:
+            self.update(self._annotation_display_bounds(previous))
 
     @staticmethod
     def _virtual_geometry() -> QRect:
@@ -672,6 +1470,7 @@ class ScreenshotCaptureOverlay(QWidget):
             self.update()
             return
         index = max(0, min(index, len(self._history.paths) - 1))
+        self._clear_annotations()
         path = self._history.paths[index]
         image = QImage(str(path))
         if image.isNull():
@@ -680,10 +1479,12 @@ class ScreenshotCaptureOverlay(QWidget):
             return
         self._history = ScreenshotHistory(self._history.paths, index)
         self._image = image
+        self._invalidate_render_cache()
         self._capture_ready = True
         source_rect = self._region_store.get(path) if self._region_store is not None else None
         self._selection = self._selection_from_source(source_rect) if source_rect is not None else QRect()
         self._toolbar.hide()
+        self._text_properties_bar.hide()
         self._history_label.setText(f"{index + 1} / {len(self._history.paths)}    < 上一张    > 下一张")
         self._history_label.adjustSize()
         if not self._selection.isEmpty():
@@ -694,6 +1495,8 @@ class ScreenshotCaptureOverlay(QWidget):
         if image.isNull():
             return
         self._image = image
+        self._invalidate_render_cache()
+        self._clear_annotations()
         self._update_color_preview()
         self._history_label.setText("正在保存截图…")
         self._history_label.adjustSize()
@@ -724,11 +1527,88 @@ class ScreenshotCaptureOverlay(QWidget):
         self._history_label.adjustSize()
         self.update()
 
+    def _invalidate_render_cache(self) -> None:
+        self._capture_pixmap = QPixmap()
+        self._dimmed_capture_pixmap = QPixmap()
+
+    def _ensure_render_cache(self) -> None:
+        if self._image.isNull() or self.size().isEmpty():
+            self._invalidate_render_cache()
+            return
+        if self._capture_pixmap.size() == self.size() and not self._dimmed_capture_pixmap.isNull():
+            return
+        scaled = self._image.scaled(
+            self.size(),
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        self._capture_pixmap = QPixmap.fromImage(scaled)
+        dimmed = scaled.copy()
+        painter = QPainter(dimmed)
+        try:
+            painter.fillRect(dimmed.rect(), QColor(15, 23, 42, 132))
+        finally:
+            painter.end()
+        self._dimmed_capture_pixmap = QPixmap.fromImage(dimmed)
+
     def _image_selection(self) -> QImage:
         if self._selection.isEmpty() or self._image.isNull() or self.width() <= 0 or self.height() <= 0:
             return QImage()
         source = self._source_rect(self._selection)
-        return self._image.copy(source)
+        image = self._image.copy(source)
+        if image.isNull() or not self._annotations:
+            return image
+        painter = QPainter(image)
+        try:
+            for annotation in self._annotations:
+                self._draw_annotation(painter, annotation, source.topLeft())
+        finally:
+            painter.end()
+        return image
+
+    def _selection_label(self, selection: QRect) -> tuple[str, QRect]:
+        source = self._source_rect(selection)
+        label = f"{source.width()} × {source.height()}" if not source.isNull() else "正在准备截图…"
+        metrics = self.fontMetrics()
+        label_rect = QRect(
+            selection.left(),
+            max(0, selection.top() - metrics.height() - 9),
+            metrics.horizontalAdvance(label) + 14,
+            metrics.height() + 7,
+        )
+        return label, label_rect
+
+    def _selection_paint_bounds(self, selection: QRect) -> QRect:
+        if selection.isEmpty():
+            return QRect()
+        _label, label_rect = self._selection_label(selection)
+        handle_padding = _SELECTION_HANDLE_RADIUS + 3
+        return selection.adjusted(-handle_padding, -handle_padding, handle_padding, handle_padding).united(label_rect.adjusted(-2, -2, 2, 2)).intersected(self.rect())
+
+    def _update_selection_region(self, previous: QRect) -> None:
+        if previous.isEmpty() != self._selection.isEmpty():
+            self.update()
+            return
+        dirty = self._selection_paint_bounds(previous).united(self._selection_paint_bounds(self._selection))
+        if dirty.isEmpty():
+            return
+        self.update(dirty)
+
+    def _set_selection(self, selection: QRect) -> None:
+        previous = QRect(self._selection)
+        self._selection = QRect(selection)
+        self._update_selection_region(previous)
+
+    def _position_text_properties_bar(self) -> None:
+        if self._selection.isEmpty() or not self._text_properties_bar.isVisible() or not self._toolbar.isVisible():
+            return
+        self._text_properties_bar.adjustSize()
+        x = max(8, min(self._toolbar.x(), self.width() - self._text_properties_bar.width() - 8))
+        below = self._toolbar.y() + self._toolbar.height() + 4
+        y = below if below + self._text_properties_bar.height() <= self.height() - 8 else self._toolbar.y() - self._text_properties_bar.height() - 4
+        y = max(8, min(y, self.height() - self._text_properties_bar.height() - 8))
+        self._text_properties_bar.move(x, y)
+        self._text_properties_bar.raise_()
 
     def _position_toolbar(self) -> None:
         if self._selection.isEmpty():
@@ -741,16 +1621,20 @@ class ScreenshotCaptureOverlay(QWidget):
         self._toolbar.move(x, y)
         self._toolbar.show()
         self._toolbar.raise_()
+        # Refresh after showing the main toolbar so a text-properties bar selected
+        # before this call is made visible and positioned in the second row.
+        self._refresh_annotation_controls()
+        self._position_text_properties_bar()
 
     def _complete_selection(self) -> None:
         self._candidate_click_pending = False
         if self._selection.width() < 2 or self._selection.height() < 2:
-            self._selection = QRect()
+            self._set_selection(QRect())
             self._toolbar.hide()
-            self.update()
+            self._text_properties_bar.hide()
             return
         self._position_toolbar()
-        self.update()
+        self.update(self._selection_paint_bounds(self._selection))
 
     def _commit_current_capture(self) -> Path | None:
         current = self._history.current
@@ -890,7 +1774,6 @@ class ScreenshotCaptureOverlay(QWidget):
         self._color_preview = color
         self.color_copy_requested.emit(color.name().upper())
         self._update_color_tip()
-        self.update()
         return True
 
     def _copy(self) -> None:
@@ -911,15 +1794,15 @@ class ScreenshotCaptureOverlay(QWidget):
         selection = self._selection_from_window_candidate(self._hover_window_candidate)
         if selection.isEmpty():
             return False
-        self._selection = selection
+        self._set_selection(selection)
         self._hover_window_candidate = None
         self._candidate_click_pending = False
         self._position_toolbar()
         self._update_color_preview()
-        self.update()
         return True
 
     def _run_selection_action(self, action: str) -> bool:
+        self._commit_text_annotation()
         if self._selection.isEmpty() and not self._focus_hovered_window_candidate():
             return False
         if not self._capture_ready:
@@ -949,24 +1832,31 @@ class ScreenshotCaptureOverlay(QWidget):
             return
         self.close()
 
-    def paintEvent(self, _event) -> None:
+    def paintEvent(self, event) -> None:
+        dirty = event.rect().intersected(self.rect())
         painter = QPainter(self)
         try:
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-            painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+            painter.fillRect(dirty, Qt.GlobalColor.transparent)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-            if not self._image.isNull():
+            self._ensure_render_cache()
+            if not self._capture_pixmap.isNull():
+                background = self._dimmed_capture_pixmap if not self._selection.isEmpty() else self._capture_pixmap
+                painter.drawPixmap(dirty, background, dirty)
+            elif not self._image.isNull():
                 painter.drawImage(self.rect(), self._image)
             if not self._selection.isEmpty():
-                painter.fillRect(self.rect(), QColor(15, 23, 42, 132))
-                if not self._image.isNull():
-                    painter.drawImage(self._selection, self._image, self._source_rect(self._selection))
+                selection_rect = self._selection.intersected(dirty)
+                if not selection_rect.isEmpty():
+                    if not self._capture_pixmap.isNull():
+                        painter.drawPixmap(selection_rect, self._capture_pixmap, selection_rect)
+                    elif not self._image.isNull():
+                        painter.drawImage(selection_rect, self._image, self._source_rect(selection_rect))
+                self._paint_annotations(painter)
                 painter.setPen(QPen(QColor(_screenshot_theme_colors()["selection"]), 2, Qt.PenStyle.DashLine))
                 painter.drawRect(self._selection.adjusted(0, 0, -1, -1))
-                selection = self._image_selection()
-                label = f"{selection.width()} × {selection.height()}" if not selection.isNull() else "正在准备截图…"
-                metrics = painter.fontMetrics()
-                label_rect = QRect(self._selection.left(), max(0, self._selection.top() - metrics.height() - 9), metrics.horizontalAdvance(label) + 14, metrics.height() + 7)
+                self._paint_selection_handles(painter)
+                label, label_rect = self._selection_label(self._selection)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(13, 148, 136, 230))
                 painter.drawRoundedRect(label_rect, 4, 4)
@@ -975,7 +1865,12 @@ class ScreenshotCaptureOverlay(QWidget):
             elif self._hover_window_candidate is not None:
                 candidate_rect = self._selection_from_window_candidate(self._hover_window_candidate)
                 if not candidate_rect.isEmpty():
-                    if not self._image.isNull():
+                    if not self._capture_pixmap.isNull():
+                        painter.drawPixmap(dirty, self._dimmed_capture_pixmap, dirty)
+                        candidate_dirty = candidate_rect.intersected(dirty)
+                        if not candidate_dirty.isEmpty():
+                            painter.drawPixmap(candidate_dirty, self._capture_pixmap, candidate_dirty)
+                    elif not self._image.isNull():
                         painter.fillRect(self.rect(), QColor(15, 23, 42, 132))
                         painter.drawImage(candidate_rect, self._image, self._source_rect(candidate_rect))
                     painter.setPen(QPen(QColor(_screenshot_theme_colors()["selection"]), 2, Qt.PenStyle.DashLine))
@@ -990,6 +1885,10 @@ class ScreenshotCaptureOverlay(QWidget):
                     painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
         finally:
             painter.end()
+
+    def resizeEvent(self, event) -> None:
+        self._invalidate_render_cache()
+        super().resizeEvent(event)
 
     def _source_rect(self, selection: QRect) -> QRect:
         if self.width() <= 0 or self.height() <= 0:
@@ -1012,6 +1911,19 @@ class ScreenshotCaptureOverlay(QWidget):
         ).intersected(self.rect())
 
     def eventFilter(self, watched: QObject, event) -> bool:
+        if watched is self._text_editor and event.type() == QEvent.Type.KeyPress and isinstance(event, QKeyEvent):
+            if event.key() == Qt.Key.Key_Escape:
+                self._cancel_text_annotation()
+                self._position_toolbar()
+                self.setFocus()
+                return True
+        if watched is not self._text_editor and event.type() == QEvent.Type.KeyPress and isinstance(event, QKeyEvent):
+            if event.key() == Qt.Key.Key_Z and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self._undo_annotation()
+                return True
+            if event.key() == Qt.Key.Key_Escape:
+                self.close()
+                return True
         if event.type() == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.RightButton:
             self.close()
             event.accept()
@@ -1026,29 +1938,81 @@ class ScreenshotCaptureOverlay(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             point = event.position().toPoint()
             self._pointer_position = point
+            if self._text_editor is not None and not self._text_editor.geometry().contains(point):
+                self._commit_text_annotation()
+                self.setFocus()
+                event.accept()
+                return
             if self._selection.isEmpty() and self._hover_window_candidate is not None:
                 selection = self._selection_from_window_candidate(self._hover_window_candidate)
                 if not selection.isEmpty():
-                    self._selection = selection
+                    self._set_selection(selection)
                     self._drag_start = point
                     self._candidate_click_pending = True
                     self._selection_move_offset = None
                     self._toolbar.hide()
-                    self.update()
+                    self._text_properties_bar.hide()
                     event.accept()
                     return
-            if not self._selection.isEmpty() and self._selection.contains(point):
-                self._selection_move_offset = point - self._selection.topLeft()
-                event.accept()
-                return
+            if not self._selection.isEmpty():
+                if self._selected_text_annotation is not None:
+                    text_handle = self._text_annotation_handle_at(point)
+                    if text_handle != ScreenshotSelectionHandle.NONE:
+                        self._text_resize_handle = text_handle
+                        self._text_resize_start = self._text_annotation_display_rect(self._selected_text_annotation)
+                        self._toolbar.hide()
+                        self._text_properties_bar.hide()
+                        self.setCursor(self._cursor_for_selection_handle(text_handle))
+                        event.accept()
+                        return
+                    text_annotation = self._text_annotation_at(point)
+                    if text_annotation is not None:
+                        self._text_edit_on_release = text_annotation == self._selected_text_annotation
+                        self._select_text_annotation(text_annotation)
+                        self._text_move_offset = point - self._text_annotation_display_rect(text_annotation).topLeft()
+                        self._text_dragged = False
+                        self._toolbar.hide()
+                        self._text_properties_bar.hide()
+                        event.accept()
+                        return
+                else:
+                    text_annotation = self._text_annotation_at(point)
+                    if text_annotation is not None:
+                        self._text_edit_on_release = False
+                        self._select_text_annotation(text_annotation)
+                        self._text_move_offset = point - self._text_annotation_display_rect(text_annotation).topLeft()
+                        self._text_dragged = False
+                        self._toolbar.hide()
+                        self._text_properties_bar.hide()
+                        event.accept()
+                        return
+                handle = self._selection_handle_at(point)
+                if handle != ScreenshotSelectionHandle.NONE:
+                    self._commit_text_annotation()
+                    self._selection_resize_handle = handle
+                    self._selection_resize_start = QRect(self._selection)
+                    self._toolbar.hide()
+                    self._text_properties_bar.hide()
+                    self.setCursor(self._cursor_for_selection_handle(handle))
+                    event.accept()
+                    return
+                if self._begin_annotation(point):
+                    event.accept()
+                    return
+                if self._selection.contains(point):
+                    self._selection_move_offset = point - self._selection.topLeft()
+                    self._toolbar.hide()
+                    self._text_properties_bar.hide()
+                    event.accept()
+                    return
             self._hover_window_candidate = None
             self._drag_start = point
             self._selection_move_offset = None
             self._candidate_click_pending = False
-            self._selection = QRect(self._drag_start, self._drag_start)
+            self._set_selection(QRect(self._drag_start, self._drag_start))
             self._toolbar.hide()
+            self._text_properties_bar.hide()
             self._update_color_preview()
-            self.update()
             event.accept()
             return
         super().mousePressEvent(event)
@@ -1056,14 +2020,38 @@ class ScreenshotCaptureOverlay(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         point = event.position().toPoint()
         self._pointer_position = point
+        if self._text_resize_handle != ScreenshotSelectionHandle.NONE and event.buttons() & Qt.MouseButton.LeftButton:
+            bounds = self._resized_text_annotation_rect(point)
+            self._update_selected_text_bounds(bounds)
+            event.accept()
+            return
+        if self._text_move_offset is not None and event.buttons() & Qt.MouseButton.LeftButton and self._selected_text_annotation is not None:
+            old_bounds = self._text_annotation_display_rect(self._selected_text_annotation)
+            target = point - self._text_move_offset
+            target.setX(max(self._selection.left(), min(target.x(), self._selection.right() - old_bounds.width() + 1)))
+            target.setY(max(self._selection.top(), min(target.y(), self._selection.bottom() - old_bounds.height() + 1)))
+            moved = QRect(target, old_bounds.size())
+            if moved.topLeft() != old_bounds.topLeft():
+                self._text_dragged = True
+                self._update_selected_text_bounds(moved)
+            event.accept()
+            return
+        if self._selection_resize_handle != ScreenshotSelectionHandle.NONE and event.buttons() & Qt.MouseButton.LeftButton:
+            self._set_selection(self._resized_selection(point))
+            event.accept()
+            return
         if self._selection_move_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
             point -= self._selection_move_offset
             x = max(0, min(point.x(), self.width() - self._selection.width()))
             y = max(0, min(point.y(), self.height() - self._selection.height()))
+            previous = QRect(self._selection)
             self._selection.moveTo(x, y)
-            self._position_toolbar()
+            self._update_selection_region(previous)
             self._update_color_preview()
-            self.update()
+            event.accept()
+            return
+        if self._active_annotation is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self._update_active_annotation(point)
             event.accept()
             return
         if self._drag_start is not None and event.buttons() & Qt.MouseButton.LeftButton:
@@ -1072,11 +2060,18 @@ class ScreenshotCaptureOverlay(QWidget):
                 return
             self._candidate_click_pending = False
             self._hover_window_candidate = None
-            self._selection = QRect(self._drag_start, point).normalized()
+            self._set_selection(QRect(self._drag_start, point).normalized())
             self._update_color_preview()
-            self.update()
             event.accept()
             return
+        if not self._selection.isEmpty():
+            handle = self._selection_handle_at(point)
+            if handle != ScreenshotSelectionHandle.NONE:
+                self.setCursor(self._cursor_for_selection_handle(handle))
+            elif self._annotation_tool == ScreenshotAnnotationTool.SELECTION and self._selection.contains(point):
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
         previous_hover = self._hover_window_candidate
         self._update_window_hover(point)
         self._update_color_preview()
@@ -1085,15 +2080,43 @@ class ScreenshotCaptureOverlay(QWidget):
         event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._text_resize_handle != ScreenshotSelectionHandle.NONE:
+            self._text_resize_handle = ScreenshotSelectionHandle.NONE
+            self._position_toolbar()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._text_move_offset is not None:
+            open_editor = self._text_edit_on_release and not self._text_dragged and self._selected_text_annotation is not None
+            annotation = self._selected_text_annotation
+            self._text_move_offset = None
+            self._text_edit_on_release = False
+            self._position_toolbar()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            if open_editor and annotation is not None:
+                self._start_text_annotation(event.position().toPoint(), annotation)
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._selection_resize_handle != ScreenshotSelectionHandle.NONE:
+            self._set_selection(self._resized_selection(event.position().toPoint()))
+            self._selection_resize_handle = ScreenshotSelectionHandle.NONE
+            self._position_toolbar()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._selection_move_offset is not None:
             self._selection_move_offset = None
             self._position_toolbar()
-            self.update()
+            self.update(self._selection_paint_bounds(self._selection))
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._active_annotation is not None:
+            self._finish_active_annotation(event.position().toPoint())
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
             if not self._candidate_click_pending:
-                self._selection = QRect(self._drag_start, event.position().toPoint()).normalized()
+                self._set_selection(QRect(self._drag_start, event.position().toPoint()).normalized())
             self._drag_start = None
             self._complete_selection()
             self._update_color_preview()
@@ -1101,7 +2124,17 @@ class ScreenshotCaptureOverlay(QWidget):
             return
         super().mouseReleaseEvent(event)
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._selection.contains(event.position().toPoint()):
+            annotation = self._text_annotation_at(event.position().toPoint())
+            if annotation is not None:
+                self._start_text_annotation(event.position().toPoint(), annotation)
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def closeEvent(self, event) -> None:
+        self._cancel_text_annotation()
         self._color_tip.close()
         self._color_tip.deleteLater()
         for path in tuple(self._transient_paths):
@@ -1116,11 +2149,14 @@ class ScreenshotCaptureOverlay(QWidget):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
             return
+        if event.key() == Qt.Key.Key_Z and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._undo_annotation()
+            return
         if event.key() == Qt.Key.Key_C and event.modifiers() == Qt.KeyboardModifier.NoModifier:
             self.copy_current_color()
             return
         if event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self._selection = self.rect()
+            self._set_selection(self.rect())
             self._complete_selection()
             return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) or (

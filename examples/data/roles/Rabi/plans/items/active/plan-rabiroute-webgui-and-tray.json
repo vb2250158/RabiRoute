@@ -6,8 +6,8 @@
   "priority": "medium",
   "kind": "ui",
   "currentStepId": "validate-windows-desktop-interactions",
-  "currentStep": "公开 README 已补充中英文的 RabiRoute Desktop 设置页截图，画面只展示主题、系统级截图、快捷键和滑词菜单，不包含账号、访问密钥、聊天内容或私有路径。WebGUI 已有统一保存入口、即时页面切换和中英文文案；当前仍缺系统级截图与滑词在真实 Windows 软件中的完整操作验收。",
-  "nextAction": "在普通 Windows 软件和 Unity 中分别验证鼠标/键盘划选、受保护剪贴板回退、人格列表、朗读、截图框选、贴图快捷键、文字与图片投递、关闭后无副作用，以及 Manager 短暂离线后的恢复；继续补充不含私密内容的界面截图。",
+  "currentStep": "系统截图已具备框选、移动、八个控制点缩放、矩形框、箭头和多行文字标注，并通过自动化测试；仍需在真实 Windows 应用中验收截图、滑词与标注后的投递。",
+  "nextAction": "在普通 Windows 软件和 Unity 中分别验证鼠标/键盘划选、受保护剪贴板回退、人格列表、朗读、截图框选与标注、贴图快捷键、文字与图片投递、关闭后无副作用，以及 Manager 短暂离线后的恢复；继续补充不含私密内容的界面截图。",
   "steps": [
     { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
     { "id": "speech-monitor", "title": "统一语音页与 Route 监视器状态读取", "status": "已完成" },
@@ -42,6 +42,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-08-20T21:45:00+08:00",
+  "updatedAt": "2026-08-24T00:00:00+08:00",
   "keywords": ["RibiWebGUI", "Manager API", "人格自动化", "定时任务", "本机脚本", "身份工作区", "共用账号", "说话习惯", "当前计划", "近期记忆", "沉淀记忆", "已归档", "消息处理看板", "图片来源审核", "Outbox 回执", "Agent 状态", "真实截图", "RabiRoute Desktop", "系统级截图", "滑词菜单", "DSH", "脱敏截图"]
 }

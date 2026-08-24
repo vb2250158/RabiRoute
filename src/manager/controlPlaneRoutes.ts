@@ -22,6 +22,7 @@ import {
   type AgentManagerApiContext
 } from "../agentAdapters/managerApi.js";
 import type { MessageAdapterType } from "../adapters/messageAdapter.js";
+import { getMessage } from "../napcat.js";
 import type { ForwardRouteKind } from "../forwarding.js";
 import { appendAdapterLogToDir } from "../history.js";
 import {
@@ -184,9 +185,15 @@ import {
   CodexHookContextService,
   type AgentRequestStopResult,
   type CodexHookContextRequest,
-  type PlanTaskCompletionDelivery
+  type PlanTaskCompletionDelivery,
 } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
+import {
+  pangHuProgressMessage,
+  stablePangHuProgressDeliveryId,
+  type PangHuProgressNotificationDelivery,
+  type PangHuProgressNotificationResult
+} from "./panghuProgressNotificationGate.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
@@ -1022,7 +1029,9 @@ const codexHookContextService = new CodexHookContextService({
   deliverPlanTaskCompletion,
   hookEnabled: codexHookEnabled,
   isManagedAgentSession,
-  recordAgentRequestStop
+  recordAgentRequestStop,
+  findPangHuProgressIssue,
+  deliverPangHuProgressNotification
 });
 const languageStyleValidator = new LanguageStyleValidator();
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
@@ -4964,6 +4973,102 @@ function runtimeForRoleDelivery(roleId: string, gatewayId: string): GatewayRunti
   return matches[0];
 }
 
+type PangHuIssueLedgerItem = {
+  planId?: string;
+  signature?: {
+    groupId?: string;
+    sourceMessageId?: string;
+    module?: string;
+    summary?: string;
+  };
+};
+
+function pangHuIssueForPlan(planId: string): PangHuIssueLedgerItem | undefined {
+  const ledgerPath = path.join(rootDir, "data", "roles", "XinghaiBuilder", "state", "issue-threads.json");
+  try {
+    const raw = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as { items?: unknown };
+    const items = Array.isArray(raw.items) ? raw.items : [];
+    const item = items.find((candidate) => candidate && typeof candidate === "object" && String((candidate as Record<string, unknown>).planId || "") === planId);
+    return item && typeof item === "object" ? item as PangHuIssueLedgerItem : undefined;
+  } catch (error) {
+    managerOperationalLog.record("warn", "panghu_progress_issue_ledger_read_failed", {
+      action: planId,
+      error: managerOperationalError(error, rootDir)
+    });
+    return undefined;
+  }
+}
+
+function findPangHuProgressIssue(plan: PlanItem): PangHuProgressNotificationDelivery["issue"] | undefined {
+  const item = pangHuIssueForPlan(plan.id);
+  const groupId = String(item?.signature?.groupId || "").trim();
+  const sourceMessageId = String(item?.signature?.sourceMessageId || "").trim();
+  if (!groupId || !sourceMessageId) return undefined;
+  return {
+    groupId,
+    sourceMessageId,
+    module: String(item?.signature?.module || "").trim() || undefined,
+    summary: String(item?.signature?.summary || "").trim() || undefined
+  };
+}
+
+function pangHuRuntimeForDelivery(delivery: PangHuProgressNotificationDelivery): GatewayRuntime {
+  const gatewayId = String(delivery.gatewayId || "").trim();
+  if (gatewayId) return runtimeForRoleDelivery(delivery.roleId, gatewayId);
+  return runtimeForRoleDelivery(delivery.roleId, "");
+}
+
+async function deliverPangHuProgressNotification(delivery: PangHuProgressNotificationDelivery): Promise<PangHuProgressNotificationResult> {
+  const runtime = pangHuRuntimeForDelivery(delivery);
+  const routeId = runtime.definition.routeProfiles?.[0]?.id || runtime.definition.id;
+  const deliveryId = stablePangHuProgressDeliveryId(delivery.plan.id, delivery.sourceSessionId, delivery.sourceTurnId);
+  const sourceMessageId = String(delivery.issue.sourceMessageId || "").trim();
+  const groupId = String(delivery.issue.groupId || "").trim();
+  if (!groupId || !sourceMessageId) return { status: "failed", reason: "issue_source_incomplete", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, error: "PangHu issue source group/message identity is incomplete." };
+  const replyOptions = {
+    rootDir,
+    routeRoot,
+    rolesRoot,
+    speechServiceUrl: speechServiceUrl(),
+    publishEvent: publishManagerEvent,
+    runtimes: [...runtimes.values()].map((item) => ({
+      ...item.definition,
+      rabiLinkRelay: rabiLinkRelayConfigFor(item.definition),
+      napcatInstances: (item.definition.napcatInstances ?? sharedNormalizeNapCatInstances(item.definition)).map((instance) => ({ ...instance, accessToken: instance.accessToken ?? "" }))
+    }))
+  };
+  const napcatInstances = runtime.definition.napcatInstances ?? sharedNormalizeNapCatInstances(runtime.definition);
+  const instance = napcatInstances.find((candidate) => candidate.enabled !== false) || napcatInstances[0];
+  const request: AgentSendRequest = {
+    deliveryId,
+    sender: { agentType: "codex_hook", sessionId: delivery.sourceSessionId },
+    routeId,
+    channel: "napcat",
+    params: {
+      target: "group",
+      groupId,
+      instanceId: instance?.id || "",
+      replyToMessageId: sourceMessageId
+    },
+    payload: { type: "text", text: pangHuProgressMessage(delivery) },
+    styleValidation: 0
+  };
+  const result = await handleAgentSend(request, replyOptions);
+  if (result.status !== "sent" || !String(result.sentMessageId || "").trim()) {
+    return { status: "failed", reason: "outbox_not_sent", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, error: result.reason || `Outbox status=${result.status}` };
+  }
+  const sentMessageId = String(result.sentMessageId).trim();
+  const sent = await getMessage(sentMessageId, { httpUrl: String(instance?.httpUrl || ""), accessToken: String(instance?.accessToken || "") });
+  const readbackId = String(sent.messageId || "").trim();
+  const rawMessage = String(sent.rawMessage || "");
+  const hasSourceQuote = rawMessage.includes(`[CQ:reply,id=${sourceMessageId}]`)
+    || (Array.isArray(sent.message) && sent.message.some((segment) => String(segment?.type || "").toLowerCase() === "reply" && String(segment?.data?.id ?? segment?.data?.message_id ?? "") === sourceMessageId));
+  if (readbackId !== sentMessageId || String(sent.groupId || "") !== groupId || !hasSourceQuote) {
+    return { status: "failed", reason: "platform_reference_readback_incomplete", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, sentMessageId, platformReferenceReadback: false, error: `NapCat get_msg readback did not prove sentMessageId=${sentMessageId}, groupId=${groupId}, and quote=${sourceMessageId}.` };
+  }
+  return { status: "sent", reason: "outbox_sent_and_napcat_reference_readback", planId: delivery.plan.id, turnId: delivery.sourceTurnId, deliveryId, sentMessageId, platformReferenceReadback: true };
+}
+
 function deliverPlanTaskCompletion(delivery: PlanTaskCompletionDelivery): Promise<void> {
   return planTaskCompletionDelivery(delivery);
 }
@@ -7245,6 +7350,7 @@ export async function startManager(): Promise<void> {
                 loadRuntimes,
                 syncRunningGateways,
                 syncRabiLinkRelay: () => syncActiveRabiLinkRelay(),
+                routeDataDir: definition => dataDirFor(definition),
                 scanAgentAdapters: () => {
                   const service = agentAdapterCatalogService;
                   if (!service) {

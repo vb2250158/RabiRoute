@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="2200" viewBox="0 0 1600 2200" role="img" aria-labelledby="title desc">
+  <title id="title">Taoran — Xinghai Builder concept preview</title>
+  <desc id="desc">An original black, blue, and white anime-inspired construction guide character concept.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#07142e"/><stop offset="1" stop-color="#102f64"/></linearGradient>
+    <linearGradient id="coat" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff"/><stop offset="1" stop-color="#cddcf5"/></linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101426"/><stop offset=".66" stop-color="#161d38"/><stop offset=".67" stop-color="#e9f3ff"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="13" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <pattern id="grid" width="86" height="86" patternUnits="userSpaceOnUse"><path d="M0 0H86V86H0Z" fill="none" stroke="#79b8ff" stroke-opacity=".22" stroke-width="2"/></pattern>
+  </defs>
+  <rect width="1600" height="2200" fill="url(#sky)"/>
+  <rect width="1600" height="2200" fill="url(#grid)" opacity=".65"/>
+  <g fill="#dcecff"><circle cx="180" cy="180" r="4"/><circle cx="350" cy="340" r="6"/><circle cx="1410" cy="250" r="5"/><circle cx="1230" cy="510" r="4"/><circle cx="110" cy="690" r="5"/><circle cx="1490" cy="800" r="4"/></g>
+  <g stroke="#6cb2ff" fill="none" opacity=".76"><path d="M0 1610 L350 1300 570 1480 870 1160 1210 1370 1600 1090" stroke-width="7"/><path d="M0 1750 L320 1430 630 1600 1000 1300 1600 1520" stroke-width="3"/></g>
+  <g stroke="#a9d7ff" fill="#112b58" stroke-width="7" opacity=".84"><path d="M115 1290h190v510H115z"/><path d="M360 1090h220v710H360z"/><path d="M1250 1070h220v730h-220z"/><path d="M1010 1260h180v540h-180z"/></g>
+  <g transform="translate(785 100)">
+    <!-- halo --> <circle cx="0" cy="285" r="270" fill="none" stroke="#9bd1ff" stroke-width="16" opacity=".8" filter="url(#glow)"/><circle cx="0" cy="285" r="245" fill="none" stroke="#fff" stroke-width="3" opacity=".85"/>
+    <!-- hair back --> <path d="M-275 445Q-320 225-165 80Q10-58 195 80Q310 195 260 500L190 690H-210Z" fill="url(#hair)" stroke="#050916" stroke-width="18"/>
+    <!-- face --> <ellipse cx="-5" cy="290" rx="195" ry="230" fill="#f4f8ff" stroke="#091125" stroke-width="15"/>
+    <!-- fringe --> <path d="M-188 230Q-150 35 0 55Q156 38 205 218Q135 160 92 100L32 238L-32 92Q-86 172-185 230Z" fill="#101426" stroke="#071024" stroke-width="15"/>
+    <path d="M85 118Q205 135 218 275Q169 228 119 260Z" fill="#edf5ff" stroke="#071024" stroke-width="13"/>
+    <!-- eyes --> <g stroke="#081126" stroke-width="12"><path d="M-125 300Q-72 254-22 300Q-68 355-125 300Z" fill="#66b4ff"/><path d="M34 300Q86 254 138 300Q87 355 34 300Z" fill="#66b4ff"/></g><circle cx="-73" cy="302" r="16" fill="#07142e"/><circle cx="86" cy="302" r="16" fill="#07142e"/>
+    <path d="M-38 420Q0 452 44 417" stroke="#1b345a" stroke-width="12" fill="none" stroke-linecap="round"/>
+    <!-- star clip --> <path d="M215 120l18 43 46 4-35 30 11 45-40-24-40 24 11-45-35-30 46-4z" fill="#fff" stroke="#0d2348" stroke-width="10"/>
+    <!-- neck --> <path d="M-65 500H65V655H-65Z" fill="#ecf4ff" stroke="#081126" stroke-width="15"/>
+    <!-- coat --> <path d="M-365 1010Q-330 665-145 595L0 710L145 595Q330 665 365 1010L305 1395H-305Z" fill="url(#coat)" stroke="#071024" stroke-width="20"/>
+    <path d="M0 710L-80 900L0 1095L80 900Z" fill="#174b99" stroke="#071024" stroke-width="14"/>
+    <path d="M-285 820L-100 910M285 820L100 910" stroke="#286dbc" stroke-width="18"/>
+    <!-- skirt --> <path d="M-278 1210H278L355 1500H-355Z" fill="#0e2856" stroke="#071024" stroke-width="20"/><g stroke="#94c9ff" stroke-width="13" opacity=".8"><path d="M-190 1220l-45 255M-60 1220l-15 255M60 1220l15 255M190 1220l45 255"/></g>
+    <!-- blueprint --> <g transform="rotate(-10 -355 1010)"><path d="M-585 925h280v220h-280z" fill="#1b74d1" fill-opacity=".3" stroke="#c7ebff" stroke-width="12" filter="url(#glow)"/><path d="M-550 1095h205v-125h-205zm34-92h140v57h-140zM-552 1060h205" fill="none" stroke="#e5f7ff" stroke-width="9"/><circle cx="-415" cy="1030" r="16" fill="#fff"/></g>
+    <!-- wrench --> <g transform="translate(370 1000) rotate(25)"><path d="M0 0q50-55 103-3l-36 38 230 230-63 63L5 98l-38 35Q-85 80-33 30Z" fill="#142d58" stroke="#dcefff" stroke-width="14"/><circle cx="265" cy="297" r="17" fill="#72baff"/></g>
+    <!-- drone --> <g transform="translate(360 560)" filter="url(#glow)"><ellipse cx="0" cy="0" rx="110" ry="55" fill="#edf6ff" stroke="#071024" stroke-width="15"/><circle cx="0" cy="0" r="23" fill="#4aa4ff"/><path d="M-80 0l-98-66M80 0l98-66M-80 0l-98 66M80 0l98 66" stroke="#edf6ff" stroke-width="14"/><circle cx="-180" cy="-68" r="24" fill="#0b1932" stroke="#8fcaff" stroke-width="9"/><circle cx="180" cy="-68" r="24" fill="#0b1932" stroke="#8fcaff" stroke-width="9"/></g>
+  </g>
+  <g font-family="Segoe UI, sans-serif" fill="#f4f9ff"><text x="100" y="1980" font-size="64" font-weight="700" letter-spacing="12">TAORAN</text><text x="104" y="2055" font-size="32" letter-spacing="5" fill="#a9d7ff">XINGHAI BUILDER · CONCEPT PREVIEW</text></g>
+</svg>

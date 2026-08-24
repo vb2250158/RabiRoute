@@ -21,6 +21,8 @@ from rabiroute_tray.manager_client import DesktopSettings  # noqa: E402
 from rabiroute_tray.plugin_catalog import DesktopPluginHotkey  # noqa: E402
 from rabiroute_tray.system_selection import SelectionDeliveryTarget  # noqa: E402
 from rabiroute_tray.system_screenshot import (  # noqa: E402
+    ScreenshotAnnotation,
+    ScreenshotAnnotationTool,
     ScreenshotCaptureOverlay,
     ScreenshotComposer,
     ScreenshotWindowCandidate,
@@ -510,6 +512,299 @@ class SystemScreenshotTest(unittest.TestCase):
             )
 
             self.assertLess(overlay._color_tip.geometry().bottom(), cursor.y())
+            overlay.close()
+
+    def test_dragging_selection_repaints_only_the_changed_region(self) -> None:
+        class TrackingOverlay(ScreenshotCaptureOverlay):
+            def __init__(self, *args, **kwargs) -> None:
+                self.update_calls: list[tuple[object, ...]] = []
+                super().__init__(*args, **kwargs)
+
+            def update(self, *args) -> None:
+                self.update_calls.append(args)
+                super().update(*args)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(1000, 600, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = TrackingOverlay(ScreenshotHistory((path,)), QRect(0, 0, 1000, 600))
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(100, 100), QPointF(100, 100), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            overlay.update_calls.clear()
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(420, 280), QPointF(420, 280), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertEqual(len(overlay.update_calls), 1)
+            dirty = overlay.update_calls[0][0]
+            self.assertIsInstance(dirty, QRect)
+            self.assertNotEqual(dirty, overlay.rect())
+            self.assertTrue(dirty.contains(overlay._selection))
+            overlay.close()
+
+    def test_moving_selection_repaints_only_the_old_and_new_selection_area(self) -> None:
+        class TrackingOverlay(ScreenshotCaptureOverlay):
+            def __init__(self, *args, **kwargs) -> None:
+                self.update_calls: list[tuple[object, ...]] = []
+                super().__init__(*args, **kwargs)
+
+            def update(self, *args) -> None:
+                self.update_calls.append(args)
+                super().update(*args)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(1000, 600, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = TrackingOverlay(ScreenshotHistory((path,)), QRect(0, 0, 1000, 600))
+            original = QRect(100, 100, 220, 140)
+            overlay._selection = QRect(original)
+            overlay._complete_selection()
+            overlay.update_calls.clear()
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(130, 120), QPointF(130, 120), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(230, 190), QPointF(230, 190), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertEqual(len(overlay.update_calls), 1)
+            dirty = overlay.update_calls[0][0]
+            self.assertIsInstance(dirty, QRect)
+            self.assertNotEqual(dirty, overlay.rect())
+            self.assertTrue(dirty.contains(original))
+            self.assertTrue(dirty.contains(overlay._selection))
+            self.assertTrue(overlay._toolbar.isHidden())
+            overlay.close()
+
+    def test_selection_edge_handle_resizes_the_existing_area(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            overlay._selection = QRect(10, 8, 30, 20)
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(39, 18), QPointF(39, 18), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(65, 18), QPointF(65, 18), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(65, 18), QPointF(65, 18), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertEqual(overlay._selection, QRect(10, 8, 56, 20))
+            overlay.close()
+
+    def test_rectangle_arrow_and_text_annotations_are_baked_into_the_selected_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            overlay._selection = QRect(0, 0, 100, 60)
+            overlay._annotations = [
+                ScreenshotAnnotation(ScreenshotAnnotationTool.RECTANGLE, QPoint(10, 10), QPoint(30, 25), "#ef4444", 3),
+                ScreenshotAnnotation(ScreenshotAnnotationTool.ARROW, QPoint(40, 12), QPoint(70, 28), "#3b82f6", 3),
+                ScreenshotAnnotation(ScreenshotAnnotationTool.TEXT, QPoint(12, 34), QPoint(12, 34), "#22c55e", 3, "注", 18),
+            ]
+
+            rendered = overlay._image_selection()
+
+            self.assertEqual(rendered.size(), QSize(100, 60))
+            self.assertGreater(rendered.pixelColor(10, 10).red(), 180)
+            self.assertGreater(rendered.pixelColor(55, 20).blue(), 100)
+            self.assertTrue(any(rendered.pixelColor(x, y) != QColor(Qt.GlobalColor.white) for y in range(34, 58) for x in range(12, 80)))
+            overlay.close()
+
+    def test_annotation_tools_add_and_undo_a_rectangle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            overlay._selection = QRect(10, 8, 80, 40)
+            overlay._set_annotation_tool(ScreenshotAnnotationTool.RECTANGLE)
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(22, 18), QPointF(22, 18), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseMove, QPointF(60, 34), QPointF(60, 34), Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(60, 34), QPointF(60, 34), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertEqual(len(overlay._annotations), 1)
+            self.assertEqual(overlay._annotations[0].tool, ScreenshotAnnotationTool.RECTANGLE)
+            overlay._undo_annotation()
+            self.assertEqual(overlay._annotations, [])
+            overlay.close()
+
+    def test_screenshot_toolbar_uses_icons_and_exposes_the_selected_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 200, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 200))
+
+            for button in overlay._annotation_tool_buttons.values():
+                self.assertFalse(button.icon().isNull())
+                self.assertTrue(button.accessibleName())
+            self.assertFalse(overlay._copy_button.icon().isNull())
+            self.assertFalse(overlay._pin_button.icon().isNull())
+            self.assertFalse(overlay._send_button.icon().isNull())
+            self.assertTrue(overlay._selection_tool_button.isChecked())
+            self.assertEqual(overlay._selection_tool_button.accessibleName(), "调整选区")
+
+            overlay._set_annotation_tool(ScreenshotAnnotationTool.ARROW)
+            self.assertFalse(overlay._selection_tool_button.isChecked())
+            self.assertTrue(overlay._arrow_tool_button.isChecked())
+
+            selected_color = "#3B82F6"
+            overlay._set_annotation_color(selected_color)
+            self.assertEqual(overlay._annotation_color_buttons[selected_color].property("selected"), True)
+            self.assertEqual(overlay._annotation_color_buttons["#EF4444"].property("selected"), False)
+            self.assertEqual(overlay._undo_shortcut.key().toString(), "Ctrl+Z")
+            self.assertIs(overlay._text_smaller_button.parentWidget(), overlay._text_properties_bar)
+            self.assertIs(overlay._text_larger_button.parentWidget(), overlay._text_properties_bar)
+            self.assertIs(overlay._text_font_size_label.parentWidget(), overlay._text_properties_bar)
+            self.assertNotIn(overlay._text_smaller_button, overlay._toolbar.findChildren(type(overlay._text_smaller_button)))
+            self.assertNotIn(overlay._text_larger_button, overlay._toolbar.findChildren(type(overlay._text_larger_button)))
+            overlay.show()
+            QApplication.processEvents()
+            overlay._selection = QRect(10, 8, 80, 40)
+            overlay._complete_selection()
+            toolbar_width = overlay._toolbar.width()
+            overlay._set_annotation_tool(ScreenshotAnnotationTool.TEXT)
+            self.assertTrue(overlay._text_properties_bar.isVisible())
+            self.assertGreaterEqual(overlay._text_properties_bar.y(), overlay._toolbar.y() + overlay._toolbar.height())
+            self.assertEqual(overlay._toolbar.width(), toolbar_width)
+            overlay._set_annotation_tool(ScreenshotAnnotationTool.ARROW)
+            self.assertFalse(overlay._text_properties_bar.isVisible())
+            overlay._annotations = [ScreenshotAnnotation(ScreenshotAnnotationTool.RECTANGLE, QPoint(10, 10), QPoint(20, 20))]
+            overlay._undo_shortcut.activated.emit()
+            self.assertEqual(overlay._annotations, [])
+            overlay.close()
+
+    def test_text_annotation_commits_the_editor_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(100, 60, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 100, 60))
+            overlay._selection = QRect(10, 8, 80, 40)
+            overlay._set_annotation_tool(ScreenshotAnnotationTool.TEXT)
+            overlay._start_text_annotation(QPoint(20, 20))
+            self.assertIsNotNone(overlay._text_editor)
+            self.assertIn("background: transparent", overlay._text_editor.styleSheet())  # type: ignore[union-attr]
+            self.assertIn("border: none", overlay._text_editor.styleSheet())  # type: ignore[union-attr]
+            self.assertEqual(overlay._text_editor.placeholderText(), "")  # type: ignore[union-attr]
+            overlay._text_editor.setPlainText("重点")  # type: ignore[union-attr]
+            overlay._commit_text_annotation()
+
+            self.assertEqual(len(overlay._annotations), 1)
+            self.assertEqual(overlay._annotations[0].text, "重点")
+            self.assertEqual(overlay._annotations[0].tool, ScreenshotAnnotationTool.TEXT)
+            overlay.close()
+
+    def test_text_editor_range_grows_with_the_text_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(180, 120, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.black)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 180, 120))
+            overlay._selection = QRect(10, 8, 160, 100)
+            overlay._set_annotation_tool(ScreenshotAnnotationTool.TEXT)
+            overlay._start_text_annotation(QPoint(20, 20))
+            editor = overlay._text_editor
+            self.assertIsNotNone(editor)
+            empty_size = editor.size()  # type: ignore[union-attr]
+
+            editor.setPlainText("XXXX")  # type: ignore[union-attr]
+            one_line_size = editor.size()  # type: ignore[union-attr]
+            self.assertGreater(one_line_size.width(), empty_size.width())
+
+            editor.setPlainText("XXXX\nXXXXXXX\nXX")  # type: ignore[union-attr]
+            multiline_size = editor.size()  # type: ignore[union-attr]
+            self.assertGreater(multiline_size.width(), one_line_size.width())
+            self.assertGreater(multiline_size.height(), one_line_size.height())
+            self.assertEqual(overlay._text_editor_source_bounds, overlay._source_rect(editor.geometry()))  # type: ignore[union-attr]
+            overlay.close()
+
+    def test_text_annotation_clicking_blank_commits_multiline_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(180, 120, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 180, 120))
+            overlay._selection = QRect(10, 8, 160, 100)
+            overlay._set_annotation_tool(ScreenshotAnnotationTool.TEXT)
+            overlay._start_text_annotation(QPoint(20, 20))
+            overlay._text_editor.setPlainText("第一行\n第二行" * 80)  # type: ignore[union-attr]
+
+            QApplication.sendEvent(
+                overlay,
+                QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(170, 100), QPointF(170, 100), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier),
+            )
+
+            self.assertIsNone(overlay._text_editor)
+            self.assertEqual(len(overlay._annotations), 1)
+            self.assertEqual(overlay._annotations[0].text, "第一行\n第二行" * 80)
+            overlay.close()
+
+    def test_selected_text_can_reopen_move_resize_and_change_font_size(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(180, 120, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 180, 120))
+            overlay._selection = QRect(10, 8, 160, 100)
+            text = ScreenshotAnnotation(ScreenshotAnnotationTool.TEXT, QPoint(20, 20), QPoint(90, 54), "#ef4444", 3, "重点\n说明", 18)
+            overlay._annotations = [text]
+            overlay._select_text_annotation(text)
+
+            overlay._update_selected_text_bounds(QRect(32, 26, 96, 48))
+            moved = overlay._selected_text_annotation
+            self.assertIsNotNone(moved)
+            self.assertEqual(moved.start, QPoint(32, 26))  # type: ignore[union-attr]
+            self.assertEqual(moved.end, QPoint(127, 73))  # type: ignore[union-attr]
+            overlay._adjust_annotation_font_size(4)
+            self.assertEqual(overlay._selected_text_annotation.font_size, 22)  # type: ignore[union-attr]
+
+            overlay._start_text_annotation(QPoint(40, 32), overlay._selected_text_annotation)
+            self.assertEqual(overlay._text_editor.toPlainText(), "重点\n说明")  # type: ignore[union-attr]
+            overlay._text_editor.setPlainText("已修改\n文字")  # type: ignore[union-attr]
+            overlay._commit_text_annotation()
+            self.assertEqual(len(overlay._annotations), 1)
+            self.assertEqual(overlay._annotations[0].text, "已修改\n文字")
             overlay.close()
 
     def test_existing_selection_can_be_dragged_without_changing_its_size(self) -> None:

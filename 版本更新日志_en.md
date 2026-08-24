@@ -25,6 +25,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - Persona-bound AgentPackets now append a shared per-turn work contract: separate facts, inferences, unknowns, and the smallest user-owned step; advance one verifiable action; and keep external messages, device control, deletion, payment, and third-party effects behind the Action Gate. Heartbeats are explicitly not attendance checks or default project audits.
 - RabiLink proactive review prefers the role-specific `prompts/rabilink-proactive-review.md` and falls back to `prompts/proactive-review.md`. A reflection turn may briefly inspect local evidence only when the role supplies a bounded tool and the user has explicitly allowed it; raw evidence must then be deleted and cannot enter memory or outbound messages.
 
+### Windows screenshot annotations and message-processing controls
+
+- System screenshots now support moving and resizing the selection with eight handles, rectangle and arrow marks, editable multiline text, color selection, font-size changes, and `Ctrl+Z` undo. Copy, pin, and send bake annotations into the image. Tray and screenshot tests cover annotation bounds, history, clipboard behavior, and actions queued until the image is ready.
+- Message-processing `maxAgents` now defaults to `1`. Route APIs expose worker/affinity readback, cleanup of stale helper tasks scoped to the Route and workspace, and controlled limit changes.
+- For formal PangHu workspaces, the Codex `Stop` Hook sends group progress only for effective progress and deduplicates by plan/progress fingerprint. Completion notification proceeds only after Outbox returns a `sentMessageId` and platform-reference readback succeeds; missing group mapping or platform receipt keeps the task incomplete.
+
 ## 0.2.0 - 2026-08-22
 
 ### WebGUI themes and hardware display checks

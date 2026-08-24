@@ -25,6 +25,7 @@ export type RabiApiContext = {
   syncRunningGateways: () => void;
   syncRabiLinkRelay: () => Promise<void>;
   scanAgentAdapters: () => Promise<Record<string, unknown>>;
+  routeDataDir: (definition: GatewayDefinition) => string;
 };
 
 type RabiInstance = {
@@ -596,6 +597,140 @@ function isSelfGuid(ctx: RabiApiContext, guid: string): boolean {
   return ctx.globalConfig.read().rabiGuid === guid;
 }
 
+
+function messageProcessingStatePaths(ctx: RabiApiContext, route: GatewayDefinition): { agents: string; affinity: string } {
+  const dir = path.join(ctx.routeDataDir(route), "message-groups");
+  return { agents: path.join(dir, "agents.json"), affinity: path.join(dir, "routing-affinity.json") };
+}
+
+function readJsonFile<T>(filePath: string, fallback: T): T {
+  try {
+    return fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, "utf8")) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function messageProcessingPayload(ctx: RabiApiContext, route: GatewayDefinition): Record<string, unknown> {
+  const paths = messageProcessingStatePaths(ctx, route);
+  const agents = readJsonFile<{ workers?: unknown[] }>(paths.agents, {});
+  const affinity = readJsonFile<{ workers?: unknown[] }>(paths.affinity, {});
+  return {
+    code: 0,
+    data: {
+      route: { id: route.id, name: route.name, messageProcessingAgents: route.messageProcessingAgents ?? {} },
+      stateFiles: {
+        agents: path.relative(ctx.rootDir, paths.agents).replace(/\\/g, "/"),
+        affinity: path.relative(ctx.rootDir, paths.affinity).replace(/\\/g, "/")
+      },
+      workers: Array.isArray(agents.workers) ? agents.workers : [],
+      affinities: Array.isArray(affinity.workers) ? affinity.workers : []
+    }
+  };
+}
+
+function managedMessageWorker(worker: Record<string, unknown>, route: GatewayDefinition, adapter?: string): boolean {
+  const workerAdapter = String(worker.agentAdapter || (String(worker.threadId || "").startsWith("session-") ? "dsh" : "codex"));
+  const expectedWorkspace = workerAdapter === "dsh" ? route.dshCwd : route.codexCwd;
+  const title = String(worker.threadName || "");
+  return (!adapter || workerAdapter === adapter)
+    && (!expectedWorkspace || path.resolve(String(worker.workspace || "")) === path.resolve(expectedWorkspace))
+    && title.includes("协助处理消息");
+}
+
+async function listDshMessageWorkers(route: GatewayDefinition): Promise<Record<string, unknown>[]> {
+  const baseUrl = (route.dshBaseUrl || "http://127.0.0.1:3080").replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/api/session.list`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      type: "client-request",
+      rpcId: `rabi-message-workers-${Date.now()}`,
+      method: "session.list",
+      payload: {}
+    })
+  });
+  const body = await response.json() as Record<string, any>;
+  const items = body.result?.ok === true && Array.isArray(body.result.value?.items)
+    ? body.result.value.items as Record<string, any>[]
+    : undefined;
+  if (!response.ok || items === undefined) {
+    throw new Error(String(body.result?.error?.message || body.message || `DSH session.list failed with HTTP ${response.status}`));
+  }
+  return items.flatMap((item) => {
+    const sessionId = String(item.sessionId || "");
+    const workspace = String(item.cwd || "");
+    const title = String(item.projections?.values?.title || "");
+    const worker = { agentAdapter: "dsh", threadId: sessionId, threadName: title, workspace };
+    return sessionId && managedMessageWorker(worker, route, "dsh") ? [worker] : [];
+  });
+}
+
+async function deleteDshSession(baseUrl: string, sessionId: string): Promise<Record<string, unknown>> {
+  const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/session.delete`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type: "client-request", rpcId: `rabi-cleanup-${sessionId}`, method: "session.delete", payload: { sessionId } })
+  });
+  const body = await response.json() as Record<string, any>;
+  if (!response.ok || body.result?.ok !== true) {
+    throw new Error(String(body.result?.error?.message || body.message || `DSH session.delete failed with HTTP ${response.status}`));
+  }
+  return body;
+}
+
+async function localMessageProcessingCleanup(
+  ctx: RabiApiContext,
+  route: GatewayDefinition,
+  body: { adapter?: string; keepSessionIds?: string[] }
+): Promise<Record<string, unknown>> {
+  const paths = messageProcessingStatePaths(ctx, route);
+  const state = readJsonFile<{ schemaVersion?: number; updatedAt?: string; workers?: Record<string, unknown>[] }>(paths.agents, {});
+  const affinity = readJsonFile<{ schemaVersion?: number; updatedAt?: string; workers?: Record<string, unknown>[] }>(paths.affinity, {});
+  const keep = new Set((body.keepSessionIds ?? []).map(String));
+  const workers = Array.isArray(state.workers) ? state.workers : [];
+  const candidates = new Map<string, Record<string, unknown>>();
+  for (const worker of workers) {
+    if (managedMessageWorker(worker, route, body.adapter)) candidates.set(String(worker.threadId || ""), worker);
+  }
+  if (!body.adapter || body.adapter === "dsh") {
+    for (const worker of await listDshMessageWorkers(route)) candidates.set(String(worker.threadId || ""), worker);
+  }
+  const selected = [...candidates.values()].filter(worker => !keep.has(String(worker.threadId || "")));
+  const deleted: string[] = [];
+  const failed: Array<Record<string, string>> = [];
+  for (const worker of selected) {
+    const threadId = String(worker.threadId || "");
+    const adapter = String(worker.agentAdapter || (threadId.startsWith("session-") ? "dsh" : "codex"));
+    try {
+      if (adapter === "dsh" && threadId) {
+        await deleteDshSession(route.dshBaseUrl || "http://127.0.0.1:3080", threadId);
+      }
+      deleted.push(threadId);
+    } catch (error) {
+      failed.push({ threadId, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  const deletedSet = new Set(deleted);
+  writeJsonFile(paths.agents, {
+    schemaVersion: state.schemaVersion ?? 2,
+    updatedAt: new Date().toISOString(),
+    workers: workers.filter(worker => !deletedSet.has(String(worker.threadId || "")))
+  });
+  const affinityWorkers = Array.isArray(affinity.workers) ? affinity.workers : [];
+  writeJsonFile(paths.affinity, {
+    schemaVersion: affinity.schemaVersion ?? 1,
+    updatedAt: new Date().toISOString(),
+    workers: affinityWorkers.filter(worker => !deletedSet.has(String(worker.threadId || "")))
+  });
+  return { code: failed.length ? -1 : 0, data: { selected: selected.map(worker => String(worker.threadId || "")), deleted, failed, kept: [...keep] } };
+}
+
 export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse, ctx: RabiApiContext): boolean {
   const pathname = requestUrl.pathname;
 
@@ -645,12 +780,83 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
     return true;
   }
 
-  const routeMatch = pathname.match(/^\/api\/rabi\/instances\/([^/]+)\/routes(?:\/([^/]+)(?:\/(agent-options|agent-binding|rabilink-replies))?)?$/);
+  const routeMatch = pathname.match(/^\/api\/rabi\/instances\/([^/]+)\/routes(?:\/([^/]+)(?:\/(agent-options|agent-binding|rabilink-replies|message-processing|message-processing-cleanup))?)?$/);
   if (!routeMatch) return false;
 
   const guid = decodeURIComponent(routeMatch[1]);
   const routeId = routeMatch[2] ? decodeURIComponent(routeMatch[2]) : "";
   const action = routeMatch[3] || "";
+
+  if ((request.method === "GET" || request.method === "PATCH") && routeId && action === "message-processing") {
+    if (!isSelfGuid(ctx, guid)) {
+      void (async () => {
+        const body = request.method === "PATCH"
+          ? await readJsonBody<Record<string, unknown>>(request)
+          : undefined;
+        const instance = await findInstance(ctx, request, requestUrl, guid);
+        return instance
+          ? proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/message-processing`, {
+            method: request.method,
+            ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+          })
+          : { status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } };
+      })()
+        .then(result => jsonResponse(response, result.status, result.body))
+        .catch(error => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    const run = async (): Promise<Record<string, unknown>> => {
+      const route = findGateway(ctx.readConfig(), routeId);
+      if (!route) return { code: -1, message: `Route not found: ${routeId}` };
+      if (request.method === "GET") return messageProcessingPayload(ctx, route);
+      const body = await readJsonBody<{ adapter?: string; maxAgents?: number }>(request);
+      const maxAgents = Math.max(1, Math.min(32, Math.floor(Number(body.maxAgents)) || 1));
+      const adapters = body.adapter ? [body.adapter] : ["codex", "dsh"];
+      route.messageProcessingAgents = { ...(route.messageProcessingAgents ?? {}) };
+      for (const adapter of adapters) {
+        if (!isAgentAdapterType(adapter)) continue;
+        route.messageProcessingAgents[adapter] = {
+          ...(route.messageProcessingAgents[adapter] ?? { enabled: false, model: "gpt-5.6-luna", reasoningEffort: "medium" }),
+          maxAgents
+        };
+      }
+      const normalized = ctx.writeConfig(ctx.readConfig());
+      ctx.loadRuntimes();
+      ctx.syncRunningGateways();
+      const updated = findGateway(normalized, routeId) ?? route;
+      return messageProcessingPayload(ctx, updated);
+    };
+    void run().then(result => jsonResponse(response, result.code === 0 ? 200 : 404, result)).catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  if (request.method === "POST" && routeId && action === "message-processing-cleanup") {
+    if (!isSelfGuid(ctx, guid)) {
+      void (async () => {
+        const body = await readJsonBody<Record<string, unknown>>(request);
+        const instance = await findInstance(ctx, request, requestUrl, guid);
+        return instance
+          ? proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/message-processing-cleanup`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body)
+          })
+          : { status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } };
+      })()
+        .then(result => jsonResponse(response, result.status, result.body))
+        .catch(error => jsonResponse(response, 502, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
+    void readJsonBody<{ adapter?: string; keepSessionIds?: string[] }>(request)
+      .then(async body => {
+        const route = findGateway(ctx.readConfig(), routeId);
+        if (!route) return { status: 404, body: { code: -1, message: `Route not found: ${routeId}` } };
+        return { status: 200, body: await localMessageProcessingCleanup(ctx, route, body) };
+      })
+      .then(result => jsonResponse(response, result.status, result.body))
+      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
 
   if (request.method === "GET" && !routeId && !action) {
     if (isSelfGuid(ctx, guid)) {
