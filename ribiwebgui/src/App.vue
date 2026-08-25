@@ -13,8 +13,8 @@ import { useGatewayStore } from "./stores/gatewayStore";
 import { configNameFor } from "./utils/gatewayHelpers";
 import { pageSaveAction } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
-import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
-import { readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
+import { applyCatalogInterfaceTheme, customVuetifyTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
+import { replaceCustomWebThemeResources, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
 import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
@@ -33,6 +33,7 @@ const { t } = useI18n();
 const vuetifyTheme = useTheme();
 const interfaceThemePreference = ref<WebThemeId>("system");
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const LEGACY_WEB_THEME_PREFERENCE_KEY = "rabiroute:webgui:theme-preference";
 let managerEvents: EventSource | null = null;
 
 async function handlePluginCatalogChanged(): Promise<void> {
@@ -48,7 +49,15 @@ function refreshInterfaceTheme(): void {
   const resolved = applyCatalogInterfaceTheme(pluginCatalogStore.themes.value, interfaceThemePreference.value, systemThemeQuery.matches);
   const selected = resolveWebThemeResource(pluginCatalogStore.themes.value, interfaceThemePreference.value);
   interfaceThemePreference.value = selected.themeId;
-  vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
+  if (selected.customTheme) {
+    const custom = customVuetifyTheme(selected.customTheme);
+    const liveCustom = vuetifyTheme.themes.value.RabiCustom;
+    liveCustom.dark = custom.dark;
+    Object.assign(liveCustom.colors, custom.colors);
+    vuetifyTheme.global.name.value = "RabiCustom";
+  } else {
+    vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
+  }
 }
 
 function onSystemThemeChanged(): void {
@@ -64,15 +73,30 @@ function onInterfaceThemeChanged(event: Event): void {
 
 async function loadInterfaceTheme(): Promise<void> {
   let desktopTheme: WebThemeId = "system";
+  let legacyWebTheme = "";
   try {
-    desktopTheme = (await desktopSettingsClient.read()).theme;
+    legacyWebTheme = window.localStorage.getItem(LEGACY_WEB_THEME_PREFERENCE_KEY)?.trim() || "";
+    window.localStorage.removeItem(LEGACY_WEB_THEME_PREFERENCE_KEY);
+  } catch {
+    // Some privacy modes deny localStorage access; Manager remains authoritative.
+  }
+  try {
+    // Theme selection now belongs to Manager settings. Remove the pre-Manager
+    // browser copy so an old tab can never override the shared source of truth.
+    let settings = await desktopSettingsClient.read();
+    replaceCustomWebThemeResources(settings.customThemes);
+    if (
+      legacyWebTheme
+      && legacyWebTheme !== settings.webTheme
+      && pluginCatalogStore.themes.value.options.some(option => option.themeId === legacyWebTheme)
+    ) {
+      settings = await desktopSettingsClient.update({ webTheme: legacyWebTheme });
+    }
+    desktopTheme = settings.webTheme;
   } catch {
     desktopTheme = "system";
   }
-  const stored = readStoredWebThemePreference();
-  interfaceThemePreference.value = pluginCatalogStore.themes.value.options.some(option => option.themeId === stored)
-    ? stored
-    : desktopTheme;
+  interfaceThemePreference.value = desktopTheme;
   refreshInterfaceTheme();
 }
 

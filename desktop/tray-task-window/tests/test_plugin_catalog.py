@@ -659,7 +659,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                     _command("capture-screenshot", "desktop.capture-screenshot"),
                     _hotkey("capture-screenshot-hotkey", "capture-screenshot", "Ctrl+Shift+S"),
                     _command("pin-clipboard-image", "desktop.pin-clipboard-image"),
-                    _hotkey("pin-clipboard-image-hotkey", "pin-clipboard-image", "F3"),
+                    _hotkey("pin-clipboard-image-hotkey", "pin-clipboard-image", "Ctrl+Alt+V"),
                     _theme("system", "builtin.desktop-theme.system.v1"),
                     _theme("light", "builtin.desktop-theme.light.v1"),
                     _theme("dark", "builtin.desktop-theme.dark.v1"),
@@ -673,7 +673,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
             [(item.command_id, item.handler_id, item.default_binding) for item in catalog.hotkeys],
             [
                 ("capture-screenshot", "desktop.capture-screenshot", "Ctrl+Shift+S"),
-                ("pin-clipboard-image", "desktop.pin-clipboard-image", "F3"),
+                ("pin-clipboard-image", "desktop.pin-clipboard-image", "Ctrl+Alt+V"),
             ],
         )
         self.assertEqual(

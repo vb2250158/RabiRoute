@@ -26,12 +26,15 @@ from rabiroute_tray.system_screenshot import (  # noqa: E402
     ScreenshotWindowCandidate,
     PinnedScreenshotStore,
     ScreenshotHistory,
+    ScreenCaptureLayout,
+    ScreenCaptureSegment,
     ScreenshotRegionStore,
     ScreenshotSettings,
     SystemScreenshotController,
     _next_plugin_hotkey_id,
     parse_hotkey,
     save_screenshot_image,
+    split_desktop_capture_by_screen,
     screenshot_history,
     screenshot_window_candidate_at,
 )
@@ -48,6 +51,22 @@ def _plugin_hotkey(command_id: str, handler_id: str, binding: str) -> DesktopPlu
         label=command_id,
         order=10,
     )
+
+
+class _FakeScreen:
+    def __init__(self, geometry: QRect, device_pixel_ratio: float, name: str = "") -> None:
+        self._geometry = geometry
+        self._device_pixel_ratio = device_pixel_ratio
+        self._name = name
+
+    def geometry(self) -> QRect:
+        return QRect(self._geometry)
+
+    def devicePixelRatio(self) -> float:
+        return self._device_pixel_ratio
+
+    def name(self) -> str:
+        return self._name
 
 
 class SystemScreenshotTest(unittest.TestCase):
@@ -74,6 +93,65 @@ class SystemScreenshotTest(unittest.TestCase):
         modifiers, key = parse_hotkey("F1") or (0, 0)
         self.assertEqual(modifiers & 0x4000, 0x4000)
         self.assertEqual(key, 0x70)
+
+    def test_capture_layout_maps_high_dpi_screen_to_native_pixels(self) -> None:
+        layout = ScreenCaptureLayout.from_screens(
+            QSize(4865, 3600),
+            (
+                _FakeScreen(QRect(0, 0, 2560, 1440), 1.0),
+                _FakeScreen(QRect(-1024, 0, 1024, 768), 1.0),
+                _FakeScreen(QRect(1, -2160, 2560, 1440), 1.5),
+            ),
+            image_origin=QPoint(-1024, -2160),
+        )
+
+        self.assertEqual(layout.virtual_geometry, QRect(-1024, -2160, 3585, 3600))
+        self.assertEqual(layout.source_rect_for_logical(QRect(1035, 10, 20, 20)), QRect(1040, 15, 30, 30))
+
+    def test_overlay_selection_uses_native_pixels_for_high_dpi_screen(self) -> None:
+        layout = ScreenCaptureLayout(
+            QRect(0, 0, 300, 100),
+            QSize(500, 100),
+            (
+                # The right half is displayed at 2x native pixels.
+                ScreenCaptureSegment(QRect(0, 0, 100, 100), QRect(0, 0, 100, 100)),
+                ScreenCaptureSegment(QRect(100, 0, 200, 100), QRect(100, 0, 400, 100)),
+            ),
+        )
+        image = QImage(500, 100, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.blue)
+        overlay = ScreenshotCaptureOverlay(
+            ScreenshotHistory(()),
+            QRect(0, 0, 300, 100),
+            capture_layout=layout,
+        )
+        overlay.set_capture_image(image)
+        overlay._selection = QRect(110, 10, 20, 20)
+
+        self.assertEqual(overlay._image_selection().size(), QSize(40, 20))
+        overlay.close()
+
+    def test_desktop_capture_is_split_into_independent_monitor_canvases(self) -> None:
+        image = QImage(250, 150, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.blue)
+        candidates = split_desktop_capture_by_screen(
+            image,
+            (
+                _FakeScreen(QRect(0, 0, 100, 100), 1.0, "Left"),
+                _FakeScreen(QRect(100, 0, 100, 100), 1.5, "Right"),
+            ),
+            image_origin=QPoint(0, 0),
+        )
+
+        self.assertEqual([(item.screen_name, item.image.size()) for item in candidates], [
+            ("Left", QSize(100, 100)),
+            ("Right", QSize(150, 150)),
+        ])
+        self.assertEqual(candidates[1].layout.virtual_geometry, QRect(100, 0, 100, 100))
+        self.assertEqual(
+            candidates[1].layout.source_rect_for_logical(QRect(10, 10, 20, 20)),
+            QRect(15, 15, 30, 30),
+        )
 
     def test_hotkey_parser_rejects_invalid_unmodified_or_incomplete_shortcuts(self) -> None:
         self.assertIsNone(parse_hotkey(""))
@@ -280,7 +358,7 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertEqual(len(list((root / ".rabiroute-message-images").glob("screenshot-*.png"))), 1)
             overlay.close()
 
-    def test_capture_overlay_is_created_before_async_capture_starts(self) -> None:
+    def test_capture_starts_async_before_a_monitor_is_selected(self) -> None:
         controller = SystemScreenshotController(
             None,  # type: ignore[arg-type]
             Path(tempfile.gettempdir()),
@@ -291,9 +369,28 @@ class SystemScreenshotTest(unittest.TestCase):
         with patch("rabiroute_tray.system_screenshot.start_qt_task", return_value=None) as start_task:
             controller._capture_requested()
 
-        self.assertIsNotNone(controller._capture_overlay)
-        self.assertEqual(start_task.call_count, 2)
+        self.assertIsNone(controller._capture_overlay)
+        self.assertEqual(start_task.call_count, 1)
         self.assertEqual(start_task.call_args_list[0].args[0].__name__, "capture_desktop_image_async")
+        controller.stop()
+
+    def test_closing_monitor_picker_only_clears_picker_state(self) -> None:
+        controller = SystemScreenshotController(
+            None,  # type: ignore[arg-type]
+            Path(tempfile.gettempdir()),
+            lambda _payload: None,
+            lambda *_args: None,
+        )
+        picker = object()
+        controller._screen_picker = picker  # type: ignore[assignment]
+        controller._capture_candidates = (object(),)  # type: ignore[assignment]
+
+        with patch("rabiroute_tray.system_screenshot.start_qt_task") as start_task:
+            controller._clear_screen_picker(picker)  # type: ignore[arg-type]
+
+        self.assertIsNone(controller._screen_picker)
+        self.assertEqual(controller._capture_candidates, ())
+        start_task.assert_not_called()
         controller.stop()
 
     def test_window_candidate_hover_uses_the_current_cursor_without_mouse_move(self) -> None:
@@ -639,6 +736,44 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertEqual(overlay._selection, source_rect)
             overlay.close()
 
+    def test_region_history_persists_the_capture_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "screen.png"
+            image = QImage(400, 100, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.blue)
+            self.assertTrue(image.save(str(path), "PNG"))
+            layout = ScreenCaptureLayout(
+                QRect(0, 0, 300, 100),
+                QSize(400, 100),
+                (ScreenCaptureSegment(QRect(100, 0, 200, 100), QRect(100, 0, 300, 100)),),
+            )
+            store = ScreenshotRegionStore(root)
+
+            store.remember_layout(path, layout)
+
+            restored = store.get_layout(path)
+            self.assertIsNotNone(restored)
+            self.assertEqual(restored, layout)
+
+    def test_region_history_moves_the_capture_layout_when_a_capture_is_committed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = root / "capture-screen.png"
+            next_path = root / "screenshot-screen.png"
+            layout = ScreenCaptureLayout(
+                QRect(0, 0, 300, 100),
+                QSize(400, 100),
+                (ScreenCaptureSegment(QRect(100, 0, 200, 100), QRect(100, 0, 300, 100)),),
+            )
+            store = ScreenshotRegionStore(root)
+            store.remember_layout(previous, layout)
+
+            store.rename_image(previous, next_path)
+
+            self.assertIsNone(store.get_layout(previous))
+            self.assertEqual(store.get_layout(next_path), layout)
+
     def test_pin_uses_the_selected_screen_position(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "screen.png"
@@ -810,7 +945,7 @@ class SystemScreenshotTest(unittest.TestCase):
         self.assertEqual(screenshot_hotkey.configurations[-1], (True, "Ctrl+Alt+S"))
         self.assertEqual(clipboard_hotkey.configurations[-1], (False, "F4"))
         controller.set_plugin_hotkeys((
-            _plugin_hotkey("pin-clipboard-image", "desktop.pin-clipboard-image", "F3"),
+            _plugin_hotkey("pin-clipboard-image", "desktop.pin-clipboard-image", "Ctrl+Alt+V"),
         ))
         self.assertEqual(screenshot_hotkey.configurations[-1], (False, "Ctrl+Alt+S"))
         self.assertEqual(clipboard_hotkey.configurations[-1], (True, "F4"))
@@ -871,7 +1006,7 @@ class SystemScreenshotTest(unittest.TestCase):
             controller._settings_retry_delay_ms = 1
             controller.set_plugin_hotkeys((
                 _plugin_hotkey("capture-screenshot", "desktop.capture-screenshot", "Ctrl+Shift+S"),
-                _plugin_hotkey("pin-clipboard-image", "desktop.pin-clipboard-image", "F3"),
+                _plugin_hotkey("pin-clipboard-image", "desktop.pin-clipboard-image", "Ctrl+Alt+V"),
             ))
             controller.start()
             deadline = time.monotonic() + 2

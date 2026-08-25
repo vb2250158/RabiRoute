@@ -166,11 +166,13 @@ test("Codex settings scan stops a stalled task catalog and records the timed-out
     durationMs: number;
     error: boolean;
   }>;
+  const catalogOperation = operations.find(item => item.operation === "manager.agent_scan.codex_catalog");
 
-  assert.ok(elapsedMs < 200, `expected bounded scan, got ${elapsedMs.toFixed(1)} ms`);
+  assert.ok(elapsedMs < 1_000, `expected bounded scan, got ${elapsedMs.toFixed(1)} ms`);
   assert.match(codex.warnings?.join(" ") ?? "", /任务目录.*超时/);
   assert.equal(operations.length >= 1, true);
-  assert.equal(operations.find(item => item.operation === "manager.agent_scan.codex_catalog")?.error, true);
+  assert.equal(catalogOperation?.error, true);
+  assert.ok((catalogOperation?.durationMs ?? Infinity) < 200, "Codex catalog timeout must remain independently bounded.");
 });
 
 

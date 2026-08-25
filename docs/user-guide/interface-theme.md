@@ -15,8 +15,9 @@
 - **跟随系统**：浏览器和 Windows 当前使用浅色或深色时，RabiRoute 随之切换。
 - **浅色**：始终使用浅色界面。
 - **深色**：始终使用深色界面。
+- **添加自定义主题**：复制当前选中主题的全部参数，编辑名称、浅/深基底、语义颜色、圆角、表面透明度和阴影；点击“保存并应用”后立即生效，并作为新的主题选项保留。
 
-保存后，当前 WebGUI 立即切换；托盘会在下一次设置刷新时切换，通常不超过十秒；重启托盘也会读取已保存的选择。
+内置主题通过页面保存按钮持久化；自定义主题在编辑面板点击“保存并应用”时直接持久化。当前 WebGUI 立即切换；托盘会在下一次设置刷新时切换，通常不超过十秒；重启托盘也会读取已保存的选择。
 
 ## 唯一设置来源
 
@@ -24,20 +25,30 @@
 
 ```json
 {
-  "theme": "system"
+  "theme": "custom:night-rain-green",
+  "webTheme": "custom:night-rain-green",
+  "customThemes": [
+    {
+      "id": "custom:night-rain-green",
+      "name": "夜雨绿",
+      "baseTheme": "dark",
+      "colors": { "success": "#16a34a" },
+      "styles": { "cornerRadius": 8, "shadow": "soft", "glassOpacity": 94 }
+    }
+  ]
 }
 ```
 
-允许值为 `system`、`light`、`dark`，缺失或无效值按 `system` 处理。Manager 的 `GET` 和 `PATCH /api/desktop/settings` 是 WebGUI 与 Windows 托盘的共同接口。浏览器本地存储、托盘私有文件和单个窗口状态都不能成为第二份主题设置。
+`theme` 允许 `system`、`light`、`dark` 或指向 `customThemes` 中现存主题的 `custom:*` ID，供 Windows Desktop 使用；`webTheme` 保存 WebGUI 选择，也允许可信插件提供的 Web 专属主题 ID。旧配置没有 `webTheme` 时会继承 `theme`；悬空的 `custom:*` 会回退到可用主题。Manager 的 `GET` 和 `PATCH /api/desktop/settings` 是 WebGUI 与 Windows Desktop 的共同接口。旧浏览器主题键只会迁移一次并删除，不能成为第二份主题设置。
 
 ## 模块分工
 
 | 模块 | 负责内容 |
 | --- | --- |
-| `src/shared/desktopSettingsContract.ts` | 主题值、默认值和输入校验。 |
+| `src/shared/interfaceThemeContract.ts` 与 `desktopSettingsContract.ts` | 内置模板、自定义主题字段、范围限制、主题选择和输入校验。 |
 | Manager | 读写主机设置并通过 `/api/desktop/settings` 返回。 |
-| WebGUI | 从 `ribiwebgui/src/themes/light/` 或 `ribiwebgui/src/themes/dark/` 读取 CSS token 和 Vuetify 色板；在“跟随系统”时监听浏览器系统颜色变化。 |
-| Windows 托盘 | 从 `desktop/tray-task-window/rabiroute_tray/themes/light/` 或 `desktop/tray-task-window/rabiroute_tray/themes/dark/` 读取调色板和菜单样式，并在刷新时更新 Qt 应用、角色面板、滑词操作条和截图窗口。 |
+| WebGUI | 内置主题从 `ribiwebgui/src/themes/light/` 或 `dark/` 读取 CSS token 和 Vuetify 色板；自定义主题把语义颜色映射到同一批 token。所有开关读取主题的关闭轨道、圆点和绿色开启态。 |
+| Windows 托盘 | 内置主题从 `desktop/tray-task-window/rabiroute_tray/themes/` 读取；自定义主题由同一份声明生成 Qt 调色板、菜单样式和现有窗口颜色替换表。 |
 
 主题只决定表现颜色和系统颜色偏好，不改变路由、消息、计划、权限或数据处理规则。
 
@@ -47,3 +58,6 @@
 2. 打开托盘菜单和角色面板，背景、文字、边框、按钮与 WebGUI 使用相同的浅色或深色模式。
 3. 在开启滑词菜单与截图功能后，操作条和截图窗口随托盘主题切换。
 4. 选择“跟随系统”后，切换系统颜色模式并确认 WebGUI 与托盘都更新。
+5. 检查不同页面的开关：关闭态与当前主题协调，开启态统一显示当前主题提供的绿色。
+6. 从当前主题创建自定义主题，修改“成功 / 开启”颜色并保存；确认 WebGUI 开关、托盘菜单和角色面板随之更新，刷新页面后仍可选择该主题。
+7. 在颜色编辑器输入非法色值或让正文、标题与卡片表面的对比度不足；保存应被阻止，并在对应字段显示修正提示。

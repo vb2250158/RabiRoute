@@ -48,6 +48,8 @@ Paraformer 文件转写的官方协议只承诺 `file_urls` 使用可公网访�
 
 角色声线从 `data/roles/<RoleId>/voice/` 读取。`voice/voice-profile.json` 是人格 TTS 配置唯一真源，统一维护模型、声线绑定、语言、语速和发声说明；Route 只维护语音消息端订阅、热/关键词投递与是否播放回复。主机麦克风、ASR 模型、VAD 和切句参数统一归 RabiSpeech。把角色 ID 传给 `voice` 即可使用角色，不需要创建 Route 或绑定 Agent。旧 Route TTS/ASR/VAD 字段仅作为兼容回退读取，不再由 WebGUI 新建或展示。TTS 播放由一条全局 FIFO 串行队列协调，跨 Route、会话、Agent、人格和模型都不抢播。
 
+Manager 可以把显式提交到 `/api/work-events/ended` 的任务结束事件交给同一条 FIFO。语音服务页的“任务完成播报”控制来源开关、人格、模板、预览与近期回执；Manager 先清洗摘要，再从目标人格的 `voice-profile.json` 解析声线并调用本机 TTS。任务事件按日期物理分卷保留，播报账本只记录决策、摘要哈希和播放回执，不复制原始摘要。当前只完成生产者契约与消费链，真实 Codex / DSH 完成事件仍待各自接入；因此设置开启不能单独证明这些处理端已经会播报。
+
 ## 安装和运行
 
 RabiRoute 的标准 Windows 安装包默认不安装语音识别、语音合成依赖或模型。只有需要语音功能时才执行下面的命令；`install.ps1` 会在插件私有目录安装依赖并生成 Windows 运行时，模型仍由 `install_models.ps1` 按需选择。

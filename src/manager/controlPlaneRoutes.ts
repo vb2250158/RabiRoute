@@ -300,6 +300,7 @@ import {
 } from "./gatewayMessageAdapterEnvironment.js";
 import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
 import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
+import { handleDesktopPetApi } from "./desktopPetRoutes.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
 import type { ScanDiagnostic } from "./scanController.js";
@@ -328,6 +329,20 @@ import {
   SelectionSpeechSettingsStore,
   selectionSpeechSettingsPath
 } from "./selectionSpeechSettings.js";
+import {
+  TaskCompletionAnnouncementLedger,
+  TaskCompletionAnnouncementService,
+  TaskCompletionAnnouncementSettingsStore
+} from "./taskCompletionAnnouncements.js";
+import type { TaskCompletionAnnouncementEvent } from "../shared/taskCompletionAnnouncementContract.js";
+import {
+  WorkEndEventLedger,
+  WorkEndEventService
+} from "./workEndEvents.js";
+import type {
+  WorkEndedEvent,
+  WorkEndedEventInput
+} from "../shared/workEndEventContract.js";
 import {
   DesktopSettingsStore,
   desktopSettingsPath
@@ -1146,6 +1161,44 @@ const speechControl = new ManagerSpeechControl({
     if (runtime) appendLog(runtime, message);
   },
   speechIngressStore
+});
+const taskCompletionAnnouncements = new TaskCompletionAnnouncementService({
+  settings: new TaskCompletionAnnouncementSettingsStore(),
+  ledger: new TaskCompletionAnnouncementLedger(),
+  synthesize: command => speechControl.synthesize(command),
+  resolveModel: async () => {
+    const available = (await speechControl.models()).filter(model => model.capability === "tts" && model.available);
+    return available.find(model => model.id.endsWith("/gpt-sovits"))?.id
+      || available.find(model => model.isDefault)?.id
+      || available[0]?.id
+      || "";
+  }
+});
+const workEndEvents = new WorkEndEventService({
+  ledger: new WorkEndEventLedger(),
+  publish: event => publishManagerEvent("work_ended", event),
+  announce: async (event: WorkEndedEvent) => {
+    if (event.source !== "codex" && event.source !== "dsh") {
+      return { handled: false, spoken: false, reason: "source_not_configured" };
+    }
+    const result = await taskCompletionAnnouncements.accept({
+      id: event.id,
+      source: event.source,
+      sessionId: event.sessionId,
+      turnId: event.turnId,
+      status: event.status === "cancelled" ? "failed" : event.status,
+      text: event.summary,
+      taskName: event.taskName,
+      isChild: event.isChild,
+      occurredAt: event.occurredAt
+    });
+    return {
+      handled: result.accepted,
+      spoken: result.spoken,
+      ...(result.reason ? { reason: result.reason } : {}),
+      ...(result.playbackJobId ? { playbackJobId: result.playbackJobId } : {})
+    };
+  }
 });
 const speechRuntimeControl = new SpeechRuntimeControl({
   rootDir,
@@ -5588,6 +5641,51 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
     );
     return true;
   }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/task-completion/settings") {
+    jsonResponse(response, 200, { code: 0, data: taskCompletionAnnouncements.settings() });
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/task-completion/settings") {
+    writeSpeechJson(response, readJsonBody<unknown>(request).then(body => taskCompletionAnnouncements.updateSettings(body)), 200, 500);
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/speech/task-completion/events") {
+    const limit = Number(requestUrl.searchParams.get("limit") || "12");
+    jsonResponse(response, 200, { code: 0, data: { records: taskCompletionAnnouncements.records(limit) } });
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/task-completion/preview") {
+    writeSpeechJson(response, taskCompletionAnnouncements.preview(), 200, 500);
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/speech/task-completion/events") {
+    writeSpeechJson(
+      response,
+      readJsonBody<TaskCompletionAnnouncementEvent>(request)
+        .then(event => workEndEvents.accept({
+          id: event.id,
+          source: event.source,
+          sessionId: event.sessionId,
+          turnId: event.turnId,
+          status: event.status,
+          summary: event.text,
+          taskName: event.taskName,
+          isChild: event.isChild,
+          occurredAt: event.occurredAt
+        }))
+        .then(result => ({
+          accepted: result.accepted,
+          duplicate: result.duplicate,
+          eventId: result.eventId,
+          spoken: result.consumers.announcement?.spoken === true,
+          reason: result.consumers.announcement?.reason,
+          playbackJobId: result.consumers.announcement?.playbackJobId
+        })),
+      200,
+      400
+    );
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === "/api/speech/models") {
     writeSpeechJson(response, speechControl.models().then(models => ({ models })));
     return true;
@@ -7020,9 +7118,20 @@ export function handleManagerEventApi(
   requestUrl: URL,
   response: http.ServerResponse
 ): boolean {
-  if (request.method !== "GET" || requestUrl.pathname !== "/api/events") return false;
-  openManagerEventStream(request, response);
-  return true;
+  if (request.method === "GET" && requestUrl.pathname === "/api/events") {
+    openManagerEventStream(request, response);
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/work-events/ended") {
+    const limit = Number(requestUrl.searchParams.get("limit") || "20");
+    jsonResponse(response, 200, { code: 0, data: { records: workEndEvents.records(limit) } });
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/work-events/ended") {
+    writeSpeechJson(response, readJsonBody<WorkEndedEventInput>(request).then(event => workEndEvents.accept(event)), 200, 400);
+    return true;
+  }
+  return false;
 }
 
 export function handlePersonaPluginApi(
@@ -7045,6 +7154,7 @@ export function handlePersonaPluginApi(
     // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
     publishManagerEvent("persona_avatar_changed", change);
   })) return true;
+  if (handleDesktopPetApi(request, requestUrl, response, resolveRoleDir, desktopSettings)) return true;
   if (handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
   if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;

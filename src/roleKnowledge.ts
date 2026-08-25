@@ -2286,7 +2286,13 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours = DEFAU
   const archived: PlanItem[] = [];
   for (const plan of listPlans(roleDir)) {
     if (plan.status !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
-    const next = { ...plan, status: "已归档" as const, archivedAt: nowIso(), updatedAt: nowIso() };
+    const next = {
+      ...plan,
+      status: "已归档" as const,
+      currentStepId: undefined,
+      archivedAt: nowIso(),
+      updatedAt: nowIso()
+    };
     updatePlan(roleDir, plan.id, next);
     archived.push(next);
   }

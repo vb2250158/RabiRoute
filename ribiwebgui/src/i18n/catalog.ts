@@ -625,7 +625,7 @@ export const englishCatalog: Record<string, string> = {
   "确认选区时自动复制到剪贴板；关闭后可按 Ctrl+C 或点击“复制”。": "Copy the selected area to the clipboard when you confirm it. When off, press Ctrl+C or select Copy.",
   "自动复制": "Auto copy",
   "贴图快捷键": "Pin-image shortcut",
-  "截图窗口打开时，直接贴出框选区域；其他时候贴出剪贴板图片。默认 F3；可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。": "With the screenshot window open, pin the selected area; otherwise pin the clipboard image. Default: F3. Use F1–F12 alone or combine it with Ctrl, Alt, Shift, or Win.",
+  "截图窗口打开时，直接贴出框选区域；其他时候贴出剪贴板图片。默认 Ctrl+Alt+V；也可以明确设置 F3。可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。": "With the screenshot window open, pin the selected area; otherwise pin the clipboard image. Default: Ctrl+Alt+V; you can explicitly choose F3. Use F1–F12 alone or combine it with Ctrl, Alt, Shift, or Win.",
   "Windows 登录启动": "Start with Windows",
   "登录 Windows 后自动启动 RabiRoute Desktop；后台运行时保留系统托盘入口。": "Launch RabiRoute Desktop when you sign in to Windows and keep a system-tray entry while it runs in the background.",
   "登录后启动": "Start on sign-in",

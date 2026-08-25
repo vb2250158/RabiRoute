@@ -646,8 +646,8 @@ def create_builtin_desktop_extension_registry(*, freeze: bool = True) -> Desktop
     registry.register_hotkey_contract(
         "pin-clipboard-image",
         "desktop.pin-clipboard-image",
-        "F3",
-        binding=lambda _item, settings: str(getattr(settings, "clipboard_shortcut", "F3")),
+        "Ctrl+Alt+V",
+        binding=lambda _item, settings: str(getattr(settings, "clipboard_shortcut", "Ctrl+Alt+V")),
         enabled=lambda _item, settings: getattr(settings, "enabled", False) is True,
         **desktop_owner,
     )

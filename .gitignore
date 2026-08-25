@@ -41,6 +41,8 @@
 /RabiRoute-Tray.exe
 /RabiRoute-Tray.new.exe
 /RabiRoute-Desktop.exe.bak-*
+/RabiRoute-Tray.exe.bak-*
+/_tmp_*
 /.idea/
 .venv/
 /.venv-tray/

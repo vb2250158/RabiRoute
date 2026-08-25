@@ -24,7 +24,7 @@
 - [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。第一次使用时从这里开始，完成一条真实投递，并学会看状态、改规则和处理常见失败。
 - [快速上手](getting-started.md) — **现行指南**。完成安装，启动 Manager，并确认浏览器能打开控制台。
 - [界面与状态](user-guide/interface-and-status.md) — **现行指南**。看懂当前 Route、Manager 连接、未保存修改、运行状态，以及设置页的截图、滑词菜单和登录启动。
-- [界面主题](user-guide/interface-theme.md) — **现行指南**。统一 WebGUI 与 Windows 托盘的浅色、深色和跟随系统设置。
+- [界面主题](user-guide/interface-theme.md) — **现行指南**。统一 WebGUI 与 Windows 托盘的浅色、深色、跟随系统和受限自定义主题。
 - [运行、日志与排障](user-guide/operations-and-troubleshooting.md) — **现行指南**。消息没有送达时，从诊断摘要开始逐项找到断点。
 - [安全、回传与数据](user-guide/safety-and-data.md) — **现行指南**。在启用外部回复或共享诊断材料前，确认权限和隐私边界。
 - [当前能力与成熟度](current-capabilities.md) — **当前事实**。核对哪些能力已经验证，哪些仍需要真实账号、网络或设备验收。

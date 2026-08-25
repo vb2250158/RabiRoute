@@ -224,7 +224,7 @@ test("AgentPacket exposes workspace paths as relative paths", () => {
   assert.ok(decision);
 
   const dataDir = path.join(process.cwd(), "data", "route", "main");
-  const roleDir = path.join(process.cwd(), "data", "roles", "Rabi");
+  const roleDir = path.join(process.cwd(), "data", "roles", "__path_projection_test__");
   const rolePath = path.join(roleDir, "persona.md");
   const packet = buildAgentPacket(decision, decision.matchedRules[0], {
     roleId: "Rabi",
@@ -234,12 +234,13 @@ test("AgentPacket exposes workspace paths as relative paths", () => {
   });
 
   assert.equal(packet.templateValues.dataDir, "data/route/main");
-  assert.equal(packet.templateValues.agentRoleDir, "data/roles/Rabi");
-  assert.equal(packet.templateValues.agentRolePath, "data/roles/Rabi/persona.md");
+  assert.equal(packet.templateValues.agentRoleDir, "data/roles/__path_projection_test__");
+  assert.equal(packet.templateValues.agentRolePath, "data/roles/__path_projection_test__/persona.md");
   assert.equal(packet.templateValues.groupLogPath, "data/route/main/group-messages.jsonl");
   assert.equal(packet.templateValues.agentInterfaceDocPath, "docs/rabi-agent-interfaces.md");
-  assert.match(packet.message, /角色文件：data\/roles\/Rabi\/persona\.md/);
+  assert.match(packet.message, /角色文件：data\/roles\/__path_projection_test__\/persona\.md/);
   assert.doesNotMatch(packet.message, new RegExp(process.cwd().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(fs.existsSync(roleDir), false);
 
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
   assert.equal(replyContext.dataDir, "data/route/main");

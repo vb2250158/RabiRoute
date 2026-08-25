@@ -27,6 +27,11 @@ import type {
   SpeechSynthesisCommand
 } from "@shared/speechControlContract";
 import type { SelectionSpeechSettings } from "@shared/selectionSpeechContract";
+import type {
+  TaskCompletionAnnouncementReceipt,
+  TaskCompletionAnnouncementRecord,
+  TaskCompletionAnnouncementSettings
+} from "@shared/taskCompletionAnnouncementContract";
 
 export type SpeechRecordsQuery = {
   limit?: number;
@@ -134,6 +139,26 @@ export const speechControlClient = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(settings)
     }
+  ),
+  taskCompletionAnnouncementSettings: (): Promise<TaskCompletionAnnouncementSettings> => managerData(
+    "/api/speech/task-completion/settings"
+  ),
+  updateTaskCompletionAnnouncementSettings: (
+    settings: TaskCompletionAnnouncementSettings
+  ): Promise<TaskCompletionAnnouncementSettings> => managerData(
+    "/api/speech/task-completion/settings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(settings)
+    }
+  ),
+  taskCompletionAnnouncementRecords: (limit = 12): Promise<{ records: TaskCompletionAnnouncementRecord[] }> => managerData(
+    `/api/speech/task-completion/events?limit=${encodeURIComponent(String(limit))}`
+  ),
+  previewTaskCompletionAnnouncement: (): Promise<TaskCompletionAnnouncementReceipt> => managerData(
+    "/api/speech/task-completion/preview",
+    { method: "POST" }
   ),
   personas: (): Promise<SpeechPersonasPayload> => managerData("/api/speech/personas"),
   records: (query: SpeechRecordsQuery = {}): Promise<SpeechRecordsPayload> => {

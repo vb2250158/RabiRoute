@@ -13,11 +13,23 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - RabiSpeech audio-stream events now use reverse limited reads over the current-file tail and archive index. File scans run in worker threads without holding the event-append lock, while live client snapshots remain on the event loop. Read-only capability, model, record, speaker, and microphone-device scans also run in worker threads, preventing roughly 90 MB of archived events from blocking health requests during concurrent Speech page loading.
 - Performance pages now read a bounded raw cache plus 10-second, 1-minute, and 5-minute incremental aggregates. A 720-hour disk retention no longer restores or keeps every raw sample resident, and 48-hour queries no longer synchronously scan large object arrays. Page queries no longer force a flush plus a second JSONL parse, and invalid recent-log limits fall back to the default. Persistent Manager and speech event streams no longer affect HTTP P95, top-level cards use the most recently reporting Manager runtime, and WebGUI starts theme, lightweight Route status, metadata, and network-option reads concurrently.
 - Windows Relay scheduled tasks no longer inherit the default 72-hour execution limit and restart after failure. Runtime-state replacement handles an existing Windows destination file and restores an orphaned backup after an interrupted replacement.
+- Automatic archival clears a legacy completed plan's `currentStepId`, which is valid only for in-progress or paused plans, before validating the archived record. The path-projection test now uses a nonexistent isolated persona directory instead of reading or archiving the developer's real Rabi plans.
+
+### Desktop pet, work-ended events, and local announcements
+
+- Manager now accepts generic work-ended events and exposes recent-event queries plus an SSE stream. Events use stable IDs; summaries are redacted by sensitive key name and then physically rotated into date shards. This delivery includes the producer contract and consumers; real Codex / DSH completion producers still require integration and device acceptance.
+- The Speech Service page now provides task-completion announcement settings, preview, and recent results. Manager owns source policy, summary cleanup, persona voice selection, and RabiSpeech global-FIFO delivery. The announcement ledger stores only decision, hash, and receipt metadata, not the original summary. Codex is enabled by default; DSH remains disabled pending its producer.
+- Added Manager APIs, constrained pack import, WebGUI settings, and a Qt consumer for the YeYu desktop pet. Manager remains the single owner of assets and settings; imports validate ownership, paths, file types, entry count, and expanded size. Automated contracts are covered; the Windows package and animation still require device acceptance.
+
+### Custom themes and multi-monitor screenshots
+
+- Manager now owns `theme`, `webTheme`, and `customThemes`. WebGUI and Qt Desktop share one custom-theme contract that validates theme IDs, colors, and numeric ranges.
+- Multi-monitor capture now obtains one native-pixel image per display and selects on the chosen monitor's local canvas. History retains monitor geometry, and closing the monitor picker no longer triggers a stale save task with undefined state.
 
 ### Local speech data and Windows desktop startup boundaries
 
 - RabiSpeech runtime configuration, temporary files, and outputs now default to `%LOCALAPPDATA%\RabiPC\RabiSpeech`, while models default to `%LOCALAPPDATA%\RabiPC\models\rabispeech`. First startup copies a legacy package-local configuration once. `RABISPEECH_DATA_ROOT`, `RABISPEECH_MODEL_ROOT`, and the existing narrower overrides can select another local location. Model downloads, the Windows speech host, and Manager now share this layout instead of binding private runtime data to a Git checkout or installer directory.
-- `Start-RabiRoute-Desktop.bat` now prefers the packaged `RabiRoute-Desktop.exe` when it exists at the project root and retains the Python desktop fallback for source environments. The clipboard-screenshot default moves from the game-conflicting bare `F3` to `Ctrl+Alt+V`, and normalization migrates the legacy default automatically.
+- `Start-RabiRoute-Desktop.bat` now prefers the packaged `RabiRoute-Desktop.exe` when it exists at the project root and retains the Python desktop fallback for source environments. The pin-shortcut default moves from the game-conflicting bare `F3` to `Ctrl+Alt+V`; an explicitly saved `F3` setting remains unchanged.
 - Manager now starts the rebuildable persona-sync manifest index asynchronously after startup, so a NAS manifest walk cannot block control-plane configuration migration and availability.
 
 ### Persona work contract and proactive-review evidence boundaries

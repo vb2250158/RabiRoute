@@ -62,10 +62,11 @@ class SelectionSpeechSettings:
 class DesktopSettings:
     screenshot_enabled: bool = False
     screenshot_shortcut: str = "Ctrl+Shift+S"
-    screenshot_clipboard_shortcut: str = "F3"
+    screenshot_clipboard_shortcut: str = "Ctrl+Alt+V"
     screenshot_auto_copy: bool = True
     autostart: bool = False
     theme: str = "system"
+    custom_theme: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -321,13 +322,21 @@ class ManagerClient:
         data = payload.get("data")
         row = data if isinstance(data, dict) else {}
         screenshot = row.get("screenshot") if isinstance(row.get("screenshot"), dict) else {}
+        requested_theme = str(row.get("theme") or "system").strip().lower()
+        custom_themes = row.get("customThemes") if isinstance(row.get("customThemes"), list) else []
+        custom_theme = next(
+            (item for item in custom_themes if isinstance(item, dict) and item.get("id") == requested_theme),
+            None,
+        )
+        theme = requested_theme if requested_theme in {"system", "light", "dark"} or custom_theme is not None else "system"
         return DesktopSettings(
             screenshot_enabled=screenshot.get("enabled") is True,
             screenshot_shortcut=str(screenshot.get("shortcut") or "Ctrl+Shift+S").strip()[:80],
-            screenshot_clipboard_shortcut=str(screenshot.get("clipboardShortcut") or "F3").strip()[:80],
+            screenshot_clipboard_shortcut=str(screenshot.get("clipboardShortcut") or "Ctrl+Alt+V").strip()[:80],
             screenshot_auto_copy=screenshot.get("autoCopy", True) is not False,
             autostart=row.get("autostart") is True,
-            theme=str(row.get("theme") or "system").strip().lower() if str(row.get("theme") or "system").strip().lower() in {"system", "light", "dark"} else "system",
+            theme=theme,
+            custom_theme=custom_theme,
         )
 
     def speech_models(self) -> list[dict[str, Any]]:

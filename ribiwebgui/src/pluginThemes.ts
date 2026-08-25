@@ -1,4 +1,8 @@
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
+import {
+  normalizeCustomInterfaceThemes,
+  type CustomInterfaceTheme
+} from "../../src/shared/interfaceThemeContract";
 import { ref } from "vue";
 
 export type WebThemeId = string;
@@ -13,6 +17,7 @@ export type TrustedWebThemeResourceRegistration = Readonly<{
   label: string;
   icon: string;
   desktopTheme?: DesktopTheme;
+  customTheme?: CustomInterfaceTheme;
   apply: (systemDark: boolean) => EffectiveWebTheme;
 }>;
 
@@ -29,6 +34,7 @@ export type WebThemeOption = Readonly<{
   label: string;
   icon: string;
   desktopTheme?: DesktopTheme;
+  customTheme?: CustomInterfaceTheme;
 }>;
 
 export type ResolvedWebThemeResource = WebThemeOption & Readonly<{
@@ -44,6 +50,7 @@ type JsonRecord = Record<string, unknown>;
 
 const themeRegistry = new Map<WebThemeId, TrustedWebThemeResourceRegistration>();
 const themeResourceOwners = new Map<WebThemeResourceId, WebThemeId>();
+const customThemeIds = new Set<WebThemeId>();
 const themeRegistrationRevision = ref(0);
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -83,6 +90,7 @@ function normalizeRegistration(input: TrustedWebThemeResourceRegistration): Trus
     label: controlledText(input.label, "label", 80),
     icon: controlledSymbol(input.icon, "icon", 80),
     ...(input.desktopTheme ? { desktopTheme: input.desktopTheme } : {}),
+    ...(input.customTheme ? { customTheme: input.customTheme } : {}),
     apply: input.apply
   });
 }
@@ -111,6 +119,37 @@ export function registerTrustedWebThemeResource(input: TrustedWebThemeResourceRe
 
 export function registeredWebThemeResources(): readonly TrustedWebThemeResourceRegistration[] {
   return Object.freeze([...themeRegistry.values()]);
+}
+
+export function replaceCustomWebThemeResources(value: unknown): readonly CustomInterfaceTheme[] {
+  for (const themeId of customThemeIds) {
+    const registration = themeRegistry.get(themeId);
+    if (!registration) continue;
+    themeRegistry.delete(themeId);
+    themeResourceOwners.delete(registration.webResourceId);
+  }
+  customThemeIds.clear();
+
+  const themes = normalizeCustomInterfaceThemes(value);
+  for (const theme of themes) {
+    const resourceId = `user.web-theme.${theme.id.slice("custom:".length)}.v1`;
+    const registration = Object.freeze({
+      instanceId: "manager:custom-theme",
+      pluginId: "builtin:manager/custom-themes",
+      themeId: theme.id,
+      webResourceId: resourceId,
+      label: theme.name,
+      icon: "mdi-palette-outline",
+      desktopTheme: theme.id,
+      customTheme: theme,
+      apply: () => theme.baseTheme
+    }) satisfies TrustedWebThemeResourceRegistration;
+    themeRegistry.set(theme.id, registration);
+    themeResourceOwners.set(resourceId, theme.id);
+    customThemeIds.add(theme.id);
+  }
+  themeRegistrationRevision.value += 1;
+  return themes;
 }
 
 export function parseWebThemeContribution(value: unknown): WebThemeContribution | undefined {
@@ -150,16 +189,27 @@ export function resolveWebThemeCatalog(contributions: readonly unknown[] | null)
     accepted.findIndex(candidate => candidate.themeId === theme.themeId) === index
     && accepted.filter(candidate => candidate.themeId === theme.themeId).length === 1
   ));
+  const customThemes = [...customThemeIds].flatMap(themeId => {
+    const registration = themeRegistry.get(themeId);
+    return registration ? [{
+      instanceId: registration.instanceId,
+      pluginId: registration.pluginId,
+      themeId: registration.themeId,
+      webResourceId: registration.webResourceId
+    }] : [];
+  });
+  const acceptedThemes = [...unique, ...customThemes];
   return {
-    themes: Object.freeze(unique),
-    options: Object.freeze(unique.flatMap(theme => {
+    themes: Object.freeze(acceptedThemes),
+    options: Object.freeze(acceptedThemes.flatMap(theme => {
       const registration = themeRegistry.get(theme.themeId);
       return registration ? [{
         themeId: registration.themeId,
         webResourceId: registration.webResourceId,
         label: registration.label,
         icon: registration.icon,
-        ...(registration.desktopTheme ? { desktopTheme: registration.desktopTheme } : {})
+        ...(registration.desktopTheme ? { desktopTheme: registration.desktopTheme } : {}),
+        ...(registration.customTheme ? { customTheme: registration.customTheme } : {})
       }] : [];
     }))
   };
@@ -174,6 +224,7 @@ function fallbackSystemResource(): ResolvedWebThemeResource {
     label: registration.label,
     icon: registration.icon,
     ...(registration.desktopTheme ? { desktopTheme: registration.desktopTheme } : {}),
+    ...(registration.customTheme ? { customTheme: registration.customTheme } : {}),
     apply: registration.apply
   };
 }
@@ -191,28 +242,11 @@ export function resolveWebThemeResource(
     label: registration.label,
     icon: registration.icon,
     ...(registration.desktopTheme ? { desktopTheme: registration.desktopTheme } : {}),
+    ...(registration.customTheme ? { customTheme: registration.customTheme } : {}),
     apply: registration.apply
   };
 }
 
-export const WEB_THEME_PREFERENCE_KEY = "rabiroute:webgui:theme-preference";
-
-export function readStoredWebThemePreference(): WebThemeId {
-  try {
-    return window.localStorage.getItem(WEB_THEME_PREFERENCE_KEY)?.trim() || "";
-  } catch {
-    return "";
-  }
-}
-
-export function writeStoredWebThemePreference(themeId: WebThemeId | undefined): void {
-  try {
-    if (themeId) window.localStorage.setItem(WEB_THEME_PREFERENCE_KEY, themeId);
-    else window.localStorage.removeItem(WEB_THEME_PREFERENCE_KEY);
-  } catch {
-    // 浏览器禁用本地存储时仅保留当前会话主题。
-  }
-}
 registerTrustedWebThemeResource({
   instanceId: "manager:core",
   pluginId: "builtin:manager/core",

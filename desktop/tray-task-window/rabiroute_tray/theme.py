@@ -4,14 +4,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMenu
 
-from .themes import theme_definition
+from .themes import has_theme, theme_definition
 
 
 _THEME_OPTIONS = {"system", "light", "dark"}
 
 
 def normalize_theme(value: object) -> str:
-    return value if isinstance(value, str) and value in _THEME_OPTIONS else "system"
+    return value if isinstance(value, str) and (value in _THEME_OPTIONS or has_theme(value)) else "system"
 
 
 def system_theme_is_dark(app: QApplication) -> bool:

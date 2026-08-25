@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { DesktopTheme } from "@shared/desktopSettingsContract";
+import type { DesktopPetBinding, DesktopTheme } from "@shared/desktopSettingsContract";
+import {
+  cloneBuiltinInterfaceTheme,
+  interfaceThemeContrastRatio,
+  INTERFACE_THEME_COLOR_KEYS,
+  isInterfaceThemeHexColor,
+  readableInterfaceThemeForeground,
+  type CustomInterfaceTheme,
+  type InterfaceThemeBase,
+  type InterfaceThemeColorKey
+} from "@shared/interfaceThemeContract";
 import { resolveSelectionSpeechModel, type SelectionSpeechSettings } from "@shared/selectionSpeechContract";
 import type { SpeechModel } from "@shared/speechControlContract";
 import { desktopSettingsClient } from "../../desktopSettingsClient";
+import { desktopPetClient, type DesktopPetPackSummary } from "../../desktopPetClient";
 import { publishInterfaceTheme } from "../../interfaceTheme";
 import { registerPageSaveAction } from "../../pageSaveAction";
 import { pluginCatalogStore } from "../../pluginCatalogStore";
 import { speechControlClient } from "../../speech/speechControlClient";
 import {
-  readStoredWebThemePreference,
+  replaceCustomWebThemeResources,
   resolveWebThemeResource,
-  writeStoredWebThemePreference,
   type WebThemeId
 } from "../../pluginThemes";
 
@@ -24,6 +34,15 @@ const desktopScreenshotAutoCopy = ref(true);
 const desktopAutostart = ref(false);
 const desktopTheme = ref<WebThemeId>("system");
 const persistedDesktopTheme = ref<DesktopTheme>("system");
+const persistedWebTheme = ref<WebThemeId>("system");
+const customThemes = ref<CustomInterfaceTheme[]>([]);
+const customThemeDialog = ref(false);
+const customThemeSaving = ref(false);
+const customThemeError = ref("");
+const customThemeDraft = ref<CustomInterfaceTheme | null>(null);
+const customThemeBaseline = ref("");
+const customThemeColorErrors = ref<Partial<Record<InterfaceThemeColorKey, string>>>({});
+const customThemeOpenColorGroups = ref<number[]>([0, 1]);
 const selectionSpeechEnabled = ref(false);
 const selectionReadAloudEnabled = ref(true);
 const selectionSpeechAdvanced = ref(false);
@@ -31,15 +50,64 @@ const selectionSpeechModel = ref("");
 const selectionSpeechModels = ref<SpeechModel[]>([]);
 const selectionSpeechLoaded = ref(false);
 const selectionSpeechError = ref("");
+const petPersonaId = "YeYu";
+const petBinding = ref<DesktopPetBinding | null>(null);
+const petPacks = ref<DesktopPetPackSummary[]>([]);
+const petLoaded = ref(false);
+const petDirty = ref(false);
+const petError = ref("");
+const petImportFile = ref<File | null>(null);
+const petImportPackId = ref("");
+const petImportName = ref("");
+const petImporting = ref(false);
 const loaded = ref(false);
 const hydrating = ref(true);
 const saving = ref(false);
 const desktopDirty = ref(false);
 const selectionSpeechDirty = ref(false);
-const dirty = computed(() => desktopDirty.value || selectionSpeechDirty.value);
+const dirty = computed(() => desktopDirty.value || selectionSpeechDirty.value || petDirty.value);
 const error = ref("");
 const themeOptions = computed(() => pluginCatalogStore.themes.value.options);
-const ready = computed(() => loaded.value && (!selectionSpeechDirty.value || selectionSpeechLoaded.value));
+const selectedCustomTheme = computed(() => customThemes.value.find(item => item.id === desktopTheme.value));
+const themeColorFields: readonly { key: InterfaceThemeColorKey; label: string }[] = INTERFACE_THEME_COLOR_KEYS.map(key => ({
+  key,
+  label: ({
+    pageCanvas: "页面底色", canvas: "内容底色", surface: "卡片表面", subtle: "次级表面", input: "输入框",
+    border: "边框", borderStrong: "强调边框", text: "正文", heading: "标题", muted: "次要文字",
+    accent: "强调色", accentStrong: "强调深色", success: "成功 / 开启", warning: "警告", error: "错误",
+    info: "信息", switchTrack: "关闭轨道", switchThumb: "开关圆点"
+  } satisfies Record<InterfaceThemeColorKey, string>)[key]
+}));
+const themeColorGroups = [
+  { title: "表面与边框", keys: ["pageCanvas", "canvas", "surface", "subtle", "input", "border", "borderStrong"] },
+  { title: "文字", keys: ["text", "heading", "muted"] },
+  { title: "强调与状态", keys: ["accent", "accentStrong", "success", "warning", "error", "info"] },
+  { title: "开关", keys: ["switchTrack", "switchThumb"] }
+].map(group => ({
+  title: group.title,
+  fields: group.keys.map(key => themeColorFields.find(field => field.key === key)!)
+}));
+const customThemePreviewStyle = computed(() => {
+  const draft = customThemeDraft.value;
+  if (!draft) return {};
+  return {
+    background: draft.colors.surface,
+    color: draft.colors.text,
+    borderColor: draft.colors.border,
+    borderRadius: `${draft.styles.cornerRadius}px`,
+    boxShadow: draft.styles.shadow === "none"
+      ? "none"
+      : draft.styles.shadow === "strong"
+        ? `0 14px 30px color-mix(in srgb, ${draft.colors.text} 28%, transparent)`
+        : `0 8px 20px color-mix(in srgb, ${draft.colors.text} 14%, transparent)`
+  };
+});
+const customThemePreviewButtonStyle = computed(() => {
+  const accent = customThemeDraft.value?.colors.accent;
+  if (!accent) return {};
+  return { background: accent, color: readableInterfaceThemeForeground(accent) };
+});
+const ready = computed(() => loaded.value && (!selectionSpeechDirty.value || selectionSpeechLoaded.value) && (!petDirty.value || petLoaded.value));
 let unregisterSaveAction: (() => void) | undefined;
 
 async function loadDesktopSettings(): Promise<void> {
@@ -51,10 +119,9 @@ async function loadDesktopSettings(): Promise<void> {
     desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
     desktopAutostart.value = settings.autostart;
     persistedDesktopTheme.value = settings.theme;
-    const storedTheme = readStoredWebThemePreference();
-    desktopTheme.value = themeOptions.value.some(option => option.themeId === storedTheme)
-      ? storedTheme
-      : resolveWebThemeResource(pluginCatalogStore.themes.value, settings.theme).themeId;
+    persistedWebTheme.value = settings.webTheme;
+    customThemes.value = [...replaceCustomWebThemeResources(settings.customThemes)];
+    desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, settings.webTheme).themeId;
     loaded.value = true;
     error.value = "";
   } catch (cause) {
@@ -83,13 +150,61 @@ async function loadSelectionSpeechSettings(): Promise<void> {
   }
 }
 
+async function loadDesktopPetSettings(): Promise<void> {
+  try {
+    const [binding, catalog] = await Promise.all([
+      desktopPetClient.binding(petPersonaId),
+      desktopPetClient.packs(petPersonaId)
+    ]);
+    petBinding.value = binding;
+    petPacks.value = catalog.packs;
+    petLoaded.value = true;
+    petError.value = catalog.diagnostics[0]?.message || "";
+  } catch (cause) {
+    petError.value = cause instanceof Error ? cause.message : String(cause);
+  }
+}
+
+function selectedImportFile(): File | null {
+  const value = petImportFile.value as File | File[] | null;
+  return Array.isArray(value) ? value[0] || null : value;
+}
+
+async function importDesktopPetPack(): Promise<void> {
+  const file = selectedImportFile();
+  const packId = petImportPackId.value.trim();
+  if (!file || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(packId)) {
+    petError.value = "请选择 GIF、PNG 或 ZIP，并填写只含字母、数字、点、横线、下划线的动作包 ID。";
+    return;
+  }
+  petImporting.value = true;
+  try {
+    const pack = await desktopPetClient.importFile(petPersonaId, file, {
+      packId,
+      state: "idle",
+      name: petImportName.value.trim() || packId
+    });
+    petPacks.value = [...petPacks.value.filter(item => item.id !== pack.id), pack];
+    if (petBinding.value) petBinding.value.packId = pack.id;
+    petImportFile.value = null;
+    petImportPackId.value = "";
+    petImportName.value = "";
+    petError.value = "";
+  } catch (cause) {
+    petError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    petImporting.value = false;
+  }
+}
+
 async function load(): Promise<void> {
   hydrating.value = true;
   try {
-    await Promise.all([loadDesktopSettings(), loadSelectionSpeechSettings()]);
+    await Promise.all([loadDesktopSettings(), loadSelectionSpeechSettings(), loadDesktopPetSettings()]);
     await nextTick();
     desktopDirty.value = false;
     selectionSpeechDirty.value = false;
+    petDirty.value = false;
   } finally {
     hydrating.value = false;
   }
@@ -107,7 +222,9 @@ async function saveDesktopSettings(): Promise<void> {
         autoCopy: desktopScreenshotAutoCopy.value
       },
       autostart: desktopAutostart.value,
-      theme: nextDesktopTheme
+      theme: nextDesktopTheme,
+      webTheme: selectedTheme.themeId,
+      customThemes: customThemes.value
     });
     desktopScreenshotEnabled.value = settings.screenshot.enabled;
     desktopScreenshotShortcut.value = settings.screenshot.shortcut;
@@ -115,13 +232,123 @@ async function saveDesktopSettings(): Promise<void> {
     desktopScreenshotAutoCopy.value = settings.screenshot.autoCopy;
     desktopAutostart.value = settings.autostart;
     persistedDesktopTheme.value = settings.theme;
-    writeStoredWebThemePreference(selectedTheme.desktopTheme ? undefined : selectedTheme.themeId);
+    persistedWebTheme.value = settings.webTheme;
+    customThemes.value = [...replaceCustomWebThemeResources(settings.customThemes)];
     desktopTheme.value = selectedTheme.themeId;
     publishInterfaceTheme(selectedTheme.themeId);
     error.value = "";
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
     throw cause;
+  }
+}
+
+function customThemeId(): CustomInterfaceTheme["id"] {
+  return `custom:${crypto.randomUUID().toLowerCase()}`;
+}
+
+function clonedTheme(baseTheme: InterfaceThemeBase): Pick<CustomInterfaceTheme, "baseTheme" | "colors" | "styles"> {
+  return cloneBuiltinInterfaceTheme(baseTheme);
+}
+
+function openCustomThemeEditor(mode: "clone" | "edit"): void {
+  const selected = resolveWebThemeResource(pluginCatalogStore.themes.value, desktopTheme.value);
+  if (mode === "edit" && selected.customTheme) {
+    customThemeDraft.value = structuredClone(selected.customTheme);
+  } else {
+    const base = selected.customTheme
+      ? structuredClone(selected.customTheme)
+      : clonedTheme(selected.apply(window.matchMedia("(prefers-color-scheme: dark)").matches));
+    customThemeDraft.value = {
+      id: customThemeId(),
+      name: `${selected.label} 副本`.slice(0, 40),
+      baseTheme: base.baseTheme,
+      colors: { ...base.colors },
+      styles: { ...base.styles }
+    };
+  }
+  customThemeError.value = "";
+  customThemeColorErrors.value = {};
+  customThemeDialog.value = true;
+  customThemeBaseline.value = JSON.stringify(customThemeDraft.value);
+}
+
+function collectCustomThemeColorErrors(): Partial<Record<InterfaceThemeColorKey, string>> {
+  const draft = customThemeDraft.value;
+  if (!draft) return {};
+  const errors: Partial<Record<InterfaceThemeColorKey, string>> = {};
+  for (const key of INTERFACE_THEME_COLOR_KEYS) {
+    if (!isInterfaceThemeHexColor(draft.colors[key])) errors[key] = "请输入 #RRGGBB 六位色值。";
+  }
+  if (errors.surface) return errors;
+  const contrastPairs: readonly [InterfaceThemeColorKey, number, string][] = [
+    ["text", 4.5, "正文与卡片表面对比度需至少 4.5:1。"],
+    ["heading", 4.5, "标题与卡片表面对比度需至少 4.5:1。"],
+    ["muted", 3, "次要文字与卡片表面对比度需至少 3:1。"]
+  ];
+  for (const [key, minimum, message] of contrastPairs) {
+    if (!errors[key] && interfaceThemeContrastRatio(draft.colors[key], draft.colors.surface) < minimum) errors[key] = message;
+  }
+  return errors;
+}
+
+function validateCustomThemeColors(): boolean {
+  customThemeColorErrors.value = collectCustomThemeColorErrors();
+  return Object.keys(customThemeColorErrors.value).length === 0;
+}
+
+function closeCustomThemeEditor(): void {
+  if (customThemeSaving.value) return;
+  const changed = JSON.stringify(customThemeDraft.value) !== customThemeBaseline.value;
+  if (changed && !window.confirm("当前主题有未保存修改，确定放弃吗？")) return;
+  customThemeDialog.value = false;
+}
+
+async function saveCustomTheme(): Promise<void> {
+  const draft = customThemeDraft.value;
+  if (!draft || customThemeSaving.value) return;
+  draft.name = draft.name.trim();
+  if (!draft.name) {
+    customThemeError.value = "请先填写主题名称。";
+    return;
+  }
+  const duplicate = customThemes.value.some(item => item.id !== draft.id && item.name.toLocaleLowerCase() === draft.name.toLocaleLowerCase());
+  if (duplicate) {
+    customThemeError.value = "主题名称已存在，请换一个名称。";
+    return;
+  }
+  if (!validateCustomThemeColors()) {
+    customThemeError.value = "请修正颜色格式或对比度后再保存。";
+    void nextTick(() => document.querySelector<HTMLElement>(".custom-theme-color-field .v-input--error input")?.focus());
+    return;
+  }
+  customThemeSaving.value = true;
+  const wasDirty = desktopDirty.value;
+  hydrating.value = true;
+  try {
+    const savedDraft: CustomInterfaceTheme = {
+      id: draft.id,
+      name: draft.name,
+      baseTheme: draft.baseTheme,
+      colors: { ...draft.colors },
+      styles: { ...draft.styles }
+    };
+    const nextThemes = [...customThemes.value.filter(item => item.id !== draft.id), savedDraft];
+    const settings = await desktopSettingsClient.update({ customThemes: nextThemes, theme: draft.id, webTheme: draft.id });
+    customThemes.value = [...replaceCustomWebThemeResources(settings.customThemes)];
+    persistedDesktopTheme.value = settings.theme;
+    persistedWebTheme.value = settings.webTheme;
+    desktopTheme.value = settings.webTheme;
+    publishInterfaceTheme(settings.webTheme);
+    customThemeDialog.value = false;
+    customThemeError.value = "";
+    await nextTick();
+    desktopDirty.value = wasDirty;
+  } catch (cause) {
+    customThemeError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    hydrating.value = false;
+    customThemeSaving.value = false;
   }
 }
 
@@ -145,11 +372,23 @@ async function saveSelectionSpeechSettings(): Promise<void> {
   }
 }
 
+async function saveDesktopPetSettings(): Promise<void> {
+  if (!petBinding.value) return;
+  try {
+    petBinding.value = await desktopPetClient.update(petPersonaId, petBinding.value);
+    petError.value = "";
+  } catch (cause) {
+    petError.value = cause instanceof Error ? cause.message : String(cause);
+    throw cause;
+  }
+}
+
 async function save(): Promise<void> {
   if (!ready.value || saving.value) throw new Error("桌面设置尚未加载完成。");
   const tasks = [
     ...(desktopDirty.value ? [{ dirty: desktopDirty, run: saveDesktopSettings }] : []),
-    ...(selectionSpeechDirty.value ? [{ dirty: selectionSpeechDirty, run: saveSelectionSpeechSettings }] : [])
+    ...(selectionSpeechDirty.value ? [{ dirty: selectionSpeechDirty, run: saveSelectionSpeechSettings }] : []),
+    ...(petDirty.value ? [{ dirty: petDirty, run: saveDesktopPetSettings }] : [])
   ];
   if (!tasks.length) return;
 
@@ -236,10 +475,16 @@ watch([
   if (!hydrating.value && selectionSpeechLoaded.value) selectionSpeechDirty.value = true;
 });
 
+watch(petBinding, () => {
+  if (!hydrating.value && petLoaded.value) petDirty.value = true;
+}, { deep: true });
+
 watch(themeOptions, options => {
   if (!loaded.value || options.some(option => option.themeId === desktopTheme.value)) return;
-  desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, persistedDesktopTheme.value).themeId;
-  writeStoredWebThemePreference(undefined);
+  desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, persistedWebTheme.value).themeId;
+  if (!options.some(option => option.themeId === desktopTheme.value)) {
+    desktopTheme.value = resolveWebThemeResource(pluginCatalogStore.themes.value, persistedDesktopTheme.value).themeId;
+  }
   publishInterfaceTheme(desktopTheme.value);
 });
 
@@ -266,14 +511,149 @@ onBeforeUnmount(() => {
     <div class="section-title-row compact-row mb-2">
       <div>
         <div class="section-title small-title">界面主题</div>
-        <div class="section-note">可信主题资源可以扩展 WebGUI；内置主题同时同步到桌面端。</div>
+        <div class="section-note">自定义主题从当前选择复制；保存后同步到 WebGUI 与 Windows 桌面。</div>
       </div>
-      <v-btn-toggle v-model="desktopTheme" color="secondary" density="compact" mandatory divided :disabled="!loaded">
-        <v-btn v-for="option in themeOptions" :key="option.webResourceId" :value="option.themeId" :prepend-icon="option.icon">
-          {{ option.label }}
+      <div class="theme-actions">
+        <v-btn-toggle v-model="desktopTheme" color="secondary" density="compact" mandatory divided :disabled="!loaded" class="theme-options">
+          <v-btn v-for="option in themeOptions" :key="option.webResourceId" :value="option.themeId" :prepend-icon="option.icon">
+            {{ option.label }}
+          </v-btn>
+        </v-btn-toggle>
+        <v-btn class="theme-action-button" prepend-icon="mdi-palette-plus-outline" variant="outlined" color="secondary" :disabled="!loaded" @click="openCustomThemeEditor('clone')">
+          添加自定义主题
         </v-btn>
-      </v-btn-toggle>
+        <v-btn v-if="selectedCustomTheme" icon="mdi-pencil-outline" variant="text" color="secondary" aria-label="编辑当前自定义主题" @click="openCustomThemeEditor('edit')" />
+      </div>
     </div>
+    <v-dialog v-model="customThemeDialog" max-width="980" persistent scrollable>
+      <v-card v-if="customThemeDraft" class="custom-theme-dialog">
+        <v-card-title>编辑自定义主题</v-card-title>
+        <v-card-subtitle>已复制当前主题参数；保存后会立即应用，并保留在主题选项中。</v-card-subtitle>
+        <v-card-text>
+          <v-alert v-if="customThemeError" role="alert" type="error" variant="tonal" density="compact" class="mb-4">{{ customThemeError }}</v-alert>
+          <div class="custom-theme-heading-grid">
+            <v-text-field v-model="customThemeDraft.name" label="主题名称" maxlength="40" counter="40" autofocus />
+            <v-select
+              v-model="customThemeDraft.baseTheme"
+              label="界面基底"
+              :items="[{ title: '浅色', value: 'light' }, { title: '深色', value: 'dark' }]"
+              hint="决定系统控件和未单独配置区域采用浅色还是深色语义。"
+              persistent-hint
+            />
+          </div>
+          <div class="section-title small-title mb-2">颜色</div>
+          <v-expansion-panels v-model="customThemeOpenColorGroups" multiple variant="accordion" class="custom-theme-color-groups">
+            <v-expansion-panel v-for="group in themeColorGroups" :key="group.title">
+              <v-expansion-panel-title>{{ group.title }}</v-expansion-panel-title>
+              <v-expansion-panel-text>
+                <div class="custom-theme-color-grid">
+                  <label v-for="field in group.fields" :key="field.key" class="custom-theme-color-field">
+                    <span>{{ field.label }}</span>
+                    <div>
+                      <input
+                        v-model="customThemeDraft.colors[field.key]"
+                        type="color"
+                        :aria-label="`${field.label}颜色`"
+                        @change="validateCustomThemeColors"
+                      >
+                      <v-text-field
+                        v-model="customThemeDraft.colors[field.key]"
+                        density="compact"
+                        maxlength="7"
+                        :aria-label="`${field.label}十六进制色值`"
+                        :error-messages="customThemeColorErrors[field.key]"
+                        hide-details="auto"
+                        @blur="validateCustomThemeColors"
+                      />
+                    </div>
+                  </label>
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
+          <v-divider class="my-5" />
+          <div class="section-title small-title mb-2">样式</div>
+          <div class="custom-theme-style-grid">
+            <div>
+              <div class="custom-theme-field-label">卡片圆角：{{ customThemeDraft.styles.cornerRadius }}px</div>
+              <v-slider v-model="customThemeDraft.styles.cornerRadius" :min="0" :max="24" :step="1" color="secondary" hide-details />
+            </div>
+            <div>
+              <div class="custom-theme-field-label">表面透明度：{{ customThemeDraft.styles.glassOpacity }}%</div>
+              <v-slider v-model="customThemeDraft.styles.glassOpacity" :min="70" :max="100" :step="1" color="secondary" hide-details />
+            </div>
+            <div>
+              <div class="custom-theme-field-label mb-2">卡片阴影</div>
+              <v-btn-toggle v-model="customThemeDraft.styles.shadow" mandatory divided density="compact" color="secondary">
+                <v-btn value="none">无</v-btn>
+                <v-btn value="soft">柔和</v-btn>
+                <v-btn value="strong">明显</v-btn>
+              </v-btn-toggle>
+            </div>
+          </div>
+          <div class="custom-theme-preview" :style="customThemePreviewStyle">
+            <div :style="{ color: customThemeDraft.colors.heading }">主题预览</div>
+            <p :style="{ color: customThemeDraft.colors.muted }">标题、正文、边框、强调色和开关会使用这套主题参数。</p>
+            <div class="custom-theme-preview-row">
+              <span :style="customThemePreviewButtonStyle">强调按钮</span>
+              <i :style="{ background: customThemeDraft.colors.success }" />
+            </div>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" :disabled="customThemeSaving" @click="closeCustomThemeEditor">取消</v-btn>
+          <v-btn color="secondary" variant="flat" :loading="customThemeSaving" @click="saveCustomTheme">保存并应用</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+    <v-divider class="my-4" />
+    <div class="section-title-row compact-row mb-2">
+      <div>
+        <div class="section-title small-title">夜雨桌宠</div>
+        <div class="section-note">素材只从 YeYu 人格目录加载；结束事件只触发同一人格的动作与气泡。</div>
+      </div>
+      <v-switch v-if="petBinding" v-model="petBinding.enabled" label="启用桌宠" color="success" density="compact" inset hide-details :disabled="!petLoaded" />
+    </div>
+    <v-alert v-if="petError" type="warning" variant="tonal" density="compact" class="mb-3">{{ petError }}</v-alert>
+    <template v-if="petBinding">
+      <div class="desktop-pet-import-grid mb-3">
+        <v-file-input v-model="petImportFile" label="导入 GIF、PNG 或 ZIP" accept=".gif,.png,.zip,image/gif,image/png,application/zip" density="compact" hide-details />
+        <v-text-field v-model="petImportPackId" label="动作包 ID" placeholder="yeyu-library-default" density="compact" hide-details />
+        <v-text-field v-model="petImportName" label="显示名称" placeholder="夜雨 · 图书馆日常" density="compact" hide-details />
+        <v-btn color="secondary" variant="outlined" :loading="petImporting" :disabled="!petImportFile || !petImportPackId.trim()" @click="importDesktopPetPack">导入并选用</v-btn>
+      </div>
+      <v-select
+        v-model="petBinding.packId"
+        label="动作包"
+        :items="petPacks"
+        item-title="name"
+        item-value="id"
+        clearable
+        no-data-text="动作素材还没有放入 YeYu/desktop-pet/packs"
+        :disabled="!petLoaded"
+      />
+      <div class="desktop-pet-slider-grid">
+        <div>
+          <div class="custom-theme-field-label">大小：{{ Math.round(petBinding.scale * 100) }}%</div>
+          <v-slider v-model="petBinding.scale" :min="0.1" :max="2" :step="0.05" color="secondary" hide-details />
+        </div>
+        <div>
+          <div class="custom-theme-field-label">透明度：{{ Math.round(petBinding.opacity * 100) }}%</div>
+          <v-slider v-model="petBinding.opacity" :min="0.2" :max="1" :step="0.05" color="secondary" hide-details />
+        </div>
+      </div>
+      <div class="desktop-pet-switch-grid">
+        <v-switch v-model="petBinding.alwaysOnTop" label="总在最前" color="secondary" density="compact" hide-details />
+        <v-switch v-model="petBinding.clickThrough" label="鼠标点透" color="secondary" density="compact" hide-details />
+        <v-switch v-model="petBinding.locked" label="锁定位置" color="secondary" density="compact" hide-details />
+        <v-switch v-model="petBinding.hideOnFullscreen" label="全屏时隐藏" color="secondary" density="compact" hide-details />
+        <v-switch v-model="petBinding.bubbleEnabled" label="显示结果气泡" color="secondary" density="compact" hide-details />
+      </div>
+      <v-btn-toggle v-model="petBinding.fpsCap" color="secondary" density="compact" mandatory divided class="mt-3">
+        <v-btn v-for="fps in [6, 12, 15, 24]" :key="fps" :value="fps">{{ fps }} FPS</v-btn>
+      </v-btn-toggle>
+    </template>
     <v-divider class="my-4" />
     <div class="section-title-row compact-row mb-2">
       <div>
@@ -304,8 +684,8 @@ onBeforeUnmount(() => {
     <v-text-field
       v-model="desktopScreenshotClipboardShortcut"
       label="贴图快捷键"
-      placeholder="F3"
-      :hint="desktopScreenshotClipboardShortcutCapturing ? '正在录入，按下要绑定的按键。' : '截图窗口打开时，直接贴出框选区域；其他时候贴出剪贴板图片。默认 F3；可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。'"
+      placeholder="Ctrl+Alt+V"
+      :hint="desktopScreenshotClipboardShortcutCapturing ? '正在录入，按下要绑定的按键。' : '截图窗口打开时，直接贴出框选区域；其他时候贴出剪贴板图片。默认 Ctrl+Alt+V；也可以明确设置 F3。可单独使用 F1-F12，或搭配 Ctrl、Alt、Shift、Win。'"
       persistent-hint density="compact" readonly
       :disabled="!loaded || !desktopScreenshotEnabled"
       @click="desktopScreenshotClipboardShortcutCapturing = true"
@@ -354,3 +734,139 @@ onBeforeUnmount(() => {
     </div>
   </v-card>
 </template>
+
+<style scoped>
+.theme-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.theme-options {
+  flex-wrap: wrap;
+  height: auto !important;
+}
+
+.theme-options :deep(.v-btn),
+.theme-action-button {
+  min-height: 44px;
+}
+
+.custom-theme-dialog {
+  border: 1px solid var(--rr-border-soft);
+  background: var(--rr-surface) !important;
+}
+
+.custom-theme-heading-grid,
+.custom-theme-style-grid,
+.desktop-pet-slider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.desktop-pet-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 14px;
+}
+
+.desktop-pet-import-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.custom-theme-color-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.custom-theme-color-groups {
+  border: 1px solid var(--rr-border-soft);
+  border-radius: var(--rr-card-radius, 8px);
+  overflow: hidden;
+}
+
+.custom-theme-color-groups :deep(.v-expansion-panel) {
+  background: var(--rr-subtle);
+  color: var(--rr-text);
+}
+
+.custom-theme-color-field > span,
+.custom-theme-field-label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--rr-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.custom-theme-color-field > div {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.custom-theme-color-field input[type="color"] {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--rr-border);
+  border-radius: 8px;
+  padding: 3px;
+  background: var(--rr-input);
+  cursor: pointer;
+}
+
+.custom-theme-preview {
+  margin-top: 20px;
+  border: 1px solid;
+  padding: 18px;
+}
+
+.custom-theme-preview > div:first-child {
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.custom-theme-preview p {
+  margin: 5px 0 14px;
+  font-size: 13px;
+}
+
+.custom-theme-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.custom-theme-preview-row span {
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.custom-theme-preview-row i {
+  display: block;
+  width: 48px;
+  height: 26px;
+  border-radius: 999px;
+}
+
+@media (max-width: 760px) {
+  .custom-theme-heading-grid,
+  .custom-theme-style-grid,
+  .desktop-pet-slider-grid,
+  .desktop-pet-switch-grid,
+  .desktop-pet-import-grid,
+  .custom-theme-color-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

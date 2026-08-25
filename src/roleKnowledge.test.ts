@@ -135,6 +135,29 @@ test("plan history keeps snapshots after updates and archive moves", () => {
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.text, "批准并保留完整记录。");
 });
 
+test("automatic archival clears a legacy completed-plan current step", () => {
+  const roleDir = makeRoleDir();
+  const activeDir = path.join(roleDir, "plans", "items", "active");
+  fs.mkdirSync(activeDir, { recursive: true });
+  fs.writeFileSync(path.join(activeDir, "legacy-completed.json"), `${JSON.stringify({
+    id: "legacy-completed",
+    title: "Legacy completed plan",
+    focus: "Archive a legacy completed record safely",
+    status: "已完成",
+    currentStepId: "done",
+    steps: [{ id: "done", title: "Done", status: "已完成" }],
+    keywords: ["legacy"],
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z"
+  }, null, 2)}\n`, "utf8");
+
+  const archived = archiveCompletedPlans(roleDir, -1);
+
+  assert.equal(archived[0]?.status, "已归档");
+  assert.equal(archived[0]?.currentStepId, undefined);
+  assert.equal(getPlan(roleDir, "legacy-completed")?.currentStepId, undefined);
+});
+
 test("plan writes reject presentation-only lifecycle labels as top-level status", () => {
   const roleDir = makeRoleDir();
   assert.throws(() => createPlan(roleDir, {

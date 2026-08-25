@@ -59,6 +59,16 @@ class ManagerSnapshotTest(unittest.TestCase):
         self.assertTrue(settings.screenshot_enabled)
         self.assertEqual(settings.theme, "dark")
 
+    def test_desktop_settings_reads_selected_custom_theme_definition(self) -> None:
+        client = _RecordingManagerClient()
+        custom = {"id": "custom:night-rain-green", "name": "夜雨绿", "baseTheme": "dark", "colors": {"accent": "#22c55e"}}
+        client._get_json = lambda path: {"data": {"theme": custom["id"], "customThemes": [custom]}}  # type: ignore[method-assign]
+
+        settings = client.desktop_settings()
+
+        self.assertEqual(settings.theme, custom["id"])
+        self.assertEqual(settings.custom_theme, custom)
+
     def test_snapshot_requests_lightweight_gateway_summary(self) -> None:
         client = _RecordingManagerClient()
 

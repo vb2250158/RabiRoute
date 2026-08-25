@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  replaceCustomWebThemeResources,
   registerTrustedWebThemeResource,
   registeredWebThemeResources,
   resolveWebThemeCatalog,
@@ -107,4 +108,19 @@ test("unknown catalog selections use the registered system recovery resource", (
     icon: "mdi-palette-outline",
     apply: () => "dark"
   }), /already registered/);
+});
+
+test("Manager custom themes replace stale registry entries instead of accumulating", () => {
+  const customTheme = {
+    id: "custom:night-rain-green",
+    name: "夜雨绿",
+    baseTheme: "dark",
+    colors: { accent: "#22c55e" },
+    styles: {}
+  };
+  replaceCustomWebThemeResources([customTheme]);
+  assert.deepEqual(resolveWebThemeCatalog(null).options.map(option => option.themeId), [customTheme.id]);
+  replaceCustomWebThemeResources([]);
+  assert.deepEqual(resolveWebThemeCatalog(null).options, []);
+  assert.equal(resolveWebThemeResource(resolveWebThemeCatalog(null), customTheme.id).themeId, "system");
 });

@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from PIL import ImageGrab
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent
+from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -42,7 +42,7 @@ from .windows_app_identity import sync_startup_shortcut
 
 
 DEFAULT_SCREENSHOT_SHORTCUT = "Ctrl+Shift+S"
-DEFAULT_CLIPBOARD_PIN_SHORTCUT = "F3"
+DEFAULT_CLIPBOARD_PIN_SHORTCUT = "Ctrl+Alt+V"
 _HISTORY_LIMIT = 30
 _SETTINGS_RETRY_DELAY_MS = 2_000
 _PLUGIN_HOTKEY_ID_RANGE = range(0x5300, 0x5400)
@@ -191,6 +191,223 @@ class PinnedScreenshot:
     opacity: float
 
 
+@dataclass(frozen=True)
+class ScreenCaptureSegment:
+    """Maps one Qt desktop rectangle to its native-pixel screenshot rectangle."""
+
+    logical_rect: QRect
+    source_rect: QRect
+
+
+@dataclass(frozen=True)
+class ScreenCaptureCandidate:
+    """One monitor's native screenshot and the local canvas used to select it."""
+
+    screen_name: str
+    screen_geometry: QRect
+    image: QImage
+    layout: "ScreenCaptureLayout"
+
+
+@dataclass(frozen=True)
+class ScreenCaptureLayout:
+    """Piecewise mapping for a virtual desktop with mixed monitor DPI."""
+
+    virtual_geometry: QRect
+    image_size: QSize
+    segments: tuple[ScreenCaptureSegment, ...]
+
+    @classmethod
+    def from_screens(
+        cls,
+        image_size: QSize,
+        screens: tuple[Any, ...] | list[Any],
+        image_origin: QPoint | None = None,
+    ) -> "ScreenCaptureLayout":
+        if not screens or image_size.isEmpty():
+            return cls(QRect(0, 0, max(1, image_size.width()), max(1, image_size.height())), image_size, ())
+        screen_geometries = [QRect(screen.geometry()) for screen in screens]
+        virtual_geometry = QRect(screen_geometries[0])
+        for geometry in screen_geometries[1:]:
+            virtual_geometry = virtual_geometry.united(geometry)
+        origin = image_origin or virtual_geometry.topLeft()
+        image_bounds = QRect(QPoint(0, 0), image_size)
+        segments: list[ScreenCaptureSegment] = []
+        for screen, geometry in zip(screens, screen_geometries):
+            try:
+                device_pixel_ratio = max(0.01, float(screen.devicePixelRatio()))
+            except (AttributeError, TypeError, ValueError):
+                device_pixel_ratio = 1.0
+            logical_rect = QRect(geometry.topLeft() - virtual_geometry.topLeft(), geometry.size())
+            source_rect = QRect(
+                geometry.left() - origin.x(),
+                geometry.top() - origin.y(),
+                max(1, round(geometry.width() * device_pixel_ratio)),
+                max(1, round(geometry.height() * device_pixel_ratio)),
+            ).intersected(image_bounds)
+            if not logical_rect.isEmpty() and not source_rect.isEmpty():
+                segments.append(ScreenCaptureSegment(logical_rect, source_rect))
+        return cls(virtual_geometry, image_size, tuple(segments))
+
+    @classmethod
+    def for_single_screen(cls, screen: Any, image_size: QSize) -> "ScreenCaptureLayout":
+        """Map a native monitor image onto only that monitor's logical canvas."""
+        geometry = QRect(screen.geometry())
+        logical = QRect(QPoint(0, 0), geometry.size())
+        source = QRect(QPoint(0, 0), image_size)
+        return cls(geometry, image_size, (ScreenCaptureSegment(logical, source),))
+
+    def source_rect_for_logical(self, logical_rect: QRect) -> QRect:
+        if logical_rect.isEmpty():
+            return QRect()
+        if not self.segments:
+            return self._uniform_source_rect(logical_rect)
+        source: QRect | None = None
+        for segment in self.segments:
+            intersection = logical_rect.intersected(segment.logical_rect)
+            if intersection.isEmpty():
+                continue
+            mapped = self._map_rect(intersection, segment.logical_rect, segment.source_rect)
+            source = mapped if source is None else source.united(mapped)
+        return (source or QRect()).intersected(QRect(QPoint(0, 0), self.image_size))
+
+    def logical_rect_for_source(self, source_rect: QRect) -> QRect:
+        if source_rect.isEmpty():
+            return QRect()
+        if not self.segments:
+            return self._uniform_logical_rect(source_rect)
+        logical: QRect | None = None
+        for segment in self.segments:
+            intersection = source_rect.intersected(segment.source_rect)
+            if intersection.isEmpty():
+                continue
+            mapped = self._map_rect(intersection, segment.source_rect, segment.logical_rect)
+            logical = mapped if logical is None else logical.united(mapped)
+        return (logical or QRect()).intersected(QRect(QPoint(0, 0), self.virtual_geometry.size()))
+
+    def draw(self, painter: QPainter, image: QImage, target_rect: QRect | None = None) -> None:
+        target = target_rect or QRect(QPoint(0, 0), self.virtual_geometry.size())
+        if target.isEmpty() or image.isNull():
+            return
+        if not self.segments:
+            painter.drawImage(target, image, self._uniform_source_rect(target))
+            return
+        for segment in self.segments:
+            logical = target.intersected(segment.logical_rect)
+            if logical.isEmpty():
+                continue
+            source = self._map_rect(logical, segment.logical_rect, segment.source_rect)
+            painter.drawImage(logical, image, source)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "virtual": self._rect_payload(self.virtual_geometry),
+            "image": [self.image_size.width(), self.image_size.height()],
+            "segments": [
+                {
+                    "logical": self._rect_payload(segment.logical_rect),
+                    "source": self._rect_payload(segment.source_rect),
+                }
+                for segment in self.segments
+            ],
+        }
+
+    @classmethod
+    def from_payload(cls, value: object) -> "ScreenCaptureLayout | None":
+        if not isinstance(value, dict):
+            return None
+        virtual = cls._rect_from_payload(value.get("virtual"))
+        image_value = value.get("image")
+        if virtual is None or not isinstance(image_value, list) or len(image_value) != 2:
+            return None
+        try:
+            image_size = QSize(int(image_value[0]), int(image_value[1]))
+        except (TypeError, ValueError):
+            return None
+        if image_size.isEmpty():
+            return None
+        raw_segments = value.get("segments")
+        if not isinstance(raw_segments, list):
+            return None
+        segments: list[ScreenCaptureSegment] = []
+        for raw_segment in raw_segments:
+            if not isinstance(raw_segment, dict):
+                continue
+            logical = cls._rect_from_payload(raw_segment.get("logical"))
+            source = cls._rect_from_payload(raw_segment.get("source"))
+            if logical is not None and source is not None and not logical.isEmpty() and not source.isEmpty():
+                segments.append(ScreenCaptureSegment(logical, source))
+        return cls(virtual, image_size, tuple(segments))
+
+    @staticmethod
+    def _map_rect(rect: QRect, from_rect: QRect, to_rect: QRect) -> QRect:
+        def map_start(value: int, from_start: int, from_size: int, to_start: int, to_size: int) -> int:
+            return to_start + round((value - from_start) * to_size / from_size)
+
+        left = map_start(rect.left(), from_rect.left(), from_rect.width(), to_rect.left(), to_rect.width())
+        top = map_start(rect.top(), from_rect.top(), from_rect.height(), to_rect.top(), to_rect.height())
+        right = map_start(rect.right() + 1, from_rect.left(), from_rect.width(), to_rect.left(), to_rect.width())
+        bottom = map_start(rect.bottom() + 1, from_rect.top(), from_rect.height(), to_rect.top(), to_rect.height())
+        return QRect(left, top, max(1, right - left), max(1, bottom - top))
+
+    def _uniform_source_rect(self, logical_rect: QRect) -> QRect:
+        return self._map_rect(logical_rect, QRect(QPoint(0, 0), self.virtual_geometry.size()), QRect(QPoint(0, 0), self.image_size)).intersected(QRect(QPoint(0, 0), self.image_size))
+
+    def _uniform_logical_rect(self, source_rect: QRect) -> QRect:
+        return self._map_rect(source_rect, QRect(QPoint(0, 0), self.image_size), QRect(QPoint(0, 0), self.virtual_geometry.size())).intersected(QRect(QPoint(0, 0), self.virtual_geometry.size()))
+
+    @staticmethod
+    def _rect_payload(rect: QRect) -> list[int]:
+        return [rect.x(), rect.y(), rect.width(), rect.height()]
+
+    @staticmethod
+    def _rect_from_payload(value: object) -> QRect | None:
+        if not isinstance(value, list) or len(value) != 4:
+            return None
+        try:
+            rect = QRect(int(value[0]), int(value[1]), int(value[2]), int(value[3]))
+        except (TypeError, ValueError):
+            return None
+        return rect if not rect.isEmpty() else None
+
+
+def split_desktop_capture_by_screen(
+    image: QImage,
+    screens: tuple[Any, ...] | list[Any],
+    image_origin: QPoint | None = None,
+) -> tuple[ScreenCaptureCandidate, ...]:
+    """Split one Windows virtual-desktop grab into independent monitor images.
+
+    The grab stays a Windows implementation detail.  Every later UI operation
+    receives a single monitor image with a local (0, 0) canvas, so selection can
+    never cross a mixed-DPI boundary.
+    """
+    if image.isNull() or not screens:
+        return ()
+    layout = ScreenCaptureLayout.from_screens(image.size(), screens, image_origin=image_origin)
+    candidates: list[ScreenCaptureCandidate] = []
+    for index, screen in enumerate(screens):
+        geometry = QRect(screen.geometry())
+        logical = QRect(geometry.topLeft() - layout.virtual_geometry.topLeft(), geometry.size())
+        segment = next((item for item in layout.segments if item.logical_rect == logical), None)
+        if segment is None or segment.source_rect.isEmpty():
+            continue
+        cropped = image.copy(segment.source_rect)
+        if cropped.isNull():
+            continue
+        try:
+            screen_name = str(screen.name()).strip()
+        except AttributeError:
+            screen_name = ""
+        candidates.append(ScreenCaptureCandidate(
+            screen_name or f"显示器 {index + 1}",
+            geometry,
+            cropped,
+            ScreenCaptureLayout.for_single_screen(screen, cropped.size()),
+        ))
+    return tuple(candidates)
+
+
 def desktop_screenshot_state_directory(project_root: Path) -> Path:
     return project_root / "data" / "desktop"
 
@@ -234,22 +451,69 @@ class ScreenshotRegionStore:
             return rect if rect.width() > 0 and rect.height() > 0 else None
         return None
 
+    def get_layout(self, image_path: Path) -> ScreenCaptureLayout | None:
+        entries = _read_json_object(self._path).get("regions")
+        if not isinstance(entries, list):
+            return None
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("image") != image_path.name:
+                continue
+            return ScreenCaptureLayout.from_payload(entry.get("layout"))
+        return None
+
+    def remember_layout(self, image_path: Path, layout: ScreenCaptureLayout) -> None:
+        if not image_path.name or layout.image_size.isEmpty():
+            return
+        payload = _read_json_object(self._path)
+        entries = payload.get("regions")
+        records = [entry for entry in entries if isinstance(entry, dict) and entry.get("image") != image_path.name] if isinstance(entries, list) else []
+        existing = next((entry for entry in entries if isinstance(entry, dict) and entry.get("image") == image_path.name), None) if isinstance(entries, list) else None
+        record = dict(existing) if isinstance(existing, dict) else {"image": image_path.name}
+        record["layout"] = layout.to_payload()
+        records.insert(0, record)
+        _write_json_object(self._path, {"version": 1, "regions": records[:_HISTORY_LIMIT]})
+
+    def rename_image(self, previous_path: Path, next_path: Path) -> None:
+        if not previous_path.name or not next_path.name or previous_path.name == next_path.name:
+            return
+        payload = _read_json_object(self._path)
+        entries = payload.get("regions")
+        if not isinstance(entries, list):
+            return
+        records: list[dict[str, Any]] = []
+        moved: dict[str, Any] | None = None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            image_name = entry.get("image")
+            if image_name == previous_path.name:
+                moved = dict(entry)
+                moved["image"] = next_path.name
+                continue
+            if image_name == next_path.name:
+                continue
+            records.append(entry)
+        if moved is not None:
+            records.insert(0, moved)
+            _write_json_object(self._path, {"version": 1, "regions": records[:_HISTORY_LIMIT]})
+
     def remember(self, image_path: Path, source_rect: QRect) -> None:
         if source_rect.isEmpty() or not image_path.name:
             return
         payload = _read_json_object(self._path)
         entries = payload.get("regions")
         records = [entry for entry in entries if isinstance(entry, dict) and entry.get("image") != image_path.name] if isinstance(entries, list) else []
-        records.insert(
-            0,
-            {
-                "image": image_path.name,
-                "x": source_rect.x(),
-                "y": source_rect.y(),
-                "width": source_rect.width(),
-                "height": source_rect.height(),
-            },
-        )
+        existing = next((entry for entry in entries if isinstance(entry, dict) and entry.get("image") == image_path.name), None) if isinstance(entries, list) else None
+        record: dict[str, Any] = {
+            "image": image_path.name,
+            "x": source_rect.x(),
+            "y": source_rect.y(),
+            "width": source_rect.width(),
+            "height": source_rect.height(),
+        }
+        if isinstance(existing, dict) and isinstance(existing.get("layout"), dict):
+            record["layout"] = existing["layout"]
+        records.insert(0, record)
         _write_json_object(self._path, {"version": 1, "regions": records[:_HISTORY_LIMIT]})
 
 
@@ -474,6 +738,8 @@ class WindowsGlobalClipboardPinHotkey(WindowsGlobalHotkey):
 
 
 def capture_desktop_image(screens: list[Any] | None = None) -> QImage:
+    if sys.platform == "win32":
+        return capture_desktop_image_async()
     screens = screens if screens is not None else list(QApplication.screens())
     if not screens:
         raise RuntimeError("没有可用的显示器。")
@@ -506,8 +772,65 @@ def capture_desktop_image_async() -> QImage:
     return image
 
 
+def windows_virtual_screen_origin() -> QPoint:
+    if sys.platform != "win32":
+        return QPoint(0, 0)
+    user32 = ctypes.windll.user32
+    return QPoint(int(user32.GetSystemMetrics(76)), int(user32.GetSystemMetrics(77)))
+
+
 def capture_desktop(project_root: Path, screens: list[Any] | None = None) -> Path:
     return save_screenshot_image(project_root, capture_desktop_image(screens), "capture")
+
+
+class ScreenCapturePicker(QDialog):
+    """Choose one independently captured monitor before opening the selector."""
+
+    screen_selected = Signal(int)
+
+    def __init__(self, candidates: tuple[ScreenCaptureCandidate, ...]) -> None:
+        super().__init__()
+        self._candidates = candidates
+        self.setWindowTitle("选择要框选的显示器")
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setModal(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setMinimumWidth(480)
+        self.setMaximumHeight(620)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+        heading = QLabel("选择一块显示器，再在它自己的截图里框选")
+        heading.setWordWrap(True)
+        heading.setStyleSheet("font-weight: 600;")
+        layout.addWidget(heading)
+        for index, candidate in enumerate(candidates):
+            layout.addWidget(self._candidate_button(index, candidate))
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, self)
+        controls.rejected.connect(self.reject)
+        layout.addWidget(controls)
+
+    def _candidate_button(self, index: int, candidate: ScreenCaptureCandidate) -> QPushButton:
+        button = QPushButton(self)
+        button.setMinimumHeight(92)
+        button.setStyleSheet("text-align: left; padding: 8px;")
+        geometry = candidate.screen_geometry
+        title = f"{index + 1}. {candidate.screen_name}    {geometry.width()} × {geometry.height()}"
+        button.setText(title)
+        preview = QPixmap.fromImage(candidate.image).scaled(
+            QSize(132, 72),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        button.setIcon(QIcon(preview))
+        button.setIconSize(QSize(132, 72))
+        button.clicked.connect(lambda _checked=False, selected=index: self._select(selected))
+        return button
+
+    def _select(self, index: int) -> None:
+        if 0 <= index < len(self._candidates):
+            self.screen_selected.emit(index)
+            self.accept()
 
 
 class ScreenshotColorPreviewWindow(QFrame):
@@ -586,12 +909,16 @@ class ScreenshotCaptureOverlay(QWidget):
         region_store: ScreenshotRegionStore | None = None,
         transient_paths: tuple[Path, ...] = (),
         auto_copy_on_confirm: bool = True,
+        capture_layout: ScreenCaptureLayout | None = None,
+        pin_shortcut: str = DEFAULT_CLIPBOARD_PIN_SHORTCUT,
     ) -> None:
         super().__init__()
         self._history = history
         self._region_store = region_store
         self._transient_paths = set(transient_paths)
         self._auto_copy_on_confirm = auto_copy_on_confirm
+        self._capture_layout = capture_layout
+        self._pin_shortcut = pin_shortcut or DEFAULT_CLIPBOARD_PIN_SHORTCUT
         self._image = QImage()
         self._capture_ready = bool(history.paths)
         self._pending_action: str | None = None
@@ -680,6 +1007,13 @@ class ScreenshotCaptureOverlay(QWidget):
             return
         self._history = ScreenshotHistory(self._history.paths, index)
         self._image = image
+        stored_layout = self._region_store.get_layout(path) if self._region_store is not None else None
+        self._capture_layout = stored_layout if stored_layout is not None and stored_layout.image_size == image.size() else None
+        if self._capture_layout is not None:
+            # New captures keep their original monitor geometry.  Historical
+            # single-monitor images therefore reopen on that monitor instead
+            # of being stretched across whichever overlay was already open.
+            self.setGeometry(self._capture_layout.virtual_geometry)
         self._capture_ready = True
         source_rect = self._region_store.get(path) if self._region_store is not None else None
         self._selection = self._selection_from_source(source_rect) if source_rect is not None else QRect()
@@ -694,9 +1028,22 @@ class ScreenshotCaptureOverlay(QWidget):
         if image.isNull():
             return
         self._image = image
+        if self._capture_layout is not None and self._capture_layout.image_size != image.size():
+            self._capture_layout = None
         self._update_color_preview()
         self._history_label.setText("正在保存截图…")
         self._history_label.adjustSize()
+        self.update()
+
+    @property
+    def capture_layout(self) -> ScreenCaptureLayout | None:
+        return self._capture_layout
+
+    def set_capture_layout(self, layout: ScreenCaptureLayout | None) -> None:
+        if layout is None or layout.image_size != self._image.size():
+            self._capture_layout = None
+        else:
+            self._capture_layout = layout
         self.update()
 
     def complete_capture(self, history: ScreenshotHistory, transient_path: Path) -> None:
@@ -761,6 +1108,11 @@ class ScreenshotCaptureOverlay(QWidget):
             current.replace(target)
         except OSError:
             return None
+        if self._region_store is not None:
+            try:
+                self._region_store.rename_image(current, target)
+            except OSError:
+                pass
         self._history = ScreenshotHistory(tuple(target if path == current else path for path in self._history.paths), self._history.index)
         self._transient_paths.discard(current)
         return target
@@ -956,11 +1308,11 @@ class ScreenshotCaptureOverlay(QWidget):
             painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
             if not self._image.isNull():
-                painter.drawImage(self.rect(), self._image)
+                self._draw_image(painter, self.rect())
             if not self._selection.isEmpty():
                 painter.fillRect(self.rect(), QColor(15, 23, 42, 132))
                 if not self._image.isNull():
-                    painter.drawImage(self._selection, self._image, self._source_rect(self._selection))
+                    self._draw_image(painter, self._selection)
                 painter.setPen(QPen(QColor(_screenshot_theme_colors()["selection"]), 2, Qt.PenStyle.DashLine))
                 painter.drawRect(self._selection.adjusted(0, 0, -1, -1))
                 selection = self._image_selection()
@@ -977,10 +1329,10 @@ class ScreenshotCaptureOverlay(QWidget):
                 if not candidate_rect.isEmpty():
                     if not self._image.isNull():
                         painter.fillRect(self.rect(), QColor(15, 23, 42, 132))
-                        painter.drawImage(candidate_rect, self._image, self._source_rect(candidate_rect))
+                        self._draw_image(painter, candidate_rect)
                     painter.setPen(QPen(QColor(_screenshot_theme_colors()["selection"]), 2, Qt.PenStyle.DashLine))
                     painter.drawRect(candidate_rect.adjusted(0, 0, -1, -1))
-                    label = f"窗口 {candidate_rect.width()} × {candidate_rect.height()} · 回车复制 / F3 贴图 / F2 发送"
+                    label = f"窗口 {candidate_rect.width()} × {candidate_rect.height()} · 回车复制 / {self._pin_shortcut} 贴图 / F2 发送"
                     metrics = painter.fontMetrics()
                     label_rect = QRect(candidate_rect.left(), max(0, candidate_rect.top() - metrics.height() - 9), metrics.horizontalAdvance(label) + 14, metrics.height() + 7)
                     painter.setPen(Qt.PenStyle.NoPen)
@@ -994,6 +1346,8 @@ class ScreenshotCaptureOverlay(QWidget):
     def _source_rect(self, selection: QRect) -> QRect:
         if self.width() <= 0 or self.height() <= 0:
             return QRect()
+        if self._capture_layout is not None:
+            return self._capture_layout.source_rect_for_logical(selection)
         return QRect(
             round(selection.x() * self._image.width() / self.width()),
             round(selection.y() * self._image.height() / self.height()),
@@ -1004,12 +1358,20 @@ class ScreenshotCaptureOverlay(QWidget):
     def _selection_from_source(self, source: QRect) -> QRect:
         if source.isEmpty() or self._image.isNull() or self._image.width() <= 0 or self._image.height() <= 0:
             return QRect()
+        if self._capture_layout is not None:
+            return self._capture_layout.logical_rect_for_source(source)
         return QRect(
             round(source.x() * self.width() / self._image.width()),
             round(source.y() * self.height() / self._image.height()),
             max(1, round(source.width() * self.width() / self._image.width())),
             max(1, round(source.height() * self.height() / self._image.height())),
         ).intersected(self.rect())
+
+    def _draw_image(self, painter: QPainter, target: QRect) -> None:
+        if self._capture_layout is not None:
+            self._capture_layout.draw(painter, self._image, target)
+            return
+        painter.drawImage(target, self._image, self._source_rect(target))
 
     def eventFilter(self, watched: QObject, event) -> bool:
         if event.type() == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.RightButton:
@@ -1395,6 +1757,8 @@ class SystemScreenshotController(QObject):
         self._capture_task: QtAsyncTask | None = None
         self._window_candidates_task: QtAsyncTask | None = None
         self._capture_save_task: QtAsyncTask | None = None
+        self._screen_picker: ScreenCapturePicker | None = None
+        self._capture_candidates: tuple[ScreenCaptureCandidate, ...] = ()
         self._send_task: QtAsyncTask | None = None
         self._composer: ScreenshotComposer | None = None
         self._capture_overlay: ScreenshotCaptureOverlay | None = None
@@ -1501,6 +1865,10 @@ class SystemScreenshotController(QObject):
         if self._capture_overlay is not None:
             self._capture_overlay.close()
             self._capture_overlay = None
+        if self._screen_picker is not None:
+            self._screen_picker.close()
+            self._screen_picker = None
+        self._capture_candidates = ()
         for pin in tuple(self._pins):
             pin.close_for_shutdown()
         self._pins.clear()
@@ -1583,33 +1951,11 @@ class SystemScreenshotController(QObject):
 
     @Slot()
     def _capture_requested(self) -> None:
-        if not self._settings.enabled or self._capture_overlay is not None:
+        if not self._settings.enabled or self._capture_overlay is not None or self._screen_picker is not None or self._capture_task is not None:
             return
-        overlay = ScreenshotCaptureOverlay(
-            ScreenshotHistory(()),
-            region_store=self._region_store,
-            auto_copy_on_confirm=self._settings.auto_copy,
-        )
-        self._capture_overlay = overlay
-        overlay.copy_requested.connect(self._copy_capture_image)
-        overlay.pin_requested.connect(self._pin_image)
-        overlay.send_requested.connect(self._send_capture_image)
-        overlay.color_copy_requested.connect(self._copy_color_text)
-        overlay.destroyed.connect(lambda *_: self._clear_capture_overlay(overlay))
-        overlay.show()
-        overlay.raise_()
-        overlay.activateWindow()
-        overlay.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
-        QApplication.processEvents()
         self._capture_task = start_qt_task(
             capture_desktop_image_async,
-            lambda task, result: self._capture_image_ready(task, overlay, result),
-            on_error=lambda error: error,
-        )
-        overlay_handle = int(overlay.winId())
-        self._window_candidates_task = start_qt_task(
-            lambda: screenshot_window_candidates((overlay_handle,)),
-            lambda task, result: self._window_candidates_ready(task, overlay, result),
+            self._capture_image_ready,
             on_error=lambda error: error,
         )
 
@@ -1619,22 +1965,76 @@ class SystemScreenshotController(QObject):
         if self._capture_overlay is overlay and isinstance(result, tuple):
             overlay.set_window_candidates(tuple(item for item in result if isinstance(item, ScreenshotWindowCandidate)))
 
-    def _capture_image_ready(self, task: QtAsyncTask, overlay: ScreenshotCaptureOverlay, result: object) -> None:
+    def _capture_image_ready(self, task: QtAsyncTask, result: object) -> None:
         if self._capture_task is task:
             self._capture_task = None
         if not isinstance(result, QImage) or result.isNull():
-            if self._capture_overlay is overlay:
-                overlay.capture_failed()
-                self._notify("系统截图", f"截图失败：{result}", True)
+            self._notify("系统截图", f"截图失败：{result}", True)
             return
-        if self._capture_overlay is not overlay:
+        candidates = split_desktop_capture_by_screen(
+            result,
+            list(QApplication.screens()),
+            image_origin=windows_virtual_screen_origin(),
+        )
+        if not candidates:
+            self._notify("系统截图", "没有可用的显示器截图。", True)
             return
-        overlay.set_capture_image(result)
+        self._capture_candidates = candidates
+        picker = ScreenCapturePicker(candidates)
+        self._screen_picker = picker
+        picker.screen_selected.connect(self._screen_capture_selected)
+        picker.destroyed.connect(lambda *_: self._clear_screen_picker(picker))
+        picker.show()
+        picker.raise_()
+        picker.activateWindow()
+        picker.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+    @Slot(int)
+    def _screen_capture_selected(self, index: int) -> None:
+        if not (0 <= index < len(self._capture_candidates)):
+            return
+        candidate = self._capture_candidates[index]
+        picker = self._screen_picker
+        self._screen_picker = None
+        self._capture_candidates = ()
+        if picker is not None:
+            picker.close()
+        overlay = ScreenshotCaptureOverlay(
+            ScreenshotHistory(()),
+            candidate.layout.virtual_geometry,
+            region_store=self._region_store,
+            auto_copy_on_confirm=self._settings.auto_copy,
+            capture_layout=candidate.layout,
+            pin_shortcut=self._settings.clipboard_shortcut,
+        )
+        self._capture_overlay = overlay
+        overlay.copy_requested.connect(self._copy_capture_image)
+        overlay.pin_requested.connect(self._pin_image)
+        overlay.send_requested.connect(self._send_capture_image)
+        overlay.color_copy_requested.connect(self._copy_color_text)
+        overlay.destroyed.connect(lambda *_: self._clear_capture_overlay(overlay))
+        overlay.set_capture_image(candidate.image)
+        overlay.show()
+        overlay.raise_()
+        overlay.activateWindow()
+        overlay.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+        QApplication.processEvents()
         self._capture_save_task = start_qt_task(
-            lambda: save_screenshot_image(self._project_root, result, "capture"),
+            lambda: save_screenshot_image(self._project_root, candidate.image, "capture"),
             lambda save_task, saved: self._capture_image_saved(save_task, overlay, saved),
             on_error=lambda error: error,
         )
+        overlay_handle = int(overlay.winId())
+        self._window_candidates_task = start_qt_task(
+            lambda: screenshot_window_candidates((overlay_handle,)),
+            lambda window_task, windows: self._window_candidates_ready(window_task, overlay, windows),
+            on_error=lambda error: error,
+        )
+
+    def _clear_screen_picker(self, picker: ScreenCapturePicker) -> None:
+        if self._screen_picker is picker:
+            self._screen_picker = None
+            self._capture_candidates = ()
 
     def _capture_image_saved(self, task: QtAsyncTask, overlay: ScreenshotCaptureOverlay, result: object) -> None:
         if self._capture_save_task is task:
@@ -1650,6 +2050,11 @@ class SystemScreenshotController(QObject):
             except OSError:
                 pass
             return
+        if overlay.capture_layout is not None:
+            try:
+                self._region_store.remember_layout(result, overlay.capture_layout)
+            except OSError:
+                pass
         overlay.complete_capture(screenshot_history(result), result)
 
     @Slot()

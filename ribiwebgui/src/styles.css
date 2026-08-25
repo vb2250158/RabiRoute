@@ -407,7 +407,7 @@ body::before {
 
 .app-card {
   border: 1px solid var(--rr-border-soft) !important;
-  border-radius: 8px !important;
+  border-radius: var(--rr-card-radius, 8px) !important;
   box-shadow: var(--rr-shadow-card) !important;
 }
 
@@ -416,13 +416,18 @@ body::before {
   backdrop-filter: blur(14px);
 }
 
+.v-switch.v-input--density-compact {
+  --v-input-control-height: 44px;
+  min-height: 44px;
+}
+
 .v-switch .v-selection-control {
-  min-height: 34px;
+  min-height: 44px !important;
 }
 
 .v-switch .v-selection-control__wrapper {
   width: 58px;
-  height: 34px;
+  height: 44px !important;
 }
 
 .v-switch .v-switch__track {
@@ -430,20 +435,58 @@ body::before {
   height: 28px;
   border-radius: 999px;
   opacity: 1;
-  background: var(--rr-switch-track);
-  box-shadow: inset 0 1px 2px rgba(17, 32, 51, .14);
+  background: var(--rr-switch-track) !important;
+  box-shadow: var(--rr-switch-track-shadow);
 }
 
 .v-switch .v-switch__thumb {
   width: 32px;
   height: 32px;
-  background: var(--rr-switch-thumb);
-  box-shadow: 0 8px 18px rgba(17, 32, 51, .2);
+  background: var(--rr-switch-thumb) !important;
+  box-shadow: var(--rr-switch-thumb-shadow);
+}
+
+.v-switch .v-selection-control__input {
+  color: var(--rr-switch-track) !important;
+}
+
+.v-switch .v-selection-control--dirty .v-selection-control__input {
+  color: var(--rr-switch-track-active) !important;
+}
+
+.v-switch .v-selection-control--dirty .v-switch__track {
+  background: var(--rr-switch-track-active) !important;
+}
+
+.v-switch .v-selection-control--dirty .v-switch__thumb {
+  background: var(--rr-switch-thumb-active) !important;
 }
 
 .v-switch .v-label {
   color: var(--rr-heading);
   font-weight: 800;
+}
+
+@media (forced-colors: active) {
+  .v-switch .v-selection-control__input {
+    color: ButtonText !important;
+  }
+
+  .v-switch .v-selection-control--dirty .v-selection-control__input {
+    color: Highlight !important;
+  }
+
+  .v-switch .v-switch__track {
+    background: ButtonFace;
+  }
+
+  .v-switch .v-selection-control--dirty .v-switch__track {
+    background: Highlight;
+  }
+
+  .v-switch .v-selection-control--dirty .v-switch__thumb {
+    background: HighlightText;
+  }
 }
 
 .left-sidebar {

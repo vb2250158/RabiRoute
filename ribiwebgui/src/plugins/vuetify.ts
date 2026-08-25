@@ -19,7 +19,8 @@ export const vuetify = createVuetify({
     defaultTheme: "RabiLight",
     themes: {
       RabiLight: RABI_LIGHT_THEME,
-      RabiDark: RABI_DARK_THEME
+      RabiDark: RABI_DARK_THEME,
+      RabiCustom: RABI_LIGHT_THEME
     }
   },
   defaults: {

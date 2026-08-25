@@ -104,7 +104,7 @@ The secondary navigation above the footer contains **Speech Service**, **Perform
 
 ## Interface theme
 
-In **Settings** > **RabiRoute desktop features**, choose **Follow system**, **Light**, or **Dark**, then use the top-bar **Save configuration** action. The current WebGUI changes immediately. The Windows tray, role panel, selected-text action bar, and screenshot windows change on the next settings refresh, usually within ten seconds. The theme changes colors and control appearance only. See [Interface theme](interface-theme_en.md) for the full guide.
+In **Settings** > **RabiRoute desktop features**, choose **Follow system**, **Light**, **Dark**, or a saved custom theme. Use the top-bar **Save configuration** action for a built-in theme and the card's **Save and apply** action for a custom theme. The current WebGUI changes immediately. The Windows tray, role panel, selected-text action bar, and screenshot windows change on the next settings refresh, usually within ten seconds. The theme changes colors and control appearance only. See [Interface theme](interface-theme_en.md) for the full guide.
 
 ## System screenshots and persona delivery
 

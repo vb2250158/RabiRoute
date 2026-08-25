@@ -37,6 +37,10 @@ html[data-rabiroute-theme="light"] {
   --rr-shadow-card: 0 10px 24px rgba(15, 23, 42, .07);
   --rr-shadow-menu: 0 18px 45px rgba(12, 42, 74, .16);
   --rr-switch-track: rgba(17, 32, 51, .42);
+  --rr-switch-track-active: rgb(var(--v-theme-success));
   --rr-switch-thumb: #fffaf0;
+  --rr-switch-thumb-active: #ffffff;
+  --rr-switch-track-shadow: inset 0 1px 2px rgba(17, 32, 51, .14);
+  --rr-switch-thumb-shadow: 0 8px 18px rgba(17, 32, 51, .2);
   --rr-warning-text: #b45309;
 }

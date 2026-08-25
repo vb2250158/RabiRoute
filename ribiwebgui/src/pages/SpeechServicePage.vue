@@ -14,6 +14,7 @@ import {
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
 import SpeechHostMonitor from "../components/SpeechHostMonitor.vue";
+import TaskCompletionAnnouncementsCard from "../components/TaskCompletionAnnouncementsCard.vue";
 import { useGatewayStore } from "../stores/gatewayStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { useSpeechStore } from "../stores/speechStore";
@@ -1077,6 +1078,8 @@ onBeforeUnmount(() => {
           <v-btn color="primary" size="large" prepend-icon="mdi-account-voice" :loading="ttsBusy" :disabled="!ttsText.trim() || !voice" @click="synthesize">合成并播放</v-btn>
         </div>
       </v-card>
+
+      <TaskCompletionAnnouncementsCard v-if="activeKind === 'tts'" />
 
       <v-card v-else class="app-card glass-card speech-console-card">
         <div class="speech-console-head">

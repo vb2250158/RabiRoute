@@ -24,7 +24,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Start here on your first use to complete a real delivery, read status, change rules, and recover from common failures.
 - [Getting Started](getting-started_en.md) — **Current guide**. Install RabiRoute, start Manager, and confirm that the console opens.
 - [Interface and status](user-guide/interface-and-status_en.md) — **Current guide**. Understand the current Route, Manager connection, unsaved changes, runtime state, and Settings-page screenshots, selected-text menu, and login startup.
-- [Interface theme](user-guide/interface-theme_en.md) — **Current guide**. Shared light, dark, and follow-system settings for WebGUI and the Windows tray.
+- [Interface theme](user-guide/interface-theme_en.md) — **Current guide**. Shared light, dark, follow-system, and bounded custom themes for WebGUI and the Windows tray.
 - [Runtime, logs, and troubleshooting](user-guide/operations-and-troubleshooting_en.md) — **Current guide**. When a message does not arrive, start with the diagnosis summary and locate the break.
 - [Safety, replies, and data](user-guide/safety-and-data_en.md) — **Current guide**. Check permissions and privacy before enabling external replies or sharing diagnostics.
 - [Current Capabilities and Maturity](current-capabilities_en.md) — **Current fact**. Check what is verified and what still needs a real account, network, or device acceptance run.

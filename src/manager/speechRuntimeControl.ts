@@ -171,6 +171,18 @@ export class SpeechRuntimeControl {
     };
   }
 
+  /**
+   * TTS workers and model paths belong to the Windows user, not the NAS source
+   * tree or the replaceable program bundle.  The bundled adapter still provides
+   * code and dependencies; its host reads this user-local configuration.
+   */
+  private userSpeechConfigPath(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>): string {
+    const localAppData = process.env.LOCALAPPDATA;
+    return localAppData
+      ? path.join(localAppData, "RabiPC", "RabiSpeech", "config.json")
+      : path.join(paths.serviceRoot, "config.json");
+  }
+
   private assertWindowsRuntimeInstalled(paths: ReturnType<SpeechRuntimeControl["runtimePaths"]>): void {
     if (this.platform !== "win32") {
       throw new SpeechRuntimeControlError("WebGUI 启停 RabiSpeech 当前只支持 Windows 主机。", 409);
@@ -217,7 +229,8 @@ export class SpeechRuntimeControl {
             env: {
               ...process.env,
               PYTHONUTF8: "1",
-              PYTHONIOENCODING: "utf-8"
+              PYTHONIOENCODING: "utf-8",
+              RABISPEECH_CONFIG: this.userSpeechConfigPath(paths)
             }
           }
         );

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .app_paths import project_dir_from_gateway, role_dir_from_gateway, role_id_from_gateway, runtime_dir_from_gateway
 from .desktop_adapter import DesktopAdapter
+from .desktop_pet_controller import DesktopPetController
 from .desktop_refresh import (
     DesktopRefreshResult,
     DesktopRefreshService,
@@ -49,6 +50,7 @@ from .system_selection import (
 from .system_screenshot import SystemScreenshotController
 from .task_window import TaskWindow
 from .theme import apply_rabi_application_theme, apply_rabi_menu_theme
+from .themes import register_custom_theme
 from .tray_menu_controller import TrayMenuController, show_tray_menu_for_activation
 from .windows_app_identity import apply_qt_app_metadata
 
@@ -239,6 +241,9 @@ def run(
 
     refresh_action = QAction("刷新")
     webgui_action = QAction("打开 RabiRoute WebGUI")
+    desktop_pet_action = QAction("显示夜雨桌宠")
+    desktop_pet_click_through_action = QAction("桌宠鼠标点透")
+    desktop_pet_click_through_action.setCheckable(True)
     status_action = QAction("状态：加载中")
     persona_heading_action = QAction("人格聊天")
     more_personas_menu = QMenu("更多人格")
@@ -253,6 +258,8 @@ def run(
     menu.addSeparator()
     menu.addAction(persona_heading_action)
     persona_actions_end = menu.addSeparator()
+    menu.addAction(desktop_pet_action)
+    menu.addAction(desktop_pet_click_through_action)
     menu.addAction(webgui_action)
     menu.addAction(refresh_action)
     menu.addSeparator()
@@ -283,6 +290,7 @@ def run(
         "loaded_gateway_id": selected_gateway_id,
         "theme": "system",
         "resolved_theme": "light",
+        "theme_definition": None,
         "plugin_catalog": empty_desktop_plugin_catalog(),
     }
     theme_refresh_task: QtAsyncTask | None = None
@@ -292,13 +300,18 @@ def run(
     refresh_gate = _SnapshotRefreshGate()
     lifecycle.observe(initial_manager)
 
-    def apply_desktop_theme(theme: object) -> None:
+    def apply_desktop_theme(theme: object, custom_theme: object = None) -> None:
+        registered_custom_theme = register_custom_theme(custom_theme)
+        if registered_custom_theme:
+            theme = registered_custom_theme
         selected = _desktop_plugin_theme(state["plugin_catalog"], theme, desktop_extensions)
         context = DesktopThemeContext(app, apply_rabi_application_theme)
         try:
             resolved = (
                 desktop_extensions.apply_theme(selected, context)
                 if selected is not None
+                else apply_rabi_application_theme(app, theme)
+                if registered_custom_theme
                 else desktop_extensions.apply_registered_theme(
                     "system", "builtin.desktop-theme.system.v1", context
                 )
@@ -306,6 +319,7 @@ def run(
         except LookupError:
             resolved = apply_rabi_application_theme(app, "system")
         state["theme"] = theme if isinstance(theme, str) else "system"
+        state["theme_definition"] = custom_theme if isinstance(custom_theme, dict) else None
         state["resolved_theme"] = resolved
         apply_rabi_menu_theme(menu, more_personas_menu, plugin_menu, theme=resolved)
         if panel is not None:
@@ -319,7 +333,10 @@ def run(
         def completed(settings) -> None:
             nonlocal theme_refresh_task
             theme_refresh_task = None
-            apply_desktop_theme(getattr(settings, "theme", "system"))
+            apply_desktop_theme(
+                getattr(settings, "theme", "system"),
+                getattr(settings, "custom_theme", None),
+            )
 
         def failed(_error: BaseException) -> None:
             nonlocal theme_refresh_task
@@ -440,6 +457,32 @@ def run(
                 5000,
             )
 
+    def open_desktop_pet_persona() -> None:
+        gateway = next(
+            (item for item in state["manager"].gateways if role_id_from_gateway(item, "") == "YeYu"),
+            None,
+        )
+        if gateway is None:
+            _show_message(
+                tray,
+                tray_available,
+                "夜雨桌宠",
+                "Manager 当前没有提供 YeYu 人格入口。",
+                QSystemTrayIcon.Warning,
+                4000,
+            )
+            return
+        open_chat(gateway)
+
+    desktop_pet = DesktopPetController(manager.manager_url, "YeYu", open_desktop_pet_persona)
+    desktop_pet.visibility_changed.connect(
+        lambda visible: desktop_pet_action.setText("隐藏夜雨桌宠" if visible else "显示夜雨桌宠")
+    )
+    desktop_pet.click_through_changed.connect(desktop_pet_click_through_action.setChecked)
+    desktop_pet_action.triggered.connect(lambda _checked=False: desktop_pet.toggle())
+    desktop_pet_click_through_action.toggled.connect(desktop_pet.set_click_through)
+    app.aboutToQuit.connect(desktop_pet.close)
+
     def apply_refresh(result: DesktopRefreshResult, auto: bool) -> None:
         previous_manager = state["manager"]
         previous_plans = state["plans"]
@@ -553,7 +596,7 @@ def run(
                     system_screenshot.set_plugin_hotkeys(
                         _desktop_plugin_hotkeys(catalog, desktop_extensions)
                     )
-                    apply_desktop_theme(state["theme"])
+                    apply_desktop_theme(state["theme"], state["theme_definition"])
                     _rebuild_plugin_menu(
                         menu,
                         plugin_menu,
