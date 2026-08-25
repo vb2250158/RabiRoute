@@ -192,17 +192,18 @@ test("NapCat auto login on Rabi start defaults on and preserves an explicit off 
   assert.equal(normalized[1]?.autoLoginOnRabiStart, false);
 });
 
-test("Message Agent limit is optional and ignores invalid values", () => {
-  const normalized = normalizeGatewayDefinition(gateway({
+test("Message Agent limit defaults to one and ignores invalid values", () => {
+  const defaulted = normalizeGatewayDefinition(gateway({
     agentAdapters: ["codex"],
-    messageProcessingAgents: {
-      codex: { enabled: true, maxAgents: 0 }
-    }
+    messageProcessingAgents: { codex: { enabled: true } }
+  }));
+  const invalid = normalizeGatewayDefinition(gateway({
+    agentAdapters: ["codex"],
+    messageProcessingAgents: { codex: { enabled: true, maxAgents: 0 } }
   }));
 
-  assert.deepEqual(normalized.messageProcessingAgents, {
-    codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" }
-  });
+  assert.equal(defaulted.messageProcessingAgents?.codex?.maxAgents, 1);
+  assert.equal(invalid.messageProcessingAgents?.codex?.maxAgents, 1);
 });
 
 test("managed task capability layer exposes the three Codex task features independently", () => {

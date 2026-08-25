@@ -7,6 +7,7 @@ import { Writable } from "node:stream";
 import { once } from "node:events";
 import test from "node:test";
 import { createPlan } from "../roleKnowledge.js";
+import { planJsonFile } from "../planStorageLayout.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 
 class MockResponse extends Writable {
@@ -51,7 +52,7 @@ test("plan attachment route serves a managed image inline", async () => {
     attachments: [{ name: "preview.png", mimeType: "image/png", contentBase64: content.toString("base64") }]
   });
   const attachment = plan.attachments[0]!;
-  const planFile = path.join(roleDir, "plans", "items", "active", `${plan.id}.json`);
+  const planFile = planJsonFile(roleDir, plan.id, "active");
   const stored = JSON.parse(fs.readFileSync(planFile, "utf8")) as { attachments: Array<{ kind: string }> };
   stored.attachments[0]!.kind = "file";
   fs.writeFileSync(planFile, JSON.stringify(stored, null, 2), "utf8");
@@ -111,7 +112,7 @@ test("plan attachment route returns 404 for missing or unmanaged paths", async (
 
   const outside = path.join(roleDir, "outside.txt");
   fs.writeFileSync(outside, "outside", "utf8");
-  const planFile = path.join(roleDir, "plans", "items", "active", `${plan.id}.json`);
+  const planFile = planJsonFile(roleDir, plan.id, "active");
   const stored = JSON.parse(fs.readFileSync(planFile, "utf8")) as { attachments: Array<{ path: string }> };
   stored.attachments[0]!.path = outside;
   fs.writeFileSync(planFile, JSON.stringify(stored, null, 2), "utf8");

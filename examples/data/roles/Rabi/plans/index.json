@@ -14,5 +14,5 @@
     "plan-rabiroute-cordis-plugin-runtime"
   ],
   "archivedPlanIds": [],
-  "notes": "Public, sanitized example index for the Rabi persona. unarchivedPlanIds means plans that are not archived, including 未开始、进行中、暂停 and 已完成. Plan details live in items/active/*.json."
+  "notes": "Public, sanitized example index for the Rabi persona. unarchivedPlanIds means plans that are not archived, including 未开始、进行中、暂停 and 已完成. Plan details live in active/<planId>/plan.json."
 }

@@ -26,7 +26,6 @@ import {
 } from "../markdownPreview";
 import { activePlanIdAtAnchor, directoryScrollTopForItem } from "../planDirectoryScrollSync";
 import {
-  drainKnowledgePages,
   hasMoreKnowledgeAfterWindow,
   hasMoreKnowledgeBeforeWindow,
   knowledgeRenderWindow,
@@ -39,13 +38,12 @@ import {
   loadPlanFeedback,
   loadPlanHistory,
   loadPlanAgentStatuses,
-  loadRoleMemoryCounts,
+  loadPendingMemoryConsolidationRunCount,
   loadRoleMemoryPage,
+  loadRoleKnowledgeFileCounts,
   loadRolePlan,
   loadRolePlanPage,
   loadRolePlanPageWithPriorityDetails,
-  ROLE_MEMORY_BACKGROUND_PAGE_SIZE,
-  ROLE_PLAN_BACKGROUND_PAGE_SIZE,
   openPlanAgentTask,
   submitPlanFeedback,
   type PlanAgentBindingStatus,
@@ -73,7 +71,8 @@ const archivedMemory = ref<RoleMemory[]>([]);
 const loading = ref(false);
 const loadingMorePlans = ref(false);
 const memoryLoading = ref(false);
-const error = ref("");
+const planError = ref("");
+const memoryError = ref("");
 const activeView = ref<PlanKnowledgeView>("plans");
 const query = ref<string | null>("");
 const expandedPlans = reactive<Record<string, boolean>>({});
@@ -268,7 +267,7 @@ const totalMemoryForView = computed(() => activeView.value === "consolidated_mem
   : activeView.value === "archived"
     ? memoryPageCounts.value.archived
     : memoryPageCounts.value.recent);
-const knowledgeListLoading = computed(() => loading.value || loadingMorePlans.value || memoryLoading.value || hasMorePlans.value || hasMoreMemory.value);
+const knowledgeListLoading = computed(() => loading.value || loadingMorePlans.value || memoryLoading.value);
 const knowledgeListStatus = computed(() => {
   const counts: string[] = [];
   if (showsPlanList.value) counts.push(isEnglish.value
@@ -727,7 +726,7 @@ function drainPlanDetailQueue(): void {
       })
       .catch((loadError) => {
         if (task.request === requestVersion) {
-          error.value = loadError instanceof Error ? loadError.message : String(loadError);
+          planError.value = loadError instanceof Error ? loadError.message : String(loadError);
         }
       })
       .finally(() => {
@@ -865,7 +864,7 @@ async function loadMoreMemory(limit = 24): Promise<void> {
     memoryNextCursor.value = page.nextCursor;
     memoryPageCounts.value = page.counts;
   } catch (loadError) {
-    if (currentRequest === requestVersion) error.value = loadError instanceof Error ? loadError.message : String(loadError);
+    if (currentRequest === requestVersion) memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
   } finally {
     if (currentRequest === requestVersion) memoryLoading.value = false;
     scheduleProgressiveSentinelRefresh();
@@ -921,7 +920,7 @@ async function loadMorePlans(limit = 8): Promise<void> {
     planNextCursor.value = page.nextCursor;
   } catch (loadError) {
     if (currentRequest === requestVersion) {
-      error.value = loadError instanceof Error ? loadError.message : String(loadError);
+      planError.value = loadError instanceof Error ? loadError.message : String(loadError);
     }
   } finally {
     if (currentRequest === requestVersion) loadingMorePlans.value = false;
@@ -948,137 +947,48 @@ async function yieldToKnowledgePaint(): Promise<void> {
   });
 }
 
-async function waitForKnowledgePageRequestIdle(request: number, requestInProgress: () => boolean): Promise<void> {
-  while (request === requestVersion && knowledgePageWorkAllowed() && requestInProgress()) {
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
-  }
-}
-
-async function loadAllRemainingPlans(): Promise<void> {
-  const backgroundRequest = requestVersion;
-  if (planPageBackgroundRequest === backgroundRequest) return;
-  planPageBackgroundRequest = backgroundRequest;
-  try {
-    await drainKnowledgePages({
-      nextCursor: () => planNextCursor.value,
-      shouldContinue: () => backgroundRequest === requestVersion && knowledgePageWorkAllowed(),
-      yieldToUi: yieldToKnowledgePaint,
-      loadNextPage: async () => {
-        await waitForKnowledgePageRequestIdle(backgroundRequest, () => loadingMorePlans.value);
-        if (backgroundRequest !== requestVersion || !knowledgePageWorkAllowed()) return;
-        await loadMorePlans(ROLE_PLAN_BACKGROUND_PAGE_SIZE);
-      }
-    });
-    if (backgroundRequest === requestVersion && !planNextCursor.value && knowledgePageWorkAllowed()) {
-      await yieldToKnowledgePaint();
-      refreshExpandedPlanAgentStatuses();
-    }
-  } finally {
-    if (planPageBackgroundRequest === backgroundRequest) planPageBackgroundRequest = 0;
-  }
-}
-
-async function loadAllRemainingMemory(): Promise<void> {
-  const backgroundRequest = requestVersion;
-  if (memoryPageBackgroundRequest === backgroundRequest) return;
-  memoryPageBackgroundRequest = backgroundRequest;
-  try {
-    await drainKnowledgePages({
-      nextCursor: () => memoryNextCursor.value,
-      shouldContinue: () => backgroundRequest === requestVersion && showsMemoryList.value && knowledgePageWorkAllowed(),
-      yieldToUi: yieldToKnowledgePaint,
-      loadNextPage: async () => {
-        await waitForKnowledgePageRequestIdle(backgroundRequest, () => memoryLoading.value);
-        if (backgroundRequest !== requestVersion || !knowledgePageWorkAllowed()) return;
-        await loadMoreMemory(ROLE_MEMORY_BACKGROUND_PAGE_SIZE);
-      }
-    });
-  } finally {
-    if (memoryPageBackgroundRequest === backgroundRequest) memoryPageBackgroundRequest = 0;
-  }
-}
-
-async function refreshKnowledge(): Promise<void> {
-  const selectedRoleId = roleId.value;
-  if (!knowledgePageWorkAllowed()) return;
-  if (!selectedRoleId) {
-    resetPlanMarkdownTeasers();
-    resetPlanMediaLoadStates();
-    resetPlanDetailHydration();
-    resetPlanAgentStatusState();
-    plans.value = [];
-    recentMemory.value = [];
-    consolidatedMemory.value = [];
-    archivedMemory.value = [];
-    planNextCursor.value = "";
-    planListResultTotal.value = 0;
-    planListStatusOptions.value = [];
-    planListTagOptions.value = [];
-    memoryNextCursor.value = "";
-    planRenderStart.value = 0;
-    resetPlanPageCounts();
-    resetMemoryPageCounts();
-    error.value = "";
-    return;
-  }
-  const currentRequest = ++requestVersion;
-  resetPlanAgentStatusState();
-  loading.value = true;
-  memoryLoading.value = false;
-  loadingMorePlans.value = false;
-  error.value = "";
-  planNextCursor.value = "";
-  memoryNextCursor.value = "";
-  planRenderStart.value = 0;
-  planRenderLimit.value = 8;
-  memoryRenderLimit.value = 24;
-  resetPlanMediaLoadStates();
-  resetPlanDetailHydration();
-  void loadRoleMemoryCounts(selectedRoleId)
-    .then((counts) => {
-      if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
-      memoryPageCounts.value = counts;
-    })
-    .catch(() => undefined);
-  void refreshPendingMemoryConsolidationRuns(selectedRoleId).catch(() => undefined);
-  if (showsPlanList.value) {
-    try {
-      const result = await loadRolePlanPageWithPriorityDetails(selectedRoleId, "", 8, currentPlanPageFilter(), 8);
-      if (currentRequest !== requestVersion) return;
-      applyPlanSnapshots(result.items, true, currentRequest);
-      const detailPlanIds = new Set(result.detailPlanIds);
-      const hydratedPlans = result.items.filter((plan) => detailPlanIds.has(plan.id));
-      for (const plan of hydratedPlans) {
-        planDetailsLoaded[plan.id] = true;
-        applyFeedbackDeliveryState(plan.id, plan.approval.latest);
-      }
-      void refreshPlanMarkdownTeasers(hydratedPlans, currentRequest);
-      planPageCounts.value = result.counts;
-      planListResultTotal.value = result.total;
-      planListStatusOptions.value = result.facets?.statuses || [];
-      planListTagOptions.value = result.facets?.tags || [];
-      planNextCursor.value = result.nextCursor;
-    } catch (loadError) {
-      if (currentRequest !== requestVersion) return;
-      error.value = loadError instanceof Error ? loadError.message : String(loadError);
-    } finally {
-      if (currentRequest === requestVersion) loading.value = false;
-      scheduleProgressiveSentinelRefresh();
-    }
-    if (currentRequest === requestVersion && planNextCursor.value) void loadAllRemainingPlans();
-    else if (currentRequest === requestVersion) refreshExpandedPlanAgentStatuses();
-  } else {
+async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: number): Promise<void> {
+  if (!showsPlanList.value) {
     plans.value = [];
     planListResultTotal.value = 0;
     planListStatusOptions.value = [];
     planListTagOptions.value = [];
     loading.value = false;
+    return;
+  }
+  loading.value = true;
+  try {
+    const result = await loadRolePlanPageWithPriorityDetails(selectedRoleId, "", 8, currentPlanPageFilter(), 8);
+    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+    applyPlanSnapshots(result.items, true, currentRequest);
+    const detailPlanIds = new Set(result.detailPlanIds);
+    const hydratedPlans = result.items.filter((plan) => detailPlanIds.has(plan.id));
+    for (const plan of hydratedPlans) {
+      planDetailsLoaded[plan.id] = true;
+      applyFeedbackDeliveryState(plan.id, plan.approval.latest);
+    }
+    void refreshPlanMarkdownTeasers(hydratedPlans, currentRequest);
+    planPageCounts.value = result.counts;
+    planListResultTotal.value = result.total;
+    planListStatusOptions.value = result.facets?.statuses || [];
+    planListTagOptions.value = result.facets?.tags || [];
+    planNextCursor.value = result.nextCursor;
+  } catch (loadError) {
+    if (currentRequest === requestVersion) planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+  } finally {
+    if (currentRequest === requestVersion) loading.value = false;
+    scheduleProgressiveSentinelRefresh();
   }
   if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+  refreshExpandedPlanAgentStatuses();
+}
+
+async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: number): Promise<void> {
   if (!showsMemoryList.value) {
     recentMemory.value = [];
     consolidatedMemory.value = [];
     archivedMemory.value = [];
+    memoryLoading.value = false;
     return;
   }
   memoryLoading.value = true;
@@ -1102,14 +1012,83 @@ async function refreshKnowledge(): Promise<void> {
     memoryNextCursor.value = memory.nextCursor;
     memoryPageCounts.value = memory.counts;
   } catch (loadError) {
-    if (currentRequest === requestVersion) {
-      error.value = loadError instanceof Error ? loadError.message : String(loadError);
-    }
+    if (currentRequest === requestVersion) memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
   } finally {
     if (currentRequest === requestVersion) memoryLoading.value = false;
     scheduleProgressiveSentinelRefresh();
   }
-  if (currentRequest === requestVersion && memoryNextCursor.value) void loadAllRemainingMemory();
+}
+
+async function refreshKnowledge(): Promise<void> {
+  const selectedRoleId = roleId.value;
+  if (!knowledgePageWorkAllowed()) return;
+  if (!selectedRoleId) {
+    resetPlanMarkdownTeasers();
+    resetPlanMediaLoadStates();
+    resetPlanDetailHydration();
+    resetPlanAgentStatusState();
+    plans.value = [];
+    recentMemory.value = [];
+    consolidatedMemory.value = [];
+    archivedMemory.value = [];
+    planNextCursor.value = "";
+    planListResultTotal.value = 0;
+    planListStatusOptions.value = [];
+    planListTagOptions.value = [];
+    memoryNextCursor.value = "";
+    planRenderStart.value = 0;
+    resetPlanPageCounts();
+    resetMemoryPageCounts();
+    planError.value = "";
+    memoryError.value = "";
+    return;
+  }
+  const currentRequest = ++requestVersion;
+  resetPlanAgentStatusState();
+  loadingMorePlans.value = false;
+  planError.value = "";
+  memoryError.value = "";
+  planNextCursor.value = "";
+  memoryNextCursor.value = "";
+  planRenderStart.value = 0;
+  planRenderLimit.value = 8;
+  memoryRenderLimit.value = 24;
+  resetPlanMediaLoadStates();
+  resetPlanDetailHydration();
+  void loadRoleKnowledgeFileCounts(selectedRoleId)
+    .then((counts) => {
+      if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+      planPageCounts.value = {
+        ...planPageCounts.value,
+        total: counts.activePlans + counts.archivedPlans,
+        current: counts.activePlans,
+        plans: counts.activePlans,
+        archived: counts.archivedPlans
+      };
+      memoryPageCounts.value = {
+        recent: counts.recentMemory,
+        consolidated: counts.consolidatedMemory,
+        archived: 0,
+        consolidationRuns: counts.consolidationRuns
+      };
+    })
+    .catch((loadError) => {
+      if (currentRequest === requestVersion && selectedRoleId === roleId.value) {
+        planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      }
+    });
+  if (showsPlanList.value) {
+    await refreshPlanKnowledge(selectedRoleId, currentRequest);
+    return;
+  }
+  await refreshMemoryKnowledge(selectedRoleId, currentRequest);
+  if (activeView.value === "recent_memory") {
+    void refreshPendingMemoryConsolidationRuns(selectedRoleId).catch((loadError) => {
+      if (currentRequest === requestVersion && selectedRoleId === roleId.value) {
+        memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      }
+    });
+  }
 }
 
 watch([activeView, query], () => {
@@ -2010,23 +1989,21 @@ async function refreshPendingMemoryConsolidationRuns(expectedRoleId = roleId.val
     pendingMemoryConsolidationRuns.value = 0;
     return;
   }
-  const response = await fetch(managerResourceUrl(`/api/roles/${encodeURIComponent(expectedRoleId)}/memory/consolidation-runs`), {
-    cache: "no-store"
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const payload = await response.json() as { data?: Array<{ status?: string }> };
+  const pendingRuns = await loadPendingMemoryConsolidationRunCount(expectedRoleId);
   if (expectedRoleId !== roleId.value) return;
-  pendingMemoryConsolidationRuns.value = Array.isArray(payload.data)
-    ? payload.data.filter((run) => run?.status === "requested").length
-    : 0;
+  pendingMemoryConsolidationRuns.value = pendingRuns;
 }
 
 function handleMemoryConsolidationChanged(raw: Event): void {
   try {
     const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; status?: string };
     if (data.roleId !== roleId.value) return;
-    void refreshPendingMemoryConsolidationRuns();
-    if (data.status === "completed") void refreshKnowledge();
+    if (activeView.value === "recent_memory") {
+      void refreshPendingMemoryConsolidationRuns().catch((loadError) => {
+        memoryError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      });
+    }
+    if (data.status === "completed" && showsMemoryList.value) void refreshKnowledge();
   } catch {
     // Ignore malformed event payloads and keep the latest valid memory snapshot.
   }
@@ -2212,10 +2189,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
     </section>
 
     <div class="knowledge-metrics">
-      <div class="knowledge-metric blocked"><span>阻塞中</span><b>{{ planCounts.blocked }}</b><small>需要先解除依赖</small></div>
-      <div class="knowledge-metric qa"><span>待QA测试</span><b>{{ planCounts.qa }}</b><small>等待验证或验收</small></div>
-      <div class="knowledge-metric active"><span>活跃计划</span><b>{{ planCounts.active }}</b><small>当前仍在推进</small></div>
-      <div class="knowledge-metric memory"><span>可读记忆</span><b>{{ memoryPageCounts.recent + memoryPageCounts.consolidated }}</b><small>近期与沉淀合计</small></div>
+      <div class="knowledge-metric blocked"><span>当前计划文件</span><b>{{ planCounts.plans }}</b><small>plans/active/&lt;planId&gt;</small></div>
+      <div class="knowledge-metric qa"><span>已归档计划文件</span><b>{{ planCounts.archived }}</b><small>plans/archive/&lt;planId&gt;</small></div>
+      <div class="knowledge-metric active"><span>近期记忆文件</span><b>{{ memoryPageCounts.recent }}</b><small>memory/recent</small></div>
+      <div class="knowledge-metric memory"><span>沉淀记忆文件</span><b>{{ memoryPageCounts.consolidated }}</b><small>memory/consolidated</small></div>
     </div>
 
     <div
@@ -2497,8 +2474,13 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         <v-icon v-else size="16" color="success">mdi-check-circle-outline</v-icon>
         <span data-no-i18n>{{ knowledgeListStatus }}</span>
       </div>
-      <v-alert v-if="error" type="error" variant="tonal" class="ma-5">{{ error }}</v-alert>
-      <v-alert v-else-if="!roleId" type="warning" variant="tonal" class="ma-5">当前 Route 尚未绑定人格。</v-alert>
+      <v-alert v-if="roleId && showsPlanList && planError" type="error" variant="tonal" class="ma-5">
+        {{ t("计划加载失败") }}：{{ planError }}
+      </v-alert>
+      <v-alert v-if="roleId && showsMemoryList && memoryError" type="error" variant="tonal" class="ma-5">
+        {{ t("记忆加载失败") }}：{{ memoryError }}
+      </v-alert>
+      <v-alert v-if="!roleId" type="warning" variant="tonal" class="ma-5">当前 Route 尚未绑定人格。</v-alert>
 
       <div v-if="roleId && showsPlanList" class="knowledge-list">
         <div v-if="activeView === 'archived'" class="knowledge-subsection-heading">

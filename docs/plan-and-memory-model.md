@@ -71,35 +71,31 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 
 `暂停` 表示用户或负责人明确要求暂时停止推进，但仍保留恢复位置。等待审批、方案确认或授权的当前步骤保持 `进行中`，并写完整的 `approvalRequest` 与 `waitingFor`；当合同完整、可提交且 `responseStatus=pending` 时，Manager 自动派生阻塞，秘书继续追问但不得续投合同外实施。等待 QA 验收、资料、执行失败或外部产物都不是阻塞，必须继续询问、重试、改道、拆分或补证据。顶层状态不新增“阻塞”。
 
-推荐目录：
+计划按“一个计划一个目录”保存：
 
 ```text
 data/roles/<RoleId>/plans/
-  README.md
-  index.json
-  items/
-    active/
+  active/
+    <planId>/
+      plan.json
+      history.jsonl
+      feedback.jsonl
+      attachments/
+      feedback-attachments/<feedbackId>/
   archive/
-  attachments/<planId>/
+    <planId>/
+      plan.json
+      history.jsonl
+      feedback.jsonl
+      attachments/
+      feedback-attachments/<feedbackId>/
 ```
 
-活跃计划：
+`plan.json` 是当前业务状态的唯一真源。`active/` 放所有未归档计划，包括 `未开始`、`进行中`、`暂停`、`已完成`；`archive/` 只放 `已归档` 计划。计划不再按短期、长期、项目关联拆目录；这些信息应写入 `kind`、`project`、`importance`、`urgency`、`dueAt`、`nextAction` 等字段，由视图筛选。
 
-```text
-plans/items/active/*.json
-```
+Manager 新建和更新计划时直接写此目录。启动完成并开始提供 HTTP 服务后，Manager 在后台检查旧的分散目录，并以同卷 `rename` 将旧计划、留痕、反馈和附件迁入对应计划目录；不会读取附件正文。目标目录已存在或内容不一致时保守保留原数据，并在运行日志记录迁移失败，避免覆盖文件。旧布局在迁移完成前仍可读取。
 
-用于放所有未归档计划，包括 `未开始`、`进行中`、`暂停`、`已完成`。计划不再按短期、长期、项目关联拆目录；这些信息应写入 `kind`、`project`、`importance`、`urgency`、`dueAt`、`nextAction` 等字段，由视图筛选。
-
-归档计划：
-
-```text
-plans/archive/
-```
-
-用于放已完成、过期或不再默认展示的计划。
-
-已完成计划不会立即归档。它会先保持 `已完成` 状态，继续在完成列表或总览里保留一段时间，方便用户确认结果。距离最后更新时间超过当前固定的 72 小时后，角色知识快照会将它变为 `已归档`，并移动到 `plans/archive/`。
+已完成计划不会立即归档。它会先保持 `已完成` 状态，继续在完成列表或总览里保留一段时间，方便用户确认结果。距离最后更新时间超过当前固定的 72 小时后，角色知识快照会将它变为 `已归档`，并将整个计划目录从 `plans/active/<planId>/` 移到 `plans/archive/<planId>/`。
 
 计划归档不需要经过 Agent 处理。它是 RabiRoute 的机械生命周期维护，不触发 Agent 总结，不要求 Agent 判断，只更新状态、`archivedAt` 和存放位置。
 
@@ -142,7 +138,7 @@ completedArchiveAfterHours = 72
       "id": "attachment-preview",
       "kind": "image",
       "name": "plan-preview.png",
-      "path": "C:/Path/To/data/roles/Role/plans/attachments/plan-id/attachment-preview-plan-preview.png",
+      "path": "C:/Path/To/data/roles/Role/plans/active/plan-id/attachments/attachment-preview-plan-preview.png",
       "size": 2048,
       "mimeType": "image/png",
       "sha256": "<sha256>"
@@ -225,7 +221,7 @@ completedArchiveAfterHours = 72
 
 `focus` 是单条计划的唯一主题声明。新增计划必须显式填写，且只能是一行；一个计划只推进一个主题，遇到无关目标或独立阻塞时应拆成另一条计划，不能继续堆进 `currentStep`。
 
-`attachments` 是计划本体的可选附件列表。Agent 可在 POST/PATCH 中为新附件提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`。Manager 校验后复制到人格私有的 `plans/attachments/<planId>/`，计划 JSON 只保存 `id/kind/name/path/size/mimeType/sha256` 元数据，不保存 Base64。最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。PATCH 省略 `attachments` 时保留原附件；显式传 `attachments: []` 时清空计划记录中的附件列表。
+`attachments` 是计划本体的可选附件列表。Agent 可在 POST/PATCH 中为新附件提供本机 `path`，或提供 `name`、可选 `mimeType` 与 `contentBase64`。Manager 校验后复制到该计划目录的 `plans/active/<planId>/attachments/`，计划 JSON 只保存 `id/kind/name/path/size/mimeType/sha256` 元数据，不保存 Base64。最多 8 个，单个不超过 10 MiB、总计不超过 25 MiB。PATCH 省略 `attachments` 时保留原附件；显式传 `attachments: []` 时清空计划记录中的附件列表。
 
 WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，以及 Markdown 文件统一显示紧凑固定宽度的 16:9 预览卡片，仅在容器不足时等比缩小。Markdown 卡片流式读取最多 12 KiB 的正文开头，转成最多 180 字的纯文本摘要并截断显示，不执行 HTML、链接或图片；点击后才打开完整文档弹窗。点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器。Markdown 不超过 2 MiB 时可在页内预览 GFM 标题、列表、表格、引用与代码，原始 HTML、危险/相对链接和远程图片加载均被禁用，弹窗保留原文件下载入口。其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的受管目录内，路径穿越或 symlink 越界均失败关闭。
 
@@ -612,7 +608,7 @@ Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计�
 
 ## 计划引导与审批意见
 
-计划反馈是保存在 `plans/feedback/<planId>.jsonl` 的独立 JSONL 审计记录。`kind=guidance` 表示只关联 `planId` 的计划级引导，不能携带 `stepId`；`kind=approval_suggestion` 表示关联审批步骤的正式审批意见。它们都不是计划 JSON 的第二份副本，也不是通用 Outbox Action Queue。
+计划反馈是保存在同一计划目录 `feedback.jsonl` 的独立 JSONL 审计记录。`kind=guidance` 表示只关联 `planId` 的计划级引导，不能携带 `stepId`；`kind=approval_suggestion` 表示关联审批步骤的正式审批意见。它们都不是计划 JSON 的第二份副本，也不是通用 Outbox Action Queue。
 
 读取接口返回折叠同一 `feedbackId` 投递状态后的完整 `records`。RibiWebGUI 在任何计划的详情中都可以按需读取这些记录；已批准、已完成和已归档计划仍保留计划引导历史与审批意见历史。`latest` 只用于轻量摘要与投递状态判断，不再替代完整意见历史。
 
@@ -623,15 +619,15 @@ POST /api/roles/:roleId/plans/:planId/feedback
 
 ## 计划版本留痕
 
-计划 JSON 保存当前状态；每次创建、更新和归档还会向 `plans/history/<planId>.jsonl` 追加一次完整计划快照。快照保留当时的步骤、审批合同、状态和时间，因此后续 Agent 可以复核某次审批完成前后的真实计划内容。
+计划 JSON 保存当前状态；每次创建、更新和归档还会向同一计划目录的 `history.jsonl` 追加一次完整计划快照。快照保留当时的步骤、审批合同、状态和时间，因此后续 Agent 可以复核某次审批完成前后的真实计划内容。
 
 ```http
 GET /api/roles/:roleId/plans/:planId/history
 ```
 
-RibiWebGUI 在计划详情中提供默认折叠的“工作留痕”。其中分别显示计划引导、步骤审批意见和计划版本记录；计划完成、移动到 `archive/` 或不再处于待审批状态，都不会让这些记录从界面消失。归档只改变计划默认所在视图和计划 JSON 的目录，不删除反馈文件、反馈附件或版本留痕。删除本地运行数据仍属于单独的人工文件操作，不是计划生命周期动作。
+RibiWebGUI 在计划详情中提供默认折叠的“工作留痕”。其中分别显示计划引导、步骤审批意见和计划版本记录；计划完成、整个目录移动到 `plans/archive/<planId>/` 或不再处于待审批状态，都不会让这些记录从界面消失。归档只改变计划默认所在视图和计划 JSON 的目录，不删除反馈文件、反馈附件或版本留痕。删除本地运行数据仍属于单独的人工文件操作，不是计划生命周期动作。
 
-RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入 `plans/feedback/attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
+RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受没有进入审批步骤的进行中计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入同一计划目录的 `feedback-attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
 
 Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视为整个计划的方向输入；如果范围、优先级、方法或后续路径变化，显式 `PATCH` 计划并同步调整尚未开始的步骤，随后以 `kind=guidance_response`、`author=agent`、`notifyAgent=false` 回写同一 `planId`，且不带 `stepId`。收到 `approval_suggestion` 时仍更新对应计划/步骤与审批回执，并以 `approval_response` 回写同一 `planId / stepId`。两种记录本身都不会自动推进计划。
 
@@ -656,6 +652,8 @@ Manager 为未终态计划只公开“进行中、等待打包、等待 QA、暂
 对新增细分状态，`waiting_package` 返回 `frozen_until_package + wait_for_target_package`，无独立动作的跨计划依赖返回 `frozen_until_dependencies` 且 `requiredAction=null`，真实测试环境等待返回 `frozen_until_test_environment + wait_for_test_environment`，等待重新授权返回 `waiting_for_authorization + request_authorization`；这些等待的 `implementationDispatchAllowed` 都是 `false`。绿色 QA 阶段同样禁止实施投递：缺回执但仍可发送或修复时返回 `actionable + send_qa_request`；已有真实 QA 回执且只等结论时返回 `waiting_result + wait_for_qa_result`。strict audit 会拒绝“QA 步骤已写只等结论但没有本轮真实回执”的矛盾计划。CLI 或替代验证仍可执行时保持 `actionable`；普通外部资料继续使用 `inquire_until_result`。
 
 Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶段汇总、视图分类、状态色板和既有顺序。RibiWebGUI 使用“当前计划 / 近期记忆 / 沉淀记忆 / 已归档”四个标签；已归档同时包含归档计划和带 `consolidatedAt` 的来源记忆。Qt 托盘继续使用自身的紧凑分类，但两端都不直接读取 `data/`，也不各自维护状态识别、状态颜色或排序规则；缺失 `presentation` 时只显示中性“状态未知”，不根据生命周期字段猜测真实阶段。
+
+首次进入 RibiWebGUI 只请求当前标签的一页：计划摘要最多 8 条并优先补齐这 8 条详情，记忆最多 24 条；后续页只在滚动到加载哨兵或点击“加载更多”后请求。保留下一页 cursor 不代表仍在加载，首屏不再自动遍历全部计划或记忆分页。
 
 ## 托盘视图
 

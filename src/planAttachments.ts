@@ -8,6 +8,11 @@ import {
   type PlanAttachment,
   type PlanAttachmentInput
 } from "./shared/planAttachmentContract.js";
+import {
+  legacyPlanAttachmentDirectory,
+  planAttachmentDirectory as planStorageAttachmentDirectory,
+  type PlanStorageBucket
+} from "./planStorageLayout.js";
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const VIDEO_MIME_TYPES = new Set(["video/mp4", "video/webm", "video/ogg", "video/quicktime"]);
@@ -97,8 +102,12 @@ function pathWithin(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-export function planAttachmentDirectory(roleDir: string, planId: string): string {
-  return path.join(roleDir, "plans", "attachments", safeIdPart(planId) || "plan");
+export function planAttachmentDirectory(
+  roleDir: string,
+  planId: string,
+  bucket: PlanStorageBucket = "active"
+): string {
+  return planStorageAttachmentDirectory(roleDir, planId, bucket);
 }
 
 export function normalizeStoredPlanAttachments(value: unknown): PlanAttachment[] {
@@ -138,7 +147,8 @@ export function storePlanAttachments(
   roleDir: string,
   planId: string,
   value: unknown,
-  existingValue: unknown = []
+  existingValue: unknown = [],
+  bucket: PlanStorageBucket = "active"
 ): PlanAttachment[] {
   if (!Array.isArray(value)) throw new Error("Plan attachments must be an array.");
   if (value.length > PLAN_MAX_ATTACHMENTS) {
@@ -147,7 +157,7 @@ export function storePlanAttachments(
 
   const existing = normalizeStoredPlanAttachments(existingValue);
   const existingById = new Map(existing.map((attachment) => [attachment.id, attachment]));
-  const attachmentDir = planAttachmentDirectory(roleDir, planId);
+  const attachmentDir = planAttachmentDirectory(roleDir, planId, bucket);
   const usedIds = new Set<string>();
   let total = 0;
   const prepared = value.map((item, index) => {
@@ -247,9 +257,14 @@ export function storePlanAttachments(
 }
 
 export function resolvePlanAttachmentFile(roleDir: string, planId: string, attachment: PlanAttachment): string {
-  const attachmentDir = path.resolve(planAttachmentDirectory(roleDir, planId));
   const candidate = path.resolve(attachment.path);
-  if (!pathWithin(attachmentDir, candidate)) throw new Error("Plan attachment path is outside its managed directory.");
+  const managedRoots = [
+    planAttachmentDirectory(roleDir, planId, "active"),
+    planAttachmentDirectory(roleDir, planId, "archive"),
+    legacyPlanAttachmentDirectory(roleDir, planId)
+  ].map((directory) => path.resolve(directory));
+  const attachmentDir = managedRoots.find((directory) => pathWithin(directory, candidate));
+  if (!attachmentDir) throw new Error("Plan attachment path is outside its managed directory.");
   const realRoot = fs.realpathSync(attachmentDir);
   const realCandidate = fs.realpathSync(candidate);
   if (!pathWithin(realRoot, realCandidate)) throw new Error("Plan attachment path leaves its managed directory.");

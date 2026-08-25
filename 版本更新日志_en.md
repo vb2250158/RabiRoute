@@ -8,6 +8,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.2.1 - 2026-08-25
+
+### Plan directories and first-page reads
+
+- Plan runtime data now uses one directory per plan: `plans/active/<planId>/` or `plans/archive/<planId>/` holds `plan.json`, `history.jsonl`, `feedback.jsonl`, plan attachments, and feedback attachments. Archiving moves the complete directory.
+- After the Manager starts HTTP service, it asynchronously checks the legacy split layout. Migration uses same-volume rename operations without reading attachment bodies, keeps legacy reads compatible, and never overwrites a conflicting target; failures are recorded in the operational log.
+- On first entry, RibiWebGUI loads only the active tab's first page: at most 8 plan summaries with priority details for those 8 plans, or at most 24 memories. Later pages load only at the scroll sentinel or after Load more. A next-page cursor no longer keeps the page in a loading state.
+
+### Verification
+
+- 91 focused tests covering plan storage, migration, attachment routes, feedback, history, QA, pagination, and WebGUI passed.
+- TypeScript checking and `npm run webgui:build` passed.
+
 ### Runtime service fixes
 
 - RabiSpeech audio-stream events now use reverse limited reads over the current-file tail and archive index. File scans run in worker threads without holding the event-append lock, while live client snapshots remain on the event loop. Read-only capability, model, record, speaker, and microphone-device scans also run in worker threads, preventing roughly 90 MB of archived events from blocking health requests during concurrent Speech page loading.
@@ -36,6 +49,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Persona-bound AgentPackets now append a shared per-turn work contract: separate facts, inferences, unknowns, and the smallest user-owned step; advance one verifiable action; and keep external messages, device control, deletion, payment, and third-party effects behind the Action Gate. Heartbeats are explicitly not attendance checks or default project audits.
 - RabiLink proactive review prefers the role-specific `prompts/rabilink-proactive-review.md` and falls back to `prompts/proactive-review.md`. A reflection turn may briefly inspect local evidence only when the role supplies a bounded tool and the user has explicitly allowed it; raw evidence must then be deleted and cannot enter memory or outbound messages.
+
+### Windows screenshot annotations and message-processing controls
+
+- System screenshots now support moving and resizing the selection with eight handles, rectangle and arrow marks, editable multiline text, color selection, font-size changes, and `Ctrl+Z` undo. Copy, pin, and send bake annotations into the image. Tray and screenshot tests cover annotation bounds, history, clipboard behavior, and actions queued until the image is ready.
+- Message-processing `maxAgents` now defaults to `1`. Route APIs expose worker/affinity readback, cleanup of stale helper tasks scoped to the Route and workspace, and controlled limit changes.
+- For formal PangHu workspaces, the Codex `Stop` Hook sends group progress only for effective progress and deduplicates by plan/progress fingerprint. Completion notification proceeds only after Outbox returns a `sentMessageId` and platform-reference readback succeeds; missing group mapping or platform receipt keeps the task incomplete.
 
 ## 0.2.0 - 2026-08-22
 

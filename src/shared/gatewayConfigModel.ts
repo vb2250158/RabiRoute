@@ -119,6 +119,7 @@ export const MAX_RECENT_MESSAGE_LIMIT = 200;
 
 export const DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL = "gpt-5.6-luna";
 export const DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT: CodexReasoningEffort = "medium";
+export const DEFAULT_MESSAGE_PROCESSING_AGENT_MAX_AGENTS = 1;
 export const MAX_MESSAGE_PROCESSING_AGENTS = 32;
 
 export type MessageGroupingPolicy = {
@@ -511,12 +512,12 @@ export function normalizeMessageProcessingAgentPolicies(
     const parsedMaxAgents = Math.floor(Number(policy?.maxAgents));
     const maxAgents = Number.isFinite(parsedMaxAgents) && parsedMaxAgents > 0
       ? Math.min(MAX_MESSAGE_PROCESSING_AGENTS, parsedMaxAgents)
-      : undefined;
+      : DEFAULT_MESSAGE_PROCESSING_AGENT_MAX_AGENTS;
     result[adapter] = {
       enabled: policy?.enabled === true,
       model,
       reasoningEffort,
-      ...(maxAgents ? { maxAgents } : {})
+      maxAgents
     };
   }
   return result;

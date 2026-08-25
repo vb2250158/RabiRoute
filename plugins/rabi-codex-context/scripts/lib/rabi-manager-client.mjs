@@ -83,10 +83,16 @@ export async function handleHookInput(input, options = {}) {
     }
     if (eventName === "Stop") {
       const completion = data?.planTaskCompletion;
+      const progress = data?.pangHuProgressNotification;
       const agentRequestStop = data?.agentRequestStop;
       if (agentRequestStop?.status === "failed") {
         return {
           systemMessage: `Rabi Agent request Stop check failed: ${agentRequestStop.error || agentRequestStop.reason || "unknown error"}`
+        };
+      }
+      if (progress?.status === "failed") {
+        return {
+          systemMessage: `PangHu 工作群进度同步未取得完整回执，当前任务保持进行中：${progress.error || progress.reason || "unknown error"}`
         };
       }
       if (completion?.status === "failed") {

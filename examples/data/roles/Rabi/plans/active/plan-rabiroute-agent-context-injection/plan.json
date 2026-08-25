@@ -6,8 +6,8 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "validate-codex-plugin",
-  "currentStep": "AgentPacket、Codex Hook 与 Manager 现在共用聚焦知识生命周期；普通消息先展示最近消息再展示本轮消息，消息处理需求必须核对当前来源、递归引用链和附件。发送前的 send-context 审核绑定上下文版本、发送会话、目标和正文，引用图片还需逐张提交内容与含义说明。Codex Desktop 仍是唯一真实消息 owner，线程创建 reservation 防止并发或索引延迟造成重复任务。",
-  "nextAction": "在真实 Codex Desktop 中验证本机图片随消息进入正确任务、同一完整 ID 连续续投、并发创建只产生一个任务、上下文变化后旧发送审核被拒绝，以及完成或暂停后的消息处理槽位释放；再补无副作用 packet preview。",
+  "currentStep": "AgentPacket、Codex Hook 与 Manager 现在共用聚焦知识生命周期；普通消息先展示最近消息再展示本轮消息，消息处理需求必须核对当前来源、递归引用链和附件。发送前的 send-context 审核绑定上下文版本、发送会话、目标和正文，引用图片还需逐张提交内容与含义说明。Codex Desktop 仍是唯一真实消息 owner，线程创建 reservation 防止并发或索引延迟造成重复任务。正式项目 workspace 的 Stop Hook 只对有效进展发起工作群通知，并要求 Outbox 发送标识与平台引用回读；缺少任一证据时完成通知失败关闭。",
+  "nextAction": "在真实 Codex Desktop 中验证本机图片随消息进入正确任务、同一完整 ID 连续续投、并发创建只产生一个任务、上下文变化后旧发送审核被拒绝、完成或暂停后的消息处理槽位释放，以及正式项目进展通知的真实平台回读；再补无副作用 packet preview。",
   "steps": [
     { "id": "inject-agent-packet", "title": "注入事件、角色路径、计划、记忆、技能和接口索引", "status": "已完成" },
     { "id": "add-required-read", "title": "增加处理前高相关必读项和按 ID 读取协议", "status": "已完成" },
@@ -32,6 +32,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-08-12T20:21:06+08:00",
+  "updatedAt": "2026-08-24T00:00:00+08:00",
   "keywords": ["AgentPacket", "上下文注入", "contextInjection", "focused", "CQ reply", "CQ at", "引用链", "OneBot get_msg", "Gateway 历史", "Outbox", "Codex 插件", "session ID", "Hook", "RabiContextManager", "PreToolUse", "PostToolUse", "人格绑定", "packet preview", "sourceThreadId", "sourceAgentType", "responsePolicy", "required response", "消息处理 Agent", "sourceEvidenceReview", "send-context", "localImage", "replyImageDescriptions", "thread reservation", "taskBinding", "secretaryBinding", "任务交接回执"]
 }

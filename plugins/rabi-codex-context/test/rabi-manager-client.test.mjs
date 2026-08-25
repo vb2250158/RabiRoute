@@ -136,6 +136,28 @@ test("Stop forwards the final assistant message but emits no hook output", async
   assert.equal(output, null);
 });
 
+test("Stop blocks completion when PangHu progress lacks its required group receipt context", async (t) => {
+  const mock = await server((_request, response) => json(response, 200, {
+    code: 0,
+    data: {
+      pangHuProgressNotification: {
+        status: "failed",
+        reason: "PANGHU_PROGRESS_NOTIFICATION_CONTEXT_REQUIRED",
+        error: "PangHu progress notification requires a managed work-group issue mapping with groupId and sourceMessageId."
+      }
+    }
+  }));
+  t.after(() => mock.close());
+  const output = await handleHookInput({
+    hook_event_name: "Stop",
+    session_id: "session-panghu",
+    turn_id: "turn-panghu-missing-context"
+  }, { managerUrl: mock.url });
+  assert.match(output.systemMessage, /PangHu/);
+  assert.match(output.systemMessage, /managed work-group issue mapping/);
+  assert.equal(output.continue, undefined);
+});
+
 test("Stop surfaces a non-blocking system warning when reminder delivery fails", async (t) => {
   const mock = await server((_request, response) => json(response, 200, {
     code: 0,

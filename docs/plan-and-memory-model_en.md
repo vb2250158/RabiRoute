@@ -21,10 +21,18 @@ data/roles/<RoleId>/
   growth.md
   skills.md
   skills/*.md
-  plans/items/active/*.json
-  plans/archive/*.json
-  plans/attachments/<planId>/*
-  plans/feedback/*.jsonl
+  plans/active/<planId>/
+    plan.json
+    history.jsonl
+    feedback.jsonl
+    attachments/
+    feedback-attachments/<feedbackId>/
+  plans/archive/<planId>/
+    plan.json
+    history.jsonl
+    feedback.jsonl
+    attachments/
+    feedback-attachments/<feedbackId>/
   memory/recent/*.md
   memory/consolidated/*.md
   memory/consolidation-runs/*.json
@@ -32,6 +40,8 @@ data/roles/<RoleId>/
 ```
 
 The filesystem is the source of truth. The Manager API reads and writes these files. Qt and WebGUI keep plan content read-only; approval feedback stays on Manager-declared approval steps, while RibiWebGUI also accepts whole-plan guidance for running plans outside approval.
+
+`plan.json` is the sole business source of truth for the current plan state. New plan writes use this one-plan directory. After HTTP service becomes available, Manager asynchronously checks the legacy split layout and moves a plan, its history, feedback, and attachments with same-volume `rename` calls without reading attachment bodies. A pre-existing target or incompatible content is left untouched and reported in the operational log; legacy reads remain supported until migration succeeds.
 
 ### Identity-relation memory
 
@@ -80,7 +90,7 @@ A plan describes one focused objective. Common fields:
       "id": "attachment-preview",
       "kind": "image",
       "name": "plan-preview.png",
-      "path": "C:/Path/To/data/roles/Role/plans/attachments/plan-id/attachment-preview-plan-preview.png",
+      "path": "C:/Path/To/data/roles/Role/plans/active/plan-id/attachments/attachment-preview-plan-preview.png",
       "size": 2048,
       "mimeType": "image/png",
       "sha256": "<sha256>"
@@ -156,7 +166,7 @@ A plan describes one focused objective. Common fields:
 
 `steps` is the ordered execution path. Every new plan must list all of its steps, with at most one step in `进行中`. Top-level `currentStepId` must point to that step so both the UI and Agents can answer exactly where execution is. A paused plan must keep exactly one in-progress resume step and `currentStepId` must point to it. A missing pointer, a pointer to another step, zero in-progress steps, or multiple in-progress steps is rejected consistently by Manager writes, work-cycle finish preflight, and strict audit. Resuming changes only the top-level status back to `进行中`; it does not rebuild the steps or rewrite the resume point. A step may include `detail`, `waitingFor`, `blockedBy`, `startedAt`, `completedAt`, and `approvalRequest`. `waitingFor` names who or what the Agent must ask or follow up with. Ordinary waits, failures, and missing resources remain actionable; every inspection chooses inquiry, escalation, retry, rerouting, decomposition, an alternative, or evidence gathering. Only a complete actionable current approval contract with `responseStatus=pending` is blocked. `isBlocked` remains a compatibility projection written by Manager for older clients; it is not an Agent input or the source of truth. `blockedBy` is human-readable context only and cannot create a blocked state. Manager fills `startedAt` when a step is first written as `进行中`, then fills `completedAt` while preserving the start time when it becomes `已完成`. Reopening a completed step clears its stale `completedAt`; resetting it to `未开始` clears both timestamps. A step created directly as completed, or a legacy step missing timestamps, is backfilled with the next plan-write time, which cannot reconstruct older history. RibiWebGUI shows only the start time for an in-progress step, only the completion time for a completed step, and no time for a not-started step. `currentStep` remains a progress note; it no longer acts as the step list, step identity, or phase classifier. Because structured steps already express the future path, the UI does not repeat `nextAction`; Agents and legacy plans may still use that field, but it also does not classify the phase.
 
-`attachments` is the optional plan-level attachment list. For a new attachment, an Agent may provide a local `path`, or `name`, optional `mimeType`, and `contentBase64` in POST/PATCH. Manager validates and copies the content into the persona-private `plans/attachments/<planId>/` directory. Plan JSON stores only `id/kind/name/path/size/mimeType/sha256` metadata and never stores Base64. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Omitting `attachments` from PATCH preserves the current list; sending `attachments: []` clears the list from the plan record.
+`attachments` is the optional plan-level attachment list. For a new attachment, an Agent may provide a local `path`, or `name`, optional `mimeType`, and `contentBase64` in POST/PATCH. Manager validates and copies the content into that plan directory: `plans/active/<planId>/attachments/`. Plan JSON stores only `id/kind/name/path/size/mimeType/sha256` metadata and never stores Base64. A plan may contain up to 8 attachments, limited to 10 MiB each and 25 MiB in total. Omitting `attachments` from PATCH preserves the current list; sending `attachments: []` clears the list from the plan record.
 
 WebGUI never reads the stored local path directly. It requests files through `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId`. PNG, JPEG, WebP, and GIF images; MP4/M4V, WebM, Ogg Video, and MOV/QuickTime videos; and Markdown files all render in compact, fixed-width 16:9 preview cards that shrink only when their container is narrower. A Markdown card streams at most the first 12 KiB of source, turns it into a plain-text excerpt capped at 180 characters, and clamps the visible lines without executing HTML, links, or images; clicking it opens the complete document dialog. Images open in an in-page large-image preview, while videos open in an in-page player with controls. Video responses support byte ranges; actual playback codecs still depend on the current browser. Markdown files up to 2 MiB render GFM headings, lists, tables, blockquotes, and code in-page; raw HTML, dangerous or relative links, and remote image loading are disabled, while the dialog retains a source-download action. Other files show name, type, and size and open or download through the attachment response. The read boundary rechecks that the real path remains inside that plan's managed directory, failing closed on traversal or symlink escape.
 
@@ -184,7 +194,7 @@ Global strict audit is observational and compares ledger snapshots from before a
 
 The target Codex Route must already have an exact task ID and must differ from the execution session. Multiple plans bound to one execution session, workspace mismatch, execution-context persona mismatch, a missing or wrong-persona gateway, or multiple same-persona gateways without `gatewayId` all fail closed. The capability remains experimental until verified between two real Desktop tasks.
 
-Completed plans remain visible for confirmation. A role-knowledge snapshot archives them when the latest `updatedAt` is more than the current fixed 72-hour window old. It sets `archivedAt` and moves the file to `plans/archive/`.
+Completed plans remain visible for confirmation. A role-knowledge snapshot archives them when the latest `updatedAt` is more than the current fixed 72-hour window old. It sets `archivedAt` and moves the whole directory from `plans/active/<planId>/` to `plans/archive/<planId>/`.
 
 `completedArchiveAfterHours` is not currently a public `personaConfig.json` field. Do not present it as user-configurable yet.
 
@@ -403,13 +413,13 @@ Plan pagination also accepts `sort=<status|updated|importance|urgency>`, repeate
 
 ## Plan guidance and approval feedback
 
-Plan feedback is an independent JSONL audit record stored under `plans/feedback/<planId>.jsonl`. `kind=guidance` is plan-level guidance associated only with `planId` and must not carry `stepId`; `kind=approval_suggestion` is formal feedback associated with an approval step. Neither is a second copy of the plan JSON or the generic Outbox Action Queue.
+Plan feedback is an independent JSONL audit record stored as `feedback.jsonl` inside the same plan directory. `kind=guidance` is plan-level guidance associated only with `planId` and must not carry `stepId`; `kind=approval_suggestion` is formal feedback associated with an approval step. Neither is a second copy of the plan JSON or the generic Outbox Action Queue.
 
 The read endpoint returns complete `records` after collapsing delivery-state updates for the same `feedbackId`. RibiWebGUI can load them on demand from every plan detail and preserves plan-guidance and approval-feedback history after approval, completion, and archival. `latest` remains only a lightweight summary and delivery-state signal.
 
 ## Plan revision history
 
-The plan JSON is the current-state record. Every create, update, and archive also appends a full plan snapshot to `plans/history/<planId>.jsonl`. The snapshots retain the steps, approval contract, status, and timestamps from that point, so later Agents can review the actual plan before and after an approval result.
+The plan JSON is the current-state record. Every create, update, and archive also appends a full plan snapshot to that plan directory's `history.jsonl`. The snapshots retain the steps, approval contract, status, and timestamps from that point, so later Agents can review the actual plan before and after an approval result.
 
 ```http
 GET /api/roles/:roleId/plans/:planId/history
@@ -417,7 +427,7 @@ GET /api/roles/:roleId/plans/:planId/history
 
 RibiWebGUI provides a collapsed **Work history** section in every plan detail. It separately shows plan guidance, step approval feedback, and plan revisions. Completion, a move to `archive/`, or leaving the pending-approval state never removes these records from the interface. Archiving changes only the default plan view and the plan JSON directory; it does not delete feedback files, feedback attachments, or revision history. Removing local runtime data is a separate manual file operation, not a plan lifecycle action.
 
-RibiWebGUI submits plan guidance with `kind=guidance`, `author=user`, `source=webgui`, and `notifyAgent=true`, without `stepId`; Manager accepts it only for running plans that are not currently in an approval step. WebGUI and tray approval submissions continue to use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Plan guidance and approval use the same feedback composer, so both support `@` references to plan attachments, keyboard submission, file selection, clipboard paste, attachment previews, and removal. Future composer capabilities must be added through this shared component so both inputs receive them together. Newly uploaded content is stored under the private runtime directory `plans/feedback/attachments/<feedbackId>/`; JSONL records never embed the binary content. Both feedback types are durably recorded before returning `deliveryStatus=pending`. A complete business binding goes through `/api/agent/threads` and Desktop IPC to the original task; with Plan Secretary enabled, the responsible `secretaryBinding` simultaneously receives the control notice and the Primary Persona is not notified for every automatic delivery. An incomplete business binding sends the full feedback to the Secretary first, falling back to the Primary Persona only when no usable Secretary is enabled. Retry, terminal status, and `plan_feedback_changed` semantics remain shared.
+RibiWebGUI submits plan guidance with `kind=guidance`, `author=user`, `source=webgui`, and `notifyAgent=true`, without `stepId`; Manager accepts it only for running plans that are not currently in an approval step. WebGUI and tray approval submissions continue to use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Plan guidance and approval use the same feedback composer, so both support `@` references to plan attachments, keyboard submission, file selection, clipboard paste, attachment previews, and removal. Future composer capabilities must be added through this shared component so both inputs receive them together. Newly uploaded content is stored under the same plan directory's private `feedback-attachments/<feedbackId>/` directory; JSONL records never embed the binary content. Both feedback types are durably recorded before returning `deliveryStatus=pending`. A complete business binding goes through `/api/agent/threads` and Desktop IPC to the original task; with Plan Secretary enabled, the responsible `secretaryBinding` simultaneously receives the control notice and the Primary Persona is not notified for every automatic delivery. An incomplete business binding sends the full feedback to the Secretary first, falling back to the Primary Persona only when no usable Secretary is enabled. Retry, terminal status, and `plan_feedback_changed` semantics remain shared.
 
 After receiving `guidance`, the Agent first reads the current plan and feedback, treats the guidance as whole-plan direction, and explicitly `PATCH`es the plan plus any not-started steps affected by changed scope, priority, method, or path. It then writes `kind=guidance_response`, `author=agent`, and `notifyAgent=false` under the same `planId` without `stepId`. Approval feedback still updates the affected plan/step and approval receipt before writing `approval_response` under the same `planId / stepId`. Neither record advances a plan automatically.
 
