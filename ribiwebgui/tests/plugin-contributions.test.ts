@@ -5,7 +5,7 @@ import type { WebPluginCatalog, WebPluginCatalogPlugin } from "../src/pluginCata
 import { availableWebContributions } from "../src/pluginContributions";
 import { resolveWebCommandCatalog } from "../src/pluginCommands";
 
-const pluginId = "builtin:manager/route-control";
+const pluginId = "rabi.manager.base";
 const activePlugin: WebPluginCatalogPlugin = {
   instanceId: "manager:route-control",
   pluginId,
@@ -51,7 +51,7 @@ function quickSetup(overrides: Record<string, unknown> = {}): unknown {
 test("Web contributions require an active matching owner whose manifest supports Web", () => {
   assert.equal(availableWebContributions(catalog([quickSetup()])).length, 1);
   assert.equal(availableWebContributions(catalog([quickSetup()], [{ ...activePlugin, status: "failed" }])).length, 0);
-  assert.equal(availableWebContributions(catalog([quickSetup({ pluginId: "builtin:manager/other" })])).length, 0);
+  assert.equal(availableWebContributions(catalog([quickSetup({ pluginId: "example.other" })])).length, 0);
   assert.equal(availableWebContributions(catalog([quickSetup()], [{ ...activePlugin, manifest: { ...activePlugin.manifest, hosts: ["manager"] } }])).length, 0);
   assert.equal(availableWebContributions(catalog([quickSetup()], [
     activePlugin,
@@ -94,5 +94,5 @@ test("App keeps only refresh, connection state, and recovery as fixed host contr
   assert.match(source, /Manager \{\{ managerConnected/);
   assert.match(source, /PLUGIN_RECOVERY_ROUTE_NAME/);
   assert.match(source, /webPageDataRequirements/);
-  assert.doesNotMatch(source, /pageNeedsGatewayDiagnostics|\^\\/routes/);
+  assert.doesNotMatch(source, /pageNeedsGatewayDiagnostics|\^\/routes/);
 });

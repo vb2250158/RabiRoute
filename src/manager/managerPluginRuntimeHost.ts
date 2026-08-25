@@ -5,17 +5,17 @@ import {
 } from "../runtime/managerPluginRuntime.js";
 import { ManagerPluginReconciler } from "../runtime/managerPluginReconciler.js";
 
-export const BUILTIN_MANAGER_PLUGIN_RUNTIME_KEY = "rabi.runtime.managerPlugins.builtin";
+export const MANAGER_PLUGIN_RUNTIME_KEY = "rabi.runtime.managerPlugins";
 
-export type BuiltinManagerPluginHost = {
+export type ManagerPluginRuntimeHost = {
   runtime: ManagerPluginRuntimeMount;
   reconciler: ManagerPluginReconciler;
 };
 
-export function getBuiltinManagerPluginHost(): Promise<BuiltinManagerPluginHost> {
+export function getManagerPluginRuntimeHost(): Promise<ManagerPluginRuntimeHost> {
   const root = getBuiltinManagerCordisRoot();
   return root.ensure(
-    BUILTIN_MANAGER_PLUGIN_RUNTIME_KEY,
+    MANAGER_PLUGIN_RUNTIME_KEY,
     async host => {
       const runtime = await mountManagerPluginRuntime(host);
       return { runtime, reconciler: new ManagerPluginReconciler(runtime) };

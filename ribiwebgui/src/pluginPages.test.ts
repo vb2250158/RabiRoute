@@ -15,7 +15,7 @@ function page(overrides: Record<string, unknown> = {}): unknown {
     surface: "web.pages",
     id: "performance-page",
     instanceId: "manager:performance",
-    pluginId: "builtin:manager/performance",
+    pluginId: "rabi.manager.base",
     routeId: "global.performance",
     rendererId: "builtin.web-page.performance.v1",
     hosts: ["web"],
@@ -29,7 +29,7 @@ function navigation(overrides: Record<string, unknown> = {}): unknown {
     surface: "web.navigation",
     id: "performance",
     instanceId: "manager:performance",
-    pluginId: "builtin:manager/performance",
+    pluginId: "rabi.manager.base",
     label: { fallback: "性能监控" },
     routeId: "global.performance",
     icon: "mdi-chart-timeline-variant",
@@ -44,7 +44,7 @@ test("page catalog accepts only owner-bound route and renderer pairs", () => {
   const catalog = resolveWebPageCatalog([
     page(),
     page({ id: "cross-instance", instanceId: "manager:other" }),
-    page({ id: "cross-plugin", pluginId: "builtin:manager/other" }),
+    page({ id: "cross-plugin", pluginId: "example.other" }),
     page({ id: "wrong-surface", surface: "shared.settings" }),
     page({ id: "unknown-renderer", rendererId: "plugin.remote-component.v1" }),
     page({ id: "unknown-route", routeId: "plugin.remote-route" })

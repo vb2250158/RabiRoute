@@ -215,7 +215,7 @@ export function writeStoredWebThemePreference(themeId: WebThemeId | undefined): 
 }
 registerTrustedWebThemeResource({
   instanceId: "manager:core",
-  pluginId: "builtin:manager/core",
+  pluginId: "rabi.manager.base",
   themeId: "system",
   webResourceId: "builtin.web-theme.system.v1",
   label: "跟随系统",
@@ -226,7 +226,7 @@ registerTrustedWebThemeResource({
 
 registerTrustedWebThemeResource({
   instanceId: "manager:core",
-  pluginId: "builtin:manager/core",
+  pluginId: "rabi.manager.base",
   themeId: "light",
   webResourceId: "builtin.web-theme.light.v1",
   label: "浅色",
@@ -237,7 +237,7 @@ registerTrustedWebThemeResource({
 
 registerTrustedWebThemeResource({
   instanceId: "manager:core",
-  pluginId: "builtin:manager/core",
+  pluginId: "rabi.manager.base",
   themeId: "dark",
   webResourceId: "builtin.web-theme.dark.v1",
   label: "深色",

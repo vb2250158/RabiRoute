@@ -375,11 +375,11 @@ startManager();
 
 ### Manager 插件运行时
 
-正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts`，再创建唯一的 `managerPluginHost.ts`，把 26 个内置 definition 与 `controlPlaneRoutes.ts` 的业务 `apply` hook 合成后执行首次对账。旧的独立内置 Runtime 初始化入口已经删除，避免原始 definition 提前对账。`managerPluginConfig.ts` 把 `data/manager.json` 归一化为期望状态，`managerPluginReconciler.ts` 串行启停或重载变化实例。激活失败时恢复旧定义；恢复失败保留明确错误状态。
+正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts` 和唯一的 `managerPluginHost.ts`，再从 `data/plugins/manager/profile.json` 解析版本化 Bundle。内置 26 个实例由 `rabi.manager.base` Bundle 进入同一 Loader；`controlPlaneRoutes.ts` 仍提供受控业务 hook，但不再把 `manager.json` 作为插件真源。`managerPluginReconciler.ts` 串行启停或重载 revision 变化的实例。激活失败时恢复旧 Fiber；恢复失败保留明确错误状态。
 
 每个 definition 声明 `provides`、`requires` 和 `optional`。Reconciler 先拒绝同一能力的多个已启用 Provider，再按必需依赖排序；缺少 `requires` 的实例进入 `waiting_dependency`。可选 Provider 存在时先于消费者启动。每个实例的依赖 revision 会递归包含直接和传递 Provider 的 revision、启用状态、能力关系与缺失能力摘要，因此 `root -> middle -> leaf` 中的 root 变化会把 middle 和 leaf 都纳入同一重启批次，同时不影响无依赖实例。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，支持同一实例 `active -> waiting_dependency -> active`。停用按当前应用顺序逆序执行。
 
-`builtinManagerPlugins.ts` 当前声明 26 个内置实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供非空 hook：
+`managerBasePluginDefinitions.ts` 当前声明 26 个内置实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供非空 hook：
 
 ```text
 manager:core

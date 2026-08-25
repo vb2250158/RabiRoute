@@ -4,16 +4,19 @@ import test from "node:test";
 import { RabiCordisHost } from "../runtime/cordisHost.js";
 import { mountManagerPluginRuntime } from "../runtime/managerPluginRuntime.js";
 import { ManagerPluginReconciler } from "../runtime/managerPluginReconciler.js";
-import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
-import { normalizeManagerPluginConfig } from "./managerPluginConfig.js";
+import { managerBasePluginDefinitions } from "./managerBasePluginDefinitions.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 
 async function startCatalogServer() {
   const host = new RabiCordisHost();
   const runtime = await mountManagerPluginRuntime(host);
   const reconciler = new ManagerPluginReconciler(runtime);
-  const normalized = normalizeManagerPluginConfig({});
-  await reconciler.reconcile(normalized.desired);
+  const desired = managerBasePluginDefinitions().map((definition, index) => ({
+    definition,
+    enabled: true,
+    revision: `catalog-test-${index}`
+  }));
+  await reconciler.reconcile(desired);
   let reconcileCount = 0;
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -21,10 +24,10 @@ async function startCatalogServer() {
       runtime,
       reconciliation: {
         reconciler,
-        diagnostics: () => normalized.diagnostics,
+        diagnostics: () => [],
         reconcile: async () => {
           reconcileCount += 1;
-          return reconciler.reconcile(normalized.desired);
+          return reconciler.reconcile(desired);
         }
       }
     })) {
@@ -152,5 +155,43 @@ test("Plugin reconciliation API leaves the removed reconcile alias unhandled", a
     assert.equal(app.reconcileCount(), 0);
   } finally {
     await app.close();
+  }
+});
+
+test("Plugin module API lists and serves only the matching immutable revision", async () => {
+  const host = new RabiCordisHost();
+  const runtime = await mountManagerPluginRuntime(host);
+  const rev = "a".repeat(64);
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (!handlePluginCatalogApi(request, url, response, {
+      runtime,
+      webModules: {
+        list: async () => [{ id: "manager:example", instanceId: "manager:example", pluginId: "example.web", version: "1.0.0", rev }],
+        read: async (id, requestedRev) => {
+          if (id !== "manager:example" || requestedRev !== rev) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          return { module: { id, instanceId: id, pluginId: "example.web", version: "1.0.0", rev }, source: Buffer.from("export const version = '1.0.0';") };
+        }
+      }
+    })) { response.writeHead(404); response.end(); }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    const catalog = await fetch(baseUrl + "/api/plugins/modules");
+    assert.equal(catalog.status, 200);
+    const listed = await catalog.json() as { data: { modules: Array<{ id: string; rev: string }> } };
+    assert.deepEqual(listed.data.modules, [{ id: "manager:example", instanceId: "manager:example", pluginId: "example.web", version: "1.0.0", rev }]);
+    const bundle = await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("manager:example")}/client.js?rev=${rev}`);
+    assert.equal(bundle.status, 200);
+    assert.equal(bundle.headers.get("cache-control"), "no-store");
+    assert.match(await bundle.text(), /version/);
+    assert.equal((await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("manager:example")}/client.js?rev=${"b".repeat(64)}`)).status, 404);
+  } finally {
+    await runtime.unmount();
+    await host.dispose();
+    await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });

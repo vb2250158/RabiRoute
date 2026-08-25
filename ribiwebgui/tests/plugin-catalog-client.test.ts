@@ -15,10 +15,10 @@ function catalogEnvelope() {
       revision: { plugins: 3, contributions: 7 },
       plugins: [{
         instanceId: "manager:core",
-        pluginId: "builtin:manager/core",
+        pluginId: "rabi.manager.base",
         status: "active",
         manifest: {
-          id: "builtin:manager/core",
+          id: "rabi.manager.base",
           hosts: ["manager", "web", "desktop"],
           capabilities: ["manager.plugin-catalog", "manager.contributions"]
         }
@@ -52,10 +52,10 @@ test("plugin catalog client performs the fixed Web catalog GET request", async (
     assert.equal(catalog.contributions.length, 1);
     assert.deepEqual(catalog.plugins, [{
       instanceId: "manager:core",
-      pluginId: "builtin:manager/core",
+      pluginId: "rabi.manager.base",
       status: "active",
       manifest: {
-        id: "builtin:manager/core",
+        id: "rabi.manager.base",
         hosts: ["manager", "web", "desktop"],
         capabilities: ["manager.plugin-catalog", "manager.contributions"]
       }
@@ -105,9 +105,9 @@ test("plugin catalog client rejects unsupported or incomplete payloads", () => {
         ...catalogEnvelope().data,
         plugins: [{
           instanceId: "manager:core",
-          pluginId: "builtin:manager/core",
+          pluginId: "rabi.manager.base",
           status: "unknown",
-          manifest: { id: "builtin:manager/core", hosts: ["web"], capabilities: [] }
+          manifest: { id: "rabi.manager.base", hosts: ["web"], capabilities: [] }
         }]
       }
     }),
@@ -120,9 +120,9 @@ test("plugin catalog client rejects unsupported or incomplete payloads", () => {
         ...catalogEnvelope().data,
         plugins: [{
           instanceId: "manager:core",
-          pluginId: "builtin:manager/core",
+          pluginId: "rabi.manager.base",
           status: "active",
-          manifest: { id: "builtin:manager/core", hosts: ["browser"], capabilities: [] }
+          manifest: { id: "rabi.manager.base", hosts: ["browser"], capabilities: [] }
         }]
       }
     }),
@@ -135,9 +135,9 @@ test("plugin catalog client rejects unsupported or incomplete payloads", () => {
         ...catalogEnvelope().data,
         plugins: [{
           instanceId: "manager:core",
-          pluginId: "builtin:manager/core",
+          pluginId: "rabi.manager.base",
           status: "active",
-          manifest: { id: "builtin:manager/core", hosts: ["web"], capabilities: [" duplicated "] }
+          manifest: { id: "rabi.manager.base", hosts: ["web"], capabilities: [" duplicated "] }
         }]
       }
     }),

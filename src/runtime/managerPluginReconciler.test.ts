@@ -365,8 +365,10 @@ test("Manager Plugin Reconciler orders providers before consumers and keeps miss
     ...definition("manager:consumer", "1.0.0", () => { lifecycle.push("consumer:start"); }),
     requires: ["manager.example"]
   } satisfies ManagerPluginDefinition;
+  const waitingBase = definition("manager:waiting", "1.0.0", () => { lifecycle.push("waiting:start"); });
   const waiting = {
-    ...definition("manager:waiting", "1.0.0", () => { lifecycle.push("waiting:start"); }),
+    ...waitingBase,
+    manifest: { ...waitingBase.manifest, id: "example.manager.waiting" },
     requires: ["manager.missing"]
   } satisfies ManagerPluginDefinition;
 
@@ -384,7 +386,7 @@ test("Manager Plugin Reconciler orders providers before consumers and keeps miss
     fixture.runtime.catalog.get("manager:waiting"),
     {
       instanceId: "manager:waiting",
-      pluginId: "builtin:manager:waiting",
+      pluginId: "example.manager.waiting",
       manifest: waiting.manifest,
       host: "manager",
       scope: "global",

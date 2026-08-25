@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "example.manager.echo",
+  "version": "1.0.0",
+  "hosts": ["manager", "web"],
+  "entry": "./index.mjs",
+  "webEntry": "./client.mjs"
+}

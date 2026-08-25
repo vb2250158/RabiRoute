@@ -14,7 +14,7 @@ function theme(themeId: string, webResourceId: string, overrides: Record<string,
     surface: "shared.themes",
     id: `${themeId}-theme`,
     instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
+    pluginId: "rabi.manager.base",
     themeId,
     webResourceId,
     hosts: ["web", "desktop"],
@@ -24,9 +24,9 @@ function theme(themeId: string, webResourceId: string, overrides: Record<string,
 
 test("built-in themes use the trusted resource registration API", () => {
   assert.deepEqual(registeredWebThemeResources().map(theme => [theme.instanceId, theme.pluginId, theme.themeId]), [
-    ["manager:core", "builtin:manager/core", "system"],
-    ["manager:core", "builtin:manager/core", "light"],
-    ["manager:core", "builtin:manager/core", "dark"]
+    ["manager:core", "rabi.manager.base", "system"],
+    ["manager:core", "rabi.manager.base", "light"],
+    ["manager:core", "rabi.manager.base", "dark"]
   ]);
   const catalog = resolveWebThemeCatalog([
     theme("system", "builtin.web-theme.system.v1"),
@@ -100,7 +100,7 @@ test("unknown catalog selections use the registered system recovery resource", (
   assert.deepEqual(resolveWebThemeResource(resolveWebThemeCatalog(null), "unknown").themeId, "system");
   assert.throws(() => registerTrustedWebThemeResource({
     instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
+    pluginId: "rabi.manager.base",
     themeId: "dark",
     webResourceId: "trusted.web-theme.duplicate.v1",
     label: "Duplicate",

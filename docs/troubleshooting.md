@@ -89,7 +89,7 @@ npm run check:config
 3. 检查 route 保存的 `codexThreadId` 和 `codexCwd`。有效 ID 且目录一致时会直接复用；Desktop 改名、SQLite 标题滞后、展示标题超过 240 或 goal 完成都不会创建新任务。
 4. 只有 ID 被明确清空、非法或确实不存在时才按 `codexThreadName + codexCwd` 查找；不要因 SQLite `title` 变成首条 prompt 就让有效 ID 失效。多个同名同目录任务自动绑定最后更新时间唯一最新者。保存 ID 指向已归档任务时，下一次真实投递或保存会创建新任务并更新绑定，不复用其它同名任务。新建时，超过 240 的任务名会安全截断并保存实际名称。
 5. 检查 `agent-packets.jsonl`、`gateway-status.json` 和 Manager 日志，区分“路由未命中”“Desktop IPC 未就绪”“任务 owner 未加载”和“任务 ID/cwd 失效”。
-6. 若错误含 `no-client-found`，RabiRoute 会用 `codex://threads/<id>` 打开目标任务并短暂重试；仍失败时不会切换到后台 Runtime。
+6. 若错误含 `no-client-found`，RabiRoute 会用 `codex://threads/<id>` 打开目标任务并短暂重试；重试后精确 ID 已无法从本地状态读取时，会创建替代任务并投递本次消息；如果请求来自计划任务，同时更新原计划绑定并返回警告。任务仍存在时不会切换到后台 Runtime，也不会新建任务。
 
 不要设置 `CODEX_APP_SERVER_WS_URL` 或固定 4510 端口来修复投递；它们不是 RabiRoute 的真实消息 transport。
 

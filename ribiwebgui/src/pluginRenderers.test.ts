@@ -48,17 +48,17 @@ function status(rendererId: string, overrides: Record<string, unknown> = {}): un
 test("built-in settings and status renderers use the trusted registration API", () => {
   assert.ok(registeredWebSettingsRenderers().some(renderer => (
     renderer.instanceId === "manager:desktop"
-    && renderer.pluginId === "builtin:manager/desktop"
+    && renderer.pluginId === "rabi.manager.base"
     && renderer.rendererId === "builtin.desktop-settings.v1"
   )));
   assert.ok(registeredWebStatusRenderers().some(renderer => (
     renderer.instanceId === "manager:speech"
-    && renderer.pluginId === "builtin:manager/speech"
+    && renderer.pluginId === "rabi.manager.base"
     && renderer.rendererId === "builtin.speech-status.v1"
   )));
   assert.ok(registeredWebStatusRenderers().some(renderer => (
     renderer.instanceId === "manager:performance"
-    && renderer.pluginId === "builtin:manager/performance"
+    && renderer.pluginId === "rabi.manager.base"
     && renderer.rendererId === "builtin.performance-status.v1"
   )));
 });
@@ -109,7 +109,7 @@ test("custom trusted renderers resolve to real components and disappear after di
 test("trusted renderer registration rejects duplicate renderer IDs", () => {
   assert.throws(() => registerTrustedWebStatusRenderer({
     instanceId: "manager:desktop",
-    pluginId: "builtin:manager/desktop",
+    pluginId: "rabi.manager.base",
     rendererId: "builtin.desktop-settings.v1",
     placementId: "trusted.status.placement",
     allowedSlots: ["trusted"],

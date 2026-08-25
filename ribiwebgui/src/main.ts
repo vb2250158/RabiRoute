@@ -16,6 +16,7 @@ import { lazyRouteRecovery, router } from "./router";
 import { vuetify } from "./plugins/vuetify";
 import { redirectLoopbackWebguiToLan } from "./webguiLanRedirect";
 import { pluginCatalogStore } from "./pluginCatalogStore";
+import { refreshWebPluginModulesSafely } from "./pluginModuleBootstrap";
 
 let routeRenderStartedAt = performance.now();
 router.beforeEach(() => {
@@ -38,6 +39,7 @@ async function bootstrap(): Promise<void> {
   installFrontendPerformanceReporter();
   if (await redirectLoopbackWebguiToLan()) return;
   await pluginCatalogStore.refresh();
+  await refreshWebPluginModulesSafely();
 
   createApp(App)
     .use(createPinia())

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import { defineComponent, type Component } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
-import { createImmediateRouteComponent } from "../src/immediateRouteComponent";
+import { ROUTE_LOAD_TIMEOUT_MS, createImmediateRouteComponent } from "../src/immediateRouteComponent";
 
 test("route navigation completes before the page module resolves", async () => {
   const warnings: string[] = [];
@@ -36,4 +38,11 @@ test("route navigation completes before the page module resolves", async () => {
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test("immediate route components have a bounded failure state", () => {
+  const source = fs.readFileSync(path.resolve(import.meta.dirname, "../src/immediateRouteComponent.ts"), "utf8");
+  assert.equal(ROUTE_LOAD_TIMEOUT_MS, 12_000);
+  assert.match(source, /errorComponent: options\.errorComponent/);
+  assert.match(source, /timeout: options\.timeoutMs \?\? ROUTE_LOAD_TIMEOUT_MS/);
 });

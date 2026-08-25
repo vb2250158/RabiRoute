@@ -1,5 +1,6 @@
 import type { AsyncComponentLoader } from "vue";
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
+import RouteLoadErrorPage from "./components/RouteLoadErrorPage.vue";
 import RouteLoadingPage from "./components/RouteLoadingPage.vue";
 import PluginCatalogRecoveryPage from "./pages/PluginCatalogRecoveryPage.vue";
 import { createImmediateRouteComponent } from "./immediateRouteComponent";
@@ -7,7 +8,9 @@ import { createLazyRouteRecovery } from "./lazyRouteRecovery";
 import { pluginCatalogStore } from "./pluginCatalogStore";
 import {
   isWebPageRouteActive,
+  isTrustedWebPageReplacementInProgress,
   onTrustedWebPageRegistrationChange,
+  onTrustedWebPageReplacement,
   registeredWebPages,
   type TrustedWebPageRegistration,
   type WebPageRouteId
@@ -16,9 +19,20 @@ import {
 export const lazyRouteRecovery = createLazyRouteRecovery();
 export const PLUGIN_RECOVERY_ROUTE_NAME = "plugin-recovery";
 
+async function reloadActiveTrustedWebPageAfterReplacement(): Promise<void> {
+  const current = router.currentRoute.value;
+  const routeId = typeof current.meta.pluginRouteId === "string" ? current.meta.pluginRouteId : "";
+  if (!routeId || !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return;
+  const resolved = router.resolve(current.fullPath);
+  if (typeof resolved.meta.pluginRouteId !== "string" || resolved.meta.pluginRouteId !== routeId) return;
+  await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: current.fullPath } });
+  await router.replace(current.fullPath);
+}
+
 function immediatePage(loader: AsyncComponentLoader) {
   return createImmediateRouteComponent(loader, RouteLoadingPage, {
-    onLoadError: error => lazyRouteRecovery.recover(error, router.currentRoute.value.fullPath),
+    errorComponent: RouteLoadErrorPage,
+    onLoadError: error => { lazyRouteRecovery.recover(error, router.currentRoute.value.fullPath); },
     onLoadSuccess: () => lazyRouteRecovery.markReady()
   });
 }
@@ -80,13 +94,15 @@ onTrustedWebPageRegistrationChange(change => {
   }
   const activeRouteId = router.currentRoute.value.meta.pluginRouteId;
   unmountTrustedWebPageRoutes(change.registration.routeId);
-  if (activeRouteId === change.registration.routeId) {
+  if (activeRouteId === change.registration.routeId && !isTrustedWebPageReplacementInProgress()) {
     void router.replace({
       name: PLUGIN_RECOVERY_ROUTE_NAME,
       query: { from: router.currentRoute.value.fullPath }
     });
   }
 });
+
+onTrustedWebPageReplacement(() => { void reloadActiveTrustedWebPageAfterReplacement(); });
 
 router.beforeEach((to) => {
   const routeId = typeof to.meta.pluginRouteId === "string" ? to.meta.pluginRouteId : "";

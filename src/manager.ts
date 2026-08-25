@@ -7,10 +7,11 @@ import {
 import { installManagerRuntimeDiagnostics } from "./managerRuntimeDiagnostics.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const instanceLockRoot = path.resolve(process.env.RABIROUTE_MANAGER_INSTANCE_LOCK_DIR?.trim() || projectRoot);
 const runtimeDiagnostics = installManagerRuntimeDiagnostics({ rootDir: projectRoot });
 
 try {
-  const instanceLock = acquireManagerInstanceLock({ rootDir: projectRoot });
+  const instanceLock = acquireManagerInstanceLock({ rootDir: instanceLockRoot });
   process.once("exit", () => instanceLock.release());
   void import("./manager/controlPlaneRoutes.js")
     .then(({ startManager }) => startManager())

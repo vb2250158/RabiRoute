@@ -218,11 +218,11 @@ Starts the loopback Manager, loads route/role configuration, serves WebGUI/API, 
 
 ### Manager plugin runtime
 
-Production Manager initialization runs only through `startManager()`. It mounts `managerSharedResourcesRuntime.ts`, creates the single `managerPluginHost.ts`, composes all 26 built-in definitions with the business `apply` hooks from `controlPlaneRoutes.ts`, and then performs the first reconciliation. The former standalone built-in Runtime initializer is gone, so raw definitions cannot reconcile before their hooks are attached. `managerPluginConfig.ts` normalizes `data/manager.json` into desired state, and `managerPluginReconciler.ts` serializes activation, deactivation, and reload of changed instances. Failed activation restores the previous definition when possible; failed restoration remains explicit.
+Production Manager initialization runs only through `startManager()`. It mounts `managerSharedResourcesRuntime.ts` and the single `managerPluginHost.ts`, then resolves versioned Bundles from `data/plugins/manager/profile.json`. The `rabi.manager.base` Bundle brings all 26 built-in instances through the same Loader; `controlPlaneRoutes.ts` still supplies controlled business hooks but `manager.json` is no longer the plugin source of truth. `managerPluginReconciler.ts` serializes activation, deactivation, and revision reloads. Failed activation restores the preceding Fiber; a failed restoration remains explicit.
 
 Each definition declares `provides`, `requires`, and `optional`. The reconciler rejects multiple enabled providers for one capability, orders required dependencies, and puts consumers with missing `requires` into `waiting_dependency`. An available optional provider starts before its consumer. Each dependency revision recursively includes direct and transitive provider revisions, active state, capability ownership, and missing-capability summaries. In a `root -> middle -> leaf` chain, a root revision change therefore places both middle and leaf in the restart batch without affecting unrelated instances. `PluginCatalog.refreshDeclaration()` updates the manifest and `missingCapabilities` during reload, allowing one instance to move `active -> waiting_dependency -> active`. Deactivation follows reverse current application order.
 
-`builtinManagerPlugins.ts` currently declares 26 built-in instances, and `controlPlaneRoutes.ts` supplies one non-empty hook for each instance:
+`managerBasePluginDefinitions.ts` currently declares 26 built-in instances, and `controlPlaneRoutes.ts` supplies one non-empty hook for each instance:
 
 ```text
 manager:core

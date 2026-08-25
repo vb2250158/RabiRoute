@@ -18,6 +18,8 @@ import { readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId 
 import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
+import { disposeWebPluginModules } from "./pluginModules";
+import { refreshWebPluginModulesSafely } from "./pluginModuleBootstrap";
 import {
   webCommandForHandler,
   webCommandsInSlot,
@@ -37,6 +39,7 @@ let managerEvents: EventSource | null = null;
 
 async function handlePluginCatalogChanged(): Promise<void> {
   await pluginCatalogStore.refresh();
+  await refreshWebPluginModulesSafely();
   if (!webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup")) store.quickSetupDialogOpen = false;
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
@@ -216,10 +219,12 @@ onBeforeUnmount(() => {
   systemThemeQuery.removeEventListener("change", onSystemThemeChanged);
   managerEvents?.close();
   managerEvents = null;
+  void disposeWebPluginModules();
 });
 
 async function refresh(): Promise<void> {
   await Promise.all([store.load(), pluginCatalogStore.refresh()]);
+  await refreshWebPluginModulesSafely();
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
   if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });

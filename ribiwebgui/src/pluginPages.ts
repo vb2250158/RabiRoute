@@ -61,6 +61,8 @@ const webPageRendererRegistry = new Map<WebPageRouteId, TrustedWebPageRegistrati
 const webPageRendererIds = new Map<WebPageRendererId, WebPageRouteId>();
 const webPageRoutePaths = new Map<string, WebPageRouteId>();
 const registrationListeners = new Set<RegistrationListener>();
+const replacementListeners = new Set<() => void>();
+let replacementDepth = 0;
 const webPageRegistrationRevision = ref(0);
 const reservedRoutePaths = new Set(["/", "/plugin-recovery", "/models", "/:pathMatch(.*)*"]);
 const controlledPageRequirements = new Set<WebPageDataRequirement>(["gateway.diagnostics"]);
@@ -238,6 +240,31 @@ export function onTrustedWebPageRegistrationChange(listener: RegistrationListene
   return () => registrationListeners.delete(listener);
 }
 
+/** Keeps a route registered while its owning Web Bundle replaces one revision. */
+export function beginTrustedWebPageReplacement(): () => void {
+  replacementDepth += 1;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    replacementDepth = Math.max(0, replacementDepth - 1);
+  };
+}
+
+export function isTrustedWebPageReplacementInProgress(): boolean {
+  return replacementDepth > 0;
+}
+
+/** Notifies the Router after a replaced Bundle page has been registered again. */
+export function notifyTrustedWebPageReplacement(): void {
+  for (const listener of [...replacementListeners]) listener();
+}
+
+export function onTrustedWebPageReplacement(listener: () => void): () => void {
+  replacementListeners.add(listener);
+  return () => replacementListeners.delete(listener);
+}
+
 export function webPageDataRequirements(routeId: WebPageRouteId): readonly WebPageDataRequirement[] {
   return webPageRendererRegistry.get(routeId)?.requirements ?? [];
 }
@@ -336,7 +363,7 @@ export function isWebNavigationPageActive(
 const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   {
     instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
+    pluginId: "rabi.manager.base",
     routeId: "route.overview",
     rendererId: "builtin.web-page.overview.v1",
     loader: () => import("./pages/OverviewPage.vue"),
@@ -353,7 +380,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:message-adapter-control",
-    pluginId: "builtin:manager/message-adapter-control",
+    pluginId: "rabi.manager.base",
     routeId: "route.adapters",
     rendererId: "builtin.web-page.adapters.v1",
     loader: () => import("./pages/RouteConfigPage.vue"),
@@ -370,7 +397,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
+    pluginId: "rabi.manager.base",
     routeId: "route.persona",
     rendererId: "builtin.web-page.persona.v1",
     loader: () => import("./pages/PersonaTemplatePage.vue"),
@@ -386,7 +413,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
+    pluginId: "rabi.manager.base",
     routeId: "route.persona-document",
     rendererId: "builtin.web-page.persona-document.v1",
     loader: () => import("./pages/PersonaDocumentPage.vue"),
@@ -394,7 +421,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
+    pluginId: "rabi.manager.base",
     routeId: "route.knowledge",
     rendererId: "builtin.web-page.knowledge.v1",
     loader: () => import("./pages/RoleKnowledgePage.vue"),
@@ -410,7 +437,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
+    pluginId: "rabi.manager.base",
     routeId: "route.persona-sync",
     rendererId: "builtin.web-page.persona-sync.v1",
     loader: () => import("./pages/PersonaSyncPage.vue"),
@@ -423,7 +450,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:speech",
-    pluginId: "builtin:manager/speech",
+    pluginId: "rabi.manager.base",
     routeId: "route.speech",
     rendererId: "builtin.web-page.speech.v1",
     loader: () => import("./pages/SpeechServicePage.vue"),
@@ -439,7 +466,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:performance",
-    pluginId: "builtin:manager/performance",
+    pluginId: "rabi.manager.base",
     routeId: "global.performance",
     rendererId: "builtin.web-page.performance.v1",
     loader: () => import("./pages/PerformancePage.vue"),
@@ -452,7 +479,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:diagnostics",
-    pluginId: "builtin:manager/diagnostics",
+    pluginId: "rabi.manager.base",
     routeId: "route.runtime",
     rendererId: "builtin.web-page.runtime.v1",
     loader: () => import("./pages/RuntimeLogPage.vue"),
@@ -469,7 +496,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
+    pluginId: "rabi.manager.base",
     routeId: "global.settings",
     rendererId: "builtin.web-page.settings.v1",
     loader: () => import("./pages/SettingsPage.vue"),
@@ -482,7 +509,7 @@ const builtinWebPages: readonly TrustedWebPageRegistration[] = [
   },
   {
     instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
+    pluginId: "rabi.manager.base",
     routeId: "global.docs",
     rendererId: "builtin.web-page.docs.v1",
     loader: () => import("./pages/ProjectDocsPage.vue"),

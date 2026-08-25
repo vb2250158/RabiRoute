@@ -6,9 +6,13 @@ import {
   type Component
 } from "vue";
 
+export const ROUTE_LOAD_TIMEOUT_MS = 12_000;
+
 export type ImmediateRouteComponentOptions = {
-  onLoadError?: (error: unknown) => boolean;
+  errorComponent?: Component;
+  onLoadError?: (error: unknown) => void;
   onLoadSuccess?: () => void;
+  timeoutMs?: number;
 };
 
 export function createImmediateRouteComponent(
@@ -23,14 +27,14 @@ export function createImmediateRouteComponent(
         options.onLoadSuccess?.();
         return component;
       } catch (error) {
-        if (options.onLoadError?.(error)) {
-          return await new Promise<never>(() => undefined);
-        }
+        options.onLoadError?.(error);
         throw error;
       }
     },
     loadingComponent,
+    errorComponent: options.errorComponent,
     delay: 0,
+    timeout: options.timeoutMs ?? ROUTE_LOAD_TIMEOUT_MS,
     suspensible: false
   });
 

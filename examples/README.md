@@ -30,6 +30,7 @@ cp -R examples/data/. data/
 | --- | --- | --- |
 | [`data/`](./data/README.md) | 当前示例 | 可复制的 Route、Persona、计划和记忆数据包。 |
 | [`rabilink-relay/`](./rabilink-relay/README.md) | 当前示例 | Relay 工具导入和鉴权配置样板，不包含真实 token。 |
+| [`plugin-bundles/manager-echo/`](./plugin-bundles/manager-echo/README.md) | 当前示例 | 受控 Manager Bundle、Profile Patch 和热替换样板。 |
 | [`rabi-link-vela-probe/`](./rabi-link-vela-probe/README.md) | 历史探针 | vela 手环验证应用，保留为设备调查证据。 |
 | `.env.example` | 可选样板 | 不经过 Manager、直接用环境变量启动单 Gateway 时使用。 |
 | `send-webhook-demo.*` | 当前示例 | 向通用 Webhook 入口发送测试文本。 |

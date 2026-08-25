@@ -5,6 +5,7 @@ import type {
   ManagerPluginReconciliationStatus,
   ManagerPluginReconciler
 } from "../runtime/managerPluginReconciler.js";
+import type { WebPluginModule } from "./webPluginModules.js";
 
 export type PluginReconciliationApiContext = {
   reconciler: ManagerPluginReconciler;
@@ -15,6 +16,10 @@ export type PluginReconciliationApiContext = {
 export type PluginCatalogApiContext = {
   runtime: ManagerPluginRuntimeMount;
   reconciliation?: PluginReconciliationApiContext;
+  webModules?: {
+    list(): Promise<readonly WebPluginModule[]>;
+    read(id: string, rev: string): Promise<Readonly<{ module: WebPluginModule; source: Buffer }>>;
+  };
 };
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
@@ -67,6 +72,47 @@ export function handlePluginCatalogApi(
       return true;
     }
     jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+    return true;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/plugins/modules") {
+    if (!context.webModules) {
+      jsonResponse(response, 200, { code: 0, data: { schemaVersion: 1, modules: [] } });
+      return true;
+    }
+    void context.webModules.list()
+      .then(modules => jsonResponse(response, 200, { code: 0, data: { schemaVersion: 1, modules } }))
+      .catch(error => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+
+  const moduleMatch = requestUrl.pathname.match(/^\/api\/plugins\/modules\/([^/]+)\/client\.js$/);
+  if (request.method === "GET" && moduleMatch) {
+    if (!context.webModules) {
+      jsonResponse(response, 404, { code: -1, message: "Web plugin module was not found." });
+      return true;
+    }
+    let id = "";
+    try { id = decodeURIComponent(moduleMatch[1]!); } catch {
+      jsonResponse(response, 400, { code: -1, message: "Web plugin module id is invalid." });
+      return true;
+    }
+    const rev = requestUrl.searchParams.get("rev") ?? "";
+    if (!rev || !/^[a-f0-9]{64}$/.test(rev)) {
+      jsonResponse(response, 400, { code: -1, message: "Web plugin module revision is invalid." });
+      return true;
+    }
+    void context.webModules.read(id, rev)
+      .then(({ source }) => {
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("x-content-type-options", "nosniff");
+        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+        response.end(source);
+      })
+      .catch(error => jsonResponse(response, (error as { code?: string }).code === "ENOENT" ? 404 : 500, {
+        code: -1,
+        message: error instanceof Error ? error.message : String(error)
+      }));
     return true;
   }
 

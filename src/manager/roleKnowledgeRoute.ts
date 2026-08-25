@@ -1,5 +1,6 @@
 export type RoleKnowledgeResource =
   | "plans"
+  | "counts"
   | "skills"
   | "memory"
   | "memory/recent"
@@ -13,7 +14,7 @@ export type RoleKnowledgeResourceRoute = {
   itemId: string;
 };
 
-const roleKnowledgeResourcePattern = /^\/(?:api\/)?roles\/([^/]+)\/(memory\/consolidation-requests|memory\/consolidation-runs|memory\/consolidated|memory\/recent|memory|plans|skills)(?:\/([^/]+))?$/;
+const roleKnowledgeResourcePattern = /^\/(?:api\/)?roles\/([^/]+)\/(memory\/consolidation-requests|memory\/consolidation-runs|memory\/consolidated|memory\/recent|memory|plans|skills|counts)(?:\/([^/]+))?$/;
 
 export function parseRoleKnowledgeResourceRoute(pathname: string): RoleKnowledgeResourceRoute | null {
   const match = pathname.match(roleKnowledgeResourcePattern);

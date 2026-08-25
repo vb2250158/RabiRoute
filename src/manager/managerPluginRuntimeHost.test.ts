@@ -4,12 +4,12 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
-import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
+import { getManagerPluginRuntimeHost } from "./managerPluginRuntimeHost.js";
 
-test("builtin Manager Plugin Host is deduplicated by the Manager root without eager plugin activation", async () => {
+test("Manager Plugin Runtime Host is deduplicated by the Manager root without eager plugin activation", async () => {
   const [first, second] = await Promise.all([
-    getBuiltinManagerPluginHost(),
-    getBuiltinManagerPluginHost()
+    getManagerPluginRuntimeHost(),
+    getManagerPluginRuntimeHost()
   ]);
   const root = getBuiltinManagerCordisRoot();
   assert.strictEqual(first, second);
@@ -20,7 +20,7 @@ test("builtin Manager Plugin Host is deduplicated by the Manager root without ea
   assert.deepEqual(first.runtime.catalog.snapshot().plugins, []);
   assert.deepEqual(first.runtime.contributions.catalog().contributions, []);
 
-  const replacement = await getBuiltinManagerPluginHost();
+  const replacement = await getManagerPluginRuntimeHost();
   const replacementRoot = getBuiltinManagerCordisRoot();
   assert.notStrictEqual(replacement, first);
   assert.notStrictEqual(replacementRoot, root);
@@ -29,9 +29,9 @@ test("builtin Manager Plugin Host is deduplicated by the Manager root without ea
 });
 
 test("Manager Plugin Host exposes no legacy eager-runtime accessor", () => {
-  const sourcePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "managerPluginHost.ts");
+  const sourcePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "managerPluginRuntimeHost.ts");
   const source = fs.readFileSync(sourcePath, "utf8");
 
   assert.doesNotMatch(source, /getBuiltinManagerPluginRuntime/);
-  assert.doesNotMatch(source, /builtinManagerPluginDefinitions/);
+  assert.doesNotMatch(source, /managerBasePluginDefinitions/);
 });

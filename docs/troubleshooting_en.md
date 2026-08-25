@@ -62,7 +62,7 @@ Check in order:
 3. Check the saved `codexThreadId` and `codexCwd`. A valid ID in the same workspace is reused even after a Desktop rename, stale SQLite title, display title longer than 240, or completed goal.
 4. Only an explicitly cleared, invalid, or genuinely missing ID falls back to `codexThreadName + codexCwd` lookup. A SQLite title changing to the first prompt does not invalidate a good ID. One or more exact matches bind the unique latest `updatedAt`; only zero matches may create. An archived saved binding creates a new task at the next real delivery or save commit point and persists the replacement ID without reusing another same-name task. A genuinely new task name longer than 240 is safely truncated and the actual name is persisted.
 5. Inspect packet/status and Manager logs for route miss, Desktop IPC readiness, owner loading, and ID/workspace errors.
-6. `no-client-found` causes a `codex://threads/<id>` open and a short retry; failure never switches to a background Runtime.
+6. `no-client-found` causes a `codex://threads/<id>` open and a short retry. When the exact ID can no longer be read from local state after that retry, RabiRoute creates a replacement and delivers the message; for a plan task, it also updates the original plan binding and returns a warning. When the task still exists, it neither switches to a background Runtime nor creates a task.
 
 Do not set `CODEX_APP_SERVER_WS_URL`, a fixed port 4510, or a separate stdio process to repair delivery. They are not the real-message transport.
 

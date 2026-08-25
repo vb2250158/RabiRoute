@@ -58,6 +58,7 @@
 - [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明 26 个内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
 - [DSH 如何使用 Cordis](dsh-cordis-runtime-analysis.md) — **实现调查**。说明 profile、Loader、Fiber、服务 realm、浏览器插件树、动态代码和进程沙箱的真实边界。
 - [基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md) — **当前实现说明**。定义 26 个内置 Manager 插件、中央 HTTP 最小宿主、WebGUI/Desktop 扩展协议、插件资源所有权和停用顺序。
+- [插件 Bundle 与热替换](plugin-bundles.md) — **当前实现说明**。Profile、Patch、版本化 Bundle、受控 Manager 宿主 API 和浏览器 revision 回滚。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
 - [路径与目录规范](path-and-directory-conventions.md) — **当前维护规范**。区分软件目录、公开示例、本机运行数据和日志，并规定 API 中相对路径与业务 ID 的写法。

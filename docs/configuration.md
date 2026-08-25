@@ -8,51 +8,22 @@
 
 > 状态：现行指南。字段和成熟度以当前配置模型、Manager API 和扫描结果为准；验收状态见[当前能力与成熟度](current-capabilities.md)。
 
-## Manager 插件组合
+## Manager 插件 Bundle
 
-`data/manager.json` 负责 Manager 目录位置和内置插件启停。首次初始化会从 `examples/data/manager.json` 复制安全示例。
+`data/manager.json` 只保存 Manager 目录位置：
 
 ```json
 {
   "routeDir": "data/route",
-  "rolesDir": "data/roles",
-  "managerPlugins": {
-    "manager:core": { "enabled": true },
-    "manager:persona": { "enabled": true },
-    "manager:speech": { "enabled": true },
-    "manager:performance": { "enabled": true },
-    "manager:desktop": { "enabled": true },
-    "manager:gateway-runtime": { "enabled": true },
-    "manager:bilibili-history": { "enabled": true },
-    "manager:route-control": { "enabled": true },
-    "manager:message-adapter-control": { "enabled": true },
-    "manager:agent-adapter-catalog": { "enabled": true },
-    "manager:agent-state-control": { "enabled": true },
-    "manager:agent-thread-control": { "enabled": true },
-    "manager:agent-communication": { "enabled": true },
-    "manager:copilot-control": { "enabled": true },
-    "manager:astrbot-control": { "enabled": true },
-    "manager:marvis-control": { "enabled": true },
-    "manager:remote-agent": { "enabled": true },
-    "manager:diagnostics": { "enabled": true },
-    "manager:rabilink-relay": { "enabled": true },
-    "manager:memory-consolidation": { "enabled": true },
-    "manager:fennenote-output": { "enabled": true },
-    "manager:message-processing-control": { "enabled": true },
-    "manager:message-processing-automation": { "enabled": true },
-    "manager:plan-feedback-delivery": { "enabled": true },
-    "manager:napcat-control": { "enabled": true },
-    "manager:napcat-supervisor": { "enabled": true }
-  }
+  "rolesDir": "data/roles"
 }
 ```
 
-`manager:core` 是恢复和目录 API 的必需插件，配置不能关闭。其他内置插件默认启用。Manager 只接受已注册实例 ID 和布尔 `enabled`；路径、包名、命令、URL、环境变量和未知字段会被忽略并写入诊断。正式启动只走 `startManager()`：先挂载共享资源，再合成全部 definition 与业务 hook，最后首次对账。
+插件由 `data/plugins/manager/profile.json` 选择。每行的稳定 `id` 选择一个受信任 Bundle、版本、启用状态和 JSON 配置；`profile.d/*.json` 按文件名顺序叠加 `upsert`、`remove` Patch。`manager:core` 必须启用。
 
-内置 definition 声明 `provides`、`requires` 和 `optional`。缺少 `requires` 时实例显示 `waiting_dependency`；可选 Provider 存在时先启动 Provider；依赖 revision 递归包含直接和传递 Provider，因此上游 revision 或启停变化会沿能力链把全部真实消费者纳入重启批次。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，因此同一实例可以从 `active` 进入 `waiting_dependency`，依赖恢复后再回到 `active`。同一能力出现多个已启用 Provider 时，对账直接失败。
+内置功能由受版本控制的 `rabi.manager.base` Bundle 提供。首次启动会把旧 `manager.json.managerPlugins` 迁入 Profile 并删除该字段；运行时不再把 `manager.json` 当成插件配置。Profile、Patch 或 Bundle 文件变化时，监听器按 revision 局部对账：撤销旧路由、排空已接受请求、卸载旧 Fiber，再加载新 revision；激活失败时恢复旧 Fiber。
 
-保存 `manager.json` 后，文件 watcher 只对账发生变化的插件。停用会销毁目标 Fiber；revision 变化会重载目标实例；新定义失败时恢复旧定义。`GET /api/plugins/reconciliation` 返回期望、活动、变化、回滚和诊断状态，`POST /api/plugins/reconciliation` 重新读取本机配置。WebGUI 通过 `/api/events` 的 `plugin_catalog_changed` 事件刷新目录。
-
+`GET /api/plugins/reconciliation` 返回期望、活动、变化、回滚和诊断状态。`POST /api/plugins/reconciliation` 立即重读 Profile。WebGUI 通过 `/api/events` 的 `plugin_catalog_changed` 更新目录和动态 Web Bundle。完整 Bundle 目录、宿主 API 和热替换限制见[插件 Bundle 与热替换](plugin-bundles.md)。
 ### 插件入口与资源所有权
 
 当前内置目录注册 26 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。

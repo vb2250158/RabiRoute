@@ -71,10 +71,10 @@ function plugin(
   return {
     instanceId: `manager:${id}`,
     manifest: {
-      id: `builtin:manager/${id}`,
+      id: "rabi.manager.base",
       name,
       version: rabiRoutePackageVersion(),
-      kind: "builtin",
+      kind: "package",
       hosts: [
         "manager",
         ...(contributionHosts.has("web") ? ["web" as const] : []),
@@ -93,7 +93,7 @@ function plugin(
   };
 }
 
-export function builtinManagerPluginDefinitions(): ManagerPluginDefinition[] {
+export function managerBasePluginDefinitions(): ManagerPluginDefinition[] {
   return [
     plugin("core", "RabiRoute Manager Core", [
       {

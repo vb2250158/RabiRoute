@@ -196,15 +196,16 @@ import {
 } from "./panghuProgressNotificationGate.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
-import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
-import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
-import { composeBuiltinManagerPluginDefinitions } from "./builtinManagerPluginComposition.js";
+import { getManagerPluginRuntimeHost } from "./managerPluginRuntimeHost.js";
+import { readWebPluginModuleSource, readWebPluginModules } from "./webPluginModules.js";
+import { managerBasePluginDefinitions } from "./managerBasePluginDefinitions.js";
 import {
   ManagerPluginRouteRegistry,
   type ManagerPluginRouteHandler
 } from "./managerPluginRouteRegistry.js";
 import { isManagerControlRequestPath } from "./managerHttpRequestClassification.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
+import { createRabiManagerPluginHostApi } from "./managerPluginPackageHost.js";
 import { createDesktopControlRoutes, desktopConfigFilePayload } from "./desktopControlRoutes.js";
 import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
 import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
@@ -238,8 +239,9 @@ import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderSer
 import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
 import { runWindowsTaskkill, stopChildProcessTree } from "../runtime/windowsProcessTree.js";
 import {
-  normalizeManagerPluginConfig,
-  type ManagerPluginConfigDiagnostic
+  migrateManagerPluginProfile,
+  resolveManagerPluginProfile,
+  type ManagerPluginProfileDiagnostic
 } from "./managerPluginConfig.js";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
 import {
@@ -1888,6 +1890,48 @@ async function reloadChangedConfig(
 }
 
 type ConfigWatcher = { close(): void };
+type PluginBundleWatcher = { close(): void };
+
+function startPluginBundleWatcher(reconcile: (reason: string) => Promise<void>): PluginBundleWatcher {
+  const directories = [
+    path.join(rootDir, "data", "plugins", "manager"),
+    path.join(rootDir, "plugins", "packages")
+  ];
+  const watchers: fs.FSWatcher[] = [];
+  let timer: NodeJS.Timeout | undefined;
+  let closed = false;
+  const schedule = (): void => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (closed) return;
+      void reconcile("plugin profile or bundle changed").catch(error => {
+        console.warn("Plugin bundle reload failed; the active revision remains in service.", error);
+      });
+    }, 160);
+  };
+  for (const directory of directories) {
+    fs.mkdirSync(directory, { recursive: true });
+    try {
+      const watcher = fs.watch(directory, { recursive: true }, (_eventType, fileName) => {
+        const name = fileName?.toString().replace(/\\/g, "/") ?? "";
+        if (name.includes(".rabi-runtime") || name.endsWith(".tmp")) return;
+        schedule();
+      });
+      watcher.on("error", error => console.warn(`Plugin bundle watch failed for ${directory}:`, error));
+      watchers.push(watcher);
+    } catch (error) {
+      console.warn(`Unable to watch plugin bundle directory ${directory}:`, error);
+    }
+  }
+  return {
+    close(): void {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      for (const watcher of watchers) watcher.close();
+    }
+  };
+}
 
 function startConfigWatcher(
   reconcileManagerPlugins?: (reason: string) => Promise<void>,
@@ -4356,9 +4400,11 @@ function runtimeForMessageProcessingTarget(target: MessageProcessingDeliveryTarg
 
 function replaceOpenAgentRequestParties(
   previousThreadId: string,
+  previousWorkspace: string | undefined,
   worker: NonNullable<MessageProcessingRequirement["worker"]>
 ): void {
   const result = agentRequests.reconcileOpenParties((party) => party.threadId === previousThreadId
+    && (!previousWorkspace || !party.workspace || sameCodexWorkspace(party.workspace, previousWorkspace))
     ? {
         ...party,
         threadId: worker.threadId,
@@ -4386,7 +4432,7 @@ function persistResolvedAgentRequestTarget(
     : undefined;
   const threadId = String(thread?.id || result.threadId || "").trim();
   if (!previousThreadId || previousThreadId !== target.threadId || !threadId || threadId === previousThreadId) return;
-  replaceOpenAgentRequestParties(previousThreadId, {
+  replaceOpenAgentRequestParties(previousThreadId, target.workspace, {
     threadId,
     threadName: String(thread?.title || target.threadName || threadId),
     workspace: String(thread?.cwd || target.workspace || rootDir)
@@ -4445,7 +4491,7 @@ function persistResolvedMessageProcessingTarget(
     }
   }
   messageProcessingBoard.replaceWorkerReferences(resolved.previousThreadId, replacement);
-  replaceOpenAgentRequestParties(resolved.previousThreadId, replacement);
+  replaceOpenAgentRequestParties(resolved.previousThreadId, target.worker.workspace, replacement);
   reconcileMessageProcessingAgentRequests();
   publishManagerEvent("codex_binding_replaced", {
     gatewayId: runtime.definition.id,
@@ -4611,6 +4657,13 @@ async function deliverKnowledgeCallbackReminder(requirement: MessageProcessingRe
     runtime
   );
   messageProcessingBoard.recordWorkerReference(requirement.id, resolved.worker);
+  const warning = typeof result.data.warning === "string" ? result.data.warning.trim() : "";
+  if (warning) {
+    managerOperationalLog.record("warn", "knowledge_callback_reminder_target_replaced", {
+      action: `${requirement.id}:${worker.threadId}->${resolved.worker.threadId}`,
+      result: warning
+    });
+  }
 }
 
 async function messageProcessingBoardPayload(routeId?: string, limit?: number): Promise<Record<string, unknown>> {
@@ -4755,7 +4808,15 @@ async function sendPlanFeedbackToTask(
     title: typeof thread?.title === "string" ? thread.title : undefined,
     cwd: typeof thread?.cwd === "string" ? thread.cwd : undefined
   });
-  if (taskBinding) updatePlan(roleDir, currentPlan.id, { taskBinding });
+  if (!taskBinding) return;
+  updatePlan(roleDir, currentPlan.id, { taskBinding });
+  const warning = typeof result.data.warning === "string" ? result.data.warning.trim() : "";
+  if (warning) {
+    managerOperationalLog.record("warn", "plan_task_binding_replaced", {
+      action: `${planId}:${request.threadId}->${resolvedId}`,
+      result: warning
+    });
+  }
 }
 
 function ensurePlanSecretaryTarget(
@@ -7198,9 +7259,9 @@ export async function startManager(): Promise<void> {
     MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
     mountManagerSharedResourcesRuntime(messageProcessingBoardPersistence)
   );
-  let managerPluginHost: Awaited<ReturnType<typeof getBuiltinManagerPluginHost>>;
+  let managerPluginHost: Awaited<ReturnType<typeof getManagerPluginRuntimeHost>>;
   try {
-    managerPluginHost = await getBuiltinManagerPluginHost();
+    managerPluginHost = await getManagerPluginRuntimeHost();
   } catch (error) {
     await managerSharedResourcesRuntime.unmount().catch(() => {});
     await managerCordisRoot.dispose().catch(() => {});
@@ -7227,7 +7288,7 @@ export async function startManager(): Promise<void> {
     }
     if (firstError) throw firstError;
   };
-  let managerPluginDiagnostics: ManagerPluginConfigDiagnostic[] = [];
+  let managerPluginDiagnostics: readonly ManagerPluginProfileDiagnostic[] = [];
   let managerServicesReady = false;
   let managerListenerReady = false;
   let syncActiveRabiLinkRelay = async (): Promise<void> => {};
@@ -7241,11 +7302,7 @@ export async function startManager(): Promise<void> {
   };
   const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.catalog.get(instanceId)?.status === "active";
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
-  let managerPluginDefinitions: ReturnType<typeof composeBuiltinManagerPluginDefinitions>;
-  try {
-    managerPluginDefinitions = composeBuiltinManagerPluginDefinitions(
-      builtinManagerPluginDefinitions(),
-      {
+  const managerPluginApplyHooks: Record<string, (ctx: import("../runtime/cordisHost.js").RabiCordisContext) => void | Promise<void>> = {
       "manager:core": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
@@ -8153,15 +8210,35 @@ export async function startManager(): Promise<void> {
           };
         }, "activate Manager desktop plugin");
       }
+  };
+  const managerPluginDefinitions = managerBasePluginDefinitions().map(definition => {
+    const hook = managerPluginApplyHooks[definition.instanceId];
+    if (!hook) return definition;
+    return {
+      ...definition,
+      async apply(ctx: import("../runtime/cordisHost.js").RabiCordisContext): Promise<void> {
+        await definition.apply?.(ctx);
+        await hook(ctx);
       }
-    );
-  } catch (error) {
-    await disposeManagerCordisRuntime().catch(() => {});
-    throw error;
-  }
+    };
+  });
 
   const reconcileManagerPlugins = async (reason: string): Promise<void> => {
-    const normalized = normalizeManagerPluginConfig(readManagerConfig(), managerPluginDefinitions);
+    const persistedConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
+    await migrateManagerPluginProfile(rootDir, managerPluginDefinitions, persistedConfig.managerPlugins);
+    if (Object.hasOwn(persistedConfig, "managerPlugins")) {
+      delete persistedConfig.managerPlugins;
+      writeManagerConfig(persistedConfig);
+    }
+    const normalized = await resolveManagerPluginProfile({
+      rootDir,
+      builtinDefinitions: managerPluginDefinitions,
+      createServices: identity => createRabiManagerPluginHostApi({
+        instanceId: identity.instanceId,
+        routes: managerPluginRoutes,
+        publishManagerEvent
+      })
+    });
     managerPluginDiagnostics = normalized.diagnostics;
     const status = await managerPluginReconciler.reconcile(normalized.desired);
     publishManagerEvent("plugin_reconciliation_changed", { reason, ...status, diagnostics: managerPluginDiagnostics });
@@ -8186,6 +8263,7 @@ export async function startManager(): Promise<void> {
     throw error;
   }
   let configWatcher: ConfigWatcher | null = null;
+  let pluginBundleWatcher: PluginBundleWatcher | null = null;
   let removeSignalHandlers = (): void => {};
   let managerResourcesStopped = false;
   let server: http.Server | undefined;
@@ -8195,6 +8273,7 @@ export async function startManager(): Promise<void> {
     managerResourcesStopped = true;
     removeSignalHandlers();
     configWatcher?.close();
+    pluginBundleWatcher?.close();
     closeManagerEventClients();
   }
 
@@ -8286,6 +8365,10 @@ export async function startManager(): Promise<void> {
             await reconcileManagerPlugins("manual API request");
             return managerPluginReconciler.status();
           }
+        },
+        webModules: {
+          list: () => readWebPluginModules(rootDir),
+          read: (id, rev) => readWebPluginModuleSource(rootDir, id, rev)
         }
       })) {
         return;
@@ -8339,6 +8422,7 @@ export async function startManager(): Promise<void> {
   if (!configWatcher) {
     console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
   }
+  pluginBundleWatcher = startPluginBundleWatcher(reconcileManagerPlugins);
 
   let shuttingDown = false;
 

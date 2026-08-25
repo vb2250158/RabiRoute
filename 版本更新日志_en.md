@@ -7,6 +7,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### Manager plugin Bundles and hot replacement
+
+- Manager plugins now come from Profile, Patch, and versioned Bundle composition. Legacy `manager.json.managerPlugins` is migrated only at first startup and is no longer runtime configuration. Built-in instances load through `rabi.manager.base`; the old `builtin:manager/*` identities and centralized composition entry have been removed.
+- Bundle changes use revisions to unload the preceding Fiber, remove instance routes, drain accepted requests, and load the new version. Failed activation restores the preceding version. Web Bundles use content revisions and Manager SSE replacement, retaining the preceding usable page if replacement fails.
+- The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry instead of waiting indefinitely.
 
 ## 0.2.1 - 2026-08-25
 

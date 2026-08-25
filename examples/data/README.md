@@ -12,7 +12,7 @@
 
 用途：
 
-- 提供 `manager.json` 内置插件组合示例；`manager:core` 必须启用，其他插件可以按实例关闭和局部重载。
+- 提供只含目录位置的 `manager.json`；插件 Profile 会在首次启动时创建。
 - 提供一份名为“Rabi Demo”的完整 `data/route/main/adapterConfig.json` 示例；它通过 `agentRoleId: "Rabi"` 绑定 Rabi 本体。
 - 给默认路由配置提供人格 `roles/Rabi`，并提供 RabiLink 专用的 `roles/RabiActive`。
 - 给默认人格提供 `roles/Rabi/personaConfig.json` 自动化规则和最近消息投递数量；示例包含消息通知 Agent 与定时通知 Agent，不默认运行脚本。
@@ -23,7 +23,7 @@
 - 演示本地路由配置的 `rolesDir` 应该指向 `./data/roles`。
 - 让用户复制后可以直接在 WebUI 里选择并预览示例人格。
 
-`manager.json` 默认列出当前 26 个内置 Manager 插件。7 个插件发布表现贡献，其他 19 个插件仍拥有 HTTP、服务、进程、定时器、监听器或对账生命周期。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；业务 HTTP 路由由 Manager 插件的 `apply` hook 注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。WebGUI/Desktop 通过宿主拥有的可信注册表解析新的 renderer、route、handler 和 resource contract，未知或未注册贡献失败关闭。第三方任意表现代码的受控 Extension Host 属于后续路线。统一验证尚未执行。
+首次启动会创建 `data/plugins/manager/profile.json`，由受版本控制的 `rabi.manager.base` Bundle 提供 26 个 Manager 实例。Profile 和 Patch 才是插件启停、版本和配置真源；完整目录、热替换和受控宿主 API 见 [`docs/plugin-bundles.md`](../../docs/plugin-bundles.md)。
 
 整包复制后只有 `main` 默认 Route 启用。RabiLink、voice-chat、Rokid 原生语音、XiaoAI、WeCom 和个人微信 Weixin 均为禁用模板。填写凭据或完成扫码、检查工作目录和端口后再逐条启用。
 

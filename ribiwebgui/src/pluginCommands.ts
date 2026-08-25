@@ -194,7 +194,7 @@ export function webCommandForHandler(
 const builtinWebCommands: readonly TrustedWebCommandRegistration[] = [
   {
     instanceId: "manager:route-control",
-    pluginId: "builtin:manager/route-control",
+    pluginId: "rabi.manager.base",
     handlerId: "web.quick-setup",
     allowedSlots: ["sidebar-footer-primary"],
     allowedIcons: ["mdi-lightning-bolt-outline"],
@@ -203,7 +203,7 @@ const builtinWebCommands: readonly TrustedWebCommandRegistration[] = [
   },
   {
     instanceId: "manager:route-control",
-    pluginId: "builtin:manager/route-control",
+    pluginId: "rabi.manager.base",
     handlerId: "web.add-route",
     allowedSlots: ["topbar-primary"],
     allowedIcons: ["mdi-plus"],
@@ -211,7 +211,7 @@ const builtinWebCommands: readonly TrustedWebCommandRegistration[] = [
   },
   {
     instanceId: "manager:route-control",
-    pluginId: "builtin:manager/route-control",
+    pluginId: "rabi.manager.base",
     handlerId: "web.open-manager-config",
     allowedSlots: ["sidebar-footer"],
     allowedIcons: ["mdi-folder-cog-outline"],
@@ -219,7 +219,7 @@ const builtinWebCommands: readonly TrustedWebCommandRegistration[] = [
   },
   {
     instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
+    pluginId: "rabi.manager.base",
     handlerId: "web.save-page",
     allowedSlots: ["topbar-primary"],
     allowedIcons: ["mdi-content-save"],

@@ -13,10 +13,10 @@ function catalogResponse(): Response {
       revision: { plugins: 1, contributions: 2 },
       plugins: [{
         instanceId: "manager:core",
-        pluginId: "builtin:manager/core",
+        pluginId: "rabi.manager.base",
         status: "active",
         manifest: {
-          id: "builtin:manager/core",
+          id: "rabi.manager.base",
           hosts: ["manager", "web", "desktop"],
           capabilities: ["manager.plugin-catalog", "manager.contributions"]
         }
@@ -26,7 +26,7 @@ function catalogResponse(): Response {
         surface: "web.pages",
         id: "settings-page",
         instanceId: "manager:core",
-        pluginId: "builtin:manager/core",
+        pluginId: "rabi.manager.base",
         routeId: "global.settings",
         rendererId: "builtin.web-page.settings.v1",
         hosts: ["web"]
@@ -35,7 +35,7 @@ function catalogResponse(): Response {
         surface: "shared.themes",
         id: "dark-theme",
         instanceId: "manager:core",
-        pluginId: "builtin:manager/core",
+        pluginId: "rabi.manager.base",
         themeId: "dark",
         webResourceId: "builtin.web-theme.dark.v1",
         desktopResourceId: "builtin.desktop-theme.dark.v1",

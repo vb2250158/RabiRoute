@@ -233,7 +233,7 @@ export function webRenderersAt(
 
 registerTrustedWebSettingsRenderer({
   instanceId: "manager:desktop",
-  pluginId: "builtin:manager/desktop",
+  pluginId: "rabi.manager.base",
   rendererId: "builtin.desktop-settings.v1",
   placementId: "global.settings.sections",
   allowedSlots: ["desktop"],
@@ -245,7 +245,7 @@ registerTrustedWebSettingsRenderer({
 
 registerTrustedWebStatusRenderer({
   instanceId: "manager:speech",
-  pluginId: "builtin:manager/speech",
+  pluginId: "rabi.manager.base",
   rendererId: "builtin.speech-status.v1",
   placementId: "route.speech.summary",
   allowedSlots: ["runtime-status"],
@@ -255,7 +255,7 @@ registerTrustedWebStatusRenderer({
 
 registerTrustedWebStatusRenderer({
   instanceId: "manager:performance",
-  pluginId: "builtin:manager/performance",
+  pluginId: "rabi.manager.base",
   rendererId: "builtin.performance-status.v1",
   placementId: "global.performance.summary",
   allowedSlots: ["runtime-status"],

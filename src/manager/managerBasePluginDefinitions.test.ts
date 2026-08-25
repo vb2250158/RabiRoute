@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
+import { managerBasePluginDefinitions } from "./managerBasePluginDefinitions.js";
 
 test("built-in Manager plugins publish the current WebGUI and Desktop contribution surface", () => {
-  const definitions = builtinManagerPluginDefinitions();
+  const definitions = managerBasePluginDefinitions();
   assert.deepEqual(definitions.map(item => item.instanceId), [
     "manager:core",
     "manager:persona",
@@ -62,7 +62,7 @@ test("built-in Manager plugins publish the current WebGUI and Desktop contributi
 });
 
 test("builtin Manager plugins pair every navigation with a page in the same instance", () => {
-  for (const plugin of builtinManagerPluginDefinitions()) {
+  for (const plugin of managerBasePluginDefinitions()) {
     const pages = new Map(
       (plugin.contributions ?? [])
         .filter(contribution => contribution.kind === "page")
@@ -77,7 +77,7 @@ test("builtin Manager plugins pair every navigation with a page in the same inst
 });
 
 test("builtin Manager plugins publish only controlled interface themes", () => {
-  const themes = builtinManagerPluginDefinitions()
+  const themes = managerBasePluginDefinitions()
     .flatMap(plugin => plugin.contributions ?? [])
     .filter(contribution => contribution.kind === "theme");
 
@@ -93,7 +93,7 @@ test("builtin Manager plugins publish only controlled interface themes", () => {
 });
 
 test("builtin Desktop hotkeys reference commands from the same plugin instance", () => {
-  const desktop = builtinManagerPluginDefinitions().find(plugin => plugin.instanceId === "manager:desktop");
+  const desktop = managerBasePluginDefinitions().find(plugin => plugin.instanceId === "manager:desktop");
   assert.ok(desktop);
   const commands = new Map(
     (desktop.contributions ?? [])
@@ -112,7 +112,7 @@ test("builtin Desktop hotkeys reference commands from the same plugin instance",
 });
 
 test("builtin Manager plugins without presentation entries publish no UI contributions", () => {
-  const definitions = builtinManagerPluginDefinitions();
+  const definitions = managerBasePluginDefinitions();
   const serviceInstanceIds = [
     "manager:bilibili-history",
     "manager:agent-adapter-catalog",
@@ -146,7 +146,7 @@ test("builtin Manager plugins without presentation entries publish no UI contrib
 
 
 test("built-in Manager manifests expose target hosts and declared capabilities", () => {
-  const definitions = builtinManagerPluginDefinitions();
+  const definitions = managerBasePluginDefinitions();
   for (const definition of definitions) {
     const contributionHosts = new Set((definition.contributions ?? []).flatMap(item => item.hosts));
     assert.deepEqual(definition.manifest.hosts, [

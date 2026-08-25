@@ -8,51 +8,22 @@ English | <a href="./configuration.md">简体中文</a>
 
 > Status: current reference. Fields and maturity are based on the active configuration model, Manager APIs, and scan results. See [Current Capabilities](current-capabilities_en.md) for acceptance status.
 
-## Manager plugin composition
+## Manager plugin Bundles
 
-`data/manager.json` owns Manager directory locations and built-in plugin enablement. First-time initialization copies the safe `examples/data/manager.json` example.
+`data/manager.json` stores only Manager directory locations:
 
 ```json
 {
   "routeDir": "data/route",
-  "rolesDir": "data/roles",
-  "managerPlugins": {
-    "manager:core": { "enabled": true },
-    "manager:persona": { "enabled": true },
-    "manager:speech": { "enabled": true },
-    "manager:performance": { "enabled": true },
-    "manager:desktop": { "enabled": true },
-    "manager:gateway-runtime": { "enabled": true },
-    "manager:bilibili-history": { "enabled": true },
-    "manager:route-control": { "enabled": true },
-    "manager:message-adapter-control": { "enabled": true },
-    "manager:agent-adapter-catalog": { "enabled": true },
-    "manager:agent-state-control": { "enabled": true },
-    "manager:agent-thread-control": { "enabled": true },
-    "manager:agent-communication": { "enabled": true },
-    "manager:copilot-control": { "enabled": true },
-    "manager:astrbot-control": { "enabled": true },
-    "manager:marvis-control": { "enabled": true },
-    "manager:remote-agent": { "enabled": true },
-    "manager:diagnostics": { "enabled": true },
-    "manager:rabilink-relay": { "enabled": true },
-    "manager:memory-consolidation": { "enabled": true },
-    "manager:fennenote-output": { "enabled": true },
-    "manager:message-processing-control": { "enabled": true },
-    "manager:message-processing-automation": { "enabled": true },
-    "manager:plan-feedback-delivery": { "enabled": true },
-    "manager:napcat-control": { "enabled": true },
-    "manager:napcat-supervisor": { "enabled": true }
-  }
+  "rolesDir": "data/roles"
 }
 ```
 
-`manager:core` is required for recovery and catalog APIs and cannot be disabled. Other built-ins are enabled by default. Manager accepts only registered instance IDs and a boolean `enabled` field. Paths, package names, commands, URLs, environment variables, unknown instances, and unknown fields are ignored and reported as diagnostics. Production startup uses only `startManager()`: mount shared resources, compose every definition with its business hook, then perform initial reconciliation.
+`data/plugins/manager/profile.json` selects plugins. Every stable `id` chooses a trusted Bundle, version, enabled state, and JSON configuration; `profile.d/*.json` applies `upsert` and `remove` Patches in filename order. `manager:core` must remain enabled.
 
-Built-in definitions declare `provides`, `requires`, and `optional`. Missing `requires` produces `waiting_dependency`; an available optional provider starts before the consumer; dependency revisions recursively include direct and transitive providers, so an upstream revision or active-state change places every real downstream consumer in the restart batch. `PluginCatalog.refreshDeclaration()` updates the manifest and `missingCapabilities` during reload, so one instance can move from `active` to `waiting_dependency` and back to `active`. Multiple enabled providers for one capability reject reconciliation.
+The version-controlled `rabi.manager.base` Bundle supplies built-in features. On first startup, old `manager.json.managerPlugins` values migrate into the Profile and the field is removed; runtime no longer treats `manager.json` as plugin configuration. Profile, Patch, or Bundle changes reconcile by revision: remove old routes, drain accepted requests, unload the old Fiber, and load the new revision. Failed activation restores the preceding Fiber.
 
-After `manager.json` changes, the file watcher reconciles only changed plugins. Disabling disposes the target Fiber. A revision change reloads the target instance. Failed activation restores the previous definition when possible. `GET /api/plugins/reconciliation` returns desired, active, changed, rolled-back, and diagnostic state. `POST /api/plugins/reconciliation` rereads local configuration. WebGUI refreshes its catalog from the `plugin_catalog_changed` event on `/api/events`.
-
+`GET /api/plugins/reconciliation` returns desired, active, changed, rolled-back, and diagnostic state. `POST /api/plugins/reconciliation` rereads the Profile immediately. WebGUI uses `plugin_catalog_changed` from `/api/events` to refresh its catalog and dynamic Web Bundles. See [Plugin Bundles and hot replacement](plugin-bundles_en.md) for directory layout, host API, and replacement limits.
 ### Plugin entry-point and resource ownership
 
 The built-in catalog registers 26 Manager plugins. `manager:core` retains recovery, catalog, and basic-page contributions, while optional business entry points are registered by their plugins. The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths. Production business routes declare stable `routeId` values with real `exact` or `prefix` matchers; `dynamic` remains only as an extension contract. The Registry rejects duplicate route IDs and, when methods overlap, `exact/exact`, `exact/prefix`, and `prefix/prefix` path conflicts. Non-`/api` paths such as `/meta` and `/manager-config` also use explicit static declarations.
