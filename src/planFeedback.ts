@@ -10,6 +10,14 @@ import {
 } from "./shared/planFeedbackContract.js";
 import { normalizeStoredPlanAttachments } from "./planAttachments.js";
 import { PLAN_MAX_ATTACHMENTS, type PlanAttachment } from "./shared/planAttachmentContract.js";
+import {
+  legacyPlanFeedbackFile,
+  planBucketForStatus,
+  planFeedbackAttachmentDirectory,
+  planFeedbackFile as planStorageFeedbackFile,
+  planJsonFile,
+  type PlanStorageBucket
+} from "./planStorageLayout.js";
 
 export type { PlanFeedbackAttachment } from "./shared/planFeedbackContract.js";
 
@@ -200,6 +208,7 @@ export function resolvePlanFeedbackPlanAttachments(
 
 export function storePlanFeedbackAttachments(
   roleDir: string,
+  planId: string,
   feedbackId: string,
   value: unknown,
   expected?: PlanFeedbackAttachment[]
@@ -208,7 +217,7 @@ export function storePlanFeedbackAttachments(
   if (value.length > PLAN_FEEDBACK_MAX_ATTACHMENTS) {
     throw new Error(`Approval feedback supports at most ${PLAN_FEEDBACK_MAX_ATTACHMENTS} attachments.`);
   }
-  const attachmentDir = path.join(roleDir, "plans", "feedback", "attachments", safeIdPart(feedbackId) || "feedback");
+  const attachmentDir = planFeedbackAttachmentDirectory(roleDir, planId, feedbackId, planStorageBucket(roleDir, planId));
   let total = 0;
   const prepared = value.map((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -254,8 +263,32 @@ export function storePlanFeedbackAttachments(
   return attachments;
 }
 
+function planStorageBucket(roleDir: string, planId: string): PlanStorageBucket {
+  if (fs.existsSync(planJsonFile(roleDir, planId, "archive"))) return "archive";
+  if (fs.existsSync(planJsonFile(roleDir, planId, "active"))) return "active";
+  const legacy = path.join(roleDir, "plans", "archive", `${safeIdPart(planId) || "plan"}.json`);
+  if (fs.existsSync(legacy)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(legacy, "utf8")) as { status?: unknown };
+      return planBucketForStatus(raw.status);
+    } catch {
+      return "archive";
+    }
+  }
+  return "active";
+}
+
+function feedbackFiles(roleDir: string, planId: string): string[] {
+  return [
+    planStorageFeedbackFile(roleDir, planId, "active"),
+    planStorageFeedbackFile(roleDir, planId, "archive"),
+    legacyPlanFeedbackFile(roleDir, planId)
+  ];
+}
+
 function feedbackFile(roleDir: string, planId: string): string {
-  return path.join(roleDir, "plans", "feedback", `${safeIdPart(planId) || "plan"}.jsonl`);
+  return feedbackFiles(roleDir, planId).find((filePath) => fs.existsSync(filePath))
+    || planStorageFeedbackFile(roleDir, planId, planStorageBucket(roleDir, planId));
 }
 
 function normalizeKind(value: unknown): PlanFeedbackKind {
@@ -340,10 +373,10 @@ export function updatePlanFeedbackQaHandling(
 }
 
 export function listPlanFeedback(roleDir: string, planId: string): PlanFeedbackRecord[] {
-  const filePath = feedbackFile(roleDir, planId);
-  if (!fs.existsSync(filePath)) return [];
   const latestById = new Map<string, PlanFeedbackRecord>();
-  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
+  for (const filePath of feedbackFiles(roleDir, planId)) {
+    if (!fs.existsSync(filePath)) continue;
+    for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
     try {
       const value = JSON.parse(line) as Partial<PlanFeedbackRecord>;
       if (!value.id || value.planId !== planId || !value.text || !value.createdAt) continue;
@@ -352,8 +385,9 @@ export function listPlanFeedback(roleDir: string, planId: string): PlanFeedbackR
         attachments: normalizeStoredAttachments(value.attachments),
         planAttachments: normalizeStoredPlanAttachments(value.planAttachments)
       } as PlanFeedbackRecord);
-    } catch {
-      // Keep other valid audit rows readable when one line is damaged.
+      } catch {
+        // Keep other valid audit rows readable when one line is damaged.
+      }
     }
   }
   return [...latestById.values()].sort((left, right) => {

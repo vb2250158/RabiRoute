@@ -20,6 +20,7 @@ import {
   listRecentMemories,
   listRoleSkills,
   markMemoryConsolidationRunDelivered,
+  migrateRolePlanLayout,
   normalizeRoleContextInjection,
   nextMemoryConsolidationTriggerAt,
   pendingMemoryConsolidation,
@@ -37,7 +38,19 @@ import {
   updateRecentMemory,
   validateRoleKnowledge
 } from "./roleKnowledge.js";
-import { appendPlanFeedback, listPlanFeedback} from "./planFeedback.js";
+import { appendPlanFeedback, listPlanFeedback, storePlanFeedbackAttachments } from "./planFeedback.js";
+import {
+  legacyPlanAttachmentDirectory,
+  legacyPlanFeedbackAttachmentDirectory,
+  legacyPlanFeedbackFile,
+  legacyPlanHistoryFile,
+  planAttachmentDirectory,
+  planDirectory,
+  planFeedbackAttachmentDirectory,
+  planFeedbackFile,
+  planHistoryFile,
+  planJsonFile
+} from "./planStorageLayout.js";
 
 function makeRoleDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-"));
@@ -133,6 +146,88 @@ test("plan history keeps snapshots after updates and archive moves", () => {
   assert.equal(history[2]?.after.status, "已归档");
   assert.equal(archived[0]?.id, plan.id);
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.text, "批准并保留完整记录。");
+});
+
+
+
+test("legacy plan artifacts migrate into one plan directory without reading attachment bodies", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    id: "legacy-layout-plan",
+    title: "Legacy layout plan",
+    focus: "Move one plan into one directory",
+    status: "进行中",
+    currentStepId: "move",
+    steps: [{ id: "move", title: "Move plan", status: "进行中" }],
+    keywords: ["legacy", "migration"],
+    attachments: [{ name: "note.txt", mimeType: "text/plain", contentBase64: Buffer.from("plan attachment", "utf8").toString("base64") }]
+  });
+  const feedbackAttachments = storePlanFeedbackAttachments(roleDir, plan.id, "legacy-feedback", [{
+    name: "review.txt",
+    mimeType: "text/plain",
+    contentBase64: Buffer.from("feedback attachment", "utf8").toString("base64")
+  }]);
+  appendPlanFeedback(roleDir, {
+    id: "legacy-feedback",
+    roleId: "Role",
+    planId: plan.id,
+    planTitle: plan.title,
+    kind: "guidance",
+    author: "user",
+    source: "webgui",
+    text: "Keep the plan files together.",
+    attachments: feedbackAttachments,
+    planAttachments: plan.attachments,
+    createdAt: "2026-08-25T00:00:00.000Z",
+    updatedAt: "2026-08-25T00:00:00.000Z",
+    deliveryStatus: "record_only"
+  });
+
+  const currentDirectory = planDirectory(roleDir, plan.id, "active");
+  const legacyAttachmentDirectory = legacyPlanAttachmentDirectory(roleDir, plan.id);
+  const legacyFeedbackAttachmentDirectory = legacyPlanFeedbackAttachmentDirectory(roleDir, "legacy-feedback");
+  const currentAttachmentDirectory = planAttachmentDirectory(roleDir, plan.id, "active");
+  const currentFeedbackAttachmentDirectory = planFeedbackAttachmentDirectory(roleDir, plan.id, "legacy-feedback", "active");
+  const remap = (text: string): string => text
+    .replaceAll(currentAttachmentDirectory, legacyAttachmentDirectory)
+    .replaceAll(currentFeedbackAttachmentDirectory, legacyFeedbackAttachmentDirectory);
+  const planJson = remap(fs.readFileSync(planJsonFile(roleDir, plan.id, "active"), "utf8"));
+  const historyJsonl = remap(fs.readFileSync(planHistoryFile(roleDir, plan.id, "active"), "utf8"));
+  const feedbackJsonl = remap(fs.readFileSync(planFeedbackFile(roleDir, plan.id, "active"), "utf8"));
+  fs.mkdirSync(path.join(roleDir, "plans", "items", "active"), { recursive: true });
+  fs.mkdirSync(path.dirname(legacyAttachmentDirectory), { recursive: true });
+  fs.mkdirSync(path.dirname(legacyFeedbackAttachmentDirectory), { recursive: true });
+  fs.mkdirSync(path.dirname(legacyPlanHistoryFile(roleDir, plan.id)), { recursive: true });
+  fs.mkdirSync(path.dirname(legacyPlanFeedbackFile(roleDir, plan.id)), { recursive: true });
+  fs.writeFileSync(path.join(roleDir, "plans", "items", "active", `${plan.id}.json`), planJson, "utf8");
+  fs.writeFileSync(legacyPlanHistoryFile(roleDir, plan.id), historyJsonl, "utf8");
+  fs.writeFileSync(legacyPlanFeedbackFile(roleDir, plan.id), feedbackJsonl, "utf8");
+  fs.renameSync(currentAttachmentDirectory, legacyAttachmentDirectory);
+  fs.renameSync(currentFeedbackAttachmentDirectory, legacyFeedbackAttachmentDirectory);
+  fs.rmSync(currentDirectory, { recursive: true, force: true });
+
+  const migrated = migrateRolePlanLayout(roleDir);
+  assert.deepEqual(migrated, { migrated: 1, skipped: 0, failures: [] });
+  assert.equal(fs.existsSync(planJsonFile(roleDir, plan.id, "active")), true);
+  assert.equal(fs.existsSync(planHistoryFile(roleDir, plan.id, "active")), true);
+  assert.equal(fs.existsSync(planFeedbackFile(roleDir, plan.id, "active")), true);
+  assert.equal(fs.existsSync(legacyAttachmentDirectory), false);
+  assert.equal(fs.existsSync(legacyFeedbackAttachmentDirectory), false);
+  assert.equal(getPlan(roleDir, plan.id)?.attachments[0]?.path.startsWith(planAttachmentDirectory(roleDir, plan.id, "active")), true);
+  assert.equal(listPlanHistory(roleDir, plan.id)[0]?.after.attachments[0]?.path.startsWith(planAttachmentDirectory(roleDir, plan.id, "active")), true);
+  assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.attachments[0]?.path.startsWith(planFeedbackAttachmentDirectory(roleDir, plan.id, "legacy-feedback", "active")), true);
+  assert.deepEqual(migrateRolePlanLayout(roleDir), { migrated: 0, skipped: 0, failures: [] });
+
+  updatePlan(roleDir, plan.id, {
+    status: "已归档",
+    currentStepId: "",
+    steps: [{ id: "move", title: "Move plan", status: "已完成" }]
+  });
+  assert.equal(fs.existsSync(planDirectory(roleDir, plan.id, "active")), false);
+  assert.equal(fs.existsSync(planJsonFile(roleDir, plan.id, "archive")), true);
+  assert.equal(fs.existsSync(planAttachmentDirectory(roleDir, plan.id, "archive")), true);
+  assert.equal(fs.existsSync(planFeedbackAttachmentDirectory(roleDir, plan.id, "legacy-feedback", "archive")), true);
+  assert.equal(listPlanHistory(roleDir, plan.id).at(-1)?.kind, "archived");
 });
 
 test("plan writes reject presentation-only lifecycle labels as top-level status", () => {
@@ -315,7 +410,7 @@ test("plan list cache observes direct external plan-file changes", async () => {
   });
   assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "External cache plan");
 
-  const filePath = path.join(roleDir, "plans", "items", "active", `${created.id}.json`);
+  const filePath = planJsonFile(roleDir, created.id, "active");
   const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
   fs.writeFileSync(filePath, JSON.stringify({ ...raw, title: "Externally updated cache plan" }, null, 2), "utf8");
 
@@ -392,7 +487,7 @@ test("plan list cache reparses only the externally changed plan file", { concurr
   assert.equal(listPlans(roleDir).length, 40);
 
   const changedId = "incremental-cache-17";
-  const changedFile = path.join(roleDir, "plans", "items", "active", `${changedId}.json`);
+  const changedFile = planJsonFile(roleDir, changedId, "active");
   const raw = JSON.parse(fs.readFileSync(changedFile, "utf8")) as Record<string, unknown>;
   fs.writeFileSync(changedFile, JSON.stringify({ ...raw, title: "Incrementally updated plan" }, null, 2), "utf8");
 
@@ -489,8 +584,8 @@ test("plans store managed image, video, and file attachments without persisting 
   assert.equal(plan.attachments[1]?.kind, "video");
   assert.equal(plan.attachments[2]?.kind, "file");
   assert.equal(fs.readFileSync(plan.attachments[2]!.path, "utf8"), "attachment note");
-  assert.equal(path.relative(path.join(roleDir, "plans", "attachments", plan.id), plan.attachments[0]!.path).startsWith(".."), false);
-  const stored = fs.readFileSync(path.join(roleDir, "plans", "items", "active", `${plan.id}.json`), "utf8");
+  assert.equal(path.relative(planAttachmentDirectory(roleDir, plan.id, "active"), plan.attachments[0]!.path).startsWith(".."), false);
+  const stored = fs.readFileSync(planJsonFile(roleDir, plan.id, "active"), "utf8");
   assert.doesNotMatch(stored, /contentBase64/);
   assert.doesNotMatch(stored, new RegExp(pngBase64.slice(0, 24)));
 

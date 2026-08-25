@@ -13,6 +13,22 @@ import {
 } from "./planAttachments.js";
 import type { PlanAttachment } from "./shared/planAttachmentContract.js";
 import type { PlanImportanceLevel, PlanUrgencyLevel } from "./shared/planSortContract.js";
+import {
+  legacyActivePlanFile,
+  legacyArchivedPlanFile,
+  legacyPlanAttachmentDirectory,
+  legacyPlanFeedbackAttachmentDirectory,
+  legacyPlanFeedbackFile,
+  legacyPlanHistoryFile,
+  planAttachmentDirectory,
+  planBucketForStatus,
+  planDirectory,
+  planFeedbackAttachmentDirectory,
+  planFeedbackFile as planStorageFeedbackFile,
+  planHistoryFile as planStorageHistoryFile,
+  planJsonFile,
+  type PlanStorageBucket
+} from "./planStorageLayout.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -469,6 +485,42 @@ function markdownFiles(dir: string): string[] {
   } catch {
     return [];
   }
+}
+
+export type RoleKnowledgeFileCounts = {
+  activePlans: number;
+  archivedPlans: number;
+  recentMemory: number;
+  consolidatedMemory: number;
+  consolidationRuns: number;
+};
+
+/**
+ * Counts the files that own the role-knowledge categories without parsing their JSON or Markdown bodies.
+ * Listing and filtering content remain separate, on-demand operations.
+ */
+function planJsonFilesInBucket(roleDir: string, bucket: PlanStorageBucket): string[] {
+  const directory = path.join(plansDir(roleDir), bucket);
+  try {
+    if (!fs.existsSync(directory)) return [];
+    return fs.readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(directory, entry.name, "plan.json"))
+      .filter((filePath) => fs.existsSync(filePath))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+export function roleKnowledgeFileCounts(roleDir: string): RoleKnowledgeFileCounts {
+  return {
+    activePlans: jsonFiles(path.join(plansDir(roleDir), "items", "active")).length + planJsonFilesInBucket(roleDir, "active").length,
+    archivedPlans: jsonFiles(path.join(plansDir(roleDir), "archive")).length + planJsonFilesInBucket(roleDir, "archive").length,
+    recentMemory: markdownFiles(path.join(memoryDir(roleDir), "recent")).length,
+    consolidatedMemory: markdownFiles(path.join(memoryDir(roleDir), "consolidated")).length,
+    consolidationRuns: jsonFiles(path.join(memoryDir(roleDir), "consolidation-runs")).length
+  };
 }
 
 function ageHours(updatedAt: string, now = Date.now()): number {
@@ -1456,12 +1508,19 @@ function skillsDir(roleDir: string): string {
 }
 
 function planFile(roleDir: string, plan: PlanItem): string {
-  const base = plan.status === "已归档" ? path.join(plansDir(roleDir), "archive") : path.join(plansDir(roleDir), "items", "active");
-  return path.join(base, `${safeIdPart(plan.id) || "plan"}.json`);
+  return planJsonFile(roleDir, plan.id, planBucketForStatus(plan.status));
 }
 
-function planHistoryFile(roleDir: string, planId: string): string {
-  return path.join(plansDir(roleDir), "history", `${safeIdPart(planId) || "plan"}.jsonl`);
+function planHistoryFiles(roleDir: string, planId: string): string[] {
+  return [
+    planStorageHistoryFile(roleDir, planId, "active"),
+    planStorageHistoryFile(roleDir, planId, "archive"),
+    legacyPlanHistoryFile(roleDir, planId)
+  ];
+}
+
+function planHistoryFile(roleDir: string, plan: Pick<PlanItem, "id" | "status">): string {
+  return planStorageHistoryFile(roleDir, plan.id, planBucketForStatus(plan.status));
 }
 
 function planHistoryKind(before: PlanItem | undefined, after: PlanItem): PlanHistoryRecord["kind"] {
@@ -1480,34 +1539,35 @@ function appendPlanHistory(roleDir: string, before: PlanItem | undefined, after:
     ...(before ? { before } : {}),
     after
   };
-  const filePath = planHistoryFile(roleDir, after.id);
+  const filePath = planHistoryFile(roleDir, after);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
   return record;
 }
 
 export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRecord[] {
-  const filePath = planHistoryFile(roleDir, planId);
-  if (!fs.existsSync(filePath)) return [];
-  const records: PlanHistoryRecord[] = [];
-  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
-    try {
-      const value = JSON.parse(line) as Partial<PlanHistoryRecord>;
-      if (!value.id || value.planId !== planId || !value.recordedAt || !value.after || typeof value.after !== "object") continue;
-      if (value.kind !== "created" && value.kind !== "updated" && value.kind !== "archived") continue;
-      records.push({
-        id: value.id,
-        planId,
-        kind: value.kind,
-        recordedAt: value.recordedAt,
-        ...(value.before && typeof value.before === "object" ? { before: value.before as PlanItem } : {}),
-        after: value.after as PlanItem
-      });
-    } catch {
-      // A damaged audit line must not hide later valid history entries.
+  const records = new Map<string, PlanHistoryRecord>();
+  for (const filePath of planHistoryFiles(roleDir, planId)) {
+    if (!fs.existsSync(filePath)) continue;
+    for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
+      try {
+        const value = JSON.parse(line) as Partial<PlanHistoryRecord>;
+        if (!value.id || value.planId !== planId || !value.recordedAt || !value.after || typeof value.after !== "object") continue;
+        if (value.kind !== "created" && value.kind !== "updated" && value.kind !== "archived") continue;
+        records.set(value.id, {
+          id: value.id,
+          planId,
+          kind: value.kind,
+          recordedAt: value.recordedAt,
+          ...(value.before && typeof value.before === "object" ? { before: value.before as PlanItem } : {}),
+          after: value.after as PlanItem
+        });
+      } catch {
+        // A damaged audit line must not hide later valid history entries.
+      }
     }
   }
-  return records;
+  return [...records.values()].sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt));
 }
 
 function recentMemoryFile(roleDir: string, memory: RecentMemoryItem): string {
@@ -1524,9 +1584,11 @@ function consolidationRunFile(roleDir: string, runId: string): string {
 
 function allPlanFiles(roleDir: string): string[] {
   return [
-    path.join(plansDir(roleDir), "items", "active"),
-    path.join(plansDir(roleDir), "archive")
-  ].flatMap((dir) => jsonFiles(dir));
+    ...jsonFiles(path.join(plansDir(roleDir), "items", "active")),
+    ...jsonFiles(path.join(plansDir(roleDir), "archive")),
+    ...planJsonFilesInBucket(roleDir, "active"),
+    ...planJsonFilesInBucket(roleDir, "archive")
+  ].sort();
 }
 
 type PlanListCacheEntry = {
@@ -1690,11 +1752,11 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
 }
 
 async function allPlanFilesAsync(roleDir: string): Promise<string[]> {
-  const directories = [
+  const legacyDirectories = [
     path.join(plansDir(roleDir), "items", "active"),
     path.join(plansDir(roleDir), "archive")
   ];
-  const groups = await Promise.all(directories.map(async (directory) => {
+  const legacyGroups = await Promise.all(legacyDirectories.map(async (directory) => {
     try {
       const entries = await fs.promises.readdir(directory, { withFileTypes: true });
       return entries
@@ -1706,7 +1768,21 @@ async function allPlanFilesAsync(roleDir: string): Promise<string[]> {
       throw error;
     }
   }));
-  return groups.flat();
+  const storageGroups = await Promise.all((["active", "archive"] as const).map(async (bucket) => {
+    const directory = path.join(plansDir(roleDir), bucket);
+    try {
+      const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(directory, entry.name, "plan.json"))
+        .filter((filePath) => fs.existsSync(filePath))
+        .sort((left, right) => left.localeCompare(right));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+  }));
+  return [...legacyGroups.flat(), ...storageGroups.flat()].sort((left, right) => left.localeCompare(right));
 }
 
 async function readPlanFileForCatalog(filePath: string): Promise<AsyncPlanFileCacheResult> {
@@ -1809,7 +1885,9 @@ function ensurePlanListWatchers(roleDir: string): boolean {
   const cacheKey = planListCacheKey(roleDir);
   const directories = [
     path.join(plansDir(roleDir), "items", "active"),
-    path.join(plansDir(roleDir), "archive")
+    path.join(plansDir(roleDir), "archive"),
+    path.join(plansDir(roleDir), "active"),
+    ...["active", "archive"].flatMap((bucket) => planJsonFilesInBucket(roleDir, bucket as PlanStorageBucket).map((filePath) => path.dirname(filePath)))
   ].filter((directory) => fs.existsSync(directory));
   if (!directories.length) return false;
   let watchers = planListWatchers.get(cacheKey);
@@ -1855,10 +1933,11 @@ type PlanRecord = {
 };
 
 function planCandidateFiles(roleDir: string, planId: string): string[] {
-  const fileName = `${safeIdPart(planId) || "plan"}.json`;
   return [
-    path.join(plansDir(roleDir), "items", "active", fileName),
-    path.join(plansDir(roleDir), "archive", fileName)
+    planJsonFile(roleDir, planId, "active"),
+    planJsonFile(roleDir, planId, "archive"),
+    legacyActivePlanFile(roleDir, planId),
+    legacyArchivedPlanFile(roleDir, planId)
   ];
 }
 
@@ -2194,6 +2273,193 @@ export function roleMemoryCounts(roleDir: string): {
   };
 }
 
+export type PlanLayoutMigrationResult = {
+  migrated: number;
+  skipped: number;
+  failures: Array<{ planId: string; error: string }>;
+};
+
+function remapManagedPath(filePath: string, mappings: Array<{ from: string; to: string }>): string {
+  const candidate = path.resolve(filePath);
+  for (const mapping of mappings) {
+    const from = path.resolve(mapping.from);
+    const relative = path.relative(from, candidate);
+    if (!relative.startsWith("..") && !path.isAbsolute(relative)) return path.join(mapping.to, relative);
+  }
+  return filePath;
+}
+
+function rewritePlanStoragePaths(value: unknown, mappings: Array<{ from: string; to: string }>): unknown {
+  if (Array.isArray(value)) return value.map((item) => rewritePlanStoragePaths(item, mappings));
+  if (!value || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    output[key] = key === "path" && typeof item === "string"
+      ? remapManagedPath(item, mappings)
+      : rewritePlanStoragePaths(item, mappings);
+  }
+  return output;
+}
+
+function rewriteJsonlFile(source: string, destination: string, mappings: Array<{ from: string; to: string }>): string[] {
+  if (!fs.existsSync(source)) return [];
+  const feedbackIds: string[] = [];
+  const lines = fs.readFileSync(source, "utf8").split(/\r?\n/);
+  const rewritten = lines.map((line) => {
+    if (!line) return line;
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      const id = typeof parsed.id === "string" ? parsed.id.trim() : "";
+      if (id) feedbackIds.push(id);
+      return JSON.stringify(rewritePlanStoragePaths(parsed, mappings));
+    } catch {
+      return line;
+    }
+  });
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, rewritten.join("\n"), "utf8");
+  return feedbackIds;
+}
+
+function moveDirectoryWithoutOverwrite(source: string, destination: string): void {
+  if (!fs.existsSync(source)) return;
+  if (fs.existsSync(destination)) throw new Error(`Migration target already exists: ${destination}`);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.renameSync(source, destination);
+}
+
+function remapPlanAttachmentPaths(
+  roleDir: string,
+  planId: string,
+  attachments: PlanAttachment[],
+  fromBucket: PlanStorageBucket,
+  toBucket: PlanStorageBucket
+): PlanAttachment[] {
+  const from = planAttachmentDirectory(roleDir, planId, fromBucket);
+  const to = planAttachmentDirectory(roleDir, planId, toBucket);
+  return attachments.map((attachment) => ({ ...attachment, path: remapManagedPath(attachment.path, [{ from, to }]) }));
+}
+
+function movePlanDirectory(
+  roleDir: string,
+  planId: string,
+  fromBucket: PlanStorageBucket,
+  toBucket: PlanStorageBucket
+): void {
+  const source = planDirectory(roleDir, planId, fromBucket);
+  const destination = planDirectory(roleDir, planId, toBucket);
+  if (!fs.existsSync(source)) return;
+  moveDirectoryWithoutOverwrite(source, destination);
+  const mappings = [{ from: source, to: destination }];
+  const planFilePath = planJsonFile(roleDir, planId, toBucket);
+  const plan = readJson<Record<string, unknown>>(planFilePath);
+  if (plan) writeJson(planFilePath, rewritePlanStoragePaths(plan, mappings));
+  for (const filePath of [
+    planStorageHistoryFile(roleDir, planId, toBucket),
+    planStorageFeedbackFile(roleDir, planId, toBucket)
+  ]) {
+    if (fs.existsSync(filePath)) rewriteJsonlFile(filePath, filePath, mappings);
+  }
+}
+
+/**
+ * Moves legacy per-role plan files into their single-plan directory without reading attachment bodies.
+ * A target collision is reported and left untouched so the operator can resolve it safely.
+ */
+export function migrateRolePlanLayout(roleDir: string): PlanLayoutMigrationResult {
+  const result: PlanLayoutMigrationResult = { migrated: 0, skipped: 0, failures: [] };
+  const legacyFiles = [
+    ...jsonFiles(path.join(plansDir(roleDir), "items", "active")),
+    ...jsonFiles(path.join(plansDir(roleDir), "archive"))
+  ];
+  for (const sourcePlanFile of legacyFiles) {
+    const raw = readJson<Record<string, unknown>>(sourcePlanFile);
+    const fallbackId = path.basename(sourcePlanFile, ".json");
+    const plan = raw ? normalizePlan(raw, fallbackId) : null;
+    if (!plan) {
+      result.failures.push({ planId: fallbackId, error: `Cannot read legacy plan JSON: ${sourcePlanFile}` });
+      continue;
+    }
+    const bucket = planBucketForStatus(plan.status);
+    const destinationDirectory = planDirectory(roleDir, plan.id, bucket);
+    const destinationPlanFile = planJsonFile(roleDir, plan.id, bucket);
+    const legacyHistory = legacyPlanHistoryFile(roleDir, plan.id);
+    const destinationHistory = planStorageHistoryFile(roleDir, plan.id, bucket);
+    const legacyFeedback = legacyPlanFeedbackFile(roleDir, plan.id);
+    const destinationFeedback = planStorageFeedbackFile(roleDir, plan.id, bucket);
+    const legacyAttachmentDirectory = legacyPlanAttachmentDirectory(roleDir, plan.id);
+    const destinationAttachmentDirectory = planAttachmentDirectory(roleDir, plan.id, bucket);
+    const feedbackIds = fs.existsSync(legacyFeedback)
+      ? fs.readFileSync(legacyFeedback, "utf8").split(/\r?\n/).flatMap((line) => {
+        try {
+          const value = JSON.parse(line) as { id?: unknown };
+          return typeof value.id === "string" && value.id.trim() ? [value.id] : [];
+        } catch {
+          return [];
+        }
+      })
+      : [];
+    const feedbackDirectoryMoves = [...new Set(feedbackIds)].map((feedbackId) => ({
+      source: legacyPlanFeedbackAttachmentDirectory(roleDir, feedbackId),
+      destination: planFeedbackAttachmentDirectory(roleDir, plan.id, feedbackId, bucket)
+    }));
+    try {
+      if (fs.existsSync(destinationDirectory)) {
+        throw new Error(`Migration target already exists: ${destinationDirectory}`);
+      }
+      for (const move of feedbackDirectoryMoves) {
+        if (fs.existsSync(move.source) && fs.existsSync(move.destination)) {
+          throw new Error(`Migration target already exists: ${move.destination}`);
+        }
+      }
+      const moves: Array<{ source: string; destination: string }> = [];
+      const move = (source: string, destination: string): void => {
+        if (!fs.existsSync(source)) return;
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.renameSync(source, destination);
+        moves.push({ source, destination });
+      };
+      try {
+        move(sourcePlanFile, destinationPlanFile);
+        move(legacyHistory, destinationHistory);
+        move(legacyFeedback, destinationFeedback);
+        move(legacyAttachmentDirectory, destinationAttachmentDirectory);
+        for (const directoryMove of feedbackDirectoryMoves) move(directoryMove.source, directoryMove.destination);
+      } catch (error) {
+        for (const moved of moves.reverse()) {
+          try {
+            if (fs.existsSync(moved.destination) && !fs.existsSync(moved.source)) {
+              fs.mkdirSync(path.dirname(moved.source), { recursive: true });
+              fs.renameSync(moved.destination, moved.source);
+            }
+          } catch {
+            // Preserve the original error and leave any non-reversible state untouched.
+          }
+        }
+        throw error;
+      }
+      const mappings = [
+        { from: legacyAttachmentDirectory, to: destinationAttachmentDirectory },
+        ...feedbackDirectoryMoves.map(({ source, destination }) => ({ from: source, to: destination }))
+      ];
+      const movedPlan = readJson<Record<string, unknown>>(destinationPlanFile);
+      if (!movedPlan) throw new Error(`Cannot read migrated plan JSON: ${destinationPlanFile}`);
+      writeJson(destinationPlanFile, rewritePlanStoragePaths(movedPlan, mappings));
+      if (fs.existsSync(destinationHistory)) rewriteJsonlFile(destinationHistory, destinationHistory, mappings);
+      if (fs.existsSync(destinationFeedback)) rewriteJsonlFile(destinationFeedback, destinationFeedback, mappings);
+      result.migrated += 1;
+    } catch (error) {
+      result.failures.push({
+        planId: plan.id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  if (result.migrated) clearPlanListCache(roleDir);
+  result.skipped = legacyFiles.length - result.migrated - result.failures.length;
+  return result;
+}
+
 export function createPlan(roleDir: string, input: Record<string, unknown>): PlanItem {
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   validatePlanStatusInput(input.status);
@@ -2207,7 +2473,7 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
   requireKeywords(plan.keywords, "Plan");
   validatePlanWrite(roleDir, plan, true);
   if (Object.prototype.hasOwnProperty.call(input, "attachments")) {
-    plan.attachments = storePlanAttachments(roleDir, plan.id, input.attachments);
+    plan.attachments = storePlanAttachments(roleDir, plan.id, input.attachments, [], planBucketForStatus(plan.status));
   }
   const destination = planFile(roleDir, plan);
   writeJson(destination, plan);
@@ -2217,6 +2483,7 @@ export function createPlan(roleDir: string, input: Record<string, unknown>): Pla
 }
 
 export function updatePlan(roleDir: string, planId: string, patch: Record<string, unknown>): PlanItem {
+  migrateRolePlanLayout(roleDir);
   const record = findPlanRecord(roleDir, planId);
   if (!record) throw new Error(`Plan not found: ${planId}`);
   const existing = record.plan;
@@ -2230,10 +2497,16 @@ export function updatePlan(roleDir: string, planId: string, patch: Record<string
   requireKeywords(next.keywords, "Plan");
   validatePlanWrite(roleDir, next);
   if (Object.prototype.hasOwnProperty.call(patch, "attachments")) {
-    next.attachments = storePlanAttachments(roleDir, next.id, patch.attachments, existing.attachments);
+    next.attachments = storePlanAttachments(roleDir, next.id, patch.attachments, existing.attachments, planBucketForStatus(existing.status));
   }
   if (next.status === "已完成" && existing.status !== "已完成" && !next.completedAt) {
     next.completedAt = next.updatedAt;
+  }
+  const currentBucket = planBucketForStatus(existing.status);
+  const destinationBucket = planBucketForStatus(next.status);
+  if (currentBucket !== destinationBucket) {
+    movePlanDirectory(roleDir, next.id, currentBucket, destinationBucket);
+    next.attachments = remapPlanAttachmentPaths(roleDir, next.id, next.attachments, currentBucket, destinationBucket);
   }
   const destination = planFile(roleDir, next);
   writeJson(destination, next);

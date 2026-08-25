@@ -8,6 +8,19 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.2.1 - 2026-08-25
+
+### Plan directories and first-page reads
+
+- Plan runtime data now uses one directory per plan: `plans/active/<planId>/` or `plans/archive/<planId>/` holds `plan.json`, `history.jsonl`, `feedback.jsonl`, plan attachments, and feedback attachments. Archiving moves the complete directory.
+- After the Manager starts HTTP service, it asynchronously checks the legacy split layout. Migration uses same-volume rename operations without reading attachment bodies, keeps legacy reads compatible, and never overwrites a conflicting target; failures are recorded in the operational log.
+- On first entry, RibiWebGUI loads only the active tab's first page: at most 8 plan summaries with priority details for those 8 plans, or at most 24 memories. Later pages load only at the scroll sentinel or after Load more. A next-page cursor no longer keeps the page in a loading state.
+
+### Verification
+
+- 91 focused tests covering plan storage, migration, attachment routes, feedback, history, QA, pagination, and WebGUI passed.
+- TypeScript checking and `npm run webgui:build` passed.
+
 ### Runtime service fixes
 
 - RabiSpeech audio-stream events now use reverse limited reads over the current-file tail and archive index. File scans run in worker threads without holding the event-append lock, while live client snapshots remain on the event loop. Read-only capability, model, record, speaker, and microphone-device scans also run in worker threads, preventing roughly 90 MB of archived events from blocking health requests during concurrent Speech page loading.

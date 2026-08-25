@@ -384,11 +384,13 @@ import {
   listRecentMemories,
   listRoleSkills,
   markMemoryConsolidationRunDelivered,
+  migrateRolePlanLayout,
   nextMemoryConsolidationTriggerAt,
   pendingMemoryConsolidation,
   presentRoleMemory,
   presentRoleMemories,
   roleKnowledgeSnapshot,
+  roleKnowledgeFileCounts,
   subscribePlanUpdates,
   type PlanItem,
   updatePlan,
@@ -6456,7 +6458,7 @@ function handleRoleKnowledgeApi(
             }
             const attachments = body.attachments === undefined
               ? existing?.attachments || []
-              : storePlanFeedbackAttachments(roleDir, baseCandidate.id, body.attachments, existing?.attachments);
+              : storePlanFeedbackAttachments(roleDir, plan.id, baseCandidate.id, body.attachments, existing?.attachments);
             const mentionedPlanAttachments = resolvePlanFeedbackPlanAttachments(
               plan.attachments,
               body.planAttachmentIds,
@@ -6553,6 +6555,10 @@ function handleRoleKnowledgeApi(
 
   try {
     const roleDir = resolveRoleDir(roleId);
+    if (request.method === "GET" && resource === "counts") {
+      jsonResponse(response, 200, { code: 0, data: roleKnowledgeFileCounts(roleDir) });
+      return true;
+    }
     if (request.method === "GET" && resource === "plans") {
       const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
       const wantsPage = !itemId && requestUrl.searchParams.has("limit");
@@ -6957,6 +6963,35 @@ function metaPayload(): Record<string, unknown> {
     personaSyncLan: personaSyncLanServer.status(),
     computerName: os.hostname()
   };
+}
+
+async function migrateRolePlanLayoutsAfterStartup(): Promise<void> {
+  if (managerReadOnly) return;
+  const startedAt = Date.now();
+  let roles = 0;
+  let migrated = 0;
+  const failures: string[] = [];
+  try {
+    const entries = await fs.promises.readdir(rolesRoot, { withFileTypes: true });
+    const roleDirectories = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(rolesRoot, entry.name));
+    roles = roleDirectories.length;
+    for (const roleDir of roleDirectories) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const outcome = migrateRolePlanLayout(roleDir);
+      migrated += outcome.migrated;
+      for (const failure of outcome.failures) failures.push(`${path.basename(roleDir)}:${failure.planId}:${failure.error}`);
+    }
+    managerOperationalLog.record(failures.length ? "warn" : "info", "role_plan_layout_migration_completed", {
+      durationMs: Date.now() - startedAt,
+      result: `roles=${roles}; migrated=${migrated}; failures=${failures.length}${failures.length ? `; ${failures.slice(0, 10).join(" | ")}` : ""}`
+    });
+  } catch (error) {
+    managerOperationalLog.record("warn", "role_plan_layout_migration_failed", {
+      durationMs: Date.now() - startedAt,
+      result: `roles=${roles}; migrated=${migrated}`,
+      error: managerOperationalError(error, rootDir)
+    });
+  }
 }
 
 async function prewarmRolePlanCatalogs(): Promise<void> {
@@ -8295,7 +8330,9 @@ export async function startManager(): Promise<void> {
   memoryConsolidationScheduler?.start();
   startActiveNapcatSupervisor();
   startActivePlanFeedbackRecovery();
-  setImmediate(() => { void prewarmRolePlanCatalogs(); });
+  setImmediate(() => {
+    void migrateRolePlanLayoutsAfterStartup().finally(() => { void prewarmRolePlanCatalogs(); });
+  });
   configWatcher = managerShouldAutostart && managerConfigWatcherEnabled()
     ? startConfigWatcher(reconcileManagerPlugins, () => syncActiveRabiLinkRelay())
     : null;

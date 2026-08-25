@@ -115,12 +115,12 @@ test("plan feedback compares mentioned plan attachments by stable metadata", () 
 test("plan feedback attachments are private, bounded, and idempotent", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-feedback-files-"));
   const contentBase64 = Buffer.from("image bytes", "utf8").toString("base64");
-  const first = storePlanFeedbackAttachments(roleDir, "request-with-file", [{
+  const first = storePlanFeedbackAttachments(roleDir, "plan-1", "request-with-file", [{
     name: "approval.png",
     mimeType: "image/png",
     contentBase64
   }]);
-  const retry = storePlanFeedbackAttachments(roleDir, "request-with-file", [{
+  const retry = storePlanFeedbackAttachments(roleDir, "plan-1", "request-with-file", [{
     name: "approval.png",
     mimeType: "image/png",
     contentBase64
@@ -130,7 +130,7 @@ test("plan feedback attachments are private, bounded, and idempotent", () => {
   assert.equal(first[0]?.kind, "image");
   assert.equal(fs.readFileSync(first[0]!.path, "utf8"), "image bytes");
   assert.equal(planFeedbackAttachmentsEqual(first, retry), true);
-  assert.throws(() => storePlanFeedbackAttachments(roleDir, "request-with-file", [{
+  assert.throws(() => storePlanFeedbackAttachments(roleDir, "plan-1", "request-with-file", [{
     name: "approval.png",
     mimeType: "image/png",
     contentBase64: Buffer.from("different", "utf8").toString("base64")
