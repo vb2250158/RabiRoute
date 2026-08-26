@@ -122,9 +122,9 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
         return { kind: "workspace-mismatch", thread: exact };
       }
       if (!exact.archived) return { kind: "id", thread: exact };
-      // Archived chat tasks are terminal history. Read-only lookup reports the
-      // archived binding, while a real delivery/save point creates one new
-      // task and lets the caller persist that replacement id.
+      // An archived binding is terminal history. Delivery must create one
+      // replacement even when another task happens to share its title; name
+      // lookup is only valid after the old binding no longer identifies a task.
       if (!params.createIfMissing) return { kind: "archived", thread: exact };
       return {
         kind: "created",
@@ -137,6 +137,7 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   }
 
   const matches = (await dependencies.list({ title: params.title, cwd: params.cwd }))
+    .filter((thread) => !thread.archived)
     .filter((thread) => thread.title === params.title)
     .filter((thread) => !thread.cwd || sameCodexWorkspace(thread.cwd, params.cwd));
   if (matches.length > 1) {

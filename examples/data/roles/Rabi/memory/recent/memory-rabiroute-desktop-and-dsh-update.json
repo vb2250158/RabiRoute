@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-desktop-and-dsh-update",
   "title": "RabiRoute Desktop 与 DSH 主人格路径要区分已实现和待验收环节",
-  "content": "Windows 正式入口现在是 Start-RabiRoute-Desktop.bat 与 RabiRoute-Desktop.exe：本机 Manager、桌面界面和轻量监督器共同组成一个运行态。系统级截图和滑词菜单都从 WebGUI 设置页配置；划选文字本身不朗读、不投递，必须由用户点击朗读或选择投递对象。公开截图只能使用脱敏样例，不出现账号、访问密钥、聊天内容或私有路径。DSH 已能按 API 地址、工作目录和会话绑定承担主人格与受管辅助会话；失败不改投 Codex。代码和自动化合同不等于真实验收，Windows 交互、DSH profile 的连续投递、重启读回和工具 owner 仍需现场证据。",
+  "content": "Windows 正式入口现在是 Start-RabiRoute-Desktop.bat 与 RabiRoute-Desktop.exe：本机 Manager、桌面界面和轻量监督器共同组成一个运行态。系统级截图和滑词菜单都从 WebGUI 设置页配置；划选文字本身不朗读、不投递，必须由用户点击朗读或选择投递对象。Codex Desktop 实际消息始终只交给目标任务 owner；每次投递附带 UUID deliveryId，只有目标任务 rollout 出现同一标记才算送达。IPC 接收但没有回执时会从 steer 重试一次 start，仍缺标记则失败关闭；已绑定任务确认删除时才创建一个替代任务并重投，不复用已归档任务的同名历史。DSH 已能按 API 地址、工作目录和会话绑定承担主人格与受管辅助会话；失败不改投 Codex。代码和自动化合同不等于真实验收，Windows 交互、DSH profile 的连续投递、重启读回和工具 owner 仍需现场证据。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：桌面入口、系统级交互与 DSH 主人格的验收边界"
   },
   "createdAt": "2026-08-20T21:45:00+08:00",
-  "updatedAt": "2026-08-20T21:45:00+08:00",
+  "updatedAt": "2026-08-26T00:00:00+08:00",
   "keywords": [
     "RabiRoute Desktop",
     "Start-RabiRoute-Desktop.bat",
@@ -17,6 +17,10 @@
     "DSH",
     "主人格",
     "真实验收",
-    "脱敏截图"
+    "脱敏截图",
+    "deliveryId",
+    "投递回执",
+    "任务替换",
+    "失败关闭"
   ]
 }

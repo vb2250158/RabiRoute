@@ -47,20 +47,22 @@ test("selection speech uses the default model until advanced selection is enable
   assert.equal(resolveSelectionSpeechModel({ enabled: true, readAloudEnabled: true, advanced: true, model: "tts/offline" }, models), "tts/default");
 });
 
-test("WebGUI stores system selection settings through Manager and does not inspect browser selections", () => {
+test("WebGUI stores trusted system selection settings through Manager and does not inspect browser selections", () => {
   const page = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
+  const renderer = fs.readFileSync(new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
   const app = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
   const client = fs.readFileSync(new URL("../src/speech/speechControlClient.ts", import.meta.url), "utf8");
   const routes = fs.readFileSync(new URL("../../src/manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
-  assert.match(page, /开启滑词菜单/);
-  assert.match(page, /label="开启滑词菜单"/);
-  assert.match(page, /small-title">滑词朗读/);
-  assert.match(page, /label="滑词朗读"/);
-  assert.match(page, /label="高级选项"[\s\S]{0,280}:disabled="[^"]*selectionReadAloudEnabled/);
-  assert.match(page, /v-if="selectionSpeechEnabled && selectionReadAloudEnabled && selectionSpeechAdvanced"[\s\S]+label="滑词朗读模型"/);
-  assert.match(page, /Windows 任意支持文本选区的软件/);
-  assert.match(page, /selectionReaderSettings\(\)/);
-  assert.match(page, /updateSelectionReaderSettings/);
+  assert.match(page, /TrustedWebRendererHost/);
+  assert.doesNotMatch(page, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);
+  assert.match(renderer, /开启滑词菜单/);
+  assert.match(renderer, /label="开启滑词菜单"/);
+  assert.match(renderer, /small-title">滑词朗读/);
+  assert.match(renderer, /label="滑词朗读"/);
+  assert.match(renderer, /label="高级选项"[\s\S]{0,280}:disabled="[^"]*selectionReadAloudEnabled/);
+  assert.match(renderer, /v-if="selectionReadAloudEnabled && selectionSpeechAdvanced"[\s\S]+label="滑词朗读模型"/);
+  assert.match(renderer, /selectionReaderSettings\(\)/);
+  assert.match(renderer, /updateSelectionReaderSettings/);
   assert.doesNotMatch(app, /selectionchange|window\.getSelection|readSelectedText|deliverSelectedText/);
   assert.match(client, /\/api\/speech\/selection-reader\/settings/);
   assert.match(routes, /GET" && requestUrl\.pathname === "\/api\/speech\/selection-reader\/settings/);

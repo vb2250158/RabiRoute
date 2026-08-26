@@ -30,11 +30,12 @@ test("Codex exposes an opt-in dedicated memory consolidation Agent with the Terr
   assert.match(source, /记忆整理/);
 });
 
-test("message-processing board opens on demand instead of mounting with the Route configuration page", () => {
+test("message-processing board opens on demand for the managed primary Agent", () => {
   assert.match(source, /defineAsyncComponent\(\(\) => import\("\.\.\/components\/MessageProcessingBoard\.vue"\)\)/);
   assert.match(source, /const messageProcessingBoardOpen = ref\(false\)/);
-  assert.match(source, /codexMessageProcessingAgentEnabled\(gateway\.value\)/);
+  assert.match(source, /primaryMessageProcessingAgentEnabled\(gateway\.value\)/);
+  assert.match(source, /v-if="messageProcessingAgentPolicy\(agent\.type\)\.enabled"/);
   assert.match(source, /打开消息处理看板/);
   assert.match(source, /<v-dialog v-model="messageProcessingBoardOpen" max-width="1200" scrollable>/);
-  assert.match(source, /v-if="messageProcessingBoardOpen && codexMessageAgentModeEnabled"/);
+  assert.match(source, /v-if="messageProcessingBoardOpen && managedMessageAgentModeEnabled"/);
 });

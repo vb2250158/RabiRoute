@@ -18,7 +18,7 @@ Not every handler has projects, persistent sessions, tools, streaming, or cancel
 
 Every adapter must satisfy these rules before advanced features matter:
 
-1. Reuse the bound session when the immutable ID exists in the configured workspace and its owner record is not archived. The owner title or SQLite `title` is mutable display metadata and must not participate in identity. If the saved ID is archived, do not reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist its ID, and deliver there.
+1. Reuse the bound session when the immutable ID exists in the configured workspace and its owner record is not archived. The owner title or SQLite `title` is mutable display metadata and must not participate in identity. If the saved ID is archived, do not reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist its ID, and deliver there. If Desktop wake-and-retry has completed and the exact ID can no longer be read from local state, create a replacement scoped to the old ID, deliver there, and return a warning.
 2. Only when the ID is empty, invalid, or actually missing, search by the Manager-saved name plus normalized workspace. Rebind the unique most recently updated match when one or more candidates exist, create once only when there is no match, and ask the user only when the maximum update time is tied or unusable.
 3. Deliver to the real owner that provides the user-visible task and tool context. Sharing a database, title, or session ID with a second Runtime is not unified ownership.
 4. Saving settings completes the binding transaction and persists visible name, full session ID, and workspace together.

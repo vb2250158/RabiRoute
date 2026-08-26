@@ -4,12 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
+import { appendAdapterLog } from "./history.js";
 import { CodexAppServerClient } from "./codexAppServerClient.js";
 import {
   CodexDesktopBridge,
+  agentDeliveryMarkerForTest,
   listCodexDesktopThreads,
   readCodexDesktopThread,
   type CodexDesktopDelivery,
+  type CodexDesktopDeliveryEvent,
   type CodexDesktopReasoningEffort,
   type CodexDesktopThread
 } from "./codexDesktopBridge.js";
@@ -102,7 +105,21 @@ type CodexState = {
   desktopHostRequired?: boolean;
 };
 
-const desktopBridge = new CodexDesktopBridge();
+function logCodexDesktopDeliveryEvent(event: CodexDesktopDeliveryEvent): void {
+  const level = event.stage === "start_rejected"
+    ? "error"
+    : event.stage === "steer_rejected" || event.stage === "owner_load_retry"
+      ? "warning"
+      : "info";
+  appendAdapterLog("codex", {
+    event: `desktop_delivery_${event.stage}`,
+    level,
+    message: `Codex Desktop delivery stage=${event.stage} threadId=${event.threadId}${event.method ? ` method=${event.method}` : ""}${event.action ? ` action=${event.action}` : ""}`,
+    data: event
+  });
+}
+
+const desktopBridge = new CodexDesktopBridge({ onDeliveryEvent: logCodexDesktopDeliveryEvent });
 let memoryState: CodexState = {};
 let notificationQueue: Promise<unknown> = Promise.resolve();
 
@@ -391,18 +408,33 @@ async function setCodexTaskName(
   }
 }
 
+export function ensureCodexDesktopDeliveryMarkerForTest(
+  prompt: string,
+  requestedDeliveryId?: string
+): { prompt: string; deliveryId: string } {
+  const existingDeliveryId = agentDeliveryMarkerForTest(prompt);
+  if (existingDeliveryId) return { prompt, deliveryId: existingDeliveryId };
+  const deliveryId = requestedDeliveryId || randomUUID();
+  return {
+    prompt: `${prompt.trimEnd()}\n\n[投递编号]\ndeliveryId: ${deliveryId}`,
+    deliveryId
+  };
+}
+
 async function deliverDesktopMessage(params: {
   thread: CodexDesktopThread;
   prompt: string;
   sandbox: CodexTurnSandbox;
+  deliveryId?: string;
   model?: string;
   reasoningEffort?: CodexDesktopReasoningEffort;
   imagePaths?: string[];
-}): Promise<CodexDesktopDelivery & { warning?: string }> {
+}): Promise<CodexDesktopDelivery & { deliveryId: string; warning?: string }> {
+  const prepared = ensureCodexDesktopDeliveryMarkerForTest(params.prompt, params.deliveryId);
   const preserveEmptyTaskTitle = !params.thread.firstUserMessage;
   const delivery = await desktopBridge.deliver({
     threadId: params.thread.id,
-    prompt: params.prompt,
+    prompt: prepared.prompt,
     cwd: params.thread.cwd,
     sandbox: params.sandbox,
     model: params.model,
@@ -416,11 +448,12 @@ async function deliverDesktopMessage(params: {
     } catch (error) {
       return {
         ...delivery,
+        deliveryId: prepared.deliveryId,
         warning: `Desktop 已接收消息，但任务名恢复失败：${errorMessage(error)}`
       };
     }
   }
-  return delivery;
+  return { ...delivery, deliveryId: prepared.deliveryId };
 }
 
 function asSummary(thread: CodexDesktopThread): CodexThreadSummary {
@@ -537,9 +570,10 @@ export async function createCodexThread(params: CodexThreadCreateParams): Promis
   try {
     if (!normalizedParams.prompt.trim()) return created;
     normalizedParams.onCreationStage?.("initial_turn", bootstrap.threadId);
+    const initialDelivery = ensureCodexDesktopDeliveryMarkerForTest(normalizedParams.prompt);
     await desktopBridge.deliver({
       threadId: bootstrap.threadId,
-      prompt: normalizedParams.prompt,
+      prompt: initialDelivery.prompt,
       cwd: normalizedParams.cwd,
       sandbox: normalizedParams.sandbox
     });
@@ -748,6 +782,7 @@ async function deliverNotification(message: string, deliveryId: string, imagePat
     deliver: ({ thread, prompt }) => deliverDesktopMessage({
       thread,
       prompt,
+      deliveryId,
       sandbox: "workspace-write",
       imagePaths,
       ...turnOptions
@@ -793,6 +828,7 @@ export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNot
       await deliverDesktopMessage({
         thread: resolved.thread,
         prompt: message,
+        deliveryId,
         sandbox: "workspace-write",
         ...resolvePrimaryCodexTurnOptions(config)
       });

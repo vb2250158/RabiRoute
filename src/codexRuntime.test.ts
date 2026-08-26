@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   buildCodexBootstrapEnv,
   codexThreadDiscoveryRequestForTest,
+  ensureCodexDesktopDeliveryMarkerForTest,
   codexThreadIsActiveFromSourcesForTest,
   codexThreadRuntimeStatusFromSourcesForTest,
   codexThreadDeliveryTargetIsStaleForTest,
@@ -16,6 +17,20 @@ import {
   resolvePrimaryCodexTurnOptions,
   waitForCodexDesktopThreadForTest
 } from "./codexRuntime.js";
+
+test("every Desktop delivery has one stable UUID receipt marker", () => {
+  const requestedId = "12345678-1234-4567-8123-123456789abc";
+  const prepared = ensureCodexDesktopDeliveryMarkerForTest("通知目标任务", requestedId);
+  assert.equal(prepared.deliveryId, requestedId);
+  assert.match(prepared.prompt, /\[投递编号\]\ndeliveryId: 12345678-1234-4567-8123-123456789abc$/);
+
+  const existing = ensureCodexDesktopDeliveryMarkerForTest(
+    "[Agent 回复合同]\n本次投递 deliveryId：aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    requestedId
+  );
+  assert.equal(existing.deliveryId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+  assert.equal(existing.prompt.match(/deliveryId/g)?.length, 1);
+});
 
 test("Primary Codex turns apply the Route model and reasoning effort together", () => {
   assert.deepEqual(resolvePrimaryCodexTurnOptions({

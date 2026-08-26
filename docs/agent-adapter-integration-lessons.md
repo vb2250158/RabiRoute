@@ -277,7 +277,7 @@ flowchart LR
 - 配置绑定统一走一个 resolver：有效 ID + cwd 且未归档 → 精确绑定，不比较可变标题；ID 为空/非法/失效 → 保存名称 + 规范化 cwd；一个或多个同名 → 按 `updatedAt` 自动绑定唯一最新者；零匹配 → 创建空任务；最大时间并列 → 返回候选。
 - 投递前按最终 ID 读取任务并校验规范化 `cwd`；目录冲突、重名未消歧或 owner 无法加载都停止。
 - 通过 Desktop IPC 先 steer；确认没有活动轮次时再 start。
-- `no-client-found` 时只用 deeplink 加载目标任务并重试，绝不转给独立 app-server。
+- `no-client-found` 时先只用 deeplink 加载目标任务并重试，绝不转给独立 app-server。重试后精确 ID 已无法从本地状态读取，才按旧 ID 隔离地创建替代任务、重新投递并返回警告；任务仍存在时保留原失败。
 - 实际 prompt 由 Desktop owner 执行，因此沿用该任务的模型、工具、沙箱和审批。
 - 短生命周期 app-server 只负责读取用户可见任务元数据，以及在用户输入新名称时创建/命名空任务；它不得接收真实 prompt 或执行 turn，完成元数据操作后立即退出。
 - Desktop IPC 属于版本敏感合同；Desktop 升级后必须先跑探测和可见性烟测，失败时保持 fail closed。

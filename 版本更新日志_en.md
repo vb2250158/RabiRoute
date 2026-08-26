@@ -15,6 +15,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - `npm test` now limits Node test concurrency from 8 to 4. Worker Pool and voice-transcript deadline tests no longer compete with a large batch of child processes for local resources, while the suite still retains parallel coverage instead of reporting resource contention as a product failure.
 
+### Codex Desktop delivery receipts and task recovery
+
+- Every Codex Desktop delivery now has a UUID `deliveryId`, and RabiRoute returns `delivered` only after the target task rollout contains that marker. If IPC accepts `steer` without a receipt, delivery retries once as `start`; a missing marker still fails explicitly instead of treating task selection or IPC acceptance as actual delivery.
+- `thread-follower-start-turn` now uses Desktop protocol version `2` with the `turnStart.request + context` payload. Idle tasks no longer receive only `no-client-found` because of the obsolete payload or protocol version.
+- If a bound task is confirmed deleted after the Desktop owner accepted a delivery, RabiRoute creates and persists one replacement task, redelivers the current message, and returns the replacement warning to the caller. An archived binding likewise cannot reuse a same-named task.
+- The Windows Desktop lifecycle supervisor uses Manager `/meta` availability as the health signal. If the process remains present but its control plane is unresponsive, it invokes the unified launcher and records the probe error and consecutive failure count.
+
 ### Manager plugin Bundles and hot replacement
 
 - The `rabi.manager.base` Bundle now directly owns the 26 built-in definitions, dependencies, presentation contributions, and default Profile. Manager no longer creates a definition for the Bundle. Only the matching base-Bundle instance receives the constrained capability to activate Manager-owned resources; external Bundles still receive the general controlled API only.

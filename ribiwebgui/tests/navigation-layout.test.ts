@@ -57,15 +57,16 @@ test("console is route-card-only while host settings live on the Settings page",
   assert.match(settingsSource, /class="section-title small-title">局域网访问 WebGUI<\/div>/);
 });
 
-test("selected-text reading stays on Settings while trusted desktop settings render in the same placement", () => {
-  assert.match(settingsSource, /开启滑词菜单/);
-  assert.match(settingsSource, /small-title">滑词朗读/);
+test("system selection settings render through the trusted Desktop renderer on Settings", () => {
   assert.match(settingsSource, /TrustedWebRendererHost/);
+  assert.doesNotMatch(settingsSource, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);
+  assert.match(desktopSettingsRendererSource, /开启滑词菜单/);
+  assert.match(desktopSettingsRendererSource, /small-title">滑词朗读/);
   assert.match(desktopSettingsRendererSource, /系统级截图/);
   assert.match(desktopSettingsRendererSource, /Windows 登录启动/);
   assert.match(desktopSettingsRendererSource, /themeOptions/);
   assert.match(desktopSettingsRendererSource, /option\.webResourceId/);
-  assert.match(settingsSource, /selectionSpeechAdvanced/);
+  assert.match(desktopSettingsRendererSource, /selectionSpeechAdvanced/);
   assert.match(desktopSettingsRendererSource, /desktopScreenshotShortcut/);
   assert.match(desktopSettingsRendererSource, /desktopAutostart/);
   assert.doesNotMatch(speechSource, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);

@@ -25,6 +25,8 @@ function Write-LifecycleRecord {
     $Intent = $null,
     $ManagerConnected = $null,
     $ManagerPresent = $null,
+    [int]$ManagerFailureCount = 0,
+    [string]$ManagerProbeError = "",
     [int]$DesktopShellCount = -1,
     [bool]$RepairAttempted = $false
   )
@@ -36,6 +38,8 @@ function Write-LifecycleRecord {
     source = if ($Intent) { [string]$Intent.source } else { $null }
     managerConnected = $ManagerConnected
     managerPresent = $ManagerPresent
+    managerFailureCount = $ManagerFailureCount
+    managerProbeError = $ManagerProbeError
     desktopShellCount = $DesktopShellCount
     repairAttempted = $RepairAttempted
   }
@@ -59,9 +63,17 @@ function Read-DesktopLifecycleIntent {
 function Test-ManagerConnected {
   try {
     Invoke-RestMethod -Uri "$ManagerUrl/meta" -Method Get -TimeoutSec 3 | Out-Null
-    return $true
+    return [pscustomobject]@{
+      connected = $true
+      error = ""
+    }
   } catch {
-    return $false
+    $message = [string]$_.Exception.Message
+    if ($message.Length -gt 500) { $message = $message.Substring(0, 500) }
+    return [pscustomobject]@{
+      connected = $false
+      error = $message
+    }
   }
 }
 
@@ -107,12 +119,9 @@ function Get-DesktopShellProcesses {
 
 function Repair-RabiRouteDesktop {
   param($Intent)
-  $packagedDesktop = Join-Path $projectRoot "RabiRoute-Desktop.exe"
-  if ([string]$Intent.source -eq "packaged-desktop" -and (Test-Path -LiteralPath $packagedDesktop)) {
-    Start-Process -FilePath $packagedDesktop -ArgumentList @("--manager-url", $ManagerUrl) -WorkingDirectory $projectRoot -WindowStyle Hidden | Out-Null
-    return
-  }
-
+  # The launcher verifies an unresponsive port owner before replacing it. The
+  # packaged desktop executable can start a missing Manager but cannot take over
+  # a live, unresponsive Manager that still owns the instance lock and port.
   $launcher = Join-Path $projectRoot "Start-RabiRoute-Desktop.bat"
   if (-not (Test-Path -LiteralPath $launcher)) {
     throw "Desktop launcher is missing: $launcher"
@@ -154,10 +163,14 @@ try {
       exit 0
     }
 
-    $managerConnected = Test-ManagerConnected
+    $managerProbe = Test-ManagerConnected
+    $managerConnected = [bool]$managerProbe.connected
+    $managerProbeError = [string]$managerProbe.error
     $managerPresent = $managerConnected -or @(Get-ProjectManagerProcesses).Count -gt 0
     $desktopShellCount = @(Get-DesktopShellProcesses).Count
-    $managerFailures = if ($managerPresent) { 0 } else { $managerFailures + 1 }
+    # A surviving node process is only ownership evidence. Recovery must follow
+    # the Manager API because the tray cannot work while /meta is unavailable.
+    $managerFailures = if ($managerConnected) { 0 } else { $managerFailures + 1 }
     $trayFailures = if ($desktopShellCount -gt 0) { 0 } else { $trayFailures + 1 }
     $repairNeeded = $managerFailures -ge [Math]::Max(1, $FailureThreshold) -or $trayFailures -ge [Math]::Max(1, $FailureThreshold)
     $repairAttempted = $false
@@ -171,14 +184,14 @@ try {
         $repairError = $_.Exception.Message
       }
       Start-Sleep -Milliseconds 750
-      $managerConnected = Test-ManagerConnected
+      $managerProbe = Test-ManagerConnected
+      $managerConnected = [bool]$managerProbe.connected
+      $managerProbeError = [string]$managerProbe.error
       $managerPresent = $managerConnected -or @(Get-ProjectManagerProcesses).Count -gt 0
       $desktopShellCount = @(Get-DesktopShellProcesses).Count
-      $managerFailures = if ($managerPresent) { 0 } else { $managerFailures }
+      $managerFailures = if ($managerConnected) { 0 } else { $managerFailures }
       $trayFailures = if ($desktopShellCount -gt 0) { 0 } else { $trayFailures }
-      if ($managerPresent -and $desktopShellCount -gt 0) {
-        # A launcher can time out while a newly created Manager is still warming.
-        # Process-pair ownership is already restored, so do not enter a restart loop.
+      if ($managerConnected) {
         $repairError = $null
       }
     }
@@ -192,11 +205,20 @@ try {
     } elseif ($healthy) {
       "Manager and tray are associated and healthy."
     } elseif ($managerPresent -and $desktopShellCount -gt 0) {
-      "Manager and desktop shell processes are paired; Manager control plane is still warming or degraded."
+      "Manager process and desktop shell are present, but /meta is unavailable."
     } else {
       "Manager/tray pair is incomplete; waiting for the bounded failure threshold or repair verification."
     }
-    Write-LifecycleRecord -Status $status -Message $message -Intent $intent -ManagerConnected $managerConnected -ManagerPresent $managerPresent -DesktopShellCount $desktopShellCount -RepairAttempted $repairAttempted
+    Write-LifecycleRecord `
+      -Status $status `
+      -Message $message `
+      -Intent $intent `
+      -ManagerConnected $managerConnected `
+      -ManagerPresent $managerPresent `
+      -ManagerFailureCount $managerFailures `
+      -ManagerProbeError $managerProbeError `
+      -DesktopShellCount $desktopShellCount `
+      -RepairAttempted $repairAttempted
 
     if (-not $Once) { Start-Sleep -Seconds ([Math]::Max(1, $IntervalSeconds)) }
   } while (-not $Once)
