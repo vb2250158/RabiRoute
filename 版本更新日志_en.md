@@ -11,6 +11,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Moving a completed plan to archived now clears `currentStepId`; an archived record no longer retains a current-step pointer that is valid only for in-progress or paused plans.
 
+### Full-suite verification stability
+
+- `npm test` now limits Node test concurrency from 8 to 4. Worker Pool and voice-transcript deadline tests no longer compete with a large batch of child processes for local resources, while the suite still retains parallel coverage instead of reporting resource contention as a product failure.
+
 ### Manager plugin Bundles and hot replacement
 
 - The `rabi.manager.base` Bundle now directly owns the 26 built-in definitions, dependencies, presentation contributions, and default Profile. Manager no longer creates a definition for the Bundle. Only the matching base-Bundle instance receives the constrained capability to activate Manager-owned resources; external Bundles still receive the general controlled API only.
