@@ -18,7 +18,7 @@ plugins/packages/<encodeURIComponent(packageId)>/<version>/
 
 Profile 的每个条目都有稳定 `id`、Bundle `package`、固定 `version`、`enabled` 和 JSON `config`。Patch 按文件名字典序应用 `upsert` 与 `remove`，因此安装包、选择版本和本机覆盖配置是三件独立的事。
 
-旧 `manager.json.managerPlugins` 只在首次启动时迁入 Profile，随后被删除。旧 `rabi.manager.builtin` 条目会改为 `rabi.manager.base`。正式运行路径不再读取或写入旧配置键。
+Profile 缺失时，Manager 先用 Bundle 自带的默认 Profile 与旧 `manager.json.managerPlugins` enabled 值完成首轮装载；HTTP listener 就绪后异步写入 Profile 并删除旧键。若 Profile 已存在，它是唯一配置来源。旧 `rabi.manager.builtin` Profile 或 Patch 行在同一次初始化中改为 `rabi.manager.base`。常规对账只读取 Profile、Patch 和 Bundle，不读取或写入旧键。
 
 ## Bundle 合同
 
@@ -37,7 +37,7 @@ Profile 的每个条目都有稳定 `id`、Bundle `package`、固定 `version`�
 
 清单只声明身份、版本、宿主与入口。它不能声明命令、任意路径、URL 或环境变量。Manager 对 Bundle 的全部文件计算 SHA-256 revision，并把每个 revision 复制到隔离运行目录后再导入，旧模块缓存不能污染新版本。
 
-`rabi.manager.base` 是随 RabiRoute 发布的基础 Bundle。26 个内置 Manager 实例同样通过 Profile 和统一 Loader 装载；它保留对 Manager 业务事实的受控内部 capability。外部 Bundle 不会取得该 capability。
+`rabi.manager.base` 是随 RabiRoute 发布的基础 Bundle。它的 `index.mjs` 直接拥有 26 个实例的 definition、依赖和表现贡献，`rabi.manager.profile.json` 拥有默认 Profile；Manager 不再反向创建内置 definition。基础 Bundle 仅取得按实例发放的 Manager 资源激活 capability，外部 Bundle 不会取得该 capability。
 
 ## Manager 生命周期
 
@@ -55,7 +55,7 @@ Manager Bundle 只能注册本实例路由、跟踪异步操作、发布命名�
 
 ## Web Bundle 热替换
 
-`GET /api/plugins/modules` 返回启用 Web Bundle 的实例 ID、包 ID、版本与 SHA-256 revision。WebGUI 收到 `plugin_catalog_changed` 后：
+`GET /api/plugins/modules` 从最近一次成功完成的 Manager runtime snapshot 返回 active Web Bundle 的实例 ID、包 ID、版本与 SHA-256 revision。它不在请求时重读 Profile；失败或等待依赖的实例不会发布给浏览器。WebGUI 收到 `plugin_catalog_changed` 后：
 
 1. 释放已加载但 revision 变化的旧模块；
 2. 从 `/api/plugins/modules/<instanceId>/client.js?rev=<revision>` 读取新模块；

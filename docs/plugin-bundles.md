@@ -13,7 +13,7 @@ plugins/packages/<encodeURIComponent(packageId)>/<version>/
   client.mjs (可选)
 ```
 
-首次启动会把旧 `manager.json.managerPlugins` 和旧 `rabi.manager.builtin` Profile 行迁到 `rabi.manager.base` Bundle。迁移完成后不会再读取 `manager.json.managerPlugins`。`manager:core` 仍由 Profile 表示，但不能禁用。
+Profile 缺失时，首轮装载使用 `rabi.manager.base/rabi.manager.profile.json` 并合并旧 `manager.json.managerPlugins` enabled 值；listener 就绪后异步写入 Profile 并删除旧键。已存在的 Profile 不再读取旧键。旧 `rabi.manager.builtin` Profile 或 Patch 行在同一次初始化中迁到 `rabi.manager.base`。迁移完成后常规对账不会再读取 `manager.json.managerPlugins`。`manager:core` 仍由 Profile 表示，但不能禁用。
 
 `rabi.plugin.json` 只允许 schema、包 ID、版本、宿主、Manager 入口和可选 Web 入口。不能声明命令、任意路径、URL 或环境变量。Manager 对 Bundle 全部文件计算 SHA-256 revision；Profile、Patch、入口或依赖变化时，文件监听会把新 revision 复制到隔离运行目录，再由 Plugin Reconciler 停止旧 Fiber、撤销路由、排空已接受请求并挂载新 Fiber。新版本激活失败时恢复旧 Fiber。
 

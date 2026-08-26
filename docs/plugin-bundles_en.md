@@ -13,7 +13,7 @@ plugins/packages/<encodeURIComponent(packageId)>/<version>/
   client.mjs (optional)
 ```
 
-The first startup migrates old `manager.json.managerPlugins` entries and old `rabi.manager.builtin` Profile rows into the `rabi.manager.base` Bundle. After migration, `manager.json.managerPlugins` is not read. `manager:core` remains a Profile entry but cannot be disabled.
+When the Profile is absent, the first load uses `rabi.manager.base/rabi.manager.profile.json` plus old `manager.json.managerPlugins` enabled values; after the listener is ready, initialization writes the Profile and removes the old field. An existing Profile never reads the old field. The same initialization migrates old `rabi.manager.builtin` Profile or Patch rows to `rabi.manager.base`. Normal reconciliation does not read `manager.json.managerPlugins` after that. `manager:core` remains a Profile entry but cannot be disabled.
 
 `rabi.plugin.json` may declare only its schema, package ID, version, hosts, Manager entry, and optional Web entry. It cannot carry commands, arbitrary paths, URLs, or environment variables. Manager hashes every Bundle file into a SHA-256 revision. A Profile, Patch, entry, or dependency change makes the file watcher copy the new revision into an isolated runtime directory; the Plugin Reconciler then stops the old Fiber, removes routes, drains accepted work, and mounts the new Fiber. A failed activation restores the old Fiber.
 

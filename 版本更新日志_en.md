@@ -9,7 +9,9 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ## Unreleased
 ### Manager plugin Bundles and hot replacement
 
-- Manager plugins now come from Profile, Patch, and versioned Bundle composition. Legacy `manager.json.managerPlugins` is migrated only at first startup and is no longer runtime configuration. Built-in instances load through `rabi.manager.base`; the old `builtin:manager/*` identities and centralized composition entry have been removed.
+- The `rabi.manager.base` Bundle now directly owns the 26 built-in definitions, dependencies, presentation contributions, and default Profile. Manager no longer creates a definition for the Bundle. Only the matching base-Bundle instance receives the constrained capability to activate Manager-owned resources; external Bundles still receive the general controlled API only.
+- The first load uses the Bundle default Profile. After the HTTP listener is ready, one asynchronous migration converts old `manager.json.managerPlugins` / `rabi.manager.builtin` data and removes the old field. Normal reconciliation then reads only Profile, Patch, and Bundle data.
+- The Web module catalog is published from the successfully reconciled runtime snapshot instead of rereading Profile on each request. Failed rollback candidates and `waiting_dependency` instances never send a new revision to the browser.
 - Bundle changes use revisions to unload the preceding Fiber, remove instance routes, drain accepted requests, and load the new version. Failed activation restores the preceding version. Web Bundles use content revisions and Manager SSE replacement, retaining the preceding usable page if replacement fails.
 - The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry instead of waiting indefinitely.
 

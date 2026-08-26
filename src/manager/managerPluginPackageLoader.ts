@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   importRabiPluginModule,
   loadRabiPluginBundle,
+  type LoadedRabiPluginBundle,
   type RabiPluginBundleManifest
 } from "../runtime/pluginBundle.js";
 import type { RabiCordisContext } from "../runtime/cordisHost.js";
@@ -46,7 +47,7 @@ export type ManagerPluginPackageLoaderOptions<TServices> = Readonly<{
 export type LoadedManagerPluginPackage<TServices> = Readonly<{
   profile: RabiPluginProfileEntry;
   definition: ManagerPluginDefinition;
-  bundle: RabiPluginBundleManifest;
+  bundle: LoadedRabiPluginBundle;
   context: RabiManagerPluginPackageContext<TServices>;
   desired: DesiredManagerPlugin;
 }>;
@@ -118,7 +119,7 @@ async function loadOne<TServices>(
   return Object.freeze({
     profile: entry,
     definition,
-    bundle: bundle.manifest,
+    bundle,
     context,
     desired: Object.freeze({
       definition,

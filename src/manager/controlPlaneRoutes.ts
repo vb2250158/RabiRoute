@@ -197,8 +197,7 @@ import {
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 import { getManagerPluginRuntimeHost } from "./managerPluginRuntimeHost.js";
-import { readWebPluginModuleSource, readWebPluginModules } from "./webPluginModules.js";
-import { managerBasePluginDefinitions } from "./managerBasePluginDefinitions.js";
+import { WebPluginModuleRegistry } from "./webPluginModules.js";
 import {
   ManagerPluginRouteRegistry,
   type ManagerPluginRouteHandler
@@ -239,7 +238,9 @@ import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderSer
 import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
 import { runWindowsTaskkill, stopChildProcessTree } from "../runtime/windowsProcessTree.js";
 import {
-  migrateManagerPluginProfile,
+  BUILTIN_MANAGER_PLUGIN_PACKAGE_ID,
+  initializeManagerPluginProfile,
+  MANAGER_PLUGIN_RUNTIME_RELATIVE_PATH,
   resolveManagerPluginProfile,
   type ManagerPluginProfileDiagnostic
 } from "./managerPluginConfig.js";
@@ -7302,7 +7303,8 @@ export async function startManager(): Promise<void> {
   };
   const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.catalog.get(instanceId)?.status === "active";
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
-  const managerPluginApplyHooks: Record<string, (ctx: import("../runtime/cordisHost.js").RabiCordisContext) => void | Promise<void>> = {
+  const webPluginModules = new WebPluginModuleRegistry(path.join(rootDir, MANAGER_PLUGIN_RUNTIME_RELATIVE_PATH));
+  const managerBasePluginActivation: Record<string, (ctx: import("../runtime/cordisHost.js").RabiCordisContext) => void | Promise<void>> = {
       "manager:core": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
@@ -8211,36 +8213,28 @@ export async function startManager(): Promise<void> {
         }, "activate Manager desktop plugin");
       }
   };
-  const managerPluginDefinitions = managerBasePluginDefinitions().map(definition => {
-    const hook = managerPluginApplyHooks[definition.instanceId];
-    if (!hook) return definition;
-    return {
-      ...definition,
-      async apply(ctx: import("../runtime/cordisHost.js").RabiCordisContext): Promise<void> {
-        await definition.apply?.(ctx);
-        await hook(ctx);
-      }
-    };
-  });
-
-  const reconcileManagerPlugins = async (reason: string): Promise<void> => {
-    const persistedConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
-    await migrateManagerPluginProfile(rootDir, managerPluginDefinitions, persistedConfig.managerPlugins);
-    if (Object.hasOwn(persistedConfig, "managerPlugins")) {
-      delete persistedConfig.managerPlugins;
-      writeManagerConfig(persistedConfig);
-    }
+  const reconcileManagerPlugins = async (
+    reason: string,
+    bootstrapLegacyManagerPlugins?: unknown
+  ): Promise<void> => {
     const normalized = await resolveManagerPluginProfile({
       rootDir,
-      builtinDefinitions: managerPluginDefinitions,
-      createServices: identity => createRabiManagerPluginHostApi({
-        instanceId: identity.instanceId,
-        routes: managerPluginRoutes,
-        publishManagerEvent
-      })
+      bootstrapLegacyManagerPlugins,
+      createServices: identity => {
+        const host = createRabiManagerPluginHostApi({
+          instanceId: identity.instanceId,
+          routes: managerPluginRoutes,
+          publishManagerEvent
+        });
+        if (identity.bundle.id !== BUILTIN_MANAGER_PLUGIN_PACKAGE_ID) return host;
+        const activate = managerBasePluginActivation[identity.instanceId];
+        if (!activate) throw new Error(`No scoped Manager activation capability exists: ${identity.instanceId}.`);
+        return Object.freeze({ ...host, activate });
+      }
     });
     managerPluginDiagnostics = normalized.diagnostics;
     const status = await managerPluginReconciler.reconcile(normalized.desired);
+    await webPluginModules.updateFromReconciliation(normalized.loaded, status);
     publishManagerEvent("plugin_reconciliation_changed", { reason, ...status, diagnostics: managerPluginDiagnostics });
     publishManagerEvent("plugin_catalog_changed", {
       reason,
@@ -8253,8 +8247,9 @@ export async function startManager(): Promise<void> {
     for (const diagnostic of managerPluginDiagnostics) console.warn(diagnostic.message);
   };
 
+  const startupPluginConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
   try {
-    await reconcileManagerPlugins("manager startup");
+    await reconcileManagerPlugins("manager startup", startupPluginConfig.managerPlugins);
     if (!managerPluginActive("manager:core")) {
       throw new Error("Required Manager plugin failed to activate: manager:core");
     }
@@ -8367,8 +8362,8 @@ export async function startManager(): Promise<void> {
           }
         },
         webModules: {
-          list: () => readWebPluginModules(rootDir),
-          read: (id, rev) => readWebPluginModuleSource(rootDir, id, rev)
+          list: async () => webPluginModules.list(),
+          read: (id, rev) => webPluginModules.read(id, rev)
         }
       })) {
         return;
@@ -8414,6 +8409,18 @@ export async function startManager(): Promise<void> {
   startActiveNapcatSupervisor();
   startActivePlanFeedbackRecovery();
   setImmediate(() => {
+    void (async () => {
+      const persistedConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
+      const hasLegacyManagerPlugins = Object.hasOwn(persistedConfig, "managerPlugins");
+      const initialized = await initializeManagerPluginProfile(rootDir, persistedConfig.managerPlugins);
+      if (hasLegacyManagerPlugins) {
+        delete persistedConfig.managerPlugins;
+        writeManagerConfig(persistedConfig);
+      }
+      if (initialized.wroteConfiguration || hasLegacyManagerPlugins) {
+        await reconcileManagerPlugins("post-listener plugin profile initialization");
+      }
+    })().catch(error => console.warn(`Manager plugin profile initialization failed: ${error instanceof Error ? error.message : String(error)}`));
     void migrateRolePlanLayoutsAfterStartup().finally(() => { void prewarmRolePlanCatalogs(); });
   });
   configWatcher = managerShouldAutostart && managerConfigWatcherEnabled()

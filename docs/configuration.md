@@ -21,7 +21,7 @@
 
 插件由 `data/plugins/manager/profile.json` 选择。每行的稳定 `id` 选择一个受信任 Bundle、版本、启用状态和 JSON 配置；`profile.d/*.json` 按文件名顺序叠加 `upsert`、`remove` Patch。`manager:core` 必须启用。
 
-内置功能由受版本控制的 `rabi.manager.base` Bundle 提供。首次启动会把旧 `manager.json.managerPlugins` 迁入 Profile 并删除该字段；运行时不再把 `manager.json` 当成插件配置。Profile、Patch 或 Bundle 文件变化时，监听器按 revision 局部对账：撤销旧路由、排空已接受请求、卸载旧 Fiber，再加载新 revision；激活失败时恢复旧 Fiber。
+内置功能由受版本控制的 `rabi.manager.base` Bundle 提供，Bundle 自己拥有内置 definition 与默认 Profile。Profile 缺失时，首轮装载把这份默认 Profile 与旧 `manager.json.managerPlugins` 的 enabled 值合并；listener 就绪后异步写入 Profile 并删除旧字段。若 Profile 已存在，它是唯一配置来源。常规运行不再把 `manager.json` 当成插件配置。Profile、Patch 或 Bundle 文件变化时，监听器按 revision 局部对账：撤销旧路由、排空已接受请求、卸载旧 Fiber，再加载新 revision；激活失败时恢复旧 Fiber。
 
 `GET /api/plugins/reconciliation` 返回期望、活动、变化、回滚和诊断状态。`POST /api/plugins/reconciliation` 立即重读 Profile。WebGUI 通过 `/api/events` 的 `plugin_catalog_changed` 更新目录和动态 Web Bundle。完整 Bundle 目录、宿主 API 和热替换限制见[插件 Bundle 与热替换](plugin-bundles.md)。
 ### 插件入口与资源所有权

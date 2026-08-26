@@ -18,7 +18,7 @@ plugins/packages/<encodeURIComponent(packageId)>/<version>/
 
 Every Profile entry has a stable `id`, Bundle `package`, pinned `version`, `enabled` state, and JSON `config`. Patches apply `upsert` and `remove` in lexical filename order. Package installation, version selection, and local configuration overrides are separate concerns.
 
-The old `manager.json.managerPlugins` field is migrated into the Profile only on first startup and then removed. Old `rabi.manager.builtin` entries become `rabi.manager.base`. The production path no longer reads or writes the old configuration field.
+When the Profile is absent, Manager uses the Bundle-owned default Profile plus old `manager.json.managerPlugins` enabled values for its first load; after the HTTP listener is ready, it writes the Profile and removes the old field. An existing Profile is the only configuration source. The same initialization rewrites old `rabi.manager.builtin` Profile or Patch rows to `rabi.manager.base`. Normal reconciliation reads only Profile, Patch, and Bundle data; it never reads or writes the old field.
 
 ## Bundle contract
 
@@ -37,7 +37,7 @@ Every Bundle directory needs `rabi.plugin.json`:
 
 The manifest declares only identity, version, hosts, and entries. It cannot declare commands, arbitrary paths, URLs, or environment variables. The Manager calculates a SHA-256 revision over every Bundle file and imports each revision from an isolated runtime directory so old module caches cannot pollute the new version.
 
-`rabi.manager.base` is the base Bundle shipped with RabiRoute. The 26 built-in Manager instances also load through the Profile and unified Loader; this Bundle retains a controlled internal capability for Manager-owned business facts. External Bundles never receive that capability.
+`rabi.manager.base` is the base Bundle shipped with RabiRoute. Its `index.mjs` directly owns the 26 definitions, dependencies, and presentation contributions, while `rabi.manager.profile.json` owns the default Profile. Manager no longer creates an in-process built-in definition on the Bundle’s behalf. The base Bundle receives only an instance-scoped capability to activate Manager-owned resources; external Bundles never receive it.
 
 ## Manager lifecycle
 
@@ -55,7 +55,7 @@ A Manager Bundle may only register instance-scoped routes, track asynchronous wo
 
 ## Web Bundle hot replacement
 
-`GET /api/plugins/modules` returns the instance ID, package ID, version, and SHA-256 revision for enabled Web Bundles. After receiving `plugin_catalog_changed`, WebGUI:
+`GET /api/plugins/modules` returns the active Web Bundle graph from the most recent successfully reconciled Manager runtime snapshot: instance ID, package ID, version, and SHA-256 revision. It does not reread Profile data on request, so failed or dependency-waiting instances are never published to the browser. After receiving `plugin_catalog_changed`, WebGUI:
 
 1. disposes each loaded module whose revision changed;
 2. loads `/api/plugins/modules/<instanceId>/client.js?rev=<revision>`;

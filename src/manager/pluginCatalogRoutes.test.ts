@@ -1,17 +1,38 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { RabiCordisHost } from "../runtime/cordisHost.js";
 import { mountManagerPluginRuntime } from "../runtime/managerPluginRuntime.js";
 import { ManagerPluginReconciler } from "../runtime/managerPluginReconciler.js";
-import { managerBasePluginDefinitions } from "./managerBasePluginDefinitions.js";
+import type { ManagerPluginDefinition } from "../runtime/managerPluginRuntime.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
+
+type ManagerBaseBundleModule = Readonly<{
+  managerPluginInstanceIds: readonly string[];
+  createPlugin(context: Readonly<{
+    instanceId: string;
+    bundle: Readonly<{ id: string; version: string; revision: string }>;
+    services: Readonly<{ activate(): Promise<void> }>;
+  }>): ManagerPluginDefinition;
+}>;
+
+async function loadBaseBundleDefinitions(): Promise<ManagerPluginDefinition[]> {
+  const bundlePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "plugins", "packages", "rabi.manager.base", "0.2.1", "index.mjs");
+  const bundle = await import(pathToFileURL(bundlePath).href) as ManagerBaseBundleModule;
+  return bundle.managerPluginInstanceIds.map(instanceId => bundle.createPlugin({
+    instanceId,
+    bundle: { id: "rabi.manager.base", version: "0.2.1", revision: "test" },
+    services: { activate: async () => {} }
+  }));
+}
 
 async function startCatalogServer() {
   const host = new RabiCordisHost();
   const runtime = await mountManagerPluginRuntime(host);
   const reconciler = new ManagerPluginReconciler(runtime);
-  const desired = managerBasePluginDefinitions().map((definition, index) => ({
+  const desired = (await loadBaseBundleDefinitions()).map((definition, index) => ({
     definition,
     enabled: true,
     revision: `catalog-test-${index}`

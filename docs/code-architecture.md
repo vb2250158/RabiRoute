@@ -375,11 +375,11 @@ startManager();
 
 ### Manager 插件运行时
 
-正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts` 和唯一的 `managerPluginHost.ts`，再从 `data/plugins/manager/profile.json` 解析版本化 Bundle。内置 26 个实例由 `rabi.manager.base` Bundle 进入同一 Loader；`controlPlaneRoutes.ts` 仍提供受控业务 hook，但不再把 `manager.json` 作为插件真源。`managerPluginReconciler.ts` 串行启停或重载 revision 变化的实例。激活失败时恢复旧 Fiber；恢复失败保留明确错误状态。
+正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts` 和唯一的 `managerPluginHost.ts`，再从 Profile 解析版本化 Bundle。Profile 缺失时首轮装载读取 `rabi.manager.base` 自带的默认 Profile；HTTP listener 就绪后异步写入正式 Profile 并一次性迁移旧 `manager.json.managerPlugins`。内置 26 个实例由 `rabi.manager.base` Bundle 进入同一 Loader；Manager 只提供按实例受限的资源激活 capability，不再替 Bundle 创建 definition。`managerPluginReconciler.ts` 串行启停或重载 revision 变化的实例。激活失败时恢复旧 Fiber；恢复失败保留明确错误状态。
 
 每个 definition 声明 `provides`、`requires` 和 `optional`。Reconciler 先拒绝同一能力的多个已启用 Provider，再按必需依赖排序；缺少 `requires` 的实例进入 `waiting_dependency`。可选 Provider 存在时先于消费者启动。每个实例的依赖 revision 会递归包含直接和传递 Provider 的 revision、启用状态、能力关系与缺失能力摘要，因此 `root -> middle -> leaf` 中的 root 变化会把 middle 和 leaf 都纳入同一重启批次，同时不影响无依赖实例。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，支持同一实例 `active -> waiting_dependency -> active`。停用按当前应用顺序逆序执行。
 
-`managerBasePluginDefinitions.ts` 当前声明 26 个内置实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供非空 hook：
+`plugins/packages/rabi.manager.base/0.2.1/index.mjs` 直接声明 26 个内置实例、依赖和表现贡献，`rabi.manager.profile.json` 直接声明默认 Profile。Manager 只向基础 Bundle 的每个实例发放受限的资源激活 capability；它不再为 Bundle 创建 definition。
 
 ```text
 manager:core
@@ -416,7 +416,7 @@ Desktop 与 WebGUI 是最小宿主。表现 Contribution Catalog 只发布 `page
 
 ### Manager 插件持有的运行资源
 
-26 个 hook 都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`，避免同层 Cordis disposer 并发时共享资源先停。共享资源 Runtime 内先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。停止完成后这些资源可以重新启动。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
+26 个实例的资源激活函数都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`，避免同层 Cordis disposer 并发时共享资源先停。共享资源 Runtime 内先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。停止完成后这些资源可以重新启动。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
 ```text
 unregister routes
