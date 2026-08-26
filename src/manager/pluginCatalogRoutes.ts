@@ -1,3 +1,4 @@
+import path from "node:path";
 import type http from "node:http";
 import type { RabiContributionHost } from "../runtime/contributionRegistry.js";
 import type { ManagerPluginRuntimeMount } from "../runtime/managerPluginRuntime.js";
@@ -18,7 +19,7 @@ export type PluginCatalogApiContext = {
   reconciliation?: PluginReconciliationApiContext;
   webModules?: {
     list(): Promise<readonly WebPluginModule[]>;
-    read(id: string, rev: string): Promise<Readonly<{ module: WebPluginModule; source: Buffer }>>;
+    read(id: string, rev: string, relativePath: string): Promise<Readonly<{ module: WebPluginModule; source: Buffer; path: string }>>;
   };
 };
 
@@ -86,27 +87,42 @@ export function handlePluginCatalogApi(
     return true;
   }
 
-  const moduleMatch = requestUrl.pathname.match(/^\/api\/plugins\/modules\/([^/]+)\/client\.js$/);
+  const moduleMatch = requestUrl.pathname.match(/^\/api\/plugins\/modules\/([^/]+)\/([a-f0-9]{64})\/(.+)$/);
   if (request.method === "GET" && moduleMatch) {
     if (!context.webModules) {
       jsonResponse(response, 404, { code: -1, message: "Web plugin module was not found." });
       return true;
     }
     let id = "";
-    try { id = decodeURIComponent(moduleMatch[1]!); } catch {
-      jsonResponse(response, 400, { code: -1, message: "Web plugin module id is invalid." });
+    let relativePath = "";
+    try {
+      id = decodeURIComponent(moduleMatch[1]!);
+      relativePath = decodeURIComponent(moduleMatch[3]!);
+    } catch {
+      jsonResponse(response, 400, { code: -1, message: "Web plugin module path is invalid." });
       return true;
     }
-    const rev = requestUrl.searchParams.get("rev") ?? "";
-    if (!rev || !/^[a-f0-9]{64}$/.test(rev)) {
-      jsonResponse(response, 400, { code: -1, message: "Web plugin module revision is invalid." });
-      return true;
-    }
-    void context.webModules.read(id, rev)
-      .then(({ source }) => {
+    const rev = moduleMatch[2]!;
+    void context.webModules.read(id, rev, relativePath)
+      .then(({ source, path: sourcePath }) => {
+        const extension = path.extname(sourcePath).toLowerCase();
+        const contentType = extension === ".css"
+          ? "text/css; charset=utf-8"
+          : extension === ".js" || extension === ".mjs"
+            ? "text/javascript; charset=utf-8"
+            : "application/octet-stream";
         response.setHeader("cache-control", "no-store");
         response.setHeader("x-content-type-options", "nosniff");
-        response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+        response.writeHead(200, { "content-type": contentType });
+        if (extension === ".js" || extension === ".mjs") {
+          const directory = path.posix.dirname(sourcePath);
+          const base = `/api/plugins/modules/${encodeURIComponent(id)}/${rev}/${directory === "." ? "" : `${directory}/`}`;
+          const browserSource = source.toString("utf8")
+            .replace(/(["''])assets\//g, "$1")
+            .replace(/=function\(e\)\{return"\/"\+e\}/g, `=function(e){return${JSON.stringify(base)}+e}`);
+          response.end(browserSource);
+          return;
+        }
         response.end(source);
       })
       .catch(error => jsonResponse(response, (error as { code?: string }).code === "ENOENT" ? 404 : 500, {

@@ -45,24 +45,10 @@ function status(rendererId: string, overrides: Record<string, unknown> = {}): un
   };
 }
 
-test("built-in settings and status renderers use the trusted registration API", () => {
-  assert.ok(registeredWebSettingsRenderers().some(renderer => (
-    renderer.instanceId === "manager:desktop"
-    && renderer.pluginId === "rabi.manager.base"
-    && renderer.rendererId === "builtin.desktop-settings.v1"
-  )));
-  assert.ok(registeredWebStatusRenderers().some(renderer => (
-    renderer.instanceId === "manager:speech"
-    && renderer.pluginId === "rabi.manager.base"
-    && renderer.rendererId === "builtin.speech-status.v1"
-  )));
-  assert.ok(registeredWebStatusRenderers().some(renderer => (
-    renderer.instanceId === "manager:performance"
-    && renderer.pluginId === "rabi.manager.base"
-    && renderer.rendererId === "builtin.performance-status.v1"
-  )));
+test("renderer registry starts empty until an active Web Bundle registers contributions", () => {
+  assert.deepEqual(registeredWebSettingsRenderers(), []);
+  assert.deepEqual(registeredWebStatusRenderers(), []);
 });
-
 test("custom trusted renderers resolve to real components and disappear after disposal", () => {
   const settingsId = "trusted.settings-renderer.v1";
   const statusId = "trusted.status-renderer.v1";
@@ -107,17 +93,19 @@ test("custom trusted renderers resolve to real components and disappear after di
 });
 
 test("trusted renderer registration rejects duplicate renderer IDs", () => {
-  assert.throws(() => registerTrustedWebStatusRenderer({
-    instanceId: "manager:desktop",
-    pluginId: "rabi.manager.base",
-    rendererId: "builtin.desktop-settings.v1",
-    placementId: "trusted.status.placement",
-    allowedSlots: ["trusted"],
-    queryId: "trusted.status",
+  const dispose = registerTrustedWebStatusRenderer({
+    instanceId: "manager:trusted", pluginId: "package:trusted", rendererId: "trusted.status.duplicate.v1",
+    placementId: "trusted.status.placement", allowedSlots: ["trusted"], queryId: "trusted.status",
     loader: async () => defineComponent({ template: "<div />" })
-  }), /already registered/);
+  });
+  try {
+    assert.throws(() => registerTrustedWebStatusRenderer({
+      instanceId: "manager:other", pluginId: "package:other", rendererId: "trusted.status.duplicate.v1",
+      placementId: "trusted.status.placement", allowedSlots: ["trusted"], queryId: "trusted.status",
+      loader: async () => defineComponent({ template: "<div />" })
+    }), /already registered/);
+  } finally { dispose(); }
 });
-
 test("system selection settings are owned by the Desktop settings renderer", () => {
   const settingsPage = readFileSync(new URL("./pages/SettingsPage.vue", import.meta.url), "utf8");
   const desktopRenderer = readFileSync(new URL("./components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");

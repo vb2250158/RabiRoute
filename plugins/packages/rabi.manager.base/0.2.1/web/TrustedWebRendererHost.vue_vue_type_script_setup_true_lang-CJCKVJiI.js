@@ -1,0 +1,1 @@
+import{l as r,N as n,Q as o,F as s,R as a,O as c,a1 as l}from"./runtime-core.esm-bundler-DYja7TDp.js";const x=r({__name:"TrustedWebRendererHost",props:{renderers:{},context:{}},setup(e){return(m,u)=>(n(!0),o(s,null,a(e.renderers,t=>(n(),c(l(t.component),{key:t.key,context:e.context},null,8,["context"]))),128))}});export{x as _};

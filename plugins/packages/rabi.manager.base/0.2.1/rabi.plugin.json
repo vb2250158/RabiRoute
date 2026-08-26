@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "id": "rabi.manager.base",
   "version": "0.2.1",
-  "hosts": ["manager"],
-  "entry": "./index.mjs"
+  "hosts": ["manager", "web"],
+  "entry": "./index.mjs",
+  "webEntry": "./web/client.mjs"
 }

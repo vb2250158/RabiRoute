@@ -10,7 +10,7 @@ data/plugins/manager/profile.d/*.json
 plugins/packages/<encodeURIComponent(packageId)>/<version>/
   rabi.plugin.json
   index.mjs
-  client.mjs (可选)
+  web/client.mjs (可选，及同目录的浏览器依赖)
 ```
 
 Profile 缺失时，首轮装载使用 `rabi.manager.base/rabi.manager.profile.json` 并合并旧 `manager.json.managerPlugins` enabled 值；listener 就绪后异步写入 Profile 并删除旧键。已存在的 Profile 不再读取旧键。旧 `rabi.manager.builtin` Profile 或 Patch 行在同一次初始化中迁到 `rabi.manager.base`。迁移完成后常规对账不会再读取 `manager.json.managerPlugins`。`manager:core` 仍由 Profile 表示，但不能禁用。
@@ -19,6 +19,6 @@ Profile 缺失时，首轮装载使用 `rabi.manager.base/rabi.manager.profile.j
 
 Manager Bundle 只能通过受控宿主 API 注册 HTTP 路由、跟踪异步操作、发布命名插件事件、读取有限大小 JSON 请求体和返回 JSON。宿主把每个路由固定到当前 `instanceId`，卸载时自动撤销全部路由并等待已接受请求结束。Bundle 不能取得 Manager 全局状态，也不能替换核心路由。
 
-Web Bundle 目录由 `/api/plugins/modules` 发布实例 ID、包 ID、版本和 revision。浏览器以 revision 加载 `/api/plugins/modules/<instanceId>/client.js?rev=<revision>`；收到 `plugin_catalog_changed` 后先执行旧 disposer，再激活新 Bundle。新 Bundle 激活失败时会重新激活上一 revision；旧版也无法恢复时才报告该模块失败。Web Bundle 只能注册受控页面、设置 renderer 和状态 renderer，不能直接改 Manager 内部状态。`webEntry` 是浏览器直接加载的单文件 ESM；发布前必须把依赖打进该文件，当前 HTTP 合同不提供相对导入的依赖文件。
+Web Bundle 目录由 `/api/plugins/modules` 发布实例 ID、包 ID、版本、revision 和 `entryPath`。浏览器以不可变路径加载 `/api/plugins/modules/<instanceId>/<revision>/<entryPath>`；同一 revision 下的相对 JavaScript、CSS 和字体资源也从该 Bundle revision 提供。收到 `plugin_catalog_changed` 后先执行旧 disposer，再激活新 Bundle。新 Bundle 激活失败时会重新激活上一 revision；旧版也无法恢复时才报告该模块失败。Web Bundle 只能注册受控页面、设置 renderer、状态 renderer 和主题资源，不能直接改 Manager 内部状态。旧 revision 保留的资源树与 `client.mjs` 一起读取，因此回退不会依赖会被下一次 WebGUI 构建覆盖的宿主静态资源。
 
 最小可运行 Bundle 在 [`examples/plugin-bundles/manager-echo/`](../examples/plugin-bundles/manager-echo/README.md)。

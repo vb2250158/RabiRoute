@@ -1,0 +1,1 @@
+function n(...e){for(const t of e){const l=typeof t=="string"?t.trim():"";if(l)return l}return""}function s(e){return n(e.roleTitle,e.label,e.value)}function i(e,t){const l=n(e.agentRoleId,t?.selectedRoleId),o=t?.options?.find(r=>n(r.value)===l);return n(o?.roleTitle,t?.selectedRoleTitle,e.routeName,e.name,o?.label,l,e.configName,e.id,"未命名人格")}export{i as g,s as p};

@@ -2,8 +2,10 @@ import { fileURLToPath, URL } from "node:url";
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
 
+const root = fileURLToPath(new URL(".", import.meta.url));
+
 export default defineConfig({
-  root: fileURLToPath(new URL(".", import.meta.url)),
+  root,
   plugins: [vue()],
   resolve: {
     alias: {
@@ -14,7 +16,15 @@ export default defineConfig({
   build: {
     target: "esnext",
     outDir: "dist",
-    emptyOutDir: true
+    emptyOutDir: true,
+    manifest: true,
+    rollupOptions: {
+      preserveEntrySignatures: "exports-only",
+      input: {
+        app: fileURLToPath(new URL("./index.html", import.meta.url)),
+        rabiManagerBaseClient: fileURLToPath(new URL("./src/bundles/rabiManagerBaseClient.ts", import.meta.url))
+      }
+    }
   },
   server: {
     port: 8793,

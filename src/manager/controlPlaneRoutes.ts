@@ -8363,7 +8363,7 @@ export async function startManager(): Promise<void> {
         },
         webModules: {
           list: async () => webPluginModules.list(),
-          read: (id, rev) => webPluginModules.read(id, rev)
+          read: (id, rev, relativePath) => webPluginModules.read(id, rev, relativePath)
         }
       })) {
         return;

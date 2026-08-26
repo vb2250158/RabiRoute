@@ -36,19 +36,19 @@ test("Web module registry publishes only successfully active Bundle revisions", 
   await registry.updateFromReconciliation(firstLoaded, { state: "idle", active: ["manager:example-web"] });
   const first = registry.list()[0]!;
   assert.match(first.rev, /^[a-f0-9]{64}$/);
-  assert.match((await registry.read(first.id, first.rev)).source.toString("utf8"), /activate/);
+  assert.match((await registry.read(first.id, first.rev, first.entryPath)).source.toString("utf8"), /activate/);
 
   await fs.writeFile(path.join(value.packageDirectory, "client.mjs"), "export function activate() { throw new Error('new revision failed'); }", "utf8");
   const changedLoaded = await load(value.root);
   await registry.updateFromReconciliation(changedLoaded, { state: "failed", active: ["manager:example-web"] });
   assert.deepEqual(registry.list(), [first]);
-  assert.match((await registry.read(first.id, first.rev)).source.toString("utf8"), /activate/);
+  assert.match((await registry.read(first.id, first.rev, first.entryPath)).source.toString("utf8"), /activate/);
 
   await registry.updateFromReconciliation(changedLoaded, { state: "idle", active: ["manager:example-web"] });
   const second = registry.list()[0]!;
   assert.notEqual(second.rev, first.rev);
-  assert.match((await registry.read(second.id, second.rev)).source.toString("utf8"), /new revision failed/);
-  assert.match((await registry.read(first.id, first.rev)).source.toString("utf8"), /activate/);
+  assert.match((await registry.read(second.id, second.rev, second.entryPath)).source.toString("utf8"), /new revision failed/);
+  assert.match((await registry.read(first.id, first.rev, first.entryPath)).source.toString("utf8"), /activate/);
 });
 
 test("Web module registry excludes disabled and waiting Manager instances", async () => {

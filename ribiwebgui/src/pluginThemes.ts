@@ -166,18 +166,15 @@ export function resolveWebThemeCatalog(contributions: readonly unknown[] | null)
 }
 
 function fallbackSystemResource(): ResolvedWebThemeResource {
-  const registration = themeRegistry.get("system");
-  if (!registration) throw new Error("Trusted Web system theme is not registered.");
   return {
-    themeId: registration.themeId,
-    webResourceId: registration.webResourceId,
-    label: registration.label,
-    icon: registration.icon,
-    ...(registration.desktopTheme ? { desktopTheme: registration.desktopTheme } : {}),
-    apply: registration.apply
+    themeId: "system",
+    webResourceId: "web-host.recovery-theme.v1",
+    label: "跟随系统",
+    icon: "mdi-theme-light-dark",
+    desktopTheme: "system",
+    apply: systemDark => systemDark ? "dark" : "light"
   };
 }
-
 export function resolveWebThemeResource(
   catalog: WebThemeCatalog,
   preference: WebThemeId
@@ -213,35 +210,3 @@ export function writeStoredWebThemePreference(themeId: WebThemeId | undefined): 
     // 浏览器禁用本地存储时仅保留当前会话主题。
   }
 }
-registerTrustedWebThemeResource({
-  instanceId: "manager:core",
-  pluginId: "rabi.manager.base",
-  themeId: "system",
-  webResourceId: "builtin.web-theme.system.v1",
-  label: "跟随系统",
-  icon: "mdi-theme-light-dark",
-  desktopTheme: "system",
-  apply: systemDark => systemDark ? "dark" : "light"
-});
-
-registerTrustedWebThemeResource({
-  instanceId: "manager:core",
-  pluginId: "rabi.manager.base",
-  themeId: "light",
-  webResourceId: "builtin.web-theme.light.v1",
-  label: "浅色",
-  icon: "mdi-weather-sunny",
-  desktopTheme: "light",
-  apply: () => "light"
-});
-
-registerTrustedWebThemeResource({
-  instanceId: "manager:core",
-  pluginId: "rabi.manager.base",
-  themeId: "dark",
-  webResourceId: "builtin.web-theme.dark.v1",
-  label: "深色",
-  icon: "mdi-weather-night",
-  desktopTheme: "dark",
-  apply: () => "dark"
-});

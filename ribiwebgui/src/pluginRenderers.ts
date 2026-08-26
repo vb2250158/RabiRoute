@@ -230,36 +230,3 @@ export function webRenderersAt(
 ): readonly WebRendererContribution[] {
   return renderers.filter(renderer => renderer.placementId === placementId);
 }
-
-registerTrustedWebSettingsRenderer({
-  instanceId: "manager:desktop",
-  pluginId: "rabi.manager.base",
-  rendererId: "builtin.desktop-settings.v1",
-  placementId: "global.settings.sections",
-  allowedSlots: ["desktop"],
-  schemaId: "desktop.settings.v1",
-  readCommandId: "manager.desktop-settings.read",
-  writeCommandId: "manager.desktop-settings.write",
-  loader: () => import("./components/renderers/DesktopSettingsRenderer.vue")
-});
-
-registerTrustedWebStatusRenderer({
-  instanceId: "manager:speech",
-  pluginId: "rabi.manager.base",
-  rendererId: "builtin.speech-status.v1",
-  placementId: "route.speech.summary",
-  allowedSlots: ["runtime-status"],
-  queryId: "manager.speech-status",
-  loader: () => import("./components/renderers/SpeechStatusRenderer.vue")
-});
-
-registerTrustedWebStatusRenderer({
-  instanceId: "manager:performance",
-  pluginId: "rabi.manager.base",
-  rendererId: "builtin.performance-status.v1",
-  placementId: "global.performance.summary",
-  allowedSlots: ["runtime-status"],
-  queryId: "manager.performance-status",
-  loader: () => import("./components/renderers/PerformanceStatusRenderer.vue")
-});
-

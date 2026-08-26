@@ -58,11 +58,11 @@ A Manager Bundle may only register instance-scoped routes, track asynchronous wo
 `GET /api/plugins/modules` returns the active Web Bundle graph from the most recent successfully reconciled Manager runtime snapshot: instance ID, package ID, version, and SHA-256 revision. It does not reread Profile data on request, so failed or dependency-waiting instances are never published to the browser. After receiving `plugin_catalog_changed`, WebGUI:
 
 1. disposes each loaded module whose revision changed;
-2. loads `/api/plugins/modules/<instanceId>/client.js?rev=<revision>`;
+2. loads `/api/plugins/modules/<instanceId>/<revision>/<entryPath>`;
 3. permits the new module to register only controlled pages, settings renderers, or status renderers;
 4. reactivates the prior revision if new activation fails; it exposes an error and keeps the host recovery entry only when both activations fail.
 
-A Web entry is a single-file ESM module loaded directly by the browser. Publishers must bundle dependencies into `client.mjs`; the current module URL does not expose a relative-import dependency tree.
+A Web entry and its relative JavaScript, CSS, and font dependencies belong to one immutable revision directory. Rollback reads that complete revision resource tree.
 
 ## Acceptance entry points
 

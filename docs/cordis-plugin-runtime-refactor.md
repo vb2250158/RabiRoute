@@ -58,11 +58,11 @@ Manager Bundle 只能注册本实例路由、跟踪异步操作、发布命名�
 `GET /api/plugins/modules` 从最近一次成功完成的 Manager runtime snapshot 返回 active Web Bundle 的实例 ID、包 ID、版本与 SHA-256 revision。它不在请求时重读 Profile；失败或等待依赖的实例不会发布给浏览器。WebGUI 收到 `plugin_catalog_changed` 后：
 
 1. 释放已加载但 revision 变化的旧模块；
-2. 从 `/api/plugins/modules/<instanceId>/client.js?rev=<revision>` 读取新模块；
+2. 从 `/api/plugins/modules/<instanceId>/<revision>/<entryPath>` 读取新模块；
 3. 新模块只可注册受控页面、设置 renderer 或状态 renderer；
 4. 新模块激活失败时重新激活上一 revision；两次激活都失败时显示错误并保留宿主恢复入口。
 
-Web entry 是浏览器直接加载的单文件 ESM。发布者应把依赖打进 `client.mjs`；当前模块 URL 不暴露相对导入的依赖树。
+Web entry 与相对 JavaScript、CSS、字体资源同属一个不可变 revision 目录；回退读取该 revision 的完整资源树。
 
 ## 验收入口
 

@@ -6,6 +6,10 @@ import {
   type TrustedWebPageRegistration
 } from "./pluginPages";
 import {
+  registerTrustedWebThemeResource,
+  type TrustedWebThemeResourceRegistration
+} from "./pluginThemes";
+import {
   registerTrustedWebSettingsRenderer,
   registerTrustedWebStatusRenderer,
   type TrustedWebSettingsRendererRegistration,
@@ -18,6 +22,7 @@ type WebPluginModuleDescriptor = Readonly<{
   pluginId: string;
   version: string;
   rev: string;
+  entryPath: string;
 }>;
 
 type WebPluginModuleRegistrationApi = Readonly<{
@@ -29,6 +34,7 @@ type WebPluginModuleRegistrationApi = Readonly<{
   registerPage(input: Omit<TrustedWebPageRegistration, "instanceId" | "pluginId">): () => void;
   registerSettingsRenderer(input: Omit<TrustedWebSettingsRendererRegistration, "instanceId" | "pluginId">): () => void;
   registerStatusRenderer(input: Omit<TrustedWebStatusRendererRegistration, "instanceId" | "pluginId">): () => void;
+  registerTheme(input: Omit<TrustedWebThemeResourceRegistration, "instanceId" | "pluginId">): () => void;
   asComponent(value: Component): Component;
 }>;
 
@@ -44,10 +50,11 @@ let syncQueue: Promise<void> = Promise.resolve();
 function validDescriptor(value: unknown): value is WebPluginModuleDescriptor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return ["id", "instanceId", "pluginId", "version", "rev"].every(key => typeof record[key] === "string")
+  return ["id", "instanceId", "pluginId", "version", "rev", "entryPath"].every(key => typeof record[key] === "string")
     && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(record.id as string)
     && record.id === record.instanceId
-    && /^[a-f0-9]{64}$/.test(record.rev as string);
+    && /^[a-f0-9]{64}$/.test(record.rev as string)
+    && /^(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(record.entryPath as string);
 }
 
 async function list(): Promise<readonly WebPluginModuleDescriptor[]> {
@@ -72,12 +79,13 @@ function registrationApi(descriptor: WebPluginModuleDescriptor): WebPluginModule
     registerPage: input => registerTrustedWebPage({ ...input, ...owner }),
     registerSettingsRenderer: input => registerTrustedWebSettingsRenderer({ ...input, ...owner }),
     registerStatusRenderer: input => registerTrustedWebStatusRenderer({ ...input, ...owner }),
+    registerTheme: input => registerTrustedWebThemeResource({ ...input, ...owner }),
     asComponent: value => value
   });
 }
 
 async function importModule(descriptor: WebPluginModuleDescriptor): Promise<WebPluginModule> {
-  const url = `/api/plugins/modules/${encodeURIComponent(descriptor.id)}/client.js?rev=${descriptor.rev}`;
+  const url = `/api/plugins/modules/${encodeURIComponent(descriptor.id)}/${descriptor.rev}/${descriptor.entryPath.split("/").map(encodeURIComponent).join("/")}`;
   return await import(/* @vite-ignore */ url) as WebPluginModule;
 }
 
