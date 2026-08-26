@@ -13,6 +13,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - The first load uses the Bundle default Profile. After the HTTP listener is ready, one asynchronous migration converts old `manager.json.managerPlugins` / `rabi.manager.builtin` data and removes the old field. Normal reconciliation then reads only Profile, Patch, and Bundle data.
 - The Web module catalog is published from the successfully reconciled runtime snapshot instead of rereading Profile on each request. Failed rollback candidates and `waiting_dependency` instances never send a new revision to the browser.
 - Bundle changes use revisions to unload the preceding Fiber, remove instance routes, drain accepted requests, and load the new version. Failed activation restores the preceding version. Web Bundles use content revisions and Manager SSE replacement, retaining the preceding usable page if replacement fails.
+- A Web Bundle entry, lazy script, CSS, and font now use relative URLs from the same revision directory; lazy loads no longer fall through to the WebGUI root. The build copies the Vite entry module itself, avoiding a dependency on a temporary minified export alias.
 - The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry instead of waiting indefinitely.
 
 ## 0.2.1 - 2026-08-25
