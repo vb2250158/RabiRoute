@@ -13,6 +13,8 @@ export default defineConfig({
       "@shared": fileURLToPath(new URL("../src/shared", import.meta.url))
     }
   },
+  // Relative URLs are required because a Bundle is served below its immutable revision URL.
+  base: "./",
   build: {
     target: "esnext",
     outDir: "dist",

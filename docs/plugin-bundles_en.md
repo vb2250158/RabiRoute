@@ -21,4 +21,6 @@ A Manager Bundle can use only the controlled host API to register HTTP routes, t
 
 The Web module catalog at `/api/plugins/modules` exposes an instance ID, package ID, version, revision, and `entryPath`. The browser loads `/api/plugins/modules/<instanceId>/<revision>/<entryPath>`; JavaScript, CSS, and font dependencies relative to that entry come from the same retained Bundle revision. After `plugin_catalog_changed`, it first runs the old disposer and then activates the new Bundle. If activation fails, it reactivates the preceding revision; only a failed rollback leaves the module unavailable. A Web Bundle can only register controlled pages, settings renderers, status renderers, and theme resources. It cannot mutate Manager internals. Rollback never depends on WebGUI static assets overwritten by a newer build.
 
+Bundle builds must use relative URLs. When an entry runs below `/api/plugins/modules/<instance>/<rev>/web/`, lazy scripts, CSS, and fonts remain in that revision directory instead of falling through to the WebGUI root or the current host static assets.
+
 A minimal working Bundle is available at [`examples/plugin-bundles/manager-echo/`](../examples/plugin-bundles/manager-echo/README_en.md).

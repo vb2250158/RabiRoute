@@ -34,12 +34,18 @@ test("base Bundle registers only the selected Manager instance contribution", ()
   assert.deepEqual(desktop.filter(item => item.kind === "settings").map(item => item.rendererId), ["builtin.desktop-settings.v1"]);
 });
 
-test("built base client module is a real Bundle entry with its revision-local module tree", () => {
-  const bundle = readFileSync(new URL("../../../plugins/packages/rabi.manager.base/0.2.1/web/client.mjs", import.meta.url), "utf8");
-  assert.match(bundle, /activate/);
-  assert.match(bundle, /RoleKnowledgePage-/);
-  assert.match(bundle, /from"\.\/routeScopedNavigation-/);
-  assert.match(bundle, /import\("\.\/RoleKnowledgePage-/);
+test("built base client uses a revision-local graph for lazy chunks", () => {
+  const webRoot = new URL("../../../plugins/packages/rabi.manager.base/0.2.1/web/", import.meta.url);
+  const client = readFileSync(new URL("client.mjs", webRoot), "utf8");
+  assert.match(client, /activate/);
+  assert.match(client, /from"\.\/rabiManagerBaseClient-/);
+
+  const implementationMatch = client.match(/from"\.\/(rabiManagerBaseClient-[^"]+\.js)"/);
+  assert.ok(implementationMatch, "Base Bundle implementation import is missing.");
+  const implementation = readFileSync(new URL(implementationMatch[1]!, webRoot), "utf8");
+  assert.match(implementation, /RoleKnowledgePage-/);
+  assert.match(implementation, /import\("\.\/RoleKnowledgePage-/);
+  // Vite preloads lazy chunks from import.meta.url below the revision, never the WebGUI root.
+  assert.match(implementation, /new URL\(e,r\)\.href/);
+  assert.doesNotMatch(implementation, /return"\/"\+\w/);
 });
-
-
