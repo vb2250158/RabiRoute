@@ -55,10 +55,10 @@ A Manager Bundle may only register instance-scoped routes, track asynchronous wo
 
 ## Web Bundle hot replacement
 
-`GET /api/plugins/modules` returns the active Web Bundle graph from the most recent successfully reconciled Manager runtime snapshot: instance ID, package ID, version, and SHA-256 revision. It does not reread Profile data on request, so failed or dependency-waiting instances are never published to the browser. After receiving `plugin_catalog_changed`, WebGUI:
+`GET /api/plugins/modules` returns the active Web Bundle graph from the most recent successfully reconciled Manager runtime snapshot. Each record aggregates one Bundle package ID, version, and SHA-256 revision; `instances` lists the active instances owned by that Bundle. It does not reread Profile data on request, so failed or dependency-waiting instances are never published to the browser. One Bundle revision is imported once even when it owns several instances, and the Bundle can register each contribution only through controlled `forInstance(instanceId)`. After receiving `plugin_catalog_changed`, WebGUI:
 
-1. disposes each loaded module whose revision changed;
-2. loads `/api/plugins/modules/<instanceId>/<revision>/<entryPath>`;
+1. disposes each loaded Bundle whose revision or instance membership changed;
+2. loads `/api/plugins/modules/<moduleId>/<revision>/<entryPath>`;
 3. permits the new module to register only controlled pages, settings renderers, or status renderers;
 4. reactivates the prior revision if new activation fails; it exposes an error and keeps the host recovery entry only when both activations fail.
 

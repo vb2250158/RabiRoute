@@ -114,15 +114,6 @@ export function handlePluginCatalogApi(
         response.setHeader("cache-control", "no-store");
         response.setHeader("x-content-type-options", "nosniff");
         response.writeHead(200, { "content-type": contentType });
-        if (extension === ".js" || extension === ".mjs") {
-          const directory = path.posix.dirname(sourcePath);
-          const base = `/api/plugins/modules/${encodeURIComponent(id)}/${rev}/${directory === "." ? "" : `${directory}/`}`;
-          const browserSource = source.toString("utf8")
-            .replace(/(["''])assets\//g, "$1")
-            .replace(/=function\(e\)\{return"\/"\+e\}/g, `=function(e){return${JSON.stringify(base)}+e}`);
-          response.end(browserSource);
-          return;
-        }
         response.end(source);
       })
       .catch(error => jsonResponse(response, (error as { code?: string }).code === "ENOENT" ? 404 : 500, {

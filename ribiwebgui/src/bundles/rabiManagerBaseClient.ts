@@ -25,6 +25,10 @@ type BaseWebBundleApi = Readonly<{
   asComponent(value: Component): Component;
 }>;
 
+type BaseWebBundleModuleApi = Readonly<{
+  instanceIds: readonly string[];
+  forInstance(instanceId: string): BaseWebBundleApi;
+}>;
 type Dispose = () => void;
 type PageInput = Omit<TrustedWebPageRegistration, "instanceId" | "pluginId">;
 
@@ -140,18 +144,21 @@ function activateDesktop(api: BaseWebBundleApi): readonly Dispose[] {
   })];
 }
 
-export function activate(api: BaseWebBundleApi): Dispose {
-  const disposers = (() => {
-    switch (api.instanceId) {
-      case "manager:core": return activateCore(api);
-      case "manager:message-adapter-control": return activateMessageAdapterControl(api);
-      case "manager:persona": return activatePersona(api);
-      case "manager:speech": return activateSpeech(api);
-      case "manager:performance": return activatePerformance(api);
-      case "manager:diagnostics": return activateDiagnostics(api);
-      case "manager:desktop": return activateDesktop(api);
-      default: return [];
-    }
-  })();
+function activateInstance(api: BaseWebBundleApi): readonly Dispose[] {
+  switch (api.instanceId) {
+    case "manager:core": return activateCore(api);
+    case "manager:message-adapter-control": return activateMessageAdapterControl(api);
+    case "manager:persona": return activatePersona(api);
+    case "manager:speech": return activateSpeech(api);
+    case "manager:performance": return activatePerformance(api);
+    case "manager:diagnostics": return activateDiagnostics(api);
+    case "manager:desktop": return activateDesktop(api);
+    default: return [];
+  }
+}
+
+/** One Web Bundle activation owns all active Manager instances in the same Bundle revision. */
+export function activate(api: BaseWebBundleModuleApi): Dispose {
+  const disposers = api.instanceIds.flatMap(instanceId => activateInstance(api.forInstance(instanceId)));
   return () => { for (const dispose of [...disposers].reverse()) dispose(); };
 }

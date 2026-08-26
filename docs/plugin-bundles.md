@@ -19,8 +19,8 @@ Profile 缺失时，首轮装载使用 `rabi.manager.base/rabi.manager.profile.j
 
 Manager Bundle 只能通过受控宿主 API 注册 HTTP 路由、跟踪异步操作、发布命名插件事件、读取有限大小 JSON 请求体和返回 JSON。宿主把每个路由固定到当前 `instanceId`，卸载时自动撤销全部路由并等待已接受请求结束。Bundle 不能取得 Manager 全局状态，也不能替换核心路由。
 
-Web Bundle 目录由 `/api/plugins/modules` 发布实例 ID、包 ID、版本、revision 和 `entryPath`。浏览器以不可变路径加载 `/api/plugins/modules/<instanceId>/<revision>/<entryPath>`；同一 revision 下的相对 JavaScript、CSS 和字体资源也从该 Bundle revision 提供。收到 `plugin_catalog_changed` 后先执行旧 disposer，再激活新 Bundle。新 Bundle 激活失败时会重新激活上一 revision；旧版也无法恢复时才报告该模块失败。Web Bundle 只能注册受控页面、设置 renderer、状态 renderer 和主题资源，不能直接改 Manager 内部状态。旧 revision 保留的资源树与 `client.mjs` 一起读取，因此回退不会依赖会被下一次 WebGUI 构建覆盖的宿主静态资源。
+Web Bundle 目录由 `/api/plugins/modules` 按 Bundle 包 ID、版本和 revision 发布；同一个 revision 即使服务多个 Manager 实例，浏览器也只加载一次入口。模块记录里的 `instances` 是该 Bundle 当前拥有的实例，Bundle 通过受控 `forInstance(instanceId)` API 分别注册它们的页面、设置 renderer、状态 renderer 和主题资源。浏览器以不可变路径加载 `/api/plugins/modules/<moduleId>/<revision>/<entryPath>`；同一 revision 下的相对 JavaScript、CSS 和字体资源也从该 Bundle revision 提供。收到 `plugin_catalog_changed` 后，revision 或 `instances` 集合变化都会先执行旧 disposer，再激活新 Bundle。新 Bundle 激活失败时会重新激活上一 revision；旧版也无法恢复时才报告该模块失败。旧 revision 保留的资源树与 `client.mjs` 一起读取，因此回退不会依赖会被下一次 WebGUI 构建覆盖的宿主静态资源。
 
-Bundle 构建必须使用相对 URL。入口运行在 `/api/plugins/modules/<instance>/<rev>/web/` 时，懒加载脚本、CSS 和字体继续从这个 revision 目录读取，不会绕回 WebGUI 根路径或当前宿主静态资源。
+Bundle 构建必须使用相对 URL。入口运行在 `/api/plugins/modules/<moduleId>/<rev>/web/` 时，懒加载脚本、CSS 和字体继续从这个 revision 目录读取，不会绕回 WebGUI 根路径或当前宿主静态资源。
 
 最小可运行 Bundle 在 [`examples/plugin-bundles/manager-echo/`](../examples/plugin-bundles/manager-echo/README.md)。

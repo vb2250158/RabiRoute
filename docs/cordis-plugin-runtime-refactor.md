@@ -55,10 +55,10 @@ Manager Bundle 只能注册本实例路由、跟踪异步操作、发布命名�
 
 ## Web Bundle 热替换
 
-`GET /api/plugins/modules` 从最近一次成功完成的 Manager runtime snapshot 返回 active Web Bundle 的实例 ID、包 ID、版本与 SHA-256 revision。它不在请求时重读 Profile；失败或等待依赖的实例不会发布给浏览器。WebGUI 收到 `plugin_catalog_changed` 后：
+`GET /api/plugins/modules` 从最近一次成功完成的 Manager runtime snapshot 返回 active Web Bundle 图：每条记录按 Bundle 包 ID、版本和 SHA-256 revision 聚合，`instances` 列出该 Bundle 当前拥有的实例。它不在请求时重读 Profile；失败或等待依赖的实例不会发布给浏览器。同一 Bundle revision 即使拥有多个实例，浏览器也只 import 一次；Bundle 只能通过受控 `forInstance(instanceId)` 为每个实例登记贡献。WebGUI 收到 `plugin_catalog_changed` 后：
 
-1. 释放已加载但 revision 变化的旧模块；
-2. 从 `/api/plugins/modules/<instanceId>/<revision>/<entryPath>` 读取新模块；
+1. 释放 revision 或实例集合变化的旧 Bundle；
+2. 从 `/api/plugins/modules/<moduleId>/<revision>/<entryPath>` 读取新模块；
 3. 新模块只可注册受控页面、设置 renderer 或状态 renderer；
 4. 新模块激活失败时重新激活上一 revision；两次激活都失败时显示错误并保留宿主恢复入口。
 

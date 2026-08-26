@@ -16,17 +16,20 @@ import {
   type TrustedWebStatusRendererRegistration
 } from "./pluginRenderers";
 
+type WebPluginModuleInstanceDescriptor = Readonly<{
+  instanceId: string;
+}>;
+
 type WebPluginModuleDescriptor = Readonly<{
   id: string;
-  instanceId: string;
   pluginId: string;
   version: string;
   rev: string;
   entryPath: string;
+  instances: readonly WebPluginModuleInstanceDescriptor[];
 }>;
 
-type WebPluginModuleRegistrationApi = Readonly<{
-  id: string;
+type WebPluginInstanceRegistrationApi = Readonly<{
   instanceId: string;
   pluginId: string;
   version: string;
@@ -38,6 +41,15 @@ type WebPluginModuleRegistrationApi = Readonly<{
   asComponent(value: Component): Component;
 }>;
 
+type WebPluginModuleRegistrationApi = Readonly<{
+  id: string;
+  pluginId: string;
+  version: string;
+  instanceIds: readonly string[];
+  h: typeof h;
+  forInstance(instanceId: string): WebPluginInstanceRegistrationApi;
+}>;
+
 type WebPluginModule = Readonly<{
   activate?: (api: WebPluginModuleRegistrationApi) => void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
 }>;
@@ -47,14 +59,33 @@ type ActiveModule = Readonly<{ descriptor: WebPluginModuleDescriptor; dispose: (
 const active = new Map<string, ActiveModule>();
 let syncQueue: Promise<void> = Promise.resolve();
 
+function validInstance(value: unknown): value is WebPluginModuleInstanceDescriptor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const instanceId = (value as Record<string, unknown>).instanceId;
+  return typeof instanceId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(instanceId);
+}
+
 function validDescriptor(value: unknown): value is WebPluginModuleDescriptor {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return ["id", "instanceId", "pluginId", "version", "rev", "entryPath"].every(key => typeof record[key] === "string")
+  if (!(["id", "pluginId", "version", "rev", "entryPath"].every(key => typeof record[key] === "string")
     && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(record.id as string)
-    && record.id === record.instanceId
     && /^[a-f0-9]{64}$/.test(record.rev as string)
-    && /^(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(record.entryPath as string);
+    && /^(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(record.entryPath as string)
+    && Array.isArray(record.instances)
+    && record.instances.length > 0
+    && record.instances.every(validInstance))) return false;
+  return new Set(record.instances.map(item => (item as WebPluginModuleInstanceDescriptor).instanceId)).size === record.instances.length;
+}
+
+/** Instance membership changes require a full Bundle disposer/activation even when its revision is unchanged. */
+export function sameWebPluginModuleInstances(
+  left: readonly WebPluginModuleInstanceDescriptor[],
+  right: readonly WebPluginModuleInstanceDescriptor[]
+): boolean {
+  if (left.length !== right.length) return false;
+  const leftIds = new Set(left.map(instance => instance.instanceId));
+  return leftIds.size === right.length && right.every(instance => leftIds.has(instance.instanceId));
 }
 
 async function list(): Promise<readonly WebPluginModuleDescriptor[]> {
@@ -69,10 +100,12 @@ async function list(): Promise<readonly WebPluginModuleDescriptor[]> {
   return Object.freeze([...modules].sort((left, right) => left.id.localeCompare(right.id)));
 }
 
-function registrationApi(descriptor: WebPluginModuleDescriptor): WebPluginModuleRegistrationApi {
-  const owner = { instanceId: descriptor.instanceId, pluginId: descriptor.pluginId };
+function instanceRegistrationApi(
+  descriptor: WebPluginModuleDescriptor,
+  instanceId: string
+): WebPluginInstanceRegistrationApi {
+  const owner = { instanceId, pluginId: descriptor.pluginId };
   return Object.freeze({
-    id: descriptor.id,
     ...owner,
     version: descriptor.version,
     h,
@@ -81,6 +114,26 @@ function registrationApi(descriptor: WebPluginModuleDescriptor): WebPluginModule
     registerStatusRenderer: input => registerTrustedWebStatusRenderer({ ...input, ...owner }),
     registerTheme: input => registerTrustedWebThemeResource({ ...input, ...owner }),
     asComponent: value => value
+  });
+}
+
+function registrationApi(descriptor: WebPluginModuleDescriptor): WebPluginModuleRegistrationApi {
+  const instances = new Map(descriptor.instances.map(instance => [
+    instance.instanceId,
+    instanceRegistrationApi(descriptor, instance.instanceId)
+  ]));
+  const instanceIds = Object.freeze([...instances.keys()]);
+  return Object.freeze({
+    id: descriptor.id,
+    pluginId: descriptor.pluginId,
+    version: descriptor.version,
+    instanceIds,
+    h,
+    forInstance(instanceId: string): WebPluginInstanceRegistrationApi {
+      const api = instances.get(instanceId);
+      if (!api) throw new Error(`Web Bundle does not own Manager instance: ${instanceId}.`);
+      return api;
+    }
   });
 }
 
@@ -105,7 +158,9 @@ async function syncNow(): Promise<void> {
   const desiredById = new Map(desired.map(item => [item.id, item]));
   for (const [id, loaded] of [...active]) {
     const target = desiredById.get(id);
-    if (target && target.rev === loaded.descriptor.rev) continue;
+    if (target
+      && target.rev === loaded.descriptor.rev
+      && sameWebPluginModuleInstances(target.instances, loaded.descriptor.instances)) continue;
     const endReplacement = beginTrustedWebPageReplacement();
     try {
       await dispose(loaded);

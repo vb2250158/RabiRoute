@@ -7,6 +7,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### Plan archive consistency
+
+- Moving a completed plan to archived now clears `currentStepId`; an archived record no longer retains a current-step pointer that is valid only for in-progress or paused plans.
+
 ### Manager plugin Bundles and hot replacement
 
 - The `rabi.manager.base` Bundle now directly owns the 26 built-in definitions, dependencies, presentation contributions, and default Profile. Manager no longer creates a definition for the Bundle. Only the matching base-Bundle instance receives the constrained capability to activate Manager-owned resources; external Bundles still receive the general controlled API only.
@@ -14,6 +18,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - The Web module catalog is published from the successfully reconciled runtime snapshot instead of rereading Profile on each request. Failed rollback candidates and `waiting_dependency` instances never send a new revision to the browser.
 - Bundle changes use revisions to unload the preceding Fiber, remove instance routes, drain accepted requests, and load the new version. Failed activation restores the preceding version. Web Bundles use content revisions and Manager SSE replacement, retaining the preceding usable page if replacement fails.
 - A Web Bundle entry, lazy script, CSS, and font now use relative URLs from the same revision directory; lazy loads no longer fall through to the WebGUI root. The build copies the Vite entry module itself, avoiding a dependency on a temporary minified export alias.
+- The Web Bundle graph now aggregates by package ID, version, and revision. The 26 instances of one `rabi.manager.base@0.2.1` revision download and initialize once. An enable or disable change that alters `instances` disposes and reactivates the Bundle so disabled instances cannot leave pages or renderers behind. Manager serves immutable revision files as their original bytes and no longer rewrites built JavaScript.
 - The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry instead of waiting indefinitely.
 
 ## 0.2.1 - 2026-08-25

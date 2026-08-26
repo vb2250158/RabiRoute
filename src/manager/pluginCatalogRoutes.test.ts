@@ -188,10 +188,20 @@ test("Plugin module API lists and serves only the matching immutable revision", 
     if (!handlePluginCatalogApi(request, url, response, {
       runtime,
       webModules: {
-        list: async () => [{ id: "manager:example", instanceId: "manager:example", pluginId: "example.web", version: "1.0.0", rev, entryPath: "client.mjs" }],
+        list: async () => [{
+          id: "web-example", pluginId: "example.web", version: "1.0.0", rev, entryPath: "client.mjs",
+          instances: [{ instanceId: "manager:example-a" }, { instanceId: "manager:example-b" }]
+        }],
         read: async (id, requestedRev, relativePath) => {
-          if (id !== "manager:example" || requestedRev !== rev || relativePath !== "client.mjs") throw Object.assign(new Error("missing"), { code: "ENOENT" });
-          return { module: { id, instanceId: id, pluginId: "example.web", version: "1.0.0", rev, entryPath: "client.mjs" }, path: "client.mjs", source: Buffer.from("export const version = '1.0.0';") };
+          if (id !== "web-example" || requestedRev !== rev || relativePath !== "client.mjs") throw Object.assign(new Error("missing"), { code: "ENOENT" });
+          return {
+            module: {
+              id, pluginId: "example.web", version: "1.0.0", rev, entryPath: "client.mjs",
+              instances: [{ instanceId: "manager:example-a" }, { instanceId: "manager:example-b" }]
+            },
+            path: "client.mjs",
+            source: Buffer.from('const asset = function(e){return"/"+e}; export const version = "1.0.0";')
+          };
         }
       }
     })) { response.writeHead(404); response.end(); }
@@ -203,13 +213,16 @@ test("Plugin module API lists and serves only the matching immutable revision", 
   try {
     const catalog = await fetch(baseUrl + "/api/plugins/modules");
     assert.equal(catalog.status, 200);
-    const listed = await catalog.json() as { data: { modules: Array<{ id: string; rev: string }> } };
-    assert.deepEqual(listed.data.modules, [{ id: "manager:example", instanceId: "manager:example", pluginId: "example.web", version: "1.0.0", rev, entryPath: "client.mjs" }]);
-    const bundle = await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("manager:example")}/${rev}/client.mjs`);
+    const listed = await catalog.json() as { data: { modules: Array<{ id: string; rev: string; instances: Array<{ instanceId: string }> }> } };
+    assert.deepEqual(listed.data.modules, [{
+      id: "web-example", pluginId: "example.web", version: "1.0.0", rev, entryPath: "client.mjs",
+      instances: [{ instanceId: "manager:example-a" }, { instanceId: "manager:example-b" }]
+    }]);
+    const bundle = await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("web-example")}/${rev}/client.mjs`);
     assert.equal(bundle.status, 200);
     assert.equal(bundle.headers.get("cache-control"), "no-store");
-    assert.match(await bundle.text(), /version/);
-    assert.equal((await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("manager:example")}/${"b".repeat(64)}/client.mjs`)).status, 404);
+    assert.equal(await bundle.text(), 'const asset = function(e){return"/"+e}; export const version = "1.0.0";');
+    assert.equal((await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("web-example")}/${"b".repeat(64)}/client.mjs`)).status, 404);
   } finally {
     await runtime.unmount();
     await host.dispose();

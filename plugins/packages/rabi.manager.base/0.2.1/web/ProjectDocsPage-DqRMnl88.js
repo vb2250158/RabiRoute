@@ -1,4 +1,4 @@
-import{m as Z}from"./marked.esm-D2OCE8en.js";import{a as ee,u as ne}from"./vue-router-CdIg99BM.js";import{u as te}from"./index-CsRbdOjO.js";import{l as re,y as D,M as W,N as u,Q as p,v as s,U as i,n as k,P as U,S as N,F as R,R as A,o as E,T as ae,h as O,k as g,L as oe}from"./runtime-core.esm-bundler-DYja7TDp.js";import{_ as se}from"./_plugin-vue_export-helper-DlAUqK2U.js";const ie=`<!-- docs-language-switch -->\r
+import{m as Z}from"./marked.esm-D2OCE8en.js";import{a as ee,u as ne}from"./vue-router-CdIg99BM.js";import{u as re}from"./index-CsRbdOjO.js";import{l as te,y as D,M as W,N as u,Q as p,v as s,U as i,n as k,P as U,S as N,F as R,R as A,o as E,T as ae,h as O,k as g,L as oe}from"./runtime-core.esm-bundler-DYja7TDp.js";import{_ as se}from"./_plugin-vue_export-helper-DlAUqK2U.js";const ie=`<!-- docs-language-switch -->\r
 <div align="center">\r
 <a href="./README_en.md">English</a> | 简体中文\r
 </div>\r
@@ -35,9 +35,9 @@ RabiRoute 是消息分诊和调度层。它接收消息、记录事件、判断�
 4. 人格可以先留空，保存配置。\r
 5. 到“日志诊断”手动触发一次并确认任务收到消息。\r
 \r
-完整步骤见[跑通第一条 Route](first-route.md)。需要接 QQ 时，再阅读[Route 与消息端](routes-and-adapters.md)。
-
-实际使用时，先确认顶栏显示“Manager 已连接”，再保存并启动自己的 Route。
+完整步骤见[跑通第一条 Route](first-route.md)。需要接 QQ 时，再阅读[Route 与消息端](routes-and-adapters.md)。\r
+\r
+实际使用时，先确认顶栏显示“Manager 已连接”，再保存并启动自己的 Route。\r
 \r
 ## 按目标找文档\r
 \r
@@ -106,9 +106,9 @@ To prove that the software works, start with Heartbeat and Codex. This path does
 4. Leave the persona empty for now, then save.\r
 5. Open Log diagnostics, trigger one message, and confirm that the task receives it.\r
 \r
-See [Run your first Route](first-route_en.md) for the full procedure. When you are ready for QQ, continue with [Routes and message adapters](routes-and-adapters_en.md).
-
-In normal use, confirm **Manager connected**, then save and start your own Route.
+See [Run your first Route](first-route_en.md) for the full procedure. When you are ready for QQ, continue with [Routes and message adapters](routes-and-adapters_en.md).\r
+\r
+In normal use, confirm **Manager connected**, then save and start your own Route.\r
 \r
 ## Find a guide by goal\r
 \r
@@ -612,7 +612,7 @@ RabiRoute 内部保存完整任务 ID。任务在 Desktop 中改名或完成 goa
 \r
 ## 第 3 步：确认人格\r
 \r
-人格可以先使用已有示例，也可以留空。无人格 Route 会生成基础规则；有明确角色行为需求时，再进入“人格配置”编辑正文和规则。
+人格可以先使用已有示例，也可以留空。无人格 Route 会生成基础规则；有明确角色行为需求时，再进入“人格配置”编辑正文和规则。\r
 \r
 点击“保存配置”。保存会写入本地 Route 配置，并可能启动或重载当前 Route。\r
 \r
@@ -718,7 +718,7 @@ RabiRoute stores the complete task ID. A Desktop rename or completed goal does n
 \r
 ## Step 3: confirm the persona\r
 \r
-Use an existing example persona or leave the field empty. A persona-free Route receives basic rules; when you need role-specific behavior, open **Persona Configuration** to edit its document and rules.
+Use an existing example persona or leave the field empty. A persona-free Route receives basic rules; when you need role-specific behavior, open **Persona Configuration** to edit its document and rules.\r
 \r
 Select **Save configuration**. Saving writes local Route configuration and may start or reload the current Route.\r
 \r
@@ -772,190 +772,190 @@ For the full sequence, see [Operations, logs, and troubleshooting](operations-an
 - Add QQ: [Routes and message adapters](routes-and-adapters_en.md).\r
 - Bind messages to the correct project task: [Agents, projects, and tasks](agents-and-sessions_en.md).\r
 - Configure group, private, or scheduled rules: [Personas and message rules](personas-and-rules_en.md).\r
-`,me=`<!-- docs-language-switch -->
-<div align="center">
-<a href="./interface-and-status_en.md">English</a> | 简体中文
-</div>
-<!-- /docs-language-switch -->
-
-# 界面与状态
-
-RibiWebGUI 是 RabiRoute 的本地控制台。它负责展示和编辑配置、调用 Manager 动作并呈现诊断结果，但配置事实最终保存在本地文件和运行状态中。
-
-## 从局域网访问 WebGUI
-
-Rabi PC 上的 Manager 就是 RibiWebGUI 的完整 HTTP 后端。默认地址 \`http://127.0.0.1:8790/\` 只允许本机使用；另一台设备上的 \`127.0.0.1\` 指向那台设备自己，不会指向 Rabi PC。
-
-在 Rabi PC 本机打开“控制台 → 目录配置 → 局域网访问 WebGUI”，开启访问并生成密钥。重启 Manager 后，若仍从本机 \`localhost/127.0.0.1\` 打开 WebGUI，页面会自动重定向到优先局域网 IP，并保留当前 Route、页面和认证；也可以复制页面给出的链接，例如：
-
-局域网 HTTP 页面可能没有浏览器的安全剪贴板权限。控制台的复制链接、复制密钥和其它 WebGUI 复制按钮会先使用 Clipboard API，权限不可用时自动回退到页面内复制；只有两种机制都被浏览器拒绝时，才提示手动选择文本复制。
-
-\`\`\`text
-http://192.168.0.57:8790/#/routes/<Route配置名>/overview?webgui_token=<访问密钥>
-\`\`\`
-
-左侧“当前路由”是唯一选择源。控制台、消息适配器、人格配置、计划与记忆、语音服务和日志诊断都使用 \`#/routes/<Route配置名>/<页面>\`；对应页面依次为 \`overview\`、\`adapters\`、\`persona\`、\`knowledge\`、\`speech\`、\`runtime\`。切换当前 Route 会保留页面类型并立即重定向 URL。“性能监控”和“设置”是本机全局页面，不随当前 Route 改变。若要直接打开该 Route 的“计划与记忆”，使用同一个 Route 配置名和 \`knowledge\` 页面，或点击“复制 Route 知识库链接”：
-
-点击左侧任一页面标签时，WebGUI 会先更新选中状态、顶部标题和 URL，并立即显示“页面已切换，正在加载内容”。控制台、消息适配器、人格配置、计划与记忆、语音服务、性能监控、日志诊断和设置的页面代码与数据随后异步加载，不会等待完整页面准备好才切换标签。页面代码加载失败时会自动刷新一次并恢复当前目标页面。
-
-\`\`\`text
-http://192.168.0.57:8790/#/routes/<Route配置名>/knowledge?webgui_token=<访问密钥>
-\`\`\`
-
-Route 配置名会进行 URL 编码。打开任一 Route 作用域链接后，页面会先选中该 Route；切换左侧 Route 时，当前浏览器会话的地址会同步为新 Route 的同类页面路径。需要收藏、重新打开或发送给同一局域网中的已授权设备时，应使用包含访问密钥的完整链接，不要直接复制已经自动移除密钥的地址栏。
-
-WebGUI 会把 URL 中的密钥保存到当前浏览器会话，自动用于 HTTP、SSE 和人格头像请求，并从地址栏移除，避免后续截图继续暴露。轮换密钥会立即使旧链接失效；开关和密钥只能由运行 Manager 的 Rabi PC 本机管理，自动重定向后的本机局域网地址仍可管理，其他设备不可以。若链接超时，先确认 Manager 已重启，再检查 Windows 防火墙的专用/域网络是否允许 RabiRoute 或 Node.js 监听 TCP \`8790\`。不要把链接发送到公开群聊、日志或仓库。
-
-Rabi PC 本机通过自己的局域网 IP 访问时仍按本机请求处理，因此开启局域网访问不会让同一台电脑上的消息发送、托盘或本地工具额外要求 WebGUI 密钥。其他设备仍必须使用带有效密钥的完整链接。
-
-## 通过 RabiLink 远程访问 WebGUI
-
-若 Rabi PC 已开启全局 RabiLink Relay 连接，并在 Relay 管理后台属于当前账号，可先登录 \`https://rabiroute.cottongame.com/manage\`，再打开：
-
-\`\`\`text
-https://rabiroute.cottongame.com/manage/<账号>/<RabiGUID>/#/routes/<Route配置名>/knowledge
-\`\`\`
-
-远程入口使用同一组 Route 页面名；可把末尾 \`knowledge\` 替换为 \`overview\`、\`adapters\`、\`persona\`、\`speech\` 或 \`runtime\`。设置使用本机全局路径 \`#/settings\`，性能监控使用本机全局路径 \`/performance\`。
-
-也可以把最后页面换成 \`overview\` 或其他 WebGUI 路由。远程入口不使用局域网 \`webgui_token\`，而使用浏览器的 Relay 管理登录 Cookie；PC worker 另用应用 token 与 Relay 通讯。普通 API、图片、附件、音频、文件下载和视频按字节播放都会回到目标 PC 的本机 Manager，Manager 事件也会经远程 SSE 实时刷新。若页面壳能打开但数据、附件或状态不更新，先确认 Relay 中目标 PC 在线、RabiGUID 正确，并确认服务器脚本和 \`ribiwebgui/dist\` 已同时发布；只重启本机 Manager 不会更新公网 Relay 代码。
-
-## 先认清主要页面
-
-| 区域 | 主要用途 | 常见动作 |
-| --- | --- | --- |
-| 控制台 | 查看和操作各个 Route | 新增、启用、重启、删除 Route |
-| 消息适配器 | 配置消息入口和 Agent 处理端 | 扫描、添加、连接、绑定任务 |
-| 人格配置 | 管理人格、路由变量和消息规则 | 新增规则、编辑正则和定时计划 |
-| 计划与记忆 | 查看当前人格的计划、近期记忆、沉淀记忆和审批记录 | 搜索、展开步骤、核对执行合同、为需要审批的步骤提交意见、刷新 Manager 数据 |
-| 语音服务 | 管理本机 TTS、ASR、麦克风和播放 | 查看状态、调整参数、测试语音 |
-| 性能监控 | 查看 Manager、Route 和语音服务的运行指标 | 查看实时状态和历史记录 |
-| 日志诊断 | 定位链路断点并执行真实测试 | 启停、重启、手动触发、看日志 |
-| 设置 | 管理本机身份、RabiLink、目录、局域网访问和桌面入口 | 配置截图、滑词菜单、登录启动、访问密钥和访问链接 |
-| 使用手册 | 按任务阅读软件使用说明 | 搜索、切换章节、打开深入资料 |
-
-进入“计划与记忆”后，页面先请求首批 8 条轻量计划摘要，并行补齐首两张可见卡片的完整详情后再显示卡片，因此首屏不会先停在“正在加载计划详情…”；随后无需滚动，页面会按每批最多 50 条自动补齐当前分类的全部计划摘要，并按每批最多 100 条自动补齐当前可见的记忆分类。页面持续显示已加载数量与总数；标签页不可见时暂停这些后台请求，重新显示后重新读取并继续补齐。左侧目录保留全部已返回标题，右侧正文只先挂载 8 张计划卡和 24 张记忆卡，再随滚动分批追加；点击尚未挂载的目录项时会从目标计划开始创建一个有界的向后窗口，并把该计划的详情放到最高优先级，当前 Manager 与局域网环境以 1 秒内显示详情为交互预算。页面不会一次创建目标前面的几十张正文卡；向下滚动会继续加载后面的计划，向上滚动会分批补回目标前面的计划，并保持当前卡片的页面位置。其余正文、步骤、审批与附件元数据只在卡片真正接近视口时按需加载，每轮只提升最近的 2 张且最多 2 个并发请求；下一批摘要只让出一个渲染帧，不等待正文详情加载完成，因此目录补齐不会被重卡片或附件拖慢。只有已经发出详情请求的卡片显示加载动画，尚未进入视口的卡片使用紧凑提示，不再为全部计划同时创建大型骨架；离屏计划卡由浏览器跳过布局和绘制。图片和视频在媒体就绪前显示浅色“附件加载中”占位，不会以纯黑块占住页面。
-
-页面只在用户展开计划详情时读取该计划所绑定任务 Agent 的 Codex Desktop 状态；页面刷新后也只补查仍保持展开的计划，不再为全部计划发起状态扫描。单次等待最多 3 秒，同一轮不会重复请求同一个计划。展开详情可查看任务 Agent、已启用时的协助秘书、各自的工作状态和 Codex 会话任务状态；会话不存在时单独显示“会话任务 Agent 已丢失”。非工作中且绑定有效的任务可从卡片或 Agent 行在 Codex 中定位并唤醒；该动作只打开精确的任务 ID，不新建任务，也不发送消息。
-
-计划卡片的分类、状态、状态色板、排序和审批说明都由 Manager 返回。RibiWebGUI 顶部从左到右显示“当前计划 / 近期记忆 / 沉淀记忆 / 已归档”四个标签：“当前计划”展示未归档计划；“近期记忆”只展示尚未沉淀的记忆；“沉淀记忆”展示整理后仍可召回的稳定记忆；“已归档”同时展示归档计划和已经作为沉淀输入的来源记忆。RibiWebGUI 与 Qt 托盘继续使用 Manager 返回的同一套卡片强调色和状态徽标颜色。RibiWebGUI 会在计划标题下显示与标题不同的 \`focus\` 计划描述；旧计划用标题回填 \`focus\` 时不会重复显示。多条计划之间使用中性底色间隔和独立描边形成清晰的工作项边界；卡片不显示会随排序和筛选变化的动态序号，内部再按“问题标题与描述 → 当前步骤与时间 → 展开后的完整执行计划”建立三级层级，避免相邻计划和计划内步骤落在同一视觉平面。没有进入审批的进行中计划在展开详情顶部显示计划级引导，输入只关联 \`planId\`，Agent 可据此调整整个计划和尚未开始的步骤。展开后的进行中步骤只显示 Manager 记录的开始时间，已完成步骤只显示完成时间，未开始步骤不显示时间。计划面板外侧提供粘性悬浮的计划目录，只列出当前页签与搜索条件下可见的计划；每行左侧直接显示去掉开头连续 \`[...]\` 分类前缀的精简标题，右侧只显示一个与当前排序方式对应的标签。时间排序显示相对更新时间；状态、重要程度和紧急程度使用 Manager 返回的整数等级，并分别映射文字和颜色。重要程度从“最高”到“低”排列，未设置排在最后；紧急程度从“紧急”到“低”排列，未设置排在最后。目录标题右侧显示当前结果数；右上角按钮打开名为“列表排序与筛选”的独立模态对话框。用户点击“完成”后，WebGUI 才把排序和筛选参数交给 Manager，由 Manager 在分页前处理，目录与右侧计划卡片始终使用同一结果和顺序。目录自身可滚动，点击标题会平滑定位并聚焦右侧正常页面流中的对应计划卡片；计划卡片仍保留完整原始标题。窄屏下目录移到计划面板上方，计划卡片内部不增加目录。审批合同直接展开在 Manager 指定的对应步骤卡片内，并列出完整审批材料与回执。用户意见、Agent 回复和系统记录按时间从旧到新纵向排列，每条独立占位；新回复不会替换先前意见，新的反馈输入框始终位于记录列表下方。信息不完整时页面标记“审批资料不完整/禁止审批”，审批输入、附件和提交全部禁用；补齐为 \`ready/enabled=true\` 后才允许提交审批决定。已启用时，反馈可以选择普通文件，也可以先复制图片，再在输入框中按 \`Ctrl+V\` 将图片作为附件粘贴；页面会显示图片缩略图或文件卡片，并允许提交前删除。最多 8 个附件，单个不超过 10 MiB、总计不超过 25 MiB。填写意见后可按 \`Enter\` 直接提交，\`Shift+Enter\` 保留换行；中文输入法确认候选词的回车不会误提交。点击或按键提交后，意见落盘即结束按钮加载，Agent 通知在后台继续；终态只刷新当前卡片，失败时恢复原意见与附件供重试，不再整页重载计划与记忆。
-
-当前步骤摘要会在步骤标题下直接显示该步骤的 \`detail\` 描述，用户无需展开完整执行计划即可看到本步要做什么。步骤没有描述时不显示空白占位。
-
-目录不会产生整个面板的水平滚动。右侧排序标签固定不动，左侧标题在溢出时于鼠标悬停或键盘聚焦后匀速往返滚动；减少动态效果的系统偏好会关闭标题滚动。列表弹窗里的选择只是草稿，关闭弹窗不会改变列表；点击“完成”后，页面关闭弹窗并立即重新调用整个计划列表，排序、筛选、目录和内容卡片一次更新。
-
-筛选弹窗同时提供状态和计划 \`keywords\` 标签。两个分组都可多选：同组匹配任一项，计划需要同时满足状态组和标签组。标签较多时可在弹窗内搜索；按钮和结果摘要显示当前筛选数量，并提供分组清除与一键清除。窄屏下两个筛选组改为单栏，复选项和操作按钮保持至少 44px 操作区。
-
-直接进入“计划与记忆”页面时，页面会并行读取记忆数量，因此“近期记忆”“沉淀记忆”和“已归档”的数字不需要等用户切换标签后才出现。近期记忆卡片显示“记录时间”和“上次命中召回”两个时间；从未被消息真正命中过的记忆显示“尚未命中召回”。已归档来源记忆显示记录时间和归档时间。记忆正文按 Markdown 显示，可混排标题、列表、代码、链接和 HTTP(S) 图片；本机绝对路径与危险协议不会加载。单张记忆卡片最高 512px，超出的正文在卡片内裁剪，不出现卡片内滚动条；点击“查看详情”可在独立窗口阅读完整内容。当最不活跃的记忆距离 72 小时触发点不足 24 小时时，记忆列表上方出现独立的“近期记忆沉淀”区域，显示剩余时间、将触发的记忆和预计进入本次沉淀的数量。会进入本次沉淀的卡片带有标记。倒计时到 0 后，Manager 会自动创建并投递本批沉淀任务，无需保持这个页面打开。本轮候选固定为原始 72 小时触发时已经超过 24 小时的记忆，晚执行不会追加后来才跨过边界的条目；候选结果由 Manager 动态给出，页面不会把普通查看当成召回，也不会自行推算候选范围。
-
-计划本体也可以由 Agent 在创建或更新计划时附带图片、视频或普通文件，包括待审批计划已经产出的效果图、演示视频、设计稿、报告或补丁。图片、视频和 Markdown 在计划描述下方统一使用紧凑的固定宽度 16:9 预览卡片，只有容器更窄时才等比缩小。Markdown 卡片会安全读取文档开头并显示截断的纯文本简短预览，卡片内不会执行 HTML、打开链接或加载图片；点击后才在页内以文档样式预览标题、列表、表格、引用和代码块，并保留原文件下载入口。视频缩略图在未悬停、未选中时也会常驻显示播放图标，并由浏览器读取媒体 metadata 后在右下角显示 \`m:ss\` 或 \`h:mm:ss\` 时长。点击图片在当前页面打开大图，点击视频打开带播放控制的页内预览。单个 Markdown 超过 2 MiB 时只提供下载，避免浏览器因超长文档卡顿。完整文档预览会转义原始 HTML、禁用危险或相对链接，并把远程图片显示为文本占位，不从附件内容自动加载第三方资源。支持识别 PNG、JPEG、WebP、GIF 与 MP4/M4V、WebM、Ogg Video、MOV/QuickTime，视频的实际解码能力取决于浏览器。其它文件显示文件名、类型与大小，点击后由 Manager 打开或下载。浏览器不会直接读取计划记录中的本机路径，所有附件都经过受控 Manager 接口；局域网 WebGUI 会把当前会话密钥自动附加到缩略图、媒体预览和文件链接。
-
-RabiLink 远程 WebGUI 会自动为缩略图、媒体预览和文件链接保留 \`/manage/<账号>/<RabiGUID>\` 前缀，并为视频转发字节范围请求；不需要也不应在远程 URL 中添加局域网 \`webgui_token\`。
-
-Agent 处理意见后会先更新计划，再把说明作为 \`approval_response\` 直接显示在该计划记录中；Codex 任务只保留简短处理状态，不作为回复正文的交付位置。
-
-先用左侧选择当前 Route，再看顶栏的 Manager 连接状态。Route 是否正在运行，要以控制台或日志诊断里的运行状态为准。
-
-“计划与记忆”页不直接读取 \`data/\`，也不在浏览器里重新解释分类、状态颜色或合同完整性。Manager 返回计划的状态整数等级、重要程度整数等级、紧急程度整数等级、各自文字和色板、\`counts.stages\` 及审批状态；默认顺序也由 Manager 决定。用户在列表菜单选择排序或筛选时，浏览器只提交参数。时间排序使用 \`updatedAt\`；其余三种排序都比较 Manager 返回的整数等级。没有进入审批步骤的进行中计划在展开详情后提供“计划引导”：输入针对整个计划，不绑定某一步；Agent 会根据引导继续推进，并在需要时调整尚未开始的步骤。进入审批状态后只显示对应步骤里的审批入口，不同时开放计划引导。计划引导和审批输入都支持用 \`@\` 引用计划附件，并共享键盘提交、附件选择、粘贴、预览和删除操作。未终态计划只显示绿色“进行中”、蓝色“等待打包”、紫色“等待 QA”、灰色“暂停”、红色“待审批”、橙色“待人工核验”；暂停绝对排在最后。外部资料、账号、设备、owner、授权和回执等原因只保留在计划详情中。
-
-等待审批、方案确认或授权时，当前步骤写入完整的 \`approvalRequest\`。只有合同完整、可提交且 \`responseStatus=pending\` 时，Manager 才显示红色“待审批”，并同时开放审批入口。审批资料缺项时计划仍显示绿色“进行中”，由 Agent 继续调查和补齐。会改变交付内容的计划只有在适用同步、SVN 提交和无冲突回读完成后才显示蓝色“等待打包”；目标包完成并证明纳入后显示紫色“等待 QA”。开发闭环后只剩人工视觉或交互确认的 \`manual-verify-*\` 步骤显示橙色“待人工核验”。完全没有安全动作时显示灰色“暂停”，具体缺口继续保存在 \`waitingFor\`。
-
-“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA 验收 → QA 通过完成；QA 失败回实施”只用于代码、Prefab、资源、配置等会改变项目内容的计划。调查、设计评审、运营、资料收集、外部依赖与控制面维护继续显示自身真实步骤和等待原因，不会为了凑流程被塞入打包或 QA 阶段。
-
-工作群中的“已认领”只表示 Agent 已通过引用消息公开接手。计划与记忆中出现对应工作项，还要求后台完成受管登记：源消息、有效认领回执、唯一计划、唯一正式任务、两轮查重和三方 workspace 必须一致。认领成功但登记失败时，不能把它当成已经进入计划闭环。
-
-长计划列表保持正常页面滚动，只有外侧计划目录限制在视口高度内独立滚动。滚动右侧计划时，页面使用浏览器可见性观察更新目录中的当前阅读项；只有高亮项离开目录自身的可见区域时才调整目录滚动，不对整页滚动执行持续的全列表扫描。点击目录跳转时会暂时锁定所选高亮，平滑滚动结束后再恢复当前阅读项观察，避免沿途计划让目录光标连续跳动。计划分类、搜索和刷新工具栏在桌面宽度下会吸附在固定顶栏下方；目录跳转为卡片标题预留工具栏高度，不会把定位目标遮住。窄屏下工具栏恢复普通页面流，避免双行控件长期占用可视区域。展开详情不执行高度动画，审批输入也不自动反复增高。
-
-计划引导或审批意见落盘后，Agent 通知会在后台继续。通知期间下一条草稿仍可编辑，只暂时禁止再次提交，并在输入区附近明确说明原因。计划引导回写为只关联 \`planId\` 的处理说明；审批回复仍关联 \`planId / stepId\`。计划详情中的“工作留痕”默认折叠，展开后可以查看计划引导、步骤审批意见、Agent 回复和计划版本；已批准、已完成和已归档计划也保留该入口。
-
-## 左侧栏：先选择当前 Route
-
-左侧“当前航线”决定大多数页面正在查看和修改哪一条 Route。切换前如果存在未保存修改，界面会请求确认。
-
-Route 下拉旁的数量是当前配置数量。下拉选中项和候选项优先显示人格标题；Route 配置名、禁用状态和消息端组合作为辅助信息，便于同一人格存在多条 Route 时继续区分。没有可用人格标题时，界面依次回退到 Route 显示名、人格 ID 和配置名。下方状态不代表每个外部平台都已经登录。
-
-主导航下方依次是“语音服务”“性能监控”“日志诊断”和“设置”；这些页面位于“使用手册”上方。
-
-## 界面主题
-
-在“设置”的“RabiRoute 桌面功能”中选择“跟随系统”“浅色”或“深色”，再点击顶栏“保存配置”。当前 WebGUI 会立即切换；Windows 托盘、角色面板、滑词操作条和截图窗口会在下一次设置刷新时切换，通常不超过十秒。主题只改变颜色和控件外观。完整说明见[界面主题](interface-theme.md)。
-
-## 系统截图与人格投递
-
-在 WebGUI 打开“设置”，找到“桌面快捷功能”：
-
-1. 开启“系统级截图”，设置截图快捷键、“自动复制选区”和“贴图快捷键”。默认贴图快捷键为 \`F3\`；所有快捷键都可单独使用 \`F1\` 到 \`F12\`，也支持 \`Ctrl\`、\`Alt\`、\`Shift\`、\`Win\` 加一个字母或功能键。完成设置页的其他修改后，统一点击顶栏“保存配置”。
-2. 在任意 Windows 软件中按截图快捷键后，截图窗口会先打开，画面不会整体变暗，可立即拖动框选区域。光标移到窗口上会显示可选范围和尺寸，图片就绪后窗口以外的画面会变暗，窗口本身保持原亮度；此时该窗口已是当前操作区域，可直接按 \`Enter\` / \`Ctrl+C\` 复制、按 \`F2\` 发送或按贴图快捷键贴图。单击左键也可保留整个窗口作为待确认选区。拖拽后选区以外的画面变暗，选区内保持原亮度；可在选区内拖动调整位置，也可拖动边框四角和四边中点调整范围。截图工具栏使用图标按钮；悬停可以查看文字提示，当前工具会显示青绿色背景和亮色边框，当前颜色会显示选中边框。选区确定后，工具栏可选择“框”“箭头”或“文字”，并用红、黄、绿、蓝四种颜色标注；文字标注支持不限长度的多行输入；直接输入文字，输入范围会随最长一行和换行数自动扩展；点击文字区域外的空白处完成，点击已有文字可选中，拖动文字可移动，拖动八个控制点可调整文字范围，双击可再次编辑，文字属性栏中的字号按钮可调整文字大小。按 \`Ctrl+Z\` 删除最后一笔。复制、贴图或发送时会把标注写入图片。图片尚未准备完时点击“复制”“贴图”或“发送”，会在图片就绪后继续。拖拽只创建待确认选区：按 \`Enter\` / \`Ctrl+C\` 复制，按 \`F2\` 发送，按贴图快捷键确认并贴图；默认确认贴图或发送时也复制到剪贴板，可在“自动复制选区”关闭，关闭后仍可按 \`Ctrl+C\` 或点击“复制”。\`Ctrl+A\` 选择整个屏幕。未框选时，光标右下角会跟随显示静态画面的 10 倍像素采样预览、当前颜色块和 HTML 颜色代码 \`#RRGGBB\`；按 \`C\` 直接复制该代码，不确认选区、不写入截图历史，也不弹通知。按鼠标右键、\`Esc\` 或关闭截图窗口会取消本次截图，不写入截图历史；复制、贴图或发送才会保存截图和框选区域。
-3. 截图窗口按 \`<\` / \`>\` 查看上一张和下一张已保存的屏幕截图；切换后会恢复该截图最后一次用于复制、贴图或发送的框选区域。截图窗口打开且已框选区域时，按贴图快捷键会直接贴出该区域；其他时候按贴图快捷键会贴出剪贴板中的图片；框选贴图会保留原屏幕位置和大小，拖动、缩放、复制、保存和调整透明度后，RabiRoute Desktop 重启仍会恢复。关闭单个贴图才删除它。
-4. 点击“发送”后，输入可选文字并从“投递至人格”中选择已激活人格。文字可以留空，图片仍会发送。
-
-截图和文字共用角色面板投递入口。Codex 和 DSH 会把截图作为图片输入接收；截图文件暂存在项目私有目录 \`.rabiroute-message-images/\`，贴图图片和区域记录保存在私有 \`data/desktop/\`。修改截图开关、截图快捷键、自动复制选区、贴图快捷键或“Windows 登录启动”后，托盘会自动读取新配置，不需要重启。
-
-## 开启滑词菜单
-
-在 WebGUI 打开“设置”，找到“开启滑词菜单”：
-
-1. 打开“开启滑词菜单”。完成设置页的其他修改后，统一点击顶栏“保存配置”。在 Windows 软件中用鼠标拖选，或用 \`Shift\` + 方向键 / \`Home\` / \`End\` / \`PageUp\` / \`PageDown\` 扩选文字后，会出现系统悬浮按钮。悬浮条按选区范围横向居中；鼠标向上拖选时显示在上方，向下或同一行拖选时显示在下方，不遮挡选中文字。键盘扩选会使用系统插入符范围；Unity 没有系统插入符时，使用同一窗口最近一次点击位置。
-2. 把光标移到“投递至”，会列出当前已启用且运行中的人格；点击一项后，把选中文字投递到对应 Route。
-3. “滑词朗读”是滑词菜单的子功能。开启时悬浮条左侧还有“朗读”，点击后才进入本机语音队列；关闭后悬浮条只保留“投递至”。
-4. 只有同时打开“滑词朗读”和“高级选项”，才显示“滑词朗读模型”。
-
-划选本身不朗读、不投递。密码控件和仍无法读取的选区会被忽略。普通软件不会模拟 \`Ctrl+C\`；Unity 编辑器只有在 UI Automation 读不到文字时才发送受保护的临时复制，等待编辑器更新剪贴板，并在读取后恢复原剪贴板。保存后托盘会读取新配置，不需要重启。
-
-左下角有四个辅助入口：
-
-- **快速配置**：用三步向导完成常见配置。
-- **GitHub**：打开项目仓库。
-- **使用手册**：打开本页所在的用户文档中心。
-- **打开配置目录**：在本机查看 Manager 配置位置。
-
-## 顶栏：区分连接、保存和刷新
-
-顶栏中的 \`Manager 已连接\` 只表示浏览器能访问 Manager。它不等于 Route 正在运行，也不等于 NapCat 或 Codex 已经就绪。
-
-| 控件 | 实际作用 |
-| --- | --- |
-| 中 / EN | 切换当前浏览器的界面语言，不修改 Route 数据 |
-| 刷新状态 | 重新读取 Manager、配置和运行状态，不保存编辑内容 |
-| 新增航线 | 新建 Route 并打开快速配置 |
-| 保存配置 | 在 Route 页面保存当前 Route；在“设置”页一次保存桌面功能、滑词、Rabi 实例、目录和局域网访问配置；在“性能监控”页保存性能记录设置 |
-
-出现“有未保存的修改”时，先保存再切换 Route 或离开页面。刷新不是保存，重启也不会替你保存表单。
-
-
-## 常见运行状态
-
-| 状态 | 含义 | 下一步 |
-| --- | --- | --- |
-| 运行中 | 需要子进程的 Route 已启动 | 继续检查消息端和处理端连接 |
-| 启用中 | Route 已启用，但当前入口不需要独立 Gateway listener | 查看对应 Manager 入口状态 |
-| 已停止 | Route 配置存在，但子进程没有运行 | 到日志诊断启动或检查错误 |
-| 禁用中 | Route 或消息输入被关闭 | 确认是否应启用后保存 |
-| Manager 未连接 | WebGUI 无法访问本地 Manager | 检查进程、端口和启动目录 |
-
-实验适配器显示“实验”并不等于故障。它表示代码入口存在，但外部系统或真机链路仍需在你的环境里验收。
-
-## 启动、停止和重启的区别
-
-- **启动**：让当前 Route 的运行入口开始工作。
-- **停止**：停止当前 Route 子进程，不删除配置和历史记录。
-- **重启**：停止后重新启动，用于应用构建或连接变化。
-- **删除**：删除 Route 配置，风险高于停止；操作前先确认数据范围。
-
-Manager 只守护自己启动的 Route 子进程。NapCat、QQNT、Codex/ChatGPT Desktop 等外部程序有各自的生命周期。
-
-## 语言切换边界
-
-界面语言保存在当前浏览器。Route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据保持原文，不随语言切换改变。
-
-使用手册会切换到对应语言文件。开发者文档、代码路径和外部页面会按链接打开，不会生成第三份自动翻译内容。
-
-## 接下来阅读
-
-- 还没有成功投递：回到[跑通第一条 Route](first-route.md)。
-- 不知道该选哪个入口：阅读 [Route 与消息端](routes-and-adapters.md)。
-- 状态正常但消息没到：阅读[运行、日志与排障](operations-and-troubleshooting.md)。
-`,be="<!-- docs-language-switch -->\n<div align=\"center\">\nEnglish | <a href=\"./interface-and-status.md\">简体中文</a>\n</div>\n<!-- /docs-language-switch -->\n\n# Interface and status\n\nRibiWebGUI is RabiRoute's local control console. It edits configuration, invokes Manager actions, and shows diagnostics. Local files and runtime state remain the underlying sources of truth.\n\n## Access WebGUI from the LAN\n\nManager on the Rabi PC is RibiWebGUI's complete HTTP backend. The default `http://127.0.0.1:8790/` is local-only. On another device, `127.0.0.1` points back to that device, not to the Rabi PC.\n\nOn the Rabi PC, open **Console → Directory configuration → LAN WebGUI access**, enable access, and generate a key. After restarting Manager, a WebGUI still opened locally through `localhost/127.0.0.1` automatically redirects to the preferred LAN IP while preserving the current Route, page, and authentication. You can also copy the generated link, for example:\n\nAn HTTP LAN page may not receive secure browser clipboard permission. Copy-link, copy-key, and other WebGUI copy actions try the Clipboard API first and automatically fall back to an in-page copy operation when that API is unavailable or rejected. A manual-copy message appears only when the browser rejects both mechanisms.\n\n```text\nhttp://192.168.0.57:8790/#/routes/<Route-config-name>/overview?webgui_token=<access-key>\n```\n\nThe sidebar **Current Route** selector is the only selection source. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, and Runtime Diagnostics all use `#/routes/<Route-config-name>/<page>`, with `overview`, `adapters`, `persona`, `knowledge`, `speech`, and `runtime` respectively. Changing Current Route preserves the page type and immediately redirects the URL. **Performance** and **Settings** are host-wide pages and do not change with the selected Route. To open that Route's **Plans & Memory** directly, use the same Route configuration name with the `knowledge` page, or click **Copy Route knowledge link**:\n\nClicking any sidebar page label updates the selected state, top title, and URL first, then immediately shows **Page switched. Loading content…**. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, Performance, Runtime Diagnostics, and Settings load their page code and data asynchronously instead of delaying the tab switch until the complete page is ready. If a page chunk fails to load, WebGUI refreshes once and restores the intended page.\n\n```text\nhttp://192.168.0.57:8790/#/routes/<Route-config-name>/knowledge?webgui_token=<access-key>\n```\n\nThe Route configuration name is URL-encoded. Any Route-scoped link selects that Route before rendering the page. Switching the sidebar Route updates the current browser session to the same page type under the new Route. To bookmark, reopen, or share the shortcut with an authorized device on the same LAN, use a complete keyed link rather than the address bar after WebGUI has removed the key.\n\nWebGUI keeps the URL key in the current browser session, automatically applies it to HTTP, SSE, and persona-avatar requests, and removes it from the address bar so later screenshots do not keep exposing it. Rotating the key immediately invalidates old links. The switch and key can be managed only from the Rabi PC running Manager; that PC's redirected LAN address remains manageable, while other devices cannot manage them. If the link times out, first confirm that Manager restarted, then check whether Windows Firewall allows RabiRoute or Node.js TCP `8790` on the private/domain network. Never publish the link in a public chat, log, or repository.\n\nRequests from the Rabi PC to its own LAN address are still treated as local requests. Enabling LAN access therefore does not make message sending, the tray, or local tools on that same PC require the WebGUI key. Other devices must still use the complete link with a valid key.\n\n## Access WebGUI remotely through RabiLink\n\nWhen the Rabi PC has the global RabiLink Relay connection enabled and belongs to the current Relay account, sign in at `https://rabiroute.cottongame.com/manage`, then open:\n\n```text\nhttps://rabiroute.cottongame.com/manage/<account>/<RabiGUID>/#/routes/<Route-config-name>/knowledge\n```\n\nThe remote entry uses the same Route page names. Replace `knowledge` with `overview`, `adapters`, `persona`, `speech`, or `runtime` as needed. Settings uses the host-wide `#/settings` path, and Performance uses the host-wide `/performance` path.\n\nReplace the final page with `overview` or another WebGUI route when needed. This remote entry does not use the LAN `webgui_token`; it uses the browser's Relay management login cookie, while the PC worker separately authenticates with its application token. Ordinary APIs, images, attachments, audio, downloads, and byte-range video playback return to the selected PC's loopback Manager, and Manager events refresh through remote SSE. If the shell opens but data, attachments, or live status do not, verify that the target PC is online in Relay, the RabiGUID is correct, and the Relay script plus `ribiwebgui/dist` were published together. Restarting only the local Manager does not update the public Relay.\n\n## The main pages\n\n| Area | Primary purpose | Common actions |\n| --- | --- | --- |\n| Console | View and operate each Route | Add, enable, restart, or delete a Route |\n| Message Adapters | Message sources and Agent handlers | Scan, add, connect, and bind tasks |\n| Persona Configuration | Persona, Route variables, and message rules | Add rules, regexes, and schedules |\n| Plans & Memory | Plans, recent memory, consolidated memory, plan guidance, and approval records for the current persona | Search, guide running plans, expand steps, review execution contracts, submit approval feedback, and refresh Manager data |\n| Speech Service | Host TTS, ASR, microphone, and playback | Inspect status, adjust parameters, and test speech |\n| Performance | Manager, Route, and speech-service runtime metrics | Inspect live state and history |\n| Log Diagnostics | Find path breaks and run real tests | Start, restart, trigger, and inspect logs |\n| Settings | Host identity, RabiLink, directories, LAN access, and desktop entry points | Configure screenshots, the selected-text menu, login startup, access keys, and access links |\n| User Guide | Task-based product instructions | Search, change page, and open deeper material |\n\nWhen Plans & Memory opens, it first requests eight lightweight plan summaries and fetches the complete details for the first two visible cards in parallel before mounting those cards, so the first screen does not pause on `Loading plan details`. Without requiring scroll, it then completes the selected plan category in background pages of up to 50 summaries and completes the visible memory category in pages of up to 100 items. The page keeps the loaded and total counts visible. These background requests pause while the tab is hidden; when the tab becomes visible again, the page refreshes and resumes completion. The left directory retains every returned title, while the content area initially mounts only eight plan cards and 24 memory cards, then appends bounded batches while scrolling. Clicking a directory item that is not mounted creates a bounded forward window starting at that target and gives that plan's detail request highest priority; the current Manager and LAN environment uses a one-second interactive detail budget. The page does not create every preceding body card at once. Scrolling down renders later plans, while scrolling up restores earlier plans in bounded batches and keeps the current card at the same viewport position. Other body text, steps, approvals, and attachment metadata hydrate only when cards are genuinely near the viewport; each observer turn promotes only the nearest two cards and runs at most two concurrent detail requests. Each later summary page yields one rendering frame without waiting for body hydration, so heavy cards or attachments cannot delay directory completion. Only cards with a real in-flight detail request show the loading animation; cards that have not approached the viewport use a compact hint instead of instantiating a large skeleton for every plan, and the browser skips layout and paint for off-screen cards. Image and video cards show a light `Loading attachment` placeholder instead of a black block until media is ready.\n\nThe page reads Codex Desktop state only when the user expands a plan, and after a page refresh it checks only plans that remain expanded. It no longer starts a state scan for every loaded plan. One plan is not requested twice in the same pass, and each read has a three-second limit. Expanded details show the Task Agent, the Plan Secretary when enabled, each Agent's work state, and the matching Codex task state. A missing task has its own `Task Agent session is missing` label. A valid non-working binding can be located or awakened in Codex from the card or Agent row; this opens only the exact task ID and sends no message or replacement task.\n\nFor a running plan outside approval, expanding the card exposes whole-plan guidance. It is associated only with `planId`, not one step; the Agent uses it to continue the plan and adjust not-started steps when needed, then writes a `guidance_response` without `stepId`. Approval plans continue to use the owning step's approval contract and `approval_response`.\n\nChoose the current Route in the sidebar, then check the Manager connection in the top bar. Use the Console or Log diagnostics runtime state to decide whether that Route is running.\n\nThe **Plans & Memory** page never reads `data/` directly or reinterprets Manager presentation. Non-terminal cards expose only green `In progress`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification`. External information, accounts, devices, owners, authorization, and receipts remain internal plan details instead of status labels. RibiWebGUI and the Qt tray consume the same Manager DTO, palette, counts, and order.\n\nThe current-step summary now shows the step's `detail` description directly below its title, so users can see what the step requires without opening the full execution plan. Steps without a description do not render an empty placeholder.\n\nThe directory never introduces horizontal scrolling for the whole panel. The trailing sort label remains fixed while an overflowing title moves at a constant speed on pointer hover or keyboard focus. Reduced-motion preferences disable title movement. Choices in the list dialog remain drafts until **Done**. Closing the dialog leaves the current list unchanged; **Done** closes it and immediately calls the complete plan list once with the selected Manager-side sort and filters, updating directory and content cards together.\n\nThe dialog includes both status filters and plan `keywords` tags. Each group supports multiple selections with OR matching inside the group; a plan must match both groups. The tag section is searchable. The trigger and result summary show the active filter count, with per-group clear actions and **Clear filters**. Narrow screens stack the groups into one column, and checkbox and action targets remain at least 44px.\n\nWhen Plans & Memory is opened directly, the page loads memory counts in parallel, so the Recent Memory, Consolidated Memory, and Archived tab numbers do not wait for the user to open those tabs. Each Recent Memory card shows both its recorded time and its last true recall-hit time; a memory that has never matched a message says `Not recalled yet`. Archived source-memory cards show the recorded time and archive time. Memory bodies render as Markdown with headings, lists, code, links, and HTTP(S) images; local absolute paths and dangerous protocols are not loaded. A memory card is capped at 512px. Extra body content is clipped without an internal card scrollbar, and **View details** opens the complete memory in a separate dialog. When the least-active memory is less than 24 hours away from the 72-hour trigger, a separate consolidation panel appears above the list with the remaining time, the memory that will trigger the run, and the expected candidate count. Candidate cards are marked. At zero, Manager automatically creates and delivers the batch; the page does not need to remain open. The cohort is frozen to memories already beyond 24 hours at the original 72-hour trigger, so late execution does not append later boundary crossings. Manager derives and caches the booleans; the browser neither treats a direct view as a recall nor recalculates the candidate set.\n\nA complete actionable `approvalRequest` with `responseStatus=pending` produces red `Awaiting approval`; an incomplete contract remains green `In progress`. A content-changing plan becomes blue `Awaiting package` after applicable sync, commit, and conflict-free readback. Proven package inclusion produces purple `Awaiting QA`. A development-closed `manual-verify-*` step produces orange `Awaiting manual verification`. A plan with no safe action becomes gray `Paused`, while `waitingFor` keeps the exact internal reason.\n\nAvailable CLI, static checks, fallback validation, retries, sending, or coordination stay green `In progress`. A completed delivery gate that only lacks package identity or inclusion proof is blue `Awaiting package`; proven inclusion is purple `Awaiting QA`. Test infrastructure, assets, documents, owner replies, renewed authorization, or external receipts produce gray `Paused` only when no safe action remains, and their exact reason stays outside the status badge.\n\nThe `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure` lifecycle applies only to plans that change project content such as code, prefabs, assets, or configuration. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance continue to show their real steps and wait reasons instead of being forced into package or QA stages.\n\nA quoted **claim** in the work group only means that the Agent publicly took ownership. For the matching item to appear under Plans & Memory, managed registration must also validate the source message, verified claim receipt, unique plan, unique business task, two deduplication passes, and the same workspace across all three records. A successful claim with failed registration has not entered the managed plan lifecycle.\n\nThe Agent may also add images, videos, or ordinary files to the plan itself when creating or updating it, including effect previews, demo videos, design drafts, reports, or patches already produced for a plan awaiting approval. Images, videos, and Markdown appear below the plan description in compact, fixed-width 16:9 preview cards that shrink only when the container is narrower. A Markdown card safely reads the beginning of the document and displays a clamped plain-text excerpt; it does not execute HTML, open links, or load images. Clicking it opens the in-page document preview with headings, lists, tables, blockquotes, and code blocks plus a source-download action. Video thumbnails keep a play icon visible before hover or selection, then show an `m:ss` or `h:mm:ss` duration in the lower-right corner after the browser reads media metadata. Images open in an in-page large-image preview, while videos open in an in-page player with controls. Markdown files larger than 2 MiB remain download-only to avoid freezing the browser. The complete-document renderer escapes raw HTML, disables dangerous or relative links, and replaces remote images with text placeholders instead of loading third-party resources from attachment content. Recognized media includes PNG, JPEG, WebP, GIF, MP4/M4V, WebM, Ogg Video, and MOV/QuickTime, with actual video codec support depending on the browser. Other files show name, type, and size and open or download through Manager. The browser never reads a local path from the plan record directly; every attachment crosses the constrained Manager endpoint, and LAN WebGUI automatically applies the current session key to thumbnails, media previews, and file links.\n\nRabiLink remote WebGUI automatically preserves the `/manage/<account>/<RabiGUID>` prefix for thumbnails, media previews, and file links, and forwards byte-range video requests. Do not add the LAN `webgui_token` to a remote URL.\n\nLong plan lists keep the normal page scroll, while only the external plan directory scrolls independently within the viewport. As the plan cards scroll, browser visibility observation updates the directory's current reading item; the directory adjusts its own scroll only when that highlighted item leaves the directory viewport, without continuously scanning the full list on every page-scroll event. A directory click temporarily locks the selected highlight and resumes reading-position observation after smooth scrolling settles, so intermediate cards do not make the cursor jump through the directory. On desktop widths, the plan-view tabs, search field, and refresh action stick immediately below the fixed app bar. Directory jumps reserve the sticky toolbar height so the destination card heading remains visible. Narrow layouts return the toolbar to normal page flow instead of letting a two-row control block occupy the viewport. Detail expansion remains animation-free, and the approval input does not repeatedly auto-grow.\n\nAfter plan guidance or approval feedback is durably recorded, Agent notification continues in the background. The next draft remains editable while another submission is temporarily disabled, and a nearby status row explains the reason and recovery condition. Each plan detail also has a collapsed **Work history** section. Open it to review plan guidance, step approval feedback, Agent replies, and plan revisions; the entry remains available for approved, completed, and archived plans.\n\n## Sidebar: select the current Route first\n\n**Current Route** determines which configuration most pages display and edit. If changes are unsaved, the interface asks before switching.\n\nThe count beside the selector is the number of configurations. The selected value and menu items prefer the persona title, while the Route configuration name, disabled state, and adapter combination remain secondary details so multiple Routes for one persona stay distinguishable. When no persona title is available, WebGUI falls back to the Route display name, persona ID, and then configuration name. The status below does not prove that every external platform is authenticated.\n\nThe secondary navigation above the footer contains **Speech Service**, **Performance**, **Log Diagnostics**, and **Settings**; these entries sit above **User Guide**.\n\n## Interface theme\n\nIn **Settings** > **RabiRoute desktop features**, choose **Follow system**, **Light**, or **Dark**, then use the top-bar **Save configuration** action. The current WebGUI changes immediately. The Windows tray, role panel, selected-text action bar, and screenshot windows change on the next settings refresh, usually within ten seconds. The theme changes colors and control appearance only. See [Interface theme](interface-theme_en.md) for the full guide.\n\n## System screenshots and persona delivery\n\nOpen **Settings** in WebGUI and find **Desktop shortcuts**:\n\n1. Enable **System screenshot**, then set the screenshot shortcut, **Auto-copy selection**, and **Pin shortcut**. The default pin shortcut is `F3`. Every shortcut can use `F1` through `F12` alone, or `Ctrl`, `Alt`, `Shift`, or `Win` plus one letter or function key. When the other Settings edits are ready, use the single top-bar **Save configuration** action.\n2. Press the screenshot shortcut in any Windows application; the capture window opens first without dimming the screen so you can drag to select immediately. Hovering over a window shows its selectable bounds and size; once the image is ready, the area outside that window is dimmed while the window keeps its original brightness. That window is immediately the active operation area: press `Enter` / `Ctrl+C` to copy it, `F2` to send it, or the pin shortcut to pin it. A left click can still keep the whole window as a selection awaiting confirmation. After dragging, everything outside the selection is dimmed while the selected area remains at its original brightness; drag inside the selection to reposition it, or drag a corner or edge-midpoint handle to resize it. The screenshot toolbar uses icon buttons; hover shows the text label, the active tool has a teal background and bright border, and the active color has a visible selection border. After selecting an area, use the toolbar to add a rectangle, arrow, or text in red, yellow, green, or blue; Text annotations accept unlimited multiline input; type directly on the screenshot; the input range grows with the longest line and line count, then click outside the text area to commit, click the annotation again to select it, drag it to move, drag its handles to resize the text box, double-click to edit, and use the separate text-properties bar to change the font size. `Ctrl+Z` removes the last mark. Copying, pinning, and sending bake the marks into the image. If the image is still preparing, **Copy**, **Pin**, or **Send** continues when it is ready. Dragging only creates a selection awaiting confirmation: `Enter` / `Ctrl+C` copies it, `F2` sends it, and the pin shortcut confirms and pins it. By default, confirming a pin or send also copies the selection to the clipboard; turn that off in **Auto-copy selection** and use `Ctrl+C` or **Copy** when needed. `Ctrl+A` selects the full screen. Before a region is selected, a cursor-following tip shows a 10x pixel-sampling preview, the current color swatch, and the static-image HTML color code `#RRGGBB`. Press `C` to copy it directly without confirming a region, adding screenshot history, or showing a notification. Right-clicking, pressing `Esc`, or closing the capture window cancels that capture without adding it to history; copying, pinning, or sending saves the screen capture and selected area.\n3. Press `<` / `>` in the capture window to view the previous / next saved screen capture. The last area used to copy, pin, or send that capture is restored. While a selected capture is open, press the pin shortcut to pin that selected area. Otherwise, it pins an image already on the clipboard. A pinned selection keeps its original screen position and size; its drag position, zoomed size, and opacity are restored after RabiRoute Desktop restarts. It can also be copied and saved. Closing that individual pin removes it.\n4. Click **Send**, add optional text, choose an active persona in **Send to persona**, and confirm. The image is sent even if the text is empty.\n\nThe screenshot and text use the role-panel delivery entry. Codex and DSH receive the screenshot as image input. The file is kept temporarily in the private project directory `.rabiroute-message-images/`; pinned images and selected-area records are stored in private `data/desktop/`. After changing the screenshot toggle, screenshot shortcut, auto-copy setting, pin shortcut, or **Windows login startup**, the tray reads the new settings automatically; restarting is not required.\n\n## Enable selected-text menu\n\nOpen **Settings** in WebGUI and find **Enable selected-text menu**:\n\n1. Turn on **Enable selected-text menu**. When the other Settings edits are ready, use the single top-bar **Save configuration** action. Select text with a mouse drag or with `Shift` plus an arrow key, `Home`, `End`, `PageUp`, or `PageDown`. The floating buttons are horizontally centered on the selection bounds. An upward mouse drag places them above; a downward or same-line drag places them below. Keyboard selection uses system caret bounds; when Unity has no system caret, the most recent click in the same window keeps the buttons near the text.\n2. Move the cursor to **Send to** to list currently enabled and running personas. Click one item to deliver the selected text to that Route.\n3. **Selected-text reading** is a sub-feature of the selected-text menu. When it is on, the left button is **Read aloud** and only a click enqueues host speech. When it is off, the bar keeps only **Send to**.\n4. The **Selected-text voice model** selector appears only when both **Selected-text reading** and **Advanced options** are on.\n\nSelection alone does not read or send. Password controls and still-unreadable selections are ignored. Normal applications never receive a simulated `Ctrl+C`; only the Unity Editor sends a guarded temporary copy when UI Automation cannot read the selection, waits for the editor to update the clipboard, and restores the original clipboard afterward. After saving, the tray reads the new settings; restarting is not required.\n\nThe footer contains four supporting actions:\n\n- **Quick setup**: configure common paths in three steps.\n- **GitHub**: open the repository.\n- **User Guide**: open this task-based documentation center.\n- **Open config directory**: open the local Manager configuration location.\n\n## Top bar: connection, save, and refresh differ\n\n`Manager connected` only means the browser can reach the Manager. It does not mean the Route, NapCat, or Codex task is ready.\n\n| Control | Actual effect |\n| --- | --- |\n| 中 / EN | Changes this browser's interface language only |\n| Refresh status | Reloads Manager, configuration, and runtime state; does not save edits |\n| Add Route | Creates a Route and opens Quick setup |\n| Save configuration | Saves the current Route on Route pages; on **Settings**, saves desktop features, selected-text menu, Rabi instance, directories, and LAN WebGUI access together; on **Performance monitor**, saves the performance-recording settings |\n\nWhen the unsaved-changes notice appears, save before switching Routes or leaving. Refresh is not Save, and Restart does not save form edits.\n\n\n## Common runtime states\n\n| State | Meaning | Next check |\n| --- | --- | --- |\n| Running | A Route that needs a child process has started | Check source and handler connectivity |\n| Enabled | The Route is enabled but its current entry is Manager-owned | Check the corresponding Manager entry |\n| Stopped | Configuration exists but the child process is not running | Start it or inspect errors in Log Diagnostics |\n| Disabled | The Route or its message input is off | Enable intentionally, then save |\n| Manager disconnected | WebGUI cannot reach the local Manager | Check the process, port, and startup directory |\n\nAn **Experimental** badge is not itself an error. It means a code path exists, while the external system or real-device loop still needs acceptance in your environment.\n\n## Start, stop, restart, and delete\n\n- **Start** begins the current Route's runtime entry.\n- **Stop** ends the Route process without deleting configuration or history.\n- **Restart** stops and starts it again after build or connection changes.\n- **Delete** removes Route configuration and has a wider impact than Stop.\n\nThe Manager supervises Route processes that it starts. External programs such as NapCat, QQNT, and Codex/ChatGPT Desktop keep their own lifecycles.\n\n## Locale boundaries\n\nLocale is stored in this browser. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values stay unchanged.\n\nThe User Guide selects the matching language file. Developer documents, code paths, and external pages open through links; RabiRoute does not maintain a third machine-translated source.\n\n## Continue\n\n- No successful delivery yet: [Run your first Route](first-route_en.md).\n- Unsure which source to choose: [Routes and message adapters](routes-and-adapters_en.md).\n- Status looks healthy but delivery fails: [Operations, logs, and troubleshooting](operations-and-troubleshooting_en.md).\n",fe=`<!-- docs-language-switch -->\r
+`,me=`<!-- docs-language-switch -->\r
+<div align="center">\r
+<a href="./interface-and-status_en.md">English</a> | 简体中文\r
+</div>\r
+<!-- /docs-language-switch -->\r
+\r
+# 界面与状态\r
+\r
+RibiWebGUI 是 RabiRoute 的本地控制台。它负责展示和编辑配置、调用 Manager 动作并呈现诊断结果，但配置事实最终保存在本地文件和运行状态中。\r
+\r
+## 从局域网访问 WebGUI\r
+\r
+Rabi PC 上的 Manager 就是 RibiWebGUI 的完整 HTTP 后端。默认地址 \`http://127.0.0.1:8790/\` 只允许本机使用；另一台设备上的 \`127.0.0.1\` 指向那台设备自己，不会指向 Rabi PC。\r
+\r
+在 Rabi PC 本机打开“控制台 → 目录配置 → 局域网访问 WebGUI”，开启访问并生成密钥。重启 Manager 后，若仍从本机 \`localhost/127.0.0.1\` 打开 WebGUI，页面会自动重定向到优先局域网 IP，并保留当前 Route、页面和认证；也可以复制页面给出的链接，例如：\r
+\r
+局域网 HTTP 页面可能没有浏览器的安全剪贴板权限。控制台的复制链接、复制密钥和其它 WebGUI 复制按钮会先使用 Clipboard API，权限不可用时自动回退到页面内复制；只有两种机制都被浏览器拒绝时，才提示手动选择文本复制。\r
+\r
+\`\`\`text\r
+http://192.168.0.57:8790/#/routes/<Route配置名>/overview?webgui_token=<访问密钥>\r
+\`\`\`\r
+\r
+左侧“当前路由”是唯一选择源。控制台、消息适配器、人格配置、计划与记忆、语音服务和日志诊断都使用 \`#/routes/<Route配置名>/<页面>\`；对应页面依次为 \`overview\`、\`adapters\`、\`persona\`、\`knowledge\`、\`speech\`、\`runtime\`。切换当前 Route 会保留页面类型并立即重定向 URL。“性能监控”和“设置”是本机全局页面，不随当前 Route 改变。若要直接打开该 Route 的“计划与记忆”，使用同一个 Route 配置名和 \`knowledge\` 页面，或点击“复制 Route 知识库链接”：\r
+\r
+点击左侧任一页面标签时，WebGUI 会先更新选中状态、顶部标题和 URL，并立即显示“页面已切换，正在加载内容”。控制台、消息适配器、人格配置、计划与记忆、语音服务、性能监控、日志诊断和设置的页面代码与数据随后异步加载，不会等待完整页面准备好才切换标签。页面代码加载失败时会自动刷新一次并恢复当前目标页面。\r
+\r
+\`\`\`text\r
+http://192.168.0.57:8790/#/routes/<Route配置名>/knowledge?webgui_token=<访问密钥>\r
+\`\`\`\r
+\r
+Route 配置名会进行 URL 编码。打开任一 Route 作用域链接后，页面会先选中该 Route；切换左侧 Route 时，当前浏览器会话的地址会同步为新 Route 的同类页面路径。需要收藏、重新打开或发送给同一局域网中的已授权设备时，应使用包含访问密钥的完整链接，不要直接复制已经自动移除密钥的地址栏。\r
+\r
+WebGUI 会把 URL 中的密钥保存到当前浏览器会话，自动用于 HTTP、SSE 和人格头像请求，并从地址栏移除，避免后续截图继续暴露。轮换密钥会立即使旧链接失效；开关和密钥只能由运行 Manager 的 Rabi PC 本机管理，自动重定向后的本机局域网地址仍可管理，其他设备不可以。若链接超时，先确认 Manager 已重启，再检查 Windows 防火墙的专用/域网络是否允许 RabiRoute 或 Node.js 监听 TCP \`8790\`。不要把链接发送到公开群聊、日志或仓库。\r
+\r
+Rabi PC 本机通过自己的局域网 IP 访问时仍按本机请求处理，因此开启局域网访问不会让同一台电脑上的消息发送、托盘或本地工具额外要求 WebGUI 密钥。其他设备仍必须使用带有效密钥的完整链接。\r
+\r
+## 通过 RabiLink 远程访问 WebGUI\r
+\r
+若 Rabi PC 已开启全局 RabiLink Relay 连接，并在 Relay 管理后台属于当前账号，可先登录 \`https://rabiroute.cottongame.com/manage\`，再打开：\r
+\r
+\`\`\`text\r
+https://rabiroute.cottongame.com/manage/<账号>/<RabiGUID>/#/routes/<Route配置名>/knowledge\r
+\`\`\`\r
+\r
+远程入口使用同一组 Route 页面名；可把末尾 \`knowledge\` 替换为 \`overview\`、\`adapters\`、\`persona\`、\`speech\` 或 \`runtime\`。设置使用本机全局路径 \`#/settings\`，性能监控使用本机全局路径 \`/performance\`。\r
+\r
+也可以把最后页面换成 \`overview\` 或其他 WebGUI 路由。远程入口不使用局域网 \`webgui_token\`，而使用浏览器的 Relay 管理登录 Cookie；PC worker 另用应用 token 与 Relay 通讯。普通 API、图片、附件、音频、文件下载和视频按字节播放都会回到目标 PC 的本机 Manager，Manager 事件也会经远程 SSE 实时刷新。若页面壳能打开但数据、附件或状态不更新，先确认 Relay 中目标 PC 在线、RabiGUID 正确，并确认服务器脚本和 \`ribiwebgui/dist\` 已同时发布；只重启本机 Manager 不会更新公网 Relay 代码。\r
+\r
+## 先认清主要页面\r
+\r
+| 区域 | 主要用途 | 常见动作 |\r
+| --- | --- | --- |\r
+| 控制台 | 查看和操作各个 Route | 新增、启用、重启、删除 Route |\r
+| 消息适配器 | 配置消息入口和 Agent 处理端 | 扫描、添加、连接、绑定任务 |\r
+| 人格配置 | 管理人格、路由变量和消息规则 | 新增规则、编辑正则和定时计划 |\r
+| 计划与记忆 | 查看当前人格的计划、近期记忆、沉淀记忆和审批记录 | 搜索、展开步骤、核对执行合同、为需要审批的步骤提交意见、刷新 Manager 数据 |\r
+| 语音服务 | 管理本机 TTS、ASR、麦克风和播放 | 查看状态、调整参数、测试语音 |\r
+| 性能监控 | 查看 Manager、Route 和语音服务的运行指标 | 查看实时状态和历史记录 |\r
+| 日志诊断 | 定位链路断点并执行真实测试 | 启停、重启、手动触发、看日志 |\r
+| 设置 | 管理本机身份、RabiLink、目录、局域网访问和桌面入口 | 配置截图、滑词菜单、登录启动、访问密钥和访问链接 |\r
+| 使用手册 | 按任务阅读软件使用说明 | 搜索、切换章节、打开深入资料 |\r
+\r
+进入“计划与记忆”后，页面先请求首批 8 条轻量计划摘要，并行补齐首两张可见卡片的完整详情后再显示卡片，因此首屏不会先停在“正在加载计划详情…”；随后无需滚动，页面会按每批最多 50 条自动补齐当前分类的全部计划摘要，并按每批最多 100 条自动补齐当前可见的记忆分类。页面持续显示已加载数量与总数；标签页不可见时暂停这些后台请求，重新显示后重新读取并继续补齐。左侧目录保留全部已返回标题，右侧正文只先挂载 8 张计划卡和 24 张记忆卡，再随滚动分批追加；点击尚未挂载的目录项时会从目标计划开始创建一个有界的向后窗口，并把该计划的详情放到最高优先级，当前 Manager 与局域网环境以 1 秒内显示详情为交互预算。页面不会一次创建目标前面的几十张正文卡；向下滚动会继续加载后面的计划，向上滚动会分批补回目标前面的计划，并保持当前卡片的页面位置。其余正文、步骤、审批与附件元数据只在卡片真正接近视口时按需加载，每轮只提升最近的 2 张且最多 2 个并发请求；下一批摘要只让出一个渲染帧，不等待正文详情加载完成，因此目录补齐不会被重卡片或附件拖慢。只有已经发出详情请求的卡片显示加载动画，尚未进入视口的卡片使用紧凑提示，不再为全部计划同时创建大型骨架；离屏计划卡由浏览器跳过布局和绘制。图片和视频在媒体就绪前显示浅色“附件加载中”占位，不会以纯黑块占住页面。\r
+\r
+页面只在用户展开计划详情时读取该计划所绑定任务 Agent 的 Codex Desktop 状态；页面刷新后也只补查仍保持展开的计划，不再为全部计划发起状态扫描。单次等待最多 3 秒，同一轮不会重复请求同一个计划。展开详情可查看任务 Agent、已启用时的协助秘书、各自的工作状态和 Codex 会话任务状态；会话不存在时单独显示“会话任务 Agent 已丢失”。非工作中且绑定有效的任务可从卡片或 Agent 行在 Codex 中定位并唤醒；该动作只打开精确的任务 ID，不新建任务，也不发送消息。\r
+\r
+计划卡片的分类、状态、状态色板、排序和审批说明都由 Manager 返回。RibiWebGUI 顶部从左到右显示“当前计划 / 近期记忆 / 沉淀记忆 / 已归档”四个标签：“当前计划”展示未归档计划；“近期记忆”只展示尚未沉淀的记忆；“沉淀记忆”展示整理后仍可召回的稳定记忆；“已归档”同时展示归档计划和已经作为沉淀输入的来源记忆。RibiWebGUI 与 Qt 托盘继续使用 Manager 返回的同一套卡片强调色和状态徽标颜色。RibiWebGUI 会在计划标题下显示与标题不同的 \`focus\` 计划描述；旧计划用标题回填 \`focus\` 时不会重复显示。多条计划之间使用中性底色间隔和独立描边形成清晰的工作项边界；卡片不显示会随排序和筛选变化的动态序号，内部再按“问题标题与描述 → 当前步骤与时间 → 展开后的完整执行计划”建立三级层级，避免相邻计划和计划内步骤落在同一视觉平面。没有进入审批的进行中计划在展开详情顶部显示计划级引导，输入只关联 \`planId\`，Agent 可据此调整整个计划和尚未开始的步骤。展开后的进行中步骤只显示 Manager 记录的开始时间，已完成步骤只显示完成时间，未开始步骤不显示时间。计划面板外侧提供粘性悬浮的计划目录，只列出当前页签与搜索条件下可见的计划；每行左侧直接显示去掉开头连续 \`[...]\` 分类前缀的精简标题，右侧只显示一个与当前排序方式对应的标签。时间排序显示相对更新时间；状态、重要程度和紧急程度使用 Manager 返回的整数等级，并分别映射文字和颜色。重要程度从“最高”到“低”排列，未设置排在最后；紧急程度从“紧急”到“低”排列，未设置排在最后。目录标题右侧显示当前结果数；右上角按钮打开名为“列表排序与筛选”的独立模态对话框。用户点击“完成”后，WebGUI 才把排序和筛选参数交给 Manager，由 Manager 在分页前处理，目录与右侧计划卡片始终使用同一结果和顺序。目录自身可滚动，点击标题会平滑定位并聚焦右侧正常页面流中的对应计划卡片；计划卡片仍保留完整原始标题。窄屏下目录移到计划面板上方，计划卡片内部不增加目录。审批合同直接展开在 Manager 指定的对应步骤卡片内，并列出完整审批材料与回执。用户意见、Agent 回复和系统记录按时间从旧到新纵向排列，每条独立占位；新回复不会替换先前意见，新的反馈输入框始终位于记录列表下方。信息不完整时页面标记“审批资料不完整/禁止审批”，审批输入、附件和提交全部禁用；补齐为 \`ready/enabled=true\` 后才允许提交审批决定。已启用时，反馈可以选择普通文件，也可以先复制图片，再在输入框中按 \`Ctrl+V\` 将图片作为附件粘贴；页面会显示图片缩略图或文件卡片，并允许提交前删除。最多 8 个附件，单个不超过 10 MiB、总计不超过 25 MiB。填写意见后可按 \`Enter\` 直接提交，\`Shift+Enter\` 保留换行；中文输入法确认候选词的回车不会误提交。点击或按键提交后，意见落盘即结束按钮加载，Agent 通知在后台继续；终态只刷新当前卡片，失败时恢复原意见与附件供重试，不再整页重载计划与记忆。\r
+\r
+当前步骤摘要会在步骤标题下直接显示该步骤的 \`detail\` 描述，用户无需展开完整执行计划即可看到本步要做什么。步骤没有描述时不显示空白占位。\r
+\r
+目录不会产生整个面板的水平滚动。右侧排序标签固定不动，左侧标题在溢出时于鼠标悬停或键盘聚焦后匀速往返滚动；减少动态效果的系统偏好会关闭标题滚动。列表弹窗里的选择只是草稿，关闭弹窗不会改变列表；点击“完成”后，页面关闭弹窗并立即重新调用整个计划列表，排序、筛选、目录和内容卡片一次更新。\r
+\r
+筛选弹窗同时提供状态和计划 \`keywords\` 标签。两个分组都可多选：同组匹配任一项，计划需要同时满足状态组和标签组。标签较多时可在弹窗内搜索；按钮和结果摘要显示当前筛选数量，并提供分组清除与一键清除。窄屏下两个筛选组改为单栏，复选项和操作按钮保持至少 44px 操作区。\r
+\r
+直接进入“计划与记忆”页面时，页面会并行读取记忆数量，因此“近期记忆”“沉淀记忆”和“已归档”的数字不需要等用户切换标签后才出现。近期记忆卡片显示“记录时间”和“上次命中召回”两个时间；从未被消息真正命中过的记忆显示“尚未命中召回”。已归档来源记忆显示记录时间和归档时间。记忆正文按 Markdown 显示，可混排标题、列表、代码、链接和 HTTP(S) 图片；本机绝对路径与危险协议不会加载。单张记忆卡片最高 512px，超出的正文在卡片内裁剪，不出现卡片内滚动条；点击“查看详情”可在独立窗口阅读完整内容。当最不活跃的记忆距离 72 小时触发点不足 24 小时时，记忆列表上方出现独立的“近期记忆沉淀”区域，显示剩余时间、将触发的记忆和预计进入本次沉淀的数量。会进入本次沉淀的卡片带有标记。倒计时到 0 后，Manager 会自动创建并投递本批沉淀任务，无需保持这个页面打开。本轮候选固定为原始 72 小时触发时已经超过 24 小时的记忆，晚执行不会追加后来才跨过边界的条目；候选结果由 Manager 动态给出，页面不会把普通查看当成召回，也不会自行推算候选范围。\r
+\r
+计划本体也可以由 Agent 在创建或更新计划时附带图片、视频或普通文件，包括待审批计划已经产出的效果图、演示视频、设计稿、报告或补丁。图片、视频和 Markdown 在计划描述下方统一使用紧凑的固定宽度 16:9 预览卡片，只有容器更窄时才等比缩小。Markdown 卡片会安全读取文档开头并显示截断的纯文本简短预览，卡片内不会执行 HTML、打开链接或加载图片；点击后才在页内以文档样式预览标题、列表、表格、引用和代码块，并保留原文件下载入口。视频缩略图在未悬停、未选中时也会常驻显示播放图标，并由浏览器读取媒体 metadata 后在右下角显示 \`m:ss\` 或 \`h:mm:ss\` 时长。点击图片在当前页面打开大图，点击视频打开带播放控制的页内预览。单个 Markdown 超过 2 MiB 时只提供下载，避免浏览器因超长文档卡顿。完整文档预览会转义原始 HTML、禁用危险或相对链接，并把远程图片显示为文本占位，不从附件内容自动加载第三方资源。支持识别 PNG、JPEG、WebP、GIF 与 MP4/M4V、WebM、Ogg Video、MOV/QuickTime，视频的实际解码能力取决于浏览器。其它文件显示文件名、类型与大小，点击后由 Manager 打开或下载。浏览器不会直接读取计划记录中的本机路径，所有附件都经过受控 Manager 接口；局域网 WebGUI 会把当前会话密钥自动附加到缩略图、媒体预览和文件链接。\r
+\r
+RabiLink 远程 WebGUI 会自动为缩略图、媒体预览和文件链接保留 \`/manage/<账号>/<RabiGUID>\` 前缀，并为视频转发字节范围请求；不需要也不应在远程 URL 中添加局域网 \`webgui_token\`。\r
+\r
+Agent 处理意见后会先更新计划，再把说明作为 \`approval_response\` 直接显示在该计划记录中；Codex 任务只保留简短处理状态，不作为回复正文的交付位置。\r
+\r
+先用左侧选择当前 Route，再看顶栏的 Manager 连接状态。Route 是否正在运行，要以控制台或日志诊断里的运行状态为准。\r
+\r
+“计划与记忆”页不直接读取 \`data/\`，也不在浏览器里重新解释分类、状态颜色或合同完整性。Manager 返回计划的状态整数等级、重要程度整数等级、紧急程度整数等级、各自文字和色板、\`counts.stages\` 及审批状态；默认顺序也由 Manager 决定。用户在列表菜单选择排序或筛选时，浏览器只提交参数。时间排序使用 \`updatedAt\`；其余三种排序都比较 Manager 返回的整数等级。没有进入审批步骤的进行中计划在展开详情后提供“计划引导”：输入针对整个计划，不绑定某一步；Agent 会根据引导继续推进，并在需要时调整尚未开始的步骤。进入审批状态后只显示对应步骤里的审批入口，不同时开放计划引导。计划引导和审批输入都支持用 \`@\` 引用计划附件，并共享键盘提交、附件选择、粘贴、预览和删除操作。未终态计划只显示绿色“进行中”、蓝色“等待打包”、紫色“等待 QA”、灰色“暂停”、红色“待审批”、橙色“待人工核验”；暂停绝对排在最后。外部资料、账号、设备、owner、授权和回执等原因只保留在计划详情中。\r
+\r
+等待审批、方案确认或授权时，当前步骤写入完整的 \`approvalRequest\`。只有合同完整、可提交且 \`responseStatus=pending\` 时，Manager 才显示红色“待审批”，并同时开放审批入口。审批资料缺项时计划仍显示绿色“进行中”，由 Agent 继续调查和补齐。会改变交付内容的计划只有在适用同步、SVN 提交和无冲突回读完成后才显示蓝色“等待打包”；目标包完成并证明纳入后显示紫色“等待 QA”。开发闭环后只剩人工视觉或交互确认的 \`manual-verify-*\` 步骤显示橙色“待人工核验”。完全没有安全动作时显示灰色“暂停”，具体缺口继续保存在 \`waitingFor\`。\r
+\r
+“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA 验收 → QA 通过完成；QA 失败回实施”只用于代码、Prefab、资源、配置等会改变项目内容的计划。调查、设计评审、运营、资料收集、外部依赖与控制面维护继续显示自身真实步骤和等待原因，不会为了凑流程被塞入打包或 QA 阶段。\r
+\r
+工作群中的“已认领”只表示 Agent 已通过引用消息公开接手。计划与记忆中出现对应工作项，还要求后台完成受管登记：源消息、有效认领回执、唯一计划、唯一正式任务、两轮查重和三方 workspace 必须一致。认领成功但登记失败时，不能把它当成已经进入计划闭环。\r
+\r
+长计划列表保持正常页面滚动，只有外侧计划目录限制在视口高度内独立滚动。滚动右侧计划时，页面使用浏览器可见性观察更新目录中的当前阅读项；只有高亮项离开目录自身的可见区域时才调整目录滚动，不对整页滚动执行持续的全列表扫描。点击目录跳转时会暂时锁定所选高亮，平滑滚动结束后再恢复当前阅读项观察，避免沿途计划让目录光标连续跳动。计划分类、搜索和刷新工具栏在桌面宽度下会吸附在固定顶栏下方；目录跳转为卡片标题预留工具栏高度，不会把定位目标遮住。窄屏下工具栏恢复普通页面流，避免双行控件长期占用可视区域。展开详情不执行高度动画，审批输入也不自动反复增高。\r
+\r
+计划引导或审批意见落盘后，Agent 通知会在后台继续。通知期间下一条草稿仍可编辑，只暂时禁止再次提交，并在输入区附近明确说明原因。计划引导回写为只关联 \`planId\` 的处理说明；审批回复仍关联 \`planId / stepId\`。计划详情中的“工作留痕”默认折叠，展开后可以查看计划引导、步骤审批意见、Agent 回复和计划版本；已批准、已完成和已归档计划也保留该入口。\r
+\r
+## 左侧栏：先选择当前 Route\r
+\r
+左侧“当前航线”决定大多数页面正在查看和修改哪一条 Route。切换前如果存在未保存修改，界面会请求确认。\r
+\r
+Route 下拉旁的数量是当前配置数量。下拉选中项和候选项优先显示人格标题；Route 配置名、禁用状态和消息端组合作为辅助信息，便于同一人格存在多条 Route 时继续区分。没有可用人格标题时，界面依次回退到 Route 显示名、人格 ID 和配置名。下方状态不代表每个外部平台都已经登录。\r
+\r
+主导航下方依次是“语音服务”“性能监控”“日志诊断”和“设置”；这些页面位于“使用手册”上方。\r
+\r
+## 界面主题\r
+\r
+在“设置”的“RabiRoute 桌面功能”中选择“跟随系统”“浅色”或“深色”，再点击顶栏“保存配置”。当前 WebGUI 会立即切换；Windows 托盘、角色面板、滑词操作条和截图窗口会在下一次设置刷新时切换，通常不超过十秒。主题只改变颜色和控件外观。完整说明见[界面主题](interface-theme.md)。\r
+\r
+## 系统截图与人格投递\r
+\r
+在 WebGUI 打开“设置”，找到“桌面快捷功能”：\r
+\r
+1. 开启“系统级截图”，设置截图快捷键、“自动复制选区”和“贴图快捷键”。默认贴图快捷键为 \`F3\`；所有快捷键都可单独使用 \`F1\` 到 \`F12\`，也支持 \`Ctrl\`、\`Alt\`、\`Shift\`、\`Win\` 加一个字母或功能键。完成设置页的其他修改后，统一点击顶栏“保存配置”。\r
+2. 在任意 Windows 软件中按截图快捷键后，截图窗口会先打开，画面不会整体变暗，可立即拖动框选区域。光标移到窗口上会显示可选范围和尺寸，图片就绪后窗口以外的画面会变暗，窗口本身保持原亮度；此时该窗口已是当前操作区域，可直接按 \`Enter\` / \`Ctrl+C\` 复制、按 \`F2\` 发送或按贴图快捷键贴图。单击左键也可保留整个窗口作为待确认选区。拖拽后选区以外的画面变暗，选区内保持原亮度；可在选区内拖动调整位置，也可拖动边框四角和四边中点调整范围。截图工具栏使用图标按钮；悬停可以查看文字提示，当前工具会显示青绿色背景和亮色边框，当前颜色会显示选中边框。选区确定后，工具栏可选择“框”“箭头”或“文字”，并用红、黄、绿、蓝四种颜色标注；文字标注支持不限长度的多行输入；直接输入文字，输入范围会随最长一行和换行数自动扩展；点击文字区域外的空白处完成，点击已有文字可选中，拖动文字可移动，拖动八个控制点可调整文字范围，双击可再次编辑，文字属性栏中的字号按钮可调整文字大小。按 \`Ctrl+Z\` 删除最后一笔。复制、贴图或发送时会把标注写入图片。图片尚未准备完时点击“复制”“贴图”或“发送”，会在图片就绪后继续。拖拽只创建待确认选区：按 \`Enter\` / \`Ctrl+C\` 复制，按 \`F2\` 发送，按贴图快捷键确认并贴图；默认确认贴图或发送时也复制到剪贴板，可在“自动复制选区”关闭，关闭后仍可按 \`Ctrl+C\` 或点击“复制”。\`Ctrl+A\` 选择整个屏幕。未框选时，光标右下角会跟随显示静态画面的 10 倍像素采样预览、当前颜色块和 HTML 颜色代码 \`#RRGGBB\`；按 \`C\` 直接复制该代码，不确认选区、不写入截图历史，也不弹通知。按鼠标右键、\`Esc\` 或关闭截图窗口会取消本次截图，不写入截图历史；复制、贴图或发送才会保存截图和框选区域。\r
+3. 截图窗口按 \`<\` / \`>\` 查看上一张和下一张已保存的屏幕截图；切换后会恢复该截图最后一次用于复制、贴图或发送的框选区域。截图窗口打开且已框选区域时，按贴图快捷键会直接贴出该区域；其他时候按贴图快捷键会贴出剪贴板中的图片；框选贴图会保留原屏幕位置和大小，拖动、缩放、复制、保存和调整透明度后，RabiRoute Desktop 重启仍会恢复。关闭单个贴图才删除它。\r
+4. 点击“发送”后，输入可选文字并从“投递至人格”中选择已激活人格。文字可以留空，图片仍会发送。\r
+\r
+截图和文字共用角色面板投递入口。Codex 和 DSH 会把截图作为图片输入接收；截图文件暂存在项目私有目录 \`.rabiroute-message-images/\`，贴图图片和区域记录保存在私有 \`data/desktop/\`。修改截图开关、截图快捷键、自动复制选区、贴图快捷键或“Windows 登录启动”后，托盘会自动读取新配置，不需要重启。\r
+\r
+## 开启滑词菜单\r
+\r
+在 WebGUI 打开“设置”，找到“开启滑词菜单”：\r
+\r
+1. 打开“开启滑词菜单”。完成设置页的其他修改后，统一点击顶栏“保存配置”。在 Windows 软件中用鼠标拖选，或用 \`Shift\` + 方向键 / \`Home\` / \`End\` / \`PageUp\` / \`PageDown\` 扩选文字后，会出现系统悬浮按钮。悬浮条按选区范围横向居中；鼠标向上拖选时显示在上方，向下或同一行拖选时显示在下方，不遮挡选中文字。键盘扩选会使用系统插入符范围；Unity 没有系统插入符时，使用同一窗口最近一次点击位置。\r
+2. 把光标移到“投递至”，会列出当前已启用且运行中的人格；点击一项后，把选中文字投递到对应 Route。\r
+3. “滑词朗读”是滑词菜单的子功能。开启时悬浮条左侧还有“朗读”，点击后才进入本机语音队列；关闭后悬浮条只保留“投递至”。\r
+4. 只有同时打开“滑词朗读”和“高级选项”，才显示“滑词朗读模型”。\r
+\r
+划选本身不朗读、不投递。密码控件和仍无法读取的选区会被忽略。普通软件不会模拟 \`Ctrl+C\`；Unity 编辑器只有在 UI Automation 读不到文字时才发送受保护的临时复制，等待编辑器更新剪贴板，并在读取后恢复原剪贴板。保存后托盘会读取新配置，不需要重启。\r
+\r
+左下角有四个辅助入口：\r
+\r
+- **快速配置**：用三步向导完成常见配置。\r
+- **GitHub**：打开项目仓库。\r
+- **使用手册**：打开本页所在的用户文档中心。\r
+- **打开配置目录**：在本机查看 Manager 配置位置。\r
+\r
+## 顶栏：区分连接、保存和刷新\r
+\r
+顶栏中的 \`Manager 已连接\` 只表示浏览器能访问 Manager。它不等于 Route 正在运行，也不等于 NapCat 或 Codex 已经就绪。\r
+\r
+| 控件 | 实际作用 |\r
+| --- | --- |\r
+| 中 / EN | 切换当前浏览器的界面语言，不修改 Route 数据 |\r
+| 刷新状态 | 重新读取 Manager、配置和运行状态，不保存编辑内容 |\r
+| 新增航线 | 新建 Route 并打开快速配置 |\r
+| 保存配置 | 在 Route 页面保存当前 Route；在“设置”页一次保存桌面功能、滑词、Rabi 实例、目录和局域网访问配置；在“性能监控”页保存性能记录设置 |\r
+\r
+出现“有未保存的修改”时，先保存再切换 Route 或离开页面。刷新不是保存，重启也不会替你保存表单。\r
+\r
+\r
+## 常见运行状态\r
+\r
+| 状态 | 含义 | 下一步 |\r
+| --- | --- | --- |\r
+| 运行中 | 需要子进程的 Route 已启动 | 继续检查消息端和处理端连接 |\r
+| 启用中 | Route 已启用，但当前入口不需要独立 Gateway listener | 查看对应 Manager 入口状态 |\r
+| 已停止 | Route 配置存在，但子进程没有运行 | 到日志诊断启动或检查错误 |\r
+| 禁用中 | Route 或消息输入被关闭 | 确认是否应启用后保存 |\r
+| Manager 未连接 | WebGUI 无法访问本地 Manager | 检查进程、端口和启动目录 |\r
+\r
+实验适配器显示“实验”并不等于故障。它表示代码入口存在，但外部系统或真机链路仍需在你的环境里验收。\r
+\r
+## 启动、停止和重启的区别\r
+\r
+- **启动**：让当前 Route 的运行入口开始工作。\r
+- **停止**：停止当前 Route 子进程，不删除配置和历史记录。\r
+- **重启**：停止后重新启动，用于应用构建或连接变化。\r
+- **删除**：删除 Route 配置，风险高于停止；操作前先确认数据范围。\r
+\r
+Manager 只守护自己启动的 Route 子进程。NapCat、QQNT、Codex/ChatGPT Desktop 等外部程序有各自的生命周期。\r
+\r
+## 语言切换边界\r
+\r
+界面语言保存在当前浏览器。Route/persona ID、规则名、模板、正则、任务名、路径、token、日志和运行数据保持原文，不随语言切换改变。\r
+\r
+使用手册会切换到对应语言文件。开发者文档、代码路径和外部页面会按链接打开，不会生成第三份自动翻译内容。\r
+\r
+## 接下来阅读\r
+\r
+- 还没有成功投递：回到[跑通第一条 Route](first-route.md)。\r
+- 不知道该选哪个入口：阅读 [Route 与消息端](routes-and-adapters.md)。\r
+- 状态正常但消息没到：阅读[运行、日志与排障](operations-and-troubleshooting.md)。\r
+`,be="<!-- docs-language-switch -->\r\n<div align=\"center\">\r\nEnglish | <a href=\"./interface-and-status.md\">简体中文</a>\r\n</div>\r\n<!-- /docs-language-switch -->\r\n\r\n# Interface and status\r\n\r\nRibiWebGUI is RabiRoute's local control console. It edits configuration, invokes Manager actions, and shows diagnostics. Local files and runtime state remain the underlying sources of truth.\r\n\r\n## Access WebGUI from the LAN\r\n\r\nManager on the Rabi PC is RibiWebGUI's complete HTTP backend. The default `http://127.0.0.1:8790/` is local-only. On another device, `127.0.0.1` points back to that device, not to the Rabi PC.\r\n\r\nOn the Rabi PC, open **Console → Directory configuration → LAN WebGUI access**, enable access, and generate a key. After restarting Manager, a WebGUI still opened locally through `localhost/127.0.0.1` automatically redirects to the preferred LAN IP while preserving the current Route, page, and authentication. You can also copy the generated link, for example:\r\n\r\nAn HTTP LAN page may not receive secure browser clipboard permission. Copy-link, copy-key, and other WebGUI copy actions try the Clipboard API first and automatically fall back to an in-page copy operation when that API is unavailable or rejected. A manual-copy message appears only when the browser rejects both mechanisms.\r\n\r\n```text\r\nhttp://192.168.0.57:8790/#/routes/<Route-config-name>/overview?webgui_token=<access-key>\r\n```\r\n\r\nThe sidebar **Current Route** selector is the only selection source. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, and Runtime Diagnostics all use `#/routes/<Route-config-name>/<page>`, with `overview`, `adapters`, `persona`, `knowledge`, `speech`, and `runtime` respectively. Changing Current Route preserves the page type and immediately redirects the URL. **Performance** and **Settings** are host-wide pages and do not change with the selected Route. To open that Route's **Plans & Memory** directly, use the same Route configuration name with the `knowledge` page, or click **Copy Route knowledge link**:\r\n\r\nClicking any sidebar page label updates the selected state, top title, and URL first, then immediately shows **Page switched. Loading content…**. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, Performance, Runtime Diagnostics, and Settings load their page code and data asynchronously instead of delaying the tab switch until the complete page is ready. If a page chunk fails to load, WebGUI refreshes once and restores the intended page.\r\n\r\n```text\r\nhttp://192.168.0.57:8790/#/routes/<Route-config-name>/knowledge?webgui_token=<access-key>\r\n```\r\n\r\nThe Route configuration name is URL-encoded. Any Route-scoped link selects that Route before rendering the page. Switching the sidebar Route updates the current browser session to the same page type under the new Route. To bookmark, reopen, or share the shortcut with an authorized device on the same LAN, use a complete keyed link rather than the address bar after WebGUI has removed the key.\r\n\r\nWebGUI keeps the URL key in the current browser session, automatically applies it to HTTP, SSE, and persona-avatar requests, and removes it from the address bar so later screenshots do not keep exposing it. Rotating the key immediately invalidates old links. The switch and key can be managed only from the Rabi PC running Manager; that PC's redirected LAN address remains manageable, while other devices cannot manage them. If the link times out, first confirm that Manager restarted, then check whether Windows Firewall allows RabiRoute or Node.js TCP `8790` on the private/domain network. Never publish the link in a public chat, log, or repository.\r\n\r\nRequests from the Rabi PC to its own LAN address are still treated as local requests. Enabling LAN access therefore does not make message sending, the tray, or local tools on that same PC require the WebGUI key. Other devices must still use the complete link with a valid key.\r\n\r\n## Access WebGUI remotely through RabiLink\r\n\r\nWhen the Rabi PC has the global RabiLink Relay connection enabled and belongs to the current Relay account, sign in at `https://rabiroute.cottongame.com/manage`, then open:\r\n\r\n```text\r\nhttps://rabiroute.cottongame.com/manage/<account>/<RabiGUID>/#/routes/<Route-config-name>/knowledge\r\n```\r\n\r\nThe remote entry uses the same Route page names. Replace `knowledge` with `overview`, `adapters`, `persona`, `speech`, or `runtime` as needed. Settings uses the host-wide `#/settings` path, and Performance uses the host-wide `/performance` path.\r\n\r\nReplace the final page with `overview` or another WebGUI route when needed. This remote entry does not use the LAN `webgui_token`; it uses the browser's Relay management login cookie, while the PC worker separately authenticates with its application token. Ordinary APIs, images, attachments, audio, downloads, and byte-range video playback return to the selected PC's loopback Manager, and Manager events refresh through remote SSE. If the shell opens but data, attachments, or live status do not, verify that the target PC is online in Relay, the RabiGUID is correct, and the Relay script plus `ribiwebgui/dist` were published together. Restarting only the local Manager does not update the public Relay.\r\n\r\n## The main pages\r\n\r\n| Area | Primary purpose | Common actions |\r\n| --- | --- | --- |\r\n| Console | View and operate each Route | Add, enable, restart, or delete a Route |\r\n| Message Adapters | Message sources and Agent handlers | Scan, add, connect, and bind tasks |\r\n| Persona Configuration | Persona, Route variables, and message rules | Add rules, regexes, and schedules |\r\n| Plans & Memory | Plans, recent memory, consolidated memory, plan guidance, and approval records for the current persona | Search, guide running plans, expand steps, review execution contracts, submit approval feedback, and refresh Manager data |\r\n| Speech Service | Host TTS, ASR, microphone, and playback | Inspect status, adjust parameters, and test speech |\r\n| Performance | Manager, Route, and speech-service runtime metrics | Inspect live state and history |\r\n| Log Diagnostics | Find path breaks and run real tests | Start, restart, trigger, and inspect logs |\r\n| Settings | Host identity, RabiLink, directories, LAN access, and desktop entry points | Configure screenshots, the selected-text menu, login startup, access keys, and access links |\r\n| User Guide | Task-based product instructions | Search, change page, and open deeper material |\r\n\r\nWhen Plans & Memory opens, it first requests eight lightweight plan summaries and fetches the complete details for the first two visible cards in parallel before mounting those cards, so the first screen does not pause on `Loading plan details`. Without requiring scroll, it then completes the selected plan category in background pages of up to 50 summaries and completes the visible memory category in pages of up to 100 items. The page keeps the loaded and total counts visible. These background requests pause while the tab is hidden; when the tab becomes visible again, the page refreshes and resumes completion. The left directory retains every returned title, while the content area initially mounts only eight plan cards and 24 memory cards, then appends bounded batches while scrolling. Clicking a directory item that is not mounted creates a bounded forward window starting at that target and gives that plan's detail request highest priority; the current Manager and LAN environment uses a one-second interactive detail budget. The page does not create every preceding body card at once. Scrolling down renders later plans, while scrolling up restores earlier plans in bounded batches and keeps the current card at the same viewport position. Other body text, steps, approvals, and attachment metadata hydrate only when cards are genuinely near the viewport; each observer turn promotes only the nearest two cards and runs at most two concurrent detail requests. Each later summary page yields one rendering frame without waiting for body hydration, so heavy cards or attachments cannot delay directory completion. Only cards with a real in-flight detail request show the loading animation; cards that have not approached the viewport use a compact hint instead of instantiating a large skeleton for every plan, and the browser skips layout and paint for off-screen cards. Image and video cards show a light `Loading attachment` placeholder instead of a black block until media is ready.\r\n\r\nThe page reads Codex Desktop state only when the user expands a plan, and after a page refresh it checks only plans that remain expanded. It no longer starts a state scan for every loaded plan. One plan is not requested twice in the same pass, and each read has a three-second limit. Expanded details show the Task Agent, the Plan Secretary when enabled, each Agent's work state, and the matching Codex task state. A missing task has its own `Task Agent session is missing` label. A valid non-working binding can be located or awakened in Codex from the card or Agent row; this opens only the exact task ID and sends no message or replacement task.\r\n\r\nFor a running plan outside approval, expanding the card exposes whole-plan guidance. It is associated only with `planId`, not one step; the Agent uses it to continue the plan and adjust not-started steps when needed, then writes a `guidance_response` without `stepId`. Approval plans continue to use the owning step's approval contract and `approval_response`.\r\n\r\nChoose the current Route in the sidebar, then check the Manager connection in the top bar. Use the Console or Log diagnostics runtime state to decide whether that Route is running.\r\n\r\nThe **Plans & Memory** page never reads `data/` directly or reinterprets Manager presentation. Non-terminal cards expose only green `In progress`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification`. External information, accounts, devices, owners, authorization, and receipts remain internal plan details instead of status labels. RibiWebGUI and the Qt tray consume the same Manager DTO, palette, counts, and order.\r\n\r\nThe current-step summary now shows the step's `detail` description directly below its title, so users can see what the step requires without opening the full execution plan. Steps without a description do not render an empty placeholder.\r\n\r\nThe directory never introduces horizontal scrolling for the whole panel. The trailing sort label remains fixed while an overflowing title moves at a constant speed on pointer hover or keyboard focus. Reduced-motion preferences disable title movement. Choices in the list dialog remain drafts until **Done**. Closing the dialog leaves the current list unchanged; **Done** closes it and immediately calls the complete plan list once with the selected Manager-side sort and filters, updating directory and content cards together.\r\n\r\nThe dialog includes both status filters and plan `keywords` tags. Each group supports multiple selections with OR matching inside the group; a plan must match both groups. The tag section is searchable. The trigger and result summary show the active filter count, with per-group clear actions and **Clear filters**. Narrow screens stack the groups into one column, and checkbox and action targets remain at least 44px.\r\n\r\nWhen Plans & Memory is opened directly, the page loads memory counts in parallel, so the Recent Memory, Consolidated Memory, and Archived tab numbers do not wait for the user to open those tabs. Each Recent Memory card shows both its recorded time and its last true recall-hit time; a memory that has never matched a message says `Not recalled yet`. Archived source-memory cards show the recorded time and archive time. Memory bodies render as Markdown with headings, lists, code, links, and HTTP(S) images; local absolute paths and dangerous protocols are not loaded. A memory card is capped at 512px. Extra body content is clipped without an internal card scrollbar, and **View details** opens the complete memory in a separate dialog. When the least-active memory is less than 24 hours away from the 72-hour trigger, a separate consolidation panel appears above the list with the remaining time, the memory that will trigger the run, and the expected candidate count. Candidate cards are marked. At zero, Manager automatically creates and delivers the batch; the page does not need to remain open. The cohort is frozen to memories already beyond 24 hours at the original 72-hour trigger, so late execution does not append later boundary crossings. Manager derives and caches the booleans; the browser neither treats a direct view as a recall nor recalculates the candidate set.\r\n\r\nA complete actionable `approvalRequest` with `responseStatus=pending` produces red `Awaiting approval`; an incomplete contract remains green `In progress`. A content-changing plan becomes blue `Awaiting package` after applicable sync, commit, and conflict-free readback. Proven package inclusion produces purple `Awaiting QA`. A development-closed `manual-verify-*` step produces orange `Awaiting manual verification`. A plan with no safe action becomes gray `Paused`, while `waitingFor` keeps the exact internal reason.\r\n\r\nAvailable CLI, static checks, fallback validation, retries, sending, or coordination stay green `In progress`. A completed delivery gate that only lacks package identity or inclusion proof is blue `Awaiting package`; proven inclusion is purple `Awaiting QA`. Test infrastructure, assets, documents, owner replies, renewed authorization, or external receipts produce gray `Paused` only when no safe action remains, and their exact reason stays outside the status badge.\r\n\r\nThe `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure` lifecycle applies only to plans that change project content such as code, prefabs, assets, or configuration. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance continue to show their real steps and wait reasons instead of being forced into package or QA stages.\r\n\r\nA quoted **claim** in the work group only means that the Agent publicly took ownership. For the matching item to appear under Plans & Memory, managed registration must also validate the source message, verified claim receipt, unique plan, unique business task, two deduplication passes, and the same workspace across all three records. A successful claim with failed registration has not entered the managed plan lifecycle.\r\n\r\nThe Agent may also add images, videos, or ordinary files to the plan itself when creating or updating it, including effect previews, demo videos, design drafts, reports, or patches already produced for a plan awaiting approval. Images, videos, and Markdown appear below the plan description in compact, fixed-width 16:9 preview cards that shrink only when the container is narrower. A Markdown card safely reads the beginning of the document and displays a clamped plain-text excerpt; it does not execute HTML, open links, or load images. Clicking it opens the in-page document preview with headings, lists, tables, blockquotes, and code blocks plus a source-download action. Video thumbnails keep a play icon visible before hover or selection, then show an `m:ss` or `h:mm:ss` duration in the lower-right corner after the browser reads media metadata. Images open in an in-page large-image preview, while videos open in an in-page player with controls. Markdown files larger than 2 MiB remain download-only to avoid freezing the browser. The complete-document renderer escapes raw HTML, disables dangerous or relative links, and replaces remote images with text placeholders instead of loading third-party resources from attachment content. Recognized media includes PNG, JPEG, WebP, GIF, MP4/M4V, WebM, Ogg Video, and MOV/QuickTime, with actual video codec support depending on the browser. Other files show name, type, and size and open or download through Manager. The browser never reads a local path from the plan record directly; every attachment crosses the constrained Manager endpoint, and LAN WebGUI automatically applies the current session key to thumbnails, media previews, and file links.\r\n\r\nRabiLink remote WebGUI automatically preserves the `/manage/<account>/<RabiGUID>` prefix for thumbnails, media previews, and file links, and forwards byte-range video requests. Do not add the LAN `webgui_token` to a remote URL.\r\n\r\nLong plan lists keep the normal page scroll, while only the external plan directory scrolls independently within the viewport. As the plan cards scroll, browser visibility observation updates the directory's current reading item; the directory adjusts its own scroll only when that highlighted item leaves the directory viewport, without continuously scanning the full list on every page-scroll event. A directory click temporarily locks the selected highlight and resumes reading-position observation after smooth scrolling settles, so intermediate cards do not make the cursor jump through the directory. On desktop widths, the plan-view tabs, search field, and refresh action stick immediately below the fixed app bar. Directory jumps reserve the sticky toolbar height so the destination card heading remains visible. Narrow layouts return the toolbar to normal page flow instead of letting a two-row control block occupy the viewport. Detail expansion remains animation-free, and the approval input does not repeatedly auto-grow.\r\n\r\nAfter plan guidance or approval feedback is durably recorded, Agent notification continues in the background. The next draft remains editable while another submission is temporarily disabled, and a nearby status row explains the reason and recovery condition. Each plan detail also has a collapsed **Work history** section. Open it to review plan guidance, step approval feedback, Agent replies, and plan revisions; the entry remains available for approved, completed, and archived plans.\r\n\r\n## Sidebar: select the current Route first\r\n\r\n**Current Route** determines which configuration most pages display and edit. If changes are unsaved, the interface asks before switching.\r\n\r\nThe count beside the selector is the number of configurations. The selected value and menu items prefer the persona title, while the Route configuration name, disabled state, and adapter combination remain secondary details so multiple Routes for one persona stay distinguishable. When no persona title is available, WebGUI falls back to the Route display name, persona ID, and then configuration name. The status below does not prove that every external platform is authenticated.\r\n\r\nThe secondary navigation above the footer contains **Speech Service**, **Performance**, **Log Diagnostics**, and **Settings**; these entries sit above **User Guide**.\r\n\r\n## Interface theme\r\n\r\nIn **Settings** > **RabiRoute desktop features**, choose **Follow system**, **Light**, or **Dark**, then use the top-bar **Save configuration** action. The current WebGUI changes immediately. The Windows tray, role panel, selected-text action bar, and screenshot windows change on the next settings refresh, usually within ten seconds. The theme changes colors and control appearance only. See [Interface theme](interface-theme_en.md) for the full guide.\r\n\r\n## System screenshots and persona delivery\r\n\r\nOpen **Settings** in WebGUI and find **Desktop shortcuts**:\r\n\r\n1. Enable **System screenshot**, then set the screenshot shortcut, **Auto-copy selection**, and **Pin shortcut**. The default pin shortcut is `F3`. Every shortcut can use `F1` through `F12` alone, or `Ctrl`, `Alt`, `Shift`, or `Win` plus one letter or function key. When the other Settings edits are ready, use the single top-bar **Save configuration** action.\r\n2. Press the screenshot shortcut in any Windows application; the capture window opens first without dimming the screen so you can drag to select immediately. Hovering over a window shows its selectable bounds and size; once the image is ready, the area outside that window is dimmed while the window keeps its original brightness. That window is immediately the active operation area: press `Enter` / `Ctrl+C` to copy it, `F2` to send it, or the pin shortcut to pin it. A left click can still keep the whole window as a selection awaiting confirmation. After dragging, everything outside the selection is dimmed while the selected area remains at its original brightness; drag inside the selection to reposition it, or drag a corner or edge-midpoint handle to resize it. The screenshot toolbar uses icon buttons; hover shows the text label, the active tool has a teal background and bright border, and the active color has a visible selection border. After selecting an area, use the toolbar to add a rectangle, arrow, or text in red, yellow, green, or blue; Text annotations accept unlimited multiline input; type directly on the screenshot; the input range grows with the longest line and line count, then click outside the text area to commit, click the annotation again to select it, drag it to move, drag its handles to resize the text box, double-click to edit, and use the separate text-properties bar to change the font size. `Ctrl+Z` removes the last mark. Copying, pinning, and sending bake the marks into the image. If the image is still preparing, **Copy**, **Pin**, or **Send** continues when it is ready. Dragging only creates a selection awaiting confirmation: `Enter` / `Ctrl+C` copies it, `F2` sends it, and the pin shortcut confirms and pins it. By default, confirming a pin or send also copies the selection to the clipboard; turn that off in **Auto-copy selection** and use `Ctrl+C` or **Copy** when needed. `Ctrl+A` selects the full screen. Before a region is selected, a cursor-following tip shows a 10x pixel-sampling preview, the current color swatch, and the static-image HTML color code `#RRGGBB`. Press `C` to copy it directly without confirming a region, adding screenshot history, or showing a notification. Right-clicking, pressing `Esc`, or closing the capture window cancels that capture without adding it to history; copying, pinning, or sending saves the screen capture and selected area.\r\n3. Press `<` / `>` in the capture window to view the previous / next saved screen capture. The last area used to copy, pin, or send that capture is restored. While a selected capture is open, press the pin shortcut to pin that selected area. Otherwise, it pins an image already on the clipboard. A pinned selection keeps its original screen position and size; its drag position, zoomed size, and opacity are restored after RabiRoute Desktop restarts. It can also be copied and saved. Closing that individual pin removes it.\r\n4. Click **Send**, add optional text, choose an active persona in **Send to persona**, and confirm. The image is sent even if the text is empty.\r\n\r\nThe screenshot and text use the role-panel delivery entry. Codex and DSH receive the screenshot as image input. The file is kept temporarily in the private project directory `.rabiroute-message-images/`; pinned images and selected-area records are stored in private `data/desktop/`. After changing the screenshot toggle, screenshot shortcut, auto-copy setting, pin shortcut, or **Windows login startup**, the tray reads the new settings automatically; restarting is not required.\r\n\r\n## Enable selected-text menu\r\n\r\nOpen **Settings** in WebGUI and find **Enable selected-text menu**:\r\n\r\n1. Turn on **Enable selected-text menu**. When the other Settings edits are ready, use the single top-bar **Save configuration** action. Select text with a mouse drag or with `Shift` plus an arrow key, `Home`, `End`, `PageUp`, or `PageDown`. The floating buttons are horizontally centered on the selection bounds. An upward mouse drag places them above; a downward or same-line drag places them below. Keyboard selection uses system caret bounds; when Unity has no system caret, the most recent click in the same window keeps the buttons near the text.\r\n2. Move the cursor to **Send to** to list currently enabled and running personas. Click one item to deliver the selected text to that Route.\r\n3. **Selected-text reading** is a sub-feature of the selected-text menu. When it is on, the left button is **Read aloud** and only a click enqueues host speech. When it is off, the bar keeps only **Send to**.\r\n4. The **Selected-text voice model** selector appears only when both **Selected-text reading** and **Advanced options** are on.\r\n\r\nSelection alone does not read or send. Password controls and still-unreadable selections are ignored. Normal applications never receive a simulated `Ctrl+C`; only the Unity Editor sends a guarded temporary copy when UI Automation cannot read the selection, waits for the editor to update the clipboard, and restores the original clipboard afterward. After saving, the tray reads the new settings; restarting is not required.\r\n\r\nThe footer contains four supporting actions:\r\n\r\n- **Quick setup**: configure common paths in three steps.\r\n- **GitHub**: open the repository.\r\n- **User Guide**: open this task-based documentation center.\r\n- **Open config directory**: open the local Manager configuration location.\r\n\r\n## Top bar: connection, save, and refresh differ\r\n\r\n`Manager connected` only means the browser can reach the Manager. It does not mean the Route, NapCat, or Codex task is ready.\r\n\r\n| Control | Actual effect |\r\n| --- | --- |\r\n| 中 / EN | Changes this browser's interface language only |\r\n| Refresh status | Reloads Manager, configuration, and runtime state; does not save edits |\r\n| Add Route | Creates a Route and opens Quick setup |\r\n| Save configuration | Saves the current Route on Route pages; on **Settings**, saves desktop features, selected-text menu, Rabi instance, directories, and LAN WebGUI access together; on **Performance monitor**, saves the performance-recording settings |\r\n\r\nWhen the unsaved-changes notice appears, save before switching Routes or leaving. Refresh is not Save, and Restart does not save form edits.\r\n\r\n\r\n## Common runtime states\r\n\r\n| State | Meaning | Next check |\r\n| --- | --- | --- |\r\n| Running | A Route that needs a child process has started | Check source and handler connectivity |\r\n| Enabled | The Route is enabled but its current entry is Manager-owned | Check the corresponding Manager entry |\r\n| Stopped | Configuration exists but the child process is not running | Start it or inspect errors in Log Diagnostics |\r\n| Disabled | The Route or its message input is off | Enable intentionally, then save |\r\n| Manager disconnected | WebGUI cannot reach the local Manager | Check the process, port, and startup directory |\r\n\r\nAn **Experimental** badge is not itself an error. It means a code path exists, while the external system or real-device loop still needs acceptance in your environment.\r\n\r\n## Start, stop, restart, and delete\r\n\r\n- **Start** begins the current Route's runtime entry.\r\n- **Stop** ends the Route process without deleting configuration or history.\r\n- **Restart** stops and starts it again after build or connection changes.\r\n- **Delete** removes Route configuration and has a wider impact than Stop.\r\n\r\nThe Manager supervises Route processes that it starts. External programs such as NapCat, QQNT, and Codex/ChatGPT Desktop keep their own lifecycles.\r\n\r\n## Locale boundaries\r\n\r\nLocale is stored in this browser. Route/persona IDs, rule names, templates, regexes, task names, paths, tokens, logs, and runtime values stay unchanged.\r\n\r\nThe User Guide selects the matching language file. Developer documents, code paths, and external pages open through links; RabiRoute does not maintain a third machine-translated source.\r\n\r\n## Continue\r\n\r\n- No successful delivery yet: [Run your first Route](first-route_en.md).\r\n- Unsure which source to choose: [Routes and message adapters](routes-and-adapters_en.md).\r\n- Status looks healthy but delivery fails: [Operations, logs, and troubleshooting](operations-and-troubleshooting_en.md).\r\n",fe=`<!-- docs-language-switch -->\r
 <div align="center">\r
   简体中文 | <a href="./interface-theme_en.md">English</a>\r
 </div>\r
@@ -1535,7 +1535,7 @@ One persona can serve several Routes. Editing its text or rules affects every bo
 \r
 ## Configure a persona\r
 \r
-Open **Persona Configuration** and select an existing role under **Persona binding**. The page shows the \`persona.md\` preview, Route variables, and persona automation.
+Open **Persona Configuration** and select an existing role under **Persona binding**. The page shows the \`persona.md\` preview, Route variables, and persona automation.\r
 \r
 After selecting a persona, use the same configuration card to set or replace its avatar. PNG, JPEG, WebP, and GIF images up to 5 MB are supported. The avatar follows the persona into selectors, the Route overview, speech persona selection, and the local role panel; the first character of the persona ID is used as the fallback. Because the image belongs to the persona directory, it does not need to be uploaded again for each Route.\r
 \r
@@ -1551,7 +1551,7 @@ User-facing copy uses **persona**. Existing \`roleId\`, \`/api/roles/*\`, and \`
 \r
 ## Synchronize the current persona across PCs\r
 \r
-After selecting a persona, use **Multi-PC persona sync** in the page header to open a dedicated persona-folder synchronization workspace. Choose another PC using the same RabiLink application token on the left. Changed Files then shows, without writing files, what would be pulled, pushed, deleted, automatically merged, or require confirmation. Synchronization starts only after you select **Pull and synchronize**. Automatic synchronization runs in the backend and does not require the page to remain open. A local persona-file change, peer availability change, or Relay reconnection triggers one manifest reconciliation. LAN is preferred, with restricted Relay transit only when direct access is unavailable. Unfinished scope is persisted locally, so disconnects and Manager restarts do not forget it; an offline target waits for a connection event instead of fixed-interval business queries.
+After selecting a persona, use **Multi-PC persona sync** in the page header to open a dedicated persona-folder synchronization workspace. Choose another PC using the same RabiLink application token on the left. Changed Files then shows, without writing files, what would be pulled, pushed, deleted, automatically merged, or require confirmation. Synchronization starts only after you select **Pull and synchronize**. Automatic synchronization runs in the backend and does not require the page to remain open. A local persona-file change, peer availability change, or Relay reconnection triggers one manifest reconciliation. LAN is preferred, with restricted Relay transit only when direct access is unavailable. Unfinished scope is persisted locally, so disconnects and Manager restarts do not forget it; an offline target waits for a connection event instead of fixed-interval business queries.\r
 \r
 The page shows automatic-reconciliation state, and **Sync current persona** runs it immediately. Results distinguish pull, push, already converged, LAN/Relay transport, and conflict counts. Two-sided ordinary-file edits or concurrent deletion versus editing never use last-writer-wins replacement. They enter **Human confirmation required**:\r
 \r
@@ -1559,26 +1559,26 @@ The page shows automatic-reconciliation state, and **Sync current persona** runs
 - **Use remote / Accept remote deletion** explicitly accepts the remote content or deletion intent.\r
 - **Manual merge** lets the local Agent submit reviewed content through the \`use_merged\` API.\r
 \r
-Concurrent voice-account classification branches do not let the file-conflict dialog guess who is the user. Confirm them again under **Voice endpoint accounts** in **Identity relations** so a new classification event explicitly converges the branch. Relay performs discovery and transit only; it stores no server-side master persona. Synchronization also does not replace independent backups or Git/SVN.
-
-## Recognize a person across endpoint accounts
-
-After selecting a persona, **Identity positioning** is divided into two cards:
-
-- **Recognized identities** is organized by person. One person's name and confirmed QQ, Weixin, voice, and other endpoint accounts appear on the same person card. Selecting the whole card opens one identity workspace where basic details, endpoint accounts, speaking habits, and relations can be viewed and edited without separate three-dot-menu dialogs.
-- **Unrecognized identities** is organized by endpoint type. An account stays here when its people are unknown, its candidates do not yet point to recognized people, or its evidence conflicts. Matching display names do not merge accounts automatically.
-
-The **Relations** section uses one relation model for people, organizations, and projects; it does not split records into long-term and short-term types. Temporary roles in the current message, such as who proposed an idea or who is replying to whom, remain in automatically created Situation records instead of becoming another manually maintained relation type. Basic details and speaking habits save together, while accounts and relations save inside their own sections so a partial failure is not presented as a successful all-at-once update.
-
-When an endpoint supplies an account identifier that does not change with its display name and the message matches a rule for the current persona, an unfamiliar account appears automatically as a “getting to know” candidate. This means only that the persona can accumulate clues for the account. It does not mean RabiRoute already knows the person. The account moves to a person card only after confirmation.
-
-A self-reported name, another person's claim, a temporary display name, or long-term consistency in vocabulary, sentence patterns, and response rhythm may help review a candidate, but none can confirm identity alone. If a claim exists only in forwarded, quoted, or attached content, or the endpoint cannot supply a stable account identifier, the system keeps the account unrecognized instead of attaching it automatically to an existing person.
-
-Several people may use one account. Once the allowed user set is known, attach the account to every relevant person card and mark it **Shared**. This identifies who may use the account, not who wrote the current message. The system may combine explicit self-identification, reply chains, task continuity, and speaking-habit consistency for per-message attribution, while retaining confidence and uncertainty. Recent activity by one person must not turn the whole account into their permanent account. When correcting an identity, retain the real endpoint account and retire any fictional person record created from its nickname so the history remains traceable.
-
-## Classify voice accounts under Identity positioning
-
-After a persona is selected, **Identity positioning** presents text accounts such as QQ and WeCom together with **Voice endpoint accounts**. Each processing-host and voiceprint-ID pair is one voice account, and a recording with several speakers may reference several accounts. The voice section shows the latest 24-hour classification coverage, speech attributed to the user, speech attributed to other people, unknown/conflicting segments, and relationships already stored by this persona. **This is me** is only the current persona's explicit interpretation of a voiceprint on its processing host. Neither RabiSpeech nor the RabiRoute host decides who a person is or assigns any voiceprint to the user by default.
+Concurrent voice-account classification branches do not let the file-conflict dialog guess who is the user. Confirm them again under **Voice endpoint accounts** in **Identity relations** so a new classification event explicitly converges the branch. Relay performs discovery and transit only; it stores no server-side master persona. Synchronization also does not replace independent backups or Git/SVN.\r
+\r
+## Recognize a person across endpoint accounts\r
+\r
+After selecting a persona, **Identity positioning** is divided into two cards:\r
+\r
+- **Recognized identities** is organized by person. One person's name and confirmed QQ, Weixin, voice, and other endpoint accounts appear on the same person card. Selecting the whole card opens one identity workspace where basic details, endpoint accounts, speaking habits, and relations can be viewed and edited without separate three-dot-menu dialogs.\r
+- **Unrecognized identities** is organized by endpoint type. An account stays here when its people are unknown, its candidates do not yet point to recognized people, or its evidence conflicts. Matching display names do not merge accounts automatically.\r
+\r
+The **Relations** section uses one relation model for people, organizations, and projects; it does not split records into long-term and short-term types. Temporary roles in the current message, such as who proposed an idea or who is replying to whom, remain in automatically created Situation records instead of becoming another manually maintained relation type. Basic details and speaking habits save together, while accounts and relations save inside their own sections so a partial failure is not presented as a successful all-at-once update.\r
+\r
+When an endpoint supplies an account identifier that does not change with its display name and the message matches a rule for the current persona, an unfamiliar account appears automatically as a “getting to know” candidate. This means only that the persona can accumulate clues for the account. It does not mean RabiRoute already knows the person. The account moves to a person card only after confirmation.\r
+\r
+A self-reported name, another person's claim, a temporary display name, or long-term consistency in vocabulary, sentence patterns, and response rhythm may help review a candidate, but none can confirm identity alone. If a claim exists only in forwarded, quoted, or attached content, or the endpoint cannot supply a stable account identifier, the system keeps the account unrecognized instead of attaching it automatically to an existing person.\r
+\r
+Several people may use one account. Once the allowed user set is known, attach the account to every relevant person card and mark it **Shared**. This identifies who may use the account, not who wrote the current message. The system may combine explicit self-identification, reply chains, task continuity, and speaking-habit consistency for per-message attribution, while retaining confidence and uncertainty. Recent activity by one person must not turn the whole account into their permanent account. When correcting an identity, retain the real endpoint account and retire any fictional person record created from its nickname so the history remains traceable.\r
+\r
+## Classify voice accounts under Identity positioning\r
+\r
+After a persona is selected, **Identity positioning** presents text accounts such as QQ and WeCom together with **Voice endpoint accounts**. Each processing-host and voiceprint-ID pair is one voice account, and a recording with several speakers may reference several accounts. The voice section shows the latest 24-hour classification coverage, speech attributed to the user, speech attributed to other people, unknown/conflicting segments, and relationships already stored by this persona. **This is me** is only the current persona's explicit interpretation of a voiceprint on its processing host. Neither RabiSpeech nor the RabiRoute host decides who a person is or assigns any voiceprint to the user by default.\r
 \r
 For an unresolved voiceprint, choose:\r
 \r
@@ -1586,27 +1586,27 @@ For an unresolved voiceprint, choose:\r
 - **Another person**: explicitly mark it as not the user.\r
 - **Clear decision**: retain the relationship event while removing the \`isUser\` conclusion, returning it to unknown.\r
 \r
-The page requests only statistics, abbreviated voiceprints, duration, last-seen time, and relationships; it neither requests nor displays transcript text. New recordings, local relationship corrections, and multi-PC persona synchronization each trigger one event-driven refresh. Reconnecting the event stream performs one catch-up query instead of fixed-interval coverage polling. The current version keeps existing voice classifications in the persona's \`voice/voice-identities.jsonl\` while presenting them inside Identity relations. A later unified-data migration must preserve those classifications. Multi-PC conflicts remain visible until a later explicit confirmation converges the branches.
+The page requests only statistics, abbreviated voiceprints, duration, last-seen time, and relationships; it neither requests nor displays transcript text. New recordings, local relationship corrections, and multi-PC persona synchronization each trigger one event-driven refresh. Reconnecting the event stream performs one catch-up query instead of fixed-interval coverage polling. The current version keeps existing voice classifications in the persona's \`voice/voice-identities.jsonl\` while presenting them inside Identity relations. A later unified-data migration must preserve those classifications. Multi-PC conflicts remain visible until a later explicit confirmation converges the branches.\r
 \r
 On first use, an opaque voiceprint ID may be impossible to recognize. Select **Mark the next recording**, then speak one continuous sentence by yourself through the PC, phone, or glasses you want to classify, preferably in a quiet environment. When the next recording event completes, unresolved voiceprints newly observed during that attempt move to the front and receive an **Observed this time** marker. This only narrows the candidates: it starts no second recorder, performs no automatic identification, and never assigns the user merely because one candidate appeared. If other people spoke at the same time, confirm only a voiceprint you can identify confidently or capture again.\r
 \r
-## How persona automation is composed
-
-Each rule answers two questions: when it runs, and what happens next.
-
-Triggers are:
-
-- **When a message arrives**: select one or more message sources, with optional text, group, and speaker filters.
-- **Scheduled task**: use a fixed interval, a daily time, or a one-off date and time.
-
-Actions are:
-
-- **Notify Agent**: send the current message or scheduled task to this persona, with optional extra decision guidance.
-- **Run script**: run a \`.cmd\`, \`.bat\`, or \`.py\` file from the current persona's \`scripts/\` directory.
-
-The same model therefore covers message-to-Agent, schedule-to-Agent, message-to-script, and schedule-to-script rules. New trigger or action types can extend this model without creating another independent rules screen.
-
-The interface separates **When a message arrives** from **Scheduled tasks**. Message rules are then grouped into chat, voice and devices, manual and system, and other sources. The editor asks for the trigger first and the action second, showing only fields relevant to the current choices.
+## How persona automation is composed\r
+\r
+Each rule answers two questions: when it runs, and what happens next.\r
+\r
+Triggers are:\r
+\r
+- **When a message arrives**: select one or more message sources, with optional text, group, and speaker filters.\r
+- **Scheduled task**: use a fixed interval, a daily time, or a one-off date and time.\r
+\r
+Actions are:\r
+\r
+- **Notify Agent**: send the current message or scheduled task to this persona, with optional extra decision guidance.\r
+- **Run script**: run a \`.cmd\`, \`.bat\`, or \`.py\` file from the current persona's \`scripts/\` directory.\r
+\r
+The same model therefore covers message-to-Agent, schedule-to-Agent, message-to-script, and schedule-to-script rules. New trigger or action types can extend this model without creating another independent rules screen.\r
+\r
+The interface separates **When a message arrives** from **Scheduled tasks**. Message rules are then grouped into chat, voice and devices, manual and system, and other sources. The editor asks for the trigger first and the action second, showing only fields relevant to the current choices.\r
 \r
 ## Common Route kinds\r
 \r
@@ -1625,7 +1625,7 @@ The interface separates **When a message arrives** from **Scheduled tasks**. Mes
 | \`wecom_message\` | WeCom group events |\r
 | \`rabilink\` | RabiLink events |\r
 \r
-The interface groups available kinds by adapters on the current Route. A message rule with no selected source matches every received message, and the page displays a warning. Start with private messages, direct replies, or narrow keywords before adding broader group-message matches.
+The interface groups available kinds by adapters on the current Route. A message rule with no selected source matches every received message, and the page displays a warning. Start with private messages, direct replies, or narrow keywords before adding broader group-message matches.\r
 \r
 ## Keep regex focused\r
 \r
@@ -1637,27 +1637,27 @@ requirement|error|build failed|reminder|please record\r
 \r
 Regex decides whether the rule matches, not whether the Agent must reply. The persona guidance should still distinguish new facts, tasks, risks, acknowledgements, and polite responses.\r
 \r
-## Scheduled tasks
-
-Schedule triggers support:
+## Scheduled tasks\r
+\r
+Schedule triggers support:\r
 \r
 - recurring intervals;\r
 - a daily time;\r
 - a one-off date and time.\r
 \r
-A scheduled task requires the Route's Scheduled Tasks input. Agent actions carry the current task, persona/plan/memory indexes, and required paths without automatic chat history. Script actions go directly to the local script executor instead of passing through the Agent.
-
-## Script restrictions
-
-Scripts are disabled by default. The current Route must explicitly enable **Allow this Route to run persona scripts**. This permission stays on the local PC and is not synchronized with the persona.
-
-- A script must remain physically inside the current persona's \`scripts/\` directory; links and \`..\` cannot escape it.
-- Only \`.cmd\`, \`.bat\`, and \`.py\` are accepted. Arbitrary command text is not.
-- Manager tokens, passwords, and message bodies are not exposed as script environment variables.
-- The same rule cannot overlap on the same Route, and a timeout stops its process tree.
-- Script execution and Agent delivery keep separate results; one cannot impersonate the other's success.
-
-Enter paths relative to the persona \`scripts/\` directory, such as \`daily-check.py\` or \`tools/check.cmd\`. Enter one argument per line. Validate non-destructive scripts with a test persona before using tasks that modify files or call external systems.
+A scheduled task requires the Route's Scheduled Tasks input. Agent actions carry the current task, persona/plan/memory indexes, and required paths without automatic chat history. Script actions go directly to the local script executor instead of passing through the Agent.\r
+\r
+## Script restrictions\r
+\r
+Scripts are disabled by default. The current Route must explicitly enable **Allow this Route to run persona scripts**. This permission stays on the local PC and is not synchronized with the persona.\r
+\r
+- A script must remain physically inside the current persona's \`scripts/\` directory; links and \`..\` cannot escape it.\r
+- Only \`.cmd\`, \`.bat\`, and \`.py\` are accepted. Arbitrary command text is not.\r
+- Manager tokens, passwords, and message bodies are not exposed as script environment variables.\r
+- The same rule cannot overlap on the same Route, and a timeout stops its process tree.\r
+- Script execution and Agent delivery keep separate results; one cannot impersonate the other's success.\r
+\r
+Enter paths relative to the persona \`scripts/\` directory, such as \`daily-check.py\` or \`tools/check.cmd\`. Enter one argument per line. Validate non-destructive scripts with a test persona before using tasks that modify files or call external systems.\r
 \r
 ## What belongs in the template\r
 \r
@@ -1675,7 +1675,7 @@ Conversational wording alone cannot grant send permission. Pipeline and message-
 \r
 ## Save and validate\r
 \r
-Close the rule dialog, then select **Save configuration**. The change applies to the next message or scheduled event. Legacy message-template rules appear automatically in the new interface; after saving, the persona file uses the new \`automationRules\` structure.
+Close the rule dialog, then select **Save configuration**. The change applies to the next message or scheduled event. Legacy message-template rules appear automatically in the new interface; after saving, the persona file uses the new \`automationRules\` structure.\r
 \r
 The current WebGUI has no side-effect-free RouteDecision or AgentPacket preview. Use manual trigger for validation only when you intend to enter the real delivery path.\r
 \r
@@ -2086,7 +2086,7 @@ Read the changelog before starting a new version. Schema normalization can migra
 \r
 # 从远端调用 TTS 与 ASR\r
 \r
-这篇指南用于让另一台电脑、手机后端或自动化客户端通过 RabiLink Relay 调用目标 Rabi PC 上的 RabiSpeech。普通 TTS 与文件 ASR 请求直接返回音频或转写，不进入 Agent、人格、Route 或会话账本；Android/眼镜连续 PCM 流是明确例外，目标 PC 完成 ASR 后会自动进入主机语音库和 \`rabilink\` Route。
+这篇指南用于让另一台电脑、手机后端或自动化客户端通过 RabiLink Relay 调用目标 Rabi PC 上的 RabiSpeech。普通 TTS 与文件 ASR 请求直接返回音频或转写，不进入 Agent、人格、Route 或会话账本；Android/眼镜连续 PCM 流是明确例外，目标 PC 完成 ASR 后会自动进入主机语音库和 \`rabilink\` Route。\r
 \r
 > 成熟度：实验。先在受控环境验证模型、超时和公网反代，再接入正式客户端。\r
 \r
@@ -2137,13 +2137,13 @@ curl.exe --fail-with-body --silent --show-error \`\r
   -X POST "$SpeechBase/v1/audio/speech" \`\r
   -H "Authorization: Bearer $Token" \`\r
   -H "Content-Type: application/json" \`\r
-  --data-raw '{"input":"你好，这是通过 RabiLink 调用的本机语音。","voice":"default","response_format":"wav","sample_rate":16000,"speed":1.0}' \`
+  --data-raw '{"input":"你好，这是通过 RabiLink 调用的本机语音。","voice":"default","response_format":"wav","sample_rate":16000,"speed":1.0}' \`\r
   --output speech.wav\r
 \r
 Get-Item .\\speech.wav | Select-Object Name, Length\r
 \`\`\`\r
 \r
-成功判据：HTTP 返回成功，并且 \`speech.wav\` 的 \`Length\` 大于 0。WAV 输出的 \`sample_rate\` 由目标 PC 的 RabiSpeech 本地完成，不要求远端客户端安装 ffmpeg；MP3、FLAC、Opus、AAC、PCM 等跨格式输出仍取决于目标 PC 的 ffmpeg 配置。若要指定模型，先从 \`/v1/models\` 复制当前 PC 实际提供的模型 ID，再在 JSON 中加入 \`model\`。
+成功判据：HTTP 返回成功，并且 \`speech.wav\` 的 \`Length\` 大于 0。WAV 输出的 \`sample_rate\` 由目标 PC 的 RabiSpeech 本地完成，不要求远端客户端安装 ffmpeg；MP3、FLAC、Opus、AAC、PCM 等跨格式输出仍取决于目标 PC 的 ffmpeg 配置。若要指定模型，先从 \`/v1/models\` 复制当前 PC 实际提供的模型 ID，再在 JSON 中加入 \`model\`。\r
 \r
 ## 3. 把音频交给 ASR\r
 \r
@@ -2193,14 +2193,14 @@ $Token = $null\r
 - \`GET /api/rabilink/speech/health\`\r
 - \`GET /api/rabilink/speech/v1/models\`\r
 - \`GET /api/rabilink/speech/v1/capabilities\`\r
-- \`POST /api/rabilink/speech/v1/audio/speech\`
-- \`POST /api/rabilink/speech/v1/audio/transcriptions\`
-- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/start\`
-- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=...&sequence=1\`
-- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/stop\`
-- \`GET /api/rabilink/speech/openapi.json\`
-
-前三个流式接口供 Android/眼镜连续传 16 kHz mono PCM 使用。\`sequence\` 从 1 开始严格递增；VAD、切句、ASR 和声纹均由目标 PC RabiSpeech 完成，15 秒无 PCM 会自动回收。普通人工 TTS/文件 ASR 调用仍使用前面的同步端点。字段、兼容端点和本机扩展边界见 [RabiSpeech 本机 TTS / ASR 服务](../rabispeech-plugin.md)。
+- \`POST /api/rabilink/speech/v1/audio/speech\`\r
+- \`POST /api/rabilink/speech/v1/audio/transcriptions\`\r
+- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/start\`\r
+- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=...&sequence=1\`\r
+- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/stop\`\r
+- \`GET /api/rabilink/speech/openapi.json\`\r
+\r
+前三个流式接口供 Android/眼镜连续传 16 kHz mono PCM 使用。\`sequence\` 从 1 开始严格递增；VAD、切句、ASR 和声纹均由目标 PC RabiSpeech 完成，15 秒无 PCM 会自动回收。普通人工 TTS/文件 ASR 调用仍使用前面的同步端点。字段、兼容端点和本机扩展边界见 [RabiSpeech 本机 TTS / ASR 服务](../rabispeech-plugin.md)。\r
 `,Se=`<!-- docs-language-switch -->\r
 <div align="center">\r
 English | <a href="./speech-api.md">简体中文</a>\r
@@ -2209,7 +2209,7 @@ English | <a href="./speech-api.md">简体中文</a>\r
 \r
 # Call TTS and ASR remotely\r
 \r
-Use this guide to call RabiSpeech on a selected Rabi PC from another computer, a phone backend, or an automation client through RabiLink Relay. Ordinary TTS and file-ASR requests return audio or a transcription directly and do not enter an Agent, persona, Route, or conversation ledger. Continuous Android/glasses PCM streaming is the explicit exception: after PC ASR, it automatically enters the host-wide speech store and \`rabilink\` Route.
+Use this guide to call RabiSpeech on a selected Rabi PC from another computer, a phone backend, or an automation client through RabiLink Relay. Ordinary TTS and file-ASR requests return audio or a transcription directly and do not enter an Agent, persona, Route, or conversation ledger. Continuous Android/glasses PCM streaming is the explicit exception: after PC ASR, it automatically enters the host-wide speech store and \`rabilink\` Route.\r
 \r
 > Maturity: experimental. Validate models, timeouts, and the public reverse proxy in a controlled environment before integrating a production client.\r
 \r
@@ -2260,13 +2260,13 @@ curl.exe --fail-with-body --silent --show-error \`\r
   -X POST "$SpeechBase/v1/audio/speech" \`\r
   -H "Authorization: Bearer $Token" \`\r
   -H "Content-Type: application/json" \`\r
-  --data-raw '{"input":"Hello from the RabiSpeech API through RabiLink.","voice":"default","response_format":"wav","sample_rate":16000,"speed":1.0}' \`
+  --data-raw '{"input":"Hello from the RabiSpeech API through RabiLink.","voice":"default","response_format":"wav","sample_rate":16000,"speed":1.0}' \`\r
   --output speech.wav\r
 \r
 Get-Item .\\speech.wav | Select-Object Name, Length\r
 \`\`\`\r
 \r
-Success means the HTTP request completed and \`speech.wav\` has a \`Length\` greater than zero. The target PC's RabiSpeech applies WAV \`sample_rate\` locally, so the remote caller does not need ffmpeg; MP3, FLAC, Opus, AAC, and raw-PCM output still depends on the target PC's ffmpeg configuration. To select a model, copy an actual model ID from \`/v1/models\` and add \`model\` to the JSON body.
+Success means the HTTP request completed and \`speech.wav\` has a \`Length\` greater than zero. The target PC's RabiSpeech applies WAV \`sample_rate\` locally, so the remote caller does not need ffmpeg; MP3, FLAC, Opus, AAC, and raw-PCM output still depends on the target PC's ffmpeg configuration. To select a model, copy an actual model ID from \`/v1/models\` and add \`model\` to the JSON body.\r
 \r
 ## 3. Transcribe the generated audio\r
 \r
@@ -2316,12 +2316,12 @@ Open **Speech service** in the local or remote RibiWebGUI, then select **Target-
 - \`GET /api/rabilink/speech/health\`\r
 - \`GET /api/rabilink/speech/v1/models\`\r
 - \`GET /api/rabilink/speech/v1/capabilities\`\r
-- \`POST /api/rabilink/speech/v1/audio/speech\`
-- \`POST /api/rabilink/speech/v1/audio/transcriptions\`
-- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/start\`
-- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=...&sequence=1\`
-- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/stop\`
-- \`GET /api/rabilink/speech/openapi.json\`
-
-The three streaming endpoints are for continuous Android/glasses 16 kHz mono PCM. \`sequence\` starts at 1 and must remain contiguous. Target-PC RabiSpeech owns VAD, segmentation, ASR, and voiceprint processing, and retires a stream after 15 seconds without PCM. Manual TTS/file-ASR callers keep using the synchronous endpoints above. See [RabiSpeech local TTS / ASR service](../rabispeech-plugin_en.md) for fields, compatibility endpoints, and local extension boundaries.
-`,_e={class:"page-shell user-guide-page"},Pe={class:"guide-header app-card"},Me={class:"eyebrow"},De={class:"guide-title"},We={class:"page-subtitle"},Ue={class:"guide-layout"},Ne={class:"guide-sidebar app-card"},Ee={class:"guide-count"},Oe=["aria-label"],Qe=["onClick"],Ge={key:0,class:"guide-empty"},Le={class:"guide-article app-card"},Be={class:"guide-meta"},qe=["innerHTML"],je=["aria-label"],ze={class:"guide-outline-card app-card"},He={class:"guide-outline-title"},Fe=["onClick"],Ve="https://github.com/vb2250158/RabiRoute/blob/main/",$e=re({__name:"ProjectDocsPage",setup(Ke){const{isEnglish:C,setLocale:Q}=te(),b=ee(),x=ne(),G=Object.assign({"../../../docs/user-guide/README.md":ie,"../../../docs/user-guide/README_en.md":de,"../../../docs/user-guide/agents-and-sessions.md":le,"../../../docs/user-guide/agents-and-sessions_en.md":ce,"../../../docs/user-guide/faq-and-support.md":he,"../../../docs/user-guide/faq-and-support_en.md":ue,"../../../docs/user-guide/first-route.md":pe,"../../../docs/user-guide/first-route_en.md":ge,"../../../docs/user-guide/interface-and-status.md":me,"../../../docs/user-guide/interface-and-status_en.md":be,"../../../docs/user-guide/interface-theme.md":fe,"../../../docs/user-guide/interface-theme_en.md":ye,"../../../docs/user-guide/operations-and-troubleshooting.md":ve,"../../../docs/user-guide/operations-and-troubleshooting_en.md":we,"../../../docs/user-guide/personas-and-rules.md":ke,"../../../docs/user-guide/personas-and-rules_en.md":Re,"../../../docs/user-guide/routes-and-adapters.md":Ae,"../../../docs/user-guide/routes-and-adapters_en.md":Ce,"../../../docs/user-guide/safety-and-data.md":xe,"../../../docs/user-guide/safety-and-data_en.md":Ie,"../../../docs/user-guide/speech-api.md":Te,"../../../docs/user-guide/speech-api_en.md":Se}),L=/<!-- docs-language-switch -->[\s\S]*?<!-- \/docs-language-switch -->/g,I=["README","first-route","interface-and-status","routes-and-adapters","speech-api","agents-and-sessions","personas-and-rules","operations-and-troubleshooting","safety-and-data","faq-and-support"];function B(e){return e.replace(L,"").trim()}function q(e){const n=e.replace(/\\/g,"/");return`docs/user-guide/${n.split("/docs/user-guide/")[1]||n.split("/").pop()||"README.md"}`}function T(e){return(e.split("/").pop()||"README.md").replace(/_en\.md$/,"").replace(/\.md$/,"")}function j(e,n){return e.match(/^#\s+(.+)$/m)?.[1]?.trim()||T(n)}function z(e,n){const t=e.split(/\r?\n/);for(const a of t){const r=a.trim();if(!(!r||r.startsWith("#")||r.startsWith(">")||r.startsWith("|")||r.startsWith("```")||r.startsWith("<"))&&!(/^[-*]\s/.test(r)||/^\d+\.\s/.test(r)))return r.replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").replace(/[`*_]/g,"")}return n}function H(e){return e.replace(/```[\s\S]*?```/g," ").replace(/<[^>]+>/g," ").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").replace(/[#>*_`|~-]/g," ").replace(/\s+/g," ").toLowerCase()}function F(e,n){const t=n==="en"?["Start here","Use RabiRoute","Operate safely","Help"]:["开始使用","日常使用","运行与安全","获得帮助"];return e==="README"||e==="first-route"?t[0]:["interface-and-status","routes-and-adapters","speech-api","agents-and-sessions","personas-and-rules"].includes(e)?t[1]:["operations-and-troubleshooting","safety-and-data"].includes(e)?t[2]:t[3]}function S(e){return e.replace(/<[^>]+>/g,"").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").replace(/[`*_~]/g,"").trim()}function V(e){return S(e).toLowerCase().replace(/[^\p{Letter}\p{Number}\s-]/gu,"").trim().replace(/[\s-]+/g,"-")||"section"}function _(e){const n=[],t=new Map;for(const a of e.split(/\r?\n/)){const r=a.match(/^(#{1,3})\s+(.+?)\s*#*$/);if(!r)continue;const o=S(r[2]),d=V(o),w=t.get(d)||0;t.set(d,w+1),n.push({id:w?`${d}-${w+1}`:d,title:o,depth:r[1].length})}return n}const P=Object.entries(G).map(([e,n])=>{const t=q(e),a=B(String(n)),r=T(t),o=t.endsWith("_en.md")?"en":"zh-CN",d=I.indexOf(r);return{key:r,path:t,title:j(a,t),summary:z(a,o==="en"?"Open this guide.":"打开这篇使用指南。"),source:a,searchText:H(a),section:F(r,o),order:d<0?I.length:d,locale:o}}).sort((e,n)=>e.order-n.order||e.title.localeCompare(n.title)),f=O(""),m=O("README"),c=g(()=>P.filter(e=>e.locale===(C.value?"en":"zh-CN"))),h=g(()=>c.value.find(e=>e.key===m.value)||c.value[0]);D(c,e=>{e.length&&!e.some(n=>n.key===m.value)&&(m.value=e[0].key)}),D(()=>b.query.page,e=>{const n=Array.isArray(e)?e[0]:e,t=typeof n=="string"&&c.value.some(a=>a.key===n)?n:"README";t!==m.value&&(m.value=t),n&&t==="README"&&x.replace({query:{...b.query,page:void 0}})},{immediate:!0});const l=g(()=>C.value?{eyebrow:"RabiRoute User Guide",title:"Use RabiRoute with confidence",subtitle:"Task-based instructions for setup, routing, daily operation, safety, and troubleshooting.",badge:"user guides",search:"Search the user guide",count:"guides",empty:"No guide matches this search.",toc:"On this page",nav:"User guide navigation"}:{eyebrow:"RabiRoute 使用手册",title:"从第一条消息到稳定运行",subtitle:"按真实任务组织的配置、路由、日常运维、安全与排障说明。",badge:"篇用户指南",search:"搜索使用手册",count:"篇指南",empty:"没有找到匹配的指南。",toc:"本页目录",nav:"使用手册导航"}),y=g(()=>{const e=f.value.trim().toLowerCase().split(/\s+/).filter(Boolean);return e.length?c.value.filter(n=>{const t=`${n.title} ${n.summary} ${n.searchText}`.toLowerCase();return e.every(a=>t.includes(a))}):c.value}),$=g(()=>{const e=new Map;for(const n of y.value){const t=e.get(n.section)||[];t.push(n),e.set(n.section,t)}return[...e.entries()].map(([n,t])=>({section:n,items:t}))}),K=g(()=>_(h.value?.source||"").filter(e=>e.depth>1)),J=g(()=>{const e=h.value?.source||"",n=Z.parse(e,{async:!1,gfm:!0});if(typeof DOMParser>"u")return n;const t=new DOMParser().parseFromString(n,"text/html"),a=_(e);return t.querySelectorAll("h1, h2, h3").forEach((r,o)=>{const d=a[o];d&&(r.id=d.id)}),t.body.innerHTML});function X(e,n){const t=decodeURIComponent(n.split("#")[0].split("?")[0]).replace(/\\/g,"/"),a=e.split("/");a.pop();for(const r of t.split("/"))!r||r==="."||(r===".."?a.pop():a.push(r));return a.join("/")}async function M(e,n=""){m.value=e;const t=e==="README"?void 0:e;b.query.page!==t&&await x.replace({query:{...b.query,page:t}}),await oe(),n?v(n):window.scrollTo({top:0,behavior:"smooth"})}function v(e){document.getElementById(e)?.scrollIntoView({behavior:"smooth",block:"start"})}function Y(e){const n=e.target?.closest("a");if(!(n instanceof HTMLAnchorElement))return;const t=n.getAttribute("href")||"";if(!t||!h.value)return;if(t.startsWith("#")){e.preventDefault(),v(decodeURIComponent(t.slice(1)));return}if(/^https?:/i.test(t)||!/\.md(?:$|[?#])/i.test(t))return;e.preventDefault();const a=X(h.value.path,t),r=P.find(o=>o.path===a);if(r){const o=t.includes("#")?decodeURIComponent(t.split("#")[1].split("?")[0]):"";r.locale!==h.value.locale&&Q(r.locale),M(r.key,o);return}window.open(`${Ve}${a}`,"_blank","noopener,noreferrer")}return(e,n)=>{const t=W("v-chip"),a=W("v-text-field");return u(),p("div",_e,[s("header",Pe,[s("div",null,[s("div",Me,i(l.value.eyebrow),1),s("h1",De,i(l.value.title),1),s("p",We,i(l.value.subtitle),1)]),k(t,{color:"secondary",variant:"tonal","prepend-icon":"mdi-book-open-page-variant-outline"},{default:U(()=>[N(i(c.value.length)+" "+i(l.value.badge),1)]),_:1})]),s("div",Ue,[s("aside",Ne,[k(a,{modelValue:f.value,"onUpdate:modelValue":n[0]||(n[0]=r=>f.value=r),label:l.value.search,"prepend-inner-icon":"mdi-magnify",clearable:"",density:"compact"},null,8,["modelValue","label"]),s("div",Ee,i(y.value.length)+" / "+i(c.value.length)+" "+i(l.value.count),1),s("nav",{"aria-label":l.value.nav},[(u(!0),p(R,null,A($.value,r=>(u(),p("section",{key:r.section,class:"guide-group"},[s("h2",null,i(r.section),1),(u(!0),p(R,null,A(r.items,o=>(u(),p("button",{key:o.path,type:"button",class:E({active:o.key===h.value?.key}),onClick:d=>M(o.key)},[s("strong",null,i(o.title),1),s("span",null,i(o.summary),1)],10,Qe))),128))]))),128)),y.value.length===0?(u(),p("div",Ge,i(l.value.empty),1)):ae("",!0)],8,Oe)]),s("main",Le,[s("div",Be,[k(t,{size:"small",color:"secondary",variant:"tonal"},{default:U(()=>[N(i(h.value?.section),1)]),_:1}),s("span",null,i(h.value?.summary),1)]),s("article",{class:"markdown-body","data-no-i18n":"",onClick:Y,innerHTML:J.value},null,8,qe)]),s("aside",{class:"guide-outline","aria-label":l.value.toc},[s("div",ze,[s("div",He,i(l.value.toc),1),(u(!0),p(R,null,A(K.value,r=>(u(),p("button",{key:r.id,type:"button",class:E({nested:r.depth===3}),onClick:o=>v(r.id)},i(r.title),11,Fe))),128))])],8,je)])])}}}),nn=se($e,[["__scopeId","data-v-615bcd17"]]);export{nn as default};
+- \`POST /api/rabilink/speech/v1/audio/speech\`\r
+- \`POST /api/rabilink/speech/v1/audio/transcriptions\`\r
+- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/start\`\r
+- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=...&sequence=1\`\r
+- \`POST /api/rabilink/speech/v1/audio-streams/rabilink/stop\`\r
+- \`GET /api/rabilink/speech/openapi.json\`\r
+\r
+The three streaming endpoints are for continuous Android/glasses 16 kHz mono PCM. \`sequence\` starts at 1 and must remain contiguous. Target-PC RabiSpeech owns VAD, segmentation, ASR, and voiceprint processing, and retires a stream after 15 seconds without PCM. Manual TTS/file-ASR callers keep using the synchronous endpoints above. See [RabiSpeech local TTS / ASR service](../rabispeech-plugin_en.md) for fields, compatibility endpoints, and local extension boundaries.\r
+`,_e={class:"page-shell user-guide-page"},Pe={class:"guide-header app-card"},Me={class:"eyebrow"},De={class:"guide-title"},We={class:"page-subtitle"},Ue={class:"guide-layout"},Ne={class:"guide-sidebar app-card"},Ee={class:"guide-count"},Oe=["aria-label"],Qe=["onClick"],Ge={key:0,class:"guide-empty"},Le={class:"guide-article app-card"},Be={class:"guide-meta"},qe=["innerHTML"],je=["aria-label"],ze={class:"guide-outline-card app-card"},He={class:"guide-outline-title"},Fe=["onClick"],Ve="https://github.com/vb2250158/RabiRoute/blob/main/",$e=te({__name:"ProjectDocsPage",setup(Ke){const{isEnglish:C,setLocale:Q}=re(),b=ee(),x=ne(),G=Object.assign({"../../../docs/user-guide/README.md":ie,"../../../docs/user-guide/README_en.md":de,"../../../docs/user-guide/agents-and-sessions.md":le,"../../../docs/user-guide/agents-and-sessions_en.md":ce,"../../../docs/user-guide/faq-and-support.md":he,"../../../docs/user-guide/faq-and-support_en.md":ue,"../../../docs/user-guide/first-route.md":pe,"../../../docs/user-guide/first-route_en.md":ge,"../../../docs/user-guide/interface-and-status.md":me,"../../../docs/user-guide/interface-and-status_en.md":be,"../../../docs/user-guide/interface-theme.md":fe,"../../../docs/user-guide/interface-theme_en.md":ye,"../../../docs/user-guide/operations-and-troubleshooting.md":ve,"../../../docs/user-guide/operations-and-troubleshooting_en.md":we,"../../../docs/user-guide/personas-and-rules.md":ke,"../../../docs/user-guide/personas-and-rules_en.md":Re,"../../../docs/user-guide/routes-and-adapters.md":Ae,"../../../docs/user-guide/routes-and-adapters_en.md":Ce,"../../../docs/user-guide/safety-and-data.md":xe,"../../../docs/user-guide/safety-and-data_en.md":Ie,"../../../docs/user-guide/speech-api.md":Te,"../../../docs/user-guide/speech-api_en.md":Se}),L=/<!-- docs-language-switch -->[\s\S]*?<!-- \/docs-language-switch -->/g,I=["README","first-route","interface-and-status","routes-and-adapters","speech-api","agents-and-sessions","personas-and-rules","operations-and-troubleshooting","safety-and-data","faq-and-support"];function B(e){return e.replace(L,"").trim()}function q(e){const n=e.replace(/\\/g,"/");return`docs/user-guide/${n.split("/docs/user-guide/")[1]||n.split("/").pop()||"README.md"}`}function T(e){return(e.split("/").pop()||"README.md").replace(/_en\.md$/,"").replace(/\.md$/,"")}function j(e,n){return e.match(/^#\s+(.+)$/m)?.[1]?.trim()||T(n)}function z(e,n){const r=e.split(/\r?\n/);for(const a of r){const t=a.trim();if(!(!t||t.startsWith("#")||t.startsWith(">")||t.startsWith("|")||t.startsWith("```")||t.startsWith("<"))&&!(/^[-*]\s/.test(t)||/^\d+\.\s/.test(t)))return t.replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").replace(/[`*_]/g,"")}return n}function H(e){return e.replace(/```[\s\S]*?```/g," ").replace(/<[^>]+>/g," ").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").replace(/[#>*_`|~-]/g," ").replace(/\s+/g," ").toLowerCase()}function F(e,n){const r=n==="en"?["Start here","Use RabiRoute","Operate safely","Help"]:["开始使用","日常使用","运行与安全","获得帮助"];return e==="README"||e==="first-route"?r[0]:["interface-and-status","routes-and-adapters","speech-api","agents-and-sessions","personas-and-rules"].includes(e)?r[1]:["operations-and-troubleshooting","safety-and-data"].includes(e)?r[2]:r[3]}function S(e){return e.replace(/<[^>]+>/g,"").replace(/\[([^\]]+)\]\([^)]+\)/g,"$1").replace(/[`*_~]/g,"").trim()}function V(e){return S(e).toLowerCase().replace(/[^\p{Letter}\p{Number}\s-]/gu,"").trim().replace(/[\s-]+/g,"-")||"section"}function _(e){const n=[],r=new Map;for(const a of e.split(/\r?\n/)){const t=a.match(/^(#{1,3})\s+(.+?)\s*#*$/);if(!t)continue;const o=S(t[2]),d=V(o),w=r.get(d)||0;r.set(d,w+1),n.push({id:w?`${d}-${w+1}`:d,title:o,depth:t[1].length})}return n}const P=Object.entries(G).map(([e,n])=>{const r=q(e),a=B(String(n)),t=T(r),o=r.endsWith("_en.md")?"en":"zh-CN",d=I.indexOf(t);return{key:t,path:r,title:j(a,r),summary:z(a,o==="en"?"Open this guide.":"打开这篇使用指南。"),source:a,searchText:H(a),section:F(t,o),order:d<0?I.length:d,locale:o}}).sort((e,n)=>e.order-n.order||e.title.localeCompare(n.title)),f=O(""),m=O("README"),c=g(()=>P.filter(e=>e.locale===(C.value?"en":"zh-CN"))),h=g(()=>c.value.find(e=>e.key===m.value)||c.value[0]);D(c,e=>{e.length&&!e.some(n=>n.key===m.value)&&(m.value=e[0].key)}),D(()=>b.query.page,e=>{const n=Array.isArray(e)?e[0]:e,r=typeof n=="string"&&c.value.some(a=>a.key===n)?n:"README";r!==m.value&&(m.value=r),n&&r==="README"&&x.replace({query:{...b.query,page:void 0}})},{immediate:!0});const l=g(()=>C.value?{eyebrow:"RabiRoute User Guide",title:"Use RabiRoute with confidence",subtitle:"Task-based instructions for setup, routing, daily operation, safety, and troubleshooting.",badge:"user guides",search:"Search the user guide",count:"guides",empty:"No guide matches this search.",toc:"On this page",nav:"User guide navigation"}:{eyebrow:"RabiRoute 使用手册",title:"从第一条消息到稳定运行",subtitle:"按真实任务组织的配置、路由、日常运维、安全与排障说明。",badge:"篇用户指南",search:"搜索使用手册",count:"篇指南",empty:"没有找到匹配的指南。",toc:"本页目录",nav:"使用手册导航"}),y=g(()=>{const e=f.value.trim().toLowerCase().split(/\s+/).filter(Boolean);return e.length?c.value.filter(n=>{const r=`${n.title} ${n.summary} ${n.searchText}`.toLowerCase();return e.every(a=>r.includes(a))}):c.value}),$=g(()=>{const e=new Map;for(const n of y.value){const r=e.get(n.section)||[];r.push(n),e.set(n.section,r)}return[...e.entries()].map(([n,r])=>({section:n,items:r}))}),K=g(()=>_(h.value?.source||"").filter(e=>e.depth>1)),J=g(()=>{const e=h.value?.source||"",n=Z.parse(e,{async:!1,gfm:!0});if(typeof DOMParser>"u")return n;const r=new DOMParser().parseFromString(n,"text/html"),a=_(e);return r.querySelectorAll("h1, h2, h3").forEach((t,o)=>{const d=a[o];d&&(t.id=d.id)}),r.body.innerHTML});function X(e,n){const r=decodeURIComponent(n.split("#")[0].split("?")[0]).replace(/\\/g,"/"),a=e.split("/");a.pop();for(const t of r.split("/"))!t||t==="."||(t===".."?a.pop():a.push(t));return a.join("/")}async function M(e,n=""){m.value=e;const r=e==="README"?void 0:e;b.query.page!==r&&await x.replace({query:{...b.query,page:r}}),await oe(),n?v(n):window.scrollTo({top:0,behavior:"smooth"})}function v(e){document.getElementById(e)?.scrollIntoView({behavior:"smooth",block:"start"})}function Y(e){const n=e.target?.closest("a");if(!(n instanceof HTMLAnchorElement))return;const r=n.getAttribute("href")||"";if(!r||!h.value)return;if(r.startsWith("#")){e.preventDefault(),v(decodeURIComponent(r.slice(1)));return}if(/^https?:/i.test(r)||!/\.md(?:$|[?#])/i.test(r))return;e.preventDefault();const a=X(h.value.path,r),t=P.find(o=>o.path===a);if(t){const o=r.includes("#")?decodeURIComponent(r.split("#")[1].split("?")[0]):"";t.locale!==h.value.locale&&Q(t.locale),M(t.key,o);return}window.open(`${Ve}${a}`,"_blank","noopener,noreferrer")}return(e,n)=>{const r=W("v-chip"),a=W("v-text-field");return u(),p("div",_e,[s("header",Pe,[s("div",null,[s("div",Me,i(l.value.eyebrow),1),s("h1",De,i(l.value.title),1),s("p",We,i(l.value.subtitle),1)]),k(r,{color:"secondary",variant:"tonal","prepend-icon":"mdi-book-open-page-variant-outline"},{default:U(()=>[N(i(c.value.length)+" "+i(l.value.badge),1)]),_:1})]),s("div",Ue,[s("aside",Ne,[k(a,{modelValue:f.value,"onUpdate:modelValue":n[0]||(n[0]=t=>f.value=t),label:l.value.search,"prepend-inner-icon":"mdi-magnify",clearable:"",density:"compact"},null,8,["modelValue","label"]),s("div",Ee,i(y.value.length)+" / "+i(c.value.length)+" "+i(l.value.count),1),s("nav",{"aria-label":l.value.nav},[(u(!0),p(R,null,A($.value,t=>(u(),p("section",{key:t.section,class:"guide-group"},[s("h2",null,i(t.section),1),(u(!0),p(R,null,A(t.items,o=>(u(),p("button",{key:o.path,type:"button",class:E({active:o.key===h.value?.key}),onClick:d=>M(o.key)},[s("strong",null,i(o.title),1),s("span",null,i(o.summary),1)],10,Qe))),128))]))),128)),y.value.length===0?(u(),p("div",Ge,i(l.value.empty),1)):ae("",!0)],8,Oe)]),s("main",Le,[s("div",Be,[k(r,{size:"small",color:"secondary",variant:"tonal"},{default:U(()=>[N(i(h.value?.section),1)]),_:1}),s("span",null,i(h.value?.summary),1)]),s("article",{class:"markdown-body","data-no-i18n":"",onClick:Y,innerHTML:J.value},null,8,qe)]),s("aside",{class:"guide-outline","aria-label":l.value.toc},[s("div",ze,[s("div",He,i(l.value.toc),1),(u(!0),p(R,null,A(K.value,t=>(u(),p("button",{key:t.id,type:"button",class:E({nested:t.depth===3}),onClick:o=>v(t.id)},i(t.title),11,Fe))),128))])],8,je)])])}}}),nn=se($e,[["__scopeId","data-v-615bcd17"]]);export{nn as default};
