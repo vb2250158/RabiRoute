@@ -282,12 +282,16 @@ import { handlePlanAgentStatusApi } from "./planAgentStatusRoutes.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
+import { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
+import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import {
   generateWebguiAccessToken,
   isLoopbackRemoteAddress,
   isLocalMachineRemoteAddress,
   isPublicWebguiStaticRequest,
   isWebguiLanRequestAuthorized,
+  webguiTokenMatches,
   lanAddressPriority,
   managerListensOnLan
 } from "./webguiLanAccess.js";
@@ -1201,6 +1205,11 @@ function webguiLanRequestAllowed(request: http.IncomingMessage, requestUrl: URL)
   ) return true;
   if (isPublicWebguiStaticRequest(request.method, requestUrl.pathname)) return true;
   if (remoteRequestUsesIndependentAuthorization(request, requestUrl)) return true;
+  if (requestUrl.pathname.startsWith("/api/lan-agent/releases/") && request.method === "GET") {
+    const authorization = Array.isArray(request.headers.authorization) ? request.headers.authorization[0] ?? "" : request.headers.authorization ?? "";
+    const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
+    return webguiTokenMatches(token, rabiGlobalConfig.read().webguiLan.accessToken);
+  }
   return isWebguiLanRequestAuthorized(request, requestUrl, rabiGlobalConfig.read().webguiLan);
 }
 
@@ -7318,15 +7327,35 @@ export async function startManager(): Promise<void> {
   };
   const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.catalog.get(instanceId)?.status === "active";
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
+  const lanAgentRegistry = new LanAgentRegistry({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json") });
+  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir });
+  let detachLanAgentUpgrade: (() => void) | undefined;
   const webPluginModules = new WebPluginModuleRegistry(path.join(rootDir, MANAGER_PLUGIN_RUNTIME_RELATIVE_PATH));
   const managerBasePluginActivation: Record<string, (ctx: import("../runtime/cordisHost.js").RabiCordisContext) => void | Promise<void>> = {
       "manager:core": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
           const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:core", "manager.core.api", [
-            requestTracker.wrap(handleWebguiLanAccessApi)
+            requestTracker.wrap((request, requestUrl, response) => (
+              handleWebguiLanAccessApi(request, requestUrl, response)
+              || handleLanAgentApi(request, requestUrl, response, {
+                readJsonBody,
+                jsonResponse,
+                registry: lanAgentRegistry,
+                releases: lanAgentReleaseStore,
+                isReleaseRequestAuthorized: candidate => {
+                  const config = rabiGlobalConfig.read().webguiLan;
+                  const authorization = Array.isArray(candidate.headers.authorization)
+                    ? candidate.headers.authorization[0] ?? ""
+                    : candidate.headers.authorization ?? "";
+                  const match = authorization.match(/^Bearer\s+(.+)$/i);
+                  return config.enabled && webguiTokenMatches(match?.[1]?.trim() ?? "", config.accessToken);
+                }
+              })
+            ))
           ], [
-            { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] }
+            { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] },
+            { routeId: "lan-agent", kind: "prefix", pathPrefix: "/api/lan-agent/", methods: ["*"] }
           ]);
           return async () => {
             unregister();
@@ -8269,6 +8298,7 @@ export async function startManager(): Promise<void> {
       throw new Error("Required Manager plugin failed to activate: manager:core");
     }
   } catch (error) {
+    lanAgentRegistry.close();
     await disposeManagerCordisRuntime().catch(() => {});
     throw error;
   }
@@ -8284,6 +8314,9 @@ export async function startManager(): Promise<void> {
     removeSignalHandlers();
     configWatcher?.close();
     pluginBundleWatcher?.close();
+    detachLanAgentUpgrade?.();
+    detachLanAgentUpgrade = undefined;
+    lanAgentRegistry.close();
     closeManagerEventClients();
   }
 
@@ -8409,6 +8442,10 @@ export async function startManager(): Promise<void> {
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
+  detachLanAgentUpgrade = lanAgentRegistry.attach(activeServer, {
+    getToken: () => rabiGlobalConfig.read().webguiLan.accessToken,
+    enabled: () => rabiGlobalConfig.read().webguiLan.enabled
+  });
 
   await listenManagerServer(activeServer, managerPort, managerHost);
 

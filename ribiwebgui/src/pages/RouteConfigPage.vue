@@ -3634,7 +3634,18 @@ async function initializePlanAssistants(): Promise<void> {
       throw new Error(`主 ${managedAgentLabel(primaryAgentType.value || "codex")} 会话尚未完成名称 + ID + workspace 绑定。`);
     }
     const count = normalizeCodexPlanAssistantCount(codexPlanAssistants.value.count);
-    const sourceThreadName = source.sessionName || fallbackCodexThreadName();
+    const sourceRead = await postAgentThreadAction({
+      action: "read",
+      agentAdapter: source.agentAdapter,
+      threadId: source.sessionId,
+      ...(source.dshBaseUrl ? { dshBaseUrl: source.dshBaseUrl } : {})
+    });
+    const sourceThreadName = String(source.agentAdapter === "codex"
+      ? sourceRead.thread?.name
+      : sourceRead.thread?.name || sourceRead.thread?.title || source.sessionName || fallbackCodexThreadName()).trim();
+    if (!sourceThreadName) {
+      throw new Error("无法读取 Codex 侧栏显示的 Name，未创建计划秘书 Agent。");
+    }
     const titles = codexPlanAssistantSessionTitles(sourceThreadName, count);
     const existing = (current.codexPlanAssistantSessions ?? [])
       .filter((session) => planAssistantSessionAgentAdapter(session) === source.agentAdapter);

@@ -12,7 +12,10 @@ export type CodexDesktopReasoningEffort = "low" | "medium" | "high" | "xhigh" | 
 
 export type CodexDesktopThread = {
   id: string;
+  /** Name shown in the Codex Desktop left sidebar; empty when the index has no Name. */
   title: string;
+  /** Raw SQLite metadata retained only for diagnostics; never use for name decisions. */
+  stateTitle?: string;
   cwd: string;
   updatedAt: string;
   rolloutPath: string;
@@ -177,11 +180,11 @@ export function applyCodexSidebarTaskNamesForTest(
   }
   return threads.map((thread) => {
     const sidebar = latestById.get(thread.id);
-    if (!sidebar) return thread;
     return {
       ...thread,
-      title: sidebar.title,
-      updatedAt: sidebar.updatedAt || thread.updatedAt
+      stateTitle: thread.stateTitle ?? thread.title,
+      title: sidebar?.title ?? "",
+      updatedAt: sidebar?.updatedAt || thread.updatedAt
     };
   });
 }
@@ -190,7 +193,7 @@ function applyCodexSidebarTaskNames(
   threads: CodexDesktopThread[],
   sessionIndexPath = codexDesktopSessionIndexPath()
 ): CodexDesktopThread[] {
-  if (!fs.existsSync(sessionIndexPath)) return threads;
+  if (!fs.existsSync(sessionIndexPath)) return applyCodexSidebarTaskNamesForTest(threads, "");
   return applyCodexSidebarTaskNamesForTest(threads, fs.readFileSync(sessionIndexPath, "utf8"));
 }
 

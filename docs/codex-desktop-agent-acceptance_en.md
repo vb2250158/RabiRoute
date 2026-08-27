@@ -66,7 +66,7 @@ The creation transaction must also persist a runtime Manager reservation. It rec
 
 - The UI shows task name and last activity; users do not type UUIDs.
 - Internally, identity is the complete task ID plus workspace. The visible name is display and no-ID lookup metadata.
-- For Codex, the user-visible name comes from the Desktop left sidebar: full scans use app-server `thread/list` `thread.name`, while exact-ID reads use the same sidebar session index. Both are exposed through the single task read model in `codexDesktopBridge.ts`. SQLite `threads.title` may contain the first prompt and can supplement owner state only; it must not become the task name or drive dropdown labels and same-name lookup.
+- For Codex, the user-visible name comes only from the Desktop left sidebar: full scans and exact-ID reads both use `thread_name` from the same sidebar session index, exposed through the single task read model in `codexDesktopBridge.ts`. SQLite `threads.title` may contain the first prompt and can supplement owner state only; it must not become the task name or drive dropdown labels and same-name lookup.
 - Last activity is display/sorting data, not identity.
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
 - For same-name tasks in one workspace, sort by parseable `updatedAt` and bind the unique maximum; never use database return order. Require selection only when the maximum time is tied or all candidate times are unusable.

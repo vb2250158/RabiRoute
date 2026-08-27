@@ -29,6 +29,21 @@ test("Desktop left sidebar is the only displayed task-name source", () => {
   assert.equal(result[0]?.id, id);
   assert.equal(result[0]?.title, "星海建造师 策划 程序 协助处理消息3");
   assert.equal(result[0]?.updatedAt, "2026-08-04T08:01:00.000Z");
+  assert.equal(result[0]?.stateTitle, "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]");
+});
+
+test("Desktop tasks without a sidebar Name do not fall back to SQLite title", () => {
+  const result = applyCodexSidebarTaskNamesForTest([{
+    id: "019f0000-0000-7000-8000-000000000066",
+    title: "SQLite 原始 title",
+    cwd: "C:\\Work\\PangHu",
+    rolloutPath: "task.jsonl",
+    firstUserMessage: "首条消息",
+    updatedAt: "2026-08-04T08:00:00.000Z"
+  }], "");
+
+  assert.equal(result[0]?.title, "");
+  assert.equal(result[0]?.stateTitle, "SQLite 原始 title");
 });
 
 type IpcRequest = {

@@ -62,7 +62,7 @@ flowchart TD
 
 - 用户界面显示 `任务名称 + 最后会话时间`，不要求用户查看或输入 UUID。
 - 内部身份是 `完整任务 ID + workspace`；可见名称用于显示、无 ID 时查找和用户显式切换目标。
-- Codex 的用户可见名称以 Desktop 左侧聊天栏为准：全量扫描使用 app-server `thread/list` 的 `thread.name`，按 ID 读取使用同一侧边栏会话索引；两者都通过 `codexDesktopBridge.ts` 的统一任务读取模型对外提供。SQLite `threads.title` 可能是首条 prompt，只能补充 owner 状态，不能成为任务名、下拉名称或同名查找依据。
+- Codex 的用户可见名称只以 Desktop 左侧聊天栏为准：全量扫描和按 ID 读取都使用同一侧边栏会话索引的 `thread_name`，并通过 `codexDesktopBridge.ts` 的统一任务读取模型对外提供。SQLite `threads.title` 可能是首条 prompt，只能补充 owner 状态，不能成为任务名、下拉名称或同名查找依据。
 - 最后时间仅用于展示；不能用“最新任务”替代精确绑定。
 - 列表必须支持全部任务或可靠分页，不能只展示前 20/100 条却声称是全部。
 - 同名且同 workspace 的多个任务必须按可解析的 `updatedAt` 自动取唯一最新者，不能依赖数据库返回顺序；最大时间并列或都无有效时间时才要求选择。

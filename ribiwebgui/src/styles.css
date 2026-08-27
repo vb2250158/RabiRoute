@@ -1461,10 +1461,11 @@ body::before {
 .catalog-param-panel {
   margin: 0 0 10px 50px;
   max-width: calc(100% - 50px);
-  border-left: 2px solid rgba(25, 191, 193, .35);
+  border-left: 2px solid var(--rr-accent-border);
   border-radius: 0 8px 8px 0;
   padding: 10px 10px 4px;
-  background: rgba(246, 252, 253, .72);
+  background: color-mix(in srgb, var(--rr-subtle) 78%, transparent);
+  color: var(--rr-text);
 }
 
 .catalog-param-grid {

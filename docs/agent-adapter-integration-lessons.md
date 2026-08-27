@@ -188,7 +188,7 @@ connect ECONNREFUSED 127.0.0.1:4510
 3. 用户在 Rabi 端输入新名称时，UI 必须先清空旧 ID；resolver 看到无 ID 后才按名称 + cwd 查找/创建。
 4. 保存和真实投递必须走同一个 resolver；已创建 ID 要先持久化，后续消息只复用它。
 5. 必测连续两次真实投递：第一条使数据库标题变化后，第二条仍进入同一 ID，任务数不变。
-6. Codex 无 ID 查找和下拉名称使用 Desktop app-server `thread/list` 的 `thread.name`；SQLite 只补充精确 ID、cwd、归档、时间和 owner/rollout 定位，不提供用户可见名称真源。
+6. Codex 无 ID 查找和下拉名称只使用 Desktop 左侧栏共用索引的 `thread_name`；SQLite 只补充精确 ID、cwd、归档、时间和 owner/rollout 定位，不提供用户可见名称真源。
 
 ### 3B. 会话越多，设置页越卡或一直扫描
 
@@ -273,7 +273,7 @@ flowchart LR
 
 ### Codex
 
-- 短生命周期 app-server 的 `thread/list` 只读提供 Desktop 用户可见的 `thread.name` 并可靠分页；本地状态库只补充精确 ID、cwd、归档、时间和 owner/rollout 定位。两者按完整 ID 合并，下拉显示名称和最后时间，内部保存完整 opaque ID。
+- Desktop 左侧栏共用的 `session_index.jsonl.thread_name` 提供唯一用户可见名称；本地状态库提供任务 ID、cwd、归档、时间和 owner/rollout 定位。两者按完整 ID 合并，下拉显示侧栏 `Name` 和最后时间，内部保存完整 opaque ID。
 - 配置绑定统一走一个 resolver：有效 ID + cwd 且未归档 → 精确绑定，不比较可变标题；ID 为空/非法/失效 → 保存名称 + 规范化 cwd；一个或多个同名 → 按 `updatedAt` 自动绑定唯一最新者；零匹配 → 创建空任务；最大时间并列 → 返回候选。
 - 投递前按最终 ID 读取任务并校验规范化 `cwd`；目录冲突、重名未消歧或 owner 无法加载都停止。
 - 通过 Desktop IPC 先 steer；确认没有活动轮次时再 start。

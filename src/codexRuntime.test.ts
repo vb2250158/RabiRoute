@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import {
   buildCodexBootstrapEnv,
-  codexThreadDiscoveryRequestForTest,
   ensureCodexDesktopDeliveryMarkerForTest,
   codexThreadIsActiveFromSourcesForTest,
   codexThreadRuntimeStatusFromSourcesForTest,
@@ -77,21 +76,6 @@ test("Codex task runtime status comes from the live Desktop host plus Codex roll
   }), "notLoaded");
 });
 
-test("system-owned Desktop task discovery can use the bounded app-server state index", () => {
-  const search = codexThreadDiscoveryRequestForTest("星海 协助处理消息1", null, ["C:/Projects/PangHu"], true);
-  assert.equal(search.method, "thread/list");
-  assert.equal(search.params.searchTerm, "星海 协助处理消息1");
-  assert.equal(search.params.useStateDbOnly, true);
-  assert.deepEqual(search.params.cwd, ["C:/Projects/PangHu"]);
-
-  const list = codexThreadDiscoveryRequestForTest("", "next-page", ["C:/Projects/PangHu"]);
-  assert.equal(list.method, "thread/list");
-  assert.equal(list.params.searchTerm, undefined);
-  assert.equal(list.params.useStateDbOnly, false);
-  assert.deepEqual(list.params.cwd, ["C:/Projects/PangHu"]);
-  assert.equal(list.params.cursor, "next-page");
-});
-
 test("Codex task bootstrap cannot inherit a stale desktop WebSocket override", () => {
   const env = buildCodexBootstrapEnv({
     Path: "C:\\Windows",
@@ -130,30 +114,39 @@ test("Codex Desktop treats archived rollout errors as stale delivery targets", (
   assert.equal(codexThreadDeliveryTargetIsStaleForTest(new Error("model temporarily unavailable")), false);
 });
 
-test("Codex task discovery uses the app-server user-facing name instead of mutable SQLite title", () => {
+test("Codex task discovery uses only the Desktop sidebar Name", () => {
   const result = mergeCodexDesktopThreadsWithMetadataForTest([{
     id: "019f0000-0000-7000-8000-000000000049",
-    title: "[RabiRoute 事件] 首条超长消息",
+    title: "星海建造师 策划 程序",
+    stateTitle: "“星海建造师 策划 程序” 这个会话宕机了？",
     cwd: "D:/MonsterGirl",
     updatedAt: "2026-07-18T03:00:00.000Z",
     rolloutPath: "session.jsonl",
     firstUserMessage: "[RabiRoute 事件] 首条超长消息"
   }], [{
     id: "019f0000-0000-7000-8000-000000000049",
-    name: "MonsterGirl / 伊莉娅 策划美术",
+    name: "app-server 原始 name",
     cwd: "D:\\MonsterGirl",
     updatedAt: 1_784_359_692
   }], {
-    query: "MonsterGirl / 伊莉娅 策划美术",
+    query: "星海建造师 策划 程序",
     allowedWorkspaces: ["//?/D:/MonsterGirl"],
     limit: 20,
     offset: 0
   });
 
   assert.equal(result.length, 1);
-  assert.equal(result[0]?.title, "MonsterGirl / 伊莉娅 策划美术");
+  assert.equal(result[0]?.title, "星海建造师 策划 程序");
+  assert.equal(result[0]?.stateTitle, "“星海建造师 策划 程序” 这个会话宕机了？");
   assert.equal(result[0]?.id, "019f0000-0000-7000-8000-000000000049");
   assert.equal(result[0]?.updatedAt, "2026-07-18T07:28:12.000Z");
+
+  assert.deepEqual(mergeCodexDesktopThreadsWithMetadataForTest(result, [{
+    id: result[0]!.id,
+    name: "app-server 原始 name",
+    cwd: "D:/MonsterGirl",
+    updatedAt: 1_784_359_692
+  }], { query: "app-server 原始 name" }), []);
 });
 
 test("freshly created Desktop tasks wait for the read index before first delivery", async () => {
@@ -228,6 +221,11 @@ test("local state lookup finds a bootstrapped task before it has a first message
     ""
   );
   database.close();
+  fs.writeFileSync(path.join(codexHome, "session_index.jsonl"), JSON.stringify({
+    id: taskId,
+    thread_name: taskTitle,
+    updated_at: "2026-08-10T00:00:00.000Z"
+  }) + "\n", "utf8");
 
   const result = await listCodexThreads({
     query: taskTitle,

@@ -7,6 +7,21 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+
+### LAN Rabi Agent
+
+- Added an experimental headless LAN Rabi Agent, Manager node/task APIs, a Rabi Web management page, and self-update flow. A node delivers only to its configured Codex Desktop task owner. Real multi-computer bootstrap, update, and reconnect acceptance remains pending.
+- Release manifests expose the Ed25519 public key, signature, and public-key SHA-256 fingerprint. Bootstrap stores the fingerprint in node-private configuration; every update compares that pinned value before verifying the manifest signature and file SHA-256 values, so replacing the key and re-signing is still rejected.
+
+### WebGUI theme colors
+
+- Message-adapter parameter panels now follow the active theme and no longer show a fixed light background in dark mode.
+
+### Codex Desktop sidebar Name authority
+
+- The user-visible Codex task name now comes only from `thread_name` in the index shared with the Desktop left sidebar. app-server `thread.name` and SQLite `threads.title` no longer override names or participate in name filtering.
+- Plan Secretary and Message Agent names use the Primary Persona sidebar `Name` as their prefix. Creation and rename fail closed when that Name is missing instead of falling back to the first prompt, Route name, or another raw title.
+- The complete task ID plus normalized workspace remains the delivery identity, so renaming does not invalidate exact-ID delivery. The task catalog now comes directly from the sidebar index plus local task state; app-server remains only for empty-task creation and naming.
 ### RibiWebGUI cold start and message-board retention
 
 - The WebGUI now renders its fixed shell immediately after LAN-address normalization. The plugin catalog and optional Web Bundles refresh in the background. A direct knowledge-page URL no longer waits for an optional Bundle; catalog delay or one Bundle failure keeps the original path and a recoverable loading state.

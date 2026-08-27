@@ -113,9 +113,9 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   const threadId = params.threadId?.trim() || "";
   if (isCodexTaskId(threadId)) {
     const exact = await dependencies.read(threadId);
-    // Desktop's SQLite title is mutable metadata: after a routed turn it can
-    // temporarily become the first prompt even while the UI keeps the user's
-    // visible task name. The opaque id plus workspace is the stable identity.
+    // The Desktop sidebar Name can change without changing task identity. The
+    // opaque id plus workspace is the stable identity; app-server and SQLite
+    // titles never participate in this exact-ID delivery decision.
     // Explicit name edits clear threadId in the UI before this resolver runs.
     if (exact) {
       if (exact.cwd && !sameCodexWorkspace(exact.cwd, params.cwd)) {

@@ -130,6 +130,28 @@ function basePluginDefinitions(context) {
       {
         kind: "page",
         surface: "web.pages",
+        id: "lan-agents-page",
+        label: { fallback: "局域网 Agent" },
+        routeId: "global.lan-agents",
+        rendererId: "builtin.web-page.lan-agents.v1",
+        slot: "global",
+        hosts: ["web"],
+        order: 65
+      },
+      {
+        kind: "navigation",
+        surface: "web.navigation",
+        id: "lan-agents",
+        label: { fallback: "局域网 Agent" },
+        routeId: "global.lan-agents",
+        icon: "mdi-lan-connect",
+        slot: "utility",
+        hosts: ["web"],
+        order: 65
+      },
+      {
+        kind: "page",
+        surface: "web.pages",
         id: "settings-page",
         label: { fallback: "设置" },
         routeId: "global.settings",

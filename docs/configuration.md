@@ -167,7 +167,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `dshSessionId` / `dshSessionName` / `dshCwd` / `dshBaseUrl`：DSH（DeepSeek Harness）主人格绑定。WebGUI 按“API 地址 → 工作目录 → 会话”扫描并选择；也可输入新名称，保存时按名称和工作目录查找，零匹配才幂等创建。创建前先通过 DSH `workspace.create` 注册或复用该工作目录，再把返回的 `workspaceId` 传给 `session.create`；RabiRoute 创建的主人格、消息处理、计划秘书和记忆整理会话会直接进入对应工作空间分组。选择或创建后保存完整 `session-<uuid>`、名称和工作目录；“自动初始化会话”先保存绑定，再向同一 DSH owner 投递角色、计划、记忆和必读项。真实消息通过 `POST /api/session.prompt` queue 模式续投，失败时不改投 Codex。DSH“设置 → 我的插件”需要启用 `RabiRoute Agent`；该插件提供线程桥、外发、计划、消息处理、记忆和 Agent 间通信工具。WebGUI 的 DSH 刷新和会话分页使用独立的 `GET /api/scan/agents/dsh`，不等待 Codex、Copilot CLI、AstrBot 或 Marvis 的通用扫描。匿名测试路由已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、`required` 正式回复和无效 Endpoint 失败关闭；独立扫描还会读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，缺失、未激活或版本不匹配时给出更新并重启 DSH 的修复提示。适配器仍标为实验，等待发布包和全新环境回归。
 - `primaryAgentAdapter`：当前 Route 的主控 Agent，必须是 `agentAdapters` 中的一项。消息命中规则后只投递给主控，不会广播给列表里的其他 Agent。旧配置没有该字段时使用列表第一项；删除主控后自动改用仍存在的第一项。
 - Agent 端先使用基础能力层描述安装、认证、项目、会话和投递，再按真实支持情况声明托管任务扩展。Codex 与 DSH 都声明“消息处理 Agent 模式”“独立记忆整理 Agent”“计划协助会话”和“Hook 管理”；这些设置只归当前主 Agent，切换主 Agent 时会过滤另一端的辅助会话绑定。DSH 通过 `RabiRoute Agent` 插件提供对应工具；其它 Agent 端仍按各自真实能力显示。
-- `messageProcessingAgents.codex` / `messageProcessingAgents.dsh`：当前主 Agent 的消息处理 Agent 调度资格、任务数量上限和运行参数。只有与 `primaryAgentAdapter` 相同的条目生效；Codex 使用独立模型与推理强度，DSH 会话沿用 DSH 端配置的模型。默认关闭；开启后，聊天消息形成消息组并按不同话题复用或动态创建消息处理会话，ASR 和结构化事件照常直接投递。Agent 列表、上限截取和实际投递共用同一套权重顺序：依次考虑引用的 Agent 外发消息、原消息组、消息端、会话、说话人和最近使用时间，同分时才使用固定序号。`maxAgents` 可选，范围 `1–32`；未设置时默认为 `1`，达到上限后继续复用唯一消息处理会话。降低上限只解除超额会话与当前 Route 的消息处理池关联，不删除 owner 会话。消息端、计划回调、记忆回调和 Agent 待回复继续使用当前主 Agent 端，不会失败后切换到另一端。
+- `messageProcessingAgents.codex` / `messageProcessingAgents.dsh`：当前主 Agent 的消息处理 Agent 调度资格、任务数量上限和运行参数。只有与 `primaryAgentAdapter` 相同的条目生效；Codex 使用独立模型与推理强度，DSH 会话沿用 DSH 端配置的模型。默认关闭；开启后，聊天消息形成消息组并按不同话题复用或动态创建消息处理会话，ASR 和结构化事件照常直接投递。Agent 列表、上限截取和实际投递共用同一套权重顺序：依次考虑引用的 Agent 外发消息、原消息组、消息端、会话、说话人和最近使用时间，同分时才使用固定序号。`maxAgents` 可选，范围 `1–32`；未设置时默认为 `1`，达到上限后继续复用唯一消息处理会话。降低上限只解除超额会话与当前 Route 的消息处理池关联，不删除 owner 会话。消息端、计划回调、记忆回调和 Agent 待回复继续使用当前主 Agent 端，不会失败后切换到另一端。 Codex 新建或改名消息处理任务时，名称前缀取 Desktop 侧栏显示的 `Name`；不会使用状态库中的原始 `name`。
 - 关闭 `messageProcessingAgents.codex.enabled` 后，普通聊天恢复逐条投递给主人格；已关联消息组产生的计划进展通知、知识回调提醒和 Agent 间待回复也迁移到当前 Route 的主人格任务。旧消息处理任务和审计记录保留，但不会再因这些后续工作自动打开。
 - 开启 `messageProcessingAgents.codex.enabled` 后，同一设置区域会显示消息处理看板。看板不是另一套统计：它读取 Manager 保存的消息发送需求，明确区分必须回复、由 Agent 判断、已转交、等待发送、等待审批、已发送、不需要回复和发送失败。直接 @、直接回复和私聊默认必须处理；普通群消息允许 Agent 主动参与讨论，也允许提交有原因的“不回复”。计划与来源消息完成结构化关联后，统一计划写入函数会在进展变化时生成通知需求，并复用原消息处理任务把结果发回来源群或私聊。看板通过 Manager 事件刷新，不定时扫描聊天或计划目录。
 - `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录完整查找。只有 RabiRoute 自己按稳定名称动态建立的消息处理任务使用 app-server 状态库的名称过滤，避免首次投递扫描完整任务目录；普通会话绑定仍保留完整查找。一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
@@ -176,7 +176,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `codexMemoryConsolidationAgentModel`：独立记忆整理 Agent 的模型，默认 `gpt-5.6-terra`。只影响该独立任务的新轮次，不改变主人格、消息处理 Agent、计划秘书或计划执行 Agent。
 - `codexPlanAssistantEnabled`：是否启用当前 Route 的持久计划秘书。默认关闭；旧配置已经保存 `codexPlanAssistantSessions` 时按开启兼容读取。关闭后不再向人格提供秘书槽，也不再为这些任务自动套用秘书模型；已绑定任务仍保留，重新开启后继续复用。
 - `codexPlanAssistantModel`：Manager 为当前 Route 的全部计划秘书统一选择的模型，默认 `gpt-5.6-terra`。WebGUI 只编辑这一处；秘书任务数组不再分别保存模型。旧配置若只在秘书条目里保存模型，读取时迁移为统一值，之后按统一配置运行和保存。调用方明确指定某一轮模型时仍尊重该选择。
-- `codexPlanAssistantSessions`：当前 Route 精确绑定的持久计划管理秘书列表，只保存完整任务 ID、可见名称、workspace、槽位序号和初始化时间。该列表与启用开关、统一模型分开保存，关闭秘书或修改模型都不会删除绑定。1 个时命名为“`<主会话名> 协助处理计划`”；多个时命名为“`<主会话名> 协助处理计划1`”“…计划2”。从 1 个扩容时会把原任务改名为“…计划1”；缩容只从 Route 解绑多余任务，不删除 Desktop 任务。Manager 在计划的独立 `secretaryBinding` 中保存当前负责秘书；业务 `taskBinding` 始终只指向执行任务。秘书负责计划/记忆、业务任务查重与续投，禁止执行调查、实现、测试或修改业务文件。该多任务能力尚未完成真实 Desktop 纵向验收，当前按实验能力展示。
+- `codexPlanAssistantSessions`：当前 Route 精确绑定的持久计划管理秘书列表，只保存完整任务 ID、可见名称、workspace、槽位序号和初始化时间。该列表与启用开关、统一模型分开保存，关闭秘书或修改模型都不会删除绑定。1 个时命名为“`<主会话显示 Name> 协助处理计划`”；多个时命名为“`<主会话显示 Name> 协助处理计划1`”“…计划2”。从 1 个扩容时会把原任务改名为“…计划1”；创建或改名时从 Desktop 侧栏显示的 `Name` 取前缀，不使用状态库中的原始 `name`；缩容只从 Route 解绑多余任务，不删除 Desktop 任务。Manager 在计划的独立 `secretaryBinding` 中保存当前负责秘书；业务 `taskBinding` 始终只指向执行任务。秘书负责计划/记忆、业务任务查重与续投，禁止执行调查、实现、测试或修改业务文件。该多任务能力尚未完成真实 Desktop 纵向验收，当前按实验能力展示。
 - `codexHooks.sessionContextEnabled`：默认 `true`。控制 `SessionStart` / `UserPromptSubmit`；打开、恢复、清空或压缩 Codex 任务，以及用户提交新消息时触发。
 - `codexHooks.reasoningContextEnabled`：默认 `true`。控制 `PreToolUse` / `PostToolUse`；Codex 调用工具前后触发，只返回本轮新命中的计划、记忆或技能上下文。
 - `codexHooks.planTaskCompletionEnabled`：默认 `true`。控制 `Stop` 完成提醒；绑定计划的执行任务输出本轮最终回答后触发。启用计划秘书且存在有效秘书任务时，Manager 直接投递给计划 `secretaryBinding` 指向的负责秘书，不写入主人格角色面板，也不默认唤醒主人格；未启用或没有可用秘书时才回退到原主人格链路。关闭只让 Manager 忽略或拒绝对应 Hook，不卸载或改写 Codex 插件 Hook。
@@ -308,7 +308,7 @@ URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`。`/api
 
 当前内置 Agent 端适配器：
 
-- `codex`：用短生命周期 app-server `thread/list` 读取 Desktop 用户可见的任务名称，并按完整 ID 合并本地 cwd、归档、时间和 owner/rollout 状态；以完整任务 ID 和工作目录绑定。投递时让 Desktop 加载目标任务，再通过 Desktop IPC start 或 steer，实际消息只由 Desktop owner 执行。
+- `codex`：从 Desktop 左侧栏共用索引读取用户可见 `Name`，并按完整 ID 合并本地 cwd、归档、时间和 owner/rollout 状态；以完整任务 ID 和工作目录绑定。投递时让 Desktop 加载目标任务，再通过 Desktop IPC start 或 steer，实际消息只由 Desktop owner 执行。
 - `copilotCli`：通过本机 Copilot CLI 命令投递一次性 prompt，输出写入 `copilot-output.jsonl`，运行态上报给 Manager。它不会注入已有 VS Code Copilot 面板线程；如需后台调用，请确保 CLI 可执行文件在 PATH 中，或设置 `COPILOT_CLI_BIN`。
 - `astrbot`：使用 `ASTRBOT_URL`、Dashboard 登录凭据和必需的 `ASTRBOT_SESSION_ID`。发送时只调用 ChatUI `POST /api/chat/send`；缺少 Session ID 时失败关闭。旧 AstrBot 插件回退与部署入口已经删除。
 - `marvis`：通过本机 handoff 方式接入 Marvis 桌面端。RabiRoute 会把 prompt 写入 `marvis-prompts/`、复制到剪贴板，并优先启动/聚焦 Windows 桌面应用 `Tencent.Marvis`；由于 Marvis 当前未提供稳定公开后台 API，这个适配器不会自动点击发送。
@@ -327,7 +327,7 @@ Codex adapter 的默认安全边界：
 - Codex/ChatGPT Desktop 必须运行；RabiRoute 不负责启动或停止 Desktop Runtime。
 - 目标任务未被 Desktop owner 加载时，RabiRoute 只打开 `codex://threads/<id>` 并短暂重试。
 - 有效 ID 且工作目录一致时始终复用，不因标题索引滞后、Desktop 改名或 goal 完成而新建。ID 被明确清空或确实失效时，才按保存名称和规范化工作目录查找/创建。
-- 无 ID 查找和下拉名称以 app-server `thread.name` 为准；SQLite `threads.title` 可能是首条 prompt，只能作为可变内部元数据，不能用于同名查找。
+- 无 ID 查找和下拉名称只以 Codex Desktop 左侧栏显示的 `Name` 为准。app-server `thread.name` 和 SQLite `threads.title` 都可能与侧栏不同，不能用于同名查找；任务 ID、工作目录、归档和时间从本地任务状态按完整 ID 读取；侧栏缺少 `Name` 时名称查找失败关闭。
 - 项目与任务列表只在进入设置界面时自动扫描一次；之后只有点击“扫描/重新扫描”按钮才刷新。
 - 主人格已有完整 ID 和工作目录时，配置页显示“定位会话”：Manager 先按 ID 读取并校验未归档状态和工作目录，再打开 Codex Desktop 任务或携带 `rabiSessionId` 的 DSH Web；该动作不发送 prompt、不创建会话、不修改绑定。“自动初始化会话”只在主人格尚无完整绑定时显示，先保存并解析稳定绑定，再通过角色面板/AgentPacket 正式链路把人格资料交给同一个 owner。
 - 模型、工具、文件/网络权限和审批沿用目标 Desktop 任务；RabiRoute 不伪造或覆盖。

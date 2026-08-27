@@ -6,45 +6,45 @@
 
 # RabiRoute
 
-![RabiRoute 看板娘展示与具体 Agent 解耦的消息网关、策略路由器和动作安全门](assets/rabiroute-hero-oss.webp)
+![RabiRoute 看板娘展示消息进入、规则分流、Agent 处理和受控回传](assets/rabiroute-hero-oss.webp)
 
 <h2 align="center">让 Agent 连接我们的一切。</h2>
 
-<p align="center">让来自聊天、语音、设备和时间的信号汇入 Agent，在持续理解中主动准备，在安全边界内把帮助落到现实。</p>
+<p align="center">把聊天、语音、定时任务和设备消息交给合适的 Agent，并保留清楚的上下文、权限边界和投递记录。</p>
 
 <p align="center">
   <a href="https://github.com/vb2250158/RabiRoute/commits/main"><img alt="最近提交" src="https://img.shields.io/github/last-commit/vb2250158/RabiRoute?color=19bfc1"></a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178c6">
+  <img alt="当前版本：0.2.1" src="https://img.shields.io/badge/version-0.2.1-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
-RabiRoute 是一个与具体 Agent 解耦的**消息网关、策略路由器和动作安全门**。它接收聊天、Webhook、定时器、语音和设备消息，按规则把消息交给正确的 Agent 或程序。
+RabiRoute 是一个与具体 Agent 解耦的**消息网关、发送规则管理器和动作安全门**。它接收 QQ、Webhook、定时任务、语音、桌面操作和设备消息，再按消息路线（Route）把内容交给指定的 Agent 或程序。
 
-Agent 或程序负责真正回答和执行任务。RabiRoute 负责决定**消息交给谁、自动附带哪些最近消息、是否允许向外回复，以及结果回到哪里**。
+Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责消息从哪里来、交给谁、附带哪些最近消息、能否向外回复，以及结果和回执保存在哪里。
 
-[可以构建什么](#可以构建什么) · [快速上手](#快速上手) · [本次更新](#本次更新重点) · [工作方式](#工作方式) · [当前能力](#当前能力) · [深入了解](#深入了解)
+[快速上手](#快速上手) · [当前能力](#当前能力) · [近期变化](#近期变化) · [工作方式](#工作方式) · [文档](#文档入口)
 
-## 可以构建什么
+## 适合做什么
 
-- 💬 **聊天到 Agent 的路由。** 把 QQ、角色面板或定时事件交给选定的处理端；Codex 是第一条完成端到端验证的处理端。
-- ⏱️ **主动工作例程。** 组合 Heartbeat、人格规则和项目上下文，唤醒正确的 Desktop 任务执行巡检、跟进或维护。
-- 🧳 **带最近消息的交接。** 按人格保存消息记录，只附带当前任务需要的内容，并按照这条 Route 的发送规则决定是否回传。
-- 🖼️ **系统文本和截图。** 在其他软件中划选文字或框选截图后，再主动朗读或投递给正在运行的人格；划选本身不会朗读或发消息。
-
-路由器始终与处理端解耦。你可以替换 Agent、工作流、脚本或人工队列，而不必把渠道凭据和网关策略一起交出去。
+- **把聊天交给 Agent。** QQ 群聊、私聊、角色面板和其他消息入口可以按 Route 进入固定项目和固定任务。
+- **让 Agent 定时工作。** 人格规则可以按间隔、时间窗口、每天指定时间或单次时间触发 Agent，也可以运行明确授权的本机脚本。
+- **保留连续上下文。** 每个人格拥有自己的消息记录、计划、记忆和技能引用；每条 Route 可以限制自动附带的最近消息。
+- **控制外部发送。** Agent 必须通过统一发送接口回复 QQ、RabiLink 等外部渠道；目标、引用消息、发送者身份和回执会被校验并记录。
+- **从 Windows 桌面投递文字和图片。** RabiRoute Desktop 支持滑词操作、系统截图、标注、复制、贴图和投递给已启用人格。
+- **连接语音和移动设备。** RabiSpeech、RabiLink 手机/眼镜、穿戴设备与远程 Relay 已有实现，但仍按实验集成验收。
 
 ## 快速上手
 
 ### Windows 安装包
 
-从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest) 下载 `RabiRoute-<版本>-windows-x64-setup.exe`。安装包包含 RabiRoute Desktop、Node.js、作为本机后端的 Manager、RibiWebGUI 和生产依赖。
+从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest) 下载 `RabiRoute-<版本>-windows-x64-setup.exe`。安装包包含 RabiRoute Desktop、本机 Manager、RibiWebGUI、Node.js 和生产依赖。
 
-发布页也提供便携 ZIP 和 `SHA256SUMS.txt`。当前 Windows 包尚未签名；遇到 SmartScreen“未知发布者”提示时，请先核对校验和。
+发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
 
-### 源码安装
+### 从源码运行
 
 需要 Node.js 20 或更高版本，以及 npm。
 
@@ -56,133 +56,84 @@ npm run build
 npm run start:manager
 ```
 
-打开 [http://127.0.0.1:8790/](http://127.0.0.1:8790/)。如果本机还没有运行数据，Manager 会从 `examples/data/` 创建脱敏的本地配置。
+打开 [http://127.0.0.1:8790/](http://127.0.0.1:8790/)。首次启动且没有本机运行数据时，Manager 会从 `examples/data/` 创建脱敏示例配置。
 
-创建第一条消息路线（Route）：
+### 跑通第一条 Route
 
-1. 打开**快速配置**，选择 Heartbeat 作为消息入口。
-2. 选择 Codex，并绑定项目目录与一个 Desktop 任务。
-3. 保存 Route，打开**日志诊断**，执行一次手动触发。
+1. 打开**快速配置**，选择“定时触发”。
+2. 选择 **Codex Agent**，绑定项目目录和一个已经存在的 Codex/ChatGPT Desktop 任务。
+3. 保存 Route，在**日志诊断**中执行一次手动触发。
+4. 确认触发成功，并且同一个 Desktop 任务出现了 RabiRoute 消息。
 
-> 成功标准：触发完成，并且选定的 Codex/ChatGPT Desktop 任务收到一条 RabiRoute 消息。这是真实投递，不是无副作用预览。
+这次手动触发会执行真实投递。完整步骤和失败检查见[跑通第一条 Route](docs/user-guide/first-route.md)。
 
-接下来阅读[第一条 Route 指南](docs/user-guide/first-route.md)。局域网访问、外部适配器和远端语音都有独立的配置与安全步骤。
+## 当前能力
 
-## 本次更新重点
+仓库当前版本为 `0.2.1`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
-### 一个完整的 Windows 桌面运行态
+| 范围 | 当前状态 | 用户可以完成什么 |
+| --- | --- | --- |
+| 路由主链 | 已验证 | 接收消息、保存事件、匹配规则、生成 Agent 上下文、投递处理端并记录回传。 |
+| NapCat / OneBot | 已验证 | 接收 QQ 群聊和私聊，保存图片与合并转发证据，通过 OneBot HTTP 发送回复。 |
+| 定时任务与人格自动化 | 已验证 | 按消息或时间触发 Agent；在单独授权后运行人格目录中的本机脚本。 |
+| Codex Desktop | 已验证 | 按完整任务 ID 和项目目录投递；只有目标任务写入 `deliveryId` 回执后才报告成功。任务删除或归档后可受控换新。 |
+| RibiWebGUI | 已验证 | 管理 Route、人格、消息端、Agent、计划、记忆、日志、诊断、主题和桌面设置。 |
+| 计划、记忆与消息处理 | 已验证 | 分页查看计划和记忆，提交计划反馈，分配消息处理任务，并保存处理状态和回执。 |
+| Windows 桌面 | 主链已实现 | 统一启动 Manager 与桌面界面；提供滑词、截图和截图标注。部分系统交互仍需 Windows 实机复测。 |
+| DSH | 实验支持 | 作为主人格或辅助处理端使用明确的 API、项目目录和会话绑定。 |
+| RabiSpeech / RabiLink / 移动与穿戴设备 | 实验支持 | 接入语音、手机、眼镜、Relay 和健康数据链路；每条链路按设备与网络环境单独验收。 |
+| 局域网 Rabi Agent | 实验支持 | 其他电脑运行无界面工作进程，连接 Manager，并把任务交给该电脑上指定的 Codex Desktop 任务。真实多电脑验收待完成。 |
 
-Windows 正式入口改为 **RabiRoute Desktop**：`Start-RabiRoute-Desktop.bat` 和 `RabiRoute-Desktop.exe` 会把本机 Manager 与桌面界面作为同一运行态启动。轻量监督器只会在保存的意图仍是运行时补齐缺失组件；点击“退出 RabiRoute”会先保存明确停止，再关闭本机后端。
+完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
-### 系统级文本与图片投递
+## 近期变化
 
-“设置”页可以打开滑词菜单和系统级截图。在其他软件中用鼠标或键盘划选文字后，再点“朗读”或“投递至”；划选本身没有副作用。截图可以复制、贴到屏幕、输入说明，再带着文字投递给已启用人格。Windows 真机闭环仍待验收。
+### 0.2.1：计划读取和本机运行改进
 
-![RabiRoute Desktop 设置页展示系统级截图、快捷键和滑词菜单](assets/screenshots/webgui-desktop-features-zh.png)
+- 每个计划使用独立目录保存正文、历史、反馈和附件，归档时移动整个目录。
+- 计划与记忆页面先加载当前可见内容，再按需读取后续页面，减少首屏等待和 Manager 磁盘压力。
+- RabiSpeech 的大文件读取、性能统计和人格同步索引移出 Manager 主请求路径。
+- Windows 桌面截图增加选区调整、矩形、箭头、文字、颜色和撤销。
 
-*截图使用本机脱敏样例，不包含账号、访问密钥、聊天内容或私有路径。*
+### 未发布：投递、插件和 WebGUI 恢复能力
 
-### 更可靠的 Agent 工作链路
+- Codex Desktop 投递增加 `deliveryId` 写入确认；IPC 接收但目标任务没有回执时会重试或明确失败。
+- Codex 任务显示名称改为读取 Desktop 左侧栏共用索引，任务 ID 与项目目录继续作为投递身份。
+- Manager 插件由版本化 Profile 和 Bundle 管理；修改后按 revision 排空旧请求、切换新实例，失败时恢复上一可用版本。
+- Web Bundle 使用不可变 revision 地址，页面、脚本、样式和字体从同一版本目录加载；浏览器收到插件目录变化后替换对应模块。
+- WebGUI 先显示固定界面，再在后台读取插件目录和知识内容；消息看板过期正文会被删除，只保留限期重放去重键。
 
-- **Codex 仍是已验证处理端。** 真实 prompt 只投给选定的 Codex/ChatGPT Desktop 任务 owner；Desktop 不可用、工作目录不一致或 owner 缺失时失败关闭。
-- **DSH 是实验性的主人格处理端。** 它可以承担主人格和受管辅助会话，但真实 profile 的连续投递、重启读回和工具 owner 仍需实机证据。
-- **每条投递保留实际来源。** 处理端能区分消息来自哪里与正文内容；人格之间的消息需要显式发送、带身份校验和重复投递保护，默认不会自动返回。
-- **归档绑定会在下一次真实投递时换新。** 主人格、消息处理 Agent 和计划秘书会创建准确的新任务，不会投进归档记录或复用同名任务。
-
-Windows 控件见 [界面与状态](docs/user-guide/interface-and-status.md)，能力成熟度见[当前能力与成熟度](docs/current-capabilities.md)，配置与恢复细节见[版本更新日志](版本更新日志.md)。
+逐项记录和迁移说明见[版本更新日志](版本更新日志.md)。
 
 ## 工作方式
 
 ```mermaid
-flowchart TB
-    subgraph ingress ["1 · 消息进入"]
-        direction LR
-        A["聊天 · Webhook · 定时器<br/>语音 · 设备"] --> B["消息适配器"]
-    end
-
-    subgraph routing ["2 · 路由与上下文"]
-        direction LR
-        C["事件存储"] --> D["路由决策"] --> E["AgentPacket<br/>模板 + 可迁移上下文"]
-    end
-
-    subgraph delivery ["3 · 处理、安全门与回传"]
-        direction LR
-        F["Codex · Agent · 工作流<br/>脚本 · 人工"] --> G["Outbox / Action Gate"] --> H["回复 · 草稿 · 审批<br/>外部动作"]
-    end
-
-    B --> C
-    E --> F
-    H -. "审计 + 结果" .-> C
+flowchart LR
+    A[聊天 · 定时任务 · 语音 · 设备] --> B[消息入口]
+    B --> C[事件记录]
+    C --> D[Route 规则]
+    D --> E[上下文与附件]
+    E --> F[Agent 或程序]
+    F --> G[发送规则与动作安全门]
+    G --> H[回复 · 回执 · 审计]
 ```
 
-每条 Route 都把消息进入、策略判断、可迁移上下文、处理端投递和外发控制分开。事件和投递结果会留下可检查的证据，不会消失在某个一体化集成里。
+每条 Route 分开保存消息入口、人格、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
 
-### 插件化 Manager
+Manager 当前通过 `rabi.manager.base@0.2.1` Bundle 提供 26 个内置插件实例。插件声明依赖和界面贡献；Manager 负责启停、依赖检查、路由撤销、请求排空和失败恢复。当前实现说明见[插件 Bundle 与热替换](docs/plugin-bundles.md)。
 
-26 个内置 Manager 插件迁移已经完成。正式启动只有一条初始化路径：`startManager()` 先把共享资源挂到 Manager 根 Context，再把内置定义与业务 `apply` hook 合成，随后执行首次对账。插件定义声明 `provides`、`requires` 和 `optional`。缺少必需能力的消费者进入 `waiting_dependency`；可选 Provider 存在时参与启动排序；Provider revision 或活动状态变化会沿能力依赖链重启真实消费者；同一能力出现多个已启用 Provider 时拒绝对账。
+## Agent 与安全边界
 
-业务 HTTP 路由使用稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` 声明；`dynamic` 只保留为扩展合同。`ManagerPluginRouteRegistry` 拒绝重复路由 ID，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突。Manager 根 Fiber 持有三个共享读取 Worker Pool 和消息处理合并持久化服务。停止时拒绝新工作、取消排队和共享请求、刷新待写数据、终止 Worker 并等待退出。RabiLink 停止会中止 Relay 工作，关闭人格同步 listener 与 Socket，并等待 Relay、SSE、WebGUI 和语音 drain；停止期间若排队了重启，第二次 `stop()` 会清除目标配置并取消该重启。配置 watcher 和 Rabi 身份配置接口都会等待异步 Relay 同步完成后再结束重载或返回。
+- Codex 的真实消息只通过 Desktop IPC 交给选定的 Codex/ChatGPT Desktop 任务 owner。
+- 目标 Desktop 任务拥有自己的模型、工具、沙箱和审批；RabiRoute 不替它执行推理。
+- 项目锁定的 `codex app-server` 只用于创建或命名空任务，不执行 Route 消息。
+- Desktop 不可用、任务无法加载、项目目录不一致或 owner 不明确时，投递失败并保留错误记录。
+- 平台账号、登录状态和凭据仍由对应平台拥有。
+- 本机 `data/`、日志、录音、转录文本、token、Cookie 和私有路径不进入公开仓库。
 
-表现 Contribution Catalog 发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 与 Desktop 的可信合同都绑定 `pluginId + instanceId`，目录引用必须解析到同一插件实例；未知、未注册或跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动等桌面设置。插件停用后，系统划词、目录操作和手动触发入口随之撤销；目录读取失败时立即撤销旧命令、renderer、面板操作和系统监听，并只保留固定 WebGUI 恢复入口。
+RabiRoute 当前没有通用 Action Queue、统一审批中心或无副作用的 Route 预览界面。手机、眼镜、穿戴设备和多电脑 Agent 的生产闭环仍按实验功能管理。
 
-AstrBot 现在必须配置 `ASTRBOT_SESSION_ID`，并且只调用 ChatUI `POST /api/chat/send`。已删除 `POST /api/plugins/reconcile`、两个 Agent availability 接口、`/api/playback/request`、AstrBot `/api/plug/rabiroute_agent/chat` 和 `/api/deploy-astrbot-adapter`。对应使用 `GET/POST /api/plugins/reconciliation`、`/api/scan/agents`、`/api/scan/agents/dsh` 和 `/api/fennenote/playback`。
-
-## 当前能力
-
-| 领域 | 当前能力 |
-| --- | --- |
-| 已验证入口 | NapCat / OneBot、Heartbeat 和内置角色面板。Manual trigger 是 Manager 动作，不是 adapter。 |
-| 人格协作 | Agent 可以查询当前可联系的人格，并显式向另一个已启用 Route 单向投递消息。接口包含身份校验和重复投递保护；真实双人格 Desktop 验收仍待完成。 |
-| 路由 | Route profile、人格规则、直接 @、回复链、私聊、关键词、正则、定时规则和每 Route 独立模板。 |
-| 上下文 | 人格级双向会话账本、最近消息额度、计划/记忆/技能引用、回复上下文和安全附件元数据。 |
-| 已验证处理端 | 通过选定 Codex/ChatGPT Desktop 任务 owner 投递的 Codex。 |
-| 实验性的主人格处理端 | DSH 可以承担主人格和受管辅助会话；真实 profile 的连续投递与重启验收仍待完成。 |
-| Windows 桌面交互 | RabiRoute Desktop 提供滑词操作和系统级截图投递；Windows 真机闭环仍待验收。 |
-| 控制面 | Node.js Manager 组合 26 个内置 Cordis 插件；RibiWebGUI 与 RabiRoute Desktop 按活动插件目录显示 Route、适配器、人格、语音、性能、日志、设置、诊断和生命周期入口。 |
-| 安全与证据 | Route 自己的 Outbox policy，以及事件、数据包、投递、回复、Heartbeat 和 replay 的 JSONL 记录。 |
-| 实验集成 | Remote Agent、RabiSpeech、RabiLink、小爱、Webhook、WeCom、飞书、个人微信、穿戴设备、Copilot CLI 和 AstrBot。 |
-
-RabiRoute 正处于活跃的 `0.1.x` 开发阶段。外部平台与设备链路仍需对应环境验收；完整口径见[当前能力与成熟度](docs/current-capabilities.md)。
-
-项目不会把通用审批中心、持久 Action Queue、无副作用 Route 预览，或全部手机、眼镜和穿戴设备生产闭环宣传为已完成能力。
-
-## 边界与安全
-
-| RabiRoute 负责 | 处理端负责 |
-| --- | --- |
-| 消息进入和规范化 | 回答具体问题 |
-| 事件与投递记录 | 规划和执行任务 |
-| 路由匹配与处理端选择 | 调用工具和修改代码 |
-| 上下文模板与 `AgentPacket` 构建 | 私有运行状态和深层记忆 |
-| 会话投递策略 | 领域内推理 |
-| 草稿、回复和审计边界 | 产出结果或动作请求 |
-
-换句话说：**RabiRoute 不拥有 Agent，但拥有上下文和门。**
-
-RabiRoute 不是完整 Agent OS，不是聊天机器人框架的替代品，不是工作流平台，也不是某个模型提供商的外壳。新消息平台应进入 `src/adapters/`；处理端集成留在 agent-adapter 接口之后。
-
-- 平台凭据和登录状态仍由各平台拥有。
-- Desktop 任务审批与 RabiRoute 的业务动作策略是两道独立安全门。
-- 运行期 `data/`、日志、token、录音、转录文本和私有路径不会进入 Git。
-- owner、工作目录或权限状态不明确时失败关闭。
-
-## Agent 集成
-
-Codex 是第一条完整验证的处理端，但不是产品边界。
-
-- 真实消息只通过 Desktop IPC 投给选定的 Codex/ChatGPT Desktop 任务 owner。
-- 已保存的任务 ID 与 workspace 是稳定身份；改名或 goal 完成不会创建重复任务。
-- Desktop 缺席、任务无法加载或工作目录不一致时，投递失败关闭，不启动备用 Runtime。
-- 模型、工具、沙箱和审批由目标 Desktop 任务拥有。
-- 项目锁定的 `codex app-server` 可以创建或命名空任务，但不执行真实路由 prompt。
-
-这组边界让路由器保持独立，同时保留可靠投递和清晰的任务所有权。
-
-DSH 使用明确的 API 地址、工作目录和会话绑定；会话、插件或 owner 不可用时不会改投 Codex。当前已有实现和自动化合同，但真实 DSH profile 的连续投递与重启读回尚未完成验收，不能当作已验证能力宣传。
-
-## 配置模型
-
-运行配置把消息路由与人格行为分开保存：
+## 配置和数据
 
 ```text
 data/route/<configName>/adapterConfig.json
@@ -190,43 +141,49 @@ data/roles/<RoleId>/persona.md
 data/roles/<RoleId>/personaConfig.json
 ```
 
-- `adapterConfig.json` 定义消息入口、处理端 adapter、工作目录、pipeline preset 和人格绑定。
-- `persona.md` 保存人格或面向处理端的角色说明。
-- `personaConfig.json` 保存人格自动化规则、头像信息、语音关键词和最近消息额度。每条自动化规则由“收到消息或到达时间”与“通知 Agent 或运行本机人格脚本”组成。
+- `adapterConfig.json` 保存消息入口、处理端、项目目录、Route 规则和人格绑定。
+- `persona.md` 保存人格说明和面向处理端的工作要求。
+- `personaConfig.json` 保存人格自动化、头像、语音关键词和最近消息额度。
+- `data/roles/<RoleId>/conversation/` 保存该人格的消息记录。
+- [`examples/data/`](examples/data/) 保存可公开复制的脱敏样板。
 
-完整会话证据位于 `data/roles/<RoleId>/conversation/`。可公开复制的脱敏样板位于 [`examples/data/`](examples/data/)，本机运行数据保持私有。
+可独立构建的客户端位于 [`apps/`](apps/)，共享 SDK 位于 [`packages/`](packages/)，可复用 Agent 指南位于 [`skills/`](skills/)。
 
-可独立构建的客户端位于 [`apps/`](apps/)，共享端侧契约位于 [`packages/`](packages/)，可复用项目指南位于 [`skills/`](skills/)。
+## 文档入口
 
-## 深入了解
+### 第一次使用
 
-| 目标 | 文档 |
-| --- | --- |
-| 完成第一条投递 | [RibiWebGUI 使用手册](docs/user-guide/README.md) |
-| 核对真实已实现能力 | [当前能力与成熟度](docs/current-capabilities.md) |
-| 浏览现行、实验、设计和历史文档 | [文档索引](docs/README.md) |
-| 理解产品与代码边界 | [架构说明](docs/architecture.md) · [代码架构](docs/code-architecture.md) |
-| 查找功能对应的代码 owner | [项目功能地图](docs/project-function-map.md) |
-| 安全配置局域网访问 | [RibiWebGUI 界面与状态](docs/user-guide/interface-and-status.md) |
-| 构建手机端或眼镜端 | [客户端应用](apps/README.md) |
-| 运行本机或远端 TTS / ASR | [RabiSpeech](docs/rabispeech-plugin.md) · [远端语音](docs/user-guide/speech-api.md) |
-| 查看配置迁移说明 | [版本更新日志](版本更新日志.md) |
+- [跑通第一条 Route](docs/user-guide/first-route.md)：完成一次真实 Codex Desktop 投递。
+- [RibiWebGUI 使用手册](docs/user-guide/README.md)：查看界面、人格、Route、Agent 和排障步骤。
+- [界面与运行状态](docs/user-guide/interface-and-status.md)：判断 Manager、Route 和消息端是否正常。
+- [运行、日志与排障](docs/user-guide/operations-and-troubleshooting.md)：按现象定位失败位置。
 
-## 开发与贡献
+### 安装和接入
+
+- [配置说明](docs/configuration.md)：查看本机配置、目录和主要参数。
+- [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：接入其他电脑上的无界面 Codex 工作进程。
+- [RabiSpeech](docs/rabispeech-plugin.md)：配置本机或远端 TTS / ASR。
+- [客户端应用](apps/README.md)：构建 Android、Rokid AIUI、浏览器桥和 Rabi Agent。
+
+### 开发和维护
+
+- [当前能力与成熟度](docs/current-capabilities.md)：核对功能是否已验证。
+- [文档索引](docs/README.md)：浏览现行、实验、设计和历史资料。
+- [架构说明](docs/architecture.md)：理解产品边界和数据流。
+- [项目功能手册](docs/project-function-map.md)：查找功能拥有者、API 和代码入口。
+- [版本更新日志](版本更新日志.md)：查看版本变化和迁移要求。
+
+## 开发
 
 ```bash
 npm run manager          # 直接运行 TypeScript Manager
 npm run webgui:dev       # 运行 Vue/Vuetify 前端
 npm run test             # 运行后端与契约测试
-npm run build            # 构建后端与 WebGUI
-npm run check:config     # 检查公开/运行期 JSON 文本
+npm run build            # 构建 Manager 与 WebGUI，并同步基础 Web Bundle
+npm run check:config     # 检查公开和运行期 JSON 文本
 ```
 
-开始较大改动前，请先阅读[当前能力与成熟度](docs/current-capabilities.md)，再检查相关代码、测试和文档。
-
-欢迎通过 [GitHub 仓库](https://github.com/vb2250158/RabiRoute)提交 issue 和 pull request。
-
-请勿提交真实账号标识、聊天内容、token、Cookie、私有路径或运行期 `data/`。本仓库始终按公开、可复现项目维护。
+提交公开内容前，删除真实账号标识、聊天内容、token、Cookie、本机用户名、私有路径和运行期 `data/`。
 
 ## 许可证
 

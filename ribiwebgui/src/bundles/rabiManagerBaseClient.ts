@@ -50,6 +50,12 @@ function activateCore(api: BaseWebBundleApi): readonly Dispose[] {
         navigation: { resolvePath: routeScopedOverviewPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-view-dashboard-outline"] }
       },
       {
+        routeId: "global.lan-agents", rendererId: "builtin.web-page.lan-agents.v1",
+        loader: () => import("../pages/LanAgentsPage.vue"),
+        paths: [{ path: "/lan-agents", title: "局域网 Agent" }],
+        navigation: { resolvePath: () => "/lan-agents", allowedSlots: ["utility"], allowedIcons: ["mdi-lan-connect"] }
+      },
+      {
         routeId: "global.settings", rendererId: "builtin.web-page.settings.v1",
         loader: () => import("../pages/SettingsPage.vue"),
         paths: [{ path: "/settings", title: "设置" }],

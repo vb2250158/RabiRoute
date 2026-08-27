@@ -58,6 +58,7 @@
 - [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明 26 个内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
 - [DSH 如何使用 Cordis](dsh-cordis-runtime-analysis.md) — **实现调查**。说明 profile、Loader、Fiber、服务 realm、浏览器插件树、动态代码和进程沙箱的真实边界。
 - [基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md) — **当前实现说明**。定义 26 个内置 Manager 插件、中央 HTTP 最小宿主、WebGUI/Desktop 扩展协议、插件资源所有权和停用顺序。
+- [RabiRoute 插件平台目标架构](manager-plugin-implementation-hot-swap.md) — **待评审设计**。定义最小插件内核、独立能力包、统一 SDK、多宿主扩展、generation 原子切换、树外插件验收和一次性删除旧运行时。
 - [插件 Bundle 与热替换](plugin-bundles.md) — **当前实现说明**。Profile、Patch、版本化 Bundle、受控 Manager 宿主 API 和浏览器 revision 回滚。
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
@@ -98,6 +99,7 @@
 - [人格路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
 - [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。
+- [局域网 Rabi Agent 接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。查看无界面节点接入、局域网连接 Token、Rabi Web 更新请求和现有 Codex Desktop task owner 的限制。
 - [手机 App Webhook 历史方案](mobile-app-webhook-integration.md) — **历史参考**，当前 RabiLink 主链不再以手机桥作为必经中转。
 
 归档材料位于 [`archive/`](../archive/README.md)，可构建客户端位于 [`apps/`](../apps/README.md)，共享 SDK 位于 [`packages/`](../packages/README.md)，可复制样板位于 [`examples/`](../examples/README.md)。

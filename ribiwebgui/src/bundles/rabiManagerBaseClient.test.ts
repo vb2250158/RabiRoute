@@ -56,7 +56,7 @@ function activateInstances(instanceIds: readonly string[]): Registration[] {
 
 test("one base Web Bundle activation registers every selected Manager instance contribution", () => {
   const registrations = activateInstances(["manager:core", "manager:persona", "manager:desktop"]);
-  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:core" && item.kind === "page").map(item => item.routeId), ["route.overview", "global.settings", "global.docs"]);
+  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:core" && item.kind === "page").map(item => item.routeId), ["route.overview", "global.lan-agents", "global.settings", "global.docs"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:core" && item.kind === "theme").map(item => item.themeId), ["system", "light", "dark"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:persona" && item.kind === "page").map(item => item.routeId), ["route.persona", "route.persona-document", "route.persona-sync"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:desktop" && item.kind === "settings").map(item => item.rendererId), ["builtin.desktop-settings.v1"]);

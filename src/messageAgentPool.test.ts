@@ -208,7 +208,7 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
     now: () => new Date("2026-08-04T06:00:00.000Z"),
     request: async (payload) => {
       calls.push(payload);
-      if (payload.action === "read") return { thread: { status: { type: "idle" }, active: false } };
+      if (payload.action === "read") return { thread: { name: "星海建造师 策划 程序", status: { type: "idle" }, active: false } };
       if (payload.action === "resolve") return { thread: { id: "019f0000-0000-7000-8000-000000000010", title: payload.title, cwd: process.cwd() } };
       return {};
     }
@@ -254,6 +254,51 @@ test("Message Agent pool creates a Desktop task and sends the first group with L
   assert.match(deliveryText, /params\.replyImageDescriptions/);
   assert.match(deliveryText, /按原图顺序说明内容和含义/);
   assert.match(deliveryText, /群内回复默认一至两句/);
+});
+
+test("Message Agent names use the Primary Persona's displayed Codex Name", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-displayed-name-"));
+  const resolvedTitles: string[] = [];
+  const pool = new MessageAgentPool({
+    ...options(path.join(root, "agents.json")),
+    sourceThreadName: "原始任务标题",
+    roleDisplayName: "角色文件标题"
+  }, {
+    request: async (payload) => {
+      if (payload.action === "read") {
+        return { thread: { name: "Desktop 显示 Name", title: "原始任务标题", status: { type: "idle" }, active: false } };
+      }
+      if (payload.action === "resolve") {
+        resolvedTitles.push(String(payload.title));
+        return { thread: { id: "019f0000-0000-7000-8000-000000000084", title: payload.title, cwd: process.cwd() } };
+      }
+      return {};
+    }
+  });
+
+  await deliver(pool, group("displayed-name"), "create");
+
+  assert.deepEqual(resolvedTitles, ["Desktop 显示 Name 协助处理消息"]);
+});
+
+test("Message Agent creation fails closed when the Codex sidebar Name is missing", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-missing-display-name-"));
+  let resolveCount = 0;
+  const pool = new MessageAgentPool(options(path.join(root, "agents.json")), {
+    request: async (payload) => {
+      if (payload.action === "read") {
+        return { thread: { id: options(path.join(root, "unused.json")).sourceThreadId, name: "", title: "", status: { type: "idle" } } };
+      }
+      if (payload.action === "resolve") resolveCount += 1;
+      return {};
+    }
+  });
+
+  await assert.rejects(
+    () => deliver(pool, group("missing-display-name"), "create"),
+    /sidebar Name is unavailable/
+  );
+  assert.equal(resolveCount, 0);
 });
 
 test("Message Agent pool stages seventeen source images in the worker workspace and sends stable 8+8+1 batches", async () => {
@@ -346,7 +391,7 @@ test("direct replies default to a visible acknowledgement even when no plan chan
   assert.match(prompt, /纯结束语、重复消息、自身消息/);
 });
 
-test("Message Agent initialization resolves the current Primary Persona title by complete task id", async () => {
+test("Message Agent initialization resolves the current Primary Persona displayed Name by complete task id", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-agent-primary-title-"));
   const calls: Array<Record<string, any>> = [];
   const pool = new MessageAgentPool({
@@ -356,7 +401,7 @@ test("Message Agent initialization resolves the current Primary Persona title by
     request: async (payload) => {
       calls.push(payload);
       if (payload.action === "read" && payload.threadId === options(path.join(root, "unused.json")).sourceThreadId) {
-        return { thread: { id: payload.threadId, title: "星海建造师 策划 程序", cwd: process.cwd(), status: { type: "idle" }, active: false } };
+        return { thread: { id: payload.threadId, name: "星海建造师 策划 程序", title: "“星海建造师 策划 程序” 这个会话宕机了？", cwd: process.cwd(), status: { type: "idle" }, active: false } };
       }
       if (payload.action === "resolve") {
         return { thread: { id: "019f0000-0000-7000-8000-000000000012", title: payload.title, cwd: process.cwd() } };
