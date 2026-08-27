@@ -17,6 +17,58 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Manager adds a read-only role-knowledge file-count endpoint. The RibiWebGUI role-knowledge client now exposes loaders for active/archived plan, recent/consolidated memory, and memory-consolidation-run counts, so pages can avoid loading complete knowledge content when they need totals.
 
+### LAN Rabi Agent
+
+- Added an experimental headless LAN Rabi Agent, Manager node/task APIs, a Rabi Web management page, and self-update flow. A node delivers only to its configured Codex Desktop task owner. Real multi-computer bootstrap, update, and reconnect acceptance remains pending.
+- Node listing, task assignment, and update requests now require an explicit WebGUI access Token even from loopback, preventing another local process or page from using implicit machine trust to control a remote Agent.
+- Release manifests expose the Ed25519 public key, signature, and public-key SHA-256 fingerprint. Bootstrap stores the fingerprint in node-private configuration; every update compares that pinned value before verifying the manifest signature and file SHA-256 values, so replacing the key and re-signing is still rejected.
+
+### WebGUI theme colors
+
+- Message-adapter parameter panels now follow the active theme and no longer show a fixed light background in dark mode.
+
+### Codex Desktop sidebar Name authority
+
+- The user-visible Codex task name now comes only from `thread_name` in the index shared with the Desktop left sidebar. app-server `thread.name` and SQLite `threads.title` no longer override names or participate in name filtering.
+- Plan Secretary and Message Agent names use the Primary Persona sidebar `Name` as their prefix. Creation and rename fail closed when that Name is missing instead of falling back to the first prompt, Route name, or another raw title.
+- The complete task ID plus normalized workspace remains the delivery identity, so renaming does not invalidate exact-ID delivery. The task catalog now comes directly from the sidebar index plus local task state; app-server remains only for empty-task creation and naming.
+
+### RibiWebGUI cold start and message-board retention
+
+- The WebGUI now renders its fixed shell immediately after LAN-address normalization. The plugin catalog and optional Web Bundles refresh in the background. A direct knowledge-page URL no longer waits for an optional Bundle; catalog delay or one Bundle failure keeps the original path and a recoverable loading state.
+- The knowledge page first resolves the Route and role through `/gateways?summary=1`, displays eight plan summaries, and then serially loads the remaining pages for the same filter in the background. A Route change, hidden page, or unmount stops later reads. Full Gateway configuration still loads in the background for editing and diagnostics.
+- The root HTML uses `no-store`; content-hashed static assets and revision-addressed Web Bundle modules use long-lived immutable caching. The base Bundle now only re-exports the current main WebGUI entry, avoiding a second Vue, Pinia, and page-dependency download.
+- The message-processing board snapshot is now v2. An expired requirement drops message bodies, attachments, and reply context while retaining a SHA-256 replay-dedupe key for up to seven days. A matching replay returns `replay_suppressed` without another Agent delivery or board event.
+
+### Plan archive consistency
+
+- Moving a completed plan to archived now clears `currentStepId`; an archived record no longer retains a current-step pointer that is valid only for in-progress or paused plans.
+
+### Full-suite verification stability
+
+- `npm test` now limits Node test concurrency from 8 to 4. Worker Pool and voice-transcript deadline tests no longer compete with a large batch of child processes for local resources, while the suite still retains parallel coverage instead of reporting resource contention as a product failure.
+
+### Codex Desktop delivery receipts and task recovery
+
+- Every Codex Desktop delivery now has a UUID `deliveryId`, and RabiRoute returns `delivered` only after the target task rollout contains that marker. If IPC accepts `steer` without a receipt, delivery retries once as `start`; a missing marker still fails explicitly instead of treating task selection or IPC acceptance as actual delivery.
+- `thread-follower-start-turn` now uses Desktop protocol version `2` with the `turnStart.request + context` payload. Idle tasks no longer receive only `no-client-found` because of the obsolete payload or protocol version.
+- If a bound task is confirmed deleted after the Desktop owner accepted a delivery, RabiRoute creates and persists one replacement task, redelivers the current message, and returns the replacement warning to the caller. An archived binding likewise cannot reuse a same-named task.
+- The Windows Desktop lifecycle supervisor uses Manager `/meta` availability as the health signal. If the process remains present but its control plane is unresponsive, it invokes the unified launcher and records the probe error and consecutive failure count.
+
+### Manager plugin Bundles and hot replacement
+
+- The `rabi.manager.base` Bundle now directly owns the 26 built-in definitions, dependencies, presentation contributions, and default Profile. Manager no longer creates a definition for the Bundle. Only the matching base-Bundle instance receives the constrained capability to activate Manager-owned resources; external Bundles still receive the general controlled API only.
+- The first load uses the Bundle default Profile. After the HTTP listener is ready, one asynchronous migration converts old `manager.json.managerPlugins` / `rabi.manager.builtin` data and removes the old field. Normal reconciliation then reads only Profile, Patch, and Bundle data.
+- The Web module catalog is published from the successfully reconciled runtime snapshot instead of rereading Profile on each request. Failed rollback candidates and `waiting_dependency` instances never send a new revision to the browser.
+- Bundle changes use revisions to unload the preceding Fiber, remove instance routes, drain accepted requests, and load the new version. Failed activation restores the preceding version. Web Bundles use content revisions and Manager SSE replacement, retaining the preceding usable page if replacement fails.
+- A Web Bundle entry, lazy script, CSS, and font now use relative URLs from the same revision directory; lazy loads no longer fall through to the WebGUI root. The build copies the Vite entry module itself, avoiding a dependency on a temporary minified export alias.
+- The Web Bundle graph now aggregates by package ID, version, and revision. The 26 instances of one `rabi.manager.base@0.2.1` revision download and initialize once. An enable or disable change that alters `instances` disposes and reactivates the Bundle so disabled instances cannot leave pages or renderers behind. Manager serves immutable revision files as their original bytes and no longer rewrites built JavaScript.
+- The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry instead of waiting indefinitely.
+
+### Dependency security
+
+- The lockfile updates the transitive development dependency `nanoid` from `3.3.16` to `3.3.18`, fixing the custom-generator infinite-loop condition for `size=0` (GHSA-2v37-7h3g-55p8). A repeat `npm audit` reports zero vulnerabilities.
+
 ## 0.2.1 - 2026-08-25
 
 ### Plan directories and first-page reads

@@ -1,0 +1,15 @@
+{
+  "name": "rabi-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless LAN worker that forwards approved RabiRoute tasks to a local Codex Desktop owner.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node rabi-agent.mjs --run",
+    "bootstrap": "node rabi-agent.mjs --bootstrap",
+    "check": "node --check rabi-agent.mjs && node --check lib/codex-desktop-ipc.mjs && node --check lib/cwd-policy.mjs && node --test test/*.test.mjs"
+  }
+}

@@ -7,6 +7,7 @@ import { ref } from "vue";
 import { pageSaveAction, registerPageSaveAction } from "../src/pageSaveAction";
 
 const appSource = fs.readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+const commandSource = fs.readFileSync(new URL("../src/pluginCommands.ts", import.meta.url), "utf8");
 const settingsSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
 const performanceSource = fs.readFileSync(new URL("../src/pages/PerformancePage.vue", import.meta.url), "utf8");
 const desktopRendererSource = fs.readFileSync(new URL("../src/components/renderers/DesktopSettingsRenderer.vue", import.meta.url), "utf8");
@@ -33,7 +34,7 @@ test("page save command delegates to every active page save participant", async 
 });
 
 test("configuration pages and trusted settings renderers register save participants", () => {
-  assert.match(appSource, /handlerId: "web\.save-page"|web\.save-page/);
+  assert.match(commandSource, /handlerId: "web\.save-page"/);
   assert.match(appSource, /activePageSaveAction/);
   assert.match(settingsSource, /registerPageSaveAction\(/);
   assert.match(desktopRendererSource, /registerPageSaveAction\(/);

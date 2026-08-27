@@ -25,7 +25,7 @@ description: 新增、改造或排障 RabiRoute Agent 端适配器时使用。�
 5. 会话身份是“完整线程 ID + workspace”；名称用于显示和无 ID 查找。Agent/Desktop 改名或首投后 `title` 自动变化时继续同一 ID；用户在 Rabi 端明确输入新名称时，UI 先清空旧 ID，再按新名称查找/创建并保存新 ID。
 6. 项目和会话扫描只允许在进入设置界面时自动执行一次，或由用户点击扫描/刷新按钮显式触发；禁止定时轮询、展开面板、输入、`blur`、保存或普通状态刷新持续扫描。
 
-Codex 目前的产品基线是 Desktop owner：RabiRoute 用短生命周期 app-server `thread/list` 读取 Desktop 用户可见的 `thread.name`，再按完整 ID 合并本地 cwd、归档、时间和 owner/rollout 状态，以“完整 ID + 工作目录”稳定绑定，并通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 当前任务。SQLite `threads.title` 可能是首条 prompt，不得用于下拉名称或同名查找。Desktop 必须在线；任务无法加载就失败，禁止启动备用执行 Runtime。
+Codex 目前的产品基线是 Desktop owner：RabiRoute 从 Codex Desktop 左侧栏共用的 `session_index.jsonl.thread_name` 读取用户可见 `Name`，再按完整 ID 合并本地状态提供的 cwd、归档、时间和 owner/rollout 状态，以“完整 ID + 工作目录”稳定绑定，并通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 当前任务。SQLite `threads.title` 可能是首条 prompt，不得用于下拉名称或同名查找。Desktop 必须在线；任务无法加载就失败，禁止启动备用执行 Runtime。
 
 AstrBot 这类服务型 Agent 必须显示服务健康、认证状态和可选会话。当前 AstrBot 合同只允许绑定明确的 ChatUI 会话并调用 `/api/chat/send`；没有 `ASTRBOT_SESSION_ID` 时失败，不再部署或回退到 `rabiroute_agent` 插件。
 
@@ -336,7 +336,7 @@ WebGUI 读取 `agents[type]` 优先；旧字段只作为迁移兼容。
 会话身份必须遵守：
 
 - 下拉显示 `name + updatedAt`，内部 value 和持久化绑定使用 Agent 返回的完整 opaque ID。
-- Codex 的 `name` 必须来自 Desktop app-server `thread/list` 的 `thread.name`；本地状态库只按完整 ID 补充 cwd、归档、时间和 owner/rollout 定位。禁止直接用 SQLite `threads.title` 建立用户可见名称索引。
+- Codex 的 `name` 必须来自 Desktop 左侧栏共用的 `session_index.jsonl.thread_name`；SQLite 只按完整 ID 补充 cwd、归档、时间和 owner/rollout 定位。禁止使用 app-server `thread.name` 或 SQLite `threads.title` 覆盖侧栏 `Name`。
 - 会话绑定同时持久化可见名称、完整 ID 和 workspace，但身份由完整 ID + workspace 决定。名称和时间是展示/查找元数据，不能因自动变化而让有效 ID 失效。
 - 投递前必须通过实际 owner 的合同验证精确 ID，并校验规范化 cwd。Codex 还必须验证 Desktop IPC 及目标任务 owner。
 - 统一 resolver 先读取有效 ID；ID 存在、cwd 匹配且未归档就精确绑定，不比较 owner 的可变标题。ID 已归档时，真实投递或保存提交点按旧 ID 隔离的幂等键创建新任务并更新绑定，不复用其它同名任务。ID 为空、非法或确实失效时走名称查找，零匹配才按用户输入的新名称创建；最新时间并列才要求选择。
@@ -472,7 +472,7 @@ npm run build
 - 用户环境残留旧 endpoint 时不产生隐藏依赖。
 - 重名会话和精确 ID 的错误 cwd fail closed；非法/失效 ID 按名称 + cwd 自动解析，一个或多个匹配选择唯一最新者，零匹配创建，最新时间并列要求选择；已归档 ID 必须创建新任务、更新绑定且不复用同名任务。
 - Desktop/Agent 端改名或 SQLite 标题在首投后变化时，连续两次真实投递仍使用同一 ID；Rabi 端明确输入新名称时先清空旧 ID，再按新名称查找/创建并保存新 ID。
-- Codex 下拉和无 ID lookup 能按 app-server `thread.name` 找到 UI 可见任务，即使同一 ID 的 SQLite `threads.title` 已变成首条 prompt；该场景不得创建新任务。
+- Codex 下拉和无 ID lookup 能按左侧栏 `Name` 找到 UI 可见任务，即使同一 ID 的 app-server `thread.name` 与 SQLite `threads.title` 都不同；该场景不得创建新任务。侧栏索引缺少 `Name` 时，名称查找失败关闭，不得退回其它标题源。
 - 自动初始化按钮先持久化名称 + ID，再投递包含角色文件、记忆/计划索引和必读项的初始化消息；Desktop 中真实可见，初始化失败不产生第二会话。
 - 超过 100 个会话时仍能访问全部结果；UNC、映射盘和 extended path 规范化后属于同一 cwd。
 - 记录进入设置页、展开面板、输入、`blur`、保存和空闲等待期间的扫描请求次数：只有页面进入一次和每次显式点击扫描各增加一次，禁止后台持续增长。

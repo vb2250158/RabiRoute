@@ -95,16 +95,18 @@ test("desktop lifecycle supervisor invokes the non-recursive launcher when the t
   }
 });
 
-test("desktop lifecycle supervisor does not restart a verified Manager process during control-plane warmup", async () => {
+test("desktop lifecycle supervisor repairs an unresponsive Manager even while its process remains present", async () => {
   const root = makeRoot("running", process.cwd());
   const distManager = path.join(root, "dist", "manager.js");
   const helper = path.join(root, "keep-alive.cjs");
   const trayMain = path.join(root, "desktop", "tray-task-window", "main.py");
+  const launcher = path.join(root, "Start-RabiRoute-Desktop.bat");
   fs.mkdirSync(path.dirname(distManager), { recursive: true });
   fs.mkdirSync(path.dirname(trayMain), { recursive: true });
   fs.writeFileSync(distManager, "setInterval(() => {}, 1000);\n", "utf8");
   fs.writeFileSync(helper, "setInterval(() => {}, 1000);\n", "utf8");
   fs.writeFileSync(trayMain, "# process identity marker\n", "utf8");
+  fs.writeFileSync(launcher, "@echo off\r\necho %* > \"%~dp0repair-receipt.txt\"\r\nexit /b 0\r\n", "utf8");
   const manager = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", distManager], { windowsHide: true, stdio: "ignore" });
   const tray = spawn(process.execPath, [helper, trayMain], { windowsHide: true, stdio: "ignore" });
   try {
@@ -115,12 +117,17 @@ test("desktop lifecycle supervisor does not restart a verified Manager process d
       "-Once", "-FailureThreshold", "1"
     ]);
     assert.equal(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+    const receipt = fs.readFileSync(path.join(root, "repair-receipt.txt"), "utf8");
+    assert.match(receipt, /-NoDesktopSupervisor/);
+    assert.match(receipt, /-ReuseHealthyManager/);
     const logPath = path.join(root, "data", "route", "default-main", "logs", "desktop-lifecycle-supervisor.jsonl");
     const record = JSON.parse(fs.readFileSync(logPath, "utf8").trim());
     assert.equal(record.managerConnected, false);
     assert.equal(record.managerPresent, true);
+    assert.equal(record.managerFailureCount, 1);
+    assert.notEqual(record.managerProbeError, "");
     assert.equal(record.desktopShellCount > 0, true);
-    assert.equal(record.repairAttempted, false);
+    assert.equal(record.repairAttempted, true);
   } finally {
     manager.kill();
     tray.kill();

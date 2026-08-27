@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   CodexDesktopBridge,
+  type CodexDesktopDeliveryEvent,
   agentDeliveryMarkerForTest,
   applyCodexSidebarTaskNamesForTest,
   codexDesktopDeepLinkForTest,
@@ -28,15 +29,34 @@ test("Desktop left sidebar is the only displayed task-name source", () => {
   assert.equal(result[0]?.id, id);
   assert.equal(result[0]?.title, "星海建造师 策划 程序 协助处理消息3");
   assert.equal(result[0]?.updatedAt, "2026-08-04T08:01:00.000Z");
+  assert.equal(result[0]?.stateTitle, "[rabi:bind XinghaiBuilder]\n[消息处理 Agent 初始化]");
+});
+
+test("Desktop tasks without a sidebar Name do not fall back to SQLite title", () => {
+  const result = applyCodexSidebarTaskNamesForTest([{
+    id: "019f0000-0000-7000-8000-000000000066",
+    title: "SQLite 原始 title",
+    cwd: "C:\\Work\\PangHu",
+    rolloutPath: "task.jsonl",
+    firstUserMessage: "首条消息",
+    updatedAt: "2026-08-04T08:00:00.000Z"
+  }], "");
+
+  assert.equal(result[0]?.title, "");
+  assert.equal(result[0]?.stateTitle, "SQLite 原始 title");
 });
 
 type IpcRequest = {
   type?: string;
   requestId?: string;
   method?: string;
+  version?: number;
   params?: {
     conversationId?: string;
-    turnStartParams?: Record<string, any>;
+    turnStart?: {
+      request?: Record<string, any>;
+      context?: Record<string, any>;
+    };
     input?: Array<Record<string, unknown>>;
     restoreMessage?: Record<string, any>;
   };
@@ -231,6 +251,113 @@ test("Desktop bridge starts a new turn when the task is idle", async () => {
   }
 });
 
+
+test("Desktop bridge retries an unconfirmed steer with start before reporting delivery", async () => {
+  const methods: string[] = [];
+  const events: CodexDesktopDeliveryEvent[] = [];
+  let receiptReads = 0;
+  const router = await createMockDesktopRouter((request) => {
+    methods.push(request.method ?? "");
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: { clientId: "rabi" } };
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath],
+    deliveryReceiptGraceMs: 0,
+    deliveryReceiptReader: async () => ++receiptReads >= 2,
+    onDeliveryEvent: event => { events.push(event); }
+  });
+
+  try {
+    const delivery = await bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000113",
+      prompt: "[投递编号] deliveryId: 88888888-1111-4222-8333-444444444444\n验证投递",
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+
+    assert.equal(delivery.action, "started");
+    assert.deepEqual(methods.filter(method => method.startsWith("thread-follower-")), [
+      "thread-follower-steer-turn",
+      "thread-follower-start-turn"
+    ]);
+    assert.deepEqual(events.map(event => event.stage), [
+      "queued",
+      "steer_requested",
+      "delivery_receipt_missing",
+      "delivery_retry_start",
+      "start_requested",
+      "start_accepted",
+      "delivery_receipt_confirmed",
+      "delivery_accepted"
+    ]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
+
+test("Desktop bridge starts a new turn when current Desktop reports NoActiveTurn", async () => {
+  let turnStart: { request?: Record<string, any>; context?: Record<string, any> } | undefined;
+  let startRequestVersion: number | undefined;
+  const events: Array<{ stage: string; method?: string; payloadShape?: string }> = [];
+  const router = await createMockDesktopRouter((request) => {
+    if (request.method === "initialize") {
+      return { type: "response", requestId: request.requestId, resultType: "success", method: "initialize", result: { clientId: "rabi" } };
+    }
+    if (request.method === "thread-follower-steer-turn") {
+      return { type: "response", requestId: request.requestId, resultType: "error", error: "NoActiveTurn" };
+    }
+    if (request.method === "thread-follower-start-turn") {
+      turnStart = request.params?.turnStart;
+      startRequestVersion = request.version;
+    }
+    return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
+  });
+  const bridge = new CodexDesktopBridge({
+    pipePaths: [router.pipePath],
+    onDeliveryEvent: (event) => events.push(event)
+  });
+
+  try {
+    const result = await bridge.deliver({
+      threadId: "019f0000-0000-7000-8000-000000000057",
+      prompt: "idle task current Desktop message",
+      cwd: process.cwd(),
+      sandbox: "workspace-write"
+    });
+
+    assert.equal(result.action, "started");
+    assert.equal(turnStart?.request?.threadId, "019f0000-0000-7000-8000-000000000057");
+    assert.equal(typeof turnStart?.request?.clientUserMessageId, "string");
+    assert.equal(startRequestVersion, 2);
+    assert.deepEqual(turnStart?.request?.input, [{ type: "text", text: "idle task current Desktop message", text_elements: [] }]);
+    assert.equal(turnStart?.request?.turnStartParams, undefined);
+    assert.deepEqual(turnStart?.context, { attachments: [], commentAttachments: [] });
+    assert.deepEqual(events.map((event) => event.stage), [
+      "queued",
+      "steer_requested",
+      "steer_rejected",
+      "start_fallback",
+      "start_requested",
+      "start_accepted",
+      "delivery_accepted"
+    ]);
+    const startRequested = events.find((event) => event.stage === "start_requested");
+    assert.equal(startRequested?.method, "thread-follower-start-turn");
+    assert.equal(startRequested?.payloadShape, "turnStart.request+context");
+    assert.deepEqual(router.methods, [
+      "initialize",
+      "thread-follower-steer-turn",
+      "thread-follower-start-turn"
+    ]);
+  } finally {
+    bridge.close();
+    await router.close();
+  }
+});
 test("Desktop bridge accepts a timed-out start when the exact Agent delivery marker reached the rollout", async () => {
   const prompt = "[Agent 回复合同]\n本次投递 deliveryId：11111111-2222-4333-8444-555555555555\n\n[消息内容]\ncontinue";
   const seen: Array<{ threadId: string; marker: string }> = [];
@@ -337,7 +464,7 @@ test("Desktop bridge sends local images as model input for both start and restor
       { type: "localImage", path: imagePath }
     ]);
     assert.equal(steer?.params?.restoreMessage?.context.imageAttachments[0]?.localPath, imagePath);
-    assert.deepEqual(start?.params?.turnStartParams?.input, [
+    assert.deepEqual(start?.params?.turnStart?.request?.input, [
       { type: "text", text: "inspect the image", text_elements: [] },
       { type: "localImage", path: imagePath }
     ]);
@@ -385,7 +512,7 @@ test("Desktop bridge starts a message processing turn with the configured Luna m
     if (request.method === "thread-follower-steer-turn") {
       return { type: "response", requestId: request.requestId, resultType: "error", error: "no active turn to steer" };
     }
-    if (request.method === "thread-follower-start-turn") turnStartParams = request.params?.turnStartParams;
+    if (request.method === "thread-follower-start-turn") turnStartParams = request.params?.turnStart?.request;
     return { type: "response", requestId: request.requestId, resultType: "success", method: request.method, result: {} };
   });
   const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath] });

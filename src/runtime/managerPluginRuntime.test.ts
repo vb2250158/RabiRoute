@@ -21,7 +21,7 @@ function definition(
   return {
     instanceId: options.instanceId ?? `manager:${id}`,
     manifest: {
-      id: options.pluginId ?? `builtin:manager/${id}`,
+      id: options.pluginId ?? `example.manager.${id}`,
       name: id,
       version: "1.0.0",
       kind: "builtin",
@@ -68,8 +68,8 @@ test("Manager Plugin Runtime publishes plugin state and rolls one plugin back to
   assert.deepEqual(
     runtime.catalog.snapshot().plugins.map(item => [item.instanceId, item.pluginId, item.status]),
     [
-      ["manager:overview", "builtin:manager/overview", "active"],
-      ["manager:performance", "builtin:manager/performance", "active"]
+      ["manager:overview", "example.manager.overview", "active"],
+      ["manager:performance", "example.manager.performance", "active"]
     ]
   );
   assert.deepEqual(
@@ -77,8 +77,8 @@ test("Manager Plugin Runtime publishes plugin state and rolls one plugin back to
       .filter(item => item.kind === "navigation")
       .map(item => [item.routeId, item.pluginId, item.instanceId]),
     [
-      ["route.overview", "builtin:manager/overview", "manager:overview"],
-      ["route.performance", "builtin:manager/performance", "manager:performance"]
+      ["route.overview", "example.manager.overview", "manager:overview"],
+      ["route.performance", "example.manager.performance", "manager:performance"]
     ]
   );
 

@@ -62,6 +62,51 @@ function plan(overrides: Partial<PlanItem> = {}): PlanItem {
   };
 }
 
+test("message-processing retention keeps only active requirements and current plan subscriptions", () => {
+  const writes: unknown[] = [];
+  let now = new Date("2026-08-26T12:00:00.000Z");
+  const seed = new MessageProcessingBoardStore({ read: () => undefined, write: () => {} }, () => now);
+  seed.registerMessageGroup({ requirementId: "req-stale", messageGroupId: "group-stale", source: source(["direct_at"]) });
+  seed.recordDispatch("req-stale", { threadId: "worker-stale", threadName: "消息处理 Agent", workspace: "C:/workspace" });
+  seed.submitOutcome("req-stale", {
+    decision: "handoff",
+    targetAgentType: "plan_agent",
+    roleId: "DemoPersona",
+    planId: "plan-stale",
+    planTitle: "过期计划订阅"
+  });
+  const stale = seed.snapshot();
+  stale.requirements[0].createdAt = "2026-08-18T12:00:00.000Z";
+  stale.requirements[0].updatedAt = now.toISOString();
+  stale.planOrigins[0].linkedAt = "2026-08-18T12:00:00.000Z";
+  const retained = structuredClone(stale.requirements[0]);
+  retained.id = "req-current";
+  retained.dedupeKey = "message-group:req-current";
+  retained.messageGroupId = "group-current";
+  retained.source.messageIds = ["301"];
+  retained.source.conversationKey = "group:101";
+  retained.updatedAt = now.toISOString();
+  retained.createdAt = now.toISOString();
+  retained.status = "processing";
+  retained.handoff = undefined;
+  retained.decision = undefined;
+  const persistence = {
+    read: () => ({ ...stale, requirements: [stale.requirements[0], retained] }),
+    write: (state: unknown) => { writes.push(state); }
+  };
+
+  const store = new MessageProcessingBoardStore(persistence, () => now);
+  assert.equal(store.getRequirement("req-stale"), undefined);
+  assert.equal(store.planOriginList().length, 0);
+  assert.equal(store.getRequirement("req-current")?.status, "processing");
+  assert.equal(writes.length, 1);
+
+  now = new Date("2026-08-27T12:00:00.001Z");
+  assert.deepEqual(store.pruneExpired(), { requirements: 1, planOrigins: 0 });
+  assert.equal(store.getRequirement("req-current"), undefined);
+  assert.equal(writes.length, 2);
+});
+
 test("message requirements can be found by exact Route and source message without board paging", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-source-lookup-"));
   const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
@@ -330,7 +375,8 @@ test("ordinary group discussion remains an Agent decision and records missing ou
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-message-board-decision-"));
   const store = new MessageProcessingBoardStore(path.join(root, "board.json"));
   const item = store.registerMessageGroup({ requirementId: "req-2", messageGroupId: "group-2", source: source(["group_message"]) });
-  assert.equal(item.replyPolicy, "agent_decides");
+  assert.equal(item.outcome, "created");
+  assert.equal(item.requirement.replyPolicy, "agent_decides");
   store.recordDispatch("req-2", { threadId: "thread-1", threadName: "消息处理1", workspace: root });
   const board = store.board({}, new Map([["thread-1", {
     threadName: "Codex 左侧任务名",
@@ -359,7 +405,8 @@ test("the same platform message ids reuse one canonical requirement across repea
     messageGroupId: "group-source-1",
     source: source(["direct_reply"])
   });
-  store.recordDispatch(first.id, {
+  assert.equal(first.outcome, "created");
+  store.recordDispatch(first.requirement.id, {
     threadId: "thread-1",
     threadName: "消息处理1",
     workspace: "C:\\workspace"
@@ -369,9 +416,68 @@ test("the same platform message ids reuse one canonical requirement across repea
     messageGroupId: "group-source-2",
     source: { ...source(["direct_reply"]), summary: "同一条消息被网关再次投递" }
   });
-  assert.equal(repeated.id, first.id);
-  assert.equal(repeated.status, "processing");
+  assert.equal(repeated.outcome, "existing");
+  assert.equal(repeated.requirement.id, first.requirement.id);
+  assert.equal(repeated.requirement.status, "processing");
   assert.equal(store.list().length, 1);
+});
+
+test("expired reply payload is replaced by a hash-only replay record", () => {
+  let now = new Date("2026-08-26T12:00:00.000Z");
+  const store = new MessageProcessingBoardStore({ read: () => undefined, write: () => {} }, () => now);
+  const original = store.registerMessageGroup({
+    requirementId: "req-expired-replay",
+    messageGroupId: "group-expired-replay",
+    source: { ...source(["direct_reply"]), summary: "large source payload that must not remain in the dedupe index" }
+  });
+  assert.equal(original.outcome, "created");
+  store.recordDispatchFailure(original.requirement.id, "Desktop was temporarily unavailable.");
+
+  now = new Date("2026-08-26T12:16:00.000Z");
+  assert.deepEqual(store.pruneExpired(), { requirements: 1, planOrigins: 0 });
+  const snapshot = store.snapshot();
+  assert.equal(snapshot.requirements.length, 0);
+  assert.equal(snapshot.dedupeRecords.length, 1);
+  assert.match(snapshot.dedupeRecords[0]?.key || "", /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(snapshot), /large source payload/);
+
+  const replay = store.registerMessageGroup({
+    requirementId: "req-expired-replay-again",
+    messageGroupId: "group-expired-replay-again",
+    source: source(["direct_reply"])
+  });
+  assert.equal(replay.outcome, "replay_suppressed");
+  assert.equal(store.list().length, 0);
+});
+
+test("failed plan notifications leave the control board after the transient retry window", () => {
+  let now = new Date("2026-08-26T12:00:00.000Z");
+  const store = new MessageProcessingBoardStore({ read: () => undefined, write: () => {} }, () => now);
+  const registration = store.registerMessageGroup({
+    requirementId: "req-plan-origin",
+    messageGroupId: "group-plan-origin",
+    source: source(["direct_at"])
+  });
+  assert.equal(registration.outcome, "created");
+  store.recordDispatch(registration.requirement.id, { threadId: "thread-plan", threadName: "计划 Agent", workspace: "C:/workspace" });
+  store.submitOutcome(registration.requirement.id, {
+    decision: "handoff",
+    targetAgentType: "plan_agent",
+    roleId: "DemoPersona",
+    planId: "plan-1",
+    planTitle: "实现选择界面"
+  });
+  const notification = store.registerPlanChange("DemoPersona", plan(), plan({
+    status: "已完成",
+    updatedAt: "2026-08-26T12:00:00.000Z"
+  }));
+  assert.equal(notification?.kind, "plan_progress_notification");
+  store.recordDispatchFailure(notification!.id, "Desktop was temporarily unavailable.");
+
+  now = new Date("2026-08-26T12:16:00.000Z");
+  assert.deepEqual(store.pruneExpired(), { requirements: 1, planOrigins: 0 });
+  assert.equal(store.getRequirement(notification!.id), undefined);
+  assert.equal(store.planOriginList().length, 1);
 });
 
 test("RabiManager does not infer project facts from message text", () => {
@@ -382,9 +488,10 @@ test("RabiManager does not infer project facts from message text", () => {
     messageGroupId: "group-no-inference",
     source: { ...source(["group_message"]), summary: "批准示例方案，2030年10月15日上线，交给示例负责人" }
   });
-  assert.equal(item.criticalFacts, undefined);
-  assert.equal(item.projectFactAssessment, undefined);
-  assert.equal(item.factAssessmentRequired, true);
+  assert.equal(item.outcome, "created");
+  assert.equal(item.requirement.criticalFacts, undefined);
+  assert.equal(item.requirement.projectFactAssessment, undefined);
+  assert.equal(item.requirement.factAssessmentRequired, true);
 });
 
 test("every recalled plan or memory requires an explicit Agent disposition", () => {
@@ -466,7 +573,8 @@ test("standalone knowledge callbacks accept explicit unchanged and keep deferred
       { id: "memory-ui", title: "界面记忆", type: "recent_memory", endpoint: "/memory/memory-ui", score: 20, revisionAt: "2026-08-05T05:00:00.000Z" }
     ]
   });
-  assert.equal(item.knowledgeCallbackDueAt, "2026-08-05T07:00:00.000Z");
+  assert.equal(item.outcome, "created");
+  assert.equal(item.requirement.knowledgeCallbackDueAt, "2026-08-05T07:00:00.000Z");
   store.recordKnowledgeCallback("req-callback", {
     knowledgeId: "plan-ui",
     knowledgeType: "plan",
@@ -517,7 +625,8 @@ test("critical project facts cannot close or reply before a verified record exis
       summary: "示例项目暂以2030年10月15日为内部上线目标"
     }
   });
-  assert.equal(item.criticalFacts, undefined);
+  assert.equal(item.outcome, "created");
+  assert.equal(item.requirement.criticalFacts, undefined);
   assert.throws(() => store.submitOutcome("req-critical", {
     decision: "no_reply",
     reason: "无需在群里回复。"

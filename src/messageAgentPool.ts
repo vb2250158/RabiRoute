@@ -216,8 +216,8 @@ function workerAgentAdapter(worker: Pick<MessageAgentWorker, "agentAdapter" | "t
   return worker.agentAdapter ?? (worker.threadId.startsWith("session-") ? "dsh" : "codex");
 }
 
-function workerBaseTitle(options: MessageAgentPoolOptions): string {
-  return String(options.roleDisplayName || roleDisplayNameFromFile(options.rolePath) || options.sourceThreadName).trim();
+function workerBaseTitle(options: MessageAgentPoolOptions, sourceThreadDisplayName: string): string {
+  return String(sourceThreadDisplayName || options.roleDisplayName || roleDisplayNameFromFile(options.rolePath) || options.sourceThreadName).trim();
 }
 
 function normalizeWorker(value: unknown): MessageAgentWorker | undefined {
@@ -626,6 +626,8 @@ export class MessageAgentPool {
   private allocationTail: Promise<void> = Promise.resolve();
   private workerTitlesNormalized = false;
   private sourceThreadName: string;
+  private sourceThreadDisplayName = "";
+  private sourceThreadDisplayNameUnavailable = false;
   private sourceThreadNameResolved = false;
   private sourceThreadAvailability: MessageAgentWorkerAvailability | undefined;
   private readonly maxAgents: number;
@@ -872,18 +874,28 @@ export class MessageAgentPool {
 
   private async ensureSourceThreadName(): Promise<void> {
     if (this.sourceThreadNameResolved) return;
+    const agentAdapter = poolAgentAdapter(this.options);
     try {
-      const response = await this.request({ action: "read", agentAdapter: poolAgentAdapter(this.options), threadId: this.options.sourceThreadId });
+      const response = await this.request({ action: "read", agentAdapter, threadId: this.options.sourceThreadId });
       this.sourceThreadAvailability = this.availabilityFromResponse(response);
-      const title = String(response.thread?.title || "").trim();
-      if (title && !title.includes("\n") && title.length <= codexThreadTitleMaxLength) {
-        this.sourceThreadName = title;
+      const thread = response.thread && typeof response.thread === "object" ? response.thread : {};
+      const returnedThreadId = String(thread.id || "").trim();
+      const readMatchesSource = !returnedThreadId || returnedThreadId === this.options.sourceThreadId;
+      const hasDisplayedNameField = readMatchesSource && (Object.prototype.hasOwnProperty.call(thread, "name")
+        || Object.prototype.hasOwnProperty.call(thread, "title"));
+      const displayName = readMatchesSource ? String(thread.name || thread.title || "").trim() : "";
+      if (displayName && !displayName.includes("\n")) {
+        this.sourceThreadDisplayName = displayName;
+        this.sourceThreadName = displayName;
+      } else if (agentAdapter === "codex" && hasDisplayedNameField) {
+        this.sourceThreadDisplayNameUnavailable = true;
       }
     } catch {
-      // Keep the saved Route display name when Manager cannot resolve the current owner title.
+      // Keep the saved Route display name when the owner read itself is unavailable.
       this.sourceThreadAvailability = "unavailable";
+    } finally {
+      this.sourceThreadNameResolved = true;
     }
-    this.sourceThreadNameResolved = true;
   }
 
   private async withAllocationLock<T>(work: () => Promise<T>): Promise<T> {
@@ -899,11 +911,14 @@ export class MessageAgentPool {
   }
 
   private async createWorker(): Promise<MessageAgentWorker> {
+    if (this.sourceThreadDisplayNameUnavailable) {
+      throw new Error(`Codex Desktop sidebar Name is unavailable for the Primary Persona task: ${this.options.sourceThreadId}`);
+    }
     if (this.workers.length >= this.maxAgents) {
       throw new Error(`Message Agent pool reached its configured limit of ${this.maxAgents}.`);
     }
     const index = this.workers.reduce((maximum, worker) => Math.max(maximum, worker.index), 0) + 1;
-    const baseTitle = workerBaseTitle(this.options);
+    const baseTitle = workerBaseTitle(this.options, this.sourceThreadDisplayName);
     if (this.workers.length === 1 && index === 2) {
       const first = this.workers[0];
       const firstTitle = workerTitle(baseTitle, 1, 2);
@@ -949,8 +964,11 @@ export class MessageAgentPool {
 
   private async ensureWorkerTitles(): Promise<void> {
     if (this.workerTitlesNormalized) return;
+    if (this.sourceThreadDisplayNameUnavailable) {
+      throw new Error(`Codex Desktop sidebar Name is unavailable for the Primary Persona task: ${this.options.sourceThreadId}`);
+    }
     const count = this.workers.length;
-    const baseTitle = workerBaseTitle(this.options);
+    const baseTitle = workerBaseTitle(this.options, this.sourceThreadDisplayName);
     let changed = false;
     let allNormalized = true;
     for (const worker of this.workers) {

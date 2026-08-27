@@ -348,7 +348,7 @@ test("plan cards use isolated work-item framing and a three-level execution hier
   assert.match(page, /class="knowledge-plan-timing-item"/);
   assert.match(page, /class="knowledge-steps-head"/);
   assert.match(page, /currentStepPosition\(plan\)/);
-  assert.match(styles, /\.knowledge-plan-cards\s*\{[\s\S]*?gap:\s*18px[\s\S]*?background:\s*#edf2f4/);
+  assert.match(styles, /\.knowledge-plan-cards\s*\{[\s\S]*?gap:\s*18px[\s\S]*?background:\s*var\(--rr-subtle\)/);
   assert.match(styles, /\.knowledge-plan-card\s*\{[\s\S]*?border-radius:\s*14px[\s\S]*?box-shadow:/);
   assert.match(styles, /\.knowledge-plan-summary\s*\{[\s\S]*?grid-template-columns:\s*minmax\(280px, 1fr\) max-content/);
   assert.match(styles, /\.knowledge-plan-current-copy\s*\{[\s\S]*?display:\s*grid[\s\S]*?gap:/);
@@ -406,9 +406,9 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(page, /v-html="planMarkdownPreview\.html"/);
   assert.match(page, /t\("下载原文件"\)/);
   assert.match(styles, /\.knowledge-plan-markdown-visual\s*\{[\s\S]*?padding:\s*9px[\s\S]*?background:/);
-  assert.match(styles, /\.knowledge-plan-markdown-paper\s*\{[\s\S]*?height:\s*100%[\s\S]*?border-top:\s*3px solid #0f8b8d/);
+  assert.match(styles, /\.knowledge-plan-markdown-paper\s*\{[\s\S]*?height:\s*100%[\s\S]*?border-top:\s*3px solid var\(--rr-accent-strong\)/);
   assert.match(styles, /\.knowledge-plan-markdown-teaser\s*\{[\s\S]*?-webkit-line-clamp:\s*4/);
-  assert.match(styles, /\.knowledge-plan-markdown-document\s*\{[\s\S]*?border-top:\s*4px solid #0f8b8d[\s\S]*?background:\s*#fff/);
+  assert.match(styles, /\.knowledge-plan-markdown-document\s*\{[\s\S]*?border-top:\s*4px solid var\(--rr-accent-strong\)[\s\S]*?background:\s*#fff/);
   assert.match(styles, /\.knowledge-plan-markdown-document pre\s*\{[\s\S]*?overflow:\s*auto/);
 });
 

@@ -144,6 +144,7 @@ test("plan history keeps snapshots after updates and archive moves", () => {
   assert.equal(history[0]?.after.steps[0]?.approvalRequest?.request, "批准计划留痕实现");
   assert.equal(history[1]?.before?.title, "保留审批留痕");
   assert.equal(history[2]?.after.status, "已归档");
+  assert.equal(history[2]?.after.currentStepId, undefined);
   assert.equal(archived[0]?.id, plan.id);
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.text, "批准并保留完整记录。");
 });

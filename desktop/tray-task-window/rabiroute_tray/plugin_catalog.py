@@ -583,13 +583,13 @@ def _manual_trigger_panel_actions(
 
 def create_builtin_desktop_extension_registry(*, freeze: bool = True) -> DesktopExtensionRegistry:
     registry = DesktopExtensionRegistry()
-    desktop_owner = {"plugin_id": "builtin:manager/desktop", "instance_id": "manager:desktop"}
-    persona_owner = {"plugin_id": "builtin:manager/persona", "instance_id": "manager:persona"}
-    route_control_owner = {"plugin_id": "builtin:manager/route-control", "instance_id": "manager:route-control"}
-    gateway_runtime_owner = {"plugin_id": "builtin:manager/gateway-runtime", "instance_id": "manager:gateway-runtime"}
-    core_owner = {"plugin_id": "builtin:manager/core", "instance_id": "manager:core"}
-    speech_owner = {"plugin_id": "builtin:manager/speech", "instance_id": "manager:speech"}
-    performance_owner = {"plugin_id": "builtin:manager/performance", "instance_id": "manager:performance"}
+    desktop_owner = {"plugin_id": "rabi.manager.base", "instance_id": "manager:desktop"}
+    persona_owner = {"plugin_id": "rabi.manager.base", "instance_id": "manager:persona"}
+    route_control_owner = {"plugin_id": "rabi.manager.base", "instance_id": "manager:route-control"}
+    gateway_runtime_owner = {"plugin_id": "rabi.manager.base", "instance_id": "manager:gateway-runtime"}
+    core_owner = {"plugin_id": "rabi.manager.base", "instance_id": "manager:core"}
+    speech_owner = {"plugin_id": "rabi.manager.base", "instance_id": "manager:speech"}
+    performance_owner = {"plugin_id": "rabi.manager.base", "instance_id": "manager:performance"}
 
     registry.register_command_handler(
         "desktop.open-webgui",

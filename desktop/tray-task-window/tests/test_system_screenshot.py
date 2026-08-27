@@ -44,7 +44,7 @@ from rabiroute_tray.system_screenshot import (  # noqa: E402
 
 def _plugin_hotkey(command_id: str, handler_id: str, binding: str) -> DesktopPluginHotkey:
     return DesktopPluginHotkey(
-        plugin_id="builtin:manager/desktop",
+        plugin_id="rabi.manager.base",
         instance_id="manager:desktop",
         contribution_id=f"{command_id}-hotkey",
         command_id=command_id,

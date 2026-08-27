@@ -114,9 +114,9 @@ test("plan feedback replies are written to the plan audit record and published t
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-feedback-"));
   const rolesRoot = path.join(rootDir, "data", "roles");
   const roleDir = path.join(rolesRoot, "Rabi");
-  const planDir = path.join(roleDir, "plans", "items", "active");
+  const planDir = path.join(roleDir, "plans", "active", "plan-1");
   fs.mkdirSync(planDir, { recursive: true });
-  fs.writeFileSync(path.join(planDir, "plan-1.json"), JSON.stringify({
+  fs.writeFileSync(path.join(planDir, "plan.json"), JSON.stringify({
     id: "plan-1",
     title: "说明原问题",
     focus: "补齐计划背景和修改边界",
@@ -159,7 +159,7 @@ test("plan feedback replies are written to the plan audit record and published t
   assert.equal(result.ok, true);
   assert.equal(result.targetType, "plan_feedback");
   assert.equal(result.sentMessageId, "response-feedback-1");
-  const feedbackPath = path.join(roleDir, "plans", "feedback", "plan-1.jsonl");
+  const feedbackPath = path.join(roleDir, "plans", "active", "plan-1", "feedback.jsonl");
   const rows = fs.readFileSync(feedbackPath, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
   assert.equal(rows.length, 1);
   assert.equal(rows[0].kind, "approval_response");

@@ -95,11 +95,13 @@ Do not use fixed port 4510, `CODEX_APP_SERVER_WS_URL`, or a separate stdio Runti
 
 ## RabiRoute Desktop UI is missing
 
-A full desktop runtime launched by `Start-RabiRoute-Desktop.bat` or packaged RabiRoute Desktop records `running` in `data/runtime/desktop-lifecycle-intent.json` and starts one `watch-rabiroute-desktop-lifecycle.ps1` owner per workspace. The supervisor checks only this project's local backend `/meta` and desktop UI process. After two consecutive misses, it restores the complete desktop runtime through the original launcher's port-owner, PID, and single-instance gates. The UI stays available and reconnects during a temporary local-backend outage.
+A full desktop runtime launched by `Start-RabiRoute-Desktop.bat` or packaged RabiRoute Desktop records `running` in `data/runtime/desktop-lifecycle-intent.json` and starts one `watch-rabiroute-desktop-lifecycle.ps1` owner per workspace. The supervisor checks only this project's local backend `/meta` and desktop UI process. After two consecutive `/meta` failures, it restores the complete desktop runtime through the original launcher's port-owner, PID, and single-instance gates even if an old Manager process still exists. The UI stays available and reconnects during a temporary local-backend outage.
 
-Run `Start-RabiRoute-Desktop.bat -NoOpen` once, then inspect `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`. A healthy record has `desiredState=running`, `managerConnected=true`, and `desktopShellCount>0`. `desiredState=stopped` means the previous exit was intentional and requires an explicit user start. Missing or malformed intent fails closed. Do not substitute the half-hour business-health patrol for this lightweight owner or create a separate desktop-UI relaunch loop.
+Run `Start-RabiRoute-Desktop.bat -NoOpen` once, then inspect `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`. A healthy record has `desiredState=running`, `managerConnected=true`, and `desktopShellCount>0`. `managerFailureCount` is the consecutive `/meta` failure count, and `managerProbeError` records the latest probe error. `desiredState=stopped` means the previous exit was intentional and requires an explicit user start. Missing or malformed intent fails closed. Do not substitute the half-hour business-health patrol for this lightweight owner or create a separate desktop-UI relaunch loop.
 
 `Exit RabiRoute` from the RabiRoute Desktop menu persists `stopped` before shutting down the local backend and desktop UI, so supervision cannot undo a deliberate exit. Ordinary Manager build reloads, installer upgrades, and `SIGTERM` preserve desktop intent; when it remains `running`, supervision restores the complete desktop runtime after the reload.
+
+If a page does not load within 12 seconds after navigation, RibiWebGUI shows Page failed to load. Retry this page opens the same path with its access parameters preserved. For stale page assets, the UI first reloads once automatically; use the button if that does not restore the page.
 
 ## Port 8790 held by a stale Manager
 

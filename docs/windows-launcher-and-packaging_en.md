@@ -61,8 +61,8 @@ The batch/PowerShell hybrid launcher:
 - Opens RibiWebGUI unless `-NoOpen` is passed.
 - Starts the RabiRoute Desktop interface unless `-NoDesktopShell` is passed.
 - Reuses an existing RabiRoute Desktop UI instead of creating a duplicate.
-- Persists a `running` desktop intent and starts one lightweight supervisor per workspace. It checks only the local backend `/meta` and this project's desktop UI process every five seconds, requires two consecutive misses, and then reuses the launcher's PID, port-ownership, and single-instance gates to restore the complete desktop runtime. It does not scan or repair QQ, NapCat, Routes, or adapters.
-- Keeps the desktop UI alive and visibly offline during a transient backend outage. A genuinely missing backend or UI is restored by the supervisor as one desktop runtime.
+- Persists a `running` desktop intent and starts one lightweight supervisor per workspace. It checks only the local backend `/meta` and this project's desktop UI process every five seconds. Two consecutive `/meta` failures trigger recovery through the launcher's PID, port-ownership, and single-instance gates even if an old `node dist/manager.js` process still exists. It does not scan or repair QQ, NapCat, Routes, or adapters.
+- Keeps the desktop UI alive and visibly offline during a transient backend outage. Supervisor records include `managerFailureCount` and `managerProbeError` to distinguish an exited process, a port owner, and an unresponsive Manager API.
 
 Logs are written under:
 

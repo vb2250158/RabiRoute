@@ -1,0 +1,23 @@
+{
+  "id": "memory-rabiroute-lan-agent-trust-anchor",
+  "title": "局域网 Rabi Agent 更新必须固定发布公钥指纹",
+  "content": "局域网 Rabi Agent 是其他电脑上的无界面工作进程，只把 Manager 任务投递给该电脑已配置的 Codex Desktop 任务 owner。首次接入从 Rabi Web 取得发布公钥 SHA-256 指纹，并保存到当前用户私有配置。每次更新先比较固定指纹，再验证 Ed25519 清单签名、文件大小和 SHA-256；攻击者即使同时替换清单公钥和签名也会被拒绝。Manager 页面负责显示节点、任务、发布版本和指纹；真实多电脑接入、更新、断线重连与登录恢复仍待验收。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例近期记忆：局域网 Agent 边界与更新信任锚"
+  },
+  "createdAt": "2026-08-27T20:05:00+08:00",
+  "updatedAt": "2026-08-27T20:05:00+08:00",
+  "keywords": [
+    "Rabi Agent",
+    "局域网 Agent",
+    "Codex Desktop",
+    "任务 owner",
+    "Ed25519",
+    "公钥指纹",
+    "SHA-256",
+    "自更新",
+    "失败关闭",
+    "多电脑验收"
+  ]
+}

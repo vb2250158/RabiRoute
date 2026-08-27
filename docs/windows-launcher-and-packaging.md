@@ -67,8 +67,8 @@ Start-RabiRoute-Desktop.bat
 - manager 响应后打开 RibiWebGUI。
 - 除非传入 `-NoDesktopShell`，否则启动 RabiRoute Desktop 界面。
 - 如果 RabiRoute Desktop 界面已经运行，会复用已有界面，不创建重复窗口。
-- 完整桌面启动会由 Manager 原子记录 `running` 意图，并启动工作区唯一的轻量监督器。监督器每 5 秒只检查本机后端 `/meta` 和本项目桌面界面进程，连续两次缺失才走同一启动器的 PID、端口和单实例门禁恢复完整运行态；它不扫描或修复 QQ、NapCat、Route、Adapter 等业务状态。
-- 桌面界面探测到本机后端暂时离线时保持运行并显示离线状态，不再因连续超时自行退出；后端或界面真正消失时，由监督器恢复完整桌面运行态。
+- 完整桌面启动会由 Manager 原子记录 `running` 意图，并启动工作区唯一的轻量监督器。监督器每 5 秒只检查本机后端 `/meta` 和本项目桌面界面进程；`/meta` 连续两次失败时，即使旧 `node dist/manager.js` 仍在，也会走同一启动器的 PID、端口和单实例门禁恢复完整运行态。它不扫描或修复 QQ、NapCat、Route、Adapter 等业务状态。
+- 桌面界面探测到本机后端暂时离线时保持运行并显示离线状态。监督日志会记录 `managerFailureCount` 和 `managerProbeError`，用于区分进程退出、端口占用和 Manager API 无响应。
 
 日志写入：
 

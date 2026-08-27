@@ -37,6 +37,14 @@ type LoadOptions = {
   replaceDirtyConfig?: boolean;
 };
 
+export type GatewayRouteSummary = Readonly<{
+  id: string;
+  configName: string;
+  name: string;
+  agentRoleId: string;
+  running: boolean;
+}>;
+
 function asManagerRows(value: unknown): RuntimeStatus[] {
   return Array.isArray(value) ? value as RuntimeStatus[] : [];
 }
@@ -46,6 +54,18 @@ function managerErrorOf(value: unknown): string {
     return String((value as { error?: unknown }).error || "");
   }
   return "";
+}
+
+function routeSummariesFrom(value: unknown): GatewayRouteSummary[] {
+  return asManagerRows(value)
+    .map((gateway) => ({
+      id: String(gateway.id || "").trim(),
+      configName: String(gateway.configName || configNameFor(gateway)).trim(),
+      name: String(gateway.name || "").trim(),
+      agentRoleId: String(gateway.agentRoleId || "").trim(),
+      running: gateway.running === true
+    }))
+    .filter((gateway) => Boolean(gateway.id));
 }
 
 function assertValidPort(value: unknown, label: string): number {
@@ -192,6 +212,9 @@ function selectedGatewayIdFromLocation(items: GatewayDefinition[]): string {
 export const useGatewayStore = defineStore("gateway", () => {
   const gateways = ref<GatewayDefinition[]>([]);
   const managerRows = ref<RuntimeStatus[]>([]);
+  const routeSummaries = ref<GatewayRouteSummary[]>([]);
+  const routeBootstrapLoading = ref(false);
+  const routeBootstrapError = ref("");
   const managerError = ref("");
   const networkOptions = ref<NetworkOptions>({ adapters: {}, localAddresses: [], httpServers: [], websocketClients: [] });
   const configFiles = ref<Record<string, string>>({});
@@ -241,6 +264,19 @@ export const useGatewayStore = defineStore("gateway", () => {
   });
 
   const selectedGateway = computed(() => gateways.value[selectedIndex.value] || null);
+
+  function routeSummaryForKey(value: string): GatewayRouteSummary | null {
+    const key = String(value || "").trim();
+    if (!key) return null;
+    return routeSummaries.value.find((gateway) => gateway.id === key || gateway.configName === key) || null;
+  }
+
+  const selectedRouteSummary = computed(() => {
+    const fromLocation = routeSummaryForKey(routeKeyFromWebguiHash(window.location.hash));
+    if (fromLocation) return fromLocation;
+    const selected = selectedGateway.value;
+    return selected ? routeSummaryForKey(selected.id) : null;
+  });
 
   const selectedRuntime = computed(() => {
     const gateway = selectedGateway.value;
@@ -327,21 +363,39 @@ export const useGatewayStore = defineStore("gateway", () => {
     }
   }
 
+  async function loadRouteSummaries(): Promise<void> {
+    routeBootstrapLoading.value = true;
+    routeBootstrapError.value = "";
+    try {
+      const response = await fetch(`${apiBase}/gateways?summary=1`);
+      const body = await response.json() as GatewayPayload;
+      if (!response.ok || body.code !== 0 || !body.data) {
+        throw new Error(body.message || "插件 API 没有返回 route 摘要");
+      }
+      managerRows.value = asManagerRows(body.data.manager);
+      managerError.value = managerErrorOf(body.data.manager);
+      routeSummaries.value = routeSummariesFrom(body.data.manager);
+    } catch (loadError) {
+      routeBootstrapError.value = loadError instanceof Error ? loadError.message : String(loadError);
+      managerError.value = routeBootstrapError.value;
+      routeSummaries.value = [];
+    } finally {
+      routeBootstrapLoading.value = false;
+    }
+  }
+
   async function load(options: LoadOptions = {}): Promise<void> {
     loading.value = true;
     error.value = "";
     try {
-      const [response] = await Promise.all([
-        fetch(`${apiBase}/gateways?summary=1&includeConfig=1`),
-        loadMeta(),
-        loadNetworkOptions()
-      ]);
+      const response = await fetch(`${apiBase}/gateways?summary=1&includeConfig=1`);
       const body = await response.json() as GatewayPayload;
       if (!response.ok || body.code !== 0 || !body.data?.config) {
         throw new Error(body.message || "插件 API 没有返回 gateway 配置");
       }
       managerRows.value = asManagerRows(body.data.manager);
       managerError.value = managerErrorOf(body.data.manager);
+      routeSummaries.value = routeSummariesFrom(body.data.manager);
       diagnosticsLoaded.value = false;
       if (!dirty.value || options.replaceDirtyConfig) {
         gateways.value = body.data.config.gateways || [];
@@ -368,6 +422,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     } finally {
       loading.value = false;
     }
+    void loadMeta();
+    void loadNetworkOptions();
   }
 
   async function ensureDiagnostics(force = false): Promise<void> {
@@ -950,6 +1006,10 @@ export const useGatewayStore = defineStore("gateway", () => {
   return {
     gateways,
     managerRows,
+    routeSummaries,
+    routeBootstrapLoading,
+    routeBootstrapError,
+    selectedRouteSummary,
     managerError,
     networkOptions,
     configFiles,
@@ -967,10 +1027,12 @@ export const useGatewayStore = defineStore("gateway", () => {
     meta,
     runningCount,
     quickSetupNeeded,
+    routeSummaryForKey,
     runtimeFor,
     touch,
     openQuickSetup,
     closeQuickSetup,
+    loadRouteSummaries,
     load,
     ensureDiagnostics,
     save,

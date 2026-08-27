@@ -1,13 +1,13 @@
 {
   "id": "memory-rabiroute-cordis-runtime-slice",
   "title": "RabiRoute 插件能力、贡献和资源由 Cordis 生命周期统一管理",
-  "content": "RabiRoute 本轮 Cordis 插件化重构和统一验证已经完成。TypeScript 类型检查、后端构建、WebGUI 构建和配置检查通过；npm test 完成 1360 项 TypeScript 测试（1359 项通过、1 项跳过）及 55 项脚本合同测试；Desktop Python 测试 202 项全部通过。\n\nManagerPluginDefinition 使用 provides、requires 和 optional 声明 capability。Reconciler 根据必需依赖决定启动顺序和 waiting_dependency，根据可选 Provider 调整顺序；Provider 的 revision 与启停状态会进入 Consumer 的依赖 revision，并沿直接和传递依赖链触发重启。重复 capability Provider 会被拒绝。停用按当前应用顺序逆序执行。\n\n正式 Manager 只有 startManager 一条初始化路径：共享 Worker/Persistence 先挂到 Manager 根 Context，内置 definition 与业务 apply hook 合成后再执行首次对账。PluginCatalog.refreshDeclaration 会更新 manifest 与 missingCapabilities，允许同一实例经历 active、waiting_dependency、active。\n\nManagerPluginRouteRegistry 使用稳定 routeId、真实 exact/prefix matcher 和 handler 声明生产路由。重复 routeId 与 method 重叠时的 exact/exact、exact/prefix、prefix/prefix 冲突会被拒绝；dynamic 只保留为扩展合同。内部 snapshot 只包含 method、path、prefix 或说明，不序列化 handler。\n\nGateway 性能上报属于 Gateway 根 Context 的 Fiber。Manager 的读取 Worker Pool、目录 Worker Pool、性能 Worker Pool和合并写入持久化服务属于 Manager 根 Fiber。停止时不再接收新任务，取消排队或共享请求，刷新待写数据，终止 Worker，并等待活动子进程和写入结束；停止完成后可以重新启动。\n\nWebGUI 和 Desktop 是“一切皆插件”模型中的最小宿主。可信 command、page、renderer、theme、status、settings、panel action 和 lifecycle 合同绑定 pluginId + instanceId；目录引用必须来自同一插件实例，未知、未注册、owner 不明确或跨插件引用失败关闭。manager:desktop 的 settings-section 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动。目录读取失败会撤销旧贡献和系统监听，只保留固定 WebGUI 恢复入口。\n\nRabiLink 保存活动运行 Promise。stop 会发出 abort，等待 Relay、WebGUI、Speech、SSE、回写连接、Persona Sync LAN listener 和活动 Socket 结束；停止期间排队的重启可以由第二次 stop 取消。配置 watcher 和 Rabi 身份配置 PATCH 会等待异步 Relay 配置同步完成。\n\n旧的 POST /api/plugins/reconcile、Agent Adapter availability 路径、/api/playback/request、/api/deploy-astrbot-adapter 和 AstrBot /api/plug/rabiroute_agent/chat 回退已经删除。保留的入口包括 GET/POST /api/plugins/reconciliation、/api/scan/agents、/api/scan/agents/dsh、/api/fennenote/playback 和 AstrBot /api/chat/send。AstrBot 必须提供 ASTRBOT_SESSION_ID。\n\nDSH 普通插件默认在同一 Node 进程内由 Cordis Fiber 管理，Cordis isolate 隔离服务作用域，不提供恶意代码沙箱。RabiRoute 的可信 Web/Python 注册也属于进程内扩展；未知或高风险第三方代码使用独立进程，任意第三方表现代码的受控 Extension Host 仍是后续工作。",
+  "content": "RabiRoute 的 Manager 插件现在由 Profile、Patch 和版本化 Bundle 组合。`data/plugins/manager/profile.json` 选择稳定实例 ID、包名、版本、启用状态和 JSON 配置；`profile.d/*.json` 按文件名顺序应用本机 Patch。Profile 缺失时旧 `manager.json.managerPlugins` enabled 值只在首次启动时迁入，旧 `rabi.manager.builtin` Profile 或 Patch 行迁为 `rabi.manager.base`；Profile 已存在时它是唯一配置来源，正式运行不再读取旧字段。`rabi.manager.base` Bundle 通过统一 Loader 装载 26 个 Manager 实例。TypeScript 类型检查、后端构建、WebGUI 构建、只读 Manager 验收和 Desktop Python 测试均通过。\n\nManagerPluginDefinition 使用 provides、requires 和 optional 声明 capability。Reconciler 根据必需依赖决定启动顺序和 waiting_dependency，根据可选 Provider 调整顺序；Provider 的 revision 与启停状态会进入 Consumer 的依赖 revision，并沿直接和传递依赖链触发重启。重复 capability Provider 会被拒绝。停用按当前应用顺序逆序执行。\n\n正式 Manager 只有 `startManager()` 一条初始化路径：共享 Worker/Persistence 先挂到 Manager 根 Context，再由统一 Loader 从 Profile 解析 Bundle。每个 Bundle 文件内容都计算 SHA-256 revision；Profile、Patch、入口或依赖变化时，先撤销实例路由、等待已接受请求结束、dispose 旧 Fiber，再从隔离 revision 目录导入新代码。失败时恢复前一成功 Fiber。PluginCatalog.refreshDeclaration 会更新 manifest 与 missingCapabilities，允许同一实例经历 active、waiting_dependency、active。\n\nManagerPluginRouteRegistry 使用稳定 routeId、真实 exact/prefix matcher 和 handler 声明生产路由。重复 routeId 与 method 重叠时的 exact/exact、exact/prefix、prefix/prefix 冲突会被拒绝；dynamic 只保留为扩展合同。内部 snapshot 只包含 method、path、prefix 或说明，不序列化 handler。\n\nGateway 性能上报属于 Gateway 根 Context 的 Fiber。Manager 的读取 Worker Pool、目录 Worker Pool、性能 Worker Pool和合并写入持久化服务属于 Manager 根 Fiber。停止时不再接收新任务，取消排队或共享请求，刷新待写数据，终止 Worker，并等待活动子进程和写入结束；停止完成后可以重新启动。\n\nWebGUI 和 Desktop 是“一切皆插件”模型中的最小宿主。可信 command、page、renderer、theme、status、settings、panel action 和 lifecycle 合同绑定 pluginId + instanceId；目录引用必须来自同一插件实例，未知、未注册、owner 不明确或跨插件引用失败关闭。Web Bundle 通过 `/api/plugins/modules` 发布版本 revision，浏览器在 `plugin_catalog_changed` 后释放旧模块并加载新模块；激活失败会恢复上一 revision。`manager:desktop` 的 settings-section 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动。目录读取失败会撤销旧贡献和系统监听，只保留固定 WebGUI 恢复入口。\n\nRabiLink 保存活动运行 Promise。stop 会发出 abort，等待 Relay、WebGUI、Speech、SSE、回写连接、Persona Sync LAN listener 和活动 Socket 结束；停止期间排队的重启可以由第二次 stop 取消。配置 watcher 和 Rabi 身份配置 PATCH 会等待异步 Relay 配置同步完成。\n\n旧的 POST /api/plugins/reconcile、Agent Adapter availability 路径、/api/playback/request、/api/deploy-astrbot-adapter 和 AstrBot /api/plug/rabiroute_agent/chat 回退已经删除。保留的入口包括 GET/POST /api/plugins/reconciliation、/api/scan/agents、/api/scan/agents/dsh、/api/fennenote/playback 和 AstrBot /api/chat/send。AstrBot 必须提供 ASTRBOT_SESSION_ID。\n\nDSH 普通插件默认在同一 Node 进程内由 Cordis Fiber 管理，Cordis isolate 隔离服务作用域，不提供恶意代码沙箱。RabiRoute 的可信 Web/Python 注册也属于进程内扩展；未知或高风险第三方代码使用独立进程，任意第三方表现代码的受控 Extension Host 仍是后续工作。",
   "source": {
     "kind": "example",
-    "summary": "公开示例记忆：Cordis 插件运行时的事实所有权和隔离边界"
+    "summary": "公开示例记忆：Profile/Bundle 插件运行时、Cordis 生命周期和受控扩展边界"
   },
   "createdAt": "2026-08-21T02:00:00+08:00",
-  "updatedAt": "2026-08-21T23:59:59+08:00",
+  "updatedAt": "2026-08-25T16:05:00+08:00",
   "keywords": [
     "Cordis",
     "Fiber",
@@ -42,6 +42,12 @@
     "/api/scan/agents",
     "/api/fennenote/playback",
     "Extension Host",
-    "统一验证通过"
+    "统一验证通过",
+    "Profile",
+    "Patch",
+    "Bundle",
+    "rabi.manager.base",
+    "SHA-256 revision",
+    "Web Bundle rollback"
   ]
 }

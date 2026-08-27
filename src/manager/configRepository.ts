@@ -32,14 +32,9 @@ import {
   writePersonaRules
 } from "./configMigration.js";
 
-export type ManagerPluginConfigEntry = {
-  enabled?: boolean;
-};
-
 export type ManagerConfig = {
   routeDir?: string;
   rolesDir?: string;
-  managerPlugins?: Record<string, ManagerPluginConfigEntry>;
 };
 
 export type ManagerConfigRepositoryOptions = {

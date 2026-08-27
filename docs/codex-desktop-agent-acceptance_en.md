@@ -11,7 +11,7 @@ This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not
 ## Non-negotiable product contract
 
 1. Deliver to the saved task when the full task ID exists in the configured workspace and the owner record is not archived. A mutable Desktop/SQLite title does not invalidate that identity. When the saved ID is archived, do not locate or reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist the replacement binding, and deliver there.
-2. Approval, execution guidance, and QA-failure continuation for a plan must reuse that same plan. When its bound task is archived, create a replacement using the saved title and, after delivery succeeds, update only that plan's existing `taskBinding`; do not reuse an active same-name task or create a duplicate plan.
+2. Approval, execution guidance, and QA-failure continuation for a plan must reuse that same plan. When its bound task is archived, or Desktop wake-and-retry has completed and the exact ID can no longer be read from local state, create a replacement using the saved title and, after delivery succeeds, update only that plan's existing `taskBinding` and return a warning; do not reuse an active same-name task or create a duplicate plan.
 3. If the ID is empty, invalid, or actually missing, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
 4. A Desktop-side rename or automatic title-metadata rewrite keeps the same ID target. Explicitly typing a new Rabi name clears the old ID before lookup/create and persists the selected replacement target.
 5. Real prompts go only to the current Desktop task owner. RabiRoute must not resume the same ID in another Runtime or silently switch execution paths.
@@ -44,7 +44,7 @@ flowchart TD
     P["RabiRoute AgentPacket"] --> R["Shared session resolver"]
     R --> I{"Saved ID exists in the configured workspace?"}
     I -->|"Active"| B["Reuse binding"]
-    I -->|"Archived"| C2["Create a new task with an old-ID-scoped idempotency key"]
+    I -->|"Archived or confirmed deleted after delivery"| C2["Create a new task with an old-ID-scoped idempotency key"]
     I -->|"Missing"| N["Find active tasks by visible name + workspace"]
     N -->|"One or more"| L{"Unique latest updatedAt?"}
     L -->|"Yes"| S["Persist latest matched ID"]
@@ -66,12 +66,12 @@ The creation transaction must also persist a runtime Manager reservation. It rec
 
 - The UI shows task name and last activity; users do not type UUIDs.
 - Internally, identity is the complete task ID plus workspace. The visible name is display and no-ID lookup metadata.
-- For Codex, the user-visible name comes from the Desktop left sidebar: full scans use app-server `thread/list` `thread.name`, while exact-ID reads use the same sidebar session index. Both are exposed through the single task read model in `codexDesktopBridge.ts`. SQLite `threads.title` may contain the first prompt and can supplement owner state only; it must not become the task name or drive dropdown labels and same-name lookup.
+- For Codex, the user-visible name comes only from the Desktop left sidebar: full scans and exact-ID reads both use `thread_name` from the same sidebar session index, exposed through the single task read model in `codexDesktopBridge.ts`. SQLite `threads.title` may contain the first prompt and can supplement owner state only; it must not become the task name or drive dropdown labels and same-name lookup.
 - Last activity is display/sorting data, not identity.
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
 - For same-name tasks in one workspace, sort by parseable `updatedAt` and bind the unique maximum; never use database return order. Require selection only when the maximum time is tied or all candidate times are unusable.
 - “Task created, initial delivery failed” is a recoverable delivery state, not a missing task.
-- Delivery state is explicit: internal transitional `accepted` means only that RabiRoute entered the Desktop path; `delivered` is set only after the target Desktop owner's `start/steer` succeeds; resolver, owner-loading, or IPC failures are `failed`. Route acceptance must never impersonate Desktop receipt.
+- Delivery state is explicit: internal transitional `accepted` means only that RabiRoute entered the Desktop path. Every real Desktop delivery carries a UUID `deliveryId`, and it is `delivered` only after that marker appears in the target task rollout. If `start/steer` IPC succeeds without the marker, retry `steer` once as `start`; if the marker is still absent, mark the delivery `failed`. Route acceptance, IPC success, or merely selecting the task must never impersonate Desktop receipt.
 - A matched ordinary endpoint event is delivered directly: first attempt `steer` against the active turn, then `start` only when that turn is inactive or absent. Heartbeat may use its dedicated busy-skip exception, while speech may use its dedicated hot/keyword exception.
 - Manager must not decide task activity from the Desktop IPC memory set alone. It timestamp-merges the connection-scoped active marker with the latest rollout lifecycle event: a newer completion, abort, or failure supersedes an older active marker; a genuinely newer IPC start remains active until rollout catches up; disconnect clears that connection's markers immediately.
 
@@ -84,6 +84,8 @@ The creation transaction must also persist a runtime Manager reservation. It rec
 - `4xx/5xx`: Route validation, owner loading, IPC, or delivery-timeout failure.
 
 This contract proves that the target owner received the message. It does not prove that the Agent has answered, Outbox has returned a reply, or TTS has finished playback.
+
+When an idle task starts a new turn, Desktop IPC must send `thread-follower-start-turn` with protocol version `2`; `thread-follower-steer-turn` remains version `1`. A version mismatch makes the router report `no-client-found` even when the owner is loaded.
 
 ## Automatic initialization transaction
 
@@ -106,6 +108,8 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 | UI name differs from SQLite `title` | Find and display the original task by app-server `thread.name`; do not create |
 | Saved ID points to an archived task and an active same-name task exists | Create a new task and persist its ID; do not reuse the same-name task |
 | Saved ID points to an archived task with no active same-name task | Create a new task, persist the replacement binding, and deliver there |
+| Bound ID confirmed deleted after delivery | Create a replacement, update the original plan `taskBinding`, deliver, and return a warning |
+| IPC succeeds but the target rollout lacks this `deliveryId` | Fall back from idle-task `steer` to `start`; fail rather than report delivery if the marker remains absent |
 | Deleted/invalid ID, unique name match | Rebind; task count unchanged |
 | No name match | Create one task, persist ID, deliver to it |
 | Desktop index is briefly delayed | Wait for the same ID; do not create a duplicate |
@@ -130,7 +134,7 @@ Mocks and unit tests prove resolver and failure behavior only. Release acceptanc
 1. Define the user-visible destination, unique owner, session identity, and forbidden fallbacks.
 2. Test independent lifecycle and port-4510 safety before polishing the session UI.
 3. Reuse one resolver for settings save, normal delivery, and automatic initialization.
-4. Lock stable ID/workspace reuse, title-mutation continuity, archived-binding replacement and persistence, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
+4. Lock stable ID/workspace reuse, title-mutation continuity, replacement and persistence after archival or confirmed deletion after delivery, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
 5. Mark Codex `verified` only after a real Desktop task receives and executes the prompt visibly.
 
 See [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) for the general contract and [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) for the failed designs and their root causes.

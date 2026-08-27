@@ -1,13 +1,4 @@
 import { ref, type AsyncComponentLoader } from "vue";
-import {
-  routeScopedAdaptersPath,
-  routeScopedKnowledgePath,
-  routeScopedOverviewPath,
-  routeScopedPersonaPath,
-  routeScopedPersonaSyncPath,
-  routeScopedRuntimePath,
-  routeScopedSpeechPath
-} from "./routeScopedNavigation";
 
 export type WebPageRouteId = string;
 export type WebPageRendererId = string;
@@ -61,6 +52,8 @@ const webPageRendererRegistry = new Map<WebPageRouteId, TrustedWebPageRegistrati
 const webPageRendererIds = new Map<WebPageRendererId, WebPageRouteId>();
 const webPageRoutePaths = new Map<string, WebPageRouteId>();
 const registrationListeners = new Set<RegistrationListener>();
+const replacementListeners = new Set<() => void>();
+let replacementDepth = 0;
 const webPageRegistrationRevision = ref(0);
 const reservedRoutePaths = new Set(["/", "/plugin-recovery", "/models", "/:pathMatch(.*)*"]);
 const controlledPageRequirements = new Set<WebPageDataRequirement>(["gateway.diagnostics"]);
@@ -238,6 +231,31 @@ export function onTrustedWebPageRegistrationChange(listener: RegistrationListene
   return () => registrationListeners.delete(listener);
 }
 
+/** Keeps a route registered while its owning Web Bundle replaces one revision. */
+export function beginTrustedWebPageReplacement(): () => void {
+  replacementDepth += 1;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    replacementDepth = Math.max(0, replacementDepth - 1);
+  };
+}
+
+export function isTrustedWebPageReplacementInProgress(): boolean {
+  return replacementDepth > 0;
+}
+
+/** Notifies the Router after a replaced Bundle page has been registered again. */
+export function notifyTrustedWebPageReplacement(): void {
+  for (const listener of [...replacementListeners]) listener();
+}
+
+export function onTrustedWebPageReplacement(listener: () => void): () => void {
+  replacementListeners.add(listener);
+  return () => replacementListeners.delete(listener);
+}
+
 export function webPageDataRequirements(routeId: WebPageRouteId): readonly WebPageDataRequirement[] {
   return webPageRendererRegistry.get(routeId)?.requirements ?? [];
 }
@@ -332,167 +350,3 @@ export function isWebNavigationPageActive(
       && page.routeId === routeId
     ));
 }
-
-const builtinWebPages: readonly TrustedWebPageRegistration[] = [
-  {
-    instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
-    routeId: "route.overview",
-    rendererId: "builtin.web-page.overview.v1",
-    loader: () => import("./pages/OverviewPage.vue"),
-    paths: [
-      { path: "/overview", title: "控制台" },
-      { path: "/routes/:id/overview", title: "控制台" }
-    ],
-    requirements: ["gateway.diagnostics"],
-    navigation: {
-      resolvePath: routeScopedOverviewPath,
-      allowedSlots: ["route-primary"],
-      allowedIcons: ["mdi-view-dashboard-outline"]
-    }
-  },
-  {
-    instanceId: "manager:message-adapter-control",
-    pluginId: "builtin:manager/message-adapter-control",
-    routeId: "route.adapters",
-    rendererId: "builtin.web-page.adapters.v1",
-    loader: () => import("./pages/RouteConfigPage.vue"),
-    paths: [
-      { path: "/routes/:id/adapters", title: "消息适配器" },
-      { path: "/routes/:id?", title: "消息适配器" }
-    ],
-    requirements: ["gateway.diagnostics"],
-    navigation: {
-      resolvePath: routeScopedAdaptersPath,
-      allowedSlots: ["route-primary"],
-      allowedIcons: ["mdi-puzzle-outline"]
-    }
-  },
-  {
-    instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
-    routeId: "route.persona",
-    rendererId: "builtin.web-page.persona.v1",
-    loader: () => import("./pages/PersonaTemplatePage.vue"),
-    paths: [
-      { path: "/routes/:id/persona", title: "人格配置" },
-      { path: "/persona/:id?", title: "人格配置" }
-    ],
-    navigation: {
-      resolvePath: routeScopedPersonaPath,
-      allowedSlots: ["route-primary"],
-      allowedIcons: ["mdi-account-heart-outline"]
-    }
-  },
-  {
-    instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
-    routeId: "route.persona-document",
-    rendererId: "builtin.web-page.persona-document.v1",
-    loader: () => import("./pages/PersonaDocumentPage.vue"),
-    paths: [{ path: "/routes/:id/persona/document", title: "人格正文" }]
-  },
-  {
-    instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
-    routeId: "route.knowledge",
-    rendererId: "builtin.web-page.knowledge.v1",
-    loader: () => import("./pages/RoleKnowledgePage.vue"),
-    paths: [
-      { path: "/routes/:id/knowledge", title: "计划与记忆" },
-      { path: "/knowledge", title: "计划与记忆" }
-    ],
-    navigation: {
-      resolvePath: routeScopedKnowledgePath,
-      allowedSlots: ["route-primary"],
-      allowedIcons: ["mdi-notebook-check-outline"]
-    }
-  },
-  {
-    instanceId: "manager:persona",
-    pluginId: "builtin:manager/persona",
-    routeId: "route.persona-sync",
-    rendererId: "builtin.web-page.persona-sync.v1",
-    loader: () => import("./pages/PersonaSyncPage.vue"),
-    paths: [{ path: "/routes/:id/persona/sync", title: "多电脑人格同步" }],
-    navigation: {
-      resolvePath: routeScopedPersonaSyncPath,
-      allowedSlots: ["persona-secondary"],
-      allowedIcons: ["mdi-folder-sync-outline"]
-    }
-  },
-  {
-    instanceId: "manager:speech",
-    pluginId: "builtin:manager/speech",
-    routeId: "route.speech",
-    rendererId: "builtin.web-page.speech.v1",
-    loader: () => import("./pages/SpeechServicePage.vue"),
-    paths: [
-      { path: "/speech", title: "语音服务" },
-      { path: "/routes/:id/speech", title: "语音服务" }
-    ],
-    navigation: {
-      resolvePath: routeScopedSpeechPath,
-      allowedSlots: ["utility"],
-      allowedIcons: ["mdi-waveform"]
-    }
-  },
-  {
-    instanceId: "manager:performance",
-    pluginId: "builtin:manager/performance",
-    routeId: "global.performance",
-    rendererId: "builtin.web-page.performance.v1",
-    loader: () => import("./pages/PerformancePage.vue"),
-    paths: [{ path: "/performance", title: "性能监控" }],
-    navigation: {
-      resolvePath: () => "/performance",
-      allowedSlots: ["utility"],
-      allowedIcons: ["mdi-chart-timeline-variant"]
-    }
-  },
-  {
-    instanceId: "manager:diagnostics",
-    pluginId: "builtin:manager/diagnostics",
-    routeId: "route.runtime",
-    rendererId: "builtin.web-page.runtime.v1",
-    loader: () => import("./pages/RuntimeLogPage.vue"),
-    paths: [
-      { path: "/routes/:id/runtime", title: "日志诊断" },
-      { path: "/runtime", title: "日志诊断" }
-    ],
-    requirements: ["gateway.diagnostics"],
-    navigation: {
-      resolvePath: routeScopedRuntimePath,
-      allowedSlots: ["utility"],
-      allowedIcons: ["mdi-console-line"]
-    }
-  },
-  {
-    instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
-    routeId: "global.settings",
-    rendererId: "builtin.web-page.settings.v1",
-    loader: () => import("./pages/SettingsPage.vue"),
-    paths: [{ path: "/settings", title: "设置" }],
-    navigation: {
-      resolvePath: () => "/settings",
-      allowedSlots: ["utility"],
-      allowedIcons: ["mdi-cog-outline"]
-    }
-  },
-  {
-    instanceId: "manager:core",
-    pluginId: "builtin:manager/core",
-    routeId: "global.docs",
-    rendererId: "builtin.web-page.docs.v1",
-    loader: () => import("./pages/ProjectDocsPage.vue"),
-    paths: [{ path: "/docs", title: "使用手册" }],
-    navigation: {
-      resolvePath: () => "/docs",
-      allowedSlots: ["footer"],
-      allowedIcons: ["mdi-book-open-page-variant-outline"]
-    }
-  }
-];
-
-for (const registration of builtinWebPages) registerTrustedWebPage(registration);

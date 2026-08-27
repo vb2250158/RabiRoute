@@ -58,6 +58,8 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Research and implementation summary**. Covers the completed migration of 26 built-in Manager plugins, WebGUI/Desktop minimal extension hosts, contribution points, process-isolation boundaries, and the future third-party presentation Extension Host.
 - [How DSH uses Cordis](dsh-cordis-runtime-analysis_en.md) — **Implementation research**. Explains profiles, Loader, Fibers, service realms, the browser plugin tree, dynamic code, and process-sandbox boundaries.
 - [Cordis-based plugin runtime refactor](cordis-plugin-runtime-refactor_en.md) — **Current implementation guide**. Defines the 26 built-in Manager plugins, the minimal central HTTP host, WebGUI/Desktop extension protocol, plugin resource ownership, and deactivation order.
+- [RabiRoute plugin platform target architecture](manager-plugin-implementation-hot-swap_en.md) — **Design pending review**. Defines a minimal Plugin Kernel, independent capability packages, one SDK, multi-host extension, atomic generation switching, out-of-tree plugin acceptance, and one complete removal of the old runtime.
+- [Plugin Bundles and hot replacement](plugin-bundles_en.md) — **Current implementation guide**. Profile, Patch, versioned Bundles, the controlled Manager host API, and browser revision rollback.
 - [Code architecture](code-architecture_en.md) — **Current fact**. Backend, Manager, endpoint, Role Knowledge, WebGUI, and desktop module map.
 - [Project function map](project-function-map_en.md) — **Current fact**. Locate behavior by maturity, side effect, API, and code owner.
 - [Path and directory conventions](path-and-directory-conventions_en.md) — **Current maintainer guide**. Separates software, public samples, local runtime data, and logs, and defines relative-path and business-ID interfaces.
@@ -97,6 +99,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
 - [Windows tray task-window plan](rabiroute-windows-tray-task-window-plan_en.md) — design record; use `desktop/tray-task-window/` and the packaging guide for the actual implementation.
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.
+- [LAN Rabi Agent bootstrap and updates](lan-rabi-agent-bootstrap_en.md) — **Experimental integration**. Covers headless-node bootstrap, the LAN connection Token, Rabi Web update requests, and the current Codex Desktop task-owner limitation.
 - [Historical mobile-app Webhook plan](mobile-app-webhook-integration_en.md) — **Historical**. The current RabiLink path no longer requires a phone bridge as the main relay.
 
 Archived material is under [`archive/`](../archive/README_en.md). Buildable clients live under [`apps/`](../apps/README_en.md), reusable SDKs under [`packages/`](../packages/README_en.md), and copyable samples under [`examples/`](../examples/README_en.md).

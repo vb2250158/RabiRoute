@@ -7,7 +7,7 @@ import {
 } from "./pluginCatalog.js";
 
 const manifest: RabiPluginManifest = {
-  id: "builtin:manager/performance",
+  id: "rabi.manager.base",
   name: "Performance",
   version: "1.0.0",
   kind: "builtin",
@@ -23,7 +23,7 @@ test("Plugin Catalog records valid lifecycle transitions without exposing mutabl
     host: "manager"
   });
   assert.equal(declared.instanceId, "manager:performance");
-  assert.equal(declared.pluginId, "builtin:manager/performance");
+  assert.equal(declared.pluginId, "rabi.manager.base");
   assert.equal(declared.status, "inactive");
 
   catalog.activating(declared.instanceId);
@@ -134,8 +134,8 @@ test("Plugin Catalog keeps instance identity separate from plugin identity", () 
   assert.deepEqual(
     catalog.snapshot().plugins.map(item => [item.instanceId, item.pluginId]),
     [
-      ["manager:performance:primary", "builtin:manager/performance"],
-      ["manager:performance:secondary", "builtin:manager/performance"]
+      ["manager:performance:primary", "rabi.manager.base"],
+      ["manager:performance:secondary", "rabi.manager.base"]
     ]
   );
 
@@ -171,7 +171,7 @@ test("Plugin Catalog refreshes an inactive declaration without changing instance
   catalog.declare({ instanceId: "manager:first", manifest, host: "manager" });
   catalog.declare({
     instanceId: "manager:second",
-    manifest: { ...manifest, id: "builtin:manager/second", name: "Second" },
+    manifest: { ...manifest, id: "example.manager.second", name: "Second" },
     host: "manager"
   });
 

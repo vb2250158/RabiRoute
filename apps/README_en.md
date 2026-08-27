@@ -13,5 +13,6 @@ English | <a href="./README.md">简体中文</a>
 | [`rabilink-android/`](./rabilink-android/README_en.md) | Android phone + Rokid glasses | Conversation list and chat details, continuous messaging, remote configuration, wearable-health entry points, and the glasses frontend built with the phone project. |
 | [`rabilink-aiui/`](./rabilink-aiui/README_en.md) | Rokid AIUI | Foreground messaging, configuration assistant, AIX packaging, and acceptance. Its host has no SSE, WebSocket, or chunk callback, so a controlled long wait remains to preserve proactive downlink; the newer native path prefers Android companion events. |
 | [`bilibili-history-bridge/`](./bilibili-history-bridge/README.md) | Chrome | One-time-installed, read-only long pagination over Bilibili history using the browser session, with checkpoints and aggregates kept by the local Manager and item records date-sharded in the selected persona's private runtime directory. |
+| [`rabi-agent/`](./rabi-agent/README_en.md) | Windows/macOS/Linux | Headless LAN worker that receives Manager tasks and delivers only to its configured Codex Desktop task owner. |
 
 The shared Android transport contract lives under [`packages/android-sdk/`](../packages/android-sdk/README_en.md). Copyable Route/persona and Relay samples remain under [`examples/`](../examples/README_en.md).

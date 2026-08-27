@@ -23,7 +23,7 @@ type PluginOwner = Readonly<{
 }>;
 
 function builtinOwner(id: string): PluginOwner {
-  return { instanceId: `manager:${id}`, pluginId: `builtin:manager/${id}` };
+  return { instanceId: `manager:${id}`, pluginId: "rabi.manager.base" };
 }
 
 function page(

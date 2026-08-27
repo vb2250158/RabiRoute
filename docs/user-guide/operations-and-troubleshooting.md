@@ -95,11 +95,13 @@ Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自�
 
 ## RabiRoute Desktop 界面未显示
 
-从 `Start-RabiRoute-Desktop.bat` 或打包版 RabiRoute Desktop 启动的完整桌面运行态，会在 `data/runtime/desktop-lifecycle-intent.json` 记录 `running`，并启动工作区唯一的 `watch-rabiroute-desktop-lifecycle.ps1`。监督器只检查本项目本机后端 `/meta` 和桌面界面进程；连续两次确认任一部分缺失后，才通过原启动器的端口 owner、PID 和单实例门禁恢复完整运行态。界面遇到本机后端暂时离线时会保留入口并继续重连。
+从 `Start-RabiRoute-Desktop.bat` 或打包版 RabiRoute Desktop 启动的完整桌面运行态，会在 `data/runtime/desktop-lifecycle-intent.json` 记录 `running`，并启动工作区唯一的 `watch-rabiroute-desktop-lifecycle.ps1`。监督器只检查本项目本机后端 `/meta` 和桌面界面进程；`/meta` 连续两次失败后，即使旧 Manager 进程仍存在，也会通过原启动器的端口 owner、PID 和单实例门禁恢复完整运行态。界面遇到本机后端暂时离线时会保留入口并继续重连。
 
-先重新运行一次 `Start-RabiRoute-Desktop.bat -NoOpen`。然后检查 `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`：正常记录应同时满足 `desiredState=running`、`managerConnected=true`、`desktopShellCount>0`。如果 `desiredState=stopped`，说明上次是明确退出，应由用户重新启动；文件缺失或损坏时监督器也会失败关闭，不会自行猜测。不要用半小时业务健康巡检替代这个轻量监督器，也不要单独循环拉起桌面界面。
+先重新运行一次 `Start-RabiRoute-Desktop.bat -NoOpen`。然后检查 `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`：正常记录应同时满足 `desiredState=running`、`managerConnected=true`、`desktopShellCount>0`。`managerFailureCount` 是连续 `/meta` 失败次数，`managerProbeError` 是最近一次探测错误。`desiredState=stopped` 表示上次由用户明确退出，应手动重新启动；文件缺失或损坏时监督器也会失败关闭，不会自行猜测。不要用半小时业务健康巡检替代这个轻量监督器，也不要单独循环拉起桌面界面。
 
 RabiRoute Desktop 菜单的 `退出 RabiRoute` 会先把意图写成 `stopped` 再关闭本机后端和桌面界面，因此监督器不会反向复活。普通 Manager 构建重载、安装升级和 `SIGTERM` 不修改桌面意图；如果桌面仍标记 `running`，监督器会在重载后恢复完整运行态。
+
+页面切换后如果内容在 12 秒内没有加载出来，RibiWebGUI 会显示“页面加载失败”。点击“重试当前页面”会重新打开相同路径和访问参数。旧页面资源失效时，界面会先自动刷新一次；仍失败再手动重试。
 
 ## 8790 被旧 Manager 占用
 

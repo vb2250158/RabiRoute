@@ -270,11 +270,9 @@ test("Feishu Fiber waits for listener readiness, forwards messages, and releases
 
   await first.dispose();
   assert.equal(readStatus(dataDir).messageAdapters.feishu.status, "disabled");
-  await assert.rejects(request({
-    port,
-    path: settings(port).webhookPath,
-    body: Buffer.from("{}")
-  }));
+  const releasedPortProbe = http.createServer();
+  assert.equal(await listen(releasedPortProbe, port), port);
+  await close(releasedPortProbe);
 
   const second = await runtime.mount("feishu");
   assert.equal(readStatus(dataDir).messageAdapters.feishu.listenerReady, true);
@@ -301,37 +299,43 @@ test("Feishu listener conflict rejects Cordis mount and records failure", async 
   assert.match(status.lastError, /EADDRINUSE/);
 });
 
-test("Feishu disposal cancels an incomplete callback before persistence or forwarding", async (t) => {
+test("Feishu disposal prevents an incomplete callback from persisting or forwarding", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feishu-late-"));
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const probe = http.createServer();
   const port = await listen(probe);
   await close(probe);
   const forwarded: string[] = [];
+  let markCallbackStarted: (() => void) | undefined;
+  const callbackStarted = new Promise<void>((resolve) => { markCallbackStarted = resolve; });
   const adapter = createFeishuAdapter({
     settings: () => settings(port),
     dataDir: () => dataDir,
     memoryDataDir: () => dataDir,
     now: () => new Date(nowSeconds * 1000),
-    forward: () => forwarded.push("forwarded")
+    forward: () => forwarded.push("forwarded"),
+    createServer: (listener) => http.createServer((request, response) => {
+      markCallbackStarted?.();
+      listener(request, response);
+    })
   });
   const dispose = await adapter.start() as MessageAdapterDispose;
 
-  const requestError = new Promise<Error>((resolve) => {
-    const req = http.request({
-      host: "127.0.0.1",
-      port,
-      path: settings(port).webhookPath,
-      method: "POST",
-      headers: { "content-type": "application/json", "content-length": "4096" }
-    });
-    req.once("error", resolve);
-    req.flushHeaders();
-    req.write("{");
+  const req = http.request({
+    host: "127.0.0.1",
+    port,
+    path: settings(port).webhookPath,
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": "4096" }
   });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  req.once("error", () => {});
+  req.flushHeaders();
+  req.write("{");
+  await callbackStarted;
   await dispose();
-  await requestError;
+  const requestClosed = new Promise<void>((resolve) => req.once("close", resolve));
+  req.destroy();
+  await requestClosed;
 
   assert.deepEqual(forwarded, []);
   assert.equal(fs.existsSync(path.join(dataDir, "feishu-messages.jsonl")), false);

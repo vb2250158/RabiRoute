@@ -196,15 +196,15 @@ import {
 } from "./panghuProgressNotificationGate.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
-import { getBuiltinManagerPluginHost } from "./managerPluginHost.js";
-import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
-import { composeBuiltinManagerPluginDefinitions } from "./builtinManagerPluginComposition.js";
+import { getManagerPluginRuntimeHost } from "./managerPluginRuntimeHost.js";
+import { WebPluginModuleRegistry } from "./webPluginModules.js";
 import {
   ManagerPluginRouteRegistry,
   type ManagerPluginRouteHandler
 } from "./managerPluginRouteRegistry.js";
 import { isManagerControlRequestPath } from "./managerHttpRequestClassification.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
+import { createRabiManagerPluginHostApi } from "./managerPluginPackageHost.js";
 import { createDesktopControlRoutes, desktopConfigFilePayload } from "./desktopControlRoutes.js";
 import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
 import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
@@ -238,8 +238,11 @@ import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderSer
 import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
 import { runWindowsTaskkill, stopChildProcessTree } from "../runtime/windowsProcessTree.js";
 import {
-  normalizeManagerPluginConfig,
-  type ManagerPluginConfigDiagnostic
+  BUILTIN_MANAGER_PLUGIN_PACKAGE_ID,
+  initializeManagerPluginProfile,
+  MANAGER_PLUGIN_RUNTIME_RELATIVE_PATH,
+  resolveManagerPluginProfile,
+  type ManagerPluginProfileDiagnostic
 } from "./managerPluginConfig.js";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
 import {
@@ -279,12 +282,17 @@ import { handlePlanAgentStatusApi } from "./planAgentStatusRoutes.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
 import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalConfig.js";
+import { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
+import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import {
   generateWebguiAccessToken,
   isLoopbackRemoteAddress,
   isLocalMachineRemoteAddress,
   isPublicWebguiStaticRequest,
   isWebguiLanRequestAuthorized,
+  webguiRequestToken,
+  webguiTokenMatches,
   lanAddressPriority,
   managerListensOnLan
 } from "./webguiLanAccess.js";
@@ -1251,6 +1259,11 @@ function webguiLanRequestAllowed(request: http.IncomingMessage, requestUrl: URL)
   ) return true;
   if (isPublicWebguiStaticRequest(request.method, requestUrl.pathname)) return true;
   if (remoteRequestUsesIndependentAuthorization(request, requestUrl)) return true;
+  if (requestUrl.pathname.startsWith("/api/lan-agent/releases/") && request.method === "GET") {
+    const authorization = Array.isArray(request.headers.authorization) ? request.headers.authorization[0] ?? "" : request.headers.authorization ?? "";
+    const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
+    return webguiTokenMatches(token, rabiGlobalConfig.read().webguiLan.accessToken);
+  }
   return isWebguiLanRequestAuthorized(request, requestUrl, rabiGlobalConfig.read().webguiLan);
 }
 
@@ -1941,6 +1954,48 @@ async function reloadChangedConfig(
 }
 
 type ConfigWatcher = { close(): void };
+type PluginBundleWatcher = { close(): void };
+
+function startPluginBundleWatcher(reconcile: (reason: string) => Promise<void>): PluginBundleWatcher {
+  const directories = [
+    path.join(rootDir, "data", "plugins", "manager"),
+    path.join(rootDir, "plugins", "packages")
+  ];
+  const watchers: fs.FSWatcher[] = [];
+  let timer: NodeJS.Timeout | undefined;
+  let closed = false;
+  const schedule = (): void => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (closed) return;
+      void reconcile("plugin profile or bundle changed").catch(error => {
+        console.warn("Plugin bundle reload failed; the active revision remains in service.", error);
+      });
+    }, 160);
+  };
+  for (const directory of directories) {
+    fs.mkdirSync(directory, { recursive: true });
+    try {
+      const watcher = fs.watch(directory, { recursive: true }, (_eventType, fileName) => {
+        const name = fileName?.toString().replace(/\\/g, "/") ?? "";
+        if (name.includes(".rabi-runtime") || name.endsWith(".tmp")) return;
+        schedule();
+      });
+      watcher.on("error", error => console.warn(`Plugin bundle watch failed for ${directory}:`, error));
+      watchers.push(watcher);
+    } catch (error) {
+      console.warn(`Unable to watch plugin bundle directory ${directory}:`, error);
+    }
+  }
+  return {
+    close(): void {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      for (const watcher of watchers) watcher.close();
+    }
+  };
+}
 
 function startConfigWatcher(
   reconcileManagerPlugins?: (reason: string) => Promise<void>,
@@ -4409,9 +4464,11 @@ function runtimeForMessageProcessingTarget(target: MessageProcessingDeliveryTarg
 
 function replaceOpenAgentRequestParties(
   previousThreadId: string,
+  previousWorkspace: string | undefined,
   worker: NonNullable<MessageProcessingRequirement["worker"]>
 ): void {
   const result = agentRequests.reconcileOpenParties((party) => party.threadId === previousThreadId
+    && (!previousWorkspace || !party.workspace || sameCodexWorkspace(party.workspace, previousWorkspace))
     ? {
         ...party,
         threadId: worker.threadId,
@@ -4439,7 +4496,7 @@ function persistResolvedAgentRequestTarget(
     : undefined;
   const threadId = String(thread?.id || result.threadId || "").trim();
   if (!previousThreadId || previousThreadId !== target.threadId || !threadId || threadId === previousThreadId) return;
-  replaceOpenAgentRequestParties(previousThreadId, {
+  replaceOpenAgentRequestParties(previousThreadId, target.workspace, {
     threadId,
     threadName: String(thread?.title || target.threadName || threadId),
     workspace: String(thread?.cwd || target.workspace || rootDir)
@@ -4498,7 +4555,7 @@ function persistResolvedMessageProcessingTarget(
     }
   }
   messageProcessingBoard.replaceWorkerReferences(resolved.previousThreadId, replacement);
-  replaceOpenAgentRequestParties(resolved.previousThreadId, replacement);
+  replaceOpenAgentRequestParties(resolved.previousThreadId, target.worker.workspace, replacement);
   reconcileMessageProcessingAgentRequests();
   publishManagerEvent("codex_binding_replaced", {
     gatewayId: runtime.definition.id,
@@ -4664,6 +4721,13 @@ async function deliverKnowledgeCallbackReminder(requirement: MessageProcessingRe
     runtime
   );
   messageProcessingBoard.recordWorkerReference(requirement.id, resolved.worker);
+  const warning = typeof result.data.warning === "string" ? result.data.warning.trim() : "";
+  if (warning) {
+    managerOperationalLog.record("warn", "knowledge_callback_reminder_target_replaced", {
+      action: `${requirement.id}:${worker.threadId}->${resolved.worker.threadId}`,
+      result: warning
+    });
+  }
 }
 
 async function messageProcessingBoardPayload(routeId?: string, limit?: number): Promise<Record<string, unknown>> {
@@ -4808,7 +4872,15 @@ async function sendPlanFeedbackToTask(
     title: typeof thread?.title === "string" ? thread.title : undefined,
     cwd: typeof thread?.cwd === "string" ? thread.cwd : undefined
   });
-  if (taskBinding) updatePlan(roleDir, currentPlan.id, { taskBinding });
+  if (!taskBinding) return;
+  updatePlan(roleDir, currentPlan.id, { taskBinding });
+  const warning = typeof result.data.warning === "string" ? result.data.warning.trim() : "";
+  if (warning) {
+    managerOperationalLog.record("warn", "plan_task_binding_replaced", {
+      action: `${planId}:${request.threadId}->${resolvedId}`,
+      result: warning
+    });
+  }
 }
 
 function ensurePlanSecretaryTarget(
@@ -7127,6 +7199,15 @@ function contentTypeFor(filePath: string): string {
   return "application/octet-stream";
 }
 
+function webuiCacheControl(filePath: string, indexPath: string): string {
+  if (filePath === indexPath) return "no-store";
+  // Vite names emitted assets with a content hash. They are safe to cache until
+  // their URL changes, while index.html must always select the latest bundle.
+  return /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/.test(path.basename(filePath))
+    ? "public, max-age=31536000, immutable"
+    : "no-cache";
+}
+
 function staticWebuiResponse(pathname: string, response: http.ServerResponse): boolean {
   const indexPath = path.join(webuiDistPath, "index.html");
   if (!fs.existsSync(indexPath)) {
@@ -7142,7 +7223,10 @@ function staticWebuiResponse(pathname: string, response: http.ServerResponse): b
   }
 
   if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
-    response.writeHead(200, { "content-type": contentTypeFor(candidatePath) });
+    response.writeHead(200, {
+      "content-type": contentTypeFor(candidatePath),
+      "cache-control": webuiCacheControl(candidatePath, indexPath)
+    });
     response.end(fs.readFileSync(candidatePath));
     return true;
   }
@@ -7151,7 +7235,10 @@ function staticWebuiResponse(pathname: string, response: http.ServerResponse): b
     return false;
   }
 
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store"
+  });
   response.end(fs.readFileSync(indexPath, "utf8"));
   return true;
 }
@@ -7308,9 +7395,9 @@ export async function startManager(): Promise<void> {
     MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
     mountManagerSharedResourcesRuntime(messageProcessingBoardPersistence)
   );
-  let managerPluginHost: Awaited<ReturnType<typeof getBuiltinManagerPluginHost>>;
+  let managerPluginHost: Awaited<ReturnType<typeof getManagerPluginRuntimeHost>>;
   try {
-    managerPluginHost = await getBuiltinManagerPluginHost();
+    managerPluginHost = await getManagerPluginRuntimeHost();
   } catch (error) {
     await managerSharedResourcesRuntime.unmount().catch(() => {});
     await managerCordisRoot.dispose().catch(() => {});
@@ -7337,7 +7424,7 @@ export async function startManager(): Promise<void> {
     }
     if (firstError) throw firstError;
   };
-  let managerPluginDiagnostics: ManagerPluginConfigDiagnostic[] = [];
+  let managerPluginDiagnostics: readonly ManagerPluginProfileDiagnostic[] = [];
   let managerServicesReady = false;
   let managerListenerReady = false;
   let syncActiveRabiLinkRelay = async (): Promise<void> => {};
@@ -7351,18 +7438,40 @@ export async function startManager(): Promise<void> {
   };
   const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.catalog.get(instanceId)?.status === "active";
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
-  let managerPluginDefinitions: ReturnType<typeof composeBuiltinManagerPluginDefinitions>;
-  try {
-    managerPluginDefinitions = composeBuiltinManagerPluginDefinitions(
-      builtinManagerPluginDefinitions(),
-      {
+  const lanAgentRegistry = new LanAgentRegistry({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json") });
+  const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir });
+  let detachLanAgentUpgrade: (() => void) | undefined;
+  const webPluginModules = new WebPluginModuleRegistry(path.join(rootDir, MANAGER_PLUGIN_RUNTIME_RELATIVE_PATH));
+  const managerBasePluginActivation: Record<string, (ctx: import("../runtime/cordisHost.js").RabiCordisContext) => void | Promise<void>> = {
       "manager:core": ctx => {
         const requestTracker = new ManagerPluginRequestTracker();
         ctx.effect(() => {
           const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:core", "manager.core.api", [
-            requestTracker.wrap(handleWebguiLanAccessApi)
+            requestTracker.wrap((request, requestUrl, response) => (
+              handleWebguiLanAccessApi(request, requestUrl, response)
+              || handleLanAgentApi(request, requestUrl, response, {
+                readJsonBody,
+                jsonResponse,
+                registry: lanAgentRegistry,
+                releases: lanAgentReleaseStore,
+                isReleaseRequestAuthorized: candidate => {
+                  const config = rabiGlobalConfig.read().webguiLan;
+                  const authorization = Array.isArray(candidate.headers.authorization)
+                    ? candidate.headers.authorization[0] ?? ""
+                    : candidate.headers.authorization ?? "";
+                  const match = authorization.match(/^Bearer\s+(.+)$/i);
+                  return config.enabled && webguiTokenMatches(match?.[1]?.trim() ?? "", config.accessToken);
+                },
+                isManagementRequestAuthorized: (candidate, candidateUrl) => {
+                  const config = rabiGlobalConfig.read().webguiLan;
+                  return config.enabled
+                    && webguiTokenMatches(webguiRequestToken(candidate, candidateUrl), config.accessToken);
+                }
+              })
+            ))
           ], [
-            { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] }
+            { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] },
+            { routeId: "lan-agent", kind: "prefix", pathPrefix: "/api/lan-agent/", methods: ["*"] }
           ]);
           return async () => {
             unregister();
@@ -8263,17 +8372,29 @@ export async function startManager(): Promise<void> {
           };
         }, "activate Manager desktop plugin");
       }
+  };
+  const reconcileManagerPlugins = async (
+    reason: string,
+    bootstrapLegacyManagerPlugins?: unknown
+  ): Promise<void> => {
+    const normalized = await resolveManagerPluginProfile({
+      rootDir,
+      bootstrapLegacyManagerPlugins,
+      createServices: identity => {
+        const host = createRabiManagerPluginHostApi({
+          instanceId: identity.instanceId,
+          routes: managerPluginRoutes,
+          publishManagerEvent
+        });
+        if (identity.bundle.id !== BUILTIN_MANAGER_PLUGIN_PACKAGE_ID) return host;
+        const activate = managerBasePluginActivation[identity.instanceId];
+        if (!activate) throw new Error(`No scoped Manager activation capability exists: ${identity.instanceId}.`);
+        return Object.freeze({ ...host, activate });
       }
-    );
-  } catch (error) {
-    await disposeManagerCordisRuntime().catch(() => {});
-    throw error;
-  }
-
-  const reconcileManagerPlugins = async (reason: string): Promise<void> => {
-    const normalized = normalizeManagerPluginConfig(readManagerConfig(), managerPluginDefinitions);
+    });
     managerPluginDiagnostics = normalized.diagnostics;
     const status = await managerPluginReconciler.reconcile(normalized.desired);
+    await webPluginModules.updateFromReconciliation(normalized.loaded, status);
     publishManagerEvent("plugin_reconciliation_changed", { reason, ...status, diagnostics: managerPluginDiagnostics });
     publishManagerEvent("plugin_catalog_changed", {
       reason,
@@ -8286,16 +8407,19 @@ export async function startManager(): Promise<void> {
     for (const diagnostic of managerPluginDiagnostics) console.warn(diagnostic.message);
   };
 
+  const startupPluginConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
   try {
-    await reconcileManagerPlugins("manager startup");
+    await reconcileManagerPlugins("manager startup", startupPluginConfig.managerPlugins);
     if (!managerPluginActive("manager:core")) {
       throw new Error("Required Manager plugin failed to activate: manager:core");
     }
   } catch (error) {
+    lanAgentRegistry.close();
     await disposeManagerCordisRuntime().catch(() => {});
     throw error;
   }
   let configWatcher: ConfigWatcher | null = null;
+  let pluginBundleWatcher: PluginBundleWatcher | null = null;
   let removeSignalHandlers = (): void => {};
   let managerResourcesStopped = false;
   let server: http.Server | undefined;
@@ -8305,6 +8429,10 @@ export async function startManager(): Promise<void> {
     managerResourcesStopped = true;
     removeSignalHandlers();
     configWatcher?.close();
+    pluginBundleWatcher?.close();
+    detachLanAgentUpgrade?.();
+    detachLanAgentUpgrade = undefined;
+    lanAgentRegistry.close();
     closeManagerEventClients();
   }
 
@@ -8396,6 +8524,10 @@ export async function startManager(): Promise<void> {
             await reconcileManagerPlugins("manual API request");
             return managerPluginReconciler.status();
           }
+        },
+        webModules: {
+          list: async () => webPluginModules.list(),
+          read: (id, rev, relativePath) => webPluginModules.read(id, rev, relativePath)
         }
       })) {
         return;
@@ -8426,6 +8558,10 @@ export async function startManager(): Promise<void> {
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
+  detachLanAgentUpgrade = lanAgentRegistry.attach(activeServer, {
+    getToken: () => rabiGlobalConfig.read().webguiLan.accessToken,
+    enabled: () => rabiGlobalConfig.read().webguiLan.enabled
+  });
 
   await listenManagerServer(activeServer, managerPort, managerHost);
 
@@ -8441,6 +8577,18 @@ export async function startManager(): Promise<void> {
   startActiveNapcatSupervisor();
   startActivePlanFeedbackRecovery();
   setImmediate(() => {
+    void (async () => {
+      const persistedConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
+      const hasLegacyManagerPlugins = Object.hasOwn(persistedConfig, "managerPlugins");
+      const initialized = await initializeManagerPluginProfile(rootDir, persistedConfig.managerPlugins);
+      if (hasLegacyManagerPlugins) {
+        delete persistedConfig.managerPlugins;
+        writeManagerConfig(persistedConfig);
+      }
+      if (initialized.wroteConfiguration || hasLegacyManagerPlugins) {
+        await reconcileManagerPlugins("post-listener plugin profile initialization");
+      }
+    })().catch(error => console.warn(`Manager plugin profile initialization failed: ${error instanceof Error ? error.message : String(error)}`));
     void migrateRolePlanLayoutsAfterStartup().finally(() => { void prewarmRolePlanCatalogs(); });
   });
   configWatcher = managerShouldAutostart && managerConfigWatcherEnabled()
@@ -8449,6 +8597,7 @@ export async function startManager(): Promise<void> {
   if (!configWatcher) {
     console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
   }
+  pluginBundleWatcher = startPluginBundleWatcher(reconcileManagerPlugins);
 
   let shuttingDown = false;
 

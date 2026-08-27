@@ -86,7 +86,7 @@ Typical causes are name-as-identity, delayed indexing treated as absence, concur
 
 ### The first message works and the second creates a duplicate
 
-Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Building the name index directly from SQLite is equally unsafe: lookup returns zero even though the sidebar still shows the task, then creates a duplicate. Reuse a valid unarchived ID in the same workspace regardless of title metadata. For no-ID lookup and dropdown labels, use Desktop app-server `thread/list` and its `thread.name`; merge local ID/cwd/archive/time/owner state by exact ID. If the saved ID is archived, a real delivery creates a new task and persists the replacement binding without locating or reusing another same-name task. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
+Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Building the name index directly from SQLite is equally unsafe: lookup returns zero even though the sidebar still shows the task, then creates a duplicate. Reuse a valid unarchived ID in the same workspace regardless of title metadata. For no-ID lookup and dropdown labels, use only `session_index.jsonl.thread_name`, the same Name shown in the Desktop left sidebar. Use local task state only to merge ID, workspace, archive, recency, and owner state by exact ID. If the saved ID is archived, a real delivery creates a new task and persists the replacement binding without locating or reusing another same-name task. If Desktop wake-and-retry still fails and the exact ID can no longer be read from local state, create a replacement scoped to the old ID, redeliver, and return a warning; keep the original failure when the task still exists. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
 
 ### The settings page becomes slow or scans continuously
 
@@ -133,7 +133,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 
 ### Codex Desktop
 
-- Read the Desktop-visible catalog from short-lived app-server `thread/list`; use `thread.name` for labels and no-ID lookup, then merge local ID/cwd/archive/time/owner state by exact ID without taking ownership.
+- Read the visible Name from the Desktop sidebar index. Use local task state for pagination, workspace, archive, recency, and owner data by exact ID without allowing its metadata title to override the sidebar Name.
 - Persist visible name, full task ID, and workspace as one binding.
 - Keep a valid ID/workspace binding even when owner or SQLite title metadata changes.
 - For exact same-name tasks in the workspace, bind the unique latest `updatedAt`; create only when none exist and require selection on a latest-time tie.

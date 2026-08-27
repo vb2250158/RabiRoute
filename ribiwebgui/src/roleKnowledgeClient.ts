@@ -137,13 +137,31 @@ type ManagerEnvelope<T> = {
   data?: T;
 };
 
-async function managerData<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
-  const body = await response.json().catch(() => ({})) as ManagerEnvelope<T>;
-  if (!response.ok || body.code !== 0 || body.data == null) {
-    throw new Error(body.message || `Manager request failed (HTTP ${response.status}).`);
+export const ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS = 12_000;
+
+async function managerData<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const controller = new AbortController();
+  const inheritedSignal = init.signal;
+  const abortInheritedRequest = () => controller.abort(inheritedSignal?.reason);
+  if (inheritedSignal?.aborted) abortInheritedRequest();
+  else inheritedSignal?.addEventListener("abort", abortInheritedRequest, { once: true });
+  const timeout = globalThis.setTimeout(() => controller.abort(), ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(path, { ...init, signal: controller.signal });
+    const body = await response.json().catch(() => ({})) as ManagerEnvelope<T>;
+    if (!response.ok || body.code !== 0 || body.data == null) {
+      throw new Error(body.message || `Manager request failed (HTTP ${response.status}).`);
+    }
+    return body.data;
+  } catch (error) {
+    if (controller.signal.aborted && !inheritedSignal?.aborted) {
+      throw new Error(`Manager request timed out after ${ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS}ms.`);
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+    inheritedSignal?.removeEventListener("abort", abortInheritedRequest);
   }
-  return body.data;
 }
 
 export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
@@ -195,6 +213,10 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
   };
 }
 
+export async function loadRoleKnowledgeFileCounts(roleId: string): Promise<RoleKnowledgeFileCounts> {
+  return managerData<RoleKnowledgeFileCounts>(`/api/roles/${encodeURIComponent(roleId)}/counts`, { cache: "no-store" });
+}
+
 export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePlan[]; memory: RoleMemoryPayload }> {
   const encodedRoleId = encodeURIComponent(roleId);
   const [plans, memory] = await Promise.all([
@@ -202,17 +224,6 @@ export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePl
     managerData<RoleMemoryPayload>(`/api/roles/${encodedRoleId}/memory`)
   ]);
   return { plans: plans.map(normalizeRolePlanFromManager), memory };
-}
-
-export async function loadRoleKnowledgeFileCounts(roleId: string): Promise<RoleKnowledgeFileCounts> {
-  return managerData<RoleKnowledgeFileCounts>(`/api/roles/${encodeURIComponent(roleId)}/counts`);
-}
-
-export async function loadPendingMemoryConsolidationRunCount(roleId: string): Promise<number> {
-  const runs = await managerData<Array<{ status?: string }>>(
-    `/api/roles/${encodeURIComponent(roleId)}/memory/consolidation-runs`
-  );
-  return runs.filter((run) => run?.status === "requested").length;
 }
 
 export async function loadPlanHistory(roleId: string, planId: string): Promise<RolePlanHistoryRecord[]> {
@@ -393,6 +404,20 @@ export async function loadRoleMemoryCounts(roleId: string): Promise<RoleMemoryPa
     archived: archived.length,
     consolidationRuns: 0
   };
+}
+
+export async function loadPendingMemoryConsolidationRunCount(roleId: string): Promise<number> {
+  const runs = await managerData<unknown>(
+    `/api/roles/${encodeURIComponent(roleId)}/memory/consolidation-runs`,
+    { cache: "no-store" }
+  );
+  if (!Array.isArray(runs)) throw new Error("Manager returned an invalid memory consolidation run list.");
+  return runs.filter((run) => (
+    run !== null
+    && typeof run === "object"
+    && "status" in run
+    && run.status === "requested"
+  )).length;
 }
 
 export async function loadRoleMemoryPage(

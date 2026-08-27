@@ -1,195 +1,146 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import type { ManagerPluginDefinition } from "../runtime/managerPluginRuntime.js";
-import { builtinManagerPluginDefinitions } from "./builtinManagerPlugins.js";
-import type { ManagerConfig } from "./configRepository.js";
-import { normalizeManagerPluginConfig } from "./managerPluginConfig.js";
+import {
+  BUILTIN_MANAGER_PLUGIN_PACKAGE_ID,
+  initializeManagerPluginProfile,
+  MANAGER_PLUGIN_PROFILE_RELATIVE_PATH,
+  resolveManagerPluginProfile
+} from "./managerPluginConfig.js";
 
-test("Manager plugin config enables every builtin plugin by default with stable desired revisions", () => {
-  const first = normalizeManagerPluginConfig({});
-  const second = normalizeManagerPluginConfig({});
-  const builtinIds = builtinManagerPluginDefinitions().map(definition => definition.instanceId);
+function packageSource(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "plugins", "packages", BUILTIN_MANAGER_PLUGIN_PACKAGE_ID, "0.2.1");
+}
 
-  assert.deepEqual(first.diagnostics, []);
-  assert.deepEqual(first.desired.map(item => item.definition.instanceId), builtinIds);
-  assert.equal(first.desired.every(item => item.enabled), true);
+async function installBaseBundle(root: string): Promise<void> {
+  const target = path.join(root, "plugins", "packages", encodeURIComponent(BUILTIN_MANAGER_PLUGIN_PACKAGE_ID), "0.2.1");
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.cp(packageSource(), target, { recursive: true });
+}
+
+function baseServices() {
+  return { activate: async () => {} };
+}
+
+test("post-listener profile initialization migrates legacy enabled values once into Bundle-owned defaults", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-manager-profile-"));
+  await installBaseBundle(root);
+  const initialized = await initializeManagerPluginProfile(root, {
+    "manager:desktop": { enabled: false },
+    "manager:core": { enabled: false }
+  });
+  assert.equal(initialized.wroteConfiguration, true);
+  assert.equal(initialized.profile.plugins.length, 26);
   assert.deepEqual(
-    first.desired.map(item => item.revision),
-    second.desired.map(item => item.revision)
+    initialized.profile.plugins
+      .filter(item => item.id === "manager:core" || item.id === "manager:desktop")
+      .map(item => [item.id, item.package, item.enabled]),
+    [
+      ["manager:core", BUILTIN_MANAGER_PLUGIN_PACKAGE_ID, true],
+      ["manager:desktop", BUILTIN_MANAGER_PLUGIN_PACKAGE_ID, false]
+    ]
   );
-  assert.equal(first.desired.every(item => /^[a-f0-9]{64}$/.test(item.revision)), true);
+  const saved = JSON.parse(await fs.readFile(path.join(root, MANAGER_PLUGIN_PROFILE_RELATIVE_PATH), "utf8"));
+  assert.equal(saved.schemaVersion, 1);
+  assert.equal(saved.plugins.length, 26);
 });
 
-test("Manager plugin config may disable optional builtin plugins and changes only their desired revision", () => {
-  const defaults = normalizeManagerPluginConfig({});
-  const normalized = normalizeManagerPluginConfig({
-    managerPlugins: {
-      "manager:desktop": { enabled: false }
-    }
+test("an existing Profile stays authoritative over startup-only managerPlugins values", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-manager-profile-"));
+  await installBaseBundle(root);
+  await initializeManagerPluginProfile(root);
+  const resolved = await resolveManagerPluginProfile({
+    rootDir: root,
+    bootstrapLegacyManagerPlugins: { "manager:desktop": { enabled: false } },
+    createServices: () => baseServices()
   });
-  const defaultById = new Map(defaults.desired.map(item => [item.definition.instanceId, item]));
-  const normalizedById = new Map(normalized.desired.map(item => [item.definition.instanceId, item]));
-
-  assert.equal(normalizedById.get("manager:desktop")?.enabled, false);
-  assert.notEqual(
-    normalizedById.get("manager:desktop")?.revision,
-    defaultById.get("manager:desktop")?.revision
-  );
-  for (const [instanceId, item] of normalizedById) {
-    if (instanceId === "manager:desktop") continue;
-    assert.equal(item.enabled, true);
-    assert.equal(item.revision, defaultById.get(instanceId)?.revision);
-  }
+  assert.equal(resolved.desired.find(item => item.definition.instanceId === "manager:desktop")?.enabled, true);
 });
 
-test("Manager core remains enabled and reports attempts to disable it", () => {
-  const normalized = normalizeManagerPluginConfig({
-    managerPlugins: {
-      "manager:core": { enabled: false }
-    }
+test("normal reconciliation reads only the Profile and never writes its bootstrap compatibility data", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-manager-profile-"));
+  await installBaseBundle(root);
+  const first = await resolveManagerPluginProfile({
+    rootDir: root,
+    bootstrapLegacyManagerPlugins: { "manager:desktop": { enabled: false } },
+    createServices: () => baseServices()
   });
-  const core = normalized.desired.find(item => item.definition.instanceId === "manager:core");
+  assert.equal(first.profile.plugins.length, 26);
+  assert.equal(first.desired.find(item => item.definition.instanceId === "manager:desktop")?.enabled, false);
+  await assert.rejects(() => fs.stat(path.join(root, MANAGER_PLUGIN_PROFILE_RELATIVE_PATH)), { code: "ENOENT" });
 
-  assert.equal(core?.enabled, true);
-  assert.deepEqual(normalized.diagnostics, [{
-    code: "required_plugin_cannot_disable",
+  await initializeManagerPluginProfile(root);
+  const profilePath = path.join(root, MANAGER_PLUGIN_PROFILE_RELATIVE_PATH);
+  const before = await fs.readFile(profilePath, "utf8");
+  const resolved = await resolveManagerPluginProfile({ rootDir: root, createServices: () => baseServices() });
+  assert.equal(resolved.desired.length, 26);
+  assert.equal(await fs.readFile(profilePath, "utf8"), before);
+});
+
+test("legacy base package rows boot in memory, then leave both Profile and Patch sources after listener initialization", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-manager-profile-"));
+  await installBaseBundle(root);
+  const profilePath = path.join(root, MANAGER_PLUGIN_PROFILE_RELATIVE_PATH);
+  const patchDirectory = path.join(root, "data", "plugins", "manager", "profile.d");
+  const patchPath = path.join(patchDirectory, "20-legacy-package.json");
+  await fs.mkdir(patchDirectory, { recursive: true });
+  await fs.writeFile(profilePath, JSON.stringify({
+    schemaVersion: 1,
+    plugins: [{ id: "manager:core", package: "rabi.manager.builtin", version: "0.2.1", enabled: true, config: {} }]
+  }), "utf8");
+  await fs.writeFile(patchPath, JSON.stringify({
+    schemaVersion: 1,
+    operations: [{ op: "upsert", plugin: { id: "manager:desktop", package: "rabi.manager.builtin", version: "0.2.1", enabled: false, config: {} } }]
+  }), "utf8");
+
+  const beforeProfile = await fs.readFile(profilePath, "utf8");
+  const beforePatch = await fs.readFile(patchPath, "utf8");
+  const booted = await resolveManagerPluginProfile({ rootDir: root, createServices: () => baseServices() });
+  assert.deepEqual(booted.profile.plugins.map(item => [item.id, item.package, item.version]), [
+    ["manager:core", BUILTIN_MANAGER_PLUGIN_PACKAGE_ID, "0.2.1"],
+    ["manager:desktop", BUILTIN_MANAGER_PLUGIN_PACKAGE_ID, "0.2.1"]
+  ]);
+  assert.equal(await fs.readFile(profilePath, "utf8"), beforeProfile);
+  assert.equal(await fs.readFile(patchPath, "utf8"), beforePatch);
+
+  const initialized = await initializeManagerPluginProfile(root);
+  assert.equal(initialized.wroteConfiguration, true);
+  assert.equal(initialized.profile.plugins[0]?.package, BUILTIN_MANAGER_PLUGIN_PACKAGE_ID);
+  assert.equal(initialized.profile.plugins[0]?.version, "0.2.1");
+  assert.doesNotMatch(await fs.readFile(profilePath, "utf8"), /rabi\.manager\.builtin/);
+  assert.doesNotMatch(await fs.readFile(patchPath, "utf8"), /rabi\.manager\.builtin/);
+});
+
+test("a base Bundle source revision changes the Manager desired revision", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-manager-profile-"));
+  await installBaseBundle(root);
+  await initializeManagerPluginProfile(root);
+  const first = await resolveManagerPluginProfile({ rootDir: root, createServices: () => baseServices() });
+  const firstRevision = first.desired.find(item => item.definition.instanceId === "manager:core")!.revision;
+  const entry = path.join(root, "plugins", "packages", encodeURIComponent(BUILTIN_MANAGER_PLUGIN_PACKAGE_ID), "0.2.1", "index.mjs");
+  await fs.appendFile(entry, "\n// revision test\n", "utf8");
+  const second = await resolveManagerPluginProfile({ rootDir: root, createServices: () => baseServices() });
+  assert.notEqual(second.desired.find(item => item.definition.instanceId === "manager:core")!.revision, firstRevision);
+});
+
+test("Manager core cannot be disabled by a Profile patch", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "rabiroute-manager-profile-"));
+  await installBaseBundle(root);
+  await initializeManagerPluginProfile(root);
+  const patchDirectory = path.join(root, "data", "plugins", "manager", "profile.d");
+  await fs.mkdir(patchDirectory, { recursive: true });
+  await fs.writeFile(path.join(patchDirectory, "10-disable.json"), JSON.stringify({
+    schemaVersion: 1,
+    operations: [{ op: "upsert", plugin: { id: "manager:core", package: BUILTIN_MANAGER_PLUGIN_PACKAGE_ID, version: "0.2.1", enabled: false } }]
+  }), "utf8");
+  const resolved = await resolveManagerPluginProfile({ rootDir: root, createServices: () => baseServices() });
+  assert.equal(resolved.desired.find(item => item.definition.instanceId === "manager:core")?.enabled, true);
+  assert.deepEqual(resolved.diagnostics, [{
+    code: "core_cannot_disable",
     instanceId: "manager:core",
     message: "Required Manager plugin cannot be disabled: manager:core"
   }]);
-});
-
-
-test("Manager plugin config ignores unknown instances and executable configuration fields", () => {
-  const config = {
-    managerPlugins: {
-      "manager:desktop": {
-        enabled: false,
-        path: "C:/plugins/desktop.js",
-        package: "third-party-plugin",
-        command: "node plugin.js",
-        url: "https://example.invalid/plugin.js",
-        env: { TOKEN: "secret" }
-      },
-      "package:unknown": {
-        enabled: true,
-        url: "https://example.invalid/unknown.js"
-      }
-    }
-  } as unknown as ManagerConfig;
-
-  const normalized = normalizeManagerPluginConfig(config);
-
-  assert.equal(
-    normalized.desired.some(item => item.definition.instanceId === "package:unknown"),
-    false
-  );
-  assert.equal(
-    normalized.desired.find(item => item.definition.instanceId === "manager:desktop")?.enabled,
-    false
-  );
-  assert.deepEqual(normalized.diagnostics, [
-    {
-      code: "unsupported_plugin_config",
-      instanceId: "manager:desktop",
-      message: "Unsupported Manager plugin config fields for manager:desktop: command, env, package, path, url"
-    },
-    {
-      code: "unknown_plugin",
-      instanceId: "package:unknown",
-      message: "Unknown Manager plugin instance: package:unknown"
-    }
-  ]);
-  assert.equal(JSON.stringify(normalized.desired).includes("example.invalid"), false);
-  assert.equal(JSON.stringify(normalized.desired).includes("third-party-plugin"), false);
-  assert.equal(JSON.stringify(normalized.desired).includes("TOKEN"), false);
-});
-
-
-test("Manager plugin config accepts only boolean enabled values", () => {
-  const config = {
-    managerPlugins: {
-      "manager:speech": { enabled: "false" },
-      "manager:performance": "disabled"
-    }
-  } as unknown as ManagerConfig;
-
-  const normalized = normalizeManagerPluginConfig(config);
-
-  assert.equal(
-    normalized.desired.find(item => item.definition.instanceId === "manager:speech")?.enabled,
-    true
-  );
-  assert.equal(
-    normalized.desired.find(item => item.definition.instanceId === "manager:performance")?.enabled,
-    true
-  );
-  assert.deepEqual(normalized.diagnostics, [
-    {
-      code: "unsupported_plugin_config",
-      instanceId: "manager:performance",
-      message: "Manager plugin config must contain only an optional boolean enabled field: manager:performance"
-    },
-    {
-      code: "unsupported_plugin_config",
-      instanceId: "manager:speech",
-      message: "Unsupported Manager plugin config fields for manager:speech: enabled"
-    }
-  ]);
-});
-
-test("Manager plugin config revisions include dependency contracts", () => {
-  const base = {
-    instanceId: "manager:consumer",
-    manifest: {
-      id: "builtin:manager/consumer",
-      name: "Consumer",
-      version: "1.0.0",
-      kind: "builtin",
-      hosts: ["manager"]
-    },
-    provides: ["manager.consumer"],
-    requires: ["manager.provider"],
-    optional: ["manager.optional"]
-  } satisfies ManagerPluginDefinition;
-  const first = normalizeManagerPluginConfig({}, [base]).desired[0]!;
-  const changedProvides = normalizeManagerPluginConfig({}, [{
-    ...base,
-    provides: ["manager.consumer.v2"]
-  }]).desired[0]!;
-  const changedRequires = normalizeManagerPluginConfig({}, [{
-    ...base,
-    requires: ["manager.provider.v2"]
-  }]).desired[0]!;
-  const changedOptional = normalizeManagerPluginConfig({}, [{
-    ...base,
-    optional: ["manager.optional.v2"]
-  }]).desired[0]!;
-
-  assert.notEqual(changedProvides.revision, first.revision);
-  assert.notEqual(changedRequires.revision, first.revision);
-  assert.notEqual(changedOptional.revision, first.revision);
-});
-
-test("builtin Manager plugins declare one provider per capability and explicit critical dependencies", () => {
-  const definitions = builtinManagerPluginDefinitions();
-  const providerByCapability = new Map<string, string>();
-  for (const definition of definitions) {
-    for (const capability of definition.provides ?? []) {
-      assert.equal(providerByCapability.has(capability), false, capability);
-      providerByCapability.set(capability, definition.instanceId);
-    }
-  }
-  const byId = new Map(definitions.map(definition => [definition.instanceId, definition]));
-
-  assert.deepEqual(byId.get("manager:rabilink-relay")?.requires, ["manager.core", "manager.persona"]);
-  assert.deepEqual(byId.get("manager:napcat-supervisor")?.requires, ["manager.core", "manager.napcat-control"]);
-  assert.deepEqual(byId.get("manager:message-processing-automation")?.requires, [
-    "manager.core",
-    "manager.message-processing-control"
-  ]);
-  assert.deepEqual(byId.get("manager:diagnostics")?.optional, [
-    "manager.gateway-runtime",
-    "manager.performance",
-    "manager.message-processing-control"
-  ]);
 });

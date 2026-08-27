@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -101,6 +102,7 @@ async function stopManager(child) {
 
 async function launchBuiltManager() {
   const port = await reserveLoopbackPort();
+  const instanceLockRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-lock-"));
   const child = spawn(process.execPath, [MANAGER_ENTRY], {
     cwd: REPO_ROOT,
     env: {
@@ -109,7 +111,8 @@ async function launchBuiltManager() {
       GATEWAY_MANAGER_PORT: String(port),
       RABIROUTE_MANAGER_AUTOSTART: "0",
       RABIROUTE_MANAGER_READ_ONLY: "1",
-      REMOTE_AGENT_DISCOVERABLE: "0"
+      REMOTE_AGENT_DISCOVERABLE: "0",
+      RABIROUTE_MANAGER_INSTANCE_LOCK_DIR: instanceLockRoot
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
@@ -123,32 +126,44 @@ async function launchBuiltManager() {
   }
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    stop: () => stopManager(child)
+    stop: async () => {
+      await stopManager(child);
+      fs.rmSync(instanceLockRoot, { recursive: true, force: true });
+    }
   };
 }
 
 async function requestJson(fetchImpl, baseUrl, pathname, boundaryName = pathname) {
-  let response;
-  try {
-    response = await fetchImpl(`${baseUrl}${pathname}`, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(30_000)
-    });
-  } catch (error) {
-    throw new Error(
-      `Built Manager read boundary did not complete for ${boundaryName}: ${error instanceof Error ? error.message : String(error)}`
-    );
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(`${baseUrl}${pathname}`, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(30_000)
+      });
+    } catch (error) {
+      throw new Error(
+        `Built Manager read boundary did not complete for ${boundaryName}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    const text = await response.text();
+    let body;
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`Built Manager returned non-JSON for ${boundaryName} (HTTP ${response.status}).`);
+    }
+    if (response.status === 200) return { status: response.status, body };
+    const busy = response.status === 503 && body?.message === "Manager read workers are busy; retry shortly.";
+    if (busy && attempt < 4) {
+      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      continue;
+    }
+    const message = typeof body?.message === "string" ? `: ${body.message}` : "";
+    throw new Error(`Built Manager read boundary failed for ${boundaryName} (HTTP ${response.status})${message}.`);
   }
-  const text = await response.text();
-  let body;
-  try {
-    body = text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`Built Manager returned non-JSON for ${boundaryName} (HTTP ${response.status}).`);
-  }
-  if (response.status !== 200) throw new Error(`Built Manager read boundary failed for ${boundaryName} (HTTP ${response.status}).`);
-  return { status: response.status, body };
+  throw new Error(`Built Manager read boundary exhausted retries: ${boundaryName}.`);
 }
 
 function endpointCheck(id, response, count) {

@@ -11,7 +11,7 @@
 ## 不可妥协的用户合同
 
 1. 已绑定 ID 存在、workspace 一致且任务未归档时，直接投递到该任务，不创建新任务；Desktop 标题或 SQLite `title` 变化不影响绑定。保存 ID 指向已归档任务时，不再定位或复用其它同名任务；真实投递或保存提交点幂等创建新任务，更新绑定后投递到新任务。
-2. 计划的审批、执行引导和 QA 失败续投必须复用同一计划。绑定任务归档时，按保存标题创建替代任务，成功投递后只更新该计划原有 `taskBinding`；不得复用同名有效任务或创建重复计划。
+2. 计划的审批、执行引导和 QA 失败续投必须复用同一计划。绑定任务归档，或 Desktop 已重试唤醒但精确 ID 已无法从本地状态读取时，按保存标题创建替代任务，成功投递后只更新该计划原有 `taskBinding` 并返回警告；不得复用同名有效任务或创建重复计划。
 3. 已绑定 ID 为空、非法或确实不存在时，按 `保存名称 + 规范化 workspace` 查找：一个或多个候选按 `updatedAt` 降序重绑唯一最新任务，零匹配才幂等创建一次；最大时间并列时让用户选择。
 4. 真实消息只能交给 Desktop 当前任务 owner；不得启动备用 Runtime、不得恢复同一个 ID 后在另一个 Runtime 中执行。
 5. 设置页选择或输入名称并保存时，必须完成解析/创建，并把可见名称、完整任务 ID、workspace 作为一个配对持久化。
@@ -40,7 +40,7 @@ flowchart TD
     R["RabiRoute AgentPacket"] --> S["统一 Session Resolver"]
     S --> V{"保存 ID 存在且 workspace 匹配？"}
     V -->|"未归档"| B["复用现有绑定"]
-    V -->|"已归档"| C2["按旧 ID 隔离的幂等键创建新任务"]
+    V -->|"已归档或投递后确认已删除"| C2["按旧 ID 隔离的幂等键创建新任务"]
     V -->|"不存在"| L["按名称 + workspace 查找未归档任务"]
     L -->|"一个或多个同名"| N{"是否有唯一最新 updatedAt？"}
     L -->|"零匹配且原 ID 不存在"| C["幂等创建一个空任务"]
@@ -62,12 +62,12 @@ flowchart TD
 
 - 用户界面显示 `任务名称 + 最后会话时间`，不要求用户查看或输入 UUID。
 - 内部身份是 `完整任务 ID + workspace`；可见名称用于显示、无 ID 时查找和用户显式切换目标。
-- Codex 的用户可见名称以 Desktop 左侧聊天栏为准：全量扫描使用 app-server `thread/list` 的 `thread.name`，按 ID 读取使用同一侧边栏会话索引；两者都通过 `codexDesktopBridge.ts` 的统一任务读取模型对外提供。SQLite `threads.title` 可能是首条 prompt，只能补充 owner 状态，不能成为任务名、下拉名称或同名查找依据。
+- Codex 的用户可见名称只以 Desktop 左侧聊天栏为准：全量扫描和按 ID 读取都使用同一侧边栏会话索引的 `thread_name`，并通过 `codexDesktopBridge.ts` 的统一任务读取模型对外提供。SQLite `threads.title` 可能是首条 prompt，只能补充 owner 状态，不能成为任务名、下拉名称或同名查找依据。
 - 最后时间仅用于展示；不能用“最新任务”替代精确绑定。
 - 列表必须支持全部任务或可靠分页，不能只展示前 20/100 条却声称是全部。
 - 同名且同 workspace 的多个任务必须按可解析的 `updatedAt` 自动取唯一最新者，不能依赖数据库返回顺序；最大时间并列或都无有效时间时才要求选择。
 - 创建成功、首投失败属于“已创建、待重试投递”，不是“不存在会话”。
-- 投递状态必须区分：内部过渡态 `accepted` 只表示 RabiRoute 已开始走 Desktop 主链；只有目标 Desktop owner 的 `start/steer` 返回成功后才能记为 `delivered`；解析、owner 加载或 IPC 失败记为 `failed`。不得用 Route 受理记录冒充 Desktop 已接收。
+- 投递状态必须区分：内部过渡态 `accepted` 只表示 RabiRoute 已开始走 Desktop 主链；每次真实 Desktop 投递都附带 UUID `deliveryId`，只有该编号已写入目标任务 rollout 才能记为 `delivered`。`start/steer` 的 IPC 成功但 rollout 没有编号时，`steer` 必须改走一次 `start`；仍无编号则记为 `failed`。不得把 Route 受理、IPC 成功或仅选中任务冒充 Desktop 已接收。
 - 已匹配的普通消息端事件应直接投递：先尝试 `steer` 当前活跃 turn，只在 turn 已结束/不存在时 `start`。Heartbeat 可由专用忙碌跳过开关例外；语音可由专用热/关键词策略例外。
 - 任务是否仍在运行不能只看 Desktop IPC 内存集合。Manager 按时间合并连接内活跃标记与 rollout 最近生命周期事件：较新的完成/中止/失败事件覆盖旧活跃标记，新一轮 IPC 活跃时间晚于旧 terminal 时仍保持运行；连接断开立即清空该连接的活跃标记。
 
@@ -80,6 +80,8 @@ flowchart TD
 - `4xx/5xx`：Route 校验、Desktop owner 加载、IPC 或投递超时失败。
 
 这个合同只证明目标 owner 收到了消息，不证明 Agent 已经生成回答、Outbox 已回传或 TTS 已播放。
+
+闲置任务开启新 turn 时，Desktop IPC 的 `thread-follower-start-turn` 必须使用协议版本 `2`；`thread-follower-steer-turn` 保持版本 `1`。版本不匹配会让已加载的 owner 被路由器误判为 `no-client-found`。
 
 ## 自动初始化事务
 
@@ -105,6 +107,8 @@ flowchart TD
 | 保存 ID 指向已归档任务，另有同名有效任务 | 新建任务并更新绑定；不复用同名任务 |
 | 保存 ID 指向已归档任务且没有同名有效任务 | 新建任务、更新绑定并投递 |
 | ID 非法或已删除，名称唯一存在 | 自动重绑；任务数不变 |
+| 已绑定 ID 在投递后确认已删除 | 创建替代任务、更新原计划 `taskBinding`、投递并返回警告 |
+| IPC 返回成功但目标 rollout 没有本次 `deliveryId` | 闲置任务从 `steer` 回退到 `start`；仍无编号则失败，不标记已投递 |
 | 名称不存在 | 创建一个、保存 ID、投递到该任务 |
 | 创建后 Desktop 索引延迟 | 有限等待同一 ID；不创建第二个 |
 | 并发两次首次投递 | single-flight；只创建一个任务 |
@@ -127,7 +131,7 @@ flowchart TD
 1. 先写清用户看到消息的位置、唯一 owner、会话身份和禁止 fallback。
 2. 先做独立生命周期与 4510 安全测试，再做会话 UI。
 3. 共用一个 resolver 给设置保存、真实投递和自动初始化，禁止各写一套查找逻辑。
-4. 用测试锁定 ID + workspace 稳定续投、标题改写、归档后新建与绑定更新、Rabi 显式改绑、single-flight、索引延迟、全量列表和扫描次数。
+4. 用测试锁定 ID + workspace 稳定续投、标题改写、归档或投递后确认删除时新建与绑定更新、Rabi 显式改绑、single-flight、索引延迟、全量列表和扫描次数。
 5. 完成 Desktop 实机投递后才能标记 `verified`；仅扫描成功或后台 Runtime 成功都不算。
 
 配套实现规范见[标准 Agent 端接入需求](agent-adapter-standard-requirements.md)，历史失误与原因见[Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md)。

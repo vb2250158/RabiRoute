@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  agentThreadDeliveryStateForTest,
   agentThreadRequestFailureData,
   handleAgentThreadRequest,
   listAgentThreadsFromIndexForTest,
@@ -44,6 +45,12 @@ function messageSourceFor(sessionId: string, sessionName = "测试来源任务")
     sessionName
   };
 }
+
+test("Codex rollout receipt makes delivery readback accepted when normal task read omits the marker", () => {
+  const deliveryId = "12345678-1234-4567-8123-123456789abc";
+  assert.equal(agentThreadDeliveryStateForTest({ active: false, turns: [] }, deliveryId, true), "accepted");
+  assert.equal(agentThreadDeliveryStateForTest({ active: false, turns: [] }, deliveryId, false), "missing");
+});
 
 test("Agent task read reports an exact delivery marker without treating idle as accepted", async () => {
   const deliveryId = "12345678-1234-4567-8123-123456789abc";
@@ -537,6 +544,9 @@ test("Agent thread send starts a follow-up turn through the driver", async () =>
   assert.equal(sent.cwd, path.resolve(process.cwd()));
   assert.equal(sent.sandbox, "workspace-write");
   assert.match(sent.prompt, /^\[消息源\]\n消息源类型：系统\n事件类型：test\n事件名称：测试投递\n事件 ID：agent-thread-test/);
+  const deliveryId = String((result.data.delivery as Record<string, unknown>).deliveryId);
+  assert.match(deliveryId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.ok(sent.prompt.includes(`[投递编号]\ndeliveryId: ${deliveryId}`));
   assert.doesNotMatch(sent.prompt, /PangHu 只使用正式 Main、Release 和 Art/);
   assert.match(sent.prompt, /\[消息内容\]\n补充新证据/);
 });
@@ -863,7 +873,10 @@ test("Agent-to-Agent send shows the verified source task, Agent type, and sessio
   assert.equal(result.statusCode, 202);
   assert.equal(result.data.ok, true);
   assert.equal(result.data.status, "delivered");
-  assert.deepEqual(result.data.delivery, {
+  const delivery = { ...(result.data.delivery as Record<string, unknown>) };
+  assert.match(String(delivery.deliveryId), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  delete delivery.deliveryId;
+  assert.deepEqual(delivery, {
     status: "delivered",
     targetThreadId,
     acceptedBy: "codex_desktop_owner",
@@ -945,6 +958,96 @@ test("Agent thread send replaces an archived bound task before delivery", async 
   assert.deepEqual((result.data.thread as { id: string }).id, replacementThreadId);
 });
 
+test("Agent thread send replaces a task confirmed missing after Desktop owner delivery and returns a warning", async () => {
+  const missingThreadId = "019f0000-0000-7000-8000-000000000107";
+  const replacementThreadId = "019f0000-0000-7000-8000-000000000108";
+  const title = "星海建造师 协助处理消息2";
+  let reads = 0;
+  let createCount = 0;
+  const sent: string[] = [];
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async (threadId) => {
+      assert.equal(threadId, missingThreadId);
+      reads += 1;
+      if (reads === 1) {
+        return {
+          id: missingThreadId,
+          title,
+          cwd: process.cwd(),
+          updatedAt: "2026-08-25T08:00:00.000Z"
+        };
+      }
+      throw new Error(`Codex Desktop task was not found: ${threadId}`);
+    },
+    create: async (params) => {
+      createCount += 1;
+      return {
+        id: replacementThreadId,
+        title: params.title,
+        cwd: params.cwd,
+        updatedAt: "2026-08-25T08:01:00.000Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async ({ threadId }) => {
+      if (threadId === missingThreadId) throw new Error(`no rollout found for thread id ${threadId}`);
+      sent.push(threadId);
+    }
+  };
+
+  const response = await handleAgentThreadRequest({
+    action: "send",
+    threadId: missingThreadId,
+    title,
+    createIfMissing: true,
+    prompt: "原任务消失后继续投递",
+    cwd: process.cwd(),
+    messageSource: defaultSystemMessageSource
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(createCount, 1);
+  assert.deepEqual(sent, [replacementThreadId]);
+  assert.equal(response.statusCode, 202);
+  assert.equal(response.data.status, "delivered");
+  assert.equal(response.data.threadId, replacementThreadId);
+  assert.equal(response.data.resolution, "created");
+  assert.equal(response.data.previousThreadId, missingThreadId);
+  assert.match(String(response.data.warning), /已不存在；已创建替代任务/);
+});
+
+test("Agent thread send keeps a task that only reports no-client-found and does not create a replacement", async () => {
+  const threadId = "019f0000-0000-7000-8000-000000000109";
+  let createCount = 0;
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async () => ({
+      id: threadId,
+      title: "仍存在但未加载的 Desktop 任务",
+      cwd: process.cwd(),
+      updatedAt: "2026-08-25T08:00:00.000Z"
+    }),
+    create: async () => {
+      createCount += 1;
+      throw new Error("must not create");
+    },
+    send: async () => { throw new Error("Codex Desktop IPC thread-follower-start-turn failed: no-client-found"); }
+  };
+
+  await assert.rejects(handleAgentThreadRequest({
+    action: "send",
+    threadId,
+    title: "仍存在但未加载的 Desktop 任务",
+    createIfMissing: true,
+    prompt: "不应创建替代任务",
+    cwd: process.cwd(),
+    messageSource: defaultSystemMessageSource
+  }, { allowedWorkspaces: [process.cwd()] }, driver), /no-client-found/);
+
+  assert.equal(createCount, 0);
+});
+
 test("message-processing handoff reports a structured requirement after the target owner accepts it", async () => {
   const targetThreadId = "019f0000-0000-7000-8000-000000000082";
   const sourceThreadId = "019f0000-0000-7000-8000-000000000083";
@@ -1000,7 +1103,10 @@ test("message-processing handoff reports a structured requirement after the targ
   const communication = result.data.communication as Record<string, unknown>;
   assert.equal(communication.responsePolicy, "required");
   assert.equal(communication.requestStatus, "awaiting_response");
-  assert.deepEqual(result.data.delivery, {
+  const delivery = { ...(result.data.delivery as Record<string, unknown>) };
+  assert.match(String(delivery.deliveryId), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  delete delivery.deliveryId;
+  assert.deepEqual(delivery, {
     status: "delivered",
     targetThreadId,
     acceptedBy: "codex_desktop_owner",
@@ -1076,6 +1182,147 @@ test("a reply addressed to a detached Message Agent alias is delivered to its cu
   assert.equal(agentRequests.get(tracked.requestId || "")?.status, "responded");
 });
 
+test("an Agent reply to an archived bound task creates a new replacement instead of reopening history", async () => {
+  const archivedThreadId = "019f0000-0000-7000-8000-000000000096";
+  const respondingThreadId = "019f0000-0000-7000-8000-000000000097";
+  const replacementThreadId = "019f0000-0000-7000-8000-000000000098";
+  const title = "星海建造师 策划 程序 协助处理计划1";
+  const agentRequests = new AgentRequestStore(new MemoryAgentRequestPersistence());
+  const tracked = agentRequests.prepare({
+    source: { threadId: archivedThreadId, agentType: "plan_agent", threadName: title, workspace: process.cwd() },
+    target: { threadId: respondingThreadId, agentType: "message_processing", workspace: process.cwd() },
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+  agentRequests.commit(tracked);
+  const deliveries: string[] = [];
+  let created = 0;
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async (threadId) => ({
+      id: threadId,
+      title: threadId === archivedThreadId ? title : "消息处理 Agent",
+      cwd: process.cwd(),
+      updatedAt: "2026-08-25T09:30:00.000Z",
+      archived: threadId === archivedThreadId
+    }),
+    create: async (params) => {
+      created += 1;
+      return {
+        id: replacementThreadId,
+        title: params.title,
+        cwd: params.cwd,
+        updatedAt: "2026-08-25T09:31:00.000Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async ({ threadId }) => {
+      deliveries.push(threadId);
+      return { threadId, action: "started", openedThread: true, transport: "desktop-ipc" };
+    }
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId: archivedThreadId,
+    cwd: process.cwd(),
+    prompt: "已完成，返回结果。",
+    messageSource: messageSourceFor(respondingThreadId, "消息处理 Agent"),
+    sourceThreadId: respondingThreadId,
+    sourceAgentType: "message_processing",
+    inReplyToRequestId: tracked.requestId,
+    result: "done",
+    nextAction: "none",
+    responsePolicy: "none"
+  }, { allowedWorkspaces: [process.cwd()], agentRequests }, driver);
+
+  assert.equal(created, 1);
+  assert.deepEqual(deliveries, [replacementThreadId]);
+  assert.equal(result.data.previousThreadId, archivedThreadId);
+  assert.equal(result.data.threadId, replacementThreadId);
+  assert.equal(agentRequests.get(tracked.requestId || "")?.status, "responded");
+});
+
+
+test("an Agent reply replaces a task that disappears after reply redirection", async () => {
+  const staleThreadId = "019f0000-0000-7000-8000-000000000110";
+  const respondingThreadId = "019f0000-0000-7000-8000-000000000111";
+  const replacementThreadId = "019f0000-0000-7000-8000-000000000112";
+  const title = "星海建造师 策划 程序 协助处理计划2";
+  const agentRequests = new AgentRequestStore(new MemoryAgentRequestPersistence());
+  const tracked = agentRequests.prepare({
+    source: { threadId: staleThreadId, agentType: "plan_agent", threadName: title, workspace: process.cwd() },
+    target: { threadId: respondingThreadId, agentType: "message_processing", workspace: process.cwd() },
+    responsePolicy: "required",
+    responseInstruction: "请回复"
+  });
+  agentRequests.commit(tracked);
+  let reads = 0;
+  let created = 0;
+  const deliveries: string[] = [];
+  const driver: AgentThreadDriver = {
+    list: async () => [],
+    read: async (threadId) => {
+      if (threadId === respondingThreadId) {
+        return {
+          id: respondingThreadId,
+          title: "消息处理 Agent",
+          cwd: process.cwd(),
+          updatedAt: "2026-08-25T10:00:00.000Z"
+        };
+      }
+      assert.equal(threadId, staleThreadId);
+      reads += 1;
+      if (reads === 1) {
+        return {
+          id: staleThreadId,
+          title,
+          cwd: process.cwd(),
+          updatedAt: "2026-08-25T10:00:00.000Z"
+        };
+      }
+      throw new Error(`Codex Desktop task was not found: ${threadId}`);
+    },
+    create: async (params) => {
+      created += 1;
+      return {
+        id: replacementThreadId,
+        title: params.title,
+        cwd: params.cwd,
+        updatedAt: "2026-08-25T10:01:00.000Z",
+        source: "test",
+        initialTurnStatus: "not-requested"
+      };
+    },
+    send: async ({ threadId }) => {
+      if (threadId === staleThreadId) throw new Error(`no rollout found for thread id ${threadId}`);
+      deliveries.push(threadId);
+      return { threadId, action: "started", openedThread: true, transport: "desktop-ipc" };
+    }
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId: staleThreadId,
+    cwd: process.cwd(),
+    prompt: "已完成，返回结果。",
+    messageSource: messageSourceFor(respondingThreadId, "消息处理 Agent"),
+    sourceThreadId: respondingThreadId,
+    sourceAgentType: "message_processing",
+    inReplyToRequestId: tracked.requestId,
+    result: "done",
+    nextAction: "none",
+    responsePolicy: "none"
+  }, { allowedWorkspaces: [process.cwd()], agentRequests }, driver);
+
+  assert.equal(created, 1);
+  assert.deepEqual(deliveries, [replacementThreadId]);
+  assert.equal(result.data.previousThreadId, staleThreadId);
+  assert.equal(result.data.threadId, replacementThreadId);
+  assert.equal(agentRequests.get(tracked.requestId || "")?.status, "responded");
+});
+
 test("message-processing handoff returns a partial failure without hiding the accepted target delivery", async () => {
   const targetThreadId = "019f0000-0000-7000-8000-000000000084";
   const sourceThreadId = "019f0000-0000-7000-8000-000000000085";
@@ -1125,7 +1372,10 @@ test("message-processing handoff returns a partial failure without hiding the ac
   assert.equal(result.statusCode, 202);
   assert.equal(result.data.ok, false);
   assert.equal(result.data.status, "delivered_tracking_failed");
-  assert.deepEqual(result.data.delivery, {
+  const delivery = { ...(result.data.delivery as Record<string, unknown>) };
+  assert.match(String(delivery.deliveryId), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  delete delivery.deliveryId;
+  assert.deepEqual(delivery, {
     status: "delivered",
     targetThreadId,
     acceptedBy: "codex_desktop_owner",

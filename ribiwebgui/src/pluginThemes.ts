@@ -216,16 +216,13 @@ export function resolveWebThemeCatalog(contributions: readonly unknown[] | null)
 }
 
 function fallbackSystemResource(): ResolvedWebThemeResource {
-  const registration = themeRegistry.get("system");
-  if (!registration) throw new Error("Trusted Web system theme is not registered.");
   return {
-    themeId: registration.themeId,
-    webResourceId: registration.webResourceId,
-    label: registration.label,
-    icon: registration.icon,
-    ...(registration.desktopTheme ? { desktopTheme: registration.desktopTheme } : {}),
-    ...(registration.customTheme ? { customTheme: registration.customTheme } : {}),
-    apply: registration.apply
+    themeId: "system",
+    webResourceId: "web-host.recovery-theme.v1",
+    label: "跟随系统",
+    icon: "mdi-theme-light-dark",
+    desktopTheme: "system",
+    apply: systemDark => systemDark ? "dark" : "light"
   };
 }
 
@@ -247,35 +244,21 @@ export function resolveWebThemeResource(
   };
 }
 
-registerTrustedWebThemeResource({
-  instanceId: "manager:core",
-  pluginId: "builtin:manager/core",
-  themeId: "system",
-  webResourceId: "builtin.web-theme.system.v1",
-  label: "跟随系统",
-  icon: "mdi-theme-light-dark",
-  desktopTheme: "system",
-  apply: systemDark => systemDark ? "dark" : "light"
-});
+export const WEB_THEME_PREFERENCE_KEY = "rabiroute:webgui:theme-preference";
 
-registerTrustedWebThemeResource({
-  instanceId: "manager:core",
-  pluginId: "builtin:manager/core",
-  themeId: "light",
-  webResourceId: "builtin.web-theme.light.v1",
-  label: "浅色",
-  icon: "mdi-weather-sunny",
-  desktopTheme: "light",
-  apply: () => "light"
-});
+export function readStoredWebThemePreference(): WebThemeId {
+  try {
+    return window.localStorage.getItem(WEB_THEME_PREFERENCE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
 
-registerTrustedWebThemeResource({
-  instanceId: "manager:core",
-  pluginId: "builtin:manager/core",
-  themeId: "dark",
-  webResourceId: "builtin.web-theme.dark.v1",
-  label: "深色",
-  icon: "mdi-weather-night",
-  desktopTheme: "dark",
-  apply: () => "dark"
-});
+export function writeStoredWebThemePreference(themeId: WebThemeId | undefined): void {
+  try {
+    if (themeId) window.localStorage.setItem(WEB_THEME_PREFERENCE_KEY, themeId);
+    else window.localStorage.removeItem(WEB_THEME_PREFERENCE_KEY);
+  } catch {
+    // 浏览器禁用本地存储时仅保留当前会话主题。
+  }
+}

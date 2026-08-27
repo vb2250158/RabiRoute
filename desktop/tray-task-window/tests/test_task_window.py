@@ -242,7 +242,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
 
     def test_status_view_consumes_controlled_plugin_status_and_settings(self) -> None:
         speech_card = DesktopPluginStatusCard(
-            plugin_id="builtin:manager/speech",
+            plugin_id="rabi.manager.base",
             instance_id="manager:speech",
             contribution_id="speech-status",
             query_id="manager.speech-status",
@@ -251,7 +251,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
             order=20,
         )
         performance_card = DesktopPluginStatusCard(
-            plugin_id="builtin:manager/performance",
+            plugin_id="rabi.manager.base",
             instance_id="manager:performance",
             contribution_id="performance-status",
             query_id="manager.performance-status",
@@ -260,7 +260,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
             order=30,
         )
         settings_section = DesktopPluginSettingsSection(
-            plugin_id="builtin:manager/desktop",
+            plugin_id="rabi.manager.base",
             instance_id="manager:desktop",
             contribution_id="desktop-settings",
             renderer_id="builtin.desktop-settings.v1",

@@ -16,6 +16,7 @@ import { lazyRouteRecovery, router } from "./router";
 import { vuetify } from "./plugins/vuetify";
 import { redirectLoopbackWebguiToLan } from "./webguiLanRedirect";
 import { pluginCatalogStore } from "./pluginCatalogStore";
+import { refreshWebPluginModulesSafely } from "./pluginModuleBootstrap";
 
 let routeRenderStartedAt = performance.now();
 router.beforeEach(() => {
@@ -33,11 +34,15 @@ router.onError((error, target) => {
   lazyRouteRecovery.recover(error, target.fullPath);
 });
 
+export async function refreshWebPluginCatalogInBackground(): Promise<void> {
+  await pluginCatalogStore.refresh();
+  await refreshWebPluginModulesSafely();
+}
+
 async function bootstrap(): Promise<void> {
   installManagerFetchPrefix();
   installFrontendPerformanceReporter();
   if (await redirectLoopbackWebguiToLan()) return;
-  await pluginCatalogStore.refresh();
 
   createApp(App)
     .use(createPinia())
@@ -46,6 +51,7 @@ async function bootstrap(): Promise<void> {
     .mount("#app");
 
   installDomLocalizer();
+  void refreshWebPluginCatalogInBackground();
 }
 
 void bootstrap();

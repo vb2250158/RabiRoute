@@ -4,6 +4,7 @@ import type { RolePlan } from "../src/types.js";
 import {
   loadPlanAgentStatuses,
   loadPlanHistory,
+  loadPendingMemoryConsolidationRunCount,
   loadRoleMemoryCounts,
   loadRoleMemoryPage,
   loadRolePlanPage,
@@ -487,6 +488,39 @@ test("legacy full-memory responses classify consolidated recent sources as archi
     const archived = await loadRoleMemoryPage("Rabi", "archived");
     assert.deepEqual(archived.items.map((item) => item.id), ["m-archived"]);
     assert.deepEqual(archived.counts, { recent: 1, consolidated: 0, archived: 1, consolidationRuns: 0 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("WebGUI loads pending memory consolidation counts through the shared Manager envelope", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify({
+      code: 0,
+      data: [{ status: "requested" }, { status: "completed" }, { status: "requested" }]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    assert.equal(await loadPendingMemoryConsolidationRunCount("Rabi"), 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(requests.length, 1);
+  assert.equal(new URL(requests[0]!.input, "http://127.0.0.1").pathname, "/api/roles/Rabi/memory/consolidation-runs");
+  assert.equal(requests[0]!.init?.cache, "no-store");
+});
+
+test("pending memory consolidation counts reject a Manager envelope error", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: -1,
+    message: "Manager unavailable"
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    await assert.rejects(() => loadPendingMemoryConsolidationRunCount("Rabi"), /Manager unavailable/);
   } finally {
     globalThis.fetch = originalFetch;
   }

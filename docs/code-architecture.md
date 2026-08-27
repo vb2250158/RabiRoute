@@ -375,11 +375,11 @@ startManager();
 
 ### Manager 插件运行时
 
-正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts`，再创建唯一的 `managerPluginHost.ts`，把 26 个内置 definition 与 `controlPlaneRoutes.ts` 的业务 `apply` hook 合成后执行首次对账。旧的独立内置 Runtime 初始化入口已经删除，避免原始 definition 提前对账。`managerPluginConfig.ts` 把 `data/manager.json` 归一化为期望状态，`managerPluginReconciler.ts` 串行启停或重载变化实例。激活失败时恢复旧定义；恢复失败保留明确错误状态。
+正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts` 和唯一的 `managerPluginHost.ts`，再从 Profile 解析版本化 Bundle。Profile 缺失时首轮装载读取 `rabi.manager.base` 自带的默认 Profile；HTTP listener 就绪后异步写入正式 Profile 并一次性迁移旧 `manager.json.managerPlugins`。内置 26 个实例由 `rabi.manager.base` Bundle 进入同一 Loader；Manager 只提供按实例受限的资源激活 capability，不再替 Bundle 创建 definition。`managerPluginReconciler.ts` 串行启停或重载 revision 变化的实例。激活失败时恢复旧 Fiber；恢复失败保留明确错误状态。
 
 每个 definition 声明 `provides`、`requires` 和 `optional`。Reconciler 先拒绝同一能力的多个已启用 Provider，再按必需依赖排序；缺少 `requires` 的实例进入 `waiting_dependency`。可选 Provider 存在时先于消费者启动。每个实例的依赖 revision 会递归包含直接和传递 Provider 的 revision、启用状态、能力关系与缺失能力摘要，因此 `root -> middle -> leaf` 中的 root 变化会把 middle 和 leaf 都纳入同一重启批次，同时不影响无依赖实例。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，支持同一实例 `active -> waiting_dependency -> active`。停用按当前应用顺序逆序执行。
 
-`builtinManagerPlugins.ts` 当前声明 26 个内置实例，`controlPlaneRoutes.ts` 为 26 个实例逐一提供非空 hook：
+`plugins/packages/rabi.manager.base/0.2.1/index.mjs` 直接声明 26 个内置实例、依赖和表现贡献，`rabi.manager.profile.json` 直接声明默认 Profile。Manager 只向基础 Bundle 的每个实例发放受限的资源激活 capability；它不再为 Bundle 创建 definition。
 
 ```text
 manager:core
@@ -414,9 +414,11 @@ manager:napcat-supervisor
 
 Desktop 与 WebGUI 是最小宿主。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command 注册表执行快速配置、新增 Route、打开 Manager 配置和保存页面；可信 renderer 注册表挂载设置区与状态卡。Desktop 的冻结 Registry 同时解析内置合同和显式允许的可信扩展。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 挂载系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动贡献同时控制系统划词、角色/计划/记忆/项目/运行目录和手动触发面板操作。目录不可用或刷新失败时清空旧目录，撤销命令、renderer、面板操作和系统监听，只保留固定 WebGUI 恢复入口。可信 Python entry point 仍在 Desktop 进程内执行；owner-scoped registrar 与更强隔离属于后续 Extension Host。
 
+RibiWebGUI 的固定启动核不等待可选 Web Bundle。`main.ts` 在 LAN 地址规范化后立即挂载 Vue，随后后台读取插件目录并激活扩展模块。`builtinStartupPages.ts` 预先注册 `route.knowledge`，因此 `#/routes/:id/knowledge` 在目录尚未返回、延迟或某个可选 Bundle 失败时仍可显示壳和该页的懒加载状态；目录到达后只负责验证同一 `pluginId + instanceId + rendererId` 的导航贡献。冷启动直接访问可选页面时，路由会保留原始地址并在对应 Bundle 注册后自动回到该页面；只有目录确实不可用时才停留在插件恢复页。`gatewayStore.loadRouteSummaries()` 只从 `/gateways?summary=1` 投影 Route 身份、配置名、人格 ID 和运行标记，知识页先以它解析 URL 指向的人格；完整 Gateway 配置、元数据和网络选项随后后台读取，仍是编辑和诊断的权威数据源。知识页计划先读取 8 条摘要以显示首屏，再以串行后台分页读取同一筛选结果直到 `nextCursor` 为空；每页之间让出一次渲染帧，路由切换、页面隐藏或卸载会使请求版本失效并停止后续请求。浏览器只保留计划摘要，计划正文和附件仍只在阅读位置附近读取；卡片窗口继续按滚动分批挂载。计划目录只监听每个人格的 `plans/` 根目录递归变化；文件系统不支持递归监听时回退到 500 ms TTL。根 HTML 使用 `no-store`，内容哈希静态资源与带 revision 的 Web Bundle 模块使用长期 immutable 缓存：重新打开页面时必定取得最新入口，未变更的 Bundle 不重复下载。Manager Base 的 revision 模块只重导出当前 `/assets/` 中的 Base 入口，不再复制 Vue、Pinia、Store 或页面 chunk；因此可选页面与固定启动核使用同一个 Vue/Pinia 模块实例。前端性能上报同一时刻只保留一个请求；首个样本至少在 30 秒后发送，单次上传超过 2 秒即取消，失败时保留采样并退避，不能在 Manager 变慢时形成重叠上报或占用首屏请求。消息处理看板只保存当前控制状态。状态快照升级到 v2：`pending_dispatch`、处理中和待发送等未完成需求最多保留 24 小时；`sent`、`not_required` 和 `send_failed`（包括计划通知）只保留 15 分钟的重试/查看窗口。需求过期时，Manager 删除完整消息、附件和 reply context，只保留 Route、会话和消息组标识计算出的 SHA-256 去重键至多 7 天；重放命中该键直接返回 `replay_suppressed`，不再创建 Agent 投递或看板事件。计划通知订阅保留 7 天，订阅自身持有后续通知需要的来源与 worker，过期需求不会因计划订阅再次保留。启动时仅迁移一次旧 v1 本地快照，之后只写 v2。消息记录、计划文件和发送回执仍分别保存各自的业务事实。
+
 ### Manager 插件持有的运行资源
 
-26 个 hook 都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`，避免同层 Cordis disposer 并发时共享资源先停。共享资源 Runtime 内先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。停止完成后这些资源可以重新启动。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
+26 个实例的资源激活函数都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`，避免同层 Cordis disposer 并发时共享资源先停。共享资源 Runtime 内先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。停止完成后这些资源可以重新启动。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
 ```text
 unregister routes

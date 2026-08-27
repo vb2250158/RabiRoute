@@ -12,7 +12,10 @@ export type CodexDesktopReasoningEffort = "low" | "medium" | "high" | "xhigh" | 
 
 export type CodexDesktopThread = {
   id: string;
+  /** Name shown in the Codex Desktop left sidebar; empty when the index has no Name. */
   title: string;
+  /** Raw SQLite metadata retained only for diagnostics; never use for name decisions. */
+  stateTitle?: string;
   cwd: string;
   updatedAt: string;
   rolloutPath: string;
@@ -57,11 +60,43 @@ type PendingRequest = {
   timer: NodeJS.Timeout;
 };
 
+const desktopIpcProtocolVersion = {
+  followerSteerTurn: 1,
+  followerStartTurn: 2
+} as const;
+
 export type CodexDesktopDelivery = {
   threadId: string;
   action: "started" | "steered";
   openedThread: boolean;
   transport: "desktop-ipc";
+};
+
+export type CodexDesktopDeliveryStage =
+  | "queued"
+  | "steer_requested"
+  | "steer_rejected"
+  | "start_fallback"
+  | "start_requested"
+  | "start_accepted"
+  | "start_rejected"
+  | "delivery_receipt_confirmed"
+  | "delivery_receipt_missing"
+  | "delivery_retry_start"
+  | "delivery_accepted"
+  | "owner_load_retry";
+
+export type CodexDesktopDeliveryEvent = {
+  stage: CodexDesktopDeliveryStage;
+  threadId: string;
+  deliveryMarker?: string;
+  method?: "thread-follower-steer-turn" | "thread-follower-start-turn";
+  action?: "started" | "steered";
+  attempt?: number;
+  openedThread?: boolean;
+  payloadShape?: "turnStart.request+context";
+  protocolVersion?: number;
+  error?: string;
 };
 
 export type CodexDesktopBridgeOptions = {
@@ -74,6 +109,7 @@ export type CodexDesktopBridgeOptions = {
   loadRetryDelayMs?: number;
   openThread?: (threadId: string) => Promise<void>;
   onBroadcast?: (message: Extract<IpcMessage, { type: "broadcast" }>) => void;
+  onDeliveryEvent?: (event: CodexDesktopDeliveryEvent) => void;
 };
 
 type CodexDesktopTurnDelivery = {
@@ -144,11 +180,11 @@ export function applyCodexSidebarTaskNamesForTest(
   }
   return threads.map((thread) => {
     const sidebar = latestById.get(thread.id);
-    if (!sidebar) return thread;
     return {
       ...thread,
-      title: sidebar.title,
-      updatedAt: sidebar.updatedAt || thread.updatedAt
+      stateTitle: thread.stateTitle ?? thread.title,
+      title: sidebar?.title ?? "",
+      updatedAt: sidebar?.updatedAt || thread.updatedAt
     };
   });
 }
@@ -157,7 +193,7 @@ function applyCodexSidebarTaskNames(
   threads: CodexDesktopThread[],
   sessionIndexPath = codexDesktopSessionIndexPath()
 ): CodexDesktopThread[] {
-  if (!fs.existsSync(sessionIndexPath)) return threads;
+  if (!fs.existsSync(sessionIndexPath)) return applyCodexSidebarTaskNamesForTest(threads, "");
   return applyCodexSidebarTaskNamesForTest(threads, fs.readFileSync(sessionIndexPath, "utf8"));
 }
 
@@ -311,6 +347,10 @@ function responseError(response: IpcResponse, method: string): Error | null {
     : new Error(`Codex Desktop IPC ${method} failed: ${response.error || "unknown-error"}`);
 }
 
+function diagnosticErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isDesktopOwnerLoading(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.includes("no-client-found")
@@ -320,6 +360,7 @@ function isDesktopOwnerLoading(error: unknown): boolean {
 function isInactiveTurn(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.includes("SteerTurnInactiveError")
+    || text.includes("NoActiveTurn")
     || text.includes("active turn already ended")
     || text.includes("no active turn to steer")
     || text.includes("not being streamed");
@@ -350,9 +391,13 @@ function rolloutTailContainsMarker(filePath: string, marker: string, maxBytes = 
   }
 }
 
-function defaultDeliveryReceiptReader(threadId: string, marker: string): boolean {
+export function codexDesktopRolloutContainsDeliveryMarker(threadId: string, marker: string): boolean {
   const thread = readCodexDesktopThread(threadId);
   return Boolean(thread?.rolloutPath && rolloutTailContainsMarker(thread.rolloutPath, marker));
+}
+
+function defaultDeliveryReceiptReader(threadId: string, marker: string): boolean {
+  return codexDesktopRolloutContainsDeliveryMarker(threadId, marker);
 }
 
 export class CodexDesktopBridge {
@@ -568,7 +613,32 @@ export class CodexDesktopBridge {
     }));
   }
 
-  private async confirmTimedOutDelivery(params: CodexDesktopTurnDelivery): Promise<boolean> {
+  private emitDeliveryEvent(event: CodexDesktopDeliveryEvent): void {
+    try {
+      this.options.onDeliveryEvent?.(event);
+    } catch {
+      // Diagnostics must not alter the Desktop-owner delivery result.
+    }
+  }
+
+  private deliveryMarker(params: CodexDesktopTurnDelivery): string | undefined {
+    return agentDeliveryMarkerForTest(params.prompt) || undefined;
+  }
+
+  private deliveryEvent(
+    params: CodexDesktopTurnDelivery,
+    stage: CodexDesktopDeliveryStage,
+    extra: Omit<CodexDesktopDeliveryEvent, "stage" | "threadId" | "deliveryMarker"> = {}
+  ): void {
+    this.emitDeliveryEvent({
+      stage,
+      threadId: params.threadId,
+      ...(this.deliveryMarker(params) ? { deliveryMarker: this.deliveryMarker(params) } : {}),
+      ...extra
+    });
+  }
+
+  private async confirmDeliveryReceipt(params: CodexDesktopTurnDelivery): Promise<boolean> {
     const marker = agentDeliveryMarkerForTest(params.prompt);
     if (!marker) return false;
     const deadline = Date.now() + this.options.deliveryReceiptGraceMs;
@@ -579,9 +649,18 @@ export class CodexDesktopBridge {
     } while (true);
   }
 
-  private async steer(params: CodexDesktopTurnDelivery): Promise<void> {
+  private async deliveryReceiptConfirmed(params: CodexDesktopTurnDelivery): Promise<boolean> {
+    const marker = this.deliveryMarker(params);
+    if (!marker) return true;
+    const confirmed = await this.confirmDeliveryReceipt(params);
+    this.deliveryEvent(params, confirmed ? "delivery_receipt_confirmed" : "delivery_receipt_missing", { action: undefined });
+    return confirmed;
+  }
+
+  private async steer(params: CodexDesktopTurnDelivery): Promise<boolean> {
     const imageAttachments = this.imageAttachments(params.imagePaths);
     const method = "thread-follower-steer-turn";
+    this.deliveryEvent(params, "steer_requested", { method, protocolVersion: desktopIpcProtocolVersion.followerSteerTurn });
     try {
       const response = await this.request(method, {
         conversationId: params.threadId,
@@ -603,23 +682,26 @@ export class CodexDesktopBridge {
       });
       const error = responseError(response, method);
       if (error) throw error;
+      return false;
     } catch (error) {
-      if (isTurnDeliveryTimeout(error, method) && await this.confirmTimedOutDelivery(params)) return;
+      this.deliveryEvent(params, "steer_rejected", { method, error: diagnosticErrorMessage(error) });
+      if (isTurnDeliveryTimeout(error, method) && await this.confirmDeliveryReceipt(params)) return true;
       throw error;
     }
   }
 
-  private async start(params: CodexDesktopTurnDelivery): Promise<void> {
-    const turnStartParams: Record<string, unknown> = {
+  private startTurnEnvelope(params: CodexDesktopTurnDelivery): Record<string, unknown> {
+    const request: Record<string, unknown> = {
+      threadId: params.threadId,
+      clientUserMessageId: randomUUID(),
       input: this.turnInput(params.prompt, params.imagePaths),
-      attachments: [],
-      commentAttachments: []
+      cwd: params.cwd
     };
     if (params.model) {
       const effort = params.reasoningEffort ?? "medium";
-      turnStartParams.model = params.model;
-      turnStartParams.effort = effort;
-      turnStartParams.collaborationMode = {
+      request.model = params.model;
+      request.effort = effort;
+      request.collaborationMode = {
         mode: "default",
         settings: {
           model: params.model,
@@ -628,28 +710,57 @@ export class CodexDesktopBridge {
         }
       };
     }
+    return {
+      request,
+      context: {
+        attachments: [],
+        commentAttachments: []
+      }
+    };
+  }
+
+  private async start(params: CodexDesktopTurnDelivery): Promise<boolean> {
     const method = "thread-follower-start-turn";
+    this.deliveryEvent(params, "start_requested", {
+      method,
+      payloadShape: "turnStart.request+context",
+      protocolVersion: desktopIpcProtocolVersion.followerStartTurn
+    });
     try {
       const response = await this.request(method, {
         conversationId: params.threadId,
-        turnStartParams
-      });
+        turnStart: this.startTurnEnvelope(params)
+      }, desktopIpcProtocolVersion.followerStartTurn);
       const error = responseError(response, method);
       if (error) throw error;
+      this.deliveryEvent(params, "start_accepted", { method, action: "started" });
+      return false;
     } catch (error) {
-      if (isTurnDeliveryTimeout(error, method) && await this.confirmTimedOutDelivery(params)) return;
+      this.deliveryEvent(params, "start_rejected", { method, error: diagnosticErrorMessage(error) });
+      if (isTurnDeliveryTimeout(error, method) && await this.confirmDeliveryReceipt(params)) return true;
       throw error;
     }
   }
 
   private async deliverToOwner(params: CodexDesktopTurnDelivery): Promise<"started" | "steered"> {
     try {
-      await this.steer(params);
-      return "steered";
+      const steerReceiptConfirmed = await this.steer(params);
+      if (steerReceiptConfirmed || await this.deliveryReceiptConfirmed(params)) return "steered";
+      this.deliveryEvent(params, "delivery_retry_start", {
+        method: "thread-follower-start-turn",
+        error: "Desktop accepted steer but the delivery marker was not written to the target task."
+      });
     } catch (error) {
       if (!isInactiveTurn(error)) throw error;
+      this.deliveryEvent(params, "start_fallback", {
+        method: "thread-follower-steer-turn",
+        error: diagnosticErrorMessage(error)
+      });
     }
-    await this.start(params);
+    const startReceiptConfirmed = await this.start(params);
+    if (!startReceiptConfirmed && !await this.deliveryReceiptConfirmed(params)) {
+      throw new Error(`Codex Desktop accepted thread-follower-start-turn for ${params.threadId}, but the target task did not record this Agent delivery. Message is not marked delivered.`);
+    }
     return "started";
   }
 
@@ -662,6 +773,7 @@ export class CodexDesktopBridge {
         const action = await this.deliverToOwner(params);
         this.activeThreads.add(params.threadId);
         this.activeThreadSinceMs.set(params.threadId, deliveryStartedAtMs);
+        this.deliveryEvent(params, "delivery_accepted", { action, openedThread });
         return { threadId: params.threadId, action, openedThread, transport: "desktop-ipc" };
       } catch (error) {
         lastError = error;
@@ -670,6 +782,11 @@ export class CodexDesktopBridge {
           openedThread = true;
           await this.options.openThread(params.threadId);
         }
+        this.deliveryEvent(params, "owner_load_retry", {
+          attempt: attempt + 1,
+          openedThread,
+          error: diagnosticErrorMessage(error)
+        });
         if (attempt + 1 < this.options.loadRetryAttempts) await wait(this.options.loadRetryDelayMs);
       }
     }
@@ -677,6 +794,7 @@ export class CodexDesktopBridge {
   }
 
   async deliver(params: CodexDesktopTurnDelivery): Promise<CodexDesktopDelivery> {
+    this.deliveryEvent(params, "queued");
     const key = `${params.threadId}\n${canonicalCodexWorkspacePath(params.cwd)}`;
     const previous = this.deliveryQueues.get(key);
     const scheduled = (previous ? previous.catch(() => undefined) : Promise.resolve())

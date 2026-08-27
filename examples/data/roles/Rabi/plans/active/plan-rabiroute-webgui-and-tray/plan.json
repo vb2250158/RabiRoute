@@ -9,25 +9,110 @@
   "currentStep": "系统截图已具备框选、移动、八个控制点缩放、矩形框、箭头和多行文字标注，并通过自动化测试；仍需在真实 Windows 应用中验收截图、滑词与标注后的投递。",
   "nextAction": "在普通 Windows 软件和 Unity 中分别验证鼠标/键盘划选、受保护剪贴板回退、人格列表、朗读、截图框选与标注、贴图快捷键、文字与图片投递、关闭后无副作用，以及 Manager 短暂离线后的恢复；继续补充不含私密内容的界面截图。",
   "steps": [
-    { "id": "webgui-bilingual", "title": "完成 RibiWebGUI 中英文切换与使用手册结构", "status": "已完成" },
-    { "id": "speech-monitor", "title": "统一语音页与 Route 监视器状态读取", "status": "已完成" },
-    { "id": "tray-and-package", "title": "完成 RabiRoute Desktop、任务窗口与 Windows 发布包", "status": "已完成" },
-    { "id": "structured-plan-steps", "title": "实现结构化计划步骤模型与完整步骤视图", "status": "已完成" },
-    { "id": "tray-manager-api-boundary", "title": "让托盘只消费 Manager API 并移除本地 data 读取", "status": "已完成" },
-    { "id": "plan-feedback-and-persona-tools", "title": "统一计划反馈并增加人格声纹、同步和知识界面", "status": "已完成" },
-    { "id": "event-driven-control-plane", "title": "把控制面刷新、托盘菜单和语音状态收敛到事件驱动边界", "status": "已完成" },
-    { "id": "plan-approval-contract", "title": "统一计划分类、暂停状态、审批执行合同、状态色板和异步反馈", "status": "已完成" },
-    { "id": "knowledge-progressive-loading", "title": "实现计划摘要分页、按需详情、完整内容搜索、人格优先标签和 Route 作用域导航", "status": "已完成" },
-    { "id": "napcat-owner-and-portable-node", "title": "展示 NapCat 登录归属并让托盘优先使用便携 Node", "status": "已完成" },
-    { "id": "speech-device-observability", "title": "按稳定设备展示语音收发事件、公共转写、Route 回执和短期原声", "status": "已完成" },
-    { "id": "manager-presentation-stages", "title": "统一 Manager 计划展示阶段、排序、计数与暂停恢复合同", "status": "已完成" },
-    { "id": "speech-runtime-toggle", "title": "按当前工作区进程归属与真实健康启停 RabiSpeech", "status": "已完成" },
-    { "id": "independent-message-endpoint-health", "title": "独立展示各消息端健康并保持扫描只读、有界和可部分返回", "status": "已完成" },
-    { "id": "persona-automation-and-identity-workspace", "title": "增加人格自动化、统一身份工作区和四类计划与记忆界面", "status": "已完成", "completedAt": "2026-08-12T00:00:00+08:00" },
-    { "id": "add-real-screenshots", "title": "补齐 RabiRoute Desktop 脱敏界面截图", "status": "已完成", "completedAt": "2026-08-20T21:45:00+08:00" },
-    { "id": "validate-windows-desktop-interactions", "title": "在真实 Windows 应用中验收系统截图和滑词投递", "status": "进行中", "blockedBy": "仍缺普通 Windows 软件与 Unity 的真实操作证据，以及关闭功能后不触发朗读或投递的回归记录" },
-    { "id": "persona-route-preview", "title": "完善人格路由预览与跨端排障入口", "status": "未开始" },
-    { "id": "cross-pc-speech", "title": "完成跨电脑、不同声卡与自然打断的真实语音重测", "status": "未开始" }
+    {
+      "id": "webgui-bilingual",
+      "title": "完成 RibiWebGUI 中英文切换与使用手册结构",
+      "status": "已完成"
+    },
+    {
+      "id": "speech-monitor",
+      "title": "统一语音页与 Route 监视器状态读取",
+      "status": "已完成"
+    },
+    {
+      "id": "tray-and-package",
+      "title": "完成 RabiRoute Desktop、任务窗口与 Windows 发布包",
+      "status": "已完成"
+    },
+    {
+      "id": "structured-plan-steps",
+      "title": "实现结构化计划步骤模型与完整步骤视图",
+      "status": "已完成"
+    },
+    {
+      "id": "tray-manager-api-boundary",
+      "title": "让托盘只消费 Manager API 并移除本地 data 读取",
+      "status": "已完成"
+    },
+    {
+      "id": "plan-feedback-and-persona-tools",
+      "title": "统一计划反馈并增加人格声纹、同步和知识界面",
+      "status": "已完成"
+    },
+    {
+      "id": "event-driven-control-plane",
+      "title": "把控制面刷新、托盘菜单和语音状态收敛到事件驱动边界",
+      "status": "已完成"
+    },
+    {
+      "id": "plan-approval-contract",
+      "title": "统一计划分类、暂停状态、审批执行合同、状态色板和异步反馈",
+      "status": "已完成"
+    },
+    {
+      "id": "knowledge-progressive-loading",
+      "title": "实现计划摘要分页、按需详情、完整内容搜索、人格优先标签和 Route 作用域导航",
+      "status": "已完成"
+    },
+    {
+      "id": "webgui-cold-start-and-board-retention",
+      "title": "完成 WebGUI 冷启动、知识页渐进补齐与消息看板保留期收敛",
+      "status": "已完成",
+      "completedAt": "2026-08-27T11:44:45+08:00"
+    },
+    {
+      "id": "napcat-owner-and-portable-node",
+      "title": "展示 NapCat 登录归属并让托盘优先使用便携 Node",
+      "status": "已完成"
+    },
+    {
+      "id": "speech-device-observability",
+      "title": "按稳定设备展示语音收发事件、公共转写、Route 回执和短期原声",
+      "status": "已完成"
+    },
+    {
+      "id": "manager-presentation-stages",
+      "title": "统一 Manager 计划展示阶段、排序、计数与暂停恢复合同",
+      "status": "已完成"
+    },
+    {
+      "id": "speech-runtime-toggle",
+      "title": "按当前工作区进程归属与真实健康启停 RabiSpeech",
+      "status": "已完成"
+    },
+    {
+      "id": "independent-message-endpoint-health",
+      "title": "独立展示各消息端健康并保持扫描只读、有界和可部分返回",
+      "status": "已完成"
+    },
+    {
+      "id": "persona-automation-and-identity-workspace",
+      "title": "增加人格自动化、统一身份工作区和四类计划与记忆界面",
+      "status": "已完成",
+      "completedAt": "2026-08-12T00:00:00+08:00"
+    },
+    {
+      "id": "add-real-screenshots",
+      "title": "补齐 RabiRoute Desktop 脱敏界面截图",
+      "status": "已完成",
+      "completedAt": "2026-08-20T21:45:00+08:00"
+    },
+    {
+      "id": "validate-windows-desktop-interactions",
+      "title": "在真实 Windows 应用中验收系统截图和滑词投递",
+      "status": "进行中",
+      "blockedBy": "仍缺普通 Windows 软件与 Unity 的真实操作证据，以及关闭功能后不触发朗读或投递的回归记录"
+    },
+    {
+      "id": "persona-route-preview",
+      "title": "完善人格路由预览与跨端排障入口",
+      "status": "未开始"
+    },
+    {
+      "id": "cross-pc-speech",
+      "title": "完成跨电脑、不同声卡与自然打断的真实语音重测",
+      "status": "未开始"
+    }
   ],
   "waitingFor": "",
   "project": {
@@ -42,6 +127,33 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-08-24T00:00:00+08:00",
-  "keywords": ["RibiWebGUI", "Manager API", "人格自动化", "定时任务", "本机脚本", "身份工作区", "共用账号", "说话习惯", "当前计划", "近期记忆", "沉淀记忆", "已归档", "消息处理看板", "图片来源审核", "Outbox 回执", "Agent 状态", "真实截图", "RabiRoute Desktop", "系统级截图", "滑词菜单", "DSH", "脱敏截图"]
+  "updatedAt": "2026-08-27T11:44:45+08:00",
+  "keywords": [
+    "RibiWebGUI",
+    "Manager API",
+    "人格自动化",
+    "定时任务",
+    "本机脚本",
+    "身份工作区",
+    "共用账号",
+    "说话习惯",
+    "当前计划",
+    "近期记忆",
+    "沉淀记忆",
+    "已归档",
+    "消息处理看板",
+    "图片来源审核",
+    "Outbox 回执",
+    "Agent 状态",
+    "真实截图",
+    "RabiRoute Desktop",
+    "系统级截图",
+    "滑词菜单",
+    "DSH",
+    "脱敏截图",
+    "冷启动",
+    "知识页",
+    "消息看板保留期",
+    "replay_suppressed"
+  ]
 }

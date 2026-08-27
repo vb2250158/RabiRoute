@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AgentSendResult } from "../agentSend.js";
 import type { AgentReplyResult } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
@@ -8,10 +8,14 @@ import {
   type MessageProcessingBoardPersistence
 } from "./persistence.js";
 
-export const MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION = 1;
+export const MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION = 2;
 export const MESSAGE_PROCESSING_REQUIRED_DUE_MS = 10 * 60 * 1_000;
 export const MESSAGE_PROCESSING_DECISION_DUE_MS = 30 * 60 * 1_000;
 export const MESSAGE_PROCESSING_KNOWLEDGE_CALLBACK_DUE_MS = 60 * 60 * 1_000;
+export const MESSAGE_PROCESSING_REQUIREMENT_RETENTION_MS = 24 * 60 * 60 * 1_000;
+export const MESSAGE_PROCESSING_TRANSIENT_RESULT_RETENTION_MS = 15 * 60 * 1_000;
+export const MESSAGE_PROCESSING_DEDUPE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+export const MESSAGE_PROCESSING_PLAN_ORIGIN_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export type MessageProcessingRequirementKind =
   | "message_reply"
@@ -263,11 +267,22 @@ export type MessageProcessingPlanSnapshot = {
   stepsSignature: string;
 };
 
+export type MessageProcessingDedupeRecord = {
+  key: string;
+  expiresAt: string;
+};
+
 export type MessageProcessingBoardState = {
-  schemaVersion: 1;
+  schemaVersion: typeof MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION;
   updatedAt: string;
   requirements: MessageProcessingRequirement[];
   planOrigins: MessageProcessingPlanOrigin[];
+  dedupeRecords: MessageProcessingDedupeRecord[];
+};
+
+export type MessageProcessingBoardPruneResult = {
+  requirements: number;
+  planOrigins: number;
 };
 
 export type RegisterMessageGroupRequirementInput = {
@@ -295,6 +310,10 @@ export type MessageProcessingOutcomeInput = {
 };
 
 export type KnowledgeMatchCallbackInput = Omit<KnowledgeMatchCallback, "callbackAt"> & { callbackAt?: string };
+
+export type MessageProcessingGroupRegistrationResult =
+  | { outcome: "created" | "existing"; requirement: MessageProcessingRequirement }
+  | { outcome: "replay_suppressed"; dedupeKey: string };
 
 const allowedRequiredSilenceReasons = new Set<MessageProcessingSilenceReason>([
   "closing_only",
@@ -648,13 +667,30 @@ function stringList(value: unknown, maxItems = 100): string[] {
     : [];
 }
 
-function messageSourceIdentity(source: MessageProcessingSource): string {
-  return JSON.stringify({
+function messageSourceDedupeKey(source: MessageProcessingSource): string {
+  const identity = JSON.stringify({
     routeId: source.routeId,
     endpoint: source.endpoint,
     conversationKey: source.conversationKey,
     messageIds: [...new Set(source.messageIds)].sort()
   });
+  return createHash("sha256").update(identity).digest("hex");
+}
+
+function requirementRetentionMs(requirement: MessageProcessingRequirement): number {
+  if (["sent", "not_required", "send_failed"].includes(requirement.status)) {
+    return MESSAGE_PROCESSING_TRANSIENT_RESULT_RETENTION_MS;
+  }
+  return MESSAGE_PROCESSING_REQUIREMENT_RETENTION_MS;
+}
+
+function normalizeDedupeRecord(value: unknown): MessageProcessingDedupeRecord | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Partial<MessageProcessingDedupeRecord>;
+  const key = cleanText(record.key, 128);
+  const expiresAt = cleanText(record.expiresAt, 100);
+  if (!key || !/^[a-f0-9]{64}$/i.test(key) || !expiresAt || Number.isNaN(Date.parse(expiresAt))) return undefined;
+  return { key, expiresAt };
 }
 
 function normalizeSource(value: unknown): MessageProcessingSource | undefined {
@@ -795,15 +831,24 @@ function normalizeState(value: unknown): MessageProcessingBoardState {
     ? value as Partial<MessageProcessingBoardState>
     : {};
   return {
-    schemaVersion: 1,
+    schemaVersion: MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION,
     updatedAt: cleanText(parsed.updatedAt, 100) || new Date(0).toISOString(),
     requirements: Array.isArray(parsed.requirements)
       ? parsed.requirements.flatMap((item) => normalizeRequirement(item) ?? [])
       : [],
     planOrigins: Array.isArray(parsed.planOrigins)
       ? parsed.planOrigins.flatMap((item) => normalizePlanOrigin(item) ?? [])
+      : [],
+    dedupeRecords: Array.isArray(parsed.dedupeRecords)
+      ? parsed.dedupeRecords.flatMap((item) => normalizeDedupeRecord(item) ?? [])
       : []
   };
+}
+
+function requiresBoardStateMigration(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const state = value as Partial<MessageProcessingBoardState>;
+  return state.schemaVersion !== MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION || !Array.isArray(state.dedupeRecords);
 }
 
 function planStepsSignature(plan: PlanItem): string {
@@ -863,6 +908,7 @@ export function describePlanCommunicationChanges(before: PlanItem, after: PlanIt
 export class MessageProcessingBoardStore {
   private readonly requirements = new Map<string, MessageProcessingRequirement>();
   private readonly planOrigins = new Map<string, MessageProcessingPlanOrigin>();
+  private readonly dedupeRecords = new Map<string, MessageProcessingDedupeRecord>();
   private readonly persistence: MessageProcessingBoardPersistence;
 
   constructor(
@@ -872,9 +918,21 @@ export class MessageProcessingBoardStore {
     this.persistence = typeof persistence === "string"
       ? new JsonFileMessageProcessingBoardPersistence(persistence)
       : persistence;
-    const state = normalizeState(this.persistence.read());
-    for (const requirement of state.requirements) this.requirements.set(requirement.id, requirement);
+    const rawState = this.persistence.read();
+    const state = normalizeState(rawState);
+    let migratedRequirementKeys = false;
+    for (const requirement of state.requirements) {
+      if (requirement.kind === "message_reply") {
+        const dedupeKey = messageSourceDedupeKey(requirement.source);
+        migratedRequirementKeys ||= requirement.dedupeKey !== dedupeKey;
+        requirement.dedupeKey = dedupeKey;
+      }
+      this.requirements.set(requirement.id, requirement);
+    }
     for (const origin of state.planOrigins) this.planOrigins.set(origin.key, origin);
+    for (const record of state.dedupeRecords) this.dedupeRecords.set(record.key, record);
+    const pruned = this.pruneExpiredState();
+    if (requiresBoardStateMigration(rawState) || migratedRequirementKeys || pruned.requirements || pruned.planOrigins) this.persist();
   }
 
   getRequirement(requirementId: string): MessageProcessingRequirement | undefined {
@@ -882,24 +940,33 @@ export class MessageProcessingBoardStore {
     return requirement ? structuredClone(requirement) : undefined;
   }
 
-  registerMessageGroup(input: RegisterMessageGroupRequirementInput): MessageProcessingRequirement {
+  pruneExpired(): MessageProcessingBoardPruneResult {
+    const pruned = this.pruneExpiredState();
+    if (pruned.requirements || pruned.planOrigins) this.persist();
+    return pruned;
+  }
+
+  registerMessageGroup(input: RegisterMessageGroupRequirementInput): MessageProcessingGroupRegistrationResult {
     const existing = this.requirements.get(input.requirementId);
-    if (existing) return structuredClone(existing);
+    if (existing) return { outcome: "existing", requirement: structuredClone(existing) };
     const source = normalizeSource(input.source);
     if (!source) throw new Error("Invalid message-processing source.");
     if (!String(input.messageGroupId || "").trim()) throw new Error("Missing messageGroupId.");
-    const sourceIdentity = messageSourceIdentity(source);
+    const dedupeKey = messageSourceDedupeKey(source);
     const duplicate = [...this.requirements.values()].find((requirement) =>
-      requirement.kind === "message_reply"
-      && messageSourceIdentity(requirement.source) === sourceIdentity
+      requirement.kind === "message_reply" && requirement.dedupeKey === dedupeKey
     );
-    if (duplicate) return structuredClone(duplicate);
+    if (duplicate) return { outcome: "existing", requirement: structuredClone(duplicate) };
+    const replayRecord = this.dedupeRecords.get(dedupeKey);
+    if (replayRecord && Date.parse(replayRecord.expiresAt) > this.now().getTime()) {
+      return { outcome: "replay_suppressed", dedupeKey };
+    }
     const createdAt = nowIso(this.now);
     const replyPolicy = messageReplyPolicy(source);
     const knowledgeMatches = normalizeKnowledgeMatches(input.knowledgeMatches);
     const requirement: MessageProcessingRequirement = {
       id: input.requirementId,
-      dedupeKey: `message-group:${input.requirementId}`,
+      dedupeKey,
       kind: "message_reply",
       replyPolicy,
       status: "pending_dispatch",
@@ -918,7 +985,7 @@ export class MessageProcessingBoardStore {
     };
     this.requirements.set(requirement.id, requirement);
     this.persist();
-    return structuredClone(requirement);
+    return { outcome: "created", requirement: structuredClone(requirement) };
   }
 
   recordDispatch(requirementId: string, worker: MessageProcessingWorker): MessageProcessingRequirement {
@@ -1473,10 +1540,11 @@ export class MessageProcessingBoardStore {
 
   snapshot(): MessageProcessingBoardState {
     return {
-      schemaVersion: 1,
+      schemaVersion: MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION,
       updatedAt: nowIso(this.now),
       requirements: [...this.requirements.values()].map((item) => structuredClone(item)),
-      planOrigins: [...this.planOrigins.values()].map((item) => structuredClone(item))
+      planOrigins: [...this.planOrigins.values()].map((item) => structuredClone(item)),
+      dedupeRecords: [...this.dedupeRecords.values()].map((item) => structuredClone(item))
     };
   }
 
@@ -1504,11 +1572,49 @@ export class MessageProcessingBoardStore {
   }
 
   private persist(): void {
+    this.pruneExpiredState();
     this.persistence.write({
       schemaVersion: MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION,
       updatedAt: nowIso(this.now),
       requirements: [...this.requirements.values()],
-      planOrigins: [...this.planOrigins.values()]
+      planOrigins: [...this.planOrigins.values()],
+      dedupeRecords: [...this.dedupeRecords.values()]
     } satisfies MessageProcessingBoardState);
+  }
+
+  private retainDedupeKey(dedupeKey: string, createdAt: string, now: number): void {
+    if (!/^[a-f0-9]{64}$/i.test(dedupeKey)) return;
+    const createdAtMs = Date.parse(createdAt);
+    const baseTime = Number.isNaN(createdAtMs) ? now : createdAtMs;
+    const expiresAt = new Date(baseTime + MESSAGE_PROCESSING_DEDUPE_RETENTION_MS).toISOString();
+    if (Date.parse(expiresAt) <= now) return;
+    const existing = this.dedupeRecords.get(dedupeKey);
+    if (!existing || Date.parse(existing.expiresAt) < Date.parse(expiresAt)) {
+      this.dedupeRecords.set(dedupeKey, { key: dedupeKey, expiresAt });
+    }
+  }
+
+  private pruneExpiredState(): MessageProcessingBoardPruneResult {
+    const now = this.now().getTime();
+    for (const [key, record] of this.dedupeRecords) {
+      if (Date.parse(record.expiresAt) > now) continue;
+      this.dedupeRecords.delete(key);
+    }
+
+    let planOrigins = 0;
+    for (const [key, origin] of this.planOrigins) {
+      if (now - Date.parse(origin.linkedAt) < MESSAGE_PROCESSING_PLAN_ORIGIN_RETENTION_MS) continue;
+      this.planOrigins.delete(key);
+      planOrigins += 1;
+    }
+
+    let requirements = 0;
+    for (const [id, requirement] of this.requirements) {
+      if (now - Date.parse(requirement.createdAt) < requirementRetentionMs(requirement)) continue;
+      if (requirement.kind === "message_reply") this.retainDedupeKey(requirement.dedupeKey, requirement.createdAt, now);
+      this.requirements.delete(id);
+      requirements += 1;
+    }
+    return { requirements, planOrigins };
   }
 }
