@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
@@ -6,6 +7,91 @@ const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 256 * 1024 * 1024;
 const MAX_ENTRIES = 1_200;
 const PACK_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
+const TRANSIENT_FS_CODES = new Set(["EMFILE", "ENFILE", "EBUSY"]);
+
+function fileSystemErrorCode(error: unknown): string {
+  return error && typeof error === "object" && "code" in error ? String(error.code) : "";
+}
+
+function waitSynchronously(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+export function retryTransientFileOperation<T>(
+  operation: () => T,
+  options: { retries?: number; retryDelayMs?: number; wait?: (milliseconds: number) => void } = {},
+): T {
+  const retries = Math.max(0, Math.trunc(options.retries ?? 8));
+  const retryDelayMs = Math.max(0, Math.trunc(options.retryDelayMs ?? 75));
+  const wait = options.wait ?? waitSynchronously;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return operation();
+    } catch (error) {
+      if (!TRANSIENT_FS_CODES.has(fileSystemErrorCode(error)) || attempt >= retries) throw error;
+      wait(Math.min(500, retryDelayMs * (attempt + 1)));
+    }
+  }
+}
+
+function removeDirectoryBestEffort(directory: string): void {
+  try {
+    retryTransientFileOperation(() => fs.rmSync(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 100,
+    }));
+  } catch {
+    // A failed import must retain its original error. A later import can reuse a fresh local staging directory.
+  }
+}
+
+type RenameDirectory = (source: fs.PathLike, destination: fs.PathLike) => void;
+
+function copyDirectoryWithManifestLast(source: string, destination: string): void {
+  retryTransientFileOperation(() => fs.mkdirSync(destination, { recursive: false }));
+  const copyEntries = (from: string, to: string, root: boolean): void => {
+    const entries = retryTransientFileOperation(() => fs.readdirSync(from, { withFileTypes: true }));
+    for (const entry of entries) {
+      if (root && entry.name.toLowerCase() === "pet-pack.json") continue;
+      const sourcePath = path.join(from, entry.name);
+      const destinationPath = path.join(to, entry.name);
+      if (entry.isDirectory()) {
+        retryTransientFileOperation(() => fs.mkdirSync(destinationPath, { recursive: false }));
+        copyEntries(sourcePath, destinationPath, false);
+      } else if (entry.isFile()) {
+        retryTransientFileOperation(() => fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL));
+      } else {
+        throw new Error(`Unsupported desktop pet staging entry: ${entry.name}`);
+      }
+    }
+  };
+  copyEntries(source, destination, true);
+  retryTransientFileOperation(() => fs.copyFileSync(
+      path.join(source, "pet-pack.json"),
+      path.join(destination, "pet-pack.json"),
+      fs.constants.COPYFILE_EXCL,
+    ));
+}
+
+export function commitDesktopPetPackDirectory(
+  source: string,
+  destination: string,
+  renameDirectory: RenameDirectory = fs.renameSync,
+): void {
+  if (source.startsWith("\\\\")) {
+    copyDirectoryWithManifestLast(source, destination);
+    return;
+  }
+  try {
+    renameDirectory(source, destination);
+  } catch (error) {
+    const code = fileSystemErrorCode(error);
+    if (!new Set(["EACCES", "EPERM", "EXDEV"]).has(code)) throw error;
+    copyDirectoryWithManifestLast(source, destination);
+  }
+}
 
 type ZipEntry = {
   name: string;
@@ -91,6 +177,18 @@ function assertImportRoot(roleDir: string, candidate: string): void {
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Desktop pet import escaped its persona directory.");
 }
 
+function assertStagingRoot(stagingRoot: string, candidate: string): void {
+  const relative = path.relative(path.resolve(stagingRoot), path.resolve(candidate));
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Desktop pet import escaped its staging directory.");
+}
+
+export function desktopPetImportStagingRoot(roleDir: string, tempRoot = os.tmpdir()): string {
+  const windowsPath = roleDir.replace(/\//g, "\\");
+  return windowsPath.startsWith("\\\\")
+    ? path.join(tempRoot, "rabiroute-desktop-pet-imports")
+    : path.join(roleDir, "desktop-pet", ".imports");
+}
+
 export function importDesktopPetPack(
   roleId: string,
   roleDir: string,
@@ -101,10 +199,10 @@ export function importDesktopPetPack(
 ): string {
   const desktopPetRoot = path.join(roleDir, "desktop-pet");
   const packsRoot = path.join(desktopPetRoot, "packs");
-  const importsRoot = path.join(desktopPetRoot, ".imports");
+  const importsRoot = desktopPetImportStagingRoot(roleDir);
   fs.mkdirSync(importsRoot, { recursive: true });
   const staging = fs.mkdtempSync(path.join(importsRoot, "pack-"));
-  assertImportRoot(roleDir, staging);
+  assertStagingRoot(importsRoot, staging);
   let finalDir = "";
   try {
     const extension = path.extname(fileName).toLowerCase();
@@ -170,12 +268,12 @@ export function importDesktopPetPack(
     finalDir = path.join(packsRoot, packId);
     assertImportRoot(roleDir, finalDir);
     if (fs.existsSync(finalDir)) throw new Error("A desktop pet pack with this id already exists.");
-    fs.renameSync(manifestDir, finalDir);
+    commitDesktopPetPackDirectory(manifestDir, finalDir);
     return packId;
   } catch (error) {
-    if (finalDir && fs.existsSync(finalDir)) fs.rmSync(finalDir, { recursive: true, force: true });
+    if (finalDir && fs.existsSync(finalDir)) removeDirectoryBestEffort(finalDir);
     throw error;
   } finally {
-    if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
+    if (fs.existsSync(staging)) removeDirectoryBestEffort(staging);
   }
 }

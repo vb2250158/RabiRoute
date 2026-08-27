@@ -8,6 +8,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+### Desktop-pet dragging and pack import
+
+- The YeYu desktop pet changes to the `drag` animation only after an actual pointer move, then restores its prior state on release; a click no longer triggers a drag state.
+- When importing a desktop-pet pack through a UNC/SMB path, or when directory rename is denied, Manager copies the validated staging contents with `pet-pack.json` written last so clients cannot read a partial pack.
+
+### Role-knowledge reads
+
+- Manager adds a read-only role-knowledge file-count endpoint. The RibiWebGUI role-knowledge client now exposes loaders for active/archived plan, recent/consolidated memory, and memory-consolidation-run counts, so pages can avoid loading complete knowledge content when they need totals.
+
 ## 0.2.1 - 2026-08-25
 
 ### Plan directories and first-page reads

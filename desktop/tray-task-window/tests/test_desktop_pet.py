@@ -3,16 +3,33 @@ from __future__ import annotations
 import os
 import io
 import unittest
+from unittest.mock import call, patch
+from urllib.error import HTTPError
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
-from rabiroute_tray.desktop_pet_client import DesktopPetClient, parse_desktop_pet_catalog
+from rabiroute_tray.desktop_pet_client import DesktopPetClient, DesktopPetPack, DesktopPetState, parse_desktop_pet_catalog
 from rabiroute_tray.desktop_pet_events import iter_sse_events
 from rabiroute_tray.desktop_pet_fullscreen import covers_monitor
 from rabiroute_tray.desktop_pet_window import DesktopPetWindow
+
+
+class _BinaryResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.payload
 
 
 class DesktopPetCatalogTest(unittest.TestCase):
@@ -93,6 +110,33 @@ class DesktopPetCatalogTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different persona"):
             parse_desktop_pet_catalog({"data": {"personaId": "Other", "packs": []}}, "YeYu")
 
+    def test_asset_download_retries_a_transient_manager_exhaustion(self) -> None:
+        client = DesktopPetClient("http://127.0.0.1:8790", "YeYu")
+        exhausted = HTTPError("http://127.0.0.1/idle.png", 503, "busy", {}, None)
+        with (
+            patch("rabiroute_tray.desktop_pet_client.urlopen", side_effect=[exhausted, _BinaryResponse(b"png")]) as request,
+            patch("rabiroute_tray.desktop_pet_client.time.sleep") as sleep,
+        ):
+            payload = client._get("/idle.png")
+
+        self.assertEqual(payload, b"png")
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_animation_asset_downloads_are_spaced_for_nas_storage(self) -> None:
+        client = DesktopPetClient("http://127.0.0.1:8790", "YeYu", asset_interval_seconds=0.1)
+        state = DesktopPetState("idle", "png-sequence", ("/1.png", "/2.png", "/3.png"), 12, True)
+        pack = DesktopPetPack("night", "Night", "YeYu", 512, 512, 0.5, {"idle": state})
+
+        with (
+            patch.object(client, "_get", side_effect=[b"1", b"2", b"3"]),
+            patch("rabiroute_tray.desktop_pet_client.time.sleep") as sleep,
+        ):
+            loaded = client.load_animation(pack, "idle")
+
+        self.assertEqual(loaded.assets, (b"1", b"2", b"3"))
+        self.assertEqual(sleep.call_args_list, [call(0.1), call(0.1)])
+
 
 class DesktopPetWindowTest(unittest.TestCase):
     @classmethod
@@ -116,6 +160,49 @@ class DesktopPetWindowTest(unittest.TestCase):
             self.assertTrue(window.windowFlags() & Qt.WindowType.WindowTransparentForInput)
             window.set_click_through(False)
             self.assertFalse(window.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        finally:
+            window.close()
+
+    def test_drag_state_signals_only_wrap_an_actual_move(self) -> None:
+        window = DesktopPetWindow()
+        started = QSignalSpy(window.drag_started)
+        finished = QSignalSpy(window.drag_finished)
+        try:
+            window.resize(200, 200)
+            window.show()
+            QTest.mousePress(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            QTest.mouseMove(window, QPoint(90, 90), delay=1)
+            QTest.mouseRelease(window, Qt.MouseButton.LeftButton, pos=QPoint(90, 90))
+            self.assertEqual(started.count(), 1)
+            self.assertEqual(finished.count(), 1)
+        finally:
+            window.close()
+
+    def test_single_click_emits_click_without_dragging(self) -> None:
+        window = DesktopPetWindow()
+        clicked = QSignalSpy(window.clicked)
+        started = QSignalSpy(window.drag_started)
+        try:
+            window.resize(200, 200)
+            window.show()
+            QTest.mouseClick(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            QTest.qWait(QApplication.doubleClickInterval() + 50)
+            self.assertEqual(clicked.count(), 1)
+            self.assertEqual(started.count(), 0)
+        finally:
+            window.close()
+
+    def test_double_click_does_not_also_emit_single_click(self) -> None:
+        window = DesktopPetWindow()
+        clicked = QSignalSpy(window.clicked)
+        double_clicked = QSignalSpy(window.double_clicked)
+        try:
+            window.resize(200, 200)
+            window.show()
+            QTest.mouseDClick(window, Qt.MouseButton.LeftButton, pos=QPoint(50, 50))
+            QTest.qWait(QApplication.doubleClickInterval() + 50)
+            self.assertEqual(clicked.count(), 0)
+            self.assertEqual(double_clicked.count(), 1)
         finally:
             window.close()
 

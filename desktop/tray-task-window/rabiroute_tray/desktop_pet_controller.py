@@ -21,10 +21,13 @@ class DesktopPetController(QObject):
         super().__init__()
         self.persona_id = persona_id
         self.window = DesktopPetWindow()
+        self.window.clicked.connect(self._clicked)
         self.window.double_clicked.connect(open_persona)
         self.window.animation_finished.connect(self._animation_finished)
         self.window.placement_changed.connect(lambda placement: self._persist({"placement": placement}))
         self.window.context_menu_requested.connect(self._show_context_menu)
+        self.window.drag_started.connect(self._drag_started)
+        self.window.drag_finished.connect(self._drag_finished)
         application = QApplication.instance()
         if application is not None:
             application.screenRemoved.connect(lambda _screen: self.window.recover_to_visible_screen())
@@ -38,6 +41,7 @@ class DesktopPetController(QObject):
         self._catalog_task: QtAsyncTask | None = None
         self._animation_task: QtAsyncTask | None = None
         self._requested_state = "idle"
+        self._state_before_drag = "idle"
         self._click_through = False
         self._preferred_pack_id = ""
         self._binding_task: QtAsyncTask | None = None
@@ -148,6 +152,23 @@ class DesktopPetController(QObject):
 
     def _animation_finished(self, next_state: str) -> None:
         self.set_state(next_state or "idle")
+
+    def _clicked(self) -> None:
+        if self.visible:
+            self.set_state("attention")
+
+    def _drag_started(self) -> None:
+        if not self.visible:
+            return
+        self._state_before_drag = self._requested_state or "idle"
+        self.set_state("drag")
+
+    def _drag_finished(self) -> None:
+        if not self.visible:
+            return
+        next_state = self._state_before_drag if self._state_before_drag != "drag" else "idle"
+        self._state_before_drag = "idle"
+        self.set_state(next_state)
 
     def _load_binding(self) -> None:
         if self._binding_task is not None:

@@ -99,6 +99,20 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.equal(assetResponse.headers.get("content-type"), "image/gif");
   assert.equal(Buffer.from(await assetResponse.arrayBuffer()).toString("ascii"), "GIF89a");
 
+  const originalReadFileSync = fs.readFileSync;
+  fs.readFileSync = ((filePath: fs.PathOrFileDescriptor, ...args: unknown[]) => {
+    if (String(filePath).endsWith("idle.gif")) {
+      throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
+    }
+    return (originalReadFileSync as unknown as (...values: unknown[]) => unknown)(filePath, ...args);
+  }) as typeof fs.readFileSync;
+  try {
+    const exhaustedAssetResponse = await fetch(`${baseUrl}${idleUrl}`);
+    assert.equal(exhaustedAssetResponse.status, 503);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+
   const bindingResponse = await fetch(`${baseUrl}/api/roles/YeYu/desktop-pet`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },

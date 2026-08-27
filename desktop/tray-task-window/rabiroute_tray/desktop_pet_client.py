@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin
 from urllib.request import Request, urlopen
 
@@ -108,10 +110,17 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
 class DesktopPetClient:
     """Thin HTTP adapter. Manager remains the only owner of persona pack files."""
 
-    def __init__(self, manager_url: str, persona_id: str, timeout_seconds: float = 10.0) -> None:
+    def __init__(
+        self,
+        manager_url: str,
+        persona_id: str,
+        timeout_seconds: float = 10.0,
+        asset_interval_seconds: float = 0.1,
+    ) -> None:
         self.manager_url = manager_url.rstrip("/")
         self.persona_id = persona_id
         self.timeout_seconds = timeout_seconds
+        self.asset_interval_seconds = max(0.0, asset_interval_seconds)
 
     def packs(self) -> tuple[DesktopPetPack, ...]:
         role_id = quote(self.persona_id, safe="")
@@ -169,10 +178,26 @@ class DesktopPetClient:
         state = pack.states.get(state_name) or pack.states.get("idle")
         if state is None:
             raise ValueError("Desktop pet pack has no idle state.")
-        return LoadedDesktopPetAnimation(state=state, assets=tuple(self._get(url) for url in state.asset_urls))
+        assets: list[bytes] = []
+        for index, url in enumerate(state.asset_urls):
+            assets.append(self._get(url))
+            if index + 1 < len(state.asset_urls) and self.asset_interval_seconds:
+                time.sleep(self.asset_interval_seconds)
+        return LoadedDesktopPetAnimation(state=state, assets=tuple(assets))
 
     def _get(self, path_or_url: str) -> bytes:
         url = urljoin(f"{self.manager_url}/", path_or_url.lstrip("/"))
         request = Request(url, method="GET", headers={"accept": "application/json, image/gif, image/png"})
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            return response.read()
+        for attempt in range(6):
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    return response.read()
+            except HTTPError as error:
+                if error.code not in {429, 503} or attempt >= 5:
+                    raise
+            except (URLError, OSError):
+                if attempt >= 5:
+                    raise
+            time.sleep(min(0.25 * (2**attempt), 4.0))
+
+        raise RuntimeError("desktop pet request retry loop exited unexpectedly")

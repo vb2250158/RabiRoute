@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { importDesktopPetPack } from "./desktopPetPackImport.js";
+import {
+  commitDesktopPetPackDirectory,
+  desktopPetImportStagingRoot,
+  importDesktopPetPack,
+  retryTransientFileOperation,
+} from "./desktopPetPackImport.js";
 
 function storedZip(files: Array<[string, Buffer]>): Buffer {
   const locals: Buffer[] = [];
@@ -64,4 +69,59 @@ test("desktop pet ZIP rejects path traversal before writing outside staging", ()
 
   assert.throws(() => importDesktopPetPack("YeYu", roleDir, "bad.zip", "application/zip", archive), /traversal/);
   assert.equal(fs.existsSync(path.join(roleDir, "escape.gif")), false);
+});
+
+test("desktop pet pack commit falls back to manifest-last copy when SMB rename is denied", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-pet-smb-"));
+  const source = path.join(root, "source");
+  const destination = path.join(root, "pack");
+  fs.mkdirSync(path.join(source, "frames"), { recursive: true });
+  fs.writeFileSync(path.join(source, "frames", "idle_0001.png"), "png");
+  fs.writeFileSync(path.join(source, "pet-pack.json"), "{}");
+  const deniedRename = () => {
+    throw Object.assign(new Error("SMB rename denied"), { code: "EPERM" });
+  };
+
+  commitDesktopPetPackDirectory(source, destination, deniedRename);
+
+  assert.equal(fs.readFileSync(path.join(destination, "frames", "idle_0001.png"), "utf8"), "png");
+  assert.equal(fs.readFileSync(path.join(destination, "pet-pack.json"), "utf8"), "{}");
+});
+
+test("desktop pet imports stage locally when the persona directory is on UNC storage", () => {
+  const localTemp = path.join(os.tmpdir(), "rabi-pet-local-stage-test");
+
+  assert.equal(
+    desktopPetImportStagingRoot("\\\\SmartStorage\\DigitalLife\\RabiRoute\\data\\roles\\YeYu", localTemp),
+    path.join(localTemp, "rabiroute-desktop-pet-imports"),
+  );
+  assert.equal(
+    desktopPetImportStagingRoot(path.join(localTemp, "roles", "YeYu"), localTemp),
+    path.join(localTemp, "roles", "YeYu", "desktop-pet", ".imports"),
+  );
+});
+
+test("desktop pet NAS file operations retry bounded transient handle exhaustion", () => {
+  let calls = 0;
+  const waits: number[] = [];
+
+  const result = retryTransientFileOperation(() => {
+    calls += 1;
+    if (calls < 3) throw Object.assign(new Error("NAS handle pressure"), { code: "EMFILE" });
+    return "copied";
+  }, { retries: 4, retryDelayMs: 25, wait: milliseconds => waits.push(milliseconds) });
+
+  assert.equal(result, "copied");
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [25, 50]);
+});
+
+test("desktop pet NAS file operations do not retry permanent failures", () => {
+  let calls = 0;
+
+  assert.throws(() => retryTransientFileOperation(() => {
+    calls += 1;
+    throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+  }, { wait: () => undefined }), /permission denied/);
+  assert.equal(calls, 1);
 });

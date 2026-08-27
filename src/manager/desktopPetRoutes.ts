@@ -255,13 +255,24 @@ function serveAsset(response: http.ServerResponse, roleDir: string, packId: stri
   if (!inside(realPackRoot, realCandidate)) throw new Error("Desktop pet asset escapes its pack directory.");
   const stat = fs.statSync(realCandidate);
   if (!stat.isFile() || stat.size > MAX_ASSET_BYTES) throw new Error("Desktop pet asset is unavailable or too large.");
+  const payload = fs.readFileSync(realCandidate);
   response.writeHead(200, {
     "content-type": path.extname(realCandidate).toLowerCase() === ".gif" ? "image/gif" : "image/png",
-    "content-length": String(stat.size),
+    "content-length": String(payload.length),
     "cache-control": "private, max-age=3600",
     "x-content-type-options": "nosniff"
   });
-  fs.createReadStream(realCandidate).pipe(response);
+  response.end(payload);
+}
+
+function assetReadErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function isTransientAssetReadError(error: unknown): boolean {
+  return ["EMFILE", "ENFILE", "EBUSY"].includes(assetReadErrorCode(error) ?? "");
 }
 
 export function handleDesktopPetApi(
@@ -349,6 +360,11 @@ export function handleDesktopPetApi(
       jsonResponse(response, 200, { code: 0, data: listDesktopPetPacks(roleId, roleDir) });
     }
   } catch (error) {
+    if (assetMatch && isTransientAssetReadError(error)) {
+      response.setHeader("retry-after", "1");
+      jsonResponse(response, 503, { code: -1, message: "Desktop pet asset is temporarily unavailable." });
+      return true;
+    }
     jsonResponse(response, 404, { code: -1, message: error instanceof Error ? error.message : String(error) });
   }
   return true;

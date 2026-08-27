@@ -3,6 +3,11 @@ import test from "node:test";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 
 test("role knowledge routes prefer specific memory resources over memory item ids", () => {
+  assert.deepEqual(parseRoleKnowledgeResourceRoute("/api/roles/YeYu/counts"), {
+    roleId: "YeYu",
+    resource: "counts",
+    itemId: ""
+  });
   assert.deepEqual(parseRoleKnowledgeResourceRoute("/api/roles/GameDailyRabi/memory/recent"), {
     roleId: "GameDailyRabi",
     resource: "memory/recent",

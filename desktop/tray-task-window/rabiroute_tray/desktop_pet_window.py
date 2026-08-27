@@ -8,10 +8,13 @@ from .desktop_pet_client import DesktopPetPack, LoadedDesktopPetAnimation
 
 
 class DesktopPetWindow(QWidget):
+    clicked = Signal()
     double_clicked = Signal()
     animation_finished = Signal(str)
     placement_changed = Signal(object)
     context_menu_requested = Signal(object)
+    drag_started = Signal()
+    drag_finished = Signal()
 
     def __init__(self) -> None:
         flags = (
@@ -28,6 +31,7 @@ class DesktopPetWindow(QWidget):
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._drag_offset: QPoint | None = None
+        self._dragging = False
         self._movie: QMovie | None = None
         self._movie_buffer: QBuffer | None = None
         self._png_frames: tuple[QPixmap, ...] = ()
@@ -39,6 +43,9 @@ class DesktopPetWindow(QWidget):
         self._bubble_timer = QTimer(self)
         self._bubble_timer.setSingleShot(True)
         self._bubble_timer.timeout.connect(self.hide_bubble)
+        self._single_click_timer = QTimer(self)
+        self._single_click_timer.setSingleShot(True)
+        self._single_click_timer.timeout.connect(self.clicked.emit)
         self._bubble = QLabel(None, self.windowFlags())
         self._bubble.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._bubble.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -263,12 +270,16 @@ class DesktopPetWindow(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and not self._locked:
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._dragging = False
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            if not self._dragging:
+                self._dragging = True
+                self.drag_started.emit()
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             if self._bubble.isVisible():
                 self._place_bubble()
@@ -278,11 +289,17 @@ class DesktopPetWindow(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            was_dragging = self._dragging
             self._drag_offset = None
+            self._dragging = False
             self._keep_visible()
             placement = self.placement()
             if placement is not None:
                 self.placement_changed.emit(placement)
+            if was_dragging:
+                self.drag_finished.emit()
+            else:
+                self._single_click_timer.start(QApplication.doubleClickInterval())
         elif event.button() == Qt.MouseButton.RightButton:
             self.context_menu_requested.emit(event.globalPosition().toPoint())
             event.accept()
@@ -291,6 +308,7 @@ class DesktopPetWindow(QWidget):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._single_click_timer.stop()
             self.double_clicked.emit()
             event.accept()
             return
@@ -298,6 +316,7 @@ class DesktopPetWindow(QWidget):
 
     def closeEvent(self, event) -> None:
         self.stop_animation()
+        self._single_click_timer.stop()
         self._bubble_timer.stop()
         self._bubble.close()
         super().closeEvent(event)

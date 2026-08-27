@@ -93,6 +93,14 @@ export type RoleMemoryPageCounts = {
   consolidationRuns: number;
 };
 
+export type RoleKnowledgeFileCounts = {
+  activePlans: number;
+  archivedPlans: number;
+  recentMemory: number;
+  consolidatedMemory: number;
+  consolidationRuns: number;
+};
+
 export type RoleMemoryKind = "recent" | "consolidated" | "archived";
 
 export type RoleMemoryPage = {
@@ -194,6 +202,17 @@ export async function loadRoleKnowledge(roleId: string): Promise<{ plans: RolePl
     managerData<RoleMemoryPayload>(`/api/roles/${encodedRoleId}/memory`)
   ]);
   return { plans: plans.map(normalizeRolePlanFromManager), memory };
+}
+
+export async function loadRoleKnowledgeFileCounts(roleId: string): Promise<RoleKnowledgeFileCounts> {
+  return managerData<RoleKnowledgeFileCounts>(`/api/roles/${encodeURIComponent(roleId)}/counts`);
+}
+
+export async function loadPendingMemoryConsolidationRunCount(roleId: string): Promise<number> {
+  const runs = await managerData<Array<{ status?: string }>>(
+    `/api/roles/${encodeURIComponent(roleId)}/memory/consolidation-runs`
+  );
+  return runs.filter((run) => run?.status === "requested").length;
 }
 
 export async function loadPlanHistory(roleId: string, planId: string): Promise<RolePlanHistoryRecord[]> {
