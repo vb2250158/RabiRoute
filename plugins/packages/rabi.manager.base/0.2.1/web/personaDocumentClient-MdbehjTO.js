@@ -1,1 +1,0 @@
-import{a as n,P as o}from"./markdownPreview-PAJwrYAT.js";async function i(t,a="persona.md"){const r=new URLSearchParams({file:a}),e=await fetch(`/api/roles/${encodeURIComponent(t)}/persona-document?${r}`);if(!e.ok)throw new Error((await e.text()).trim()||`人格正文读取失败（HTTP ${e.status}）。`);return n(e,o,!1,`人格正文超过 ${o} 字节。`)}export{i as l};

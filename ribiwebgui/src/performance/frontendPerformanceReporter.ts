@@ -30,6 +30,12 @@ let requests: RequestRecord[] = [];
 let operations: OperationRecord[] = [];
 let longTasks: number[] = [];
 let navigationMs: number | undefined;
+let sampleInFlight = false;
+let retryNotBefore = 0;
+let consecutiveSubmissionFailures = 0;
+let firstSamplePending = true;
+const FIRST_SAMPLE_MIN_DELAY_MS = 30_000;
+const PERFORMANCE_SUBMISSION_TIMEOUT_MS = 2_000;
 const runtimeId = globalThis.crypto?.randomUUID?.() || `webgui-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 function managerOperation(input: RequestInfo | URL): string | undefined {
@@ -48,11 +54,26 @@ function currentPage(): string {
 
 function schedule(): void {
   if (!enabled || timer !== undefined) return;
+  const firstSampleDelay = firstSamplePending ? FIRST_SAMPLE_MIN_DELAY_MS : 0;
+  const delay = Math.max(config.sampleIntervalMs, firstSampleDelay, retryNotBefore - Date.now(), 0);
   timer = window.setTimeout(() => {
     timer = undefined;
-    void submitSample();
-    schedule();
-  }, config.sampleIntervalMs);
+    void submitSample().finally(schedule);
+  }, delay);
+}
+
+function restoreCaptured(
+  capturedRequests: RequestRecord[],
+  capturedOperations: OperationRecord[],
+  capturedLongTasks: number[]
+): void {
+  requests = [...capturedRequests, ...requests].slice(-1_000);
+  operations = [...capturedOperations, ...operations].slice(-1_000);
+  longTasks = [...capturedLongTasks, ...longTasks].slice(-1_000);
+}
+
+function submissionRetryDelayMs(): number {
+  return Math.min(60_000, 1_000 * 2 ** Math.min(consecutiveSubmissionFailures, 6));
 }
 
 function summarizeRequests(captured: RequestRecord[]) {
@@ -109,7 +130,8 @@ function summarizeOperations(captured: OperationRecord[]) {
 }
 
 async function submitSample(): Promise<void> {
-  if (!enabled) return;
+  if (!enabled || sampleInFlight || Date.now() < retryNotBefore) return;
+  sampleInFlight = true;
   const capturedRequests = requests;
   const capturedOperations = operations;
   const capturedLongTasks = longTasks;
@@ -163,15 +185,28 @@ async function submitSample(): Promise<void> {
     ...(slowOperations.length ? { slowOperations } : {})
   };
   navigationMs = undefined;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), PERFORMANCE_SUBMISSION_TIMEOUT_MS);
   try {
-    await fetch("/api/performance/batches", {
+    const response = await fetch("/api/performance/batches", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(sample),
-      keepalive: true
+      keepalive: true,
+      signal: controller.signal
     });
+    if (!response.ok) throw new Error(`Performance sample rejected: ${response.status}`);
+    firstSamplePending = false;
+    consecutiveSubmissionFailures = 0;
+    retryNotBefore = 0;
   } catch {
-    // Frontend telemetry failure must not affect the control UI.
+    // Frontend telemetry failure must not affect the control UI. Keep the next sample complete and back off.
+    restoreCaptured(capturedRequests, capturedOperations, capturedLongTasks);
+    consecutiveSubmissionFailures += 1;
+    retryNotBefore = Date.now() + submissionRetryDelayMs();
+  } finally {
+    window.clearTimeout(timeout);
+    sampleInFlight = false;
   }
 }
 
@@ -184,6 +219,9 @@ export function updateFrontendPerformanceConfig(value: unknown): void {
     requests = [];
     operations = [];
     longTasks = [];
+    retryNotBefore = 0;
+    consecutiveSubmissionFailures = 0;
+    firstSamplePending = true;
     return;
   }
   schedule();

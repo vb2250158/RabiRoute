@@ -73,7 +73,7 @@ function createFixture() {
         remember("registerMessageGroup", input);
         const item = requirement(input.requirementId, "pending_dispatch");
         requirements.set(item.id, item);
-        return item;
+        return { outcome: "created" as const, requirement: item };
       },
       recordDispatch: (id, worker) => {
         remember("recordDispatch", id, worker);
@@ -263,6 +263,29 @@ test("handles all requirement registration actions and rejects bad input", async
     });
     assert.equal(missingId.status, 400);
     assert.equal((await json(missingId)).message, "Missing requirementId.");
+  } finally {
+    await app.close();
+  }
+});
+
+test("suppresses expired replay registrations without publishing a board change", async () => {
+  const fixture = createFixture();
+  fixture.context.board.registerMessageGroup = () => ({
+    outcome: "replay_suppressed",
+    dedupeKey: "a".repeat(64)
+  });
+  const app = await startServer(fixture.context);
+  try {
+    const response = await post(app.baseUrl, "/api/message-processing/requirements", {
+      action: "register_group",
+      requirementId: "req-replayed",
+      messageGroupId: "group-replayed",
+      source: requirement("source").source
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await json(response)).data.outcome, "replay_suppressed");
+    assert.equal(fixture.calls.some((call) => call.name === "schedule"), false);
+    assert.equal(fixture.calls.some((call) => call.name === "event"), false);
   } finally {
     await app.close();
   }

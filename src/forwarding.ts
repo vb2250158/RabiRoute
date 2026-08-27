@@ -363,11 +363,15 @@ async function deliverPacketToMessageAgent(
         }
       })
     );
-    const registered = registration.data && typeof registration.data === "object"
+    const registrationData = registration.data && typeof registration.data === "object"
       ? registration.data as Record<string, unknown>
       : {};
+    const registered = registrationData.requirement && typeof registrationData.requirement === "object"
+      ? registrationData.requirement as Record<string, unknown>
+      : registrationData;
+    const registrationOutcome = String(registrationData.outcome || "");
     const canonicalRequirementId = String(registered.id || requirementId);
-    const registeredStatus = String(registered.status || "pending_dispatch");
+    const registeredStatus = String(registered.status || (registrationOutcome === "replay_suppressed" ? "not_required" : "pending_dispatch"));
     if (registeredStatus !== "pending_dispatch" && registeredStatus !== "send_failed") {
       appendAdapterLogToDir("router", {
         event: "message_processing_duplicate_suppressed",

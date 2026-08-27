@@ -1,1 +1,1 @@
-import{a as r}from"./rabiManagerBaseClient-B5SOtB7P.js";import"./routeScopedNavigation-B1DNyfqa.js";export{r as activate};
+export { activate } from "/assets/rabiManagerBaseClient-B2j7jmau.js";

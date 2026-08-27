@@ -111,7 +111,9 @@ export function handlePluginCatalogApi(
           : extension === ".js" || extension === ".mjs"
             ? "text/javascript; charset=utf-8"
             : "application/octet-stream";
-        response.setHeader("cache-control", "no-store");
+        // The revision is part of the URL and the module content is immutable for that revision.
+        // Reusing it avoids re-downloading every active Web Bundle on each WebGUI visit.
+        response.setHeader("cache-control", "public, max-age=31536000, immutable");
         response.setHeader("x-content-type-options", "nosniff");
         response.writeHead(200, { "content-type": contentType });
         response.end(source);

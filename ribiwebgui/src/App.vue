@@ -16,6 +16,7 @@ import { desktopSettingsClient } from "./desktopSettingsClient";
 import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
 import { readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
 import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
+import { isBuiltinStartupWebPageRoute } from "./builtinStartupPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
 import { disposeWebPluginModules } from "./pluginModules";
@@ -42,7 +43,7 @@ async function handlePluginCatalogChanged(): Promise<void> {
   await refreshWebPluginModulesSafely();
   if (!webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup")) store.quickSetupDialogOpen = false;
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
-  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+  if (routeId && !isBuiltinStartupWebPageRoute(routeId) && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
   }
 }
@@ -169,8 +170,8 @@ async function executeCommand(command: WebCommandContribution): Promise<void> {
   await command.execute(commandContext());
 }
 
-onMounted(async () => {
-  await Promise.all([loadInterfaceTheme(), store.load()]);
+async function loadGatewayEditorInBackground(): Promise<void> {
+  await store.load();
   if (store.gateways.length === 0) {
     const quickSetup = webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup");
     if (quickSetup) await executeCommand(quickSetup);
@@ -179,6 +180,11 @@ onMounted(async () => {
     if (scopedPath && scopedPath !== route.path) await router.replace(scopedPath);
   }
   void ensurePageDiagnostics();
+}
+
+onMounted(() => {
+  void loadInterfaceTheme();
+  void store.loadRouteSummaries().then(() => loadGatewayEditorInBackground());
   window.addEventListener("beforeunload", beforeUnload);
   window.addEventListener(INTERFACE_THEME_CHANGED, onInterfaceThemeChanged);
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
@@ -226,7 +232,7 @@ async function refresh(): Promise<void> {
   await Promise.all([store.load(), pluginCatalogStore.refresh()]);
   await refreshWebPluginModulesSafely();
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
-  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+  if (routeId && !isBuiltinStartupWebPageRoute(routeId) && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
     return;
   }

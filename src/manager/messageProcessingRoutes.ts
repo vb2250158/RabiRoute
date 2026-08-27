@@ -3,6 +3,7 @@ import type {
   CriticalProjectFactDisposition,
   KnowledgeMatchCallbackInput,
   KnowledgeRecallMatch,
+  MessageProcessingGroupRegistrationResult,
   MessageProcessingOutcomeInput,
   MessageProcessingRequirement,
   RegisterMessageGroupRequirementInput
@@ -29,7 +30,7 @@ export type MessageProcessingApiContext = {
   boardPayload: (routeId?: string, limit?: number) => Promise<Record<string, unknown>>;
   board: {
     getRequirement: (requirementId: string) => MessageProcessingRequirement | undefined;
-    registerMessageGroup: (input: RegisterMessageGroupRequirementInput) => MessageProcessingRequirement;
+    registerMessageGroup: (input: RegisterMessageGroupRequirementInput) => MessageProcessingGroupRegistrationResult;
     recordDispatch: (
       requirementId: string,
       worker: NonNullable<MessageProcessingRequirement["worker"]>
@@ -203,24 +204,30 @@ export function handleMessageProcessingApi(
       .then((body) => {
         const requirementId = String(body.requirementId || "").trim();
         if (!requirementId) throw new Error("Missing requirementId.");
-        const item = body.action === "register_group"
-          ? context.board.registerMessageGroup({
+        if (body.action === "register_group") {
+          const registration = context.board.registerMessageGroup({
+            requirementId,
+            messageGroupId: String(body.messageGroupId || "").trim(),
+            source: body.source as RegisterMessageGroupRequirementInput["source"],
+            knowledgeMatches: context.recallKnowledge(body.source as RegisterMessageGroupRequirementInput["source"])
+          });
+          if (registration.outcome !== "replay_suppressed") {
+            context.scheduleKnowledgeCallbackReminder(registration.requirement);
+            publishBoardChange(context, registration.requirement);
+          }
+          return registration;
+        }
+        const item = body.action === "dispatch"
+          ? context.board.recordDispatch(
               requirementId,
-              messageGroupId: String(body.messageGroupId || "").trim(),
-              source: body.source as RegisterMessageGroupRequirementInput["source"],
-              knowledgeMatches: context.recallKnowledge(body.source as RegisterMessageGroupRequirementInput["source"])
-            })
-          : body.action === "dispatch"
-            ? context.board.recordDispatch(
+              body.worker as NonNullable<MessageProcessingRequirement["worker"]>
+            )
+          : body.action === "dispatch_failed"
+            ? context.board.recordDispatchFailure(
                 requirementId,
-                body.worker as NonNullable<MessageProcessingRequirement["worker"]>
+                body.error || "Message Agent dispatch failed."
               )
-            : body.action === "dispatch_failed"
-              ? context.board.recordDispatchFailure(
-                  requirementId,
-                  body.error || "Message Agent dispatch failed."
-                )
-              : (() => { throw new Error("Unsupported message-processing action."); })();
+            : (() => { throw new Error("Unsupported message-processing action."); })();
         context.scheduleKnowledgeCallbackReminder(item);
         publishBoardChange(context, item);
         return item;

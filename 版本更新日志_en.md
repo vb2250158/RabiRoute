@@ -7,6 +7,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### RibiWebGUI cold start and message-board retention
+
+- The WebGUI now renders its fixed shell immediately after LAN-address normalization. The plugin catalog and optional Web Bundles refresh in the background. A direct knowledge-page URL no longer waits for an optional Bundle; catalog delay or one Bundle failure keeps the original path and a recoverable loading state.
+- The knowledge page first resolves the Route and role through `/gateways?summary=1`, displays eight plan summaries, and then serially loads the remaining pages for the same filter in the background. A Route change, hidden page, or unmount stops later reads. Full Gateway configuration still loads in the background for editing and diagnostics.
+- The root HTML uses `no-store`; content-hashed static assets and revision-addressed Web Bundle modules use long-lived immutable caching. The base Bundle now only re-exports the current main WebGUI entry, avoiding a second Vue, Pinia, and page-dependency download.
+- The message-processing board snapshot is now v2. An expired requirement drops message bodies, attachments, and reply context while retaining a SHA-256 replay-dedupe key for up to seven days. A matching replay returns `replay_suppressed` without another Agent delivery or board event.
+
 ### Plan archive consistency
 
 - Moving a completed plan to archived now clears `currentStepId`; an archived record no longer retains a current-step pointer that is valid only for in-progress or paused plans.

@@ -7091,6 +7091,15 @@ function contentTypeFor(filePath: string): string {
   return "application/octet-stream";
 }
 
+function webuiCacheControl(filePath: string, indexPath: string): string {
+  if (filePath === indexPath) return "no-store";
+  // Vite names emitted assets with a content hash. They are safe to cache until
+  // their URL changes, while index.html must always select the latest bundle.
+  return /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/.test(path.basename(filePath))
+    ? "public, max-age=31536000, immutable"
+    : "no-cache";
+}
+
 function staticWebuiResponse(pathname: string, response: http.ServerResponse): boolean {
   const indexPath = path.join(webuiDistPath, "index.html");
   if (!fs.existsSync(indexPath)) {
@@ -7106,7 +7115,10 @@ function staticWebuiResponse(pathname: string, response: http.ServerResponse): b
   }
 
   if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
-    response.writeHead(200, { "content-type": contentTypeFor(candidatePath) });
+    response.writeHead(200, {
+      "content-type": contentTypeFor(candidatePath),
+      "cache-control": webuiCacheControl(candidatePath, indexPath)
+    });
     response.end(fs.readFileSync(candidatePath));
     return true;
   }
@@ -7115,7 +7127,10 @@ function staticWebuiResponse(pathname: string, response: http.ServerResponse): b
     return false;
   }
 
-  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store"
+  });
   response.end(fs.readFileSync(indexPath, "utf8"));
   return true;
 }

@@ -79,28 +79,28 @@ test("visible knowledge pages keep requesting background pages until the active 
   assert.deepEqual(requested, ["8", "58", "108"]);
 });
 
-test("background knowledge loading stops when the page is hidden or a cursor cannot advance", async () => {
+test("background knowledge loading stops after a route change or a cursor cannot advance", async () => {
   let cursor = "24";
-  let visible = true;
+  let requestVersion = 1;
   let requests = 0;
   await drainKnowledgePages({
     nextCursor: () => cursor,
-    shouldContinue: () => visible,
+    shouldContinue: () => requestVersion === 1,
     yieldToUi: async () => {},
     loadNextPage: async () => {
       requests += 1;
-      visible = false;
+      requestVersion += 1;
       cursor = "124";
     }
   });
   assert.equal(requests, 1);
 
-  visible = true;
+  requestVersion = 1;
   cursor = "124";
   requests = 0;
   await drainKnowledgePages({
     nextCursor: () => cursor,
-    shouldContinue: () => visible,
+    shouldContinue: () => requestVersion === 1,
     yieldToUi: async () => {},
     loadNextPage: async () => {
       requests += 1;
@@ -134,12 +134,15 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /const memoryError = ref\(""\)/);
   assert.match(page, /v-if="roleId && showsPlanList && planError"/);
   assert.match(page, /v-if="roleId && showsMemoryList && memoryError"/);
-  assert.doesNotMatch(page, /function loadAllRemainingPlans\(\)/);
-  assert.doesNotMatch(page, /function loadAllRemainingMemory\(\)/);
-  assert.doesNotMatch(page, /drainKnowledgePages\(/);
-  assert.doesNotMatch(page, /planNextCursor\.value\) void loadAllRemainingPlans\(\)/);
-  assert.doesNotMatch(page, /memoryNextCursor\.value\) void loadAllRemainingMemory\(\)/);
-  assert.match(page, /if \(hasMorePlans\.value\) void loadMorePlans\(\)/);
+  assert.match(page, /drainKnowledgePages/);
+  assert.match(page, /计划目录必须在页面可工作时自动读到 nextCursor 为空；缺失或提前停止属于功能缺陷。/);
+  assert.match(page, /function loadAllRemainingPlans\(selectedRoleId: string, currentRequest: number\): void/);
+  assert.match(page, /yieldToUi: yieldToKnowledgePaint/);
+  assert.match(page, /loadNextPage: \(\) => loadMorePlans\(8, true\)/);
+  assert.match(page, /!fromBackground && planPageBackgroundRequest === currentRequest/);
+  assert.match(page, /refreshExpandedPlanAgentStatuses\(\);\s*loadAllRemainingPlans\(selectedRoleId, currentRequest\);/);
+  assert.match(page, /onBeforeUnmount\(\(\) => \{\s*requestVersion \+= 1;/);
+  assert.match(page, /if \(hasMorePlans\.value && !planPageBackgroundRequest\) void loadMorePlans\(\)/);
   assert.match(page, /if \(hasMoreMemory\.value\) void loadMoreMemory\(\)/);
   assert.match(page, /MAX_CONCURRENT_PLAN_DETAILS = 10/);
   assert.match(page, /loadRolePlan\(roleId\.value, task\.planId\)/);
@@ -197,7 +200,7 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.match(page, /function releaseDirectoryJumpTarget[\s\S]{0,700}scheduleProgressiveSentinelRefresh\(\)/);
   assert.match(page, /function loadMoreRenderedPlans\(\)/);
   assert.match(page, /function loadMoreRenderedMemory\(\)/);
-  assert.match(page, /if \(hasMorePlans\.value\) void loadMorePlans\(\)/);
+  assert.match(page, /if \(hasMorePlans\.value && !planPageBackgroundRequest\) void loadMorePlans\(\)/);
   assert.doesNotMatch(page, /yieldToPlanDetailHydration/);
   assert.doesNotMatch(page, /v-for="\(plan, planIndex\) in visiblePlansForView"/);
   assert.match(page, /v-if="planDetailsLoading\[plan\.id\]" class="knowledge-plan-detail-loading"/);

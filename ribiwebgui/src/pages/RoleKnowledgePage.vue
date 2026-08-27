@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES,
   PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES,
@@ -30,6 +31,7 @@ import {
   hasMoreKnowledgeBeforeWindow,
   knowledgeRenderWindow,
   mergeKnowledgePage,
+  drainKnowledgePages,
   nextKnowledgeRenderLimit,
   previousKnowledgeRenderWindow,
   shouldAutoLoadNextKnowledgeBatch
@@ -63,6 +65,7 @@ import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract"
 import type { RoleMemory, RolePlan, RolePlanApprovalContract, RolePlanFeedback, RolePlanHistoryRecord, RolePlanStep } from "../types";
 
 const store = useGatewayStore();
+const route = useRoute();
 const { isEnglish, t } = useI18n();
 const plans = ref<RolePlan[]>([]);
 const recentMemory = ref<RoleMemory[]>([]);
@@ -186,11 +189,11 @@ const MAX_CONCURRENT_PLAN_DETAILS = 10;
 let knowledgeFilterTimer = 0;
 let memoryClockTimer = 0;
 let planPageBackgroundRequest = 0;
-let memoryPageBackgroundRequest = 0;
 let planAgentStatusGeneration = 0;
 
-const roleId = computed(() => String(store.selectedGateway?.agentRoleId || "").trim());
-const gatewayId = computed(() => String(store.selectedGateway?.id || "").trim());
+const routeSummary = computed(() => store.routeSummaryForKey(String(route.params.id || "")) || store.selectedRouteSummary);
+const roleId = computed(() => String(store.selectedGateway?.agentRoleId || routeSummary.value?.agentRoleId || "").trim());
+const gatewayId = computed(() => String(store.selectedGateway?.id || routeSummary.value?.id || "").trim());
 const roleLabel = computed(() => roleId.value || t("未绑定人格"));
 const dateFormatter = computed(() => new Intl.DateTimeFormat(isEnglish.value ? "en" : "zh-CN", {
   month: "short",
@@ -814,7 +817,7 @@ function observeProgressiveSentinels(): void {
         Boolean(directoryJumpTargetId)
       )) return;
       if (hasMoreRenderedPlans.value) loadMoreRenderedPlans();
-      if (hasMorePlans.value) void loadMorePlans();
+      if (hasMorePlans.value && !planPageBackgroundRequest) void loadMorePlans();
     }, { rootMargin: "700px 0px" });
     if (observesPreviousPlans && planLoadPreviousSentinel.value) {
       planPageObserver.observe(planLoadPreviousSentinel.value);
@@ -902,11 +905,17 @@ function loadMoreRenderedPlans(): void {
   schedulePlanDetailObserverRefresh();
 }
 
-async function loadMorePlans(limit = 8): Promise<void> {
+async function loadMorePlans(limit = 8, fromBackground = false): Promise<void> {
   const selectedRoleId = roleId.value;
   const cursor = planNextCursor.value;
   const currentRequest = requestVersion;
-  if (!selectedRoleId || !cursor || loadingMorePlans.value || !knowledgePageWorkAllowed()) return;
+  if (
+    !selectedRoleId
+    || !cursor
+    || loadingMorePlans.value
+    || (!fromBackground && planPageBackgroundRequest === currentRequest)
+    || !knowledgePageWorkAllowed()
+  ) return;
   loadingMorePlans.value = true;
   try {
     const page = await loadRolePlanPage(selectedRoleId, cursor, limit, {
@@ -947,6 +956,33 @@ async function yieldToKnowledgePaint(): Promise<void> {
   });
 }
 
+// 计划目录必须在页面可工作时自动读到 nextCursor 为空；缺失或提前停止属于功能缺陷。
+// 滚动只控制已缓存计划卡片的挂载窗口，不能决定目录数据是否继续加载。
+function loadAllRemainingPlans(selectedRoleId: string, currentRequest: number): void {
+  if (!planNextCursor.value || planPageBackgroundRequest === currentRequest) return;
+  planPageBackgroundRequest = currentRequest;
+  void drainKnowledgePages({
+    nextCursor: () => (
+      currentRequest === requestVersion
+      && selectedRoleId === roleId.value
+      && showsPlanList.value
+      && knowledgePageWorkAllowed()
+        ? planNextCursor.value
+        : ""
+    ),
+    shouldContinue: () => (
+      currentRequest === requestVersion
+      && selectedRoleId === roleId.value
+      && showsPlanList.value
+      && knowledgePageWorkAllowed()
+    ),
+    yieldToUi: yieldToKnowledgePaint,
+    loadNextPage: () => loadMorePlans(8, true)
+  }).finally(() => {
+    if (planPageBackgroundRequest === currentRequest) planPageBackgroundRequest = 0;
+  });
+}
+
 async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: number): Promise<void> {
   if (!showsPlanList.value) {
     plans.value = [];
@@ -981,6 +1017,7 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
   }
   if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
   refreshExpandedPlanAgentStatuses();
+  loadAllRemainingPlans(selectedRoleId, currentRequest);
 }
 
 async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: number): Promise<void> {
@@ -1111,11 +1148,11 @@ watch([hasMorePlans, hasMoreMemory, hasMoreRenderedPlansBefore, hasMoreRenderedP
 });
 
 watch(
-  [roleId, () => store.loading],
+  [roleId, () => store.routeBootstrapLoading],
   (current, previous) => {
     const [nextRoleId, managerLoading] = current;
     const previousRoleId = previous?.[0];
-    const previousManagerLoading = previous?.[1];
+    const previousRouteBootstrapLoading = previous?.[1];
     if (previous && nextRoleId !== previousRoleId) {
       planListSortMode.value = "status";
       planListHiddenStatuses.value = [];
@@ -1132,7 +1169,7 @@ watch(
       closeMemoryDetail();
     }
     if (!nextRoleId || managerLoading) return;
-    if (!previous || nextRoleId !== previousRoleId || previousManagerLoading === true) void refreshKnowledge();
+    if (!previous || nextRoleId !== previousRoleId || previousRouteBootstrapLoading === true) void refreshKnowledge();
   },
   { immediate: true }
 );
@@ -2073,6 +2110,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  requestVersion += 1;
+  planPageBackgroundRequest = 0;
   planDirectoryMounted = false;
   document.removeEventListener("visibilitychange", handleKnowledgeVisibilityChange);
   window.removeEventListener("scroll", handleKnowledgeWindowScroll);

@@ -1639,10 +1639,14 @@ function markPlanListCacheDirty(roleDir: string, filePath?: string): void {
   planListDirtyAt.set(cacheKey, Date.now());
   if (!filePath) {
     planListDirtyFiles.set(cacheKey, null);
+    schedulePlanListCacheRefresh(roleDir);
     return;
   }
   const current = planListDirtyFiles.get(cacheKey);
-  if (current === null) return;
+  if (current === null) {
+    schedulePlanListCacheRefresh(roleDir);
+    return;
+  }
   const dirtyFiles = current || new Set<string>();
   dirtyFiles.add(path.resolve(filePath));
   planListDirtyFiles.set(cacheKey, dirtyFiles);
@@ -1811,11 +1815,32 @@ async function refreshPlanListCacheFromDirtyFiles(roleDir: string): Promise<void
   if (planListRefreshInFlight.has(cacheKey)) return;
   const dirtyFiles = planListDirtyFiles.get(cacheKey);
   const cachedFiles = planFileCache.get(cacheKey);
-  if (!(dirtyFiles instanceof Set) || !dirtyFiles.size || !cachedFiles || !planListCache.has(cacheKey)) return;
+  if (dirtyFiles === undefined || !cachedFiles || !planListCache.has(cacheKey)) return;
   planListDirtyFiles.delete(cacheKey);
   planListDirtyAt.delete(cacheKey);
   planListRefreshInFlight.add(cacheKey);
   await measurePerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogRefresh, async () => {
+    if (dirtyFiles === null) {
+      const files = await allPlanFilesAsync(roleDir);
+      const results = await Promise.all(files.map((filePath) => readPlanFileForCatalog(filePath)));
+      if (results.some((result) => result.retry)) {
+        markPlanListCacheDirty(roleDir);
+        return;
+      }
+      const refreshedFiles = new Map<string, PlanFileCacheEntry>();
+      for (const result of results) {
+        if (result.entry) refreshedFiles.set(path.resolve(result.filePath), result.entry);
+      }
+      planFileCache.set(cacheKey, refreshedFiles);
+      const refreshed = plansFromFileCache(roleDir) ?? { signature: "", items: [] };
+      planListCache.set(cacheKey, {
+        signature: refreshed.signature,
+        validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+        plans: uniquePlans(refreshed.items)
+      });
+      return;
+    }
+    if (!dirtyFiles.size) return;
     const results = await Promise.all([...dirtyFiles].map((filePath) => readChangedPlanFile(filePath)));
     for (const result of results) {
       if (result.missing) cachedFiles.delete(result.filePath);
@@ -1832,7 +1857,7 @@ async function refreshPlanListCacheFromDirtyFiles(roleDir: string): Promise<void
     }
   }).finally(() => {
     planListRefreshInFlight.delete(cacheKey);
-    if (planListDirtyFiles.get(cacheKey) instanceof Set && !planListRefreshTimers.has(cacheKey)) {
+    if (planListDirtyFiles.has(cacheKey) && !planListRefreshTimers.has(cacheKey)) {
       schedulePlanListCacheRefresh(roleDir);
     }
   });
@@ -1883,48 +1908,42 @@ function updatePlanListCacheAfterWrite(
 
 function ensurePlanListWatchers(roleDir: string): boolean {
   const cacheKey = planListCacheKey(roleDir);
-  const directories = [
-    path.join(plansDir(roleDir), "items", "active"),
-    path.join(plansDir(roleDir), "archive"),
-    path.join(plansDir(roleDir), "active"),
-    ...["active", "archive"].flatMap((bucket) => planJsonFilesInBucket(roleDir, bucket as PlanStorageBucket).map((filePath) => path.dirname(filePath)))
-  ].filter((directory) => fs.existsSync(directory));
-  if (!directories.length) return false;
+  const directory = plansDir(roleDir);
+  if (!fs.existsSync(directory)) return false;
   let watchers = planListWatchers.get(cacheKey);
   if (!watchers) {
     watchers = new Map<string, fs.FSWatcher>();
     planListWatchers.set(cacheKey, watchers);
   }
-  for (const directory of directories) {
-    if (watchers.has(directory)) continue;
-    try {
-      const watcher = fs.watch(directory, { persistent: false }, (_eventType, fileName) => {
-        if (!fs.existsSync(directory)) {
-          watcher.close();
-          watchers?.delete(directory);
-          markPlanListCacheDirty(roleDir);
-          return;
-        }
-        if (!fileName) {
-          markPlanListCacheDirty(roleDir);
-          return;
-        }
-        const relativeName = fileName.toString();
-        if (!relativeName.toLowerCase().endsWith(".json")) return;
-        markPlanListCacheDirty(roleDir, path.join(directory, relativeName));
-      });
-      watcher.unref();
-      watcher.on("error", () => {
+  if (watchers.has(directory)) return true;
+  try {
+    const watcher = fs.watch(directory, { persistent: false, recursive: true }, (_eventType, fileName) => {
+      if (!fs.existsSync(directory)) {
         watcher.close();
         watchers?.delete(directory);
         markPlanListCacheDirty(roleDir);
-      });
-      watchers.set(directory, watcher);
-    } catch {
-      // Fall back to the short signature TTL when this filesystem cannot be watched.
-    }
+        return;
+      }
+      if (!fileName) {
+        markPlanListCacheDirty(roleDir);
+        return;
+      }
+      const relativeName = fileName.toString();
+      if (!relativeName.toLowerCase().endsWith(".json")) return;
+      markPlanListCacheDirty(roleDir, path.join(directory, relativeName));
+    });
+    watcher.unref();
+    watcher.on("error", () => {
+      watcher.close();
+      watchers?.delete(directory);
+      markPlanListCacheDirty(roleDir);
+    });
+    watchers.set(directory, watcher);
+    return true;
+  } catch {
+    // Recursive watching is unavailable on this filesystem. The 500 ms TTL below is the fallback.
+    return false;
   }
-  return directories.every((directory) => watchers?.has(directory));
 }
 
 type PlanRecord = {
@@ -1970,10 +1989,8 @@ export function listPlans(roleDir: string): PlanItem[] {
   const dirtyAt = planListDirtyAt.get(cacheKey);
   if (cached && watchBacked && dirtyAt === undefined) return cached.plans;
   if (cached && watchBacked && dirtyAt !== undefined) {
-    if (planListDirtyFiles.get(cacheKey) instanceof Set) {
-      if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
-      return cached.plans;
-    }
+    if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
+    return cached.plans;
   }
   if (cached && !watchBacked && cached.validUntil > now) return cached.plans;
   const files = allPlanFiles(roleDir);
@@ -2000,7 +2017,7 @@ export async function listPlansAsync(roleDir: string): Promise<PlanItem[]> {
     recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
     return cached.plans;
   }
-  if (cached && watchBacked && dirtyAt !== undefined && planListDirtyFiles.get(cacheKey) instanceof Set) {
+  if (cached && watchBacked && dirtyAt !== undefined) {
     if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
     recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
     return cached.plans;

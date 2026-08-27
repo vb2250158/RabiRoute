@@ -220,7 +220,7 @@ test("Plugin module API lists and serves only the matching immutable revision", 
     }]);
     const bundle = await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("web-example")}/${rev}/client.mjs`);
     assert.equal(bundle.status, 200);
-    assert.equal(bundle.headers.get("cache-control"), "no-store");
+    assert.equal(bundle.headers.get("cache-control"), "public, max-age=31536000, immutable");
     assert.equal(await bundle.text(), 'const asset = function(e){return"/"+e}; export const version = "1.0.0";');
     assert.equal((await fetch(`${baseUrl}/api/plugins/modules/${encodeURIComponent("web-example")}/${"b".repeat(64)}/client.mjs`)).status, 404);
   } finally {

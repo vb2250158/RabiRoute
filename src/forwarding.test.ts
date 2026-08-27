@@ -527,7 +527,7 @@ test("replayed platform messages reuse the canonical requirement without a secon
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({
         code: 0,
-        data: { id: "canonical-requirement", status: "processing" }
+        data: { outcome: "replay_suppressed" }
       }));
     });
   });

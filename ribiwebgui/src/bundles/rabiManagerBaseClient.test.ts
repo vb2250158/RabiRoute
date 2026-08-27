@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import type { Component } from "vue";
 import type { TrustedWebPageRegistration } from "../pluginPages";
@@ -58,22 +58,17 @@ test("one base Web Bundle activation registers every selected Manager instance c
   const registrations = activateInstances(["manager:core", "manager:persona", "manager:desktop"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:core" && item.kind === "page").map(item => item.routeId), ["route.overview", "global.settings", "global.docs"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:core" && item.kind === "theme").map(item => item.themeId), ["system", "light", "dark"]);
-  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:persona" && item.kind === "page").map(item => item.routeId), ["route.persona", "route.persona-document", "route.knowledge", "route.persona-sync"]);
+  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:persona" && item.kind === "page").map(item => item.routeId), ["route.persona", "route.persona-document", "route.persona-sync"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:desktop" && item.kind === "settings").map(item => item.rendererId), ["builtin.desktop-settings.v1"]);
   assert.equal(registrations.filter(item => item.kind === "bundle").length, 1);
 });
 
-test("built base client uses a revision-local graph for lazy chunks", () => {
+test("built base client reuses the host asset graph instead of shipping a second Vue and Pinia runtime", () => {
   const webRoot = new URL("../../../plugins/packages/rabi.manager.base/0.2.1/web/", import.meta.url);
   const client = readFileSync(new URL("client.mjs", webRoot), "utf8");
-  assert.match(client, /activate/);
-  assert.match(client, /from"\.\/rabiManagerBaseClient-/);
-
-  const implementationMatch = client.match(/from"\.\/(rabiManagerBaseClient-[^"]+\.js)"/);
-  assert.ok(implementationMatch, "Base Bundle implementation import is missing.");
-  const implementation = readFileSync(new URL(implementationMatch[1]!, webRoot), "utf8");
-  assert.match(implementation, /RoleKnowledgePage-/);
-  assert.match(implementation, /import\("\.\/RoleKnowledgePage-/);
-  assert.match(implementation, /new URL\(e,r\)\.href/);
-  assert.doesNotMatch(implementation, /return"\/"\+\w/);
+  const hostEntry = client.match(/export\s*\{\s*activate\s*\}\s*from\s*"\/assets\/(rabiManagerBaseClient-[^"]+\.js)"/);
+  assert.ok(hostEntry, "Base Bundle client must re-export the current host entry.");
+  assert.equal(readdirSync(webRoot).join(","), "client.mjs");
+  assert.match(readFileSync(new URL(`../../dist/assets/${hostEntry[1]}`, import.meta.url), "utf8"), /activate/);
+  assert.doesNotMatch(client, /runtime-core|gatewayStore|index-/);
 });

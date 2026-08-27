@@ -7,7 +7,6 @@ import type {
 import type { TrustedWebThemeResourceRegistration } from "../pluginThemes";
 import {
   routeScopedAdaptersPath,
-  routeScopedKnowledgePath,
   routeScopedOverviewPath,
   routeScopedPersonaPath,
   routeScopedPersonaSyncPath,
@@ -88,12 +87,6 @@ function activatePersona(api: BaseWebBundleApi): readonly Dispose[] {
       navigation: { resolvePath: routeScopedPersonaPath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-account-heart-outline"] }
     },
     { routeId: "route.persona-document", rendererId: "builtin.web-page.persona-document.v1", loader: () => import("../pages/PersonaDocumentPage.vue"), paths: [{ path: "/routes/:id/persona/document", title: "人格正文" }] },
-    {
-      routeId: "route.knowledge", rendererId: "builtin.web-page.knowledge.v1",
-      loader: () => import("../pages/RoleKnowledgePage.vue"),
-      paths: [{ path: "/routes/:id/knowledge", title: "计划与记忆" }, { path: "/knowledge", title: "计划与记忆" }],
-      navigation: { resolvePath: routeScopedKnowledgePath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-notebook-check-outline"] }
-    },
     {
       routeId: "route.persona-sync", rendererId: "builtin.web-page.persona-sync.v1",
       loader: () => import("../pages/PersonaSyncPage.vue"),

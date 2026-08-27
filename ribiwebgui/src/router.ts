@@ -1,4 +1,5 @@
 import type { AsyncComponentLoader } from "vue";
+import { isBuiltinStartupWebPageRoute } from "./builtinStartupPages";
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 import RouteLoadErrorPage from "./components/RouteLoadErrorPage.vue";
 import RouteLoadingPage from "./components/RouteLoadingPage.vue";
@@ -22,7 +23,7 @@ export const PLUGIN_RECOVERY_ROUTE_NAME = "plugin-recovery";
 async function reloadActiveTrustedWebPageAfterReplacement(): Promise<void> {
   const current = router.currentRoute.value;
   const routeId = typeof current.meta.pluginRouteId === "string" ? current.meta.pluginRouteId : "";
-  if (!routeId || !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return;
+  if (!routeId || isBuiltinStartupWebPageRoute(routeId) || !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return;
   const resolved = router.resolve(current.fullPath);
   if (typeof resolved.meta.pluginRouteId !== "string" || resolved.meta.pluginRouteId !== routeId) return;
   await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: current.fullPath } });
@@ -58,7 +59,10 @@ export const router = createRouter({
       meta: { title: "插件恢复" }
     },
     { path: "/models", redirect: "/speech" },
-    { path: "/:pathMatch(.*)*", redirect: { name: PLUGIN_RECOVERY_ROUTE_NAME } }
+    {
+      path: "/:pathMatch(.*)*",
+      redirect: to => ({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: to.fullPath } })
+    }
   ]
 });
 
@@ -90,6 +94,12 @@ for (const registration of registeredWebPages()) mountTrustedWebPageRoutes(regis
 onTrustedWebPageRegistrationChange(change => {
   if (change.type === "registered") {
     mountTrustedWebPageRoutes(change.registration);
+    const current = router.currentRoute.value;
+    const requestedPath = typeof current.query.from === "string" ? current.query.from : "";
+    if (current.name === PLUGIN_RECOVERY_ROUTE_NAME && requestedPath.startsWith("/") && !requestedPath.startsWith("/plugin-recovery")) {
+      const requestedRoute = router.resolve(requestedPath);
+      if (requestedRoute.meta.pluginRouteId === change.registration.routeId) void router.replace(requestedRoute.fullPath);
+    }
     return;
   }
   const activeRouteId = router.currentRoute.value.meta.pluginRouteId;
@@ -106,7 +116,7 @@ onTrustedWebPageReplacement(() => { void reloadActiveTrustedWebPageAfterReplacem
 
 router.beforeEach((to) => {
   const routeId = typeof to.meta.pluginRouteId === "string" ? to.meta.pluginRouteId : "";
-  if (!routeId || isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return true;
+  if (!routeId || isBuiltinStartupWebPageRoute(routeId) || isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return true;
   return {
     name: PLUGIN_RECOVERY_ROUTE_NAME,
     query: to.name === PLUGIN_RECOVERY_ROUTE_NAME ? {} : { from: to.fullPath }
