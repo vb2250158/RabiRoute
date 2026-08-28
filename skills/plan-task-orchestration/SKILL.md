@@ -15,14 +15,23 @@ Before writing a plan or binding a task, read the relevant sections of:
 - [Plan and memory model](../../docs/plan-and-memory-model.md) for the current Plan schema, approval projection, feedback, task binding, and lifecycle rules.
 - [Create RabiRoute Agent adapter](../create-rabiroute-agent-adapter/SKILL.md) when changing or diagnosing task discovery, Desktop ownership, thread creation, or delivery behavior.
 
-Use the configured Manager base URL or an injected API URL. Do not guess a host or port. Prefer native Codex Desktop task tools when they are available; otherwise use `POST /api/agent/threads`. Never start a second Runtime as a fallback.
+Use the configured Manager base URL or an injected API URL. Do not guess a host or port. Prefer native Codex Desktop task tools when they are available; otherwise use `POST /api/agent/threads`.
 
-Write plans only through the Manager API. If Manager is unavailable, use direct role files only for read-only recovery and report that writes remain pending.
+## Handle Manager availability without blocking project work
+
+1. Call the configured Manager normally before using any fallback. Treat `401 + WEBGUI_TOKEN_REQUIRED` as an authentication case and follow the project credential rule; do not classify it as an outage.
+2. Treat connection refusal, timeout, DNS failure, HTTP `5xx`, or an unhealthy `/meta` response as an availability failure.
+3. Search only bounded source candidates: an injected or configured RabiRoute root, the documented sibling project path, and an explicit project path. Never scan arbitrary drives for a checkout.
+4. When the configured target is local and the source root exists, inspect the listener, process and lock ownership. If no live Manager owns the endpoint, make one controlled attempt to start the existing built Manager with `node dist/manager.js` in a hidden background process, then verify `/meta`. Never kill an existing Manager or start a second Runtime.
+5. If Manager remains unavailable, use direct role files only for read-only semantic deduplication and recovery. Do not write role files, create placeholder plans, or dispatch tasks through files.
+6. When recovery fails or the source root is absent, use the governing project's versioned offline plan-adjustment queue before continuing authorized project work. For PangHu, create or update one validated JSON record under `RabiPlanCache/pending/`; record the full task session, intended plan change, acceptance criteria, changed SVN-relative files, validations, revisions, and remaining work. Commit the cache with the related project change. Never store credentials, player privacy, private messages, or full logs.
+7. Treat the offline cache as a synchronization queue, not plan truth. Manager plan writes and task delivery remain unavailable evidence, not a business-work blocker. If the cache tool itself cannot be repaired, record that failure once and continue the authorized work.
+8. When Manager returns, process pending records oldest first. Semantically deduplicate by outcome, scope, and acceptance criteria, create or update the real plan through Manager, reread it, then mark the cache `synced` only with the real `planId` and sync session. Commit that receipt. If Manager does not return, leave the record pending and report only the actual Rabi state.
 
 ## Preserve the invariants
 
 - Create a formal plan only for work that needs cross-turn execution, waiting, follow-up, or acceptance. Do not create one for chat or a one-turn answer.
-- When a project-level policy says that any potentially mutating task requires a plan, perform plan admission before business investigation, design, implementation, or file writes. A strictly read-only task remains exempt only while it cannot produce or execute a project change.
+- When a project-level policy says that any potentially mutating task requires a plan, perform plan admission before business investigation, design, implementation, or file writes while Manager is available. During a verified availability failure, follow the fallback above and continue the authorized project work. A strictly read-only task remains exempt only while it cannot produce or execute a project change.
 - Give each plan one single-line `focus`, one coherent outcome, explicit acceptance criteria, and ordered `steps`.
 - Bind exactly one independent business execution task to one plan. Do not bind a coordinator, reminder, or persona chat task.
 - Keep `taskBinding.sessionId + workspace` as the stable identity. Treat `sessionTitle` as mutable display metadata.
@@ -230,5 +239,5 @@ Before reporting completion, verify:
 - waits and approvals match Manager-derived presentation;
 - every completed step and terminal state has acceptance evidence;
 - useful source, design, implementation, test, and acceptance files are attached or have a recorded omission reason;
-- Manager writes were reread successfully;
+- Manager writes were reread successfully when Manager was available; otherwise the availability failure and any read-only local recovery were recorded without blocking project completion;
 - no private role data, runtime logs, tokens, or relationship/persona content entered this project-level skill or public examples.
