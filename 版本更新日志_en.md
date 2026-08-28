@@ -8,6 +8,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+### Offline continuation when the plan control plane is unavailable
+
+- `plan-task-orchestration` now makes one controlled recovery attempt after a Manager availability failure and searches only bounded RabiRoute source candidates. Authorized project work continues when recovery fails or no source checkout exists.
+- PangHu can record intended plan changes, modified files, validation evidence, SVN revisions, and remaining work in the versioned `RabiPlanCache/pending/` queue. After Manager recovers, the agent semantically deduplicates and updates the real plan, then writes a `synced` receipt only after obtaining the real `planId` and a successful reread. The cache never replaces Manager plan state.
+
 ### Agent model selection
 
 - The Codex Primary Persona model is now an editable combo box. When Desktop is available, it loads the current account's model catalog and matching reasoning efforts; manual input remains available when Desktop is stopped or discovery fails.
