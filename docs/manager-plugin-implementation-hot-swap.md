@@ -2,9 +2,48 @@
 
 # RabiRoute 插件平台目标架构
 
-> 状态：待评审设计。本文只描述一次切换后的正式架构，不把过渡态列为可交付状态。
+> 状态：已实施。本文描述当前正式架构和持续门禁。
 >
 > 主要读者：RabiRoute 维护者、插件作者和接入开发者。
+
+## 当前实施状态
+
+- 正式发行 Profile 为 `plugins/profiles/desktop.json`，包含 26 个独立 Manager 插件包。
+- 7 个插件独立提供 Web Bundle：`core`、`desktop`、`diagnostics`、`message-adapter-control`、`performance`、`persona` 和 `speech`。
+- 内置插件和树外插件共用 `@rabiroute/plugin-sdk`、严格 Manifest、能力图、权限检查、revision 隔离、generation 切换和 effect scope。
+- Manager、Catalog、Web module 和 Profile 只读取新插件平台。旧 Bundle、Loader、Profile/Patch、Reconciler、Catalog、进程插件宿主和迁移入口已删除。
+- WebGUI 宿主不保存业务页面 ID；页面、导航、命令和状态卡全部来自插件 contribution。
+- 插件构建先写入临时目录，再替换各版本目录；`packages` 和 `profiles` 监听根目录保持不变，旧包会在同一次构建中删除。
+- Gateway 等宿主持有的长生命周期资源使用 generation 交接租约。新 generation 取得租约后，旧 generation 才释放；只有最后一个租约释放时才停止资源。
+
+## 与 DSH/Cordis 的取舍
+
+| 维度 | DSH/Cordis | RabiRoute 当前实现 |
+|---|---|---|
+| 组合单位 | Bundle、Patch 和插件树组合 Profile | 独立插件包加一个发行 Profile |
+| 依赖 | 插件声明注入关系，配置树驱动重建 | Manifest 声明 `provides/requires/optional`，能力图决定激活顺序和受影响范围 |
+| 生命周期 | `ctx.effect` 管理可撤销资源 | effect scope 管理路由、监听器、定时器、连接和注册项 |
+| 热更新 | Cordis 重建插件树并恢复 effect | SHA-256 revision 创建候选 generation，准备成功后原子发布，失败时保留上一 revision |
+| 配置 | Bundle/Patch 合并形成配置真源 | Profile 只选择实例、配置和权限，不承载业务规则或迁移逻辑 |
+| 宿主边界 | 面向 Agent harness 的单一插件树 | Manager、Gateway、WebGUI、Desktop 共用合同，但分别加载自己的 entry |
+| 外部副作用 | 可撤销资源适合 effect | 消息外发、审批和远端写入由 Outbox、幂等命令或补偿处理，不伪装成可撤销 effect |
+
+保留了 DSH/Cordis 的可撤销 effect、声明式依赖、配置真源、稳定实例 ID 和失败回滚。没有沿用 Bundle/Patch 叠加和旧配置兼容，因为它们会重新形成多入口和迁移分支。
+
+## 2026-08-27 实时验收
+
+| 阶段 | generation | 插件 revision | 结果 |
+|---|---|---|---|
+| 基线 | `40b15b48-aa08-4878-aaa0-18af7f53e5ba` | - | 26 个插件，7 个 Web module |
+| 安装并启用 | `e2870d32-821d-4ee1-8713-422d1333c06c` | `a64b7d11160ef89fdac84c7f2c8333f8c087bb233ea78d0aec94ffc7773a9f72` | Catalog 27，Web module 8，路由返回 `marker=one` |
+| 有效更新 | `4fb5de14-084f-46c0-93ee-93ea4431345a` | `e045d8ead90bbf91f873e9383a5fa4d6d5e47548843603c3ff9d245b9d517f46` | 新 revision 生效 |
+| 失败候选 | `113b8439-ee35-4c7d-a22a-8a4c38a0a0ba` | 继续使用上一 revision | Catalog 报 `update_failed_using_previous_revision`，旧路由继续响应 |
+| 恢复更新 | `04383a16-71d8-41c7-8e71-76e64d7b2de6` | `fea00581bf11f5bd17cd59711f9a309ce39f685ec98fcaee8ddfb0c2cd452b43` | 错误消失，新 revision 生效 |
+| 停用与卸载 | `a207ba57-52e6-4391-bfaf-fd4c92e2a861` | - | Catalog 回到 26，Web module 回到 7，插件路由返回 404，diagnostics 为空 |
+
+全程 Manager PID 为 `62272`，Gateway PID 为 `68948`。安装、更新、失败回滚、恢复、停用和卸载均未替换进程。
+
+Gateway runtime 插件再次从 generation `272df510-7524-441c-8542-a77ecfc6e171` 自动切换到 `da3e7fff-282e-4103-8902-23390594a468`。Manager PID 保持 `72544`，Gateway PID 保持 `90724`，`/api/gateways` 返回 200，reconciliation diagnostics 为空。
 
 ## 需要确认的决定
 
@@ -391,6 +430,15 @@ Git 保存历史，仓库不建立源码归档副本。
 - 更新实现后进程 PID 不变；
 - 候选失败时旧 generation 继续服务；
 - 删除插件后 Catalog、路由、页面和状态全部消失。
+
+## 2026-08-27 最终门禁
+
+- TypeScript noEmit、Vue 类型检查和 26 个内置包架构门禁通过。
+- `npm test`：1401 通过，1 跳过，0 失败。
+- `npm run build`：生成 26 个独立 Manager 包和 7 个独立 Web Bundle。
+- `npm run check:built-manager`：通过，并生成本机只读验收记录。
+- 运行时代码与配置中的旧运行时标识为 0；`dist/` 为 0；当前事实文档为 0。架构检查脚本只保留 5 个已删除路径名称，用于阻止旧文件重新出现。
+- `git diff --check` 通过。
 
 ## 架构门禁
 

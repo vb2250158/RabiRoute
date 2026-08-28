@@ -78,14 +78,14 @@ const stateLabel = computed(() => {
 </template>
 
 <style scoped>
-.speech-waveform { position: relative; height: 140px; overflow: hidden; border: 1px solid rgba(17, 32, 51, .08); border-radius: 10px; background: #f7f3ef; }
+.speech-waveform { position: relative; height: 140px; overflow: hidden; border: 1px solid var(--rr-border-soft); border-radius: 10px; background: var(--rr-subtle); }
 .speech-waveform svg { display: block; width: 100%; height: 100%; }
-.grid-line { stroke: #e8ddd2; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.grid-line { stroke: var(--rr-border); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .threshold-line { vector-effect: non-scaling-stroke; }
 .record-line { stroke: #c55a61; stroke-width: 1.5; }
 .transcribe-line { stroke: #c99b48; stroke-width: 1.5; stroke-dasharray: 7 5; }
 .dynamic-line { stroke: #7666aa; stroke-width: 1; stroke-dasharray: 3 5; }
-.wave-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8b817b; font-size: 11px; }
-.wave-overlay { position: absolute; inset: 8px 10px auto; display: flex; justify-content: space-between; gap: 12px; color: #6f6660; font-size: 10px; font-weight: 800; text-shadow: 0 1px rgba(255, 255, 255, .9); }
+.wave-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--rr-muted); font-size: 11px; }
+.wave-overlay { position: absolute; inset: 8px 10px auto; display: flex; justify-content: space-between; gap: 12px; color: var(--rr-muted); font-size: 10px; font-weight: 800; text-shadow: none; }
 .is-running { box-shadow: inset 0 0 0 1px rgba(24, 165, 167, .06); }
 </style>

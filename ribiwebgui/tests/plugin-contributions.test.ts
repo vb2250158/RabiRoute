@@ -5,7 +5,7 @@ import type { WebPluginCatalog, WebPluginCatalogPlugin } from "../src/pluginCata
 import { availableWebContributions } from "../src/pluginContributions";
 import { resolveWebCommandCatalog } from "../src/pluginCommands";
 
-const pluginId = "rabi.manager.base";
+const pluginId = "io.rabiroute.manager.route-control";
 const activePlugin: WebPluginCatalogPlugin = {
   instanceId: "manager:route-control",
   pluginId,

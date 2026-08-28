@@ -8,6 +8,24 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+### Agent model selection
+
+- The Codex Primary Persona model is now an editable combo box. When Desktop is available, it loads the current account's model catalog and matching reasoning efforts; manual input remains available when Desktop is stopped or discovery fails.
+- DSH Primary Persona configuration now includes model and reasoning-effort selection. It reads `llm.models` when DSH is available, accepts manual `provider/model` input otherwise, and applies the saved choice through `session.selectModel` before the next Primary Persona delivery.
+
+### Speech model management
+
+- The model library now uses a table with separate columns for model, capability, purpose, size, runtime, status, source, and action. Filtering, search, error details, and weight downloads keep the same behavior.
+
+### Shared sidebar functions
+
+- Console is now the first item in the shared-functions section, above Speech Service. It still follows the current Route, while Message Adapters, Persona Configuration, and Plans & Memory remain in the Route configuration section.
+
+### Message-configuration channel check
+
+- Added **Channel check** to the top of Message configuration. The dialog now shows the current Route as **Message inputs → Manager → Agent handlers**, including Manager runtime state, message-input connectivity, and primary or secondary Agent roles. Selecting a node returns to its settings.
+- Agent nodes now provide **Delivery test**. Manager sends a UUID-tagged message through the current Route’s formal Agent adapter to the selected session and returns that adapter’s receipt. Codex success also requires the test ID to appear in the target Desktop task.
+
 ### LAN Rabi Agent
 
 - Added an experimental headless LAN Rabi Agent, Manager node/task APIs, a Rabi Web management page, and self-update flow. A node delivers only to its configured Codex Desktop task owner. Real multi-computer bootstrap, update, and reconnect acceptance remains pending.
@@ -15,7 +33,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### WebGUI theme colors
 
-- Message-adapter parameter panels now follow the active theme and no longer show a fixed light background in dark mode.
+- Message-adapter parameters, plan descriptions and attachments, persona Markdown documents, plan status labels, and the speech waveform now follow the active theme instead of retaining fixed light surfaces or dark headings in dark mode.
 
 ### Codex Desktop sidebar Name authority
 
@@ -28,6 +46,12 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - The knowledge page first resolves the Route and role through `/gateways?summary=1`, displays eight plan summaries, and then serially loads the remaining pages for the same filter in the background. A Route change, hidden page, or unmount stops later reads. Full Gateway configuration still loads in the background for editing and diagnostics.
 - The root HTML uses `no-store`; content-hashed static assets and revision-addressed Web Bundle modules use long-lived immutable caching. The base Bundle now only re-exports the current main WebGUI entry, avoiding a second Vue, Pinia, and page-dependency download.
 - The message-processing board snapshot is now v2. An expired requirement drops message bodies, attachments, and reply context while retaining a SHA-256 replay-dedupe key for up to seven days. A matching replay returns `replay_suppressed` without another Agent delivery or board event.
+
+### Staged plan and memory loading
+
+- The plans page now mounts the first eight summaries as soon as their title, status, current step, progress counts, attachment count, and update time arrive instead of waiting for eight complete detail requests. Later summaries continue in background batches of eight, and background completion updates count status without keeping the first-screen global progress bar active.
+- Cards near the viewport request `detail=preview`, which contains only the description, current-step detail, blocker information, and attachment metadata, with at most four concurrent requests. Image, video, and Markdown attachments remain directly visible before expansion.
+- Expanding a plan fetches all steps and complete approval contracts. Agent state, plan feedback, and Work history remain separate on-demand reads.
 
 ### Plan archive consistency
 
@@ -44,15 +68,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - If a bound task is confirmed deleted after the Desktop owner accepted a delivery, RabiRoute creates and persists one replacement task, redelivers the current message, and returns the replacement warning to the caller. An archived binding likewise cannot reuse a same-named task.
 - The Windows Desktop lifecycle supervisor uses Manager `/meta` availability as the health signal. If the process remains present but its control plane is unresponsive, it invokes the unified launcher and records the probe error and consecutive failure count.
 
-### Manager plugin Bundles and hot replacement
+### Independent plugin platform and interface themes
 
-- The `rabi.manager.base` Bundle now directly owns the 26 built-in definitions, dependencies, presentation contributions, and default Profile. Manager no longer creates a definition for the Bundle. Only the matching base-Bundle instance receives the constrained capability to activate Manager-owned resources; external Bundles still receive the general controlled API only.
-- The first load uses the Bundle default Profile. After the HTTP listener is ready, one asynchronous migration converts old `manager.json.managerPlugins` / `rabi.manager.builtin` data and removes the old field. Normal reconciliation then reads only Profile, Patch, and Bundle data.
-- The Web module catalog is published from the successfully reconciled runtime snapshot instead of rereading Profile on each request. Failed rollback candidates and `waiting_dependency` instances never send a new revision to the browser.
-- Bundle changes use revisions to unload the preceding Fiber, remove instance routes, drain accepted requests, and load the new version. Failed activation restores the preceding version. Web Bundles use content revisions and Manager SSE replacement, retaining the preceding usable page if replacement fails.
-- A Web Bundle entry, lazy script, CSS, and font now use relative URLs from the same revision directory; lazy loads no longer fall through to the WebGUI root. The build copies the Vite entry module itself, avoiding a dependency on a temporary minified export alias.
-- The Web Bundle graph now aggregates by package ID, version, and revision. The 26 instances of one `rabi.manager.base@0.2.1` revision download and initialize once. An enable or disable change that alters `instances` disposes and reactivates the Bundle so disabled instances cannot leave pages or renderers behind. Manager serves immutable revision files as their original bytes and no longer rewrites built JavaScript.
-- The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry instead of waiting indefinitely.
+- Manager now loads 26 independent built-in packages through one Plugin Kernel, with seven plugins providing separate Web Bundles. Built-in and out-of-tree plugins share `@rabiroute/plugin-sdk`, the strict manifest, capability graph, permission checks, revisions, generations, and effect lifecycle.
+- One Profile declares only instances, package versions, configuration, and grants. The build produces `dist/plugins/packages/` from `plugins/builtin/` and removes packages that are no longer selected by the Profile in the same build. Manager loads only built output or explicitly configured out-of-tree package roots.
+- WebGUI, Desktop, and Manager consume one contribution catalog. Pages, navigation, status, settings, and themes come from plugins; WebGUI no longer owns a second built-in list of business pages or settings sections.
+- Removed `rabi.manager.base`, the old Profile/Patch formats, old configuration readers, the old Reconciler and Catalog, and the process-plugin host. Production runtime performs no migration from those formats and keeps no fallback loader.
+- Out-of-tree plugins use the same package shape, a separate Profile, and explicit `grants`. A failed candidate generation leaves the previous revision active; a successful switch releases the preceding routes, services, listeners, and interface contributions.
+- **Interface theme** is visible again on Settings. The Desktop settings contribution uses `global.settings.sections`, and startup preserves the saved theme until the asynchronous plugin theme catalog is ready, so a light or dark selection survives refresh.
+- The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry.
 
 ## 0.2.1 - 2026-08-25
 

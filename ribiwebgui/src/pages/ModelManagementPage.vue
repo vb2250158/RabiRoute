@@ -35,6 +35,13 @@ const copy = computed(() => isEnglish.value ? {
   installingRuntime: "Installing environment",
   modelLibrary: "Model library",
   modelCount: "models",
+  model: "Model",
+  capability: "Capability",
+  purpose: "Purpose",
+  size: "Size",
+  runtime: "Runtime",
+  status: "Status",
+  action: "Action",
   search: "Search name, family, or alias",
   all: "All",
   tts: "Text to speech",
@@ -73,6 +80,13 @@ const copy = computed(() => isEnglish.value ? {
   installingRuntime: "正在安装运行环境",
   modelLibrary: "模型库",
   modelCount: "个模型",
+  model: "模型",
+  capability: "类型",
+  purpose: "用途",
+  size: "大小",
+  runtime: "运行环境",
+  status: "状态",
+  action: "操作",
   search: "搜索名称、系列或别名",
   all: "全部",
   tts: "语音合成",
@@ -351,55 +365,79 @@ onBeforeUnmount(() => managerEvents?.close());
         </v-btn>
       </div>
 
-      <div v-if="filteredModels.length" class="model-grid">
-        <article v-for="model in filteredModels" :key="model.alias" class="model-card app-card">
-          <div class="model-card-topline">
-            <v-chip :color="capabilityColor(model.capability)" size="small" variant="tonal" :prepend-icon="capabilityIcon(model.capability)">
-              {{ capabilityLabel(model.capability) }}
-            </v-chip>
-            <v-chip :color="modelStatus(model).color" size="small" variant="text" :prepend-icon="modelStatus(model).icon">
-              {{ modelStatus(model).label }}
-            </v-chip>
-          </div>
-          <div class="model-title-block">
-            <span>{{ model.family }}</span>
-            <h3>{{ model.name }}</h3>
-            <code>{{ model.alias }}</code>
-          </div>
-          <p class="model-purpose">{{ purpose(model) }}</p>
-          <div class="model-meta">
-            <div><v-icon size="16">mdi-harddisk</v-icon><span>{{ sizeLabel(model) }}</span></div>
-            <div :class="{ 'isolated-runtime': model.runtime === 'isolated' }">
-              <v-icon size="16">{{ model.runtime === "core" ? "mdi-check-network-outline" : "mdi-call-split" }}</v-icon>
-              <span>{{ runtimeLabel(model) }}</span>
-            </div>
-          </div>
-          <v-alert v-if="model.lastError" type="error" density="compact" variant="tonal" class="model-error">
-            {{ model.lastError }}
-          </v-alert>
-          <div class="model-card-actions">
-            <v-btn variant="text" size="small" append-icon="mdi-open-in-new" :href="model.sourceUrl" target="_blank" rel="noreferrer">
-              {{ copy.source }}
-            </v-btn>
-            <v-tooltip :text="!snapshot?.dependenciesInstalled ? copy.prepareFirst : ''" location="top">
-              <template #activator="{ props }">
-                <span v-bind="props">
-                  <v-btn
-                    color="primary"
-                    variant="tonal"
-                    size="small"
-                    prepend-icon="mdi-download"
-                    :loading="model.status === 'downloading'"
-                    :disabled="modelActionDisabled(model)"
-                    @click="installModel(model)"
-                  >
-                    {{ modelActionLabel(model) }}
+      <div v-if="filteredModels.length" class="model-table-shell">
+        <table class="model-table">
+          <thead>
+            <tr>
+              <th class="model-column">{{ copy.model }}</th>
+              <th class="capability-column">{{ copy.capability }}</th>
+              <th class="purpose-column">{{ copy.purpose }}</th>
+              <th class="size-column">{{ copy.size }}</th>
+              <th class="runtime-column">{{ copy.runtime }}</th>
+              <th class="status-column">{{ copy.status }}</th>
+              <th class="source-column">{{ copy.source }}</th>
+              <th class="action-column">{{ copy.action }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="model in filteredModels" :key="model.alias">
+              <tr class="model-row">
+                <td>
+                  <div class="model-table-name">
+                    <span>{{ model.family }}</span>
+                    <strong>{{ model.name }}</strong>
+                    <code>{{ model.alias }}</code>
+                  </div>
+                </td>
+                <td>
+                  <v-chip :color="capabilityColor(model.capability)" size="small" variant="tonal" :prepend-icon="capabilityIcon(model.capability)">
+                    {{ capabilityLabel(model.capability) }}
+                  </v-chip>
+                </td>
+                <td class="model-table-purpose">{{ purpose(model) }}</td>
+                <td class="model-table-size">{{ sizeLabel(model) }}</td>
+                <td :class="['model-table-runtime', { 'isolated-runtime': model.runtime === 'isolated' }]">
+                  <v-icon size="16">{{ model.runtime === "core" ? "mdi-check-network-outline" : "mdi-call-split" }}</v-icon>
+                  <span>{{ runtimeLabel(model) }}</span>
+                </td>
+                <td>
+                  <v-chip :color="modelStatus(model).color" size="small" variant="text" :prepend-icon="modelStatus(model).icon">
+                    {{ modelStatus(model).label }}
+                  </v-chip>
+                </td>
+                <td>
+                  <v-btn variant="text" size="small" append-icon="mdi-open-in-new" :href="model.sourceUrl" target="_blank" rel="noreferrer">
+                    {{ copy.source }}
                   </v-btn>
-                </span>
-              </template>
-            </v-tooltip>
-          </div>
-        </article>
+                </td>
+                <td>
+                  <v-tooltip :text="!snapshot?.dependenciesInstalled ? copy.prepareFirst : ''" location="top">
+                    <template #activator="{ props }">
+                      <span v-bind="props">
+                        <v-btn
+                          color="primary"
+                          variant="tonal"
+                          size="small"
+                          prepend-icon="mdi-download"
+                          :loading="model.status === 'downloading'"
+                          :disabled="modelActionDisabled(model)"
+                          @click="installModel(model)"
+                        >
+                          {{ modelActionLabel(model) }}
+                        </v-btn>
+                      </span>
+                    </template>
+                  </v-tooltip>
+                </td>
+              </tr>
+              <tr v-if="model.lastError" class="model-error-row">
+                <td colspan="8">
+                  <v-alert type="error" density="compact" variant="tonal">{{ model.lastError }}</v-alert>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
       </div>
       <v-empty-state v-else icon="mdi-cube-off-outline" :title="copy.empty" />
     </section>
@@ -439,24 +477,33 @@ onBeforeUnmount(() => managerEvents?.close());
 .library-header { align-items: flex-end; }
 .model-search { width: min(390px, 100%); flex: 0 1 390px; }
 .capability-filter { display: flex; gap: 6px; overflow-x: auto; padding: 5px; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-input); }
-.model-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.model-card { display: flex; flex-direction: column; min-width: 0; padding: 20px; background: var(--rr-surface); transition: transform .18s ease, box-shadow .18s ease; }
-.model-card:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(15,23,42,.11) !important; }
-.model-card-topline, .model-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.model-title-block { margin-top: 18px; }
-.model-title-block > span { color: var(--rr-muted-faint); font-size: 12px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
-.model-title-block h3 { margin: 5px 0 8px; color: var(--model-ink); font-size: 20px; line-height: 1.25; }
-.model-title-block code { display: inline-block; max-width: 100%; overflow: hidden; color: var(--rr-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.model-purpose { min-height: 48px; margin: 18px 0; color: var(--rr-muted); line-height: 1.55; }
-.model-meta { display: grid; gap: 8px; margin-bottom: 18px; }
-.model-meta > div { display: flex; align-items: center; gap: 8px; color: var(--rr-muted-soft); font-size: 12px; }
-.model-meta .isolated-runtime { color: rgb(var(--v-theme-warning)); }
-.model-error { margin-bottom: 14px; overflow-wrap: anywhere; }
-.model-card-actions { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--rr-border); }
-
-@media (max-width: 1120px) {
-  .model-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+.model-table-shell { overflow-x: auto; border: 1px solid var(--rr-border); border-radius: 8px; background: var(--rr-surface); }
+.model-table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; }
+.model-table th { position: sticky; top: 0; z-index: 1; padding: 11px 14px; color: var(--rr-muted-soft); background: var(--rr-input); font-size: 11px; font-weight: 800; letter-spacing: .04em; text-align: left; white-space: nowrap; }
+.model-table td { padding: 14px; border-top: 1px solid var(--rr-border); color: var(--rr-muted-soft); font-size: 13px; vertical-align: middle; }
+.model-row { transition: background-color .15s ease; }
+.model-row:hover { background: var(--rr-subtle); }
+.model-column { width: 20%; }
+.capability-column { width: 10%; }
+.purpose-column { width: 19%; }
+.size-column { width: 8%; }
+.runtime-column { width: 14%; }
+.status-column { width: 9%; }
+.source-column { width: 8%; }
+.action-column { width: 12%; }
+.model-table-name { display: grid; min-width: 0; gap: 3px; }
+.model-table-name > span { color: var(--rr-muted-faint); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.model-table-name strong { overflow: hidden; color: var(--model-ink); font-size: 15px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.model-table-name code { overflow: hidden; color: var(--rr-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.model-table-purpose { line-height: 1.45; }
+.model-table-size { white-space: nowrap; }
+.model-table-runtime { display: table-cell; }
+.model-table-runtime .v-icon { margin-right: 6px; vertical-align: -3px; }
+.model-table-runtime.isolated-runtime { color: rgb(var(--v-theme-warning)); }
+.model-table td:last-child, .model-table th:last-child { text-align: right; }
+.model-table td:nth-last-child(2), .model-table th:nth-last-child(2) { text-align: center; }
+.model-error-row td { padding: 0 14px 14px; background: var(--rr-surface); }
+.model-error-row :deep(.v-alert) { overflow-wrap: anywhere; }
 
 @media (max-width: 820px) {
   .runtime-grid { grid-template-columns: 1fr; }
@@ -466,9 +513,8 @@ onBeforeUnmount(() => managerEvents?.close());
 
 @media (max-width: 640px) {
   .model-management-page { padding: 16px; }
-  .runtime-statuses, .model-grid { grid-template-columns: 1fr; }
+  .runtime-statuses { grid-template-columns: 1fr; }
   .capability-filter { align-items: stretch; flex-direction: column; }
-  .model-card-actions { align-items: stretch; flex-direction: column-reverse; }
-  .model-card-actions :deep(.v-btn) { width: 100%; }
+  .model-table { min-width: 1040px; }
 }
 </style>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
@@ -14,9 +15,8 @@ import { configNameFor } from "./utils/gatewayHelpers";
 import { pageSaveAction } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
 import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
-import { readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
+import { initialWebThemePreference, readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
 import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
-import { isBuiltinStartupWebPageRoute } from "./builtinStartupPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
 import { disposeWebPluginModules } from "./pluginModules";
@@ -43,15 +43,13 @@ async function handlePluginCatalogChanged(): Promise<void> {
   await refreshWebPluginModulesSafely();
   if (!webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup")) store.quickSetupDialogOpen = false;
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
-  if (routeId && !isBuiltinStartupWebPageRoute(routeId) && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
   }
 }
 
 function refreshInterfaceTheme(): void {
   const resolved = applyCatalogInterfaceTheme(pluginCatalogStore.themes.value, interfaceThemePreference.value, systemThemeQuery.matches);
-  const selected = resolveWebThemeResource(pluginCatalogStore.themes.value, interfaceThemePreference.value);
-  interfaceThemePreference.value = selected.themeId;
   vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
 }
 
@@ -67,16 +65,13 @@ function onInterfaceThemeChanged(event: Event): void {
 }
 
 async function loadInterfaceTheme(): Promise<void> {
-  let desktopTheme: WebThemeId = "system";
+  let desktopTheme: DesktopTheme = "system";
   try {
     desktopTheme = (await desktopSettingsClient.read()).theme;
   } catch {
     desktopTheme = "system";
   }
-  const stored = readStoredWebThemePreference();
-  interfaceThemePreference.value = pluginCatalogStore.themes.value.options.some(option => option.themeId === stored)
-    ? stored
-    : desktopTheme;
+  interfaceThemePreference.value = initialWebThemePreference(readStoredWebThemePreference(), desktopTheme);
   refreshInterfaceTheme();
 }
 
@@ -232,7 +227,7 @@ async function refresh(): Promise<void> {
   await Promise.all([store.load(), pluginCatalogStore.refresh()]);
   await refreshWebPluginModulesSafely();
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
-  if (routeId && !isBuiltinStartupWebPageRoute(routeId) && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
     return;
   }

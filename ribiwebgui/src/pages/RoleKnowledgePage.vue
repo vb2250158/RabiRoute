@@ -45,7 +45,7 @@ import {
   loadRoleKnowledgeFileCounts,
   loadRolePlan,
   loadRolePlanPage,
-  loadRolePlanPageWithPriorityDetails,
+  loadRolePlanPreview,
   openPlanAgentTask,
   submitPlanFeedback,
   type PlanAgentBindingStatus,
@@ -128,6 +128,8 @@ type PlanMediaLoadState = "loading" | "loaded" | "error";
 const planMediaLoadStates = reactive<Record<string, PlanMediaLoadState>>({});
 const planDetailsLoaded = reactive<Record<string, boolean>>({});
 const planDetailsLoading = reactive<Record<string, boolean>>({});
+const planFullDetailsLoaded = reactive<Record<string, boolean>>({});
+const planFullDetailsLoading = reactive<Record<string, boolean>>({});
 const planAgentStatuses = reactive<Record<string, PlanAgentStatus>>({});
 const planAgentStatusLoading = reactive<Record<string, boolean>>({});
 const planAgentOpenPending = reactive<Record<string, boolean>>({});
@@ -185,7 +187,7 @@ let planDetailQueue: Array<{ planId: string; request: number }> = [];
 const queuedPlanDetailIds = new Set<string>();
 const pendingPlanAgentStatusIds = new Set<string>();
 let activePlanDetailRequests = 0;
-const MAX_CONCURRENT_PLAN_DETAILS = 10;
+const MAX_CONCURRENT_PLAN_DETAILS = 4;
 let knowledgeFilterTimer = 0;
 let memoryClockTimer = 0;
 let planPageBackgroundRequest = 0;
@@ -260,7 +262,6 @@ const hasMoreRenderedPlans = computed(() => hasMoreKnowledgeAfterWindow(
   planRenderLimit.value
 ));
 const hasMoreRenderedPlansBefore = computed(() => hasMoreKnowledgeBeforeWindow(planRenderStart.value));
-const hasPendingPlanDetails = computed(() => Object.values(planDetailsLoading).some(Boolean));
 const hasMoreMemory = computed(() => Boolean(memoryNextCursor.value));
 const hasMoreRenderedMemory = computed(() => renderedMemoryForView.value.length < visibleMemoryForView.value.length);
 const showsPlanList = computed(() => ["plans", "archived"].includes(activeView.value));
@@ -270,7 +271,7 @@ const totalMemoryForView = computed(() => activeView.value === "consolidated_mem
   : activeView.value === "archived"
     ? memoryPageCounts.value.archived
     : memoryPageCounts.value.recent);
-const knowledgeListLoading = computed(() => loading.value || loadingMorePlans.value || memoryLoading.value);
+const knowledgeListLoading = computed(() => loading.value || memoryLoading.value);
 const knowledgeListStatus = computed(() => {
   const counts: string[] = [];
   if (showsPlanList.value) counts.push(isEnglish.value
@@ -280,8 +281,10 @@ const knowledgeListStatus = computed(() => {
     ? `${visibleMemoryForView.value.length} / ${totalMemoryForView.value} memories`
     : `记忆 ${visibleMemoryForView.value.length} / ${totalMemoryForView.value}`);
   const prefix = knowledgeListLoading.value
-    ? (isEnglish.value ? "Automatically loading list data" : "正在自动加载列表数据")
-    : (isEnglish.value ? "List data loaded" : "列表数据已加载");
+    ? (isEnglish.value ? "Loading the first visible items" : "正在加载首屏内容")
+    : loadingMorePlans.value
+      ? (isEnglish.value ? "The visible list is ready; loading more titles in background" : "当前列表已可用，正在后台补齐更多标题")
+      : (isEnglish.value ? "List data loaded" : "列表数据已加载");
   const detailHint = showsPlanList.value
     ? (isEnglish.value
       ? "Plan bodies and attachments load near the reading position."
@@ -511,6 +514,8 @@ function resetPlanDetailHydration(): void {
   queuedPlanDetailIds.clear();
   for (const key of Object.keys(planDetailsLoaded)) delete planDetailsLoaded[key];
   for (const key of Object.keys(planDetailsLoading)) delete planDetailsLoading[key];
+  for (const key of Object.keys(planFullDetailsLoaded)) delete planFullDetailsLoaded[key];
+  for (const key of Object.keys(planFullDetailsLoading)) delete planFullDetailsLoading[key];
   for (const key of Object.keys(planWorkHistoryExpanded)) delete planWorkHistoryExpanded[key];
   for (const key of Object.keys(planHistoryRecords)) delete planHistoryRecords[key];
   for (const key of Object.keys(planHistoryLoading)) delete planHistoryLoading[key];
@@ -716,12 +721,22 @@ function drainPlanDetailQueue(): void {
   while (activePlanDetailRequests < MAX_CONCURRENT_PLAN_DETAILS && planDetailQueue.length) {
     const task = planDetailQueue.shift()!;
     queuedPlanDetailIds.delete(task.planId);
-    if (task.request !== requestVersion || planDetailsLoaded[task.planId] || planDetailsLoading[task.planId]) continue;
+    if (
+      task.request !== requestVersion
+      || planDetailsLoaded[task.planId]
+      || planDetailsLoading[task.planId]
+      || planFullDetailsLoaded[task.planId]
+      || planFullDetailsLoading[task.planId]
+    ) continue;
     activePlanDetailRequests += 1;
     planDetailsLoading[task.planId] = true;
-    void loadRolePlan(roleId.value, task.planId)
+    void loadRolePlanPreview(roleId.value, task.planId)
       .then((plan) => {
-        if (task.request !== requestVersion || !plans.value.some((item) => item.id === task.planId)) return;
+        if (
+          task.request !== requestVersion
+          || !plans.value.some((item) => item.id === task.planId)
+          || planFullDetailsLoaded[task.planId]
+        ) return;
         plans.value = mergeKnowledgePage(plans.value, [plan]);
         planDetailsLoaded[task.planId] = true;
         applyFeedbackDeliveryState(plan.id, plan.approval.latest);
@@ -743,7 +758,12 @@ function drainPlanDetailQueue(): void {
 function queuePlanDetails(nextPlans: RolePlan[], request: number, priority = false): void {
   const priorityTasks: Array<{ planId: string; request: number }> = [];
   for (const plan of nextPlans) {
-    if (planDetailsLoaded[plan.id] || planDetailsLoading[plan.id]) continue;
+    if (
+      planDetailsLoaded[plan.id]
+      || planDetailsLoading[plan.id]
+      || planFullDetailsLoaded[plan.id]
+      || planFullDetailsLoading[plan.id]
+    ) continue;
     const existingIndex = planDetailQueue.findIndex((task) => task.planId === plan.id);
     if (existingIndex >= 0) {
       if (priority) priorityTasks.push(...planDetailQueue.splice(existingIndex, 1));
@@ -994,16 +1014,9 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
   }
   loading.value = true;
   try {
-    const result = await loadRolePlanPageWithPriorityDetails(selectedRoleId, "", 8, currentPlanPageFilter(), 8);
+    const result = await loadRolePlanPage(selectedRoleId, "", 8, currentPlanPageFilter());
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(result.items, true, currentRequest);
-    const detailPlanIds = new Set(result.detailPlanIds);
-    const hydratedPlans = result.items.filter((plan) => detailPlanIds.has(plan.id));
-    for (const plan of hydratedPlans) {
-      planDetailsLoaded[plan.id] = true;
-      applyFeedbackDeliveryState(plan.id, plan.approval.latest);
-    }
-    void refreshPlanMarkdownTeasers(hydratedPlans, currentRequest);
     planPageCounts.value = result.counts;
     planListResultTotal.value = result.total;
     planListStatusOptions.value = result.facets?.statuses || [];
@@ -1183,7 +1196,12 @@ function stepColor(plan: RolePlan, step: RolePlanStep): string {
 
 function currentStep(plan: RolePlan): RolePlanStep | undefined {
   return plan.steps.find((step) => step.id === plan.currentStepId)
-    || plan.steps.find((step) => step.status === "进行中");
+    || plan.steps.find((step) => step.status === "进行中")
+    || plan.currentStepPreview;
+}
+
+function planStepCount(plan: RolePlan): number {
+  return Number.isFinite(plan.stepCount) ? Number(plan.stepCount) : plan.steps.length;
 }
 
 function blocker(plan: RolePlan): string {
@@ -1196,14 +1214,18 @@ function stepIsBlocked(plan: RolePlan, step: RolePlanStep): boolean {
 }
 
 function completedSteps(plan: RolePlan): number {
-  return plan.steps.filter((step) => step.status === "已完成").length;
+  return Number.isFinite(plan.completedStepCount)
+    ? Number(plan.completedStepCount)
+    : plan.steps.filter((step) => step.status === "已完成").length;
 }
 
 function progressValue(plan: RolePlan): number {
-  return plan.steps.length ? Math.round(completedSteps(plan) * 100 / plan.steps.length) : 0;
+  const total = planStepCount(plan);
+  return total ? Math.round(completedSteps(plan) * 100 / total) : 0;
 }
 
 function currentStepPosition(plan: RolePlan): number {
+  if (Number.isFinite(plan.currentStepPosition)) return Number(plan.currentStepPosition);
   const index = plan.steps.findIndex((step) => step.id === plan.currentStepId);
   return index >= 0 ? index + 1 : 0;
 }
@@ -1505,13 +1527,44 @@ function planCardDomId(planId: string): string {
   return `plan-card-${encodeURIComponent(planId)}`;
 }
 
+async function loadFullPlanDetails(planId: string): Promise<void> {
+  const selectedRoleId = roleId.value;
+  const currentRequest = requestVersion;
+  if (
+    !selectedRoleId
+    || planFullDetailsLoaded[planId]
+    || planFullDetailsLoading[planId]
+    || !plans.value.some((plan) => plan.id === planId)
+  ) return;
+  const queuedIndex = planDetailQueue.findIndex((task) => task.planId === planId);
+  if (queuedIndex >= 0) planDetailQueue.splice(queuedIndex, 1);
+  queuedPlanDetailIds.delete(planId);
+  planFullDetailsLoading[planId] = true;
+  try {
+    const plan = await loadRolePlan(selectedRoleId, planId);
+    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+    plans.value = mergeKnowledgePage(plans.value, [plan]);
+    planDetailsLoaded[planId] = true;
+    planFullDetailsLoaded[planId] = true;
+    applyFeedbackDeliveryState(plan.id, plan.approval.latest);
+    void refreshPlanMarkdownTeasers([plan], currentRequest);
+  } catch (loadError) {
+    if (currentRequest === requestVersion) {
+      planError.value = loadError instanceof Error ? loadError.message : String(loadError);
+    }
+  } finally {
+    if (currentRequest === requestVersion) planFullDetailsLoading[planId] = false;
+  }
+}
+
 function togglePlan(plan: RolePlan): void {
   const expanded = !expandedPlans[plan.id];
   expandedPlans[plan.id] = expanded;
-  if (expanded && !planAgentStatusIsFresh(plan.id)) {
-    void refreshPlanAgentStatuses([plan.id], true);
+  if (expanded) {
+    void loadFullPlanDetails(plan.id);
+    if (!planAgentStatusIsFresh(plan.id)) void refreshPlanAgentStatuses([plan.id], true);
+    void refreshPlanApproval(plan.id);
   }
-  if (expanded) void refreshPlanApproval(plan.id);
 }
 
 function togglePlanWorkHistory(plan: RolePlan): void {
@@ -2507,7 +2560,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         </div>
       </div>
 
-      <v-progress-linear v-if="knowledgeListLoading || hasPendingPlanDetails" indeterminate color="secondary" />
+      <v-progress-linear v-if="knowledgeListLoading" indeterminate color="secondary" />
       <div v-if="roleId && (showsPlanList || showsMemoryList)" class="knowledge-progressive-status" aria-live="polite">
         <v-progress-circular v-if="knowledgeListLoading" indeterminate size="16" width="2" color="primary" />
         <v-icon v-else size="16" color="success">mdi-check-circle-outline</v-icon>
@@ -2560,7 +2613,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <h2 data-no-i18n>{{ plan.title }}</h2>
               </div>
               <div class="knowledge-plan-head-actions">
-                <v-chip :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.presentation.status) }}</v-chip>
+                <v-chip class="knowledge-plan-status" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.presentation.status) }}</v-chip>
                 <v-btn
                   v-if="planAgentBindingStatus(plan, 'task')?.canOpen && !planTaskAgentWorking(plan)"
                   class="knowledge-plan-open-task"
@@ -2724,13 +2777,13 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               </div>
             </section>
 
-            <div v-if="planDetailsLoaded[plan.id]" class="knowledge-plan-summary">
+            <div class="knowledge-plan-summary">
               <div class="knowledge-plan-current" :class="{ blocked: Boolean(blocker(plan)) }">
                 <v-icon size="19">{{ blocker(plan) ? "mdi-alert-circle-outline" : "mdi-progress-wrench" }}</v-icon>
                 <div class="knowledge-plan-current-copy">
                   <div class="knowledge-plan-current-heading">
                     <span>{{ blocker(plan) ? "当前阻塞" : "当前步骤" }}</span>
-                    <small v-if="plan.steps.length">{{ currentStepPosition(plan) || "—" }}/{{ plan.steps.length }} · {{ t("执行步骤") }}</small>
+                    <small v-if="planStepCount(plan)">{{ currentStepPosition(plan) || "—" }}/{{ planStepCount(plan) }} · {{ t("执行步骤") }}</small>
                   </div>
                   <b
                     v-if="currentStep(plan)?.title || plan.currentStep"
@@ -2757,30 +2810,38 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               {{ blocker(plan) }}
             </v-alert>
 
-            <div v-if="planDetailsLoaded[plan.id] && plan.steps.length" class="knowledge-progress-row">
+            <div v-if="planStepCount(plan)" class="knowledge-progress-row">
               <div class="knowledge-progress-copy">
                 <span>{{ t("步骤进度") }}</span>
-                <b>{{ completedSteps(plan) }}/{{ plan.steps.length }}</b>
+                <b>{{ completedSteps(plan) }}/{{ planStepCount(plan) }}</b>
               </div>
               <v-progress-linear :model-value="progressValue(plan)" color="secondary" height="7" rounded />
             </div>
 
-            <div v-if="planDetailsLoaded[plan.id] && plan.keywords.length" class="knowledge-keywords">
+            <div v-if="plan.keywords.length" class="knowledge-keywords">
               <v-chip v-for="keyword in plan.keywords" :key="keyword" data-no-i18n size="x-small" variant="outlined">{{ keyword }}</v-chip>
             </div>
 
             <button
-              v-if="planDetailsLoaded[plan.id]"
               class="knowledge-expand"
               type="button"
               :aria-expanded="Boolean(expandedPlans[plan.id])"
               @click="togglePlan(plan)"
             >
-              <span>{{ expandedPlans[plan.id] ? t("收起计划详情") : plan.presentation.approval.state === "ready" ? t("查看执行合同并审批") : plan.presentation.approval.state === "incomplete" ? t("查看缺失的审批信息") : planAcceptsGuidance(plan) ? t("查看计划详情并引导") : plan.steps.length ? `${t("查看全部")} ${plan.steps.length} ${t("个步骤")}` : t("查看计划详情") }}</span>
+              <span>{{ expandedPlans[plan.id] ? t("收起计划详情") : plan.presentation.approval.state === "ready" ? t("查看执行合同并审批") : plan.presentation.approval.state === "incomplete" ? t("查看缺失的审批信息") : planAcceptsGuidance(plan) ? t("查看计划详情并引导") : planStepCount(plan) ? `${t("查看全部")} ${planStepCount(plan)} ${t("个步骤")}` : t("查看计划详情") }}</span>
               <v-icon size="18">{{ expandedPlans[plan.id] ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
             </button>
 
-            <div v-if="planDetailsLoaded[plan.id] && expandedPlans[plan.id]" class="knowledge-plan-details">
+            <div v-if="expandedPlans[plan.id]" class="knowledge-plan-details">
+              <v-alert
+                v-if="planFullDetailsLoading[plan.id]"
+                type="info"
+                variant="tonal"
+                density="compact"
+                class="knowledge-plan-full-detail-loading"
+              >
+                {{ t("正在加载计划详情…") }}
+              </v-alert>
               <section class="knowledge-plan-agents" :aria-label="t('计划关联 Agent')">
                 <div class="knowledge-plan-agents-head">
                   <div>
@@ -2945,7 +3006,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   @submit="sendPlanGuidance(plan)"
                 />
               </section>
-              <div v-if="plan.steps.length" class="knowledge-steps">
+              <div v-if="planFullDetailsLoaded[plan.id] && plan.steps.length" class="knowledge-steps">
                 <div class="knowledge-steps-head">
                   <div>
                     <span>{{ t("执行计划") }}</span>

@@ -30,6 +30,7 @@ export function planCardStyle(palette: PlanPresentationPalette): Record<string, 
 
 export function planStatusStyle(palette: PlanPresentationPalette): Record<string, string> {
   return {
+    "--plan-status-accent": palette.accent,
     backgroundColor: palette.background,
     color: palette.foreground
   };

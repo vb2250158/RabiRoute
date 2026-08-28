@@ -36,16 +36,16 @@ from rabiroute_tray.tray_app import (
     _sync_recovery_webgui_action,
 )
 
-DESKTOP_OWNER = {"plugin_id": "rabi.manager.base", "instance_id": "manager:desktop"}
-CORE_OWNER = {"plugin_id": "rabi.manager.base", "instance_id": "manager:core"}
-PERSONA_OWNER = {"plugin_id": "rabi.manager.base", "instance_id": "manager:persona"}
-GATEWAY_RUNTIME_OWNER = {"plugin_id": "rabi.manager.base", "instance_id": "manager:gateway-runtime"}
-SPEECH_OWNER = {"plugin_id": "rabi.manager.base", "instance_id": "manager:speech"}
-PERFORMANCE_OWNER = {"plugin_id": "rabi.manager.base", "instance_id": "manager:performance"}
+DESKTOP_OWNER = {"plugin_id": "io.rabiroute.manager.desktop", "instance_id": "manager:desktop"}
+CORE_OWNER = {"plugin_id": "io.rabiroute.manager.core", "instance_id": "manager:core"}
+PERSONA_OWNER = {"plugin_id": "io.rabiroute.manager.persona", "instance_id": "manager:persona"}
+GATEWAY_RUNTIME_OWNER = {"plugin_id": "io.rabiroute.manager.gateway-runtime", "instance_id": "manager:gateway-runtime"}
+SPEECH_OWNER = {"plugin_id": "io.rabiroute.manager.speech", "instance_id": "manager:speech"}
+PERFORMANCE_OWNER = {"plugin_id": "io.rabiroute.manager.performance", "instance_id": "manager:performance"}
 TRUSTED_OWNER = {"plugin_id": "package:trusted-desktop", "instance_id": "manager:trusted-desktop"}
 
 
-def _base(kind: str, contribution_id: str, *, plugin_id: str = "rabi.manager.base", instance_id: str = "manager:desktop", **overrides) -> dict:
+def _base(kind: str, contribution_id: str, *, plugin_id: str = "io.rabiroute.manager.desktop", instance_id: str = "manager:desktop", **overrides) -> dict:
     row = {
         "pluginId": plugin_id,
         "instanceId": instance_id,
@@ -87,7 +87,7 @@ def _theme(
     theme_id: str,
     desktop_resource_id: str,
     *,
-    plugin_id: str = "rabi.manager.base",
+    plugin_id: str = "io.rabiroute.manager.core",
     instance_id: str = "manager:core",
     **overrides,
 ) -> dict:
@@ -295,7 +295,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 ],
                 plugins=[
                     _plugin(
-                        "rabi.manager.base",
+                        "io.rabiroute.manager.desktop",
                         "manager:desktop",
                         capabilities=["desktop.system-selection"],
                     )
@@ -390,7 +390,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         self.assertEqual(catalog.settings_sections[0].schema_id, "desktop.settings.v1")
 
     def test_required_capabilities_use_desktop_host_registry_with_and_semantics(self) -> None:
-        plugin_id = "rabi.manager.base"
+        plugin_id = "io.rabiroute.manager.speech"
         instance_id = "manager:speech"
         catalog = parse_desktop_plugin_catalog(
             _payload(
@@ -434,7 +434,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         inactive = parse_desktop_plugin_catalog(
             _payload(
                 contributions=[contribution],
-                plugins=[_plugin("rabi.manager.base", "manager:speech", status="inactive")],
+                plugins=[_plugin("io.rabiroute.manager.speech", "manager:speech", status="inactive")],
             )
         )
         mismatched = parse_desktop_plugin_catalog(
@@ -442,7 +442,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 contributions=[contribution],
                 plugins=[
                     _plugin(
-                        "rabi.manager.base",
+                        "io.rabiroute.manager.speech",
                         "manager:speech",
                         manifest_id="example.manager.other",
                     )
@@ -454,7 +454,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 contributions=[contribution],
                 plugins=[
                     _plugin(
-                        "rabi.manager.base",
+                        "io.rabiroute.manager.speech",
                         "manager:speech",
                         hosts=["manager", "web"],
                     )

@@ -144,6 +144,9 @@ test("managed task capabilities keep Codex-only settings off unsupported Agent a
   const normalized = normalizeGatewayDefinition(gateway({
     agentModel: "gpt-5.6-sol",
     agentReasoningEffort: "high",
+    dshModelProvider: " deepseek-official ",
+    dshModel: " deepseek-v4-pro ",
+    dshReasoningEffort: " max ",
     agentAdapters: ["codex", "copilotCli"],
     messageProcessingAgents: {
       codex: { enabled: true, maxAgents: 40 },
@@ -153,6 +156,9 @@ test("managed task capabilities keep Codex-only settings off unsupported Agent a
 
   assert.equal(normalized.agentModel, "gpt-5.6-sol");
   assert.equal(normalized.agentReasoningEffort, "high");
+  assert.equal(normalized.dshModelProvider, "deepseek-official");
+  assert.equal(normalized.dshModel, "deepseek-v4-pro");
+  assert.equal(normalized.dshReasoningEffort, "max");
   assert.deepEqual(normalized.messageProcessingAgents, {
     codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium", maxAgents: 32 }
   });

@@ -63,6 +63,7 @@ test("keeps the legacy Route auto-submit field enabled so keyword mode can recor
 test("speech workbench exposes exact VAD inputs and one host playback volume control", () => {
   const source = fs.readFileSync(new URL("../src/pages/SpeechServicePage.vue", import.meta.url), "utf8");
   const controlPlane = fs.readFileSync(new URL("../../src/manager/controlPlaneRoutes.ts", import.meta.url), "utf8");
+  const speechPlugin = fs.readFileSync(new URL("../../plugins/builtin/io.rabiroute.manager.speech/1.0.0/manager.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /投递 Route|会话 ID|送入所选 Route|selectedGatewayId|v-model="autoSubmit"/);
   assert.equal(source.match(/<SpeechParameterSlider\b/g)?.length, 8);
   assert.equal(source.match(/label="主机播放音量"/g)?.length, 1);
@@ -78,9 +79,10 @@ test("speech workbench exposes exact VAD inputs and one host playback volume con
   assert.match(source, /没有 Route 订阅时只保存主机记录/);
   assert.match(source, /同一段 ASR 会广播给全部/);
   assert.match(source, /<SpeechHostMonitor[^>]+:subscriber-count="speechSubscriberRoutes\.length"/);
-  assert.match(controlPlane, /"manager:speech": ctx =>[\s\S]*reconcileActiveSpeech = reconcile/);
-  assert.match(controlPlane, /managerPluginActive\("manager:speech"\)[\s\S]*reconcileActiveSpeech\(\)/);
-  assert.match(controlPlane, /active = false[\s\S]*speechRuntimeControl\.stop\(\)/);
+  assert.match(controlPlane, /capability: "host\.manager\.speech@1"/);
+  assert.match(controlPlane, /let reconcileActiveSpeech = \(\): void => \{\};[\s\S]*reconcileActiveSpeech\(\)/);
+  assert.match(speechPlugin, /runtime\.reconcileActiveSpeech = reconcile/);
+  assert.match(speechPlugin, /runtime\.speechRuntimeControl\.stop\(\)/);
   assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("gateway save"\)/);
   assert.doesNotMatch(controlPlane, /reconcileSpeechMicrophone\("manual reload"\)/);
   const monitorSource = fs.readFileSync(new URL("../src/components/SpeechHostMonitor.vue", import.meta.url), "utf8");

@@ -11,6 +11,13 @@ test("Codex scan requires the Desktop owner for delivery", () => {
     codexBins: [],
     projects: [],
     sessions: [{ id: "configured-route", name: "RabiRoute QQ Monitor" }],
+    models: [{
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      isDefault: true,
+      defaultReasoningEffort: "high",
+      reasoningEfforts: [{ id: "none" }, { id: "high" }]
+    }],
     desktopReady: false
   });
 
@@ -19,6 +26,13 @@ test("Codex scan requires the Desktop owner for delivery", () => {
   assert.deepEqual(scan.host, { name: "Codex/ChatGPT Desktop", required: true });
   assert.match(scan.warnings?.join(" ") ?? "", /Desktop 未就绪/);
   assert.match(scan.warnings?.join(" ") ?? "", /不会启动备用 Runtime/);
+  assert.deepEqual(scan.models, [{
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    isDefault: true,
+    defaultReasoningEffort: "high",
+    reasoningEfforts: [{ id: "none" }, { id: "high" }]
+  }]);
 });
 
 test("Codex scan exposes the project-local bootstrap runtime without changing delivery ownership", () => {
@@ -128,6 +142,7 @@ test("Codex settings scan returns a bounded task page with a continuation offset
 
   const codex = (result.agents as Record<string, {
     sessions?: Array<{ id?: string }>;
+    models?: Array<{ id: string; name: string; provider?: string; providerName?: string; defaultReasoningEffort?: string; reasoningEfforts?: Array<{ id: string }> }>;
     sessionPage?: { offset: number; limit: number; returned: number; hasMore: boolean; nextOffset?: number };
   }>).codex;
   assert.deepEqual(requested, [{ limit: 3, offset: 0, query: "Task" }]);
@@ -195,6 +210,17 @@ test("DSH settings scan exposes endpoint, projects, sessions, and local paginati
     marvisAppIds: [],
     checkHttpEndpoint: async (url) => url === "http://127.0.0.1:3080",
     resolveWingetCopilot: () => null,
+    listDshModels: async () => ({
+      models: [{
+        provider: "deepseek-official",
+        providerName: "DeepSeek",
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        defaultReasoningEffort: "high",
+        reasoningEfforts: [{ id: "high" }, { id: "max" }]
+      }],
+      warnings: []
+    }),
     readDshRabiRoutePluginStatus: async () => ({
       active: true,
       version: "0.1.2",
@@ -219,6 +245,7 @@ test("DSH settings scan exposes endpoint, projects, sessions, and local paginati
     endpoints?: Array<{ url: string; healthy?: boolean }>;
     projects?: Array<{ path: string }>;
     sessions?: Array<{ id?: string }>;
+    models?: Array<{ id: string; name: string; provider?: string; providerName?: string; defaultReasoningEffort?: string; reasoningEfforts?: Array<{ id: string }> }>;
     sessionPage?: { offset: number; limit: number; returned: number; hasMore: boolean; nextOffset?: number };
   }>).dsh;
   assert.deepEqual(requested, [{
@@ -231,6 +258,14 @@ test("DSH settings scan exposes endpoint, projects, sessions, and local paginati
   assert.equal(dsh.endpoints?.[0]?.healthy, true);
   assert.equal(dsh.projects?.some((project) => project.path === process.cwd()), true);
   assert.equal(dsh.sessions?.length, 2);
+  assert.deepEqual(dsh.models, [{
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    provider: "deepseek-official",
+    providerName: "DeepSeek",
+    defaultReasoningEffort: "high",
+    reasoningEfforts: [{ id: "high" }, { id: "max" }]
+  }]);
   assert.deepEqual(dsh.sessionPage, {
     offset: 0,
     limit: 2,

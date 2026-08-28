@@ -33,6 +33,7 @@ test("plan styles pass through the Manager-owned palette", () => {
   });
   assert.deepEqual(planCardStyle(palette), { "--plan-tone": "#ef6c52" });
   assert.deepEqual(planStatusStyle(palette), {
+    "--plan-status-accent": "#ef6c52",
     backgroundColor: "#fff1ed",
     color: "#b42318"
   });
@@ -408,7 +409,9 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(styles, /\.knowledge-plan-markdown-visual\s*\{[\s\S]*?padding:\s*9px[\s\S]*?background:/);
   assert.match(styles, /\.knowledge-plan-markdown-paper\s*\{[\s\S]*?height:\s*100%[\s\S]*?border-top:\s*3px solid var\(--rr-accent-strong\)/);
   assert.match(styles, /\.knowledge-plan-markdown-teaser\s*\{[\s\S]*?-webkit-line-clamp:\s*4/);
-  assert.match(styles, /\.knowledge-plan-markdown-document\s*\{[\s\S]*?border-top:\s*4px solid var\(--rr-accent-strong\)[\s\S]*?background:\s*#fff/);
+  assert.match(styles, /\.knowledge-plan-markdown-document\s*\{[\s\S]*?border-top:\s*4px solid var\(--rr-accent-strong\)[\s\S]*?background:\s*var\(--rr-surface\)/);
+  assert.match(styles, /html\[data-rabiroute-theme="dark"\] :is\([\s\S]*?\.knowledge-plan-directory-sort-label,[\s\S]*?\.knowledge-plan-status[\s\S]*?var\(--plan-status-accent\)/);
+  assert.match(page, /class="knowledge-plan-status"/);
   assert.match(styles, /\.knowledge-plan-markdown-document pre\s*\{[\s\S]*?overflow:\s*auto/);
 });
 

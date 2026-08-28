@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defineComponent } from "vue";
+import { activateCore } from "../src/bundles/builtinWebContributions";
 import {
   onTrustedWebPageRegistrationChange,
   parseWebPageContribution,
@@ -11,18 +12,27 @@ import {
   webPageDataRequirements,
   webPageRenderer
 } from "../src/pluginPages";
+import { activateWebPluginForTest } from "./web-plugin-test-host";
 
 const trustedOwner = {
   instanceId: "manager:trusted",
   pluginId: "package:trusted"
 } as const;
 
+
+const disposeCore = activateWebPluginForTest(
+  { instanceId: "manager:core", pluginId: "io.rabiroute.manager.core" },
+  activateCore
+);
+
+test.after(() => disposeCore());
+
 test("built-in pages are installed through the trusted registration API", () => {
   const overview = webPageRenderer("route.overview");
   assert.equal(overview.rendererId, "builtin.web-page.overview.v1");
   assert.deepEqual(overview.paths.map(entry => entry.path), ["/overview", "/routes/:id/overview"]);
-  assert.equal(webPageAllowsNavigation("route.overview", "route-primary", "mdi-view-dashboard-outline"), true);
-  assert.equal(webPageAllowsNavigation("route.overview", "utility", "mdi-view-dashboard-outline"), false);
+  assert.equal(webPageAllowsNavigation("route.overview", "route-primary", "mdi-view-dashboard-outline"), false);
+  assert.equal(webPageAllowsNavigation("route.overview", "utility", "mdi-view-dashboard-outline"), true);
   assert.deepEqual(webPageDataRequirements("route.overview"), ["gateway.diagnostics"]);
 });
 

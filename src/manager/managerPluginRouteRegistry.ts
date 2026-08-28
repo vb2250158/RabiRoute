@@ -149,18 +149,20 @@ export class ManagerPluginRouteRegistry {
         handler: declaration.handler
       };
     });
-    const routeIds = new Set(existingRoutes.map(route => route.routeId));
+    const routeIds = new Map(existingRoutes.map(route => [route.routeId, route.instanceId]));
     for (const route of routes) {
-      if (routeIds.has(route.routeId)) {
+      const routeOwner = routeIds.get(route.routeId);
+      if (routeOwner && routeOwner !== normalizedInstanceId) {
         throw new Error(`Manager plugin routeId already registered: ${route.routeId}`);
       }
-      routeIds.add(route.routeId);
+      routeIds.set(route.routeId, normalizedInstanceId);
     }
     const combined = [...existingRoutes, ...routes];
     for (let leftIndex = 0; leftIndex < combined.length; leftIndex += 1) {
       const left = combined[leftIndex]!;
       for (let rightIndex = leftIndex + 1; rightIndex < combined.length; rightIndex += 1) {
         const right = combined[rightIndex]!;
+        if (left.instanceId === right.instanceId) continue;
         if (!methodsOverlap(left.methods, right.methods) || !staticPathsOverlap(left, right)) continue;
         throw new Error(
           `Manager plugin routes overlap: ${left.routeId} (${left.methods.join("|")} ${routeDescription(left)}) and ${right.routeId} (${right.methods.join("|")} ${routeDescription(right)})`
@@ -178,8 +180,18 @@ export class ManagerPluginRouteRegistry {
     };
   }
 
-  handle(request: IncomingMessage, url: URL, response: ServerResponse): boolean {
+  private activeBatches(): readonly ManagerPluginRouteBatch[] {
+    const latestByInstance = new Map<string, ManagerPluginRouteBatch>();
+    const instanceOrder: string[] = [];
     for (const batch of this.batches) {
+      if (!latestByInstance.has(batch.instanceId)) instanceOrder.push(batch.instanceId);
+      latestByInstance.set(batch.instanceId, batch);
+    }
+    return instanceOrder.map(instanceId => latestByInstance.get(instanceId)!);
+  }
+
+  handle(request: IncomingMessage, url: URL, response: ServerResponse): boolean {
+    for (const batch of this.activeBatches()) {
       for (const route of batch.routes) {
         if (!routeMatches(route, request, url)) continue;
         if (route.handler(request, url, response)) return true;
@@ -190,7 +202,7 @@ export class ManagerPluginRouteRegistry {
 
   snapshot(): ManagerPluginRouteSnapshotEntry[] {
     const entries = new Map<string, ManagerPluginRouteSnapshotEntry>();
-    for (const batch of this.batches) {
+    for (const batch of this.activeBatches()) {
       const current = entries.get(batch.instanceId) ?? {
         instanceId: batch.instanceId,
         routeCount: 0,

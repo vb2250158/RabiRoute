@@ -258,7 +258,7 @@ function normalizeSandbox(value: unknown, fallback: CodexTurnSandbox = "workspac
 }
 
 function normalizeReasoningEffort(value: unknown): CodexReasoningEffort | undefined {
-  return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max"
+  return value === "none" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" || value === "ultra"
     ? value
     : undefined;
 }

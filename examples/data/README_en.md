@@ -22,7 +22,7 @@ The pack provides:
 - A disabled personal-Weixin Route prototype. Login tokens, sync cursors, and context tokens are created only under local runtime `data/` after opt-in; the public example contains no real account or credential.
 - Relative `rolesDir` configuration suitable for a copied workspace.
 
-First startup creates `data/plugins/manager/profile.json`. The version-controlled `rabi.manager.base` Bundle supplies 26 Manager instances. The Profile and Patches are the source of truth for enablement, versions, and configuration; see [`docs/plugin-bundles_en.md`](../../docs/plugin-bundles_en.md) for the layout, hot replacement, and controlled host API.
+The default build contains `dist/plugins/profiles/desktop.json` and 26 independent Manager plugin packages. Out-of-tree plugins can select one Profile and extra package roots through environment variables; see [`docs/plugin-bundles_en.md`](../../docs/plugin-bundles_en.md) for layout, hot replacement, and the SDK.
 
 Only `main` is enabled after copying the full pack. RabiLink, voice-chat, native Rokid voice, XiaoAI, WeCom, and personal Weixin remain disabled until credentials or QR login, working directories, and ports have been checked.
 

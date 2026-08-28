@@ -120,7 +120,7 @@ flowchart LR
 
 每条 Route 分开保存消息入口、人格、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
 
-Manager 当前通过 `rabi.manager.base@0.2.1` Bundle 提供 26 个内置插件实例。插件声明依赖和界面贡献；Manager 负责启停、依赖检查、路由撤销、请求排空和失败恢复。当前实现说明见[插件 Bundle 与热替换](docs/plugin-bundles.md)。
+Manager 通过一个插件内核装载 26 个独立内置包。内置包和树外包使用相同 SDK、Manifest、依赖图、权限检查、generation 切换和 Web 模块生命周期。当前实现说明见[插件包与热替换](docs/plugin-bundles.md)。
 
 ## Agent 与安全边界
 
@@ -179,7 +179,7 @@ data/roles/<RoleId>/personaConfig.json
 npm run manager          # 直接运行 TypeScript Manager
 npm run webgui:dev       # 运行 Vue/Vuetify 前端
 npm run test             # 运行后端与契约测试
-npm run build            # 构建 Manager 与 WebGUI，并同步基础 Web Bundle
+npm run build            # 构建 Manager、独立插件包与 WebGUI
 npm run check:config     # 检查公开和运行期 JSON 文本
 ```
 

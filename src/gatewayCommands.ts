@@ -1,5 +1,6 @@
 import { config } from "./config.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
+import { parseAgentAdapterType } from "./agentAdapters/types.js";
 import { triggerManualRule } from "./manualTrigger.js";
 import { forwardMessageAndWait, recordMessageContextOnly, type ForwardDeliveryResult, type ForwardRouteKind } from "./forwarding.js";
 import {
@@ -26,7 +27,8 @@ import {
   type WearableHealthAlertDeliveryContext
 } from "./wearableHealthAlertDelivery.js";
 import type { WearableHealthAlert } from "./wearableHealth.js";
-import { renderRabiDelivery, type RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
+import type { RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
+import { serializeAgentDeliveryTestResult } from "./agentDeliveryTest.js";
 
 function deliverySummary(result: ForwardDeliveryResult): string {
   const failedAdapters = result.adapterOutcomes.filter((outcome) => outcome.status === "failed").length;
@@ -332,17 +334,49 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
     const envelope = JSON.parse(decodeURIComponent(
       directAgentEnvelopeArg.slice("--direct-agent-envelope=".length)
     )) as RabiDeliveryEnvelope;
-    const adapter = config.primaryAgentAdapter;
+    const adapterArg = argv.find((arg) => arg.startsWith("--direct-agent-adapter="));
+    const requestedAdapter = parseAgentAdapterType(adapterArg?.slice("--direct-agent-adapter=".length));
+    if (adapterArg && !requestedAdapter) {
+      console.error("RabiRoute direct agent message failed: invalid agent adapter");
+      process.exit(1);
+    }
+    const adapter = requestedAdapter ?? config.primaryAgentAdapter;
+    const testDeliveryArg = argv.find((arg) => arg.startsWith("--agent-delivery-test="));
+    const deliveryId = testDeliveryArg?.slice("--agent-delivery-test=".length).trim();
+    const gatewayArg = argv.find((arg) => arg.startsWith("--direct-agent-gateway="));
+    const gatewayId = gatewayArg
+      ? decodeURIComponent(gatewayArg.slice("--direct-agent-gateway=".length)).trim()
+      : process.env.GATEWAY_ID?.trim() || "";
     if (!adapter) {
       console.error("RabiRoute direct agent message failed: no agent adapters configured");
       process.exit(1);
     }
     try {
       await (await createAgentAdapter(adapter)).deliver(envelope);
+      if (deliveryId) {
+        console.log(serializeAgentDeliveryTestResult({
+          deliveryId,
+          gatewayId,
+          agentAdapterType: adapter,
+          status: "delivered",
+          completedAt: new Date().toISOString()
+        }));
+      }
       console.log("RabiRoute direct agent message completed");
       process.exit(0);
     } catch (error) {
-      console.error(`RabiRoute direct agent message failed: ${error instanceof Error ? error.message : String(error)}`);
+      const detail = error instanceof Error ? error.message : String(error);
+      if (deliveryId) {
+        console.log(serializeAgentDeliveryTestResult({
+          deliveryId,
+          gatewayId,
+          agentAdapterType: adapter,
+          status: "failed",
+          completedAt: new Date().toISOString(),
+          error: detail
+        }));
+      }
+      console.error(`RabiRoute direct agent message failed: ${detail}`);
       process.exit(1);
     }
   }

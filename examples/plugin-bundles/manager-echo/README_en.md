@@ -1,40 +1,39 @@
-# Manager Echo Bundle
+# Manager Echo Plugin
 
 English | [简体中文](README.md)
 
-This is a minimal hot-replaceable Manager and Web Bundle. Copy it into the trusted local Bundle directory, then add `manager:example-echo` to the Profile. It provides:
+This out-of-tree example uses the production manifest, shared SDK, Manager HTTP primitive, and an independent Web entry.
 
-```text
-GET /api/plugins/example-echo
-A Plugin Echo page and status card in WebGUI
-```
+## Install
 
 ```powershell
-$target = "plugins/packages/example.manager.echo/1.0.0"
+$packageRoot = "C:\RabiRoutePlugins"
+$profilePath = "C:\RabiRouteProfiles\desktop.json"
+$target = Join-Path $packageRoot "example.manager.echo\1.0.0"
 New-Item -ItemType Directory -Force $target | Out-Null
 Copy-Item examples/plugin-bundles/manager-echo/* $target -Recurse -Force
+$env:RABIROUTE_PLUGIN_PACKAGE_ROOTS = $packageRoot
+$env:RABIROUTE_PLUGIN_PROFILE = $profilePath
 ```
 
-Create `data/plugins/manager/profile.d/10-example-echo.json`:
+Add this instance to the Profile:
 
 ```json
 {
-  "schemaVersion": 1,
-  "operations": [
-    {
-      "op": "upsert",
-      "plugin": {
-        "id": "manager:example-echo",
-        "package": "example.manager.echo",
-        "version": "1.0.0",
-        "enabled": true,
-        "config": { "message": "hello" }
-      }
-    }
-  ]
+  "id": "manager:example-echo",
+  "package": "example.manager.echo",
+  "version": "1.0.0",
+  "enabled": true,
+  "config": { "message": "hello" },
+  "grants": ["manager.http"]
 }
 ```
 
-Saving the Patch, `index.mjs`, or `client.mjs` creates a new Manager revision. The backend stops the old Fiber, removes its routes, and drains accepted work. The browser runs the old disposer before activating the new Web entry. If the new Web entry fails, the browser restores the prior revision.
+After Manager starts, the plugin provides:
 
-`client.mjs` is a single-file ESM entry loaded directly by the browser. Bundle it into one file before publishing; the current HTTP contract does not serve relative-import dependencies.
+```text
+GET /api/plugins/example-echo
+Plugin Echo page in WebGUI
+```
+
+Changing `manager.mjs`, `web/client.mjs`, or the Profile switches revision without changing Manager PID. Removing the Profile row releases the route, service, and page; the package directory can then be deleted.

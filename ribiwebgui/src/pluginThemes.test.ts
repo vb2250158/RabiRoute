@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  initialWebThemePreference,
   registerTrustedWebThemeResource,
   registeredWebThemeResources,
   resolveWebThemeCatalog,
@@ -11,7 +12,7 @@ import {
 function theme(themeId: string, webResourceId: string, overrides: Record<string, unknown> = {}): unknown {
   return {
     kind: "theme", surface: "shared.themes", id: `${themeId}-theme`,
-    instanceId: "manager:core", pluginId: "rabi.manager.base", themeId, webResourceId, hosts: ["web", "desktop"], ...overrides
+    instanceId: "manager:core", pluginId: "io.rabiroute.manager.core", themeId, webResourceId, hosts: ["web", "desktop"], ...overrides
   };
 }
 
@@ -47,4 +48,9 @@ test("unknown catalog selections use the fixed recovery resource and registratio
       webResourceId: "trusted.web-theme.duplicate.v1", label: "Duplicate", icon: "mdi-palette-outline", apply: () => "dark"
     }), /already registered/);
   } finally { dispose(); }
+});
+
+test("initial preference survives asynchronous theme catalog registration", () => {
+  assert.equal(initialWebThemePreference("", "dark"), "dark");
+  assert.equal(initialWebThemePreference("trusted.solarized", "light"), "trusted.solarized");
 });

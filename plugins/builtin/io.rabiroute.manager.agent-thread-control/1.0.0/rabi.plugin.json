@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.agent-thread-control",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "manager.agent-thread-control@1"
+  ],
+  "requires": [
+    "host.manager.agent-thread-control@1",
+    "manager.core@1",
+    "manager.agent-adapter-catalog@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

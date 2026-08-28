@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { AgentAdapterType, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
+import type { AgentAdapterType, AgentDeliveryTestResult, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
 import {
   applyAdapterDefaults,
   automationRulesForGateway,
@@ -499,7 +499,10 @@ export const useGatewayStore = defineStore("gateway", () => {
           id: gateway.id,
           configName: gateway.configName,
           model: gateway.agentModel?.trim() || "",
-          reasoningEffort: gateway.agentReasoningEffort
+          reasoningEffort: gateway.agentReasoningEffort,
+          dshModelProvider: gateway.dshModelProvider?.trim() || "",
+          dshModel: gateway.dshModel?.trim() || "",
+          dshReasoningEffort: gateway.dshReasoningEffort?.trim() || ""
         }));
       const savedEditVersion = editVersion.value;
       const response = await fetch(`${apiBase}/gateways`, {
@@ -553,7 +556,10 @@ export const useGatewayStore = defineStore("gateway", () => {
             gateway.id === expected.id || gateway.configName === expected.configName
           ));
           return (saved?.agentModel?.trim() || "") !== expected.model
-            || saved?.agentReasoningEffort !== expected.reasoningEffort;
+            || saved?.agentReasoningEffort !== expected.reasoningEffort
+            || (saved?.dshModelProvider?.trim() || "") !== expected.dshModelProvider
+            || (saved?.dshModel?.trim() || "") !== expected.dshModel
+            || (saved?.dshReasoningEffort?.trim() || "") !== expected.dshReasoningEffort;
         });
         if (primaryAgentSettingWasDropped) {
           throw new Error("Manager 版本过旧，未保存主人格模型或推理强度。请重启 Manager 后再次保存。");
@@ -607,6 +613,19 @@ export const useGatewayStore = defineStore("gateway", () => {
       accepted: true,
       alreadyRunning: body.data?.alreadyRunning === true
     };
+  }
+
+  async function testAgentDelivery(id: string, agentAdapterType: AgentAdapterType): Promise<AgentDeliveryTestResult> {
+    const response = await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/agent-delivery-test`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentAdapterType })
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.code !== 0 || body.data?.status !== "delivered") {
+      throw new Error(body.message || body.error || body.data?.error || "Agent 投递测试失败");
+    }
+    return body.data as AgentDeliveryTestResult;
   }
 
   async function openConfigFile(type: string, gatewayId = "", roleId = ""): Promise<void> {
@@ -1039,6 +1058,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     startManager,
     actionGateway,
     manualTriggerGateway,
+    testAgentDelivery,
     openConfigFile,
     selectGateway,
     addGateway,

@@ -192,6 +192,10 @@ export function resolveWebThemeResource(
   };
 }
 
+export function initialWebThemePreference(storedTheme: WebThemeId, desktopTheme: DesktopTheme): WebThemeId {
+  return storedTheme || desktopTheme;
+}
+
 export const WEB_THEME_PREFERENCE_KEY = "rabiroute:webgui:theme-preference";
 
 export function readStoredWebThemePreference(): WebThemeId {

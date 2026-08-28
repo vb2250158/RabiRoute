@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "instances": [
+    {
+      "id": "manager:core",
+      "package": "io.rabiroute.manager.core",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:persona",
+      "package": "io.rabiroute.manager.persona",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:speech",
+      "package": "io.rabiroute.manager.speech",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:performance",
+      "package": "io.rabiroute.manager.performance",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:bilibili-history",
+      "package": "io.rabiroute.manager.bilibili-history",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:route-control",
+      "package": "io.rabiroute.manager.route-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:agent-state-control",
+      "package": "io.rabiroute.manager.agent-state-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:gateway-runtime",
+      "package": "io.rabiroute.manager.gateway-runtime",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:rabilink-relay",
+      "package": "io.rabiroute.manager.rabilink-relay",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:memory-consolidation",
+      "package": "io.rabiroute.manager.memory-consolidation",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:fennenote-output",
+      "package": "io.rabiroute.manager.fennenote-output",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:message-processing-control",
+      "package": "io.rabiroute.manager.message-processing-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:message-processing-automation",
+      "package": "io.rabiroute.manager.message-processing-automation",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:plan-feedback-delivery",
+      "package": "io.rabiroute.manager.plan-feedback-delivery",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:message-adapter-control",
+      "package": "io.rabiroute.manager.message-adapter-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:agent-adapter-catalog",
+      "package": "io.rabiroute.manager.agent-adapter-catalog",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:agent-communication",
+      "package": "io.rabiroute.manager.agent-communication",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:copilot-control",
+      "package": "io.rabiroute.manager.copilot-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:astrbot-control",
+      "package": "io.rabiroute.manager.astrbot-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:marvis-control",
+      "package": "io.rabiroute.manager.marvis-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:agent-thread-control",
+      "package": "io.rabiroute.manager.agent-thread-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:napcat-control",
+      "package": "io.rabiroute.manager.napcat-control",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:remote-agent",
+      "package": "io.rabiroute.manager.remote-agent",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:napcat-supervisor",
+      "package": "io.rabiroute.manager.napcat-supervisor",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:diagnostics",
+      "package": "io.rabiroute.manager.diagnostics",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:desktop",
+      "package": "io.rabiroute.manager.desktop",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    }
+  ]
+}

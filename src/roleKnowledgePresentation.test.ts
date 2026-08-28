@@ -6,6 +6,7 @@ import {
   normalizeRolePlanPageLimit,
   paginateRoleMemory,
   paginateRolePlans,
+  previewRolePlan,
   summarizeRolePlan
 } from "./roleKnowledgePagination.js";
 import { planPresentation, presentPlan, presentPlans, sortKnowledgeByUpdatedAt } from "./roleKnowledgePresentation.js";
@@ -1099,10 +1100,47 @@ test("plan summaries keep title, type, status and ordering metadata without form
   assert.equal(summary.presentation.status, presented.presentation.status);
   assert.equal(summary.attachmentCount, 1);
   assert.equal(summary.stepCount, 1);
+  assert.equal(summary.completedStepCount, 0);
+  assert.equal(summary.currentStepPreview?.title, "Formal step content");
+  assert.equal(summary.detailLevel, "summary");
   assert.equal("focus" in summary, false);
   assert.equal("attachments" in summary, false);
   assert.equal("steps" in summary, false);
   assert.equal("contract" in summary.presentation.approval, false);
+});
+
+test("plan previews keep visible attachments and current progress without full steps or approval contracts", () => {
+  const presented = presentPlan(plan({
+    id: "preview",
+    title: "Preview before expand",
+    focus: "Visible body",
+    attachments: [{
+      id: "image",
+      kind: "image",
+      name: "preview.png",
+      path: "C:\private\preview.png",
+      size: 1024,
+      mimeType: "image/png",
+      sha256: "a".repeat(64)
+    }],
+    steps: [{
+      id: "approval",
+      title: "Approve implementation",
+      status: "进行中",
+      detail: "Visible current-step detail",
+      approvalRequest: approvalRequest()
+    }]
+  }));
+  const preview = previewRolePlan(presented);
+
+  assert.equal(preview.focus, "Visible body");
+  assert.equal(preview.attachments.length, 1);
+  assert.equal(preview.steps.length, 0);
+  assert.equal(preview.currentStepPreview?.detail, "Visible current-step detail");
+  assert.equal(preview.currentStepPreview ? "approvalRequest" in preview.currentStepPreview : false, false);
+  assert.equal(preview.stepCount, 1);
+  assert.equal(preview.detailLevel, "preview");
+  assert.equal("contract" in preview.presentation.approval, false);
 });
 
 test("memory lists are sorted by updatedAt without mutating the source array", () => {

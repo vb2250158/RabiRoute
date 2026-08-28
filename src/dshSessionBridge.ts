@@ -34,11 +34,28 @@ export function isDshSessionId(value: string): boolean {
   return dshSessionIdPattern.test(String(value || "").trim());
 }
 
+export type DshModelSelection = {
+  provider: string;
+  model: string;
+  reasoningEffort?: string;
+};
+
+export type DshModelCatalogEntry = {
+  provider: string;
+  providerName: string;
+  id: string;
+  name: string;
+  description?: string;
+  defaultReasoningEffort?: string;
+  reasoningEfforts: Array<{ id: string; description?: string }>;
+};
+
 export type DshPrimaryBinding = {
   sessionId: string;
   sessionName: string;
   cwd: string;
   baseUrl: string;
+  modelSelection?: DshModelSelection;
 };
 
 export function dshRouteConfigPath(): string {
@@ -69,7 +86,30 @@ export function readDshPrimaryBinding(routeConfigPath: string = dshRouteConfigPa
     const sessionName = typeof parsed.dshSessionName === "string" && parsed.dshSessionName.trim()
       ? parsed.dshSessionName.trim()
       : DEFAULT_DSH_SESSION_NAME;
-    return { sessionId, sessionName, cwd, baseUrl };
+    const modelProvider = (typeof parsed.dshModelProvider === "string" ? parsed.dshModelProvider.trim() : "")
+      || process.env.DSH_MODEL_PROVIDER?.trim()
+      || "";
+    const model = (typeof parsed.dshModel === "string" ? parsed.dshModel.trim() : "")
+      || process.env.DSH_MODEL?.trim()
+      || "";
+    const reasoningEffort = (typeof parsed.dshReasoningEffort === "string" && parsed.dshReasoningEffort.trim()
+      ? parsed.dshReasoningEffort.trim()
+      : undefined)
+      || process.env.DSH_REASONING_EFFORT?.trim()
+      || undefined;
+    return {
+      sessionId,
+      sessionName,
+      cwd,
+      baseUrl,
+      ...(modelProvider && model ? {
+        modelSelection: {
+          provider: modelProvider,
+          model,
+          ...(reasoningEffort ? { reasoningEffort } : {})
+        }
+      } : {})
+    };
   } catch {
     return null;
   }
@@ -109,6 +149,119 @@ async function dshRpc<T>(baseUrl: string, method: string, payload: unknown): Pro
     };
   }
   return { ok: true, value: result.value as T };
+}
+
+type DshModelCatalogResponse = {
+  groups?: unknown;
+  failures?: unknown;
+};
+
+export function normalizeDshModelCatalogForTest(value: unknown): {
+  models: DshModelCatalogEntry[];
+  warnings: string[];
+} {
+  const response = value && typeof value === "object" ? value as DshModelCatalogResponse : {};
+  const models = Array.isArray(response.groups)
+    ? response.groups.flatMap((group): DshModelCatalogEntry[] => {
+        if (!group || typeof group !== "object") return [];
+        const provider = group as Record<string, unknown>;
+        const providerId = typeof provider.id === "string" ? provider.id.trim() : "";
+        if (!providerId || !Array.isArray(provider.models)) return [];
+        const providerName = typeof provider.name === "string" && provider.name.trim()
+          ? provider.name.trim()
+          : providerId;
+        return provider.models.flatMap((model): DshModelCatalogEntry[] => {
+          if (!model || typeof model !== "object") return [];
+          const raw = model as Record<string, unknown>;
+          const id = typeof raw.id === "string" ? raw.id.trim() : "";
+          if (!id) return [];
+          const reasoning = raw.reasoning && typeof raw.reasoning === "object"
+            ? raw.reasoning as Record<string, unknown>
+            : {};
+          const reasoningEfforts = Array.isArray(reasoning.efforts)
+            ? reasoning.efforts.flatMap((effort): Array<{ id: string; description?: string }> => {
+                if (!effort || typeof effort !== "object") return [];
+                const option = effort as Record<string, unknown>;
+                const effortId = typeof option.id === "string" ? option.id.trim() : "";
+                if (!effortId) return [];
+                const description = typeof option.description === "string" && option.description.trim()
+                  ? option.description.trim()
+                  : undefined;
+                return [{ id: effortId, ...(description ? { description } : {}) }];
+              })
+            : [];
+          const description = typeof raw.description === "string" && raw.description.trim()
+            ? raw.description.trim()
+            : undefined;
+          const defaultReasoningEffort = typeof reasoning.defaultEffort === "string" && reasoning.defaultEffort.trim()
+            ? reasoning.defaultEffort.trim()
+            : undefined;
+          return [{
+            provider: providerId,
+            providerName,
+            id,
+            name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : id,
+            ...(description ? { description } : {}),
+            ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+            reasoningEfforts
+          }];
+        });
+      })
+    : [];
+  const warnings = Array.isArray(response.failures)
+    ? response.failures.flatMap((failure): string[] => {
+        if (!failure || typeof failure !== "object") return [];
+        const raw = failure as Record<string, unknown>;
+        const name = typeof raw.name === "string" && raw.name.trim()
+          ? raw.name.trim()
+          : typeof raw.id === "string"
+            ? raw.id.trim()
+            : "DSH provider";
+        const message = typeof raw.message === "string" && raw.message.trim() ? raw.message.trim() : "模型目录读取失败";
+        return [`${name}：${message}`];
+      })
+    : [];
+  return { models, warnings };
+}
+
+export async function listDshModels(baseUrl: string = DEFAULT_DSH_BASE_URL): Promise<{
+  models: DshModelCatalogEntry[];
+  warnings: string[];
+}> {
+  const result = await dshRpc<DshModelCatalogResponse>(normalizedDshBaseUrl(baseUrl), "llm.models", {});
+  if (!result.ok) {
+    throw new Error(`DSH llm.models failed: ${result.error.message || result.error.code || "unknown error"}`);
+  }
+  return normalizeDshModelCatalogForTest(result.value);
+}
+
+async function applyDshSessionModel(
+  baseUrl: string,
+  sessionId: string,
+  selection: DshModelSelection | undefined
+): Promise<void> {
+  if (!selection) return;
+  const current = await dshRpc<{ current?: { provider?: string; model?: string; reasoningEffort?: string } }>(
+    baseUrl,
+    "session.models",
+    { sessionId }
+  );
+  if (!current.ok) {
+    throw new Error(`DSH session.models failed: ${current.error.message || current.error.code || "unknown error"}`);
+  }
+  const active = current.value.current;
+  const modelMatches = active?.provider === selection.provider && active?.model === selection.model;
+  const reasoningMatches = !selection.reasoningEffort || active?.reasoningEffort === selection.reasoningEffort;
+  if (modelMatches && reasoningMatches) return;
+  const selected = await dshRpc<{ selected?: DshModelSelection }>(baseUrl, "session.selectModel", {
+    sessionId,
+    provider: selection.provider,
+    model: selection.model,
+    ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {})
+  });
+  if (!selected.ok) {
+    throw new Error(`DSH session.selectModel failed: ${selected.error.message || selected.error.code || "unknown error"}`);
+  }
 }
 
 export type DshRabiRoutePluginStatus = {
@@ -555,8 +708,10 @@ export async function sendDshSessionMessage(params: {
   cwd: string;
   baseUrl?: string;
   imagePaths?: string[];
+  modelSelection?: DshModelSelection;
 }): Promise<DshSessionDelivery> {
   const baseUrl = (params.baseUrl || DEFAULT_DSH_BASE_URL).replace(/\/+$/, "");
+  await applyDshSessionModel(baseUrl, params.sessionId, params.modelSelection);
   const imagePaths = params.imagePaths || [];
   const content: Array<{ type: "text"; text: string } | { type: "image"; mediaType: string; data: string; name: string }> = [
     { type: "text", text: params.prompt }
@@ -624,7 +779,8 @@ export async function notifyDshSession(message: string, imagePaths: string[] = [
     prompt: message,
     cwd: binding.cwd,
     baseUrl: binding.baseUrl,
-    imagePaths
+    imagePaths,
+    modelSelection: binding.modelSelection
   });
   return { sessionId: binding.sessionId };
 }

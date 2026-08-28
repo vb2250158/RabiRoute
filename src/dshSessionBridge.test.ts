@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   createDshSession,
   listDshSessions,
+  normalizeDshModelCatalogForTest,
+  sendDshSessionMessage,
   renameDshSession,
   resolveDshSession
 } from "./dshSessionBridge.js";
@@ -192,5 +194,67 @@ test("DSH rename fails closed when the saved session belongs to another workspac
     assert.equal(stub.requests.some((request) => request.method === "session.rename"), false);
   } finally {
     stub.restore();
+  }
+});
+
+
+test("DSH model catalog preserves provider identity and reasoning choices", () => {
+  assert.deepEqual(normalizeDshModelCatalogForTest({
+    groups: [{
+      id: "deepseek-official",
+      name: "DeepSeek",
+      models: [{
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        description: "Reasoning model",
+        reasoning: {
+          defaultEffort: "high",
+          efforts: [{ id: "high", description: "Deep reasoning" }, { id: "max" }]
+        }
+      }]
+    }],
+    failures: [{ id: "offline", name: "Offline", message: "not connected" }]
+  }), {
+    models: [{
+      provider: "deepseek-official",
+      providerName: "DeepSeek",
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      description: "Reasoning model",
+      defaultReasoningEffort: "high",
+      reasoningEfforts: [{ id: "high", description: "Deep reasoning" }, { id: "max" }]
+    }],
+    warnings: ["Offline：not connected"]
+  });
+});
+
+test("DSH delivery switches the bound session model before queuing the prompt", async () => {
+  const originalFetch = globalThis.fetch;
+  const methods: string[] = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body || "{}")) as RpcRequest;
+    methods.push(body.method);
+    const value = body.method === "session.models"
+      ? { current: { provider: "deepseek-official", model: "deepseek-v4-flash" }, routable: true, groups: [], failures: [] }
+      : body.method === "session.selectModel"
+        ? { selected: { provider: body.payload.provider, model: body.payload.model, reasoningEffort: body.payload.reasoningEffort } }
+        : body.method === "session.prompt"
+          ? { accepted: true }
+          : undefined;
+    return new Response(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value } }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  }) as typeof fetch;
+  try {
+    await sendDshSessionMessage({
+      sessionId: "session-44444444-4444-4444-8444-444444444444",
+      prompt: "test",
+      cwd: "C:\\work\\rabi",
+      modelSelection: { provider: "deepseek-official", model: "deepseek-v4-pro", reasoningEffort: "max" }
+    });
+    assert.deepEqual(methods, ["session.models", "session.selectModel", "session.prompt"]);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });

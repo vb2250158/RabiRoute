@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { canonicalCodexWorkspacePath } from "./codexTaskIdentity.js";
 
 export type CodexDesktopSandbox = "read-only" | "workspace-write" | "danger-full-access";
-export type CodexDesktopReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type CodexDesktopReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export type CodexDesktopThread = {
   id: string;

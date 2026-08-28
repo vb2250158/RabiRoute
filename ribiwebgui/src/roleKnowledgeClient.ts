@@ -41,10 +41,6 @@ export type RolePlanPage = {
   };
 };
 
-export type RolePlanPageWithPriorityDetails = RolePlanPage & {
-  detailPlanIds: string[];
-};
-
 export type PlanAgentRole = "task" | "secretary";
 export type PlanAgentWorkStatus = "working" | "idle" | "unknown";
 export type PlanAgentSessionStatus =
@@ -111,7 +107,6 @@ export type RoleMemoryPage = {
 };
 
 export const ROLE_PLAN_PAGE_SIZE = 8;
-export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 250;
 export const ROLE_MEMORY_BACKGROUND_PAGE_SIZE = 100;
 
 export type RolePlanPageFilter = {
@@ -125,10 +120,11 @@ export type RolePlanPageFilter = {
 
 type RolePlanSummary = Pick<
   RolePlan,
-  "id" | "title" | "status" | "importance" | "urgency" | "priority" | "kind" | "project" | "secretaryBinding" | "taskBinding" | "createdAt" | "updatedAt" | "keywords" | "presentation"
+  "id" | "title" | "status" | "importance" | "urgency" | "priority" | "kind" | "currentStep" | "currentStepId" | "currentStepPreview" | "currentStepPosition" | "dueAt" | "project" | "secretaryBinding" | "taskBinding" | "createdAt" | "updatedAt" | "keywords" | "presentation" | "detailLevel"
 > & {
   attachmentCount: number;
   stepCount: number;
+  completedStepCount: number;
 };
 
 type ManagerEnvelope<T> = {
@@ -165,9 +161,22 @@ async function managerData<T>(path: string, init: RequestInit = {}): Promise<T> 
 }
 
 export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
+  const attachments = Array.isArray(plan.attachments) ? plan.attachments : [];
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+  const normalizedCounts = {
+    attachments,
+    steps,
+    attachmentCount: Number.isFinite(plan.attachmentCount) ? plan.attachmentCount : attachments.length,
+    stepCount: Number.isFinite(plan.stepCount) ? plan.stepCount : steps.length,
+    completedStepCount: Number.isFinite(plan.completedStepCount)
+      ? plan.completedStepCount
+      : steps.filter((step) => step.status === "已完成").length,
+    detailLevel: plan.detailLevel || (steps.length || attachments.length || plan.focus ? "full" : "summary")
+  } satisfies Pick<RolePlan, "attachments" | "steps" | "attachmentCount" | "stepCount" | "completedStepCount" | "detailLevel">;
   if (plan.presentation?.status && plan.presentation?.tone && plan.presentation.approval) {
     return {
       ...plan,
+      ...normalizedCounts,
       presentation: {
         ...plan.presentation,
         statusLevel: Number.isFinite(plan.presentation.statusLevel)
@@ -195,6 +204,7 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
   }
   return {
     ...plan,
+    ...normalizedCounts,
     presentation: {
       status: "状态未知",
       tone: "unknown",
@@ -278,10 +288,23 @@ export async function loadRolePlanPage(
   };
 }
 
-export async function loadRolePlan(roleId: string, planId: string): Promise<RolePlan> {
+export async function loadRolePlanPreview(roleId: string, planId: string): Promise<RolePlan> {
   return normalizeRolePlanFromManager(await managerData<RolePlan>(
+    `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}?detail=preview`
+  ));
+}
+
+export async function loadRolePlan(roleId: string, planId: string): Promise<RolePlan> {
+  const plan = normalizeRolePlanFromManager(await managerData<RolePlan>(
     `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`
   ));
+  return {
+    ...plan,
+    attachmentCount: plan.attachments.length,
+    stepCount: plan.steps.length,
+    completedStepCount: plan.steps.filter((step) => step.status === "已完成").length,
+    detailLevel: "full"
+  };
 }
 
 const PLAN_AGENT_STATUS_CHUNK_SIZE = 40;
@@ -353,29 +376,6 @@ export async function openPlanAgentTask(
       body: JSON.stringify({ role })
     }
   );
-}
-
-export async function loadRolePlanPageWithPriorityDetails(
-  roleId: string,
-  cursor = "",
-  limit = ROLE_PLAN_PAGE_SIZE,
-  filter: RolePlanPageFilter = {},
-  priorityDetailCount = 2
-): Promise<RolePlanPageWithPriorityDetails> {
-  const page = await loadRolePlanPage(roleId, cursor, limit, filter);
-  const priorityItems = page.items.slice(0, Math.max(0, Math.floor(priorityDetailCount)));
-  const detailResults = await Promise.allSettled(
-    priorityItems.map((item) => loadRolePlan(roleId, item.id))
-  );
-  const details = new Map<string, RolePlan>();
-  for (const result of detailResults) {
-    if (result.status === "fulfilled") details.set(result.value.id, result.value);
-  }
-  return {
-    ...page,
-    items: page.items.map((item) => details.get(item.id) || item),
-    detailPlanIds: priorityItems.map((item) => item.id).filter((id) => details.has(id))
-  };
 }
 
 export async function loadRoleMemory(roleId: string): Promise<RoleMemoryPayload> {

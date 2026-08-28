@@ -6,7 +6,8 @@ import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { managerEventSource } from "../managerApi";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
-import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
+import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
+import { codexModelPickerItems, dshModelPickerItems, dshModelValue, parseDshModelValue, reasoningEffortPickerItems } from "../agentModelPicker";
 import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
@@ -30,6 +31,12 @@ const speech = useSpeechStore();
 const route = useRoute();
 const router = useRouter();
 const messageProcessingBoardOpen = ref(false);
+const channelCheckDialogOpen = ref(false);
+const agentDeliveryTest = ref<{ loading: AgentAdapterType | null; result: AgentDeliveryTestResult | null; error: string }>({
+  loading: null,
+  result: null,
+  error: ""
+});
 const runtime = computed(() => store.selectedRuntime);
 const personaAvatarUrl = computed(() => (runtime.value.roleInfo?.options || [])
   .find(option => option.value === store.selectedGateway?.agentRoleId)?.avatarUrl || "");
@@ -56,11 +63,59 @@ const agentScan = ref({
 const dshScanLoading = ref(false);
 const dshScanRevision = ref(0);
 
+const codexModelItems = computed(() => codexModelPickerItems(agentScan.value.agents.codex?.models ?? []));
+const codexReasoningEffortItems = computed(() => {
+  const discovered = reasoningEffortPickerItems(
+    agentScan.value.agents.codex?.models ?? [],
+    store.selectedGateway?.agentModel
+  );
+  return discovered.length > 0 ? discovered : ["low", "medium", "high", "xhigh", "max"];
+});
+const dshModelItems = computed(() => dshModelPickerItems(agentScan.value.agents.dsh?.models ?? []));
+const configuredDshModelValue = computed(() => dshModelValue(
+  store.selectedGateway?.dshModelProvider,
+  store.selectedGateway?.dshModel
+));
+const dshReasoningEffortItems = computed(() => reasoningEffortPickerItems(
+  agentScan.value.agents.dsh?.models ?? [],
+  store.selectedGateway?.dshModel,
+  store.selectedGateway?.dshModelProvider
+));
+
+function selectCodexModel(value: unknown): void {
+  if (!store.selectedGateway) return;
+  store.selectedGateway.agentModel = String(value || "").trim();
+  const selected = agentScan.value.agents.codex?.models?.find(model => model.id === store.selectedGateway?.agentModel);
+  const efforts = selected?.reasoningEfforts?.map(effort => effort.id) ?? [];
+  if (selected && (!store.selectedGateway.agentReasoningEffort || !efforts.includes(store.selectedGateway.agentReasoningEffort))) {
+    store.selectedGateway.agentReasoningEffort = selected.defaultReasoningEffort as typeof store.selectedGateway.agentReasoningEffort;
+  }
+  touch();
+}
+
+function selectDshModel(value: unknown): void {
+  if (!store.selectedGateway) return;
+  const parsed = parseDshModelValue(value, agentScan.value.agents.dsh?.models ?? []);
+  store.selectedGateway.dshModelProvider = parsed.provider;
+  store.selectedGateway.dshModel = parsed.model;
+  const selected = agentScan.value.agents.dsh?.models?.find(model => (
+    model.provider === parsed.provider && model.id === parsed.model
+  ));
+  const efforts = selected?.reasoningEfforts?.map(effort => effort.id) ?? [];
+  if (selected && (!store.selectedGateway.dshReasoningEffort || !efforts.includes(store.selectedGateway.dshReasoningEffort))) {
+    store.selectedGateway.dshReasoningEffort = selected.defaultReasoningEffort || "";
+  }
+  touch();
+}
+
 const messageAdapterScan = ref({
   adapters: {} as Partial<Record<MessageAdapterType, MessageAdapterScanResult>>,
   loading: false,
   error: "",
-  overall: null as null | { state: "healthy" | "degraded" | "unknown"; message: string }
+  overall: null as null | { state: "healthy" | "degraded" | "unknown"; message: string },
+  partial: false,
+  durationMs: 0,
+  checkedAt: ""
 });
 type RemoteAgentDeviceStatus = {
   deviceId: string;
@@ -124,6 +179,9 @@ async function runMessageAdapterScan(): Promise<void> {
     if (!res.ok) throw new Error(data.message || `消息端扫描失败（HTTP ${res.status}）`);
     messageAdapterScan.value.adapters = data.adapters ?? {};
     messageAdapterScan.value.overall = data.health?.overall ?? null;
+    messageAdapterScan.value.partial = data.scan?.partial === true;
+    messageAdapterScan.value.durationMs = Number(data.scan?.durationMs || 0);
+    messageAdapterScan.value.checkedAt = new Date().toISOString();
     if (data.repair?.changed) {
       await store.load();
     }
@@ -141,6 +199,9 @@ async function runMessageAdapterScan(): Promise<void> {
   } catch (error) {
     messageAdapterScan.value.adapters = {};
     messageAdapterScan.value.overall = null;
+    messageAdapterScan.value.partial = false;
+    messageAdapterScan.value.durationMs = 0;
+    messageAdapterScan.value.checkedAt = "";
     messageAdapterScan.value.error = error instanceof Error ? error.message : String(error);
   }
   finally { messageAdapterScan.value.loading = false; }
@@ -1280,6 +1341,104 @@ function sourceTitle(type: MessageAdapterType): string {
 
 function messageScanFor(type: MessageAdapterType): MessageAdapterScanResult | undefined {
   return messageAdapterScan.value.adapters[type];
+}
+
+const channelCheckItems = computed(() => {
+  const catalog = new Map(adapterGroups.flatMap(group => group.choices).map(choice => [choice.type, choice]));
+  return addedAdapters.value
+    .filter((type): type is MessageEndpointType => type !== "disabled")
+    .map(type => catalog.get(type) ?? {
+      type,
+      title: adapterLabel(type),
+      note: "当前 Route 已添加的消息端。",
+      icon: "mdi-connection"
+    });
+});
+
+async function runChannelCheck(): Promise<void> {
+  const scanAgents = runAgentScan;
+  await Promise.all([runMessageAdapterScan(), scanAgents()]);
+}
+
+function openChannelCheckDialog(): void {
+  channelCheckDialogOpen.value = true;
+  void runChannelCheck();
+}
+
+function openChannelCheckDetails(type: MessageAdapterType): void {
+  channelCheckDialogOpen.value = false;
+  adapterQuery.value = "";
+  adapterParamOpen.value[type] = true;
+}
+
+function openChannelCheckAgentDetails(type: AgentAdapterType): void {
+  channelCheckDialogOpen.value = false;
+  agentParamOpen.value[type] = true;
+}
+
+function agentDeliveryTestCompletedAt(value: string): string {
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toLocaleString() : value;
+}
+
+async function runAgentDeliveryTest(type: AgentAdapterType): Promise<void> {
+  if (!gateway.value) return;
+  agentDeliveryTest.value = { loading: type, result: null, error: "" };
+  try {
+    if (store.dirty) {
+      throw new Error("请先保存当前配置，再执行投递测试。");
+    }
+    const result = await store.testAgentDelivery(gateway.value.id, type);
+    agentDeliveryTest.value = { loading: null, result, error: "" };
+  } catch (error) {
+    agentDeliveryTest.value = {
+      loading: null,
+      result: null,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+function enabledChannelCheckScans(): Array<MessageAdapterScanResult | undefined> {
+  if (!gateway.value) return [];
+  return channelCheckItems.value
+    .filter(item => !isAdapterDisabled(gateway.value!, item.type))
+    .map(item => messageScanFor(item.type));
+}
+
+function channelCheckOverallLabel(): string {
+  if (messageAdapterScan.value.loading || agentScan.value.loading) return "正在检查通道";
+  if (messageAdapterScan.value.error) return "通道检查失败";
+  if (!messageAdapterScan.value.checkedAt) return "尚未检查";
+  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "当前 Route 已停用";
+  if (runtime.value.running === false) return "Manager 未运行";
+  const scans = enabledChannelCheckScans();
+  if (!scans.length) return "没有启用的通道";
+  if (!channelCheckAgentItems.value.length) return "尚未配置 Agent 端";
+  if (scans.some(scan => !scan)) return "检查完成，状态待确认";
+  if (scans.some(scan => scan?.scan?.state === "timeout" || scan?.scan?.state === "error")) {
+    return "检查完成，部分结果超时";
+  }
+  const agentsReady = channelCheckAgentItems.value.every(item => ["可投递", "已绑定", "已发现"].includes(channelAgentConnectionLabel(item.type)));
+  if (agentsReady && scans.every(scan => ["可用", "已发现"].includes(scanConnectionLabel(scan)))) return "通道状态正常";
+  return "发现需要处理的通道";
+}
+
+function channelCheckOverallColor(): string {
+  const label = channelCheckOverallLabel();
+  if (label === "通道检查失败") return "error";
+  if (["正在检查通道", "尚未检查", "没有启用的通道", "当前 Route 已停用"].includes(label)) return "secondary";
+  if (label !== "通道状态正常") return "warning";
+  return "success";
+}
+
+function channelCheckDetail(scan?: MessageAdapterScanResult): string {
+  if (!scan) return messageAdapterScan.value.loading ? "正在读取连接和依赖状态。" : "本轮没有返回检查结果。";
+  if (scan.health?.message) return scan.health.message;
+  if (scan.scan?.message) return scan.scan.message;
+  const missing = scan.requirements?.filter(item => item.required && item.ok === false) ?? [];
+  if (missing.length) return `缺少：${missing.map(item => item.label).join("、")}`;
+  return scan.installed ? "已发现消息端，连接状态需要进一步确认。" : "尚未发现所需配置或服务。";
 }
 
 function remoteAgentDeviceTitle(device: RemoteAgentDeviceStatus): string {
@@ -3156,6 +3315,51 @@ const primaryAgentItems = computed(() => visibleAgentItems.value.map(agent => ({
   value: agent.type
 })));
 
+const channelCheckAgentItems = computed(() => visibleAgentItems.value.map(agent => ({
+  ...agent,
+  primary: primaryAgentType.value === agent.type
+})));
+
+function channelManagerConnectionLabel(): string {
+  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "已停用";
+  return runtime.value.running ? "运行中" : "已停止";
+}
+
+function channelManagerConnectionColor(): string {
+  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "secondary";
+  return runtime.value.running ? "success" : "warning";
+}
+
+function channelManagerDetail(): string {
+  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "当前 Route 已停用。";
+  if (runtime.value.running) return "Manager 正在承载当前 Route。";
+  return "Manager 尚未运行当前 Route。";
+}
+
+function channelAgentConnectionLabel(type: AgentAdapterType): string {
+  const state = agentStateFor(type);
+  if (state.deliveryHealthy === true) return "可投递";
+  if (state.lastNotificationError) return "投递失败";
+  if (state.bound === true) return "已绑定";
+  return agentConnectionLabel(type);
+}
+
+function channelAgentConnectionColor(type: AgentAdapterType): string {
+  const label = channelAgentConnectionLabel(type);
+  if (["可投递", "已绑定", "已发现"].includes(label)) return "success";
+  if (["扫描中", "未扫描"].includes(label)) return "secondary";
+  if (["投递失败", "未安装"].includes(label)) return "error";
+  return "warning";
+}
+
+function channelAgentDetail(type: AgentAdapterType): string {
+  const state = agentStateFor(type);
+  if (typeof state.message === "string" && state.message.trim()) return state.message;
+  const scan = agentScanFor(type);
+  if (scan?.auth?.message) return scan.auth.message;
+  return agentDefs.find(agent => agent.type === type)?.note || "当前 Route 已添加的 Agent 端。";
+}
+
 function messageProcessingAgentPolicy(type: AgentAdapterType) {
   const policy = gateway.value?.messageProcessingAgents?.[type];
   return {
@@ -3874,6 +4078,9 @@ watch(
       </div>
       <div class="page-actions" v-if="gateway">
         <v-switch v-model="gateway.enabled" label="是否启用" color="success" inset hide-details @update:model-value="touch" />
+        <v-btn prepend-icon="mdi-connection" color="secondary" variant="tonal" :loading="messageAdapterScan.loading && channelCheckDialogOpen" @click="openChannelCheckDialog">
+          通道检查
+        </v-btn>
         <v-btn prepend-icon="mdi-folder-open-outline" variant="tonal" @click="store.openConfigFile('route-folder', gateway.id, gateway.agentRoleId || '')">
           打开航线配置
         </v-btn>
@@ -5296,17 +5503,30 @@ watch(
                     实际消息只交给 Codex/ChatGPT Desktop 当前任务执行，因此桌面端会立即显示消息并沿用该任务的工具、模型与权限。Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime。
                   </v-alert>
                   <div class="catalog-param-grid">
-                    <v-text-field
-                      v-model="gateway.agentModel"
+                    <v-combobox
+                      :model-value="gateway.agentModel"
+                      :items="codexModelItems"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
                       label="主人格模型"
-                      hint="Manager 统一应用到当前 Route 主人格的新轮次；留空时沿用 Desktop 任务自己的模型。"
+                      hint="Desktop 可用时读取当前账号的模型目录；读取失败时仍可手动输入。留空则沿用目标任务自己的模型。"
                       persistent-hint
+                      clearable
                       data-no-i18n
-                      @update:model-value="touch"
-                    />
+                      @update:model-value="selectCodexModel"
+                    >
+                      <template #item="{ props, item }">
+                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+                      </template>
+                      <template #append-inner>
+                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新读取模型" @click.stop="runAgentScan" />
+                      </template>
+                    </v-combobox>
                     <v-select
                       v-model="gateway.agentReasoningEffort"
-                      :items="['low', 'medium', 'high', 'xhigh', 'max']"
+                      :items="codexReasoningEffortItems"
                       label="主人格推理强度"
                       hint="与主人格模型一起应用到 Desktop 新轮次；留空时沿用 Desktop 当前设置。"
                       persistent-hint
@@ -5525,6 +5745,38 @@ watch(
                         <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="按当前地址扫描" @click.stop="runDshAgentScan" />
                       </template>
                     </v-combobox>
+                    <v-combobox
+                      :model-value="configuredDshModelValue"
+                      :items="dshModelItems"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
+                      label="主人格模型"
+                      placeholder="provider/model"
+                      hint="DSH 可用时读取模型目录；读取失败时可手动输入 provider/model。配置会在主人格下一次投递前应用到绑定会话。"
+                      persistent-hint
+                      clearable
+                      data-no-i18n
+                      @update:model-value="selectDshModel"
+                    >
+                      <template #item="{ props, item }">
+                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+                      </template>
+                      <template #append-inner>
+                        <v-progress-circular v-if="dshScanLoading" size="16" width="2" indeterminate />
+                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新读取模型" @click.stop="runDshAgentScan" />
+                      </template>
+                    </v-combobox>
+                    <v-combobox
+                      v-model="gateway.dshReasoningEffort"
+                      :items="dshReasoningEffortItems"
+                      label="主人格推理强度"
+                      hint="优先显示所选 DSH 模型支持的值；目录不可用时可以手动输入。留空则沿用模型或 DSH 当前默认值。"
+                      persistent-hint
+                      clearable
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
                     <v-combobox
                       v-model="gateway.dshCwd"
                       :items="agentProjectItems('dsh')"
@@ -5953,5 +6205,182 @@ watch(
         </div>
       </v-card>
     </template>
+
+    <v-dialog v-model="channelCheckDialogOpen" max-width="1180" scrollable>
+      <v-card class="app-card channel-check-dialog">
+        <v-card-title class="d-flex align-center ga-3">
+          <v-icon color="secondary">mdi-connection</v-icon>
+          <div>
+            <div>通道检查</div>
+            <div class="section-note">检查当前 Route 从消息端经过 Manager 到 Agent 端的完整链路。</div>
+          </div>
+          <v-spacer />
+          <v-btn icon="mdi-close" variant="text" title="关闭" @click="channelCheckDialogOpen = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text>
+          <v-alert type="info" variant="tonal" density="compact" class="mb-4">
+            状态检查不会修改配置或触发登录。点击 Agent 节点的“投递测试”会发送一条带测试编号的真实消息，用于确认对应 Agent 是否收到。
+          </v-alert>
+
+          <div class="d-flex align-center ga-2 flex-wrap mb-4">
+            <v-chip :color="channelCheckOverallColor()" variant="tonal">{{ channelCheckOverallLabel() }}</v-chip>
+            <span v-if="messageAdapterScan.checkedAt" class="section-note">
+              用时 {{ messageAdapterScan.durationMs }} ms
+            </span>
+          </div>
+
+          <v-progress-linear v-if="messageAdapterScan.loading || agentScan.loading" indeterminate color="secondary" class="mb-4" />
+          <v-alert v-if="messageAdapterScan.error" type="error" variant="tonal" density="compact" class="mb-4">
+            {{ messageAdapterScan.error }}
+          </v-alert>
+
+          <div class="channel-topology" aria-label="消息端到 Agent 端的通道拓扑">
+            <section class="channel-topology-column channel-topology-messages">
+              <div class="channel-topology-heading">
+                <v-icon size="18">mdi-message-processing-outline</v-icon>
+                <span>消息端</span>
+                <small>消息进入</small>
+              </div>
+              <button
+                v-for="item in channelCheckItems"
+                :key="item.type"
+                type="button"
+                class="channel-topology-node channel-topology-message-node"
+                :data-tone="gateway && isAdapterDisabled(gateway, item.type) ? 'secondary' : scanConnectionColor(messageScanFor(item.type))"
+                @click="openChannelCheckDetails(item.type)"
+              >
+                <v-icon class="channel-topology-node-icon">{{ item.icon }}</v-icon>
+                <span class="channel-topology-node-main">
+                  <strong>{{ item.title }}</strong>
+                  <small>{{ channelCheckDetail(messageScanFor(item.type)) }}</small>
+                </span>
+                <span class="channel-topology-node-status">
+                  <v-chip size="x-small" :color="gateway && !isAdapterDisabled(gateway, item.type) ? 'success' : 'secondary'" variant="tonal">
+                    {{ gateway && !isAdapterDisabled(gateway, item.type) ? "已启用" : "已停用" }}
+                  </v-chip>
+                  <v-chip size="x-small" :color="scanConnectionColor(messageScanFor(item.type))" variant="tonal">
+                    {{ scanConnectionLabel(messageScanFor(item.type)) }}
+                  </v-chip>
+                </span>
+                <span class="channel-topology-node-action">查看配置</span>
+              </button>
+              <div v-if="channelCheckItems.length === 0" class="channel-topology-empty">
+                <strong>尚未添加消息端</strong>
+                <span>先在消息配置页添加一个消息端。</span>
+              </div>
+            </section>
+
+            <div class="channel-topology-bridge" aria-hidden="true" />
+
+            <section class="channel-topology-manager">
+              <div class="channel-topology-heading channel-topology-heading-center">
+                <v-icon size="18">mdi-routes</v-icon>
+                <span>分诊与路由</span>
+              </div>
+              <div class="channel-topology-node channel-topology-manager-node" :data-tone="channelManagerConnectionColor()">
+                <v-icon class="channel-topology-manager-icon">mdi-router-network</v-icon>
+                <strong>Rabi Manager</strong>
+                <v-chip size="small" :color="channelManagerConnectionColor()" variant="tonal">
+                  {{ channelManagerConnectionLabel() }}
+                </v-chip>
+                <small>{{ channelManagerDetail() }}</small>
+              </div>
+            </section>
+
+            <div class="channel-topology-bridge" aria-hidden="true" />
+
+            <section class="channel-topology-column channel-topology-agents">
+              <div class="channel-topology-heading">
+                <v-icon size="18">mdi-robot-outline</v-icon>
+                <span>Agent 端</span>
+                <small>处理与回复</small>
+              </div>
+              <div
+                v-for="agent in channelCheckAgentItems"
+                :key="agent.type"
+                class="channel-topology-node channel-topology-agent-node"
+                :data-tone="channelAgentConnectionColor(agent.type)"
+              >
+                <v-icon class="channel-topology-node-icon">{{ agent.icon }}</v-icon>
+                <span class="channel-topology-node-main">
+                  <strong>{{ agent.title }}</strong>
+                  <small>{{ channelAgentDetail(agent.type) }}</small>
+                </span>
+                <span class="channel-topology-node-status">
+                  <v-chip v-if="agent.primary" size="x-small" color="primary" variant="tonal">主控</v-chip>
+                  <v-chip v-else size="x-small" color="secondary" variant="tonal">备用</v-chip>
+                  <v-chip size="x-small" :color="channelAgentConnectionColor(agent.type)" variant="tonal">
+                    {{ channelAgentConnectionLabel(agent.type) }}
+                  </v-chip>
+                </span>
+                <span class="channel-topology-node-actions">
+                  <v-btn
+                    size="x-small"
+                    color="secondary"
+                    variant="tonal"
+                    prepend-icon="mdi-send-check-outline"
+                    :loading="agentDeliveryTest.loading === agent.type"
+                    :disabled="Boolean(agentDeliveryTest.loading) || store.dirty || agent.type === 'marvis'"
+                    @click="runAgentDeliveryTest(agent.type)"
+                  >
+                    {{ agent.type === "marvis" ? "仅人工接力" : "投递测试" }}
+                  </v-btn>
+                  <button type="button" class="channel-topology-config-action" @click="openChannelCheckAgentDetails(agent.type)">
+                    查看配置
+                  </button>
+                </span>
+              </div>
+              <div v-if="channelCheckAgentItems.length === 0" class="channel-topology-empty">
+                <strong>尚未添加 Agent 端</strong>
+                <span>先在消息配置页添加处理端。</span>
+              </div>
+            </section>
+          </div>
+
+          <v-alert
+            v-if="agentDeliveryTest.loading"
+            type="info"
+            variant="tonal"
+            density="compact"
+            class="mt-4"
+          >
+            正在向 {{ channelCheckAgentItems.find(item => item.type === agentDeliveryTest.loading)?.title || agentDeliveryTest.loading }} 投递真实测试消息…
+          </v-alert>
+          <v-alert
+            v-else-if="agentDeliveryTest.result"
+            type="success"
+            variant="tonal"
+            density="compact"
+            class="mt-4"
+            title="目标 Agent 已收到测试消息"
+          >
+            <div class="channel-delivery-test-details">
+              <span>目标：{{ channelCheckAgentItems.find(item => item.type === agentDeliveryTest.result?.agentAdapterType)?.title || agentDeliveryTest.result.agentAdapterType }}</span>
+              <span>测试编号：<code>{{ agentDeliveryTest.result.deliveryId }}</code></span>
+              <span>完成时间：{{ agentDeliveryTestCompletedAt(agentDeliveryTest.result.completedAt) }}</span>
+            </div>
+          </v-alert>
+          <v-alert
+            v-else-if="agentDeliveryTest.error"
+            type="error"
+            variant="tonal"
+            density="compact"
+            class="mt-4"
+            title="投递测试失败"
+          >
+            {{ agentDeliveryTest.error }}
+          </v-alert>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="channelCheckDialogOpen = false">关闭</v-btn>
+          <v-btn color="secondary" variant="tonal" prepend-icon="mdi-refresh" :loading="messageAdapterScan.loading || agentScan.loading" @click="runChannelCheck">
+            重新检查
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>

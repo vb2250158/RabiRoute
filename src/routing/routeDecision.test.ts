@@ -211,40 +211,48 @@ test("AgentPacket renders rule template and reply context from a decision", () =
 });
 
 test("AgentPacket exposes workspace paths as relative paths", () => {
-  const route = routeProfile({
-    notificationRules: [{
-      id: "direct",
-      name: "direct",
-      enabled: true,
-      routeKinds: ["direct_at"],
-      template: "role={agentRolePath} data={dataDir}"
-    }]
-  });
-  const decision = createRouteDecision(route, "direct_at", groupMessage(), {});
-  assert.ok(decision);
+  const fixtureParent = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(fixtureParent, { recursive: true });
+  const fixtureRoot = fs.mkdtempSync(path.join(fixtureParent, "route-decision-relative-"));
+  try {
+    const route = routeProfile({
+      notificationRules: [{
+        id: "direct",
+        name: "direct",
+        enabled: true,
+        routeKinds: ["direct_at"],
+        template: "role={agentRolePath} data={dataDir}"
+      }]
+    });
+    const decision = createRouteDecision(route, "direct_at", groupMessage(), {});
+    assert.ok(decision);
 
-  const dataDir = path.join(process.cwd(), "data", "route", "main");
-  const roleDir = path.join(process.cwd(), "data", "roles", "Rabi");
-  const rolePath = path.join(roleDir, "persona.md");
-  const packet = buildAgentPacket(decision, decision.matchedRules[0], {
-    roleId: "Rabi",
-    roleDir,
-    rolePath,
-    dataDir
-  });
+    const dataDir = path.join(fixtureRoot, "data", "route", "main");
+    const roleDir = path.join(fixtureRoot, "data", "roles", "Rabi");
+    const rolePath = path.join(roleDir, "persona.md");
+    const relativeRoot = path.relative(process.cwd(), fixtureRoot).replaceAll("\\", "/");
+    const packet = buildAgentPacket(decision, decision.matchedRules[0], {
+      roleId: "Rabi",
+      roleDir,
+      rolePath,
+      dataDir
+    });
 
-  assert.equal(packet.templateValues.dataDir, "data/route/main");
-  assert.equal(packet.templateValues.agentRoleDir, "data/roles/Rabi");
-  assert.equal(packet.templateValues.agentRolePath, "data/roles/Rabi/persona.md");
-  assert.equal(packet.templateValues.groupLogPath, "data/route/main/group-messages.jsonl");
-  assert.equal(packet.templateValues.agentInterfaceDocPath, "docs/rabi-agent-interfaces.md");
-  assert.match(packet.message, /角色文件：data\/roles\/Rabi\/persona\.md/);
-  assert.doesNotMatch(packet.message, new RegExp(process.cwd().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(packet.templateValues.dataDir, `${relativeRoot}/data/route/main`);
+    assert.equal(packet.templateValues.agentRoleDir, `${relativeRoot}/data/roles/Rabi`);
+    assert.equal(packet.templateValues.agentRolePath, `${relativeRoot}/data/roles/Rabi/persona.md`);
+    assert.equal(packet.templateValues.groupLogPath, `${relativeRoot}/data/route/main/group-messages.jsonl`);
+    assert.equal(packet.templateValues.agentInterfaceDocPath, "docs/rabi-agent-interfaces.md");
+    assert.match(packet.message, new RegExp(`角色文件：${relativeRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\/data\/roles\/Rabi\/persona\.md`));
+    assert.doesNotMatch(packet.message, new RegExp(process.cwd().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
-  const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
-  assert.equal(replyContext.dataDir, "data/route/main");
-  assert.equal(replyContext.groupLogPath, "data/route/main/group-messages.jsonl");
-  assert.equal(replyContext.privateLogPath, "data/route/main/private-messages.jsonl");
+    const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));
+    assert.equal(replyContext.dataDir, `${relativeRoot}/data/route/main`);
+    assert.equal(replyContext.groupLogPath, `${relativeRoot}/data/route/main/group-messages.jsonl`);
+    assert.equal(replyContext.privateLogPath, `${relativeRoot}/data/route/main/private-messages.jsonl`);
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test("AgentPacket migrates legacy FenneNote transcripts to RabiSpeech TTS output", () => {

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.marvis-control",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "manager.marvis-control@1"
+  ],
+  "requires": [
+    "host.manager.marvis-control@1",
+    "manager.core@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

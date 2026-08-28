@@ -1,7 +1,13 @@
 import type http from "node:http";
+import type { AgentDeliveryTestResult } from "../agentDeliveryTest.js";
+import type { AgentAdapterType } from "../agentAdapters/types.js";
 import type { DeliveryReplayRequest } from "../deliveryReplay.js";
 import type { GatewayConfigFile } from "../shared/gatewayConfigModel.js";
 import type { ManualTriggerLaunchResult } from "./manualTriggerProcess.js";
+
+export type GatewayAgentDeliveryTestRequest = {
+  agentAdapterType?: AgentAdapterType;
+};
 
 export type GatewayManualTriggerRequest = {
   triggerId?: string;
@@ -39,6 +45,7 @@ export type GatewayControlRoutesContext = {
   weixinLoginTarget: (id: string) => GatewayWeixinLoginTarget | undefined;
   requestWeixinLogin: (dataDir: string) => void;
   triggerManualRule: (id: string, request: GatewayManualTriggerRequest) => ManualTriggerLaunchResult;
+  testAgentDelivery: (id: string, request: GatewayAgentDeliveryTestRequest) => Promise<AgentDeliveryTestResult>;
   listDeliveryReplayAttempts: (id: string, limit: number, status: string | null) => Record<string, unknown>;
   replayDelivery: (id: string, request: DeliveryReplayRequest) => Promise<void>;
   trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
@@ -151,6 +158,31 @@ function handleManualTrigger(
   return true;
 }
 
+function handleAgentDeliveryTest(
+  request: http.IncomingMessage,
+  pathname: string,
+  response: http.ServerResponse,
+  context: GatewayControlRoutesContext
+): boolean {
+  const match = pathname.match(/^\/gateways\/([^/]+)\/agent-delivery-test$/);
+  if (!match) return false;
+
+  const id = decodedGatewayId(match[1]);
+  runTrackedOperation(context, context.readJsonBody<GatewayAgentDeliveryTestRequest>(request)
+    .then((body) => context.testAgentDelivery(id, body))
+    .then((result) => {
+      context.jsonResponse(response, 200, {
+        code: 0,
+        message: "agent delivery test completed",
+        data: result
+      });
+    })
+    .catch((error) => {
+      context.jsonResponse(response, 502, { code: -1, message: errorMessage(error) });
+    }));
+  return true;
+}
+
 function handleDeliveryReplay(
   request: http.IncomingMessage,
   requestUrl: URL,
@@ -232,6 +264,7 @@ export function handleGatewayControlApi(
   if (request.method === "POST" && handleGatewayAction(requestUrl.pathname, response, context)) return true;
   if (request.method === "POST" && handleWeixinLogin(requestUrl.pathname, response, context)) return true;
   if (request.method === "POST" && handleManualTrigger(request, requestUrl.pathname, response, context)) return true;
+  if (request.method === "POST" && handleAgentDeliveryTest(request, requestUrl.pathname, response, context)) return true;
   if (handleDeliveryReplay(request, requestUrl, response, context)) return true;
 
   if (request.method === "POST" && requestUrl.pathname === "/reload") {
