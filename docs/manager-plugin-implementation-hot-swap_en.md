@@ -8,7 +8,7 @@
 
 ## Current implementation
 
-- The production distribution Profile is `plugins/profiles/desktop.json` and selects 26 independent Manager plugin packages.
+- The production distribution Profile is `plugins/profiles/desktop.json` and selects 28 independent Manager plugin packages.
 - Seven plugins provide independent Web Bundles: `core`, `desktop`, `diagnostics`, `message-adapter-control`, `performance`, `persona`, and `speech`.
 - Built-in and out-of-tree plugins share `@rabiroute/plugin-sdk`, strict manifests, the capability graph, permission checks, revision isolation, generation switching, and effect scopes.
 - Manager, Catalog, Web modules, and Profile read only the new plugin platform. The old Bundle, loaders, Profile/Patch path, reconciler, catalog, process plugin host, and migration entries are deleted.
@@ -435,7 +435,7 @@ Each plugin must:
 
 - TypeScript noEmit, Vue type checking, and the 26-package architecture gate passed.
 - `npm test`: 1,401 passed, 1 skipped, and 0 failed.
-- `npm run build`: produced 26 independent Manager packages and 7 independent Web Bundles.
+- `npm run build`: produced 28 independent Manager packages and 7 independent Web Bundles.
 - `npm run check:built-manager`: passed and produced a local read-only acceptance record.
 - Removed-runtime identifiers are zero in runtime source and configuration, zero in `dist/`, and zero in current-fact documents. The architecture checker keeps only five deleted path names as negative assertions that prevent those files from returning.
 - `git diff --check` passed.

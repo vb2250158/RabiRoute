@@ -20,7 +20,7 @@ Manager 监听当前 Profile 和全部包根目录。revision、配置、权限�
 
 ### 插件入口与资源所有权
 
-当前内置目录注册 26 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
+当前内置目录注册 28 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
 
 表现 Contribution Catalog 发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command 注册表处理快速配置、新增 Route、打开 Manager 配置和保存页面；可信 renderer 注册表处理设置区与状态卡。Desktop 的冻结 Registry 同时处理内置合同和显式允许的可信扩展。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动 lifecycle/command 贡献控制系统监听、目录操作和手动触发。目录不可用或刷新失败时撤销旧贡献，只保留固定 WebGUI 恢复入口。
 
@@ -41,6 +41,8 @@ Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessagePro
 | --- | --- | --- |
 | `manager:diagnostics` | `GET /meta`、`GET /api/gateways`，以及 WebGUI“日志诊断”页面和导航 | 撤销诊断入口并 drain 已接收请求；只读取其他插件状态，不启动或恢复已停用插件 |
 | `manager:desktop` | `/api/desktop/settings`、`/open-config-file`、`/manager/start`、`/manager/desktop-lifecycle/start`、`/manager/shutdown`，以及 Desktop/WebGUI 的桌面设置、命令、托盘和快捷键贡献 | 撤销入口并 drain 请求，然后清除本实例尚未执行的延迟关闭计时器 |
+| `manager:desktop-pet` | `/api/desktop-pet/` 下的桌宠资源包、绑定、设置和素材读取入口 | 撤销桌宠入口并 drain 已接收请求；桌面端空闲调度由本机控制器停止 |
+| `manager:yeyu-gamer` | 固定 loopback 的 YeYu Gamer health/meta/snapshot/capabilities 读取，以及 plan-only work item 创建 | 撤销入口并 drain 请求；不 claim 工作项、不申请能力，也不启动游戏 |
 | `manager:gateway-runtime` | Gateway 配置、启停、重启、删除、手动触发、Agent 投递测试、回放、网络选项和重载入口；Gateway、投递测试与手动触发子进程 | 撤销入口并 drain 请求，停止本实例的手动触发进程，再停止并等待 Gateway 进程树退出 |
 | `manager:agent-adapter-catalog` | Agent Adapter 目录与 `/api/scan/agents`、`/api/scan/agents/dsh` 扫描入口；受控扫描 Worker Pool | 撤销入口、取消排队或活动扫描，并停止 Worker 进程树 |
 | `manager:agent-thread-control` | Agent 任务创建、查询和绑定入口 | 撤销入口并 drain 请求；任务和业务记录继续由稳定业务模块拥有 |

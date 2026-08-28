@@ -8,7 +8,7 @@
 
 ## 当前实施状态
 
-- 正式发行 Profile 为 `plugins/profiles/desktop.json`，包含 26 个独立 Manager 插件包。
+- 正式发行 Profile 为 `plugins/profiles/desktop.json`，包含 28 个独立 Manager 插件包。
 - 7 个插件独立提供 Web Bundle：`core`、`desktop`、`diagnostics`、`message-adapter-control`、`performance`、`persona` 和 `speech`。
 - 内置插件和树外插件共用 `@rabiroute/plugin-sdk`、严格 Manifest、能力图、权限检查、revision 隔离、generation 切换和 effect scope。
 - Manager、Catalog、Web module 和 Profile 只读取新插件平台。旧 Bundle、Loader、Profile/Patch、Reconciler、Catalog、进程插件宿主和迁移入口已删除。
@@ -433,9 +433,9 @@ Git 保存历史，仓库不建立源码归档副本。
 
 ## 2026-08-27 最终门禁
 
-- TypeScript noEmit、Vue 类型检查和 26 个内置包架构门禁通过。
+- TypeScript noEmit、Vue 类型检查和 28 个内置包架构门禁通过。
 - `npm test`：1401 通过，1 跳过，0 失败。
-- `npm run build`：生成 26 个独立 Manager 包和 7 个独立 Web Bundle。
+- `npm run build`：生成 28 个独立 Manager 包和 7 个独立 Web Bundle。
 - `npm run check:built-manager`：通过，并生成本机只读验收记录。
 - 运行时代码与配置中的旧运行时标识为 0；`dist/` 为 0；当前事实文档为 0。架构检查脚本只保留 5 个已删除路径名称，用于阻止旧文件重新出现。
 - `git diff --check` 通过。

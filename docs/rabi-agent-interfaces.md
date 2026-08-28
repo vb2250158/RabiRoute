@@ -1354,6 +1354,12 @@ GET /roles/:roleId/memory/consolidation-runs
 GET /roles/:roleId/memory/consolidation-runs/:runId
 ```
 
+## YeYu Gamer Manager 本机门面
+
+实验性的 YeYu Gamer 接入不是通用 Agent 执行器。启用后，本机 Agent 只能通过 RabiRoute Manager 读取 `/api/agent/yeyu-gamer/{health,meta,snapshot,capabilities}`，以及向 `/api/agent/yeyu-gamer/work-items` 派发 `mode: "plan"` 的 work item。调用方必须使用新鲜 snapshot 的 `stateVersion` 和稳定的幂等键；成功回执只证明 Manager 已记录计划项。
+
+门面只接受 loopback 调用，目标固定为 `http://127.0.0.1:8877/api/v1`。凭据来自 YeYu Gamer 本机运行目录的独立 `rabiroute.token`，不得写入 RabiRoute 配置或返回给调用方。接口不提供 claim、decision、capability invocation、Shell、路径、点击或旧脚本入口。配置、请求和无游戏启动验收方式见 [YeYu Gamer Manager 本机接入](yeyu-gamer-manager-integration.md)。
+
 ## 错误边界
 
 Agent 不应该：

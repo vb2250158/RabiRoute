@@ -12,9 +12,16 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
-from rabiroute_tray.desktop_pet_client import DesktopPetClient, DesktopPetPack, DesktopPetState, parse_desktop_pet_catalog
+from rabiroute_tray.desktop_pet_client import (
+    DesktopPetClient,
+    DesktopPetIdleBehavior,
+    DesktopPetPack,
+    DesktopPetState,
+    parse_desktop_pet_catalog,
+)
 from rabiroute_tray.desktop_pet_events import iter_sse_events
 from rabiroute_tray.desktop_pet_fullscreen import covers_monitor
+from rabiroute_tray.desktop_pet_idle import DesktopPetIdleScheduler
 from rabiroute_tray.desktop_pet_window import DesktopPetWindow
 
 
@@ -60,6 +67,20 @@ class DesktopPetCatalogTest(unittest.TestCase):
         self.assertEqual(binding.placement["screen"], "DISPLAY-2")
         self.assertEqual(binding.fps_cap, 24)
 
+    def test_runtime_catalog_requests_only_the_local_runtime_scope(self) -> None:
+        client = DesktopPetClient("http://127.0.0.1:8790", "YeYu")
+        requested_paths: list[str] = []
+
+        def fake_get(path: str) -> bytes:
+            requested_paths.append(path)
+            return b'{"data":{"personaId":"YeYu","packs":[]}}'
+
+        client._get = fake_get  # type: ignore[method-assign]
+
+        client.packs()
+
+        self.assertEqual(requested_paths, ["/api/desktop-pet/roles/YeYu/packs?scope=runtime"])
+
     def test_fullscreen_detection_requires_covering_the_monitor(self) -> None:
         self.assertTrue(covers_monitor((0, 0, 1920, 1080), (0, 0, 1920, 1080)))
         self.assertFalse(covers_monitor((0, 0, 1000, 800), (0, 0, 1920, 1080)))
@@ -79,20 +100,33 @@ class DesktopPetCatalogTest(unittest.TestCase):
                             "states": {
                                 "idle": {
                                     "type": "gif",
-                                    "assets": ["/api/roles/YeYu/desktop-pet/packs/default/assets/idle.gif"],
+                                    "assets": ["/api/desktop-pet/roles/YeYu/packs/default/assets/idle.gif"],
                                     "fps": 12,
                                     "loop": True,
                                 },
                                 "thinking": {
                                     "type": "png-sequence",
                                     "assets": [
-                                        "/api/roles/YeYu/desktop-pet/packs/default/assets/thinking_1.png",
-                                        "/api/roles/YeYu/desktop-pet/packs/default/assets/thinking_2.png",
+                                        "/api/desktop-pet/roles/YeYu/packs/default/assets/thinking_1.png",
+                                        "/api/desktop-pet/roles/YeYu/packs/default/assets/thinking_2.png",
                                     ],
                                     "fps": 15,
                                     "loop": False,
                                     "next": "idle",
                                 },
+                                "sleep": {
+                                    "type": "png-sequence",
+                                    "assets": ["/api/sleep_1.png"],
+                                    "fps": 12,
+                                    "loop": True,
+                                },
+                            },
+                            "idleBehavior": {
+                                "randomMinSeconds": 75,
+                                "randomMaxSeconds": 180,
+                                "randomStates": ["thinking", "missing"],
+                                "sleepAfterSeconds": 900,
+                                "sleepState": "sleep",
                             },
                         }
                     ],
@@ -105,7 +139,57 @@ class DesktopPetCatalogTest(unittest.TestCase):
         self.assertEqual(packs[0].persona_id, "YeYu")
         self.assertEqual(packs[0].states["thinking"].fps, 15)
         self.assertEqual(packs[0].states["thinking"].next_state, "idle")
+        self.assertEqual(packs[0].idle_behavior.random_states, ("thinking",))
+        self.assertEqual(packs[0].idle_behavior.sleep_state, "sleep")
 
+
+class _PredictableRandom:
+    def uniform(self, start: float, _end: float) -> float:
+        return start
+
+    def choice(self, values: list[str]) -> str:
+        return values[0]
+
+
+class DesktopPetIdleSchedulerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_random_idle_actions_do_not_repeat_back_to_back(self) -> None:
+        scheduler = DesktopPetIdleScheduler(random_source=_PredictableRandom())
+        requested = QSignalSpy(scheduler.animation_requested)
+        scheduler.configure(DesktopPetIdleBehavior(10, 20, ("idle-reading", "idle-wave"), 900, "sleep"))
+        scheduler.set_active(True)
+        scheduler.state_started("idle")
+
+        scheduler._request_random_animation()
+        scheduler.state_started("idle")
+        scheduler._request_random_animation()
+
+        self.assertEqual(
+            [requested.at(index)[0] for index in range(requested.count())],
+            ["idle-reading", "idle-wave"],
+        )
+        scheduler.stop()
+
+    def test_long_inactivity_requests_looping_sleep_state(self) -> None:
+        now = [100.0]
+        scheduler = DesktopPetIdleScheduler(random_source=_PredictableRandom(), clock=lambda: now[0])
+        requested = QSignalSpy(scheduler.animation_requested)
+        scheduler.configure(DesktopPetIdleBehavior(10, 20, ("idle-reading",), 60, "sleep"))
+        scheduler.set_active(True)
+        scheduler.state_started("idle")
+        now[0] = 161.0
+
+        scheduler._arm_sleep_timer()
+
+        self.assertEqual(requested.count(), 1)
+        self.assertEqual(requested.at(0)[0], "sleep")
+        scheduler.stop()
+
+
+class DesktopPetClientTest(unittest.TestCase):
     def test_catalog_rejects_cross_persona_response(self) -> None:
         with self.assertRaisesRegex(ValueError, "different persona"):
             parse_desktop_pet_catalog({"data": {"personaId": "Other", "packs": []}}, "YeYu")

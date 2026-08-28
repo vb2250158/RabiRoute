@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { validateGatewayPortConflicts } from "../shared/gatewayConfigModel.js";
 import { ManagerConfigRepository } from "./configRepository.js";
 
 test("the complete example data pack is readable and starts only the default route", () => {
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   const repository = new ManagerConfigRepository({
-    rootDir: process.cwd(),
+    rootDir: projectRoot,
     managerPort: 8790,
     routeRoot: "examples/data/route",
     rolesRoot: "examples/data/roles",

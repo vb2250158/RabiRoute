@@ -20,6 +20,15 @@ class DesktopPetState:
 
 
 @dataclass(frozen=True)
+class DesktopPetIdleBehavior:
+    random_min_seconds: float = 0.0
+    random_max_seconds: float = 0.0
+    random_states: tuple[str, ...] = ()
+    sleep_after_seconds: float = 0.0
+    sleep_state: str = ""
+
+
+@dataclass(frozen=True)
 class DesktopPetPack:
     pack_id: str
     name: str
@@ -28,6 +37,7 @@ class DesktopPetPack:
     canvas_height: int
     scale: float
     states: dict[str, DesktopPetState]
+    idle_behavior: DesktopPetIdleBehavior = DesktopPetIdleBehavior()
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,37 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
             )
         if "idle" not in states:
             continue
+        raw_idle_behavior = row.get("idleBehavior") if isinstance(row.get("idleBehavior"), dict) else {}
+        random_states = tuple(
+            name
+            for name in raw_idle_behavior.get("randomStates", [])
+            if isinstance(name, str)
+            and name != "idle"
+            and name in states
+            and not states[name].loop
+            and states[name].next_state == "idle"
+        ) if isinstance(raw_idle_behavior.get("randomStates"), list) else ()
+        sleep_state = str(raw_idle_behavior.get("sleepState") or "")
+        if sleep_state not in states or not states[sleep_state].loop or sleep_state == "idle":
+            sleep_state = ""
+        random_min_seconds = _bounded_number(raw_idle_behavior.get("randomMinSeconds"), 0, 0, 3600)
+        random_max_seconds = _bounded_number(
+            raw_idle_behavior.get("randomMaxSeconds"),
+            random_min_seconds,
+            random_min_seconds,
+            3600,
+        )
+        idle_behavior = DesktopPetIdleBehavior(
+            random_min_seconds=random_min_seconds if random_states else 0,
+            random_max_seconds=random_max_seconds if random_states else 0,
+            random_states=random_states,
+            sleep_after_seconds=(
+                _bounded_number(raw_idle_behavior.get("sleepAfterSeconds"), 0, 0, 86400)
+                if sleep_state
+                else 0
+            ),
+            sleep_state=sleep_state,
+        )
         packs.append(
             DesktopPetPack(
                 pack_id=pack_id,
@@ -102,6 +143,7 @@ def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[Desktop
                 canvas_height=int(_bounded_number(canvas.get("height"), 512, 1, 2048)),
                 scale=_bounded_number(row.get("scale"), 0.5, 0.1, 2),
                 states=states,
+                idle_behavior=idle_behavior,
             )
         )
     return tuple(packs)
@@ -124,12 +166,14 @@ class DesktopPetClient:
 
     def packs(self) -> tuple[DesktopPetPack, ...]:
         role_id = quote(self.persona_id, safe="")
-        payload = json.loads(self._get(f"/api/roles/{role_id}/desktop-pet/packs").decode("utf-8"))
+        payload = json.loads(
+            self._get(f"/api/desktop-pet/roles/{role_id}/packs?scope=runtime").decode("utf-8")
+        )
         return parse_desktop_pet_catalog(payload, self.persona_id)
 
     def binding(self) -> DesktopPetBinding:
         role_id = quote(self.persona_id, safe="")
-        payload = json.loads(self._get(f"/api/roles/{role_id}/desktop-pet").decode("utf-8"))
+        payload = json.loads(self._get(f"/api/desktop-pet/roles/{role_id}").decode("utf-8"))
         data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
         if data.get("personaId") != self.persona_id:
             raise ValueError("Manager desktop pet binding returned a different persona.")

@@ -29,6 +29,7 @@ a = Analysis(
         "rabiroute_tray.desktop_pet_controller",
         "rabiroute_tray.desktop_pet_events",
         "rabiroute_tray.desktop_pet_fullscreen",
+        "rabiroute_tray.desktop_pet_idle",
         "rabiroute_tray.desktop_pet_window",
         "rabiroute_tray.desktop_read_model",
         "rabiroute_tray.desktop_refresh",

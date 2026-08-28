@@ -13,6 +13,7 @@ import { sanitizeRoleId } from "../shared/routeIdentity.js";
 const PACK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/;
 const IMAGE_EXTENSIONS = new Set([".gif", ".png"]);
 const MAX_ASSET_BYTES = 64 * 1024 * 1024;
+const DEFAULT_DESKTOP_PET_CACHE_ROOT = path.join(process.cwd(), "data", "cache", "desktop-pet-roles");
 
 type JsonObject = Record<string, unknown>;
 
@@ -22,6 +23,14 @@ export type DesktopPetStateAsset = {
   fps: number;
   loop: boolean;
   next?: string;
+};
+
+export type DesktopPetIdleBehavior = {
+  randomMinSeconds: number;
+  randomMaxSeconds: number;
+  randomStates: string[];
+  sleepAfterSeconds?: number;
+  sleepState?: string;
 };
 
 export type DesktopPetPackPresentation = {
@@ -36,12 +45,17 @@ export type DesktopPetPackPresentation = {
   };
   scale: number;
   states: Record<string, DesktopPetStateAsset>;
+  idleBehavior?: DesktopPetIdleBehavior;
 };
 
 export type DesktopPetPackCatalog = {
   personaId: string;
   packs: DesktopPetPackPresentation[];
   diagnostics: Array<{ packId: string; message: string }>;
+};
+
+export type DesktopPetPackCatalogOptions = {
+  includeSharedSource?: boolean;
 };
 
 export type DesktopPetSettingsAccess = {
@@ -87,7 +101,7 @@ function patternMatcher(pattern: string): (fileName: string) => boolean {
 
 function assetUrl(roleId: string, packId: string, packRelativePath: string): string {
   const encodedPath = packRelativePath.split(/[\\/]+/).map(segment => encodeURIComponent(segment)).join("/");
-  return `/api/roles/${encodeURIComponent(roleId)}/desktop-pet/packs/${encodeURIComponent(packId)}/assets/${encodedPath}`;
+  return `/api/desktop-pet/roles/${encodeURIComponent(roleId)}/packs/${encodeURIComponent(packId)}/assets/${encodedPath}`;
 }
 
 function statePresentation(
@@ -135,6 +149,40 @@ function statePresentation(
   };
 }
 
+function idleBehaviorPresentation(
+  rawBehavior: unknown,
+  states: Record<string, DesktopPetStateAsset>
+): DesktopPetIdleBehavior | undefined {
+  const behavior = objectValue(rawBehavior);
+  const randomInterval = objectValue(behavior.randomIntervalSeconds);
+  const randomStates = Array.isArray(behavior.randomStates)
+    ? [...new Set(behavior.randomStates
+      .filter((name): name is string => typeof name === "string")
+      .map(name => name.trim())
+      .filter(name => name !== "idle"
+        && states[name]?.loop === false
+        && states[name]?.next === "idle"))].slice(0, 12)
+    : [];
+  const randomMinSeconds = finiteNumber(randomInterval.min, 90, 5, 3600);
+  const randomMaxSeconds = finiteNumber(randomInterval.max, 240, randomMinSeconds, 3600);
+  const requestedSleepState = typeof behavior.sleepState === "string" ? behavior.sleepState.trim() : "";
+  const sleepState = requestedSleepState
+    && requestedSleepState !== "idle"
+    && states[requestedSleepState]?.loop === true
+    ? requestedSleepState
+    : undefined;
+  const sleepAfterSeconds = sleepState
+    ? finiteNumber(behavior.sleepAfterSeconds, 900, 60, 86400)
+    : undefined;
+  if (!randomStates.length && !sleepState) return undefined;
+  return {
+    randomMinSeconds,
+    randomMaxSeconds,
+    randomStates,
+    ...(sleepState ? { sleepAfterSeconds, sleepState } : {})
+  };
+}
+
 function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
   const manifestPath = path.join(packDir, "pet-pack.json");
   const manifest = objectValue(JSON.parse(fs.readFileSync(manifestPath, "utf8").replace(/^\uFEFF/, "")));
@@ -153,6 +201,7 @@ function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
     if (presentation) states[stateName] = presentation;
   }
   if (!states.idle) throw new Error("A runnable desktop pet pack must contain a valid idle state.");
+  const idleBehavior = idleBehaviorPresentation(manifest.idleBehavior, states);
 
   return {
     id: packId,
@@ -165,26 +214,42 @@ function readPack(roleId: string, packDir: string): DesktopPetPackPresentation {
       anchorY: finiteNumber(canvas.anchorY, 0.96, 0, 1)
     },
     scale: finiteNumber(defaults.scale, 0.5, 0.1, 2),
-    states
+    states,
+    ...(idleBehavior ? { idleBehavior } : {})
   };
 }
 
-export function listDesktopPetPacks(roleIdInput: unknown, roleDir: string): DesktopPetPackCatalog {
+export function listDesktopPetPacks(
+  roleIdInput: unknown,
+  roleDir: string,
+  cacheRoot = DEFAULT_DESKTOP_PET_CACHE_ROOT,
+  options: DesktopPetPackCatalogOptions = {}
+): DesktopPetPackCatalog {
   const roleId = sanitizeRoleId(roleIdInput);
   if (!roleId) throw new Error("Invalid role id.");
-  const packsRoot = path.join(roleDir, "desktop-pet", "packs");
   const packs: DesktopPetPackPresentation[] = [];
   const diagnostics: DesktopPetPackCatalog["diagnostics"] = [];
-  if (!fs.existsSync(packsRoot)) return { personaId: roleId, packs, diagnostics };
-
-  for (const entry of fs.readdirSync(packsRoot, { withFileTypes: true }).sort((a, b) => naturalCompare(a.name, b.name))) {
-    if (!entry.isDirectory() || !PACK_ID_PATTERN.test(entry.name)) continue;
-    const packDir = path.join(packsRoot, entry.name);
-    if (!fs.existsSync(path.join(packDir, "pet-pack.json"))) continue;
+  const seenPackIds = new Set<string>();
+  const locations = [{ label: "cache", roleDir: path.join(cacheRoot, roleId) }];
+  if (options.includeSharedSource !== false) locations.push({ label: "source", roleDir });
+  for (const location of locations) {
+    const packsRoot = path.join(location.roleDir, "desktop-pet", "packs");
+    if (!fs.existsSync(packsRoot)) continue;
     try {
-      packs.push(readPack(roleId, packDir));
+      const entries = fs.readdirSync(packsRoot, { withFileTypes: true }).sort((a, b) => naturalCompare(a.name, b.name));
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !PACK_ID_PATTERN.test(entry.name) || seenPackIds.has(entry.name)) continue;
+        const packDir = path.join(packsRoot, entry.name);
+        if (!fs.existsSync(path.join(packDir, "pet-pack.json"))) continue;
+        try {
+          packs.push(readPack(roleId, packDir));
+          seenPackIds.add(entry.name);
+        } catch (error) {
+          diagnostics.push({ packId: entry.name, message: error instanceof Error ? error.message : String(error) });
+        }
+      }
     } catch (error) {
-      diagnostics.push({ packId: entry.name, message: error instanceof Error ? error.message : String(error) });
+      diagnostics.push({ packId: location.label, message: error instanceof Error ? error.message : String(error) });
     }
   }
   return { personaId: roleId, packs, diagnostics };
@@ -228,7 +293,8 @@ function updateBinding(
   settings: DesktopPetSettingsAccess,
   roleId: string,
   body: unknown,
-  roleDir: string
+  roleDir: string,
+  cacheRoot: string
 ): DesktopPetBinding {
   const row = objectValue(body);
   if (typeof row.personaId === "string" && row.personaId !== roleId) {
@@ -237,7 +303,7 @@ function updateBinding(
   const current = settings.read();
   const binding = normalizeDesktopPetBinding({ ...(current.pets[roleId] ?? DEFAULT_DESKTOP_PET_BINDING), ...row });
   if (binding.packId) {
-    const catalog = listDesktopPetPacks(roleId, roleDir);
+    const catalog = listDesktopPetPacks(roleId, roleDir, cacheRoot);
     if (!catalog.packs.some(pack => pack.id === binding.packId)) {
       throw new Error("Desktop pet pack does not belong to this persona or is not runnable.");
     }
@@ -245,9 +311,18 @@ function updateBinding(
   return settings.write({ ...current, pets: { ...current.pets, [roleId]: binding } }).pets[roleId]!;
 }
 
-function serveAsset(response: http.ServerResponse, roleDir: string, packId: string, relativePath: string): void {
+function serveAsset(
+  response: http.ServerResponse,
+  roleDir: string,
+  roleId: string,
+  packId: string,
+  relativePath: string,
+  cacheRoot: string
+): void {
   if (!PACK_ID_PATTERN.test(packId)) throw new Error("Invalid desktop pet pack id.");
-  const packRoot = path.resolve(roleDir, "desktop-pet", "packs", packId);
+  const cachedPackRoot = path.resolve(cacheRoot, roleId, "desktop-pet", "packs", packId);
+  const sourcePackRoot = path.resolve(roleDir, "desktop-pet", "packs", packId);
+  const packRoot = fs.existsSync(path.join(cachedPackRoot, "pet-pack.json")) ? cachedPackRoot : sourcePackRoot;
   const candidate = resolveInside(packRoot, relativePath);
   if (!candidate || !IMAGE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) throw new Error("Invalid desktop pet asset path.");
   const realPackRoot = fs.realpathSync(packRoot);
@@ -280,12 +355,13 @@ export function handleDesktopPetApi(
   requestUrl: URL,
   response: http.ServerResponse,
   resolveRoleDir: (roleId: string) => string,
-  settings?: DesktopPetSettingsAccess
+  settings?: DesktopPetSettingsAccess,
+  cacheRoot = DEFAULT_DESKTOP_PET_CACHE_ROOT
 ): boolean {
-  const bindingMatch = requestUrl.pathname.match(/^\/api\/roles\/([^/]+)\/desktop-pet$/);
-  const importMatch = requestUrl.pathname.match(/^\/api\/roles\/([^/]+)\/desktop-pet\/packs\/import$/);
-  const catalogMatch = requestUrl.pathname.match(/^\/api\/roles\/([^/]+)\/desktop-pet\/packs$/);
-  const assetMatch = requestUrl.pathname.match(/^\/api\/roles\/([^/]+)\/desktop-pet\/packs\/([^/]+)\/assets\/(.+)$/);
+  const bindingMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)$/);
+  const importMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/import$/);
+  const catalogMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs$/);
+  const assetMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/([^/]+)\/assets\/(.+)$/);
   if (!bindingMatch && !importMatch && !catalogMatch && !assetMatch) return false;
   if (bindingMatch) {
     const roleId = sanitizeRoleId(decodeURIComponent(bindingMatch[1]));
@@ -299,7 +375,7 @@ export function handleDesktopPetApi(
     }
     if (request.method === "PATCH" || request.method === "PUT") {
       void readJsonBody(request)
-        .then(body => updateBinding(settings, roleId, body, resolveRoleDir(roleId)))
+        .then(body => updateBinding(settings, roleId, body, resolveRoleDir(roleId), cacheRoot))
         .then(binding => jsonResponse(response, 200, { code: 0, data: { personaId: roleId, binding } }))
         .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
@@ -332,7 +408,7 @@ export function handleDesktopPetApi(
             name: requestUrl.searchParams.get("name") || undefined
           }
         );
-        const catalog = listDesktopPetPacks(roleId, roleDir);
+        const catalog = listDesktopPetPacks(roleId, roleDir, cacheRoot);
         const pack = catalog.packs.find(item => item.id === packId);
         if (!pack) {
           const target = path.join(roleDir, "desktop-pet", "packs", packId);
@@ -355,9 +431,19 @@ export function handleDesktopPetApi(
     if (!roleId) throw new Error("Invalid role id.");
     const roleDir = resolveRoleDir(roleId);
     if (assetMatch) {
-      serveAsset(response, roleDir, decodeURIComponent(assetMatch[2]), decodeURIComponent(assetMatch[3]));
+      serveAsset(
+        response,
+        roleDir,
+        roleId,
+        decodeURIComponent(assetMatch[2]),
+        decodeURIComponent(assetMatch[3]),
+        cacheRoot
+      );
     } else {
-      jsonResponse(response, 200, { code: 0, data: listDesktopPetPacks(roleId, roleDir) });
+      const options: DesktopPetPackCatalogOptions = {
+        includeSharedSource: requestUrl.searchParams.get("scope") !== "runtime"
+      };
+      jsonResponse(response, 200, { code: 0, data: listDesktopPetPacks(roleId, roleDir, cacheRoot, options) });
     }
   } catch (error) {
     if (assetMatch && isTransientAssetReadError(error)) {

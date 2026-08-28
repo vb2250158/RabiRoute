@@ -120,7 +120,7 @@ flowchart LR
 
 Each Route stores its message input, persona, handler, workspace, and sending rules separately. Message adapters do not build Agent instructions, and Agents do not receive channel credentials or direct ownership of routing state.
 
-Manager loads 26 independent built-in packages through one Plugin Kernel. Built-in and out-of-tree packages share the same SDK, manifest, dependency graph, permission checks, generation switching, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
+Manager loads 28 independent built-in packages through one Plugin Kernel. Built-in and out-of-tree packages share the same SDK, manifest, dependency graph, permission checks, generation switching, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
 
 ## Agent and safety boundaries
 

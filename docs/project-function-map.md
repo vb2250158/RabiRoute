@@ -6,7 +6,7 @@
 
 # RabiRoute 项目功能手册
 
-> 状态：当前事实地图。Manager 已有 26 个内置插件定义及对应 hook；外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
+> 状态：当前事实地图。Manager 已有 28 个独立内置插件包；外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
 
 本文是 RabiRoute 的通用项目功能手册。它面向产品设计、GUI 改造、代码维护、排障和新 Agent 交接，不只服务某一个页面或某一次需求。
 
@@ -54,18 +54,18 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 
 ## Manager 后台插件生命周期
 
-当前目录包含 26 个内置 Manager 实例。正式入口只通过 `startManager()` 挂载共享资源、合成 26 个 definition 与 26 个业务 hook，再执行首次对账。每个 definition 发布 `provides`，并用 `requires` 与 `optional` 声明依赖。缺少必需能力时进入 `waiting_dependency`；依赖 revision 递归包含直接和传递 Provider，因此上游 revision 或启停变化会沿能力链把全部真实消费者纳入重启批次；`refreshDeclaration()` 更新 manifest 与缺失能力，支持 `active -> waiting_dependency -> active`；重复 Provider 拒绝对账。
+当前目录包含 28 个内置 Manager 实例。正式入口只通过 `startManager()` 挂载宿主服务、读取单一 Profile，再由 Plugin Kernel 解析 28 个独立包的 `provides`、`requires` 与 `optional`。缺少必需能力时进入 `waiting_dependency`；依赖 revision 递归包含直接和传递 Provider，因此上游 revision 或启停变化会沿能力链把真实消费者纳入 generation 切换；重复 Provider 拒绝对账。
 
 | 分组 | 实例 | 主要责任 |
 | --- | --- | --- |
-| 宿主与表现 | `manager:core`、`manager:desktop`、`manager:diagnostics` | WebGUI LAN 配置入口、Desktop 生命周期/设置、Manager 元信息与 Gateway 诊断 |
+| 宿主与表现 | `manager:core`、`manager:desktop`、`manager:desktop-pet`、`manager:diagnostics` | WebGUI LAN 配置入口、Desktop 生命周期/设置、桌宠受限资源与绑定 API、Manager 元信息与 Gateway 诊断 |
 | 人格与运行观测 | `manager:persona`、`manager:speech`、`manager:performance` | 人格/同步/语言风格、语音服务、性能采集与查询 |
-| Gateway 与外部连接 | `manager:gateway-runtime`、`manager:bilibili-history`、`manager:rabilink-relay`、`manager:napcat-control`、`manager:napcat-supervisor`、`manager:remote-agent` | Gateway 进程、Bilibili 历史桥、Relay/LAN、NapCat 控制与启动检查、Remote Agent Hub |
+| Gateway 与外部连接 | `manager:gateway-runtime`、`manager:bilibili-history`、`manager:rabilink-relay`、`manager:napcat-control`、`manager:napcat-supervisor`、`manager:remote-agent`、`manager:yeyu-gamer` | Gateway 进程、Bilibili 历史桥、Relay/LAN、NapCat 控制与启动检查、Remote Agent Hub、YeYu Gamer 本机 typed API 门面 |
 | Route 与 Adapter 控制 | `manager:route-control`、`manager:message-adapter-control`、`manager:agent-adapter-catalog`、`manager:agent-state-control`、`manager:agent-thread-control`、`manager:agent-communication` | Route/Gateway API、消息端控制、Agent 目录/状态/任务/通信 |
 | Agent Provider 控制 | `manager:copilot-control`、`manager:astrbot-control`、`manager:marvis-control` | 安装、登录、进程或连接控制 |
 | 后台业务服务 | `manager:memory-consolidation`、`manager:fennenote-output`、`manager:message-processing-control`、`manager:message-processing-automation`、`manager:plan-feedback-delivery` | 记忆整理、FenneNote 输出、消息处理看板与提醒、计划反馈恢复投递 |
 
-7 个实例发布表现贡献；19 个实例没有表现贡献，但仍拥有实际生命周期。生产业务路由使用稳定 `routeId` 与真实 `exact` 或 `prefix` matcher；重复 ID，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突会被拒绝。WebGUI 与 Desktop 的可信合同绑定 `pluginId + instanceId`，跨插件目录引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动贡献还控制人格/计划/记忆/项目/运行目录和手动触发。目录不可用或刷新失败时清空旧贡献，Desktop 停止系统监听，只保留固定 WebGUI 恢复入口。
+7 个实例发布表现贡献；21 个实例没有表现贡献，但仍拥有实际生命周期。生产业务路由使用稳定 `routeId` 与真实 `exact` 或 `prefix` matcher；重复 ID，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突会被拒绝。WebGUI 与 Desktop 的可信合同绑定 `pluginId + instanceId`，跨插件目录引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动贡献还控制人格/计划/记忆/项目/运行目录和手动触发。目录不可用或刷新失败时清空旧贡献，Desktop 停止系统监听，只保留固定 WebGUI 恢复入口。
 
 每个插件在一个 disposer 内执行：
 
@@ -100,7 +100,8 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | Manager 控制面 | 已有 | `data/manager.json`、runtime registry | WebGUI、远端 API、子进程管理 | manager 启动和 API 调用时 | 启停子进程、写配置 | `npm run manager`、`src/manager.ts` | `src/manager/controlPlaneRoutes.ts`、`src/manager/runtimeRegistry.ts` | `docs/windows-launcher-and-packaging.md` |
 | 界面主题与自定义主题 | 已有 | `data/desktop/settings.json` 中的 `theme`、`webTheme` 与 `customThemes` | WebGUI CSS/Vuetify、Windows Qt 调色板和窗口样式 | 内置主题页面保存后；自定义主题“保存并应用”后 | 写主机级桌面设置并刷新表现层，不改变业务数据 | WebGUI 设置页“界面主题” | `src/shared/interfaceThemeContract.ts`、`ribiwebgui/src/interfaceTheme.ts`、`desktop/tray-task-window/rabiroute_tray/themes/` | `docs/user-guide/interface-theme.md` |
 | 任务结束事件与本机播报 | 已有；真实 Codex / DSH 生产者待接入 | `work-events/events/YYYY-MM-DD.jsonl`、任务完成播报设置与元数据账本 | Manager 事件流、WebGUI 语音服务页、RabiSpeech 全局 FIFO、桌宠 | 生产者显式提交结束事件后 | 脱敏并保留任务事件；按来源策略决定是否合成、播放和记录回执 | `/api/work-events/ended`、`/api/speech/task-completion/*` | `src/manager/workEndEvents.ts`、`src/manager/taskCompletionAnnouncements.ts` | `docs/rabispeech-plugin.md` |
-| YeYu 桌宠 | 已有；Windows 实机待验收 | `data/roles/YeYu/desktop-pet/` 与 Manager 桌面设置 | WebGUI 桌宠设置、Qt Desktop 桌宠控制器 | 保存绑定、导入资源包或收到匹配人格的任务结束事件时 | 写受限资源包/绑定；桌面端切换动效，不直接改任务或人格资料 | `/api/roles/YeYu/desktop-pet*` | `src/manager/desktopPetRoutes.ts`、`desktop/tray-task-window/rabiroute_tray/desktop_pet_*` | `desktop/tray-task-window/README.md` |
+| YeYu 桌宠 | 已有；Windows 实机待验收 | `io.rabiroute.manager.desktop-pet` 插件、`data/roles/YeYu/desktop-pet/` 与 Manager 桌面设置 | WebGUI 桌宠设置、Qt Desktop 桌宠控制器 | 插件 generation 激活后注册受限 API；保存绑定、导入资源包或收到匹配人格的任务结束事件时生效 | 写受限资源包/绑定；卸载插件会移除 API，桌面端只切换动效，不直接改任务或人格资料 | `/api/desktop-pet/roles/YeYu*` | `plugins/builtin/io.rabiroute.manager.desktop-pet/`、`src/manager/desktopPetRoutes.ts`、`desktop/tray-task-window/rabiroute_tray/desktop_pet_*` | `desktop/tray-task-window/README.md` |
+| YeYu Gamer Manager | 实验集成；本机安装联调待验收 | `io.rabiroute.manager.yeyu-gamer` 插件 Profile 配置、本机 8877 typed API、独立 `rabiroute.token` | RabiRoute Manager 本机门面与 Agent | 插件启用后只读 health/meta/snapshot/capabilities，或创建 `mode: "plan"` 的 work item | 不 claim、不调用 capability、不启动游戏；成功回执只证明计划项已记录 | `/api/agent/yeyu-gamer/*` | `plugins/builtin/io.rabiroute.manager.yeyu-gamer/`、`src/integrations/yeyuGamer/` | `docs/yeyu-gamer-manager-integration.md` |
 | WebGUI | 已有 | manager HTTP API | 用户配置和排障 | 页面加载 / 用户操作时 | 调用 manager API，可能写配置或触发动作 | `ribiwebgui` | `ribiwebgui/src/router.ts`、`ribiwebgui/src/stores/gatewayStore.ts` | `docs/code-architecture.md` |
 | WebGUI 局域网访问 | 已有，默认关闭 | `data/Config.json.webguiLan` | Manager HTTP 门禁、WebGUI fetch/SSE/私有资源适配、Route 作用域导航 | 本机启用并重启 Manager 后 | 监听从回环切换到局域网；本机回环 URL 自动重定向到优先局域网 IP 并保留当前 Route/页面；非本机控制面请求必须带访问密钥，轮换立即使旧链接失效；左侧当前 Route 切换会保留页面类型并重定向 `#/routes/<Route配置名>/overview|adapters|persona|knowledge|speech|runtime` | 控制台“局域网访问 WebGUI”、复制 Route 控制台/知识库链接、`GET/PATCH /api/webgui-access` | `src/manager/webguiLanAccess.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/managerApi.ts`、`ribiwebgui/src/webguiLanRedirect.ts`、`ribiwebgui/src/routeScopedNavigation.ts`、`ribiwebgui/src/App.vue`、`ribiwebgui/src/pages/OverviewPage.vue` | `docs/user-guide/interface-and-status.md` |
 | WebGUI 中英切换与使用手册 | 已有 | 浏览器 `rabiroute:webgui:locale`、人工词库、`docs/user-guide/*.md` | 导航、表单、状态、诊断和用户手册 | 用户切换语言或页面重渲染时 | 只改变界面展示和 `<html lang>`，不写项目配置 | 顶栏 `中 / EN`、`/#/docs` | `ribiwebgui/src/i18n/*`、`LocaleSwitcher.vue`、`ProjectDocsPage.vue` | `docs/user-guide/README.md` |

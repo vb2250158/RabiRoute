@@ -2,7 +2,7 @@
 
 # RabiRoute 从 DSH 学习的插件化设计理念
 
-> 状态：架构调研、26 个内置 Manager 插件迁移和统一验证已经完成，配置对账、受控表现贡献和独立进程扩展合同已经落地。
+> 状态：架构调研、28 个内置 Manager 插件迁移和统一验证已经完成，配置对账、受控表现贡献和独立进程扩展合同已经落地。
 >
 > 主要读者：RabiRoute 维护者、消息端与 Agent 端接入开发者。
 
@@ -83,7 +83,7 @@ DSH 对模型生成的 Host 动态插件使用同进程 `node:vm` 和受限 Cont
 
 - Manager 和 Gateway 使用独立 Cordis 根 Context。
 - Gateway 性能采样与上报已迁入 Gateway 根 Context 下的 Fiber；根 Context 销毁时由 effect disposer 撤销 reporter 资源。
-- 正式 Manager 只通过 `startManager()` 初始化：先挂共享资源，再合成 26 个 definition 与对应 hook，随后首次对账。definition 使用 `provides`、`requires` 和 `optional` 建立能力图。
+- 正式 Manager 只通过 `startManager()` 初始化：先挂共享资源，再合成 28 个 definition 与对应 hook，随后首次对账。definition 使用 `provides`、`requires` 和 `optional` 建立能力图。
 - 表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`；业务 HTTP 路由由 Manager 插件的 `apply` hook 注册到 `ManagerPluginRouteRegistry`。
 - 中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。
 - 7 个 Manager 插件贡献页面、导航、设置区、状态卡、命令、快捷键、托盘菜单或主题；19 个插件只提供运行能力。
@@ -243,7 +243,7 @@ interface RabiPluginContext {
 ## 当前采用情况
 
 1. Agent Adapter 和 Message Adapter 已进入受控注册与组合边界。
-2. Manager 已有 26 个内置插件 definition 与对应 hook，并通过配置对账局部启停。依赖 revision 递归包含直接和传递 Provider，上游变化会沿能力链重启真实消费者。
+2. Manager 已有 28 个内置插件 definition 与对应 hook，并通过配置对账局部启停。依赖 revision 递归包含直接和传递 Provider，上游变化会沿能力链重启真实消费者。
 3. 生产 Manager 业务路由使用稳定 `routeId` 与真实 `exact/prefix` 声明；重复 ID 和相交静态路径会被拒绝。HTTP 路由不属于表现贡献。
 4. WebGUI 与 Desktop 通过宿主拥有的可信注册表消费表现贡献。合同绑定 `pluginId + instanceId`，跨插件目录引用失败关闭；`manager:desktop` 的设置区负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置。
 5. 未知、不可信或高风险第三方扩展必须使用独立进程和版本化协议；这属于 RabiRoute 的安全增强，不是 DSH 普通插件的默认运行方式。

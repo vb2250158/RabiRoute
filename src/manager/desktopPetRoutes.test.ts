@@ -15,22 +15,36 @@ function roleFixture(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-pet-"));
 }
 
-function writePack(roleDir: string, personaId = "YeYu"): void {
-  const packDir = path.join(roleDir, "desktop-pet", "packs", "yeyu-library-default");
+function writePack(roleDir: string, personaId = "YeYu", packId = "yeyu-library-default"): void {
+  const packDir = path.join(roleDir, "desktop-pet", "packs", packId);
   fs.mkdirSync(path.join(packDir, "frames", "thinking"), { recursive: true });
   fs.writeFileSync(path.join(packDir, "idle.gif"), Buffer.from("GIF89a"));
   fs.writeFileSync(path.join(packDir, "frames", "thinking", "thinking_10.png"), Buffer.from("png10"));
   fs.writeFileSync(path.join(packDir, "frames", "thinking", "thinking_2.png"), Buffer.from("png2"));
   fs.writeFileSync(path.join(packDir, "pet-pack.json"), JSON.stringify({
     schemaVersion: 1,
-    id: "yeyu-library-default",
+    id: packId,
     name: "夜雨 · 图书馆日常",
     personaId,
     canvas: { width: 512, height: 512, anchorX: 0.5, anchorY: 0.96 },
     defaults: { fps: 12, scale: 0.5, loop: true },
+    idleBehavior: {
+      randomIntervalSeconds: { min: 75, max: 180 },
+      randomStates: ["idle-reading", "thinking", "missing"],
+      sleepAfterSeconds: 900,
+      sleepState: "sleep"
+    },
     states: {
       idle: { type: "gif", source: "idle.gif" },
-      thinking: { type: "png-sequence", source: "frames/thinking", pattern: "thinking_*.png" }
+      thinking: { type: "png-sequence", source: "frames/thinking", pattern: "thinking_*.png" },
+      "idle-reading": {
+        type: "png-sequence",
+        source: "frames/thinking",
+        pattern: "thinking_*.png",
+        loop: false,
+        next: "idle"
+      },
+      sleep: { type: "png-sequence", source: "frames/thinking", pattern: "thinking_*.png", loop: true }
     }
   }), "utf8");
 }
@@ -43,6 +57,13 @@ test("desktop pet catalog binds packs to the role and naturally sorts PNG frames
 
   assert.equal(catalog.packs.length, 1);
   assert.equal(catalog.packs[0].personaId, "YeYu");
+  assert.deepEqual(catalog.packs[0].idleBehavior, {
+    randomMinSeconds: 75,
+    randomMaxSeconds: 180,
+    randomStates: ["idle-reading"],
+    sleepAfterSeconds: 900,
+    sleepState: "sleep"
+  });
   assert.deepEqual(
     catalog.packs[0].states.thinking.assets.map(asset => asset.split("/").at(-1)),
     ["thinking_2.png", "thinking_10.png"]
@@ -72,6 +93,68 @@ test("desktop pet catalog ignores template-only pack skeletons", () => {
   assert.deepEqual(catalog.diagnostics, []);
 });
 
+test("desktop pet catalog uses a local immutable-pack cache before the shared role tree", () => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(path.join(cacheRoot, "YeYu"));
+
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
+
+  assert.equal(catalog.packs.length, 1);
+  assert.equal(catalog.packs[0].id, "yeyu-library-default");
+  assert.equal(catalog.packs[0].states.idle.assets[0].endsWith("/idle.gif"), true);
+});
+
+test("desktop pet API serves cached assets without opening the shared pack", async t => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(path.join(cacheRoot, "YeYu"));
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!handleDesktopPetApi(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const catalog = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs`)).json() as {
+    data: DesktopPetPackCatalog;
+  };
+
+  const assetResponse = await fetch(`${baseUrl}${catalog.data.packs[0].states.idle.assets[0]}`);
+
+  assert.equal(assetResponse.status, 200);
+  assert.equal(Buffer.from(await assetResponse.arrayBuffer()).toString("ascii"), "GIF89a");
+});
+
+test("desktop pet runtime catalog does not scan or return shared-source packs", async t => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  writePack(path.join(cacheRoot, "YeYu"));
+  writePack(roleDir, "YeYu", "shared-only-pack");
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!handleDesktopPetApi(request, requestUrl, response, () => roleDir, undefined, cacheRoot)) {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const response = await fetch(
+    `http://127.0.0.1:${address.port}/api/desktop-pet/roles/YeYu/packs?scope=runtime`
+  );
+  const catalog = await response.json() as { data: DesktopPetPackCatalog };
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(catalog.data.packs.map(pack => pack.id), ["yeyu-library-default"]);
+});
+
 test("desktop pet API serves role-scoped catalog and image assets", async t => {
   const roleDir = roleFixture();
   writePack(roleDir);
@@ -88,7 +171,7 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.ok(address && typeof address === "object");
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
-  const catalogResponse = await fetch(`${baseUrl}/api/roles/YeYu/desktop-pet/packs`);
+  const catalogResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs`);
   const catalog = await catalogResponse.json() as { data: DesktopPetPackCatalog };
   assert.equal(catalogResponse.status, 200);
   assert.equal(catalog.data.packs[0].personaId, "YeYu");
@@ -113,7 +196,7 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
     fs.readFileSync = originalReadFileSync;
   }
 
-  const bindingResponse = await fetch(`${baseUrl}/api/roles/YeYu/desktop-pet`, {
+  const bindingResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ personaId: "YeYu", enabled: true, packId: "yeyu-library-default", scale: 0.75 })
@@ -124,7 +207,7 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.equal(bindingPayload.data.binding.packId, "yeyu-library-default");
   assert.equal(bindingPayload.data.binding.scale, 0.75);
 
-  const crossPersonaResponse = await fetch(`${baseUrl}/api/roles/YeYu/desktop-pet`, {
+  const crossPersonaResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ personaId: "OtherRole", enabled: true })
@@ -132,10 +215,10 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.equal(crossPersonaResponse.status, 400);
 
   const importResponse = await fetch(
-    `${baseUrl}/api/roles/YeYu/desktop-pet/packs/import?fileName=idle.gif&packId=yeyu-second&state=idle&name=${encodeURIComponent("夜雨第二套")}`,
+    `${baseUrl}/api/desktop-pet/roles/YeYu/packs/import?fileName=idle.gif&packId=yeyu-second&state=idle&name=${encodeURIComponent("夜雨第二套")}`,
     { method: "POST", headers: { "content-type": "image/gif" }, body: Buffer.from("GIF89a") }
   );
   assert.equal(importResponse.status, 201);
-  const refreshedCatalog = await (await fetch(`${baseUrl}/api/roles/YeYu/desktop-pet/packs`)).json() as { data: DesktopPetPackCatalog };
+  const refreshedCatalog = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs`)).json() as { data: DesktopPetPackCatalog };
   assert.equal(refreshedCatalog.data.packs.some(pack => pack.id === "yeyu-second"), true);
 });

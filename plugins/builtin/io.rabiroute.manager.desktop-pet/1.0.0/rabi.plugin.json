@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.desktop-pet",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "manager.desktop-pet@1"
+  ],
+  "requires": [
+    "host.manager.desktop-pet@1",
+    "manager.desktop@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

@@ -2,7 +2,7 @@ English | <a href="./dsh-plugin-architecture-lessons.md">简体中文</a>
 
 # Plugin Architecture Lessons for RabiRoute from DSH
 
-> Status: architecture research, migration of all 26 built-in Manager plugins, and unified validation are complete, with configuration reconciliation, controlled presentation contributions, and a separate-process extension contract implemented.
+> Status: architecture research, migration of all 28 built-in Manager plugins, and unified validation are complete, with configuration reconciliation, controlled presentation contributions, and a separate-process extension contract implemented.
 >
 > Primary audience: RabiRoute maintainers and developers of message-side and Agent-side integrations.
 
@@ -83,7 +83,7 @@ The current implementation has these boundaries:
 
 - Manager and Gateway use independent Cordis root Contexts.
 - Gateway performance sampling and reporting have moved into a Fiber under the Gateway root Context; disposing the root withdraws reporter resources through the effect disposer.
-- Production Manager initialization runs only through `startManager()`: mount shared resources, compose the 26 definitions with their hooks, then perform initial reconciliation. Definitions use `provides`, `requires`, and `optional` to build the capability graph.
+- Production Manager initialization runs only through `startManager()`: mount shared resources, compose the 28 definitions with their hooks, then perform initial reconciliation. Definitions use `provides`, `requires`, and `optional` to build the capability graph.
 - The presentation Contribution Catalog publishes only `page`, `navigation`, `settings-section`, `status-card`, `command`, `tray-menu`, `hotkey`, and `theme`; Manager plugin `apply` hooks register business HTTP routes in `ManagerPluginRouteRegistry`.
 - The central HTTP chain is limited to LAN authentication, the read-only write gate, plugin route dispatch, Manager SSE, plugin catalog/reconciliation, static assets, JSON 404 for control paths, and WebGUI HTML fallback for all other paths.
 - Seven Manager plugins contribute pages, navigation, settings sections, status cards, commands, hotkeys, tray menus, or themes. Nineteen provide runtime capabilities only.
@@ -243,7 +243,7 @@ Every registration helper should ultimately attach to the same lifecycle scope.
 ## Current adoption
 
 1. Agent Adapter and Message Adapter capabilities now use controlled registration and composition boundaries.
-2. Manager has 26 built-in plugin definitions with matching hooks and configuration-driven local reconciliation. Dependency revisions recursively include direct and transitive providers, so upstream changes restart real downstream consumers.
+2. Manager has 28 independent built-in plugin packages with configuration-driven local reconciliation. Dependency revisions recursively include direct and transitive providers, so upstream changes restart real downstream consumers.
 3. Production Manager business routes use stable `routeId` values with real `exact/prefix` declarations; duplicate IDs and intersecting static paths are rejected. HTTP routes are not presentation contributions.
 4. WebGUI and Desktop consume presentation contributions through host-owned trusted registries. Contracts are bound to `pluginId + instanceId`, so cross-plugin catalog references fail closed. The `manager:desktop` settings section owns system-selection, system-screenshot, clipboard-image hotkey, and login-startup settings.
 5. Unknown, untrusted, or high-risk third-party extensions must use a separate process and versioned protocol. This is RabiRoute hardening, not the default execution model for ordinary DSH plugins.

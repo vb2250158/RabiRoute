@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/vb2250158/RabiRoute/examples/schemas/yeyu-gamer-manager-config.schema.json",
+  "title": "RabiRoute YeYu Gamer Manager integration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "baseUrl": {
+      "const": "http://127.0.0.1:8877/api/v1",
+      "default": "http://127.0.0.1:8877/api/v1",
+      "description": "Fixed loopback YeYu Gamer Manager API v1 origin."
+    },
+    "runtimeDir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional absolute local YeYu Gamer runtime directory. Network paths are rejected."
+    },
+    "requestTimeoutMs": {
+      "type": "integer",
+      "minimum": 250,
+      "maximum": 30000,
+      "default": 3000
+    }
+  }
+}

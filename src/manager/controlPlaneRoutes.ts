@@ -217,6 +217,8 @@ import {
 import { isManagerControlRequestPath } from "./managerHttpRequestClassification.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import { createDesktopControlRoutes, desktopConfigFilePayload } from "./desktopControlRoutes.js";
+import { handleDesktopPetApi } from "./desktopPetRoutes.js";
+import { createYeYuGamerManagerRouteHandler } from "../integrations/yeyuGamer/managerRoutes.js";
 import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
 import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
 import { handleRemoteAgentApi as handleRemoteAgentPluginApi } from "./remoteAgentRoutes.js";
@@ -7859,6 +7861,22 @@ export async function startManager(): Promise<void> {
       set routeRoot(value) { routeRoot = value; },
       get shutdownManager() { return shutdownManager; },
       set shutdownManager(value) { shutdownManager = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.desktop-pet@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      desktopSettings,
+      handleDesktopPetApi,
+      managerPluginRoutes,
+      registerManagerPluginHandlerRoutes,
+      resolveRoleDir: roleDirForApi,
+    }) }),
+    Object.freeze({ capability: "host.manager.yeyu-gamer@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      createYeYuGamerManagerRouteHandler,
+      jsonResponse,
+      managerPluginRoutes,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
     }) }),
   ]);
   const configuredPluginProfile = process.env.RABIROUTE_PLUGIN_PROFILE?.trim();

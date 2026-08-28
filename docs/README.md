@@ -31,7 +31,7 @@
 
 ## 本机安装、配置与恢复
 
-- [配置与接入](configuration.md) — **现行指南**。查看 26 个内置 Manager 插件、`provides/requires/optional` 依赖、单一初始化入口、声明式路由、共享资源生命周期、WebGUI/Desktop 扩展入口，以及 AstrBot ChatUI-only 配置。
+- [配置与接入](configuration.md) — **现行指南**。查看 28 个内置 Manager 插件、`provides/requires/optional` 依赖、单一初始化入口、声明式路由、共享资源生命周期、WebGUI/Desktop 扩展入口，以及 AstrBot ChatUI-only 配置。
 - [常驻性能记录与查看](performance-monitoring.md) — **现行指南**。按开关持续记录 Manager、Gateway 和 WebGUI 的近期性能，查看趋势、慢操作和独立 JSONL 文件。
 - [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — Windows 安装、启动和打包方式。
@@ -55,7 +55,7 @@
 ## 架构与维护
 
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
-- [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明 26 个内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
+- [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明 28 个内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
 - [DSH 如何使用 Cordis](dsh-cordis-runtime-analysis.md) — **实现调查**。说明 profile、Loader、Fiber、服务 realm、浏览器插件树、动态代码和进程沙箱的真实边界。
 - [RabiRoute 插件平台目标架构](manager-plugin-implementation-hot-swap.md) — **当前架构**。定义最小插件内核、独立能力包、统一 SDK、多宿主扩展、generation 原子切换、树外插件验收和一次性删除旧运行时。
 - [插件 Bundle 与热替换](plugin-bundles.md) — **当前实现说明**。单一 Profile、独立插件包、统一 SDK、generation 热替换和浏览器 revision 回滚。
@@ -69,6 +69,7 @@
 
 ## 实验集成
 
+- [YeYu Gamer Manager 本机接入](yeyu-gamer-manager-integration.md) — **实验集成**。固定连接本机 8877，只读 health/meta/snapshot/capabilities，并用独立 `rabiroute.token` 创建 plan-only Agent work item；默认关闭，真实安装联调待验收。
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [飞书独立消息端接入](feishu-integration.md) — 飞书应用事件订阅、签名/加密回调、持久去重与来源 chat 回发。
 - [语音交互工作站](voice-interaction-workstation.md) — 历史工作站接线记录；FenneNote/OumuQ 已停止维护，现行入口是 RabiPC + RabiSpeech。

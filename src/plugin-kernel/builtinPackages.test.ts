@@ -8,8 +8,8 @@ import { parsePluginProfile } from "./profile.js";
 test("built-in Manager capabilities are independent SDK packages", async () => {
   const root = path.resolve("plugins");
   const profile = parsePluginProfile(JSON.parse(await fs.readFile(path.join(root, "profiles", "desktop.json"), "utf8")) as unknown);
-  assert.equal(profile.instances.length, 26);
-  assert.equal(new Set(profile.instances.map(instance => instance.package)).size, 26);
+  assert.equal(profile.instances.length, 28);
+  assert.equal(new Set(profile.instances.map(instance => instance.package)).size, 28);
   for (const instance of profile.instances) {
     const packageRoot = path.join(root, "builtin", encodeURIComponent(instance.package), instance.version);
     const manifest = parsePluginManifest(JSON.parse(await fs.readFile(path.join(packageRoot, "rabi.plugin.json"), "utf8")) as unknown);

@@ -31,7 +31,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Local installation, configuration, and recovery
 
-- [Configuration](configuration_en.md) — **Current guide** for the 26 built-in Manager plugins, `provides/requires/optional` dependencies, the single initialization path, declarative routes, shared-resource lifecycle, WebGUI/Desktop extension entries, and AstrBot ChatUI-only configuration.
+- [Configuration](configuration_en.md) — **Current guide** for the 28 built-in Manager plugins, `provides/requires/optional` dependencies, the single initialization path, declarative routes, shared-resource lifecycle, WebGUI/Desktop extension entries, and AstrBot ChatUI-only configuration.
 - [Resident performance recording and inspection](performance-monitoring_en.md) — **Current guide** for optional continuous Manager, Gateway, and WebGUI metrics, trends, slow operations, and independent JSONL files.
 - [Troubleshooting](troubleshooting_en.md) — NapCat, encoding, Codex Desktop task ownership, models, and approval boundaries.
 - [Windows launcher and packaging](windows-launcher-and-packaging_en.md) — Windows installation, startup, and packaging.
@@ -55,7 +55,7 @@ This directory contains current guides, experimental integrations, designs, rese
 ## Architecture and maintenance
 
 - [Architecture](architecture_en.md) — **Current fact**. Product boundaries, the Codex Desktop owner, current Outbox, and future Action Queue are separated.
-- [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Research and implementation summary**. Covers the completed migration of 26 built-in Manager plugins, WebGUI/Desktop minimal extension hosts, contribution points, process-isolation boundaries, and the future third-party presentation Extension Host.
+- [Plugin architecture lessons from DSH](dsh-plugin-architecture-lessons_en.md) — **Research and implementation summary**. Covers the completed migration of 28 built-in Manager plugins, WebGUI/Desktop minimal extension hosts, contribution points, process-isolation boundaries, and the future third-party presentation Extension Host.
 - [How DSH uses Cordis](dsh-cordis-runtime-analysis_en.md) — **Implementation research**. Explains profiles, Loader, Fibers, service realms, the browser plugin tree, dynamic code, and process-sandbox boundaries.
 - [RabiRoute plugin platform target architecture](manager-plugin-implementation-hot-swap_en.md) — **Current architecture**. Defines a minimal Plugin Kernel, independent capability packages, one SDK, multi-host extension, atomic generation switching, out-of-tree plugin acceptance, and one complete removal of the old runtime.
 - [Plugin Bundles and hot replacement](plugin-bundles_en.md) — **Current implementation guide**. one Profile, independent packages, the shared SDK, generation hot replacement, and browser revision rollback.
@@ -69,6 +69,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Experimental integrations
 
+- [Local YeYu Gamer Manager integration](yeyu-gamer-manager-integration_en.md) — **Experimental integration**. Fixed local port 8877, typed health/meta/snapshot/capability reads, and plan-only Agent work-item creation through a dedicated `rabiroute.token`; disabled by default pending live installation acceptance.
 - [WeCom integration](wecom-integration_en.md)
 - [Feishu endpoint integration](feishu-integration_en.md) — enterprise-app event callbacks, signature/encryption checks, durable deduplication, and source-chat text replies.
 - [Voice interaction workstation](voice-interaction-workstation_en.md) — historical wiring; FenneNote/OumuQ are retired in favor of RabiPC + RabiSpeech.

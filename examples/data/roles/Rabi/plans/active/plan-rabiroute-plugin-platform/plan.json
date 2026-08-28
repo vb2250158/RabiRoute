@@ -6,7 +6,7 @@
   "priority": "high",
   "kind": "architecture",
   "currentStepId": "verify-independent-plugin-platform",
-  "currentStep": "26 个独立内置包、7 个 Web Bundle、树外插件合同、主题入口和旧运行时删除已经完成。",
+  "currentStep": "28 个独立内置包、7 个 Web Bundle、树外插件合同、主题入口和旧运行时删除已经完成。",
   "nextAction": "",
   "steps": [
     {
@@ -23,7 +23,7 @@
     },
     {
       "id": "split-builtin-packages",
-      "title": "把 26 个内置能力拆成独立插件包",
+      "title": "把 28 个内置能力拆成独立插件包",
       "status": "已完成",
       "completedAt": "2026-08-27T12:00:00+08:00"
     },

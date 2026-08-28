@@ -6,7 +6,7 @@
 
 # RabiRoute 代码架构
 
-> 状态：当前代码地图。26 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应。
+> 状态：当前代码地图。28 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应。
 
 这份文档面向需要改代码的人。它不重复解释 RabiRoute 的产品定位；产品边界见 [架构说明](architecture.md)。这里主要说明代码里的 Module 怎么分工、一条消息怎么流动、改某类功能应该先看哪里。
 
@@ -377,7 +377,7 @@ startManager();
 
 正式 Manager 只通过 `startManager()` 初始化。`src/plugin-kernel/` 负责 Manifest 校验、包 revision 隔离、单一 Profile、能力图、权限、generation 和 effect 释放。默认构建从 `dist/plugins/profiles/desktop.json` 与 `dist/plugins/packages/` 加载；树外插件可通过 `RABIROUTE_PLUGIN_PROFILE` 和 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 选择独立 Profile 与额外包根目录。运行时不读取旧配置格式，也不从源码插件目录加载。
 
-`plugins/builtin/` 中的 26 个内置能力各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
+`plugins/builtin/` 中的 28 个内置能力各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
 
 `GenerationRuntime` 按真实依赖组件切换。revision、配置、权限和依赖 revision 不变时复用现有实例；变化只重载受影响组件。缺少必需能力的实例进入 `waiting_dependency`。候选激活或 effect 发布失败时，旧组件继续服务；不相关组件照常更新。成功发布后释放旧 effect scope。Manager API 从 generation 的不可变 service 与 contribution 快照生成 Plugin Catalog；Web 模块按包 ID、版本和 SHA-256 revision 发布不可变资源。
 
@@ -392,7 +392,7 @@ data/plugins/.runtime/
 
 ### Manager 插件持有的运行资源
 
-26 个实例的资源激活函数都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginKernel.dispose() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`。共享资源 Runtime 先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
+28 个实例的资源激活函数都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginKernel.dispose() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`。共享资源 Runtime 先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
 ```text
 unregister routes
@@ -635,7 +635,9 @@ Windows 系统级滑词菜单由托盘拥有。`system_selection.py` 用低级�
 
 `workEndEvents.ts` 是通用任务结束事件的 Manager 真源：生产者向 `/api/work-events/ended` 提交带稳定 ID 的事件，Manager 按敏感键名清洗摘要、按日期物理分卷到本机运行目录，并通过统一 Manager 事件流发布 `work_ended`。分卷是文件轮转，不是归档、过期或删除；当前源码只定义生产者契约，Codex / DSH 的真实生产者仍待各自接入。`taskCompletionAnnouncements.ts` 是独立消费策略，只保存设置和决策/哈希/回执元数据，元数据同样按接收日期分卷；索引保留最近 40 条展示记录和 4096 个幂等 ID，源分卷保留，索引损坏时由源分卷人工重建。原始摘要仍以任务事件分卷为真源；允许的事件经人格 `voice-profile.json` 解析后进入 RabiSpeech 全局 FIFO。
 
-`desktopPetRoutes.ts` 使 Manager 成为人格桌宠资源包、绑定和设置的唯一持有者。导入先落临时 staging，校验归属、路径穿越、链接、加密条目、允许类型、条目数和展开大小，再移动到 `data/roles/<RoleId>/desktop-pet/packs/`；资源读取也必须保持在解析后的包根内。WebGUI 只调用受限 API，Qt 的 `desktop_pet_controller.py` 读取同一绑定并消费 `work_ended`，不直接编辑人格或运行目录。
+`io.rabiroute.manager.desktop-pet` 独立插件拥有桌宠 HTTP 路由和 effect 生命周期，`desktopPetRoutes.ts` 提供受限的资源包、绑定与设置实现。导入先落临时 staging，校验归属、路径穿越、链接、加密条目、允许类型、条目数和展开大小，再移动到 `data/roles/<RoleId>/desktop-pet/packs/`；资源读取也必须保持在解析后的包根内。WebGUI 和 Qt 只调用 `/api/desktop-pet/`，插件停用时路由随 generation 释放；`desktop_pet_controller.py` 消费同一绑定与 `work_ended`，不直接编辑人格或运行目录。
+
+`io.rabiroute.manager.yeyu-gamer` 是独立、默认关闭的 Manager 插件。Profile 拥有启用状态与固定 loopback 配置；`src/integrations/yeyuGamer/` 校验 typed API、token 文件和 plan-only work item 合同。宿主只提供插件路由与请求排空原语，不把该集成塞回 `controlPlaneRoutes.ts` 的请求分支。
 
 RabiSpeech 的 `speech_records.py` 是 ASR/TTS 文本记录唯一真源，参考芬妮笔记按日追加运行文件。`tts_audio_store.py` 单独拥有可重建的 TTS 音频缓存：已解析人格的成品进入 `data/roles/<RoleId>/voice/cache/tts-audio/`，非人格直接调用进入 RabiSpeech 私有 fallback；两者默认按各自 mtime 保留 24 小时。Manager 的 read model 只允许 POSIX 风格安全相对引用，兼容旧记录的单文件名，并省略绝对路径、父级穿越和反斜杠路径。WebGUI 在 ASR 页面内嵌最近持久化双向记录，显示相对缓存位置和预计过期时间；它不把路径做成文件链接，也不提供独立会议记录、选择或导出工作流。缓存超过保留窗口不改变文本记录，ASR 原始录音仍默认不复制。
 

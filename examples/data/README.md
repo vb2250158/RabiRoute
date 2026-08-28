@@ -23,7 +23,7 @@
 - 演示本地路由配置的 `rolesDir` 应该指向 `./data/roles`。
 - 让用户复制后可以直接在 WebUI 里选择并预览示例人格。
 
-默认构建包含 `dist/plugins/profiles/desktop.json` 和 26 个独立 Manager 插件包。树外插件可用环境变量选择单一 Profile 和额外包根目录；完整目录、热替换和 SDK 见 [`docs/plugin-bundles.md`](../../docs/plugin-bundles.md)。
+默认构建包含 `dist/plugins/profiles/desktop.json` 和 28 个独立 Manager 插件包。树外插件可用环境变量选择单一 Profile 和额外包根目录；完整目录、热替换和 SDK 见 [`docs/plugin-bundles.md`](../../docs/plugin-bundles.md)。
 
 整包复制后只有 `main` 默认 Route 启用。RabiLink、voice-chat、Rokid 原生语音、XiaoAI、WeCom 和个人微信 Weixin 均为禁用模板。填写凭据或完成扫码、检查工作目录和端口后再逐条启用。
 

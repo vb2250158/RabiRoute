@@ -1013,6 +1013,12 @@ GET /api/roles/:roleId/skills/:skillId
 
 The list returns metadata; the item endpoint returns the complete Markdown body. Skill bodies are not injected into every packet. If a skill appears in required reads, the handler must fetch it before acting.
 
+## Local YeYu Gamer Manager facade
+
+The experimental YeYu Gamer integration is not a general Agent executor. When enabled, a local Agent can read only `/api/agent/yeyu-gamer/{health,meta,snapshot,capabilities}` through RabiRoute Manager and dispatch a work item with `mode: "plan"` to `/api/agent/yeyu-gamer/work-items`. Callers must supply the `stateVersion` from a fresh snapshot and a stable idempotency key. A successful receipt proves only that Manager recorded the plan item.
+
+The facade accepts loopback callers only and fixes its destination to `http://127.0.0.1:8877/api/v1`. Its credential comes from the dedicated `rabiroute.token` in the local YeYu Gamer runtime and must never enter RabiRoute configuration or a response. There is no claim, decision, capability-invocation, shell, path, click, or legacy-script surface. See [Local YeYu Gamer Manager integration](yeyu-gamer-manager-integration_en.md) for configuration, requests, and acceptance without starting a game.
+
 ## Error boundary
 
 Handlers should not directly modify consolidated memory, copy raw chat logs into memory, fetch all historical context without need, bypass Outbox, or treat RabiRoute as an Agent OS or executor queue. They should maintain focused plans and recent memories, read required evidence by ID, return consolidation results through the run API, and submit ordinary replies through `/api/agent/send`.

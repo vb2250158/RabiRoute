@@ -208,6 +208,25 @@
       "enabled": true,
       "config": {},
       "grants": []
+    },
+    {
+      "id": "manager:desktop-pet",
+      "package": "io.rabiroute.manager.desktop-pet",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:yeyu-gamer",
+      "package": "io.rabiroute.manager.yeyu-gamer",
+      "version": "1.0.0",
+      "enabled": false,
+      "config": {
+        "baseUrl": "http://127.0.0.1:8877/api/v1",
+        "requestTimeoutMs": 3000
+      },
+      "grants": []
     }
   ]
 }

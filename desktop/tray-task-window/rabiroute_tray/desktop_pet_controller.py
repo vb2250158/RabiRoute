@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QMenu
 from .desktop_pet_client import DesktopPetBinding, DesktopPetClient, DesktopPetPack, LoadedDesktopPetAnimation
 from .desktop_pet_events import DesktopPetEventStream
 from .desktop_pet_fullscreen import is_foreground_fullscreen
+from .desktop_pet_idle import DesktopPetIdleScheduler
 from .desktop_pet_window import DesktopPetWindow
 from .qt_async import QtAsyncTask, start_qt_task
 
@@ -22,7 +23,7 @@ class DesktopPetController(QObject):
         self.persona_id = persona_id
         self.window = DesktopPetWindow()
         self.window.clicked.connect(self._clicked)
-        self.window.double_clicked.connect(open_persona)
+        self.window.double_clicked.connect(self._double_clicked)
         self.window.animation_finished.connect(self._animation_finished)
         self.window.placement_changed.connect(lambda placement: self._persist({"placement": placement}))
         self.window.context_menu_requested.connect(self._show_context_menu)
@@ -38,6 +39,8 @@ class DesktopPetController(QObject):
         self._events.connection_changed.connect(self._event_connection_changed)
         self._events.start()
         self._pack: DesktopPetPack | None = None
+        self._idle_scheduler = DesktopPetIdleScheduler(self)
+        self._idle_scheduler.animation_requested.connect(self.set_state)
         self._catalog_task: QtAsyncTask | None = None
         self._animation_task: QtAsyncTask | None = None
         self._requested_state = "idle"
@@ -76,6 +79,8 @@ class DesktopPetController(QObject):
     def show(self) -> None:
         self._hidden_for_fullscreen = False
         self.window.show_on_desktop()
+        self._idle_scheduler.set_active(True)
+        self._idle_scheduler.note_activity()
         self.visibility_changed.emit(True)
         if self._pack is None:
             self._load_catalog()
@@ -85,6 +90,7 @@ class DesktopPetController(QObject):
 
     def hide(self) -> None:
         self._hidden_for_fullscreen = False
+        self._idle_scheduler.set_active(False)
         self.window.hide()
         self.window.stop_animation()
         self.visibility_changed.emit(False)
@@ -98,11 +104,13 @@ class DesktopPetController(QObject):
 
     def close(self) -> None:
         self._fullscreen_timer.stop()
+        self._idle_scheduler.stop()
         self._events.stop()
         self.window.close()
 
     def set_state(self, state_name: str) -> None:
         self._requested_state = state_name or "idle"
+        self._idle_scheduler.state_requested(self._requested_state)
         if self._pack is None or self._animation_task is not None or not self.visible:
             return
         requested = self._requested_state if self._requested_state in self._pack.states else "idle"
@@ -114,10 +122,12 @@ class DesktopPetController(QObject):
             if not self.visible:
                 return
             if isinstance(result, LoadedDesktopPetAnimation) and self._pack is not None:
-                self.window.play(self._pack, result)
                 pending_state = self._requested_state if self._requested_state in self._pack.states else "idle"
                 if pending_state != result.state.name:
                     self.set_state(pending_state)
+                    return
+                self.window.play(self._pack, result)
+                self._idle_scheduler.state_started(result.state.name)
             else:
                 self.window.show_placeholder("夜雨\n素材暂不可用")
 
@@ -146,6 +156,7 @@ class DesktopPetController(QObject):
             if self._pack is None:
                 self.window.show_placeholder("夜雨\n素材准备中")
                 return
+            self._idle_scheduler.configure(self._pack.idle_behavior)
             self.set_state(self._requested_state)
 
         self._catalog_task = start_qt_task(self._client.packs, completed, on_error=lambda error: error)
@@ -155,11 +166,17 @@ class DesktopPetController(QObject):
 
     def _clicked(self) -> None:
         if self.visible:
+            self._idle_scheduler.note_activity()
             self.set_state("attention")
+
+    def _double_clicked(self) -> None:
+        self._idle_scheduler.note_activity()
+        self._open_persona()
 
     def _drag_started(self) -> None:
         if not self.visible:
             return
+        self._idle_scheduler.note_activity()
         self._state_before_drag = self._requested_state or "idle"
         self.set_state("drag")
 
@@ -203,6 +220,8 @@ class DesktopPetController(QObject):
             self.click_through_changed.emit(result.click_through)
             if result.enabled:
                 self.window.show_on_desktop()
+                self._idle_scheduler.set_active(True)
+                self._idle_scheduler.note_activity()
                 self.visibility_changed.emit(True)
                 self._load_catalog()
 
@@ -233,6 +252,7 @@ class DesktopPetController(QObject):
             return
         if not self.visible or time.monotonic() < self._muted_until:
             return
+        self._idle_scheduler.note_activity()
         status = str(event.get("status") or "")
         self.set_state("success" if status == "completed" else "concerned")
         summary = str(event.get("summary") or "").strip()
@@ -253,6 +273,7 @@ class DesktopPetController(QObject):
         fullscreen = self._hide_on_fullscreen and is_foreground_fullscreen()
         if fullscreen and self.visible:
             self._hidden_for_fullscreen = True
+            self._idle_scheduler.set_active(False)
             self.window.hide_bubble()
             self.window.hide()
             self.window.stop_animation()
@@ -260,9 +281,11 @@ class DesktopPetController(QObject):
         if not fullscreen and self._hidden_for_fullscreen:
             self._hidden_for_fullscreen = False
             self.window.show_on_desktop()
+            self._idle_scheduler.set_active(True)
             self.set_state(self._requested_state)
 
     def _show_context_menu(self, position: object) -> None:
+        self._idle_scheduler.note_activity()
         point = position if isinstance(position, QPoint) else self.window.mapToGlobal(self.window.rect().center())
         menu = QMenu(self.window)
         menu.addAction(f"打开 {self.persona_id} 人格面板", self._open_persona)
