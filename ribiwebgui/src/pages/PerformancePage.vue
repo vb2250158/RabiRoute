@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="performance-page">
+  <div class="page-shell performance-page">
     <header class="performance-hero">
       <div>
         <span class="performance-kicker">FLIGHT RECORDER · 本机性能记录</span>
@@ -313,7 +313,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.performance-page { --perf-ink: var(--rr-text); --perf-teal: var(--rr-accent-strong); --perf-amber: #e8a838; display: grid; gap: 18px; padding: 2px 0 34px; color: var(--perf-ink); }
+.performance-page { --perf-ink: var(--rr-text); --perf-teal: var(--rr-accent-strong); --perf-amber: #e8a838; display: grid; gap: 18px; color: var(--perf-ink); }
 .performance-hero { position: relative; display: flex; min-height: 190px; align-items: flex-end; justify-content: space-between; gap: 24px; overflow: hidden; border-radius: 28px; padding: 34px; background: radial-gradient(circle at 86% 18%, rgba(87, 219, 207, .2), transparent 25%), linear-gradient(125deg, #09202b, #123946 65%, #0e5553); color: #f2ffff; box-shadow: 0 22px 54px rgba(17, 53, 65, .2); }
 .performance-hero::after { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 39px, rgba(187, 255, 249, .035) 40px), repeating-linear-gradient(0deg, transparent 0 39px, rgba(187, 255, 249, .035) 40px); content: ""; pointer-events: none; }
 .performance-hero > * { position: relative; z-index: 1; }

@@ -48,7 +48,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 | Outbox / Send | 接收带发送 Agent 类型与会话 ID 的明确请求，校验 Route、渠道、目标参数、内容和策略后发送并保存追溯回执 | 让处理端绕过 RabiRoute 写平台，或从来源上下文猜测目标 | `src/agentSend.ts`、`src/outbox.ts` |
 | 消息处理看板 | 保存消息发送需求、处理阶段、转交、决定和 Outbox 回执；把计划进展重新通知来源会话 | 代替 Agent 回答、从日志猜测状态、把普通群消息全部设为必须回复 | `src/messageProcessing/board.ts`、`src/messageProcessing/persistence.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/components/MessageProcessingBoard.vue` |
 | Manager 控制面 | 管配置、进程、扫描、状态、WebGUI 静态资源和 HTTP API | 具体平台实时消息处理 | `src/manager/*`、`src/manager.ts` |
-| Manager 插件 Bundle | Profile/Patch、`rabi.manager.base`、稳定 ID、`provides/requires/optional` 能力图、Plugin Catalog、声明式路由和实例 Fiber 生命周期 | 让 Bundle 读取 Manager 全局状态或执行未受控第三方资源 | `src/manager/managerPluginConfig.ts`、`src/manager/managerPluginPackageLoader.ts`、`src/manager/managerPluginPackageHost.ts`、`src/manager/controlPlaneRoutes.ts`、`src/runtime/managerPluginReconciler.ts` |
+| 插件平台 | 单一 Profile、独立包、`provides/requires/optional` 能力图、权限、generation、Plugin Catalog 和 effect 释放 | 在宿主中增加具体插件 ID 分支，或让插件绕过 SDK 直接改宿主状态 | `src/plugin-kernel/*`、`plugins/contracts/plugin-sdk/*`、`plugins/builtin/*`、`plugins/profiles/desktop.json`、`src/manager/pluginCatalogRoutes.ts` |
 | WebGUI / Desktop 最小宿主 | 连接 Manager、消费贡献目录、安全渲染、维护窗口/页面外壳和固定恢复入口 | 维护第二套页面、设置、命令、导航、状态或生命周期入口清单 | `ribiwebgui/src/*`、`desktop/tray-task-window/*`、`src/manager/pluginCatalogRoutes.ts` |
 | Role Knowledge | 管角色计划、记忆、技能和上下文快照；Manager 展示层统一派生状态和排序，并按精确绑定读取任务 Agent 状态 | 决定消息是否路由命中，或根据计划生命周期猜测 Codex 是否工作 | `src/roleKnowledge.ts`、`src/roleKnowledgePresentation.ts`、`src/manager/roleKnowledgeRoute.ts`、`src/manager/planAgentStatus.ts`、`src/manager/controlPlaneRoutes.ts` |
 
@@ -77,7 +77,7 @@ unregister routes
 → await resource exit
 ```
 
-Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，因此有顺序要求的停用流程不能拆成多个 `ctx.effect()`。当前 Manager hook 把关键停止顺序放在一个 disposer 中；`ManagerPluginRequestTracker.trackOperation()` 等待 response 之外的实际业务 Promise。Manager 退出和启动失败回收按 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()` 串行执行。共享资源 Runtime 停止时取消排队/共享请求、flush 写入、终止 Worker 并等待退出；任一停止失败时仍继续清理其余资源。RabiLink abort 后等待活动 run、LAN listener、Socket、Relay、SSE、WebGUI 和 Speech drain；第二次 `stop()` 可以取消停止期间排队的重启，配置 watcher 与 Rabi 身份配置 PATCH 都等待异步 Relay 同步。批量对账逆序停用后再按依赖顺序启动。
+Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，因此有顺序要求的停用流程不能拆成多个 `ctx.effect()`。当前 Manager hook 把关键停止顺序放在一个 disposer 中；`ManagerPluginRequestTracker.trackOperation()` 等待 response 之外的实际业务 Promise。Manager 退出和启动失败回收按 `managerPluginKernel.dispose() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()` 串行执行。共享资源 Runtime 停止时取消排队/共享请求、flush 写入、终止 Worker 并等待退出；任一停止失败时仍继续清理其余资源。RabiLink abort 后等待活动 run、LAN listener、Socket、Relay、SSE、WebGUI 和 Speech drain；第二次 `stop()` 可以取消停止期间排队的重启，配置 watcher 与 Rabi 身份配置 PATCH 都等待异步 Relay 同步。批量对账逆序停用后再按依赖顺序启动。
 
 中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404 和其他路径 WebGUI HTML 回退。`/manager` 与所有 `/manager/*` 都返回控制面响应。
 

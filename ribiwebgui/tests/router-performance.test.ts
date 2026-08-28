@@ -4,6 +4,7 @@ import test from "node:test";
 
 const routerSource = fs.readFileSync(new URL("../src/router.ts", import.meta.url), "utf8");
 const pluginPagesSource = fs.readFileSync(new URL("../src/pluginPages.ts", import.meta.url), "utf8");
+const builtinWebContributionsSource = fs.readFileSync(new URL("../src/bundles/builtinWebContributions.ts", import.meta.url), "utf8");
 
 test("WebGUI route pages use the trusted renderer registry and asynchronous page chunks", () => {
   assert.match(routerSource, /createImmediateRouteComponent/);
@@ -28,8 +29,9 @@ test("WebGUI route pages use the trusted renderer registry and asynchronous page
     "SpeechServicePage",
     "SettingsPage"
   ]) {
-    assert.match(pluginPagesSource, new RegExp(`import\\("\\.\\/pages\\/${page}\\.vue"\\)`));
+    assert.equal(builtinWebContributionsSource.includes(`import("../pages/${page}.vue")`), true);
   }
+  assert.doesNotMatch(pluginPagesSource, /import\("\.\/pages\//);
   assert.match(pluginPagesSource, /registerTrustedWebPage/);
   assert.match(pluginPagesSource, /allowedSlots/);
   assert.match(pluginPagesSource, /allowedIcons/);

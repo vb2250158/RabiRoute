@@ -55,6 +55,26 @@ export type AgentScanProject = {
   exists: boolean;
 };
 
+export type AgentScanModel = {
+  id: string;
+  name: string;
+  provider?: string;
+  providerName?: string;
+  description?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  reasoningEfforts?: Array<{ id: string; description?: string }>;
+};
+
+export type AgentDeliveryTestResult = {
+  deliveryId: string;
+  gatewayId: string;
+  agentAdapterType: AgentAdapterType;
+  status: "delivered" | "failed";
+  completedAt: string;
+  error?: string;
+};
+
 export type AgentScanResult = {
   type: AgentAdapterType;
   label: string;
@@ -65,6 +85,7 @@ export type AgentScanResult = {
   endpoints?: Array<{ label: string; url: string; healthy?: boolean }>;
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
+  models?: AgentScanModel[];
   sessionPage?: {
     offset: number;
     limit: number;
@@ -271,6 +292,12 @@ export type RolePlan = {
   kind?: string;
   currentStep?: string;
   currentStepId?: string;
+  currentStepPreview?: RolePlanStep;
+  currentStepPosition?: number;
+  stepCount?: number;
+  completedStepCount?: number;
+  attachmentCount?: number;
+  detailLevel?: "summary" | "preview" | "full";
   nextAction?: string;
   waitingFor?: string;
   isBlocked?: boolean;

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.test.agent-adapter",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "agent.adapter.fixture@1"
+  ],
+  "requires": [
+    "host.test-events@1",
+    "message.source.fixture@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

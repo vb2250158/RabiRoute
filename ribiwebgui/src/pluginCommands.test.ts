@@ -27,10 +27,10 @@ function contribution(handlerId: string, overrides: Record<string, unknown> = {}
 
 test("built-in Web commands use the trusted registration API", () => {
   assert.deepEqual(registeredWebCommands().map(command => [command.instanceId, command.pluginId, command.handlerId]), [
-    ["manager:route-control", "rabi.manager.base", "web.quick-setup"],
-    ["manager:route-control", "rabi.manager.base", "web.add-route"],
-    ["manager:route-control", "rabi.manager.base", "web.open-manager-config"],
-    ["manager:core", "rabi.manager.base", "web.save-page"]
+    ["manager:route-control", "io.rabiroute.manager.route-control", "web.quick-setup"],
+    ["manager:route-control", "io.rabiroute.manager.route-control", "web.add-route"],
+    ["manager:route-control", "io.rabiroute.manager.route-control", "web.open-manager-config"],
+    ["manager:core", "io.rabiroute.manager.core", "web.save-page"]
   ]);
 });
 
@@ -60,7 +60,7 @@ test("trusted command registration resolves catalog contributions and unregister
 test("trusted command registration rejects duplicate handlers", () => {
   assert.throws(() => registerTrustedWebCommand({
     instanceId: "manager:route-control",
-    pluginId: "rabi.manager.base",
+    pluginId: "io.rabiroute.manager.route-control",
     handlerId: "web.quick-setup",
     allowedSlots: ["utility-action"],
     allowedIcons: ["mdi-shield-check-outline"],

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.message-adapter-control",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs",
+    "web": "./web/client.mjs"
+  },
+  "provides": [
+    "manager.message-adapter-control@1"
+  ],
+  "requires": [
+    "host.manager.message-adapter-control@1",
+    "manager.core@1",
+    "manager.gateway-runtime@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

@@ -24,7 +24,13 @@ export default defineConfig({
       preserveEntrySignatures: "exports-only",
       input: {
         app: fileURLToPath(new URL("./index.html", import.meta.url)),
-        rabiManagerBaseClient: fileURLToPath(new URL("./src/bundles/rabiManagerBaseClient.ts", import.meta.url))
+        managerCorePlugin: fileURLToPath(new URL("./src/bundles/builtin/core.ts", import.meta.url)),
+        managerMessageAdapterControlPlugin: fileURLToPath(new URL("./src/bundles/builtin/message-adapter-control.ts", import.meta.url)),
+        managerPersonaPlugin: fileURLToPath(new URL("./src/bundles/builtin/persona.ts", import.meta.url)),
+        managerSpeechPlugin: fileURLToPath(new URL("./src/bundles/builtin/speech.ts", import.meta.url)),
+        managerPerformancePlugin: fileURLToPath(new URL("./src/bundles/builtin/performance.ts", import.meta.url)),
+        managerDiagnosticsPlugin: fileURLToPath(new URL("./src/bundles/builtin/diagnostics.ts", import.meta.url)),
+        managerDesktopPlugin: fileURLToPath(new URL("./src/bundles/builtin/desktop.ts", import.meta.url))
       }
     }
   },

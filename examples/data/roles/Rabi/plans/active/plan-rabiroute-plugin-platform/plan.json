@@ -1,0 +1,92 @@
+{
+  "id": "plan-rabiroute-plugin-platform",
+  "title": "建立 RabiRoute 独立插件平台并删除旧运行时",
+  "focus": "统一插件内核、独立插件包、多宿主贡献和无遗留迁移",
+  "status": "已完成",
+  "priority": "high",
+  "kind": "architecture",
+  "currentStepId": "verify-independent-plugin-platform",
+  "currentStep": "26 个独立内置包、7 个 Web Bundle、树外插件合同、主题入口和旧运行时删除已经完成。",
+  "nextAction": "",
+  "steps": [
+    {
+      "id": "research-dsh-cordis",
+      "title": "调查 DSH、Cordis 和可释放 effect 边界",
+      "status": "已完成",
+      "completedAt": "2026-08-21T02:00:00+08:00"
+    },
+    {
+      "id": "define-plugin-platform",
+      "title": "确定统一插件内核、SDK、Manifest、能力、权限和 generation 合同",
+      "status": "已完成",
+      "completedAt": "2026-08-27T12:00:00+08:00"
+    },
+    {
+      "id": "split-builtin-packages",
+      "title": "把 26 个内置能力拆成独立插件包",
+      "status": "已完成",
+      "completedAt": "2026-08-27T12:00:00+08:00"
+    },
+    {
+      "id": "unify-host-contributions",
+      "title": "让 Manager、WebGUI 和 Desktop 使用同一贡献目录",
+      "status": "已完成",
+      "completedAt": "2026-08-27T12:00:00+08:00"
+    },
+    {
+      "id": "verify-out-of-tree-plugin",
+      "title": "验证树外插件安装、更新、失败回滚、停用和卸载",
+      "status": "已完成",
+      "completedAt": "2026-08-27T12:00:00+08:00"
+    },
+    {
+      "id": "remove-legacy-runtime",
+      "title": "删除基础 Bundle、旧 Profile/Patch、旧配置读取和旧插件宿主",
+      "status": "已完成",
+      "completedAt": "2026-08-27T12:00:00+08:00"
+    },
+    {
+      "id": "restore-theme-contribution",
+      "title": "恢复设置页主题入口和刷新后的主题选择",
+      "status": "已完成",
+      "completedAt": "2026-08-28T12:00:00+08:00"
+    },
+    {
+      "id": "verify-independent-plugin-platform",
+      "title": "完成源码、WebGUI、脚本、构建和实际 Manager 验收",
+      "status": "已完成",
+      "completedAt": "2026-08-28T12:00:00+08:00"
+    }
+  ],
+  "waitingFor": "",
+  "project": {
+    "name": "RabiRoute",
+    "path": "./"
+  },
+  "source": {
+    "kind": "example",
+    "summary": "公开示例计划：完成独立插件平台并删除旧运行时"
+  },
+  "dueAt": "",
+  "completedAt": "2026-08-28T12:00:00+08:00",
+  "archivedAt": "",
+  "createdAt": "2026-08-21T02:00:00+08:00",
+  "updatedAt": "2026-08-28T12:00:00+08:00",
+  "keywords": [
+    "Plugin Kernel",
+    "plugin package",
+    "@rabiroute/plugin-sdk",
+    "Manifest",
+    "provides",
+    "requires",
+    "permissions",
+    "generation",
+    "effect scope",
+    "Contribution Catalog",
+    "Web Bundle",
+    "Desktop settings",
+    "theme persistence",
+    "out-of-tree plugin",
+    "legacy removal"
+  ]
+}

@@ -343,7 +343,7 @@ Stage 1 needs only `builtin` and `declarative`. Open `installed-trusted` after p
 - A second RabiLink `stop()` cancels a restart queued during shutdown; the configuration watcher and Rabi identity PATCH both await asynchronous Relay synchronization.
 - Label “separate process or stronger isolation” as a RabiRoute security choice, not current DSH behavior.
 
-See [Cordis-Based Plugin Runtime Refactor for RabiRoute](cordis-plugin-runtime-refactor_en.md) for implementation design and [Plugin Architecture Lessons for RabiRoute from DSH](dsh-plugin-architecture-lessons_en.md) for the principle summary.
+See [RabiRoute Plugin Platform Target Architecture](manager-plugin-implementation-hot-swap_en.md) for the current implementation and [Plugin Architecture Lessons for RabiRoute from DSH](dsh-plugin-architecture-lessons_en.md) for the principle summary.
 
 ## Primary evidence paths
 

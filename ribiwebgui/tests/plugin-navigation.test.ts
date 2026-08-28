@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { defineComponent } from "vue";
+import { activateCore, activateMessageAdapterControl, activatePersona, activateSpeech } from "../src/bundles/builtinWebContributions";
 import { buildWebNavigation } from "../src/pluginNavigation";
 import { registerTrustedWebPage } from "../src/pluginPages";
+import { activateWebPluginForTest } from "./web-plugin-test-host";
 
 const rendererByRoute: Readonly<Record<string, string>> = {
   "route.overview": "builtin.web-page.overview.v1",
@@ -23,8 +25,20 @@ type PluginOwner = Readonly<{
 }>;
 
 function builtinOwner(id: string): PluginOwner {
-  return { instanceId: `manager:${id}`, pluginId: "rabi.manager.base" };
+  return { instanceId: `manager:${id}`, pluginId: `io.rabiroute.manager.${id}` };
 }
+
+
+const disposeBuiltinPages = [
+  activateWebPluginForTest(builtinOwner("core"), activateCore),
+  activateWebPluginForTest(builtinOwner("message-adapter-control"), activateMessageAdapterControl),
+  activateWebPluginForTest(builtinOwner("persona"), activatePersona),
+  activateWebPluginForTest(builtinOwner("speech"), activateSpeech)
+];
+
+test.after(() => {
+  for (const dispose of [...disposeBuiltinPages].reverse()) dispose();
+});
 
 function page(
   routeId: string,
@@ -84,15 +98,20 @@ test("Web navigation is empty before a successful plugin catalog", () => {
 test("Web navigation resolves activated page routes and registered slots", () => {
   const selected = "Main /../?route=#one";
   const groups = buildWebNavigation([
-    ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 }),
+    ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "utility", order: 40 }),
+    ...pair({ id: "speech", owner: builtinOwner("speech"), routeId: "route.speech", label: "语音服务", icon: "mdi-waveform", slot: "utility", order: 50 }),
     ...pair({ id: "persona-sync", owner: builtinOwner("persona"), routeId: "route.persona-sync", label: "人格同步", icon: "mdi-folder-sync-outline", slot: "persona-secondary", order: 40 }),
     ...pair({ id: "settings", owner: builtinOwner("core"), routeId: "global.settings", label: "设置", icon: "mdi-cog-outline", slot: "utility", order: 80 }),
     ...pair({ id: "docs", owner: builtinOwner("core"), routeId: "global.docs", label: "手册", icon: "mdi-book-open-page-variant-outline", slot: "footer", order: 90 })
   ], selected);
 
-  assert.deepEqual(groups.routePrimary.map(item => item.to), [`/routes/${encodeURIComponent(selected)}/overview`]);
+  assert.deepEqual(groups.routePrimary.map(item => item.to), []);
   assert.deepEqual(groups.personaSecondary.map(item => item.to), [`/routes/${encodeURIComponent(selected)}/persona/sync`]);
-  assert.deepEqual(groups.utility.map(item => item.to), ["/settings"]);
+  assert.deepEqual(groups.utility.map(item => item.to), [
+    `/routes/${encodeURIComponent(selected)}/overview`,
+    `/routes/${encodeURIComponent(selected)}/speech`,
+    "/settings"
+  ]);
   assert.deepEqual(groups.footer.map(item => item.to), ["/docs"]);
 });
 
@@ -159,11 +178,13 @@ test("trusted extensions can register a new route, renderer, path resolver, slot
 test("accepted navigation keeps catalog ordering and unscoped Route recovery paths", () => {
   const groups = buildWebNavigation([
     ...pair({ id: "adapters", owner: builtinOwner("message-adapter-control"), routeId: "route.adapters", label: "适配器", icon: "mdi-puzzle-outline", slot: "route-primary", order: 20 }),
-    ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "route-primary", order: 10 })
+    ...pair({ id: "overview", owner: builtinOwner("core"), routeId: "route.overview", label: "控制台", icon: "mdi-view-dashboard-outline", slot: "utility", order: 40 })
   ], "");
 
   assert.deepEqual(groups.routePrimary.map(item => [item.id, item.to]), [
-    ["overview", "/overview"],
     ["adapters", "/routes"]
+  ]);
+  assert.deepEqual(groups.utility.map(item => [item.id, item.to]), [
+    ["overview", "/overview"]
   ]);
 });

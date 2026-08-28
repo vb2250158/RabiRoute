@@ -13,6 +13,7 @@ import {
   codexThreadMatchesConfiguredTargetForTest,
   mergeCodexDesktopThreadsWithMetadataForTest,
   listCodexThreads,
+  normalizeCodexModelListForTest,
   resolvePrimaryCodexTurnOptions,
   waitForCodexDesktopThreadForTest
 } from "./codexRuntime.js";
@@ -29,6 +30,41 @@ test("every Desktop delivery has one stable UUID receipt marker", () => {
   );
   assert.equal(existing.deliveryId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
   assert.equal(existing.prompt.match(/deliveryId/g)?.length, 1);
+});
+
+test("Codex model catalog keeps visible models and reasoning metadata", () => {
+  assert.deepEqual(normalizeCodexModelListForTest({
+    data: [
+      {
+        id: "catalog-luna",
+        model: "gpt-5.6-luna",
+        displayName: "GPT-5.6 Luna",
+        description: "Fast model",
+        hidden: false,
+        isDefault: true,
+        defaultReasoningEffort: "high",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "none", description: "Fastest" },
+          { reasoningEffort: "high", description: "Deeper" }
+        ]
+      },
+      { id: "hidden", model: "hidden-model", displayName: "Hidden", hidden: true, supportedReasoningEfforts: [] }
+    ],
+    nextCursor: "page-2"
+  }), {
+    models: [{
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      description: "Fast model",
+      isDefault: true,
+      defaultReasoningEffort: "high",
+      reasoningEfforts: [
+        { id: "none", description: "Fastest" },
+        { id: "high", description: "Deeper" }
+      ]
+    }],
+    nextCursor: "page-2"
+  });
 });
 
 test("Primary Codex turns apply the Route model and reasoning effort together", () => {

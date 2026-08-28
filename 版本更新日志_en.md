@@ -8,37 +8,50 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
-### Desktop-pet dragging and pack import
+### Agent model selection
 
-- The YeYu desktop pet changes to the `drag` animation only after an actual pointer move, then restores its prior state on release; a click no longer triggers a drag state.
-- When importing a desktop-pet pack through a UNC/SMB path, or when directory rename is denied, Manager copies the validated staging contents with `pet-pack.json` written last so clients cannot read a partial pack.
+- The Codex Primary Persona model is now an editable combo box. When Desktop is available, it loads the current account's model catalog and matching reasoning efforts; manual input remains available when Desktop is stopped or discovery fails.
+- DSH Primary Persona configuration now includes model and reasoning-effort selection. It reads `llm.models` when DSH is available, accepts manual `provider/model` input otherwise, and applies the saved choice through `session.selectModel` before the next Primary Persona delivery.
 
-### Role-knowledge reads
+### Speech model management
 
-- Manager adds a read-only role-knowledge file-count endpoint. The RibiWebGUI role-knowledge client now exposes loaders for active/archived plan, recent/consolidated memory, and memory-consolidation-run counts, so pages can avoid loading complete knowledge content when they need totals.
+- The model library now uses a table with separate columns for model, capability, purpose, size, runtime, status, source, and action. Filtering, search, error details, and weight downloads keep the same behavior.
+
+### Shared sidebar functions
+
+- Console is now the first item in the shared-functions section, above Speech Service. It still follows the current Route, while Message Adapters, Persona Configuration, and Plans & Memory remain in the Route configuration section.
+
+### Message-configuration channel check
+
+- Added **Channel check** to the top of Message configuration. The dialog now shows the current Route as **Message inputs → Manager → Agent handlers**, including Manager runtime state, message-input connectivity, and primary or secondary Agent roles. Selecting a node returns to its settings.
+- Agent nodes now provide **Delivery test**. Manager sends a UUID-tagged message through the current Route’s formal Agent adapter to the selected session and returns that adapter’s receipt. Codex success also requires the test ID to appear in the target Desktop task.
 
 ### LAN Rabi Agent
 
 - Added an experimental headless LAN Rabi Agent, Manager node/task APIs, a Rabi Web management page, and self-update flow. A node delivers only to its configured Codex Desktop task owner. Real multi-computer bootstrap, update, and reconnect acceptance remains pending.
-- Node listing, task assignment, and update requests now require an explicit WebGUI access Token even from loopback, preventing another local process or page from using implicit machine trust to control a remote Agent.
 - Release manifests expose the Ed25519 public key, signature, and public-key SHA-256 fingerprint. Bootstrap stores the fingerprint in node-private configuration; every update compares that pinned value before verifying the manifest signature and file SHA-256 values, so replacing the key and re-signing is still rejected.
 
 ### WebGUI theme colors
 
-- Message-adapter parameter panels now follow the active theme and no longer show a fixed light background in dark mode.
+- Message-adapter parameters, plan descriptions and attachments, persona Markdown documents, plan status labels, and the speech waveform now follow the active theme instead of retaining fixed light surfaces or dark headings in dark mode.
 
 ### Codex Desktop sidebar Name authority
 
 - The user-visible Codex task name now comes only from `thread_name` in the index shared with the Desktop left sidebar. app-server `thread.name` and SQLite `threads.title` no longer override names or participate in name filtering.
 - Plan Secretary and Message Agent names use the Primary Persona sidebar `Name` as their prefix. Creation and rename fail closed when that Name is missing instead of falling back to the first prompt, Route name, or another raw title.
 - The complete task ID plus normalized workspace remains the delivery identity, so renaming does not invalidate exact-ID delivery. The task catalog now comes directly from the sidebar index plus local task state; app-server remains only for empty-task creation and naming.
-
 ### RibiWebGUI cold start and message-board retention
 
 - The WebGUI now renders its fixed shell immediately after LAN-address normalization. The plugin catalog and optional Web Bundles refresh in the background. A direct knowledge-page URL no longer waits for an optional Bundle; catalog delay or one Bundle failure keeps the original path and a recoverable loading state.
 - The knowledge page first resolves the Route and role through `/gateways?summary=1`, displays eight plan summaries, and then serially loads the remaining pages for the same filter in the background. A Route change, hidden page, or unmount stops later reads. Full Gateway configuration still loads in the background for editing and diagnostics.
 - The root HTML uses `no-store`; content-hashed static assets and revision-addressed Web Bundle modules use long-lived immutable caching. The base Bundle now only re-exports the current main WebGUI entry, avoiding a second Vue, Pinia, and page-dependency download.
 - The message-processing board snapshot is now v2. An expired requirement drops message bodies, attachments, and reply context while retaining a SHA-256 replay-dedupe key for up to seven days. A matching replay returns `replay_suppressed` without another Agent delivery or board event.
+
+### Staged plan and memory loading
+
+- The plans page now mounts the first eight summaries as soon as their title, status, current step, progress counts, attachment count, and update time arrive instead of waiting for eight complete detail requests. Later summaries continue in background batches of eight, and background completion updates count status without keeping the first-screen global progress bar active.
+- Cards near the viewport request `detail=preview`, which contains only the description, current-step detail, blocker information, and attachment metadata, with at most four concurrent requests. Image, video, and Markdown attachments remain directly visible before expansion.
+- Expanding a plan fetches all steps and complete approval contracts. Agent state, plan feedback, and Work history remain separate on-demand reads.
 
 ### Plan archive consistency
 
@@ -55,19 +68,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - If a bound task is confirmed deleted after the Desktop owner accepted a delivery, RabiRoute creates and persists one replacement task, redelivers the current message, and returns the replacement warning to the caller. An archived binding likewise cannot reuse a same-named task.
 - The Windows Desktop lifecycle supervisor uses Manager `/meta` availability as the health signal. If the process remains present but its control plane is unresponsive, it invokes the unified launcher and records the probe error and consecutive failure count.
 
-### Manager plugin Bundles and hot replacement
+### Independent plugin platform and interface themes
 
-- The `rabi.manager.base` Bundle now directly owns the 26 built-in definitions, dependencies, presentation contributions, and default Profile. Manager no longer creates a definition for the Bundle. Only the matching base-Bundle instance receives the constrained capability to activate Manager-owned resources; external Bundles still receive the general controlled API only.
-- The first load uses the Bundle default Profile. After the HTTP listener is ready, one asynchronous migration converts old `manager.json.managerPlugins` / `rabi.manager.builtin` data and removes the old field. Normal reconciliation then reads only Profile, Patch, and Bundle data.
-- The Web module catalog is published from the successfully reconciled runtime snapshot instead of rereading Profile on each request. Failed rollback candidates and `waiting_dependency` instances never send a new revision to the browser.
-- Bundle changes use revisions to unload the preceding Fiber, remove instance routes, drain accepted requests, and load the new version. Failed activation restores the preceding version. Web Bundles use content revisions and Manager SSE replacement, retaining the preceding usable page if replacement fails.
-- A Web Bundle entry, lazy script, CSS, and font now use relative URLs from the same revision directory; lazy loads no longer fall through to the WebGUI root. The build copies the Vite entry module itself, avoiding a dependency on a temporary minified export alias.
-- The Web Bundle graph now aggregates by package ID, version, and revision. The 26 instances of one `rabi.manager.base@0.2.1` revision download and initialize once. An enable or disable change that alters `instances` disposes and reactivates the Bundle so disabled instances cannot leave pages or renderers behind. Manager serves immutable revision files as their original bytes and no longer rewrites built JavaScript.
-- The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry instead of waiting indefinitely.
-
-### Dependency security
-
-- The lockfile updates the transitive development dependency `nanoid` from `3.3.16` to `3.3.18`, fixing the custom-generator infinite-loop condition for `size=0` (GHSA-2v37-7h3g-55p8). A repeat `npm audit` reports zero vulnerabilities.
+- Manager now loads 26 independent built-in packages through one Plugin Kernel, with seven plugins providing separate Web Bundles. Built-in and out-of-tree plugins share `@rabiroute/plugin-sdk`, the strict manifest, capability graph, permission checks, revisions, generations, and effect lifecycle.
+- One Profile declares only instances, package versions, configuration, and grants. The build produces `dist/plugins/packages/` from `plugins/builtin/` and removes packages that are no longer selected by the Profile in the same build. Manager loads only built output or explicitly configured out-of-tree package roots.
+- WebGUI, Desktop, and Manager consume one contribution catalog. Pages, navigation, status, settings, and themes come from plugins; WebGUI no longer owns a second built-in list of business pages or settings sections.
+- Removed `rabi.manager.base`, the old Profile/Patch formats, old configuration readers, the old Reconciler and Catalog, and the process-plugin host. Production runtime performs no migration from those formats and keeps no fallback loader.
+- Out-of-tree plugins use the same package shape, a separate Profile, and explicit `grants`. A failed candidate generation leaves the previous revision active; a successful switch releases the preceding routes, services, listeners, and interface contributions.
+- **Interface theme** is visible again on Settings. The Desktop settings contribution uses `global.settings.sections`, and startup preserves the saved theme until the asynchronous plugin theme catalog is ready, so a light or dark selection survives refresh.
+- The Role Knowledge first screen now uses bounded requests: file counts come from a dedicated `/counts` endpoint, and both frontend requests and route loading fail after 12 seconds with retry.
 
 ## 0.2.1 - 2026-08-25
 
@@ -87,23 +96,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 - RabiSpeech audio-stream events now use reverse limited reads over the current-file tail and archive index. File scans run in worker threads without holding the event-append lock, while live client snapshots remain on the event loop. Read-only capability, model, record, speaker, and microphone-device scans also run in worker threads, preventing roughly 90 MB of archived events from blocking health requests during concurrent Speech page loading.
 - Performance pages now read a bounded raw cache plus 10-second, 1-minute, and 5-minute incremental aggregates. A 720-hour disk retention no longer restores or keeps every raw sample resident, and 48-hour queries no longer synchronously scan large object arrays. Page queries no longer force a flush plus a second JSONL parse, and invalid recent-log limits fall back to the default. Persistent Manager and speech event streams no longer affect HTTP P95, top-level cards use the most recently reporting Manager runtime, and WebGUI starts theme, lightweight Route status, metadata, and network-option reads concurrently.
 - Windows Relay scheduled tasks no longer inherit the default 72-hour execution limit and restart after failure. Runtime-state replacement handles an existing Windows destination file and restores an orphaned backup after an interrupted replacement.
-- Automatic archival clears a legacy completed plan's `currentStepId`, which is valid only for in-progress or paused plans, before validating the archived record. The path-projection test now uses a nonexistent isolated persona directory instead of reading or archiving the developer's real Rabi plans.
-
-### Desktop pet, work-ended events, and local announcements
-
-- Manager now accepts generic work-ended events and exposes recent-event queries plus an SSE stream. Events use stable IDs; summaries are redacted by sensitive key name and then physically rotated into date shards. This delivery includes the producer contract and consumers; real Codex / DSH completion producers still require integration and device acceptance.
-- The Speech Service page now provides task-completion announcement settings, preview, and recent results. Manager owns source policy, summary cleanup, persona voice selection, and RabiSpeech global-FIFO delivery. The announcement ledger stores only decision, hash, and receipt metadata, not the original summary. Codex is enabled by default; DSH remains disabled pending its producer.
-- Added Manager APIs, constrained pack import, WebGUI settings, and a Qt consumer for the YeYu desktop pet. Manager remains the single owner of assets and settings; imports validate ownership, paths, file types, entry count, and expanded size. Automated contracts are covered; the Windows package and animation still require device acceptance.
-
-### Custom themes and multi-monitor screenshots
-
-- Manager now owns `theme`, `webTheme`, and `customThemes`. WebGUI and Qt Desktop share one custom-theme contract that validates theme IDs, colors, and numeric ranges.
-- Multi-monitor capture now obtains one native-pixel image per display and selects on the chosen monitor's local canvas. History retains monitor geometry, and closing the monitor picker no longer triggers a stale save task with undefined state.
 
 ### Local speech data and Windows desktop startup boundaries
 
 - RabiSpeech runtime configuration, temporary files, and outputs now default to `%LOCALAPPDATA%\RabiPC\RabiSpeech`, while models default to `%LOCALAPPDATA%\RabiPC\models\rabispeech`. First startup copies a legacy package-local configuration once. `RABISPEECH_DATA_ROOT`, `RABISPEECH_MODEL_ROOT`, and the existing narrower overrides can select another local location. Model downloads, the Windows speech host, and Manager now share this layout instead of binding private runtime data to a Git checkout or installer directory.
-- `Start-RabiRoute-Desktop.bat` now prefers the packaged `RabiRoute-Desktop.exe` when it exists at the project root and retains the Python desktop fallback for source environments. The pin-shortcut default moves from the game-conflicting bare `F3` to `Ctrl+Alt+V`; an explicitly saved `F3` setting remains unchanged.
+- `Start-RabiRoute-Desktop.bat` now prefers the packaged `RabiRoute-Desktop.exe` when it exists at the project root and retains the Python desktop fallback for source environments. The clipboard-screenshot default moves from the game-conflicting bare `F3` to `Ctrl+Alt+V`, and normalization migrates the legacy default automatically.
 - Manager now starts the rebuildable persona-sync manifest index asynchronously after startup, so a NAS manifest walk cannot block control-plane configuration migration and availability.
 
 ### Persona work contract and proactive-review evidence boundaries

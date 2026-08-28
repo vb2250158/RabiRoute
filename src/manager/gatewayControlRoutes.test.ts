@@ -98,6 +98,16 @@ function createFixture() {
       record("triggerManualRule", id, body);
       return { accepted: true, alreadyRunning: manualAlreadyRunning };
     },
+    async testAgentDelivery(id, body) {
+      record("testAgentDelivery", id, body);
+      return {
+        deliveryId: "12345678-1234-4234-8234-123456789abc",
+        gatewayId: id,
+        agentAdapterType: body.agentAdapterType ?? "codex",
+        status: "delivered",
+        completedAt: "2026-08-28T00:00:00.000Z"
+      };
+    },
     listDeliveryReplayAttempts(id, limit, status) {
       record("listDeliveryReplayAttempts", id, limit, status);
       return { gatewayId: id, attempts: [{ attemptId: "attempt-1" }] };
@@ -131,11 +141,18 @@ async function startServer(context: GatewayControlRoutesContext) {
       response.end(JSON.stringify({ fallback: true }));
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
+  let address: AddressInfo;
+  do {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    server.removeAllListeners("error");
+    address = server.address() as AddressInfo;
+    if (address.port > 10_080) break;
+    // Fetch rejects several historical service ports even when a local test server owns them.
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  } while (true);
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: () => new Promise<void>((resolve) => server.close(() => resolve()))
@@ -272,6 +289,41 @@ test("Weixin login preserves missing, disabled, accepted, and failure responses"
   }
 });
 
+test("Agent delivery test returns the real target receipt", async () => {
+  const fixture = createFixture();
+  const app = await startServer(fixture.context);
+  try {
+    const delivered = await post(app.baseUrl, "/gateways/route-a/agent-delivery-test", {
+      agentAdapterType: "dsh"
+    });
+    assert.equal(delivered.status, 200);
+    assert.deepEqual(await json(delivered), {
+      code: 0,
+      message: "agent delivery test completed",
+      data: {
+        deliveryId: "12345678-1234-4234-8234-123456789abc",
+        gatewayId: "route-a",
+        agentAdapterType: "dsh",
+        status: "delivered",
+        completedAt: "2026-08-28T00:00:00.000Z"
+      }
+    });
+    assert.deepEqual(fixture.calls.find(call => call.name === "testAgentDelivery")?.args, [
+      "route-a",
+      { agentAdapterType: "dsh" }
+    ]);
+
+    fixture.failures.set("testAgentDelivery", new Error("Desktop owner unavailable"));
+    const failed = await post(app.baseUrl, "/gateways/route-a/agent-delivery-test", {
+      agentAdapterType: "codex"
+    });
+    assert.equal(failed.status, 502);
+    assert.deepEqual(await json(failed), { code: -1, message: "Desktop owner unavailable" });
+  } finally {
+    await app.close();
+  }
+});
+
 test("Manual trigger keeps accepted, already-running, and parse failure responses", async () => {
   const fixture = createFixture();
   const app = await startServer(fixture.context);
@@ -393,12 +445,13 @@ test("registers complete asynchronous gateway request chains", async () => {
   try {
     await post(app.baseUrl, "/gateways", { gateways: [] });
     await post(app.baseUrl, "/gateways/route-a/manual-trigger", { triggerId: "manual" });
+    await post(app.baseUrl, "/gateways/route-a/agent-delivery-test", { agentAdapterType: "codex" });
     await post(app.baseUrl, "/gateways/route-a/delivery-replay", { attemptId: "attempt-1" });
 
-    assert.equal(fixture.trackedOperations.length, 3);
+    assert.equal(fixture.trackedOperations.length, 4);
     assert.deepEqual(
       (await Promise.allSettled(fixture.trackedOperations)).map((result) => result.status),
-      ["fulfilled", "fulfilled", "fulfilled"]
+      ["fulfilled", "fulfilled", "fulfilled", "fulfilled"]
     );
   } finally {
     await app.close();

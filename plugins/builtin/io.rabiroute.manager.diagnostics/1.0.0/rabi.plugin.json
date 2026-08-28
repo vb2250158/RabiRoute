@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.diagnostics",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs",
+    "web": "./web/client.mjs"
+  },
+  "provides": [
+    "manager.diagnostics@1"
+  ],
+  "requires": [
+    "host.manager.diagnostics@1",
+    "manager.core@1"
+  ],
+  "optional": [
+    "manager.gateway-runtime@1",
+    "manager.performance@1",
+    "manager.message-processing-control@1"
+  ],
+  "permissions": []
+}

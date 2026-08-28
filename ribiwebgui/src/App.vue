@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
@@ -13,10 +14,9 @@ import { useGatewayStore } from "./stores/gatewayStore";
 import { configNameFor } from "./utils/gatewayHelpers";
 import { pageSaveAction } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
-import { applyCatalogInterfaceTheme, customVuetifyTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
-import { replaceCustomWebThemeResources, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
+import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
+import { initialWebThemePreference, readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
 import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
-import { isBuiltinStartupWebPageRoute } from "./builtinStartupPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
 import { disposeWebPluginModules } from "./pluginModules";
@@ -36,7 +36,6 @@ const { t } = useI18n();
 const vuetifyTheme = useTheme();
 const interfaceThemePreference = ref<WebThemeId>("system");
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
-const LEGACY_WEB_THEME_PREFERENCE_KEY = "rabiroute:webgui:theme-preference";
 let managerEvents: EventSource | null = null;
 
 async function handlePluginCatalogChanged(): Promise<void> {
@@ -44,24 +43,14 @@ async function handlePluginCatalogChanged(): Promise<void> {
   await refreshWebPluginModulesSafely();
   if (!webCommandForHandler(pluginCatalogStore.commands.value, "web.quick-setup")) store.quickSetupDialogOpen = false;
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
-  if (routeId && !isBuiltinStartupWebPageRoute(routeId) && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
   }
 }
 
 function refreshInterfaceTheme(): void {
   const resolved = applyCatalogInterfaceTheme(pluginCatalogStore.themes.value, interfaceThemePreference.value, systemThemeQuery.matches);
-  const selected = resolveWebThemeResource(pluginCatalogStore.themes.value, interfaceThemePreference.value);
-  interfaceThemePreference.value = selected.themeId;
-  if (selected.customTheme) {
-    const custom = customVuetifyTheme(selected.customTheme);
-    const liveCustom = vuetifyTheme.themes.value.RabiCustom;
-    liveCustom.dark = custom.dark;
-    Object.assign(liveCustom.colors, custom.colors);
-    vuetifyTheme.global.name.value = "RabiCustom";
-  } else {
-    vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
-  }
+  vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
 }
 
 function onSystemThemeChanged(): void {
@@ -76,31 +65,13 @@ function onInterfaceThemeChanged(event: Event): void {
 }
 
 async function loadInterfaceTheme(): Promise<void> {
-  let desktopTheme: WebThemeId = "system";
-  let legacyWebTheme = "";
+  let desktopTheme: DesktopTheme = "system";
   try {
-    legacyWebTheme = window.localStorage.getItem(LEGACY_WEB_THEME_PREFERENCE_KEY)?.trim() || "";
-    window.localStorage.removeItem(LEGACY_WEB_THEME_PREFERENCE_KEY);
-  } catch {
-    // Some privacy modes deny localStorage access; Manager remains authoritative.
-  }
-  try {
-    // Theme selection now belongs to Manager settings. Remove the pre-Manager
-    // browser copy so an old tab can never override the shared source of truth.
-    let settings = await desktopSettingsClient.read();
-    replaceCustomWebThemeResources(settings.customThemes);
-    if (
-      legacyWebTheme
-      && legacyWebTheme !== settings.webTheme
-      && pluginCatalogStore.themes.value.options.some(option => option.themeId === legacyWebTheme)
-    ) {
-      settings = await desktopSettingsClient.update({ webTheme: legacyWebTheme });
-    }
-    desktopTheme = settings.webTheme;
+    desktopTheme = (await desktopSettingsClient.read()).theme;
   } catch {
     desktopTheme = "system";
   }
-  interfaceThemePreference.value = desktopTheme;
+  interfaceThemePreference.value = initialWebThemePreference(readStoredWebThemePreference(), desktopTheme);
   refreshInterfaceTheme();
 }
 
@@ -256,7 +227,7 @@ async function refresh(): Promise<void> {
   await Promise.all([store.load(), pluginCatalogStore.refresh()]);
   await refreshWebPluginModulesSafely();
   const routeId = typeof route.meta.pluginRouteId === "string" ? route.meta.pluginRouteId : "";
-  if (routeId && !isBuiltinStartupWebPageRoute(routeId) && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
+  if (routeId && !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) {
     await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: route.fullPath } });
     return;
   }

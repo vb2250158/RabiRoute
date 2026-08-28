@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.astrbot-control",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "manager.astrbot-control@1"
+  ],
+  "requires": [
+    "host.manager.astrbot-control@1",
+    "manager.core@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

@@ -120,7 +120,7 @@ flowchart LR
 
 Each Route stores its message input, persona, handler, workspace, and sending rules separately. Message adapters do not build Agent instructions, and Agents do not receive channel credentials or direct ownership of routing state.
 
-Manager currently uses the `rabi.manager.base@0.2.1` Bundle to provide 26 built-in plugin instances. Plugins declare dependencies and presentation contributions; Manager handles activation, dependency checks, route removal, request draining, and recovery. See [Plugin Bundles and hot replacement](docs/plugin-bundles_en.md).
+Manager loads 26 independent built-in packages through one Plugin Kernel. Built-in and out-of-tree packages share the same SDK, manifest, dependency graph, permission checks, generation switching, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
 
 ## Agent and safety boundaries
 
@@ -179,7 +179,7 @@ Buildable clients live under [`apps/`](apps/), shared SDKs under [`packages/`](p
 npm run manager          # run Manager from TypeScript
 npm run webgui:dev       # run the Vue/Vuetify frontend
 npm run test             # run backend and contract tests
-npm run build            # build Manager and WebGUI, then sync the base Web Bundle
+npm run build            # build Manager, independent plugin packages, and WebGUI
 npm run check:config     # validate public and runtime JSON text
 ```
 

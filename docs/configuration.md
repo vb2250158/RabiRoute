@@ -8,22 +8,16 @@
 
 > 状态：现行指南。字段和成熟度以当前配置模型、Manager API 和扫描结果为准；验收状态见[当前能力与成熟度](current-capabilities.md)。
 
-## Manager 插件 Bundle
+## 插件平台
 
-`data/manager.json` 只保存 Manager 目录位置：
+默认 Profile 位于 `dist/plugins/profiles/desktop.json`，默认包根目录是 `dist/plugins/packages/`。源码构建通过 `plugins/profiles/desktop.json` 和 `plugins/builtin/` 生成这两个目录。
 
-```json
-{
-  "routeDir": "data/route",
-  "rolesDir": "data/roles"
-}
-```
+树外插件通过 `RABIROUTE_PLUGIN_PROFILE` 指定唯一 Profile，通过 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 增加包根目录。Profile 使用 `instances` 数组，条目包含稳定 `id`、包名、版本、启用状态、JSON 配置和权限 `grants`；不支持 Patch。
 
-插件由 `data/plugins/manager/profile.json` 选择。每行的稳定 `id` 选择一个受信任 Bundle、版本、启用状态和 JSON 配置；`profile.d/*.json` 按文件名顺序叠加 `upsert`、`remove` Patch。`manager:core` 必须启用。
+Manager 监听当前 Profile 和全部包根目录。revision、配置、权限和依赖 revision 不变时不重新激活；变化只重载对应依赖组件。候选失败保留上一可用 generation，缺少依赖进入 `waiting_dependency`，权限不足失败关闭。
 
-内置功能由受版本控制的 `rabi.manager.base` Bundle 提供，Bundle 自己拥有内置 definition 与默认 Profile。Profile 缺失时，首轮装载把这份默认 Profile 与旧 `manager.json.managerPlugins` 的 enabled 值合并；listener 就绪后异步写入 Profile 并删除旧字段。若 Profile 已存在，它是唯一配置来源。常规运行不再把 `manager.json` 当成插件配置。Profile、Patch 或 Bundle 文件变化时，监听器按 revision 局部对账：撤销旧路由、排空已接受请求、卸载旧 Fiber，再加载新 revision；激活失败时恢复旧 Fiber。
+`GET /api/plugins/reconciliation` 返回活动、等待、失败和诊断状态，`POST /api/plugins/reconciliation` 立即重读。WebGUI 通过 `plugin_catalog_changed` 更新目录和 Web 模块。完整目录与插件作者入口见[插件包与热替换](plugin-bundles.md)。
 
-`GET /api/plugins/reconciliation` 返回期望、活动、变化、回滚和诊断状态。`POST /api/plugins/reconciliation` 立即重读 Profile。WebGUI 通过 `/api/events` 的 `plugin_catalog_changed` 更新目录和动态 Web Bundle。完整 Bundle 目录、宿主 API 和热替换限制见[插件 Bundle 与热替换](plugin-bundles.md)。
 ### 插件入口与资源所有权
 
 当前内置目录注册 26 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
@@ -47,7 +41,7 @@ Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessagePro
 | --- | --- | --- |
 | `manager:diagnostics` | `GET /meta`、`GET /api/gateways`，以及 WebGUI“日志诊断”页面和导航 | 撤销诊断入口并 drain 已接收请求；只读取其他插件状态，不启动或恢复已停用插件 |
 | `manager:desktop` | `/api/desktop/settings`、`/open-config-file`、`/manager/start`、`/manager/desktop-lifecycle/start`、`/manager/shutdown`，以及 Desktop/WebGUI 的桌面设置、命令、托盘和快捷键贡献 | 撤销入口并 drain 请求，然后清除本实例尚未执行的延迟关闭计时器 |
-| `manager:gateway-runtime` | Gateway 配置、启停、重启、删除、手动触发、回放、网络选项和重载入口；Gateway 与手动触发子进程 | 撤销入口并 drain 请求，停止本实例的手动触发进程，再停止并等待 Gateway 进程树退出 |
+| `manager:gateway-runtime` | Gateway 配置、启停、重启、删除、手动触发、Agent 投递测试、回放、网络选项和重载入口；Gateway、投递测试与手动触发子进程 | 撤销入口并 drain 请求，停止本实例的手动触发进程，再停止并等待 Gateway 进程树退出 |
 | `manager:agent-adapter-catalog` | Agent Adapter 目录与 `/api/scan/agents`、`/api/scan/agents/dsh` 扫描入口；受控扫描 Worker Pool | 撤销入口、取消排队或活动扫描，并停止 Worker 进程树 |
 | `manager:agent-thread-control` | Agent 任务创建、查询和绑定入口 | 撤销入口并 drain 请求；任务和业务记录继续由稳定业务模块拥有 |
 | `manager:agent-communication` | Agent 请求、发送、回执和追踪入口 | 撤销入口并 drain 请求；继续复用 Outbox、审批、回执和消息处理业务模块 |
@@ -122,6 +116,9 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
   },
   "agentModel": "gpt-5.6-terra",
   "agentReasoningEffort": "high",
+  "dshModelProvider": "deepseek-official",
+  "dshModel": "deepseek-v4-pro",
+  "dshReasoningEffort": "max",
   "agentAdapters": ["codex"],
   "primaryAgentAdapter": "codex",
   "messageProcessingAgents": {
@@ -165,6 +162,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `napcatHttpUrl`：OneBot HTTP API 地址。
 - `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`、`dsh`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot、DSH 实验支持；Marvis 仅人工接力。
 - `dshSessionId` / `dshSessionName` / `dshCwd` / `dshBaseUrl`：DSH（DeepSeek Harness）主人格绑定。WebGUI 按“API 地址 → 工作目录 → 会话”扫描并选择；也可输入新名称，保存时按名称和工作目录查找，零匹配才幂等创建。创建前先通过 DSH `workspace.create` 注册或复用该工作目录，再把返回的 `workspaceId` 传给 `session.create`；RabiRoute 创建的主人格、消息处理、计划秘书和记忆整理会话会直接进入对应工作空间分组。选择或创建后保存完整 `session-<uuid>`、名称和工作目录；“自动初始化会话”先保存绑定，再向同一 DSH owner 投递角色、计划、记忆和必读项。真实消息通过 `POST /api/session.prompt` queue 模式续投，失败时不改投 Codex。DSH“设置 → 我的插件”需要启用 `RabiRoute Agent`；该插件提供线程桥、外发、计划、消息处理、记忆和 Agent 间通信工具。WebGUI 的 DSH 刷新和会话分页使用独立的 `GET /api/scan/agents/dsh`，不等待 Codex、Copilot CLI、AstrBot 或 Marvis 的通用扫描。匿名测试路由已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、`required` 正式回复和无效 Endpoint 失败关闭；独立扫描还会读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，缺失、未激活或版本不匹配时给出更新并重启 DSH 的修复提示。适配器仍标为实验，等待发布包和全新环境回归。
+- `dshModelProvider` / `dshModel` / `dshReasoningEffort`：可选的 DSH 主人格模型设置。WebGUI 在 DSH 可用时通过 `llm.models` 读取提供方、模型和推理强度；读取失败时仍可按 `provider/model` 手动输入。配置非空时，Gateway 在主人格下一次消息投递前先读取 `session.models`，仅在当前选择不一致时调用 `session.selectModel`，随后再调用 `session.prompt`。留空则沿用 DSH 绑定会话自己的当前设置。
 - `primaryAgentAdapter`：当前 Route 的主控 Agent，必须是 `agentAdapters` 中的一项。消息命中规则后只投递给主控，不会广播给列表里的其他 Agent。旧配置没有该字段时使用列表第一项；删除主控后自动改用仍存在的第一项。
 - Agent 端先使用基础能力层描述安装、认证、项目、会话和投递，再按真实支持情况声明托管任务扩展。Codex 与 DSH 都声明“消息处理 Agent 模式”“独立记忆整理 Agent”“计划协助会话”和“Hook 管理”；这些设置只归当前主 Agent，切换主 Agent 时会过滤另一端的辅助会话绑定。DSH 通过 `RabiRoute Agent` 插件提供对应工具；其它 Agent 端仍按各自真实能力显示。
 - `messageProcessingAgents.codex` / `messageProcessingAgents.dsh`：当前主 Agent 的消息处理 Agent 调度资格、任务数量上限和运行参数。只有与 `primaryAgentAdapter` 相同的条目生效；Codex 使用独立模型与推理强度，DSH 会话沿用 DSH 端配置的模型。默认关闭；开启后，聊天消息形成消息组并按不同话题复用或动态创建消息处理会话，ASR 和结构化事件照常直接投递。Agent 列表、上限截取和实际投递共用同一套权重顺序：依次考虑引用的 Agent 外发消息、原消息组、消息端、会话、说话人和最近使用时间，同分时才使用固定序号。`maxAgents` 可选，范围 `1–32`；未设置时默认为 `1`，达到上限后继续复用唯一消息处理会话。降低上限只解除超额会话与当前 Route 的消息处理池关联，不删除 owner 会话。消息端、计划回调、记忆回调和 Agent 待回复继续使用当前主 Agent 端，不会失败后切换到另一端。 Codex 新建或改名消息处理任务时，名称前缀取 Desktop 侧栏显示的 `Name`；不会使用状态库中的原始 `name`。

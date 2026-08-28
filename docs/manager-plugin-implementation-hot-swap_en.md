@@ -2,9 +2,48 @@
 
 # RabiRoute Plugin Platform Target Architecture
 
-> Status: design pending review. This document describes only the production architecture after one complete cutover. A transitional state is not a deliverable.
+> Status: implemented. This document describes the current production architecture and continuing gates.
 >
 > Primary readers: RabiRoute maintainers, plugin authors, and integration developers.
+
+## Current implementation
+
+- The production distribution Profile is `plugins/profiles/desktop.json` and selects 26 independent Manager plugin packages.
+- Seven plugins provide independent Web Bundles: `core`, `desktop`, `diagnostics`, `message-adapter-control`, `performance`, `persona`, and `speech`.
+- Built-in and out-of-tree plugins share `@rabiroute/plugin-sdk`, strict manifests, the capability graph, permission checks, revision isolation, generation switching, and effect scopes.
+- Manager, Catalog, Web modules, and Profile read only the new plugin platform. The old Bundle, loaders, Profile/Patch path, reconciler, catalog, process plugin host, and migration entries are deleted.
+- The WebGUI host contains no product page IDs. Pages, navigation, commands, and status cards come from plugin contributions.
+- Plugin builds write to a staging directory before replacing individual version directories. The watched `packages` and `profiles` roots remain in place, and stale packages are removed in the same build.
+- Long-lived host-owned resources such as Gateways use generation handoff leases. A new generation acquires its lease before the old generation releases it, and the resource stops only after the final lease is released.
+
+## DSH/Cordis comparison and decisions
+
+| Dimension | DSH/Cordis | Current RabiRoute implementation |
+|---|---|---|
+| Composition unit | Bundles, patches, and a plugin tree compose a Profile | Independent plugin packages plus one distribution Profile |
+| Dependencies | Plugins declare injection relationships and the configuration tree drives reconstruction | Manifests declare `provides/requires/optional`; the capability graph determines activation order and affected scope |
+| Lifecycle | `ctx.effect` owns reversible resources | Effect scopes own routes, listeners, timers, connections, and registrations |
+| Hot update | Cordis reconstructs the plugin tree and restores effects | A SHA-256 revision creates a candidate generation; successful preparation publishes atomically and failure keeps the previous revision |
+| Configuration | Bundle/Patch composition forms the configuration authority | The Profile selects instances, configuration, and grants only; it contains no business rules or migration logic |
+| Host boundary | One plugin tree for an Agent harness | Manager, Gateway, WebGUI, and Desktop share contracts but load separate entries |
+| External side effects | Reversible resources fit effects | Sends, approvals, and remote writes use Outbox, idempotent commands, or compensation instead of pretending to be reversible effects |
+
+RabiRoute keeps reversible effects, declared dependencies, configuration authority, stable instance IDs, and failed-update rollback. It does not keep Bundle/Patch layering or old-configuration compatibility because those mechanisms would recreate multiple production entries and migration branches.
+
+## Live acceptance on 2026-08-27
+
+| Phase | generation | Plugin revision | Result |
+|---|---|---|---|
+| Baseline | `40b15b48-aa08-4878-aaa0-18af7f53e5ba` | - | 26 plugins and 7 Web modules |
+| Install and enable | `e2870d32-821d-4ee1-8713-422d1333c06c` | `a64b7d11160ef89fdac84c7f2c8333f8c087bb233ea78d0aec94ffc7773a9f72` | Catalog 27, Web modules 8, route returned `marker=one` |
+| Valid update | `4fb5de14-084f-46c0-93ee-93ea4431345a` | `e045d8ead90bbf91f873e9383a5fa4d6d5e47548843603c3ff9d245b9d517f46` | New revision became active |
+| Failed candidate | `113b8439-ee35-4c7d-a22a-8a4c38a0a0ba` | Previous revision remained active | Catalog reported `update_failed_using_previous_revision`; the old route continued serving |
+| Recovery update | `04383a16-71d8-41c7-8e71-76e64d7b2de6` | `fea00581bf11f5bd17cd59711f9a309ce39f685ec98fcaee8ddfb0c2cd452b43` | Error cleared and the new revision became active |
+| Disable and uninstall | `a207ba57-52e6-4391-bfaf-fd4c92e2a861` | - | Catalog returned to 26, Web modules returned to 7, the plugin route returned 404, and diagnostics were empty |
+
+Manager PID stayed `62272` and Gateway PID stayed `68948` throughout installation, update, failed-candidate rollback, recovery, disable, and uninstall.
+
+The Gateway runtime plugin then switched automatically from generation `272df510-7524-441c-8542-a77ecfc6e171` to `da3e7fff-282e-4103-8902-23390594a468`. Manager PID stayed `72544`, Gateway PID stayed `90724`, `/api/gateways` returned 200, and reconciliation diagnostics remained empty.
 
 ## Decisions to approve
 
@@ -391,6 +430,15 @@ Each plugin must:
 - update implementation without changing process PID;
 - keep the old generation serving after candidate failure;
 - remove catalog entries, routes, pages, and state after uninstall.
+
+## Final gates on 2026-08-27
+
+- TypeScript noEmit, Vue type checking, and the 26-package architecture gate passed.
+- `npm test`: 1,401 passed, 1 skipped, and 0 failed.
+- `npm run build`: produced 26 independent Manager packages and 7 independent Web Bundles.
+- `npm run check:built-manager`: passed and produced a local read-only acceptance record.
+- Removed-runtime identifiers are zero in runtime source and configuration, zero in `dist/`, and zero in current-fact documents. The architecture checker keeps only five deleted path names as negative assertions that prevent those files from returning.
+- `git diff --check` passed.
 
 ## Architecture gates
 

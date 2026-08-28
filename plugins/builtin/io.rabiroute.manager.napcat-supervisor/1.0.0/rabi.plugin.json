@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.napcat-supervisor",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "manager.napcat-supervisor@1"
+  ],
+  "requires": [
+    "host.manager.napcat-supervisor@1",
+    "manager.core@1",
+    "manager.napcat-control@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

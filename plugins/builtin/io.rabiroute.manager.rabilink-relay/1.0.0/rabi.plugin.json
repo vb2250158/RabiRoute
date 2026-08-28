@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.rabilink-relay",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "manager.rabilink-relay@1"
+  ],
+  "requires": [
+    "host.manager.rabilink-relay@1",
+    "manager.core@1",
+    "manager.persona@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

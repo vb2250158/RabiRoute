@@ -1,7 +1,9 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
 import test from "node:test";
+import { activateCore } from "./bundles/builtinWebContributions";
 import { pluginCatalogStore } from "./pluginCatalogStore";
+import { activateWebPluginForTest } from "../tests/web-plugin-test-host";
 
 function catalogResponse(): Response {
   return new Response(JSON.stringify({
@@ -13,12 +15,12 @@ function catalogResponse(): Response {
       revision: { plugins: 1, contributions: 2 },
       plugins: [{
         instanceId: "manager:core",
-        pluginId: "rabi.manager.base",
+        pluginId: "io.rabiroute.manager.core",
         status: "active",
         manifest: {
-          id: "rabi.manager.base",
+          id: "io.rabiroute.manager.core",
           hosts: ["manager", "web", "desktop"],
-          capabilities: ["manager.plugin-catalog", "manager.contributions"]
+          capabilities: ["manager.core@1", "manager.contributions@2"]
         }
       }],
       contributions: [{
@@ -26,7 +28,7 @@ function catalogResponse(): Response {
         surface: "web.pages",
         id: "settings-page",
         instanceId: "manager:core",
-        pluginId: "rabi.manager.base",
+        pluginId: "io.rabiroute.manager.core",
         routeId: "global.settings",
         rendererId: "builtin.web-page.settings.v1",
         hosts: ["web"]
@@ -35,7 +37,7 @@ function catalogResponse(): Response {
         surface: "shared.themes",
         id: "dark-theme",
         instanceId: "manager:core",
-        pluginId: "rabi.manager.base",
+        pluginId: "io.rabiroute.manager.core",
         themeId: "dark",
         webResourceId: "builtin.web-theme.dark.v1",
         desktopResourceId: "builtin.desktop-theme.dark.v1",
@@ -52,6 +54,11 @@ test("catalog store removes plugin contributions after every catalog failure", a
     if (mode === "success") return catalogResponse();
     return new Response("unavailable", { status: 503 });
   }) as typeof fetch;
+
+  const disposeCore = activateWebPluginForTest(
+    { instanceId: "manager:core", pluginId: "io.rabiroute.manager.core" },
+    activateCore
+  );
 
   try {
     await pluginCatalogStore.refresh();
@@ -71,6 +78,7 @@ test("catalog store removes plugin contributions after every catalog failure", a
     assert.deepEqual(pluginCatalogStore.commands.value, []);
     assert.deepEqual(pluginCatalogStore.themes.value.options, []);
   } finally {
+    disposeCore();
     globalThis.fetch = originalFetch;
   }
 });

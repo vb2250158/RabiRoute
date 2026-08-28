@@ -14,7 +14,7 @@ import {
 function page(overrides: Record<string, unknown> = {}): unknown {
   return {
     kind: "page", surface: "web.pages", id: "performance-page",
-    instanceId: "manager:performance", pluginId: "rabi.manager.base",
+    instanceId: "manager:performance", pluginId: "io.rabiroute.manager.performance",
     routeId: "global.performance", rendererId: "builtin.web-page.performance.v1", hosts: ["web"], ...overrides
   };
 }
@@ -22,7 +22,7 @@ function page(overrides: Record<string, unknown> = {}): unknown {
 function navigation(overrides: Record<string, unknown> = {}): unknown {
   return {
     kind: "navigation", surface: "web.navigation", id: "performance",
-    instanceId: "manager:performance", pluginId: "rabi.manager.base",
+    instanceId: "manager:performance", pluginId: "io.rabiroute.manager.performance",
     label: { fallback: "性能监控" }, routeId: "global.performance",
     icon: "mdi-chart-timeline-variant", slot: "utility", hosts: ["web"], order: 60, ...overrides
   };
@@ -30,7 +30,7 @@ function navigation(overrides: Record<string, unknown> = {}): unknown {
 
 function registerPerformancePage(): () => void {
   return registerTrustedWebPage({
-    instanceId: "manager:performance", pluginId: "rabi.manager.base",
+    instanceId: "manager:performance", pluginId: "io.rabiroute.manager.performance",
     routeId: "global.performance", rendererId: "builtin.web-page.performance.v1",
     loader: async () => defineComponent({ template: "<div />" }),
     paths: [{ path: "/performance", title: "性能监控" }],

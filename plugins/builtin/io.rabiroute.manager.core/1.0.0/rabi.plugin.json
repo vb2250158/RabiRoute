@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.core",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs",
+    "web": "./web/client.mjs"
+  },
+  "provides": [
+    "manager.core@1"
+  ],
+  "requires": [
+    "host.manager.core@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

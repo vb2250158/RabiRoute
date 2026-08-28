@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  replaceCustomWebThemeResources,
+  initialWebThemePreference,
   registerTrustedWebThemeResource,
   registeredWebThemeResources,
   resolveWebThemeCatalog,
@@ -12,7 +12,7 @@ import {
 function theme(themeId: string, webResourceId: string, overrides: Record<string, unknown> = {}): unknown {
   return {
     kind: "theme", surface: "shared.themes", id: `${themeId}-theme`,
-    instanceId: "manager:core", pluginId: "rabi.manager.base", themeId, webResourceId, hosts: ["web", "desktop"], ...overrides
+    instanceId: "manager:core", pluginId: "io.rabiroute.manager.core", themeId, webResourceId, hosts: ["web", "desktop"], ...overrides
   };
 }
 
@@ -50,17 +50,7 @@ test("unknown catalog selections use the fixed recovery resource and registratio
   } finally { dispose(); }
 });
 
-test("Manager custom themes replace stale registry entries instead of accumulating", () => {
-  const customTheme = {
-    id: "custom:night-rain-green",
-    name: "夜雨绿",
-    baseTheme: "dark",
-    colors: { accent: "#22c55e" },
-    styles: {}
-  };
-  replaceCustomWebThemeResources([customTheme]);
-  assert.deepEqual(resolveWebThemeCatalog(null).options.map(option => option.themeId), [customTheme.id]);
-  replaceCustomWebThemeResources([]);
-  assert.deepEqual(resolveWebThemeCatalog(null).options, []);
-  assert.equal(resolveWebThemeResource(resolveWebThemeCatalog(null), customTheme.id).themeId, "system");
+test("initial preference survives asynchronous theme catalog registration", () => {
+  assert.equal(initialWebThemePreference("", "dark"), "dark");
+  assert.equal(initialWebThemePreference("trusted.solarized", "light"), "trusted.solarized");
 });

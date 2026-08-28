@@ -10,17 +10,30 @@ import {
 import { resolvePersistedProjectPath } from "../shared/projectPaths.js";
 import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { CodexDesktopBridge } from "../codexDesktopBridge.js";
-import { listCodexThreads } from "../codexRuntime.js";
+import { listCodexModels, listCodexThreads, type CodexModelCatalogEntry } from "../codexRuntime.js";
 import {
   DEFAULT_DSH_BASE_URL,
   DSH_RABIROUTE_TOOL_NAMES,
   EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION,
+  listDshModels,
   listDshSessions,
+  type DshModelCatalogEntry,
   readDshRabiRoutePluginStatus,
   type DshRabiRoutePluginStatus
 } from "../dshSessionBridge.js";
 
 type AgentMaturity = AgentAdapterMaturity;
+
+export type AgentScanModel = {
+  id: string;
+  name: string;
+  provider?: string;
+  providerName?: string;
+  description?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  reasoningEfforts?: Array<{ id: string; description?: string }>;
+};
 
 type AgentScanSession = {
   id?: string;
@@ -80,6 +93,7 @@ export type AgentScanResult = {
   projects?: AgentScanProject[];
   sessions?: AgentScanSession[];
   sessionPage?: AgentSessionPage;
+  models?: AgentScanModel[];
   plugins?: Array<{ id: string; name: string; installed: boolean; version?: string; healthy?: boolean; details?: string[] }>;
   warnings?: string[];
   transport?: { protocol: string; mode: string };
@@ -168,8 +182,11 @@ export type AgentManagerApiContext = {
     query: AgentSessionPageQuery,
     options?: { signal?: AbortSignal }
   ) => Promise<AgentScanSession[]>;
+  isCodexDesktopReady?: () => Promise<boolean>;
+  listCodexModels?: (cwd: string, timeoutMs?: number) => Promise<CodexModelCatalogEntry[]>;
   dshSessions?: AgentScanSession[];
   listDshSessions?: (query: AgentSessionPageQuery & { baseUrl: string }) => Promise<AgentScanSession[]>;
+  listDshModels?: (baseUrl: string) => Promise<{ models: DshModelCatalogEntry[]; warnings: string[] }>;
   readDshRabiRoutePluginStatus?: (baseUrl: string) => Promise<DshRabiRoutePluginStatus>;
 };
 
@@ -201,6 +218,15 @@ export async function scanDshAgentAdapter(
         .then((status) => ({ status, error: "" }))
         .catch((error) => ({ status: undefined, error: error instanceof Error ? error.message : String(error) }))
     : Promise.resolve({ status: undefined, error: "" });
+  const shouldReadDshModels = dshEndpointHealthy && (
+    ctx.listDshModels != null
+    || (ctx.dshSessions == null && ctx.listDshSessions == null && ctx.readDshRabiRoutePluginStatus == null)
+  );
+  const modelCatalogPromise = shouldReadDshModels
+    ? (ctx.listDshModels ?? listDshModels)(dshBaseUrl)
+        .then((catalog) => ({ catalog, error: "" }))
+        .catch((error) => ({ catalog: { models: [], warnings: [] }, error: error instanceof Error ? error.message : String(error) }))
+    : Promise.resolve({ catalog: { models: [], warnings: [] }, error: "" });
   let dshSessionWarning = "";
   let rawDshSessions: AgentScanSession[] = ctx.dshSessions ?? [];
   if (!ctx.dshSessions && (ctx.listDshSessions || dshEndpointHealthy)) {
@@ -252,7 +278,7 @@ export async function scanDshAgentAdapter(
     ...configuredDshCwds,
     ...dshSessions.map((session) => session.projectPath).filter((value): value is string => Boolean(value))
   ]);
-  const pluginRead = await pluginStatusPromise;
+  const [pluginRead, modelRead] = await Promise.all([pluginStatusPromise, modelCatalogPromise]);
   const pluginStatus = pluginRead.status;
   const pluginVersionMatches = pluginStatus?.version === EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION;
   const pluginToolCoverage = DSH_RABIROUTE_TOOL_NAMES.every((name) => pluginStatus?.tools.includes(name));
@@ -282,6 +308,15 @@ export async function scanDshAgentAdapter(
       projects: dshProjects,
       sessions: dshSessions,
       sessionPage: dshSessionPage,
+      models: modelRead.catalog.models.map((model) => ({
+        id: model.id,
+        name: model.name,
+        provider: model.provider,
+        providerName: model.providerName,
+        ...(model.description ? { description: model.description } : {}),
+        ...(model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
+        reasoningEfforts: model.reasoningEfforts
+      })),
       plugins: [{
         id: "rabiroute-agent",
         name: "RabiRoute Agent",
@@ -292,6 +327,8 @@ export async function scanDshAgentAdapter(
       }],
       warnings: [
         ...pluginWarnings,
+        ...(modelRead.error ? [`读取 DSH 模型目录失败：${modelRead.error}`] : []),
+        ...modelRead.catalog.warnings.map((warning) => `DSH 模型目录：${warning}`),
         ...(dshSessionWarning ? [dshSessionWarning] : []),
         ...(dshEndpoints.some((endpoint) => endpoint.healthy) ? [] : ["DSH apiproxy 不可用；请启动 DSH 并确认服务地址。"]),
         ...(dshSessions.length === 0 && !dshSessionWarning ? ["未发现 DSH 会话；保存配置时可按名称和工作目录创建。"] : []),
@@ -323,7 +360,7 @@ export async function scanAgentAdapters(
   const desktopReadyStartedAt = performance.now();
   let desktopReadyFailed = false;
   try {
-    codexDesktopReady = await desktopBridge.isReady();
+    codexDesktopReady = await (ctx.isCodexDesktopReady ?? (() => desktopBridge.isReady()))();
     desktopReadyFailed = !codexDesktopReady;
   } finally {
     desktopBridge.close();
@@ -333,6 +370,12 @@ export async function scanAgentAdapters(
       error: desktopReadyFailed
     });
   }
+  const shouldReadCodexModels = codexDesktopReady && (ctx.listCodexModels != null || ctx.codexSessions == null);
+  const codexModelsPromise = shouldReadCodexModels
+    ? (ctx.listCodexModels ?? listCodexModels)(ctx.rootDir, codexCatalogTimeoutMs)
+        .then((models) => ({ models, error: "" }))
+        .catch((error) => ({ models: [] as CodexModelCatalogEntry[], error: error instanceof Error ? error.message : String(error) }))
+    : Promise.resolve({ models: [] as CodexModelCatalogEntry[], error: "" });
   let codexSessionWarning = "";
   let discoveredCodexSessions: AgentScanSession[] = [];
   if (!ctx.codexSessions) {
@@ -384,6 +427,7 @@ export async function scanAgentAdapters(
       });
     }
   }
+  const codexModelRead = await codexModelsPromise;
   const rawCodexSessions = ctx.codexSessions ?? discoveredCodexSessions;
   const codexHasMore = rawCodexSessions.length > codexLimit;
   const codexSessions = rawCodexSessions.slice(0, codexLimit);
@@ -475,7 +519,11 @@ export async function scanAgentAdapters(
       sessions: codexSessions,
       sessionPage: codexSessionPage,
       desktopReady: codexDesktopReady,
-      sessionWarning: codexSessionWarning
+      models: codexModelRead.models,
+      sessionWarning: [
+        codexSessionWarning,
+        codexModelRead.error ? `读取 Codex 模型目录失败：${codexModelRead.error}` : ""
+      ].filter(Boolean).join("；")
     }),
     copilotCli: {
       ...agentScanManifestFields("copilotCli"),
@@ -547,6 +595,7 @@ export function buildCodexAgentScan(input: {
   sessions: AgentScanSession[];
   sessionPage?: AgentSessionPage;
   desktopReady?: boolean;
+  models?: CodexModelCatalogEntry[];
   sessionWarning?: string;
 }): AgentScanResult {
   const codexBins = [...new Set(input.codexBins.filter(Boolean))];
@@ -562,6 +611,14 @@ export function buildCodexAgentScan(input: {
     // Desktop owner for the exact opaque task id.
     sessions: input.sessions,
     ...(input.sessionPage ? { sessionPage: input.sessionPage } : {}),
+    models: (input.models ?? []).map((model) => ({
+      id: model.id,
+      name: model.name,
+      ...(model.description ? { description: model.description } : {}),
+      ...(model.isDefault ? { isDefault: true } : {}),
+      ...(model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
+      reasoningEfforts: model.reasoningEfforts
+    })),
     warnings: [
       ...(input.desktopReady === false ? ["Codex/ChatGPT Desktop 未就绪；RabiRoute 不会启动备用 Runtime，请先打开 Desktop。"] : []),
       ...(codexBins.length === 0 ? ["未发现项目锁定的 @openai/codex；已有 Desktop 任务仍可投递，但无法从新名称创建空任务。"] : []),

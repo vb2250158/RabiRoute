@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.speech",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs",
+    "web": "./web/client.mjs"
+  },
+  "provides": [
+    "manager.speech@1"
+  ],
+  "requires": [
+    "host.manager.speech@1",
+    "manager.core@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

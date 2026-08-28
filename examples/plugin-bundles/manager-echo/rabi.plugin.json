@@ -2,7 +2,12 @@
   "schemaVersion": 1,
   "id": "example.manager.echo",
   "version": "1.0.0",
-  "hosts": ["manager", "web"],
-  "entry": "./index.mjs",
-  "webEntry": "./client.mjs"
+  "entries": {
+    "manager": "./manager.mjs",
+    "web": "./web/client.mjs"
+  },
+  "provides": ["example.manager.echo@1"],
+  "requires": ["host.manager.http@1"],
+  "optional": [],
+  "permissions": ["manager.http"]
 }

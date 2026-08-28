@@ -1,3 +1,5 @@
+import { isPluginCapabilityReference } from "../../src/plugin-kernel/capabilityReference.js";
+
 export type WebPluginCatalogRevision = Readonly<{
   plugins: number;
   contributions: number;
@@ -64,6 +66,24 @@ function parseSymbols(value: unknown, field: string): readonly string[] {
   return symbols;
 }
 
+function parseCapabilities(value: unknown, field: string): readonly string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`Plugin catalog ${field} is invalid.`);
+  const capabilities = value.map((entry, index) => {
+    if (typeof entry !== "string") throw new Error(`Plugin catalog ${field}[${index}] is invalid.`);
+    const normalized = entry.trim();
+    if (
+      normalized !== entry
+      || !isPluginCapabilityReference(normalized)
+    ) {
+      throw new Error(`Plugin catalog ${field}[${index}] is invalid.`);
+    }
+    return normalized;
+  });
+  if (new Set(capabilities).size !== capabilities.length) throw new Error(`Plugin catalog ${field} is invalid.`);
+  return capabilities;
+}
+
 function parseHosts(value: unknown, field: string): readonly WebPluginHost[] {
   const hosts = parseSymbols(value, field);
   if (!hosts.length || hosts.some(host => !pluginHosts.has(host as WebPluginHost))) {
@@ -87,7 +107,7 @@ function parsePlugin(value: unknown, index: number): WebPluginCatalogPlugin {
     manifest: {
       id: controlledSymbol(value.manifest.id, `plugin[${index}] manifest.id`),
       hosts: parseHosts(value.manifest.hosts, `plugin[${index}] manifest.hosts`),
-      capabilities: parseSymbols(value.manifest.capabilities, `plugin[${index}] manifest.capabilities`)
+      capabilities: parseCapabilities(value.manifest.capabilities, `plugin[${index}] manifest.capabilities`)
     }
   };
 }

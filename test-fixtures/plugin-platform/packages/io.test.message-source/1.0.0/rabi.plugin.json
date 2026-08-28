@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "io.test.message-source",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "message.source.fixture@1"
+  ],
+  "requires": [
+    "host.test-events@1"
+  ],
+  "optional": [],
+  "permissions": [
+    "message.receive"
+  ]
+}

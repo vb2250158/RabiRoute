@@ -1,0 +1,26 @@
+{
+  "id": "memory-rabiroute-independent-plugin-platform",
+  "title": "RabiRoute 使用独立插件包和统一插件内核",
+  "content": "RabiRoute 的正式插件真源是一个发行 Profile 和独立插件包目录。26 个内置插件分别拥有 Manifest、Manager entry 和可选 Web entry；7 个 Web 插件分别发布自己的界面模块。内置插件与树外插件共用 @rabiroute/plugin-sdk、能力依赖、权限授权、内容 revision、generation 切换和 effect 释放。Manager、WebGUI 与 Desktop 读取同一贡献目录，页面、导航、状态、设置和主题不再由宿主维护第二份业务清单。旧 rabi.manager.base、旧 Profile/Patch、旧配置读取、旧 Reconciler、旧 Catalog 和进程插件宿主已经删除，正式运行不保留迁移或备用加载路径。树外插件通过独立 Profile、包根目录和 grants 接入；候选 generation 失败时上一 revision 继续服务，成功切换后旧路由、服务、监听器和界面贡献全部释放。界面主题属于插件贡献，浏览器会保留已保存的主题选择，等待异步主题目录加载后再解析，因此刷新不会把深色或浅色选择改回跟随系统。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：独立插件平台、统一贡献目录和主题持久化"
+  },
+  "createdAt": "2026-08-28T12:00:00+08:00",
+  "updatedAt": "2026-08-28T12:00:00+08:00",
+  "keywords": [
+    "RabiRoute",
+    "Plugin Kernel",
+    "@rabiroute/plugin-sdk",
+    "independent packages",
+    "Profile",
+    "capability graph",
+    "permissions",
+    "generation",
+    "effect disposal",
+    "Web Bundle",
+    "contribution catalog",
+    "theme persistence",
+    "out-of-tree plugin"
+  ]
+}

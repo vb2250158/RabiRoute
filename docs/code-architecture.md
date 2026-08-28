@@ -272,7 +272,7 @@ Agent 端 Adapter 在 `src/agentAdapters/`：
 - `managerApi.ts`：manager 用于扫描、安装、登录、打开处理端的控制面能力。
 - `astrbotAdapter.ts`：AstrBot 投递实现。
 
-`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/cordisRoot.ts` 提供 Gateway/Manager 共用的根 Context 生命周期：同 key 初始化并发去重、失败后重试、销毁等待初始化，以及幂等根销毁。`gatewayCordisRoot.ts` 和 `managerCordisRoot.ts` 提供对称但彼此独立的宿主单例。常驻 Gateway 在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；销毁单个 Fiber 只移除对应定义，销毁根 Context 会撤销三个 Registry 的全部定义与副作用。`src/runtime/messageAdapterRuntime.ts` 提供消息端 Definition 注册和实例 Fiber。通用 Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有定时器；NapCat Fiber 等待全部启用实例的 WebSocket listener 就绪，并在卸载时终止客户端、关闭多实例端口、阻止新消息处理和写入 `disabled`。任一 NapCat 实例启动失败会回滚先前 listener。`src/index.ts` 只识别调用类型并动态加载一次性命令或常驻 Gateway 入口；一次性命令不能启动 Message Adapter Runtime 或 Contribution Runtime。常驻入口只组合 `MessageAdapterRegistry` 中的九种消息端，并在正常退出或启动失败时销毁整个根 Context。共享 `MessageEndpointType` 描述 Route 可接收的全部来源，`GatewayMessageAdapterType` 只描述可由 Gateway Fiber 挂载的类型；纯 `speech`、`rolePanel`、`wearable` 或 `remoteAgent` Route 不启动子进程。Cordis API 不进入路由、消息模板、Webhook payload 解析或具体处理端实现。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入都读取共享 Agent Adapter manifest。Manager 启动时通过 `managerPluginRuntime.ts` 在 Manager 根下挂载统一 `PluginCatalog` 与 `ContributionRegistry`，内置 Manager 插件声明当前 WebGUI 页面、导航、设置区、状态卡、主题，以及 Desktop 命令、菜单、快捷键和主题；`GET /api/plugins/catalog` 始终返回完整插件实例清单，并可按 `web`、`desktop` 筛选表现贡献。Manager 启动期间任一步骤失败都会停止已启动资源、关闭 HTTP/SSE、移除信号监听并销毁 Manager 根。Desktop/WebGUI 是“一切皆插件”模型中的最小宿主，其可扩展入口由该插件贡献目录提供。WebGUI 与 Desktop 通过宿主拥有的可信注册表解析贡献。注册表可以增加新的 renderer、route、handler 和 resource contract；导航和命令引用仍须解析到同一插件实例和注册批次。未知、未注册、跨插件或宿主不支持的贡献失败关闭。两个宿主都按本地能力注册表判断 `requiredCapabilities`，不会使用插件 manifest 代替宿主能力。第三方任意表现代码仍需受控 Extension Host。
+`src/runtime/cordisHost.ts` 是 Cordis 兼容边界，`src/runtime/cordisRoot.ts` 提供 Gateway/Manager 共用的根 Context 生命周期：同 key 初始化并发去重、失败后重试、销毁等待初始化，以及幂等根销毁。`gatewayCordisRoot.ts` 和 `managerCordisRoot.ts` 提供对称但彼此独立的宿主单例。常驻 Gateway 在同一根下挂载 Agent Adapter Registry、Message Adapter Registry 和 Contribution Registry；销毁单个 Fiber 只移除对应定义，销毁根 Context 会撤销三个 Registry 的全部定义与副作用。`src/runtime/messageAdapterRuntime.ts` 提供消息端 Definition 注册和实例 Fiber。通用 Webhook Fiber 持有 HTTP listener；Heartbeat Fiber 持有定时器；NapCat Fiber 等待全部启用实例的 WebSocket listener 就绪，并在卸载时终止客户端、关闭多实例端口、阻止新消息处理和写入 `disabled`。任一 NapCat 实例启动失败会回滚先前 listener。`src/index.ts` 只识别调用类型并动态加载一次性命令或常驻 Gateway 入口；一次性命令不能启动 Message Adapter Runtime 或 Contribution Runtime。常驻入口只组合 `MessageAdapterRegistry` 中的九种消息端，并在正常退出或启动失败时销毁整个根 Context。共享 `MessageEndpointType` 描述 Route 可接收的全部来源，`GatewayMessageAdapterType` 只描述可由 Gateway Fiber 挂载的类型；纯 `speech`、`rolePanel`、`wearable` 或 `remoteAgent` Route 不启动子进程。Cordis API 不进入路由、消息模板、Webhook payload 解析或具体处理端实现。类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入都读取共享 Agent Adapter manifest。Manager 启动时由 `src/plugin-kernel/` 装载独立插件包，并从 generation 的不可变快照生成 Plugin Catalog。插件声明 WebGUI 页面、导航、设置区、状态卡、主题，以及 Desktop 命令、菜单、快捷键和主题；`GET /api/plugins/catalog` 返回完整实例清单，并可按 `web`、`desktop` 筛选表现贡献。Manager 启动期间任一步骤失败都会停止已启动资源、关闭 HTTP/SSE、移除信号监听并销毁 Manager 根。Desktop/WebGUI 是“一切皆插件”模型中的最小宿主，其可扩展入口由该插件贡献目录提供。WebGUI 与 Desktop 通过宿主拥有的可信注册表解析贡献。注册表可以增加新的 renderer、route、handler 和 resource contract；导航和命令引用仍须解析到同一插件实例和注册批次。未知、未注册、跨插件或宿主不支持的贡献失败关闭。两个宿主都按本地能力注册表判断 `requiredCapabilities`，不会使用插件 manifest 代替宿主能力。第三方任意表现代码仍需受控 Extension Host。
 
 DSH 普通插件在同一 Node 进程内运行，Cordis `isolate` 只隔离服务作用域。RabiRoute 要求未知或高风险第三方扩展在独立进程运行，不把进程内 Context 当作安全沙箱。第三方任意表现代码的受控 Extension Host 属于后续路线。
 
@@ -281,7 +281,7 @@ DSH 普通插件在同一 Node 进程内运行，Cordis `isolate` 只隔离服�
 - `codexRuntime.ts`：Codex 业务适配层，负责固定线程身份、thread/turn 选择、运行中 steer 和运行状态上报。
 - `codexRolloutActivity.ts`：从 Desktop 任务记录末尾向前分块读取，只检查最近一轮是否结束；读取异步执行，并按文件版本缓存结果。
 - `codexDesktopBridge.ts`：Codex 任务只读模型的唯一入口。完整 ID、cwd、归档和 rollout 定位来自 Desktop 状态；对外显示名称统一覆盖为左侧聊天栏索引中的当前名称；随后通过 Desktop IPC 向目标任务 owner start/steer。
-- `codexAppServerClient.ts`：仅供创建、命名空任务的短生命周期元数据驱动；不得执行真实 prompt。
+- `codexAppServerClient.ts`：短生命周期元数据驱动，用于创建、命名空任务和读取 `model/list`；不得执行真实 prompt。
 - `agentThreads.ts`：受控的本机任务桥，提供 list/read/resolve/create/rename/send；`rename` 只改 Desktop 可见名称，不改变完整 ID + workspace 身份。
 
 Codex 任务有两个不同但唯一归口的事实：身份只由完整任务 ID + workspace 决定；当前显示名只由 Desktop 左侧聊天栏决定。SQLite `threads.title`、首轮 prompt、Route 的 `codexThreadName` 和运行状态里的 `monitorThreadName` 都不是新的名称真源。`codexThreadName` 只在没有有效 ID 时作为首次查找/创建提示；一旦 ID 有效，改名不会改变绑定，也不会触发重建。
@@ -375,50 +375,24 @@ startManager();
 
 ### Manager 插件运行时
 
-正式 Manager 只通过 `startManager()` 初始化。它先挂载 `managerSharedResourcesRuntime.ts` 和唯一的 `managerPluginHost.ts`，再从 Profile 解析版本化 Bundle。Profile 缺失时首轮装载读取 `rabi.manager.base` 自带的默认 Profile；HTTP listener 就绪后异步写入正式 Profile 并一次性迁移旧 `manager.json.managerPlugins`。内置 26 个实例由 `rabi.manager.base` Bundle 进入同一 Loader；Manager 只提供按实例受限的资源激活 capability，不再替 Bundle 创建 definition。`managerPluginReconciler.ts` 串行启停或重载 revision 变化的实例。激活失败时恢复旧 Fiber；恢复失败保留明确错误状态。
+正式 Manager 只通过 `startManager()` 初始化。`src/plugin-kernel/` 负责 Manifest 校验、包 revision 隔离、单一 Profile、能力图、权限、generation 和 effect 释放。默认构建从 `dist/plugins/profiles/desktop.json` 与 `dist/plugins/packages/` 加载；树外插件可通过 `RABIROUTE_PLUGIN_PROFILE` 和 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 选择独立 Profile 与额外包根目录。运行时不读取旧配置格式，也不从源码插件目录加载。
 
-每个 definition 声明 `provides`、`requires` 和 `optional`。Reconciler 先拒绝同一能力的多个已启用 Provider，再按必需依赖排序；缺少 `requires` 的实例进入 `waiting_dependency`。可选 Provider 存在时先于消费者启动。每个实例的依赖 revision 会递归包含直接和传递 Provider 的 revision、启用状态、能力关系与缺失能力摘要，因此 `root -> middle -> leaf` 中的 root 变化会把 middle 和 leaf 都纳入同一重启批次，同时不影响无依赖实例。`PluginCatalog.refreshDeclaration()` 在重载时更新 manifest 与 `missingCapabilities`，支持同一实例 `active -> waiting_dependency -> active`。停用按当前应用顺序逆序执行。
+`plugins/builtin/` 中的 26 个内置能力各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
 
-`plugins/packages/rabi.manager.base/0.2.1/index.mjs` 直接声明 26 个内置实例、依赖和表现贡献，`rabi.manager.profile.json` 直接声明默认 Profile。Manager 只向基础 Bundle 的每个实例发放受限的资源激活 capability；它不再为 Bundle 创建 definition。
+`GenerationRuntime` 按真实依赖组件切换。revision、配置、权限和依赖 revision 不变时复用现有实例；变化只重载受影响组件。缺少必需能力的实例进入 `waiting_dependency`。候选激活或 effect 发布失败时，旧组件继续服务；不相关组件照常更新。成功发布后释放旧 effect scope。Manager API 从 generation 的不可变 service 与 contribution 快照生成 Plugin Catalog；Web 模块按包 ID、版本和 SHA-256 revision 发布不可变资源。
 
 ```text
-manager:core
-manager:persona
-manager:speech
-manager:performance
-manager:desktop
-manager:gateway-runtime
-manager:bilibili-history
-manager:route-control
-manager:message-adapter-control
-manager:agent-adapter-catalog
-manager:agent-state-control
-manager:agent-thread-control
-manager:agent-communication
-manager:copilot-control
-manager:astrbot-control
-manager:marvis-control
-manager:remote-agent
-manager:diagnostics
-manager:rabilink-relay
-manager:memory-consolidation
-manager:fennenote-output
-manager:message-processing-control
-manager:message-processing-automation
-manager:plan-feedback-delivery
-manager:napcat-control
-manager:napcat-supervisor
+plugins/contracts/plugin-sdk/
+plugins/builtin/<package-id>/1.0.0/
+plugins/profiles/desktop.json
+src/plugin-kernel/
+dist/plugins/
+data/plugins/.runtime/
 ```
-
-其中 7 个实例声明页面、导航、设置区、状态卡、命令、快捷键、托盘菜单或主题贡献；其余 19 个实例没有表现贡献，但仍有实际 HTTP、服务、进程、定时器、监听器或对账生命周期。空的 contribution 数组不等于空 hook。
-
-Desktop 与 WebGUI 是最小宿主。表现 Contribution Catalog 只发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command 注册表执行快速配置、新增 Route、打开 Manager 配置和保存页面；可信 renderer 注册表挂载设置区与状态卡。Desktop 的冻结 Registry 同时解析内置合同和显式允许的可信扩展。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 挂载系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动贡献同时控制系统划词、角色/计划/记忆/项目/运行目录和手动触发面板操作。目录不可用或刷新失败时清空旧目录，撤销命令、renderer、面板操作和系统监听，只保留固定 WebGUI 恢复入口。可信 Python entry point 仍在 Desktop 进程内执行；owner-scoped registrar 与更强隔离属于后续 Extension Host。
-
-RibiWebGUI 的固定启动核不等待可选 Web Bundle。`main.ts` 在 LAN 地址规范化后立即挂载 Vue，随后后台读取插件目录并激活扩展模块。`builtinStartupPages.ts` 预先注册 `route.knowledge`，因此 `#/routes/:id/knowledge` 在目录尚未返回、延迟或某个可选 Bundle 失败时仍可显示壳和该页的懒加载状态；目录到达后只负责验证同一 `pluginId + instanceId + rendererId` 的导航贡献。冷启动直接访问可选页面时，路由会保留原始地址并在对应 Bundle 注册后自动回到该页面；只有目录确实不可用时才停留在插件恢复页。`gatewayStore.loadRouteSummaries()` 只从 `/gateways?summary=1` 投影 Route 身份、配置名、人格 ID 和运行标记，知识页先以它解析 URL 指向的人格；完整 Gateway 配置、元数据和网络选项随后后台读取，仍是编辑和诊断的权威数据源。知识页计划先读取 8 条摘要以显示首屏，再以串行后台分页读取同一筛选结果直到 `nextCursor` 为空；每页之间让出一次渲染帧，路由切换、页面隐藏或卸载会使请求版本失效并停止后续请求。浏览器只保留计划摘要，计划正文和附件仍只在阅读位置附近读取；卡片窗口继续按滚动分批挂载。计划目录只监听每个人格的 `plans/` 根目录递归变化；文件系统不支持递归监听时回退到 500 ms TTL。根 HTML 使用 `no-store`，内容哈希静态资源与带 revision 的 Web Bundle 模块使用长期 immutable 缓存：重新打开页面时必定取得最新入口，未变更的 Bundle 不重复下载。Manager Base 的 revision 模块只重导出当前 `/assets/` 中的 Base 入口，不再复制 Vue、Pinia、Store 或页面 chunk；因此可选页面与固定启动核使用同一个 Vue/Pinia 模块实例。前端性能上报同一时刻只保留一个请求；首个样本至少在 30 秒后发送，单次上传超过 2 秒即取消，失败时保留采样并退避，不能在 Manager 变慢时形成重叠上报或占用首屏请求。消息处理看板只保存当前控制状态。状态快照升级到 v2：`pending_dispatch`、处理中和待发送等未完成需求最多保留 24 小时；`sent`、`not_required` 和 `send_failed`（包括计划通知）只保留 15 分钟的重试/查看窗口。需求过期时，Manager 删除完整消息、附件和 reply context，只保留 Route、会话和消息组标识计算出的 SHA-256 去重键至多 7 天；重放命中该键直接返回 `replay_suppressed`，不再创建 Agent 投递或看板事件。计划通知订阅保留 7 天，订阅自身持有后续通知需要的来源与 worker，过期需求不会因计划订阅再次保留。启动时仅迁移一次旧 v1 本地快照，之后只写 v2。消息记录、计划文件和发送回执仍分别保存各自的业务事实。
 
 ### Manager 插件持有的运行资源
 
-26 个实例的资源激活函数都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginRuntime.unmount() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`，避免同层 Cordis disposer 并发时共享资源先停。共享资源 Runtime 内先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。停止完成后这些资源可以重新启动。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
+26 个实例的资源激活函数都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginKernel.dispose() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`。共享资源 Runtime 先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
 ```text
 unregister routes
@@ -428,9 +402,9 @@ unregister routes
 → await resource exit
 ```
 
-`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 启动后和健康检查后各收集一次 PID；FenneNote 等待转发任务退出。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。人格同步 LAN Server 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。动态对账按当前激活顺序逆序停用变化批次，再按期望定义顺序启动。
+`ManagerPluginRequestTracker` 拒绝新工作，并同时等待 HTTP response 与 `trackOperation()` 登记的实际业务 Promise。拥有外部资源的插件先移除路由批次，再等待已接收的发送、任务、配置写入、扫描和回调，最后在同一个 disposer 中停止资源。Remote Agent 回调使用插件级 `AbortSignal` 并等待真正结束；NapCat 启动后和健康检查后各收集一次 PID；FenneNote 等待转发任务退出。RabiLink 保存活动运行 Promise，停止时 abort 并等待运行结束；停止期间排队的配置会在 stop 完成后重启，但第二次 `stop()` 会先清除目标 signature，从而取消该排队重启。人格同步 LAN Server 关闭 listener 和活动 Socket；本地 WebGUI、Speech、SSE 与 Relay 回写都绑定停止信号。配置 watcher 的 `afterReload` 和 Rabi 身份配置 PATCH 都等待异步 Relay 同步。`GenerationRuntime` 按依赖组件生成候选并发布不可变快照，发布成功后逆序释放旧 effect scope；候选失败时释放候选资源并继续使用旧 revision。
 
-可信内置插件运行在 Manager 主进程。`processPluginProtocol.ts`、`processPluginHost.ts` 与 `processManagerPlugin.ts` 为未知、不可信或高风险扩展提供独立进程、能力授权、健康检查、超时、脱敏错误和 Windows 进程树清理。这是 RabiRoute 增加的安全策略；DSH 普通插件默认仍在主进程运行，Cordis scope/isolate 只处理可见性、依赖和资源所有权。
+内置与树外 Manager 插件都在 Manager 进程内执行，并受同一 Manifest、能力图、权限和 effect scope 约束。当前插件合同面向可信扩展；需要运行不可信代码时，应新增独立进程宿主并定义跨进程能力合同，不能把进程内权限检查当作安全沙箱。
 
 业务事实仍由原模块拥有：Route 配置归配置仓库，运行状态归 `RuntimeRegistry`，消息处理记录归 `MessageProcessingBoardStore`，Outbox 归外发模块，计划和记忆归 Role Knowledge。插件只拥有自己的注册和运行资源。
 
@@ -565,7 +539,7 @@ Gateway 配置的事实源 Module。
 关键位置：
 
 - `src/stores/gatewayStore.ts`：调用 manager HTTP 接口并维护配置状态。首屏使用 `/gateways?summary=1&includeConfig=1`，保留完整可编辑 Route 定义，但只取轻量运行状态；控制台、消息适配器和日志诊断页通过 `ensureDiagnostics()` 按需补取完整诊断，避免人格页和知识页反复扫描日志、消息文件与所有人格全文。
-- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。`roleKnowledgeClient.ts` 的 `loadRolePlanPageWithPriorityDetails()` 先取首批 8 条摘要，再并行取这 8 张卡片的完整详情，页面一次性应用摘要与详情，避免目录批量渲染推迟首屏详情。随后在页面可见期间按最多 250 条自动补齐计划摘要，后续页用 `facets=0` 避免重复生成和传输首页筛选统计；记忆先取当前可见分类的 24 条，随后按最多 100 条自动补齐。Manager 的控制面 JSON 响应使用紧凑编码，单计划详情复用已预热的计划列表缓存。计划目录冷缓存通过异步并发文件读取建立；同一人格的并发请求共用一个填充任务。文件监听只重读变化文件，完整失效使用代次检查阻止旧快照覆盖新写入。目录跳转仍只挂载以目标为起点的有界窗口，并把目标详情移到现有 10 并发队列最前；不新增浏览器侧正式数据源。隐藏浏览器标签页停止继续加载并关闭自己的 Manager 事件连接，重新可见后补查并继续。审批合同按 Manager 返回的 `presentation.approval.stepId` 嵌入对应步骤卡片，只有 `ready/enabled=true` 可提交正式审批决定；没有审批状态的进行中计划在详情顶部显示计划级引导入口，引导只提交 `planId`，不提交 `stepId`。提交成功后只更新本地卡片，并监听 `plan_feedback_changed` 读取单计划摘要，不整页重拉；目录、渐进加载和无高度动画的详情展开保持现有边界。所有计划详情另有按需读取的折叠“工作留痕”：`plans/feedback/<planId>.jsonl` 提供计划级引导与 `planId / stepId` 审批意见，`plans/history/<planId>.jsonl` 提供每次创建、更新和归档后的完整计划快照；不依赖当前 `presentation.approval`，因此已批准、已完成和已归档计划仍可查看原审批合同和工作记录。
+- `src/pages/RoleKnowledgePage.vue`：通过 `/api/roles/:roleId/plans` 和 `/memory` 展示当前人格计划与记忆；计划主体只读。首屏使用 `loadRolePlanPage()` 读取 8 条摘要并立即挂载，摘要包含当前步骤标题、进度和附件数量；后续摘要仍按每批 8 条后台补齐并使用 `facets=0`。视口附近通过 `loadRolePlanPreview()` 请求 `detail=preview`，只合并计划描述、当前步骤说明、阻塞信息与附件元数据，队列最多 4 并发；附件保持在折叠卡片中可见。展开卡片时 `loadFullPlanDetails()` 再调用完整单计划接口，取得全部步骤和审批合同，并独立刷新 Agent 状态与反馈；“工作留痕”继续单独读取历史。首屏全局进度只覆盖首批列表，后台目录补齐和卡片预览使用数量状态及卡片内提示。记忆先取当前分类 24 条并按最多 100 条补齐。Manager 控制面使用紧凑 JSON，单计划预览和完整详情复用预热目录缓存；冷缓存由异步并发文件读取建立，同一人格共用填充任务，文件监听只重读变化文件。目录跳转只挂载目标起点的有界窗口并提升目标预览优先级，不新增浏览器侧事实源。审批合同仍由 Manager 的 `presentation.approval.stepId` 定位，只有 `ready/enabled=true` 可提交；计划级引导只提交 `planId`。反馈成功后更新本地卡片并监听 `plan_feedback_changed`。
 - `src/components/PlanFeedbackComposer.vue`：计划引导与审批意见共用的输入组件。`@` 引用、Enter/Shift+Enter、文件选择、剪贴板粘贴、附件预览和删除只在此处实现；页面只传入两类反馈各自的可编辑条件、提交条件和文案。
 - 计划详情展开时，通过 `manager/planAgentStatusRoutes.ts` 按需读取该计划 `taskBinding` 与可选 `secretaryBinding` 的真实会话状态；页面刷新后只补查仍保持展开的计划，不在目录摘要加载完成后扫描全部绑定。`manager/planAgentStatus.ts` 按绑定的 `agentType` 分派：Codex 读取 Desktop 任务，DSH 通过 apiproxy 读取 DSH 会话；它负责 2.8 秒有界读取、同绑定请求去重、workspace 校验以及 Agent 工作状态与会话状态的分离。Windows 普通路径与 `\\?\\` 扩展路径先归一化再比较。WebGUI 的 3 秒请求预算只决定何时显示未知。打开动作只定位已核对的精确绑定：Codex 调用 `openCodexDesktopThread()`，DSH 打开带 `rabiSessionId` 的 DSH Web 页面；两者都不发送 prompt、不创建任务或会话，也不走备用 Runtime。
 - `src/roleKnowledge.ts` 为近期记忆列表生成并缓存沉淀投影。投影用 `updatedAt` / `recalledAt` 计算每条记忆的 24 小时候选时间和 72 小时触发时间，返回 `triggersNextConsolidation` 与 `willEnterNextConsolidation`；记忆目录写入或外部文件变化时与目录缓存一起失效。`src/manager/memoryConsolidationScheduler.ts` 读取最早截止时间并设置一次性任务，到点后重新核对活跃时间、创建 run 并投递 Manager 内置事件。最不活跃记忆到达 72 小时时，`recentMemoryConsolidationCohort()` 固定 `triggerAt` 与 `candidateCutoffAt`，列表投影和真实整理 request 共用该结果，避免晚执行时扩大候选范围。新记忆写入 `.md`，结构化字段保存在元数据区，正文保留标准 Markdown；旧 `.json` 继续读取，同 ID 时 `.md` 优先。`RoleKnowledgePage.vue` 只消费 Manager 结果，不在浏览器复制沉淀候选算法。
@@ -804,4 +778,4 @@ src/messageEndpoints/
 - 不把运行期 `data/`、日志、token、真实账号写进仓库。
 - 不混淆 OpenAI provider、Codex agent、Desktop IPC transport、Desktop task owner 和具体 model。
 - 不为 Codex 实际消息增加独立 app-server、共享 4510 或其他备用投递路径。
-- 不在 RabiRoute 中硬编码或覆盖模型；由目标 Desktop 任务决定。
+- Codex 模型留空时由目标 Desktop 任务决定；Route 明确配置时只在 Desktop IPC 新轮次请求中传入。DSH 模型留空时由绑定会话决定；Route 明确配置时在主人格投递前通过 owner 的 `session.selectModel` 应用。

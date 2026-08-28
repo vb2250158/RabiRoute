@@ -201,6 +201,96 @@ function createCodexMetadataClient(cwd: string): CodexAppServerClient {
   });
 }
 
+export type CodexModelCatalogEntry = {
+  id: string;
+  name: string;
+  description?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  reasoningEfforts: Array<{ id: string; description?: string }>;
+};
+
+type CodexModelListResponse = {
+  data?: unknown;
+  nextCursor?: unknown;
+};
+
+export function normalizeCodexModelListForTest(value: unknown): {
+  models: CodexModelCatalogEntry[];
+  nextCursor?: string;
+} {
+  const response = value && typeof value === "object" ? value as CodexModelListResponse : {};
+  const models = Array.isArray(response.data)
+    ? response.data.flatMap((item): CodexModelCatalogEntry[] => {
+        if (!item || typeof item !== "object") return [];
+        const raw = item as Record<string, unknown>;
+        if (raw.hidden === true) return [];
+        const id = typeof raw.model === "string" && raw.model.trim()
+          ? raw.model.trim()
+          : typeof raw.id === "string"
+            ? raw.id.trim()
+            : "";
+        if (!id) return [];
+        const name = typeof raw.displayName === "string" && raw.displayName.trim()
+          ? raw.displayName.trim()
+          : id;
+        const reasoningEfforts = Array.isArray(raw.supportedReasoningEfforts)
+          ? raw.supportedReasoningEfforts.flatMap((effort): Array<{ id: string; description?: string }> => {
+              if (!effort || typeof effort !== "object") return [];
+              const option = effort as Record<string, unknown>;
+              const reasoningEffort = typeof option.reasoningEffort === "string" ? option.reasoningEffort.trim() : "";
+              if (!reasoningEffort) return [];
+              const description = typeof option.description === "string" && option.description.trim()
+                ? option.description.trim()
+                : undefined;
+              return [{ id: reasoningEffort, ...(description ? { description } : {}) }];
+            })
+          : [];
+        const description = typeof raw.description === "string" && raw.description.trim()
+          ? raw.description.trim()
+          : undefined;
+        const defaultReasoningEffort = typeof raw.defaultReasoningEffort === "string" && raw.defaultReasoningEffort.trim()
+          ? raw.defaultReasoningEffort.trim()
+          : undefined;
+        return [{
+          id,
+          name,
+          ...(description ? { description } : {}),
+          ...(raw.isDefault === true ? { isDefault: true } : {}),
+          ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+          reasoningEfforts
+        }];
+      })
+    : [];
+  const nextCursor = typeof response.nextCursor === "string" && response.nextCursor.trim()
+    ? response.nextCursor.trim()
+    : undefined;
+  return { models, ...(nextCursor ? { nextCursor } : {}) };
+}
+
+export async function listCodexModels(cwd: string, timeoutMs = 8_000): Promise<CodexModelCatalogEntry[]> {
+  const client = createCodexMetadataClient(cwd);
+  const timer = setTimeout(() => client.close(), Math.max(100, timeoutMs));
+  try {
+    const byId = new Map<string, CodexModelCatalogEntry>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+      const parsed = normalizeCodexModelListForTest(await client.request("model/list", {
+        limit: 100,
+        includeHidden: false,
+        ...(cursor ? { cursor } : {})
+      }));
+      for (const model of parsed.models) byId.set(model.id, model);
+      if (!parsed.nextCursor) break;
+      cursor = parsed.nextCursor;
+    }
+    return [...byId.values()];
+  } finally {
+    clearTimeout(timer);
+    client.close();
+  }
+}
+
 type CodexAppServerThreadMetadata = {
   id?: unknown;
   name?: unknown;

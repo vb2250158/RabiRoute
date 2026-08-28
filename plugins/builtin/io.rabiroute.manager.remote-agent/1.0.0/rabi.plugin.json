@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.rabiroute.manager.remote-agent",
+  "version": "1.0.0",
+  "entries": {
+    "manager": "./manager.mjs"
+  },
+  "provides": [
+    "manager.remote-agent@1"
+  ],
+  "requires": [
+    "host.manager.remote-agent@1",
+    "manager.core@1"
+  ],
+  "optional": [],
+  "permissions": []
+}

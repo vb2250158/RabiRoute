@@ -47,6 +47,10 @@ Open **Message Adapters** and add an entry under **Message sources**. The catalo
 
 Each adapter shows maturity, connection state, dependency checks, and its own settings. Stabilize one source before adding another.
 
+To inspect the complete delivery path for the current Route, select **Channel check** at the top of the page. The dialog uses three columns: **Message inputs → Manager → Agent handlers**. The left side lists added message inputs, the center shows the Manager state for the current Route, and the right side lists configured Agents with their primary or secondary role. Select a message node or **View settings** to return to its settings; **Check again** refreshes both message-input and Agent status.
+
+Each Agent node provides **Delivery test**. Save the Route, then select the button to send a real message with a UUID test ID to that Agent’s configured session. The UI reports success only after the adapter confirms receipt. Codex additionally verifies that the ID appears in the target Desktop task. The test does not wait for an Agent answer and does not send to QQ, WeChat, or another external platform. Marvis currently supports manual copy/open handoff only, so it cannot run this test.
+
 ![Message Adapters showing the current Route state, message inputs, and primary Agent](../../assets/screenshots/webgui-adapters-en.png)
 
 The documentation sample Route was paused for the screenshot, while NapCat and Scheduled trigger remain visible in its input list. Confirm the inputs and primary Agent before enabling a Route.

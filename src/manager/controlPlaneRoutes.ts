@@ -5,7 +5,13 @@ import path from "node:path";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import {
+  buildAgentDeliveryTestEnvelope,
+  parseAgentDeliveryTestResult,
+  type AgentDeliveryTestResult
+} from "../agentDeliveryTest.js";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
+import { agentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
 import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
@@ -196,7 +202,13 @@ import {
 } from "./panghuProgressNotificationGate.js";
 import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
-import { getManagerPluginRuntimeHost } from "./managerPluginRuntimeHost.js";
+import {
+  GenerationRuntime,
+  loadPluginProfile,
+  PluginPackageCatalog,
+  type HostService,
+  type LoadedPluginProfile
+} from "../plugin-kernel/index.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
 import {
   ManagerPluginRouteRegistry,
@@ -204,7 +216,6 @@ import {
 } from "./managerPluginRouteRegistry.js";
 import { isManagerControlRequestPath } from "./managerHttpRequestClassification.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
-import { createRabiManagerPluginHostApi } from "./managerPluginPackageHost.js";
 import { createDesktopControlRoutes, desktopConfigFilePayload } from "./desktopControlRoutes.js";
 import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
 import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
@@ -232,18 +243,12 @@ import {
 import { FenneNoteOutputService } from "./fenneNoteOutputService.js";
 import { handleMessageProcessingApi } from "./messageProcessingRoutes.js";
 import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";
+import { GenerationHandoffLease } from "./generationHandoffLease.js";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
 import { MessageProcessingAutomationService } from "./messageProcessingAutomationService.js";
 import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderService.js";
 import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
 import { runWindowsTaskkill, stopChildProcessTree } from "../runtime/windowsProcessTree.js";
-import {
-  BUILTIN_MANAGER_PLUGIN_PACKAGE_ID,
-  initializeManagerPluginProfile,
-  MANAGER_PLUGIN_RUNTIME_RELATIVE_PATH,
-  resolveManagerPluginProfile,
-  type ManagerPluginProfileDiagnostic
-} from "./managerPluginConfig.js";
 import { getBuiltinManagerCordisRoot } from "../runtime/managerCordisRoot.js";
 import {
   MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
@@ -291,7 +296,6 @@ import {
   isLocalMachineRemoteAddress,
   isPublicWebguiStaticRequest,
   isWebguiLanRequestAuthorized,
-  webguiRequestToken,
   webguiTokenMatches,
   lanAddressPriority,
   managerListensOnLan
@@ -315,7 +319,6 @@ import {
 } from "./gatewayMessageAdapterEnvironment.js";
 import { BilibiliHistoryBridge } from "./bilibiliHistoryBridge.js";
 import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
-import { handleDesktopPetApi } from "./desktopPetRoutes.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
 import type { ScanDiagnostic } from "./scanController.js";
@@ -344,20 +347,6 @@ import {
   SelectionSpeechSettingsStore,
   selectionSpeechSettingsPath
 } from "./selectionSpeechSettings.js";
-import {
-  TaskCompletionAnnouncementLedger,
-  TaskCompletionAnnouncementService,
-  TaskCompletionAnnouncementSettingsStore
-} from "./taskCompletionAnnouncements.js";
-import type { TaskCompletionAnnouncementEvent } from "../shared/taskCompletionAnnouncementContract.js";
-import {
-  WorkEndEventLedger,
-  WorkEndEventService
-} from "./workEndEvents.js";
-import type {
-  WorkEndedEvent,
-  WorkEndedEventInput
-} from "../shared/workEndEventContract.js";
 import {
   DesktopSettingsStore,
   desktopSettingsPath
@@ -425,6 +414,7 @@ import {
   normalizeRoleMemoryPageLimit,
   normalizeRolePlanPageLimit,
   paginateRolePlans,
+  previewRolePlan,
   summarizeRolePlan
 } from "../roleKnowledgePagination.js";
 import { verifyCriticalProjectFactRecord } from "../messageProcessing/criticalFactRecord.js";
@@ -564,6 +554,9 @@ type GatewayDefinition = {
   dshSessionName?: string;
   dshCwd?: string;
   dshBaseUrl?: string;
+  dshModelProvider?: string;
+  dshModel?: string;
+  dshReasoningEffort?: string;
   codexPlanAssistantEnabled?: boolean;
   codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
@@ -1180,44 +1173,6 @@ const speechControl = new ManagerSpeechControl({
     if (runtime) appendLog(runtime, message);
   },
   speechIngressStore
-});
-const taskCompletionAnnouncements = new TaskCompletionAnnouncementService({
-  settings: new TaskCompletionAnnouncementSettingsStore(),
-  ledger: new TaskCompletionAnnouncementLedger(),
-  synthesize: command => speechControl.synthesize(command),
-  resolveModel: async () => {
-    const available = (await speechControl.models()).filter(model => model.capability === "tts" && model.available);
-    return available.find(model => model.id.endsWith("/gpt-sovits"))?.id
-      || available.find(model => model.isDefault)?.id
-      || available[0]?.id
-      || "";
-  }
-});
-const workEndEvents = new WorkEndEventService({
-  ledger: new WorkEndEventLedger(),
-  publish: event => publishManagerEvent("work_ended", event),
-  announce: async (event: WorkEndedEvent) => {
-    if (event.source !== "codex" && event.source !== "dsh") {
-      return { handled: false, spoken: false, reason: "source_not_configured" };
-    }
-    const result = await taskCompletionAnnouncements.accept({
-      id: event.id,
-      source: event.source,
-      sessionId: event.sessionId,
-      turnId: event.turnId,
-      status: event.status === "cancelled" ? "failed" : event.status,
-      text: event.summary,
-      taskName: event.taskName,
-      isChild: event.isChild,
-      occurredAt: event.occurredAt
-    });
-    return {
-      handled: result.accepted,
-      spoken: result.spoken,
-      ...(result.reason ? { reason: result.reason } : {}),
-      ...(result.playbackJobId ? { playbackJobId: result.playbackJobId } : {})
-    };
-  }
 });
 const speechRuntimeControl = new SpeechRuntimeControl({
   rootDir,
@@ -1873,7 +1828,7 @@ function reconcilePersistedPlanSecretaryWorkspaces(): void {
   }
 }
 
-let gatewayRuntimePluginActive = false;
+const gatewayRuntimePluginLease = new GenerationHandoffLease();
 
 const gatewayRuntimeService = new ManagerGatewayRuntimeService<GatewayDefinition, GatewayRuntime>(runtimes, {
   loadDefinitions: () => readConfig().gateways,
@@ -1917,7 +1872,7 @@ function loadRuntimes(): void {
 }
 
 function syncRunningGateways(): void {
-  if (!gatewayRuntimePluginActive) return;
+  if (!gatewayRuntimePluginLease.active) return;
   gatewayRuntimeService.reconcile();
 }
 
@@ -1954,13 +1909,12 @@ async function reloadChangedConfig(
 }
 
 type ConfigWatcher = { close(): void };
-type PluginBundleWatcher = { close(): void };
+type PluginPackageWatcher = { close(): void };
 
-function startPluginBundleWatcher(reconcile: (reason: string) => Promise<void>): PluginBundleWatcher {
-  const directories = [
-    path.join(rootDir, "data", "plugins", "manager"),
-    path.join(rootDir, "plugins", "packages")
-  ];
+function startPluginPackageWatcher(
+  directories: readonly string[],
+  reconcile: (reason: string) => Promise<void>
+): PluginPackageWatcher {
   const watchers: fs.FSWatcher[] = [];
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
@@ -1979,7 +1933,7 @@ function startPluginBundleWatcher(reconcile: (reason: string) => Promise<void>):
     try {
       const watcher = fs.watch(directory, { recursive: true }, (_eventType, fileName) => {
         const name = fileName?.toString().replace(/\\/g, "/") ?? "";
-        if (name.includes(".rabi-runtime") || name.endsWith(".tmp")) return;
+        if (name.includes(".runtime") || name.endsWith(".tmp")) return;
         schedule();
       });
       watcher.on("error", error => console.warn(`Plugin bundle watch failed for ${directory}:`, error));
@@ -2147,6 +2101,10 @@ function envFor(
     MESSAGE_ADAPTER_POLICIES: JSON.stringify(definition.messageAdapterPolicies ?? {}),
     AGENT_MODEL: definition.agentModel?.trim() || "",
     AGENT_REASONING_EFFORT: definition.agentReasoningEffort ?? "",
+    DSH_MODEL_PROVIDER: definition.dshModelProvider?.trim() || "",
+    DSH_MODEL: definition.dshModel?.trim() || "",
+    DSH_REASONING_EFFORT: definition.dshReasoningEffort?.trim() || "",
+    RABI_DSH_ROUTE_CONFIG_PATH: adapterConfigPath(configName),
     MESSAGE_PROCESSING_AGENTS: JSON.stringify(definition.messageProcessingAgents ?? {}),
     PIPELINE_PRESET: definition.pipelinePreset ?? "",
     PIPELINE: definition.pipeline ? JSON.stringify(definition.pipeline) : "",
@@ -2345,17 +2303,17 @@ function stopGatewayRuntime(id: string): void {
 }
 
 function startGateway(id: string): void {
-  if (!gatewayRuntimePluginActive) throw new Error("Manager Gateway runtime plugin is inactive.");
+  if (!gatewayRuntimePluginLease.active) throw new Error("Manager Gateway runtime plugin is inactive.");
   gatewayRuntimeService.start(id);
 }
 
 function stopGateway(id: string): void {
-  if (!gatewayRuntimePluginActive) throw new Error("Manager Gateway runtime plugin is inactive.");
+  if (!gatewayRuntimePluginLease.active) throw new Error("Manager Gateway runtime plugin is inactive.");
   gatewayRuntimeService.stop(id);
 }
 
 function restartGateway(id: string): void {
-  if (!gatewayRuntimePluginActive) throw new Error("Manager Gateway runtime plugin is inactive.");
+  if (!gatewayRuntimePluginLease.active) throw new Error("Manager Gateway runtime plugin is inactive.");
   gatewayRuntimeService.restart(id);
 }
 
@@ -3484,6 +3442,9 @@ function runtimeStatusWithRoleInfoCache(
     routeProfiles: runtime.definition.routeProfiles ?? [],
     agentModel: runtime.definition.agentModel ?? "",
     agentReasoningEffort: runtime.definition.agentReasoningEffort,
+    dshModelProvider: runtime.definition.dshModelProvider,
+    dshModel: runtime.definition.dshModel,
+    dshReasoningEffort: runtime.definition.dshReasoningEffort,
     codexThreadId: runtime.definition.codexThreadId,
     codexThreadName: resolveCodexThreadName(runtime.definition),
     codexCwd: runtime.definition.codexCwd,
@@ -5514,6 +5475,96 @@ function triggerGatewaySpeechMessage(runtime: GatewayRuntime, record: SpeechIngr
   });
 }
 
+async function testGatewayAgentDelivery(
+  id: string,
+  request: { agentAdapterType?: AgentAdapterType }
+): Promise<AgentDeliveryTestResult> {
+  const runtime = runtimes.get(id);
+  if (!runtime) throw new Error(`Gateway not found: ${id}`);
+  if (runtime.definition.enabled === false) throw new Error("当前 Route 已停用，不能执行投递测试。");
+
+  const configuredAdapters = normalizeAgentAdapters(runtime.definition.agentAdapters);
+  const requestedAdapter = parseAgentAdapterType(request.agentAdapterType);
+  const adapter = requestedAdapter
+    ?? runtime.definition.primaryAgentAdapter
+    ?? configuredAdapters[0];
+  if (!adapter || !configuredAdapters.includes(adapter)) {
+    throw new Error("目标 Agent 未添加到当前 Route。");
+  }
+  if (agentAdapterManifest(adapter).maturity === "stub") {
+    throw new Error("该 Agent 当前只支持人工接力，无法确认真实投递。");
+  }
+
+  const deliveryId = randomUUID();
+  const envelope = buildAgentDeliveryTestEnvelope({
+    deliveryId,
+    gatewayId: id,
+    routeName: runtime.definition.name,
+    agentAdapterType: adapter
+  });
+  const command = childCommand([
+    `--direct-agent-envelope=${encodeURIComponent(JSON.stringify(envelope))}`,
+    `--direct-agent-adapter=${adapter}`,
+    `--direct-agent-gateway=${encodeURIComponent(id)}`,
+    `--agent-delivery-test=${deliveryId}`
+  ]);
+  appendLog(runtime, `agent delivery test requested: adapter=${adapter} deliveryId=${deliveryId}`);
+
+  return await new Promise<AgentDeliveryTestResult>((resolve, reject) => {
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      action();
+    };
+    const deadline = setTimeout(() => {
+      void stopChildProcessTree(child)
+        .catch(() => { child.kill(); })
+        .finally(() => finish(() => reject(new Error(`投递测试超时：${deliveryId}`))));
+    }, 60_000);
+    deadline.unref?.();
+    child.stdout.on("data", (data) => {
+      const text = data.toString("utf8");
+      stdout += text;
+      for (const line of text.split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `agent delivery test: ${line}`);
+      }
+    });
+    child.stderr.on("data", (data) => {
+      const text = data.toString("utf8");
+      stderr += text;
+      for (const line of text.split(/\r?\n/).filter(Boolean)) {
+        appendLog(runtime, `agent delivery test error: ${line}`);
+      }
+    });
+    child.on("error", error => finish(() => reject(error)));
+    child.on("exit", (code, signal) => finish(() => {
+      const result = parseAgentDeliveryTestResult(stdout);
+      if (code === 0
+        && result?.status === "delivered"
+        && result.deliveryId === deliveryId
+        && result.agentAdapterType === adapter) {
+        appendLog(runtime, `agent delivery test delivered: adapter=${adapter} deliveryId=${deliveryId}`);
+        resolve(result);
+        return;
+      }
+      const detail = result?.error
+        || stderr.trim().split(/\r?\n/).filter(Boolean).at(-1)
+        || `agent delivery test failed: code=${code ?? "null"} signal=${signal ?? "null"}`;
+      reject(new Error(detail));
+    }));
+  });
+}
+
 function triggerGatewayDirectAgentMessage(id: string, envelope: RabiDeliveryEnvelope): Promise<void> {
   const runtime = runtimes.get(id);
   if (!runtime) {
@@ -5817,51 +5868,6 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
       readJsonBody<unknown>(request).then(body => selectionSpeechSettings.write(body)),
       200,
       500
-    );
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === "/api/speech/task-completion/settings") {
-    jsonResponse(response, 200, { code: 0, data: taskCompletionAnnouncements.settings() });
-    return true;
-  }
-  if (request.method === "PUT" && requestUrl.pathname === "/api/speech/task-completion/settings") {
-    writeSpeechJson(response, readJsonBody<unknown>(request).then(body => taskCompletionAnnouncements.updateSettings(body)), 200, 500);
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === "/api/speech/task-completion/events") {
-    const limit = Number(requestUrl.searchParams.get("limit") || "12");
-    jsonResponse(response, 200, { code: 0, data: { records: taskCompletionAnnouncements.records(limit) } });
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === "/api/speech/task-completion/preview") {
-    writeSpeechJson(response, taskCompletionAnnouncements.preview(), 200, 500);
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === "/api/speech/task-completion/events") {
-    writeSpeechJson(
-      response,
-      readJsonBody<TaskCompletionAnnouncementEvent>(request)
-        .then(event => workEndEvents.accept({
-          id: event.id,
-          source: event.source,
-          sessionId: event.sessionId,
-          turnId: event.turnId,
-          status: event.status,
-          summary: event.text,
-          taskName: event.taskName,
-          isChild: event.isChild,
-          occurredAt: event.occurredAt
-        }))
-        .then(result => ({
-          accepted: result.accepted,
-          duplicate: result.duplicate,
-          eventId: result.eventId,
-          spoken: result.consumers.announcement?.spoken === true,
-          reason: result.consumers.announcement?.reason,
-          playbackJobId: result.consumers.announcement?.playbackJobId
-        })),
-      200,
-      400
     );
     return true;
   }
@@ -6739,7 +6745,14 @@ function handleRoleKnowledgeApi(
           jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
           return true;
         }
-        jsonResponse(response, 200, { code: 0, data: presentedPlanWithFeedback(roleDir, plan) });
+        const detail = requestUrl.searchParams.get("detail")?.trim();
+        const data = detail === "preview"
+          ? {
+            ...previewRolePlan(presentPlan(plan)),
+            approval: planFeedbackSummary(roleDir, plan.id)
+          }
+          : presentedPlanWithFeedback(roleDir, plan);
+        jsonResponse(response, 200, { code: 0, data });
         return true;
       }
       void listPlansAsync(roleDir)
@@ -7345,20 +7358,9 @@ export function handleManagerEventApi(
   requestUrl: URL,
   response: http.ServerResponse
 ): boolean {
-  if (request.method === "GET" && requestUrl.pathname === "/api/events") {
-    openManagerEventStream(request, response);
-    return true;
-  }
-  if (request.method === "GET" && requestUrl.pathname === "/api/work-events/ended") {
-    const limit = Number(requestUrl.searchParams.get("limit") || "20");
-    jsonResponse(response, 200, { code: 0, data: { records: workEndEvents.records(limit) } });
-    return true;
-  }
-  if (request.method === "POST" && requestUrl.pathname === "/api/work-events/ended") {
-    writeSpeechJson(response, readJsonBody<WorkEndedEventInput>(request).then(event => workEndEvents.accept(event)), 200, 400);
-    return true;
-  }
-  return false;
+  if (request.method !== "GET" || requestUrl.pathname !== "/api/events") return false;
+  openManagerEventStream(request, response);
+  return true;
 }
 
 export function handlePersonaPluginApi(
@@ -7381,7 +7383,6 @@ export function handlePersonaPluginApi(
     // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
     publishManagerEvent("persona_avatar_changed", change);
   })) return true;
-  if (handleDesktopPetApi(request, requestUrl, response, resolveRoleDir, desktopSettings)) return true;
   if (handlePersonaDocumentApi(request, requestUrl, response, resolveRoleDir)) return true;
   if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
@@ -7395,20 +7396,12 @@ export async function startManager(): Promise<void> {
     MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
     mountManagerSharedResourcesRuntime(messageProcessingBoardPersistence)
   );
-  let managerPluginHost: Awaited<ReturnType<typeof getManagerPluginRuntimeHost>>;
-  try {
-    managerPluginHost = await getManagerPluginRuntimeHost();
-  } catch (error) {
-    await managerSharedResourcesRuntime.unmount().catch(() => {});
-    await managerCordisRoot.dispose().catch(() => {});
-    throw error;
-  }
-  const managerPluginRuntime = managerPluginHost.runtime;
-  const managerPluginReconciler = managerPluginHost.reconciler;
+  let managerPluginKernel: GenerationRuntime | undefined;
+  let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
   const disposeManagerCordisRuntime = async (): Promise<void> => {
     let firstError: unknown;
     try {
-      await managerPluginRuntime.unmount();
+      await managerPluginKernel?.dispose();
     } catch (error) {
       firstError = error;
     }
@@ -7424,11 +7417,12 @@ export async function startManager(): Promise<void> {
     }
     if (firstError) throw firstError;
   };
-  let managerPluginDiagnostics: readonly ManagerPluginProfileDiagnostic[] = [];
+  let managerPluginDiagnostics: readonly unknown[] = [];
   let managerServicesReady = false;
   let managerListenerReady = false;
   let syncActiveRabiLinkRelay = async (): Promise<void> => {};
   let reconcileActiveSpeech = (): void => {};
+  let recordManagerHttpRequest = (_pathname: string, _statusCode: number, _durationMs: number, _requestId: string, _responseBytes?: number): void => {};
   let startActiveNapcatSupervisor = (): void => {};
   let stopActiveNapcatSupervisor = async (): Promise<void> => {};
   let activeNapcatControlContext: ReturnType<typeof napcatManagerCtx> | undefined;
@@ -7436,982 +7430,486 @@ export async function startManager(): Promise<void> {
   let shutdownManager = (_reason: string): void => {
     throw new Error("Manager shutdown is not ready.");
   };
-  const managerPluginActive = (instanceId: string): boolean => managerPluginRuntime.catalog.get(instanceId)?.status === "active";
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
   const lanAgentRegistry = new LanAgentRegistry({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json") });
   const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir });
   let detachLanAgentUpgrade: (() => void) | undefined;
-  const webPluginModules = new WebPluginModuleRegistry(path.join(rootDir, MANAGER_PLUGIN_RUNTIME_RELATIVE_PATH));
-  const managerBasePluginActivation: Record<string, (ctx: import("../runtime/cordisHost.js").RabiCordisContext) => void | Promise<void>> = {
-      "manager:core": ctx => {
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:core", "manager.core.api", [
-            requestTracker.wrap((request, requestUrl, response) => (
-              handleWebguiLanAccessApi(request, requestUrl, response)
-              || handleLanAgentApi(request, requestUrl, response, {
-                readJsonBody,
-                jsonResponse,
-                registry: lanAgentRegistry,
-                releases: lanAgentReleaseStore,
-                isReleaseRequestAuthorized: candidate => {
-                  const config = rabiGlobalConfig.read().webguiLan;
-                  const authorization = Array.isArray(candidate.headers.authorization)
-                    ? candidate.headers.authorization[0] ?? ""
-                    : candidate.headers.authorization ?? "";
-                  const match = authorization.match(/^Bearer\s+(.+)$/i);
-                  return config.enabled && webguiTokenMatches(match?.[1]?.trim() ?? "", config.accessToken);
-                },
-                isManagementRequestAuthorized: (candidate, candidateUrl) => {
-                  const config = rabiGlobalConfig.read().webguiLan;
-                  return config.enabled
-                    && webguiTokenMatches(webguiRequestToken(candidate, candidateUrl), config.accessToken);
-                }
-              })
-            ))
-          ], [
-            { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] },
-            { routeId: "lan-agent", kind: "prefix", pathPrefix: "/api/lan-agent/", methods: ["*"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-          };
-        }, "activate Manager core recovery routes");
-      },
-      "manager:persona": async ctx => {
-        personaSyncAutoReconciler?.start();
-        // A full NAS manifest walk may transiently exhaust SMB file handles. Do
-        // not make Manager availability depend on this rebuildable cache: let
-        // the control plane finish its synchronous configuration migration
-        // before indexing starts in the next event-loop turn.
-        setTimeout(() => {
-          void personaSyncService.startManifestIndex()
-            .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
-        }, 0).unref();
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:persona", "manager.persona.api", [
-            requestTracker.wrap((request, requestUrl, response) => (
-              handlePersonaPluginApi(request, requestUrl, response)
-              || handleLanguageStyleApi(request, requestUrl, response, languageStyleValidator)
-              || handlePersonaSyncApi(request, requestUrl, response, personaSyncRouteContext(true))
-            ))
-          ], [
-            { routeId: "personas", kind: "exact", path: "/api/personas", methods: ["GET"] },
-            { routeId: "personas-resource", kind: "prefix", pathPrefix: "/api/personas/" },
-            { routeId: "roles-api", kind: "prefix", pathPrefix: "/api/roles/" },
-            { routeId: "roles-static", kind: "prefix", pathPrefix: "/roles/" },
-            { routeId: "persona-sync", kind: "prefix", pathPrefix: "/api/persona-sync" },
-            { routeId: "language-style-validate", kind: "exact", path: "/api/language-style/validate", methods: ["POST"] },
-            { routeId: "role-panel-messages", kind: "exact", path: "/api/role-panel/messages", methods: ["POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-            personaSyncAutoReconciler?.stop();
-            personaSyncService.stopManifestIndex();
-          };
-        }, "activate Manager persona plugin");
-      },
-      "manager:speech": ctx => {
-        let active = true;
-        const reconcile = (): void => reconcileSpeechMicrophone(
-          managerServicesReady ? "speech plugin activation" : "manager startup",
-          () => active
-        );
-        reconcileActiveSpeech = reconcile;
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:speech", "manager.speech.api", [
-            requestTracker.wrap((request, requestUrl, response) => handleSpeechApi(request, requestUrl, response))
-          ], [
-            { routeId: "speech", kind: "prefix", pathPrefix: "/api/speech/" }
-          ]);
-          return async () => {
-            active = false;
-            if (reconcileActiveSpeech === reconcile) reconcileActiveSpeech = (): void => {};
-            unregister();
-            await requestTracker.stop();
-            await Promise.allSettled([
-              speechControl.stopMicrophone(),
-              speechControl.stopPlayback(),
-              speechRuntimeControl.stop()
-            ]);
-            speechModelManager.stop();
-          };
-        }, "activate Manager speech plugin");
-        if (managerServicesReady && !managerReadOnly) reconcile();
-      },
-      "manager:performance": async ctx => {
-        const api = new PerformanceApi({
-          service: performanceMonitoring,
-          globalConfig: rabiGlobalConfig,
-          gatewayExists: gatewayId => Boolean(runtimes.get(gatewayId)),
-          readWorkerPool: managerPerformanceWorkerPool
-        });
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:performance", "manager.performance.api", [
-            requestTracker.wrap((request, requestUrl, response) => api.handle(request, requestUrl, response))
-          ], [
-            { routeId: "performance", kind: "prefix", pathPrefix: "/api/performance/" }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-            api.close();
-            await performanceMonitoring.stop();
-          };
-        }, "activate Manager performance plugin");
-        if (!managerReadOnly) await performanceMonitoring.start();
-      },
-      "manager:bilibili-history": ctx => {
-        const bridge = new BilibiliHistoryBridge(
-          path.join(rootDir, "data", "runtime", "bilibili-history-bridge.json"),
-          () => configRepository.rolesRoot,
-          { readOnly: managerReadOnly }
-        );
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:bilibili-history", "manager.bilibili-history.api", [
-            requestTracker.wrap((request, requestUrl, response) => bridge.handle(request, requestUrl, response))
-          ], [
-            { routeId: "bilibili-history", kind: "prefix", pathPrefix: "/api/bilibili-history/" }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-          };
-        }, "activate Manager Bilibili history plugin");
-      },
-      "manager:route-control": ctx => {
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:route-control", "manager.route-control.api", [
-            requestTracker.wrap((request, requestUrl, response) => {
-              if (handleRabiApi(request, requestUrl, response, {
-                rootDir,
-                routeRoot,
-                managerPort,
-                managerHost,
-                version: rabiRoutePackageVersion,
-                globalConfig: rabiGlobalConfig,
-                runtimes: () => runtimes.values(),
-                runtimeStatus,
-                readConfig,
-                writeConfig,
-                loadRuntimes,
-                syncRunningGateways,
-                syncRabiLinkRelay: () => syncActiveRabiLinkRelay(),
-                routeDataDir: definition => dataDirFor(definition),
-                scanAgentAdapters: () => {
-                  const service = agentAdapterCatalogService;
-                  if (!service) {
-                    throw Object.assign(new Error("Agent adapter catalog plugin is inactive."), { statusCode: 503 });
-                  }
-                  return service.scanAll();
-                }
-              })) return true;
-              if (request.method === "GET" && requestUrl.pathname === "/manager-config") {
-                jsonResponse(response, 200, {
-                  code: 0,
-                  routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
-                  rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
-                });
-                return true;
-              }
-              if (request.method === "POST" && requestUrl.pathname === "/manager-config") {
-                void readJsonBody<ManagerConfig>(request)
-                  .then(body => {
-                    const cfg = readManagerConfig();
-                    if (body.routeDir !== undefined) cfg.routeDir = body.routeDir || undefined;
-                    if (body.rolesDir !== undefined) cfg.rolesDir = body.rolesDir || undefined;
-                    writeManagerConfig(cfg);
-                    ensureDataDirs();
-                    jsonResponse(response, 200, {
-                      code: 0,
-                      routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
-                      rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
-                    });
-                  })
-                  .catch(error => jsonResponse(response, 400, {
-                    code: -1,
-                    message: error instanceof Error ? error.message : String(error)
-                  }));
-                return true;
-              }
-              return false;
-            })
-          ], [
-            { routeId: "rabi-identity", kind: "exact", path: "/api/rabi/identity", methods: ["GET", "PATCH"] },
-            { routeId: "rabi-instances", kind: "exact", path: "/api/rabi/instances", methods: ["GET"] },
-            { routeId: "rabi-instance-resource", kind: "prefix", pathPrefix: "/api/rabi/instances/" },
-            { routeId: "manager-config", kind: "exact", path: "/manager-config", methods: ["GET", "POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-          };
-        }, "activate Manager Route control plugin");
-      },
-      "manager:agent-state-control": ctx => {
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:agent-state-control", "manager.agent-state-control.api", [
-            requestTracker.wrap((request, requestUrl, response) => (
-              request.method === "POST" && handleAgentStateReport(request, requestUrl.pathname, response)
-            ))
-          ], [
-            { routeId: "agent-state", kind: "exact", path: "/api/agent-state", methods: ["POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-          };
-        }, "activate Manager Agent state control plugin");
-      },
-      "manager:gateway-runtime": ctx => {
-        ctx.effect(() => {
-          gatewayRuntimePluginActive = true;
-          const requestTracker = new ManagerPluginRequestTracker();
-          const unregisterRoutes = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:gateway-runtime", "manager.gateway-runtime.api", [
-            requestTracker.wrap((request, requestUrl, response) => handleGatewayControlApi(
-              request,
-              requestUrl,
-              response,
-              {
-                readJsonBody,
-                jsonResponse,
-                redirectResponse: (target, statusCode, location) => {
-                  target.writeHead(statusCode, { location });
-                  target.end();
-                },
-                gatewayPayload: options => standaloneGatewayPayload(
-                  options?.includeDiagnostics ?? true,
-                  options?.includeConfigDefinitions ?? (options?.includeDiagnostics ?? true)
-                ),
-                writeConfig,
-                loadRuntimes,
-                syncRunningGateways,
-                runtimeStatuses: () => [...runtimes.values()].map(runtimeStatus),
-                networkOptionsPayload,
-                startGateway,
-                stopGateway,
-                restartGateway,
-                removeGatewayConfig,
-                weixinLoginTarget: id => {
-                  const runtime = runtimes.get(id);
-                  return runtime
-                    ? {
-                        enabled: sharedGatewayAdapterTypes(runtime.definition).includes("weixin"),
-                        dataDir: dataDirFor(runtime.definition)
-                      }
-                    : undefined;
-                },
-                requestWeixinLogin,
-                triggerManualRule: (id, request) => triggerGatewayManualRule(
-                  id,
-                  request,
-                  {},
-                  "manager:gateway-runtime"
-                ),
-                listDeliveryReplayAttempts: listGatewayDeliveryReplayAttempts,
-                replayDelivery: replayGatewayDelivery,
-                trackOperation: operation => requestTracker.trackOperation(operation)
-              }
-            ))
-          ], [
-            { routeId: "gateways", kind: "exact", path: "/gateways", methods: ["GET", "POST"] },
-            { routeId: "gateway-resource", kind: "prefix", pathPrefix: "/gateways/" },
-            { routeId: "network-options", kind: "exact", path: "/network-options", methods: ["GET"] },
-            { routeId: "reload", kind: "exact", path: "/reload", methods: ["POST"] }
-          ]);
-          if (managerServicesReady && !managerReadOnly) syncRunningGateways();
-          return async () => {
-            unregisterRoutes();
-            await requestTracker.stop();
-            gatewayRuntimePluginActive = false;
-            await Promise.all([
-              manualTriggerProcesses.stopOwner("manager:gateway-runtime"),
-              stopAllGatewaysAndWait()
-            ]);
-          };
-        }, "activate Manager Gateway runtime plugin");
-      },
-      "manager:rabilink-relay": async ctx => {
-        const sync = async (): Promise<void> => syncRabiLinkRelayRuntime(
-          () => syncActiveRabiLinkRelay === sync ? sync() : undefined
-        );
-        syncActiveRabiLinkRelay = sync;
-        ctx.effect(() => async () => {
-          if (syncActiveRabiLinkRelay === sync) {
-            syncActiveRabiLinkRelay = async (): Promise<void> => {};
-          }
-          await Promise.all([
-            personaSyncLanServer.stop(),
-            rabiLinkRelayRuntime.stop()
-          ]);
-        }, "stop Manager RabiLink Relay plugin");
-        if (managerListenerReady) await sync();
-      },
-      "manager:memory-consolidation": ctx => {
-        if (managerReadOnly) return;
-        const scheduler = createMemoryConsolidationScheduler();
-        memoryConsolidationScheduler = scheduler;
-        ctx.effect(() => async () => {
-          const schedulerStopped = scheduler.stop();
-          await manualTriggerProcesses.stopOwner("manager:memory-consolidation");
-          await schedulerStopped;
-          if (memoryConsolidationScheduler === scheduler) memoryConsolidationScheduler = undefined;
-        }, "stop Manager memory consolidation plugin");
-        if (managerListenerReady) scheduler.start();
-      },
-      "manager:fennenote-output": ctx => {
-        const service = new FenneNoteOutputService({
-          playbackUrl: fenneNotePlaybackUrl,
-          playbackToken: fenneNotePlaybackToken,
-          replyUrl: fenneNoteReplyUrl,
-          replyToken: fenneNoteReplyToken
-        });
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:fennenote-output", "manager.fennenote-output.api", [
-            requestTracker.wrap((request, requestUrl, response) => service.handle(request, requestUrl, response))
-          ], [
-            { routeId: "reply", kind: "exact", path: "/api/fennenote/reply", methods: ["POST"] },
-            { routeId: "playback", kind: "exact", path: "/api/fennenote/playback", methods: ["POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-            await service.stop();
-          };
-        }, "activate Manager FenneNote output plugin");
-      },
-      "manager:message-processing-control": ctx => {
-        const requestTracker = new ManagerPluginRequestTracker();
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:message-processing-control", "manager.message-processing-control.api", [
-            requestTracker.wrap((request, requestUrl, response) => handleMessageProcessingApi(request, requestUrl, response, {
-              boardPayload: messageProcessingBoardPayload,
-              board: messageProcessingBoard,
-              sendContextReview: messageProcessingSendContextReview,
-              operationalLog: managerOperationalLog,
-              recallKnowledge: recalledKnowledgeForMessage,
-              verifyCriticalFactRecord: ({ roleId, requirement, disposition }) => verifyCriticalProjectFactRecord({
-                workspaceRoot: rootDir,
-                roleDir: roleId ? roleDirForApi(roleId) : undefined,
-                requirement,
-                disposition
-              }),
-              setPlanBaseline: setMessageProcessingPlanBaseline,
-              scheduleKnowledgeCallbackReminder,
-              publishEvent: publishManagerEvent,
-              trackOperation: operation => requestTracker.trackOperation(operation)
-            }))
-          ], [
-            { routeId: "board", kind: "exact", path: "/api/message-processing/board", methods: ["GET"] },
-            { routeId: "requirements", kind: "exact", path: "/api/message-processing/requirements", methods: ["POST"] },
-            { routeId: "requirement-resource", kind: "prefix", pathPrefix: "/api/message-processing/requirements/" }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-          };
-        }, "activate Manager message processing control plugin");
-      },
-      "manager:message-processing-automation": async ctx => {
-        if (managerReadOnly) return;
-        const automation = new MessageProcessingAutomationService({
-          listExistingRequests: () => agentRequests.list(),
-          getRequest: requestId => agentRequests.get(requestId),
-          deliverReminder: deliverAgentRequestReminder,
-          onError: recordAgentRequestReminderFailure
-        });
-        const knowledgeReminders = new KnowledgeCallbackReminderService<MessageProcessingRequirement>({
-          listExisting: () => messageProcessingBoard.list({ limit: 500 }),
-          getRecord: requirementId => messageProcessingBoard.getRequirement(requirementId),
-          isPending: requirement => Boolean(
-            requirement.knowledgeCallbackDueAt
-            && messageProcessingBoard.pendingKnowledgeMatches(requirement.id).length
-          ),
-          deliverReminder: deliverKnowledgeCallbackReminder,
-          completeAttempt: requirement => messageProcessingBoard.pendingKnowledgeMatches(requirement.id).length
-            ? messageProcessingBoard.recordKnowledgeReminder(requirement.id)
-            : undefined,
-          onError: (error, requirement) => {
-            managerOperationalLog.record("warn", "knowledge_callback_reminder_failed", {
-              action: requirement?.id ?? "unknown",
-              error: managerOperationalError(error, rootDir)
-            });
-          }
-        });
-        let unsubscribePlanUpdates = (): void => {};
-        let disposed = false;
-        const dispose = async (): Promise<void> => {
-          if (disposed) return;
-          disposed = true;
-          unsubscribePlanUpdates();
-          if (messageProcessingAutomationService === automation) messageProcessingAutomationService = undefined;
-          if (knowledgeCallbackReminderService === knowledgeReminders) knowledgeCallbackReminderService = undefined;
-          await Promise.all([automation.stop(), knowledgeReminders.stop()]);
-        };
-        ctx.effect(() => dispose, "stop Manager message processing automation plugin");
-        messageProcessingAutomationService = automation;
-        knowledgeCallbackReminderService = knowledgeReminders;
-        try {
-          unsubscribePlanUpdates = subscribePlanUpdates(event => {
-            void handleMessageProcessingPlanUpdate(event.roleDir, event.after);
-          });
-          automation.start();
-          await knowledgeReminders.start();
-        } catch (error) {
-          await dispose();
-          throw error;
-        }
-      },
-      "manager:plan-feedback-delivery": ctx => {
-        if (managerReadOnly) return;
-        planFeedbackDeliveryActive = true;
-        const recovery = new PlanFeedbackRecoveryService({
-          listCandidates: () => managerReadWorkerPool.queryPlanFeedbackRecoveryCandidates(rolesRoot),
-          recoverCandidate: async (candidate, controls) => {
-            const outcome = await recoverPlanFeedbackCandidate(candidate, {
-              inspect: inspectPlanFeedbackDelivery,
-              schedule: async current => {
-                await controls.scheduleOnce(() => scheduleAndWaitForPlanFeedbackDelivery(
-                  current.roleDir,
-                  current.roleId,
-                  String(current.feedback.gatewayId || "").trim(),
-                  current.plan,
-                  current.feedback
-                ));
-              }
-            });
-            if (outcome.state === "delivered") {
-              publishManagerEvent("plan_feedback_changed", {
-                roleId: candidate.roleId,
-                planId: candidate.plan.id,
-                feedbackId: outcome.record.id
-              });
-            }
-            return outcome;
-          },
-          onSummary: summary => {
-            managerOperationalLog.record("info", "plan_feedback_recovery_sweep", {
-              action: summary.reason,
-              result: `candidates=${summary.candidates}; delivered=${summary.delivered}; scheduled=${summary.scheduled}; deferred=${summary.deferred}; alreadyAttempted=${summary.alreadyAttempted}`
-            });
-          },
-          onError: event => {
-            managerOperationalLog.record("warn", "plan_feedback_recovery_failed", {
-              action: event.recoveryKey ? `${event.reason}:${event.recoveryKey}` : event.reason,
-              error: managerOperationalError(event.error, rootDir),
-              result: event.stage === "scan" && event.error instanceof ManagerReadWorkerError
-                ? event.error.code
-                : event.stage
-            });
-          }
-        });
-        planFeedbackRecoveryService = recovery;
-        const start = (): void => { void recovery.start("manager plugin activation"); };
-        startActivePlanFeedbackRecovery = start;
-        ctx.effect(() => async () => {
-          planFeedbackDeliveryActive = false;
-          if (startActivePlanFeedbackRecovery === start) startActivePlanFeedbackRecovery = (): void => {};
-          await recovery.stop();
-          await Promise.allSettled([...activePlanFeedbackDeliveryFlights.values()]);
-          if (planFeedbackRecoveryService === recovery) planFeedbackRecoveryService = undefined;
-        }, "stop Manager plan feedback delivery plugin");
-        if (managerListenerReady) start();
-      },
-      "manager:message-adapter-control": ctx => {
-        ctx.effect(() => {
-          const providers = new MessageAdapterScanProviderRegistry();
-          const service = new MessageAdapterControlService(providers);
-          const unregisterProviders = registerBuiltinMessageAdapterScanProviders(providers, {
-            rootDir,
-            adapterRuntimes,
-            routeCallbackEndpoint,
-            routeHasRecentMessages,
-            checkHttpEndpoint,
-            fenneNotePlaybackUrl,
-            scanNapcatEndpoint: () => scanNapcatEndpoint(napcatManagerCtx()),
-            remoteAgentScanResult: remoteAgentMessageAdapterScanResult,
-            speechStatus: () => speechControl.status(),
-            readGatewayStatus,
-            weixinDefaultBaseUrl: () => process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com"
-          });
-          const requestTracker = new ManagerPluginRequestTracker();
-          const unregisterRoutes = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:message-adapter-control", "manager.message-adapter-control.api", [
-            requestTracker.wrap((request, requestUrl, response) => handleMessageAdapterControlApi(
-              request,
-              requestUrl,
-              response,
-              {
-                service,
-                scanNapcatHealth: napcatScanHealthPayload,
-                gatewayPayload: () => standaloneGatewayPayload(),
-                jsonResponse,
-                trackOperation: operation => requestTracker.trackOperation(operation)
-              }
-            ))
-          ], [
-            { routeId: "scan", kind: "exact", path: "/api/scan/message-adapters", methods: ["GET"] }
-          ]);
-          return async () => {
-            unregisterRoutes();
-            await Promise.all([
-              requestTracker.stop(),
-              service.stop()
-            ]);
-            unregisterProviders();
-          };
-        }, "activate Manager message adapter control plugin");
-      },
-      "manager:agent-adapter-catalog": ctx => {
-        const mount = mountAgentAdapterCatalogPlugin({
-          rootDir,
-          getRuntimes: () => runtimes.values(),
-          jsonResponse,
-          registerRoutes: (instanceId, routeIdPrefix, handlers) => registerManagerPluginHandlerRoutes(managerPluginRoutes, instanceId, routeIdPrefix, handlers, [
-            { routeId: "catalog", kind: "exact", path: "/api/agent-adapters/catalog", methods: ["GET"] },
-            { routeId: "scan-agents", kind: "exact", path: "/api/scan/agents", methods: ["GET"] },
-            { routeId: "scan-dsh", kind: "exact", path: "/api/scan/agents/dsh", methods: ["GET"] }
-          ])
-        });
-        agentAdapterCatalogService = mount.service;
-        ctx.effect(() => async () => {
-          if (agentAdapterCatalogService === mount.service) agentAdapterCatalogService = undefined;
-          await mount.stop("Manager Agent adapter catalog plugin stopped.");
-        }, "stop Manager Agent adapter catalog plugin");
-      },
-      "manager:agent-communication": ctx => {
-        const codexHookRequestTracker = new ManagerPluginRequestTracker();
-        const routes = createAgentCommunicationRoutes({
-          readJsonBody,
-          jsonResponse,
-          receiptResponse: deliveryId => agentSendReceiptResponse(rootDir, deliveryId),
-          findSendTraces: query => findAgentSendTraces(rootDir, query),
-          send: performAgentSend,
-          agentRequests,
-          refreshAgentRequestReminderTimers,
-          publishManagerEvent
-        });
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:agent-communication", "manager.agent-communication.api", [
-            routes.handler,
-            codexHookRequestTracker.wrap((request, requestUrl, response) => (
-              handleCodexHookApi(request, requestUrl, response, codexHookContextService)
-            ))
-          ], [
-            { routeId: "requests", kind: "exact", path: "/api/agent/requests", methods: ["GET"] },
-            { routeId: "request-resource", kind: "prefix", pathPrefix: "/api/agent/requests/" },
-            { routeId: "send", kind: "exact", path: "/api/agent/send", methods: ["POST"] },
-            { routeId: "send-traces", kind: "exact", path: "/api/agent/send/traces", methods: ["GET"] },
-            { routeId: "send-receipts", kind: "prefix", pathPrefix: "/api/agent/send/receipts/" },
-            { routeId: "codex-context", kind: "exact", path: "/api/codex-hook/context", methods: ["POST"], handlerIndex: 1 },
-            { routeId: "codex-roles", kind: "exact", path: "/api/codex-hook/roles", methods: ["GET"], handlerIndex: 1 },
-            { routeId: "codex-doctor", kind: "exact", path: "/api/codex-hook/doctor", methods: ["GET"], handlerIndex: 1 },
-            { routeId: "codex-sessions", kind: "exact", path: "/api/codex-hook/sessions", methods: ["GET"], handlerIndex: 1 },
-            { routeId: "codex-session-resource", kind: "prefix", pathPrefix: "/api/codex-hook/sessions/", handlerIndex: 1 }
-          ]);
-          return async () => {
-            unregister();
-            await Promise.all([
-              routes.stopAcceptingAndDrain(),
-              codexHookRequestTracker.stop()
-            ]);
-          };
-        }, "activate Manager Agent communication plugin");
-      },
-      "manager:copilot-control": ctx => {
-        const service = new CopilotControlService();
-        const requestTracker = new ManagerPluginRequestTracker();
-        const handler = createAgentProviderControlRouteHandler("copilot", {
-          jsonResponse,
-          installCopilot: () => service.install(),
-          startCopilotLogin: callbacks => service.login(callbacks),
-          getCopilotStatus: () => getCopilotStatus(agentManagerApiCtx()),
-          publishEvent: publishManagerEvent
-        }, operation => requestTracker.trackOperation(operation));
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:copilot-control", "manager.copilot-control.api", [requestTracker.wrap(handler)], [
-            { routeId: "install", kind: "exact", path: "/api/agent/copilot-install", methods: ["POST"] },
-            { routeId: "login", kind: "exact", path: "/api/agent/copilot-login", methods: ["POST"] },
-            { routeId: "status", kind: "exact", path: "/api/agent/copilot-status", methods: ["GET"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-            await service.stop();
-          };
-        }, "activate Manager Copilot control plugin");
-      },
-      "manager:astrbot-control": ctx => {
-        const requestTracker = new ManagerPluginRequestTracker();
-        const handler = createAgentProviderControlRouteHandler("astrbot", {
-          readJsonBody,
-          jsonResponse,
-          testAstrbotLogin: testAstrbotLoginEndpoint
-        }, operation => requestTracker.trackOperation(operation));
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:astrbot-control", "manager.astrbot-control.api", [requestTracker.wrap(handler)], [
-            { routeId: "login-test", kind: "exact", path: "/api/agent/astrbot-login-test", methods: ["POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-          };
-        }, "activate Manager AstrBot control plugin");
-      },
-      "manager:marvis-control": ctx => {
-        const requestTracker = new ManagerPluginRequestTracker();
-        const handler = createAgentProviderControlRouteHandler("marvis", {
-          readJsonBody,
-          jsonResponse,
-          openMarvis: body => openMarvis(agentManagerApiCtx(), body)
-        }, operation => requestTracker.trackOperation(operation));
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:marvis-control", "manager.marvis-control.api", [requestTracker.wrap(handler)], [
-            { routeId: "open", kind: "exact", path: "/api/agent/marvis-open", methods: ["POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await requestTracker.stop();
-          };
-        }, "activate Manager Marvis control plugin");
-      },
-      "manager:agent-thread-control": ctx => {
-        const routes = createAgentThreadControlRoutes({
-          readJsonBody,
-          jsonResponse,
-          agentRequests,
-          messageProcessingBoard,
-          applyManagedAgentThreadDefaults,
-          agentThreadRequestOptions,
-          handleAgentThreadRequest,
-          agentThreadRequestFailureData,
-          setMessageProcessingPlanBaseline,
-          refreshAgentRequestReminderTimers,
-          publishManagerEvent,
-          operationalLog: managerOperationalLog,
-          operationalError: error => managerOperationalError(error, rootDir)
-        });
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:agent-thread-control", "manager.agent-thread-control.api", [routes.handler], [
-            { routeId: "threads", kind: "exact", path: "/api/agent/threads", methods: ["GET", "POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await routes.stopAcceptingAndDrain();
-          };
-        }, "activate Manager Agent thread control plugin");
-      },
-      "manager:napcat-control": ctx => {
-        const requestTracker = new ManagerPluginRequestTracker();
-        const ownedInstances = new Map<string, {
-          request: ManagedNapcatLaunchRequest;
-          child?: ChildProcess;
-          pids: Set<string>;
-        }>();
-        let accepting = true;
-        const activeOperations = new Set<Promise<unknown>>();
-        const assertAccepting = (): void => {
-          if (!accepting) throw new Error("NapCat control plugin is stopping.");
-        };
-        const runOperation = <T>(action: () => T | Promise<T>): Promise<T> => {
-          const operation = Promise.resolve().then(() => {
-            assertAccepting();
-            return action();
-          });
-          activeOperations.add(operation);
-          void operation.then(
-            () => activeOperations.delete(operation),
-            () => activeOperations.delete(operation)
-          );
-          return operation;
-        };
-        const drainOperations = async (): Promise<void> => {
-          while (activeOperations.size > 0) {
-            await Promise.allSettled([...activeOperations]);
-          }
-        };
-        const rememberLaunch = (request: ManagedNapcatLaunchRequest, child?: ChildProcess): void => {
-          assertAccepting();
-          const gatewayId = request.gatewayId?.trim();
-          const instanceId = request.instanceId?.trim();
-          if (gatewayId && instanceId) {
-            const key = `${gatewayId}:${instanceId}`;
-            const current = ownedInstances.get(key);
-            ownedInstances.set(key, {
-              request: { gatewayId, instanceId },
-              child,
-              pids: current?.pids ?? new Set<string>()
-            });
-          }
-        };
-        const rememberLaunchPids = (request: ManagedNapcatLaunchRequest, pids: readonly string[]): void => {
-          const gatewayId = request.gatewayId?.trim();
-          const instanceId = request.instanceId?.trim();
-          if (!gatewayId || !instanceId) return;
-          const key = `${gatewayId}:${instanceId}`;
-          const current = ownedInstances.get(key);
-          if (!current) return;
-          for (const pid of pids) if (/^\d+$/.test(pid)) current.pids.add(pid);
-        };
-        const controlContext = napcatManagerCtx(rememberLaunch, rememberLaunchPids, assertAccepting);
-        activeNapcatControlContext = controlContext;
-        const releaseOwnership = (request: { gatewayId?: string; instanceId?: string }): void => {
-          const gatewayId = request.gatewayId?.trim();
-          const instanceId = request.instanceId?.trim();
-          if (gatewayId && instanceId) ownedInstances.delete(`${gatewayId}:${instanceId}`);
-        };
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:napcat-control", "manager.napcat-control.api", [
-            requestTracker.wrap((request, requestUrl, response) => handleNapcatControlApi(
-              request,
-              requestUrl,
-              response,
-              {
-                readJsonBody,
-                jsonResponse,
-                repairAll: () => runOperation(repairAllNapcatInstances),
-                ensureReady: body => runOperation(() => ensureNapcatInstanceReady(controlContext, body)),
-                health: body => runOperation(() => checkNapcatHealthWithBackfill(body)),
-                configureOneBot: body => runOperation(() => configureNapcatOneBot(controlContext, body)),
-                add: body => runOperation(() => addManagedNapcatInstance(body, controlContext)),
-                launch: body => runOperation(() => launchNapcatInstanceEndpoint(controlContext, body)),
-                restart: body => runOperation(() => restartNapcatInstanceEndpoint(controlContext, body)),
-                remove: body => runOperation(async () => {
-                  const result = await removeManagedNapcatInstance(body);
-                  if (result.ok === true) releaseOwnership(body);
-                  return result;
-                })
-              }
-            ))
-          ], [
-            { routeId: "repair-all", kind: "exact", path: "/api/message/napcat-repair-all", methods: ["POST"] },
-            { routeId: "ensure-ready", kind: "exact", path: "/api/message/napcat-ensure-ready", methods: ["POST"] },
-            { routeId: "health", kind: "exact", path: "/api/message/napcat-health", methods: ["POST"] },
-            { routeId: "configure-onebot", kind: "exact", path: "/api/message/napcat-configure-onebot", methods: ["POST"] },
-            { routeId: "add", kind: "exact", path: "/api/message/napcat-add", methods: ["POST"] },
-            { routeId: "launch", kind: "exact", path: "/api/message/napcat-launch", methods: ["POST"] },
-            { routeId: "restart", kind: "exact", path: "/api/message/napcat-restart", methods: ["POST"] },
-            { routeId: "remove", kind: "exact", path: "/api/message/napcat-remove", methods: ["POST"] }
-          ]);
-          if (managerListenerReady) startActiveNapcatSupervisor();
-          return async () => {
-            unregister();
-            accepting = false;
-            await Promise.all([
-              requestTracker.stop(),
-              stopActiveNapcatSupervisor()
-            ]);
-            await drainOperations();
-            const owned = [...ownedInstances.values()];
-            ownedInstances.clear();
-            await Promise.allSettled(owned.flatMap(({ child, pids }) => {
-              const stops: Promise<unknown>[] = [];
-              if (child && child.exitCode === null) {
-                stops.push(stopChildProcessTree(child).catch(() => { child.kill(); }));
-              }
-              for (const pid of pids) {
-                const numericPid = Number(pid);
-                if (!Number.isInteger(numericPid) || numericPid <= 0 || numericPid === child?.pid) continue;
-                stops.push(process.platform === "win32"
-                  ? runWindowsTaskkill(numericPid).catch(() => undefined)
-                  : Promise.resolve().then(() => { try { process.kill(numericPid, "SIGTERM"); } catch {} }));
-              }
-              return stops;
-            }));
-            if (activeNapcatControlContext === controlContext) activeNapcatControlContext = undefined;
-          };
-        }, "activate Manager NapCat control plugin");
-      },
-      "manager:remote-agent": ctx => {
-        ctx.effect(() => {
-          const hub = new RemoteAgentHub({
-            managerPort,
-            managerHost,
-            publicHost: remoteAgentPublicHost,
-            discoveryPort: Number(process.env.REMOTE_AGENT_DISCOVERY_PORT ?? "8798"),
-            passwordStorePath: path.join(rootDir, "data", "remote-agent-connections.json"),
-            fileStoreDir: path.join(rootDir, "data", "remote-agent-files"),
-            getDefaultGatewayId: () => [...runtimes.values()][0]?.definition.id,
-            onTaskEvent: handleRemoteAgentTaskEvent,
-            onConversationRecord: (record, signal) => {
-              if (signal.aborted) return;
-              const runtime = record.gatewayId ? runtimes.get(record.gatewayId) : undefined;
-              if (!runtime) {
-                console.warn(`Remote Agent conversation record skipped: Gateway not found (${record.gatewayId || "missing"})`);
-                return;
-              }
-              try {
-                appendMessageContextToDir(roleDirForDefinition(runtime.definition), record);
-              } catch (error) {
-                appendLog(runtime, `remote agent conversation record failed: ${error instanceof Error ? error.message : String(error)}`);
-              }
-            }
-          });
-          const requestTracker = new ManagerPluginRequestTracker();
-          remoteAgentHub = hub;
-          const unregisterRoutes = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:remote-agent", "manager.remote-agent.api", [
-            requestTracker.wrap((request, requestUrl, response) => handleRemoteAgentPluginApi(
-              request,
-              requestUrl,
-              response,
-              {
-                readJsonBody,
-                jsonResponse,
-                listDevices: () => hub.listDevices(),
-                listTasks: limit => hub.listTasks(limit),
-                scanLan: () => hub.scanLan(),
-                connectDevice: body => hub.connectDevice(body),
-                disconnectDevice: deviceId => hub.disconnectDevice(deviceId),
-                createTask: body => hub.createTask(body),
-                receiveTaskEvent: event => hub.receiveTaskEvent(event),
-                applyTaskDefaults: remoteAgentTaskWithGatewayDefaults,
-                trackOperation: operation => requestTracker.trackOperation(operation)
-              }
-            ))
-          ], [
-            { routeId: "devices", kind: "exact", path: "/api/remote-agent/devices", methods: ["GET"] },
-            { routeId: "scan", kind: "exact", path: "/api/remote-agent/scan", methods: ["POST"] },
-            { routeId: "connect", kind: "exact", path: "/api/remote-agent/connect", methods: ["POST"] },
-            { routeId: "disconnect", kind: "exact", path: "/api/remote-agent/disconnect", methods: ["POST"] },
-            { routeId: "tasks", kind: "exact", path: "/api/remote-agent/tasks", methods: ["GET", "POST"] },
-            { routeId: "task-events", kind: "exact", path: "/api/remote-agent/task-events", methods: ["POST"] }
-          ]);
-          return async () => {
-            unregisterRoutes();
-            hub.stopAccepting();
-            await requestTracker.stop();
-            if (remoteAgentHub === hub) remoteAgentHub = undefined;
-            await hub.shutdown();
-          };
-        }, "activate Manager Remote Agent plugin");
-      },
-      "manager:napcat-supervisor": ctx => {
-        if (managerReadOnly || !managerShouldAutostart) return;
-        const supervisor = new NapcatSupervisorService({
-          run: async signal => {
-            if (activeNapcatControlContext) {
-              await autoLoginNapcatInstancesOnRabiStart(activeNapcatControlContext, undefined, signal);
-            }
-          },
-          onError: error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`)
-        });
-        const start = (): void => { void supervisor.start(); };
-        const stop = async (): Promise<void> => { await supervisor.stop(); };
-        startActiveNapcatSupervisor = start;
-        stopActiveNapcatSupervisor = stop;
-        ctx.effect(() => async () => {
-          if (startActiveNapcatSupervisor === start) startActiveNapcatSupervisor = (): void => {};
-          if (stopActiveNapcatSupervisor === stop) stopActiveNapcatSupervisor = async (): Promise<void> => {};
-          await stop();
-        }, "stop Manager NapCat supervisor plugin");
-        if (managerListenerReady) start();
-      },
-      "manager:diagnostics": ctx => {
-        const routes = createDiagnosticsRoutes({
-          jsonResponse,
-          metaPayload: () => measureSyncPerformanceOperation(
-            PERFORMANCE_OPERATIONS.managerMetaBuild,
-            metaPayload
-          ),
-          gatewayDiagnosticsPayload: () => measureSyncPerformanceOperation(
-            PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics,
-            () => {
-              const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
-              const tailCache: JsonlTailCache = new Map();
-              return [...runtimes.values()]
-                .map(runtime => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache));
-            }
-          )
-        });
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:diagnostics", "manager.diagnostics.api", [routes.handler], [
-            { routeId: "meta", kind: "exact", path: "/meta", methods: ["GET"] },
-            { routeId: "gateways", kind: "exact", path: "/api/gateways", methods: ["GET"] }
-          ]);
-          return async () => {
-            unregister();
-            await routes.stopAcceptingAndDrain();
-          };
-        }, "activate Manager diagnostics plugin");
-      },
-      "manager:desktop": ctx => {
-        const routes = createDesktopControlRoutes({
-          rootDir,
-          shutdownManager: reason => shutdownManager(reason),
-          jsonResponse,
-          openConfigFilePayload: (type, gatewayId, roleId) => desktopConfigFilePayload(type, gatewayId, roleId, {
-            routeRoot,
-            rolesRoot,
-            ensureDataDirs,
-            findRoute: gatewayId => runtimes.get(gatewayId)?.definition,
-            ensurePersonaConfigFile,
-            adapterConfigPath,
-            writeAdapterConfigFile: route => writeAdapterConfigFile(route as GatewayDefinition)
-          }),
-          settingsHandler: (request, requestUrl, response) => handleDesktopSettingsApi(request, requestUrl, response)
-        });
-        ctx.effect(() => {
-          const unregister = registerManagerPluginHandlerRoutes(managerPluginRoutes, "manager:desktop", "manager.desktop.api", [routes.handler], [
-            { routeId: "settings", kind: "exact", path: "/api/desktop/settings", methods: ["GET", "PATCH", "PUT"] },
-            { routeId: "open-config-file", kind: "exact", path: "/open-config-file", methods: ["POST"] },
-            { routeId: "manager-start", kind: "exact", path: "/manager/start", methods: ["POST"] },
-            { routeId: "desktop-lifecycle-start", kind: "exact", path: "/manager/desktop-lifecycle/start", methods: ["POST"] },
-            { routeId: "manager-shutdown", kind: "exact", path: "/manager/shutdown", methods: ["POST"] }
-          ]);
-          return async () => {
-            unregister();
-            await routes.stopAcceptingAndDrain();
-          };
-        }, "activate Manager desktop plugin");
+  const webPluginModules = new WebPluginModuleRegistry();
+  const managerPluginHostServices: readonly HostService[] = Object.freeze([
+    Object.freeze({ capability: "host.manager.http@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      jsonResponse,
+      publishManagerEvent,
+      readJsonBody,
+      registerRoutes(instanceId: string, handlerId: string, handlers: Parameters<typeof registerManagerPluginHandlerRoutes>[3], declarations: Parameters<typeof registerManagerPluginHandlerRoutes>[4]) {
+        return registerManagerPluginHandlerRoutes(managerPluginRoutes, instanceId, handlerId, handlers, declarations);
       }
-  };
-  const reconcileManagerPlugins = async (
-    reason: string,
-    bootstrapLegacyManagerPlugins?: unknown
-  ): Promise<void> => {
-    const normalized = await resolveManagerPluginProfile({
+    }) }),
+    Object.freeze({ capability: "host.manager.core@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      handleLanAgentApi,
+      handleWebguiLanAccessApi,
+      jsonResponse,
+      lanAgentRegistry,
+      lanAgentReleaseStore,
+      managerPluginRoutes,
+      rabiGlobalConfig,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
+      webguiTokenMatches,
+    }) }),
+    Object.freeze({ capability: "host.manager.persona@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      handleLanguageStyleApi,
+      handlePersonaPluginApi,
+      handlePersonaSyncApi,
+      languageStyleValidator,
+      managerPluginRoutes,
+      personaSyncRouteContext,
+      personaSyncService,
+      registerManagerPluginHandlerRoutes,
+      get personaSyncAutoReconciler() { return personaSyncAutoReconciler; },
+      set personaSyncAutoReconciler(value) { personaSyncAutoReconciler = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.speech@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      handleSpeechApi,
+      managerPluginRoutes,
+      managerReadOnly,
+      reconcileSpeechMicrophone,
+      registerManagerPluginHandlerRoutes,
+      speechControl,
+      speechModelManager,
+      speechRuntimeControl,
+      get managerServicesReady() { return managerServicesReady; },
+      set managerServicesReady(value) { managerServicesReady = value; },
+      get reconcileActiveSpeech() { return reconcileActiveSpeech; },
+      set reconcileActiveSpeech(value) { reconcileActiveSpeech = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.performance@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      PerformanceApi,
+      managerPerformanceWorkerPool,
+      managerPluginRoutes,
+      managerReadOnly,
+      performanceMonitoring,
+      rabiGlobalConfig,
+      registerManagerPluginHandlerRoutes,
+      runtimes,
+      get recordManagerHttpRequest() { return recordManagerHttpRequest; },
+      set recordManagerHttpRequest(value) { recordManagerHttpRequest = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.bilibili-history@1", value: Object.freeze({
+      BilibiliHistoryBridge,
+      ManagerPluginRequestTracker,
+      configRepository,
+      managerPluginRoutes,
+      managerReadOnly,
+      path,
+      registerManagerPluginHandlerRoutes,
       rootDir,
-      bootstrapLegacyManagerPlugins,
-      createServices: identity => {
-        const host = createRabiManagerPluginHostApi({
-          instanceId: identity.instanceId,
-          routes: managerPluginRoutes,
-          publishManagerEvent
-        });
-        if (identity.bundle.id !== BUILTIN_MANAGER_PLUGIN_PACKAGE_ID) return host;
-        const activate = managerBasePluginActivation[identity.instanceId];
-        if (!activate) throw new Error(`No scoped Manager activation capability exists: ${identity.instanceId}.`);
-        return Object.freeze({ ...host, activate });
-      }
+    }) }),
+    Object.freeze({ capability: "host.manager.route-control@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      dataDirFor,
+      ensureDataDirs,
+      handleRabiApi,
+      jsonResponse,
+      loadRuntimes,
+      managerHost,
+      managerPluginRoutes,
+      managerPort,
+      path,
+      rabiGlobalConfig,
+      rabiRoutePackageVersion,
+      readConfig,
+      readJsonBody,
+      readManagerConfig,
+      registerManagerPluginHandlerRoutes,
+      rootDir,
+      runtimeStatus,
+      runtimes,
+      syncRunningGateways,
+      writeConfig,
+      writeManagerConfig,
+      get agentAdapterCatalogService() { return agentAdapterCatalogService; },
+      set agentAdapterCatalogService(value) { agentAdapterCatalogService = value; },
+      get rolesRoot() { return rolesRoot; },
+      set rolesRoot(value) { rolesRoot = value; },
+      get routeRoot() { return routeRoot; },
+      set routeRoot(value) { routeRoot = value; },
+      get syncActiveRabiLinkRelay() { return syncActiveRabiLinkRelay; },
+      set syncActiveRabiLinkRelay(value) { syncActiveRabiLinkRelay = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.agent-state-control@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      handleAgentStateReport,
+      managerPluginRoutes,
+      registerManagerPluginHandlerRoutes,
+    }) }),
+    Object.freeze({ capability: "host.manager.gateway-runtime@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      dataDirFor,
+      handleGatewayControlApi,
+      jsonResponse,
+      listGatewayDeliveryReplayAttempts,
+      loadRuntimes,
+      managerPluginRoutes,
+      managerReadOnly,
+      manualTriggerProcesses,
+      networkOptionsPayload,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
+      removeGatewayConfig,
+      replayGatewayDelivery,
+      requestWeixinLogin,
+      restartGateway,
+      runtimeStatus,
+      runtimes,
+      sharedGatewayAdapterTypes,
+      standaloneGatewayPayload,
+      startGateway,
+      stopAllGatewaysAndWait,
+      stopGateway,
+      syncRunningGateways,
+      triggerGatewayManualRule,
+      testAgentDelivery: testGatewayAgentDelivery,
+      writeConfig,
+      acquireGatewayRuntimePluginLease: () => gatewayRuntimePluginLease.acquire(),
+      get managerServicesReady() { return managerServicesReady; },
+      set managerServicesReady(value) { managerServicesReady = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.rabilink-relay@1", value: Object.freeze({
+      personaSyncLanServer,
+      rabiLinkRelayRuntime,
+      syncRabiLinkRelayRuntime,
+      get managerListenerReady() { return managerListenerReady; },
+      set managerListenerReady(value) { managerListenerReady = value; },
+      get syncActiveRabiLinkRelay() { return syncActiveRabiLinkRelay; },
+      set syncActiveRabiLinkRelay(value) { syncActiveRabiLinkRelay = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.memory-consolidation@1", value: Object.freeze({
+      createMemoryConsolidationScheduler,
+      managerReadOnly,
+      manualTriggerProcesses,
+      get managerListenerReady() { return managerListenerReady; },
+      set managerListenerReady(value) { managerListenerReady = value; },
+      get memoryConsolidationScheduler() { return memoryConsolidationScheduler; },
+      set memoryConsolidationScheduler(value) { memoryConsolidationScheduler = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.fennenote-output@1", value: Object.freeze({
+      FenneNoteOutputService,
+      ManagerPluginRequestTracker,
+      fenneNotePlaybackToken,
+      fenneNotePlaybackUrl,
+      fenneNoteReplyToken,
+      fenneNoteReplyUrl,
+      managerPluginRoutes,
+      registerManagerPluginHandlerRoutes,
+    }) }),
+    Object.freeze({ capability: "host.manager.message-processing-control@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      handleMessageProcessingApi,
+      managerOperationalLog,
+      managerPluginRoutes,
+      messageProcessingBoard,
+      messageProcessingBoardPayload,
+      messageProcessingSendContextReview,
+      publishManagerEvent,
+      recalledKnowledgeForMessage,
+      registerManagerPluginHandlerRoutes,
+      roleDirForApi,
+      rootDir,
+      scheduleKnowledgeCallbackReminder,
+      setMessageProcessingPlanBaseline,
+      verifyCriticalProjectFactRecord,
+    }) }),
+    Object.freeze({ capability: "host.manager.message-processing-automation@1", value: Object.freeze({
+      KnowledgeCallbackReminderService,
+      MessageProcessingAutomationService,
+      agentRequests,
+      deliverAgentRequestReminder,
+      deliverKnowledgeCallbackReminder,
+      handleMessageProcessingPlanUpdate,
+      managerOperationalError,
+      managerOperationalLog,
+      managerReadOnly,
+      messageProcessingBoard,
+      recordAgentRequestReminderFailure,
+      rootDir,
+      subscribePlanUpdates,
+      get knowledgeCallbackReminderService() { return knowledgeCallbackReminderService; },
+      set knowledgeCallbackReminderService(value) { knowledgeCallbackReminderService = value; },
+      get messageProcessingAutomationService() { return messageProcessingAutomationService; },
+      set messageProcessingAutomationService(value) { messageProcessingAutomationService = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.plan-feedback-delivery@1", value: Object.freeze({
+      ManagerReadWorkerError,
+      PlanFeedbackRecoveryService,
+      activePlanFeedbackDeliveryFlights,
+      inspectPlanFeedbackDelivery,
+      managerOperationalError,
+      managerOperationalLog,
+      managerReadOnly,
+      managerReadWorkerPool,
+      publishManagerEvent,
+      recoverPlanFeedbackCandidate,
+      rootDir,
+      scheduleAndWaitForPlanFeedbackDelivery,
+      get managerListenerReady() { return managerListenerReady; },
+      set managerListenerReady(value) { managerListenerReady = value; },
+      get planFeedbackDeliveryActive() { return planFeedbackDeliveryActive; },
+      set planFeedbackDeliveryActive(value) { planFeedbackDeliveryActive = value; },
+      get planFeedbackRecoveryService() { return planFeedbackRecoveryService; },
+      set planFeedbackRecoveryService(value) { planFeedbackRecoveryService = value; },
+      get rolesRoot() { return rolesRoot; },
+      set rolesRoot(value) { rolesRoot = value; },
+      get startActivePlanFeedbackRecovery() { return startActivePlanFeedbackRecovery; },
+      set startActivePlanFeedbackRecovery(value) { startActivePlanFeedbackRecovery = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.message-adapter-control@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      MessageAdapterControlService,
+      MessageAdapterScanProviderRegistry,
+      adapterRuntimes,
+      checkHttpEndpoint,
+      fenneNotePlaybackUrl,
+      handleMessageAdapterControlApi,
+      jsonResponse,
+      managerPluginRoutes,
+      napcatManagerCtx,
+      napcatScanHealthPayload,
+      readGatewayStatus,
+      registerBuiltinMessageAdapterScanProviders,
+      registerManagerPluginHandlerRoutes,
+      remoteAgentMessageAdapterScanResult,
+      rootDir,
+      routeCallbackEndpoint,
+      routeHasRecentMessages,
+      scanNapcatEndpoint,
+      speechControl,
+      standaloneGatewayPayload,
+    }) }),
+    Object.freeze({ capability: "host.manager.agent-adapter-catalog@1", value: Object.freeze({
+      jsonResponse,
+      managerPluginRoutes,
+      mountAgentAdapterCatalogPlugin,
+      registerManagerPluginHandlerRoutes,
+      rootDir,
+      runtimes,
+      get agentAdapterCatalogService() { return agentAdapterCatalogService; },
+      set agentAdapterCatalogService(value) { agentAdapterCatalogService = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.agent-communication@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      agentRequests,
+      agentSendReceiptResponse,
+      codexHookContextService,
+      createAgentCommunicationRoutes,
+      findAgentSendTraces,
+      handleCodexHookApi,
+      jsonResponse,
+      managerPluginRoutes,
+      performAgentSend,
+      publishManagerEvent,
+      readJsonBody,
+      refreshAgentRequestReminderTimers,
+      registerManagerPluginHandlerRoutes,
+      rootDir,
+    }) }),
+    Object.freeze({ capability: "host.manager.copilot-control@1", value: Object.freeze({
+      CopilotControlService,
+      ManagerPluginRequestTracker,
+      agentManagerApiCtx,
+      createAgentProviderControlRouteHandler,
+      getCopilotStatus,
+      jsonResponse,
+      managerPluginRoutes,
+      publishManagerEvent,
+      registerManagerPluginHandlerRoutes,
+    }) }),
+    Object.freeze({ capability: "host.manager.astrbot-control@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      createAgentProviderControlRouteHandler,
+      jsonResponse,
+      managerPluginRoutes,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
+      testAstrbotLoginEndpoint,
+    }) }),
+    Object.freeze({ capability: "host.manager.marvis-control@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      agentManagerApiCtx,
+      createAgentProviderControlRouteHandler,
+      jsonResponse,
+      managerPluginRoutes,
+      openMarvis,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
+    }) }),
+    Object.freeze({ capability: "host.manager.agent-thread-control@1", value: Object.freeze({
+      agentRequests,
+      agentThreadRequestFailureData,
+      agentThreadRequestOptions,
+      applyManagedAgentThreadDefaults,
+      createAgentThreadControlRoutes,
+      handleAgentThreadRequest,
+      jsonResponse,
+      managerOperationalError,
+      managerOperationalLog,
+      managerPluginRoutes,
+      messageProcessingBoard,
+      publishManagerEvent,
+      readJsonBody,
+      refreshAgentRequestReminderTimers,
+      registerManagerPluginHandlerRoutes,
+      rootDir,
+      setMessageProcessingPlanBaseline,
+    }) }),
+    Object.freeze({ capability: "host.manager.napcat-control@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      addManagedNapcatInstance,
+      checkNapcatHealthWithBackfill,
+      configureNapcatOneBot,
+      ensureNapcatInstanceReady,
+      handleNapcatControlApi,
+      jsonResponse,
+      launchNapcatInstanceEndpoint,
+      managerPluginRoutes,
+      napcatManagerCtx,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
+      removeManagedNapcatInstance,
+      repairAllNapcatInstances,
+      restartNapcatInstanceEndpoint,
+      runWindowsTaskkill,
+      stopChildProcessTree,
+      get activeNapcatControlContext() { return activeNapcatControlContext; },
+      set activeNapcatControlContext(value) { activeNapcatControlContext = value; },
+      get managerListenerReady() { return managerListenerReady; },
+      set managerListenerReady(value) { managerListenerReady = value; },
+      get startActiveNapcatSupervisor() { return startActiveNapcatSupervisor; },
+      set startActiveNapcatSupervisor(value) { startActiveNapcatSupervisor = value; },
+      get stopActiveNapcatSupervisor() { return stopActiveNapcatSupervisor; },
+      set stopActiveNapcatSupervisor(value) { stopActiveNapcatSupervisor = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.remote-agent@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      RemoteAgentHub,
+      appendLog,
+      appendMessageContextToDir,
+      handleRemoteAgentPluginApi,
+      handleRemoteAgentTaskEvent,
+      jsonResponse,
+      managerHost,
+      managerPluginRoutes,
+      managerPort,
+      path,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
+      remoteAgentPublicHost,
+      remoteAgentTaskWithGatewayDefaults,
+      roleDirForDefinition,
+      rootDir,
+      runtimes,
+      get remoteAgentHub() { return remoteAgentHub; },
+      set remoteAgentHub(value) { remoteAgentHub = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.napcat-supervisor@1", value: Object.freeze({
+      NapcatSupervisorService,
+      autoLoginNapcatInstancesOnRabiStart,
+      managerReadOnly,
+      managerShouldAutostart,
+      get activeNapcatControlContext() { return activeNapcatControlContext; },
+      set activeNapcatControlContext(value) { activeNapcatControlContext = value; },
+      get managerListenerReady() { return managerListenerReady; },
+      set managerListenerReady(value) { managerListenerReady = value; },
+      get startActiveNapcatSupervisor() { return startActiveNapcatSupervisor; },
+      set startActiveNapcatSupervisor(value) { startActiveNapcatSupervisor = value; },
+      get stopActiveNapcatSupervisor() { return stopActiveNapcatSupervisor; },
+      set stopActiveNapcatSupervisor(value) { stopActiveNapcatSupervisor = value; },
+    }) }),
+    Object.freeze({ capability: "host.manager.diagnostics@1", value: Object.freeze({
+      PERFORMANCE_OPERATIONS,
+      createDiagnosticsRoutes,
+      jsonResponse,
+      managerPluginRoutes,
+      measureSyncPerformanceOperation,
+      metaPayload,
+      registerManagerPluginHandlerRoutes,
+      runtimeStatusWithRoleInfoCache,
+      runtimes,
+    }) }),
+    Object.freeze({ capability: "host.manager.desktop@1", value: Object.freeze({
+      adapterConfigPath,
+      createDesktopControlRoutes,
+      desktopConfigFilePayload,
+      ensureDataDirs,
+      ensurePersonaConfigFile,
+      handleDesktopSettingsApi,
+      jsonResponse,
+      managerPluginRoutes,
+      registerManagerPluginHandlerRoutes,
+      rootDir,
+      runtimes,
+      writeAdapterConfigFile,
+      get rolesRoot() { return rolesRoot; },
+      set rolesRoot(value) { rolesRoot = value; },
+      get routeRoot() { return routeRoot; },
+      set routeRoot(value) { routeRoot = value; },
+      get shutdownManager() { return shutdownManager; },
+      set shutdownManager(value) { shutdownManager = value; },
+    }) }),
+  ]);
+  const configuredPluginProfile = process.env.RABIROUTE_PLUGIN_PROFILE?.trim();
+  const managerPluginProfilePath = configuredPluginProfile
+    ? path.resolve(configuredPluginProfile)
+    : path.join(rootDir, "dist", "plugins", "profiles", "desktop.json");
+  const configuredPackageRoots = (process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS ?? "")
+    .split(path.delimiter)
+    .map(value => value.trim())
+    .filter(Boolean)
+    .map(value => path.resolve(value));
+  const managerPluginPackageRoots = Object.freeze([...new Set([
+    path.join(rootDir, "dist", "plugins", "packages"),
+    ...configuredPackageRoots
+  ])]);
+  const managerPluginPackageCatalog = new PluginPackageCatalog(managerPluginPackageRoots);
+  managerPluginKernel = new GenerationRuntime({
+    host: "manager",
+    hostServices: managerPluginHostServices,
+    grantedPermissions: identity => loadedManagerPluginProfile?.grants(identity) ?? []
+  });
+  const reconcileManagerPlugins = async (reason: string): Promise<void> => {
+    const loaded = await loadPluginProfile({
+      profilePath: managerPluginProfilePath,
+      packageCatalog: managerPluginPackageCatalog,
+      runtimeRoot: path.join(rootDir, "data", "plugins", ".runtime"),
+      host: "manager"
     });
-    managerPluginDiagnostics = normalized.diagnostics;
-    const status = await managerPluginReconciler.reconcile(normalized.desired);
-    await webPluginModules.updateFromReconciliation(normalized.loaded, status);
-    publishManagerEvent("plugin_reconciliation_changed", { reason, ...status, diagnostics: managerPluginDiagnostics });
+    loadedManagerPluginProfile = loaded;
+    const result = await managerPluginKernel!.switch(loaded.candidates);
+    webPluginModules.update(loaded, result.generation);
+    const active = result.generation.records.filter(record => record.status === "active").map(record => record.identity.instanceId);
+    const waiting = result.generation.records.filter(record => record.status === "waiting_dependency").map(record => record.identity.instanceId);
+    const failed = result.generation.records.filter(record => record.status === "failed").map(record => record.identity.instanceId);
+    managerPluginDiagnostics = result.generation.records.filter(record => record.status !== "active");
+    publishManagerEvent("plugin_reconciliation_changed", { reason, state: "idle", active, waiting, failed, diagnostics: managerPluginDiagnostics });
     publishManagerEvent("plugin_catalog_changed", {
       reason,
-      generation: managerPluginRuntime.generation,
-      revision: {
-        plugins: managerPluginRuntime.catalog.snapshot().revision,
-        contributions: managerPluginRuntime.contributions.catalog().revision
-      }
+      generation: result.generation.id,
+      revision: { plugins: result.generation.sequence, contributions: result.generation.contributions.revision }
     });
-    for (const diagnostic of managerPluginDiagnostics) console.warn(diagnostic.message);
   };
 
-  const startupPluginConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
   try {
-    await reconcileManagerPlugins("manager startup", startupPluginConfig.managerPlugins);
-    if (!managerPluginActive("manager:core")) {
-      throw new Error("Required Manager plugin failed to activate: manager:core");
+    await reconcileManagerPlugins("manager startup");
+    if (!managerPluginKernel!.current().services.services.has("manager.core@1")) {
+      const failedRecords = managerPluginKernel!.current().records
+        .filter(record => record.status === "failed")
+        .map(record => `${record.identity.instanceId}: ${record.error?.message ?? "activation failed"}`);
+      const detail = failedRecords.join("; ") || "manager:core did not publish manager.core@1";
+      throw new Error(`Required Manager capability failed to activate: manager.core@1 (${detail})`);
     }
   } catch (error) {
     lanAgentRegistry.close();
@@ -8419,7 +7917,7 @@ export async function startManager(): Promise<void> {
     throw error;
   }
   let configWatcher: ConfigWatcher | null = null;
-  let pluginBundleWatcher: PluginBundleWatcher | null = null;
+  let pluginPackageWatcher: PluginPackageWatcher | null = null;
   let removeSignalHandlers = (): void => {};
   let managerResourcesStopped = false;
   let server: http.Server | undefined;
@@ -8429,7 +7927,7 @@ export async function startManager(): Promise<void> {
     managerResourcesStopped = true;
     removeSignalHandlers();
     configWatcher?.close();
-    pluginBundleWatcher?.close();
+    pluginPackageWatcher?.close();
     detachLanAgentUpgrade?.();
     detachLanAgentUpgrade = undefined;
     lanAgentRegistry.close();
@@ -8447,7 +7945,7 @@ export async function startManager(): Promise<void> {
   managerServicesReady = true;
   if (managerReadOnly) {
     console.log("Manager read-only mode enabled: startup reconciliation and mutating HTTP methods are disabled.");
-  } else if (managerPluginActive("manager:speech")) {
+  } else {
     reconcileActiveSpeech();
   }
 
@@ -8470,15 +7968,13 @@ export async function startManager(): Promise<void> {
       const failed = response.statusCode >= 400;
       const slow = durationMs >= 2_000;
       const context = managerRequestContexts.get(response);
-      if (managerPluginActive("manager:performance")) {
-        performanceMonitoring.recordHttpRequest(
-          pathname,
-          response.statusCode,
-          durationMs,
-          requestId,
-          context?.responseBytes
-        );
-      }
+      recordManagerHttpRequest(
+        pathname,
+        response.statusCode,
+        durationMs,
+        requestId,
+        context?.responseBytes
+      );
       if (!mutating && !failed && !slow) return;
       managerOperationalLog.record(failed ? "warn" : slow ? "warn" : "info", "http_request_completed", {
         requestId,
@@ -8516,13 +8012,12 @@ export async function startManager(): Promise<void> {
         return;
       }
       if (handlePluginCatalogApi(request, requestUrl, response, {
-        runtime: managerPluginRuntime,
+        runtime: managerPluginKernel!,
         reconciliation: {
-          reconciler: managerPluginReconciler,
           diagnostics: () => managerPluginDiagnostics,
           reconcile: async () => {
             await reconcileManagerPlugins("manual API request");
-            return managerPluginReconciler.status();
+            return managerPluginKernel!.current();
           }
         },
         webModules: {
@@ -8577,27 +8072,19 @@ export async function startManager(): Promise<void> {
   startActiveNapcatSupervisor();
   startActivePlanFeedbackRecovery();
   setImmediate(() => {
-    void (async () => {
-      const persistedConfig = readManagerConfig() as ManagerConfig & { managerPlugins?: unknown };
-      const hasLegacyManagerPlugins = Object.hasOwn(persistedConfig, "managerPlugins");
-      const initialized = await initializeManagerPluginProfile(rootDir, persistedConfig.managerPlugins);
-      if (hasLegacyManagerPlugins) {
-        delete persistedConfig.managerPlugins;
-        writeManagerConfig(persistedConfig);
-      }
-      if (initialized.wroteConfiguration || hasLegacyManagerPlugins) {
-        await reconcileManagerPlugins("post-listener plugin profile initialization");
-      }
-    })().catch(error => console.warn(`Manager plugin profile initialization failed: ${error instanceof Error ? error.message : String(error)}`));
     void migrateRolePlanLayoutsAfterStartup().finally(() => { void prewarmRolePlanCatalogs(); });
   });
+
   configWatcher = managerShouldAutostart && managerConfigWatcherEnabled()
     ? startConfigWatcher(reconcileManagerPlugins, () => syncActiveRabiLinkRelay())
     : null;
   if (!configWatcher) {
     console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
   }
-  pluginBundleWatcher = startPluginBundleWatcher(reconcileManagerPlugins);
+  pluginPackageWatcher = startPluginPackageWatcher(
+    [...managerPluginPackageRoots, path.dirname(managerPluginProfilePath)],
+    reconcileManagerPlugins
+  );
 
   let shuttingDown = false;
 

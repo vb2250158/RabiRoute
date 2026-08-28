@@ -79,6 +79,7 @@ test("plugin route modules retain every migrated endpoint family", () => {
     "/network-options",
     "/reload",
     "manual-trigger",
+    "agent-delivery-test",
     "delivery-replay",
     "weixin-login"
   ]);
@@ -138,15 +139,11 @@ test("plugin route modules retain every migrated endpoint family", () => {
   ]);
 });
 
-test("Agent state reporting is registered by the Agent state plugin hook", () => {
-  const central = source("src/manager/controlPlaneRoutes.ts");
-  const hookStart = central.indexOf('"manager:agent-state-control": ctx =>');
-  const hookEnd = central.indexOf('"manager:gateway-runtime": ctx =>', hookStart);
-  const hook = central.slice(hookStart, hookEnd);
-  assert.ok(hookStart >= 0 && hookEnd > hookStart);
-  assert.match(hook, /registerManagerPluginHandlerRoutes\(managerPluginRoutes, "manager:agent-state-control"/);
-  assert.match(hook, /handleAgentStateReport\(request, requestUrl\.pathname, response\)/);
-  assert.match(central, /function handleAgentStateReport[\s\S]*pathname !== "\/api\/agent-state"/);
+test("Agent state reporting is registered by the Agent state plugin package", () => {
+  const plugin = source("plugins/builtin/io.rabiroute.manager.agent-state-control/1.0.0/manager.mjs");
+  assert.match(plugin, /registerManagerPluginHandlerRoutes\(runtime\.managerPluginRoutes, "manager:agent-state-control"/);
+  assert.match(plugin, /handleAgentStateReport\(request, requestUrl\.pathname, response\)/);
+  assert.match(source("src/manager/controlPlaneRoutes.ts"), /function handleAgentStateReport[\s\S]*pathname !== "\/api\/agent-state"/);
 });
 
 test("Outbox imports the shared FenneNote output implementation", () => {
@@ -157,29 +154,20 @@ test("Outbox imports the shared FenneNote output implementation", () => {
 
 
 test("NapCat plugin shutdown uses only launch-owned child processes and recorded PIDs", () => {
-  const central = source("src/manager/controlPlaneRoutes.ts");
-  const hookStart = central.indexOf('"manager:napcat-control": ctx =>');
-  const hookEnd = central.indexOf('"manager:remote-agent": ctx =>', hookStart);
-  const hook = central.slice(hookStart, hookEnd);
-  assert.ok(hookStart >= 0 && hookEnd > hookStart);
-  assert.match(hook, /rememberLaunchPids/);
-  assert.match(hook, /const activeOperations = new Set<Promise<unknown>>\(\)/);
-  assert.match(hook, /napcatManagerCtx\(rememberLaunch, rememberLaunchPids, assertAccepting\)/);
-  assert.match(hook, /accepting = false;[\s\S]*requestTracker\.stop\(\)[\s\S]*drainOperations\(\)/);
-  assert.match(hook, /if \(result\.ok === true\) releaseOwnership\(body\)/);
-  assert.match(hook, /runWindowsTaskkill\(numericPid\)/);
-  assert.doesNotMatch(hook, /stopNapcatInstanceEndpoint\(controlContext/);
+  const plugin = source("plugins/builtin/io.rabiroute.manager.napcat-control/1.0.0/manager.mjs");
+  assert.match(plugin, /rememberLaunchPids/);
+  assert.match(plugin, /const activeOperations = new Set/);
+  assert.match(plugin, /napcatManagerCtx\(rememberLaunch, rememberLaunchPids, assertAccepting\)/);
+  assert.match(plugin, /accepting = false;[\s\S]*requestTracker\.stop\(\)[\s\S]*drainOperations\(\)/);
+  assert.match(plugin, /if \(result\.ok === true\)\s+releaseOwnership\(body\)/);
+  assert.match(plugin, /runWindowsTaskkill\(numericPid\)/);
+  assert.doesNotMatch(plugin, /stopNapcatInstanceEndpoint\(controlContext/);
 });
 
 test("Remote Agent rejects WebSocket work before HTTP request drain", () => {
-  const central = source("src/manager/controlPlaneRoutes.ts");
-  const hookStart = central.indexOf('"manager:remote-agent": ctx =>');
-  const hookEnd = central.indexOf('"manager:napcat-supervisor": ctx =>', hookStart);
-  const hook = central.slice(hookStart, hookEnd);
-  assert.ok(hookStart >= 0 && hookEnd > hookStart);
-  assert.match(hook, /unregisterRoutes\(\);[\s\S]*hub\.stopAccepting\(\);[\s\S]*await requestTracker\.stop\(\);[\s\S]*await hub\.shutdown\(\)/);
+  const plugin = source("plugins/builtin/io.rabiroute.manager.remote-agent/1.0.0/manager.mjs");
+  assert.match(plugin, /unregisterRoutes\(\);[\s\S]*hub\.stopAccepting\(\);[\s\S]*await requestTracker\.stop\(\);[\s\S]*await hub\.shutdown\(\)/);
 });
-
 
 test("Manager forced shutdown allows the full plugin drain budget", () => {
   const central = source("src/manager/controlPlaneRoutes.ts");
@@ -192,7 +180,7 @@ test("Manager stops plugin Fibers before shared workers and the root Context", (
   const helperEnd = central.indexOf("let managerPluginDiagnostics", helperStart);
   const helper = central.slice(helperStart, helperEnd);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  const pluginStop = helper.indexOf("await managerPluginRuntime.unmount()");
+  const pluginStop = helper.indexOf("await managerPluginKernel?.dispose()");
   const sharedStop = helper.indexOf("await managerSharedResourcesRuntime.unmount()");
   const rootStop = helper.indexOf("await managerCordisRoot.dispose()");
   assert.ok(pluginStop >= 0 && sharedStop > pluginStop && rootStop > sharedStop);

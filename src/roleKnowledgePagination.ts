@@ -57,6 +57,7 @@ export type RoleMemoryPage<T> = {
 type RolePlanSummarySource = PresentedPlanItem;
 
 export type RolePlanSummary = ReturnType<typeof summarizeRolePlan>;
+export type RolePlanPreview = ReturnType<typeof previewRolePlan>;
 
 type PresentedPlanLike = {
   updatedAt: string;
@@ -258,8 +259,48 @@ function searchableKnowledgeStrings(value: unknown, output: string[] = [], seen 
   return output;
 }
 
-export function summarizeRolePlan(plan: RolePlanSummarySource) {
+function currentPlanStep(plan: RolePlanSummarySource) {
+  return plan.steps.find((step) => step.id === plan.currentStepId)
+    || plan.steps.find((step) => step.status === "进行中");
+}
+
+function planStepSummary(plan: RolePlanSummarySource) {
+  const step = currentPlanStep(plan);
+  if (!step) return undefined;
+  return {
+    id: step.id,
+    title: step.title,
+    status: step.status
+  };
+}
+
+function planStepPreview(plan: RolePlanSummarySource) {
+  const step = currentPlanStep(plan);
+  if (!step) return undefined;
+  const { approvalRequest: _approvalRequest, ...preview } = step;
+  return preview;
+}
+
+function planProgressSummary(plan: RolePlanSummarySource) {
+  const currentStepId = currentPlanStep(plan)?.id;
+  const currentIndex = plan.steps.findIndex((step) => step.id === currentStepId);
+  return {
+    attachmentCount: plan.attachments.length,
+    stepCount: plan.steps.length,
+    completedStepCount: plan.steps.filter((step) => step.status === "已完成").length,
+    currentStepPosition: currentIndex >= 0 ? currentIndex + 1 : 0
+  };
+}
+
+function planPresentationWithoutContract(plan: RolePlanSummarySource) {
   const { contract: _contract, ...approval } = plan.presentation.approval as RolePlanSummarySource["presentation"]["approval"] & { contract?: unknown };
+  return {
+    ...plan.presentation,
+    approval
+  };
+}
+
+export function summarizeRolePlan(plan: RolePlanSummarySource) {
   return {
     id: plan.id,
     title: plan.title,
@@ -268,18 +309,30 @@ export function summarizeRolePlan(plan: RolePlanSummarySource) {
     urgency: plan.urgency,
     priority: plan.priority,
     kind: plan.kind,
+    currentStep: plan.currentStep,
+    currentStepId: plan.currentStepId,
+    currentStepPreview: planStepSummary(plan),
+    dueAt: plan.dueAt,
     project: plan.project ? { name: plan.project.name } : undefined,
     secretaryBinding: plan.secretaryBinding,
     taskBinding: plan.taskBinding,
     createdAt: plan.createdAt,
     updatedAt: plan.updatedAt,
     keywords: plan.keywords,
-    attachmentCount: plan.attachments.length,
-    stepCount: plan.steps.length,
-    presentation: {
-      ...plan.presentation,
-      approval
-    }
+    ...planProgressSummary(plan),
+    detailLevel: "summary" as const,
+    presentation: planPresentationWithoutContract(plan)
+  };
+}
+
+export function previewRolePlan(plan: RolePlanSummarySource) {
+  return {
+    ...plan,
+    steps: [],
+    currentStepPreview: planStepPreview(plan),
+    ...planProgressSummary(plan),
+    detailLevel: "preview" as const,
+    presentation: planPresentationWithoutContract(plan)
   };
 }
 import type { PresentedPlanItem } from "./roleKnowledgePresentation.js";

@@ -1,5 +1,4 @@
 import type { AsyncComponentLoader } from "vue";
-import { isBuiltinStartupWebPageRoute } from "./builtinStartupPages";
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 import RouteLoadErrorPage from "./components/RouteLoadErrorPage.vue";
 import RouteLoadingPage from "./components/RouteLoadingPage.vue";
@@ -23,7 +22,7 @@ export const PLUGIN_RECOVERY_ROUTE_NAME = "plugin-recovery";
 async function reloadActiveTrustedWebPageAfterReplacement(): Promise<void> {
   const current = router.currentRoute.value;
   const routeId = typeof current.meta.pluginRouteId === "string" ? current.meta.pluginRouteId : "";
-  if (!routeId || isBuiltinStartupWebPageRoute(routeId) || !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return;
+  if (!routeId || !isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return;
   const resolved = router.resolve(current.fullPath);
   if (typeof resolved.meta.pluginRouteId !== "string" || resolved.meta.pluginRouteId !== routeId) return;
   await router.replace({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: current.fullPath } });
@@ -116,7 +115,7 @@ onTrustedWebPageReplacement(() => { void reloadActiveTrustedWebPageAfterReplacem
 
 router.beforeEach((to) => {
   const routeId = typeof to.meta.pluginRouteId === "string" ? to.meta.pluginRouteId : "";
-  if (!routeId || isBuiltinStartupWebPageRoute(routeId) || isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return true;
+  if (!routeId || isWebPageRouteActive(pluginCatalogStore.pages.value, routeId)) return true;
   return {
     name: PLUGIN_RECOVERY_ROUTE_NAME,
     query: to.name === PLUGIN_RECOVERY_ROUTE_NAME ? {} : { from: to.fullPath }

@@ -7,8 +7,9 @@ import {
   loadPendingMemoryConsolidationRunCount,
   loadRoleMemoryCounts,
   loadRoleMemoryPage,
+  loadRolePlan,
   loadRolePlanPage,
-  loadRolePlanPageWithPriorityDetails,
+  loadRolePlanPreview,
   normalizeRolePlanFromManager,
   openPlanAgentTask
 } from "../src/roleKnowledgeClient.js";
@@ -292,76 +293,107 @@ test("WebGUI batches plan Agent status reads and opens only the selected bound r
   assert.equal(requests[1]!.init?.body, JSON.stringify({ role: "secretary" }));
 });
 
-test("WebGUI hydrates the first plan page in parallel before returning it", async () => {
+test("WebGUI returns the first eight summaries without waiting for plan details", async () => {
   const originalFetch = globalThis.fetch;
   const requests: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request) => {
     const request = String(input);
     requests.push(request);
-    const match = request.match(/\/plans\/(plan-[123])$/);
-    const data = match
-      ? {
-          ...plan(),
-          id: match[1],
-          title: match[1],
-          focus: `${match[1]} detail`,
-          steps: [{ id: "step-1", title: "Detail", status: "进行中" }]
-        }
-      : {
-          items: ["plan-1", "plan-2", "plan-3"].map((id) => ({
-            id,
-            title: id,
-            status: "进行中",
-            createdAt: "2026-07-30T00:00:00.000Z",
-            updatedAt: "2026-07-30T00:00:00.000Z",
-            keywords: [],
-            presentation: plan().presentation,
-            attachmentCount: 0,
-            stepCount: 1
-          })),
-          total: 3,
-          nextCursor: "",
-          counts: {
-            total: 3,
-            current: 3,
-            plans: 3,
-            archived: 0,
-            blocked: 0,
+    return new Response(JSON.stringify({
+      code: 0,
+      data: {
+        items: [{
+          id: "plan-1",
+          title: "Plan 1",
+          status: "进行中",
+          currentStepId: "step-2",
+          currentStepPreview: { id: "step-2", title: "Current step", status: "进行中" },
+          currentStepPosition: 2,
+          attachmentCount: 3,
+          stepCount: 5,
+          completedStepCount: 1,
+          detailLevel: "summary",
+          createdAt: "2026-07-30T00:00:00.000Z",
+          updatedAt: "2026-07-30T00:00:00.000Z",
+          keywords: [],
+          presentation: plan().presentation
+        }],
+        total: 1,
+        nextCursor: "",
+        counts: {
+          total: 1,
+          current: 1,
+          plans: 1,
+          archived: 0,
+          blocked: 0,
+          qa: 0,
+          active: 1,
+          stages: {
+            executing: 1,
             qa: 0,
-            active: 3,
-            stages: {
-              executing: 3,
-              qa: 0,
-              waitingPackage: 0,
-              waitingExternal: 0,
-              approval: 0,
-              pending: 0,
-              paused: 0,
-              completed: 0,
-              archived: 0
-            }
+            waitingPackage: 0,
+            approval: 0,
+            manualVerification: 0,
+            paused: 0,
+            completed: 0,
+            archived: 0
           }
-        };
-    return new Response(JSON.stringify({ code: 0, data }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    });
+        },
+        facets: { statuses: [], tags: [] }
+      }
+    }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   try {
-    const result = await loadRolePlanPageWithPriorityDetails("Rabi", "", 8, { view: "plans" }, 8);
-    assert.deepEqual(result.detailPlanIds, ["plan-1", "plan-2", "plan-3"]);
-    assert.equal(result.items[0]?.focus, "plan-1 detail");
-    assert.equal(result.items[1]?.focus, "plan-2 detail");
-    assert.equal(result.items[2]?.focus, "plan-3 detail");
+    const result = await loadRolePlanPage("Rabi", "", 8, { view: "plans" });
+    assert.equal(result.items[0]?.detailLevel, "summary");
+    assert.equal(result.items[0]?.currentStepPreview?.title, "Current step");
+    assert.equal(result.items[0]?.stepCount, 5);
+    assert.equal(result.items[0]?.attachments.length, 0);
+    assert.equal(result.items[0]?.steps.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
 
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 1);
   assert.match(requests[0]!, /detail=summary/);
-  assert.match(requests[1]!, /\/plans\/plan-1$/);
-  assert.match(requests[2]!, /\/plans\/plan-2$/);
-  assert.match(requests[3]!, /\/plans\/plan-3$/);
+});
+
+test("WebGUI reads attachment previews separately from full expanded plan details", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const request = String(input);
+    requests.push(request);
+    const preview = request.includes("detail=preview");
+    return new Response(JSON.stringify({
+      code: 0,
+      data: {
+        ...plan(),
+        focus: preview ? "Preview body" : "Full body",
+        attachments: [{ id: "image", kind: "image", name: "preview.png", size: 42, mimeType: "image/png", sha256: "a".repeat(64) }],
+        steps: preview ? [] : [{ id: "step-1", title: "Full step", status: "进行中" }],
+        currentStepPreview: { id: "step-1", title: "Current step", status: "进行中", detail: "Visible before expand" },
+        attachmentCount: 1,
+        stepCount: 1,
+        completedStepCount: 0,
+        detailLevel: preview ? "preview" : "full"
+      }
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const preview = await loadRolePlanPreview("Rabi", "plan-1");
+    const full = await loadRolePlan("Rabi", "plan-1");
+    assert.equal(preview.detailLevel, "preview");
+    assert.equal(preview.attachments.length, 1);
+    assert.equal(preview.steps.length, 0);
+    assert.equal(full.detailLevel, "full");
+    assert.equal(full.steps[0]?.title, "Full step");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requests[0], "/api/roles/Rabi/plans/plan-1?detail=preview");
+  assert.equal(requests[1], "/api/roles/Rabi/plans/plan-1");
 });
 
 test("WebGUI requests a bounded page for only the visible memory category", async () => {

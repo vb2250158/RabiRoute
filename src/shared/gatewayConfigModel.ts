@@ -81,7 +81,7 @@ export type OutputAdapterType = "qq" | "agent" | "file" | "console" | "tts" | "w
 export type PipelineOutputAdapterInput = OutputAdapterType | "codex";
 export type PromptOutputMode = "qq_text" | "voice_short" | "markdown" | "json" | "plain_text";
 export type MessagePayloadKind = "text" | "image" | "voice" | "file";
-export type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 export type SpeechPushMode = "hot" | "keyword";
 export type CodexHookSettings = {
   sessionContextEnabled: boolean;
@@ -349,6 +349,9 @@ export type GatewayDefinition = {
   dshSessionName?: string;
   dshCwd?: string;
   dshBaseUrl?: string;
+  dshModelProvider?: string;
+  dshModel?: string;
+  dshReasoningEffort?: string;
   codexPlanAssistantEnabled?: boolean;
   codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
@@ -428,7 +431,7 @@ export type GatewayConfigModelOptions = {
 export const agentAdapterValues: ReadonlySet<AgentAdapterType> = new Set(agentAdapterTypes);
 const messagePayloadKindValues = new Set<MessagePayloadKind>(["text", "image", "voice", "file"]);
 const defaultSupportedOutputs: MessagePayloadKind[] = ["text", "image", "voice", "file"];
-const codexReasoningEffortValues = new Set<CodexReasoningEffort>(["low", "medium", "high", "xhigh", "max"]);
+const codexReasoningEffortValues = new Set<CodexReasoningEffort>(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const dshSessionIdPattern = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function normalizeDshSessionId(value: unknown): string | undefined {
@@ -1392,6 +1395,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     dshSessionName: definition.dshSessionName?.trim() || undefined,
     dshCwd,
     dshBaseUrl: definition.dshBaseUrl?.trim() || undefined,
+    dshModelProvider: definition.dshModelProvider?.trim() || undefined,
+    dshModel: definition.dshModel?.trim() || undefined,
+    dshReasoningEffort: definition.dshReasoningEffort?.trim() || undefined,
     codexPlanAssistantEnabled: planAssistantSupported
       ? codexPlanAssistantEnabled
       : undefined,

@@ -343,7 +343,7 @@ Cordis 适合组合能力和生命周期。RabiRoute 的 Route、事件记录、
 - RabiLink 第二次 `stop()` 可以取消停止期间排队的重启；配置 watcher 与 Rabi 身份配置 PATCH 都等待异步 Relay 同步。
 - 文档中“独立进程或更强隔离”标记为 RabiRoute 的安全选择，不再描述为 DSH 的现有做法。
 
-实施设计见[基于 Cordis 的插件运行时重构设计](cordis-plugin-runtime-refactor.md)，原则摘要见[从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md)。
+当前实现见[RabiRoute 插件平台目标架构](manager-plugin-implementation-hot-swap.md)，原则摘要见[从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md)。
 
 ## 主要证据路径
 
