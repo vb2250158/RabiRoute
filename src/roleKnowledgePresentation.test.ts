@@ -1109,6 +1109,22 @@ test("plan summaries keep title, type, status and ordering metadata without form
   assert.equal("contract" in summary.presentation.approval, false);
 });
 
+test("plan summaries locate the in-progress step when currentStepId is missing", () => {
+  const presented = presentPlan(plan({
+    id: "summary-current-step-fallback",
+    title: "Summary current-step fallback",
+    currentStepId: undefined,
+    steps: [
+      { id: "done", title: "Done", status: "已完成" },
+      { id: "running", title: "Running", status: "进行中" }
+    ]
+  }));
+  const summary = summarizeRolePlan(presented);
+
+  assert.equal(summary.currentStepPreview?.id, "running");
+  assert.equal(summary.currentStepPosition, 2);
+});
+
 test("plan previews keep visible attachments and current progress without full steps or approval contracts", () => {
   const presented = presentPlan(plan({
     id: "preview",

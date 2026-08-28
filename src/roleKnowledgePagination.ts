@@ -282,7 +282,8 @@ function planStepPreview(plan: RolePlanSummarySource) {
 }
 
 function planProgressSummary(plan: RolePlanSummarySource) {
-  const currentIndex = plan.steps.findIndex((step) => step.id === plan.currentStepId);
+  const currentStepId = currentPlanStep(plan)?.id;
+  const currentIndex = plan.steps.findIndex((step) => step.id === currentStepId);
   return {
     attachmentCount: plan.attachments.length,
     stepCount: plan.steps.length,
