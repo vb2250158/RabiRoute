@@ -48,4 +48,4 @@ The role conversation endpoint is a separate current capability; it can append r
 
 ## Lifecycle
 
-The tray connects to the portable Manager at `http://127.0.0.1:8790`. **Exit RabiRoute** calls `POST /manager/shutdown`, allowing the Manager to stop gateways and close cleanly. The desktop panel remains optional for the portable Node/WebGUI runtime.
+In the Windows package, Host starts the tray only after an exact same-generation Manager READY and passes the dynamic URL plus application/Manager identity. **Exit RabiRoute** sends a generation-fenced command to Host. The tray cannot run independently, start or repair Manager, or call a Manager shutdown API. Source-mode Manager remains independently runnable without creating a tray.

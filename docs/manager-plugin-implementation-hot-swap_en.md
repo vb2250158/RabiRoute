@@ -8,13 +8,13 @@
 
 ## Current implementation
 
-- The production distribution Profile is `plugins/profiles/desktop.json` and selects 28 independent Manager plugin packages.
+- The production distribution Profile is `plugins/profiles/desktop.json` and selects 29 independent Manager plugin packages.
 - Seven plugins provide independent Web Bundles: `core`, `desktop`, `diagnostics`, `message-adapter-control`, `performance`, `persona`, and `speech`.
-- Built-in and out-of-tree plugins share `@rabiroute/plugin-sdk`, strict manifests, the capability graph, permission checks, revision isolation, generation switching, and effect scopes.
-- Manager, Catalog, Web modules, and Profile read only the new plugin platform. The old Bundle, loaders, Profile/Patch path, reconciler, catalog, process plugin host, and migration entries are deleted.
+- Built-in and out-of-tree plugins share schema/profile v2, `@rabiroute/plugin-sdk`, strict manifests, the capability graph, permission checks, revision isolation, generation switching, and effect scopes.
+- Manager, Catalog, Web modules, and Profile read only the new plugin platform. Retired Bundles, Profile/Patch, multi-entry loaders, unrestricted process hosts, and migration entries are deleted. Current `isolated` execution uses only the bounded Plugin Runtime Host and Process Lease Registry.
 - The WebGUI host contains no product page IDs. Pages, navigation, commands, and status cards come from plugin contributions.
 - Plugin builds write to a staging directory before replacing individual version directories. The watched `packages` and `profiles` roots remain in place, and stale packages are removed in the same build.
-- Long-lived host-owned resources such as Gateways use generation handoff leases. A new generation acquires its lease before the old generation releases it, and the resource stops only after the final lease is released.
+- Long-lived resources such as Gateways use generation handoff leases. Plugin children use process leases carrying application/Manager/activation/instance/revision identity. Replacement disposes consumers before providers, and shared resources stop only after their final lease is released.
 
 ## DSH/Cordis comparison and decisions
 
@@ -185,18 +185,18 @@ A package omits unsupported host entries. Builds emit only to `dist/plugins/`; s
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "io.rabiroute.agent.codex",
   "version": "1.0.0",
   "entries": {
-    "manager": "./manager.mjs",
-    "web": "./web.mjs"
+    "manager": { "execution": "isolated", "module": "./manager.mjs" },
+    "web": { "execution": "in_process", "module": "./web.mjs" }
   },
   "provides": ["agent.adapter.codex@1"],
   "requires": ["agent.tasks.query@1", "agent.delivery@1"],
   "optional": ["ui.notifications@1"],
   "permissions": ["desktop.ipc.codex", "storage.namespace:agent-codex"],
-  "configSchema": "./config.schema.json",
+  "configSchema": { "type": "object", "additionalProperties": false },
   "stateSchemaVersion": 1
 }
 ```
@@ -314,19 +314,18 @@ A package may contain multiple independently loaded entries:
 - Manager entry: control-plane orchestration;
 - Gateway entry: message input and resident connections;
 - Web entry: pages, components, and commands;
-- Desktop entry: desktop lifecycle and local interaction;
-- isolated entry: versioned RPC in a separate process.
+- Desktop entry: declarative desktop presentation and local-interaction contracts, never application lifecycle;
+- `isolated` execution: versioned RPC in a separate process whose top-level entry code never enters Manager loader.
 
 Entries collaborate through public APIs, events, or durable facts, not shared mutable memory. Web and Desktop never import Manager implementation.
 
 ## Trust and permissions
 
-| Type | Source | Execution |
+| Execution | Scope | Runtime |
 |---|---|---|
-| `builtin` | official distribution | in-process with complete contract tests |
-| `trusted` | explicitly installed and authorized | in-process with constrained permissions |
-| `isolated` | unknown code or high-risk dependencies | separate process with RPC and resource limits |
-| `declarative` | manifests and presentation data | no code execution |
+| `in_process` | reviewed core shipped with Manager and covered by complete contracts | Manager process under SDK lifecycle/effects |
+| `isolated` | out-of-tree code or high-risk dependencies | separate Runtime Host, bounded RPC, resource policy, and process lease |
+| `declarative` | Desktop/Web manifests and presentation data | no plugin code execution |
 
 Installation records source, version, hash, permissions, and enabled Profile. Added permissions require renewed authorization. Installed does not mean unrestricted host access.
 
@@ -339,7 +338,7 @@ sequenceDiagram
     participant R as Atomic Registries
     participant O as Old Generation
 
-    L->>N: Import, validate, resolve dependencies
+    L->>N: Validate manifest, prepare by execution mode, resolve dependencies
     N->>N: Prepare private resources and registration snapshot
     N->>N: Run readiness and invariant checks
     alt Preparation fails
@@ -349,7 +348,8 @@ sequenceDiagram
         N->>R: Atomically publish service, route, and contribution snapshots
         R->>O: Stop admitting new work
         O->>O: Drain accepted work
-        O->>O: Dispose every effect
+        O->>O: Abort lifecycle.signal
+        O->>O: Dispose consumer effects and leases before providers
     end
 ```
 
@@ -359,6 +359,7 @@ Constraints:
 - service, route, and contribution registries switch immutable snapshots once;
 - the old generation admits no new work and completes accepted work only;
 - preparation failure leaves the old generation unchanged;
+- unmet Profile `readyRequires` prevents candidate publication and Manager READY to Host;
 - invariant failure restores the old snapshot before business traffic reaches the candidate;
 - failure after real traffic uses normal recovery and does not pretend to undo external side effects;
 - delivery and outbound operations use durable idempotent records for retry and recovery.
@@ -435,7 +436,7 @@ Each plugin must:
 
 - TypeScript noEmit, Vue type checking, and the 26-package architecture gate passed.
 - `npm test`: 1,401 passed, 1 skipped, and 0 failed.
-- `npm run build`: produced 28 independent Manager packages and 7 independent Web Bundles.
+- That 2026-08-27 `npm run build` produced the then-current 28 Manager packages and 7 Web Bundles; the current build produces 29 Manager packages.
 - `npm run check:built-manager`: passed and produced a local read-only acceptance record.
 - Removed-runtime identifiers are zero in runtime source and configuration, zero in `dist/`, and zero in current-fact documents. The architecture checker keeps only five deleted path names as negative assertions that prevent those files from returning.
 - `git diff --check` passed.

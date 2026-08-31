@@ -28,6 +28,7 @@ import {
   mergeNotificationRules,
   migrateLegacyConfigs,
   readPersonaConfigFragment,
+  readPersonaConfigFragmentAsync,
   writePersonaConfig as writePersonaConfigFile,
   writePersonaRules
 } from "./configMigration.js";
@@ -63,13 +64,13 @@ export function migrateLegacyCopilotThreadName(
 
 export class ManagerConfigRepository {
   readonly rootDir: string;
-  readonly managerPort: number;
+  private currentManagerPort: number;
   routeRoot: string;
   rolesRoot: string;
 
   constructor(options: ManagerConfigRepositoryOptions) {
     this.rootDir = options.rootDir;
-    this.managerPort = options.managerPort;
+    this.currentManagerPort = options.managerPort;
     const cfg = this.readManagerConfig();
     this.routeRoot = path.resolve(this.rootDir, options.routeRoot ?? cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
     this.rolesRoot = path.resolve(this.rootDir, options.rolesRoot ?? cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
@@ -120,7 +121,63 @@ export class ManagerConfigRepository {
     }
     fs.mkdirSync(this.rolesRoot, { recursive: true });
     fs.mkdirSync(this.routeRoot, { recursive: true });
-    this.migrateLegacyConfigs();
+    // Do not synchronously traverse and rewrite every role on Manager startup.
+    // rolesRoot may be NAS-backed; a broad legacy migration here can prevent the
+    // local control-plane listener from ever coming up. Call migrateLegacyConfigs
+    // only from an explicit maintenance/migration workflow.
+  }
+
+  async ensureDataDirsAsync(): Promise<void> {
+    const exists = async (target: string): Promise<boolean> => {
+      try {
+        await fs.promises.access(target);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const exampleDataDir = path.join(this.rootDir, "examples", "data");
+    const exampleManagerConfig = path.join(exampleDataDir, "manager.json");
+    if (!await exists(this.managerConfigPath) && await exists(exampleManagerConfig)) {
+      await fs.promises.mkdir(path.dirname(this.managerConfigPath), { recursive: true });
+      try {
+        await fs.promises.copyFile(exampleManagerConfig, this.managerConfigPath, fs.constants.COPYFILE_EXCL);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      this.refreshManagerConfig();
+    }
+    if (!await exists(this.rolesRoot) && await exists(path.join(exampleDataDir, "roles"))) {
+      await fs.promises.mkdir(path.dirname(this.rolesRoot), { recursive: true });
+      await fs.promises.cp(path.join(exampleDataDir, "roles"), this.rolesRoot, {
+        recursive: true,
+        force: false,
+        errorOnExist: false
+      });
+    }
+    if (!await exists(this.routeRoot) && await exists(path.join(exampleDataDir, "route"))) {
+      await fs.promises.mkdir(path.dirname(this.routeRoot), { recursive: true });
+      await fs.promises.cp(path.join(exampleDataDir, "route"), this.routeRoot, {
+        recursive: true,
+        force: false,
+        errorOnExist: false
+      });
+    }
+    await Promise.all([
+      fs.promises.mkdir(this.rolesRoot, { recursive: true }),
+      fs.promises.mkdir(this.routeRoot, { recursive: true })
+    ]);
+  }
+
+  get managerPort(): number {
+    return this.currentManagerPort;
+  }
+
+  setManagerPort(port: number): void {
+    if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+      throw new Error(`Manager port must be an integer from 1 to 65535; received ${port}.`);
+    }
+    this.currentManagerPort = port;
   }
 
   adapterConfigPath(configName: string): string {
@@ -131,6 +188,12 @@ export class ManagerConfigRepository {
     const safeRoleId = sanitizeRoleId(roleId);
     if (!safeRoleId) return {};
     return readPersonaConfigFragment(this.personaConfigPath(safeRoleId));
+  }
+
+  async readRoleMessageConfigAsync(roleId: string | undefined): Promise<Partial<GatewayDefinition>> {
+    const safeRoleId = sanitizeRoleId(roleId);
+    if (!safeRoleId) return {};
+    return readPersonaConfigFragmentAsync(this.personaConfigPath(safeRoleId));
   }
 
   personaConfigPath(roleId: string): string {

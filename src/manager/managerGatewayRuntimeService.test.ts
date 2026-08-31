@@ -113,6 +113,17 @@ test("load updates runtimes in definition order and stops removed runtimes befor
   assert.deepEqual(fixture.events, []);
 });
 
+test("loadDefinitions applies asynchronously acquired definitions without reading them again", () => {
+  const fixture = serviceFixture({
+    definitions: [{ id: "callback-only", revision: 1 }]
+  });
+
+  fixture.service.loadDefinitions([{ id: " async ", revision: 2 }]);
+
+  assert.deepEqual([...fixture.runtimes.keys()], ["async"]);
+  assert.equal(fixture.runtimes.get("async")?.definition.revision, 2);
+});
+
 test("reconcile performs runtime actions sequentially in store order", () => {
   const fixture = serviceFixture({
     initial: [

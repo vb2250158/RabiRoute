@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.wearable-companion",
+  "version": "1.0.0",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.wearable-companion@1"
+  ],
+  "requires": [
+    "host.manager.wearable-companion-runtime@1",
+    "host.manager.wearable-companion@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "roleId": { "type": "string", "minLength": 1, "maxLength": 80 },
+      "serial": { "type": "string", "maxLength": 160 }
+    }
+  }
+}

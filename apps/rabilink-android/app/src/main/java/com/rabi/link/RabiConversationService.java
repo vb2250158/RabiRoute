@@ -53,6 +53,7 @@ public final class RabiConversationService extends Service {
     public static final String ACTION_RESTORE = "com.rabi.link.conversation.RESTORE";
     public static final String ACTION_PREFERENCE = "com.rabi.link.conversation.PREFERENCE";
     public static final String ACTION_REPLAY_TTS = "com.rabi.link.conversation.REPLAY_TTS";
+    public static final String ACTION_CLEAR_AUDIO_QUARANTINE = "com.rabi.link.conversation.CLEAR_AUDIO_QUARANTINE";
     private static final String CHANNEL = "rabi_conversation";
     private static final String LISTENING_CHANNEL = "rabi_listening";
     private static final String MESSAGE_CHANNEL = "rabi_messages";
@@ -78,6 +79,7 @@ public final class RabiConversationService extends Service {
     private boolean shutdownComplete;
     private boolean networkKnownOffline;
     private boolean networkFallbackCheckScheduled;
+    private boolean voiceServiceActive;
     private final Object phonePlaybackLock = new Object();
     private final Set<String> pendingTtsReplayIds = Collections.synchronizedSet(new HashSet<>());
     private RabiConversationSettings.InputMode inputMode = RabiConversationSettings.InputMode.PAUSED;
@@ -175,6 +177,11 @@ public final class RabiConversationService extends Service {
         context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RESTORE));
     }
 
+    public static void clearAudioQuarantineAfterUserConfirmation(Context context) {
+        context.startForegroundService(new Intent(context, RabiConversationService.class)
+                .setAction(ACTION_CLEAR_AUDIO_QUARANTINE));
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -183,6 +190,10 @@ public final class RabiConversationService extends Service {
         phoneAudioCapture = new RabiPhoneAudioCapture(this, new RabiPhoneAudioCapture.Listener() {
             @Override public void onPcm(byte[] pcm) { if (backend != null) backend.streamPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_PHONE); }
             @Override public void onPlaybackSuppressed() { }
+            @Override public void onGap(String reason, long estimatedBytes) {
+                RabiGlassPcBackend target = backend;
+                if (target != null) target.recordAudioGap(reason, estimatedBytes, RabiGlassPcBackend.SOURCE_PHONE);
+            }
             @Override public void onStatus(String status) { updateStatus(status); }
             @Override public void onDiagnostic(String event, String level, String state) {
                 RabiGlassPcBackend target = backend;
@@ -338,6 +349,7 @@ public final class RabiConversationService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
+        updateRuntime("serviceAction", action == null ? ACTION_START : action);
         if (ACTION_STOP.equals(action)) {
             RabiConversationServiceState.setRestoreEnabled(this, false);
             shutdown(true);
@@ -347,11 +359,21 @@ public final class RabiConversationService extends Service {
             RabiConversationServiceState.setRestoreEnabled(this, true);
         }
         if (ACTION_RESTORE.equals(action)) {
+            if (voiceServiceActive) {
+                // A delayed boot/transport restore must never downgrade an already running
+                // user-started microphone session.
+                promote(personaDisplayName() + " 移动端持续服务", true);
+                showReviewShortcut();
+                if (configureBackend()) backend.start();
+                return START_STICKY;
+            }
+            voiceServiceActive = false;
+            pauseAllCaptureModes();
             promote(personaDisplayName() + " 消息连接正常", false);
             showReviewShortcut();
             if (configureBackend()) {
                 backend.start();
-                updateStatus("消息连接正常 · 打开 App 恢复持续聆听");
+                updateStatus("消息连接正常 · 语音采集未启动");
             } else {
                 updateStatus("等待手机重新配置 RabiLink");
             }
@@ -407,6 +429,13 @@ public final class RabiConversationService extends Service {
             promote("正在重试失败消息", false); showReviewShortcut(); if (configureBackend()) backend.start(); backend.retryFailedItems();
             return START_STICKY;
         }
+        if (ACTION_CLEAR_AUDIO_QUARANTINE.equals(action)) {
+            promote("正在清理隔离录音", false);
+            boolean cleared = backend != null && backend.clearAudioQuarantineAfterUserConfirmation();
+            updateStatus(cleared ? "隔离录音已按你的确认清理" : "隔离录音清理失败 · 原文件仍保留");
+            updateRuntime("queue", backend == null ? "服务尚未初始化" : backend.reliableQueueSummary());
+            return START_STICKY;
+        }
         promote("正在连接 " + personaDisplayName(), false);
         showReviewShortcut();
         startConversation();
@@ -416,12 +445,25 @@ public final class RabiConversationService extends Service {
     private void startConversation() {
         RabiConversationSettings settings = RabiConversationSettings.load(this);
         updateRuntime("desiredMode", settings.inputMode.name());
+        if (!settings.continuousListening) {
+            voiceServiceActive = false;
+            pauseAllCaptureModes();
+            promote(personaDisplayName() + " 移动端消息连接", false);
+            if (configureBackend()) {
+                backend.start();
+                updateStatus("消息连接正常 · 语音服务已关闭");
+            } else {
+                updateStatus("语音服务已关闭 · 等待手机配置 RabiLink");
+            }
+            return;
+        }
         if (!configureBackend()) {
             updateStatus("等待手机配置 RabiLink");
             return;
         }
         updateRuntime("error", "");
         String persona = personaDisplayName();
+        voiceServiceActive = settings.continuousListening;
         promote(settings.continuousListening ? persona + " 移动端持续服务" : persona + " 移动端消息连接", settings.continuousListening);
         backend.start();
         applyInputMode(settings);
@@ -463,7 +505,7 @@ public final class RabiConversationService extends Service {
                 ? "手机麦克风采集中"
                 : next == RabiConversationSettings.InputMode.GLASSES
                         ? "眼镜麦克风采集中" : "采集已暂停");
-        if (changed) backend.queueDiagnostic("conversation.input_mode", "info", next.name().toLowerCase(java.util.Locale.ROOT));
+        if (changed && backend != null) backend.queueDiagnostic("conversation.input_mode", "info", next.name().toLowerCase(java.util.Locale.ROOT));
     }
 
     private void promote(String text, boolean conversation) {
@@ -473,6 +515,7 @@ public final class RabiConversationService extends Service {
                     ? android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
                     : android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
         }
+        voiceServiceActive = conversation;
         startForeground(REVIEW_NOTIFICATION_ID, notification(text), type);
     }
 
@@ -801,8 +844,8 @@ public final class RabiConversationService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, LISTENING_CHANNEL)
                 .setSmallIcon(com.rabi.link.R.drawable.rabiroute_icon)
-                .setContentTitle(persona + "在听")
-                .setContentText("点一下立即让 " + persona + " 审阅当前会话")
+                .setContentTitle(voiceServiceActive ? persona + " 语音服务运行中" : persona + " 消息连接正常")
+                .setContentText(voiceServiceActive ? "正在按当前模式持续采集语音" : "语音采集已关闭，消息仍可正常收发")
                 .setContentIntent(content)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
@@ -823,8 +866,8 @@ public final class RabiConversationService extends Service {
         String persona = personaDisplayName();
         Notification value = new NotificationCompat.Builder(this, LISTENING_CHANNEL)
                 .setSmallIcon(com.rabi.link.R.drawable.rabiroute_icon)
-                .setContentTitle(persona + "在听")
-                .setContentText("点一下立即让 " + persona + " 审阅当前会话")
+                .setContentTitle(voiceServiceActive ? persona + " 语音服务运行中" : persona + " 消息连接正常")
+                .setContentText(voiceServiceActive ? "点一下立即让 " + persona + " 审阅当前会话" : "语音采集已关闭，消息仍可正常收发")
                 .setContentIntent(action)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
@@ -902,11 +945,10 @@ public final class RabiConversationService extends Service {
         shutdownComplete = true;
         notificationHandler.removeCallbacks(reviewNotificationRefresh);
         unregisterNetworkEvents();
-        if (phoneAudioCapture != null) {
-            phoneAudioCapture.close(explicitStop);
-        }
-        if (backend != null) backend.stop();
-        stopGlassesBackend();
+        RabiAudioShutdownSequence.run(
+                () -> { if (phoneAudioCapture != null) phoneAudioCapture.close(explicitStop); },
+                this::stopGlassesBackend,
+                () -> { if (backend != null) backend.stop(); });
         inputMode = RabiConversationSettings.InputMode.PAUSED;
         stopForeground(STOP_FOREGROUND_REMOVE);
         NotificationManager manager = getSystemService(NotificationManager.class);

@@ -9,6 +9,7 @@ import {
   createRecentMemory,
   completeMemoryConsolidation,
   getPlan,
+  getPlanAsync,
   getRecentMemory,
   getRoleSkill,
   listActiveRecentMemories,
@@ -309,6 +310,103 @@ test("cold plan catalogs load asynchronously and share one in-flight cache fill"
     assert.equal(reads, coldReads);
   } finally {
     fs.promises.readFile = originalReadFile;
+  }
+});
+
+test("plan-by-id recovery reads asynchronously and forwards cancellation to filesystem I/O", async () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    id: "async-recovery-plan",
+    title: "异步恢复计划",
+    focus: "验证恢复读取不会同步阻塞 UNC event loop",
+    steps: [{ id: "recover", title: "恢复", status: "未开始" }],
+    keywords: ["恢复", "异步"]
+  });
+  const originalReadFile = fs.promises.readFile;
+  const originalReadFileSync = fs.readFileSync;
+  let releaseRead!: () => void;
+  const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+  let readStartedResolve!: () => void;
+  const readStarted = new Promise<void>(resolve => { readStartedResolve = resolve; });
+  let observedSignal: AbortSignal | undefined;
+  fs.promises.readFile = (async (...args: Parameters<typeof fs.promises.readFile>) => {
+    const options = args[1];
+    observedSignal = typeof options === "object" && options !== null && "signal" in options
+      ? options.signal as AbortSignal | undefined
+      : undefined;
+    readStartedResolve();
+    await readGate;
+    return originalReadFile(...args as [path: fs.PathLike, options: { encoding: BufferEncoding; signal?: AbortSignal }]);
+  }) as typeof fs.promises.readFile;
+  fs.readFileSync = (() => {
+    throw new Error("synchronous plan reads are forbidden in recovery");
+  }) as typeof fs.readFileSync;
+  const controller = new AbortController();
+  try {
+    const loading = getPlanAsync(roleDir, plan.id, { signal: controller.signal });
+    await readStarted;
+    controller.abort(new DOMException("stop recovery", "AbortError"));
+    releaseRead();
+    await assert.rejects(
+      loading,
+      (error: unknown) => error instanceof Error && error.name === "AbortError"
+    );
+    assert.equal(observedSignal, controller.signal);
+  } finally {
+    fs.promises.readFile = originalReadFile;
+    fs.readFileSync = originalReadFileSync;
+    releaseRead();
+  }
+});
+
+test("plan-by-id recovery cancels while fallback directory enumeration is pending", async () => {
+  const roleDir = makeRoleDir();
+  const originalReaddir = fs.promises.readdir;
+  let enumerationStarted!: () => void;
+  const started = new Promise<void>(resolve => { enumerationStarted = resolve; });
+  fs.promises.readdir = (async () => {
+    enumerationStarted();
+    await new Promise(() => {});
+    return [];
+  }) as typeof fs.promises.readdir;
+  const controller = new AbortController();
+  try {
+    const loading = getPlanAsync(roleDir, "missing-plan", { signal: controller.signal });
+    await started;
+    controller.abort(new DOMException("stop enumeration", "AbortError"));
+    await assert.rejects(
+      Promise.race([
+        loading,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("enumeration cancellation timed out")), 250))
+      ]),
+      (error: unknown) => error instanceof Error && error.name === "AbortError"
+    );
+  } finally {
+    fs.promises.readdir = originalReaddir;
+  }
+});
+
+test("plan catalog prewarm can skip synchronous filesystem watcher setup", async () => {
+  const sourceRoleDir = makeRoleDir();
+  const roleDir = makeRoleDir();
+  createPlan(sourceRoleDir, {
+    id: "prewarm-without-watchers",
+    title: "不建立同步 watcher 的预热计划",
+    focus: "验证启动预热只走异步文件读取",
+    steps: [{ id: "load", title: "加载", status: "未开始" }],
+    keywords: ["预热"]
+  });
+  fs.cpSync(path.join(sourceRoleDir, "plans"), path.join(roleDir, "plans"), { recursive: true });
+
+  const originalExistsSync = fs.existsSync;
+  fs.existsSync = (() => {
+    throw new Error("synchronous filesystem probe must not run during prewarm");
+  }) as typeof fs.existsSync;
+  try {
+    const plans = await listPlansAsync(roleDir, { watch: false });
+    assert.deepEqual(plans.map((plan) => plan.id), ["prewarm-without-watchers"]);
+  } finally {
+    fs.existsSync = originalExistsSync;
   }
 });
 

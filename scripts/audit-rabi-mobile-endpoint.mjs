@@ -14,6 +14,7 @@ const activity = read("apps/rabilink-android/app/src/main/java/com/rabi/link/Mai
 const chatStore = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiChatStore.java");
 const service = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationService.java");
 const serviceState = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationServiceState.java");
+const startupPolicy = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationStartupPolicy.java");
 const bootReceiver = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationBootReceiver.java");
 const phoneCapture = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiPhoneAudioCapture.java");
 const audioCache = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiBoundedAudioCache.java");
@@ -61,10 +62,13 @@ includes(activity, [
   "getMobileRoutes",
   "route_profile_id",
   "RabiConversationServiceState.shouldRestore(this)",
+  "RabiConversationStartupPolicy.decide(",
+  "RabiConversationStartupPolicy.Action.START_VOICE",
+  "RabiConversationStartupPolicy.Action.RESTORE_TRANSPORT",
   "RabiConversationService.restoreAfterBoot(this)"
 ], "mobile chat");
-assert.match(activity, /RabiConversationServiceState\.shouldRestore\(this\)[\s\S]*conversation\.inputMode != RabiConversationSettings\.InputMode\.PHONE[\s\S]*RabiConversationService\.start\(this\)[\s\S]*RabiConversationService\.restoreAfterBoot\(this\)/s,
-  "opening the app must restore durable message transport even when microphone capture cannot resume yet");
+assert.match(startupPolicy, /InputMode\.PHONE\s*&&\s*!microphonePermissionGranted[\s\S]*return Action\.RESTORE_TRANSPORT/s,
+  "opening the app must restore durable message transport when phone microphone capture cannot resume yet");
 includes(activity, [
   "ContextCompat.registerReceiver",
   "RUNTIME_UPDATED",

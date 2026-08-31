@@ -119,7 +119,7 @@ npm run build:backend
 npm run check:built-manager
 ```
 
-烟测使用临时回环端口和 `RABIROUTE_MANAGER_READ_ONLY=1`，不会重启现有 8790，也不会启动 Gateway、Relay、局域网发现、Route watcher、人格文件 watcher 或麦克风协调。Manager 就绪由子进程 stdout 事件触发，不进行状态轮询。它还读取回环 `index-status`，证明构建产物已完成 manifest 索引校准；只读模式不写索引缓存。默认把脱敏证据原子写入 Git 忽略的 `data/acceptance/built-manager-readonly-<timestamp>.json`；只记录构建哈希、HTTP 状态、索引模式和数量，不记录人格名/ID、文件路径/正文、转写、人物、token、Relay URL 或端口。
+烟测使用临时回环端口和 `RABIROUTE_MANAGER_READ_ONLY=1`，不会重启当前 Host 管理的应用 generation，也不会启动 Gateway、Relay、局域网发现、Route watcher、人格文件 watcher 或麦克风协调。Manager 就绪由子进程 stdout 事件触发，不进行状态轮询。它还读取回环 `index-status`，证明构建产物已完成 manifest 索引校准；只读模式不写索引缓存。默认把脱敏证据原子写入 Git 忽略的 `data/acceptance/built-manager-readonly-<timestamp>.json`；只记录构建哈希、HTTP 状态、索引模式和数量，不记录人格名/ID、文件路径/正文、转写、人物、token、Relay URL 或端口。
 
 ## 本机双节点构建产物验收
 

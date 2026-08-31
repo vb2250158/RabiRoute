@@ -202,6 +202,10 @@
             android:exported="true" />
 
         <activity
+            android:name=".RabiSpeechPreviewActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop">

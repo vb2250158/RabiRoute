@@ -292,7 +292,6 @@ const runtimeAndRiskActions = [
   { label: "delete route", aiui: ["controlGateway(\"delete\")", "gatewayActionPath(\"delete\")", "removeGatewayDraft"], relayPath: "/gateways/" },
   { label: "save config", aiui: ["saveWebguiConfig"], relayPath: "/gateways" },
   { label: "reload manager", aiui: ["reloadPcWebgui", "WEBGUI_TOOL_PATHS.reload"], relayPath: "/reload" },
-  { label: "shutdown manager", aiui: ["shutdownManager", "WEBGUI_TOOL_PATHS.managerShutdown"], relayPath: "/manager/shutdown" },
   { label: "open config file", aiui: ["openPcConfigFile"], relayPath: "/open-config-file" },
   { label: "NapCat repair", aiui: ["configureNapcatOnebot", "repairAllNapcatIssues"], relayPath: "/api/message/napcat-repair-all" },
   { label: "remote agent connect", aiui: ["connectRemoteAgentDevice"], relayPath: "/api/remote-agent/connect" }

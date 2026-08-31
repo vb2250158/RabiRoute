@@ -4,8 +4,8 @@ import android.content.Context
 import android.net.wifi.WifiManager
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.NetworkInterface
 import java.net.URL
@@ -21,7 +21,9 @@ data class RabiInstance(
     val baseUrl: String,
     val host: String,
     val port: Int,
-    val version: String?
+    val version: String?,
+    val applicationGenerationId: String,
+    val managerInstanceId: String
 )
 
 data class RabiLinkEndpoint(
@@ -169,25 +171,49 @@ data class RabiAgentBinding(
 }
 
 class RabiRouteSdk @JvmOverloads constructor(
-    private val ports: List<Int> = listOf(8790),
+    private val managerBaseUrls: List<String> = emptyList(),
     private val rabiLinkPorts: List<Int> = listOf(8794),
     private val timeoutMs: Int = 650
 ) {
     fun scanLan(context: Context): List<RabiInstance> {
-        val hosts = candidateHosts(context)
-        val executor = Executors.newFixedThreadPool(32)
+        val discoveredEndpoints = RabiRouteNsdDiscovery(context, timeoutMs).discoverManagerEndpoints()
+        val discoveredInstances = discoveredEndpoints.map { endpoint ->
+            val verified = readIdentityDocument(endpoint.baseUrl)
+            RabiRouteDiscoveryContract.requireMatchingIdentity(
+                advertised = endpoint.lifecycleIdentity,
+                observed = verified.lifecycleIdentity
+            )
+            verified.instance
+        }
+        val discoveredBaseUrls = discoveredEndpoints.mapTo(HashSet()) { it.baseUrl }
+        val configuredBaseUrls = managerBaseUrls
+            .map(::normalizeManagerBaseUrl)
+            .distinct()
+            .filterNot(discoveredBaseUrls::contains)
+        val configuredInstances = scanManagerBaseUrls(configuredBaseUrls)
+        val instancesByGuid = LinkedHashMap<String, RabiInstance>()
+        for (instance in configuredInstances) instancesByGuid[instance.guid] = instance
+        for (instance in discoveredInstances) instancesByGuid[instance.guid] = instance
+        return instancesByGuid.values.sortedBy { it.name }
+    }
+
+    fun scanManagerBaseUrls(baseUrls: List<String>): List<RabiInstance> {
+        val targets = baseUrls.map(::normalizeManagerBaseUrl).distinct()
+        if (targets.isEmpty()) return emptyList()
+        val executor = Executors.newFixedThreadPool(targets.size.coerceAtMost(32))
         val results = Collections.synchronizedMap(LinkedHashMap<String, RabiInstance>())
-        for (host in hosts) {
-            for (port in ports.distinct()) {
-                executor.submit {
-                    val baseUrl = "http://$host:$port"
-                    val instance = runCatching { readIdentity(baseUrl) }.getOrNull()
-                    if (instance != null) results[instance.guid] = instance.copy(host = host, port = port, baseUrl = baseUrl)
-                }
+        for (baseUrl in targets) {
+            executor.submit {
+                val instance = runCatching { readIdentity(baseUrl) }.getOrNull()
+                if (instance != null) results[instance.guid] = instance
             }
         }
         executor.shutdown()
-        executor.awaitTermination((timeoutMs * hosts.size.coerceAtMost(254) / 8L).coerceAtLeast(1500L), TimeUnit.MILLISECONDS)
+        val completed = executor.awaitTermination(
+            (timeoutMs.toLong() * targets.size / 8L).coerceAtLeast(1500L),
+            TimeUnit.MILLISECONDS
+        )
+        if (!completed) executor.shutdownNow()
         return results.values.sortedBy { it.name }
     }
 
@@ -216,24 +242,61 @@ class RabiRouteSdk @JvmOverloads constructor(
     }
 
     fun readIdentity(baseUrl: String): RabiInstance {
-        val data = getJson("$baseUrl/api/rabi/identity").getJSONObject("data")
-        val host = URL(baseUrl).host
-        val port = URL(baseUrl).port.takeIf { it > 0 } ?: 8790
-        return RabiInstance(
-            guid = data.optString("guid"),
-            name = data.optString("name", data.optString("computerName", "RabiRoute")),
-            computerName = data.optString("computerName"),
-            deviceType = data.optString("deviceType", "RabiRoute Manager"),
-            baseUrl = baseUrl.trimEnd('/'),
-            host = host,
-            port = port,
-            version = data.optString("version").ifBlank { null }
+        return readIdentityDocument(baseUrl).instance
+    }
+
+    private fun readIdentityDocument(baseUrl: String): VerifiedManagerIdentity {
+        val normalizedBaseUrl = normalizeManagerBaseUrl(baseUrl)
+        val parsedBaseUrl = URL(normalizedBaseUrl)
+        val response = requestJson(
+            "$normalizedBaseUrl${RabiRouteDiscoveryContract.WELL_KNOWN_PATH}",
+            "GET",
+            null,
+            maxResponseBytes = 64 * 1024
         )
+        require(response.optInt("code", -1) == 0) {
+            "RabiRoute discovery document returned a non-success code."
+        }
+        val data = response.getJSONObject("data")
+        val lifecycleIdentity = RabiRouteDiscoveryContract.requireValidIdentity(
+            protocolVersion = data.optInt("protocolVersion", -1),
+            applicationGenerationId = data.optString("applicationGenerationId"),
+            managerInstanceId = data.optString("managerInstanceId"),
+            guid = data.optString("guid")
+        )
+        return VerifiedManagerIdentity(
+            instance = RabiInstance(
+                guid = data.optString("guid"),
+                name = data.optString("name", data.optString("computerName", "RabiRoute")),
+                computerName = data.optString("computerName"),
+                deviceType = data.optString("deviceType", "RabiRoute Manager"),
+                baseUrl = normalizedBaseUrl,
+                host = parsedBaseUrl.host,
+                port = parsedBaseUrl.port,
+                version = data.optString("version").ifBlank { null },
+                applicationGenerationId = lifecycleIdentity.applicationGenerationId,
+                managerInstanceId = lifecycleIdentity.managerInstanceId
+            ),
+            lifecycleIdentity = lifecycleIdentity
+        )
+    }
+
+    private fun normalizeManagerBaseUrl(value: String): String {
+        val parsed = URL(value.trim())
+        require(parsed.protocol == "http" && parsed.host.isNotBlank()) {
+            "Manager base URL must be an explicit HTTP address."
+        }
+        require(parsed.userInfo == null && parsed.query == null && parsed.ref == null && (parsed.path.isEmpty() || parsed.path == "/")) {
+            "Manager base URL must not contain credentials, a path, query, or fragment."
+        }
+        val port = if (parsed.port == -1) parsed.defaultPort else parsed.port
+        require(port in 1..65535) { "Manager base URL must include a valid port." }
+        return RabiRouteDiscoveryContract.managerBaseUrl(parsed.host, port)
     }
 
     fun getRoutes(instance: RabiInstance): List<RabiRouteInfo> {
         val url = "${instance.baseUrl}/api/rabi/instances/${encodePath(instance.guid)}/routes"
-        val routes = getJson(url).getJSONObject("data").getJSONArray("routes")
+        val routes = getManagerJson(instance, url).getJSONObject("data").getJSONArray("routes")
         return (0 until routes.length()).map { index ->
             val item = routes.getJSONObject(index)
             RabiRouteInfo(
@@ -258,12 +321,12 @@ class RabiRouteSdk @JvmOverloads constructor(
 
     fun getAgentOptions(instance: RabiInstance, routeId: String): JSONObject {
         val url = "${instance.baseUrl}/api/rabi/instances/${encodePath(instance.guid)}/routes/${encodePath(routeId)}/agent-options"
-        return getJson(url).getJSONObject("data")
+        return getManagerJson(instance, url).getJSONObject("data")
     }
 
     fun setAgentBinding(instance: RabiInstance, routeId: String, binding: RabiAgentBinding): JSONObject {
         val url = "${instance.baseUrl}/api/rabi/instances/${encodePath(instance.guid)}/routes/${encodePath(routeId)}/agent-binding"
-        return requestJson(url, "PATCH", binding.toJson().toString()).getJSONObject("data")
+        return requestManagerJson(instance, url, "PATCH", binding.toJson().toString()).getJSONObject("data")
     }
 
     fun deliverRabiLinkMessage(callbackUrl: String, text: String, routeId: String? = null): RabiLinkDeliveryResult {
@@ -300,14 +363,14 @@ class RabiRouteSdk @JvmOverloads constructor(
             .put("payload", JSONObject()
                 .put("type", "text")
                 .put("text", text))
-        return requestJson("${instance.baseUrl}/api/agent/send", "POST", payload.toString())
+        return requestManagerJson(instance, "${instance.baseUrl}/api/agent/send", "POST", payload.toString())
     }
 
     fun getRabiLinkReplies(instance: RabiInstance, routeId: String, limit: Int = 10, afterId: String = ""): JSONObject {
         val safeLimit = limit.coerceIn(1, 100)
         val after = if (afterId.isBlank()) "" else "&afterId=${encodeQuery(afterId)}"
         val url = "${instance.baseUrl}/api/rabi/instances/${encodePath(instance.guid)}/routes/${encodePath(routeId)}/rabilink-replies?limit=$safeLimit$after"
-        return getJson(url).getJSONObject("data")
+        return getManagerJson(instance, url).getJSONObject("data")
     }
 
     fun getRabiLinkReplies(callbackUrl: String, routeId: String, limit: Int = 10, afterId: String = ""): JSONObject {
@@ -563,6 +626,22 @@ class RabiRouteSdk @JvmOverloads constructor(
         ).getJSONObject("data")
     }
 
+    private fun managerLifecycleHeaders(instance: RabiInstance): Map<String, String> {
+        require(instance.applicationGenerationId.isNotBlank() && instance.managerInstanceId.isNotBlank()) {
+            "Manager operations require a complete lifecycle lease."
+        }
+        return mapOf(
+            "x-rabiroute-expected-application-generation-id" to instance.applicationGenerationId,
+            "x-rabiroute-expected-manager-instance-id" to instance.managerInstanceId
+        )
+    }
+
+    private fun getManagerJson(instance: RabiInstance, url: String): JSONObject =
+        requestJson(url, "GET", null, managerLifecycleHeaders(instance))
+
+    private fun requestManagerJson(instance: RabiInstance, url: String, method: String, body: String?): JSONObject =
+        requestJson(url, method, body, managerLifecycleHeaders(instance))
+
     private fun getJson(url: String): JSONObject = requestJson(url, "GET", null)
 
     private fun probeRabiLinkCallback(host: String, port: Int): RabiLinkEndpoint? {
@@ -587,12 +666,14 @@ class RabiRouteSdk @JvmOverloads constructor(
         method: String,
         body: String?,
         headers: Map<String, String> = emptyMap(),
-        readTimeoutMs: Int = timeoutMs
+        readTimeoutMs: Int = timeoutMs,
+        maxResponseBytes: Int = 4 * 1024 * 1024
     ): JSONObject {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = timeoutMs
             readTimeout = readTimeoutMs
+            instanceFollowRedirects = false
             setRequestProperty("accept", "application/json")
             for ((key, value) in headers) setRequestProperty(key, value)
             if (body != null) {
@@ -604,9 +685,10 @@ class RabiRouteSdk @JvmOverloads constructor(
             if (body != null) connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val responseCode = connection.responseCode
             val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.let {
-                BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
-            }.orEmpty()
+            if (connection.contentLengthLong > maxResponseBytes) {
+                throw IllegalStateException("JSON response exceeds the bounded client size.")
+            }
+            val text = stream?.use { readBoundedUtf8(it, maxResponseBytes) }.orEmpty()
             val json = JSONObject(text.ifBlank { "{}" })
             if (responseCode !in 200..299) {
                 throw IllegalStateException(json.optString("message", "HTTP $responseCode"))
@@ -738,4 +820,21 @@ class RabiRouteSdk @JvmOverloads constructor(
         if (this == null) return emptyList()
         return (0 until length()).mapNotNull { optJSONObject(it) }
     }
+
+    private fun readBoundedUtf8(stream: InputStream, maxBytes: Int): String {
+        val output = ByteArrayOutputStream(minOf(maxBytes, 16 * 1024))
+        val buffer = ByteArray(8 * 1024)
+        while (true) {
+            val read = stream.read(buffer)
+            if (read < 0) break
+            if (output.size() + read > maxBytes) throw IllegalStateException("JSON response exceeds the bounded client size.")
+            output.write(buffer, 0, read)
+        }
+        return output.toByteArray().toString(Charsets.UTF_8)
+    }
+
+    private data class VerifiedManagerIdentity(
+        val instance: RabiInstance,
+        val lifecycleIdentity: RabiRouteManagerLifecycleIdentity
+    )
 }

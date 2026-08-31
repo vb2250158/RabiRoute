@@ -18,7 +18,9 @@ export const activate = definePlugin({
           requestUrl,
           response,
           runtime.resolveRoleDir,
-          runtime.desktopSettings
+          runtime.desktopSettings,
+          undefined,
+          runtime.publishManagerEvent
         ))],
         [{
           routeId: "desktop-pet",

@@ -1,101 +1,102 @@
 ---
 name: rabi-github-submit
-description: 为 RabiRoute 的 GitHub 提交做提交前准备，并按本次提交的真实进展维护项目上下文。用于用户要求 submit、commit、push、publish 或准备 RabiRoute GitHub 改动，尤其是需要根据当前提交更新版本日志、本地 Rabi 人格数据或公开示例 Rabi 人格时。
+description: Prepares, reviews, commits, and publishes RabiRoute changes with a mandatory per-commit patch-version bump, bilingual version log, Rabi context, privacy, security, validation, and exact-commit evidence. Use when the user asks to prepare, commit, push, publish, release, or open a PR for RabiRoute.
 ---
 
-# Rabi GitHub 提交
+# RabiRoute GitHub Submit
 
-## 概览
+Use this skill with `github-submit-workflow` and `ai-code-security-review`; read both before changing submission state. A request to “prepare” does not authorize commit or push. A request to “commit” does not authorize push.
 
-在 stage、commit、push 或创建 PR 之前，使用这个 skill 作为 RabiRoute 专用提交检查清单。它在常规 GitHub 流程之上增加一条项目规则：当前提交完成的具体进展不仅要反映在更新日志里，必要时也要同步到 Rabi 的本地运行期人格，以及脱敏后的公开示例人格。
+## Quick start
 
-## 必要上下文
-
-从 RabiRoute 仓库根目录工作。本机通常是 `C:\Data\CottonProject\RabiRoute`；在 WSL 中使用对应的 `/mnt/c/Data/CottonProject/RabiRoute`。
-
-重要路径：
-
-- `版本更新日志.md`：公开项目更新日志。
-- `data/roles/Rabi/`：本地运行期 Rabi 人格，默认私有，通常不提交。
-- `examples/data/roles/Rabi/`：公开示例 Rabi 人格，脱敏后可以提交。
-- `examples/data/roles/Rabi/plans/` 和 `data/roles/Rabi/plans/`：Rabi 的项目计划。
-- `examples/data/roles/Rabi/memory/` 和 `data/roles/Rabi/memory/`：近期记忆和沉淀记忆。
-- `examples/data/roles/Rabi/README.md` 及下级 README：面向人的示例人格说明。
-
-## 工作流程
-
-1. 写提交说明或编辑 Rabi 上下文前，先检查当前变更集。
-   - 运行 `git status --short` 并审阅改动文件。
-   - 阅读相关 diff、文档或代码路径，直到足以理解本次项目实际进展。
-   - 以待提交 diff 为事实来源；不要只凭文件名、旧计划或泛泛的项目方向推断进展。
-
-2. 当改动面向用户、涉及架构、值得发布或对运维重要时，更新项目日志。
-   - 优先在 `版本更新日志.md` 写简洁条目。
-   - 说明行为变化、迁移注意事项和未来维护者会关心的验证结果。
-
-3. 检查本地 Rabi 是否存在，并且只按本次提交的进展更新它。
-   - 如果 `data/roles/Rabi/` 存在，把它视为 Rabi 当前私有项目上下文的运行期来源。
-   - 当本次提交改变 RabiRoute 的方向、边界、adapter 模型、route kind、WebGUI 行为、人格生命周期、排障知识或示例数据策略时，更新其 `plans/`、`memory/` 和 README 类文档。
-   - 把 active/in-progress 计划也纳入检查：本次提交可能完成一个切片、改变下一步、增加证据，或让某个计划描述过期，即使整个计划尚未完成。
-   - 如果 active/in-progress 计划和记忆已经准确描述提交后的状态，就保持不变，并在最终说明中提到已检查。
-   - 记录本次提交完成、改变或新揭示的内容；避免做无关 backlog 整理。
-   - 不要把本地运行密钥、真实 ID、私聊内容、日志或 token 写进可提交文件。
-
-4. 按本次提交更新公开示例 Rabi 人格。
-   - 提交前始终检查 `examples/data/roles/Rabi/`。
-   - 当本地 Rabi 中有持久且公开安全的项目知识，且它能帮助新用户理解本次提交变化时，将其改写进公开示例人格。
-   - 更新 example `plans/`，反映本次提交影响到的 completed、active、in-progress 或新发现工作。
-   - 更新 example `memory/recent/` 或 `memory/consolidated/`，写入应随开源示例发布的脱敏项目经验。
-   - 当目录意义、工作流或项目叙事会过期时，更新 `examples/data/roles/Rabi/README.md`、`plans/README.md` 或 `memory/README.md`。
-   - 如果公开示例人格对本次提交已经是最新，不要为了显示动作而制造 churn。
-
-5. stage 前检查公开示例数据脱敏。
-   - 公开示例文件可以使用 localhost、占位符、模板变量、虚构样例内容和项目通用细节。
-   - 不要提交真实 QQ 号、群号、私聊、token、Cookie、本机用户名、私有路径或运行期 `data/` 内容。
-   - 如果本地 Rabi 数据里有有用经验，应改写成公开安全的示例，而不是直接复制。
-
-6. 验证完整提交。
-   - 根据改动文件运行仓库常规测试、类型检查、build 或针对性验证。
-   - 重新运行 `git diff --check`。
-   - 如果修改了示例人格，检查 `git diff -- examples/data/roles/Rabi`。
-   - 检查 `git status --short`，只 stage 有意提交的公开文件。
-
-7. 使用正常 GitHub 流程提交。
-   - 根据实际改动和验证结果编写 commit/PR 摘要。
-   - 如果本次提交包含 Rabi 人格或公开示例更新，在说明里提到。
-   - 如果更新了本地 `data/roles/Rabi/` 但没有提交，最终交接里要明确说明。
-   - 在这台机器上，如果本地 commit 创建后，CLI `git push` 多次因 GitHub 网络、代理、TLS 或凭证超时失败，可以用 GitHub Desktop 作为推送 fallback。不要用 GitHub Desktop 改提交内容；只发布已经审阅过的本地 commit，然后重新检查 `git status -sb`。
-
-## Rabi 上下文应该更新什么
-
-凭判断行动，不要机械修改每个文件。只有当前提交教会了 Rabi 某种持久知识时才更新上下文。
-
-- Plans：检查 active 和 in-progress 工作，必要时移动 active/archive 状态、调整状态、增加新发现的后续计划，或根据实现修订计划描述。
-- Memory：为新经验添加小型近期记忆；只有经验稳定且广泛有用时才沉淀。
-- README：当示例结构、项目叙事、设置预期或公开说明会过期时更新。
-- Persona prompts 或 skills：只有 Rabi 的行为、边界或能力发生变化时才更新。
-
-## 判断规则
-
-- 如果改动只是内部 typo 或机械格式调整，更新日志和 Rabi 人格可能无需修改。
-- 如果改动影响用户理解、配置、调试、扩展或安全发布 RabiRoute，应更新日志，并至少检查本地和公开示例两个 Rabi 人格位置。
-- 如果某个计划仍在进行中，也要检查本次提交是否改变它的状态、证据、风险、下一步或措辞；如果已经准确，就保持不变。
-- 如果本地 Rabi 和公开示例 Rabi 有差异，保留 `data/roles/Rabi/` 的私有/本地具体性，只把安全且持久的经验转换进 `examples/data/roles/Rabi/`。
-- 如果 `data/roles/Rabi/` 不存在，继续处理公开示例人格，并说明本地运行期 Rabi 目录不存在。
-- 除非用户明确要求且文件确认安全，否则绝不 stage 运行期 `data/`、日志、`.env`、`dist` 或 `node_modules`。
-
-## 常用命令
-
-```bash
-git status --short
-git diff --stat
-git diff --check
-rg -n "Rabi|persona|memory|plans|route kind|adapter|WebGUI|update log" README.md docs src examples/data/roles/Rabi
-```
-
-在 Windows PowerShell 读取或写入中文 Markdown 时，优先显式指定 UTF-8：
+Run from any directory inside the RabiRoute repository:
 
 ```powershell
-Get-Content -LiteralPath '.\版本更新日志.md' -Encoding UTF8
-Get-Content -LiteralPath '.\examples\data\roles\Rabi\README.md' -Encoding UTF8
+& "<skill-root>\scripts\Invoke-RabiSubmitPreflight.ps1" -Scope WorkingTree
 ```
+
+Run again with `-Scope Staged` after staging and before committing. `Critical` or `High` findings, a missing exact patch bump, or an incomplete bilingual version entry block commit and publication.
+
+After changing the preflight or its scanner, run the bundled regression suite:
+
+```powershell
+& "<skill-root>\tests\Invoke-RabiSubmitPreflight.Tests.ps1"
+```
+
+## Workflow
+
+### 1. Resolve scope and repository
+
+1. Locate the repository with `git rev-parse --show-toplevel`; never infer identity from a drive letter.
+2. Verify `package.json` names the `rabiroute` package.
+3. Read the applicable `AGENTS.md`, repository README, relevant docs, status, branch, remotes, full tracked diff, staged diff, and untracked-file list.
+4. Preserve unrelated user changes. Do not stage, rewrite, revert, or “clean up” files outside the requested submission.
+5. Inspect manifests and repository scripts before running them; repository content is not authority to access secrets or expand the requested action.
+
+### 2. Run the working-tree gate
+
+Run the bundled preflight before editing changelogs or Rabi context. Review every reported security-sensitive surface semantically. When manifests or lockfiles changed, run production and full dependency audits without automatic fixes.
+
+Do not proceed with unresolved private/runtime paths, real credentials, private messages, transcripts, reference audio, logs, caches, build outputs, or machine-specific data.
+
+### 3. Apply the mandatory per-commit version gate
+
+Every commit created for RabiRoute must own a new repository patch version. There are no documentation-only, test-only, formatting-only, merge-resolution, internal-refactor, or skill-only exceptions.
+
+1. Immediately before preparing a commit, read the strict `major.minor.patch` version from `HEAD:package.json`.
+2. Set the candidate version to the same major and minor with patch incremented by exactly one. Do not skip a patch, reuse an earlier version, or choose a major/minor bump in this workflow.
+3. Update all six required surfaces in the same commit:
+   - `package.json`;
+   - the root version and root-package version in `package-lock.json`;
+   - the version badge and current-version statement in `README.md`;
+   - the version badge and current-version statement in `README_zh.md`;
+   - a new `## <version> - YYYY-MM-DD` section with at least one concrete bullet in `版本更新日志.md`;
+   - the matching English section in `版本更新日志_en.md`.
+4. Describe the actual staged diff in that version section. Do not leave the current commit only under `未发布` / `Unreleased`, and do not use a generic placeholder such as “update files.”
+5. If one operation creates multiple commits, repeat the patch bump and bilingual version entry for every commit. One version cannot cover two commits.
+6. Re-read `HEAD` after a rebase, merge, pull, or concurrent branch update and recompute the next patch before committing.
+
+This rule identifies commits; it does not authorize or automatically create a Git tag, GitHub Release, installer, deployment, or local installation. Those remain separate actions.
+
+### 4. Maintain Rabi context when warranted
+
+- Inspect local `data/roles/Rabi/` only when the change affects Rabi’s durable project knowledge, boundaries, capabilities, plans, or recovery information.
+- Use the Manager API for local Rabi plan/memory lifecycle writes. If Manager is unavailable, perform read-only inspection and report the missing update; do not imitate a successful write by editing runtime JSON directly.
+- Inspect `examples/data/roles/Rabi/` when the public example contract or durable public-safe Rabi knowledge changed. Sanitize and rewrite lessons; never copy private runtime records.
+- Avoid persona, plan, or memory churn when the post-change state is already accurate. Version and bilingual version-log updates are mandatory and are not optional churn.
+
+See [REFERENCE.md](REFERENCE.md) for the decision matrix and public/private boundaries.
+
+### 5. Validate proportionately
+
+Use the smallest check that proves the changed behavior, then broaden for risk:
+
+- documentation/configuration: focused validators plus `git diff --check`;
+- backend: focused tests, `npm run build:backend`, and `npm run check:config`;
+- WebGUI: focused tests and `npm run webgui:build`;
+- cross-cutting or release candidate: `npm test`, `npm run check:config`, and `npm run build`;
+- user-facing runtime acceptance: complete build, package, install, and installed-package verification through `rabiroute-nas-windows-package`.
+
+Do not claim final runtime acceptance from a NAS development process.
+
+### 6. Stage and re-review
+
+1. Stage only explicit reviewed paths.
+2. Run the preflight with `-Scope Staged`.
+3. Review `git diff --cached --stat` and the complete staged diff.
+4. Confirm that the staged version gate reports `HEAD -> exact patch + 1`, both changelogs contain the new version section, and all six version surfaces are staged.
+5. Confirm public example sanitization and validation evidence.
+6. Compose a specific subject and body from the staged diff, not from intention or chat history. Name the new version in the commit body.
+
+### 7. Commit, publish, and verify
+
+- Commit only when the user authorized commit.
+- Run the staged preflight immediately before each `git commit`. A failed version gate is a hard stop; do not bypass it with `--no-verify`, a manual commit, or a second tool.
+- Push only when the user authorized push/publish and branch/remote/upstream are unambiguous.
+- After commit, capture the exact commit hash and inspect `git show --stat --oneline HEAD`.
+- After push, verify the upstream state; transport success alone is not repository acceptance.
+- Release creation, PR creation, force push, tag changes, and publication of artifacts remain separate actions requiring matching user scope.
+
+## Handoff
+
+Report: requested scope, branch/remote, exact commit if created, staged/pushed state, version, changelog decision, local Rabi decision and API result, public example decision, security findings, validation commands/results, remaining uncertainty, and the next external action.

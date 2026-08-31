@@ -6,7 +6,7 @@
 
 # RabiRoute 项目功能手册
 
-> 状态：当前事实地图。Manager 已有 28 个独立内置插件包；外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
+> 状态：当前事实地图。Manager 已有 29 个独立内置插件包；外部系统验收仍以 [当前能力与成熟度](current-capabilities.md) 为准。
 
 本文是 RabiRoute 的通用项目功能手册。它面向产品设计、GUI 改造、代码维护、排障和新 Agent 交接，不只服务某一个页面或某一次需求。
 
@@ -54,7 +54,7 @@ Codex 集成按五层理解：OpenAI 是 provider，Codex 是 agent/runtime，De
 
 ## Manager 后台插件生命周期
 
-当前目录包含 28 个内置 Manager 实例。正式入口只通过 `startManager()` 挂载宿主服务、读取单一 Profile，再由 Plugin Kernel 解析 28 个独立包的 `provides`、`requires` 与 `optional`。缺少必需能力时进入 `waiting_dependency`；依赖 revision 递归包含直接和传递 Provider，因此上游 revision 或启停变化会沿能力链把真实消费者纳入 generation 切换；重复 Provider 拒绝对账。
+当前目录包含 29 个内置 Manager 实例。正式入口只通过 `startManager()` 挂载宿主服务、读取 schema/profile v2，再由 Plugin Kernel 解析 29 个独立包的 `provides`、`requires`、`optional`、执行模式与 `readyRequires`。缺少必需能力时进入 `waiting_dependency`；依赖 revision 递归包含直接和传递 Provider，因此上游 revision 或启停变化会沿能力链把真实消费者纳入 generation 切换；重复 Provider 拒绝对账。停止时按依赖逆序先释放消费者、再释放 Provider，长期子进程由 process lease 回收。
 
 | 分组 | 实例 | 主要责任 |
 | --- | --- | --- |
@@ -105,7 +105,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | WebGUI | 已有 | manager HTTP API | 用户配置和排障 | 页面加载 / 用户操作时 | 调用 manager API，可能写配置或触发动作 | `ribiwebgui` | `ribiwebgui/src/router.ts`、`ribiwebgui/src/stores/gatewayStore.ts` | `docs/code-architecture.md` |
 | WebGUI 局域网访问 | 已有，默认关闭 | `data/Config.json.webguiLan` | Manager HTTP 门禁、WebGUI fetch/SSE/私有资源适配、Route 作用域导航 | 本机启用并重启 Manager 后 | 监听从回环切换到局域网；本机回环 URL 自动重定向到优先局域网 IP 并保留当前 Route/页面；非本机控制面请求必须带访问密钥，轮换立即使旧链接失效；左侧当前 Route 切换会保留页面类型并重定向 `#/routes/<Route配置名>/overview|adapters|persona|knowledge|speech|runtime` | 控制台“局域网访问 WebGUI”、复制 Route 控制台/知识库链接、`GET/PATCH /api/webgui-access` | `src/manager/webguiLanAccess.ts`、`src/manager/controlPlaneRoutes.ts`、`ribiwebgui/src/managerApi.ts`、`ribiwebgui/src/webguiLanRedirect.ts`、`ribiwebgui/src/routeScopedNavigation.ts`、`ribiwebgui/src/App.vue`、`ribiwebgui/src/pages/OverviewPage.vue` | `docs/user-guide/interface-and-status.md` |
 | WebGUI 中英切换与使用手册 | 已有 | 浏览器 `rabiroute:webgui:locale`、人工词库、`docs/user-guide/*.md` | 导航、表单、状态、诊断和用户手册 | 用户切换语言或页面重渲染时 | 只改变界面展示和 `<html lang>`，不写项目配置 | 顶栏 `中 / EN`、`/#/docs` | `ribiwebgui/src/i18n/*`、`LocaleSwitcher.vue`、`ProjectDocsPage.vue` | `docs/user-guide/README.md` |
-| QQ / NapCat 消息端 | 已验证；多实例 listener 已迁移 Fiber 生命周期 | NapCat WS / HTTP、route config、`group-messages.jsonl`、`private-messages.jsonl` | forwarding、Outbox QQ 发送 | 收到 QQ 事件时；或用户点击“打开 NapCat”时 | 写消息日志，可能投递 Agent；合并转发通过 `get_forward_msg` 展开；Fiber 启动等待全部 listener，失败回滚先前端口，卸载终止客户端、释放全部端口并写 `disabled`；一键恢复继续保留现有在线账号 owner 并拒绝重复启动 | route 消息端、路由页“打开 NapCat”、NapCat 管理 API | `src/adapters/napcatAdapter.ts`、`src/runtime/messageAdapterRuntime.ts`、`src/napcat.ts`、`src/napcatForwardMessages.ts`、`src/messageEndpoints/napcatManager.ts` | `docs/napcat-unattended.md` |
+| QQ / NapCat 消息端 | 已验证；每 Route 单 NapCat listener 使用 Fiber 生命周期 | NapCat WS / HTTP、route config、`group-messages.jsonl`、`private-messages.jsonl` | forwarding、Outbox QQ 发送 | 收到 QQ 事件时；或用户点击“打开 NapCat”时 | 写消息日志，可能投递 Agent；合并转发通过 `get_forward_msg` 展开；Fiber 启动当前 Route 的唯一 listener，卸载终止客户端、释放端口并写 `disabled`；一键恢复继续保留现有在线账号 owner 并拒绝重复启动 | route 消息端、路由页“打开 NapCat”、NapCat 管理 API | `src/adapters/napcatAdapter.ts`、`src/runtime/messageAdapterRuntime.ts`、`src/napcat.ts`、`src/napcatForwardMessages.ts`、`src/messageEndpoints/napcatManager.ts` | `docs/napcat-unattended.md` |
 | QQ route kind 判断 | 已有 | OneBot event、回复链日志 | `forwardMessage(routeKind, record)` | 收到群消息时 | 影响规则匹配 | NapCat adapter | `src/adapters/napcatAdapter.ts` | `docs/routing-and-personas.md` |
 | Webhook / XiaoAi / FenneNote 旧兼容 | 实验支持 / 退役兼容；通用 Webhook 已迁移 Fiber 生命周期 | HTTP payload、`voice-transcripts.jsonl` | forwarding、设备回调、可选 RabiLink record-first 观察 | HTTP callback 到达时 | 写转写日志；通用 Webhook 启动等待 listener 就绪，失败回滚，Fiber 卸载关闭端口并写 `disabled`；FenneNote 不再提供新增 UI，只在旧 Route 存在时兼容 | webhook 端口 / 路径、Route 变量 | `src/adapters/webhookAdapter.ts`、`src/runtime/messageAdapterRuntime.ts`、`src/rabilinkObservationRecorder.ts`、`src/messageEndpoints/webhookLikeScans.ts` | `docs/voice-interaction-workstation.md` |
 | 眼镜端（经 RabiLink） | 实验支持，内部兼容键 `rabilink` | 眼镜 observation、`rabilink-voice-transcripts.jsonl`、`rabilink-replies.jsonl` | forwarding、眼镜下行回复 | 眼镜消息到达；或本地调试 POST `/rabilink` | 写兼容消息 / 回复日志，按 route 规则决定是否投递 Agent | route 消息端“眼镜端（经 RabiLink）”、`/rabilink`、`/rabilink/replies` | `src/adapters/rabilinkAdapter.ts`、`src/adapters/rabilinkReplies.ts`、`src/adapters/rabilinkRelayWorker.ts` | `docs/rabilink-relay-server.md` |
@@ -150,7 +150,7 @@ Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，
 | Delivery replay | 已有 | `delivery-replay-ledger.jsonl` | replay API / manager child process | 投递后记录，用户触发 replay 时重放 | replay 会再次进入真实投递链路 | `/gateways/:id/delivery-replay` | `src/deliveryReplay.ts`、`src/deliveryReplayLedger.ts` | `docs/troubleshooting.md` |
 | Remote Agent | 实验支持 | remote-agent devices / tasks | 远端设备、manager API | 设备连接 / 任务创建 / 事件回报时 | 创建任务、接收任务事件，完成后可投递回本地 Agent | `/api/remote-agent/*` | `src/messageEndpoints/remoteAgentManager.ts` | `docs/rabi-agent-interfaces.md` |
 | Rabi 多实例 API | 已有 | `manager.json`、runtime identity | 远端 / 多实例控制面 | API 调用时 | 代理其它实例的 routes / binding / replies | `/api/rabi/*` | `src/manager/rabiApi.ts` | `docs/rabi-agent-interfaces.md` |
-| RabiRoute Desktop | 已有 | 与 RibiWebGUI 同源的 Manager HTTP API、打包资源 | Windows 桌面入口 | 用户启动 RabiRoute Desktop 时 | 作为一个 Windows 应用启动和退出本机 Manager 后端，并异步显示 DTO；不直接读取 `data/`。WebGUI“设置”页开启滑词菜单后，系统托盘入口支持鼠标拖选和 `Shift` 键盘扩选；普通软件通过 UI Automation 读取文字与选区矩形，Unity 编辑器在不可用时发送受保护的临时复制并恢复剪贴板。悬浮条按选区横向居中，向上拖选放上方，向下或同一行拖选放下方；无系统插入符时使用同一窗口最近一次点击位置。点击才执行；关闭“滑词朗读”后只保留“投递至” | `/gateways?summary=1`、`/api/roles/:roleId/*`、`RabiRoute-Desktop.exe` | `desktop/tray-task-window/`、`scripts/build-desktop-exe.ps1` | `docs/windows-launcher-and-packaging.md` |
+| RabiRoute Windows Host | 已有 | Host READY 发布的动态 Manager URL、同一应用运行代身份、打包资源 | Windows 桌面入口 | 用户启动 `RabiRouteHost.exe` 时 | `RabiRouteHost.exe` 是唯一生命周期所有者，在同一运行代内直接拥有 Manager 与 Tray 两个子进程；Tray 不自行启动或扫描 Manager，只消费 Host READY 发布的当前身份与动态地址。WebGUI 异步显示 Manager DTO，不直接读取 `data/`。WebGUI“设置”页开启滑词菜单后，托盘支持鼠标拖选和 `Shift` 键盘扩选；普通软件通过 UI Automation 读取文字与选区矩形，Unity 编辑器在不可用时发送受保护的临时复制并恢复剪贴板。悬浮条按选区横向居中，向上拖选放上方，向下或同一行拖选放下方；无系统插入符时使用同一窗口最近一次点击位置。点击才执行；关闭“滑词朗读”后只保留“投递至” | `RabiRouteHost.exe --command status --json`、Host READY Manager URL、`/gateways?summary=1`、`/api/roles/:roleId/*` | `desktop/windows-host/`、`desktop/tray-task-window/`、`scripts/build-windows-host.ps1` | `docs/windows-launcher-and-packaging.md` |
 | 示例数据 | 已有 | `examples/data/` | 初次初始化、公开示例 | 首次无 data 目录时可复制 | 只默认启用 `main`；其他接入模板保持禁用；不应包含真实账号和 token | 仓库示例 | `examples/data/roles`、`examples/data/route` | `examples/data/README.md` |
 | 项目内 Skills | 已有 | `skills/` | Codex / Agent 开发指南 | Agent 读取 skill 时 | 无运行时副作用 | 仓库文件 | `skills/*/SKILL.md` | `skills/create-rabiroute-persona/SKILL.md` |
 | 人格路由工作台预览 | 拟新增 | route profile + simulated record | dry-run RouteDecision / AgentPacket / roleKnowledge | 用户点击生成预览时 | 必须无副作用：不投递 Agent、不写日志、不刷新 viewedAt | 未来人格页 | `docs/persona-route-workbench-plan.md` | `docs/persona-route-workbench-plan.md` |

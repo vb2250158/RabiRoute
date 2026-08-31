@@ -114,11 +114,12 @@ export function codexPlanAssistantInitializationPrompt(input: {
   workspace: string;
   count: number;
   index: number;
-  managerBaseUrl?: string;
+  managerBaseUrl: string;
 }): string {
   const count = normalizeCodexPlanAssistantCount(input.count);
   const index = Math.max(1, Math.min(count, Math.floor(input.index) || 1));
-  const managerBaseUrl = String(input.managerBaseUrl || "http://127.0.0.1:8790").replace(/\/+$/, "");
+  const managerBaseUrl = String(input.managerBaseUrl || "").trim().replace(/\/+$/, "");
+  if (!managerBaseUrl) throw new Error("managerBaseUrl is required for a plan assistant session.");
   return [
     `[rabi:bind ${input.roleId}]`,
     "[计划协助会话初始化]",

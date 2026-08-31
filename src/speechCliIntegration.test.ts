@@ -72,7 +72,7 @@ function speechCliEnvironment(
     ...process.env,
     RABIROUTE_SPEECH_MESSAGES_DIR: fixture.ingressDir,
     GATEWAY_ID: gatewayId,
-    GATEWAY_MANAGER_URL: "",
+    GATEWAY_MANAGER_URL: process.env.GATEWAY_MANAGER_URL,
     MESSAGE_ADAPTER_TYPE: adapterType,
     MESSAGE_ADAPTER_TYPES: JSON.stringify([adapterType]),
     AGENT_ADAPTERS: "marvis",

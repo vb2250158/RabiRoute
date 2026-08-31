@@ -6,7 +6,8 @@ import test from "node:test";
 import {
   appendPlanFeedback,
   createPlanFeedbackRecord,
-  listPlanFeedback
+  listPlanFeedback,
+  listPlanFeedbackFiles
 } from "../planFeedback.js";
 import { createPlan } from "../roleKnowledge.js";
 import {
@@ -56,7 +57,7 @@ function createCandidateFixture(status: "pending" | "failed" = "pending") {
   return { rolesRoot, roleDir, roleId, plan, feedback };
 }
 
-test("startup recovery lists the latest pending or failed plan feedback once", () => {
+test("startup recovery lists the latest pending or failed plan feedback once", async () => {
   const fixture = createCandidateFixture();
   appendPlanFeedback(fixture.roleDir, {
     ...fixture.feedback,
@@ -64,15 +65,37 @@ test("startup recovery lists the latest pending or failed plan feedback once", (
     deliveryStatus: "delivered"
   });
 
-  const candidates = listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot);
+  const candidates = await listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot);
 
   assert.deepEqual(candidates.map((candidate) => candidate.feedback.id), ["feedback-recovery"]);
   assert.equal(candidates[0]?.plan.taskBinding?.sessionId, fixture.plan.taskBinding?.sessionId);
 });
 
+test("startup recovery discovers feedback without loading unrelated plan bodies", async () => {
+  const fixture = createCandidateFixture();
+  const activeDirectory = path.join(fixture.roleDir, "plans", "active");
+  for (let index = 0; index < 500; index += 1) {
+    fs.mkdirSync(path.join(activeDirectory, `unrelated-${index}`), { recursive: true });
+  }
+
+  const candidates = await listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot);
+
+  assert.deepEqual(candidates.map((candidate) => candidate.feedback.id), [fixture.feedback.id]);
+});
+
+test("startup recovery observes cancellation before touching the catalog", async () => {
+  const controller = new AbortController();
+  controller.abort(new DOMException("stop recovery", "AbortError"));
+
+  await assert.rejects(
+    listOpenPlanFeedbackRecoveryCandidates(makeRolesRoot(), controller.signal),
+    (error: unknown) => error instanceof DOMException && error.name === "AbortError"
+  );
+});
+
 test("startup recovery marks an accepted feedback delivered without replay", async () => {
   const fixture = createCandidateFixture();
-  const candidate = listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot)[0]!;
+  const candidate = (await listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot))[0]!;
   let sends = 0;
 
   const outcome = await recoverPlanFeedbackCandidate(candidate, {
@@ -101,7 +124,7 @@ test("startup recovery accepts a linked guidance response after Desktop history 
     text: "Processed",
     notifyAgent: false
   }));
-  const candidate = listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot)[0]!;
+  const candidate = (await listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot))[0]!;
   let reads = 0;
   let sends = 0;
 
@@ -115,9 +138,59 @@ test("startup recovery accepts a linked guidance response after Desktop history 
   assert.equal(sends, 0);
 });
 
-test("startup recovery replays a missing feedback once and defers in-progress or unreadable state", async () => {
+test("startup recovery does not replay a candidate whose authoritative ledger is already delivered", async () => {
+  const fixture = createCandidateFixture();
+  const candidate = (await listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot))[0]!;
+  appendPlanFeedback(fixture.roleDir, {
+    ...fixture.feedback,
+    deliveryStatus: "delivered",
+    deliveryMessage: "completed by the live delivery path"
+  });
+  let inspections = 0;
+  let sends = 0;
+
+  const outcome = await recoverPlanFeedbackCandidate(candidate, {
+    inspect: async () => { inspections += 1; return "missing"; },
+    schedule: async () => { sends += 1; }
+  });
+
+  assert.equal(outcome.state, "delivered");
+  assert.equal(inspections, 0);
+  assert.equal(sends, 0);
+});
+
+test("feedback ledger reads keep filesystem concurrency bounded", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-feedback-read-bound-"));
+  const files = Array.from({ length: 40 }, (_, index) => {
+    const filePath = path.join(root, `${index}.jsonl`);
+    fs.writeFileSync(filePath, "", "utf8");
+    return filePath;
+  });
+  const originalReadFile = fs.promises.readFile;
+  let active = 0;
+  let peak = 0;
+  fs.promises.readFile = (async (...args: Parameters<typeof fs.promises.readFile>) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 2));
+    try {
+      return await originalReadFile(...args as [path: fs.PathLike, options: { encoding: BufferEncoding; signal?: AbortSignal }]);
+    } finally {
+      active -= 1;
+    }
+  }) as typeof fs.promises.readFile;
+  try {
+    await listPlanFeedbackFiles(files);
+  } finally {
+    fs.promises.readFile = originalReadFile;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  assert.ok(peak > 0 && peak <= 8, `peak filesystem reads=${peak}`);
+});
+
+test("startup recovery replays a missing feedback, defers active work, and classifies inspection failure", async () => {
   const missingFixture = createCandidateFixture("failed");
-  const missingCandidate = listOpenPlanFeedbackRecoveryCandidates(missingFixture.rolesRoot)[0]!;
+  const missingCandidate = (await listOpenPlanFeedbackRecoveryCandidates(missingFixture.rolesRoot))[0]!;
   let sends = 0;
   const missing = await recoverPlanFeedbackCandidate(missingCandidate, {
     inspect: async () => "missing",
@@ -127,7 +200,7 @@ test("startup recovery replays a missing feedback once and defers in-progress or
   assert.equal(sends, 1);
 
   const activeFixture = createCandidateFixture();
-  const activeCandidate = listOpenPlanFeedbackRecoveryCandidates(activeFixture.rolesRoot)[0]!;
+  const activeCandidate = (await listOpenPlanFeedbackRecoveryCandidates(activeFixture.rolesRoot))[0]!;
   const active = await recoverPlanFeedbackCandidate(activeCandidate, {
     inspect: async () => "in_progress",
     schedule: async () => { sends += 1; }
@@ -139,6 +212,6 @@ test("startup recovery replays a missing feedback once and defers in-progress or
     inspect: async () => { throw new Error("Desktop unavailable"); },
     schedule: async () => { sends += 1; }
   });
-  assert.equal(unreadable.state, "deferred");
+  assert.equal(unreadable.state, "failed");
   assert.equal(sends, 1);
 });

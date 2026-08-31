@@ -228,7 +228,7 @@ GET /api/personas/messages/receipts/:deliveryId
 需要向消息端发送内容时，AgentPacket 会同时给出明确发送接口、已经按当前来源生成的请求模板，以及只读来源上下文：
 
 ```text
-明确发送 API：http://127.0.0.1:8790/api/agent/send
+明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
 明确发送请求模板：{"deliveryId":"<stable-id>","sender":{"agentType":"primary_persona","sessionId":"<当前 Codex 主人格完整会话 ID>"},"routeId":"main","channel":"napcat","styleValidation":1,"params":{"target":"group","groupId":"456","instanceId":"default","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<正文>"}}
 来源上下文（只用于核对来源，不可直接作为发送参数）：{"routeKind":"direct_at","messageId":"123","groupId":"456"}
 ```
@@ -769,7 +769,7 @@ Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发�
 这类回合需要改用 RabiRoute Manager 提供的本机线程桥：
 
 ```http
-POST http://127.0.0.1:8790/api/agent/threads
+POST <managerBaseUrl>/api/agent/threads
 ```
 
 线程桥提供六个动作：

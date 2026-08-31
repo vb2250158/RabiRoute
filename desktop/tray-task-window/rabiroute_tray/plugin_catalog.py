@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from importlib import metadata
 from threading import Lock
 from typing import Callable, Mapping
 
@@ -19,7 +18,6 @@ DESKTOP_HOST_CAPABILITIES = frozenset(
         "desktop.tray-menu",
     }
 )
-TRUSTED_DESKTOP_EXTENSION_ENTRY_POINT_GROUP = "rabiroute.desktop_extensions"
 _SYMBOL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*$", re.IGNORECASE)
 
 
@@ -683,42 +681,6 @@ def create_builtin_desktop_extension_registry(*, freeze: bool = True) -> Desktop
         **desktop_owner,
     )
     return registry.freeze() if freeze else registry
-
-
-def load_trusted_desktop_extensions(
-    registry: DesktopExtensionRegistry,
-    entry_point_names: tuple[str, ...] | list[str],
-) -> tuple[str, ...]:
-    """Load explicitly allowed, trusted in-process extensions before Registry freeze.
-
-    Process isolation for untrusted extensions belongs to a future Extension Host.
-    """
-    requested = tuple(dict.fromkeys(
-        _required_text(name, "entry point name", limit=160) for name in entry_point_names
-    ))
-    if not requested:
-        return ()
-    if registry.frozen:
-        raise RuntimeError("Trusted Desktop extensions must be loaded before the registry is frozen.")
-    available: dict[str, object] = {}
-    duplicate_names: set[str] = set()
-    for entry_point in metadata.entry_points(group=TRUSTED_DESKTOP_EXTENSION_ENTRY_POINT_GROUP):
-        if entry_point.name in available:
-            duplicate_names.add(entry_point.name)
-        else:
-            available[entry_point.name] = entry_point
-    ambiguous = [name for name in requested if name in duplicate_names]
-    if ambiguous:
-        raise LookupError(f"Trusted Desktop extension entry point is ambiguous: {', '.join(ambiguous)}")
-    missing = [name for name in requested if name not in available]
-    if missing:
-        raise LookupError(f"Trusted Desktop extension entry point is not installed: {', '.join(missing)}")
-    for name in requested:
-        registrar = available[name].load()
-        if not callable(registrar):
-            raise TypeError(f"Trusted Desktop extension entry point is not callable: {name}")
-        registrar(registry)
-    return requested
 
 
 def _revision(value: object) -> int | None:

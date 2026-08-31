@@ -19,10 +19,13 @@ async function fixture(): Promise<Readonly<{
   const profilePath = path.join(root, "profile.json");
   await fs.mkdir(path.join(packageDirectory, "web"), { recursive: true });
   await fs.writeFile(path.join(packageDirectory, "rabi.plugin.json"), JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "example.web",
     version: "1.0.0",
-    entries: { manager: "./manager.mjs", web: "./web/client.mjs" },
+    entries: {
+      manager: { execution: "in_process", module: "./manager.mjs" },
+      web: { execution: "in_process", module: "./web/client.mjs" }
+    },
     provides: [],
     requires: [],
     optional: [],
@@ -30,17 +33,21 @@ async function fixture(): Promise<Readonly<{
   }), "utf8");
   await fs.writeFile(path.join(packageDirectory, "manager.mjs"), "export function activate() {}\n", "utf8");
   await fs.writeFile(path.join(packageDirectory, "web", "client.mjs"), "export function activate() {}\n", "utf8");
+  const packageRoot = path.join(root, "packages");
   return Object.freeze({
     root,
     packageDirectory,
     profilePath,
-    packageCatalog: new PluginPackageCatalog([path.join(root, "packages")])
+    packageCatalog: new PluginPackageCatalog([packageRoot], {
+      trustedInProcessRoots: [packageRoot]
+    })
   });
 }
 
 async function load(value: Awaited<ReturnType<typeof fixture>>, entries: readonly ProfileEntry[]) {
   await fs.writeFile(value.profilePath, JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    readyRequires: [],
     instances: entries.map(entry => ({
       id: entry.id,
       package: "example.web",

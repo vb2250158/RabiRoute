@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 import time
 import unittest
+import uuid
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -11,7 +13,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 TRAY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TRAY_ROOT))
 
-from PySide6.QtCore import QThread, Qt
+from PySide6.QtCore import QObject, QThread, Qt
+from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from rabiroute_tray.desktop_refresh import DesktopRefreshService
@@ -19,6 +22,7 @@ from rabiroute_tray.manager_client import ManagerSnapshot, ManualTriggerResult, 
 from rabiroute_tray.tray_app import (
     MAX_DIRECT_PERSONA_CHATS,
     _SnapshotRefreshGate,
+    _connect_host_lifecycle,
     _persona_menu_signature,
     _panel_is_active,
     _panel_manager_signature,
@@ -30,7 +34,7 @@ from rabiroute_tray.tray_app import (
     _rebuild_persona_chat_menu,
     _retain_last_gateway_snapshot,
     _start_manager_snapshot,
-    _start_manager_shutdown,
+    _start_application_quit,
     _start_manual_trigger,
     _start_plan_feedback_send,
     _start_role_panel_send,
@@ -173,11 +177,11 @@ class TrayAppAsyncSendTest(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(results, [ManualTriggerResult(ok=True)])
 
-    def test_manager_shutdown_returns_without_blocking_qt_thread(self) -> None:
+    def test_application_quit_returns_without_blocking_qt_thread(self) -> None:
         results: list[bool] = []
         started_at = time.perf_counter()
 
-        _start_manager_shutdown(
+        _start_application_quit(
             _SlowLifecycle(),  # type: ignore[arg-type]
             lambda _task, result: results.append(result),
         )
@@ -267,6 +271,57 @@ class TrayAppAsyncSendTest(unittest.TestCase):
         self.assertFalse(gate.request(auto=False))
         self.assertTrue(gate.completed(active_task))
         self.assertTrue(gate.request(auto=False))
+
+    def test_hosted_surface_does_not_compete_with_the_host_single_instance_lock(self) -> None:
+        source = (TRAY_ROOT / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("QLockFile", source)
+        self.assertNotIn("desktop-instance.lock", source)
+        self.assertNotIn("lock.unlock()", source)
+
+    def test_host_lifecycle_pipe_quits_through_the_qt_event_loop(self) -> None:
+        class LifecycleOwner(QObject):
+            def __init__(self) -> None:
+                super().__init__()
+                self.quit_called = False
+
+            def quit(self) -> None:
+                self.quit_called = True
+
+        pipe_name = f"RabiRoute.Tray.test.{uuid.uuid4().hex}"
+        QLocalServer.removeServer(pipe_name)
+        server = QLocalServer(self.app)
+        self.assertTrue(server.listen(pipe_name), server.errorString())
+        owner = LifecycleOwner()
+        socket = _connect_host_lifecycle(owner, pipe_name, "generation-1", "manager-1")  # type: ignore[arg-type]
+        deadline = time.monotonic() + 2
+        connection = None
+        while time.monotonic() < deadline and connection is None:
+            self.app.processEvents()
+            if server.hasPendingConnections():
+                connection = server.nextPendingConnection()
+            time.sleep(0.01)
+        self.assertIsNotNone(connection)
+        ready_bytes = bytearray()
+        while time.monotonic() < deadline and b"\n" not in ready_bytes:
+            self.app.processEvents()
+            ready_bytes.extend(bytes(connection.readAll()))
+            time.sleep(0.01)
+        ready_line = bytes(ready_bytes).decode("utf-8").strip()
+        self.assertTrue(ready_line.startswith("RABIROUTE_TRAY_READY:"))
+        ready = json.loads(ready_line.removeprefix("RABIROUTE_TRAY_READY:"))
+        self.assertEqual(ready["applicationGenerationId"], "generation-1")
+        self.assertEqual(ready["managerInstanceId"], "manager-1")
+        self.assertEqual(ready["pid"], os.getpid())
+        connection.write(b"shutdown\n")
+        connection.flush()
+        while time.monotonic() < deadline and not owner.quit_called:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.assertTrue(owner.quit_called)
+        socket.abort()
+        server.close()
+        QLocalServer.removeServer(pipe_name)
 
     def test_transient_gateway_timeout_keeps_last_successful_gateway_snapshot(self) -> None:
         previous = ManagerSnapshot(

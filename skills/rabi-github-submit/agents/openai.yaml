@@ -1,4 +1,4 @@
 interface:
   display_name: "Rabi GitHub Submit"
-  short_description: "Submit RabiRoute with example persona updates."
-  default_prompt: "Use this when preparing RabiRoute changes for GitHub submission."
+  short_description: "Submit RabiRoute with one patch version per commit."
+  default_prompt: "Use $rabi-github-submit to prepare a RabiRoute commit with the mandatory patch bump and bilingual version log."

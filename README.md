@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.2.1" src="https://img.shields.io/badge/version-0.2.1-3178c6">
+  <img alt="Current version: 0.2.2" src="https://img.shields.io/badge/version-0.2.2-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -40,9 +40,9 @@ The Agent answers, writes code, calls tools, and performs the task. RabiRoute de
 
 ### Windows installer
 
-Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). The package includes RabiRoute Desktop, the local Manager, RibiWebGUI, Node.js, and production dependencies.
+Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). The package includes RabiRoute Host, the Desktop surface, the local Manager, RibiWebGUI, Node.js, and production dependencies. On Windows, Host is the only application-lifecycle owner: it creates one application generation and keeps Manager and Desktop in that same generation.
 
-A portable ZIP and `SHA256SUMS.txt` are also published. Windows packages are currently unsigned, so verify the checksum before accepting a SmartScreen unknown-publisher warning.
+A portable ZIP and `SHA256SUMS.txt` are also published. The ZIP uses the `RabiRouteHost.exe + current.json + versions/<releaseId>` layout and must be extracted only into a new empty directory; use Setup for every existing installation. Setup embeds that exact ZIP, stages it on the installation volume, verifies every manifest hash and size plus private-path, reparse-point, and Host self-test gates, then issues a generation-fenced quit. Only a valid candidate can atomically replace `current.json` and the bootstrap; failure restores the previous pointer and bootstrap. Exactly identified retired lifecycle entries move into installer-owned, non-executable quarantine names ending in `.retired`; rollback or power-loss recovery restores them in place, while foreign and similarly suffixed files never move. `data/`, `logs/`, and foreign files are neither overwritten nor removed by uninstall. Windows packages are currently unsigned, so verify the checksum before accepting a SmartScreen unknown-publisher warning.
 
 ### Run from source
 
@@ -56,7 +56,7 @@ npm run build
 npm run start:manager
 ```
 
-Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/). When no local runtime data exists, Manager creates a sanitized sample configuration from `examples/data/`.
+Manager prints its actual loopback URL after startup; the operating system assigns an unused port. Source-mode users open that printed URL. Packaged Windows users start RabiRoute Host and let Host status or the tray open the current URL; no fixed localhost port is part of the product contract. When no local runtime data exists, Manager creates a sanitized sample configuration from `examples/data/`.
 
 ### Complete the first Route
 
@@ -69,17 +69,17 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.2.1`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.2.2`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
 | Routing core | Verified | Receive messages, persist events, match rules, build Agent context, deliver to a handler, and record replies. |
-| NapCat / OneBot | Verified | Receive QQ group and direct messages, preserve image and merged-forward evidence, and send replies through OneBot HTTP. |
+| NapCat / OneBot | Verified | Bind one NapCat to each Route, manage quick/password/QR login and security confirmation inside the Route card, receive QQ group/direct messages, preserve media evidence, and send replies through OneBot HTTP. |
 | Schedules and persona automation | Verified | Trigger an Agent from messages or time rules; run persona-local scripts only after separate permission is enabled. |
 | Codex Desktop | Verified | Deliver by full task ID and workspace; report success only after the target rollout records the `deliveryId`. Deleted or archived bindings can be replaced under controlled rules. |
 | RibiWebGUI | Verified | Manage Routes, personas, message inputs, Agents, plans, memories, logs, diagnostics, themes, and desktop settings. |
 | Plans, memories, and message processing | Verified | Page through plans and memories, submit plan feedback, assign message-processing work, and preserve state and receipts. |
-| Windows desktop | Core path implemented | Start Manager and the desktop UI together; use selected-text actions, screenshots, and annotations. Some system interactions still need Windows device acceptance. |
+| Windows desktop | Core path implemented | Host owns one application generation containing Manager and the tray/task-window surface; use selected-text actions, screenshots, and annotations. Some system interactions still need Windows device acceptance. |
 | DSH | Experimental | Bind an explicit API address, workspace, and session as the primary or an auxiliary handler. |
 | RabiSpeech / RabiLink / mobile and wearables | Experimental | Connect speech, phones, glasses, Relay, and health-data paths, with separate acceptance for each device and network environment. |
 | LAN Rabi Agent | Experimental | Run a headless worker on another computer and deliver Manager tasks to a configured Codex Desktop owner on that machine. Real multi-computer acceptance remains pending. |
@@ -97,9 +97,11 @@ See [Current capabilities and maturity](docs/current-capabilities_en.md) for com
 
 ### Unreleased: delivery, plugin, and WebGUI recovery
 
+- Windows now has one lifecycle trunk: RabiRoute Host is the only application owner, Manager and the tray are same-generation children, and terminating either child causes a bounded whole-generation rebuild. The tray cannot start, repair, or outlive Manager on its own.
+- Manager asks the operating system for an unused loopback port. Host publishes the current endpoint through its authenticated local control channel and starts the tray only after Manager reports the matching application generation and Manager instance.
 - Codex Desktop delivery now waits for a recorded `deliveryId`; an IPC acceptance without a target-task receipt is retried or reported as a failure.
 - Visible Codex task names now come from the index shared with the Desktop sidebar, while task ID and workspace remain the delivery identity.
-- Manager plugins are managed through versioned Profiles and Bundles. A revision change drains accepted requests, replaces the instance, and restores the last working revision if activation fails.
+- Manager plugins use schema/profile v2. Each entry declares `in_process`, `isolated`, or `declarative` execution; Profiles declare `readyRequires`; process leases and the dependency graph make shutdown release consumers before providers.
 - Web Bundles use immutable revision URLs, keeping each page, script, stylesheet, and font on the same revision. The browser replaces only the changed module after catalog updates.
 - RibiWebGUI displays its fixed shell before loading the plugin catalog and knowledge content. Expired message-board records discard bodies and attachments while keeping time-limited replay hashes.
 
@@ -120,7 +122,7 @@ flowchart LR
 
 Each Route stores its message input, persona, handler, workspace, and sending rules separately. Message adapters do not build Agent instructions, and Agents do not receive channel credentials or direct ownership of routing state.
 
-Manager loads 28 independent built-in packages through one Plugin Kernel. Built-in and out-of-tree packages share the same SDK, manifest, dependency graph, permission checks, generation switching, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
+Manager loads 29 independent built-in packages through one Plugin Kernel. Built-in and out-of-tree packages share schema/profile v2, the same SDK, dependency graph, permission checks, generation switching, execution-mode boundary, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
 
 ## Agent and safety boundaries
 

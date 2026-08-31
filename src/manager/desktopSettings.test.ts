@@ -100,3 +100,20 @@ test("desktop settings keep persona-scoped pet bindings bounded and isolated", (
   assert.equal(settings.pets.YeYu?.placement?.screen, "DISPLAY-2");
   assert.equal(settings.pets.YeYu?.fpsCap, 24);
 });
+
+test("autostart configuration remains tri-state for missing or corrupt settings", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-autostart-state-"));
+  const filePath = path.join(root, "settings.json");
+  try {
+    const store = new DesktopSettingsStore(filePath);
+    assert.equal(store.autostartConfigured(), false);
+    fs.writeFileSync(filePath, "{broken", "utf8");
+    assert.equal(store.autostartConfigured(), false);
+    fs.writeFileSync(filePath, JSON.stringify({ theme: "dark" }), "utf8");
+    assert.equal(store.autostartConfigured(), false);
+    store.write({ autostart: false });
+    assert.equal(store.autostartConfigured(), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

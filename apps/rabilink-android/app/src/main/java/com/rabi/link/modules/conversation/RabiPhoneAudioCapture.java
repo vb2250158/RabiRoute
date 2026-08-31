@@ -41,6 +41,7 @@ public final class RabiPhoneAudioCapture {
     public interface Listener {
         void onPcm(byte[] pcm);
         void onPlaybackSuppressed();
+        void onGap(String reason, long estimatedBytes);
         void onStatus(String status);
         void onDiagnostic(String event, String level, String state);
     }
@@ -54,6 +55,7 @@ public final class RabiPhoneAudioCapture {
 
     private volatile boolean requested;
     private volatile boolean playbackSuppressed;
+    private volatile long playbackSuppressedAt;
     private volatile ScheduledFuture<?> stallDeadline;
     private volatile AudioRecord recorder;
     private volatile long lastReadElapsed;
@@ -85,7 +87,15 @@ public final class RabiPhoneAudioCapture {
     }
 
     public void setPlaybackSuppressed(boolean value) {
+        if (playbackSuppressed == value) return;
         playbackSuppressed = value;
+        if (value) {
+            playbackSuppressedAt = SystemClock.elapsedRealtime();
+        } else if (playbackSuppressedAt > 0L) {
+            long durationMs = Math.max(0L, SystemClock.elapsedRealtime() - playbackSuppressedAt);
+            playbackSuppressedAt = 0L;
+            listener.onGap("playback_suppressed", durationMs * 32L);
+        }
     }
 
     /** Pauses phone capture while keeping the supervisor reusable for a later mode switch. */
@@ -235,6 +245,7 @@ public final class RabiPhoneAudioCapture {
         consecutiveRestarts += 1;
         restartCount += 1;
         long delay = Math.min(MAX_RESTART_DELAY_MS, 1_000L << Math.min(5, consecutiveRestarts - 1));
+        listener.onGap(reason, delay * 32L);
         persistRuntime(false, reason);
         listener.onDiagnostic("conversation.audio.restart", "warning", reason);
         listener.onStatus("手机录音异常 · " + (delay / 1000L) + " 秒后自动恢复");
@@ -282,6 +293,7 @@ public final class RabiPhoneAudioCapture {
         persistRuntime(false, reason);
         releaseWakeLock();
         listener.onDiagnostic("conversation.audio.failed", "error", reason);
+        listener.onGap(reason, 0L);
         listener.onStatus(status);
     }
 

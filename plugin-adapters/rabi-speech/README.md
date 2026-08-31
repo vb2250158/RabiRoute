@@ -6,7 +6,7 @@
 
 # RabiSpeech 插件
 
-RabiSpeech 是 Rabi 的独立本机服务插件，也是只绑定回环地址的本地 TTS / ASR provider 网关。普通手动语音 API 不接入 Agent、不经过消息路由；常驻麦克风每完成一段 ASR，Manager 会把同一份文本广播给所有已开启语音消息端的 Route，各 Route 独立执行热投递或人格关键词策略：
+RabiSpeech 是由 RabiRoute Manager 语音插件管理的本机重型子进程，也是只绑定回环地址的本地 TTS / ASR provider 网关。它不能脱离当前 RabiRoute application generation 独立自启动。普通手动语音 API 不接入 Agent、不经过消息路由；常驻麦克风每完成一段 ASR，Manager 会把同一份文本广播给所有已开启语音消息端的 Route，各 Route 独立执行热投递或人格关键词策略：
 
 - TTS 由 RabiSpeech 直接管理本地 ONNX-VITS、GPT-SoVITS、IndexTTS2、Qwen3-TTS 和 CosyVoice3 worker。
 - ASR 支持本地 faster-whisper、Qwen3-ASR、SenseVoiceSmall 和 FireRedASR2。
@@ -23,16 +23,9 @@ RabiRoute 标准安装不包含 ASR/TTS 依赖和模型。只有需要语音功�
 ```powershell
 cd plugin-adapters\rabi-speech
 .\scripts\install.ps1
-.\scripts\start.ps1
 ```
 
-注册为当前用户登录时自动启动的本机服务插件：
-
-```powershell
-.\scripts\install-service.ps1 -StartNow
-```
-
-计划任务使用当前用户身份，以便读取 NAS 上的插件和模型；它不使用 SYSTEM 权限，也不会改变 `127.0.0.1` 监听边界。
+依赖准备完成后，只启动已安装的 `RabiRouteHost.exe`。Host 创建 Manager，Manager 的语音插件再启动并持有 RabiSpeech；插件停用、应用代重建或用户退出时，同一代 RabiSpeech 必须随之停止。Windows 登录自启动也只能指向 `RabiRouteHost.exe`。历史 `install-service.ps1` 已退役，会明确报错，不能再创建独立的 `RabiSpeech` 计划任务。
 
 默认地址：`http://127.0.0.1:8781`。首次启动会从 `config.example.json` 复制本机 `config.json`；后者不提交 Git。
 
@@ -235,11 +228,11 @@ benchmarks/cases.zh-CN.json
   -> render-html
 ```
 
-固定语料、功能元数据和 HTML 模板位于 `benchmarks/`。完整工作流见 `../../skills/benchmark-rabispeech-models/SKILL.md`，报告说明见 `../../docs/rabispeech-plugin.md`。构建 WebGUI 后打开：
+固定语料、功能元数据和 HTML 模板位于 `benchmarks/`。完整工作流见 `../../skills/benchmark-rabispeech-models/SKILL.md`，报告说明见 `../../docs/rabispeech-plugin.md`。构建 WebGUI 后，从 `RabiRouteHost.exe --command status --json` 读取本代 `managerBaseUrl`，并先核对 `/meta` 的 `applicationGenerationId`、`managerInstanceId` 与 Host READY 一致，再打开：
 
 ```text
-http://127.0.0.1:8790/#/docs
-http://127.0.0.1:8790/reports/rabispeech-model-benchmark.html
+<managerBaseUrl>/#/docs
+<managerBaseUrl>/reports/rabispeech-model-benchmark.html
 ```
 
 运行期 WAV、JSON、CSV 和日志继续放在被忽略的 `output/benchmarks/`；公开 HTML 只嵌入脱敏后的指标和逐句结果。

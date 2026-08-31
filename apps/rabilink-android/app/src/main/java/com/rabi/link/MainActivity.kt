@@ -67,9 +67,13 @@ class MainActivity : Activity() {
     private val runtimeHandler = Handler(Looper.getMainLooper())
     private lateinit var inputMode: Spinner
     private lateinit var proactivityPreference: Spinner
+    private lateinit var autoStartVoiceService: Switch
     private lateinit var autoPlayAgentVoice: Switch
     private lateinit var ttsModel: EditText
     private lateinit var ttsVoice: EditText
+    private lateinit var audioRetentionHours: EditText
+    private lateinit var audioMaxStorageMb: EditText
+    private lateinit var audioReserveFreeMb: EditText
     private enum class Screen { SETUP, CONVERSATIONS, CHAT, SETTINGS, CONFIG_ASSISTANT }
     private data class ConversationRow(
         val id: String,
@@ -135,15 +139,15 @@ class MainActivity : Activity() {
         }
         if (saved.configured && saved.statusSyncEnabled) RokidDeviceStatusSyncService.start(this)
         val conversation = RabiConversationSettings.load(this)
-        if (saved.configured && RabiConversationServiceState.shouldRestore(this)) {
-            if (conversation.inputMode != RabiConversationSettings.InputMode.PHONE
-                || checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                RabiConversationService.start(this)
-            } else {
-                // Restore durable queues/downlink even when Android still requires a foreground
-                // microphone permission interaction before continuous capture can resume.
-                RabiConversationService.restoreAfterBoot(this)
-            }
+        when (RabiConversationStartupPolicy.decide(
+            saved.configured,
+            RabiConversationServiceState.shouldRestore(this),
+            conversation,
+            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )) {
+            RabiConversationStartupPolicy.Action.START_VOICE -> RabiConversationService.start(this)
+            RabiConversationStartupPolicy.Action.RESTORE_TRANSPORT -> RabiConversationService.restoreAfterBoot(this)
+            RabiConversationStartupPolicy.Action.NONE -> Unit
         }
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), requestNotifications)
@@ -812,6 +816,9 @@ class MainActivity : Activity() {
         actions.addView(space(), LinearLayout.LayoutParams(dp(6), 1))
         actions.addView(secondary("停止") { RabiConversationService.stop(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(actions)
+        addView(primary("查看录音与转写") {
+            startActivity(Intent(this@MainActivity, RabiSpeechPreviewActivity::class.java))
+        }, full(0, 8, 0, 0))
     }
 
     private fun refreshConversationRuntime() {
@@ -922,9 +929,14 @@ class MainActivity : Activity() {
                 listOf("由 Agent 人格综合决定", "偏安静", "均衡", "偏主动"),
             ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         })
+        autoStartVoiceService = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply {
+            text = "Rabi 启动后自动开启语音服务"
+        })
         autoPlayAgentVoice = RabiMobileUi.styleSwitch(this@MainActivity, Switch(this@MainActivity).apply { text = "收到 Agent TTS 后立即播放" })
         addView(label("当前交互模式")); addView(inputMode, full(0, 0, 0, 6))
         addView(note("眼镜模式只有在眼镜真实连接后才开始采集；连接前或断线后保持暂停，不会同时上传手机和眼镜麦克风。"))
+        addView(autoStartVoiceService)
+        addView(note("开启后，每次打开 Rabi 都会按当前交互模式启动语音服务。关闭后只保持消息连接，不会自动使用手机或眼镜麦克风。"))
         addView(label("明确主动性偏好")); addView(proactivityPreference, full(0, 0, 0, 6))
         addView(note("这是交给 PC / Route / Agent 的明确偏好，不是 App 本地决策规则。Agent 仍可根据情景、权限和动作安全门选择不打扰、准备、提示、建议、请求确认或行动。"))
         addView(autoPlayAgentVoice)
@@ -932,8 +944,15 @@ class MainActivity : Activity() {
         ttsVoice = input("Rabi")
         addView(label("Rabi PC TTS 模型")); addView(ttsModel, full(0, 0, 0, 6))
         addView(label("人格 / 声线")); addView(ttsVoice, full(0, 0, 0, 6))
-        addView(primary("保存并开始持续会话") { startConversation() }, full(0, 0, 0, 8))
-        addView(note("常驻运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。Android 不保存整日原始录音；RabiSpeech 在 PC 端切出的 ASR 语段和 Agent TTS 按统一缓存语义逐条保留 24 小时。小米等厂商仍可能额外限制后台应用，请在真机上核对电池优化与自启动权限。"))
+        audioRetentionHours = input("6").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        audioMaxStorageMb = input("8192").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        audioReserveFreeMb = input("1024").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        addView(label("已确认录音保留（小时，0–168）")); addView(audioRetentionHours, full(0, 0, 0, 6))
+        addView(label("录音队列上限（MiB，至少 1024）")); addView(audioMaxStorageMb, full(0, 0, 0, 6))
+        addView(label("设备剩余空间水位（MiB，至少 256）")); addView(audioReserveFreeMb, full(0, 0, 0, 6))
+        addView(note("未确认分片不会因保留期限被删除；只有 Rabi PC 明确确认完整字节、序号与校验和后，手机副本才进入可清理状态。达到存储水位会停止接受新的 PCM，并在本机留下可审计缺口。"))
+        addView(primary("保存并应用") { startConversation() }, full(0, 0, 0, 8))
+        addView(note("常驻运行会使用麦克风前台服务、采集 WakeLock、卡死检测和自动恢复。手机先把连续 PCM 写入私有动态分片，断网或 PC 离线时继续落盘，恢复联网后按序补传。小米等厂商仍可能额外限制后台应用，请在真机上核对电池优化与自启动权限。"))
         val actions = row()
         actions.addView(secondary("立即提示 Agent") { RabiConversationService.requestReview(this@MainActivity) }, LinearLayout.LayoutParams(0, -2, 1f))
         actions.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
@@ -958,9 +977,13 @@ class MainActivity : Activity() {
             RabiConversationSettings.ProactivityPreference.PROACTIVE -> 3
             else -> 0
         })
+        autoStartVoiceService.isChecked = value.autoStartVoiceService
         autoPlayAgentVoice.isChecked = value.autoPlayAgentVoice
         ttsModel.setText(value.ttsModel)
         ttsVoice.setText(value.ttsVoice)
+        audioRetentionHours.setText(value.audioRetentionHours.toString())
+        audioMaxStorageMb.setText(value.audioMaxStorageMb.toString())
+        audioReserveFreeMb.setText(value.audioReserveFreeMb.toString())
     }
 
     private fun saveConversationSettings() {
@@ -977,15 +1000,19 @@ class MainActivity : Activity() {
                 3 -> RabiConversationSettings.ProactivityPreference.PROACTIVE
                 else -> RabiConversationSettings.ProactivityPreference.AGENT_DECIDES
             },
+            autoStartVoiceService.isChecked,
             autoPlayAgentVoice.isChecked,
             ttsModel.text.toString(),
-            ttsVoice.text.toString()
+            ttsVoice.text.toString(),
+            audioRetentionHours.text.toString().toIntOrNull() ?: 6,
+            audioMaxStorageMb.text.toString().toIntOrNull() ?: 8192,
+            audioReserveFreeMb.text.toString().toIntOrNull() ?: 1024
         )
         next.save(this)
         if (previous.proactivityPreference != next.proactivityPreference) {
             RabiConversationService.updateProactivityPreference(this, next.proactivityPreference.wireValue)
         }
-        toast("模式与持续会话设置已保存")
+        toast("语音服务设置已保存")
     }
 
     private fun startConversation() {
@@ -993,7 +1020,8 @@ class MainActivity : Activity() {
         val relay = RabiLinkRelaySettings.load(this)
         if (!relay.configured) return toast("请先连接 RabiLink 服务器")
         val settings = RabiConversationSettings.load(this)
-        if (settings.inputMode == RabiConversationSettings.InputMode.PHONE
+        if (settings.autoStartVoiceService
+            && settings.inputMode == RabiConversationSettings.InputMode.PHONE
             && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), requestPhoneAudio)
             return

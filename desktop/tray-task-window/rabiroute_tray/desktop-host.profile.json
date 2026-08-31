@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "host": "io.rabiroute.desktop.qt-host",
+  "features": [
+    {
+      "id": "io.rabiroute.desktop.pet-renderer@1",
+      "enabled": true
+    }
+  ]
+}

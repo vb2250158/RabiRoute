@@ -14,6 +14,16 @@ export function desktopSettingsPath(rootDir: string): string {
 export class DesktopSettingsStore {
   constructor(private readonly filePath: string) {}
 
+  autostartConfigured(): boolean {
+    if (!fs.existsSync(this.filePath)) return false;
+    try {
+      const value = JSON.parse(fs.readFileSync(this.filePath, "utf8").replace(/^\uFEFF/, ""));
+      return Boolean(value && typeof value === "object" && !Array.isArray(value) && typeof value.autostart === "boolean");
+    } catch {
+      return false;
+    }
+  }
+
   read(): DesktopSettings {
     if (!fs.existsSync(this.filePath)) return structuredClone(DEFAULT_DESKTOP_SETTINGS);
     try {

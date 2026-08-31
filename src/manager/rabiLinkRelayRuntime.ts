@@ -35,11 +35,13 @@ export type RabiLinkRelayRuntimeOptions = {
   localSpeechRequestTimeoutMs?: number;
   relayWriteTimeoutMs?: number;
   relayWriteAttempts?: number;
+  channelRetryDelayMs?: number;
   onStatus?: (status: RabiLinkRelayRuntimeStatus) => void;
   onEvent?: (eventType: string, data: Record<string, unknown>) => void;
 };
 
 const RETRY_DELAY_MS = 3000;
+const MAX_CHANNEL_RETRY_DELAY_MS = 30_000;
 const DEFAULT_LOCAL_REQUEST_TIMEOUT_MS = 5000;
 const DEFAULT_LOCAL_REQUEST_ATTEMPTS = 3;
 const DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS = 180000;
@@ -59,17 +61,33 @@ function abortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+function runtimeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error) || !("cause" in error) || !error.cause) return message;
+  const cause = error.cause;
+  const causeMessage = cause instanceof Error ? cause.message : String(cause);
+  const causeCode = typeof cause === "object" && cause !== null && "code" in cause
+    ? String((cause as { code?: unknown }).code ?? "").trim()
+    : "";
+  const detail = [causeCode, causeMessage].filter(Boolean).join(" ");
+  return detail && detail !== message ? `${message}: ${detail}` : message;
+}
+
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    if (signal.aborted) {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
       resolve();
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
+    };
+    if (signal.aborted) return finish();
+    timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+    if (signal.aborted) finish();
   });
 }
 
@@ -637,6 +655,10 @@ export class RabiLinkRelayRuntime {
       localSpeechRequestTimeoutMs: Math.max(1000, Number(options.localSpeechRequestTimeoutMs) || DEFAULT_LOCAL_SPEECH_REQUEST_TIMEOUT_MS),
       relayWriteTimeoutMs: Math.max(100, Number(options.relayWriteTimeoutMs) || DEFAULT_RELAY_WRITE_TIMEOUT_MS),
       relayWriteAttempts: Math.max(1, Math.min(5, Number(options.relayWriteAttempts) || DEFAULT_RELAY_WRITE_ATTEMPTS)),
+      channelRetryDelayMs: Math.max(10, Math.min(
+        MAX_CHANNEL_RETRY_DELAY_MS,
+        Number(options.channelRetryDelayMs) || RETRY_DELAY_MS
+      )),
       onStatus: options.onStatus ?? (() => undefined),
       onEvent: options.onEvent ?? (() => undefined)
     };
@@ -755,7 +777,16 @@ export class RabiLinkRelayRuntime {
   private async run(config: RabiLinkRelayRuntimeConfig, generation: number, signal: AbortSignal): Promise<void> {
     let webguiDrain: Promise<void> | null = null;
     let speechDrain: Promise<void> | null = null;
+    let webguiDrainFailures = 0;
+    let speechDrainFailures = 0;
     const webguiEvents = new Map<string, Promise<void>>();
+    const markChannelsOnline = (): void => {
+      if (webguiDrainFailures === 0
+        && (!config.speechProxyEnabled || speechDrainFailures === 0)
+        && this.active(generation, signal)) {
+        this.markOnline(config.speechProxyEnabled);
+      }
+    };
     const startWebguiEvents = (): void => {
       if (signal.aborted) return;
       for (const streamPath of WEBGUI_EVENT_STREAM_PATHS) {
@@ -766,44 +797,68 @@ export class RabiLinkRelayRuntime {
       }
     };
     const drainWebgui = (): void => {
-      if (webguiDrain || signal.aborted) return;
-      webguiDrain = this.drainChannel(
+      if (webguiDrain || !this.active(generation, signal)) return;
+      let retry = false;
+      const attempt: Promise<void> = this.drainChannel(
         signal,
         (waitMs, channelSignal) => claimWebguiRequests(config, waitMs, channelSignal),
         (request) => proxyWebguiRequest(config, request, this.options, signal)
       ).then(() => {
-        if (!signal.aborted) this.markOnline(config.speechProxyEnabled);
-      }).catch(error => {
-        if (!signal.aborted && !abortError(error)) {
-          this.setStatus({
-            state: "error",
-            message: `RabiLink WebGUI 事件处理失败：${error instanceof Error ? error.message : String(error)}`,
-            lastConnectedAt: this.runtimeStatus.lastConnectedAt,
-            lastSuccessAt: this.runtimeStatus.lastSuccessAt,
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }).finally(() => { webguiDrain = null; });
+        webguiDrainFailures = 0;
+        markChannelsOnline();
+      }).catch(async error => {
+        if (!this.active(generation, signal)) return;
+        webguiDrainFailures += 1;
+        retry = true;
+        const message = runtimeErrorMessage(error);
+        this.setStatus({
+          state: "error",
+          message: `RabiLink WebGUI 事件处理失败：${message}`,
+          lastConnectedAt: this.runtimeStatus.lastConnectedAt,
+          lastSuccessAt: this.runtimeStatus.lastSuccessAt,
+          error: message
+        });
+        await delay(Math.min(
+          this.options.channelRetryDelayMs * webguiDrainFailures,
+          MAX_CHANNEL_RETRY_DELAY_MS
+        ), signal);
+      }).finally(() => {
+        if (webguiDrain === attempt) webguiDrain = null;
+        if (retry && this.active(generation, signal)) drainWebgui();
+      });
+      webguiDrain = attempt;
     };
     const drainSpeech = (): void => {
-      if (!config.speechProxyEnabled || speechDrain || signal.aborted) return;
-      speechDrain = this.drainChannel(
+      if (!config.speechProxyEnabled || speechDrain || !this.active(generation, signal)) return;
+      let retry = false;
+      const attempt: Promise<void> = this.drainChannel(
         signal,
         (waitMs, channelSignal) => claimSpeechRequests(config, waitMs, channelSignal),
         (request) => proxySpeechRequest(config, request, this.options, signal)
       ).then(() => {
-        if (!signal.aborted) this.markOnline(config.speechProxyEnabled);
-      }).catch(error => {
-        if (!signal.aborted && !abortError(error)) {
-          this.setStatus({
-            state: "error",
-            message: `RabiLink 语音事件处理失败：${error instanceof Error ? error.message : String(error)}`,
-            lastConnectedAt: this.runtimeStatus.lastConnectedAt,
-            lastSuccessAt: this.runtimeStatus.lastSuccessAt,
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }).finally(() => { speechDrain = null; });
+        speechDrainFailures = 0;
+        markChannelsOnline();
+      }).catch(async error => {
+        if (!this.active(generation, signal)) return;
+        speechDrainFailures += 1;
+        retry = true;
+        const message = runtimeErrorMessage(error);
+        this.setStatus({
+          state: "error",
+          message: `RabiLink 语音事件处理失败：${message}`,
+          lastConnectedAt: this.runtimeStatus.lastConnectedAt,
+          lastSuccessAt: this.runtimeStatus.lastSuccessAt,
+          error: message
+        });
+        await delay(Math.min(
+          this.options.channelRetryDelayMs * speechDrainFailures,
+          MAX_CHANNEL_RETRY_DELAY_MS
+        ), signal);
+      }).finally(() => {
+        if (speechDrain === attempt) speechDrain = null;
+        if (retry && this.active(generation, signal)) drainSpeech();
+      });
+      speechDrain = attempt;
     };
     try {
       while (this.active(generation, signal)) {
@@ -815,7 +870,7 @@ export class RabiLinkRelayRuntime {
               // Relay ownership and proxy delivery do not depend on observers.
             }
             if (eventType === "ready") {
-              this.markOnline(config.speechProxyEnabled);
+              markChannelsOnline();
               startWebguiEvents();
               drainWebgui();
               drainSpeech();
@@ -828,7 +883,7 @@ export class RabiLinkRelayRuntime {
           if (this.active(generation, signal)) throw new Error("RabiLink Relay event stream closed.");
         } catch (error) {
           if (signal.aborted || abortError(error) || !this.active(generation, signal)) return;
-          const message = error instanceof Error ? error.message : String(error);
+          const message = runtimeErrorMessage(error);
           this.setStatus({
             state: "error",
             message: `RabiLink Relay 事件流连接失败：${message}`,

@@ -15,7 +15,9 @@ RabiRoute owns normalized health history, alert rules, and Agent queries. The Ra
 ```text
 wearable
   -> phone Health Connect (native mobile source)
-     or mobile settings -> PC ADB Companion -> Xiaomi Health local Provider
+     or mobile settings -> RabiRouteHost -> current Manager generation
+                           -> Plugin Kernel -> ProcessLeaseRegistry
+                              -> PC ADB Companion worker -> Xiaomi Health local Provider
   -> structured wearable.health observation through Relay or trusted local Manager
   -> wearable message endpoint
   -> data/roles/<RoleId>/wearable-health/events/YYYY-MM-DD.jsonl
@@ -50,31 +52,34 @@ Enable a `wearable_health_alert` persona rule. Runnable examples live in `exampl
 
 ## Phone settings
 
-Open “Wearable health” and select either Health Connect or “Xiaomi Health (PC ADB Companion)”, then set the stable device ID/name/kind, event-triggered lookback window, high/low heart-rate thresholds, cooldown, and sleep-state alerts. Health Connect is read once after an explicit user/startup/platform event; the phone no longer runs a periodic health query. ADB Companion uses the phone settings as its source of truth and is run by the paired Rabi PC.
+Open “Wearable health” and select either Health Connect or “Xiaomi Health (PC ADB Companion)”, then set the stable device ID/name/kind, event-triggered lookback window, high/low heart-rate thresholds, cooldown, and sleep-state alerts. Health Connect is read once after an explicit user/startup/platform event; the phone no longer runs a periodic health query. ADB Companion uses the phone settings as its source of truth and runs as a Host-owned Manager plugin worker on the paired Rabi PC.
 
 An obtained Xiaomi authentication key may be saved in the password field. Android Keystore protects it with AES-GCM; it is reserved for a future direct-vendor collector and is not uploaded. Neither source invents records when its upstream is empty, and the PC Companion never reads the Keystore secret.
 
 ## Xiaomi ADB Companion
 
-With USB debugging enabled, the temporary bridge reads Xiaomi Health's latest local Provider heart rate plus the current sleep report and stages, then normalizes heart-rate, session, stage, and provable current sleep-state samples. It is dry-run by default; actual ADB access and publishing require `-Execute`:
+With USB debugging enabled, the bridge reads Xiaomi Health's latest local Provider heart rate plus the current sleep report and stages, then normalizes heart-rate, session, stage, and provable current sleep-state samples. Production no longer owns a logon scheduled task. `RabiRouteHost.exe` owns the current Manager, and the Manager Plugin Kernel owns the PowerShell worker and its ADB descendants through a generation-scoped `ProcessLeaseRegistry`.
+
+Manager binds `127.0.0.1:0` by default. The worker receives only the current Host READY tuple (`managerBaseUrl`, `applicationGenerationId`, and `managerInstanceId`), verifies `/meta`, and attaches both lifecycle-fencing headers to every Manager request. It never reads a fixed Manager port, scans candidate ports, or accepts `GATEWAY_MANAGER_URL` / `RABIROUTE_MANAGER_URL` bypasses.
+
+The headers are `x-rabiroute-expected-application-generation-id` and `x-rabiroute-expected-manager-instance-id`. Manager returns `503` when it is not part of a Host generation, `400` when either header is missing, and `409` for stale or mismatched identity. Only a matching pair reaches body ingestion and persistence and returns `202`; rejected fence requests create no role directory or health record.
+
+Repository scripts remain only as one-shot diagnostics. A manual Manager check must identify the locally installed Host so `status --json` can return the current dynamic identity:
 
 ```powershell
-.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1
-
 .\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
-  -Execute -Continuous -Transport Manager -UseMobileSettings:$true
+  -Execute -Transport Manager `
+  -HostExe "<local-install-root>\RabiRouteHost.exe" `
+  -UseMobileSettings:$true
 ```
 
 `Auto` prefers a configured Relay and falls back to trusted local Manager. Manager observations can request the same Agent alert route. The script never prints Relay credentials or reads the wearable key. Real-device checks verified the latest heart rate, a sleep session, nine sleep stages, current sleep state, deduplication, and query APIs. This is not a full-day heart-rate curve and still requires a persistent ADB connection.
 
-Install the per-user logon task with an explicit mutation flag:
+`Install-RabiLinkWearableCompanionTask.ps1` is now a fail-closed compatibility diagnostic and never registers, starts, stops, or deletes a task. Setup transactionally backs up and removes the retired `RabiLinkWearableHealthCompanion` only when its SID, description, old NAS runner, and fixed-Manager arguments match the exact product fingerprint. A foreign same-name task blocks installation before any mutation; a later installation failure restores the backed-up XML and running state.
 
-```powershell
-.\apps\rabilink-android\scripts\Install-RabiLinkWearableCompanionTask.ps1 `
-  -Execute -StartNow -RoleId YeYu
-```
+If the phone has not enabled ADB Companion or ADB is temporarily unavailable, the same worker records `degraded` and retries no faster than once per 60 seconds; it does not create a restart storm. A genuine worker crash gets three bounded exponential-backoff restarts inside the same generation before the plugin fails. Sanitized state and logs live under local runtime `data/wearable-companion/` and `logs/wearable-companion/`, never inside the immutable plugin package or on NAS.
 
-`RabiLinkWearableHealthCompanion` retries disconnections and writes only sanitized counts/status to ignored `out/private/` logs. Disable continuous recording on the phone to gate collection. Removal requires `-Uninstall -Execute`.
+A child-process `error` event is not proof of exit. Until a real `exit` / `close` event or exit code exists, the process lease retains the global worker key and a replacement plugin generation cannot start another worker. A failed stop keeps the old lease, allows the same handle to retry, and makes handoff fail closed; an asynchronous pidless spawn error is observed by the lease layer and enters bounded retry instead of becoming an unhandled event that terminates Manager.
 
 Threshold alerts use a dedicated `wearable` route to reach the Agent without starting unrelated QQ or FenneNote adapters. Inspect first, then configure explicitly:
 
@@ -107,4 +112,4 @@ A direct Manager observation POST persists data and returns rule results. With e
 
 Events are daily JSONL files under the role directory. Sensitive metadata names such as auth, token, secret, key, password, and cookie are dropped. Stable sample IDs/content fingerprints deduplicate retries; alerts use per-device rule cooldowns. There is no automatic retention policy yet, so exposing Manager, backing up role data, or deleting health history requires an explicit privacy decision.
 
-Real-device acceptance requires a genuine sample, structured Relay receipt, deduplicated role event, working state/history queries, one alert inside a cooldown window, successful Agent delivery, and proof that neither wearable keys nor Relay tokens appear in logs or health files.
+Real-device acceptance requires matching Host/Manager/worker generation identity, a dynamic URL equal to `/meta`, rejection of stale fencing headers, a Manager-owned worker lease with zero residue after unload, zero retired scheduled tasks, a genuine sample, a structured Relay or Manager receipt, a deduplicated role event, working state/history queries, one alert inside a cooldown window, successful Agent delivery, and proof that neither wearable keys nor Relay tokens appear in logs or health files.

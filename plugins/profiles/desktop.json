@@ -1,5 +1,8 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "readyRequires": [
+    "manager.core@1"
+  ],
   "instances": [
     {
       "id": "manager:core",
@@ -71,6 +74,18 @@
       "version": "1.0.0",
       "enabled": true,
       "config": {},
+      "grants": []
+    },
+    {
+      "id": "manager:wearable-companion",
+      "package": "io.rabiroute.manager.wearable-companion",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {
+        "enabled": true,
+        "roleId": "YeYu",
+        "serial": ""
+      },
       "grants": []
     },
     {
@@ -225,6 +240,29 @@
       "config": {
         "baseUrl": "http://127.0.0.1:8877/api/v1",
         "requestTimeoutMs": 3000
+      },
+      "grants": []
+    },
+    {
+      "id": "manager:xiaomi-home",
+      "package": "io.rabiroute.manager.xiaomi-home",
+      "version": "1.0.0",
+      "enabled": true,
+      "config": {
+        "baseUrl": "http://127.0.0.1:8123",
+        "tokenEnv": "RABIROUTE_XIAOMI_HOME_HA_TOKEN",
+        "requestTimeoutMs": 5000,
+        "writeEnabled": false,
+        "allowPublicBaseUrl": false,
+        "agentRoleId": "YeYu",
+        "eventMonitorEnabled": true,
+        "eventDeliveryMode": "significant",
+        "cameraMotionEntityIds": [],
+        "cameraClipCaptureEnabled": false,
+        "cameraClipAllowedHosts": [],
+        "ffmpegPath": "ffmpeg",
+        "ffprobePath": "ffprobe",
+        "artifactReadTokenEnv": "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN"
       },
       "grants": []
     }

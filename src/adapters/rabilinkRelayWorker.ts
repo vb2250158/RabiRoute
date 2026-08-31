@@ -415,7 +415,8 @@ export function handleWearableHealthRelayTask(
   }
   const memoryDataDir = options.memoryDataDir ?? config.memoryDataDir;
   const agentRoleId = options.agentRoleId ?? config.agentRoleId;
-  const managerPort = options.managerPort ?? process.env.GATEWAY_MANAGER_PORT ?? "8790";
+  const managerPort = options.managerPort ?? process.env.GATEWAY_MANAGER_PORT;
+  if (!managerPort) throw new Error("GATEWAY_MANAGER_PORT was not supplied by the owning RabiRoute Manager.");
   const deliver = options.forward ?? forwardMessage;
   const result = ingestWearableHealthObservation(memoryDataDir, observation);
   for (const alert of result.alerts) {

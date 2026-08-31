@@ -53,7 +53,7 @@ const webguiLanAccess = ref<WebguiLanAccess>({
   token: "",
   canManage: true,
   managerHost: "127.0.0.1",
-  managerPort: 8790,
+  managerPort: 0,
   listeningOnLan: false,
   restartRequired: false,
   hostManagedByEnvironment: false,
@@ -537,7 +537,7 @@ onBeforeUnmount(() => {
           </v-btn>
         </div>
         <div class="section-note mt-3">
-          其他设备必须使用这台 Rabi PC 的局域网 IP，不能使用 127.0.0.1。若重启后仍无法连接，请检查 Windows 防火墙是否允许 RabiRoute/Node.js 的 8790 端口。
+          其他设备必须使用这台 Rabi PC 的局域网 IP，不能使用 127.0.0.1。若重启后仍无法连接，请确认 RabiRouteHost.exe 正在运行，并按 Host READY 当前发布的动态 Manager 地址检查 Windows 防火墙。
         </div>
       </v-card>
     </div>

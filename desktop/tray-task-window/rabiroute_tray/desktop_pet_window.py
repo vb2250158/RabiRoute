@@ -35,6 +35,7 @@ class DesktopPetWindow(QWidget):
         self._movie: QMovie | None = None
         self._movie_buffer: QBuffer | None = None
         self._png_frames: tuple[QPixmap, ...] = ()
+        self._prepared_png_frames: dict[tuple[str, str, int, int], tuple[QPixmap, ...]] = {}
         self._png_index = 0
         self._png_loop = True
         self._png_next_state = ""
@@ -59,6 +60,8 @@ class DesktopPetWindow(QWidget):
             "font-size: 14px; padding: 10px 12px; }"
         )
         self._placed = False
+        self._active_pack: DesktopPetPack | None = None
+        self._active_animation: LoadedDesktopPetAnimation | None = None
         self._scale = 0.5
         self._fps_cap = 15
         self._locked = False
@@ -67,6 +70,8 @@ class DesktopPetWindow(QWidget):
 
     def show_placeholder(self, text: str) -> None:
         self.stop_animation()
+        self._active_pack = None
+        self._active_animation = None
         self.resize(176, 112)
         self._label.setGeometry(self.rect())
         self._label.setText(text)
@@ -78,10 +83,9 @@ class DesktopPetWindow(QWidget):
 
     def play(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> None:
         self.stop_animation()
-        target = QSize(
-            max(64, min(1024, int(pack.canvas_width * self._scale))),
-            max(64, min(1024, int(pack.canvas_height * self._scale))),
-        )
+        self._active_pack = pack
+        self._active_animation = animation
+        target = self._target_size(pack)
         self.resize(target)
         self._keep_visible()
         self._label.setGeometry(self.rect())
@@ -91,6 +95,28 @@ class DesktopPetWindow(QWidget):
             self._play_gif(animation.assets[0], target, animation.state.next_state)
         else:
             self._play_png_sequence(animation, target)
+
+    def prepare_animation(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
+        """Pre-render a Manager-authorized PNG action before the user can select it."""
+        if animation.state.kind != "png-sequence":
+            return True
+        target = self._target_size(pack)
+        cache_key = self._prepared_key(pack, animation, target)
+        if cache_key in self._prepared_png_frames:
+            return True
+        frames = self._decode_png_frames(animation, target)
+        if not frames:
+            return False
+        self._prepared_png_frames[cache_key] = frames
+        return True
+
+    def is_animation_prepared(self, pack: DesktopPetPack, animation: LoadedDesktopPetAnimation) -> bool:
+        if animation.state.kind != "png-sequence":
+            return True
+        return self._prepared_key(pack, animation, self._target_size(pack)) in self._prepared_png_frames
+
+    def clear_prepared_animations(self) -> None:
+        self._prepared_png_frames.clear()
 
     def stop_animation(self) -> None:
         self._png_timer.stop()
@@ -158,6 +184,8 @@ class DesktopPetWindow(QWidget):
         bubble_enabled: bool,
         fps_cap: int,
     ) -> None:
+        previous_scale = self._scale
+        previous_fps_cap = self._fps_cap
         self._scale = max(0.1, min(2.0, float(scale)))
         self._fps_cap = min((6, 12, 15, 24), key=lambda candidate: abs(candidate - int(fps_cap)))
         self._locked = bool(locked)
@@ -172,6 +200,14 @@ class DesktopPetWindow(QWidget):
         if bubble_visible:
             self._bubble.show()
             self._place_bubble()
+        if (
+            self._active_pack is not None
+            and self._active_animation is not None
+            and (abs(self._scale - previous_scale) > 0.001 or self._fps_cap != previous_fps_cap)
+        ):
+            if abs(self._scale - previous_scale) > 0.001:
+                self.clear_prepared_animations()
+            self.play(self._active_pack, self._active_animation)
 
     def restore_placement(self, placement: object) -> None:
         row = placement if isinstance(placement, dict) else {}
@@ -229,6 +265,37 @@ class DesktopPetWindow(QWidget):
         movie.start()
 
     def _play_png_sequence(self, animation: LoadedDesktopPetAnimation, target: QSize) -> None:
+        cache_key = self._prepared_key(self._active_pack, animation, target)
+        frames = self._prepared_png_frames.get(cache_key)
+        if frames is None:
+            frames = self._decode_png_frames(animation, target)
+            if frames:
+                self._prepared_png_frames[cache_key] = frames
+        if not frames:
+            self.show_placeholder("夜雨\n素材无法解码")
+            return
+        self._png_frames = frames
+        self._png_index = 0
+        self._png_loop = animation.state.loop
+        self._png_next_state = animation.state.next_state
+        self._label.setPixmap(self._png_frames[0])
+        self._png_timer.start(max(42, round(1000 / min(animation.state.fps, self._fps_cap))))
+
+    def _target_size(self, pack: DesktopPetPack) -> QSize:
+        return QSize(
+            max(64, min(1024, int(pack.canvas_width * self._scale))),
+            max(64, min(1024, int(pack.canvas_height * self._scale))),
+        )
+
+    def _prepared_key(
+        self,
+        pack: DesktopPetPack | None,
+        animation: LoadedDesktopPetAnimation,
+        target: QSize,
+    ) -> tuple[str, str, int, int]:
+        return (pack.pack_id if pack is not None else "", animation.state.name, target.width(), target.height())
+
+    def _decode_png_frames(self, animation: LoadedDesktopPetAnimation, target: QSize) -> tuple[QPixmap, ...]:
         frames: list[QPixmap] = []
         for payload in animation.assets:
             pixmap = QPixmap()
@@ -240,15 +307,7 @@ class DesktopPetWindow(QWidget):
                         Qt.TransformationMode.SmoothTransformation,
                     )
                 )
-        if not frames:
-            self.show_placeholder("夜雨\n素材无法解码")
-            return
-        self._png_frames = tuple(frames)
-        self._png_index = 0
-        self._png_loop = animation.state.loop
-        self._png_next_state = animation.state.next_state
-        self._label.setPixmap(self._png_frames[0])
-        self._png_timer.start(max(42, round(1000 / min(animation.state.fps, self._fps_cap))))
+        return tuple(frames)
 
     def _advance_png_frame(self) -> None:
         if not self._png_frames:

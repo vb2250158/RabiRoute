@@ -94,6 +94,7 @@ export type MessageAdapterControlScanContext = {
   scanNapcatEndpoint(): MessageAdapterScanResult | Promise<MessageAdapterScanResult>;
   remoteAgentScanResult(): MessageAdapterScanResult;
   speechStatus(): Promise<SpeechRuntimeStatus>;
+  xiaomiHomeHealth(): Promise<Record<string, unknown>>;
   readGatewayStatus(definition: GatewayDefinition): Record<string, any>;
   weixinDefaultBaseUrl(): string;
 };
@@ -270,6 +271,79 @@ function provider(
   return { type, label, maturity, mode, scan };
 }
 
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function displayBaseUrl(value: unknown): string {
+  try {
+    const url = new URL(String(value || "http://127.0.0.1:8123"));
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "Home Assistant（地址不可用）";
+  }
+}
+
+export function scanXiaomiHomeEndpoint(healthInput: Record<string, unknown>): MessageAdapterScanResult {
+  const health = recordValue(healthInput);
+  const monitor = recordValue(health.eventMonitor);
+  const camera = recordValue(health.cameraCapture);
+  const status = String(health.status || "unavailable");
+  const tokenConfigured = health.tokenConfigured === true;
+  const ready = status === "ready" && tokenConfigured;
+  const monitorState = String(monitor.connectionState || (tokenConfigured ? "stopped" : "authorization_required"));
+  const monitorReady = ready && monitor.enabled === true && monitorState === "subscribed";
+  const cameraReady = camera.ready === true;
+  const tokenEnv = String(health.tokenEnv || "RABIROUTE_XIAOMI_HOME_HA_TOKEN");
+  const authorizationDetail = status === "authorization_required"
+    ? `待授权：只在本机受保护运行环境中配置 ${tokenEnv}；WebGUI 不接收 token。`
+    : status === "authorization_failed"
+      ? "本机已有授权配置，但 Home Assistant 已拒绝；请在本机更新授权。"
+      : status === "timeout"
+        ? "本机已有授权配置，但 Home Assistant 健康检查超时。"
+        : status === "unreachable"
+          ? "本机已有授权配置，但 Home Assistant 当前不可达。"
+          : ready
+            ? "Home Assistant 已确认授权可用。"
+            : "尚未确认 Home Assistant 授权状态。";
+  const monitorLabels: Record<string, string> = {
+    disabled: "事件监听已关闭。",
+    authorization_required: "待授权；授权完成前不会建立事件连接。",
+    authorization_failed: "Home Assistant 拒绝授权，事件监听已停止重连。",
+    stopped: "事件监听当前未运行。",
+    connecting: "正在连接 Home Assistant 事件流。",
+    authorizing: "正在验证 Home Assistant 授权。",
+    subscribing: "已授权，正在订阅状态变化事件。",
+    subscribed: "正在订阅状态变化事件。",
+    reconnecting: "事件流已断开，正在有界重连。"
+  };
+  return {
+    type: "xiaomiHome",
+    label: "米家 / Xiaomi Home",
+    maturity: "experimental",
+    installed: true,
+    endpoints: [{
+      label: "Home Assistant",
+      url: displayBaseUrl(health.baseUrl),
+      healthy: ready
+    }],
+    requirements: [
+      { id: "authorization", label: "Home Assistant 授权", required: true, ok: ready, detail: authorizationDetail },
+      { id: "event-monitor", label: "米家事件监听", required: true, ok: monitorReady, detail: monitorLabels[monitorState] || `事件监听状态：${monitorState}` },
+      { id: "write-control", label: "设备控制", required: false, ok: health.writeEnabled === true, detail: health.writeEnabled === true ? "控制已显式开启；所有动作仍经过能力与幂等校验。" : "默认关闭；当前消息端只读取状态和事件。" },
+      { id: "camera-capture", label: "摄像头事件录像", required: false, ok: cameraReady, detail: cameraReady ? `已就绪；当前 ${Number(camera.inFlight || 0)} 个抓取任务。` : camera.enabled === true ? "已开启，但尚未配置允许的媒体主机。" : "未开启；普通米家状态事件不受影响。" }
+    ],
+    warnings: [
+      "米家只把 Home Assistant 状态与摄像头事件投递到当前人格；它不是 Gateway 常驻 adapter，也不同于小米音箱 / 小爱。",
+      ...(ready ? [] : ["未取得 Home Assistant 的真实成功响应前，状态保持为待授权或未连接。"])
+    ]
+  };
+}
+
 export function createBuiltinMessageAdapterScanProviders(
   context: MessageAdapterControlScanContext
 ): MessageAdapterScanProvider[] {
@@ -329,6 +403,7 @@ export function createBuiltinMessageAdapterScanProviders(
     }),
     provider("fennenote", "FenneNote / 芬妮笔记", "experimental", () => scanFenneNoteEndpoint(webhookLikeContext)),
     provider("xiaoai", "小米音箱 / 小爱", "experimental", () => scanXiaoAiEndpoint(webhookLikeContext)),
+    provider("xiaomiHome", "米家 / Xiaomi Home", "experimental", async () => scanXiaomiHomeEndpoint(await context.xiaomiHomeHealth())),
     provider("rabilink", "RabiLink / Relay 直连", "experimental", () => scanRabiLinkEndpoint(webhookLikeContext)),
     provider("wearable", "智能手表/手环", "experimental", () => scanWearableEndpoint(webhookLikeContext)),
     provider("wecom", "企业微信 / WeCom", "experimental", () => scanWeComEndpoint({

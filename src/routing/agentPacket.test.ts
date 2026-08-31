@@ -11,6 +11,8 @@ import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecor
 import type { RouteDecision } from "./routeDecision.js";
 import { buildAgentPacket, type AgentRoleContext } from "./agentPacket.js";
 
+process.env.GATEWAY_MANAGER_URL ||= "http://127.0.0.1:8790";
+
 function appendGroupMessage(dataDir: string, record: GroupMessageRecord): void {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.appendFileSync(path.join(dataDir, "group-messages.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
@@ -1244,9 +1246,11 @@ test("AgentPacket exposes one-shot persona capabilities only for explicit curren
   });
 
   const syncPacket = packetFor("我有多台电脑，请把当前人格同步到另一台电脑。");
+  const managerBaseUrl = process.env.GATEWAY_MANAGER_URL ?? "";
+  assert.ok(managerBaseUrl);
   assert.match(syncPacket.message, /\[多电脑人格同步\]/);
-  assert.match(syncPacket.message, /GET http:\/\/127\.0\.0\.1:8790\/api\/persona-sync\/peers/);
-  assert.match(syncPacket.message, /POST http:\/\/127\.0\.0\.1:8790\/api\/persona-sync\/sync/);
+  assert.ok(syncPacket.message.includes(`GET ${managerBaseUrl}/api/persona-sync/peers`));
+  assert.ok(syncPacket.message.includes(`POST ${managerBaseUrl}/api/persona-sync/sync`));
   assert.match(syncPacket.message, /"roleId": "Rabi"/);
   assert.match(syncPacket.message, /只执行一次查询\/同步，不创建后台轮询/);
   assert.match(syncPacket.message, /存在冲突时不能声称同步完成/);
@@ -1258,7 +1262,7 @@ test("AgentPacket exposes one-shot persona capabilities only for explicit curren
   const voiceReviewPacket = packetFor("今天的录音里哪些是我说的，哪些是别人说的？");
   assert.match(voiceReviewPacket.message, /\[全天语音与声纹归类\]/);
   assert.match(voiceReviewPacket.message, /voice-transcripts\?from=<ISO>&to=<ISO>&speaker=<user\|other\|unknown\|conflict>/);
-  assert.match(voiceReviewPacket.message, /PUT http:\/\/127\.0\.0\.1:8790\/api\/roles\/Rabi\/voice-identities/);
+  assert.ok(voiceReviewPacket.message.includes(`PUT ${managerBaseUrl}/api/roles/Rabi/voice-identities`));
   assert.match(voiceReviewPacket.message, /证据不足时保持 unknown/);
   assert.doesNotMatch(ordinaryPacket.message, /\[全天语音与声纹归类\]/);
 });

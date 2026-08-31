@@ -69,12 +69,11 @@
     <p>这里是跳转入口，不是第二套控制台。完整配置、日志诊断和 Rabi 人格设置都在 RibiWebGUI 里完成。</p>
     <label>
       RibiWebGUI 地址
-      <input id="manager-url" value="http://127.0.0.1:8790" />
+      <input id="manager-url" placeholder="由 RabiRoute Host 显示的当前地址" />
     </label>
     <div class="actions">
-      <a id="open-link" class="primary" href="http://127.0.0.1:8790/" target="_blank" rel="noreferrer">打开 RibiWebGUI</a>
+      <a id="open-link" class="primary" href="#" target="_blank" rel="noreferrer">打开 RibiWebGUI</a>
       <button id="save-button" type="button">保存入口地址</button>
-      <button id="start-button" type="button">启动本机 Manager</button>
     </div>
     <div id="status" class="status"></div>
   </main>
@@ -89,8 +88,8 @@
     }
 
     function updateLink() {
-      const url = managerUrlInput.value.trim() || "http://127.0.0.1:8790";
-      openLink.href = url.replace(/\/$/, "") + "/";
+      const url = managerUrlInput.value.trim();
+      openLink.href = url ? url.replace(/\/$/, "") + "/" : "#";
     }
 
     async function loadConfig() {
@@ -101,7 +100,7 @@
           managerUrlInput.value = body.data.managerUrl;
         }
       } catch {
-        setStatus("未读取到插件配置，使用默认本机地址。");
+        setStatus("未读取到入口地址，请从 RabiRoute Host 状态复制当前地址。");
       }
       updateLink();
     }
@@ -112,7 +111,7 @@
         const response = await fetch(`${pluginApiBase}/config`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ managerUrl: managerUrlInput.value.trim() || "http://127.0.0.1:8790" })
+          body: JSON.stringify({ managerUrl: managerUrlInput.value.trim() })
         });
         const body = await response.json();
         if (!response.ok || body.code !== 0) throw new Error(body.message || "保存失败");
@@ -122,20 +121,8 @@
       }
     }
 
-    async function startManager() {
-      try {
-        const response = await fetch(`${pluginApiBase}/manager/start`, { method: "POST" });
-        const body = await response.json();
-        if (!response.ok || body.code !== 0) throw new Error(body.message || "启动失败");
-        setStatus(body.message || "Manager 正在启动。启动完成后点击“打开 RibiWebGUI”。");
-      } catch (error) {
-        setStatus(`启动失败：${error.message || error}`);
-      }
-    }
-
     managerUrlInput.addEventListener("input", updateLink);
     document.getElementById("save-button").addEventListener("click", saveConfig);
-    document.getElementById("start-button").addEventListener("click", startManager);
     void loadConfig();
   </script>
 </body>

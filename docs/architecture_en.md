@@ -104,10 +104,16 @@ There is no generic persistent approval queue or automatic retry queue. A future
 ## Current runtime topology
 
 ```text
-RibiWebGUI / Qt panel / CLI
+RabiRoute Host (Windows application-generation owner)
+  |-- Manager child on an OS-assigned loopback port
+  |     |-- validated READY: generation + instance + PID + URL
+  |     `-- Plugin Kernel generation
+  `-- tray/task-window child, started only after READY
+
+RibiWebGUI / tray presentation / CLI
           |
           v
-Manager on 127.0.0.1:8790
+Current Manager URL from Host status or explicit source-mode stdout
   |-- configuration and scan APIs
   |-- gateway subprocess lifecycle
   |-- role knowledge and Agent send APIs
@@ -125,6 +131,8 @@ Codex/ChatGPT Desktop task owner
 ```
 
 RabiLink adds a public Relay and PC worker without exposing the local Manager directly. The phone/eyewear path is an endpoint around the same routing core, not a second Agent owner.
+
+Host is the only Windows application-lifecycle owner. Manager and tray are same-generation children in one Windows Job; either child failing causes bounded whole-generation replacement. Ordinary plugins cannot own Host, Manager, or tray lifetime. Manager's plugin generation is a nested boundary with schema/profile v2, `readyRequires`, execution modes, and consumer-before-provider disposal.
 
 ## Relationship to an Agent OS or workbench
 

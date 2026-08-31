@@ -42,7 +42,7 @@ RabiSpeech 的普通手动 TTS/ASR API 不接入 Agent。常驻麦克风完成�
 - `PUT /v1/playback/settings`
 - `POST /v1/playback/stop`
 
-RabiRoute Manager 同源代理：`http://127.0.0.1:8790`
+RabiRoute Manager 同源代理：先调用已安装的 `RabiRouteHost.exe --command status --json`，使用当前应用代际返回的 `managerBaseUrl`；不得缓存或扫描端口。
 
 - `GET /api/speech/status`
 - `GET /api/speech/events`

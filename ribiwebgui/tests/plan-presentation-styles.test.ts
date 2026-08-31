@@ -199,7 +199,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /function approvalRecordsForDisplay[\s\S]*?feedback\.kind === "approval_suggestion"[\s\S]*?\.reverse\(\)/);
   assert.match(page, /v-for="feedback in approvalRecordsForDisplay\(plan\)"/);
   assert.match(page, /class="knowledge-approval-record"/);
-  assert.match(page, /if \(expanded\) void refreshPlanApproval\(plan\.id\);/);
+  assert.match(page, /function togglePlan\(plan: RolePlan\): void \{[\s\S]*?if \(expanded\) \{[\s\S]*?void refreshPlanApproval\(plan\.id\);[\s\S]*?\}/);
   assert.match(page, /class="knowledge-work-history"[\s\S]*?togglePlanWorkHistory\(plan\)/);
   assert.match(page, /loadPlanHistory[\s\S]*?function refreshPlanHistory/);
   assert.match(page, /guidanceRecordsForDisplay\(plan\)[\s\S]*?approvalRecordsForDisplay\(plan\)[\s\S]*?步骤审批合同[\s\S]*?计划版本记录/);

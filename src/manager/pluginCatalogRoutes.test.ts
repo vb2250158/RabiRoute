@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { GenerationRuntime, loadPluginProfile, PluginPackageCatalog } from "../plugin-kernel/index.js";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
 
@@ -15,10 +16,13 @@ async function createFixture() {
   const profilePath = path.join(root, "profile.json");
   await fs.mkdir(path.join(packageDirectory, "web"), { recursive: true });
   await fs.writeFile(path.join(packageDirectory, "rabi.plugin.json"), JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "io.test.catalog",
     version: "1.0.0",
-    entries: { manager: "./manager.mjs", web: "./web/client.mjs" },
+    entries: {
+      manager: { execution: "in_process", module: "./manager.mjs" },
+      web: { execution: "in_process", module: "./web/client.mjs" }
+    },
     provides: ["test.catalog@1"],
     requires: [],
     optional: [],
@@ -33,7 +37,8 @@ export async function activate(context) {
 `, "utf8");
   await fs.writeFile(path.join(packageDirectory, "web", "client.mjs"), "export function activate() { return 'catalog'; }\n", "utf8");
   await fs.writeFile(profilePath, JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    readyRequires: [],
     instances: [{
       id: "manager:test-catalog",
       package: "io.test.catalog",
@@ -48,7 +53,9 @@ export async function activate(context) {
 
 async function startCatalogServer() {
   const fixture = await createFixture();
-  const catalog = new PluginPackageCatalog([fixture.packageRoot]);
+  const catalog = new PluginPackageCatalog([fixture.packageRoot], {
+    trustedInProcessRoots: [fixture.packageRoot]
+  });
   const runtimeRoot = path.join(fixture.root, "runtime");
   let loaded = await loadPluginProfile({
     profilePath: fixture.profilePath,
@@ -83,18 +90,17 @@ async function startCatalogServer() {
       webModules: { list: () => modules.list(), read: (id, rev, relativePath) => modules.read(id, rev, relativePath) }
     })) response.writeHead(404).end();
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+  const endpoint = await listenManagerEndpoint({
+    server,
+    host: "127.0.0.1",
+    policy: { mode: "auto" }
   });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Catalog test server did not bind.");
 
   return {
     runtime,
     modules,
     reconcileCount: () => reconcileCount,
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: endpoint.baseUrl,
     async close() {
       await runtime.dispose();
       await new Promise<void>(resolve => server.close(() => resolve()));

@@ -52,7 +52,8 @@ test("exposes one recent-context limit for every message endpoint", () => {
     "webhook",
     "wecom",
     "weixin",
-    "feishu"
+    "feishu",
+    "xiaomiHome"
   ]);
 });
 

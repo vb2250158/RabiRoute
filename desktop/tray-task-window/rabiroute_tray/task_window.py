@@ -28,7 +28,6 @@ from .manager_client import (
     DesktopPluginSettingsResult,
     DesktopPluginStatusResult,
     DesktopPluginSurfaceSnapshot,
-    ManagerClient,
     ManagerSnapshot,
 )
 from .desktop_models import ContextEntry, PlanItem, PlanSnapshot, PlanStep, RoleContextSnapshot
@@ -1041,9 +1040,9 @@ class TaskWindow(QWidget):
         self._sidebar_collapsed = False
         self.theme = normalize_theme(theme)
         self._desktop_extensions = extension_registry or create_builtin_desktop_extension_registry()
-        self._plugin_manager_factory = plugin_manager_factory or (
-            lambda manager_url: ManagerClient(manager_url, extension_registry=self._desktop_extensions)
-        )
+        if plugin_manager_factory is None:
+            raise ValueError("TaskWindow requires a Host-fenced plugin Manager client factory.")
+        self._plugin_manager_factory = plugin_manager_factory
         self._plugin_surface_task: QtAsyncTask | None = None
         self._plugin_surface_snapshot: DesktopPluginSurfaceSnapshot | None = None
         self._plugin_surface_manager_url = ""

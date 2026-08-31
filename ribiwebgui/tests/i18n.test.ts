@@ -51,6 +51,11 @@ test("translates dynamic counts and adapter summaries", () => {
 });
 
 test("translates speech delivery and persona configuration copy", () => {
+  assert.equal(translateText("基础资料", "en"), "Profile");
+  assert.equal(translateText("表达与语音", "en"), "Expression & voice");
+  assert.equal(translateText("身份关系", "en"), "Identity relations");
+  assert.equal(translateText("消息上下文", "en"), "Message context");
+  assert.equal(translateText("自动化", "en"), "Automation");
   assert.equal(translateText("热投递", "en"), "Hot delivery");
   assert.equal(
     translateText("开启（hot）：每段 ASR 立即投递。关闭（keyword）：未命中关键词时只记录，命中当前人格关键词时才投递。", "en"),

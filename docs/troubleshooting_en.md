@@ -77,7 +77,7 @@ Check that the ID still exists, normalize moved/case/symlink-changed paths, and 
 Task-tool injection and RabiRoute delivery health are separate. Prompt changes cannot create an unavailable tool. Use the local bridge:
 
 ```http
-POST http://127.0.0.1:8790/api/agent/threads
+POST <managerBaseUrl>/api/agent/threads
 ```
 
 It supports `list`, `read`, `resolve`, `create`, and `send` inside configured Codex workspaces. Creation only bootstraps an empty task; real prompts still go to the Desktop owner. See [Rabi Interfaces for Handlers](rabi-agent-interfaces_en.md). Do not create repeated same-named Desktop tasks or substitute an internal sub-agent for a formal task.

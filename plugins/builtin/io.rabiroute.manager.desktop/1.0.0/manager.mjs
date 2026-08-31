@@ -199,8 +199,6 @@ export const activate = definePlugin({
             });
             try {
         const routes = runtime.createDesktopControlRoutes({
-            rootDir: runtime.rootDir,
-            shutdownManager: reason => runtime.shutdownManager(reason),
             jsonResponse: runtime.jsonResponse,
             openConfigFilePayload: (type, gatewayId, roleId) => runtime.desktopConfigFilePayload(type, gatewayId, roleId, {
                 routeRoot: runtime.routeRoot,
@@ -216,10 +214,7 @@ export const activate = definePlugin({
         ctx.effect(() => {
             const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:desktop", "manager.desktop.api", [routes.handler], [
                 { routeId: "settings", kind: "exact", path: "/api/desktop/settings", methods: ["GET", "PATCH", "PUT"] },
-                { routeId: "open-config-file", kind: "exact", path: "/open-config-file", methods: ["POST"] },
-                { routeId: "manager-start", kind: "exact", path: "/manager/start", methods: ["POST"] },
-                { routeId: "desktop-lifecycle-start", kind: "exact", path: "/manager/desktop-lifecycle/start", methods: ["POST"] },
-                { routeId: "manager-shutdown", kind: "exact", path: "/manager/shutdown", methods: ["POST"] }
+                { routeId: "open-config-file", kind: "exact", path: "/open-config-file", methods: ["POST"] }
             ]);
             return async () => {
                 unregister();

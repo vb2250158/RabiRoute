@@ -8,3 +8,4 @@ export * from "./serviceRegistry.js";
 export * from "./types.js";
 export * from "./packageLoader.js";
 export * from "./profile.js";
+export * from "./pluginExecutor.js";

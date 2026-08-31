@@ -4,6 +4,7 @@ import base64
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import hashlib
 import os
 import threading
 import time
@@ -270,6 +271,15 @@ def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_pa
     })
     assert started.status_code == 200
     assert started.json()["source"] == "remote"
+    assert started.json()["rabilink_chunk_protocol"] == {
+        "version": 2,
+        "durable_ack_tuple": True,
+        "cross_process_claim": True,
+        "ambiguous_replay_policy": "retain_without_ack",
+        "ambiguous_resolution": "explicit_operator_decision",
+    }
+    assert started.json()["durable_chunk_ledger"]["retention"] == "indefinite_until_explicit_source_retirement"
+    assert started.json()["durable_chunk_ledger"]["automatic_pruning"] is False
     selected = started.json()["clients"][0]
     assert selected["id"] == "phone-one-audio"
     assert selected["name"] == "Rabi Android · HBP-AL00 · abc123"
@@ -279,25 +289,38 @@ def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_pa
     assert selected["received_bytes"] == 0
     assert any(event["kind"] == "client_connected" for event in started.json()["events"])
     chunk = client.post(
-        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1",
+        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1&chunkId=audio-00000000000000000001",
         content=b"\x00\x00" * 1600,
         headers={"content-type": "application/octet-stream"},
     )
     assert chunk.status_code == 200
     assert chunk.json()["accepted_bytes"] == 3200
     assert chunk.json()["sequence"] == 1
+    assert chunk.json()["chunk_id"] == "audio-00000000000000000001"
+    assert chunk.json()["sha256"] == hashlib.sha256(b"\x00\x00" * 1600).hexdigest()
     stream_after_chunk = client.get("/v1/audio-streams").json()
+    assert stream_after_chunk["clients"][0]["last_chunk_id"] == "audio-00000000000000000001"
+    assert stream_after_chunk["clients"][0]["last_chunk_bytes"] == 3200
+    assert stream_after_chunk["clients"][0]["last_chunk_sha256"] == chunk.json()["sha256"]
     assert stream_after_chunk["events"][0]["kind"] == "pcm_received"
     assert stream_after_chunk["events"][0]["direction"] == "inbound"
     assert stream_after_chunk["events"][0]["total_bytes"] == 3200
     duplicate = client.post(
-        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1",
+        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1&chunkId=audio-00000000000000000001",
         content=b"\x00\x00" * 1600,
         headers={"content-type": "application/octet-stream"},
     )
     assert duplicate.status_code == 200
+    assert duplicate.json()["sha256"] == chunk.json()["sha256"]
+    conflicting_duplicate = client.post(
+        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=1&chunkId=audio-conflict",
+        content=b"\x00\x00" * 1600,
+        headers={"content-type": "application/octet-stream"},
+    )
+    assert conflicting_duplicate.status_code == 409
+    assert "id, byte count, or checksum" in conflicting_duplicate.json()["detail"]
     out_of_order = client.post(
-        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=3",
+        "/v1/audio-streams/rabilink/chunk?streamId=phone-one-audio&sequence=3&chunkId=audio-00000000000000000003",
         content=b"\x00\x00" * 1600,
         headers={"content-type": "application/octet-stream"},
     )
@@ -326,6 +349,60 @@ def test_rabilink_audio_stream_reuses_host_microphone_vad_and_asr_runtime(tmp_pa
     assert any(event["kind"] == "pcm_received" for event in persisted)
 
 
+def test_rabilink_operator_lifecycle_endpoints_require_exact_evidence_and_retain_retirement_audit(
+    tmp_path: Path,
+) -> None:
+    client, _tts, _asr = fixture(tmp_path)
+    assert client.post("/v1/audio-streams/rabilink/start", json={
+        "stream_id": "retire-phone-audio", "source_device_id": "retire-phone",
+    }).status_code == 200
+    payload = b"\x00\x00" * 160
+    assert client.post(
+        "/v1/audio-streams/rabilink/chunk?streamId=retire-phone-audio&sequence=1&chunkId=audio-00000000000000000001",
+        content=payload, headers={"content-type": "application/octet-stream"},
+    ).status_code == 200
+    tuples = client.get(
+        "/v1/audio-streams/rabilink/ledger/tuples",
+        params={"sourceDeviceId": "retire-phone", "afterSourceSequence": 0, "limit": 1},
+    )
+    assert tuples.status_code == 200
+    assert tuples.json()["records"] == [{
+        "source_device_id": "retire-phone",
+        "chunk_id": "audio-00000000000000000001",
+        "accepted_bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "source_sequence": 1,
+        "stream_sequence": 1,
+        "terminal": True,
+        "terminal_status": "processed",
+        "processed_at": tuples.json()["records"][0]["processed_at"],
+    }]
+    refused = client.post("/v1/audio-streams/rabilink/sources/retire", json={
+        "source_device_id": "retire-phone", "phone_spool_empty": True,
+        "maximum_phone_retention_elapsed": True, "operator_confirmation": "yes",
+    })
+    assert refused.status_code == 409
+    assert client.post("/v1/audio-streams/rabilink/stop", json={
+        "stream_id": "retire-phone-audio",
+    }).status_code == 200
+    retired = client.post("/v1/audio-streams/rabilink/sources/retire", json={
+        "source_device_id": "retire-phone", "phone_spool_empty": True,
+        "maximum_phone_retention_elapsed": True,
+        "operator_confirmation": "retire:retire-phone",
+    })
+    assert retired.status_code == 200
+    assert retired.json()["removed_chunks"] == 1
+    assert retired.json()["removed_bytes"] == len(payload)
+    assert retired.json()["audit_retained"] is True
+    ledger = client.get("/v1/audio-streams").json()["durable_chunk_ledger"]
+    assert ledger["retired_sources"] == 1
+    missing = client.post("/v1/audio-streams/rabilink/ambiguous/resolve", json={
+        "source_device_id": "retire-phone", "chunk_id": "missing", "accepted_bytes": 2,
+        "sha256": hashlib.sha256(b"\x00\x00").hexdigest(), "decision": "skip",
+    })
+    assert missing.status_code == 409
+
+
 def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -> None:
     client, _tts, _asr = fixture(tmp_path, rabilink_audio_stale_timeout_seconds=0.3)
     with client:
@@ -338,7 +415,7 @@ def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -
         assert started.status_code == 200
         time.sleep(0.1)
         chunk = client.post(
-            "/v1/audio-streams/rabilink/chunk?streamId=phone-event-audio&sequence=1",
+            "/v1/audio-streams/rabilink/chunk?streamId=phone-event-audio&sequence=1&chunkId=audio-event-1",
             content=b"\x00\x00" * 160,
             headers={"content-type": "application/octet-stream"},
         )
@@ -350,6 +427,37 @@ def test_rabilink_audio_stream_expiry_is_rearmed_by_pcm_events(tmp_path: Path) -
         expired = client.get("/v1/audio-streams").json()
         assert expired["selected_client_id"] == "phone-event-audio"
         assert expired["selected_online"] is False
+
+
+def test_rabilink_unselected_virtual_client_does_not_ack_or_advance_sequence(tmp_path: Path) -> None:
+    client, _tts, _asr = fixture(tmp_path)
+    first = client.post("/v1/audio-streams/rabilink/start", json={
+        "stream_id": "selected-phone-audio",
+        "source_device_id": "selected-phone",
+        "route_profile_id": "route-a",
+        "session_id": "selected-phone",
+    })
+    assert first.status_code == 200
+    second = client.post("/v1/audio-streams/rabilink/start", json={
+        "stream_id": "unselected-phone-audio",
+        "source_device_id": "unselected-phone",
+        "route_profile_id": "route-b",
+        "session_id": "unselected-phone",
+    })
+    assert second.status_code == 200
+
+    rejected = client.post(
+        "/v1/audio-streams/rabilink/chunk?streamId=unselected-phone-audio&sequence=1&chunkId=audio-unselected-1",
+        content=b"\x00\x00" * 160,
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    assert rejected.status_code == 409
+    snapshot = client.get("/v1/audio-streams").json()
+    unselected = next(row for row in snapshot["clients"] if row["id"] == "unselected-phone-audio")
+    assert unselected["last_sequence"] == 0
+    assert unselected["last_chunk_id"] is None
+    assert unselected["received_bytes"] == 0
 
 
 def test_rabilink_audio_stream_keepalive_preserves_online_selection_without_fake_pcm(tmp_path: Path) -> None:

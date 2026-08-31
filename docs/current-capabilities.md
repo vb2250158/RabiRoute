@@ -43,7 +43,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 
 | 入口 | 状态 | 实际边界 |
 | --- | --- | --- |
-| NapCat / OneBot | 已验证 | Gateway 子进程通过 WebSocket 接收 QQ 群聊和私聊；Manager 可扫描、添加、启动、重启、移除和修复多个 NapCat 实例；OneBot HTTP 用于状态查询和外发；合并转发消息会展开为文本/媒体证据。收到的 QQ 图片会立即保存为本机附件；下载失败会保留明确的不可用状态，不让处理端把图片当成已经看过。 |
+| NapCat / OneBot | 已验证 | 每个 Route 绑定一个 NapCat；多个 QQ 使用多个 Route。Gateway 子进程通过 WebSocket 接收 QQ 群聊和私聊；Manager 可扫描、绑定、隐藏启动、重启、移除和修复各 Route 的 NapCat。Route 卡片通过 Manager 代理快速登录、密码登录、扫码登录、腾讯验证码与新设备确认，不再要求打开 NapCat WebUI。OneBot HTTP 用于状态查询和外发；合并转发消息会展开为文本/媒体证据。收到的 QQ 图片会立即保存为本机附件；下载失败会保留明确的不可用状态，不让处理端把图片当成已经看过。 |
 | 人格自动化 | 本机实现与自动化测试已验证；长期运行待继续观察 | 人格规则统一支持消息或定时触发，并可通知 Agent 或运行受限本机脚本。旧消息模板规则兼容迁移；脚本默认关闭，只能来自人格 `scripts/` 目录，Agent 与脚本结果分开记录。 |
 | 外发语言风格风控 | 本机实现与自动化测试已验证 | 人格可绑定语言风格 Skill。`/api/agent/send` 默认校验；失败时在 Outbox 前返回原因，同一 `deliveryId` 可用 `styleValidation=0` 二次确认。通用校验 API 与 Codex Hook 复用同一规则；Hook 只提示。 |
 | 定时任务运行入口 | 已验证 | Gateway 子进程承载定时人格自动化；支持间隔、时间窗口、每天指定时间和单次指定时间。通知 Agent 时可选在固定 Codex 线程忙碌时跳过；脚本动作使用独立本机权限。 |
@@ -61,7 +61,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | FenneNote | 已退役兼容 | 不再出现在新增消息端或新规则 UI；只读取旧 Route，并保留历史 webhook/Outbox 兼容以便迁移。 |
 | 小米音箱 / 小爱 | 实验支持 | RabiRoute 提供命名回调入口和 PC 侧桥接目录，但必须依赖 open-xiaoai、xiaogpt 或自定义桥把音箱事件送到 PC；不是音箱直连核心。 |
 | RabiLink | 实验支持 | 同时存在本地兼容入口、全局 Relay Runtime 和 Route worker；Android 手机/眼镜通过 Relay SSE 收到队列事件后按 cursor 单次补漏，音频只传 PCM，PC 完成 ASR 后进入主机通用语音库和选定 RabiLink Route；主动消息与回复走独立 Relay 下行队列。明确目标下行在 `delivered` 前不按 TTL 删除，手机持久补传 `delivered/played/playback_failed`，而 `played` 只能由手机/眼镜各自 AudioTrack marker 产生。Rokid AIUI AIX 的宿主只提供整包 HTTP、没有 SSE/WS/分块回调，为保证前台主动消息功能保留 25 秒长等待这一受控例外。代码回执闭环已完成，手机/眼镜实际扬声器和穿戴设备仍需真机验收。 |
-| 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Health Connect 优先事件触发，小米 ADB Provider 因没有可靠变更通知，在用户显式启用 Companion 后保留分钟级低频轮询。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
+| 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Companion 由唯一 Host 下的 Manager Plugin Kernel 与 generation-scoped process lease 持有，动态 READY URL 经 `/meta` 和双身份 header 围栏，不再拥有登录计划任务或固定 Manager 端口。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
 | 通用 Webhook | 实验支持 | 接收没有专用适配器的外部 POST；已有命名平台应使用自己的适配器，以保留日志和回传语义。 |
 | 企业微信 / WeCom | 实验支持 | 使用 `@wecom/aibot-node-sdk` 的智能机器人 WebSocket 长连接，支持群消息进入和 Outbox 回发；需要真实 Bot ID/Secret 验证。 |
 | 个人微信 / Weixin | 实验原型 | 通过 OpenClaw iLink API 长轮询个人微信消息；WebGUI 区分安全会话恢复、暂时不可达、明确失效和从未登录，二维码只在用户明确请求后生成。Windows 使用当前用户 DPAPI 保护会话材料，其它平台使用本机 AES-256-GCM。文本可进入 Agent，并可按来源会话回发文本或受控本地文件；入站媒体只记录。长期在线、真实账号风险和稳定性验收仍未完成。 |
@@ -98,6 +98,8 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 
 处理端创建已接入 Cordis 运行时：五个内置 Agent Adapter 由独立 Fiber 注册到同一清单，类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入读取同一 manifest；兼容入口和原投递路径保持不变。单个 Fiber 与根 Context 的撤销已通过自动化测试。Manager 已通过 `/api/plugins/catalog` 发布统一插件目录；WebGUI 从目录生成受控导航并响应目录变化，Desktop 读取同一目录生成宿主预先注册的菜单、状态、设置、快捷键和主题入口。第三方 Vue 组件、脚本、样式和命令处理器仍未开放。
 
+Manager 的 29 个内置插件与树外插件统一使用 schema/profile v2。入口明确选择 `in_process`、`isolated` 或 `declarative`；Profile 的 `readyRequires` 决定 Manager 是否可对 Host 报 ready；Plugin Kernel 在替换时先释放消费者、再释放 provider，长期插件子进程由 Process Lease Registry 按 generation/activation/instance/revision 回收。任何非 v2 插件 Schema 都不进入运行链。
+
 目标 Desktop 任务的命令、文件、网络、权限和工具审批与 RabiRoute 的外部消息 Outbox policy 是两层不同边界。
 
 ## Outbox 与明确发送
@@ -118,7 +120,8 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 
 ## Manager 与 WebGUI
 
-- Manager 默认在 `http://127.0.0.1:8790/` 提供 RibiWebGUI 和 HTTP API，管理 route 配置、子进程生命周期、扫描、日志和全局设置。
+- Windows 安装版由唯一 RabiRoute Host 创建一代 Manager 与托盘子程序。两者加入同一 Windows Job；Manager 结构化 READY 身份匹配后才启动托盘，任一子程序异常都会触发有界整代重建，用户退出后不会由任何并行守护入口复活。
+- Manager 在操作系统分配的回环端口提供 RibiWebGUI 和 HTTP API，管理 Route 配置、受 process lease 约束的子进程、扫描、日志和全局设置。Windows 安装版从 Host 状态或托盘取得本代 URL，不存在固定端口默认值。
 - Manager 把需要读取大量语音历史的查询放进独立工作线程；同时最多执行 2 个、排队最多 8 个、单次上限 30 秒，超过容量或时限会明确返回 503/504，不再让主 HTTP 线程长时间失去响应。带时间范围的语音查询先根据归档索引排除不相交文件，再读取正文；同时到达、查询范围相同且不需要正文的语音统计只执行一次扫描。`GET /meta` 的 `readWorkers` 可查看当前执行数、排队数和上限。
 - 完整 Route 诊断只从 JSONL 文件尾部读取有限记录，并在同一次响应中复用相同文件的读取结果。人格冲突历史尚无快照时，接口立即返回 202，随后由独立的单 worker 目录任务限速整理；它最多等待 1 项、单次上限 5 分钟，不占用语音读取名额，也不会用满速目录遍历争抢页面读取。`GET /meta.catalogWorkers` 可查看状态。Manager 同时限制请求头接收为 10 秒、请求接收为 30 秒、Keep-Alive 空闲为 5 秒，并限制单连接最多 100 次请求；这些值可从 `GET /meta.httpLimits` 查看。
 - 控制台可显式开启局域网 WebGUI，并在 `data/Config.json.webguiLan` 生成/轮换独立访问密钥。重启后 Manager 从回环监听切换到局域网监听；此时从本机 `localhost/127.0.0.1` 打开的页面会自动重定向到优先局域网 IP，并保留当前 Route 和页面。非本机的 Manager API、SSE 和私有资源请求必须携带 `webgui_token` 或专用请求头，静态登录壳本身不授予读取权限。开关和密钥只能由运行 Manager 的本机通过回环或自己的局域网地址管理，其他设备仍被拒绝；左侧“当前路由”切换会重定向 `#/routes/<Route配置名>/overview` 或 `knowledge`，控制台可复制对应完整链接。
@@ -132,7 +135,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 - 计划列表排序支持状态、更新时间、重要程度和紧急程度。更新时间使用时间戳；状态、重要程度和紧急程度都由 Manager 投影为整数等级后排序。重要程度优先读取 `importance`，旧 `priority` 只在读取边界转换一次；紧急程度优先读取 `urgency`，旧计划可由 `dueAt` 转成兼容等级。每个等级的文字和色板独立映射，目录每行只在右侧显示当前排序类型的标签。
 - 近期记忆卡片分别显示记录时间与真实命中召回时间，并安全渲染 Markdown 图文内容。Manager 为最早的 72 小时触发点设置一次性任务，到点时固定触发时间和 24 小时候选上限并自动投递；晚执行不会追加后来才跨过边界的记忆。WebGUI 只在距离触发不足 24 小时时显示独立倒计时、最不活跃记忆、候选数量和卡片标记。已完成沉淀的近期来源不会再次进入候选，生成的沉淀记忆仍可继续召回。
 - 控制台管理 Rabi 实例名/GUID、全局 RabiLink Relay 连接、route/role 目录和 route 启停。
-- 消息适配器页包含 NapCat 多实例管理、Remote Agent 扫描连接、外部适配器诊断、Agent 扫描、主控 Agent 选择和 pipeline/工作目录配置。
+- 消息适配器页包含每 Route 单 NapCat 绑定、Remote Agent 扫描连接、外部适配器诊断、Agent 扫描、主控 Agent 选择和 pipeline/工作目录配置。
 - 人格页管理 persona、route variables、规则、route kind、regex、定时计划和模板；没有实现设计稿中的 dry-run 预览。
 - 日志页展示连接状态、Codex 投递通道和最近日志，并能执行手动触发。Delivery replay 已有 Manager API 和 ledger，但当前页面没有回放按钮。
 - 顶栏支持简体中文 / English 运行时切换。语言状态统一保存在浏览器 `localStorage` 的 `rabiroute:webgui:locale`，并同步 `<html lang>`；它只是 UI 偏好，不写入 route、role 或 Manager 配置。

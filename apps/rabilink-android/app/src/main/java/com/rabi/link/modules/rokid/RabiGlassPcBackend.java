@@ -21,6 +21,7 @@ import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.UUID;
 import java.util.Arrays;
 import java.util.ArrayList;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.Comparator;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -43,6 +45,8 @@ public final class RabiGlassPcBackend {
     private static final int MAX_CONTROL_QUEUE_ITEMS = 2000;
     private static final int MAX_MEDIA_QUEUE_ITEMS = 500;
     private static final int EVENT_STREAM_READ_TIMEOUT_MS = 45_000;
+    private static final int AUDIO_CAPTURE_QUEUE_CAPACITY = 256;
+    private static final long AUDIO_CAPTURE_QUEUE_MAX_BYTES = 2L * 1024L * 1024L;
 
     public interface Listener {
         void onStatus(String status);
@@ -73,6 +77,12 @@ public final class RabiGlassPcBackend {
     private final ScheduledExecutorService uploadExecutor = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService eventExecutor = Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService audioStreamExecutor = Executors.newSingleThreadScheduledExecutor();
+    private final ExecutorService audioWriteExecutor = Executors.newSingleThreadExecutor();
+    private final RabiBoundedAudioWriteQueue audioWriteQueue =
+            new RabiBoundedAudioWriteQueue(AUDIO_CAPTURE_QUEUE_CAPACITY, AUDIO_CAPTURE_QUEUE_MAX_BYTES);
+    private final AtomicBoolean audioWriteDrainActive = new AtomicBoolean();
+    private final AtomicBoolean audioSpoolClosed = new AtomicBoolean();
+    private final Object audioWriteIoLock = new Object();
     private final Object audioStreamQueueLock = new Object();
     private final RabiSingleDrainGate audioStreamDrainGate = new RabiSingleDrainGate();
     private final AtomicBoolean eventLoopActive = new AtomicBoolean();
@@ -96,17 +106,16 @@ public final class RabiGlassPcBackend {
     private volatile RabiConversationSettings settings;
     private String lastDiagnosticKey = "";
     private long lastDiagnosticAt;
-    private final RabiPcmUploadBuffer audioUploadBuffer = new RabiPcmUploadBuffer();
+    private final RabiDurableAudioSpool audioSpool;
     private String activeAudioStreamId = "";
     private String activeAudioStreamSource = "";
     private String activeAudioStreamRoute = "";
     private String desiredAudioStreamSource = "";
     private String desiredAudioStreamRoute = "";
     private long audioStreamSequence;
-    private long pendingAudioSequence;
     private int audioStreamChunkFailures;
     private boolean audioStreamRetryWaiting;
-    private boolean audioBufferOverflowReported;
+    private boolean audioStorageFailureReported;
     private volatile boolean audioStreamKeepaliveUnsupported;
     private ScheduledFuture<?> audioStreamKeepaliveFuture;
     private int eventReconnectAttempt;
@@ -126,6 +135,13 @@ public final class RabiGlassPcBackend {
         this.diagnosticQueueDirectory.mkdirs();
         this.receiptQueueDirectory = new File(this.context.getFilesDir(), "rabi-conversation/receipt-queue");
         this.receiptQueueDirectory.mkdirs();
+        try {
+            this.audioSpool = new RabiDurableAudioSpool(
+                    new File(this.context.getFilesDir(), "rabi-conversation/audio-spool"),
+                    audioPolicy(this.settings));
+        } catch (Throwable error) {
+            throw new IllegalStateException("无法恢复手机本地录音队列", error);
+        }
         recoverReliableQueueDirectories();
     }
 
@@ -184,22 +200,51 @@ public final class RabiGlassPcBackend {
 
     public void reloadSettings() {
         settings = RabiConversationSettings.load(context);
+        audioSpool.updatePolicy(audioPolicy(settings));
+    }
+
+    private static RabiDurableAudioSpool.Policy audioPolicy(RabiConversationSettings settings) {
+        long mib = 1024L * 1024L;
+        return new RabiDurableAudioSpool.Policy(
+                160L * 1024L,
+                5_000L,
+                settings.audioMaxStorageMb * mib,
+                settings.audioReserveFreeMb * mib,
+                settings.audioRetentionHours * 60L * 60L * 1000L);
     }
 
     public void start() {
         if (running) return;
         running = true;
         requestDrain(0);
+        requestAudioStreamDrain();
         ensureEventLoop();
     }
 
     public void stop() {
         running = false;
+        audioWriteQueue.closeAdmission();
         networkWakeGate.close();
         cancelAudioStreamKeepalive();
         HttpURLConnection current = eventConnection;
         if (current != null) current.disconnect();
         enqueueAudioControl(this::stopActiveAudioStream);
+        CountDownLatch audioWritesClosed = new CountDownLatch(1);
+        try {
+            audioWriteExecutor.execute(() -> {
+                try {
+                    closeAudioSpoolDurably();
+                } finally {
+                    audioWritesClosed.countDown();
+                }
+            });
+            if (!awaitDrainOrTakeOver(audioWritesClosed, 10L, TimeUnit.SECONDS, this::closeAudioSpoolDurably)) {
+                listener.onStatus("录音关闭等待超过 10 秒 · 已转为同步落盘，完成前不会丢弃队列");
+            }
+        } catch (Throwable error) {
+            closeAudioSpoolDurably();
+        }
+        audioWriteExecutor.shutdownNow();
         uploadExecutor.shutdownNow();
         eventExecutor.shutdownNow();
         audioStreamExecutor.shutdown();
@@ -217,15 +262,22 @@ public final class RabiGlassPcBackend {
         if (copy.length == 0) return;
         String source = normalizedSourceKind(sourceDeviceKind);
         String route = routeProfileId();
+        if (!running || !audioWriteQueue.isAccepting()) {
+            audioSpool.recordGap("capture_after_backend_stop", copy.length, source, route);
+            return;
+        }
         updateDesiredAudioStream(source, route);
-        int droppedBytes = audioUploadBuffer.append(copy);
-        if (droppedBytes > 0 && !audioBufferOverflowReported) {
-            audioBufferOverflowReported = true;
-            listener.onError("音频流离线缓冲已满，已丢弃过期 PCM，保留当前待确认块和最新音频");
+        if (!audioWriteQueue.offer(copy, source, route)) {
+            if (!audioStorageFailureReported) {
+                audioStorageFailureReported = true;
+                listener.onError("录音落盘队列已满 · 已记录背压缺口，采集线程继续运行");
+            }
+            if (!audioWriteQueue.isAccepting()) {
+                flushAudioBackpressureGaps();
+                return;
+            }
         }
-        if (activeAudioStreamId.isEmpty() || audioUploadBuffer.ready()) {
-            requestAudioStreamDrain();
-        }
+        requestAudioWriteDrain();
     }
 
     public void onNetworkAvailable() {
@@ -247,7 +299,127 @@ public final class RabiGlassPcBackend {
     }
 
     public void pauseAudioStream() {
-        enqueueAudioControl(this::stopActiveAudioStream);
+        synchronized (audioStreamQueueLock) {
+            desiredAudioStreamSource = "";
+            desiredAudioStreamRoute = "";
+        }
+        enqueueAudioBoundary("capture_paused", () -> enqueueAudioControl(this::stopActiveAudioStream));
+    }
+
+    public void recordAudioGap(String reason, long estimatedBytes, String sourceDeviceKind) {
+        String source = normalizedSourceKind(sourceDeviceKind);
+        String route = routeProfileId();
+        if (!audioWriteQueue.isAccepting()) {
+            audioSpool.boundary(reason);
+            audioSpool.recordGap(reason, estimatedBytes, source, route);
+            return;
+        }
+        enqueueAudioWriteControl(() -> {
+            audioSpool.boundary(reason);
+            audioSpool.recordGap(reason, estimatedBytes, source, route);
+        });
+    }
+
+    private void requestAudioWriteDrain() {
+        if (audioWriteExecutor.isShutdown() || !audioWriteDrainActive.compareAndSet(false, true)) return;
+        try {
+            audioWriteExecutor.execute(() -> {
+                try {
+                    drainAudioWritesNow();
+                    flushAudioBackpressureGaps();
+                } finally {
+                    audioWriteDrainActive.set(false);
+                    if (audioWriteQueue.hasWork()) requestAudioWriteDrain();
+                }
+            });
+        } catch (RejectedExecutionException ignored) {
+            audioWriteDrainActive.set(false);
+        }
+    }
+
+    private void drainAudioWritesNow() {
+        synchronized (audioWriteIoLock) {
+            RabiBoundedAudioWriteQueue.Entry item;
+            while ((item = audioWriteQueue.poll()) != null) {
+                RabiDurableAudioSpool.AppendResult written = audioSpool.append(item.pcm, item.source, item.route);
+                if (!written.accepted) {
+                    if (!audioStorageFailureReported) {
+                        audioStorageFailureReported = true;
+                        listener.onError("手机录音未能落盘 · 已留下缺口记录，请检查存储水位");
+                    }
+                    continue;
+                }
+                audioStorageFailureReported = false;
+                requestAudioStreamDrain();
+            }
+        }
+    }
+
+    private void flushAudioBackpressureGaps() {
+        synchronized (audioWriteIoLock) {
+            List<RabiBoundedAudioWriteQueue.Gap> gaps = audioWriteQueue.takeRejected();
+            if (gaps.isEmpty()) return;
+            audioSpool.boundary("capture_backpressure");
+            for (RabiBoundedAudioWriteQueue.Gap gap : gaps) {
+                String reason = audioWriteQueue.isAccepting() ? "capture_backpressure" : "capture_after_backend_stop";
+                audioSpool.recordGap(reason, gap.bytes, gap.source, gap.route);
+            }
+        }
+    }
+
+    private void closeAudioSpoolDurably() {
+        synchronized (audioWriteIoLock) {
+            if (audioSpoolClosed.compareAndSet(false, true)) {
+                drainAndCloseAudioQueue(audioWriteQueue, audioSpool);
+            }
+        }
+    }
+
+    static void drainAndCloseAudioQueue(RabiBoundedAudioWriteQueue queue, RabiDurableAudioSpool spool) {
+        RabiBoundedAudioWriteQueue.Entry entry;
+        while ((entry = queue.poll()) != null) spool.append(entry.pcm, entry.source, entry.route);
+        List<RabiBoundedAudioWriteQueue.Gap> gaps = queue.takeRejected();
+        if (!gaps.isEmpty()) spool.boundary("capture_after_backend_stop");
+        for (RabiBoundedAudioWriteQueue.Gap gap : gaps) {
+            spool.recordGap("capture_after_backend_stop", gap.bytes, gap.source, gap.route);
+        }
+        spool.close();
+    }
+
+    static boolean awaitDrainOrTakeOver(CountDownLatch completed, long timeout, TimeUnit unit,
+                                         Runnable synchronousTakeover) {
+        boolean interrupted = false;
+        try {
+            if (completed.await(timeout, unit)) return true;
+        } catch (InterruptedException error) {
+            interrupted = true;
+        }
+        synchronousTakeover.run();
+        if (interrupted) Thread.currentThread().interrupt();
+        return false;
+    }
+
+    private void enqueueAudioBoundary(String reason) {
+        enqueueAudioBoundary(reason, null);
+    }
+
+    private void enqueueAudioBoundary(String reason, Runnable afterBoundary) {
+        enqueueAudioWriteControl(() -> {
+            audioSpool.boundary(reason);
+            if (afterBoundary != null) afterBoundary.run();
+        });
+    }
+
+    private void enqueueAudioWriteControl(Runnable control) {
+        if (audioWriteExecutor.isShutdown()) return;
+        try {
+            audioWriteExecutor.execute(() -> {
+                drainAudioWritesNow();
+                flushAudioBackpressureGaps();
+                control.run();
+            });
+        } catch (RejectedExecutionException ignored) {
+        }
     }
 
     private void enqueueAudioControl(Runnable command) {
@@ -271,28 +443,31 @@ public final class RabiGlassPcBackend {
     }
 
     private void drainAudioStream() {
-        String source;
-        String route;
-        synchronized (audioStreamQueueLock) {
-            source = desiredAudioStreamSource;
-            route = desiredAudioStreamRoute;
-        }
-        if (source.isEmpty()) return;
-        beginOrResumeAudioStream(source, route);
-    }
-
-    private void beginOrResumeAudioStream(String sourceDeviceKind, String routeProfileId) {
-        desiredAudioStreamSource = sourceDeviceKind;
-        desiredAudioStreamRoute = clean(routeProfileId);
         if (!networkWakeGate.isAvailable()) {
             audioStreamRetryWaiting = true;
             return;
         }
         try {
-            boolean recovering = audioStreamRetryWaiting || audioUploadBuffer.hasData();
+            boolean recovering = audioStreamRetryWaiting || audioSpool.nextUpload() != null;
             audioStreamRetryWaiting = false;
-            ensureAudioStream(desiredAudioStreamSource, desiredAudioStreamRoute);
-            while (audioUploadBuffer.ready()) flushAudioStreamChunk();
+            while (true) {
+                RabiDurableAudioSpool.Segment head = audioSpool.nextUpload();
+                String source;
+                String route;
+                if (head != null) {
+                    source = head.source;
+                    route = head.routeProfileId;
+                } else {
+                    synchronized (audioStreamQueueLock) {
+                        source = desiredAudioStreamSource;
+                        route = desiredAudioStreamRoute;
+                    }
+                }
+                if (source.isEmpty()) return;
+                ensureAudioStream(source, route);
+                if (head == null) break;
+                flushAudioStreamChunk();
+            }
             if (recovering) listener.onStatus("网络连接正常 · 持续聆听中");
         } catch (Throwable error) {
             handleAudioStreamFailure(error);
@@ -313,7 +488,8 @@ public final class RabiGlassPcBackend {
         try {
             audioStreamExecutor.schedule(() -> {
                 if (generation != audioStreamRecoveryGeneration.get() || !networkWakeGate.isAvailable()) return;
-                if (generation != audioStreamRecoveryGeneration.get() || desiredAudioStreamSource.isEmpty()) return;
+                if (generation != audioStreamRecoveryGeneration.get()
+                        || (desiredAudioStreamSource.isEmpty() && audioSpool.nextUpload() == null)) return;
                 audioStreamDrainGate.request(audioStreamExecutor, this::drainAudioStream);
             }, Math.max(0, delayMs), TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException ignored) {
@@ -340,7 +516,7 @@ public final class RabiGlassPcBackend {
             desiredAudioStreamRoute = route;
         }
         String suffix = SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "phone";
-        String streamId = safeStreamId(deviceId + "-" + suffix + "-audio");
+        String streamId = safeStreamId(deviceId + "-" + suffix + "-" + routeKey(route) + "-audio");
         boolean glasses = SOURCE_GLASSES.equals(sourceDeviceKind);
         String deviceModel = glasses ? "" : clean(Build.MODEL);
         String deviceLabel = deviceLabel(deviceId, glasses, deviceModel);
@@ -357,14 +533,32 @@ public final class RabiGlassPcBackend {
                 .put("session_id", deviceId);
         JSONObject streamState = jsonRequest("POST", "/api/rabilink/speech/v1/audio-streams/rabilink/start",
                 "application/json; charset=utf-8", body.toString().getBytes(StandardCharsets.UTF_8), 60000);
+        if (!supportsDurableChunkProtocol(streamState)) {
+            try {
+                JSONObject stopBody = new JSONObject().put("stream_id", streamId);
+                jsonRequest("POST", "/api/rabilink/speech/v1/audio-streams/rabilink/stop",
+                        "application/json; charset=utf-8",
+                        stopBody.toString().getBytes(StandardCharsets.UTF_8), 60000);
+            } catch (Throwable ignored) { }
+            throw new IllegalStateException("Rabi PC 音频服务版本过旧，未发送 PCM；请先更新支持持久 ACK v2 的 RabiSpeech");
+        }
         activeAudioStreamId = streamId;
         activeAudioStreamSource = sourceDeviceKind;
         activeAudioStreamRoute = route;
         audioStreamSequence = resumeAudioStreamSequence(findAudioStreamSequence(streamState, streamId));
-        pendingAudioSequence = nextPendingAudioSequence(audioStreamSequence, audioUploadBuffer.hasPending());
+        String serverChunkId = findAudioStreamChunkId(streamState, streamId);
+        long serverChunkBytes = findAudioStreamChunkBytes(streamState, streamId);
+        String serverChecksum = findAudioStreamChecksum(streamState, streamId);
+        if (!audioSpool.reconcileLastServerAck(audioStreamSequence, serverChunkId,
+                serverChunkBytes, serverChecksum)) {
+            RabiDurableAudioSpool.Segment head = audioSpool.nextUpload();
+            if (head != null && head.serverSequence > 0L && head.serverSequence != audioStreamSequence + 1L) {
+                audioSpool.resetHeadServerAssignment();
+            }
+        }
         audioStreamChunkFailures = 0;
         audioStreamRetryWaiting = false;
-        audioBufferOverflowReported = false;
+        audioStorageFailureReported = false;
         armAudioStreamKeepalive();
         listener.onStatus("手机音频流已接入 Rabi PC");
     }
@@ -380,6 +574,15 @@ public final class RabiGlassPcBackend {
         return suffix.isEmpty() ? base : base + " · " + suffix;
     }
 
+    static boolean supportsDurableChunkProtocol(JSONObject streamState) {
+        JSONObject protocol = streamState == null ? null : streamState.optJSONObject("rabilink_chunk_protocol");
+        return protocol != null
+                && protocol.optInt("version", 0) >= 2
+                && protocol.optBoolean("durable_ack_tuple", false)
+                && protocol.optBoolean("cross_process_claim", false)
+                && "retain_without_ack".equals(protocol.optString("ambiguous_replay_policy", ""));
+    }
+
     private static long findAudioStreamSequence(JSONObject streamState, String streamId) {
         JSONArray clients = streamState == null ? null : streamState.optJSONArray("clients");
         for (int index = 0; clients != null && index < clients.length(); index++) {
@@ -389,6 +592,39 @@ public final class RabiGlassPcBackend {
             }
         }
         return 0L;
+    }
+
+    private static String findAudioStreamChecksum(JSONObject streamState, String streamId) {
+        JSONArray clients = streamState == null ? null : streamState.optJSONArray("clients");
+        for (int index = 0; clients != null && index < clients.length(); index++) {
+            JSONObject client = clients.optJSONObject(index);
+            if (client != null && clean(streamId).equals(clean(client.optString("id", "")))) {
+                return client.optString("last_chunk_sha256", "");
+            }
+        }
+        return "";
+    }
+
+    private static String findAudioStreamChunkId(JSONObject streamState, String streamId) {
+        JSONArray clients = streamState == null ? null : streamState.optJSONArray("clients");
+        for (int index = 0; clients != null && index < clients.length(); index++) {
+            JSONObject client = clients.optJSONObject(index);
+            if (client != null && clean(streamId).equals(clean(client.optString("id", "")))) {
+                return client.optString("last_chunk_id", "");
+            }
+        }
+        return "";
+    }
+
+    private static long findAudioStreamChunkBytes(JSONObject streamState, String streamId) {
+        JSONArray clients = streamState == null ? null : streamState.optJSONArray("clients");
+        for (int index = 0; clients != null && index < clients.length(); index++) {
+            JSONObject client = clients.optJSONObject(index);
+            if (client != null && clean(streamId).equals(clean(client.optString("id", "")))) {
+                return client.optLong("last_chunk_bytes", -1L);
+            }
+        }
+        return -1L;
     }
 
     static long resumeAudioStreamSequence(long serverSequence) {
@@ -401,18 +637,40 @@ public final class RabiGlassPcBackend {
 
     private void flushAudioStreamChunk() throws Exception {
         if (activeAudioStreamId.isEmpty()) return;
-        RabiPcmUploadBuffer.PendingChunk pending = audioUploadBuffer.preparePending();
+        RabiDurableAudioSpool.Segment pending = audioSpool.nextUpload(activeAudioStreamSource, activeAudioStreamRoute);
         if (pending == null) return;
-        if (pendingAudioSequence <= 0) {
-            pendingAudioSequence = audioStreamSequence + 1;
+        long serverSequence = pending.serverSequence;
+        if (serverSequence <= 0L) {
+            serverSequence = audioStreamSequence + 1L;
+            pending = audioSpool.assignServerSequence(pending, serverSequence);
         }
         String path = "/api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId="
-                + encode(activeAudioStreamId) + "&sequence=" + pendingAudioSequence
+                + encode(activeAudioStreamId) + "&sequence=" + serverSequence
                 + "&chunkId=" + encode(pending.id);
-        request("POST", path, "application/octet-stream", pending.pcm, 60000);
-        audioStreamSequence = pendingAudioSequence;
-        audioUploadBuffer.acknowledgePending();
-        pendingAudioSequence = 0;
+        byte[] pcm;
+        try {
+            pcm = audioSpool.readPcm(pending);
+        } catch (RabiDurableAudioSpool.PoisonedSegmentException poisoned) {
+            if (!poisoned.isolated) throw poisoned;
+            listener.onError("录音分片校验失败 · 已隔离并记录缺口，后续分片继续补传");
+            return;
+        }
+        try {
+            JSONObject acknowledgement = new JSONObject(new String(
+                    request("POST", path, "application/octet-stream", pcm, 60000), StandardCharsets.UTF_8));
+            if (!acknowledgement.optBoolean("ok", false)
+                    || acknowledgement.optLong("accepted_bytes", -1L) != pending.bytes
+                    || acknowledgement.optLong("sequence", -1L) != serverSequence
+                    || !pending.id.equals(acknowledgement.optString("chunk_id", ""))
+                    || !pending.sha256.equalsIgnoreCase(acknowledgement.optString("sha256", ""))) {
+                throw new IllegalStateException("Rabi PC 未返回完整录音分片确认");
+            }
+            audioSpool.acknowledge(pending.id, serverSequence, pending.bytes, pending.sha256);
+        } catch (Throwable error) {
+            audioSpool.markUploadFailure(pending, error);
+            throw error;
+        }
+        audioStreamSequence = serverSequence;
         audioStreamChunkFailures = 0;
         audioStreamRetryWaiting = false;
         armAudioStreamKeepalive();
@@ -478,7 +736,6 @@ public final class RabiGlassPcBackend {
         }
         String streamId = activeAudioStreamId;
         try {
-            while (audioUploadBuffer.hasData()) flushAudioStreamChunk();
             JSONObject body = new JSONObject().put("stream_id", streamId);
             jsonRequest("POST", "/api/rabilink/speech/v1/audio-streams/rabilink/stop",
                     "application/json; charset=utf-8", body.toString().getBytes(StandardCharsets.UTF_8), 60000);
@@ -493,14 +750,10 @@ public final class RabiGlassPcBackend {
         activeAudioStreamId = "";
         activeAudioStreamSource = "";
         activeAudioStreamRoute = "";
-        desiredAudioStreamSource = "";
-        desiredAudioStreamRoute = "";
         audioStreamSequence = 0;
-        pendingAudioSequence = 0;
         audioStreamChunkFailures = 0;
         audioStreamRetryWaiting = false;
-        audioBufferOverflowReported = false;
-        audioUploadBuffer.clear();
+        audioStorageFailureReported = false;
         audioStreamRecoveryGeneration.incrementAndGet();
     }
 
@@ -510,7 +763,6 @@ public final class RabiGlassPcBackend {
         activeAudioStreamSource = "";
         activeAudioStreamRoute = "";
         audioStreamSequence = 0;
-        pendingAudioSequence = 0;
     }
 
     private static String safeStreamId(String value) {
@@ -1200,10 +1452,40 @@ public final class RabiGlassPcBackend {
     }
 
     public String reliableQueueSummary() {
-        return "文字/控制 " + RabiReliableQueueFiles.list(controlQueueDirectory, ".json").length
+        JSONObject audio = audioSpool.health();
+        return "录音待传 " + audio.optInt("pendingSegments", 0)
+                + " · 待落盘 " + audioWriteQueue.size()
+                + " · 本地 " + String.format(java.util.Locale.US, "%.1f MiB", audio.optLong("storedBytes", 0L) / 1048576.0)
+                + " · 隔离 " + audio.optLong("quarantineItems", 0L)
+                + " · 文字/控制 " + RabiReliableQueueFiles.list(controlQueueDirectory, ".json").length
                 + " · 媒体 " + RabiReliableQueueFiles.list(mediaQueueDirectory, ".json").length
                 + " · 下行 " + RabiReliableQueueFiles.list(replyQueueDirectory, ".json").length
                 + " · 回执 " + RabiReliableQueueFiles.list(receiptQueueDirectory, ".json").length;
+    }
+
+    private static String routeKey(String route) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(clean(route).getBytes(StandardCharsets.UTF_8));
+            StringBuilder value = new StringBuilder(12);
+            for (int index = 0; index < 6; index++) value.append(String.format(java.util.Locale.US, "%02x", digest[index] & 0xff));
+            return value.toString();
+        } catch (Throwable ignored) {
+            return Integer.toHexString(clean(route).hashCode());
+        }
+    }
+
+    public JSONObject audioSpoolHealth() {
+        JSONObject health = audioSpool.health();
+        try {
+            health.put("captureQueueItems", audioWriteQueue.size())
+                    .put("captureBufferedBytes", audioWriteQueue.queuedBytes());
+        } catch (Throwable ignored) { }
+        return health;
+    }
+
+    public boolean clearAudioQuarantineAfterUserConfirmation() {
+        return audioSpool.clearQuarantineAfterUserConfirmation();
     }
 
     private JSONObject jsonRequest(String method, String path, String contentType, byte[] body, int timeout) throws Exception {

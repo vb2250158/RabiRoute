@@ -99,10 +99,11 @@ npm run webgui:build
 
 然后打开：
 
-```text
-http://127.0.0.1:8790/#/docs
-http://127.0.0.1:8790/#/speech
-http://127.0.0.1:8790/reports/rabispeech-model-benchmark.html
+```powershell
+$status = & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json | ConvertFrom-Json
+Start-Process ($status.managerBaseUrl + "/#/docs")
+Start-Process ($status.managerBaseUrl + "/#/speech")
+Start-Process ($status.managerBaseUrl + "/reports/rabispeech-model-benchmark.html")
 ```
 
 检查“语音服务”下的 TTS、ASR、性能报告三个栏目、目标测试机报告，以及使用手册中的“从远端调用 TTS 与 ASR”。确认表格、柱状图、逐句结果、移动端横向滚动和独立报告链接都可用。

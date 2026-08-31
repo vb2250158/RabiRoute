@@ -90,6 +90,26 @@ test("speech model manager lists allowlisted models without installing speech by
   }
 });
 
+test("speech model manager reads immutable adapter assets from package root while state remains separate", () => {
+  const fixture = makeFixture();
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-speech-model-state-"));
+  try {
+    const manager = new SpeechModelManager({
+      packageRoot: fixture.root,
+      rootDir: stateRoot,
+      modelRoot: path.join(stateRoot, "models"),
+      platform: "win32"
+    });
+    const snapshot = manager.snapshot();
+    assert.equal(snapshot.models[0]?.alias, "asr-fixture");
+    assert.equal(snapshot.dependenciesInstalled, false);
+    assert.equal(fs.existsSync(path.join(stateRoot, "plugin-adapters")), false);
+  } finally {
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+    fixture.cleanup();
+  }
+});
+
 test("repository model catalog exposes unique allowlisted download targets", () => {
   const payload = JSON.parse(fs.readFileSync(
     path.join(process.cwd(), "plugin-adapters", "rabi-speech", "model-catalog.json"),

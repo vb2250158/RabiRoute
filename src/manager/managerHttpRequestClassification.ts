@@ -3,6 +3,7 @@ export function isManagerControlRequestPath(pathname: string): boolean {
     || pathname.startsWith("/api/")
     || pathname === "/roles"
     || pathname.startsWith("/roles/")
+    || pathname === "/health"
     || pathname === "/meta"
     || pathname === "/gateways"
     || pathname.startsWith("/gateways/")

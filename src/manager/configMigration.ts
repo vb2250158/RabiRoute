@@ -51,6 +51,14 @@ export function readJsonFile(filePath: string): unknown {
   }
 }
 
+export async function readJsonFileAsync(filePath: string): Promise<unknown> {
+  try {
+    return JSON.parse(await fs.promises.readFile(filePath, "utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 export function extractNotificationRules(value: unknown): NotificationRuleDefinition[] | undefined {
   if (!isJsonObject(value)) return undefined;
   if (Array.isArray(value.notificationRules) && value.notificationRules.length > 0) {
@@ -92,15 +100,18 @@ function defaultPersonaRules(rules: NotificationRuleDefinition[] | undefined): N
 
 export function readPersonaRules(personaConfigPath: string): NotificationRuleDefinition[] | undefined {
   const parsed = readJsonFile(personaConfigPath);
+  return personaRulesFromValue(parsed);
+}
+
+function personaRulesFromValue(parsed: unknown): NotificationRuleDefinition[] | undefined {
   if (isJsonObject(parsed) && Array.isArray(parsed.automationRules)) {
     return notificationRulesFromPersonaAutomations(normalizePersonaAutomationRules(parsed.automationRules));
   }
   return extractNotificationRules(parsed);
 }
 
-export function readPersonaConfigFragment(personaConfigPath: string): Partial<GatewayDefinition> {
-  const parsed = readJsonFile(personaConfigPath);
-  const rules = readPersonaRules(personaConfigPath);
+export function personaConfigFragmentFromValue(parsed: unknown): Partial<GatewayDefinition> {
+  const rules = personaRulesFromValue(parsed);
   const fragment: Partial<GatewayDefinition> = {};
   if (isJsonObject(parsed)) {
     const configuredAutomations = normalizePersonaAutomationRules(parsed.automationRules);
@@ -124,6 +135,14 @@ export function readPersonaConfigFragment(personaConfigPath: string): Partial<Ga
     fragment.notificationRules = defaultPersonaRules(rules);
   }
   return fragment;
+}
+
+export function readPersonaConfigFragment(personaConfigPath: string): Partial<GatewayDefinition> {
+  return personaConfigFragmentFromValue(readJsonFile(personaConfigPath));
+}
+
+export async function readPersonaConfigFragmentAsync(personaConfigPath: string): Promise<Partial<GatewayDefinition>> {
+  return personaConfigFragmentFromValue(await readJsonFileAsync(personaConfigPath));
 }
 
 function normalizedPersonaConfigValue(

@@ -7,7 +7,11 @@ from rabiroute_tray.manager_client import ManagerClient, ManagerSnapshot
 
 class _RecordingManagerClient(ManagerClient):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(
+            "http://127.0.0.1:8790",
+            application_generation_id="app-generation",
+            manager_instance_id="manager-instance",
+        )
         self.paths: list[str] = []
         self.posts: list[tuple[str, dict]] = []
         self.post_timeouts: list[float | None] = []
@@ -16,7 +20,12 @@ class _RecordingManagerClient(ManagerClient):
     def _get_json(self, path: str) -> dict:
         self.paths.append(path)
         if path == "/meta":
-            return {"version": "test", "health": {"pid": 321}}
+            return {
+                "version": "test",
+                "health": {"pid": 321},
+                "applicationGenerationId": "app-generation",
+                "managerInstanceId": "manager-instance",
+            }
         if path.endswith("/plans"):
             return {"code": 0, "data": [{"id": "plan-1"}]}
         if path.endswith("/memory"):
@@ -43,13 +52,6 @@ class _RecordingManagerClient(ManagerClient):
 
 
 class ManagerSnapshotTest(unittest.TestCase):
-    def test_shutdown_marks_an_explicit_desktop_exit(self) -> None:
-        client = _RecordingManagerClient()
-
-        self.assertTrue(client.shutdown())
-
-        self.assertEqual(client.posts, [("/manager/shutdown", {"desktopExit": True})])
-
     def test_desktop_settings_reads_shared_theme(self) -> None:
         client = _RecordingManagerClient()
         client._get_json = lambda path: {"data": {"theme": "dark", "screenshot": {"enabled": True}}}  # type: ignore[method-assign]
@@ -58,6 +60,16 @@ class ManagerSnapshotTest(unittest.TestCase):
 
         self.assertTrue(settings.screenshot_enabled)
         self.assertEqual(settings.theme, "dark")
+        self.assertFalse(settings.autostart_configured)
+
+    def test_desktop_settings_preserves_explicit_autostart_tristate(self) -> None:
+        client = _RecordingManagerClient()
+        client._get_json = lambda path: {"data": {"autostart": False, "autostartConfigured": True}}  # type: ignore[method-assign]
+
+        settings = client.desktop_settings()
+
+        self.assertFalse(settings.autostart)
+        self.assertTrue(settings.autostart_configured)
 
     def test_desktop_settings_reads_selected_custom_theme_definition(self) -> None:
         client = _RecordingManagerClient()
@@ -77,14 +89,31 @@ class ManagerSnapshotTest(unittest.TestCase):
         self.assertEqual(client.paths, ["/meta", "/gateways?summary=1"])
         self.assertEqual(snapshot.gateways, [{"id": "route-1"}])
 
-    def test_snapshot_observes_manager_pid_for_legacy_catalog_restart_detection(self) -> None:
+    def test_snapshot_rejects_a_different_application_generation_before_reading_gateways(self) -> None:
         client = _RecordingManagerClient()
-        identities: list[object] = []
-        client._desktop_plugin_catalog_cache.observe_manager_identity = identities.append  # type: ignore[method-assign]
+        client._get_json = lambda path: {  # type: ignore[method-assign]
+            "applicationGenerationId": "stale-generation",
+            "managerInstanceId": "manager-instance",
+        }
 
-        client.snapshot()
+        snapshot = client.snapshot()
 
-        self.assertEqual(identities, ["pid:321"])
+        self.assertFalse(snapshot.connected)
+        self.assertEqual(snapshot.gateways, [])
+        self.assertIn("application generation mismatch", snapshot.error)
+
+    def test_snapshot_rejects_a_different_manager_instance_before_reading_gateways(self) -> None:
+        client = _RecordingManagerClient()
+        client._get_json = lambda path: {  # type: ignore[method-assign]
+            "applicationGenerationId": "app-generation",
+            "managerInstanceId": "replacement-manager",
+        }
+
+        snapshot = client.snapshot()
+
+        self.assertFalse(snapshot.connected)
+        self.assertEqual(snapshot.gateways, [])
+        self.assertIn("Manager instance mismatch", snapshot.error)
 
     def test_desktop_read_models_use_manager_role_apis(self) -> None:
         client = _RecordingManagerClient()

@@ -17,7 +17,8 @@ const definitions = [
 
 async function writeProfile(profilePath: string, enabled: readonly string[], grantSource = true): Promise<void> {
   await fs.writeFile(profilePath, JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    readyRequires: [],
     instances: definitions.map(definition => ({
       id: definition.id,
       package: definition.package,
@@ -30,9 +31,10 @@ async function writeProfile(profilePath: string, enabled: readonly string[], gra
 }
 
 async function load(root: string, profilePath: string) {
+  const packageRoot = path.join(root, "packages");
   return loadPluginProfile({
     profilePath,
-    packageCatalog: new PluginPackageCatalog([path.join(root, "packages")]),
+    packageCatalog: new PluginPackageCatalog([packageRoot], { trustedInProcessRoots: [packageRoot] }),
     runtimeRoot: path.join(root, "runtime"),
     host: "manager"
   });

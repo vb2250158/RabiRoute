@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -67,6 +68,35 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
       body: JSON.stringify({ targetDeviceId: "pc-a" })
     });
     assert.equal(target.status, 200);
+
+    const pendingPreview = fetch(`${baseUrl}/api/rabilink/speech/v1/records?kind=asr&source_device_id=phone-a&since=123&limit=1000`, {
+      headers: { "x-rabilink-token": token }
+    });
+    let claimedPreview;
+    for (let attempt = 0; attempt < 50 && !claimedPreview; attempt += 1) {
+      const response = await fetch(`${baseUrl}/worker/speech-requests?deviceId=pc-a&deviceGuid=guid-a&deviceName=PC-A&waitMs=0&capabilities=webgui,speech`, {
+        headers: { "x-rabilink-token": token }
+      });
+      claimedPreview = (await response.json()).requests?.[0];
+      if (!claimedPreview) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(claimedPreview.method, "GET");
+    assert.equal(claimedPreview.path, "/v1/records?kind=asr&source_device_id=phone-a&since=123&limit=1000");
+    await fetch(`${baseUrl}/worker/speech-requests/${encodeURIComponent(claimedPreview.id)}/response`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-rabilink-token": token },
+      body: JSON.stringify({
+        deviceId: "pc-a",
+        deviceGuid: "guid-a",
+        ok: true,
+        statusCode: 200,
+        headers: { "content-type": "application/json" },
+        bodyBase64: Buffer.from(JSON.stringify({ data: [{ id: "asr-one", kind: "asr", text: "预览成功" }] })).toString("base64")
+      })
+    });
+    const previewResult = await pendingPreview;
+    assert.equal(previewResult.status, 200);
+    assert.equal((await previewResult.json()).data[0].text, "预览成功");
 
     const payload = {
       recordId: "phone-one",
@@ -140,10 +170,20 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
         ok: true,
         statusCode: 200,
         headers: { "content-type": "application/json" },
-        bodyBase64: Buffer.from(JSON.stringify({ ok: true })).toString("base64")
+        bodyBase64: Buffer.from(JSON.stringify({
+          ok: true,
+          rabilink_chunk_protocol: {
+            version: 2,
+            durable_ack_tuple: true,
+            cross_process_claim: true,
+            ambiguous_replay_policy: "retain_without_ack"
+          }
+        })).toString("base64")
       })
     });
-    assert.equal((await pendingStart).status, 200);
+    const startResult = await pendingStart;
+    assert.equal(startResult.status, 200);
+    assert.equal((await startResult.json()).rabilink_chunk_protocol.version, 2);
 
     const pcm = Buffer.from([0, 0, 1, 0, 255, 255]);
     const pendingChunk = fetch(`${baseUrl}/api/rabilink/speech/v1/audio-streams/rabilink/chunk?streamId=phone-a-audio&sequence=1&chunkId=phone-a-chunk-1`, {
@@ -171,12 +211,21 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
         ok: true,
         statusCode: 200,
         headers: { "content-type": "application/json" },
-        bodyBase64: Buffer.from(JSON.stringify({ ok: true, accepted_bytes: pcm.length, sequence: 1 })).toString("base64")
+        bodyBase64: Buffer.from(JSON.stringify({
+          ok: true,
+          accepted_bytes: pcm.length,
+          sequence: 1,
+          chunk_id: "phone-a-chunk-1",
+          sha256: createHash("sha256").update(pcm).digest("hex")
+        })).toString("base64")
       })
     });
     const chunkResult = await pendingChunk;
     assert.equal(chunkResult.status, 200);
-    assert.equal((await chunkResult.json()).sequence, 1);
+    const chunkAck = await chunkResult.json();
+    assert.equal(chunkAck.sequence, 1);
+    assert.equal(chunkAck.chunk_id, "phone-a-chunk-1");
+    assert.equal(chunkAck.sha256, createHash("sha256").update(pcm).digest("hex"));
 
     const pendingKeepalive = fetch(`${baseUrl}/api/rabilink/speech/v1/audio-streams/rabilink/keepalive?streamId=phone-a-audio`, {
       method: "POST",

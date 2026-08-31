@@ -64,7 +64,7 @@ test("route id and config names are normalized", () => {
 test("message endpoint and Gateway adapter contracts have exact host-owned members", () => {
   assert.deepEqual([...MESSAGE_ENDPOINT_TYPES], [
     "napcat", "remoteAgent", "heartbeat", "rolePanel", "speech", "fennenote", "xiaoai",
-    "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu"
+    "rabilink", "wearable", "webhook", "wecom", "weixin", "feishu", "xiaomiHome"
   ]);
   assert.deepEqual([...GATEWAY_MESSAGE_ADAPTER_TYPES], [
     "napcat", "heartbeat", "fennenote", "xiaoai", "rabilink", "webhook", "wecom", "weixin", "feishu"
@@ -72,6 +72,7 @@ test("message endpoint and Gateway adapter contracts have exact host-owned membe
   assert.equal(MESSAGE_ENDPOINT_TYPES.includes("disabled" as never), false);
   assert.equal(GATEWAY_MESSAGE_ADAPTER_TYPES.includes("wearable" as never), false);
   assert.equal(GATEWAY_MESSAGE_ADAPTER_TYPES.includes("speech" as never), false);
+  assert.equal(GATEWAY_MESSAGE_ADAPTER_TYPES.includes("xiaomiHome" as never), false);
 });
 
 test("legacy disabled selection normalizes to state instead of an endpoint type", () => {
@@ -180,22 +181,56 @@ test("Codex message processing requires Codex to be the selected primary Agent",
   }), true);
 });
 
-test("NapCat auto login on Rabi start defaults on and preserves an explicit off switch", () => {
-  const normalized = normalizeNapCatInstances(gateway({
+test("a Route keeps only its primary NapCat endpoint when migrating a multi-instance config", () => {
+  const firstEnabled = normalizeNapCatInstances(gateway({
     napcatInstances: [{
-      id: "default-on",
+      id: "disabled-old-primary",
+      enabled: false,
       gatewayPort: 8789,
       httpUrl: localUrl(3000)
     }, {
-      id: "explicit-off",
+      id: "selected-primary",
       gatewayPort: 8791,
       httpUrl: localUrl(3001),
       autoLoginOnRabiStart: false
+    }, {
+      id: "discarded-secondary",
+      gatewayPort: 8792,
+      httpUrl: localUrl(3002)
     }]
   }));
 
+  assert.equal(firstEnabled.length, 1);
+  assert.equal(firstEnabled[0]?.id, "selected-primary");
+  assert.equal(firstEnabled[0]?.enabled, true);
+  assert.equal(firstEnabled[0]?.autoLoginOnRabiStart, false);
+});
+
+test("Xiaomi Home survives Route save and reload without becoming a Gateway runtime adapter", () => {
+  const saved = JSON.stringify(normalizeGatewayDefinition(gateway({
+    messageAdapters: ["xiaoai", "xiaomiHome"]
+  })));
+  const reloaded = normalizeGatewayDefinition(JSON.parse(saved));
+  assert.deepEqual(reloaded.messageAdapters, ["xiaoai", "xiaomiHome"]);
+  assert.deepEqual(gatewayAdapterTypes(reloaded), ["xiaoai", "xiaomiHome"]);
+  assert.deepEqual(gatewayMessageAdapterTypes(reloaded), ["xiaoai"]);
+  assert.deepEqual(
+    reloaded.notificationRules?.find(rule => rule.routeKinds?.includes("xiaomi_home_event"))?.routeKinds,
+    ["xiaomi_home_event"]
+  );
+});
+
+test("a single NapCat endpoint defaults auto login on", () => {
+  const normalized = normalizeNapCatInstances(gateway({
+    napcatInstances: [{
+      id: "default",
+      gatewayPort: 8789,
+      httpUrl: localUrl(3000)
+    }]
+  }));
+
+  assert.equal(normalized.length, 1);
   assert.equal(normalized[0]?.autoLoginOnRabiStart, true);
-  assert.equal(normalized[1]?.autoLoginOnRabiStart, false);
 });
 
 test("Message Agent limit defaults to one and ignores invalid values", () => {
@@ -709,15 +744,15 @@ test("legacy disabled adapter list backfills policy input state", () => {
   assert.equal(messageAdapterPolicyFor(normalized, "heartbeat").inputEnabled, true);
 });
 
-test("NapCat instances receive defaults and unique ids", () => {
+test("NapCat normalization keeps one endpoint and applies defaults", () => {
   const instances = normalizeNapCatInstances(gateway({
     napcatInstances: [
       { id: "bot", gatewayPort: 8791, httpUrl: localUrl(3001) },
       { id: "bot", gatewayPort: 8792, httpUrl: localUrl(3002) }
     ]
   }));
+  assert.equal(instances.length, 1);
   assert.equal(instances[0].id, "bot");
-  assert.equal(instances[1].id, "bot-2");
   assert.equal(instances[0].webuiUrl, localUrl(6099, "/webui"));
 });
 
@@ -743,10 +778,11 @@ test("NapCat primary resolution chooses the first enabled normalized instance", 
     ]
   }));
 
-  assert.equal(resolved.primaryIndex, 1);
+  assert.equal(resolved.primaryIndex, 0);
   assert.equal(resolved.primary?.id, "on");
-  assert.equal(resolved.instances[0].enabled, false);
-  assert.equal(resolved.instances[1].webuiUrl, localUrl(6099, "/webui"));
+  assert.equal(resolved.instances.length, 1);
+  assert.equal(resolved.instances[0].enabled, true);
+  assert.equal(resolved.instances[0].webuiUrl, localUrl(6099, "/webui"));
 });
 
 test("NapCat primary sync backfills gateway fields and clears stale tokens", () => {
@@ -792,11 +828,24 @@ test("NapCat invalid ports are rejected", () => {
   );
 });
 
-test("auto assignment skips the manager port", () => {
-  const items = [gateway({ gatewayPort: 8790 })];
-  autoAssignGatewayPorts(items, 8790);
-  assert.notEqual(items[0].gatewayPort, 8790);
-  assert.equal(items[0].gatewayPort, 8791);
+test("auto assignment fences the dynamic Manager port published by Host READY", () => {
+  const managerPort = 13486;
+  const items = [gateway({ gatewayPort: managerPort })];
+  autoAssignGatewayPorts(items, managerPort);
+  const assignedPort = Number(items[0].gatewayPort);
+  assert.notEqual(assignedPort, managerPort);
+  assert.ok(Number.isInteger(assignedPort) && assignedPort >= 1 && assignedPort <= 65535);
+  const listenerPorts = collectGatewayPortClaims(items, { managerPort })
+    .filter((claim) => claim.kind !== "napcat-http")
+    .map((claim) => claim.port);
+  assert.equal(new Set(listenerPorts).size, listenerPorts.length);
+});
+
+test("auto assignment does not reserve a Manager port before Host READY", () => {
+  const preferredGatewayPort = 13486;
+  const items = [gateway({ gatewayPort: preferredGatewayPort })];
+  autoAssignGatewayPorts(items);
+  assert.equal(items[0].gatewayPort, preferredGatewayPort);
 });
 
 test("auto assignment allocates unique Route listener ports and preserves NapCat endpoints", () => {
@@ -828,8 +877,7 @@ test("auto assignment allocates unique Route listener ports and preserves NapCat
   assert.equal(items[0].gatewayPort, items[0].napcatInstances?.[0].gatewayPort);
   assert.equal(items[0].napcatHttpUrl, items[0].napcatInstances?.[0].httpUrl);
   assert.equal(items[0].napcatAccessToken, "a1");
-  assert.notEqual(items[0].napcatInstances?.[0].gatewayPort, items[0].napcatInstances?.[1].gatewayPort);
-  assert.equal(items[0].napcatInstances?.[0].httpUrl, items[0].napcatInstances?.[1].httpUrl);
+  assert.equal(items[0].napcatInstances?.length, 1);
   validateGatewayPortConflicts(items);
 });
 

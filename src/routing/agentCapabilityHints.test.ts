@@ -26,3 +26,16 @@ test("voice identity review capability exposes persona-owned daily classificatio
   assert.match(text, /不周期轮询覆盖率/);
   assert.equal(voiceIdentityReviewCapabilityHint("播放下一条语音", context), null);
 });
+
+test("capability hints fail closed without a valid current Manager port", () => {
+  for (const managerPort of [undefined, "", "0", "65536", "not-a-port", "9000.5"]) {
+    assert.throws(
+      () => personaSyncCapabilityHint("把当前人格同步到另一台电脑", { managerPort, roleId: "Rabi" }),
+      /valid current Manager port/
+    );
+  }
+  assert.throws(
+    () => voiceIdentityReviewCapabilityHint("今天哪些录音是我说的？", { roleId: "Rabi" }),
+    /valid current Manager port/
+  );
+});

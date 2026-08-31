@@ -1,10 +1,16 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "io.rabiroute.manager.diagnostics",
   "version": "1.0.0",
   "entries": {
-    "manager": "./manager.mjs",
-    "web": "./web/client.mjs"
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
   },
   "provides": [
     "manager.diagnostics@1"

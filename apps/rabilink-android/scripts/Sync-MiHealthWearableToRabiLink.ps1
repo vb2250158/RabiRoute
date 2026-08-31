@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Serial = "",
     [string]$RelayUrl = $env:RABILINK_RELAY_URL,
@@ -6,7 +6,7 @@ param(
     [string]$RabiRouteConfigPath = "",
     [ValidateSet("Auto", "Relay", "Manager")]
     [string]$Transport = "Auto",
-    [string]$ManagerUrl = $(if ($env:RABIROUTE_MANAGER_URL) { $env:RABIROUTE_MANAGER_URL } else { "http://127.0.0.1:8790" }),
+    [string]$HostExe = "",
     [string]$RoleId = "YeYu",
     [bool]$DeliverAlerts = $true,
     [bool]$UseMobileSettings = $true,
@@ -23,6 +23,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "Resolve-RabiRouteHostManagerUrl.ps1")
 $script:PollSecondsWasExplicit = $PSBoundParameters.ContainsKey("PollSeconds")
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..\..")).Path
@@ -145,26 +146,29 @@ function Apply-RabiLinkMobileWearableSettings {
 function Resolve-PublishTarget {
     $requested = $Transport.Trim().ToLowerInvariant()
     if ($requested -eq "relay") {
-        return [pscustomobject]@{ Kind = "Relay"; Relay = Resolve-RelaySettings; ManagerUrl = "" }
+        return [pscustomobject]@{ Kind = "Relay"; Relay = Resolve-RelaySettings; ManagerBaseUrl = ""; Headers = @{} }
     }
     if ($requested -eq "auto") {
         try {
             $relay = Resolve-RelaySettings
-            return [pscustomobject]@{ Kind = "Relay"; Relay = $relay; ManagerUrl = "" }
+            return [pscustomobject]@{ Kind = "Relay"; Relay = $relay; ManagerBaseUrl = ""; Headers = @{} }
         } catch {
             # A local Manager is the intentional offline fallback. It records
             # the same role-scoped timeline and can explicitly route alerts.
         }
     }
-    $url = $ManagerUrl.Trim().TrimEnd("/")
-    if ([string]::IsNullOrWhiteSpace($url)) { throw "RabiRoute Manager 地址未配置。" }
-    try {
-        $meta = Invoke-RestMethod -Uri "$url/meta" -Method Get -TimeoutSec 5
-        if ($null -eq $meta) { throw "empty response" }
-    } catch {
-        throw "RabiRoute Manager 不可用：$url"
+    if ([string]::IsNullOrWhiteSpace($HostExe)) {
+        throw "Manager transport requires -HostExe so the current dynamic READY identity can be fenced."
     }
-    return [pscustomobject]@{ Kind = "Manager"; Relay = $null; ManagerUrl = $url }
+    $identity = Resolve-RabiRouteHostManagerIdentity -HostExe $HostExe
+    return [pscustomobject]@{
+        Kind = "Manager"
+        Relay = $null
+        ManagerBaseUrl = $identity.ManagerBaseUrl
+        ApplicationGenerationId = $identity.ApplicationGenerationId
+        ManagerInstanceId = $identity.ManagerInstanceId
+        Headers = $identity.Headers
+    }
 }
 
 function ConvertTo-MiHealthIsoTime {
@@ -406,8 +410,9 @@ function Publish-WearableObservation {
     $encodedRoleId = [Uri]::EscapeDataString($RoleId.Trim())
     $deliver = if ($DeliverAlerts) { "true" } else { "false" }
     $receipt = Invoke-RestMethod `
-        -Uri "$($Target.ManagerUrl)/api/roles/$encodedRoleId/health/observations?deliverAlerts=$deliver" `
+        -Uri "$($Target.ManagerBaseUrl)/api/roles/$encodedRoleId/health/observations?deliverAlerts=$deliver" `
         -Method Post `
+        -Headers $Target.Headers `
         -ContentType "application/json; charset=utf-8" `
         -Body ($Observation.Body | ConvertTo-Json -Depth 10 -Compress)
     if ($receipt.code -ne 0) { throw "Manager 拒绝了健康观测。" }
@@ -432,7 +437,7 @@ if (-not $Execute) {
         WouldReadAdb = $true
         WouldPublishToRabiLink = $true
         Transport = $Transport
-        ManagerUrlConfigured = (-not [string]::IsNullOrWhiteSpace($ManagerUrl))
+        HostExeConfigured = (-not [string]::IsNullOrWhiteSpace($HostExe))
         RoleId = $RoleId
         DeliverAlerts = $DeliverAlerts
         UseMobileSettings = $UseMobileSettings

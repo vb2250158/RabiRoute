@@ -32,8 +32,6 @@ export type FenneNotePostResult = {
   response: unknown;
 };
 
-const DEFAULT_REPLY_URL = "http://127.0.0.1:8793/api/fennenote/reply";
-const DEFAULT_PLAYBACK_URL = "http://127.0.0.1:8793/api/fennenote/playback";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 type FenneNoteHttpResult = FenneNoteForwardResult & {
@@ -42,24 +40,42 @@ type FenneNoteHttpResult = FenneNoteForwardResult & {
   statusText: string;
 };
 
+function firstConfigured(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const configured = value?.trim();
+    if (configured) return configured;
+  }
+  return "";
+}
+
 function endpointFor(options: FenneNoteOutputOptions): { target: string; token: string } {
   if (options.mode === "playback") {
+    const target = firstConfigured(
+      options.url,
+      options.playbackUrl,
+      process.env.FENNOTE_PLAYBACK_URL
+    );
+    if (!target) {
+      throw new Error("FenneNote playback endpoint is not configured; set FENNOTE_PLAYBACK_URL or pass an explicit URL.");
+    }
     return {
-      target: options.url
-        ?? options.playbackUrl
-        ?? process.env.FENNOTE_PLAYBACK_URL
-        ?? DEFAULT_PLAYBACK_URL,
+      target,
       token: options.token
         ?? options.playbackToken
         ?? process.env.FENNOTE_PLAYBACK_TOKEN
         ?? ""
     };
   }
+  const target = firstConfigured(
+    options.url,
+    options.replyUrl,
+    process.env.FENNOTE_REPLY_URL
+  );
+  if (!target) {
+    throw new Error("FenneNote reply endpoint is not configured; set FENNOTE_REPLY_URL or pass an explicit URL.");
+  }
   return {
-    target: options.url
-      ?? options.replyUrl
-      ?? process.env.FENNOTE_REPLY_URL
-      ?? DEFAULT_REPLY_URL,
+    target,
     token: options.token
       ?? options.replyToken
       ?? process.env.FENNOTE_REPLY_TOKEN

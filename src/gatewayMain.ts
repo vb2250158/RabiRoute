@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { gatewayReadyLine, type GatewayEndpoint } from "./gatewayLifecycle.js";
 import type { GatewayMessageAdapterType } from "./adapters/messageAdapter.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
 import { mountGatewayPerformanceReporter } from "./runtime/gatewayPerformanceRuntime.js";
@@ -132,4 +133,36 @@ export function startGatewayMain(
 
 export async function runGatewayMain(): Promise<void> {
   await startGatewayMain();
+  const gatewayId = String(process.env.GATEWAY_ID || "").trim();
+  const gatewayGenerationId = String(process.env.RABIROUTE_GATEWAY_GENERATION_ID || "").trim();
+  if (!gatewayId || !gatewayGenerationId) {
+    throw new Error("Manager-owned Gateway identity is missing.");
+  }
+  const endpoints: GatewayEndpoint[] = [];
+  if (config.gatewayMessageAdapterTypes.includes("napcat")) {
+    for (const instance of config.napcatInstances.filter(item => item.enabled !== false)) {
+      endpoints.push({
+        id: `napcat:${instance.id}`,
+        transport: "websocket",
+        host: "127.0.0.1",
+        port: instance.gatewayPort
+      });
+    }
+  }
+  const addHttp = (id: string, enabled: boolean, host: string, port: number, path: string): void => {
+    if (enabled) endpoints.push({ id, transport: "http", host, port, path });
+  };
+  addHttp("webhook", config.gatewayMessageAdapterTypes.includes("webhook"), "127.0.0.1", config.webhookPort, config.webhookPath);
+  addHttp("fennenote", config.gatewayMessageAdapterTypes.includes("fennenote"), "127.0.0.1", config.fenneNoteWebhookPort, config.fenneNoteWebhookPath);
+  addHttp("xiaoai", config.gatewayMessageAdapterTypes.includes("xiaoai"), "127.0.0.1", config.xiaoaiWebhookPort, config.xiaoaiWebhookPath);
+  addHttp("rabilink", config.gatewayMessageAdapterTypes.includes("rabilink"), config.rabiLinkWebhookHost, config.rabiLinkWebhookPort, config.rabiLinkWebhookPath);
+  addHttp("feishu", config.gatewayMessageAdapterTypes.includes("feishu"), "127.0.0.1", config.feishuWebhookPort, config.feishuWebhookPath);
+  console.log(gatewayReadyLine({
+    protocolVersion: 1,
+    gatewayId,
+    gatewayGenerationId,
+    pid: process.pid,
+    readyAt: new Date().toISOString(),
+    endpoints
+  }));
 }

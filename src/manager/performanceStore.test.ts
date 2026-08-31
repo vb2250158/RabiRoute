@@ -66,8 +66,7 @@ test("performance store writes independent hourly JSONL and builds recent summar
   const store = new PerformanceStore(root, config);
   try {
     await store.start();
-    const now = new Date();
-    now.setMinutes(5, 0, 0);
+    const now = new Date(Date.now() - 5_000);
     assert.equal(store.append(sample(now.toISOString())), true);
     assert.equal(store.append(sample(now.toISOString())), false);
     await store.flush();

@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { runPersonaSyncAcceptance } from "./test-rabi-persona-sync.mjs";
 
+const TEST_MANAGER_URL = "http://127.0.0.1:8790";
+
 function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
@@ -78,7 +80,7 @@ test("persona sync acceptance writes sanitized passing evidence", async () => {
 
 test("a functional sync is not formal physical evidence without explicit host confirmation", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-persona-sync-functional-"));
-  const result = await runPersonaSyncAcceptance({ outputPath: path.join(root, "evidence.json") }, {
+  const result = await runPersonaSyncAcceptance({ managerUrl: TEST_MANAGER_URL, outputPath: path.join(root, "evidence.json") }, {
     fetchImpl: fakeManager(),
     now: () => new Date("2026-07-23T12:00:00.000Z")
   });
@@ -118,6 +120,7 @@ test("persona sync acceptance refuses non-loopback Manager URLs", async () => {
 test("persona sync acceptance explains a stale Manager serving WebGUI HTML", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-persona-sync-stale-manager-"));
   const result = await runPersonaSyncAcceptance({
+    managerUrl: TEST_MANAGER_URL,
     outputPath: path.join(root, "evidence.json")
   }, {
     fetchImpl: async () => new Response("<html>WebGUI</html>", {

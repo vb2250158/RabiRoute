@@ -1640,6 +1640,47 @@ button.channel-topology-node:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.napcat-login-control {
+  border: 1px solid rgba(108, 92, 231, .24);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(248, 247, 255, .84);
+}
+
+.napcat-login-control-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.napcat-login-window {
+  padding-top: 12px;
+}
+
+.napcat-login-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.napcat-login-qr-pane {
+  align-items: center;
+  text-align: center;
+}
+
+.napcat-login-qr {
+  display: block;
+  width: min(280px, 100%);
+  aspect-ratio: 1;
+  border: 8px solid #fff;
+  border-radius: 10px;
+  background: #fff;
+  object-fit: contain;
+}
+
 .napcat-detail-panel .v-expansion-panel-title {
   min-height: 38px !important;
   font-size: 12px;
@@ -1652,22 +1693,6 @@ button.channel-topology-node:focus-visible {
   color: var(--rr-muted);
   font-size: 0.86rem;
   line-height: 1.6;
-}
-
-.napcat-add-card {
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 6px;
-  min-height: 180px;
-  border-style: dashed;
-  color: #4c3b8f;
-  cursor: pointer;
-}
-
-.napcat-add-card span {
-  color: var(--rr-muted-soft);
-  font-size: 12px;
 }
 
 .config-toolbar {

@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MANAGER_ENTRY = path.join(REPO_ROOT, "dist", "manager.js");
 const MANAGER_CONTROL_PLANE = path.join(REPO_ROOT, "dist", "manager", "controlPlaneRoutes.js");
+const MANAGER_PLUGIN_PROFILE = path.join(REPO_ROOT, "dist", "plugins", "profiles", "desktop.json");
 const READ_ONLY_READY_LINE = "Manager read-only mode enabled: startup reconciliation and mutating HTTP methods are disabled.";
 
 function timestamp(value) {
@@ -37,12 +38,13 @@ function sha256(filePath) {
 }
 
 function builtArtifacts() {
-  for (const filePath of [MANAGER_ENTRY, MANAGER_CONTROL_PLANE]) {
-    if (!fs.existsSync(filePath)) throw new Error("Built Manager artifacts are missing. Run npm run build:backend first.");
+  for (const filePath of [MANAGER_ENTRY, MANAGER_CONTROL_PLANE, MANAGER_PLUGIN_PROFILE]) {
+    if (!fs.existsSync(filePath)) throw new Error("Built Manager artifacts are incomplete. Run npm run build (including build:plugins) first.");
   }
   return {
     managerEntrySha256: sha256(MANAGER_ENTRY),
-    controlPlaneSha256: sha256(MANAGER_CONTROL_PLANE)
+    controlPlaneSha256: sha256(MANAGER_CONTROL_PLANE),
+    pluginProfileSha256: sha256(MANAGER_PLUGIN_PROFILE)
   };
 }
 
@@ -66,24 +68,40 @@ function reserveLoopbackPort() {
 function waitForManagerReady(child, port, timeoutMs = 15_000) {
   return new Promise((resolve, reject) => {
     let output = "";
-    const timeout = setTimeout(() => finish(new Error("Built Manager did not become ready before the one-shot startup deadline.")), timeoutMs);
+    let errorOutput = "";
+    const diagnosticTail = () => {
+      const parts = [];
+      if (output.trim()) parts.push(`Manager stdout tail:\n${output.trim()}`);
+      if (errorOutput.trim()) parts.push(`Manager stderr tail:\n${errorOutput.trim()}`);
+      return parts.length ? `\n${parts.join("\n")}` : "";
+    };
+    const timeout = setTimeout(() => finish(new Error(
+      `Built Manager did not become ready before the one-shot startup deadline.${diagnosticTail()}`
+    )), timeoutMs);
     const onData = chunk => {
       output = `${output}${chunk.toString("utf8")}`.slice(-16_384);
       if (output.includes(READ_ONLY_READY_LINE) && output.includes(`gateway-manager listening on http://127.0.0.1:${port}`)) {
         finish(null);
       }
     };
-    const onExit = code => finish(new Error(`Built Manager exited before readiness (code ${String(code)}).`));
+    const onErrorData = chunk => {
+      errorOutput = `${errorOutput}${chunk.toString("utf8")}`.slice(-16_384);
+    };
+    const onExit = code => {
+      finish(new Error(`Built Manager exited before readiness (code ${String(code)}).${diagnosticTail()}`));
+    };
     const onError = () => finish(new Error("Built Manager process could not be started."));
     const finish = error => {
       clearTimeout(timeout);
       child.stdout?.off("data", onData);
+      child.stderr?.off("data", onErrorData);
       child.off("exit", onExit);
       child.off("error", onError);
       if (error) reject(error);
       else resolve();
     };
     child.stdout?.on("data", onData);
+    child.stderr?.on("data", onErrorData);
     child.once("exit", onExit);
     child.once("error", onError);
   });
@@ -111,13 +129,14 @@ async function launchBuiltManager() {
       GATEWAY_MANAGER_PORT: String(port),
       RABIROUTE_MANAGER_AUTOSTART: "0",
       RABIROUTE_MANAGER_READ_ONLY: "1",
+      RABIROUTE_MANAGER_ACCEPTANCE_MODE: "1",
       REMOTE_AGENT_DISCOVERABLE: "0",
-      RABIROUTE_MANAGER_INSTANCE_LOCK_DIR: instanceLockRoot
+      RABIROUTE_MANAGER_INSTANCE_LOCK_DIR: instanceLockRoot,
+      RABIROUTE_MANAGER_TEST_OWNERSHIP_NAMESPACE: `readonly-${process.pid}-${Date.now()}`
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
   });
-  child.stderr?.resume();
   try {
     await waitForManagerReady(child, port);
   } catch (error) {

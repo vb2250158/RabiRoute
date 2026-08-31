@@ -7,7 +7,8 @@ function argument(name, fallback) {
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
 }
 
-const baseUrl = String(argument("--base-url", "http://127.0.0.1:8790")).replace(/\/+$/, "");
+const baseUrl = String(argument("--base-url", process.env.GATEWAY_MANAGER_URL || "")).replace(/\/+$/, "");
+if (!baseUrl) throw new Error("Pass --base-url with the current Host-published Manager URL.");
 const samples = Math.max(1, Number(argument("--samples", "3")) || 3);
 const timeoutMs = Math.max(100, Number(argument("--timeout-ms", "20000")) || 20_000);
 

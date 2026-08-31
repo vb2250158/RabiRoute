@@ -14,8 +14,8 @@ English | <a href="./RUNBOOK_zh.md">简体中文</a>
 Speaker-side client or compatible server
   -> optional WebSocket or SSH tunnel
     -> PC-side Open-XiaoAI-compatible process
-      -> http://127.0.0.1:8798/v1/xiaoai/decision
-        -> http://127.0.0.1:8791/webhook
+      -> <bridgeBaseUrl>/v1/xiaoai/decision
+        -> <webhookUrl>
           -> RabiRoute XiaoAI Route
 ```
 
@@ -23,11 +23,23 @@ The repository does not vendor Open-XiaoAI. Obtain and review it separately from
 
 ## Start order
 
-1. Build and start the Manager from the repository root.
-2. Enable the disabled `xiaoai` Route after checking port `8791`.
-3. Start this bridge on `127.0.0.1:8798`.
-4. Start an external Open-XiaoAI-compatible server or client integration.
-5. Add an SSH reverse tunnel only if direct connectivity is unavailable.
+1. Start the installed application through `RabiRouteHost.exe`, or build and start the Manager from the repository root for source-only development.
+2. Obtain the current `managerBaseUrl` from Host `--command status --json`; in source mode, copy the URL printed by Manager to stdout. Do not assume a Manager port.
+3. Enable the disabled `xiaoai` Route after checking its explicitly configured Webhook URL.
+4. Start this bridge at its explicitly configured address. The commands below use `127.0.0.1:8798` only as a local example.
+5. Start an external Open-XiaoAI-compatible server or client integration.
+6. Add an SSH reverse tunnel only if direct connectivity is unavailable.
+
+Installed Windows application:
+
+```powershell
+$hostExe = "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"
+$hostStatus = & $hostExe --command status --json | ConvertFrom-Json
+$managerBaseUrl = $hostStatus.managerBaseUrl
+if (-not $managerBaseUrl) { throw "Host did not report the current Manager URL." }
+```
+
+Source-only development:
 
 ```powershell
 npm run build
@@ -54,11 +66,20 @@ The common tunnel layout makes a speaker client connect to `ws://127.0.0.1:4399`
 
 ## Checks
 
-Manager and bridge ports:
+Manager discovery and configured adapter ports:
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8790,8791,8798,4399 -ErrorAction SilentlyContinue
+# Installed application: refresh this value from Host status before every check.
+$hostStatus = & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json | ConvertFrom-Json
+$managerBaseUrl = $hostStatus.managerBaseUrl
+$managerPort = ([uri]$managerBaseUrl).Port
+Invoke-RestMethod "$managerBaseUrl/meta"
+
+# 8791, 8798, and 4399 are this runbook's explicit local adapter examples.
+Get-NetTCPConnection -LocalPort $managerPort,8791,8798,4399 -ErrorAction SilentlyContinue
 ```
+
+For source mode, set `$managerBaseUrl` to the exact URL printed by Manager instead of querying Host.
 
 Bridge health:
 

@@ -12,7 +12,7 @@
 
 默认 Profile 位于 `dist/plugins/profiles/desktop.json`，默认包根目录是 `dist/plugins/packages/`。源码构建通过 `plugins/profiles/desktop.json` 和 `plugins/builtin/` 生成这两个目录。
 
-树外插件通过 `RABIROUTE_PLUGIN_PROFILE` 指定唯一 Profile，通过 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 增加包根目录。Profile 使用 `instances` 数组，条目包含稳定 `id`、包名、版本、启用状态、JSON 配置和权限 `grants`；不支持 Patch。
+树外插件通过 `RABIROUTE_PLUGIN_PROFILE` 指定唯一 Profile，通过 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 增加包根目录。Manifest 与 Profile 都必须是 schema v2；Profile 使用 `readyRequires` 和 `instances`，实例包含稳定 `id`、包名、版本、启用状态、JSON 配置、权限 `grants` 及有界的 restart/resource `policy`。任何非 v2 Schema 与 Patch 都不进入运行链。
 
 Manager 监听当前 Profile 和全部包根目录。revision、配置、权限和依赖 revision 不变时不重新激活；变化只重载对应依赖组件。候选失败保留上一可用 generation，缺少依赖进入 `waiting_dependency`，权限不足失败关闭。
 
@@ -20,19 +20,13 @@ Manager 监听当前 Profile 和全部包根目录。revision、配置、权限�
 
 ### 插件入口与资源所有权
 
-当前内置目录注册 28 个 Manager 插件。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
+当前内置目录注册 29 个 Manager 插件。入口按 `in_process`、`isolated` 或 `declarative` 执行；`isolated` 入口不会由 Manager loader 导入顶层代码，长期子进程必须持有 process lease。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、Host 专用关闭路径、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
 
-表现 Contribution Catalog 发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command 注册表处理快速配置、新增 Route、打开 Manager 配置和保存页面；可信 renderer 注册表处理设置区与状态卡。Desktop 的冻结 Registry 同时处理内置合同和显式允许的可信扩展。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和登录启动设置；活动 lifecycle/command 贡献控制系统监听、目录操作和手动触发。目录不可用或刷新失败时撤销旧贡献，只保留固定 WebGUI 恢复入口。
+表现 Contribution Catalog 发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command/renderer 注册表处理随构建发布的表现合同；Desktop 的冻结 Registry 只包含本机构建内置合同，并消费 Manager 校验过的声明式贡献。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和指向 Host 的登录启动设置；活动 command 贡献控制系统监听、目录操作和手动触发，不能贡献应用 lifecycle。目录不可用或刷新失败时撤销旧贡献，只保留 Host 绑定的 WebGUI 入口。
 
 WebGUI 的可信页面扩展在前端构建时调用 `registerTrustedWebPage()`，注册 `routeId`、`rendererId`、异步组件 loader、页面路径和允许的导航位置/图标。插件目录只能引用已经注册的合同，不能提供远程模块 URL 或任意脚本。
 
-Desktop 的可信 Python 扩展通过 `rabiroute.desktop_extensions` entry point group 安装，并由启动参数逐个允许：
-
-```powershell
-RabiRoute-Desktop.exe --trusted-desktop-extension my_extension
-```
-
-参数可以重复。默认列表为空，因此不会自动导入任何第三方包。扩展注册完成后，Desktop 冻结注册表。该入口中的代码与 Desktop 在同一进程运行，只适用于明确安装并信任的扩展。目录贡献必须用相同 `pluginId + instanceId` 命中合同，跨插件借用失败关闭；面向第三方 Desktop 自定义代码的 owner-scoped registrar、权限模型和更强隔离属于后续 Extension Host。
+Desktop 不加载第三方 Python entry point。第三方可执行逻辑使用 Manager 插件的 `isolated` 模式；Desktop/Web 扩展只使用 `declarative` 资源和宿主已经发布的 renderer/command 合同，不能把代码注入 Qt 进程。
 Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessageProcessingBoardPersistence`。停止时持久化服务拒绝新写入、清理 timer、flush 并等待活动 Worker；读取池取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。任一停止失败时仍继续清理其余资源，最后返回第一个错误。停止完成后可以重新启动。
 
 所有使用 `ManagerPluginRequestTracker` 的路由都执行同一停用顺序：先撤销路由，再拒绝新请求，然后等待已接收响应触发 `finish` 或 `close`。同步和异步 handler 都纳入统计。默认 drain 截止时间为 30 秒；超时后销毁仍未结束的响应，再继续释放插件资源。
@@ -40,7 +34,7 @@ Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessagePro
 | 实例 | 拥有的入口或资源 | 停用行为 |
 | --- | --- | --- |
 | `manager:diagnostics` | `GET /meta`、`GET /api/gateways`，以及 WebGUI“日志诊断”页面和导航 | 撤销诊断入口并 drain 已接收请求；只读取其他插件状态，不启动或恢复已停用插件 |
-| `manager:desktop` | `/api/desktop/settings`、`/open-config-file`、`/manager/start`、`/manager/desktop-lifecycle/start`、`/manager/shutdown`，以及 Desktop/WebGUI 的桌面设置、命令、托盘和快捷键贡献 | 撤销入口并 drain 请求，然后清除本实例尚未执行的延迟关闭计时器 |
+| `manager:desktop` | `/api/desktop/settings`、`/open-config-file`，以及 Desktop/WebGUI 的桌面设置、命令、托盘和快捷键声明贡献 | 撤销入口并 drain 请求；不启动、关闭或监督 Manager/托盘 |
 | `manager:desktop-pet` | `/api/desktop-pet/` 下的桌宠资源包、绑定、设置和素材读取入口 | 撤销桌宠入口并 drain 已接收请求；桌面端空闲调度由本机控制器停止 |
 | `manager:yeyu-gamer` | 固定 loopback 的 YeYu Gamer health/meta/snapshot/capabilities 读取，以及 plan-only work item 创建 | 撤销入口并 drain 请求；不 claim 工作项、不申请能力，也不启动游戏 |
 | `manager:gateway-runtime` | Gateway 配置、启停、重启、删除、手动触发、Agent 投递测试、回放、网络选项和重载入口；Gateway、投递测试与手动触发子进程 | 撤销入口并 drain 请求，停止本实例的手动触发进程，再停止并等待 Gateway 进程树退出 |
@@ -48,7 +42,7 @@ Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessagePro
 | `manager:agent-thread-control` | Agent 任务创建、查询和绑定入口 | 撤销入口并 drain 请求；任务和业务记录继续由稳定业务模块拥有 |
 | `manager:agent-communication` | Agent 请求、发送、回执和追踪入口 | 撤销入口并 drain 请求；继续复用 Outbox、审批、回执和消息处理业务模块 |
 | `manager:remote-agent` | Remote Agent 扫描、连接、任务和事件入口；活动 WebSocket 与 Hub 回调 | 撤销入口并 drain 请求；未完成任务改为 `interrupted`，关闭 WebSocket 并等待已开始的回调结束 |
-| `manager:napcat-control` | NapCat 修复、健康检查、OneBot 配置、添加、启动、重启和删除入口 | 停止接收并 drain 请求，停止 supervisor，然后只停止本插件明确启动且仍归它所有的实例；端口扫描发现或由外部程序启动的实例不归本插件所有 |
+| `manager:napcat-control` | NapCat 修复、健康检查、三种登录方式、OneBot 配置、绑定、启动、重启和删除入口 | 停止接收并 drain 请求，停止 supervisor，然后只停止本插件明确启动且仍归它所有的实例；端口扫描发现或由外部程序启动的实例不归本插件所有 |
 | `manager:napcat-supervisor` | Manager 自动启动后的 NapCat 登录检查队列 | 取消剩余账号队列，等待当前检查结束，并忽略停用后的旧完成回调 |
 | `manager:rabilink-relay` | RabiLink Relay Runtime 和人格同步局域网服务 | 停止 Relay、同步 listener 和活动回调 |
 | `manager:memory-consolidation` | 记忆整理调度器和本实例启动的一次性进程 | 停止调度器、终止进程并等待当前整理结束 |
@@ -149,13 +143,13 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
 - `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
 - `gatewayPort`：NapCat WebSocket Client 连接的端口。
-- `napcatHttpUrl`：RabiRoute 调用的 OneBot HTTP 服务地址。多个 Route 可以明确共用同一个 NapCat 实例和同一个 HTTP 地址；自动端口分配只处理 RabiRoute 自己监听的端口，不会把已经配置的 NapCat 地址改到一个未启动的端口。
+- `napcatHttpUrl`：RabiRoute 调用的 OneBot HTTP 服务地址。一个 Route 只绑定一个 NapCat；多个 QQ 应分别建立 Route。多个 Route 仍可明确共用同一个 NapCat 和 HTTP 地址；自动端口分配只处理 RabiRoute 自己监听的端口，不会把已经配置的 NapCat 地址改到一个未启动的端口。
 - `webhookPort`：Webhook 监听端口。未配置时回退到 `gatewayPort`。
 - `webhookPath`：Webhook 入口路径，默认 `/webhook`。
 - `rabiLinkWebhookPort` / `rabiLinkWebhookPath`：RabiLink 本地兼容入口端口和路径，默认路径 `/rabilink`。局域网脚本或手工调试可直接 POST 到这里；正式 AIUI 链路由电脑端 RabiLink worker 直连公网 Relay，接收 observation 输入并消费独立的主动下行队列。
 - `data/Config.json` 里的 `rabiGuid`：这台 Rabi PC 的稳定身份。服务器远程 WebGUI 使用 `/manage/<账号>/<RabiGUID>/` 定位 PC；旧 `/webgui` 子路径只作兼容。显示名和 `deviceId` 只用于展示、兼容和任务领取。
 - `data/Config.json` 里的 `rabiLinkRelay`：这台 Rabi PC 的全局 Relay 连接配置，包含全局开关 `enabled`，以及 `url`、`token`、`deviceId`、`replyIdleTimeoutMs`。应用 token 在服务器 Relay WebGUI `/manage` 里创建；开启全局开关后，Manager 会常驻订阅 `/api/rabilink/events`，收到事件后即时领取远程 WebGUI、语音或任务，不依赖任何单条路由启动；同时订阅本机 Manager `/api/events`，把非 `ready` 事件转发到 Relay 的远程 WebGUI SSE。远程附件、下载和媒体 Range 仍走同一个受限 WebGUI 请求通道。旧配置中的 `claimWaitMs` 只为 Schema 兼容保留，不再控制轮询。服务器应用自身仍可禁用，PC 开关与服务器应用必须同时启用才会接收输入和发布下行消息。
-- `data/Config.json` 里的 `webguiLan`：本机 Manager 的局域网 WebGUI 开关与访问密钥。默认 `enabled=false`，Manager 只监听 `127.0.0.1`；在本机控制台启用后会自动生成 32 字节随机访问密钥，重启 Manager 后监听 `0.0.0.0`。局域网 URL 使用 `http://<本机局域网IP>:8790/#/overview?webgui_token=<密钥>`；浏览器读取后只在当前会话保存密钥并从地址栏移除。开关、生成和轮换密钥只允许来自运行 Manager 的本机请求，包括回环地址和本机自己的局域网地址；其他设备仍被拒绝，轮换后旧链接立即失效。
+- `data/Config.json` 里的 `webguiLan`：本机 Manager 的局域网 WebGUI 开关与访问密钥。默认 `enabled=false`，Manager 只监听 `127.0.0.1`；在本机控制台启用后会自动生成 32 字节随机访问密钥，重启 Manager 后监听 `0.0.0.0`，端口仍由操作系统分配。局域网 URL 使用 `http://<本机局域网IP>:<当前-manager-port>/#/overview?webgui_token=<密钥>`；浏览器读取后只在当前会话保存密钥并从地址栏移除。开关、生成和轮换密钥只允许来自运行 Manager 的本机请求，包括回环地址和本机自己的局域网地址；其他设备仍被拒绝，轮换后旧链接立即失效。
 - 旧版 `adapterConfig.json` 里的 `rabiLinkRelayEnabled` / `rabiLinkRelayUrl` / `rabiLinkRelayToken` / `rabiLinkRelayDeviceId` 仍兼容读取；新配置应放在全局 `data/Config.json`，路由消息端只保存监听端口、路径和是否启用。
 - `routeVariables.rabilinkAutoReview` / `rabilinkContinuousReflection`：分别控制新 observation 的空闲审阅和无新输入时的周期反思。配套的 `rabilinkReviewIntervalMs`、`rabilinkReviewSettleMs`、`rabilinkReflectionIntervalMinutes`、`rabilinkConversationSplitAfterHours` 控制检查频率、输入稳定窗口、反思间隔和会话切分。`rabilinkRecordFirstSources` 是可选的逗号分隔消息源白名单，例如 `fennenote`；把对应消息端放在承载 `RabiActive` 的同一条 Route 后，命中的 FenneNote/Webhook 转写只进入同一 RabiLink 账本和审阅器，不逐句直接投递 Agent。该列表默认留空，持续录音源必须显式启用；不要让另一条直投 Route 同时消费同一个 webhook。可直接参考 `examples/data/route/RabiLink/` 与 `examples/data/roles/RabiActive/`；示例不包含 Relay 地址或 token。
 - `wecomBotId` / `wecomBotSecret` / `wecomWsUrl`：企业微信智能机器人 WebSocket 长连接配置。`wecomWsUrl` 可选；公开示例只能使用占位值，真实 secret 建议走 `WECOM_BOT_ID` / `WECOM_BOT_SECRET` / `WECOM_WS_URL` 环境变量。
@@ -240,13 +234,13 @@ Windows 路径在 WebUI 里写 `C:\Path\To\Project` 或 `C:/Path/To/Project`；�
 - `feishu`：飞书独立消息端。签名/加密事件回调写入 `feishu-messages.jsonl`，按 v2 `event_id` 持久去重，并按来源 `chat_id` 隔离会话和回发文本。缺少应用凭据、Verification Token、Encrypt Key 或事件订阅确认时，监听和出站都保持关闭。
 旧配置仍然兼容：`messageInputsDisabled=true` 或 `messageAdapters=["disabled"]` 会临时关闭整个路由的消息进入；`messageAdaptersDisabled` 会被视为对应 adapter 的 `inputEnabled=false`。新配置建议优先使用 `messageAdapterPolicies` 表达“接收”和“发送”两个管道级开关。
 
-NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。每个 QQ 实例的“启动 Rabi 时自动登录”默认开启；Manager 监听成功后异步启动绑定实例、使用已有 quick login 并修复 OneBot 连接，不等待该流程完成。路由页“打开 NapCat”可随时手动执行同一流程。详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
+NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。每个 Route 所绑定 NapCat 的“启动 Rabi 时自动登录”默认开启；Manager 监听成功后异步启动绑定实例、使用已有 quick login 并修复 OneBot 连接，不等待该流程完成。路由页“启动并管理登录”可随时手动执行同一流程，并在卡片内提供快速登录、密码登录和扫码登录；密码只用于一次请求，Manager 计算 MD5 后即丢弃。详见 [NapCat 无值守与登录稳定性](napcat-unattended.md)。
 
 - `rabilink`：旧配置中的内部兼容键，界面名称为“眼镜端（经 RabiLink）”。眼镜才是消息端；RabiLink Relay 是 Manager 持有的系统内置转接服务。当前 AIUI 把最终 ASR 文本作为 `rabilink.observation` 上送；电脑端 worker 先写入角色目录下的 `rabilink-conversation.jsonl` 统一会话账本并完成上行，不逐句同步等待 Codex。审阅器在线程空闲、触摸板引导或周期反思时读取账本并唤醒或 steer 固定 Codex 线程；Agent、定时器和规划器的文本再通过 Outbox 与 Relay 独立下行。旧插件消息和本地 `/rabilink` POST 仍走兼容转发路径，并保留 `rabilink-voice-transcripts.jsonl` 调试记录。
 - `wearable`：智能手表 / 手环健康消息端。它复用全局 RabiLink Relay worker 接收结构化 `wearable.health` observation，按角色写入 `wearable-health/` 时间线；普通样本不进入聊天账本，只有命中心率/睡眠规则时才以 `wearable_health_alert` 投递 Agent。手机配置、Agent 查询 API 和实验数据源见 `docs/rabilink-wearable-health.md`。
 - `webhook`：接收暂时没有专用消息端的外部系统 POST 事件。FenneNote、小爱、企业微信、飞书、眼镜端这类已命名来源应使用各自专用消息端，避免日志、模板变量和回传语义混在通用 webhook 里。
 
-如果要让 Rokid/灵珠在公网访问 RabiRoute，不应暴露本机 manager，而是部署公网 Relay，在服务器 `/manage` 创建 RabiLink 应用，并在控制台“Rabi 实例”中填写全局 Relay 地址、应用 token 和本机 PC 标识，再打开“连接服务器”开关。Manager 会立即让这台 PC 在服务器上线；需要处理眼镜消息时，再给目标路由添加“眼镜端（经 RabiLink）”（内部键 `rabilink`）。当前主链路不经过手机桥：Relay 的输入队列由电脑端 worker 领取，AIUI observation 采用 record-first；主动回复走独立的全局下行队列，不与某个输入任务的生命周期绑定。需要在服务器上配置这台 PC 时，登录后访问 `/manage/<账号>/<RabiGUID>/#/routes`，它会经 Relay 转到 PC 本机 `http://127.0.0.1:8790/#/routes`。
+如果要让 Rokid/灵珠在公网访问 RabiRoute，不应暴露本机 Manager，而是部署公网 Relay，在服务器 `/manage` 创建 RabiLink 应用，并在控制台“Rabi 实例”中填写全局 Relay 地址、应用 token 和本机 PC 标识，再打开“连接服务器”开关。Manager 会立即让这台 PC 在服务器上线；需要处理眼镜消息时，再给目标路由添加“眼镜端（经 RabiLink）”（内部键 `rabilink`）。当前主链路不经过手机桥：Relay 的输入队列由电脑端 worker 领取，AIUI observation 采用 record-first；主动回复走独立的全局下行队列，不与某个输入任务的生命周期绑定。需要在服务器上配置这台 PC 时，登录后访问 `/manage/<账号>/<RabiGUID>/#/routes`，PC worker 会从 Host 状态取得当前 `managerBaseUrl` 后转发，不依赖固定本机端口。
 
 新增平台时，优先在 `src/adapters/` 新增 adapter，并输出统一消息记录和路由事件，不要把新平台逻辑塞进 NapCat adapter。
 
@@ -394,10 +388,10 @@ MARVIS_COPY_TO_CLIPBOARD=1
 
 ## RibiWebGUI 与 NapCat 插件
 
-RibiWebGUI 是独立控制台，由 manager 在本机提供：
+RibiWebGUI 是独立控制台，由 Manager 在本代动态地址提供。安装版从托盘打开，或查询 Host `status --json` 的 `managerBaseUrl`：
 
 ```text
-http://127.0.0.1:8790/
+<managerBaseUrl>
 ```
 
 仓库也包含一个可选 NapCat 插件入口，位于插件侧适配目录：
@@ -406,7 +400,7 @@ http://127.0.0.1:8790/
 plugin-adapters/napcat-rabiroute/
 ```
 
-这个插件不是主 WebGUI，也不是 Codex 网关。它只让 NapCat 插件页能打开 RibiWebGUI，并可请求启动本地 manager。NapCat 本身只是 `messageAdapters` 里的一个消息端适配器。
+这个插件不是主 WebGUI，也不是 Codex 网关。它只让 NapCat 插件页打开已显式配置或发现的当前 RibiWebGUI；它不能启动、修复或关闭本地 Manager。NapCat 本身只是 `messageAdapters` 里的一个消息端适配器。
 
 如需从 NapCat 内打开入口，把该目录复制到 NapCat 插件目录后启用。示例路径：
 
@@ -423,7 +417,7 @@ NapCat.*/resources/app/napcat/plugins/napcat-plugin-rabiroute
 插件页会提供入口跳转到 RibiWebGUI：
 
 ```text
-http://127.0.0.1:8790/
+<managerBaseUrl>
 ```
 
 本地调试 NapCat 插件时，把 `plugin-adapters/napcat-rabiroute/` 复制到 NapCat 插件目录并命名为 `napcat-plugin-rabiroute`，然后重新加载插件。直接使用 RibiWebGUI 时不需要安装 NapCat 插件。

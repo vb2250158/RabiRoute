@@ -55,6 +55,7 @@ data/roles/<RoleId>/memory/consolidated/*.md
 
 ## 运行边界
 
+- Windows 安装版由 Host 在 Manager 同代 READY 后传入动态 URL、应用代和 Manager 实例身份，再启动托盘。托盘不能独立运行、拉起或修复 Manager；“退出 RabiRoute”只向 Host 提交带 generation fencing 的命令，不调用 Manager 关闭 API。
 - Qt 代码里的 manager HTTP client、路径解析、计划仓储和记忆仓储应保持跨平台。
 - Windows-only 行为只允许出现在启动器、托盘可用性判断、打包脚本等平台层。
 - 打开目录时优先使用 Qt desktop services，而不是把 `explorer` 或 `os.startfile` 写进仓储层。

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import ipaddress
 import logging
 import mimetypes
@@ -120,6 +121,22 @@ class RabiLinkAudioStreamBody(BaseModel):
     source_device_id: str | None = None
     route_profile_id: str | None = None
     session_id: str | None = None
+
+
+class RabiLinkAmbiguousResolutionBody(BaseModel):
+    source_device_id: str
+    chunk_id: str
+    accepted_bytes: int = Field(gt=0)
+    sha256: str
+    decision: str
+    operator: str = "loopback_operator"
+
+
+class RabiLinkSourceRetirementBody(BaseModel):
+    source_device_id: str
+    phone_spool_empty: bool
+    maximum_phone_retention_elapsed: bool
+    operator_confirmation: str
 
 
 def default_registry(settings: Settings, roles_root: Path | None = None) -> ProviderRegistry:
@@ -649,7 +666,58 @@ def create_app(
         if not accepted:
             raise HTTPException(status_code=409, detail="RabiLink audio stream is not active or capture is not ready.")
         arm_virtual_audio_expiry(stream_id)
-        return {"ok": True, "accepted_bytes": len(payload), "sequence": sequence}
+        return {
+            "ok": True,
+            "accepted_bytes": len(payload),
+            "sequence": sequence,
+            "chunk_id": chunk_id,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    @api.post("/v1/audio-streams/rabilink/ambiguous/resolve")
+    async def resolve_rabilink_ambiguous_chunk(request: Request, body: RabiLinkAmbiguousResolutionBody) -> dict[str, object]:
+        _require_loopback(request)
+        async with virtual_audio_lock:
+            try:
+                return remote_audio.resolve_ambiguous_chunk(
+                    body.source_device_id,
+                    body.chunk_id,
+                    body.accepted_bytes,
+                    body.sha256.strip().lower(),
+                    body.decision,
+                    body.operator,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @api.get("/v1/audio-streams/rabilink/ledger/tuples")
+    async def rabilink_durable_tuple_page(request: Request) -> dict[str, object]:
+        _require_loopback(request)
+        source_device_id = str(request.query_params.get("sourceDeviceId") or "").strip()
+        try:
+            after_source_sequence = int(str(request.query_params.get("afterSourceSequence") or "0"))
+            limit = int(str(request.query_params.get("limit") or "500"))
+            return remote_audio.durable_tuple_page(
+                source_device_id,
+                after_source_sequence=after_source_sequence,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.post("/v1/audio-streams/rabilink/sources/retire")
+    async def retire_rabilink_source(request: Request, body: RabiLinkSourceRetirementBody) -> dict[str, object]:
+        _require_loopback(request)
+        async with virtual_audio_lock:
+            try:
+                return remote_audio.retire_durable_source(
+                    body.source_device_id,
+                    phone_spool_empty=body.phone_spool_empty,
+                    maximum_phone_retention_elapsed=body.maximum_phone_retention_elapsed,
+                    operator_confirmation=body.operator_confirmation,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @api.post("/v1/audio-streams/rabilink/keepalive")
     async def rabilink_audio_stream_keepalive(request: Request) -> dict[str, object]:
@@ -1318,7 +1386,12 @@ def _transcription_response(result: TranscriptionResult, response_format: str) -
 
 
 def _manager_loopback_url() -> str:
-    raw = os.environ.get("RABIROUTE_MANAGER_URL", "http://127.0.0.1:8790").strip().rstrip("/")
+    raw = (
+        os.environ.get("RABIROUTE_MANAGER_URL", "").strip()
+        or os.environ.get("GATEWAY_MANAGER_URL", "").strip()
+    ).rstrip("/")
+    if not raw:
+        raise RuntimeError("RABIROUTE_MANAGER_URL or GATEWAY_MANAGER_URL is required.")
     parsed = urlparse(raw)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise RuntimeError("RABIROUTE_MANAGER_URL must be an HTTP loopback URL.")

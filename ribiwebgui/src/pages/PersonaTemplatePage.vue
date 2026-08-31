@@ -66,6 +66,8 @@ const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
 const automationWorkspaceTab = ref<"messages" | "schedule">("messages");
+type PersonaPageTab = "profile" | "expression" | "identity" | "context" | "automation";
+const activePersonaPageTab = ref<PersonaPageTab>("profile");
 const activeAutomationId = ref("");
 const activeRuleIndex = ref(0);
 const ruleMatchParamsOpen = ref(true);
@@ -875,6 +877,12 @@ watch(() => gateway.value?.agentRoleId, (roleId) => {
   }
 }, { immediate: true });
 
+watch(hasPersona, (enabled) => {
+  if (!enabled && (activePersonaPageTab.value === "expression" || activePersonaPageTab.value === "identity")) {
+    activePersonaPageTab.value = "profile";
+  }
+});
+
 watch(() => speech.recordsVersion, () => {
   if (hasPersona.value && voiceIdentityLoaded.value) void refreshVoiceIdentityReview(true);
 });
@@ -952,6 +960,26 @@ watch(() => store.selectedGatewayId, (id) => {
           <b :data-no-i18n="hasPersona ? '' : undefined">{{ hasPersona ? roleDirLabel : "无人格直通" }}</b>
         </div>
       </div>
+
+      <v-card class="app-card glass-card overflow-hidden">
+        <v-tabs
+          v-model="activePersonaPageTab"
+          class="persona-page-tabs"
+          color="secondary"
+          show-arrows
+          :aria-label="t('人格配置分区')"
+        >
+          <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
+          <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
+          <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
+          <v-tab value="context" prepend-icon="mdi-message-text-clock-outline">消息上下文</v-tab>
+          <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
+        </v-tabs>
+      </v-card>
+
+      <v-window v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
+        <v-window-item value="profile">
+          <div class="persona-tab-panel">
 
       <div class="two-column">
         <v-card class="app-card glass-card section-card">
@@ -1048,6 +1076,12 @@ watch(() => store.selectedGatewayId, (id) => {
           </div>
         </v-card>
       </div>
+
+          </div>
+        </v-window-item>
+
+        <v-window-item value="expression">
+          <div class="persona-tab-panel">
 
       <div v-if="hasPersona" class="two-column">
         <v-card class="app-card glass-card section-card">
@@ -1196,6 +1230,12 @@ watch(() => store.selectedGatewayId, (id) => {
         </v-card>
       </div>
 
+          </div>
+        </v-window-item>
+
+        <v-window-item value="identity">
+          <div class="persona-tab-panel">
+
       <PersonaIdentityRelationsCard
         v-if="hasPersona"
         :role-id="gateway.agentRoleId || ''"
@@ -1300,6 +1340,12 @@ watch(() => store.selectedGatewayId, (id) => {
         </v-card>
       </v-dialog>
 
+          </div>
+        </v-window-item>
+
+        <v-window-item value="context">
+          <div class="persona-tab-panel">
+
       <v-card v-if="hasPersona" class="app-card glass-card section-card">
         <div class="section-title-row">
           <div>
@@ -1353,6 +1399,12 @@ watch(() => store.selectedGatewayId, (id) => {
           </template>
         </div>
       </v-card>
+
+          </div>
+        </v-window-item>
+
+        <v-window-item value="automation">
+          <div class="persona-tab-panel">
 
       <v-card v-if="!hasPersona" class="app-card glass-card section-card">
         <div class="section-title-row">
@@ -1526,6 +1578,10 @@ watch(() => store.selectedGatewayId, (id) => {
           </div>
         </div>
       </v-card>
+
+          </div>
+        </v-window-item>
+      </v-window>
     </template>
 
     <v-dialog v-model="automationDialog" max-width="1040" class="editor-dialog">
@@ -1817,3 +1873,41 @@ watch(() => store.selectedGatewayId, (id) => {
     </v-dialog>
   </div>
 </template>
+
+<style scoped>
+.persona-page-tabs {
+  min-height: 56px;
+  background: rgba(239, 244, 249, .72);
+}
+
+.persona-page-tabs :deep(.v-tab) {
+  min-width: 168px;
+  min-height: 56px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.persona-page-window,
+.persona-page-window :deep(.v-window__container) {
+  overflow: visible;
+}
+
+.persona-tab-panel {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+@media (max-width: 600px) {
+  .persona-page-tabs :deep(.v-tab) {
+    min-width: 144px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .persona-page-window :deep(.v-window-item) {
+    transition: none !important;
+  }
+}
+</style>

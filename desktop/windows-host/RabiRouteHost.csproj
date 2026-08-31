@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>RabiRouteHost.Core</AssemblyName>
+    <RootNamespace>RabiRoute.WindowsHost</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <DebugType>embedded</DebugType>
+    <PathMap>$(MSBuildProjectDirectory)=/_/desktop/windows-host</PathMap>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="RabiRouteHost.Tests\**\*.cs" />
+  </ItemGroup>
+</Project>

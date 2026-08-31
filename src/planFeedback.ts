@@ -341,6 +341,41 @@ export function appendPlanFeedback(roleDir: string, record: PlanFeedbackRecord):
   return record;
 }
 
+const asyncFeedbackWrites = new Map<string, Promise<void>>();
+
+function awaitAbortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+export async function appendPlanFeedbackAsync(
+  roleDir: string,
+  record: PlanFeedbackRecord,
+  signal?: AbortSignal
+): Promise<PlanFeedbackRecord> {
+  signal?.throwIfAborted();
+  const filePath = feedbackFile(roleDir, record.planId);
+  const previous = asyncFeedbackWrites.get(filePath) ?? Promise.resolve();
+  const write = previous.then(async () => {
+    signal?.throwIfAborted();
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    signal?.throwIfAborted();
+    await fs.promises.appendFile(filePath, `${JSON.stringify(record)}\n`, "utf8");
+  });
+  const tail = write.catch(() => {});
+  asyncFeedbackWrites.set(filePath, tail);
+  void tail.then(() => {
+    if (asyncFeedbackWrites.get(filePath) === tail) asyncFeedbackWrites.delete(filePath);
+  });
+  await awaitAbortable(write, signal);
+  return record;
+}
+
 export function updatePlanFeedbackDelivery(
   roleDir: string,
   record: PlanFeedbackRecord,
@@ -373,14 +408,27 @@ export function updatePlanFeedbackQaHandling(
 }
 
 export function listPlanFeedback(roleDir: string, planId: string): PlanFeedbackRecord[] {
+  return parsePlanFeedbackFiles(
+    feedbackFiles(roleDir, planId).flatMap((filePath) => {
+      if (!fs.existsSync(filePath)) return [];
+      return [fs.readFileSync(filePath, "utf8")];
+    }),
+    planId
+  );
+}
+
+function parsePlanFeedbackFiles(
+  contents: readonly string[],
+  expectedPlanId?: string
+): PlanFeedbackRecord[] {
   const latestById = new Map<string, PlanFeedbackRecord>();
-  for (const filePath of feedbackFiles(roleDir, planId)) {
-    if (!fs.existsSync(filePath)) continue;
-    for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
+  for (const content of contents) {
+    for (const line of content.split(/\r?\n/).filter(Boolean)) {
     try {
       const value = JSON.parse(line) as Partial<PlanFeedbackRecord>;
-      if (!value.id || value.planId !== planId || !value.text || !value.createdAt) continue;
-      latestById.set(value.id, {
+      if (!value.id || !value.planId || !value.text || !value.createdAt) continue;
+      if (expectedPlanId !== undefined && value.planId !== expectedPlanId) continue;
+      latestById.set(`${value.planId}\u0000${value.id}`, {
         ...value,
         attachments: normalizeStoredAttachments(value.attachments),
         planAttachments: normalizeStoredPlanAttachments(value.planAttachments)
@@ -394,6 +442,64 @@ export function listPlanFeedback(roleDir: string, planId: string): PlanFeedbackR
     const dateDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
     return dateDelta || left.id.localeCompare(right.id);
   });
+}
+
+export function updatePlanFeedbackDeliveryAsync(
+  roleDir: string,
+  record: PlanFeedbackRecord,
+  deliveryStatus: "pending" | "delivered" | "failed",
+  deliveryMessage?: string,
+  signal?: AbortSignal
+): Promise<PlanFeedbackRecord> {
+  return appendPlanFeedbackAsync(roleDir, {
+    ...record,
+    updatedAt: new Date().toISOString(),
+    deliveryStatus,
+    deliveryMessage: optionalText(deliveryMessage)
+  }, signal);
+}
+
+/**
+ * Reads a pre-discovered set of feedback ledgers without probing every plan in a role.
+ * The caller owns discovery and may therefore use bounded, asynchronous UNC I/O.
+ */
+export async function listPlanFeedbackFiles(
+  filePaths: readonly string[],
+  signal?: AbortSignal,
+  concurrency = 8
+): Promise<PlanFeedbackRecord[]> {
+  signal?.throwIfAborted();
+  const contents = new Array<string>(filePaths.length);
+  let cursor = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(Math.max(1, Math.floor(concurrency)), Math.max(1, filePaths.length)) },
+    async () => {
+      while (true) {
+        signal?.throwIfAborted();
+        const index = cursor++;
+        if (index >= filePaths.length) return;
+        try {
+          contents[index] = await fs.promises.readFile(filePaths[index]!, { encoding: "utf8", signal });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            contents[index] = "";
+            continue;
+          }
+          throw error;
+        }
+      }
+    }
+  ));
+  signal?.throwIfAborted();
+  return parsePlanFeedbackFiles(contents);
+}
+
+export function listPlanFeedbackAsync(
+  roleDir: string,
+  planId: string,
+  signal?: AbortSignal
+): Promise<PlanFeedbackRecord[]> {
+  return listPlanFeedbackFiles(feedbackFiles(roleDir, planId), signal);
 }
 
 export function planFeedbackSummary(roleDir: string, planId: string): { count: number; latest?: PlanFeedbackRecord } {

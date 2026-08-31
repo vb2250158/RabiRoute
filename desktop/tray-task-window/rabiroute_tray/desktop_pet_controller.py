@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QPoint, QTimer, Signal
@@ -12,6 +13,26 @@ from .desktop_pet_fullscreen import is_foreground_fullscreen
 from .desktop_pet_idle import DesktopPetIdleScheduler
 from .desktop_pet_window import DesktopPetWindow
 from .qt_async import QtAsyncTask, start_qt_task
+
+
+DESKTOP_PET_STATE_LABELS = {
+    "idle": "待机",
+    "thinking": "思考",
+    "talking": "说话",
+    "success": "完成",
+    "concerned": "担心",
+    "attention": "回应",
+    "sleep": "睡觉",
+    "drag": "拖动",
+    "idle-reading": "读书",
+    "idle-wave": "挥手",
+    "idle-pout": "噘嘴",
+    "idle-cover-mouth": "捂嘴",
+}
+
+def desktop_pet_state_label(state_name: str) -> str:
+    """Keep Manager state keys stable while giving common YeYu actions clear menu text."""
+    return DESKTOP_PET_STATE_LABELS.get(state_name, state_name)
 
 
 class DesktopPetController(QObject):
@@ -36,6 +57,7 @@ class DesktopPetController(QObject):
         self._client = DesktopPetClient(manager_url, persona_id)
         self._events = DesktopPetEventStream(manager_url)
         self._events.work_ended.connect(self._work_ended)
+        self._events.settings_changed.connect(self._desktop_settings_changed)
         self._events.connection_changed.connect(self._event_connection_changed)
         self._events.start()
         self._pack: DesktopPetPack | None = None
@@ -43,6 +65,10 @@ class DesktopPetController(QObject):
         self._idle_scheduler.animation_requested.connect(self.set_state)
         self._catalog_task: QtAsyncTask | None = None
         self._animation_task: QtAsyncTask | None = None
+        self._preload_task: QtAsyncTask | None = None
+        self._binding_snapshot: DesktopPetBinding | None = None
+        self._animation_cache: dict[str, LoadedDesktopPetAnimation] = {}
+        self._preload_queue: deque[str] = deque()
         self._requested_state = "idle"
         self._state_before_drag = "idle"
         self._click_through = False
@@ -86,6 +112,7 @@ class DesktopPetController(QObject):
             self._load_catalog()
         else:
             self.set_state(self._requested_state)
+            self._enqueue_animation_preloads()
         self._persist({"enabled": True})
 
     def hide(self) -> None:
@@ -106,14 +133,24 @@ class DesktopPetController(QObject):
         self._fullscreen_timer.stop()
         self._idle_scheduler.stop()
         self._events.stop()
+        self._preload_queue.clear()
+        self._animation_cache.clear()
         self.window.close()
 
     def set_state(self, state_name: str) -> None:
         self._requested_state = state_name or "idle"
         self._idle_scheduler.state_requested(self._requested_state)
-        if self._pack is None or self._animation_task is not None or not self.visible:
+        if self._pack is None or not self.visible:
             return
         requested = self._requested_state if self._requested_state in self._pack.states else "idle"
+        cached_animation = self._animation_cache.get(requested)
+        if cached_animation is not None:
+            self.window.prepare_animation(self._pack, cached_animation)
+            self.window.play(self._pack, cached_animation)
+            self._idle_scheduler.state_started(cached_animation.state.name)
+            return
+        if self._animation_task is not None:
+            return
 
         def completed(task: QtAsyncTask, result: object) -> None:
             if self._animation_task is not task:
@@ -126,13 +163,15 @@ class DesktopPetController(QObject):
                 if pending_state != result.state.name:
                     self.set_state(pending_state)
                     return
+                self._cache_animation(result)
                 self.window.play(self._pack, result)
                 self._idle_scheduler.state_started(result.state.name)
+                self._enqueue_animation_preloads()
             else:
                 self.window.show_placeholder("夜雨\n素材暂不可用")
 
         self._animation_task = start_qt_task(
-            lambda: self._client.load_animation(self._pack, requested),
+            lambda: self._client.load_animation(self._pack, requested, max_concurrency=4),
             completed,
             on_error=lambda error: error,
         )
@@ -156,6 +195,9 @@ class DesktopPetController(QObject):
             if self._pack is None:
                 self.window.show_placeholder("夜雨\n素材准备中")
                 return
+            self._animation_cache.clear()
+            self._preload_queue.clear()
+            self.window.clear_prepared_animations()
             self._idle_scheduler.configure(self._pack.idle_behavior)
             self.set_state(self._requested_state)
 
@@ -197,35 +239,61 @@ class DesktopPetController(QObject):
             self._binding_task = None
             if not isinstance(result, DesktopPetBinding):
                 return
-            self._preferred_pack_id = result.pack_id
-            self._hide_on_fullscreen = result.hide_on_fullscreen
-            self._click_through = result.click_through
-            self._scale = result.scale
-            self._opacity = result.opacity
-            self._always_on_top = result.always_on_top
-            self._locked = result.locked
-            self._bubble_enabled = result.bubble_enabled
-            self._fps_cap = result.fps_cap
-            self.window.apply_presentation_settings(
-                scale=result.scale,
-                opacity=result.opacity,
-                always_on_top=result.always_on_top,
-                locked=result.locked,
-                bubble_enabled=result.bubble_enabled,
-                fps_cap=result.fps_cap,
-            )
-            if result.placement:
-                self.window.restore_placement(result.placement)
-            self.window.set_click_through(result.click_through)
-            self.click_through_changed.emit(result.click_through)
-            if result.enabled:
-                self.window.show_on_desktop()
-                self._idle_scheduler.set_active(True)
-                self._idle_scheduler.note_activity()
-                self.visibility_changed.emit(True)
-                self._load_catalog()
+            self._apply_binding(result)
 
         self._binding_task = start_qt_task(self._client.binding, completed, on_error=lambda error: error)
+
+    def _apply_binding(self, binding: DesktopPetBinding) -> None:
+        """Refresh the Manager-owned binding without changing pointer interaction."""
+        previous = self._binding_snapshot
+        if previous == binding:
+            return
+        pack_changed = previous is not None and previous.pack_id != binding.pack_id
+        self._binding_snapshot = binding
+        self._preferred_pack_id = binding.pack_id
+        self._hide_on_fullscreen = binding.hide_on_fullscreen
+        self._click_through = binding.click_through
+        self._scale = binding.scale
+        self._opacity = binding.opacity
+        self._always_on_top = binding.always_on_top
+        self._locked = binding.locked
+        self._bubble_enabled = binding.bubble_enabled
+        self._fps_cap = binding.fps_cap
+        self.window.apply_presentation_settings(
+            scale=binding.scale,
+            opacity=binding.opacity,
+            always_on_top=binding.always_on_top,
+            locked=binding.locked,
+            bubble_enabled=binding.bubble_enabled,
+            fps_cap=binding.fps_cap,
+        )
+        if binding.placement:
+            self.window.restore_placement(binding.placement)
+        self.window.set_click_through(binding.click_through)
+        self.click_through_changed.emit(binding.click_through)
+
+        if not binding.enabled:
+            if self.visible:
+                self._idle_scheduler.set_active(False)
+                self.window.stop_animation()
+                self.window.hide()
+                self.visibility_changed.emit(False)
+            return
+
+        if not self.visible:
+            self.window.show_on_desktop()
+            self._idle_scheduler.set_active(True)
+            self._idle_scheduler.note_activity()
+            self.visibility_changed.emit(True)
+            self._load_catalog()
+            return
+
+        if pack_changed:
+            self._pack = None
+            self._animation_cache.clear()
+            self._preload_queue.clear()
+            self.window.clear_prepared_animations()
+            self._load_catalog()
 
     def _persist(self, patch: dict[str, object]) -> None:
         self._pending_settings_patch.update(patch)
@@ -261,12 +329,20 @@ class DesktopPetController(QObject):
 
     def _event_connection_changed(self, connected: bool) -> None:
         if connected:
+            self._load_binding()
             if self.visible and self._requested_state == "concerned":
                 self.set_state("idle")
             return
         if self.visible and time.monotonic() >= self._muted_until:
             self.set_state("concerned")
             self.window.show_bubble("Rabi Manager 连接暂时中断")
+
+    def _desktop_settings_changed(self, payload: object) -> None:
+        event = payload if isinstance(payload, dict) else {}
+        event_persona_id = str(event.get("personaId") or "")
+        if event_persona_id and event_persona_id != self.persona_id:
+            return
+        self._load_binding()
 
     def _reconcile_fullscreen_visibility(self) -> None:
         self._fullscreen_timer.start(1500)
@@ -313,6 +389,25 @@ class DesktopPetController(QObject):
             action.setCheckable(True)
             action.setChecked(abs(self._scale - scale) < 0.01)
             action.triggered.connect(lambda _checked=False, value=scale: self._set_scale(value))
+        action_menu = menu.addMenu("播放动作")
+        menu._desktop_pet_action_menu = action_menu
+        if self._pack is None:
+            action_menu.addAction("动作正在加载…").setEnabled(False)
+        else:
+            ready_count = sum(self._is_action_ready(state_name) for state_name in self._pack.states)
+            if ready_count < len(self._pack.states):
+                action_menu.addAction(f"正在预载动作（{ready_count}/{len(self._pack.states)}）").setEnabled(False)
+                action_menu.addSeparator()
+            for state_name in self._pack.states:
+                ready = self._is_action_ready(state_name)
+                label = desktop_pet_state_label(state_name)
+                action = action_menu.addAction(label if ready else f"{label}（准备中）")
+                action.setCheckable(True)
+                action.setChecked(state_name == self._requested_state)
+                action.setEnabled(ready)
+                action.triggered.connect(
+                    lambda _checked=False, value=state_name: self._play_manual_action(value)
+                )
         if self._pack is not None:
             menu.addSeparator()
             menu.addAction(f"当前动作包：{self._pack.name}").setEnabled(False)
@@ -331,8 +426,6 @@ class DesktopPetController(QObject):
             bubble_enabled=self._bubble_enabled,
             fps_cap=self._fps_cap,
         )
-        if self._pack is not None and self.visible:
-            self.set_state(self._requested_state)
 
     def _set_locked(self, enabled: bool) -> None:
         self._locked = bool(enabled)
@@ -354,7 +447,80 @@ class DesktopPetController(QObject):
     def _set_scale(self, scale: float) -> None:
         self._scale = scale
         self._apply_presentation()
+        self._enqueue_animation_preloads()
         self._persist({"scale": scale})
+
+    def _play_manual_action(self, state_name: str) -> None:
+        if not self._is_action_ready(state_name):
+            return
+        self._idle_scheduler.note_activity()
+        self.set_state(state_name)
+
+    def _is_action_ready(self, state_name: str) -> bool:
+        if self._pack is None:
+            return False
+        animation = self._animation_cache.get(state_name)
+        return animation is not None and self.window.is_animation_prepared(self._pack, animation)
+
+    def _cache_animation(self, animation: LoadedDesktopPetAnimation) -> None:
+        if self._pack is None or animation.state.name not in self._pack.states:
+            return
+        if self.window.prepare_animation(self._pack, animation):
+            self._animation_cache[animation.state.name] = animation
+
+    def _enqueue_animation_preloads(self) -> None:
+        if self._pack is None or not self.visible:
+            return
+        queued = set(self._preload_queue)
+        interaction_states = [
+            state_name
+            for state_name in ("attention", "drag")
+            if state_name in self._pack.states
+        ]
+        one_shot_states = [
+            state_name
+            for state_name, state in self._pack.states.items()
+            if state_name != "idle" and state_name not in interaction_states and not state.loop
+        ]
+        looping_states = [
+            state_name
+            for state_name, state in self._pack.states.items()
+            if state_name != "idle" and state_name not in interaction_states and state.loop
+        ]
+        for state_name in interaction_states + one_shot_states + looping_states:
+            if not self._is_action_ready(state_name) and state_name not in queued:
+                self._preload_queue.append(state_name)
+        self._start_next_animation_preload()
+
+    def _start_next_animation_preload(self) -> None:
+        if self._preload_task is not None or self._pack is None or not self.visible:
+            return
+        while self._preload_queue:
+            state_name = self._preload_queue.popleft()
+            if self._is_action_ready(state_name):
+                continue
+            cached_animation = self._animation_cache.get(state_name)
+            if cached_animation is not None:
+                self.window.prepare_animation(self._pack, cached_animation)
+                QTimer.singleShot(0, self._start_next_animation_preload)
+                return
+            pack = self._pack
+
+            def completed(task: QtAsyncTask, result: object, *, requested_state=state_name, requested_pack=pack) -> None:
+                if self._preload_task is not task:
+                    return
+                self._preload_task = None
+                if self._pack is requested_pack and isinstance(result, LoadedDesktopPetAnimation):
+                    if result.state.name == requested_state:
+                        self._cache_animation(result)
+                self._start_next_animation_preload()
+
+            self._preload_task = start_qt_task(
+                lambda: self._client.load_animation(pack, state_name, max_concurrency=4),
+                completed,
+                on_error=lambda error: error,
+            )
+            return
 
     def _mute_for_one_hour(self) -> None:
         self._muted_until = time.monotonic() + 60 * 60

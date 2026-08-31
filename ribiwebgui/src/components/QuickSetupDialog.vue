@@ -105,7 +105,6 @@ const agentScan = ref({
 const testingAstrbotLogin = ref(false);
 const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
 const testingNapcatHealth = ref(false);
-const copyingNapcatToken = ref(false);
 const napcatHealthResult = ref<{
   ok?: boolean;
   http?: { ok?: boolean; message?: string; userId?: string | number; nickname?: string };
@@ -114,11 +113,9 @@ const napcatHealthResult = ref<{
     reachable?: boolean;
     found?: boolean;
     tokenFound?: boolean;
-    token?: string;
     tokenLength?: number;
     configPath?: string;
     source?: "provided" | "config";
-    loginUrl?: string;
     message?: string;
   };
   process?: { found?: boolean; candidates?: Array<{ name: string; pid: string }> };
@@ -513,23 +510,6 @@ function openExternalUrl(url: string | undefined): void {
   window.open(target, "_blank", "noopener,noreferrer");
 }
 
-function napcatWebuiUrlWithToken(webuiUrl: string | undefined, token: string | undefined): string {
-  const url = webuiUrl?.trim() || defaultNapcatWebuiUrl();
-  const value = token?.trim();
-  if (!value) return url;
-  try {
-    const parsed = new URL(url);
-    parsed.pathname = parsed.pathname.replace(/\/webui\/?$/i, "/web_login");
-    if (!/\/web_login\/?$/i.test(parsed.pathname)) parsed.pathname = "/web_login";
-    parsed.searchParams.set("token", value);
-    return parsed.toString();
-  } catch {
-    const loginUrl = url.replace(/\/webui\/?(?:\?.*)?$/i, "/web_login");
-    const separator = loginUrl.includes("?") ? "&" : "?";
-    return `${loginUrl}${separator}token=${encodeURIComponent(value)}`;
-  }
-}
-
 async function copyText(text: string, message = "已复制"): Promise<void> {
   let result = message;
   try {
@@ -575,65 +555,6 @@ async function testNapcatHealth(): Promise<void> {
     napcatHealthResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
   } finally {
     testingNapcatHealth.value = false;
-  }
-}
-
-async function openNapcatWebuiWithToken(): Promise<void> {
-  const fallbackUrl = defaultNapcatWebuiUrl();
-  try {
-    const resp = await fetch("/api/message/napcat-health", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        httpUrl: form.napcatHttpUrl,
-        webuiUrl: fallbackUrl,
-        gatewayPort: form.gatewayPort
-      })
-    });
-    const body = await resp.json().catch(() => ({}));
-    napcatHealthResult.value = { ok: Boolean(body.ok), ...body };
-    const target = body?.webui?.loginUrl
-      || (body?.webui?.token ? napcatWebuiUrlWithToken(body?.webui?.url || fallbackUrl, body.webui.token) : "")
-      || (body?.webui?.reachable ? body?.webui?.url : "");
-    if (target) {
-      openExternalUrl(target);
-      return;
-    }
-    napcatHealthResult.value = {
-      ok: false,
-      ...body,
-      message: body?.webui?.message || body?.message || `NapCat WebUI 未响应：${fallbackUrl}`
-    };
-  } catch (e: unknown) {
-    napcatHealthResult.value = { ok: false, message: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-async function copyNapcatWebuiToken(): Promise<void> {
-  if (copyingNapcatToken.value) return;
-  copyingNapcatToken.value = true;
-  try {
-    const resp = await fetch("/api/message/napcat-health", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        httpUrl: form.napcatHttpUrl,
-        webuiUrl: defaultNapcatWebuiUrl(),
-        gatewayPort: form.gatewayPort
-      })
-    });
-    const body = await resp.json().catch(() => ({}));
-    napcatHealthResult.value = { ok: Boolean(body.ok), ...body };
-    const token = body?.webui?.token;
-    if (token) {
-      await copyText(token, "已复制 NapCat WebUI 登录密钥");
-    } else {
-      showCopyResult(body?.webui?.message || "未读取到 NapCat WebUI 登录密钥，请检查 NapCat config/webui.json 或启动日志。");
-    }
-  } catch (e: unknown) {
-    showCopyResult(e instanceof Error ? e.message : String(e));
-  } finally {
-    copyingNapcatToken.value = false;
   }
 }
 
@@ -970,26 +891,13 @@ async function apply() {
                   <template v-if="form.adapters.includes('napcat')">
                     <v-text-field v-model.number="form.gatewayPort" type="number" label="RabiRoute WS 端口" />
                     <v-text-field v-model="form.napcatHttpUrl" label="NapCat HTTP 地址" />
-                    <v-text-field v-model="form.napcatWebuiUrl" class="full-span" label="NapCat WebUI 地址" />
+                    <v-text-field v-model="form.napcatWebuiUrl" class="full-span" label="NapCat 管理接口地址" />
                     <div class="quick-agent-status full-span">
                       <div class="agent-action-bar">
                         <div class="agent-action-status">
-                          <span class="section-note">打开 NapCat 配置页，或直接检查 HTTP / WebUI / 本机进程状态。</span>
+                          <span class="section-note">先检查 HTTP、管理接口与本机进程；保存 Route 后，直接在 NapCat 卡片完成快速、密码或扫码登录。</span>
                         </div>
                         <div class="d-flex ga-2 flex-wrap">
-                          <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-open-in-new" @click="openNapcatWebuiWithToken">
-                            打开 NapCat
-                          </v-btn>
-                          <v-btn
-                            size="small"
-                            variant="text"
-                            prepend-icon="mdi-key-variant"
-                            :loading="copyingNapcatToken"
-                            :disabled="copyingNapcatToken"
-                            @click="copyNapcatWebuiToken"
-                          >
-                            复制 WebUI 登录密钥
-                          </v-btn>
                           <v-btn
                             size="small"
                             variant="tonal"
@@ -1012,41 +920,20 @@ async function apply() {
                           HTTP：{{ napcatHealthResult.http.ok ? `可用，${napcatHealthResult.http.nickname || napcatHealthResult.http.userId || '已登录'}` : (napcatHealthResult.http.message || '不可用') }}
                         </div>
                         <div v-if="napcatHealthResult.webui">
-                          WebUI：{{ napcatHealthResult.webui.reachable ? "可访问" : "未响应" }} · {{ napcatHealthResult.webui.url }}
+                          管理接口：{{ napcatHealthResult.webui.reachable ? "可访问" : "未响应" }} · {{ napcatHealthResult.webui.url }}
                         </div>
                         <div v-if="napcatHealthResult.webui?.found">
-                          WebUI 登录密钥：已从 NapCat webui.json 读取 {{ napcatHealthResult.webui.tokenLength || "-" }} 位；只用于打开管理页。
+                          管理凭据：已从 NapCat webui.json 读取 {{ napcatHealthResult.webui.tokenLength || "-" }} 位；仅由 Rabi 后端代理使用。
                         </div>
                         <div v-else-if="napcatHealthResult.webui?.source === 'provided'">
-                          WebUI 登录密钥：使用当前配置保存的 {{ napcatHealthResult.webui.tokenLength || "-" }} 位登录密钥。
+                          管理凭据：使用当前 Route 保存的 {{ napcatHealthResult.webui.tokenLength || "-" }} 位凭据。
                         </div>
                         <div v-else-if="napcatHealthResult.webui?.message">
-                          WebUI 登录密钥：{{ napcatHealthResult.webui.message }}
+                          管理凭据：{{ napcatHealthResult.webui.message }}
                         </div>
                         <div>WS：请在 NapCat WebSocket Client 里连接 {{ napcatHealthResult.wsUrl || napcatWsUrl() }}</div>
                         <div v-if="napcatHealthResult.process">
                           进程：{{ napcatHealthResult.process.found ? napcatHealthResult.process.candidates?.map(item => `${item.name}(${item.pid})`).join(", ") : "未发现 NapCat/QQNT 相关进程" }}
-                        </div>
-                        <div class="d-flex ga-2 flex-wrap mt-2">
-                          <v-btn
-                            v-if="napcatHealthResult.webui?.loginUrl"
-                            size="small"
-                            variant="tonal"
-                            color="primary"
-                            prepend-icon="mdi-open-in-new"
-                            @click="openExternalUrl(napcatHealthResult.webui.loginUrl)"
-                          >
-                            打开 WebUI
-                          </v-btn>
-                          <v-btn
-                            v-if="napcatHealthResult.webui?.token"
-                            size="small"
-                            variant="text"
-                            prepend-icon="mdi-key-variant"
-                            @click="copyText(napcatHealthResult.webui.token, '已复制 NapCat WebUI 登录密钥')"
-                          >
-                            复制 WebUI 登录密钥
-                          </v-btn>
                         </div>
                       </v-alert>
                     </div>

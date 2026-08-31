@@ -6,7 +6,7 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiSpeech plugin
 
-RabiSpeech is Rabi's independent host-local service plugin and a TTS/ASR provider gateway bound to loopback by default. Ordinary manual speech APIs do not enter an Agent or pass through message routing. Whenever the resident microphone completes an ASR segment, Manager broadcasts the same text to every Route whose speech endpoint is enabled, and each Route independently applies hot delivery or persona-keyword policy:
+RabiSpeech is a heavyweight local child process managed by the RabiRoute Manager speech plugin and a TTS/ASR provider gateway bound to loopback by default. It must not autostart independently of the current RabiRoute application generation. Ordinary manual speech APIs do not enter an Agent or pass through message routing. Whenever the resident microphone completes an ASR segment, Manager broadcasts the same text to every Route whose speech endpoint is enabled, and each Route independently applies hot delivery or persona-keyword policy:
 
 - RabiSpeech directly manages local ONNX-VITS, GPT-SoVITS, IndexTTS2, Qwen3-TTS, and CosyVoice3 TTS workers.
 - Local ASR support includes faster-whisper, Qwen3-ASR, SenseVoiceSmall, and FireRedASR2.
@@ -23,16 +23,9 @@ You can also use RibiWebGUI **Model Management** (`/#/models`) to prepare the sp
 ```powershell
 cd plugin-adapters\rabi-speech
 .\scripts\install.ps1
-.\scripts\start.ps1
 ```
 
-Register the plugin as a local service that starts when the current user signs in:
-
-```powershell
-.\scripts\install-service.ps1 -StartNow
-```
-
-The scheduled task runs as the current user so it can read plugins and models stored on a NAS. It does not use SYSTEM privileges or change the `127.0.0.1` listening boundary.
+After preparing the dependencies, start only the installed `RabiRouteHost.exe`. Host creates Manager, and the Manager speech plugin starts and owns RabiSpeech. Disabling the plugin, rebuilding the application generation, or exiting the application must stop the same-generation RabiSpeech process. Windows sign-in autostart must also target only `RabiRouteHost.exe`. The historical `install-service.ps1` entry is retired and fails explicitly instead of creating an independent `RabiSpeech` scheduled task.
 
 The default address is `http://127.0.0.1:8781`. On first start, `config.example.json` is copied to the machine-local `config.json`, which is not committed to Git.
 
@@ -235,11 +228,11 @@ benchmarks/cases.zh-CN.json
   -> render-html
 ```
 
-The fixed corpus, feature metadata, and HTML template live under `benchmarks/`. See `../../skills/benchmark-rabispeech-models/SKILL.md` for the full workflow and `../../docs/rabispeech-plugin_en.md` for the service guide. After building WebGUI, open:
+The fixed corpus, feature metadata, and HTML template live under `benchmarks/`. See `../../skills/benchmark-rabispeech-models/SKILL.md` for the full workflow and `../../docs/rabispeech-plugin_en.md` for the service guide. After building WebGUI, read this generation's `managerBaseUrl` from `RabiRouteHost.exe --command status --json`, verify that `/meta` has the same `applicationGenerationId` and `managerInstanceId` as Host READY, then open:
 
 ```text
-http://127.0.0.1:8790/#/docs
-http://127.0.0.1:8790/reports/rabispeech-model-benchmark.html
+<managerBaseUrl>/#/docs
+<managerBaseUrl>/reports/rabispeech-model-benchmark.html
 ```
 
 Runtime WAV, JSON, CSV, and logs remain in ignored `output/benchmarks/`. The public HTML embeds only sanitized metrics and sentence-level results.

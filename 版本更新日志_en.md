@@ -8,11 +8,35 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.2.2 - 2026-08-31
+
+### Single Windows Host lifecycle and plugin runtime v2
+
+- The Windows package now has one application-lifecycle owner: the self-contained single-file `RabiRouteHost.exe`. A per-user Mutex/named pipe enforces one Host. Each start creates a new Windows Job and `applicationGenerationId`, with Manager and tray as same-generation children. Either child failing ends the generation and invokes bounded replacement; user quit cannot be undone by a side path.
+- Host creates Manager suspended, assigns it to the Job, and resumes it. After Profile `readyRequires` are satisfied, Manager emits structured READY carrying generation, PID, `managerInstanceId`, `baseUrl`, and time. Only then does Host create the tray under the same Job. The tray revalidates identity through `/meta` and cannot run standalone, scan ports, repair Manager, or stop it.
+- Local and LAN automatic Manager modes both pass port `0` to the operating system. Host `--command status --json` and the tray carry this generation's `managerBaseUrl`; a fixed port is no longer the discovery contract, so another application occupying a familiar port cannot block startup.
+- Manifest and Profile accept schema v2 only and reject every non-v2 version. All 29 built-in packages declare `in_process`, `isolated`, or `declarative`; Profile includes `readyRequires` and bounded restart/resource policy. Manager loader never executes isolated entry top-level code, and Process Lease Registry reclaims long-lived children.
+- Plugin-generation replacement now disposes consumers before providers. `lifecycle.signal`, effects/disposers, request drain, and process leases meet at one stop boundary. A failed candidate preserves the last committed generation without half-active services or orphan children.
+- Installer, login startup, desktop/Start-menu entries, and the compatibility BAT all target Host only. Retired parallel lifecycle scripts, tray self-start/self-repair, Manager HTTP application start/stop routes, and fixed-port discovery are removed from the production path.
+
+### Desktop tray WebGUI entry
+
+- **Open RabiRoute WebGUI** now remains visible in the main tray menu instead of disappearing after a successful plugin-catalog load; a same-name catalog contribution is deduplicated.
+
+### Dynamic Manager ports and instance discovery
+
+- The Host-generation plus operating-system dynamic-port architecture above supersedes this intermediate design. Manager no longer publishes endpoints through its instance-lock file or retries a small port range; structured READY, Host status, and `/meta` close the same-generation identity and URL loop.
+
+### Rabi mobile voice-service autostart
+
+- Settings now includes **Automatically start voice service after Rabi opens**. When enabled, an App launch starts voice service in the selected phone or glasses mode. Phone mode without microphone permission restores message transport only and does not trigger a launch-time permission prompt.
+- Turning the switch off and applying it immediately stops phone and glasses capture while preserving text, media, downlink, and reliable queues. The foreground notification now says that message transport is connected instead of incorrectly claiming that Rabi is listening.
+
 ### Independent desktop-pet and YeYu Gamer plugins
 
 - Desktop-pet pack, binding, settings, and bounded-asset APIs now belong to the independent `io.rabiroute.manager.desktop-pet` plugin under `/api/desktop-pet/roles/:roleId`. Its generation owns route registration, removal, and request draining. The Desktop client adds configurable randomized idle and sleep scheduling with bounded temporary-asset and cache scope.
 - The local YeYu Gamer integration now belongs to the disabled-by-default `io.rabiroute.manager.yeyu-gamer` plugin. Its configuration lives in the single Profile, the target is fixed to `http://127.0.0.1:8877/api/v1`, and protected reads plus plan-only work-item creation use a separate local token. No claim, capability invocation, shell, click, or legacy-script surface is exposed.
-- The default Profile now contains 28 independent Manager plugin packages. Installed Windows integration acceptance remains pending.
+- The default Profile now contains 29 independent Manager plugin packages, all migrated to schema/profile v2 and the unified execution-mode contract.
 
 ### Offline continuation when the plan control plane is unavailable
 

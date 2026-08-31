@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 
 TRAY_ROOT = Path(__file__).resolve().parents[1]
@@ -18,69 +17,109 @@ LAUNCHER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(LAUNCHER)
 
 
-class LauncherNodeResolutionTest(unittest.TestCase):
-    def test_packaged_tray_marks_running_before_starting_supervision(self) -> None:
+class LauncherContractTest(unittest.TestCase):
+    def test_packaged_runtime_resolves_its_parent_as_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
-            response = MagicMock()
-            response.__enter__.return_value = response
-            response.__exit__.return_value = False
-
-            with patch.object(LAUNCHER.urllib.request, "urlopen", return_value=response) as urlopen:
-                result = LAUNCHER._mark_desktop_running(project_root, "http://127.0.0.1:8790")
-
-            self.assertTrue(result)
-            request = urlopen.call_args.args[0]
-            self.assertEqual(request.full_url, "http://127.0.0.1:8790/manager/desktop-lifecycle/start")
-            self.assertIn(b'"source": "packaged-desktop"', request.data)
-
-    def test_desktop_startup_removes_only_obsolete_desktop_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            project_root = Path(temp_dir)
-            legacy_names = (
-                "RabiRoute-Tray.exe",
-                "RabiRoute-Tray.new.exe",
-                "RabiRoute-Desktop.new.exe",
-            )
-            for name in legacy_names:
-                (project_root / name).touch()
-            current_desktop = project_root / "RabiRoute-Desktop.exe"
-            unrelated_file = project_root / "unrelated.exe"
-            current_desktop.touch()
-            unrelated_file.touch()
-
-            removed = LAUNCHER._remove_legacy_desktop_artifacts(project_root)
-
-            self.assertEqual(removed, legacy_names)
-            self.assertTrue(current_desktop.exists())
-            self.assertTrue(unrelated_file.exists())
-            for name in legacy_names:
-                self.assertFalse((project_root / name).exists())
-
-    def test_trusted_desktop_extensions_require_explicit_cli_entries(self) -> None:
-        source = (TRAY_ROOT / "main.py").read_text(encoding="utf-8")
-
-        self.assertIn('"--trusted-desktop-extension"', source)
-        self.assertIn('action="append"', source)
-        self.assertIn("default=[]", source)
-        self.assertIn("trusted_extension_entry_points=tuple(args.trusted_desktop_extension)", source)
-
-    def test_packaged_runtime_prefers_project_portable_node_over_path(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            project_root = Path(temp_dir)
-            portable_node = project_root / ("node.exe" if os.name == "nt" else "node")
-            portable_node.touch()
-            path_node = project_root / "external-node.exe"
-            path_node.touch()
+            executable = project_root / "desktop-runtime" / "RabiRoute-Tray.exe"
+            executable.parent.mkdir()
+            executable.touch()
 
             with (
-                patch.dict(os.environ, {"RABIROUTE_NODE": str(path_node)}, clear=False),
-                patch.object(LAUNCHER.shutil, "which", return_value=str(path_node)),
+                patch.object(LAUNCHER.sys, "frozen", True, create=True),
+                patch.object(LAUNCHER.sys, "executable", str(executable)),
             ):
-                node, source = LAUNCHER._node_executable(project_root)
+                self.assertEqual(LAUNCHER._resolve_project_root(), project_root)
 
-            self.assertEqual(Path(node), portable_node)
-            self.assertEqual(source, "project portable node")
+    def test_unfrozen_modular_host_resolves_its_parent_as_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            packaged_main = project_root / "desktop-runtime" / "main.py"
+            packaged_main.parent.mkdir()
+            packaged_main.touch()
+
+            with patch.object(LAUNCHER, "__file__", str(packaged_main)):
+                self.assertEqual(LAUNCHER._resolve_project_root(), project_root)
+
+    def test_surface_child_requires_the_complete_host_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            host = Path(temp_dir) / "RabiRoute-Host.exe"
+            host.touch()
+
+            args = LAUNCHER.build_argument_parser().parse_args([
+                "--surface-child",
+                "--manager-url",
+                "http://127.0.0.1:49152",
+                "--application-generation-id",
+                "generation-1",
+                "--manager-instance-id",
+                "manager-1",
+                "--host-executable",
+                str(host),
+                "--host-lifecycle-pipe",
+                "RabiRoute.Tray.generation-1.channel",
+                "--show-desktop-pet",
+            ])
+
+            self.assertTrue(args.surface_child)
+            self.assertEqual(args.manager_url, "http://127.0.0.1:49152")
+            self.assertEqual(args.application_generation_id, "generation-1")
+            self.assertEqual(args.manager_instance_id, "manager-1")
+            self.assertEqual(args.host_executable, host.resolve())
+            self.assertEqual(args.host_lifecycle_pipe, "RabiRoute.Tray.generation-1.channel")
+            self.assertTrue(args.show_desktop_pet)
+
+    def test_launcher_rejects_direct_execution_without_surface_child_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            host = Path(temp_dir) / "RabiRoute-Host.exe"
+            host.touch()
+            with self.assertRaises(SystemExit):
+                LAUNCHER.main([
+                    "--manager-url",
+                    "http://127.0.0.1:49152",
+                    "--application-generation-id",
+                    "generation-1",
+                    "--manager-instance-id",
+                    "manager-1",
+                    "--host-executable",
+                    str(host),
+                ])
+
+    def test_launcher_rejects_non_loopback_manager_origins(self) -> None:
+        parser = LAUNCHER.build_argument_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args([
+                "--surface-child",
+                "--manager-url",
+                "http://192.168.1.20:8790",
+                "--application-generation-id",
+                "generation-1",
+                "--manager-instance-id",
+                "manager-1",
+                "--host-executable",
+                str(Path(__file__).resolve()),
+            ])
+
+    def test_launcher_contains_no_process_or_extension_ownership_backdoors(self) -> None:
+        source = (TRAY_ROOT / "main.py").read_text(encoding="utf-8")
+
+        for forbidden in (
+            "_start_manager",
+            "resolve_manager_endpoint",
+            "watch-rabiroute",
+            "--trusted-desktop-extension",
+            "--startup-status",
+            "--owns-manager",
+            "npm",
+        ):
+            self.assertNotIn(forbidden, source)
+
+    def test_qt_dll_bootstrap_and_desktop_pet_flag_remain_supported(self) -> None:
+        source = (TRAY_ROOT / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("_configure_frozen_qt_dll_search_paths", source)
+        self.assertIn('"--show-desktop-pet"', source)
+        self.assertIn("show_desktop_pet=args.show_desktop_pet", source)
 
 
 if __name__ == "__main__":

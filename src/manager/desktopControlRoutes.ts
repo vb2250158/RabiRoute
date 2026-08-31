@@ -4,7 +4,6 @@ import { spawn } from "node:child_process";
 import type http from "node:http";
 import { roleFilePath } from "../shared/routePaths.js";
 import { routeRuntimeParts, sanitizeConfigName, sanitizeRoleId } from "../shared/routeIdentity.js";
-import { handleDesktopLifecycleApi } from "./desktopLifecycleRoutes.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
 
@@ -99,10 +98,7 @@ export type DesktopControlRoutesContext = {
     gatewayId: string | null,
     roleId: string | null
   ) => Record<string, unknown>;
-  rootDir: string;
-  shutdownManager: (reason: string) => void | Promise<void>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
-  scheduleShutdown?: (task: () => void, delayMs: number) => void;
   settingsHandler?: ManagerPluginRouteHandler;
 };
 
@@ -134,17 +130,7 @@ function handleDesktopControlApiWithRuntime(
     return true;
   }
 
-  if (request.method === "POST" && requestUrl.pathname === "/manager/start") {
-    context.jsonResponse(response, 200, { code: 0, message: "manager is already running" });
-    return true;
-  }
-
-  return handleDesktopLifecycleApi(request, requestUrl, response, {
-    rootDir: context.rootDir,
-    shutdownManager: context.shutdownManager,
-    scheduleShutdown: context.scheduleShutdown,
-    trackOperation: hooks.trackOperation
-  });
+  return false;
 }
 
 export function handleDesktopControlApi(
@@ -164,35 +150,15 @@ export function createDesktopControlRoutes(
   context: DesktopControlRoutesContext
 ): DesktopControlRoutes {
   const requestTracker = new ManagerPluginRequestTracker();
-  const shutdownTimers = new Set<NodeJS.Timeout>();
-  let acceptingShutdownSchedules = true;
-  const routeContext: DesktopControlRoutesContext = {
-    ...context,
-    shutdownManager: (reason) => requestTracker.trackOperation(
-      Promise.resolve().then(() => context.shutdownManager(reason))
-    ),
-    scheduleShutdown: (task, delayMs) => {
-      if (!acceptingShutdownSchedules) return;
-      const timer = setTimeout(() => {
-        shutdownTimers.delete(timer);
-        if (!acceptingShutdownSchedules) return;
-        task();
-      }, delayMs);
-      shutdownTimers.add(timer);
-    }
-  };
   const runtimeHooks: DesktopControlRuntimeHooks = {
     trackOperation: operation => requestTracker.trackOperation(operation)
   };
   return {
     handler: requestTracker.wrap((request, requestUrl, response) => (
-      handleDesktopControlApiWithRuntime(request, requestUrl, response, routeContext, runtimeHooks)
+      handleDesktopControlApiWithRuntime(request, requestUrl, response, context, runtimeHooks)
     )),
     stopAcceptingAndDrain: async () => {
       const draining = requestTracker.stop();
-      acceptingShutdownSchedules = false;
-      for (const timer of shutdownTimers) clearTimeout(timer);
-      shutdownTimers.clear();
       await draining;
     },
     activeRequestCount: () => requestTracker.activeCount()

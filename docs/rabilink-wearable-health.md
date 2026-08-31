@@ -15,7 +15,9 @@ RabiRoute 保存归一化健康时间线、执行告警规则并给 Agent 提供
 ```text
 手表 / 手环
   -> 手机 Health Connect（移动端原生来源）
-     或手机配置 -> PC ADB Companion -> 小米健康本地 Provider（当前真机来源）
+     或手机配置 -> RabiRouteHost -> 当前 Manager generation
+                    -> Plugin Kernel -> ProcessLeaseRegistry
+                       -> PC ADB Companion worker -> 小米健康本地 Provider（当前真机来源）
   -> RabiLink Relay，或可信本机 Manager observation
   -> wearable 消息端
   -> data/roles/<RoleId>/wearable-health/events/YYYY-MM-DD.jsonl
@@ -58,36 +60,35 @@ Agent / 主动智能
 3. 设置心率高/低阈值、告警冷却和睡眠状态变化告警。
 4. 打开 Health Connect 权限页，授权心率与睡眠读取。
 5. 如已取得小米认证秘钥，可在密码框保存；它经 Android Keystore AES-GCM 加密，只为后续厂商直连采集器保留，当前不会上传。
-6. 保存并启动，或点“立即同步”。Health Connect 使用手机前台服务；ADB Companion 模式由已配对的 Rabi PC 常驻任务读取同一份手机配置。
+6. 保存并启动，或点“立即同步”。Health Connect 使用手机前台服务；ADB Companion 模式由已配对 Rabi PC 上的 Host 所有插件 worker 读取同一份手机配置。
 
 Health Connect 没有数据时不会制造样本。手机端不再常驻轮询 Health Connect；只在用户手动同步、启动恢复或后续平台/设备事件到达时读取一次回看窗口。当前已验证手机选择 ADB Companion 后，电脑会把手机上的启用开关、稳定设备 ID、名称、类别、事件触发回看窗口和告警规则作为配置真源；电脑不读取 Keystore 密钥。
 
 ## 小米 ADB Companion
 
-已开启 USB 调试时，Companion 使用小米健康本地 Provider 的最新心率、当日睡眠日报和睡眠阶段。脚本会归一化出心率、睡眠会话、阶段和可证明的当前睡/醒状态；默认只显示 dry-run，真实读取必须显式传入 `-Execute`：
+已开启 USB 调试时，Companion 使用小米健康本地 Provider 的最新心率、当日睡眠日报和睡眠阶段。脚本会归一化出心率、睡眠会话、阶段和可证明的当前睡/醒状态。正式运行不再创建登录计划任务：`RabiRouteHost.exe` 持有当前 Manager，Manager Plugin Kernel 再通过 generation-scoped `ProcessLeaseRegistry` 持有 PowerShell worker 及其 ADB 子进程。插件卸载、代际切换或退出会回收整棵 worker 进程树。
+
+Manager 默认绑定 `127.0.0.1:0`。worker 只接收 Host 当前 READY 发布的 `managerBaseUrl`、`applicationGenerationId` 和 `managerInstanceId`，先核对 `/meta`，再给每个 Manager 请求同时附带两个 lifecycle fencing header。它不读取固定端口、不扫描候选端口，也不接受 `GATEWAY_MANAGER_URL` / `RABIROUTE_MANAGER_URL` 旁路。
+
+两个 header 分别是 `x-rabiroute-expected-application-generation-id` 和 `x-rabiroute-expected-manager-instance-id`。Manager 不属于 Host generation 时返回 `503`，缺少任一 header 时返回 `400`，身份过期或不匹配时返回 `409`；只有双身份匹配才返回 `202` 并开始读取、持久化 observation。失败的围栏请求不会创建角色目录或健康记录。
+
+仓库中的脚本只保留单次诊断与人工验证入口；它们必须显式指向本机安装的 Host，由 Host `status --json` 返回当前动态身份：
 
 ```powershell
-.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1
-
 .\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
   -Execute `
-  -Continuous `
   -Transport Manager `
+  -HostExe "<本机安装目录>\RabiRouteHost.exe" `
   -UseMobileSettings:$true
 ```
 
 `Auto` 模式优先使用已配置 Relay，没有 Relay 时退回可信本机 Manager；Manager 模式可在 `POST observations?deliverAlerts=true` 时走相同的 Agent 告警路由。脚本不会输出 token，也不读取手表认证秘钥。该路线已在小米真机验证最近心率、睡眠会话、9 段睡眠阶段、当前睡/醒状态、去重写入和查询 API。它仍不是全天心率曲线接口，并且要求手机持续通过 ADB 连接电脑。
 
-登录后常驻可安装当前用户计划任务；脚本默认 dry-run，只有 `-Execute` 才修改任务：
+`Install-RabiLinkWearableCompanionTask.ps1` 已变成 fail-closed 兼容诊断，永远不会注册、启动、停止或删除任务。新版 Setup 只在完整指纹确认同 SID、同描述、同旧 NAS runner 和旧固定 Manager 参数时，事务性备份并移除历史 `RabiLinkWearableHealthCompanion`；同名但非本产品任务会让安装在任何 mutation 前失败。后续安装步骤失败时，事务会从 XML 备份恢复原任务状态。
 
-```powershell
-.\apps\rabilink-android\scripts\Install-RabiLinkWearableCompanionTask.ps1
+手机未启用 ADB Companion 或 ADB 暂不可用时，同一个 worker 写入 `degraded` 状态并按至少 60 秒间隔重试，不反复创建进程。真正异常退出只在同一 generation 内进行 3 次有界指数退避重启；耗尽后插件进入失败状态。脱敏状态与日志写入本机 runtime root 下的 `data/wearable-companion/` 和 `logs/wearable-companion/`，不会写回不可变插件包或 NAS。
 
-.\apps\rabilink-android\scripts\Install-RabiLinkWearableCompanionTask.ps1 `
-  -Execute -StartNow -RoleId YeYu
-```
-
-任务名为 `RabiLinkWearableHealthCompanion`。它在登录时隐藏启动、断线后自动重试，并把仅含计数和状态的脱敏日志写进已忽略的 `out/private/`。手机端关闭“持续健康记录”即可阻止采集；卸载任务需显式执行安装脚本的 `-Uninstall -Execute`。
+子进程的 `error` 事件不等于已经退出：只要没有真实 `exit` / `close` 或退出码，process lease 继续占有全局 worker key，新的插件代不得启动第二个 worker。停止失败会保持旧 lease、允许同一 handle 重试，并让代际交接超时关闭；pid 尚未建立的异步 spawn 错误由 lease 层吸收并交给有界重试，不会成为未处理事件带退 Manager。
 
 健康阈值告警使用独立的 `wearable` 消息端路由交给 Agent，避免为了健康采集启动 QQ、FenneNote 等无关消息端。首次配置可先检查，再显式执行：
 
@@ -134,4 +135,4 @@ GET /api/roles/YeYu/health/summary
 
 ## 验收口径
 
-完成某一真实设备的验收至少需要：手机/桥产生真实样本、Relay 接收结构化 observation、角色目录出现去重后的事件、历史与状态 API 可查询、阈值命中只产生一次冷却内告警、Agent 收到告警，以及秘钥/token 未出现在日志和健康文件中。
+完成某一真实设备的验收至少需要：Host、Manager、插件 worker 的 generation/instance 身份一致；当前动态 URL 与 `/meta` 一致；错误身份请求返回 fencing 冲突；worker 属于 Manager 的 process lease 且卸载后无残留；历史计划任务为 0；手机/桥产生真实样本；Relay 或 Manager 接收结构化 observation；角色目录出现去重后的事件；历史与状态 API 可查询；阈值命中只产生一次冷却内告警；Agent 收到告警；以及秘钥/token 未出现在日志和健康文件中。

@@ -21,7 +21,15 @@ One persona can serve several Routes. Editing its text or rules affects every bo
 
 ## Configure a persona
 
-Open **Persona Configuration** and select an existing role under **Persona binding**. The page shows the `persona.md` preview, Route variables, and persona automation.
+Open **Persona Configuration** and select an existing role under **Persona binding**. The summary at the top always shows the current persona plus message-rule and scheduled-task counts. The tabs below divide the formerly continuous page into focused sections:
+
+- **Profile**: persona binding, avatar, and the `persona.md` summary.
+- **Expression & voice**: language-style validation, persona TTS settings, and speech wake-up keywords.
+- **Identity relations**: recognized identities, unrecognized accounts, and voiceprint classification.
+- **Message context**: recent-message limits per endpoint and Route variables.
+- **Automation**: message triggers, scheduled tasks, and available template variables.
+
+When no persona is selected, **Expression & voice** and **Identity relations** are unavailable. Profile settings, Route variables, and default message rules remain accessible.
 
 After selecting a persona, use the same configuration card to set or replace its avatar. PNG, JPEG, WebP, and GIF images up to 5 MB are supported. The avatar follows the persona into selectors, the Route overview, speech persona selection, and the local role panel; the first character of the persona ID is used as the fallback. Because the image belongs to the persona directory, it does not need to be uploaded again for each Route.
 

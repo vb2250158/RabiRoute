@@ -10,14 +10,14 @@ RibiWebGUI 是 RabiRoute 的本地控制台。它负责展示和编辑配置、�
 
 ## 从局域网访问 WebGUI
 
-Rabi PC 上的 Manager 就是 RibiWebGUI 的完整 HTTP 后端。默认地址 `http://127.0.0.1:8790/` 只允许本机使用；另一台设备上的 `127.0.0.1` 指向那台设备自己，不会指向 Rabi PC。
+Rabi PC 上的 Manager 就是 RibiWebGUI 的完整 HTTP 后端。Manager 每一代都由操作系统分配可用端口；本机从托盘打开当前 WebGUI，或用 `RabiRouteHost.exe --command status --json` 读取 `managerBaseUrl`。另一台设备上的 `127.0.0.1` 指向那台设备自己，不会指向 Rabi PC。
 
 在 Rabi PC 本机打开“控制台 → 目录配置 → 局域网访问 WebGUI”，开启访问并生成密钥。重启 Manager 后，若仍从本机 `localhost/127.0.0.1` 打开 WebGUI，页面会自动重定向到优先局域网 IP，并保留当前 Route、页面和认证；也可以复制页面给出的链接，例如：
 
 局域网 HTTP 页面可能没有浏览器的安全剪贴板权限。控制台的复制链接、复制密钥和其它 WebGUI 复制按钮会先使用 Clipboard API，权限不可用时自动回退到页面内复制；只有两种机制都被浏览器拒绝时，才提示手动选择文本复制。
 
 ```text
-http://192.168.0.57:8790/#/routes/<Route配置名>/overview?webgui_token=<访问密钥>
+http://<Rabi-PC-局域网-IP>:<当前-manager-port>/#/routes/<Route配置名>/overview?webgui_token=<访问密钥>
 ```
 
 左侧“当前路由”是唯一选择源。消息适配器、人格配置和计划与记忆列在 Route 配置区；控制台列在公共功能区首位，位于语音服务上方，但仍读取当前 Route。控制台、消息适配器、人格配置、计划与记忆、语音服务和日志诊断都使用 `#/routes/<Route配置名>/<页面>`；对应页面依次为 `overview`、`adapters`、`persona`、`knowledge`、`speech`、`runtime`。切换当前 Route 会保留页面类型并立即重定向 URL。“性能监控”和“设置”是本机全局页面，不随当前 Route 改变。若要直接打开该 Route 的“计划与记忆”，使用同一个 Route 配置名和 `knowledge` 页面，或点击“复制 Route 知识库链接”：
@@ -25,12 +25,12 @@ http://192.168.0.57:8790/#/routes/<Route配置名>/overview?webgui_token=<访问
 点击左侧任一页面标签时，WebGUI 会先更新选中状态、顶部标题和 URL，并立即显示“页面已切换，正在加载内容”。控制台、消息适配器、人格配置、计划与记忆、语音服务、性能监控、日志诊断和设置的页面代码与数据随后异步加载，不会等待完整页面准备好才切换标签。页面代码加载失败时会自动刷新一次并恢复当前目标页面。
 
 ```text
-http://192.168.0.57:8790/#/routes/<Route配置名>/knowledge?webgui_token=<访问密钥>
+http://<Rabi-PC-局域网-IP>:<当前-manager-port>/#/routes/<Route配置名>/knowledge?webgui_token=<访问密钥>
 ```
 
 Route 配置名会进行 URL 编码。打开任一 Route 作用域链接后，页面会先选中该 Route；切换左侧 Route 时，当前浏览器会话的地址会同步为新 Route 的同类页面路径。需要收藏、重新打开或发送给同一局域网中的已授权设备时，应使用包含访问密钥的完整链接，不要直接复制已经自动移除密钥的地址栏。
 
-WebGUI 会把 URL 中的密钥保存到当前浏览器会话，自动用于 HTTP、SSE 和人格头像请求，并从地址栏移除，避免后续截图继续暴露。轮换密钥会立即使旧链接失效；开关和密钥只能由运行 Manager 的 Rabi PC 本机管理，自动重定向后的本机局域网地址仍可管理，其他设备不可以。若链接超时，先确认 Manager 已重启，再检查 Windows 防火墙的专用/域网络是否允许 RabiRoute 或 Node.js 监听 TCP `8790`。不要把链接发送到公开群聊、日志或仓库。
+WebGUI 会把 URL 中的密钥保存到当前浏览器会话，自动用于 HTTP、SSE 和人格头像请求，并从地址栏移除，避免后续截图继续暴露。轮换密钥会立即使旧链接失效；开关和密钥只能由运行 Manager 的 Rabi PC 本机管理，自动重定向后的本机局域网地址仍可管理，其他设备不可以。若链接超时，先从 Host 状态确认当前端口，再检查 Windows 防火墙的专用/域网络是否允许本代 RabiRoute Manager。不要把链接发送到公开群聊、日志或仓库，也不要收藏上一代动态端口作为永久地址。
 
 Rabi PC 本机通过自己的局域网 IP 访问时仍按本机请求处理，因此开启局域网访问不会让同一台电脑上的消息发送、托盘或本地工具额外要求 WebGUI 密钥。其他设备仍必须使用带有效密钥的完整链接。
 
@@ -159,7 +159,7 @@ Route 下拉旁的数量是当前配置数量。下拉选中项和候选项优�
 | 启用中 | Route 已启用，但当前入口不需要独立 Gateway listener | 查看对应 Manager 入口状态 |
 | 已停止 | Route 配置存在，但子进程没有运行 | 到日志诊断启动或检查错误 |
 | 禁用中 | Route 或消息输入被关闭 | 确认是否应启用后保存 |
-| Manager 未连接 | WebGUI 无法访问本地 Manager | 检查进程、端口和启动目录 |
+| Manager 未连接 | WebGUI 无法访问当前 Manager | 从 Host 状态核对本代 generation、instance 与动态 URL |
 
 实验适配器显示“实验”并不等于故障。它表示代码入口存在，但外部系统或真机链路仍需在你的环境里验收。
 
@@ -170,7 +170,7 @@ Route 下拉旁的数量是当前配置数量。下拉选中项和候选项优�
 - **重启**：停止后重新启动，用于应用构建或连接变化。
 - **删除**：删除 Route 配置，风险高于停止；操作前先确认数据范围。
 
-Manager 只守护自己启动的 Route 子进程。NapCat、QQNT、Codex/ChatGPT Desktop 等外部程序有各自的生命周期。
+Manager 只管理自己启动且持有 process lease 的 Route/插件子进程。Windows Host 拥有 Manager 与托盘的应用代；NapCat、QQNT、Codex/ChatGPT Desktop 等外部程序仍有各自的生命周期。
 
 ## 语言切换边界
 

@@ -40,6 +40,7 @@ test("memory consolidation scheduler delivers a due run once and schedules the n
 
 test("memory consolidation scheduler retries a run after delivery failure", async () => {
   let attempts = 0;
+  let now = 10_000;
   const scheduler = new MemoryConsolidationScheduler({
     listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "C:/roles/a" }],
     requestDueRun: () => ({ runId: "run-due" }),
@@ -50,11 +51,12 @@ test("memory consolidation scheduler retries a run after delivery failure", asyn
     },
     scheduleDeadline: () => ({ unref() {} } as NodeJS.Timeout),
     clearDeadline: () => {},
-    now: () => 10_000,
+    now: () => now,
     retryDelayMs: 1_000
   });
 
   await scheduler.runOnce();
+  now += 1_000;
   await scheduler.runOnce();
 
   assert.equal(attempts, 2);
@@ -74,6 +76,137 @@ test("memory consolidation scheduler does not redeliver a run already accepted b
   await scheduler.runOnce();
 
   assert.equal(attempts, 0);
+});
+
+test("memory consolidation failures back off exponentially and open one incident", async () => {
+  let now = 10_000;
+  const deadlines: number[] = [];
+  const reports: number[] = [];
+  const incidents: string[] = [];
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
+    requestDueRun: () => null,
+    nextTriggerAt: () => undefined,
+    evaluate: async () => { throw new Error("NAS unavailable"); },
+    deliver: () => {},
+    retryDelayMs: 1_000,
+    maximumRetryDelayMs: 4_000,
+    incidentThreshold: 3,
+    now: () => now,
+    scheduleDeadline: (_callback, delayMs) => {
+      deadlines.push(delayMs);
+      return { unref() {} } as NodeJS.Timeout;
+    },
+    clearDeadline: () => {},
+    onError: (_target, _error, circuit) => reports.push(circuit.snapshot.consecutiveFailures),
+    onIncident: (_target, _error, circuit) => incidents.push(circuit.snapshot.incidentId || "")
+  });
+
+  await scheduler.runOnce();
+  now += 1_000;
+  await scheduler.runOnce();
+  now += 2_000;
+  await scheduler.runOnce();
+  now += 4_000;
+  await scheduler.runOnce();
+
+  assert.deepEqual(deadlines, [1_000, 2_000, 4_000, 4_000]);
+  assert.deepEqual(reports, [1, 3, 4]);
+  assert.equal(incidents.length, 1);
+  assert.ok(incidents[0]);
+});
+
+test("memory consolidation skips attempts inside backoff and resumes after explicit repair", async () => {
+  let now = 100;
+  let evaluations = 0;
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
+    requestDueRun: () => null,
+    nextTriggerAt: () => undefined,
+    evaluate: async () => {
+      evaluations += 1;
+      if (evaluations === 1) throw new Error("NAS unavailable");
+      return { pending: null };
+    },
+    deliver: () => {},
+    retryDelayMs: 1_000,
+    now: () => now,
+    scheduleDeadline: () => ({ unref() {} } as NodeJS.Timeout),
+    clearDeadline: () => {}
+  });
+
+  await scheduler.runOnce();
+  await scheduler.runOnce();
+  assert.equal(evaluations, 1);
+  scheduler.resetFailure("role-a");
+  await scheduler.runOnce();
+  assert.equal(evaluations, 2);
+});
+
+test("a failed due delivery cannot be re-armed at zero by a past business trigger", async () => {
+  const deadlines: number[] = [];
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "/a" }],
+    requestDueRun: () => ({ runId: "due" }),
+    nextTriggerAt: () => 1,
+    deliver: async () => { throw new Error("worker unavailable"); },
+    retryDelayMs: 1_000,
+    now: () => 10_000,
+    scheduleDeadline: (_callback, delayMs) => {
+      deadlines.push(delayMs);
+      return { unref() {} } as NodeJS.Timeout;
+    },
+    clearDeadline: () => {}
+  });
+
+  await scheduler.runOnce();
+  assert.deepEqual(deadlines, [1_000]);
+});
+
+test("stop aborts a hung schedule evaluation and waits for bounded cleanup", async () => {
+  let evaluationStarted = false;
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "/a" }],
+    requestDueRun: () => null,
+    nextTriggerAt: () => undefined,
+    evaluate: async (_target, signal) => {
+      evaluationStarted = true;
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      return { pending: null };
+    },
+    deliver: () => {}
+  });
+
+  scheduler.start();
+  while (!evaluationStarted) await new Promise(resolve => setImmediate(resolve));
+  await scheduler.stop();
+});
+
+test("memory consolidation scheduler can evaluate NAS-backed schedules asynchronously", async () => {
+  let releaseEvaluation!: () => void;
+  let evaluationStarted = false;
+  const delivered: string[] = [];
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
+    requestDueRun: () => { throw new Error("synchronous memory scan must not run"); },
+    nextTriggerAt: () => { throw new Error("synchronous trigger scan must not run"); },
+    evaluate: async () => {
+      evaluationStarted = true;
+      await new Promise<void>(resolve => { releaseEvaluation = resolve; });
+      return { pending: { runId: "run-async" }, nextTriggerAt: undefined };
+    },
+    deliver: async (_target, run) => { delivered.push(run.runId); }
+  });
+
+  const running = scheduler.runOnce();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(evaluationStarted, true);
+  assert.deepEqual(delivered, []);
+  releaseEvaluation();
+  await running;
+  assert.deepEqual(delivered, ["run-async"]);
 });
 
 

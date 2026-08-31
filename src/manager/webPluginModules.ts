@@ -66,7 +66,9 @@ export class WebPluginModuleRegistry {
       if (!webEntry) continue;
 
       const id = webModuleId(item.package.manifest.id, item.package.manifest.version);
-      const entryPath = safeRelativePath(webEntry);
+      const entryPath = safeRelativePath(
+        webEntry.execution === "declarative" ? webEntry.resource : webEntry.module
+      );
       const existing = pending.get(id);
       if (existing) {
         if (

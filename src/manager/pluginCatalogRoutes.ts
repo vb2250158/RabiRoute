@@ -24,7 +24,8 @@ function reconciliationPayload(context: PluginCatalogApiContext): object {
   const generation = context.runtime.current();
   return {
     schemaVersion: 1,
-    state: "idle",
+    state: generation.readiness.state === "ready" ? "idle" : "degraded",
+    readiness: generation.readiness,
     active: generation.records.filter(record => record.status === "active").map(record => record.identity.instanceId),
     waiting: generation.records.filter(record => record.status === "waiting_dependency").map(record => record.identity.instanceId),
     failed: generation.records.filter(record => record.status === "failed").map(record => record.identity.instanceId),

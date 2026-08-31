@@ -14,8 +14,8 @@
 音箱侧 client 或兼容 server
   -> 可选 WebSocket / SSH 隧道
     -> PC 侧 Open-XiaoAI 兼容进程
-      -> http://127.0.0.1:8798/v1/xiaoai/decision
-        -> http://127.0.0.1:8791/webhook
+      -> <bridgeBaseUrl>/v1/xiaoai/decision
+        -> <webhookUrl>
           -> RabiRoute XiaoAI Route
 ```
 
@@ -23,11 +23,23 @@
 
 ## 启动顺序
 
-1. 在仓库根目录构建并启动 Manager。
-2. 检查 `8791` 端口后启用默认禁用的 `xiaoai` Route。
-3. 在 `127.0.0.1:8798` 启动本桥接层。
-4. 启动外部 Open-XiaoAI 兼容 server 或 client 集成。
-5. 只有直连不可用时才增加 SSH 反向隧道。
+1. 安装版只通过 `RabiRouteHost.exe` 启动应用；只有源码开发才在仓库根目录构建并单独启动 Manager。
+2. 安装版从 Host `--command status --json` 取得本代 `managerBaseUrl`；源码模式使用 Manager 写到标准输出的 URL。不要假设 Manager 端口。
+3. 检查显式配置的 Webhook URL 后，启用默认禁用的 `xiaoai` Route。
+4. 在显式配置的地址启动本桥接层。下方命令中的 `127.0.0.1:8798` 只是本机示例。
+5. 启动外部 Open-XiaoAI 兼容 server 或 client 集成。
+6. 只有直连不可用时才增加 SSH 反向隧道。
+
+Windows 安装版：
+
+```powershell
+$hostExe = "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"
+$hostStatus = & $hostExe --command status --json | ConvertFrom-Json
+$managerBaseUrl = $hostStatus.managerBaseUrl
+if (-not $managerBaseUrl) { throw "Host 未返回当前 Manager URL。" }
+```
+
+源码开发：
 
 ```powershell
 npm run build
@@ -55,9 +67,17 @@ py -3 reverse-tunnel.py
 ## 检查
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8790,8791,8798,4399 -ErrorAction SilentlyContinue
+$hostStatus = & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json | ConvertFrom-Json
+$managerBaseUrl = $hostStatus.managerBaseUrl
+$managerPort = ([uri]$managerBaseUrl).Port
+Invoke-RestMethod "$managerBaseUrl/meta"
+
+# 8791、8798、4399 是本 Runbook 显式配置的本机适配器示例，不是 Manager 默认端口。
+Get-NetTCPConnection -LocalPort $managerPort,8791,8798,4399 -ErrorAction SilentlyContinue
 Invoke-RestMethod http://127.0.0.1:8798/health
 ```
+
+源码模式不查询 Host，应把 `$managerBaseUrl` 设为 Manager 标准输出给出的准确 URL。
 
 ```powershell
 cd plugin-adapters\xiaoai-rabiroute

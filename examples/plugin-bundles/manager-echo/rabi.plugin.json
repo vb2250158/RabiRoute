@@ -1,13 +1,25 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "example.manager.echo",
   "version": "1.0.0",
   "entries": {
-    "manager": "./manager.mjs",
-    "web": "./web/client.mjs"
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
+    }
   },
-  "provides": ["example.manager.echo@1"],
-  "requires": ["host.manager.http@1"],
+  "provides": [
+    "example.manager.echo@1"
+  ],
+  "requires": [
+    "host.manager.http@1"
+  ],
   "optional": [],
-  "permissions": ["manager.http"]
+  "permissions": [
+    "manager.http"
+  ]
 }

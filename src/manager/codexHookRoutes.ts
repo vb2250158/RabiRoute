@@ -33,7 +33,8 @@ function readJsonBody(request: http.IncomingMessage, maximumBytes = 256 * 1024):
 }
 
 function managerBaseUrl(request: http.IncomingMessage): string {
-  const host = String(request.headers.host || "127.0.0.1:8790").replace(/[\r\n]/g, "");
+  const host = String(request.headers.host || "").replace(/[\r\n]/g, "").trim();
+  if (!host) throw new Error("Manager request Host header is required.");
   return `http://${host}`;
 }
 

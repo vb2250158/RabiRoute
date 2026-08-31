@@ -8,6 +8,8 @@ import {
   transcriptSimilarity
 } from "./test-rabispeech-tts-loop.mjs";
 
+const TEST_MANAGER_URL = "http://127.0.0.1:8790";
+
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
@@ -144,6 +146,7 @@ test("TTS loop acceptance waits for SSE events and queries records once after co
   const runtime = fakeSpeechRuntime();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabispeech-tts-loop-"));
   const result = await runRabiSpeechTtsLoopAcceptance({
+    managerUrl: TEST_MANAGER_URL,
     outputPath: path.join(root, "report.json"),
     timeoutMs: 2_000
   }, {
@@ -169,6 +172,7 @@ test("API providers require explicit authorization", async () => {
   const runtime = fakeSpeechRuntime({ apiProviders: true });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabispeech-tts-loop-api-"));
   const denied = await runRabiSpeechTtsLoopAcceptance({
+    managerUrl: TEST_MANAGER_URL,
     outputPath: path.join(root, "denied.json"),
     timeoutMs: 2_000
   }, { fetchImpl: runtime.fetchImpl });
@@ -176,6 +180,7 @@ test("API providers require explicit authorization", async () => {
   assert.match(denied.report.error, /--allow-api-provider/);
 
   const allowed = await runRabiSpeechTtsLoopAcceptance({
+    managerUrl: TEST_MANAGER_URL,
     outputPath: path.join(root, "allowed.json"),
     allowApiProvider: true,
     timeoutMs: 2_000
@@ -187,6 +192,7 @@ test("faster-whisper local-files-only metadata is accepted as a local provider",
   const runtime = fakeSpeechRuntime({ fasterWhisperMetadata: true });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabispeech-tts-loop-faster-whisper-"));
   const result = await runRabiSpeechTtsLoopAcceptance({
+    managerUrl: TEST_MANAGER_URL,
     outputPath: path.join(root, "report.json"),
     timeoutMs: 2_000
   }, { fetchImpl: runtime.fetchImpl });
@@ -210,6 +216,7 @@ test("missing records_changed events fail by one-shot deadline without record po
   const runtime = fakeSpeechRuntime({ emitEvents: false });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabispeech-tts-loop-events-"));
   const result = await runRabiSpeechTtsLoopAcceptance({
+    managerUrl: TEST_MANAGER_URL,
     outputPath: path.join(root, "report.json"),
     timeoutMs: 80
   }, { fetchImpl: runtime.fetchImpl });
@@ -231,6 +238,7 @@ test("stale Manager HTML fails closed instead of falling back to record polling"
   const runtime = fakeSpeechRuntime({ staleManagerEvents: true });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabispeech-tts-loop-stale-manager-"));
   const result = await runRabiSpeechTtsLoopAcceptance({
+    managerUrl: TEST_MANAGER_URL,
     outputPath: path.join(root, "report.json"),
     timeoutMs: 2_000
   }, { fetchImpl: runtime.fetchImpl });

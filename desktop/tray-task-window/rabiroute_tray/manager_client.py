@@ -65,6 +65,7 @@ class DesktopSettings:
     screenshot_clipboard_shortcut: str = "Ctrl+Alt+V"
     screenshot_auto_copy: bool = True
     autostart: bool = False
+    autostart_configured: bool = False
     theme: str = "system"
     custom_theme: dict[str, Any] | None = None
 
@@ -108,14 +109,39 @@ class PlanFeedbackSubmitResult:
 class ManagerClient:
     def __init__(
         self,
-        manager_url: str = "http://127.0.0.1:8790",
+        manager_url: str,
+        *,
+        application_generation_id: str,
+        manager_instance_id: str,
         timeout_seconds: float = 3.0,
         extension_registry: DesktopExtensionRegistry | None = None,
     ) -> None:
         self.manager_url = manager_url.rstrip("/")
+        self.application_generation_id = application_generation_id
+        self.manager_instance_id = manager_instance_id
         self.timeout_seconds = timeout_seconds
         self.desktop_extension_registry = extension_registry or create_builtin_desktop_extension_registry()
         self._desktop_plugin_catalog_cache = DesktopPluginCatalogCache(self.desktop_extension_registry)
+        self._desktop_plugin_catalog_cache.observe_manager_identity(
+            f"{self.application_generation_id}:{self.manager_instance_id}"
+        )
+
+    def _identity_error(self, meta: object) -> str:
+        if not isinstance(meta, dict):
+            return "Manager /meta did not return an object."
+        actual_generation = str(meta.get("applicationGenerationId") or "").strip()
+        actual_manager = str(meta.get("managerInstanceId") or "").strip()
+        if actual_generation != self.application_generation_id:
+            return (
+                "Manager application generation mismatch: "
+                f"expected {self.application_generation_id}, received {actual_generation or '<missing>'}."
+            )
+        if actual_manager != self.manager_instance_id:
+            return (
+                "Manager instance mismatch: "
+                f"expected {self.manager_instance_id}, received {actual_manager or '<missing>'}."
+            )
+        return ""
 
     def snapshot(self) -> ManagerSnapshot:
         try:
@@ -129,10 +155,15 @@ class ManagerClient:
                 error=str(error),
             )
 
-        health = meta.get("health") if isinstance(meta, dict) else None
-        manager_pid = health.get("pid") if isinstance(health, dict) else None
-        if isinstance(manager_pid, int) and not isinstance(manager_pid, bool) and manager_pid > 0:
-            self._desktop_plugin_catalog_cache.observe_manager_identity(f"pid:{manager_pid}")
+        identity_error = self._identity_error(meta)
+        if identity_error:
+            return ManagerSnapshot(
+                connected=False,
+                manager_url=self.manager_url,
+                meta=meta if isinstance(meta, dict) else {},
+                gateways=[],
+                error=identity_error,
+            )
 
         try:
             gateway_payload = self._get_json("/gateways?summary=1")
@@ -152,13 +183,6 @@ class ManagerClient:
                 gateways=[],
                 error=f"gateway status unavailable: {error}",
             )
-
-    def shutdown(self) -> bool:
-        try:
-            self._post_json("/manager/shutdown", {"desktopExit": True})
-            return True
-        except (OSError, URLError, TimeoutError, json.JSONDecodeError):
-            return False
 
     def manual_trigger(
         self,
@@ -335,6 +359,7 @@ class ManagerClient:
             screenshot_clipboard_shortcut=str(screenshot.get("clipboardShortcut") or "Ctrl+Alt+V").strip()[:80],
             screenshot_auto_copy=screenshot.get("autoCopy", True) is not False,
             autostart=row.get("autostart") is True,
+            autostart_configured=row.get("autostartConfigured") is True,
             theme=theme,
             custom_theme=custom_theme,
         )

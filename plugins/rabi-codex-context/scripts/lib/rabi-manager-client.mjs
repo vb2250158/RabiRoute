@@ -1,10 +1,43 @@
-const DEFAULT_MANAGER_URL = "http://127.0.0.1:8790";
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+
 const DEFAULT_TIMEOUT_MS = 8000;
 
+function discoverManagerUrlFromHost(env) {
+  const candidates = [
+    env.RABIROUTE_HOST_EXE,
+    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, "Programs", "RabiRoute", "RabiRouteHost.exe")
+  ].filter(Boolean);
+  for (const executable of candidates) {
+    if (!fs.existsSync(executable)) continue;
+    const result = spawnSync(executable, ["--command", "status", "--json"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 3000
+    });
+    if (result.status !== 0 || !result.stdout) continue;
+    try {
+      const descriptor = JSON.parse(result.stdout.trim());
+      const baseUrl = String(descriptor.managerBaseUrl || descriptor.baseUrl || "").trim();
+      if (/^http:\/\/127\.0\.0\.1:\d+$/.test(baseUrl)) return baseUrl;
+    } catch {
+      // A stale or non-RabiRoute executable is not a discovery source.
+    }
+  }
+  return "";
+}
+
 export function resolveManagerUrl(env = process.env) {
-  return String(env.RABI_MANAGER_URL || env.RABI_CODEX_MANAGER_URL || DEFAULT_MANAGER_URL)
+  const value = String(
+    env.RABI_MANAGER_URL
+    || env.RABI_CODEX_MANAGER_URL
+    || discoverManagerUrlFromHost(env)
+  )
     .trim()
     .replace(/\/+$/, "");
+  if (!value) throw new Error("RabiRoute Host is not running and no explicit Manager URL was supplied.");
+  return value;
 }
 
 async function responseBody(response) {

@@ -119,7 +119,7 @@ npm run build:backend
 npm run check:built-manager
 ```
 
-The smoke test uses a temporary loopback port plus `RABIROUTE_MANAGER_READ_ONLY=1`. It does not restart the existing Manager on port 8790 and starts no Gateway, Relay worker, LAN discovery, Route watcher, persona-file watcher, or microphone reconciliation. Child-process stdout readiness events replace status polling. It also reads loopback `index-status` to prove that the built manifest index finished reconciliation; read-only mode does not write the cache. Sanitized evidence is atomically written to Git-ignored `data/acceptance/built-manager-readonly-<timestamp>.json` by default. It stores only build hashes, HTTP statuses, index mode, and counts, never persona names/IDs, file paths/bodies, transcripts, people, tokens, Relay URLs, or ports.
+The smoke test uses a temporary loopback port plus `RABIROUTE_MANAGER_READ_ONLY=1`. It does not restart the application generation owned by the current Host and starts no Gateway, Relay worker, LAN discovery, Route watcher, persona-file watcher, or microphone reconciliation. Child-process stdout readiness events replace status polling. It also reads loopback `index-status` to prove that the built manifest index finished reconciliation; read-only mode does not write the cache. Sanitized evidence is atomically written to Git-ignored `data/acceptance/built-manager-readonly-<timestamp>.json` by default. It stores only build hashes, HTTP statuses, index mode, and counts, never persona names/IDs, file paths/bodies, transcripts, people, tokens, Relay URLs, or ports.
 
 ## Local dual-node built-artifact acceptance
 

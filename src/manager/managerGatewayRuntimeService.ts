@@ -38,7 +38,10 @@ export class ManagerGatewayRuntimeService<
   ) {}
 
   load(): void {
-    const definitions = this.callbacks.loadDefinitions();
+    this.loadDefinitions(this.callbacks.loadDefinitions());
+  }
+
+  loadDefinitions(definitions: readonly TDefinition[]): void {
     const seen = new Set<string>();
 
     for (const rawDefinition of definitions) {

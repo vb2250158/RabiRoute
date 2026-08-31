@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -195,7 +196,7 @@ class DesktopPetClient:
 
     def update_binding(self, patch: dict[str, object]) -> DesktopPetBinding:
         role_id = quote(self.persona_id, safe="")
-        url = urljoin(f"{self.manager_url}/", f"api/roles/{role_id}/desktop-pet")
+        url = urljoin(f"{self.manager_url}/", f"api/desktop-pet/roles/{role_id}")
         body = json.dumps({"personaId": self.persona_id, **patch}, ensure_ascii=False).encode("utf-8")
         request = Request(url, data=body, method="PATCH", headers={"content-type": "application/json; charset=utf-8"})
         with urlopen(request, timeout=self.timeout_seconds) as response:
@@ -216,18 +217,30 @@ class DesktopPetClient:
             fps_cap=int(_bounded_number(row.get("fpsCap"), 15, 6, 24)),
         )
 
-    def load_animation(self, pack: DesktopPetPack, state_name: str) -> LoadedDesktopPetAnimation:
+    def load_animation(
+        self,
+        pack: DesktopPetPack,
+        state_name: str,
+        *,
+        max_concurrency: int = 1,
+    ) -> LoadedDesktopPetAnimation:
         if pack.persona_id != self.persona_id:
             raise ValueError("Desktop pet pack belongs to a different persona.")
         state = pack.states.get(state_name) or pack.states.get("idle")
         if state is None:
             raise ValueError("Desktop pet pack has no idle state.")
-        assets: list[bytes] = []
-        for index, url in enumerate(state.asset_urls):
-            assets.append(self._get(url))
-            if index + 1 < len(state.asset_urls) and self.asset_interval_seconds:
-                time.sleep(self.asset_interval_seconds)
-        return LoadedDesktopPetAnimation(state=state, assets=tuple(assets))
+        workers = max(1, min(4, int(max_concurrency), len(state.asset_urls)))
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="desktop-pet-assets") as executor:
+                assets = tuple(executor.map(self._get, state.asset_urls))
+        else:
+            loaded_assets: list[bytes] = []
+            for index, url in enumerate(state.asset_urls):
+                loaded_assets.append(self._get(url))
+                if index + 1 < len(state.asset_urls) and self.asset_interval_seconds:
+                    time.sleep(self.asset_interval_seconds)
+            assets = tuple(loaded_assets)
+        return LoadedDesktopPetAnimation(state=state, assets=assets)
 
     def _get(self, path_or_url: str) -> bytes:
         url = urljoin(f"{self.manager_url}/", path_or_url.lstrip("/"))

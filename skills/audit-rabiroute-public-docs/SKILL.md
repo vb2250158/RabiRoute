@@ -32,7 +32,7 @@ description: 审计并修复 RabiRoute 公共文档在本机、远端 RabiLink W
 
 ## 三种入口契约
 
-- 本机控制面根路径通常是 `http://127.0.0.1:8790/`。在公共概览中把回环地址写成代码，不做成让远端读者误点的链接。
+- 本机控制面根路径由已安装的 `RabiRouteHost.exe --command status --json` 在 `managerBaseUrl` 返回；端口由当前应用代际动态分配。公共概览应说明发现命令，不得写死或扫描端口。
 - 远端 WebGUI 根路径是 `/manage/<account>/<RabiGUID>/`。运行时报告、图片和下载资源必须使用相对 URL，并由 Relay 在同一前缀下安全地提供。
 - 仓库 Markdown 的相对链接必须从当前文件位置计算。不要假设浏览器的 `<base>` 与 GitHub 的文件目录相同。
 - `/api/*` 与 `/assets/*` 是否重写由 Relay 实现决定；新增静态前缀时必须同时补服务器处理和回归测试。

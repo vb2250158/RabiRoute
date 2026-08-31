@@ -1,4 +1,5 @@
-const baseUrl = String(process.argv[2] || "http://127.0.0.1:8790").replace(/\/+$/, "");
+const baseUrl = String(process.argv[2] || process.env.GATEWAY_MANAGER_URL || "").replace(/\/+$/, "");
+if (!baseUrl) throw new Error("Pass the current Manager URL or set GATEWAY_MANAGER_URL.");
 const roleId = String(process.argv[3] || "XinghaiBuilder").trim();
 const metaProbeCount = 50;
 

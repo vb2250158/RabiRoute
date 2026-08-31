@@ -120,13 +120,9 @@ test("plugin route modules retain every migrated endpoint family", () => {
     "/api/gateways"
   ]);
   assertSourceRetainsRoutes("src/manager/desktopControlRoutes.ts", [
-    "/open-config-file",
-    "/manager/start"
+    "/open-config-file"
   ]);
-  assertSourceRetainsRoutes("src/manager/desktopLifecycleRoutes.ts", [
-    "/manager/desktop-lifecycle/start",
-    "/manager/shutdown"
-  ]);
+  assert.equal(fs.existsSync(path.join(root, "src/manager/desktopLifecycleRoutes.ts")), false);
   assertSourceRetainsRoutes("src/manager/napcatControlRoutes.ts", [
     "/api/message/napcat-repair-all",
     "/api/message/napcat-ensure-ready",

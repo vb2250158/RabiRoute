@@ -74,6 +74,7 @@ test("plan assistant initialization keeps the secretary control-only and preserv
     assistantThreadId: "019fa314-2c07-7523-896f-9bb6b638054d",
     assistantThreadName: "建造师 策划 程序 协助处理计划1",
     workspace: "C:\\Data\\CottonProject\\RabiRoute",
+    managerBaseUrl: "http://127.0.0.1:8790",
     count: 2,
     index: 1
   });

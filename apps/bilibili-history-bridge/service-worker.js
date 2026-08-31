@@ -1,5 +1,5 @@
-const MANAGER = "http://127.0.0.1:8790";
 const STORAGE_TOKEN = "rabirouteBilibiliBridgeToken";
+const STORAGE_MANAGER = "rabirouteManagerBaseUrl";
 const POLL_ALARM = "rabiroute-bilibili-history-poll";
 let running = false;
 
@@ -8,7 +8,10 @@ function delay(milliseconds) {
 }
 
 async function manager(path, options = {}) {
-  const response = await fetch(`${MANAGER}${path}`, options);
+  const stored = await chrome.storage.local.get(STORAGE_MANAGER);
+  const managerBaseUrl = String(stored[STORAGE_MANAGER] || "").replace(/\/+$/, "");
+  if (!managerBaseUrl) throw new Error("Open RibiWebGUI once so the extension can bind the current dynamic endpoint.");
+  const response = await fetch(`${managerBaseUrl}${path}`, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `Manager HTTP ${response.status}`);
   return body;
@@ -106,6 +109,26 @@ chrome.runtime.onInstalled.addListener(() => {
   void run();
 });
 chrome.runtime.onStartup.addListener(() => void run());
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "rabiroute-manager-endpoint" || typeof message.origin !== "string") return false;
+  void (async () => {
+    try {
+      const origin = new URL(message.origin);
+      if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || sender.tab?.url?.startsWith(origin.origin) !== true) {
+        throw new Error("invalid Manager origin");
+      }
+      const response = await fetch(`${origin.origin}/meta`, { cache: "no-store" });
+      const meta = await response.json();
+      if (!response.ok || !meta.managerInstanceId || meta.managerBaseUrl !== origin.origin) throw new Error("endpoint identity mismatch");
+      await chrome.storage.local.set({ [STORAGE_MANAGER]: origin.origin, [STORAGE_TOKEN]: null });
+      sendResponse({ ok: true });
+      void run();
+    } catch (error) {
+      sendResponse({ ok: false, error: String(error?.message || error) });
+    }
+  })();
+  return true;
+});
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === POLL_ALARM) void run();
 });

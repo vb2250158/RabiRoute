@@ -77,6 +77,34 @@ test("Manager forwarding returns non-JSON and non-2xx responses without throwing
   });
 });
 
+test("FenneNote forwarding fails closed when an endpoint is not explicitly configured", async () => {
+  const previousReply = process.env.FENNOTE_REPLY_URL;
+  const previousPlayback = process.env.FENNOTE_PLAYBACK_URL;
+  delete process.env.FENNOTE_REPLY_URL;
+  delete process.env.FENNOTE_PLAYBACK_URL;
+  let fetchCalls = 0;
+  const fetchImpl: FenneNoteFetch = async () => {
+    fetchCalls += 1;
+    return response("{}");
+  };
+  try {
+    await assert.rejects(
+      forwardFenneNoteRequest({}, { mode: "reply", url: "  ", replyUrl: "\t", fetchImpl }),
+      /FenneNote reply endpoint is not configured; set FENNOTE_REPLY_URL/
+    );
+    await assert.rejects(
+      forwardFenneNoteRequest({}, { mode: "playback", playbackUrl: "  ", fetchImpl }),
+      /FenneNote playback endpoint is not configured; set FENNOTE_PLAYBACK_URL/
+    );
+    assert.equal(fetchCalls, 0);
+  } finally {
+    if (previousReply === undefined) delete process.env.FENNOTE_REPLY_URL;
+    else process.env.FENNOTE_REPLY_URL = previousReply;
+    if (previousPlayback === undefined) delete process.env.FENNOTE_PLAYBACK_URL;
+    else process.env.FENNOTE_PLAYBACK_URL = previousPlayback;
+  }
+});
+
 test("Outbox forwarding preserves its success result and HTTP error behavior", async () => {
   const success = await postFenneNoteOutput({ text: "play" }, {
     mode: "playback",

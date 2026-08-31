@@ -6,8 +6,40 @@ import {
   handleMessageAdapterControlApi,
   MessageAdapterControlService,
   MessageAdapterScanProviderRegistry,
+  scanXiaomiHomeEndpoint,
   type MessageAdapterScanResult
 } from "./messageAdapterControl.js";
+
+test("Xiaomi Home scan maps the owner health contract without treating pending authorization as connected", () => {
+  const pending = scanXiaomiHomeEndpoint({
+    status: "authorization_required",
+    baseUrl: "http://user:secret@127.0.0.1:8123?token=hidden",
+    tokenConfigured: false,
+    writeEnabled: false,
+    eventMonitor: { enabled: true, connectionState: "authorization_required" },
+    cameraCapture: { enabled: false, ready: false, allowedHostCount: 0, inFlight: 0 }
+  });
+  assert.equal(pending.type, "xiaomiHome");
+  assert.equal(pending.label, "米家 / Xiaomi Home");
+  assert.equal(pending.endpoints?.[0]?.url, "http://127.0.0.1:8123");
+  assert.equal(pending.endpoints?.[0]?.healthy, false);
+  assert.equal(pending.requirements?.find(item => item.id === "authorization")?.ok, false);
+  assert.match(pending.requirements?.find(item => item.id === "authorization")?.detail ?? "", /待授权/);
+  assert.equal(JSON.stringify(pending).includes("secret"), false);
+  assert.equal(JSON.stringify(pending).includes("hidden"), false);
+
+  const ready = scanXiaomiHomeEndpoint({
+    status: "ready",
+    baseUrl: "http://homeassistant.local:8123",
+    tokenConfigured: true,
+    writeEnabled: false,
+    eventMonitor: { enabled: true, connectionState: "subscribed" },
+    cameraCapture: { enabled: true, ready: true, inFlight: 0 }
+  });
+  assert.equal(ready.endpoints?.[0]?.healthy, true);
+  assert.equal(ready.requirements?.find(item => item.id === "event-monitor")?.ok, true);
+  assert.match(ready.warnings?.[0] ?? "", /不是 Gateway 常驻 adapter/);
+});
 
 function adapterResult(): MessageAdapterScanResult {
   return {

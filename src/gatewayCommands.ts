@@ -29,6 +29,12 @@ import {
 import type { WearableHealthAlert } from "./wearableHealth.js";
 import type { RabiDeliveryEnvelope } from "./shared/rabiMessage.js";
 import { serializeAgentDeliveryTestResult } from "./agentDeliveryTest.js";
+import {
+  buildXiaomiHomeEventRecord,
+  xiaomiHomeEventTemplateValues,
+  type XiaomiHomeEvent,
+  type XiaomiHomeEventDeliveryContext
+} from "./xiaomiHomeEventDelivery.js";
 
 function deliverySummary(result: ForwardDeliveryResult): string {
   const failedAdapters = result.adapterOutcomes.filter((outcome) => outcome.status === "failed").length;
@@ -51,6 +57,7 @@ function parseReplayRouteKind(value: string | undefined): ForwardRouteKind | und
     || value === "rabilink"
     || value === "wearable_health_alert"
     || value === "weixin_message"
+    || value === "xiaomi_home_event"
     ? value
     : undefined;
 }
@@ -68,8 +75,36 @@ type WearableHealthAlertCliPayload = {
   context: WearableHealthAlertDeliveryContext;
 };
 
+type XiaomiHomeEventCliPayload = {
+  event: XiaomiHomeEvent;
+  context: XiaomiHomeEventDeliveryContext;
+};
+
 
 export async function runGatewayCommand(argv: readonly string[] = process.argv): Promise<void> {
+  if (argv.includes("--xiaomi-home-event-stdin")) {
+    try {
+      const payload = await readStandardInputJson<XiaomiHomeEventCliPayload>();
+      if (!payload?.event?.id || !payload?.context?.agentRoleId) throw new Error("Xiaomi Home event payload is incomplete.");
+      const result = await forwardMessageAndWait(
+        "xiaomi_home_event",
+        buildXiaomiHomeEventRecord(payload.event),
+        xiaomiHomeEventTemplateValues(payload.event)
+      );
+      console.log(`RABIROUTE_XIAOMI_HOME_DELIVERY_RESULT:${JSON.stringify({
+        status: result.status,
+        matchedRuleCount: result.matchedRuleCount,
+        sentPacketCount: result.sentPacketCount,
+        reason: result.reason,
+        adapterOutcomes: result.adapterOutcomes.map(outcome => ({ adapter: outcome.adapter, status: outcome.status }))
+      })}`);
+      process.exit(result.status === "failed" ? 1 : 0);
+    } catch (error) {
+      console.error(`RabiRoute Xiaomi Home event delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  }
+
   if (argv.includes("--wearable-health-alert-stdin")) {
     try {
       const payload = await readStandardInputJson<WearableHealthAlertCliPayload>();

@@ -395,10 +395,12 @@ RabiRoute gateway 和 manager 都建议继续只监听本机地址，由反代�
 ```text
 公网 443
   -> Caddy / Nginx
-  -> http://127.0.0.1:8790  manager API
+  -> <managerBaseUrl>  本代 Manager API（由 Host 状态发现）
   -> http://127.0.0.1:8791  webhook gateway
   -> http://127.0.0.1:8794  RabiLink gateway
 ```
+
+`<current-manager-port>` 不是手填常量。反代启动前必须通过 Host `status --json` 读取 `managerBaseUrl`，并在 application generation 变化时受控重载；无法实现这一发现链时使用 RabiLink Relay，不得退回固定 Manager 端口。
 
 Caddy 示例：
 
@@ -406,7 +408,7 @@ Caddy 示例：
 rabi.example.com {
   reverse_proxy /webhook 127.0.0.1:8791
   reverse_proxy /rabilink 127.0.0.1:8794
-  reverse_proxy /api/mobile/* 127.0.0.1:8790
+  reverse_proxy /api/mobile/* <current-manager-host>:<current-manager-port>
 }
 ```
 
@@ -414,7 +416,7 @@ rabi.example.com {
 
 ```nginx
 location /api/mobile/ws {
-  proxy_pass http://127.0.0.1:8790;
+  proxy_pass http://<current-manager-host>:<current-manager-port>;
   proxy_http_version 1.1;
   proxy_set_header Upgrade $http_upgrade;
   proxy_set_header Connection "upgrade";

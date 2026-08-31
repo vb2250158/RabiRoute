@@ -8,6 +8,7 @@ test("Manager control request classification keeps plugin APIs out of the WebGUI
     "/api/agent/send",
     "/roles",
     "/roles/Rabi/memory/recent",
+    "/health",
     "/meta",
     "/gateways",
     "/gateways/main/restart",

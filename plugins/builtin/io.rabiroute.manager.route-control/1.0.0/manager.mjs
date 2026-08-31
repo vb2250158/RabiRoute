@@ -116,6 +116,8 @@ export const activate = definePlugin({
                         routeRoot: runtime.routeRoot,
                         managerPort: runtime.managerPort,
                         managerHost: runtime.managerHost,
+                        applicationGenerationId: runtime.applicationGenerationId,
+                        managerInstanceId: runtime.managerInstanceId,
                         version: runtime.rabiRoutePackageVersion,
                         globalConfig: runtime.rabiGlobalConfig,
                         runtimes: () => runtime.runtimes.values(),

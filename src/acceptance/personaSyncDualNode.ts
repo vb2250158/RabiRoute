@@ -16,6 +16,7 @@ import {
 import { PersonaSyncLanServer } from "../manager/personaSyncLanServer.js";
 import { handlePersonaSyncApi } from "../manager/personaSyncRoutes.js";
 import { RabiLinkRelayRuntime, type RabiLinkRelayRuntimeStatus } from "../manager/rabiLinkRelayRuntime.js";
+import { managerPortIsFetchSafe } from "../managerEndpointPolicy.js";
 
 const MODULE_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(path.dirname(MODULE_PATH), "..", "..");
@@ -82,16 +83,21 @@ function closeServer(server: http.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
 }
 
-function reservePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = address && typeof address === "object" ? address.port : 0;
-      server.close(error => error ? reject(error) : resolve(port));
+async function reservePort(): Promise<number> {
+  const maxAttempts = 128;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const port = await new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const reservedPort = address && typeof address === "object" ? address.port : 0;
+        server.close(error => error ? reject(error) : resolve(reservedPort));
+      });
     });
-  });
+    if (managerPortIsFetchSafe(port)) return port;
+  }
+  throw new Error(`Windows did not allocate a browser-safe Relay acceptance port after ${maxAttempts} attempts.`);
 }
 
 function waitForRelayReady(child: ChildProcess, timeoutMs: number): Promise<void> {

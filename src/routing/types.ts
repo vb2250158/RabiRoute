@@ -26,9 +26,10 @@ export type ForwardRouteKind =
   | "wearable_health_alert"
   | "wecom_message"
   | "weixin_message"
-  | "feishu_message";
+  | "feishu_message"
+  | "xiaomi_home_event";
 
-export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message";
+export type ForwardLogKind = "private" | "group_mention" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event";
 
 export interface MessageGroupForwardMetadata {
   messageGroupId?: string;

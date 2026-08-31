@@ -51,9 +51,10 @@ function writePack(roleDir: string, personaId = "YeYu", packId = "yeyu-library-d
 
 test("desktop pet catalog binds packs to the role and naturally sorts PNG frames", () => {
   const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
   writePack(roleDir);
 
-  const catalog = listDesktopPetPacks("YeYu", roleDir);
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
 
   assert.equal(catalog.packs.length, 1);
   assert.equal(catalog.packs[0].personaId, "YeYu");
@@ -73,9 +74,10 @@ test("desktop pet catalog binds packs to the role and naturally sorts PNG frames
 
 test("desktop pet catalog rejects a manifest owned by another persona", () => {
   const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
   writePack(roleDir, "OtherRole");
 
-  const catalog = listDesktopPetPacks("YeYu", roleDir);
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
 
   assert.equal(catalog.packs.length, 0);
   assert.match(catalog.diagnostics[0].message, /personaId/);
@@ -83,11 +85,12 @@ test("desktop pet catalog rejects a manifest owned by another persona", () => {
 
 test("desktop pet catalog ignores template-only pack skeletons", () => {
   const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
   const packDir = path.join(roleDir, "desktop-pet", "packs", "draft-pack");
   fs.mkdirSync(packDir, { recursive: true });
   fs.writeFileSync(path.join(packDir, "pet-pack.template.json"), "{}", "utf8");
 
-  const catalog = listDesktopPetPacks("YeYu", roleDir);
+  const catalog = listDesktopPetPacks("YeYu", roleDir, cacheRoot);
 
   assert.deepEqual(catalog.packs, []);
   assert.deepEqual(catalog.diagnostics, []);
@@ -155,13 +158,50 @@ test("desktop pet runtime catalog does not scan or return shared-source packs", 
   assert.deepEqual(catalog.data.packs.map(pack => pack.id), ["yeyu-library-default"]);
 });
 
+test("desktop pet API promotes a validated shared-source pack into the runtime cache", async t => {
+  const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  const publishedEvents: Array<{ eventType: string; data: unknown }> = [];
+  writePack(roleDir, "YeYu", "shared-cache-pack");
+  const server = http.createServer((request, response) => {
+    const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+    if (!handleDesktopPetApi(request, requestUrl, response, () => roleDir, undefined, cacheRoot, (eventType, data) => publishedEvents.push({ eventType, data }))) {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const cacheResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs/shared-cache-pack/cache`, { method: "POST" });
+  assert.equal(cacheResponse.status, 201);
+  const runtimeCatalog = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs?scope=runtime`)).json() as { data: DesktopPetPackCatalog };
+  assert.deepEqual(runtimeCatalog.data.packs.map(pack => pack.id), ["shared-cache-pack"]);
+  assert.deepEqual(publishedEvents, [{
+    eventType: "desktop_pet_catalog_changed",
+    data: { personaId: "YeYu", packId: "shared-cache-pack" }
+  }]);
+});
+
 test("desktop pet API serves role-scoped catalog and image assets", async t => {
   const roleDir = roleFixture();
+  const cacheRoot = roleFixture();
+  const publishedEvents: Array<{ eventType: string; data: unknown }> = [];
   writePack(roleDir);
   const settings = new DesktopSettingsStore(path.join(roleDir, "host-settings.json"));
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
-    if (!handleDesktopPetApi(request, requestUrl, response, () => roleDir, settings)) {
+    if (!handleDesktopPetApi(
+      request,
+      requestUrl,
+      response,
+      () => roleDir,
+      settings,
+      cacheRoot,
+      (eventType, data) => publishedEvents.push({ eventType, data })
+    )) {
       response.writeHead(404).end();
     }
   });
@@ -206,6 +246,10 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
   assert.equal(bindingPayload.data.binding.enabled, true);
   assert.equal(bindingPayload.data.binding.packId, "yeyu-library-default");
   assert.equal(bindingPayload.data.binding.scale, 0.75);
+  assert.deepEqual(publishedEvents[0], {
+    eventType: "desktop_settings_changed",
+    data: { scope: "desktop-pet", personaId: "YeYu" }
+  });
 
   const crossPersonaResponse = await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu`, {
     method: "PATCH",
@@ -219,6 +263,10 @@ test("desktop pet API serves role-scoped catalog and image assets", async t => {
     { method: "POST", headers: { "content-type": "image/gif" }, body: Buffer.from("GIF89a") }
   );
   assert.equal(importResponse.status, 201);
+  assert.deepEqual(publishedEvents[1], {
+    eventType: "desktop_pet_catalog_changed",
+    data: { personaId: "YeYu", packId: "yeyu-second" }
+  });
   const refreshedCatalog = await (await fetch(`${baseUrl}/api/desktop-pet/roles/YeYu/packs`)).json() as { data: DesktopPetPackCatalog };
   assert.equal(refreshedCatalog.data.packs.some(pack => pack.id === "yeyu-second"), true);
 });

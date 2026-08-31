@@ -222,6 +222,7 @@ export function adapterLabel(type: string): string {
   if (type === "speech") return "语音消息端";
   if (type === "fennenote") return "FenneNote / 芬妮笔记";
   if (type === "xiaoai") return "小米音箱 / 小爱";
+  if (type === "xiaomiHome") return "米家 / Xiaomi Home";
   if (type === "rabilink") return "眼镜端（经 RabiLink）";
   if (type === "wearable") return "智能手表/手环";
   if (type === "wecom") return "企业微信 / WeCom";
@@ -252,6 +253,7 @@ export function adapterSourceAliases(type: string): string[] {
   if (type === "fennenote") return ["fennenote", "fenne_note", "fenne-note", "fenne", "芬妮笔记", "芬妮"];
   if (type === "speech") return ["speech", "rabispeech", "rabipc", "语音消息端"];
   if (type === "xiaoai") return ["xiaoai", "xiao_ai", "xiao-ai", "mi_speaker", "mi-speaker", "xiaomi", "小爱", "小米音箱"];
+  if (type === "xiaomiHome") return ["xiaomiHome", "xiaomi_home", "xiaomi-home", "home_assistant", "home-assistant", "米家", "智能家居"];
   if (type === "rabilink") return ["rabilink", "rabi_link", "rabi-link", "rokid", "rokid_glass", "rizon", "lingzhu", "relay", "服务器", "直连", "乐奇", "乐棋"];
   if (type === "wearable") return ["wearable", "watch", "band", "health", "smartwatch", "手表", "手环", "健康", "心率", "睡眠"];
   if (type === "wecom") return ["wecom", "wechat-work", "企业微信", "企微"];
@@ -291,6 +293,11 @@ export function applyAdapterDefaults(gateway: GatewayDefinition): void {
         accessToken: gateway.napcatAccessToken || "",
         webuiToken: gateway.napcatWebuiToken || ""
       }];
+    } else {
+      const primary = gateway.napcatInstances.find(instance => instance.enabled !== false)
+        ?? gateway.napcatInstances[0];
+      primary.enabled = true;
+      gateway.napcatInstances = [primary];
     }
   }
   if (adapters.includes("heartbeat")) {
@@ -489,6 +496,12 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
       groups: [{ title: "小爱语音事件", routeKinds: ["voice_transcript"] }]
     },
     {
+      adapter: "xiaomiHome",
+      title: "米家 / Xiaomi Home",
+      note: "Home Assistant 中的米家状态与摄像头事件；由 Manager 集成投递到当前人格，不会启动 Gateway 常驻 adapter。",
+      groups: [{ title: "米家设备事件", routeKinds: ["xiaomi_home_event"] }]
+    },
+    {
       adapter: "rabilink",
       title: "眼镜端（经 RabiLink）",
       note: "眼镜是消息来源；系统内置 RabiLink 负责转接，再由当前路由决定是否投递 Agent。",
@@ -577,7 +590,7 @@ export function adapterConnectionReasons(gateway: GatewayDefinition, runtime: Ru
   }
   if (!runtime.running && externalAdaptersNeedRuntime) {
     reasons.push(externalAdapterTypes.includes("napcat")
-      ? "RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。"
+      ? "RabiRoute 监听进程未运行。请启动当前 Route 的 NapCat 监听。"
       : "RabiRoute 监听进程未运行。当前消息端需要本地监听服务；请启动当前路由。");
   }
   if (adapterPendingRestart) {
@@ -609,7 +622,7 @@ export function adapterErrorsFor(type: MessageAdapterType, gateway: GatewayDefin
   }
   if (!runtime.running && adapterNeedsGatewayRuntime(type)) {
     reasons.push(type === "napcat"
-      ? "RabiRoute 监听进程未运行。一个监听进程可以承载多个 NapCat/QQ 实例；请启动当前路由。"
+      ? "RabiRoute 监听进程未运行。请启动当前 Route 的 NapCat 监听。"
       : "RabiRoute 监听进程未运行。当前消息端需要本地监听服务；请启动当前路由。");
     return reasons;
   }

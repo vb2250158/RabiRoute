@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { importDesktopPetPack } from "./desktopPetPackImport.js";
+import { copyDesktopPetPackDirectory, importDesktopPetPack } from "./desktopPetPackImport.js";
 import {
   DEFAULT_DESKTOP_PET_BINDING,
   normalizeDesktopPetBinding,
@@ -63,6 +63,8 @@ export type DesktopPetSettingsAccess = {
   write(value: unknown): DesktopSettings;
 };
 
+export type DesktopPetEventPublisher = (eventType: string, data: unknown) => void;
+
 function objectValue(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
 }
@@ -86,6 +88,29 @@ function resolveInside(root: string, relativePath: string): string | undefined {
   if (!relativePath || path.isAbsolute(relativePath)) return undefined;
   const candidate = path.resolve(root, relativePath);
   return inside(path.resolve(root), candidate) ? candidate : undefined;
+}
+
+function syncImportedPackToRuntimeCache(
+  roleId: string,
+  roleDir: string,
+  packId: string,
+  cacheRoot: string
+): void {
+  const sourceRoot = path.resolve(roleDir, "desktop-pet", "packs");
+  const sourcePack = path.resolve(sourceRoot, packId);
+  const runtimePacksRoot = path.resolve(cacheRoot, roleId, "desktop-pet", "packs");
+  const runtimePack = path.resolve(runtimePacksRoot, packId);
+  if (!inside(sourceRoot, sourcePack) || !inside(runtimePacksRoot, runtimePack)) {
+    throw new Error("Desktop pet pack path is invalid.");
+  }
+  if (!fs.existsSync(path.join(sourcePack, "pet-pack.json"))) {
+    throw new Error("Imported desktop pet pack is missing its manifest.");
+  }
+  if (fs.existsSync(runtimePack)) {
+    throw new Error("Desktop pet runtime cache already contains this pack id.");
+  }
+  fs.mkdirSync(runtimePacksRoot, { recursive: true });
+  copyDesktopPetPackDirectory(sourcePack, runtimePack);
 }
 
 function naturalCompare(left: string, right: string): number {
@@ -356,13 +381,15 @@ export function handleDesktopPetApi(
   response: http.ServerResponse,
   resolveRoleDir: (roleId: string) => string,
   settings?: DesktopPetSettingsAccess,
-  cacheRoot = DEFAULT_DESKTOP_PET_CACHE_ROOT
+  cacheRoot = DEFAULT_DESKTOP_PET_CACHE_ROOT,
+  publishEvent?: DesktopPetEventPublisher
 ): boolean {
   const bindingMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)$/);
   const importMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/import$/);
+  const cacheMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/([^/]+)\/cache$/);
   const catalogMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs$/);
   const assetMatch = requestUrl.pathname.match(/^\/api\/desktop-pet\/roles\/([^/]+)\/packs\/([^/]+)\/assets\/(.+)$/);
-  if (!bindingMatch && !importMatch && !catalogMatch && !assetMatch) return false;
+  if (!bindingMatch && !importMatch && !cacheMatch && !catalogMatch && !assetMatch) return false;
   if (bindingMatch) {
     const roleId = sanitizeRoleId(decodeURIComponent(bindingMatch[1]));
     if (!roleId || !settings) {
@@ -376,7 +403,10 @@ export function handleDesktopPetApi(
     if (request.method === "PATCH" || request.method === "PUT") {
       void readJsonBody(request)
         .then(body => updateBinding(settings, roleId, body, resolveRoleDir(roleId), cacheRoot))
-        .then(binding => jsonResponse(response, 200, { code: 0, data: { personaId: roleId, binding } }))
+        .then(binding => {
+          publishEvent?.("desktop_settings_changed", { scope: "desktop-pet", personaId: roleId });
+          jsonResponse(response, 200, { code: 0, data: { personaId: roleId, binding } });
+        })
         .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
       return true;
     }
@@ -408,6 +438,7 @@ export function handleDesktopPetApi(
             name: requestUrl.searchParams.get("name") || undefined
           }
         );
+        syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
         const catalog = listDesktopPetPacks(roleId, roleDir, cacheRoot);
         const pack = catalog.packs.find(item => item.id === packId);
         if (!pack) {
@@ -417,8 +448,36 @@ export function handleDesktopPetApi(
         }
         return pack;
       })
-      .then(pack => jsonResponse(response, 201, { code: 0, data: { personaId: roleId, pack } }))
+      .then(pack => {
+        publishEvent?.("desktop_pet_catalog_changed", { personaId: roleId, packId: pack.id });
+        jsonResponse(response, 201, { code: 0, data: { personaId: roleId, pack } });
+      })
       .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (cacheMatch) {
+    if (request.method !== "POST") {
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
+      return true;
+    }
+    try {
+      const roleId = sanitizeRoleId(decodeURIComponent(cacheMatch[1]));
+      const packId = safePackId(decodeURIComponent(cacheMatch[2]));
+      if (!roleId || !packId) throw new Error("Invalid role or pack id.");
+      const roleDir = resolveRoleDir(roleId);
+      const sharedCatalog = listDesktopPetPacks(roleId, roleDir, cacheRoot);
+      if (!sharedCatalog.packs.some(pack => pack.id === packId)) {
+        throw new Error("Desktop pet pack is not available from the shared role source.");
+      }
+      syncImportedPackToRuntimeCache(roleId, roleDir, packId, cacheRoot);
+      const runtimeCatalog = listDesktopPetPacks(roleId, roleDir, cacheRoot, { includeSharedSource: false });
+      const pack = runtimeCatalog.packs.find(item => item.id === packId);
+      if (!pack) throw new Error("Desktop pet pack was not readable from the runtime cache.");
+      publishEvent?.("desktop_pet_catalog_changed", { personaId: roleId, packId });
+      jsonResponse(response, 201, { code: 0, data: { personaId: roleId, pack } });
+    } catch (error) {
+      jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+    }
     return true;
   }
   if (request.method !== "GET") {

@@ -61,11 +61,11 @@ cd plugin-adapters\rabi-speech
 .\scripts\install.ps1
 .\scripts\install_models.ps1 -List
 .\scripts\test.ps1
-.\scripts\start.ps1
-.\scripts\install-service.ps1 -StartNow
 ```
 
-默认只监听 `http://127.0.0.1:8781`。首次启动生成 Git 忽略的 `config.json`；模型、参考音、输出和私有绝对路径均不提交。
+依赖和模型准备完成后，只启动已安装的 `RabiRouteHost.exe`，再通过 RibiWebGUI 的“语音服务”开关启用 RabiSpeech。Host 创建 Manager，Manager 的语音插件持有 RabiSpeech；插件停用、应用代重建或用户退出时，同代 RabiSpeech 必须随之停止。`scripts/start.ps1` 仅供受控诊断，`scripts/install-service.ps1` 已退役并会明确失败，不能再创建独立计划任务或登录启动入口。
+
+RabiSpeech 默认只监听 `http://127.0.0.1:8781`。首次启动生成 Git 忽略的 `config.json`；模型、参考音、输出和私有绝对路径均不提交。
 
 RibiWebGUI“语音服务”页顶部提供整页 RabiSpeech 滑轨。开启时，已鉴权的 Manager 通过当前工作区 `scripts/start.ps1` 设置 Python 与私有依赖环境，再启动正式的 `runtime/RabiSpeech.exe`；只有轻量 `/health` 成功后才展开模型、音频流、ASR、TTS、声纹和播放参数。模型清单和预热在健康检查之后继续，不会让已经在线的服务被误报为启动失败。若启动日志显示端口冲突，Manager 只在确认占用者属于当前工作区且健康检查仍离线时终止旧进程，并重试一次；其他占用者保持失败关闭。关闭时，Manager 先核验监听端口确实属于当前工作区的 `runtime/RabiSpeech.exe` 或 `windows_host.py`，再停止进程并收起全部参数。端口归属不明时失败关闭，绝不按端口盲杀其他服务。该开关当前只支持 Windows 主机；Manager 只读模式继续禁止启停。服务切换期间旧 SSE 短暂断开属于自动重连过程，不显示成操作失败，也不触发布局抖动；运行时配置刷新不会反向提交一次无意义的设置保存。
 
@@ -238,7 +238,7 @@ RabiSpeech 仍可在本机诊断界面保存操作员标注和声纹原型，但
 
 `npm run check:rabispeech:tts-loop` 提供独立于本机模型性能报告的运行时闭环烟测。它连接已经运行的回环 RabiSpeech/Manager，先订阅 `/api/speech/events`（跳过 Manager 时订阅 `/v1/events`），再执行 TTS → 16 kHz mono WAV → ASR → 声纹证据 → 同会话记录查询。SSE 必须收到 TTS 与 ASR 两个 `records_changed` 终态后才查询一次记录；超时由单次 deadline 结束，不轮询。脚本不启停麦克风、不播放、不调用 `/api/speech/messages`，因此不会唤醒 Route。自动选模优先本地，API Provider 必须显式传 `--allow-api-provider`。输出位于 Git 忽略的 `output/acceptance/`，正文、声线和原始声纹 ID 均不写入报告，并固定保持 `formalValidationEligible=false`。完整参数见插件 [README](../plugin-adapters/rabi-speech/README.md)。
 
-构建后运行 `npm run check:speech-ingress-separation`，可在不接触真实人格和消息端的情况下验收主机通用消息与人格关联。脚本用临时数据根和真实 `dist/index.js` 子进程处理一条 `speech` PC 麦克风记录与一条 `rabilink` 手机记录，检查同一主机库恰好两条、两个隔离人格各自只有一条 `voice-transcripts.jsonl` 和一条 `conversation/current.jsonl`、主机人物字段被删除，以及手机回复目标只来自稳定设备而不是临时 PCM 流。没有固定间隔检查，子进程通过退出事件与单次 deadline 收敛；不会访问当前 8790、Desktop、QQ、Relay、麦克风或真实 `data/roles`。
+构建后运行 `npm run check:speech-ingress-separation`，可在不接触真实人格和消息端的情况下验收主机通用消息与人格关联。脚本用临时数据根和真实 `dist/index.js` 子进程处理一条 `speech` PC 麦克风记录与一条 `rabilink` 手机记录，检查同一主机库恰好两条、两个隔离人格各自只有一条 `voice-transcripts.jsonl` 和一条 `conversation/current.jsonl`、主机人物字段被删除，以及手机回复目标只来自稳定设备而不是临时 PCM 流。没有固定间隔检查，子进程通过退出事件与单次 deadline 收敛；不会访问当前 Host READY 发布的 `managerBaseUrl`、Desktop、QQ、Relay、麦克风或真实 `data/roles`。其他需要连接正式 Manager 的验收必须从 Host `status --json` 读取动态地址，并核对 `/meta` 的 `applicationGenerationId` 与 `managerInstanceId`，不能扫描或复用旧端口。
 
 `GET /api/speech/messages?limit=200` 读取最近的主机通用语音消息；`GET /api/speech/messages?recordId=<id>` 返回指定原始消息和它最新的逐 Route 终态 receipts。这个只读入口面向本机 Agent、诊断工具和后续管理界面，不代替人格自己的 `conversation/current.jsonl`。
 

@@ -39,10 +39,12 @@ import { normalizeCodexMemoryConsolidationAgentModel } from "./shared/codexMemor
 import { resolvePersistedProjectPath } from "./shared/projectPaths.js";
 import { resolveRouteIdentity, sanitizeRoleId } from "./shared/routeIdentity.js";
 import { resolveRolePaths, roleFilePath, roleFolderPath } from "./shared/routePaths.js";
+import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
 
-dotenv.config();
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const defaultPackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+export const runtimeLayout = resolveRuntimeLayout(defaultPackageRoot);
+const rootDir = runtimeLayout.stateRoot;
+dotenv.config({ path: path.join(rootDir, ".env") });
 
 export const defaultGroupNotificationTemplate = "";
 export const defaultGroupAtNotificationTemplate = "";
@@ -52,7 +54,7 @@ export const defaultPrivateNotificationTemplate = "";
 export const defaultHeartbeatNotificationTemplate = "";
 export const defaultVoiceTranscriptNotificationTemplate = "";
 
-export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message";
+export type NotificationRouteKind = "private" | "group_message" | "direct_at" | "direct_reply" | "indirect_reply" | "heartbeat" | "manual_trigger" | "role_panel_message" | "plan_feedback" | "voice_transcript" | "rabilink" | "wearable_health_alert" | "wecom_message" | "weixin_message" | "feishu_message" | "xiaomi_home_event";
 
 export type NotificationRule = {
   id: string;
@@ -156,7 +158,7 @@ function parseNotificationRules(raw: string | undefined): NotificationRule[] | n
 }
 
 export function parseMessageAdapterType(raw: string | undefined): MessageAdapterType {
-  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "feishu" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
+  return raw === "webhook" || raw === "rabilink" || raw === "wearable" || raw === "wecom" || raw === "weixin" || raw === "feishu" || raw === "xiaomiHome" || raw === "remoteAgent" || raw === "speech" || raw === "fennenote" || raw === "xiaoai" || raw === "heartbeat" || raw === "rolePanel" || raw === "disabled" || raw === "napcat" ? raw : "napcat";
 }
 
 function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
@@ -174,7 +176,8 @@ function isNotificationRouteKind(kind: unknown): kind is NotificationRouteKind {
     || kind === "wearable_health_alert"
     || kind === "wecom_message"
     || kind === "weixin_message"
-    || kind === "feishu_message";
+    || kind === "feishu_message"
+    || kind === "xiaomi_home_event";
 }
 
 function normalizeMessageAdapterTypes(items: unknown[]): MessageAdapterType[] {

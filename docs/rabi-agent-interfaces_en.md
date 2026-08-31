@@ -18,7 +18,7 @@ The packet normally includes:
 
 ```text
 Rabi interface guide: docs/rabi-agent-interfaces.md
-Send API: http://127.0.0.1:8790/api/agent/send
+Send API: `<managerBaseUrl>/api/agent/send`; installed clients discover this generation through Host `status --json`, while source mode uses Manager stdout.
 Current reply context: {...}
 ```
 

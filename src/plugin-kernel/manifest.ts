@@ -1,7 +1,14 @@
-import { PLUGIN_HOSTS, type PluginEntries, type PluginHost, type PluginManifest } from "./types.js";
+import {
+  PLUGIN_EXECUTION_MODES,
+  PLUGIN_HOSTS,
+  type PluginEntries,
+  type PluginEntry,
+  type PluginHost,
+  type PluginManifest
+} from "./types.js";
 import { isPluginCapabilityReference } from "./capabilityReference.js";
 
-export const PLUGIN_MANIFEST_SCHEMA_VERSION = 1;
+export const PLUGIN_MANIFEST_SCHEMA_VERSION = 2;
 
 function record(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${field} must be an object.`);
@@ -40,19 +47,35 @@ function uniqueStrings(value: unknown, field: string, parse: (item: unknown, ite
   if (new Set(normalized).size !== normalized.length) throw new Error(`${field} contains duplicates.`);
   return Object.freeze(normalized);
 }
-function entry(value: unknown, host: PluginHost): string {
-  const normalized = text(value, `Plugin entries.${host}`, 240).replace(/\\/g, "/");
+function packagePath(value: unknown, field: string): string {
+  const normalized = text(value, field, 240).replace(/\\/g, "/");
   if (!normalized.startsWith("./") || normalized.endsWith("/") || normalized.includes("../")) {
-    throw new Error(`Plugin entries.${host} must be a relative file inside its package.`);
+    throw new Error(`${field} must be a relative file inside its package.`);
   }
   return normalized;
+}
+function entry(value: unknown, host: PluginHost): PluginEntry {
+  const raw = record(value, `Plugin entries.${host}`);
+  const executionValue = text(raw.execution, `Plugin entries.${host}.execution`, 40);
+  if (!(PLUGIN_EXECUTION_MODES as readonly string[]).includes(executionValue)) {
+    throw new Error(`Plugin entries.${host}.execution is unsupported.`);
+  }
+  const execution = executionValue as PluginEntry["execution"];
+  if (execution === "declarative") {
+    const unknown = Object.keys(raw).filter(key => key !== "execution" && key !== "resource");
+    if (unknown.length) throw new Error(`Plugin entries.${host} contains unsupported fields: ${unknown.join(", ")}.`);
+    return Object.freeze({ execution, resource: packagePath(raw.resource, `Plugin entries.${host}.resource`) });
+  }
+  const unknown = Object.keys(raw).filter(key => key !== "execution" && key !== "module");
+  if (unknown.length) throw new Error(`Plugin entries.${host} contains unsupported fields: ${unknown.join(", ")}.`);
+  return Object.freeze({ execution, module: packagePath(raw.module, `Plugin entries.${host}.module`) });
 }
 function entries(value: unknown): PluginEntries {
   const raw = record(value, "Plugin entries");
   const supported = new Set<string>(PLUGIN_HOSTS);
   const unknown = Object.keys(raw).filter(key => !supported.has(key));
   if (unknown.length) throw new Error(`Plugin entries contain unsupported hosts: ${unknown.sort().join(", ")}.`);
-  const normalized: Partial<Record<PluginHost, string>> = {};
+  const normalized: Partial<Record<PluginHost, PluginEntry>> = {};
   for (const host of PLUGIN_HOSTS) if (raw[host] !== undefined) normalized[host] = entry(raw[host], host);
   if (!Object.keys(normalized).length) throw new Error("Plugin entries must declare at least one host.");
   return Object.freeze(normalized);

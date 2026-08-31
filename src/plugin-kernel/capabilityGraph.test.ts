@@ -5,10 +5,11 @@ import type { PluginCandidate, PluginManifest } from "./types.js";
 
 function candidate(instanceId: string, provides: string[], requires: string[]): PluginCandidate {
   const manifest: PluginManifest = {
-    schemaVersion: 1, id: `io.test.${instanceId}`, version: "1.0.0", entries: { manager: "./manager.mjs" },
+    schemaVersion: 2, id: `io.test.${instanceId}`, version: "1.0.0",
+    entries: { manager: { execution: "in_process", module: "./manager.mjs" } },
     provides, requires, optional: [], permissions: []
   };
-  return { instanceId, revision: "one", manifest, config: {}, module: { activate() {} } };
+  return { instanceId, revision: "one", manifest, config: {}, entry: { execution: "in_process", path: "virtual.mjs" } };
 }
 
 test("planCapabilityGraph orders providers before consumers", () => {

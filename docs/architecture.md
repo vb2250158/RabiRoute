@@ -89,7 +89,7 @@ Codex/ChatGPT Desktop 同时是用户可见宿主和任务 owner；Codex 是 age
 
 - 已验证：NapCat / OneBot、Heartbeat、Manager 内置角色面板和 Manual trigger。人格目录与跨人格投递已通过自动化合同测试，但尚未完成真实双人格 Desktop 验收。
 - 实验支持：Remote Agent、RabiSpeech 语音消息端、小爱、RabiLink、通用 Webhook 和 WeCom。FenneNote 已退役，只保留旧配置兼容。
-- NapCat HTTP Server 用于状态查询和外发；NapCat 插件只负责页面入口、配置桥接和启动 Manager。
+- NapCat HTTP Server 用于状态查询和外发；NapCat 插件只负责页面入口和配置桥接，不启动、修复或关闭 Manager。
 - Remote Agent、角色面板和 `/api/personas` 是 Manager 级入口，不应被误写成 Gateway 子进程 listener。跨人格消息经过与本地角色面板相同的固定 `role_panel_message` 投递服务；发送身份由当前 Route 与人格共同绑定的凭据校验，Manager 不让调用方只靠正文声明发送者。
 
 未来可扩展：
@@ -297,6 +297,8 @@ NapCat plugin page
   -> data/route/*/adapterConfig.json + data/roles/*/personaConfig.json
   -> start / stop / restart route process
 ```
+
+Windows 应用的运行主干不属于普通插件：`RabiRouteHost.exe` 创建一代 Windows Job，先启动动态端口 Manager，验证 `applicationGenerationId + managerInstanceId + PID + baseUrl` 的 READY，再启动同代托盘/任务窗口。Manager 与托盘任一异常都会结束整代并有界重建；托盘不能独立运行，插件也不能取得应用生命周期 owner 权限。
 
 ## 后续演进顺序
 

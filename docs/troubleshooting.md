@@ -109,7 +109,7 @@ RabiRoute 的投递健康与目标 Desktop 任务是否注册 `codex_app__*` 管
 后台 Agent 应调用本机线程桥：
 
 ```http
-POST http://127.0.0.1:8790/api/agent/threads
+POST <managerBaseUrl>/api/agent/threads
 ```
 
 支持 `list`、`read`、`resolve`、`create`、`send`。详细请求见 `docs/rabi-agent-interfaces.md`。该接口读取 Desktop 任务状态，创建时只做空任务 bootstrap，真实消息仍交给 Desktop owner；不要用 multi-agent 子 Agent 冒充正式任务。

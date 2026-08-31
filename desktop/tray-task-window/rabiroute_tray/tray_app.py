@@ -1,17 +1,23 @@
 from __future__ import annotations
 
-import subprocess
+import json
+import os
 import sys
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QDir, QEventLoop, QLockFile, QTimer, Qt
+from PySide6.QtCore import QEventLoop, QIODevice, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtNetwork import QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .app_paths import project_dir_from_gateway, role_dir_from_gateway, role_id_from_gateway, runtime_dir_from_gateway
 from .desktop_adapter import DesktopAdapter
-from .desktop_pet_controller import DesktopPetController
+from .desktop_feature_runtime import (
+    DesktopFeatureContext,
+    activate_builtin_features,
+    enabled_builtin_feature_ids,
+)
 from .desktop_refresh import (
     DesktopRefreshResult,
     DesktopRefreshService,
@@ -39,7 +45,6 @@ from .plugin_catalog import (
     DesktopThemeContext,
     create_builtin_desktop_extension_registry,
     empty_desktop_plugin_catalog,
-    load_trusted_desktop_extensions,
 )
 from .qt_async import QtAsyncTask, start_qt_task, wait_for_qt_tasks
 from .system_selection import (
@@ -56,6 +61,7 @@ from .windows_app_identity import apply_qt_app_metadata
 
 
 MAX_DIRECT_PERSONA_CHATS = 5
+FIXED_TRAY_COMMAND_HANDLER_IDS = frozenset({"desktop.open-webgui"})
 _ROUTE_STATE_ICONS: dict[str, QIcon] = {}
 
 
@@ -173,7 +179,7 @@ def _start_manual_trigger(
     )
 
 
-def _start_manager_shutdown(
+def _start_application_quit(
     lifecycle: LifecycleController,
     completed_callback,
     started_callback=None,
@@ -208,30 +214,29 @@ def _wait_for_background_tasks(timeout_ms: int = 5_000) -> bool:
 
 def run(
     project_root: Path,
-    manager_url: str = "http://127.0.0.1:8790",
-    manager_proc: "subprocess.Popen[bytes] | None" = None,
-    trusted_extension_entry_points: tuple[str, ...] = (),
+    manager_url: str,
+    application_generation_id: str,
+    manager_instance_id: str,
+    host_executable: Path,
+    host_lifecycle_pipe: str,
+    show_desktop_pet: bool = False,
 ) -> int:
-    desktop_extensions = create_builtin_desktop_extension_registry(freeze=False)
-    load_trusted_desktop_extensions(desktop_extensions, trusted_extension_entry_points)
-    desktop_extensions.freeze()
+    enabled_features = enabled_builtin_feature_ids()
+    desktop_pet_enabled = "io.rabiroute.desktop.pet-renderer@1" in enabled_features
+    desktop_extensions = create_builtin_desktop_extension_registry()
     app = QApplication(sys.argv)
     apply_qt_app_metadata(app)
-    app.aboutToQuit.connect(_wait_for_background_tasks)
-    lock = _app_lock(project_root)
-    if not lock.tryLock(100):
-        print(
-            "这个项目的 RabiRoute Qt 计划与记忆面板已经在运行。\n"
-            "请使用现有托盘图标或窗口，不要重复启动。",
-            file=sys.stderr,
-        )
-        return 0
 
     tray_available = QSystemTrayIcon.isSystemTrayAvailable()
     app.setQuitOnLastWindowClosed(not tray_available)
 
-    manager = ManagerClient(manager_url=manager_url, extension_registry=desktop_extensions)
-    lifecycle = LifecycleController(manager=manager)
+    manager = ManagerClient(
+        manager_url,
+        application_generation_id=application_generation_id,
+        manager_instance_id=manager_instance_id,
+        extension_registry=desktop_extensions,
+    )
+    lifecycle = LifecycleController(host_executable, application_generation_id)
     desktop = DesktopAdapter(project_root)
     refresh_service = DesktopRefreshService(manager, project_root)
     app_icon = desktop.app_icon()
@@ -241,9 +246,10 @@ def run(
 
     refresh_action = QAction("刷新")
     webgui_action = QAction("打开 RabiRoute WebGUI")
-    desktop_pet_action = QAction("显示夜雨桌宠")
-    desktop_pet_click_through_action = QAction("桌宠鼠标点透")
-    desktop_pet_click_through_action.setCheckable(True)
+    desktop_pet_action = QAction("显示夜雨桌宠") if desktop_pet_enabled else None
+    desktop_pet_click_through_action = QAction("桌宠鼠标点透") if desktop_pet_enabled else None
+    if desktop_pet_click_through_action is not None:
+        desktop_pet_click_through_action.setCheckable(True)
     status_action = QAction("状态：加载中")
     persona_heading_action = QAction("人格聊天")
     more_personas_menu = QMenu("更多人格")
@@ -258,8 +264,9 @@ def run(
     menu.addSeparator()
     menu.addAction(persona_heading_action)
     persona_actions_end = menu.addSeparator()
-    menu.addAction(desktop_pet_action)
-    menu.addAction(desktop_pet_click_through_action)
+    if desktop_pet_action is not None and desktop_pet_click_through_action is not None:
+        menu.addAction(desktop_pet_action)
+        menu.addAction(desktop_pet_click_through_action)
     menu.addAction(webgui_action)
     menu.addAction(refresh_action)
     menu.addSeparator()
@@ -330,7 +337,7 @@ def run(
         if theme_refresh_task is not None:
             return
 
-        def completed(settings) -> None:
+        def completed(_task: QtAsyncTask, settings) -> None:
             nonlocal theme_refresh_task
             theme_refresh_task = None
             apply_desktop_theme(
@@ -351,7 +358,12 @@ def run(
         panel = TaskWindow(
             app_icon,
             state["resolved_theme"],
-            plugin_manager_factory=lambda url: ManagerClient(url, extension_registry=desktop_extensions),
+            plugin_manager_factory=lambda url: ManagerClient(
+                url,
+                application_generation_id=application_generation_id,
+                manager_instance_id=manager_instance_id,
+                extension_registry=desktop_extensions,
+            ),
             extension_registry=desktop_extensions,
         )
         panel.refresh_button.clicked.connect(refresh)
@@ -474,14 +486,18 @@ def run(
             return
         open_chat(gateway)
 
-    desktop_pet = DesktopPetController(manager.manager_url, "YeYu", open_desktop_pet_persona)
-    desktop_pet.visibility_changed.connect(
-        lambda visible: desktop_pet_action.setText("隐藏夜雨桌宠" if visible else "显示夜雨桌宠")
-    )
-    desktop_pet.click_through_changed.connect(desktop_pet_click_through_action.setChecked)
-    desktop_pet_action.triggered.connect(lambda _checked=False: desktop_pet.toggle())
-    desktop_pet_click_through_action.toggled.connect(desktop_pet.set_click_through)
-    app.aboutToQuit.connect(desktop_pet.close)
+    if desktop_pet_action is not None and desktop_pet_click_through_action is not None:
+        feature_context = DesktopFeatureContext(
+            manager_url=manager.manager_url,
+            application=app,
+            desktop_pet_action=desktop_pet_action,
+            desktop_pet_click_through_action=desktop_pet_click_through_action,
+            open_desktop_pet_persona=open_desktop_pet_persona,
+        )
+        for dispose in activate_builtin_features(enabled_features, feature_context):
+            app.aboutToQuit.connect(dispose)
+        if show_desktop_pet:
+            QTimer.singleShot(0, desktop_pet_action.trigger)
 
     def apply_refresh(result: DesktopRefreshResult, auto: bool) -> None:
         previous_manager = state["manager"]
@@ -588,7 +604,6 @@ def run(
                     return
                 try:
                     state["plugin_catalog"] = catalog
-                    _sync_recovery_webgui_action(menu, webgui_action, refresh_action, catalog)
                     if desktop_extensions.lifecycle_capability_active(catalog, "desktop.system-selection"):
                         system_selection.start()
                     else:
@@ -666,7 +681,7 @@ def run(
     refresh_action.triggered.connect(refresh)
     refresh_action.triggered.connect(lambda _checked=False: refresh_plugin_catalog())
     webgui_action.triggered.connect(lambda: desktop.open_url(manager.manager_url))
-    quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle, manager_proc))
+    quit_action.triggered.connect(lambda: _quit(app, tray, tray_available, lifecycle))
 
     def selection_delivery_targets() -> list[SelectionDeliveryTarget]:
         return active_selection_delivery_targets(state["manager"].gateways, selected_gateway_id)
@@ -695,10 +710,12 @@ def run(
         selection_delivery_targets,
         notify_selection_action,
         settings_path=project_root / "data" / "desktop" / "settings.json",
+        host_executable=host_executable,
         extension_registry=desktop_extensions,
         execute_command=execute_plugin_handler,
     )
     app.aboutToQuit.connect(system_screenshot.stop)
+    app.aboutToQuit.connect(_wait_for_background_tasks)
     system_screenshot.start()
 
     timer = QTimer()
@@ -726,19 +743,53 @@ def run(
         QSystemTrayIcon.Information,
         3000,
     )
-    try:
-        return app.exec()
-    finally:
-        lock.unlock()
+    _host_lifecycle_socket = _connect_host_lifecycle(
+        app,
+        host_lifecycle_pipe,
+        application_generation_id,
+        manager_instance_id,
+    )
+    if bool(app.property("rabirouteHostShutdownRequested")):
+        QTimer.singleShot(0, app.quit)
+    return app.exec()
 
 
-def _app_lock(project_root: Path) -> QLockFile:
-    lock_dir = Path(QDir.tempPath()) / "rabiroute"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    project_key = str(project_root.resolve()).replace("\\", "_").replace("/", "_").replace(":", "")
-    lock = QLockFile(str(lock_dir / f"{project_key}.tray.lock"))
-    lock.setStaleLockTime(30_000)
-    return lock
+def _connect_host_lifecycle(
+    app: QApplication,
+    pipe_name: str,
+    application_generation_id: str,
+    manager_instance_id: str,
+) -> QLocalSocket:
+    socket = QLocalSocket(app)
+    pending = bytearray()
+
+    def publish_ready() -> None:
+        ready = {
+            "protocolVersion": 1,
+            "applicationGenerationId": application_generation_id,
+            "managerInstanceId": manager_instance_id,
+            "pid": os.getpid(),
+        }
+        socket.write(("RABIROUTE_TRAY_READY:" + json.dumps(ready, separators=(",", ":")) + "\n").encode("utf-8"))
+        socket.flush()
+
+    def request_shutdown() -> None:
+        app.setProperty("rabirouteHostShutdownRequested", True)
+        QTimer.singleShot(0, app.quit)
+
+    def receive_commands() -> None:
+        pending.extend(bytes(socket.readAll()))
+        while b"\n" in pending:
+            raw_command, _, remaining = pending.partition(b"\n")
+            pending[:] = remaining
+            if raw_command.strip().lower() == b"shutdown":
+                request_shutdown()
+                return
+
+    socket.connected.connect(publish_ready)
+    socket.readyRead.connect(receive_commands)
+    socket.connectToServer(pipe_name, QIODevice.OpenModeFlag.ReadWrite)
+    return socket
 
 
 def _show_tray_context_menu(menu: QMenu, reason) -> bool:
@@ -809,21 +860,6 @@ def _desktop_plugin_theme(
     )
 
 
-def _sync_recovery_webgui_action(
-    root_menu: QMenu,
-    recovery_action: QAction,
-    insert_before: QAction,
-    catalog: DesktopPluginCatalog,
-) -> None:
-    should_show = not catalog.available
-    is_inserted = recovery_action in root_menu.actions()
-    if should_show == is_inserted:
-        return
-    root_menu.removeAction(recovery_action)
-    if should_show:
-        root_menu.insertAction(insert_before, recovery_action)
-
-
 def _rebuild_plugin_menu(
     root_menu: QMenu,
     plugin_menu: QMenu,
@@ -834,6 +870,7 @@ def _rebuild_plugin_menu(
 ) -> None:
     items = tuple(
         item for item in catalog.menu_items
+        if item.handler_id not in FIXED_TRAY_COMMAND_HANDLER_IDS
         if registry.has_command_handler(item.handler_id, item.plugin_id, item.instance_id)
     )
     signature = tuple(
@@ -862,7 +899,6 @@ def _quit(
     tray: QSystemTrayIcon,
     tray_available: bool,
     lifecycle: LifecycleController,
-    manager_proc: "subprocess.Popen[bytes] | None" = None,
 ) -> None:
     if bool(app.property("rabirouteQuitPending")):
         return
@@ -875,21 +911,21 @@ def _quit(
         QSystemTrayIcon.Information,
         2500,
     )
-    def completed(_task: QtAsyncTask, shutdown_requested: bool) -> None:
-        if not shutdown_requested:
+    def completed(_task: QtAsyncTask, quit_requested: bool) -> None:
+        if not quit_requested:
             app.setProperty("rabirouteQuitPending", False)
             _show_message(
                 tray,
                 tray_available,
                 "RabiRoute / 当前人格",
-                "未能关闭 RabiRoute manager，桌面入口保持运行。请检查 manager 状态后再退出。",
+                "RabiRoute Host 未接受退出请求，桌面入口保持运行。请检查 Host 状态后再退出。",
                 QSystemTrayIcon.Warning,
                 5000,
             )
             return
         app.quit()
 
-    _start_manager_shutdown(lifecycle, completed)
+    _start_application_quit(lifecycle, completed)
 
 
 def _show_message(tray: QSystemTrayIcon, tray_available: bool, title: str, message: str, icon, timeout: int) -> None:

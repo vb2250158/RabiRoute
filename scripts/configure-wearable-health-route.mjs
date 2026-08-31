@@ -28,7 +28,7 @@ function writeJsonAtomic(filePath, value) {
 }
 
 function usedPorts() {
-  const ports = new Set([8790]);
+  const ports = new Set();
   if (!fs.existsSync(routeRoot)) return ports;
   for (const entry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;

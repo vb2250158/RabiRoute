@@ -104,11 +104,11 @@ export default wx;
     "getMobileWebgui must proxy path via encoded query."
   );
 
-  await api.postMobileWebgui(config, "/manager/start", { dryRun: true }, "pc-a");
+  await api.postMobileWebgui(config, "/reload", { dryRun: true }, "pc-a");
   const webguiPost = mock.requests.at(-1);
   assert(webguiPost.url === "https://relay.example.com/api/rabilink/mobile/webgui?targetDeviceId=pc-a", "postMobileWebgui must use the mobile webgui endpoint.");
   assert(webguiPost.method === "POST", "postMobileWebgui transport must use POST.");
-  assert(webguiPost.data.method === "POST" && webguiPost.data.path === "/manager/start", "postMobileWebgui must wrap PC method and path.");
+  assert(webguiPost.data.method === "POST" && webguiPost.data.path === "/reload", "postMobileWebgui must wrap PC method and path.");
   assert(webguiPost.data.body.dryRun === true, "postMobileWebgui must preserve body.");
 
   mock.nextResponses.push({

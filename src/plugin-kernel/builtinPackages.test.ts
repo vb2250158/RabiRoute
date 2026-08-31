@@ -8,15 +8,19 @@ import { parsePluginProfile } from "./profile.js";
 test("built-in Manager capabilities are independent SDK packages", async () => {
   const root = path.resolve("plugins");
   const profile = parsePluginProfile(JSON.parse(await fs.readFile(path.join(root, "profiles", "desktop.json"), "utf8")) as unknown);
-  assert.equal(profile.instances.length, 28);
-  assert.equal(new Set(profile.instances.map(instance => instance.package)).size, 28);
+  assert.equal(profile.instances.length, 30);
+  assert.equal(new Set(profile.instances.map(instance => instance.package)).size, 30);
+  assert.equal(
+    profile.instances.some(instance => instance.package === "io.rabiroute.manager.wearable-companion"),
+    true
+  );
   for (const instance of profile.instances) {
     const packageRoot = path.join(root, "builtin", encodeURIComponent(instance.package), instance.version);
     const manifest = parsePluginManifest(JSON.parse(await fs.readFile(path.join(packageRoot, "rabi.plugin.json"), "utf8")) as unknown);
     const source = await fs.readFile(path.join(packageRoot, "manager.mjs"), "utf8");
     assert.equal(manifest.id, instance.package);
-    assert.equal(manifest.entries.manager, "./manager.mjs");
-    if (manifest.entries.web) assert.equal(manifest.entries.web, "./web/client.mjs");
+    assert.deepEqual(manifest.entries.manager, { execution: "in_process", module: "./manager.mjs" });
+    if (manifest.entries.web) assert.deepEqual(manifest.entries.web, { execution: "in_process", module: "./web/client.mjs" });
     assert.match(source, /from "@rabiroute\/plugin-sdk"/);
     assert.doesNotMatch(source, /from ["'][^"']*src\/|from ["'][^"']*manager\/controlPlaneRoutes/);
     assert.doesNotMatch(source, /^ {8}if [^\n]+\r?\n {12}return;$/m);

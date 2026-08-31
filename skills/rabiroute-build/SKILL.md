@@ -15,130 +15,76 @@ description: Use when the user asks to build, package, rebuild, restart, or depl
 | 前端（Vue/Vite） | `ribiwebgui/src/` | `ribiwebgui/dist/` | `npm run webgui:build` |
 | 全量构建 | 两者 | 两者 | `npm run build` |
 
-**重要**：npm 无法直接在 PowerShell 运行，必须用 `cmd /c "npm ..."` 包裹。
+**重要**：正式 Windows 验收必须用本机磁盘上的构建副本和输出目录；NAS 只保存源码，不能承载构建中间物或运行进程。
 
 ## 场景对应命令
 
-> **默认策略：始终走完整打包**（后端 + 前端 + 重启 manager）。
+> **默认策略：始终走完整打包**（后端 + 前端 + 插件 + Host + Tray runtime + 安装器）。
 > 只在明确说"只改前端"/"只改后端"时才单独构建。
 
-### 完整打包 + 重启 + 托盘（默认，任何改动都用这个）
+### 完整打包 + 安装验收（默认）
 ```powershell
-# 1. 构建
-cmd /c "cd /d <repo> && npm run build"
-# 2. 停旧 manager
-$p = (netstat -ano | Select-String ":8790.*LISTENING" | ForEach-Object { ($_ -split "\s+")[-1] } | Select-Object -First 1)
-if ($p) { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue }
-Start-Sleep 1
-# 3. 启动新 manager
-Start-Process "node" -ArgumentList "dist/manager.js" -WorkingDirectory "<repo>" -RedirectStandardOutput "rabiroute-manager-restart.log" -RedirectStandardError "rabiroute-manager-restart.err.log" -WindowStyle Hidden
-Start-Sleep 2; Invoke-RestMethod "http://localhost:8790/meta" -TimeoutSec 3
-# 4. 启动/复用托盘（-NoBuild 跳过重复构建，-NoOpen 不重复开浏览器）
-& "<repo>\Start-RabiRoute-Desktop.bat" -NoBuild -NoOpen
+& "<repo>\scripts\build-windows-release.ps1"
 ```
 
 ### 仅前端（明确指定时才用）
 ```powershell
 cmd /c "cd /d <repo> && npm run webgui:build"
 ```
-打包后仍需重启 manager（静态文件由 manager 提供）。
+这只用于开发校验；正式安装仍走完整包。
 
 ### 仅后端（明确指定时才用）
 ```powershell
 cmd /c "cd /d <repo> && npm run build:backend"
 ```
-必须重启 manager 才能生效。
+这只用于开发校验；正式安装仍走完整包。
 
 
 ### 4. Windows 托盘版本（默认部署方式）
 **在 Windows 上"打包"默认指托盘版本。** 托盘版本 = manager + PySide6 Qt 任务面板 + 系统托盘图标。
 
-启动方式（会自动检测是否需要 build）：
+启动方式（只启动已打包或已安装的唯一 Host）：
 ```powershell
 Start-Process "<repo>\Start-RabiRoute-Desktop.bat"
 ```
 
-也可以向 bat 入口传递参数：
+查询当前代状态和动态 Manager 地址：
 ```powershell
-& "<repo>\Start-RabiRoute-Desktop.bat"
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json
 ```
 
-脚本参数：
-- `-NoBuild`：跳过自动构建（已有最新 dist）
-- `-NoDesktopShell`：只启动 manager，不启动 RabiRoute Desktop 界面
-- `-NoOpen`：不自动在浏览器打开 WebGUI
-- `-ManagerUrl`：默认 `http://127.0.0.1:8790`
+`Start-RabiRoute-Desktop.bat` 不构建、不探测端口、不管理子进程；找不到同包或已安装 Host 时直接失败。
 
-托盘 Python 环境：
-- 优先使用 `desktop\tray-task-window\.venv\Scripts\python.exe`
-- 回退 `.venv-tray\Scripts\python.exe`
-- 再回退系统 `py.exe` / `python.exe`
-- 依赖：`PySide6>=6.7`，安装：`py -m pip install -r desktop\tray-task-window\requirements.txt`
+### 5. 构建 Windows 完整包
 
-### 5. 打包成单个 exe（Windows 分发）
-
-**打包命令**（在 `<repo>` 目录下执行）：
 ```powershell
-.\scripts\build-desktop-exe.ps1
+.\scripts\build-windows-release.ps1
 ```
 
-输出：`<repo>\RabiRoute-Desktop.exe`
+默认输出到 `%LOCALAPPDATA%\RabiRoute\build\windows-release`。脚本构建后端、WebGUI、插件包、.NET Host 与隔离 Qt runtime，并生成 portable zip 和安装器；源码可以在 NAS，所有构建中间物与成品必须在本机磁盘。
 
-参数：
-- `-SkipNodeBuild`：跳过 `npm run build`（已有最新 dist 时使用）
-- `-SkipCopy`：不把 exe 复制到项目根目录
+Host 是唯一应用生命周期拥有者：每一代先以挂起状态创建 Manager、放入 Windows Job 后恢复，收到结构化 READY 才以同代身份启动 Tray。任一必需子程序异常退出都会结束整代，再按有界退避重建；用户退出走带 generation fence 的 Host 命令。
 
-**exe 启动行为**：
-1. 检测 manager 是否已在 `http://127.0.0.1:8790` 运行
-2. 若未运行，自动执行 `node dist/manager.js`（需要 Node.js 在 PATH）
-3. 等待 manager 上线（最多 15 秒），然后以 `--owns-manager` 模式启动 Qt 托盘
-4. 退出托盘时同时关闭 manager
-
-**前提条件**：
-- Python 环境中已安装 `PySide6>=6.7`（`py -m pip install -r desktop\tray-task-window\requirements.txt`）
-- Node.js 在 PATH（exe 本身只打包了 Python 托盘，manager 仍需要外部 Node.js）
-- `dist/manager.js` 已构建（`npm run build:backend`）
-
-**实现文件**：
-- `desktop/tray-task-window/main.py`：冻结模式检测（`sys.frozen`），自动启动 manager
-- `RabiRoute-Desktop.spec`：PyInstaller spec（onefile，`console=False`）
-- `scripts/build-desktop-exe.ps1`：封装打包流程的脚本
-
-**注意**：
-- `project_root` 在 exe 中通过 `Path(sys.executable).parent` 解析（exe 放在项目根目录）
-- exe 不捆绑 Node.js 和 `dist/manager.js`，这两项仍是外部依赖
-- exe 是本地打包产物，不提交到源码仓库；公开发布包暂不启用，除非先完成二进制脱敏和冒烟检查
-- 若有 `.ico` 图标，修改 `RabiRoute-Desktop.spec` 中的 `icon=` 行
-
-## 重启 manager（不重新构建）
+## 重启完整应用代
 
 ```powershell
-$p = (netstat -ano | Select-String ":8790.*LISTENING" | ForEach-Object { ($_ -split "\s+")[-1] } | Select-Object -First 1)
-if ($p) { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue }
-Start-Sleep 1
-Start-Process "node" -ArgumentList "dist/manager.js" -WorkingDirectory "<repo>" -RedirectStandardOutput "rabiroute-manager-restart.log" -RedirectStandardError "rabiroute-manager-restart.err.log" -WindowStyle Hidden
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command restart
 ```
 
-验证 manager 是否在线：
+验证当前代：
 ```powershell
-Start-Sleep 2; Invoke-RestMethod "http://localhost:8790/meta" -TimeoutSec 3
+$status = & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json | ConvertFrom-Json
+Invoke-RestMethod ($status.managerBaseUrl + "/meta") -TimeoutSec 3
 ```
 
 ## 端口说明
 
-| 端口 | 用途 |
-|------|------|
-| 8790 | Manager HTTP API + WebGUI 静态文件 |
-| 8792 | config-3 gateway WebSocket（可能在旧进程残留） |
-
-## 自动构建判断
-
-`Start-RabiRoute-Desktop.bat` 会比较 `dist/manager.js` 的修改时间与 `src/`、`ribiwebgui/src/` 下 `.ts/.vue` 文件的修改时间，若源文件更新则自动触发 `npm run build`。
+Manager HTTP API 与 WebGUI 默认请求端口 `0`，由 Windows 分配空闲回环端口。消费者只能从 Host status 或本代 READY 获得地址；不要缓存端口、扫描端口或读取旧 lock file。Gateway 与第三方 Adapter 的显式协议端口仍由各自配置管理，不属于 Manager 生命周期发现。
 
 ## 部署顺序（完整启动）
 
-1. `npm run build`（或脚本自动触发）
-2. 启动 `node dist/manager.js`（后台）
-3. 等待 `http://127.0.0.1:8790/meta` 响应
-4. 启动 Qt 托盘面板（`desktop/tray-task-window/main.py --owns-manager`）
-5. 打开浏览器 `http://127.0.0.1:8790`
+1. 运行 `scripts/build-windows-release.ps1`。
+2. 安装生成的 setup，或解压 portable 包到本机磁盘。
+3. 启动 `RabiRouteHost.exe`。
+4. 用 `--command status --json` 验证 `state=healthy` 和 Manager/应用代身份。
+5. 通过托盘或 Host `activate` 打开本代 WebGUI。

@@ -54,6 +54,9 @@ export class SpeechModelManagerError extends Error {
 }
 
 export type SpeechModelManagerOptions = {
+  /** Immutable version package containing the speech adapter and catalog. */
+  packageRoot?: string;
+  /** Stable application state root used for models and mutable manifests. */
   rootDir: string;
   platform?: NodeJS.Platform;
   modelRoot?: string;
@@ -75,7 +78,7 @@ export class SpeechModelManager {
 
   constructor(private readonly options: SpeechModelManagerOptions) {
     this.platform = options.platform ?? process.platform;
-    this.pluginRoot = path.join(options.rootDir, "plugin-adapters", "rabi-speech");
+    this.pluginRoot = path.join(options.packageRoot ?? options.rootDir, "plugin-adapters", "rabi-speech");
     this.modelRoot = path.resolve(
       options.modelRoot
         || process.env.RABISPEECH_MODEL_ROOT

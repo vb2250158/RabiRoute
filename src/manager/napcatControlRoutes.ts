@@ -1,6 +1,17 @@
 import type http from "node:http";
-import type { NapcatHealthRequest, NapcatLaunchRequest, NapcatStopRequest } from "../messageEndpoints/napcatManager.js";
-export type { NapcatHealthRequest, NapcatLaunchRequest } from "../messageEndpoints/napcatManager.js";
+import type {
+  NapcatHealthRequest,
+  NapcatLaunchRequest,
+  NapcatLoginActionRequest,
+  NapcatLoginPanelRequest,
+  NapcatStopRequest
+} from "../messageEndpoints/napcatManager.js";
+export type {
+  NapcatHealthRequest,
+  NapcatLaunchRequest,
+  NapcatLoginActionRequest,
+  NapcatLoginPanelRequest
+} from "../messageEndpoints/napcatManager.js";
 
 export type NapcatAddRequest = {
   gatewayId?: string;
@@ -20,6 +31,8 @@ export type NapcatControlRoutesContext = {
   repairAll: () => MaybePromise<NapcatControlResult>;
   ensureReady: (request: NapcatLaunchRequest) => MaybePromise<NapcatControlResult>;
   health: (request: NapcatHealthRequest) => MaybePromise<NapcatControlResult>;
+  loginPanel: (request: NapcatLoginPanelRequest) => MaybePromise<NapcatControlResult>;
+  loginAction: (request: NapcatLoginActionRequest) => MaybePromise<NapcatControlResult>;
   configureOneBot: (request: NapcatHealthRequest) => MaybePromise<NapcatControlResult>;
   add: (request: NapcatAddRequest) => MaybePromise<NapcatControlResult>;
   launch: (request: NapcatLaunchRequest) => MaybePromise<NapcatControlResult>;
@@ -85,6 +98,24 @@ export function handleNapcatControlApi(
 
   if (url.pathname === "/api/message/napcat-health") {
     handleBodyAction<NapcatHealthRequest>(request, response, context, context.health, () => 200);
+    return true;
+  }
+
+  if (url.pathname === "/api/message/napcat-login-panel") {
+    response.setHeader("cache-control", "no-store");
+    handleBodyAction<NapcatLoginPanelRequest>(request, response, context, context.loginPanel, () => 200);
+    return true;
+  }
+
+  if (url.pathname === "/api/message/napcat-login-action") {
+    response.setHeader("cache-control", "no-store");
+    handleBodyAction<NapcatLoginActionRequest>(
+      request,
+      response,
+      context,
+      context.loginAction,
+      (result) => result.ok !== false ? 200 : 400
+    );
     return true;
   }
 

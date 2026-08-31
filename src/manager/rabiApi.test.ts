@@ -5,6 +5,20 @@ import path from "node:path";
 import test from "node:test";
 import { mobileAdapterStates, personaProfileIds, publicRabiLinkRelayConfig } from "./rabiApi.js";
 
+test("Rabi discovery uses only fenced DNS-SD endpoints", () => {
+  const source = fs.readFileSync(new URL("./rabiApi.ts", import.meta.url), "utf8");
+  assert.match(source, /discoverManagerLanEndpoints/);
+  assert.match(source, /verifyManagerDiscoveryEndpoint/);
+  assert.match(source, /x-rabiroute-expected-application-generation-id/);
+  assert.match(source, /x-rabiroute-expected-manager-instance-id/);
+  assert.match(source, /redirect: "error"/);
+  assert.match(source, /Boolean\(expectedGeneration\) !== Boolean\(expectedManager\)/);
+  assert.match(source, /maxResponseBytes = 4 \* 1024 \* 1024/);
+  assert.doesNotMatch(source, /function candidateHosts/);
+  assert.doesNotMatch(source, /rabiDiscoveryPorts/);
+  assert.doesNotMatch(source, /\/api\/rabi\/identity`, timeoutMs/);
+});
+
 test("public Rabi identity never exposes the Relay application token", () => {
   const publicConfig = publicRabiLinkRelayConfig({
     enabled: true,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import type { AddressInfo } from "node:net";
+import { listenManagerEndpoint } from "../managerEndpointPolicy.js";
 import type { LanAgentRegistry } from "./lanAgentRegistry.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
@@ -51,13 +51,13 @@ async function startServer() {
       releases
     })) response.writeHead(404).end();
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+  const endpoint = await listenManagerEndpoint({
+    server,
+    host: "127.0.0.1",
+    policy: { mode: "auto" }
   });
-  const address = server.address() as AddressInfo;
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: endpoint.baseUrl,
     updateRequests: () => updateRequests,
     close: () => new Promise<void>(resolve => server.close(() => resolve()))
   };

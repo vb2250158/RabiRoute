@@ -91,12 +91,12 @@ Relay 按应用把状态存入独立文件，并在 `GET /api/rabilink/mobile/st
 
 ```text
 https://你的域名/manage/<账号>/<RabiGUID>/#/routes
-= http://127.0.0.1:8790/#/routes
+= <当前 managerBaseUrl>/#/routes
 ```
 
-这里的 `<RabiGUID>` 来自 PC 端 `data/Config.json` 的 `rabiGuid`，不是显示名。浏览器必须先登录 `/manage` 中对应账号；每个浏览器只保留一个当前登录账号。这个入口会把 WebGUI 的 `GET` / `POST` / `PATCH` 等普通 HTTP 请求排队给对应 PC worker，由 PC worker 在本机访问 `http://127.0.0.1:8790`，因此可以在服务器页面里修改这台 PC 的 Rabi 配置。附件、图片和文件下载使用同一前缀；视频的 `Range` / `If-Range` 会传到本机 Manager 并保留 `206`、`Content-Range` 与 `Accept-Ranges` 响应。`/api/events` 与 `/api/speech/events` 不进入一次性请求队列：PC worker 分别维持一条有界、可取消的本机 SSE 上游，Relay 按路径隔离并扇出给远程页面，所以 Manager、计划、人格和语音状态仍可实时刷新且不会串流。普通 API、媒体下载和 `Range` / `206` 仍走有限响应代理。服务器不会直接连入用户电脑。
+这里的 `<RabiGUID>` 来自 PC 端 `data/Config.json` 的 `rabiGuid`，不是显示名。浏览器必须先登录 `/manage` 中对应账号；每个浏览器只保留一个当前登录账号。这个入口会把 WebGUI 的 `GET` / `POST` / `PATCH` 等普通 HTTP 请求排队给对应 PC worker；worker 从 Host 状态取得本代 `managerBaseUrl`，并在 application generation 变化后重新发现，而不是绑定固定端口。附件、图片和文件下载使用同一前缀；视频的 `Range` / `If-Range` 会传到本机 Manager 并保留 `206`、`Content-Range` 与 `Accept-Ranges` 响应。`/api/events` 与 `/api/speech/events` 不进入一次性请求队列：PC worker 分别维持一条有界、可取消的本机 SSE 上游，Relay 按路径隔离并扇出给远程页面，所以 Manager、计划、人格和语音状态仍可实时刷新且不会串流。普通 API、媒体下载和 `Range` / `206` 仍走有限响应代理。服务器不会直接连入用户电脑。
 
-Manager 的本地监听与 Relay 连接相互独立：Manager 先提供本机和局域网 WebGUI，再异步连接 Relay。Relay 暂时不可用只会让广域网入口降级，不会阻止 Manager 启动或拖住本机 `8790`。Relay 恢复、用户稍后打开远程页面或页面断线重连时会热连接，不需要重启 Manager。
+Manager 的本地监听与 Relay 连接相互独立：Manager 先在操作系统分配的端口提供本机和局域网 WebGUI，再异步连接 Relay。Relay 暂时不可用只会让广域网入口降级，不会阻止 Manager 启动或占住某个固定端口。Relay 恢复、用户稍后打开远程页面或页面断线重连时会热连接，不需要重启 Manager。
 
 若远程请求没有可用 PC worker，API 会返回带诊断请求 ID 的结构化 `RABI_PC_WEBGUI_UNAVAILABLE`；等待 worker 回填超时则返回 `RABI_PC_WEBGUI_TIMEOUT`。两者都标记 `retryable`、发送 `Retry-After: 3`，并避免泄露本机异常、路径或地址。普通浏览器导航收到的是包含同一诊断 ID 和恢复提示的 HTML 错误页，不再只有无上下文的 502/504。
 
@@ -622,10 +622,10 @@ POST /worker/webgui-events
 Authorization: Bearer <token>
 ```
 
-worker 会在本机访问 `RABILINK_RELAY_WEBGUI_URL`，默认是 `GATEWAY_MANAGER_URL`，通常即：
+worker 优先从 Host 状态发现本代 URL；源码或显式部署可通过 `RABILINK_RELAY_WEBGUI_URL` / `GATEWAY_MANAGER_URL` 注入：
 
 ```text
-http://127.0.0.1:8790
+<managerBaseUrl>
 ```
 
 随后把本机 WebGUI 响应回填：

@@ -438,7 +438,7 @@ unregister routes
 - 避免在这里新增配置 normalize / validate。
 - 避免在这里新增具体平台扫描细节。
 
-`RABIROUTE_MANAGER_READ_ONLY=1` 是构建产物验收专用模式。它强制关闭 Gateway、Relay、LAN discovery、Route watcher 和人格文件 watcher 自动启动，跳过启动时的语音麦克风协调与配置目录迁移，并在 HTTP 入口拒绝 POST、PUT、PATCH、DELETE。`scripts/test-built-manager-readonly.mjs` 在临时回环端口启动当前 `dist/manager.js`，通过 stdout 就绪事件而非轮询等待，然后只读取 Gateway 摘要、人格同步 manifest/索引状态/冲突、主机通用语音消息，以及 manifest 中每个人格的语音账号兼容归类和语音会话视图。只读校准不写 manifest 缓存；证据只保存状态、索引模式、数量和构建哈希，不保存人格名、角色 ID、文件路径、转写正文、人物、token、Relay URL 或监听地址；现有 8790 Manager 不会被重启。
+`RABIROUTE_MANAGER_READ_ONLY=1` 是构建产物验收专用模式。它强制关闭 Gateway、Relay、LAN discovery、Route watcher 和人格文件 watcher 自动启动，跳过启动时的语音麦克风协调与配置目录迁移，并在 HTTP 入口拒绝 POST、PUT、PATCH、DELETE。`scripts/test-built-manager-readonly.mjs` 在临时回环端口启动当前 `dist/manager.js`，通过 stdout 就绪事件而非轮询等待，然后只读取 Gateway 摘要、人格同步 manifest/索引状态/冲突、主机通用语音消息，以及 manifest 中每个人格的语音账号兼容归类和语音会话视图。只读校准不写 manifest 缓存；证据只保存状态、索引模式、数量和构建哈希，不保存人格名、角色 ID、文件路径、转写正文、人物、token、Relay URL 或监听地址；当前 Host 管理的应用 generation 不会被重启。
 
 ### `src/manager/configRepository.ts`
 

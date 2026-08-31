@@ -72,7 +72,7 @@ export function conversationSituationForIdentity(
     ? "private"
     : routeKind === "group_message" || routeKind === "direct_at" || routeKind === "direct_reply" || routeKind === "indirect_reply" || routeKind === "wecom_message" || routeKind === "feishu_message"
       ? "group"
-      : routeKind === "heartbeat" || routeKind === "manual_trigger" || routeKind === "plan_feedback" || routeKind === "role_panel_message"
+      : routeKind === "heartbeat" || routeKind === "manual_trigger" || routeKind === "plan_feedback" || routeKind === "role_panel_message" || routeKind === "xiaomi_home_event"
         ? "system"
         : "unknown";
   return {

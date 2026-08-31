@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { discoverManagerBaseUrl } from "../../../scripts/lib/discover-manager-url.mjs";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const rabiRouteRoot = path.resolve(projectRoot, "..", "..");
 const relayBaseUrl = String(process.env.RABILINK_E2E_RELAY_URL || "").trim().replace(/\/+$/, "");
 const token = String(process.env.RABILINK_E2E_TOKEN || "").trim();
-const managerBaseUrl = String(process.env.RABILINK_E2E_MANAGER_URL || "http://127.0.0.1:8790").trim().replace(/\/+$/, "");
 const configOnly = process.argv.includes("--config-only");
+const managerBaseUrl = configOnly ? "" : discoverManagerBaseUrl({ explicit: process.env.RABILINK_E2E_MANAGER_URL });
 const defaultReportName = configOnly ? "config-rollback-e2e.json" : "live-relay-codex.json";
 const reportPath = path.resolve(process.env.RABILINK_E2E_REPORT || path.join(projectRoot, "dist", defaultReportName));
 const aixPath = path.join(projectRoot, "dist", "rabilink-aiui.aix");

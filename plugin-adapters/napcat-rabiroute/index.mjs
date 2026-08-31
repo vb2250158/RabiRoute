@@ -1,14 +1,10 @@
 import fs from "fs";
 import path from "path";
-import { spawn } from "child_process";
 
 let logger = null;
 let currentConfig = {
-  gatewayRoot: "C:\\Path\\To\\RabiRoute",
-  managerUrl: "http://127.0.0.1:8790",
-  managerPort: 8790
+  managerUrl: ""
 };
-let managerProcess = null;
 
 function napcatConfigDir() {
   return path.resolve(path.dirname(currentConfigPath), "..", "..");
@@ -80,7 +76,9 @@ function readOneBotNetworkOptions() {
 }
 
 async function fetchManager(pathname, options = {}) {
-  const url = `${currentConfig.managerUrl.replace(/\/$/, "")}${pathname}`;
+  const managerUrl = String(currentConfig.managerUrl || "").trim().replace(/\/$/, "");
+  if (!managerUrl) throw new Error("请先从 RabiRoute Host 状态中复制当前 RibiWebGUI 地址。");
+  const url = `${managerUrl}${pathname}`;
   const response = await fetch(url, options);
   const text = await response.text();
   let body = text;
@@ -93,24 +91,6 @@ async function fetchManager(pathname, options = {}) {
     throw new Error(`管理器请求失败 ${pathname}：HTTP ${response.status} ${text}`);
   }
   return body;
-}
-
-function startManagerProcess() {
-  if (managerProcess && !managerProcess.killed) {
-    return;
-  }
-  managerProcess = spawn("npm", ["run", "manager"], {
-    cwd: currentConfig.gatewayRoot,
-    env: {
-      ...process.env,
-      GATEWAY_MANAGER_PORT: String(currentConfig.managerPort)
-    },
-    shell: true,
-    windowsHide: true,
-    stdio: "ignore"
-  });
-  managerProcess.unref();
-  logger?.info(`RabiRoute 管理器已启动，pid=${managerProcess.pid ?? "未知"}`);
 }
 
 async function reloadManager() {
@@ -188,17 +168,6 @@ const plugin_init = async (ctx) => {
   };
   ctx.router.post("/gateways", handlePostGateways);
   ctx.router.postNoAuth("/gateways", handlePostGateways);
-
-  const handleStartManager = (_req, res) => {
-    try {
-      startManagerProcess();
-      res.json({ code: 0, message: "管理器正在启动" });
-    } catch (error) {
-      res.status(500).json({ code: -1, message: error.message });
-    }
-  };
-  ctx.router.post("/manager/start", handleStartManager);
-  ctx.router.postNoAuth("/manager/start", handleStartManager);
 
   const handleOpenConfigFile = async (req, res) => {
     try {

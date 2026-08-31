@@ -4,9 +4,9 @@ English | <a href="./README.md">简体中文</a>
 </div>
 <!-- /docs-language-switch -->
 
-# RabiRoute Qt role panel
+# RabiRoute Desktop
 
-> Status: current desktop convenience layer. The panel is implemented and used by the Windows launcher, but it does not replace the Manager, RibiWebGUI, or Codex/ChatGPT Desktop.
+> Status: current Windows presentation child. RabiRoute Host is the only application-lifecycle owner; tray/task-window and Manager must carry the same `applicationGenerationId`.
 
 This PySide6/Qt application provides a tray icon and floating role panel. It reads Manager, Route, plan, and memory state, and can send text or file attachments to the Agent bound to the selected Route through the `rolePanel` message adapter.
 
@@ -15,14 +15,14 @@ The Qt layer is kept portable where practical. See the [Windows launcher and pac
 ## Current capabilities
 
 - Uses the system tray when available and falls back to a normal window otherwise.
-- Enforces one panel instance per project root.
+- Relies on Host's per-user singleton and application generation for exactly one tray; Desktop has no second singleton or autostart mechanism.
 - Reads Routes, runtime status, and role bindings from the Manager.
 - Selects the only enabled Route on first open. It falls back to the `Rabi` persona or the first row only when enabled selection is ambiguous, so a disabled unrelated persona does not become the accidental default.
 - Switches between Routes and six views: Chat, Current, Plans, Recent Memory, Archived, and Diagnostics.
 - Keeps all six views visible in the primary navigation; Current is grouped into in-progress plans and recent memory, while Diagnostics uses a read-only status/path table.
-- Desktop enables tray commands, panel actions, system selection, system-capture and clipboard-pin hotkeys, and `system` / `light` / `dark` / `custom:*` themes from the Manager plugin catalog. Built-in contracts and explicitly allowed trusted extensions use the same Registry; only contracts declared by active plugins and registered on this host take effect. Deactivating a plugin removes its tray entries and panel actions and stops its system listeners. A catalog outage or refresh failure immediately withdraws stale contributions and system listeners and restores the fixed **Open RabiRoute WebGUI** recovery entry; after a valid catalog loads, only active plugin contributions can expose that entry. Active shortcuts still use values saved in **Settings**. Missing or unsupported declarations leave their hotkeys unregistered and fall back to the system theme.
+- Desktop consumes schema/profile-v2 declarative contributions from Manager to enable tray commands, panel actions, system selection, system-capture and clipboard-pin hotkeys, and `system` / `light` / `dark` / `custom:*` themes. Desktop imports no third-party Python entry points and lets no plugin register lifecycle authority. Deactivating a plugin removes its entries and listeners. **Open RabiRoute WebGUI** is a Host-bound presentation entry that opens this generation's dynamic URL rather than a plugin contribution.
 - Follows RibiWebGUI's `RabiLight` visual language: mist-blue page backgrounds, white surfaces, deep navy text, teal interaction accents, 8px radii, and light borders. The tray menu and the panel's More actions menu share this palette. Windows no longer registers Qt's implicit `setContextMenu`; presentation-only `TrayMenuController` handles both left-click `Trigger` and right-click `Context` and directly calls non-blocking `QMenu.popup()`, so either click immediately opens the same prewarmed menu. The role panel also completes an invisible QWidget/native-layout warmup before the tray icon becomes clickable, keeping the first persona click from paying several hundred milliseconds of construction cost. Persona actions first show, raise, and request activation synchronously inside the user-click callback, preserving Windows foreground-user permission, then apply cached DTOs and rebuild content on the next event-loop turn. Menu rebuilding likewise waits until the menu closes. The current persona and up to five persona-chat entries are shown directly, while overflow entries are created lazily when More personas opens. Running, warning, and offline states retain distinct semantic colors.
-- Uses the same Rabi Manager backend as RibiWebGUI. Route summaries and persona display information come from `/gateways?summary=1`; plans, memory, role conversation, and avatars come from `/api/roles/:roleId/plans`, `/memory`, `/role-panel/messages`, and `/avatar`, while plan approval feedback uses `/api/roles/:roleId/plans/:planId/feedback`. The tray never reads `data/` or persona files directly. A Qt-free `DesktopRefreshService` assembles API snapshots and a generic Qt thread-pool bridge runs them asynchronously; refreshes, role-chat sends, approval submissions, manual triggers, and shutdown requests keep Manager I/O off the UI thread. A hidden panel requests only the lightweight Manager/Route summary—not plans, memory, conversation, or avatars—and does not rebuild widgets, so the 10-second tray refresh cannot repeatedly trigger large role-data reads. Completed refreshes wait while the tray menu is visible, and Manager fields outside the presentation signature do not rebuild the menu or panel. Only one refresh runs at a time, while explicit manual refresh remains queued. Transient failures retain and label the last snapshot; a real Manager disconnect still clears live state.
+- Uses the same Rabi Manager backend as RibiWebGUI. Route summaries and persona display information come from `/gateways?summary=1`; plans, memory, role conversation, and avatars come from `/api/roles/:roleId/plans`, `/memory`, `/role-panel/messages`, and `/avatar`, while plan approval feedback uses `/api/roles/:roleId/plans/:planId/feedback`. The tray never reads `data/` or persona files directly. A Qt-free `DesktopRefreshService` assembles API snapshots and a generic Qt thread-pool bridge runs them asynchronously; refreshes, role-chat sends, approval submissions, and manual triggers keep Manager I/O off the UI thread. A hidden panel requests only the lightweight Manager/Route summary—not plans, memory, conversation, or avatars—and does not rebuild widgets, so the 10-second tray refresh cannot repeatedly trigger large role-data reads. Completed refreshes wait while the tray menu is visible, and Manager fields outside the presentation signature do not rebuild the menu or panel. Only one refresh runs at a time, while explicit manual refresh remains queued. Transient failures may label the last snapshot; persistent disconnect or identity mismatch exits the child so Host can decide whether to rebuild the generation.
 - `/gateways?summary=1` contains only persona identity, path, avatar, a lightweight title extracted from the file prefix, and other presentation metadata. It neither reads nor transfers full persona Markdown bodies, avoiding repeated large persona transfers during the 10-second refresh.
 - Collapsed plan cards use three summary rows: title, current step, and trigger keywords. The current-step row prefers the structured `Step N · title` form; plan and memory keywords stay on one responsive line, reveal more as the window widens, and mark hidden items with `……`. Expanding a plan hides the collapsed current-step summary and reveals every keyword plus the full plan details.
 - Expanded plan cards list the complete `steps` array first, show completed/total progress, and identify the execution point with both a `Current: step N` callout and a highlighted row. Steps are no longer truncated to a six-row preview, and structured plans do not repeat `nextAction`. The status, callout, and current row become blocked only when Manager returns `presentation.tone=blocked`; raw `blockedBy` text does not let the tray invent a second blocked-state rule. Only legacy plans without `steps` keep the old current/next compatibility area.
@@ -36,17 +36,17 @@ The Qt layer is kept portable where practical. See the [Windows launcher and pac
 - On multi-monitor systems, triggering the screenshot shortcut first captures every monitor as its own native-pixel image and shows monitor thumbnails. Selection then happens only on the chosen monitor's local canvas instead of a mixed-DPI virtual desktop; history reopens on the monitor geometry saved with that image.
 - The YeYu desktop pet reads a bounded animation pack and persona binding from Manager. It supports GIF / PNG sequences, persisted placement, scaling, always-on-top, locking, click-through, bubbles, and automatic fullscreen hiding. A pack-level `idleBehavior` can schedule occasional one-shot idle actions and a looping sleep state after prolonged inactivity; random actions return to `idle` without resetting the long-inactivity clock. Click, drag, opening the role panel, or a `work_ended` event for the current persona wakes the pet and restarts that clock. An actual pointer move plays `drag` until release restores the previous state; double-click opens the YeYu role panel. Only `work_ended` events carrying `personaId=YeYu` trigger success or concerned animation. The pet does not mutate ordinary task state or persona files. Pack import and settings go through Manager from WebGUI; Qt does not scan or edit `data/roles/YeYu/desktop-pet/` directly. A packaged Windows runtime may keep a rebuildable copy of each bound immutable pack under `data/cache/desktop-pet-roles/` to avoid high-frequency PNG reads exhausting NAS handles; the shared role directory remains the persona and pack source of truth.
 - After a screenshot selection is confirmed, corner and edge-midpoint handles resize it. The toolbar supports rectangle, arrow, and multiline text annotations in red, yellow, green, or blue. Text can move, resize, reopen for editing, and change font size; `Ctrl+Z` removes the last mark, and copy, pin, or send bakes annotations into the image.
-- **Settings → Windows login startup** synchronizes a per-user Startup shortcut. Turning it off removes that shortcut. The tray watches the settings file, so changing the screenshot toggle, screenshot shortcut, auto-copy setting, pin shortcut, or login-startup option does not require restarting the tray.
+- **Settings → Windows login startup** synchronizes only a per-user Startup shortcut targeting `RabiRouteHost.exe`; turning it off removes that shortcut. No startup entry points directly at the tray. The tray watches screenshot and pin settings, so those changes do not require a restart.
 - Keeps plan content and memory read-only; only Manager-declared approval steps accept appended feedback.
 - Opens role, plan, memory, project, and runtime-status directories only while the corresponding panel commands are active.
 - Shows and runs declared `manual_trigger` or `heartbeat` actions only while the `manager:gateway-runtime` manual-trigger command is active.
-- Withdraws stale contributions and uses the fixed RibiWebGUI recovery entry whenever the plugin catalog is unavailable or refresh fails; after the catalog loads, an active plugin must contribute that entry. Refresh and graceful Manager shutdown remain fixed Desktop controls.
+- Withdraws stale contributions whenever the plugin catalog is unavailable or refresh fails. The Host-bound RibiWebGUI entry and local refresh remain available; application exit goes only through Host control.
 
 Sending a message, submitting approval feedback, or triggering a rule is an explicit user action. The panel never creates, edits, completes, archives, or deletes plan and memory files directly; Manager writes approval feedback to its audit record and the Agent decides whether to update the plan.
 
 ## Out of scope
 
-- Replacing `npm run start:manager` or `node dist/manager.js`.
+- Starting, stopping, repairing, or supervising Manager; only RabiRoute Host owns the Windows application lifecycle.
 - Executing real Codex prompts; Desktop IPC still delivers them to a loaded task.
 - Sending QQ/NapCat messages or bypassing Route policy.
 - Hosting a new MCP server, command port, or fallback task Runtime.
@@ -54,39 +54,21 @@ Sending a message, submitting approval feedback, or triggering a rule is an expl
 
 ## Install and run
 
-Python 3, PySide6, and the Windows UI Automation Python adapter are required:
+Host starts Desktop in both installed and development Windows flows. The repository entry delegates only to `RabiRouteHost.exe`:
+
+```powershell
+Start-RabiRoute-Desktop.bat
+```
+
+After Manager publishes an exact same-generation READY, Host starts Desktop with `--surface-child`, `--manager-url`, `--application-generation-id`, `--manager-instance-id`, and `--host-executable`. Missing arguments, a mismatched `/meta` identity, or unavailable Host make Desktop fail closed. There is no standalone mode, port search, or Manager self-start path.
+
+Building Desktop still requires Python 3, PySide6, and the Windows UI Automation adapter:
 
 ```powershell
 py -m pip install -r desktop\tray-task-window\requirements.txt
 ```
 
-Connect the panel to an existing Manager:
-
-```powershell
-py desktop\tray-task-window\main.py --manager-url http://127.0.0.1:8790
-```
-
-### Trusted Desktop extensions
-
-A trusted Python package exposes a registrar through the `rabiroute.desktop_extensions` entry-point group. Installing a package does not enable it. Add every allowed entry point explicitly when starting Desktop:
-
-```powershell
-py desktop\tray-task-window\main.py `
-  --trusted-desktop-extension example-extension `
-  --trusted-desktop-extension another-extension
-```
-
-Each allowed entry point receives the same `DesktopExtensionRegistry` during startup and may register command handlers, panel-action providers, lifecycle capabilities, hotkeys, themes, status cards, and settings-section contracts. Desktop freezes the Registry after all registrars return; runtime additions, replacements, and duplicate registrations are rejected. Installed packages omitted from `--trusted-desktop-extension` are never imported.
-
-These entry points are trusted in-process code and can access the current Python process. A future Extension Host will provide process isolation for untrusted code.
-
-The Manager plugin catalog decides when those contracts are active. Panel directory commands use `desktop.open-role-directory`, `desktop.open-plan-directory`, `desktop.open-memory-directory`, `desktop.open-project-directory`, and `desktop.open-runtime-directory`; manual triggers use `desktop.manual-trigger`, and system selection uses `desktop.system-selection`. Removing those active commands or capabilities removes the UI entries and stops the corresponding listener.
-
-The Windows launcher starts the Manager and tray together:
-
-```powershell
-Start-RabiRoute-Desktop.bat
-```
+The Manager plugin catalog decides when declarative contracts are active. Panel directory commands use `desktop.open-role-directory`, `desktop.open-plan-directory`, `desktop.open-memory-directory`, `desktop.open-project-directory`, and `desktop.open-runtime-directory`; manual triggers use `desktop.manual-trigger`, and system selection uses `desktop.system-selection`. Removing those capabilities removes the UI entries and stops the listener.
 
 ## Tray latency acceptance check
 
@@ -106,22 +88,24 @@ Role chat uses Manager APIs and passes through the selected Route's `rolePanel` 
 
 ## Lifecycle
 
-`Exit RabiRoute` from the RabiRoute Desktop menu requests `POST /manager/shutdown` with an explicit desktop-exit marker. Manager atomically persists private runtime intent as `stopped` before stopping managed Gateways and HTTP. If persistence or graceful shutdown fails, the UI stays visible; it does not leave a `running` supervisor intent that could resurrect the process.
+Desktop is not a separately persistent application. Host starts Manager, validates structured READY, and then starts Desktop in the same generation. Desktop verifies `applicationGenerationId`, `managerInstanceId`, and `managerBaseUrl` through `/meta` before becoming available.
 
-A temporary Manager outage leaves the RabiRoute Desktop UI available, marks it offline, and keeps reconnecting. Full desktop startup through the Windows launcher or packaged RabiRoute Desktop also starts `scripts/watch-rabiroute-desktop-lifecycle.ps1`. That lightweight owner maintains one desktop runtime across its local backend and UI, then reuses existing safe startup gates after consecutive misses. QQ, NapCat, Route, and adapter health remain outside this supervisor. Plain `npm run start:manager` is a development or cross-platform backend entry and does not implicitly create RabiRoute Desktop.
+**Exit RabiRoute** calls Host's local control channel with the current `applicationGenerationId`. Host ends the complete Windows Job and exits. Desktop never calls Manager start/shutdown HTTP APIs or kills a PID.
+
+When Manager or Host remains unavailable, Manager identity changes, or Desktop itself fails, Desktop exits. Host closes the old Job and applies bounded whole-generation recovery. There is no resident tray reconnect loop or parallel guardian chain.
 
 ## Code layout
 
-- `ManagerClient`: the shared Manager HTTP backend client for Routes, plans, memory, conversation, avatars, actions, and shutdown.
+- `ManagerClient`: the shared Manager HTTP backend client for Routes, plans, memory, conversation, avatars, and business actions.
 - `DesktopRefreshService`: Qt-free API snapshot orchestration with no local role-file access.
 - `desktop_models` / `desktop_read_model`: Manager DTO conversion and rebuildable presentation caches.
 - `qt_async`: generic Qt thread-pool bridge with no Manager or role business logic.
 - `desktop_pet_idle`: pack-configured random-idle timing, long-inactivity timing, and non-repeating selection only; it neither loads assets nor owns the final animation state.
 - `system_selection`: Windows global mouse-drag and keyboard-selection detection, UI Automation text extraction, the Unity-only clipboard fallback, selection-avoiding no-activate floating bar, active-persona hover menu, and Manager-only speech/role-panel actions. The Read aloud button is hidden when `readAloudEnabled` is false.
 - `system_screenshot`: Windows global region capture, selected-area or clipboard pinning, screen and selected-area history, restart-restored pinned-image windows, and role-panel image-attachment delivery; persistent settings are owned by Manager at `/api/desktop/settings`.
-- `LifecycleController`: explicit user-exit decisions only; Manager reachability is presentation state and never decides tray lifetime.
+- `LifecycleController`: validates Host-injected same-generation identity and sends explicit user exit to Host; it does not own Manager lifetime.
 - `TaskWindow`: Route navigation, six views, composer, and rendering.
 - `DesktopAdapter`: portable URL and path opening.
 - `tray_app`: presentation-only composition root for menus, windows, cached DTO application, and user events.
 
-Future macOS and Linux launchers should reuse this Manager protocol and Qt panel rather than fork the business behavior.
+Future macOS and Linux launchers should reuse this Manager protocol and Qt presentation layer with one platform application Host rather than fork business behavior or add a second lifecycle owner.

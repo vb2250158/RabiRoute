@@ -13,6 +13,7 @@ import {
 } from "./planAttachments.js";
 import type { PlanAttachment } from "./shared/planAttachmentContract.js";
 import type { PlanImportanceLevel, PlanUrgencyLevel } from "./shared/planSortContract.js";
+import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
 import {
   legacyActivePlanFile,
   legacyArchivedPlanFile,
@@ -30,7 +31,9 @@ import {
   type PlanStorageBucket
 } from "./planStorageLayout.js";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const packageRoot = resolveRuntimeLayout(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+).packageRoot;
 
 export type PlanStatus = "未开始" | "进行中" | "暂停" | "已完成" | "已归档";
 const PLAN_STATUSES = new Set<PlanStatus>(["未开始", "进行中", "暂停", "已完成", "已归档"]);
@@ -1755,14 +1758,36 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
   }
 }
 
-async function allPlanFilesAsync(roleDir: string): Promise<string[]> {
+function awaitAbortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const aborted = (): void => reject(signal.reason);
+    signal.addEventListener("abort", aborted, { once: true });
+    void operation.then(
+      value => {
+        signal.removeEventListener("abort", aborted);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener("abort", aborted);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function allPlanFilesAsync(roleDir: string, signal?: AbortSignal): Promise<string[]> {
   const legacyDirectories = [
     path.join(plansDir(roleDir), "items", "active"),
     path.join(plansDir(roleDir), "archive")
   ];
   const legacyGroups = await Promise.all(legacyDirectories.map(async (directory) => {
     try {
-      const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+      const entries = await awaitAbortable(
+        fs.promises.readdir(directory, { withFileTypes: true }),
+        signal
+      );
       return entries
         .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
         .map((entry) => path.join(directory, entry.name))
@@ -1775,11 +1800,13 @@ async function allPlanFilesAsync(roleDir: string): Promise<string[]> {
   const storageGroups = await Promise.all((["active", "archive"] as const).map(async (bucket) => {
     const directory = path.join(plansDir(roleDir), bucket);
     try {
-      const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+      const entries = await awaitAbortable(
+        fs.promises.readdir(directory, { withFileTypes: true }),
+        signal
+      );
       return entries
         .filter((entry) => entry.isDirectory())
         .map((entry) => path.join(directory, entry.name, "plan.json"))
-        .filter((filePath) => fs.existsSync(filePath))
         .sort((left, right) => left.localeCompare(right));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -2008,10 +2035,13 @@ export function listPlans(roleDir: string): PlanItem[] {
   return plans;
 }
 
-export async function listPlansAsync(roleDir: string): Promise<PlanItem[]> {
+export async function listPlansAsync(
+  roleDir: string,
+  options: { watch?: boolean } = {}
+): Promise<PlanItem[]> {
   const cacheKey = planListCacheKey(roleDir);
   const cached = planListCache.get(cacheKey);
-  const watchBacked = ensurePlanListWatchers(roleDir);
+  const watchBacked = options.watch !== false && ensurePlanListWatchers(roleDir);
   const dirtyAt = planListDirtyAt.get(cacheKey);
   if (cached && watchBacked && dirtyAt === undefined) {
     recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerPlanCatalogCacheHit, 0);
@@ -2083,6 +2113,68 @@ export function getPlan(roleDir: string, planId: string): PlanItem | null {
     }
   }
   return findPlanRecord(roleDir, planId)?.plan ?? null;
+}
+
+const PLAN_BY_ID_ASYNC_READ_CONCURRENCY = 8;
+
+async function readPlanRecordAsync(
+  filePath: string,
+  planId: string,
+  signal?: AbortSignal
+): Promise<PlanRecord | null> {
+  signal?.throwIfAborted();
+  let text: string;
+  try {
+    text = await fs.promises.readFile(filePath, { encoding: "utf8", signal });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  signal?.throwIfAborted();
+  try {
+    const plan = normalizePlan(
+      JSON.parse(text) as Record<string, unknown>,
+      path.basename(filePath, ".json")
+    );
+    return plan?.id === planId ? { filePath, plan } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads one plan without synchronous filesystem work. Recovery workers use
+ * this path so a slow UNC role root remains cancellable and cannot pin an
+ * event loop while resolving feedback ledgers back to their owning plans.
+ */
+export async function getPlanAsync(
+  roleDir: string,
+  planId: string,
+  options: { signal?: AbortSignal } = {}
+): Promise<PlanItem | null> {
+  const { signal } = options;
+  signal?.throwIfAborted();
+  const candidates = planCandidateFiles(roleDir, planId);
+  for (const filePath of candidates) {
+    const record = await readPlanRecordAsync(filePath, planId, signal);
+    if (record) return record.plan;
+  }
+
+  const candidateSet = new Set(candidates.map(filePath => path.resolve(filePath)));
+  const fallbackFiles = (await allPlanFilesAsync(roleDir, signal))
+    .filter(filePath => !candidateSet.has(path.resolve(filePath)));
+  signal?.throwIfAborted();
+  for (let offset = 0; offset < fallbackFiles.length; offset += PLAN_BY_ID_ASYNC_READ_CONCURRENCY) {
+    const records = await Promise.all(
+      fallbackFiles
+        .slice(offset, offset + PLAN_BY_ID_ASYNC_READ_CONCURRENCY)
+        .map(filePath => readPlanRecordAsync(filePath, planId, signal))
+    );
+    const match = records.find((record): record is PlanRecord => record !== null);
+    if (match) return match.plan;
+    signal?.throwIfAborted();
+  }
+  return null;
 }
 
 type MemoryCatalogItem = RecentMemoryItem | ConsolidatedMemoryItem;
@@ -2991,7 +3083,7 @@ export function roleKnowledgeSnapshot(
     roleDir,
     plansDir: plansDir(roleDir),
     memoryDir: memoryDir(roleDir),
-    agentInterfaceDocPath: path.join(rootDir, "docs", "rabi-agent-interfaces.md"),
+    agentInterfaceDocPath: path.join(packageRoot, "docs", "rabi-agent-interfaces.md"),
     activePlans,
     activeSkills,
     recentMemories,

@@ -75,6 +75,7 @@ export const activate = definePlugin({
                 scanNapcatEndpoint: () => runtime.scanNapcatEndpoint(runtime.napcatManagerCtx()),
                 remoteAgentScanResult: runtime.remoteAgentMessageAdapterScanResult,
                 speechStatus: () => runtime.speechControl.status(),
+                xiaomiHomeHealth: runtime.xiaomiHomeHealthForScan,
                 readGatewayStatus: runtime.readGatewayStatus,
                 weixinDefaultBaseUrl: () => process.env.WEIXIN_BASE_URL || "https://ilinkai.weixin.qq.com"
             });

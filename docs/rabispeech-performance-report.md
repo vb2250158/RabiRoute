@@ -137,7 +137,7 @@ xychart-beta
 | 真实采集流 | Maono 索引 1，请求 16 kHz 单声道 | 启动成功；状态为 `listening`，能返回实时 RMS 电平 |
 | 常驻恢复 | 监听启用后重启 RabiSpeech 计划任务 | 自动恢复同一设备、模型和会话；关闭浏览器不影响服务流 |
 | 持久停止 | 本机 stop 接口 | `running=false` 且 `microphone.json` 写回 `enabled=false` |
-| Manager / RabiPC 代理 | `127.0.0.1:8790/api/speech/microphone/*` | 设备、启动、状态、停止全部通过 |
+| Manager / RabiPC 代理 | `<managerBaseUrl>/api/speech/microphone/*` | 设备、启动、状态、停止全部通过 |
 | 切句与投递 | 合成 PCM 单元测试 | 前置缓存、双阈值、静音切句、WAV、ASR、可选 Route 提交通过 |
 | 公网边界 | RabiLink 通用应用 token | 普通模型/TTS/ASR 可用；麦克风控制路径返回 404，不允许远程开关主机麦克风 |
 

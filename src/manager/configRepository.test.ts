@@ -39,6 +39,26 @@ test("repository reads route config and falls back to personaConfig rules", () =
   assert.equal(config.gateways[0].notificationRules?.[0]?.template, "tick\ntock");
 });
 
+test("async repository read preserves the route and persona merge contract", async () => {
+  const rootDir = makeTempRoot();
+  writeJson(path.join(rootDir, "data", "route", "main", "adapterConfig.json"), {
+    enabled: true,
+    messageAdapters: ["heartbeat"],
+    gatewayPort: 8789,
+    agentRoleId: "Rabi"
+  });
+  writeJson(path.join(rootDir, "data", "roles", "Rabi", "personaConfig.json"), {
+    notificationRules: [{ id: "heartbeat", routeKinds: ["heartbeat"], template: "async" }]
+  });
+
+  const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  await repo.ensureDataDirsAsync();
+  const persona = await repo.readRoleMessageConfigAsync("Rabi");
+
+  assert.equal(persona.notificationRules?.[0]?.template, "async");
+  assert.deepEqual(persona, repo.readRoleMessageConfig("Rabi"));
+});
+
 test("repository migrates the legacy persona limit and writes split Route/persona speech settings", () => {
   const rootDir = makeTempRoot();
   const adapterPath = path.join(rootDir, "data", "route", "main", "adapterConfig.json");
@@ -106,6 +126,7 @@ test("repository migrates persona-owned fields out of legacy adapter and profile
   });
 
   const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  repo.migrateLegacyConfigs();
   const config = repo.readConfig();
   const adapter = JSON.parse(fs.readFileSync(adapterPath, "utf8")) as GatewayDefinition;
   const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition;
@@ -163,6 +184,7 @@ test("repository migrates legacy role rules to personaConfig and keeps adapter c
   });
 
   const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
+  repo.migrateLegacyConfigs();
   const config = repo.readConfig();
 
   assert.equal(fs.existsSync(adapterPath), true);
@@ -222,7 +244,7 @@ test("repository migration preserves existing personaConfig fields and rules", (
   });
 
   const repo = new ManagerConfigRepository({ rootDir, managerPort: 8790 });
-  repo.ensureDataDirs();
+  repo.migrateLegacyConfigs();
 
   const persona = JSON.parse(fs.readFileSync(personaPath, "utf8")) as GatewayDefinition & { routeVariables?: Record<string, string> };
   assert.deepEqual(persona.routeVariables, { tone: "warm" });

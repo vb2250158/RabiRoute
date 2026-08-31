@@ -24,7 +24,7 @@ function helpText() {
     "  --timeout-seconds <n>     One-shot infrastructure deadline (default 30)",
     "Runs two isolated persona roots with the current built coordinator, dedicated LAN listener,",
     "the real RabiLink Relay server, and a real target worker/Manager data plane.",
-    "It does not use the existing port 8790, application token, Relay data, or persona folders."
+    "It does not use the installed Host generation, application token, Relay data, or persona folders."
   ].join("\n");
 }
 

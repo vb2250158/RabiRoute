@@ -32,8 +32,8 @@ android {
         targetSdk 34
         // The thin-phone package must always be an installable upgrade over
         // the prior diagnostic build.  Keep the normal build metadata intact.
-        versionCode mobileSlim ? 11 : 4
-        versionName mobileSlim ? "0.3.8" : "0.3.1"
+        versionCode mobileSlim ? 20 : 4
+        versionName mobileSlim ? "0.3.17" : "0.3.1"
         buildConfigField "boolean", "MOBILE_SLIM", mobileSlim ? "true" : "false"
         buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
     }

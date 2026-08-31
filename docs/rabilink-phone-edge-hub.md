@@ -54,7 +54,7 @@ RabiLink 手机伴侣不拥有 Agent；RabiRoute 不拥有 Agent，但拥有上�
 | Relay | token 鉴权、应用隔离、入站 observation、下行持久队列、幂等、设备过滤 | Agent 推理、全局消费确认、设备 UI |
 | PC RabiRoute | 统一账本、空闲审阅、主动投递、配置、审计、安全门 | 蓝牙配对、手表本地 API、眼镜 UI |
 | 手机伴侣 | token、目标 PC、本地设备身份、联网、状态、cursor、眼镜音频/媒体队列与便携端转发 | 长期记忆、人格真源、Route/Agent 配置副本、替代 Codex |
-| 眼镜原生 App | PCM 采集/播放、HUD、触摸板、设备媒体输入 | Relay 凭据、本地 ASR/TTS、24 小时后台录音、可靠保存全部上下文 |
+| 眼镜原生 App | PCM 采集/播放、HUD、触摸板、设备媒体输入 | Relay 凭据、本地 ASR/TTS、人格真源、可靠保存全部上下文 |
 | 手表客户端 | 快速输入、通知、震动、简短回复、自己的 cursor | 读取其他设备私有队列、直接持有 PC 配置 |
 
 ## 双向数据流
@@ -191,7 +191,7 @@ GET /rokid/rabilink/messages?after=<cursor>&stream=1
 - 它只读取眼镜电量/充电并上报 Relay，不创建 Custom View，不拥有 Agent。
 - Android SDK 已提供一次性 `publishPortableObservation` 和 `getPortableMessages`；调用方决定何时运行，不偷偷常驻麦克风。
 - 连续 PCM 恢复由系统网络事件和 RabiLink SSE 恢复事件驱动；Android 已知断网时，SSE 连接和可靠队列发送阻塞在网络事件门，不按秒空转。仅为覆盖少数厂商漏发已注册默认网络回调，前台服务在已知离线期间每五分钟检查一次 OS 当前网络，恢复后立即停止；该兜底不请求 Relay、不读取消息、不推进 cursor。只有网络可用但服务暂时失败时才使用一次性 1–30 秒退避。
-- 待确认 PCM 使用跨临时流稳定的 `chunkId`，PC 按稳定设备只保存最后一个已接收块的 ID/哈希去重证据。断网缓冲有界并舍弃过旧声音，因此恢复会追上实时流；若需要完整保留离线期间每句话，必须另行显式设计带隐私提示的离线录音模式。
+- 手机待确认 PCM 使用私有磁盘分片和跨临时流稳定的 `chunkId`。`AudioRecord` 回调与 fsync/上传分别运行在有界接收、单写和网络执行器；断网不阻塞采集。联网后按本地单调序号逐段使用分片自己的来源/Route 流补传，PC 以序号、chunkId、字节数和 SHA-256 明确确认，并把处理结果写入跨进程幂等账本，手机只清理已 ACK 副本。来电、麦克风争用、播放抑制、背压、残留 partial、毒化分片和存储不足都留下 gap/失败记录；quarantine 计入水位且只接受用户确认清理。
 - 文字、媒体和 `delivered/played/playback_failed` 回执先落手机私有可靠队列；事件恢复后按 cursor 单次查询补漏并补传。`delivered` 不是 `played`，手机与眼镜只在各自 AudioTrack marker 后报告实际播放完成；眼镜在 BEGIN 后同步确认采集已暂停才接收 PCM，界面销毁会把未完成播放明确回为失败。
 
 ### 后续产品化

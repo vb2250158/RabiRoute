@@ -2767,6 +2767,7 @@ class SystemScreenshotController(QObject):
         delivery_targets_provider: Callable[[], list[SelectionDeliveryTarget]],
         notify: Callable[[str, str, bool], None],
         settings_path: Path | None = None,
+        host_executable: Path | None = None,
         hotkey: WindowsGlobalHotkey | None = None,
         clipboard_hotkey: WindowsGlobalHotkey | None = None,
         extension_registry: DesktopExtensionRegistry | None = None,
@@ -2778,6 +2779,7 @@ class SystemScreenshotController(QObject):
         self._delivery_targets_provider = delivery_targets_provider
         self._notify = notify
         self._settings_path = settings_path
+        self._host_executable = host_executable
         self._hotkey = hotkey or WindowsGlobalScreenshotHotkey()
         self._clipboard_hotkey = clipboard_hotkey or WindowsGlobalClipboardPinHotkey()
         self._desktop_extensions = extension_registry or create_builtin_desktop_extension_registry()
@@ -2977,7 +2979,11 @@ class SystemScreenshotController(QObject):
                 result.screenshot_auto_copy,
             )
             self._apply_hotkey_configuration()
-            sync_startup_shortcut(self._project_root, result.autostart)
+            if result.autostart_configured:
+                try:
+                    sync_startup_shortcut(self._project_root, result.autostart, self._host_executable)
+                except (OSError, RuntimeError, ValueError) as error:
+                    self._notify("RabiRoute 登录启动", str(error), True)
 
         self._settings_task = start_qt_task(
             self._manager.desktop_settings,

@@ -6,190 +6,138 @@ English | <a href="./windows-launcher-and-packaging.md">简体中文</a>
 
 # Windows Desktop Launch and Packaging
 
-> Status: current guide. Checked against the launcher, Manager shutdown endpoint, Qt tray code, and packaging scripts.
+The Windows package has one application-lifecycle entry: `RabiRouteHost.exe`. Manager owns business state and the tray/task window is presentation; both are same-generation children created by Host. The tray is neither a lifecycle owner nor a second desktop application.
 
-RabiRoute Desktop is the one Windows user entry. Its system tray and task window are views; Manager is its local backend and does not appear as a separate Windows application. A complete desktop runtime is a coordinated set of artifacts:
+## Lifecycle ownership
 
-```text
-RabiRoute-Desktop.exe          tray/task-panel entry and startup supervisor
-scripts/watch-rabiroute-desktop-lifecycle.ps1  desktop backend and UI supervisor
-dist/manager.js             Node Manager entry
-dist/**/*.js                gateway, adapter, routing, and backend output
-ribiwebgui/dist/            RibiWebGUI static build
-data/                       writable private runtime configuration and logs
-node.exe or system Node.js  Node runtime
-node_modules/               runtime dependencies, or an equivalent bundle
+| Component | Owns | Does not own |
+| --- | --- | --- |
+| RabiRoute Host | Per-user singleton, application generation, child Job, startup order, bounded restart, local control commands | Routes, plugin business logic, WebGUI state, desktop presentation |
+| Manager | HTTP API, business facts, plugin generation, persistence, Routes and Gateways | Windows application singleton, starting the tray, repairing the tray |
+| Tray/task window | Render Manager DTOs, collect user actions, open the current WebGUI, request Host exit | Start or stop Manager, scan ports, write business files, remain resident alone |
+| Manager plugin | Provide declared capabilities within a Manager generation | Own the Host/Manager/tray application lifecycle |
+
+```mermaid
+flowchart TD
+    A[User, login startup, or installer] --> H[RabiRoute Host]
+    H --> J[Windows Job for this generation]
+    J --> M[Manager child]
+    M -->|same-generation READY: generation + instance + URL| H
+    H --> T[Tray/task-window child]
+    T -->|HTTP DTO / command| M
+    T -->|named pipe: activate / quit| H
+    M --> P[plugin generation]
 ```
 
-`RabiRoute-Desktop.exe` is the desktop entry inside that bundle. On startup it removes same-directory legacy `RabiRoute-Tray.exe`, `RabiRoute-Tray.new.exe`, and unreplaced `RabiRoute-Desktop.new.exe` artifacts so obsolete entry points cannot remain visible. It does not contain the Manager, WebGUI, Node.js, dependencies, or runtime data by itself.
+Host uses a per-user named Mutex for single instance and a per-user named pipe for `activate`, `status`, `restart`, and `quit`. A second launch activates the existing Host instead of creating another Manager or tray.
 
-Windows users always start RabiRoute Desktop. It detects and starts the local backend only when needed, writes logs outside bundled resources, opens RibiWebGUI, and shows the PySide6/Qt plan-and-memory interface. Running Node Manager directly is for development or cross-platform deployment.
+Manager also holds an operating-system named-pipe lease derived from the current user and product-install identity, preventing a legacy/manual entry from becoming a second state writer. Windows releases the lease with the process. `manager-instance.lock` is diagnostic metadata only; ownership no longer depends on whether a reusable PID happens to be alive, so power loss, Job termination, or PID reuse cannot permanently lock Manager out.
 
-```text
-Start-RabiRoute-Desktop.bat or RabiRoute-Desktop.exe
-  -> verify/build dist/manager.js and ribiwebgui/dist
-  -> node dist/manager.js
-     -> static WebGUI and HTTP API
-     -> managed gateway subprocesses
-  -> RabiRoute Desktop UI (system tray and task window) connects to http://127.0.0.1:8790
-  -> data/runtime/desktop-lifecycle-intent.json = running
-  -> watch-rabiroute-desktop-lifecycle.ps1
-     -> restores the complete desktop runtime through the same launcher when its backend or UI is missing
+For every application generation, Host creates a new Windows Job. Manager and tray are created with `CREATE_SUSPENDED`, assigned to the Job, and then resumed, so closing Host or the Job cannot leave orphan children. Manager starts first. Host accepts only a structured READY carrying the expected `applicationGenerationId`, Manager PID, `managerInstanceId`, and loopback `baseUrl`; the tray starts only after that validation succeeds.
+
+## Traceable design basis
+
+This design borrows lifecycle invariants, not another project's process layout or ports:
+
+- On Sunshine's current `master`, [`src/system_tray.cpp`](https://github.com/LizardByte/Sunshine/blob/master/src/system_tray.cpp) runs the tray as a managed thread inside the Sunshine process, and its quit callback calls [`lifetime::exit_sunshine`](https://github.com/LizardByte/Sunshine/blob/master/src/entry_handler.h). Tray actions therefore return to one application-exit boundary instead of creating an independently resident program.
+- Sunshine's Windows [`tools/sunshinesvc.cpp`](https://github.com/LizardByte/Sunshine/blob/master/tools/sunshinesvc.cpp) places the child in a Job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, watches child exit, and on normal stop requests graceful termination for up to 20 seconds before force termination. RabiRoute retains the single owner, Job, unified quit/restart, and graceful-then-force invariants.
+- RabiRoute Manager runs on Node.js, the tray runs on Python/Qt, and plugins need separate fault domains. RabiRoute therefore uses Host plus two same-generation children instead of putting the tray on a Manager thread. This intentional runtime difference does not dilute Host's sole lifecycle ownership.
+- DSH informs only plugin scopes and dependency-aware unload: RabiRoute applies generations, `readyRequires`, process leases, and reverse-dependency release. A DSH-style in-process isolate is not treated as a security sandbox; RabiRoute `in_process` is a trusted extension and `isolated` is a separate fault domain, while OS permissions remain the actual security boundary.
+
+Sunshine's fixed base-port convention is not one of the adopted invariants. RabiRoute Manager continues to use an operating-system-assigned port that Host binds, publishes, and validates for the current generation.
+
+## Dynamic Manager endpoint
+
+Manager passes port `0` to the operating system and receives an available loopback port. Endpoint identity consists of:
+
+- `applicationGenerationId`: the generation created by Host;
+- `managerInstanceId`: the Manager instance in that generation;
+- `managerBaseUrl`: the generation's actual loopback URL;
+- Manager PID: READY must come from the child Host just created.
+
+Host status and the tray carry these fields. They are not replaced with a fixed port, guessed by scanning ports, or reused across generations. The tray validates both generation and Manager instance through `/meta` and only presents Offline on failure. Host's independent health probe is the sole owner that rebuilds the complete generation after consecutive unreachable or identity-mismatch results.
+
+Query the current state with:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json
 ```
 
-Choosing **Exit RabiRoute** from the RabiRoute Desktop menu first makes Manager atomically persist `desiredState=stopped`, then stops managed gateways, closes HTTP, and exits before the desktop UI exits. The supervisor observes `stopped` and terminates without resurrecting an intentional exit. An ordinary Manager reload does not change that intent.
+Only the returned `managerBaseUrl` is the current WebGUI and local API address. **Open RabiRoute WebGUI** in the tray opens this Host-bound address.
 
-## Double-click startup
+## Start, restart, and quit
 
-From the repository root:
-
-```text
-Start-RabiRoute-Desktop.bat
-```
-
-The batch/PowerShell hybrid launcher:
-
-- Uses the repository root as its working directory.
-- Checks `http://127.0.0.1:8790/meta` repeatedly and reuses only a stably healthy Manager.
-- If a healthy Manager predates the current `dist/manager.js`, performs a controlled shutdown and loads the current build.
-- If an unresponsive process owns port 8790, takes over only when its command line precisely identifies this project's absolute `dist/manager.js` or the relative `dist/manager.js` form used by packaged and older launchers: graceful `/manager/shutdown` first, then the verified process tree only if shutdown times out. The Node-process, port-owner, and Manager-health gates must still hold together.
-- If port 8790 belongs to another or unverifiable process, leaves it untouched and refuses to start a duplicate Manager.
-- Before loading the control plane, Manager also acquires `data/.runtime/manager-instance.lock`. Concurrent starts of the same workspace through a mapped drive, UNC path, the launcher, or direct `node dist/manager.js` are rejected with exit code `17`; a stale lock is reclaimed only after its recorded PID no longer exists.
-- Runs `npm.cmd run build` when the backend or WebGUI build is missing/stale, unless `-NoBuild` is passed.
-- If the Manager already runs, repairs only the WebGUI with `npm.cmd run webgui:build` when needed.
-- Starts `node dist\manager.js` in the background when no Manager is running.
-- Opens RibiWebGUI unless `-NoOpen` is passed.
-- Starts the RabiRoute Desktop interface unless `-NoDesktopShell` is passed.
-- Reuses an existing RabiRoute Desktop UI instead of creating a duplicate.
-- Persists a `running` desktop intent and starts one lightweight supervisor per workspace. It checks only the local backend `/meta` and this project's desktop UI process every five seconds. Two consecutive `/meta` failures trigger recovery through the launcher's PID, port-ownership, and single-instance gates even if an old `node dist/manager.js` process still exists. It does not scan or repair QQ, NapCat, Routes, or adapters.
-- Keeps the desktop UI alive and visibly offline during a transient backend outage. Supervisor records include `managerFailureCount` and `managerProbeError` to distinguish an exited process, a port owner, and an unresponsive Manager API.
-
-Logs are written under:
-
-```text
-data/route/default-main/logs/
-```
-
-Typical files:
-
-```text
-launcher-YYYYMMDD-HHMMSS.log
-manager-YYYYMMDD-HHMMSS.stdout.log
-manager-YYYYMMDD-HHMMSS.stderr.log
-tray-YYYYMMDD-HHMMSS.stdout.log
-tray-YYYYMMDD-HHMMSS.stderr.log
-desktop-lifecycle-supervisor.log
-desktop-lifecycle-supervisor.jsonl
-```
-
-Useful commands:
+The installed Start-menu, desktop, and login-startup entries launch `RabiRouteHost.exe` directly. The repository compatibility launcher only delegates to Host:
 
 ```powershell
 .\Start-RabiRoute-Desktop.bat
-.\Start-RabiRoute-Desktop.bat -NoOpen
-.\Start-RabiRoute-Desktop.bat -NoBuild
-.\Start-RabiRoute-Desktop.bat -NoDesktopShell
-.\Start-RabiRoute-Desktop.bat -ManagerUrl http://127.0.0.1:8790
 ```
 
-The launcher does not start or stop QQ, NapCat, or unrelated processes. An unknown port owner remains untouched. Only a precisely verified stale Manager from the same project may be shut down; forced process-tree termination is a bounded fallback after graceful shutdown times out. NapCat lifecycle remains an explicit action in RibiWebGUI.
+The batch file does not probe ports, launch Manager or tray, maintain PIDs, or create a background lifecycle owner.
 
-## Manager shutdown endpoint
+Restart the complete generation explicitly:
 
-```http
-POST http://127.0.0.1:8790/manager/shutdown
+```powershell
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command restart --json
 ```
 
-The endpoint is loopback-only. A tray request includes `{ "desktopExit": true }`; Manager persists `stopped` before acknowledging it, and a persistence failure leaves both the Manager and tray running. Installer, upgrade, and controlled-reload calls use an empty body, shutting down only Manager without changing the desktop intent. Both eventually use the same shutdown path as `SIGINT` and `SIGTERM`.
+**Exit RabiRoute** sends Host a local-control request fenced by the current `applicationGenerationId`. Host stops that generation and then exits; a stale tray cannot quit a newer application. Ordinary Manager HTTP APIs do not expose application start or shutdown commands.
 
-Full desktop startup records its intent through another loopback-only endpoint:
+If Manager or tray exits unexpectedly, Host closes the complete Job and creates a fresh generation with bounded backoff. Repeated failures open the restart circuit and leave evidence instead of causing infinite resurrection. The tray never remains alive and reconnects to an arbitrary port after Manager disappears.
 
-```http
-POST http://127.0.0.1:8790/manager/desktop-lifecycle/start
-```
+## Running from source
 
-The private `data/runtime/desktop-lifecycle-intent.json` file is the single runtime source of truth and is never committed. Missing, malformed, or non-`running` state makes the supervisor fail closed.
+Cross-platform and backend development can still run Manager alone:
 
-The tray does not kill an arbitrary PID or become the Manager's permanent parent. A separate Windows supervisor owns only process pairing; the portable Node core remains independently runnable.
-
-## macOS and Linux baseline
-
-```bash
+```powershell
 npm install
 npm run build
 npm run start:manager
 ```
 
-Then open:
+This is a development entry, not the packaged Windows lifecycle. Manager prints the operating-system-assigned URL to stdout; source-mode callers use that explicit URL. There is no product-level fixed-port discovery contract.
+
+## Dynamic LAN discovery
+
+Manager publishes the standard DNS-SD service `_rabiroute._tcp.local.` only when the user enables WebGUI LAN access and Manager actually listens on the LAN. The SRV record carries the operating-system-assigned port for the current generation. TXT contains only the protocol version, the `/.well-known/rabiroute-manager` path, `applicationGenerationId`, and `managerInstanceId`; it never publishes the WebGUI credential, Host control token, or private paths.
+
+The Android SDK's parameterless `scanLan()` consumes that service, reads the well-known identity document from the resolved host and port, and returns the complete dynamic Manager URL. Missing protocol data, identity mismatch, resolution failure, and timeout are explicit failures or empty discovery results; there is no fallback scan of `8790..8799`. Discovery locates and fences identity only. Other Manager APIs remain protected by the WebGUI LAN authorization policy.
+
+## Build
+
+Build Windows artifacts on a local disk. NAS storage may hold source, but not application execution, intermediate build output, or runtime logs.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-release.ps1 `
+  -OutputRoot C:\RabiRouteBuild
+```
+
+The release contains:
+
+- a self-contained, single-file .NET 9 `RabiRouteHost.exe`;
+- the `dist/` Manager, RibiWebGUI, and 29 built-in plugin packages;
+- a local Node.js runtime and production dependencies;
+- the presentation-only PySide6/Qt Desktop under `desktop-runtime/`;
+- default configuration and public assets.
+
+`RabiRouteHost.exe` is the only target for Start-menu, desktop, login-startup, and uninstall-stop flows. Before upgrade, the installer stops the active generation through Host control and removes retired parallel lifecycle and startup artifacts. No side path remains able to resurrect the old architecture.
+
+The portable ZIP supports extraction to a new empty folder only; it is not an in-place upgrade medium. A ZIP cannot remove surplus executables, watchers, scheduled tasks, or sign-in entries from an old directory, so an existing installation must be upgraded by Setup's fail-closed stop and migration flow. As a final composition-root gate, Host checks for exact retired Desktop, Tray, and watcher files before creating Manager or the tray. Any match returns `legacy_overlay_blocked`, deletes nothing, and directs the user to a clean folder or Setup. Similarly suffixed backup files do not match, and a clean Setup installation is not blocked.
+
+## Logs and acceptance
+
+Host writes:
 
 ```text
-http://127.0.0.1:8790/
+%LOCALAPPDATA%\RabiRoute\diagnostics\host\host-YYYYMMDD.log
 ```
 
-Manager APIs, gateways, WebGUI, storage layout, and shutdown semantics are cross-platform. Only `Start-RabiRoute-Desktop.bat` is Windows-specific. A future macOS/Linux convenience launcher should follow the same contract: probe `/meta`, avoid duplicate Managers, pass `--manager-url` to the Qt panel, and use `POST /manager/shutdown` for exit.
+Desktop keeps one crash-evidence bundle per launch; Manager, plugins, and Routes keep their own sources of truth. Acceptance must cover at least:
 
-## Qt plan and memory panel
-
-The optional panel lives under `desktop/tray-task-window`. It is part of the Windows desktop experience but is not required for the portable Manager/WebGUI path. It is a frontend of the same Manager backend as RibiWebGUI: `DesktopRefreshService` calls Manager APIs asynchronously and the packaged tray does not load local plan/memory repositories.
-
-Recommended local setup:
-
-```powershell
-py -m venv .venv-tray
-.\.venv-tray\Scripts\python.exe -m pip install -r desktop\tray-task-window\requirements.txt
-.\.venv-tray\Scripts\python.exe desktop\tray-task-window\main.py
-```
-
-Python discovery order:
-
-1. `desktop\tray-task-window\.venv\Scripts\python.exe`
-2. `.venv-tray\Scripts\python.exe`
-3. `py.exe -3`
-4. `python.exe`
-
-If Python or PySide6 is unavailable, the desktop shell process exits with a clear stderr message while the Manager and WebGUI remain usable. The panel uses a project-root single-instance lock and can fall back to a normal floating window when a system tray is unavailable.
-
-## Building the Windows desktop bundle
-
-```powershell
-.\scripts\build-desktop-exe.ps1
-```
-
-The wrapper runs `npm run build`, verifies the backend and WebGUI output, invokes PyInstaller with `RabiRoute-Desktop.spec`, and copies `dist\RabiRoute-Desktop.exe` to the repository root for local testing. The executable is ignored by Git.
-
-Packaging boundaries:
-
-- The executable bundles the PySide6 RabiRoute Desktop entry and Python tray code only.
-- It does not bundle Node.js, `dist/manager.js`, `ribiwebgui/dist`, `node_modules`, or `data`.
-- Frozen mode resolves the project root from `Path(sys.executable).parent`.
-- It reuses a running Manager and may rebuild a stale WebGUI.
-- If no Manager is running, it verifies/builds backend and frontend output before starting `node dist/manager.js`.
-- Once Manager is healthy, it records a `packaged-desktop` running intent and starts the same lifecycle supervisor. Package recovery relaunches the packaged executable and does not depend on system Python.
-
-Before publishing a Windows package, verify that the backend and WebGUI are built, Node and dependencies are available, runtime data remains writable and external, and the binary has passed a separate privacy review for embedded build-machine paths. The desktop entry must never become the only supported startup path.
-
-## Installer and GitHub Release assets
-
-Build the complete Windows release locally with:
-
-```powershell
-.\scripts\build-windows-release.ps1
-```
-
-The default release package builds only the tray, Manager, WebGUI, Node.js runtime, and production npm dependencies required by the RabiRoute desktop. It does not build or copy the RabiSpeech Windows runtime, and it does not install ASR/TTS Python dependencies or models. The public speech-plugin scripts remain in the package. Users who need speech can enter `plugin-adapters\rabi-speech`, run `scripts\install.ps1`, and then select only the models they need.
-
-Maintainers should opt in only when producing a package that includes the RabiSpeech Windows process host:
-
-```powershell
-.\scripts\build-windows-release.ps1 -IncludeSpeech
-```
-
-This switch additionally generates and copies `plugin-adapters/rabi-speech/runtime/RabiSpeech.exe` with RabiSpeech product, icon, and version resources. Windows 11 Volume Mixer uses the real process image for application identity, so changing only the Core Audio session label would still show `Python`. The switch still does not bundle the large Python dependency tree or speech models; users install those explicitly. The script copies only Git-tracked public runtime resources plus selected generated outputs, embeds a pinned Windows x64 Node.js runtime, installs production-only npm dependencies, scans for private files and build-machine paths, smoke-tests the packaged Manager through `/meta`, and produces:
-
-- `RabiRoute-<version>-windows-x64-setup.exe`
-- `RabiRoute-<version>-windows-x64-portable.zip`
-- `SHA256SUMS.txt`
-
-The Inno Setup installer is per-user and defaults to `%LOCALAPPDATA%\Programs\RabiRoute`. Before replacing files, and again before uninstall removes program files, it asks the loopback Manager shutdown API to stop the current runtime gracefully. The payload contains no top-level `data/`; first launch initializes from sanitized `examples/data/`, while upgrades and uninstall do not proactively remove user routes, personas, or logs.
-
-A `v*` tag triggers `.github/workflows/release-windows.yml`, which repeats tests, configuration validation, the clean Windows build, privacy checks, and the packaged Manager smoke test before uploading the three assets to GitHub Releases. Current binaries are unsigned, so release documentation must retain the SmartScreen unknown-publisher warning and checksum guidance. Code signing, stable/nightly channels, and in-app updates remain later decisions based on actual release cadence.
+1. repeated launches leave one Host and one Manager/tray generation;
+2. occupying a familiar local port does not prevent a new dynamic endpoint;
+3. the tray appears only after exact Manager READY validation;
+4. terminating Manager or tray ends the old generation and creates exactly one replacement;
+5. quit leaves no Host, Manager, tray, or leased plugin process, and nothing resurrects;
+6. `--command status --json` matches Manager `/meta` generation, instance, and URL;
+7. retired lifecycle entries, fixed-port defaults, and Manager HTTP application-start/stop routes are absent from the production path and package.

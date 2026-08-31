@@ -11,7 +11,8 @@ export const MESSAGE_ENDPOINT_TYPES = [
   "webhook",
   "wecom",
   "weixin",
-  "feishu"
+  "feishu",
+  "xiaomiHome"
 ] as const;
 
 export type MessageEndpointType = typeof MESSAGE_ENDPOINT_TYPES[number];

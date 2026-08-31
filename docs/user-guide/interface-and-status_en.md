@@ -10,14 +10,14 @@ RibiWebGUI is RabiRoute's local control console. It edits configuration, invokes
 
 ## Access WebGUI from the LAN
 
-Manager on the Rabi PC is RibiWebGUI's complete HTTP backend. The default `http://127.0.0.1:8790/` is local-only. On another device, `127.0.0.1` points back to that device, not to the Rabi PC.
+Manager on the Rabi PC is RibiWebGUI's complete HTTP backend. The operating system assigns an available port to each Manager generation. Open the current WebGUI from the tray or read `managerBaseUrl` through `RabiRouteHost.exe --command status --json`. On another device, `127.0.0.1` points back to that device, not to the Rabi PC.
 
 On the Rabi PC, open **Console → Directory configuration → LAN WebGUI access**, enable access, and generate a key. After restarting Manager, a WebGUI still opened locally through `localhost/127.0.0.1` automatically redirects to the preferred LAN IP while preserving the current Route, page, and authentication. You can also copy the generated link, for example:
 
 An HTTP LAN page may not receive secure browser clipboard permission. Copy-link, copy-key, and other WebGUI copy actions try the Clipboard API first and automatically fall back to an in-page copy operation when that API is unavailable or rejected. A manual-copy message appears only when the browser rejects both mechanisms.
 
 ```text
-http://192.168.0.57:8790/#/routes/<Route-config-name>/overview?webgui_token=<access-key>
+http://<Rabi-PC-LAN-IP>:<current-manager-port>/#/routes/<Route-config-name>/overview?webgui_token=<access-key>
 ```
 
 The sidebar **Current Route** selector is the only selection source. Message Adapters, Persona Configuration, and Plans & Memory stay in the Route configuration group. Console is the first item in the shared-functions group, above Speech Service, but still reads the current Route. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, and Runtime Diagnostics all use `#/routes/<Route-config-name>/<page>`, with `overview`, `adapters`, `persona`, `knowledge`, `speech`, and `runtime` respectively. Changing Current Route preserves the page type and immediately redirects the URL. **Performance** and **Settings** are host-wide pages and do not change with the selected Route. To open that Route's **Plans & Memory** directly, use the same Route configuration name with the `knowledge` page, or click **Copy Route knowledge link**:
@@ -25,12 +25,12 @@ The sidebar **Current Route** selector is the only selection source. Message Ada
 Clicking any sidebar page label updates the selected state, top title, and URL first, then immediately shows **Page switched. Loading content…**. Console, Message Adapters, Persona Configuration, Plans & Memory, Speech Service, Performance, Runtime Diagnostics, and Settings load their page code and data asynchronously instead of delaying the tab switch until the complete page is ready. If a page chunk fails to load, WebGUI refreshes once and restores the intended page.
 
 ```text
-http://192.168.0.57:8790/#/routes/<Route-config-name>/knowledge?webgui_token=<access-key>
+http://<Rabi-PC-LAN-IP>:<current-manager-port>/#/routes/<Route-config-name>/knowledge?webgui_token=<access-key>
 ```
 
 The Route configuration name is URL-encoded. Any Route-scoped link selects that Route before rendering the page. Switching the sidebar Route updates the current browser session to the same page type under the new Route. To bookmark, reopen, or share the shortcut with an authorized device on the same LAN, use a complete keyed link rather than the address bar after WebGUI has removed the key.
 
-WebGUI keeps the URL key in the current browser session, automatically applies it to HTTP, SSE, and persona-avatar requests, and removes it from the address bar so later screenshots do not keep exposing it. Rotating the key immediately invalidates old links. The switch and key can be managed only from the Rabi PC running Manager; that PC's redirected LAN address remains manageable, while other devices cannot manage them. If the link times out, first confirm that Manager restarted, then check whether Windows Firewall allows RabiRoute or Node.js TCP `8790` on the private/domain network. Never publish the link in a public chat, log, or repository.
+WebGUI keeps the URL key in the current browser session, automatically applies it to HTTP, SSE, and persona-avatar requests, and removes it from the address bar so later screenshots do not keep exposing it. Rotating the key immediately invalidates old links. The switch and key can be managed only from the Rabi PC running Manager; that PC's redirected LAN address remains manageable, while other devices cannot manage them. If the link times out, confirm the current port through Host status, then check whether Windows Firewall allows this generation's RabiRoute Manager on private/domain networks. Never publish the link in a public chat, log, or repository, and do not bookmark a previous generation's dynamic port as a permanent address.
 
 Requests from the Rabi PC to its own LAN address are still treated as local requests. Enabling LAN access therefore does not make message sending, the tray, or local tools on that same PC require the WebGUI key. Other devices must still use the complete link with a valid key.
 
@@ -159,7 +159,7 @@ When the unsaved-changes notice appears, save before switching Routes or leaving
 | Enabled | The Route is enabled but its current entry is Manager-owned | Check the corresponding Manager entry |
 | Stopped | Configuration exists but the child process is not running | Start it or inspect errors in Log Diagnostics |
 | Disabled | The Route or its message input is off | Enable intentionally, then save |
-| Manager disconnected | WebGUI cannot reach the local Manager | Check the process, port, and startup directory |
+| Manager disconnected | WebGUI cannot reach the current Manager | Check the generation, instance, and dynamic URL through Host status |
 
 An **Experimental** badge is not itself an error. It means a code path exists, while the external system or real-device loop still needs acceptance in your environment.
 
@@ -170,7 +170,7 @@ An **Experimental** badge is not itself an error. It means a code path exists, w
 - **Restart** stops and starts it again after build or connection changes.
 - **Delete** removes Route configuration and has a wider impact than Stop.
 
-The Manager supervises Route processes that it starts. External programs such as NapCat, QQNT, and Codex/ChatGPT Desktop keep their own lifecycles.
+Manager owns Route/plugin children created through process leases. Windows Host owns the Manager/tray application generation. External programs such as NapCat, QQNT, and Codex/ChatGPT Desktop keep their own lifecycles.
 
 ## Locale boundaries
 

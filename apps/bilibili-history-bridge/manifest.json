@@ -9,7 +9,14 @@
   ],
   "host_permissions": [
     "https://api.bilibili.com/x/web-interface/history/cursor*",
-    "http://127.0.0.1:8790/api/bilibili-history/*"
+    "http://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*"],
+      "js": ["endpoint-discovery.js"],
+      "run_at": "document_idle"
+    }
   ],
   "background": {
     "service_worker": "service-worker.js"

@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.2.1" src="https://img.shields.io/badge/version-0.2.1-3178c6">
+  <img alt="当前版本：0.2.2" src="https://img.shields.io/badge/version-0.2.2-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -40,9 +40,9 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 
 ### Windows 安装包
 
-从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest) 下载 `RabiRoute-<版本>-windows-x64-setup.exe`。安装包包含 RabiRoute Desktop、本机 Manager、RibiWebGUI、Node.js 和生产依赖。
+从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest) 下载 `RabiRoute-<版本>-windows-x64-setup.exe`。安装包包含 RabiRoute Host、Desktop 表现层、本机 Manager、RibiWebGUI、Node.js 和生产依赖。在 Windows 上，Host 是唯一的应用生命周期 owner：它创建一代应用，并让 Manager 与 Desktop 始终属于同一代。
 
-发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
+发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。便携 ZIP 使用 `RabiRouteHost.exe + current.json + versions/<releaseId>` 布局，只能解压到新的空目录，不能覆盖旧 RabiRoute 目录；升级既有安装必须运行 Setup。Setup 嵌入同一份便携 ZIP，先在安装盘暂存并逐清单校验哈希、大小、私有路径、reparse point 与 Host 自检，再按当前 application generation 执行 fenced quit；只有候选通过后才原子切换 `current.json` 与 bootstrap，失败会恢复上一指针和 bootstrap。经精确识别的旧生命周期入口会以 `.retired` 后缀移入安装器所有的非执行 quarantine；事务失败或断电恢复会把它们原位还原，foreign 和相似后缀文件不移动。`data/`、`logs/` 与 foreign 文件不参与覆盖或卸载。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
 
 ### 从源码运行
 
@@ -56,7 +56,7 @@ npm run build
 npm run start:manager
 ```
 
-打开 [http://127.0.0.1:8790/](http://127.0.0.1:8790/)。首次启动且没有本机运行数据时，Manager 会从 `examples/data/` 创建脱敏示例配置。
+Manager 启动后会打印真实的回环地址，端口由操作系统分配。从源码运行时打开这条输出中的地址；Windows 安装版由 Host 状态或托盘打开当前地址，产品合同不包含固定本机端口。首次启动且没有本机运行数据时，Manager 会从 `examples/data/` 创建脱敏示例配置。
 
 ### 跑通第一条 Route
 
@@ -69,17 +69,17 @@ npm run start:manager
 
 ## 当前能力
 
-仓库当前版本为 `0.2.1`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.2.2`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
 | 路由主链 | 已验证 | 接收消息、保存事件、匹配规则、生成 Agent 上下文、投递处理端并记录回传。 |
-| NapCat / OneBot | 已验证 | 接收 QQ 群聊和私聊，保存图片与合并转发证据，通过 OneBot HTTP 发送回复。 |
+| NapCat / OneBot | 已验证 | 每个 Route 绑定一个 NapCat；在 Route 卡片内完成快速、密码、扫码登录与安全确认，接收 QQ 群聊和私聊、保存媒体证据，并通过 OneBot HTTP 发送回复。 |
 | 定时任务与人格自动化 | 已验证 | 按消息或时间触发 Agent；在单独授权后运行人格目录中的本机脚本。 |
 | Codex Desktop | 已验证 | 按完整任务 ID 和项目目录投递；只有目标任务写入 `deliveryId` 回执后才报告成功。任务删除或归档后可受控换新。 |
 | RibiWebGUI | 已验证 | 管理 Route、人格、消息端、Agent、计划、记忆、日志、诊断、主题和桌面设置。 |
 | 计划、记忆与消息处理 | 已验证 | 分页查看计划和记忆，提交计划反馈，分配消息处理任务，并保存处理状态和回执。 |
-| Windows 桌面 | 主链已实现 | 统一启动 Manager 与桌面界面；提供滑词、截图和截图标注。部分系统交互仍需 Windows 实机复测。 |
+| Windows 桌面 | 主链已实现 | Host 管理包含 Manager 和托盘/任务窗口表现层的同一代应用；提供滑词、截图和截图标注。部分系统交互仍需 Windows 实机复测。 |
 | DSH | 实验支持 | 作为主人格或辅助处理端使用明确的 API、项目目录和会话绑定。 |
 | RabiSpeech / RabiLink / 移动与穿戴设备 | 实验支持 | 接入语音、手机、眼镜、Relay 和健康数据链路；每条链路按设备与网络环境单独验收。 |
 | 局域网 Rabi Agent | 实验支持 | 其他电脑运行无界面工作进程，连接 Manager，并把任务交给该电脑上指定的 Codex Desktop 任务。真实多电脑验收待完成。 |
@@ -97,9 +97,11 @@ npm run start:manager
 
 ### 未发布：投递、插件和 WebGUI 恢复能力
 
+- Windows 生命周期已经收成一条主干：RabiRoute Host 是唯一应用 owner，Manager 与托盘是同代子程序；任一子程序异常退出都会触发有界的整代重建，托盘不能自行启动、修复或脱离 Manager 存活。
+- Manager 向操作系统申请空闲回环端口。Host 通过受身份校验的本机控制通道发布当前端点，并且只在 Manager 报告同一应用代和 Manager 实例后启动托盘。
 - Codex Desktop 投递增加 `deliveryId` 写入确认；IPC 接收但目标任务没有回执时会重试或明确失败。
 - Codex 任务显示名称改为读取 Desktop 左侧栏共用索引，任务 ID 与项目目录继续作为投递身份。
-- Manager 插件由版本化 Profile 和 Bundle 管理；修改后按 revision 排空旧请求、切换新实例，失败时恢复上一可用版本。
+- Manager 插件统一使用 schema/profile v2；每个入口声明 `in_process`、`isolated` 或 `declarative` 执行模式，Profile 声明 `readyRequires`，进程租约和依赖图保证关闭时先释放消费者、再释放提供者。
 - Web Bundle 使用不可变 revision 地址，页面、脚本、样式和字体从同一版本目录加载；浏览器收到插件目录变化后替换对应模块。
 - WebGUI 先显示固定界面，再在后台读取插件目录和知识内容；消息看板过期正文会被删除，只保留限期重放去重键。
 
@@ -120,7 +122,7 @@ flowchart LR
 
 每条 Route 分开保存消息入口、人格、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
 
-Manager 通过一个插件内核装载 28 个独立内置包。内置包和树外包使用相同 SDK、Manifest、依赖图、权限检查、generation 切换和 Web 模块生命周期。当前实现说明见[插件包与热替换](docs/plugin-bundles.md)。
+Manager 通过一个插件内核装载 29 个独立内置包。内置包和树外包统一使用 schema/profile v2、SDK、依赖图、权限检查、generation 切换、执行模式边界和 Web 模块生命周期。当前实现说明见[插件包与热替换](docs/plugin-bundles.md)。
 
 ## Agent 与安全边界
 

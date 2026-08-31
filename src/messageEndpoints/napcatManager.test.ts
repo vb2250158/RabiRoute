@@ -9,8 +9,10 @@ import {
   ensureNapcatInstanceReady,
   launchNapcatInstance,
   napcatStatusHasUsableConnection,
+  readNapcatLoginPanel,
   resolveNapcatLaunchPlan,
-  restartNapcatInstance
+  restartNapcatInstance,
+  runNapcatLoginAction
 } from "./napcatManager.js";
 
 async function listen(server: http.Server): Promise<number> {
@@ -95,6 +97,79 @@ test("NapCat launch plan keeps existing quick login argument when redirecting", 
   }
 });
 
+test("NapCat login panel proxies all three login modes without exposing the WebUI credential", async () => {
+  const calls: Array<{ pathname: string; body: Record<string, unknown> }> = [];
+  const webui = http.createServer(async (request, response) => {
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    const body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.setHeader("connection", "close");
+    if (request.url === "/api/auth/login") {
+      response.end(JSON.stringify({ code: 0, data: { Credential: "private-webui-credential" } }));
+      return;
+    }
+    calls.push({ pathname: String(request.url), body });
+    if (request.url === "/api/QQLogin/CheckLoginStatus") {
+      response.end(JSON.stringify({ code: 0, data: { isLogin: false, qrcodeurl: "https://example.test/qq-login" } }));
+      return;
+    }
+    if (request.url === "/api/QQLogin/GetQQLoginInfo") {
+      response.end(JSON.stringify({ code: 0, data: {} }));
+      return;
+    }
+    if (request.url === "/api/QQLogin/GetQuickLoginListNew") {
+      response.end(JSON.stringify({ code: 0, data: [{ uin: "10000", nickName: "Bot", isQuickLogin: true }] }));
+      return;
+    }
+    response.end(JSON.stringify({ code: 0, data: null }));
+  });
+  const webuiPort = await listen(webui);
+  const instance = {
+    id: "bot",
+    gatewayPort: 8789,
+    httpUrl: "http://127.0.0.1:3000",
+    webuiUrl: `http://127.0.0.1:${webuiPort}/webui`,
+    webuiToken: "secret",
+    botUserId: "10000"
+  };
+  const runtime = { definition: { id: "route", gatewayPort: 8789, napcatInstances: [instance] } };
+  const context = {
+    rootDir: process.cwd(),
+    getRuntimes: () => [runtime],
+    normalizeNapCatInstances: () => [instance],
+    appendLog: () => undefined,
+    checkHttpEndpoint: async () => true
+  };
+  try {
+    const panel = await readNapcatLoginPanel(context, { gatewayId: "route", instanceId: "bot" });
+    assert.equal(panel.state, "login-required");
+    assert.equal(Array.isArray(panel.quickAccounts), true);
+    assert.match(String(panel.qrCodeDataUrl), /^data:image\/png;base64,/);
+    assert.equal(JSON.stringify(panel).includes("private-webui-credential"), false);
+
+    await runNapcatLoginAction(context, {
+      gatewayId: "route",
+      instanceId: "bot",
+      action: "quick-login",
+      userId: "10000"
+    });
+    await runNapcatLoginAction(context, {
+      gatewayId: "route",
+      instanceId: "bot",
+      action: "password-login",
+      userId: "10000",
+      password: "test-only-password"
+    });
+    const passwordCall = calls.find((item) => item.pathname === "/api/QQLogin/PasswordLogin");
+    assert.equal(passwordCall?.body.uin, "10000");
+    assert.equal(passwordCall?.body.passwordMd5, "e057768c2e575d28b5a1586e9da816dd");
+    assert.equal(JSON.stringify(calls).includes("test-only-password"), false);
+  } finally {
+    await close(webui);
+  }
+});
+
 test("ensure ready automatically quick-logs the bound QQ and waits for OneBot", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-napcat-quick-login-"));
   let ready = false;
@@ -167,10 +242,8 @@ test("ensure ready automatically quick-logs the bound QQ and waits for OneBot", 
     assert.equal(result.ok, true);
     assert.equal(result.state, "ready");
     assert.equal(quickLoginCount, 1);
-    assert.match(String(result.openUrl), /token=secret/);
-    const openUrl = new URL(String(result.openUrl));
-    assert.equal(openUrl.pathname, "/webui/");
-    assert.equal(openUrl.searchParams.get("token"), "secret");
+    assert.equal(result.openUrl, undefined);
+    assert.doesNotMatch(JSON.stringify(result), /secret/);
   } finally {
     await Promise.all([close(onebot), close(webui)]);
   }
@@ -220,10 +293,8 @@ test("ensure ready returns an already healthy OneBot without probing WebUI login
     assert.equal(result.ok, true);
     assert.equal(result.state, "ready");
     assert.equal(webuiAuthCount, 0);
-    const openUrl = new URL(String(result.openUrl));
-    assert.equal(openUrl.pathname, "/custom-console");
-    assert.equal(openUrl.searchParams.get("theme"), "dark");
-    assert.equal(openUrl.searchParams.get("token"), "secret");
+    assert.equal(result.openUrl, undefined);
+    assert.doesNotMatch(JSON.stringify(result), /secret/);
   } finally {
     await Promise.all([close(onebot), close(webui)]);
   }

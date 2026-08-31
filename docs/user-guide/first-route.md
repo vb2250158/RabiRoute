@@ -17,13 +17,13 @@
 - 你知道目标任务所在的项目目录。
 - 目标任务可以正常进入，不处于已删除或不可访问状态。
 
-如果还没有启动 Manager，在项目目录运行：
+Windows 安装版从开始菜单启动 RabiRoute Host，再从托盘打开 WebGUI。从源码运行时，在项目目录运行：
 
 ```powershell
 npm run start:manager
 ```
 
-然后打开 `http://127.0.0.1:8790/`。
+然后打开 Manager 标准输出中的 `<managerBaseUrl>`。这条地址由操作系统动态分配，不使用固定端口。
 
 ## 第 1 步：打开快速配置
 
@@ -90,7 +90,7 @@ RabiRoute 内部保存完整任务 ID。任务在 Desktop 中改名或完成 goa
 
 | 现象 | 先检查 |
 | --- | --- |
-| 顶栏显示 Manager 未连接 | Manager 进程和 `127.0.0.1:8790` |
+| 顶栏显示 Manager 未连接 | 安装版检查 Host `status --json` 的 generation/instance/URL；源码模式检查本次标准输出 URL |
 | Route 已启用但未运行 | 日志诊断中的启动按钮和最近日志 |
 | 没有可触发规则 | 人格页是否有 `heartbeat` 或 `manual_trigger` 规则 |
 | Codex 显示未绑定 | 工作目录、任务选择和重新扫描结果 |

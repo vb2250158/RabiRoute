@@ -40,10 +40,10 @@ Do not add this state to QQ, the role panel, ordinary text, or unrelated voice t
 
 ## Return through Outbox
 
-POST the spoken text with the injected explicit send template to the Manager URL supplied by `sendApiUrl`, normally:
+POST the spoken text with the injected explicit send template to the current Manager URL supplied by `sendApiUrl`:
 
 ```http
-POST http://127.0.0.1:8790/api/agent/send
+POST <sendApiUrl>
 Content-Type: application/json; charset=utf-8
 ```
 

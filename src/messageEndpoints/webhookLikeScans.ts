@@ -54,7 +54,10 @@ function scanCallbacks<Runtime>(ctx: WebhookLikeScanContext<Runtime>, type: Extr
 
 export async function scanFenneNoteEndpoint<Runtime>(ctx: WebhookLikeScanContext<Runtime>): Promise<MessageAdapterScanResult> {
   const { runtimes: fenneRuntimes, callbacks: fenneCallbacks, callbackReady: fenneCallbackReady } = scanCallbacks(ctx, "fennenote");
-  const fennePlaybackHealthy = await ctx.checkHttpEndpoint(ctx.fenneNotePlaybackUrl, 1200);
+  const fennePlaybackUrl = ctx.fenneNotePlaybackUrl.trim();
+  const fennePlaybackHealthy = fennePlaybackUrl
+    ? await ctx.checkHttpEndpoint(fennePlaybackUrl, 1200)
+    : false;
   const fenneRecent = fenneRuntimes.some((runtime) => ctx.routeHasRecentMessages(runtime, "fennenote"));
 
   return {
@@ -68,11 +71,13 @@ export async function scanFenneNoteEndpoint<Runtime>(ctx: WebhookLikeScanContext
     ],
     endpoints: [
       ...fenneCallbacks,
-      { label: "FenneNote 播放/回复端", url: ctx.fenneNotePlaybackUrl, healthy: fennePlaybackHealthy }
+      ...(fennePlaybackUrl
+        ? [{ label: "FenneNote 播放/回复端", url: fennePlaybackUrl, healthy: fennePlaybackHealthy }]
+        : [])
     ],
     requirements: [
       { id: "callback", label: "RabiRoute FenneNote 回调入口", required: true, ok: fenneCallbackReady, detail: fenneCallbacks[0]?.url || "添加 FenneNote 消息端并重启 route 后生成。" },
-      { id: "app", label: "FenneNote 桌面端/语音转写端", required: true, ok: fennePlaybackHealthy || undefined, detail: fennePlaybackHealthy ? "检测到 FenneNote 本地播放/回复端可达。" : "此仓库不内置 FenneNote，需要按你的实际分发渠道安装并运行。" },
+      { id: "app", label: "FenneNote 桌面端/语音转写端", required: true, ok: fennePlaybackHealthy, detail: fennePlaybackHealthy ? "检测到 FenneNote 本地播放/回复端可达。" : fennePlaybackUrl ? "已配置 FenneNote 播放/回复端，但当前不可达。" : "未配置 FENNOTE_PLAYBACK_URL；RabiRoute 不会猜测或占用固定端口。" },
       { id: "webhook-config", label: "FenneNote 已配置转写 webhook", required: true, ok: fenneRecent, detail: fenneRecent ? "已收到过 FenneNote 语音转写事件。" : "尚未收到 FenneNote 请求；请把回调地址填到 FenneNote 的转写/事件配置里。" },
       { id: "tts", label: "OumuQ / TTS worker", required: false, ok: undefined, detail: "只做语音输入时可先不配；需要播报回复时再配置。" }
     ],

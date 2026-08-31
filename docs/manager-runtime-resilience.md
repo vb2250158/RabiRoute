@@ -6,118 +6,83 @@
 
 # Manager 运行稳定性与故障证据
 
-> 状态：现行指南。对应 Manager 单实例、运行诊断、人格索引持久化和 Windows watchdog 的当前实现。
+稳定性的根基是让每个状态只有一个 owner。Windows 应用由 RabiRoute Host 拥有；Manager 拥有业务状态和插件 generation；托盘只呈现 Manager DTO；插件进程必须持有 Manager 发出的租约。退役的并行守护与托盘自救不属于现行架构。
 
-## 事故根因
+## 两层 generation
 
-2026-07-30 的两次自然退出具有相同栈：
+| 层级 | 身份 | owner | 失败边界 |
+| --- | --- | --- | --- |
+| Windows 应用 generation | `applicationGenerationId` | RabiRoute Host | Manager 或托盘异常退出时关闭整个 Windows Job，再有界重建整代 |
+| Manager 插件 generation | Plugin Kernel generation/revision | Manager | 新图准备和校验失败时不提交；已提交旧图按依赖逆序排空和释放 |
+
+应用 generation 先于插件 generation 存在。插件不能启动、关闭或替代 Host，也不能把应用生命周期能力注册成普通插件贡献。
+
+## 启动就绪合同
+
+Manager 让操作系统分配回环端口，完成配置、路由与 Profile 激活后，只有 Profile 的 `readyRequires` 全部可用才进入 ready。被 Host 托管时，Manager 向自己的标准输出写一条结构化 READY，至少包含：
 
 ```text
-PersonaSyncManifestIndex.persistNow
-  -> atomicWriteFileSync
-  -> fs.renameSync
-  -> EPERM
+applicationGenerationId
+managerInstanceId
+pid
+baseUrl
+readyAt
 ```
 
-目标是 `data/persona-sync/manifest-index.json`。这个文件是可删除、可重建的派生索引，但旧实现从 `setTimeout` 回调直接执行一次 `renameSync`；Windows 或 SMB 短暂拒绝替换时，异常逃出定时器并成为未捕获异常，Manager 随即退出。
+Host 验证 generation、PID、Manager 实例和回环 URL，随后才启动托盘。端口打开不等于 ready，旧端点能响应也不等于当前 generation。
 
-修复分成两层：
+核心请求层直接提供 `/health`，不依赖可选 diagnostics 插件。它同时返回当前 `applicationGenerationId`、`managerInstanceId`、`managerBaseUrl` 和三项彼此独立的判断：`live` 表示 event loop 能响应，`requiredReady` 表示 Profile 的 `readyRequires` 仍完整，`businessReady` 表示已启用的 Route 入口是否全部 ready。Host 只把身份不符、`live != true` 或 `requiredReady != true` 计入整代故障；可选插件、外部 Route 或后台任务降级仍可见，但不会触发无意义的整代重启。
 
-- 通用原子写入对 `EPERM / EACCES / EBUSY / ENOTEMPTY` 做有限指数退避；临时文件使用独占创建、`fsync` 和随机名称。
-- 人格索引即使在通用重试耗尽后也不让派生缓存写入终止 Manager；它保留内存索引、记录失败状态，并按上限 30 秒的指数退避再次持久化。
+`/meta` 复用同一份健康快照，并额外暴露插件 generation、Route 和后台任务诊断。同代客户端必须核对身份；Host 外的源码模式则以 Manager 标准输出返回的 URL 作为显式入口。
 
-`GET /api/persona-sync/index-status` 的 `persistence` 字段可查看连续失败数、累计失败数、最近成功/失败、下次重试和最后错误。
+## 故障恢复
 
-## 502 的判定边界
+Manager 或托盘子程序异常退出时，Host 不做局部补丁式复活。它停止本代 Job，释放全部子进程，然后按有界退避启动新代。达到失败上限后熔断并保留日志，等待显式用户启动或重启命令。
 
-本机设置 `HTTP_PROXY` 时，普通 `curl http://127.0.0.1:8790/meta` 可能把回环请求发给代理，并在 8790 没有监听时得到代理生成的 502。它不能单独证明 Manager 自己返回了 502。
+插件 reload 在 Manager 内完成 prepare → validate → commit：
 
-直接诊断必须绕过代理：
+1. 解析 schema/profile v2，但不在 loader 阶段执行入口顶层代码；
+2. 按依赖顺序准备候选实例，并验证权限、服务与 `readyRequires`；
+3. 提交后把新请求切到新 generation；
+4. 旧 generation 先停止消费者，再停止提供者；
+5. `lifecycle.signal` 先中止，effect/disposer 和 process lease 随后收束；
+6. 候选失败时保持上一已提交 generation，不留下半激活进程。
+
+## 进程租约
+
+Manager 或插件创建的长期子进程必须通过统一 Process Lease Registry。租约记录 generation、插件实例和用途，禁止插件绕过 Registry 产生无人拥有的后台进程。generation 释放、插件卸载和 Manager 退出都会收回相应租约；重复释放保持幂等。
+
+Windows Job 是应用代的最后边界，process lease 是 Manager 内部的责任边界。两者相互补强，但不能互相替代。
+
+## HTTP 502 与连接错误
+
+HTTP 502 只说明当前请求的上游失败，不能单凭状态码断言 Manager 退出。排障时依次核对：
+
+1. Host `--command status --json` 是否仍给出当前 generation；
+2. `/health` 返回的 generation、Manager instance 与 URL 是否匹配，且 `live`、`requiredReady` 是否为 `true`；
+3. Host、Manager、插件/Route 的对应日志是否记录子程序退出、reload 或上游错误；
+4. 请求是否错误复用了上一代 URL；
+5. 连接预算、并发读、文件句柄或远端 Relay 是否耗尽。
+
+Manager 的本地服务先就绪，Relay、远端页面和非必要适配器在后台连接；远端不可用不能阻塞本机 READY。大文件、聚合与目录遍历不能占住核心请求路径，超时和 AbortSignal 必须传到真实 I/O。计划反馈恢复先从 feedback ledger 找候选，再在 Manager read worker 内以有界并发异步读取对应计划；不得回到同步遍历全部计划或逐候选同步 `getPlan()`。
+
+## 证据位置
+
+```text
+%LOCALAPPDATA%\RabiRoute\diagnostics\host\host-YYYYMMDD.log
+%LOCALAPPDATA%\RabiRoute\diagnostics\desktop\YYYY-MM-DD\desktop-*\
+data/route/<configName>/logs/
+```
+
+Host 日志证明应用代和子进程变化；Desktop 证据包证明 Qt/Python 启停；Route 与插件日志证明业务处理。三者不能互相冒充。
+
+## 验证
 
 ```powershell
-curl.exe --noproxy "*" --max-time 6 http://127.0.0.1:8790/meta
+npm test
+npm run build
+npm run check:config
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-host.ps1 -OutputRoot C:\RabiRouteBuild\host
 ```
 
-Windows 启动器、watchdog 和浸泡脚本都显式禁用自身进程的 Web 代理，并为回环地址设置 `NO_PROXY`。Relay 上游故障仍返回 502/504，但响应包含结构化错误码、诊断请求 ID、`retryable` 与 `Retry-After`，用于和本机代理 502 区分。
-
-## 持久运行证据
-
-Manager 在以下目录按 UTC 日期追加 JSONL：
-
-```text
-logs/manager/manager-runtime-YYYY-MM-DD.jsonl
-```
-
-记录包括：
-
-- `process_start`
-- `startup_failure`
-- `uncaught_exception`
-- `process_exit`
-
-每条记录含 PID、父 PID、运行时间、Node 版本、平台和退出码。项目根路径会替换为 `<projectRoot>`；项目内错误路径保存为相对路径，外部路径只保留文件名。诊断写入失败不会改变原始崩溃语义。
-
-`GET /meta` 的 `managerRuntime` 提供当前 PID、启动时间、运行秒数、Node 版本和日志分片，不暴露本机绝对路径。
-
-## 并发读取与连接保护
-
-大范围语音历史查询由有界工作线程池执行，不阻塞 `/meta`、计划摘要和 Route 状态等轻量接口。线程池同时最多运行 2 项、等待最多 8 项、单项最长 30 秒；超出容量返回 503，超过时限返回 504，请求方断开时终止对应任务。归档查询先用索引时间范围排除不相关文件；范围相同且不需要正文的并发统计共享一个扫描任务。
-
-完整 Route 诊断只读取 JSONL 文件末尾的有限记录，并在一次响应内复用同一文件结果。人格冲突历史尚无快照时立即返回 202，再由独立的单 worker 目录池限速整理；该池最多等待 1 项、单项上限 5 分钟，不占用语音 worker。`GET /meta` 的 `readWorkers`、`catalogWorkers` 与 `httpLimits` 可查看这些上限。
-
-连接层默认在 10 秒内收完请求头、30 秒内收完请求、Keep-Alive 空闲 5 秒，并限制单连接最多 100 次请求。它们用于释放异常或长期空闲连接，不代替具体业务接口自己的工作时限。
-
-Manager 的日常操作另写入：
-
-```text
-logs/manager/manager-operations-YYYY-MM-DD.jsonl
-```
-
-它记录会改变状态的 HTTP 请求、失败或超过 2 秒的只读请求、Route 子进程启动/停止/退出，以及 Manager 开始监听和关闭请求。HTTP 响应头 `x-rabiroute-request-id` 与日志中的 `requestId` 一致，可以从浏览器网络面板或调用方错误信息定位一次操作。日志只保留方法、路径、状态码、耗时和受控运行标识；不保存查询参数、请求正文、Cookie、token 或聊天内容。
-
-## 单实例与自动恢复
-
-Manager 在加载控制面之前独占：
-
-```text
-data/.runtime/manager-instance.lock
-```
-
-活实例存在时，后到实例以退出码 `17` 结束；只有锁中 PID 已不存在时才回收陈旧锁。
-
-Windows watchdog 每分钟执行一个有互斥保护的单轮检查。恢复行为：
-
-1. 无代理直连 `/meta`。
-2. 通过同一个 Windows 启动器和本机打包 Node 启动，不回退到 PATH Node。
-3. 启动后主动探测健康，不使用 `Start-Process -Wait` 等待长期 Manager 子进程。
-4. 失败后按 15、30、60、120、240、300 秒上限退避。
-5. 每次恢复使用唯一 stdout/stderr 文件，并在按日 `manager-recovery-YYYY-MM-DD.jsonl` 中记录开始、成功、失败或退避跳过。
-6. 自动恢复复用健康 Manager，也允许在源码比最后一次成功构建新时使用现有 `dist`；watchdog 不负责构建或以构建时间触发计划外重启。
-
-计划任务可用 `scripts/Install-RabiRoute-HealthWatchdogTask.ps1` 安装。Task Scheduler Operational 通道若由管理员启用，可提供额外系统事件；即使该通道关闭，任务结果、watchdog JSONL、launcher 日志和 Manager runtime JSONL 仍构成完整的应用侧时间线。
-
-## 验证命令
-
-```powershell
-npm.cmd run build
-node --import tsx --test `
-  src/shared/filePersistence.test.ts `
-  src/personaSyncManifestIndex.test.ts `
-  src/managerRuntimeDiagnostics.test.ts `
-  src/managerInstanceLock.test.ts
-
-curl.exe --noproxy "*" http://127.0.0.1:8790/meta
-curl.exe --noproxy "*" http://127.0.0.1:8790/api/persona-sync/index-status
-npm.cmd run check:manager-concurrency -- http://127.0.0.1:8790 XinghaiBuilder
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-  .\scripts\Test-RabiRoute-ManagerSoak.ps1 `
-  -DurationSeconds 300 -IntervalSeconds 5
-
-Get-ScheduledTask -TaskName RabiRouteHealthWatchdog
-Get-ScheduledTaskInfo -TaskName RabiRouteHealthWatchdog
-```
-
-浸泡通过条件是所有 `/meta` 样本成功且监听 PID 不变化。不要把一次临时重启或单次 200 响应视为稳定性验收。
-
-并发检查会同时发起三条归档语音查询、人格冲突、完整 Route 诊断和计划摘要请求，并穿插 50 次 `/meta`。通过条件是 `/meta` 全部成功、P95 不超过 500ms、最大值不超过 1000ms，且重请求在 30 秒内返回明确结果。
+实机验收必须再覆盖：动态端口冲突、重复启动、Manager/托盘分别崩溃、显式重启、用户退出、Host 被终止、插件 isolated 进程回收，以及退役生命周期 owner 不再存在。测试通过只能证明相应合同，不能替代安装包中的完整生命周期验收。

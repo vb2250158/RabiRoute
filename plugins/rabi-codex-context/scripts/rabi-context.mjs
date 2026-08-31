@@ -36,7 +36,7 @@ Commands:
   context --session <session-id> --event <SessionStart|UserPromptSubmit|PreToolUse|PostToolUse> [--turn <turn-id>] [--prompt <text>] [--tool <tool-name>] [--input <text>] [--response <text>]
   doctor
 
-Set RABI_MANAGER_URL to override ${resolveManagerUrl({})}.`;
+The current Manager URL is discovered from RabiRouteHost.exe. Set RABI_MANAGER_URL only for an explicit non-Host development Manager.`;
 }
 
 const { positional, flags } = parseArgs(process.argv.slice(2));

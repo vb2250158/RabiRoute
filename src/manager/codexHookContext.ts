@@ -181,7 +181,9 @@ function writeJsonAtomic(filePath: string, value: unknown): void {
 }
 
 function normalizeManagerBaseUrl(value: string | undefined): string {
-  return String(value || "http://127.0.0.1:8790").trim().replace(/\/+$/, "");
+  const resolved = String(value || process.env.GATEWAY_MANAGER_URL || "").trim().replace(/\/+$/, "");
+  if (!resolved) throw new Error("Manager base URL is required for Codex hook context.");
+  return resolved;
 }
 
 function normalizedWorkspace(value: string | undefined): string {

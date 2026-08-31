@@ -1,17 +1,22 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { validateGatewayPortConflicts } from "../shared/gatewayConfigModel.js";
 import { ManagerConfigRepository } from "./configRepository.js";
 
-test("the complete example data pack is readable and starts only the default route", () => {
+test("the complete example data pack is readable and starts only the default route", t => {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-example-data-"));
+  fs.cpSync(path.join(projectRoot, "examples", "data"), path.join(rootDir, "data"), { recursive: true });
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
   const repository = new ManagerConfigRepository({
-    rootDir: projectRoot,
+    rootDir,
     managerPort: 8790,
-    routeRoot: "examples/data/route",
-    rolesRoot: "examples/data/roles",
+    routeRoot: "data/route",
+    rolesRoot: "data/roles",
   });
   const gateways = repository.readConfig().gateways;
   const byName = new Map(gateways.map((gateway) => [gateway.configName, gateway]));

@@ -16,6 +16,8 @@ import { agentThreadRequestFailureData, handleAgentThreadRequest, type AgentThre
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
 import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
 import { agentRequestStatePath } from "../agentRequests/persistence.js";
+import { projectDirectoryLayout } from "../shared/projectDirectoryLayout.js";
+import { resolveRuntimeLayout } from "../shared/runtimeLayout.js";
 import { listCodexDesktopThreads } from "../codexDesktopBridge.js";
 import { isDshSessionId } from "../dshSessionBridge.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
@@ -52,7 +54,9 @@ import {
   launchNapcatProcess as launchManagedNapcatProcess,
   nextFreeLocalPort,
   prepareManagedNapcatInstance,
+  readNapcatLoginPanel,
   restartNapcatInstance as restartNapcatInstanceEndpoint,
+  runNapcatLoginAction,
   scanNapcatEndpoint,
   stopNapcatInstance as stopNapcatInstanceEndpoint,
   testNapcatHealth as testNapcatHealthEndpoint,
@@ -170,6 +174,24 @@ import {
 } from "../shared/projectPaths.js";
 import { normalizePathForComparison } from "../shared/pathPolicy.js";
 import { rabiRoutePackageVersion } from "../packageInfo.js";
+import type { ManagerInstanceLock } from "../managerInstanceLock.js";
+import {
+  listenManagerEndpoint,
+  parseManagerPortPolicy
+} from "../managerEndpointPolicy.js";
+import {
+  handleManagerHostLifecycleRequest,
+  managerHostIdentityFromEnvironment,
+  managerReadyLine
+} from "./hostLifecycle.js";
+import {
+  handleManagerLanDiscoveryRequest,
+  MANAGER_DISCOVERY_PROTOCOL_VERSION
+} from "./managerLanDiscovery.js";
+import {
+  startManagerDiscoveryPublisher,
+  type ManagerDiscoveryStatus
+} from "./managerLanDiscoveryPublisher.js";
 import {
   routeRuntimeParts,
   sanitizeConfigName,
@@ -209,6 +231,10 @@ import {
   type HostService,
   type LoadedPluginProfile
 } from "../plugin-kernel/index.js";
+import { createFullPluginExecutor } from "../plugin-runtime-host/executor.js";
+import { ProcessLeaseRegistry } from "../runtime/processLeaseRegistry.js";
+import { createWearableCompanionRuntimeIdentity } from "./wearableCompanionRuntimeIdentity.js";
+import { WearableCompanionWorkerService } from "./wearableCompanionWorkerService.js";
 import { WebPluginModuleRegistry } from "./webPluginModules.js";
 import {
   ManagerPluginRouteRegistry,
@@ -219,6 +245,13 @@ import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import { createDesktopControlRoutes, desktopConfigFilePayload } from "./desktopControlRoutes.js";
 import { handleDesktopPetApi } from "./desktopPetRoutes.js";
 import { createYeYuGamerManagerRouteHandler } from "../integrations/yeyuGamer/managerRoutes.js";
+import { XiaomiHomeManagerApiClient } from "../integrations/xiaomiHome/managerApi.js";
+import { XiaomiHomeArtifactStore } from "../integrations/xiaomiHome/artifactStore.js";
+import { XiaomiHomeEventMonitor } from "../integrations/xiaomiHome/eventMonitor.js";
+import { XiaomiHomeClipCaptureWorker } from "../integrations/xiaomiHome/clipCapture.js";
+import { XiaomiHomeArtifactAccess } from "../integrations/xiaomiHome/artifactAccess.js";
+import { createXiaomiHomeManagerRouteHandler } from "../integrations/xiaomiHome/managerRoutes.js";
+import type { XiaomiHomeEvent, XiaomiHomeEventDeliveryContext } from "../xiaomiHomeEventDelivery.js";
 import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
 import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
 import { handleRemoteAgentApi as handleRemoteAgentPluginApi } from "./remoteAgentRoutes.js";
@@ -283,6 +316,8 @@ import {
   type DueMemoryConsolidationRun,
   type MemoryConsolidationScheduleTarget
 } from "./memoryConsolidationScheduler.js";
+import { evaluateMemoryConsolidationSchedule } from "./memoryConsolidationScheduleWorkerClient.js";
+import { migrateRolePlanLayoutInWorker } from "./rolePlanLayoutMigrationWorkerClient.js";
 import { consumePlanQaFeedback, type PlanQaTaskRequest } from "./planQaFeedback.js";
 import { replacementPlanTaskBinding } from "./planTaskBindingDelivery.js";
 import { handlePlanAgentStatusApi } from "./planAgentStatusRoutes.js";
@@ -303,8 +338,9 @@ import {
   managerListensOnLan
 } from "./webguiLanAccess.js";
 import { handleRabiApi, publicRabiLinkRelayConfig } from "./rabiApi.js";
+import { parseGatewayReadyLine } from "../gatewayLifecycle.js";
 import { RabiLinkRelayRuntime } from "./rabiLinkRelayRuntime.js";
-import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { RuntimeRegistry, type GatewayRuntime } from "./runtimeRegistry.js";
 import {
   gatewayRuntimeStartDecision,
   gatewayRuntimeSyncAction,
@@ -313,6 +349,7 @@ import {
   managerReadOnlyEnabled,
   managerReadOnlyRequestAllowed
 } from "./managerRuntimeMode.js";
+import { buildManagerHealthSnapshot } from "./managerHealth.js";
 import { resolveGatewayChildCommand } from "./gatewayChildCommand.js";
 import {
   gatewayMessageAdapterEnvironment,
@@ -398,7 +435,6 @@ import {
   listRecentMemories,
   listRoleSkills,
   markMemoryConsolidationRunDelivered,
-  migrateRolePlanLayout,
   nextMemoryConsolidationTriggerAt,
   pendingMemoryConsolidation,
   presentRoleMemory,
@@ -653,21 +689,6 @@ type GatewayConfigFile = {
   gateways: GatewayDefinition[];
 };
 
-type GatewayRuntime = {
-  definition: GatewayDefinition;
-  process: ChildProcessWithoutNullStreams | null;
-  needsRestart: boolean;
-  startedAt: string | null;
-  stoppedAt: string | null;
-  agentStateGeneration?: string;
-  lastExit: {
-    code: number | null;
-    signal: NodeJS.Signals | null;
-    at: string;
-  } | null;
-  log: string[];
-};
-
 type AgentMessageSource = RabiAgentMessageSource;
 
 function agentMessageSourceForSession(
@@ -823,8 +844,25 @@ type NapCatInstanceDefinition = {
   botNickname?: string;
 };
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const managerPort = Number(process.env.GATEWAY_MANAGER_PORT ?? "8790");
+const managerRuntimeLayout = resolveRuntimeLayout(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
+);
+const packageRoot = managerRuntimeLayout.packageRoot;
+const rootDir = managerRuntimeLayout.stateRoot;
+const managerHostIdentity = managerHostIdentityFromEnvironment();
+const managerPortPolicy = parseManagerPortPolicy(process.env.GATEWAY_MANAGER_PORT);
+let managerPort = managerPortPolicy.mode === "fixed" ? managerPortPolicy.port : 0;
+let managerBaseUrl = managerPort > 0 ? `http://127.0.0.1:${managerPort}` : "";
+let managerInstanceId = "";
+let managerPluginGenerationStatus: Readonly<{
+  id: string;
+  sequence: number;
+  readiness: Readonly<{ state: "ready" | "degraded"; missingCapabilities: readonly string[] }>;
+}> | undefined;
+let managerLanDiscoveryStatus: ManagerDiscoveryStatus = Object.freeze({
+  state: "disabled",
+  serviceType: "_rabiroute._tcp.local"
+});
 const managerHttpLimits = {
   requestTimeoutMs: 30_000,
   headersTimeoutMs: 10_000,
@@ -1054,11 +1092,11 @@ const codexHookContextService = new CodexHookContextService({
   deliverPangHuProgressNotification
 });
 const languageStyleValidator = new LanguageStyleValidator();
-const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL ?? "http://127.0.0.1:8793/api/fennenote/playback";
-const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL ?? "http://127.0.0.1:8793/api/fennenote/reply";
+const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL?.trim() ?? "";
+const fenneNoteReplyUrl = process.env.FENNOTE_REPLY_URL?.trim() ?? "";
 const fenneNotePlaybackToken = process.env.FENNOTE_PLAYBACK_TOKEN ?? "";
 const fenneNoteReplyToken = process.env.FENNOTE_REPLY_TOKEN ?? fenneNotePlaybackToken;
-const webuiDistPath = path.join(rootDir, "ribiwebgui", "dist");
+const webuiDistPath = path.join(packageRoot, "ribiwebgui", "dist");
 const runtimes = new RuntimeRegistry();
 const persistedPerformanceConfig = rabiGlobalConfig.read().performance;
 const performanceMonitoring = new PerformanceMonitoringService(rootDir, managerReadOnly
@@ -1263,6 +1301,45 @@ function readConfig(): GatewayConfigFile {
       rolesDir: raw.rolesDir,
       agentRoleFile: raw.agentRoleFile
     } as GatewayDefinition & { configName: string });
+  }
+  return { gateways };
+}
+
+async function readConfigAsync(): Promise<GatewayConfigFile> {
+  if (managerReadOnly) {
+    routeRoot = configRepository.routeRoot;
+    rolesRoot = configRepository.rolesRoot;
+    try {
+      await fs.promises.access(routeRoot);
+    } catch {
+      return { gateways: [] };
+    }
+  } else {
+    await configRepository.ensureDataDirsAsync();
+    routeRoot = configRepository.routeRoot;
+    rolesRoot = configRepository.rolesRoot;
+  }
+  const gateways: GatewayDefinition[] = [];
+  for (const routeEntry of await fs.promises.readdir(routeRoot, { withFileTypes: true })) {
+    if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) continue;
+    const configName = sanitizeRoleId(routeEntry.name);
+    const configPath = adapterConfigPath(configName);
+    try {
+      const raw = JSON.parse(await fs.promises.readFile(configPath, "utf8")) as Partial<GatewayDefinition>;
+      const personaConfig = await configRepository.readRoleMessageConfigAsync(raw.agentRoleId);
+      gateways.push({
+        ...raw,
+        ...personaConfig,
+        id: configName,
+        configName,
+        agentRoleId: raw.agentRoleId,
+        rolesDir: raw.rolesDir,
+        agentRoleFile: raw.agentRoleFile
+      } as GatewayDefinition & { configName: string });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
   }
   return { gateways };
 }
@@ -1508,7 +1585,8 @@ function rabiLinkRelayConfigFor(definition: GatewayDefinition): RabiLinkRelayGlo
 
 function firstRouteLevelRabiLinkRelayConfig(): RabiLinkRelayGlobalConfig | null {
   const globalConfig = rabiGlobalConfig.read();
-  for (const definition of readConfig().gateways) {
+  for (const runtime of runtimes.values()) {
+    const definition = runtime.definition;
     if (!definition.rabiLinkRelayUrl?.trim() && !definition.rabiLinkRelayToken?.trim()) continue;
     const url = definition.rabiLinkRelayUrl?.trim() || "";
     const token = definition.rabiLinkRelayToken?.trim() || "";
@@ -1634,6 +1712,9 @@ async function addManagedNapcatInstance(
   if (!runtime) throw new Error(`未找到路由：${gatewayId}`);
   const definition = runtime.definition;
   const instances = sharedNormalizeNapCatInstances(definition);
+  if (instances.length > 0) {
+    throw new Error("每个 Route 只能绑定一个 NapCat；如需另一个 QQ，请新建 Route。");
+  }
   const index = instances.length + 1;
   const usedIds = new Set(instances.map((item) => item.id));
   let id = sanitizeInstanceId(`napcat-${index}`, `napcat-${index}`);
@@ -1668,7 +1749,7 @@ async function addManagedNapcatInstance(
   const instance = prepared.instance;
   steps.push(...prepared.steps);
 
-  definition.napcatInstances = [...instances, instance];
+  definition.napcatInstances = [instance];
   const primary = definition.napcatInstances.find((item) => item.enabled !== false) ?? instance;
   definition.gatewayPort = primary.gatewayPort;
   definition.napcatHttpUrl = primary.httpUrl;
@@ -1684,13 +1765,12 @@ async function addManagedNapcatInstance(
   return {
     ok: launchResult.ok !== false,
     message: launchResult.ok !== false
-      ? "已创建并启动 NapCat，请在自动打开的 WebUI 中登录 QQ。"
-      : "已创建 NapCat 实例，但后台未在超时时间内可达；请检查启动命令或手动打开 WebUI。",
+      ? "已创建并启动 NapCat；请在当前 Route 的 NapCat 卡片中完成 QQ 登录。"
+      : "已创建 NapCat，但后台未在超时时间内可达；请检查启动命令后从当前 Route 卡片重试。",
     steps,
     launch: launchResult,
     instance,
-    webuiUrl: instance.webuiUrl,
-    loginUrl: prepared.loginUrl || instance.webuiUrl
+    webuiUrl: instance.webuiUrl
   };
 }
 
@@ -1798,7 +1878,7 @@ function ensurePersonaConfigFile(roleId: string): string {
   return configPath;
 }
 
-function reconcilePersistedPlanSecretaryWorkspaces(): void {
+async function reconcilePersistedPlanSecretaryWorkspaces(): Promise<void> {
   const ownerByRoleDir = new Map<string, { roleDir: string; workspace: string; conflicting: boolean }>();
   for (const runtime of runtimes.values()) {
     const workspace = runtime.definition.codexCwd?.trim();
@@ -1820,7 +1900,7 @@ function reconcilePersistedPlanSecretaryWorkspaces(): void {
     }
     try {
       reconcilePlanSecretaryBindingsForWorkspace(
-        listPlans(owner.roleDir),
+        await listPlansAsync(owner.roleDir),
         owner.workspace,
         (planId) => { updatePlan(owner.roleDir, planId, { secretaryBinding: null }); }
       );
@@ -1843,6 +1923,9 @@ const gatewayRuntimeService = new ManagerGatewayRuntimeService<GatewayDefinition
     startedAt: null,
     stoppedAt: null,
     lastExit: null,
+    readiness: "stopped",
+    endpoints: [],
+    lastError: null,
     log: []
   }),
   isRunning: runtime => Boolean(runtime.process),
@@ -1868,7 +1951,12 @@ const gatewayRuntimeService = new ManagerGatewayRuntimeService<GatewayDefinition
 
 function loadRuntimes(): void {
   gatewayRuntimeService.load();
-  reconcilePersistedPlanSecretaryWorkspaces();
+  memoryConsolidationScheduler?.reschedule();
+  reconcileMessageProcessingAgentRequests();
+}
+
+async function loadRuntimesAsync(): Promise<void> {
+  gatewayRuntimeService.loadDefinitions((await readConfigAsync()).gateways);
   memoryConsolidationScheduler?.reschedule();
   reconcileMessageProcessingAgentRequests();
 }
@@ -1888,7 +1976,8 @@ async function reloadChangedConfig(
     routeRoot = configRepository.routeRoot;
     rolesRoot = configRepository.rolesRoot;
     personaCatalog.invalidate();
-    loadRuntimes();
+    await loadRuntimesAsync();
+    await reconcilePersistedPlanSecretaryWorkspaces();
   } catch (error) {
     console.error(`Failed to reload gateway config ${reason}`, error);
   }
@@ -2053,7 +2142,7 @@ function appendLog(runtime: GatewayRuntime, line: string): void {
 }
 
 function childCommand(extraArgs: string[] = []) {
-  return resolveGatewayChildCommand(rootDir, extraArgs);
+  return resolveGatewayChildCommand(packageRoot, extraArgs);
 }
 
 function reconcileSpeechMicrophone(reason: string, isActive: () => boolean = () => true): void {
@@ -2227,6 +2316,7 @@ function startGatewayRuntime(id: string): void {
   const agentStateGeneration = randomUUID();
   const childEnv = envFor(runtime.definition, gatewayMessageAdapterEnvironment(runtimeAdapters));
   childEnv.AGENT_STATE_GENERATION = agentStateGeneration;
+  childEnv.RABIROUTE_GATEWAY_GENERATION_ID = agentStateGeneration;
   runtime.agentStateGeneration = agentStateGeneration;
   agentStateByGateway.delete(runtime.definition.id);
   const child = spawn(command.command, command.args, {
@@ -2238,18 +2328,37 @@ function startGatewayRuntime(id: string): void {
 
   runtime.log = [];
   runtime.process = child;
+  runtime.readiness = "starting";
+  runtime.endpoints = [];
+  runtime.lastError = null;
   runtime.needsRestart = false;
   runtime.startedAt = new Date().toISOString();
   runtime.stoppedAt = null;
-  appendLog(runtime, `started pid=${child.pid ?? "unknown"} port=${runtime.definition.gatewayPort}`);
+  appendLog(runtime, `starting pid=${child.pid ?? "unknown"}; awaiting exact Gateway READY`);
   managerOperationalLog.record("info", "gateway_started", {
     routeId: runtime.definition.id,
     childPid: child.pid,
     result: "started"
   });
 
+  let stdoutBuffer = "";
   child.stdout.on("data", (data) => {
-    for (const line of data.toString().split(/\r?\n/).filter(Boolean)) {
+    stdoutBuffer += data.toString();
+    const lines = stdoutBuffer.split(/\r?\n/);
+    stdoutBuffer = lines.pop() ?? "";
+    for (const line of lines.filter(Boolean)) {
+      const ready = child.pid ? parseGatewayReadyLine(line, {
+        gatewayId: runtime.definition.id,
+        gatewayGenerationId: agentStateGeneration,
+        pid: child.pid
+      }) : null;
+      if (ready && runtime.process === child) {
+        runtime.readiness = "ready";
+        runtime.endpoints = ready.endpoints;
+        runtime.lastError = null;
+        appendLog(runtime, `READY generation=${agentStateGeneration} endpoints=${ready.endpoints.length}`);
+        continue;
+      }
       appendLog(runtime, line);
     }
   });
@@ -2257,6 +2366,10 @@ function startGatewayRuntime(id: string): void {
   child.stderr.on("data", (data) => {
     for (const line of data.toString().split(/\r?\n/).filter(Boolean)) {
       appendLog(runtime, `ERR ${line}`);
+      runtime.lastError = line.slice(-2_000);
+      if (/EADDRINUSE|address already in use/i.test(line) && runtime.readiness !== "ready") {
+        runtime.readiness = "blocked";
+      }
     }
   });
 
@@ -2266,6 +2379,12 @@ function startGatewayRuntime(id: string): void {
     runtime.agentStateGeneration = undefined;
     agentStateByGateway.delete(runtime.definition.id);
     runtime.stoppedAt = new Date().toISOString();
+    if (runtime.readiness === "stopping" || (code === 0 && runtime.readiness === "ready")) {
+      runtime.readiness = "stopped";
+    } else if (runtime.readiness !== "blocked") {
+      runtime.readiness = "failed";
+    }
+    runtime.endpoints = [];
     runtime.lastExit = {
       code,
       signal,
@@ -2293,6 +2412,7 @@ function stopGatewayRuntime(id: string): void {
   }
 
   appendLog(runtime, "stopping");
+  runtime.readiness = "stopping";
   managerOperationalLog.record("info", "gateway_stop_requested", {
     routeId: runtime.definition.id,
     childPid: runtime.process.pid,
@@ -3120,6 +3240,109 @@ async function deliverWearableAlert(
   return Promise.all(candidates.map((runtime) => deliverWearableAlertViaGateway(runtime, alert, context)));
 }
 
+async function xiaomiHomeHealthForScan(): Promise<Record<string, unknown>> {
+  if (!managerPort) throw new Error("Manager listener is not ready.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  try {
+    const response = await fetch(`http://127.0.0.1:${managerPort}/api/agent/xiaomi-home/health`, {
+      method: "GET",
+      signal: controller.signal
+    });
+    const payload = await response.json() as { data?: Record<string, unknown>; error?: { message?: string } };
+    if (!response.ok || !payload.data) {
+      throw new Error(payload.error?.message || `Xiaomi Home health returned HTTP ${response.status}.`);
+    }
+    return payload.data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+type XiaomiHomeGatewayDeliveryResult = WearableAlertCliDelivery & { gatewayId?: string };
+const xiaomiHomeDeliveryResultPrefix = "RABIROUTE_XIAOMI_HOME_DELIVERY_RESULT:";
+
+function xiaomiHomeGatewayRuntimes(roleId: string): GatewayRuntime[] {
+  const safeRoleId = sanitizeRoleId(roleId);
+  if (!safeRoleId) return [];
+  return [...runtimes.values()].filter(runtime => {
+    const definitionRoleId = sanitizeRoleId(runtime.definition.agentRoleId)
+      || routeRuntimeParts(runtime.definition.id).roleId;
+    return runtime.definition.enabled !== false
+      && definitionRoleId === safeRoleId
+      && sharedGatewayAdapterTypes(runtime.definition).includes("xiaomiHome");
+  });
+}
+
+function parseXiaomiHomeEventCliDelivery(stdout: string): WearableAlertCliDelivery | null {
+  const line = stdout.split(/\r?\n/).reverse().find(item => item.startsWith(xiaomiHomeDeliveryResultPrefix));
+  if (!line) return null;
+  try {
+    const parsed = JSON.parse(line.slice(xiaomiHomeDeliveryResultPrefix.length)) as Partial<WearableAlertCliDelivery>;
+    if (!parsed.status || !Number.isFinite(parsed.matchedRuleCount) || !Number.isFinite(parsed.sentPacketCount)) return null;
+    return {
+      status: parsed.status,
+      matchedRuleCount: Number(parsed.matchedRuleCount),
+      sentPacketCount: Number(parsed.sentPacketCount),
+      reason: parsed.reason,
+      adapterOutcomes: Array.isArray(parsed.adapterOutcomes) ? parsed.adapterOutcomes : []
+    };
+  } catch {
+    return null;
+  }
+}
+
+function deliverXiaomiHomeEventViaGateway(
+  runtime: GatewayRuntime,
+  event: XiaomiHomeEvent,
+  context: XiaomiHomeEventDeliveryContext
+): Promise<XiaomiHomeGatewayDeliveryResult> {
+  return new Promise(resolve => {
+    const command = childCommand(["--xiaomi-home-event-stdin"]);
+    const child = spawn(command.command, command.args, {
+      cwd: rootDir,
+      env: envFor(runtime.definition),
+      shell: command.shell,
+      windowsHide: true
+    });
+    let stdout = "";
+    let settled = false;
+    const finish = (result: XiaomiHomeGatewayDeliveryResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      appendLog(runtime, `xiaomi home event delivery status=${result.status} matched=${result.matchedRuleCount} sent=${result.sentPacketCount}`);
+      resolve(result);
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish({ gatewayId: runtime.definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_process_timeout" });
+    }, 10 * 60 * 1000);
+    child.stdout.on("data", data => { if (stdout.length < 256 * 1024) stdout += data.toString(); });
+    child.stderr.resume();
+    child.on("error", () => finish({ gatewayId: runtime.definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_process_spawn_failed" }));
+    child.on("exit", () => {
+      const delivery = parseXiaomiHomeEventCliDelivery(stdout);
+      finish(delivery ? { gatewayId: runtime.definition.id, ...delivery } : {
+        gatewayId: runtime.definition.id, status: "failed", matchedRuleCount: 0, sentPacketCount: 0, reason: "delivery_process_no_result"
+      });
+    });
+    child.stdin.on("error", () => { /* exit/error handlers own the result */ });
+    child.stdin.end(JSON.stringify({ event, context }));
+  });
+}
+
+async function deliverXiaomiHomeEvent(
+  event: XiaomiHomeEvent,
+  context: XiaomiHomeEventDeliveryContext
+): Promise<XiaomiHomeGatewayDeliveryResult[]> {
+  const candidates = xiaomiHomeGatewayRuntimes(context.agentRoleId);
+  if (candidates.length === 0) {
+    return [{ status: "missed", matchedRuleCount: 0, sentPacketCount: 0, reason: "no_matching_xiaomi_home_gateway" }];
+  }
+  return Promise.all(candidates.map(runtime => deliverXiaomiHomeEventViaGateway(runtime, event, context)));
+}
+
 function wearableHealthMessageFileEntry(filePath: string, record: Record<string, unknown>): Record<string, unknown> {
   const metric = String(record.metric ?? "");
   const value = record.value;
@@ -3482,7 +3705,10 @@ function runtimeStatusWithRoleInfoCache(
     automationRules: runtime.definition.automationRules,
     roleNotificationRules: runtime.definition.roleNotificationRules,
     roleRouteNames: runtime.definition.roleRouteNames,
-    running: Boolean(runtime.process),
+    running: runtime.readiness === "ready",
+    lifecycleState: runtime.readiness,
+    endpoints: runtime.endpoints,
+    lastError: runtime.lastError,
     pid: runtime.process?.pid ?? null,
     startedAt: runtime.startedAt,
     stoppedAt: runtime.stoppedAt,
@@ -3515,7 +3741,8 @@ function runtimeSummaryStatusWithRoleInfoCache(
     configName: sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName,
     routeName: definition.routeName,
     enabled: definition.enabled,
-    running: Boolean(runtime.process),
+    running: runtime.readiness === "ready",
+    lifecycleState: runtime.readiness,
     messageAdapterType: definition.messageAdapterType ?? "napcat",
     messageAdapters: definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"],
     agentRoleId: definition.agentRoleId,
@@ -3873,20 +4100,38 @@ function deliverAutomaticMemoryConsolidation(
 }
 
 function createMemoryConsolidationScheduler(): MemoryConsolidationScheduler {
+  const failureStateRoot = path.join(projectDirectoryLayout(rootDir).runtimeStateRoot, "background-failure-circuits");
   return new MemoryConsolidationScheduler({
     listTargets: memoryConsolidationScheduleTargets,
+    evaluate: (target, signal) => evaluateMemoryConsolidationSchedule(target.roleDir, { signal, timeoutMs: 30_000 }),
     requestDueRun: (target) => {
       const request = pendingMemoryConsolidation(target.roleDir, "auto");
       return request ? { runId: request.run.id, delivered: Boolean(request.run.deliveredAt) } : null;
     },
     nextTriggerAt: (target) => nextMemoryConsolidationTriggerAt(target.roleDir),
     deliver: deliverAutomaticMemoryConsolidation,
-    onError: (target, error) => {
+    persistencePath: path.join(failureStateRoot, "memory-consolidation.json"),
+    onPersistenceError: (error) => {
+      managerOperationalLog.record("warn", "background_failure_state_persist_failed", {
+        action: "memory-consolidation",
+        error: managerOperationalError(error, rootDir)
+      });
+    },
+    onError: (target, error, circuit) => {
       const runtime = runtimes.get(target.gatewayId);
       const message = error instanceof Error ? error.message : String(error);
-      if (runtime) appendLog(runtime, `automatic memory consolidation failed: ${message}`);
+      if (runtime) {
+        appendLog(runtime, `automatic memory consolidation failed; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}: ${message}`);
+      }
       managerOperationalLog.record("error", "memory_consolidation_auto_failed", {
-        result: `gatewayId=${target.gatewayId}; ${message}`
+        result: `gatewayId=${target.gatewayId}; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; signature=${circuit.snapshot.signature}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${message}`
+      });
+    },
+    onIncident: (target, error, circuit) => {
+      managerOperationalLog.record("error", "memory_consolidation_incident_opened", {
+        action: `gatewayId=${target.gatewayId}`,
+        result: `incidentId=${circuit.snapshot.incidentId}; signature=${circuit.snapshot.signature}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}`,
+        error: managerOperationalError(error, rootDir)
       });
     }
   });
@@ -4125,6 +4370,7 @@ function agentThreadAllowedWorkspaces(): string[] {
 }
 
 const speechModelManager = new SpeechModelManager({
+  packageRoot,
   rootDir,
   onChange: snapshot => publishManagerEvent("speech_model_management_changed", {
     activeJob: snapshot.activeJob,
@@ -5043,7 +5289,8 @@ async function resolvePlanSecretaryDeliveryTarget(
       assistantThreadName: resolvedTarget.threadName,
       workspace: resolvedTarget.workspace,
       count,
-      index
+      index,
+      managerBaseUrl
     })
   };
 }
@@ -6133,7 +6380,10 @@ function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, respons
 function handleDesktopSettingsApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
   if (requestUrl.pathname !== "/api/desktop/settings") return false;
   if (request.method === "GET") {
-    jsonResponse(response, 200, { code: 0, data: desktopSettings.read() });
+    jsonResponse(response, 200, {
+      code: 0,
+      data: { ...desktopSettings.read(), autostartConfigured: desktopSettings.autostartConfigured() }
+    });
     return true;
   }
   if (request.method === "PATCH" || request.method === "PUT") {
@@ -6153,7 +6403,10 @@ function handleDesktopSettingsApi(request: http.IncomingMessage, requestUrl: URL
           screenshot: { ...current.screenshot, ...screenshot }
         });
       })
-      .then((data) => jsonResponse(response, 200, { code: 0, data }))
+      .then((data) => jsonResponse(response, 200, {
+        code: 0,
+        data: { ...data, autostartConfigured: true }
+      }))
       .catch((error) => jsonResponse(response, 400, {
         code: -1,
         message: error instanceof Error ? error.message : String(error)
@@ -6212,11 +6465,32 @@ function wearableHealthMetrics(requestUrl: URL): WearableHealthMetric[] | undefi
   return values.length > 0 ? [...new Set(values)] : undefined;
 }
 
-function handleWearableHealthApi(request: http.IncomingMessage, pathname: string, response: http.ServerResponse): boolean {
+function managerLifecycleFenceHeader(request: http.IncomingMessage, name: string): string {
+  const value = request.headers[name];
+  if (Array.isArray(value)) return value.length === 1 ? value[0]!.trim() : "";
+  const normalized = String(value ?? "").trim();
+  return normalized.includes(",") ? "" : normalized;
+}
+
+export type WearableHealthApiContext = Readonly<{
+  roleDir?: (roleId: string) => string;
+  ingest?: typeof ingestWearableHealthObservation;
+  lifecycleFence?: Readonly<{
+    applicationGenerationId: string;
+    managerInstanceId: string;
+  }> | null;
+}>;
+
+export function handleWearableHealthApi(
+  request: http.IncomingMessage,
+  pathname: string,
+  response: http.ServerResponse,
+  context: WearableHealthApiContext = {}
+): boolean {
   const route = parseWearableHealthResourceRoute(pathname);
   if (!route) return false;
   try {
-    const roleDir = roleDirForApi(route.roleId);
+    const roleDir = (context.roleDir ?? roleDirForApi)(route.roleId);
     const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
     const sourceDeviceId = requestUrl.searchParams.get("sourceDeviceId")?.trim() || "";
     if (request.method === "GET" && route.resource === "config") {
@@ -6263,6 +6537,47 @@ function handleWearableHealthApi(request: http.IncomingMessage, pathname: string
       return true;
     }
     if (request.method === "POST" && route.resource === "observations") {
+      const lifecycleFence = context.lifecycleFence === undefined
+        ? managerHostIdentity
+          ? Object.freeze({
+            applicationGenerationId: managerHostIdentity.applicationGenerationId,
+            managerInstanceId
+          })
+          : null
+        : context.lifecycleFence;
+      if (!lifecycleFence) {
+        jsonResponse(response, 503, {
+          code: -1,
+          state: "host_generation_unavailable",
+          message: "Wearable observations require a Host-owned Manager generation."
+        });
+        return true;
+      }
+      const expectedApplicationGenerationId = managerLifecycleFenceHeader(
+        request,
+        "x-rabiroute-expected-application-generation-id"
+      );
+      const expectedManagerInstanceId = managerLifecycleFenceHeader(
+        request,
+        "x-rabiroute-expected-manager-instance-id"
+      );
+      if (!expectedApplicationGenerationId || !expectedManagerInstanceId) {
+        jsonResponse(response, 400, {
+          code: -1,
+          state: "invalid_lifecycle_fence",
+          message: "Wearable observations require complete Manager lifecycle fencing headers."
+        });
+        return true;
+      }
+      if (expectedApplicationGenerationId !== lifecycleFence.applicationGenerationId
+        || expectedManagerInstanceId !== lifecycleFence.managerInstanceId) {
+        jsonResponse(response, 409, {
+          code: -1,
+          state: "stale_lifecycle_fence",
+          message: "Wearable observation lifecycle identity is stale."
+        });
+        return true;
+      }
       const deliverAlerts = ["1", "true", "yes"].includes(
         (requestUrl.searchParams.get("deliverAlerts") || "").trim().toLowerCase()
       );
@@ -6277,9 +6592,11 @@ function handleWearableHealthApi(request: http.IncomingMessage, pathname: string
             policy: nested.policy ?? body.policy,
             samples: nested.samples ?? body.samples
           } as WearableHealthObservationInput;
-          const data = ingestWearableHealthObservation(roleDir, observation);
+           const data = (context.ingest ?? ingestWearableHealthObservation)(roleDir, observation);
           if (!deliverAlerts || data.alerts.length === 0) return data;
-          const managerPort = request.socket.localPort || process.env.GATEWAY_MANAGER_PORT || "8790";
+          if (!Number.isInteger(managerPort) || managerPort < 1 || managerPort > 65535) {
+            throw new Error("Manager listener is not ready.");
+          }
           const deliveries = [];
           for (const alert of data.alerts) {
             const sourceSample = alert.sample;
@@ -7099,20 +7416,71 @@ function handleWebguiLanAccessApi(
   return true;
 }
 
+function managerHealthPayload(): Record<string, unknown> {
+  const pluginGeneration = managerPluginGenerationStatus;
+  const pluginReadiness = pluginGeneration?.readiness ?? {
+    state: "degraded" as const,
+    missingCapabilities: ["plugin-kernel-not-ready"]
+  };
+  const requiredRoutes = runtimes.values().filter(runtime =>
+    runtime.definition.enabled === true
+    && sharedGatewayMessageAdapterTypes(runtime.definition).length > 0
+  );
+  const routeLifecycle = {
+    required: requiredRoutes.length,
+    ready: requiredRoutes.filter(runtime => runtime.readiness === "ready").length,
+    starting: requiredRoutes.filter(runtime => runtime.readiness === "starting").length,
+    blocked: requiredRoutes.filter(runtime => runtime.readiness === "blocked").map(runtime => runtime.definition.id),
+    failed: requiredRoutes.filter(runtime => runtime.readiness === "failed").map(runtime => runtime.definition.id)
+  };
+  const routesReady = routeLifecycle.ready === routeLifecycle.required;
+  const backgroundLifecycle = {
+    memoryConsolidation: memoryConsolidationScheduler?.failureSummary() ?? { backoff: 0, incidents: 0 },
+    planFeedbackRecovery: planFeedbackRecoveryService?.failureSummary() ?? { backoff: 0, incidents: 0 }
+  };
+  const backgroundIncidentCount = backgroundLifecycle.memoryConsolidation.incidents
+    + backgroundLifecycle.planFeedbackRecovery.incidents;
+  return {
+    protocolVersion: 1,
+    applicationGenerationId: managerHostIdentity?.applicationGenerationId,
+    managerInstanceId: managerInstanceId || undefined,
+    managerBaseUrl: managerBaseUrl || undefined,
+    health: buildManagerHealthSnapshot({
+      pluginReadiness,
+      routesReady,
+      routeReadyCount: routeLifecycle.ready,
+      routeRequiredCount: routeLifecycle.required,
+      blockedRouteIds: routeLifecycle.blocked,
+      failedRouteIds: routeLifecycle.failed,
+      backgroundIncidentCount
+    }),
+    pluginReadiness,
+    routeLifecycle,
+    backgroundLifecycle
+  };
+}
+
 function metaPayload(): Record<string, unknown> {
   const version = rabiRoutePackageVersion();
   const globalConfig = rabiGlobalConfig.read();
+  const healthPayload = managerHealthPayload();
+  const pluginGeneration = managerPluginGenerationStatus;
   return {
     version,
-    health: {
-      state: "healthy",
-      scope: "manager_control_plane",
-      checkedAt: new Date().toISOString(),
-      pid: process.pid,
-      message: "Manager 控制面可响应；消息入口健康在独立层级报告。"
-    },
+    health: healthPayload.health,
     githubUrl: "https://github.com/vb2250158/RabiRoute",
+    applicationGenerationId: managerHostIdentity?.applicationGenerationId,
+    managerInstanceId: managerInstanceId || undefined,
+    managerBaseUrl: managerBaseUrl || undefined,
     managerPort,
+    lanDiscovery: managerLanDiscoveryStatus,
+    pluginGeneration: pluginGeneration ? {
+      id: pluginGeneration.id,
+      sequence: pluginGeneration.sequence,
+      readiness: healthPayload.pluginReadiness
+    } : undefined,
+    routeLifecycle: healthPayload.routeLifecycle,
+    backgroundLifecycle: healthPayload.backgroundLifecycle,
     managerAutostart: managerShouldAutostart,
     rabiGuid: globalConfig.rabiGuid,
     rabiName: globalConfig.rabiName,
@@ -7162,7 +7530,7 @@ async function migrateRolePlanLayoutsAfterStartup(): Promise<void> {
     roles = roleDirectories.length;
     for (const roleDir of roleDirectories) {
       await new Promise<void>((resolve) => setImmediate(resolve));
-      const outcome = migrateRolePlanLayout(roleDir);
+      const outcome = await migrateRolePlanLayoutInWorker(roleDir);
       migrated += outcome.migrated;
       for (const failure of outcome.failures) failures.push(`${path.basename(roleDir)}:${failure.planId}:${failure.error}`);
     }
@@ -7187,7 +7555,9 @@ async function prewarmRolePlanCatalogs(): Promise<void> {
     roleDirectories = entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => path.join(rolesRoot, entry.name));
-    const results = await Promise.allSettled(roleDirectories.map((roleDir) => listPlansAsync(roleDir)));
+    const results = await Promise.allSettled(roleDirectories.map((roleDir) => (
+      listPlansAsync(roleDir, { watch: false })
+    )));
     managerOperationalLog.record("info", "role_plan_catalogs_prewarmed", {
       durationMs: Date.now() - startedAt,
       result: `roles=${roleDirectories.length}; fulfilled=${results.filter((result) => result.status === "fulfilled").length}`
@@ -7273,7 +7643,7 @@ function assetResponse(pathname: string, response: http.ServerResponse): boolean
     return false;
   }
 
-  const assetPath = path.join(rootDir, "assets", match[1]);
+  const assetPath = path.join(packageRoot, "assets", match[1]);
   if (!fs.existsSync(assetPath)) {
     return false;
   }
@@ -7392,20 +7762,72 @@ export function handlePersonaPluginApi(
   return handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir);
 }
 
-export async function startManager(): Promise<void> {
+export type StartManagerOptions = {
+  instanceLock?: ManagerInstanceLock;
+};
+
+export async function startManager(options: StartManagerOptions = {}): Promise<void> {
   const managerCordisRoot = getBuiltinManagerCordisRoot();
   const managerSharedResourcesRuntime = await managerCordisRoot.ensure(
     MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
     mountManagerSharedResourcesRuntime(messageProcessingBoardPersistence)
   );
+  const managerStartingRequest = (_request: http.IncomingMessage, response: http.ServerResponse): void => {
+    response.statusCode = 503;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("retry-after", "1");
+    response.end(`${JSON.stringify({
+      code: -1,
+      state: "starting",
+      message: "RabiRoute Manager is starting."
+    })}\n`);
+  };
+  const activeServer = http.createServer(managerStartingRequest);
+  activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
+  activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
+  activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
+  activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
+  try {
+    const endpoint = await listenManagerEndpoint({
+      server: activeServer,
+      host: managerHost,
+      policy: managerPortPolicy
+    });
+    managerPort = endpoint.port;
+    managerBaseUrl = endpoint.baseUrl;
+    managerInstanceId = options.instanceLock?.owner.ownerId ?? randomUUID();
+    process.env.GATEWAY_MANAGER_PORT = String(managerPort);
+    process.env.GATEWAY_MANAGER_URL = managerBaseUrl;
+    configRepository.setManagerPort(managerPort);
+  } catch (error) {
+    if (activeServer.listening) {
+      await new Promise<void>(resolve => activeServer.close(() => resolve()));
+    }
+    await managerSharedResourcesRuntime.unmount().catch(() => {});
+    await managerCordisRoot.dispose().catch(() => {});
+    throw error;
+  }
   let managerPluginKernel: GenerationRuntime | undefined;
+  const managerPluginProcessLeases = new ProcessLeaseRegistry();
   let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
+  let stopManagerLanDiscovery = async (): Promise<void> => {};
   const disposeManagerCordisRuntime = async (): Promise<void> => {
     let firstError: unknown;
+    try {
+      await stopManagerLanDiscovery();
+    } catch (error) {
+      firstError = error;
+    }
     try {
       await managerPluginKernel?.dispose();
     } catch (error) {
       firstError = error;
+    }
+    try {
+      await managerPluginProcessLeases.disposeAll();
+    } catch (error) {
+      firstError ??= error;
     }
     try {
       await managerSharedResourcesRuntime.unmount();
@@ -7422,6 +7844,10 @@ export async function startManager(): Promise<void> {
   let managerPluginDiagnostics: readonly unknown[] = [];
   let managerServicesReady = false;
   let managerListenerReady = false;
+  let resolveWearableCompanionStartup = (): void => {};
+  const wearableCompanionStartupReady = new Promise<void>(resolve => {
+    resolveWearableCompanionStartup = resolve;
+  });
   let syncActiveRabiLinkRelay = async (): Promise<void> => {};
   let reconcileActiveSpeech = (): void => {};
   let recordManagerHttpRequest = (_pathname: string, _statusCode: number, _durationMs: number, _requestId: string, _responseBytes?: number): void => {};
@@ -7437,7 +7863,29 @@ export async function startManager(): Promise<void> {
   const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir });
   let detachLanAgentUpgrade: (() => void) | undefined;
   const webPluginModules = new WebPluginModuleRegistry();
+  const wearableCompanionRuntimeIdentity = createWearableCompanionRuntimeIdentity({
+    hostOwned: Boolean(managerHostIdentity),
+    managerBaseUrl,
+    applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+    managerInstanceId,
+    runtimeRoot: rootDir,
+    explicitPwshPath: process.env.RABIROUTE_PWSH_PATH,
+    environment: process.env
+  });
+  const wearableCompanionWorkerService = new WearableCompanionWorkerService(
+    wearableCompanionRuntimeIdentity,
+    managerPluginProcessLeases,
+    { startupReady: wearableCompanionStartupReady }
+  );
   const managerPluginHostServices: readonly HostService[] = Object.freeze([
+    Object.freeze({
+      capability: "host.manager.wearable-companion-runtime@1",
+      value: wearableCompanionRuntimeIdentity
+    }),
+    Object.freeze({
+      capability: "host.manager.wearable-companion@1",
+      value: wearableCompanionWorkerService
+    }),
     Object.freeze({ capability: "host.manager.http@1", value: Object.freeze({
       ManagerPluginRequestTracker,
       jsonResponse,
@@ -7520,7 +7968,9 @@ export async function startManager(): Promise<void> {
       loadRuntimes,
       managerHost,
       managerPluginRoutes,
-      managerPort,
+      get managerPort() { return managerPort; },
+      get applicationGenerationId() { return managerHostIdentity?.applicationGenerationId ?? managerInstanceId; },
+      get managerInstanceId() { return managerInstanceId; },
       path,
       rabiGlobalConfig,
       rabiRoutePackageVersion,
@@ -7654,6 +8104,11 @@ export async function startManager(): Promise<void> {
       managerOperationalLog,
       managerReadOnly,
       managerReadWorkerPool,
+      planFeedbackFailureStatePath: path.join(
+        projectDirectoryLayout(rootDir).runtimeStateRoot,
+        "background-failure-circuits",
+        "plan-feedback-recovery.json"
+      ),
       publishManagerEvent,
       recoverPlanFeedbackCandidate,
       rootDir,
@@ -7690,6 +8145,7 @@ export async function startManager(): Promise<void> {
       routeHasRecentMessages,
       scanNapcatEndpoint,
       speechControl,
+      xiaomiHomeHealthForScan,
       standaloneGatewayPayload,
     }) }),
     Object.freeze({ capability: "host.manager.agent-adapter-catalog@1", value: Object.freeze({
@@ -7779,11 +8235,13 @@ export async function startManager(): Promise<void> {
       launchNapcatInstanceEndpoint,
       managerPluginRoutes,
       napcatManagerCtx,
+      readNapcatLoginPanel,
       readJsonBody,
       registerManagerPluginHandlerRoutes,
       removeManagedNapcatInstance,
       repairAllNapcatInstances,
       restartNapcatInstanceEndpoint,
+      runNapcatLoginAction,
       runWindowsTaskkill,
       stopChildProcessTree,
       get activeNapcatControlContext() { return activeNapcatControlContext; },
@@ -7859,14 +8317,13 @@ export async function startManager(): Promise<void> {
       set rolesRoot(value) { rolesRoot = value; },
       get routeRoot() { return routeRoot; },
       set routeRoot(value) { routeRoot = value; },
-      get shutdownManager() { return shutdownManager; },
-      set shutdownManager(value) { shutdownManager = value; },
     }) }),
     Object.freeze({ capability: "host.manager.desktop-pet@1", value: Object.freeze({
       ManagerPluginRequestTracker,
       desktopSettings,
       handleDesktopPetApi,
       managerPluginRoutes,
+      publishManagerEvent,
       registerManagerPluginHandlerRoutes,
       resolveRoleDir: roleDirForApi,
     }) }),
@@ -7878,59 +8335,133 @@ export async function startManager(): Promise<void> {
       readJsonBody,
       registerManagerPluginHandlerRoutes,
     }) }),
+    Object.freeze({ capability: "host.manager.xiaomi-home@1", value: Object.freeze({
+      ManagerPluginRequestTracker,
+      XiaomiHomeManagerApiClient,
+      XiaomiHomeArtifactStore,
+      XiaomiHomeEventMonitor,
+      XiaomiHomeClipCaptureWorker,
+      XiaomiHomeArtifactAccess,
+      createXiaomiHomeManagerRouteHandler,
+      deliverXiaomiHomeEvent,
+      jsonResponse,
+      managerPluginRoutes,
+      readJsonBody,
+      registerManagerPluginHandlerRoutes,
+    }) }),
   ]);
   const configuredPluginProfile = process.env.RABIROUTE_PLUGIN_PROFILE?.trim();
   const managerPluginProfilePath = configuredPluginProfile
     ? path.resolve(configuredPluginProfile)
-    : path.join(rootDir, "dist", "plugins", "profiles", "desktop.json");
+    : path.join(packageRoot, "dist", "plugins", "profiles", "desktop.json");
   const configuredPackageRoots = (process.env.RABIROUTE_PLUGIN_PACKAGE_ROOTS ?? "")
     .split(path.delimiter)
     .map(value => value.trim())
     .filter(Boolean)
     .map(value => path.resolve(value));
+  const builtinPluginPackageRoot = path.join(packageRoot, "dist", "plugins", "packages");
   const managerPluginPackageRoots = Object.freeze([...new Set([
-    path.join(rootDir, "dist", "plugins", "packages"),
+    builtinPluginPackageRoot,
     ...configuredPackageRoots
   ])]);
-  const managerPluginPackageCatalog = new PluginPackageCatalog(managerPluginPackageRoots);
+  const managerPluginPackageCatalog = new PluginPackageCatalog(managerPluginPackageRoots, {
+    trustedInProcessRoots: [builtinPluginPackageRoot]
+  });
   managerPluginKernel = new GenerationRuntime({
     host: "manager",
     hostServices: managerPluginHostServices,
-    grantedPermissions: identity => loadedManagerPluginProfile?.grants(identity) ?? []
+    grantedPermissions: identity => loadedManagerPluginProfile?.grants(identity) ?? [],
+    applicationIdentity: {
+      applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+      managerInstanceId
+    },
+    executor: createFullPluginExecutor(managerPluginProcessLeases),
+    onRuntimeFailure: event => {
+      managerPluginGenerationStatus = Object.freeze({
+        id: event.generation.id,
+        sequence: event.generation.sequence,
+        readiness: event.generation.readiness
+      });
+      managerPluginDiagnostics = event.generation.records.filter(record => record.status !== "active");
+      if (loadedManagerPluginProfile) webPluginModules.update(loadedManagerPluginProfile, event.generation);
+      const active = event.generation.records.filter(record => record.status === "active").map(record => record.identity.instanceId);
+      const waiting = event.generation.records.filter(record => record.status === "waiting_dependency").map(record => record.identity.instanceId);
+      const failed = event.generation.records.filter(record => record.status === "failed").map(record => record.identity.instanceId);
+      managerOperationalLog.record("error", "plugin_runtime_failed", {
+        result: `plugin=${event.identity.instanceId}; code=${event.error.code}`,
+        error: managerOperationalError(event.error, rootDir)
+      });
+      publishManagerEvent("plugin_reconciliation_changed", {
+        reason: "runtime failure",
+        state: "runtime_failed",
+        active,
+        waiting,
+        failed,
+        diagnostics: managerPluginDiagnostics
+      });
+      publishManagerEvent("plugin_catalog_changed", {
+        reason: "runtime failure",
+        generation: event.generation.id,
+        revision: {
+          plugins: event.generation.sequence,
+          contributions: event.generation.contributions.revision
+        }
+      });
+    }
   });
-  const reconcileManagerPlugins = async (reason: string): Promise<void> => {
-    const loaded = await loadPluginProfile({
-      profilePath: managerPluginProfilePath,
-      packageCatalog: managerPluginPackageCatalog,
-      runtimeRoot: path.join(rootDir, "data", "plugins", ".runtime"),
-      host: "manager"
+  let managerPluginReconciliationTail: Promise<void> = Promise.resolve();
+  const reconcileManagerPlugins = (reason: string): Promise<void> => {
+    const reconciliation = managerPluginReconciliationTail.then(async () => {
+      const previousProfile = loadedManagerPluginProfile;
+      const loaded = await loadPluginProfile({
+        profilePath: managerPluginProfilePath,
+        packageCatalog: managerPluginPackageCatalog,
+        runtimeRoot: path.join(rootDir, "data", "plugins", ".runtime"),
+        host: "manager"
+      });
+      // GenerationRuntime resolves grants while executing switch(). Keep the matching
+      // profile snapshot installed for that whole serialized transaction.
+      loadedManagerPluginProfile = loaded;
+      try {
+        const result = await managerPluginKernel!.switch(loaded.candidates, {
+          readyRequires: loaded.profile.readyRequires
+        });
+        managerPluginGenerationStatus = Object.freeze({
+          id: result.generation.id,
+          sequence: result.generation.sequence,
+          readiness: result.generation.readiness
+        });
+        webPluginModules.update(loaded, result.generation);
+        const active = result.generation.records.filter(record => record.status === "active").map(record => record.identity.instanceId);
+        const waiting = result.generation.records.filter(record => record.status === "waiting_dependency").map(record => record.identity.instanceId);
+        const failed = result.generation.records.filter(record => record.status === "failed").map(record => record.identity.instanceId);
+        managerPluginDiagnostics = result.generation.records.filter(record => record.status !== "active");
+        publishManagerEvent("plugin_reconciliation_changed", { reason, state: "idle", active, waiting, failed, diagnostics: managerPluginDiagnostics });
+        publishManagerEvent("plugin_catalog_changed", {
+          reason,
+          generation: result.generation.id,
+          revision: { plugins: result.generation.sequence, contributions: result.generation.contributions.revision }
+        });
+      } catch (error) {
+        loadedManagerPluginProfile = previousProfile;
+        throw error;
+      }
     });
-    loadedManagerPluginProfile = loaded;
-    const result = await managerPluginKernel!.switch(loaded.candidates);
-    webPluginModules.update(loaded, result.generation);
-    const active = result.generation.records.filter(record => record.status === "active").map(record => record.identity.instanceId);
-    const waiting = result.generation.records.filter(record => record.status === "waiting_dependency").map(record => record.identity.instanceId);
-    const failed = result.generation.records.filter(record => record.status === "failed").map(record => record.identity.instanceId);
-    managerPluginDiagnostics = result.generation.records.filter(record => record.status !== "active");
-    publishManagerEvent("plugin_reconciliation_changed", { reason, state: "idle", active, waiting, failed, diagnostics: managerPluginDiagnostics });
-    publishManagerEvent("plugin_catalog_changed", {
-      reason,
-      generation: result.generation.id,
-      revision: { plugins: result.generation.sequence, contributions: result.generation.contributions.revision }
-    });
+    managerPluginReconciliationTail = reconciliation.catch(() => {});
+    return reconciliation;
   };
 
   try {
     await reconcileManagerPlugins("manager startup");
-    if (!managerPluginKernel!.current().services.services.has("manager.core@1")) {
-      const failedRecords = managerPluginKernel!.current().records
-        .filter(record => record.status === "failed")
-        .map(record => `${record.identity.instanceId}: ${record.error?.message ?? "activation failed"}`);
-      const detail = failedRecords.join("; ") || "manager:core did not publish manager.core@1";
-      throw new Error(`Required Manager capability failed to activate: manager.core@1 (${detail})`);
+    const readiness = managerPluginKernel!.current().readiness;
+    if (readiness.missingCapabilities.length > 0) {
+      throw new Error(`Required Manager capabilities failed to activate: ${readiness.missingCapabilities.join(", ")}`);
     }
   } catch (error) {
     lanAgentRegistry.close();
+    if (activeServer.listening) {
+      await new Promise<void>(resolve => activeServer.close(() => resolve()));
+    }
     await disposeManagerCordisRuntime().catch(() => {});
     throw error;
   }
@@ -7938,7 +8469,6 @@ export async function startManager(): Promise<void> {
   let pluginPackageWatcher: PluginPackageWatcher | null = null;
   let removeSignalHandlers = (): void => {};
   let managerResourcesStopped = false;
-  let server: http.Server | undefined;
 
   function stopManagerResources(): void {
     if (managerResourcesStopped) return;
@@ -7953,13 +8483,6 @@ export async function startManager(): Promise<void> {
   }
 
   try {
-  // Built-artifact acceptance is a control-plane liveness/read-boundary check.
-  // Do not let a transient NAS route scan delay the isolated Manager listener;
-  // normal installed runtime still loads and owns its configured Routes.
-  if (!managerReadOnly) {
-    loadRuntimes();
-    syncRunningGateways();
-  }
   managerServicesReady = true;
   if (managerReadOnly) {
     console.log("Manager read-only mode enabled: startup reconciliation and mutating HTTP methods are disabled.");
@@ -7967,8 +8490,7 @@ export async function startManager(): Promise<void> {
     reconcileActiveSpeech();
   }
 
-  const activeServer = http.createServer((request, response) => {
-  server = activeServer;
+  const handleManagerRequest = (request: http.IncomingMessage, response: http.ServerResponse): void => {
     const requestId = randomUUID();
     const requestStartedAt = Date.now();
     const method = request.method ?? "UNKNOWN";
@@ -8006,6 +8528,27 @@ export async function startManager(): Promise<void> {
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
       pathname = requestUrl.pathname;
+      if (handleManagerLanDiscoveryRequest(request, requestUrl, response, {
+        enabled: !managerReadOnly
+          && managerListensOnLan(managerHost)
+          && rabiGlobalConfig.read().webguiLan.enabled,
+        document: () => {
+          const config = rabiGlobalConfig.read();
+          return Object.freeze({
+            protocolVersion: MANAGER_DISCOVERY_PROTOCOL_VERSION,
+            applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+            managerInstanceId,
+            guid: config.rabiGuid,
+            name: config.rabiName,
+            computerName: os.hostname(),
+            deviceType: "RabiRoute Manager" as const,
+            version: rabiRoutePackageVersion()
+          });
+        },
+        jsonResponse
+      })) {
+        return;
+      }
       if (!webguiLanRequestAllowed(request, requestUrl)) {
         response.setHeader("cache-control", "no-store");
         response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
@@ -8016,10 +8559,33 @@ export async function startManager(): Promise<void> {
         });
         return;
       }
-      if (managerReadOnly && !managerReadOnlyRequestAllowed(request.method)) {
+      if (managerReadOnly && !managerReadOnlyRequestAllowed(request.method, pathname)) {
         jsonResponse(response, 423, {
           code: -1,
           message: "Manager is running in read-only acceptance mode."
+        });
+        return;
+      }
+      if (handleManagerHostLifecycleRequest(request, requestUrl, response, {
+        identity: managerHostIdentity,
+        shutdown: reason => shutdownManager(reason),
+        jsonResponse
+      })) {
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/health") {
+        jsonResponse(response, 200, managerHealthPayload());
+        return;
+      }
+      const pluginReadiness = managerPluginGenerationStatus?.readiness;
+      const missingCapabilities = pluginReadiness?.missingCapabilities ?? [];
+      if (missingCapabilities.length > 0
+        && !["GET", "HEAD", "OPTIONS"].includes(request.method ?? "")
+        && requestUrl.pathname !== "/api/plugins/reconciliation") {
+        jsonResponse(response, 503, {
+          code: -1,
+          error: "MANAGER_REQUIRED_CAPABILITY_UNAVAILABLE",
+          message: `Manager required plugin capabilities are unavailable: ${missingCapabilities.join(", ")}`
         });
         return;
       }
@@ -8065,7 +8631,10 @@ export async function startManager(): Promise<void> {
       });
       jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
-  });
+  };
+
+  activeServer.removeListener("request", managerStartingRequest);
+  activeServer.on("request", handleManagerRequest);
 
   activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
@@ -8076,7 +8645,36 @@ export async function startManager(): Promise<void> {
     enabled: () => rabiGlobalConfig.read().webguiLan.enabled
   });
 
-  await listenManagerServer(activeServer, managerPort, managerHost);
+  const lanDiscoveryEnabled = !managerReadOnly
+    && managerListensOnLan(managerHost)
+    && rabiGlobalConfig.read().webguiLan.enabled;
+  if (lanDiscoveryEnabled) {
+    try {
+      const publisher = await startManagerDiscoveryPublisher({
+        port: managerPort,
+        applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+        managerInstanceId,
+        onStatus: status => { managerLanDiscoveryStatus = status; }
+      });
+      stopManagerLanDiscovery = () => publisher.stop();
+    } catch (error) {
+      managerLanDiscoveryStatus = Object.freeze({
+        state: "failed",
+        serviceType: "_rabiroute._tcp.local",
+        port: managerPort,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      managerOperationalLog.record("warn", "manager_lan_discovery_failed", {
+        result: `port=${managerPort}`,
+        error: managerOperationalError(error, rootDir)
+      });
+    }
+  } else {
+    managerLanDiscoveryStatus = Object.freeze({
+      state: "disabled",
+      serviceType: "_rabiroute._tcp.local"
+    });
+  }
 
   console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
   console.log(`roles: ${rolesRoot}`);
@@ -8085,6 +8683,13 @@ export async function startManager(): Promise<void> {
     result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
   });
   managerListenerReady = true;
+  // Publish the responsive control plane before route scans and child-process
+  // reconciliation so slow NAS or adapter work cannot delay identity readiness.
+  if (!managerReadOnly) {
+    await loadRuntimesAsync();
+    syncRunningGateways();
+    void reconcilePersistedPlanSecretaryWorkspaces();
+  }
   await syncActiveRabiLinkRelay();
   memoryConsolidationScheduler?.start();
   startActiveNapcatSupervisor();
@@ -8126,10 +8731,21 @@ export async function startManager(): Promise<void> {
   };
 
   removeSignalHandlers = installManagerSignalHandlers(shutdownManager);
+  if (managerHostIdentity) {
+    console.log(managerReadyLine({
+      protocolVersion: 1,
+      applicationGenerationId: managerHostIdentity.applicationGenerationId,
+      managerInstanceId,
+      pid: process.pid,
+      baseUrl: managerBaseUrl,
+      readyAt: new Date().toISOString()
+    }));
+    resolveWearableCompanionStartup();
+  }
   } catch (error) {
     stopManagerResources();
-    if (server?.listening) {
-      await new Promise<void>(resolve => server?.close(() => resolve()));
+    if (activeServer.listening) {
+      await new Promise<void>(resolve => activeServer.close(() => resolve()));
     }
     await Promise.allSettled([
       managerOperationalLog.flush(),

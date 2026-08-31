@@ -58,6 +58,35 @@ test("FenneNote service returns false for unrelated routes and stops accepting w
     await app.close();
   }
 });
+
+test("FenneNote service returns a clear 502 when no output endpoint is configured", async () => {
+  const previousReply = process.env.FENNOTE_REPLY_URL;
+  const previousPlayback = process.env.FENNOTE_PLAYBACK_URL;
+  delete process.env.FENNOTE_REPLY_URL;
+  delete process.env.FENNOTE_PLAYBACK_URL;
+  const service = new FenneNoteOutputService();
+  const app = await listen(service);
+  try {
+    for (const [route, mode, variable] of [
+      ["/api/fennenote/reply", "reply", "FENNOTE_REPLY_URL"],
+      ["/api/fennenote/playback", "playback", "FENNOTE_PLAYBACK_URL"]
+    ]) {
+      const result = await fetch(app.baseUrl + route, { method: "POST", body: "{}" });
+      assert.equal(result.status, 502);
+      const body = await result.json() as { error: string; target?: string };
+      assert.match(body.error, new RegExp(`FenneNote ${mode} endpoint is not configured; set ${variable}`));
+      assert.equal(body.target, undefined);
+    }
+  } finally {
+    await service.stop();
+    await app.close();
+    if (previousReply === undefined) delete process.env.FENNOTE_REPLY_URL;
+    else process.env.FENNOTE_REPLY_URL = previousReply;
+    if (previousPlayback === undefined) delete process.env.FENNOTE_PLAYBACK_URL;
+    else process.env.FENNOTE_PLAYBACK_URL = previousPlayback;
+  }
+});
+
 test("FenneNote service aborts and drains an in-flight request during stop", async () => {
   let upstreamAccepted!: () => void;
   const accepted = new Promise<void>(resolve => { upstreamAccepted = resolve; });

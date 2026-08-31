@@ -37,6 +37,7 @@ class DesktopPetEventStream(QObject):
     """Reconnectable Manager SSE adapter; it never owns work-event policy."""
 
     work_ended = Signal(object)
+    settings_changed = Signal(object)
     connection_changed = Signal(bool)
 
     def __init__(self, manager_url: str) -> None:
@@ -45,6 +46,7 @@ class DesktopPetEventStream(QObject):
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._response: object | None = None
+        self._response_lock = threading.Lock()
         self._connected = False
 
     def start(self) -> None:
@@ -56,7 +58,8 @@ class DesktopPetEventStream(QObject):
 
     def stop(self) -> None:
         self._stop.set()
-        response = self._response
+        with self._response_lock:
+            response = self._response
         if response is not None:
             try:
                 response.close()  # type: ignore[attr-defined]
@@ -65,14 +68,20 @@ class DesktopPetEventStream(QObject):
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=2.0)
-        self._thread = None
+        if thread is None or not thread.is_alive():
+            self._thread = None
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            response: object | None = None
             try:
                 request = Request(self._url, method="GET", headers={"accept": "text/event-stream"})
-                with urlopen(request, timeout=65.0) as response:
-                    self._response = response
+                with urlopen(request, timeout=65.0) as opened_response:
+                    response = opened_response
+                    with self._response_lock:
+                        self._response = response
+                    if self._stop.is_set():
+                        return
                     if not self._connected:
                         self._connected = True
                         self.connection_changed.emit(True)
@@ -81,10 +90,17 @@ class DesktopPetEventStream(QObject):
                             return
                         if event_name == "work_ended" and isinstance(payload, dict):
                             self.work_ended.emit(payload)
+                        elif event_name == "desktop_settings_changed" and isinstance(payload, dict):
+                            self.settings_changed.emit(payload)
+            except AttributeError:
+                if not self._stop.is_set():
+                    raise
             except (OSError, TimeoutError, ValueError):
                 pass
             finally:
-                self._response = None
+                with self._response_lock:
+                    if self._response is response:
+                        self._response = None
                 if self._connected and not self._stop.is_set():
                     self._connected = False
                     self.connection_changed.emit(False)

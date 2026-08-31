@@ -403,7 +403,7 @@ Rabi，帮我看看计划和记忆机制怎么设计。
 语音转写日志：data/route/default-main/voice-transcripts.jsonl
 
 [发送]
-明确发送 API：http://127.0.0.1:8790/api/agent/send
+明确发送 API：`<managerBaseUrl>/api/agent/send`；安装版从 Host `status --json` 发现本代地址，源码模式由 Manager 标准输出提供。
 发送请求模板：{"deliveryId":"<稳定发送 ID>","sender":{"agentType":"primary_persona","sessionId":"<当前主人格完整会话 ID>"},"routeId":"default-main","channel":"napcat","params":{"target":"group","groupId":"example-group-id","replyToMessageId":"<能引用时填源消息 ID；不引用时填空字符串>","replyImageDescriptions":[]},"payload":{"type":"text","text":"<发送正文>"}}
 Codex 主人格 Route 开启“仅允许主人格发送消息”Hook 后，`sender.sessionId` 必须填写该 Route 绑定的 `codexThreadId`。
 来源上下文（仅供审计）：{"runtimeRouteId":"default-main","routeProfileId":"default-main","routeKind":"group_message","targetType":"group","messageId":"example-message-id","groupId":"example-group-id"}

@@ -1,5 +1,5 @@
 param(
-  [string]$ManagerUrl = "http://127.0.0.1:8790",
+  [string]$ManagerUrl = "",
   [int]$DurationSeconds = 300,
   [int]$IntervalSeconds = 5,
   [int]$RequestTimeoutSeconds = 4,
@@ -8,6 +8,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "Resolve-RabiRouteManagerUrl.ps1")
+$ManagerUrl = Resolve-RabiRouteManagerUrl -ExplicitUrl $ManagerUrl
 
 if ($DurationSeconds -lt 1) { throw "DurationSeconds must be at least 1." }
 if ($IntervalSeconds -lt 1) { throw "IntervalSeconds must be at least 1." }

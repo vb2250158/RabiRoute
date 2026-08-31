@@ -1,9 +1,12 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "io.rabiroute.manager.bilibili-history",
   "version": "1.0.0",
   "entries": {
-    "manager": "./manager.mjs"
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
   },
   "provides": [
     "manager.bilibili-history@1"

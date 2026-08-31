@@ -16,7 +16,7 @@ node <plugin-root>/scripts/rabi-context.mjs doctor
 node <plugin-root>/scripts/rabi-context.mjs roles
 ```
 
-The default Manager URL is `http://127.0.0.1:8790`. Set `RABI_MANAGER_URL` only when the local Rabi Manager uses another base URL. If the Manager is unavailable, report that no fresh Rabi context was injected; do not recover from a plugin-local role cache.
+The client discovers the current dynamic Manager endpoint from `RabiRouteHost.exe`. Set `RABI_MANAGER_URL` only for an explicit non-Host development Manager. Never guess or retain an earlier port. If the Host or Manager is unavailable, report that no fresh Rabi context was injected; do not recover from a plugin-local role cache.
 
 For Codex-only use, run RabiRoute Manager with gateway autostart disabled. Keep persona, plan, memory, validation, and consolidation APIs active:
 

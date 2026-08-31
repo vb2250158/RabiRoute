@@ -115,6 +115,8 @@ test("Manager read-only mode accepts observation methods and rejects mutations",
   assert.equal(managerReadOnlyRequestAllowed("HEAD"), true);
   assert.equal(managerReadOnlyRequestAllowed("OPTIONS"), true);
   assert.equal(managerReadOnlyRequestAllowed("POST"), false);
+  assert.equal(managerReadOnlyRequestAllowed("POST", "/_rabiroute/host/shutdown"), true);
+  assert.equal(managerReadOnlyRequestAllowed("POST", "/manager/shutdown"), false);
   assert.equal(managerReadOnlyRequestAllowed("PUT"), false);
   assert.equal(managerReadOnlyRequestAllowed("PATCH"), false);
   assert.equal(managerReadOnlyRequestAllowed("DELETE"), false);

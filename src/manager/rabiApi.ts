@@ -9,12 +9,19 @@ import { routeFolderPath } from "../shared/routePaths.js";
 import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
 import type { RabiGlobalConfigStore, RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
+import {
+  discoverManagerLanEndpoints,
+  verifyManagerDiscoveryEndpoint,
+  type DiscoveredManagerEndpoint
+} from "./managerLanDiscoveryConsumer.js";
 
 export type RabiApiContext = {
   rootDir: string;
   routeRoot: string;
   managerPort: number;
   managerHost: string;
+  applicationGenerationId: string;
+  managerInstanceId: string;
   version: () => string;
   globalConfig: RabiGlobalConfigStore;
   runtimes: () => Iterable<GatewayRuntime>;
@@ -39,6 +46,8 @@ type RabiInstance = {
   version?: string;
   addresses?: string[];
   self?: boolean;
+  applicationGenerationId: string;
+  managerInstanceId: string;
 };
 
 export function publicRabiLinkRelayConfig(config: RabiLinkRelayGlobalConfig): Record<string, unknown> {
@@ -127,6 +136,8 @@ function identityPayload(ctx: RabiApiContext, request: http.IncomingMessage): { 
       port,
       baseUrl: `http://${publicHost}:${port}`,
       version: ctx.version(),
+      applicationGenerationId: ctx.applicationGenerationId,
+      managerInstanceId: ctx.managerInstanceId,
       addresses: localIpv4Addresses(),
       managerHost: ctx.managerHost,
       rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay),
@@ -507,65 +518,21 @@ function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: Agent
   return { code: 0, data: { route: updated } };
 }
 
-function parsePorts(value: string | null, fallback: number): number[] {
-  const ports = (value || "")
-    .split(",")
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isInteger(item) && item > 0 && item <= 65535);
-  return [...new Set([fallback, 8790, ...ports])];
-}
-
-function candidateHosts(): string[] {
-  const hosts = new Set<string>(["127.0.0.1", ...localIpv4Addresses()]);
-  for (const address of localIpv4Addresses()) {
-    const parts = address.split(".").map(Number);
-    if (parts.length !== 4) continue;
-    for (let i = 1; i <= 254; i += 1) {
-      hosts.add(`${parts[0]}.${parts[1]}.${parts[2]}.${i}`);
-    }
-  }
-  return [...hosts];
-}
-
-async function fetchJson(url: string, timeoutMs: number): Promise<Record<string, any> | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) return null;
-    return await response.json() as Record<string, any>;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function discoverInstances(ctx: RabiApiContext, request: http.IncomingMessage, requestUrl: URL): Promise<RabiInstance[]> {
+  if (requestUrl.searchParams.has("ports")) {
+    throw Object.assign(new Error("The ports discovery query is retired; Manager discovery uses DNS-SD and generation fencing."), { statusCode: 400 });
+  }
   const timeoutMs = Math.max(120, Math.min(3000, Number(requestUrl.searchParams.get("timeoutMs") || 450)));
-  const ports = parsePorts(requestUrl.searchParams.get("ports"), ctx.managerPort);
-  const targets = candidateHosts().flatMap((host) => ports.map((port) => ({ host, port, baseUrl: `http://${host}:${port}` })));
   const found = new Map<string, RabiInstance>();
   const self = identityPayload(ctx, request).data;
   found.set(self.guid, self);
-  const workers = targets.map(async (target) => {
-    const body = await fetchJson(`${target.baseUrl}/api/rabi/identity`, timeoutMs);
-    const data = body?.data;
-    if (!data?.guid) return;
-    found.set(String(data.guid), {
-      guid: String(data.guid),
-      name: String(data.name || data.computerName || "RabiRoute"),
-      computerName: String(data.computerName || ""),
-      deviceType: String(data.deviceType || "RabiRoute Manager"),
-      host: target.host,
-      port: target.port,
-      baseUrl: target.baseUrl,
-      version: data.version ? String(data.version) : undefined,
-      addresses: Array.isArray(data.addresses) ? data.addresses.map(String) : undefined,
-      self: String(data.guid) === self.guid
+  const discovery = await discoverManagerLanEndpoints({ timeoutMs });
+  for (const endpoint of discovery.endpoints) {
+    found.set(endpoint.guid, {
+      ...endpoint,
+      self: endpoint.guid === self.guid
     });
-  });
-  await Promise.allSettled(workers);
+  }
   return [...found.values()].sort((left, right) => Number(Boolean(right.self)) - Number(Boolean(left.self)) || left.name.localeCompare(right.name));
 }
 
@@ -576,11 +543,22 @@ async function findInstance(ctx: RabiApiContext, request: http.IncomingMessage, 
 }
 
 async function proxyJson(instance: RabiInstance, path: string, init: RequestInit, timeoutMs = 3000): Promise<{ status: number; body: unknown }> {
+  if (!instance.self) {
+    await verifyManagerDiscoveryEndpoint(instance as DiscoveredManagerEndpoint, { timeoutMs });
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${instance.baseUrl}${path}`, { ...init, signal: controller.signal });
-    const text = await response.text();
+    const headers = new Headers(init.headers);
+    headers.set("x-rabiroute-expected-application-generation-id", instance.applicationGenerationId);
+    headers.set("x-rabiroute-expected-manager-instance-id", instance.managerInstanceId);
+    const response = await fetch(`${instance.baseUrl}${path}`, { ...init, headers, redirect: "error", signal: controller.signal });
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    const maxResponseBytes = 4 * 1024 * 1024;
+    if (declaredLength > maxResponseBytes) throw Object.assign(new Error("Remote Manager response exceeds the bounded proxy size."), { statusCode: 502 });
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    if (responseBytes.byteLength > maxResponseBytes) throw Object.assign(new Error("Remote Manager response exceeds the bounded proxy size."), { statusCode: 502 });
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(responseBytes);
     let body: unknown = {};
     try {
       body = text ? JSON.parse(text) : {};
@@ -733,6 +711,17 @@ async function localMessageProcessingCleanup(
 
 export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse, ctx: RabiApiContext): boolean {
   const pathname = requestUrl.pathname;
+  const expectedGeneration = String(request.headers["x-rabiroute-expected-application-generation-id"] || "").trim();
+  const expectedManager = String(request.headers["x-rabiroute-expected-manager-instance-id"] || "").trim();
+  if (Boolean(expectedGeneration) !== Boolean(expectedManager)) {
+    jsonResponse(response, 400, { code: -1, message: "Manager lifecycle fencing requires both generation and instance headers." });
+    return true;
+  }
+  if ((expectedGeneration && expectedGeneration !== ctx.applicationGenerationId)
+    || (expectedManager && expectedManager !== ctx.managerInstanceId)) {
+    jsonResponse(response, 409, { code: -1, message: "The requested Manager generation is no longer active." });
+    return true;
+  }
 
   if (request.method === "GET" && pathname === "/api/rabi/identity") {
     jsonResponse(response, 200, identityPayload(ctx, request));
@@ -776,7 +765,7 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
   if (request.method === "GET" && pathname === "/api/rabi/instances") {
     void discoverInstances(ctx, request, requestUrl)
       .then((items) => jsonResponse(response, 200, { code: 0, data: { instances: items } }))
-      .catch((error) => jsonResponse(response, 500, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => jsonResponse(response, apiErrorStatus(error), { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;
   }
 

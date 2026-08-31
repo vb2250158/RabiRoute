@@ -82,28 +82,64 @@ for (const file of await filesRecursively("src/plugin-kernel")) {
 
 const builtinRoot = path.join(root, "plugins", "builtin");
 const packageDirectories = (await fs.readdir(builtinRoot, { withFileTypes: true })).filter(entry => entry.isDirectory());
+const profilePath = path.join(root, "plugins", "profiles", "desktop.json");
+const profile = JSON.parse(await fs.readFile(profilePath, "utf8"));
+const selectedBuiltins = new Map((profile.instances ?? []).map(instance => [instance.package, instance]));
 const allowedManifestFields = new Set(["schemaVersion", "id", "version", "entries", "provides", "requires", "optional", "permissions", "configSchema", "stateSchemaVersion"]);
 for (const packageEntry of packageDirectories) {
-  const versionRoot = path.join(builtinRoot, packageEntry.name, "1.0.0");
+  const selected = selectedBuiltins.get(packageEntry.name);
+  if (!selected || typeof selected.version !== "string") {
+    violations.push(`${packageEntry.name} has no selected desktop profile version`);
+    continue;
+  }
+  const versionRoot = path.join(builtinRoot, packageEntry.name, selected.version);
   const manifestPath = path.join(versionRoot, "rabi.plugin.json");
-  const managerPath = path.join(versionRoot, "manager.mjs");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  if (manifest.schemaVersion !== 2) violations.push(`${relative(manifestPath)} must use plugin manifest schema 2`);
   const unknownFields = Object.keys(manifest).filter(field => !allowedManifestFields.has(field));
   if (unknownFields.length) violations.push(`${relative(manifestPath)} contains removed manifest fields: ${unknownFields.join(", ")}`);
   if (manifest.id !== packageEntry.name) violations.push(`${relative(manifestPath)} package identity mismatch`);
-  if (!manifest.entries?.manager) violations.push(`${relative(manifestPath)} has no Manager entry`);
-  const managerSource = await fs.readFile(managerPath, "utf8");
-  const imports = [...managerSource.matchAll(/from\s+["']([^"']+)["']/g)].map(match => match[1]);
-  if (imports.some(specifier => specifier !== "@rabiroute/plugin-sdk")) violations.push(`${relative(managerPath)} imports outside the shared SDK`);
-  if (!managerSource.includes("definePlugin(")) violations.push(`${relative(managerPath)} does not use definePlugin`);
-  if (!managerSource.includes("context.effects.add(")) violations.push(`${relative(managerPath)} has no releasable effect scope`);
+  const managerEntry = manifest.entries?.manager;
+  if (!managerEntry || !["in_process", "isolated", "declarative"].includes(managerEntry.execution)) {
+    violations.push(`${relative(manifestPath)} has no valid Manager entry`);
+  }
+  for (const [host, entry] of Object.entries(manifest.entries ?? {})) {
+    if (!entry || typeof entry !== "object" || !["in_process", "isolated", "declarative"].includes(entry.execution)) {
+      violations.push(`${relative(manifestPath)} has an invalid ${host} execution entry`);
+      continue;
+    }
+    const allowedEntryFields = entry.execution === "declarative"
+      ? new Set(["execution", "resource"])
+      : new Set(["execution", "module"]);
+    const invalidEntryFields = Object.keys(entry).filter(field => !allowedEntryFields.has(field));
+    if (invalidEntryFields.length) violations.push(`${relative(manifestPath)} has forbidden ${host} entry fields: ${invalidEntryFields.join(", ")}`);
+  }
+  if (managerEntry?.execution !== "declarative" && typeof managerEntry?.module === "string") {
+    const managerPath = path.join(versionRoot, managerEntry.module);
+    const managerSource = await fs.readFile(managerPath, "utf8");
+    const imports = [...managerSource.matchAll(/from\s+["']([^"']+)["']/g)].map(match => match[1]);
+    if (imports.some(specifier => specifier !== "@rabiroute/plugin-sdk")) violations.push(`${relative(managerPath)} imports outside the shared SDK`);
+    if (!managerSource.includes("definePlugin(")) violations.push(`${relative(managerPath)} does not use definePlugin`);
+    if (!managerSource.includes("context.effects.add(")) violations.push(`${relative(managerPath)} has no releasable effect scope`);
+  }
 }
 
-const profilePath = path.join(root, "plugins", "profiles", "desktop.json");
-const profile = JSON.parse(await fs.readFile(profilePath, "utf8"));
-if (Object.keys(profile).some(field => !["schemaVersion", "instances"].includes(field))) violations.push("desktop profile contains unsupported top-level fields");
+if (Object.keys(profile).some(field => !["schemaVersion", "readyRequires", "instances"].includes(field))) violations.push("desktop profile contains unsupported top-level fields");
+if (profile.schemaVersion !== 2) violations.push("desktop profile must use schema 2");
+if (!Array.isArray(profile.readyRequires) || !profile.readyRequires.includes("manager.core@1")) violations.push("desktop profile must declare manager.core@1 readiness");
 if (!Array.isArray(profile.instances) || profile.instances.length !== packageDirectories.length) violations.push("desktop profile must select every built-in package exactly once");
 if (new Set(profile.instances?.map(instance => instance.package)).size !== profile.instances?.length) violations.push("desktop profile contains duplicate packages");
+
+const packageLoaderSource = await fs.readFile(path.join(root, "src", "plugin-kernel", "packageLoader.ts"), "utf8");
+if (/\bimport\s*\(\s*pathToFileURL\s*\(entryPath\)/.test(packageLoaderSource)) {
+  violations.push("packageLoader imports plugin code before execution policy selection");
+}
+for (const target of [
+  "src/plugin-runtime-host/main.ts",
+  "src/plugin-runtime-host/executor.ts",
+  "src/plugin-runtime-host/protocol.ts",
+  "src/runtime/processLeaseRegistry.ts"
+]) if (!await exists(target)) violations.push(`Plugin lifecycle runtime is missing: ${target}`);
 
 for (const file of await filesRecursively("src")) {
   if (!/[.]ts$/.test(file) || file.endsWith(".test.ts")) continue;

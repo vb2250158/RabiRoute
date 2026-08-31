@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { discoverManagerBaseUrl } from "./lib/discover-manager-url.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_TEXT = "这是一条由文本转语音模型生成的系统测试音频，用来验证语音转写、声纹提取和事件记录链路。";
@@ -9,7 +10,7 @@ const DEFAULT_TEXT = "这是一条由文本转语音模型生成的系统测试�
 function parseArgs(argv) {
   const options = {
     speechUrl: "http://127.0.0.1:8781",
-    managerUrl: "http://127.0.0.1:8790",
+    managerUrl: "",
     ttsModel: "auto",
     asrModel: "auto",
     voice: "",
@@ -417,7 +418,7 @@ export async function runRabiSpeechTtsLoopAcceptance(options = {}, dependencies 
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
   const speechUrl = loopbackBaseUrl(options.speechUrl || "http://127.0.0.1:8781", "RabiSpeech URL");
   const skipManager = Boolean(options.skipManager);
-  const managerUrl = skipManager ? "" : loopbackBaseUrl(options.managerUrl || "http://127.0.0.1:8790", "Manager URL");
+  const managerUrl = skipManager ? "" : loopbackBaseUrl(options.managerUrl || discoverManagerBaseUrl(), "Manager URL");
   const timeoutMs = Math.max(1_000, Number(options.timeoutMs || 180_000));
   const sessionId = `tts-loop-${timestamp(now)}`;
   const outputPath = path.resolve(options.outputPath || defaultOutputPath(now));
@@ -637,7 +638,7 @@ function helpText() {
   return [
     "Usage: node scripts/test-rabispeech-tts-loop.mjs [options]",
     "  --speech <loopback-url>     RabiSpeech URL (default http://127.0.0.1:8781)",
-    "  --manager <loopback-url>    Manager URL (default http://127.0.0.1:8790)",
+    "  --manager <loopback-url>    Manager URL (default: current RabiRoute Host generation)",
     "  --tts-model <id|auto>       Discovered TTS model; auto prefers an available local model",
     "  --asr-model <id|auto>       Discovered ASR model; auto prefers an available local model",
     "  --voice <voice-or-role>     Optional voice/persona selector; omitted from evidence",

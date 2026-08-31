@@ -18,12 +18,29 @@ cmd /c "cd /d <repo> && npm run build"
 cmd /c "cd /d <repo> && npm run webgui:build"
 ```
 
-重启 Manager：
+重启安装版应用代并读取新的动态 Manager 地址：
 ```powershell
-$p = (netstat -ano | Select-String ":8790.*LISTENING") -replace '.*\s(\d+)$','$1' | Select-Object -First 1
-if ($p) { Stop-Process -Id ([int]$p.Trim()) -Force; Start-Sleep 1 }
-Start-Process "node" -ArgumentList "dist/manager.js" -WorkingDirectory "<repo>" -WindowStyle Hidden
+$hostExe = if ($env:RABIROUTE_HOST_EXE) { $env:RABIROUTE_HOST_EXE } else { Join-Path $env:LOCALAPPDATA "Programs\RabiRoute\RabiRouteHost.exe" }
+$before = & $hostExe --command status --json | ConvertFrom-Json
+if (-not $before.applicationGenerationId) { throw "RabiRoute Host 没有发布完整 READY 身份。" }
+& $hostExe --command restart --application-generation-id $before.applicationGenerationId --json
+$current = $null
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+  $candidate = & $hostExe --command status --json | ConvertFrom-Json
+  if ($candidate.ok -eq $true -and $candidate.state -eq "healthy" -and $candidate.applicationGenerationId -and $candidate.managerInstanceId -and $candidate.managerBaseUrl) {
+    $current = $candidate
+    break
+  }
+  Start-Sleep -Milliseconds 500
+}
+if (-not $current) { throw "RabiRoute Host 没有在期限内发布新的完整 READY 身份。" }
+$meta = Invoke-RestMethod "$($current.managerBaseUrl)/meta"
+if ($meta.applicationGenerationId -ne $current.applicationGenerationId -or $meta.managerInstanceId -ne $current.managerInstanceId) {
+  throw "Host READY 与 Manager /meta 身份不一致。"
+}
 ```
+
+源码开发服务器不扫描端口。先运行 `npm run start:manager`，把本次标准输出中的动态地址写入 `RABIROUTE_MANAGER_URL`，再运行 `npm run webgui:dev`；Windows 已安装 Host 在线时，开发服务器也可以直接读取 Host `status --json`。地址缺失、Host 未就绪或 READY 身份不完整时，开发服务器显式失败。不得按端口查找或结束其他进程，也不得直接启动独立 Manager/托盘替代 Host 应用代。
 
 ---
 

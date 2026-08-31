@@ -5,67 +5,55 @@ import path from "node:path";
 import test from "node:test";
 import {
   acquireManagerInstanceLock,
-  ManagerInstanceAlreadyRunningError
+  ManagerInstanceAlreadyRunningError,
+  managerInstanceLeaseAddress
 } from "./managerInstanceLock.js";
 
-test("Manager instance lock rejects a second live owner and releases cleanly", () => {
+test("Manager OS lease rejects a second owner across different metadata roots and releases cleanly", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-lock-"));
+  const otherRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-lock-other-"));
+  const ownershipNamespace = `test-${process.pid}-${Date.now()}-cross-root`;
   try {
-    const first = acquireManagerInstanceLock({
-      rootDir,
-      pid: 101,
-      ownerId: "first",
-      isProcessAlive: (pid) => pid === 101
-    });
-
-    assert.throws(
-      () => acquireManagerInstanceLock({
-        rootDir,
-        pid: 202,
-        ownerId: "second",
-        isProcessAlive: (pid) => pid === 101
-      }),
-      (error) => error instanceof ManagerInstanceAlreadyRunningError
+    const first = await acquireManagerInstanceLock({ rootDir, ownershipNamespace, pid: 101, ownerId: "first" });
+    await assert.rejects(
+      acquireManagerInstanceLock({ rootDir: otherRootDir, ownershipNamespace, pid: 202, ownerId: "second" }),
+      (error: unknown) => error instanceof ManagerInstanceAlreadyRunningError
         && error.owner.pid === 101
         && error.owner.ownerId === "first"
     );
+    await first.release();
+    const second = await acquireManagerInstanceLock({ rootDir: otherRootDir, ownershipNamespace, pid: 202, ownerId: "second" });
+    await second.release();
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+    fs.rmSync(otherRootDir, { recursive: true, force: true });
+  }
+});
 
-    first.release();
-    const second = acquireManagerInstanceLock({
+test("stale diagnostic metadata cannot block an OS-released Manager lease", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-lock-stale-"));
+  try {
+    const runtimeDir = path.join(rootDir, "data", ".runtime");
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, "manager-instance.lock"), `${JSON.stringify({
+      pid: process.pid,
+      ownerId: "stale-reused-pid",
+      startedAt: "2000-01-01T00:00:00.000Z",
+      projectRoot: rootDir
+    })}\n`);
+    const current = await acquireManagerInstanceLock({
       rootDir,
-      pid: 202,
-      ownerId: "second",
-      isProcessAlive: () => false
+      ownershipNamespace: `test-${process.pid}-${Date.now()}-stale`,
+      ownerId: "current"
     });
-    second.release();
+    assert.equal(JSON.parse(fs.readFileSync(current.lockPath, "utf8")).ownerId, "current");
+    await current.release();
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
 });
 
-test("Manager instance lock reclaims a stale owner without letting stale cleanup remove the new lock", () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-lock-stale-"));
-  try {
-    const stale = acquireManagerInstanceLock({
-      rootDir,
-      pid: 303,
-      ownerId: "stale",
-      isProcessAlive: () => false
-    });
-    const current = acquireManagerInstanceLock({
-      rootDir,
-      pid: 404,
-      ownerId: "current",
-      isProcessAlive: () => false
-    });
-
-    stale.release();
-    assert.equal(fs.existsSync(current.lockPath), true);
-    assert.equal(JSON.parse(fs.readFileSync(current.lockPath, "utf8")).ownerId, "current");
-
-    current.release();
-    assert.equal(fs.existsSync(current.lockPath), false);
-  } finally {
-    fs.rmSync(rootDir, { recursive: true, force: true });
-  }
+test("Manager lease identity is stable for one ownership namespace and independent of metadata roots", () => {
+  assert.equal(managerInstanceLeaseAddress("user-a"), managerInstanceLeaseAddress("user-a"));
+  assert.notEqual(managerInstanceLeaseAddress("user-a"), managerInstanceLeaseAddress("user-b"));
 });

@@ -460,7 +460,6 @@ function remoteAgentDeviceMeta(device) {
 
 const WEBGUI_TOOL_PATHS = {
   reload: "/reload",
-  managerShutdown: "/manager/shutdown",
   openConfigFile: "/open-config-file",
   napcatAdd: "/api/message/napcat-add",
   napcatLaunch: "/api/message/napcat-launch",
@@ -685,7 +684,6 @@ export default {
     astrbotProjectId: "",
     astrbotSessionId: "",
     networkSummary: "未读取网络选项",
-    managerActionSummary: "未执行 Manager 操作",
     agentScanSummary: "未扫描 Agent",
     messageScanSummary: "未扫描消息端",
     napcatHealthSummary: "未检查 NapCat",
@@ -2738,15 +2736,6 @@ export default {
     return this.runWebguiTool("重载 WebGUI", WEBGUI_TOOL_PATHS.reload, {}, { reload: true });
   },
 
-  shutdownManager() {
-    this.confirmDangerousTool(
-      "关闭 Manager",
-      "确认关闭当前 PC Rabi Manager？之后需要在 PC 或服务端重新启动。",
-      "关闭",
-      () => this.runWebguiTool("关闭 Manager", WEBGUI_TOOL_PATHS.managerShutdown)
-    );
-  },
-
   selectedGatewayWebguiId() {
     const gateway = this.selectedGatewayConfig();
     return String(gateway?.id || gateway?.configName || gateway?.name || "").trim();
@@ -2799,17 +2788,6 @@ export default {
       this.setData({ runtimeActionSummary });
       this.appendLog(`${runtimeActionSummary}：${this.data.selectedGatewayLabel}`);
       this.say(runtimeActionSummary);
-      await this.loadWebguiConfigData();
-    });
-  },
-
-  async startManager() {
-    await this.runAction("启动 Manager", async () => {
-      await postMobileWebgui(this.config(), "/manager/start", {}, this.data.targetDeviceId);
-      const managerActionSummary = "Manager 启动命令已发送";
-      this.setData({ managerActionSummary });
-      this.appendLog(managerActionSummary);
-      this.say(managerActionSummary);
       await this.loadWebguiConfigData();
     });
   },
@@ -4759,7 +4737,6 @@ export default {
     if (parsed.command === VOICE_COMMANDS.CONFIGURE_NAPCAT) return this.configureNapcatOnebot();
     if (parsed.command === VOICE_COMMANDS.REPAIR_NAPCAT) return this.repairAllNapcatIssues();
     if (parsed.command === VOICE_COMMANDS.CHECK_ASTRBOT) return this.testAstrbotLogin();
-    if (parsed.command === VOICE_COMMANDS.START_MANAGER) return this.startManager();
     if (parsed.command === VOICE_COMMANDS.START_ROUTE) return this.startGateway();
     if (parsed.command === VOICE_COMMANDS.STOP_ROUTE) return this.stopGateway();
     if (parsed.command === VOICE_COMMANDS.RESTART_ROUTE) return this.restartGateway();

@@ -18,6 +18,10 @@
 
 ## 安装和构建
 
+Windows 安装包直接从开始菜单运行 RabiRoute Host。Host 创建同一代 Manager 与托盘，并把操作系统分配的 Manager URL 交给托盘；从托盘打开 RibiWebGUI 即可。重复启动只激活现有 Host。
+
+从源码运行后端：
+
 Windows PowerShell：
 
 ```powershell
@@ -36,15 +40,14 @@ npm run build
 npm run start:manager
 ```
 
-打开：
+Manager 会在标准输出打印真实地址，例如：
 
 ```text
-http://127.0.0.1:8790/
+RabiRoute manager listening at <managerBaseUrl>
 ```
 
-默认端口：
+使用这次输出的 `<managerBaseUrl>`，不要把某次端口保存成永久默认。其他集成常用端口仍按各自配置管理：
 
-- RabiRoute 管理器：`http://127.0.0.1:8790`
 - NapCat 反向 WebSocket：`ws://127.0.0.1:8789`
 - NapCat HTTP API：`http://127.0.0.1:3000`
 
@@ -121,8 +124,8 @@ npm run check:config
 
 ## 验证链路
 
-1. 启动 manager：`npm run start:manager`。
-2. 打开 RibiWebGUI，确认 gateway 为运行中。
+1. 安装版启动 Host；源码模式运行 `npm run start:manager` 并记录标准输出中的 `<managerBaseUrl>`。
+2. 从托盘或 `<managerBaseUrl>` 打开 RibiWebGUI，确认 gateway 为运行中。
 3. 在 NapCat 侧确认 WebSocket 已连到 `127.0.0.1:8789`。
 4. 在 QQ 群里 @ 机器人，或发一条私聊。
 5. 查看 `data/route/<配置名>/` 下是否出现消息记录和投递记录。

@@ -77,7 +77,7 @@ OneBot HTTP 可访问不代表 QQ 核心一定能发送。检查登录状态、q
 
 `GET /api/scan/message-adapters` 是纯只读诊断：不会启动 Route/NapCat、不会补写配置、不会触发扫码或自动修复。所有独立探针并行起跑并受共享截止时间约束；响应中的 `scan.partial=true` 表示至少一个探针超时或失败，其他已完成结果仍然可信。
 
-状态按入口和实例分别解释。`QQ 可用` 以 OneBot 健康为准，不能用 WebUI 可打开替代；个人微信未登录只影响个人微信。Watchdog 中单一消息端的错误汇总为 `degraded`，只有 Manager、Route 或 Agent 投递等系统级错误才把整轮巡检标为 `error`。
+状态按入口和实例分别解释。`QQ 可用` 以 OneBot 健康为准，不能用 WebUI 可打开替代；个人微信未登录只影响个人微信。业务健康巡检把单一消息端错误汇总为 `degraded`，只有 Manager、Route 或 Agent 投递等系统级错误才把整轮巡检标为 `error`。它只报告业务状态，不拥有应用生命周期。
 
 Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自动重试队列；修复登录后需要明确重试，避免重复发送。
 
@@ -95,21 +95,25 @@ Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自�
 
 ## RabiRoute Desktop 界面未显示
 
-从 `Start-RabiRoute-Desktop.bat` 或打包版 RabiRoute Desktop 启动的完整桌面运行态，会在 `data/runtime/desktop-lifecycle-intent.json` 记录 `running`，并启动工作区唯一的 `watch-rabiroute-desktop-lifecycle.ps1`。监督器只检查本项目本机后端 `/meta` 和桌面界面进程；`/meta` 连续两次失败后，即使旧 Manager 进程仍存在，也会通过原启动器的端口 owner、PID 和单实例门禁恢复完整运行态。界面遇到本机后端暂时离线时会保留入口并继续重连。
+Windows 安装版只由 `RabiRouteHost.exe` 创建 Manager 与 Desktop。先重新运行 `Start-RabiRoute-Desktop.bat`；它只激活现有 Host 或启动一个新 Host，不会直接拉起托盘。
 
-先重新运行一次 `Start-RabiRoute-Desktop.bat -NoOpen`。然后检查 `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`：正常记录应同时满足 `desiredState=running`、`managerConnected=true`、`desktopShellCount>0`。`managerFailureCount` 是连续 `/meta` 失败次数，`managerProbeError` 是最近一次探测错误。`desiredState=stopped` 表示上次由用户明确退出，应手动重新启动；文件缺失或损坏时监督器也会失败关闭，不会自行猜测。不要用半小时业务健康巡检替代这个轻量监督器，也不要单独循环拉起桌面界面。
+查询同一代的真实状态：
 
-RabiRoute Desktop 菜单的 `退出 RabiRoute` 会先把意图写成 `stopped` 再关闭本机后端和桌面界面，因此监督器不会反向复活。普通 Manager 构建重载、安装升级和 `SIGTERM` 不修改桌面意图；如果桌面仍标记 `running`，监督器会在重载后恢复完整运行态。
+```powershell
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json
+```
+
+`state=running` 时应同时包含 `applicationGenerationId`、`managerInstanceId`、`managerBaseUrl` 和 Manager PID。再打开 `managerBaseUrl/meta`，核对 generation、instance 和 URL。Host 只有在 Manager READY 身份全部匹配后才启动 Desktop；Desktop 再次发现身份不匹配时会退出，由 Host 重建完整 generation。
+
+若 Host 已熔断或仍未出现 Desktop，检查 `%LOCALAPPDATA%\RabiRoute\diagnostics\host\host-YYYYMMDD.log` 和最新 Desktop 证据包。不要单独运行 `main.py`、扫描端口、循环拉起托盘，或恢复退役生命周期入口。
 
 页面切换后如果内容在 12 秒内没有加载出来，RibiWebGUI 会显示“页面加载失败”。点击“重试当前页面”会重新打开相同路径和访问参数。旧页面资源失效时，界面会先自动刷新一次；仍失败再手动重试。
 
-## 8790 被旧 Manager 占用
+## Manager 地址变化或端口已占用
 
-如果启动器提示 `8790` 已监听，但 `/meta` 没有稳定响应，常见原因是同一项目的旧 Manager 仍占着端口。远程页面反复断线重连、Relay 或 SSE 异常不应该成为本地启动依赖；当前实现会让 Manager 先提供本机/局域网 WebGUI，再异步热连 Relay。
+RabiRoute 不依赖固定 Manager 端口。Manager 每一代都向操作系统申请可用端口，因此其他软件占用某个端口不会阻止启动，也不需要终止未知端口 owner。
 
-重新运行 `Start-RabiRoute-Desktop.bat`。启动器会核对端口 owner 的命令行，只对精确指向本项目 `dist/manager.js` 的旧实例执行有界接管：先请求优雅关闭，超时后才终止已核实的进程树。未知进程不会被停止。如果当前 `dist` 比健康运行实例更新，启动器也会重载当前构建。
-
-Manager 自身还会在加载控制面前取得工作区级实例锁。若第二条启动链返回退出码 `17`，说明已有同工作区 Manager 持有有效锁；不要反复拉起。先用 `/meta` 和端口 owner 确认现有实例，只有锁中 PID 已不存在时，下一次启动才会安全回收陈旧锁。
+重启后旧书签、旧命令行或旧浏览器标签可能仍指向上一代 URL。用 Host `status --json` 取得本代 `managerBaseUrl`，或直接从托盘重新打开 WebGUI；不要从旧端口是否响应推断当前实例。Host 会用 application generation、Manager instance 和 PID 绑定 READY，而不是靠端口占用判断 owner。
 
 恢复后分别验证：本机或局域网 `/meta` 可用；Relay 状态可在稍后恢复为在线；远程 `/api/events` 与 `/api/speech/events` 可重连；媒体 `Range` 请求仍返回 `206`。Relay 暂时离线时，本机和局域网仍应可用，不需要反复重启 Manager。
 
@@ -122,7 +126,7 @@ Manager 自身还会在加载控制面前取得工作区级实例锁。若第二
 适合重启的情况：
 
 - 刚完成新构建。
-- 外部端口或连接配置变化。
+- 外部连接配置变化，或调用者需要重新读取动态 Manager URL。
 - Route 子进程退出。
 - 日志证明运行的是旧产物。
 

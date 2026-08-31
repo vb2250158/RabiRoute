@@ -6,7 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import { defaultPerformanceMonitoringConfig, type PerformanceSample } from "../shared/performanceContract.js";
 import { PersonaSyncService } from "../personaSync.js";
-import { createRecentMemory } from "../roleKnowledge.js";
+import { appendPlanFeedback, createPlanFeedbackRecord } from "../planFeedback.js";
+import { createPlan, createRecentMemory } from "../roleKnowledge.js";
 import { ManagerReadWorkerError, ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
 import { PerformanceStore } from "./performanceStore.js";
 
@@ -60,6 +61,37 @@ function voiceArchiveFixture(archiveCount = 8, entriesPerArchive = 500): string 
   return roleDir;
 }
 
+function planFeedbackRecoveryFixture(unrelatedPlanDirectories = 500): string {
+  const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-recovery-worker-"));
+  const roleId = "Planner";
+  const roleDir = path.join(rolesRoot, roleId);
+  const plan = createPlan(roleDir, {
+    id: "worker-recovery-plan",
+    title: "Worker recovery plan",
+    focus: "Keep UNC recovery outside the Manager event loop",
+    status: "进行中",
+    currentStepId: "recover",
+    steps: [{ id: "recover", title: "Recover", status: "进行中" }],
+    keywords: ["worker", "recovery"]
+  });
+  appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+    id: "worker-recovery-feedback",
+    roleId,
+    planId: plan.id,
+    planTitle: plan.title,
+    kind: "guidance",
+    author: "user",
+    source: "webgui",
+    text: "Resume this feedback after Manager recovery",
+    notifyAgent: true
+  }));
+  const activeDirectory = path.join(roleDir, "plans", "active");
+  for (let index = 0; index < unrelatedPlanDirectories; index += 1) {
+    fs.mkdirSync(path.join(activeDirectory, `unrelated-${index}`), { recursive: true });
+  }
+  return rolesRoot;
+}
+
 test("manager read workers keep the main event loop responsive during archive queries", async () => {
   const roleDir = voiceArchiveFixture();
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });
@@ -75,6 +107,25 @@ test("manager read workers keep the main event loop responsive during archive qu
     assert.ok(ticks >= 5, `expected the Manager event loop to keep ticking, got ${ticks}`);
   } finally {
     clearInterval(timer);
+  }
+});
+
+test("plan feedback recovery stays ledger-first inside a bounded read worker", async () => {
+  const rolesRoot = planFeedbackRecoveryFixture();
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 0, timeoutMs: 30_000 });
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 2);
+  try {
+    const candidates = await pool.queryPlanFeedbackRecoveryCandidates(rolesRoot);
+    assert.deepEqual(candidates.map(candidate => candidate.feedback.id), ["worker-recovery-feedback"]);
+    assert.equal(candidates[0]?.plan.id, "worker-recovery-plan");
+    assert.ok(ticks >= 1, `expected the Manager event loop to remain responsive, got ${ticks} ticks`);
+    assert.equal(pool.status().maxConcurrency, 1);
+    assert.equal(pool.status().maxQueue, 0);
+  } finally {
+    clearInterval(timer);
+    await pool.stop();
+    fs.rmSync(rolesRoot, { recursive: true, force: true });
   }
 });
 

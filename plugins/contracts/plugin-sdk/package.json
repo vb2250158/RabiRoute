@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "types": "./index.d.ts",
   "exports": {
     ".": {
       "types": "./index.d.ts",
-      "import": "./index.mjs"
+      "import": "./index.mjs",
+      "default": "./index.mjs"
     }
   },
   "files": ["index.mjs", "index.d.ts", "README.md", "README_en.md"]

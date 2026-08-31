@@ -16,6 +16,10 @@ English | <a href="./getting-started.md">简体中文</a>
 
 ## Install and start
 
+The Windows installer launches RabiRoute Host from the Start menu. Host creates same-generation Manager and tray children and passes the operating-system-assigned Manager URL to the tray; open RibiWebGUI from the tray. Repeated launch activates the existing Host.
+
+To run the backend from source:
+
 Windows PowerShell:
 
 ```powershell
@@ -34,15 +38,14 @@ npm run build
 npm run start:manager
 ```
 
-Open:
+Manager prints its actual address to stdout, for example:
 
 ```text
-http://127.0.0.1:8790/
+RabiRoute manager listening at <managerBaseUrl>
 ```
 
-Common defaults:
+Use that run's `<managerBaseUrl>` instead of preserving one port as a permanent default. Other integrations retain their own configured endpoints:
 
-- Manager/WebGUI: `http://127.0.0.1:8790`
 - NapCat reverse WebSocket: `ws://127.0.0.1:8789`
 - NapCat OneBot HTTP: `http://127.0.0.1:3000`
 
@@ -114,8 +117,8 @@ Use real line breaks in WebUI text areas. Let JSON serialization escape them onc
 
 ## Verify the path
 
-1. Start the Manager.
-2. Confirm the route is running in RibiWebGUI.
+1. Start Host in the Windows package, or run `npm run start:manager` in source mode and record stdout `<managerBaseUrl>`.
+2. Open RibiWebGUI from the tray or `<managerBaseUrl>` and confirm the route is running.
 3. Confirm NapCat is connected to port 8789.
 4. Mention the bot in a QQ group, send a private message, or run a heartbeat/manual trigger.
 5. Inspect `data/route/<configName>/` for message and `agent-packets.jsonl` records.

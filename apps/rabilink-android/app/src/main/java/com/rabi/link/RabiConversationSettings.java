@@ -8,6 +8,10 @@ public final class RabiConversationSettings {
     private static final String PREFS = "rabi_conversation_settings";
     private static final String KEY_INPUT_MODE = "inputMode";
     private static final String KEY_PROACTIVITY_PREFERENCE = "proactivityPreference";
+    private static final String KEY_AUTO_START_VOICE_SERVICE = "autoStartVoiceService";
+    private static final String KEY_AUDIO_RETENTION_HOURS = "audioRetentionHours";
+    private static final String KEY_AUDIO_MAX_STORAGE_MB = "audioMaxStorageMb";
+    private static final String KEY_AUDIO_RESERVE_FREE_MB = "audioReserveFreeMb";
 
     public enum InputMode {
         PAUSED,
@@ -46,27 +50,51 @@ public final class RabiConversationSettings {
 
     public final InputMode inputMode;
     public final ProactivityPreference proactivityPreference;
+    public final boolean autoStartVoiceService;
     public final boolean continuousListening;
     public final boolean glassesEnabled;
     public final boolean autoPlayAgentVoice;
     public final String ttsModel;
     public final String ttsVoice;
+    public final int audioRetentionHours;
+    public final int audioMaxStorageMb;
+    public final int audioReserveFreeMb;
 
     public RabiConversationSettings(
             InputMode inputMode,
             ProactivityPreference proactivityPreference,
+            boolean autoStartVoiceService,
             boolean autoPlayAgentVoice,
             String ttsModel,
             String ttsVoice
     ) {
+        this(inputMode, proactivityPreference, autoStartVoiceService, autoPlayAgentVoice,
+                ttsModel, ttsVoice, 6, 8192, 1024);
+    }
+
+    public RabiConversationSettings(
+            InputMode inputMode,
+            ProactivityPreference proactivityPreference,
+            boolean autoStartVoiceService,
+            boolean autoPlayAgentVoice,
+            String ttsModel,
+            String ttsVoice,
+            int audioRetentionHours,
+            int audioMaxStorageMb,
+            int audioReserveFreeMb
+    ) {
         this.inputMode = inputMode == null ? InputMode.PHONE : inputMode;
         this.proactivityPreference = proactivityPreference == null
                 ? ProactivityPreference.AGENT_DECIDES : proactivityPreference;
-        this.continuousListening = this.inputMode != InputMode.PAUSED;
+        this.autoStartVoiceService = autoStartVoiceService;
+        this.continuousListening = autoStartVoiceService && this.inputMode != InputMode.PAUSED;
         this.glassesEnabled = this.inputMode == InputMode.GLASSES;
         this.autoPlayAgentVoice = autoPlayAgentVoice;
         this.ttsModel = clean(ttsModel, "local-tts/gpt-sovits");
         this.ttsVoice = clean(ttsVoice, "Rabi");
+        this.audioRetentionHours = clamp(audioRetentionHours, 0, 168);
+        this.audioMaxStorageMb = clamp(audioMaxStorageMb, 1024, 65536);
+        this.audioReserveFreeMb = clamp(audioReserveFreeMb, 256, 16384);
     }
 
     public static RabiConversationSettings load(Context context) {
@@ -74,12 +102,20 @@ public final class RabiConversationSettings {
         InputMode legacyMode = !values.getBoolean("continuousListening", true)
                 ? InputMode.PAUSED
                 : values.getBoolean("glassesEnabled", false) ? InputMode.GLASSES : InputMode.PHONE;
+        InputMode inputMode = InputMode.fromPersisted(values.getString(KEY_INPUT_MODE, ""), legacyMode);
+        boolean autoStartVoiceService = values.contains(KEY_AUTO_START_VOICE_SERVICE)
+                ? values.getBoolean(KEY_AUTO_START_VOICE_SERVICE, true)
+                : inputMode != InputMode.PAUSED;
         return new RabiConversationSettings(
-                InputMode.fromPersisted(values.getString(KEY_INPUT_MODE, ""), legacyMode),
+                inputMode,
                 ProactivityPreference.fromPersisted(values.getString(KEY_PROACTIVITY_PREFERENCE, "agent_decides")),
+                autoStartVoiceService,
                 values.getBoolean("autoPlayAgentVoice", true),
                 values.getString("ttsModel", "local-tts/gpt-sovits"),
-                values.getString("ttsVoice", "Rabi")
+                values.getString("ttsVoice", "Rabi"),
+                values.getInt(KEY_AUDIO_RETENTION_HOURS, 6),
+                values.getInt(KEY_AUDIO_MAX_STORAGE_MB, 8192),
+                values.getInt(KEY_AUDIO_RESERVE_FREE_MB, 1024)
         );
     }
 
@@ -87,9 +123,13 @@ public final class RabiConversationSettings {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString(KEY_INPUT_MODE, inputMode.name())
                 .putString(KEY_PROACTIVITY_PREFERENCE, proactivityPreference.wireValue)
+                .putBoolean(KEY_AUTO_START_VOICE_SERVICE, autoStartVoiceService)
                 .putBoolean("autoPlayAgentVoice", autoPlayAgentVoice)
                 .putString("ttsModel", ttsModel)
                 .putString("ttsVoice", ttsVoice)
+                .putInt(KEY_AUDIO_RETENTION_HOURS, audioRetentionHours)
+                .putInt(KEY_AUDIO_MAX_STORAGE_MB, audioMaxStorageMb)
+                .putInt(KEY_AUDIO_RESERVE_FREE_MB, audioReserveFreeMb)
                 .remove("asrModel")
                 .remove("asrLanguage")
                 .remove("vadThreshold")
@@ -102,5 +142,9 @@ public final class RabiConversationSettings {
     private static String clean(String value, String fallback) {
         String result = value == null ? "" : value.trim();
         return result.isEmpty() ? fallback : result;
+    }
+
+    static int clamp(int value, int minimum, int maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
     }
 }

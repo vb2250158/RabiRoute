@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   commitDesktopPetPackDirectory,
+  copyDesktopPetPackDirectory,
   desktopPetImportStagingRoot,
   importDesktopPetPack,
   retryTransientFileOperation,
@@ -99,6 +100,21 @@ test("desktop pet imports stage locally when the persona directory is on UNC sto
     desktopPetImportStagingRoot(path.join(localTemp, "roles", "YeYu"), localTemp),
     path.join(localTemp, "roles", "YeYu", "desktop-pet", ".imports"),
   );
+});
+
+test("desktop pet cache copy preserves a runnable source pack", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-pet-cache-copy-"));
+  const source = path.join(root, "source");
+  const destination = path.join(root, "runtime", "pack");
+  fs.mkdirSync(path.join(source, "frames", "drag"), { recursive: true });
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(path.join(source, "frames", "drag", "drag_0001.png"), "png");
+  fs.writeFileSync(path.join(source, "pet-pack.json"), "{}", "utf8");
+
+  copyDesktopPetPackDirectory(source, destination);
+
+  assert.equal(fs.readFileSync(path.join(destination, "frames", "drag", "drag_0001.png"), "utf8"), "png");
+  assert.equal(fs.readFileSync(path.join(destination, "pet-pack.json"), "utf8"), "{}");
 });
 
 test("desktop pet NAS file operations retry bounded transient handle exhaustion", () => {

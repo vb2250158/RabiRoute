@@ -17,13 +17,13 @@ This tutorial uses Scheduled trigger plus Codex for the shortest complete loop. 
 - You know the project directory used by the target task.
 - The target task is accessible and has not been deleted.
 
-If the Manager is not running, start it from the repository:
+In the Windows package, start RabiRoute Host and open WebGUI from the tray. In source mode, start Manager from the repository:
 
 ```powershell
 npm run start:manager
 ```
 
-Then open `http://127.0.0.1:8790/`.
+Then open the `<managerBaseUrl>` printed by Manager. The operating system assigns this address; no fixed port is used.
 
 ## Step 1: open Quick setup
 
@@ -90,7 +90,7 @@ All four checks should pass:
 
 | Symptom | Check first |
 | --- | --- |
-| Manager disconnected | The Manager process and `127.0.0.1:8790` |
+| Manager disconnected | Host `status --json` generation/instance/URL in the package, or this run's stdout URL in source mode |
 | Enabled Route is stopped | Start/Restart and recent logs in Log Diagnostics |
 | No triggerable rule | A `heartbeat` or `manual_trigger` rule in Persona |
 | Codex is unbound | Workspace, task selection, and rescan results |

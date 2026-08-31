@@ -588,7 +588,6 @@ assert(
 
 for (const path of [
   "/reload",
-  "/manager/shutdown",
   "/open-config-file",
   "/api/message/napcat-add",
   "/api/message/napcat-launch",
@@ -629,10 +628,8 @@ assert(
   relayServer.includes("\\/gateways\\/[^/]+\\/") && relayServer.includes("manual-trigger") && relayServer.includes("delete"),
   "Relay mobile WebGUI whitelist must allow route runtime actions."
 );
-assert(
-  pageInk.includes("startManager") && relayServer.includes('pathname === "/manager/start"'),
-  "AIUI and Relay must expose PC WebGUI manager start."
-);
+assert(!pageInk.includes("startManager") && !pageInk.includes("shutdownManager"), "AIUI must not own the PC application lifecycle.");
+assert(!relayServer.includes('pathname === "/manager/start"') && !relayServer.includes('pathname === "/manager/shutdown"'), "Relay must not proxy PC application lifecycle commands.");
 assert(
   pageInk.includes("configureNapcatOnebot") && pageInk.includes('"/api/message/napcat-configure-onebot"'),
   "AIUI page must expose PC WebGUI NapCat OneBot configuration."

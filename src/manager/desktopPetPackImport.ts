@@ -49,7 +49,7 @@ function removeDirectoryBestEffort(directory: string): void {
 
 type RenameDirectory = (source: fs.PathLike, destination: fs.PathLike) => void;
 
-function copyDirectoryWithManifestLast(source: string, destination: string): void {
+export function copyDesktopPetPackDirectory(source: string, destination: string): void {
   retryTransientFileOperation(() => fs.mkdirSync(destination, { recursive: false }));
   const copyEntries = (from: string, to: string, root: boolean): void => {
     const entries = retryTransientFileOperation(() => fs.readdirSync(from, { withFileTypes: true }));
@@ -81,7 +81,7 @@ export function commitDesktopPetPackDirectory(
   renameDirectory: RenameDirectory = fs.renameSync,
 ): void {
   if (source.startsWith("\\\\")) {
-    copyDirectoryWithManifestLast(source, destination);
+    copyDesktopPetPackDirectory(source, destination);
     return;
   }
   try {
@@ -89,7 +89,7 @@ export function commitDesktopPetPackDirectory(
   } catch (error) {
     const code = fileSystemErrorCode(error);
     if (!new Set(["EACCES", "EPERM", "EXDEV"]).has(code)) throw error;
-    copyDirectoryWithManifestLast(source, destination);
+    copyDesktopPetPackDirectory(source, destination);
   }
 }
 

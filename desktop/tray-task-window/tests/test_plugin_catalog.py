@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from urllib.error import URLError
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -25,7 +25,6 @@ from rabiroute_tray.plugin_catalog import (
     DesktopPluginStatusCard,
     create_builtin_desktop_extension_registry,
     empty_desktop_plugin_catalog,
-    load_trusted_desktop_extensions,
     parse_desktop_plugin_catalog,
 )
 from rabiroute_tray.tray_app import (
@@ -33,7 +32,6 @@ from rabiroute_tray.tray_app import (
     _desktop_plugin_theme,
     _rebuild_plugin_menu,
     _start_desktop_plugin_catalog,
-    _sync_recovery_webgui_action,
 )
 
 DESKTOP_OWNER = {"plugin_id": "io.rabiroute.manager.desktop", "instance_id": "manager:desktop"}
@@ -200,7 +198,11 @@ def _builtin_payload(revision: int = 1) -> dict:
 
 class _CatalogManagerClient(ManagerClient):
     def __init__(self, responses: list[object]) -> None:
-        super().__init__()
+        super().__init__(
+            "http://127.0.0.1:8790",
+            application_generation_id="app-generation",
+            manager_instance_id="manager-instance",
+        )
         self.responses = list(responses)
         self.paths: list[str] = []
 
@@ -214,7 +216,11 @@ class _CatalogManagerClient(ManagerClient):
 
 class _SurfaceManagerClient(ManagerClient):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(
+            "http://127.0.0.1:8790",
+            application_generation_id="app-generation",
+            manager_instance_id="manager-instance",
+        )
         self.paths: list[str] = []
         self.catalog_payload = _payload(
             contributions=[
@@ -787,51 +793,6 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         self.assertEqual(catalog.status_cards, ())
         self.assertEqual(catalog.settings_sections, ())
 
-    def test_trusted_extension_entry_points_are_explicit_and_loaded_before_freeze(self) -> None:
-        registry = create_builtin_desktop_extension_registry(freeze=False)
-        entry_point = MagicMock()
-        entry_point.name = "trusted-example"
-        entry_point.load.return_value = lambda target: target.register_command_handler(
-            "trusted.entry-command",
-            lambda _context: None,
-            **TRUSTED_OWNER,
-        )
-
-        with patch(
-            "rabiroute_tray.plugin_catalog.metadata.entry_points",
-            return_value=[entry_point],
-        ) as entry_points:
-            self.assertEqual(load_trusted_desktop_extensions(registry, ()), ())
-            entry_points.assert_not_called()
-            self.assertEqual(
-                load_trusted_desktop_extensions(registry, ("trusted-example", "trusted-example")),
-                ("trusted-example",),
-            )
-
-        self.assertTrue(registry.has_command_handler("trusted.entry-command", **TRUSTED_OWNER))
-        registry.freeze()
-        with self.assertRaises(RuntimeError):
-            load_trusted_desktop_extensions(registry, ("trusted-example",))
-
-    def test_duplicate_trusted_extension_entry_point_fails_closed(self) -> None:
-        registry = create_builtin_desktop_extension_registry(freeze=False)
-        first = MagicMock()
-        first.name = "duplicate-extension"
-        second = MagicMock()
-        second.name = "duplicate-extension"
-        with patch(
-            "rabiroute_tray.plugin_catalog.metadata.entry_points",
-            return_value=[first, second],
-        ):
-            with self.assertRaises(LookupError):
-                load_trusted_desktop_extensions(registry, ("duplicate-extension",))
-        first.load.assert_not_called()
-        second.load.assert_not_called()
-    def test_missing_trusted_extension_entry_point_fails_closed(self) -> None:
-        registry = create_builtin_desktop_extension_registry(freeze=False)
-        with patch("rabiroute_tray.plugin_catalog.metadata.entry_points", return_value=[]):
-            with self.assertRaises(LookupError):
-                load_trusted_desktop_extensions(registry, ("missing-extension",))
     def test_rejects_unknown_or_cross_instance_hotkey_contracts(self) -> None:
         catalog = parse_desktop_plugin_catalog(
             _payload(
@@ -917,7 +878,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         self.assertEqual(_desktop_plugin_hotkeys(catalog, registry), ())
         self.assertIsNone(_desktop_plugin_theme(catalog, "dark", registry))
 
-    def test_plugin_menu_keeps_fixed_recovery_entries_and_executes_whitelist(self) -> None:
+    def test_plugin_menu_keeps_fixed_webgui_entry_without_a_duplicate_plugin_action(self) -> None:
         root = QMenu()
         webgui = root.addAction("打开 RabiRoute WebGUI")
         refresh = root.addAction("刷新")
@@ -930,29 +891,24 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, executed.append, create_builtin_desktop_extension_registry())
 
         self.assertEqual(root.actions(), [webgui, plugin_menu.menuAction(), refresh, separator, quit_action])
-        self.assertEqual([action.text() for action in plugin_menu.actions()], ["打开 WebGUI", "打开设置"])
+        self.assertEqual([action.text() for action in plugin_menu.actions()], ["打开设置"])
         plugin_menu.actions()[0].trigger()
-        plugin_menu.actions()[1].trigger()
-        self.assertEqual(executed, ["desktop.open-webgui", "desktop.open-settings"])
+        self.assertEqual(executed, ["desktop.open-settings"])
 
-    def test_fixed_webgui_action_is_only_present_while_catalog_is_unavailable(self) -> None:
+    def test_fixed_webgui_action_remains_present_for_available_and_unavailable_catalogs(self) -> None:
         root = QMenu()
-        recovery = root.addAction("打开 RabiRoute WebGUI")
+        webgui = root.addAction("打开 RabiRoute WebGUI")
         refresh = root.addAction("刷新")
+        plugin_menu = QMenu("插件", root)
+        registry = create_builtin_desktop_extension_registry()
 
-        _sync_recovery_webgui_action(root, recovery, refresh, empty_desktop_plugin_catalog())
-        self.assertIn(recovery, root.actions())
+        _rebuild_plugin_menu(root, plugin_menu, refresh, empty_desktop_plugin_catalog(), lambda _handler: None, registry)
+        self.assertEqual(root.actions(), [webgui, refresh])
 
-        _sync_recovery_webgui_action(
-            root,
-            recovery,
-            refresh,
-            DesktopPluginCatalog(2, 1, 1, (), available=True),
-        )
-        self.assertNotIn(recovery, root.actions())
-
-        _sync_recovery_webgui_action(root, recovery, refresh, empty_desktop_plugin_catalog())
-        self.assertEqual(root.actions(), [recovery, refresh])
+        catalog = parse_desktop_plugin_catalog(_builtin_payload())
+        _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, lambda _handler: None, registry)
+        self.assertEqual(root.actions(), [webgui, plugin_menu.menuAction(), refresh])
+        self.assertIn(webgui, root.actions())
 
     def test_catalog_failure_removes_cached_plugin_menu(self) -> None:
         client = _CatalogManagerClient([_builtin_payload(4), URLError("offline")])
@@ -965,7 +921,6 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         _rebuild_plugin_menu(root, plugin_menu, refresh, client.desktop_plugin_catalog(), lambda _handler: None, create_builtin_desktop_extension_registry())
         self.assertIn(plugin_menu.menuAction(), root.actions())
         failed_catalog = client.desktop_plugin_catalog()
-        _sync_recovery_webgui_action(root, webgui, refresh, failed_catalog)
         _rebuild_plugin_menu(root, plugin_menu, refresh, failed_catalog, lambda _handler: None, create_builtin_desktop_extension_registry())
 
         self.assertEqual(root.actions(), [webgui, refresh, quit_action])
@@ -1052,14 +1007,12 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         assert old_catalog is not None
         applied: list[DesktopPluginCatalog] = []
 
-        _sync_recovery_webgui_action(root, recovery, refresh, old_catalog)
         _rebuild_plugin_menu(root, plugin_menu, refresh, old_catalog, lambda _handler: None, registry)
         self.assertIn(plugin_menu.menuAction(), root.actions())
-        self.assertNotIn(recovery, root.actions())
+        self.assertIn(recovery, root.actions())
 
         def completed(_task, catalog: DesktopPluginCatalog) -> None:
             applied.append(catalog)
-            _sync_recovery_webgui_action(root, recovery, refresh, catalog)
             _rebuild_plugin_menu(root, plugin_menu, refresh, catalog, lambda _handler: None, registry)
 
         _start_desktop_plugin_catalog(

@@ -8,13 +8,13 @@
 
 ## 当前实施状态
 
-- 正式发行 Profile 为 `plugins/profiles/desktop.json`，包含 28 个独立 Manager 插件包。
+- 正式发行 Profile 为 `plugins/profiles/desktop.json`，包含 29 个独立 Manager 插件包。
 - 7 个插件独立提供 Web Bundle：`core`、`desktop`、`diagnostics`、`message-adapter-control`、`performance`、`persona` 和 `speech`。
-- 内置插件和树外插件共用 `@rabiroute/plugin-sdk`、严格 Manifest、能力图、权限检查、revision 隔离、generation 切换和 effect scope。
-- Manager、Catalog、Web module 和 Profile 只读取新插件平台。旧 Bundle、Loader、Profile/Patch、Reconciler、Catalog、进程插件宿主和迁移入口已删除。
+- 内置插件和树外插件共用 schema/profile v2、`@rabiroute/plugin-sdk`、严格 Manifest、能力图、权限检查、revision 隔离、generation 切换和 effect scope。
+- Manager、Catalog、Web module 和 Profile 只读取新插件平台。退役的 Bundle、Profile/Patch、多入口 loader、无约束进程宿主和迁移入口已删除；当前 `isolated` 模式只通过受限 Plugin Runtime Host 与 Process Lease Registry 执行。
 - WebGUI 宿主不保存业务页面 ID；页面、导航、命令和状态卡全部来自插件 contribution。
 - 插件构建先写入临时目录，再替换各版本目录；`packages` 和 `profiles` 监听根目录保持不变，旧包会在同一次构建中删除。
-- Gateway 等宿主持有的长生命周期资源使用 generation 交接租约。新 generation 取得租约后，旧 generation 才释放；只有最后一个租约释放时才停止资源。
+- Gateway 等长生命周期资源使用 generation 交接租约；插件子进程使用包含 application/Manager/activation/instance/revision 身份的 process lease。替换时先释放消费者、再释放 provider，只有最后一个租约释放时才停止共享资源。
 
 ## 与 DSH/Cordis 的取舍
 
@@ -185,18 +185,18 @@ plugin-package/
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "io.rabiroute.agent.codex",
   "version": "1.0.0",
   "entries": {
-    "manager": "./manager.mjs",
-    "web": "./web.mjs"
+    "manager": { "execution": "isolated", "module": "./manager.mjs" },
+    "web": { "execution": "in_process", "module": "./web.mjs" }
   },
   "provides": ["agent.adapter.codex@1"],
   "requires": ["agent.tasks.query@1", "agent.delivery@1"],
   "optional": ["ui.notifications@1"],
   "permissions": ["desktop.ipc.codex", "storage.namespace:agent-codex"],
-  "configSchema": "./config.schema.json",
+  "configSchema": { "type": "object", "additionalProperties": false },
   "stateSchemaVersion": 1
 }
 ```
@@ -314,19 +314,18 @@ UI、Desktop 和消息端不能复制这些规则或直接写对应文件。
 - Manager entry：控制面和业务编排；
 - Gateway entry：消息输入和常驻连接；
 - Web entry：页面、组件和命令；
-- Desktop entry：桌面生命周期和本机交互；
-- isolated entry：通过版本化 RPC 在独立进程运行。
+- Desktop entry：声明式桌面表现与本机交互合同，不拥有应用生命周期；
+- `isolated` execution：通过版本化 RPC 在独立进程运行，入口顶层代码不进入 Manager loader。
 
 entry 通过公开 API、事件或持久事实协作，不共享可变内存。Web 和 Desktop 不导入 Manager 实现。
 
 ## 信任与权限
 
-| 类型 | 来源 | 执行方式 |
+| execution | 适用范围 | 执行方式 |
 |---|---|---|
-| `builtin` | 官方发行包 | 进程内，完整合同测试 |
-| `trusted` | 用户明确安装和授权 | 进程内，权限受限 |
-| `isolated` | 未知代码或高风险依赖 | 独立进程，RPC 和资源限额 |
-| `declarative` | 清单和表现数据 | 不执行代码 |
+| `in_process` | 随 Manager 发布并完成完整合同测试的可信核心 | Manager 进程内，由 SDK lifecycle/effect 收束 |
+| `isolated` | 树外代码或高风险依赖 | 独立 Runtime Host、受限 RPC、资源 policy 与 process lease |
+| `declarative` | Desktop/Web 清单和表现数据 | 不执行插件代码 |
 
 安装记录来源、版本、哈希、权限和启用 Profile。新增权限需要重新授权。已安装不等于可以访问全部宿主能力。
 
@@ -339,7 +338,7 @@ sequenceDiagram
     participant R as Atomic Registries
     participant O as Old Generation
 
-    L->>N: 导入、校验、解析依赖
+    L->>N: 校验清单、按 execution 准备、解析依赖
     N->>N: 准备私有资源和注册快照
     N->>N: readiness / invariant 检查
     alt 准备失败
@@ -349,7 +348,8 @@ sequenceDiagram
         N->>R: 原子发布 service、route 和 contribution 快照
         R->>O: 停止接收新工作
         O->>O: 排空已接受工作
-        O->>O: dispose 全部 effect
+        O->>O: 中止 lifecycle.signal
+        O->>O: 消费者先于 provider 释放 effect 与 process lease
     end
 ```
 
@@ -359,6 +359,7 @@ sequenceDiagram
 - service、route 和 contribution 使用不可变快照一次切换；
 - 旧 generation 不再接收新工作，只完成已接受工作；
 - 准备失败时旧 generation 完全不变；
+- Profile 的 `readyRequires` 未满足时，候选不能发布，Manager 也不能向 Host 报 ready；
 - invariant 失败必须在新 generation 接收业务流量前恢复旧快照；
 - 处理过真实流量后的失败使用正常故障恢复，不伪造外部副作用回滚；
 - 投递和外发使用持久幂等记录完成重试和恢复。
@@ -433,9 +434,9 @@ Git 保存历史，仓库不建立源码归档副本。
 
 ## 2026-08-27 最终门禁
 
-- TypeScript noEmit、Vue 类型检查和 28 个内置包架构门禁通过。
+- 该次 2026-08-27 验收的 TypeScript noEmit、Vue 类型检查和当时 28 个内置包架构门禁通过；当前发行清单为 29 个包。
 - `npm test`：1401 通过，1 跳过，0 失败。
-- `npm run build`：生成 28 个独立 Manager 包和 7 个独立 Web Bundle。
+- 该次 `npm run build` 生成当时的 28 个独立 Manager 包和 7 个独立 Web Bundle；当前构建生成 29 个 Manager 包。
 - `npm run check:built-manager`：通过，并生成本机只读验收记录。
 - 运行时代码与配置中的旧运行时标识为 0；`dist/` 为 0；当前事实文档为 0。架构检查脚本只保留 5 个已删除路径名称，用于阻止旧文件重新出现。
 - `git diff --check` 通过。

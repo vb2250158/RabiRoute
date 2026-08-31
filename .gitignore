@@ -82,3 +82,5 @@ assets/reference-cache/
 /plugin-adapters/xiaoai-rabiroute/**/target/
 /plugin-adapters/xiaoai-rabiroute/**/migpt/open-xiaoai.node
 /plugin-adapters/xiaoai-rabiroute/xiaoai-local.config.json
+/desktop/windows-host/**/bin/
+/desktop/windows-host/**/obj/

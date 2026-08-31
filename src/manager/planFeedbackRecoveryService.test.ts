@@ -138,7 +138,7 @@ test("scan errors publish one error and retry after the configured delay", async
   await service.stop();
 });
 
-test("queue keeps only the first pending timer", async () => {
+test("queue keeps the earliest pending timer", async () => {
   const reasons: string[] = [];
   const service = new PlanFeedbackRecoveryService({
     retryDelayMs: 10,
@@ -154,10 +154,10 @@ test("queue keeps only the first pending timer", async () => {
 
   await service.start("manager startup");
   assert.equal(service.queue("first timer", 10), true);
-  assert.equal(service.queue("duplicate timer", 0), false);
+  assert.equal(service.queue("earlier timer", 0), true);
   await waitUntil(() => reasons.length === 2);
 
-  assert.deepEqual(reasons, ["manager startup", "first timer"]);
+  assert.deepEqual(reasons, ["manager startup", "earlier timer"]);
   await service.stop();
 });
 
@@ -203,7 +203,7 @@ test("sweeps never overlap when a queued timer fires during recovery", async () 
   await service.stop();
 });
 
-test("stop clears timers, waits for the active sweep, and suppresses stale publication and retry", async () => {
+test("stop aborts the active sweep, clears timers, and suppresses stale publication and retry", async () => {
   const item = candidate("Planner", "plan-4", "feedback-4");
   const summaries: PlanFeedbackRecoverySweepSummary[] = [];
   let recoveryStarted = false;
@@ -232,15 +232,9 @@ test("stop clears timers, waits for the active sweep, and suppresses stale publi
   await waitUntil(() => recoveryStarted);
   assert.equal(service.queue("stale timer", 10), true);
 
-  let stopped = false;
-  const stopping = service.stop().then(() => {
-    stopped = true;
-  });
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(stopped, false);
-
-  releaseRecovery();
+  const stopping = service.stop();
   await Promise.all([sweep, stopping]);
+  releaseRecovery();
   await new Promise(resolve => setTimeout(resolve, 25));
 
   assert.deepEqual(summaries, []);
@@ -276,8 +270,10 @@ test("allowRetry releases a scheduled recovery key", async () => {
 test("failed schedule releases the recovery key for a later sweep", async () => {
   const item = candidate("Planner", "plan-failure", "feedback-failure");
   let recoverCalls = 0;
+  let now = 0;
   const service = new PlanFeedbackRecoveryService({
     retryDelayMs: 10,
+    now: () => now,
     listCandidates: () => [item],
     recoverCandidate: async (_candidate, controls) => {
       recoverCalls += 1;
@@ -291,7 +287,119 @@ test("failed schedule releases the recovery key for a later sweep", async () => 
   });
 
   await service.start("first");
+  now += 10;
   await service.start("second");
   assert.equal(recoverCalls, 2);
+  await service.stop();
+});
+
+test("stop aborts a recovery attempt that never settles", async () => {
+  const item = candidate("Planner", "plan-hung", "feedback-hung");
+  let started = false;
+  let observedSignal: AbortSignal | undefined;
+  const service = new PlanFeedbackRecoveryService({
+    attemptTimeoutMs: 60_000,
+    listCandidates: () => [item],
+    recoverCandidate: async (_candidate, controls) => {
+      started = true;
+      observedSignal = controls.signal;
+      await new Promise(() => {});
+      return delivered();
+    },
+    onSummary: () => {},
+    onError: () => {}
+  });
+
+  service.start("hung").catch(() => {});
+  await waitUntil(() => started);
+  await service.stop().then(
+    () => undefined,
+    error => assert.fail(`stop escaped: ${String(error)}`)
+  );
+  assert.equal(observedSignal?.aborted, true);
+});
+
+test("stop does not wait forever for a candidate scan that never settles", async () => {
+  let scanStarted = false;
+  const service = new PlanFeedbackRecoveryService({
+    listCandidates: async () => {
+      scanStarted = true;
+      await new Promise(() => {});
+      return [];
+    },
+    recoverCandidate: async () => delivered(),
+    onSummary: () => {},
+    onError: () => {}
+  });
+
+  service.start("hung scan").catch(() => {});
+  await waitUntil(() => scanStarted);
+  await service.stop();
+});
+
+test("repeated scan failure backs off exponentially and emits one incident", async () => {
+  const errors: number[] = [];
+  const incidents: string[] = [];
+  let scans = 0;
+  const service = new PlanFeedbackRecoveryService({
+    retryDelayMs: 5,
+    maximumRetryDelayMs: 20,
+    incidentThreshold: 3,
+    listCandidates: () => {
+      scans += 1;
+      if (scans <= 3) throw new Error("NAS unavailable");
+      return [];
+    },
+    recoverCandidate: async () => delivered(),
+    onSummary: () => {},
+    onError: event => { errors.push(event.circuit.snapshot.consecutiveFailures); },
+    onIncident: event => { incidents.push(event.circuit.snapshot.incidentId || ""); }
+  });
+
+  await service.start("startup");
+  await waitUntil(() => scans === 4, 500);
+  assert.deepEqual(errors, [1, 3]);
+  assert.equal(incidents.length, 1);
+  assert.ok(incidents[0]);
+  await service.stop();
+});
+
+test("an authoritative empty scan retires vanished candidate circuits", async () => {
+  const item = candidate("Planner", "plan-retired", "feedback-retired");
+  let scans = 0;
+  const service = new PlanFeedbackRecoveryService({
+    retryDelayMs: 1,
+    maximumRetryDelayMs: 1,
+    incidentThreshold: 2,
+    listCandidates: () => (++scans <= 2 ? [item] : []),
+    recoverCandidate: async () => ({ state: "failed", error: new Error("Desktop unavailable") }),
+    onSummary: () => {},
+    onError: () => {},
+    onIncident: () => {}
+  });
+
+  await service.start("startup");
+  await waitUntil(() => scans >= 3);
+  assert.deepEqual(service.failureSummary(), { backoff: 0, incidents: 0 });
+  await service.stop();
+});
+
+test("a deferred recovery key does not run again inside its backoff window", async () => {
+  const item = candidate("Planner", "plan-backoff", "feedback-backoff");
+  let recoverCalls = 0;
+  const service = new PlanFeedbackRecoveryService({
+    retryDelayMs: 50,
+    listCandidates: () => [item],
+    recoverCandidate: async () => {
+      recoverCalls += 1;
+      return { state: "deferred", reason: "Desktop busy" };
+    },
+    onSummary: () => {},
+    onError: () => {}
+  });
+
+  await service.start("first");
+  await service.start("manual sweep inside backoff");
+  assert.equal(recoverCalls, 1);
   await service.stop();
 });

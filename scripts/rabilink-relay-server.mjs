@@ -82,6 +82,9 @@ const speechProxyPaths = new Map([
   ["GET /health", "/health"],
   ["GET /v1/models", "/v1/models"],
   ["GET /v1/capabilities", "/v1/capabilities"],
+  ["GET /v1/audio-streams", "/v1/audio-streams"],
+  ["GET /v1/microphone/status", "/v1/microphone/status"],
+  ["GET /v1/records", "/v1/records"],
   ["POST /v1/audio/speech", "/v1/audio/speech"],
   ["POST /v1/audio/transcriptions", "/v1/audio/transcriptions"],
   ["POST /v1/audio-streams/rabilink/start", "/v1/audio-streams/rabilink/start"],
@@ -5281,8 +5284,6 @@ function mobileWebguiPathAllowed(method, rawPath) {
   if (upperMethod === "POST") {
     return pathname === "/gateways"
       || pathname === "/manager-config"
-      || pathname === "/manager/start"
-      || pathname === "/manager/shutdown"
       || pathname === "/reload"
       || pathname === "/open-config-file"
       || /^\/gateways\/[^/]+\/(?:start|stop|restart|delete|manual-trigger)$/.test(pathname)

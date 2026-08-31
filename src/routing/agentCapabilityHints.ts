@@ -7,7 +7,15 @@ const PERSONA_SYNC_INTENT_PATTERN = /(?:人格|角色).{0,8}(?:同步|跨机|多
 const VOICE_IDENTITY_INTENT_PATTERN = /声纹|谁(?:在)?说的|说话人|哪些.{0,8}(?:是我|用户).{0,8}说|(?:用户|我).{0,8}说的.{0,8}(?:别人|其他人)|(?:别人|其他人).{0,8}说的|区分.{0,12}(?:用户|我|别人|其他人).{0,8}说|(?:一天|全天).{0,8}录音|voiceprint|speaker[\s_-]*identity/i;
 
 function managerBaseUrl(context: AgentCapabilityHintContext): string {
-  return `http://127.0.0.1:${context.managerPort || "8790"}`;
+  const rawPort = String(context.managerPort || "").trim();
+  if (!/^[1-9]\d{0,4}$/.test(rawPort)) {
+    throw new Error("A valid current Manager port is required for Agent capability hints.");
+  }
+  const port = Number(rawPort);
+  if (port > 65535) {
+    throw new Error("A valid current Manager port is required for Agent capability hints.");
+  }
+  return `http://127.0.0.1:${port}`;
 }
 
 export function personaSyncCapabilityHint(

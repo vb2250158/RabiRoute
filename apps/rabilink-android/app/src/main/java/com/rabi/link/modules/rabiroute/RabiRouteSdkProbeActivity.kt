@@ -81,8 +81,7 @@ class RabiRouteSdkProbeActivity : Activity() {
         addHeader(content)
         dashboardView = addDashboard(content)
 
-        baseUrlInput = plainInput("RabiRoute Manager URL，默认 USB 反向端口")
-        baseUrlInput.setText("http://127.0.0.1:8790")
+        baseUrlInput = plainInput("RabiRoute Manager URL；先扫描或从电脑 Host 状态复制")
         callbackUrlInput = plainInput("RabiLink 回调 URL，默认 USB 反向端口")
         callbackUrlInput.setText("http://127.0.0.1:8794/rabilink")
         val managerSelectorPanel = managerSelectorPanel()
@@ -94,7 +93,7 @@ class RabiRouteSdkProbeActivity : Activity() {
             "01 局域网 RabiRoute 发现",
             "先扫描局域网里的 RabiRoute Manager；扫到后自动拿到电脑 IP。",
             "用途：这是整个手机测试页的前提。拿到 Manager IP 后，页面会自动推导 Manager URL 和 RabiLink 回调 URL。",
-            "前置：电脑端 Manager 允许局域网访问；手机和电脑在同一 Wi-Fi；Windows 防火墙放行 8790。",
+            "前置：电脑端 Manager 允许局域网访问；手机和电脑在同一 Wi-Fi；Windows 防火墙允许当前 Host 代际动态发布的 Manager 端口。",
             "证据：identity、guid、computer、version，以及自动生成的 http://电脑IP:8794/rabilink。",
             managerSelectorPanel,
             primaryButton("扫描并自动配置") { scanRabiRoutes() },
@@ -672,7 +671,7 @@ class RabiRouteSdkProbeActivity : Activity() {
                 }
                 if (instances.isEmpty()) {
                     appendLine("- 未发现 manager；这个页面的正确前提是先让 Manager 能被局域网访问。")
-                    appendLine("- 如果只开了 127.0.0.1:8790，手机局域网扫不到；USB 临时测试才用 adb reverse。")
+                    appendLine("- 如果 Manager 只监听 127.0.0.1，手机局域网扫不到；USB 临时测试才用 adb reverse。")
                 }
                 appendLine()
                 appendLine("按 RabiRoute IP 探测 RabiLink 回调端：")

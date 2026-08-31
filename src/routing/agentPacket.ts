@@ -759,9 +759,14 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
   return summaries;
 }
 
+function runtimeManagerBaseUrl(): string {
+  const value = process.env.GATEWAY_MANAGER_URL?.trim();
+  if (!value) throw new Error("GATEWAY_MANAGER_URL was not supplied by the owning RabiRoute Manager.");
+  return value.replace(/\/+$/, "");
+}
+
 function remoteAgentApiHint(values: ForwardTemplateValues): string[] {
-  const managerPort = process.env.GATEWAY_MANAGER_PORT ?? "8790";
-  const baseUrl = `http://127.0.0.1:${managerPort}`;
+  const baseUrl = runtimeManagerBaseUrl();
   const gatewayId = String(values.gatewayId || values.runtimeRouteId || "");
   const replyContext = String(values.replyContextJson || "{}");
   const defaultDeviceId = String(values.remoteAgentDefaultDeviceId || config.remoteAgentDefaultDeviceId || "").trim();
@@ -810,6 +815,7 @@ function eventTitleForRoute(routeKind: RouteDecision["routeKind"], record?: Rout
   if (routeKind === "wecom_message") return "企业微信群聊消息提醒";
   if (routeKind === "weixin_message") return "个人微信消息提醒";
   if (routeKind === "feishu_message") return "飞书群聊消息提醒";
+  if (routeKind === "xiaomi_home_event") return "米家设备事件";
   return "RabiRoute 消息提醒";
 }
 
@@ -942,7 +948,7 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
   const targetType = isGroup || isWeCom || isFeishu ? "group" : isHeartbeat ? "heartbeat" : isManualTrigger ? "manual_trigger" : isPlanFeedback || isRolePanel ? localTargetType : isVoiceTranscript ? decision.routeKind === "rabilink" ? "rabilink" : "voice_transcript" : "private";
   const pipeline = outputPipelineForDecision(decision);
   const sendApiPath = "/api/agent/send";
-  const sendApiUrl = `http://127.0.0.1:${process.env.GATEWAY_MANAGER_PORT ?? "8790"}${sendApiPath}`;
+  const sendApiUrl = `${runtimeManagerBaseUrl()}${sendApiPath}`;
   const personaDataDir = personaDataDirFor(roleContext);
   const dataDirPath = relativeWorkspacePath(personaDataDir);
   const roleDirPath = relativeWorkspacePath(roleContext.roleDir);
@@ -1162,7 +1168,7 @@ function buildAgentMessage(
     userTemplateText
   ].filter(Boolean).join("\n");
   const capabilityContext = {
-    managerPort: process.env.GATEWAY_MANAGER_PORT ?? "8790",
+    managerPort: new URL(runtimeManagerBaseUrl()).port,
     roleId: String(values.agentRoleId || "").trim()
   };
   const identityObservationUrl = capabilityContext.roleId

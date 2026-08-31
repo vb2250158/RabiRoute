@@ -31,9 +31,17 @@ export const activate = definePlugin({
             return () => { };
         runtime.planFeedbackDeliveryActive = true;
         const recovery = new runtime.PlanFeedbackRecoveryService({
-            listCandidates: () => runtime.managerReadWorkerPool.queryPlanFeedbackRecoveryCandidates(runtime.rolesRoot),
+            persistencePath: runtime.planFeedbackFailureStatePath,
+            onPersistenceError: error => {
+                runtime.managerOperationalLog.record("warn", "background_failure_state_persist_failed", {
+                    action: "plan-feedback-recovery",
+                    error: runtime.managerOperationalError(error, runtime.rootDir)
+                });
+            },
+            listCandidates: signal => runtime.managerReadWorkerPool.queryPlanFeedbackRecoveryCandidates(runtime.rolesRoot, { signal }),
             recoverCandidate: async (candidate, controls) => {
                 const outcome = await runtime.recoverPlanFeedbackCandidate(candidate, {
+                    signal: controls.signal,
                     inspect: runtime.inspectPlanFeedbackDelivery,
                     schedule: async (current) => {
                         await controls.scheduleOnce(() => runtime.scheduleAndWaitForPlanFeedbackDelivery(current.roleDir, current.roleId, String(current.feedback.gatewayId || "").trim(), current.plan, current.feedback));
@@ -58,9 +66,16 @@ export const activate = definePlugin({
                 runtime.managerOperationalLog.record("warn", "plan_feedback_recovery_failed", {
                     action: event.recoveryKey ? `${event.reason}:${event.recoveryKey}` : event.reason,
                     error: runtime.managerOperationalError(event.error, runtime.rootDir),
-                    result: event.stage === "scan" && event.error instanceof runtime.ManagerReadWorkerError
+                    result: `${event.stage === "scan" && event.error instanceof runtime.ManagerReadWorkerError
                         ? event.error.code
-                        : event.stage
+                        : event.stage}; phase=${event.circuit.snapshot.phase}; failures=${event.circuit.snapshot.consecutiveFailures}; signature=${event.circuit.snapshot.signature}; retryAt=${new Date(event.circuit.snapshot.retryAt).toISOString()}`
+                });
+            },
+            onIncident: event => {
+                runtime.managerOperationalLog.record("error", "plan_feedback_recovery_incident_opened", {
+                    action: event.recoveryKey ? `${event.reason}:${event.recoveryKey}` : event.reason,
+                    error: runtime.managerOperationalError(event.error, runtime.rootDir),
+                    result: `incidentId=${event.circuit.snapshot.incidentId}; stage=${event.stage}; signature=${event.circuit.snapshot.signature}; failures=${event.circuit.snapshot.consecutiveFailures}; retryAt=${new Date(event.circuit.snapshot.retryAt).toISOString()}`
                 });
             }
         });

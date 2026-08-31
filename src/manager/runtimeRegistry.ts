@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
+import type { GatewayEndpoint } from "../gatewayLifecycle.js";
 
 export type GatewayRuntime = {
   definition: GatewayDefinition;
@@ -13,6 +14,9 @@ export type GatewayRuntime = {
     signal: NodeJS.Signals | null;
     at: string;
   } | null;
+  readiness: "stopped" | "starting" | "ready" | "blocked" | "failed" | "stopping";
+  endpoints: readonly GatewayEndpoint[];
+  lastError: string | null;
   log: string[];
 };
 
@@ -53,6 +57,9 @@ export class RuntimeRegistry {
       stoppedAt: existing?.stoppedAt ?? null,
       agentStateGeneration: existing?.agentStateGeneration,
       lastExit: existing?.lastExit ?? null,
+      readiness: existing?.readiness ?? "stopped",
+      endpoints: existing?.endpoints ?? [],
+      lastError: existing?.lastError ?? null,
       log: existing?.log ?? []
     };
     this.runtimes.set(definition.id, runtime);

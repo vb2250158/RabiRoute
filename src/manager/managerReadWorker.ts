@@ -160,7 +160,7 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
       });
     }
     case "plan_feedback_recovery_candidates":
-      return listOpenPlanFeedbackRecoveryCandidates(task.rolesRoot);
+      return await listOpenPlanFeedbackRecoveryCandidates(task.rolesRoot);
     case "role_memory_catalog": {
       if (task.kind === "recent" || task.kind === "archived") {
         if (task.memoryId && !getRecentMemory(task.roleDir, task.memoryId)) return null;

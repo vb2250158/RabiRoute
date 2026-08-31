@@ -522,10 +522,14 @@ export function startDefaultRabiLinkConversationReviewer(): RabiLinkConversation
   if (defaultReviewer) return defaultReviewer;
   const variables = config.routeVariables;
   const autoReviewEnabled = optionalBoolean(variables.rabilinkAutoReview, true);
+  const gatewayManagerUrl = process.env.GATEWAY_MANAGER_URL?.trim() || process.env.RABIROUTE_MANAGER_URL?.trim();
+  if (!gatewayManagerUrl) {
+    throw new Error("GATEWAY_MANAGER_URL or RABIROUTE_MANAGER_URL is required for RabiLink conversation review.");
+  }
   defaultReviewer = new RabiLinkConversationReviewer({
     dataDir: config.memoryDataDir,
     routeProfileId: process.env.GATEWAY_ID?.trim() || config.routeProfiles[0]?.id || "rabilink",
-    gatewayManagerUrl: process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790",
+    gatewayManagerUrl,
     agentRolePath: config.agentRolePath,
     agentRoleId: config.agentRoleId,
     autoReviewEnabled,

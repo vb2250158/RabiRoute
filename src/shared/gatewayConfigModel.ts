@@ -112,7 +112,8 @@ export const RECENT_MESSAGE_ENDPOINTS: readonly RecentMessageEndpoint[] = [
   "webhook",
   "wecom",
   "weixin",
-  "feishu"
+  "feishu",
+  "xiaomiHome"
 ];
 export const DEFAULT_RECENT_MESSAGE_LIMIT = 12;
 export const MAX_RECENT_MESSAGE_LIMIT = 200;
@@ -575,6 +576,7 @@ function defaultRouteKindsForMessageAdapter(adapter: MessageEndpointType): strin
   if (adapter === "wecom") return ["wecom_message"];
   if (adapter === "weixin") return ["weixin_message"];
   if (adapter === "feishu") return ["feishu_message"];
+  if (adapter === "xiaomiHome") return ["xiaomi_home_event"];
   return [];
 }
 
@@ -590,6 +592,7 @@ function defaultRuleNameForMessageAdapter(adapter: MessageEndpointType): string 
   if (adapter === "wecom") return "企业微信默认消息";
   if (adapter === "weixin") return "个人微信默认消息";
   if (adapter === "feishu") return "飞书默认消息";
+  if (adapter === "xiaomiHome") return "米家设备事件";
   if (adapter === "webhook") return "Webhook 默认消息";
   return "默认消息";
 }
@@ -1074,33 +1077,31 @@ export function sanitizeInstanceId(value: unknown, fallback: string): string {
 
 export function normalizeNapCatInstances(definition: GatewayDefinition): NapCatInstanceDefinition[] {
   const source = Array.isArray(definition.napcatInstances) ? definition.napcatInstances : [];
+  // A Route owns exactly one NapCat endpoint. Older configurations may contain
+  // several entries; preserve the endpoint that previously acted as primary
+  // (the first enabled entry, otherwise the first entry) and discard the rest.
+  // Multiple QQ accounts belong in separate Routes so their policy, logs and
+  // lifecycle stay isolated.
+  const item = source.find((candidate) => candidate.enabled !== false) ?? source[0];
+  if (!item) return [];
 
-  const used = new Set<string>();
-  return source.map((item, index) => {
-    const baseId = sanitizeInstanceId(item.id, `napcat-${index + 1}`);
-    let id = baseId;
-    let suffix = 2;
-    while (used.has(id)) {
-      id = `${baseId}-${suffix++}`;
-    }
-    used.add(id);
-    const gatewayPort = Number(item.gatewayPort || definition.gatewayPort || 8790 + index);
+  const id = sanitizeInstanceId(item.id, "default");
+  const gatewayPort = Number(item.gatewayPort || definition.gatewayPort || 8790);
     assertValidPort(gatewayPort, `NapCat instance port for ${definition.id}/${id}`);
-    return {
-      ...item,
-      id,
-      name: item.name?.trim() || id,
-      enabled: item.enabled !== false,
-      autoLoginOnRabiStart: item.autoLoginOnRabiStart !== false,
-      gatewayPort,
-      httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
-      webuiUrl: item.webuiUrl?.trim() || definition.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
-      accessToken: item.accessToken ?? definition.napcatAccessToken ?? "",
-      webuiToken: item.webuiToken ?? definition.napcatWebuiToken ?? "",
-      launchCommand: item.launchCommand?.trim() || undefined,
-      workingDir: item.workingDir?.trim() || undefined
-    };
-  });
+  return [{
+    ...item,
+    id,
+    name: item.name?.trim() || id,
+    enabled: true,
+    autoLoginOnRabiStart: item.autoLoginOnRabiStart !== false,
+    gatewayPort,
+    httpUrl: item.httpUrl?.trim() || definition.napcatHttpUrl || "http://127.0.0.1:3000",
+    webuiUrl: item.webuiUrl?.trim() || definition.napcatWebuiUrl || "http://127.0.0.1:6099/webui",
+    accessToken: item.accessToken ?? definition.napcatAccessToken ?? "",
+    webuiToken: item.webuiToken ?? definition.napcatWebuiToken ?? "",
+    launchCommand: item.launchCommand?.trim() || undefined,
+    workingDir: item.workingDir?.trim() || undefined
+  }];
 }
 
 export function resolvePrimaryNapCatInstance(
@@ -1124,7 +1125,10 @@ export function syncPrimaryNapCatInstanceFields(
   definition: GatewayDefinition,
   instances: NapCatInstanceDefinition[] = normalizeNapCatInstances(definition)
 ): ResolvedNapCatInstances {
-  const resolved = resolvePrimaryNapCatInstance(definition, instances);
+  const resolved = resolvePrimaryNapCatInstance(definition, normalizeNapCatInstances({
+    ...definition,
+    napcatInstances: instances
+  }));
   definition.napcatInstances = resolved.instances;
   if (resolved.primary) {
     definition.gatewayPort = resolved.primary.gatewayPort;
@@ -1534,10 +1538,16 @@ export function nextAvailablePort(used: Set<number>, preferred: number): number 
   return port;
 }
 
-export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPort = 8790): void {
+export function autoAssignGatewayPorts(gateways: GatewayDefinition[], managerPort?: number): void {
   const usedIngress = new Set<number>();
-  if (Number.isInteger(managerPort) && managerPort >= 1 && managerPort <= 65535) {
-    usedIngress.add(managerPort);
+  const publishedManagerPort = typeof managerPort === "number"
+    && Number.isInteger(managerPort)
+    && managerPort >= 1
+    && managerPort <= 65535
+    ? managerPort
+    : null;
+  if (publishedManagerPort != null) {
+    usedIngress.add(publishedManagerPort);
   }
 
   const assignIngress = (value: unknown, fallback: number): number => {

@@ -1,21 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GenerationRuntime } from "./generationRuntime.js";
-import type { PluginCandidate, PluginManifest } from "./types.js";
+import { GenerationRuntime, RequiredPluginCapabilitiesUnavailableError } from "./generationRuntime.js";
+import type { PluginCandidate, PluginManifest, PluginModule } from "./types.js";
+
+const testModules = new WeakMap<PluginCandidate, PluginModule>();
+const testExecutor = Object.freeze({
+  async prepare(item: PluginCandidate): Promise<PluginModule> {
+    const module = testModules.get(item);
+    if (!module) throw new Error(`Missing test module: ${item.instanceId}.`);
+    return module;
+  }
+});
 
 function manifest(id: string, input: Partial<PluginManifest> = {}): PluginManifest {
   return {
-    schemaVersion: 1, id, version: "1.0.0", entries: { manager: "./manager.mjs" },
+    schemaVersion: 2, id, version: "1.0.0",
+    entries: { manager: { execution: "in_process", module: "./manager.mjs" } },
     provides: [], requires: [], optional: [], permissions: [], ...input
   };
 }
-function candidate(input: Partial<PluginCandidate> & Pick<PluginCandidate, "instanceId" | "manifest" | "module">): PluginCandidate {
-  return { revision: "one", config: {}, ...input };
+function candidate(input: Partial<PluginCandidate> & Pick<PluginCandidate, "instanceId" | "manifest"> & { module: PluginModule }): PluginCandidate {
+  const { module, ...candidateInput } = input;
+  const result: PluginCandidate = {
+    revision: "one", config: {}, entry: { execution: "in_process", path: "virtual.mjs" }, ...candidateInput
+  };
+  testModules.set(result, module);
+  return result;
+}
+function createRuntime(options: Omit<ConstructorParameters<typeof GenerationRuntime>[0], "host" | "executor"> = {}): GenerationRuntime {
+  return new GenerationRuntime({ host: "manager", executor: testExecutor, ...options });
 }
 
 test("GenerationRuntime publishes services and contributions atomically", async () => {
   const lifecycle: string[] = [];
-  const runtime = new GenerationRuntime({ host: "manager" });
+  const runtime = createRuntime();
   const result = await runtime.switch([
     candidate({
       instanceId: "provider", manifest: manifest("io.test.provider", { provides: ["test.value@1"] }),
@@ -41,7 +59,7 @@ test("GenerationRuntime publishes services and contributions atomically", async 
 });
 
 test("GenerationRuntime isolates a failed plugin from independent active plugins", async () => {
-  const runtime = new GenerationRuntime({ host: "manager" });
+  const runtime = createRuntime();
   const stable = candidate({ instanceId: "stable", manifest: manifest("io.test.stable"), module: { activate() {} } });
   await runtime.switch([stable]);
   const result = await runtime.switch([
@@ -54,7 +72,7 @@ test("GenerationRuntime isolates a failed plugin from independent active plugins
 });
 
 test("GenerationRuntime fails closed when permissions were not granted", async () => {
-  const runtime = new GenerationRuntime({ host: "manager", grantedPermissions: () => [] });
+  const runtime = createRuntime({ grantedPermissions: () => [] });
   const result = await runtime.switch([
     candidate({
       instanceId: "desktop", manifest: manifest("io.test.desktop", { permissions: ["desktop.ipc.codex"] }),
@@ -66,7 +84,7 @@ test("GenerationRuntime fails closed when permissions were not granted", async (
 });
 
 test("GenerationRuntime keeps the previous component when effect publication fails", async () => {
-  const runtime = new GenerationRuntime({ host: "manager" });
+  const runtime = createRuntime();
   let stableStarts = 0;
   let stableStops = 0;
   await runtime.switch([
@@ -99,7 +117,9 @@ test("GenerationRuntime keeps the previous component when effect publication fai
 
 test("GenerationRuntime skips unchanged plugins and restarts only the dependency component", async () => {
   const lifecycle: string[] = [];
-  const runtime = new GenerationRuntime({ host: "manager" });
+  const runtime = createRuntime({
+    applicationIdentity: { applicationGenerationId: "app-one", managerInstanceId: "manager-one" }
+  });
   const createProvider = (revision: string) => candidate({
     instanceId: "provider", revision, manifest: manifest("io.test.provider", { provides: ["test.value@1"] }),
     module: { activate(ctx) {
@@ -126,9 +146,223 @@ test("GenerationRuntime skips unchanged plugins and restarts only the dependency
   assert.deepEqual(lifecycle, [
     "start-independent", "start-provider-one", "start-consumer-one",
     "start-provider-two", "start-consumer-two",
-    "stop-provider-one", "stop-consumer-one"
+    "stop-consumer-one", "stop-provider-one"
   ]);
   await runtime.dispose();
   assert.equal(lifecycle.filter(item => item === "start-independent").length, 1);
   assert.equal(lifecycle.filter(item => item === "stop-independent").length, 1);
+});
+
+test("GenerationRuntime keeps activation identity and rejects a hot switch that loses required capabilities", async () => {
+  const runtime = createRuntime({
+    applicationIdentity: { applicationGenerationId: "app-one", managerInstanceId: "manager-one" }
+  });
+  const core = candidate({
+    instanceId: "core",
+    manifest: manifest("io.test.core", { provides: ["manager.core@1"] }),
+    module: { activate(ctx) { ctx.services.provide("manager.core@1", { ready: true }); } }
+  });
+  const first = await runtime.switch([core], { readyRequires: ["manager.core@1"] });
+  const coreActivation = first.generation.records[0]!.identity.activationId;
+  assert.equal(first.generation.readiness.state, "ready");
+  assert.equal(first.generation.applicationGenerationId, "app-one");
+  const optional = candidate({ instanceId: "optional", manifest: manifest("io.test.optional"), module: { activate() {} } });
+  const second = await runtime.switch([core, optional], { readyRequires: ["manager.core@1"] });
+  assert.equal(second.generation.records.find(record => record.identity.instanceId === "core")?.identity.activationId, coreActivation);
+  await assert.rejects(
+    runtime.switch([optional], { readyRequires: ["manager.core@1"] }),
+    (error: unknown) => error instanceof Error
+      && error.name === "RequiredPluginCapabilitiesUnavailableError"
+      && /manager\.core@1/.test(error.message)
+  );
+  assert.equal(runtime.current().id, second.generation.id);
+  assert.equal(runtime.current().services.services.get("manager.core@1")?.value !== undefined, true);
+  await runtime.dispose();
+});
+
+test("required readiness failure preserves bounded plugin activation diagnostics", async () => {
+  const runtime = createRuntime();
+  const brokenCore = candidate({
+    instanceId: "broken-core",
+    manifest: manifest("io.test.broken-core", { provides: ["manager.core@1"] }),
+    module: { activate() { throw new Error("fixture activation failed"); } }
+  });
+  await assert.rejects(
+    runtime.switch([brokenCore], { readyRequires: ["manager.core@1"] }),
+    (error: unknown) => error instanceof RequiredPluginCapabilitiesUnavailableError
+      && error.diagnostics.length === 1
+      && error.diagnostics[0]?.identity.instanceId === "broken-core"
+      && error.diagnostics[0]?.error?.message === "fixture activation failed"
+      && error.message.includes("broken-core: fixture activation failed")
+  );
+  await runtime.dispose();
+});
+
+test("an optional activation failure reports degraded health without removing core readiness", async () => {
+  const runtime = createRuntime();
+  const core = candidate({
+    instanceId: "core",
+    manifest: manifest("io.test.core", { provides: ["manager.core@1"] }),
+    module: { activate(ctx) { ctx.services.provide("manager.core@1", { ready: true }); } }
+  });
+  const brokenOptional = candidate({
+    instanceId: "optional",
+    manifest: manifest("io.test.optional"),
+    module: { activate() { throw new Error("optional dependency unavailable"); } }
+  });
+
+  const result = await runtime.switch([core, brokenOptional], { readyRequires: ["manager.core@1"] });
+  assert.equal(result.generation.readiness.state, "degraded");
+  assert.deepEqual(result.generation.readiness.missingCapabilities, []);
+  assert.ok(result.generation.services.services.has("manager.core@1"));
+  assert.equal(result.generation.records.find(record => record.identity.instanceId === "optional")?.status, "failed");
+  await runtime.dispose();
+});
+
+test("an optional runtime failure degrades health while independent core stays active", async () => {
+  let failOptional = (_error: unknown): void => {};
+  let failureObserved!: () => void;
+  const observed = new Promise<void>(resolve => { failureObserved = resolve; });
+  const runtime = createRuntime({ onRuntimeFailure: () => failureObserved() });
+  const core = candidate({
+    instanceId: "core",
+    manifest: manifest("io.test.core", { provides: ["manager.core@1"] }),
+    module: { activate(ctx) { ctx.services.provide("manager.core@1", { ready: true }); } }
+  });
+  const optional = candidate({
+    instanceId: "optional",
+    manifest: manifest("io.test.optional"),
+    module: { activate(ctx) { failOptional = ctx.lifecycle.fail; } }
+  });
+  await runtime.switch([core, optional], { readyRequires: ["manager.core@1"] });
+  failOptional(new Error("worker exhausted"));
+  await observed;
+
+  assert.equal(runtime.current().readiness.state, "degraded");
+  assert.deepEqual(runtime.current().readiness.missingCapabilities, []);
+  assert.ok(runtime.current().services.services.has("manager.core@1"));
+  assert.equal(runtime.current().records.find(record => record.identity.instanceId === "core")?.status, "active");
+  await runtime.dispose();
+});
+
+test("Effect lifecycle aborts before plugin disposers run", async () => {
+  const runtime = createRuntime();
+  const observed: boolean[] = [];
+  await runtime.switch([candidate({
+    instanceId: "signal",
+    manifest: manifest("io.test.signal"),
+    module: { activate(ctx) {
+      ctx.effects.add(() => () => { observed.push(ctx.lifecycle.signal.aborted); });
+    } }
+  })]);
+  await runtime.dispose();
+  assert.deepEqual(observed, [true]);
+});
+
+test("GenerationRuntime records every superseded cleanup failure without skipping later scopes", async () => {
+  const runtime = createRuntime();
+  const disposed: string[] = [];
+  const broken = (instanceId: string) => candidate({
+    instanceId,
+    manifest: manifest(`io.test.${instanceId}`),
+    module: { activate(ctx) {
+      ctx.effects.add(() => () => {
+        disposed.push(instanceId);
+        throw new Error(`cleanup ${instanceId} failed`);
+      });
+    } }
+  });
+  await runtime.switch([broken("one"), broken("two")]);
+  const result = await runtime.switch([]);
+  assert.deepEqual(disposed.sort(), ["one", "two"]);
+  assert.deepEqual(result.generation.cleanupDiagnostics.map(item => item.instanceId).sort(), ["one", "two"]);
+  assert.ok(result.generation.cleanupDiagnostics.every(item => item.phase === "superseded"));
+});
+
+test("GenerationRuntime shutdown attempts every active scope before reporting cleanup errors", async () => {
+  const runtime = createRuntime();
+  const disposed: string[] = [];
+  const broken = (instanceId: string) => candidate({
+    instanceId,
+    manifest: manifest(`io.test.${instanceId}`),
+    module: { activate(ctx) {
+      ctx.effects.add(() => () => {
+        disposed.push(instanceId);
+        throw new Error(`shutdown ${instanceId} failed`);
+      });
+    } }
+  });
+  await runtime.switch([broken("one"), broken("two")]);
+  await assert.rejects(runtime.dispose(), AggregateError);
+  assert.deepEqual(disposed.sort(), ["one", "two"]);
+  assert.equal(runtime.current().cleanupDiagnostics.filter(item => item.phase === "shutdown").length, 2);
+});
+
+test("GenerationRuntime removes a failed runtime component and publishes the fault", async () => {
+  let reportFailure = (_error: unknown): void => {};
+  let observedFailure: Promise<void>;
+  let resolveFailure = (): void => {};
+  observedFailure = new Promise(resolve => { resolveFailure = resolve; });
+  const runtime = createRuntime({ onRuntimeFailure: () => { resolveFailure(); } });
+  const provider = candidate({
+    instanceId: "provider",
+    manifest: manifest("io.test.provider", { provides: ["manager.core@1"] }),
+    module: { activate(ctx) {
+      ctx.services.provide("manager.core@1", { ready: true });
+      reportFailure = ctx.lifecycle.fail;
+    } }
+  });
+  const consumer = candidate({
+    instanceId: "consumer",
+    manifest: manifest("io.test.consumer", { requires: ["manager.core@1"] }),
+    module: { activate(ctx) { assert.ok(ctx.services.require("manager.core@1")); } }
+  });
+  const independent = candidate({
+    instanceId: "independent",
+    manifest: manifest("io.test.independent"),
+    module: { activate() {} }
+  });
+  await runtime.switch([provider, consumer, independent], { readyRequires: ["manager.core@1"] });
+  reportFailure(new Error("child exited"));
+  await observedFailure;
+  const failed = runtime.current();
+  assert.equal(failed.readiness.state, "degraded");
+  assert.deepEqual(failed.readiness.missingCapabilities, ["manager.core@1"]);
+  assert.equal(failed.records.find(record => record.identity.instanceId === "provider")?.error?.code, "runtime_failed");
+  assert.equal(failed.records.find(record => record.identity.instanceId === "consumer")?.status, "waiting_dependency");
+  assert.equal(failed.records.find(record => record.identity.instanceId === "independent")?.status, "active");
+  assert.equal(failed.services.services.has("manager.core@1"), false);
+  await runtime.dispose();
+});
+
+test("GenerationRuntime publishes required invalidation before bounded failed-plugin cleanup", async () => {
+  let reportFailure = (_error: unknown): void => {};
+  let observedRequiredReady: boolean | undefined;
+  const observed = new Promise<void>(resolve => {
+    const runtime = createRuntime({
+      onRuntimeFailure: event => {
+        observedRequiredReady = event.generation.readiness.missingCapabilities.length === 0;
+        resolve();
+      }
+    });
+    void runtime.switch([candidate({
+      instanceId: "core",
+      manifest: manifest("io.test.core", { provides: ["manager.core@1"] }),
+      policy: {
+        restart: { mode: "never", maxAttempts: 0, windowMs: 60_000, initialBackoffMs: 0, maximumBackoffMs: 1 },
+        resources: { maxChildProcesses: 1, shutdownTimeoutMs: 20 }
+      },
+      module: { activate(ctx) {
+        ctx.services.provide("manager.core@1", { ready: true });
+        reportFailure = ctx.lifecycle.fail;
+        ctx.effects.add(() => async () => { await new Promise(() => {}); }, "hung required cleanup");
+      } }
+    })], { readyRequires: ["manager.core@1"] }).then(() => reportFailure(new Error("core failed")));
+  });
+
+  await Promise.race([
+    observed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("required invalidation publication timed out")), 100))
+  ]);
+  assert.equal(observedRequiredReady, false);
 });

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { discoverManagerBaseUrl } from "./lib/discover-manager-url.mjs";
+
 const args = process.argv.slice(2);
 const value = (name) => {
   const index = args.indexOf(name);
@@ -17,7 +19,10 @@ Examples:
   process.exit(has("--help") ? 0 : 2);
 }
 
-const manager = (process.env.RABI_MANAGER_URL || "http://127.0.0.1:8790").replace(/\/$/, "");
+const manager = discoverManagerBaseUrl({
+  explicit: process.env.RABI_MANAGER_URL,
+  environmentNames: ["RABIROUTE_MANAGER_URL", "GATEWAY_MANAGER_URL"]
+});
 const request = async (pathname, options) => {
   const response = await fetch(`${manager}${pathname}`, options);
   const body = await response.json().catch(() => ({}));

@@ -183,7 +183,7 @@ function activeMessageAgentPool(): MessageAgentPool {
   if (!binding || !adapter || !policy?.enabled) throw new Error("Primary Agent Message Agent mode is not enabled.");
   messageAgentPool = new MessageAgentPool({
     statePath: messageAgentPoolStatePath(config.dataDir),
-    managerBaseUrl: process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790",
+    managerBaseUrl: managerBaseUrl(),
     sourceThreadName: binding.sessionName,
     sourceThreadId: binding.sessionId,
     agentAdapter: binding.agentAdapter,
@@ -217,7 +217,11 @@ function activeMemoryConsolidationAgent(): MemoryConsolidationAgent {
 }
 
 function managerBaseUrl(): string {
-  return process.env.GATEWAY_MANAGER_URL?.trim() || "http://127.0.0.1:8790";
+  const value = process.env.GATEWAY_MANAGER_URL?.trim();
+  if (!value) {
+    throw new Error("GATEWAY_MANAGER_URL was not supplied by the owning RabiRoute Manager.");
+  }
+  return value.replace(/\/+$/, "");
 }
 
 async function referencedAgentSendersForMessageGroup(
@@ -589,6 +593,7 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
     return "weixin_message";
   }
   if (routeKind === "feishu_message") return "feishu_message";
+  if (routeKind === "xiaomi_home_event") return "xiaomi_home_event";
   return routeKind === "private" ? "private" : "group_mention";
 }
 

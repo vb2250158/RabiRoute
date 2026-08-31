@@ -77,7 +77,7 @@ Reachable OneBot HTTP does not prove that the QQ core can send. Check login, qui
 
 `GET /api/scan/message-adapters` is a strictly read-only diagnostic. It does not start a Route or NapCat, write configuration, trigger QR login, or run automatic repair. Independent probes start concurrently under one shared deadline. `scan.partial=true` means at least one probe timed out or failed; completed results from the other endpoints remain available.
 
-Interpret state per endpoint and per instance. `QQ available` requires OneBot health and cannot be inferred from a reachable WebUI. A logged-out personal-Weixin adapter affects only personal Weixin. The watchdog summarizes a single endpoint error as `degraded`; only system-level Manager, Route, or Agent-delivery errors make the whole patrol `error`.
+Interpret state per endpoint and per instance. `QQ available` requires OneBot health and cannot be inferred from a reachable WebUI. A logged-out personal-Weixin adapter affects only personal Weixin. Business health inspection summarizes a single endpoint error as `degraded`; only system-level Manager, Route, or Agent-delivery errors make the whole patrol `error`. It reports business state and owns no application lifecycle.
 
 A failed Outbox attempt retains `failed` and draft data. There is no generic automatic retry queue; repair login, then retry intentionally to avoid duplicates.
 
@@ -95,21 +95,25 @@ Do not use fixed port 4510, `CODEX_APP_SERVER_WS_URL`, or a separate stdio Runti
 
 ## RabiRoute Desktop UI is missing
 
-A full desktop runtime launched by `Start-RabiRoute-Desktop.bat` or packaged RabiRoute Desktop records `running` in `data/runtime/desktop-lifecycle-intent.json` and starts one `watch-rabiroute-desktop-lifecycle.ps1` owner per workspace. The supervisor checks only this project's local backend `/meta` and desktop UI process. After two consecutive `/meta` failures, it restores the complete desktop runtime through the original launcher's port-owner, PID, and single-instance gates even if an old Manager process still exists. The UI stays available and reconnects during a temporary local-backend outage.
+Only `RabiRouteHost.exe` creates Manager and Desktop in the Windows package. Run `Start-RabiRoute-Desktop.bat`; it activates the current Host or starts one new Host and never launches the tray directly.
 
-Run `Start-RabiRoute-Desktop.bat -NoOpen` once, then inspect `data/route/default-main/logs/desktop-lifecycle-supervisor.jsonl`. A healthy record has `desiredState=running`, `managerConnected=true`, and `desktopShellCount>0`. `managerFailureCount` is the consecutive `/meta` failure count, and `managerProbeError` records the latest probe error. `desiredState=stopped` means the previous exit was intentional and requires an explicit user start. Missing or malformed intent fails closed. Do not substitute the half-hour business-health patrol for this lightweight owner or create a separate desktop-UI relaunch loop.
+Query the exact generation state:
 
-`Exit RabiRoute` from the RabiRoute Desktop menu persists `stopped` before shutting down the local backend and desktop UI, so supervision cannot undo a deliberate exit. Ordinary Manager build reloads, installer upgrades, and `SIGTERM` preserve desktop intent; when it remains `running`, supervision restores the complete desktop runtime after the reload.
+```powershell
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json
+```
+
+`state=running` must include `applicationGenerationId`, `managerInstanceId`, `managerBaseUrl`, and Manager PID. Open `managerBaseUrl/meta` and compare generation, instance, and URL. Host starts Desktop only after exact Manager READY validation, and Desktop exits if its own `/meta` validation no longer matches so Host can rebuild the whole generation.
+
+If Host opened its restart circuit or Desktop is still absent, inspect `%LOCALAPPDATA%\RabiRoute\diagnostics\host\host-YYYYMMDD.log` and the latest Desktop evidence bundle. Do not run `main.py` alone, scan ports, loop-launch the tray, or restore a retired lifecycle entry.
 
 If a page does not load within 12 seconds after navigation, RibiWebGUI shows Page failed to load. Retry this page opens the same path with its access parameters preserved. For stale page assets, the UI first reloads once automatically; use the button if that does not restore the page.
 
-## Port 8790 held by a stale Manager
+## Manager URL changed or a port is occupied
 
-If the launcher reports a listener on port `8790` but `/meta` is not stably responsive, a stale Manager from the same project may still own the port. Remote-page reconnects, Relay outages, and SSE failures must not become local startup dependencies: Manager serves local/LAN WebGUI first and hot-connects to Relay asynchronously.
+RabiRoute has no fixed Manager-port dependency. Every Manager generation asks the operating system for an available port, so another application occupying a familiar port neither blocks startup nor authorizes terminating that port owner.
 
-Run `Start-RabiRoute-Desktop.bat` again. The launcher inspects the port owner's command line and performs bounded takeover only for an old process that precisely references this project's `dist/manager.js`: graceful shutdown first, then the verified process tree only after timeout. Unknown processes remain untouched. The launcher also reloads a healthy Manager when the current `dist` is newer than the running process.
-
-Manager also acquires a workspace-level instance lock before loading its control plane. Exit code `17` from a second startup path means a live Manager for that workspace still owns the lock; do not keep relaunching it. Check `/meta` and the port owner first. A later start reclaims the lock only after its recorded PID no longer exists.
+After restart, an old bookmark, command line, or browser tab may still point to the previous generation. Read this generation's `managerBaseUrl` from Host `status --json`, or reopen WebGUI from the tray. Do not infer current instance ownership from whether an old port responds. Host binds READY through application generation, Manager instance, and PID rather than port ownership.
 
 After recovery, verify separately that local or LAN `/meta` responds, Relay can become online later, remote `/api/events` and `/api/speech/events` reconnect, and media Range requests still return `206`. Local and LAN access should remain available while Relay is offline, without repeated Manager restarts.
 
@@ -122,7 +126,7 @@ If plan approval submission coincides with a Manager restart or a temporary netw
 Restart when:
 
 - a new build completed;
-- an external port or connection changed;
+- external connection configuration changed, or a caller must refresh the dynamic Manager URL;
 - the Route child process exited;
 - logs prove an old build is still running.
 

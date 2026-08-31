@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { discoverManagerBaseUrl } from "./lib/discover-manager-url.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function parseArgs(argv) {
   const options = {
-    managerUrl: "http://127.0.0.1:8790",
+    managerUrl: "",
     peerId: "",
     roleId: "",
     outputPath: "",
@@ -99,7 +100,7 @@ function writeEvidence(outputPath, report) {
 export async function runPersonaSyncAcceptance(options = {}, dependencies = {}) {
   const now = dependencies.now?.() ?? new Date();
   const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
-  const managerUrl = managerBaseUrl(options.managerUrl || "http://127.0.0.1:8790");
+  const managerUrl = managerBaseUrl(options.managerUrl || discoverManagerBaseUrl());
   const outputPath = options.outputPath || defaultOutputPath(now);
   const report = {
     schemaVersion: 2,
@@ -206,7 +207,7 @@ export async function runPersonaSyncAcceptance(options = {}, dependencies = {}) 
 function helpText() {
   return [
     "Usage: node scripts/test-rabi-persona-sync.mjs [options]",
-    "  --manager <loopback-url>  Manager URL (default http://127.0.0.1:8790)",
+    "  --manager <loopback-url>  Manager URL (default: current RabiRoute Host generation)",
     "  --peer <id-or-guid>       Target peer; optional only when exactly one peer is eligible",
     "  --role <role-id>          Synchronize one persona instead of all personas",
     "  --inspect                 Discover and validate readiness without synchronizing",

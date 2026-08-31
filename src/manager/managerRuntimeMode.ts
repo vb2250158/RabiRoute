@@ -41,6 +41,8 @@ export function managerReadOnlyEnabled(value = process.env.RABIROUTE_MANAGER_REA
 
 const readOnlyHttpMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
-export function managerReadOnlyRequestAllowed(method: string | undefined): boolean {
-  return readOnlyHttpMethods.has(String(method || "GET").toUpperCase());
+export function managerReadOnlyRequestAllowed(method: string | undefined, pathname = ""): boolean {
+  const normalizedMethod = String(method || "GET").toUpperCase();
+  if (normalizedMethod === "POST" && pathname === "/_rabiroute/host/shutdown") return true;
+  return readOnlyHttpMethods.has(normalizedMethod);
 }

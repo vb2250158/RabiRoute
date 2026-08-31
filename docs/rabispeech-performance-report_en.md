@@ -107,7 +107,7 @@ These are engineering recommendations derived from this installation, not offici
 | Real stream | Maono index 1, requested 16 kHz mono | Started in `listening` and returned live RMS levels |
 | Service restore | Restart RabiSpeech while capture was enabled | Restored the same device, model, and session without a browser lifecycle |
 | Persistent stop | Local stop endpoint | `running=false` and persisted `enabled=false` |
-| Manager/RabiPC proxy | `127.0.0.1:8790/api/speech/microphone/*` | Devices, start, status, and stop passed |
+| Manager/RabiPC proxy | `<managerBaseUrl>/api/speech/microphone/*` | Devices, start, status, and stop passed |
 | Segmentation/delivery | Synthetic PCM unit test | Pre-roll, dual thresholds, silence boundary, WAV, ASR, and optional Route delivery passed |
 | Public boundary | Generic RabiLink application token | Normal model/TTS/ASR calls passed; microphone control returned 404 |
 

@@ -2,23 +2,30 @@ from __future__ import annotations
 
 import os
 import io
+import threading
+import time
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QBuffer, QIODevice, QPoint, Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication
 
 from rabiroute_tray.desktop_pet_client import (
     DesktopPetClient,
     DesktopPetIdleBehavior,
+    DesktopPetBinding,
     DesktopPetPack,
     DesktopPetState,
+    LoadedDesktopPetAnimation,
     parse_desktop_pet_catalog,
 )
+from rabiroute_tray.desktop_pet_controller import DesktopPetController
+from rabiroute_tray.desktop_pet_events import DesktopPetEventStream
 from rabiroute_tray.desktop_pet_events import iter_sse_events
 from rabiroute_tray.desktop_pet_fullscreen import covers_monitor
 from rabiroute_tray.desktop_pet_idle import DesktopPetIdleScheduler
@@ -50,6 +57,43 @@ class DesktopPetCatalogTest(unittest.TestCase):
 
         self.assertEqual(events[1][0], "work_ended")
         self.assertEqual(events[1][1]["personaId"], "YeYu")
+
+    def test_event_stream_treats_close_during_blocking_read_as_clean_stop(self) -> None:
+        entered_read = threading.Event()
+        closed = threading.Event()
+        uncaught: list[BaseException] = []
+
+        class ClosingResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> None:
+                return None
+
+            def readline(self) -> bytes:
+                entered_read.set()
+                closed.wait(timeout=2.0)
+                raise AttributeError("closed response has no readline")
+
+            def close(self) -> None:
+                closed.set()
+
+        original_hook = threading.excepthook
+        threading.excepthook = lambda args: uncaught.append(args.exc_value)
+        try:
+            stream = DesktopPetEventStream("http://127.0.0.1:1")
+            with patch("rabiroute_tray.desktop_pet_events.urlopen", return_value=ClosingResponse()):
+                stream.start()
+                self.assertTrue(entered_read.wait(timeout=1.0))
+                thread = stream._thread
+                stream.stop()
+                self.assertIsNotNone(thread)
+                thread.join(timeout=1.0)
+                self.assertFalse(thread.is_alive())
+        finally:
+            threading.excepthook = original_hook
+
+        self.assertEqual(uncaught, [])
 
     def test_binding_parser_keeps_persona_scoped_presentation_settings(self) -> None:
         client = DesktopPetClient("http://127.0.0.1:8790", "YeYu")
@@ -221,6 +265,23 @@ class DesktopPetClientTest(unittest.TestCase):
         self.assertEqual(loaded.assets, (b"1", b"2", b"3"))
         self.assertEqual(sleep.call_args_list, [call(0.1), call(0.1)])
 
+    def test_binding_updates_use_the_desktop_pet_plugin_route(self) -> None:
+        client = DesktopPetClient("http://127.0.0.1:8790", "YeYu")
+        response = _BinaryResponse(
+            b'{"data":{"personaId":"YeYu","binding":{"enabled":true,"packId":"night",'
+            b'"clickThrough":false}}}'
+        )
+
+        with patch("rabiroute_tray.desktop_pet_client.urlopen", return_value=response) as request:
+            binding = client.update_binding({"clickThrough": False})
+
+        outgoing = request.call_args.args[0]
+        self.assertEqual(outgoing.full_url, "http://127.0.0.1:8790/api/desktop-pet/roles/YeYu")
+        self.assertEqual(outgoing.get_method(), "PATCH")
+        self.assertEqual(outgoing.data, b'{"personaId": "YeYu", "clickThrough": false}')
+        self.assertTrue(binding.enabled)
+        self.assertFalse(binding.click_through)
+
 
 class DesktopPetWindowTest(unittest.TestCase):
     @classmethod
@@ -246,6 +307,207 @@ class DesktopPetWindowTest(unittest.TestCase):
             self.assertFalse(window.windowFlags() & Qt.WindowType.WindowTransparentForInput)
         finally:
             window.close()
+
+    def test_scale_change_resizes_the_cached_animation_without_a_network_reload(self) -> None:
+        window = DesktopPetWindow()
+        state = DesktopPetState("idle", "png-sequence", ("/idle.png",), 12, True)
+        pack = DesktopPetPack("night", "Night", "YeYu", 512, 512, 0.5, {"idle": state})
+        payload = QBuffer()
+        payload.open(QIODevice.OpenModeFlag.WriteOnly)
+        frame = QPixmap(8, 8)
+        frame.fill(Qt.GlobalColor.cyan)
+        self.assertTrue(frame.save(payload, "PNG"))
+        animation = LoadedDesktopPetAnimation(state, (bytes(payload.data()),))
+        try:
+            window.play(pack, animation)
+            self.assertEqual((window.width(), window.height()), (256, 256))
+            window.apply_presentation_settings(
+                scale=1.0,
+                opacity=1.0,
+                always_on_top=True,
+                locked=False,
+                bubble_enabled=True,
+                fps_cap=15,
+            )
+
+            self.assertEqual((window.width(), window.height()), (512, 512))
+        finally:
+            payload.close()
+            window.close()
+
+    def test_right_click_menu_plays_only_actions_declared_by_the_current_pack(self) -> None:
+        states = {
+            "idle": DesktopPetState("idle", "png-sequence", ("/idle.png",), 12, True),
+            "idle-wave": DesktopPetState("idle-wave", "png-sequence", ("/wave.png",), 12, False, "idle"),
+        }
+        pack = DesktopPetPack("night", "Night", "YeYu", 512, 512, 0.5, states)
+        with (
+            patch.object(DesktopPetEventStream, "start"),
+            patch.object(DesktopPetEventStream, "stop"),
+            patch.object(DesktopPetController, "_load_binding"),
+            patch("rabiroute_tray.desktop_pet_controller.QMenu.popup"),
+        ):
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller._pack = pack
+            controller._idle_scheduler = MagicMock()
+            try:
+                with patch.object(controller, "_is_action_ready", return_value=True):
+                    controller._show_context_menu(QPoint(30, 40))
+                root_menu = controller._context_menu
+                self.assertIsNotNone(root_menu)
+                play_menu = root_menu._desktop_pet_action_menu
+                self.assertEqual([action.text() for action in play_menu.actions()], ["待机", "挥手"])
+
+                with patch.object(controller, "_play_manual_action") as play:
+                    next(action for action in play_menu.actions() if action.text() == "挥手").trigger()
+                play.assert_called_once_with("idle-wave")
+
+                controller._idle_scheduler.note_activity.reset_mock()
+                with (
+                    patch.object(controller, "_is_action_ready", side_effect=lambda state_name: state_name == "idle-wave"),
+                    patch.object(controller, "set_state") as set_state,
+                ):
+                    controller._play_manual_action("idle-wave")
+                    controller._play_manual_action("not-in-the-pack")
+                controller._idle_scheduler.note_activity.assert_called_once()
+                set_state.assert_called_once_with("idle-wave")
+            finally:
+                controller.close()
+
+    def test_unprepared_right_click_actions_are_disabled(self) -> None:
+        states = {
+            "idle": DesktopPetState("idle", "png-sequence", ("/idle.png",), 12, True),
+            "idle-wave": DesktopPetState("idle-wave", "png-sequence", ("/wave.png",), 12, False, "idle"),
+        }
+        pack = DesktopPetPack("night", "Night", "YeYu", 512, 512, 0.5, states)
+        with (
+            patch.object(DesktopPetEventStream, "start"),
+            patch.object(DesktopPetEventStream, "stop"),
+            patch.object(DesktopPetController, "_load_binding"),
+            patch("rabiroute_tray.desktop_pet_controller.QMenu.popup"),
+        ):
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller._pack = pack
+            try:
+                controller._show_context_menu(QPoint(30, 40))
+                play_menu = controller._context_menu._desktop_pet_action_menu
+                self.assertEqual(play_menu.actions()[0].text(), "正在预载动作（0/2）")
+                self.assertFalse(play_menu.actions()[-1].isEnabled())
+            finally:
+                controller.close()
+
+    def test_manager_binding_refresh_reloads_a_newly_bound_pack(self) -> None:
+        with (
+            patch.object(DesktopPetEventStream, "start"),
+            patch.object(DesktopPetEventStream, "stop"),
+            patch.object(DesktopPetController, "_load_binding"),
+        ):
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            try:
+                controller.window.show()
+                controller._binding_snapshot = DesktopPetBinding(enabled=True, pack_id="old-pack")
+                controller._preferred_pack_id = "old-pack"
+                controller._pack = DesktopPetPack("old-pack", "Old", "YeYu", 512, 512, 0.5, {})
+                controller._animation_cache["idle"] = MagicMock()
+                with patch.object(controller, "_load_catalog") as reload_catalog:
+                    controller._apply_binding(DesktopPetBinding(enabled=True, pack_id="new-pack"))
+
+                self.assertEqual(controller._preferred_pack_id, "new-pack")
+                self.assertIsNone(controller._pack)
+                self.assertEqual(controller._animation_cache, {})
+                reload_catalog.assert_called_once()
+            finally:
+                controller.close()
+
+    def test_prepared_action_starts_within_the_interaction_budget(self) -> None:
+        window = DesktopPetWindow()
+        state = DesktopPetState("idle-wave", "png-sequence", ("/wave.png",) * 24, 12, False, "idle")
+        pack = DesktopPetPack("night", "Night", "YeYu", 512, 512, 0.5, {"idle": state, "idle-wave": state})
+        payload = QBuffer()
+        payload.open(QIODevice.OpenModeFlag.WriteOnly)
+        frame = QPixmap(8, 8)
+        frame.fill(Qt.GlobalColor.cyan)
+        self.assertTrue(frame.save(payload, "PNG"))
+        animation = LoadedDesktopPetAnimation(state, (bytes(payload.data()),) * 24)
+        try:
+            self.assertTrue(window.prepare_animation(pack, animation))
+            started_at = time.perf_counter()
+            window.play(pack, animation)
+            self.assertLess(time.perf_counter() - started_at, 0.1)
+        finally:
+            payload.close()
+            window.close()
+
+    def test_click_interrupts_sleep_with_a_prepared_attention_action(self) -> None:
+        idle = DesktopPetState("idle", "png-sequence", ("/idle.png",), 12, True)
+        sleep = DesktopPetState("sleep", "png-sequence", ("/sleep.png",), 12, True)
+        attention = DesktopPetState("attention", "png-sequence", ("/attention.png",), 12, False, "idle")
+        pack = DesktopPetPack(
+            "night",
+            "Night",
+            "YeYu",
+            512,
+            512,
+            0.5,
+            {"idle": idle, "sleep": sleep, "attention": attention},
+        )
+        animation = LoadedDesktopPetAnimation(attention, (b"prepared",))
+        with (
+            patch.object(DesktopPetEventStream, "start"),
+            patch.object(DesktopPetEventStream, "stop"),
+            patch.object(DesktopPetController, "_load_binding"),
+        ):
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller._pack = pack
+            controller._requested_state = "sleep"
+            controller._animation_cache["attention"] = animation
+            controller._idle_scheduler = MagicMock()
+            controller.window.show()
+            try:
+                with (
+                    patch.object(controller.window, "prepare_animation", return_value=True),
+                    patch.object(controller.window, "play") as play,
+                ):
+                    controller._clicked()
+
+                controller._idle_scheduler.note_activity.assert_called_once()
+                controller._idle_scheduler.state_requested.assert_called_once_with("attention")
+                controller._idle_scheduler.state_started.assert_called_once_with("attention")
+                play.assert_called_once_with(pack, animation)
+                self.assertEqual(controller._requested_state, "attention")
+                self.assertIsNone(controller._animation_task)
+            finally:
+                controller.close()
+
+    def test_attention_is_preloaded_before_other_pack_actions(self) -> None:
+        states = {
+            "idle": DesktopPetState("idle", "png-sequence", ("/idle.png",), 12, True),
+            "success": DesktopPetState("success", "png-sequence", ("/success.png",), 12, False, "idle"),
+            "attention": DesktopPetState(
+                "attention", "png-sequence", ("/attention.png",), 12, False, "idle"
+            ),
+            "thinking": DesktopPetState("thinking", "png-sequence", ("/thinking.png",), 12, True),
+            "drag": DesktopPetState("drag", "png-sequence", ("/drag.png",), 12, True),
+        }
+        pack = DesktopPetPack("night", "Night", "YeYu", 512, 512, 0.5, states)
+        with (
+            patch.object(DesktopPetEventStream, "start"),
+            patch.object(DesktopPetEventStream, "stop"),
+            patch.object(DesktopPetController, "_load_binding"),
+        ):
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller._pack = pack
+            controller.window.show()
+            try:
+                with patch.object(controller, "_start_next_animation_preload"):
+                    controller._enqueue_animation_preloads()
+
+                self.assertEqual(
+                    list(controller._preload_queue),
+                    ["attention", "drag", "success", "thinking"],
+                )
+            finally:
+                controller.close()
 
     def test_drag_state_signals_only_wrap_an_actual_move(self) -> None:
         window = DesktopPetWindow()

@@ -30,6 +30,9 @@ function runtime(id: string, personaId: string, enabled = true): GatewayRuntime 
     startedAt: null,
     stoppedAt: null,
     lastExit: null,
+    readiness: "stopped",
+    endpoints: [],
+    lastError: null,
     log: []
   };
 }

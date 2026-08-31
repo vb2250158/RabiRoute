@@ -20,4 +20,15 @@ public final class RabiConversationSettingsTest {
         assertEquals(RabiConversationSettings.ProactivityPreference.AGENT_DECIDES,
                 RabiConversationSettings.ProactivityPreference.fromPersisted("always_interrupt"));
     }
+
+    @Test
+    public void durableAudioStorageSettingsAreBoundedToOperationalRanges() {
+        RabiConversationSettings value = new RabiConversationSettings(
+                RabiConversationSettings.InputMode.PHONE,
+                RabiConversationSettings.ProactivityPreference.BALANCED,
+                true, true, "model", "voice", -1, 100, 99999);
+        assertEquals(0, value.audioRetentionHours);
+        assertEquals(1024, value.audioMaxStorageMb);
+        assertEquals(16384, value.audioReserveFreeMb);
+    }
 }

@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 2,
+  "id": "io.rabiroute.manager.xiaomi-home",
+  "version": "1.0.0",
+  "entries": {
+    "manager": {
+      "execution": "in_process",
+      "module": "./manager.mjs"
+    }
+  },
+  "provides": [
+    "manager.xiaomi-home@1"
+  ],
+  "requires": [
+    "host.manager.xiaomi-home@1",
+    "manager.core@1"
+  ],
+  "optional": [],
+  "permissions": [],
+  "configSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8123"
+      },
+      "tokenEnv": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{2,127}$",
+        "default": "RABIROUTE_XIAOMI_HOME_HA_TOKEN"
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 250,
+        "maximum": 30000,
+        "default": 5000
+      },
+      "writeEnabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "allowPublicBaseUrl": {
+        "type": "boolean",
+        "default": false
+      },
+      "runtimeDir": {
+        "type": "string",
+        "minLength": 3,
+        "description": "Optional absolute local runtime directory. Network paths are rejected."
+      },
+      "agentRoleId": {
+        "type": "string",
+        "minLength": 1,
+        "default": "YeYu"
+      },
+      "eventMonitorEnabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "eventDeliveryMode": {
+        "type": "string",
+        "enum": [
+          "significant",
+          "all"
+        ],
+        "default": "significant"
+      },
+      "cameraMotionEntityIds": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 3
+        },
+        "uniqueItems": true,
+        "default": []
+      },
+      "cameraClipCaptureEnabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "cameraClipAllowedHosts": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^(\\*\\.)?[A-Za-z0-9.-]+$"
+        },
+        "uniqueItems": true,
+        "default": []
+      },
+      "ffmpegPath": {
+        "type": "string",
+        "default": "ffmpeg"
+      },
+      "ffprobePath": {
+        "type": "string",
+        "default": "ffprobe"
+      },
+      "artifactReadTokenEnv": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{2,127}$",
+        "default": "RABIROUTE_XIAOMI_HOME_ARTIFACT_TOKEN"
+      },
+      "cameraClipRequestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 30000,
+        "default": 10000
+      },
+      "cameraClipMaxSegments": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "default": 120
+      },
+      "cameraClipMaxSegmentBytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 134217728,
+        "default": 33554432
+      }
+    }
+  }
+}

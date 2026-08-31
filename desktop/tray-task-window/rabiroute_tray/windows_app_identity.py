@@ -30,7 +30,7 @@ def apply_qt_app_metadata(app: object) -> None:
         app.setDesktopFileName(APP_USER_MODEL_ID)
 
 
-def ensure_start_menu_shortcut(project_root: Path) -> None:
+def ensure_start_menu_shortcut(project_root: Path, host_executable: Path) -> None:
     """Register a Start Menu shortcut so Windows can show the friendly app name."""
     if sys.platform != "win32":
         return
@@ -40,7 +40,7 @@ def ensure_start_menu_shortcut(project_root: Path) -> None:
 
     shortcut_dir = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / APP_NAME
     shortcut_path = shortcut_dir / f"{APP_NAME}.lnk"
-    target_path, arguments = _shortcut_target(project_root)
+    target_path, arguments = _shortcut_target(project_root, host_executable)
     icon_path = _shortcut_icon(project_root, target_path)
 
     try:
@@ -57,7 +57,7 @@ def ensure_start_menu_shortcut(project_root: Path) -> None:
         print(f"[RabiRoute] Failed to register Windows shortcut identity: {error}", file=sys.stderr)
 
 
-def sync_startup_shortcut(project_root: Path, enabled: bool) -> None:
+def sync_startup_shortcut(project_root: Path, enabled: bool, host_executable: Path | None = None) -> None:
     """Keep the per-user Windows login shortcut in sync with the desktop setting."""
     if sys.platform != "win32":
         return
@@ -66,13 +66,17 @@ def sync_startup_shortcut(project_root: Path, enabled: bool) -> None:
         return
     startup_dir = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
     shortcut_path = startup_dir / f"{APP_NAME}.lnk"
+    ownership = _startup_shortcut_ownership(shortcut_path, project_root, host_executable)
+    if ownership == "foreign":
+        raise RuntimeError(f"Refusing to overwrite or delete foreign startup shortcut: {shortcut_path}")
     if not enabled:
-        try:
+        if ownership == "owned":
             shortcut_path.unlink(missing_ok=True)
-        except OSError as error:
-            print(f"[RabiRoute] Failed to remove Windows startup shortcut: {error}", file=sys.stderr)
         return
-    target_path, arguments = _shortcut_target(project_root)
+    if host_executable is None:
+        print("[RabiRoute] Refusing to register Windows startup without the Host executable.", file=sys.stderr)
+        return
+    target_path, arguments = _shortcut_target(project_root, host_executable)
     try:
         startup_dir.mkdir(parents=True, exist_ok=True)
         _create_windows_shortcut(
@@ -87,23 +91,97 @@ def sync_startup_shortcut(project_root: Path, enabled: bool) -> None:
         print(f"[RabiRoute] Failed to register Windows startup shortcut: {error}", file=sys.stderr)
 
 
-def _shortcut_target(project_root: Path) -> tuple[Path, str]:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve(), ""
-    launcher = project_root / "Start-RabiRoute-Desktop.bat"
-    if launcher.exists():
-        return launcher, ""
-    tray_main = project_root / "desktop" / "tray-task-window" / "main.py"
-    return Path(sys.executable).resolve(), f'"{tray_main}"'
+def _same_windows_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(str(left.resolve())) == os.path.normcase(str(right.resolve()))
+
+
+def _startup_shortcut_ownership(shortcut_path: Path, project_root: Path, host_executable: Path | None) -> str:
+    if not shortcut_path.exists():
+        return "absent"
+    if host_executable is None:
+        return "foreign"
+    try:
+        target, arguments, working_dir = _read_windows_shortcut(shortcut_path)
+        if (
+            not arguments.strip()
+            and _same_windows_path(target, host_executable)
+            and _same_windows_path(working_dir, project_root)
+        ):
+            return "owned"
+    except (OSError, ValueError):
+        pass
+    return "foreign"
+
+
+def _read_windows_shortcut(shortcut_path: Path) -> tuple[Path, str, Path]:
+    if sys.platform != "win32":
+        raise OSError("Windows ShellLink is unavailable on this platform.")
+    from ctypes import POINTER, Structure, byref, c_long, c_ubyte, c_void_p, wintypes
+
+    class GUID(Structure):
+        _fields_ = [
+            ("Data1", wintypes.DWORD),
+            ("Data2", wintypes.WORD),
+            ("Data3", wintypes.WORD),
+            ("Data4", c_ubyte * 8),
+        ]
+
+    def guid(value: str) -> GUID:
+        import uuid
+
+        parsed = uuid.UUID(value)
+        return GUID(parsed.time_low, parsed.time_mid, parsed.time_hi_version, (c_ubyte * 8).from_buffer_copy(parsed.bytes[8:]))
+
+    def method(ptr: c_void_p, index: int, *argtypes: object) -> object:
+        vtable = ctypes.cast(ptr, POINTER(POINTER(c_void_p))).contents
+        return ctypes.WINFUNCTYPE(c_long, c_void_p, *argtypes)(vtable[index])
+
+    def check(hr: int, operation: str) -> None:
+        if hr < 0:
+            raise OSError(f"{operation} failed with HRESULT 0x{hr & 0xFFFFFFFF:08X}")
+
+    shell_link = c_void_p()
+    persist_file = c_void_p()
+    ole32 = ctypes.windll.ole32
+    initialized = ole32.CoInitialize(None) >= 0
+    try:
+        clsid = guid("00021401-0000-0000-C000-000000000046")
+        shell_iid = guid("000214F9-0000-0000-C000-000000000046")
+        persist_iid = guid("0000010B-0000-0000-C000-000000000046")
+        check(ole32.CoCreateInstance(byref(clsid), None, 1, byref(shell_iid), byref(shell_link)), "CoCreateInstance(IShellLink)")
+        query_interface = method(shell_link, 0, POINTER(GUID), POINTER(c_void_p))
+        check(query_interface(shell_link, byref(persist_iid), byref(persist_file)), "QueryInterface(IPersistFile)")
+        check(method(persist_file, 5, wintypes.LPCWSTR, wintypes.DWORD)(persist_file, str(shortcut_path), 0), "IPersistFile.Load")
+        target = ctypes.create_unicode_buffer(32768)
+        arguments = ctypes.create_unicode_buffer(32768)
+        working_dir = ctypes.create_unicode_buffer(32768)
+        check(method(shell_link, 3, wintypes.LPWSTR, ctypes.c_int, c_void_p, wintypes.DWORD)(shell_link, target, len(target), None, 0), "IShellLink.GetPath")
+        check(method(shell_link, 10, wintypes.LPWSTR, ctypes.c_int)(shell_link, arguments, len(arguments)), "IShellLink.GetArguments")
+        check(method(shell_link, 8, wintypes.LPWSTR, ctypes.c_int)(shell_link, working_dir, len(working_dir)), "IShellLink.GetWorkingDirectory")
+        if not target.value or not working_dir.value:
+            raise ValueError("Shortcut target or working directory is empty.")
+        return Path(target.value), arguments.value, Path(working_dir.value)
+    finally:
+        for ptr in (persist_file, shell_link):
+            if ptr:
+                vtable = ctypes.cast(ptr, POINTER(POINTER(c_void_p))).contents
+                ctypes.WINFUNCTYPE(c_long, c_void_p)(vtable[2])(ptr)
+        if initialized:
+            ole32.CoUninitialize()
+
+
+def _shortcut_target(project_root: Path, host_executable: Path) -> tuple[Path, str]:
+    _ = project_root
+    target = Path(host_executable).resolve()
+    if not target.is_absolute() or not target.is_file():
+        raise ValueError("RabiRoute Host executable is unavailable.")
+    return target, ""
 
 
 def _shortcut_icon(project_root: Path, target_path: Path) -> Path:
     asset_icon = project_root / "assets" / "rabiroute-icon.ico"
     if asset_icon.exists():
         return asset_icon
-    exe_icon = project_root / "RabiRoute-Desktop.exe"
-    if exe_icon.exists():
-        return exe_icon
     return target_path
 
 
