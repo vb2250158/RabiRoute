@@ -9,7 +9,6 @@ import {
   type PlanAttachmentInput
 } from "./shared/planAttachmentContract.js";
 import {
-  legacyPlanAttachmentDirectory,
   planAttachmentDirectory as planStorageAttachmentDirectory,
   type PlanStorageBucket
 } from "./planStorageLayout.js";
@@ -143,13 +142,23 @@ export function normalizeStoredPlanAttachments(value: unknown): PlanAttachment[]
   });
 }
 
-export function storePlanAttachments(
+export type PreparedPlanAttachment = {
+  metadata: PlanAttachment;
+  content?: Buffer;
+};
+
+/**
+ * Validates attachment input and materializes immutable bytes in memory.
+ * The caller must publish the returned files through the plan-storage Repository;
+ * this function never creates or changes a managed plan directory.
+ */
+export function preparePlanAttachments(
   roleDir: string,
   planId: string,
   value: unknown,
   existingValue: unknown = [],
   bucket: PlanStorageBucket = "active"
-): PlanAttachment[] {
+): PreparedPlanAttachment[] {
   if (!Array.isArray(value)) throw new Error("Plan attachments must be an array.");
   if (value.length > PLAN_MAX_ATTACHMENTS) {
     throw new Error(`A plan supports at most ${PLAN_MAX_ATTACHMENTS} attachments.`);
@@ -248,20 +257,14 @@ export function storePlanAttachments(
       }
     }
   }
-  if (prepared.some((item) => item.content)) fs.mkdirSync(attachmentDir, { recursive: true });
-  for (const item of prepared) {
-    if (!item.content || fs.existsSync(item.metadata.path)) continue;
-    fs.writeFileSync(item.metadata.path, item.content, { flag: "wx" });
-  }
-  return prepared.map((item) => item.metadata);
+  return prepared;
 }
 
 export function resolvePlanAttachmentFile(roleDir: string, planId: string, attachment: PlanAttachment): string {
   const candidate = path.resolve(attachment.path);
   const managedRoots = [
     planAttachmentDirectory(roleDir, planId, "active"),
-    planAttachmentDirectory(roleDir, planId, "archive"),
-    legacyPlanAttachmentDirectory(roleDir, planId)
+    planAttachmentDirectory(roleDir, planId, "archive")
   ].map((directory) => path.resolve(directory));
   const attachmentDir = managedRoots.find((directory) => pathWithin(directory, candidate));
   if (!attachmentDir) throw new Error("Plan attachment path is outside its managed directory.");

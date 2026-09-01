@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   archiveCompletedPlans,
+  applyMemoryConsolidationResult,
   createPlan,
   createRecentMemory,
   completeMemoryConsolidation,
+  completeMemoryConsolidationWithAtomicBatchFaultForTest,
   getPlan,
   getPlanAsync,
   getRecentMemory,
@@ -21,7 +24,6 @@ import {
   listRecentMemories,
   listRoleSkills,
   markMemoryConsolidationRunDelivered,
-  migrateRolePlanLayout,
   normalizeRoleContextInjection,
   nextMemoryConsolidationTriggerAt,
   pendingMemoryConsolidation,
@@ -30,21 +32,33 @@ import {
   planIsBlocked,
   presentRoleMemory,
   presentRoleMemories,
+  publishRoleKnowledgeCatalogSnapshot,
+  readPlansFromStorageInWorker,
+  readRoleKnowledgeCatalogSnapshot,
   roleContextInjectionPolicy,
   roleMemoryCounts,
   planRequiresApproval,
   roleKnowledgeSnapshot,
+  roleKnowledgeSnapshotFromStorage,
   subscribePlanUpdates,
+  touchRecentMemory,
   updatePlan,
   updateRecentMemory,
   validateRoleKnowledge
 } from "./roleKnowledge.js";
-import { appendPlanFeedback, listPlanFeedback, storePlanFeedbackAttachments } from "./planFeedback.js";
+import {
+  ROLE_MEMORY_CATALOG_LEASE_ID,
+  safeMemoryStorageSegment
+} from "./memoryStorageIdentity.js";
+import { migrateRolePlanLayoutAtStartup } from "./manager/planStorageStartupMigration.js";
+import { commitPlanFeedback, listPlanFeedback } from "./planFeedback.js";
 import {
   legacyPlanAttachmentDirectory,
   legacyPlanFeedbackAttachmentDirectory,
   legacyPlanFeedbackFile,
-  legacyPlanHistoryFile,
+  legacyPlanHistoryFile
+} from "./planStorageLegacyLayout.js";
+import {
   planAttachmentDirectory,
   planDirectory,
   planFeedbackAttachmentDirectory,
@@ -52,9 +66,35 @@ import {
   planHistoryFile,
   planJsonFile
 } from "./planStorageLayout.js";
+import {
+  canonicalPlanStorageCollisionKey,
+  canonicalPlanStorageKey,
+  windowsPlanStoragePathCollisionKey
+} from "./planStorageIdentity.js";
+import {
+  assertPlanStorageLeaseOwner,
+  planStorageLeasePath,
+  withPlanStorageLeaseAsync
+} from "./planStorageRepository.js";
+import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { storageMutationRevision } from "./shared/storageRevision.js";
 
 function makeRoleDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-"));
+}
+
+function directoryByteSnapshot(root: string): Array<[string, string]> {
+  if (!fs.existsSync(root)) return [];
+  const files: Array<[string, string]> = [];
+  const visit = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      const target = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(target);
+      else if (entry.isFile()) files.push([path.relative(root, target).replace(/\\/g, "/"), fs.readFileSync(target).toString("hex")]);
+    }
+  };
+  visit(root);
+  return files;
 }
 
 function writeRecentMemory(roleDir: string, memory: Record<string, unknown>): void {
@@ -79,6 +119,10 @@ function writePersonaConfig(roleDir: string, config: Record<string, unknown>): v
   fs.writeFileSync(path.join(roleDir, "personaConfig.json"), JSON.stringify(config, null, 2), "utf8");
 }
 
+function publishStoredRoleKnowledge(roleDir: string) {
+  return publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
+}
+
 test("plan list cache is invalidated by canonical create and update writes", () => {
   const roleDir = makeRoleDir();
   const created = createPlan(roleDir, {
@@ -90,10 +134,82 @@ test("plan list cache is invalidated by canonical create and update writes", () 
     steps: [{ id: "cache", title: "Verify cache invalidation", status: "进行中" }],
     keywords: ["cache"]
   });
+  readPlansFromStorageInWorker(roleDir);
   assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "Cache plan");
+  assert.equal(Object.isFrozen(listPlans(roleDir)), true);
+  assert.equal(Object.isFrozen(listPlans(roleDir)[0]?.steps), true);
 
   updatePlan(roleDir, created.id, { title: "Updated cache plan" });
   assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "Updated cache plan");
+});
+
+test("published role knowledge is cloned and deeply frozen before hot-path reads", { concurrency: false }, () => {
+  const roleDir = makeRoleDir();
+  createPlan(roleDir, {
+    id: "immutable-publication",
+    title: "Immutable publication",
+    focus: "Protect the published catalog",
+    status: "进行中",
+    currentStepId: "serve",
+    steps: [{ id: "serve", title: "Serve snapshot", status: "进行中" }],
+    keywords: ["immutable"]
+  });
+  createRecentMemory(roleDir, {
+    id: "immutable-memory",
+    title: "Immutable memory",
+    focus: "Published memory",
+    content: "Memory payload",
+    keywords: ["immutable"]
+  });
+  writeConsolidatedMemory(roleDir, {
+    id: "immutable-consolidated",
+    title: "Immutable consolidated",
+    focus: "Published consolidated memory",
+    content: "Consolidated payload",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+    keywords: ["immutable"]
+  });
+  writeSkill(roleDir, "immutable.md", `---
+id: immutable-skill
+title: Immutable skill
+summary: Published skill metadata.
+keywords: immutable
+updatedAt: 2026-08-01T00:00:00.000Z
+status: active
+---
+Body is not published.
+`);
+
+  const source = structuredClone(readRoleKnowledgeCatalogSnapshot(roleDir));
+  const published = publishRoleKnowledgeCatalogSnapshot(roleDir, source);
+  assert.equal(Object.isFrozen(published), true);
+  for (const value of [
+    published.plans, published.plans[0], published.plans[0]?.steps,
+    published.recentMemories, published.recentMemories[0], published.recentMemories[0]?.keywords,
+    published.consolidatedMemories, published.consolidatedMemories[0],
+    published.skills, published.skills[0], published.skills[0]?.keywords,
+    published.limits, published.limits.plan, published.limits.memory, published.contextInjection
+  ]) assert.equal(Object.isFrozen(value), true);
+
+  source.plans[0].title = "mutated source";
+  source.recentMemories[0].keywords[0] = "mutated source";
+  assert.equal(listPlans(roleDir)[0]?.title, "Immutable publication");
+  assert.deepEqual(published.recentMemories[0]?.keywords, ["immutable"]);
+
+  const originalExistsSync = fs.existsSync;
+  const originalReaddirSync = fs.readdirSync;
+  const originalReadFileSync = fs.readFileSync;
+  fs.existsSync = (() => { throw new Error("hot path probed storage"); }) as typeof fs.existsSync;
+  fs.readdirSync = (() => { throw new Error("hot path enumerated storage"); }) as typeof fs.readdirSync;
+  fs.readFileSync = (() => { throw new Error("hot path read storage"); }) as typeof fs.readFileSync;
+  try {
+    assert.equal(roleKnowledgeSnapshot(roleDir, "immutable").activePlans[0]?.id, "immutable-publication");
+  } finally {
+    fs.existsSync = originalExistsSync;
+    fs.readdirSync = originalReaddirSync;
+    fs.readFileSync = originalReadFileSync;
+  }
 });
 
 test("plan history keeps snapshots after updates and archive moves", () => {
@@ -120,7 +236,7 @@ test("plan history keeps snapshots after updates and archive moves", () => {
     }}],
     keywords: ["留痕"]
   });
-  appendPlanFeedback(roleDir, {
+  commitPlanFeedback(roleDir, {
     id: "history-feedback",
     roleId: "Role",
     planId: plan.id,
@@ -138,6 +254,7 @@ test("plan history keeps snapshots after updates and archive moves", () => {
     deliveryStatus: "record_only"
   });
   updatePlan(roleDir, plan.id, { title: "保留审批和引导留痕" });
+  readPlansFromStorageInWorker(roleDir);
   const archived = archiveCompletedPlans(roleDir, -1);
 
   const history = listPlanHistory(roleDir, plan.id);
@@ -150,27 +267,27 @@ test("plan history keeps snapshots after updates and archive moves", () => {
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.text, "批准并保留完整记录。");
 });
 
-test("automatic archival clears a legacy completed-plan current step", () => {
+test("automatic archival clears a completed-plan current step from canonical storage", () => {
   const roleDir = makeRoleDir();
-  const activeDir = path.join(roleDir, "plans", "items", "active");
-  fs.mkdirSync(activeDir, { recursive: true });
-  fs.writeFileSync(path.join(activeDir, "legacy-completed.json"), `${JSON.stringify({
-    id: "legacy-completed",
-    title: "Legacy completed plan",
-    focus: "Archive a legacy completed record safely",
+  const planId = "canonical-completed";
+  createPlan(roleDir, {
+    id: planId,
+    title: "Canonical completed plan",
+    focus: "Archive a canonical completed record safely",
     status: "已完成",
-    currentStepId: "done",
     steps: [{ id: "done", title: "Done", status: "已完成" }],
-    keywords: ["legacy"],
-    createdAt: "2026-08-01T00:00:00.000Z",
-    updatedAt: "2026-08-01T00:00:00.000Z"
-  }, null, 2)}\n`, "utf8");
+    keywords: ["canonical"]
+  });
+  const legacyFile = planJsonFile(roleDir, planId, "active");
+  const legacyRecord = JSON.parse(fs.readFileSync(legacyFile, "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(legacyFile, `${JSON.stringify({ ...legacyRecord, currentStepId: "done" }, null, 2)}\n`, "utf8");
 
+  readPlansFromStorageInWorker(roleDir);
   const archived = archiveCompletedPlans(roleDir, -1);
 
   assert.equal(archived[0]?.status, "已归档");
   assert.equal(archived[0]?.currentStepId, undefined);
-  assert.equal(getPlan(roleDir, "legacy-completed")?.currentStepId, undefined);
+  assert.equal(getPlan(roleDir, planId)?.currentStepId, undefined);
 });
 
 
@@ -186,12 +303,7 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
     keywords: ["legacy", "migration"],
     attachments: [{ name: "note.txt", mimeType: "text/plain", contentBase64: Buffer.from("plan attachment", "utf8").toString("base64") }]
   });
-  const feedbackAttachments = storePlanFeedbackAttachments(roleDir, plan.id, "legacy-feedback", [{
-    name: "review.txt",
-    mimeType: "text/plain",
-    contentBase64: Buffer.from("feedback attachment", "utf8").toString("base64")
-  }]);
-  appendPlanFeedback(roleDir, {
+  commitPlanFeedback(roleDir, {
     id: "legacy-feedback",
     roleId: "Role",
     planId: plan.id,
@@ -200,12 +312,16 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
     author: "user",
     source: "webgui",
     text: "Keep the plan files together.",
-    attachments: feedbackAttachments,
+    attachments: [],
     planAttachments: plan.attachments,
     createdAt: "2026-08-25T00:00:00.000Z",
     updatedAt: "2026-08-25T00:00:00.000Z",
     deliveryStatus: "record_only"
-  });
+  }, [{
+    name: "review.txt",
+    mimeType: "text/plain",
+    contentBase64: Buffer.from("feedback attachment", "utf8").toString("base64")
+  }]);
 
   const currentDirectory = planDirectory(roleDir, plan.id, "active");
   const legacyAttachmentDirectory = legacyPlanAttachmentDirectory(roleDir, plan.id);
@@ -230,8 +346,13 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
   fs.renameSync(currentFeedbackAttachmentDirectory, legacyFeedbackAttachmentDirectory);
   fs.rmSync(currentDirectory, { recursive: true, force: true });
 
-  const migrated = migrateRolePlanLayout(roleDir);
-  assert.deepEqual(migrated, { migrated: 1, skipped: 0, failures: [] });
+  const migrated = migrateRolePlanLayoutAtStartup(roleDir);
+  assert.equal(migrated.migrated, 1);
+  assert.equal(migrated.skipped, 0);
+  assert.equal(migrated.reconciled, 0);
+  assert.equal(migrated.alreadyReconciled, 0);
+  assert.equal(migrated.receipts.length, 2);
+  assert.deepEqual(migrated.failures, []);
   assert.equal(fs.existsSync(planJsonFile(roleDir, plan.id, "active")), true);
   assert.equal(fs.existsSync(planHistoryFile(roleDir, plan.id, "active")), true);
   assert.equal(fs.existsSync(planFeedbackFile(roleDir, plan.id, "active")), true);
@@ -240,7 +361,14 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
   assert.equal(getPlan(roleDir, plan.id)?.attachments[0]?.path.startsWith(planAttachmentDirectory(roleDir, plan.id, "active")), true);
   assert.equal(listPlanHistory(roleDir, plan.id)[0]?.after.attachments[0]?.path.startsWith(planAttachmentDirectory(roleDir, plan.id, "active")), true);
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.attachments[0]?.path.startsWith(planFeedbackAttachmentDirectory(roleDir, plan.id, "legacy-feedback", "active")), true);
-  assert.deepEqual(migrateRolePlanLayout(roleDir), { migrated: 0, skipped: 0, failures: [] });
+  assert.deepEqual(migrateRolePlanLayoutAtStartup(roleDir), {
+    migrated: 0,
+    skipped: 0,
+    reconciled: 0,
+    alreadyReconciled: 0,
+    receipts: [],
+    failures: []
+  });
 
   updatePlan(roleDir, plan.id, {
     status: "已归档",
@@ -311,6 +439,195 @@ test("cold plan catalogs load asynchronously and share one in-flight cache fill"
   } finally {
     fs.promises.readFile = originalReadFile;
   }
+});
+
+test("runtime plan reads and archive sweeps never migrate or consume legacy layout", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    id: "runtime-canonical-only",
+    title: "运行期只读 canonical 计划",
+    focus: "禁止运行期迁移扫描",
+    status: "进行中",
+    steps: [{ id: "observe", title: "观察健康状态", status: "进行中" }],
+    currentStepId: "observe",
+    keywords: ["canonical", "health"]
+  });
+  const legacyActive = path.join(roleDir, "plans", "items", "active", `${plan.id}.json`);
+  const legacyArchive = path.join(roleDir, "plans", "archive", `${plan.id}.json`);
+  fs.mkdirSync(path.dirname(legacyActive), { recursive: true });
+  fs.mkdirSync(path.dirname(legacyArchive), { recursive: true });
+  fs.writeFileSync(legacyActive, JSON.stringify({ ...plan, title: "不得读取的旧 active" }), "utf8");
+  fs.writeFileSync(legacyArchive, JSON.stringify({ ...plan, status: "已归档", title: "不得读取的旧 archive" }), "utf8");
+  readPlansFromStorageInWorker(roleDir);
+
+  const originalRename = fs.renameSync;
+  let renameCount = 0;
+  fs.renameSync = ((...args: Parameters<typeof fs.renameSync>) => {
+    renameCount += 1;
+    return originalRename(...args);
+  }) as typeof fs.renameSync;
+  try {
+    assert.deepEqual(listPlans(roleDir).map((item) => item.title), [plan.title]);
+    assert.equal(getPlan(roleDir, plan.id)?.title, plan.title);
+    assert.deepEqual(archiveCompletedPlans(roleDir, Number.POSITIVE_INFINITY), []);
+  } finally {
+    fs.renameSync = originalRename;
+  }
+  assert.equal(renameCount, 0);
+  assert.equal(fs.existsSync(legacyActive), true);
+  assert.equal(fs.existsSync(legacyArchive), true);
+});
+
+test("plan storage rejects sanitized identity collisions before overwriting another logical plan", (t) => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  createPlan(roleDir, {
+    id: "Plan A",
+    title: "First logical plan",
+    focus: "Keep the first plan intact",
+    status: "进行中",
+    currentStepId: "one",
+    steps: [{ id: "one", title: "One", status: "进行中" }],
+    keywords: ["collision"]
+  });
+  const originalPath = planJsonFile(roleDir, "Plan A", "active");
+  const originalBytes = fs.readFileSync(originalPath);
+  assert.throws(() => createPlan(roleDir, {
+    id: "Plan-A",
+    title: "Colliding logical plan",
+    focus: "Must not overwrite the first plan",
+    status: "进行中",
+    currentStepId: "two",
+    steps: [{ id: "two", title: "Two", status: "进行中" }],
+    keywords: ["collision"]
+  }), /identity collision/i);
+  assert.throws(() => createPlan(roleDir, {
+    id: " Plan A ",
+    title: "Padded logical plan",
+    focus: "Must be rejected before storage lookup",
+    status: "进行中",
+    currentStepId: "padded",
+    steps: [{ id: "padded", title: "Padded", status: "进行中" }],
+    keywords: ["collision"]
+  }), /trimmed and Unicode NFC-normalized/i);
+  assert.throws(() => createPlan(roleDir, {
+    id: "plan a",
+    title: "Case-fold collision",
+    focus: "Must share the physical identity lock",
+    status: "进行中",
+    currentStepId: "case",
+    steps: [{ id: "case", title: "Case", status: "进行中" }],
+    keywords: ["collision"]
+  }), /identity collision/i);
+  assert.throws(() => createPlan(roleDir, {
+    id: "e\u0301-plan",
+    title: "Non-NFC plan",
+    focus: "Must not create a normalization-equivalent identity",
+    status: "进行中",
+    currentStepId: "nfc",
+    steps: [{ id: "nfc", title: "NFC", status: "进行中" }],
+    keywords: ["collision"]
+  }), /trimmed and Unicode NFC-normalized/i);
+  assert.equal(getPlan(roleDir, "Plan A")?.title, "First logical plan");
+  assert.deepEqual(fs.readFileSync(originalPath), originalBytes);
+  assert.deepEqual(fs.readdirSync(path.join(roleDir, "plans", "active")), ["plan-a"]);
+});
+
+test("plan storage rejects a Windows ordinal-ignore-case sigma collision before any persistent write", (t) => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const compatiblePlanId = "Plan A";
+  const compatibleStorageId = canonicalPlanStorageKey(compatiblePlanId);
+  assert.equal(canonicalPlanStorageCollisionKey(compatiblePlanId), compatibleStorageId);
+  assert.equal(
+    planStorageLeasePath(roleDir, compatiblePlanId),
+    path.join(
+      roleDir,
+      "plans",
+      ".locks",
+      `${createHash("sha256").update(compatibleStorageId).digest("hex").slice(0, 32)}.lock`
+    )
+  );
+  assert.equal(canonicalPlanStorageCollisionKey("plan-ß"), canonicalPlanStorageKey("plan-ß"));
+  assert.notEqual(canonicalPlanStorageCollisionKey("plan-ß"), canonicalPlanStorageCollisionKey("plan-ss"));
+  assert.notEqual(canonicalPlanStorageCollisionKey("plan-ﬃ"), canonicalPlanStorageCollisionKey("plan-ffi"));
+  assert.equal(canonicalPlanStorageCollisionKey("plan-ſ"), canonicalPlanStorageCollisionKey("plan-s"));
+  assert.equal(canonicalPlanStorageCollisionKey("plan-ı"), canonicalPlanStorageCollisionKey("plan-i"));
+  assert.equal(
+    windowsPlanStoragePathCollisionKey("Attachments/σ.txt"),
+    windowsPlanStoragePathCollisionKey("attachments/ς.TXT")
+  );
+  const firstPlanId = "ordinal-σ";
+  const collidingPlanId = "ordinal-ς";
+  assert.notEqual(canonicalPlanStorageKey(firstPlanId), canonicalPlanStorageKey(collidingPlanId));
+  assert.equal(canonicalPlanStorageCollisionKey(firstPlanId), canonicalPlanStorageCollisionKey(collidingPlanId));
+  assert.equal(planStorageLeasePath(roleDir, firstPlanId), planStorageLeasePath(roleDir, collidingPlanId));
+
+  createPlan(roleDir, {
+    id: firstPlanId,
+    title: "Original sigma owner",
+    focus: "Keep every persisted byte intact",
+    status: "进行中",
+    currentStepId: "one",
+    steps: [{ id: "one", title: "One", status: "进行中" }],
+    keywords: ["ordinal-ignore-case", "collision"]
+  });
+  const plansRoot = path.join(roleDir, "plans");
+  const before = directoryByteSnapshot(plansRoot);
+
+  assert.throws(() => createPlan(roleDir, {
+    id: collidingPlanId,
+    title: "Final sigma alias",
+    focus: "Must be rejected before identity, WAL, or plan publication",
+    status: "进行中",
+    currentStepId: "two",
+    steps: [{ id: "two", title: "Two", status: "进行中" }],
+    keywords: ["ordinal-ignore-case", "collision"]
+  }), /identity collision/i);
+
+  assert.deepEqual(directoryByteSnapshot(plansRoot), before);
+  assert.equal(getPlan(roleDir, firstPlanId)?.title, "Original sigma owner");
+});
+
+test("archived plans are immutable terminal records", (t) => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const created = createPlan(roleDir, {
+    id: "terminal-plan",
+    title: "Terminal plan",
+    focus: "Prove archive immutability",
+    status: "已完成",
+    steps: [{ id: "done", title: "Done", status: "已完成" }],
+    keywords: ["archive"]
+  });
+  updatePlan(roleDir, created.id, { status: "已归档", archivedAt: "2026-08-31T00:00:00.000Z" });
+  assert.throws(() => updatePlan(roleDir, created.id, { title: "Edited after archive" }), /immutable terminal/i);
+  assert.equal(getPlan(roleDir, created.id)?.title, "Terminal plan");
+});
+
+test("sync and async plan reads fail closed on duplicate physical records", async (t) => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const created = createPlan(roleDir, {
+    id: "duplicate-plan",
+    title: "Duplicate plan",
+    focus: "Reject active and archive duplicates",
+    status: "进行中",
+    currentStepId: "one",
+    steps: [{ id: "one", title: "One", status: "进行中" }],
+    keywords: ["duplicate"]
+  });
+  fs.cpSync(
+    planDirectory(roleDir, created.id, "active"),
+    planDirectory(roleDir, created.id, "archive"),
+    { recursive: true, errorOnExist: true }
+  );
+  assert.throws(() => getPlan(roleDir, created.id), /storage conflict/i);
+  await assert.rejects(getPlanAsync(roleDir, created.id), /storage conflict/i);
+  await assert.rejects(listPlansAsync(roleDir), /storage conflict/i);
+  const validation = validateRoleKnowledge(roleDir);
+  assert.equal(validation.ok, false);
+  assert.equal(validation.issues.some((issue) => issue.type === "plan_storage"), true);
 });
 
 test("plan-by-id recovery reads asynchronously and forwards cancellation to filesystem I/O", async () => {
@@ -410,6 +727,32 @@ test("plan catalog prewarm can skip synchronous filesystem watcher setup", async
   }
 });
 
+test("a prewarmed runtime catalog never falls back to a synchronous NAS rescan", async () => {
+  const roleDir = makeRoleDir();
+  createPlan(roleDir, {
+    id: "prewarmed-health-safe",
+    title: "预热后保持健康探针可响应",
+    focus: "禁止热请求同步全量扫描",
+    steps: [{ id: "serve", title: "服务缓存快照", status: "进行中" }],
+    currentStepId: "serve",
+    status: "进行中",
+    keywords: ["prewarm", "health"]
+  });
+  assert.equal((await listPlansAsync(roleDir, { watch: false }))[0]?.id, "prewarmed-health-safe");
+  await new Promise((resolve) => setTimeout(resolve, 520));
+
+  const originalWatch = fs.watch;
+  const originalReaddir = fs.readdirSync;
+  fs.watch = (() => { throw new Error("recursive watcher unavailable on NAS"); }) as typeof fs.watch;
+  fs.readdirSync = (() => { throw new Error("hot request attempted a synchronous directory scan"); }) as typeof fs.readdirSync;
+  try {
+    assert.equal(listPlans(roleDir)[0]?.id, "prewarmed-health-safe");
+  } finally {
+    fs.watch = originalWatch;
+    fs.readdirSync = originalReaddir;
+  }
+});
+
 test("an async plan catalog retries when a canonical write invalidates the in-flight snapshot", async () => {
   const roleDir = makeRoleDir();
   const plan = createPlan(roleDir, {
@@ -485,6 +828,163 @@ test("new memories use Markdown files while legacy JSON remains readable without
   assert.equal(memories.find((memory) => memory.id === "legacy-memory")?.content, "Legacy JSON content");
 });
 
+test("lossy recent-memory storage keys never overwrite a different logical memory id", () => {
+  const roleDir = makeRoleDir();
+  const original = createRecentMemory(roleDir, {
+    id: "memory collision",
+    title: "Original collision owner",
+    focus: "Keep the first logical memory identity",
+    content: "The original memory must remain intact.",
+    keywords: ["identity", "collision"]
+  });
+  const physicalPath = path.join(roleDir, "memory", "recent", "memory-collision.md");
+  const originalBytes = fs.readFileSync(physicalPath);
+
+  assert.throws(() => createRecentMemory(roleDir, {
+    id: "memory-collision",
+    title: "Colliding memory",
+    focus: "Attempt a lossy physical-name collision",
+    content: "This memory must not replace the original.",
+    keywords: ["identity", "collision"]
+  }), /storage key already exists for a different logical id/i);
+  assert.deepEqual(fs.readFileSync(physicalPath), originalBytes);
+  assert.deepEqual(listRecentMemories(roleDir).map(memory => memory.id), [original.id]);
+
+  const touched = touchRecentMemory(roleDir, original.id, {
+    requestId: "memory-collision-touch",
+    revision: storageMutationRevision("memory-collision-touch")
+  });
+  const updated = updateRecentMemory(roleDir, original.id, {
+    content: "The original memory remains independently updateable."
+  });
+  assert.equal(touched.id, original.id);
+  assert.equal(updated.id, original.id);
+  assert.match(fs.readFileSync(physicalPath, "utf8"), /id: "memory collision"/);
+});
+
+test("Windows sigma aliases cannot overwrite an existing recent-memory logical id", () => {
+  const roleDir = makeRoleDir();
+  const original = createRecentMemory(roleDir, {
+    id: "σ",
+    title: "Sigma owner",
+    focus: "Preserve the first Windows case-insensitive path owner",
+    content: "The ordinary sigma record owns this physical identity.",
+    keywords: ["identity", "windows"]
+  });
+  const physicalPath = path.join(roleDir, "memory", "recent", "σ.md");
+  const originalBytes = fs.readFileSync(physicalPath);
+
+  assert.throws(() => createRecentMemory(roleDir, {
+    id: "ς",
+    title: "Final sigma alias",
+    focus: "Reject a Windows ordinal-ignore-case path alias",
+    content: "This record must never replace the ordinary sigma owner.",
+    keywords: ["identity", "windows"]
+  }), /storage key already exists for a different logical id/i);
+
+  assert.deepEqual(fs.readFileSync(physicalPath), originalBytes);
+  assert.deepEqual(listRecentMemories(roleDir).map(memory => memory.id), [original.id]);
+});
+
+test("memory filename truncation preserves complete astral code points and distinct owners", () => {
+  const roleDir = makeRoleDir();
+  const prefix = "a".repeat(79);
+  const firstId = `${prefix}𐐀`;
+  const secondId = `${prefix}𐐁`;
+  const firstSegment = safeMemoryStorageSegment(firstId);
+  const secondSegment = safeMemoryStorageSegment(secondId);
+  assert.equal(Array.from(firstSegment).length, 80);
+  assert.equal(Array.from(secondSegment).length, 80);
+  assert.notEqual(firstSegment, secondSegment);
+  assert.doesNotMatch(firstSegment, /[\uD800-\uDFFF]$/u);
+  assert.doesNotMatch(secondSegment, /[\uD800-\uDFFF]$/u);
+
+  const first = createRecentMemory(roleDir, {
+    id: firstId,
+    title: "First astral owner",
+    focus: "Preserve a complete code point at the filename boundary",
+    content: "The first astral identity must remain byte-for-byte stable.",
+    keywords: ["identity", "unicode"]
+  });
+  const firstPath = path.join(roleDir, "memory", "recent", `${firstSegment}.md`);
+  const firstBytes = fs.readFileSync(firstPath);
+  const second = createRecentMemory(roleDir, {
+    id: secondId,
+    title: "Second astral owner",
+    focus: "Keep distinct astral code points as distinct physical names",
+    content: "The second astral identity must not alias the first.",
+    keywords: ["identity", "unicode"]
+  });
+
+  assert.deepEqual(fs.readFileSync(firstPath), firstBytes);
+  assert.equal(fs.existsSync(path.join(roleDir, "memory", "recent", `${secondSegment}.md`)), true);
+  assert.deepEqual(listRecentMemories(roleDir).map(memory => memory.id).sort(), [first.id, second.id].sort());
+});
+
+test("a memory write never replaces a physical target owned by a mismatched legacy id", () => {
+  const roleDir = makeRoleDir();
+  const owner = createRecentMemory(roleDir, {
+    id: "physical owner",
+    title: "Mismatched legacy owner",
+    focus: "Preserve the physical file owner",
+    content: "This record simulates a legacy filename mismatch.",
+    keywords: ["identity", "legacy"]
+  });
+  const recentDir = path.join(roleDir, "memory", "recent");
+  const ownerPath = path.join(recentDir, "physical-owner.md");
+  const claimedPath = path.join(recentDir, "claimed-target.md");
+  fs.renameSync(ownerPath, claimedPath);
+  const originalBytes = fs.readFileSync(claimedPath);
+
+  assert.throws(() => createRecentMemory(roleDir, {
+    id: "claimed target",
+    title: "Claimed target",
+    focus: "Attempt to reuse an occupied physical path",
+    content: "This write must fail closed.",
+    keywords: ["identity", "legacy"]
+  }), /storage key already exists for a different logical id/i);
+  assert.deepEqual(fs.readFileSync(claimedPath), originalBytes);
+  assert.equal(listRecentMemories(roleDir).find(memory => memory.id === owner.id)?.content, owner.content);
+});
+
+test("legacy colliding recent-memory records remain readable but update and touch fail closed", () => {
+  const roleDir = makeRoleDir();
+  const timestamp = new Date().toISOString();
+  writeRecentMemory(roleDir, {
+    id: "legacy memory",
+    title: "Legacy space id",
+    focus: "Preserve the first legacy identity",
+    content: "First legacy record.",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    keywords: ["legacy", "identity"]
+  });
+  writeRecentMemory(roleDir, {
+    id: "legacy-memory",
+    title: "Legacy hyphen id",
+    focus: "Preserve the second legacy identity",
+    content: "Second legacy record.",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    keywords: ["legacy", "identity"]
+  });
+  assert.deepEqual(
+    listRecentMemories(roleDir).map(memory => memory.id).sort(),
+    ["legacy memory", "legacy-memory"]
+  );
+
+  assert.throws(() => touchRecentMemory(roleDir, "legacy memory", {
+    requestId: "legacy-memory-touch",
+    revision: storageMutationRevision("legacy-memory-touch")
+  }), /storage key already exists for a different logical id/i);
+  assert.throws(
+    () => updateRecentMemory(roleDir, "legacy-memory", { content: "Unsafe replacement." }),
+    /storage key already exists for a different logical id/i
+  );
+  assert.equal(listRecentMemories(roleDir).find(memory => memory.id === "legacy memory")?.content, "First legacy record.");
+  assert.equal(listRecentMemories(roleDir).find(memory => memory.id === "legacy-memory")?.content, "Second legacy record.");
+});
+
 test("canonical plan updates publish one event after persistence", () => {
   const roleDir = makeRoleDir();
   const created = createPlan(roleDir, {
@@ -529,6 +1029,7 @@ test("plan list cache observes direct external plan-file changes", async () => {
     steps: [{ id: "cache", title: "Verify external invalidation", status: "进行中" }],
     keywords: ["cache", "external"]
   });
+  await listPlansAsync(roleDir);
   assert.equal(listPlans(roleDir).find((plan) => plan.id === created.id)?.title, "External cache plan");
 
   const filePath = planJsonFile(roleDir, created.id, "active");
@@ -605,6 +1106,7 @@ test("plan list cache reparses only the externally changed plan file", { concurr
       keywords: ["cache", "incremental"]
     });
   }
+  await listPlansAsync(roleDir);
   assert.equal(listPlans(roleDir).length, 40);
 
   const changedId = "incremental-cache-17";
@@ -663,6 +1165,7 @@ test("plan detail reads reuse the warm plan list cache", { concurrency: false },
       keywords: ["cache", "detail"]
     });
   }
+  readPlansFromStorageInWorker(roleDir);
   const plans = listPlans(roleDir);
   const originalReadFileSync = fs.readFileSync;
   let planFileReads = 0;
@@ -968,7 +1471,7 @@ test("keyword recall records recalledAt and delays consolidation", () => {
     keywords: ["关键词命中"]
   });
 
-  const snapshot = roleKnowledgeSnapshot(roleDir, "这次消息包含关键词命中");
+  const snapshot = roleKnowledgeSnapshotFromStorage(roleDir, "这次消息包含关键词命中");
   assert.deepEqual(snapshot.matchedItems, [{ id: "memory-keyword", title: "旧记忆", type: "recent_memory" }]);
   assert.equal(snapshot.requiredReadItems[0]?.id, "memory-keyword");
   assert.equal(snapshot.requiredReadItems[0]?.endpoint.endsWith("/memory/recent/memory-keyword"), true);
@@ -1000,6 +1503,32 @@ test("reading or updating a recent memory refreshes viewedAt", () => {
   assert.equal(updated.content, "新内容");
   assert.equal(updated.viewedAt, updated.updatedAt);
   assert.equal(updated.recalledAt, undefined);
+});
+
+test("a recent-memory view mutation preserves updatedAt and carries deterministic commit proof", () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-view-mutation",
+    title: "浏览记忆",
+    focus: "验证浏览元数据由显式 mutation 写入",
+    content: "浏览不能伪装成内容更新。",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+    keywords: ["浏览", "幂等"]
+  });
+  const mutation = {
+    requestId: "recent-memory-view-event-one",
+    revision: storageMutationRevision("recent-memory-view-event-one")
+  };
+
+  const touched = touchRecentMemory(roleDir, "memory-view-mutation", mutation, "2026-09-01T01:02:03.000Z");
+
+  assert.equal(touched.updatedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(touched.viewedAt, "2026-09-01T01:02:03.000Z");
+  assert.equal(touched.recalledAt, undefined);
+  assert.equal(touched.storageMutationRequestId, mutation.requestId);
+  assert.equal(touched.storageRevision, mutation.revision);
+  assert.deepEqual(listRecentMemories(roleDir).find(item => item.id === touched.id), touched);
 });
 
 test("memory lifecycle presentation exposes Manager-owned 24 and 72 hour boundaries", () => {
@@ -1205,7 +1734,7 @@ test("consolidated memories can enter required read items and refresh viewedAt",
     keywords: ["项目边界", "Agent OS"]
   });
 
-  const snapshot = roleKnowledgeSnapshot(roleDir, "请确认项目边界");
+  const snapshot = roleKnowledgeSnapshotFromStorage(roleDir, "请确认项目边界");
   assert.equal(snapshot.requiredReadItems[0]?.id, "memory-stable");
   assert.equal(snapshot.requiredReadItems[0]?.type, "consolidated_memory");
   assert.equal(snapshot.requiredReadItems[0]?.endpoint.endsWith("/memory/consolidated/memory-stable"), true);
@@ -1243,7 +1772,7 @@ test("consolidated sources are not consolidated again while consolidated output 
   });
 
   assert.equal(pendingMemoryConsolidation(roleDir, "api", 24, 72, true), null);
-  const snapshot = roleKnowledgeSnapshot(roleDir, "请读取稳定结论");
+  const snapshot = roleKnowledgeSnapshotFromStorage(roleDir, "请读取稳定结论");
   assert.equal(snapshot.requiredReadItems.some((item) => item.id === "memory-source"), false);
   assert.equal(snapshot.requiredReadItems.some((item) => item.id === "memory-output" && item.type === "consolidated_memory"), true);
   const recalled = readConsolidatedMemory(roleDir, "memory-output");
@@ -1337,6 +1866,319 @@ test("large consolidation writes yield to the Manager event loop", async () => {
   );
 });
 
+test("consolidation rejects a lossy output-id collision before writing outputs or marking sources", async () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-consolidation-source",
+    title: "Consolidation source",
+    focus: "Preserve the source when output identity collides",
+    content: "This source remains active after a rejected completion.",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    keywords: ["identity", "consolidation"]
+  });
+  writeConsolidatedMemory(roleDir, {
+    id: "stable memory",
+    title: "Existing stable memory",
+    focus: "Own the legacy physical storage key",
+    content: "The existing consolidated result must remain intact.",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    inputMemoryIds: ["older-source"],
+    consolidationRunId: "older-run",
+    keywords: ["identity", "consolidation"]
+  });
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+
+  await assert.rejects(completeMemoryConsolidation(roleDir, request.run.id, [{
+    id: "stable-memory",
+    title: "Colliding stable memory",
+    focus: "Attempt a lossy consolidated-output collision",
+    content: "This output must not replace the existing result.",
+    keywords: ["identity", "consolidation"]
+  }]), /storage key already exists for a different logical id/i);
+
+  assert.equal(
+    listConsolidatedMemories(roleDir).find(memory => memory.id === "stable memory")?.content,
+    "The existing consolidated result must remain intact."
+  );
+  assert.equal(
+    listRecentMemories(roleDir).find(memory => memory.id === "memory-consolidation-source")?.consolidatedAt,
+    undefined
+  );
+});
+
+test("Windows sigma aliases cannot replace an existing consolidated memory", async () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "sigma-consolidation-source",
+    title: "Sigma consolidation source",
+    focus: "Preserve stable memory across Windows path aliases",
+    content: "This source remains active after the alias is rejected.",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    keywords: ["identity", "windows"]
+  });
+  writeConsolidatedMemory(roleDir, {
+    id: "σ",
+    title: "Stable sigma owner",
+    focus: "Keep the original consolidated bytes",
+    content: "The ordinary sigma owns this stable memory identity.",
+    createdAt: "2025-01-01T00:00:00.000Z",
+    updatedAt: "2025-01-01T00:00:00.000Z",
+    inputMemoryIds: ["older-source"],
+    consolidationRunId: "older-run",
+    keywords: ["identity", "windows"]
+  });
+  const existingPath = path.join(roleDir, "memory", "consolidated", "σ.json");
+  const existingBytes = fs.readFileSync(existingPath);
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+
+  await assert.rejects(completeMemoryConsolidation(roleDir, request.run.id, [{
+    id: "ς",
+    title: "Final sigma alias",
+    focus: "Attempt a Windows ordinal-ignore-case collision",
+    content: "This alias must never replace the stable sigma owner.",
+    keywords: ["identity", "windows"]
+  }]), /storage key already exists for a different logical id/i);
+
+  assert.deepEqual(fs.readFileSync(existingPath), existingBytes);
+  assert.equal(
+    listRecentMemories(roleDir).find(memory => memory.id === "sigma-consolidation-source")?.consolidatedAt,
+    undefined
+  );
+});
+
+test("consolidation never overwrites an existing consolidated memory with the same logical id", async () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-immutable-source",
+    title: "Immutable source",
+    focus: "Preserve an existing stable memory",
+    content: "This source must remain active when the output id is already owned.",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    keywords: ["immutable", "identity"]
+  });
+  writeConsolidatedMemory(roleDir, {
+    id: "stable-memory-exact",
+    title: "Existing immutable memory",
+    focus: "Keep the first stable record byte-for-byte",
+    content: "The original consolidated memory is immutable.",
+    createdAt: "2025-01-01T00:00:00.000Z",
+    updatedAt: "2025-01-01T00:00:00.000Z",
+    inputMemoryIds: ["older-source"],
+    consolidationRunId: "older-run",
+    keywords: ["immutable", "identity"]
+  });
+  const existingPath = path.join(roleDir, "memory", "consolidated", "stable-memory-exact.json");
+  const existingBytes = fs.readFileSync(existingPath);
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+  const requestId = "immutable-output-request";
+
+  await assert.rejects(completeMemoryConsolidation(roleDir, request.run.id, [{
+    id: "stable-memory-exact",
+    title: "Replacement memory",
+    focus: "Attempt to replace the immutable record",
+    content: "This content must never be published.",
+    keywords: ["immutable", "identity"]
+  }], {
+    requestId,
+    revision: storageMutationRevision(requestId)
+  }), /already exists and is immutable/i);
+
+  assert.deepEqual(fs.readFileSync(existingPath), existingBytes);
+  assert.equal(
+    listRecentMemories(roleDir).find(memory => memory.id === "memory-immutable-source")?.consolidatedAt,
+    undefined
+  );
+});
+
+test("consolidation rejects repeated logical output ids before publishing any batch entry", async () => {
+  const roleDir = makeRoleDir();
+  writeRecentMemory(roleDir, {
+    id: "memory-duplicate-output-source",
+    title: "Duplicate output source",
+    focus: "Reject duplicate output identities before publication",
+    content: "This source must remain active after a rejected batch.",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    keywords: ["duplicate", "identity"]
+  });
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+  const requestId = "duplicate-output-request";
+
+  await assert.rejects(completeMemoryConsolidation(roleDir, request.run.id, [{
+    id: "duplicate-output",
+    title: "First duplicate",
+    focus: "First output using the repeated id",
+    content: "First candidate.",
+    keywords: ["duplicate", "identity"]
+  }, {
+    id: "duplicate-output",
+    title: "Second duplicate",
+    focus: "Second output using the repeated id",
+    content: "Second candidate.",
+    keywords: ["duplicate", "identity"]
+  }], {
+    requestId,
+    revision: storageMutationRevision(requestId)
+  }), /batch repeats a logical id/i);
+
+  assert.equal(fs.existsSync(path.join(roleDir, "memory", "consolidated", "duplicate-output.md")), false);
+  assert.equal(
+    listRecentMemories(roleDir).find(memory => memory.id === "memory-duplicate-output-source")?.consolidatedAt,
+    undefined
+  );
+});
+
+test("a consolidation retry converges after a fault between atomic batch publications", async () => {
+  const roleDir = makeRoleDir();
+  for (const id of ["memory-atomic-source-a", "memory-atomic-source-b"]) {
+    writeRecentMemory(roleDir, {
+      id,
+      title: `Atomic source ${id}`,
+      focus: "Recover a partially published atomic consolidation batch",
+      content: `Stable source content for ${id}.`,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      keywords: ["atomic", "recovery"]
+    });
+  }
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+  const requestId = "atomic-batch-recovery-request";
+  const mutation = {
+    requestId,
+    revision: storageMutationRevision(requestId)
+  };
+  const outputs = [{
+    id: "atomic-output-a",
+    title: "Atomic output A",
+    focus: "First stable output from the recoverable batch",
+    content: "Stable output A.",
+    keywords: ["atomic", "recovery"]
+  }, {
+    id: "atomic-output-b",
+    title: "Atomic output B",
+    focus: "Second stable output from the recoverable batch",
+    content: "Stable output B.",
+    keywords: ["atomic", "recovery"]
+  }];
+
+  await assert.rejects(
+    completeMemoryConsolidationWithAtomicBatchFaultForTest(
+      roleDir,
+      request.run.id,
+      outputs,
+      mutation,
+      3
+    ),
+    /injected memory catalog batch failure/i
+  );
+  const firstOutputPath = path.join(roleDir, "memory", "consolidated", "atomic-output-a.md");
+  const firstPublishedBytes = fs.readFileSync(firstOutputPath);
+  assert.equal(
+    listRecentMemories(roleDir).filter(memory => memory.consolidationRunId === request.run.id).length,
+    1
+  );
+
+  const recovered = await completeMemoryConsolidation(roleDir, request.run.id, outputs, mutation);
+
+  assert.equal(recovered.run.status, "completed");
+  assert.deepEqual(recovered.run.outputMemoryIds, ["atomic-output-a", "atomic-output-b"]);
+  assert.deepEqual(fs.readFileSync(firstOutputPath), firstPublishedBytes);
+  assert.equal(
+    listConsolidatedMemories(roleDir).filter(memory => memory.consolidationRunId === request.run.id).length,
+    2
+  );
+  assert.equal(
+    listRecentMemories(roleDir).filter(memory => memory.consolidationRunId === request.run.id).length,
+    2
+  );
+  assert.equal(
+    fs.readdirSync(path.join(roleDir, "memory", "recent")).some(name => name.endsWith(".tmp")),
+    false
+  );
+});
+
+test("consolidation stops after the first publication when its lease owner is atomically replaced", async () => {
+  const roleDir = makeRoleDir();
+  for (const id of ["memory-fenced-source-a", "memory-fenced-source-b"]) {
+    writeRecentMemory(roleDir, {
+      id,
+      title: `Fenced source ${id}`,
+      focus: "Stop a consolidation batch immediately after lease replacement",
+      content: `Source content for ${id}.`,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      keywords: ["fencing", "consolidation"]
+    });
+  }
+  const request = pendingMemoryConsolidation(roleDir, "api", 24, 72, true);
+  assert.ok(request);
+  const requestId = "fenced-batch-request";
+  const mutation = {
+    requestId,
+    revision: storageMutationRevision(requestId)
+  };
+  const outputs = [{
+    id: "fenced-output-a",
+    title: "Fenced output A",
+    focus: "The only output published before replacement is detected",
+    content: "This first atomic output may already be durable.",
+    keywords: ["fencing", "consolidation"]
+  }, {
+    id: "fenced-output-b",
+    title: "Fenced output B",
+    focus: "No publication after the replacement checkpoint",
+    content: "This output must never be published by the old owner.",
+    keywords: ["fencing", "consolidation"]
+  }];
+  const lockPath = planStorageLeasePath(roleDir, ROLE_MEMORY_CATALOG_LEASE_ID);
+  const replacementOwner = "replacement-host:8765:memory-batch";
+  let checkpoints = 0;
+
+  await assert.rejects(withPlanStorageLeaseAsync(
+    roleDir,
+    ROLE_MEMORY_CATALOG_LEASE_ID,
+    async lease => applyMemoryConsolidationResult(
+      roleDir,
+      request.run.id,
+      { memories: outputs },
+      mutation,
+      () => {
+        checkpoints += 1;
+        if (checkpoints === 3) {
+          const replacement = {
+            ...(JSON.parse(fs.readFileSync(lockPath, "utf8")) as Record<string, unknown>),
+            owner: replacementOwner,
+            host: `${os.hostname()}-replacement`,
+            pid: 8765
+          };
+          atomicWriteFileSync(lockPath, `${JSON.stringify(replacement)}\n`);
+        }
+        assertPlanStorageLeaseOwner(lease);
+      }
+    ),
+    { heartbeatIntervalMs: 10 }
+  ), error => error instanceof Error
+    && (error as Error & { code?: string }).code === "PLAN_STORAGE_LEASE_LOST");
+
+  assert.equal(checkpoints, 3);
+  assert.equal(fs.existsSync(path.join(roleDir, "memory", "consolidated", "fenced-output-a.md")), true);
+  assert.equal(fs.existsSync(path.join(roleDir, "memory", "consolidated", "fenced-output-b.md")), false);
+  assert.equal(
+    listRecentMemories(roleDir).filter(memory => memory.consolidationRunId === request.run.id).length,
+    0
+  );
+  assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).owner, replacementOwner);
+});
+
 test("active recent memories get a small boost without overwhelming explicit matches", () => {
   const roleDir = makeRoleDir();
   writeRecentMemory(roleDir, {
@@ -1364,7 +2206,7 @@ test("active recent memories get a small boost without overwhelming explicit mat
     keywords: ["无关词"]
   });
 
-  const snapshot = roleKnowledgeSnapshot(roleDir, "共同关键词，同时请看明确标题记忆");
+  const snapshot = roleKnowledgeSnapshotFromStorage(roleDir, "共同关键词，同时请看明确标题记忆");
   assert.equal(snapshot.requiredReadItems[0]?.id, "memory-explicit");
   assert.equal(snapshot.requiredReadItems[1]?.id, "memory-active");
   assert.equal(snapshot.requiredReadItems.some((item) => item.id === "memory-irrelevant-active"), false);
@@ -1381,7 +2223,7 @@ test("memory content alone does not create a required read match", () => {
     keywords: ["其他关键词"]
   });
 
-  const snapshot = roleKnowledgeSnapshot(roleDir, "隐藏短语");
+  const snapshot = roleKnowledgeSnapshotFromStorage(roleDir, "隐藏短语");
   assert.deepEqual(snapshot.requiredReadItems, []);
   assert.deepEqual(snapshot.matchedItems, []);
 });
@@ -1801,12 +2643,12 @@ status: active
 Hidden-only body phrase.
 `);
 
-  const matched = roleKnowledgeSnapshot(roleDir, "Please explain route kind.");
+  const matched = roleKnowledgeSnapshotFromStorage(roleDir, "Please explain route kind.");
   assert.equal(matched.requiredReadItems[0]?.id, "routing-guide");
   assert.equal(matched.requiredReadItems[0]?.type, "role_skill");
   assert.equal(matched.requiredReadItems[0]?.endpoint.endsWith("/skills/routing-guide"), true);
   assert.deepEqual(matched.matchedSkills.map((item) => item.id), ["routing-guide"]);
 
-  const hidden = roleKnowledgeSnapshot(roleDir, "Hidden-only body phrase.");
+  const hidden = roleKnowledgeSnapshotFromStorage(roleDir, "Hidden-only body phrase.");
   assert.deepEqual(hidden.requiredReadItems, []);
 });

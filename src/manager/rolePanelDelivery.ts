@@ -1,7 +1,7 @@
 import {
-  appendRolePanelTimelineMessage,
   createRolePanelMessageId,
   type RolePanelAttachment,
+  type RolePanelTimelineAppendResult,
   type RolePanelTimelineMessage
 } from "../rolePanelTimeline.js";
 import {
@@ -22,13 +22,16 @@ export type RolePanelDelivery = (
 export type RolePanelDeliveryOptions = {
   runtime: GatewayRuntime;
   roleId: string;
-  roleDir: string;
   sender: string;
   text: string;
   attachments: RolePanelAttachment[];
   messageIdPrefix: string;
   replyContext?: Record<string, unknown>;
   deliver: RolePanelDelivery;
+  appendTimeline: (
+    roleId: string,
+    message: RolePanelTimelineMessage
+  ) => Promise<RolePanelTimelineAppendResult>;
 };
 
 export type RolePanelDeliveryResult = {
@@ -92,7 +95,7 @@ export async function deliverRolePanelMessage(options: RolePanelDeliveryOptions)
     await options.deliver(options.runtime, messageId, options.text, options.attachments, replyContext);
   } catch (error) {
     try {
-      appendRolePanelTimelineMessage(options.roleDir, timelineMessage(options, messageId, replyContext, "failed"));
+      await options.appendTimeline(options.roleId, timelineMessage(options, messageId, replyContext, "failed"));
     } catch {
       // The handler failure remains authoritative when the audit timeline is unavailable.
     }
@@ -106,7 +109,10 @@ export async function deliverRolePanelMessage(options: RolePanelDeliveryOptions)
 
   let message: RolePanelTimelineMessage | undefined;
   try {
-    message = appendRolePanelTimelineMessage(options.roleDir, timelineMessage(options, messageId, replyContext, "sent"));
+    message = (await options.appendTimeline(
+      options.roleId,
+      timelineMessage(options, messageId, replyContext, "sent")
+    )).message;
   } catch {
     // The handler already accepted the turn. A timeline failure must not invite a duplicate retry.
   }

@@ -95,7 +95,7 @@ Do not use fixed port 4510, `CODEX_APP_SERVER_WS_URL`, or a separate stdio Runti
 
 ## RabiRoute Desktop UI is missing
 
-Only `RabiRouteHost.exe` creates Manager and Desktop in the Windows package. Run `Start-RabiRoute-Desktop.bat`; it activates the current Host or starts one new Host and never launches the tray directly.
+Only `RabiRouteHost.exe` creates Manager and Desktop in the Windows package. Reopen RabiRoute from the Start menu or run `RabiRouteHost.exe` from the installation directory. A second launch sends an activation request to the current Host and never starts the tray directly.
 
 Query the exact generation state:
 

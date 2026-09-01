@@ -5,6 +5,8 @@ const TRANSCRIPT_QUEUE_KEY = "rabilink-aiui-transcript-queue";
 const AGENT_MESSAGE_QUEUE_KEY = "rabilink-aiui-agent-message-queue";
 const CLOUD_LOG_QUEUE_KEY = "rabilink-aiui-cloud-log-queue";
 const DEVICE_CREDENTIAL_KEY = "rabilink-aiui-device-credential";
+const CONTENT_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const OPERATION_ID_PATTERN = /^[A-Za-z0-9:._-]{1,256}$/;
 const MAX_TRANSCRIPT_QUEUE_LENGTH = 2000;
 const MAX_TRANSCRIPT_QUEUE_AGE_MS = 48 * 60 * 60 * 1000;
 const MAX_AGENT_MESSAGE_QUEUE_LENGTH = 2000;
@@ -117,6 +119,33 @@ function hashTokenPart(value, seed) {
   return hash.toString(16).padStart(8, "0");
 }
 
+function strongContentHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return CONTENT_HASH_PATTERN.test(normalized) ? normalized : "";
+}
+
+function normalizePendingRouteMutation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const operationId = String(value.operationId || "").trim();
+  const expectedContentHash = strongContentHash(value.expectedContentHash);
+  const kind = String(value.kind || "").trim();
+  const targetId = String(value.targetId || "").trim().slice(0, 256);
+  const targetDeviceId = String(value.targetDeviceId || "").trim().slice(0, 256);
+  const payloadFingerprint = strongContentHash(value.payloadFingerprint);
+  const state = ["pending", "uncertain", "conflict"].includes(value.state) ? value.state : "pending";
+  if (!OPERATION_ID_PATTERN.test(operationId) || !expectedContentHash || !kind || !payloadFingerprint) return null;
+  return {
+    operationId,
+    expectedContentHash,
+    kind,
+    targetId,
+    targetDeviceId,
+    payloadFingerprint,
+    state,
+    createdAt: Math.max(0, Number(value.createdAt || 0))
+  };
+}
+
 export function loadSettings(defaults = {}) {
   const cached = readStorage();
   return {
@@ -124,6 +153,9 @@ export function loadSettings(defaults = {}) {
     token: "",
     targetDeviceId: cached.targetDeviceId || "",
     selectedRouteId: cached.selectedRouteId || "",
+    routeCatalogContentHash: strongContentHash(cached.routeCatalogContentHash),
+    routeCatalogRouteConfigHash: strongContentHash(cached.routeCatalogRouteConfigHash),
+    pendingRouteMutation: normalizePendingRouteMutation(cached.pendingRouteMutation),
     agentCursor: cached.agentCursor || "",
     agentCursorTokenKey: cached.agentCursorTokenKey || ""
   };
@@ -135,6 +167,12 @@ export function saveSettings(patch) {
     ...(patch || {})
   };
   delete next.token;
+  next.routeCatalogContentHash = strongContentHash(next.routeCatalogContentHash);
+  next.routeCatalogRouteConfigHash = strongContentHash(next.routeCatalogRouteConfigHash);
+  if (Object.prototype.hasOwnProperty.call(next, "pendingRouteMutation")) {
+    next.pendingRouteMutation = normalizePendingRouteMutation(next.pendingRouteMutation);
+    if (!next.pendingRouteMutation) delete next.pendingRouteMutation;
+  }
   wx.setStorageSync(STORAGE_KEY, next);
   return next;
 }

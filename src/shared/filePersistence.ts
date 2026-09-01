@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -15,6 +16,68 @@ export type AtomicWriteFileOptions = {
   renameSync?: (source: string, destination: string) => void;
 };
 
+type FileLockRecord = {
+  owner?: string;
+  host?: string;
+  pid?: number;
+  createdAt?: number;
+};
+
+function readFileLockRecord(lockPath: string): FileLockRecord | null {
+  try {
+    return JSON.parse(fs.readFileSync(lockPath, "utf8")) as FileLockRecord;
+  } catch {
+    return null;
+  }
+}
+
+function sameHostProcessAlive(record: FileLockRecord | null): boolean {
+  if (!record?.host || record.host.toLowerCase() !== os.hostname().toLowerCase()
+    || !Number.isInteger(record.pid) || Number(record.pid) <= 0) return false;
+  try {
+    process.kill(Number(record.pid), 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function reclaimStaleFileLock(lockPath: string, staleMs: number): boolean {
+  try {
+    const before = fs.statSync(lockPath);
+    const record = readFileLockRecord(lockPath);
+    if (sameHostProcessAlive(record) || Date.now() - before.mtimeMs < staleMs) return false;
+    const owner = String(record?.owner || "");
+    const afterRecord = readFileLockRecord(lockPath);
+    const after = fs.statSync(lockPath);
+    if (String(afterRecord?.owner || "") !== owner
+      || after.mtimeMs !== before.mtimeMs
+      || after.size !== before.size) return false;
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+}
+
+function releaseOwnedFileLock(lockPath: string, owner: string): void {
+  try {
+    if (readFileLockRecord(lockPath)?.owner === owner) fs.unlinkSync(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+function isWindowsExclusiveCreateContention(error: unknown, lockPath: string): boolean {
+  const failure = error as NodeJS.ErrnoException;
+  return process.platform === "win32"
+    && failure.code === "EPERM"
+    && failure.syscall === "open"
+    && typeof failure.path === "string"
+    && path.resolve(failure.path) === path.resolve(lockPath);
+}
+
 export function withFileLockSync<T>(
   lockPath: string,
   action: () => T,
@@ -24,46 +87,30 @@ export function withFileLockSync<T>(
   const staleMs = Math.max(timeoutMs, Math.floor(options.staleMs ?? 30_000));
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   const deadline = Date.now() + timeoutMs;
+  const owner = `${os.hostname()}:${process.pid}:${randomUUID()}`;
   while (true) {
     try {
       const descriptor = fs.openSync(lockPath, "wx");
       try {
-        fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`, "utf8");
+        fs.writeFileSync(descriptor, `${JSON.stringify({ owner, host: os.hostname(), pid: process.pid, createdAt: Date.now() })}\n`, "utf8");
+        fs.fsyncSync(descriptor);
       } finally {
         fs.closeSync(descriptor);
       }
-      try {
-        return action();
-      } finally {
-        try {
-          fs.unlinkSync(lockPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-      }
+      break;
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") {
-        if (process.platform !== "win32" || code !== "EPERM") throw error;
-        try {
-          fs.statSync(lockPath);
-        } catch (lockError) {
-          if ((lockError as NodeJS.ErrnoException).code === "ENOENT") continue;
-          throw error;
-        }
-      }
-      try {
-        if (Date.now() - fs.statSync(lockPath).mtimeMs >= staleMs) {
-          fs.unlinkSync(lockPath);
-          continue;
-        }
-      } catch (lockError) {
-        if ((lockError as NodeJS.ErrnoException).code !== "ENOENT") throw lockError;
-        continue;
-      }
+      const code = String((error as NodeJS.ErrnoException).code || "");
+      const windowsExclusiveCreateContention = isWindowsExclusiveCreateContention(error, lockPath);
+      if (code !== "EEXIST" && !windowsExclusiveCreateContention) throw error;
+      if (reclaimStaleFileLock(lockPath, staleMs)) continue;
       if (Date.now() >= deadline) throw new Error(`Timed out waiting for file lock: ${lockPath}`);
       Atomics.wait(lockWaitBuffer, 0, 0, 10);
     }
+  }
+  try {
+    return action();
+  } finally {
+    releaseOwnedFileLock(lockPath, owner);
   }
 }
 
@@ -83,7 +130,10 @@ export function atomicWriteFileSync(
     path.dirname(filePath),
     `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   );
-  const maxRenameAttempts = Math.max(1, Math.floor(options.maxRenameAttempts ?? 8));
+  // Windows readers may briefly hold a destination without FILE_SHARE_DELETE.
+  // Keep the old file intact and retry the atomic rename for a bounded window;
+  // never unlink the destination as a fallback because that creates a visible gap.
+  const maxRenameAttempts = Math.max(1, Math.floor(options.maxRenameAttempts ?? 24));
   const retryDelayMs = Math.max(1, Math.floor(options.retryDelayMs ?? 25));
   const renameSync = options.renameSync ?? fs.renameSync;
   try {

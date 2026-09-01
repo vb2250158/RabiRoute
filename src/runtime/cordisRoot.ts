@@ -45,12 +45,19 @@ export class RabiCordisRoot {
       this.state = "disposing";
       this.disposePromise = (async () => {
         const pending = [...this.initializers.values()];
-        await Promise.allSettled(pending);
+        const failures: unknown[] = [];
+        const initializerResults = await Promise.allSettled(pending);
+        for (const result of initializerResults) {
+          if (result.status === "rejected") failures.push(result.reason);
+        }
         try {
-          await this.host.dispose();
+          await this.host.dispose().catch(error => { failures.push(error); });
         } finally {
           this.initializers.clear();
           this.state = "disposed";
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(failures, `${this.name} Cordis root disposal was not fully confirmed.`);
         }
       })();
     }

@@ -19,6 +19,10 @@ import {
   mountMessageAdapterRuntime,
   type MessageAdapterRuntimeMount
 } from "./runtime/messageAdapterRuntime.js";
+import {
+  planStorageGenerationLeaseFromEnvironment,
+  verifyPlanStorageGenerationLease
+} from "./runtime/planStorageGenerationFence.js";
 
 const GATEWAY_CONTRIBUTION_RUNTIME_KEY = "rabi.runtime.contributions.gateway";
 const GATEWAY_MESSAGE_ADAPTER_RUNTIME_KEY = "rabi.runtime.messageAdapters.gateway";
@@ -132,6 +136,8 @@ export function startGatewayMain(
 }
 
 export async function runGatewayMain(): Promise<void> {
+  const storageGenerationLease = planStorageGenerationLeaseFromEnvironment();
+  await verifyPlanStorageGenerationLease(storageGenerationLease);
   await startGatewayMain();
   const gatewayId = String(process.env.GATEWAY_ID || "").trim();
   const gatewayGenerationId = String(process.env.RABIROUTE_GATEWAY_GENERATION_ID || "").trim();

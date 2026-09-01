@@ -8,6 +8,7 @@ import type { TrustedWebThemeResourceRegistration } from "../pluginThemes";
 import { activate as activateCore } from "./builtin/core";
 import { activate as activatePersona } from "./builtin/persona";
 import { activate as activateDesktop } from "./builtin/desktop";
+import { activate as activateXiaomiHome } from "./builtin/xiaomi-home";
 
 type Registration = {
   kind: string;
@@ -50,8 +51,11 @@ test("independent Web plugin entries register only their own contributions", () 
   activateCore(moduleApi("manager:core", registrations));
   activatePersona(moduleApi("manager:persona", registrations));
   activateDesktop(moduleApi("manager:desktop", registrations));
+  activateXiaomiHome(moduleApi("manager:xiaomi-home", registrations));
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:core" && item.kind === "page").map(item => item.routeId), ["route.overview", "global.lan-agents", "global.settings", "global.docs"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:persona" && item.kind === "page").map(item => item.routeId), ["route.persona", "route.persona-document", "route.knowledge", "route.persona-sync"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:desktop").map(item => item.rendererId), ["builtin.desktop-settings.v1"]);
   assert.deepEqual(registrations.filter(item => item.instanceId === "manager:desktop").map(item => item.placementId), ["global.settings.sections"]);
+  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:xiaomi-home").map(item => item.rendererId), ["builtin.xiaomi-home-settings.v1"]);
+  assert.deepEqual(registrations.filter(item => item.instanceId === "manager:xiaomi-home").map(item => item.placementId), ["global.settings.sections"]);
 });

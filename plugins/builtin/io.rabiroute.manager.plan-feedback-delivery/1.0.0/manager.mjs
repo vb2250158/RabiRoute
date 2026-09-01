@@ -80,7 +80,7 @@ export const activate = definePlugin({
             }
         });
         runtime.planFeedbackRecoveryService = recovery;
-        const start = () => { void recovery.start("manager plugin activation"); };
+        const start = () => { void recovery.start("plan and route readiness"); };
         runtime.startActivePlanFeedbackRecovery = start;
         ctx.effect(() => async () => {
             runtime.planFeedbackDeliveryActive = false;
@@ -91,9 +91,6 @@ export const activate = definePlugin({
             if (runtime.planFeedbackRecoveryService === recovery)
                 runtime.planFeedbackRecoveryService = undefined;
         }, "stop Manager plan feedback delivery plugin");
-        if (runtime.managerListenerReady)
-            start();
-
                 await Promise.all(pendingEffects);
                 return disposeStartedEffects;
             } catch (error) {

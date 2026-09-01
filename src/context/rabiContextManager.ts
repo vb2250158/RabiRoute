@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import {
   roleKnowledgeSnapshot,
+  roleKnowledgeSnapshotFromStorage,
+  type RoleKnowledgeSnapshotOptions,
   type RequiredReadItem,
   type RoleKnowledgeSnapshot
 } from "../roleKnowledge.js";
@@ -53,6 +55,22 @@ export type RabiContextResolution = {
   reason: "entry_context" | "knowledge_match" | "explicit_rabi_context" | "no_match";
   entries: RabiContextEntry[];
 };
+
+export type RabiContextKnowledgeResolver = (
+  roleDir: string,
+  signalText: string,
+  options: RoleKnowledgeSnapshotOptions
+) => RoleKnowledgeSnapshot;
+
+export type RabiContextKnowledgeResolvers = {
+  published: RabiContextKnowledgeResolver;
+  storage: RabiContextKnowledgeResolver;
+};
+
+const DEFAULT_KNOWLEDGE_RESOLVERS: RabiContextKnowledgeResolvers = Object.freeze({
+  published: roleKnowledgeSnapshot,
+  storage: roleKnowledgeSnapshotFromStorage
+});
 
 const EXPLICIT_RABI_CONTEXT_PATTERN = /\[rabi:|\/api\/roles\/[^\s/]+\/(?:plans|memory|skills)|(?:data[\\/])?roles[\\/][^\\/\s]+[\\/](?:plans|memory|persona\.md|growth\.md|skills\.md)/i;
 
@@ -112,11 +130,15 @@ export function requiredReadContextKey(item: RequiredReadItem): string {
 }
 
 export class RabiContextManager {
+  constructor(private readonly knowledgeResolvers: RabiContextKnowledgeResolvers = DEFAULT_KNOWLEDGE_RESOLVERS) {}
+
   resolve(trigger: RabiContextTrigger): RabiContextResolution {
     const policy = RABI_CONTEXT_TRIGGER_POLICIES[trigger.kind];
-    const signalText = String(trigger.signalText || "");
     const seenContextKeys = new Set(trigger.seenContextKeys ?? []);
-    const knowledge = roleKnowledgeSnapshot(trigger.roleDir, signalText, {
+    const resolveKnowledge = trigger.source === "codex_hook"
+      ? this.knowledgeResolvers.storage
+      : this.knowledgeResolvers.published;
+    const knowledge = resolveKnowledge(trigger.roleDir, String(trigger.signalText || ""), {
       roleId: trigger.roleId,
       includePendingConsolidation: trigger.includePendingConsolidation,
       consolidationTrigger: trigger.consolidationTrigger,
@@ -125,6 +147,13 @@ export class RabiContextManager {
       touchViewedAt: policy.touchViewedAt,
       touchRequiredRead: (item) => !seenContextKeys.has(requiredReadContextKey(item))
     });
+    return this.resolveProjection(trigger, knowledge);
+  }
+
+  /** Resolves presentation metadata from a Manager-fenced projection without reading role storage. */
+  resolveProjection(trigger: RabiContextTrigger, knowledge: RoleKnowledgeSnapshot): RabiContextResolution {
+    const policy = RABI_CONTEXT_TRIGGER_POLICIES[trigger.kind];
+    const signalText = String(trigger.signalText || "");
     const hasKnowledgeMatch = knowledge.requiredReadItems.length > 0;
     const hasExplicitRabiContext = EXPLICIT_RABI_CONTEXT_PATTERN.test(signalText);
     const shouldInject = policy.alwaysInject || hasKnowledgeMatch || hasExplicitRabiContext;

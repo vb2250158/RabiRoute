@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readRolePanelTimeline } from "../rolePanelTimeline.js";
+import {
+  appendRolePanelTimelineMessageIfAbsent,
+  readRolePanelTimeline,
+  type RolePanelTimelineMessage
+} from "../rolePanelTimeline.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import {
   createPlanTaskCompletionDelivery,
@@ -57,6 +61,11 @@ function delivery(roleDir: string, gatewayId?: string) {
   };
 }
 
+function appendTimelineTo(roleDir: string) {
+  return async (_roleId: string, message: RolePanelTimelineMessage) =>
+    appendRolePanelTimelineMessageIfAbsent(roleDir, message);
+}
+
 test("plan task completion writes the RolePanel timeline and invokes the selected route handoff", async (t) => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-delivery-"));
   t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
@@ -70,6 +79,7 @@ test("plan task completion writes the RolePanel timeline and invokes the selecte
     triggerRolePanelMessage: async (target, messageId, text) => {
       handoffs.push({ runtimeId: target.definition.id, messageId, text });
     },
+    appendTimeline: appendTimelineTo(roleDir),
     publishEvent: (type, data) => events.push({ type, data })
   });
 
@@ -86,6 +96,33 @@ test("plan task completion writes the RolePanel timeline and invokes the selecte
   assert.equal(events[0].type, "plan_task_completed");
   assert.equal(events[0].data.gatewayId, selected.definition.id);
   assert.equal(events[0].data.recipient, "persona_fallback");
+});
+
+test("a timeline retry reuses the completion message id without redelivering externally", async (t) => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-plan-delivery-retry-"));
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const selected = runtime("YeYu__retry", "YeYu");
+  let externalDeliveries = 0;
+  const recordedIds: string[] = [];
+  const deliver = createPlanTaskCompletionDelivery({
+    getRuntime: () => selected,
+    listRuntimes: () => [selected],
+    roleIdForDefinition: definition => definition.agentRoleId || "",
+    triggerRolePanelMessage: async () => { externalDeliveries += 1; },
+    appendTimeline: async (_roleId, message) => {
+      recordedIds.push(message.id);
+      if (recordedIds.length === 1) throw new Error("timeline unavailable");
+      return appendRolePanelTimelineMessageIfAbsent(roleDir, message);
+    }
+  });
+
+  await deliver(delivery(roleDir, selected.definition.id));
+  await deliver(delivery(roleDir, selected.definition.id));
+
+  assert.equal(externalDeliveries, 1);
+  assert.equal(recordedIds.length, 2);
+  assert.equal(recordedIds[0], recordedIds[1]);
+  assert.equal(readRolePanelTimeline(roleDir).length, 1);
 });
 
 test("enabled plan secretary receives the business result directly without waking the persona", async (t) => {
@@ -107,6 +144,7 @@ test("enabled plan secretary receives the business result directly without wakin
     listRuntimes: () => [selected],
     roleIdForDefinition: (definition) => definition.agentRoleId || "",
     triggerRolePanelMessage: async () => { personaHandoffs += 1; },
+    appendTimeline: appendTimelineTo(roleDir),
     sendToSecretary: async (_runtime, target, completion, prompt) => {
       secretaryHandoffs.push({
         threadId: target.threadId,
@@ -162,7 +200,8 @@ test("plan task completion fails closed for missing or conflicting route binding
     getRuntime: (id) => runtimes.find((item) => item.definition.id === id),
     listRuntimes: () => runtimes,
     roleIdForDefinition: (definition) => definition.agentRoleId || "",
-    triggerRolePanelMessage: async () => { handoffCount += 1; }
+    triggerRolePanelMessage: async () => { handoffCount += 1; },
+    appendTimeline: appendTimelineTo(roleDir)
   });
 
   await assert.rejects(deliver(delivery(roleDir, "missing")), /Gateway not found/);
@@ -182,7 +221,8 @@ test("plan task completion rejects a Codex target bound to the source session", 
     getRuntime: () => selected,
     listRuntimes: () => [selected],
     roleIdForDefinition: (definition) => definition.agentRoleId || "",
-    triggerRolePanelMessage: async () => { handoffCount += 1; }
+    triggerRolePanelMessage: async () => { handoffCount += 1; },
+    appendTimeline: appendTimelineTo(roleDir)
   });
 
   await assert.rejects(
@@ -209,7 +249,8 @@ test("plan task completion respects the target Codex endpoint Hook switch", asyn
     getRuntime: () => selected,
     listRuntimes: () => [selected],
     roleIdForDefinition: (definition) => definition.agentRoleId || "",
-    triggerRolePanelMessage: async () => { handoffCount += 1; }
+    triggerRolePanelMessage: async () => { handoffCount += 1; },
+    appendTimeline: appendTimelineTo(roleDir)
   });
 
   await assert.rejects(

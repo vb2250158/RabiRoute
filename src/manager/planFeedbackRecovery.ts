@@ -1,13 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
 import {
-  listPlanFeedbackAsync,
-  listPlanFeedbackFiles,
   planFeedbackResponseId,
-  updatePlanFeedbackDeliveryAsync,
+  type PlanFeedbackDeliveryStatus,
   type PlanFeedbackRecord
 } from "../planFeedback.js";
-import { getPlanAsync, type PlanItem } from "../roleKnowledge.js";
+import type { PlanItem } from "../roleKnowledge.js";
 
 export type PlanFeedbackRecoveryCandidate = {
   roleDir: string;
@@ -30,184 +26,101 @@ export type PlanFeedbackRecoveryOutcome =
   | { state: "deferred"; reason: string }
   | { state: "failed"; error: unknown };
 
-function isRecoverableFeedback(record: PlanFeedbackRecord): boolean {
-  return (record.deliveryStatus === "pending" || record.deliveryStatus === "failed")
+export type PlanFeedbackRecoveryProjection = Readonly<{
+  plan: PlanItem;
+  records: PlanFeedbackRecord[];
+}>;
+
+function hasOpenPostCommit(record: PlanFeedbackRecord): boolean {
+  return record.postCommit?.deliveryId === record.id
+    && record.postCommit.status !== "completed";
+}
+
+function hasRecoverableQa(record: PlanFeedbackRecord): boolean {
+  return record.kind === "approval_suggestion"
+    && (record.qaHandling?.status === "dispatching" || record.qaHandling?.status === "dispatch_failed");
+}
+
+export function isRecoverablePlanFeedback(record: PlanFeedbackRecord): boolean {
+  if (record.author === "agent") return false;
+  const recoverableDelivery = (record.deliveryStatus === "pending" || record.deliveryStatus === "failed")
     && (record.kind === "guidance" || record.kind === "approval_suggestion")
-    && record.author !== "agent"
     && !record.qaHandling;
-}
-
-const RECOVERY_DISCOVERY_CONCURRENCY = 24;
-const RECOVERY_PLAN_READ_CONCURRENCY = 8;
-
-type RoleFeedbackCatalog = {
-  roleId: string;
-  roleDir: string;
-  files: string[];
-};
-
-function throwIfAborted(signal?: AbortSignal): void {
-  signal?.throwIfAborted();
-}
-
-async function readDirectories(directory: string, signal?: AbortSignal): Promise<fs.Dirent[]> {
-  throwIfAborted(signal);
-  try {
-    return await fs.promises.readdir(directory, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-}
-
-async function mapBounded<T, U>(
-  values: readonly T[],
-  concurrency: number,
-  map: (value: T) => Promise<U>,
-  signal?: AbortSignal
-): Promise<U[]> {
-  const results = new Array<U>(values.length);
-  let cursor = 0;
-  await Promise.all(Array.from(
-    { length: Math.min(Math.max(1, concurrency), Math.max(1, values.length)) },
-    async () => {
-      while (true) {
-        throwIfAborted(signal);
-        const index = cursor++;
-        if (index >= values.length) return;
-        results[index] = await map(values[index]!);
-      }
-    }
-  ));
-  return results;
-}
-
-async function discoverRoleFeedbackCatalog(
-  rolesRoot: string,
-  roleEntry: fs.Dirent,
-  signal?: AbortSignal
-): Promise<RoleFeedbackCatalog> {
-  const roleId = roleEntry.name;
-  const roleDir = path.join(rolesRoot, roleId);
-  const planDirectories = (
-    await Promise.all((["active", "archive"] as const).map(async (bucket) => {
-      const bucketDir = path.join(roleDir, "plans", bucket);
-      const entries = await readDirectories(bucketDir, signal);
-      return entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(bucketDir, entry.name));
-    }))
-  ).flat();
-  const discovered = await mapBounded(
-    planDirectories,
-    RECOVERY_DISCOVERY_CONCURRENCY,
-    async (planDir) => {
-      const feedbackFile = path.join(planDir, "feedback.jsonl");
-      try {
-        await fs.promises.access(feedbackFile, fs.constants.R_OK);
-        return feedbackFile;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-        throw error;
-      }
-    },
-    signal
-  );
-  const legacyDir = path.join(roleDir, "plans", "feedback");
-  const legacyFiles = (await readDirectories(legacyDir, signal))
-    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".jsonl"))
-    .map((entry) => path.join(legacyDir, entry.name));
-  return {
-    roleId,
-    roleDir,
-    files: [...discovered.filter((filePath): filePath is string => Boolean(filePath)), ...legacyFiles]
-  };
-}
-
-export async function listOpenPlanFeedbackRecoveryCandidates(
-  rolesRoot: string,
-  signal?: AbortSignal
-): Promise<PlanFeedbackRecoveryCandidate[]> {
-  throwIfAborted(signal);
-  let roleEntries: fs.Dirent[];
-  try {
-    roleEntries = (await fs.promises.readdir(rolesRoot, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  const catalogs = await mapBounded(
-    roleEntries,
-    4,
-    (entry) => discoverRoleFeedbackCatalog(rolesRoot, entry, signal),
-    signal
-  );
-  const candidates: PlanFeedbackRecoveryCandidate[] = [];
-  for (const catalog of catalogs) {
-    throwIfAborted(signal);
-    const feedbackRows = await listPlanFeedbackFiles(catalog.files, signal);
-    const recoverableFeedback = feedbackRows.filter(isRecoverableFeedback);
-    const planIds = [...new Set(recoverableFeedback.map(feedback => feedback.planId))];
-    const planEntries = await mapBounded(
-      planIds,
-      RECOVERY_PLAN_READ_CONCURRENCY,
-      async (planId) => [
-        planId,
-        await getPlanAsync(catalog.roleDir, planId, { signal })
-      ] as const,
-      signal
-    );
-    const plans = new Map<string, PlanItem | null>(planEntries);
-    for (const feedback of recoverableFeedback) {
-      const plan = plans.get(feedback.planId);
-      if (plan) candidates.push({
-        roleDir: catalog.roleDir,
-        roleId: catalog.roleId,
-        plan,
-        feedback
-      });
-    }
-  }
-  return candidates.sort((left, right) => {
-    const createdDelta = Date.parse(left.feedback.createdAt) - Date.parse(right.feedback.createdAt);
-    return createdDelta || left.feedback.id.localeCompare(right.feedback.id);
-  });
+  return hasOpenPostCommit(record) || hasRecoverableQa(record) || recoverableDelivery;
 }
 
 export async function recoverPlanFeedbackCandidate(
   candidate: PlanFeedbackRecoveryCandidate,
   options: {
     signal?: AbortSignal;
+    query: (
+      candidate: PlanFeedbackRecoveryCandidate,
+      signal?: AbortSignal
+    ) => Promise<PlanFeedbackRecoveryProjection | null>;
     inspect: (request: PlanFeedbackRecoveryTaskRequest) => Promise<PlanFeedbackDeliveryInspection>;
     schedule: (candidate: PlanFeedbackRecoveryCandidate) => Promise<void>;
+    updateDelivery: (
+      candidate: PlanFeedbackRecoveryCandidate,
+      record: PlanFeedbackRecord,
+      status: Exclude<PlanFeedbackDeliveryStatus, "record_only">,
+      message?: string,
+      signal?: AbortSignal
+    ) => Promise<PlanFeedbackRecord>;
+    postCommit?: (candidate: PlanFeedbackRecoveryCandidate) => Promise<{
+      outcome: "handled" | "ignored";
+      record: PlanFeedbackRecord;
+    }>;
   }
 ): Promise<PlanFeedbackRecoveryOutcome> {
   options.signal?.throwIfAborted();
-  const responseKind = candidate.feedback.kind === "guidance"
-    ? "guidance_response"
-    : "approval_response";
-  const currentFeedback = await listPlanFeedbackAsync(candidate.roleDir, candidate.plan.id, options.signal);
-  const latestCandidate = currentFeedback.find(record => record.id === candidate.feedback.id);
-  if (!latestCandidate || !isRecoverableFeedback(latestCandidate)) {
+  let authoritative = await options.query(candidate, options.signal);
+  if (!authoritative) {
+    return { state: "deferred", reason: "The plan is no longer available in the authoritative storage projection." };
+  }
+  let currentFeedback = authoritative.records;
+  let latestCandidate = currentFeedback.find(record => record.id === candidate.feedback.id);
+  if (!latestCandidate || !isRecoverablePlanFeedback(latestCandidate)) {
     return latestCandidate?.deliveryStatus === "delivered"
       ? { state: "delivered", record: latestCandidate }
       : { state: "deferred", reason: "Feedback is no longer recoverable in the authoritative ledger." };
   }
-  const currentCandidate: PlanFeedbackRecoveryCandidate = {
+  let currentCandidate: PlanFeedbackRecoveryCandidate = {
     ...candidate,
+    plan: authoritative.plan,
     feedback: latestCandidate
   };
+  if ((hasOpenPostCommit(latestCandidate) || hasRecoverableQa(latestCandidate)) && options.postCommit) {
+    try {
+      const processed = await options.postCommit(currentCandidate);
+      if (processed.outcome === "handled") return { state: "delivered", record: processed.record };
+      authoritative = await options.query(currentCandidate, options.signal);
+      if (!authoritative) return { state: "deferred", reason: "The plan disappeared after post-commit recovery." };
+      currentFeedback = authoritative.records;
+      latestCandidate = currentFeedback.find(record => record.id === candidate.feedback.id);
+      if (!latestCandidate) return { state: "deferred", reason: "Feedback disappeared after post-commit recovery." };
+      if (latestCandidate.deliveryStatus === "delivered" || latestCandidate.deliveryStatus === "record_only") {
+        return { state: "delivered", record: latestCandidate };
+      }
+      currentCandidate = { ...candidate, plan: authoritative.plan, feedback: latestCandidate };
+    } catch (error) {
+      return { state: "failed", error };
+    }
+  } else if (latestCandidate.deliveryStatus === "delivered") {
+    return { state: "delivered", record: latestCandidate };
+  }
+  const responseKind = latestCandidate.kind === "guidance"
+    ? "guidance_response"
+    : "approval_response";
   const linkedResponse = currentFeedback.find((record) => (
-    record.id === planFeedbackResponseId(candidate.feedback)
+    record.id === planFeedbackResponseId(latestCandidate)
     && record.kind === responseKind
     && record.author === "agent"
   ));
   if (linkedResponse) {
     return {
       state: "delivered",
-      record: await updatePlanFeedbackDeliveryAsync(
-        candidate.roleDir,
+      record: await options.updateDelivery(
+        currentCandidate,
         latestCandidate,
         "delivered",
         `Manager recovery confirmed linked ${responseKind} ${linkedResponse.id}.`,
@@ -216,7 +129,7 @@ export async function recoverPlanFeedbackCandidate(
     };
   }
 
-  const binding = candidate.plan.taskBinding;
+  const binding = currentCandidate.plan.taskBinding;
   if (!binding?.sessionId?.trim() || !binding.workspace?.trim()) {
     await options.schedule(currentCandidate);
     return { state: "scheduled" };
@@ -227,7 +140,7 @@ export async function recoverPlanFeedbackCandidate(
     state = await options.inspect({
       threadId: binding.sessionId.trim(),
       cwd: binding.workspace.trim(),
-      deliveryId: candidate.feedback.id
+      deliveryId: latestCandidate.id
     });
   } catch (error) {
     return {
@@ -239,8 +152,8 @@ export async function recoverPlanFeedbackCandidate(
   if (state === "accepted") {
     return {
       state: "delivered",
-      record: await updatePlanFeedbackDeliveryAsync(
-        candidate.roleDir,
+      record: await options.updateDelivery(
+        currentCandidate,
         latestCandidate,
         "delivered",
         "Manager recovery confirmed the feedback in the bound Desktop task.",

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GenerationRuntime, RequiredPluginCapabilitiesUnavailableError } from "./generationRuntime.js";
+import {
+  GenerationRuntime,
+  RequiredPluginCapabilitiesUnavailableError,
+  selectReadyPluginCandidates
+} from "./generationRuntime.js";
 import type { PluginCandidate, PluginManifest, PluginModule } from "./types.js";
 
 const testModules = new WeakMap<PluginCandidate, PluginModule>();
@@ -216,6 +220,57 @@ test("an optional activation failure reports degraded health without removing co
   assert.deepEqual(result.generation.readiness.missingCapabilities, []);
   assert.ok(result.generation.services.services.has("manager.core@1"));
   assert.equal(result.generation.records.find(record => record.identity.instanceId === "optional")?.status, "failed");
+  await runtime.dispose();
+});
+
+test("ready candidate selection excludes unrelated optional plugins and keeps the required dependency closure", () => {
+  const hostProvided = candidate({
+    instanceId: "host-only-consumer",
+    manifest: manifest("io.test.host-only", {
+      provides: ["manager.core@1"],
+      requires: ["host.manager.core@1", "plugin.storage@1"]
+    }),
+    module: { activate() {} }
+  });
+  const storage = candidate({
+    instanceId: "storage",
+    manifest: manifest("io.test.storage", { provides: ["plugin.storage@1"] }),
+    module: { activate() {} }
+  });
+  const unrelated = candidate({
+    instanceId: "unrelated",
+    manifest: manifest("io.test.unrelated", { provides: ["plugin.optional@1"] }),
+    module: { activate() {} }
+  });
+
+  const selected = selectReadyPluginCandidates(
+    [unrelated, hostProvided, storage],
+    ["manager.core@1"],
+    ["host.manager.core@1"]
+  );
+  assert.deepEqual(selected.map(item => item.instanceId), ["host-only-consumer", "storage"]);
+});
+
+test("a non-settling optional activation is bounded and cannot block core publication", async () => {
+  const runtime = createRuntime({ activationTimeoutMs: 20 });
+  const core = candidate({
+    instanceId: "core",
+    manifest: manifest("io.test.core", { provides: ["manager.core@1"] }),
+    module: { activate(ctx) { ctx.services.provide("manager.core@1", { ready: true }); } }
+  });
+  const hung = candidate({
+    instanceId: "hung",
+    manifest: manifest("io.test.hung"),
+    module: { async activate() { await new Promise(() => {}); } }
+  });
+
+  const result = await runtime.switch([core, hung], { readyRequires: ["manager.core@1"] });
+  assert.equal(result.generation.readiness.state, "degraded");
+  assert.ok(result.generation.services.services.has("manager.core@1"));
+  assert.match(
+    result.generation.records.find(record => record.identity.instanceId === "hung")?.error?.message ?? "",
+    /activation timed out.*20ms/i
+  );
   await runtime.dispose();
 });
 

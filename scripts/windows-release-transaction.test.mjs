@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { writeManifest } from "./create-windows-release-manifest.mjs";
 
@@ -12,10 +14,54 @@ const transactionContract = fs.readFileSync(transaction, "utf8");
 const uninstallTransaction = fileURLToPath(new URL("./Uninstall-RabiRouteReleaseTransaction.ps1", import.meta.url));
 const uninstallContract = fs.readFileSync(uninstallTransaction, "utf8");
 const legacyTaskMigration = fileURLToPath(new URL("./Migrate-LegacyWearableHealthTask.ps1", import.meta.url));
+const autostartConfigurator = fileURLToPath(new URL("./Configure-WindowsAutostart.ps1", import.meta.url));
 const stopContract = fs.readFileSync(new URL("./Stop-RabiRouteHostFenced.ps1", import.meta.url), "utf8");
 const installer = fs.readFileSync(new URL("../installer/RabiRoute.iss", import.meta.url), "utf8");
 const build = fs.readFileSync(new URL("./build-windows-release.ps1", import.meta.url), "utf8");
 const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+
+function runQuitFenceResolver(status) {
+  const start = stopContract.indexOf("function Resolve-HostQuitFence");
+  const end = stopContract.indexOf("function Invoke-HostJson", start);
+  assert.ok(start >= 0 && end > start, "Stop helper must expose one pure quit-fence resolver");
+  const resolver = stopContract.slice(start, end);
+  const script = `${resolver}\n` +
+    `$status = @'\n${JSON.stringify(status)}\n'@ | ConvertFrom-Json\n` +
+    "try { Resolve-HostQuitFence $status | ConvertTo-Json -Compress } " +
+    "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 7 }\n";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-stop-fence-"));
+  const probe = path.join(root, "probe.ps1");
+  fs.writeFileSync(probe, script, "utf8");
+  try {
+    return spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", probe], {
+      encoding: "utf8",
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("fenced stop selects the state-owned generation and fails closed on incomplete or transitional status", { skip: process.platform !== "win32" }, () => {
+  for (const [state, applicationGenerationId] of [["healthy", "healthy-a"], ["degraded", "degraded-a"], ["faulted", "faulted-a"]]) {
+    const result = runQuitFenceResolver({ state, applicationGenerationId, controlFenceGenerationId: "control-b" });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.deepEqual(JSON.parse(result.stdout), { generationId: applicationGenerationId, source: "applicationGenerationId" });
+  }
+
+  const faulted = runQuitFenceResolver({ state: "faulted", applicationGenerationId: null, controlFenceGenerationId: "faulted-control" });
+  assert.equal(faulted.status, 0, faulted.stderr || faulted.stdout);
+  assert.deepEqual(JSON.parse(faulted.stdout), { generationId: "faulted-control", source: "controlFenceGenerationId" });
+
+  for (const [status, expected] of [
+    [{ state: "healthy", applicationGenerationId: null, controlFenceGenerationId: "must-not-fallback" }, /omitted applicationGenerationId/],
+    [{ state: "faulted", applicationGenerationId: null, controlFenceGenerationId: null }, /omitted controlFenceGenerationId/],
+    [{ state: "starting", applicationGenerationId: "starting-a", controlFenceGenerationId: "control-a" }, /Unsupported Host state/],
+  ]) {
+    const result = runQuitFenceResolver(status);
+    assert.equal(result.status, 7);
+    assert.match(result.stderr, expected);
+  }
+});
 
 function makeFixture(scenario = "success") {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-release-transaction-"));
@@ -56,10 +102,17 @@ function makeFixture(scenario = "success") {
   }
   fs.mkdirSync(install, { recursive: true });
   fs.writeFileSync(path.join(install, "RabiRouteHost.exe"), "old-bootstrap");
-  fs.writeFileSync(path.join(install, "current.json"), '{"old":true}\n');
+  const previousReleaseId = "8.8.8-existing";
+  const previousPointer = `${JSON.stringify({
+    schemaVersion: 1, appId: "io.rabiroute.windows", releaseId: previousReleaseId,
+    versionPath: `versions/${previousReleaseId}`, payloadSha256: "previous-payload",
+  })}\n`;
+  fs.writeFileSync(path.join(install, "current.json"), previousPointer);
   const currentSid = "S-1-5-21-1000";
   const runner = "Z:\\DigitalLife\\RabiRoute\\examples\\android-rabi-link-probe\\scripts\\Start-RabiLinkWearableCompanion.ps1";
   const taskStore = path.join(root, "task-store.json");
+  const appData = path.join(root, "appdata");
+  fs.mkdirSync(appData, { recursive: true });
   const legacyTaskRecord = {
     taskName: "RabiLinkWearableHealthCompanion", taskPath: "\\",
     principal: { userId: currentSid, logonType: "InteractiveToken", runLevel: "Limited" },
@@ -81,25 +134,99 @@ function makeFixture(scenario = "success") {
     env: { ...process.env, RABIROUTE_TEST_DISTRIBUTION: distribution, RABIROUTE_TEST_ZIP: zip },
   });
   assert.equal(zipped.status, 0, zipped.stderr || zipped.stdout);
-  return { root, install, zip, helper, taskStore, legacyTaskRecord, releaseId: manifest.releaseId };
+  return {
+    root, install, zip, helper, taskStore, appData, legacyTaskRecord,
+    releaseId: manifest.releaseId, previousReleaseId, previousPointer,
+  };
 }
 
-function run(fixture, fault = "") {
+function run(fixture, fault = "", {
+  autostartScript = fixture.helper,
+  autostartEnabled = "false",
+  extraEnv = {},
+} = {}) {
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", transaction,
     "-InstallRoot", fixture.install, "-PortableZip", fixture.zip, "-ExpectedReleaseId", fixture.releaseId,
     "-StopHostScript", fixture.helper, "-LegacyMigrationScript", fixture.helper,
     "-LegacyTaskMigrationScript", legacyTaskMigration, "-TestLegacyTaskStorePath", fixture.taskStore,
-    "-AutostartScript", fixture.helper, "-TestSelfTestScript", fixture.helper];
+    "-AutostartScript", autostartScript, "-AutostartEnabled", autostartEnabled, "-TestSelfTestScript", fixture.helper];
   if (fault) args.push("-FaultPoint", fault);
-  return spawnSync(powershell, args, { encoding: "utf8", env: { ...process.env, RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1" }, timeout: 30_000 });
+  return spawnSync(powershell, args, {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      APPDATA: fixture.appData,
+      RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1",
+      ...extraEnv,
+    },
+    timeout: 30_000,
+  });
 }
 
-function runUninstall(fixture, preflight = true) {
+function autostartRestoreFailureWrapper(fixture) {
+  const wrapper = path.join(fixture.root, "autostart-restore-failure.ps1");
+  fs.writeFileSync(wrapper, `param(
+  [string]$InstallRoot,
+  [string]$Enabled,
+  [switch]$PreflightOnly,
+  [switch]$RestoreSnapshot,
+  [string]$SnapshotRoot
+)
+if ($RestoreSnapshot) {
+  if ($env:RABIROUTE_TEST_CORRUPT_CURRENT -eq '1') {
+    [IO.File]::WriteAllText((Join-Path $InstallRoot 'current.json'), '{"schemaVersion":1,"appId":"io.rabiroute.windows","releaseId":"wrong-release"}')
+  }
+  exit 87
+}
+$arguments = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$env:RABIROUTE_TEST_REAL_AUTOSTART,'-InstallRoot',$InstallRoot,'-Enabled',$Enabled)
+if ($PreflightOnly) { $arguments += '-PreflightOnly' }
+if ($SnapshotRoot) { $arguments += @('-SnapshotRoot',$SnapshotRoot) }
+& powershell.exe @arguments
+exit $LASTEXITCODE
+`);
+  return wrapper;
+}
+
+function configureAutostart(fixture, enabled) {
+  return spawnSync(powershell, [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", autostartConfigurator,
+    "-InstallRoot", fixture.install, "-Enabled", enabled,
+  ], { encoding: "utf8", env: { ...process.env, APPDATA: fixture.appData }, timeout: 30_000 });
+}
+
+function createShortcut(fixture, shortcutPath, targetPath) {
+  const script = [
+    "$shell = New-Object -ComObject WScript.Shell",
+    "$shortcut = $shell.CreateShortcut($env:RABIROUTE_TEST_SHORTCUT)",
+    "$shortcut.TargetPath = $env:RABIROUTE_TEST_TARGET",
+    "$shortcut.Arguments = ''",
+    "$shortcut.WorkingDirectory = $env:RABIROUTE_TEST_INSTALL",
+    "$shortcut.Save()",
+  ].join("; ");
+  return spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      RABIROUTE_TEST_SHORTCUT: shortcutPath,
+      RABIROUTE_TEST_TARGET: targetPath,
+      RABIROUTE_TEST_INSTALL: fixture.install,
+    },
+  });
+}
+
+function runUninstall(fixture, preflight = true, { failDeleteAt = 0, failStage = "", stopScript = fixture.helper } = {}) {
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", uninstallTransaction,
-    "-InstallRoot", fixture.install, "-StopHostScript", fixture.helper,
-    "-LegacyTaskMigrationScript", legacyTaskMigration, "-TestLegacyTaskStorePath", fixture.taskStore];
+    "-InstallRoot", fixture.install, "-StopHostScript", stopScript,
+    "-LegacyTaskMigrationScript", legacyTaskMigration, "-AutostartScript", autostartConfigurator,
+    "-TestLegacyTaskStorePath", fixture.taskStore];
   if (preflight) args.push("-PreflightOnly");
-  return spawnSync(powershell, args, { encoding: "utf8", env: { ...process.env, RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1" }, timeout: 30_000 });
+  if (failDeleteAt) args.push("-TestFailDeleteAt", String(failDeleteAt));
+  if (failStage) args.push("-TestFailStage", failStage);
+  return spawnSync(powershell, args, {
+    encoding: "utf8",
+    env: { ...process.env, APPDATA: fixture.appData, RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1" },
+    timeout: 30_000,
+  });
 }
 
 function readLegacyTasks(fixture) {
@@ -133,7 +260,7 @@ for (const scenario of ["bad-core", "missing-node", "extra-root", "forged-identi
       const result = run(fixture);
       assert.notEqual(result.status, 0);
       assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
-      assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), '{"old":true}\n');
+      assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
       assert.equal(readLegacyTasks(fixture).length, 1);
       assert.equal(readLegacyTasks(fixture)[0].state, "Running");
     } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
@@ -146,8 +273,79 @@ for (const fault of ["after-stage", "after-legacy-task-remove", "after-bootstrap
     const result = run(fixture, fault);
     assert.notEqual(result.status, 0);
     assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
-    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), '{"old":true}\n');
+    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
     assert.equal(readLegacyTasks(fixture).length, 1);
+    assert.equal(readLegacyTasks(fixture)[0].state, "Running");
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("post-autostart install failure restores the prior settings and owned Startup link", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  const settingsPath = path.join(fixture.install, "data", "desktop", "settings.json");
+  const startupPath = path.join(fixture.appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "RabiRoute.lnk");
+  try {
+    const seeded = configureAutostart(fixture, "true");
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const settingsBefore = fs.readFileSync(settingsPath);
+    const startupBefore = fs.readFileSync(startupPath);
+
+    const failed = run(fixture, "after-autostart", { autostartScript: autostartConfigurator, autostartEnabled: "false" });
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /Injected fault after-autostart/);
+    assert.deepEqual(fs.readFileSync(settingsPath), settingsBefore);
+    assert.deepEqual(fs.readFileSync(startupPath), startupBefore);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("an autostart rollback failure cannot prevent current pointer and bootstrap restoration", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  try {
+    const failed = run(fixture, "after-autostart", {
+      autostartScript: autostartRestoreFailureWrapper(fixture),
+      autostartEnabled: "false",
+      extraEnv: {
+        RABIROUTE_TEST_REAL_AUTOSTART: autostartConfigurator,
+        RABIROUTE_TEST_CORRUPT_CURRENT: "1",
+      },
+    });
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /Autostart rollback failed with ExitCode=87/);
+    assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
+    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8")).releaseId, fixture.previousReleaseId);
+    const journal = JSON.parse(fs.readFileSync(path.join(fixture.install, ".rabiroute-install-transaction.json"), "utf8"));
+    assert.equal(journal.autostartState, "applied");
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("power loss after autostart commit restores settings and both owned Startup links on recovery", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  const startupDirectory = path.join(fixture.appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
+  const settingsPath = path.join(fixture.install, "data", "desktop", "settings.json");
+  const startupPath = path.join(startupDirectory, "RabiRoute.lnk");
+  const legacyStartupPath = path.join(startupDirectory, "RabiRoute Desktop.lnk");
+  try {
+    assert.equal(configureAutostart(fixture, "true").status, 0);
+    const legacySeed = createShortcut(fixture, legacyStartupPath, path.join(fixture.install, "RabiRoute-Desktop.exe"));
+    assert.equal(legacySeed.status, 0, legacySeed.stderr || legacySeed.stdout);
+    const before = {
+      settings: fs.readFileSync(settingsPath),
+      startup: fs.readFileSync(startupPath),
+      legacyStartup: fs.readFileSync(legacyStartupPath),
+    };
+
+    const interrupted = run(fixture, "after-autostart-before-journal", { autostartScript: autostartConfigurator, autostartEnabled: "false" });
+    assert.equal(interrupted.status, 98, interrupted.stderr || interrupted.stdout);
+    assert.equal(fs.existsSync(startupPath), false);
+    assert.equal(fs.existsSync(legacyStartupPath), false);
+
+    const recovered = run(fixture, "after-recovery", { autostartScript: autostartConfigurator, autostartEnabled: "false" });
+    assert.equal(recovered.status, 95, recovered.stderr || recovered.stdout);
+    assert.deepEqual(fs.readFileSync(settingsPath), before.settings);
+    assert.deepEqual(fs.readFileSync(startupPath), before.startup);
+    assert.deepEqual(fs.readFileSync(legacyStartupPath), before.legacyStartup);
+    assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
+    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
     assert.equal(readLegacyTasks(fixture)[0].state, "Running");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
@@ -180,7 +378,7 @@ test("foreign same-name wearable task blocks before install mutation", { skip: p
     assert.deepEqual(fs.readFileSync(fixture.taskStore), before);
     assert.equal(fs.existsSync(path.join(fixture.install, ".rabiroute-install-transaction.json")), false);
     assert.equal(fs.readFileSync(path.join(fixture.install, "RabiRouteHost.exe"), "utf8"), "old-bootstrap");
-    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), '{"old":true}\n');
+    assert.equal(fs.readFileSync(path.join(fixture.install, "current.json"), "utf8"), fixture.previousPointer);
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
@@ -365,6 +563,61 @@ test("uninstall removes only a fully validated active version and preserves fore
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
+test("uninstall removes the owned Host-only Startup link", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  const startupPath = path.join(fixture.appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "RabiRoute.lnk");
+  try {
+    const installed = run(fixture, "", { autostartScript: autostartConfigurator, autostartEnabled: "true" });
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    assert.ok(fs.existsSync(startupPath));
+
+    const removed = runUninstall(fixture, false);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(fs.existsSync(startupPath), false);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test("foreign same-name Startup link blocks uninstall before Host stop, task removal, or code mutation", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  const startupPath = path.join(fixture.appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "RabiRoute.lnk");
+  const stopMarker = path.join(fixture.root, "stop-invoked.txt");
+  const recordingStop = path.join(fixture.root, "record-stop.ps1");
+  try {
+    assert.equal(run(fixture).status, 0);
+    fs.mkdirSync(path.dirname(startupPath), { recursive: true });
+    const shortcut = createShortcut(fixture, startupPath, path.join(fixture.root, "foreign", "NapCat.exe"));
+    assert.equal(shortcut.status, 0, shortcut.stderr || shortcut.stdout);
+    fs.writeFileSync(recordingStop, "[IO.File]::WriteAllText($env:RABIROUTE_TEST_STOP_MARKER, 'called')\nexit 0\n", "utf8");
+
+    const store = JSON.parse(fs.readFileSync(fixture.taskStore, "utf8"));
+    store.tasks = [fixture.legacyTaskRecord];
+    fs.writeFileSync(fixture.taskStore, `${JSON.stringify(store)}\n`, "utf8");
+    const taskBefore = fs.readFileSync(fixture.taskStore);
+    const activeFile = path.join(fixture.install, "versions", fixture.releaseId, "dist", "manager.js");
+    const rejected = spawnSync(powershell, [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", uninstallTransaction,
+      "-InstallRoot", fixture.install, "-StopHostScript", recordingStop,
+      "-LegacyTaskMigrationScript", legacyTaskMigration, "-AutostartScript", autostartConfigurator,
+      "-TestLegacyTaskStorePath", fixture.taskStore,
+    ], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        APPDATA: fixture.appData,
+        RABIROUTE_INSTALL_TRANSACTION_TEST_MODE: "1",
+        RABIROUTE_TEST_STOP_MARKER: stopMarker,
+      },
+      timeout: 30_000,
+    });
+    assert.notEqual(rejected.status, 0);
+    assert.equal(fs.existsSync(stopMarker), false);
+    assert.deepEqual(fs.readFileSync(fixture.taskStore), taskBefore);
+    assert.ok(fs.existsSync(activeFile));
+    assert.ok(fs.existsSync(path.join(fixture.install, "current.json")));
+    assert.equal(fs.existsSync(path.join(fixture.install, ".rabiroute-uninstall-transaction.json")), false);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
 test("uninstall safely retires a managed legacy wearable task", { skip: process.platform !== "win32" }, () => {
   const fixture = makeFixture();
   try {
@@ -378,6 +631,127 @@ test("uninstall safely retires a managed legacy wearable task", { skip: process.
     assert.equal(fs.existsSync(path.join(fixture.install, "current.json")), false);
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
+
+test("uninstall resumes after an owned-file deletion interruption and retains the wearable task backup until commit", { skip: process.platform !== "win32" }, () => {
+  const fixture = makeFixture();
+  try {
+    assert.equal(run(fixture).status, 0);
+    const store = JSON.parse(fs.readFileSync(fixture.taskStore, "utf8"));
+    store.tasks = [fixture.legacyTaskRecord];
+    fs.writeFileSync(fixture.taskStore, `${JSON.stringify(store)}\n`, "utf8");
+
+    const interrupted = runUninstall(fixture, false, { failDeleteAt: 2 });
+    assert.notEqual(interrupted.status, 0);
+    const journalPath = path.join(fixture.install, ".rabiroute-uninstall-transaction.json");
+    assert.ok(fs.existsSync(journalPath));
+    const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+    assert.ok(fs.existsSync(path.join(journal.taskBackupRoot, "task-backup.json")));
+    assert.equal(readLegacyTasks(fixture).length, 0);
+
+    const retry = runUninstall(fixture, false);
+    assert.equal(retry.status, 0, retry.stderr || retry.stdout);
+    assert.equal(fs.existsSync(journalPath), false);
+    assert.equal(fs.existsSync(journal.taskBackupRoot), false);
+    assert.equal(fs.existsSync(path.join(fixture.install, "current.json")), false);
+    assert.equal(fs.existsSync(path.join(fixture.install, "RabiRouteHost.exe")), false);
+    assert.equal(fs.existsSync(path.join(fixture.install, "versions", fixture.releaseId)), false);
+    assert.equal(readLegacyTasks(fixture).length, 0);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+for (const stage of ["manifest", "pointer", "bootstrap"]) {
+  test(`uninstall retry converges after ${stage} removal is interrupted`, { skip: process.platform !== "win32" }, () => {
+    const fixture = makeFixture();
+    try {
+      assert.equal(run(fixture).status, 0);
+      const interrupted = runUninstall(fixture, false, { failStage: stage });
+      assert.notEqual(interrupted.status, 0);
+      assert.ok(fs.existsSync(path.join(fixture.install, ".rabiroute-uninstall-transaction.json")));
+
+      const retry = runUninstall(fixture, false);
+      assert.equal(retry.status, 0, retry.stderr || retry.stdout);
+      assert.equal(fs.existsSync(path.join(fixture.install, ".rabiroute-uninstall-transaction.json")), false);
+      assert.equal(fs.existsSync(path.join(fixture.install, "current.json")), false);
+      assert.equal(fs.existsSync(path.join(fixture.install, "RabiRouteHost.exe")), false);
+      assert.equal(fs.existsSync(path.join(fixture.install, "versions", fixture.releaseId)), false);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const stage of ["cleanup", "cleanup-after-root"]) {
+  test(`committed uninstall cleanup resumes after ${stage} interruption without orphaning task backup state`, { skip: process.platform !== "win32" }, () => {
+    const fixture = makeFixture();
+    try {
+      assert.equal(run(fixture).status, 0);
+      const interrupted = runUninstall(fixture, false, { failStage: stage });
+      assert.notEqual(interrupted.status, 0);
+      const journalPath = path.join(fixture.install, ".rabiroute-uninstall-transaction.json");
+      assert.ok(fs.existsSync(journalPath));
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      assert.equal(journal.state, "committed");
+      assert.equal(fs.existsSync(journal.transactionRoot), stage === "cleanup");
+      if (stage === "cleanup") assert.ok(fs.existsSync(path.join(journal.taskBackupRoot, "task-backup.json")));
+
+      const retry = runUninstall(fixture, false);
+      assert.equal(retry.status, 0, retry.stderr || retry.stdout);
+      assert.equal(fs.existsSync(journalPath), false);
+      assert.equal(fs.existsSync(journal.transactionRoot), false);
+      assert.equal(fs.existsSync(journal.taskBackupRoot), false);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+}
+
+for (const stage of ["manifest", "pointer", "bootstrap"]) {
+  test(`uninstall retains its journal when ${stage} deletion really fails and the target remains`, { skip: process.platform !== "win32" }, async () => {
+    const fixture = makeFixture();
+    let lockProcess;
+    try {
+      assert.equal(run(fixture).status, 0);
+      const prepared = runUninstall(fixture, false, { failDeleteAt: 1 });
+      assert.notEqual(prepared.status, 0);
+      const journalPath = path.join(fixture.install, ".rabiroute-uninstall-transaction.json");
+      assert.ok(fs.existsSync(journalPath));
+      const target = stage === "manifest"
+        ? path.join(fixture.install, "versions", fixture.releaseId, "release-manifest.json")
+        : path.join(fixture.install, stage === "pointer" ? "current.json" : "RabiRouteHost.exe");
+      const ready = path.join(fixture.root, `${stage}-lock-ready.txt`);
+      const lockScript = path.join(fixture.root, `${stage}-lock.ps1`);
+      fs.writeFileSync(lockScript, [
+        "param([string]$Target, [string]$Ready)",
+        "$stream = [IO.FileStream]::new($Target, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)",
+        "try { [IO.File]::WriteAllText($Ready, 'ready'); Start-Sleep -Seconds 30 } finally { $stream.Dispose() }",
+      ].join("\r\n"), "utf8");
+      lockProcess = spawn(powershell, [
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", lockScript,
+        "-Target", target, "-Ready", ready,
+      ], { stdio: "ignore", windowsHide: true });
+      for (let attempt = 0; attempt < 100 && !fs.existsSync(ready); attempt += 1) await delay(25);
+      assert.ok(fs.existsSync(ready), "exclusive file lock did not become ready");
+
+      const rejected = runUninstall(fixture, false);
+      assert.notEqual(rejected.status, 0);
+      assert.ok(fs.existsSync(target), `${stage} target must remain after the real deletion failure`);
+      assert.ok(fs.existsSync(journalPath));
+      const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+      const flag = stage === "manifest" ? "manifestRemoved" : stage === "pointer" ? "pointerRemoved" : "bootstrapRemoved";
+      assert.equal(journal[flag], false);
+
+      lockProcess.kill();
+      await once(lockProcess, "exit");
+      lockProcess = undefined;
+      const retry = runUninstall(fixture, false);
+      assert.equal(retry.status, 0, retry.stderr || retry.stdout);
+      assert.equal(fs.existsSync(journalPath), false);
+      assert.equal(fs.existsSync(target), false);
+    } finally {
+      if (lockProcess && lockProcess.exitCode === null) {
+        lockProcess.kill();
+        await Promise.race([once(lockProcess, "exit"), delay(5_000)]);
+      }
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("foreign same-name wearable task blocks uninstall without task or code mutation", { skip: process.platform !== "win32" }, () => {
   const fixture = makeFixture();
@@ -401,8 +775,13 @@ test("foreign same-name wearable task blocks uninstall without task or code muta
 test("installer embeds the exact portable ZIP and has no flat overwrite or unfenced quit", () => {
   assert.match(installer, /Source: "\{#PortableZip\}"[\s\S]*Flags: dontcopy/);
   assert.doesNotMatch(installer, /SourceDir|recursesubdirs|InstallDelete|allow-unfenced-quit/);
+  assert.match(installer, /ResultCode := -1/);
+  assert.match(installer, /Exec\([\s\S]*ewWaitUntilTerminated, ResultCode\) and \(ResultCode = 0\)/);
+  assert.match(installer, /if not Result then Log\(Format\('[^']*ResultCode=%d/);
+  assert.match(installer, /PrepareToInstall[\s\S]*if not InstallTransaction then[\s\S]*安装已 fail-closed/);
   assert.match(installer, /Install-RabiRouteReleaseTransaction\.ps1/);
   assert.match(installer, /Uninstall-RabiRouteReleaseTransaction\.ps1/);
+  assert.match(installer, /RunUninstallTransaction[\s\S]*-AutostartScript[\s\S]*Configure-WindowsAutostart\.ps1/);
   assert.match(installer, /Migrate-LegacyWearableHealthTask\.ps1/);
   assert.match(stopContract, /--application-generation-id/);
   assert.doesNotMatch(stopContract, /allow-unfenced-quit|Stop-Process|taskkill/i);

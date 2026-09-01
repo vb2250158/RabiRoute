@@ -1,15 +1,6 @@
-import {
-  listPlanFeedback,
-  updatePlanFeedbackQaHandling,
-  type PlanFeedbackRecord,
-  type PlanQaFeedbackHandling
-} from "../planFeedback.js";
-import {
-  listPlans,
-  updatePlan,
-  type PlanItem,
-  type PlanStep
-} from "../roleKnowledge.js";
+import type { PlanFeedbackRecord, PlanQaFeedbackHandling } from "../planFeedback.js";
+import type { PlanItem, PlanStep } from "../roleKnowledge.js";
+import { roleStorageOperationKey } from "./roleStorageApplication.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 
 export type PlanQaTaskRequest = {
@@ -18,13 +9,60 @@ export type PlanQaTaskRequest = {
   title: string;
   cwd: string;
   createIfMissing: true;
+  deliveryId: string;
   prompt: string;
 };
 
+export type PlanQaTaskDeliveryReadRequest = {
+  threadId: string;
+  cwd: string;
+  deliveryId: string;
+};
+
+export type PlanQaStorageProjection = Readonly<{
+  plan: PlanItem;
+  planRevision: string;
+  records: PlanFeedbackRecord[];
+  recordRevisions: Readonly<Record<string, string | null>>;
+}>;
+
+export type PlanQaMutationContext = Readonly<{
+  idempotencyKey: string;
+  expectedRevision: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}>;
+
+export type PlanQaStoragePort = Readonly<{
+  query: (
+    roleId: string,
+    planId: string,
+    options?: Readonly<{ signal?: AbortSignal; timeoutMs?: number }>
+  ) => Promise<PlanQaStorageProjection | null>;
+  updatePlan: (
+    roleId: string,
+    planId: string,
+    patch: Record<string, unknown>,
+    context: PlanQaMutationContext
+  ) => Promise<Readonly<{ plan: PlanItem; revision: string }>>;
+  updateQaHandling: (
+    roleId: string,
+    planId: string,
+    record: PlanFeedbackRecord,
+    qaHandling: PlanQaFeedbackHandling,
+    context: PlanQaMutationContext
+  ) => Promise<PlanQaStorageProjection>;
+}>;
+
 export type ConsumePlanQaFeedbackOptions = {
-  roleDir: string;
+  roleId: string;
+  storage: PlanQaStoragePort;
   feedback: PlanFeedbackRecord;
+  signal?: AbortSignal;
   sendToTask: (request: PlanQaTaskRequest) => Promise<void>;
+  readTaskDelivery?: (
+    request: PlanQaTaskDeliveryReadRequest
+  ) => Promise<"accepted" | "in_progress" | "missing">;
 };
 
 export type PlanQaFeedbackResult = {
@@ -166,12 +204,11 @@ function feedbackDetail(feedback: PlanFeedbackRecord): string {
 }
 
 function reopenForInvestigation(
-  roleDir: string,
   plan: PlanItem,
   qaStep: PlanStep,
   feedback: PlanFeedbackRecord,
   missingEvidence: string[]
-): PlanItem {
+): Record<string, unknown> {
   const investigateId = investigationStepId(qaStep);
   const existingInvestigation = plan.steps.find((step) => step.id === investigateId);
   const investigation: PlanStep = {
@@ -193,7 +230,7 @@ function reopenForInvestigation(
       : step);
   const qaIndex = steps.findIndex((step) => step.id === qaStep.id);
   steps.splice(qaIndex < 0 ? steps.length : qaIndex, 0, investigation);
-  return updatePlan(roleDir, plan.id, {
+  return {
     status: "进行中",
     currentStepId: investigateId,
     currentStep: "QA 失败回传已消费，进入深化根因调查",
@@ -205,7 +242,7 @@ function reopenForInvestigation(
     blockedBy: undefined,
     completedAt: undefined,
     steps
-  });
+  };
 }
 
 function taskPrompt(plan: PlanItem, feedback: PlanFeedbackRecord): string {
@@ -222,11 +259,10 @@ function taskPrompt(plan: PlanItem, feedback: PlanFeedbackRecord): string {
 }
 
 function completeAcceptance(
-  roleDir: string,
   plan: PlanItem,
   qaStep: PlanStep,
   feedback: PlanFeedbackRecord
-): PlanItem {
+): Record<string, unknown> {
   const steps = plan.steps.map((step) => step.id === qaStep.id
     ? {
         ...step,
@@ -241,7 +277,7 @@ function completeAcceptance(
   const nextIndex = steps.findIndex((step, index) => index > qaIndex && step.status === "未开始");
   if (nextIndex >= 0) {
     steps[nextIndex] = { ...steps[nextIndex], status: "进行中" };
-    return updatePlan(roleDir, plan.id, {
+    return {
       status: "进行中",
       currentStepId: steps[nextIndex].id,
       currentStep: steps[nextIndex].title,
@@ -250,9 +286,9 @@ function completeAcceptance(
       isBlocked: false,
       blockedBy: undefined,
       steps
-    });
+    };
   }
-  return updatePlan(roleDir, plan.id, {
+  return {
     status: "已完成",
     currentStepId: undefined,
     currentStep: "QA 明确通过，验收完成",
@@ -261,29 +297,117 @@ function completeAcceptance(
     isBlocked: false,
     blockedBy: undefined,
     steps
-  });
+  };
+}
+
+function requiredFeedback(
+  projection: PlanQaStorageProjection,
+  feedbackId: string
+): Readonly<{ record: PlanFeedbackRecord; revision: string }> {
+  const record = projection.records.find((candidate) => candidate.id === feedbackId);
+  if (!record) throw new Error(`Plan feedback not found in the authoritative storage projection: ${feedbackId}`);
+  const revision = projection.recordRevisions[feedbackId];
+  if (!revision) throw new Error(`Plan feedback revision is unavailable: ${feedbackId}`);
+  return { record, revision };
+}
+
+function mutationContext(
+  operation: string,
+  roleId: string,
+  resourceId: string,
+  expectedRevision: string,
+  payload: unknown,
+  signal?: AbortSignal
+): PlanQaMutationContext {
+  return {
+    idempotencyKey: roleStorageOperationKey(
+      operation,
+      roleId,
+      resourceId,
+      expectedRevision,
+      JSON.stringify(payload) ?? "null"
+    ),
+    expectedRevision,
+    signal,
+    timeoutMs: 30_000
+  };
+}
+
+async function commitPlanPatch(
+  options: ConsumePlanQaFeedbackOptions,
+  projection: PlanQaStorageProjection,
+  feedbackId: string,
+  patch: Record<string, unknown>
+): Promise<PlanItem> {
+  const committed = await options.storage.updatePlan(
+    options.roleId,
+    projection.plan.id,
+    patch,
+    mutationContext(
+      "plan-qa-plan-transition",
+      options.roleId,
+      `${projection.plan.id}:${feedbackId}`,
+      projection.planRevision,
+      patch,
+      options.signal
+    )
+  );
+  return committed.plan;
+}
+
+async function commitQaHandling(
+  options: ConsumePlanQaFeedbackOptions,
+  projection: PlanQaStorageProjection,
+  feedbackId: string,
+  qaHandling: PlanQaFeedbackHandling
+): Promise<Readonly<{ projection: PlanQaStorageProjection; record: PlanFeedbackRecord }>> {
+  const current = requiredFeedback(projection, feedbackId);
+  const committedProjection = await options.storage.updateQaHandling(
+    options.roleId,
+    current.record.planId,
+    current.record,
+    qaHandling,
+    mutationContext(
+      "plan-qa-feedback-transition",
+      options.roleId,
+      `${current.record.planId}:${current.record.id}`,
+      current.revision,
+      qaHandling,
+      options.signal
+    )
+  );
+  return {
+    projection: committedProjection,
+    record: requiredFeedback(committedProjection, feedbackId).record
+  };
 }
 
 export async function consumePlanQaFeedback(
   options: ConsumePlanQaFeedbackOptions
 ): Promise<PlanQaFeedbackResult> {
-  if (!isQaVerdictFeedback(options.feedback)) {
+  let projection = await options.storage.query(options.roleId, options.feedback.planId, {
+    signal: options.signal,
+    timeoutMs: 30_000
+  });
+  if (!projection) throw new Error("Plan not found: " + options.feedback.planId);
+  const latest = requiredFeedback(projection, options.feedback.id).record;
+  if (!isQaVerdictFeedback(latest)) {
     return { outcome: "ignored", status: "ignored", missingEvidence: [] };
   }
-  const feedbackRecords = listPlanFeedback(options.roleDir, options.feedback.planId);
-  const latest = feedbackRecords.find((record) => record.id === options.feedback.id) || options.feedback;
-  if (latest.qaHandling && latest.qaHandling.status !== "dispatch_failed") {
+  const feedbackRecords = projection.records;
+  if (latest.qaHandling
+    && latest.qaHandling.status !== "dispatch_failed"
+    && latest.qaHandling.status !== "dispatching") {
     return {
       outcome: latest.qaHandling.outcome,
       status: latest.qaHandling.status,
       missingEvidence: latest.qaHandling.missingEvidence,
-      plan: listPlans(options.roleDir).find((plan) => plan.id === latest.planId)
+      plan: projection.plan
     };
   }
   const failed = latest.qaHandling?.status === "dispatch_failed" || QA_FAILURE_PATTERN.test(latest.text);
   const passed = !failed && QA_PASS_PATTERN.test(latest.text);
-  const plan = listPlans(options.roleDir).find((item) => item.id === latest.planId);
-  if (!plan) throw new Error("Plan not found: " + latest.planId);
+  const plan = projection.plan;
   const priorWaiting = [...feedbackRecords].reverse().find((record) => (
     record.id !== latest.id
     && record.qaHandling?.outcome === "failed"
@@ -306,11 +430,21 @@ export async function consumePlanQaFeedback(
         planAttachments: [...priorWaiting.planAttachments, ...latest.planAttachments]
       }
     : latest;
-  const qaStep = qaStepFor(plan, effectiveFeedback, evidenceFollowUp || latest.qaHandling?.status === "dispatch_failed");
+  const qaStep = qaStepFor(
+    plan,
+    effectiveFeedback,
+    evidenceFollowUp
+      || latest.qaHandling?.status === "dispatch_failed"
+      || latest.qaHandling?.status === "dispatching"
+      || latest.postCommit?.status === "processing"
+      || latest.postCommit?.status === "failed"
+  );
   if (!qaStep) return { outcome: "ignored", status: "ignored", missingEvidence: [] };
   if (passed) {
-    const updatedPlan = completeAcceptance(options.roleDir, plan, qaStep, latest);
-    updatePlanFeedbackQaHandling(options.roleDir, latest, {
+    const updatedPlan = qaStep.status === "已完成"
+      ? plan
+      : await commitPlanPatch(options, projection, latest.id, completeAcceptance(plan, qaStep, latest));
+    await commitQaHandling(options, projection, latest.id, {
       outcome: "passed",
       issueType: "generic",
       status: "completed",
@@ -321,9 +455,16 @@ export async function consumePlanQaFeedback(
   }
   const detectedIssueType = priorWaiting?.qaHandling?.issueType || issueType(effectiveFeedback, plan);
   const missingEvidence = missingEvidenceFor(effectiveFeedback, detectedIssueType);
-  const updatedPlan = reopenForInvestigation(options.roleDir, plan, qaStep, effectiveFeedback, missingEvidence);
+  const updatedPlan = plan.currentStepId === investigationStepId(qaStep)
+    ? plan
+    : await commitPlanPatch(
+        options,
+        projection,
+        latest.id,
+        reopenForInvestigation(plan, qaStep, effectiveFeedback, missingEvidence)
+      );
   if (missingEvidence.length) {
-    updatePlanFeedbackQaHandling(options.roleDir, latest, {
+    await commitQaHandling(options, projection, latest.id, {
       outcome: "failed",
       issueType: detectedIssueType,
       status: "waiting_for_evidence",
@@ -335,7 +476,7 @@ export async function consumePlanQaFeedback(
   const taskTarget = planTaskDeliveryTarget(updatedPlan);
   if (!taskTarget) {
     const message = "QA failure cannot continue because the original taskBinding sessionId/workspace is incomplete.";
-    updatePlanFeedbackQaHandling(options.roleDir, latest, {
+    await commitQaHandling(options, projection, latest.id, {
       outcome: "failed",
       issueType: detectedIssueType,
       status: "dispatch_failed",
@@ -345,28 +486,73 @@ export async function consumePlanQaFeedback(
     });
     throw new Error(message);
   }
-  const dispatching = updatePlanFeedbackQaHandling(options.roleDir, latest, {
+  if (latest.qaHandling?.status === "dispatching" || latest.qaHandling?.status === "dispatch_failed") {
+    if (!options.readTaskDelivery) {
+      throw new Error(`QA feedback ${latest.id} requires authoritative delivery readback before retry.`);
+    }
+    const readback = await options.readTaskDelivery({
+      threadId: taskTarget.threadId,
+      cwd: taskTarget.cwd,
+      deliveryId: latest.id
+    });
+    if (readback === "accepted") {
+      await commitQaHandling(options, projection, latest.id, {
+        ...latest.qaHandling,
+        status: "dispatched",
+        message: undefined
+      });
+      return { outcome: "failed", status: "dispatched", missingEvidence: [], plan: updatedPlan };
+    }
+    if (readback === "in_progress") {
+      return { outcome: "failed", status: "dispatching", missingEvidence: [], plan: updatedPlan };
+    }
+  }
+  const dispatchingCommit = await commitQaHandling(options, projection, latest.id, {
     outcome: "failed",
     issueType: detectedIssueType,
     status: "dispatching",
     missingEvidence: [],
     consumedAt: new Date().toISOString()
   });
+  projection = dispatchingCommit.projection;
+  const dispatching = dispatchingCommit.record;
   try {
     await options.sendToTask({
       ...taskTarget,
+      deliveryId: latest.id,
       prompt: taskPrompt(updatedPlan, effectiveFeedback)
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    updatePlanFeedbackQaHandling(options.roleDir, dispatching, {
+    if (options.readTaskDelivery) {
+      try {
+        const readback = await options.readTaskDelivery({
+          threadId: taskTarget.threadId,
+          cwd: taskTarget.cwd,
+          deliveryId: latest.id
+        });
+        if (readback === "accepted") {
+          await commitQaHandling(options, projection, dispatching.id, {
+            ...dispatching.qaHandling!,
+            status: "dispatched",
+            message: undefined
+          });
+          return { outcome: "failed", status: "dispatched", missingEvidence: [], plan: updatedPlan };
+        }
+        if (readback === "in_progress") throw error;
+      } catch (readbackError) {
+        if (readbackError !== error) throw readbackError;
+        throw error;
+      }
+    }
+    await commitQaHandling(options, projection, dispatching.id, {
       ...dispatching.qaHandling!,
       status: "dispatch_failed",
       message
     });
     throw error;
   }
-  updatePlanFeedbackQaHandling(options.roleDir, dispatching, {
+  await commitQaHandling(options, projection, dispatching.id, {
     ...dispatching.qaHandling!,
     status: "dispatched"
   });

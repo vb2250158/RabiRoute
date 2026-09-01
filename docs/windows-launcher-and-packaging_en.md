@@ -67,13 +67,19 @@ Only the returned `managerBaseUrl` is the current WebGUI and local API address. 
 
 ## Start, restart, and quit
 
-The installed Start-menu, desktop, and login-startup entries launch `RabiRouteHost.exe` directly. The repository compatibility launcher only delegates to Host:
+The installed Start-menu, desktop, and login-startup entries launch `RabiRouteHost.exe` directly. The source repository no longer provides a production-launch compatibility entry. Use `npm run dev` for source development or `npm run dev:hot` when WebGUI hot reload is needed. To validate a built Windows runtime, start only `RabiRouteHost.exe` from the local build or installation directory.
+
+Ordinary code changes do not require rebuilding the compressed Setup/ZIP. Materialize the NAS source into a local development directory, install the locked dependencies there, and run:
 
 ```powershell
-.\Start-RabiRoute-Desktop.bat
+.\scripts\Publish-RabiRouteDeveloperCandidate.ps1 -SourceRoot C:\path\to\local\RabiRoute
 ```
 
-The batch file does not probe ports, launch Manager or tray, maintain PIDs, or create a background lifecycle owner.
+The Developer Channel runs the incremental build locally, derives a manifest-identified candidate from the current immutable version, then uses the single Host for a fenced quit, an atomic `current.json` switch, and a complete new application generation. It verifies Host→Manager/Tray ownership plus the dynamic URL and `/meta` identity. A failed candidate restores the previous pointer and runtime automatically. It never runs code from NAS, starts Manager or Tray directly, or creates release archives. Changes to `package-lock.json`, the root Bootstrap, or dependency runtimes still require a full release. By default it rebuilds both the tray Desktop runtime and Host Core so a candidate cannot silently reuse stale binaries from its base. Pass `-RebuildDesktopRuntime:$false` or `-RebuildHostCore:$false` only when deliberately reusing the installed build.
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"
+```
 
 Restart the complete generation explicitly:
 
@@ -122,7 +128,7 @@ The release contains:
 
 `RabiRouteHost.exe` is the only target for Start-menu, desktop, login-startup, and uninstall-stop flows. Before upgrade, the installer stops the active generation through Host control and removes retired parallel lifecycle and startup artifacts. No side path remains able to resurrect the old architecture.
 
-The portable ZIP supports extraction to a new empty folder only; it is not an in-place upgrade medium. A ZIP cannot remove surplus executables, watchers, scheduled tasks, or sign-in entries from an old directory, so an existing installation must be upgraded by Setup's fail-closed stop and migration flow. As a final composition-root gate, Host checks for exact retired Desktop, Tray, and watcher files before creating Manager or the tray. Any match returns `legacy_overlay_blocked`, deletes nothing, and directs the user to a clean folder or Setup. Similarly suffixed backup files do not match, and a clean Setup installation is not blocked.
+The portable ZIP supports extraction to a new empty folder only; it is not an in-place upgrade medium. A ZIP cannot remove surplus executables, watchers, scheduled tasks, or sign-in entries from an old directory, so an existing installation must be upgraded by Setup's fail-closed stop and migration flow. As a final composition-root gate, Host checks both the active version package root and the state/install root for exact retired Desktop, Tray, and watcher files before creating Manager or the tray. Any match returns `legacy_overlay_blocked`, deletes nothing, and directs the user to a clean folder or Setup. Similarly suffixed backup files do not match, and a clean Setup installation is not blocked.
 
 ## Logs and acceptance
 

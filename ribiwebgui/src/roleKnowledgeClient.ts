@@ -133,9 +133,78 @@ type ManagerEnvelope<T> = {
   data?: T;
 };
 
-export const ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS = 12_000;
+export type ManagerResource<T> = {
+  data: T;
+  etag: string;
+};
 
-async function managerData<T>(path: string, init: RequestInit = {}): Promise<T> {
+export class ManagerRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ManagerRequestError";
+    this.status = status;
+  }
+}
+
+export type PlanFeedbackMutationResult = {
+  feedback: RolePlanFeedback;
+  etag: string;
+  idempotencyKey: string;
+};
+
+export const ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS = 12_000;
+const managerResourceEtags = new Map<string, string>();
+let activeManagerLifecycleKey = "";
+
+type ManagerLifecycleIdentity = {
+  applicationGenerationId: string;
+  managerInstanceId: string;
+};
+
+function managerLifecycleKey(identity: ManagerLifecycleIdentity): string {
+  return `${identity.applicationGenerationId}\u0000${identity.managerInstanceId}`;
+}
+
+async function readManagerLifecycleIdentity(): Promise<ManagerLifecycleIdentity> {
+  const response = await boundedManagerFetch("/meta", {
+    cache: "no-store",
+    headers: { accept: "application/json" }
+  });
+  const body = await response.json().catch(() => ({})) as Partial<ManagerLifecycleIdentity>;
+  const applicationGenerationId = String(body.applicationGenerationId || "").trim();
+  const managerInstanceId = String(body.managerInstanceId || "").trim();
+  if (!response.ok || !applicationGenerationId || !managerInstanceId) {
+    throw new ManagerRequestError("Manager did not publish a complete lifecycle identity.", response.status || 502);
+  }
+  return { applicationGenerationId, managerInstanceId };
+}
+
+export async function synchronizeRoleKnowledgeLifecycle(): Promise<string> {
+  try {
+    const nextKey = managerLifecycleKey(await readManagerLifecycleIdentity());
+    if (activeManagerLifecycleKey !== nextKey) managerResourceEtags.clear();
+    activeManagerLifecycleKey = nextKey;
+    return nextKey;
+  } catch (error) {
+    activeManagerLifecycleKey = "";
+    managerResourceEtags.clear();
+    throw error;
+  }
+}
+
+function managerResourceEtagKey(lifecycleKey: string, path: string): string {
+  return `${lifecycleKey}\u0000${path}`;
+}
+
+function strongEtag(response: Response): string {
+  const etag = String(response.headers.get("etag") || "").trim();
+  if (!etag || /^W\//i.test(etag) || !/^"[^"\r\n]+"$/.test(etag)) return "";
+  return etag;
+}
+
+async function boundedManagerFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const controller = new AbortController();
   const inheritedSignal = init.signal;
   const abortInheritedRequest = () => controller.abort(inheritedSignal?.reason);
@@ -143,21 +212,39 @@ async function managerData<T>(path: string, init: RequestInit = {}): Promise<T> 
   else inheritedSignal?.addEventListener("abort", abortInheritedRequest, { once: true });
   const timeout = globalThis.setTimeout(() => controller.abort(), ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(path, { ...init, signal: controller.signal });
-    const body = await response.json().catch(() => ({})) as ManagerEnvelope<T>;
-    if (!response.ok || body.code !== 0 || body.data == null) {
-      throw new Error(body.message || `Manager request failed (HTTP ${response.status}).`);
-    }
-    return body.data;
+    return await fetch(path, { ...init, signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted && !inheritedSignal?.aborted) {
-      throw new Error(`Manager request timed out after ${ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS}ms.`);
+      throw new ManagerRequestError(`Manager request timed out after ${ROLE_KNOWLEDGE_REQUEST_TIMEOUT_MS}ms.`, 0);
     }
     throw error;
   } finally {
     globalThis.clearTimeout(timeout);
     inheritedSignal?.removeEventListener("abort", abortInheritedRequest);
   }
+}
+
+async function managerResource<T>(
+  path: string,
+  init: RequestInit = {},
+  lifecycleKey = ""
+): Promise<ManagerResource<T>> {
+  try {
+    const response = await boundedManagerFetch(path, init);
+    const body = await response.json().catch(() => ({})) as ManagerEnvelope<T>;
+    if (!response.ok || body.code !== 0 || body.data == null) {
+      throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status);
+    }
+    const etag = strongEtag(response);
+    if (etag && lifecycleKey) managerResourceEtags.set(managerResourceEtagKey(lifecycleKey, path), etag);
+    return { data: body.data, etag };
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function managerData<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return (await managerResource<T>(path, init)).data;
 }
 
 export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
@@ -243,16 +330,45 @@ export async function loadPlanHistory(roleId: string, planId: string): Promise<R
   return Array.isArray(data.records) ? data.records : [];
 }
 
-export async function loadPlanFeedback(roleId: string, planId: string): Promise<RolePlan["approval"]> {
-  const data = await managerData<RolePlan["approval"] & { records?: RolePlanFeedback[] }>(
-    `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}/feedback`
-  );
+function planFeedbackPath(roleId: string, planId: string): string {
+  return `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}/feedback`;
+}
+
+function normalizedPlanApproval(data: RolePlan["approval"] & { records?: RolePlanFeedback[] }): RolePlan["approval"] {
   const records = Array.isArray(data.records) ? data.records : [];
   return {
     count: Number(data.count || records.length),
     latest: data.latest || records[0],
     records
   };
+}
+
+export async function loadPlanFeedbackWithRevision(
+  roleId: string,
+  planId: string
+): Promise<{ approval: RolePlan["approval"]; etag: string }> {
+  const path = planFeedbackPath(roleId, planId);
+  let lifecycleKey = await synchronizeRoleKnowledgeLifecycle();
+  let resource = await managerResource<RolePlan["approval"] & { records?: RolePlanFeedback[] }>(path, { cache: "no-store" }, lifecycleKey);
+  const verifiedLifecycleKey = await synchronizeRoleKnowledgeLifecycle();
+  if (lifecycleKey !== verifiedLifecycleKey) {
+    lifecycleKey = verifiedLifecycleKey;
+    resource = await managerResource<RolePlan["approval"] & { records?: RolePlanFeedback[] }>(path, { cache: "no-store" }, lifecycleKey);
+    if (lifecycleKey !== await synchronizeRoleKnowledgeLifecycle()) {
+      throw new ManagerRequestError("Manager lifecycle changed while reading plan feedback; retry after it is ready.", 503);
+    }
+  }
+  if (!resource.etag) throw new ManagerRequestError("Manager did not return a strong plan storage ETag.", 502);
+  return { approval: normalizedPlanApproval(resource.data), etag: resource.etag };
+}
+
+export async function loadPlanFeedback(roleId: string, planId: string): Promise<RolePlan["approval"]> {
+  return (await loadPlanFeedbackWithRevision(roleId, planId)).approval;
+}
+
+export function cachedPlanFeedbackRevision(roleId: string, planId: string): string {
+  if (!activeManagerLifecycleKey) return "";
+  return managerResourceEtags.get(managerResourceEtagKey(activeManagerLifecycleKey, planFeedbackPath(roleId, planId))) || "";
 }
 
 function summaryAsPlan(summary: RolePlanSummary): RolePlan {
@@ -474,12 +590,31 @@ export async function submitPlanFeedback(input: {
   planAttachmentIds: string[];
   source: "webgui" | "tray";
   kind: "guidance" | "approval_suggestion";
-}): Promise<RolePlanFeedback> {
-  const response = await fetch(
-    `/api/roles/${encodeURIComponent(input.roleId)}/plans/${encodeURIComponent(input.planId)}/feedback`,
+  expectedRevision: string;
+}): Promise<PlanFeedbackMutationResult> {
+  const expectedRevision = String(input.expectedRevision || "").trim();
+  if (!expectedRevision || /^W\//i.test(expectedRevision) || !/^"[^"\r\n]+"$/.test(expectedRevision)) {
+    throw new ManagerRequestError("Plan feedback requires the exact strong ETag returned by Manager.", 400);
+  }
+  const feedbackId = String(input.feedbackId || "").trim();
+  if (!/^[A-Za-z0-9._:-]{1,170}$/.test(feedbackId)) {
+    throw new ManagerRequestError("Plan feedback requires a stable feedbackId.", 400);
+  }
+  const idempotencyKey = `plan-feedback:${feedbackId}`;
+  const path = planFeedbackPath(input.roleId, input.planId);
+  const lifecycleKey = await synchronizeRoleKnowledgeLifecycle();
+  if (managerResourceEtags.get(managerResourceEtagKey(lifecycleKey, path)) !== expectedRevision) {
+    throw new ManagerRequestError("Plan feedback must use the strong ETag from a current-generation GET.", 412);
+  }
+  const response = await boundedManagerFetch(
+    path,
     {
       method: "POST",
-      headers: { "content-type": "application/json; charset=utf-8" },
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "idempotency-key": idempotencyKey,
+        "if-match": expectedRevision
+      },
       body: JSON.stringify({
         feedbackId: input.feedbackId,
         gatewayId: input.gatewayId,
@@ -496,7 +631,25 @@ export async function submitPlanFeedback(input: {
   );
   const body = await response.json().catch(() => ({})) as ManagerEnvelope<RolePlanFeedback>;
   if (!response.ok || body.code !== 0 || !body.data) {
-    throw new Error(body.message || `Manager request failed (HTTP ${response.status}).`);
+    throw new ManagerRequestError(body.message || `Manager request failed (HTTP ${response.status}).`, response.status);
   }
-  return body.data;
+  if (String(body.data.id || "").trim() !== feedbackId
+    || String(body.data.planId || "").trim() !== String(input.planId || "").trim()) {
+    throw new ManagerRequestError("Manager plan feedback receipt body did not confirm the submitted feedbackId and planId.", 502);
+  }
+  const etag = strongEtag(response);
+  if (!etag) throw new ManagerRequestError("Manager committed plan feedback without returning a strong ETag.", 502);
+  const receiptIdempotencyKey = String(response.headers.get("idempotency-key") || "").trim();
+  if (receiptIdempotencyKey !== idempotencyKey) {
+    throw new ManagerRequestError("Manager plan feedback receipt did not confirm the submitted Idempotency-Key.", 502);
+  }
+  if (lifecycleKey !== await synchronizeRoleKnowledgeLifecycle()) {
+    throw new ManagerRequestError("Manager lifecycle changed while committing plan feedback; retry the same feedbackId after reloading.", 503);
+  }
+  managerResourceEtags.set(managerResourceEtagKey(lifecycleKey, path), etag);
+  return {
+    feedback: body.data,
+    etag,
+    idempotencyKey: receiptIdempotencyKey
+  };
 }

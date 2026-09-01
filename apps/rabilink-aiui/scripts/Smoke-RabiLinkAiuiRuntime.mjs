@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -355,6 +356,172 @@ try {
   const pageModule = await import(`${pathToFileURL(path.join(stagingRoot, "pages", "home", "index.js")).href}?smoke=${Date.now()}`);
   const page = createPageInstance(pageModule);
 
+  const mutationPage = createPageInstance(pageModule);
+  mutationPage.data.targetDeviceId = "pc-route-mutation";
+  mutationPage.data.routeCatalogContentHash = "a".repeat(64);
+  mutationPage.data.routeCatalogRouteConfigHash = "a".repeat(64);
+  const secretPayload = { gateways: [{ id: "route-a", astrbotPassword: "must-not-persist" }] };
+  let firstOperationId = "";
+  let unavailableError = null;
+  try {
+    await mutationPage.performRouteMutation(
+      "replace-gateways",
+      "gateways",
+      secretPayload,
+      async (mutation) => {
+        firstOperationId = mutation.operationId;
+        throw Object.assign(new Error("temporarily unavailable"), { statusCode: 503 });
+      }
+    );
+  } catch (error) {
+    unavailableError = error;
+  }
+  assert(unavailableError?.statusCode === 503, "A 503 route mutation must remain retryable.");
+  const uncertainSettings = wxModule.getStorageValue("rabilink-aiui-settings");
+  assert(uncertainSettings.pendingRouteMutation?.state === "uncertain", "A 503 must persist the caller-owned pending operation.");
+  assert(uncertainSettings.pendingRouteMutation?.operationId === firstOperationId, "The pending operation must retain its stable operationId.");
+  assert(/^[a-f0-9]{64}$/.test(uncertainSettings.pendingRouteMutation?.payloadFingerprint || ""), "Pending mutation identity must use a canonical SHA-256 fingerprint.");
+  assert(
+    uncertainSettings.pendingRouteMutation.payloadFingerprint === crypto.createHash("sha256")
+      .update(JSON.stringify({ gateways: [{ astrbotPassword: "must-not-persist", id: "route-a" }] }), "utf8")
+      .digest("hex"),
+    "The packaged synchronous fingerprint must match canonical UTF-8 SHA-256."
+  );
+  assert(!JSON.stringify(uncertainSettings).includes("must-not-persist"), "Pending mutation persistence must never store route secrets or mutation bodies.");
+
+  const reorderedPending = mutationPage.pendingRouteMutation(
+    "replace-gateways",
+    "gateways",
+    { gateways: [{ astrbotPassword: "must-not-persist", id: "route-a" }] }
+  );
+  assert(reorderedPending.operationId === firstOperationId, "Canonical property ordering must reuse the same pending operationId.");
+
+  mutationPage.rememberRouteCatalog({
+    routeCatalog: { contentHash: "d".repeat(64), routeConfigHash: "d".repeat(64) }
+  });
+  const afterCatalogReload = mutationPage.pendingRouteMutation(
+    "replace-gateways",
+    "gateways",
+    secretPayload
+  );
+  assert(afterCatalogReload.operationId === firstOperationId, "A lost-response retry must reuse its operationId after a catalog reload.");
+  assert(afterCatalogReload.expectedContentHash === "a".repeat(64), "A lost-response retry must replay its original If-Match for receipt lookup.");
+
+  let mismatchError = null;
+  try {
+    await mutationPage.performRouteMutation(
+      "replace-gateways",
+      "gateways",
+      { gateways: [{ id: "different-route" }] },
+      async () => ({})
+    );
+  } catch (error) {
+    mismatchError = error;
+  }
+  assert(/上一笔 Route 修改仍未取得明确回执/.test(mismatchError?.message || ""), "A different mutation must not replace an unresolved pending operation.");
+
+  let retriedOperationId = "";
+  await mutationPage.performRouteMutation(
+    "replace-gateways",
+    "gateways",
+    secretPayload,
+    async (mutation) => {
+      retriedOperationId = mutation.operationId;
+      return {
+        mutationReceipt: {
+          state: "committed",
+          operationId: mutation.operationId,
+          contentHash: "b".repeat(64)
+        }
+      };
+    }
+  );
+  assert(retriedOperationId === firstOperationId, "A 503 retry must reuse the exact persisted operationId.");
+  assert(!wxModule.getStorageValue("rabilink-aiui-settings").pendingRouteMutation, "Only an explicit committed receipt may clear the pending operation.");
+  assert(mutationPage.data.routeCatalogRouteConfigHash === "b".repeat(64), "A committed receipt must advance the local mutation hash.");
+
+  const unicodePending = mutationPage.pendingRouteMutation(
+    "rename-route",
+    "route-a",
+    { 名称: "夜雨", enabled: true }
+  );
+  assert(
+    unicodePending.payloadFingerprint === crypto.createHash("sha256")
+      .update(JSON.stringify({ enabled: true, 名称: "夜雨" }), "utf8")
+      .digest("hex"),
+    "Canonical SHA-256 must encode non-ASCII mutation payloads as UTF-8."
+  );
+  wxModule.setStorageValue("rabilink-aiui-settings", {
+    ...wxModule.getStorageValue("rabilink-aiui-settings"),
+    pendingRouteMutation: null
+  });
+
+  let conflictReloads = 0;
+  let conflictError = null;
+  try {
+    await mutationPage.performRouteMutation(
+      "delete-gateway",
+      "route-a",
+      {},
+      async () => {
+        throw Object.assign(new Error("precondition failed"), { statusCode: 412 });
+      },
+      async () => {
+        conflictReloads += 1;
+        mutationPage.rememberRouteCatalog({
+          routeCatalog: { contentHash: "c".repeat(64), routeConfigHash: "c".repeat(64) }
+        });
+      }
+    );
+  } catch (error) {
+    conflictError = error;
+  }
+  assert(conflictReloads === 1, "A 412 must reload the route catalog exactly once.");
+  assert(/已重新读取/.test(conflictError?.message || ""), "A 412 must tell the user that the catalog was reloaded.");
+  assert(!wxModule.getStorageValue("rabilink-aiui-settings").pendingRouteMutation, "A rejected 412 operation must clear only after reload completes.");
+
+  let rejectedError = null;
+  try {
+    await mutationPage.performRouteMutation(
+      "delete-gateway",
+      "route-b",
+      {},
+      async () => {
+        throw Object.assign(new Error("invalid request"), { statusCode: 400 });
+      }
+    );
+  } catch (error) {
+    rejectedError = error;
+  }
+  assert(rejectedError?.statusCode === 400, "A definitive Route rejection must preserve its HTTP status.");
+  assert(!wxModule.getStorageValue("rabilink-aiui-settings").pendingRouteMutation, "A definitive non-committing 4xx must retire its pending operation.");
+
+  let committedReloadError = null;
+  try {
+    await mutationPage.performRouteMutation(
+      "rename-route",
+      "route-a",
+      { name: "night-rain" },
+      async (mutation) => ({
+        mutationReceipt: {
+          state: "committed",
+          operationId: mutation.operationId,
+          contentHash: "e".repeat(64)
+        }
+      }),
+      async () => {
+        throw new Error("reload unavailable after commit");
+      }
+    );
+  } catch (error) {
+    committedReloadError = error;
+  }
+  assert(/reload unavailable after commit/.test(committedReloadError?.message || ""), "A post-commit reload failure must remain visible.");
+  assert(!wxModule.getStorageValue("rabilink-aiui-settings").pendingRouteMutation, "A post-commit reload failure must not resurrect a completed mutation.");
+  assert(mutationPage.data.routeCatalogRouteConfigHash === "e".repeat(64), "A committed receipt must remain authoritative when refresh fails.");
+  wxModule.setStorageValue("rabilink-aiui-settings", {});
+  wxModule.resetWxCalls();
+
   const commandSamples = voiceCommandSamples();
   const commandCases = voiceCommandCases();
   const expectedCommands = Object.values(VOICE_COMMANDS).filter((command) => command !== VOICE_COMMANDS.UNKNOWN);
@@ -421,6 +588,7 @@ try {
   assert(typeof page.refreshBatteryStatus === "function" && typeof page.updateDeviceClock === "function", "Page must expose lower-corner device status updates.");
   assert(typeof page.selectAgent === "function", "Page must expose agent selection.");
   assert(typeof page.applySelectedRemoteAgentDevice === "function", "Page must expose remote Agent selection.");
+  assert(typeof page.performRouteMutation === "function", "Page must own durable route mutation retries and conflict reloads.");
 
   page.onLoad();
   assert(page.data.maskedToken === "未设置", "onLoad should initialize masked token.");

@@ -16,6 +16,7 @@ export type ManagerHealthSnapshot = Readonly<{
 
 export function buildManagerHealthSnapshot(input: Readonly<{
   pluginReadiness: ManagerPluginReadiness;
+  planStorageReady: boolean;
   routesReady: boolean;
   routeReadyCount: number;
   routeRequiredCount: number;
@@ -26,7 +27,7 @@ export function buildManagerHealthSnapshot(input: Readonly<{
   checkedAt?: string;
 }>): ManagerHealthSnapshot {
   const requiredReady = input.pluginReadiness.missingCapabilities.length === 0;
-  const businessReady = input.routesReady;
+  const businessReady = input.routesReady && input.planStorageReady;
   const healthy = input.pluginReadiness.state === "ready"
     && requiredReady
     && businessReady
@@ -35,9 +36,11 @@ export function buildManagerHealthSnapshot(input: Readonly<{
     ? `Manager event loop is live, but required plugin capabilities are unavailable: ${input.pluginReadiness.missingCapabilities.join(", ")}`
     : input.pluginReadiness.state !== "ready"
       ? "Manager event loop and required capabilities are ready, but optional plugins are degraded."
+      : !input.planStorageReady
+        ? "Manager event loop and required capabilities are ready, but plan storage startup recovery is not ready."
       : input.backgroundIncidentCount > 0
         ? `Manager event loop and required capabilities are ready, but background incidents remain: incidents=${input.backgroundIncidentCount}`
-        : businessReady
+        : input.routesReady
           ? "Manager event loop, required capabilities, and enabled Route ingress are ready."
           : `Manager event loop and required capabilities are ready, but Route ingress is degraded: ready=${input.routeReadyCount}/${input.routeRequiredCount}; blocked=${input.blockedRouteIds.join(",") || "none"}; failed=${input.failedRouteIds.join(",") || "none"}`;
   return Object.freeze({

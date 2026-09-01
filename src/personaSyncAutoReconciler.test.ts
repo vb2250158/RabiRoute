@@ -130,6 +130,9 @@ test("a peer reconnect event automatically converges real persona folders withou
   const token = "same-application-token";
   const serviceA = new PersonaSyncService(() => rolesA, stateA);
   const serviceB = new PersonaSyncService(() => rolesB, stateB);
+  t.after(() => serviceA.stopManifestIndex());
+  t.after(() => serviceB.stopManifestIndex());
+  await Promise.all([serviceA.startManifestIndex(), serviceB.startManifestIndex()]);
   const lan = new PersonaSyncLanServer({
     service: serviceB,
     coordinator: {} as PersonaSyncCoordinator,

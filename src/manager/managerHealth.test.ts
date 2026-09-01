@@ -4,6 +4,7 @@ import { buildManagerHealthSnapshot } from "./managerHealth.js";
 
 const base = {
   pluginReadiness: { state: "ready" as const, missingCapabilities: [] as readonly string[] },
+  planStorageReady: true,
   routesReady: true,
   routeReadyCount: 2,
   routeRequiredCount: 2,
@@ -60,4 +61,17 @@ test("optional plugin and Route degradation preserve required generation readine
   assert.equal(routeDegraded.requiredReady, true);
   assert.equal(routeDegraded.businessReady, false);
   assert.equal(routeDegraded.state, "degraded");
+});
+
+test("plan storage startup blocks business readiness without rejecting the required generation", () => {
+  const health = buildManagerHealthSnapshot({
+    ...base,
+    planStorageReady: false
+  });
+
+  assert.equal(health.live, true);
+  assert.equal(health.requiredReady, true);
+  assert.equal(health.businessReady, false);
+  assert.equal(health.state, "degraded");
+  assert.match(health.message, /plan storage startup recovery is not ready/i);
 });

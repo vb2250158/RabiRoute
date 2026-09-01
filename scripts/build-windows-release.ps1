@@ -319,8 +319,7 @@ foreach ($relative in @(
     "README.md",
     "README_zh.md",
     ($versionLogBaseName + ".md"),
-    ($versionLogBaseName + "_en.md"),
-    "Start-RabiRoute-Desktop.bat"
+    ($versionLogBaseName + "_en.md")
 )) {
     Copy-Item -LiteralPath (Join-Path $repo $relative) -Destination (Join-Path $payload $relative) -Force
 }

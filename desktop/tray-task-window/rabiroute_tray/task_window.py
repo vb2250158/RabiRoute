@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont, QIcon, QKeyEvent, QMouseEvent, QPixmap
@@ -37,6 +37,7 @@ from .plugin_catalog import (
     DesktopPluginSettingsSection,
     create_builtin_desktop_extension_registry,
 )
+from .plan_feedback_ledger import PlanFeedbackLedger, PlanFeedbackLedgerError
 from .qt_async import QtAsyncTask, start_qt_task
 from .theme import apply_rabi_menu_theme, normalize_theme, theme_stylesheet
 
@@ -63,6 +64,7 @@ PLAN_KIND_LABELS = {"human-gate": "需人工接管"}
 
 PLAN_STEP_DONE_STATUSES = {"已完成", "完成", "done", "completed"}
 PLAN_STEP_CURRENT_STATUSES = {"进行中", "当前", "current", "in_progress", "in-progress"}
+
 
 class ClickableHeader(QFrame):
     clicked = Signal()
@@ -298,7 +300,13 @@ class PlanMetadataPanel(QFrame):
 class PlanDetailPanel(QFrame):
     approval_requested = Signal(str, str, str, str)
 
-    def __init__(self, plan: PlanItem, metadata_fields: list[tuple[str, str]]) -> None:
+    def __init__(
+        self,
+        plan: PlanItem,
+        metadata_fields: list[tuple[str, str]],
+        role_id: str = "",
+        feedback_ledger: PlanFeedbackLedger | None = None,
+    ) -> None:
         super().__init__()
         self.setObjectName("planDetailPanel")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
@@ -346,7 +354,9 @@ class PlanDetailPanel(QFrame):
         if metadata_fields:
             layout.addWidget(PlanMetadataPanel(metadata_fields))
 
-        self.approval_panel = PlanApprovalPanel(plan) if plan.approval_state != "none" else None
+        self.approval_panel = (
+            PlanApprovalPanel(plan, role_id, feedback_ledger) if plan.approval_state != "none" else None
+        )
         if self.approval_panel is not None:
             self.approval_panel.submit_requested.connect(self.approval_requested.emit)
             layout.addWidget(self.approval_panel)
@@ -511,10 +521,18 @@ class PlanDetailPanel(QFrame):
 class PlanApprovalPanel(QFrame):
     submit_requested = Signal(str, str, str, str)
 
-    def __init__(self, plan: PlanItem) -> None:
+    def __init__(
+        self,
+        plan: PlanItem,
+        role_id: str = "",
+        feedback_ledger: PlanFeedbackLedger | None = None,
+    ) -> None:
         super().__init__()
         self.plan = plan
-        self.feedback_id = str(uuid4())
+        self.feedback_scope = f"{role_id}\0{plan.plan_id}"
+        self.feedback_ledger = feedback_ledger or PlanFeedbackLedger()
+        self.feedback_id = ""
+        self.feedback_signature = ""
         self.setObjectName("planApprovalPanel")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
@@ -682,6 +700,15 @@ class PlanApprovalPanel(QFrame):
         if len(text) > 2000:
             self.complete(False, "审批建议不能超过 2000 个字符。", "error")
             return
+        signature = hashlib.sha256(
+            f"{self.plan.plan_id}\0{self.plan.approval_step_id}\0{text}".encode("utf-8")
+        ).hexdigest()
+        try:
+            self.feedback_id = self.feedback_ledger.reserve(self.feedback_scope, signature)
+        except PlanFeedbackLedgerError as error:
+            self.complete(False, f"无法安全保存本次提交标识，尚未发送：{error}", "error")
+            return
+        self.feedback_signature = signature
         self.submit_requested.emit(self.plan.plan_id, self.plan.approval_step_id, self.feedback_id, text)
 
     def set_pending(self, pending: bool) -> None:
@@ -692,11 +719,23 @@ class PlanApprovalPanel(QFrame):
         if pending:
             self._set_notice("正在由 Rabi Manager 记录并通知 Agent。", "pending")
 
-    def complete(self, succeeded: bool, message: str = "", tone: str = "") -> None:
+    def complete(self, succeeded: bool, message: str = "", tone: str = "", *, retire: bool = False) -> None:
         self.set_pending(False)
+        should_retire = succeeded or retire
+        if should_retire and self.feedback_id and self.feedback_signature:
+            try:
+                self.feedback_ledger.retire(self.feedback_scope, self.feedback_signature, self.feedback_id)
+            except PlanFeedbackLedgerError as error:
+                self._set_notice(
+                    f"{message} 本地提交回执无法安全清理：{error}",
+                    "warning",
+                )
+                return
         if succeeded:
             self.input.clear()
-            self.feedback_id = str(uuid4())
+        if should_retire:
+            self.feedback_id = ""
+            self.feedback_signature = ""
         self._set_notice(message, tone or ("success" if succeeded else "error"))
 
     def _set_notice(self, message: str, tone: str) -> None:
@@ -793,6 +832,8 @@ class ExpandableCard(QFrame):
         expanded: bool = False,
         plan: PlanItem | None = None,
         theme: object = "light",
+        role_id: str = "",
+        feedback_ledger: PlanFeedbackLedger | None = None,
     ) -> None:
         super().__init__()
         self._expanded = False
@@ -879,7 +920,7 @@ class ExpandableCard(QFrame):
         details_layout.setContentsMargins(14, 2, 0, 0)
         details_layout.setSpacing(6)
         if plan is not None:
-            self.plan_detail_panel = PlanDetailPanel(plan, fields)
+            self.plan_detail_panel = PlanDetailPanel(plan, fields, role_id, feedback_ledger)
             self.plan_detail_panel.approval_requested.connect(self.approval_requested.emit)
             details_layout.addWidget(self.plan_detail_panel)
         elif fields:
@@ -1019,6 +1060,7 @@ class TaskWindow(QWidget):
         theme: object = "light",
         plugin_manager_factory=None,
         extension_registry: DesktopExtensionRegistry | None = None,
+        feedback_ledger: PlanFeedbackLedger | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle("RabiRoute 角色面板")
@@ -1028,6 +1070,7 @@ class TaskWindow(QWidget):
         self._drag_start: QPoint | None = None
         self._expanded_cards: set[str] = set()
         self._plan_approval_panels: dict[str, PlanApprovalPanel] = {}
+        self._plan_feedback_ledger = feedback_ledger or PlanFeedbackLedger.durable_default()
 
         self.active_view = "chat"
         self.manager: ManagerSnapshot | None = None
@@ -1446,10 +1489,18 @@ class TaskWindow(QWidget):
         if panel is not None:
             panel.set_pending(pending)
 
-    def complete_plan_feedback(self, plan_id: str, succeeded: bool, message: str, tone: str = "") -> None:
+    def complete_plan_feedback(
+        self,
+        plan_id: str,
+        succeeded: bool,
+        message: str,
+        tone: str = "",
+        *,
+        retire: bool = False,
+    ) -> None:
         panel = self._plan_approval_panels.get(plan_id)
         if panel is not None:
-            panel.complete(succeeded, message, tone)
+            panel.complete(succeeded, message, tone, retire=retire)
 
     def _render_active_view(self) -> None:
         self._clear_content()
@@ -1843,6 +1894,8 @@ class TaskWindow(QWidget):
             expanded=key in self._expanded_cards,
             plan=plan,
             theme=self.theme,
+            role_id=self.plans.role_id if self.plans is not None else "",
+            feedback_ledger=self._plan_feedback_ledger,
         )
         card.expanded_changed.connect(lambda expanded, item_key=key: self._set_card_expanded(item_key, expanded))
         if plan is not None:

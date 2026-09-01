@@ -1,5 +1,9 @@
 import http from "node:http";
-import { CodexHookContextService, type CodexHookEventName } from "./codexHookContext.js";
+import {
+  CodexHookContextService,
+  CodexHookPlanStorageUnavailableError,
+  type CodexHookEventName
+} from "./codexHookContext.js";
 
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -72,7 +76,17 @@ export function handleCodexHookApi(
     void readJsonBody(request)
       .then((body) => service.handleHook(hookContextRequest(body, request)))
       .then((data) => jsonResponse(response, 200, { code: 0, data }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => {
+        if (error instanceof CodexHookPlanStorageUnavailableError) {
+          jsonResponse(response, error.statusCode, {
+            code: -1,
+            error: error.code,
+            message: error.message
+          });
+          return;
+        }
+        jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
+      });
     return true;
   }
 

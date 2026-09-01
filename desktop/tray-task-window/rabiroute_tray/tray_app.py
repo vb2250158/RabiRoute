@@ -1003,7 +1003,32 @@ def _send_plan_feedback(
             return
         if result.delivery_status == "failed":
             detail = f" {result.message}" if result.message else ""
-            panel.complete_plan_feedback(plan_id, False, f"审批建议已记录，但通知 Agent 失败；可以重试。{detail}", "warning")
+            panel.complete_plan_feedback(
+                plan_id,
+                False,
+                f"审批建议已记录，但通知 Agent 失败；请确认计划当前状态后再提交新建议。{detail}",
+                "warning",
+                retire=True,
+            )
+            return
+        if result.uncertain:
+            detail = f" {result.message}" if result.message else ""
+            panel.complete_plan_feedback(
+                plan_id,
+                False,
+                f"提交结果尚未确认；已保留同一提交标识，恢复连接后可安全重试。{detail}",
+                "warning",
+            )
+            return
+        if result.revision_conflict:
+            panel.complete_plan_feedback(
+                plan_id,
+                False,
+                "计划已更新，正在重新读取当前版本；确认内容后将创建新的版本化提交。",
+                "warning",
+                retire=True,
+            )
+            refresh_callback()
             return
         panel.complete_plan_feedback(plan_id, False, result.message or "审批建议提交失败。", "error")
 

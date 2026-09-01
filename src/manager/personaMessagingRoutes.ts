@@ -1,15 +1,19 @@
 import http from "node:http";
+import path from "node:path";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { routeRuntimeParts, sanitizeRoleId } from "../shared/routeIdentity.js";
-import { roleFolderPath } from "../shared/routePaths.js";
-import type { RolePanelAttachment } from "../rolePanelTimeline.js";
+import type {
+  RolePanelAttachment,
+  RolePanelTimelineAppendResult,
+  RolePanelTimelineMessage
+} from "../rolePanelTimeline.js";
 import type { PersonaMessageReplyContext } from "../shared/rolePanelMessage.js";
 import {
   executeDurableDelivery,
   normalizeDurableDeliveryId,
   readDurableDeliveryReceipt
 } from "./durableDeliveryIdempotency.js";
-import type { PersonaCatalog } from "./personaCatalog.js";
+import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
 import { deliverRolePanelMessage, RolePanelDeliveryError } from "./rolePanelDelivery.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
 
@@ -26,10 +30,11 @@ export type PersonaMessageDelivery = (
 export type PersonaMessagingRouteContext = {
   rootDir: string;
   rolesRoot: string;
-  catalog: PersonaCatalog;
+  personaPresentations: () => readonly RouteCatalogPersonaPresentation[];
   runtimes: () => PersonaMessagingRuntime[];
   authorizeSource: (routeId: string, personaId: string, capability: string) => boolean;
   deliver: PersonaMessageDelivery;
+  appendTimeline: (roleId: string, message: RolePanelTimelineMessage) => Promise<RolePanelTimelineAppendResult>;
 };
 
 export type PersonaRouteSummary = {
@@ -131,19 +136,26 @@ function routeSummary(runtime: PersonaMessagingRuntime): PersonaRouteSummary {
   };
 }
 
-export function listPersonas(context: Pick<PersonaMessagingRouteContext, "rolesRoot" | "runtimes" | "catalog">): PersonaSummary[] {
+function rolesRootKey(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/").toLowerCase();
+}
+
+export function listPersonas(context: Pick<PersonaMessagingRouteContext, "rolesRoot" | "runtimes" | "personaPresentations">): PersonaSummary[] {
   const runtimes = context.runtimes();
-  return context.catalog.list(context.rolesRoot, { preferredFileName: "persona.md" })
-    .map((entry) => {
-      const personaId = entry.personaId;
+  const activeRoot = rolesRootKey(context.rolesRoot);
+  return context.personaPresentations()
+    .filter(item => item.isPersona && rolesRootKey(item.rolesRoot) === activeRoot)
+    .map((item) => {
+      const personaId = item.roleId;
+      const title = item.files.find(file => file.fileName.toLowerCase() === "persona.md")?.title ?? "";
       const matchingRuntimes = runtimes.filter(runtime => personaIdForDefinition(runtime.definition) === personaId);
       const routes = matchingRuntimes.map(routeSummary)
         .sort((left, right) => left.routeId.localeCompare(right.routeId));
       const enabledRoutes = routes.filter(route => route.enabled);
       return {
         personaId,
-        name: entry.title || routes[0]?.name || personaId,
-        title: entry.title,
+        name: title || routes[0]?.name || item.displayName || personaId,
+        title,
         addressable: enabledRoutes.length > 0,
         defaultRouteId: enabledRoutes.length === 1 ? enabledRoutes[0].routeId : undefined,
         routes
@@ -263,13 +275,13 @@ async function deliverPersonaMessage(
     const delivery = await deliverRolePanelMessage({
       runtime: target,
       roleId: targetPersonaId,
-      roleDir: roleFolderPath(context.rolesRoot, targetPersonaId),
       sender: sourcePersona.name,
       text,
       attachments: [],
       messageIdPrefix: "persona-message",
       replyContext: personaReplyContext,
-      deliver: context.deliver
+      deliver: context.deliver,
+      appendTimeline: context.appendTimeline
     });
     return {
       status: delivery.status,

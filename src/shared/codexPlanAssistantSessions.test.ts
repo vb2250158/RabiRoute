@@ -94,4 +94,13 @@ test("plan assistant initialization keeps the secretary control-only and preserv
   assert.match(prompt, /本轮执行一项并更新计划与记忆/);
   assert.match(prompt, /消费业务结果、更新计划与记忆并续投/);
   assert.match(prompt, /仅把决定、批准、授权、缺少输入或最终复核升级给主人格/);
+  assert.match(prompt, /Idempotency-Key/);
+  assert.match(prompt, /If-Match/);
+  assert.match(prompt, /强 ETag/);
+  assert.match(prompt, /有界超时/);
+  assert.match(prompt, /applicationGenerationId/);
+  assert.match(prompt, /managerInstanceId/);
+  assert.match(prompt, /成功响应.*Idempotency-Key.*强 ETag/);
+  assert.match(prompt, /503[^\n]*同一个 Idempotency-Key/);
+  assert.match(prompt, /412[^\n]*废弃[^\n]*重新 GET[^\n]*新[^\n]*Idempotency-Key/);
 });

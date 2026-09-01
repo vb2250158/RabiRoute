@@ -58,10 +58,11 @@ function createFixture() {
       record("gatewayPayload", options);
       return { code: 0, data: { options: options ?? null, marker: "gateways" } };
     },
-    writeConfig(config) {
-      record("writeConfig", config);
+    async writeConfig(config, expectedContentHash, operationId) {
+      record("writeConfig", config, expectedContentHash, operationId);
+      return config;
     },
-    loadRuntimes() {
+    async loadRuntimes() {
       record("loadRuntimes");
     },
     syncRunningGateways() {
@@ -70,6 +71,14 @@ function createFixture() {
     runtimeStatuses() {
       record("runtimeStatuses");
       return runtimeStatuses;
+    },
+    routeCatalogVersion() {
+      return {
+        contentHash: "a".repeat(64),
+        routeConfigHash: "a".repeat(64),
+        presentationHash: "b".repeat(64),
+        revision: 7
+      };
     },
     networkOptionsPayload() {
       record("networkOptionsPayload");
@@ -84,8 +93,8 @@ function createFixture() {
     restartGateway(id) {
       record("restartGateway", id);
     },
-    removeGatewayConfig(id) {
-      record("removeGatewayConfig", id);
+    async removeGatewayConfig(id, expectedContentHash, operationId) {
+      record("removeGatewayConfig", id, expectedContentHash, operationId);
     },
     weixinLoginTarget(id) {
       record("weixinLoginTarget", id);
@@ -163,12 +172,21 @@ async function json(response: Response): Promise<Record<string, any>> {
   return await response.json() as Record<string, any>;
 }
 
-async function post(baseUrl: string, pathname: string, body?: unknown, accept?: string): Promise<Response> {
+async function post(
+  baseUrl: string,
+  pathname: string,
+  body?: unknown,
+  accept?: string,
+  idempotencyKey = "gateway-test-operation",
+  expectedContentHash = "a".repeat(64)
+): Promise<Response> {
   return fetch(`${baseUrl}${pathname}`, {
     method: "POST",
     headers: {
       ...(body === undefined ? {} : { "content-type": "application/json" }),
-      ...(accept ? { accept } : {})
+      ...(accept ? { accept } : {}),
+      ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
+      ...(expectedContentHash ? { "if-match": expectedContentHash } : {})
     },
     body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
     redirect: "manual"
@@ -204,21 +222,129 @@ test("GET /gateways preserves diagnostic and config query semantics", async () =
   }
 });
 
-test("POST /gateways writes config, reloads runtimes, and keeps 400 errors", async () => {
+test("POST /gateways awaits the committed config snapshot and keeps 400 errors", async () => {
   const fixture = createFixture();
   const app = await startServer(fixture.context);
   try {
     const response = await post(app.baseUrl, "/gateways", { gateways: [] });
     assert.equal(response.status, 200);
-    assert.equal((await json(response)).data.marker, "gateways");
+    const responseBody = await json(response);
+    assert.equal(responseBody.data.marker, "gateways");
+    assert.deepEqual(responseBody.receipt, {
+      state: "committed",
+      operationId: "gateway-test-operation",
+      routeConfigHash: "a".repeat(64)
+    });
     assert.deepEqual(
       fixture.calls.map((call) => call.name),
-      ["writeConfig", "loadRuntimes", "syncRunningGateways", "gatewayPayload"]
+      ["writeConfig", "syncRunningGateways", "gatewayPayload"]
     );
+    assert.deepEqual(fixture.calls[0].args.slice(1), ["a".repeat(64), "gateway-test-operation"]);
 
     const invalid = await post(app.baseUrl, "/gateways", "{");
     assert.equal(invalid.status, 400);
     assert.equal((await json(invalid)).code, -1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("route mutations require a valid upstream Idempotency-Key and never invent one", async () => {
+  const fixture = createFixture();
+  const app = await startServer(fixture.context);
+  try {
+    const missing = await post(app.baseUrl, "/gateways", { gateways: [] }, undefined, "");
+    assert.equal(missing.status, 400);
+    assert.deepEqual(await json(missing), {
+      code: -1,
+      errorCode: "idempotency_key_required",
+      message: "Idempotency-Key is required for route catalog mutations."
+    });
+    const invalid = await post(app.baseUrl, "/gateways/route-a/delete", undefined, undefined, "bad key");
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(await json(invalid), {
+      code: -1,
+      errorCode: "idempotency_key_invalid",
+      message: "Idempotency-Key is invalid for a route catalog mutation."
+    });
+    const missingRevision = await post(
+      app.baseUrl,
+      "/gateways",
+      { gateways: [] },
+      undefined,
+      "gateway-test-operation",
+      ""
+    );
+    assert.equal(missingRevision.status, 400);
+    assert.equal((await json(missingRevision)).errorCode, "route_catalog_revision_required");
+    assert.deepEqual(fixture.calls, []);
+  } finally {
+    await app.close();
+  }
+});
+
+test("stale route catalog mutations return HTTP 412", async () => {
+  const fixture = createFixture();
+  fixture.failures.set("writeConfig", Object.assign(
+    new Error("private child detail"),
+    { code: "ROUTE_CATALOG_REVISION_CONFLICT" }
+  ));
+  const app = await startServer(fixture.context);
+  try {
+    const response = await post(app.baseUrl, "/gateways", { gateways: [] });
+    assert.equal(response.status, 412);
+    assert.deepEqual(await json(response), {
+      code: -1,
+      errorCode: "route_catalog_conflict",
+      message: "Route catalog changed; refresh and retry this update."
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+test("route mutation failures expose stable codes without child diagnostics", async () => {
+  const fixture = createFixture();
+  fixture.failures.set("writeConfig", Object.assign(
+    new Error("child diagnostics=C:\\private\\roles"),
+    { code: "ROUTE_CATALOG_TRANSACTION_FAILED" }
+  ));
+  const app = await startServer(fixture.context);
+  try {
+    const response = await post(app.baseUrl, "/gateways", { gateways: [] });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await json(response), {
+      code: -1,
+      errorCode: "route_catalog_transaction_failed",
+      message: "Route catalog update failed."
+    });
+  } finally {
+    await app.close();
+  }
+});
+
+test("POST /gateways fails closed without publishing uncommitted memory or private diagnostics", async () => {
+  const fixture = createFixture();
+  fixture.failures.set("writeConfig", Object.assign(
+    new Error("Route catalog update is temporarily unavailable."),
+    {
+      statusCode: 503,
+      code: "route_catalog_unavailable",
+      cause: new Error("private \\\\nas\\route path")
+    }
+  ));
+  const app = await startServer(fixture.context);
+  try {
+    const response = await post(app.baseUrl, "/gateways", { gateways: [] });
+    const body = await json(response);
+    assert.equal(response.status, 503);
+    assert.deepEqual(body, {
+      code: -1,
+      errorCode: "route_catalog_unavailable",
+      message: "Route catalog update is temporarily unavailable."
+    });
+    assert.equal(JSON.stringify(body).includes("nas"), false);
+    assert.deepEqual(fixture.calls.map(call => call.name), ["writeConfig"]);
   } finally {
     await app.close();
   }
@@ -240,11 +366,16 @@ test("Gateway lifecycle actions keep success, delete, and error responses", asyn
 
     const deleted = await post(app.baseUrl, "/gateways/route-a/delete");
     assert.equal(deleted.status, 200);
-    assert.equal((await json(deleted)).data.marker, "gateways");
+    const deletedBody = await json(deleted);
+    assert.equal(deletedBody.data.marker, "gateways");
+    assert.equal(deletedBody.receipt.operationId, "gateway-test-operation");
+    assert.equal(deletedBody.receipt.routeConfigHash, "a".repeat(64));
     assert.deepEqual(
-      fixture.calls.slice(-4).map((call) => call.name),
-      ["removeGatewayConfig", "loadRuntimes", "syncRunningGateways", "gatewayPayload"]
+      fixture.calls.slice(-3).map((call) => call.name),
+      ["removeGatewayConfig", "syncRunningGateways", "gatewayPayload"]
     );
+    const removeCall = fixture.calls.find(call => call.name === "removeGatewayConfig");
+    assert.deepEqual(removeCall?.args, ["route-a", "a".repeat(64), "gateway-test-operation"]);
 
     fixture.failures.set("startGateway", new Error("start failed"));
     const failed = await post(app.baseUrl, "/gateways/route-a/start");
@@ -406,7 +537,13 @@ test("Network options and reload preserve JSON and redirect responses", async ()
     assert.equal(reloadJson.status, 200);
     assert.deepEqual(await json(reloadJson), {
       ok: true,
-      gateways: [{ id: "route-a", status: "running" }]
+      gateways: [{ id: "route-a", status: "running" }],
+      routeCatalog: {
+        contentHash: "a".repeat(64),
+        routeConfigHash: "a".repeat(64),
+        presentationHash: "b".repeat(64),
+        revision: 7
+      }
     });
 
     const reloadRedirect = await post(app.baseUrl, "/reload");

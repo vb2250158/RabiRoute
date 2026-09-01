@@ -20,23 +20,18 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
     trackOperation<T>(operation: Promise<T>): Promise<T> { return operation; }
     async stop(): Promise<void> {}
   }
-  class ClipCapture {
-    isEnabled(): boolean { return false; }
-    status(): Record<string, unknown> { return { enabled: false, ready: false }; }
-    async capture(): Promise<never> { throw new Error("capture is disabled in this contract test"); }
-  }
-  class EventMonitor {
+  class RuntimeController {
+    constructor(..._args: unknown[]) {}
     start(): void {}
     stop(): void {}
-    status(): Record<string, unknown> { return { connectionState: "stopped" }; }
+    settings(): Record<string, unknown> { return { source: "profile" }; }
   }
   const runtime = {
     ManagerPluginRequestTracker: Tracker,
-    XiaomiHomeManagerApiClient: class {},
-    XiaomiHomeArtifactStore: class {},
-    XiaomiHomeArtifactAccess: class {},
-    XiaomiHomeClipCaptureWorker: ClipCapture,
-    XiaomiHomeEventMonitor: EventMonitor,
+    XiaomiHomeArtifactStore: class { runtimeDir = "unused-in-contract-test"; },
+    XiaomiHomeSettingsStore: class {},
+    XiaomiHomeRuntimeController: RuntimeController,
+    lifecycleFence: { applicationGenerationId: "generation-current", managerInstanceId: "manager-current" },
     createXiaomiHomeManagerRouteHandler: (context: Record<string, any>) => {
       routeContext = context;
       return handler;
@@ -84,11 +79,9 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
   const snapshot = registry.snapshot();
 
   assert.equal(snapshot.length, 1);
-  assert.deepEqual(routeContext?.runtimeHealth(), {
-    eventMonitor: { connectionState: "stopped" },
-    cameraCapture: { enabled: false, ready: false }
-  });
-  assert.equal(snapshot[0]?.routeCount, 7);
+  assert.ok(routeContext?.runtime instanceof RuntimeController);
+  assert.deepEqual(routeContext?.lifecycleFence, runtime.lifecycleFence);
+  assert.equal(snapshot[0]?.routeCount, 8);
   assert.deepEqual(
     snapshot[0]?.routes
       .filter(route => route.match.kind === "prefix")

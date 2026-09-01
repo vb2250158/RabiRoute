@@ -35,6 +35,10 @@ import {
   type XiaomiHomeEvent,
   type XiaomiHomeEventDeliveryContext
 } from "./xiaomiHomeEventDelivery.js";
+import {
+  planStorageGenerationLeaseFromEnvironment,
+  verifyPlanStorageGenerationLease
+} from "./runtime/planStorageGenerationFence.js";
 
 function deliverySummary(result: ForwardDeliveryResult): string {
   const failedAdapters = result.adapterOutcomes.filter((outcome) => outcome.status === "failed").length;
@@ -84,6 +88,8 @@ type XiaomiHomeEventCliPayload = {
 export async function runGatewayCommand(argv: readonly string[] = process.argv): Promise<void> {
   if (argv.includes("--xiaomi-home-event-stdin")) {
     try {
+      const storageGenerationLease = planStorageGenerationLeaseFromEnvironment();
+      await verifyPlanStorageGenerationLease(storageGenerationLease);
       const payload = await readStandardInputJson<XiaomiHomeEventCliPayload>();
       if (!payload?.event?.id || !payload?.context?.agentRoleId) throw new Error("Xiaomi Home event payload is incomplete.");
       const result = await forwardMessageAndWait(
@@ -181,6 +187,8 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
     const triggerRuleId = ruleArg ? ruleArg.slice("--manual-rule=".length).trim() || undefined : routeKind === "heartbeat" ? undefined : triggerId;
     const triggerSource = sourceArg?.slice("--manual-source=".length) === "auto" ? "auto" : "manual";
     try {
+      const storageGenerationLease = planStorageGenerationLeaseFromEnvironment();
+      await verifyPlanStorageGenerationLease(storageGenerationLease);
       const result = await triggerManualRule(triggerId, message, triggerName, routeKind, triggerRuleId, triggerSource);
       const summary = deliverySummary(result);
       if (result.status === "failed") {

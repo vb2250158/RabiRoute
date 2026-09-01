@@ -30,6 +30,15 @@ test("AgentPacket plan hints explain shared guidance and approval feedback workf
   assert.match(hints, /sourceCapability/);
   assert.match(hints, /deliveryId/);
   assert.match(hints, /personaMessageMaxHops/);
+  assert.match(hints, /Idempotency-Key/);
+  assert.match(hints, /If-Match/);
+  assert.match(hints, /强 ETag/);
+  assert.match(hints, /有界超时/);
+  assert.match(hints, /applicationGenerationId/);
+  assert.match(hints, /managerInstanceId/);
+  assert.match(hints, /成功响应.*Idempotency-Key.*强 ETag/);
+  assert.match(hints, /503[^\n]*同一个 Idempotency-Key/);
+  assert.match(hints, /412[^\n]*废弃[^\n]*重新 GET[^\n]*新[^\n]*Idempotency-Key/);
 });
 
 test("focused AgentPacket hints keep plan attachment discovery available", () => {
@@ -48,4 +57,9 @@ test("focused AgentPacket hints keep plan attachment discovery available", () =>
     assert.match(hints, /计划 attachments/);
     assert.match(hints, /图片、视频预览/);
     assert.match(hints, /POST \/api\/personas\/\{personaId\}\/messages/);
+    assert.match(hints, /Idempotency-Key/);
+    assert.match(hints, /有界超时/);
+    assert.match(hints, /applicationGenerationId/);
+    assert.match(hints, /managerInstanceId/);
+    assert.match(hints, /412[^\n]*废弃[^\n]*新[^\n]*Idempotency-Key/);
   });

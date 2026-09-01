@@ -188,6 +188,7 @@ export type RuntimeStatus = GatewayDefinition & {
 export type GatewayPayload = {
   code: number;
   message?: string;
+  routeCatalog?: RouteCatalogVersion;
   data?: {
     config?: {
       gateways?: GatewayDefinition[];
@@ -195,6 +196,13 @@ export type GatewayPayload = {
     configFiles?: Record<string, string>;
     manager?: RuntimeStatus[] | { error?: string };
   };
+};
+
+export type RouteCatalogVersion = {
+  contentHash: string;
+  routeConfigHash: string;
+  presentationHash: string;
+  revision: number;
 };
 
 export type NetworkOptions = {
@@ -205,6 +213,8 @@ export type NetworkOptions = {
 };
 
 export type MetaPayload = {
+  applicationGenerationId?: string;
+  managerInstanceId?: string;
   version: string;
   githubUrl: string;
   managerPort: number;

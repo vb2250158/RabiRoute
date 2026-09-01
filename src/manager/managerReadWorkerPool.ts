@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process";
+import { fork } from "node:child_process";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
@@ -8,11 +8,16 @@ import type {
   PersonaVoiceTranscriptQueryResult
 } from "../personaVoiceTranscriptView.js";
 import type { PersonaSyncConflict } from "../personaSync.js";
-import type {
-  MemoryLifecyclePresentation,
-  RecentMemoryItem
+import {
+  publishRoleKnowledgeCatalogSnapshot,
+  publishRolePlanCatalog,
+  type PlanItem,
+  type RoleKnowledgeCatalogSnapshot,
+  type MemoryLifecyclePresentation,
+  type RecentMemoryItem
 } from "../roleKnowledge.js";
 import type { PlanFeedbackRecoveryCandidate } from "./planFeedbackRecovery.js";
+import type { RolePanelTimelineMessage } from "../rolePanelTimeline.js";
 import type {
   PerformanceMonitoringConfig,
   PerformanceStoreStatus
@@ -27,6 +32,24 @@ export type ManagerReadWorkerPoolOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
   timeoutMs?: number;
+  terminationTimeoutMs?: number;
+  forceTerminationTimeoutMs?: number;
+  workerFactory?: () => ManagerReadWorkerChild;
+  setWorkerPriority?: (pid: number) => void;
+};
+
+export type ManagerReadWorkerChild = {
+  readonly pid?: number;
+  readonly exitCode: number | null;
+  readonly signalCode: NodeJS.Signals | null;
+  readonly connected: boolean;
+  readonly channel?: { unref?(): void } | null;
+  on(event: string, listener: (...args: any[]) => void): unknown;
+  once(event: string, listener: (...args: any[]) => void): unknown;
+  send(message: unknown, callback?: (error: Error | null) => void): boolean;
+  kill(signal?: NodeJS.Signals | number): boolean;
+  disconnect(): void;
+  unref(): void;
 };
 
 export type ManagerReadWorkerPoolStatus = {
@@ -38,9 +61,16 @@ export type ManagerReadWorkerPoolStatus = {
   spawnedWorkers: number;
   globalActive: number;
   globalMaxConcurrency: number;
+  globalTerminationBlocked: boolean;
+  blockedWorkerPids: number[];
   maxConcurrency: number;
   maxQueue: number;
   timeoutMs: number;
+};
+
+export type RolePlanCatalogRead = {
+  plans: PlanItem[];
+  approvalByPlanId: Record<string, { count: number; latest?: unknown }>;
 };
 
 type PendingRead = {
@@ -66,20 +96,24 @@ type ActiveRead = {
   startedAt: number;
   timer: NodeJS.Timeout;
   abortListener?: () => void;
+  settled: boolean;
 };
 
 type WorkerSlot = {
-  worker: ChildProcess;
+  worker: ManagerReadWorkerChild;
   active?: ActiveRead;
   closed: boolean;
+  terminating: boolean;
   closedPromise: Promise<void>;
   resolveClosed(): void;
+  terminationFlight?: Promise<boolean>;
+  terminationCause?: Error;
 };
 
 export class ManagerReadWorkerError extends Error {
   constructor(
     message: string,
-    readonly code: "busy" | "timeout" | "aborted" | "worker_failed"
+    readonly code: "busy" | "timeout" | "aborted" | "worker_failed" | "termination_unconfirmed"
   ) {
     super(message);
     this.name = "ManagerReadWorkerError";
@@ -97,7 +131,37 @@ function workerExecArgv(): string[] {
   return import.meta.url.endsWith(".ts") ? ["--import", "tsx"] : [];
 }
 
-function unrefWorker(worker: ChildProcess): void {
+function spawnManagerReadWorker(): ManagerReadWorkerChild {
+  return fork(workerEntryPath(), [], {
+    execArgv: workerExecArgv(),
+    serialization: "advanced",
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    env: {
+      ...process.env,
+      RABIROUTE_MANAGER_READ_PROCESS: "1"
+    }
+  });
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
+}
+
+function closesWithin(slot: WorkerSlot, timeoutMs: number): Promise<boolean> {
+  if (slot.closed) return Promise.resolve(true);
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    slot.closedPromise.then(() => true),
+    new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref?.();
+    })
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function unrefWorker(worker: ManagerReadWorkerChild): void {
   worker.unref();
   worker.channel?.unref?.();
 }
@@ -105,10 +169,16 @@ function unrefWorker(worker: ChildProcess): void {
 export class ManagerReadWorkerPool {
   private static readonly instances = new Set<ManagerReadWorkerPool>();
   private static readonly globalMaxConcurrency = 2;
+  private static readonly terminationPendingWorkers = new Set<WorkerSlot>();
+  private static readonly terminationBlockedWorkers = new Set<WorkerSlot>();
   private static globalActive = 0;
   private readonly maxConcurrency: number;
   private readonly maxQueue: number;
   private readonly timeoutMs: number;
+  private readonly terminationTimeoutMs: number;
+  private readonly forceTerminationTimeoutMs: number;
+  private readonly workerFactory: () => ManagerReadWorkerChild;
+  private readonly setWorkerPriority: (pid: number) => void;
   private readonly queue: PendingRead[] = [];
   private readonly voiceSummaryInFlight = new Map<string, SharedRead<PersonaVoiceTranscriptQueryResult>>();
   private readonly performanceInFlight = new Map<string, SharedRead<string>>();
@@ -124,11 +194,22 @@ export class ManagerReadWorkerPool {
     this.maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? 2));
     this.maxQueue = Math.max(0, Math.floor(options.maxQueue ?? 8));
     this.timeoutMs = Math.max(100, Math.floor(options.timeoutMs ?? 30_000));
+    this.terminationTimeoutMs = positiveInteger(options.terminationTimeoutMs, 1_000);
+    this.forceTerminationTimeoutMs = positiveInteger(options.forceTerminationTimeoutMs, 5_000);
+    this.workerFactory = options.workerFactory ?? spawnManagerReadWorker;
+    this.setWorkerPriority = options.setWorkerPriority
+      ?? ((pid) => os.setPriority(pid, os.constants.priority.PRIORITY_BELOW_NORMAL));
     ManagerReadWorkerPool.instances.add(this);
   }
 
   start(): void {
     if (!this.stopped) return;
+    if (ManagerReadWorkerPool.terminationBlockedWorkers.size > 0) {
+      throw ManagerReadWorkerPool.globalTerminationBlockedError();
+    }
+    if (ManagerReadWorkerPool.terminationPendingWorkers.size > 0) {
+      throw new ManagerReadWorkerError("Manager read worker termination is still in progress.", "busy");
+    }
     if (this.active || this.queue.length || this.workers.size) {
       throw new Error("Manager read worker pool cannot restart while resources are still active.");
     }
@@ -140,42 +221,52 @@ export class ManagerReadWorkerPool {
 
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
+    if (this.stopped && this.workers.size === 0 && this.active === 0) return Promise.resolve();
+    const flight = this.stopOnce();
+    this.stopPromise = flight.catch(error => {
+      this.stopPromise = undefined;
+      throw error;
+    });
+    return this.stopPromise;
+  }
+
+  private async stopOnce(): Promise<void> {
     this.accepting = false;
     ManagerReadWorkerPool.instances.delete(this);
     const stoppingError = new ManagerReadWorkerError("Manager read worker pool stopped.", "aborted");
-    for (const pending of this.queue.splice(0)) {
-      if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
-      pending.reject(stoppingError);
-    }
+    this.rejectQueue(stoppingError);
     for (const shared of this.voiceSummaryInFlight.values()) shared.controller.abort();
     for (const shared of this.performanceInFlight.values()) shared.controller.abort();
     const slots = [...this.workers];
-    this.stopPromise = (async () => {
-      for (const slot of slots) this.discardWorker(slot, stoppingError);
-      await Promise.all(slots.map(async slot => {
-        if (slot.worker.exitCode !== null || slot.worker.signalCode !== null) return;
-        await Promise.race([
-          slot.closedPromise,
-          new Promise<void>(resolve => setTimeout(resolve, 2_000))
-        ]);
-        if (slot.worker.exitCode === null && slot.worker.signalCode === null) {
-          slot.worker.kill("SIGKILL");
-          await Promise.race([
-            slot.closedPromise,
-            new Promise<void>(resolve => setTimeout(resolve, 2_000))
-          ]);
-        }
-      }));
-      this.voiceSummaryInFlight.clear();
-      this.performanceInFlight.clear();
-      this.stopped = true;
-    })();
-    return this.stopPromise;
+    const closed = await Promise.all(slots.map(slot => this.discardWorker(slot, stoppingError)));
+    const unconfirmed = slots.filter((_slot, index) => !closed[index]);
+    if (unconfirmed.length > 0 || this.workers.size > 0 || this.active > 0) {
+      const pids = [...new Set([
+        ...unconfirmed,
+        ...this.workers
+      ].map(slot => slot.worker.pid).filter((pid): pid is number => typeof pid === "number"))];
+      throw new ManagerReadWorkerError(
+        `Manager read worker pool cannot stop while worker termination is unconfirmed: pids=${pids.join(",") || "unknown"}.`,
+        "termination_unconfirmed"
+      );
+    }
+    this.voiceSummaryInFlight.clear();
+    this.performanceInFlight.clear();
+    this.stopped = true;
   }
 
   run<T>(task: ManagerReadWorkerTask, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
     if (!this.accepting) {
       return Promise.reject(new ManagerReadWorkerError("Manager read worker pool is stopped.", "aborted"));
+    }
+    if (ManagerReadWorkerPool.terminationBlockedWorkers.size > 0) {
+      return Promise.reject(ManagerReadWorkerPool.globalTerminationBlockedError());
+    }
+    if (ManagerReadWorkerPool.terminationPendingWorkers.size > 0) {
+      return Promise.reject(new ManagerReadWorkerError(
+        "Manager read worker termination is still in progress; retry shortly.",
+        "busy"
+      ));
     }
     if (options.signal?.aborted) {
       return Promise.reject(new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));
@@ -206,6 +297,27 @@ export class ManagerReadWorkerPool {
       this.queue.push(pending);
       this.drain();
     });
+  }
+
+  queryRoleKnowledgeCatalogSnapshot(
+    roleDir: string,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<RoleKnowledgeCatalogSnapshot> {
+    return this.run<RoleKnowledgeCatalogSnapshot>({
+      type: "role_knowledge_catalog_snapshot",
+      roleDir
+    }, options).then(snapshot => publishRoleKnowledgeCatalogSnapshot(roleDir, snapshot));
+  }
+
+  queryRolePlanCatalog(
+    roleDir: string,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<RolePlanCatalogRead> {
+    return this.run<RolePlanCatalogRead>({ type: "role_plan_catalog", roleDir }, options)
+      .then(result => ({
+        ...result,
+        plans: [...publishRolePlanCatalog(roleDir, result.plans)]
+      }));
   }
 
   queryPersonaVoiceTranscripts(
@@ -326,6 +438,20 @@ export class ManagerReadWorkerPool {
     return this.run<T>({ type: "role_memory_counts", roleDir }, options);
   }
 
+  queryRolePanelTimeline(
+    rolesRoot: string,
+    roleId: string,
+    limit: number,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<RolePanelTimelineMessage[]> {
+    return this.run<RolePanelTimelineMessage[]>({
+      type: "role_panel_timeline_read",
+      rolesRoot,
+      roleId,
+      limit
+    }, options);
+  }
+
   queryPerformanceSummaryJson(
     logDirectory: string,
     rangeMs: number,
@@ -365,6 +491,10 @@ export class ManagerReadWorkerPool {
       spawnedWorkers: this.spawnedWorkers,
       globalActive: ManagerReadWorkerPool.globalActive,
       globalMaxConcurrency: ManagerReadWorkerPool.globalMaxConcurrency,
+      globalTerminationBlocked: ManagerReadWorkerPool.terminationBlockedWorkers.size > 0,
+      blockedWorkerPids: [...ManagerReadWorkerPool.terminationBlockedWorkers]
+        .map(slot => slot.worker.pid)
+        .filter((pid): pid is number => typeof pid === "number"),
       maxConcurrency: this.maxConcurrency,
       maxQueue: this.maxQueue,
       timeoutMs: this.timeoutMs
@@ -426,6 +556,8 @@ export class ManagerReadWorkerPool {
   private drain(): void {
     while (
       this.accepting
+      && ManagerReadWorkerPool.terminationPendingWorkers.size === 0
+      && ManagerReadWorkerPool.terminationBlockedWorkers.size === 0
       && this.active < this.maxConcurrency
       && ManagerReadWorkerPool.globalActive < ManagerReadWorkerPool.globalMaxConcurrency
       && this.queue.length > 0
@@ -436,7 +568,7 @@ export class ManagerReadWorkerPool {
         pending.reject(new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));
         continue;
       }
-      const slot = [...this.workers].find(candidate => !candidate.closed && !candidate.active)
+      const slot = [...this.workers].find(candidate => !candidate.closed && !candidate.terminating && !candidate.active)
         ?? this.createWorker();
       if (!slot) {
         pending.reject(new ManagerReadWorkerError("Manager read worker could not start.", "worker_failed"));
@@ -447,52 +579,62 @@ export class ManagerReadWorkerPool {
   }
 
   private createWorker(): WorkerSlot | undefined {
-    let worker: ChildProcess;
+    let worker: ManagerReadWorkerChild;
     try {
-      worker = fork(workerEntryPath(), [], {
-        execArgv: workerExecArgv(),
-        serialization: "advanced",
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-        env: {
-          ...process.env,
-          RABIROUTE_MANAGER_READ_PROCESS: "1"
-        }
-      });
+      worker = this.workerFactory();
     } catch {
       return undefined;
     }
     let resolveClosed = (): void => {};
     const closedPromise = new Promise<void>(resolve => { resolveClosed = resolve; });
-    const slot: WorkerSlot = { worker, closed: false, closedPromise, resolveClosed };
-    worker.once("close", () => resolveClosed());
-    if (!worker.pid) {
-      if (worker.connected) worker.disconnect();
-      worker.kill();
-      return undefined;
-    }
-    try {
-      os.setPriority(worker.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
-    } catch {
-      if (worker.connected) worker.disconnect();
-      worker.kill();
-      return undefined;
-    }
+    const slot: WorkerSlot = {
+      worker,
+      closed: false,
+      terminating: false,
+      closedPromise,
+      resolveClosed
+    };
     this.workers.add(slot);
     this.spawnedWorkers += 1;
     worker.on("message", message => this.handleWorkerMessage(slot, message as ManagerReadWorkerMessage));
-    worker.on("error", error => this.discardWorker(
-      slot,
-      new ManagerReadWorkerError(error.message, "worker_failed")
-    ));
-    worker.on("exit", code => {
-      if (slot.closed) return;
-      this.discardWorker(
+    worker.once("error", error => {
+      void this.discardWorker(slot, new ManagerReadWorkerError(
+        error instanceof Error ? error.message : String(error),
+        "worker_failed"
+      ));
+    });
+    worker.once("exit", (code, signal) => {
+      if (slot.closed || slot.terminating) return;
+      void this.discardWorker(
         slot,
         slot.active
-          ? new ManagerReadWorkerError(`Manager read worker exited with code ${code}.`, "worker_failed")
+          ? new ManagerReadWorkerError(
+              `Manager read worker exited with code ${code ?? "none"}; signal=${signal ?? "none"}.`,
+              "worker_failed"
+            )
           : undefined
       );
     });
+    worker.once("close", (code, signal) => this.handleWorkerClose(slot, code, signal));
+    if (!worker.pid) {
+      void this.discardWorker(
+        slot,
+        new ManagerReadWorkerError("Manager read worker did not publish a process id.", "worker_failed")
+      );
+      return undefined;
+    }
+    try {
+      this.setWorkerPriority(worker.pid);
+    } catch (error) {
+      void this.discardWorker(
+        slot,
+        new ManagerReadWorkerError(
+          `Manager read worker priority setup failed: ${error instanceof Error ? error.message : String(error)}`,
+          "worker_failed"
+        )
+      );
+      return undefined;
+    }
     unrefWorker(worker);
     return slot;
   }
@@ -507,7 +649,7 @@ export class ManagerReadWorkerPool {
     const startedAt = performance.now();
     const requestId = String(this.nextRequestId++);
     const timer = setTimeout(() => {
-      this.discardWorker(
+      void this.discardWorker(
         slot,
         new ManagerReadWorkerError(`Manager read exceeded ${pending.timeoutMs} ms.`, "timeout")
       );
@@ -515,21 +657,21 @@ export class ManagerReadWorkerPool {
     timer.unref?.();
     const abortListener = pending.signal
       ? () => {
-          this.discardWorker(slot, new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));
+          void this.discardWorker(slot, new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));
         }
       : undefined;
     if (abortListener) pending.signal!.addEventListener("abort", abortListener, { once: true });
-    slot.active = { pending, requestId, startedAt, timer, abortListener };
+    slot.active = { pending, requestId, startedAt, timer, abortListener, settled: false };
     try {
       slot.worker.send(
         { requestId, task: pending.task } satisfies ManagerReadWorkerRequest,
         error => {
           if (!error || slot.active?.requestId !== requestId) return;
-          this.discardWorker(slot, new ManagerReadWorkerError(error.message, "worker_failed"));
+          void this.discardWorker(slot, new ManagerReadWorkerError(error.message, "worker_failed"));
         }
       );
     } catch (error) {
-      this.discardWorker(
+      void this.discardWorker(
         slot,
         new ManagerReadWorkerError(error instanceof Error ? error.message : String(error), "worker_failed")
       );
@@ -538,19 +680,93 @@ export class ManagerReadWorkerPool {
 
   private handleWorkerMessage(slot: WorkerSlot, message: ManagerReadWorkerMessage): void {
     const current = slot.active;
-    if (!current || current.requestId !== message.requestId) return;
+    if (slot.terminating || !current || current.settled || current.requestId !== message.requestId) return;
     if (message.ok) this.finish(slot, undefined, message.value);
     else this.finish(slot, new ManagerReadWorkerError(message.message, "worker_failed"));
   }
 
   private finish(slot: WorkerSlot, error?: Error, value?: unknown): void {
     const current = slot.active;
-    if (!current) return;
-    slot.active = undefined;
+    if (!current || slot.terminating || current.settled) return;
+    this.settleActivePromise(current, error, value);
+    this.releaseActiveLease(slot, current);
+    unrefWorker(slot.worker);
+    ManagerReadWorkerPool.drainAll();
+  }
+
+  private async discardWorker(slot: WorkerSlot, error?: Error): Promise<boolean> {
+    if (slot.closed) return true;
+    if (error && !slot.terminationCause) slot.terminationCause = error;
+    slot.terminating = true;
+    ManagerReadWorkerPool.terminationPendingWorkers.add(slot);
+    const current = slot.active;
+    if (current) {
+      this.clearActiveDeadline(current);
+    }
+    const confirmed = await this.terminateAndConfirm(slot);
+    if (confirmed) return true;
+    const blockedError = new ManagerReadWorkerError(
+      `${slot.terminationCause?.message ?? "Manager read worker stopped."} `
+        + `Worker termination was not confirmed: pid=${slot.worker.pid ?? "unknown"}.`,
+      "termination_unconfirmed"
+    );
+    ManagerReadWorkerPool.blockTermination(slot, blockedError);
+    if (current && !current.settled) this.settleActivePromise(current, blockedError);
+    this.rejectQueue(blockedError);
+    return false;
+  }
+
+  private terminateAndConfirm(slot: WorkerSlot): Promise<boolean> {
+    if (slot.closed) return Promise.resolve(true);
+    if (slot.terminationFlight) return slot.terminationFlight;
+    slot.terminationFlight = (async () => {
+      try { slot.worker.kill("SIGTERM"); } catch { /* close observation is authoritative */ }
+      if (await closesWithin(slot, this.terminationTimeoutMs)) return true;
+      try { slot.worker.kill("SIGKILL"); } catch { /* reported below if close remains absent */ }
+      const confirmed = await closesWithin(slot, this.forceTerminationTimeoutMs);
+      if (confirmed) return true;
+      unrefWorker(slot.worker);
+      return false;
+    })();
+    return slot.terminationFlight;
+  }
+
+  private handleWorkerClose(slot: WorkerSlot, code: number | null, signal: NodeJS.Signals | null): void {
+    if (slot.closed) return;
+    slot.closed = true;
+    slot.terminating = false;
+    slot.resolveClosed();
+    this.workers.delete(slot);
+    ManagerReadWorkerPool.terminationPendingWorkers.delete(slot);
+    ManagerReadWorkerPool.terminationBlockedWorkers.delete(slot);
+    const current = slot.active;
+    if (current) {
+      this.clearActiveDeadline(current);
+      if (!current.settled) {
+        this.settleActivePromise(
+          current,
+          slot.terminationCause ?? new ManagerReadWorkerError(
+            `Manager read worker closed before responding: code=${code ?? "none"}; signal=${signal ?? "none"}.`,
+            "worker_failed"
+          )
+        );
+      }
+      this.releaseActiveLease(slot, current);
+    }
+    if (ManagerReadWorkerPool.terminationBlockedWorkers.size === 0) {
+      ManagerReadWorkerPool.drainAll();
+    }
+  }
+
+  private clearActiveDeadline(current: ActiveRead): void {
     clearTimeout(current.timer);
     if (current.abortListener) current.pending.signal?.removeEventListener("abort", current.abortListener);
-    this.active -= 1;
-    ManagerReadWorkerPool.globalActive -= 1;
+  }
+
+  private settleActivePromise(current: ActiveRead, error?: Error, value?: unknown): void {
+    if (current.settled) return;
+    current.settled = true;
+    this.clearActiveDeadline(current);
     recordPerformanceOperation(
       managerReadWorkerOperation("execute", current.pending.task.type),
       performance.now() - current.startedAt,
@@ -558,34 +774,40 @@ export class ManagerReadWorkerPool {
     );
     if (error) current.pending.reject(error);
     else current.pending.resolve(value);
-    unrefWorker(slot.worker);
-    ManagerReadWorkerPool.drainAll();
   }
 
-  private discardWorker(slot: WorkerSlot, error?: Error): void {
-    if (slot.closed) return;
-    slot.closed = true;
-    this.workers.delete(slot);
-    const current = slot.active;
-    if (current) {
-      slot.active = undefined;
-      clearTimeout(current.timer);
-      if (current.abortListener) current.pending.signal?.removeEventListener("abort", current.abortListener);
-      this.active -= 1;
-      ManagerReadWorkerPool.globalActive -= 1;
-      recordPerformanceOperation(
-        managerReadWorkerOperation("execute", current.pending.task.type),
-        performance.now() - current.startedAt,
-        true
-      );
-      current.pending.reject(error ?? new ManagerReadWorkerError("Manager read worker stopped.", "worker_failed"));
+  private releaseActiveLease(slot: WorkerSlot, current: ActiveRead): void {
+    if (slot.active !== current) return;
+    slot.active = undefined;
+    this.active -= 1;
+    ManagerReadWorkerPool.globalActive -= 1;
+  }
+
+  private rejectQueue(error: Error): void {
+    for (const pending of this.queue.splice(0)) {
+      if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
+      pending.reject(error);
     }
-    if (slot.worker.connected) slot.worker.disconnect();
-    slot.worker.kill();
-    ManagerReadWorkerPool.drainAll();
+  }
+
+  private static globalTerminationBlockedError(): ManagerReadWorkerError {
+    const pids = [...ManagerReadWorkerPool.terminationBlockedWorkers]
+      .map(slot => slot.worker.pid)
+      .filter((pid): pid is number => typeof pid === "number");
+    return new ManagerReadWorkerError(
+      `Manager read worker termination is not confirmed: pids=${pids.join(",") || "unknown"}.`,
+      "termination_unconfirmed"
+    );
+  }
+
+  private static blockTermination(slot: WorkerSlot, error: ManagerReadWorkerError): void {
+    ManagerReadWorkerPool.terminationBlockedWorkers.add(slot);
+    for (const pool of ManagerReadWorkerPool.instances) pool.rejectQueue(error);
   }
 
   private static drainAll(): void {
+    if (ManagerReadWorkerPool.terminationPendingWorkers.size > 0
+      || ManagerReadWorkerPool.terminationBlockedWorkers.size > 0) return;
     for (const pool of ManagerReadWorkerPool.instances) pool.drain();
   }
 }

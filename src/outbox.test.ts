@@ -8,6 +8,8 @@ import { handleAgentReply, inspectAgentReplyDelivery, napcatGroupReplyMessage, t
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 import { recentMessageContextItems } from "./messageContextStore.js";
+import { appendRolePanelTimelineMessageIfAbsent, readRolePanelTimeline } from "./rolePanelTimeline.js";
+import { submitPlanFeedback as submitPlanFeedbackDirectFixture } from "./planFeedbackSubmission.js";
 
 function optionsWithRuntime(runtime: AgentReplyOptions["runtimes"][number]): AgentReplyOptions {
   return {
@@ -110,6 +112,38 @@ test("legacy Codex reply context normalizes to the local Agent output", async ()
   assert.equal(result.reason, "Reply kept in the local Agent session.");
 });
 
+test("role panel outbox uses the injected idempotent timeline command with a stable delivery id", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-role-panel-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const rolesRoot = path.join(rootDir, "roles");
+  const roleDir = path.join(rolesRoot, "Rabi");
+  const options: AgentReplyOptions = {
+    rootDir,
+    routeRoot: path.join(rootDir, "route"),
+    rolesRoot,
+    runtimes: [{ id: "main", agentRoleId: "Rabi", pipeline: { outputAdapter: "agent", outputPipeline: "agent" } }],
+    appendRolePanelTimeline: async (_roleId, message) => appendRolePanelTimelineMessageIfAbsent(roleDir, message)
+  };
+  const request = {
+    deliveryId: "stable-role-panel-delivery",
+    text: "已处理。",
+    replyContext: {
+      runtimeRouteId: "main",
+      routeProfileId: "main",
+      targetType: "role_panel",
+      adapterType: "rolePanel",
+      roleId: "Rabi",
+      messageId: "source-role-panel-message"
+    }
+  };
+
+  assert.equal((await handleAgentReply(request, options)).status, "sent");
+  assert.equal((await handleAgentReply(request, options)).status, "sent");
+  const timeline = readRolePanelTimeline(roleDir);
+  assert.equal(timeline.length, 1);
+  assert.match(timeline[0].id, /^role-panel-assistant-[a-f0-9]{24}$/);
+});
+
 test("plan feedback replies are written to the plan audit record and published to the plan page", async () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-feedback-"));
   const rolesRoot = path.join(rootDir, "data", "roles");
@@ -128,8 +162,26 @@ test("plan feedback replies are written to the plan audit record and published t
     keywords: ["plan"]
   }), "utf8");
   const events: Array<{ eventType: string; data: Record<string, unknown> }> = [];
+  const submitRequests: Array<Parameters<NonNullable<AgentReplyOptions["submitPlanFeedback"]>>[0]> = [];
+  const submitPlanFeedback: NonNullable<AgentReplyOptions["submitPlanFeedback"]> = async (input) => {
+    submitRequests.push(input);
+    return submitPlanFeedbackDirectFixture({
+      roleDir,
+      roleId: input.roleId,
+      planId: input.planId,
+      feedbackId: input.feedbackId,
+      stepId: input.stepId,
+      gatewayId: input.gatewayId,
+      kind: input.kind,
+      author: "agent",
+      source: "agent",
+      text: input.text,
+      notifyAgent: false
+    });
+  };
 
   const result = await handleAgentReply({
+    deliveryId: "delivery-response-feedback-1",
     text: "已补充原问题、具体修改范围、验证和回退说明。",
     replyContext: {
       runtimeRouteId: "main",
@@ -153,7 +205,8 @@ test("plan feedback replies are written to the plan audit record and published t
       agentRoleId: "Rabi",
       pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
     }],
-    publishEvent: (eventType, data) => events.push({ eventType, data })
+    publishEvent: (eventType, data) => events.push({ eventType, data }),
+    submitPlanFeedback
   });
 
   assert.equal(result.ok, true);
@@ -166,6 +219,7 @@ test("plan feedback replies are written to the plan audit record and published t
   assert.equal(rows[0].author, "agent");
   assert.equal(rows[0].stepId, "approval");
   assert.equal(rows[0].text, "已补充原问题、具体修改范围、验证和回退说明。");
+  assert.equal(submitRequests[0].deliveryId, "delivery-response-feedback-1");
   assert.deepEqual(events, [{
     eventType: "plan_feedback_changed",
     data: {
@@ -177,6 +231,7 @@ test("plan feedback replies are written to the plan audit record and published t
   }]);
 
   const guidanceResult = await handleAgentReply({
+    deliveryId: "delivery-response-guidance-1",
     text: "已按计划引导调整后续未开始步骤。",
     replyContext: {
       runtimeRouteId: "main",
@@ -198,13 +253,80 @@ test("plan feedback replies are written to the plan audit record and published t
       id: "main",
       agentRoleId: "Rabi",
       pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
-    }]
+    }],
+    submitPlanFeedback
   });
 
   assert.equal(guidanceResult.reason, "Saved as a plan guidance response.");
   const guidanceRows = fs.readFileSync(feedbackPath, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line));
   assert.equal(guidanceRows[1].kind, "guidance_response");
   assert.equal(guidanceRows[1].stepId, undefined);
+  assert.equal(submitRequests[1].deliveryId, "delivery-response-guidance-1");
+});
+
+test("plan feedback outbox delivery is fail-closed until plan storage startup is ready", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-startup-gate-"));
+  const rolesRoot = path.join(rootDir, "data", "roles");
+  const result = await handleAgentReply({
+    text: "must not be written",
+    replyContext: {
+      runtimeRouteId: "main",
+      routeProfileId: "main",
+      targetType: "plan_feedback",
+      adapterType: "rolePanel",
+      messageId: "plan-feedback-blocked",
+      roleId: "Rabi",
+      planId: "plan-1"
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot,
+    runtimes: [{
+      id: "main",
+      agentRoleId: "Rabi",
+      pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
+    }],
+    planStorageReady: () => false
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason || "", /PLAN_STORAGE_STARTUP_UNAVAILABLE/);
+  assert.equal(fs.existsSync(rolesRoot), false);
+});
+
+test("plan feedback outbox delivery fails closed when its submit port is missing", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-plan-submit-port-"));
+  const rolesRoot = path.join(rootDir, "data", "roles");
+  const result = await handleAgentReply({
+    deliveryId: "delivery-plan-submit-port-missing",
+    text: "must not be written",
+    replyContext: {
+      runtimeRouteId: "main",
+      routeProfileId: "main",
+      targetType: "plan_feedback",
+      adapterType: "rolePanel",
+      messageId: "plan-feedback-submit-port-missing",
+      roleId: "Rabi",
+      planId: "plan-1",
+      planFeedbackResponseId: "response-plan-submit-port-missing"
+    }
+  }, {
+    rootDir,
+    routeRoot: path.join(rootDir, "data", "route"),
+    rolesRoot,
+    runtimes: [{
+      id: "main",
+      agentRoleId: "Rabi",
+      pipeline: { outputAdapter: "agent", outputPipeline: "agent" }
+    }]
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason || "", /PLAN_FEEDBACK_SUBMIT_UNAVAILABLE/);
+  assert.equal(fs.existsSync(rolesRoot), false);
 });
 
 test("QQ output does not require original source context when target is explicit", async () => {

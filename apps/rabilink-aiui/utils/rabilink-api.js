@@ -1,6 +1,12 @@
 import wx from "wx";
 
 const DEFAULT_TIMEOUT_MS = 45000;
+const CONTENT_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const OPERATION_ID_PATTERN = /^[A-Za-z0-9:._-]{1,256}$/;
+const MUTATION_HEADER_NAMES = Object.freeze({
+  operationId: "Idempotency-Key",
+  expectedContentHash: "If-Match"
+});
 
 function trimEndSlash(value) {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -15,6 +21,81 @@ function targetQuery(targetDeviceId) {
   return target ? `?targetDeviceId=${encodeURIComponent(target)}` : "";
 }
 
+function mutationHeaders(mutation) {
+  if (!mutation) return {};
+  const operationId = String(mutation.operationId || "").trim();
+  const expectedContentHash = String(mutation.expectedContentHash || "").trim().toLowerCase();
+  if (!OPERATION_ID_PATTERN.test(operationId)) {
+    throw new Error("Route mutation requires a caller-owned stable operationId.");
+  }
+  if (!CONTENT_HASH_PATTERN.test(expectedContentHash)) {
+    throw new Error("Route mutation requires the current strong route catalog content hash.");
+  }
+  return {
+    [MUTATION_HEADER_NAMES.operationId]: operationId,
+    [MUTATION_HEADER_NAMES.expectedContentHash]: expectedContentHash
+  };
+}
+
+function allowedResponseHeaders(response = {}) {
+  const source = response.header || response.headers || {};
+  const allowed = {};
+  for (const [name, value] of Object.entries(source)) {
+    const normalized = String(name || "").trim().toLowerCase();
+    if (!["idempotency-key", "if-match", "etag", "x-rabiroute-operation-id", "x-rabiroute-content-hash"].includes(normalized)) continue;
+    allowed[normalized] = String(value || "").trim();
+  }
+  return allowed;
+}
+
+function withResponseMetadata(data, response) {
+  if (!data || typeof data !== "object") return data;
+  data.mutationHeaders = allowedResponseHeaders(response);
+  return data;
+}
+
+function routeCatalogResult(json) {
+  const data = json && typeof json.data === "object" && !Array.isArray(json.data) ? json.data : {};
+  const routes = Array.isArray(data.routes) ? data.routes : (Array.isArray(json?.routes) ? json.routes : []);
+  const routeCatalog = json?.routeCatalog && typeof json.routeCatalog === "object"
+    ? json.routeCatalog
+    : (data.routeCatalog && typeof data.routeCatalog === "object" ? data.routeCatalog : {});
+  return {
+    routes,
+    routeCatalog,
+    contentHash: String(routeCatalog.contentHash || "").trim().toLowerCase(),
+    routeConfigHash: String(routeCatalog.routeConfigHash || routeCatalog.contentHash || "").trim().toLowerCase(),
+    rawJson: json
+  };
+}
+
+function requireCommittedMutationReceipt(json, mutation) {
+  const receipt = json?.mutationReceipt || json?.receipt || json?.data?.receipt;
+  const operationId = String(receipt?.operationId || "").trim();
+  const state = String(receipt?.state || receipt?.status || "").trim().toLowerCase();
+  const contentHash = String(
+    receipt?.routeConfigHash
+      || receipt?.contentHash
+      || json?.routeCatalog?.routeConfigHash
+      || json?.routeCatalog?.contentHash
+      || ""
+  ).trim().toLowerCase();
+  if (!receipt || operationId !== mutation.operationId || state !== "committed" || !CONTENT_HASH_PATTERN.test(contentHash)) {
+    const error = new Error("Route mutation response is missing a matching explicit committed receipt.");
+    error.code = "route_mutation_receipt_invalid";
+    throw error;
+  }
+  return {
+    ...json,
+    mutationReceipt: {
+      ...receipt,
+      operationId,
+      state: "committed",
+      contentHash
+    }
+  };
+}
+
 function requestJson(config, path, options = {}) {
   const baseUrl = trimEndSlash(config.relayBaseUrl);
   const token = String(config.token || "").trim();
@@ -26,6 +107,7 @@ function requestJson(config, path, options = {}) {
     "content-type": "application/json; charset=utf-8"
   };
   if (options.auth !== false) header["X-RabiLink-Token"] = token;
+  Object.assign(header, mutationHeaders(options.mutation));
 
   return new Promise((resolve, reject) => {
     wx.request({
@@ -36,11 +118,16 @@ function requestJson(config, path, options = {}) {
       header,
       success(response) {
         const statusCode = Number(response.statusCode || 0);
-        const data = typeof response.data === "string" ? safeParseJson(response.data) : (response.data || {});
+        const data = withResponseMetadata(
+          typeof response.data === "string" ? safeParseJson(response.data) : (response.data || {}),
+          response
+        );
         if (statusCode < 200 || statusCode >= 300) {
           const error = new Error(data.message || `HTTP ${statusCode}`);
           error.statusCode = statusCode;
           error.code = data.code;
+          error.response = data;
+          error.mutationHeaders = data.mutationHeaders || {};
           reject(error);
           return;
         }
@@ -48,6 +135,8 @@ function requestJson(config, path, options = {}) {
           const error = new Error(data.message || data.error || "RabiLink request failed.");
           error.statusCode = statusCode;
           error.code = data.code;
+          error.response = data;
+          error.mutationHeaders = data.mutationHeaders || {};
           reject(error);
           return;
         }
@@ -80,7 +169,8 @@ export function selectMobileTarget(config, targetDeviceId) {
 }
 
 export function getMobileRoutes(config, targetDeviceId = "") {
-  return requestJson(config, `/api/rabilink/mobile/routes${targetQuery(targetDeviceId)}`);
+  return requestJson(config, `/api/rabilink/mobile/routes${targetQuery(targetDeviceId)}`)
+    .then(routeCatalogResult);
 }
 
 export function getMobileAgentOptions(config, routeId, targetDeviceId = "") {
@@ -90,15 +180,16 @@ export function getMobileAgentOptions(config, routeId, targetDeviceId = "") {
   );
 }
 
-export function setMobileAgentBinding(config, routeId, binding, targetDeviceId = "") {
+export function setMobileAgentBinding(config, routeId, binding, mutation, targetDeviceId = "") {
   return requestJson(
     config,
     `/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-binding${targetQuery(targetDeviceId)}`,
     {
       method: "PATCH",
-      body: binding
+      body: binding,
+      mutation
     }
-  );
+  ).then((json) => requireCommittedMutationReceipt(json, mutation));
 }
 
 export function getMobileWebgui(config, path, targetDeviceId = "") {
@@ -108,7 +199,8 @@ export function getMobileWebgui(config, path, targetDeviceId = "") {
   return requestJson(config, `/api/rabilink/mobile/webgui?${query.toString()}`);
 }
 
-export function postMobileWebgui(config, path, body = {}, targetDeviceId = "", method = "POST") {
+export function postMobileWebgui(config, path, body = {}, targetDeviceId = "", method = "POST", mutation = null) {
+  const headers = mutationHeaders(mutation);
   return requestJson(
     config,
     `/api/rabilink/mobile/webgui${targetQuery(targetDeviceId)}`,
@@ -117,10 +209,12 @@ export function postMobileWebgui(config, path, body = {}, targetDeviceId = "", m
       body: {
         method,
         path,
-        body
-      }
+        body,
+        ...(mutation ? { headers } : {})
+      },
+      mutation
     }
-  );
+  ).then((json) => mutation ? requireCommittedMutationReceipt(json, mutation) : json);
 }
 
 export function sendMobileProof(config, proof = {}) {

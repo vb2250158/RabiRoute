@@ -54,10 +54,10 @@ Sending a message, submitting approval feedback, or triggering a rule is an expl
 
 ## Install and run
 
-Host starts Desktop in both installed and development Windows flows. The repository entry delegates only to `RabiRouteHost.exe`:
+The installed Host starts Desktop. Use `npm run dev` or `npm run dev:hot` for source development. To validate the complete Windows application, first build the release on local disk and then start `RabiRouteHost.exe` from the build or installation directory:
 
 ```powershell
-Start-RabiRoute-Desktop.bat
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"
 ```
 
 After Manager publishes an exact same-generation READY, Host starts Desktop with `--surface-child`, `--manager-url`, `--application-generation-id`, `--manager-instance-id`, and `--host-executable`. Missing arguments, a mismatched `/meta` identity, or unavailable Host make Desktop fail closed. There is no standalone mode, port search, or Manager self-start path.

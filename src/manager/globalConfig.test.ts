@@ -86,3 +86,22 @@ test("legacy Relay config without enabled keeps its previous automatic behavior"
   const config = new RabiGlobalConfigStore(rootDir).read();
   assert.equal(config.rabiLinkRelay.enabled, true);
 });
+
+test("request-time reads use the published memory snapshot until an explicit reload", () => {
+  const rootDir = tempRoot();
+  const store = new RabiGlobalConfigStore(rootDir);
+  const published = store.patch({ rabiName: "Published PC" });
+  const external = {
+    ...published,
+    rabiName: "External PC",
+    updatedAt: "2026-09-01T00:00:00.000Z"
+  };
+  fs.writeFileSync(store.configPath, `${JSON.stringify(external, null, 2)}\n`, "utf8");
+
+  assert.equal(store.read().rabiName, "Published PC");
+  assert.equal(store.reload().rabiName, "External PC");
+
+  fs.rmSync(store.configPath);
+  assert.equal(store.read().rabiName, "External PC");
+  assert.equal(fs.existsSync(store.configPath), false);
+});

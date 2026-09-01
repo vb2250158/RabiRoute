@@ -276,6 +276,7 @@ export async function runPersonaSyncDualNodeAcceptance(
     const serviceA = new PersonaSyncService(() => rolesA, stateA);
     const serviceB = new PersonaSyncService(() => rolesB, stateB);
     manifestServices.push(serviceA, serviceB);
+    await Promise.all([serviceA.startManifestIndex(), serviceB.startManifestIndex()]);
     const relayPort = await reservePort();
     const startedRelay = spawn(process.execPath, [RELAY_ENTRY], {
       cwd: REPO_ROOT,

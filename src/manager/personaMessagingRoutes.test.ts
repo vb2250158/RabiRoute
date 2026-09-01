@@ -4,10 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readRolePanelTimeline } from "../rolePanelTimeline.js";
+import { appendRolePanelTimelineMessageIfAbsent, readRolePanelTimeline } from "../rolePanelTimeline.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
-import { PersonaCatalog } from "./personaCatalog.js";
+import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
 import {
   handlePersonaMessagingApi,
   listPersonas,
@@ -43,6 +43,30 @@ function persona(root: string, id: string, title: string): void {
   fs.writeFileSync(path.join(dir, "persona.md"), `# ${title}\n`, "utf8");
 }
 
+function personaPresentations(rolesRoot: string): RouteCatalogPersonaPresentation[] {
+  return fs.readdirSync(rolesRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => {
+      const content = fs.readFileSync(path.join(rolesRoot, entry.name, "persona.md"), "utf8");
+      const title = content.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "";
+      return {
+        rolesRoot,
+        roleId: entry.name,
+        isPersona: true,
+        displayName: title || entry.name,
+        avatarConfigured: false,
+        files: [{
+          fileName: "persona.md",
+          exists: true,
+          title,
+          content,
+          contentTruncated: false
+        }],
+        speech: { voiceReady: false }
+      };
+    });
+}
+
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -58,6 +82,11 @@ function close(server: http.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
 }
 
+function appendTimelineTo(rolesRoot: string) {
+  return async (roleId: string, message: Parameters<typeof appendRolePanelTimelineMessageIfAbsent>[1]) =>
+    appendRolePanelTimelineMessageIfAbsent(path.join(rolesRoot, roleId), message);
+}
+
 test("persona directory exposes user-facing names and enabled Route reachability", (t) => {
   const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-personas-"));
   t.after(() => fs.rmSync(rolesRoot, { recursive: true, force: true }));
@@ -67,7 +96,7 @@ test("persona directory exposes user-facing names and enabled Route reachability
 
   const personas = listPersonas({
     rolesRoot,
-    catalog: new PersonaCatalog(),
+    personaPresentations: () => personaPresentations(rolesRoot),
     runtimes: () => [runtime("rabi-main", "Rabi", false), runtime("builder-main", "Builder"), runtime("silent-main", "Silent")]
   });
 
@@ -89,12 +118,13 @@ test("persona message API authenticates the Route-bound sender and delivers to t
   const context: PersonaMessagingRouteContext = {
     rootDir: rolesRoot,
     rolesRoot,
-    catalog: new PersonaCatalog(),
+    personaPresentations: () => personaPresentations(rolesRoot),
     runtimes: () => runtimes,
     authorizeSource: (routeId, personaId, capability) => capability === `capability:${routeId}:${personaId}`,
     deliver: async (target, _messageId, _text, _attachments, replyContext) => {
       deliveries.push({ routeId: target.definition.id, replyContext });
-    }
+    },
+    appendTimeline: appendTimelineTo(rolesRoot)
   };
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
@@ -152,10 +182,11 @@ test("persona message deliveryId is durable and rejects changed retry payloads",
   const context: PersonaMessagingRouteContext = {
     rootDir,
     rolesRoot,
-    catalog: new PersonaCatalog(),
+    personaPresentations: () => personaPresentations(rolesRoot),
     runtimes: () => [runtime("rabi-main", "Rabi"), runtime("builder-main", "Builder")],
     authorizeSource: (routeId, personaId, capability) => capability === `capability:${routeId}:${personaId}`,
-    deliver: async () => { deliveryCount += 1; }
+    deliver: async () => { deliveryCount += 1; },
+    appendTimeline: appendTimelineTo(rolesRoot)
   };
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
@@ -204,10 +235,11 @@ test("persona message API refuses disabled sources, self delivery, and ambiguous
   const context: PersonaMessagingRouteContext = {
     rootDir: rolesRoot,
     rolesRoot,
-    catalog: new PersonaCatalog(),
+    personaPresentations: () => personaPresentations(rolesRoot),
     runtimes: () => runtimes,
     authorizeSource: (routeId, personaId, capability) => capability === `capability:${routeId}:${personaId}`,
-    deliver: async () => undefined
+    deliver: async () => undefined,
+    appendTimeline: appendTimelineTo(rolesRoot)
   };
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
@@ -237,10 +269,11 @@ test("persona message API reports target handler failure without claiming delive
   const context: PersonaMessagingRouteContext = {
     rootDir: rolesRoot,
     rolesRoot,
-    catalog: new PersonaCatalog(),
+    personaPresentations: () => personaPresentations(rolesRoot),
     runtimes: () => [runtime("rabi-main", "Rabi"), runtime("builder-main", "Builder")],
     authorizeSource: (routeId, personaId, capability) => capability === `capability:${routeId}:${personaId}`,
-    deliver: async () => { throw new Error("Desktop owner unavailable"); }
+    deliver: async () => { throw new Error("Desktop owner unavailable"); },
+    appendTimeline: appendTimelineTo(rolesRoot)
   };
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);

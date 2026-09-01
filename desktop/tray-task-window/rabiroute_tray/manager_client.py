@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -104,6 +105,8 @@ class PlanFeedbackSubmitResult:
     ok: bool
     delivery_status: str = ""
     message: str = ""
+    revision_conflict: bool = False
+    uncertain: bool = False
 
 
 class ManagerClient:
@@ -404,11 +407,27 @@ class ManagerClient:
         feedback_id: str,
         text: str,
     ) -> PlanFeedbackSubmitResult:
+        mutation_started = False
         try:
             encoded_role_id = quote(role_id, safe="")
             encoded_plan_id = quote(plan_id, safe="")
-            payload = self._post_json(
-                f"/api/roles/{encoded_role_id}/plans/{encoded_plan_id}/feedback",
+            path = f"/api/roles/{encoded_role_id}/plans/{encoded_plan_id}/feedback"
+            identity_error = self._identity_error(self._get_json("/meta"))
+            if identity_error:
+                return PlanFeedbackSubmitResult(ok=False, message=identity_error)
+            _, revision = self._get_json_resource(path)
+            if not re.fullmatch(r'"[^"\r\n]+"', revision) or revision.startswith("W/"):
+                return PlanFeedbackSubmitResult(
+                    ok=False,
+                    message="Manager did not return a strong plan storage ETag.",
+                )
+            identity_error = self._identity_error(self._get_json("/meta"))
+            if identity_error:
+                return PlanFeedbackSubmitResult(ok=False, message=identity_error)
+            idempotency_key = f"plan-feedback:{feedback_id}"
+            mutation_started = True
+            payload, response_headers = self._post_json_resource(
+                path,
                 {
                     "feedbackId": feedback_id,
                     "gatewayId": gateway_id,
@@ -420,33 +439,113 @@ class ManagerClient:
                     "notifyAgent": True,
                 },
                 timeout_seconds=5,
+                headers={
+                    "Idempotency-Key": idempotency_key,
+                    "If-Match": revision,
+                },
             )
+            try:
+                identity_error = self._identity_error(self._get_json("/meta"))
+            except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
+                return PlanFeedbackSubmitResult(
+                    ok=False,
+                    message=f"Feedback commit result is uncertain because Manager identity could not be confirmed: {error}",
+                    uncertain=True,
+                )
+            if identity_error:
+                return PlanFeedbackSubmitResult(
+                    ok=False,
+                    message=f"Feedback commit result is uncertain after Manager lifecycle changed: {identity_error}",
+                    uncertain=True,
+                )
+            receipt_key = next(
+                (value for name, value in response_headers.items() if name.lower() == "idempotency-key"),
+                "",
+            ).strip()
+            committed_revision = next(
+                (value for name, value in response_headers.items() if name.lower() == "etag"),
+                "",
+            ).strip()
+            if receipt_key != idempotency_key:
+                return PlanFeedbackSubmitResult(
+                    ok=False,
+                    message="Manager feedback receipt did not confirm the submitted Idempotency-Key.",
+                    uncertain=True,
+                )
+            if not re.fullmatch(r'"[^"\r\n]+"', committed_revision) or committed_revision.startswith("W/"):
+                return PlanFeedbackSubmitResult(
+                    ok=False,
+                    message="Manager feedback receipt did not include a strong committed ETag.",
+                    uncertain=True,
+                )
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
             delivery_status = str(data.get("deliveryStatus") or "")
+            if str(data.get("id") or "") != feedback_id or str(data.get("planId") or "") != plan_id:
+                return PlanFeedbackSubmitResult(
+                    ok=False,
+                    message="Manager feedback receipt body did not confirm the submitted feedback identity and plan.",
+                    uncertain=True,
+                )
+            if payload.get("code") != 0 or delivery_status not in {"pending", "delivered", "failed"}:
+                return PlanFeedbackSubmitResult(
+                    ok=False,
+                    message="Manager feedback receipt body is incomplete or invalid.",
+                    uncertain=True,
+                )
             return PlanFeedbackSubmitResult(
-                ok=delivery_status != "failed",
+                ok=delivery_status in {"pending", "delivered"},
                 delivery_status=delivery_status,
                 message=str(data.get("deliveryMessage") or ""),
             )
         except HTTPError as error:
-            return PlanFeedbackSubmitResult(ok=False, message=self._error_message(error))
+            return PlanFeedbackSubmitResult(
+                ok=False,
+                message=self._error_message(error),
+                revision_conflict=error.code == 412,
+                uncertain=mutation_started and error.code != 412,
+            )
         except (OSError, URLError, TimeoutError, json.JSONDecodeError) as error:
-            return PlanFeedbackSubmitResult(ok=False, message=str(error))
+            return PlanFeedbackSubmitResult(ok=False, message=str(error), uncertain=mutation_started)
 
     def _get_json(self, path: str) -> dict[str, Any]:
         with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def _get_json_resource(self, path: str) -> tuple[dict[str, Any], str]:
+        with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            return payload, str(response.headers.get("ETag") or "").strip()
+
     def _get_bytes(self, path: str) -> bytes:
         with urlopen(f"{self.manager_url}{path}", timeout=self.timeout_seconds) as response:
             return response.read()
 
-    def _post_json(self, path: str, payload: dict[str, Any] | None = None, timeout_seconds: float | None = None) -> dict[str, Any]:
+    def _post_json(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return self._post_json_resource(path, payload, timeout_seconds, headers)[0]
+
+    def _post_json_resource(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
         data = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
         request = Request(f"{self.manager_url}{path}", data=data, method="POST")
         request.add_header("content-type", "application/json; charset=utf-8")
+        for name, value in (headers or {}).items():
+            request.add_header(name, value)
         with urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
+            return (
+                json.loads(response.read().decode("utf-8")),
+                {str(name): str(value) for name, value in response.headers.items()},
+            )
 
     def _post_binary(self, path: str, payload: dict[str, Any], timeout_seconds: float | None = None) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

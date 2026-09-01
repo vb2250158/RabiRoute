@@ -130,6 +130,16 @@ export type CodexHookControl =
   | { action: "bind"; roleId: string }
   | { action: "status" | "refresh" | "off" };
 
+export class CodexHookPlanStorageUnavailableError extends Error {
+  readonly code = "PLAN_STORAGE_STARTUP_UNAVAILABLE";
+  readonly statusCode = 503;
+
+  constructor() {
+    super("Plan storage recovery is not ready. Retry after the current startup recovery attempt completes.");
+    this.name = "CodexHookPlanStorageUnavailableError";
+  }
+}
+
 export type CodexHookContextServiceOptions = {
   rolesRoot: () => string;
   storePath: string;
@@ -139,6 +149,7 @@ export type CodexHookContextServiceOptions = {
   recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
   findPangHuProgressIssue?: (plan: PlanItem) => PangHuProgressNotificationDelivery["issue"] | undefined;
   deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
+  planStorageReady?: () => boolean;
 };
 
 function nowIso(): string {
@@ -251,6 +262,7 @@ export class CodexHookContextService {
   private readonly recordAgentRequestStop?: (request: CodexHookContextRequest) => Promise<AgentRequestStopResult> | AgentRequestStopResult;
   private readonly findPangHuProgressIssue?: (plan: PlanItem) => PangHuProgressNotificationDelivery["issue"] | undefined;
   private readonly deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
+  private readonly planStorageReady?: () => boolean;
 
   constructor(options: CodexHookContextServiceOptions) {
     this.rolesRoot = options.rolesRoot;
@@ -261,6 +273,7 @@ export class CodexHookContextService {
     this.recordAgentRequestStop = options.recordAgentRequestStop;
     this.findPangHuProgressIssue = options.findPangHuProgressIssue;
     this.deliverPangHuProgressNotification = options.deliverPangHuProgressNotification;
+    this.planStorageReady = options.planStorageReady;
   }
 
   listRoles(): string[] {
@@ -312,6 +325,12 @@ export class CodexHookContextService {
   }
 
   async handleHook(request: CodexHookContextRequest): Promise<CodexHookContextResult> {
+    // Stop may read plans and persists completion/progress state. Fence it
+    // before any observer, role lookup or internal mutation while recovery is
+    // incomplete; non-mutating context hooks remain available.
+    if (request.eventName === "Stop" && this.planStorageReady?.() === false) {
+      throw new CodexHookPlanStorageUnavailableError();
+    }
     const toolDecision = agentCommunicationToolDenial(
       request,
       this.isManagedAgentSession?.(request) === true

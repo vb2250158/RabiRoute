@@ -177,7 +177,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.doesNotMatch(page, /该意见不会被视为批准/);
   assert.match(page, /提交审批意见/);
   assert.match(page, /planFeedbackSubmissionErrorMessage\(submitError\)/);
-  assert.match(page, /feedbackId: feedbackRequestId\(plan\.id\)/);
+  assert.match(page, /const feedbackId = feedbackRequestId\(plan\.id, signature\)/);
   assert.match(page, /审批资料不完整 · 禁止审批/);
   assert.match(page, /审批资料不完整，禁止审批。缺少/);
   assert.match(page, /审批人 \/ 责任人/);
@@ -221,7 +221,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /调整尚未开始的步骤/);
   assert.match(page, /:composer-id="`guidance-\$\{plan\.id\}`"[\s\S]*?@submit="sendPlanGuidance\(plan\)"/);
   assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance"\)/);
-  assert.match(page, /stepId: guidance \? undefined : plan\.presentation\.approval\.stepId/);
+  assert.match(page, /const stepId = guidance \? undefined : plan\.presentation\.approval\.stepId/);
   assert.match(page, /const attachments = await approvalAttachmentUploads\(plan\.id\)/);
   assert.match(page, /const planAttachmentIds = referencedPlanAttachmentIds\(text, allApprovalMentionCandidates\(plan\)\)/);
   assert.match(page, /submittedApprovalAttachments\.set\(plan\.id, takeApprovalAttachments\(plan\.id\)\)/);

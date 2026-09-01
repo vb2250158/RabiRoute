@@ -126,7 +126,8 @@ begin
   ExtractTransactionFiles;
   Arguments := '-InstallRoot ' + PsQuote(ExpandConstant('{app}')) +
     ' -StopHostScript ' + PsQuote(ExpandConstant('{tmp}\Stop-RabiRouteHostFenced.ps1')) +
-    ' -LegacyTaskMigrationScript ' + PsQuote(ExpandConstant('{tmp}\Migrate-LegacyWearableHealthTask.ps1'));
+    ' -LegacyTaskMigrationScript ' + PsQuote(ExpandConstant('{tmp}\Migrate-LegacyWearableHealthTask.ps1')) +
+    ' -AutostartScript ' + PsQuote(ExpandConstant('{tmp}\Configure-WindowsAutostart.ps1'));
   if PreflightOnly then Arguments := Arguments + ' -PreflightOnly';
   Result := RunPowerShell('Uninstall-RabiRouteReleaseTransaction.ps1', Arguments, ResultCode);
 end;

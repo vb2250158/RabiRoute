@@ -54,10 +54,10 @@ Qt 面板本身尽量保持跨平台。Windows 启动器与打包边界以 [`doc
 
 ## 安装与运行
 
-安装版与开发版都由 Host 启动 Desktop。仓库入口只委托给 `RabiRouteHost.exe`：
+安装版由已安装的 Host 启动 Desktop。源码开发使用 `npm run dev` 或 `npm run dev:hot`；验证完整 Windows 应用时必须先在本机磁盘构建发行包，再启动构建或安装目录里的 `RabiRouteHost.exe`：
 
 ```powershell
-Start-RabiRoute-Desktop.bat
+& "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"
 ```
 
 Host 在 Manager 发布匹配本代身份的 READY 后，使用 `--surface-child`、`--manager-url`、`--application-generation-id`、`--manager-instance-id` 和 `--host-executable` 启动 Desktop。缺少任一参数、`/meta` 身份不匹配或 Host 不可用时，Desktop 失败关闭；没有独立运行、自动寻找端口或自行拉起 Manager 的模式。

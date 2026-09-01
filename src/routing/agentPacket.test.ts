@@ -9,9 +9,23 @@ import { listIdentityEndpointAccounts, updateIdentityRelation } from "../identit
 import { resolvePipeline } from "../pipelines.js";
 import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
-import { buildAgentPacket, type AgentRoleContext } from "./agentPacket.js";
+import { buildAgentPacket as buildPublishedAgentPacket, type AgentPacket, type AgentRoleContext } from "./agentPacket.js";
+import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "../roleKnowledge.js";
+import { migrateRolePlanLayoutAtStartup } from "../manager/planStorageStartupMigration.js";
 
 process.env.GATEWAY_MANAGER_URL ||= "http://127.0.0.1:8790";
+
+function buildAgentPacket(
+  decision: RouteDecision,
+  rule: NotificationRule,
+  roleContext: AgentRoleContext
+): AgentPacket {
+  if (roleContext.roleDir) {
+    migrateRolePlanLayoutAtStartup(roleContext.roleDir);
+    publishRoleKnowledgeCatalogSnapshot(roleContext.roleDir, readRoleKnowledgeCatalogSnapshot(roleContext.roleDir));
+  }
+  return buildPublishedAgentPacket(decision, rule, roleContext);
+}
 
 function appendGroupMessage(dataDir: string, record: GroupMessageRecord): void {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -22,6 +36,13 @@ function appendOutboxMessage(dataDir: string, record: Record<string, unknown>): 
   fs.mkdirSync(dataDir, { recursive: true });
   fs.appendFileSync(path.join(dataDir, "outbox-adapter.log.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
 }
+
+test("AgentPacket memory consolidation result contract requires stable key and a current strong ETag", () => {
+  const source = fs.readFileSync(new URL("./agentPacket.ts", import.meta.url), "utf8");
+  assert.match(source, /memoryConsolidationResultMutationLines\(\{/);
+  assert.match(source, /endpoint: `\/api\/roles\/\$\{values\.agentRoleId\}\/memory\/consolidation-runs\/\$\{pendingConsolidation\.run\.id\}\/result`/);
+  assert.match(source, /runId: pendingConsolidation\.run\.id/);
+});
 
 test("AgentPacket expands CQ reply chains and centralizes at mappings", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-"));

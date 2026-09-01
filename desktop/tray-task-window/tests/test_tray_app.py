@@ -7,6 +7,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -30,6 +31,7 @@ from rabiroute_tray.tray_app import (
     _prewarm_panel,
     _run_when_menu_idle,
     _show_panel_for_user_action,
+    _send_plan_feedback,
     _start_desktop_refresh,
     _rebuild_persona_chat_menu,
     _retain_last_gateway_snapshot,
@@ -155,6 +157,118 @@ class TrayAppAsyncSendTest(unittest.TestCase):
             self.app.processEvents()
             time.sleep(0.01)
         self.assertEqual(results, [PlanFeedbackSubmitResult(ok=True, delivery_status="delivered")])
+
+    def test_revision_conflict_retires_the_stale_operation_before_reload(self) -> None:
+        class Panel:
+            def __init__(self) -> None:
+                self.completions: list[tuple[tuple, dict]] = []
+
+            def set_plan_feedback_pending(self, *_args) -> None:
+                pass
+
+            def complete_plan_feedback(self, *args, **kwargs) -> None:
+                self.completions.append((args, kwargs))
+
+        panel = Panel()
+        refreshes: list[bool] = []
+
+        def complete_immediately(*args) -> None:
+            callback = args[-2]
+            callback(object(), PlanFeedbackSubmitResult(ok=False, revision_conflict=True, message="changed"))
+
+        with patch("rabiroute_tray.tray_app._start_plan_feedback_send", side_effect=complete_immediately):
+            _send_plan_feedback(
+                object(),
+                "route-1",
+                "YeYu",
+                "plan-1",
+                "verify",
+                "feedback-1",
+                "批准。",
+                panel,  # type: ignore[arg-type]
+                object(),  # type: ignore[arg-type]
+                False,
+                lambda: refreshes.append(True),
+                set(),
+            )
+
+        self.assertEqual(panel.completions[-1][1], {"retire": True})
+        self.assertEqual(refreshes, [True])
+
+    def test_uncertain_commit_keeps_the_same_operation_for_retry(self) -> None:
+        class Panel:
+            def __init__(self) -> None:
+                self.completions: list[tuple[tuple, dict]] = []
+
+            def set_plan_feedback_pending(self, *_args) -> None:
+                pass
+
+            def complete_plan_feedback(self, *args, **kwargs) -> None:
+                self.completions.append((args, kwargs))
+
+        panel = Panel()
+
+        def complete_immediately(*args) -> None:
+            callback = args[-2]
+            callback(object(), PlanFeedbackSubmitResult(ok=False, uncertain=True, message="timeout"))
+
+        with patch("rabiroute_tray.tray_app._start_plan_feedback_send", side_effect=complete_immediately):
+            _send_plan_feedback(
+                object(),
+                "route-1",
+                "YeYu",
+                "plan-1",
+                "verify",
+                "feedback-1",
+                "批准。",
+                panel,  # type: ignore[arg-type]
+                object(),  # type: ignore[arg-type]
+                False,
+                lambda: None,
+                set(),
+            )
+
+        self.assertEqual(panel.completions[-1][1], {})
+        self.assertIn("保留同一提交标识", panel.completions[-1][0][2])
+
+    def test_committed_feedback_with_failed_delivery_retires_the_operation(self) -> None:
+        class Panel:
+            def __init__(self) -> None:
+                self.completions: list[tuple[tuple, dict]] = []
+
+            def set_plan_feedback_pending(self, *_args) -> None:
+                pass
+
+            def complete_plan_feedback(self, *args, **kwargs) -> None:
+                self.completions.append((args, kwargs))
+
+        panel = Panel()
+
+        def complete_immediately(*args) -> None:
+            callback = args[-2]
+            callback(
+                object(),
+                PlanFeedbackSubmitResult(ok=False, delivery_status="failed", message="notify failed"),
+            )
+
+        with patch("rabiroute_tray.tray_app._start_plan_feedback_send", side_effect=complete_immediately):
+            _send_plan_feedback(
+                object(),
+                "route-1",
+                "YeYu",
+                "plan-1",
+                "verify",
+                "feedback-1",
+                "批准。",
+                panel,  # type: ignore[arg-type]
+                object(),  # type: ignore[arg-type]
+                False,
+                lambda: None,
+                set(),
+            )
+
+        self.assertEqual(panel.completions[-1][1], {"retire": True})
+        self.assertIn("已记录", panel.completions[-1][0][2])
 
     def test_manual_trigger_returns_without_blocking_qt_thread(self) -> None:
         results: list[ManualTriggerResult] = []

@@ -11,6 +11,7 @@ import {
 import { toProjectRelativePath } from "../shared/projectPaths.js";
 import { resolveSpeechRouteProfile } from "../shared/speechControlContract.js";
 import { recentMessageLimitFor } from "../shared/gatewayConfigModel.js";
+import { memoryConsolidationResultMutationLines } from "../shared/roleStorageMutationContract.js";
 import { communicationModeForRouteKind, proactiveCommunicationPolicyLines } from "../shared/agentCommunicationPolicy.js";
 import { normalizeRabiMessageContent, renderRabiMessage, type RabiMessageSource } from "../shared/rabiMessage.js";
 import {
@@ -18,7 +19,8 @@ import {
   getPlan,
   planApprovalGate,
   planBlockingReason,
-  planIsBlocked
+  planIsBlocked,
+  type RoleKnowledgeSnapshot
 } from "../roleKnowledge.js";
 import {
   messageContextArchiveIndexPath,
@@ -28,6 +30,7 @@ import {
   recentMessageContextText
 } from "../messageContextStore.js";
 import { resolvePersonaVoiceIdentities, type PersonaVoiceIdentity } from "../personaVoiceIdentities.js";
+import { canonicalLogicalPlanId } from "../planStorageIdentity.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import { identityContextsForForward, identityContextLines } from "./identityContext.js";
 import {
@@ -73,6 +76,11 @@ export type AgentPacket = {
   message: string;
   /** Shadow assessment persisted only after this packet enters the delivery path. */
   conversationSituation?: ConversationSituation;
+};
+
+export type BuildAgentPacketOptions = {
+  /** Manager-fenced projection for an isolated Gateway/Speech child. */
+  roleKnowledge?: RoleKnowledgeSnapshot;
 };
 
 type MessageCodeRecord = {
@@ -837,10 +845,10 @@ function planSourceIdentity(record: RouteDecision["record"], roleDir: string): {
   const replyContext = isPlanFeedbackRecord(record) && record.replyContext && typeof record.replyContext === "object"
     ? record.replyContext
     : {};
-  const planId = String(replyContext.planId || "").trim();
+  const planId = canonicalLogicalPlanId(replyContext.planId);
   const planName = String(replyContext.planTitle || "").trim()
     || (planId ? String(getPlan(roleDir, planId)?.title || "").trim() : "");
-  if (!planId || !planName) throw new Error("Plan message source requires the exact plan id and name.");
+  if (!planName) throw new Error("Plan message source requires the exact plan id and name.");
   return { planId, planName };
 }
 
@@ -939,8 +947,8 @@ function templateValuesForDecision(decision: RouteDecision, roleContext: AgentRo
     ? localReplyContext.targetType.trim()
     : isPlanFeedback ? "plan_feedback" : "role_panel";
   const localRoleId = isPlanFeedback ? record.roleId : isRolePanel ? record.roleId : undefined;
-  const planFeedbackTargetId = typeof localReplyContext.planId === "string" && localReplyContext.planId.trim()
-    ? localReplyContext.planId.trim()
+  const planFeedbackTargetId = typeof localReplyContext.planId === "string" && localReplyContext.planId
+    ? canonicalLogicalPlanId(localReplyContext.planId)
     : localRoleId ?? "plan_feedback";
   const targetId = isGroup ? record.groupId : "userId" in record ? record.userId : isVoiceTranscript ? record.source ?? "webhook" : isManualTrigger ? record.triggerId ?? "manual_trigger" : isPlanFeedback ? planFeedbackTargetId : isRolePanel ? record.roleId ?? "rolePanel" : "heartbeat";
   const wecomGroupId = isWeCom ? record.groupId ?? record.chatId ?? record.conversationId : undefined;
@@ -1130,7 +1138,8 @@ function buildAgentMessage(
   userTemplateText: string,
   rolePath: string,
   roleDir: string,
-  dataDir: string
+  dataDir: string,
+  options: BuildAgentPacketOptions
 ): { messageSource: RabiMessageSource; content: string; message: string; conversationSituation?: ConversationSituation } {
   const record = decision.record;
   const routeKind = decision.routeKind;
@@ -1139,8 +1148,8 @@ function buildAgentMessage(
   const referencedPlanSummaries = routeKind === "manual_trigger"
     ? readReferencedPlanSummaries(roleDir, userTemplateText)
     : [];
-  const contextResolution = hasPersona
-    ? rabiContextManager.resolve({
+  const contextTrigger = hasPersona
+    ? {
         kind: "message_delivery",
         source: "rabi_delivery",
         roleId: String(values.agentRoleId || ""),
@@ -1148,7 +1157,12 @@ function buildAgentMessage(
         signalText: String(values.message || ""),
         includePendingConsolidation: shouldAttachMemoryConsolidation,
         consolidationTrigger: shouldAttachMemoryConsolidation ? "manual" : undefined
-      })
+      } as const
+    : null;
+  const contextResolution = contextTrigger
+    ? options.roleKnowledge
+      ? rabiContextManager.resolveProjection(contextTrigger, options.roleKnowledge)
+      : rabiContextManager.resolve(contextTrigger)
     : null;
   const knowledge = contextResolution?.knowledge ?? null;
   const knowledgeView = knowledge ? buildRoleKnowledgeContextView(values.agentRoleId, knowledge) : null;
@@ -1228,7 +1242,10 @@ function buildAgentMessage(
   const pendingConsolidationLines = pendingConsolidation
     ? [
         `runId：${pendingConsolidation.run.id}`,
-        `结果回传 API：/api/roles/${values.agentRoleId}/memory/consolidation-runs/${pendingConsolidation.run.id}/result`,
+        ...memoryConsolidationResultMutationLines({
+          endpoint: `/api/roles/${values.agentRoleId}/memory/consolidation-runs/${pendingConsolidation.run.id}/result`,
+          runId: pendingConsolidation.run.id
+        }),
         pendingConsolidation.run.instruction,
         "",
         ...pendingConsolidation.memories.map((memory) => `- ${memory.id}：${memory.title}\n  ${memory.content}`)
@@ -1371,7 +1388,12 @@ function buildAgentMessage(
   };
 }
 
-export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule, roleContext: AgentRoleContext): AgentPacket {
+export function buildAgentPacket(
+  decision: RouteDecision,
+  rule: NotificationRule,
+  roleContext: AgentRoleContext,
+  options: BuildAgentPacketOptions = {}
+): AgentPacket {
   const templateValues = {
     ...templateValuesForDecision(decision, roleContext),
     ...decision.extraValues,
@@ -1381,7 +1403,15 @@ export function buildAgentPacket(decision: RouteDecision, rule: NotificationRule
   const rolePath = relativeWorkspacePath(roleContext.rolePath) || "";
   const roleDir = relativeWorkspacePath(roleContext.roleDir) || "";
 
-  const built = buildAgentMessage(decision, templateValues, userTemplateText, rolePath, roleDir, personaDataDirFor(roleContext));
+  const built = buildAgentMessage(
+    decision,
+    templateValues,
+    userTemplateText,
+    rolePath,
+    roleDir,
+    personaDataDirFor(roleContext),
+    options
+  );
   return {
     rule,
     templateValues,

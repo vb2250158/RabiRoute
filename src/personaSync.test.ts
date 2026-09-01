@@ -7,9 +7,103 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { PersonaSyncService } from "./personaSync.js";
+import {
+  createActivePlanPackageCommandFromFiles,
+  createArchivedPlanPackageCommandFromFiles,
+  type PersonaSyncActivePlanPackageCommand,
+  type PersonaSyncArchivedPlanPackageCommand,
+  type PersonaSyncPlanPackageFile
+} from "./personaSyncPlanPackage.js";
+import { planStorageDirectory } from "./planStorageReconciliation.js";
 
 function hash(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function planPackageFile(relativePath: string, value: Buffer | string): PersonaSyncPlanPackageFile {
+  const content = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
+  return {
+    path: relativePath,
+    size: content.byteLength,
+    sha256: hash(content),
+    contentBase64: content.toString("base64")
+  };
+}
+
+function activePlanPackage(
+  roleId: string,
+  planId: string,
+  overrides: Record<string, unknown> = {}
+): PersonaSyncActivePlanPackageCommand {
+  const recordedAt = "2026-08-01T00:00:00.000Z";
+  const plan = {
+    id: planId,
+    title: "Active plan",
+    focus: "Remain active",
+    status: "进行中",
+    createdAt: recordedAt,
+    updatedAt: recordedAt,
+    steps: [{ id: "working", title: "Working", status: "进行中" }],
+    keywords: ["active"],
+    ...overrides
+  };
+  const history = {
+    id: `created-${planId}`,
+    planId,
+    kind: "created",
+    recordedAt,
+    after: plan
+  };
+  return createActivePlanPackageCommandFromFiles(roleId, planId, [
+    planPackageFile("plan.json", `${JSON.stringify(plan, null, 2)}\n`),
+    planPackageFile("history.jsonl", `${JSON.stringify(history)}\n`)
+  ], "fixture-peer");
+}
+
+function archivedPlanPackage(
+  roleId: string,
+  planId: string,
+  options: { storedPlanId?: string; terminalStatus?: string } = {}
+): PersonaSyncArchivedPlanPackageCommand {
+  const storedPlanId = options.storedPlanId || planId;
+  const completed = {
+    id: storedPlanId,
+    title: "Archived plan",
+    focus: "Remain archived",
+    status: "已完成",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    completedAt: "2026-08-01T01:00:00.000Z",
+    updatedAt: "2026-08-01T01:00:00.000Z",
+    steps: [{ id: "done", title: "Done", status: "已完成" }],
+    keywords: ["archive"]
+  };
+  const archived = {
+    ...completed,
+    status: options.terminalStatus || "已归档",
+    archivedAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z"
+  };
+  const history = [
+    {
+      id: `created-${storedPlanId}`,
+      planId: storedPlanId,
+      kind: "created",
+      recordedAt: completed.updatedAt,
+      after: completed
+    },
+    {
+      id: `archived-${storedPlanId}`,
+      planId: storedPlanId,
+      kind: "archived",
+      recordedAt: archived.updatedAt,
+      before: completed,
+      after: archived
+    }
+  ];
+  return createArchivedPlanPackageCommandFromFiles(roleId, planId, [
+    planPackageFile("plan.json", `${JSON.stringify(archived, null, 2)}\n`),
+    planPackageFile("history.jsonl", `${history.map(record => JSON.stringify(record)).join("\n")}\n`)
+  ], "fixture-peer");
 }
 
 async function waitForFile(filePath: string): Promise<void> {
@@ -71,7 +165,7 @@ test("persona sync manifests text and binary persona assets while safely merging
   assert.deepEqual(fs.readFileSync(path.join(roleRoot, "voice", "cache", "reference-audio", "remote.wav")), remoteReference);
 });
 
-test("persona sync transport rejects runtime paths while accepting portable plan and memory files", (t) => {
+test("persona sync transport rejects runtime and generic plan paths while accepting whole plan packages and memory files", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-sync-runtime-filter-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const rolesRoot = path.join(root, "roles");
@@ -98,15 +192,23 @@ test("persona sync transport rejects runtime paths while accepting portable plan
   );
   assert.equal(fs.existsSync(runtimeTarget), true);
 
-  const plan = Buffer.from("{\"id\":\"plan-1\"}\n", "utf8");
   const memory = Buffer.from("{\"id\":\"memory-1\"}\n", "utf8");
-  assert.equal(service.merge({
+  assert.equal(service.applyActivePlanPackage(activePlanPackage("Rabi", "plan-1")).status, "applied");
+  const activePlan = fs.readFileSync(path.join(roleRoot, "plans", "active", "plan-1", "plan.json"));
+  assert.throws(() => service.merge({
+    roleId: "Rabi",
+    path: "plans/active/plan-1/plan.json",
+    contentBase64: activePlan.toString("base64"),
+    remoteHash: hash(activePlan),
+    peerId: "pc-b"
+  }), /requires an atomic plan package/i);
+  assert.throws(() => service.merge({
     roleId: "Rabi",
     path: "plans/items/active/plan-1.json",
-    contentBase64: plan.toString("base64"),
-    remoteHash: hash(plan),
+    contentBase64: activePlan.toString("base64"),
+    remoteHash: hash(activePlan),
     peerId: "pc-b"
-  }).status, "created");
+  }), /excluded|legacy plan storage/i);
   assert.equal(service.merge({
     roleId: "Rabi",
     path: "memory/recent/memory-1.json",
@@ -114,6 +216,173 @@ test("persona sync transport rejects runtime paths while accepting portable plan
     remoteHash: hash(memory),
     peerId: "pc-b"
   }).status, "created");
+});
+
+function writeArchivedPlanFixture(roleRoot: string, planId = "archived-plan"): { active: string; archive: string } {
+  const active = planStorageDirectory(roleRoot, planId, "active");
+  const archive = planStorageDirectory(roleRoot, planId, "archive");
+  fs.mkdirSync(archive, { recursive: true });
+  for (const file of archivedPlanPackage("Rabi", planId).files) {
+    const target = path.join(archive, ...file.path.split("/"));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, Buffer.from(file.contentBase64, "base64"));
+  }
+  return { active, archive };
+}
+
+test("persona sync treats canonical archive as a terminal fence against active resurrection", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-archive-fence-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  const { active } = writeArchivedPlanFixture(roleRoot);
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+
+  const manifest = await service.manifest("Rabi");
+  assert.equal(manifest.roles[0]?.files.some((file) => file.path.includes("plans/active/")), false);
+  assert.throws(
+    () => service.readFile("Rabi", "plans/active/archived-plan/plan.json"),
+    /already archived/i
+  );
+  const result = service.applyActivePlanPackage(activePlanPackage("Rabi", "archived-plan", {
+    status: "已完成",
+    completedAt: "2026-08-01T01:00:00.000Z",
+    updatedAt: "2026-08-01T01:00:00.000Z"
+  }));
+  assert.equal(result.status, "conflict");
+  assert.equal(result.reason, "canonical_archive_is_terminal");
+  assert.equal(fs.existsSync(active), false);
+});
+
+test("persona sync fails closed for incomplete archive storage and non-canonical plan paths", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-invalid-archive-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(path.join(roleRoot, "plans", "archive", "broken-plan"), { recursive: true });
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+  const incoming = Buffer.from(JSON.stringify({ id: "broken-plan", status: "进行中" }), "utf8");
+
+  const conflict = service.applyActivePlanPackage(activePlanPackage("Rabi", "broken-plan"));
+  assert.equal(conflict.status, "conflict");
+  assert.match(String(conflict.reason), /canonical_archive_is_terminal|missing_plan_json|invalid archive storage/i);
+  assert.throws(() => service.merge({
+    roleId: "Rabi",
+    path: "plans/active/foo bar/plan.json",
+    contentBase64: incoming.toString("base64"),
+    remoteHash: hash(incoming)
+  }), /non-canonical storage identity/i);
+});
+
+test("persona sync validates archive identity and never applies archive deletion", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-archive-write-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(roleRoot, { recursive: true });
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+
+  assert.throws(
+    () => service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan", { storedPlanId: "other-plan" })),
+    /invalid terminal identity|identity does not match plan\.json/i
+  );
+  assert.throws(
+    () => service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan", { terminalStatus: "已完成" })),
+    /archive plan package is not terminal/i
+  );
+
+  const applied = service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan"));
+  assert.equal(applied.status, "applied");
+  const archived = fs.readFileSync(path.join(roleRoot, "plans", "archive", "archive-plan", "plan.json"));
+  assert.throws(() => service.merge({
+    roleId: "Rabi",
+    path: "plans/archive/archive-plan/plan.json",
+    deleted: true,
+    baseHash: hash(archived)
+  }), /requires an atomic plan package/i);
+  assert.equal(fs.existsSync(path.join(roleRoot, "plans", "archive", "archive-plan", "plan.json")), true);
+});
+
+test("generic persona merge cannot bypass plan package identity or lifecycle fencing", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-plan-resolution-fence-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+  const applied = service.applyActivePlanPackage(activePlanPackage("Rabi", "resolve-plan", { title: "local" }));
+  assert.equal(applied.status, "applied");
+  const planFile = path.join(roleRoot, "plans", "active", "resolve-plan", "plan.json");
+  const local = fs.readFileSync(planFile);
+  const remote = Buffer.from(JSON.stringify({ id: "resolve-plan", status: "已完成", title: "remote" }), "utf8");
+  assert.throws(() => service.merge({
+    roleId: "Rabi",
+    path: "plans/active/resolve-plan/plan.json",
+    contentBase64: remote.toString("base64"),
+    peerId: "pc-b"
+  }), /requires an atomic plan package/i);
+  assert.equal(service.listConflicts("Rabi").length, 0);
+  assert.deepEqual(fs.readFileSync(planFile), local);
+});
+
+test("persona sync rejects full logical plan id collisions that share one storage identity", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-plan-logical-collision-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  const localId = `${"p".repeat(100)}-local`;
+  const remoteId = `${"p".repeat(100)}-remote`;
+  const storageId = "p".repeat(100);
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+  assert.equal(service.applyActivePlanPackage(activePlanPackage("Rabi", localId)).status, "applied");
+  const planFile = path.join(roleRoot, "plans", "active", storageId, "plan.json");
+  const local = fs.readFileSync(planFile);
+
+  assert.throws(
+    () => service.applyActivePlanPackage(activePlanPackage("Rabi", remoteId)),
+    /invalid live identity|storage identity collision/i
+  );
+  assert.deepEqual(fs.readFileSync(planFile), local);
+});
+
+test("persona manifest fails closed instead of hiding an ambiguous active and archive pair", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-plan-ambiguity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  const { active, archive } = writeArchivedPlanFixture(roleRoot, "ambiguous-plan");
+  const archivedHistory = fs.readFileSync(path.join(archive, "history.jsonl"), "utf8").trim().split(/\r?\n/);
+  const first = JSON.parse(archivedHistory[0]!) as { after: Record<string, unknown> };
+  fs.mkdirSync(path.join(active, "attachments"), { recursive: true });
+  fs.writeFileSync(path.join(active, "plan.json"), `${JSON.stringify(first.after, null, 2)}\n`, "utf8");
+  fs.writeFileSync(path.join(active, "history.jsonl"), `${archivedHistory[0]}\n`, "utf8");
+  fs.writeFileSync(path.join(active, "attachments", "unarchived.txt"), "new active-only data\n", "utf8");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+
+  await assert.rejects(service.manifest("Rabi"), /incomplete or ambiguous plan package|unresolved plan lifecycle|duplicate active\/archive plan storage/i);
+});
+
+test("persona manifest refuses to hide a reconcilable active replica before reconciliation completes", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-plan-reconcilable-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleRoot = path.join(rolesRoot, "Rabi");
+  const { active, archive } = writeArchivedPlanFixture(roleRoot, "reconcilable-plan");
+  const archivedHistory = fs.readFileSync(path.join(archive, "history.jsonl"), "utf8").trim().split(/\r?\n/);
+  const last = JSON.parse(archivedHistory.at(-1)!) as { before: Record<string, unknown> };
+  fs.mkdirSync(active, { recursive: true });
+  fs.writeFileSync(path.join(active, "plan.json"), `${JSON.stringify(last.before, null, 2)}\n`, "utf8");
+  fs.writeFileSync(path.join(active, "history.jsonl"), `${archivedHistory[0]}\n`, "utf8");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+
+  await assert.rejects(service.manifest("Rabi"), /incomplete or ambiguous plan package|unresolved plan lifecycle|duplicate active\/archive plan storage/i);
+  assert.equal(fs.existsSync(active), true);
 });
 
 test("persona sync fast-forwards from a known base and preserves divergent files as conflicts", () => {

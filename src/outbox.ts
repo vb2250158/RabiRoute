@@ -7,10 +7,10 @@ import { normalizeWeComError, sendWeComMessage, type WeComEndpoint } from "./wec
 import { sendFeishuText, type FeishuEndpoint } from "./feishu.js";
 import { sendWeixinFile, sendWeixinImage, sendWeixinText } from "./weixinOpenClaw.js";
 import {
-  appendRolePanelTimelineMessage,
-  createRolePanelMessageId,
   normalizeRolePanelAttachments,
-  type RolePanelAttachment
+  type RolePanelAttachment,
+  type RolePanelTimelineAppendResult,
+  type RolePanelTimelineMessage
 } from "./rolePanelTimeline.js";
 import {
   messageAdapterPolicyFor,
@@ -31,12 +31,6 @@ import {
   appendMessageContextToDir,
   messageContextFromOutboxEvent
 } from "./messageContextStore.js";
-import {
-  appendPlanFeedback,
-  createPlanFeedbackRecord,
-  listPlanFeedback
-} from "./planFeedback.js";
-import { listPlans } from "./roleKnowledge.js";
 import { postFenneNoteOutput } from "./fenneNoteOutput.js";
 
 export type AgentReplyRequest = {
@@ -142,6 +136,26 @@ export type AgentReplyRuntime = {
   };
 };
 
+export type AgentPlanFeedbackSubmitRequest = Readonly<{
+  roleId: string;
+  planId: string;
+  feedbackId: string;
+  deliveryId: string;
+  stepId?: string;
+  gatewayId: string;
+  kind: "approval_response" | "guidance_response";
+  text: string;
+}>;
+
+export type AgentPlanFeedbackSubmitResult = Readonly<{
+  record: Readonly<{ id: string }>;
+  created: boolean;
+}>;
+
+export type AgentPlanFeedbackSubmitPort = (
+  input: AgentPlanFeedbackSubmitRequest
+) => Promise<AgentPlanFeedbackSubmitResult>;
+
 export type AgentReplyOptions = {
   rootDir: string;
   routeRoot: string;
@@ -153,6 +167,12 @@ export type AgentReplyOptions = {
   fenneNoteReplyToken?: string;
   speechServiceUrl?: string;
   publishEvent?: (eventType: string, data: Record<string, unknown>) => void;
+  planStorageReady?: () => boolean;
+  appendRolePanelTimeline?: (
+    roleId: string,
+    message: RolePanelTimelineMessage
+  ) => Promise<RolePanelTimelineAppendResult>;
+  submitPlanFeedback?: AgentPlanFeedbackSubmitPort;
 };
 
 export type AgentReplyResult = {
@@ -1056,24 +1076,31 @@ function draft(reason: string, text: string, target: SourceRecord, routeProfileI
   };
 }
 
-function appendRolePanelReply(
+async function appendRolePanelReply(
   options: AgentReplyOptions,
   route: ResolvedRoute,
   target: SourceRecord,
   text: string,
   attachments: RolePanelAttachment[],
   request: AgentReplyRequest
-): AgentReplyResult {
-  const roleDir = roleDirFor(options.rootDir, options.rolesRoot, {
-    rolesDir: route.profile?.rolesDir ?? route.runtime.rolesDir,
-    agentRoleId: target.roleId ?? route.profile?.agentRoleId ?? route.runtime.agentRoleId
-  });
-  if (!roleDir) {
+): Promise<AgentReplyResult> {
+  const roleId = valueString(target.roleId ?? route.profile?.agentRoleId ?? route.runtime.agentRoleId);
+  if (!roleId) {
     return { ok: false, status: "blocked", reason: "Role panel reply requires a role id.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId: target.messageId };
   }
-  const roleId = valueString(target.roleId ?? route.profile?.agentRoleId ?? route.runtime.agentRoleId) ?? path.basename(roleDir);
-  appendRolePanelTimelineMessage(roleDir, {
-    id: createRolePanelMessageId("role-panel-assistant"),
+  const deliveryId = requestField(request, "deliveryId");
+  if (!deliveryId) {
+    return { ok: false, status: "blocked", reason: "Role panel reply requires a stable deliveryId.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId: target.messageId };
+  }
+  if (!options.appendRolePanelTimeline) {
+    return { ok: false, status: "blocked", reason: "Role panel timeline storage is unavailable.", routeProfileId: route.profile?.id ?? route.runtime.id, messageId: target.messageId };
+  }
+  const timelineMessageId = `role-panel-assistant-${createHash("sha256")
+    .update(`${roleId}\u0000${deliveryId}`, "utf8")
+    .digest("hex")
+    .slice(0, 24)}`;
+  await options.appendRolePanelTimeline(roleId, {
+    id: timelineMessageId,
     time: Math.floor(Date.now() / 1000),
     roleId,
     gatewayId: route.runtime.id,
@@ -1104,23 +1131,33 @@ function weixinPolicy(route: ResolvedRoute): Required<MessageAdapterPolicy> {
   }, "weixin");
 }
 
-function appendPlanFeedbackReply(
+async function appendPlanFeedbackReply(
   options: AgentReplyOptions,
   route: ResolvedRoute,
   target: SourceRecord,
   text: string,
   request: AgentReplyRequest
-): AgentReplyResult {
+): Promise<AgentReplyResult> {
   const context = contextObject(request);
   const routeRoleId = valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId);
   const roleId = valueString(context.roleId ?? target.roleId ?? routeRoleId);
-  const planId = valueString(context.planId);
+  const planId = typeof context.planId === "string" ? context.planId : undefined;
   const stepId = valueString(context.planStepId);
   if (!roleId || !planId) {
     return {
       ok: false,
       status: "blocked",
       reason: "Plan feedback reply requires roleId and planId in replyContext.",
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId: target.messageId,
+      targetType: "plan_feedback"
+    };
+  }
+  if (options.planStorageReady?.() === false) {
+    return {
+      ok: false,
+      status: "blocked",
+      reason: "PLAN_STORAGE_STARTUP_UNAVAILABLE: plan feedback is blocked until startup recovery completes.",
       routeProfileId: route.profile?.id ?? route.runtime.id,
       messageId: target.messageId,
       targetType: "plan_feedback"
@@ -1136,66 +1173,56 @@ function appendPlanFeedbackReply(
       targetType: "plan_feedback"
     };
   }
-  const roleDir = roleDirFor(options.rootDir, options.rolesRoot, {
-    rolesDir: route.profile?.rolesDir ?? route.runtime.rolesDir,
-    agentRoleId: roleId
-  });
-  const plan = roleDir ? listPlans(roleDir).find((item) => item.id === planId) : undefined;
-  if (!roleDir || !plan) {
+  const deliveryId = valueString(request.deliveryId);
+  if (!deliveryId) {
     return {
       ok: false,
       status: "blocked",
-      reason: `Plan not found for feedback reply: ${roleId}/${planId}.`,
-      routeProfileId: route.profile?.id ?? route.runtime.id,
-      messageId: target.messageId,
-      targetType: "plan_feedback"
-    };
-  }
-  const step = stepId ? plan.steps.find((item) => item.id === stepId) : undefined;
-  if (stepId && !step) {
-    return {
-      ok: false,
-      status: "blocked",
-      reason: `Plan step not found for feedback reply: ${stepId}.`,
+      reason: "Plan feedback reply requires a stable deliveryId.",
       routeProfileId: route.profile?.id ?? route.runtime.id,
       messageId: target.messageId,
       targetType: "plan_feedback"
     };
   }
   const responseId = valueString(context.planFeedbackResponseId)
-    || valueString(request.deliveryId)
-    || undefined;
+    || deliveryId;
   const responseKind = valueString(context.planFeedbackKind) === "guidance"
     ? "guidance_response"
     : "approval_response";
-  const candidate = createPlanFeedbackRecord({
-    id: responseId,
-    roleId,
-    planId,
-    planTitle: plan.title,
-    stepId: step?.id,
-    stepTitle: step?.title,
-    gatewayId: route.runtime.id,
-    kind: responseKind,
-    author: "agent",
-    source: "agent",
-    text,
-    attachments: [],
-    notifyAgent: false
-  });
-  const existing = listPlanFeedback(roleDir, planId).find((item) => item.id === candidate.id);
-  if (existing && (existing.text !== candidate.text || existing.stepId !== candidate.stepId || existing.kind !== responseKind)) {
+  if (!options.submitPlanFeedback) {
     return {
       ok: false,
       status: "blocked",
-      reason: `Plan feedback response id already exists with different content: ${candidate.id}.`,
+      reason: "PLAN_FEEDBACK_SUBMIT_UNAVAILABLE: plan feedback submit port is not available.",
       routeProfileId: route.profile?.id ?? route.runtime.id,
       messageId: target.messageId,
       targetType: "plan_feedback"
     };
   }
-  const record = existing || appendPlanFeedback(roleDir, candidate);
-  if (!existing) {
+  let submitted: AgentPlanFeedbackSubmitResult;
+  try {
+    submitted = await options.submitPlanFeedback({
+      roleId,
+      planId,
+      feedbackId: responseId,
+      deliveryId,
+      stepId,
+      gatewayId: route.runtime.id,
+      kind: responseKind,
+      text
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      status: "blocked",
+      reason: error instanceof Error ? error.message : String(error),
+      routeProfileId: route.profile?.id ?? route.runtime.id,
+      messageId: target.messageId,
+      targetType: "plan_feedback"
+    };
+  }
+  const { record, created } = submitted;
+  if (created) {
     options.publishEvent?.("plan_feedback_changed", {
       roleId,
       planId,
@@ -1402,12 +1429,12 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     target.groupId = String(route.runtime.targetGroupId);
   }
   if (target.targetType === "plan_feedback") {
-    const result = appendPlanFeedbackReply(options, route, target, text, request);
+    const result = await appendPlanFeedbackReply(options, route, target, text, request);
     appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "plan_feedback_reply_sent" : "reply_blocked", result.reason ?? "", result);
     return result;
   }
   if (target.targetType === "role_panel" || target.adapterType === "rolePanel") {
-    const result = appendRolePanelReply(options, route, target, text, rolePanelAttachmentsForRequest(request, content), request);
+    const result = await appendRolePanelReply(options, route, target, text, rolePanelAttachmentsForRequest(request, content), request);
     appendOutboxLog(options, route, result.ok ? "info" : "warning", result.ok ? "role_panel_reply_sent" : "reply_blocked", result.reason ?? "", withConversation({ ...result }));
     return result;
   }

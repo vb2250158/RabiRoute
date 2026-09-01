@@ -4,36 +4,42 @@ export const activate = definePlugin({
   activate(context) {
     const runtime = context.services.require("host.manager.xiaomi-home@1");
     context.services.provide("manager.xiaomi-home@1", Object.freeze({ instanceId: context.identity.instanceId }));
+    context.contributions.register({
+      kind: "settings-section",
+      id: "xiaomi-home-settings",
+      value: {
+        surface: "shared.settings",
+        label: { fallback: "米家 / Xiaomi Home" },
+        rendererId: "builtin.xiaomi-home-settings.v1",
+        schemaId: "xiaomi-home.settings.v1",
+        readCommandId: "manager.xiaomi-home-settings.read",
+        writeCommandId: "manager.xiaomi-home-settings.write",
+        icon: "mdi-home-automation",
+        slot: "xiaomi-home",
+        hosts: ["web"],
+        order: 50
+      }
+    });
     context.effects.add(() => {
       let activationStage = "request tracker";
       try {
         const tracker = new runtime.ManagerPluginRequestTracker();
         activationStage = "Home Assistant client";
-        const client = new runtime.XiaomiHomeManagerApiClient(context.config);
-        activationStage = "artifact store";
         const artifacts = new runtime.XiaomiHomeArtifactStore(context.config.runtimeDir);
-        activationStage = "artifact access";
-        const artifactAccess = new runtime.XiaomiHomeArtifactAccess(context.config, artifacts);
-        activationStage = "clip capture worker";
-        const clipCapture = new runtime.XiaomiHomeClipCaptureWorker(context.config, artifacts);
-        activationStage = "event monitor";
-        const monitor = new runtime.XiaomiHomeEventMonitor(context.config, {
-          deliverEvent: runtime.deliverXiaomiHomeEvent,
-          captureMotionClip: clipCapture.isEnabled() ? candidate => clipCapture.capture(candidate) : undefined
+        activationStage = "settings store";
+        const settingsStore = new runtime.XiaomiHomeSettingsStore(artifacts.runtimeDir, context.config);
+        activationStage = "runtime controller";
+        const xiaomiHomeRuntime = new runtime.XiaomiHomeRuntimeController(settingsStore, artifacts, {
+          deliverEvent: runtime.deliverXiaomiHomeEvent
         });
         activationStage = "route handler";
         const handler = runtime.createXiaomiHomeManagerRouteHandler({
-          client,
+          runtime: xiaomiHomeRuntime,
+          lifecycleFence: runtime.lifecycleFence,
           readJsonBody: runtime.readJsonBody,
           jsonResponse: runtime.jsonResponse,
           deliverEvent: runtime.deliverXiaomiHomeEvent,
-           artifacts,
-           artifactAccess,
-          runtimeHealth: () => ({
-            eventMonitor: monitor.status(),
-            cameraCapture: clipCapture.status()
-          }),
-           trackOperation: operation => tracker.trackOperation(operation)
+          trackOperation: operation => tracker.trackOperation(operation)
         });
         activationStage = "route registration";
         const unregister = runtime.registerManagerPluginHandlerRoutes(
@@ -43,6 +49,7 @@ export const activate = definePlugin({
           [tracker.wrap(handler)],
           [
             { routeId: "health", kind: "exact", path: "/api/agent/xiaomi-home/health", methods: ["GET"] },
+            { routeId: "settings", kind: "exact", path: "/api/agent/xiaomi-home/settings", methods: ["GET", "PUT"] },
             { routeId: "resources", kind: "exact", path: "/api/agent/xiaomi-home/resources", methods: ["GET"] },
             { routeId: "resource", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/resources/", methods: ["GET"] },
             { routeId: "action-requests", kind: "exact", path: "/api/agent/xiaomi-home/action-requests", methods: ["POST"] },
@@ -51,10 +58,10 @@ export const activate = definePlugin({
             { routeId: "artifact", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/artifacts/", methods: ["GET"] }
           ]
         );
-        activationStage = "event monitor start";
-        monitor.start();
+        activationStage = "runtime start";
+        xiaomiHomeRuntime.start();
         return async () => {
-          monitor.stop();
+          xiaomiHomeRuntime.stop();
           unregister();
           await tracker.stop();
         };

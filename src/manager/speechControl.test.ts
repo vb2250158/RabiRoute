@@ -20,6 +20,46 @@ const onlineStatus: SpeechRuntimeStatus = {
   providers: { tts: [], asr: [] }
 };
 
+test("speech personas consume immutable route catalog voice and avatar metadata", () => {
+  const control = new ManagerSpeechControl({
+    serviceUrl: () => "http://127.0.0.1:8781",
+    personas: () => [{
+      rolesRoot: "Z:\\roles",
+      roleId: "YeYu",
+      isPersona: true,
+      displayName: "夜雨",
+      avatarConfigured: true,
+      avatarVersion: "10-20",
+      files: [],
+      speech: {
+        voiceReady: true,
+        defaultModel: "local-tts",
+        language: "zh",
+        speed: 1.1,
+        voiceStyleSummary: "calm"
+      }
+    }],
+    route: () => undefined,
+    routes: () => [],
+    deliverTranscript: async () => ({ status: "delivered" }),
+    appendRouteLog: () => {}
+  });
+
+  assert.deepEqual(control.personas(), [{
+    id: "YeYu",
+    voiceReady: true,
+    avatarUrl: "/api/roles/YeYu/avatar?v=10-20",
+    defaultModel: "local-tts",
+    language: "zh",
+    instructions: undefined,
+    speed: 1.1,
+    voiceStyleSummary: "calm"
+  }]);
+  const source = fs.readFileSync(new URL("./speechControl.ts", import.meta.url), "utf8");
+  const personaSource = source.slice(source.indexOf("  personas():"), source.indexOf("  async playbackStatus"));
+  assert.doesNotMatch(personaSource, /fs\.|path\.|readdirSync|readFileSync|existsSync/);
+});
+
 function binaryResponse(): LocalSpeechResponse {
   return {
     status: 200,
@@ -45,7 +85,7 @@ test("Manager speech control shares concurrent runtime status probes", async () 
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -123,7 +163,7 @@ test("Manager speech control owns camelCase microphone and model contracts", asy
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -171,7 +211,7 @@ test("Manager speech control normalizes and updates the host playback volume", a
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -249,7 +289,7 @@ test("Manager speech control preserves remote device models, counters, and trans
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -288,7 +328,7 @@ test("Manager speech control maps resident microphone settings to broadcast mode
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => routeId === "Ilias" ? { id: routeId, speechEnabled: true } : undefined,
     routes: () => [{ id: "Ilias", speechEnabled: true }],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -360,7 +400,7 @@ test("Manager speech reconciliation keeps capture independent from Route subscri
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => subscribedRoutes.find(route => route.id === routeId),
     routes: () => subscribedRoutes,
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -423,7 +463,7 @@ test("Manager speech reconciliation respects the host ASR streaming switch", asy
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -504,7 +544,7 @@ test("Manager speech reconciliation migrates a legacy Route-bound microphone to 
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => ({ id: routeId, speechEnabled: true }),
     routes: () => [{ id: "Xinghai", speechEnabled: true }],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -527,7 +567,7 @@ test("Manager speech control waits for the Desktop owner terminal receipt", asyn
   const logs: string[] = [];
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => ({ id: routeId, speechEnabled: true }),
     routes: () => [{ id: "Ilias", speechEnabled: true }],
     deliverTranscript: () => new Promise((resolve) => { resolveDelivery = resolve; }),
@@ -563,7 +603,7 @@ test("Manager speech control returns recorded and propagates real delivery failu
   let delivery: "recorded" | "failed" = "recorded";
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => ({ id: routeId, speechEnabled: true }),
     routes: () => [{ id: "Ilias", speechEnabled: true }],
     deliverTranscript: async () => {
@@ -588,7 +628,7 @@ test("Manager speech control broadcasts one transcript to every enabled speech R
   let sequence = 0;
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => ({ id: routeId, speechEnabled: routeId !== "disabled" }),
     routes: () => [
       { id: "Xinghai", speechEnabled: true },
@@ -623,7 +663,7 @@ test("Manager speech control stores one raw ingress record before Route fan-out"
   const delivered: Array<{ routeId: string; recordId: string; voiceprintId?: string; speakerId?: string; speakerName?: string }> = [];
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => ({ id: routeId, speechEnabled: true }),
     routes: () => [{ id: "Rabi", speechEnabled: true }, { id: "Work", speechEnabled: true }],
     deliverTranscript: async ({ routeId, record }) => {
@@ -674,7 +714,7 @@ test("Manager speech control reuses terminal Route receipts for retried and conc
   let deliveries = 0;
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => ({ id: routeId, speechEnabled: true }),
     routes: () => [{ id: "Rabi", speechEnabled: true }],
     deliverTranscript: async () => {
@@ -712,7 +752,7 @@ test("Manager speech control binds mobile trust to an exact persisted ASR record
   ];
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: routeId => routes.find(route => route.id === routeId),
     routes: () => routes,
     deliverTranscript: async ({ routeId, record }) => {
@@ -792,7 +832,7 @@ test("Manager speech control binds mobile trust to an exact persisted ASR record
 test("Manager speech broadcast records locally when no Route subscribes", async () => {
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -939,7 +979,7 @@ test("Manager speech control normalizes persistent speech records and redacts un
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),
@@ -1086,7 +1126,7 @@ test("Manager speech control exposes manual speaker profiles without claiming vo
   };
   const control = new ManagerSpeechControl({
     serviceUrl: () => "http://127.0.0.1:8781",
-    rolesRoot: () => "Z:/missing-roles",
+    personas: () => [],
     route: () => undefined,
     routes: () => [],
     deliverTranscript: async () => ({ status: "delivered" }),

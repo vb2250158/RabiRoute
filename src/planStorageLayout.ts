@@ -1,18 +1,29 @@
 import path from "node:path";
+import {
+  canonicalLogicalPlanId,
+  canonicalPlanStorageCollisionKey,
+  canonicalPlanStorageKey,
+  safePlanStorageSegment
+} from "./planStorageIdentity.js";
+
+export { canonicalLogicalPlanId } from "./planStorageIdentity.js";
 
 export type PlanStorageBucket = "active" | "archive";
 
 export function safePlanStorageId(value: unknown): string {
-  return String(value || "")
-    .trim()
-    .replace(/[^\p{L}\p{N}_-]+/gu, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, 100);
+  return safePlanStorageSegment(value);
 }
 
-function planStorageName(planId: unknown): string {
-  return safePlanStorageId(planId) || "plan";
+export function canonicalPlanStorageName(planId: unknown): string {
+  return canonicalPlanStorageKey(canonicalLogicalPlanId(planId));
+}
+
+export function canonicalPlanStorageIdentity(planId: unknown): string {
+  return canonicalPlanStorageName(planId);
+}
+
+export function canonicalPlanStorageCollisionIdentity(planId: unknown): string {
+  return canonicalPlanStorageCollisionKey(canonicalLogicalPlanId(planId));
 }
 
 export function planBucketForStatus(status: unknown): PlanStorageBucket {
@@ -20,7 +31,11 @@ export function planBucketForStatus(status: unknown): PlanStorageBucket {
 }
 
 export function planDirectory(roleDir: string, planId: unknown, bucket: PlanStorageBucket): string {
-  return path.join(roleDir, "plans", bucket, planStorageName(planId));
+  return path.join(roleDir, "plans", bucket, canonicalPlanStorageName(planId));
+}
+
+export function planStorageDirectory(roleDir: string, planId: unknown, bucket: PlanStorageBucket): string {
+  return planDirectory(roleDir, planId, bucket);
 }
 
 export function planJsonFile(roleDir: string, planId: unknown, bucket: PlanStorageBucket): string {
@@ -46,28 +61,4 @@ export function planFeedbackAttachmentDirectory(
   bucket: PlanStorageBucket
 ): string {
   return path.join(planDirectory(roleDir, planId, bucket), "feedback-attachments", safePlanStorageId(feedbackId) || "feedback");
-}
-
-export function legacyActivePlanFile(roleDir: string, planId: unknown): string {
-  return path.join(roleDir, "plans", "items", "active", `${planStorageName(planId)}.json`);
-}
-
-export function legacyArchivedPlanFile(roleDir: string, planId: unknown): string {
-  return path.join(roleDir, "plans", "archive", `${planStorageName(planId)}.json`);
-}
-
-export function legacyPlanHistoryFile(roleDir: string, planId: unknown): string {
-  return path.join(roleDir, "plans", "history", `${planStorageName(planId)}.jsonl`);
-}
-
-export function legacyPlanFeedbackFile(roleDir: string, planId: unknown): string {
-  return path.join(roleDir, "plans", "feedback", `${planStorageName(planId)}.jsonl`);
-}
-
-export function legacyPlanAttachmentDirectory(roleDir: string, planId: unknown): string {
-  return path.join(roleDir, "plans", "attachments", planStorageName(planId));
-}
-
-export function legacyPlanFeedbackAttachmentDirectory(roleDir: string, feedbackId: unknown): string {
-  return path.join(roleDir, "plans", "feedback", "attachments", safePlanStorageId(feedbackId) || "feedback");
 }

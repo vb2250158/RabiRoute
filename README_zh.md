@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.2.2" src="https://img.shields.io/badge/version-0.2.2-3178c6">
+  <img alt="当前版本：0.2.3" src="https://img.shields.io/badge/version-0.2.3-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -69,7 +69,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.2.2`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.2.3`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -88,22 +88,20 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 近期变化
 
-### 0.2.1：计划读取和本机运行改进
+### 0.2.3：Manager 状态耐久性与客户端恢复
 
-- 每个计划使用独立目录保存正文、历史、反馈和附件，归档时移动整个目录。
-- 计划与记忆页面先加载当前可见内容，再按需读取后续页面，减少首屏等待和 Manager 磁盘压力。
-- RabiSpeech 的大文件读取、性能统计和人格同步索引移出 Manager 主请求路径。
-- Windows 桌面截图增加选区调整、矩形、箭头、文字、颜色和撤销。
+- 计划、记忆、反馈和 Route 目录 mutation 统一使用 revision、稳定幂等键、generation fence、worker ownership 与可恢复回执，不再由 Manager 父进程直接写入。
+- 计划启动迁移先发布完整 canonical package，再退休 legacy 文件；存储 lease 与 durable-delivery ownership 在长任务中持续续租，ownership 改变时失败关闭。
+- RibiWebGUI、Windows 托盘、Android SDK、RabiLink AIUI 与小米家庭设置都携带明确 revision，并能在 Manager generation 或端点变化后恢复，而不会静默重放 mutation。
+- 人格同步把 manifest 与 package 检查移出 Manager 请求路径，保留 canonical plan-package identity，并拒绝过期或冲突证据。
+- Windows developer candidate、事务化安装/应用脚本、Host fencing 与 release manifest 统一遵守本机运行 ownership；源码与已安装状态继续分离。
 
-### 未发布：投递、插件和 WebGUI 恢复能力
+### 0.2.2：Windows 单一生命周期与插件运行时 v2
 
-- Windows 生命周期已经收成一条主干：RabiRoute Host 是唯一应用 owner，Manager 与托盘是同代子程序；任一子程序异常退出都会触发有界的整代重建，托盘不能自行启动、修复或脱离 Manager 存活。
-- Manager 向操作系统申请空闲回环端口。Host 通过受身份校验的本机控制通道发布当前端点，并且只在 Manager 报告同一应用代和 Manager 实例后启动托盘。
-- Codex Desktop 投递增加 `deliveryId` 写入确认；IPC 接收但目标任务没有回执时会重试或明确失败。
-- Codex 任务显示名称改为读取 Desktop 左侧栏共用索引，任务 ID 与项目目录继续作为投递身份。
-- Manager 插件统一使用 schema/profile v2；每个入口声明 `in_process`、`isolated` 或 `declarative` 执行模式，Profile 声明 `readyRequires`，进程租约和依赖图保证关闭时先释放消费者、再释放提供者。
-- Web Bundle 使用不可变 revision 地址，页面、脚本、样式和字体从同一版本目录加载；浏览器收到插件目录变化后替换对应模块。
-- WebGUI 先显示固定界面，再在后台读取插件目录和知识内容；消息看板过期正文会被删除，只保留限期重放去重键。
+- RabiRoute Host 成为唯一 Windows 应用 owner。Manager 与托盘作为同代子程序运行，端口由操作系统分配，并通过 Host 认证状态与 `/meta` identity 发现。
+- Manager 插件升级为 schema/profile v2，明确 execution mode、ready dependency、generation replacement、process lease 与不可变 Web Bundle revision。
+- Codex Desktop 投递增加 `deliveryId` 落盘确认、受控任务替换与侧栏索引名称；RibiWebGUI 增加首屏有界读取和可恢复目录加载。
+- 桌宠、YeYu Gamer、穿戴设备、小米家庭、移动语音与局域网 Agent 均进入明确的插件、设备与验收边界。
 
 逐项记录和迁移说明见[版本更新日志](版本更新日志.md)。
 

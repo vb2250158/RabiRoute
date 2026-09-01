@@ -125,6 +125,8 @@ export const activate = definePlugin({
                         readConfig: runtime.readConfig,
                         writeConfig: runtime.writeConfig,
                         loadRuntimes: runtime.loadRuntimes,
+                        routeCatalogVersion: runtime.routeCatalogVersion,
+                        routeCatalogPersonas: runtime.routeCatalogPersonas,
                         syncRunningGateways: runtime.syncRunningGateways,
                         syncRabiLinkRelay: () => runtime.syncActiveRabiLinkRelay(),
                         routeDataDir: definition => runtime.dataDirFor(definition),
@@ -146,25 +148,27 @@ export const activate = definePlugin({
                         return true;
                     }
                     if (request.method === "POST" && requestUrl.pathname === "/manager-config") {
-                        void runtime.readJsonBody(request)
-                            .then(body => {
+                        void requestTracker.trackOperation(runtime.readJsonBody(request)
+                            .then(async body => {
                             const cfg = runtime.readManagerConfig();
                             if (body.routeDir !== undefined)
                                 cfg.routeDir = body.routeDir || undefined;
                             if (body.rolesDir !== undefined)
                                 cfg.rolesDir = body.rolesDir || undefined;
                             runtime.writeManagerConfig(cfg);
-                            runtime.ensureDataDirs();
+                            await runtime.ensureDataDirs();
                             runtime.jsonResponse(response, 200, {
                                 code: 0,
                                 routeDir: runtime.path.relative(runtime.rootDir, runtime.routeRoot).replace(/\\/g, "/"),
                                 rolesDir: runtime.path.relative(runtime.rootDir, runtime.rolesRoot).replace(/\\/g, "/")
                             });
                         })
-                            .catch(error => runtime.jsonResponse(response, 400, {
+                            .catch(error => runtime.jsonResponse(response,
+                            Number.isInteger(error?.statusCode) ? error.statusCode : 400, {
                             code: -1,
+                            errorCode: typeof error?.code === "string" ? error.code : "request_failed",
                             message: error instanceof Error ? error.message : String(error)
-                        }));
+                        })));
                         return true;
                     }
                     return false;

@@ -17,18 +17,20 @@ export async function stopManagerSharedResources(
   persistence: Pick<CoalescingMessageProcessingBoardPersistence, "stop">,
   stopWorkerPools: () => Promise<void> = stopBuiltinManagerReadWorkerPools
 ): Promise<void> {
-  let firstError: unknown;
+  const failures: unknown[] = [];
   try {
     await persistence.stop();
   } catch (error) {
-    firstError = error;
+    failures.push(error);
   }
   try {
     await stopWorkerPools();
   } catch (error) {
-    firstError ??= error;
+    failures.push(error);
   }
-  if (firstError) throw firstError;
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Manager shared resource shutdown was not fully confirmed.");
+  }
 }
 
 export function mountManagerSharedResourcesRuntime(

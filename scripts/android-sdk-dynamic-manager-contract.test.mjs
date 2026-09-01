@@ -57,6 +57,34 @@ const jvmTestPath = path.join(
   "sdk",
   "RabiRouteDiscoveryContractJvmTest.kt"
 );
+const lifecycleJvmTestPath = path.join(
+  repoRoot,
+  "packages",
+  "android-sdk",
+  "rabiroute-sdk",
+  "src",
+  "test",
+  "java",
+  "com",
+  "rabiroute",
+  "sdk",
+  "RabiRouteSdkLifecycleLeaseJvmTest.kt"
+);
+const probeActivityPath = path.join(
+  repoRoot,
+  "apps",
+  "rabilink-android",
+  "app",
+  "src",
+  "main",
+  "java",
+  "com",
+  "rabi",
+  "link",
+  "modules",
+  "rabiroute",
+  "RabiRouteSdkProbeActivity.kt"
+);
 
 test("Android SDK discovers only explicit full Manager URLs", () => {
   const source = fs.readFileSync(sdkPath, "utf8");
@@ -119,7 +147,7 @@ test("Android SDK fences DNS-SD records to the exact Manager generation", () => 
   assert.match(source, /x-rabiroute-expected-application-generation-id/);
   assert.match(source, /x-rabiroute-expected-manager-instance-id/);
   assert.match(source, /getManagerJson\(instance, url\)/);
-  assert.match(source, /requestManagerJson\(instance, url, "PATCH"/);
+  assert.match(source, /requestManagerJson\(\s*instance,\s*url,\s*"PATCH"/);
   assert.match(source, /requestManagerJson\(instance, "\$\{instance\.baseUrl\}\/api\/agent\/send"/);
 });
 
@@ -147,4 +175,40 @@ test("Android SDK Manager URL parsing fails closed", () => {
   assert.match(source, /readBoundedUtf8\(it, maxResponseBytes\)/);
   assert.match(source, /RabiRouteDiscoveryContract\.requireValidIdentity\(/);
   assert.doesNotMatch(source, /\/api\/rabi\/identity/);
+});
+
+test("Android SDK preserves route catalog revisions and requires caller-owned mutation fencing", () => {
+  const source = fs.readFileSync(sdkPath, "utf8");
+  const probe = fs.readFileSync(probeActivityPath, "utf8");
+  const lifecycleTest = fs.readFileSync(lifecycleJvmTestPath, "utf8");
+
+  assert.match(source, /class RabiRouteCatalogResult\([\s\S]*\) : List<RabiRouteInfo> by routes/);
+  assert.match(source, /val routeCatalog: RabiRouteCatalogRevision/);
+  assert.match(source, /val contentHash: String/);
+  assert.match(source, /fun getRoutes\(instance: RabiInstance\): List<RabiRouteInfo>/);
+  assert.match(source, /fun getRouteCatalog\(instance: RabiInstance\): RabiRouteCatalogResult/);
+  assert.match(source, /fun getMobileRoutes\([\s\S]*\): List<RabiRouteInfo>/);
+  assert.match(source, /fun getMobileRouteCatalog\([\s\S]*\): RabiRouteCatalogResult/);
+  assert.match(source, /json\.optJSONObject\("routeCatalog"\)/);
+  assert.match(source, /operationId: String,[\s\S]*expectedContentHash: String/);
+  assert.match(source, /"Idempotency-Key" to normalizedOperationId/);
+  assert.match(source, /"If-Match" to normalizedContentHash/);
+  assert.match(source, /requireCommittedMutationReceipt\(response, operationId\)/);
+  assert.match(source, /Route mutation response is missing an explicit committed receipt/);
+  assert.match(source, /Legacy route mutation is disabled:[\s\S]*caller-owned operationId[\s\S]*content hash/);
+  assert.match(source, /throw UnsupportedOperationException\(LEGACY_ROUTE_MUTATION_MESSAGE\)/);
+  assert.doesNotMatch(source, /UUID\.randomUUID\(|randomUUID\(/);
+
+  assert.match(probe, /sdk\.getRouteCatalog\(instance\)/);
+  assert.match(probe, /routeCatalog\.routeConfigHash\.ifBlank \{ routes\.contentHash \}/);
+  assert.match(probe, /operationId = "rabilink-probe-binding-\$\{UUID\.randomUUID\(\)\}"/);
+  assert.match(probe, /expectedContentHash = expectedContentHash/);
+  assert.match(lifecycleTest, /oldRelayRoutesRemainReadableButCannotBeUsedForRevisionlessWrites/);
+  assert.match(lifecycleTest, /assertEquals\("", routes\.contentHash\)/);
+  assert.match(lifecycleTest, /assertEquals\("android-binding-1", observedOperationId\.get\(\)\)/);
+  assert.match(lifecycleTest, /legacyJvmDescriptorsRemainPresentAndMutationsFailClosedBeforeNetwork/);
+  assert.match(lifecycleTest, /"getRoutes", java\.util\.List::class\.java/);
+  assert.match(lifecycleTest, /"getMobileRoutes",[\s\S]*java\.util\.List::class\.java/);
+  assert.match(lifecycleTest, /legacyManagerMutation\.invoke/);
+  assert.match(lifecycleTest, /legacyMobileMutation\.invoke/);
 });

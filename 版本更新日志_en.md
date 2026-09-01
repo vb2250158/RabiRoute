@@ -8,6 +8,44 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ## Unreleased
 
+## 0.2.3 - 2026-09-01
+
+### Single-writer Manager state and recoverable mutations
+
+- Plan, recent-memory, plan-feedback, and background-consolidation writes now enter `RoleStorageApplication` and a bounded mutation worker. Every mutation carries an `Idempotency-Key`, expected revision, `applicationGenerationId`, `managerInstanceId`, and storage lease. Timeout, unconfirmed termination, or worker loss exposes an unknown commit state and permits only same-key recovery.
+- The Manager parent and QA/feedback paths no longer write plan or feedback files directly. Reads use the read worker and writes share one mutation port, so an old QA snapshot cannot bypass CAS and overwrite a user's newer plan edit.
+- Durable delivery receipts now carry an execution owner, lease, and independent heartbeat. Receipt mutation locks linearize takeover decisions with renewal: an active same-key retry reads the current receipt instead of executing a second side effect while the first sender is still running, and an old execution cannot overwrite a replacement receipt or settle terminally after ownership loss.
+- Child-process stdout/stderr no longer enters HTTP, status, or log error text. The parent retains only diagnostic byte counts and stable codes, preventing local paths, parameters, or private output from escaping through an error surface.
+
+### Plan and memory storage recovery
+
+- Manager publishes its fenced control plane first, then starts the startup gate to recover lifecycle, legacy-migration, feedback, and package transactions in order. Read-only mode does not probe role directories; affected HTTP and background work remain gated and report temporary unavailability until recovery completes.
+- Legacy plan migration publishes a complete canonical package through the lifecycle WAL, then retires legacy plan, history, feedback, and attachment artifacts through the legacy-resolution WAL. A process terminated at any publication boundary resumes from manifests and receipts instead of relying on an in-process `catch` rollback.
+- Feedback transactions fully stage and verify their payload before publishing a manifest. A mid-payload exit creates no visible prepared transaction, and the next same request restages missing files. Recovery also binds each manifest to the scanned `roleDir`, preventing a misplaced or damaged manifest from writing across personas.
+- Synchronous and asynchronous plan-storage leases share a dedicated Worker heartbeat, so synchronous NAS I/O or CPU work that blocks the main thread still renews ownership. Every storage publication checks heartbeat, owner, inode, reclaim fence, and deadline; any change returns `PLAN_STORAGE_LEASE_LOST`, and finalization never deletes a replacement owner's lock.
+- Plan logical IDs are now separated from Windows physical-collision identity. Aliases such as `σ/ς`, `ſ/s`, and `ı/i` that share Windows filename semantics enter the same lease and reject a second logical owner before claim, package staging, or persona-sync receipt publication. Existing ASCII-lowercase storage IDs and lease hashes remain unchanged, so no directory migration is introduced.
+- Memory logical IDs are separated from physical file identity. Lossy safe filenames can no longer make two memories share one file under different leases; create and consolidation paths reject physical collisions explicitly. Published consolidated memories remain immutable and only an identical same-mutation, same-run retry may reuse them. Batch publication uses a same-directory temporary file, `fsync`, and atomic replacement for each entry so the original request can converge after a mid-batch exit.
+
+### Route catalog, WebGUI, and device clients
+
+- Route-catalog capture, validation, mutation, and recovery now run through a dedicated startup lifecycle. Gateway, persona-presentation, and configuration revisions use canonical SHA-256 identities. After a catalog refresh, the WebGUI and AIUI mutation ledgers still replay the original `Idempotency-Key + If-Match` to query an uncertain receipt. They release records only for definitive 4xx rejections; timeout, throttling, client disconnect, and 5xx remain an unknown commit state.
+- RibiWebGUI plan-feedback, Route-settings, and Xiaomi Home clients now carry the same revision/idempotency contract. Role Knowledge separates preview from full detail and cancels stale requests when cards collapse, routes change, or the page unmounts.
+- The Windows tray, Android SDK, and RabiLink AIUI no longer cache a fixed Manager endpoint. They rediscover and verify `/meta` after Host generation or endpoint changes, retaining the original key and evidence for offline mutations instead of treating reconnection as a successful write. The Android SDK preserves the legacy route-read JVM descriptors; legacy revisionless mutation overloads remain linkable but fail closed before network access, while the new catalog APIs and mutation overloads require a caller-owned operation ID and strong revision.
+- Xiaomi Home device actions atomically claim a complete intent digest in a local runtime receipt store before checking `expectedStateVersion` and issuing at most one Home Assistant service POST. Concurrent calls, process restarts, and lost responses only replay the receipt or perform read-only state verification; uncertain actions are never resent automatically. Bearer tokens are sent by default only to `localhost` or literal loopback/private IPs; hostnames require explicit trust, and credentials, URL paths, and redirects are rejected.
+- Manager-spawned Xiaomi Home event children verify the current `applicationGenerationId + managerInstanceId + managerBaseUrl` before reading stdin or delivering to a Route, so stale or identity-less children fail closed.
+
+### Persona synchronization and background work
+
+- Persona-manifest scanning, hashing, and package projection moved to a worker with generation fencing, a bounded queue, and crash recovery. Plan-package synchronization preserves logical ID, storage ID, bucket, and inventory identity, routing stale or conflicting evidence into explicit reconciliation.
+- Memory-consolidation schedule inspection moved to a controlled child and reports stable diagnostic codes only. The background scheduler starts only after both plan storage and the route catalog are ready.
+- RabiLink Relay, the AIUI glasses surface, Android lifecycle leases, Xiaomi Home clip/event monitoring, and plugin settings gained dynamic-Manager, revision, and recovery contracts. Phones, glasses, home devices, and cross-machine networks still require acceptance in their target environments.
+
+### Windows developer candidates and installation boundaries
+
+- Added local developer-candidate build, publish, and apply flows. Candidates must be produced on local disk, carry a release manifest and hashes, and pass Host fenced quit plus transactional install switching. NAS storage remains source-only and is never the build, installation, or runtime directory.
+- Developer apply and the release installer share a named Mutex derived from the normalized installation root and apply exact-byte CAS to the active-release pointer. A failed switch restores the old pointer and bootstrap before autostart; the old generation restarts only after the candidate is safely stopped and the previous release identity reads back exactly.
+- Install, uninstall, autostart, tray, and Host tests now share the current generation and dynamic Manager address. Retired `Start-RabiRoute-Desktop.bat` and the old launcher-freshness path were removed so a second lifecycle owner cannot return.
+
 ## 0.2.2 - 2026-08-31
 
 ### Single Windows Host lifecycle and plugin runtime v2

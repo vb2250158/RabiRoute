@@ -1,23 +1,24 @@
 import type http from "node:http";
 import {
-  XiaomiHomeManagerApiClient,
   XiaomiHomeManagerApiError,
   type XiaomiHomeActionRequest
 } from "./managerApi.js";
 import type { ManagerPluginRouteHandler } from "../../manager/managerPluginRouteRegistry.js";
 import type { XiaomiHomeEvent, XiaomiHomeEventDeliveryContext } from "../../xiaomiHomeEventDelivery.js";
-import { XiaomiHomeArtifactStore, type XiaomiHomeArtifactInput } from "./artifactStore.js";
-import type { XiaomiHomeArtifactAccess } from "./artifactAccess.js";
+import type { XiaomiHomeArtifactInput } from "./artifactStore.js";
+import type { XiaomiHomeSettingsUpdate } from "../../shared/xiaomiHomeSettingsContract.js";
+import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
 
 export type XiaomiHomeManagerRoutesContext = {
-  client: XiaomiHomeManagerApiClient;
+  runtime: XiaomiHomeRuntimeController;
+  lifecycleFence: Readonly<{
+    applicationGenerationId: string;
+    managerInstanceId: string;
+  }>;
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
   deliverEvent: (event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext) => Promise<unknown>;
-  artifacts: XiaomiHomeArtifactStore;
-  artifactAccess: XiaomiHomeArtifactAccess;
-  runtimeHealth?: () => Record<string, unknown>;
 };
 
 function isLoopbackAddress(address: string | undefined): boolean {
@@ -39,6 +40,33 @@ function respond<T>(response: http.ServerResponse, context: XiaomiHomeManagerRou
   });
 }
 
+function requireLifecycleFence(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  context: XiaomiHomeManagerRoutesContext
+): boolean {
+  const expectedApplicationGenerationId = String(request.headers["x-rabiroute-expected-application-generation-id"] || "").trim();
+  const expectedManagerInstanceId = String(request.headers["x-rabiroute-expected-manager-instance-id"] || "").trim();
+  if (!expectedApplicationGenerationId || !expectedManagerInstanceId) {
+    context.jsonResponse(response, 400, {
+      code: -1,
+      error: { code: "xiaomi_home_lifecycle_fence_required", message: "Current application generation and Manager instance headers are required." }
+    });
+    return false;
+  }
+  if (
+    expectedApplicationGenerationId !== context.lifecycleFence.applicationGenerationId
+    || expectedManagerInstanceId !== context.lifecycleFence.managerInstanceId
+  ) {
+    context.jsonResponse(response, 409, {
+      code: -1,
+      error: { code: "xiaomi_home_lifecycle_fence_stale", message: "Manager lifecycle changed; reload /meta before retrying." }
+    });
+    return false;
+  }
+  return true;
+}
+
 export function handleXiaomiHomeManagerApi(
   request: http.IncomingMessage,
   requestUrl: URL,
@@ -52,47 +80,56 @@ export function handleXiaomiHomeManagerApi(
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/health`) {
-    respond(response, context, context.client.getHealth().then(provider => ({
-      ...provider,
-      ...(context.runtimeHealth?.() ?? {})
-    })));
+    respond(response, context, context.runtime.health());
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === `${root}/settings`) {
+    respond(response, context, Promise.resolve(context.runtime.settings()));
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === `${root}/settings`) {
+    if (!requireLifecycleFence(request, response, context)) return true;
+    respond(response, context, context.readJsonBody<XiaomiHomeSettingsUpdate>(request)
+      .then(body => context.runtime.update(body.settings, String(body.revision || ""))));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/resources`) {
-    respond(response, context, context.client.listResources());
+    respond(response, context, context.runtime.client.listResources());
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/resources/`)) {
     const resourceId = decodeURIComponent(requestUrl.pathname.slice(`${root}/resources/`.length));
-    respond(response, context, context.client.getResource(resourceId));
+    respond(response, context, context.runtime.client.getResource(resourceId));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === `${root}/action-requests`) {
+    if (!requireLifecycleFence(request, response, context)) return true;
     const idempotencyKey = String(request.headers["idempotency-key"] || "");
     respond(response, context, context.readJsonBody<XiaomiHomeActionRequest>(request)
-      .then(body => context.client.executeAction(body, idempotencyKey)), 202);
+      .then(body => context.runtime.client.executeAction(body, idempotencyKey)), 202);
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === `${root}/events`) {
+    if (!requireLifecycleFence(request, response, context)) return true;
     respond(response, context, context.readJsonBody<{ event: XiaomiHomeEvent; agentRoleId: string }>(request)
       .then(body => context.deliverEvent(body.event, { agentRoleId: body.agentRoleId })), 202);
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/artifacts`) {
-    respond(response, context, Promise.resolve(context.artifacts.list({
+    respond(response, context, Promise.resolve(context.runtime.artifacts.list({
       resourceId: requestUrl.searchParams.get("resourceId") || undefined,
       eventKind: requestUrl.searchParams.get("eventKind") || undefined
     })));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/artifacts/lifecycle`) {
-    respond(response, context, Promise.resolve(context.artifacts.lifecycleContract()));
+    respond(response, context, Promise.resolve(context.runtime.artifacts.lifecycleContract()));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/artifacts/`) && requestUrl.pathname.endsWith("/content")) {
     const encoded = requestUrl.pathname.slice(`${root}/artifacts/`.length, -"/content".length);
     try {
-      context.artifactAccess.stream(request, response, decodeURIComponent(encoded));
+      context.runtime.artifactAccess.stream(request, response, decodeURIComponent(encoded));
     } catch (error) {
       const presented = presentedError(error);
       context.jsonResponse(response, presented.status, { code: -1, error: { code: presented.code, message: presented.message } });
@@ -101,13 +138,14 @@ export function handleXiaomiHomeManagerApi(
   }
   if (request.method === "GET" && requestUrl.pathname.startsWith(`${root}/artifacts/`)) {
     const artifactId = decodeURIComponent(requestUrl.pathname.slice(`${root}/artifacts/`.length));
-    const artifact = context.artifacts.get(artifactId);
+    const artifact = context.runtime.artifacts.get(artifactId);
     if (!artifact) context.jsonResponse(response, 404, { code: -1, error: { code: "xiaomi_home_artifact_not_found", message: "Artifact was not found." } });
     else context.jsonResponse(response, 200, { code: 0, data: artifact });
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === `${root}/artifacts`) {
-    respond(response, context, context.readJsonBody<XiaomiHomeArtifactInput>(request).then(body => context.artifacts.register(body)), 201);
+    if (!requireLifecycleFence(request, response, context)) return true;
+    respond(response, context, context.readJsonBody<XiaomiHomeArtifactInput>(request).then(body => context.runtime.artifacts.register(body)), 201);
     return true;
   }
   context.jsonResponse(response, 404, { code: -1, error: { code: "xiaomi_home_route_not_found", message: "Xiaomi Home API route was not found." } });

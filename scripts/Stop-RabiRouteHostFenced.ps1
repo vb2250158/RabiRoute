@@ -5,6 +5,31 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-HostQuitFence([object]$Status) {
+    $state = ([string]$Status.state).Trim().ToLowerInvariant()
+    $applicationGeneration = ([string]$Status.applicationGenerationId).Trim()
+
+    if ($state -in @("healthy", "degraded")) {
+        if ([string]::IsNullOrWhiteSpace($applicationGeneration)) {
+            throw "Host state '$state' omitted applicationGenerationId; refusing fenced quit."
+        }
+        return [pscustomobject]@{ generationId = $applicationGeneration; source = "applicationGenerationId" }
+    }
+
+    if ($state -eq "faulted") {
+        if (-not [string]::IsNullOrWhiteSpace($applicationGeneration)) {
+            return [pscustomobject]@{ generationId = $applicationGeneration; source = "applicationGenerationId" }
+        }
+        $controlFence = ([string]$Status.controlFenceGenerationId).Trim()
+        if ([string]::IsNullOrWhiteSpace($controlFence)) {
+            throw "Faulted Host status omitted controlFenceGenerationId; refusing fenced quit."
+        }
+        return [pscustomobject]@{ generationId = $controlFence; source = "controlFenceGenerationId" }
+    }
+
+    throw "Unsupported Host state '$state'; refusing fenced quit."
+}
+
 function Invoke-HostJson([string]$HostPath, [string[]]$Arguments, [string]$Work) {
     [IO.Directory]::CreateDirectory($Work) | Out-Null
     $id = [guid]::NewGuid().ToString("N")
@@ -36,10 +61,10 @@ if ([string]$status.state -eq "stopped") {
     [pscustomobject]@{ ok = $true; state = "stopped" } | ConvertTo-Json -Compress
     exit 0
 }
-$generation = [string]$status.applicationGenerationId
-if ([string]::IsNullOrWhiteSpace($generation)) { throw "Running Host status omitted applicationGenerationId; refusing unfenced quit." }
+$fence = Resolve-HostQuitFence $status
+$generation = [string]$fence.generationId
 $quit = Invoke-HostJson $hostPath @("--command", "quit", "--application-generation-id", $generation, "--json") $WorkingRoot
 if ([string]$quit.state -ne "stopped") { throw "Fenced quit did not reach state=stopped." }
 $after = Invoke-HostJson $hostPath @("--command", "status", "--json") $WorkingRoot
 if ([string]$after.state -ne "stopped") { throw "Host remained active after fenced quit." }
-[pscustomobject]@{ ok = $true; state = "stopped"; applicationGenerationId = $generation } | ConvertTo-Json -Compress
+[pscustomobject]@{ ok = $true; state = "stopped"; applicationGenerationId = $generation; fenceSource = [string]$fence.source } | ConvertTo-Json -Compress

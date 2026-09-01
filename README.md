@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.2.2" src="https://img.shields.io/badge/version-0.2.2-3178c6">
+  <img alt="Current version: 0.2.3" src="https://img.shields.io/badge/version-0.2.3-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -69,7 +69,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.2.2`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.2.3`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -88,22 +88,20 @@ See [Current capabilities and maturity](docs/current-capabilities_en.md) for com
 
 ## Recent changes
 
-### 0.2.1: plan loading and local-runtime improvements
+### 0.2.3: durable Manager state and client recovery
 
-- Each plan now has its own directory for content, history, feedback, and attachments; archiving moves the complete directory.
-- Plan and memory pages load visible content first and request later pages on demand, reducing startup delay and Manager disk work.
-- Large RabiSpeech reads, performance aggregation, and persona-sync index recovery moved away from the Manager request path.
-- Windows screenshots gained resizable selections, rectangles, arrows, editable text, colors, and undo.
+- Plan, memory, feedback, and route-catalog mutations now use revision checks, stable idempotency keys, generation fences, worker ownership, and recoverable receipts instead of direct parent-process writes.
+- Plan startup recovery publishes a complete canonical package before retiring legacy files. Storage leases and durable-delivery ownership stay alive during long work and fail closed if ownership changes.
+- RibiWebGUI, the Windows tray, Android SDK, RabiLink AIUI, and Xiaomi Home settings now keep explicit revisions and recover from Manager generation or endpoint changes without silently replaying a mutation.
+- Persona synchronization moves manifest and package inspection off the Manager request path, preserves canonical plan-package identity, and rejects stale or conflicting evidence.
+- Windows developer candidates, transactional install/apply scripts, Host fencing, and release manifests now share the same local-runtime ownership rules; source remains separate from installed state.
 
-### Unreleased: delivery, plugin, and WebGUI recovery
+### 0.2.2: single Windows lifecycle and plugin runtime v2
 
-- Windows now has one lifecycle trunk: RabiRoute Host is the only application owner, Manager and the tray are same-generation children, and terminating either child causes a bounded whole-generation rebuild. The tray cannot start, repair, or outlive Manager on its own.
-- Manager asks the operating system for an unused loopback port. Host publishes the current endpoint through its authenticated local control channel and starts the tray only after Manager reports the matching application generation and Manager instance.
-- Codex Desktop delivery now waits for a recorded `deliveryId`; an IPC acceptance without a target-task receipt is retried or reported as a failure.
-- Visible Codex task names now come from the index shared with the Desktop sidebar, while task ID and workspace remain the delivery identity.
-- Manager plugins use schema/profile v2. Each entry declares `in_process`, `isolated`, or `declarative` execution; Profiles declare `readyRequires`; process leases and the dependency graph make shutdown release consumers before providers.
-- Web Bundles use immutable revision URLs, keeping each page, script, stylesheet, and font on the same revision. The browser replaces only the changed module after catalog updates.
-- RibiWebGUI displays its fixed shell before loading the plugin catalog and knowledge content. Expired message-board records discard bodies and attachments while keeping time-limited replay hashes.
+- RabiRoute Host became the only Windows application owner. Manager and tray run as same-generation children on an operating-system-assigned port and are discovered through authenticated Host state plus `/meta` identity.
+- Manager plugins moved to schema/profile v2 with explicit execution modes, readiness dependencies, generation replacement, process leases, and immutable Web Bundle revisions.
+- Codex Desktop delivery gained recorded `deliveryId` confirmation, controlled task replacement, and sidebar-index display names; RibiWebGUI gained bounded first-screen reads and recoverable catalog loading.
+- Desktop-pet, YeYu Gamer, wearable, Xiaomi Home, mobile voice, and LAN Agent integrations moved behind explicit plugin, device, and acceptance boundaries.
 
 See the [version changelog](版本更新日志_en.md) for individual changes and migration notes.
 

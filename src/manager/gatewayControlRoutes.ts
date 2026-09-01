@@ -33,15 +33,29 @@ export type GatewayControlRoutesContext = {
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   redirectResponse: (response: http.ServerResponse, statusCode: number, location: string) => void;
   gatewayPayload: (options?: GatewayPayloadOptions) => Record<string, unknown>;
-  writeConfig: (config: GatewayConfigFile) => unknown;
-  loadRuntimes: () => void;
+  writeConfig: (
+    config: GatewayConfigFile,
+    expectedContentHash: string | undefined,
+    operationId: string
+  ) => Promise<GatewayConfigFile>;
+  loadRuntimes: () => Promise<void>;
   syncRunningGateways: () => void;
   runtimeStatuses: () => unknown[];
   networkOptionsPayload: () => Record<string, unknown>;
   startGateway: (id: string) => void;
   stopGateway: (id: string) => void;
   restartGateway: (id: string) => void;
-  removeGatewayConfig: (id: string) => void;
+  removeGatewayConfig: (
+    id: string,
+    expectedContentHash: string | undefined,
+    operationId: string
+  ) => Promise<void>;
+  routeCatalogVersion: () => Readonly<{
+    contentHash: string;
+    routeConfigHash: string;
+    presentationHash: string;
+    revision: number;
+  }>;
   weixinLoginTarget: (id: string) => GatewayWeixinLoginTarget | undefined;
   requestWeixinLogin: (dataDir: string) => void;
   triggerManualRule: (id: string, request: GatewayManualTriggerRequest) => ManualTriggerLaunchResult;
@@ -53,6 +67,133 @@ export type GatewayControlRoutesContext = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errorStatus(error: unknown, fallback = 400): number {
+  const statusCode = Number((error as { statusCode?: unknown } | null)?.statusCode);
+  return Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599
+    ? statusCode
+    : fallback;
+}
+
+function errorCode(error: unknown): string {
+  return typeof (error as { code?: unknown } | null)?.code === "string"
+    ? String((error as { code: string }).code)
+    : "request_failed";
+}
+
+function publicRouteMutationError(error: unknown): Readonly<{
+  statusCode: number;
+  errorCode: string;
+  message: string;
+}> {
+  switch (errorCode(error)) {
+    case "ROUTE_CATALOG_REVISION_CONFLICT":
+    case "route_catalog_conflict":
+      return Object.freeze({
+        statusCode: 412,
+        errorCode: "route_catalog_conflict",
+        message: "Route catalog changed; refresh and retry this update."
+      });
+    case "ROUTE_CATALOG_IDEMPOTENCY_CONFLICT":
+      return Object.freeze({
+        statusCode: 409,
+        errorCode: "route_catalog_idempotency_conflict",
+        message: "Idempotency-Key was already used for a different route catalog update."
+      });
+    case "ROUTE_CATALOG_BUSY":
+      return Object.freeze({
+        statusCode: 503,
+        errorCode: "route_catalog_busy",
+        message: "Route catalog update queue is temporarily full."
+      });
+    case "ROUTE_CATALOG_TRANSACTION_FAILED":
+      return Object.freeze({
+        statusCode: 500,
+        errorCode: "route_catalog_transaction_failed",
+        message: "Route catalog update failed."
+      });
+    default:
+      return Object.freeze({
+        statusCode: errorStatus(error),
+        errorCode: errorCode(error),
+        message: errorMessage(error)
+      });
+  }
+}
+
+function expectedContentHash(
+  request: http.IncomingMessage,
+  _context: Pick<GatewayControlRoutesContext, "routeCatalogVersion">
+): string {
+  const header = Array.isArray(request.headers["if-match"])
+    ? request.headers["if-match"][0] ?? ""
+    : request.headers["if-match"] ?? "";
+  const raw = String(header).trim();
+  if (!raw) {
+    throw Object.assign(new Error("If-Match is required for route catalog mutations."), {
+      statusCode: 400,
+      code: "route_catalog_revision_required"
+    });
+  }
+  if (raw === "*" || /^W\//i.test(raw)) {
+    throw Object.assign(new Error("If-Match must contain the exact strong route catalog revision."), {
+      statusCode: 400,
+      code: "route_catalog_revision_invalid"
+    });
+  }
+  const value = raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+  if (!/^[a-f0-9]{64}$/i.test(value)) {
+    throw Object.assign(new Error("If-Match contains an invalid route catalog revision."), {
+      statusCode: 400,
+      code: "route_catalog_revision_invalid"
+    });
+  }
+  return value.toLowerCase();
+}
+
+function routeMutationOperationId(request: http.IncomingMessage): string {
+  const header = Array.isArray(request.headers["idempotency-key"])
+    ? request.headers["idempotency-key"][0] ?? ""
+    : request.headers["idempotency-key"] ?? "";
+  const operationId = String(header).trim();
+  if (!operationId) {
+    throw Object.assign(new Error("Idempotency-Key is required for route catalog mutations."), {
+      statusCode: 400,
+      code: "idempotency_key_required"
+    });
+  }
+  if (!/^[A-Za-z0-9:._-]{1,256}$/.test(operationId)) {
+    throw Object.assign(new Error("Idempotency-Key is invalid for a route catalog mutation."), {
+      statusCode: 400,
+      code: "idempotency_key_invalid"
+    });
+  }
+  return operationId;
+}
+
+function withRouteCatalogVersion(
+  context: Pick<GatewayControlRoutesContext, "routeCatalogVersion">,
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  return { ...payload, routeCatalog: context.routeCatalogVersion() };
+}
+
+function withRouteMutationReceipt(
+  context: Pick<GatewayControlRoutesContext, "routeCatalogVersion">,
+  operationId: string,
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  const routeCatalog = context.routeCatalogVersion();
+  return {
+    ...payload,
+    receipt: {
+      state: "committed",
+      operationId,
+      routeConfigHash: routeCatalog.routeConfigHash
+    },
+    routeCatalog
+  };
 }
 function runTrackedOperation<T>(
   context: Pick<GatewayControlRoutesContext, "trackOperation">,
@@ -66,6 +207,7 @@ function decodedGatewayId(encodedId: string): string {
 }
 
 function handleGatewayAction(
+  request: http.IncomingMessage,
   pathname: string,
   response: http.ServerResponse,
   context: GatewayControlRoutesContext
@@ -83,14 +225,37 @@ function handleGatewayAction(
     } else if (action === "restart") {
       context.restartGateway(id);
     } else {
-      context.removeGatewayConfig(id);
-      context.loadRuntimes();
-      context.syncRunningGateways();
-      context.jsonResponse(response, 200, context.gatewayPayload());
+      const operationId = routeMutationOperationId(request);
+      runTrackedOperation(context, context.removeGatewayConfig(
+        id,
+        expectedContentHash(request, context),
+        operationId
+      )
+        .then(() => {
+          context.syncRunningGateways();
+          context.jsonResponse(response, 200, withRouteMutationReceipt(context, operationId, context.gatewayPayload()));
+        })
+        .catch(error => {
+          const failure = publicRouteMutationError(error);
+          context.jsonResponse(response, failure.statusCode, {
+            code: -1,
+            errorCode: failure.errorCode,
+            message: failure.message
+          });
+        }));
       return true;
     }
   } catch (error) {
-    context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
+    if (action !== "delete") {
+      context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
+      return true;
+    }
+    const failure = publicRouteMutationError(error);
+    context.jsonResponse(response, failure.statusCode, {
+      code: -1,
+      errorCode: failure.errorCode,
+      message: failure.message
+    });
     return true;
   }
 
@@ -234,24 +399,34 @@ export function handleGatewayControlApi(
   context: GatewayControlRoutesContext
 ): boolean {
   if (request.method === "GET" && requestUrl.pathname === "/gateways") {
-    context.jsonResponse(response, 200, context.gatewayPayload({
+    context.jsonResponse(response, 200, withRouteCatalogVersion(context, context.gatewayPayload({
       includeDiagnostics: requestUrl.searchParams.get("summary") !== "1",
       includeConfigDefinitions: requestUrl.searchParams.get("summary") !== "1"
         || requestUrl.searchParams.get("includeConfig") === "1"
-    }));
+    })));
     return true;
   }
 
   if (request.method === "POST" && requestUrl.pathname === "/gateways") {
+    let operationId = "";
     runTrackedOperation(context, context.readJsonBody<GatewayConfigFile>(request)
-      .then((body) => {
-        context.writeConfig(body);
-        context.loadRuntimes();
+      .then(async (body) => {
+        operationId = routeMutationOperationId(request);
+        await context.writeConfig(
+          body,
+          expectedContentHash(request, context),
+          operationId
+        );
         context.syncRunningGateways();
-        context.jsonResponse(response, 200, context.gatewayPayload());
+        context.jsonResponse(response, 200, withRouteMutationReceipt(context, operationId, context.gatewayPayload()));
       })
       .catch((error) => {
-        context.jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
+        const failure = publicRouteMutationError(error);
+        context.jsonResponse(response, failure.statusCode, {
+          code: -1,
+          errorCode: failure.errorCode,
+          message: failure.message
+        });
       }));
     return true;
   }
@@ -261,20 +436,29 @@ export function handleGatewayControlApi(
     return true;
   }
 
-  if (request.method === "POST" && handleGatewayAction(requestUrl.pathname, response, context)) return true;
+  if (request.method === "POST" && handleGatewayAction(request, requestUrl.pathname, response, context)) return true;
   if (request.method === "POST" && handleWeixinLogin(requestUrl.pathname, response, context)) return true;
   if (request.method === "POST" && handleManualTrigger(request, requestUrl.pathname, response, context)) return true;
   if (request.method === "POST" && handleAgentDeliveryTest(request, requestUrl.pathname, response, context)) return true;
   if (handleDeliveryReplay(request, requestUrl, response, context)) return true;
 
   if (request.method === "POST" && requestUrl.pathname === "/reload") {
-    context.loadRuntimes();
-    context.syncRunningGateways();
-    if (request.headers.accept?.includes("application/json")) {
-      context.jsonResponse(response, 200, { ok: true, gateways: context.runtimeStatuses() });
-    } else {
-      context.redirectResponse(response, 303, "/");
-    }
+    runTrackedOperation(context, context.loadRuntimes()
+      .then(() => {
+        context.syncRunningGateways();
+        if (request.headers.accept?.includes("application/json")) {
+          context.jsonResponse(response, 200, {
+            ok: true,
+            gateways: context.runtimeStatuses(),
+            routeCatalog: context.routeCatalogVersion()
+          });
+        } else {
+          context.redirectResponse(response, 303, "/");
+        }
+      })
+      .catch(error => {
+        context.jsonResponse(response, errorStatus(error, 503), { code: -1, message: errorMessage(error) });
+      }));
     return true;
   }
 

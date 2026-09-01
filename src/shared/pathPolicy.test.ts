@@ -6,10 +6,31 @@ import test from "node:test";
 import {
   assertExistingPathWithinRoots,
   assertPathWithinRoot,
+  isUncPath,
   isPathWithinRoot,
   normalizePathForComparison,
+  requiresWorkerFilesystemAccess,
   resolveRelativePathWithinRoot
 } from "./pathPolicy.js";
+
+test("UNC detection is lexical and never needs a filesystem probe", () => {
+  assert.equal(isUncPath("\\\\example-host\\example-share\\project"), true);
+  assert.equal(isUncPath("//example-host/example-share/project"), true);
+  assert.equal(isUncPath("\\\\?\\UNC\\example-host\\example-share\\project"), true);
+  assert.equal(isUncPath("\\\\?\\C:\\ExampleApp"), false);
+  assert.equal(isUncPath("G:\\ExampleApp"), false);
+  assert.equal(isUncPath("/var/lib/rabiroute"), false);
+});
+
+test("worker filesystem access only trusts the configured Windows system drive", () => {
+  assert.equal(requiresWorkerFilesystemAccess("\\\\example-host\\example-share\\project", "C:"), true);
+  assert.equal(requiresWorkerFilesystemAccess("C:\\ExampleApp\\data", "C:"), false);
+  assert.equal(requiresWorkerFilesystemAccess("\\\\?\\C:\\ExampleApp\\data", "C:"), false);
+  assert.equal(requiresWorkerFilesystemAccess("G:\\ExampleApp\\data", "C:"), true);
+  assert.equal(requiresWorkerFilesystemAccess("Z:/ExampleShare/Project", "C:"), true);
+  assert.equal(requiresWorkerFilesystemAccess("C:\\ExampleApp\\data", ""), true);
+  assert.equal(requiresWorkerFilesystemAccess("/var/lib/rabiroute", "C:"), false);
+});
 
 test("path comparison treats Windows extended paths as the same workspace", (t) => {
   if (process.platform !== "win32") {

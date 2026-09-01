@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readRolePanelTimeline } from "../rolePanelTimeline.js";
+import { appendRolePanelTimelineMessageIfAbsent, readRolePanelTimeline } from "../rolePanelTimeline.js";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
 import { deliverRolePanelMessage, RolePanelDeliveryError } from "./rolePanelDelivery.js";
@@ -37,7 +37,6 @@ test("role-panel delivery records sent only after the handler accepts it", async
   const result = await deliverRolePanelMessage({
     runtime: runtime(),
     roleId: "Builder",
-    roleDir,
     sender: "拉比",
     text: "请检查构建。",
     attachments: [],
@@ -45,7 +44,8 @@ test("role-panel delivery records sent only after the handler accepts it", async
     replyContext: { crossPersona: true },
     deliver: async () => {
       assert.equal(readRolePanelTimeline(roleDir).length, 0);
-    }
+    },
+    appendTimeline: async (_roleId, message) => appendRolePanelTimelineMessageIfAbsent(roleDir, message)
   });
   assert.equal(result.status, "delivered");
   assert.equal(readRolePanelTimeline(roleDir)[0].status, "sent");
@@ -57,7 +57,6 @@ test("role-panel delivery records failed and never leaves a false sent row", asy
   await assert.rejects(() => deliverRolePanelMessage({
     runtime: runtime(),
     roleId: "Builder",
-    roleDir,
     sender: "本地用户",
     text: "失败路径",
     attachments: [],
@@ -65,7 +64,8 @@ test("role-panel delivery records failed and never leaves a false sent row", asy
     deliver: async () => {
       assert.equal(readRolePanelTimeline(roleDir).length, 0);
       throw new Error("Desktop owner unavailable");
-    }
+    },
+    appendTimeline: async (_roleId, message) => appendRolePanelTimelineMessageIfAbsent(roleDir, message)
   }), (error: unknown) => error instanceof RolePanelDeliveryError && error.statusCode === 502);
   const timeline = readRolePanelTimeline(roleDir);
   assert.equal(timeline.length, 1);

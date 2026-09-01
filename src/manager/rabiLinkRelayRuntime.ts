@@ -1,3 +1,5 @@
+import { PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY } from "../personaSyncPlanPackage.js";
+
 type RelayProxyRequest = {
   id?: string;
   method?: string;
@@ -363,7 +365,7 @@ function appendPeerUrls(params: URLSearchParams, config: RabiLinkRelayRuntimeCon
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["webgui", "persona-sync", config.speechProxyEnabled ? "speech" : ""]
+  return ["webgui", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -408,10 +410,17 @@ function isLoopbackUrl(value: string): boolean {
   }
 }
 
-function compactResponse(method: string, localPath: string, statusCode: number, body: Buffer): Buffer {
+function compactResponse(
+  method: string,
+  localPath: string,
+  statusCode: number,
+  body: Buffer,
+  requestHeaders: Record<string, string>
+): Buffer {
   if (!["POST", "PATCH", "PUT", "DELETE"].includes(method.toUpperCase())) return body;
   if (!localPath.startsWith("/gateways") && !localPath.startsWith("/manager-config")) return body;
   if (statusCode < 200 || statusCode >= 300) return body;
+  if (requestHeaders["idempotency-key"] || requestHeaders["if-match"]) return body;
   return Buffer.from(JSON.stringify({ code: 0, ok: true }), "utf8");
 }
 
@@ -443,7 +452,9 @@ async function proxyWebguiRequest(
     const headers: Record<string, string> = {};
     for (const [key, value] of Object.entries(request.headers || {})) {
       const lower = key.toLowerCase();
-      if (["accept", "content-type", "user-agent", "range", "if-range"].includes(lower)) headers[lower] = String(value || "");
+      if (["accept", "content-type", "user-agent", "range", "if-range", "idempotency-key", "if-match"].includes(lower)) {
+        headers[lower] = String(value || "");
+      }
     }
     if (isWebguiEventStreamProxy(localPath, headers)) {
       throw new Error("SSE event streams must use the Relay event channel instead of the finite WebGUI response proxy.");
@@ -484,7 +495,7 @@ async function proxyWebguiRequest(
     }
     const rawBody = Buffer.from(await response.arrayBuffer());
     if (signal.aborted) return;
-    const responseBody = compactResponse(method, localPath, response.status, rawBody);
+    const responseBody = compactResponse(method, localPath, response.status, rawBody, headers);
     const responseHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       responseHeaders[key] = value;

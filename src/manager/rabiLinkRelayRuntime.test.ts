@@ -185,7 +185,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceGuid: "guid-a",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "webgui,persona-sync",
+    capabilities: "webgui,persona-sync,persona-sync-plan-package-v1",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
   assert.equal(finishedBody?.deviceId, "pc-a");
@@ -620,7 +620,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "webgui,persona-sync,speech");
+  assert.equal(declaredCapabilities, "webgui,persona-sync,persona-sync-plan-package-v1,speech");
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);
@@ -1010,6 +1010,114 @@ test("stop cancels a pending channel retry without cross-generation relaunch", a
   await new Promise(resolve => setTimeout(resolve, 250));
   assert.equal(claimCount, 1);
   assert.equal(runtime.status().state, "disabled");
+});
+
+test("global Relay runtime preserves route mutation fencing and committed receipts", async (t) => {
+  const operationId = "relay-runtime-route-mutation-1";
+  const expectedContentHash = "a".repeat(64);
+  const committedContentHash = "b".repeat(64);
+  const localState: Record<string, unknown> = {};
+  const localWebgui = http.createServer((request, response) => {
+    if (request.method !== "POST" || request.url !== "/gateways") {
+      response.writeHead(404).end();
+      return;
+    }
+    localState.operationId = request.headers["idempotency-key"];
+    localState.expectedContentHash = request.headers["if-match"];
+    localState.privateDiagnostic = request.headers["x-private-diagnostic"];
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      localState.body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "idempotency-key": operationId,
+        etag: `"${committedContentHash}"`
+      });
+      response.end(JSON.stringify({
+        code: 0,
+        receipt: { state: "committed", operationId, routeConfigHash: committedContentHash },
+        routeCatalog: { contentHash: committedContentHash, routeConfigHash: committedContentHash, revision: 2 }
+      }));
+    });
+  });
+  const localPort = await listen(localWebgui);
+  t.after(() => close(localWebgui));
+
+  let claims = 0;
+  const relayState: { finishedBody?: Record<string, unknown> } = {};
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/api/rabilink/events") {
+      openRelayEvents(response);
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/worker/webgui-requests") {
+      claims += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        ok: true,
+        requests: claims === 1 ? [{
+          id: "request-route-mutation",
+          method: "POST",
+          path: "/gateways",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": operationId,
+            "if-match": expectedContentHash,
+            "x-private-diagnostic": "must-not-forward"
+          },
+          bodyBase64: Buffer.from(JSON.stringify({ gateways: [] }), "utf8").toString("base64")
+        }] : []
+      }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/worker/webgui-requests/request-route-mutation/response") {
+      const chunks: Buffer[] = [];
+      request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        relayState.finishedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+
+  const runtime = new RabiLinkRelayRuntime();
+  t.after(() => runtime.stop());
+  runtime.sync({
+    enabled: true,
+    url: `http://127.0.0.1:${relayPort}`,
+    token: "app-token",
+    deviceId: "pc-a",
+    deviceGuid: "guid-a",
+    deviceName: "Test PC",
+    claimWaitMs: 60_000,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`,
+    speechProxyEnabled: false,
+    localSpeechUrl: "http://127.0.0.1:8781"
+  });
+
+  await waitForRelayRuntime(
+    runtime,
+    "route mutation proxy completion",
+    () => relayState.finishedBody !== undefined,
+    () => ({ claims, localState, finished: Boolean(relayState.finishedBody) })
+  );
+  assert.equal(localState.operationId, operationId);
+  assert.equal(localState.expectedContentHash, expectedContentHash);
+  assert.deepEqual(localState.body, { gateways: [] });
+  const finished = relayState.finishedBody!;
+  const responseBody = JSON.parse(Buffer.from(String(finished.bodyBase64), "base64").toString("utf8"));
+  assert.equal(responseBody.receipt.operationId, operationId, "route mutations must not be compacted into a receipt-less success body");
+  assert.equal((finished.headers as Record<string, string>)["idempotency-key"], operationId);
+  assert.equal((finished.headers as Record<string, string>).etag, `"${committedContentHash}"`);
+  assert.equal(localState.privateDiagnostic, undefined);
+  await runtime.stop();
 });
 
 test("duplicate Relay availability events keep a single WebGUI drain flight", async (t) => {

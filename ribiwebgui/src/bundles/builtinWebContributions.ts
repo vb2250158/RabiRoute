@@ -150,4 +150,12 @@ export function activateDesktop(api: BaseWebBundleApi): readonly Dispose[] {
   })];
 }
 
+export function activateXiaomiHome(api: BaseWebBundleApi): readonly Dispose[] {
+  return [api.registerSettingsRenderer({
+    rendererId: "builtin.xiaomi-home-settings.v1", placementId: "global.settings.sections", allowedSlots: ["xiaomi-home"],
+    schemaId: "xiaomi-home.settings.v1", readCommandId: "manager.xiaomi-home-settings.read", writeCommandId: "manager.xiaomi-home-settings.write",
+    loader: () => import("../components/renderers/XiaomiHomeSettingsRenderer.vue")
+  })];
+}
+
 

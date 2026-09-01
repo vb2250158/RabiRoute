@@ -32,8 +32,14 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 class RabiRouteSdkProbeActivity : Activity() {
+    private data class PendingAgentBindingOperation(
+        val signature: String,
+        val operationId: String
+    )
+
     private val sdk = RabiRouteSdk()
     private val report = StringBuilder()
     private val discoveredManagers = mutableListOf<RabiInstance>()
@@ -41,6 +47,9 @@ class RabiRouteSdkProbeActivity : Activity() {
     private val cwdOptionValues = mutableListOf("")
     private val threadOptionValues = mutableListOf("")
     private var selectedInstance: RabiInstance? = null
+    @Volatile private var routeCatalogContentHash = ""
+    private val bindingOperationLock = Any()
+    private var pendingAgentBindingOperation: PendingAgentBindingOperation? = null
     private lateinit var dashboardView: TextView
     private lateinit var output: TextView
     private lateinit var advancedPanel: View
@@ -415,6 +424,8 @@ class RabiRouteSdkProbeActivity : Activity() {
 
     private fun selectManager(instance: RabiInstance) {
         selectedInstance = instance
+        routeCatalogContentHash = ""
+        synchronized(bindingOperationLock) { pendingAgentBindingOperation = null }
         baseUrlInput.setText(instance.baseUrl)
         callbackUrlInput.setText("http://${instance.host}:8794/rabilink")
         updateRoutes(emptyList())
@@ -619,7 +630,8 @@ class RabiRouteSdkProbeActivity : Activity() {
             val instance = sdk.readIdentity(baseUrl)
             saveProbeStatus("full-probe:identity guid=${instance.guid} name=${instance.name}")
             runOnUiThread { addOrSelectManager(instance) }
-            val routes = sdk.getRoutes(instance)
+            val routes = sdk.getRouteCatalog(instance)
+            routeCatalogContentHash = routes.routeCatalog.routeConfigHash.ifBlank { routes.contentHash }
             saveProbeStatus("full-probe:routes count=${routes.size}")
             val firstRoute = routes.firstOrNull()
             val options = firstRoute?.let { sdk.getAgentOptions(instance, it.id) }
@@ -715,7 +727,8 @@ class RabiRouteSdkProbeActivity : Activity() {
         val selectedRouteBefore = selectedRouteId()
         append("正在读取路由...")
         runAsync {
-            val routes = sdk.getRoutes(instance)
+            val routes = sdk.getRouteCatalog(instance)
+            routeCatalogContentHash = routes.routeCatalog.routeConfigHash.ifBlank { routes.contentHash }
             val route = routes.firstOrNull { it.id == selectedRouteBefore } ?: routes.firstOrNull()
             val options = route?.let { sdk.getAgentOptions(instance, it.id) }
             runOnUiThread {
@@ -743,8 +756,18 @@ class RabiRouteSdkProbeActivity : Activity() {
         if (routeId.isBlank()) return append("请先读取路由，并在 Route 下拉框里选择一条。")
         val codexCwd = selectedCwd()
         val codexThreadName = selectedThreadName()
+        val expectedContentHash = routeCatalogContentHash
+        if (!Regex("^[a-f0-9]{64}$").matches(expectedContentHash)) {
+            return append("当前 Route catalog 没有可写的强版本；请先重新读取路由。")
+        }
         append("正在设置 $routeId ...")
         runAsync {
+            val operation = bindingOperation(
+                routeId = routeId,
+                expectedContentHash = expectedContentHash,
+                codexCwd = codexCwd,
+                codexThreadName = codexThreadName
+            )
             val result = sdk.setAgentBinding(
                 instance,
                 routeId,
@@ -752,10 +775,34 @@ class RabiRouteSdkProbeActivity : Activity() {
                     agentAdapter = "codex",
                     codexCwd = codexCwd,
                     codexThreadName = codexThreadName
-                )
+                ),
+                operationId = operation.operationId,
+                expectedContentHash = expectedContentHash
             )
+            val refreshedRoutes = sdk.getRouteCatalog(instance)
+            routeCatalogContentHash = refreshedRoutes.routeCatalog.routeConfigHash.ifBlank { refreshedRoutes.contentHash }
+            synchronized(bindingOperationLock) {
+                if (pendingAgentBindingOperation?.operationId == operation.operationId) {
+                    pendingAgentBindingOperation = null
+                }
+            }
+            runOnUiThread { updateRoutes(refreshedRoutes, routeId) }
             "设置完成：\n${result.toString(2)}"
         }
+    }
+
+    private fun bindingOperation(
+        routeId: String,
+        expectedContentHash: String,
+        codexCwd: String,
+        codexThreadName: String
+    ): PendingAgentBindingOperation = synchronized(bindingOperationLock) {
+        val signature = listOf(routeId, expectedContentHash, codexCwd, codexThreadName).joinToString("\u0000")
+        pendingAgentBindingOperation?.takeIf { it.signature == signature }
+            ?: PendingAgentBindingOperation(
+                signature = signature,
+                operationId = "rabilink-probe-binding-${UUID.randomUUID()}"
+            ).also { pendingAgentBindingOperation = it }
     }
 
     private fun runAsync(action: () -> String) {

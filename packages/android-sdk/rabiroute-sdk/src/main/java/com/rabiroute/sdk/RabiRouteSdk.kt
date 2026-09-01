@@ -137,6 +137,30 @@ data class RabiRouteInfo(
     val rawJson: JSONObject
 )
 
+data class RabiRouteCatalogRevision(
+    val contentHash: String,
+    val routeConfigHash: String,
+    val presentationHash: String,
+    val revision: Long,
+    val rawJson: JSONObject
+) {
+    val isStrong: Boolean
+        get() = CONTENT_HASH_PATTERN.matches(contentHash)
+
+    private companion object {
+        val CONTENT_HASH_PATTERN = Regex("^[a-f0-9]{64}$")
+    }
+}
+
+class RabiRouteCatalogResult(
+    val routes: List<RabiRouteInfo>,
+    val routeCatalog: RabiRouteCatalogRevision,
+    val rawJson: JSONObject
+) : List<RabiRouteInfo> by routes {
+    val contentHash: String
+        get() = routeCatalog.contentHash
+}
+
 data class RabiAgentBinding(
     val agentAdapter: String? = null,
     val codexCwd: String? = null,
@@ -294,29 +318,12 @@ class RabiRouteSdk @JvmOverloads constructor(
         return RabiRouteDiscoveryContract.managerBaseUrl(parsed.host, port)
     }
 
-    fun getRoutes(instance: RabiInstance): List<RabiRouteInfo> {
+    fun getRoutes(instance: RabiInstance): List<RabiRouteInfo> =
+        getRouteCatalog(instance).routes
+
+    fun getRouteCatalog(instance: RabiInstance): RabiRouteCatalogResult {
         val url = "${instance.baseUrl}/api/rabi/instances/${encodePath(instance.guid)}/routes"
-        val routes = getManagerJson(instance, url).getJSONObject("data").getJSONArray("routes")
-        return (0 until routes.length()).map { index ->
-            val item = routes.getJSONObject(index)
-            RabiRouteInfo(
-                id = item.optString("id"),
-                name = item.optString("name"),
-                configName = item.optString("configName"),
-                routeName = item.optString("routeName"),
-                enabled = item.optBoolean("enabled"),
-                running = item.optBoolean("running"),
-                agentRoleId = item.optString("agentRoleId"),
-                personaDisplayName = item.optString("personaDisplayName"),
-                messageAdapters = item.optJSONArray("messageAdapters").toStringList(),
-                agentAdapters = item.optJSONArray("agentAdapters").toStringList(),
-                codexCwd = item.optString("codexCwd"),
-                codexThreadName = item.optString("codexThreadName"),
-                avatarConfigured = item.optBoolean("avatarConfigured"),
-                avatarVersion = item.optString("avatarVersion"),
-                rawJson = item
-            )
-        }
+        return routeCatalogResult(getManagerJson(instance, url))
     }
 
     fun getAgentOptions(instance: RabiInstance, routeId: String): JSONObject {
@@ -324,10 +331,33 @@ class RabiRouteSdk @JvmOverloads constructor(
         return getManagerJson(instance, url).getJSONObject("data")
     }
 
-    fun setAgentBinding(instance: RabiInstance, routeId: String, binding: RabiAgentBinding): JSONObject {
+    fun setAgentBinding(
+        instance: RabiInstance,
+        routeId: String,
+        binding: RabiAgentBinding,
+        operationId: String,
+        expectedContentHash: String
+    ): JSONObject {
         val url = "${instance.baseUrl}/api/rabi/instances/${encodePath(instance.guid)}/routes/${encodePath(routeId)}/agent-binding"
-        return requestManagerJson(instance, url, "PATCH", binding.toJson().toString()).getJSONObject("data")
+        val response = requestManagerJson(
+            instance,
+            url,
+            "PATCH",
+            binding.toJson().toString(),
+            routeMutationHeaders(operationId, expectedContentHash)
+        )
+        requireCommittedMutationReceipt(response, operationId)
+        return response.getJSONObject("data")
     }
+
+    @Deprecated(
+        message = "Legacy route mutation is disabled: a verified lifecycle lease, caller-owned operationId, and current strong route catalog content hash are required."
+    )
+    fun setAgentBinding(
+        instance: RabiInstance,
+        routeId: String,
+        binding: RabiAgentBinding
+    ): JSONObject = throw UnsupportedOperationException(LEGACY_ROUTE_MUTATION_MESSAGE)
 
     fun deliverRabiLinkMessage(callbackUrl: String, text: String, routeId: String? = null): RabiLinkDeliveryResult {
         val trimmed = callbackUrl.trimEnd('/')
@@ -590,7 +620,14 @@ class RabiRouteSdk @JvmOverloads constructor(
         return mobileStateFromJson(json)
     }
 
-    fun getMobileRoutes(relayBaseUrl: String, token: String, targetDeviceId: String = ""): List<RabiRouteInfo> {
+    fun getMobileRoutes(relayBaseUrl: String, token: String, targetDeviceId: String = ""): List<RabiRouteInfo> =
+        getMobileRouteCatalog(relayBaseUrl, token, targetDeviceId).routes
+
+    fun getMobileRouteCatalog(
+        relayBaseUrl: String,
+        token: String,
+        targetDeviceId: String = ""
+    ): RabiRouteCatalogResult {
         val target = targetQuery(targetDeviceId)
         val profiles = if (target.isBlank()) "?includeProfiles=true" else "$target&includeProfiles=true"
         val json = requestJson(
@@ -600,8 +637,7 @@ class RabiRouteSdk @JvmOverloads constructor(
             mapOf("X-RabiLink-Token" to token),
             readTimeoutMs = 45000
         )
-        val routes = json.getJSONObject("data").getJSONArray("routes")
-        return (0 until routes.length()).map { index -> routeInfoFromJson(routes.getJSONObject(index)) }
+        return routeCatalogResult(json)
     }
 
     fun getMobileAgentOptions(relayBaseUrl: String, token: String, routeId: String, targetDeviceId: String = ""): JSONObject {
@@ -615,16 +651,37 @@ class RabiRouteSdk @JvmOverloads constructor(
         ).getJSONObject("data")
     }
 
-    fun setMobileAgentBinding(relayBaseUrl: String, token: String, routeId: String, binding: RabiAgentBinding, targetDeviceId: String = ""): JSONObject {
+    fun setMobileAgentBinding(
+        relayBaseUrl: String,
+        token: String,
+        routeId: String,
+        binding: RabiAgentBinding,
+        operationId: String,
+        expectedContentHash: String,
+        targetDeviceId: String = ""
+    ): JSONObject {
         val target = targetQuery(targetDeviceId)
-        return requestJson(
+        val response = requestJson(
             "${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/routes/${encodePath(routeId)}/agent-binding$target",
             "PATCH",
             binding.toJson().toString(),
-            mapOf("X-RabiLink-Token" to token),
+            mapOf("X-RabiLink-Token" to token) + routeMutationHeaders(operationId, expectedContentHash),
             readTimeoutMs = 45000
-        ).getJSONObject("data")
+        )
+        requireCommittedMutationReceipt(response, operationId)
+        return response.getJSONObject("data")
     }
+
+    @Deprecated(
+        message = "Legacy route mutation is disabled: a verified lifecycle lease, caller-owned operationId, and current strong route catalog content hash are required."
+    )
+    fun setMobileAgentBinding(
+        relayBaseUrl: String,
+        token: String,
+        routeId: String,
+        binding: RabiAgentBinding,
+        targetDeviceId: String = ""
+    ): JSONObject = throw UnsupportedOperationException(LEGACY_ROUTE_MUTATION_MESSAGE)
 
     private fun managerLifecycleHeaders(instance: RabiInstance): Map<String, String> {
         require(instance.applicationGenerationId.isNotBlank() && instance.managerInstanceId.isNotBlank()) {
@@ -639,8 +696,82 @@ class RabiRouteSdk @JvmOverloads constructor(
     private fun getManagerJson(instance: RabiInstance, url: String): JSONObject =
         requestJson(url, "GET", null, managerLifecycleHeaders(instance))
 
-    private fun requestManagerJson(instance: RabiInstance, url: String, method: String, body: String?): JSONObject =
-        requestJson(url, method, body, managerLifecycleHeaders(instance))
+    private fun requestManagerJson(
+        instance: RabiInstance,
+        url: String,
+        method: String,
+        body: String?,
+        headers: Map<String, String> = emptyMap()
+    ): JSONObject = requestJson(url, method, body, managerLifecycleHeaders(instance) + headers)
+
+    private fun routeCatalogResult(json: JSONObject): RabiRouteCatalogResult {
+        val data = json.optJSONObject("data") ?: JSONObject()
+        val items = data.optJSONArray("routes") ?: json.optJSONArray("routes") ?: JSONArray()
+        val routes = (0 until items.length()).mapNotNull { index ->
+            items.optJSONObject(index)?.let { routeInfoFromJson(it) }
+        }
+        val catalog = json.optJSONObject("routeCatalog")
+            ?: data.optJSONObject("routeCatalog")
+            ?: JSONObject()
+        val contentHash = catalog.optString("contentHash").trim().lowercase()
+        val routeConfigHash = catalog.optString("routeConfigHash", contentHash).trim().lowercase()
+        val presentationHash = catalog.optString("presentationHash").trim().lowercase()
+        return RabiRouteCatalogResult(
+            routes = routes,
+            routeCatalog = RabiRouteCatalogRevision(
+                contentHash = contentHash,
+                routeConfigHash = routeConfigHash,
+                presentationHash = presentationHash,
+                revision = catalog.optLong("revision", 0L),
+                rawJson = catalog
+            ),
+            rawJson = json
+        )
+    }
+
+    private fun routeMutationHeaders(operationId: String, expectedContentHash: String): Map<String, String> {
+        val normalizedOperationId = operationId.trim()
+        val normalizedContentHash = expectedContentHash.trim().lowercase()
+        require(OPERATION_ID_PATTERN.matches(normalizedOperationId)) {
+            "Route mutation requires a caller-owned stable operationId."
+        }
+        require(CONTENT_HASH_PATTERN.matches(normalizedContentHash)) {
+            "Route mutation requires the current strong route catalog content hash."
+        }
+        return mapOf(
+            "Idempotency-Key" to normalizedOperationId,
+            "If-Match" to normalizedContentHash
+        )
+    }
+
+    private fun requireCommittedMutationReceipt(json: JSONObject, expectedOperationId: String) {
+        val data = json.optJSONObject("data")
+        val receipt = json.optJSONObject("receipt")
+            ?: json.optJSONObject("mutationReceipt")
+            ?: data?.optJSONObject("receipt")
+            ?: throw IllegalStateException("Route mutation response is missing an explicit committed receipt.")
+        val operationId = receipt.optString("operationId").trim()
+        val status = receipt.optString("status", receipt.optString("state")).trim().lowercase()
+        val contentHash = receipt.optString("contentHash", receipt.optString("routeConfigHash"))
+            .trim()
+            .lowercase()
+            .ifBlank {
+                val catalog = json.optJSONObject("routeCatalog")
+                catalog?.let { it.optString("routeConfigHash", it.optString("contentHash")) }
+                    ?.trim()
+                    ?.lowercase()
+                    .orEmpty()
+        }
+        require(operationId == expectedOperationId.trim()) {
+            "Route mutation receipt does not match the caller-owned operationId."
+        }
+        require(status == "committed") {
+            "Route mutation response is not an explicit committed receipt."
+        }
+        require(CONTENT_HASH_PATTERN.matches(contentHash)) {
+            "Route mutation receipt is missing a strong committed content hash."
+        }
+    }
 
     private fun getJson(url: String): JSONObject = requestJson(url, "GET", null)
 
@@ -819,6 +950,13 @@ class RabiRouteSdk @JvmOverloads constructor(
     private fun JSONArray?.toObjectList(): List<JSONObject> {
         if (this == null) return emptyList()
         return (0 until length()).mapNotNull { optJSONObject(it) }
+    }
+
+    private companion object {
+        val CONTENT_HASH_PATTERN = Regex("^[a-f0-9]{64}$")
+        val OPERATION_ID_PATTERN = Regex("^[A-Za-z0-9:._-]{1,256}$")
+        const val LEGACY_ROUTE_MUTATION_MESSAGE =
+            "Legacy route mutation is disabled: a verified lifecycle lease, caller-owned operationId, and current strong route catalog content hash are required."
     }
 
     private fun readBoundedUtf8(stream: InputStream, maxBytes: Int): String {

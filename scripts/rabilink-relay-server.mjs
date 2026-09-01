@@ -1235,7 +1235,7 @@ function sendJson(res, statusCode, body, extraHeaders = {}) {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization,x-rabilink-token,x-rabilink-admin-auth",
+    "access-control-allow-headers": "content-type,authorization,x-rabilink-token,x-rabilink-admin-auth,idempotency-key,if-match",
     ...extraHeaders
   });
   res.end(text);
@@ -2021,8 +2021,48 @@ function normalizeProxyRequestHeaders(headers) {
   const result = {};
   for (const [key, value] of Object.entries(headers || {})) {
     const lower = key.toLowerCase();
-    if (!["accept", "content-type", "user-agent", "range", "if-range"].includes(lower)) continue;
+    if (!["accept", "content-type", "user-agent", "range", "if-range", "idempotency-key", "if-match"].includes(lower)) continue;
     result[lower] = Array.isArray(value) ? value.join(", ") : String(value || "");
+  }
+  return result;
+}
+
+function normalizeRouteMutationHeaders(headers) {
+  const result = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    const lower = key.toLowerCase();
+    if (!["idempotency-key", "if-match"].includes(lower)) continue;
+    result[lower] = Array.isArray(value) ? String(value[0] || "").trim() : String(value || "").trim();
+  }
+  return result;
+}
+
+function mobileRouteMutationHeaders(req, envelopeHeaders = {}) {
+  const outer = normalizeRouteMutationHeaders(req?.headers);
+  const envelope = normalizeRouteMutationHeaders(envelopeHeaders);
+  for (const name of ["idempotency-key", "if-match"]) {
+    if (outer[name] && envelope[name] && outer[name] !== envelope[name]) {
+      const error = new Error(`Conflicting ${name} Route mutation headers.`);
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+  return {
+    ...(outer["idempotency-key"] || envelope["idempotency-key"]
+      ? { "idempotency-key": outer["idempotency-key"] || envelope["idempotency-key"] }
+      : {}),
+    ...(outer["if-match"] || envelope["if-match"]
+      ? { "if-match": outer["if-match"] || envelope["if-match"] }
+      : {})
+  };
+}
+
+function mobileMutationResponseHeaders(headers) {
+  const result = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    const lower = key.toLowerCase();
+    if (!["idempotency-key", "if-match", "etag", "x-rabiroute-operation-id", "x-rabiroute-content-hash"].includes(lower)) continue;
+    result[lower] = String(value || "").trim();
   }
   return result;
 }
@@ -2076,7 +2116,7 @@ function createWebguiRequest(req, target, localPath, rawBody) {
   return request;
 }
 
-function createMobileWebguiRequest(app, worker, method, localPath, body = null) {
+function createMobileWebguiRequest(app, worker, method, localPath, body = null, mutationHeaders = {}) {
   const now = Date.now();
   const bodyBuffer = body == null ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body), "utf8");
   const request = {
@@ -2094,7 +2134,8 @@ function createMobileWebguiRequest(app, worker, method, localPath, body = null) 
     path: localPath,
     headers: {
       accept: "application/json",
-      ...(body == null ? {} : { "content-type": "application/json; charset=utf-8" })
+      ...(body == null ? {} : { "content-type": "application/json; charset=utf-8" }),
+      ...normalizeRouteMutationHeaders(mutationHeaders)
     },
     bodyBase64: bodyBuffer.length > 0 ? bodyBuffer.toString("base64") : "",
     response: null
@@ -5224,8 +5265,8 @@ function mobileWorkerTarget(app, url, body = {}) {
   return worker;
 }
 
-async function mobileProxyJson(app, worker, method, localPath, body = null) {
-  const request = createMobileWebguiRequest(app, worker, method, localPath, body);
+async function mobileProxyJson(app, worker, method, localPath, body = null, mutationHeaders = {}) {
+  const request = createMobileWebguiRequest(app, worker, method, localPath, body, mutationHeaders);
   const finalRequest = await waitForWebguiRequest(request, webguiRequestWaitMs);
   if (finalRequest.status !== "done" || !finalRequest.response) {
     const error = new Error(finalRequest.error || "Rabi PC WebGUI request timed out.");
@@ -5239,7 +5280,11 @@ async function mobileProxyJson(app, worker, method, localPath, body = null) {
   } catch {
     parsed = { code: -1, message: responseBody };
   }
-  return { statusCode: finalRequest.response.statusCode || 200, body: parsed };
+  return {
+    statusCode: finalRequest.response.statusCode || 200,
+    headers: mobileMutationResponseHeaders(finalRequest.response.headers),
+    body: parsed
+  };
 }
 
 async function mobileProxyRaw(app, worker, method, localPath) {
@@ -5319,8 +5364,16 @@ async function handleMobileWebguiApi(req, url, res, body, app) {
     });
   }
   const worker = mobileWorkerTarget(app, url, body);
-  const result = await mobileProxyJson(app, worker, method, localPath, method === "GET" ? null : body?.body ?? {});
-  return sendJson(res, result.statusCode, result.body);
+  const mutationHeaders = mobileRouteMutationHeaders(req, body?.headers);
+  const result = await mobileProxyJson(
+    app,
+    worker,
+    method,
+    localPath,
+    method === "GET" ? null : body?.body ?? {},
+    mutationHeaders
+  );
+  return sendJson(res, result.statusCode, result.body, result.headers);
 }
 
 async function handleMobileApi(req, url, res, body) {
@@ -5384,8 +5437,16 @@ async function handleMobileApi(req, url, res, body) {
     return sendJson(res, result.statusCode, result.body);
   }
   if ((req.method === "PATCH" || req.method === "POST") && routeId && action === "agent-binding") {
-    const result = await mobileProxyJson(app, worker, "PATCH", `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes/${encodeURIComponent(routeId)}/agent-binding`, body || {});
-    return sendJson(res, result.statusCode, result.body);
+    const mutationHeaders = mobileRouteMutationHeaders(req);
+    const result = await mobileProxyJson(
+      app,
+      worker,
+      "PATCH",
+      `/api/rabi/instances/${encodeURIComponent(rabiGuid)}/routes/${encodeURIComponent(routeId)}/agent-binding`,
+      body || {},
+      mutationHeaders
+    );
+    return sendJson(res, result.statusCode, result.body, result.headers);
   }
   return sendJson(res, 405, { code: -1, ok: false, message: "Method not allowed" });
 }

@@ -12,7 +12,8 @@ const entries = [
   ["src/bundles/builtin/speech.ts", "io.rabiroute.manager.speech"],
   ["src/bundles/builtin/performance.ts", "io.rabiroute.manager.performance"],
   ["src/bundles/builtin/diagnostics.ts", "io.rabiroute.manager.diagnostics"],
-  ["src/bundles/builtin/desktop.ts", "io.rabiroute.manager.desktop"]
+  ["src/bundles/builtin/desktop.ts", "io.rabiroute.manager.desktop"],
+  ["src/bundles/builtin/xiaomi-home.ts", "io.rabiroute.manager.xiaomi-home"]
 ];
 for (const [source, pluginId] of entries) {
   const built = manifest[source];

@@ -5,6 +5,40 @@ export function slashPath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
+/**
+ * Identifies a Windows network path without touching the filesystem. Manager
+ * lifecycle code uses this before any synchronous watch/stat call so a stalled
+ * SMB redirector can never pin the control-plane event loop.
+ */
+export function isUncPath(value: string): boolean {
+  const windowsPath = String(value || "").trim().replace(/\//g, "\\");
+  return /^\\\\\?\\UNC\\/i.test(windowsPath)
+    || /^\\\\(?![?.]\\)/.test(windowsPath);
+}
+
+function windowsDriveDesignator(value: string): string | undefined {
+  const windowsPath = String(value || "").trim().replace(/\//g, "\\");
+  const match = windowsPath.match(/^\\\\\?\\([a-z]):(?:\\|$)/i)
+    ?? windowsPath.match(/^([a-z]):(?:\\|$)/i);
+  return match ? `${match[1].toUpperCase()}:` : undefined;
+}
+
+/**
+ * Conservatively keeps filesystem lifecycle work off the Manager event loop.
+ * A drive-letter path is only trusted when it is on the configured Windows
+ * system drive; mapped and otherwise unproven drives use an isolated worker.
+ */
+export function requiresWorkerFilesystemAccess(
+  value: string,
+  systemDrive = process.env.SystemDrive ?? ""
+): boolean {
+  if (isUncPath(value)) return true;
+  const drive = windowsDriveDesignator(value);
+  if (!drive) return false;
+  const trustedDrive = windowsDriveDesignator(systemDrive);
+  return !trustedDrive || drive !== trustedDrive;
+}
+
 export function normalizePathForComparison(value: string): string {
   let comparable = value;
   if (process.platform === "win32") {

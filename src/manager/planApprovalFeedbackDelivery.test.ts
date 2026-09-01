@@ -182,6 +182,18 @@ test("plan guidance reaches the bound task without pretending to approve a step"
   assert.match(taskRequests[0]?.prompt || "", /kind=guidance_response/);
   assert.match(taskRequests[0]?.prompt || "", /feedbackId=response-feedback-plan-guidance/);
   assert.match(taskRequests[0]?.prompt || "", /只写当前 planId/);
+  assert.match(taskRequests[0]?.prompt || "", /有界超时 GET .*\/feedback 并保存响应的强 ETag/);
+  assert.match(taskRequests[0]?.prompt || "", /Idempotency-Key=plan-feedback-response:response-feedback-plan-guidance/);
+  assert.match(taskRequests[0]?.prompt || "", /If-Match=<刚才 GET 的强 ETag>/);
+  assert.match(taskRequests[0]?.prompt || "", /GET http:\/\/127\.0\.0\.1:8790\/meta/);
+  assert.match(taskRequests[0]?.prompt || "", /有界超时/);
+  assert.match(taskRequests[0]?.prompt || "", /响应 Idempotency-Key 必须等于请求值/);
+  assert.match(taskRequests[0]?.prompt || "", /响应 ETag 必须是强 ETag/);
+  assert.match(taskRequests[0]?.prompt || "", /data\.id=response-feedback-plan-guidance/);
+  assert.match(taskRequests[0]?.prompt || "", /data\.planId=plan-approval-delivery/);
+  assert.match(taskRequests[0]?.prompt || "", /applicationGenerationId.*managerInstanceId.*完全一致/);
+  assert.match(taskRequests[0]?.prompt || "", /503.*同一个 Idempotency-Key/);
+  assert.match(taskRequests[0]?.prompt || "", /412.*废弃.*新.*Idempotency-Key/);
   assert.doesNotMatch(taskRequests[0]?.prompt || "", /批准按推荐方案/);
 });
 

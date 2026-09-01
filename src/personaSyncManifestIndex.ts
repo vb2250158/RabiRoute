@@ -2,7 +2,26 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { PersonaSyncFile, PersonaSyncManifest } from "./personaSync.js";
+import {
+  inspectPlanStorageConflict,
+  validateCanonicalActivePlanDirectory,
+  validateCanonicalArchivedPlanDirectory
+} from "./planStoragePolicy.js";
+import {
+  canonicalPlanIdForStorageIdentity,
+  personaPlanStoragePath
+} from "./personaPlanStorage.js";
+import { canonicalPlanStorageCollisionIdentity } from "./planStorageLayout.js";
+import { withPlanStorageLease as withPlanStorageLock } from "./planStorageRepository.js";
+import { archivedPlanPackageInventory } from "./personaSyncPlanPackage.js";
+import { runPersonaSyncManifestWorker } from "./personaSyncManifestWorkerClient.js";
+import type {
+  PersonaSyncManifestCacheFile,
+  PersonaSyncManifestCachePayload,
+  PersonaSyncManifestRefreshResult
+} from "./personaSyncManifestWorkerProtocol.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { requiresWorkerFilesystemAccess } from "./shared/pathPolicy.js";
 import { sanitizeRoleId } from "./shared/routeIdentity.js";
 
 const INDEX_SCHEMA_VERSION = 1;
@@ -12,18 +31,48 @@ const FILE_EVENT_BARRIER_MS = 50;
 const INDEX_PERSIST_SETTLE_MS = 120;
 const HASH_CONCURRENCY = 4;
 
-type CachedPersonaSyncFile = PersonaSyncFile & {
-  mtimeMs: number;
-  ctimeMs: number;
-  fileId: string;
+type CachedPersonaSyncFile = PersonaSyncManifestCacheFile;
+
+type PhysicalPlanScope = {
+  storageId: string;
+  bucket: "active" | "archive";
+  directory: string;
 };
 
-type PersistedManifestIndex = {
-  schemaVersion: 1;
-  generatedAt: string;
-  roles: string[];
-  files: CachedPersonaSyncFile[];
-};
+function physicalPlanScopes(roleDir: string): Map<string, PhysicalPlanScope> {
+  const scopes = new Map<string, PhysicalPlanScope>();
+  for (const bucket of ["active", "archive"] as const) {
+    const bucketDirectory = path.join(roleDir, "plans", bucket);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(bucketDirectory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isDirectory()) {
+        throw new Error(`Persona sync rejected non-canonical plan storage entry: ${bucket}/${entry.name}`);
+      }
+      const parsed = personaPlanStoragePath(`plans/${bucket}/${entry.name}/plan.json`);
+      if (!parsed || parsed.bucket !== bucket) {
+        throw new Error(`Persona sync rejected non-canonical plan storage path: ${bucket}/${entry.name}`);
+      }
+      const key = canonicalPlanStorageCollisionIdentity(parsed.storageId);
+      if (scopes.has(key)) {
+        throw new Error(`Persona sync rejected duplicate active/archive plan storage: ${entry.name}`);
+      }
+      scopes.set(key, {
+        storageId: parsed.storageId,
+        bucket,
+        directory: path.join(bucketDirectory, entry.name)
+      });
+    }
+  }
+  return scopes;
+}
+
+type PersistedManifestIndex = PersonaSyncManifestCachePayload;
 
 export type PersonaSyncManifestIndexEvent = {
   kind: "ready" | "created" | "updated" | "deleted" | "reconciled" | "watch_unavailable" | "persistence_failed";
@@ -43,7 +92,7 @@ export type PersonaSyncManifestIndexPersistenceStatus = {
 
 export type PersonaSyncManifestIndexStatus = {
   state: "idle" | "initializing" | "ready" | "fallback" | "failed" | "stopped";
-  watchMode: "recursive" | "query_reconcile" | "disabled";
+  watchMode: "recursive" | "query_reconcile" | "worker_poll" | "disabled";
   generation: number;
   roles: number;
   files: number;
@@ -55,13 +104,35 @@ export type PersonaSyncManifestIndexStatus = {
     completedAt: string;
   };
   persistence: PersonaSyncManifestIndexPersistenceStatus;
+  publication: {
+    executionMode: "inline" | "child_process";
+    available: boolean;
+    revision: number;
+    state: "empty" | "refreshing" | "ready" | "degraded";
+    stale: boolean;
+    refreshedAt?: string;
+    refreshStartedAt?: string;
+    workerPid?: number;
+    deadlineMs: number;
+    error?: string;
+  };
   error?: string;
+};
+
+export type PersonaSyncManifestPublishedSnapshot = {
+  manifest?: PersonaSyncManifest;
+  publication: PersonaSyncManifestIndexStatus["publication"];
 };
 
 export type PersonaSyncManifestIndexOptions = {
   readOnly?: boolean;
   watch?: boolean;
   reconcileOnQueryFallback?: boolean;
+  scanExecutionMode?: "inline" | "child_process";
+  autoStart?: boolean;
+  refreshTimeoutMs?: number;
+  remoteRefreshIntervalMs?: number;
+  runManifestWorker?: typeof runPersonaSyncManifestWorker;
   onEvent?: (event: PersonaSyncManifestIndexEvent) => void;
   persistSettleMs?: number;
   persistRetryBaseMs?: number;
@@ -136,6 +207,18 @@ function validRelativePath(value: string): boolean {
     && normalized.split("/").every(segment => Boolean(segment) && segment !== "." && segment !== "..");
 }
 
+function immutableManifest(manifest: PersonaSyncManifest): PersonaSyncManifest {
+  const roles = manifest.roles.map(role => Object.freeze({
+    roleId: role.roleId,
+    files: Object.freeze(role.files.map(file => Object.freeze({ ...file })))
+  }));
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    generatedAt: manifest.generatedAt,
+    roles: Object.freeze(roles)
+  }) as unknown as PersonaSyncManifest;
+}
+
 const EXCLUDED_RUNTIME_DIRECTORIES = new Set([
   "state/work-cycle-history",
   "state/work-cycle-history-locks",
@@ -143,6 +226,12 @@ const EXCLUDED_RUNTIME_DIRECTORIES = new Set([
   "state/work-cycle-plan-locks",
   "state/work-cycle-receipt-locks",
   "conversation/situations",
+  "plans/items",
+  "plans/history",
+  "plans/feedback",
+  "plans/attachments",
+  "plans/quarantine",
+  "plans/.staging",
   "voice/cache/tts-audio"
 ]);
 
@@ -154,6 +243,7 @@ export function personaSyncPathEligible(relativePath: string): boolean {
     return false;
   }
   if (/\.(?:tmp|lock|part)$/i.test(normalized)) return false;
+  if (/^plans\/archive\/[^/]+\.json$/i.test(normalized)) return false;
   return ![...EXCLUDED_RUNTIME_DIRECTORIES]
     .some(directory => normalized === directory || normalized.startsWith(`${directory}/`));
 }
@@ -236,6 +326,11 @@ export class PersonaSyncManifestIndex {
     readOnly: boolean;
     watch: boolean;
     reconcileOnQueryFallback: boolean;
+    scanExecutionMode: "inline" | "child_process";
+    autoStart: boolean;
+    refreshTimeoutMs: number;
+    remoteRefreshIntervalMs: number;
+    runManifestWorker: typeof runPersonaSyncManifestWorker;
     onEvent?: (event: PersonaSyncManifestIndexEvent) => void;
     persistSettleMs: number;
     persistRetryBaseMs: number;
@@ -252,10 +347,14 @@ export class PersonaSyncManifestIndex {
   private watcher: fs.FSWatcher | null = null;
   private readyPromise: Promise<void> | null = null;
   private reconcileFlight: Promise<void> | null = null;
+  private workerRefreshFlight: Promise<void> | null = null;
+  private workerRefreshAbort: AbortController | null = null;
   private pendingFlush: Promise<void> | null = null;
   private eventTimer: NodeJS.Timeout | null = null;
+  private remoteRefreshTimer: NodeJS.Timeout | null = null;
   private persistTimer: NodeJS.Timeout | null = null;
   private fallbackRequired = false;
+  private remoteWorkerPollRequired = false;
   private stopped = false;
   private generation = 0;
   private totalHashedFiles = 0;
@@ -268,6 +367,19 @@ export class PersonaSyncManifestIndex {
   private lastPersistFailureAt = "";
   private nextPersistRetryAt = "";
   private lastPersistError = "";
+  private publishedManifest = immutableManifest({
+    schemaVersion: 1,
+    generatedAt: new Date(0).toISOString(),
+    roles: []
+  });
+  private publishedAvailable = false;
+  private publicationRevision = 0;
+  private publicationState: PersonaSyncManifestIndexStatus["publication"]["state"] = "empty";
+  private publicationStale = true;
+  private publicationRefreshedAt = "";
+  private publicationRefreshStartedAt = "";
+  private publicationError = "";
+  private publicationWorkerPid: number | undefined;
 
   constructor(
     readonly rolesRoot: () => string,
@@ -279,6 +391,11 @@ export class PersonaSyncManifestIndex {
       readOnly: options.readOnly === true,
       watch: options.watch !== false,
       reconcileOnQueryFallback: options.reconcileOnQueryFallback !== false,
+      scanExecutionMode: options.scanExecutionMode ?? "inline",
+      autoStart: options.autoStart === true,
+      refreshTimeoutMs: Math.max(100, Math.floor(options.refreshTimeoutMs ?? 5_000)),
+      remoteRefreshIntervalMs: Math.max(250, Math.floor(options.remoteRefreshIntervalMs ?? 5_000)),
+      runManifestWorker: options.runManifestWorker ?? runPersonaSyncManifestWorker,
       onEvent: options.onEvent,
       persistSettleMs: Math.max(0, Math.floor(options.persistSettleMs ?? INDEX_PERSIST_SETTLE_MS)),
       persistRetryBaseMs: Math.max(1, Math.floor(options.persistRetryBaseMs ?? 250)),
@@ -292,6 +409,21 @@ export class PersonaSyncManifestIndex {
     };
     this.options.persistRetryMaxMs = Math.max(this.options.persistRetryBaseMs, this.options.persistRetryMaxMs);
     this.loadPersistedIndex();
+    this.publishedManifest = immutableManifest(this.snapshotFromCache());
+    if (this.options.readOnly) {
+      this.publishedAvailable = true;
+      this.publicationRevision = 1;
+      this.publicationState = "ready";
+      this.publicationStale = false;
+      this.publicationRefreshedAt = this.publishedManifest.generatedAt;
+    }
+    if (this.options.scanExecutionMode === "child_process" && this.options.autoStart) {
+      setImmediate(() => {
+        void this.start().catch(error => {
+          this.lastError = error instanceof Error ? error.message : String(error);
+        });
+      });
+    }
   }
 
   start(): Promise<void> {
@@ -309,6 +441,11 @@ export class PersonaSyncManifestIndex {
   async manifest(roleId?: string): Promise<PersonaSyncManifest> {
     const requested = this.requestedRoleId(roleId);
     await this.start();
+    if (this.options.scanExecutionMode === "child_process") {
+      const published = this.publishedSnapshot(requested || undefined);
+      if (!published.manifest) throw new Error(published.publication.error || "Persona manifest snapshot is not ready.");
+      return published.manifest;
+    }
     if (this.watcher && !this.fallbackRequired) {
       // fs.watch delivery is asynchronous. A one-shot barrier lets an edit that
       // completed immediately before this explicit query enter the pending
@@ -319,10 +456,57 @@ export class PersonaSyncManifestIndex {
     if (this.fallbackRequired && this.options.reconcileOnQueryFallback) {
       await this.reconcileAll("query_fallback");
     }
+    const planRoleIds = requested ? [requested] : [...this.rolesCache];
+    for (const planRoleId of planRoleIds) {
+      const rolePlansRoot = path.join(this.rolesRoot(), planRoleId, "plans");
+      const cachedPlanExists = [...this.filesCache.values()].some(file =>
+        file.roleId === planRoleId && Boolean(personaPlanStoragePath(file.path))
+      );
+      if (cachedPlanExists || fs.existsSync(rolePlansRoot)) {
+        await this.reconcileDirectory(planRoleId, "plans", "authoritative_plan_manifest_query");
+      }
+    }
+    const manifest = this.snapshotFromCache(requested || undefined, true);
+    this.publishManifest(manifest, false);
     return this.snapshot(requested || undefined);
   }
 
   snapshot(roleId?: string): PersonaSyncManifest {
+    const published = this.publishedSnapshot(roleId);
+    return published.manifest ?? immutableManifest({
+      schemaVersion: 1,
+      generatedAt: this.publishedManifest.generatedAt,
+      roles: []
+    });
+  }
+
+  publishedSnapshot(roleId?: string): PersonaSyncManifestPublishedSnapshot {
+    const requested = this.requestedRoleId(roleId);
+    const publication = this.publicationStatus();
+    if (!this.publishedAvailable) return { publication };
+    if (!requested) return { manifest: this.publishedManifest, publication };
+    return {
+      manifest: immutableManifest({
+        schemaVersion: 1,
+        generatedAt: this.publishedManifest.generatedAt,
+        roles: this.publishedManifest.roles.filter(role => role.roleId === requested)
+      }),
+      publication
+    };
+  }
+
+  cacheSnapshot(): PersonaSyncManifestCachePayload {
+    return {
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      roles: [...this.rolesCache].sort((left, right) => left.localeCompare(right)),
+      files: [...this.filesCache.values()]
+        .sort((left, right) => left.roleId.localeCompare(right.roleId) || left.path.localeCompare(right.path))
+        .map(file => ({ ...file }))
+    };
+  }
+
+  private snapshotFromCache(roleId?: string, validatePlanStorage = false): PersonaSyncManifest {
     const requested = this.requestedRoleId(roleId);
     const roleIds = requested ? [requested] : [...this.rolesCache].sort((left, right) => left.localeCompare(right));
     return {
@@ -330,10 +514,66 @@ export class PersonaSyncManifestIndex {
       generatedAt: new Date().toISOString(),
       roles: roleIds.flatMap(id => {
         if (!this.rolesCache.has(id)) return [];
-        const files = [...this.filesCache.values()]
+        const cachedFiles = [...this.filesCache.values()]
           .filter(file => file.roleId === id)
-          .sort((left, right) => left.path.localeCompare(right.path))
-          .map(file => ({
+          .sort((left, right) => left.path.localeCompare(right.path));
+        if (!validatePlanStorage) {
+          return [{
+            roleId: id,
+            files: cachedFiles.map(file => ({
+              roleId: file.roleId,
+              path: file.path,
+              size: file.size,
+              modifiedAt: file.modifiedAt,
+              sha256: file.sha256,
+              mergeStrategy: file.mergeStrategy
+            }))
+          }];
+        }
+        const roleDir = path.join(this.rolesRoot(), id);
+        const cachedPlanScopes = new Map<string, CachedPersonaSyncFile[]>();
+        for (const file of cachedFiles) {
+          const planPath = personaPlanStoragePath(file.path);
+          if (!planPath) continue;
+          const key = canonicalPlanStorageCollisionIdentity(planPath.storageId);
+          const scope = cachedPlanScopes.get(key) ?? [];
+          scope.push(file);
+          cachedPlanScopes.set(key, scope);
+        }
+        const diskPlanScopes = physicalPlanScopes(roleDir);
+        const staleCachedScopes = [...cachedPlanScopes.keys()].filter(key => !diskPlanScopes.has(key));
+        if (staleCachedScopes.length > 0) {
+          throw new Error(`Persona sync rejected stale plan manifest scopes: ${id}/${staleCachedScopes.join(",")}`);
+        }
+        for (const [storageIdentity, diskScope] of diskPlanScopes) {
+          const scopeFiles = cachedPlanScopes.get(storageIdentity) ?? [];
+          const parsed = scopeFiles.map(file => ({ file, planPath: personaPlanStoragePath(file.path)! }));
+          const buckets = new Set(parsed.map(item => item.planPath.bucket));
+          const identities = parsed.filter(item => item.file.path.replace(/\\/g, "/").toLowerCase().endsWith("/plan.json"));
+          if (buckets.size !== 1 || !buckets.has(diskScope.bucket) || identities.length !== 1) {
+            throw new Error(`Persona sync rejected incomplete or ambiguous plan package ${id}/${storageIdentity}`);
+          }
+          withPlanStorageLock(roleDir, diskScope.storageId, () => {
+            const planId = canonicalPlanIdForStorageIdentity(roleDir, diskScope.storageId);
+            if (!planId) throw new Error(`Persona sync plan package identity disappeared: ${id}/${storageIdentity}`);
+            const inspection = inspectPlanStorageConflict(roleDir, planId);
+            if (inspection.status !== "single") {
+              throw new Error(`Persona sync rejected unresolved plan lifecycle ${id}/${planId}: ${inspection.reason}`);
+            }
+            if (diskScope.bucket === "archive") validateCanonicalArchivedPlanDirectory(diskScope.directory, planId);
+            else validateCanonicalActivePlanDirectory(diskScope.directory, planId);
+            const inventory = archivedPlanPackageInventory(diskScope.directory);
+            const prefix = `plans/${diskScope.bucket}/${diskScope.storageId}/`;
+            const cachedByPath = new Map(scopeFiles.map(file => [file.path, file]));
+            if (inventory.files.length !== scopeFiles.length || inventory.files.some(entry => {
+              const cached = cachedByPath.get(`${prefix}${entry.path}`);
+              return !cached || cached.size !== entry.size || cached.sha256 !== entry.sha256;
+            })) {
+              throw new Error(`Persona sync rejected a stale or partial plan manifest cache: ${id}/${planId}`);
+            }
+          });
+        }
+        const files = cachedFiles.map(file => ({
             roleId: file.roleId,
             path: file.path,
             size: file.size,
@@ -364,7 +604,11 @@ export class PersonaSyncManifestIndex {
     return {
       state: this.state,
       watchMode: this.options.watch
-        ? this.fallbackRequired ? "query_reconcile" : "recursive"
+        ? this.remoteWorkerPollRequired
+          ? "worker_poll"
+          : this.fallbackRequired
+            ? "query_reconcile"
+          : "recursive"
         : "disabled",
       generation: this.generation,
       roles: this.rolesCache.size,
@@ -379,6 +623,7 @@ export class PersonaSyncManifestIndex {
         nextRetryAt: this.nextPersistRetryAt || undefined,
         lastError: this.lastPersistError || undefined
       },
+      publication: this.publicationStatus(),
       error: this.lastError || undefined
     };
   }
@@ -387,11 +632,15 @@ export class PersonaSyncManifestIndex {
     this.stopped = true;
     this.state = "stopped";
     if (this.eventTimer) clearTimeout(this.eventTimer);
+    if (this.remoteRefreshTimer) clearTimeout(this.remoteRefreshTimer);
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.eventTimer = null;
+    this.remoteRefreshTimer = null;
     this.persistTimer = null;
     this.watcher?.close();
     this.watcher = null;
+    this.workerRefreshAbort?.abort();
+    this.workerRefreshAbort = null;
     if (!this.options.readOnly) this.persistNow();
   }
 
@@ -403,6 +652,14 @@ export class PersonaSyncManifestIndex {
       this.emit({ kind: "ready", generation: this.generation });
       return;
     }
+    if (this.options.scanExecutionMode === "child_process") {
+      if (this.options.watch) this.startWatcher();
+      await this.refreshManifestInWorker("startup");
+      if (this.pendingPaths.size) await this.flushPendingEvents();
+      this.state = this.fallbackRequired ? "fallback" : "ready";
+      this.emit({ kind: "ready", generation: this.generation });
+      return;
+    }
     await this.reconcileAll("startup");
     if (this.options.watch) {
       this.startWatcher();
@@ -410,13 +667,20 @@ export class PersonaSyncManifestIndex {
     } else if (this.options.reconcileOnQueryFallback) {
       this.fallbackRequired = true;
     }
+    this.publishManifest(this.snapshotFromCache(undefined, true), false);
     this.state = this.fallbackRequired ? "fallback" : "ready";
     this.emit({ kind: "ready", generation: this.generation });
   }
 
   private startWatcher(): void {
-    const root = path.resolve(this.rolesRoot());
-    if (!fs.existsSync(root)) {
+    const configuredRoot = this.rolesRoot();
+    if (requiresWorkerFilesystemAccess(configuredRoot)) {
+      this.remoteWorkerPollRequired = true;
+      this.scheduleWorkerRefreshPoll();
+      return;
+    }
+    const root = path.resolve(configuredRoot);
+    if (this.options.scanExecutionMode === "inline" && !fs.existsSync(root)) {
       this.enableFallback("Persona roles root is unavailable for file events.");
       return;
     }
@@ -454,6 +718,23 @@ export class PersonaSyncManifestIndex {
     this.state = "fallback";
     this.lastError = message;
     this.emit({ kind: "watch_unavailable", generation: this.generation });
+    this.scheduleWorkerRefreshPoll();
+  }
+
+  private scheduleWorkerRefreshPoll(): void {
+    if (this.options.scanExecutionMode !== "child_process"
+      || (!this.remoteWorkerPollRequired && !this.fallbackRequired)
+      || this.stopped
+      || this.remoteRefreshTimer) {
+      return;
+    }
+    this.remoteRefreshTimer = setTimeout(() => {
+      this.remoteRefreshTimer = null;
+      void this.refreshManifestInWorker("bounded_remote_poll")
+        .catch(() => undefined)
+        .finally(() => this.scheduleWorkerRefreshPoll());
+    }, this.options.remoteRefreshIntervalMs);
+    this.remoteRefreshTimer.unref?.();
   }
 
   private armEventTimer(): void {
@@ -462,7 +743,7 @@ export class PersonaSyncManifestIndex {
       this.eventTimer = null;
       void this.flushPendingEvents().catch(error => {
         this.lastError = error instanceof Error ? error.message : String(error);
-        this.enableFallback(this.lastError);
+        if (this.options.scanExecutionMode === "inline") this.enableFallback(this.lastError);
       });
     }, FILE_EVENT_SETTLE_MS);
     this.eventTimer.unref();
@@ -485,6 +766,12 @@ export class PersonaSyncManifestIndex {
   }
 
   private async applyPendingEvents(pending: PendingPath[]): Promise<void> {
+    if (this.options.scanExecutionMode === "child_process") {
+      await this.refreshManifestInWorker(pending.some(item => !item.roleId)
+        ? "ambiguous_file_event"
+        : "file_event");
+      return;
+    }
     if (pending.some(item => !item.roleId)) {
       await this.reconcileAll("ambiguous_file_event");
       return;
@@ -695,6 +982,126 @@ export class PersonaSyncManifestIndex {
     });
     await Promise.all(workers);
     return { files, hashedFiles, reusedFiles };
+  }
+
+  private publicationStatus(): PersonaSyncManifestIndexStatus["publication"] {
+    return {
+      executionMode: this.options.scanExecutionMode,
+      available: this.publishedAvailable,
+      revision: this.publicationRevision,
+      state: this.publicationState,
+      stale: this.publicationStale,
+      refreshedAt: this.publicationRefreshedAt || undefined,
+      refreshStartedAt: this.publicationRefreshStartedAt || undefined,
+      workerPid: this.publicationWorkerPid,
+      deadlineMs: this.options.refreshTimeoutMs,
+      error: this.publicationError || undefined
+    };
+  }
+
+  private publishManifest(manifest: PersonaSyncManifest, stale: boolean): void {
+    this.publishedManifest = immutableManifest(manifest);
+    this.publishedAvailable = true;
+    this.publicationRevision += 1;
+    this.publicationState = stale ? "degraded" : "ready";
+    this.publicationStale = stale;
+    this.publicationRefreshedAt = new Date().toISOString();
+    this.publicationError = "";
+  }
+
+  private refreshManifestInWorker(reason: string): Promise<void> {
+    if (this.workerRefreshFlight) return this.workerRefreshFlight;
+    const controller = new AbortController();
+    this.workerRefreshAbort = controller;
+    this.publicationState = "refreshing";
+    this.publicationStale = this.publishedAvailable;
+    this.publicationRefreshStartedAt = new Date().toISOString();
+    this.publicationError = "";
+    this.workerRefreshFlight = this.options.runManifestWorker(
+      this.rolesRoot(),
+      this.stateRoot,
+      {
+        timeoutMs: this.options.refreshTimeoutMs,
+        signal: controller.signal,
+        onSpawn: pid => { this.publicationWorkerPid = pid; }
+      }
+    ).then(result => {
+      if (this.stopped) return;
+      this.publishWorkerResult(result, reason);
+      this.state = this.fallbackRequired ? "fallback" : "ready";
+      this.lastError = "";
+    }).catch(error => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.publicationState = "degraded";
+      this.publicationStale = true;
+      this.publicationError = message;
+      this.lastError = message;
+      throw error;
+    }).finally(() => {
+      this.publicationWorkerPid = undefined;
+      if (this.workerRefreshAbort === controller) this.workerRefreshAbort = null;
+      this.workerRefreshFlight = null;
+      this.scheduleWorkerRefreshPoll();
+    });
+    return this.workerRefreshFlight;
+  }
+
+  private publishWorkerResult(result: PersonaSyncManifestRefreshResult, reason: string): void {
+    if (result.schemaVersion !== INDEX_SCHEMA_VERSION || result.cache.schemaVersion !== INDEX_SCHEMA_VERSION) {
+      throw new Error("Persona manifest worker returned an unsupported cache schema.");
+    }
+    const nextRoles = new Set<string>();
+    for (const rawRole of result.cache.roles) {
+      const roleId = sanitizeRoleId(rawRole);
+      if (!roleId || roleId !== rawRole) throw new Error("Persona manifest worker returned an invalid role id.");
+      nextRoles.add(roleId);
+    }
+    const nextFiles = new Map<string, CachedPersonaSyncFile>();
+    for (const raw of result.cache.files) {
+      const roleId = sanitizeRoleId(raw?.roleId);
+      const relativePath = normalizedRelativePath(String(raw?.path || ""));
+      const size = Number(raw?.size);
+      const mtimeMs = Number(raw?.mtimeMs);
+      const ctimeMs = Number(raw?.ctimeMs);
+      const hash = String(raw?.sha256 || "");
+      const id = String(raw?.fileId || "");
+      if (!roleId || roleId !== raw.roleId || !nextRoles.has(roleId) || !validRelativePath(relativePath)
+        || !Number.isFinite(size) || !Number.isFinite(mtimeMs) || !Number.isFinite(ctimeMs)
+        || !/^[a-f0-9]{64}$/i.test(hash) || !id || !personaSyncFileEligible(relativePath, size)) {
+        throw new Error("Persona manifest worker returned an invalid cache entry.");
+      }
+      const key = cacheKey(roleId, relativePath);
+      if (nextFiles.has(key)) throw new Error(`Persona manifest worker returned duplicate file ${key}.`);
+      nextFiles.set(key, {
+        roleId,
+        path: relativePath,
+        size,
+        modifiedAt: new Date(mtimeMs).toISOString(),
+        sha256: hash.toLowerCase(),
+        mergeStrategy: mergeStrategy(relativePath),
+        mtimeMs,
+        ctimeMs,
+        fileId: id
+      });
+    }
+    const changed = !sameIndex(this.rolesCache, nextRoles, this.filesCache, nextFiles);
+    this.rolesCache.clear();
+    this.filesCache.clear();
+    for (const roleId of nextRoles) this.rolesCache.add(roleId);
+    for (const [key, file] of nextFiles) this.filesCache.set(key, file);
+    this.totalHashedFiles += Math.max(0, Math.floor(result.scan.hashedFiles));
+    this.lastReconcile = {
+      reason,
+      hashedFiles: Math.max(0, Math.floor(result.scan.hashedFiles)),
+      reusedFiles: Math.max(0, Math.floor(result.scan.reusedFiles)),
+      completedAt: result.scan.completedAt
+    };
+    this.publishManifest(this.snapshotFromCache(), false);
+    if (changed) {
+      this.generation += 1;
+      this.emit({ kind: "reconciled", generation: this.generation });
+    }
+    this.schedulePersist();
   }
 
   private changed(kind: PersonaSyncManifestIndexEvent["kind"], roleId?: string, relativePath?: string): void {

@@ -23,7 +23,20 @@ test("Manager shared resources still stop Worker Pools when persistence fails", 
       },
       async () => { calls.push("workers"); }
     ),
-    /persistence failed/
+    (error: unknown) => error instanceof AggregateError
+      && error.errors.length === 1
+      && (error.errors[0] as Error).message === "persistence failed"
   );
   assert.deepEqual(calls, ["persistence", "workers"]);
+});
+
+test("Manager shared resources preserve every shutdown failure", async () => {
+  await assert.rejects(
+    stopManagerSharedResources(
+      { stop: async () => { throw new Error("persistence failed"); } },
+      async () => { throw new Error("workers failed"); }
+    ),
+    (error: unknown) => error instanceof AggregateError
+      && error.errors.map(item => (item as Error).message).join(",") === "persistence failed,workers failed"
+  );
 });

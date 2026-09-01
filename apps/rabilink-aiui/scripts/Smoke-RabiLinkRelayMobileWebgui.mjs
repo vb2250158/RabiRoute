@@ -523,6 +523,111 @@ async function main() {
     assert(mobileResult.body?.source === "pc-rabi-smoke", "Mobile caller should receive the PC WebGUI JSON body.");
     assert(mobileResult.body?.config?.manager?.autoStart === true, "Mobile caller should receive nested PC config data.");
 
+    const operationId = "aiui-relay-route-mutation-1";
+    const expectedContentHash = "a".repeat(64);
+    const committedContentHash = "b".repeat(64);
+    const mutationHeaders = {
+      ...headers,
+      "Idempotency-Key": operationId,
+      "If-Match": expectedContentHash
+    };
+    const mutationWorkerPollPromise = fetchJson(`${baseUrl}/worker/webgui-requests?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=5000`, { headers });
+    await sleep(100);
+    const mobileMutationPromise = fetchJson(`${baseUrl}/api/rabilink/mobile/webgui`, {
+      method: "POST",
+      headers: mutationHeaders,
+      body: JSON.stringify({
+        method: "POST",
+        path: "/gateways",
+        body: { gateways: [] },
+        headers: {
+          "Idempotency-Key": operationId,
+          "If-Match": expectedContentHash,
+          "X-Private-Diagnostic": "must-not-forward"
+        }
+      })
+    });
+    const mutationWorkerPoll = await mutationWorkerPollPromise;
+    const mutationRequest = mutationWorkerPoll.body?.requests?.[0];
+    assert(mutationRequest?.headers?.["idempotency-key"] === operationId, "Relay must forward the stable Idempotency-Key to the PC worker.");
+    assert(mutationRequest?.headers?.["if-match"] === expectedContentHash, "Relay must forward the strong If-Match hash to the PC worker.");
+    assert(!Object.hasOwn(mutationRequest?.headers || {}, "x-private-diagnostic"), "Relay mutation envelopes must discard non-allowlisted headers.");
+    const committedBody = {
+      code: 0,
+      receipt: { state: "committed", operationId, routeConfigHash: committedContentHash },
+      routeCatalog: { contentHash: committedContentHash, routeConfigHash: committedContentHash, revision: 2 }
+    };
+    await fetchJson(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(mutationRequest.id)}/response`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        deviceId: "pc-renamed",
+        deviceGuid: "guid-test",
+        statusCode: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "idempotency-key": operationId,
+          etag: `"${committedContentHash}"`,
+          "x-private-diagnostic": "must-not-return"
+        },
+        bodyBase64: Buffer.from(JSON.stringify(committedBody), "utf8").toString("base64")
+      })
+    });
+    const mobileMutation = await mobileMutationPromise;
+    assert(mobileMutation.response.status === 200, "Relay route mutation must preserve the PC status.");
+    assert(mobileMutation.body?.receipt?.operationId === operationId, "Relay route mutation must preserve the explicit committed receipt.");
+    assert(mobileMutation.response.headers.get("idempotency-key") === operationId, "Relay must return the allowlisted mutation response header.");
+    assert(!mobileMutation.response.headers.has("x-private-diagnostic"), "Relay must not return private worker response headers.");
+
+    const weakOperationId = "aiui-relay-route-mutation-weak";
+    const weakIfMatch = `W/\"${committedContentHash}\"`;
+    const weakWorkerPollPromise = fetchJson(`${baseUrl}/worker/webgui-requests?deviceId=pc-renamed&deviceName=${encodeURIComponent("PC Rabi Renamed")}&deviceGuid=guid-test&waitMs=5000`, { headers });
+    await sleep(100);
+    const weakMobilePromise = fetchJson(`${baseUrl}/api/rabilink/mobile/webgui`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Idempotency-Key": weakOperationId,
+        "If-Match": weakIfMatch
+      },
+      body: JSON.stringify({
+        method: "POST",
+        path: "/gateways",
+        body: { gateways: [] },
+        headers: {
+          "Idempotency-Key": weakOperationId,
+          "If-Match": weakIfMatch,
+          "X-Private-Diagnostic": "must-not-forward"
+        }
+      })
+    });
+    const weakWorkerPoll = await weakWorkerPollPromise;
+    const weakRequest = weakWorkerPoll.body?.requests?.[0];
+    assert(weakRequest?.headers?.["if-match"] === weakIfMatch, "Relay must not launder a weak If-Match into a strong validator.");
+    assert(!Object.hasOwn(weakRequest?.headers || {}, "x-private-diagnostic"), "Weak-validator forwarding must retain the same mutation-only header allowlist.");
+    await fetchJson(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(weakRequest.id)}/response`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        deviceId: "pc-renamed",
+        deviceGuid: "guid-test",
+        statusCode: 428,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "x-private-diagnostic": "must-not-return"
+        },
+        bodyBase64: Buffer.from(JSON.stringify({
+          code: -1,
+          errorCode: "route_catalog_precondition_required",
+          message: "A strong If-Match Route catalog hash is required for this mutation."
+        }), "utf8").toString("base64")
+      })
+    });
+    const weakMobile = await weakMobilePromise;
+    assert(weakMobile.response.status === 428, "Relay must preserve Manager rejection of a weak If-Match.");
+    assert(weakMobile.body?.errorCode === "route_catalog_precondition_required", "Relay must preserve the stable weak-validator error code.");
+    assert(!weakMobile.response.headers.has("x-private-diagnostic"), "Relay must not expose private headers on rejected mutations.");
+
     const report = {
       generated_at: new Date().toISOString(),
       ok: true,
@@ -549,7 +654,8 @@ async function main() {
       },
       blocked_path_status: blockedResult.response.status,
       proxied_path: request.path,
-      pc_response_source: mobileResult.body.source
+      pc_response_source: mobileResult.body.source,
+      mutation_receipt_operation_id: mobileMutation.body.receipt.operationId
     };
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf8");

@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { AgentAdapterType, AgentDeliveryTestResult, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, PersonaAutomationRuleDefinition, RuntimeStatus } from "../types";
+import type { AgentAdapterType, AgentDeliveryTestResult, GatewayDefinition, GatewayPayload, MessageAdapterType, MetaPayload, NetworkOptions, NotificationRule, PersonaAutomationRuleDefinition, RouteCatalogVersion, RuntimeStatus } from "../types";
 import {
   applyAdapterDefaults,
   automationRulesForGateway,
@@ -28,6 +28,13 @@ import {
 } from "@shared/gatewayConfigModel";
 import { bindAgentSessionsForSave } from "@shared/codexSessionBinding";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL } from "@shared/codexMemoryConsolidationAgent";
+import {
+  boundedRouteCatalogMutationFetch,
+  committedRouteCatalogRevision,
+  routeCatalogMutationFailureIsDefinitive,
+  type PendingRouteCatalogMutation,
+  RouteCatalogMutationLedger
+} from "../routeCatalogMutationLedger";
 
 const pluginApiBase = "/plugin/napcat-plugin-rabiroute/api";
 const isPluginShell = window.location.pathname.startsWith("/plugin/");
@@ -36,6 +43,8 @@ const apiBase = isPluginShell ? pluginApiBase : "";
 type LoadOptions = {
   replaceDirtyConfig?: boolean;
 };
+
+const routeCatalogMutationLedger = new RouteCatalogMutationLedger();
 
 export type GatewayRouteSummary = Readonly<{
   id: string;
@@ -91,6 +100,8 @@ export const useGatewayStore = defineStore("gateway", () => {
   const routeSummaries = ref<GatewayRouteSummary[]>([]);
   const routeBootstrapLoading = ref(false);
   const routeBootstrapError = ref("");
+  const routeCatalogRevisionHash = ref("");
+  const managerLifecycleKey = ref("");
   const managerError = ref("");
   const networkOptions = ref<NetworkOptions>({ adapters: {}, localAddresses: [], httpServers: [], websocketClients: [] });
   const configFiles = ref<Record<string, string>>({});
@@ -212,13 +223,53 @@ export const useGatewayStore = defineStore("gateway", () => {
     });
   }
 
-  async function loadMeta(): Promise<void> {
+  function applyRouteCatalogVersion(value: RouteCatalogVersion | undefined): void {
+    const routeConfigHash = String(value?.routeConfigHash || "").trim().toLowerCase();
+    routeCatalogRevisionHash.value = /^[a-f0-9]{64}$/.test(routeConfigHash) ? routeConfigHash : "";
+  }
+
+  async function loadMeta(required = false): Promise<string> {
     try {
       const response = await fetch(`${apiBase}/meta`);
-      if (!response.ok) return;
-      meta.value = await response.json() as MetaPayload;
-    } catch {
-      // Keep defaults when the old manager has not been restarted yet.
+      if (!response.ok) throw new Error(`Manager /meta failed (HTTP ${response.status}).`);
+      const nextMeta = await response.json() as MetaPayload;
+      const applicationGenerationId = String(nextMeta.applicationGenerationId || "").trim();
+      const managerInstanceId = String(nextMeta.managerInstanceId || "").trim();
+      if (!applicationGenerationId || !managerInstanceId) {
+        throw new Error("Manager /meta did not publish applicationGenerationId and managerInstanceId.");
+      }
+      const nextLifecycleKey = `${applicationGenerationId}\u0000${managerInstanceId}`;
+      if (managerLifecycleKey.value !== nextLifecycleKey) routeCatalogRevisionHash.value = "";
+      managerLifecycleKey.value = nextLifecycleKey;
+      meta.value = nextMeta;
+      return nextLifecycleKey;
+    } catch (metaError) {
+      managerLifecycleKey.value = "";
+      routeCatalogRevisionHash.value = "";
+      if (required) {
+        throw new Error(metaError instanceof Error ? metaError.message : String(metaError));
+      }
+      return "";
+    }
+  }
+
+  async function retireRejectedRouteMutation(
+    response: Response,
+    pending: PendingRouteCatalogMutation,
+    expectedLifecycleKey: string
+  ): Promise<void> {
+    if (!routeCatalogMutationFailureIsDefinitive(response.status)) return;
+    routeCatalogMutationLedger.complete(pending);
+    if (response.status !== 412) return;
+    if (await loadMeta(true) !== expectedLifecycleKey) {
+      throw new Error("Manager lifecycle changed while retiring the rejected Route mutation.");
+    }
+    await loadRouteSummaries();
+    if (!routeCatalogRevisionHash.value) {
+      throw new Error("Manager did not return a current routeConfigHash after rejecting the Route mutation.");
+    }
+    if (await loadMeta(true) !== expectedLifecycleKey) {
+      throw new Error("Manager lifecycle changed while reloading the rejected Route mutation.");
     }
   }
 
@@ -249,9 +300,11 @@ export const useGatewayStore = defineStore("gateway", () => {
         throw new Error(body.message || "插件 API 没有返回 route 摘要");
       }
       managerRows.value = asManagerRows(body.data.manager);
+      applyRouteCatalogVersion(body.routeCatalog);
       managerError.value = managerErrorOf(body.data.manager);
       routeSummaries.value = routeSummariesFrom(body.data.manager);
     } catch (loadError) {
+      routeCatalogRevisionHash.value = "";
       routeBootstrapError.value = loadError instanceof Error ? loadError.message : String(loadError);
       managerError.value = routeBootstrapError.value;
       routeSummaries.value = [];
@@ -264,12 +317,14 @@ export const useGatewayStore = defineStore("gateway", () => {
     loading.value = true;
     error.value = "";
     try {
+      await loadMeta();
       const response = await fetch(`${apiBase}/gateways?summary=1&includeConfig=1`);
       const body = await response.json() as GatewayPayload;
       if (!response.ok || body.code !== 0 || !body.data?.config) {
         throw new Error(body.message || "插件 API 没有返回 gateway 配置");
       }
       managerRows.value = asManagerRows(body.data.manager);
+      applyRouteCatalogVersion(body.routeCatalog);
       managerError.value = managerErrorOf(body.data.manager);
       routeSummaries.value = routeSummariesFrom(body.data.manager);
       diagnosticsLoaded.value = false;
@@ -298,7 +353,6 @@ export const useGatewayStore = defineStore("gateway", () => {
     } finally {
       loading.value = false;
     }
-    void loadMeta();
     void loadNetworkOptions();
   }
 
@@ -380,16 +434,34 @@ export const useGatewayStore = defineStore("gateway", () => {
           dshModel: gateway.dshModel?.trim() || "",
           dshReasoningEffort: gateway.dshReasoningEffort?.trim() || ""
         }));
+      const mutationLifecycleKey = await loadMeta(true);
+      const pendingMutation = await routeCatalogMutationLedger.retain(
+        "save",
+        { gateways: gateways.value },
+        routeCatalogRevisionHash.value
+      );
       const savedEditVersion = editVersion.value;
-      const response = await fetch(`${apiBase}/gateways`, {
+      const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": pendingMutation.operationId,
+          "if-match": `"${pendingMutation.expectedContentHash}"`
+        },
         body: JSON.stringify({ gateways: gateways.value })
       });
-      const body = await response.json();
+      const body = await response.json().catch(() => ({})) as GatewayPayload & { error?: string };
       if (!response.ok || body.code !== 0) {
+        await retireRejectedRouteMutation(response, pendingMutation, mutationLifecycleKey);
         throw new Error(body.message || body.error || "保存配置失败");
       }
+      const committedRevision = committedRouteCatalogRevision(body, pendingMutation);
+      if (await loadMeta(true) !== mutationLifecycleKey) {
+        throw new Error("Manager lifecycle changed after the Route commit; retry the same saved operation.");
+      }
+      applyRouteCatalogVersion(body.routeCatalog);
+      routeCatalogRevisionHash.value = committedRevision;
+      routeCatalogMutationLedger.complete(pendingMutation);
       const savedGateways = body?.data?.config?.gateways;
       if (Array.isArray(savedGateways)) {
         const messageAgentSettingWasDropped = expectedMessageAgentSettings.some(expected => {
@@ -453,11 +525,6 @@ export const useGatewayStore = defineStore("gateway", () => {
     } finally {
       saving.value = false;
     }
-  }
-
-  async function startManager(): Promise<void> {
-    await fetch(`${apiBase}/manager/start`, { method: "POST" });
-    await load();
   }
 
   async function actionGateway(id: string, action: "start" | "stop" | "restart"): Promise<void> {
@@ -566,7 +633,19 @@ export const useGatewayStore = defineStore("gateway", () => {
     saving.value = true;
     error.value = "";
     try {
-      const response = await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/delete`, { method: "POST" });
+      const mutationLifecycleKey = await loadMeta(true);
+      const pendingMutation = await routeCatalogMutationLedger.retain(
+        "delete",
+        { id },
+        routeCatalogRevisionHash.value
+      );
+      const response = await boundedRouteCatalogMutationFetch(`${apiBase}/gateways/${encodeURIComponent(id)}/delete`, {
+        method: "POST",
+        headers: {
+          "idempotency-key": pendingMutation.operationId,
+          "if-match": `"${pendingMutation.expectedContentHash}"`
+        }
+      });
       const text = await response.text();
       let body: any = {};
       try {
@@ -575,11 +654,19 @@ export const useGatewayStore = defineStore("gateway", () => {
         body = {};
       }
       if (!response.ok || body.code !== 0) {
+        await retireRejectedRouteMutation(response, pendingMutation, mutationLifecycleKey);
         const fallbackMessage = response.status === 404 || /<!doctype html|<html/i.test(text)
           ? "当前 Manager 还没有加载删除接口，请重启 Manager 后再删除。"
           : `删除路由失败（HTTP ${response.status}）：${text.replace(/\s+/g, " ").slice(0, 160) || "没有返回错误详情"}`;
         throw new Error(body.message || body.error || fallbackMessage);
       }
+      const committedRevision = committedRouteCatalogRevision(body, pendingMutation);
+      if (await loadMeta(true) !== mutationLifecycleKey) {
+        throw new Error("Manager lifecycle changed after the Route deletion; retry the same delete operation.");
+      }
+      applyRouteCatalogVersion(body.routeCatalog);
+      routeCatalogRevisionHash.value = committedRevision;
+      routeCatalogMutationLedger.complete(pendingMutation);
       selectedGatewayId.value = nextSelectedGatewayId;
       dirty.value = false;
       await load();
@@ -907,6 +994,7 @@ export const useGatewayStore = defineStore("gateway", () => {
     routeSummaries,
     routeBootstrapLoading,
     routeBootstrapError,
+    routeCatalogRevisionHash,
     selectedRouteSummary,
     managerError,
     networkOptions,
@@ -934,7 +1022,6 @@ export const useGatewayStore = defineStore("gateway", () => {
     load,
     ensureDiagnostics,
     save,
-    startManager,
     actionGateway,
     manualTriggerGateway,
     testAgentDelivery,

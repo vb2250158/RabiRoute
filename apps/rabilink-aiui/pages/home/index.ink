@@ -210,7 +210,142 @@ const CLOUD_LOG_BATCH_SIZE = 20;
 const CLOUD_LOG_FLUSH_DELAY_MS = 1200;
 const CLOUD_LOG_RETRY_DELAY_MS = 10000;
 const DEVICE_TOKEN_CLAIM_RETRY_MS = 5000;
+const ROUTE_CONTENT_HASH_PATTERN = /^[a-f0-9]{64}$/;
 let cloudConsoleCaptureState = null;
+let routeMutationSequence = 0;
+
+function strongRouteContentHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ROUTE_CONTENT_HASH_PATTERN.test(normalized) ? normalized : "";
+}
+
+function canonicalMutationValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalMutationValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, canonicalMutationValue(value[key])])
+  );
+}
+
+const SHA256_INITIAL = [
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+  0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+];
+const SHA256_ROUND = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+];
+
+function utf8Bytes(value) {
+  const bytes = [];
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    let code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      const low = text.charCodeAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        code = 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
+        index += 1;
+      }
+    }
+    if (code < 0x80) bytes.push(code);
+    else if (code < 0x800) bytes.push(0xc0 | (code >>> 6), 0x80 | (code & 0x3f));
+    else if (code < 0x10000) bytes.push(0xe0 | (code >>> 12), 0x80 | ((code >>> 6) & 0x3f), 0x80 | (code & 0x3f));
+    else bytes.push(0xf0 | (code >>> 18), 0x80 | ((code >>> 12) & 0x3f), 0x80 | ((code >>> 6) & 0x3f), 0x80 | (code & 0x3f));
+  }
+  return bytes;
+}
+
+function rotateRight(value, bits) {
+  return (value >>> bits) | (value << (32 - bits));
+}
+
+function sha256Hex(value) {
+  const bytes = utf8Bytes(value);
+  const bitLength = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  const high = Math.floor(bitLength / 0x100000000);
+  const low = bitLength >>> 0;
+  for (let shift = 24; shift >= 0; shift -= 8) bytes.push((high >>> shift) & 0xff);
+  for (let shift = 24; shift >= 0; shift -= 8) bytes.push((low >>> shift) & 0xff);
+
+  const hash = SHA256_INITIAL.slice();
+  const words = new Array(64).fill(0);
+  for (let offset = 0; offset < bytes.length; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      const cursor = offset + index * 4;
+      words[index] = ((bytes[cursor] << 24) | (bytes[cursor + 1] << 16) | (bytes[cursor + 2] << 8) | bytes[cursor + 3]) >>> 0;
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const x = words[index - 15];
+      const y = words[index - 2];
+      const sigma0 = rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >>> 3);
+      const sigma1 = rotateRight(y, 17) ^ rotateRight(y, 19) ^ (y >>> 10);
+      words[index] = (words[index - 16] + sigma0 + words[index - 7] + sigma1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = hash;
+    for (let index = 0; index < 64; index += 1) {
+      const sum1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+      const choice = (e & f) ^ (~e & g);
+      const temp1 = (h + sum1 + choice + SHA256_ROUND[index] + words[index]) >>> 0;
+      const sum0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (sum0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+    hash[0] = (hash[0] + a) >>> 0;
+    hash[1] = (hash[1] + b) >>> 0;
+    hash[2] = (hash[2] + c) >>> 0;
+    hash[3] = (hash[3] + d) >>> 0;
+    hash[4] = (hash[4] + e) >>> 0;
+    hash[5] = (hash[5] + f) >>> 0;
+    hash[6] = (hash[6] + g) >>> 0;
+    hash[7] = (hash[7] + h) >>> 0;
+  }
+  return hash.map((word) => word.toString(16).padStart(8, "0")).join("");
+}
+
+function mutationPayloadFingerprint(value) {
+  return sha256Hex(JSON.stringify(canonicalMutationValue(value)));
+}
+
+function createRouteMutationOperationId(kind) {
+  routeMutationSequence = (routeMutationSequence + 1) >>> 0;
+  const randomPart = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+  return `rabilink-aiui:${String(kind || "route").replace(/[^0-9A-Za-z._-]/g, "_")}:${Date.now().toString(36)}:${routeMutationSequence.toString(36)}:${randomPart}`;
+}
+
+function routeMutationFailureIsDefinitive(statusCode) {
+  const status = Number(statusCode || 0);
+  return Number.isInteger(status)
+    && status >= 400
+    && status < 500
+    && ![408, 425, 429, 499].includes(status);
+}
+
+function routeCatalogVersion(payload = {}) {
+  const data = payload && typeof payload.data === "object" && !Array.isArray(payload.data) ? payload.data : {};
+  const catalog = payload?.routeCatalog && typeof payload.routeCatalog === "object"
+    ? payload.routeCatalog
+    : (data.routeCatalog && typeof data.routeCatalog === "object" ? data.routeCatalog : {});
+  const contentHash = strongRouteContentHash(catalog.contentHash);
+  const routeConfigHash = strongRouteContentHash(catalog.routeConfigHash || catalog.contentHash);
+  return { contentHash, routeConfigHash };
+}
 
 function cloudSafeMessage(value) {
   let text = String(value || "").replace(/\s+/g, " ").trim();
@@ -495,6 +630,8 @@ export default {
     targetDeviceId: "",
 
     routes: [],
+    routeCatalogContentHash: "",
+    routeCatalogRouteConfigHash: "",
     routeIndex: 0,
     selectedRouteLabel: "未读取 Route",
     selectedRouteMeta: "选择 PC 后读取",
@@ -998,6 +1135,8 @@ export default {
       token,
       maskedToken: maskToken(token),
       targetDeviceId: this.data.targetDeviceId || settings.targetDeviceId,
+      routeCatalogContentHash: settings.routeCatalogContentHash,
+      routeCatalogRouteConfigHash: settings.routeCatalogRouteConfigHash,
       agentCursor,
       transcriptionPendingCount: transcriptQueue.length,
       transcriptionSyncLabel: token
@@ -1961,31 +2100,128 @@ export default {
     });
   },
 
+  rememberRouteCatalog(payload) {
+    const version = routeCatalogVersion(payload);
+    this.setData({
+      routeCatalogContentHash: version.contentHash,
+      routeCatalogRouteConfigHash: version.routeConfigHash
+    });
+    saveSettings({
+      routeCatalogContentHash: version.contentHash,
+      routeCatalogRouteConfigHash: version.routeConfigHash
+    });
+    return version;
+  },
+
+  pendingRouteMutation(kind, targetId, payload) {
+    const expectedContentHash = strongRouteContentHash(
+      this.data.routeCatalogRouteConfigHash || this.data.routeCatalogContentHash
+    );
+    if (!expectedContentHash) {
+      throw new Error("当前 Route catalog 没有可写的强版本；请先重新读取 Route。");
+    }
+    const descriptor = {
+      kind: String(kind || "").trim(),
+      targetId: String(targetId || "").trim(),
+      targetDeviceId: String(this.data.targetDeviceId || "").trim(),
+      payloadFingerprint: mutationPayloadFingerprint(payload),
+      expectedContentHash
+    };
+    const existing = initialSettings().pendingRouteMutation;
+    if (existing) {
+      const matches = existing.kind === descriptor.kind
+        && existing.targetId === descriptor.targetId
+        && existing.targetDeviceId === descriptor.targetDeviceId
+        && existing.payloadFingerprint === descriptor.payloadFingerprint;
+      if (!matches) {
+        throw new Error("上一笔 Route 修改仍未取得明确回执；请先重试原操作或重新读取 Route。");
+      }
+      return existing;
+    }
+    const pending = {
+      ...descriptor,
+      operationId: createRouteMutationOperationId(descriptor.kind),
+      state: "pending",
+      createdAt: Date.now()
+    };
+    saveSettings({ pendingRouteMutation: pending });
+    return pending;
+  },
+
+  rememberCommittedRouteMutation(result) {
+    const committedHash = strongRouteContentHash(result?.mutationReceipt?.contentHash);
+    if (committedHash) {
+      this.setData({ routeCatalogRouteConfigHash: committedHash });
+      saveSettings({ routeCatalogRouteConfigHash: committedHash });
+    }
+    saveSettings({ pendingRouteMutation: null });
+  },
+
+  async performRouteMutation(kind, targetId, payload, execute, reload) {
+    const pending = this.pendingRouteMutation(kind, targetId, payload);
+    const mutation = {
+      operationId: pending.operationId,
+      expectedContentHash: pending.expectedContentHash
+    };
+    let result;
+    try {
+      result = await execute(mutation);
+    } catch (error) {
+      const statusCode = Number(error?.statusCode || 0);
+      if (statusCode === 412) {
+        saveSettings({ pendingRouteMutation: { ...pending, state: "conflict" } });
+        try {
+          if (reload) await reload();
+          else await this.loadRoutesData();
+        } finally {
+          saveSettings({ pendingRouteMutation: null });
+        }
+        error.message = "Route catalog 已变化，已重新读取；请检查后重新提交。";
+      } else if (routeMutationFailureIsDefinitive(statusCode)) {
+        saveSettings({ pendingRouteMutation: null });
+      } else {
+        saveSettings({ pendingRouteMutation: { ...pending, state: "uncertain" } });
+      }
+      throw error;
+    }
+    this.rememberCommittedRouteMutation(result);
+    if (reload) await reload();
+    return result;
+  },
+
+  async loadRoutesData() {
+    const result = await getMobileRoutes(this.config(), this.data.targetDeviceId);
+    const routes = result.routes;
+    this.rememberRouteCatalog(result);
+    const savedRouteId = initialSettings().selectedRouteId;
+    const routeIndex = Math.max(0, routes.findIndex((route) => {
+      return route.id === savedRouteId || route.configName === savedRouteId;
+    }));
+    const gatewayIndex = this.data.gateways.length
+      ? findGatewayIndex(this.data.gateways, routes[routeIndex]?.id || savedRouteId)
+      : this.data.gatewayIndex;
+    this.setData({
+      routes,
+      routeIndex,
+      gatewayIndex,
+      statusText: "Route 已读取"
+    });
+    this.updateDerivedState();
+    return routes;
+  },
+
   async refreshRoutes() {
     await this.runAction("读取 Route", async () => {
-      const routes = await getMobileRoutes(this.config(), this.data.targetDeviceId);
-      const savedRouteId = initialSettings().selectedRouteId;
-      const routeIndex = Math.max(0, routes.findIndex((route) => {
-        return route.id === savedRouteId || route.configName === savedRouteId;
-      }));
-      const gatewayIndex = this.data.gateways.length
-        ? findGatewayIndex(this.data.gateways, routes[routeIndex]?.id || savedRouteId)
-        : this.data.gatewayIndex;
-      this.setData({
-        routes,
-        routeIndex,
-        gatewayIndex,
-        statusText: "Route 已读取"
-      });
+      const routes = await this.loadRoutesData();
       this.appendLog(`读取到 ${routes.length} 条 Route。`);
       this.say(`读取到 ${routes.length} 条 Route。`);
-      this.updateDerivedState();
     });
   },
 
   async loadWebguiConfigData() {
     const targetDeviceId = this.data.targetDeviceId;
     const gatewayPayload = await getMobileWebgui(this.config(), "/gateways", targetDeviceId);
+    this.rememberRouteCatalog(gatewayPayload);
     const meta = await getMobileWebgui(this.config(), "/meta", targetDeviceId);
     const dirConfig = await getMobileWebgui(this.config(), "/manager-config", targetDeviceId);
     const gateways = extractGateways(gatewayPayload);
@@ -2032,7 +2268,20 @@ export default {
     }
     await this.runAction("保存 WebGUI 配置", async () => {
       const body = saveBodyForGateways(this.data.gateways);
-      await postMobileWebgui(this.config(), "/gateways", body, this.data.targetDeviceId);
+      await this.performRouteMutation(
+        "replace-gateways",
+        "gateways",
+        body,
+        (mutation) => postMobileWebgui(
+          this.config(),
+          "/gateways",
+          body,
+          this.data.targetDeviceId,
+          "POST",
+          mutation
+        ),
+        () => this.loadWebguiConfigData()
+      );
       this.setData({ webguiDirty: false, statusText: "WebGUI 配置已保存" });
       this.appendLog("WebGUI route 配置已保存。");
       this.say("配置已保存。");
@@ -2205,7 +2454,19 @@ export default {
     }
     await this.runAction("保存 Agent 绑定", async () => {
       const binding = this.buildAgentBinding();
-      await setMobileAgentBinding(this.config(), route.id, binding, this.data.targetDeviceId);
+      await this.performRouteMutation(
+        "set-agent-binding",
+        route.id,
+        binding,
+        (mutation) => setMobileAgentBinding(
+          this.config(),
+          route.id,
+          binding,
+          mutation,
+          this.data.targetDeviceId
+        ),
+        () => this.loadRoutesData()
+      );
       this.setData({ statusText: "绑定已保存" });
       this.appendLog(`已保存 ${route.name || route.id} -> ${this.data.agentAdapter}。`);
       this.say("绑定已保存。");
@@ -2463,12 +2724,28 @@ export default {
 
   async runWebguiTool(label, path, body = {}, options = {}) {
     await this.runAction(label, async () => {
-      const data = await postMobileWebgui(this.config(), path, body, this.data.targetDeviceId);
+      const mutationDescriptor = options.routeMutation;
+      const data = mutationDescriptor
+        ? await this.performRouteMutation(
+          mutationDescriptor.kind,
+          mutationDescriptor.targetId,
+          body,
+          (mutation) => postMobileWebgui(
+            this.config(),
+            path,
+            body,
+            this.data.targetDeviceId,
+            "POST",
+            mutation
+          ),
+          options.reload ? () => this.loadWebguiConfigData() : null
+        )
+        : await postMobileWebgui(this.config(), path, body, this.data.targetDeviceId);
       const webguiToolSummary = this.summarizeToolResult(label, data);
       this.setData({ webguiToolSummary });
       this.appendLog(webguiToolSummary);
       this.say(webguiToolSummary);
-      if (options.reload) await this.loadWebguiConfigData();
+      if (options.reload && !mutationDescriptor) await this.loadWebguiConfigData();
     });
   },
 
@@ -2695,11 +2972,15 @@ export default {
   deleteGatewayConfigOnPc() {
     const path = this.gatewayActionPath("delete");
     if (!path) return this.warn("请先读取 WebGUI 配置。");
+    const routeId = this.selectedGatewayWebguiId();
     this.confirmDangerousTool(
       "删除 Route",
       "确认删除 PC 上当前 Route 配置目录？这个动作不可只靠 AIUI 撤销。",
       "删除",
-      () => this.runWebguiTool("删除 Route", path, {}, { reload: true })
+      () => this.runWebguiTool("删除 Route", path, {}, {
+        reload: true,
+        routeMutation: { kind: "delete-gateway", targetId: routeId }
+      })
     );
   },
 

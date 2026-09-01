@@ -6,9 +6,9 @@ import { gatewayAdapterTypes, type GatewayDefinition, type GatewayConfigFile } f
 import { isAgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 import { sanitizeConfigName } from "../shared/routeIdentity.js";
 import { routeFolderPath } from "../shared/routePaths.js";
-import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
 import type { RabiGlobalConfigStore, RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
+import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
 import {
   discoverManagerLanEndpoints,
   verifyManagerDiscoveryEndpoint,
@@ -27,8 +27,19 @@ export type RabiApiContext = {
   runtimes: () => Iterable<GatewayRuntime>;
   runtimeStatus: (runtime: GatewayRuntime) => Record<string, unknown>;
   readConfig: () => GatewayConfigFile;
-  writeConfig: (config: GatewayConfigFile) => GatewayConfigFile;
-  loadRuntimes: () => void;
+  writeConfig: (
+    config: GatewayConfigFile,
+    expectedContentHash: string | undefined,
+    operationId: string
+  ) => Promise<GatewayConfigFile>;
+  loadRuntimes: () => Promise<void>;
+  routeCatalogVersion: () => Readonly<{
+    contentHash: string;
+    routeConfigHash: string;
+    presentationHash: string;
+    revision: number;
+  }>;
+  routeCatalogPersonas: () => readonly RouteCatalogPersonaPresentation[];
   syncRunningGateways: () => void;
   syncRabiLinkRelay: () => Promise<void>;
   scanAgentAdapters: () => Promise<Record<string, unknown>>;
@@ -247,13 +258,16 @@ export function mobileAdapterStates(input: MobileRouteStatusInput): MobileAdapte
 function routeSummary(
   runtime: GatewayRuntime,
   runtimeStatus: Record<string, unknown>,
+  rootDir: string,
   defaultRolesRoot: string,
+  personaPresentations: readonly RouteCatalogPersonaPresentation[],
   mobilePresentation = false
 ): Record<string, unknown> {
   const definition = runtime.definition;
   const roleId = definition.agentRoleId ?? "";
-  const rolesRoot = String(definition.rolesDir || "").trim() || defaultRolesRoot;
-  const avatar = roleId ? personaAvatarPresentation(roleId, path.join(rolesRoot, roleId)) : {};
+  const rolesRoot = resolveRolesRoot(rootDir, definition.rolesDir, defaultRolesRoot);
+  const presentation = routeCatalogPersona(personaPresentations, rolesRoot, roleId);
+  const avatar = roleId ? personaAvatarFromCatalog(roleId, presentation) : {};
   const enabled = definition.enabled !== false;
   const running = Boolean(runtime.process);
   const messageAdapters = definition.messageAdapters ?? [definition.messageAdapterType ?? "napcat"];
@@ -276,7 +290,7 @@ function routeSummary(
       messageAdapters,
       messageAdaptersDisabled,
       agentRoleId: roleId,
-      personaDisplayName: personaDisplayName(rolesRoot, roleId),
+      personaDisplayName: presentation?.displayName || roleId,
       chatAvailable: enabled
         && normalizedMessageAdapters.has("rabilink")
         && !normalizedDisabledAdapters.has("rabilink"),
@@ -306,76 +320,76 @@ function routeSummary(
     messageAdapters,
     messageAdaptersDisabled,
     agentRoleId: roleId,
-    personaDisplayName: personaDisplayName(rolesRoot, roleId),
+    personaDisplayName: presentation?.displayName || roleId,
     ...avatar,
     runtimeStatus
   };
 }
 
-function safePersonaDisplayName(value: string, fallback: string): string {
-  const compact = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-  // Persona source files sometimes use a heading such as “呆猫人格提示词”.
-  // The phone should show the person, not that authoring label.
-  return compact.replace(/(?:\s*[-—–:：]\s*)?(?:人格提示词|人格)$/u, "").trim().slice(0, 80) || fallback;
+function resolveRolesRoot(rootDir: string, value: unknown, fallback: string): string {
+  const configured = String(value || "").trim();
+  if (!configured) return path.resolve(fallback);
+  return path.isAbsolute(configured) ? path.resolve(configured) : path.resolve(rootDir, configured);
 }
 
-export function personaDisplayName(rolesRoot: string, roleId: string): string {
-  if (roleId === "YeYu") return "夜雨";
-  const personaPath = path.join(rolesRoot, roleId, "persona.md");
-  try {
-    const heading = fs.readFileSync(personaPath, "utf8").match(/^#\s+(.+)$/m)?.[1]?.trim();
-    if (heading) return safePersonaDisplayName(heading, roleId);
-  } catch { /* A role without a persona document still has a useful stable id. */ }
-  return roleId;
+function routeCatalogPersonaKey(rolesRoot: string, roleId: string): string {
+  return `${path.resolve(rolesRoot).replace(/\\/g, "/").toLowerCase()}\0${roleId.toLowerCase()}`;
 }
 
-/**
- * A roles root also contains lifecycle folders such as `old/`.  Only an
- * actual persona document is publishable to mobile clients.
- */
-export function personaProfileIds(rolesRoots: Iterable<string>, boundRoleIds: Iterable<string>): Array<{ roleId: string; personaDisplayName: string; rolesRoot: string }> {
+function routeCatalogPersona(
+  presentations: readonly RouteCatalogPersonaPresentation[],
+  rolesRoot: string,
+  roleId: string
+): RouteCatalogPersonaPresentation | undefined {
+  const expected = routeCatalogPersonaKey(rolesRoot, roleId);
+  return presentations.find(item => routeCatalogPersonaKey(item.rolesRoot, item.roleId) === expected);
+}
+
+function personaAvatarFromCatalog(
+  roleId: string,
+  presentation: RouteCatalogPersonaPresentation | undefined
+): Record<string, unknown> {
+  const version = presentation?.avatarVersion;
+  return {
+    avatarConfigured: presentation?.avatarConfigured === true,
+    ...(version ? {
+      avatarUrl: `/api/roles/${encodeURIComponent(roleId)}/avatar?v=${encodeURIComponent(version)}`,
+      avatarVersion: version
+    } : {})
+  };
+}
+
+export function personaProfileIds(
+  presentations: readonly RouteCatalogPersonaPresentation[],
+  boundRoleIds: Iterable<string>
+): RouteCatalogPersonaPresentation[] {
   const known = new Set([...boundRoleIds].map((value) => String(value || "").trim()).filter(Boolean));
-  const profiles: Array<{ roleId: string; personaDisplayName: string; rolesRoot: string }> = [];
-  for (const rolesRoot of rolesRoots) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(rolesRoot, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const item of entries) {
-      if (!item.isDirectory() || known.has(item.name)) continue;
-      const personaPath = path.join(rolesRoot, item.name, "persona.md");
-      try {
-        if (!fs.statSync(personaPath).isFile()) continue;
-      } catch {
-        continue;
-      }
-      known.add(item.name);
-      profiles.push({
-        roleId: item.name,
-        personaDisplayName: personaDisplayName(rolesRoot, item.name),
-        rolesRoot
-      });
-    }
+  const profiles: RouteCatalogPersonaPresentation[] = [];
+  for (const presentation of presentations) {
+    if (!presentation.isPersona || known.has(presentation.roleId)) continue;
+    known.add(presentation.roleId);
+    profiles.push(presentation);
   }
   return profiles;
 }
 
 function localRoutes(ctx: RabiApiContext, includeProfiles = false, mobilePresentation = false): Record<string, unknown> {
   const defaultRolesRoot = path.join(ctx.rootDir, "data", "roles");
-  const routes = [...ctx.runtimes()].map((runtime) => routeSummary(runtime, ctx.runtimeStatus(runtime), defaultRolesRoot, mobilePresentation));
+  const personaPresentations = ctx.routeCatalogPersonas();
+  const routes = [...ctx.runtimes()].map((runtime) => routeSummary(
+    runtime,
+    ctx.runtimeStatus(runtime),
+    ctx.rootDir,
+    defaultRolesRoot,
+    personaPresentations,
+    mobilePresentation
+  ));
   if (includeProfiles) {
     const boundRoleIds = new Set(routes.map((route) => String(route.agentRoleId || "").trim()).filter(Boolean));
-    const rolesRoots = new Set<string>([path.join(ctx.rootDir, "data", "roles")]);
-    for (const gateway of ctx.readConfig().gateways) {
-      const configuredRoot = String(gateway.rolesDir || "").trim();
-      if (configuredRoot) rolesRoots.add(configuredRoot);
-    }
-    for (const profile of personaProfileIds(rolesRoots, boundRoleIds)) {
+    for (const profile of personaProfileIds(personaPresentations, boundRoleIds)) {
         routes.push({
           id: `role:${profile.roleId}`,
-          name: profile.personaDisplayName,
+          name: profile.displayName,
           configName: "",
           routeName: "",
           enabled: false,
@@ -384,8 +398,8 @@ function localRoutes(ctx: RabiApiContext, includeProfiles = false, mobilePresent
           messageAdapters: [],
           messageAdaptersDisabled: [],
           agentRoleId: profile.roleId,
-          personaDisplayName: profile.personaDisplayName,
-          ...personaAvatarPresentation(profile.roleId, path.join(profile.rolesRoot, profile.roleId)),
+          personaDisplayName: profile.displayName,
+          ...personaAvatarFromCatalog(profile.roleId, profile),
           chatAvailable: false,
           adapterStates: [],
           isPersonaOnly: true,
@@ -393,7 +407,7 @@ function localRoutes(ctx: RabiApiContext, includeProfiles = false, mobilePresent
         });
     }
   }
-  return { code: 0, data: { routes } };
+  return { code: 0, data: { routes }, routeCatalog: ctx.routeCatalogVersion() };
 }
 
 function findGateway(config: GatewayConfigFile, routeId: string): GatewayDefinition | undefined {
@@ -461,6 +475,95 @@ function apiErrorStatus(error: unknown, fallback = 500): number {
   return Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599 ? statusCode : fallback;
 }
 
+type RouteMutationContract = Readonly<{
+  operationId: string;
+  expectedContentHash: string;
+}>;
+
+function requestHeader(request: http.IncomingMessage, name: string): string {
+  const value = request.headers[name.toLowerCase()];
+  return String(Array.isArray(value) ? value[0] ?? "" : value ?? "").trim();
+}
+
+function requireRouteMutationContract(request: http.IncomingMessage): RouteMutationContract {
+  const operationId = requestHeader(request, "idempotency-key");
+  const rawIfMatch = requestHeader(request, "if-match");
+  const quotedHash = /^"([a-f0-9]{64})"$/i.exec(rawIfMatch)?.[1];
+  const expectedContentHash = (/^[a-f0-9]{64}$/i.test(rawIfMatch) ? rawIfMatch : quotedHash ?? "")
+    .toLowerCase();
+  if (!/^[A-Za-z0-9:._-]{1,256}$/.test(operationId)) {
+    throw Object.assign(new Error("A valid Idempotency-Key is required for this Route mutation."), {
+      statusCode: 400,
+      code: "idempotency_key_required"
+    });
+  }
+  if (/^W\//i.test(rawIfMatch) || !/^[a-f0-9]{64}$/.test(expectedContentHash)) {
+    throw Object.assign(new Error("A strong If-Match Route catalog hash is required for this mutation."), {
+      statusCode: 428,
+      code: "route_catalog_precondition_required"
+    });
+  }
+  return Object.freeze({ operationId, expectedContentHash });
+}
+
+function routeMutationProxyHeaders(contract: RouteMutationContract): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    "idempotency-key": contract.operationId,
+    "if-match": contract.expectedContentHash
+  };
+}
+
+function nestedErrorCodes(error: unknown): string[] {
+  let current = error as ({ code?: unknown; cause?: unknown } | null);
+  const codes: string[] = [];
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    if (typeof current.code === "string" && current.code) codes.push(current.code);
+    current = current.cause && typeof current.cause === "object"
+      ? current.cause as { code?: unknown; cause?: unknown }
+      : null;
+  }
+  return codes;
+}
+
+function publicRouteMutationFailure(error: unknown): Readonly<{
+  statusCode: number;
+  errorCode: string;
+  message: string;
+}> {
+  const codes = nestedErrorCodes(error);
+  const code = codes[0] || "";
+  if (codes.includes("ROUTE_CATALOG_REVISION_CONFLICT") || codes.includes("route_catalog_conflict")) {
+    return Object.freeze({
+      statusCode: 412,
+      errorCode: "route_catalog_conflict",
+      message: "Route catalog changed; reload and retry with its new hash."
+    });
+  }
+  if (codes.includes("ROUTE_CATALOG_IDEMPOTENCY_CONFLICT") || codes.includes("route_catalog_idempotency_conflict")) {
+    return Object.freeze({
+      statusCode: 409,
+      errorCode: "route_catalog_idempotency_conflict",
+      message: "Idempotency-Key is already committed for a different Route mutation."
+    });
+  }
+  const statusCode = apiErrorStatus(error, 503);
+  if (statusCode === 400 || statusCode === 428) {
+    return Object.freeze({
+      statusCode,
+      errorCode: code || "route_mutation_contract_invalid",
+      message: error instanceof Error ? error.message : "Route mutation contract is invalid."
+    });
+  }
+  return Object.freeze({
+    statusCode: statusCode === 409 ? 409 : 503,
+    errorCode: code || "route_catalog_unavailable",
+    message: statusCode === 409
+      ? "Route catalog mutation conflicts with an existing operation."
+      : "Route catalog is temporarily unavailable. Retry with the same Idempotency-Key."
+  });
+}
+
 function localRabiLinkReplies(ctx: RabiApiContext, routeId: string, requestUrl: URL): Record<string, unknown> {
   const config = ctx.readConfig();
   const route = findGateway(config, routeId);
@@ -484,7 +587,12 @@ function localRabiLinkReplies(ctx: RabiApiContext, routeId: string, requestUrl: 
   };
 }
 
-function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: AgentBindingPatch): Record<string, unknown> {
+async function setLocalAgentBinding(
+  ctx: RabiApiContext,
+  routeId: string,
+  patch: AgentBindingPatch,
+  mutation: RouteMutationContract
+): Promise<Record<string, unknown>> {
   const config = ctx.readConfig();
   const route = findGateway(config, routeId);
   if (!route) return { code: -1, message: `Route not found: ${routeId}` };
@@ -511,11 +619,20 @@ function setLocalAgentBinding(ctx: RabiApiContext, routeId: string, patch: Agent
   if (patch.dshSessionName !== undefined) route.dshSessionName = String(patch.dshSessionName || "");
   if (patch.dshCwd !== undefined) route.dshCwd = String(patch.dshCwd || "");
   if (patch.dshBaseUrl !== undefined) route.dshBaseUrl = String(patch.dshBaseUrl || "");
-  const normalized = ctx.writeConfig(config);
-  ctx.loadRuntimes();
+  const normalized = await ctx.writeConfig(config, mutation.expectedContentHash, mutation.operationId);
   ctx.syncRunningGateways();
   const updated = findGateway(normalized, routeId) ?? route;
-  return { code: 0, data: { route: updated } };
+  const routeCatalog = ctx.routeCatalogVersion();
+  return {
+    code: 0,
+    data: { route: updated },
+    receipt: {
+      state: "committed",
+      operationId: mutation.operationId,
+      routeConfigHash: routeCatalog.routeConfigHash
+    },
+    routeCatalog
+  };
 }
 
 async function discoverInstances(ctx: RabiApiContext, request: http.IncomingMessage, requestUrl: URL): Promise<RabiInstance[]> {
@@ -759,7 +876,11 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
           rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay)
         }
       }))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => jsonResponse(
+        response,
+        apiErrorStatus(error, 400),
+        { code: -1, message: error instanceof Error ? error.message : String(error) }
+      ));
     return true;
   }
   if (request.method === "GET" && pathname === "/api/rabi/instances") {
@@ -777,6 +898,16 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
   const action = routeMatch[3] || "";
 
   if ((request.method === "GET" || request.method === "PATCH") && routeId && action === "message-processing") {
+    let mutation: RouteMutationContract | undefined;
+    if (request.method === "PATCH") {
+      try {
+        mutation = requireRouteMutationContract(request);
+      } catch (error) {
+        const failure = publicRouteMutationFailure(error);
+        jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
+        return true;
+      }
+    }
     if (!isSelfGuid(ctx, guid)) {
       void (async () => {
         const body = request.method === "PATCH"
@@ -786,7 +917,7 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
         return instance
           ? proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/message-processing`, {
             method: request.method,
-            ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+            ...(body === undefined ? {} : { headers: routeMutationProxyHeaders(mutation!), body: JSON.stringify(body) })
           })
           : { status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } };
       })()
@@ -795,7 +926,8 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
       return true;
     }
     const run = async (): Promise<Record<string, unknown>> => {
-      const route = findGateway(ctx.readConfig(), routeId);
+      const config = ctx.readConfig();
+      const route = findGateway(config, routeId);
       if (!route) return { code: -1, message: `Route not found: ${routeId}` };
       if (request.method === "GET") return messageProcessingPayload(ctx, route);
       const body = await readJsonBody<{ adapter?: string; maxAgents?: number }>(request);
@@ -809,13 +941,26 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
           maxAgents
         };
       }
-      const normalized = ctx.writeConfig(ctx.readConfig());
-      ctx.loadRuntimes();
+      const normalized = await ctx.writeConfig(config, mutation!.expectedContentHash, mutation!.operationId);
       ctx.syncRunningGateways();
       const updated = findGateway(normalized, routeId) ?? route;
-      return messageProcessingPayload(ctx, updated);
+      const routeCatalog = ctx.routeCatalogVersion();
+      return {
+        ...messageProcessingPayload(ctx, updated),
+        receipt: {
+          state: "committed",
+          operationId: mutation!.operationId,
+          routeConfigHash: routeCatalog.routeConfigHash
+        },
+        routeCatalog
+      };
     };
-    void run().then(result => jsonResponse(response, result.code === 0 ? 200 : 404, result)).catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    void run()
+      .then(result => jsonResponse(response, result.code === 0 ? 200 : 404, result))
+      .catch(error => {
+        const failure = publicRouteMutationFailure(error);
+        jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
+      });
     return true;
   }
 
@@ -899,19 +1044,32 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
   }
 
   if ((request.method === "PATCH" || request.method === "POST") && routeId && action === "agent-binding") {
+    let mutation: RouteMutationContract;
+    try {
+      mutation = requireRouteMutationContract(request);
+    } catch (error) {
+      const failure = publicRouteMutationFailure(error);
+      jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
+      return true;
+    }
     void readJsonBody<AgentBindingPatch>(request)
       .then(async (body) => {
-        if (isSelfGuid(ctx, guid)) return { status: 200, body: setLocalAgentBinding(ctx, routeId, body) };
+        if (isSelfGuid(ctx, guid)) {
+          return { status: 200, body: await setLocalAgentBinding(ctx, routeId, body, mutation) };
+        }
         const instance = await findInstance(ctx, request, requestUrl, guid);
         if (!instance) return { status: 404, body: { code: -1, message: `RabiRoute instance not found: ${guid}` } };
         return proxyJson(instance, `/api/rabi/instances/${encodeURIComponent(guid)}/routes/${encodeURIComponent(routeId)}/agent-binding`, {
           method: "PATCH",
-          headers: { "content-type": "application/json" },
+          headers: routeMutationProxyHeaders(mutation),
           body: JSON.stringify(body)
         });
       })
       .then((result) => jsonResponse(response, result.status, result.body))
-      .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      .catch((error) => {
+        const failure = publicRouteMutationFailure(error);
+        jsonResponse(response, failure.statusCode, { code: -1, errorCode: failure.errorCode, message: failure.message });
+      });
     return true;
   }
 

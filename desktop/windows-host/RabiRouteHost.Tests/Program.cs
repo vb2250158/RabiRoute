@@ -34,6 +34,13 @@ Check(GenerationFence.AllowsQuit(generation, generation), "accept matching appli
 Check(!GenerationFence.AllowsQuit(generation, "stale-generation"), "reject stale application generation quit");
 Check(!GenerationFence.AllowsQuit(null, generation), "reject fenced quit without an active generation");
 Check(!GenerationFence.AllowsQuit(generation, null), "reject every unfenced quit");
+const string faultedControlFence = "faulted-control-fence";
+Check(
+    GenerationFence.AllowsQuit(faultedControlFence, faultedControlFence),
+    "faulted Host accepts an exact retained control fence for terminal quit");
+Check(
+    !GenerationFence.AllowsQuit(faultedControlFence, "stale-faulted-control-fence"),
+    "faulted Host rejects a stale retained control fence");
 var trayArguments = ApplicationGeneration.BuildTrayArguments(
     "C:\\immutable\\desktop-runtime\\main.py",
     ready!,
@@ -58,19 +65,28 @@ Check(
     "Host identity namespace does not collapse different SID sources");
 
 var portableRoot = Path.Combine(Path.GetTempPath(), $"rabiroute-portable-guard-{Guid.NewGuid():N}");
-Directory.CreateDirectory(Path.Combine(portableRoot, "scripts"));
+var portablePackageRoot = Path.Combine(portableRoot, "versions", "release-a");
+var portableStateRoot = portableRoot;
+Directory.CreateDirectory(Path.Combine(portablePackageRoot, "scripts"));
+Directory.CreateDirectory(Path.Combine(portableStateRoot, "scripts"));
 try
 {
     Check(
-        PortableOverlayGuard.FindRetiredLifecycleEntries(portableRoot).Count == 0,
+        PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(portablePackageRoot, portableStateRoot).Count == 0,
         "clean portable root is accepted");
-    File.WriteAllText(Path.Combine(portableRoot, "scripts", "watch-rabiroute-health.ps1.backup"), "fixture");
+    File.WriteAllText(Path.Combine(portableStateRoot, "scripts", "watch-rabiroute-health.ps1.backup"), "fixture");
     Check(
-        PortableOverlayGuard.FindRetiredLifecycleEntries(portableRoot).Count == 0,
+        PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(portablePackageRoot, portableStateRoot).Count == 0,
         "similarly named backup cannot trigger the portable overlay guard");
-    File.WriteAllText(Path.Combine(portableRoot, "RabiRoute-Desktop.exe"), "fixture");
-    File.WriteAllText(Path.Combine(portableRoot, "scripts", "watch-rabiroute-health.ps1"), "fixture");
-    var retiredEntries = PortableOverlayGuard.FindRetiredLifecycleEntries(portableRoot);
+    File.WriteAllText(Path.Combine(portablePackageRoot, "RabiRoute-Tray.exe"), "fixture");
+    Check(
+        PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(portablePackageRoot, portableStateRoot)
+            .SequenceEqual(new[] { "RabiRoute-Tray.exe" }),
+        "portable overlay guard preserves and inspects the active package root");
+    File.Delete(Path.Combine(portablePackageRoot, "RabiRoute-Tray.exe"));
+    File.WriteAllText(Path.Combine(portableStateRoot, "RabiRoute-Desktop.exe"), "fixture");
+    File.WriteAllText(Path.Combine(portableStateRoot, "scripts", "watch-rabiroute-health.ps1"), "fixture");
+    var retiredEntries = PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(portablePackageRoot, portableStateRoot);
     Check(
         retiredEntries.SequenceEqual(new[] { "RabiRoute-Desktop.exe", "scripts/watch-rabiroute-health.ps1" }),
         "portable overlay guard reports only exact retired lifecycle entries");
@@ -355,43 +371,111 @@ var lifecycleReady = new ManagerReady(
     managerPid,
     $"http://127.0.0.1:{lifecyclePort}",
     "2026-08-30T10:00:00Z");
-var lifecycleRequests = new List<string>();
+string? lifecycleHealthRequest = null;
+string? lifecycleShutdownRequest = null;
+var observedLifecyclePaths = new List<string>();
+using var lifecycleServerCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+string LifecycleObservationSummary()
+{
+    var observed = observedLifecyclePaths.Count == 0
+        ? "<none>"
+        : string.Join(", ", observedLifecyclePaths);
+    var missing = new List<string>();
+    if (lifecycleHealthRequest is null) missing.Add("GET /health");
+    if (lifecycleShutdownRequest is null) missing.Add("POST /_rabiroute/host/shutdown");
+    return $"missing={string.Join(", ", missing)}; observed={observed}";
+}
 var lifecycleServer = Task.Run(async () =>
 {
-    for (var index = 0; index < 2; index++)
+    while (lifecycleHealthRequest is null || lifecycleShutdownRequest is null)
     {
-        using var connection = await lifecycleListener.AcceptTcpClientAsync();
-        await using var stream = connection.GetStream();
-        using var reader = new StreamReader(stream, Encoding.ASCII, false, 4096, leaveOpen: true);
-        var requestLines = new List<string>();
-        while (await reader.ReadLineAsync() is { Length: > 0 } line) requestLines.Add(line);
-        lifecycleRequests.Add(string.Join("\n", requestLines));
-        var body = index == 0
-            ? $"{{\"applicationGenerationId\":\"{generation}\",\"managerInstanceId\":\"manager-a\"," +
-              $"\"managerBaseUrl\":\"http://127.0.0.1:{lifecyclePort}\",\"health\":{{\"state\":\"healthy\",\"pid\":{managerPid},\"live\":true,\"requiredReady\":true}}}}"
-            : "{\"code\":0}";
-        var bodyBytes = Encoding.UTF8.GetBytes(body);
-        var status = index == 0 ? "200 OK" : "202 Accepted";
-        var header = Encoding.ASCII.GetBytes(
-            $"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n");
-        await stream.WriteAsync(header);
-        await stream.WriteAsync(bodyBytes);
-        await stream.FlushAsync();
+        using var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifecycleServerCancellation.Token);
+        requestDeadline.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            using var connection = await lifecycleListener.AcceptTcpClientAsync(requestDeadline.Token);
+            await using var stream = connection.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, false, 4096, leaveOpen: true);
+            var requestLine = await reader.ReadLineAsync(requestDeadline.Token);
+            if (string.IsNullOrWhiteSpace(requestLine))
+            {
+                observedLifecyclePaths.Add("<empty-request-line>");
+                throw new InvalidDataException($"Lifecycle test server received an empty request line; {LifecycleObservationSummary()}.");
+            }
+            var requestParts = requestLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var method = requestParts.Length > 0 ? requestParts[0] : "<missing-method>";
+            var requestPath = requestParts.Length > 1 ? requestParts[1] : "<missing-path>";
+            observedLifecyclePaths.Add($"{method} {requestPath}");
+            var requestLines = new List<string> { requestLine };
+            while (await reader.ReadLineAsync(requestDeadline.Token) is { } line && line.Length > 0)
+            {
+                requestLines.Add(line);
+            }
+            var requestText = string.Join("\n", requestLines);
+
+            string status;
+            byte[] bodyBytes;
+            if (string.Equals(method, "GET", StringComparison.Ordinal) &&
+                string.Equals(requestPath, "/health", StringComparison.Ordinal))
+            {
+                lifecycleHealthRequest ??= requestText;
+                status = "200 OK";
+                bodyBytes = Encoding.UTF8.GetBytes(
+                    $"{{\"applicationGenerationId\":\"{generation}\",\"managerInstanceId\":\"manager-a\"," +
+                    $"\"managerBaseUrl\":\"http://127.0.0.1:{lifecyclePort}\",\"health\":{{\"state\":\"healthy\",\"pid\":{managerPid},\"live\":true,\"requiredReady\":true}}}}");
+            }
+            else if (string.Equals(method, "POST", StringComparison.Ordinal) &&
+                     string.Equals(requestPath, "/_rabiroute/host/shutdown", StringComparison.Ordinal))
+            {
+                lifecycleShutdownRequest ??= requestText;
+                status = "202 Accepted";
+                bodyBytes = Array.Empty<byte>();
+            }
+            else
+            {
+                status = "404 Not Found";
+                bodyBytes = Array.Empty<byte>();
+            }
+
+            var headerBytes = Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n");
+            var responseBytes = new byte[headerBytes.Length + bodyBytes.Length];
+            Buffer.BlockCopy(headerBytes, 0, responseBytes, 0, headerBytes.Length);
+            Buffer.BlockCopy(bodyBytes, 0, responseBytes, headerBytes.Length, bodyBytes.Length);
+            await stream.WriteAsync(responseBytes, requestDeadline.Token);
+            await stream.FlushAsync(requestDeadline.Token);
+        }
+        catch (OperationCanceledException) when (requestDeadline.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Lifecycle test server request deadline expired; {LifecycleObservationSummary()}.");
+        }
     }
 });
-using (var lifecycleClient = new ManagerLifecycleClient())
+try
 {
-    var probe = await lifecycleClient.ProbeAsync(lifecycleReady, generation, CancellationToken.None);
-    Check(probe.State == ManagerProbeState.Healthy, "probe Manager health on an OS-assigned dynamic port");
-    Check(
-        await lifecycleClient.RequestShutdownAsync(lifecycleReady, "host-secret", CancellationToken.None),
-        "request protected Manager graceful shutdown");
+    using (var lifecycleClient = new ManagerLifecycleClient())
+    {
+        var probe = await lifecycleClient.ProbeAsync(lifecycleReady, generation, CancellationToken.None);
+        Check(probe.State == ManagerProbeState.Healthy, "probe Manager health on an OS-assigned dynamic port");
+        Check(
+            await lifecycleClient.RequestShutdownAsync(lifecycleReady, "host-secret", CancellationToken.None),
+            "request protected Manager graceful shutdown");
+    }
+    await lifecycleServer;
 }
-await lifecycleServer.WaitAsync(TimeSpan.FromSeconds(10));
-lifecycleListener.Stop();
-Check(lifecycleRequests[0].StartsWith("GET /health HTTP/1.1", StringComparison.Ordinal), "health probe uses the core-owned /health route");
-Check(lifecycleRequests[1].StartsWith("POST /_rabiroute/host/shutdown HTTP/1.1", StringComparison.Ordinal), "shutdown uses the Host-only route");
-Check(lifecycleRequests[1].Contains("x-rabiroute-host-token: host-secret", StringComparison.OrdinalIgnoreCase), "shutdown carries the generation secret");
+finally
+{
+    lifecycleServerCancellation.Cancel();
+    lifecycleListener.Stop();
+    if (!lifecycleServer.IsCompleted)
+    {
+        try { await lifecycleServer; }
+        catch when (lifecycleServerCancellation.IsCancellationRequested) { }
+    }
+}
+Check(lifecycleHealthRequest?.StartsWith("GET /health HTTP/1.1", StringComparison.Ordinal) == true, "health probe uses the core-owned /health route");
+Check(lifecycleShutdownRequest?.StartsWith("POST /_rabiroute/host/shutdown HTTP/1.1", StringComparison.Ordinal) == true, "shutdown uses the Host-only route");
+Check(lifecycleShutdownRequest?.Contains("x-rabiroute-host-token: host-secret", StringComparison.OrdinalIgnoreCase) == true, "shutdown carries the generation secret");
 Check(RabiRoute.WindowsHost.HostEntry.ParseCommand(new[] { "--command", "status" }) == "status", "accept formal lifecycle command");
 Check(RabiRoute.WindowsHost.HostEntry.ParseCommand(new[] { "--command" }) == "invalid", "reject incomplete formal lifecycle command");
 Check(RabiRoute.WindowsHost.HostEntry.ParseCommand(new[] { "--command", "quit", "--allow-unfenced-quit" }) == "invalid", "reject retired unfenced quit escape hatch");

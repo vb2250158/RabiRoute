@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 const MANIFEST_FILE = "release-manifest.json";
 const APP_ID = "io.rabiroute.windows";
 const RETIRED_MANAGER_PATTERNS = Object.freeze([
+  ["retired Manager lifecycle API", /(?:\\?\/)(?:api(?:\\?\/))?manager(?:\\?\/)(?:start|shutdown)\b/i],
   ["fixed Manager URL value", /\b(?:managerBaseUrl|managerUrl|GATEWAY_MANAGER_URL|RABIROUTE_MANAGER_URL)\b["']?\s*[:=]\s*["']?https?:(?:\\?\/){2}[^\s"'?#]+:879[0-9]\b/i],
   ["fixed Manager port label", /\bManager\s+(?:port\s*)?879[0-9]\b/i],
   ["fixed Manager port value", /\b(?:managerPort|GATEWAY_MANAGER_PORT|RABIROUTE_MANAGER_PORT)\b["']?\s*[:=]\s*["']?879[0-9]\b/i],

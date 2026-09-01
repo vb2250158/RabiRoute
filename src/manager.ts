@@ -70,9 +70,6 @@ try {
   void import("./manager/controlPlaneRoutes.js")
     .then(({ startManager }) => startManager({ instanceLock }))
     .catch(async (error) => {
-      await import("./runtime/managerCordisRoot.js")
-        .then(({ getBuiltinManagerCordisRoot }) => getBuiltinManagerCordisRoot().dispose())
-        .catch(() => {});
       await instanceLock.release();
       runtimeDiagnostics.record("startup_failure", { error });
       console.error(error);

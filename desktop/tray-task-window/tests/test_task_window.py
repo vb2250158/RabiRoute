@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -38,6 +39,7 @@ from rabiroute_tray.plugin_catalog import (
     DesktopPluginStatusCard,
     empty_desktop_plugin_catalog,
 )
+from rabiroute_tray.plan_feedback_ledger import PlanFeedbackLedger
 from rabiroute_tray.qt_async import wait_for_qt_tasks
 from rabiroute_tray.task_window import (
     ExpandableCard,
@@ -659,9 +661,115 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertFalse(editor.isEnabled())
         approval_panel.complete(False, "通知 Agent 失败，可重试。", "warning")
         self.assertEqual(editor.toPlainText(), "建议覆盖旧存档回归。")
+        submit.click()
+        self.app.processEvents()
+        self.assertEqual(emitted[1][2], emitted[0][2], "uncertain retry must reuse the feedback id")
+        approval_panel.complete(False, "仍可重试。", "warning")
+        editor.setPlainText("建议先补一条不同的回归。")
+        submit.click()
+        self.app.processEvents()
+        self.assertEqual(len(emitted), 2, "a changed payload must not bypass the pending operation")
+        self.assertIn("已有一笔尚未确认", approval_panel.notice.text())
+        approval_panel.complete(False, "服务端明确拒绝旧版本。", "warning", retire=True)
+        submit.click()
+        self.app.processEvents()
+        self.assertNotEqual(emitted[2][2], emitted[0][2], "a retired operation permits a new payload")
         approval_panel.complete(True, "已提交。", "success")
         self.assertEqual(editor.toPlainText(), "")
         card.close()
+
+    def test_plan_feedback_retry_keeps_id_across_panel_rerender_but_not_across_roles(self) -> None:
+        plan = PlanItem(
+            title="等待审批",
+            plan_id="plan-rerender",
+            approval_state="ready",
+            approval_enabled=True,
+            approval_step_id="verify",
+        )
+
+        feedback_ledger = PlanFeedbackLedger()
+
+        def submit_from(role_id: str) -> tuple[str, ExpandableCard]:
+            card = ExpandableCard(
+                "计划",
+                plan.title,
+                [],
+                "plan",
+                [],
+                plan=plan,
+                role_id=role_id,
+                feedback_ledger=feedback_ledger,
+            )
+            emitted: list[tuple[str, str, str, str]] = []
+            card.approval_requested.connect(lambda *args: emitted.append(tuple(str(value) for value in args)))
+            card.show()
+            card.set_expanded(True)
+            editor = card.findChild(QTextEdit, "planApprovalInput")
+            editor.setPlainText("保持同一审批建议。")
+            card.findChild(QPushButton, "planApprovalSubmit").click()
+            self.app.processEvents()
+            return emitted[0][2], card
+
+        first_id, first = submit_from("YeYu")
+        first.plan_detail_panel.approval_panel.complete(False, "版本冲突，刷新。", "warning")
+        first.close()
+        retry_id, retry = submit_from("YeYu")
+        other_role_id, other = submit_from("Rabi")
+
+        self.assertEqual(retry_id, first_id)
+        self.assertNotEqual(other_role_id, first_id)
+        retry.close()
+        other.close()
+
+    def test_plan_feedback_retry_survives_tray_restart_and_definitive_conflict_retires_it(self) -> None:
+        plan = PlanItem(
+            title="等待审批",
+            plan_id="plan-durable-retry",
+            approval_state="ready",
+            approval_enabled=True,
+            approval_step_id="verify",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "pending-plan-feedback.json"
+
+            def submit_from_new_generation() -> tuple[str, ExpandableCard]:
+                card = ExpandableCard(
+                    "计划",
+                    plan.title,
+                    [],
+                    "plan",
+                    [],
+                    plan=plan,
+                    role_id="YeYu",
+                    feedback_ledger=PlanFeedbackLedger(ledger_path),
+                )
+                emitted: list[tuple[str, str, str, str]] = []
+                card.approval_requested.connect(lambda *args: emitted.append(tuple(str(value) for value in args)))
+                card.show()
+                card.set_expanded(True)
+                card.findChild(QTextEdit, "planApprovalInput").setPlainText("保持同一审批建议。")
+                card.findChild(QPushButton, "planApprovalSubmit").click()
+                self.app.processEvents()
+                return emitted[0][2], card
+
+            first_id, first = submit_from_new_generation()
+            first.plan_detail_panel.approval_panel.complete(False, "响应丢失，保留重试。", "warning")
+            first.close()
+
+            retry_id, retry = submit_from_new_generation()
+            self.assertEqual(retry_id, first_id)
+            retry.plan_detail_panel.approval_panel.complete(
+                False,
+                "服务端明确拒绝旧版本。",
+                "warning",
+                retire=True,
+            )
+            retry.close()
+
+            after_conflict_id, after_conflict = submit_from_new_generation()
+            self.assertNotEqual(after_conflict_id, first_id)
+            after_conflict.close()
 
     def test_incomplete_approval_contract_disables_approval_until_materials_are_complete(self) -> None:
         plan = PlanItem(

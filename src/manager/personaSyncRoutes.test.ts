@@ -4,9 +4,80 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import { PersonaSyncService } from "../personaSync.js";
 import type { PersonaSyncCoordinator } from "../personaSyncCoordinator.js";
+import {
+  createActivePlanPackageCommandFromFiles,
+  createArchivedPlanPackageCommandFromFiles,
+  type PersonaSyncPlanPackageFile
+} from "../personaSyncPlanPackage.js";
 import { handlePersonaSyncApi } from "./personaSyncRoutes.js";
+
+function sha256(value: Buffer | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function packageFile(relativePath: string, value: string): PersonaSyncPlanPackageFile {
+  const content = Buffer.from(value, "utf8");
+  return {
+    path: relativePath,
+    size: content.byteLength,
+    sha256: sha256(content),
+    contentBase64: content.toString("base64")
+  };
+}
+
+function activePackage(roleId: string, planId: string, title = "Route active plan") {
+  const recordedAt = "2026-08-31T00:00:00.000Z";
+  const plan = {
+    id: planId,
+    title,
+    focus: "Exercise the active plan package route",
+    status: "进行中",
+    createdAt: recordedAt,
+    updatedAt: recordedAt,
+    steps: [{ id: "route", title: "Route", status: "进行中" }],
+    keywords: ["route"]
+  };
+  const history = {
+    id: `created-${planId}`,
+    planId,
+    kind: "created",
+    recordedAt,
+    after: plan
+  };
+  return createActivePlanPackageCommandFromFiles(roleId, planId, [
+    packageFile("plan.json", `${JSON.stringify(plan, null, 2)}\n`),
+    packageFile("history.jsonl", `${JSON.stringify(history)}\n`)
+  ], "route-peer");
+}
+
+function archivePackage(roleId: string, planId: string) {
+  const createdAt = "2026-08-01T00:00:00.000Z";
+  const completedAt = "2026-08-02T00:00:00.000Z";
+  const archivedAt = "2026-08-31T00:00:00.000Z";
+  const completed = {
+    id: planId,
+    title: "Route archived plan",
+    focus: "Exercise the archive plan package route",
+    status: "已完成",
+    createdAt,
+    completedAt,
+    updatedAt: completedAt,
+    steps: [{ id: "done", title: "Done", status: "已完成" }],
+    keywords: ["route", "archive"]
+  };
+  const archived = { ...completed, status: "已归档", archivedAt, updatedAt: archivedAt };
+  const history = [
+    { id: `created-${planId}`, planId, kind: "created", recordedAt: completedAt, after: completed },
+    { id: `archived-${planId}`, planId, kind: "archived", recordedAt: archivedAt, before: completed, after: archived }
+  ];
+  return createArchivedPlanPackageCommandFromFiles(roleId, planId, [
+    packageFile("plan.json", `${JSON.stringify(archived, null, 2)}\n`),
+    packageFile("history.jsonl", `${history.map(record => JSON.stringify(record)).join("\n")}\n`)
+  ], "route-peer");
+}
 
 async function listen(server: http.Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -68,6 +139,7 @@ test("persona sync conflict control lets a local Agent inspect and resolve evide
   fs.writeFileSync(path.join(roleDir, "persona.md"), "local\n", "utf8");
   const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"));
   t.after(() => service.stopManifestIndex());
+  await service.startManifestIndex();
   service.merge({
     roleId: "Rabi",
     path: "persona.md",
@@ -98,7 +170,13 @@ test("persona sync conflict control lets a local Agent inspect and resolve evide
         publishConflictResolution: async () => ({ status: "published" as const, peerId: "pc-b", transport: "lan" as const })
       } as unknown as PersonaSyncCoordinator,
       token: () => "shared-app-token",
-      relay: () => ({ url: "", token: "shared-app-token", deviceId: "pc-a", deviceGuid: "guid-a" })
+      relay: () => ({ url: "", token: "shared-app-token", deviceId: "pc-a", deviceGuid: "guid-a" }),
+      planStorageStartup: () => ({
+        state: "ready",
+        attempt: 1,
+        incidents: 0,
+        lastTransitionAt: "2026-09-01T00:00:00.000Z"
+      })
     })) response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -179,15 +257,143 @@ test("persona sync conflict control lets a local Agent inspect and resolve evide
   assert.equal(fs.existsSync(path.join(roleDir, "persona.md")), false);
 });
 
-test("persona manifest endpoint returns a bounded partial snapshot while refresh is slow", async (t) => {
-  const snapshot = {
-    schemaVersion: 1 as const,
-    generatedAt: new Date(0).toISOString(),
-    roles: []
-  };
+test("persona plan package routes apply canonical whole packages and generic merge rejects plan files", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-plan-package-routes-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const roleDir = path.join(rolesRoot, "Rabi");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+  const server = http.createServer((incoming, response) => {
+    const requestUrl = new URL(incoming.url || "/", "http://127.0.0.1");
+    if (!handlePersonaSyncApi(incoming, requestUrl, response, {
+      service,
+      coordinator: {} as PersonaSyncCoordinator,
+      token: () => "shared-app-token",
+      relay: () => ({ url: "", token: "shared-app-token", deviceId: "pc-a", deviceGuid: "guid-a" }),
+      planStorageStartup: () => ({
+        state: "ready",
+        attempt: 1,
+        incidents: 0,
+        lastTransitionAt: "2026-09-01T00:00:00.000Z"
+      })
+    })) response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+
+  const active = activePackage("Rabi", "route-active");
+  const activeResponse = await request(port, "/api/persona-sync/plan-packages/active", {
+    method: "POST",
+    json: active
+  });
+  assert.equal(activeResponse.status, 200);
+  const activeBody = JSON.parse(activeResponse.text) as { data: { status: string; planId: string; inventoryHash: string } };
+  assert.deepEqual(
+    [activeBody.data.status, activeBody.data.planId, activeBody.data.inventoryHash],
+    ["applied", "route-active", active.inventoryHash]
+  );
+  const activePlanFile = path.join(roleDir, "plans", "active", "route-active", "plan.json");
+  const activeHistoryFile = path.join(roleDir, "plans", "active", "route-active", "history.jsonl");
+  assert.equal(fs.existsSync(activePlanFile), true);
+  assert.equal(fs.existsSync(activeHistoryFile), true);
+  const activePlanBefore = fs.readFileSync(activePlanFile);
+
+  const genericMerge = await request(port, "/api/persona-sync/merge", {
+    method: "POST",
+    json: {
+      roleId: "Rabi",
+      path: "plans/active/route-active/plan.json",
+      contentBase64: activePlanBefore.toString("base64"),
+      remoteHash: sha256(activePlanBefore),
+      peerId: "route-peer"
+    }
+  });
+  assert.equal(genericMerge.status, 400);
+  assert.match(genericMerge.text, /requires an atomic plan package/i);
+  assert.deepEqual(fs.readFileSync(activePlanFile), activePlanBefore);
+
+  const repeatedActive = await request(port, "/api/persona-sync/plan-packages/active", {
+    method: "POST",
+    json: active
+  });
+  assert.equal(repeatedActive.status, 200);
+  assert.equal((JSON.parse(repeatedActive.text) as { data: { status: string } }).data.status, "unchanged");
+
+  const divergentActive = await request(port, "/api/persona-sync/plan-packages/active", {
+    method: "POST",
+    json: activePackage("Rabi", "route-active", "Divergent route plan")
+  });
+  assert.equal(divergentActive.status, 409);
+  assert.equal((JSON.parse(divergentActive.text) as { data: { status: string; reason: string } }).data.status, "conflict");
+  assert.deepEqual(fs.readFileSync(activePlanFile), activePlanBefore);
+
+  const archived = archivePackage("Rabi", "route-archive");
+  const archiveResponse = await request(port, "/api/persona-sync/plan-packages/archive", {
+    method: "POST",
+    json: archived
+  });
+  assert.equal(archiveResponse.status, 200);
+  const archiveBody = JSON.parse(archiveResponse.text) as { data: { status: string; planId: string; inventoryHash: string } };
+  assert.deepEqual(
+    [archiveBody.data.status, archiveBody.data.planId, archiveBody.data.inventoryHash],
+    ["applied", "route-archive", archived.inventoryHash]
+  );
+  assert.equal(fs.existsSync(path.join(roleDir, "plans", "archive", "route-archive", "plan.json")), true);
+  assert.equal(fs.existsSync(path.join(roleDir, "plans", "active", "route-archive")), false);
+});
+
+test("persona plan package mutation is rejected before body processing while startup recovery is pending", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-persona-plan-startup-gate-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const rolesRoot = path.join(root, "roles");
+  const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
+  t.after(() => service.stopManifestIndex());
+  const server = http.createServer((incoming, response) => {
+    const requestUrl = new URL(incoming.url || "/", "http://127.0.0.1");
+    if (!handlePersonaSyncApi(incoming, requestUrl, response, {
+      service,
+      coordinator: {} as PersonaSyncCoordinator,
+      token: () => "shared-app-token",
+      relay: () => ({ url: "", token: "shared-app-token", deviceId: "pc-a", deviceGuid: "guid-a" }),
+      planStorageStartup: () => ({
+        state: "running",
+        attempt: 1,
+        incidents: 0,
+        lastTransitionAt: "2026-09-01T00:00:00.000Z"
+      })
+    })) response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+
+  const response = await request(port, "/api/persona-sync/plan-packages/active", {
+    method: "POST",
+    json: { shouldNeverBeParsedAsAPlanPackage: true }
+  });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers["retry-after"], "1");
+  assert.equal((JSON.parse(response.text) as { error: string }).error, "PLAN_STORAGE_STARTUP_UNAVAILABLE");
+  assert.equal(fs.existsSync(rolesRoot), false);
+});
+
+test("persona manifest endpoint reads only the published snapshot and fails closed while the first worker refresh is running", async (t) => {
   const service = {
-    manifest: () => new Promise(() => undefined),
-    manifestSnapshot: () => snapshot
+    manifest: () => {
+      throw new Error("GET must not invoke manifest refresh work.");
+    },
+    publishedManifestSnapshot: () => ({
+      publication: {
+        executionMode: "child_process",
+        available: false,
+        revision: 0,
+        state: "refreshing",
+        stale: false,
+        refreshStartedAt: new Date(0).toISOString(),
+        workerPid: 1234,
+        deadlineMs: 5_000
+      }
+    })
   } as unknown as PersonaSyncService;
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
@@ -195,8 +401,7 @@ test("persona manifest endpoint returns a bounded partial snapshot while refresh
       service,
       coordinator: {} as PersonaSyncCoordinator,
       token: () => "",
-      relay: () => ({ url: "", token: "", deviceId: "", deviceGuid: "" }),
-      manifestTimeoutMs: 20
+      relay: () => ({ url: "", token: "", deviceId: "", deviceGuid: "" })
     })) response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -205,15 +410,28 @@ test("persona manifest endpoint returns a bounded partial snapshot while refresh
   const startedAt = Date.now();
   const response = await request(port, "/api/persona-sync/manifest");
   assert.ok(Date.now() - startedAt < 250);
-  assert.equal(response.status, 200);
-  const body = JSON.parse(response.text) as { data: typeof snapshot; scan: { state: string; partial: boolean } };
-  assert.deepEqual(body.data, snapshot);
+  assert.equal(response.status, 503);
+  const body = JSON.parse(response.text) as { code: number; data?: unknown; scan: Record<string, unknown> };
+  assert.equal(body.code, -1);
+  assert.equal(body.data, undefined);
   assert.deepEqual(body.scan, {
-    state: "timeout",
-    partial: true,
-    deadlineMs: 20,
-    message: "Persona manifest refresh exceeded its deadline; returned the last persisted in-memory snapshot while Manager stayed responsive."
+    state: "refreshing",
+    partial: false,
+    revision: 0,
+    stale: false,
+    refreshStartedAt: new Date(0).toISOString(),
+    deadlineMs: 5_000
   });
+});
+
+test("persona manifest GET has a static memory-only boundary", () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "src", "manager", "personaSyncRoutes.ts"), "utf8");
+  const start = source.indexOf('requestUrl.pathname === "/api/persona-sync/manifest"');
+  const end = source.indexOf("const fileMatch", start);
+  assert.ok(start >= 0 && end > start);
+  const route = source.slice(start, end);
+  assert.match(route, /publishedManifestSnapshot\(roleId\)/);
+  assert.doesNotMatch(route, /\.manifest\(|reconcile|physicalPlanScopes|withPlanStorageLease|createHash|\bfs\./);
 });
 
 test("authenticated WebGUI control plane may compare persona folders without opening diagnostics on the LAN data plane", async (t) => {

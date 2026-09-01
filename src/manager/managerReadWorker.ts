@@ -7,15 +7,28 @@ import {
 } from "../personaVoiceTranscriptView.js";
 import { PersonaSyncService } from "../personaSync.js";
 import {
-  getConsolidatedMemory,
-  getRecentMemory,
+  getPlan,
+  getRoleSkill,
   listActiveRecentMemories,
   listArchivedMemories,
   listConsolidatedMemories,
   listConsolidationRuns,
+  listPlanHistory,
+  listRoleSkills,
+  readPlansFromStorageInWorker,
+  readRoleKnowledgeCatalogSnapshot,
+  roleKnowledgeFileCounts,
   roleMemoryCounts,
-  presentRoleMemories
+  presentRoleMemories,
+  readRecentMemoryFromStorageInWorker,
+  type RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
+import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
+import { readPlanStoragePackage } from "../planStorageRepository.js";
+import { readRolePanelTimeline } from "../rolePanelTimeline.js";
+import { roleFolderPath } from "../shared/routePaths.js";
+import { sanitizeRoleId } from "../shared/routeIdentity.js";
+import { storageInventoryRevisionToken, storageRevisionToken } from "../shared/storageRevision.js";
 import { paginateRoleMemory } from "../roleKnowledgePagination.js";
 import { sortKnowledgeByUpdatedAt } from "../roleKnowledgePresentation.js";
 import type {
@@ -24,9 +37,14 @@ import type {
   PerformanceStoreStatus
 } from "../shared/performanceContract.js";
 import { buildPerformanceSummary, isPerformanceSample } from "./performanceStore.js";
-import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecovery.js";
+import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecoveryDiscovery.js";
+import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot.js";
 
 export type ManagerReadWorkerTask =
+  | {
+      type: "gateway_diagnostics_snapshot";
+      input: GatewayDiagnosticsWorkerInput;
+    }
   | {
       type: "persona_voice_transcripts";
       roleDir: string;
@@ -43,10 +61,63 @@ export type ManagerReadWorkerTask =
       rolesRoot: string;
     }
   | {
+      type: "role_directories";
+      rolesRoot: string;
+    }
+  | {
+      type: "role_panel_timeline_read";
+      rolesRoot: string;
+      roleId: string;
+      limit: number;
+    }
+  | {
+      type: "role_knowledge_catalog_snapshot";
+      roleDir: string;
+    }
+  | {
+      type: "role_plan_catalog";
+      roleDir: string;
+    }
+  | {
+      type: "role_plan_detail" | "role_plan_history" | "role_plan_feedback";
+      roleDir: string;
+      planId: string;
+    }
+  | {
+      type: "role_storage_plan_projection" | "role_storage_plan_feedback_projection";
+      roleDir: string;
+      planId: string;
+    }
+  | {
+      type: "role_knowledge_file_counts";
+      roleDir: string;
+    }
+  | {
+      type: "role_skill_catalog";
+      roleDir: string;
+      skillId?: string;
+    }
+  | {
+      type: "role_consolidation_runs";
+      roleDir: string;
+      runId?: string;
+    }
+  | {
+      type: "role_storage_consolidation_projection";
+      roleDir: string;
+      runId: string;
+    }
+  | {
       type: "role_memory_catalog";
       roleDir: string;
       kind: "recent" | "consolidated" | "archived";
       memoryId?: string;
+    }
+  | {
+      type: "role_storage_memory_projection";
+      roleDir: string;
+      memoryId: string;
+      fresh?: boolean;
     }
   | {
       type: "role_memory_page";
@@ -111,6 +182,15 @@ function parsePerformanceLines(content: string): PerformanceSample[] {
   return samples;
 }
 
+function planStorageRevision(roleDir: string, plan: { id: string; status: string }): string {
+  const storagePackage = readPlanStoragePackage(
+    roleDir,
+    plan.id,
+    plan.status === "已归档" ? "archive" : "active"
+  );
+  return storageInventoryRevisionToken(storagePackage.inventoryHash);
+}
+
 async function performanceLogFiles(logDirectory: string): Promise<string[]> {
   const entries = await fs.promises.readdir(logDirectory, { withFileTypes: true });
   return entries
@@ -150,6 +230,10 @@ async function readRecentPerformanceSamples(logDirectory: string, limit: number)
 
 async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
   switch (task.type) {
+    case "gateway_diagnostics_snapshot": {
+      const { buildGatewayDiagnosticsWorkerSnapshot } = await import("./controlPlaneRoutes.js");
+      return buildGatewayDiagnosticsWorkerSnapshot(task.input);
+    }
     case "persona_voice_transcripts":
       return queryPersonaVoiceTranscriptViews(task.roleDir, task.query);
     case "persona_sync_conflicts": {
@@ -161,29 +245,105 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
     }
     case "plan_feedback_recovery_candidates":
       return await listOpenPlanFeedbackRecoveryCandidates(task.rolesRoot);
+    case "role_directories":
+      return fs.readdirSync(task.rolesRoot, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => path.join(task.rolesRoot, entry.name));
+    case "role_panel_timeline_read": {
+      const roleId = sanitizeRoleId(task.roleId);
+      if (!roleId || roleId !== task.roleId) throw new Error("Role panel timeline roleId is invalid.");
+      const limit = Math.min(5_000, Math.max(1, Math.floor(task.limit) || 120));
+      return readRolePanelTimeline(roleFolderPath(task.rolesRoot, roleId), limit);
+    }
+    case "role_knowledge_catalog_snapshot":
+      return readRoleKnowledgeCatalogSnapshot(task.roleDir) satisfies RoleKnowledgeCatalogSnapshot;
+    case "role_plan_catalog": {
+      const plans = readPlansFromStorageInWorker(task.roleDir);
+      return {
+        plans,
+        approvalByPlanId: Object.fromEntries(
+          plans.map(plan => [plan.id, planFeedbackSummary(task.roleDir, plan.id)])
+        )
+      };
+    }
+    case "role_plan_detail": {
+      const plan = getPlan(task.roleDir, task.planId);
+      return plan ? { plan, approval: planFeedbackSummary(task.roleDir, plan.id) } : null;
+    }
+    case "role_storage_plan_projection": {
+      const plan = getPlan(task.roleDir, task.planId);
+      return plan ? {
+        plan,
+        revision: planStorageRevision(task.roleDir, plan),
+        approval: planFeedbackSummary(task.roleDir, plan.id)
+      } : null;
+    }
+    case "role_plan_history": {
+      const plan = getPlan(task.roleDir, task.planId);
+      return plan ? { plan, records: listPlanHistory(task.roleDir, plan.id) } : null;
+    }
+    case "role_plan_feedback": {
+      const plan = getPlan(task.roleDir, task.planId);
+      if (!plan) return null;
+      const records = listPlanFeedback(task.roleDir, plan.id);
+      return { plan, records };
+    }
+    case "role_storage_plan_feedback_projection": {
+      const plan = getPlan(task.roleDir, task.planId);
+      if (!plan) return null;
+      const records = listPlanFeedback(task.roleDir, plan.id);
+      return {
+        plan,
+        planRevision: planStorageRevision(task.roleDir, plan),
+        records,
+        recordRevisions: Object.fromEntries(records.map(record => [record.id, storageRevisionToken(record)]))
+      };
+    }
+    case "role_knowledge_file_counts":
+      return roleKnowledgeFileCounts(task.roleDir);
+    case "role_skill_catalog":
+      return task.skillId ? getRoleSkill(task.roleDir, task.skillId) ?? null : listRoleSkills(task.roleDir);
+    case "role_consolidation_runs": {
+      const runs = listConsolidationRuns(task.roleDir);
+      return task.runId ? runs.find(run => run.id === task.runId) ?? null : runs;
+    }
+    case "role_storage_consolidation_projection": {
+      const run = listConsolidationRuns(task.roleDir).find(item => item.id === task.runId) ?? null;
+      return run ? { run, revision: storageRevisionToken(run) } : null;
+    }
     case "role_memory_catalog": {
       if (task.kind === "recent" || task.kind === "archived") {
-        if (task.memoryId && !getRecentMemory(task.roleDir, task.memoryId)) return null;
+        const source = task.kind === "archived"
+          ? listArchivedMemories(task.roleDir)
+          : listActiveRecentMemories(task.roleDir);
+        if (task.memoryId && !source.some(item => item.id === task.memoryId)) return null;
         const presented = presentRoleMemories(
           task.roleDir,
-          sortKnowledgeByUpdatedAt(task.kind === "archived"
-            ? listArchivedMemories(task.roleDir)
-            : listActiveRecentMemories(task.roleDir)),
+          sortKnowledgeByUpdatedAt(source),
           "recent"
         );
         return task.memoryId
           ? presented.find((item) => item.id === task.memoryId) ?? null
           : presented;
       }
-      if (task.memoryId && !getConsolidatedMemory(task.roleDir, task.memoryId)) return null;
+      const source = listConsolidatedMemories(task.roleDir);
+      if (task.memoryId && !source.some(item => item.id === task.memoryId)) return null;
       const presented = presentRoleMemories(
         task.roleDir,
-        sortKnowledgeByUpdatedAt(listConsolidatedMemories(task.roleDir)),
+        sortKnowledgeByUpdatedAt(source),
         "consolidated"
       );
       return task.memoryId
         ? presented.find((item) => item.id === task.memoryId) ?? null
         : presented;
+    }
+    case "role_storage_memory_projection": {
+      const memory = (task.fresh
+        ? readRecentMemoryFromStorageInWorker(task.roleDir, task.memoryId)
+        : listActiveRecentMemories(task.roleDir).find(item => item.id === task.memoryId)) ?? null;
+      if (!memory) return null;
+      const projection = presentRoleMemories(task.roleDir, [memory], "recent")[0];
+      return projection ? { memory: projection, revision: storageRevisionToken(memory) } : null;
     }
     case "role_memory_page": {
       const items = task.kind === "consolidated"

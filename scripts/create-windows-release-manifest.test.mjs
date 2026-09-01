@@ -97,6 +97,19 @@ test("release manifest rejects retired Manager semantics from built runtime and 
   }
 });
 
+test("release manifest rejects retired Manager lifecycle APIs while allowing the fenced Host shutdown route", () => {
+  for (const route of ["/manager/start", "/manager/shutdown", "/api/manager/shutdown", String.raw`\/api\/manager\/shutdown`]) {
+    withPayload((root) => {
+      fs.writeFileSync(path.join(root, "dist", "manager.js"), `const retiredLifecycleRoute = '${route}';`, "utf8");
+      assert.throws(() => writeManifest(root, "0.2.1"), /retired Manager semantics \(retired Manager lifecycle API\)/);
+    });
+  }
+  withPayload((root) => {
+    fs.writeFileSync(path.join(root, "dist", "manager.js"), "const hostShutdown = '/_rabiroute/host/shutdown';", "utf8");
+    assert.ok(writeManifest(root, "0.2.1").releaseId);
+  });
+});
+
 test("release manifest scans UTF-16 operational scripts", () => {
   withPayload((root) => {
     const target = path.join(root, "scripts", "start-manager.ps1");

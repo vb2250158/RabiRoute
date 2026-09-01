@@ -50,9 +50,10 @@ const migratedCentralRouteFragments = [
 
 test("plugin-owned Manager APIs have no legacy central dispatch branches", () => {
   const central = source("src/manager/controlPlaneRoutes.ts");
-  const serverStart = central.indexOf("const activeServer = http.createServer");
-  assert.ok(serverStart >= 0);
-  const centralDispatch = central.slice(serverStart);
+  const handlerStart = central.indexOf("const handleManagerRequest =");
+  const handlerEnd = central.indexOf("activeServer.requestTimeout", handlerStart);
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+  const centralDispatch = central.slice(handlerStart, handlerEnd);
 
   for (const route of migratedCentralRouteFragments) {
     assert.equal(
@@ -165,22 +166,25 @@ test("Remote Agent rejects WebSocket work before HTTP request drain", () => {
   assert.match(plugin, /unregisterRoutes\(\);[\s\S]*hub\.stopAccepting\(\);[\s\S]*await requestTracker\.stop\(\);[\s\S]*await hub\.shutdown\(\)/);
 });
 
-test("Manager forced shutdown allows the full plugin drain budget", () => {
+test("Manager forced shutdown is bounded after the owner teardown flight starts", () => {
   const central = source("src/manager/controlPlaneRoutes.ts");
-  assert.match(central, /setTimeout\(\(\) => process\.exit\(0\), 15 \* 60_000\)/);
+  const teardownStart = central.indexOf("managerRuntimeOwner.teardown(`signal:${reason}`)");
+  const forcedExitStart = central.indexOf("const forcedExit = setTimeout(", teardownStart);
+  assert.ok(teardownStart >= 0 && forcedExitStart > teardownStart);
+  const forcedExitContract = central.slice(forcedExitStart, forcedExitStart + 500);
+  assert.match(forcedExitContract, /\(\) => process\.exit\(1\)/);
+  assert.match(
+    forcedExitContract,
+    /DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS \+ 1_000/
+  );
 });
 
-test("Manager stops plugin Fibers before shared workers and the root Context", () => {
+test("Manager RuntimeOwner gives the Cordis root sole ownership of shared Fiber disposal", () => {
   const central = source("src/manager/controlPlaneRoutes.ts");
-  const helperStart = central.indexOf("const disposeManagerCordisRuntime");
-  const helperEnd = central.indexOf("let managerPluginDiagnostics", helperStart);
-  const helper = central.slice(helperStart, helperEnd);
-  assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  const pluginStop = helper.indexOf("await managerPluginKernel?.dispose()");
-  const sharedStop = helper.indexOf("await managerSharedResourcesRuntime.unmount()");
-  const rootStop = helper.indexOf("await managerCordisRoot.dispose()");
-  assert.ok(pluginStop >= 0 && sharedStop > pluginStop && rootStop > sharedStop);
-  assert.match(central, /const managerCordisDispose = disposeManagerCordisRuntime\(\)/);
+  const rootOwner = central.indexOf('managerRuntimeOwner.register("cordis_root"');
+  const pluginOwner = central.indexOf('managerRuntimeOwner.register("manager_plugin_kernel"');
+  assert.ok(rootOwner >= 0 && pluginOwner > rootOwner);
+  assert.doesNotMatch(central, /managerSharedResourcesRuntime\.unmount\(\)|disposeManagerCordisRuntime/);
 });
 
 test("removed compatibility APIs stay absent from their former owners", () => {

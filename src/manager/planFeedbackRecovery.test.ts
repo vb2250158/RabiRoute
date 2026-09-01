@@ -7,13 +7,37 @@ import {
   appendPlanFeedback,
   createPlanFeedbackRecord,
   listPlanFeedback,
-  listPlanFeedbackFiles
+  listPlanFeedbackFiles,
+  updatePlanFeedbackDeliveryAsync,
+  updatePlanFeedbackPostCommit,
+  updatePlanFeedbackQaHandling,
+  type PlanFeedbackDeliveryStatus,
+  type PlanFeedbackRecord
 } from "../planFeedback.js";
-import { createPlan } from "../roleKnowledge.js";
+import { createPlan, listPlans } from "../roleKnowledge.js";
+import { storageRevisionToken } from "../shared/storageRevision.js";
 import {
-  listOpenPlanFeedbackRecoveryCandidates,
-  recoverPlanFeedbackCandidate
+  recoverPlanFeedbackCandidate,
+  type PlanFeedbackRecoveryCandidate
 } from "./planFeedbackRecovery.js";
+import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecoveryDiscovery.js";
+
+function updateDeliveryForTest(
+  candidate: PlanFeedbackRecoveryCandidate,
+  record: PlanFeedbackRecord,
+  status: Exclude<PlanFeedbackDeliveryStatus, "record_only">,
+  message?: string,
+  signal?: AbortSignal
+): Promise<PlanFeedbackRecord> {
+  const revision = storageRevisionToken(record);
+  if (!revision) throw new Error(`Feedback revision is unavailable: ${record.id}`);
+  return updatePlanFeedbackDeliveryAsync(candidate.roleDir, record, status, message, signal, revision);
+}
+
+async function queryRecoveryForTest(candidate: PlanFeedbackRecoveryCandidate) {
+  const plan = listPlans(candidate.roleDir).find((item) => item.id === candidate.plan.id);
+  return plan ? { plan, records: listPlanFeedback(candidate.roleDir, plan.id) } : null;
+}
 
 function makeRolesRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-feedback-recovery-"));
@@ -71,6 +95,40 @@ test("startup recovery lists the latest pending or failed plan feedback once", a
   assert.equal(candidates[0]?.plan.taskBinding?.sessionId, fixture.plan.taskBinding?.sessionId);
 });
 
+test("startup recovery includes dispatching and dispatch-failed QA post-commit records", async () => {
+  const fixture = createCandidateFixture();
+  for (const [id, status] of [
+    ["qa-dispatching", "dispatching"],
+    ["qa-dispatch-failed", "dispatch_failed"]
+  ] as const) {
+    const created = appendPlanFeedback(fixture.roleDir, createPlanFeedbackRecord({
+      id,
+      roleId: fixture.roleId,
+      planId: fixture.plan.id,
+      planTitle: fixture.plan.title,
+      kind: "approval_suggestion",
+      author: "user",
+      source: "webgui",
+      text: "问题仍存在。复现步骤：重新执行操作。修复前结果不正确，修复后实际结果仍不正确。",
+      notifyAgent: false
+    }));
+    const handling = updatePlanFeedbackQaHandling(fixture.roleDir, created, {
+      outcome: "failed",
+      issueType: "generic",
+      status,
+      missingEvidence: [],
+      consumedAt: new Date().toISOString()
+    });
+    updatePlanFeedbackPostCommit(fixture.roleDir, handling, "failed", "Manager restarted");
+  }
+
+  const candidates = await listOpenPlanFeedbackRecoveryCandidates(fixture.rolesRoot);
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.feedback.id).sort(),
+    ["feedback-recovery", "qa-dispatch-failed", "qa-dispatching"]
+  );
+});
+
 test("startup recovery discovers feedback without loading unrelated plan bodies", async () => {
   const fixture = createCandidateFixture();
   const activeDirectory = path.join(fixture.roleDir, "plans", "active");
@@ -99,6 +157,8 @@ test("startup recovery marks an accepted feedback delivered without replay", asy
   let sends = 0;
 
   const outcome = await recoverPlanFeedbackCandidate(candidate, {
+    query: queryRecoveryForTest,
+    updateDelivery: updateDeliveryForTest,
     inspect: async (request) => {
       assert.equal(request.deliveryId, fixture.feedback.id);
       return "accepted";
@@ -129,6 +189,8 @@ test("startup recovery accepts a linked guidance response after Desktop history 
   let sends = 0;
 
   const outcome = await recoverPlanFeedbackCandidate(candidate, {
+    query: queryRecoveryForTest,
+    updateDelivery: updateDeliveryForTest,
     inspect: async () => { reads += 1; return "missing"; },
     schedule: async () => { sends += 1; }
   });
@@ -150,6 +212,8 @@ test("startup recovery does not replay a candidate whose authoritative ledger is
   let sends = 0;
 
   const outcome = await recoverPlanFeedbackCandidate(candidate, {
+    query: queryRecoveryForTest,
+    updateDelivery: updateDeliveryForTest,
     inspect: async () => { inspections += 1; return "missing"; },
     schedule: async () => { sends += 1; }
   });
@@ -193,6 +257,8 @@ test("startup recovery replays a missing feedback, defers active work, and class
   const missingCandidate = (await listOpenPlanFeedbackRecoveryCandidates(missingFixture.rolesRoot))[0]!;
   let sends = 0;
   const missing = await recoverPlanFeedbackCandidate(missingCandidate, {
+    query: queryRecoveryForTest,
+    updateDelivery: updateDeliveryForTest,
     inspect: async () => "missing",
     schedule: async () => { sends += 1; }
   });
@@ -202,6 +268,8 @@ test("startup recovery replays a missing feedback, defers active work, and class
   const activeFixture = createCandidateFixture();
   const activeCandidate = (await listOpenPlanFeedbackRecoveryCandidates(activeFixture.rolesRoot))[0]!;
   const active = await recoverPlanFeedbackCandidate(activeCandidate, {
+    query: queryRecoveryForTest,
+    updateDelivery: updateDeliveryForTest,
     inspect: async () => "in_progress",
     schedule: async () => { sends += 1; }
   });
@@ -209,6 +277,8 @@ test("startup recovery replays a missing feedback, defers active work, and class
   assert.equal(sends, 1);
 
   const unreadable = await recoverPlanFeedbackCandidate(activeCandidate, {
+    query: queryRecoveryForTest,
+    updateDelivery: updateDeliveryForTest,
     inspect: async () => { throw new Error("Desktop unavailable"); },
     schedule: async () => { sends += 1; }
   });

@@ -30,6 +30,7 @@ import {
   matchingMessageScriptAutomations
 } from "./automation/personaAutomationRuntime.js";
 import { buildAgentPacket } from "./routing/agentPacket.js";
+import { fetchRoleContextProjection } from "./manager/roleContextProjection.js";
 import { renderRabiDelivery, type RabiDeliveryEnvelope, type RabiMessageSource } from "./shared/rabiMessage.js";
 import { observeIdentityEndpoint } from "./identityRelations.js";
 import { identityEndpointsForForward } from "./routing/identityContext.js";
@@ -132,6 +133,7 @@ export type ForwardMessageOptions = {
   replayOfAttemptId?: string;
   recordInbound?: boolean;
   messageGroup?: PendingMessageGroup;
+  signal?: AbortSignal;
 };
 
 let messageAgentPool: MessageAgentPool | undefined;
@@ -962,6 +964,29 @@ async function forwardMessageToRoute(
   }
 
   const roleContext = rolePathsForRoute(route);
+  const projectionIdentity = {
+    managerBaseUrl: String(process.env.GATEWAY_MANAGER_URL || "").trim(),
+    routeId: String(process.env.GATEWAY_ID || "").trim(),
+    capability: String(process.env.PERSONA_MESSAGING_CAPABILITY || "").trim(),
+    applicationGenerationId: String(process.env.RABIROUTE_APPLICATION_GENERATION_ID || "").trim(),
+    managerInstanceId: String(process.env.RABIROUTE_MANAGER_INSTANCE_ID || "").trim()
+  };
+  const projectionRequired = Boolean(
+    projectionIdentity.capability
+    || projectionIdentity.applicationGenerationId
+    || projectionIdentity.managerInstanceId
+  );
+  const roleKnowledge = roleContext.roleDir && projectionRequired
+    ? await fetchRoleContextProjection({
+        ...projectionIdentity,
+        roleId: roleContext.roleId,
+        signalText: String(extraValues.message || record.rawMessage || ""),
+        includePendingConsolidation: routeKind === "manual_trigger"
+          && String(extraValues.triggerId || "") === "memory-consolidation",
+        consolidationTrigger: routeKind === "manual_trigger" ? "manual" : undefined,
+        signal: options.signal
+      })
+    : undefined;
   if (roleContext.roleDir) {
     const identityEndpoints = identityEndpointsForForward(routeKind, record, {
       gatewayId: process.env.GATEWAY_ID,
@@ -1004,7 +1029,7 @@ async function forwardMessageToRoute(
   for (const rule of decision.matchedRules) {
     const packet = measureSyncPerformanceOperation(
       PERFORMANCE_OPERATIONS.gatewayPacketBuild,
-      () => buildAgentPacket(decision, rule, roleContext)
+      () => buildAgentPacket(decision, rule, roleContext, { roleKnowledge })
     );
     if (packet.conversationSituation && !situationRecorded) {
       try {

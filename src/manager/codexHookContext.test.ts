@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listRecentMemories } from "../roleKnowledge.js";
+import { planJsonFile } from "../planStorageLayout.js";
+import {
+  listRecentMemories,
+  publishRoleKnowledgeCatalogSnapshot,
+  readRoleKnowledgeCatalogSnapshot
+} from "../roleKnowledge.js";
 import {
   CodexHookContextService,
   parseCodexHookControl,
@@ -12,6 +17,10 @@ import {
 } from "./codexHookContext.js";
 import type { PangHuProgressNotificationDelivery, PangHuProgressNotificationResult } from "./panghuProgressNotificationGate.js";
 
+function publishFixtureRoleKnowledge(roleDir: string): void {
+  publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
+}
+
 function fixture(options: {
   deliverPlanTaskCompletion?: (delivery: PlanTaskCompletionDelivery) => Promise<void>;
   hookEnabled?: (request: CodexHookContextRequest) => boolean;
@@ -19,17 +28,19 @@ function fixture(options: {
   recordAgentRequestStop?: (request: CodexHookContextRequest) => { status: "scheduled"; reason: string; requestIds: string[]; turnId?: string };
   findPangHuProgressIssue?: (plan: any) => PangHuProgressNotificationDelivery["issue"] | undefined;
   deliverPangHuProgressNotification?: (delivery: PangHuProgressNotificationDelivery) => Promise<PangHuProgressNotificationResult>;
+  planStorageReady?: () => boolean;
 } = {}): { root: string; rolesRoot: string; roleDir: string; storePath: string; service: CodexHookContextService } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-"));
   const rolesRoot = path.join(root, "roles");
   const roleDir = path.join(rolesRoot, "YeYu");
   const storePath = path.join(root, "data", "codex-hook", "sessions.json");
   const timestamp = new Date().toISOString();
-  fs.mkdirSync(path.join(roleDir, "plans", "items", "active"), { recursive: true });
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
+  fs.mkdirSync(path.dirname(planPath), { recursive: true });
   fs.mkdirSync(path.join(roleDir, "memory", "recent"), { recursive: true });
   fs.writeFileSync(path.join(roleDir, "persona.md"), "# 夜雨\n\n温柔、清楚，只根据真实上下文行动。", "utf8");
   fs.writeFileSync(path.join(roleDir, "growth.md"), "# 成长\n\n不确定时承认不确定。", "utf8");
-  fs.writeFileSync(path.join(roleDir, "plans", "items", "active", "plan-hook.json"), JSON.stringify({
+  fs.writeFileSync(planPath, JSON.stringify({
     id: "plan-hook",
     title: "统一 Codex Hook 上下文",
     focus: "统一 Codex Hook 上下文",
@@ -57,6 +68,7 @@ function fixture(options: {
     updatedAt: timestamp,
     keywords: ["触发器和注入器"]
   }, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
   return {
     root,
     rolesRoot,
@@ -70,10 +82,33 @@ function fixture(options: {
       isManagedAgentSession: options.isManagedAgentSession,
       recordAgentRequestStop: options.recordAgentRequestStop,
       findPangHuProgressIssue: options.findPangHuProgressIssue,
-      deliverPangHuProgressNotification: options.deliverPangHuProgressNotification
+      deliverPangHuProgressNotification: options.deliverPangHuProgressNotification,
+      planStorageReady: options.planStorageReady
     })
   };
 }
+
+test("Stop completion is rejected before internal plan reads or mutations while recovery is not ready", async (t) => {
+  let deliveries = 0;
+  const { root, storePath, service } = fixture({
+    planStorageReady: () => false,
+    deliverPlanTaskCompletion: async () => { deliveries += 1; }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  await assert.rejects(
+    service.handleHook({
+      sessionId: "session-plan-worker",
+      eventName: "Stop",
+      turnId: "turn-gated",
+      cwd: root,
+      lastAssistantMessage: "done"
+    }),
+    (error: unknown) => (error as { code?: string }).code === "PLAN_STORAGE_STARTUP_UNAVAILABLE"
+  );
+  assert.equal(deliveries, 0);
+  assert.equal(fs.existsSync(storePath), false);
+});
 
 test("Codex hook control markers remain strict", () => {
   assert.deepEqual(parseCodexHookControl("[rabi:use YeYu]"), { action: "bind", roleId: "YeYu" });
@@ -323,9 +358,10 @@ test("paused plans do not deliver bound task completion reminders", async (t) =>
     deliverPlanTaskCompletion: async () => { deliveryCount += 1; }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   fs.writeFileSync(planPath, JSON.stringify({ ...plan, status: "暂停" }, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
 
   const result = await service.handleHook({
     sessionId: "session-plan-worker",
@@ -384,9 +420,10 @@ test("completed plans suppress completion reminders while retaining business bin
     deliverPlanTaskCompletion: async () => { deliveryCount += 1; }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   fs.writeFileSync(planPath, JSON.stringify({ ...plan, status: "已完成" }, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
 
   const result = await service.handleHook({
     sessionId: "session-plan-worker",
@@ -478,10 +515,11 @@ test("PangHu read-only investigation progress requires a verified group receipt 
     }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
   fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
 
   const result = await service.handleHook({
     sessionId: "session-plan-worker",
@@ -506,10 +544,11 @@ test("PangHu progress without an issue mapping blocks Stop and does not send", a
     }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
   fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
 
   const result = await service.handleHook({
     sessionId: "session-plan-worker",
@@ -538,10 +577,11 @@ test("PangHu progress passes only after sentMessageId and platform reference rea
     })
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
   fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
 
   const first = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "panghu-sent-turn", cwd: "C:\\Data\\CottonProject\\PangHu", lastAssistantMessage: "实现完成：Stop Hook 已接入 Outbox 和 NapCat 引用回读。" });
   assert.equal(first.pangHuProgressNotification?.status, "sent");
@@ -558,15 +598,17 @@ test("non-PangHu workspaces and unchanged poll messages do not trigger group pro
     deliverPangHuProgressNotification: async () => { sends += 1; return { status: "sent", reason: "ok", sentMessageId: "sent-3", platformReferenceReadback: true }; }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   plan.taskBinding.workspace = root;
   fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
   await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "non-panghu-turn", cwd: root, lastAssistantMessage: "调查已完成。" });
   assert.equal(sends, 0);
 
   plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
   fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
   const unchanged = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "unchanged-turn", cwd: "C:\\Data\\CottonProject\\PangHu", lastAssistantMessage: "重复轮询，无变化。" });
   assert.notEqual(unchanged.pangHuProgressNotification?.status, "sent");
   assert.equal(sends, 0);
@@ -579,10 +621,11 @@ test("PangHu progress send is deduplicated by unchanged progress fingerprint, no
     deliverPangHuProgressNotification: async () => { sends += 1; return { status: "sent", reason: "ok", sentMessageId: `sent-${sends}`, platformReferenceReadback: true }; }
   });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const planPath = path.join(roleDir, "plans", "items", "active", "plan-hook.json");
+  const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
   plan.taskBinding.workspace = "C:\\Data\\CottonProject\\PangHu";
   fs.writeFileSync(planPath, JSON.stringify(plan, null, 2), "utf8");
+  publishFixtureRoleKnowledge(roleDir);
   for (const turnId of ["progress-first", "progress-second"]) {
     await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId, cwd: "C:\\Data\\CottonProject\\PangHu", lastAssistantMessage: "实现已写入并完成静态检查。" });
   }

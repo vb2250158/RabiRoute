@@ -6,6 +6,10 @@
     "manager": {
       "execution": "in_process",
       "module": "./manager.mjs"
+    },
+    "web": {
+      "execution": "in_process",
+      "module": "./web/client.mjs"
     }
   },
   "provides": [
@@ -43,6 +47,7 @@
       },
       "allowPublicBaseUrl": {
         "type": "boolean",
+        "description": "Explicitly trust a Home Assistant hostname or public address. Redirects and URL credentials remain forbidden.",
         "default": false
       },
       "runtimeDir": {

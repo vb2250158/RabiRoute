@@ -206,6 +206,8 @@ export const activate = definePlugin({
                 ensureDataDirs: runtime.ensureDataDirs,
                 findRoute: gatewayId => runtime.runtimes.get(gatewayId)?.definition,
                 ensurePersonaConfigFile: runtime.ensurePersonaConfigFile,
+                ensureRoleFile: runtime.ensureRoleFile,
+                ensureRoleFolder: runtime.ensureRoleFolder,
                 adapterConfigPath: runtime.adapterConfigPath,
                 writeAdapterConfigFile: route => runtime.writeAdapterConfigFile(route)
             }),

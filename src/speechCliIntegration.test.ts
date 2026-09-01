@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parseSpeechProcessResult } from "./speechMessageDelivery.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
+import type { RoleKnowledgeSnapshot } from "./roleKnowledge.js";
+import { handleRoleContextProjectionRequest } from "./manager/roleContextProjection.js";
 
 type ChildResult = {
   code: number | null;
@@ -20,6 +23,63 @@ type SpeechCliFixture = {
   roleDir: string;
   ingressStore: SpeechIngressStore;
 };
+
+async function startRoleContextFixture(roleId: string, roleDir: string, gatewayId: string): Promise<{
+  env: NodeJS.ProcessEnv;
+  close: () => Promise<void>;
+}> {
+  const identity = { applicationGenerationId: "speech-test-generation", managerInstanceId: "speech-test-manager" };
+  const capability = `speech-test-capability:${gatewayId}:${roleId}`;
+  const projection: RoleKnowledgeSnapshot = {
+    roleDir,
+    plansDir: path.join(roleDir, "plans"),
+    memoryDir: path.join(roleDir, "memory"),
+    agentInterfaceDocPath: "docs/rabi-agent-interfaces.md",
+    activePlans: [], activeSkills: [], recentMemories: [], matchedItems: [], matchedSkills: [], requiredReadItems: [],
+    contextInjection: { mode: "focused", requiredReadLimit: 3, matchedItemLimit: 3, personaMaxChars: 1600 }
+  };
+  const readJsonBody = <T>(request: http.IncomingMessage): Promise<T> => new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as T); }
+      catch (error) { reject(error); }
+    });
+    request.on("error", reject);
+  });
+  const jsonResponse = (response: http.ServerResponse, statusCode: number, body: unknown): void => {
+    response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify(body));
+  };
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (!handleRoleContextProjectionRequest(request, url, response, {
+      identity,
+      isLoopback: () => true,
+      verifyCapability: (actualGateway, actualRole, actualCapability) =>
+        actualGateway === gatewayId && actualRole === roleId && actualCapability === capability,
+      readJsonBody,
+      resolve: body => body.roleId === roleId ? projection : undefined,
+      requestRefresh: () => undefined,
+      jsonResponse
+    })) jsonResponse(response, 404, {});
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  return {
+    env: {
+      GATEWAY_MANAGER_URL: `http://127.0.0.1:${address.port}`,
+      RABIROUTE_APPLICATION_GENERATION_ID: identity.applicationGenerationId,
+      RABIROUTE_MANAGER_INSTANCE_ID: identity.managerInstanceId,
+      PERSONA_MESSAGING_CAPABILITY: capability
+    },
+    close: () => new Promise<void>(resolve => server.close(() => resolve()))
+  };
+}
 
 function runSpeechCli(args: string[], env: NodeJS.ProcessEnv): Promise<ChildResult> {
   return new Promise((resolve, reject) => {
@@ -152,11 +212,17 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
       template: "{message}"
     }]
   }];
-  const result = await runSpeechCli([
-    "--speech-message=cli-mobile-one",
-    "--speech-gateway=MobileRuntime",
-    "--speech-route-profile=mobile-main"
-  ], speechCliEnvironment(fixture, "MobileRuntime", "Ilias", "rabilink", routeProfiles));
+  const roleContext = await startRoleContextFixture("Ilias", fixture.roleDir, "MobileRuntime");
+  let result: ChildResult;
+  try {
+    result = await runSpeechCli([
+      "--speech-message=cli-mobile-one",
+      "--speech-gateway=MobileRuntime",
+      "--speech-route-profile=mobile-main"
+    ], { ...speechCliEnvironment(fixture, "MobileRuntime", "Ilias", "rabilink", routeProfiles), ...roleContext.env });
+  } finally {
+    await roleContext.close();
+  }
 
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.equal(parseSpeechProcessResult(result.stdout)?.status, "delivered");
@@ -231,11 +297,17 @@ test("speech CLI keeps the PC microphone on the independent voice endpoint", asy
     }]
   }];
 
-  const result = await runSpeechCli([
-    "--speech-message=cli-pc-one",
-    "--speech-gateway=VoiceRuntime",
-    "--speech-route-profile=voice-main"
-  ], speechCliEnvironment(fixture, "VoiceRuntime", "Rabi", "speech", routeProfiles));
+  const roleContext = await startRoleContextFixture("Rabi", fixture.roleDir, "VoiceRuntime");
+  let result: ChildResult;
+  try {
+    result = await runSpeechCli([
+      "--speech-message=cli-pc-one",
+      "--speech-gateway=VoiceRuntime",
+      "--speech-route-profile=voice-main"
+    ], { ...speechCliEnvironment(fixture, "VoiceRuntime", "Rabi", "speech", routeProfiles), ...roleContext.env });
+  } finally {
+    await roleContext.close();
+  }
 
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.equal(parseSpeechProcessResult(result.stdout)?.status, "delivered");

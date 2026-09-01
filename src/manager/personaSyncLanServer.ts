@@ -37,7 +37,11 @@ export function personaSyncLanAddresses(): string[] {
 function dataPlaneRequest(method: string | undefined, pathname: string): boolean {
   if (method === "GET" && pathname === "/api/persona-sync/manifest") return true;
   if (method === "GET" && /^\/api\/persona-sync\/files\/[^/]+\/.+/.test(pathname)) return true;
-  return method === "POST" && pathname === "/api/persona-sync/merge";
+  return method === "POST" && new Set([
+    "/api/persona-sync/merge",
+    "/api/persona-sync/plan-packages/active",
+    "/api/persona-sync/plan-packages/archive"
+  ]).has(pathname);
 }
 
 export class PersonaSyncLanServer {

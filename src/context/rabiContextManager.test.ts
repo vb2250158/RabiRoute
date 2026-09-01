@@ -3,20 +3,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listRecentMemories } from "../roleKnowledge.js";
+import { planJsonFile } from "../planStorageLayout.js";
+import {
+  listRecentMemories,
+  publishRoleKnowledgeCatalogSnapshot,
+  readRoleKnowledgeCatalogSnapshot
+} from "../roleKnowledge.js";
 import { RabiContextManager, requiredReadContextKey } from "./rabiContextManager.js";
 
 function fixture(): { root: string; roleDir: string; memoryPath: string; completedPlanPath: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-context-manager-"));
   const roleDir = path.join(root, "roles", "YeYu");
-  const activePlansDir = path.join(roleDir, "plans", "items", "active");
   const memoryDir = path.join(roleDir, "memory", "recent");
-  fs.mkdirSync(activePlansDir, { recursive: true });
   fs.mkdirSync(memoryDir, { recursive: true });
   const oldTimestamp = "2020-01-01T00:00:00.000Z";
   const currentTimestamp = new Date().toISOString();
-  const completedPlanPath = path.join(activePlansDir, "plan-complete.json");
+  const completedPlanPath = planJsonFile(roleDir, "plan-complete", "active");
   const memoryPath = path.join(memoryDir, "memory-hook.json");
+  fs.mkdirSync(path.dirname(completedPlanPath), { recursive: true });
   fs.writeFileSync(completedPlanPath, JSON.stringify({
     id: "plan-complete",
     title: "已完成旧计划",
@@ -45,6 +49,7 @@ function fixture(): { root: string; roleDir: string; memoryPath: string; complet
 test("preview resolves the same indexes without lifecycle side effects", (t) => {
   const data = fixture();
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  publishRoleKnowledgeCatalogSnapshot(data.roleDir, readRoleKnowledgeCatalogSnapshot(data.roleDir));
   const resolution = new RabiContextManager().resolve({
     kind: "preview",
     source: "manager_api",
@@ -58,9 +63,10 @@ test("preview resolves the same indexes without lifecycle side effects", (t) => 
   assert.equal(fs.existsSync(data.completedPlanPath), true);
 });
 
-test("message delivery performs the normal viewedAt and archive lifecycle", (t) => {
+test("message delivery uses the published projection without filesystem lifecycle work", (t) => {
   const data = fixture();
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  publishRoleKnowledgeCatalogSnapshot(data.roleDir, readRoleKnowledgeCatalogSnapshot(data.roleDir));
   const resolution = new RabiContextManager().resolve({
     kind: "message_delivery",
     source: "rabi_delivery",
@@ -69,8 +75,8 @@ test("message delivery performs the normal viewedAt and archive lifecycle", (t) 
     signalText: "统一管理"
   });
   assert.equal(resolution.knowledge.requiredReadItems[0]?.id, "memory-hook");
-  assert.equal(typeof listRecentMemories(data.roleDir).find((memory) => memory.id === "memory-hook")?.viewedAt, "string");
-  assert.equal(fs.existsSync(data.completedPlanPath), false);
+  assert.equal(listRecentMemories(data.roleDir).find((memory) => memory.id === "memory-hook")?.viewedAt, undefined);
+  assert.equal(fs.existsSync(data.completedPlanPath), true);
 });
 
 test("reasoning checkpoints inject only exact knowledge or Rabi context matches", (t) => {

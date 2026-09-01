@@ -6,10 +6,33 @@ import {
   PersonaSyncManifestIndex,
   personaSyncFileEligible,
   type PersonaSyncManifestIndexOptions,
-  type PersonaSyncManifestIndexStatus
+  type PersonaSyncManifestIndexStatus,
+  type PersonaSyncManifestPublishedSnapshot
 } from "./personaSyncManifestIndex.js";
+import type { PersonaSyncManifestCachePayload } from "./personaSyncManifestWorkerProtocol.js";
 import { atomicWriteFileSync, withFileLockSync } from "./shared/filePersistence.js";
 import { sanitizeRoleId } from "./shared/routeIdentity.js";
+import { inspectPlanStorageConflict } from "./planStoragePolicy.js";
+import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
+import {
+  archivedPlanStorageFence,
+  canonicalPlanIdForStorageIdentity,
+  personaPlanStoragePath,
+  type PersonaPlanStoragePath
+} from "./personaPlanStorage.js";
+import { withPlanStorageLease } from "./planStorageRepository.js";
+import { canonicalPlanStorageName } from "./planStorageLayout.js";
+import {
+  applyActivePlanPackage,
+  applyArchivedPlanPackage,
+  type PersonaSyncActivePlanPackageCommand,
+  type PersonaSyncArchivedPlanPackageCommand,
+  type PersonaSyncPlanPackageResult
+} from "./personaSyncPlanPackage.js";
+export type {
+  PersonaSyncActivePlanPackageCommand,
+  PersonaSyncArchivedPlanPackageCommand
+} from "./personaSyncPlanPackage.js";
 
 export const PERSONA_SYNC_DELETED_HASH = "deleted";
 
@@ -39,7 +62,7 @@ export type PersonaSyncMergeCommand = {
 };
 
 export type PersonaSyncMergeResult = {
-  status: "created" | "fast_forwarded" | "kept_local" | "merged" | "unchanged" | "conflict";
+  status: "created" | "fast_forwarded" | "kept_local" | "kept_archived" | "merged" | "unchanged" | "conflict";
   roleId: string;
   path: string;
   localHash?: string;
@@ -128,6 +151,44 @@ function safeRelativePath(value: unknown): string {
     throw new Error("Persona sync path must stay inside the persona folder.");
   }
   return segments.join("/");
+}
+
+function isPersonaPlanIdentityPath(relativePath: string, planPath: PersonaPlanStoragePath): boolean {
+  return relativePath.replace(/\\/g, "/").toLowerCase().endsWith("/plan.json");
+}
+
+function validatePersonaPlanIdentity(
+  roleRoot: string,
+  relativePath: string,
+  planPath: PersonaPlanStoragePath,
+  content: Buffer
+): void {
+  if (!isPersonaPlanIdentityPath(relativePath, planPath)) return;
+  let incoming: { id?: unknown; status?: unknown };
+  try {
+    incoming = JSON.parse(content.toString("utf8")) as { id?: unknown; status?: unknown };
+  } catch {
+    throw new Error(`Persona sync rejected malformed plan identity: ${relativePath}`);
+  }
+  let logicalPlanId: string;
+  try {
+    logicalPlanId = canonicalLogicalPlanId(incoming.id);
+  } catch {
+    throw new Error(`Persona sync plan identity does not match its storage path: ${relativePath}`);
+  }
+  if (canonicalPlanStorageName(logicalPlanId) !== planPath.storageId) {
+    throw new Error(`Persona sync plan identity does not match its storage path: ${relativePath}`);
+  }
+  const existingPlanId = canonicalPlanIdForStorageIdentity(roleRoot, planPath.storageId);
+  if (existingPlanId && existingPlanId !== logicalPlanId) {
+    throw new Error(`Persona sync plan identity collides with an existing logical plan: ${relativePath}`);
+  }
+  if (planPath.bucket === "archive" && incoming.status !== "已归档") {
+    throw new Error(`Persona sync archive identity is not terminal: ${relativePath}`);
+  }
+  if (planPath.bucket === "active" && incoming.status === "已归档") {
+    throw new Error(`Persona sync active identity cannot contain an archived plan: ${relativePath}`);
+  }
 }
 
 function walkConflictFiles(root: string, current = ""): string[] {
@@ -279,6 +340,14 @@ export class PersonaSyncService {
     return this.manifestIndex.snapshot(roleId);
   }
 
+  publishedManifestSnapshot(roleId?: string): PersonaSyncManifestPublishedSnapshot {
+    return this.manifestIndex.publishedSnapshot(roleId);
+  }
+
+  manifestCacheSnapshot(): PersonaSyncManifestCachePayload {
+    return this.manifestIndex.cacheSnapshot();
+  }
+
   startManifestIndex(): Promise<void> {
     return this.manifestIndex.start();
   }
@@ -295,26 +364,39 @@ export class PersonaSyncService {
     const id = sanitizeRoleId(roleId);
     if (!id) throw new Error("Invalid persona id.");
     const safePath = safeRelativePath(relativePath);
-    const filePath = path.join(this.rolesRoot(), id, safePath);
     const root = path.resolve(this.rolesRoot(), id);
-    assertNoSymbolicLinks(root, filePath);
-    if (!path.resolve(filePath).startsWith(`${root}${path.sep}`) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-      throw new Error("Persona sync file was not found.");
-    }
-    const content = fs.readFileSync(filePath);
-    if (!personaSyncFileEligible(safePath, content.byteLength)) throw new Error("Persona sync file is excluded or too large.");
-    const stat = fs.statSync(filePath);
-    return {
-      file: {
-        roleId: id,
-        path: safePath,
-        size: content.byteLength,
-        modifiedAt: stat.mtime.toISOString(),
-        sha256: sha256(content),
-        mergeStrategy: safePath.toLowerCase().endsWith(".jsonl") ? "jsonl-union" : "three-way-file"
-      },
-      content
+    const planPath = personaPlanStoragePath(safePath);
+    const read = (): { file: PersonaSyncFile; content: Buffer } => {
+      if (planPath?.bucket === "active") {
+        const fence = archivedPlanStorageFence(root, planPath.storageId);
+        if (fence.status === "invalid") {
+          throw new Error(`Persona sync rejected invalid archive storage for ${planPath.storageId}: ${fence.reason}`);
+        }
+        if (fence.status === "archived") {
+          throw new Error("Persona sync file was not found because its plan is already archived.");
+        }
+      }
+      const filePath = path.join(root, safePath);
+      assertNoSymbolicLinks(root, filePath);
+      if (!path.resolve(filePath).startsWith(`${root}${path.sep}`) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        throw new Error("Persona sync file was not found.");
+      }
+      const content = fs.readFileSync(filePath);
+      if (!personaSyncFileEligible(safePath, content.byteLength)) throw new Error("Persona sync file is excluded or too large.");
+      const stat = fs.statSync(filePath);
+      return {
+        file: {
+          roleId: id,
+          path: safePath,
+          size: content.byteLength,
+          modifiedAt: stat.mtime.toISOString(),
+          sha256: sha256(content),
+          mergeStrategy: safePath.toLowerCase().endsWith(".jsonl") ? "jsonl-union" : "three-way-file"
+        },
+        content
+      };
     };
+    return planPath ? withPlanStorageLease(root, planPath.storageId, read) : read();
   }
 
   listConflicts(roleId?: string): PersonaSyncConflict[] {
@@ -413,9 +495,24 @@ export class PersonaSyncService {
     const conflictTarget = path.join(this.stateRoot, "conflicts", entry.conflictId);
     const target = path.join(this.rolesRoot(), entry.roleId, entry.path);
     const roleRoot = path.resolve(this.rolesRoot(), entry.roleId);
+    const planPath = personaPlanStoragePath(entry.path);
+    if (planPath && action !== "keep_local") {
+      throw new Error("Persona sync plan conflict mutation requires an atomic plan package.");
+    }
     const lockPath = path.join(this.stateRoot, "locks", entry.roleId, `${sha256(Buffer.from(entry.path, "utf8"))}.lock`);
-    const resolution: PersonaSyncConflictResolution = withFileLockSync(lockPath, () =>
-      withFileLockSync(contentLockPath(roleRoot, entry.path, target), () => {
+    const resolveContent = (): PersonaSyncConflictResolution => {
+        if (planPath?.bucket === "active") {
+          const fence = archivedPlanStorageFence(roleRoot, planPath.storageId);
+          if (fence.status === "invalid") {
+            throw new Error(`Persona sync rejected invalid archive storage for ${planPath.storageId}: ${fence.reason}`);
+          }
+          if (fence.status === "archived") {
+            throw new Error(`Archived plan fence rejects conflict resolution into active storage: ${planPath.storageId}`);
+          }
+        }
+        if (planPath?.bucket === "archive" && action !== "keep_local") {
+          throw new Error(`Persona sync archived plan storage is immutable; resolve it through an atomic plan package: ${planPath.storageId}`);
+        }
         const refreshed = this.conflictEntry(entry.conflictId);
         const duplicateConflicts = this.matchingConflictIds(refreshed)
           .filter(conflictId => conflictId !== refreshed.conflictId)
@@ -441,6 +538,7 @@ export class PersonaSyncService {
         }
         if (action !== "keep_local") {
           if (!personaSyncFileEligible(entry.path, result?.byteLength ?? 0)) throw new Error("Resolved persona file is excluded or too large.");
+          if (planPath && !result) throw new Error("Persona sync plan storage cannot be deleted through file conflict resolution.");
         }
         if (action !== "keep_local" && result) {
           if (entry.path.toLowerCase().endsWith(".jsonl")) {
@@ -448,6 +546,7 @@ export class PersonaSyncService {
             if (validated.conflict || !validated.content) throw new Error("Resolved persona JSONL is invalid or contains conflicting stable ids.");
             result = validated.content;
           }
+          if (planPath) validatePersonaPlanIdentity(roleRoot, entry.path, planPath, result);
         }
         const resultHash = result ? sha256(result) : undefined;
         let archivePath: string | undefined;
@@ -475,8 +574,13 @@ export class PersonaSyncService {
           archivePath,
           resolutionPath
         };
-      })
+    };
+    const resolveUnderPathLock = (): PersonaSyncConflictResolution => withFileLockSync(lockPath, () =>
+      planPath ? resolveContent() : withFileLockSync(contentLockPath(roleRoot, entry.path, target), resolveContent)
     );
+    const resolution = planPath
+      ? withPlanStorageLease(roleRoot, planPath.storageId, resolveUnderPathLock)
+      : resolveUnderPathLock();
     this.invalidateConflictCatalog(entry.roleId);
     this.manifestIndex.notePathChanged(entry.roleId, entry.path);
     return resolution;
@@ -487,21 +591,22 @@ export class PersonaSyncService {
     if (!roleId) throw new Error("Invalid persona id.");
     const relativePath = safeRelativePath(command.path);
     const remoteDeleted = command.deleted === true;
-    if (remoteDeleted && relativePath.toLowerCase().endsWith(".jsonl")) {
-      throw new Error("Persona sync JSONL ledgers use union/tombstone semantics and cannot be deleted remotely.");
-    }
     const remote = remoteDeleted ? Buffer.alloc(0) : Buffer.from(String(command.contentBase64 || ""), "base64");
     if (!personaSyncFileEligible(relativePath, remote.byteLength)) throw new Error("Persona sync file is excluded or too large.");
     const remoteHash = remoteDeleted ? PERSONA_SYNC_DELETED_HASH : sha256(remote);
     if (command.remoteHash && command.remoteHash !== remoteHash) throw new Error("Remote persona file hash does not match its content.");
-    const target = path.join(this.rolesRoot(), roleId, relativePath);
     const roleRoot = path.resolve(this.rolesRoot(), roleId);
+    const target = path.join(roleRoot, relativePath);
+    const planPath = personaPlanStoragePath(relativePath);
+    if (planPath) throw new Error("Persona sync plan storage requires an atomic plan package.");
     const lockPath = path.join(this.stateRoot, "locks", roleId, `${sha256(Buffer.from(relativePath, "utf8"))}.lock`);
-    const result: PersonaSyncMergeResult = withFileLockSync(lockPath, () =>
-      withFileLockSync(contentLockPath(roleRoot, relativePath, target), () => {
+    const mergeContent = (): PersonaSyncMergeResult => {
         assertNoSymbolicLinks(roleRoot, target);
         const local = fs.existsSync(target) ? fs.readFileSync(target) : null;
         const localHash = local ? sha256(local) : undefined;
+        if (remoteDeleted && relativePath.toLowerCase().endsWith(".jsonl")) {
+          throw new Error("Persona sync JSONL ledgers use union/tombstone semantics and cannot be deleted remotely.");
+        }
         const baseHash = String(command.baseHash || "").trim() || undefined;
         if (remoteDeleted) {
           if (!local) {
@@ -574,9 +679,28 @@ export class PersonaSyncService {
         }
         const conflictPath = this.conflict(roleId, relativePath, remote, command.peerId, { remoteHash, baseHash });
         return { status: "conflict", roleId, path: relativePath, localHash, remoteHash, resultHash: localHash, conflictPath };
-      })
+    };
+    const result = withFileLockSync(lockPath, () =>
+      withFileLockSync(contentLockPath(roleRoot, relativePath, target), mergeContent)
     );
     this.manifestIndex.notePathChanged(roleId, relativePath);
+    return result;
+  }
+
+  applyArchivedPlanPackage(command: PersonaSyncArchivedPlanPackageCommand): PersonaSyncPlanPackageResult {
+    const roleId = sanitizeRoleId(command.roleId);
+    if (!roleId) throw new Error("Invalid persona id.");
+    const result = applyArchivedPlanPackage(path.resolve(this.rolesRoot(), roleId), { ...command, roleId });
+    this.manifestIndex.notePathChanged(roleId, `plans/archive/${result.storageId}`);
+    this.manifestIndex.notePathChanged(roleId, `plans/active/${result.storageId}`);
+    return result;
+  }
+
+  applyActivePlanPackage(command: PersonaSyncActivePlanPackageCommand): PersonaSyncPlanPackageResult {
+    const roleId = sanitizeRoleId(command.roleId);
+    if (!roleId) throw new Error("Invalid persona id.");
+    const result = applyActivePlanPackage(path.resolve(this.rolesRoot(), roleId), { ...command, roleId });
+    this.manifestIndex.notePathChanged(roleId, `plans/active/${result.storageId}`);
     return result;
   }
 

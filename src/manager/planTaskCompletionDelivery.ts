@@ -3,9 +3,9 @@ import { normalizeAgentAdapters, type AgentAdapterType } from "../agentAdapters/
 import { normalizeCodexHookSettings, resolvePrimaryAgentAdapter, type CodexHookSettings } from "../shared/gatewayConfigModel.js";
 import type { CodexPlanAssistantSession } from "../shared/codexPlanAssistantSessions.js";
 import {
-  appendRolePanelTimelineMessage,
-  readRolePanelTimeline,
-  type RolePanelAttachment
+  type RolePanelAttachment,
+  type RolePanelTimelineAppendResult,
+  type RolePanelTimelineMessage
 } from "../rolePanelTimeline.js";
 import type { PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
@@ -35,7 +35,11 @@ export type PlanTaskCompletionDeliveryOptions<TRuntime extends PlanTaskCompletio
     text: string,
     attachments: RolePanelAttachment[]
   ) => Promise<void>;
-  assignSecretary?: (runtime: TRuntime, delivery: PlanTaskCompletionDelivery) => PlanSecretaryTarget | undefined;
+  appendTimeline: (roleId: string, message: RolePanelTimelineMessage) => Promise<RolePanelTimelineAppendResult>;
+  assignSecretary?: (
+    runtime: TRuntime,
+    delivery: PlanTaskCompletionDelivery
+  ) => PlanSecretaryTarget | undefined | Promise<PlanSecretaryTarget | undefined>;
   sendToSecretary?: (
     runtime: TRuntime,
     target: PlanSecretaryTarget,
@@ -89,6 +93,24 @@ function planTaskCompletionPersonaFallbackText(delivery: PlanTaskCompletionDeliv
 export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskCompletionRuntime>(
   options: PlanTaskCompletionDeliveryOptions<TRuntime>
 ): (delivery: PlanTaskCompletionDelivery) => Promise<void> {
+  const deliveredPersonaFallbacks = new Set<string>();
+  const personaFallbackFlights = new Map<string, Promise<void>>();
+
+  async function deliverPersonaFallbackOnce(
+    runtime: TRuntime,
+    messageId: string,
+    text: string
+  ): Promise<void> {
+    if (deliveredPersonaFallbacks.has(messageId)) return;
+    const existing = personaFallbackFlights.get(messageId);
+    if (existing) return existing;
+    const flight = options.triggerRolePanelMessage(runtime, messageId, text, [])
+      .then(() => { deliveredPersonaFallbacks.add(messageId); })
+      .finally(() => { personaFallbackFlights.delete(messageId); });
+    personaFallbackFlights.set(messageId, flight);
+    return flight;
+  }
+
   function runtimeForRoleDelivery(roleId: string, gatewayId: string): TRuntime {
     if (gatewayId) {
       const runtime = options.getRuntime(gatewayId);
@@ -118,7 +140,7 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
     const messageId = `plan-task-completed-${eventKey}`;
     const secretary = runtime.definition.codexPlanAssistantEnabled === true
       ? options.assignSecretary
-        ? options.assignSecretary(runtime, delivery)
+        ? await options.assignSecretary(runtime, delivery)
         : resolvePlanSecretaryAssignment(delivery.plan, runtime.definition.codexPlanAssistantSessions)?.target
       : undefined;
     if (secretary) {
@@ -155,9 +177,7 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
 
     const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
     const text = planTaskCompletionPersonaFallbackText(delivery);
-    const exists = readRolePanelTimeline(delivery.roleDir, 5000).some((message) => message.id === messageId);
-    if (!exists) {
-      appendRolePanelTimelineMessage(delivery.roleDir, {
+    const timelineMessage: RolePanelTimelineMessage = {
         id: messageId,
         time: Math.floor(Date.now() / 1000),
         roleId: delivery.roleId,
@@ -181,9 +201,15 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
           sourceSessionId: delivery.sourceSessionId,
           sourceTurnId: delivery.sourceTurnId
         }
-      });
+      };
+    await deliverPersonaFallbackOnce(runtime, messageId, text);
+    let timelineRecorded = false;
+    try {
+      await options.appendTimeline(delivery.roleId, timelineMessage);
+      timelineRecorded = true;
+    } catch {
+      // External delivery is authoritative. A repeat retries this same timeline id only.
     }
-    await options.triggerRolePanelMessage(runtime, messageId, text, []);
     options.publishEvent?.("plan_task_completed", {
       roleId: delivery.roleId,
       planId: delivery.plan.id,
@@ -191,7 +217,8 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
       sourceTurnId: delivery.sourceTurnId,
       gatewayId: runtime.definition.id,
       messageId,
-      recipient: "persona_fallback"
+      recipient: "persona_fallback",
+      timelineRecorded
     });
   };
 }

@@ -1,5 +1,6 @@
 import { planFeedbackResponseId, type PlanFeedbackRecord } from "../planFeedback.js";
 import type { PlanItem } from "../roleKnowledge.js";
+import { planFeedbackResponseMutationInstruction } from "../shared/roleStorageMutationContract.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 
 export type PlanApprovalFeedbackTaskRequest = {
@@ -124,7 +125,13 @@ function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
       ...feedbackLines(options.feedback),
       "这是原业务任务。直接消费引导；秘书同步跟进控制面。",
       "读取当前计划与反馈。引导影响范围、优先级或路径时，PATCH 计划和未开始步骤；引导不等于审批。",
-      `完成后 POST ${feedbackApiUrl(options)}：feedbackId=${responseId}、kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false，只写当前 planId。`
+      planFeedbackResponseMutationInstruction({
+        endpoint: feedbackApiUrl(options),
+        planId: options.plan.id,
+        feedbackId: responseId,
+        kind: responseKind(options.feedback),
+        scope: "只写当前 planId"
+      })
     ].join("\n");
   }
   return [
@@ -132,7 +139,13 @@ function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
     ...feedbackLines(options.feedback),
     "这是原业务任务。直接消费审批；秘书同步跟进控制面。",
     "读取当前计划与审批记录，按意见更新计划或步骤。说明实际改动、命令、外部变化、验证、回退和排除范围。",
-    `完成后 POST ${feedbackApiUrl(options)}：feedbackId=${responseId}、kind=${responseKind(options.feedback)}、author=agent、source=agent、notifyAgent=false，写当前 planId / stepId。`
+    planFeedbackResponseMutationInstruction({
+      endpoint: feedbackApiUrl(options),
+      planId: options.plan.id,
+      feedbackId: responseId,
+      kind: responseKind(options.feedback),
+      scope: "写当前 planId / stepId"
+    })
   ].join("\n");
 }
 

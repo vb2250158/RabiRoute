@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_SPEECH_ROUTE_PROFILE,
@@ -38,14 +36,13 @@ import {
   type SpeechTranscriptSegment
 } from "../shared/speechControlContract.js";
 import { normalizeSpeechTranscriptSegment } from "../shared/speechTranscript.js";
+import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import {
   normalizeSpeechIngressRecord,
   type SpeechIngressAppendResult,
   type SpeechRouteDeliveryReceipt
 } from "../speechIngressStore.js";
-import { roleFolderPath } from "../shared/routePaths.js";
-import { sanitizeRoleId } from "../shared/routeIdentity.js";
-import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
+import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
 import {
   localSpeechEndpoint,
   requestLocalSpeech,
@@ -96,7 +93,7 @@ export type ManagerSpeechIngressStore = {
 
 export type ManagerSpeechControlDependencies = {
   serviceUrl(): string;
-  rolesRoot(): string;
+  personas(): readonly RouteCatalogPersonaPresentation[];
   route(routeId: string): ManagerSpeechRoute | undefined;
   routes(): ManagerSpeechRoute[];
   deliverTranscript(command: ManagerSpeechDeliveryCommand): Promise<ManagerSpeechDeliveryOutcome>;
@@ -712,34 +709,20 @@ export class ManagerSpeechControl {
   }
 
   personas(): SpeechPersona[] {
-    const rolesRoot = this.dependencies.rolesRoot();
-    if (!fs.existsSync(rolesRoot)) return [];
-    return fs.readdirSync(rolesRoot, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() && Boolean(sanitizeRoleId(entry.name)))
-      .map(entry => {
-        const roleDir = roleFolderPath(rolesRoot, entry.name);
-        const voiceRoot = path.join(roleDir, "voice");
-        const profilePath = path.join(voiceRoot, "voice-profile.json");
-        let profile: Record<string, unknown> = {};
-        if (fs.existsSync(profilePath)) {
-          try {
-            const parsed = JSON.parse(fs.readFileSync(profilePath, "utf8").replace(/^\uFEFF/, ""));
-            profile = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-          } catch { /* malformed private persona profile stays unavailable */ }
-        }
-        const speed = Number(profile.speed);
-        const avatar = personaAvatarPresentation(entry.name, roleDir);
-        return {
-          id: entry.name,
-          voiceReady: fs.existsSync(profilePath) || fs.existsSync(path.join(voiceRoot, "voice-index.json")),
-          avatarUrl: avatar.avatarUrl,
-          defaultModel: optionalString(profile.default_model ?? profile.defaultModel),
-          language: optionalString(profile.language),
-          instructions: optionalString(profile.instructions),
-          speed: Number.isFinite(speed) ? speed : undefined,
-          voiceStyleSummary: optionalString(profile.voice_style_summary ?? profile.voiceStyleSummary)
-        };
-      })
+    return this.dependencies.personas()
+      .filter(persona => persona.isPersona)
+      .map(persona => ({
+        id: persona.roleId,
+        voiceReady: persona.speech.voiceReady,
+        avatarUrl: persona.avatarVersion
+          ? `/api/roles/${encodeURIComponent(persona.roleId)}/avatar?v=${encodeURIComponent(persona.avatarVersion)}`
+          : undefined,
+        defaultModel: persona.speech.defaultModel,
+        language: persona.speech.language,
+        instructions: persona.speech.instructions,
+        speed: persona.speech.speed,
+        voiceStyleSummary: persona.speech.voiceStyleSummary
+      }))
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 

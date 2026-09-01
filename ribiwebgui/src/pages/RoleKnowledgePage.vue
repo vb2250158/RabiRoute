@@ -37,7 +37,7 @@ import {
   shouldAutoLoadNextKnowledgeBatch
 } from "../knowledgePagination";
 import {
-  loadPlanFeedback,
+  loadPlanFeedbackWithRevision,
   loadPlanHistory,
   loadPlanAgentStatuses,
   loadPendingMemoryConsolidationRunCount,
@@ -48,6 +48,7 @@ import {
   loadRolePlanPreview,
   openPlanAgentTask,
   submitPlanFeedback,
+  ManagerRequestError,
   type PlanAgentBindingStatus,
   type PlanAgentRole,
   type PlanAgentSessionStatus,
@@ -58,6 +59,7 @@ import {
   type RolePlanPageFilter
 } from "../roleKnowledgeClient";
 import { planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
+import { planFeedbackMutationLedger } from "../planFeedbackMutationLedger";
 import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
 import type { PlanKnowledgeView, PlanListSortMode } from "../planPresentationStyles";
 import { useGatewayStore } from "../stores/gatewayStore";
@@ -106,6 +108,8 @@ const approvalDrafts = reactive<Record<string, string>>({});
 const approvalPending = reactive<Record<string, boolean>>({});
 const approvalDeliveryPending = reactive<Record<string, boolean>>({});
 const approvalRequestIds = reactive<Record<string, string>>({});
+const approvalRequestSignatures = reactive<Record<string, string>>({});
+const approvalRevisions = reactive<Record<string, string>>({});
 const approvalNotices = reactive<Record<string, { tone: "success" | "warning" | "error"; text: string }>>({});
 const submittedApprovalTexts = new Map<string, string>();
 type ApprovalAttachmentDraft = {
@@ -1696,14 +1700,28 @@ function approvalFileAction(action: string): string {
   return t({ create: "新建", modify: "修改", delete: "删除", move: "移动" }[action] || action);
 }
 
-function feedbackRequestId(planId: string): string {
+async function feedbackIntentSignature(value: unknown): Promise<string> {
+  const source = JSON.stringify(value);
+  if (typeof crypto === "undefined" || !crypto.subtle) {
+    throw new Error("Web Crypto SHA-256 is required for plan feedback idempotency.");
+  }
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function clearFeedbackRequestId(planId: string): void {
+  approvalRequestIds[planId] = "";
+  approvalRequestSignatures[planId] = "";
+  planFeedbackMutationLedger.complete(roleId.value, planId);
+}
+
+function feedbackRequestId(planId: string, signature: string): string {
   const existing = approvalRequestIds[planId];
-  if (existing) return existing;
-  const generated = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  approvalRequestIds[planId] = generated;
-  return generated;
+  if (existing && approvalRequestSignatures[planId] === signature) return existing;
+  const pending = planFeedbackMutationLedger.retain(roleId.value, planId, signature);
+  approvalRequestIds[planId] = pending.feedbackId;
+  approvalRequestSignatures[planId] = signature;
+  return pending.feedbackId;
 }
 
 function approvalAttachmentsFor(planId: string): ApprovalAttachmentDraft[] {
@@ -1817,6 +1835,8 @@ function resetApprovalAttachmentState(): void {
   for (const key of Object.keys(approvalAttachments)) delete approvalAttachments[key];
   for (const key of Object.keys(approvalDeliveryPending)) delete approvalDeliveryPending[key];
   for (const key of Object.keys(approvalRequestIds)) delete approvalRequestIds[key];
+  for (const key of Object.keys(approvalRequestSignatures)) delete approvalRequestSignatures[key];
+  for (const key of Object.keys(approvalRevisions)) delete approvalRevisions[key];
   submittedApprovalTexts.clear();
   submittedApprovalAttachments.clear();
 }
@@ -2012,7 +2032,7 @@ function applyFeedbackDeliveryState(planId: string, feedback: RolePlanFeedback |
   if (feedback.deliveryStatus === "delivered" || feedback.deliveryStatus === "record_only") {
     approvalDeliveryPending[planId] = false;
     approvalNotices[planId] = { tone: "success", text: t(`${noticeName}已记录并交给 Agent 处理。`) };
-    approvalRequestIds[planId] = "";
+    clearFeedbackRequestId(planId);
     submittedApprovalTexts.delete(planId);
     clearSubmittedApprovalAttachments(planId);
     return;
@@ -2033,10 +2053,11 @@ async function refreshPlanApproval(planId: string): Promise<void> {
   const selectedRoleId = roleId.value;
   if (!selectedRoleId || !plans.value.some((plan) => plan.id === planId)) return;
   try {
-    const approval = await loadPlanFeedback(selectedRoleId, planId);
+    const resource = await loadPlanFeedbackWithRevision(selectedRoleId, planId);
     if (selectedRoleId !== roleId.value) return;
-    applyPlanApproval(planId, approval);
-    applyFeedbackDeliveryState(planId, approval.latest);
+    approvalRevisions[planId] = resource.etag;
+    applyPlanApproval(planId, resource.approval);
+    applyFeedbackDeliveryState(planId, resource.approval.latest);
   } catch {
     // The submission result remains visible; a later Manager event or manual refresh can reconcile it.
   }
@@ -2213,18 +2234,39 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
   try {
     const attachments = await approvalAttachmentUploads(plan.id);
     const planAttachmentIds = referencedPlanAttachmentIds(text, allApprovalMentionCandidates(plan));
-    const result = await submitPlanFeedback({
+    const stepId = guidance ? undefined : plan.presentation.approval.stepId;
+    const signature = await feedbackIntentSignature({
       roleId: roleId.value,
       planId: plan.id,
       gatewayId: gatewayId.value,
-      stepId: guidance ? undefined : plan.presentation.approval.stepId,
-      feedbackId: feedbackRequestId(plan.id),
+      stepId,
       text,
       attachments,
       planAttachmentIds,
       source: "webgui",
       kind
     });
+    const feedbackId = feedbackRequestId(plan.id, signature);
+    // A mutation must fence against a GET from the current Manager generation,
+    // never against an ETag retained from an earlier page refresh or generation.
+    const resource = await loadPlanFeedbackWithRevision(roleId.value, plan.id);
+    approvalRevisions[plan.id] = resource.etag;
+    applyPlanApproval(plan.id, resource.approval);
+    const committed = await submitPlanFeedback({
+      roleId: roleId.value,
+      planId: plan.id,
+      gatewayId: gatewayId.value,
+      stepId,
+      feedbackId,
+      text,
+      attachments,
+      planAttachmentIds,
+      source: "webgui",
+      kind,
+      expectedRevision: approvalRevisions[plan.id]
+    });
+    approvalRevisions[plan.id] = committed.etag;
+    const result = committed.feedback;
     const existingRecords = plan.approval.records?.length
       ? plan.approval.records
       : plan.approval.latest
@@ -2249,12 +2291,20 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       approvalNotices[plan.id] = { tone: "success", text: t(`${noticeName}已记录，正在后台通知 Agent。`) };
     } else {
       approvalDrafts[plan.id] = "";
-      approvalRequestIds[plan.id] = "";
+      clearFeedbackRequestId(plan.id);
       submittedApprovalTexts.delete(plan.id);
       clearApprovalAttachments(plan.id);
       approvalNotices[plan.id] = { tone: "success", text: t(`${noticeName}已记录并交给 Agent 处理。`) };
     }
   } catch (submitError) {
+    if (submitError instanceof ManagerRequestError && submitError.status === 412) {
+      await refreshPlanApproval(plan.id);
+      approvalNotices[plan.id] = {
+        tone: "warning",
+        text: t("计划已经更新，已重新读取最新版本；请确认内容后使用原提交重试。")
+      };
+      return;
+    }
     approvalNotices[plan.id] = {
       tone: "error",
       text: t(planFeedbackSubmissionErrorMessage(submitError))

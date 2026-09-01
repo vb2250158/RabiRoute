@@ -86,6 +86,7 @@ export const activate = definePlugin({
                     stopGateway: runtime.stopGateway,
                     restartGateway: runtime.restartGateway,
                     removeGatewayConfig: runtime.removeGatewayConfig,
+                    routeCatalogVersion: runtime.routeCatalogVersion,
                     weixinLoginTarget: id => {
                         // Keep the host service available while inspecting one GatewayRuntime.
                         const gatewayRuntime = runtime.runtimes.get(id);

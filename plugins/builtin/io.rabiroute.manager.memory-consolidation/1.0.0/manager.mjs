@@ -38,9 +38,6 @@ export const activate = definePlugin({
             if (runtime.memoryConsolidationScheduler === scheduler)
                 runtime.memoryConsolidationScheduler = undefined;
         }, "stop Manager memory consolidation plugin");
-        if (runtime.managerListenerReady)
-            scheduler.start();
-
                 await Promise.all(pendingEffects);
                 return disposeStartedEffects;
             } catch (error) {

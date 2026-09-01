@@ -1,8 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type http from "node:http";
-import { roleFilePath } from "../shared/routePaths.js";
 import { routeRuntimeParts, sanitizeConfigName, sanitizeRoleId } from "../shared/routeIdentity.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
@@ -18,11 +16,14 @@ export type DesktopConfigFileRoute = {
 export type DesktopConfigFileContext = {
   routeRoot: string;
   rolesRoot: string;
-  ensureDataDirs: () => void;
+  ensureDataDirs: () => Promise<void>;
   findRoute: (gatewayId: string) => DesktopConfigFileRoute | undefined;
-  ensurePersonaConfigFile: (roleId: string) => string;
+  ensurePersonaConfigFile: (roleId: string) => Promise<string>;
+  ensureRoleFile: (roleId: string, roleFile: string) => Promise<string>;
+  ensureRoleFolder: (roleId: string) => Promise<string>;
   adapterConfigPath: (configName: string) => string;
-  writeAdapterConfigFile: (route: DesktopConfigFileRoute) => void;
+  writeAdapterConfigFile: (route: DesktopConfigFileRoute) => Promise<void>;
+  openPath?: (target: string) => void;
 };
 
 function openFileWithDefaultApp(filePath: string): void {
@@ -33,15 +34,16 @@ function openFileWithDefaultApp(filePath: string): void {
   child.unref();
 }
 
-export function desktopConfigFilePayload(
+export async function desktopConfigFilePayload(
   type: string | null,
   gatewayId: string | null,
   roleId: string | null,
   context: DesktopConfigFileContext
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
+  const openPath = context.openPath ?? openFileWithDefaultApp;
   if (type === "manager") {
-    context.ensureDataDirs();
-    openFileWithDefaultApp(context.routeRoot);
+    await context.ensureDataDirs();
+    openPath(context.routeRoot);
     return { code: 0, data: { path: context.routeRoot } };
   }
 
@@ -49,29 +51,27 @@ export function desktopConfigFilePayload(
   if (type === "role" || type === "persona") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
     if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开 persona.md。");
-    const rolePath = roleFilePath(context.rolesRoot, safeRoleId, route?.agentRoleFile ?? "persona.md");
-    if (!fs.existsSync(rolePath)) {
-      fs.mkdirSync(path.dirname(rolePath), { recursive: true });
-      fs.writeFileSync(rolePath, "", "utf8");
-    }
-    openFileWithDefaultApp(rolePath);
+    const rolePath = await context.ensureRoleFile(
+      safeRoleId,
+      route?.agentRoleFile ?? "persona.md"
+    );
+    openPath(rolePath);
     return { code: 0, data: { path: rolePath } };
   }
 
   if (type === "role-folder") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
     if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开人格文件夹。");
-    const roleDirectory = path.join(context.rolesRoot, safeRoleId);
-    fs.mkdirSync(roleDirectory, { recursive: true });
-    openFileWithDefaultApp(roleDirectory);
+    const roleDirectory = await context.ensureRoleFolder(safeRoleId);
+    openPath(roleDirectory);
     return { code: 0, data: { path: roleDirectory } };
   }
 
   if (type === "role-message-config") {
     const safeRoleId = sanitizeRoleId(roleId ?? route?.agentRoleId);
     if (!safeRoleId) throw new Error("请先选择一个路由人格，再打开 personaConfig.json。");
-    const configPath = context.ensurePersonaConfigFile(safeRoleId);
-    openFileWithDefaultApp(configPath);
+    const configPath = await context.ensurePersonaConfigFile(safeRoleId);
+    openPath(configPath);
     return { code: 0, data: { path: configPath } };
   }
 
@@ -79,16 +79,16 @@ export function desktopConfigFilePayload(
     throw new Error(`Unsupported config file type: ${type || ""}`);
   }
   if (!gatewayId || !route) {
-    openFileWithDefaultApp(context.routeRoot);
+    await context.ensureDataDirs();
+    openPath(context.routeRoot);
     return { code: 0, data: { path: context.routeRoot } };
   }
 
   const configName = sanitizeConfigName(route.configName) || routeRuntimeParts(route.id).configName;
   const configPath = context.adapterConfigPath(configName);
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  if (!fs.existsSync(configPath)) context.writeAdapterConfigFile(route);
+  await context.writeAdapterConfigFile(route);
   const targetPath = type === "route-folder" ? path.dirname(configPath) : configPath;
-  openFileWithDefaultApp(targetPath);
+  openPath(targetPath);
   return { code: 0, data: { path: targetPath } };
 }
 
@@ -97,7 +97,7 @@ export type DesktopControlRoutesContext = {
     type: string | null,
     gatewayId: string | null,
     roleId: string | null
-  ) => Record<string, unknown>;
+  ) => Promise<Record<string, unknown>>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   settingsHandler?: ManagerPluginRouteHandler;
 };
@@ -122,11 +122,28 @@ function handleDesktopControlApiWithRuntime(
   if (context.settingsHandler?.(request, requestUrl, response)) return true;
 
   if (request.method === "POST" && requestUrl.pathname === "/open-config-file") {
-    context.jsonResponse(response, 200, context.openConfigFilePayload(
+    const operation = context.openConfigFilePayload(
       requestUrl.searchParams.get("type"),
       requestUrl.searchParams.get("gatewayId"),
       requestUrl.searchParams.get("roleId")
-    ));
+    ).then(payload => {
+      context.jsonResponse(response, 200, payload);
+    }).catch(error => {
+      const statusCode = Number((error as { statusCode?: unknown } | null)?.statusCode);
+      const code = typeof (error as { code?: unknown } | null)?.code === "string"
+        ? String((error as { code: string }).code)
+        : "request_failed";
+      context.jsonResponse(
+        response,
+        Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599 ? statusCode : 400,
+        {
+          code: -1,
+          errorCode: code,
+          message: error instanceof Error ? error.message : "Desktop config request failed."
+        }
+      );
+    });
+    void (hooks.trackOperation?.(operation) ?? operation).catch(() => undefined);
     return true;
   }
 

@@ -38,7 +38,7 @@ export type XiaomiHomeEventMonitorConfig = XiaomiHomeManagerConfigInput & {
   agentRoleId?: string;
   eventMonitorEnabled?: boolean;
   eventDeliveryMode?: "significant" | "all";
-  cameraMotionEntityIds?: string[];
+  cameraMotionEntityIds?: readonly string[];
 };
 
 type XiaomiHomeEventMonitorDependencies = {
@@ -123,7 +123,7 @@ function isCameraMotionState(state: HomeAssistantState, configuredIds: ReadonlyS
 
 export function xiaomiHomeEventFromHomeAssistantStateChange(
   change: HomeAssistantStateChanged,
-  options: { deliveryMode?: "significant" | "all"; cameraMotionEntityIds?: string[] } = {}
+  options: { deliveryMode?: "significant" | "all"; cameraMotionEntityIds?: readonly string[] } = {}
 ): XiaomiHomeEvent | undefined {
   if (change.event_type !== "state_changed") return undefined;
   const state = change.data?.new_state;

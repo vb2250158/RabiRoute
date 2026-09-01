@@ -6,8 +6,20 @@ import test from "node:test";
 import type { RouteProfile } from "../config.js";
 import type { GroupMessageRecord, HeartbeatEventRecord, ManualTriggerRecord, PlanFeedbackMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import { resolvePipeline } from "../pipelines.js";
-import { buildAgentPacket } from "./agentPacket.js";
-import { createRouteDecision } from "./routeDecision.js";
+import { buildAgentPacket as buildPublishedAgentPacket, type AgentPacket, type AgentRoleContext } from "./agentPacket.js";
+import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "../roleKnowledge.js";
+import { createRouteDecision, type RouteDecision } from "./routeDecision.js";
+
+function buildAgentPacket(
+  decision: RouteDecision,
+  rule: RouteDecision["matchedRules"][number],
+  roleContext: AgentRoleContext
+): AgentPacket {
+  if (roleContext.roleDir) {
+    publishRoleKnowledgeCatalogSnapshot(roleContext.roleDir, readRoleKnowledgeCatalogSnapshot(roleContext.roleDir));
+  }
+  return buildPublishedAgentPacket(decision, rule, roleContext);
+}
 
 function routeProfile(patch: Partial<RouteProfile> = {}): RouteProfile {
   return {
@@ -293,7 +305,9 @@ test("AgentPacket migrates legacy FenneNote transcripts to RabiSpeech TTS output
   assert.match(packet.message, /"channel": "speech"/);
 });
 
-test("AgentPacket enters character TTS dialogue for RabiSpeech message endpoint transcripts", () => {
+test("AgentPacket enters character TTS dialogue for RabiSpeech message endpoint transcripts", (t) => {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
   const route = routeProfile({
     resolvedPipeline: resolvePipeline("qq_chat", {
       inputAdapter: "speech",
@@ -325,9 +339,9 @@ test("AgentPacket enters character TTS dialogue for RabiSpeech message endpoint 
 
   const packet = buildAgentPacket(decision, decision.matchedRules[0], {
     roleId: "Ilias",
-    roleDir: "data/roles/Ilias",
-    rolePath: "data/roles/Ilias/persona.md",
-    dataDir: "data/roles/Ilias"
+    roleDir,
+    rolePath: path.join(roleDir, "persona.md"),
+    dataDir: roleDir
   });
 
   const replyContext = JSON.parse(String(packet.templateValues.replyContextJson));

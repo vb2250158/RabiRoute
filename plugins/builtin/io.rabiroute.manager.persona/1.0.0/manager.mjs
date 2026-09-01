@@ -204,15 +204,27 @@ export const activate = definePlugin({
                 }
             });
             try {
-        runtime.personaSyncAutoReconciler?.start();
-        // A full NAS manifest walk may transiently exhaust SMB file handles. Do
-        // not make Manager availability depend on this rebuildable cache: let
-        // the control plane finish its synchronous configuration migration
-        // before indexing starts in the next event-loop turn.
-        setTimeout(() => {
-            void runtime.personaSyncService.startManifestIndex()
-                .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
-        }, 0).unref();
+        let personaSyncStarted = false;
+        let personaSyncDisposed = false;
+        let manifestStartTimer;
+        const startPersonaSync = () => {
+            if (personaSyncStarted || personaSyncDisposed) return;
+            personaSyncStarted = true;
+            runtime.personaSyncAutoReconciler?.start();
+            // The manifest index and automatic sync can traverse or apply plan packages.
+            // They share the Manager-owned plan-storage startup admission gate.
+            manifestStartTimer = setTimeout(() => {
+                manifestStartTimer = undefined;
+                if (personaSyncDisposed) return;
+                void runtime.personaSyncService.startManifestIndex()
+                    .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
+            }, 0);
+            manifestStartTimer.unref();
+        };
+        const removePlanStorageReadyListener = runtime.planStorageStartup?.onReady(startPersonaSync) ?? (() => {
+            startPersonaSync();
+            return () => {};
+        })();
         const requestTracker = new runtime.ManagerPluginRequestTracker();
         ctx.effect(() => {
             const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:persona", "manager.persona.api", [
@@ -229,6 +241,9 @@ export const activate = definePlugin({
                 { routeId: "role-panel-messages", kind: "exact", path: "/api/role-panel/messages", methods: ["POST"] }
             ]);
             return async () => {
+                personaSyncDisposed = true;
+                removePlanStorageReadyListener();
+                if (manifestStartTimer) clearTimeout(manifestStartTimer);
                 unregister();
                 await requestTracker.stop();
                 runtime.personaSyncAutoReconciler?.stop();

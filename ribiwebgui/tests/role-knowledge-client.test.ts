@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RolePlan } from "../src/types.js";
 import {
+  cachedPlanFeedbackRevision,
+  loadPlanFeedbackWithRevision,
   loadPlanAgentStatuses,
   loadPlanHistory,
   loadPendingMemoryConsolidationRunCount,
@@ -11,7 +13,9 @@ import {
   loadRolePlanPage,
   loadRolePlanPreview,
   normalizeRolePlanFromManager,
-  openPlanAgentTask
+  openPlanAgentTask,
+  submitPlanFeedback,
+  synchronizeRoleKnowledgeLifecycle
 } from "../src/roleKnowledgeClient.js";
 
 function plan(presentation?: RolePlan["presentation"]): RolePlan {
@@ -56,6 +60,298 @@ test("WebGUI loads a plan revision history by plan id", async () => {
     globalThis.fetch = originalFetch;
   }
   assert.equal(requests[0], "/api/roles/Rabi/plans/plan/history");
+});
+
+test("WebGUI fences plan feedback with a current-generation strong ETag and stable feedback id", async () => {
+  const originalFetch = globalThis.fetch;
+  let identity = { applicationGenerationId: "generation-a", managerInstanceId: "manager-a" };
+  const mutations: RequestInit[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/meta") {
+      return new Response(JSON.stringify(identity), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (init?.method === "POST") {
+      mutations.push(init);
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          id: "feedback-1",
+          planId: "plan-1",
+          kind: "guidance",
+          text: "continue",
+          createdAt: "2026-09-01T00:00:00.000Z",
+          source: "webgui",
+          deliveryStatus: "pending"
+        }
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json", etag: '"revision-a-2"', "idempotency-key": "plan-feedback:feedback-1" }
+      });
+    }
+    const etag = identity.applicationGenerationId === "generation-a" ? '"revision-a-1"' : '"revision-b-1"';
+    return new Response(JSON.stringify({ code: 0, data: { count: 0, records: [] } }), {
+      status: 200,
+      headers: { "content-type": "application/json", etag }
+    });
+  }) as typeof fetch;
+
+  try {
+    const current = await loadPlanFeedbackWithRevision("YeYu", "plan-1");
+    assert.equal(current.etag, '"revision-a-1"');
+    assert.equal(cachedPlanFeedbackRevision("YeYu", "plan-1"), '"revision-a-1"');
+
+    await submitPlanFeedback({
+      roleId: "YeYu",
+      planId: "plan-1",
+      gatewayId: "route-1",
+      feedbackId: "feedback-1",
+      text: "continue",
+      attachments: [],
+      planAttachmentIds: [],
+      source: "webgui",
+      kind: "guidance",
+      expectedRevision: current.etag
+    });
+    assert.equal(new Headers(mutations[0]?.headers).get("idempotency-key"), "plan-feedback:feedback-1");
+    assert.equal(new Headers(mutations[0]?.headers).get("if-match"), '"revision-a-1"');
+
+    identity = { applicationGenerationId: "generation-b", managerInstanceId: "manager-b" };
+    await synchronizeRoleKnowledgeLifecycle();
+    assert.equal(cachedPlanFeedbackRevision("YeYu", "plan-1"), "", "generation switch must evict the old ETag");
+    await assert.rejects(
+      submitPlanFeedback({
+        roleId: "YeYu",
+        planId: "plan-1",
+        gatewayId: "route-1",
+        feedbackId: "feedback-1",
+        text: "continue",
+        attachments: [],
+        planAttachmentIds: [],
+        source: "webgui",
+        kind: "guidance",
+        expectedRevision: '"revision-a-2"'
+      }),
+      (error: unknown) => error instanceof Error && /current-generation GET/.test(error.message)
+    );
+    assert.equal(mutations.length, 1, "a stale generation must be rejected before POST");
+    assert.equal((await loadPlanFeedbackWithRevision("YeYu", "plan-1")).etag, '"revision-b-1"');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("WebGUI bounds an uncertain plan feedback POST and permits retry with the same key", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const mutationHeaders: Headers[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/meta") {
+      return new Response(JSON.stringify({
+        applicationGenerationId: "generation-timeout",
+        managerInstanceId: "manager-timeout"
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (init?.method === "POST") {
+      mutationHeaders.push(new Headers(init.headers));
+      if (init.signal?.aborted) throw new DOMException("aborted", "AbortError");
+      return await new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      });
+    }
+    return new Response(JSON.stringify({ code: 0, data: { count: 0, records: [] } }), {
+      status: 200,
+      headers: { "content-type": "application/json", etag: '"revision-timeout"' }
+    });
+  }) as typeof fetch;
+
+  const feedback = {
+    roleId: "YeYu",
+    planId: "plan-timeout",
+    gatewayId: "route-1",
+    feedbackId: "feedback-timeout",
+    text: "retry me",
+    attachments: [],
+    planAttachmentIds: [],
+    source: "webgui" as const,
+    kind: "guidance" as const,
+    expectedRevision: '"revision-timeout"'
+  };
+  try {
+    await loadPlanFeedbackWithRevision(feedback.roleId, feedback.planId);
+    globalThis.setTimeout = ((callback: TimerHandler) => {
+      if (typeof callback === "function") callback();
+      return 0;
+    }) as typeof setTimeout;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(
+        submitPlanFeedback(feedback),
+        (error: unknown) => error instanceof Error && /timed out/.test(error.message)
+      );
+    }
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(mutationHeaders.length, 2);
+  assert.deepEqual(
+    mutationHeaders.map((headers) => headers.get("idempotency-key")),
+    ["plan-feedback:feedback-timeout", "plan-feedback:feedback-timeout"]
+  );
+});
+
+test("WebGUI rejects a plan feedback receipt for another feedback or plan", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/meta") {
+      return new Response(JSON.stringify({
+        applicationGenerationId: "generation-body-identity",
+        managerInstanceId: "manager-body-identity"
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (init?.method === "POST") {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          id: "feedback-other",
+          planId: "plan-body-identity",
+          kind: "guidance",
+          text: "continue",
+          createdAt: "2026-09-01T00:00:00.000Z",
+          source: "webgui",
+          deliveryStatus: "pending"
+        }
+      }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          etag: '"revision-body-2"',
+          "idempotency-key": "plan-feedback:feedback-body"
+        }
+      });
+    }
+    return new Response(JSON.stringify({ code: 0, data: { count: 0, records: [] } }), {
+      status: 200,
+      headers: { "content-type": "application/json", etag: '"revision-body-1"' }
+    });
+  }) as typeof fetch;
+
+  try {
+    const current = await loadPlanFeedbackWithRevision("YeYu", "plan-body-identity");
+    await assert.rejects(
+      submitPlanFeedback({
+        roleId: "YeYu",
+        planId: "plan-body-identity",
+        gatewayId: "route-1",
+        feedbackId: "feedback-body",
+        text: "continue",
+        attachments: [],
+        planAttachmentIds: [],
+        source: "webgui",
+        kind: "guidance",
+        expectedRevision: current.etag
+      }),
+      (error: unknown) => error instanceof Error && /feedbackId and planId/.test(error.message)
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("WebGUI fences a committed plan feedback response with post-commit Manager identity", async () => {
+  const originalFetch = globalThis.fetch;
+  let mutationCommitted = false;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/meta") {
+      const suffix = mutationCommitted ? "after" : "before";
+      return new Response(JSON.stringify({
+        applicationGenerationId: `generation-${suffix}`,
+        managerInstanceId: `manager-${suffix}`
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (init?.method === "POST") {
+      mutationCommitted = true;
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          id: "feedback-lifecycle",
+          planId: "plan-lifecycle",
+          kind: "guidance",
+          text: "continue",
+          createdAt: "2026-09-01T00:00:00.000Z",
+          source: "webgui",
+          deliveryStatus: "pending"
+        }
+      }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          etag: '"revision-lifecycle-2"',
+          "idempotency-key": "plan-feedback:feedback-lifecycle"
+        }
+      });
+    }
+    return new Response(JSON.stringify({ code: 0, data: { count: 0, records: [] } }), {
+      status: 200,
+      headers: { "content-type": "application/json", etag: '"revision-lifecycle-1"' }
+    });
+  }) as typeof fetch;
+
+  try {
+    const current = await loadPlanFeedbackWithRevision("YeYu", "plan-lifecycle");
+    await assert.rejects(
+      submitPlanFeedback({
+        roleId: "YeYu",
+        planId: "plan-lifecycle",
+        gatewayId: "route-1",
+        feedbackId: "feedback-lifecycle",
+        text: "continue",
+        attachments: [],
+        planAttachmentIds: [],
+        source: "webgui",
+        kind: "guidance",
+        expectedRevision: current.etag
+      }),
+      (error: unknown) => error instanceof Error && /lifecycle changed while committing/.test(error.message)
+    );
+    assert.equal(cachedPlanFeedbackRevision("YeYu", "plan-lifecycle"), "");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("WebGUI clears cached revisions when Manager lifecycle metadata cannot be read", async () => {
+  const originalFetch = globalThis.fetch;
+  let metaAvailable = true;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    if (String(input) === "/meta") {
+      if (!metaAvailable) {
+        return new Response(JSON.stringify({ message: "not ready" }), {
+          status: 503,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({
+        applicationGenerationId: "generation-meta-error",
+        managerInstanceId: "manager-meta-error"
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ code: 0, data: { count: 0, records: [] } }), {
+      status: 200,
+      headers: { "content-type": "application/json", etag: '"revision-meta-error"' }
+    });
+  }) as typeof fetch;
+
+  try {
+    await loadPlanFeedbackWithRevision("YeYu", "plan-meta-error");
+    assert.equal(cachedPlanFeedbackRevision("YeYu", "plan-meta-error"), '"revision-meta-error"');
+    metaAvailable = false;
+    await assert.rejects(synchronizeRoleKnowledgeLifecycle(), /complete lifecycle identity/);
+    assert.equal(cachedPlanFeedbackRevision("YeYu", "plan-meta-error"), "");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("WebGUI preserves Manager stages and does not derive a second stage when presentation is absent", () => {

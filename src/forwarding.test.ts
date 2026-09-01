@@ -14,6 +14,10 @@ import { resolvePipeline } from "./pipelines.js";
 import { appendDeliveryReplayAttempt, readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
 import { listIdentityEndpointAccounts, listIdentityParticipants } from "./identityRelations.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
+import {
+  publishRoleKnowledgeCatalogSnapshot,
+  readRoleKnowledgeCatalogSnapshot
+} from "./roleKnowledge.js";
 import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
@@ -205,6 +209,12 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     ? { ...patch, primaryAgentAdapter: patch.agentAdapters[0] }
     : patch;
   Object.assign(config, effectivePatch);
+  for (const profile of patch.routeProfiles ?? []) {
+    const roleId = profile.agentRoleId?.trim();
+    if (!roleId) continue;
+    const roleDir = path.join(profile.rolesDir ?? config.rolesDir, roleId);
+    publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
+  }
   try {
     return await run();
   } finally {
@@ -856,7 +866,7 @@ test("mobile PCM speech ingress reaches only its RabiLink persona with a stable 
     const completedAt = Date.now();
     const control = new ManagerSpeechControl({
       serviceUrl: () => "http://127.0.0.1:8781",
-      rolesRoot: () => path.join(root, "roles"),
+      personas: () => [],
       route: routeId => managerRoutes.find(route => route.id === routeId),
       routes: () => managerRoutes,
       deliverTranscript: async ({ routeId, record: ingress }) => {

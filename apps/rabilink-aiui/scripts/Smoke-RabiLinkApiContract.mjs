@@ -87,16 +87,73 @@ export default wx;
   assert(mock.requests.at(-1).method === "PATCH", "selectMobileTarget must use PATCH.");
   assert(mock.requests.at(-1).data.targetDeviceId === "pc-a", "selectMobileTarget must send targetDeviceId.");
 
-  await api.getMobileRoutes(config, "pc-a");
+  mock.nextResponses.push({
+    statusCode: 200,
+    data: {
+      code: 0,
+      data: { routes: [{ id: "route/one" }] },
+      routeCatalog: {
+        contentHash: "a".repeat(64),
+        routeConfigHash: "b".repeat(64),
+        revision: 8
+      }
+    }
+  });
+  const catalog = await api.getMobileRoutes(config, "pc-a");
   assert(mock.requests.at(-1).url === "https://relay.example.com/api/rabilink/mobile/routes?targetDeviceId=pc-a", "getMobileRoutes must include targetDeviceId query.");
+  assert(catalog.routes.length === 1, "getMobileRoutes must preserve the route list.");
+  assert(catalog.contentHash === "a".repeat(64), "getMobileRoutes must preserve the catalog content hash.");
+  assert(catalog.routeConfigHash === "b".repeat(64), "getMobileRoutes must preserve the route mutation hash.");
 
-  await api.setMobileAgentBinding(config, "route/one", { agentAdapter: "codex" }, "pc-a");
+  mock.nextResponses.push({ statusCode: 200, data: { code: 0, data: { routes: [] } } });
+  const oldRelayCatalog = await api.getMobileRoutes(config, "pc-a");
+  assert(oldRelayCatalog.contentHash === "" && oldRelayCatalog.routeConfigHash === "", "An old Relay response may remain readable but must not invent a revision.");
+  await assertRejects(
+    () => api.setMobileAgentBinding(
+      config,
+      "route/one",
+      { agentAdapter: "codex" },
+      { operationId: "aiui-old-relay-write", expectedContentHash: oldRelayCatalog.routeConfigHash },
+      "pc-a"
+    ),
+    "current strong route catalog content hash"
+  );
+
+  const bindingMutation = {
+    operationId: "aiui-binding-operation-1",
+    expectedContentHash: catalog.routeConfigHash
+  };
+  mock.nextResponses.push({
+    statusCode: 200,
+    header: { ETag: `"${"c".repeat(64)}"`, "X-Private-Diagnostic": "must-not-leak" },
+    data: {
+      code: 0,
+      data: { agentAdapter: "codex" },
+      receipt: {
+        state: "committed",
+        operationId: bindingMutation.operationId,
+        routeConfigHash: "c".repeat(64)
+      }
+    }
+  });
+  const bindingResult = await api.setMobileAgentBinding(
+    config,
+    "route/one",
+    { agentAdapter: "codex" },
+    bindingMutation,
+    "pc-a"
+  );
   assert(
     mock.requests.at(-1).url === "https://relay.example.com/api/rabilink/mobile/routes/route%2Fone/agent-binding?targetDeviceId=pc-a",
     "setMobileAgentBinding must encode route id and include target query."
   );
   assert(mock.requests.at(-1).method === "PATCH", "setMobileAgentBinding must use PATCH.");
   assert(mock.requests.at(-1).data.agentAdapter === "codex", "setMobileAgentBinding must send binding body.");
+  assert(mock.requests.at(-1).header["Idempotency-Key"] === bindingMutation.operationId, "Binding must send the caller-owned Idempotency-Key.");
+  assert(mock.requests.at(-1).header["If-Match"] === bindingMutation.expectedContentHash, "Binding must send the current If-Match hash.");
+  assert(bindingResult.mutationReceipt.contentHash === "c".repeat(64), "Binding must return the explicit committed receipt.");
+  assert(bindingResult.mutationHeaders.etag === `"${"c".repeat(64)}"`, "Allowed mutation response headers must be returned.");
+  assert(!Object.hasOwn(bindingResult.mutationHeaders, "x-private-diagnostic"), "Unapproved response headers must not be exposed.");
 
   await api.getMobileWebgui(config, "/api/agent/copilot-status", "pc-a");
   assert(
@@ -110,6 +167,40 @@ export default wx;
   assert(webguiPost.method === "POST", "postMobileWebgui transport must use POST.");
   assert(webguiPost.data.method === "POST" && webguiPost.data.path === "/reload", "postMobileWebgui must wrap PC method and path.");
   assert(webguiPost.data.body.dryRun === true, "postMobileWebgui must preserve body.");
+
+  const replaceMutation = {
+    operationId: "aiui-route-replace-1",
+    expectedContentHash: "c".repeat(64)
+  };
+  mock.nextResponses.push({
+    statusCode: 503,
+    data: { code: "route_catalog_unavailable", message: "Retry later." }
+  });
+  const unavailable = await assertRejects(
+    () => api.postMobileWebgui(config, "/gateways", { gateways: [] }, "pc-a", "POST", replaceMutation),
+    "Retry later."
+  );
+  const firstAttempt = mock.requests.at(-1);
+  assert(unavailable.statusCode === 503, "Mutation retry decisions must retain HTTP 503.");
+  assert(firstAttempt.data.headers["Idempotency-Key"] === replaceMutation.operationId, "Relay mutation envelope must carry Idempotency-Key.");
+  assert(firstAttempt.data.headers["If-Match"] === replaceMutation.expectedContentHash, "Relay mutation envelope must carry If-Match.");
+  assert(Object.keys(firstAttempt.data.headers).sort().join(",") === "Idempotency-Key,If-Match", "Relay mutation envelope must allowlist only the two mutation headers.");
+
+  mock.nextResponses.push({
+    statusCode: 200,
+    data: {
+      code: 0,
+      receipt: {
+        state: "committed",
+        operationId: replaceMutation.operationId,
+        routeConfigHash: "d".repeat(64)
+      }
+    }
+  });
+  await api.postMobileWebgui(config, "/gateways", { gateways: [] }, "pc-a", "POST", replaceMutation);
+  const retryAttempt = mock.requests.at(-1);
+  assert(retryAttempt.header["Idempotency-Key"] === firstAttempt.header["Idempotency-Key"], "A 503 retry must reuse the same caller-owned key.");
+  assert(retryAttempt.data.headers["Idempotency-Key"] === firstAttempt.data.headers["Idempotency-Key"], "Relay retry envelope must reuse the same key.");
 
   mock.nextResponses.push({
     statusCode: 202,

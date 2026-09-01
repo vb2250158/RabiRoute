@@ -17,7 +17,7 @@ export type XiaomiMiotMotionClipCandidate = {
 
 export type XiaomiHomeClipCaptureConfig = {
   cameraClipCaptureEnabled?: boolean;
-  cameraClipAllowedHosts?: string[];
+  cameraClipAllowedHosts?: readonly string[];
   ffmpegPath?: string;
   ffprobePath?: string;
   cameraClipRequestTimeoutMs?: number;
@@ -36,7 +36,7 @@ function safeToolPath(input: string | undefined, fallback: string): string {
   return value;
 }
 
-function normalizedAllowedHosts(input: string[] | undefined): string[] {
+function normalizedAllowedHosts(input: readonly string[] | undefined): string[] {
   return (input ?? []).map(value => String(value ?? "").trim().toLowerCase()).filter(value => /^(\*\.)?[a-z0-9.-]+$/.test(value));
 }
 

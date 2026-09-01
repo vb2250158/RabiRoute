@@ -66,6 +66,7 @@ export type GenerationRuntimeOptions = Readonly<{
   }>;
   readyRequires?: readonly string[];
   executor?: PluginExecutor;
+  activationTimeoutMs?: number;
   onRuntimeFailure?: (event: PluginRuntimeFailureEvent) => void | Promise<void>;
 }>;
 
@@ -87,6 +88,28 @@ export class RequiredPluginCapabilitiesUnavailableError extends Error {
     }`);
     this.name = "RequiredPluginCapabilitiesUnavailableError";
   }
+}
+
+export function selectReadyPluginCandidates(
+  candidates: readonly PluginCandidate[],
+  readyRequires: readonly string[],
+  hostCapabilities: readonly string[] = []
+): readonly PluginCandidate[] {
+  const hostCapabilitySet = new Set(hostCapabilities.map(capability => capability.trim()).filter(Boolean));
+  const plan = planCapabilityGraph(candidates, hostCapabilitySet);
+  const byId = new Map(candidates.map(candidate => [candidate.instanceId.trim(), candidate]));
+  const selected = new Set<string>();
+  const pending = readyRequires.map(capability => capability.trim()).filter(Boolean);
+  while (pending.length) {
+    const capability = pending.pop()!;
+    if (hostCapabilitySet.has(capability)) continue;
+    const providerId = plan.providers.get(capability);
+    if (!providerId || selected.has(providerId)) continue;
+    selected.add(providerId);
+    const provider = byId.get(providerId);
+    if (provider) pending.push(...provider.manifest.requires);
+  }
+  return Object.freeze(candidates.filter(candidate => selected.has(candidate.instanceId.trim())));
 }
 
 type ActivePluginState = Readonly<{
@@ -252,6 +275,7 @@ export class GenerationRuntime {
   readonly #managerInstanceId: string;
   readonly #defaultReadyRequires: readonly string[];
   readonly #executor: PluginExecutor;
+  readonly #activationTimeoutMs: number;
   readonly #onRuntimeFailure?: (event: PluginRuntimeFailureEvent) => void | Promise<void>;
   #mutationTail: Promise<void> = Promise.resolve();
   #disposed = false;
@@ -267,6 +291,7 @@ export class GenerationRuntime {
     this.#managerInstanceId = options.applicationIdentity?.managerInstanceId.trim() || randomUUID();
     this.#defaultReadyRequires = Object.freeze([...(options.readyRequires ?? [])].sort());
     this.#executor = options.executor ?? createBuiltinPluginExecutor();
+    this.#activationTimeoutMs = Math.max(1, Math.floor(options.activationTimeoutMs ?? 30_000));
     this.#onRuntimeFailure = options.onRuntimeFailure;
     this.#current = Object.freeze({
       id: randomUUID(),
@@ -433,7 +458,19 @@ export class GenerationRuntime {
 
           try {
             const module = await this.#executor.prepare(candidate, identity);
-            await module.activate(context);
+            let activationTimer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([
+                Promise.resolve(module.activate(context)),
+                new Promise<never>((_, reject) => {
+                  activationTimer = setTimeout(() => {
+                    reject(new Error(`Plugin activation timed out after ${this.#activationTimeoutMs}ms: ${instanceId}.`));
+                  }, this.#activationTimeoutMs);
+                })
+              ]);
+            } finally {
+              if (activationTimer) clearTimeout(activationTimer);
+            }
             const missingProvides = [...declaredProvides].filter(capability => !provided.has(capability));
             if (missingProvides.length) throw new Error(`Plugin did not provide declared capabilities: ${missingProvides.join(", ")}.`);
             prepared.push(Object.freeze({

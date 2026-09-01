@@ -43,9 +43,9 @@ cmd /c "cd /d <repo> && npm run build:backend"
 ### 4. Windows 托盘版本（默认部署方式）
 **在 Windows 上"打包"默认指托盘版本。** 托盘版本 = manager + PySide6 Qt 任务面板 + 系统托盘图标。
 
-启动方式（只启动已打包或已安装的唯一 Host）：
+启动方式（只启动本机已安装的唯一 Host）：
 ```powershell
-Start-Process "<repo>\Start-RabiRoute-Desktop.bat"
+Start-Process "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe"
 ```
 
 查询当前代状态和动态 Manager 地址：
@@ -53,7 +53,7 @@ Start-Process "<repo>\Start-RabiRoute-Desktop.bat"
 & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json
 ```
 
-`Start-RabiRoute-Desktop.bat` 不构建、不探测端口、不管理子进程；找不到同包或已安装 Host 时直接失败。
+源码仓库不提供生产启动兼容入口。源码开发使用 `npm run dev` 或 `npm run dev:hot`；完整 Windows 验收必须先在本机磁盘构建发行包，再启动构建或安装目录里的 `RabiRouteHost.exe`。
 
 ### 5. 构建 Windows 完整包
 

@@ -49,7 +49,8 @@ export default defineConfig(({ command }) => {
           managerSpeechPlugin: fileURLToPath(new URL("./src/bundles/builtin/speech.ts", import.meta.url)),
           managerPerformancePlugin: fileURLToPath(new URL("./src/bundles/builtin/performance.ts", import.meta.url)),
           managerDiagnosticsPlugin: fileURLToPath(new URL("./src/bundles/builtin/diagnostics.ts", import.meta.url)),
-          managerDesktopPlugin: fileURLToPath(new URL("./src/bundles/builtin/desktop.ts", import.meta.url))
+          managerDesktopPlugin: fileURLToPath(new URL("./src/bundles/builtin/desktop.ts", import.meta.url)),
+          managerXiaomiHomePlugin: fileURLToPath(new URL("./src/bundles/builtin/xiaomi-home.ts", import.meta.url))
         }
       }
     },

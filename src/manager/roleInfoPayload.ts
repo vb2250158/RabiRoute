@@ -1,9 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
-import { roleFilePath, roleFolderPath } from "../shared/routePaths.js";
-import { personaAvatarPresentation } from "./personaAvatarRoutes.js";
-import { PersonaCatalog, readPersonaMarkdownTitle } from "./personaCatalog.js";
+import { normalizePersonaFile, roleFilePath, roleFolderPath } from "../shared/routePaths.js";
+import type {
+  RouteCatalogPersonaFilePresentation,
+  RouteCatalogPersonaPresentation
+} from "./routeCatalogTransaction.js";
 
 export type RoleInfoGatewayDefinition = {
   rolesDir?: string;
@@ -13,9 +14,44 @@ export type RoleInfoGatewayDefinition = {
 
 export type RoleInfoPayloadOptions = {
   includeContents?: boolean;
-  catalogCache?: Map<string, Array<Record<string, unknown>>>;
-  personaCatalog?: PersonaCatalog;
+  personaPresentations?: readonly RouteCatalogPersonaPresentation[];
 };
+
+function rootKey(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/").toLowerCase();
+}
+
+function avatarPresentation(item: RouteCatalogPersonaPresentation): Record<string, unknown> {
+  const version = item.avatarVersion;
+  return {
+    avatarConfigured: item.avatarConfigured,
+    ...(version ? {
+      avatarUrl: `/api/roles/${encodeURIComponent(item.roleId)}/avatar?v=${encodeURIComponent(version)}`,
+      avatarVersion: version
+    } : {})
+  };
+}
+
+function preferredFile(
+  item: RouteCatalogPersonaPresentation,
+  preferredFileName: string
+): RouteCatalogPersonaFilePresentation {
+  return item.files.find(file => file.fileName === preferredFileName && file.exists)
+    ?? item.files.find(file => file.fileName.toLowerCase() === "persona.md" && file.exists)
+    ?? item.files.find(file => file.fileName === preferredFileName)
+    ?? {
+      fileName: preferredFileName,
+      exists: false,
+      title: "",
+      content: "",
+      contentTruncated: false,
+      errorCode: "PERSONA_FILE_UNAVAILABLE"
+    };
+}
+
+function publicRoleError(file: RouteCatalogPersonaFilePresentation): string {
+  return file.errorCode ? "Persona file is unavailable." : "";
+}
 
 export function roleInfoPayload(
   rootDir: string,
@@ -24,68 +60,51 @@ export function roleInfoPayload(
 ): Record<string, unknown> {
   const includeContents = options.includeContents !== false;
   const rolesDir = path.resolve(rootDir, definition.rolesDir ?? path.join("data", "roles"));
-  const roleFileName = definition.agentRoleFile ?? "persona.md";
+  const roleFileName = normalizePersonaFile(definition.agentRoleFile ?? "persona.md");
   const selectedRoleId = sanitizeRoleId(definition.agentRoleId);
-  const catalogKey = `${rolesDir}\u0000${roleFileName}\u0000${includeContents ? "detail" : "summary"}`;
-  const cachedRoleOptions = options.catalogCache?.get(catalogKey);
-  const roleOptions: Array<Record<string, unknown>> = cachedRoleOptions ?? [];
-
-  if (!cachedRoleOptions) {
-    const personaCatalog = options.personaCatalog ?? new PersonaCatalog();
-    for (const entry of personaCatalog.list(rolesDir, { preferredFileName: roleFileName, includeContents })) {
+  const activeRoot = rootKey(rolesDir);
+  const roleOptions = (options.personaPresentations ?? [])
+    .filter(item => item.isPersona && rootKey(item.rolesRoot) === activeRoot)
+    .map(item => {
+      const file = preferredFile(item, roleFileName);
+      const rolePath = roleFilePath(rolesDir, item.roleId, file.fileName);
       const roleOption: Record<string, unknown> = {
-        label: entry.personaId,
-        value: entry.personaId,
-        rolePath: entry.rolePath,
-        dataDir: entry.roleDir,
-        ...personaAvatarPresentation(entry.personaId, entry.roleDir)
+        label: item.roleId,
+        value: item.roleId,
+        rolePath,
+        dataDir: roleFolderPath(rolesDir, item.roleId),
+        roleTitle: file.title,
+        ...avatarPresentation(item)
       };
       if (includeContents) {
-        roleOption.roleTitle = entry.title;
-        roleOption.roleContent = entry.content ?? "";
-        roleOption.roleError = entry.error ?? "";
-      } else {
-        roleOption.roleTitle = entry.title;
+        roleOption.roleContent = file.content;
+        roleOption.roleContentTruncated = file.contentTruncated;
+        roleOption.roleError = publicRoleError(file);
       }
-      roleOptions.push(roleOption);
-    }
-  }
-  if (!cachedRoleOptions) options.catalogCache?.set(catalogKey, roleOptions);
+      return roleOption;
+    })
+    .sort((left, right) => String(left.roleTitle || left.value).localeCompare(
+      String(right.roleTitle || right.value),
+      "zh-CN"
+    ));
 
   const selectedDir = selectedRoleId ? roleFolderPath(rolesDir, selectedRoleId) : "";
   const selectedRolePath = selectedRoleId ? roleFilePath(rolesDir, selectedRoleId, roleFileName) : "";
+  const selectedOption = roleOptions.find(item => item.value === selectedRoleId);
   const payload: Record<string, unknown> = {
     rolesDir,
     selectedRoleId,
     selectedRolePath,
     selectedRoleDataDir: selectedDir,
-    options: roleOptions
+    options: roleOptions,
+    selectedRoleTitle: selectedOption?.roleTitle ?? ""
   };
 
   if (includeContents) {
-    const selectedOption = roleOptions.find((item) => item.value === selectedRoleId && item.rolePath === selectedRolePath);
-    if (selectedOption) {
-      payload.selectedRoleContent = selectedOption.roleContent ?? "";
-      payload.selectedRoleError = selectedOption.roleError ?? "";
-    } else if (selectedRolePath) {
-      try {
-        payload.selectedRoleContent = fs.readFileSync(selectedRolePath, "utf8");
-        payload.selectedRoleError = "";
-      } catch (error) {
-        payload.selectedRoleContent = "";
-        payload.selectedRoleError = error instanceof Error ? error.message : String(error);
-      }
-    } else {
-      payload.selectedRoleContent = "";
-      payload.selectedRoleError = "";
-    }
-    payload.selectedRoleTitle = selectedOption?.roleTitle
-      ?? (selectedRolePath ? readPersonaMarkdownTitle(selectedRolePath) : "");
-  } else {
-    const selectedOption = roleOptions.find((item) => item.value === selectedRoleId && item.rolePath === selectedRolePath);
-    payload.selectedRoleTitle = selectedOption?.roleTitle
-      ?? (selectedRolePath ? readPersonaMarkdownTitle(selectedRolePath) : "");
+    payload.selectedRoleContent = selectedOption?.roleContent ?? "";
+    payload.selectedRoleContentTruncated = selectedOption?.roleContentTruncated ?? false;
+    payload.selectedRoleError = selectedOption?.roleError
+      ?? (selectedRolePath ? "Persona file is unavailable." : "");
   }
-
   return payload;
 }

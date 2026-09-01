@@ -1,7 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Worker } from "node:worker_threads";
 import {
   measurePerformanceOperation,
   recordPerformanceOperation
@@ -9,18 +9,36 @@ import {
 import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
 import {
   normalizeStoredPlanAttachments,
-  storePlanAttachments
+  preparePlanAttachments,
+  type PreparedPlanAttachment
 } from "./planAttachments.js";
 import type { PlanAttachment } from "./shared/planAttachmentContract.js";
 import type { PlanImportanceLevel, PlanUrgencyLevel } from "./shared/planSortContract.js";
 import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
+import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import {
-  legacyActivePlanFile,
-  legacyArchivedPlanFile,
-  legacyPlanAttachmentDirectory,
-  legacyPlanFeedbackAttachmentDirectory,
-  legacyPlanFeedbackFile,
-  legacyPlanHistoryFile,
+  createStorageRevision,
+  storageInventoryRevisionToken,
+  storageRevisionToken,
+  type StorageMutationStamp
+} from "./shared/storageRevision.js";
+import { requiresWorkerFilesystemAccess } from "./shared/pathPolicy.js";
+import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
+import {
+  memoryStorageCaseFold,
+  memoryStorageCollisionKey,
+  safeMemoryStorageSegment
+} from "./memoryStorageIdentity.js";
+import {
+  assertPlanStorageIdentityAvailable,
+  commitPlanLifecycleTransitionUnderLease,
+  readCanonicalPlanStoragePackageUnderLease,
+  subscribePlanStorageBeforeMutation,
+  withPlanStorageLease as withPlanStorageLock,
+  type PlanStorageLease,
+  type PlanStoragePackageFile
+} from "./planStorageRepository.js";
+import {
   planAttachmentDirectory,
   planBucketForStatus,
   planDirectory,
@@ -167,6 +185,8 @@ export type PlanItem = {
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
+  storageRevision?: string;
+  storageMutationRequestId?: string;
   keywords: string[];
 };
 
@@ -210,6 +230,8 @@ export type RecentMemoryItem = {
   source?: KnowledgeSource;
   createdAt: string;
   updatedAt: string;
+  storageRevision?: string;
+  storageMutationRequestId?: string;
   viewedAt?: string;
   recalledAt?: string;
   consolidatedAt?: string;
@@ -225,6 +247,8 @@ export type ConsolidatedMemoryItem = {
   source?: KnowledgeSource;
   createdAt: string;
   updatedAt: string;
+  storageRevision?: string;
+  storageMutationRequestId?: string;
   viewedAt?: string;
   recalledAt?: string;
   inputMemoryIds?: string[];
@@ -253,6 +277,8 @@ export type MemoryConsolidationRun = {
   id: string;
   roleDir: string;
   requestedAt: string;
+  storageRevision?: string;
+  storageMutationRequestId?: string;
   deliveredAt?: string;
   completedAt?: string;
   trigger: "auto" | "manual" | "api";
@@ -423,7 +449,7 @@ export const DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS: RoleKnowledgeWriteLimits = {
 };
 
 export type RoleKnowledgeValidationIssue = {
-  type: "plan" | "recent_memory" | "consolidated_memory";
+  type: "plan" | "plan_storage" | "recent_memory" | "consolidated_memory";
   id: string;
   message: string;
 };
@@ -434,17 +460,35 @@ export type RoleKnowledgeValidationResult = {
   issues: RoleKnowledgeValidationIssue[];
 };
 
+export class RoleKnowledgeCacheUnavailableError extends Error {
+  readonly code = "cache_unavailable";
+
+  constructor(readonly roleDir: string) {
+    super(`Role knowledge catalog is not published for ${path.resolve(roleDir)}.`);
+    this.name = "RoleKnowledgeCacheUnavailableError";
+  }
+}
+
+/**
+ * Rebuildable read projection loaded by a bounded Manager read worker.
+ * Physical role storage remains authoritative; the parent process only
+ * publishes a normalized clone for request/event hot paths.
+ */
+export type RoleKnowledgeCatalogSnapshot = {
+  plans: PlanItem[];
+  recentMemories: RecentMemoryItem[];
+  consolidatedMemories: ConsolidatedMemoryItem[];
+  skills: RoleSkillItem[];
+  limits: RoleKnowledgeWriteLimits;
+  contextInjection: RoleContextInjectionPolicy;
+};
+
 function nowIso(): string {
   return new Date().toISOString();
 }
 
 function safeIdPart(value: string): string {
-  return value
-    .trim()
-    .replace(/[^\p{L}\p{N}_-]+/gu, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, 80);
+  return safeMemoryStorageSegment(value);
 }
 
 function generatedId(prefix: string, title: string): string {
@@ -462,8 +506,7 @@ function readJson<T>(filePath: string): T | null {
 }
 
 function writeJson(filePath: string, data: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+  atomicWriteFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
 function jsonFiles(dir: string): string[] {
@@ -518,8 +561,8 @@ function planJsonFilesInBucket(roleDir: string, bucket: PlanStorageBucket): stri
 
 export function roleKnowledgeFileCounts(roleDir: string): RoleKnowledgeFileCounts {
   return {
-    activePlans: jsonFiles(path.join(plansDir(roleDir), "items", "active")).length + planJsonFilesInBucket(roleDir, "active").length,
-    archivedPlans: jsonFiles(path.join(plansDir(roleDir), "archive")).length + planJsonFilesInBucket(roleDir, "archive").length,
+    activePlans: planJsonFilesInBucket(roleDir, "active").length,
+    archivedPlans: planJsonFilesInBucket(roleDir, "archive").length,
     recentMemory: markdownFiles(path.join(memoryDir(roleDir), "recent")).length,
     consolidatedMemory: markdownFiles(path.join(memoryDir(roleDir), "consolidated")).length,
     consolidationRuns: jsonFiles(path.join(memoryDir(roleDir), "consolidation-runs")).length
@@ -578,7 +621,7 @@ function memoryMarkdown(value: RecentMemoryItem | ConsolidatedMemoryItem): strin
 
 function writeMemoryMarkdown(filePath: string, value: RecentMemoryItem | ConsolidatedMemoryItem): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, memoryMarkdown(value), "utf8");
+  atomicWriteFileSync(filePath, memoryMarkdown(value));
 }
 
 function memoryConsolidationActivityAt(memory: { updatedAt: string; recalledAt?: string }): string {
@@ -1098,8 +1141,12 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
   }
 }
 
-function validatePlanWrite(roleDir: string, plan: PlanItem, requireSteps = false): void {
-  const limits = roleKnowledgeWriteLimits(roleDir).plan;
+function validatePlanWrite(
+  roleDir: string,
+  plan: PlanItem,
+  requireSteps = false,
+  limits = roleKnowledgeWriteLimits(roleDir).plan
+): void {
   assertTextLimit("Plan title", plan.title, limits.titleChars);
   assertSingleFocus("Plan", plan.focus, limits.focusChars);
   assertTextLimit("Plan currentStep", plan.currentStep, limits.currentStepChars);
@@ -1137,8 +1184,12 @@ function validatePlanWrite(roleDir: string, plan: PlanItem, requireSteps = false
   }
 }
 
-function validateMemoryWrite(roleDir: string, memory: RecentMemoryItem | ConsolidatedMemoryItem, label = "Memory"): void {
-  const limits = roleKnowledgeWriteLimits(roleDir).memory;
+function validateMemoryWrite(
+  roleDir: string,
+  memory: RecentMemoryItem | ConsolidatedMemoryItem,
+  label = "Memory",
+  limits = roleKnowledgeWriteLimits(roleDir).memory
+): void {
   assertTextLimit(`${label} title`, memory.title, limits.titleChars);
   assertSingleFocus(label, memory.focus, limits.focusChars);
   assertTextLimit(`${label} content`, memory.content, limits.contentChars);
@@ -1386,7 +1437,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     ? raw.status
     : "未开始";
   return withDerivedPlanBlockingState({
-    id: String(raw.id || fallbackId || generatedId("plan", title)),
+    id: canonicalLogicalPlanId(raw.id || fallbackId || generatedId("plan", title)),
     title,
     focus: String(raw.focus || title).trim(),
     status,
@@ -1415,6 +1466,12 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     archivedAt: typeof raw.archivedAt === "string" ? raw.archivedAt : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
+    storageRevision: typeof raw.storageRevision === "string" && raw.storageRevision
+      ? raw.storageRevision
+      : undefined,
+    storageMutationRequestId: typeof raw.storageMutationRequestId === "string" && raw.storageMutationRequestId
+      ? raw.storageMutationRequestId
+      : undefined,
     keywords: normalizeKeywords(raw.keywords)
   });
 }
@@ -1432,6 +1489,12 @@ function normalizeRecentMemory(raw: Partial<RecentMemoryItem> & Record<string, u
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
+    storageRevision: typeof raw.storageRevision === "string" && raw.storageRevision
+      ? raw.storageRevision
+      : undefined,
+    storageMutationRequestId: typeof raw.storageMutationRequestId === "string" && raw.storageMutationRequestId
+      ? raw.storageMutationRequestId
+      : undefined,
     viewedAt: typeof raw.viewedAt === "string" ? raw.viewedAt : undefined,
     recalledAt: typeof raw.recalledAt === "string" ? raw.recalledAt : undefined,
     consolidatedAt: typeof raw.consolidatedAt === "string" ? raw.consolidatedAt : undefined,
@@ -1453,6 +1516,12 @@ function normalizeConsolidatedMemory(raw: Partial<ConsolidatedMemoryItem> & Reco
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
+    storageRevision: typeof raw.storageRevision === "string" && raw.storageRevision
+      ? raw.storageRevision
+      : undefined,
+    storageMutationRequestId: typeof raw.storageMutationRequestId === "string" && raw.storageMutationRequestId
+      ? raw.storageMutationRequestId
+      : undefined,
     viewedAt: typeof raw.viewedAt === "string" ? raw.viewedAt : undefined,
     recalledAt: typeof raw.recalledAt === "string" ? raw.recalledAt : undefined,
     inputMemoryIds: Array.isArray(raw.inputMemoryIds) ? raw.inputMemoryIds.map(String) : undefined,
@@ -1517,9 +1586,13 @@ function planFile(roleDir: string, plan: PlanItem): string {
 function planHistoryFiles(roleDir: string, planId: string): string[] {
   return [
     planStorageHistoryFile(roleDir, planId, "active"),
-    planStorageHistoryFile(roleDir, planId, "archive"),
-    legacyPlanHistoryFile(roleDir, planId)
+    planStorageHistoryFile(roleDir, planId, "archive")
   ];
+}
+
+function planLifecycleTransactionId(kind: "plan-create" | "plan-update" | "plan-archive", ...identity: string[]): string {
+  const digest = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  return `${kind}-${digest.slice(0, 48)}`;
 }
 
 function planHistoryFile(roleDir: string, plan: Pick<PlanItem, "id" | "status">): string {
@@ -1532,9 +1605,9 @@ function planHistoryKind(before: PlanItem | undefined, after: PlanItem): PlanHis
   return "updated";
 }
 
-function appendPlanHistory(roleDir: string, before: PlanItem | undefined, after: PlanItem): PlanHistoryRecord {
+function createPlanHistoryRecord(before: PlanItem | undefined, after: PlanItem): PlanHistoryRecord {
   const recordedAt = after.updatedAt || nowIso();
-  const record: PlanHistoryRecord = {
+  return {
     id: generatedId("plan-history", `${after.id}-${recordedAt}`),
     planId: after.id,
     kind: planHistoryKind(before, after),
@@ -1542,24 +1615,26 @@ function appendPlanHistory(roleDir: string, before: PlanItem | undefined, after:
     ...(before ? { before } : {}),
     after
   };
-  const filePath = planHistoryFile(roleDir, after);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
-  return record;
+}
+
+function appendPlanHistoryContent(current: string, record: PlanHistoryRecord): string {
+  const prefix = current && !current.endsWith("\n") ? `${current}\n` : current;
+  return `${prefix}${JSON.stringify(record)}\n`;
 }
 
 export function listPlanHistory(roleDir: string, planId: string): PlanHistoryRecord[] {
+  const canonicalPlanId = canonicalLogicalPlanId(planId);
   const records = new Map<string, PlanHistoryRecord>();
-  for (const filePath of planHistoryFiles(roleDir, planId)) {
+  for (const filePath of planHistoryFiles(roleDir, canonicalPlanId)) {
     if (!fs.existsSync(filePath)) continue;
     for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter(Boolean)) {
       try {
         const value = JSON.parse(line) as Partial<PlanHistoryRecord>;
-        if (!value.id || value.planId !== planId || !value.recordedAt || !value.after || typeof value.after !== "object") continue;
+        if (!value.id || value.planId !== canonicalPlanId || !value.recordedAt || !value.after || typeof value.after !== "object") continue;
         if (value.kind !== "created" && value.kind !== "updated" && value.kind !== "archived") continue;
         records.set(value.id, {
           id: value.id,
-          planId,
+          planId: canonicalPlanId,
           kind: value.kind,
           recordedAt: value.recordedAt,
           ...(value.before && typeof value.before === "object" ? { before: value.before as PlanItem } : {}),
@@ -1587,8 +1662,6 @@ function consolidationRunFile(roleDir: string, runId: string): string {
 
 function allPlanFiles(roleDir: string): string[] {
   return [
-    ...jsonFiles(path.join(plansDir(roleDir), "items", "active")),
-    ...jsonFiles(path.join(plansDir(roleDir), "archive")),
     ...planJsonFilesInBucket(roleDir, "active"),
     ...planJsonFilesInBucket(roleDir, "archive")
   ].sort();
@@ -1599,6 +1672,20 @@ type PlanListCacheEntry = {
   validUntil: number;
   plans: PlanItem[];
 };
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function immutablePublication<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
+function immutablePlanCatalog(plans: PlanItem[]): PlanItem[] {
+  return immutablePublication(plans);
+}
 
 type PlanFileCacheEntry = {
   size: number;
@@ -1636,6 +1723,8 @@ function clearPlanListCache(roleDir: string): void {
   for (const watcher of watchers?.values() || []) watcher.close();
   planListWatchers.delete(cacheKey);
 }
+
+subscribePlanStorageBeforeMutation(({ roleDir }) => clearPlanListCache(roleDir));
 
 function markPlanListCacheDirty(roleDir: string, filePath?: string): void {
   const cacheKey = planListCacheKey(roleDir);
@@ -1686,7 +1775,7 @@ function readPlansWithFileCache(roleDir: string, files: string[]): { signature: 
       cachedFile = {
         size: stat.size,
         mtimeMs: stat.mtimeMs,
-        plan: raw ? normalizePlan(raw, path.basename(filePath, ".json")) : null
+        plan: raw ? normalizePlan(raw) : null
       };
       cachedFiles.set(filePath, cachedFile);
     }
@@ -1698,7 +1787,7 @@ function readPlansWithFileCache(roleDir: string, files: string[]): { signature: 
 function plansFromFileCache(roleDir: string): { signature: string; items: PlanItem[] } | null {
   const cachedFiles = planFileCache.get(planListCacheKey(roleDir));
   if (!cachedFiles) return null;
-  const activePrefix = `${path.resolve(path.join(plansDir(roleDir), "items", "active"))}${path.sep}`;
+  const activePrefix = `${path.resolve(path.join(plansDir(roleDir), "active"))}${path.sep}`;
   const entries = [...cachedFiles.entries()].sort(([left], [right]) => {
     const priorityDelta = Number(!left.startsWith(activePrefix)) - Number(!right.startsWith(activePrefix));
     return priorityDelta || left.localeCompare(right);
@@ -1712,7 +1801,9 @@ function plansFromFileCache(roleDir: string): { signature: string; items: PlanIt
 function uniquePlans(items: PlanItem[]): PlanItem[] {
   const seen = new Set<string>();
   return items.filter((item) => {
-    if (seen.has(item.id)) return false;
+    if (seen.has(item.id)) {
+      throw new Error(`Plan storage conflict for ${item.id}: the stable plan id exists in more than one storage bucket.`);
+    }
     seen.add(item.id);
     return true;
   });
@@ -1749,7 +1840,7 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
       entry: {
         size: after.size,
         mtimeMs: after.mtimeMs,
-        plan: raw ? normalizePlan(raw, path.basename(filePath, ".json")) : null
+        plan: raw ? normalizePlan(raw) : null
       }
     };
   } catch (error) {
@@ -1778,25 +1869,6 @@ function awaitAbortable<T>(operation: Promise<T>, signal?: AbortSignal): Promise
 }
 
 async function allPlanFilesAsync(roleDir: string, signal?: AbortSignal): Promise<string[]> {
-  const legacyDirectories = [
-    path.join(plansDir(roleDir), "items", "active"),
-    path.join(plansDir(roleDir), "archive")
-  ];
-  const legacyGroups = await Promise.all(legacyDirectories.map(async (directory) => {
-    try {
-      const entries = await awaitAbortable(
-        fs.promises.readdir(directory, { withFileTypes: true }),
-        signal
-      );
-      return entries
-        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
-        .map((entry) => path.join(directory, entry.name))
-        .sort((left, right) => left.localeCompare(right));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
-  }));
   const storageGroups = await Promise.all((["active", "archive"] as const).map(async (bucket) => {
     const directory = path.join(plansDir(roleDir), bucket);
     try {
@@ -1813,7 +1885,7 @@ async function allPlanFilesAsync(roleDir: string, signal?: AbortSignal): Promise
       throw error;
     }
   }));
-  return [...legacyGroups.flat(), ...storageGroups.flat()].sort((left, right) => left.localeCompare(right));
+  return storageGroups.flat().sort((left, right) => left.localeCompare(right));
 }
 
 async function readPlanFileForCatalog(filePath: string): Promise<AsyncPlanFileCacheResult> {
@@ -1863,7 +1935,7 @@ async function refreshPlanListCacheFromDirtyFiles(roleDir: string): Promise<void
       planListCache.set(cacheKey, {
         signature: refreshed.signature,
         validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
-        plans: uniquePlans(refreshed.items)
+        plans: immutablePlanCatalog(uniquePlans(refreshed.items))
       });
       return;
     }
@@ -1879,7 +1951,7 @@ async function refreshPlanListCacheFromDirtyFiles(roleDir: string): Promise<void
       planListCache.set(cacheKey, {
         signature: refreshed.signature,
         validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
-        plans: uniquePlans(refreshed.items)
+        plans: immutablePlanCatalog(uniquePlans(refreshed.items))
       });
     }
   }).finally(() => {
@@ -1894,12 +1966,31 @@ function updatePlanListCacheAfterWrite(
   roleDir: string,
   destination: string,
   plan: PlanItem,
-  relatedFiles: string[]
+  relatedFiles: string[],
+  previousCache?: {
+    catalog?: PlanListCacheEntry;
+    files?: Map<string, PlanFileCacheEntry>;
+  }
 ): void {
   const cacheKey = planListCacheKey(roleDir);
-  const cachedFiles = planFileCache.get(cacheKey);
-  if (!cachedFiles || !planListCache.has(cacheKey)) {
+  const cachedFiles = planFileCache.get(cacheKey) ?? previousCache?.files;
+  const cachedCatalog = planListCache.get(cacheKey) ?? previousCache?.catalog;
+  if (!cachedCatalog) {
     clearPlanListCache(roleDir);
+    return;
+  }
+  if (!cachedFiles) {
+    const plans = immutablePlanCatalog(uniquePlans([
+      ...cachedCatalog.plans.filter((item) => item.id !== plan.id),
+      structuredClone(plan)
+    ]));
+    planListCache.set(cacheKey, {
+      signature: JSON.stringify(plans.map((item) => [item.id, item.status, item.updatedAt])),
+      validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+      plans
+    });
+    planListDirtyAt.delete(cacheKey);
+    planListDirtyFiles.delete(cacheKey);
     return;
   }
   const resolvedFiles = [...new Set(relatedFiles.map((filePath) => path.resolve(filePath)))];
@@ -1912,6 +2003,7 @@ function updatePlanListCacheAfterWrite(
     clearPlanListCache(roleDir);
     return;
   }
+  planFileCache.set(cacheKey, cachedFiles);
   const refreshed = plansFromFileCache(roleDir);
   if (!refreshed) {
     clearPlanListCache(roleDir);
@@ -1920,7 +2012,7 @@ function updatePlanListCacheAfterWrite(
   planListCache.set(cacheKey, {
     signature: refreshed.signature,
     validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
-    plans: uniquePlans(refreshed.items)
+    plans: immutablePlanCatalog(uniquePlans(refreshed.items))
   });
   const dirtyFiles = planListDirtyFiles.get(cacheKey);
   if (dirtyFiles instanceof Set) {
@@ -1936,6 +2028,11 @@ function updatePlanListCacheAfterWrite(
 function ensurePlanListWatchers(roleDir: string): boolean {
   const cacheKey = planListCacheKey(roleDir);
   const directory = plansDir(roleDir);
+  // fs.watch() itself is a synchronous Windows call. Never invoke it against
+  // shared persona storage: an unavailable SMB server would block Manager's
+  // health event loop before a Promise or timeout could run. UNC catalogs use
+  // the existing async read + bounded TTL fallback instead.
+  if (requiresWorkerFilesystemAccess(directory)) return false;
   if (!fs.existsSync(directory)) return false;
   let watchers = planListWatchers.get(cacheKey);
   if (!watchers) {
@@ -1981,58 +2078,62 @@ type PlanRecord = {
 function planCandidateFiles(roleDir: string, planId: string): string[] {
   return [
     planJsonFile(roleDir, planId, "active"),
-    planJsonFile(roleDir, planId, "archive"),
-    legacyActivePlanFile(roleDir, planId),
-    legacyArchivedPlanFile(roleDir, planId)
+    planJsonFile(roleDir, planId, "archive")
   ];
 }
 
 function planRecordFromFile(filePath: string, planId: string): PlanRecord | null {
   const raw = readJson<Record<string, unknown>>(filePath);
-  const plan = raw ? normalizePlan(raw, path.basename(filePath, ".json")) : null;
+  const plan = raw ? normalizePlan(raw) : null;
   return plan?.id === planId ? { filePath, plan } : null;
 }
 
 function findPlanRecord(roleDir: string, planId: string): PlanRecord | null {
   const candidates = planCandidateFiles(roleDir, planId);
+  const records: PlanRecord[] = [];
   for (const filePath of candidates) {
     const record = planRecordFromFile(filePath, planId);
-    if (record) return record;
+    if (record) records.push(record);
   }
   const candidateSet = new Set(candidates.map((filePath) => path.resolve(filePath)));
   for (const filePath of allPlanFiles(roleDir)) {
     if (candidateSet.has(path.resolve(filePath))) continue;
     const record = planRecordFromFile(filePath, planId);
-    if (record) return record;
+    if (record) records.push(record);
   }
-  return null;
+  if (records.length > 1) {
+    throw new Error(`Plan storage conflict for ${planId}: the stable plan id exists in more than one storage bucket.`);
+  }
+  return records[0] ?? null;
 }
 
 export function listPlans(roleDir: string): PlanItem[] {
   const cacheKey = planListCacheKey(roleDir);
-  const now = Date.now();
   const cached = planListCache.get(cacheKey);
-  const watchBacked = ensurePlanListWatchers(roleDir);
-  const dirtyAt = planListDirtyAt.get(cacheKey);
-  if (cached && watchBacked && dirtyAt === undefined) return cached.plans;
-  if (cached && watchBacked && dirtyAt !== undefined) {
-    if (!planListRefreshTimers.has(cacheKey)) schedulePlanListCacheRefresh(roleDir);
-    return cached.plans;
-  }
-  if (cached && !watchBacked && cached.validUntil > now) return cached.plans;
-  const files = allPlanFiles(roleDir);
-  const { signature, items } = readPlansWithFileCache(roleDir, files);
-  if (cached && cached.signature === signature) {
-    cached.validUntil = now + PLAN_LIST_CACHE_TTL_MS;
+  if (cached) return cached.plans;
+  throw new RoleKnowledgeCacheUnavailableError(roleDir);
+}
+
+/**
+ * Authoritative synchronous storage scan for a bounded child/startup worker.
+ * Manager request and event paths must use listPlans()/publishedRolePlans()
+ * and treat RoleKnowledgeCacheUnavailableError as an explicit cold state.
+ */
+export function readPlansFromStorageInWorker(roleDir: string): PlanItem[] {
+  const cacheKey = planListCacheKey(roleDir);
+  const now = Date.now();
+  try {
+    const files = allPlanFiles(roleDir);
+    const { signature, items } = readPlansWithFileCache(roleDir, files);
+    const plans = immutablePlanCatalog(uniquePlans(items));
+    planListCache.set(cacheKey, { signature, validUntil: now + PLAN_LIST_CACHE_TTL_MS, plans });
     planListDirtyAt.delete(cacheKey);
     planListDirtyFiles.delete(cacheKey);
-    return cached.plans;
+    return plans;
+  } catch (error) {
+    clearPlanListCache(roleDir);
+    throw error;
   }
-  const plans = uniquePlans(items);
-  planListCache.set(cacheKey, { signature, validUntil: now + PLAN_LIST_CACHE_TTL_MS, plans });
-  planListDirtyAt.delete(cacheKey);
-  planListDirtyFiles.delete(cacheKey);
-  return plans;
 }
 
 export async function listPlansAsync(
@@ -2074,7 +2175,7 @@ export async function listPlansAsync(
       }
       planFileCache.set(cacheKey, cachedFiles);
       const refreshed = plansFromFileCache(roleDir) ?? { signature: "", items: [] };
-      const plans = uniquePlans(refreshed.items);
+      const plans = immutablePlanCatalog(uniquePlans(refreshed.items));
       planListCache.set(cacheKey, {
         signature: refreshed.signature,
         validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
@@ -2092,6 +2193,9 @@ export async function listPlansAsync(
       return plans;
     }
     throw new Error("Plan catalog kept changing while loading; retry shortly.");
+  }).catch((error) => {
+    if (!cached) clearPlanListCache(roleDir);
+    throw error;
   }).finally(() => {
     if (planListLoadInFlight.get(cacheKey) === load) planListLoadInFlight.delete(cacheKey);
   });
@@ -2100,19 +2204,20 @@ export async function listPlansAsync(
 }
 
 export function getPlan(roleDir: string, planId: string): PlanItem | null {
+  const canonicalPlanId = canonicalLogicalPlanId(planId);
   const cacheKey = planListCacheKey(roleDir);
   const cached = planListCache.get(cacheKey);
   const dirtyFiles = planListDirtyFiles.get(cacheKey);
   if (cached && dirtyFiles !== null) {
-    const candidateFiles = planCandidateFiles(roleDir, planId).map((filePath) => path.resolve(filePath));
+    const candidateFiles = planCandidateFiles(roleDir, canonicalPlanId).map((filePath) => path.resolve(filePath));
     const targetIsDirty = dirtyFiles instanceof Set
       && candidateFiles.some((filePath) => dirtyFiles.has(filePath));
     if (!targetIsDirty) {
-      const cachedPlan = cached.plans.find((plan) => plan.id === planId);
+      const cachedPlan = cached.plans.find((plan) => plan.id === canonicalPlanId);
       if (cachedPlan) return cachedPlan;
     }
   }
-  return findPlanRecord(roleDir, planId)?.plan ?? null;
+  return findPlanRecord(roleDir, canonicalPlanId)?.plan ?? null;
 }
 
 const PLAN_BY_ID_ASYNC_READ_CONCURRENCY = 8;
@@ -2132,10 +2237,7 @@ async function readPlanRecordAsync(
   }
   signal?.throwIfAborted();
   try {
-    const plan = normalizePlan(
-      JSON.parse(text) as Record<string, unknown>,
-      path.basename(filePath, ".json")
-    );
+    const plan = normalizePlan(JSON.parse(text) as Record<string, unknown>);
     return plan?.id === planId ? { filePath, plan } : null;
   } catch {
     return null;
@@ -2152,13 +2254,15 @@ export async function getPlanAsync(
   planId: string,
   options: { signal?: AbortSignal } = {}
 ): Promise<PlanItem | null> {
+  const canonicalPlanId = canonicalLogicalPlanId(planId);
   const { signal } = options;
   signal?.throwIfAborted();
-  const candidates = planCandidateFiles(roleDir, planId);
-  for (const filePath of candidates) {
-    const record = await readPlanRecordAsync(filePath, planId, signal);
-    if (record) return record.plan;
-  }
+  const candidates = planCandidateFiles(roleDir, canonicalPlanId);
+  const matches: PlanRecord[] = [];
+  const candidateRecords = await Promise.all(
+    candidates.map((filePath) => readPlanRecordAsync(filePath, canonicalPlanId, signal))
+  );
+  matches.push(...candidateRecords.filter((record): record is PlanRecord => record !== null));
 
   const candidateSet = new Set(candidates.map(filePath => path.resolve(filePath)));
   const fallbackFiles = (await allPlanFilesAsync(roleDir, signal))
@@ -2168,13 +2272,15 @@ export async function getPlanAsync(
     const records = await Promise.all(
       fallbackFiles
         .slice(offset, offset + PLAN_BY_ID_ASYNC_READ_CONCURRENCY)
-        .map(filePath => readPlanRecordAsync(filePath, planId, signal))
+        .map(filePath => readPlanRecordAsync(filePath, canonicalPlanId, signal))
     );
-    const match = records.find((record): record is PlanRecord => record !== null);
-    if (match) return match.plan;
+    matches.push(...records.filter((record): record is PlanRecord => record !== null));
     signal?.throwIfAborted();
   }
-  return null;
+  if (matches.length > 1) {
+    throw new Error(`Plan storage conflict for ${canonicalPlanId}: the stable plan id exists in more than one storage bucket.`);
+  }
+  return matches[0]?.plan ?? null;
 }
 
 type MemoryCatalogItem = RecentMemoryItem | ConsolidatedMemoryItem;
@@ -2182,6 +2288,11 @@ type MemoryCatalogCacheEntry = { validUntil: number; items: MemoryCatalogItem[] 
 const MEMORY_CATALOG_CACHE_TTL_MS = 500;
 const memoryCatalogCache = new Map<string, MemoryCatalogCacheEntry>();
 const memoryCatalogWatchers = new Map<string, fs.FSWatcher>();
+const roleKnowledgeCatalogMetadataCache = new Map<string, {
+  skills: RoleSkillItem[];
+  limits: RoleKnowledgeWriteLimits;
+  contextInjection: RoleContextInjectionPolicy;
+}>();
 
 function memoryCatalogDirectory(roleDir: string, kind: "recent" | "consolidated"): string {
   return path.resolve(memoryDir(roleDir), kind);
@@ -2196,6 +2307,9 @@ function invalidateMemoryCatalog(directory: string): void {
 function ensureMemoryCatalogWatcher(directory: string): boolean {
   const cacheKey = path.resolve(directory);
   if (memoryCatalogWatchers.has(cacheKey)) return true;
+  // See ensurePlanListWatchers(): UNC storage is refreshed in worker-backed
+  // reads and must never be passed to a synchronous fs.watch() call here.
+  if (requiresWorkerFilesystemAccess(directory)) return false;
   if (!fs.existsSync(cacheKey)) return false;
   try {
     const watcher = fs.watch(cacheKey, { persistent: false }, (_eventType, fileName) => {
@@ -2243,66 +2357,213 @@ function listMemoryCatalog<T extends MemoryCatalogItem>(
   return items;
 }
 
-function writeMemoryCatalog(filePath: string, value: RecentMemoryItem | ConsolidatedMemoryItem): void {
-  writeMemoryMarkdown(filePath, value);
-  invalidateMemoryCatalog(path.dirname(filePath));
+function memoryCatalogPathIdentity(filePath: string): string {
+  return memoryStorageCaseFold(path.resolve(filePath));
+}
+
+function memoryCatalogFallback(directory: string): string {
+  return path.basename(directory).toLocaleLowerCase("en-US") === "consolidated"
+    ? "consolidated-memory"
+    : "memory";
+}
+
+function memoryCatalogRaw(filePath: string): Record<string, unknown> | null {
+  return filePath.toLocaleLowerCase("en-US").endsWith(".md")
+    ? parseMemoryMarkdown(filePath)
+    : readJson<Record<string, unknown>>(filePath);
+}
+
+function memoryCatalogStorageFiles(directory: string): string[] {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && /\.(?:md|json)$/i.test(entry.name))
+    .map(entry => path.join(directory, entry.name))
+    .sort();
+}
+
+function assertMemoryCatalogWriteAvailable(
+  filePath: string,
+  value: RecentMemoryItem | ConsolidatedMemoryItem,
+  allowExistingLogicalId: boolean
+): void {
+  const directory = path.resolve(path.dirname(filePath));
+  const fallback = memoryCatalogFallback(directory);
+  const desiredId = String(value.id);
+  const desiredKey = memoryStorageCollisionKey(desiredId, fallback);
+  const targetIdentity = memoryCatalogPathIdentity(filePath);
+
+  for (const existingPath of memoryCatalogStorageFiles(directory)) {
+    const raw = memoryCatalogRaw(existingPath);
+    const sameTarget = memoryCatalogPathIdentity(existingPath) === targetIdentity;
+    if (!raw && sameTarget) {
+      throw new Error(
+        `Memory storage target already exists but its logical id cannot be verified: ${JSON.stringify(desiredId)}`
+      );
+    }
+    const fallbackId = path.basename(existingPath, path.extname(existingPath));
+    const existingId = raw && raw.id ? String(raw.id) : fallbackId;
+    const existingKey = memoryStorageCollisionKey(existingId, fallback);
+    if ((sameTarget || existingKey === desiredKey) && existingId !== desiredId) {
+      throw new Error(
+        `Memory storage key already exists for a different logical id: requested=${JSON.stringify(desiredId)}; existing=${JSON.stringify(existingId)}.`
+      );
+    }
+    if (existingId === desiredId && !allowExistingLogicalId) {
+      throw new Error(`Memory already exists: ${JSON.stringify(desiredId)}`);
+    }
+  }
+}
+
+function writeMemoryCatalog(
+  filePath: string,
+  value: RecentMemoryItem | ConsolidatedMemoryItem,
+  allowExistingLogicalId = true,
+  checkpoint?: () => void
+): void {
+  assertMemoryCatalogWriteAvailable(filePath, value, allowExistingLogicalId);
+  try {
+    checkpoint?.();
+    writeMemoryMarkdown(filePath, value);
+    checkpoint?.();
+  } finally {
+    invalidateMemoryCatalog(path.dirname(filePath));
+  }
 }
 
 type MemoryCatalogWrite = {
   filePath: string;
   value: RecentMemoryItem | ConsolidatedMemoryItem;
+  /** Consolidated outputs are immutable after their first atomic publication. */
+  existingLogicalIdPolicy?: "update" | "idempotent_only";
 };
 
-const MEMORY_CATALOG_WRITE_WORKER_SOURCE = `
-const fs = require("node:fs");
-const path = require("node:path");
-const { parentPort, workerData } = require("node:worker_threads");
-try {
-  for (const directory of new Set(workerData.map((entry) => path.dirname(entry.filePath)))) {
-    fs.mkdirSync(directory, { recursive: true });
-  }
-  for (const entry of workerData) fs.writeFileSync(entry.filePath, entry.content, "utf8");
-  parentPort.postMessage({ ok: true });
-} catch (error) {
-  parentPort.postMessage({ ok: false, message: error instanceof Error ? error.message : String(error) });
-}
-`;
+type MemoryCatalogBatchOptions = Readonly<{
+  /** Deterministic fault boundary used only by the exported recovery regression helper. */
+  failAfterPublishedEntries?: number;
+  /** Synchronous lease/fence proof immediately before and after every publication. */
+  checkpoint?: () => void;
+}>;
 
-async function writeMemoryCatalogBatch(entries: MemoryCatalogWrite[]): Promise<void> {
-  if (entries.length === 0) return;
-  const directories = [...new Set(entries.map((entry) => path.dirname(entry.filePath)))];
-  const writes = entries.map((entry) => ({ filePath: entry.filePath, content: memoryMarkdown(entry.value) }));
-  await new Promise<void>((resolve, reject) => {
-    const worker = new Worker(MEMORY_CATALOG_WRITE_WORKER_SOURCE, { eval: true, workerData: writes });
-    let settled = false;
-    const fail = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-    worker.once("message", (message: { ok?: boolean; message?: string }) => {
-      if (message?.ok !== true) {
-        fail(new Error(message?.message || "Memory catalog write worker failed."));
-        return;
-      }
-      if (settled) return;
-      settled = true;
-      resolve();
-    });
-    worker.once("error", fail);
-    worker.once("exit", (code) => {
-      if (code !== 0) fail(new Error(`Memory catalog write worker exited with code ${code}.`));
-    });
+function normalizedMemoryCatalogItem(
+  directory: string,
+  raw: Record<string, unknown>,
+  fallbackId: string
+): MemoryCatalogItem | null {
+  return path.basename(directory).toLocaleLowerCase("en-US") === "consolidated"
+    ? normalizeConsolidatedMemory(raw, fallbackId)
+    : normalizeRecentMemory(raw, fallbackId);
+}
+
+function matchingStoredMemoryItems(
+  directory: string,
+  logicalId: string
+): Array<{ filePath: string; value: MemoryCatalogItem }> {
+  return memoryCatalogStorageFiles(directory).flatMap(filePath => {
+    const raw = memoryCatalogRaw(filePath);
+    const value = raw
+      ? normalizedMemoryCatalogItem(directory, raw, path.basename(filePath, path.extname(filePath)))
+      : null;
+    return value?.id === logicalId ? [{ filePath, value }] : [];
   });
-  for (const directory of directories) invalidateMemoryCatalog(directory);
+}
+
+function assertImmutableMemoryWriteIsIdempotent(entry: MemoryCatalogWrite): boolean {
+  const directory = path.resolve(path.dirname(entry.filePath));
+  const matches = matchingStoredMemoryItems(directory, entry.value.id);
+  if (matches.length === 0) return false;
+  const expected = memoryMarkdown(entry.value);
+  for (const existing of matches) {
+    if (!entry.value.storageMutationRequestId
+      || existing.value.storageMutationRequestId !== entry.value.storageMutationRequestId
+      || existing.value.consolidationRunId !== entry.value.consolidationRunId
+      || memoryMarkdown(existing.value) !== expected) {
+      throw new Error(
+        `Consolidated memory already exists and is immutable: ${JSON.stringify(entry.value.id)}.`
+      );
+    }
+  }
+  return true;
+}
+
+async function writeMemoryCatalogBatch(
+  entries: MemoryCatalogWrite[],
+  options: MemoryCatalogBatchOptions = {}
+): Promise<void> {
+  if (entries.length === 0) return;
+  options.checkpoint?.();
+  const batchStorageKeys = new Map<string, string>();
+  const batchLogicalIds = new Set<string>();
+  for (const entry of entries) {
+    const directoryIdentity = memoryCatalogPathIdentity(path.dirname(entry.filePath));
+    const logicalIdentity = `${directoryIdentity}\u0000${entry.value.id}`;
+    if (batchLogicalIds.has(logicalIdentity)) {
+      throw new Error(`Memory catalog batch repeats a logical id: ${JSON.stringify(entry.value.id)}.`);
+    }
+    batchLogicalIds.add(logicalIdentity);
+  }
+  const pendingWrites: MemoryCatalogWrite[] = [];
+  for (const entry of entries) {
+    const directory = path.resolve(path.dirname(entry.filePath));
+    const storageKey = `${memoryCatalogPathIdentity(directory)}\u0000${memoryStorageCollisionKey(
+      entry.value.id,
+      memoryCatalogFallback(directory)
+    )}`;
+    const existingId = batchStorageKeys.get(storageKey);
+    if (existingId !== undefined && existingId !== entry.value.id) {
+      throw new Error(
+        `Memory storage key already exists for a different logical id: requested=${JSON.stringify(entry.value.id)}; existing=${JSON.stringify(existingId)}.`
+      );
+    }
+    batchStorageKeys.set(storageKey, entry.value.id);
+    const alreadyPublished = entry.existingLogicalIdPolicy === "idempotent_only"
+      ? assertImmutableMemoryWriteIsIdempotent(entry)
+      : false;
+    assertMemoryCatalogWriteAvailable(entry.filePath, entry.value, true);
+    if (!alreadyPublished) pendingWrites.push(entry);
+  }
+  const directories = [...new Set(entries.map((entry) => path.dirname(entry.filePath)))];
+  let published = 0;
+  try {
+    for (const entry of pendingWrites) {
+      // Each bounded memory file is published atomically. Yield between files so
+      // large consolidations do not monopolize the storage child's event loop.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      options.checkpoint?.();
+      atomicWriteFileSync(entry.filePath, memoryMarkdown(entry.value));
+      options.checkpoint?.();
+      published += 1;
+      if (options.failAfterPublishedEntries !== undefined
+        && published >= options.failAfterPublishedEntries) {
+        throw new Error(`Injected memory catalog batch failure after ${published} atomic publication(s).`);
+      }
+    }
+    options.checkpoint?.();
+  } finally {
+    for (const directory of directories) invalidateMemoryCatalog(directory);
+  }
 }
 
 export function listRecentMemories(roleDir: string): RecentMemoryItem[] {
   return listMemoryCatalog(memoryCatalogDirectory(roleDir, "recent"), normalizeRecentMemory);
 }
 
+/** Refreshes mutation fencing reads after a cross-process catalog lease is acquired. */
+export function invalidateRoleMemoryCatalogForMutation(roleDir: string): void {
+  invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "recent"));
+  invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "consolidated"));
+}
+
 export function listActiveRecentMemories(roleDir: string): RecentMemoryItem[] {
   return listRecentMemories(roleDir).filter((memory) => !memory.consolidatedAt);
+}
+
+/** Bypasses the resident read-worker cache for optimistic mutation fencing. */
+export function readRecentMemoryFromStorageInWorker(
+  roleDir: string,
+  memoryId: string
+): RecentMemoryItem | undefined {
+  invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "recent"));
+  return listActiveRecentMemories(roleDir).find((memory) => memory.id === memoryId);
 }
 
 export function listArchivedMemories(roleDir: string): RecentMemoryItem[] {
@@ -2312,13 +2573,38 @@ export function listArchivedMemories(roleDir: string): RecentMemoryItem[] {
 export function getRecentMemory(roleDir: string, memoryId: string): RecentMemoryItem | undefined {
   const memory = listRecentMemories(roleDir).find((item) => item.id === memoryId);
   if (!memory) return undefined;
-  const viewed = { ...memory, viewedAt: nowIso() };
+  const viewed = { ...memory, viewedAt: nowIso(), storageRevision: createStorageRevision() };
   writeMemoryCatalog(recentMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
 
+/**
+ * Persists one explicit recent-memory view event. The caller-owned mutation
+ * stamp is the durable exactly-once proof; content activity (`updatedAt`) is
+ * deliberately unchanged.
+ */
+export function touchRecentMemory(
+  roleDir: string,
+  memoryId: string,
+  mutation: StorageMutationStamp,
+  viewedAt = nowIso(),
+  checkpoint?: () => void
+): RecentMemoryItem {
+  const memory = listRecentMemories(roleDir).find((item) => item.id === memoryId);
+  if (!memory) throw new Error(`Memory not found: ${memoryId}`);
+  const touchedAt = new Date(viewedAt).toISOString();
+  const viewed = {
+    ...memory,
+    viewedAt: touchedAt,
+    storageRevision: mutation.revision,
+    storageMutationRequestId: mutation.requestId
+  };
+  writeMemoryCatalog(recentMemoryFile(roleDir, viewed), viewed, true, checkpoint);
+  return viewed;
+}
+
 function touchRecentMemoryView(roleDir: string, memory: RecentMemoryItem, viewedAt = nowIso()): RecentMemoryItem {
-  const viewed = { ...memory, viewedAt, recalledAt: viewedAt };
+  const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
   writeMemoryCatalog(recentMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
@@ -2342,6 +2628,165 @@ export function listRoleSkills(roleDir: string): RoleSkillItem[] {
   return listRoleSkillDetails(roleDir).map(({ content: _content, ...item }) => item);
 }
 
+function normalizedPublishedPlans(rawPlans: unknown): PlanItem[] {
+  if (!Array.isArray(rawPlans)) throw new Error("Role plan catalog snapshot must contain a plans array.");
+  const plans = rawPlans.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`Role plan catalog entry ${index} is invalid.`);
+    }
+    const source = structuredClone(raw) as Partial<PlanItem> & Record<string, unknown>;
+    const plan = normalizePlan(source, typeof source.id === "string" ? source.id : undefined);
+    if (!plan) throw new Error(`Role plan catalog entry ${index} is invalid.`);
+    return plan;
+  });
+  const unique = uniquePlans(plans);
+  if (unique.length !== plans.length) {
+    throw new Error("Role plan catalog snapshot contains duplicate stable plan ids.");
+  }
+  return unique;
+}
+
+function normalizedPublishedMemories<T extends RecentMemoryItem | ConsolidatedMemoryItem>(
+  rawMemories: unknown,
+  normalize: (raw: Partial<T> & Record<string, unknown>, fallbackId?: string) => T | null,
+  label: string
+): T[] {
+  if (!Array.isArray(rawMemories)) throw new Error(`Role knowledge snapshot must contain a ${label} array.`);
+  const seen = new Set<string>();
+  return rawMemories.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error(`${label} entry ${index} is invalid.`);
+    }
+    const source = structuredClone(raw) as Partial<T> & Record<string, unknown>;
+    const memory = normalize(source, typeof source.id === "string" ? source.id : undefined);
+    if (!memory) throw new Error(`${label} entry ${index} is invalid.`);
+    if (seen.has(memory.id)) throw new Error(`${label} contains duplicate id ${memory.id}.`);
+    seen.add(memory.id);
+    return memory;
+  });
+}
+
+/** Publishes a normalized worker result into the existing plan catalog cache. */
+export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): readonly PlanItem[] {
+  const plans = immutablePlanCatalog(normalizedPublishedPlans(rawPlans));
+  const cacheKey = planListCacheKey(roleDir);
+  planListCache.set(cacheKey, {
+    signature: JSON.stringify(plans.map((plan) => [plan.id, plan.status, plan.updatedAt])),
+    validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+    plans
+  });
+  // A worker snapshot has no trustworthy parent-process stat metadata. The
+  // next physical refresh rebuilds this derived file cache when needed.
+  planFileCache.delete(cacheKey);
+  planListDirtyAt.delete(cacheKey);
+  planListDirtyFiles.delete(cacheKey);
+  return plans;
+}
+
+/** Publishes a complete, rebuildable RoleKnowledge read projection. */
+export function publishRoleKnowledgeCatalogSnapshot(
+  roleDir: string,
+  rawSnapshot: RoleKnowledgeCatalogSnapshot
+): RoleKnowledgeCatalogSnapshot {
+  if (!rawSnapshot || typeof rawSnapshot !== "object") {
+    throw new Error("Role knowledge catalog snapshot is invalid.");
+  }
+  const plans = normalizedPublishedPlans(rawSnapshot.plans);
+  const recentMemories = normalizedPublishedMemories(
+    rawSnapshot.recentMemories,
+    normalizeRecentMemory,
+    "recentMemories"
+  );
+  const consolidatedMemories = normalizedPublishedMemories(
+    rawSnapshot.consolidatedMemories,
+    normalizeConsolidatedMemory,
+    "consolidatedMemories"
+  );
+  if (!Array.isArray(rawSnapshot.skills)) throw new Error("Role knowledge snapshot must contain a skills array.");
+  const skills = rawSnapshot.skills;
+  const limits: RoleKnowledgeWriteLimits = {
+    plan: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.plan, rawSnapshot.limits?.plan),
+    memory: mergeLimits(DEFAULT_ROLE_KNOWLEDGE_WRITE_LIMITS.memory, rawSnapshot.limits?.memory)
+  };
+  const contextInjection = normalizeRoleContextInjection(rawSnapshot.contextInjection);
+  const published = immutablePublication({
+    plans,
+    recentMemories,
+    consolidatedMemories,
+    skills,
+    limits,
+    contextInjection
+  } satisfies RoleKnowledgeCatalogSnapshot);
+  publishRolePlanCatalog(roleDir, published.plans);
+  memoryCatalogCache.set(memoryCatalogDirectory(roleDir, "recent"), {
+    validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS,
+    items: published.recentMemories
+  });
+  memoryCatalogCache.set(memoryCatalogDirectory(roleDir, "consolidated"), {
+    validUntil: Date.now() + MEMORY_CATALOG_CACHE_TTL_MS,
+    items: published.consolidatedMemories
+  });
+  roleKnowledgeCatalogMetadataCache.set(planListCacheKey(roleDir), {
+    skills: published.skills,
+    limits: published.limits,
+    contextInjection: published.contextInjection
+  });
+  return published;
+}
+
+/** Reads physical storage; call this only inside a bounded read worker. */
+export function readRoleKnowledgeCatalogSnapshot(roleDir: string): RoleKnowledgeCatalogSnapshot {
+  // This API is executed by the bounded catalog worker specifically to
+  // recapture physical truth after a storage-child commit. Resident TTL or
+  // watcher caches must not turn read-after-write into a stale projection.
+  invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "recent"));
+  invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "consolidated"));
+  return {
+    plans: readPlansFromStorageInWorker(roleDir),
+    recentMemories: listRecentMemories(roleDir),
+    consolidatedMemories: listConsolidatedMemories(roleDir),
+    skills: listRoleSkills(roleDir),
+    limits: roleKnowledgeWriteLimits(roleDir),
+    contextInjection: roleContextInjectionPolicy(roleDir)
+  };
+}
+
+/** Returns undefined on a cold/invalidated cache and never probes the filesystem. */
+export function publishedRoleKnowledgeCatalogSnapshot(
+  roleDir: string
+): Readonly<RoleKnowledgeCatalogSnapshot> | undefined {
+  const cacheKey = planListCacheKey(roleDir);
+  const plans = planListCache.get(cacheKey)?.plans;
+  const recentMemories = memoryCatalogCache.get(memoryCatalogDirectory(roleDir, "recent"))?.items;
+  const consolidatedMemories = memoryCatalogCache.get(memoryCatalogDirectory(roleDir, "consolidated"))?.items;
+  const metadata = roleKnowledgeCatalogMetadataCache.get(cacheKey);
+  if (!plans || !recentMemories || !consolidatedMemories || !metadata) return undefined;
+  return deepFreeze({
+    plans,
+    recentMemories: recentMemories as RecentMemoryItem[],
+    consolidatedMemories: consolidatedMemories as ConsolidatedMemoryItem[],
+    skills: metadata.skills,
+    limits: metadata.limits,
+    contextInjection: metadata.contextInjection
+  });
+}
+
+/** Memory-only plan lookup for Manager routing/event decisions. */
+export function getPublishedPlan(roleDir: string, planId: string): PlanItem | undefined {
+  let canonicalPlanId: string;
+  try {
+    canonicalPlanId = canonicalLogicalPlanId(planId);
+  } catch {
+    return undefined;
+  }
+  return planListCache.get(planListCacheKey(roleDir))?.plans.find((plan) => plan.id === canonicalPlanId);
+}
+
+/** Memory-only plan catalog lookup; undefined means the cache is not published. */
+export function publishedRolePlans(roleDir: string): readonly PlanItem[] | undefined {
+  return planListCache.get(planListCacheKey(roleDir))?.plans;
+}
+
 export function getRoleSkill(roleDir: string, skillId: string): RoleSkillDetail | undefined {
   return listRoleSkillDetails(roleDir).find((item) => item.id === skillId);
 }
@@ -2349,13 +2794,13 @@ export function getRoleSkill(roleDir: string, skillId: string): RoleSkillDetail 
 export function getConsolidatedMemory(roleDir: string, memoryId: string): ConsolidatedMemoryItem | undefined {
   const memory = listConsolidatedMemories(roleDir).find((item) => item.id === memoryId);
   if (!memory) return undefined;
-  const viewed = { ...memory, viewedAt: nowIso() };
+  const viewed = { ...memory, viewedAt: nowIso(), storageRevision: createStorageRevision() };
   writeMemoryCatalog(consolidatedMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
 
 function touchConsolidatedMemoryView(roleDir: string, memory: ConsolidatedMemoryItem, viewedAt = nowIso()): ConsolidatedMemoryItem {
-  const viewed = { ...memory, viewedAt, recalledAt: viewedAt };
+  const viewed = { ...memory, viewedAt, recalledAt: viewedAt, storageRevision: createStorageRevision() };
   writeMemoryCatalog(consolidatedMemoryFile(roleDir, viewed), viewed);
   return viewed;
 }
@@ -2382,12 +2827,6 @@ export function roleMemoryCounts(roleDir: string): {
   };
 }
 
-export type PlanLayoutMigrationResult = {
-  migrated: number;
-  skipped: number;
-  failures: Array<{ planId: string; error: string }>;
-};
-
 function remapManagedPath(filePath: string, mappings: Array<{ from: string; to: string }>): string {
   const candidate = path.resolve(filePath);
   for (const mapping of mappings) {
@@ -2410,31 +2849,18 @@ function rewritePlanStoragePaths(value: unknown, mappings: Array<{ from: string;
   return output;
 }
 
-function rewriteJsonlFile(source: string, destination: string, mappings: Array<{ from: string; to: string }>): string[] {
-  if (!fs.existsSync(source)) return [];
-  const feedbackIds: string[] = [];
-  const lines = fs.readFileSync(source, "utf8").split(/\r?\n/);
+function rewriteJsonlContent(content: Buffer, mappings: Array<{ from: string; to: string }>): Buffer {
+  const lines = content.toString("utf8").split(/\r?\n/);
   const rewritten = lines.map((line) => {
     if (!line) return line;
     try {
       const parsed = JSON.parse(line) as Record<string, unknown>;
-      const id = typeof parsed.id === "string" ? parsed.id.trim() : "";
-      if (id) feedbackIds.push(id);
       return JSON.stringify(rewritePlanStoragePaths(parsed, mappings));
     } catch {
       return line;
     }
   });
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, rewritten.join("\n"), "utf8");
-  return feedbackIds;
-}
-
-function moveDirectoryWithoutOverwrite(source: string, destination: string): void {
-  if (!fs.existsSync(source)) return;
-  if (fs.existsSync(destination)) throw new Error(`Migration target already exists: ${destination}`);
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.renameSync(source, destination);
+  return Buffer.from(rewritten.join("\n"), "utf8");
 }
 
 function remapPlanAttachmentPaths(
@@ -2449,7 +2875,43 @@ function remapPlanAttachmentPaths(
   return attachments.map((attachment) => ({ ...attachment, path: remapManagedPath(attachment.path, [{ from, to }]) }));
 }
 
-function movePlanDirectory(
+function remapPreparedPlanAttachments(
+  roleDir: string,
+  planId: string,
+  prepared: PreparedPlanAttachment[],
+  fromBucket: PlanStorageBucket,
+  toBucket: PlanStorageBucket
+): PreparedPlanAttachment[] {
+  const from = planAttachmentDirectory(roleDir, planId, fromBucket);
+  const to = planAttachmentDirectory(roleDir, planId, toBucket);
+  return prepared.map((item) => ({
+    ...item,
+    metadata: { ...item.metadata, path: remapManagedPath(item.metadata.path, [{ from, to }]) }
+  }));
+}
+
+function planStoragePackageFile(filePath: string, content: string | Buffer): PlanStoragePackageFile {
+  const body = Buffer.isBuffer(content) ? Buffer.from(content) : Buffer.from(content, "utf8");
+  return {
+    path: filePath.replace(/\\/g, "/"),
+    size: body.byteLength,
+    sha256: createHash("sha256").update(body).digest("hex"),
+    content: body
+  };
+}
+
+function planStoragePackageMap(files: PlanStoragePackageFile[]): Map<string, Buffer> {
+  return new Map(files.map((file) => [file.path.replace(/\\/g, "/"), Buffer.from(file.content)]));
+}
+
+function planStoragePackageFiles(files: Map<string, Buffer>): PlanStoragePackageFile[] {
+  return [...files.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([filePath, content]) => planStoragePackageFile(filePath, content));
+}
+
+function remapPlanStoragePackage(
+  files: Map<string, Buffer>,
   roleDir: string,
   planId: string,
   fromBucket: PlanStorageBucket,
@@ -2457,197 +2919,256 @@ function movePlanDirectory(
 ): void {
   const source = planDirectory(roleDir, planId, fromBucket);
   const destination = planDirectory(roleDir, planId, toBucket);
-  if (!fs.existsSync(source)) return;
-  moveDirectoryWithoutOverwrite(source, destination);
   const mappings = [{ from: source, to: destination }];
-  const planFilePath = planJsonFile(roleDir, planId, toBucket);
-  const plan = readJson<Record<string, unknown>>(planFilePath);
-  if (plan) writeJson(planFilePath, rewritePlanStoragePaths(plan, mappings));
-  for (const filePath of [
-    planStorageHistoryFile(roleDir, planId, toBucket),
-    planStorageFeedbackFile(roleDir, planId, toBucket)
-  ]) {
-    if (fs.existsSync(filePath)) rewriteJsonlFile(filePath, filePath, mappings);
+  for (const filePath of ["history.jsonl", "feedback.jsonl"]) {
+    const content = files.get(filePath);
+    if (content) files.set(filePath, rewriteJsonlContent(content, mappings));
   }
 }
 
-/**
- * Moves legacy per-role plan files into their single-plan directory without reading attachment bodies.
- * A target collision is reported and left untouched so the operator can resolve it safely.
- */
-export function migrateRolePlanLayout(roleDir: string): PlanLayoutMigrationResult {
-  const result: PlanLayoutMigrationResult = { migrated: 0, skipped: 0, failures: [] };
-  const legacyFiles = [
-    ...jsonFiles(path.join(plansDir(roleDir), "items", "active")),
-    ...jsonFiles(path.join(plansDir(roleDir), "archive"))
-  ];
-  for (const sourcePlanFile of legacyFiles) {
-    const raw = readJson<Record<string, unknown>>(sourcePlanFile);
-    const fallbackId = path.basename(sourcePlanFile, ".json");
-    const plan = raw ? normalizePlan(raw, fallbackId) : null;
-    if (!plan) {
-      result.failures.push({ planId: fallbackId, error: `Cannot read legacy plan JSON: ${sourcePlanFile}` });
-      continue;
-    }
-    const bucket = planBucketForStatus(plan.status);
-    const destinationDirectory = planDirectory(roleDir, plan.id, bucket);
-    const destinationPlanFile = planJsonFile(roleDir, plan.id, bucket);
-    const legacyHistory = legacyPlanHistoryFile(roleDir, plan.id);
-    const destinationHistory = planStorageHistoryFile(roleDir, plan.id, bucket);
-    const legacyFeedback = legacyPlanFeedbackFile(roleDir, plan.id);
-    const destinationFeedback = planStorageFeedbackFile(roleDir, plan.id, bucket);
-    const legacyAttachmentDirectory = legacyPlanAttachmentDirectory(roleDir, plan.id);
-    const destinationAttachmentDirectory = planAttachmentDirectory(roleDir, plan.id, bucket);
-    const feedbackIds = fs.existsSync(legacyFeedback)
-      ? fs.readFileSync(legacyFeedback, "utf8").split(/\r?\n/).flatMap((line) => {
-        try {
-          const value = JSON.parse(line) as { id?: unknown };
-          return typeof value.id === "string" && value.id.trim() ? [value.id] : [];
-        } catch {
-          return [];
-        }
-      })
-      : [];
-    const feedbackDirectoryMoves = [...new Set(feedbackIds)].map((feedbackId) => ({
-      source: legacyPlanFeedbackAttachmentDirectory(roleDir, feedbackId),
-      destination: planFeedbackAttachmentDirectory(roleDir, plan.id, feedbackId, bucket)
-    }));
-    try {
-      if (fs.existsSync(destinationDirectory)) {
-        throw new Error(`Migration target already exists: ${destinationDirectory}`);
-      }
-      for (const move of feedbackDirectoryMoves) {
-        if (fs.existsSync(move.source) && fs.existsSync(move.destination)) {
-          throw new Error(`Migration target already exists: ${move.destination}`);
-        }
-      }
-      const moves: Array<{ source: string; destination: string }> = [];
-      const move = (source: string, destination: string): void => {
-        if (!fs.existsSync(source)) return;
-        fs.mkdirSync(path.dirname(destination), { recursive: true });
-        fs.renameSync(source, destination);
-        moves.push({ source, destination });
-      };
-      try {
-        move(sourcePlanFile, destinationPlanFile);
-        move(legacyHistory, destinationHistory);
-        move(legacyFeedback, destinationFeedback);
-        move(legacyAttachmentDirectory, destinationAttachmentDirectory);
-        for (const directoryMove of feedbackDirectoryMoves) move(directoryMove.source, directoryMove.destination);
-      } catch (error) {
-        for (const moved of moves.reverse()) {
-          try {
-            if (fs.existsSync(moved.destination) && !fs.existsSync(moved.source)) {
-              fs.mkdirSync(path.dirname(moved.source), { recursive: true });
-              fs.renameSync(moved.destination, moved.source);
-            }
-          } catch {
-            // Preserve the original error and leave any non-reversible state untouched.
-          }
-        }
-        throw error;
-      }
-      const mappings = [
-        { from: legacyAttachmentDirectory, to: destinationAttachmentDirectory },
-        ...feedbackDirectoryMoves.map(({ source, destination }) => ({ from: source, to: destination }))
-      ];
-      const movedPlan = readJson<Record<string, unknown>>(destinationPlanFile);
-      if (!movedPlan) throw new Error(`Cannot read migrated plan JSON: ${destinationPlanFile}`);
-      writeJson(destinationPlanFile, rewritePlanStoragePaths(movedPlan, mappings));
-      if (fs.existsSync(destinationHistory)) rewriteJsonlFile(destinationHistory, destinationHistory, mappings);
-      if (fs.existsSync(destinationFeedback)) rewriteJsonlFile(destinationFeedback, destinationFeedback, mappings);
-      result.migrated += 1;
-    } catch (error) {
-      result.failures.push({
-        planId: plan.id,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
+function applyPreparedPlanAttachments(
+  files: Map<string, Buffer>,
+  planRoot: string,
+  prepared: PreparedPlanAttachment[]
+): PlanAttachment[] {
+  const before = new Map(files);
+  for (const filePath of [...files.keys()]) {
+    if (filePath === "attachments" || filePath.startsWith("attachments/")) files.delete(filePath);
   }
-  if (result.migrated) clearPlanListCache(roleDir);
-  result.skipped = legacyFiles.length - result.migrated - result.failures.length;
-  return result;
+  for (const item of prepared) {
+    const relative = path.relative(planRoot, item.metadata.path).replace(/\\/g, "/");
+    if (!relative.startsWith("attachments/") || relative.includes("../")) {
+      throw new Error(`Prepared plan attachment escaped its managed directory: ${item.metadata.name}.`);
+    }
+    const content = item.content ? Buffer.from(item.content) : before.get(relative);
+    if (!content || createHash("sha256").update(content).digest("hex") !== item.metadata.sha256) {
+      throw new Error(`Prepared plan attachment is missing or changed: ${item.metadata.name}.`);
+    }
+    files.set(relative, content);
+  }
+  return prepared.map((item) => item.metadata);
 }
 
-export function createPlan(roleDir: string, input: Record<string, unknown>): PlanItem {
+/** Startup-child adapter; runtime message and Gateway entry points never import migration code. */
+export function normalizePlanForStartupMigration(
+  raw: Record<string, unknown>,
+  fallbackId: string
+): Pick<PlanItem, "id" | "status"> | null {
+  return normalizePlan(raw, fallbackId);
+}
+
+/** Startup-child adapter; a completed migration invalidates any test/preflight cache. */
+export function clearPlanCatalogAfterStartupMigration(roleDir: string): void {
+  clearPlanListCache(roleDir);
+}
+
+export function createPlan(
+  roleDir: string,
+  input: Record<string, unknown>,
+  mutation?: StorageMutationStamp
+): PlanItem {
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   validatePlanStatusInput(input.status);
   validatePlanSecretaryBindingInput(input.secretaryBinding);
   validatePlanTaskBindingInput(input.taskBinding);
-  const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("plan", String(input.title || ""));
-  const recordedAt = nowIso();
-  const plan = normalizePlan({ ...input, attachments: [], id, createdAt: recordedAt, updatedAt: recordedAt });
-  if (!plan) throw new Error("Plan title is required.");
-  plan.steps = recordPlanStepTimes(plan.steps, [], recordedAt);
-  requireKeywords(plan.keywords, "Plan");
-  validatePlanWrite(roleDir, plan, true);
-  if (Object.prototype.hasOwnProperty.call(input, "attachments")) {
-    plan.attachments = storePlanAttachments(roleDir, plan.id, input.attachments, [], planBucketForStatus(plan.status));
-  }
-  const destination = planFile(roleDir, plan);
-  writeJson(destination, plan);
-  appendPlanHistory(roleDir, undefined, plan);
-  updatePlanListCacheAfterWrite(roleDir, destination, plan, [destination]);
-  return plan;
+  const id = typeof input.id === "string" && input.id.trim()
+    ? canonicalLogicalPlanId(input.id)
+    : generatedId("plan", String(input.title || ""));
+  const cacheKey = planListCacheKey(roleDir);
+  const previousCache = {
+    catalog: planListCache.get(cacheKey),
+    files: planFileCache.get(cacheKey)
+  };
+  return withPlanStorageLock(roleDir, id, (lease) => {
+    assertPlanStorageIdentityAvailable(roleDir, id);
+    if (findPlanRecord(roleDir, id)) throw new Error(`Plan already exists: ${id}`);
+    const recordedAt = nowIso();
+    const plan = normalizePlan({
+      ...input,
+      attachments: [],
+      id,
+      createdAt: recordedAt,
+      updatedAt: recordedAt,
+      storageRevision: mutation?.revision ?? createStorageRevision(),
+      storageMutationRequestId: mutation?.requestId
+    });
+    if (!plan) throw new Error("Plan title is required.");
+    plan.steps = recordPlanStepTimes(plan.steps, [], recordedAt);
+    requireKeywords(plan.keywords, "Plan");
+    validatePlanWrite(roleDir, plan, true);
+    const files = new Map<string, Buffer>();
+    if (Object.prototype.hasOwnProperty.call(input, "attachments")) {
+      const prepared = preparePlanAttachments(roleDir, plan.id, input.attachments, [], planBucketForStatus(plan.status));
+      plan.attachments = applyPreparedPlanAttachments(
+        files,
+        planDirectory(roleDir, plan.id, planBucketForStatus(plan.status)),
+        prepared
+      );
+    }
+    const history = createPlanHistoryRecord(undefined, plan);
+    files.set("plan.json", Buffer.from(`${JSON.stringify(plan, null, 2)}\n`, "utf8"));
+    files.set("history.jsonl", Buffer.from(appendPlanHistoryContent("", history), "utf8"));
+    commitPlanLifecycleTransitionUnderLease(lease, {
+      transactionId: planLifecycleTransactionId("plan-create", plan.id, recordedAt),
+      kind: "plan-create",
+      fromBucket: null,
+      toBucket: planBucketForStatus(plan.status),
+      files: planStoragePackageFiles(files)
+    });
+    const destination = planFile(roleDir, plan);
+    updatePlanListCacheAfterWrite(roleDir, destination, plan, [destination], previousCache);
+    return plan;
+  });
 }
 
-export function updatePlan(roleDir: string, planId: string, patch: Record<string, unknown>): PlanItem {
-  migrateRolePlanLayout(roleDir);
-  const record = findPlanRecord(roleDir, planId);
-  if (!record) throw new Error(`Plan not found: ${planId}`);
-  const existing = record.plan;
-  if (Object.prototype.hasOwnProperty.call(patch, "status")) validatePlanStatusInput(patch.status);
-  if (Object.prototype.hasOwnProperty.call(patch, "secretaryBinding")) validatePlanSecretaryBindingInput(patch.secretaryBinding);
-  if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
-  const recordedAt = nowIso();
-  const next = normalizePlan({ ...existing, ...patch, attachments: existing.attachments, id: existing.id, createdAt: existing.createdAt, updatedAt: recordedAt });
-  if (!next) throw new Error("Plan title is required.");
-  next.steps = recordPlanStepTimes(next.steps, existing.steps, recordedAt);
-  requireKeywords(next.keywords, "Plan");
-  validatePlanWrite(roleDir, next);
-  if (Object.prototype.hasOwnProperty.call(patch, "attachments")) {
-    next.attachments = storePlanAttachments(roleDir, next.id, patch.attachments, existing.attachments, planBucketForStatus(existing.status));
-  }
-  if (next.status === "已完成" && existing.status !== "已完成" && !next.completedAt) {
-    next.completedAt = next.updatedAt;
-  }
-  const currentBucket = planBucketForStatus(existing.status);
-  const destinationBucket = planBucketForStatus(next.status);
-  if (currentBucket !== destinationBucket) {
-    movePlanDirectory(roleDir, next.id, currentBucket, destinationBucket);
-    next.attachments = remapPlanAttachmentPaths(roleDir, next.id, next.attachments, currentBucket, destinationBucket);
-  }
-  const destination = planFile(roleDir, next);
-  writeJson(destination, next);
-  appendPlanHistory(roleDir, existing, next);
-  for (const filePath of new Set([record.filePath, ...planCandidateFiles(roleDir, planId)])) {
-    if (path.resolve(filePath) === path.resolve(destination)) continue;
-    const raw = readJson<Record<string, unknown>>(filePath);
-    if (raw?.id !== planId) continue;
-    try { fs.unlinkSync(filePath); } catch { /* ignore stale file */ }
-  }
-  updatePlanListCacheAfterWrite(
-    roleDir,
-    destination,
-    next,
-    [destination, record.filePath, ...planCandidateFiles(roleDir, planId)]
-  );
-  notifyPlanUpdated({ roleDir: path.resolve(roleDir), before: existing, after: next });
-  return next;
+export function updatePlan(
+  roleDir: string,
+  planId: string,
+  patch: Record<string, unknown>,
+  expectedRevision?: string,
+  mutation?: StorageMutationStamp
+): PlanItem {
+  const canonicalPlanId = canonicalLogicalPlanId(planId);
+  const cacheKey = planListCacheKey(roleDir);
+  const previousCache = {
+    catalog: planListCache.get(cacheKey),
+    files: planFileCache.get(cacheKey)
+  };
+  return withPlanStorageLock(roleDir, canonicalPlanId, (lease) => {
+    const record = findPlanRecord(roleDir, canonicalPlanId);
+    if (!record) throw new Error(`Plan not found: ${canonicalPlanId}`);
+    const sourcePackage = readCanonicalPlanStoragePackageUnderLease(lease);
+    const currentRevision = storageInventoryRevisionToken(sourcePackage.inventoryHash);
+    if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
+      throw new Error(`STORAGE_MUTATION_REVISION_CONFLICT: expected=${expectedRevision}; current=${currentRevision}.`);
+    }
+    const existing = record.plan;
+    if (existing.status === "已归档") {
+      throw new Error(`Archived plans are immutable terminal records: ${canonicalPlanId}`);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "status")) validatePlanStatusInput(patch.status);
+    if (Object.prototype.hasOwnProperty.call(patch, "secretaryBinding")) validatePlanSecretaryBindingInput(patch.secretaryBinding);
+    if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
+    const recordedAt = nowIso();
+    const next = normalizePlan({
+      ...existing,
+      ...patch,
+      attachments: existing.attachments,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: recordedAt,
+      storageRevision: mutation?.revision ?? createStorageRevision(),
+      storageMutationRequestId: mutation?.requestId
+    });
+    if (!next) throw new Error("Plan title is required.");
+    next.steps = recordPlanStepTimes(next.steps, existing.steps, recordedAt);
+    requireKeywords(next.keywords, "Plan");
+    validatePlanWrite(roleDir, next);
+    if (next.status === "已完成" && existing.status !== "已完成" && !next.completedAt) {
+      next.completedAt = next.updatedAt;
+    }
+    const currentBucket = planBucketForStatus(existing.status);
+    const destinationBucket = planBucketForStatus(next.status);
+    if (sourcePackage.bucket !== currentBucket) {
+      throw new Error(`Plan storage bucket changed while updating: ${canonicalPlanId}`);
+    }
+    const files = planStoragePackageMap(sourcePackage.files);
+    let preparedAttachments: PreparedPlanAttachment[] | undefined;
+    if (Object.prototype.hasOwnProperty.call(patch, "attachments")) {
+      preparedAttachments = preparePlanAttachments(
+        roleDir,
+        next.id,
+        patch.attachments,
+        existing.attachments,
+        destinationBucket
+      );
+    }
+    if (currentBucket !== destinationBucket) {
+      remapPlanStoragePackage(files, roleDir, next.id, currentBucket, destinationBucket);
+      next.attachments = remapPlanAttachmentPaths(roleDir, next.id, next.attachments, currentBucket, destinationBucket);
+      if (preparedAttachments) {
+        preparedAttachments = remapPreparedPlanAttachments(
+          roleDir,
+          next.id,
+          preparedAttachments,
+          currentBucket,
+          destinationBucket
+        );
+      }
+    }
+    if (preparedAttachments) {
+      next.attachments = applyPreparedPlanAttachments(
+        files,
+        planDirectory(roleDir, next.id, destinationBucket),
+        preparedAttachments
+      );
+    }
+    const historyBefore = currentBucket === destinationBucket
+      ? existing
+      : rewritePlanStoragePaths(existing, [{
+        from: planDirectory(roleDir, next.id, currentBucket),
+        to: planDirectory(roleDir, next.id, destinationBucket)
+      }]) as PlanItem;
+    const historyRecord = createPlanHistoryRecord(historyBefore, next);
+    const currentHistory = files.get("history.jsonl")?.toString("utf8") || "";
+    files.set("history.jsonl", Buffer.from(appendPlanHistoryContent(currentHistory, historyRecord), "utf8"));
+    files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
+    commitPlanLifecycleTransitionUnderLease(lease, {
+      transactionId: planLifecycleTransactionId(
+        currentBucket === destinationBucket ? "plan-update" : "plan-archive",
+        next.id,
+        recordedAt,
+        sourcePackage.inventoryHash
+      ),
+      kind: currentBucket === destinationBucket ? "plan-update" : "plan-archive",
+      fromBucket: currentBucket,
+      toBucket: destinationBucket,
+      expectedSourceInventoryHash: sourcePackage.inventoryHash,
+      files: planStoragePackageFiles(files)
+    });
+    const destination = planFile(roleDir, next);
+    updatePlanListCacheAfterWrite(
+      roleDir,
+      destination,
+      next,
+      [destination, record.filePath, ...planCandidateFiles(roleDir, canonicalPlanId)],
+      previousCache
+    );
+    notifyPlanUpdated({ roleDir: path.resolve(roleDir), before: existing, after: next });
+    return next;
+  });
 }
 
-export function createRecentMemory(roleDir: string, input: Record<string, unknown>): RecentMemoryItem {
+export function createRecentMemory(
+  roleDir: string,
+  input: Record<string, unknown>,
+  mutation?: StorageMutationStamp,
+  checkpoint?: () => void
+): RecentMemoryItem {
   if (!String(input.focus || "").trim()) throw new Error("Memory focus is required and must describe one subject.");
   const id = typeof input.id === "string" && input.id.trim() ? input.id : generatedId("memory", String(input.title || ""));
-  const memory = normalizeRecentMemory({ ...input, id, createdAt: nowIso(), updatedAt: nowIso() });
+  const memory = normalizeRecentMemory({
+    ...input,
+    id,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    storageRevision: mutation?.revision ?? createStorageRevision(),
+    storageMutationRequestId: mutation?.requestId
+  });
   if (!memory) throw new Error("Memory title and content are required.");
   requireKeywords(memory.keywords, "Memory");
   validateMemoryWrite(roleDir, memory);
-  writeMemoryCatalog(recentMemoryFile(roleDir, memory), memory);
+  writeMemoryCatalog(recentMemoryFile(roleDir, memory), memory, false, checkpoint);
   return memory;
 }
 
-export function updateRecentMemory(roleDir: string, memoryId: string, patch: Record<string, unknown>): RecentMemoryItem {
+export function updateRecentMemory(
+  roleDir: string,
+  memoryId: string,
+  patch: Record<string, unknown>,
+  mutation?: StorageMutationStamp,
+  checkpoint?: () => void
+): RecentMemoryItem {
   const existing = listRecentMemories(roleDir).find((item) => item.id === memoryId);
   if (!existing) throw new Error(`Memory not found: ${memoryId}`);
   if (ageHours(memoryActivityAt(existing)) > DEFAULT_RECENT_EDITABLE_HOURS) {
@@ -2656,17 +3177,28 @@ export function updateRecentMemory(roleDir: string, memoryId: string, patch: Rec
     );
   }
   const touchedAt = nowIso();
-  const next = normalizeRecentMemory({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, updatedAt: touchedAt, viewedAt: touchedAt });
+  const next = normalizeRecentMemory({
+    ...existing,
+    ...patch,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    updatedAt: touchedAt,
+    viewedAt: touchedAt,
+    storageRevision: mutation?.revision ?? createStorageRevision(),
+    storageMutationRequestId: mutation?.requestId
+  });
   if (!next) throw new Error("Memory title and content are required.");
   requireKeywords(next.keywords, "Memory");
   validateMemoryWrite(roleDir, next);
-  writeMemoryCatalog(recentMemoryFile(roleDir, next), next);
+  writeMemoryCatalog(recentMemoryFile(roleDir, next), next, true, checkpoint);
   return next;
 }
 
 export function archiveCompletedPlans(roleDir: string, archiveAfterHours = DEFAULT_PLAN_ARCHIVE_AFTER_HOURS): PlanItem[] {
   const archived: PlanItem[] = [];
-  for (const plan of listPlans(roleDir)) {
+  const plans = publishedRolePlans(roleDir);
+  if (!plans) return archived;
+  for (const plan of plans) {
     if (plan.status !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
     const next = {
       ...plan,
@@ -2681,53 +3213,118 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours = DEFAU
   return archived;
 }
 
-export function pendingMemoryConsolidation(
+function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: number): PlanItem[] {
+  const archived: PlanItem[] = [];
+  for (const plan of readPlansFromStorageInWorker(roleDir)) {
+    if (plan.status !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
+    const next = {
+      ...plan,
+      status: "已归档" as const,
+      currentStepId: undefined,
+      archivedAt: nowIso(),
+      updatedAt: nowIso()
+    };
+    updatePlan(roleDir, plan.id, next);
+    archived.push(next);
+  }
+  return archived;
+}
+
+export type MemoryConsolidationScheduleInspection = Readonly<{
+  pending: MemoryConsolidationRequest | null;
+  due: boolean;
+  dueOperationIdentity?: string;
+  nextTriggerAt?: number;
+  input: RecentMemoryItem[];
+  triggerMemoryId?: string;
+  triggerAt?: string;
+  candidateCutoffAt?: string;
+}>;
+
+export function inspectMemoryConsolidationSchedule(
   roleDir: string,
-  trigger: "auto" | "manual" | "api" = "auto",
   recentEditableHours = DEFAULT_RECENT_EDITABLE_HOURS,
   recentConsolidationHours = DEFAULT_RECENT_CONSOLIDATION_HOURS,
   force = false
-): MemoryConsolidationRequest | null {
+): MemoryConsolidationScheduleInspection {
   const memories = listRecentMemories(roleDir).filter((item) => !item.consolidatedAt);
   const cohort = recentMemoryConsolidationCohort(memories, recentEditableHours, recentConsolidationHours);
   const triggerAt = Date.parse(cohort.trigger?.consolidationTriggerAt || "");
   const shouldTrigger = force || (Number.isFinite(triggerAt) && Date.now() >= triggerAt);
-  if (!shouldTrigger) return null;
-
   const input = force
     ? memories.filter((item) => ageHours(memoryConsolidationActivityAt(item)) > recentEditableHours)
     : cohort.candidates;
-  if (input.length === 0) return null;
-
   const inputIds = input.map((item) => item.id).sort();
-  const existingRun = listConsolidationRuns(roleDir)
+  const existingRun = inputIds.length === 0 ? undefined : listConsolidationRuns(roleDir)
     .filter((run) => run.status === "requested")
     .find((run) => {
       const runIds = [...run.inputMemoryIds].sort();
       return runIds.length === inputIds.length && runIds.every((id, index) => id === inputIds[index]);
     });
-  if (existingRun) {
-    return { run: existingRun, memories: input };
-  }
+  const nextTriggerAt = Number.isFinite(triggerAt) ? triggerAt : undefined;
+  const due = shouldTrigger && input.length > 0;
+  return Object.freeze({
+    pending: existingRun ? { run: existingRun, memories: input } : null,
+    due,
+    ...(due && !existingRun
+      ? {
+          dueOperationIdentity: createHash("sha256").update(JSON.stringify({
+            inputIds,
+            triggerMemoryId: cohort.trigger?.memory.id ?? null,
+            triggerAt: cohort.trigger?.consolidationTriggerAt ?? null,
+            force
+          }), "utf8").digest("hex")
+        }
+      : {}),
+    ...(nextTriggerAt === undefined ? {} : { nextTriggerAt }),
+    input,
+    triggerMemoryId: cohort.trigger?.memory.id,
+    triggerAt: cohort.trigger?.consolidationTriggerAt,
+    candidateCutoffAt: force
+      ? new Date(Date.now() - recentEditableHours * 3_600_000).toISOString()
+      : cohort.candidateCutoffAt
+  });
+}
+
+export function pendingMemoryConsolidation(
+  roleDir: string,
+  trigger: "auto" | "manual" | "api" = "auto",
+  recentEditableHours = DEFAULT_RECENT_EDITABLE_HOURS,
+  recentConsolidationHours = DEFAULT_RECENT_CONSOLIDATION_HOURS,
+  force = false,
+  mutation?: StorageMutationStamp,
+  checkpoint?: () => void
+): MemoryConsolidationRequest | null {
+  const inspection = inspectMemoryConsolidationSchedule(
+    roleDir,
+    recentEditableHours,
+    recentConsolidationHours,
+    force
+  );
+  if (inspection.pending) return inspection.pending;
+  if (!inspection.due) return null;
+  const inputIds = inspection.input.map((item) => item.id).sort();
 
   const run: MemoryConsolidationRun = {
     id: generatedId("memory-consolidation", "run"),
     roleDir,
     requestedAt: nowIso(),
+    storageRevision: mutation?.revision ?? createStorageRevision(),
+    storageMutationRequestId: mutation?.requestId,
     trigger,
     recentEditableHours,
     recentConsolidationHours,
-    triggerMemoryId: cohort.trigger?.memory.id,
-    triggerAt: cohort.trigger?.consolidationTriggerAt,
-    candidateCutoffAt: force
-      ? new Date(Date.now() - recentEditableHours * 3_600_000).toISOString()
-      : cohort.candidateCutoffAt,
+    triggerMemoryId: inspection.triggerMemoryId,
+    triggerAt: inspection.triggerAt,
+    candidateCutoffAt: inspection.candidateCutoffAt,
     inputMemoryIds: inputIds,
     status: "requested",
     instruction: "请将以下近期记忆整理为稳定、简洁、可长期保留的沉淀记忆，只返回沉淀记忆内容。"
   };
+  checkpoint?.();
   writeJson(consolidationRunFile(roleDir, run.id), run);
-  return { run, memories: input };
+  checkpoint?.();
+  return { run, memories: inspection.input };
 }
 
 export function nextMemoryConsolidationTriggerAt(
@@ -2741,29 +3338,46 @@ export function nextMemoryConsolidationTriggerAt(
   return Number.isFinite(triggerAt) ? triggerAt : undefined;
 }
 
+export function memoryConsolidationRunRevision(run: MemoryConsolidationRun): string {
+  return storageRevisionToken(run)!;
+}
+
 export function markMemoryConsolidationRunDelivered(
   roleDir: string,
   runId: string,
-  deliveredAt = nowIso()
+  deliveredAt = nowIso(),
+  mutation?: StorageMutationStamp,
+  checkpoint?: () => void
 ): MemoryConsolidationRun {
   const run = readJson<MemoryConsolidationRun>(consolidationRunFile(roleDir, runId));
   if (!run) throw new Error(`Memory consolidation run not found: ${runId}`);
   if (run.deliveredAt || run.status === "completed") return run;
-  const delivered = { ...run, deliveredAt };
+  const delivered = {
+    ...run,
+    deliveredAt,
+    storageRevision: mutation?.revision ?? createStorageRevision(),
+    storageMutationRequestId: mutation?.requestId
+  };
+  checkpoint?.();
   writeJson(consolidationRunFile(roleDir, runId), delivered);
+  checkpoint?.();
   return delivered;
 }
 
 export function createMemoryConsolidationRequest(
   roleDir: string,
-  options: CreateMemoryConsolidationRequestOptions = {}
+  options: CreateMemoryConsolidationRequestOptions = {},
+  mutation?: StorageMutationStamp,
+  checkpoint?: () => void
 ): MemoryConsolidationRequest {
   const request = pendingMemoryConsolidation(
     roleDir,
     options.triggerSource ?? "api",
     options.includeOlderThanHours ?? DEFAULT_RECENT_EDITABLE_HOURS,
     options.triggerOlderThanHours ?? DEFAULT_RECENT_CONSOLIDATION_HOURS,
-    options.force === true
+    options.force === true,
+    mutation,
+    checkpoint
   );
   if (!request) {
     throw new Error("No recent memories are eligible for consolidation.");
@@ -2778,10 +3392,58 @@ type MemoryConsolidationCompletionResult = {
 
 const memoryConsolidationCompletions = new Map<string, Promise<MemoryConsolidationCompletionResult>>();
 
+function storedConsolidatedMemoryForRetry(
+  roleDir: string,
+  memoryId: string,
+  runId: string,
+  mutation?: StorageMutationStamp
+): ConsolidatedMemoryItem | undefined {
+  if (!mutation) return undefined;
+  return matchingStoredMemoryItems(memoryCatalogDirectory(roleDir, "consolidated"), memoryId)
+    .map(item => item.value as ConsolidatedMemoryItem)
+    .find(item => item.storageMutationRequestId === mutation.requestId && item.consolidationRunId === runId);
+}
+
+function partialConsolidationCompletedAt(
+  roleDir: string,
+  run: MemoryConsolidationRun,
+  mutation?: StorageMutationStamp
+): string | undefined {
+  if (!mutation) return undefined;
+  const inputIds = new Set(run.inputMemoryIds);
+  const completedAt = new Set(
+    matchingStoredMemoryItemsForIds(memoryCatalogDirectory(roleDir, "recent"), inputIds)
+      .map(item => item.value as RecentMemoryItem)
+      .filter(item => item.storageMutationRequestId === mutation.requestId
+        && item.consolidationRunId === run.id
+        && typeof item.consolidatedAt === "string")
+      .map(item => item.consolidatedAt as string)
+  );
+  if (completedAt.size > 1) {
+    throw new Error(`Memory consolidation retry found inconsistent completion timestamps: ${run.id}.`);
+  }
+  return completedAt.values().next().value as string | undefined;
+}
+
+function matchingStoredMemoryItemsForIds(
+  directory: string,
+  logicalIds: ReadonlySet<string>
+): Array<{ filePath: string; value: MemoryCatalogItem }> {
+  return memoryCatalogStorageFiles(directory).flatMap(filePath => {
+    const raw = memoryCatalogRaw(filePath);
+    const value = raw
+      ? normalizedMemoryCatalogItem(directory, raw, path.basename(filePath, path.extname(filePath)))
+      : null;
+    return value && logicalIds.has(value.id) ? [{ filePath, value }] : [];
+  });
+}
+
 async function completeMemoryConsolidationUnlocked(
   roleDir: string,
   runId: string,
-  rawItems: unknown
+  rawItems: unknown,
+  mutation?: StorageMutationStamp,
+  batchOptions: MemoryCatalogBatchOptions = {}
 ): Promise<MemoryConsolidationCompletionResult> {
   const run = readJson<MemoryConsolidationRun>(consolidationRunFile(roleDir, runId));
   if (!run) throw new Error(`Memory consolidation run not found: ${runId}`);
@@ -2798,11 +3460,20 @@ async function completeMemoryConsolidationUnlocked(
     if (!String(source.focus || "").trim()) {
       throw new Error("Consolidated memory focus is required and must describe one subject.");
     }
+    const id = typeof source.id === "string" && source.id
+      ? source.id
+      : mutation
+        ? `consolidated-${createHash("sha256").update(`${mutation.requestId}:${index}`, "utf8").digest("hex").slice(0, 32)}`
+        : generatedId("consolidated-memory", String(source.title || `memory-${index + 1}`));
+    const existingRetry = storedConsolidatedMemoryForRetry(roleDir, id, run.id, mutation);
+    const generatedAt = nowIso();
     const memory = normalizeConsolidatedMemory({
       ...source,
-      id: typeof source.id === "string" && source.id ? source.id : generatedId("consolidated-memory", String(source.title || `memory-${index + 1}`)),
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
+      id,
+      createdAt: existingRetry?.createdAt ?? generatedAt,
+      updatedAt: existingRetry?.updatedAt ?? generatedAt,
+      storageRevision: mutation?.revision ?? createStorageRevision(),
+      storageMutationRequestId: mutation?.requestId,
       inputMemoryIds: Array.isArray(source.inputMemoryIds) ? source.inputMemoryIds : run.inputMemoryIds,
       consolidationRunId: run.id
     });
@@ -2819,7 +3490,7 @@ async function completeMemoryConsolidationUnlocked(
     validateMemoryWrite(roleDir, memory, "Consolidated memory");
   }
 
-  const completedAt = nowIso();
+  const completedAt = partialConsolidationCompletedAt(roleDir, run, mutation) ?? nowIso();
   const inputMemoryIds = new Set(run.inputMemoryIds);
   const recentWrites = listRecentMemories(roleDir)
     .filter((item) => inputMemoryIds.has(item.id))
@@ -2828,22 +3499,29 @@ async function completeMemoryConsolidationUnlocked(
       value: {
       ...memory,
       consolidatedAt: completedAt,
-      consolidationRunId: run.id
+      consolidationRunId: run.id,
+      storageRevision: mutation?.revision ?? createStorageRevision(),
+      storageMutationRequestId: mutation?.requestId
       }
     } satisfies MemoryCatalogWrite));
   const outputWrites = output.map((memory) => ({
     filePath: consolidatedMemoryFile(roleDir, memory),
-    value: memory
+    value: memory,
+    existingLogicalIdPolicy: "idempotent_only" as const
   } satisfies MemoryCatalogWrite));
-  await writeMemoryCatalogBatch([...outputWrites, ...recentWrites]);
+  await writeMemoryCatalogBatch([...outputWrites, ...recentWrites], batchOptions);
 
   const completedRun: MemoryConsolidationRun = {
     ...run,
     completedAt,
+    storageRevision: mutation?.revision ?? createStorageRevision(),
+    storageMutationRequestId: mutation?.requestId,
     outputMemoryIds: output.map((item) => item.id),
     status: "completed"
   };
+  batchOptions.checkpoint?.();
   writeJson(consolidationRunFile(roleDir, run.id), completedRun);
+  batchOptions.checkpoint?.();
 
   return { run: completedRun, memories: output };
 }
@@ -2851,12 +3529,14 @@ async function completeMemoryConsolidationUnlocked(
 export function completeMemoryConsolidation(
   roleDir: string,
   runId: string,
-  rawItems: unknown
+  rawItems: unknown,
+  mutation?: StorageMutationStamp,
+  checkpoint?: () => void
 ): Promise<MemoryConsolidationCompletionResult> {
   const key = `${path.resolve(roleDir)}\u0000${runId}`;
   const active = memoryConsolidationCompletions.get(key);
   if (active) return active;
-  const completion = completeMemoryConsolidationUnlocked(roleDir, runId, rawItems)
+  const completion = completeMemoryConsolidationUnlocked(roleDir, runId, rawItems, mutation, { checkpoint })
     .finally(() => {
       if (memoryConsolidationCompletions.get(key) === completion) {
         memoryConsolidationCompletions.delete(key);
@@ -2866,36 +3546,89 @@ export function completeMemoryConsolidation(
   return completion;
 }
 
-export function validateRoleKnowledge(roleDir: string): RoleKnowledgeValidationResult {
+/** Exercises an actual post-rename batch failure without exposing a production route option. */
+export function completeMemoryConsolidationWithAtomicBatchFaultForTest(
+  roleDir: string,
+  runId: string,
+  rawItems: unknown,
+  mutation: StorageMutationStamp,
+  failAfterPublishedEntries: number
+): Promise<MemoryConsolidationCompletionResult> {
+  if (!Number.isSafeInteger(failAfterPublishedEntries) || failAfterPublishedEntries <= 0) {
+    throw new Error("Memory catalog batch fault boundary must be a positive integer.");
+  }
+  return completeMemoryConsolidationUnlocked(roleDir, runId, rawItems, mutation, {
+    failAfterPublishedEntries
+  });
+}
+
+function validateRoleKnowledgeCatalog(
+  roleDir: string,
+  catalog: Pick<RoleKnowledgeCatalogSnapshot, "plans" | "recentMemories" | "consolidatedMemories" | "limits">
+): RoleKnowledgeValidationResult {
   const issues: RoleKnowledgeValidationIssue[] = [];
-  for (const plan of listPlans(roleDir)) {
+  for (const plan of catalog.plans) {
     try {
       requireKeywords(plan.keywords, "Plan");
-      validatePlanWrite(roleDir, plan);
+      validatePlanWrite(roleDir, plan, false, catalog.limits.plan);
     } catch (error) {
       issues.push({ type: "plan", id: plan.id, message: error instanceof Error ? error.message : String(error) });
     }
   }
-  for (const memory of listRecentMemories(roleDir)) {
+  for (const memory of catalog.recentMemories) {
     try {
       requireKeywords(memory.keywords, "Memory");
-      validateMemoryWrite(roleDir, memory);
+      validateMemoryWrite(roleDir, memory, "Memory", catalog.limits.memory);
     } catch (error) {
       issues.push({ type: "recent_memory", id: memory.id, message: error instanceof Error ? error.message : String(error) });
     }
   }
-  for (const memory of listConsolidatedMemories(roleDir)) {
+  for (const memory of catalog.consolidatedMemories) {
     try {
       requireKeywords(memory.keywords, "Consolidated memory");
-      validateMemoryWrite(roleDir, memory, "Consolidated memory");
+      validateMemoryWrite(roleDir, memory, "Consolidated memory", catalog.limits.memory);
     } catch (error) {
       issues.push({ type: "consolidated_memory", id: memory.id, message: error instanceof Error ? error.message : String(error) });
     }
   }
-  return { ok: issues.length === 0, limits: roleKnowledgeWriteLimits(roleDir), issues };
+  return { ok: issues.length === 0, limits: catalog.limits, issues };
 }
 
-export function applyMemoryConsolidationResult(roleDir: string, runId: string, body: Record<string, unknown>): Promise<{
+/** Memory-only validation. Undefined is an explicit cold/invalidated state. */
+export function validatePublishedRoleKnowledge(roleDir: string): RoleKnowledgeValidationResult | undefined {
+  const catalog = publishedRoleKnowledgeCatalogSnapshot(roleDir);
+  return catalog ? validateRoleKnowledgeCatalog(roleDir, catalog) : undefined;
+}
+
+export function validateRoleKnowledge(roleDir: string): RoleKnowledgeValidationResult {
+  let plans: PlanItem[] = [];
+  const storageIssues: RoleKnowledgeValidationIssue[] = [];
+  try {
+    plans = readPlansFromStorageInWorker(roleDir);
+  } catch (error) {
+    storageIssues.push({
+      type: "plan_storage",
+      id: "*",
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+  const limits = roleKnowledgeWriteLimits(roleDir);
+  const result = validateRoleKnowledgeCatalog(roleDir, {
+    plans,
+    recentMemories: listRecentMemories(roleDir),
+    consolidatedMemories: listConsolidatedMemories(roleDir),
+    limits
+  });
+  return { ...result, ok: result.ok && storageIssues.length === 0, issues: [...storageIssues, ...result.issues] };
+}
+
+export function applyMemoryConsolidationResult(
+  roleDir: string,
+  runId: string,
+  body: Record<string, unknown>,
+  mutation?: StorageMutationStamp,
+  checkpoint?: () => void
+): Promise<{
   run: MemoryConsolidationRun;
   memories: ConsolidatedMemoryItem[];
 }> {
@@ -2906,7 +3639,7 @@ export function applyMemoryConsolidationResult(roleDir: string, runId: string, b
       : Array.isArray(body.items)
         ? body.items
         : body;
-  return completeMemoryConsolidation(roleDir, runId, items);
+  return completeMemoryConsolidation(roleDir, runId, items, mutation, checkpoint);
 }
 
 type ScoredKnowledgeCandidate = RoleKnowledgeIndexItem & {
@@ -2986,21 +3719,25 @@ function sortScoredCandidates(left: ScoredKnowledgeCandidate, right: ScoredKnowl
   return `${left.type}:${left.id}`.localeCompare(`${right.type}:${right.id}`);
 }
 
-export function roleKnowledgeSnapshot(
+function buildRoleKnowledgeSnapshot(
   roleDir: string,
   messageText: string,
-  options: RoleKnowledgeSnapshotOptions = {}
+  options: RoleKnowledgeSnapshotOptions,
+  catalog: Pick<
+    RoleKnowledgeCatalogSnapshot,
+    "plans" | "recentMemories" | "consolidatedMemories" | "skills" | "contextInjection"
+  >,
+  allowPersistence: boolean
 ): RoleKnowledgeSnapshot {
-  if (options.archiveCompletedPlans !== false) archiveCompletedPlans(roleDir);
-  const plans = listPlans(roleDir);
-  const memories = listRecentMemories(roleDir);
-  const consolidatedMemories = listConsolidatedMemories(roleDir);
-  const skills = listRoleSkills(roleDir);
+  const plans = catalog.plans;
+  const memories = catalog.recentMemories;
+  const consolidatedMemories = catalog.consolidatedMemories;
+  const skills = catalog.skills;
   const activePlans = plans.filter((item) => item.status === "进行中");
   const activeSkills = skills.filter((item) => item.status === "active");
   const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(memoryActivityAt(item)) <= DEFAULT_RECENT_EDITABLE_HOURS);
   const roleId = options.roleId || path.basename(roleDir);
-  const contextInjection = roleContextInjectionPolicy(roleDir);
+  const contextInjection = catalog.contextInjection;
   const recentMemoryIds = new Set(recentMemories.map((item) => item.id));
   const scoredCandidates: ScoredKnowledgeCandidate[] = [
     ...plans
@@ -3066,7 +3803,7 @@ export function roleKnowledgeSnapshot(
       revisionAt: item.revisionAt
     }));
 
-  if (options.touchViewedAt !== false) {
+  if (allowPersistence && options.touchViewedAt !== false) {
     const touchedAt = nowIso();
     for (const item of requiredReadItems.filter((item) => options.touchRequiredRead?.(item) !== false)) {
       const candidate = scoredCandidates.find((candidateItem) => candidateItem.type === item.type && candidateItem.id === item.id);
@@ -3098,7 +3835,7 @@ export function roleKnowledgeSnapshot(
       .map((item) => item.skill as RoleSkillItem),
     requiredReadItems,
     contextInjection,
-    pendingConsolidation: options.includePendingConsolidation
+    pendingConsolidation: allowPersistence && options.includePendingConsolidation
       ? pendingMemoryConsolidation(
           roleDir,
           options.consolidationTrigger ?? "auto",
@@ -3108,6 +3845,53 @@ export function roleKnowledgeSnapshot(
         ) ?? undefined
       : undefined
   };
+}
+
+export function roleKnowledgeSnapshot(
+  roleDir: string,
+  messageText: string,
+  options: RoleKnowledgeSnapshotOptions = {}
+): RoleKnowledgeSnapshot {
+  const snapshot = roleKnowledgeSnapshotFromPublishedCatalog(roleDir, messageText, options);
+  if (!snapshot) throw new RoleKnowledgeCacheUnavailableError(roleDir);
+  return snapshot;
+}
+
+/**
+ * Physical RoleKnowledge read for an isolated codex-hook process or bounded
+ * storage worker. Manager request/event paths must use the published resolver.
+ */
+export function roleKnowledgeSnapshotFromStorage(
+  roleDir: string,
+  messageText: string,
+  options: RoleKnowledgeSnapshotOptions = {}
+): RoleKnowledgeSnapshot {
+  if (options.archiveCompletedPlans === true) {
+    archiveCompletedPlansFromStorage(roleDir, DEFAULT_PLAN_ARCHIVE_AFTER_HOURS);
+  }
+  return buildRoleKnowledgeSnapshot(roleDir, messageText, options, {
+    plans: readPlansFromStorageInWorker(roleDir),
+    recentMemories: listRecentMemories(roleDir),
+    consolidatedMemories: listConsolidatedMemories(roleDir),
+    skills: listRoleSkills(roleDir),
+    contextInjection: roleContextInjectionPolicy(roleDir)
+  }, true);
+}
+
+/** Memory-only recall projection. Undefined is an explicit cold state. */
+export function roleKnowledgeSnapshotFromPublishedCatalog(
+  roleDir: string,
+  messageText: string,
+  options: RoleKnowledgeSnapshotOptions = {}
+): RoleKnowledgeSnapshot | undefined {
+  const catalog = publishedRoleKnowledgeCatalogSnapshot(roleDir);
+  if (!catalog) return undefined;
+  return buildRoleKnowledgeSnapshot(roleDir, messageText, {
+    ...options,
+    archiveCompletedPlans: false,
+    includePendingConsolidation: false,
+    touchViewedAt: false
+  }, catalog, false);
 }
 
 function indexTypeLabel(type: RoleKnowledgeItemType): string {

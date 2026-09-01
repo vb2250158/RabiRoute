@@ -31,7 +31,9 @@ readyAt
 
 Host 验证 generation、PID、Manager 实例和回环 URL，随后才启动托盘。端口打开不等于 ready，旧端点能响应也不等于当前 generation。
 
-核心请求层直接提供 `/health`，不依赖可选 diagnostics 插件。它同时返回当前 `applicationGenerationId`、`managerInstanceId`、`managerBaseUrl` 和三项彼此独立的判断：`live` 表示 event loop 能响应，`requiredReady` 表示 Profile 的 `readyRequires` 仍完整，`businessReady` 表示已启用的 Route 入口是否全部 ready。Host 只把身份不符、`live != true` 或 `requiredReady != true` 计入整代故障；可选插件、外部 Route 或后台任务降级仍可见，但不会触发无意义的整代重启。
+计划存储恢复不属于 application READY 门。Manager 端点与身份、完整必需插件集和 handler READY 建立后即可发布 READY，不等待 NAS 上的计划恢复。计划存储的读取/变更资格由可终止的 one-shot child 另行建立；状态为 `running` 或 `degraded` 时，计划变更失败关闭，`/health` 报告降级，Host 与 Tray 保持当前 application generation。
+
+核心请求层直接提供 `/health`，不依赖可选 diagnostics 插件。它同时返回当前 `applicationGenerationId`、`managerInstanceId`、`managerBaseUrl` 和三项分层判断：`live` 表示 event loop 能响应，`requiredReady` 表示 Profile 的 `readyRequires` 仍完整，`businessReady` 表示计划存储资格和已启用的 Route 入口都已 ready。Host 只把身份不符、`live != true` 或 `requiredReady != true` 计入整代故障；计划存储资格降级会把 `businessReady` 置为 `false`，但不改写 application READY，也不触发整代重启。可选插件、外部 Route 或后台任务降级仍可见，同样不会触发无意义的整代重启。
 
 `/meta` 复用同一份健康快照，并额外暴露插件 generation、Route 和后台任务诊断。同代客户端必须核对身份；Host 外的源码模式则以 Manager 标准输出返回的 URL 作为显式入口。
 

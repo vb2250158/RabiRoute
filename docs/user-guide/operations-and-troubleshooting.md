@@ -95,7 +95,7 @@ Outbox 发送失败会保留 `failed` 和 draft 数据。当前没有通用自�
 
 ## RabiRoute Desktop 界面未显示
 
-Windows 安装版只由 `RabiRouteHost.exe` 创建 Manager 与 Desktop。先重新运行 `Start-RabiRoute-Desktop.bat`；它只激活现有 Host 或启动一个新 Host，不会直接拉起托盘。
+Windows 安装版只由 `RabiRouteHost.exe` 创建 Manager 与 Desktop。先从开始菜单重新打开 RabiRoute，或直接运行安装目录里的 `RabiRouteHost.exe`；第二次启动只向现有 Host 提交激活请求，不会直接拉起托盘。
 
 查询同一代的真实状态：
 

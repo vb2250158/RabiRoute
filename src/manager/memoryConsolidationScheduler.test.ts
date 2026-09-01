@@ -9,12 +9,12 @@ test("memory consolidation scheduler delivers a due run once and schedules the n
 
   const scheduler = new MemoryConsolidationScheduler({
     listTargets: () => [
-      { gatewayId: "route-a", roleKey: "role-a", roleDir: "C:/roles/a" },
-      { gatewayId: "route-a-duplicate", roleKey: "role-a", roleDir: "C:/roles/a" },
-      { gatewayId: "route-b", roleKey: "role-b", roleDir: "C:/roles/b" }
+      { gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "C:/roles/a" },
+      { gatewayId: "route-a-duplicate", roleId: "role-a", roleKey: "role-a", roleDir: "C:/roles/a" },
+      { gatewayId: "route-b", roleId: "role-b", roleKey: "role-b", roleDir: "C:/roles/b" }
     ],
     requestDueRun: target => target.roleKey === "role-a" && requestedRunId
-      ? { runId: requestedRunId }
+      ? { runId: requestedRunId, revision: `revision:${requestedRunId}` }
       : null,
     nextTriggerAt: target => target.roleKey === "role-b" ? 20_000 : undefined,
     deliver: async (_target, run) => { delivered.push(run.runId); },
@@ -42,8 +42,8 @@ test("memory consolidation scheduler retries a run after delivery failure", asyn
   let attempts = 0;
   let now = 10_000;
   const scheduler = new MemoryConsolidationScheduler({
-    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "C:/roles/a" }],
-    requestDueRun: () => ({ runId: "run-due" }),
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "C:/roles/a" }],
+    requestDueRun: () => ({ runId: "run-due", revision: "revision:run-due" }),
     nextTriggerAt: () => undefined,
     deliver: async () => {
       attempts += 1;
@@ -62,11 +62,59 @@ test("memory consolidation scheduler retries a run after delivery failure", asyn
   assert.equal(attempts, 2);
 });
 
+test("consecutive delivery failures accumulate backoff until a successful target attempt resets it", async () => {
+  let now = 10_000;
+  let attempts = 0;
+  let failDelivery = true;
+  const reportedFailures: number[] = [];
+  const scheduler = new MemoryConsolidationScheduler({
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "/a" }],
+    requestDueRun: () => null,
+    nextTriggerAt: () => undefined,
+    evaluate: async () => ({ pending: { runId: "run-due", revision: "revision:run-due" } }),
+    deliver: async () => {
+      attempts += 1;
+      if (failDelivery) throw new Error("desktop delivery unavailable");
+    },
+    retryDelayMs: 1_000,
+    maximumRetryDelayMs: 4_000,
+    incidentThreshold: 3,
+    now: () => now,
+    scheduleDeadline: () => ({ unref() {} } as NodeJS.Timeout),
+    clearDeadline: () => {},
+    onError: (_target, _error, circuit) => {
+      reportedFailures.push(circuit.snapshot.consecutiveFailures);
+    }
+  });
+
+  await scheduler.runOnce();
+  assert.equal(scheduler.failureSummary().nextRetryAt, 11_000);
+  now = 11_000;
+  await scheduler.runOnce();
+  assert.equal(scheduler.failureSummary().nextRetryAt, 13_000);
+  now = 13_000;
+  await scheduler.runOnce();
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(reportedFailures, [1, 3]);
+  assert.deepEqual(scheduler.failureSummary(), {
+    backoff: 0,
+    incidents: 1,
+    nextRetryAt: 17_000
+  });
+
+  failDelivery = false;
+  now = 17_000;
+  await scheduler.runOnce();
+  assert.equal(attempts, 4);
+  assert.deepEqual(scheduler.failureSummary(), { backoff: 0, incidents: 0 });
+});
+
 test("memory consolidation scheduler does not redeliver a run already accepted before Manager restart", async () => {
   let attempts = 0;
   const scheduler = new MemoryConsolidationScheduler({
-    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "C:/roles/a" }],
-    requestDueRun: () => ({ runId: "run-delivered", delivered: true }),
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "C:/roles/a" }],
+    requestDueRun: () => ({ runId: "run-delivered", revision: "revision:run-delivered", delivered: true }),
     nextTriggerAt: () => undefined,
     deliver: async () => { attempts += 1; },
     scheduleDeadline: () => ({ unref() {} } as NodeJS.Timeout),
@@ -84,7 +132,7 @@ test("memory consolidation failures back off exponentially and open one incident
   const reports: number[] = [];
   const incidents: string[] = [];
   const scheduler = new MemoryConsolidationScheduler({
-    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
     requestDueRun: () => null,
     nextTriggerAt: () => undefined,
     evaluate: async () => { throw new Error("NAS unavailable"); },
@@ -120,7 +168,7 @@ test("memory consolidation skips attempts inside backoff and resumes after expli
   let now = 100;
   let evaluations = 0;
   const scheduler = new MemoryConsolidationScheduler({
-    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
     requestDueRun: () => null,
     nextTriggerAt: () => undefined,
     evaluate: async () => {
@@ -146,8 +194,8 @@ test("memory consolidation skips attempts inside backoff and resumes after expli
 test("a failed due delivery cannot be re-armed at zero by a past business trigger", async () => {
   const deadlines: number[] = [];
   const scheduler = new MemoryConsolidationScheduler({
-    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "/a" }],
-    requestDueRun: () => ({ runId: "due" }),
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "/a" }],
+    requestDueRun: () => ({ runId: "due", revision: "revision:due" }),
     nextTriggerAt: () => 1,
     deliver: async () => { throw new Error("worker unavailable"); },
     retryDelayMs: 1_000,
@@ -166,7 +214,7 @@ test("a failed due delivery cannot be re-armed at zero by a past business trigge
 test("stop aborts a hung schedule evaluation and waits for bounded cleanup", async () => {
   let evaluationStarted = false;
   const scheduler = new MemoryConsolidationScheduler({
-    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "/a" }],
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "/a" }],
     requestDueRun: () => null,
     nextTriggerAt: () => undefined,
     evaluate: async (_target, signal) => {
@@ -189,13 +237,13 @@ test("memory consolidation scheduler can evaluate NAS-backed schedules asynchron
   let evaluationStarted = false;
   const delivered: string[] = [];
   const scheduler = new MemoryConsolidationScheduler({
-    listTargets: () => [{ gatewayId: "route-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
+    listTargets: () => [{ gatewayId: "route-a", roleId: "role-a", roleKey: "role-a", roleDir: "//nas/roles/a" }],
     requestDueRun: () => { throw new Error("synchronous memory scan must not run"); },
     nextTriggerAt: () => { throw new Error("synchronous trigger scan must not run"); },
     evaluate: async () => {
       evaluationStarted = true;
       await new Promise<void>(resolve => { releaseEvaluation = resolve; });
-      return { pending: { runId: "run-async" }, nextTriggerAt: undefined };
+      return { pending: { runId: "run-async", revision: "revision:run-async" }, nextTriggerAt: undefined };
     },
     deliver: async (_target, run) => { delivered.push(run.runId); }
   });
@@ -215,10 +263,10 @@ test("stop waits for the active delivery and prevents later targets from startin
   const delivered: string[] = [];
   const scheduler = new MemoryConsolidationScheduler({
     listTargets: () => [
-      { gatewayId: "a", roleKey: "a", roleDir: "/a" },
-      { gatewayId: "b", roleKey: "b", roleDir: "/b" }
+      { gatewayId: "a", roleId: "a", roleKey: "a", roleDir: "/a" },
+      { gatewayId: "b", roleId: "b", roleKey: "b", roleDir: "/b" }
     ],
-    requestDueRun: target => ({ runId: `run-${target.gatewayId}` }),
+    requestDueRun: target => ({ runId: `run-${target.gatewayId}`, revision: `revision:run-${target.gatewayId}` }),
     nextTriggerAt: () => undefined,
     deliver: async target => {
       delivered.push(target.gatewayId);

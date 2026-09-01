@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,9 +8,72 @@ import test from "node:test";
 import { defaultPerformanceMonitoringConfig, type PerformanceSample } from "../shared/performanceContract.js";
 import { PersonaSyncService } from "../personaSync.js";
 import { appendPlanFeedback, createPlanFeedbackRecord } from "../planFeedback.js";
-import { createPlan, createRecentMemory } from "../roleKnowledge.js";
-import { ManagerReadWorkerError, ManagerReadWorkerPool } from "./managerReadWorkerPool.js";
+import { createPlan, createRecentMemory, listRecentMemories, publishedRolePlans } from "../roleKnowledge.js";
+import { appendRolePanelTimelineMessageIfAbsent } from "../rolePanelTimeline.js";
+import {
+  ManagerReadWorkerError,
+  ManagerReadWorkerPool,
+  type ManagerReadWorkerChild
+} from "./managerReadWorkerPool.js";
 import { PerformanceStore } from "./performanceStore.js";
+
+type FakeReadRequest = Readonly<{ requestId: string; task: unknown }>;
+
+class FakeReadWorker extends EventEmitter implements ManagerReadWorkerChild {
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  connected = true;
+  readonly channel = { unref(): void {} };
+  readonly signals: Array<NodeJS.Signals | number | undefined> = [];
+  private closed = false;
+
+  constructor(
+    readonly pid: number | undefined,
+    private readonly onSend: (request: FakeReadRequest, worker: FakeReadWorker) => void,
+    private readonly onKill: (
+      signal: NodeJS.Signals | number | undefined,
+      worker: FakeReadWorker
+    ) => void = () => {}
+  ) {
+    super();
+  }
+
+  send(message: unknown, callback?: (error: Error | null) => void): boolean {
+    this.onSend(message as FakeReadRequest, this);
+    callback?.(null);
+    return true;
+  }
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.signals.push(signal);
+    this.onKill(signal, this);
+    return true;
+  }
+
+  disconnect(): void {
+    this.connected = false;
+  }
+
+  unref(): void {}
+
+  respond(request: FakeReadRequest, value: unknown): void {
+    this.emit("message", { requestId: request.requestId, ok: true, value });
+  }
+
+  close(code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.exitCode = code;
+    this.signalCode = signal;
+    this.connected = false;
+    this.emit("exit", code, signal);
+    this.emit("close", code, signal);
+  }
+}
+
+function fakeReadTask(roleDir: string) {
+  return { type: "role_memory_counts" as const, roleDir };
+}
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -107,6 +171,54 @@ test("manager read workers keep the main event loop responsive during archive qu
     assert.ok(ticks >= 5, `expected the Manager event loop to keep ticking, got ${ticks}`);
   } finally {
     clearInterval(timer);
+  }
+});
+
+test("manager read workers publish a deeply immutable RoleKnowledge catalog", async () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-catalog-worker-"));
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 });
+  try {
+    createPlan(roleDir, {
+      id: "worker-catalog",
+      title: "Worker catalog",
+      focus: "Publish the RoleKnowledge catalog",
+      status: "进行中",
+      currentStepId: "read",
+      steps: [{ id: "read", title: "Read in worker", status: "进行中" }],
+      keywords: ["worker"]
+    });
+    const snapshot = await pool.queryRoleKnowledgeCatalogSnapshot(roleDir);
+    assert.equal(snapshot.plans[0]?.id, "worker-catalog");
+    assert.equal(publishedRolePlans(roleDir)?.[0]?.id, "worker-catalog");
+    assert.equal(Object.isFrozen(snapshot), true);
+    assert.equal(Object.isFrozen(snapshot.plans[0]?.steps), true);
+  } finally {
+    await pool.stop();
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
+});
+
+test("role panel timeline reads resolve a validated role id inside the read child", async () => {
+  const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-panel-read-worker-"));
+  const roleDir = path.join(rolesRoot, "YeYu");
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, timeoutMs: 10_000 });
+  try {
+    appendRolePanelTimelineMessageIfAbsent(roleDir, {
+      id: "worker-timeline-one",
+      time: 1_788_192_000,
+      roleId: "YeYu",
+      direction: "user",
+      sender: "test",
+      text: "worker read",
+      attachments: [],
+      status: "sent"
+    });
+    const messages = await pool.queryRolePanelTimeline(rolesRoot, "YeYu", 10);
+    assert.deepEqual(messages.map(message => message.id), ["worker-timeline-one"]);
+    await assert.rejects(pool.queryRolePanelTimeline(rolesRoot, "../YeYu", 10));
+  } finally {
+    await pool.stop();
+    fs.rmSync(rolesRoot, { recursive: true, force: true });
   }
 });
 
@@ -215,7 +327,7 @@ test("manager read workers keep conflict-history scans off the main event loop",
   }
 });
 
-test("manager read workers keep recent-memory detail scans and viewedAt writes off the main event loop", async () => {
+test("manager read workers keep recent-memory detail scans pure and off the main event loop", async () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-memory-worker-"));
   for (let index = 0; index < 600; index += 1) {
     createRecentMemory(roleDir, {
@@ -235,7 +347,8 @@ test("manager read workers keep recent-memory detail scans and viewedAt writes o
   try {
     const memory = await pool.queryRecentMemoryDetail(roleDir, "memory-0599");
     assert.equal(memory?.id, "memory-0599");
-    assert.equal(typeof memory?.viewedAt, "string");
+    assert.equal(memory?.viewedAt, undefined);
+    assert.equal(listRecentMemories(roleDir).find(item => item.id === "memory-0599")?.viewedAt, undefined);
     assert.ok(ticks >= 5, `expected the Manager event loop to keep ticking, got ${ticks}`);
   } finally {
     clearInterval(timer);
@@ -363,17 +476,18 @@ test("manager read worker pools stop active and queued work, reject new work, an
     assert.equal(pool.status().active, 1);
     assert.equal(pool.status().queued, 1);
 
-    const firstStop = pool.stop();
-    const secondStop = pool.stop();
-    assert.strictEqual(secondStop, firstStop);
-    await assert.rejects(
+    const activeRejected = assert.rejects(
       active,
       (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
     );
-    await assert.rejects(
+    const queuedRejected = assert.rejects(
       queued,
       (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
     );
+    const firstStop = pool.stop();
+    const secondStop = pool.stop();
+    assert.strictEqual(secondStop, firstStop);
+    await Promise.all([activeRejected, queuedRejected]);
     await firstStop;
     assert.equal(pool.status().active, 0);
     assert.equal(pool.status().queued, 0);
@@ -393,5 +507,263 @@ test("manager read worker pools stop active and queued work, reject new work, an
   } finally {
     await pool.stop();
     fs.rmSync(roleDir, { recursive: true, force: true });
+  }
+});
+
+test("manager read timeout keeps its local and global lease until the worker actually closes", async () => {
+  const events: string[] = [];
+  let spawned = 0;
+  let activeBeforeClose = -1;
+  let globalActiveBeforeClose = -1;
+  let pool: ManagerReadWorkerPool;
+  pool = new ManagerReadWorkerPool({
+    maxConcurrency: 1,
+    maxQueue: 1,
+    timeoutMs: 100,
+    terminationTimeoutMs: 5,
+    forceTerminationTimeoutMs: 100,
+    setWorkerPriority: () => {},
+    workerFactory: () => {
+      spawned += 1;
+      if (spawned === 1) {
+        let firstRequest: FakeReadRequest | undefined;
+        return new FakeReadWorker(51_001, (request) => {
+          firstRequest = request;
+          events.push("first-send");
+        }, (signal, worker) => {
+          events.push(`first-${String(signal)}`);
+          if (signal !== "SIGKILL") return;
+          if (firstRequest) worker.respond(firstRequest, { late: true });
+          setTimeout(() => {
+            activeBeforeClose = pool.status().active;
+            globalActiveBeforeClose = pool.status().globalActive;
+            events.push("first-close");
+            worker.close(null, "SIGKILL");
+          }, 10);
+        });
+      }
+      return new FakeReadWorker(51_002, (request, worker) => {
+        events.push("second-send");
+        worker.respond(request, { recovered: true });
+      }, (_signal, worker) => worker.close(0, "SIGTERM"));
+    }
+  });
+  try {
+    const timedOut = pool.run(fakeReadTask("first"));
+    const queued = pool.run<{ recovered: boolean }>(fakeReadTask("second"));
+    await assert.rejects(
+      timedOut,
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "timeout"
+    );
+    assert.equal(activeBeforeClose, 1);
+    assert.ok(globalActiveBeforeClose >= 1);
+    assert.deepEqual(await queued, { recovered: true });
+    assert.deepEqual(events.slice(0, 5), [
+      "first-send",
+      "first-SIGTERM",
+      "first-SIGKILL",
+      "first-close",
+      "second-send"
+    ]);
+  } finally {
+    await pool.stop();
+  }
+});
+
+test("manager read abort keeps its lease until SIGTERM close is observed", async () => {
+  const controller = new AbortController();
+  let activeBeforeClose = -1;
+  let globalActiveBeforeClose = -1;
+  let pool: ManagerReadWorkerPool;
+  const child = new FakeReadWorker(52_001, () => {}, (signal, worker) => {
+    if (signal !== "SIGTERM") return;
+    setTimeout(() => {
+      activeBeforeClose = pool.status().active;
+      globalActiveBeforeClose = pool.status().globalActive;
+      worker.close(null, "SIGTERM");
+    }, 10);
+  });
+  pool = new ManagerReadWorkerPool({
+    maxConcurrency: 1,
+    maxQueue: 0,
+    timeoutMs: 10_000,
+    terminationTimeoutMs: 100,
+    forceTerminationTimeoutMs: 100,
+    setWorkerPriority: () => {},
+    workerFactory: () => child
+  });
+  try {
+    const active = pool.run(fakeReadTask("abort"), { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(
+      active,
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
+    );
+    assert.equal(activeBeforeClose, 1);
+    assert.ok(globalActiveBeforeClose >= 1);
+    assert.deepEqual(child.signals, ["SIGTERM"]);
+  } finally {
+    await pool.stop();
+  }
+});
+
+test("unconfirmed read-worker termination globally blocks queues and stop until a real close", async () => {
+  const blockedChild = new FakeReadWorker(53_001, () => {}, () => {});
+  const blockedPool = new ManagerReadWorkerPool({
+    maxConcurrency: 1,
+    maxQueue: 1,
+    timeoutMs: 100,
+    terminationTimeoutMs: 5,
+    forceTerminationTimeoutMs: 5,
+    setWorkerPriority: () => {},
+    workerFactory: () => blockedChild
+  });
+  const recoveryChild = new FakeReadWorker(53_002, (request, worker) => {
+    worker.respond(request, { restored: true });
+  }, (_signal, worker) => worker.close(0, "SIGTERM"));
+  const recoveryPool = new ManagerReadWorkerPool({
+    maxConcurrency: 1,
+    maxQueue: 1,
+    timeoutMs: 1_000,
+    terminationTimeoutMs: 20,
+    forceTerminationTimeoutMs: 20,
+    setWorkerPriority: () => {},
+    workerFactory: () => recoveryChild
+  });
+  try {
+    await assert.rejects(
+      blockedPool.run(fakeReadTask("never-close")),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
+    );
+    assert.equal(blockedPool.status().active, 1);
+    assert.equal(blockedPool.status().workers, 1);
+    assert.equal(blockedPool.status().globalTerminationBlocked, true);
+    assert.deepEqual(blockedPool.status().blockedWorkerPids, [53_001]);
+
+    await assert.rejects(
+      recoveryPool.run(fakeReadTask("globally-blocked")),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
+    );
+    assert.equal(recoveryPool.status().queued, 0);
+    await assert.rejects(
+      blockedPool.stop(),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
+    );
+    assert.equal(blockedPool.status().active, 1);
+    assert.equal(blockedPool.status().workers, 1);
+
+    blockedChild.close(null, "SIGKILL");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(blockedPool.status().active, 0);
+    assert.equal(blockedPool.status().workers, 0);
+    assert.equal(recoveryPool.status().globalTerminationBlocked, false);
+    assert.deepEqual(
+      await recoveryPool.run<{ restored: boolean }>(fakeReadTask("after-close")),
+      { restored: true }
+    );
+    await blockedPool.stop();
+  } finally {
+    blockedChild.close(null, "SIGKILL");
+    recoveryChild.close(0, "SIGTERM");
+    await Promise.allSettled([blockedPool.stop(), recoveryPool.stop()]);
+  }
+});
+
+test("no-pid and priority setup failures cannot dispatch another child before close", async () => {
+  for (const scenario of ["no-pid", "priority"] as const) {
+    let spawned = 0;
+    const invalidChild = new FakeReadWorker(scenario === "no-pid" ? undefined : 54_001, () => {}, () => {});
+    const recoveredChild = new FakeReadWorker(54_002, (request, worker) => {
+      worker.respond(request, { scenario, recovered: true });
+    }, (_signal, worker) => worker.close(0, "SIGTERM"));
+    const pool = new ManagerReadWorkerPool({
+      maxConcurrency: 1,
+      maxQueue: 1,
+      timeoutMs: 1_000,
+      terminationTimeoutMs: 100,
+      forceTerminationTimeoutMs: 100,
+      workerFactory: () => {
+        spawned += 1;
+        return spawned === 1 ? invalidChild : recoveredChild;
+      },
+      setWorkerPriority: (pid) => {
+        if (scenario === "priority" && pid === 54_001) throw new Error("priority denied");
+      }
+    });
+    try {
+      await assert.rejects(
+        pool.run(fakeReadTask(`${scenario}-failure`)),
+        (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "worker_failed"
+      );
+      await assert.rejects(
+        pool.run(fakeReadTask(`${scenario}-pending-close`)),
+        (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "busy"
+      );
+      assert.equal(spawned, 1);
+      invalidChild.close(null, "SIGTERM");
+      await new Promise<void>(resolve => setImmediate(resolve));
+      assert.deepEqual(
+        await pool.run(fakeReadTask(`${scenario}-recovered`)),
+        { scenario, recovered: true }
+      );
+      assert.equal(spawned, 2);
+    } finally {
+      invalidChild.close(null, "SIGTERM");
+      recoveredChild.close(0, "SIGTERM");
+      await pool.stop();
+    }
+  }
+});
+
+test("a stopped pool cannot restart through another worker's unconfirmed termination gate", async () => {
+  const blockedChild = new FakeReadWorker(55_001, () => {}, () => {});
+  const blockedPool = new ManagerReadWorkerPool({
+    maxConcurrency: 1,
+    maxQueue: 0,
+    timeoutMs: 100,
+    terminationTimeoutMs: 5,
+    forceTerminationTimeoutMs: 5,
+    setWorkerPriority: () => {},
+    workerFactory: () => blockedChild
+  });
+  const restartedChild = new FakeReadWorker(55_002, (request, worker) => {
+    worker.respond(request, { restarted: true });
+  }, (_signal, worker) => worker.close(0, "SIGTERM"));
+  const stoppedPool = new ManagerReadWorkerPool({
+    maxConcurrency: 1,
+    maxQueue: 0,
+    timeoutMs: 1_000,
+    terminationTimeoutMs: 20,
+    forceTerminationTimeoutMs: 20,
+    setWorkerPriority: () => {},
+    workerFactory: () => restartedChild
+  });
+  await stoppedPool.stop();
+  try {
+    await assert.rejects(
+      blockedPool.run(fakeReadTask("block-restart")),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
+    );
+    assert.throws(
+      () => stoppedPool.start(),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
+    );
+    await assert.rejects(
+      stoppedPool.run(fakeReadTask("must-stay-stopped")),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
+    );
+
+    blockedChild.close(null, "SIGKILL");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    stoppedPool.start();
+    assert.deepEqual(
+      await stoppedPool.run(fakeReadTask("restart-after-close")),
+      { restarted: true }
+    );
+    await blockedPool.stop();
+  } finally {
+    blockedChild.close(null, "SIGKILL");
+    restartedChild.close(0, "SIGTERM");
+    await Promise.allSettled([blockedPool.stop(), stoppedPool.stop()]);
   }
 });

@@ -5,6 +5,7 @@ import {
   type RoleKnowledgeItemType,
   type RoleKnowledgeSnapshot
 } from "../roleKnowledge.js";
+import { roleStorageMutationContractLines } from "../shared/roleStorageMutationContract.js";
 
 export type RoleKnowledgeContextView = {
   mode: RoleContextInjectionMode;
@@ -39,6 +40,7 @@ export function planMemoryApiHint(roleId: unknown): string[] {
     `- 查看角色技能：GET ${base}/skills、GET ${base}/skills/{skillId}`,
     `- 新增近期记忆：POST ${base}/memory/recent`,
     `- 更新指定近期记忆：PATCH ${base}/memory/recent/{memoryId}`,
+    ...roleStorageMutationContractLines(base),
     "- 按 ID 查看记忆会刷新 viewedAt；更新近期记忆会刷新 updatedAt 和 viewedAt；相关记忆进入处理前确认队列时会刷新 viewedAt"
   ];
 }
@@ -49,7 +51,8 @@ function focusedApiHint(roleId: unknown): string[] {
     "计划、记忆和技能默认只注入与当前输入高相关的摘要；长历史与完整内容按需查询。",
     `按需查询/维护：${base}/plans、${base}/memory、${base}/skills；执行写入前仍须遵守对应接口校验与 Action Gate。`,
     "需要联系其它人格时，先 GET /api/personas?addressable=true，再 POST /api/personas/{personaId}/messages；请求带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 personaMessagingCapability。多目标 Route 必须明确选择；回复沿用会话 ID、引用当前消息并增加 hopCount，不得超过注入上限。",
-      "待审批计划如果已有实际效果图、演示视频、设计稿、报告或其它文件，应写入计划 attachments；可传本机 path 或 name/mimeType/contentBase64，页面会展示附件并支持图片、视频预览。"
+      "待审批计划如果已有实际效果图、演示视频、设计稿、报告或其它文件，应写入计划 attachments；可传本机 path 或 name/mimeType/contentBase64，页面会展示附件并支持图片、视频预览。",
+    ...roleStorageMutationContractLines(base)
   ];
 }
 

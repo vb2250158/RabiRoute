@@ -9,14 +9,15 @@ import { fileURLToPath } from "node:url";
 import { CodexHookContextService } from "./codexHookContext.js";
 import { handleCodexHookApi } from "./codexHookRoutes.js";
 
-async function fixture() {
+async function fixture(planStorageReady: () => boolean = () => true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-api-"));
   const roleDir = path.join(root, "roles", "YeYu");
   fs.mkdirSync(roleDir, { recursive: true });
   fs.writeFileSync(path.join(roleDir, "persona.md"), "# 夜雨\n\n由 Rabi Manager 管理。", "utf8");
   const service = new CodexHookContextService({
     rolesRoot: () => path.join(root, "roles"),
-    storePath: path.join(root, "data", "codex-hook", "sessions.json")
+    storePath: path.join(root, "data", "codex-hook", "sessions.json"),
+    planStorageReady
   });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
@@ -33,6 +34,30 @@ async function fixture() {
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   };
 }
+
+test("Codex Stop HTTP hook returns recovery gate 503 while ordinary context remains available", async (t) => {
+  const app = await fixture(() => false);
+  t.after(async () => {
+    await app.close();
+    fs.rmSync(app.root, { recursive: true, force: true });
+  });
+
+  const start = await fetch(`${app.baseUrl}/api/codex-hook/context`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hook_event_name: "SessionStart", session_id: "session-http" })
+  });
+  assert.equal(start.status, 200);
+
+  const stop = await fetch(`${app.baseUrl}/api/codex-hook/context`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hook_event_name: "Stop", session_id: "session-http", turn_id: "turn-1" })
+  });
+  const body = await stop.json() as Record<string, any>;
+  assert.equal(stop.status, 503);
+  assert.equal(body.error, "PLAN_STORAGE_STARTUP_UNAVAILABLE");
+});
 
 async function json(response: Response): Promise<Record<string, any>> {
   const body = await response.json() as Record<string, any>;

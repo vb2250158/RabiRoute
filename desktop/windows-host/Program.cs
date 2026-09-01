@@ -49,7 +49,7 @@ public static class HostEntry
             if (jsonOutput) WriteJson(response);
             return 78;
         }
-        var retiredEntries = PortableOverlayGuard.FindRetiredLifecycleEntries(packageRoot);
+        var retiredEntries = PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(packageRoot, stateRoot);
         if (retiredEntries.Count > 0)
         {
             var message = PortableOverlayGuard.BlockedMessage(retiredEntries);
@@ -156,6 +156,17 @@ internal static class PortableOverlayGuard
         Path.Combine("scripts", "watch-rabiroute-health-hidden.vbs"),
         Path.Combine("scripts", "watch-rabiroute-health.ps1")
     };
+
+    internal static IReadOnlyList<string> FindRetiredLifecycleEntriesForStartup(
+        string packageRoot,
+        string stateRoot)
+    {
+        return new[] { Path.GetFullPath(packageRoot), Path.GetFullPath(stateRoot) }
+            .SelectMany(FindRetiredLifecycleEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(relativePath => relativePath, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
 
     internal static IReadOnlyList<string> FindRetiredLifecycleEntries(string root)
     {

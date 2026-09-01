@@ -22,6 +22,26 @@ function fixture(fileCount = 3): { root: string; rolesRoot: string; roleRoot: st
   return { root, rolesRoot, roleRoot, stateRoot };
 }
 
+function writeCanonicalActivePlan(roleRoot: string, planId: string): string[] {
+  const directory = path.join(roleRoot, "plans", "active", planId);
+  const recordedAt = "2026-08-31T00:00:00.000Z";
+  const plan = { id: planId, title: planId, focus: planId, status: "进行中", updatedAt: recordedAt };
+  const history = {
+    id: `history-${planId}`,
+    planId,
+    kind: "created",
+    recordedAt,
+    after: plan
+  };
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "plan.json"), `${JSON.stringify(plan)}\n`, "utf8");
+  fs.writeFileSync(path.join(directory, "history.jsonl"), `${JSON.stringify(history)}\n`, "utf8");
+  return [
+    `plans/active/${planId}/history.jsonl`,
+    `plans/active/${planId}/plan.json`
+  ];
+}
+
 function oneShotEvent(
   predicate: (event: PersonaSyncManifestIndexEvent) => boolean,
   timeoutMs = 5_000
@@ -150,7 +170,6 @@ test("persona manifest excludes work-cycle runtime state while preserving portab
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
   const portableFiles = new Map([
     ["persona.md", "# Rabi\n"],
-    ["plans/items/active/plan-1.json", "{\"id\":\"plan-1\"}\n"],
     ["memory/recent/memory-1.json", "{\"id\":\"memory-1\"}\n"]
   ]);
   const runtimeFiles = new Map([
@@ -169,6 +188,7 @@ test("persona manifest excludes work-cycle runtime state while preserving portab
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, content, "utf8");
   }
+  const canonicalPlanFiles = writeCanonicalActivePlan(data.roleRoot, "plan-1");
 
   const service = new PersonaSyncService(() => data.rolesRoot, data.stateRoot, {
     watch: false,
@@ -177,7 +197,7 @@ test("persona manifest excludes work-cycle runtime state while preserving portab
   t.after(() => service.stopManifestIndex());
   const files = (await service.manifest("Rabi")).roles[0]?.files.map(file => file.path) ?? [];
 
-  assert.deepEqual(files, [...portableFiles.keys()].sort());
+  assert.deepEqual(files, [...portableFiles.keys(), ...canonicalPlanFiles].sort());
   for (const relativePath of runtimeFiles.keys()) assert.equal(files.includes(relativePath), false);
 });
 
@@ -218,10 +238,8 @@ test("persona manifest index hashes one changed file from a filesystem event", a
 test("persona manifest directory events reconcile only the changed subtree", async (t) => {
   const data = fixture(40);
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
-  const plansRoot = path.join(data.roleRoot, "plans", "items", "active");
-  fs.mkdirSync(plansRoot, { recursive: true });
   for (let index = 0; index < 60; index += 1) {
-    fs.writeFileSync(path.join(plansRoot, `plan-${index}.json`), `{"id":"plan-${index}"}\n`, "utf8");
+    writeCanonicalActivePlan(data.roleRoot, `plan-${index}`);
   }
 
   const index = new PersonaSyncManifestIndex(() => data.rolesRoot, data.stateRoot, {
@@ -230,18 +248,20 @@ test("persona manifest directory events reconcile only the changed subtree", asy
   });
   t.after(() => index.stop());
   await index.start();
-  assert.equal(index.status().files, 100);
+  assert.equal(index.status().files, 160);
 
   fs.rmSync(path.join(data.roleRoot, "memory", "0.md"));
   index.notePathChanged("Rabi", "memory");
+  await waitFor(() => index.status().lastReconcile?.reason === "directory_event");
+  assert.equal(index.status().lastReconcile?.reusedFiles, 39);
+  assert.equal(index.status().files, 159);
   const manifest = await index.manifest("Rabi");
   const files = manifest.roles[0]?.files.map(file => file.path) ?? [];
 
-  assert.equal(index.status().lastReconcile?.reason, "directory_event");
-  assert.equal(index.status().lastReconcile?.reusedFiles, 39);
-  assert.equal(index.status().files, 99);
+  assert.equal(index.status().lastReconcile?.reason, "authoritative_plan_manifest_query");
+  assert.equal(index.status().files, 159);
   assert.equal(files.includes("memory/0.md"), false);
-  assert.equal(files.includes("plans/items/active/plan-59.json"), true);
+  assert.equal(files.includes("plans/active/plan-59/plan.json"), true);
 });
 
 test("persona manifest stops unreliable watching when Windows omits the changed path", async (t) => {
@@ -279,7 +299,6 @@ test("persona manifest watcher ignores runtime history events but observes porta
   const data = fixture(0);
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(data.roleRoot, "state", "work-cycle-history"), { recursive: true });
-  fs.mkdirSync(path.join(data.roleRoot, "plans", "items", "active"), { recursive: true });
   const service = new PersonaSyncService(() => data.rolesRoot, data.stateRoot, { watch: true });
   t.after(() => service.stopManifestIndex());
   await service.startManifestIndex();
@@ -298,15 +317,11 @@ test("persona manifest watcher ignores runtime history events but observes porta
   assert.equal(service.manifestIndexStatus().generation, before.generation);
   assert.equal(service.manifestIndexStatus().totalHashedFiles, before.totalHashedFiles);
 
-  fs.writeFileSync(
-    path.join(data.roleRoot, "plans", "items", "active", "plan-1.json"),
-    "{\"id\":\"plan-1\"}\n",
-    "utf8"
-  );
+  writeCanonicalActivePlan(data.roleRoot, "plan-1");
   const afterPortable = await service.manifest("Rabi");
-  assert.equal(afterPortable.roles[0]?.files.some(file => file.path === "plans/items/active/plan-1.json"), true);
+  assert.equal(afterPortable.roles[0]?.files.some(file => file.path === "plans/active/plan-1/plan.json"), true);
   assert.ok(service.manifestIndexStatus().generation > before.generation);
-  assert.equal(service.manifestIndexStatus().totalHashedFiles, before.totalHashedFiles + 1);
+  assert.equal(service.manifestIndexStatus().totalHashedFiles, before.totalHashedFiles + 2);
 });
 
 test("persona manifest keeps function with one-shot query reconciliation when events are disabled", async (t) => {
@@ -324,4 +339,81 @@ test("persona manifest keeps function with one-shot query reconciliation when ev
   assert.equal(after.roles[0]?.files.some(file => file.path === "memory/added.md"), true);
   assert.equal(service.manifestIndexStatus().watchMode, "disabled");
   assert.equal(service.manifestIndexStatus().lastReconcile?.reason, "query_fallback");
+});
+
+test("child-process manifest refresh atomically publishes a deeply immutable snapshot", async (t) => {
+  const data = fixture(2);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  const index = new PersonaSyncManifestIndex(() => data.rolesRoot, data.stateRoot, {
+    watch: false,
+    reconcileOnQueryFallback: false,
+    scanExecutionMode: "child_process",
+    refreshTimeoutMs: 5_000
+  });
+  t.after(() => index.stop());
+
+  await index.start();
+
+  const published = index.publishedSnapshot("Rabi");
+  assert.equal(published.publication.executionMode, "child_process");
+  assert.equal(published.publication.available, true);
+  assert.equal(published.publication.revision, 1);
+  assert.equal(published.publication.state, "ready");
+  assert.equal(published.publication.stale, false);
+  assert.ok(published.publication.refreshedAt);
+  assert.ok(published.manifest);
+  assert.equal(Object.isFrozen(published.manifest), true);
+  assert.equal(Object.isFrozen(published.manifest!.roles), true);
+  assert.equal(Object.isFrozen(published.manifest!.roles[0]), true);
+  assert.equal(Object.isFrozen(published.manifest!.roles[0].files), true);
+  assert.equal(Object.isFrozen(published.manifest!.roles[0].files[0]), true);
+  assert.deepEqual(published.manifest!.roles[0].files.map(file => file.path), ["memory/0.md", "memory/1.md"]);
+});
+
+test("UNC persona roots never reach Manager fs.watch and use the single child refresh loop", async (t) => {
+  const data = fixture(0);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  let workerRuns = 0;
+  let watchCalls = 0;
+  const events: PersonaSyncManifestIndexEvent[] = [];
+  const index = new PersonaSyncManifestIndex(
+    () => "\\\\example-host\\example-share\\project\\data\\roles",
+    data.stateRoot,
+    {
+      watch: true,
+      scanExecutionMode: "child_process",
+      remoteRefreshIntervalMs: 250,
+      onEvent: event => events.push(event),
+      watchFactory: () => {
+        watchCalls += 1;
+        throw new Error("UNC paths must never reach fs.watch.");
+      },
+      runManifestWorker: async () => {
+        workerRuns += 1;
+        return {
+          schemaVersion: 1,
+          cache: {
+            schemaVersion: 1,
+            generatedAt: new Date().toISOString(),
+            roles: [],
+            files: []
+          },
+          scan: { hashedFiles: 0, reusedFiles: 0, completedAt: new Date().toISOString() }
+        };
+      }
+    }
+  );
+  t.after(() => index.stop());
+
+  await index.start();
+  await waitFor(() => workerRuns >= 2, 1_000);
+
+  assert.equal(watchCalls, 0);
+  assert.equal(index.status().watchMode, "worker_poll");
+  assert.equal(index.status().state, "ready");
+  assert.equal(index.status().error, undefined);
+  assert.equal(index.status().publication.state, "ready");
+  assert.equal(index.status().publication.stale, false);
+  assert.equal(events.some(event => event.kind === "watch_unavailable"), false);
+  assert.ok(workerRuns >= 2);
 });

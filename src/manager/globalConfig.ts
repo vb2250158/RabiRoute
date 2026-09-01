@@ -37,15 +37,29 @@ export type RabiLinkRelayGlobalConfig = {
 export class RabiGlobalConfigStore {
   readonly rootDir: string;
   readonly configPath: string;
+  private current: RabiGlobalConfig;
 
   constructor(rootDir: string) {
     this.rootDir = rootDir;
     this.configPath = path.join(rootDir, "data", "Config.json");
+    this.current = this.loadOrCreate();
   }
 
   read(): RabiGlobalConfig {
+    return cloneGlobalConfig(this.current);
+  }
+
+  reload(): RabiGlobalConfig {
+    const reloaded = this.readExisting();
+    if (reloaded) {
+      this.current = freezeGlobalConfig(reloaded);
+    }
+    return this.read();
+  }
+
+  private loadOrCreate(): RabiGlobalConfig {
     const current = this.readExisting();
-    if (current) return current;
+    if (current) return freezeGlobalConfig(current);
 
     const now = new Date().toISOString();
     const created: RabiGlobalConfig = {
@@ -57,8 +71,8 @@ export class RabiGlobalConfigStore {
       createdAt: now,
       updatedAt: now
     };
-    this.write(created);
-    return created;
+    this.persist(created);
+    return freezeGlobalConfig(created);
   }
 
   patch(patch: Partial<Pick<RabiGlobalConfig, "rabiName">> & {
@@ -66,7 +80,7 @@ export class RabiGlobalConfigStore {
     webguiLan?: Partial<WebguiLanAccessConfig>;
     performance?: Partial<PerformanceMonitoringConfig>;
   }): RabiGlobalConfig {
-    const current = this.read();
+    const current = this.current;
     const next: RabiGlobalConfig = {
       ...current,
       rabiName: typeof patch.rabiName === "string" && patch.rabiName.trim()
@@ -83,8 +97,9 @@ export class RabiGlobalConfigStore {
         : current.performance,
       updatedAt: new Date().toISOString()
     };
-    this.write(next);
-    return next;
+    this.persist(next);
+    this.current = freezeGlobalConfig(next);
+    return this.read();
   }
 
   private readExisting(): RabiGlobalConfig | null {
@@ -110,7 +125,7 @@ export class RabiGlobalConfigStore {
         || normalized.createdAt !== parsed.createdAt
         || normalized.updatedAt !== parsed.updatedAt
       ) {
-        this.write(normalized);
+        this.persist(normalized);
       }
       return normalized;
     } catch {
@@ -118,10 +133,27 @@ export class RabiGlobalConfigStore {
     }
   }
 
-  private write(config: RabiGlobalConfig): void {
+  private persist(config: RabiGlobalConfig): void {
     fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
     fs.writeFileSync(this.configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
+}
+
+function cloneGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
+  return {
+    ...config,
+    rabiLinkRelay: { ...config.rabiLinkRelay },
+    webguiLan: { ...config.webguiLan },
+    performance: { ...config.performance }
+  };
+}
+
+function freezeGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
+  const snapshot = cloneGlobalConfig(config);
+  Object.freeze(snapshot.rabiLinkRelay);
+  Object.freeze(snapshot.webguiLan);
+  Object.freeze(snapshot.performance);
+  return Object.freeze(snapshot);
 }
 
 function normalizeNumber(value: unknown, fallback: number, min: number, max: number): number {

@@ -107,6 +107,10 @@ import {
   type AgentSendRequest,
   type AgentSendResult
 } from "../agentSend.js";
+import type {
+  AgentPlanFeedbackSubmitRequest,
+  AgentPlanFeedbackSubmitResult
+} from "../outbox.js";
 import { evaluateAgentSendLanguageStyle } from "../agentSendLanguageStyle.js";
 import { agentSendRequestTemplateForSource } from "../agentSendTemplate.js";
 import { assertAgentSendPermission } from "./agentSendPermission.js";
@@ -137,8 +141,9 @@ import {
 import { normalizePipelineDefinition, type PipelineDefinition } from "../pipelines.js";
 import {
   normalizeRolePanelAttachments,
-  readRolePanelTimeline,
-  type RolePanelAttachment
+  type RolePanelAttachment,
+  type RolePanelTimelineAppendResult,
+  type RolePanelTimelineMessage
 } from "../rolePanelTimeline.js";
 import {
   DEFAULT_CODEX_HOOK_SETTINGS,
@@ -199,13 +204,18 @@ import {
 } from "../shared/routeIdentity.js";
 import {
   adapterConfigPath as resolveAdapterConfigPath,
+  roleFilePath,
   roleFolderPath,
   routeFolderPath,
   personaConfigPath as resolvePersonaConfigPath
 } from "../shared/routePaths.js";
 import { ManagerConfigRepository, type ManagerConfig } from "./configRepository.js";
-import { collectWatchedConfigFiles, configFilesSnapshot } from "./configWatchSnapshot.js";
-import { configWatchDirectoryRules, configWatchEventMatches } from "./configWatchPolicy.js";
+import {
+  ManagerWatchBroker,
+  disabledManagerWatchBrokerStatus,
+  publicManagerWatchBrokerStatus,
+  type ManagerWatchBrokerStatus
+} from "./managerWatchBroker.js";
 import { resolveCodexRuntimeState } from "./codexRuntimeState.js";
 import { resolveReportedCodexBindingUpdate } from "./codexBindingUpdate.js";
 import { proxySpeechEventStream } from "./speechEventProxy.js";
@@ -228,6 +238,7 @@ import {
   GenerationRuntime,
   loadPluginProfile,
   PluginPackageCatalog,
+  selectReadyPluginCandidates,
   type HostService,
   type LoadedPluginProfile
 } from "../plugin-kernel/index.js";
@@ -250,6 +261,7 @@ import { XiaomiHomeArtifactStore } from "../integrations/xiaomiHome/artifactStor
 import { XiaomiHomeEventMonitor } from "../integrations/xiaomiHome/eventMonitor.js";
 import { XiaomiHomeClipCaptureWorker } from "../integrations/xiaomiHome/clipCapture.js";
 import { XiaomiHomeArtifactAccess } from "../integrations/xiaomiHome/artifactAccess.js";
+import { XiaomiHomeRuntimeController, XiaomiHomeSettingsStore } from "../integrations/xiaomiHome/settingsRuntime.js";
 import { createXiaomiHomeManagerRouteHandler } from "../integrations/xiaomiHome/managerRoutes.js";
 import type { XiaomiHomeEvent, XiaomiHomeEventDeliveryContext } from "../xiaomiHomeEventDelivery.js";
 import { createDiagnosticsRoutes } from "./diagnosticsRoutes.js";
@@ -299,12 +311,14 @@ import {
   type PlanApprovalFeedbackTaskRequest
 } from "./planApprovalFeedbackDelivery.js";
 import {
-  recoverPlanFeedbackCandidate,
+  recoverPlanFeedbackCandidate as recoverPlanFeedbackCandidateBase,
+  type PlanFeedbackDeliveryInspection,
+  type PlanFeedbackRecoveryCandidate,
+  type PlanFeedbackRecoveryOutcome,
   type PlanFeedbackRecoveryTaskRequest
 } from "./planFeedbackRecovery.js";
 import {
   reconcilePlanSecretaryBindingsForWorkspace,
-  resolvePlanSecretaryAssignment,
   type PlanSecretaryTarget
 } from "./planSecretaryAssignment.js";
 import {
@@ -312,14 +326,37 @@ import {
   type ManualTriggerLaunchResult
 } from "./manualTriggerProcess.js";
 import {
+  DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS,
+  ManagerRuntimeOwner
+} from "./managerRuntimeOwner.js";
+import {
   MemoryConsolidationScheduler,
   type DueMemoryConsolidationRun,
   type MemoryConsolidationScheduleTarget
 } from "./memoryConsolidationScheduler.js";
+import { memoryConsolidationFailureDiagnostic } from "./memoryConsolidationDiagnostics.js";
 import { evaluateMemoryConsolidationSchedule } from "./memoryConsolidationScheduleWorkerClient.js";
-import { migrateRolePlanLayoutInWorker } from "./rolePlanLayoutMigrationWorkerClient.js";
-import { consumePlanQaFeedback, type PlanQaTaskRequest } from "./planQaFeedback.js";
-import { replacementPlanTaskBinding } from "./planTaskBindingDelivery.js";
+import { canonicalLogicalPlanId } from "../planStorageIdentity.js";
+import {
+  PlanStorageStartupLifecycle,
+  type PlanStorageStartupLifecycleSnapshot
+} from "./planStorageStartupLifecycle.js";
+import {
+  RouteCatalogOperationError,
+  RouteCatalogStartupLifecycle,
+  type RouteCatalogStartupLifecycleSnapshot
+} from "./routeCatalogStartupLifecycle.js";
+import { routeCatalogStartupUnavailable } from "./routeCatalogStartupHttpGate.js";
+import type { RouteCatalogPersonaPresentation, RouteCatalogSnapshot } from "./routeCatalogTransaction.js";
+import {
+  planStorageStartupUnavailable,
+  publicPlanStorageStartupSnapshot
+} from "./planStorageStartupHttpGate.js";
+import {
+  consumePlanQaFeedback,
+  type PlanQaStoragePort,
+  type PlanQaTaskRequest
+} from "./planQaFeedback.js";
 import { handlePlanAgentStatusApi } from "./planAgentStatusRoutes.js";
 import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
 import { parseWearableHealthResourceRoute } from "./wearableHealthRoute.js";
@@ -370,9 +407,30 @@ import {
   managerPerformanceWorkerPool,
   managerReadWorkerPool
 } from "./managerReadWorkerPool.js";
+import {
+  RoleStorageApplication,
+  RoleStorageApplicationError,
+  roleStorageHttpError,
+  roleStorageOperationKey,
+  type RoleStorageCommandContext,
+  type RoleStoragePlanFeedbackProjection
+} from "./roleStorageApplication.js";
+import {
+  ensurePlanSecretaryBindingForEvent,
+  replacePlanSecretaryBindingForEvent,
+  replacePlanTaskBindingForDelivery
+} from "./planBindingStorageMutation.js";
+import {
+  captureGatewayDiagnosticsWorkerInput,
+  GatewayDiagnosticsSnapshotService,
+  memoryOnlyGatewayRuntimeStatus,
+  type GatewayDiagnosticsWorkerInput,
+  type GatewayDiagnosticsWorkerResult
+} from "./gatewayDiagnosticsSnapshot.js";
+import { buildIsolatedGatewayDiagnosticsSnapshot } from "./gatewayDiagnosticsSnapshotWorker.js";
 import { handlePersonaMessagingApi } from "./personaMessagingRoutes.js";
-import { PersonaCatalog } from "./personaCatalog.js";
 import { loadPersonaMessageAuthority, type PersonaMessageAuthority } from "./personaMessageAuthority.js";
+import { handleRoleContextProjectionRequest } from "./roleContextProjection.js";
 import { deliverRolePanelMessage, RolePanelDeliveryError } from "./rolePanelDelivery.js";
 import { hostOwnedSpeechMessageCommand } from "./speechMessageIngress.js";
 import {
@@ -422,29 +480,23 @@ import type { LocalSpeechResponse } from "../speech/localSpeechClient.js";
 import { standaloneGatewayPayload as buildStandaloneGatewayPayload } from "./statusPayload.js";
 import { handlePersonaDocumentApi } from "./personaDocumentRoutes.js";
 import {
-  applyMemoryConsolidationResult,
-  createPlan,
-  createRecentMemory,
   getPlan,
+  getPublishedPlan,
   getRoleSkill,
   listConsolidationRuns,
   listPlanHistory,
-  planAcceptsGuidance,
   listPlans,
   listPlansAsync,
   listRecentMemories,
   listRoleSkills,
-  markMemoryConsolidationRunDelivered,
-  nextMemoryConsolidationTriggerAt,
-  pendingMemoryConsolidation,
   presentRoleMemory,
   presentRoleMemories,
-  roleKnowledgeSnapshot,
+  publishedRolePlans,
+  roleKnowledgeSnapshotFromPublishedCatalog,
   roleKnowledgeFileCounts,
   subscribePlanUpdates,
   type PlanItem,
-  updatePlan,
-  updateRecentMemory,
+  validatePublishedRoleKnowledge,
   validateRoleKnowledge
 } from "../roleKnowledge.js";
 import { presentPlan, presentPlans } from "../roleKnowledgePresentation.js";
@@ -457,19 +509,12 @@ import {
 } from "../roleKnowledgePagination.js";
 import { verifyCriticalProjectFactRecord } from "../messageProcessing/criticalFactRecord.js";
 import {
-  appendPlanFeedback,
-  createPlanFeedbackRecord,
-  listPlanFeedback,
   planFeedbackResponseId,
-  planFeedbackAttachmentsEqual,
-  planFeedbackPlanAttachmentsEqual,
   planFeedbackSummary,
-  resolvePlanFeedbackPlanAttachments,
-  storePlanFeedbackAttachments,
-  updatePlanFeedbackDelivery,
+  type PlanFeedbackDeliveryStatus,
+  type PlanFeedbackPostCommit,
   type PlanFeedbackRecord
 } from "../planFeedback.js";
-import { resolvePlanAttachmentFile } from "../planAttachments.js";
 import {
   PLAN_FEEDBACK_REQUEST_MAX_BYTES,
   type PlanFeedbackAttachmentUpload
@@ -729,8 +774,7 @@ function planMessageSource(
   planNameInput: unknown,
   sourceAgent?: AgentMessageSource
 ): RabiMessageSource {
-  const planId = String(planIdInput || "").trim();
-  if (!planId) throw new Error("Plan message source requires planId.");
+  const planId = canonicalLogicalPlanId(planIdInput);
   const planName = String(planNameInput || "").trim();
   if (!planName) throw new Error("Plan message source requires planName.");
   const { type: _type, ...agentIdentity } = sourceAgent || {} as AgentMessageSource;
@@ -762,11 +806,13 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
   if (target && runtimeForMessageProcessingTarget(target)?.definition.id === runtime.definition.id) return true;
   const roleId = roleIdForDefinition(runtime.definition);
   if (!roleId) return false;
-  try {
-    return listPlans(roleDirForApi(roleId)).some((plan) => plan.taskBinding?.sessionId === id || plan.secretaryBinding?.sessionId === id);
-  } catch {
+  const roleDir = roleDirForApi(roleId);
+  const plans = publishedRolePlans(roleDir);
+  if (!plans) {
+    requestRoleKnowledgeCatalogRefresh(roleDir);
     return false;
   }
+  return plans.some((plan) => plan.taskBinding?.sessionId === id || plan.secretaryBinding?.sessionId === id);
 }
 
 function runtimeForAgentThreadRequest(request: AgentThreadRequest): GatewayRuntime | undefined {
@@ -863,6 +909,32 @@ let managerLanDiscoveryStatus: ManagerDiscoveryStatus = Object.freeze({
   state: "disabled",
   serviceType: "_rabiroute._tcp.local"
 });
+type ActiveStorageLifecycleGeneration = Readonly<{
+  roleStorage: RoleStorageApplication;
+  planStorage: PlanStorageStartupLifecycle;
+  routeCatalog: RouteCatalogStartupLifecycle;
+  requestHandler: http.RequestListener;
+}>;
+
+let activeStorageLifecycleGeneration: ActiveStorageLifecycleGeneration | undefined;
+
+function planStorageStartupStatus(): PlanStorageStartupLifecycleSnapshot {
+  return activeStorageLifecycleGeneration?.planStorage.snapshot() ?? Object.freeze({
+    state: "idle",
+    attempt: 0,
+    incidents: 0,
+    lastTransitionAt: new Date().toISOString()
+  });
+}
+
+function routeCatalogStartupStatus(): RouteCatalogStartupLifecycleSnapshot {
+  return activeStorageLifecycleGeneration?.routeCatalog.snapshot() ?? Object.freeze({
+    state: "idle",
+    attempt: 0,
+    incidents: 0,
+    lastTransitionAt: new Date().toISOString()
+  });
+}
 const managerHttpLimits = {
   requestTimeoutMs: 30_000,
   headersTimeoutMs: 10_000,
@@ -1055,12 +1127,13 @@ function writeManagerConfig(cfg: ManagerConfig): void {
   configRepository.writeManagerConfig(cfg);
   routeRoot = configRepository.routeRoot;
   rolesRoot = configRepository.rolesRoot;
-  personaCatalog.invalidate();
 }
 
 let rolesRoot = configRepository.rolesRoot;
 let routeRoot = configRepository.routeRoot;
-const personaCatalog = new PersonaCatalog();
+let routeCatalogConfig: GatewayConfigFile = { gateways: [] };
+let routeCatalogPersonaPresentations: readonly RouteCatalogPersonaPresentation[] = Object.freeze([]);
+let roleKnowledgeCatalogsReady = false;
 let personaMessageAuthority: PersonaMessageAuthority | undefined;
 const messageProcessingSendContextReview = new MessageProcessingSendContextReview({
   getRequirement: (requirementId) => messageProcessingBoard.getRequirement(requirementId),
@@ -1089,7 +1162,8 @@ const codexHookContextService = new CodexHookContextService({
   isManagedAgentSession,
   recordAgentRequestStop,
   findPangHuProgressIssue,
-  deliverPangHuProgressNotification
+  deliverPangHuProgressNotification,
+  planStorageReady: () => planStorageStartupStatus().state === "ready"
 });
 const languageStyleValidator = new LanguageStyleValidator();
 const fenneNotePlaybackUrl = process.env.FENNOTE_PLAYBACK_URL?.trim() ?? "";
@@ -1108,7 +1182,13 @@ const planTaskCompletionDelivery = createPlanTaskCompletionDelivery<GatewayRunti
   listRuntimes: () => [...runtimes.values()],
   roleIdForDefinition,
   triggerRolePanelMessage: triggerGatewayRolePanelMessage,
-  assignSecretary: (runtime, delivery) => ensurePlanSecretaryTarget(runtime, delivery.roleDir, delivery.plan).target,
+  appendTimeline: appendRolePanelTimeline,
+  assignSecretary: async (runtime, delivery) => (await ensurePlanSecretaryTarget(
+    runtime,
+    delivery.roleId,
+    delivery.plan,
+    `completion:${delivery.sourceSessionId}:${delivery.sourceTurnId}`
+  )).target,
   sendToSecretary: sendPlanTaskCompletionToSecretary,
   publishEvent: publishManagerEvent
 });
@@ -1123,6 +1203,8 @@ const personaSyncService = new PersonaSyncService(
     readOnly: managerReadOnly,
     watch: managerShouldAutostart,
     reconcileOnQueryFallback: !managerReadOnly,
+    scanExecutionMode: managerReadOnly ? "inline" : "child_process",
+    autoStart: !managerReadOnly,
     onEvent: event => {
       publishManagerEvent("persona_sync_manifest_changed", event);
       personaSyncAutoReconciler?.noteManifestEvent(event);
@@ -1164,6 +1246,7 @@ function personaSyncRouteContext(controlPlaneAuthorized = false): PersonaSyncRou
       )),
     readOnlySnapshot: managerReadOnly,
     controlPlaneAuthorized,
+    planStorageStartup: planStorageStartupStatus,
     token: () => rabiLinkRelayConfigForMeta().token,
     relay: () => {
       const config = rabiGlobalConfig.read();
@@ -1185,7 +1268,7 @@ const selectionSpeechSettings = new SelectionSpeechSettingsStore(selectionSpeech
 const desktopSettings = new DesktopSettingsStore(desktopSettingsPath(rootDir));
 const speechControl = new ManagerSpeechControl({
   serviceUrl: () => speechServiceUrl(),
-  rolesRoot: () => rolesRoot,
+  personas: routeCatalogPersonas,
   route: (routeId) => {
     const runtime = runtimes.get(routeId);
     return runtime
@@ -1223,6 +1306,8 @@ const remoteAgentToken = process.env.REMOTE_AGENT_TOKEN?.trim() || "";
 let remoteAgentHub: RemoteAgentHub | undefined;
 let agentAdapterCatalogService: AgentAdapterCatalogService | undefined;
 let watchedConfigSnapshot = "";
+let configWatchLifecycle: ManagerWatchBrokerStatus = disabledManagerWatchBrokerStatus();
+let pluginPackageWatchLifecycle: ManagerWatchBrokerStatus = disabledManagerWatchBrokerStatus();
 
 function headerValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
@@ -1266,103 +1351,64 @@ function definitionFingerprint(definition: GatewayDefinition): string {
   return JSON.stringify(definition);
 }
 
-function ensureDataDirs(): void {
-  configRepository.ensureDataDirs();
-  routeRoot = configRepository.routeRoot;
-  rolesRoot = configRepository.rolesRoot;
+function routeCatalogMutationFailure(
+  error: unknown
+): Error & { statusCode: number; code: string } {
+  const conflict = error instanceof RouteCatalogOperationError
+    && error.code === "ROUTE_CATALOG_REVISION_CONFLICT";
+  return Object.assign(new Error(conflict
+    ? "Route catalog changed; refresh and retry this update."
+    : "Route catalog update is temporarily unavailable."), {
+    statusCode: conflict ? 409 : 503,
+    code: conflict ? "route_catalog_conflict" : "route_catalog_unavailable",
+    cause: error
+  });
+}
+
+function routeCatalogVersion(): Readonly<{
+  contentHash: string;
+  routeConfigHash: string;
+  presentationHash: string;
+  revision: number;
+}> {
+  const snapshot = routeCatalogStartupStatus();
+  return Object.freeze({
+    // Compatibility: public contentHash remains the route mutation CAS token.
+    contentHash: snapshot.routeConfigHash ?? "",
+    routeConfigHash: snapshot.routeConfigHash ?? "",
+    presentationHash: snapshot.presentationHash ?? "",
+    revision: snapshot.revision ?? 0
+  });
+}
+
+function routeCatalogPersonas(): RouteCatalogSnapshot["personas"] {
+  return routeCatalogPersonaPresentations;
+}
+
+function requireRouteCatalogLifecycle(): RouteCatalogStartupLifecycle {
+  if (!activeStorageLifecycleGeneration) {
+    throw routeCatalogMutationFailure(new Error("Route catalog lifecycle is unavailable."));
+  }
+  return activeStorageLifecycleGeneration.routeCatalog;
+}
+
+async function ensureDataDirs(): Promise<void> {
+  try {
+    await requireRouteCatalogLifecycle().recapture();
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
+  }
 }
 
 function readConfig(): GatewayConfigFile {
-  if (managerReadOnly) {
-    routeRoot = configRepository.routeRoot;
-    rolesRoot = configRepository.rolesRoot;
-    if (!fs.existsSync(routeRoot)) return { gateways: [] };
-  } else {
-    ensureDataDirs();
-  }
-  const gateways: GatewayDefinition[] = [];
-  for (const routeEntry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
-    if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) {
-      continue;
-    }
-    const configName = sanitizeRoleId(routeEntry.name);
-    const configPath = adapterConfigPath(configName);
-    if (!fs.existsSync(configPath)) {
-      continue;
-    }
-    const raw = JSON.parse(fs.readFileSync(configPath, "utf8")) as Partial<GatewayDefinition>;
-    const personaConfig = readRoleMessageConfigItem(raw.agentRoleId, configName);
-    gateways.push({
-      ...raw,
-      ...personaConfig,
-      id: configName,
-      configName,
-      agentRoleId: raw.agentRoleId,
-      rolesDir: raw.rolesDir,
-      agentRoleFile: raw.agentRoleFile
-    } as GatewayDefinition & { configName: string });
-  }
-  return { gateways };
+  return structuredClone(routeCatalogConfig);
 }
 
-async function readConfigAsync(): Promise<GatewayConfigFile> {
-  if (managerReadOnly) {
-    routeRoot = configRepository.routeRoot;
-    rolesRoot = configRepository.rolesRoot;
-    try {
-      await fs.promises.access(routeRoot);
-    } catch {
-      return { gateways: [] };
-    }
-  } else {
-    await configRepository.ensureDataDirsAsync();
-    routeRoot = configRepository.routeRoot;
-    rolesRoot = configRepository.rolesRoot;
-  }
-  const gateways: GatewayDefinition[] = [];
-  for (const routeEntry of await fs.promises.readdir(routeRoot, { withFileTypes: true })) {
-    if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) continue;
-    const configName = sanitizeRoleId(routeEntry.name);
-    const configPath = adapterConfigPath(configName);
-    try {
-      const raw = JSON.parse(await fs.promises.readFile(configPath, "utf8")) as Partial<GatewayDefinition>;
-      const personaConfig = await configRepository.readRoleMessageConfigAsync(raw.agentRoleId);
-      gateways.push({
-        ...raw,
-        ...personaConfig,
-        id: configName,
-        configName,
-        agentRoleId: raw.agentRoleId,
-        rolesDir: raw.rolesDir,
-        agentRoleFile: raw.agentRoleFile
-      } as GatewayDefinition & { configName: string });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
-    }
-  }
-  return { gateways };
-}
-
-function removeConfigFilesMissingFrom(activeConfigNames: Set<string>): void {
-  ensureDataDirs();
-  for (const routeEntry of fs.readdirSync(routeRoot, { withFileTypes: true })) {
-    if (!routeEntry.isDirectory() || !sanitizeRoleId(routeEntry.name)) {
-      continue;
-    }
-    const configName = sanitizeRoleId(routeEntry.name);
-    if (!configName || activeConfigNames.has(configName)) {
-      continue;
-    }
-    const configPath = adapterConfigPath(configName);
-    if (fs.existsSync(configPath)) {
-      try { fs.unlinkSync(configPath); } catch { /* non-fatal */ }
-    }
-  }
-}
-
-function removeGatewayConfig(id: string): void {
-  ensureDataDirs();
+async function removeGatewayConfig(
+  id: string,
+  expectedContentHash: string | undefined,
+  operationId: string
+): Promise<void> {
   const decodedId = decodeURIComponent(id);
   const runtime = runtimes.get(decodedId);
   const configName = runtime
@@ -1371,14 +1417,18 @@ function removeGatewayConfig(id: string): void {
   if (!configName) {
     throw new Error(`Invalid gateway id: ${decodedId}`);
   }
-  const configPath = adapterConfigPath(configName);
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`Gateway config not found: ${decodedId}`);
+  try {
+    await requireRouteCatalogLifecycle().remove(configName, expectedContentHash, operationId);
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
   }
-  fs.unlinkSync(configPath);
 }
 
-function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
+async function writeConfig(
+  config: GatewayConfigFile,
+  expectedContentHash: string | undefined,
+  operationId: string
+): Promise<GatewayConfigFile> {
   if (!Array.isArray(config.gateways)) {
     throw new Error("routes must be an array");
   }
@@ -1386,46 +1436,12 @@ function writeConfig(config: GatewayConfigFile): GatewayConfigFile {
   const normalized = { gateways: config.gateways.map(normalizeDefinition) };
   sharedAutoAssignGatewayPorts(normalized.gateways, managerPort);
   sharedValidateGatewayPortConflicts(normalized.gateways);
-  const grouped = new Map<string, GatewayDefinition[]>();
-  const activeConfigNames = new Set<string>();
-  for (let i = 0; i < normalized.gateways.length; i++) {
-    const item = normalized.gateways[i];
-    const rawItem = config.gateways[i];
-    const roleId = sanitizeRoleId(item.agentRoleId) || routeRuntimeParts(item.id).roleId;
-    const configName = sanitizeConfigName(item.configName) || routeRuntimeParts(item.id).configName;
-    activeConfigNames.add(configName);
-    grouped.set(roleId, [...(grouped.get(roleId) ?? []), item]);
-    // Rename data dir if configName changed (look up existing runtime by original/raw id)
-    const existingRuntime = runtimes.get(rawItem.id) ?? runtimes.get(item.id);
-    if (existingRuntime) {
-      const oldDataDir = dataDirFor(existingRuntime.definition);
-      const newDataDir = dataDirFor(item);
-      if (oldDataDir !== newDataDir && fs.existsSync(oldDataDir)) {
-        try {
-          fs.mkdirSync(path.dirname(newDataDir), { recursive: true });
-          fs.renameSync(oldDataDir, newDataDir);
-        } catch {
-          // Non-fatal: folder rename failed (e.g. cross-drive), data stays at old location
-        }
-      }
-      // Remove old config file if id (configName) changed
-      const oldConfigName = routeRuntimeParts(existingRuntime.definition.id).configName;
-      if (oldConfigName !== configName) {
-        const oldConfigPath = adapterConfigPath(oldConfigName);
-        if (fs.existsSync(oldConfigPath)) {
-          try { fs.unlinkSync(oldConfigPath); } catch { /* non-fatal */ }
-        }
-      }
-    }
-    writeAdapterConfigFile(item);
+  try {
+    await requireRouteCatalogLifecycle().replace(normalized, expectedContentHash, operationId);
+    return readConfig();
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
   }
-  for (const [roleId, items] of grouped.entries()) {
-    if (roleId) {
-      writePersonaConfigFile(roleId, items);
-    }
-  }
-  removeConfigFilesMissingFrom(activeConfigNames);
-  return normalized;
 }
 
 function normalizeDefinition(definition: GatewayDefinition): GatewayDefinition {
@@ -1642,14 +1658,25 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
   }
 }
 
-function writeAdapterConfigFile(definition: GatewayDefinition): void {
-  const configName = sanitizeConfigName(definition.configName) || routeRuntimeParts(definition.id).configName;
-  const configPath = adapterConfigPath(configName);
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(adapterConfigItem(definition), null, 2), "utf8");
+async function writeAdapterConfigFile(definition: GatewayDefinition): Promise<void> {
+  const desired = structuredClone(definition);
+  const committed = readConfig().gateways.find(item => item.id === desired.id);
+  const live = runtimes.get(desired.id);
+  if (committed && live?.definition === definition) {
+    live.definition = structuredClone(committed);
+  }
+  try {
+    await requireRouteCatalogLifecycle().upsert(desired);
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
+  }
 }
 
-function backfillNapcatInstanceWebuiUrl(definition: GatewayDefinition, instanceId: string, webuiUrl: unknown): string | null {
+async function backfillNapcatInstanceWebuiUrl(
+  definition: GatewayDefinition,
+  instanceId: string,
+  webuiUrl: unknown
+): Promise<string | null> {
   const value = String(webuiUrl || "").trim();
   if (!value) return null;
   const instances = sharedNormalizeNapCatInstances(definition);
@@ -1662,7 +1689,7 @@ function backfillNapcatInstanceWebuiUrl(definition: GatewayDefinition, instanceI
     definition.napcatWebuiUrl = primary.webuiUrl;
     definition.napcatWebuiToken = primary.webuiToken ?? "";
   }
-  writeAdapterConfigFile(definition);
+  await writeAdapterConfigFile(definition);
   return value;
 }
 
@@ -1756,8 +1783,7 @@ async function addManagedNapcatInstance(
   definition.napcatWebuiUrl = primary.webuiUrl;
   definition.napcatAccessToken = primary.accessToken ?? "";
   definition.napcatWebuiToken = primary.webuiToken ?? "";
-  writeAdapterConfigFile(definition);
-  loadRuntimes();
+  await writeAdapterConfigFile(definition);
 
   steps.push("正在执行启动命令...");
   const launchResult = await launchNapcatInstanceEndpoint(context, { gatewayId, instanceId: id });
@@ -1811,8 +1837,7 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
     botUserId: existing?.botUserId
   });
   if (!existing) {
-    writeAdapterConfigFile(runtime.definition);
-    loadRuntimes();
+    await writeAdapterConfigFile(runtime.definition);
     return {
       ok: true,
       message: "已关闭并忽略扫描发现的 NapCat 实例。",
@@ -1839,8 +1864,7 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
     runtime.definition.napcatAccessToken = "";
     runtime.definition.napcatWebuiToken = "";
   }
-  writeAdapterConfigFile(runtime.definition);
-  loadRuntimes();
+  await writeAdapterConfigFile(runtime.definition);
   return {
     ok: true,
     message: "已停止并移除 NapCat 实例。",
@@ -1848,46 +1872,47 @@ async function removeManagedNapcatInstance(request: NapcatRemoveRequest): Promis
   };
 }
 
-function readRoleMessageConfigShared(roleId: string | undefined): Partial<GatewayDefinition> {
-  return configRepository.readRoleMessageConfig(roleId) as Partial<GatewayDefinition>;
-}
-
-function readRoleMessageConfigItem(roleId: string | undefined, _configName: string): Partial<GatewayDefinition> {
-  return readRoleMessageConfigShared(roleId);
-}
-
-function writePersonaConfigFile(roleId: string, items: GatewayDefinition[]): void {
-  // Persona fields have one owner even when several Routes bind the same persona.
-  const source = items.find(item => Array.isArray(item.notificationRules) && item.notificationRules.length > 0) ?? items[0];
-  configRepository.writePersonaConfig(roleId, {
-    automationRules: source?.automationRules,
-    notificationRules: source?.notificationRules,
-    recentMessageLimits: source?.recentMessageLimits,
-    speechTriggerKeywords: source?.speechTriggerKeywords,
-    languageStyle: source?.languageStyle
-  });
-}
-
-function ensurePersonaConfigFile(roleId: string): string {
+async function ensurePersonaConfigFile(roleId: string): Promise<string> {
   const configPath = personaConfigPath(roleId);
-  if (!fs.existsSync(configPath)) {
-    const safeRoleId = sanitizeRoleId(roleId);
-    configRepository.writePersonaConfig(safeRoleId, { notificationRules: [] });
+  try {
+    await requireRouteCatalogLifecycle().ensurePersona(roleId);
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
   }
-
   return configPath;
 }
 
+async function ensureRoleFile(roleId: string, roleFile: string): Promise<string> {
+  const target = roleFilePath(rolesRoot, roleId, roleFile);
+  try {
+    await requireRouteCatalogLifecycle().ensureRoleFile(roleId, roleFile);
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
+  }
+  return target;
+}
+
+async function ensureRoleFolder(roleId: string): Promise<string> {
+  const target = roleFolderPath(rolesRoot, roleId);
+  try {
+    await requireRouteCatalogLifecycle().ensureRoleFolder(roleId);
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
+  }
+  return target;
+}
+
 async function reconcilePersistedPlanSecretaryWorkspaces(): Promise<void> {
-  const ownerByRoleDir = new Map<string, { roleDir: string; workspace: string; conflicting: boolean }>();
+  const ownerByRoleDir = new Map<string, { roleDir: string; roleId: string; workspace: string; conflicting: boolean }>();
   for (const runtime of runtimes.values()) {
     const workspace = runtime.definition.codexCwd?.trim();
     if (!workspace) continue;
     const roleDir = roleDirForDefinition(runtime.definition);
+    const roleId = roleIdForDefinition(runtime.definition);
     const key = path.resolve(roleDir).toLowerCase();
     const existing = ownerByRoleDir.get(key);
     if (!existing) {
-      ownerByRoleDir.set(key, { roleDir, workspace, conflicting: false });
+      ownerByRoleDir.set(key, { roleDir, roleId, workspace, conflicting: false });
       continue;
     }
     if (!sameCodexWorkspace(existing.workspace, workspace)) existing.conflicting = true;
@@ -1899,11 +1924,30 @@ async function reconcilePersistedPlanSecretaryWorkspaces(): Promise<void> {
       continue;
     }
     try {
+      const plans = (await currentRoleStorageApplication().queries.recaptureCatalog(
+        owner.roleId,
+        { timeoutMs: 30_000 }
+      )).plans;
+      const stalePlanIds: string[] = [];
       reconcilePlanSecretaryBindingsForWorkspace(
-        await listPlansAsync(owner.roleDir),
+        plans,
         owner.workspace,
-        (planId) => { updatePlan(owner.roleDir, planId, { secretaryBinding: null }); }
+        (planId) => { stalePlanIds.push(planId); }
       );
+      for (const planId of stalePlanIds) {
+        const projection = await currentRoleStorageApplication().queries.plan(owner.roleId, planId, { timeoutMs: 30_000 });
+        if (!projection) continue;
+        await currentRoleStorageApplication().commands.updatePlanSecretaryBinding(owner.roleId, planId, null, {
+          idempotencyKey: roleStorageOperationKey(
+            "workspace-reconcile",
+            owner.workspace,
+            planId,
+            projection.revision
+          ),
+          expectedRevision: projection.revision,
+          timeoutMs: 30_000
+        });
+      }
     } catch (error) {
       console.warn(`Plan secretary workspace reconciliation failed for ${owner.roleDir}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1949,20 +1993,45 @@ const gatewayRuntimeService = new ManagerGatewayRuntimeService<GatewayDefinition
   }
 });
 
-function loadRuntimes(): void {
-  gatewayRuntimeService.load();
-  memoryConsolidationScheduler?.reschedule();
-  reconcileMessageProcessingAgentRequests();
+async function loadRuntimes(): Promise<void> {
+  try {
+    await requireRouteCatalogLifecycle().recapture();
+  } catch (error) {
+    throw routeCatalogMutationFailure(error);
+  }
 }
 
-async function loadRuntimesAsync(): Promise<void> {
-  gatewayRuntimeService.loadDefinitions((await readConfigAsync()).gateways);
-  memoryConsolidationScheduler?.reschedule();
+function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot): void {
+  if (
+    normalizePathForComparison(snapshot.routeRoot) !== normalizePathForComparison(routeRoot)
+    || normalizePathForComparison(snapshot.rolesRoot) !== normalizePathForComparison(rolesRoot)
+  ) {
+    throw new Error("Route catalog snapshot roots no longer match the active Manager configuration.");
+  }
+  const normalized = snapshot.gateways.map(definition => normalizeDefinition(
+    structuredClone(definition) as GatewayDefinition
+  ));
+  const ids = new Set<string>();
+  for (const definition of normalized) {
+    if (ids.has(definition.id)) throw new Error(`Duplicate route catalog id: ${definition.id}`);
+    ids.add(definition.id);
+  }
+  sharedValidateGatewayPortConflicts(normalized);
+  gatewayRuntimeService.loadDefinitions(normalized);
+  routeCatalogConfig = { gateways: structuredClone(normalized) };
+  routeCatalogPersonaPresentations = Object.freeze(snapshot.personas.map(item => Object.freeze({
+    ...structuredClone(item),
+    files: Object.freeze(item.files.map(file => Object.freeze({ ...file }))),
+    speech: Object.freeze({ ...item.speech })
+  })));
   reconcileMessageProcessingAgentRequests();
 }
 
 function syncRunningGateways(): void {
   if (!gatewayRuntimePluginLease.active) return;
+  if (planStorageStartupStatus().state !== "ready") return;
+  if (routeCatalogStartupStatus().state !== "ready") return;
+  if (!roleKnowledgeCatalogsReady) return;
   gatewayRuntimeService.reconcile();
 }
 
@@ -1975,8 +2044,9 @@ async function reloadChangedConfig(
     configRepository.refreshManagerConfig();
     routeRoot = configRepository.routeRoot;
     rolesRoot = configRepository.rolesRoot;
-    personaCatalog.invalidate();
-    await loadRuntimesAsync();
+    const routeCatalogLifecycle = activeStorageLifecycleGeneration?.routeCatalog;
+    if (!routeCatalogLifecycle) throw new Error("Route catalog lifecycle is unavailable.");
+    await routeCatalogLifecycle.recapture();
     await reconcilePersistedPlanSecretaryWorkspaces();
   } catch (error) {
     console.error(`Failed to reload gateway config ${reason}`, error);
@@ -1999,141 +2069,72 @@ async function reloadChangedConfig(
 
 }
 
-type ConfigWatcher = { close(): void };
-type PluginPackageWatcher = { close(): void };
+type ConfigWatcher = Pick<ManagerWatchBroker, "close">;
+type PluginPackageWatcher = Pick<ManagerWatchBroker, "close">;
 
 function startPluginPackageWatcher(
   directories: readonly string[],
   reconcile: (reason: string) => Promise<void>
 ): PluginPackageWatcher {
-  const watchers: fs.FSWatcher[] = [];
-  let timer: NodeJS.Timeout | undefined;
-  let closed = false;
-  const schedule = (): void => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = undefined;
-      if (closed) return;
-      void reconcile("plugin profile or bundle changed").catch(error => {
+  let initialized = false;
+  let snapshot = "";
+  const broker = new ManagerWatchBroker({
+    request: { kind: "plugin_tree", roots: directories },
+    debounceMs: 160,
+    onStatus: status => { pluginPackageWatchLifecycle = status; },
+    onSnapshot: async result => {
+      if (result.partial) {
+        console.warn(`Plugin watch snapshot is partial (${result.errors.length} unavailable path(s)); Manager remains online.`);
+      }
+      if (!initialized) {
+        initialized = true;
+        snapshot = result.snapshot;
+        return;
+      }
+      if (result.snapshot === snapshot) return;
+      snapshot = result.snapshot;
+      try {
+        await reconcile("plugin profile or bundle changed");
+      } catch (error) {
         console.warn("Plugin bundle reload failed; the active revision remains in service.", error);
-      });
-    }, 160);
-  };
-  for (const directory of directories) {
-    fs.mkdirSync(directory, { recursive: true });
-    try {
-      const watcher = fs.watch(directory, { recursive: true }, (_eventType, fileName) => {
-        const name = fileName?.toString().replace(/\\/g, "/") ?? "";
-        if (name.includes(".runtime") || name.endsWith(".tmp")) return;
-        schedule();
-      });
-      watcher.on("error", error => console.warn(`Plugin bundle watch failed for ${directory}:`, error));
-      watchers.push(watcher);
-    } catch (error) {
-      console.warn(`Unable to watch plugin bundle directory ${directory}:`, error);
+        throw error;
+      }
     }
-  }
-  return {
-    close(): void {
-      closed = true;
-      if (timer) clearTimeout(timer);
-      for (const watcher of watchers) watcher.close();
-    }
-  };
+  });
+  broker.start();
+  return broker;
 }
 
 function startConfigWatcher(
   reconcileManagerPlugins?: (reason: string) => Promise<void>,
   afterReload?: () => void | Promise<void>
 ): ConfigWatcher {
-  const watchers = new Map<string, { watcher: fs.FSWatcher; signature: string }>();
-  let debounceTimer: NodeJS.Timeout | null = null;
-  let closed = false;
   let initialized = false;
-  let refreshInFlight = false;
-  let refreshQueued = false;
-
-  const armDirectories = (files: string[]): void => {
-    const rules = configWatchDirectoryRules(routeRoot, rolesRoot, files);
-    for (const [directory, entry] of watchers) {
-      if (rules.has(directory)) continue;
-      entry.watcher.close();
-      watchers.delete(directory);
-    }
-    for (const [directory, rule] of rules) {
-      if (closed) continue;
-      const signature = `${rule.discovery}|${[...rule.fileNames].sort().join("|")}`;
-      const existing = watchers.get(directory);
-      if (existing?.signature === signature) continue;
-      existing?.watcher.close();
-      try {
-        const watcher = fs.watch(directory, (eventType, fileName) => {
-          if (!configWatchEventMatches(rule, eventType, fileName)) return;
-          if (debounceTimer) clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(() => {
-            debounceTimer = null;
-            if (closed) return;
-            void refreshSnapshot("after config file event");
-          }, 120);
-        });
-        watcher.on("error", error => console.warn(`Config watch failed for ${directory}:`, error));
-        watchers.set(directory, { watcher, signature });
-      } catch (error) {
-        console.warn(`Unable to watch config directory ${directory}:`, error);
+  const broker = new ManagerWatchBroker({
+    request: () => ({
+      kind: "config",
+      routeRoot,
+      rolesRoot,
+      operationTimeoutMs: 1_500,
+      explicitFiles: [configRepository.managerConfigPath]
+    }),
+    onStatus: status => { configWatchLifecycle = status; },
+    onSnapshot: async (result, reason) => {
+      if (result.partial) {
+        console.warn(`Config watch snapshot is partial (${result.errors.length} unavailable path(s)); Manager remains online.`);
       }
-    }
-  };
-
-  const refreshSnapshot = async (reason: string): Promise<void> => {
-    if (closed) return;
-    if (refreshInFlight) {
-      refreshQueued = true;
-      return;
-    }
-    refreshInFlight = true;
-    try {
-      const discovered = await collectWatchedConfigFiles({
-        routeRoot,
-        rolesRoot,
-        timeoutMs: 1500,
-        adapterConfigPath,
-        personaConfigPath,
-        explicitFiles: [configRepository.managerConfigPath],
-        includeDirectory: name => Boolean(sanitizeRoleId(name))
-      });
-      const snapshot = await configFilesSnapshot(discovered.files, 1500);
-      const partialErrors = [...discovered.errors, ...snapshot.errors];
-      if (partialErrors.length) {
-        console.warn(`Config watch snapshot is partial (${partialErrors.length} unavailable path(s)); Manager remains online.`);
-      }
-      if (initialized && snapshot.snapshot !== watchedConfigSnapshot) {
-        watchedConfigSnapshot = snapshot.snapshot;
+      if (initialized && result.snapshot !== watchedConfigSnapshot) {
+        watchedConfigSnapshot = result.snapshot;
         await reloadChangedConfig(reason, reconcileManagerPlugins, afterReload);
-        refreshQueued = true;
+        broker.requestRefresh("after config root refresh");
       } else {
-        watchedConfigSnapshot = snapshot.snapshot;
+        watchedConfigSnapshot = result.snapshot;
         initialized = true;
       }
-      armDirectories(discovered.files);
-    } catch (error) {
-      console.warn("Config watch refresh failed; Manager remains online.", error);
-    } finally {
-      refreshInFlight = false;
-      if (refreshQueued && !closed) {
-        refreshQueued = false;
-        queueMicrotask(() => { void refreshSnapshot("after config root refresh"); });
-      }
     }
-  };
-  void refreshSnapshot("during config watch initialization");
-  return {
-    close(): void {
-      closed = true;
-      if (debounceTimer) clearTimeout(debounceTimer);
-      for (const entry of watchers.values()) entry.watcher.close();
-      watchers.clear();
-    }
-  };
+  });
+  broker.start();
+  return broker;
 }
 
 function appendLog(runtime: GatewayRuntime, line: string): void {
@@ -2181,12 +2182,18 @@ function envFor(
   const routeRolesDir = path.relative(rootDir, rolesRoot).replace(/\\/g, "/");
   const rabiLinkRelay = rabiLinkRelayConfigFor(definition);
   const globalConfig = rabiGlobalConfig.read();
+  const {
+    RABIROUTE_HOST_CONTROL_TOKEN: _hostControlToken,
+    ...gatewayBaseEnvironment
+  } = process.env;
   return {
-    ...process.env,
+    ...gatewayBaseEnvironment,
     GATEWAY_ID: definition.id,
     RABI_GUID: globalConfig.rabiGuid,
     GATEWAY_MANAGER_PORT: String(managerPort),
     GATEWAY_MANAGER_URL: `http://127.0.0.1:${managerPort}`,
+    RABIROUTE_APPLICATION_GENERATION_ID: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+    RABIROUTE_MANAGER_INSTANCE_ID: managerInstanceId,
     PERSONA_MESSAGING_CAPABILITY: currentPersonaMessageAuthority().issue(definition.id, roleIdForDefinition(definition)),
     ...adapterEnvironment,
     MESSAGE_ADAPTER_POLICIES: JSON.stringify(definition.messageAdapterPolicies ?? {}),
@@ -2293,6 +2300,18 @@ function startGatewayRuntime(id: string): void {
   const runtime = runtimes.get(id);
   if (!runtime) {
     throw new Error(`Gateway not found: ${id}`);
+  }
+  if (routeCatalogStartupStatus().state !== "ready") {
+    runtime.readiness = "blocked";
+    runtime.lastError = "Route catalog startup is not ready.";
+    appendLog(runtime, "skip start until route catalog startup is ready");
+    return;
+  }
+  if (planStorageStartupStatus().state !== "ready") {
+    runtime.readiness = "blocked";
+    runtime.lastError = "Plan storage startup recovery is not ready.";
+    appendLog(runtime, "skip start until plan storage startup recovery is ready");
+    return;
   }
   const runtimeAdapters = sharedGatewayMessageAdapterTypes(runtime.definition);
   const startDecision = gatewayRuntimeStartDecision({
@@ -2479,9 +2498,12 @@ function dataDirFor(definition: GatewayDefinition): string {
 function roleInfoFor(
   definition: GatewayDefinition,
   includeContents = true,
-  catalogCache?: Map<string, Array<Record<string, unknown>>>
+  _catalogCache?: Map<string, Array<Record<string, unknown>>>
 ): Record<string, unknown> {
-  return roleInfoPayload(rootDir, definition, { includeContents, catalogCache, personaCatalog });
+  return roleInfoPayload(rootDir, definition, {
+    includeContents,
+    personaPresentations: routeCatalogPersonas()
+  });
 }
 
 function readAgentStates(definition: GatewayDefinition): Record<string, unknown> {
@@ -2694,7 +2716,9 @@ function agentManagerApiCtx(): AgentManagerApiContext {
   };
 }
 
-function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: boolean; messages: string[] } {
+async function repairGatewayConfigsForScan(
+  _targetGatewayId?: string
+): Promise<{ changed: boolean; messages: string[] }> {
   const original = readConfig().gateways;
   const messages: string[] = [];
   const managedNapcatRoot = path.resolve(rootDir, "data", "napcat");
@@ -2770,8 +2794,12 @@ function repairGatewayConfigsForScan(_targetGatewayId?: string): { changed: bool
 
   const changed = messages.length > 0;
   if (changed) {
-    writeConfig({ gateways: normalized });
-    loadRuntimes();
+    const observedRevision = routeCatalogVersion().routeConfigHash;
+    await writeConfig(
+      { gateways: normalized },
+      observedRevision,
+      roleStorageOperationKey("route-scan-repair", observedRevision, messages.join("\n"))
+    );
     syncRunningGateways();
   }
   return { changed, messages };
@@ -2798,7 +2826,7 @@ function remoteAgentMessageAdapterScanResult(): PluginMessageAdapterScanResult {
 }
 
 async function repairAllNapcatInstances(): Promise<Record<string, unknown>> {
-  const scanRepair = repairGatewayConfigsForScan();
+  const scanRepair = await repairGatewayConfigsForScan();
   const context = napcatManagerCtx();
   const results: Array<Record<string, unknown>> = [];
   for (const runtime of runtimes.values()) {
@@ -2881,7 +2909,11 @@ async function checkNapcatHealthWithBackfill(body: NapcatHealthRequest): Promise
     : undefined;
   if (!runtime || !instance) return result;
 
-  const backfilled = backfillNapcatInstanceWebuiUrl(runtime.definition, instance.id, correctedWebuiUrl);
+  const backfilled = await backfillNapcatInstanceWebuiUrl(
+    runtime.definition,
+    instance.id,
+    correctedWebuiUrl
+  );
   if (!backfilled) return result;
   instance.webuiUrl = backfilled;
   result = addHealthDiagnostic(result, `已根据 NapCat webui.json 自动修正 WebUI 地址：${backfilled}`);
@@ -3595,7 +3627,11 @@ function readAdapterLogs(
 }
 
 function runtimeStatus(runtime: GatewayRuntime): Record<string, unknown> {
-  return runtimeStatusWithRoleInfoCache(runtime);
+  const service = activeGatewayDiagnosticsSnapshotService();
+  service.requestRefresh();
+  const snapshot = service.read(true);
+  const cached = snapshot.records.find(record => record.id === runtime.definition.id);
+  return memoryOnlyGatewayRuntimeStatus(rootDir, runtime, cached);
 }
 
 function runtimeStatusWithRoleInfoCache(
@@ -3757,6 +3793,42 @@ function runtimeSummaryStatusWithRoleInfoCache(
   };
 }
 
+/** Executed only inside ManagerReadWorkerPool's child process. */
+export function buildGatewayDiagnosticsWorkerSnapshot(
+  input: GatewayDiagnosticsWorkerInput
+): GatewayDiagnosticsWorkerResult {
+  return buildIsolatedGatewayDiagnosticsSnapshot(input, {
+    reset: () => {
+      for (const id of runtimes.keys()) runtimes.delete(id);
+      agentStateByGateway.clear();
+    },
+    install: snapshot => {
+      runtimes.set(snapshot.definition, {
+        process: snapshot.processPid === null
+          ? null
+          : ({ pid: snapshot.processPid } as ChildProcessWithoutNullStreams),
+        needsRestart: snapshot.needsRestart,
+        startedAt: snapshot.startedAt,
+        stoppedAt: snapshot.stoppedAt,
+        lastExit: snapshot.lastExit,
+        readiness: snapshot.readiness,
+        endpoints: snapshot.endpoints,
+        lastError: snapshot.lastError,
+        log: [...snapshot.log]
+      });
+      agentStateByGateway.set(
+        snapshot.definition.id,
+        snapshot.agentStates as Partial<Record<AgentAdapterType, AgentRuntimeState>>
+      );
+    },
+    runtimes: () => runtimes.values(),
+    diagnostics: (runtime, roleInfoCatalogCache, tailCache) =>
+      runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache),
+    summary: (runtime, roleInfoCatalogCache) =>
+      runtimeSummaryStatusWithRoleInfoCache(runtime, roleInfoCatalogCache)
+  });
+}
+
 function jsonResponse(response: http.ServerResponse, statusCode: number, body: unknown): void {
   if (statusCode >= 400) {
     const context = managerRequestContexts.get(response);
@@ -3808,6 +3880,112 @@ function readJsonBody<T>(request: http.IncomingMessage, maxBytes = 0): Promise<T
     });
     request.on("error", reject);
   });
+}
+
+function singleRequestHeader(request: http.IncomingMessage, name: string): string | undefined {
+  const value = request.headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      throw new RoleStorageApplicationError(`${name} must be sent exactly once.`, "invalid_request", 400);
+    }
+    return value[0]?.trim() || undefined;
+  }
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function roleStorageRequestContext(
+  request: http.IncomingMessage,
+  response: http.ServerResponse
+): RoleStorageCommandContext {
+  const controller = new AbortController();
+  request.once("aborted", () => controller.abort(new Error("Role storage request was aborted.")));
+  response.once("close", () => {
+    if (!response.writableEnded) controller.abort(new Error("Role storage response closed before completion."));
+  });
+  return Object.freeze({
+    idempotencyKey: singleRequestHeader(request, "idempotency-key"),
+    expectedRevision: singleRequestHeader(request, "if-match")
+      ?? singleRequestHeader(request, "x-rabiroute-expected-revision"),
+    signal: controller.signal
+  });
+}
+
+function currentRoleStorageApplication(): RoleStorageApplication {
+  if (!activeStorageLifecycleGeneration) {
+    throw new RoleStorageApplicationError("Role storage is not ready.", "busy", 503);
+  }
+  return activeStorageLifecycleGeneration.roleStorage;
+}
+
+async function appendRolePanelTimeline(
+  roleId: string,
+  message: RolePanelTimelineMessage
+): Promise<RolePanelTimelineAppendResult> {
+  const receipt = await currentRoleStorageApplication().commands.appendRolePanelTimeline(roleId, message, {
+    idempotencyKey: roleStorageOperationKey("role-panel-timeline-append", roleId, message.id),
+    expectedRevision: null
+  });
+  return receipt.commit;
+}
+
+async function submitAgentPlanFeedback(
+  input: AgentPlanFeedbackSubmitRequest
+): Promise<AgentPlanFeedbackSubmitResult> {
+  const application = currentRoleStorageApplication();
+  const projection = await application.queries.planFeedback(input.roleId, input.planId, {
+    timeoutMs: 30_000
+  });
+  if (!projection) {
+    throw new RoleStorageApplicationError(
+      `Plan not found for feedback reply: ${input.roleId}/${input.planId}.`,
+      "not_found",
+      404
+    );
+  }
+  const committed = await application.commands.submitPlanFeedback(input.roleId, input.planId, {
+    feedbackId: input.feedbackId,
+    stepId: input.stepId,
+    gatewayId: input.gatewayId,
+    kind: input.kind,
+    author: "agent",
+    source: "agent",
+    text: input.text,
+    notifyAgent: false
+  }, {
+    expectedRevision: projection.planRevision,
+    idempotencyKey: roleStorageOperationKey("agent-plan-feedback-reply", input.deliveryId),
+    timeoutMs: 30_000
+  });
+  return Object.freeze({
+    record: committed.commit.record,
+    created: committed.commit.created
+  });
+}
+
+function respondRoleStorageError(response: http.ServerResponse, error: unknown): void {
+  const mapped = roleStorageHttpError(error);
+  for (const [name, value] of Object.entries(mapped.headers)) response.setHeader(name, value);
+  jsonResponse(response, mapped.statusCode, mapped.body);
+}
+
+function respondRoleStorageCommit(
+  response: http.ServerResponse,
+  statusCode: number,
+  operationId: string,
+  data: unknown,
+  revision?: string | null
+): void {
+  response.setHeader("idempotency-key", operationId);
+  if (revision) response.setHeader("etag", `"${revision}"`);
+  jsonResponse(response, statusCode, { code: 0, data });
+}
+
+async function readRoleStorageJsonBody<T>(request: http.IncomingMessage, maxBytes = 0): Promise<T> {
+  try {
+    return await readJsonBody<T>(request, maxBytes);
+  } catch {
+    throw new RoleStorageApplicationError("Request body must be valid JSON within the allowed size.", "invalid_request", 400);
+  }
 }
 
 function readBodyBuffer(request: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
@@ -4057,8 +4235,10 @@ function memoryConsolidationScheduleTargets(): MemoryConsolidationScheduleTarget
     .filter((runtime) => runtime.definition.enabled !== false)
     .map((runtime) => {
       const roleDir = roleDirForDefinition(runtime.definition);
+      const roleId = roleIdForDefinition(runtime.definition);
       return {
         gatewayId: runtime.definition.id,
+        roleId,
         roleKey: path.resolve(roleDir).toLowerCase(),
         roleDir
       };
@@ -4079,19 +4259,25 @@ function deliverAutomaticMemoryConsolidation(
       triggerSource: "auto"
     }, {
       onSuccess: () => {
-        try {
-          markMemoryConsolidationRunDelivered(target.roleDir, run.runId);
+        void currentRoleStorageApplication().commands.markMemoryConsolidationDelivered(
+          target.roleId,
+          run.runId,
+          undefined,
+          {
+            idempotencyKey: roleStorageOperationKey("memory-delivered", run.runId),
+            expectedRevision: run.revision,
+            timeoutMs: 30_000
+          }
+        ).then(() => {
           const runtime = runtimes.get(target.gatewayId);
           publishManagerEvent("memory_consolidation_changed", {
             gatewayId: target.gatewayId,
-            roleId: runtime ? roleIdForDefinition(runtime.definition) : "",
+            roleId: runtime ? roleIdForDefinition(runtime.definition) : target.roleId,
             runId: run.runId,
             status: "requested"
           });
           resolve();
-        } catch (error) {
-          reject(error);
-        }
+        }, reject);
       },
       onFailure: reject
     }, "manager:memory-consolidation");
@@ -4104,11 +4290,29 @@ function createMemoryConsolidationScheduler(): MemoryConsolidationScheduler {
   return new MemoryConsolidationScheduler({
     listTargets: memoryConsolidationScheduleTargets,
     evaluate: (target, signal) => evaluateMemoryConsolidationSchedule(target.roleDir, { signal, timeoutMs: 30_000 }),
-    requestDueRun: (target) => {
-      const request = pendingMemoryConsolidation(target.roleDir, "auto");
-      return request ? { runId: request.run.id, delivered: Boolean(request.run.deliveredAt) } : null;
+    requestDueRun: async (target, dueOperationIdentity) => {
+      if (!dueOperationIdentity) return null;
+      const committed = await currentRoleStorageApplication().commands.requestMemoryConsolidation(
+        target.roleId,
+        { triggerSource: "auto" },
+        {
+          idempotencyKey: roleStorageOperationKey(
+            "memory-consolidation-auto",
+            target.roleId,
+            dueOperationIdentity
+          ),
+          timeoutMs: 30_000
+        }
+      );
+      const projection = committed.projection;
+      return projection
+        ? {
+            runId: projection.run.id,
+            delivered: Boolean(projection.run.deliveredAt),
+            revision: projection.revision
+          }
+        : null;
     },
-    nextTriggerAt: (target) => nextMemoryConsolidationTriggerAt(target.roleDir),
     deliver: deliverAutomaticMemoryConsolidation,
     persistencePath: path.join(failureStateRoot, "memory-consolidation.json"),
     onPersistenceError: (error) => {
@@ -4119,19 +4323,21 @@ function createMemoryConsolidationScheduler(): MemoryConsolidationScheduler {
     },
     onError: (target, error, circuit) => {
       const runtime = runtimes.get(target.gatewayId);
-      const message = error instanceof Error ? error.message : String(error);
+      const diagnostic = memoryConsolidationFailureDiagnostic(error);
       if (runtime) {
-        appendLog(runtime, `automatic memory consolidation failed; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}: ${message}`);
+        appendLog(runtime, `automatic memory consolidation failed; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${diagnostic.runtimeLogSuffix}`);
       }
       managerOperationalLog.record("error", "memory_consolidation_auto_failed", {
-        result: `gatewayId=${target.gatewayId}; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; signature=${circuit.snapshot.signature}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${message}`
+        result: `gatewayId=${target.gatewayId}; phase=${circuit.snapshot.phase}; failures=${circuit.snapshot.consecutiveFailures}; signature=${circuit.snapshot.signature}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${diagnostic.runtimeLogSuffix}`,
+        error: diagnostic.operationalError
       });
     },
     onIncident: (target, error, circuit) => {
+      const diagnostic = memoryConsolidationFailureDiagnostic(error);
       managerOperationalLog.record("error", "memory_consolidation_incident_opened", {
         action: `gatewayId=${target.gatewayId}`,
-        result: `incidentId=${circuit.snapshot.incidentId}; signature=${circuit.snapshot.signature}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}`,
-        error: managerOperationalError(error, rootDir)
+        result: `incidentId=${circuit.snapshot.incidentId}; signature=${circuit.snapshot.signature}; failures=${circuit.snapshot.consecutiveFailures}; retryAt=${new Date(circuit.snapshot.retryAt).toISOString()}; ${diagnostic.runtimeLogSuffix}`,
+        error: diagnostic.operationalError
       });
     }
   });
@@ -4143,20 +4349,23 @@ function roleIdForDefinition(definition: GatewayDefinition): string {
 
 function roleIdsForPlanBoundSession(sessionId: string, cwd?: string): Set<string> {
   const roleIds = new Set<string>();
-  try {
-    for (const entry of fs.readdirSync(rolesRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const roleDir = path.join(rolesRoot, entry.name);
-      for (const plan of listPlans(roleDir)) {
-        const bindings = [plan.taskBinding, plan.secretaryBinding];
-        if (bindings.some((binding) => binding?.sessionId === sessionId && hookWorkspaceMatches(binding.workspace, cwd))) {
-          roleIds.add(sanitizeRoleId(entry.name) || entry.name);
-          break;
-        }
+  const candidateRoleIds = new Set(
+    [...runtimes.values()].map(runtime => roleIdForDefinition(runtime.definition))
+  );
+  for (const roleId of candidateRoleIds) {
+    const roleDir = roleDirForApi(roleId);
+    const plans = publishedRolePlans(roleDir);
+    if (!plans) {
+      requestRoleKnowledgeCatalogRefresh(roleDir);
+      continue;
+    }
+    for (const plan of plans) {
+      const bindings = [plan.taskBinding, plan.secretaryBinding];
+      if (bindings.some((binding) => binding?.sessionId === sessionId && hookWorkspaceMatches(binding.workspace, cwd))) {
+        roleIds.add(roleId);
+        break;
       }
     }
-  } catch {
-    return roleIds;
   }
   return roleIds;
 }
@@ -4311,7 +4520,7 @@ async function deliverAgentRequestReminder(request: AgentRequestRecord): Promise
     throw new Error(String(result.data.warning || result.data.message || "Agent request reminder was not accepted."));
   }
   if (messageProcessingTarget) {
-    persistResolvedMessageProcessingTarget(
+    await persistResolvedMessageProcessingTarget(
       messageProcessingTarget,
       result.data,
       runtimeForMessageProcessingTarget(messageProcessingTarget)
@@ -4466,6 +4675,9 @@ async function performAgentSend(request: AgentSendRequest): Promise<AgentCommuni
     rolesRoot,
     speechServiceUrl: speechServiceUrl(),
     publishEvent: publishManagerEvent,
+    planStorageReady: () => planStorageStartupStatus().state === "ready",
+    appendRolePanelTimeline,
+    submitPlanFeedback: submitAgentPlanFeedback,
     runtimes: [...runtimes.values()].map(runtime => {
       const relay = rabiLinkRelayConfigFor(runtime.definition);
       return {
@@ -4596,7 +4808,7 @@ async function dispatchPlanNotificationRequirement(requirement: MessageProcessin
     if (result.data.status !== "delivered") {
       throw new Error(String(result.data.warning || result.data.message || "Plan notification was not accepted."));
     }
-    const resolved = persistResolvedMessageProcessingTarget(
+    const resolved = await persistResolvedMessageProcessingTarget(
       target,
       result.data,
       runtime
@@ -4712,11 +4924,11 @@ function persistResolvedAgentRequestTarget(
   });
 }
 
-function persistResolvedMessageProcessingTarget(
+async function persistResolvedMessageProcessingTarget(
   target: MessageProcessingDeliveryTarget,
   result: Record<string, unknown>,
   runtime: GatewayRuntime | undefined
-): MessageProcessingDeliveryTarget {
+): Promise<MessageProcessingDeliveryTarget> {
   const resolved = resolveDeliveredMessageProcessingTarget(target, result);
   if (!resolved.previousThreadId) return resolved.target;
   if (!runtime) {
@@ -4743,7 +4955,7 @@ function persistResolvedMessageProcessingTarget(
         runtime.definition.codexThreadName = replacement.threadName;
         runtime.definition.codexCwd = replacement.workspace;
       }
-      writeAdapterConfigFile(runtime.definition);
+      await writeAdapterConfigFile(runtime.definition);
     }
   } else {
     const statePath = messageAgentPoolStatePath(dataDirFor(runtime.definition));
@@ -4924,7 +5136,7 @@ async function deliverKnowledgeCallbackReminder(requirement: MessageProcessingRe
   if (result.data.status !== "delivered") {
     throw new Error(String(result.data.warning || result.data.message || "Knowledge callback reminder was not accepted."));
   }
-  const resolved = persistResolvedMessageProcessingTarget(
+  const resolved = await persistResolvedMessageProcessingTarget(
     target,
     result.data,
     runtime
@@ -5022,14 +5234,16 @@ function setMessageProcessingPlanBaseline(item: MessageProcessingRequirement, ro
   const planId = String(planIdInput || item.plan?.planId || "").trim();
   if (!roleId || !planId) return;
   try {
-    const plan = getPlan(roleDirForApi(roleId), planId);
+    const roleDir = roleDirForApi(roleId);
+    const plan = getPublishedPlan(roleDir, planId);
     if (plan) messageProcessingBoard.setPlanBaseline(roleId, plan);
+    else requestRoleKnowledgeCatalogRefresh(roleDir);
   } catch {
     // The linked requirement remains visible; the next plan update can establish the baseline.
   }
 }
 
-async function handleMessageProcessingPlanUpdate(roleDir: string, plan: ReturnType<typeof getPlan>): Promise<void> {
+async function handleMessageProcessingPlanUpdate(roleDir: string, plan: PlanItem | null): Promise<void> {
   if (!plan) return;
   const normalizedRoleDir = path.resolve(roleDir);
   for (const origin of messageProcessingBoard.planOriginList()) {
@@ -5043,13 +5257,17 @@ async function handleMessageProcessingPlanUpdate(roleDir: string, plan: ReturnTy
 }
 
 async function sendPlanFeedbackToTask(
-  roleDir: string,
+  roleId: string,
   planId: string,
   dshBaseUrl: string | undefined,
-  request: PlanQaTaskRequest | PlanApprovalFeedbackTaskRequest
+  request: PlanQaTaskRequest | PlanApprovalFeedbackTaskRequest,
+  deliveryId = "deliveryId" in request ? request.deliveryId : undefined
 ): Promise<void> {
-  const plan = getPlan(roleDir, planId);
-  if (!plan) throw new Error(`Plan not found: ${planId}`);
+  const projection = await currentRoleStorageApplication().queries.plan(roleId, planId, { timeoutMs: 30_000 });
+  const plan = projection?.plan;
+  if (!plan) {
+    throw new Error(`Role plan catalog is unavailable or plan was not found: ${planId}`);
+  }
   const result = await handleAgentThreadRequest({
     action: "send",
     agentAdapter: request.agentAdapter,
@@ -5057,6 +5275,7 @@ async function sendPlanFeedbackToTask(
     title: request.title,
     createIfMissing: request.createIfMissing,
     cwd: request.cwd,
+    deliveryId,
     messageSource: planMessageSource(
       planId,
       plan.title
@@ -5074,15 +5293,18 @@ async function sendPlanFeedbackToTask(
   const thread = result.data.thread as { id?: unknown; title?: unknown; cwd?: unknown } | undefined;
   const resolvedId = String(thread?.id || "").trim();
   if (!resolvedId || resolvedId === request.threadId) return;
-  const currentPlan = getPlan(roleDir, planId);
-  if (!currentPlan || currentPlan.taskBinding?.sessionId !== request.threadId) return;
-  const taskBinding = replacementPlanTaskBinding(currentPlan, {
+  const resolved = {
     id: resolvedId,
     title: typeof thread?.title === "string" ? thread.title : undefined,
     cwd: typeof thread?.cwd === "string" ? thread.cwd : undefined
+  };
+  await replacePlanTaskBindingForDelivery(currentRoleStorageApplication(), {
+    roleId,
+    planId,
+    deliveryId: String(deliveryId || "").trim(),
+    oldSessionId: request.threadId,
+    resolved
   });
-  if (!taskBinding) return;
-  updatePlan(roleDir, currentPlan.id, { taskBinding });
   const warning = typeof result.data.warning === "string" ? result.data.warning.trim() : "";
   if (warning) {
     managerOperationalLog.record("warn", "plan_task_binding_replaced", {
@@ -5092,34 +5314,37 @@ async function sendPlanFeedbackToTask(
   }
 }
 
-function ensurePlanSecretaryTarget(
+async function ensurePlanSecretaryTarget(
   runtime: GatewayRuntime,
-  roleDir: string,
-  plan: PlanItem
-): { plan: PlanItem; target?: PlanSecretaryTarget } {
+  roleId: string,
+  plan: PlanItem,
+  eventId: string
+): Promise<{ plan: PlanItem; target?: PlanSecretaryTarget }> {
   if (runtime.definition.codexPlanAssistantEnabled !== true) return { plan };
-  const assignment = resolvePlanSecretaryAssignment(plan, runtime.definition.codexPlanAssistantSessions);
-  if (!assignment) return { plan };
-  const assignedPlan = assignment.changed
-    ? updatePlan(roleDir, plan.id, { secretaryBinding: assignment.binding })
-    : plan;
-  return {
-    plan: assignedPlan,
+  const assignment = await ensurePlanSecretaryBindingForEvent(currentRoleStorageApplication(), {
+    roleId,
+    planId: plan.id,
+    eventId,
+    sessions: runtime.definition.codexPlanAssistantSessions
+  });
+  return assignment.target ? {
+    plan: assignment.plan,
     target: {
       ...assignment.target,
       model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel)
     }
-  };
+  } : { plan: assignment.plan };
 }
 
 async function sendPlanFeedbackToSecretary(
   runtime: GatewayRuntime,
-  roleDir: string,
+  roleId: string,
   plan: PlanItem,
   target: PlanApprovalFeedbackSecretaryTarget,
-  request: PlanApprovalFeedbackPersonaRequest
+  request: PlanApprovalFeedbackPersonaRequest,
+  eventId: string
 ): Promise<void> {
-  const resolved = await resolvePlanSecretaryDeliveryTarget(runtime, roleDir, plan, target);
+  const resolved = await resolvePlanSecretaryDeliveryTarget(runtime, roleId, plan, target, eventId);
   const result = await handleAgentThreadRequest({
     action: "send",
     agentAdapter: resolved.target.agentAdapter,
@@ -5143,7 +5368,9 @@ async function sendPlanFeedbackToSecretary(
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw new Error(String(result.data.message || "Plan secretary feedback delivery failed with HTTP " + result.statusCode + "."));
   }
-  if (resolved.initializationPrompt) markPlanSecretaryInitialized(runtime, resolved.target.threadId);
+  if (resolved.initializationPrompt) {
+    await markPlanSecretaryInitialized(runtime, resolved.target.threadId);
+  }
 }
 
 async function sendPlanTaskCompletionToSecretary(
@@ -5152,7 +5379,13 @@ async function sendPlanTaskCompletionToSecretary(
   delivery: PlanTaskCompletionDelivery,
   prompt: string
 ): Promise<void> {
-  const resolved = await resolvePlanSecretaryDeliveryTarget(runtime, delivery.roleDir, delivery.plan, target);
+  const resolved = await resolvePlanSecretaryDeliveryTarget(
+    runtime,
+    delivery.roleId,
+    delivery.plan,
+    target,
+    `completion:${delivery.sourceSessionId}:${delivery.sourceTurnId}`
+  );
   const result = await handleAgentThreadRequest({
     action: "send",
     agentAdapter: resolved.target.agentAdapter,
@@ -5188,24 +5421,27 @@ async function sendPlanTaskCompletionToSecretary(
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw new Error(String(result.data.message || "Plan task completion delivery to secretary failed with HTTP " + result.statusCode + "."));
   }
-  if (resolved.initializationPrompt) markPlanSecretaryInitialized(runtime, resolved.target.threadId);
+  if (resolved.initializationPrompt) {
+    await markPlanSecretaryInitialized(runtime, resolved.target.threadId);
+  }
 }
 
-function markPlanSecretaryInitialized(runtime: GatewayRuntime, threadId: string): void {
+async function markPlanSecretaryInitialized(runtime: GatewayRuntime, threadId: string): Promise<void> {
   let changed = false;
   runtime.definition.codexPlanAssistantSessions = (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => {
     if (session.threadId !== threadId || session.initializedAt) return session;
     changed = true;
     return { ...session, initializedAt: new Date().toISOString() };
   });
-  if (changed) writeAdapterConfigFile(runtime.definition);
+  if (changed) await writeAdapterConfigFile(runtime.definition);
 }
 
 async function resolvePlanSecretaryDeliveryTarget(
   runtime: GatewayRuntime,
-  roleDir: string,
+  roleId: string,
   plan: PlanItem,
-  target: PlanSecretaryTarget | PlanApprovalFeedbackSecretaryTarget
+  target: PlanSecretaryTarget | PlanApprovalFeedbackSecretaryTarget,
+  eventId: string
 ): Promise<{ target: PlanSecretaryTarget; initializationPrompt?: string }> {
   const targetAgentAdapter = "agentAdapter" in target
     ? target.agentAdapter
@@ -5260,11 +5496,17 @@ async function resolvePlanSecretaryDeliveryTarget(
         initializedAt: undefined
       }
     : session);
-  writeAdapterConfigFile(runtime.definition);
-  if (plan.secretaryBinding?.sessionId === target.threadId) {
-    updatePlan(roleDir, plan.id, {
-      secretaryBinding: {
-        ...plan.secretaryBinding,
+  await writeAdapterConfigFile(runtime.definition);
+  const bindingProjection = await currentRoleStorageApplication().queries.plan(roleId, plan.id, { timeoutMs: 30_000 });
+  const currentBinding = bindingProjection?.plan.secretaryBinding;
+  if (currentBinding?.sessionId === target.threadId) {
+    await replacePlanSecretaryBindingForEvent(currentRoleStorageApplication(), {
+      roleId,
+      planId: plan.id,
+      eventId,
+      oldSessionId: target.threadId,
+      binding: {
+        ...currentBinding,
         agentType: targetAgentAdapter,
         sessionId: threadId,
         sessionTitle: resolvedTarget.threadName,
@@ -5419,34 +5661,321 @@ function planFeedbackDeliveryKey(roleId: string, planId: string, feedbackId: str
   return `${roleId}:${planId}:${feedbackId}`;
 }
 
-function schedulePlanFeedbackDelivery(
+type CurrentPlanFeedback = Readonly<{
+  projection: RoleStoragePlanFeedbackProjection;
+  record: PlanFeedbackRecord;
+  revision: string;
+}>;
+
+function planFeedbackFromProjection(
+  projection: RoleStoragePlanFeedbackProjection,
+  feedbackId: string
+): CurrentPlanFeedback {
+  const record = projection.records.find((candidate) => candidate.id === feedbackId);
+  if (!record) throw new Error(`Plan feedback not found: ${feedbackId}`);
+  const revision = projection.recordRevisions[feedbackId];
+  if (!revision) throw new Error(`Plan feedback revision is unavailable: ${feedbackId}`);
+  return { projection, record, revision };
+}
+
+async function currentPlanFeedback(
+  application: RoleStorageApplication,
+  roleId: string,
+  planId: string,
+  feedbackId: string,
+  signal?: AbortSignal
+): Promise<CurrentPlanFeedback> {
+  const projection = await application.queries.planFeedback(roleId, planId, {
+    signal,
+    timeoutMs: 30_000
+  });
+  if (!projection) throw new Error(`Plan not found: ${planId}`);
+  return planFeedbackFromProjection(projection, feedbackId);
+}
+
+function planQaStoragePort(application: RoleStorageApplication): PlanQaStoragePort {
+  return Object.freeze({
+    query: (roleId, planId, options) => application.queries.planFeedback(roleId, planId, options),
+    updatePlan: async (roleId, planId, patch, context) => {
+      const committed = await application.commands.updatePlan(roleId, planId, patch, context);
+      return {
+        plan: committed.projection.plan,
+        revision: committed.projection.revision
+      };
+    },
+    updateQaHandling: async (roleId, planId, record, qaHandling, context) => (
+      await application.commands.updatePlanFeedbackQaHandling(
+        roleId,
+        planId,
+        record,
+        qaHandling,
+        context
+      )
+    ).projection
+  });
+}
+
+function planFeedbackMutationContext(
+  operation: string,
+  roleId: string,
+  planId: string,
+  feedbackId: string,
+  expectedRevision: string,
+  payload: unknown,
+  signal?: AbortSignal
+): RoleStorageCommandContext {
+  return {
+    idempotencyKey: roleStorageOperationKey(
+      operation,
+      roleId,
+      `${planId}:${feedbackId}`,
+      expectedRevision,
+      JSON.stringify(payload) ?? "null"
+    ),
+    expectedRevision,
+    signal,
+    timeoutMs: 30_000
+  };
+}
+
+function normalizedFeedbackMessage(message?: string): string | undefined {
+  return String(message || "").trim() || undefined;
+}
+
+async function transitionPlanFeedbackDelivery(
+  application: RoleStorageApplication,
+  roleId: string,
+  planId: string,
+  feedbackId: string,
+  status: Exclude<PlanFeedbackDeliveryStatus, "record_only">,
+  message?: string,
+  signal?: AbortSignal
+): Promise<CurrentPlanFeedback> {
+  const current = await currentPlanFeedback(application, roleId, planId, feedbackId, signal);
+  const normalizedMessage = normalizedFeedbackMessage(message);
+  if (current.record.deliveryStatus === "record_only" || current.record.deliveryStatus === "delivered") {
+    return current;
+  }
+  if (current.record.deliveryStatus === status && current.record.deliveryMessage === normalizedMessage) {
+    return current;
+  }
+  const committed = await application.commands.updatePlanFeedbackDelivery(
+    roleId,
+    planId,
+    current.record,
+    status,
+    normalizedMessage,
+    planFeedbackMutationContext(
+      "manager-feedback-delivery",
+      roleId,
+      planId,
+      feedbackId,
+      current.revision,
+      { status, message: normalizedMessage },
+      signal
+    )
+  );
+  return planFeedbackFromProjection(committed.projection, feedbackId);
+}
+
+async function transitionPlanFeedbackPostCommit(
+  application: RoleStorageApplication,
+  roleId: string,
+  planId: string,
+  feedbackId: string,
+  status: PlanFeedbackPostCommit["status"],
+  message?: string,
+  signal?: AbortSignal,
+  expectedAttempt?: number
+): Promise<CurrentPlanFeedback> {
+  const current = await currentPlanFeedback(application, roleId, planId, feedbackId, signal);
+  const normalizedMessage = normalizedFeedbackMessage(message);
+  if (current.record.postCommit?.status === "completed") return current;
+  if (expectedAttempt !== undefined && (
+    current.record.postCommit?.status !== "processing"
+    || current.record.postCommit.attempts !== expectedAttempt
+  )) {
+    throw new Error(
+      `Plan feedback post-commit attempt changed: ${feedbackId}; expected=${expectedAttempt}; `
+      + `current=${current.record.postCommit?.attempts ?? "absent"}:${current.record.postCommit?.status ?? "absent"}.`
+    );
+  }
+  if (current.record.postCommit?.status === status && current.record.postCommit.message === normalizedMessage) {
+    return current;
+  }
+  const committed = await application.commands.updatePlanFeedbackPostCommit(
+    roleId,
+    planId,
+    current.record,
+    status,
+    normalizedMessage,
+    planFeedbackMutationContext(
+      "manager-feedback-post-commit",
+      roleId,
+      planId,
+      feedbackId,
+      current.revision,
+      { status, message: normalizedMessage, expectedAttempt },
+      signal
+    )
+  );
+  return planFeedbackFromProjection(committed.projection, feedbackId);
+}
+
+async function processPlanFeedbackPostCommit(
+  _roleDir: string,
+  roleId: string,
+  gatewayId: string,
+  inputRecord: PlanFeedbackRecord,
+  signal?: AbortSignal,
+  application: RoleStorageApplication = currentRoleStorageApplication()
+): Promise<{ outcome: "handled" | "ignored"; record: PlanFeedbackRecord }> {
+  let current = await currentPlanFeedback(application, roleId, inputRecord.planId, inputRecord.id, signal);
+  let record = current.record;
+  if (record.postCommit?.status === "completed") {
+    return { outcome: record.qaHandling ? "handled" : "ignored", record };
+  }
+  current = await transitionPlanFeedbackPostCommit(
+    application,
+    roleId,
+    record.planId,
+    record.id,
+    "processing",
+    undefined,
+    signal
+  );
+  record = current.record;
+  const processingAttempt = record.postCommit?.attempts;
+  if (!processingAttempt) throw new Error(`Plan feedback post-commit attempt is unavailable: ${record.id}`);
+  try {
+    const qaResult = await consumePlanQaFeedback({
+      roleId,
+      storage: planQaStoragePort(application),
+      feedback: record,
+      signal,
+      sendToTask: (request) => {
+        const runtime = runtimeForRoleDelivery(
+          roleId,
+          String(record.gatewayId || gatewayId || "").trim()
+        );
+        return sendPlanFeedbackToTask(
+          roleId,
+          record.planId,
+          runtime.definition.dshBaseUrl,
+          request
+        );
+      },
+      readTaskDelivery: inspectPlanFeedbackDelivery
+    });
+    if (qaResult.status === "dispatching") {
+      throw new Error(`QA feedback ${record.id} is waiting for authoritative delivery readback.`);
+    }
+    current = await transitionPlanFeedbackPostCommit(
+      application,
+      roleId,
+      record.planId,
+      record.id,
+      "completed",
+      undefined,
+      signal,
+      processingAttempt
+    );
+    record = current.record;
+    return { outcome: qaResult.outcome === "ignored" ? "ignored" : "handled", record };
+  } catch (error) {
+    try {
+      await transitionPlanFeedbackPostCommit(
+        application,
+        roleId,
+        record.planId,
+        record.id,
+        "failed",
+        error instanceof Error ? error.message : String(error),
+        signal,
+        processingAttempt
+      );
+    } catch (transitionError) {
+      throw new AggregateError(
+        [error, transitionError],
+        `Plan feedback post-commit failed and its failure state could not be committed: ${record.id}`
+      );
+    }
+    throw error;
+  }
+}
+
+function schedulePlanFeedbackPostCommit(
   roleDir: string,
   roleId: string,
   gatewayId: string,
-  plan: ReturnType<typeof listPlans>[number],
+  plan: PlanItem,
   inputRecord: PlanFeedbackRecord
-): PlanFeedbackRecord {
-  if (inputRecord.deliveryStatus === "record_only" || inputRecord.deliveryStatus === "delivered") return inputRecord;
+): void {
+  if (!inputRecord.postCommit || inputRecord.postCommit.status === "completed") return;
+  const deliveryKey = planFeedbackDeliveryKey(roleId, inputRecord.planId, inputRecord.id);
+  const postCommitKey = `postcommit:${deliveryKey}`;
+  if (activePlanFeedbackDeliveryFlights.has(postCommitKey)) return;
+  const flight = new Promise<void>((resolve) => setImmediate(resolve))
+    .then(async () => {
+      const processed = await processPlanFeedbackPostCommit(roleDir, roleId, gatewayId, inputRecord);
+      if (processed.outcome === "ignored"
+        && processed.record.deliveryStatus !== "record_only"
+        && processed.record.deliveryStatus !== "delivered") {
+        await schedulePlanFeedbackDelivery(roleDir, roleId, gatewayId, plan, processed.record);
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      publishManagerEvent("plan_feedback_changed", { roleId, planId: inputRecord.planId, feedbackId: inputRecord.id });
+      activePlanFeedbackDeliveryFlights.delete(postCommitKey);
+    });
+  activePlanFeedbackDeliveryFlights.set(postCommitKey, flight);
+}
+
+async function runPlanFeedbackDelivery(
+  application: RoleStorageApplication,
+  _roleDir: string,
+  roleId: string,
+  gatewayId: string,
+  _plan: PlanItem,
+  inputRecord: PlanFeedbackRecord
+): Promise<PlanFeedbackRecord> {
+  let current = await currentPlanFeedback(application, roleId, inputRecord.planId, inputRecord.id);
+  let record = current.record;
+  let authoritativePlan = current.projection.plan;
+  if (record.deliveryStatus === "record_only" || record.deliveryStatus === "delivered") return record;
   if (!planFeedbackDeliveryActive) {
-    return updatePlanFeedbackDelivery(
-      roleDir,
-      inputRecord,
+    return (await transitionPlanFeedbackDelivery(
+      application,
+      roleId,
+      record.planId,
+      record.id,
       "pending",
       "Manager plan feedback delivery plugin is inactive."
-    );
+    )).record;
   }
-  let record = inputRecord.deliveryStatus === "failed"
-    ? updatePlanFeedbackDelivery(roleDir, inputRecord, "pending")
-    : inputRecord;
-  const deliveryKey = planFeedbackDeliveryKey(roleId, record.planId, record.id);
-  if (activePlanFeedbackDeliveries.has(deliveryKey)) return record;
+  if (record.deliveryStatus === "failed") {
+    current = await transitionPlanFeedbackDelivery(
+      application,
+      roleId,
+      record.planId,
+      record.id,
+      "pending"
+    );
+    record = current.record;
+    authoritativePlan = current.projection.plan;
+  }
 
   try {
-    activePlanFeedbackDeliveries.add(deliveryKey);
     const runtime = runtimeForRoleDelivery(roleId, gatewayId || String(record.gatewayId || "").trim());
-    const secretaryAssignment = ensurePlanSecretaryTarget(runtime, roleDir, plan);
-    publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
-    const flight = deliverPlanApprovalFeedback({
+    publishManagerEvent("plan_feedback_changed", { roleId, planId: authoritativePlan.id, feedbackId: record.id });
+    const secretaryAssignment = await ensurePlanSecretaryTarget(
+      runtime,
+      roleId,
+      authoritativePlan,
+      `feedback:${record.id}`
+    );
+    const result = await deliverPlanApprovalFeedback({
       roleId,
       managerBaseUrl: `http://127.0.0.1:${managerPort}`,
       plan: secretaryAssignment.plan,
@@ -5460,18 +5989,20 @@ function schedulePlanFeedbackDelivery(
           }
         : undefined,
       sendToTask: (request) => sendPlanFeedbackToTask(
-        roleDir,
+        roleId,
         secretaryAssignment.plan.id,
         runtime.definition.dshBaseUrl,
-        request
+        request,
+        record.id
       ),
       readTaskDelivery: inspectPlanFeedbackDelivery,
       sendToSecretary: (target, request) => sendPlanFeedbackToSecretary(
         runtime,
-        roleDir,
+        roleId,
         secretaryAssignment.plan,
         target,
-        request
+        request,
+        `feedback:${record.id}`
       ),
       sendToPersona: async (request) => {
         const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
@@ -5497,8 +6028,8 @@ function schedulePlanFeedbackDelivery(
           adapterType: "planFeedback",
           messageId,
           roleId,
-          planId: plan.id,
-          planTitle: plan.title,
+          planId: secretaryAssignment.plan.id,
+          planTitle: secretaryAssignment.plan.title,
           planStepId: record.stepId,
           planFeedbackId: record.id,
           planFeedbackResponseId: planFeedbackResponseId(record),
@@ -5509,61 +6040,116 @@ function schedulePlanFeedbackDelivery(
         };
         await triggerGatewayPlanFeedback(runtime, messageId, request.text, deliveryAttachments, replyContext);
       }
-    })
-      .then((result) => updatePlanFeedbackDelivery(roleDir, record, "delivered", result.message))
-      .catch((error) => {
-        const pending = error instanceof PlanFeedbackDeliveryPendingError;
-        if (pending) {
-          planFeedbackRecoveryService?.allowRetry(roleId, plan.id, record.id);
-          planFeedbackRecoveryService?.queue("pending delivery readback");
-        }
-        return updatePlanFeedbackDelivery(
-          roleDir,
-          record,
-          pending ? "pending" : "failed",
-          error instanceof Error ? error.message : String(error)
-        );
-      })
-      .then((terminalRecord) => {
-        record = terminalRecord;
-        publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
-      })
-      .finally(() => {
-        activePlanFeedbackDeliveries.delete(deliveryKey);
-        activePlanFeedbackDeliveryFlights.delete(deliveryKey);
-      });
-    activePlanFeedbackDeliveryFlights.set(deliveryKey, flight);
+    });
+    record = (await transitionPlanFeedbackDelivery(
+      application,
+      roleId,
+      record.planId,
+      record.id,
+      "delivered",
+      result.message
+    )).record;
+    publishManagerEvent("plan_feedback_changed", { roleId, planId: authoritativePlan.id, feedbackId: record.id });
     return record;
   } catch (error) {
-    record = updatePlanFeedbackDelivery(
-      roleDir,
-      record,
-      "failed",
+    if (error instanceof RoleStorageApplicationError) throw error;
+    const pending = error instanceof PlanFeedbackDeliveryPendingError;
+    if (pending) {
+      planFeedbackRecoveryService?.allowRetry(roleId, authoritativePlan.id, record.id);
+      planFeedbackRecoveryService?.queue("pending delivery readback");
+    }
+    record = (await transitionPlanFeedbackDelivery(
+      application,
+      roleId,
+      record.planId,
+      record.id,
+      pending ? "pending" : "failed",
       error instanceof Error ? error.message : String(error)
-    );
-    publishManagerEvent("plan_feedback_changed", { roleId, planId: plan.id, feedbackId: record.id });
+    )).record;
+    publishManagerEvent("plan_feedback_changed", { roleId, planId: authoritativePlan.id, feedbackId: record.id });
     return record;
   }
+}
+
+function schedulePlanFeedbackDelivery(
+  roleDir: string,
+  roleId: string,
+  gatewayId: string,
+  plan: PlanItem,
+  inputRecord: PlanFeedbackRecord
+): Promise<PlanFeedbackRecord> {
+  const application = currentRoleStorageApplication();
+  const deliveryKey = planFeedbackDeliveryKey(roleId, inputRecord.planId, inputRecord.id);
+  const existing = activePlanFeedbackDeliveryFlights.get(deliveryKey);
+  if (existing) {
+    return existing.then(async () => (
+      await currentPlanFeedback(application, roleId, inputRecord.planId, inputRecord.id)
+    ).record);
+  }
+  activePlanFeedbackDeliveries.add(deliveryKey);
+  const operation = runPlanFeedbackDelivery(application, roleDir, roleId, gatewayId, plan, inputRecord);
+  const flight = operation
+    .then(() => undefined, () => undefined)
+    .finally(() => {
+      activePlanFeedbackDeliveries.delete(deliveryKey);
+      activePlanFeedbackDeliveryFlights.delete(deliveryKey);
+    });
+  activePlanFeedbackDeliveryFlights.set(deliveryKey, flight);
+  return operation;
 }
 
 async function scheduleAndWaitForPlanFeedbackDelivery(
   roleDir: string,
   roleId: string,
   gatewayId: string,
-  plan: ReturnType<typeof listPlans>[number],
+  plan: PlanItem,
   feedback: PlanFeedbackRecord
 ): Promise<void> {
-  const scheduled = schedulePlanFeedbackDelivery(roleDir, roleId, gatewayId, plan, feedback);
-  const deliveryKey = planFeedbackDeliveryKey(roleId, scheduled.planId, scheduled.id);
-  const flight = activePlanFeedbackDeliveryFlights.get(deliveryKey);
-  if (flight) await flight;
-
-  const latest = listPlanFeedback(roleDir, plan.id).find(record => record.id === scheduled.id) ?? scheduled;
-  if (latest.deliveryStatus === "delivered" || latest.deliveryStatus === "record_only") return;
-  throw new Error(latest.deliveryMessage || "Plan feedback delivery did not complete.");
+  const scheduled = await schedulePlanFeedbackDelivery(roleDir, roleId, gatewayId, plan, feedback);
+  if (scheduled.deliveryStatus === "delivered" || scheduled.deliveryStatus === "record_only") return;
+  throw new Error(scheduled.deliveryMessage || "Plan feedback delivery did not complete.");
 }
 
-function presentedPlanWithFeedback(roleDir: string, plan: ReturnType<typeof listPlans>[number]) {
+async function recoverPlanFeedbackCandidate(
+  candidate: PlanFeedbackRecoveryCandidate,
+  options: {
+    signal?: AbortSignal;
+    inspect: (request: PlanFeedbackRecoveryTaskRequest) => Promise<PlanFeedbackDeliveryInspection>;
+    schedule: (candidate: PlanFeedbackRecoveryCandidate) => Promise<void>;
+  }
+): Promise<PlanFeedbackRecoveryOutcome> {
+  const application = currentRoleStorageApplication();
+  return recoverPlanFeedbackCandidateBase(candidate, {
+    ...options,
+    query: async (current, signal) => {
+      const projection = await application.queries.planFeedback(
+        current.roleId,
+        current.plan.id,
+        { signal, timeoutMs: 30_000 }
+      );
+      return projection ? { plan: projection.plan, records: projection.records } : null;
+    },
+    updateDelivery: (current, record, status, message, signal) => transitionPlanFeedbackDelivery(
+      application,
+      current.roleId,
+      record.planId,
+      record.id,
+      status,
+      message,
+      signal
+    ).then(committed => committed.record),
+    postCommit: (current) => processPlanFeedbackPostCommit(
+      current.roleDir,
+      current.roleId,
+      String(current.feedback.gatewayId || "").trim(),
+      current.feedback,
+      options.signal,
+      application
+    )
+  });
+}
+
+function presentedPlanWithFeedback(roleDir: string, plan: PlanItem) {
   return {
     ...presentPlan(plan),
     approval: planFeedbackSummary(roleDir, plan.id)
@@ -5951,12 +6537,15 @@ function handleRolePanelApi(
       return true;
     }
     const limit = Number(requestUrl.searchParams.get("limit") || "120");
-    const roleDir = roleFolderPath(activeRolesRoot, roleId);
-    jsonResponse(response, 200, {
-      code: 0,
+    void managerReadWorkerPool.queryRolePanelTimeline(
+      activeRolesRoot,
       roleId,
-      messages: readRolePanelTimeline(roleDir, Number.isFinite(limit) && limit > 0 ? limit : 120)
-    });
+      Number.isFinite(limit) && limit > 0 ? limit : 120
+    ).then(messages => jsonResponse(response, 200, { code: 0, roleId, messages }))
+      .catch(error => jsonResponse(response, 503, {
+        code: -1,
+        message: error instanceof Error ? error.message : "Role panel timeline is unavailable."
+      }));
     return true;
   }
 
@@ -5970,16 +6559,15 @@ function handleRolePanelApi(
         const attachments = normalizeRolePanelAttachments(body.attachments);
         if (!text && attachments.length === 0) throw new Error("Missing role panel message text or attachment.");
         const roleId = roleIdForDefinition(runtime.definition);
-        const roleDir = roleDirForDefinition(runtime.definition);
         return deliverRolePanelMessage({
           runtime,
           roleId,
-          roleDir,
           sender: "本地用户",
           text,
           attachments,
           messageIdPrefix: "role-panel-user",
-          deliver: triggerGatewayRolePanelMessage
+          deliver: triggerGatewayRolePanelMessage,
+          appendTimeline: appendRolePanelTimeline
         });
       })
       .then((payload) => jsonResponse(response, 202, { code: 0, ...payload }))
@@ -6424,15 +7012,48 @@ function roleDirForApi(roleId: string): string {
   return roleFolderPath(rolesRoot, safeRoleId);
 }
 
+const roleKnowledgeCatalogRefreshes = new Map<string, Promise<void>>();
+
+function requestRoleKnowledgeCatalogRefresh(roleDir: string): void {
+  const key = path.resolve(roleDir);
+  if (roleKnowledgeCatalogRefreshes.has(key)) return;
+  const refresh = managerCatalogWorkerPool.queryRoleKnowledgeCatalogSnapshot(roleDir, { timeoutMs: 30_000 })
+    .then(() => undefined)
+    .catch((error) => {
+      managerOperationalLog.record("warn", "role_knowledge_catalog_refresh_failed", {
+        action: key,
+        error: managerOperationalError(error, rootDir)
+      });
+    })
+    .finally(() => {
+      if (roleKnowledgeCatalogRefreshes.get(key) === refresh) roleKnowledgeCatalogRefreshes.delete(key);
+    });
+  roleKnowledgeCatalogRefreshes.set(key, refresh);
+}
+
+function roleKnowledgeCacheUnavailable(response: http.ServerResponse, roleId: string): void {
+  jsonResponse(response, 503, {
+    code: -1,
+    error: "cache_unavailable",
+    message: `Role knowledge catalog for ${roleId} is warming; retry shortly.`
+  });
+}
+
 function recalledKnowledgeForMessage(source: RegisterMessageGroupRequirementInput["source"]): KnowledgeRecallMatch[] {
   const roleId = String(source?.roleId || "").trim();
   if (!roleId) return [];
   try {
-    return roleKnowledgeSnapshot(roleDirForApi(roleId), String(source.summary || ""), {
+    const roleDir = roleDirForApi(roleId);
+    const snapshot = roleKnowledgeSnapshotFromPublishedCatalog(roleDir, String(source.summary || ""), {
       roleId,
       archiveCompletedPlans: false,
       includePendingConsolidation: false
-    }).requiredReadItems
+    });
+    if (!snapshot) {
+      requestRoleKnowledgeCatalogRefresh(roleDir);
+      return [];
+    }
+    return snapshot.requiredReadItems
       .filter((item): item is typeof item & { type: "plan" | "recent_memory" | "consolidated_memory" } =>
         item.type === "plan" || item.type === "recent_memory" || item.type === "consolidated_memory")
       .map((item) => ({
@@ -6862,7 +7483,13 @@ function handleRoleKnowledgeApi(
         return true;
       }
       const roleDir = resolveRoleDir(roleId);
-      jsonResponse(response, 200, { code: 0, data: validateRoleKnowledge(roleDir) });
+      const validation = validatePublishedRoleKnowledge(roleDir);
+      if (!validation) {
+        requestRoleKnowledgeCatalogRefresh(roleDir);
+        roleKnowledgeCacheUnavailable(response, roleId);
+        return true;
+      }
+      jsonResponse(response, 200, { code: 0, data: validation });
       return true;
     } catch (error) {
       jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
@@ -6881,13 +7508,20 @@ function handleRoleKnowledgeApi(
         return true;
       }
       const roleDir = resolveRoleDir(roleId);
-      const plan = listPlans(roleDir).find((item) => item.id === planId);
-      if (!plan) {
-        jsonResponse(response, 404, { code: -1, message: `Plan not found: ${planId}` });
-        return true;
-      }
-      const records = listPlanHistory(roleDir, planId);
-      jsonResponse(response, 200, { code: 0, data: { count: records.length, records } });
+      void managerCatalogWorkerPool.run<{ plan: PlanItem; records: unknown[] } | null>({
+        type: "role_plan_history",
+        roleDir,
+        planId
+      }).then((data) => {
+        if (!data) {
+          jsonResponse(response, 404, { code: -1, message: `Plan not found: ${planId}` });
+          return;
+        }
+        jsonResponse(response, 200, { code: 0, data: { count: data.records.length, records: data.records } });
+      }).catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+        code: -1,
+        message: error instanceof Error ? error.message : String(error)
+      }));
       return true;
     } catch (error) {
       jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) });
@@ -6898,113 +7532,62 @@ function handleRoleKnowledgeApi(
   const planFeedbackMatch = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/plans\/([^/]+)\/feedback$/);
   if (planFeedbackMatch) {
     const roleId = sanitizeRoleId(decodeURIComponent(planFeedbackMatch[1]));
-    const planId = decodeURIComponent(planFeedbackMatch[2]);
     try {
       if (!roleId) throw new Error("Missing role id.");
+      const planId = canonicalLogicalPlanId(decodeURIComponent(planFeedbackMatch[2]));
       const roleDir = resolveRoleDir(roleId);
-      const plan = listPlans(roleDir).find((item) => item.id === planId);
-      if (!plan) {
-        jsonResponse(response, 404, { code: -1, message: `Plan not found: ${planId}` });
-        return true;
-      }
       if (request.method === "GET") {
-        const records = listPlanFeedback(roleDir, planId);
-        jsonResponse(response, 200, { code: 0, data: { count: records.length, latest: records[0], records } });
+        void currentRoleStorageApplication().queries.planFeedback(roleId, planId).then((data) => {
+          if (!data) {
+            jsonResponse(response, 404, { code: -1, message: `Plan not found: ${planId}` });
+            return;
+          }
+          response.setHeader("etag", `"${data.planRevision}"`);
+          jsonResponse(response, 200, {
+            code: 0,
+            data: { count: data.records.length, latest: data.records[0], records: data.records }
+          });
+        }).catch((error) => respondRoleStorageError(response, error));
         return true;
       }
       if (request.method === "POST") {
-        void readJsonBody<PlanFeedbackRequest>(request, PLAN_FEEDBACK_REQUEST_MAX_BYTES)
-          .then(async (body) => {
-            const feedbackKind = body.kind || "approval_suggestion";
-            const planLevelFeedback = feedbackKind === "guidance" || feedbackKind === "guidance_response";
-            if (feedbackKind === "guidance") {
-              if (!planAcceptsGuidance(plan)) {
-                throw new Error("Plan guidance is available only for running plans outside approval.");
-              }
-            }
-            const requestedStepId = String(body.stepId || "").trim();
-            if (planLevelFeedback && requestedStepId) {
-              throw new Error("Plan guidance belongs to the plan and must not include a stepId.");
-            }
-            const step = planLevelFeedback
-              ? undefined
-              : requestedStepId
-              ? plan.steps.find((item) => item.id === requestedStepId)
-              : plan.steps.find((item) => item.id === plan.currentStepId)
-                || plan.steps.find((item) => item.status === "进行中");
-            if (requestedStepId && !step) throw new Error(`Plan step not found: ${requestedStepId}`);
-            const baseCandidate = createPlanFeedbackRecord({
-              id: body.feedbackId,
-              roleId,
-              planId,
-              planTitle: plan.title,
-              stepId: step?.id,
-              stepTitle: step?.title,
+        const context = roleStorageRequestContext(request, response);
+        void readRoleStorageJsonBody<PlanFeedbackRequest>(request, PLAN_FEEDBACK_REQUEST_MAX_BYTES)
+          .then(async (body) => ({
+            body,
+            committed: await currentRoleStorageApplication().commands.submitPlanFeedback(roleId, planId, {
+              feedbackId: body.feedbackId,
+              stepId: body.stepId,
               gatewayId: body.gatewayId,
               kind: body.kind,
               author: body.author,
               source: body.source,
               text: body.text,
-              notifyAgent: body.notifyAgent
-            });
-            const existing = listPlanFeedback(roleDir, planId).find((item) => item.id === baseCandidate.id);
-            if (existing && (existing.text !== baseCandidate.text || existing.stepId !== baseCandidate.stepId)) {
-              throw new Error(`Feedback id already exists with different content: ${baseCandidate.id}`);
+              notifyAgent: body.notifyAgent,
+              planAttachmentIds: body.planAttachmentIds,
+              attachments: body.attachments
+            }, context)
+          }))
+          .then(({ body, committed }) => {
+            const { record, created, plan: currentPlan } = committed.commit;
+            try {
+              schedulePlanFeedbackPostCommit(
+                roleDir,
+                roleId,
+                String(body.gatewayId || record.gatewayId || "").trim(),
+                currentPlan,
+                record
+              );
+              if (created) publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
+            } catch (error) {
+              managerOperationalLog.record("warn", "plan_feedback_post_commit_schedule_failed", {
+                action: `${roleId}:${planId}:${record.id}`,
+                error: managerOperationalError(error, rootDir)
+              });
             }
-            const attachments = body.attachments === undefined
-              ? existing?.attachments || []
-              : storePlanFeedbackAttachments(roleDir, plan.id, baseCandidate.id, body.attachments, existing?.attachments);
-            const mentionedPlanAttachments = resolvePlanFeedbackPlanAttachments(
-              plan.attachments,
-              body.planAttachmentIds,
-              existing?.planAttachments
-            ).map((attachment) => ({
-              ...attachment,
-              path: resolvePlanAttachmentFile(roleDir, plan.id, attachment)
-            }));
-            const candidate = { ...baseCandidate, attachments, planAttachments: mentionedPlanAttachments };
-            if (existing && !planFeedbackAttachmentsEqual(existing.attachments, candidate.attachments)) {
-              throw new Error(`Feedback id already exists with different attachments: ${candidate.id}`);
-            }
-            if (existing && !planFeedbackPlanAttachmentsEqual(existing.planAttachments, candidate.planAttachments)) {
-              throw new Error(`Feedback id already exists with different plan attachment mentions: ${candidate.id}`);
-            }
-            const record = existing || appendPlanFeedback(roleDir, candidate);
-            const qaResult = await consumePlanQaFeedback({
-              roleDir,
-              feedback: record,
-              sendToTask: (request) => {
-                const runtime = runtimeForRoleDelivery(
-                  roleId,
-                  String(record.gatewayId || body.gatewayId || "").trim()
-                );
-                return sendPlanFeedbackToTask(
-                  roleDir,
-                  planId,
-                  runtime.definition.dshBaseUrl,
-                  request
-                );
-              }
-            });
-            if (qaResult.outcome !== "ignored") {
-              const consumed = listPlanFeedback(roleDir, planId).find((item) => item.id === record.id) || record;
-              publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
-              return consumed;
-            }
-            if (record.deliveryStatus === "record_only" || record.deliveryStatus === "delivered") {
-              if (!existing) publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
-              return record;
-            }
-            return schedulePlanFeedbackDelivery(
-              roleDir,
-              roleId,
-              String(body.gatewayId || record.gatewayId || "").trim(),
-              plan,
-              record
-            );
+            respondRoleStorageCommit(response, 202, committed.operationId, record, committed.projection.planRevision);
           })
-          .then((data) => jsonResponse(response, 202, { code: 0, data }))
-          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+          .catch((error) => respondRoleStorageError(response, error));
         return true;
       }
       jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
@@ -7020,17 +7603,17 @@ function handleRoleKnowledgeApi(
     const roleId = decodeURIComponent(consolidationResultMatch[1]);
     const runId = decodeURIComponent(consolidationResultMatch[2]);
     try {
-      const roleDir = resolveRoleDir(roleId);
       if (request.method === "POST") {
-        void readJsonBody<Record<string, unknown>>(request)
-          .then((body) => applyMemoryConsolidationResult(roleDir, runId, body))
-          .then((data) => {
+        const context = roleStorageRequestContext(request, response);
+        void readRoleStorageJsonBody<Record<string, unknown>>(request)
+          .then((body) => currentRoleStorageApplication().commands.applyMemoryConsolidation(roleId, runId, body, context))
+          .then((committed) => {
             memoryConsolidationScheduler?.noteRunCompleted(runId);
             memoryConsolidationScheduler?.reschedule();
             publishManagerEvent("memory_consolidation_changed", { roleId, runId, status: "completed" });
-            jsonResponse(response, 200, { code: 0, data });
+            respondRoleStorageCommit(response, 200, committed.operationId, committed.commit, committed.projection?.revision);
           })
-          .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+          .catch((error) => respondRoleStorageError(response, error));
         return true;
       }
       jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
@@ -7051,7 +7634,12 @@ function handleRoleKnowledgeApi(
   try {
     const roleDir = resolveRoleDir(roleId);
     if (request.method === "GET" && resource === "counts") {
-      jsonResponse(response, 200, { code: 0, data: roleKnowledgeFileCounts(roleDir) });
+      void managerCatalogWorkerPool.run({ type: "role_knowledge_file_counts", roleDir })
+        .then((data) => jsonResponse(response, 200, { code: 0, data }))
+        .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+          code: -1,
+          message: error instanceof Error ? error.message : String(error)
+        }));
       return true;
     }
     if (request.method === "GET" && resource === "plans") {
@@ -7059,23 +7647,22 @@ function handleRoleKnowledgeApi(
       const wantsPage = !itemId && requestUrl.searchParams.has("limit");
       const wantsSummary = wantsPage && requestUrl.searchParams.get("detail") === "summary";
       if (itemId) {
-        const plan = getPlan(roleDir, itemId);
-        if (!plan) {
-          jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
-          return true;
-        }
-        const detail = requestUrl.searchParams.get("detail")?.trim();
-        const data = detail === "preview"
-          ? {
-            ...previewRolePlan(presentPlan(plan)),
-            approval: planFeedbackSummary(roleDir, plan.id)
+        void currentRoleStorageApplication().queries.plan(roleId, itemId).then((result) => {
+          if (!result) {
+            jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
+            return;
           }
-          : presentedPlanWithFeedback(roleDir, plan);
-        jsonResponse(response, 200, { code: 0, data });
+          response.setHeader("etag", `"${result.revision}"`);
+          const detail = requestUrl.searchParams.get("detail")?.trim();
+          const data = detail === "preview"
+            ? { ...previewRolePlan(presentPlan(result.plan)), approval: result.approval }
+            : { ...presentPlan(result.plan), approval: result.approval };
+          jsonResponse(response, 200, { code: 0, data });
+        }).catch((error) => respondRoleStorageError(response, error));
         return true;
       }
-      void listPlansAsync(roleDir)
-        .then((plans) => {
+      void managerCatalogWorkerPool.queryRolePlanCatalog(roleDir)
+        .then(({ plans, approvalByPlanId }) => {
           const data = wantsPage
             ? (() => {
               const requestedView = requestUrl.searchParams.get("view")?.trim() || undefined;
@@ -7102,32 +7689,38 @@ function handleRoleKnowledgeApi(
               return {
                 ...page,
                 items: page.items.map((plan) => wantsSummary
-                  ? summarizeRolePlan(plan)
+                 ? summarizeRolePlan(plan)
                   : {
                     ...plan,
-                    approval: planFeedbackSummary(roleDir, plan.id)
+                    approval: approvalByPlanId[plan.id]
                   })
               };
             })()
             : presentPlans(plans).map((plan) => ({
               ...plan,
-              approval: planFeedbackSummary(roleDir, plan.id)
+              approval: approvalByPlanId[plan.id]
             }));
           jsonResponse(response, 200, { code: 0, data });
         })
-        .catch((error) => jsonResponse(response, 400, {
+        .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
           code: -1,
           message: error instanceof Error ? error.message : String(error)
         }));
       return true;
     }
     if (request.method === "GET" && resource === "skills") {
-      const data = itemId ? getRoleSkill(roleDir, itemId) : listRoleSkills(roleDir);
-      if (itemId && !data) {
-        jsonResponse(response, 404, { code: -1, message: `Skill not found: ${itemId}` });
-        return true;
-      }
-      jsonResponse(response, 200, { code: 0, data });
+      void managerCatalogWorkerPool.run({ type: "role_skill_catalog", roleDir, ...(itemId ? { skillId: itemId } : {}) })
+        .then((data) => {
+          if (itemId && !data) {
+            jsonResponse(response, 404, { code: -1, message: `Skill not found: ${itemId}` });
+            return;
+          }
+          jsonResponse(response, 200, { code: 0, data });
+        })
+        .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+          code: -1,
+          message: error instanceof Error ? error.message : String(error)
+        }));
       return true;
     }
     if (request.method === "GET" && resource === "memory" && !itemId) {
@@ -7168,20 +7761,62 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "POST" && resource === "plans" && !itemId) {
-      void readJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
-        .then((body) => createPlan(roleDir, body))
-        .then((data) => jsonResponse(response, 201, { code: 0, data: presentedPlanWithFeedback(roleDir, data) }))
-        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      const context = roleStorageRequestContext(request, response);
+      void readRoleStorageJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
+        .then((body) => currentRoleStorageApplication().commands.createPlan(roleId, body, context))
+        .then((committed) => respondRoleStorageCommit(
+          response,
+          201,
+          committed.operationId,
+          { ...presentPlan(committed.projection.plan), approval: committed.projection.approval },
+          committed.projection.revision
+        ))
+        .catch((error) => respondRoleStorageError(response, error));
       return true;
     }
     if (request.method === "PATCH" && resource === "plans" && itemId) {
-      void readJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
-        .then((body) => updatePlan(roleDir, itemId, body))
-        .then((data) => jsonResponse(response, 200, { code: 0, data: presentedPlanWithFeedback(roleDir, data) }))
-        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+      const context = roleStorageRequestContext(request, response);
+      void readRoleStorageJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
+        .then((body) => currentRoleStorageApplication().commands.updatePlan(roleId, itemId, body, context))
+        .then((committed) => respondRoleStorageCommit(
+          response,
+          200,
+          committed.operationId,
+          { ...presentPlan(committed.projection.plan), approval: committed.projection.approval },
+          committed.projection.revision
+        ))
+        .catch((error) => respondRoleStorageError(response, error));
       return true;
     }
     if (request.method === "GET" && resource === "memory/recent") {
+      if (itemId) {
+        if (managerReadOnly) {
+          void managerReadWorkerPool.queryRecentMemoryDetail(roleDir, itemId)
+            .then((data) => {
+              if (!data) {
+                jsonResponse(response, 404, { code: -1, message: `Memory not found: ${itemId}` });
+                return;
+              }
+              jsonResponse(response, 200, { code: 0, data });
+            })
+            .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+              code: -1,
+              message: error instanceof Error ? error.message : String(error)
+            }));
+          return true;
+        }
+        const context = roleStorageRequestContext(request, response);
+        void currentRoleStorageApplication().commands.touchRecentMemory(roleId, itemId, context)
+          .then((committed) => respondRoleStorageCommit(
+            response,
+            200,
+            committed.operationId,
+            committed.projection.memory,
+            committed.projection.revision
+          ))
+          .catch((error) => respondRoleStorageError(response, error));
+        return true;
+      }
       void managerReadWorkerPool.queryRoleMemoryCatalog(roleDir, "recent", itemId)
         .then((data) => {
           if (itemId && !data) {
@@ -7212,60 +7847,69 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "POST" && resource === "memory/recent" && !itemId) {
-      void readJsonBody<Record<string, unknown>>(request)
-        .then((body) => createRecentMemory(roleDir, body))
-        .then((data) => {
+      const context = roleStorageRequestContext(request, response);
+      void readRoleStorageJsonBody<Record<string, unknown>>(request)
+        .then((body) => currentRoleStorageApplication().commands.createRecentMemory(roleId, body, context))
+        .then((committed) => {
           memoryConsolidationScheduler?.reschedule();
-          jsonResponse(response, 201, {
-            code: 0,
-            data: presentRoleMemories(roleDir, listRecentMemories(roleDir), "recent").find((item) => item.id === data.id)
-              ?? presentRoleMemory(data, "recent")
-          });
+          respondRoleStorageCommit(response, 201, committed.operationId, committed.projection.memory, committed.projection.revision);
         })
-        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        .catch((error) => respondRoleStorageError(response, error));
       return true;
     }
     if (request.method === "PATCH" && resource === "memory/recent" && itemId) {
-      void readJsonBody<Record<string, unknown>>(request)
-        .then((body) => updateRecentMemory(roleDir, itemId, body))
-        .then((data) => {
+      const context = roleStorageRequestContext(request, response);
+      void readRoleStorageJsonBody<Record<string, unknown>>(request)
+        .then((body) => currentRoleStorageApplication().commands.updateRecentMemory(roleId, itemId, body, context))
+        .then((committed) => {
           memoryConsolidationScheduler?.reschedule();
-          jsonResponse(response, 200, {
-            code: 0,
-            data: presentRoleMemories(roleDir, listRecentMemories(roleDir), "recent").find((item) => item.id === data.id)
-              ?? presentRoleMemory(data, "recent")
-          });
+          respondRoleStorageCommit(response, 200, committed.operationId, committed.projection.memory, committed.projection.revision);
         })
-        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        .catch((error) => respondRoleStorageError(response, error));
       return true;
     }
     if (request.method === "GET" && resource === "memory/consolidation-runs") {
-      const runs = listConsolidationRuns(roleDir);
-      const data = itemId ? runs.find((item) => item.id === itemId) : runs;
-      if (itemId && !data) {
-        jsonResponse(response, 404, { code: -1, message: `Consolidation run not found: ${itemId}` });
+      if (itemId) {
+        void currentRoleStorageApplication().queries.consolidationRun(roleId, itemId)
+          .then((data) => {
+            if (!data) {
+              jsonResponse(response, 404, { code: -1, message: `Consolidation run not found: ${itemId}` });
+              return;
+            }
+            response.setHeader("etag", `"${data.revision}"`);
+            jsonResponse(response, 200, { code: 0, data: data.run });
+          })
+          .catch((error) => respondRoleStorageError(response, error));
         return true;
       }
-      jsonResponse(response, 200, { code: 0, data });
+      void managerCatalogWorkerPool.run({
+        type: "role_consolidation_runs",
+        roleDir
+      }).then((data) => {
+        jsonResponse(response, 200, { code: 0, data });
+      }).catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+        code: -1,
+        message: error instanceof Error ? error.message : String(error)
+      }));
       return true;
     }
     if (request.method === "POST" && resource === "memory/consolidation-requests" && !itemId) {
-      void readJsonBody<Record<string, unknown>>(request)
-        .then((body) => pendingMemoryConsolidation(
-          roleDir,
-          body.triggerSource === "auto" ? "auto" : "api",
-          typeof body.includeOlderThanHours === "number" ? body.includeOlderThanHours : undefined,
-          typeof body.triggerOlderThanHours === "number" ? body.triggerOlderThanHours : undefined,
-          body.force === true
+      const context = roleStorageRequestContext(request, response);
+      void readRoleStorageJsonBody<Record<string, unknown>>(request)
+        .then((body) => currentRoleStorageApplication().commands.requestMemoryConsolidation(roleId, {
+          triggerSource: body.triggerSource === "auto" ? "auto" : "api",
+          includeOlderThanHours: typeof body.includeOlderThanHours === "number" ? body.includeOlderThanHours : undefined,
+          triggerOlderThanHours: typeof body.triggerOlderThanHours === "number" ? body.triggerOlderThanHours : undefined,
+          force: body.force === true
+        }, context))
+        .then((committed) => respondRoleStorageCommit(
+          response,
+          201,
+          committed.operationId,
+          committed.commit,
+          committed.projection?.revision
         ))
-        .then((data) => {
-          if (!data) {
-            jsonResponse(response, 409, { code: -1, message: "No memory consolidation is due." });
-            return;
-          }
-          jsonResponse(response, 201, { code: 0, data });
-        })
-        .catch((error) => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+        .catch((error) => respondRoleStorageError(response, error));
       return true;
     }
     jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
@@ -7276,28 +7920,63 @@ function handleRoleKnowledgeApi(
   }
 }
 
+let gatewayDiagnosticsSnapshotService: GatewayDiagnosticsSnapshotService | undefined;
+
+function activeGatewayDiagnosticsSnapshotService(): GatewayDiagnosticsSnapshotService {
+  gatewayDiagnosticsSnapshotService ??= new GatewayDiagnosticsSnapshotService({
+    capture: () => captureGatewayDiagnosticsWorkerInput(
+      runtimes.values(),
+      gatewayId => agentStateByGateway.get(gatewayId)
+    ),
+    minRefreshIntervalMs: 5_000,
+    timeoutMs: 60_000,
+    load: (input, options) => managerCatalogWorkerPool.run<GatewayDiagnosticsWorkerResult>({
+      type: "gateway_diagnostics_snapshot",
+      input
+    }, options)
+  });
+  return gatewayDiagnosticsSnapshotService;
+}
+
 function standaloneGatewayPayload(
   includeDiagnostics = true,
   includeConfigDefinitions = includeDiagnostics
 ): Record<string, unknown> {
+  const snapshotService = activeGatewayDiagnosticsSnapshotService();
+  snapshotService.requestRefresh();
+  const snapshot = snapshotService.read(includeDiagnostics);
   return measureSyncPerformanceOperation(
     includeDiagnostics
       ? PERFORMANCE_OPERATIONS.managerGatewaysBuildDiagnostics
       : PERFORMANCE_OPERATIONS.managerGatewaysBuildSummary,
     () => {
-      const roleInfoCatalogCache = new Map<string, Array<Record<string, unknown>>>();
-      const tailCache: JsonlTailCache = new Map();
-      return buildStandaloneGatewayPayload(
+      const cachedById = new Map(snapshot.records.map(record => [String(record.id ?? ""), record]));
+      const payload = buildStandaloneGatewayPayload(
         {
           runtimes: runtimes.values(),
-          runtimeStatus: includeDiagnostics
-            ? (runtime) => runtimeStatusWithRoleInfoCache(runtime, roleInfoCatalogCache, tailCache)
-            : (runtime) => runtimeSummaryStatusWithRoleInfoCache(runtime, roleInfoCatalogCache),
+          runtimeStatus: runtime => memoryOnlyGatewayRuntimeStatus(
+            rootDir,
+            runtime,
+            cachedById.get(runtime.definition.id)
+          ),
           routeDir: path.relative(rootDir, routeRoot).replace(/\\/g, "/"),
           rolesDir: path.relative(rootDir, rolesRoot).replace(/\\/g, "/")
         },
         { includeConfigDefinitions }
       );
+      const data = payload.data as Record<string, unknown>;
+      return {
+        ...payload,
+        data: {
+          ...data,
+          diagnosticsSnapshot: {
+            revision: snapshot.revision,
+            state: snapshot.state,
+            refreshedAt: snapshot.refreshedAt,
+            refreshStartedAt: snapshot.refreshStartedAt
+          }
+        }
+      };
     }
   );
 }
@@ -7426,20 +8105,35 @@ function managerHealthPayload(): Record<string, unknown> {
     runtime.definition.enabled === true
     && sharedGatewayMessageAdapterTypes(runtime.definition).length > 0
   );
+  const routeCatalogStartup = routeCatalogStartupStatus();
   const routeLifecycle = {
+    catalog: routeCatalogStartup,
     required: requiredRoutes.length,
     ready: requiredRoutes.filter(runtime => runtime.readiness === "ready").length,
     starting: requiredRoutes.filter(runtime => runtime.readiness === "starting").length,
     blocked: requiredRoutes.filter(runtime => runtime.readiness === "blocked").map(runtime => runtime.definition.id),
     failed: requiredRoutes.filter(runtime => runtime.readiness === "failed").map(runtime => runtime.definition.id)
   };
-  const routesReady = routeLifecycle.ready === routeLifecycle.required;
+  const routesReady = routeCatalogStartup.state === "ready"
+    && routeLifecycle.ready === routeLifecycle.required;
+  const planStorageStartupSnapshot = planStorageStartupStatus();
+  const planStorageStartup = publicPlanStorageStartupSnapshot(planStorageStartupSnapshot);
   const backgroundLifecycle = {
+    planStorageStartup,
+    routeCatalog: routeCatalogStartup,
     memoryConsolidation: memoryConsolidationScheduler?.failureSummary() ?? { backoff: 0, incidents: 0 },
-    planFeedbackRecovery: planFeedbackRecoveryService?.failureSummary() ?? { backoff: 0, incidents: 0 }
+    planFeedbackRecovery: planFeedbackRecoveryService?.failureSummary() ?? { backoff: 0, incidents: 0 },
+    configWatch: publicManagerWatchBrokerStatus(configWatchLifecycle),
+    pluginPackageWatch: publicManagerWatchBrokerStatus(pluginPackageWatchLifecycle)
   };
+  const watchIncidentCount = [configWatchLifecycle, pluginPackageWatchLifecycle]
+    .filter(status => status.state === "degraded" || status.partial)
+    .length;
   const backgroundIncidentCount = backgroundLifecycle.memoryConsolidation.incidents
-    + backgroundLifecycle.planFeedbackRecovery.incidents;
+    + backgroundLifecycle.planFeedbackRecovery.incidents
+    + planStorageStartupSnapshot.incidents
+    + (routeCatalogStartup.state === "degraded" ? routeCatalogStartup.incidents : 0)
+    + watchIncidentCount;
   return {
     protocolVersion: 1,
     applicationGenerationId: managerHostIdentity?.applicationGenerationId,
@@ -7447,6 +8141,7 @@ function managerHealthPayload(): Record<string, unknown> {
     managerBaseUrl: managerBaseUrl || undefined,
     health: buildManagerHealthSnapshot({
       pluginReadiness,
+      planStorageReady: planStorageStartupSnapshot.state === "ready",
       routesReady,
       routeReadyCount: routeLifecycle.ready,
       routeRequiredCount: routeLifecycle.required,
@@ -7518,56 +8213,38 @@ function metaPayload(): Record<string, unknown> {
   };
 }
 
-async function migrateRolePlanLayoutsAfterStartup(): Promise<void> {
-  if (managerReadOnly) return;
-  const startedAt = Date.now();
-  let roles = 0;
-  let migrated = 0;
-  const failures: string[] = [];
-  try {
-    const entries = await fs.promises.readdir(rolesRoot, { withFileTypes: true });
-    const roleDirectories = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(rolesRoot, entry.name));
-    roles = roleDirectories.length;
-    for (const roleDir of roleDirectories) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      const outcome = await migrateRolePlanLayoutInWorker(roleDir);
-      migrated += outcome.migrated;
-      for (const failure of outcome.failures) failures.push(`${path.basename(roleDir)}:${failure.planId}:${failure.error}`);
-    }
-    managerOperationalLog.record(failures.length ? "warn" : "info", "role_plan_layout_migration_completed", {
-      durationMs: Date.now() - startedAt,
-      result: `roles=${roles}; migrated=${migrated}; failures=${failures.length}${failures.length ? `; ${failures.slice(0, 10).join(" | ")}` : ""}`
-    });
-  } catch (error) {
-    managerOperationalLog.record("warn", "role_plan_layout_migration_failed", {
-      durationMs: Date.now() - startedAt,
-      result: `roles=${roles}; migrated=${migrated}`,
-      error: managerOperationalError(error, rootDir)
-    });
-  }
-}
-
-async function prewarmRolePlanCatalogs(): Promise<void> {
+async function prewarmRolePlanCatalogs(): Promise<boolean> {
   const startedAt = Date.now();
   let roleDirectories: string[] = [];
   try {
-    const entries = await fs.promises.readdir(rolesRoot, { withFileTypes: true });
-    roleDirectories = entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(rolesRoot, entry.name));
-    const results = await Promise.allSettled(roleDirectories.map((roleDir) => (
-      listPlansAsync(roleDir, { watch: false })
-    )));
+    roleDirectories = await managerCatalogWorkerPool.run<string[]>({
+      type: "role_directories",
+      rolesRoot
+    }, { timeoutMs: 30_000 });
+    let fulfilled = 0;
+    for (const roleDir of roleDirectories) {
+      try {
+        await managerCatalogWorkerPool.queryRoleKnowledgeCatalogSnapshot(roleDir, { timeoutMs: 30_000 });
+        fulfilled += 1;
+      } catch (error) {
+        managerOperationalLog.record("warn", "role_plan_catalog_prewarm_failed", {
+          action: roleDir,
+          error: managerOperationalError(error, rootDir)
+        });
+      }
+    }
     managerOperationalLog.record("info", "role_plan_catalogs_prewarmed", {
       durationMs: Date.now() - startedAt,
-      result: `roles=${roleDirectories.length}; fulfilled=${results.filter((result) => result.status === "fulfilled").length}`
+      result: `roles=${roleDirectories.length}; fulfilled=${fulfilled}`
     });
+    return fulfilled === roleDirectories.length;
   } catch (error) {
     managerOperationalLog.record("warn", "role_plan_catalogs_prewarm_failed", {
       durationMs: Date.now() - startedAt,
       result: `roles=${roleDirectories.length}`,
       error: managerOperationalError(error, rootDir)
     });
+    return false;
   }
 }
 
@@ -7665,7 +8342,7 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
   }
 
   void readJsonBody<AgentStateReportRequest>(request)
-    .then((body) => {
+    .then(async (body) => {
       const gatewayId = sanitizeRoleId(body.gatewayId);
       const adapterType = parseAgentAdapterType(body.adapterType);
       const runtime = gatewayId ? runtimes.get(gatewayId) : undefined;
@@ -7703,7 +8380,7 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
         if (bindingUpdate) {
           runtime.definition.codexThreadId = bindingUpdate.threadId;
           runtime.definition.codexCwd = bindingUpdate.workspace;
-          writeAdapterConfigFile(runtime.definition);
+          await writeAdapterConfigFile(runtime.definition);
           publishManagerEvent("codex_binding_replaced", {
             gatewayId,
             previousThreadId: String(body.state?.bindingPreviousThreadId || ""),
@@ -7746,10 +8423,11 @@ export function handlePersonaPluginApi(
   if (handlePersonaMessagingApi(request, requestUrl, response, {
     rootDir,
     rolesRoot: activeRolesRoot,
-    catalog: personaCatalog,
+    personaPresentations: routeCatalogPersonas,
     runtimes: () => [...runtimes.values()],
     authorizeSource: (routeId, personaId, capability) => currentPersonaMessageAuthority().verify(routeId, personaId, capability),
-    deliver: triggerGatewayRolePanelMessage
+    deliver: triggerGatewayRolePanelMessage,
+    appendTimeline: appendRolePanelTimeline
   })) return true;
   if (handlePersonaAvatarApi(request, requestUrl.pathname, response, activeRolesRoot, change => {
     // This is presentation metadata only: version plus a Manager-relative URL, never a role directory path.
@@ -7764,14 +8442,14 @@ export function handlePersonaPluginApi(
 
 export type StartManagerOptions = {
   instanceLock?: ManagerInstanceLock;
+  planStorageStartupLifecycle?: PlanStorageStartupLifecycle;
+  routeCatalogStartupLifecycle?: RouteCatalogStartupLifecycle;
 };
 
 export async function startManager(options: StartManagerOptions = {}): Promise<void> {
-  const managerCordisRoot = getBuiltinManagerCordisRoot();
-  const managerSharedResourcesRuntime = await managerCordisRoot.ensure(
-    MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
-    mountManagerSharedResourcesRuntime(messageProcessingBoardPersistence)
-  );
+  roleKnowledgeCatalogsReady = false;
+  let activeServer!: http.Server;
+  let shuttingDown = false;
   const managerStartingRequest = (_request: http.IncomingMessage, response: http.ServerResponse): void => {
     response.statusCode = 503;
     response.setHeader("content-type", "application/json; charset=utf-8");
@@ -7783,7 +8461,93 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       message: "RabiRoute Manager is starting."
     })}\n`);
   };
-  const activeServer = http.createServer(managerStartingRequest);
+  const managerStoppingRequest = (_request: http.IncomingMessage, response: http.ServerResponse): void => {
+    response.statusCode = 503;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("retry-after", "1");
+    response.end(`${JSON.stringify({
+      code: -1,
+      state: "stopping",
+      message: "RabiRoute Manager is stopping."
+    })}\n`);
+  };
+  const managerRuntimeOwner = new ManagerRuntimeOwner<ActiveStorageLifecycleGeneration>({
+    fenceIngress(reason) {
+      shuttingDown = true;
+      activeServer?.removeAllListeners("request");
+      activeServer?.on("request", managerStoppingRequest);
+      closeManagerEventClients();
+      managerOperationalLog.record("info", "manager_ingress_fenced", { result: reason });
+    },
+    publish(publication) {
+      if (activeStorageLifecycleGeneration) {
+        throw new Error("A Manager runtime generation is already published.");
+      }
+      activeServer.removeAllListeners("request");
+      activeServer.on("request", publication.requestHandler);
+      activeStorageLifecycleGeneration = publication;
+    },
+    unpublish(publication) {
+      if (activeStorageLifecycleGeneration === publication) {
+        activeStorageLifecycleGeneration = undefined;
+      }
+      activeServer.removeListener("request", publication.requestHandler);
+    },
+    onResourceStopError(owner, error) {
+      managerOperationalLog.record("error", "manager_resource_stop_failed", {
+        action: owner,
+        error: managerOperationalError(error, rootDir)
+      });
+    }
+  });
+  const failManagerStartup = async (phase: string, error: unknown): Promise<never> => {
+    await managerRuntimeOwner.teardown(phase, error);
+    throw error;
+  };
+  managerRuntimeOwner.register("operational_log_flush", () => managerOperationalLog.flush());
+  let signalExitScheduled = false;
+  const shutdownManager = (reason: string): void => {
+    console.log(`gateway-manager shutting down: ${reason}`);
+    managerOperationalLog.record("info", "manager_shutdown_requested", { result: reason });
+    const teardownFlight = managerRuntimeOwner.teardown(`signal:${reason}`);
+    if (signalExitScheduled) return;
+    signalExitScheduled = true;
+    void teardownFlight.then(
+      () => process.exit(process.exitCode ?? 0),
+      error => {
+        process.exitCode = 1;
+        console.error(error);
+        process.exit(1);
+      }
+    );
+    const forcedExit = setTimeout(
+      () => process.exit(1),
+      DEFAULT_MANAGER_RUNTIME_TEARDOWN_TIMEOUT_MS + 1_000
+    );
+    forcedExit.unref();
+  };
+  let removeSignalHandlers = (): void => {};
+  try {
+    removeSignalHandlers = installManagerSignalHandlers(shutdownManager);
+    managerRuntimeOwner.register("signal_handlers", () => removeSignalHandlers());
+  } catch (error) {
+    await failManagerStartup("manager_signal_handler_acquisition", error);
+  }
+  try {
+    const managerCordisRoot = getBuiltinManagerCordisRoot();
+    managerRuntimeOwner.register("cordis_root", () => managerCordisRoot.dispose());
+    await managerCordisRoot.ensure(
+      MANAGER_SHARED_RESOURCES_RUNTIME_KEY,
+      mountManagerSharedResourcesRuntime(messageProcessingBoardPersistence)
+    );
+  } catch (error) {
+    await failManagerStartup("manager_shared_resources_acquisition", error);
+  }
+  activeServer = http.createServer(managerStartingRequest);
+  managerRuntimeOwner.register("http_server", () => activeServer.listening
+    ? new Promise<void>(resolve => activeServer.close(() => resolve()))
+    : Promise.resolve());
   activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
@@ -7801,46 +8565,93 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     process.env.GATEWAY_MANAGER_URL = managerBaseUrl;
     configRepository.setManagerPort(managerPort);
   } catch (error) {
-    if (activeServer.listening) {
-      await new Promise<void>(resolve => activeServer.close(() => resolve()));
-    }
-    await managerSharedResourcesRuntime.unmount().catch(() => {});
-    await managerCordisRoot.dispose().catch(() => {});
-    throw error;
+    await failManagerStartup("manager_endpoint_acquisition", error);
   }
+  const roleStorageApplication = await (async (): Promise<RoleStorageApplication> => {
+    try {
+      const application = new RoleStorageApplication({
+        rolesRoot,
+        applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+        managerInstanceId,
+        currentIdentity: () => managerInstanceId
+          ? Object.freeze({
+              applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+              managerInstanceId
+            })
+          : null
+      });
+      managerRuntimeOwner.register("role_storage", () => application.stop());
+      return application;
+    } catch (error) {
+      return await failManagerStartup("role_storage_acquisition", error);
+    }
+  })();
+  const {
+    planStorageStartupLifecycle,
+    routeCatalogStartupLifecycle
+  } = await (async (): Promise<{
+    planStorageStartupLifecycle: PlanStorageStartupLifecycle;
+    routeCatalogStartupLifecycle: RouteCatalogStartupLifecycle;
+  }> => {
+    try {
+      const planLifecycle = options.planStorageStartupLifecycle ?? new PlanStorageStartupLifecycle({
+      rolesRoot,
+      readOnly: managerReadOnly,
+      attemptTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_TIMEOUT_MS) || undefined,
+      retryBaseMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_RETRY_BASE_MS) || undefined,
+      retryMaxMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_RETRY_MAX_MS) || undefined,
+      terminateTimeoutMs: Number(process.env.RABIROUTE_PLAN_STORAGE_STARTUP_TERMINATE_TIMEOUT_MS) || undefined,
+      onStatus: snapshot => {
+        publishManagerEvent("plan_storage_startup_changed", publicPlanStorageStartupSnapshot(snapshot));
+        const level = snapshot.state === "degraded" ? "error" : "info";
+        managerOperationalLog.record(level, `plan_storage_startup_${snapshot.state}`, {
+          durationMs: snapshot.startedAt && snapshot.completedAt
+            ? Math.max(0, Date.parse(snapshot.completedAt) - Date.parse(snapshot.startedAt))
+            : undefined,
+          result: `attempt=${snapshot.attempt}; state=${snapshot.state}; roles=${snapshot.summary?.roles ?? 0}; migrated=${snapshot.summary?.migrated ?? 0}; reconciled=${snapshot.summary?.reconciled ?? 0}; failures=${snapshot.summary?.failures.length ?? 0}`,
+          error: snapshot.lastError ? managerOperationalError(new Error(snapshot.lastError), rootDir) : undefined
+        });
+      }
+      });
+      managerRuntimeOwner.register("plan_storage_startup", () => planLifecycle.stop());
+      const routeLifecycle = options.routeCatalogStartupLifecycle ?? new RouteCatalogStartupLifecycle({
+      input: () => ({
+        rootDir,
+        routeRoot,
+        rolesRoot,
+        managerPort,
+        readOnly: managerReadOnly
+      }),
+      apply: applyRouteCatalogSnapshot,
+      attemptTimeoutMs: Number(process.env.RABIROUTE_ROUTE_CATALOG_STARTUP_TIMEOUT_MS) || undefined,
+      retryBaseMs: Number(process.env.RABIROUTE_ROUTE_CATALOG_STARTUP_RETRY_BASE_MS) || undefined,
+      retryMaxMs: Number(process.env.RABIROUTE_ROUTE_CATALOG_STARTUP_RETRY_MAX_MS) || undefined,
+      maxAttempts: Number(process.env.RABIROUTE_ROUTE_CATALOG_STARTUP_MAX_ATTEMPTS) || undefined,
+      terminateTimeoutMs: Number(process.env.RABIROUTE_ROUTE_CATALOG_STARTUP_TERMINATE_TIMEOUT_MS) || undefined,
+      onStatus: snapshot => {
+        publishManagerEvent("route_catalog_startup_changed", snapshot);
+      },
+      onFailure: (error, snapshot) => {
+        managerOperationalLog.record("error", "route_catalog_startup_failed", {
+          result: `attempt=${snapshot.attempt}; code=${snapshot.lastErrorCode ?? "unknown"}; Manager control plane stays live`,
+          error: managerOperationalError(error, rootDir)
+        });
+      }
+      });
+      managerRuntimeOwner.register("route_catalog_startup", () => routeLifecycle.stop());
+      return {
+        planStorageStartupLifecycle: planLifecycle,
+        routeCatalogStartupLifecycle: routeLifecycle
+      };
+    } catch (error) {
+      return await failManagerStartup("startup_lifecycle_acquisition", error);
+    }
+  })();
+  try {
   let managerPluginKernel: GenerationRuntime | undefined;
   const managerPluginProcessLeases = new ProcessLeaseRegistry();
+  managerRuntimeOwner.register("manager_plugin_process_leases", () => managerPluginProcessLeases.disposeAll());
   let loadedManagerPluginProfile: LoadedPluginProfile | undefined;
-  let stopManagerLanDiscovery = async (): Promise<void> => {};
-  const disposeManagerCordisRuntime = async (): Promise<void> => {
-    let firstError: unknown;
-    try {
-      await stopManagerLanDiscovery();
-    } catch (error) {
-      firstError = error;
-    }
-    try {
-      await managerPluginKernel?.dispose();
-    } catch (error) {
-      firstError = error;
-    }
-    try {
-      await managerPluginProcessLeases.disposeAll();
-    } catch (error) {
-      firstError ??= error;
-    }
-    try {
-      await managerSharedResourcesRuntime.unmount();
-    } catch (error) {
-      firstError ??= error;
-    }
-    try {
-      await managerCordisRoot.dispose();
-    } catch (error) {
-      firstError ??= error;
-    }
-    if (firstError) throw firstError;
-  };
   let managerPluginDiagnostics: readonly unknown[] = [];
   let managerServicesReady = false;
   let managerListenerReady = false;
@@ -7855,13 +8666,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   let stopActiveNapcatSupervisor = async (): Promise<void> => {};
   let activeNapcatControlContext: ReturnType<typeof napcatManagerCtx> | undefined;
   let startActivePlanFeedbackRecovery = (): void => {};
-  let shutdownManager = (_reason: string): void => {
-    throw new Error("Manager shutdown is not ready.");
-  };
   const managerPluginRoutes = new ManagerPluginRouteRegistry();
   const lanAgentRegistry = new LanAgentRegistry({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json") });
+  managerRuntimeOwner.register("lan_agent_registry", () => lanAgentRegistry.close());
   const lanAgentReleaseStore = new LanAgentReleaseStore({ rootDir });
-  let detachLanAgentUpgrade: (() => void) | undefined;
   const webPluginModules = new WebPluginModuleRegistry();
   const wearableCompanionRuntimeIdentity = createWearableCompanionRuntimeIdentity({
     hostOwned: Boolean(managerHostIdentity),
@@ -7917,6 +8725,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       managerPluginRoutes,
       personaSyncRouteContext,
       personaSyncService,
+      planStorageStartup: Object.freeze({
+        snapshot: () => planStorageStartupLifecycle.snapshot(),
+        onReady: (listener: Parameters<PlanStorageStartupLifecycle["onReady"]>[0]) => planStorageStartupLifecycle.onReady(listener)
+      }),
       registerManagerPluginHandlerRoutes,
       get personaSyncAutoReconciler() { return personaSyncAutoReconciler; },
       set personaSyncAutoReconciler(value) { personaSyncAutoReconciler = value; },
@@ -7981,6 +8793,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       rootDir,
       runtimeStatus,
       runtimes,
+      routeCatalogVersion,
+      routeCatalogPersonas,
       syncRunningGateways,
       writeConfig,
       writeManagerConfig,
@@ -8016,6 +8830,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       replayGatewayDelivery,
       requestWeixinLogin,
       restartGateway,
+      routeCatalogVersion,
       runtimeStatus,
       runtimes,
       sharedGatewayAdapterTypes,
@@ -8297,7 +9112,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       measureSyncPerformanceOperation,
       metaPayload,
       registerManagerPluginHandlerRoutes,
-      runtimeStatusWithRoleInfoCache,
+      runtimeStatusWithRoleInfoCache: runtimeStatus,
       runtimes,
     }) }),
     Object.freeze({ capability: "host.manager.desktop@1", value: Object.freeze({
@@ -8306,6 +9121,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       desktopConfigFilePayload,
       ensureDataDirs,
       ensurePersonaConfigFile,
+      ensureRoleFile,
+      ensureRoleFolder,
       handleDesktopSettingsApi,
       jsonResponse,
       managerPluginRoutes,
@@ -8342,8 +9159,14 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       XiaomiHomeEventMonitor,
       XiaomiHomeClipCaptureWorker,
       XiaomiHomeArtifactAccess,
+      XiaomiHomeRuntimeController,
+      XiaomiHomeSettingsStore,
       createXiaomiHomeManagerRouteHandler,
       deliverXiaomiHomeEvent,
+      lifecycleFence: Object.freeze({
+        applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+        managerInstanceId
+      }),
       jsonResponse,
       managerPluginRoutes,
       readJsonBody,
@@ -8367,6 +9190,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   const managerPluginPackageCatalog = new PluginPackageCatalog(managerPluginPackageRoots, {
     trustedInProcessRoots: [builtinPluginPackageRoot]
   });
+  try {
   managerPluginKernel = new GenerationRuntime({
     host: "manager",
     hostServices: managerPluginHostServices,
@@ -8409,8 +9233,15 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       });
     }
   });
+  managerRuntimeOwner.register("manager_plugin_kernel", () => managerPluginKernel?.dispose() ?? Promise.resolve());
+  } catch (error) {
+    await failManagerStartup("manager_plugin_kernel_construction", error);
+  }
   let managerPluginReconciliationTail: Promise<void> = Promise.resolve();
-  const reconcileManagerPlugins = (reason: string): Promise<void> => {
+  const reconcileManagerPlugins = (
+    reason: string,
+    options: Readonly<{ readyOnly?: boolean }> = {}
+  ): Promise<void> => {
     const reconciliation = managerPluginReconciliationTail.then(async () => {
       const previousProfile = loadedManagerPluginProfile;
       const loaded = await loadPluginProfile({
@@ -8423,7 +9254,14 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       // profile snapshot installed for that whole serialized transaction.
       loadedManagerPluginProfile = loaded;
       try {
-        const result = await managerPluginKernel!.switch(loaded.candidates, {
+        const candidates = options.readyOnly
+          ? selectReadyPluginCandidates(
+            loaded.candidates,
+            loaded.profile.readyRequires,
+            managerPluginHostServices.map(service => service.capability)
+          )
+          : loaded.candidates;
+        const result = await managerPluginKernel!.switch(candidates, {
           readyRequires: loaded.profile.readyRequires
         });
         managerPluginGenerationStatus = Object.freeze({
@@ -8452,42 +9290,32 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   };
 
   try {
-    await reconcileManagerPlugins("manager startup");
+    await reconcileManagerPlugins("manager startup required capabilities", { readyOnly: true });
     const readiness = managerPluginKernel!.current().readiness;
     if (readiness.missingCapabilities.length > 0) {
       throw new Error(`Required Manager capabilities failed to activate: ${readiness.missingCapabilities.join(", ")}`);
     }
   } catch (error) {
-    lanAgentRegistry.close();
-    if (activeServer.listening) {
-      await new Promise<void>(resolve => activeServer.close(() => resolve()));
-    }
-    await disposeManagerCordisRuntime().catch(() => {});
-    throw error;
+    await failManagerStartup("manager_plugin_startup", error);
   }
   let configWatcher: ConfigWatcher | null = null;
   let pluginPackageWatcher: PluginPackageWatcher | null = null;
-  let removeSignalHandlers = (): void => {};
   let managerResourcesStopped = false;
 
   function stopManagerResources(): void {
     if (managerResourcesStopped) return;
     managerResourcesStopped = true;
-    removeSignalHandlers();
-    configWatcher?.close();
-    pluginPackageWatcher?.close();
-    detachLanAgentUpgrade?.();
-    detachLanAgentUpgrade = undefined;
-    lanAgentRegistry.close();
+    gatewayDiagnosticsSnapshotService?.stop();
+    gatewayDiagnosticsSnapshotService = undefined;
     closeManagerEventClients();
   }
+  managerRuntimeOwner.register("request_scoped_resources", () => stopManagerResources());
+  managerRuntimeOwner.register("manual_trigger_processes", () => manualTriggerProcesses.stopAll());
 
   try {
   managerServicesReady = true;
   if (managerReadOnly) {
     console.log("Manager read-only mode enabled: startup reconciliation and mutating HTTP methods are disabled.");
-  } else {
-    reconcileActiveSpeech();
   }
 
   const handleManagerRequest = (request: http.IncomingMessage, response: http.ServerResponse): void => {
@@ -8549,6 +9377,30 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       })) {
         return;
       }
+      if (handleRoleContextProjectionRequest(request, requestUrl, response, {
+        identity: {
+          applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+          managerInstanceId
+        },
+        isLoopback: isLoopbackRemoteAddress,
+        verifyCapability: (routeId, roleId, capability) =>
+          currentPersonaMessageAuthority().verify(routeId, roleId, capability),
+        readJsonBody,
+        resolve: body => {
+          const roleDir = roleDirForApi(body.roleId);
+          return roleKnowledgeSnapshotFromPublishedCatalog(roleDir, String(body.signalText || ""), {
+            roleId: body.roleId,
+            includePendingConsolidation: body.includePendingConsolidation,
+            consolidationTrigger: body.consolidationTrigger,
+            archiveCompletedPlans: true,
+            touchViewedAt: true
+          });
+        },
+        requestRefresh: roleId => requestRoleKnowledgeCatalogRefresh(roleDirForApi(roleId)),
+        jsonResponse
+      })) {
+        return;
+      }
       if (!webguiLanRequestAllowed(request, requestUrl)) {
         response.setHeader("cache-control", "no-store");
         response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
@@ -8575,6 +9427,27 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }
       if (request.method === "GET" && requestUrl.pathname === "/health") {
         jsonResponse(response, 200, managerHealthPayload());
+        return;
+      }
+      const routeCatalogRejection = routeCatalogStartupUnavailable(
+        request.method,
+        requestUrl.pathname,
+        routeCatalogStartupLifecycle.snapshot()
+      );
+      if (routeCatalogRejection) {
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("retry-after", String(routeCatalogRejection.retryAfterSeconds));
+        jsonResponse(response, routeCatalogRejection.statusCode, routeCatalogRejection.body);
+        return;
+      }
+      const planStorageRejection = planStorageStartupUnavailable(
+        request.method,
+        requestUrl.pathname,
+        planStorageStartupLifecycle.snapshot()
+      );
+      if (planStorageRejection) {
+        response.setHeader("retry-after", String(planStorageRejection.retryAfterSeconds));
+        jsonResponse(response, planStorageRejection.statusCode, planStorageRejection.body);
         return;
       }
       const pluginReadiness = managerPluginGenerationStatus?.readiness;
@@ -8633,31 +9506,75 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     }
   };
 
-  activeServer.removeListener("request", managerStartingRequest);
-  activeServer.on("request", handleManagerRequest);
-
   activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
-  detachLanAgentUpgrade = lanAgentRegistry.attach(activeServer, {
+  const detachLanAgentUpgrade = lanAgentRegistry.attach(activeServer, {
     getToken: () => rabiGlobalConfig.read().webguiLan.accessToken,
     enabled: () => rabiGlobalConfig.read().webguiLan.enabled
   });
+  managerRuntimeOwner.register("lan_agent_upgrade", () => detachLanAgentUpgrade());
 
+  let planDependentBackgroundStarted = false;
+  let planDependentBackgroundFlight: Promise<void> | undefined;
+  let roleKnowledgeRetryTimer: NodeJS.Timeout | undefined;
+  managerRuntimeOwner.register("role_knowledge_startup_retry", () => {
+    if (roleKnowledgeRetryTimer) clearTimeout(roleKnowledgeRetryTimer);
+    roleKnowledgeRetryTimer = undefined;
+  });
+  const startPlanDependentBackground = (): void => {
+    if (planDependentBackgroundStarted || planDependentBackgroundFlight || shuttingDown || managerReadOnly) return;
+    if (planStorageStartupLifecycle.snapshot().state !== "ready") return;
+    if (routeCatalogStartupLifecycle.snapshot().state !== "ready") return;
+    planDependentBackgroundFlight = (async () => {
+      roleKnowledgeCatalogsReady = await prewarmRolePlanCatalogs();
+      if (shuttingDown) return;
+      if (!roleKnowledgeCatalogsReady) {
+        roleKnowledgeRetryTimer = setTimeout(() => {
+          roleKnowledgeRetryTimer = undefined;
+          startPlanDependentBackground();
+        }, 2_000);
+        roleKnowledgeRetryTimer.unref();
+        return;
+      }
+      planDependentBackgroundStarted = true;
+      syncRunningGateways();
+      void reconcilePersistedPlanSecretaryWorkspaces();
+      startActivePlanFeedbackRecovery();
+      memoryConsolidationScheduler?.start();
+    })().finally(() => {
+      planDependentBackgroundFlight = undefined;
+    });
+  };
+  planStorageStartupLifecycle.onReady(() => startPlanDependentBackground());
+  routeCatalogStartupLifecycle.onReady(() => {
+    if (!planDependentBackgroundStarted) {
+      startPlanDependentBackground();
+      return;
+    }
+    syncRunningGateways();
+    memoryConsolidationScheduler?.reschedule();
+  });
   const lanDiscoveryEnabled = !managerReadOnly
     && managerListensOnLan(managerHost)
     && rabiGlobalConfig.read().webguiLan.enabled;
   if (lanDiscoveryEnabled) {
     try {
-      const publisher = await startManagerDiscoveryPublisher({
+      const managerLanDiscoveryFlight = startManagerDiscoveryPublisher({
         port: managerPort,
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
         managerInstanceId,
         onStatus: status => { managerLanDiscoveryStatus = status; }
       });
-      stopManagerLanDiscovery = () => publisher.stop();
+      managerRuntimeOwner.register("manager_lan_discovery", async () => {
+        const publisher = await managerLanDiscoveryFlight.catch(() => undefined);
+        await publisher?.stop();
+      });
+      await managerLanDiscoveryFlight;
+      if (shuttingDown) return;
     } catch (error) {
+      if (shuttingDown) return;
       managerLanDiscoveryStatus = Object.freeze({
         state: "failed",
         serviceType: "_rabiroute._tcp.local",
@@ -8676,6 +9593,58 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     });
   }
 
+  activeGatewayDiagnosticsSnapshotService().requestRefresh({ force: true });
+  void syncActiveRabiLinkRelay().catch(error => {
+    managerOperationalLog.record("warn", "rabilink_relay_startup_failed", {
+      result: "Manager control plane stays live",
+      error: managerOperationalError(error, rootDir)
+    });
+  });
+  startActiveNapcatSupervisor();
+  if (!managerReadOnly) reconcileActiveSpeech();
+
+  try {
+    configWatcher = managerShouldAutostart && managerConfigWatcherEnabled()
+      ? startConfigWatcher(reconcileManagerPlugins, () => syncActiveRabiLinkRelay())
+      : null;
+    if (configWatcher) {
+      const acquiredConfigWatcher = configWatcher;
+      managerRuntimeOwner.register("config_watcher", () => acquiredConfigWatcher.close());
+    }
+    if (!configWatcher) {
+      configWatchLifecycle = disabledManagerWatchBrokerStatus();
+      console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
+    }
+  } catch (error) {
+    configWatchLifecycle = Object.freeze({
+      ...disabledManagerWatchBrokerStatus(),
+      state: "degraded",
+      partial: true,
+      errors: [error instanceof Error ? error.message : String(error)]
+    });
+  }
+  try {
+    pluginPackageWatcher = startPluginPackageWatcher(
+      [...managerPluginPackageRoots, path.dirname(managerPluginProfilePath)],
+      reconcileManagerPlugins
+    );
+    const acquiredPluginPackageWatcher = pluginPackageWatcher;
+    managerRuntimeOwner.register("plugin_package_watcher", () => acquiredPluginPackageWatcher.close());
+  } catch (error) {
+    pluginPackageWatchLifecycle = Object.freeze({
+      ...disabledManagerWatchBrokerStatus(),
+      state: "degraded",
+      partial: true,
+      errors: [error instanceof Error ? error.message : String(error)]
+    });
+  }
+  if (managerRuntimeOwner.isTearingDown()) return;
+  managerRuntimeOwner.publish(Object.freeze({
+    roleStorage: roleStorageApplication,
+    planStorage: planStorageStartupLifecycle,
+    routeCatalog: routeCatalogStartupLifecycle,
+    requestHandler: handleManagerRequest
+  }));
   console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
   console.log(`roles: ${rolesRoot}`);
   console.log(`route: ${routeRoot}`);
@@ -8683,54 +9652,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     result: `host=${managerHost}; port=${managerPort}; readOnly=${managerReadOnly}`
   });
   managerListenerReady = true;
-  // Publish the responsive control plane before route scans and child-process
-  // reconciliation so slow NAS or adapter work cannot delay identity readiness.
-  if (!managerReadOnly) {
-    await loadRuntimesAsync();
-    syncRunningGateways();
-    void reconcilePersistedPlanSecretaryWorkspaces();
-  }
-  await syncActiveRabiLinkRelay();
-  memoryConsolidationScheduler?.start();
-  startActiveNapcatSupervisor();
-  startActivePlanFeedbackRecovery();
-  setImmediate(() => {
-    void migrateRolePlanLayoutsAfterStartup().finally(() => { void prewarmRolePlanCatalogs(); });
-  });
-
-  configWatcher = managerShouldAutostart && managerConfigWatcherEnabled()
-    ? startConfigWatcher(reconcileManagerPlugins, () => syncActiveRabiLinkRelay())
-    : null;
-  if (!configWatcher) {
-    console.log("Route config event watcher disabled by RABIROUTE_MANAGER_AUTOSTART=0");
-  }
-  pluginPackageWatcher = startPluginPackageWatcher(
-    [...managerPluginPackageRoots, path.dirname(managerPluginProfilePath)],
-    reconcileManagerPlugins
-  );
-
-  let shuttingDown = false;
-
-  shutdownManager = (reason: string): void => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    console.log(`gateway-manager shutting down: ${reason}`);
-    managerOperationalLog.record("info", "manager_shutdown_requested", { result: reason });
-    stopManagerResources();
-    const managerCordisDispose = disposeManagerCordisRuntime()
-      .then(() => manualTriggerProcesses.stopAll());
-    activeServer.close(() => {
-      void Promise.allSettled([
-        managerOperationalLog.flush(),
-        managerCordisDispose
-      ]).finally(() => process.exit(0));
-    });
-    setTimeout(() => process.exit(0), 15 * 60_000).unref();
-  };
-
-  removeSignalHandlers = installManagerSignalHandlers(shutdownManager);
   if (managerHostIdentity) {
     console.log(managerReadyLine({
       protocolVersion: 1,
@@ -8742,15 +9663,20 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     }));
     resolveWearableCompanionStartup();
   }
+  void reconcileManagerPlugins("post-ready optional activation").catch(error => {
+    managerOperationalLog.record("warn", "plugin_post_ready_activation_failed", {
+      result: "Required Manager control plane remains live",
+      error: managerOperationalError(error, rootDir)
+    });
+  });
+  // Publish the fenced control plane before any NAS recovery worker can start.
+  planStorageStartupLifecycle.start();
+  routeCatalogStartupLifecycle.start();
   } catch (error) {
-    stopManagerResources();
-    if (activeServer.listening) {
-      await new Promise<void>(resolve => activeServer.close(() => resolve()));
-    }
-    await Promise.allSettled([
-      managerOperationalLog.flush(),
-      disposeManagerCordisRuntime().then(() => manualTriggerProcesses.stopAll())
-    ]);
-    throw error;
+    await failManagerStartup("manager_request_startup", error);
+  }
+  } catch (error) {
+    if (managerRuntimeOwner.isTearingDown()) throw error;
+    await failManagerStartup("manager_runtime_construction", error);
   }
 }

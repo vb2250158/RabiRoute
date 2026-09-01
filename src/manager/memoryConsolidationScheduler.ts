@@ -5,24 +5,30 @@ import {
 
 export type MemoryConsolidationScheduleTarget = {
   gatewayId: string;
+  roleId: string;
   roleKey: string;
   roleDir: string;
 };
 
 export type DueMemoryConsolidationRun = {
   runId: string;
+  revision: string;
   delivered?: boolean;
 };
 
 export type MemoryConsolidationScheduleEvaluation = {
   pending: DueMemoryConsolidationRun | null;
+  dueOperationIdentity?: string;
   nextTriggerAt?: number;
 };
 
 export type MemoryConsolidationSchedulerOptions = {
   listTargets: () => MemoryConsolidationScheduleTarget[];
-  requestDueRun: (target: MemoryConsolidationScheduleTarget) => DueMemoryConsolidationRun | null;
-  nextTriggerAt: (target: MemoryConsolidationScheduleTarget) => number | undefined;
+  requestDueRun: (
+    target: MemoryConsolidationScheduleTarget,
+    dueOperationIdentity?: string
+  ) => DueMemoryConsolidationRun | null | Promise<DueMemoryConsolidationRun | null>;
+  nextTriggerAt?: (target: MemoryConsolidationScheduleTarget) => number | undefined;
   evaluate?: (target: MemoryConsolidationScheduleTarget, signal?: AbortSignal) => Promise<MemoryConsolidationScheduleEvaluation>;
   deliver: (target: MemoryConsolidationScheduleTarget, run: DueMemoryConsolidationRun, signal?: AbortSignal) => void | Promise<void>;
   onError?: (
@@ -146,8 +152,11 @@ export class MemoryConsolidationScheduler {
           const evaluation = await this.options.evaluate(target, signal);
           pending = evaluation.pending;
           nextTriggerByRole.set(target.roleKey, evaluation.nextTriggerAt);
+          if (!pending && evaluation.dueOperationIdentity) {
+            pending = await this.options.requestDueRun(target, evaluation.dueOperationIdentity);
+          }
         } else {
-          pending = this.options.requestDueRun(target);
+          pending = await this.options.requestDueRun(target);
         }
       } catch (error) {
         if (this.stopped || signal.aborted) break;
@@ -157,14 +166,20 @@ export class MemoryConsolidationScheduler {
         retryAt = Math.min(retryAt ?? Number.POSITIVE_INFINITY, circuit.snapshot.retryAt);
         continue;
       }
-      this.failureCircuits.recordSuccess(target.roleKey);
-      if (!pending) continue;
+      if (!pending) {
+        this.failureCircuits.recordSuccess(target.roleKey);
+        continue;
+      }
       pendingByRole.set(target.roleKey, pending);
       if (pending.delivered) {
         this.deliveredRunIds.add(pending.runId);
+        this.failureCircuits.recordSuccess(target.roleKey);
         continue;
       }
-      if (this.deliveredRunIds.has(pending.runId)) continue;
+      if (this.deliveredRunIds.has(pending.runId)) {
+        this.failureCircuits.recordSuccess(target.roleKey);
+        continue;
+      }
 
       this.deliveredRunIds.add(pending.runId);
       try {
@@ -192,7 +207,7 @@ export class MemoryConsolidationScheduler {
       if (pending && this.deliveredRunIds.has(pending.runId)) continue;
       const triggerAt = this.options.evaluate
         ? nextTriggerByRole.get(target.roleKey)
-        : this.options.nextTriggerAt(target);
+        : this.options.nextTriggerAt?.(target);
       if (!Number.isFinite(triggerAt)) continue;
       nextAt = Math.min(nextAt ?? Number.POSITIVE_INFINITY, Number(triggerAt));
     }

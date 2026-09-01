@@ -1,6 +1,7 @@
 import { isCodexTaskId } from "./codexTaskId.js";
 import { proactiveCommunicationPolicyLines } from "./agentCommunicationPolicy.js";
 import { codexThreadTitleMaxLength, normalizeCodexThreadTitle } from "./codexThreadTitle.js";
+import { roleStorageMutationContractLines } from "./roleStorageMutationContract.js";
 
 export const MAX_CODEX_PLAN_ASSISTANT_SESSIONS = 8;
 export const DEFAULT_CODEX_PLAN_ASSISTANT_MODEL = "gpt-5.6-terra";
@@ -141,6 +142,7 @@ export function codexPlanAssistantInitializationPrompt(input: {
     `需要主人格处理时投递到 threadId=${input.sourceThreadId} 并取得回执。`,
     "如果本轮没有需要主人格或用户处理的内容，最终输出明确写“处理结果：仅更新控制面，无需外部通知”，不要生成像是已经对用户说过的话。",
     `计划接口：${managerBaseUrl}/api/roles/${encodeURIComponent(input.roleId)}/plans`,
+    ...roleStorageMutationContractLines(`${managerBaseUrl}/api/roles/${encodeURIComponent(input.roleId)}`),
     `线程桥：${managerBaseUrl}/api/agent/threads`,
     "收到任务后读取计划、记忆、taskBinding 和必读资料；单轮结束不等于计划完成。"
   ].join("\n");

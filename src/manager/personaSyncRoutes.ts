@@ -1,6 +1,8 @@
 import http from "node:http";
 import type {
   PersonaSyncConflict,
+  PersonaSyncActivePlanPackageCommand,
+  PersonaSyncArchivedPlanPackageCommand,
   PersonaSyncConflictResolutionCommand,
   PersonaSyncMergeCommand,
   PersonaSyncService
@@ -8,6 +10,8 @@ import type {
 import type { PersonaSyncCoordinator } from "../personaSyncCoordinator.js";
 import type { PersonaSyncAutoReconciler } from "../personaSyncAutoReconciler.js";
 import { ManagerReadWorkerError } from "./managerReadWorkerPool.js";
+import { planStorageStartupUnavailable } from "./planStorageStartupHttpGate.js";
+import type { PlanStorageStartupLifecycleSnapshot } from "./planStorageStartupLifecycle.js";
 
 function jsonResponse(response: http.ServerResponse, status: number, body: unknown): void {
   if (response.destroyed || response.writableEnded) return;
@@ -15,14 +19,14 @@ function jsonResponse(response: http.ServerResponse, status: number, body: unkno
   response.end(JSON.stringify(body, null, 2));
 }
 
-function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
+function readJsonBody<T>(request: http.IncomingMessage, maximumBytes = 24 * 1024 * 1024): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
     request.on("data", chunk => {
       const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       total += value.byteLength;
-      if (total > 24 * 1024 * 1024) {
+      if (total > maximumBytes) {
         reject(new Error("Persona sync request is too large."));
         request.destroy();
         return;
@@ -75,6 +79,7 @@ export type PersonaSyncRouteContext = {
   listConflicts?(roleId?: string): Promise<PersonaSyncConflict[]>;
   readOnlySnapshot?: boolean;
   controlPlaneAuthorized?: boolean;
+  planStorageStartup?(): PlanStorageStartupLifecycleSnapshot;
 };
 
 function authorized(request: http.IncomingMessage, ctx: PersonaSyncRouteContext): boolean {
@@ -108,6 +113,12 @@ export function handlePersonaSyncApi(
   }
   if (requestUrl.pathname.startsWith("/api/persona-sync/conflicts") && !localControlAllowed(request, ctx)) {
     jsonResponse(response, 403, { code: -1, message: "Persona sync conflict control is loopback-only." });
+    return true;
+  }
+  const startupRejection = planStorageStartupUnavailable(request.method, requestUrl.pathname, ctx.planStorageStartup?.());
+  if (startupRejection) {
+    response.setHeader("retry-after", String(startupRejection.retryAfterSeconds));
+    jsonResponse(response, startupRejection.statusCode, startupRejection.body);
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/persona-sync/index-status") {
@@ -277,40 +288,31 @@ export function handlePersonaSyncApi(
   }
   if (request.method === "GET" && requestUrl.pathname === "/api/persona-sync/manifest") {
     const roleId = requestUrl.searchParams.get("roleId") || undefined;
-    const timeoutMs = Math.max(10, ctx.manifestTimeoutMs ?? 5000);
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<{ timedOut: true }>(resolve => {
-      timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
-      timer.unref?.();
-    });
-    void Promise.race([
-      ctx.service.manifest(roleId).then(manifest => ({ timedOut: false as const, manifest })),
-      timeout
-    ])
-      .then(result => {
-        if (result.timedOut) {
-          jsonResponse(response, 200, {
-            code: 0,
-            data: ctx.service.manifestSnapshot(roleId),
-            scan: {
-              state: "timeout",
-              partial: true,
-              deadlineMs: timeoutMs,
-              message: "Persona manifest refresh exceeded its deadline; returned the last persisted in-memory snapshot while Manager stayed responsive."
-            }
-          });
-          return;
-        }
-        jsonResponse(response, 200, {
-          code: 0,
-          data: result.manifest,
-          scan: { state: "ok", partial: false, deadlineMs: timeoutMs }
-        });
-      })
-      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }))
-      .finally(() => {
-        if (timer) clearTimeout(timer);
+    const published = ctx.service.publishedManifestSnapshot(roleId);
+    const publication = published.publication;
+    const scan = {
+      state: publication.state === "ready" && !publication.stale ? "ok" : publication.state,
+      partial: publication.stale,
+      revision: publication.revision,
+      stale: publication.stale,
+      refreshedAt: publication.refreshedAt,
+      refreshStartedAt: publication.refreshStartedAt,
+      deadlineMs: publication.deadlineMs,
+      error: publication.error
+    };
+    if (!published.manifest) {
+      jsonResponse(response, 503, {
+        code: -1,
+        scan,
+        message: publication.error || "Persona manifest snapshot is still being built outside the Manager event loop."
       });
+      return true;
+    }
+    jsonResponse(response, 200, {
+      code: 0,
+      data: published.manifest,
+      scan
+    });
     return true;
   }
   const fileMatch = requestUrl.pathname.match(/^\/api\/persona-sync\/files\/([^/]+)\/(.+)$/);
@@ -329,6 +331,26 @@ export function handlePersonaSyncApi(
     } catch (error) {
       jsonResponse(response, 404, { code: -1, message: error instanceof Error ? error.message : String(error) });
     }
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/persona-sync/plan-packages/archive") {
+    void readJsonBody<PersonaSyncArchivedPlanPackageCommand>(request, 128 * 1024 * 1024)
+      .then(command => ctx.service.applyArchivedPlanPackage(command))
+      .then(result => jsonResponse(response, result.status === "conflict" ? 409 : 200, {
+        code: result.status === "conflict" ? 1 : 0,
+        data: result
+      }))
+      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === "/api/persona-sync/plan-packages/active") {
+    void readJsonBody<PersonaSyncActivePlanPackageCommand>(request, 128 * 1024 * 1024)
+      .then(command => ctx.service.applyActivePlanPackage(command))
+      .then(result => jsonResponse(response, result.status === "conflict" ? 409 : 200, {
+        code: result.status === "conflict" ? 1 : 0,
+        data: result
+      }))
+      .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/persona-sync/merge") {

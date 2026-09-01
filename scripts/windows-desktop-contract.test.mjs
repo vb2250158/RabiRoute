@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const read = (relative) => fs.readFileSync(new URL(relative, import.meta.url), "utf8");
 const packageJson = JSON.parse(read("../package.json"));
-const launcher = read("../Start-RabiRoute-Desktop.bat");
+const retiredLauncherPath = fileURLToPath(new URL("../Start-RabiRoute-Desktop.bat", import.meta.url));
 const hostRuntime = read("../desktop/windows-host/HostRuntime.cs");
 const hostProtocol = read("../desktop/windows-host/HostProtocol.cs");
 const hostControlAudit = read("../desktop/windows-host/HostControlAudit.cs");
@@ -30,15 +30,19 @@ const releaseTransaction = read("./Install-RabiRouteReleaseTransaction.ps1");
 const legacyWearableTaskMigration = read("./Migrate-LegacyWearableHealthTask.ps1");
 const installer = read("../installer/RabiRoute.iss");
 const autostartConfigurator = fileURLToPath(new URL("./Configure-WindowsAutostart.ps1", import.meta.url));
+const autostartConfiguratorSource = read("./Configure-WindowsAutostart.ps1");
 const speechServiceInstaller = read("../plugin-adapters/rabi-speech/scripts/install-service.ps1");
 const speechPluginDocs = read("../docs/rabispeech-plugin.md");
 const speechPluginDocsEn = read("../docs/rabispeech-plugin_en.md");
 
-test("Windows production entry starts only the lifecycle-owning Host", () => {
-  assert.equal(packageJson.scripts["start:windows"], "Start-RabiRoute-Desktop.bat");
-  assert.match(launcher, /RabiRouteHost\.exe/);
-  assert.doesNotMatch(launcher, /--root/);
-  assert.doesNotMatch(launcher, /manager\.js|main\.py|python(?:w)?\.exe|127\.0\.0\.1:\d+/i);
+test("Windows production package exposes only the lifecycle-owning Host entry", () => {
+  assert.equal("start:windows" in packageJson.scripts, false);
+  assert.equal(fs.existsSync(retiredLauncherPath), false, "the retired BAT launcher must not remain a source entry");
+  const rootFileCopyBlock = windowsReleaseBuild.slice(
+    windowsReleaseBuild.indexOf("foreach ($relative in @("),
+    windowsReleaseBuild.indexOf("Copy-Item -LiteralPath $desktopRuntime"),
+  );
+  assert.doesNotMatch(rootFileCopyBlock, /Start-RabiRoute-Desktop\.bat/);
 
   assert.match(installer, /Filename: "\{app\}\\RabiRouteHost\.exe"/);
   assert.match(installer, /Install-RabiRouteReleaseTransaction\.ps1/);
@@ -71,9 +75,14 @@ test("Host rejects an in-place portable overlay before composing a generation", 
   assert.match(hostProgram, /legacy_overlay_blocked/);
   assert.match(hostProgram, /new empty folder/);
   assert.match(hostProgram, /Windows Setup/);
+  const retiredGuardIndex = hostProgram.indexOf(
+    "PortableOverlayGuard.FindRetiredLifecycleEntriesForStartup(packageRoot, stateRoot)",
+  );
+  const hostCompositionIndex = hostProgram.indexOf("new HostRuntime(");
+  assert.notEqual(retiredGuardIndex, -1, "startup must invoke the two-root retired lifecycle guard");
+  assert.notEqual(hostCompositionIndex, -1, "contract must locate Host composition before comparing order");
   assert.ok(
-    hostProgram.indexOf("PortableOverlayGuard.FindRetiredLifecycleEntries(packageRoot)")
-      < hostProgram.indexOf("new HostRuntime("),
+    retiredGuardIndex < hostCompositionIndex,
     "portable overlay detection must run before Manager or Tray composition",
   );
   assert.doesNotMatch(hostProgram, /Delete|File\.Move|File\.Delete|Directory\.Delete/);
@@ -105,6 +114,11 @@ test("installer commits its autostart choice to the Manager desktop settings tru
   assert.match(releaseTransaction, /"Autostart commit"/);
   assert.doesNotMatch(installer, /Type: files; Name: "\{userstartup\}\\RabiRoute\.lnk"/);
   assert.doesNotMatch(installer, /Name: "\{userstartup\}\\RabiRoute"/);
+  assert.match(
+    autostartConfiguratorSource,
+    /Join-Path \$install "Start-RabiRoute-Desktop\.bat"/,
+    "autostart migration must still recognize an exact shortcut target to the retired BAT",
+  );
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-autostart-contract-"));
   const appData = path.join(root, "appdata");
@@ -253,6 +267,18 @@ test("installer migration stops only exact install-owned legacy processes", () =
   assert.match(installer, /Stop-RabiRouteHostFenced\.ps1/);
   assert.match(releaseTransaction, /"Fenced Host stop"/);
   assert.match(fencedHostStop, /@\("--command", "status", "--json"\)/);
+  assert.match(
+    fencedHostStop,
+    /"healthy",\s*"degraded"[\s\S]*applicationGenerationId/,
+    "healthy and degraded Host states must fence quit with the application generation",
+  );
+  assert.match(
+    fencedHostStop,
+    /"faulted"[\s\S]*applicationGenerationId[\s\S]*controlFenceGenerationId/,
+    "only a faulted Host without an application generation may fall back to the control fence",
+  );
+  assert.match(fencedHostStop, /Unsupported Host state[\s\S]*refusing fenced quit/);
+  assert.match(fencedHostStop, /Faulted Host status omitted controlFenceGenerationId/);
   assert.match(fencedHostStop, /@\("--command", "quit", "--application-generation-id", \$generation, "--json"\)/);
   assert.match(fencedHostStop, /Start-Process[\s\S]*-Wait[\s\S]*-PassThru/);
   assert.match(fencedHostStop, /\$process\.ExitCode -ne 0/);
@@ -599,6 +625,8 @@ test("legacy migration stops a real root Manager and watcher without matching pa
   const managerSuffixEntry = `${managerEntry}.backup`;
   const watcherEntry = path.join(installRoot, "scripts", "watch-rabiroute-desktop-lifecycle.ps1");
   const watcherSuffixEntry = `${watcherEntry}.backup.ps1`;
+  const napCatNodeExe = path.join(installRoot, "tools", "NapCat", "node.exe");
+  const napCatEntry = path.join(installRoot, "tools", "NapCat", "napcat.mjs");
   const powershellExe = path.join(
     process.env.SystemRoot ?? "C:\\Windows",
     "System32",
@@ -628,13 +656,16 @@ test("legacy migration stops a real root Manager and watcher without matching pa
   try {
     fs.mkdirSync(path.dirname(managerEntry), { recursive: true });
     fs.mkdirSync(path.dirname(watcherEntry), { recursive: true });
+    fs.mkdirSync(path.dirname(napCatEntry), { recursive: true });
     fs.copyFileSync(process.execPath, nodeExe);
+    fs.copyFileSync(process.execPath, napCatNodeExe);
     const sleeper = "setInterval(() => {}, 1000);\n";
     fs.writeFileSync(managerEntry, sleeper, "utf8");
     fs.writeFileSync(managerSuffixEntry, sleeper, "utf8");
     const watcher = "while ($true) { Start-Sleep -Milliseconds 100 }\n";
     fs.writeFileSync(watcherEntry, watcher, "utf8");
     fs.writeFileSync(watcherSuffixEntry, watcher, "utf8");
+    fs.writeFileSync(napCatEntry, sleeper, "utf8");
     fs.writeFileSync(migrationHarness, [
       "param([string]$MigrationScript, [string]$InstallRoot)",
       "function Get-ScheduledTask { [CmdletBinding()] param([string]$TaskName); return @() }",
@@ -649,6 +680,7 @@ test("legacy migration stops a real root Manager and watcher without matching pa
     const watcherSuffix = start(powershellExe, [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", watcherSuffixEntry,
     ]);
+    const napCatLike = start(napCatNodeExe, [napCatEntry, "--napcat-runtime"]);
     await delay(500);
 
     const migration = spawnSync(powershellExe, [
@@ -672,6 +704,7 @@ test("legacy migration stops a real root Manager and watcher without matching pa
     await delay(100);
     assert.equal(managerSuffix.exitCode, null, "manager.js.backup must not match manager.js");
     assert.equal(watcherSuffix.exitCode, null, "watcher .ps1.backup must not match the watcher path");
+    assert.equal(napCatLike.exitCode, null, "a NapCat-like Node process must remain untouched");
   } finally {
     for (const child of children) {
       if (child.exitCode === null) child.kill();

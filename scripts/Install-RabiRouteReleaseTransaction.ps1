@@ -7,7 +7,7 @@ param(
     [Parameter(Mandatory = $true)][string]$LegacyTaskMigrationScript,
     [Parameter(Mandatory = $true)][string]$AutostartScript,
     [ValidateSet("true", "false")][string]$AutostartEnabled = "false",
-    [ValidateSet("", "after-stage", "after-legacy-task-remove", "after-legacy-task-remove-before-journal", "after-version-move-before-journal", "before-pointer", "after-bootstrap", "after-pointer")][string]$FaultPoint = "",
+    [ValidateSet("", "after-recovery", "after-stage", "after-legacy-task-remove", "after-legacy-task-remove-before-journal", "after-version-move-before-journal", "before-pointer", "after-bootstrap", "after-pointer", "after-autostart-before-journal", "after-autostart")][string]$FaultPoint = "",
     [string]$TestSelfTestScript,
     [string]$TestLegacyTaskStorePath
 )
@@ -16,6 +16,26 @@ $ErrorActionPreference = "Stop"
 $AppId = "io.rabiroute.windows"
 
 function Full([string]$Path) { [IO.Path]::GetFullPath($Path).TrimEnd('\') }
+function Get-InstallMutexName([string]$NormalizedInstallRoot) {
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($NormalizedInstallRoot.ToLowerInvariant())
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $digest = ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+    return "Local\RabiRoute.Install.$($digest.Substring(0, 32))"
+}
+function Enter-InstallMutex([string]$NormalizedInstallRoot) {
+    $mutex = [Threading.Mutex]::new($false, (Get-InstallMutexName $NormalizedInstallRoot))
+    $acquired = $false
+    try {
+        try { $acquired = $mutex.WaitOne(0) }
+        catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw "Another RabiRoute install or Developer activation is already mutating this installation." }
+        return $mutex
+    } catch {
+        if (-not $acquired) { $mutex.Dispose() }
+        throw
+    }
+}
 function Is-Under([string]$Child, [string]$Parent) {
     $c = (Full $Child) + '\'; $p = (Full $Parent) + '\'
     $c.StartsWith($p, [StringComparison]::OrdinalIgnoreCase)
@@ -48,6 +68,15 @@ function Invoke-LegacyTaskMigration([string]$Mode, [string]$BackupRoot = "") {
     if ($TestLegacyTaskStorePath) { $arguments += @("-TaskStorePath",$TestLegacyTaskStorePath) }
     & powershell.exe @arguments | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Legacy wearable task $Mode failed with ExitCode=$LASTEXITCODE." }
+}
+function Invoke-Autostart([switch]$Preflight, [switch]$Restore, [string]$SnapshotRoot = "") {
+    $arguments = @("-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",$AutostartScript,"-InstallRoot",$install,"-Enabled",$AutostartEnabled)
+    if ($Preflight) { $arguments += "-PreflightOnly" }
+    if ($Restore) { $arguments += "-RestoreSnapshot" }
+    if ($SnapshotRoot) { $arguments += @("-SnapshotRoot",$SnapshotRoot) }
+    & powershell.exe @arguments | Out-Null
+    $label = if ($Restore) { "Autostart rollback" } elseif ($Preflight) { "Autostart preflight" } else { "Autostart commit" }
+    if ($LASTEXITCODE -ne 0) { throw "$label failed with ExitCode=$LASTEXITCODE." }
 }
 function Assert-NoReparse([string]$Root) {
     $rootItem = Get-Item -LiteralPath $Root -Force
@@ -123,6 +152,25 @@ function Restore-Previous([string]$Install, [string]$PointerBackup, [string]$Boo
         if (Test-Path -LiteralPath $item.Destination -PathType Leaf) {
             $scratch = "$temporary.replaced"; [IO.File]::Replace($temporary, $item.Destination, $scratch, $true); Remove-Item -LiteralPath $scratch -Force
         } else { [IO.File]::Move($temporary, $item.Destination) }
+    }
+}
+function Assert-RestoredPointerReleaseId([string]$Install, [string]$PointerBackup, [bool]$HadPointer) {
+    $pointerPath = Join-Path $Install "current.json"
+    if (-not $HadPointer) {
+        if (Test-Path -LiteralPath $pointerPath) { throw "Rollback left a current pointer where none existed before installation." }
+        return
+    }
+    if (-not (Test-Path -LiteralPath $PointerBackup -PathType Leaf) -or -not (Test-Path -LiteralPath $pointerPath -PathType Leaf)) {
+        throw "Rollback current pointer or its backup is missing."
+    }
+    $expected = [Text.UTF8Encoding]::new($false).GetString([IO.File]::ReadAllBytes($PointerBackup)) | ConvertFrom-Json
+    $actual = [Text.UTF8Encoding]::new($false).GetString([IO.File]::ReadAllBytes($pointerPath)) | ConvertFrom-Json
+    $expectedReleaseId = [string]$expected.releaseId
+    if ($expected.schemaVersion -ne 1 -or [string]$expected.appId -ne $AppId -or [string]::IsNullOrWhiteSpace($expectedReleaseId)) {
+        throw "Rollback pointer backup has an invalid application or release identity."
+    }
+    if ($actual.schemaVersion -ne 1 -or [string]$actual.appId -ne $AppId -or [string]$actual.releaseId -cne $expectedReleaseId) {
+        throw "Rollback current pointer releaseId verification failed; expected '$expectedReleaseId'."
     }
 }
 function Get-RetiredLifecyclePaths {
@@ -220,6 +268,8 @@ if (-not [IO.Path]::IsPathRooted($install) -or $install -eq (Full ([IO.Path]::Ge
 foreach ($script in @($StopHostScript,$LegacyMigrationScript,$LegacyTaskMigrationScript,$AutostartScript)) { if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw "Required transaction helper is missing: $script" } }
 if (($FaultPoint -or $TestSelfTestScript -or $TestLegacyTaskStorePath) -and $env:RABIROUTE_INSTALL_TRANSACTION_TEST_MODE -ne "1") { throw "Test hooks are forbidden outside explicit transaction test mode." }
 if (-not (Test-Path -LiteralPath $PortableZip -PathType Leaf)) { throw "Portable ZIP is missing." }
+$installMutex = Enter-InstallMutex $install
+try {
 # Fail closed before creating staging or stopping any process when a foreign
 # same-name task occupies the retired product identity.
 Invoke-LegacyTaskMigration "Inspect"
@@ -231,9 +281,38 @@ if (Test-Path -LiteralPath $journal) {
     $previousRoot = Full ([string]$previous.transactionRoot)
     $stagingRoot = Join-Path $install ".install-staging"
     if (-not (Is-Under $previousRoot $stagingRoot)) { throw "Transaction journal references an unsafe staging root." }
-    if ([string]$previous.state -in @("switching","switched","rolled-back")) {
-        $priorPointer = Join-Path $previousRoot "backup\current.json"; $priorBootstrap = Join-Path $previousRoot "backup\RabiRouteHost.exe"
-        Restore-Previous $install $priorPointer $priorBootstrap ([bool]$previous.hadPointer) ([bool]$previous.hadBootstrap)
+    $priorPointer = Join-Path $previousRoot "backup\current.json"; $priorBootstrap = Join-Path $previousRoot "backup\RabiRouteHost.exe"
+    $needsPointerRestore = [string]$previous.state -in @("switching","switched","autostart-applying","autostart-applied","rolled-back")
+    $initialPointerRecoveryFailure = $null
+    if ($needsPointerRestore) {
+        try {
+            Restore-Previous $install $priorPointer $priorBootstrap ([bool]$previous.hadPointer) ([bool]$previous.hadBootstrap)
+        } catch {
+            $initialPointerRecoveryFailure = $_
+        }
+    }
+    $autostartRecoveryFailure = $null
+    if ([string]$previous.autostartState -in @("applying", "applied")) {
+        try {
+            $expectedAutostartSnapshot = Full (Join-Path $previousRoot "backup\autostart")
+            if ((Full ([string]$previous.autostartSnapshotRoot)) -ne $expectedAutostartSnapshot) {
+                throw "Transaction journal references an unsafe autostart snapshot root."
+            }
+            Invoke-Autostart -Restore -SnapshotRoot $expectedAutostartSnapshot
+        } catch {
+            $autostartRecoveryFailure = $_
+        }
+    }
+    $pointerRecoveryFailure = $null
+    try {
+        if ($needsPointerRestore) {
+            # Repeat after the autostart helper so even a failing helper cannot
+            # leave current.json or the bootstrap on the candidate release.
+            Restore-Previous $install $priorPointer $priorBootstrap ([bool]$previous.hadPointer) ([bool]$previous.hadBootstrap)
+        }
+        Assert-RestoredPointerReleaseId $install $priorPointer ([bool]$previous.hadPointer)
+    } catch {
+        $pointerRecoveryFailure = $_
     }
     if ([string]$previous.legacyTaskMigrationState -in @("planned", "removed")) {
         $expectedTaskBackup = Full (Join-Path $previousRoot "backup\legacy-wearable-task")
@@ -243,10 +322,22 @@ if (Test-Path -LiteralPath $journal) {
         Invoke-LegacyTaskMigration "Restore" $expectedTaskBackup
     }
     if ($previous.quarantineMoves) { Restore-Quarantined @($previous.quarantineMoves) $install ([string]$previous.quarantineRoot) $previousRoot }
-    Remove-JournalVersionIfOwned $previous $install
+    if (-not $pointerRecoveryFailure) { Remove-JournalVersionIfOwned $previous $install }
+    if ($autostartRecoveryFailure -or $pointerRecoveryFailure) {
+        $autostartMessage = if ($autostartRecoveryFailure) { $autostartRecoveryFailure.Exception.Message } else { "none" }
+        $pointerMessage = if ($pointerRecoveryFailure) {
+            $pointerRecoveryFailure.Exception.Message
+        } elseif ($initialPointerRecoveryFailure) {
+            "initial restore failed but the verified post-autostart restore recovered"
+        } else {
+            "none"
+        }
+        throw "Previous install recovery was incomplete. autostart=$autostartMessage pointer=$pointerMessage"
+    }
     Remove-Item -LiteralPath $previousRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $journal -Force
 }
+if ($FaultPoint -eq "after-recovery") { exit 95 }
 $transactionRoot = Join-Path $install (".install-staging\" + [guid]::NewGuid().ToString("N"))
 $transactionId = Split-Path -Leaf $transactionRoot
 $quarantineRoot = Join-Path $install (".rabiroute-quarantine\" + $transactionId + "\legacy-runtime")
@@ -256,13 +347,15 @@ $backup = Join-Path $transactionRoot "backup"
 $pointerPath = Join-Path $install "current.json"; $bootstrapPath = Join-Path $install "RabiRouteHost.exe"
 $hadPointer = Test-Path -LiteralPath $pointerPath -PathType Leaf; $hadBootstrap = Test-Path -LiteralPath $bootstrapPath -PathType Leaf
 $pointerBackup = Join-Path $backup "current.json"; $bootstrapBackup = Join-Path $backup "RabiRouteHost.exe"
-if ($hadPointer) { Copy-Item -LiteralPath $pointerPath -Destination $pointerBackup }
-if ($hadBootstrap) { Copy-Item -LiteralPath $bootstrapPath -Destination $bootstrapBackup }
+if ($hadPointer) { Write-Durable $pointerBackup ([IO.File]::ReadAllBytes($pointerPath)) }
+if ($hadBootstrap) { Write-Durable $bootstrapBackup ([IO.File]::ReadAllBytes($bootstrapPath)) }
 $switched = $false
 $versionCommitted = $false
 $quarantineMoves = @()
 $legacyTaskMigrationState = "not-started"
 $legacyTaskBackupRoot = Join-Path $backup "legacy-wearable-task"
+$autostartState = "not-started"
+$autostartSnapshotRoot = Join-Path $backup "autostart"
 $destinationVersion = Join-Path (Join-Path $install "versions") $ExpectedReleaseId
 function Save-Journal([string]$State, [string]$VersionMoveState, [bool]$VersionIsCommitted, [string]$ErrorMessage = "") {
     $entry = [ordered]@{
@@ -273,6 +366,8 @@ function Save-Journal([string]$State, [string]$VersionMoveState, [bool]$VersionI
         quarantineRoot=$quarantineRoot; quarantineMoves=$quarantineMoves
         legacyTaskMigrationState=$legacyTaskMigrationState
         legacyTaskBackupRoot=$legacyTaskBackupRoot
+        autostartState=$autostartState
+        autostartSnapshotRoot=$autostartSnapshotRoot
     }
     if ($ErrorMessage) { $entry.error = $ErrorMessage }
     Write-JsonDurable $journal $entry
@@ -283,7 +378,9 @@ try {
     $release = Read-Candidate $candidate $ExpectedReleaseId
     if ($FaultPoint -eq "after-stage") { throw "Injected fault after-stage" }
     Invoke-BootstrapSelfTest $release.bootstrap "Candidate bootstrap self-test"
-    Invoke-Checked "powershell.exe" @("-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",$AutostartScript,"-InstallRoot",$install,"-Enabled",$AutostartEnabled,"-PreflightOnly") "Autostart preflight"
+    Invoke-Autostart -Preflight -SnapshotRoot $autostartSnapshotRoot
+    $autostartState = "captured"
+    Save-Journal "autostart-snapshot-captured" "not-started" $false
     $legacyTaskMigrationState = "planned"
     Save-Journal "legacy-task-removal-planned" "not-started" $false
     Invoke-LegacyTaskMigration "Remove" $legacyTaskBackupRoot
@@ -325,20 +422,72 @@ try {
     Save-Journal "switched" "committed" $true
     if ($FaultPoint -eq "after-pointer") { throw "Injected fault after-pointer" }
     Invoke-BootstrapSelfTest $bootstrapPath "Installed bootstrap self-test"
-    Invoke-Checked "powershell.exe" @("-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",$AutostartScript,"-InstallRoot",$install,"-Enabled",$AutostartEnabled) "Autostart commit"
+    $autostartState = "applying"
+    Save-Journal "autostart-applying" "committed" $true
+    Invoke-Autostart -SnapshotRoot $autostartSnapshotRoot
+    if ($FaultPoint -eq "after-autostart-before-journal") { exit 98 }
+    $autostartState = "applied"
+    Save-Journal "autostart-applied" "committed" $true
+    if ($FaultPoint -eq "after-autostart") { throw "Injected fault after-autostart" }
     Remove-Item -LiteralPath $journal -Force
     Remove-Item -LiteralPath $transactionRoot -Recurse -Force
     [pscustomobject]@{ ok=$true; releaseId=$ExpectedReleaseId; state="committed" } | ConvertTo-Json -Compress
 } catch {
     $failure = $_
-    if ($switched) { Restore-Previous $install $pointerBackup $bootstrapBackup $hadPointer $hadBootstrap }
-    if ($versionCommitted) { Remove-Item -LiteralPath $destinationVersion -Recurse -Force -ErrorAction SilentlyContinue }
+    $initialPointerRollbackFailure = $null
+    if ($switched) {
+        try {
+            Restore-Previous $install $pointerBackup $bootstrapBackup $hadPointer $hadBootstrap
+        } catch {
+            $initialPointerRollbackFailure = $_
+        }
+    }
+    $autostartRollbackFailure = $null
+    if ($autostartState -in @("applying", "applied")) {
+        try {
+            Invoke-Autostart -Restore -SnapshotRoot $autostartSnapshotRoot
+            $autostartState = "restored"
+        } catch {
+            $autostartRollbackFailure = $_
+        }
+    }
+    $pointerRollbackFailure = $null
+    try {
+        if ($switched) {
+            # Re-apply the exact backup after autostart rollback, then verify
+            # the logical release identity read from current.json.
+            Restore-Previous $install $pointerBackup $bootstrapBackup $hadPointer $hadBootstrap
+        }
+        Assert-RestoredPointerReleaseId $install $pointerBackup $hadPointer
+    } catch {
+        $pointerRollbackFailure = $_
+    }
+    if ($versionCommitted -and -not $pointerRollbackFailure) { Remove-Item -LiteralPath $destinationVersion -Recurse -Force -ErrorAction SilentlyContinue }
     if ($quarantineMoves.Count) { Restore-Quarantined $quarantineMoves $install $quarantineRoot $transactionRoot }
     if ($legacyTaskMigrationState -in @("planned", "removed")) {
         Invoke-LegacyTaskMigration "Restore" $legacyTaskBackupRoot
         $legacyTaskMigrationState = "restored"
     }
     Remove-Item -LiteralPath "$pointerPath.new","$bootstrapPath.new" -Force -ErrorAction SilentlyContinue
-    Save-Journal "rolled-back" ($(if ($versionCommitted) { "committed" } else { "not-started" })) $versionCommitted $failure.Exception.Message
+    $failureMessage = $failure.Exception.Message
+    if ($autostartRollbackFailure) {
+        $failureMessage += " | autostart rollback: $($autostartRollbackFailure.Exception.Message)"
+    }
+    if ($pointerRollbackFailure) {
+        $failureMessage += " | pointer rollback: $($pointerRollbackFailure.Exception.Message)"
+    } elseif ($initialPointerRollbackFailure) {
+        $failureMessage += " | initial pointer rollback retried and verified after autostart"
+    }
+    Save-Journal "rolled-back" ($(if ($versionCommitted) { "committed" } else { "not-started" })) $versionCommitted $failureMessage
+    if ($autostartRollbackFailure -or $pointerRollbackFailure) {
+        $autostartMessage = if ($autostartRollbackFailure) { $autostartRollbackFailure.Exception.Message } else { "none" }
+        $pointerMessage = if ($pointerRollbackFailure) { $pointerRollbackFailure.Exception.Message } else { "none" }
+        throw "Install transaction failed and rollback was incomplete. original=$($failure.Exception.Message) autostart=$autostartMessage pointer=$pointerMessage"
+    }
     throw $failure
+}
+}
+finally {
+    $installMutex.ReleaseMutex()
+    $installMutex.Dispose()
 }
