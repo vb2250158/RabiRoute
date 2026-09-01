@@ -353,8 +353,46 @@ test("only local directories are armed with fs.watch while UNC directories use p
   assert.ok(watched.includes(path.resolve(localRoot)));
   assert.equal(watched.some(isUncPath), false);
   broker.close();
+  await broker.closed();
   assert.deepEqual(new Set(closed), new Set(watched));
   assert.equal(broker.status().activeWorkerPid, undefined);
+});
+
+test("a completed one-shot worker may exit naturally before termination is attempted", async (t) => {
+  const closed = deferred<void>();
+  let terminationAttempts = 0;
+  const broker = new ManagerWatchBroker({
+    request: {
+      routeRoot: "G:\\ExampleApp\\data\\route",
+      rolesRoot: "G:\\ExampleApp\\data\\roles"
+    },
+    terminationCloseTimeoutMs: 50,
+    remotePollIntervalMs: 60_000,
+    createAttempt: () => ({
+      pid: 41_008,
+      result: Promise.resolve({
+        files: [],
+        snapshot: "snapshot-a",
+        partial: false,
+        errors: []
+      }),
+      closed: closed.promise,
+      terminate() {
+        terminationAttempts += 1;
+        closed.resolve();
+      }
+    }),
+    onSnapshot: async () => {}
+  });
+  t.after(() => broker.close());
+
+  setTimeout(() => closed.resolve(), 10);
+  broker.start();
+  await waitFor(() => broker.status().activeWorkerPid === undefined);
+
+  assert.equal(terminationAttempts, 0);
+  assert.equal(broker.status().state, "ready");
+  assert.deepEqual(broker.status().errors, []);
 });
 
 test("close terminates an active worker and suppresses timeout retries", async () => {

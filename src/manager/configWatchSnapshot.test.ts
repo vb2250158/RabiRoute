@@ -69,3 +69,22 @@ test("config watcher includes explicit Manager configuration files", async () =>
 
   assert.deepEqual(result.files, [managerConfig]);
 });
+
+test("config watcher ignores route runtime directories without adapterConfig.json", async () => {
+  const routeRoot = path.resolve("runtime", "routes");
+  const rolesRoot = path.resolve("runtime", "roles");
+  const result = await collectWatchedConfigFiles({
+    routeRoot,
+    rolesRoot,
+    readDirectory: async directory => directory === routeRoot
+      ? [{ name: "retired-route-logs", isDirectory: () => true }]
+      : [],
+    adapterConfigPath: name => path.join(routeRoot, name, "adapterConfig.json"),
+    personaConfigPath: name => path.join(rolesRoot, name, "personaConfig.json"),
+    fileExists: async () => false
+  });
+
+  assert.equal(result.partial, false);
+  assert.deepEqual(result.files, []);
+  assert.deepEqual(result.errors, []);
+});

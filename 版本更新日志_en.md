@@ -7,6 +7,13 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### Source Manager startup and legacy-data migration
+
+- Fixed source Manager route/persona catalog snapshots producing different hashes after optional fields crossed child-process JSON IPC, which kept `/meta` degraded with `ROUTE_CATALOG_STARTUP_FAILED`. Route catalog hashing now follows JSON transport semantics.
+- Startup migration now backfills a verifiable `history.jsonl` for legacy canonical plan directories that contain only `plan.json`. Active plans receive an imported-created record and archived plans receive an imported-archived record without inventing a previous state; later startups remain idempotent.
+- Configuration watching no longer treats route directories that contain only logs or retired state and no `adapterConfig.json` as broken configuration, so keeping source-runtime directories does not degrade Manager health.
+- Configuration and plugin watch workers now get a grace period to exit naturally after returning a snapshot, with termination used only after that deadline. This prevents completed workers from being recorded as `termination_failed` and keeping `/meta` degraded during Windows source startup.
+
 ### Desktop runtime data directory
 
 - Desktop now saves screenshots, region history, pin state, selected-text settings, and generated COM caches under the stable state root supplied by Host, while release directories provide code and assets only. Screenshot data previously written under `versions/<releaseId>` is migrated, so Host status, restart, and upgrade operations no longer reject the active release because a `data/` directory appeared inside it.

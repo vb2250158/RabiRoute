@@ -366,3 +366,21 @@ test("captured gateways are canonically ordered before route hashes are publishe
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
 });
+
+test("route catalog identities survive child-process JSON serialization", () => {
+  const source = {
+    routeRoot: "C:/RabiRoute/data/route",
+    rolesRoot: "C:/RabiRoute/data/roles",
+    gateways: [{ id: "demo", optionalLabel: undefined }],
+    personas: [{
+      rolesRoot: "C:/RabiRoute/data/roles",
+      roleId: "Rabi",
+      displayName: "Rabi",
+      isPersona: true,
+      avatarConfigured: false,
+      avatarVersion: undefined
+    }]
+  };
+  const transported = JSON.parse(JSON.stringify(source));
+  assert.deepEqual(routeCatalogSnapshotIdentities(source), routeCatalogSnapshotIdentities(transported));
+});

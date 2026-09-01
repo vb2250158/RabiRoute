@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import {
   legacyPlanAttachmentDirectory,
   legacyPlanFeedbackAttachmentDirectory,
@@ -156,6 +157,71 @@ function legacyArtifact(
     ? inventoryPlanStorageDirectory(sourcePath).hash
     : sha256(fs.readFileSync(sourcePath));
   return { sourcePath, evidenceRelativePath, kind, expectedHash };
+}
+
+function migrationRecordedAt(plan: Record<string, unknown>): string {
+  for (const key of ["updatedAt", "archivedAt", "completedAt", "createdAt"]) {
+    const value = typeof plan[key] === "string" ? plan[key].trim() : "";
+    if (value) return value;
+  }
+  return new Date(0).toISOString();
+}
+
+function backfillCanonicalPlanHistories(
+  roleDir: string,
+  dependencies: PlanStorageMigrationDependencies,
+  failures: PlanLayoutMigrationResult["failures"]
+): number {
+  let migrated = 0;
+  for (const bucket of ["active", "archive"] as const) {
+    const bucketDirectory = path.join(roleDir, "plans", bucket);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(bucketDirectory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const directory = path.join(bucketDirectory, entry.name);
+      const planPath = path.join(directory, "plan.json");
+      const historyPath = path.join(directory, "history.jsonl");
+      if (!fs.existsSync(planPath) || fs.existsSync(historyPath)) continue;
+      const raw = readJson(planPath);
+      const plan = raw ? dependencies.normalizePlan(raw, entry.name) : null;
+      const planId = plan?.id || entry.name;
+      if (!raw || !plan) {
+        failures.push({ planId, error: `Cannot backfill canonical plan history: ${planPath}` });
+        continue;
+      }
+      try {
+        withPlanStorageLease(roleDir, plan.id, () => {
+          if (fs.existsSync(historyPath)) return;
+          const expectedDirectory = planDirectory(roleDir, plan.id, bucket);
+          if (path.resolve(expectedDirectory) !== path.resolve(directory)) {
+            throw new Error(`Canonical plan history target does not match plan identity: ${directory}`);
+          }
+          if (planBucketForStatus(plan.status) !== bucket) {
+            throw new Error(`Canonical plan history target does not match plan status: ${plan.id}`);
+          }
+          const recordedAt = migrationRecordedAt(raw);
+          const record = {
+            id: `legacy-history-${sha256(JSON.stringify({ planId: plan.id, bucket, recordedAt, after: raw })).slice(0, 48)}`,
+            planId: plan.id,
+            kind: bucket === "archive" ? "archived" : "created",
+            recordedAt,
+            after: raw
+          };
+          atomicWriteFileSync(historyPath, `${JSON.stringify(record)}\n`);
+          migrated += 1;
+        });
+      } catch (error) {
+        failures.push({ planId: plan.id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  }
+  return migrated;
 }
 
 /**
@@ -324,6 +390,7 @@ export function migrateRolePlanLayout(
   result.alreadyReconciled = reconciliation.alreadyReconciled;
   result.receipts.push(...reconciliation.receipts);
   result.failures.push(...reconciliation.conflicts.map(({ planId, error }) => ({ planId, error })));
+  result.migrated += backfillCanonicalPlanHistories(roleDir, dependencies, result.failures);
   const migratedLegacyFiles = result.migrated - canonicalizedCount - recoveredLegacyCount;
   result.skipped = Math.max(0, legacyFiles.length - migratedLegacyFiles - legacyFailureCount);
   if (result.migrated || result.reconciled) dependencies.onChanged?.();

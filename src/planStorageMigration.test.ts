@@ -437,3 +437,41 @@ test("the next startup recovers hard termination around canonical lifecycle publ
     });
   }
 });
+
+test("startup migration backfills missing canonical plan history", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-canonical-history-backfill-"));
+  const roleDir = path.join(root, "roles", "Rabi");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const activePlan = {
+    id: "legacy-active",
+    title: "Legacy active",
+    status: "进行中",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-02T00:00:00.000Z"
+  };
+  const archivedPlan = {
+    id: "legacy-archive",
+    title: "Legacy archive",
+    status: "已归档",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-08-03T00:00:00.000Z",
+    archivedAt: "2026-08-03T00:00:00.000Z"
+  };
+  writeFile(planJsonFile(roleDir, activePlan.id, "active"), `${JSON.stringify(activePlan, null, 2)}\n`);
+  writeFile(planJsonFile(roleDir, archivedPlan.id, "archive"), `${JSON.stringify(archivedPlan, null, 2)}\n`);
+
+  const migrated = migrate(roleDir);
+
+  assert.deepEqual(migrated.failures, []);
+  assert.equal(migrated.migrated, 2);
+  const activeHistory = JSON.parse(fs.readFileSync(planHistoryFile(roleDir, activePlan.id, "active"), "utf8"));
+  const archiveHistory = JSON.parse(fs.readFileSync(planHistoryFile(roleDir, archivedPlan.id, "archive"), "utf8"));
+  assert.equal(activeHistory.kind, "created");
+  assert.deepEqual(activeHistory.after, activePlan);
+  assert.equal(archiveHistory.kind, "archived");
+  assert.deepEqual(archiveHistory.after, archivedPlan);
+
+  const repeated = migrate(roleDir);
+  assert.deepEqual(repeated.failures, []);
+  assert.equal(repeated.migrated, 0);
+});

@@ -333,6 +333,7 @@ export class ManagerWatchBroker {
   private async refresh(reason: string): Promise<void> {
     const request = this.currentRequest();
     let attempt: ConfigWatchSnapshotAttempt | undefined;
+    let resultReceived = false;
     let timer: NodeJS.Timeout | undefined;
     try {
       if (this.restartPending) {
@@ -355,6 +356,7 @@ export class ManagerWatchBroker {
           timer.unref?.();
         })
       ]);
+      resultReceived = true;
       if (this.closedFlag) return;
       const localErrors = this.armLocalWatchers(request, result.files);
       await this.options.onSnapshot(result, reason);
@@ -379,8 +381,9 @@ export class ManagerWatchBroker {
     } finally {
       if (timer) clearTimeout(timer);
       if (attempt) {
-        const termination = this.terminateAttempt(attempt);
-        const confirmed = await termination;
+        const confirmed = resultReceived
+          ? await this.closeCompletedAttempt(attempt)
+          : await this.terminateAttempt(attempt);
         if (!confirmed) {
           if (!this.closedFlag) this.handleTerminationFailure(attempt);
         } else if (this.activeAttempt === attempt) {
@@ -389,6 +392,11 @@ export class ManagerWatchBroker {
         }
       }
     }
+  }
+
+  private async closeCompletedAttempt(attempt: ConfigWatchSnapshotAttempt): Promise<boolean> {
+    if (await closesWithin(attempt.closed, this.options.terminationCloseTimeoutMs)) return true;
+    return this.terminateAttempt(attempt);
   }
 
   private armLocalWatchers(request: ManagerWatchSnapshotRequest, files: string[]): string[] {

@@ -1,15 +1,24 @@
 import { createHash } from "node:crypto";
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item)).join(",")}]`;
+function canonicalJsonValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    return `[${value.map(item => canonicalJsonValue(item) ?? "null").join(",")}]`;
+  }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
+    const entries = Object.keys(record)
       .sort()
-      .map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(",")}}`;
+      .flatMap(key => {
+        const serialized = canonicalJsonValue(record[key]);
+        return serialized === undefined ? [] : [`${JSON.stringify(key)}:${serialized}`];
+      });
+    return `{${entries.join(",")}}`;
   }
-  return JSON.stringify(value) ?? "null";
+  return JSON.stringify(value);
+}
+
+function canonicalJson(value: unknown): string {
+  return canonicalJsonValue(value) ?? "null";
 }
 
 export function canonicalRouteCatalogDigest(value: unknown): string {

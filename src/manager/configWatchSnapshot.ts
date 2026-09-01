@@ -84,11 +84,16 @@ export async function collectWatchedConfigFiles(
     read(options.rolesRoot)
   ]);
   for (const file of options.explicitFiles ?? []) files.add(path.resolve(file));
-  for (const entry of routeEntries) {
-    if (entry.isDirectory() && (options.includeDirectory?.(entry.name) ?? true)) {
-      files.add(options.adapterConfigPath(entry.name));
-    }
-  }
+  await Promise.all(routeEntries
+    .filter(entry => entry.isDirectory() && (options.includeDirectory?.(entry.name) ?? true))
+    .map(async entry => {
+      const candidate = options.adapterConfigPath(entry.name);
+      try {
+        if (await bounded(Promise.resolve(fileExists(candidate)), timeoutMs, candidate)) files.add(candidate);
+      } catch (error) {
+        errors.push(errorSummary(candidate, error));
+      }
+    }));
   await Promise.all(roleEntries
     .filter(entry => entry.isDirectory() && (options.includeDirectory?.(entry.name) ?? true))
     .map(async entry => {
