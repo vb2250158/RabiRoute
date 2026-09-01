@@ -84,3 +84,13 @@ assets/reference-cache/
 /plugin-adapters/xiaoai-rabiroute/xiaoai-local.config.json
 /desktop/windows-host/**/bin/
 /desktop/windows-host/**/obj/
+
+# Local Windows Host installation and release-test artifacts.
+/.install-staging/
+/.rabiroute-quarantine/
+/runtime/
+/versions/
+/current.json
+/RabiRouteHost.exe
+/RabiRouteHost.exe.restore.*.tmp.replaced
+/RabiRouteHost.exe~RF*.TMP
