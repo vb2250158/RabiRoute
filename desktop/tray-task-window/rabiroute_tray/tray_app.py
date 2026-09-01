@@ -213,7 +213,8 @@ def _wait_for_background_tasks(timeout_ms: int = 5_000) -> bool:
 
 
 def run(
-    project_root: Path,
+    package_root: Path,
+    state_root: Path,
     manager_url: str,
     application_generation_id: str,
     manager_instance_id: str,
@@ -237,8 +238,8 @@ def run(
         extension_registry=desktop_extensions,
     )
     lifecycle = LifecycleController(host_executable, application_generation_id)
-    desktop = DesktopAdapter(project_root)
-    refresh_service = DesktopRefreshService(manager, project_root)
+    desktop = DesktopAdapter(package_root)
+    refresh_service = DesktopRefreshService(manager, state_root)
     app_icon = desktop.app_icon()
 
     tray = QSystemTrayIcon(app_icon, app)
@@ -285,7 +286,7 @@ def run(
     selected_gateway_id = str(initial_manager.selected_gateway.get("id") or "") if initial_manager.selected_gateway else ""
     initial_role_id = role_id_from_gateway(initial_manager.selected_gateway)
     initial_plans, initial_context = empty_desktop_read_model(
-        project_root,
+        state_root,
         initial_manager.selected_gateway,
         initial_role_id,
     )
@@ -412,13 +413,13 @@ def run(
                 return
             role_id = role_id_from_gateway(gateway, "未指定人格")
             if state["loaded_gateway_id"] != active_gateway_id:
-                state["plans"], state["context"] = empty_desktop_read_model(project_root, gateway, role_id)
+                state["plans"], state["context"] = empty_desktop_read_model(state_root, gateway, role_id)
                 state["role_messages"] = []
                 state["loaded_gateway_id"] = active_gateway_id
             active_panel.set_actions(
                 _panel_actions(
                     gateway,
-                    project_root,
+                    state_root,
                     desktop,
                     manager,
                     tray,
@@ -526,7 +527,7 @@ def run(
             if panel_changed:
                 panel.set_actions(_panel_actions(
                     selected_gateway,
-                    project_root,
+                    state_root,
                     desktop,
                     manager,
                     tray,
@@ -627,7 +628,7 @@ def run(
                     if _panel_is_active(panel) and selected_gateway is not None:
                         panel.set_actions(_panel_actions(
                             selected_gateway,
-                            project_root,
+                            state_root,
                             desktop,
                             manager,
                             tray,
@@ -700,16 +701,16 @@ def run(
         manager,
         selection_delivery_targets,
         notify_selection_action,
-        settings_path=project_root / "data" / "speech" / "selection-reader-settings.json",
+        settings_path=state_root / "data" / "speech" / "selection-reader-settings.json",
     )
     app.aboutToQuit.connect(system_selection.stop)
 
     system_screenshot = SystemScreenshotController(
         manager,
-        project_root,
+        state_root,
         selection_delivery_targets,
         notify_selection_action,
-        settings_path=project_root / "data" / "desktop" / "settings.json",
+        settings_path=state_root / "data" / "desktop" / "settings.json",
         host_executable=host_executable,
         extension_registry=desktop_extensions,
         execute_command=execute_plugin_handler,
@@ -1047,7 +1048,7 @@ def _send_plan_feedback(
 
 def _panel_actions(
     gateway: dict,
-    project_root: Path,
+    state_root: Path,
     desktop: DesktopAdapter,
     manager: ManagerClient,
     tray: QSystemTrayIcon,
@@ -1058,13 +1059,13 @@ def _panel_actions(
     execute_handler,
 ) -> list[tuple[str, object, bool]]:
     role_id = role_id_from_gateway(gateway, "未指定人格")
-    role_dir = role_dir_from_gateway(project_root, gateway, role_id)
+    role_dir = role_dir_from_gateway(state_root, gateway, role_id)
     services = {
         "desktop.open-role-directory": lambda: desktop.open_path(role_dir),
         "desktop.open-plan-directory": lambda: desktop.open_path(role_dir / "plans"),
         "desktop.open-memory-directory": lambda: desktop.open_path(role_dir / "memory"),
-        "desktop.open-project-directory": lambda: desktop.open_path(project_dir_from_gateway(project_root, gateway)),
-        "desktop.open-runtime-directory": lambda: desktop.open_path(runtime_dir_from_gateway(project_root, gateway)),
+        "desktop.open-project-directory": lambda: desktop.open_path(project_dir_from_gateway(state_root, gateway)),
+        "desktop.open-runtime-directory": lambda: desktop.open_path(runtime_dir_from_gateway(state_root, gateway)),
     }
     manual_actions: list[DesktopPanelAction] = []
     for index, rule in enumerate(_manual_trigger_rules(gateway)):

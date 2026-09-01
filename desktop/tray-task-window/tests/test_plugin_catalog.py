@@ -303,7 +303,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                     _plugin(
                         "io.rabiroute.manager.desktop",
                         "manager:desktop",
-                        capabilities=["desktop.system-selection"],
+                        capabilities=["manager.desktop@1"],
                     )
                 ],
             ),
@@ -314,7 +314,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         assert catalog is not None
         self.assertTrue(catalog.available)
         self.assertEqual([command.handler_id for command in catalog.commands], ["desktop.system-selection"])
-        self.assertIn("desktop.system-selection", catalog.capabilities)
+        self.assertIn("manager.desktop@1", catalog.capabilities)
         self.assertTrue(registry.lifecycle_capability_active(catalog, "desktop.system-selection"))
 
     def test_panel_actions_are_resolved_only_from_active_catalog_commands(self) -> None:
@@ -422,7 +422,7 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                     _plugin(
                         plugin_id,
                         instance_id,
-                        capabilities=["manager.contributions"],
+                        capabilities=["manager.contributions@1"],
                     )
                 ],
             )
@@ -455,22 +455,8 @@ class DesktopPluginCatalogTest(unittest.TestCase):
                 ],
             )
         )
-        unsupported_host = parse_desktop_plugin_catalog(
-            _payload(
-                contributions=[contribution],
-                plugins=[
-                    _plugin(
-                        "io.rabiroute.manager.speech",
-                        "manager:speech",
-                        hosts=["manager", "web"],
-                    )
-                ],
-            )
-        )
-
         self.assertEqual(inactive.status_cards, ())
         self.assertEqual(mismatched.status_cards, ())
-        self.assertEqual(unsupported_host.status_cards, ())
 
     def test_unknown_status_and_settings_contracts_are_not_consumed(self) -> None:
         catalog = parse_desktop_plugin_catalog(
@@ -658,6 +644,30 @@ class DesktopPluginCatalogTest(unittest.TestCase):
         self.assertEqual(stale, empty_desktop_plugin_catalog())
         self.assertEqual(restarted.contribution_revision, 1)
 
+    def test_manager_hosted_plugin_can_publish_trusted_desktop_hotkeys(self) -> None:
+        catalog = parse_desktop_plugin_catalog(
+            _payload(
+                contributions=[
+                    _command("capture-screenshot", "desktop.capture-screenshot"),
+                    _hotkey("capture-screenshot-hotkey", "capture-screenshot", "Ctrl+Shift+S"),
+                ],
+                plugins=[
+                    _plugin(
+                        "io.rabiroute.manager.desktop",
+                        "manager:desktop",
+                        hosts=["manager", "web"],
+                        capabilities=["manager.desktop@1"],
+                    )
+                ],
+            )
+        )
+
+        self.assertIsNotNone(catalog)
+        assert catalog is not None
+        self.assertEqual(
+            [(item.command_id, item.handler_id, item.default_binding) for item in catalog.hotkeys],
+            [("capture-screenshot", "desktop.capture-screenshot", "Ctrl+Shift+S")],
+        )
     def test_resolves_controlled_hotkeys_and_themes(self) -> None:
         catalog = parse_desktop_plugin_catalog(
             _payload(

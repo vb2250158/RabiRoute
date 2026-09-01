@@ -19,6 +19,7 @@ DESKTOP_HOST_CAPABILITIES = frozenset(
     }
 )
 _SYMBOL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*$", re.IGNORECASE)
+_CAPABILITY_REFERENCE_PATTERN = re.compile(r"^[a-z][a-z0-9._:-]*@[1-9][0-9]*$")
 
 
 @dataclass(frozen=True)
@@ -700,6 +701,17 @@ def _symbols(value: object) -> frozenset[str] | None:
     return frozenset(symbols)
 
 
+def _capability_references(value: object) -> frozenset[str] | None:
+    if not isinstance(value, list):
+        return None
+    references = [_text(item, limit=200) for item in value]
+    if (
+        any(not _CAPABILITY_REFERENCE_PATTERN.fullmatch(reference) for reference in references)
+        or len(set(references)) != len(references)
+    ):
+        return None
+    return frozenset(references)
+
 def _active_plugins(rows: object) -> dict[str, _ActivePlugin] | None:
     if not isinstance(rows, list):
         return None
@@ -714,10 +726,10 @@ def _active_plugins(rows: object) -> dict[str, _ActivePlugin] | None:
             continue
         if _text(manifest.get("id")) != plugin_id:
             continue
-        hosts = manifest.get("hosts")
-        if not isinstance(hosts, list) or "desktop" not in hosts:
+        manifest_hosts = _symbols(manifest.get("hosts"))
+        if manifest_hosts is None or not manifest_hosts:
             continue
-        capabilities = _symbols(manifest.get("capabilities"))
+        capabilities = _capability_references(manifest.get("capabilities"))
         if capabilities is None:
             continue
         plugins[instance_id] = _ActivePlugin(plugin_id=plugin_id, capabilities=capabilities)

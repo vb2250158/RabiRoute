@@ -1,5 +1,11 @@
 import type { DesktopTheme } from "@shared/desktopSettingsContract";
-import { readableInterfaceThemeForeground, type CustomInterfaceTheme } from "@shared/interfaceThemeContract";
+import {
+  interfaceThemeSemanticTextColors,
+  readableInterfaceThemeForeground,
+  type CustomInterfaceTheme
+} from "@shared/interfaceThemeContract";
+export { interfaceThemeSemanticTextColors } from "@shared/interfaceThemeContract";
+export type { InterfaceThemeSemanticTextColors } from "@shared/interfaceThemeContract";
 import type { WebThemeCatalog, WebThemeId, WebThemeResourceId } from "./pluginThemes";
 import { resolveWebThemeResource } from "./pluginThemes";
 
@@ -17,8 +23,30 @@ const CUSTOM_THEME_PROPERTIES = [
   "--rr-grid-line", "--rr-grid-line-soft", "--rr-surface-glass", "--rr-surface-chrome",
   "--rr-surface-sidebar", "--rr-surface-route", "--rr-shadow-card", "--rr-shadow-menu",
   "--rr-switch-track", "--rr-switch-track-active", "--rr-switch-thumb", "--rr-switch-thumb-active",
-  "--rr-switch-track-shadow", "--rr-switch-thumb-shadow", "--rr-warning-text", "--rr-card-radius"
+  "--rr-switch-track-shadow", "--rr-switch-thumb-shadow", "--rr-on-accent-strong", "--rr-accent-text", "--rr-success-text",
+  "--rr-warning-text", "--rr-error-text", "--rr-info-text", "--rr-card-radius"
 ] as const;
+
+export type VuetifyInterfaceThemeBridge = Readonly<{
+  themes: { value: Record<string, unknown> };
+  global: { name: { value: string } };
+}>;
+
+export function applyVuetifyInterfaceTheme(
+  vuetifyTheme: VuetifyInterfaceThemeBridge,
+  effectiveTheme: EffectiveInterfaceTheme,
+  customTheme?: CustomInterfaceTheme
+): "RabiLight" | "RabiDark" | "RabiCustom" {
+  const themeName = customTheme ? "RabiCustom" : effectiveTheme === "dark" ? "RabiDark" : "RabiLight";
+  if (customTheme) {
+    vuetifyTheme.themes.value = {
+      ...vuetifyTheme.themes.value,
+      RabiCustom: customVuetifyTheme(customTheme)
+    };
+  }
+  vuetifyTheme.global.name.value = themeName;
+  return themeName;
+}
 
 function hexToRgba(hex: string, opacity: number): string {
   const value = Number.parseInt(hex.slice(1), 16);
@@ -33,6 +61,7 @@ function applyCustomInterfaceTheme(theme: CustomInterfaceTheme): void {
   clearCustomInterfaceTheme();
   const root = document.documentElement.style;
   const { colors, styles } = theme;
+  const semanticText = interfaceThemeSemanticTextColors(theme);
   const direct: Record<string, string> = {
     "--rr-page-canvas": colors.pageCanvas,
     "--rr-canvas": colors.canvas,
@@ -61,8 +90,8 @@ function applyCustomInterfaceTheme(theme: CustomInterfaceTheme): void {
     "--rr-info-border": `color-mix(in srgb, ${colors.info} 42%, ${colors.border})`,
     "--rr-border-soft": hexToRgba(colors.text, .14),
     "--rr-border-faint": hexToRgba(colors.text, .09),
-    "--rr-grid-line": hexToRgba(colors.accentStrong, .05),
-    "--rr-grid-line-soft": hexToRgba(colors.accentStrong, .035),
+    "--rr-grid-line": hexToRgba(colors.accentStrong, .08),
+    "--rr-grid-line-soft": hexToRgba(colors.accentStrong, .06),
     "--rr-surface-glass": hexToRgba(colors.surface, styles.glassOpacity / 100),
     "--rr-surface-chrome": hexToRgba(colors.surface, Math.min(1, (styles.glassOpacity + 3) / 100)),
     "--rr-surface-sidebar": `linear-gradient(180deg, ${hexToRgba(colors.surface, Math.min(1, (styles.glassOpacity + 4) / 100))}, ${hexToRgba(colors.canvas, styles.glassOpacity / 100)})`,
@@ -75,7 +104,12 @@ function applyCustomInterfaceTheme(theme: CustomInterfaceTheme): void {
     "--rr-switch-thumb-active": colors.switchThumb,
     "--rr-switch-track-shadow": `inset 0 1px 2px ${hexToRgba(colors.text, .18)}`,
     "--rr-switch-thumb-shadow": `0 8px 18px ${hexToRgba(colors.text, .24)}`,
-    "--rr-warning-text": colors.warning,
+    "--rr-on-accent-strong": semanticText.onAccentStrong,
+    "--rr-accent-text": semanticText.accentText,
+    "--rr-success-text": semanticText.successText,
+    "--rr-warning-text": semanticText.warningText,
+    "--rr-error-text": semanticText.errorText,
+    "--rr-info-text": semanticText.infoText,
     "--rr-card-radius": `${styles.cornerRadius}px`
   };
   for (const [property, value] of Object.entries(direct)) root.setProperty(property, value);
@@ -83,6 +117,7 @@ function applyCustomInterfaceTheme(theme: CustomInterfaceTheme): void {
 
 export function customVuetifyTheme(theme: CustomInterfaceTheme) {
   const { colors } = theme;
+  const semanticText = interfaceThemeSemanticTextColors(theme);
   return {
     dark: theme.baseTheme === "dark",
     variables: {},
@@ -100,7 +135,7 @@ export function customVuetifyTheme(theme: CustomInterfaceTheme) {
       "on-surface": colors.text,
       "on-primary": readableInterfaceThemeForeground(colors.heading),
       "on-secondary": readableInterfaceThemeForeground(colors.accent),
-      "on-accent": readableInterfaceThemeForeground(colors.accentStrong),
+      "on-accent": semanticText.onAccentStrong,
       "on-success": readableInterfaceThemeForeground(colors.success),
       "on-warning": readableInterfaceThemeForeground(colors.warning),
       "on-error": readableInterfaceThemeForeground(colors.error),

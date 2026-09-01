@@ -12,6 +12,7 @@ import {
   referencedPlanAttachmentIds
 } from "@shared/planAttachmentMentions";
 import PlanFeedbackComposer from "../components/PlanFeedbackComposer.vue";
+import PlanStepDetail from "../components/PlanStepDetail.vue";
 import { useI18n } from "../i18n";
 import { knowledgeItemMatchesQuery, normalizeKnowledgeQuery } from "../knowledgeSearch";
 import { knowledgePageShouldWork } from "../knowledgePageActivity";
@@ -2841,7 +2842,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     :title="currentStep(plan)?.title || plan.currentStep"
                   >{{ currentStep(plan)?.title || plan.currentStep }}</b>
                   <b v-else>{{ t("暂无进行中的步骤") }}</b>
-                  <p v-if="currentStep(plan)?.detail" class="knowledge-plan-current-detail" data-no-i18n>{{ currentStep(plan)?.detail }}</p>
+                  <PlanStepDetail v-if="currentStep(plan)?.detail" class="knowledge-plan-current-detail" :text="currentStep(plan)?.detail || ''" />
                 </div>
               </div>
               <div class="knowledge-plan-timing">
@@ -3081,7 +3082,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                         <b data-no-i18n>{{ step.title }}</b>
                         <span v-if="step.id === plan.currentStepId">{{ blocker(plan) ? t("当前阻塞") : t("正在执行") }}</span>
                       </div>
-                      <p v-if="step.detail" data-no-i18n>{{ step.detail }}</p>
+                      <PlanStepDetail v-if="step.detail" class="knowledge-step-detail" :text="step.detail" />
                       <small v-if="step.waitingFor" data-no-i18n>等待：{{ step.waitingFor }}</small>
                       <small v-if="stepIsBlocked(plan, step) && step.blockedBy" data-no-i18n>{{ step.blockedBy }}</small>
                       <small v-if="step.status === '进行中' && step.startedAt" class="knowledge-step-time">

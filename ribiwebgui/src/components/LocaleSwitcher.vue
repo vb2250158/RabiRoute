@@ -23,6 +23,7 @@ const options: Array<{ locale: AppLocale; label: string; detail: string }> = [
         {{ locale === "en" ? "EN" : "中" }}
       </v-btn>
     </template>
+
     <v-list class="locale-menu" density="compact" min-width="190">
       <v-list-item
         v-for="option in options"
@@ -40,3 +41,10 @@ const options: Array<{ locale: AppLocale; label: string; detail: string }> = [
     </v-list>
   </v-menu>
 </template>
+
+<style scoped>
+.locale-menu :deep(.v-list-item-subtitle) {
+  color: var(--rr-muted-soft) !important;
+  opacity: 1 !important;
+}
+</style>

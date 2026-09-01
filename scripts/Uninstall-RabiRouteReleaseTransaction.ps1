@@ -69,6 +69,19 @@ function Remove-LegacyTaskDurably([string]$BackupRoot) {
     }
     Invoke-LegacyTaskMigration "Remove" $BackupRoot
 }
+function Remove-StableNodeRuntime([string]$Install, [string]$Version) {
+    $runtimeRoot = Join-Path $Install "runtime"
+    $stableNode = Join-Path $runtimeRoot "node.exe"
+    $versionedNode = Join-Path $Version "node.exe"
+    if (-not (Test-Path -LiteralPath $stableNode -PathType Leaf) -or -not (Test-Path -LiteralPath $versionedNode -PathType Leaf)) { return }
+    $runtimeItem = Get-Item -LiteralPath $runtimeRoot -Force
+    $nodeItem = Get-Item -LiteralPath $stableNode -Force
+    if (($runtimeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 `
+        -or ($nodeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return }
+    if ((Get-Sha256File $stableNode) -ne (Get-Sha256File $versionedNode)) { return }
+    Remove-Item -LiteralPath $stableNode -Force
+    if (-not (Get-ChildItem -LiteralPath $runtimeRoot -Force)) { Remove-Item -LiteralPath $runtimeRoot -Force }
+}
 function Read-ValidatedOwnedRelease([string]$Install) {
     $pointerPath = Join-Path $Install "current.json"
     $pointer = Get-Content -LiteralPath $pointerPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -274,6 +287,8 @@ if ([string]$journal.startupState -ne "removed") {
     $journal.startupState = "removed"
     Save-Journal $journal
 }
+
+Remove-StableNodeRuntime $install ([string]$journal.version)
 if ([string]$journal.taskState -ne "removed") {
     $journal.taskState = "removing"
     Save-Journal $journal

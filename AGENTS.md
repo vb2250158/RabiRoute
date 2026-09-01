@@ -43,6 +43,14 @@ RabiRoute 是一个开源的消息网关 / Policy Router 项目。协作时先�
 - `skills/` 放项目内可复用的 Agent 指南，例如如何创建 RabiRoute 人格。
 - 新增、改造或排障任何 Agent 处理端（尤其是 Codex/ChatGPT Desktop、会话找不到、重复建会话、工具不可用或启动依赖问题）时，必须先完整读取并遵守 `skills/create-rabiroute-agent-adapter/SKILL.md`；不得跳过其中的 owner、名称 + ID、按需扫描与 4510 独立启动门禁。
 
+## Manager 动态地址合同
+
+- 所有新增或修改的 Skill、工作流和脚本，只要访问 RabiRoute Manager，都必须使用当前 application generation 发布的完整地址，不得写死 Manager 端口。
+- 安装版通过 `RabiRouteHost.exe --command status --json` 取得 `managerBaseUrl`、`applicationGenerationId` 和 `managerInstanceId`；源码模式只使用 Manager 输出的结构化 READY 地址；测试或外部调用可以显式注入完整 URL。
+- 取得地址后必须读取 `<managerBaseUrl>/meta`，确认 `health.state=healthy`、`requiredReady=true`，并核对 generation 与 Manager 实例身份。generation 变化后重新发现地址，不缓存旧 URL。
+- 禁止端口扫描、读取退役实例锁、直接启动或结束 Manager 进程。安装版应用生命周期只由 Host 管理。测试夹具和明确的旧任务迁移器可以保留退役端口文本用于检测，但不得把它作为当前连接目标。
+- 修改 Skill、工作流或脚本后运行 `node --test scripts/dynamic-manager-active-truth.test.mjs`；该测试递归检查现有和新增入口。
+
 ## 修改代码
 
 - 新平台入口优先新增 `src/adapters/` 模块，不要把所有逻辑塞进 NapCat adapter。

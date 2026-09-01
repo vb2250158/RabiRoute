@@ -35,6 +35,10 @@ Manager also holds an operating-system named-pipe lease derived from the current
 
 For every application generation, Host creates a new Windows Job. Manager and tray are created with `CREATE_SUSPENDED`, assigned to the Job, and then resumed, so closing Host or the Job cannot leave orphan children. Manager starts first. Host accepts only a structured READY carrying the expected `applicationGenerationId`, Manager PID, `managerInstanceId`, and loopback `baseUrl`; the tray starts only after that validation succeeds.
 
+Each release still stores its manifest-validated Node.js copy at `versions/<releaseId>/node.exe`. Before Manager starts, Host verifies and synchronizes that file to the fixed install-root path `runtime/node.exe`; Manager, Routes, and workers all start through that path. An upgrade changes release content without changing the network-program path seen by Windows, so enabling LAN WebGUI or persona synchronization no longer causes a new firewall prompt for every `releaseId`. Host repairs `runtime/node.exe` when it differs from the active release copy. Uninstall removes it only when the hashes match and preserves every other file.
+
+Host also provides Manager and Desktop with a read-only package root (`RABIROUTE_PACKAGE_ROOT`) and a stable writable state root (`RABIROUTE_STATE_ROOT`). Desktop loads code and icons from the package root, while screenshot images, region history, pin state, selected-text settings, and generated COM caches are written only under the installation root. Runtime data no longer enters `versions/<releaseId>`, so later Host status, restart, and upgrade operations can continue validating the active release against its manifest.
+
 ## Traceable design basis
 
 This design borrows lifecycle invariants, not another project's process layout or ports:
@@ -147,3 +151,4 @@ Desktop keeps one crash-evidence bundle per launch; Manager, plugins, and Routes
 5. quit leaves no Host, Manager, tray, or leased plugin process, and nothing resurrects;
 6. `--command status --json` matches Manager `/meta` generation, instance, and URL;
 7. retired lifecycle entries, fixed-port defaults, and Manager HTTP application-start/stop routes are absent from the production path and package.
+8. Manager and its Node.js children execute through `<install-root>/runtime/node.exe`; an upgrade does not fall back to `versions/<releaseId>/node.exe`.

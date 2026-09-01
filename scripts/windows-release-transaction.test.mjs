@@ -552,12 +552,16 @@ test("uninstall removes only a fully validated active version and preserves fore
   const fixture = makeFixture();
   try {
     assert.equal(run(fixture).status, 0);
+    const stableRuntime = path.join(fixture.install, "runtime", "node.exe");
+    fs.mkdirSync(path.dirname(stableRuntime), { recursive: true });
+    fs.copyFileSync(path.join(fixture.install, "versions", fixture.releaseId, "node.exe"), stableRuntime);
     fs.mkdirSync(path.join(fixture.install, "data"), { recursive: true });
     fs.writeFileSync(path.join(fixture.install, "foreign.keep"), "user-owned");
     const removed = runUninstall(fixture, false);
     assert.equal(removed.status, 0, removed.stderr || removed.stdout);
     assert.equal(fs.existsSync(path.join(fixture.install, "current.json")), false);
     assert.equal(fs.existsSync(path.join(fixture.install, "RabiRouteHost.exe")), false);
+    assert.equal(fs.existsSync(stableRuntime), false);
     assert.ok(fs.existsSync(path.join(fixture.install, "data")));
     assert.equal(fs.readFileSync(path.join(fixture.install, "foreign.keep"), "utf8"), "user-owned");
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
@@ -797,11 +801,16 @@ test("installer embeds the exact portable ZIP and has no flat overwrite or unfen
   ]) assert.ok(transactionContract.includes(retired), retired);
   assert.match(transactionContract, /\.retired/);
   assert.match(transactionContract, /Save-Journal "version-move-planned" "planned"/);
+  assert.doesNotMatch(transactionContract, /bootstrap\.replace|pointer\.replace|temporary\.replaced/);
+  assert.match(transactionContract, /function Move-DirectoryWithRetry/);
+  assert.match(transactionContract, /Move-DirectoryWithRetry \$release\.version \$destinationVersion/);
+  assert.match(transactionContract, /NullString\]::Value, \$true\)/);
   assert.match(transactionContract, /after-version-move-before-journal/);
   assert.match(transactionContract, /after-legacy-task-remove-before-journal/);
   assert.match(transactionContract, /legacyTaskMigrationState/);
   assert.match(transactionContract, /Assert-QuarantineJournal/);
   assert.match(uninstallContract, /Read-ValidatedOwnedRelease/);
+  assert.match(uninstallContract, /Remove-StableNodeRuntime/);
   assert.match(uninstallContract, /Manifest content mismatch/);
   assert.match(uninstallContract, /Active release file set does not match its manifest/);
 });

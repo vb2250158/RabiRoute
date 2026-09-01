@@ -64,6 +64,34 @@ Check(
     HostIdentity.UserKey("S-1-5-21-test") != HostIdentity.UserKey("S-1-5-21-other"),
     "Host identity namespace does not collapse different SID sources");
 
+var stableNodeRoot = Path.Combine(Path.GetTempPath(), $"rabiroute-stable-node-{Guid.NewGuid():N}");
+var stableNodeState = Path.Combine(stableNodeRoot, "install");
+var stableNodePackageA = Path.Combine(stableNodeRoot, "versions", "release-a");
+var stableNodePackageB = Path.Combine(stableNodeRoot, "versions", "release-b");
+Directory.CreateDirectory(stableNodePackageA);
+Directory.CreateDirectory(stableNodePackageB);
+Directory.CreateDirectory(stableNodeState);
+try
+{
+    File.WriteAllText(Path.Combine(stableNodePackageA, "node.exe"), "node-runtime-a");
+    File.WriteAllText(Path.Combine(stableNodePackageB, "node.exe"), "node-runtime-b");
+    var stableNodeA = StableNodeRuntime.Resolve(stableNodePackageA, stableNodeState);
+    Check(
+        stableNodeA == Path.Combine(stableNodeState, StableNodeRuntime.RuntimeDirectoryName, StableNodeRuntime.RuntimeFileName),
+        "Node.js executes from one stable install-root path instead of a release directory");
+    Check(File.ReadAllText(stableNodeA) == "node-runtime-a", "stable Node.js runtime copies the validated release runtime");
+    var stableNodeB = StableNodeRuntime.Resolve(stableNodePackageB, stableNodeState);
+    Check(stableNodeB == stableNodeA, "Node.js executable path remains stable across release changes");
+    Check(File.ReadAllText(stableNodeB) == "node-runtime-b", "stable Node.js runtime updates when the validated runtime changes");
+    File.WriteAllText(stableNodeB, "tampered-runtime");
+    StableNodeRuntime.Resolve(stableNodePackageB, stableNodeState);
+    Check(File.ReadAllText(stableNodeB) == "node-runtime-b", "stable Node.js runtime repairs a mismatched mutable copy");
+}
+finally
+{
+    Directory.Delete(stableNodeRoot, recursive: true);
+}
+
 var portableRoot = Path.Combine(Path.GetTempPath(), $"rabiroute-portable-guard-{Guid.NewGuid():N}");
 var portablePackageRoot = Path.Combine(portableRoot, "versions", "release-a");
 var portableStateRoot = portableRoot;

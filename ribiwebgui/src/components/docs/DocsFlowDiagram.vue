@@ -107,7 +107,7 @@ defineProps<{
 
 .flow-diagram-node-icon {
   margin-top: 1px;
-  color: var(--rr-accent-strong);
+  color: var(--rr-accent-text);
 }
 
 .flow-diagram-node strong,

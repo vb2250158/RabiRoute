@@ -384,7 +384,7 @@ onMounted(() => {
     <v-alert class="speaker-boundary" type="info" variant="tonal" density="compact">
       <div class="speaker-boundary-title">
         <strong>Speaker 1 / Speaker 2 只是当前会话里的分段标签，不是生物声纹身份。</strong>
-        <v-chip size="small" :color="voiceprintStatus.color" variant="tonal">{{ voiceprintStatus.label }}</v-chip>
+        <v-chip size="small" :color="voiceprintStatus.color" :variant="voiceprintStatus.color === 'grey' ? 'outlined' : 'tonal'">{{ voiceprintStatus.label }}</v-chip>
       </div>
       <span v-if="experimentalAutoAssign">
         实验性自动认人已显式开启，但尚未通过本机基准；界面会保留人工确认入口，并明确标记实验结果。
@@ -418,7 +418,7 @@ onMounted(() => {
                   <strong>{{ group.title }}</strong>
                   <span data-no-i18n>{{ group.sessionIds[0] }}</span>
                 </div>
-                <v-btn size="small" color="primary" variant="tonal" @click="openPreviewBinding(group)">
+                <v-btn size="small" color="secondary" variant="tonal" @click="openPreviewBinding(group)">
                   标注为某人
                 </v-btn>
               </div>
@@ -472,7 +472,7 @@ onMounted(() => {
     <div v-if="records.length" class="speech-record-list">
       <article v-for="record in records" :key="record.id" class="speech-record-row">
         <div class="speech-record-meta">
-          <v-chip size="x-small" :color="record.kind === 'asr' ? 'primary' : 'secondary'" variant="tonal">
+          <v-chip size="x-small" :color="record.kind === 'asr' ? 'info' : 'secondary'" variant="tonal">
             {{ record.kind.toUpperCase() }}
           </v-chip>
           <time>{{ formatTime(record.time) }}</time>
@@ -559,7 +559,7 @@ onMounted(() => {
             hide-details
           />
           <v-btn
-            color="primary"
+            color="secondary"
             variant="tonal"
             prepend-icon="mdi-account-plus-outline"
             :loading="actionBusy"
@@ -590,6 +590,7 @@ onMounted(() => {
             <div class="speaker-profile-actions">
               <v-btn
                 size="small"
+                color="secondary"
                 variant="tonal"
                 :loading="actionBusy"
                 :disabled="!speakerDrafts[profile.id].displayName.trim() || Boolean(capability?.storageError)"
@@ -710,7 +711,7 @@ onMounted(() => {
 .speech-record-meta { display: flex; flex-wrap: wrap; gap: 7px 12px; align-items: center; color: var(--rr-muted-faint); font-size: 11px; }
 .speech-record-cache { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 9px; padding: 8px 10px; border-radius: 9px; background: var(--rr-accent-surface); }
 .speech-record-cache-fact { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; min-width: 0; color: var(--rr-muted); font-size: 11px; }
-.speech-record-cache-fact code { overflow-wrap: anywhere; color: var(--rr-accent-strong); }
+.speech-record-cache-fact code { overflow-wrap: anywhere; color: var(--rr-accent-text); }
 .speech-record-cache-fact time { color: var(--rr-text); }
 .speech-record-text, .speech-segment-row p { margin: 8px 0 0; color: var(--rr-text); line-height: 1.6; white-space: pre-wrap; }
 .speech-segment-list { margin-top: 10px; }
@@ -730,7 +731,7 @@ onMounted(() => {
 .speaker-binding-facts { display: grid; gap: 9px; }
 .speaker-binding-facts > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; align-items: center; }
 .speaker-binding-facts span { color: var(--rr-muted-faint); font-size: 12px; }
-.speaker-binding-facts code { overflow-wrap: anywhere; color: var(--rr-accent-strong); }
+.speaker-binding-facts code { overflow-wrap: anywhere; color: var(--rr-accent-text); }
 .speaker-binding-preview { margin-top: 16px; padding: 13px 14px; border: 1px solid var(--rr-accent-border); border-radius: 12px; background: var(--rr-accent-surface); }
 .speaker-binding-preview > span { display: block; margin-top: 7px; color: var(--rr-muted-faint); font-size: 12px; }
 @media (max-width: 760px) {

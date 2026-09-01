@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ from rabiroute_tray.windows_app_identity import configure_process_app_identity
 
 
 def _resolve_project_root() -> Path:
-    """Resolve the installed product root without acquiring lifecycle ownership."""
+    """Resolve the package root when Host runtime-layout variables are unavailable."""
     if getattr(sys, "frozen", False):
         runtime_dir = Path(sys.executable).resolve().parent
         if runtime_dir.name == "desktop-runtime":
@@ -35,6 +36,38 @@ def _resolve_project_root() -> Path:
     if script_path.parent.name == "desktop-runtime":
         return script_path.parent.parent
     return script_path.parents[2]
+
+
+def _runtime_root_from_environment(name: str, fallback: Path) -> Path:
+    value = str(os.environ.get(name) or "").strip()
+    if not value:
+        return fallback.resolve()
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        raise RuntimeError(f"{name} must be an absolute directory")
+    resolved = candidate.resolve()
+    if not resolved.is_dir():
+        raise RuntimeError(f"{name} directory is unavailable: {resolved}")
+    return resolved
+
+
+def _resolve_runtime_roots() -> tuple[Path, Path]:
+    package_root = _runtime_root_from_environment("RABIROUTE_PACKAGE_ROOT", _resolve_project_root())
+    state_root = _runtime_root_from_environment("RABIROUTE_STATE_ROOT", package_root)
+    return package_root, state_root
+
+
+def _configure_comtypes_cache(state_root: Path) -> Path:
+    """Keep generated COM wrappers outside the immutable release directory."""
+    cache_dir = state_root / "data" / ".runtime" / "desktop" / "comtypes-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    comtypes_client = importlib.import_module("comtypes.client")
+    comtypes_gen = importlib.import_module("comtypes.gen")
+    comtypes_client.gen_dir = str(cache_dir)
+    gen_paths = comtypes_gen.__path__
+    if str(cache_dir) not in gen_paths:
+        gen_paths.append(str(cache_dir))
+    return cache_dir
 
 
 def _loopback_manager_url(value: str) -> str:
@@ -95,7 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.surface_child:
         parser.error("RabiRoute Tray can only be launched by RabiRoute Host (--surface-child is required)")
 
-    project_root = _resolve_project_root()
+    package_root, state_root = _resolve_runtime_roots()
+    _configure_comtypes_cache(state_root)
     configure_process_app_identity()
     diagnostics = DesktopDiagnostics.start()
     diagnostics.install()
@@ -120,7 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         exit_code = run(
-            project_root,
+            package_root,
+            state_root,
             manager_url=args.manager_url,
             application_generation_id=args.application_generation_id,
             manager_instance_id=args.manager_instance_id,

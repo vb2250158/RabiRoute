@@ -244,25 +244,49 @@ export function resolveWebThemeResource(
   };
 }
 
-export function initialWebThemePreference(storedTheme: WebThemeId, desktopTheme: DesktopTheme): WebThemeId {
-  return storedTheme || desktopTheme;
-}
+export type InitialWebThemePreference = Readonly<{
+  themeId: WebThemeId;
+  migrateToManager: boolean;
+}>;
 
-export const WEB_THEME_PREFERENCE_KEY = "rabiroute:webgui:theme-preference";
-
-export function readStoredWebThemePreference(): WebThemeId {
+function normalizedWebThemePreference(value: unknown): WebThemeId {
   try {
-    return window.localStorage.getItem(WEB_THEME_PREFERENCE_KEY)?.trim() || "";
+    return controlledSymbol(value, "preference");
   } catch {
     return "";
   }
 }
 
-export function writeStoredWebThemePreference(themeId: WebThemeId | undefined): void {
+export function initialWebThemePreference(managerWebTheme: unknown, legacyWebTheme: WebThemeId): InitialWebThemePreference {
+  const managerTheme = normalizedWebThemePreference(managerWebTheme);
+  if (managerTheme) return { themeId: managerTheme, migrateToManager: false };
+  const legacyTheme = normalizedWebThemePreference(legacyWebTheme);
+  if (legacyTheme) return { themeId: legacyTheme, migrateToManager: true };
+  return { themeId: "system", migrateToManager: false };
+}
+
+export const WEB_THEME_PREFERENCE_KEY = "rabiroute:webgui:theme-preference";
+
+type LegacyWebThemeStorage = Pick<Storage, "getItem" | "removeItem">;
+
+export function storedWebThemePreference(storage: Pick<Storage, "getItem"> = window.localStorage): WebThemeId {
   try {
-    if (themeId) window.localStorage.setItem(WEB_THEME_PREFERENCE_KEY, themeId);
-    else window.localStorage.removeItem(WEB_THEME_PREFERENCE_KEY);
+    return normalizedWebThemePreference(storage.getItem(WEB_THEME_PREFERENCE_KEY));
   } catch {
-    // 浏览器禁用本地存储时仅保留当前会话主题。
+    return "";
   }
+}
+
+export function clearStoredWebThemePreference(storage: Pick<Storage, "removeItem"> = window.localStorage): void {
+  try {
+    storage.removeItem(WEB_THEME_PREFERENCE_KEY);
+  } catch {
+    // Manager 写入成功后才清理旧浏览器键；清理失败不改变 Manager 真源。
+  }
+}
+
+export function consumeStoredWebThemePreference(storage: LegacyWebThemeStorage = window.localStorage): WebThemeId {
+  const stored = storedWebThemePreference(storage);
+  clearStoredWebThemePreference(storage);
+  return stored;
 }

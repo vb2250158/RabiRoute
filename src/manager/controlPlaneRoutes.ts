@@ -6991,6 +6991,10 @@ function handleDesktopSettingsApi(request: http.IncomingMessage, requestUrl: URL
           screenshot: { ...current.screenshot, ...screenshot }
         });
       })
+      .then((data) => {
+        publishManagerEvent("desktop_settings_changed", { webTheme: data.webTheme });
+        return data;
+      })
       .then((data) => jsonResponse(response, 200, {
         code: 0,
         data: { ...data, autostartConfigured: true }

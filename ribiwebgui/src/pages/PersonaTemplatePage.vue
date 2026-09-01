@@ -1877,7 +1877,8 @@ watch(() => store.selectedGatewayId, (id) => {
 <style scoped>
 .persona-page-tabs {
   min-height: 56px;
-  background: rgba(239, 244, 249, .72);
+  border-bottom: 1px solid var(--rr-border-faint);
+  background: var(--rr-subtle);
 }
 
 .persona-page-tabs :deep(.v-tab) {

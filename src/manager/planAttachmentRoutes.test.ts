@@ -95,6 +95,44 @@ test("plan attachment route serves managed video inline with byte ranges", async
   assert.deepEqual(response.body(), Buffer.from("ftyp"));
 });
 
+test("plan attachment route resolves copied plan data after the runtime root moves", async (t) => {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-source-"));
+  const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-target-"));
+  t.after(() => fs.rmSync(sourceRoot, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(targetRoot, { recursive: true, force: true }));
+  const sourceRoleDir = path.join(sourceRoot, "roles", "Rabi");
+  const targetRoleDir = path.join(targetRoot, "roles", "Rabi");
+  const content = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZsAAAAASUVORK5CYII=", "base64");
+  const plan = createPlan(sourceRoleDir, {
+    id: "plan-relocated-preview",
+    title: "迁移后的图片预览",
+    focus: "迁移后的图片预览",
+    steps: [{ id: "view", title: "查看图片", status: "未开始" }],
+    keywords: ["图片"],
+    attachments: [{ name: "preview.png", mimeType: "image/png", contentBase64: content.toString("base64") }]
+  });
+  const attachment = plan.attachments[0]!;
+  fs.mkdirSync(path.dirname(targetRoleDir), { recursive: true });
+  fs.cpSync(sourceRoleDir, targetRoleDir, { recursive: true });
+  fs.rmSync(sourceRoot, { recursive: true, force: true });
+
+  const pathname = `/api/roles/Rabi/plans/${encodeURIComponent(plan.id)}/attachments/${encodeURIComponent(attachment.id)}`;
+  const response = await getAttachment(pathname, targetRoleDir);
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.body(), content);
+
+  const relocatedFile = path.join(
+    path.dirname(planJsonFile(targetRoleDir, plan.id, "active")),
+    "attachments",
+    path.basename(attachment.path)
+  );
+  const changed = Buffer.from(content);
+  changed[changed.byteLength - 1] ^= 0xff;
+  fs.writeFileSync(relocatedFile, changed);
+  const rejected = await getAttachment(pathname, targetRoleDir);
+  assert.equal(rejected.statusCode, 404);
+});
+
 test("plan attachment route returns 404 for missing or unmanaged paths", async () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-guard-"));
   const sourceFile = path.join(roleDir, "source.txt");

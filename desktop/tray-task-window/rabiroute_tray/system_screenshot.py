@@ -322,16 +322,6 @@ class ScreenCaptureSegment:
 
 
 @dataclass(frozen=True)
-class ScreenCaptureCandidate:
-    """One monitor's native screenshot and the local canvas used to select it."""
-
-    screen_name: str
-    screen_geometry: QRect
-    image: QImage
-    layout: "ScreenCaptureLayout"
-
-
-@dataclass(frozen=True)
 class ScreenCaptureLayout:
     """Piecewise mapping for a virtual desktop with mixed monitor DPI."""
 
@@ -370,14 +360,6 @@ class ScreenCaptureLayout:
             if not logical_rect.isEmpty() and not source_rect.isEmpty():
                 segments.append(ScreenCaptureSegment(logical_rect, source_rect))
         return cls(virtual_geometry, image_size, tuple(segments))
-
-    @classmethod
-    def for_single_screen(cls, screen: Any, image_size: QSize) -> "ScreenCaptureLayout":
-        """Map a native monitor image onto only that monitor's logical canvas."""
-        geometry = QRect(screen.geometry())
-        logical = QRect(QPoint(0, 0), geometry.size())
-        source = QRect(QPoint(0, 0), image_size)
-        return cls(geometry, image_size, (ScreenCaptureSegment(logical, source),))
 
     def source_rect_for_logical(self, logical_rect: QRect) -> QRect:
         if logical_rect.isEmpty():
@@ -491,43 +473,6 @@ class ScreenCaptureLayout:
         except (TypeError, ValueError):
             return None
         return rect if not rect.isEmpty() else None
-
-
-def split_desktop_capture_by_screen(
-    image: QImage,
-    screens: tuple[Any, ...] | list[Any],
-    image_origin: QPoint | None = None,
-) -> tuple[ScreenCaptureCandidate, ...]:
-    """Split one Windows virtual-desktop grab into independent monitor images.
-
-    The grab stays a Windows implementation detail.  Every later UI operation
-    receives a single monitor image with a local (0, 0) canvas, so selection can
-    never cross a mixed-DPI boundary.
-    """
-    if image.isNull() or not screens:
-        return ()
-    layout = ScreenCaptureLayout.from_screens(image.size(), screens, image_origin=image_origin)
-    candidates: list[ScreenCaptureCandidate] = []
-    for index, screen in enumerate(screens):
-        geometry = QRect(screen.geometry())
-        logical = QRect(geometry.topLeft() - layout.virtual_geometry.topLeft(), geometry.size())
-        segment = next((item for item in layout.segments if item.logical_rect == logical), None)
-        if segment is None or segment.source_rect.isEmpty():
-            continue
-        cropped = image.copy(segment.source_rect)
-        if cropped.isNull():
-            continue
-        try:
-            screen_name = str(screen.name()).strip()
-        except AttributeError:
-            screen_name = ""
-        candidates.append(ScreenCaptureCandidate(
-            screen_name or f"显示器 {index + 1}",
-            geometry,
-            cropped,
-            ScreenCaptureLayout.for_single_screen(screen, cropped.size()),
-        ))
-    return tuple(candidates)
 
 
 def desktop_screenshot_state_directory(project_root: Path) -> Path:
@@ -905,56 +850,6 @@ def capture_desktop(project_root: Path, screens: list[Any] | None = None) -> Pat
     return save_screenshot_image(project_root, capture_desktop_image(screens), "capture")
 
 
-class ScreenCapturePicker(QDialog):
-    """Choose one independently captured monitor before opening the selector."""
-
-    screen_selected = Signal(int)
-
-    def __init__(self, candidates: tuple[ScreenCaptureCandidate, ...]) -> None:
-        super().__init__()
-        self._candidates = candidates
-        self.setWindowTitle("选择要框选的显示器")
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setModal(True)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self.setMinimumWidth(480)
-        self.setMaximumHeight(620)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(10)
-        heading = QLabel("选择一块显示器，再在它自己的截图里框选")
-        heading.setWordWrap(True)
-        heading.setStyleSheet("font-weight: 600;")
-        layout.addWidget(heading)
-        for index, candidate in enumerate(candidates):
-            layout.addWidget(self._candidate_button(index, candidate))
-        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, self)
-        controls.rejected.connect(self.reject)
-        layout.addWidget(controls)
-
-    def _candidate_button(self, index: int, candidate: ScreenCaptureCandidate) -> QPushButton:
-        button = QPushButton(self)
-        button.setMinimumHeight(92)
-        button.setStyleSheet("text-align: left; padding: 8px;")
-        geometry = candidate.screen_geometry
-        title = f"{index + 1}. {candidate.screen_name}    {geometry.width()} × {geometry.height()}"
-        button.setText(title)
-        preview = QPixmap.fromImage(candidate.image).scaled(
-            QSize(132, 72),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        button.setIcon(QIcon(preview))
-        button.setIconSize(QSize(132, 72))
-        button.clicked.connect(lambda _checked=False, selected=index: self._select(selected))
-        return button
-
-    def _select(self, index: int) -> None:
-        if 0 <= index < len(self._candidates):
-            self.screen_selected.emit(index)
-            self.accept()
-
-
 class ScreenshotColorPreviewWindow(QFrame):
     """Mouse-transparent color magnifier rendered independently from the capture overlay."""
 
@@ -1296,6 +1191,10 @@ class ScreenshotCaptureOverlay(QWidget):
     def _overlay_point_from_source(self, point: QPoint) -> QPoint:
         if self._image.isNull() or self._image.width() <= 0 or self._image.height() <= 0:
             return QPoint(point)
+        if self._capture_layout is not None:
+            logical = self._capture_layout.logical_rect_for_source(QRect(point, QSize(1, 1)))
+            if not logical.isEmpty():
+                return logical.topLeft()
         return QPoint(
             max(0, min(self.width() - 1, round(point.x() * self.width() / self._image.width()))),
             max(0, min(self.height() - 1, round(point.y() * self.height() / self._image.height()))),
@@ -1847,6 +1746,8 @@ class ScreenshotCaptureOverlay(QWidget):
             self._capture_layout = None
         else:
             self._capture_layout = layout
+            self.setGeometry(layout.virtual_geometry)
+        self._invalidate_render_cache()
         self.update()
 
     def complete_capture(self, history: ScreenshotHistory, transient_path: Path) -> None:
@@ -1884,11 +1785,20 @@ class ScreenshotCaptureOverlay(QWidget):
             return
         if self._capture_pixmap.size() == self.size() and not self._dimmed_capture_pixmap.isNull():
             return
-        scaled = self._image.scaled(
-            self.size(),
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.FastTransformation,
-        )
+        if self._capture_layout is not None:
+            scaled = QImage(self.size(), QImage.Format.Format_ARGB32)
+            scaled.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(scaled)
+            try:
+                self._capture_layout.draw(painter, self._image, self.rect())
+            finally:
+                painter.end()
+        else:
+            scaled = self._image.scaled(
+                self.size(),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
         self._capture_pixmap = QPixmap.fromImage(scaled)
         dimmed = scaled.copy()
         painter = QPainter(dimmed)
@@ -1961,7 +1871,8 @@ class ScreenshotCaptureOverlay(QWidget):
         if self._selection.isEmpty():
             return
         self._toolbar.adjustSize()
-        x = max(8, min(self._selection.left(), self.width() - self._toolbar.width() - 8))
+        selection_right_x = self._selection.right() - self._toolbar.width() + 1
+        x = max(8, min(selection_right_x, self.width() - self._toolbar.width() - 8))
         below = self._selection.bottom() + 10
         y = below if below + self._toolbar.height() <= self.height() - 8 else self._selection.top() - self._toolbar.height() - 10
         y = max(8, min(y, self.height() - self._toolbar.height() - 8))
@@ -2795,8 +2706,6 @@ class SystemScreenshotController(QObject):
         self._capture_task: QtAsyncTask | None = None
         self._window_candidates_task: QtAsyncTask | None = None
         self._capture_save_task: QtAsyncTask | None = None
-        self._screen_picker: ScreenCapturePicker | None = None
-        self._capture_candidates: tuple[ScreenCaptureCandidate, ...] = ()
         self._send_task: QtAsyncTask | None = None
         self._composer: ScreenshotComposer | None = None
         self._capture_overlay: ScreenshotCaptureOverlay | None = None
@@ -2903,10 +2812,6 @@ class SystemScreenshotController(QObject):
         if self._capture_overlay is not None:
             self._capture_overlay.close()
             self._capture_overlay = None
-        if self._screen_picker is not None:
-            self._screen_picker.close()
-            self._screen_picker = None
-        self._capture_candidates = ()
         for pin in tuple(self._pins):
             pin.close_for_shutdown()
         self._pins.clear()
@@ -2993,11 +2898,34 @@ class SystemScreenshotController(QObject):
 
     @Slot()
     def _capture_requested(self) -> None:
-        if not self._settings.enabled or self._capture_overlay is not None or self._screen_picker is not None or self._capture_task is not None:
+        if not self._settings.enabled or self._capture_overlay is not None or self._capture_task is not None:
             return
+        overlay = ScreenshotCaptureOverlay(
+            ScreenshotHistory(()),
+            region_store=self._region_store,
+            auto_copy_on_confirm=self._settings.auto_copy,
+            pin_shortcut=self._settings.clipboard_shortcut,
+        )
+        self._capture_overlay = overlay
+        overlay.copy_requested.connect(self._copy_capture_image)
+        overlay.pin_requested.connect(self._pin_image)
+        overlay.send_requested.connect(self._send_capture_image)
+        overlay.color_copy_requested.connect(self._copy_color_text)
+        overlay.destroyed.connect(lambda *_: self._clear_capture_overlay(overlay))
+        overlay.show()
+        overlay.raise_()
+        overlay.activateWindow()
+        overlay.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+        QApplication.processEvents()
         self._capture_task = start_qt_task(
             capture_desktop_image_async,
-            self._capture_image_ready,
+            lambda task, result: self._capture_image_ready(task, overlay, result),
+            on_error=lambda error: error,
+        )
+        overlay_handle = int(overlay.winId())
+        self._window_candidates_task = start_qt_task(
+            lambda: screenshot_window_candidates((overlay_handle,)),
+            lambda task, result: self._window_candidates_ready(task, overlay, result),
             on_error=lambda error: error,
         )
 
@@ -3007,76 +2935,28 @@ class SystemScreenshotController(QObject):
         if self._capture_overlay is overlay and isinstance(result, tuple):
             overlay.set_window_candidates(tuple(item for item in result if isinstance(item, ScreenshotWindowCandidate)))
 
-    def _capture_image_ready(self, task: QtAsyncTask, result: object) -> None:
+    def _capture_image_ready(self, task: QtAsyncTask, overlay: ScreenshotCaptureOverlay, result: object) -> None:
         if self._capture_task is task:
             self._capture_task = None
         if not isinstance(result, QImage) or result.isNull():
-            self._notify("系统截图", f"截图失败：{result}", True)
+            if self._capture_overlay is overlay:
+                overlay.capture_failed()
+                self._notify("系统截图", f"截图失败：{result}", True)
             return
-        candidates = split_desktop_capture_by_screen(
-            result,
+        if self._capture_overlay is not overlay:
+            return
+        layout = ScreenCaptureLayout.from_screens(
+            result.size(),
             list(QApplication.screens()),
             image_origin=windows_virtual_screen_origin(),
         )
-        if not candidates:
-            self._notify("系统截图", "没有可用的显示器截图。", True)
-            return
-        self._capture_candidates = candidates
-        picker = ScreenCapturePicker(candidates)
-        self._screen_picker = picker
-        picker.screen_selected.connect(self._screen_capture_selected)
-        picker.destroyed.connect(lambda *_: self._clear_screen_picker(picker))
-        picker.show()
-        picker.raise_()
-        picker.activateWindow()
-        picker.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
-
-    @Slot(int)
-    def _screen_capture_selected(self, index: int) -> None:
-        if not (0 <= index < len(self._capture_candidates)):
-            return
-        candidate = self._capture_candidates[index]
-        picker = self._screen_picker
-        self._screen_picker = None
-        self._capture_candidates = ()
-        if picker is not None:
-            picker.close()
-        overlay = ScreenshotCaptureOverlay(
-            ScreenshotHistory(()),
-            candidate.layout.virtual_geometry,
-            region_store=self._region_store,
-            auto_copy_on_confirm=self._settings.auto_copy,
-            capture_layout=candidate.layout,
-            pin_shortcut=self._settings.clipboard_shortcut,
-        )
-        self._capture_overlay = overlay
-        overlay.copy_requested.connect(self._copy_capture_image)
-        overlay.pin_requested.connect(self._pin_image)
-        overlay.send_requested.connect(self._send_capture_image)
-        overlay.color_copy_requested.connect(self._copy_color_text)
-        overlay.destroyed.connect(lambda *_: self._clear_capture_overlay(overlay))
-        overlay.set_capture_image(candidate.image)
-        overlay.show()
-        overlay.raise_()
-        overlay.activateWindow()
-        overlay.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
-        QApplication.processEvents()
+        overlay.set_capture_image(result)
+        overlay.set_capture_layout(layout)
         self._capture_save_task = start_qt_task(
-            lambda: save_screenshot_image(self._project_root, candidate.image, "capture"),
+            lambda: save_screenshot_image(self._project_root, result, "capture"),
             lambda save_task, saved: self._capture_image_saved(save_task, overlay, saved),
             on_error=lambda error: error,
         )
-        overlay_handle = int(overlay.winId())
-        self._window_candidates_task = start_qt_task(
-            lambda: screenshot_window_candidates((overlay_handle,)),
-            lambda window_task, windows: self._window_candidates_ready(window_task, overlay, windows),
-            on_error=lambda error: error,
-        )
-
-    def _clear_screen_picker(self, picker: ScreenCapturePicker) -> None:
-        if self._screen_picker is picker:
-            self._screen_picker = None
-            self._capture_candidates = ()
 
     def _capture_image_saved(self, task: QtAsyncTask, overlay: ScreenshotCaptureOverlay, result: object) -> None:
         if self._capture_save_task is task:

@@ -101,6 +101,23 @@ function pathWithin(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function resolveManagedAttachmentCandidate(root: string, candidate: string): string | undefined {
+  try {
+    const realRoot = fs.realpathSync(root);
+    const realCandidate = fs.realpathSync(candidate);
+    if (!pathWithin(realRoot, realCandidate)) return undefined;
+    if (!fs.statSync(realCandidate).isFile()) return undefined;
+    return realCandidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function attachmentContentMatchesMetadata(filePath: string, attachment: PlanAttachment): boolean {
+  const stat = fs.statSync(filePath);
+  return stat.size === attachment.size && sha256(fs.readFileSync(filePath)) === attachment.sha256;
+}
+
 export function planAttachmentDirectory(
   roleDir: string,
   planId: string,
@@ -266,11 +283,18 @@ export function resolvePlanAttachmentFile(roleDir: string, planId: string, attac
     planAttachmentDirectory(roleDir, planId, "active"),
     planAttachmentDirectory(roleDir, planId, "archive")
   ].map((directory) => path.resolve(directory));
-  const attachmentDir = managedRoots.find((directory) => pathWithin(directory, candidate));
-  if (!attachmentDir) throw new Error("Plan attachment path is outside its managed directory.");
-  const realRoot = fs.realpathSync(attachmentDir);
-  const realCandidate = fs.realpathSync(candidate);
-  if (!pathWithin(realRoot, realCandidate)) throw new Error("Plan attachment path leaves its managed directory.");
-  if (!fs.statSync(realCandidate).isFile()) throw new Error("Plan attachment is not a file.");
-  return realCandidate;
+
+  for (const attachmentDir of managedRoots) {
+    if (!pathWithin(attachmentDir, candidate)) continue;
+    const resolved = resolveManagedAttachmentCandidate(attachmentDir, candidate);
+    if (resolved) return resolved;
+  }
+
+  const relocatedName = path.basename(candidate);
+  for (const attachmentDir of managedRoots) {
+    const relocated = resolveManagedAttachmentCandidate(attachmentDir, path.join(attachmentDir, relocatedName));
+    if (relocated && attachmentContentMatchesMetadata(relocated, attachment)) return relocated;
+  }
+
+  throw new Error("Plan attachment file is unavailable in its managed directories.");
 }

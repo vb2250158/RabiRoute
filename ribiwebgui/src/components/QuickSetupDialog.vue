@@ -884,6 +884,7 @@ async function apply() {
                       <template #item="{ props, item }">
                         <v-list-item v-bind="props" :prepend-icon="item.raw.icon" :subtitle="item.raw.note" />
                       </template>
+
                     </v-select>
                   </div>
 
@@ -1454,3 +1455,10 @@ async function apply() {
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+:deep(.v-list-item-subtitle) {
+  color: var(--rr-muted-soft) !important;
+  opacity: 1 !important;
+}
+</style>

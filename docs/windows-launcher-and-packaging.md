@@ -35,6 +35,10 @@ Manager 另持有按当前用户与产品安装身份派生的操作系统命名
 
 每次启动 generation 时，Host 创建新的 Windows Job。Manager 与托盘都以 `CREATE_SUSPENDED` 创建，先加入 Job，再恢复执行；因此 Host 退出或 Job 被关闭时，本代子程序不能变成孤儿。Manager 先启动，Host 只接受带匹配 `applicationGenerationId`、Manager PID、`managerInstanceId` 与回环 `baseUrl` 的结构化 READY；验证通过后才启动托盘。
 
+发布包继续在 `versions/<releaseId>/node.exe` 保存经过清单校验的 Node.js。Host 启动 Manager 前会把该文件校验并同步到安装根目录固定的 `runtime/node.exe`，所有 Manager、Route 和工作进程都从这个固定路径启动。升级只切换版本内容，不再改变 Windows 看到的网络程序路径，因此启用局域网 WebGUI 或人格同步后，防火墙不会随每个 `releaseId` 重复询问。`runtime/node.exe` 与当前发布副本不一致时由 Host 修复；卸载只在哈希匹配时删除它，其他文件保持不动。
+
+Host 同时向 Manager 与 Desktop 提供只读的发布目录（`RABIROUTE_PACKAGE_ROOT`）和稳定的运行数据目录（`RABIROUTE_STATE_ROOT`）。Desktop 从发布目录读取程序和图标，但截图图片、框选历史、贴图状态、滑词设置和 COM 生成缓存等可写内容只进入安装根目录。`versions/<releaseId>` 不再接收运行数据，因此 Host 后续执行 `status`、重启或升级时仍能按清单验证当前发布。
+
 ## 可追溯的设计依据
 
 这套边界参考的是生命周期不变量，不照搬参考项目的进程布局或端口：
@@ -147,3 +151,4 @@ Desktop 的每次启动仍保存自己的崩溃证据包；Manager、插件与 R
 5. 退出后 Host、Manager、托盘与受租约管理的插件进程都消失，且不会复活；
 6. `--command status --json` 与 Manager `/meta` 的 generation、instance 和 URL 一致；
 7. 退役生命周期入口、固定端口默认值和 Manager HTTP 应用启停路由不在正式调用链与发布包中。
+8. Manager 与其 Node.js 子进程的可执行文件路径固定为 `<install-root>/runtime/node.exe`，升级后不会回到 `versions/<releaseId>/node.exe`。

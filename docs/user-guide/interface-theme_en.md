@@ -15,7 +15,7 @@ Choose one option on the WebGUI **Settings** page:
 - **Follow system**: RabiRoute follows the current light or dark appearance of the browser and Windows.
 - **Light**: always use the light interface.
 - **Dark**: always use the dark interface.
-- **Add custom theme**: clone every parameter from the current theme, then edit its name, light/dark base, semantic colors, corner radius, surface opacity, and shadow. **Save and apply** makes it active immediately and keeps it as a selectable theme.
+- **Add custom theme**: clone every parameter from the current theme, then edit its name, light/dark base, semantic colors, corner radius, surface opacity, and shadow. Page, card, and input surfaces must match the selected base mode. **Save and apply** makes it active immediately and keeps it as a selectable theme.
 
 Built-in choices are persisted by the page save action. A custom theme is persisted directly by **Save and apply**. The current WebGUI changes immediately. The tray changes on its next settings refresh, usually within ten seconds, and also reads the saved choice on restart.
 
@@ -47,7 +47,7 @@ The theme is a host-level desktop setting stored in `data/desktop/settings.json`
 | --- | --- |
 | `src/shared/interfaceThemeContract.ts` and `desktopSettingsContract.ts` | Built-in templates, custom fields and bounds, selected theme, and input validation. |
 | Manager | Read and write the host setting, and return it through `/api/desktop/settings`. |
-| WebGUI | Load built-in CSS tokens and Vuetify palettes from `ribiwebgui/src/themes/light/` or `dark/`; map custom semantic colors onto the same tokens; and make every switch use theme-owned off-track, thumb, and green on-state colors. |
+| WebGUI | Load built-in CSS tokens and Vuetify palettes from `ribiwebgui/src/themes/light/` or `dark/`; update both CSS semantic tokens and the Vuetify control palette for custom themes; pair status text with its semantic surface; and make every switch use theme-owned off-track, thumb, and green on-state colors. |
 | Windows tray | Load built-ins from `desktop/tray-task-window/rabiroute_tray/themes/`; generate a Qt palette, menu stylesheet, and existing-window color replacements from the same custom declaration. |
 
 The theme controls appearance colors and system color preference only. It does not change routing, messages, plans, permissions, or data handling.
@@ -60,3 +60,6 @@ The theme controls appearance colors and system color preference only. It does n
 4. Choose Follow system, switch the system color mode, and confirm that both WebGUI and tray update.
 5. Check switches on different pages: the off state fits the current theme, while the on state consistently uses the green supplied by that theme.
 6. Clone the current theme, change the Success / On color, and save it. Confirm WebGUI switches, the tray menu, and the role panel update, and that the theme remains selectable after refreshing.
+7. Enter an invalid color, make surface brightness conflict with the selected light/dark base, or reduce body, heading, or small secondary text below `4.5:1` against the card surface. Saving must be blocked with a correction message on the affected field.
+8. Check success, warning, error, information, and accent states. Text must use the matching semantic foreground and surface in light, dark, and custom themes.
+9. Refresh a non-Settings page while a custom theme is selected. Regular WebGUI content and Vuetify buttons, chips, and alerts must use the same palette.

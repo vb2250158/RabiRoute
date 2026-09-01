@@ -36,7 +36,6 @@ from rabiroute_tray.system_screenshot import (  # noqa: E402
     _next_plugin_hotkey_id,
     parse_hotkey,
     save_screenshot_image,
-    split_desktop_capture_by_screen,
     screenshot_history,
     screenshot_window_candidate_at,
 )
@@ -133,27 +132,6 @@ class SystemScreenshotTest(unittest.TestCase):
         self.assertEqual(overlay._image_selection().size(), QSize(40, 20))
         overlay.close()
 
-    def test_desktop_capture_is_split_into_independent_monitor_canvases(self) -> None:
-        image = QImage(250, 150, QImage.Format.Format_ARGB32)
-        image.fill(Qt.GlobalColor.blue)
-        candidates = split_desktop_capture_by_screen(
-            image,
-            (
-                _FakeScreen(QRect(0, 0, 100, 100), 1.0, "Left"),
-                _FakeScreen(QRect(100, 0, 100, 100), 1.5, "Right"),
-            ),
-            image_origin=QPoint(0, 0),
-        )
-
-        self.assertEqual([(item.screen_name, item.image.size()) for item in candidates], [
-            ("Left", QSize(100, 100)),
-            ("Right", QSize(150, 150)),
-        ])
-        self.assertEqual(candidates[1].layout.virtual_geometry, QRect(100, 0, 100, 100))
-        self.assertEqual(
-            candidates[1].layout.source_rect_for_logical(QRect(10, 10, 20, 20)),
-            QRect(15, 15, 30, 30),
-        )
 
     def test_hotkey_parser_rejects_invalid_unmodified_or_incomplete_shortcuts(self) -> None:
         self.assertIsNone(parse_hotkey(""))
@@ -360,7 +338,7 @@ class SystemScreenshotTest(unittest.TestCase):
             self.assertEqual(len(list((root / ".rabiroute-message-images").glob("screenshot-*.png"))), 1)
             overlay.close()
 
-    def test_capture_starts_async_before_a_monitor_is_selected(self) -> None:
+    def test_capture_opens_virtual_desktop_overlay_before_async_capture_starts(self) -> None:
         controller = SystemScreenshotController(
             None,  # type: ignore[arg-type]
             Path(tempfile.gettempdir()),
@@ -371,28 +349,43 @@ class SystemScreenshotTest(unittest.TestCase):
         with patch("rabiroute_tray.system_screenshot.start_qt_task", return_value=None) as start_task:
             controller._capture_requested()
 
-        self.assertIsNone(controller._capture_overlay)
-        self.assertEqual(start_task.call_count, 1)
+        self.assertIsNotNone(controller._capture_overlay)
+        self.assertEqual(start_task.call_count, 2)
         self.assertEqual(start_task.call_args_list[0].args[0].__name__, "capture_desktop_image_async")
         controller.stop()
 
-    def test_closing_monitor_picker_only_clears_picker_state(self) -> None:
+    def test_captured_virtual_desktop_keeps_all_screen_layouts_in_one_overlay(self) -> None:
         controller = SystemScreenshotController(
             None,  # type: ignore[arg-type]
             Path(tempfile.gettempdir()),
-            lambda _payload: None,
-            lambda *_args: None,
+            lambda: [],
+            lambda _title, _message, _is_error: None,
         )
-        picker = object()
-        controller._screen_picker = picker  # type: ignore[assignment]
-        controller._capture_candidates = (object(),)  # type: ignore[assignment]
+        controller._settings = ScreenshotSettings(enabled=True)
+        overlay = ScreenshotCaptureOverlay(ScreenshotHistory(()), QRect(0, 0, 200, 100))
+        controller._capture_overlay = overlay
+        capture_task = object()
+        controller._capture_task = capture_task  # type: ignore[assignment]
+        image = QImage(250, 150, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.blue)
+        screens = (
+            _FakeScreen(QRect(0, 0, 100, 100), 1.0, "Left"),
+            _FakeScreen(QRect(100, 0, 100, 100), 1.5, "Right"),
+        )
 
-        with patch("rabiroute_tray.system_screenshot.start_qt_task") as start_task:
-            controller._clear_screen_picker(picker)  # type: ignore[arg-type]
+        with (
+            patch("rabiroute_tray.system_screenshot.QApplication.screens", return_value=list(screens)),
+            patch("rabiroute_tray.system_screenshot.windows_virtual_screen_origin", return_value=QPoint(0, 0)),
+            patch("rabiroute_tray.system_screenshot.start_qt_task", return_value=None),
+        ):
+            controller._capture_image_ready(capture_task, overlay, image)  # type: ignore[arg-type]
 
-        self.assertIsNone(controller._screen_picker)
-        self.assertEqual(controller._capture_candidates, ())
-        start_task.assert_not_called()
+        self.assertIsNone(controller._capture_task)
+        self.assertEqual(overlay.geometry(), QRect(0, 0, 200, 100))
+        self.assertIsNotNone(overlay.capture_layout)
+        assert overlay.capture_layout is not None
+        self.assertEqual(len(overlay.capture_layout.segments), 2)
+        self.assertEqual(overlay._source_rect(QRect(110, 10, 20, 20)), QRect(115, 15, 30, 30))
         controller.stop()
 
     def test_window_candidate_hover_uses_the_current_cursor_without_mouse_move(self) -> None:
@@ -805,6 +798,25 @@ class SystemScreenshotTest(unittest.TestCase):
             overlay._annotations = [ScreenshotAnnotation(ScreenshotAnnotationTool.RECTANGLE, QPoint(10, 10), QPoint(20, 20))]
             overlay._undo_shortcut.activated.emit()
             self.assertEqual(overlay._annotations, [])
+            overlay.close()
+
+    def test_screenshot_toolbar_is_right_aligned_to_the_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "screen.png"
+            image = QImage(900, 300, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+            self.assertTrue(image.save(str(path), "PNG"))
+            overlay = ScreenshotCaptureOverlay(ScreenshotHistory((path,)), QRect(0, 0, 900, 300))
+            overlay.show()
+            QApplication.processEvents()
+
+            overlay._selection = QRect(120, 60, 700, 120)
+            overlay._complete_selection()
+
+            self.assertEqual(
+                overlay._toolbar.x() + overlay._toolbar.width(),
+                overlay._selection.right() + 1,
+            )
             overlay.close()
 
     def test_text_annotation_commits_the_editor_value(self) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -29,7 +30,7 @@ class LauncherContractTest(unittest.TestCase):
                 patch.object(LAUNCHER.sys, "frozen", True, create=True),
                 patch.object(LAUNCHER.sys, "executable", str(executable)),
             ):
-                self.assertEqual(LAUNCHER._resolve_project_root(), project_root)
+                self.assertEqual(LAUNCHER._resolve_project_root(), project_root.resolve())
 
     def test_unfrozen_modular_host_resolves_its_parent_as_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -39,7 +40,60 @@ class LauncherContractTest(unittest.TestCase):
             packaged_main.touch()
 
             with patch.object(LAUNCHER, "__file__", str(packaged_main)):
-                self.assertEqual(LAUNCHER._resolve_project_root(), project_root)
+                self.assertEqual(LAUNCHER._resolve_project_root(), project_root.resolve())
+
+    def test_host_runtime_layout_separates_package_and_state_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_root = root / "versions" / "release-test"
+            state_root = root / "install-state"
+            package_root.mkdir(parents=True)
+            state_root.mkdir()
+
+            with patch.dict(
+                LAUNCHER.os.environ,
+                {
+                    "RABIROUTE_PACKAGE_ROOT": str(package_root),
+                    "RABIROUTE_STATE_ROOT": str(state_root),
+                },
+                clear=False,
+            ):
+                self.assertEqual(LAUNCHER._resolve_runtime_roots(), (package_root.resolve(), state_root.resolve()))
+
+    def test_host_runtime_layout_rejects_a_relative_state_root(self) -> None:
+        with patch.dict(
+            LAUNCHER.os.environ,
+            {"RABIROUTE_STATE_ROOT": "relative-state"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "RABIROUTE_STATE_ROOT must be an absolute directory"):
+                LAUNCHER._resolve_runtime_roots()
+
+    def test_comtypes_cache_uses_the_mutable_state_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_root = Path(temp_dir)
+            comtypes_package = types.ModuleType("comtypes")
+            comtypes_package.__path__ = []
+            comtypes_client = types.ModuleType("comtypes.client")
+            comtypes_client.gen_dir = "immutable-package-cache"
+            comtypes_gen = types.ModuleType("comtypes.gen")
+            comtypes_gen.__path__ = ["immutable-package-gen"]
+            comtypes_package.client = comtypes_client
+            comtypes_package.gen = comtypes_gen
+
+            with patch.dict(
+                sys.modules,
+                {
+                    "comtypes": comtypes_package,
+                    "comtypes.client": comtypes_client,
+                    "comtypes.gen": comtypes_gen,
+                },
+            ):
+                cache_dir = LAUNCHER._configure_comtypes_cache(state_root)
+
+            self.assertEqual(cache_dir, state_root / "data" / ".runtime" / "desktop" / "comtypes-cache")
+            self.assertEqual(comtypes_client.gen_dir, str(cache_dir))
+            self.assertEqual(comtypes_gen.__path__[-1], str(cache_dir))
 
     def test_surface_child_requires_the_complete_host_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -120,6 +174,8 @@ class LauncherContractTest(unittest.TestCase):
         self.assertIn("_configure_frozen_qt_dll_search_paths", source)
         self.assertIn('"--show-desktop-pet"', source)
         self.assertIn("show_desktop_pet=args.show_desktop_pet", source)
+        self.assertIn("package_root, state_root = _resolve_runtime_roots()", source)
+        self.assertIn("run(\n            package_root,\n            state_root,", source)
 
 
 if __name__ == "__main__":

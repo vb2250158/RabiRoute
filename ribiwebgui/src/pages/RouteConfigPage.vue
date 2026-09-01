@@ -4198,7 +4198,7 @@ watch(
 
     <template v-if="gateway">
       <div class="status-row mb-4" style="gap:8px">
-        <span style="color:var(--v-theme-on-surface-variant)">配置名</span>
+        <span class="route-config-muted-label">配置名</span>
         <v-text-field
           :model-value="gateway.configName"
           density="compact"
@@ -4392,6 +4392,7 @@ watch(
                         {{ warning }}
                       </v-alert>
                     </template>
+
                     <div v-else class="section-note">尚未扫描。展开面板后会自动扫描，也可以手动刷新。</div>
                   </div>
                   <div v-if="choice.type === 'xiaomiHome'" class="dependency-panel mb-3">
@@ -4934,8 +4935,8 @@ watch(
                     <v-alert v-if="adapterErrors('napcat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
                       <div v-for="reason in adapterErrors('napcat')" :key="reason" class="text-body-2">{{ reason }}</div>
                     </v-alert>
-                    <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>WS 连接</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : napcatPrimaryOffline() ? 'text-error' : napcatState.connected ? 'text-success' : 'text-error'">{{ messageAdapterInactive ? "未启用" : napcatPrimaryOffline() ? "QQ 已离线" : napcatState.connected ? "已连接" : "未连接" }}</b></div>
+                    <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
+                    <div class="status-row"><span>WS 连接</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : napcatPrimaryOffline() ? 'text-error' : napcatState.connected ? 'text-success' : 'text-error'">{{ messageAdapterInactive ? "未启用" : napcatPrimaryOffline() ? "QQ 已离线" : napcatState.connected ? "已连接" : "未连接" }}</b></div>
                     <div class="status-row"><span>远端地址</span><b>{{ napcatState.remoteAddress || "-" }}</b></div>
                     <div class="status-row"><span>最后连接</span><b>{{ napcatState.lastConnectedAt || "-" }}</b></div>
                     <div class="status-row"><span>最后断开</span><b>{{ napcatState.lastDisconnectedAt || "-" }}</b></div>
@@ -5119,8 +5120,8 @@ watch(
                     <v-alert v-if="adapterErrors('heartbeat').length" type="error" variant="tonal" density="compact" class="mt-2 mb-1">
                       <div v-for="reason in adapterErrors('heartbeat')" :key="reason" class="text-body-2">{{ reason }}</div>
                     </v-alert>
-                    <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
-                    <div class="status-row"><span>触发器状态</span><b :class="messageAdapterInactive ? 'text-medium-emphasis' : heartbeatState.enabled === false ? 'text-error' : 'text-success'">{{ messageAdapterInactive ? "未启用" : heartbeatState.enabled === false ? "未启用" : "已启用" }}</b></div>
+                    <div class="status-row"><span>运行状态</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : ''">{{ gateway.enabled === false || runtime.enabled === false ? "已关闭" : runtime.running ? "运行中" : "已停止" }}</b></div>
+                    <div class="status-row"><span>触发器状态</span><b :class="messageAdapterInactive ? 'route-config-muted-text' : heartbeatState.enabled === false ? 'text-error' : 'text-success'">{{ messageAdapterInactive ? "未启用" : heartbeatState.enabled === false ? "未启用" : "已启用" }}</b></div>
                     <div class="status-row"><span>计划数量</span><b>{{ heartbeatState.scheduleCount ?? "-" }}</b></div>
                     <div class="status-row"><span>下次触发</span><b>{{ heartbeatState.nextTickAt || "-" }}</b></div>
                     <div class="agent-action-bar mt-2">

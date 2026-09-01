@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  consumeStoredWebThemePreference,
   initialWebThemePreference,
   registerTrustedWebThemeResource,
   registeredWebThemeResources,
@@ -50,7 +51,20 @@ test("unknown catalog selections use the fixed recovery resource and registratio
   } finally { dispose(); }
 });
 
-test("initial preference survives asynchronous theme catalog registration", () => {
-  assert.equal(initialWebThemePreference("", "dark"), "dark");
-  assert.equal(initialWebThemePreference("trusted.solarized", "light"), "trusted.solarized");
+test("Manager-owned Web theme wins while a missing Manager field migrates one legacy value", () => {
+  assert.deepEqual(initialWebThemePreference("dark", "light"), { themeId: "dark", migrateToManager: false });
+  assert.deepEqual(initialWebThemePreference("", "trusted.solarized"), { themeId: "trusted.solarized", migrateToManager: true });
+  assert.deepEqual(initialWebThemePreference(undefined, ""), { themeId: "system", migrateToManager: false });
+});
+
+test("legacy browser theme is consumed once and removed", () => {
+  const values = new Map([["rabiroute:webgui:theme-preference", " dark "]]);
+  const removed: string[] = [];
+  const storage = {
+    getItem(key: string) { return values.get(key) ?? null; },
+    removeItem(key: string) { removed.push(key); values.delete(key); }
+  };
+  assert.equal(consumeStoredWebThemePreference(storage), "dark");
+  assert.deepEqual(removed, ["rabiroute:webgui:theme-preference"]);
+  assert.equal(consumeStoredWebThemePreference(storage), "");
 });

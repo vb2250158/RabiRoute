@@ -486,7 +486,7 @@ function handleArticleClick(event: MouseEvent): void {
 
 .guide-outline button:hover {
   border-left-color: var(--rr-accent);
-  color: var(--rr-accent-strong);
+  color: var(--rr-accent-text);
 }
 
 .guide-outline button.nested {
@@ -532,7 +532,7 @@ function handleArticleClick(event: MouseEvent): void {
 }
 
 .markdown-body :deep(a) {
-  color: var(--rr-accent-strong);
+  color: var(--rr-accent-text);
   font-weight: 750;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
@@ -542,7 +542,7 @@ function handleArticleClick(event: MouseEvent): void {
   padding: 2px 5px;
   border-radius: 4px;
   background: var(--rr-accent-surface);
-  color: var(--rr-accent-strong);
+  color: var(--rr-accent-text);
   font-family: "Cascadia Mono", Consolas, monospace;
 }
 
@@ -607,7 +607,7 @@ function handleArticleClick(event: MouseEvent): void {
 }
 
 .markdown-body :deep(.screenshot-placeholder strong) {
-  color: var(--rr-accent-strong);
+  color: var(--rr-accent-text);
   font-size: 15px;
 }
 

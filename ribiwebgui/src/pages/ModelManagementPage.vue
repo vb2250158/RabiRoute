@@ -499,7 +499,7 @@ onBeforeUnmount(() => managerEvents?.close());
 .model-table-size { white-space: nowrap; }
 .model-table-runtime { display: table-cell; }
 .model-table-runtime .v-icon { margin-right: 6px; vertical-align: -3px; }
-.model-table-runtime.isolated-runtime { color: rgb(var(--v-theme-warning)); }
+.model-table-runtime.isolated-runtime { color: var(--rr-warning-text); }
 .model-table td:last-child, .model-table th:last-child { text-align: right; }
 .model-table td:nth-last-child(2), .model-table th:nth-last-child(2) { text-align: center; }
 .model-error-row td { padding: 0 14px 14px; background: var(--rr-surface); }

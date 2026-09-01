@@ -44,7 +44,7 @@ defineProps<{ context: SpeechStatusContext }>();
 <style scoped>
 .speech-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .speech-stat-card { padding: 20px; }
-.stat-label, .stat-note { color: var(--text-muted); }
+.stat-label, .stat-note { color: var(--rr-muted); }
 .stat-label { font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .stat-value { margin-top: 8px; font-size: 28px; font-weight: 900; }
 .stat-note { margin-top: 6px; font-size: 12px; }

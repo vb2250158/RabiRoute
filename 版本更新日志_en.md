@@ -7,6 +7,25 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### Desktop runtime data directory
+
+- Desktop now saves screenshots, region history, pin state, selected-text settings, and generated COM caches under the stable state root supplied by Host, while release directories provide code and assets only. Screenshot data previously written under `versions/<releaseId>` is migrated, so Host status, restart, and upgrade operations no longer reject the active release because a `data/` directory appeared inside it.
+
+### Windows runtime and firewall identity
+
+- Windows Host now synchronizes the manifest-validated Node.js runtime to the fixed `runtime/node.exe` path. Manager and child processes no longer start from the changing `versions/<releaseId>/node.exe` path. With LAN WebGUI or persona synchronization enabled, upgrades no longer trigger repeated Windows Firewall prompts just because the executable path changed. Uninstall removes the stable runtime only when it matches the active release copy by hash.
+
+### WebGUI theme readability
+
+- Fixed attachment names, descriptions, plan steps, approval contracts, and memory details blending into dark-theme backgrounds. Theme startup now reads Manager `webTheme` and `customThemes`; custom themes update both CSS semantic colors and the Vuetify control palette, while normal and small secondary text are validated at `4.5:1`. Page, card, and input surfaces now use theme surface tokens, and custom surface brightness must match the selected light or dark base.
+
+### Desktop screenshot hotkeys
+
+- Fixed system-capture and clipboard-pin shortcuts not responding in 0.2.2. Desktop now reads desktop commands published by Manager plugins and registers the configured `F1`–`F12` or modifier shortcut. Multi-monitor capture again grabs every screen at once and opens selection directly, without a monitor-picker dialog; the selection toolbar now aligns with the selection's right edge.
+
+### Plan attachment directory moves
+
+- After `data/` is copied as a unit or the installation root changes, attachment reads locate the same filename inside the current plan directory and verify its size and SHA-256. An absolute path in `plan.json` that still points to the previous root no longer makes image, video, or file attachments return 404.
 
 ## 0.2.3 - 2026-09-01
 

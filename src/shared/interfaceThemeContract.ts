@@ -61,7 +61,7 @@ export const BUILTIN_INTERFACE_THEME_TEMPLATES: Readonly<Record<InterfaceThemeBa
       heading: "#0c2a4a",
       muted: "#52677a",
       accent: "#19bfc1",
-      accentStrong: "#0f8b8d",
+      accentStrong: "#0b6f72",
       success: "#16a34a",
       warning: "#f59e0b",
       error: "#dc2626",
@@ -135,6 +135,145 @@ export function readableInterfaceThemeForeground(background: string): "#000000" 
     : "#ffffff";
 }
 
+export const INTERFACE_THEME_TEXT_SURFACE_KEYS = ["pageCanvas", "canvas", "surface", "subtle", "input"] as const;
+export type InterfaceThemeTextSurfaceKey = typeof INTERFACE_THEME_TEXT_SURFACE_KEYS[number];
+export type InterfaceThemeSemanticTextColors = Readonly<{
+  onAccentStrong: string;
+  accentText: string;
+  successText: string;
+  warningText: string;
+  errorText: string;
+  infoText: string;
+}>;
+export type InterfaceThemeContrastFailure = Readonly<{
+  foreground: InterfaceThemeColorKey;
+  background: string;
+  ratio: number;
+  kind: "base" | "text" | "semantic";
+}>;
+
+export function mixInterfaceThemeColors(foreground: string, background: string, foregroundRatio: number): string {
+  const channel = (hex: string, index: number) => Number.parseInt(hex.slice(index, index + 2), 16);
+  return `#${[1, 3, 5].map(index => Math.round(
+    channel(foreground, index) * foregroundRatio + channel(background, index) * (1 - foregroundRatio)
+  ).toString(16).padStart(2, "0")).join("")}`;
+}
+
+const SEMANTIC_THEME_COLORS = [
+  ["accent", "accentText", .12],
+  ["success", "successText", .14],
+  ["warning", "warningText", .14],
+  ["error", "errorText", .14],
+  ["info", "infoText", .14]
+] as const;
+
+function semanticForegroundMinimumContrast(
+  candidate: string,
+  statusColor: string,
+  statusSurfaceRatio: number,
+  colors: InterfaceThemeColors
+): number {
+  const ratios = [
+    interfaceThemeContrastRatio(candidate, mixInterfaceThemeColors(statusColor, colors.surface, statusSurfaceRatio)),
+    ...INTERFACE_THEME_TEXT_SURFACE_KEYS.map(key => interfaceThemeContrastRatio(
+      candidate,
+      mixInterfaceThemeColors(candidate, colors[key], .12)
+    ))
+  ];
+  return Math.min(...ratios);
+}
+
+function readableTintedInterfaceThemeForeground(
+  statusColor: string,
+  statusSurfaceRatio: number,
+  baseTheme: InterfaceThemeBase,
+  colors: InterfaceThemeColors
+): string {
+  const preferredTarget = baseTheme === "dark" ? "#ffffff" : "#000000";
+  const targets = [preferredTarget, preferredTarget === "#ffffff" ? "#000000" : "#ffffff"] as const;
+  let bestCandidate: string = readableInterfaceThemeForeground(colors.surface);
+  let bestMinimum = semanticForegroundMinimumContrast(bestCandidate, statusColor, statusSurfaceRatio, colors);
+  for (let step = 256; step >= 0; step -= 1) {
+    for (const target of targets) {
+      const candidate = mixInterfaceThemeColors(statusColor, target, step / 256);
+      const minimum = semanticForegroundMinimumContrast(candidate, statusColor, statusSurfaceRatio, colors);
+      if (minimum > bestMinimum) {
+        bestCandidate = candidate;
+        bestMinimum = minimum;
+      }
+      if (minimum >= 4.5) return candidate;
+    }
+  }
+  return bestCandidate;
+}
+
+export function interfaceThemeSemanticTextColors(
+  theme: Pick<CustomInterfaceTheme, "baseTheme" | "colors">
+): InterfaceThemeSemanticTextColors {
+  const { baseTheme, colors } = theme;
+  const semanticText = Object.fromEntries(SEMANTIC_THEME_COLORS.map(([colorKey, textKey, ratio]) => [
+    textKey,
+    readableTintedInterfaceThemeForeground(colors[colorKey], ratio, baseTheme, colors)
+  ]));
+  return Object.freeze({
+    onAccentStrong: readableInterfaceThemeForeground(colors.accentStrong),
+    ...semanticText
+  }) as InterfaceThemeSemanticTextColors;
+}
+
+export function interfaceThemeContrastFailures(
+  theme: Pick<CustomInterfaceTheme, "baseTheme" | "colors">
+): InterfaceThemeContrastFailure[] {
+  const { baseTheme, colors } = theme;
+  const failures: InterfaceThemeContrastFailure[] = [];
+  const expectedSurfaceForeground = baseTheme === "dark" ? "#ffffff" : "#000000";
+  for (const surfaceKey of INTERFACE_THEME_TEXT_SURFACE_KEYS) {
+    if (readableInterfaceThemeForeground(colors[surfaceKey]) === expectedSurfaceForeground) continue;
+    failures.push({
+      foreground: surfaceKey,
+      background: `baseTheme:${baseTheme}`,
+      ratio: interfaceThemeContrastRatio(expectedSurfaceForeground, colors[surfaceKey]),
+      kind: "base"
+    });
+  }
+  const statusSurfaces = SEMANTIC_THEME_COLORS.map(([colorKey, , ratio]) => [
+    `${colorKey}Surface`,
+    mixInterfaceThemeColors(colors[colorKey], colors.surface, ratio)
+  ] as const);
+  const backgrounds = [
+    ...INTERFACE_THEME_TEXT_SURFACE_KEYS.map(key => [key, colors[key]] as const),
+    ...statusSurfaces
+  ];
+  for (const foreground of ["text", "heading", "muted", "accentStrong"] as const) {
+    for (const [background, color] of backgrounds) {
+      const ratio = interfaceThemeContrastRatio(colors[foreground], color);
+      if (ratio < 4.5) failures.push({ foreground, background, ratio, kind: "text" });
+    }
+  }
+  for (const surfaceKey of INTERFACE_THEME_TEXT_SURFACE_KEYS) {
+    const background = `accentStrongTonalOn${surfaceKey}`;
+    const color = mixInterfaceThemeColors(colors.accentStrong, colors[surfaceKey], .12);
+    const ratio = interfaceThemeContrastRatio(colors.accentStrong, color);
+    if (ratio < 4.5) failures.push({ foreground: "accentStrong", background, ratio, kind: "text" });
+  }
+  const semanticText = interfaceThemeSemanticTextColors(theme);
+  for (const [colorKey, textKey, surfaceRatio] of SEMANTIC_THEME_COLORS) {
+    const foreground = semanticText[textKey];
+    const surfaces = [
+      [`${colorKey}Surface`, mixInterfaceThemeColors(colors[colorKey], colors.surface, surfaceRatio)] as const,
+      ...INTERFACE_THEME_TEXT_SURFACE_KEYS.map(key => [
+        `${colorKey}TonalOn${key}`,
+        mixInterfaceThemeColors(foreground, colors[key], .12)
+      ] as const)
+    ];
+    for (const [background, color] of surfaces) {
+      const ratio = interfaceThemeContrastRatio(foreground, color);
+      if (ratio < 4.5) failures.push({ foreground: colorKey, background, ratio, kind: "semantic" });
+    }
+  }
+  return failures;
+}
+
 function normalizeName(value: unknown): string {
   return typeof value === "string"
     ? value.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 40)
@@ -180,6 +319,7 @@ export function normalizeCustomInterfaceTheme(value: unknown): CustomInterfaceTh
   const glassOpacity = typeof inputStyles.glassOpacity === "number" && Number.isFinite(inputStyles.glassOpacity)
     ? Math.round(Math.min(100, Math.max(70, inputStyles.glassOpacity)))
     : template.styles.glassOpacity;
+  if (interfaceThemeContrastFailures({ baseTheme, colors }).length) return undefined;
   return { id: row.id, name, baseTheme, colors, styles: { cornerRadius, shadow, glassOpacity } };
 }
 

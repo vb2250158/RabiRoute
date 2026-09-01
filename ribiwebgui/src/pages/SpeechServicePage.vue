@@ -246,14 +246,14 @@ function audioEventTime(value: number): string {
 
 function audioEventDirection(event: SpeechAudioStreamEvent): { label: string; color: string; icon: string } {
   if (event.direction === "inbound") return { label: "接收", color: "success", icon: "mdi-arrow-down-bold" };
-  if (event.direction === "outbound") return { label: "发送", color: "primary", icon: "mdi-arrow-up-bold" };
+  if (event.direction === "outbound") return { label: "发送", color: "info", icon: "mdi-arrow-up-bold" };
   if (event.direction === "receipt") return { label: "回执", color: "secondary", icon: "mdi-check-circle-outline" };
   if (event.direction === "pipeline") return {
     label: event.stage === "vad" ? "切句" : event.stage === "asr" ? "识别" : event.stage === "route" ? "投递" : "处理",
     color: event.level === "error" ? "error" : event.level === "warning" ? "warning" : "info",
     icon: event.stage === "asr" ? "mdi-waveform" : event.stage === "route" ? "mdi-transit-connection-variant" : "mdi-tune-vertical"
   };
-  return { label: "状态", color: "grey", icon: "mdi-swap-horizontal" };
+  return { label: "状态", color: "info", icon: "mdi-swap-horizontal" };
 }
 
 function mergeAudioEvents(events: SpeechAudioStreamEvent[], append = false): void {
@@ -808,8 +808,8 @@ onBeforeUnmount(() => {
         <div class="page-subtitle">常驻麦克风、声音阈值、本机 ASR、人格 TTS 与整台电脑唯一的排队播放入口。</div>
       </div>
       <div class="page-actions">
-        <v-btn variant="tonal" prepend-icon="mdi-package-variant-closed" @click="modelManagementDialog = true">模型管理</v-btn>
-        <v-btn v-if="serviceEnabled" variant="tonal" prepend-icon="mdi-chart-box-outline" href="reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
+        <v-btn color="secondary" variant="tonal" prepend-icon="mdi-package-variant-closed" @click="modelManagementDialog = true">模型管理</v-btn>
+        <v-btn v-if="serviceEnabled" color="secondary" variant="tonal" prepend-icon="mdi-chart-box-outline" href="reports/rabispeech-model-benchmark.html" target="_blank">目标测试机报告</v-btn>
         <v-btn icon="mdi-refresh" variant="text" :loading="loading" aria-label="刷新语音服务状态" @click="refreshStatus" />
         <div class="speech-runtime-switch">
           <div>
@@ -880,7 +880,7 @@ onBeforeUnmount(() => {
             <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
           </template>
         </v-select>
-        <v-btn variant="tonal" prepend-icon="mdi-content-copy" :disabled="!audioStream?.enabled" @click="copyAudioStreamToken">复制客户端连接密钥</v-btn>
+        <v-btn color="secondary" variant="tonal" prepend-icon="mdi-content-copy" :disabled="!audioStream?.enabled" @click="copyAudioStreamToken">复制客户端连接密钥</v-btn>
       </div>
       <div class="speech-audio-stream-log">
         <div class="speech-audio-log-head">
@@ -985,7 +985,7 @@ onBeforeUnmount(() => {
                 <article v-for="record in selectedDeviceTranscripts" :key="record.id">
                   <div class="speech-device-transcript-meta">
                     <time>{{ transcriptTime(record) }}</time>
-                    <v-chip size="x-small" color="primary" variant="tonal">{{ transcriptSpeaker(record) }}</v-chip>
+                    <v-chip size="x-small" color="info" variant="tonal">{{ transcriptSpeaker(record) }}</v-chip>
                     <span>{{ record.provider || "ASR" }}/{{ record.model || "默认模型" }}</span>
                     <span>{{ deliverySummary(record.id) }}</span>
                   </div>
@@ -1050,7 +1050,7 @@ onBeforeUnmount(() => {
             <h2>独立 TTS 角色扮演</h2>
             <p>不需要配置 Route 或接入 Agent；人格名会解析到 <code>data/roles/&lt;人格&gt;/voice</code>。</p>
           </div>
-          <v-chip color="primary" variant="tonal">{{ ttsModels.filter(item => item.available).length }} 个可用模型</v-chip>
+          <v-chip color="info" variant="tonal">{{ ttsModels.filter(item => item.available).length }} 个可用模型</v-chip>
         </div>
         <v-textarea v-model="ttsText" label="要说的话" rows="4" counter="10000" :disabled="ttsBusy" />
         <div class="speech-form-grid">
@@ -1088,7 +1088,7 @@ onBeforeUnmount(() => {
             <h2>常驻转录与消息投递</h2>
             <p>RabiSpeech 本机服务只采集和识别一次，再把文字广播给所有已开启语音消息端的 Route；本页只维护整台电脑共用的麦克风、ASR 与 VAD 参数。</p>
           </div>
-          <v-chip :color="microphoneStatus?.state === 'error' ? 'error' : listening ? utteranceActive ? 'warning' : 'success' : 'grey'" variant="tonal">
+          <v-chip :color="microphoneStatus?.state === 'error' ? 'error' : listening ? utteranceActive ? 'warning' : 'success' : 'grey'" :variant="microphoneStatus?.state === 'error' || listening ? 'tonal' : 'outlined'">
             {{ microphoneStatus?.state === "transcribing" ? "正在识别" : microphoneStatus?.state === "playback_suppressed" ? "播放防回流" : microphoneStatus?.state === "error" ? "异常" : listening ? utteranceActive ? "正在收音" : "服务监听中" : "已停止" }}
           </v-chip>
         </div>
@@ -1138,7 +1138,7 @@ onBeforeUnmount(() => {
               @update:model-value="changeBargeInMode"
             />
           </div>
-          <v-chip :color="!asrStreamingEnabled ? 'grey' : listening ? 'success' : 'warning'" variant="tonal">
+          <v-chip :color="!asrStreamingEnabled ? 'grey' : listening ? 'success' : 'warning'" :variant="asrStreamingEnabled ? 'tonal' : 'outlined'">
             {{ microphoneSettingsSaving ? "正在应用主机语音设置" : !asrStreamingEnabled ? "ASR 串流已关闭" : listening ? `持续录音中 · ${speechSubscriberRoutes.length} 个 Route 已订阅` : "等待 RabiSpeech 恢复串流" }}
           </v-chip>
         </div>
@@ -1227,7 +1227,7 @@ onBeforeUnmount(() => {
               <h3>{{ providerName(provider) }}</h3>
               <div class="section-note">provider: {{ provider.id }}</div>
             </div>
-            <v-chip size="small" :color="provider.enabled ? 'success' : 'grey'" variant="tonal">{{ provider.enabled ? "已启用" : "已关闭" }}</v-chip>
+            <v-chip size="small" :color="provider.enabled ? 'success' : 'grey'" :variant="provider.enabled ? 'tonal' : 'outlined'">{{ provider.enabled ? "已启用" : "已关闭" }}</v-chip>
           </div>
           <dl class="speech-facts">
             <div><dt>当前模型</dt><dd>{{ providerModel(provider) }}</dd></div>
@@ -1269,6 +1269,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .speech-page { max-width: 1540px; }
+.speech-page :deep(.v-list-item-subtitle) { color: var(--rr-muted-soft) !important; opacity: 1 !important; }
 .model-management-dialog { height: min(92vh, 1100px); overflow: hidden; }
 .model-management-dialog-title { display: flex; align-items: center; gap: 16px; padding: 18px 22px; }
 .model-management-dialog-body { overflow-y: auto; background: var(--rr-canvas); }
@@ -1277,7 +1278,7 @@ onBeforeUnmount(() => {
 .speech-runtime-switch span { color: var(--rr-muted-faint); font-size: 10px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
 .speech-runtime-switch strong { color: var(--rr-heading); font-size: 13px; }
 .speech-runtime-switch :deep(.v-input) { flex: 0 0 auto; }
-.speech-eyebrow { color: var(--rr-accent-strong); font-size: 11px; font-weight: 900; letter-spacing: .13em; }
+.speech-eyebrow { color: var(--rr-accent-text); font-size: 11px; font-weight: 900; letter-spacing: .13em; }
 .speech-status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .speech-stat-card { min-height: 142px; padding: 22px; }
 .speech-stat-value { overflow: hidden; font-size: clamp(24px, 2.2vw, 34px); text-overflow: ellipsis; white-space: nowrap; }
@@ -1288,7 +1289,7 @@ onBeforeUnmount(() => {
 .speech-audio-stream-copy { display: flex; gap: 14px; align-items: center; min-width: 0; }
 .speech-audio-stream-copy strong { display: block; margin-top: 3px; color: var(--rr-heading); font-size: 17px; }
 .speech-audio-stream-copy p { margin: 4px 0 0; color: var(--rr-muted); font-size: 12px; line-height: 1.55; }
-.speech-audio-stream-icon { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border-radius: 13px; color: var(--rr-accent-strong); background: var(--rr-accent-surface); }
+.speech-audio-stream-icon { display: grid; flex: 0 0 44px; width: 44px; height: 44px; place-items: center; border-radius: 13px; color: var(--rr-accent-text); background: var(--rr-accent-surface); }
 .speech-audio-stream-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
 .speech-audio-stream-log { display: grid; grid-column: 1 / -1; gap: 10px; padding-top: 14px; border-top: 1px solid var(--rr-border); }
 .speech-audio-log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
@@ -1306,7 +1307,7 @@ onBeforeUnmount(() => {
 .speech-audio-log-empty { display: flex; align-items: center; gap: 9px; min-height: 46px; padding: 10px 12px; border: 1px dashed var(--rr-border-strong); border-radius: 12px; color: var(--rr-muted-faint); font-size: 12px; }
 .speech-pipeline-summary { display: flex; flex-wrap: wrap; gap: 8px; }
 .speech-pipeline-summary span { padding: 6px 9px; border-radius: 999px; color: var(--rr-muted); background: var(--rr-accent-surface); font-size: 11px; }
-.speech-pipeline-summary b { color: var(--rr-accent-strong); font-size: 13px; }
+.speech-pipeline-summary b { color: var(--rr-accent-text); font-size: 13px; }
 .speech-device-transcripts { display: grid; gap: 10px; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--rr-border); }
 .speech-device-transcript-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .speech-device-transcript-head > div { display: grid; gap: 3px; }
@@ -1327,7 +1328,7 @@ onBeforeUnmount(() => {
 .speech-console-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
 .speech-console-head h2 { margin: 6px 0 6px; color: var(--rr-heading); font-size: 23px; }
 .speech-console-head p { margin: 0; color: var(--rr-muted); font-size: 13px; line-height: 1.65; }
-.speech-console-head code { color: var(--rr-accent-strong); }
+.speech-console-head code { color: var(--rr-accent-text); }
 .speech-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px; }
 .speech-action-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 10px; }
 .speech-inline-switches { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
@@ -1336,7 +1337,7 @@ onBeforeUnmount(() => {
 .speech-slider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .transcript-card { margin-bottom: 18px; padding: 26px; }
 .transcript-actions { margin-top: 0; }
-.audio-upload-button { display: flex; align-items: center; gap: 8px; padding: 10px 15px; border: 1px solid var(--rr-accent-border); border-radius: 12px; color: var(--rr-accent-strong); background: rgba(25, 191, 193, .08); font-size: 13px; font-weight: 800; cursor: pointer; }
+.audio-upload-button { display: flex; align-items: center; gap: 8px; padding: 10px 15px; border: 1px solid var(--rr-accent-border); border-radius: 12px; color: var(--rr-accent-text); background: rgba(25, 191, 193, .08); font-size: 13px; font-weight: 800; cursor: pointer; }
 .audio-upload-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .transcript-history { display: grid; gap: 9px; margin-top: 18px; }
 .transcript-history > div { padding: 12px 15px; border: 1px solid var(--rr-border); border-radius: 12px; background: var(--rr-subtle); }
@@ -1354,7 +1355,7 @@ onBeforeUnmount(() => {
 .speech-provider-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 390px), 1fr)); gap: 18px; padding: 0 32px 30px; }
 .speech-provider-card { padding: 24px; border: 1px solid var(--rr-border); border-radius: 18px; background: var(--rr-subtle); }
 .speech-provider-top { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 13px; align-items: center; }
-.speech-provider-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 13px; color: var(--rr-accent-strong); background: var(--rr-accent-surface); }
+.speech-provider-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 13px; color: var(--rr-accent-text); background: var(--rr-accent-surface); }
 .speech-provider-top h3 { margin: 0; color: var(--rr-heading); font-size: 17px; }
 .speech-facts { display: grid; gap: 0; margin: 22px 0 18px; }
 .speech-facts > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 11px 0; border-top: 1px solid var(--rr-border); }
@@ -1366,7 +1367,7 @@ onBeforeUnmount(() => {
 .speech-offline div { display: grid; gap: 5px; min-width: 0; }
 .speech-offline strong { color: var(--rr-heading); }
 .speech-offline span { color: var(--rr-muted); font-size: 13px; }
-.speech-offline code, .speech-api-strip code { overflow-wrap: anywhere; color: var(--rr-accent-strong); font-size: 12px; }
+.speech-offline code, .speech-api-strip code { overflow-wrap: anywhere; color: var(--rr-accent-text); font-size: 12px; }
 .speech-api-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--rr-border); background: var(--rr-subtle); }
 .speech-api-strip > div { display: grid; gap: 7px; min-width: 0; padding: 20px 24px; border-right: 1px solid var(--rr-border); }
 .speech-api-strip > div:last-child { border-right: 0; }

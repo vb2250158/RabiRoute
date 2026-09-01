@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import { useTheme } from "vuetify";
 import { useRoute, useRouter } from "vue-router";
 import LocaleSwitcher from "./components/LocaleSwitcher.vue";
@@ -14,8 +13,15 @@ import { useGatewayStore } from "./stores/gatewayStore";
 import { configNameFor } from "./utils/gatewayHelpers";
 import { pageSaveAction } from "./pageSaveAction";
 import { desktopSettingsClient } from "./desktopSettingsClient";
-import { applyCatalogInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
-import { initialWebThemePreference, readStoredWebThemePreference, resolveWebThemeResource, type WebThemeId } from "./pluginThemes";
+import { applyCatalogInterfaceTheme, applyVuetifyInterfaceTheme, INTERFACE_THEME_CHANGED } from "./interfaceTheme";
+import {
+  clearStoredWebThemePreference,
+  initialWebThemePreference,
+  storedWebThemePreference,
+  replaceCustomWebThemeResources,
+  resolveWebThemeResource,
+  type WebThemeId
+} from "./pluginThemes";
 import { isWebPageRouteActive, webPageDataRequirements } from "./pluginPages";
 import { PLUGIN_RECOVERY_ROUTE_NAME } from "./router";
 import { managerEventSource } from "./managerApi";
@@ -49,8 +55,9 @@ async function handlePluginCatalogChanged(): Promise<void> {
 }
 
 function refreshInterfaceTheme(): void {
+  const selected = resolveWebThemeResource(pluginCatalogStore.themes.value, interfaceThemePreference.value);
   const resolved = applyCatalogInterfaceTheme(pluginCatalogStore.themes.value, interfaceThemePreference.value, systemThemeQuery.matches);
-  vuetifyTheme.global.name.value = resolved === "dark" ? "RabiDark" : "RabiLight";
+  applyVuetifyInterfaceTheme(vuetifyTheme, resolved, selected.customTheme);
 }
 
 function onSystemThemeChanged(): void {
@@ -65,13 +72,23 @@ function onInterfaceThemeChanged(event: Event): void {
 }
 
 async function loadInterfaceTheme(): Promise<void> {
-  let desktopTheme: DesktopTheme = "system";
+  let preference: WebThemeId = "system";
   try {
-    desktopTheme = (await desktopSettingsClient.read()).theme;
+    let settings = await desktopSettingsClient.read();
+    replaceCustomWebThemeResources(settings.customThemes);
+    const initial = initialWebThemePreference(settings.webTheme, storedWebThemePreference());
+    if (initial.migrateToManager) {
+      settings = await desktopSettingsClient.update({ webTheme: initial.themeId });
+      replaceCustomWebThemeResources(settings.customThemes);
+      preference = initialWebThemePreference(settings.webTheme, "").themeId;
+    } else {
+      preference = initial.themeId;
+    }
+    clearStoredWebThemePreference();
   } catch {
-    desktopTheme = "system";
+    preference = "system";
   }
-  interfaceThemePreference.value = initialWebThemePreference(readStoredWebThemePreference(), desktopTheme);
+  interfaceThemePreference.value = preference;
   refreshInterfaceTheme();
 }
 
@@ -185,6 +202,7 @@ onMounted(() => {
   systemThemeQuery.addEventListener("change", onSystemThemeChanged);
   managerEvents = managerEventSource("/api/events");
   managerEvents.addEventListener("plugin_catalog_changed", () => { void handlePluginCatalogChanged(); });
+  managerEvents.addEventListener("desktop_settings_changed", () => { void loadInterfaceTheme(); });
 });
 
 watch(

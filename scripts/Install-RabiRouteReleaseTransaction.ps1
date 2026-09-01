@@ -40,6 +40,18 @@ function Is-Under([string]$Child, [string]$Parent) {
     $c = (Full $Child) + '\'; $p = (Full $Parent) + '\'
     $c.StartsWith($p, [StringComparison]::OrdinalIgnoreCase)
 }
+function Move-DirectoryWithRetry([string]$Source, [string]$Destination, [string]$Label) {
+    $lastFailure = $null
+    for ($attempt = 1; $attempt -le 60; $attempt++) {
+        try {
+            [IO.Directory]::Move($Source, $Destination)
+            return
+        } catch { $lastFailure = $_.Exception }
+        if (-not (Test-Path -LiteralPath $Source) -and (Test-Path -LiteralPath $Destination -PathType Container)) { return }
+        Start-Sleep -Milliseconds 500
+    }
+    throw [IO.IOException]::new("$Label remained blocked after 30 seconds: $Source", $lastFailure)
+}
 function Write-Durable([string]$Path, [byte[]]$Bytes) {
     $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
     try { $stream.Write($Bytes, 0, $Bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
@@ -48,9 +60,7 @@ function Write-JsonDurable([string]$Path, [object]$Value) {
     $tmp = "$Path.$PID.$([guid]::NewGuid().ToString('N')).tmp"
     Write-Durable $tmp ([Text.UTF8Encoding]::new($false).GetBytes(($Value | ConvertTo-Json -Depth 20) + "`n"))
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        $replaceBackup = "$Path.replace"
-        [IO.File]::Replace($tmp, $Path, $replaceBackup, $true)
-        Remove-Item -LiteralPath $replaceBackup -Force -ErrorAction SilentlyContinue
+        [IO.File]::Replace($tmp, $Path, [System.Management.Automation.Language.NullString]::Value, $true)
     } else { [IO.File]::Move($tmp, $Path) }
 }
 function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$Label) {
@@ -150,7 +160,7 @@ function Restore-Previous([string]$Install, [string]$PointerBackup, [string]$Boo
         $temporary = "$($item.Destination).restore.$PID.tmp"
         Write-Durable $temporary ([IO.File]::ReadAllBytes($item.Backup))
         if (Test-Path -LiteralPath $item.Destination -PathType Leaf) {
-            $scratch = "$temporary.replaced"; [IO.File]::Replace($temporary, $item.Destination, $scratch, $true); Remove-Item -LiteralPath $scratch -Force
+            [IO.File]::Replace($temporary, $item.Destination, [System.Management.Automation.Language.NullString]::Value, $true)
         } else { [IO.File]::Move($temporary, $item.Destination) }
     }
 }
@@ -403,7 +413,7 @@ try {
     $versionsRoot = Join-Path $install "versions"; [IO.Directory]::CreateDirectory($versionsRoot) | Out-Null
     if (Test-Path -LiteralPath $destinationVersion) { throw "Immutable release already exists; refusing to overwrite: $ExpectedReleaseId" }
     Save-Journal "version-move-planned" "planned" $false
-    [IO.Directory]::Move($release.version, $destinationVersion)
+    Move-DirectoryWithRetry $release.version $destinationVersion "Version directory commit"
     if ($FaultPoint -eq "after-version-move-before-journal") { exit 97 }
     $versionCommitted = $true
     Save-Journal "version-committed" "committed" $true
@@ -413,11 +423,11 @@ try {
     Write-Durable "$pointerPath.new" ([IO.File]::ReadAllBytes((Join-Path $candidate "current.json")))
     $switched = $true
     if ($hadBootstrap) {
-        $scratch = Join-Path $backup "bootstrap.replace"; [IO.File]::Replace("$bootstrapPath.new", $bootstrapPath, $scratch, $true); Remove-Item -LiteralPath $scratch -Force
+        [IO.File]::Replace("$bootstrapPath.new", $bootstrapPath, [System.Management.Automation.Language.NullString]::Value, $true)
     } else { [IO.File]::Move("$bootstrapPath.new", $bootstrapPath) }
     if ($FaultPoint -eq "after-bootstrap") { throw "Injected fault after-bootstrap" }
     if ($hadPointer) {
-        $scratch = Join-Path $backup "pointer.replace"; [IO.File]::Replace("$pointerPath.new", $pointerPath, $scratch, $true); Remove-Item -LiteralPath $scratch -Force
+        [IO.File]::Replace("$pointerPath.new", $pointerPath, [System.Management.Automation.Language.NullString]::Value, $true)
     } else { [IO.File]::Move("$pointerPath.new", $pointerPath) }
     Save-Journal "switched" "committed" $true
     if ($FaultPoint -eq "after-pointer") { throw "Injected fault after-pointer" }

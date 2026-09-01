@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import type { DesktopPetBinding, DesktopTheme } from "@shared/desktopSettingsContract";
 import {
   cloneBuiltinInterfaceTheme,
-  interfaceThemeContrastRatio,
+  interfaceThemeContrastFailures,
   INTERFACE_THEME_COLOR_KEYS,
   isInterfaceThemeHexColor,
   readableInterfaceThemeForeground,
@@ -280,14 +280,15 @@ function collectCustomThemeColorErrors(): Partial<Record<InterfaceThemeColorKey,
   for (const key of INTERFACE_THEME_COLOR_KEYS) {
     if (!isInterfaceThemeHexColor(draft.colors[key])) errors[key] = "请输入 #RRGGBB 六位色值。";
   }
-  if (errors.surface) return errors;
-  const contrastPairs: readonly [InterfaceThemeColorKey, number, string][] = [
-    ["text", 4.5, "正文与卡片表面对比度需至少 4.5:1。"],
-    ["heading", 4.5, "标题与卡片表面对比度需至少 4.5:1。"],
-    ["muted", 3, "次要文字与卡片表面对比度需至少 3:1。"]
-  ];
-  for (const [key, minimum, message] of contrastPairs) {
-    if (!errors[key] && interfaceThemeContrastRatio(draft.colors[key], draft.colors.surface) < minimum) errors[key] = message;
+  if (Object.keys(errors).length) return errors;
+  for (const failure of interfaceThemeContrastFailures(draft)) {
+    const key = failure.foreground as InterfaceThemeColorKey;
+    if (errors[key]) continue;
+    errors[key] = failure.kind === "base"
+      ? "该表面颜色的亮暗与所选浅色或深色基底不一致，请调整颜色或切换基底。"
+      : failure.kind === "semantic"
+        ? "该状态色无法在状态底色和组件色调底色上生成清晰文字，请调整颜色。"
+        : "该文字颜色在页面、卡片、输入区或状态底色上的对比度需至少 4.5:1。";
   }
   return errors;
 }

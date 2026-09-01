@@ -164,7 +164,7 @@ onMounted(() => { void refresh(); });
 .task-announcement-record:last-child { border-bottom: 0; }
 .task-announcement-record > span:first-child { min-width: 0; overflow: hidden; color: var(--rr-text); text-overflow: ellipsis; white-space: nowrap; }
 .task-announcement-record time { color: var(--rr-muted-faint); font-variant-numeric: tabular-nums; font-size: 11px; }
-.task-announcement-spoken { color: var(--rr-success, #43a047); }
-.task-announcement-failed { color: var(--rr-danger, #e53935); }
+.task-announcement-spoken { color: var(--rr-success-text); }
+.task-announcement-failed { color: var(--rr-error-text); }
 @media (max-width: 700px) { .task-announcement-head { align-items: stretch; flex-direction: column; } .task-announcement-fields, .task-announcement-record { grid-template-columns: 1fr; } }
 </style>

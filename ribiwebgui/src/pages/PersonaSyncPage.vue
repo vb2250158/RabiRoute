@@ -133,8 +133,9 @@ onBeforeUnmount(() => {
 }
 
 .sync-role-summary span {
-  color: rgba(var(--v-theme-on-surface), .6);
+  color: var(--rr-muted-soft);
   font-size: 12px;
+  opacity: 1;
 }
 
 .sync-role-summary strong {

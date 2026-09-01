@@ -93,8 +93,8 @@ onMounted(() => { void refresh(); });
     <div class="d-flex flex-wrap align-center justify-space-between ga-3 mb-5">
       <div>
         <h1 class="text-h5">局域网 Rabi Agent</h1>
-        <p class="text-body-2 text-medium-emphasis mb-0">在线 {{ onlineCount }} / {{ nodes.length }} 个节点。发布版本：{{ releaseVersion || "未发布" }}。</p>
-        <p v-if="releasePublicKeySha256" class="text-caption text-medium-emphasis mb-0 fingerprint">发布公钥 SHA-256：{{ releasePublicKeySha256 }}</p>
+        <p class="text-body-2 lan-muted mb-0">在线 {{ onlineCount }} / {{ nodes.length }} 个节点。发布版本：{{ releaseVersion || "未发布" }}。</p>
+        <p v-if="releasePublicKeySha256" class="text-caption lan-muted mb-0 fingerprint">发布公钥 SHA-256：{{ releasePublicKeySha256 }}</p>
       </div>
       <v-btn :loading="loading" prepend-icon="mdi-refresh" variant="tonal" @click="refresh">刷新</v-btn>
     </div>
@@ -140,7 +140,7 @@ onMounted(() => { void refresh(); });
           <tr v-for="task in tasks" :key="task.taskId">
             <td>{{ task.nodeId }}</td><td>{{ task.targetAgent }}</td><td>{{ task.status }}</td><td>{{ formatTime(task.updatedAt) }}</td><td>{{ task.error || task.result || "—" }}</td>
           </tr>
-          <tr v-if="!tasks.length"><td colspan="5" class="text-medium-emphasis">暂无任务记录。</td></tr>
+          <tr v-if="!tasks.length"><td colspan="5" class="lan-muted">暂无任务记录。</td></tr>
         </tbody>
       </v-table>
     </v-card>
@@ -150,7 +150,8 @@ onMounted(() => { void refresh(); });
 <style scoped>
 .lan-agents-page { max-width: 1480px; }
 .detail-row { display: grid; grid-template-columns: minmax(0, 110px) minmax(0, 1fr); gap: 12px; margin: 8px 0; }
-.detail-row span { color: rgba(var(--v-theme-on-surface), .65); }
+.lan-muted { color: var(--rr-muted) !important; opacity: 1 !important; }
+.detail-row span { color: var(--rr-muted-soft); opacity: 1; }
 .detail-row b { overflow-wrap: anywhere; }
 .fingerprint { overflow-wrap: anywhere; }
 </style>

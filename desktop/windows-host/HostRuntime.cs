@@ -50,6 +50,86 @@ internal static class ManagerReadiness
     }
 }
 
+internal static class StableNodeRuntime
+{
+    internal const string RuntimeDirectoryName = "runtime";
+    internal const string RuntimeFileName = "node.exe";
+
+    internal static string Resolve(string packageRoot, string stateRoot)
+    {
+        var packaged = Path.GetFullPath(Path.Combine(packageRoot, RuntimeFileName));
+        RequireRegularFile(packaged, "versioned Node.js runtime");
+
+        var stableRoot = Path.GetFullPath(Path.Combine(stateRoot, RuntimeDirectoryName));
+        var expectedStableRoot = Path.Combine(Path.GetFullPath(stateRoot), RuntimeDirectoryName);
+        if (!string.Equals(stableRoot, expectedStableRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The stable Node.js runtime path escaped the RabiRoute state root.");
+
+        if (Directory.Exists(stableRoot)) RequireRegularDirectory(stableRoot, "stable runtime directory");
+        else Directory.CreateDirectory(stableRoot);
+        RequireRegularDirectory(stableRoot, "stable runtime directory");
+
+        var stable = Path.Combine(stableRoot, RuntimeFileName);
+        if (File.Exists(stable))
+        {
+            RequireRegularFile(stable, "stable Node.js runtime");
+            if (FilesMatch(packaged, stable)) return stable;
+        }
+
+        var temporary = Path.Combine(stableRoot, $".{RuntimeFileName}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (var source = new FileStream(packaged, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var destination = new FileStream(
+                temporary,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                1024 * 1024,
+                FileOptions.WriteThrough))
+            {
+                source.CopyTo(destination);
+                destination.Flush(flushToDisk: true);
+            }
+            if (!FilesMatch(packaged, temporary))
+                throw new InvalidDataException("The stable Node.js runtime copy did not match the validated release runtime.");
+            File.Move(temporary, stable, overwrite: true);
+            RequireRegularFile(stable, "stable Node.js runtime");
+            return stable;
+        }
+        finally
+        {
+            try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+        }
+    }
+
+    private static bool FilesMatch(string left, string right)
+    {
+        var leftInfo = new FileInfo(left);
+        var rightInfo = new FileInfo(right);
+        if (leftInfo.Length != rightInfo.Length) return false;
+        using var leftStream = File.OpenRead(left);
+        using var rightStream = File.OpenRead(right);
+        return System.Security.Cryptography.SHA256.HashData(leftStream)
+            .AsSpan()
+            .SequenceEqual(System.Security.Cryptography.SHA256.HashData(rightStream));
+    }
+
+    private static void RequireRegularDirectory(string path, string label)
+    {
+        if (!Directory.Exists(path)) throw new DirectoryNotFoundException($"The {label} is missing: {path}");
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"The {label} must not be a reparse point.");
+    }
+
+    private static void RequireRegularFile(string path, string label)
+    {
+        if (!File.Exists(path)) throw new FileNotFoundException($"The {label} is missing.", path);
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException($"The {label} must not be a reparse point.");
+    }
+}
+
 internal sealed class HostLog : IAsyncDisposable
 {
     private const long DefaultMaximumFileBytes = 2 * 1024 * 1024;
@@ -259,7 +339,8 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         TrayLifecycleChannel? trayLifecycle = null;
         try
         {
-            var node = ResolveNode(packageRoot);
+            var node = StableNodeRuntime.Resolve(packageRoot, stateRoot);
+            log.Write($"generation={generationId} stable Node.js runtime={node}");
             var managerEntry = Path.Combine(packageRoot, "dist", "manager.js");
             if (!File.Exists(managerEntry)) throw new FileNotFoundException("Manager build is missing.", managerEntry);
             manager = NativeChildProcess.StartSuspendedInJob(
@@ -545,13 +626,6 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
         }
         catch (ObjectDisposedException) { }
         catch (IOException exception) { log.Write($"generation={generationId} {source} closed: {exception.Message}"); }
-    }
-
-    private static string ResolveNode(string root)
-    {
-        var packaged = Path.Combine(root, "node.exe");
-        if (File.Exists(packaged)) return packaged;
-        throw new FileNotFoundException("The versioned RabiRoute package does not contain node.exe.", packaged);
     }
 
     public async ValueTask DisposeAsync()

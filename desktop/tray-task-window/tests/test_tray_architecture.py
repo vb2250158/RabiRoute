@@ -114,6 +114,16 @@ class TrayArchitectureTest(unittest.TestCase):
         helper = source[source.index("def _present_panel_immediately"):source.index("def _prewarm_panel")]
         self.assertLess(helper.index("_show_panel_for_user_action(panel)"), helper.index("QTimer.singleShot"))
 
+    def test_packaged_assets_and_mutable_desktop_state_use_separate_roots(self) -> None:
+        source = (TRAY_ROOT / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
+        run_source = source[source.index("def run("):source.index("def _connect_host_lifecycle(")]
+
+        self.assertIn("desktop = DesktopAdapter(package_root)", run_source)
+        self.assertIn("refresh_service = DesktopRefreshService(manager, state_root)", run_source)
+        self.assertIn('settings_path=state_root / "data" / "speech"', run_source)
+        self.assertIn('settings_path=state_root / "data" / "desktop"', run_source)
+        self.assertIn("SystemScreenshotController(\n        manager,\n        state_root,", run_source)
+
     def test_shutdown_stops_long_lived_features_before_waiting_for_qt_tasks(self) -> None:
         source = (TRAY_ROOT / "rabiroute_tray" / "tray_app.py").read_text(encoding="utf-8")
 

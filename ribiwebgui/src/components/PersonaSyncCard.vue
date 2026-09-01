@@ -520,8 +520,9 @@ watch(selectedPeerId, () => {
 .sync-files-toolbar p,
 .sync-files-footer span {
   display: block;
-  color: rgba(var(--v-theme-on-surface), .62);
+  color: var(--rr-muted-soft);
   font-size: 12px;
+  opacity: 1;
 }
 
 .sync-status-strip b {
@@ -581,7 +582,8 @@ watch(selectedPeerId, () => {
   justify-content: center;
   gap: 10px;
   min-height: 96px;
-  color: rgba(var(--v-theme-on-surface), .66);
+  color: var(--rr-muted-soft);
+  opacity: 1;
 }
 
 .sync-loading-row.compact {
@@ -616,8 +618,15 @@ watch(selectedPeerId, () => {
 }
 
 .sync-peer-choice.disabled {
+  border-color: var(--rr-border-soft);
+  color: var(--rr-muted);
+  background: var(--rr-subtle);
   cursor: not-allowed;
-  opacity: .55;
+  opacity: 1;
+}
+
+.sync-peer-choice.disabled :is(.sync-peer-mark, .sync-peer-copy strong, .sync-peer-copy small) {
+  color: var(--rr-muted);
 }
 
 .sync-peer-mark {
@@ -626,12 +635,12 @@ watch(selectedPeerId, () => {
   width: 36px;
   height: 36px;
   border-radius: 12px;
-  color: rgba(var(--v-theme-on-surface), .45);
+  color: var(--rr-muted-faint);
   background: rgba(var(--v-theme-on-surface), .06);
 }
 
 .sync-peer-mark.online {
-  color: rgb(var(--v-theme-success));
+  color: var(--rr-success-text);
   background: rgba(var(--v-theme-success), .12);
 }
 
@@ -655,8 +664,9 @@ watch(selectedPeerId, () => {
   gap: 7px;
   min-height: 250px;
   padding: 24px;
-  color: rgba(var(--v-theme-on-surface), .62);
+  color: var(--rr-muted-soft);
   text-align: center;
+  opacity: 1;
 }
 
 .sync-peer-panel-foot {
@@ -684,7 +694,7 @@ watch(selectedPeerId, () => {
 }
 
 .sync-eyebrow {
-  color: rgb(var(--v-theme-secondary));
+  color: var(--rr-accent-text);
   font-size: 10px;
   font-weight: 900;
   letter-spacing: .14em;
@@ -729,12 +739,12 @@ watch(selectedPeerId, () => {
   background: rgba(var(--v-theme-on-surface), .07);
 }
 
-.changed-file-marker.is-success { color: rgb(var(--v-theme-success)); background: rgba(var(--v-theme-success), .12); }
-.changed-file-marker.is-info { color: rgb(var(--v-theme-info)); background: rgba(var(--v-theme-info), .12); }
-.changed-file-marker.is-secondary { color: rgb(var(--v-theme-secondary)); background: rgba(var(--v-theme-secondary), .12); }
-.changed-file-marker.is-primary { color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), .12); }
-.changed-file-marker.is-warning { color: rgb(var(--v-theme-warning)); background: rgba(var(--v-theme-warning), .12); }
-.changed-file-marker.is-error { color: rgb(var(--v-theme-error)); background: rgba(var(--v-theme-error), .12); }
+.changed-file-marker.is-success { color: var(--rr-success-text); background: rgba(var(--v-theme-success), .12); }
+.changed-file-marker.is-info { color: var(--rr-info-text); background: rgba(var(--v-theme-info), .12); }
+.changed-file-marker.is-secondary { color: var(--rr-accent-text); background: rgba(var(--v-theme-secondary), .12); }
+.changed-file-marker.is-primary { color: var(--rr-accent-text); background: rgba(var(--v-theme-primary), .12); }
+.changed-file-marker.is-warning { color: var(--rr-warning-text); background: rgba(var(--v-theme-warning), .12); }
+.changed-file-marker.is-error { color: var(--rr-error-text); background: rgba(var(--v-theme-error), .12); }
 
 .changed-file-copy {
   min-width: 0;
@@ -755,8 +765,9 @@ watch(selectedPeerId, () => {
 
 .changed-file-copy span,
 .changed-file-size {
-  color: rgba(var(--v-theme-on-surface), .58);
+  color: var(--rr-muted-faint);
   font-size: 11px;
+  opacity: 1;
 }
 
 .changed-file-size {
@@ -775,7 +786,8 @@ watch(selectedPeerId, () => {
   align-items: center;
   gap: 8px;
   min-height: 70px;
-  color: rgba(var(--v-theme-on-surface), .62);
+  color: var(--rr-muted-soft);
+  opacity: 1;
 }
 
 .sync-conflicts {
@@ -819,7 +831,8 @@ button.sync-conflict-row:hover {
 
 .sync-conflict-copy small {
   margin-top: 2px;
-  color: rgba(var(--v-theme-on-surface), .62);
+  color: var(--rr-muted-soft);
+  opacity: 1;
 }
 
 .sync-preview-grid {
@@ -841,8 +854,9 @@ button.sync-conflict-row:hover {
 }
 
 .sync-preview-title span {
-  color: rgba(var(--v-theme-on-surface), .58);
+  color: var(--rr-muted-faint);
   font-size: 12px;
+  opacity: 1;
 }
 
 .sync-preview-grid pre {
