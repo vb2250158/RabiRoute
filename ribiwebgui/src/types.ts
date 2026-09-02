@@ -251,6 +251,8 @@ export type RolePlanStep = {
   id: string;
   title: string;
   status: "未开始" | "进行中" | "已完成";
+  workPhase?: "analysis" | "execution";
+  discussionState?: "pending";
   detail?: string;
   waitingFor?: string;
   isBlocked?: boolean;
@@ -340,7 +342,7 @@ export type RolePlan = {
   keywords: string[];
   presentation: {
     status: string;
-    tone: "blocked" | "manual_verification" | "qa" | "running" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
+    tone: "blocked" | "discussion" | "manual_verification" | "qa" | "analyzing" | "executing" | "running" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
     statusLevel?: number;
     sortBucket: number;
     views: Array<"current" | "plans" | "archived">;

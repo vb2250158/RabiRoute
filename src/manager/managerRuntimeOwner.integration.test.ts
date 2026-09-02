@@ -53,7 +53,8 @@ test("Manager resources are registered in acquisition order and reverse teardown
 
 test("Runtime owner integration retains the storage CAS application boundary", () => {
   assert.match(control, /function currentRoleStorageApplication\(\): RoleStorageApplication/);
-  assert.match(control, /currentRoleStorageApplication\(\)\.commands\.submitPlanFeedback/);
+  assert.match(control, /resolveRoleStorageApplication\(\)\.commands\.submitPlanFeedback/);
+  assert.match(control, /context\.roleStorageApplication \?\? currentRoleStorageApplication/);
   assert.match(control, /ensurePlanSecretaryBindingForEvent\(currentRoleStorageApplication\(\)/);
   assert.match(control, /replacePlanTaskBindingForDelivery\(currentRoleStorageApplication\(\)/);
 });

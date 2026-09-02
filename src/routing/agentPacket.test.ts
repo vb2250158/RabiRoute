@@ -10,7 +10,7 @@ import { resolvePipeline } from "../pipelines.js";
 import type { GroupMessageRecord, HeartbeatEventRecord, PlanFeedbackMessageRecord, RolePanelMessageRecord, VoiceTranscriptEventRecord } from "../history.js";
 import type { RouteDecision } from "./routeDecision.js";
 import { buildAgentPacket as buildPublishedAgentPacket, type AgentPacket, type AgentRoleContext } from "./agentPacket.js";
-import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "../roleKnowledge.js";
+import { createPlan, publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "../roleKnowledge.js";
 import { migrateRolePlanLayoutAtStartup } from "../manager/planStorageStartupMigration.js";
 
 process.env.GATEWAY_MANAGER_URL ||= "http://127.0.0.1:8790";
@@ -694,9 +694,7 @@ test("AgentPacket exposes exact plan secretary sessions without replacing busine
 test("AgentPacket tells the Agent to inquire on every inspection while a plan is waiting", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-inquiry-"));
   const planId = "plan-waiting-owner-answer";
-  const planDir = path.join(roleDir, "plans", "items", "active");
-  fs.mkdirSync(planDir, { recursive: true });
-  fs.writeFileSync(path.join(planDir, `${planId}.json`), JSON.stringify({
+  createPlan(roleDir, {
     id: planId,
     title: "等待负责人答复",
     focus: "取得明确业务口径",
@@ -716,7 +714,7 @@ test("AgentPacket tells the Agent to inquire on every inspection while a plan is
     createdAt: "2026-07-27T00:00:00.000Z",
     updatedAt: "2026-07-27T00:00:00.000Z",
     keywords: ["负责人", "确认"]
-  }), "utf8");
+  });
 
   const rule: NotificationRule = {
     id: "plan-inquiry",
@@ -762,9 +760,7 @@ test("AgentPacket tells the Agent to inquire on every inspection while a plan is
 test("AgentPacket keeps incomplete approval preparation actionable instead of blocked", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-plan-approval-preparing-"));
   const planId = "plan-approval-preparing";
-  const planDir = path.join(roleDir, "plans", "items", "active");
-  fs.mkdirSync(planDir, { recursive: true });
-  fs.writeFileSync(path.join(planDir, `${planId}.json`), JSON.stringify({
+  createPlan(roleDir, {
     id: planId,
     title: "准备审批合同",
     focus: "补齐真实执行边界后再请求审批",
@@ -792,7 +788,7 @@ test("AgentPacket keeps incomplete approval preparation actionable instead of bl
     createdAt: "2026-07-29T00:00:00.000Z",
     updatedAt: "2026-07-29T00:00:00.000Z",
     keywords: ["审批", "合同"]
-  }), "utf8");
+  });
 
   const rule: NotificationRule = {
     id: "plan-approval-preparing",

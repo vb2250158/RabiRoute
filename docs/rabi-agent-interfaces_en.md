@@ -793,7 +793,7 @@ PATCH /api/roles/:roleId/plans/:planId
   ],
   "steps": [
     { "id": "inspect-current", "title": "Inspect the existing plan API", "status": "已完成", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中", "startedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中", "workPhase": "analysis", "startedAt": "2026-07-27T08:10:00.000Z" },
     { "id": "update-guides", "title": "Update both language guides", "status": "未开始" }
   ],
   "keywords": ["routing", "configuration", "documentation"],
@@ -814,9 +814,9 @@ PATCH /api/roles/:roleId/plans/:planId
 }
 ```
 
-New plans must provide ordered `steps`. Manager exposes only green `In progress`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification` for non-terminal plans. Agents and clients must not write presentation stages. External information, assets, owners, accounts, devices, authorization, and receipts remain internal wait details.
+New plans must provide ordered `steps`. While top-level `status=进行中`, the current step uses `workPhase=analysis | execution`: investigation, evidence gathering, solution design, and pre-approval preparation use `analysis`; implementation and development validation after approval or explicit direct user authorization use `execution`. An explicit discussion wait keeps top-level `status=暂停` and the original `currentStepId`, and sets `discussionState=pending` on the single in-progress resume step; producers clear that marker when discussion ends. Manager exposes cyan `Analyzing`, green `Executing`, amber `Awaiting discussion`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification` for non-terminal plans. Agents and clients must not write presentation stages. External information, assets, owners, accounts, devices, authorization, and receipts remain internal wait details.
 
-Manager retains precise internal reconcile reasons. Available CLI, fallback validation, retries, sending, or coordination are public green `In progress`; delivery closure with only package proof missing is blue `Awaiting package`; proven inclusion is purple `Awaiting QA`; a development-closed `manual-verify-*` step is orange `Awaiting manual verification`; a complete approval contract is red `Awaiting approval`; no safe action is gray `Paused`.
+Manager retains precise internal reconcile reasons. Safe actions use `workPhase` to present cyan `Analyzing` or green `Executing`; a paused current resume step with `discussionState=pending` is amber `Awaiting discussion`; delivery closure with only package proof missing is blue `Awaiting package`; proven inclusion is purple `Awaiting QA`; a development-closed `manual-verify-*` step is orange `Awaiting manual verification`; a complete approval contract is red `Awaiting approval`; no safe action is gray `Paused`. These special states override `workPhase`.
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 

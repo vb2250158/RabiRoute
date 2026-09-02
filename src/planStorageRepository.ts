@@ -1238,13 +1238,29 @@ export function commitPlanStoragePackage(input: CommitPlanStoragePackageInput): 
     const receipt = readPackageReceipt(receiptPath);
     if (receipt) {
       if (receipt.specHash !== specHash) throw new Error(`Plan storage package transactionId has different content: ${input.transactionId}`);
-      return {
-        status: receipt.status === "applied" ? "unchanged" : "conflict",
-        reason: receipt.reason,
-        currentInventoryHash: receipt.currentInventoryHash,
-        quarantinePath: receipt.quarantinePath,
-        receiptPath
-      };
+      if (receipt.status !== "applied") {
+        return {
+          status: "conflict",
+          reason: receipt.reason,
+          currentInventoryHash: receipt.currentInventoryHash,
+          quarantinePath: receipt.quarantinePath,
+          receiptPath
+        };
+      }
+      try {
+        const current = resolveCanonicalPlanStorageLocation(roleDir, planId);
+        if (current?.bucket === input.bucket && physicalPackageInventory(current.directory).hash === inventoryHash) {
+          return {
+            status: "unchanged",
+            currentInventoryHash: inventoryHash,
+            receiptPath
+          };
+        }
+      } catch {
+        // A completed receipt is historical evidence, not current storage.
+        // Continue through normal validation so missing payloads are restored
+        // and divergent or invalid storage still fails closed.
+      }
     }
     const transactionRoot = packageTransactionRoot(normalizedInput);
     const manifestPath = path.join(transactionRoot, "manifest.json");

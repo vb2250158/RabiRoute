@@ -12,6 +12,8 @@ type TrustedWebRendererBase = Readonly<{
 }>;
 
 export type TrustedWebSettingsRendererRegistration = TrustedWebRendererBase & Readonly<{
+  contributionKind: "settings-section" | "message-endpoint-settings";
+  contributionSurface: "shared.settings" | "route.adapters";
   schemaId: string;
   readCommandId: string;
   writeCommandId: string;
@@ -73,6 +75,20 @@ function controlledOrder(value: unknown): number | undefined {
     : undefined;
 }
 
+function controlledSettingsContributionKind(
+  value: unknown
+): TrustedWebSettingsRendererRegistration["contributionKind"] | "" {
+  const normalized = controlledSymbol(value);
+  return normalized === "settings-section" || normalized === "message-endpoint-settings" ? normalized : "";
+}
+
+function controlledSettingsContributionSurface(
+  value: unknown
+): TrustedWebSettingsRendererRegistration["contributionSurface"] | "" {
+  const normalized = controlledSymbol(value);
+  return normalized === "shared.settings" || normalized === "route.adapters" ? normalized : "";
+}
+
 function rendererComponent(loader: AsyncComponentLoader): Component {
   if (typeof loader !== "function") throw new Error("Trusted Web renderer loader is invalid.");
   return markRaw(defineAsyncComponent(loader));
@@ -80,8 +96,17 @@ function rendererComponent(loader: AsyncComponentLoader): Component {
 
 export function registerTrustedWebSettingsRenderer(input: TrustedWebSettingsRendererRegistration): () => void {
   const rendererId = controlledSymbol(input.rendererId);
+  const contributionKind = controlledSettingsContributionKind(input.contributionKind);
+  const contributionSurface = controlledSettingsContributionSurface(input.contributionSurface);
   if (!rendererId || settingsRegistry.has(rendererId) || statusRegistry.has(rendererId)) {
     throw new Error(`Trusted Web renderer is already registered or invalid: ${rendererId}`);
+  }
+  if (
+    !contributionKind
+    || !contributionSurface
+    || (contributionKind === "settings-section") !== (contributionSurface === "shared.settings")
+  ) {
+    throw new Error("Trusted Web settings renderer registration is invalid.");
   }
   const registration: RegisteredSettingsRenderer = Object.freeze({
     instanceId: controlledSymbol(input.instanceId),
@@ -89,12 +114,21 @@ export function registerTrustedWebSettingsRenderer(input: TrustedWebSettingsRend
     rendererId,
     placementId: controlledSymbol(input.placementId),
     allowedSlots: controlledSymbols(input.allowedSlots, "allowedSlots"),
+    contributionKind,
+    contributionSurface,
     schemaId: controlledSymbol(input.schemaId),
     readCommandId: controlledSymbol(input.readCommandId),
     writeCommandId: controlledSymbol(input.writeCommandId),
     component: rendererComponent(input.loader)
   });
-  if (!registration.instanceId || !registration.pluginId || !registration.placementId || !registration.schemaId || !registration.readCommandId || !registration.writeCommandId) {
+  if (
+    !registration.instanceId
+    || !registration.pluginId
+    || !registration.placementId
+    || !registration.schemaId
+    || !registration.readCommandId
+    || !registration.writeCommandId
+  ) {
     throw new Error("Trusted Web settings renderer registration is invalid.");
   }
   settingsRegistry.set(rendererId, registration);
@@ -179,11 +213,13 @@ function webHosted(value: JsonRecord): boolean {
 }
 
 function parseSettingsRenderer(value: unknown): WebRendererContribution | undefined {
-  if (!isRecord(value) || value.kind !== "settings-section" || value.surface !== "shared.settings" || !webHosted(value)) return undefined;
+  if (!isRecord(value) || !webHosted(value)) return undefined;
   const rendererId = controlledSymbol(value.rendererId);
   const registration = rendererId ? settingsRegistry.get(rendererId) : undefined;
   if (
     !registration
+    || value.kind !== registration.contributionKind
+    || value.surface !== registration.contributionSurface
     || value.schemaId !== registration.schemaId
     || value.readCommandId !== registration.readCommandId
     || value.writeCommandId !== registration.writeCommandId

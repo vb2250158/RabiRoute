@@ -197,6 +197,7 @@ def _plan_steps_from_manager(value: Any) -> list[PlanStep]:
             PlanStep(
                 title=title,
                 status=str(raw_step.get("status") or "未开始"),
+                discussion_state=str(raw_step.get("discussionState") or ""),
                 detail=str(raw_step.get("detail") or ""),
                 completed_at=str(raw_step.get("completedAt") or ""),
                 step_id=str(raw_step.get("id") or f"step-{index}"),

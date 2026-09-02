@@ -31,7 +31,7 @@ DESKTOP_PET_STATE_LABELS = {
 }
 
 def desktop_pet_state_label(state_name: str) -> str:
-    """Keep Manager state keys stable while giving common YeYu actions clear menu text."""
+    """Keep Manager state keys stable while giving common actions clear menu text."""
     return DESKTOP_PET_STATE_LABELS.get(state_name, state_name)
 
 
@@ -39,10 +39,21 @@ class DesktopPetController(QObject):
     visibility_changed = Signal(bool)
     click_through_changed = Signal(bool)
 
-    def __init__(self, manager_url: str, persona_id: str, open_persona: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        manager_url: str,
+        persona_id: str,
+        open_persona: Callable[[str], None],
+        *,
+        persona_name: str | None = None,
+        initial_binding: DesktopPetBinding | None = None,
+        event_stream: DesktopPetEventStream | None = None,
+        default_slot: int = 0,
+    ) -> None:
         super().__init__()
         self.persona_id = persona_id
-        self.window = DesktopPetWindow()
+        self.persona_name = str(persona_name or persona_id)
+        self.window = DesktopPetWindow(self.persona_name, default_slot)
         self.window.clicked.connect(self._clicked)
         self.window.double_clicked.connect(self._double_clicked)
         self.window.animation_finished.connect(self._animation_finished)
@@ -50,16 +61,18 @@ class DesktopPetController(QObject):
         self.window.context_menu_requested.connect(self._show_context_menu)
         self.window.drag_started.connect(self._drag_started)
         self.window.drag_finished.connect(self._drag_finished)
-        application = QApplication.instance()
-        if application is not None:
-            application.screenRemoved.connect(lambda _screen: self.window.recover_to_visible_screen())
+        self._application = QApplication.instance()
+        if self._application is not None:
+            self._application.screenRemoved.connect(self._screen_removed)
         self._open_persona = open_persona
         self._client = DesktopPetClient(manager_url, persona_id)
-        self._events = DesktopPetEventStream(manager_url)
+        self._events = event_stream or DesktopPetEventStream(manager_url)
+        self._owns_events = event_stream is None
         self._events.work_ended.connect(self._work_ended)
-        self._events.settings_changed.connect(self._desktop_settings_changed)
         self._events.connection_changed.connect(self._event_connection_changed)
-        self._events.start()
+        if self._owns_events:
+            self._events.settings_changed.connect(self._desktop_settings_changed)
+            self._events.start()
         self._pack: DesktopPetPack | None = None
         self._idle_scheduler = DesktopPetIdleScheduler(self)
         self._idle_scheduler.animation_requested.connect(self.set_state)
@@ -90,7 +103,10 @@ class DesktopPetController(QObject):
         self._fullscreen_timer.setSingleShot(True)
         self._fullscreen_timer.timeout.connect(self._reconcile_fullscreen_visibility)
         self._fullscreen_timer.start(1500)
-        self._load_binding()
+        if initial_binding is None:
+            self._load_binding()
+        else:
+            self._apply_binding(initial_binding)
 
     @property
     def visible(self) -> bool:
@@ -103,6 +119,8 @@ class DesktopPetController(QObject):
             self.show()
 
     def show(self) -> None:
+        if not self._preferred_pack_id:
+            return
         self._hidden_for_fullscreen = False
         self.window.show_on_desktop()
         self._idle_scheduler.set_active(True)
@@ -132,10 +150,24 @@ class DesktopPetController(QObject):
     def close(self) -> None:
         self._fullscreen_timer.stop()
         self._idle_scheduler.stop()
-        self._events.stop()
+        if self._application is not None:
+            self._application.screenRemoved.disconnect(self._screen_removed)
+        if self._owns_events:
+            self._events.stop()
+        else:
+            self._events.work_ended.disconnect(self._work_ended)
+            self._events.connection_changed.disconnect(self._event_connection_changed)
         self._preload_queue.clear()
         self._animation_cache.clear()
         self.window.close()
+
+    def _screen_removed(self, _screen: object) -> None:
+        self.window.recover_to_visible_screen()
+
+    def update_persona(self, persona_name: str, binding: DesktopPetBinding) -> None:
+        self.persona_name = str(persona_name or self.persona_id)
+        self.window.set_persona_name(self.persona_name)
+        self._apply_binding(binding)
 
     def set_state(self, state_name: str) -> None:
         self._requested_state = state_name or "idle"
@@ -168,7 +200,7 @@ class DesktopPetController(QObject):
                 self._idle_scheduler.state_started(result.state.name)
                 self._enqueue_animation_preloads()
             else:
-                self.window.show_placeholder("夜雨\n素材暂不可用")
+                self.window.show_placeholder(f"{self.persona_name}\n素材暂不可用")
 
         self._animation_task = start_qt_task(
             lambda: self._client.load_animation(self._pack, requested, max_concurrency=4),
@@ -179,7 +211,7 @@ class DesktopPetController(QObject):
     def _load_catalog(self) -> None:
         if self._catalog_task is not None:
             return
-        self.window.show_placeholder("夜雨\n正在找动作包")
+        self.window.show_placeholder(f"{self.persona_name}\n正在找动作包")
 
         def completed(task: QtAsyncTask, result: object) -> None:
             if self._catalog_task is not task:
@@ -189,11 +221,10 @@ class DesktopPetController(QObject):
                 return
             packs = result if isinstance(result, tuple) else ()
             self._pack = next((pack for pack in packs if pack.pack_id == self._preferred_pack_id), None)
-            self._pack = self._pack or next((pack for pack in packs if pack.pack_id == "yeyu-library-default"), None)
             if self._pack is None and packs:
                 self._pack = packs[0]
             if self._pack is None:
-                self.window.show_placeholder("夜雨\n素材准备中")
+                self.window.show_placeholder(f"{self.persona_name}\n素材准备中")
                 return
             self._animation_cache.clear()
             self._preload_queue.clear()
@@ -213,7 +244,10 @@ class DesktopPetController(QObject):
 
     def _double_clicked(self) -> None:
         self._idle_scheduler.note_activity()
-        self._open_persona()
+        self._open_current_persona()
+
+    def _open_current_persona(self) -> None:
+        self._open_persona(self.persona_id)
 
     def _drag_started(self) -> None:
         if not self.visible:
@@ -246,7 +280,7 @@ class DesktopPetController(QObject):
     def _apply_binding(self, binding: DesktopPetBinding) -> None:
         """Refresh the Manager-owned binding without changing pointer interaction."""
         previous = self._binding_snapshot
-        if previous == binding:
+        if previous == binding and (binding.enabled and binding.pack_id or not self.visible):
             return
         pack_changed = previous is not None and previous.pack_id != binding.pack_id
         self._binding_snapshot = binding
@@ -272,7 +306,7 @@ class DesktopPetController(QObject):
         self.window.set_click_through(binding.click_through)
         self.click_through_changed.emit(binding.click_through)
 
-        if not binding.enabled:
+        if not binding.enabled or not binding.pack_id:
             if self.visible:
                 self._idle_scheduler.set_active(False)
                 self.window.stop_animation()
@@ -364,7 +398,7 @@ class DesktopPetController(QObject):
         self._idle_scheduler.note_activity()
         point = position if isinstance(position, QPoint) else self.window.mapToGlobal(self.window.rect().center())
         menu = QMenu(self.window)
-        menu.addAction(f"打开 {self.persona_id} 人格面板", self._open_persona)
+        menu.addAction(f"打开 {self.persona_name} 人格面板", self._open_current_persona)
         menu.addAction("安静一小时", self._mute_for_one_hour)
         menu.addSeparator()
         click_through = menu.addAction("鼠标点透")

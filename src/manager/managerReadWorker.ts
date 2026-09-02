@@ -29,8 +29,8 @@ import { readRolePanelTimeline } from "../rolePanelTimeline.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { storageInventoryRevisionToken, storageRevisionToken } from "../shared/storageRevision.js";
-import { paginateRoleMemory } from "../roleKnowledgePagination.js";
-import { sortKnowledgeByUpdatedAt } from "../roleKnowledgePresentation.js";
+import { paginateRoleMemory, paginateRolePlans, summarizeRolePlan } from "../roleKnowledgePagination.js";
+import { presentPlans, sortKnowledgeByUpdatedAt } from "../roleKnowledgePresentation.js";
 import type {
   PerformanceMonitoringConfig,
   PerformanceSample,
@@ -77,6 +77,19 @@ export type ManagerReadWorkerTask =
   | {
       type: "role_plan_catalog";
       roleDir: string;
+    }
+  | {
+      type: "role_plan_page";
+      roleDir: string;
+      cursor: string;
+      limit: number;
+      view?: "current" | "plans" | "archived";
+      query: string;
+      sort: "status" | "updated" | "importance" | "urgency";
+      statuses: string[];
+      tags: string[];
+      includeFacets: boolean;
+      summary: boolean;
     }
   | {
       type: "role_plan_detail" | "role_plan_history" | "role_plan_feedback";
@@ -264,6 +277,29 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
         approvalByPlanId: Object.fromEntries(
           plans.map(plan => [plan.id, planFeedbackSummary(task.roleDir, plan.id)])
         )
+      };
+    }
+    case "role_plan_page": {
+      const page = paginateRolePlans(
+        presentPlans(readPlansFromStorageInWorker(task.roleDir)),
+        task.cursor,
+        task.limit,
+        {
+          view: task.view,
+          query: task.query,
+          sort: task.sort,
+          statuses: task.statuses,
+          tags: task.tags,
+          includeFacets: task.includeFacets
+        }
+      );
+      return {
+        ...page,
+        // The overview asks for summary rows. Do not touch every plan's feedback
+        // directory before returning one eight-row page.
+        items: task.summary
+          ? page.items.map(summarizeRolePlan)
+          : page.items.map(plan => ({ ...plan, approval: planFeedbackSummary(task.roleDir, plan.id) }))
       };
     }
     case "role_plan_detail": {

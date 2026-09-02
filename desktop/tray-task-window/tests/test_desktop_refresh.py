@@ -150,6 +150,37 @@ class _ApiManager:
                 "steps": [],
                 "keywords": [],
             },
+            {
+                "id": "plan-discussion",
+                "title": "API discussion plan",
+                "status": "暂停",
+                "currentStepId": "discuss",
+                "presentation": {
+                    "status": "待讨论",
+                    "tone": "discussion",
+                    "sortBucket": 1,
+                    "views": ["plans"],
+                    "palette": {
+                        "accent": "#d97706",
+                        "background": "#fffbeb",
+                        "foreground": "#92400e",
+                    },
+                    "approval": {
+                        "state": "none",
+                        "enabled": False,
+                        "label": "无需审批",
+                        "helper": "当前步骤没有声明人工审批门禁。",
+                        "missing": [],
+                    },
+                },
+                "steps": [{
+                    "id": "discuss",
+                    "title": "等待负责人讨论范围",
+                    "status": "进行中",
+                    "discussionState": "pending",
+                }],
+                "keywords": [],
+            },
         ]
 
     def role_memory(self, role_id: str) -> dict:
@@ -188,7 +219,7 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_foreground, "#b42318")
         self.assertEqual(
             result.plan_snapshot and [plan.title for plan in result.plan_snapshot.active],
-            ["API plan", "API QA plan", "API external wait plan", "API package plan"],
+            ["API plan", "API QA plan", "API external wait plan", "API package plan", "API discussion plan"],
         )
         qa_plan = result.plan_snapshot and result.plan_snapshot.active[1]
         self.assertTrue(qa_plan and qa_plan.approval_enabled)
@@ -209,6 +240,12 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(package_plan and package_plan.display_accent, "#2563eb")
         self.assertEqual(package_plan and package_plan.display_background, "#eff6ff")
         self.assertEqual(package_plan and package_plan.display_foreground, "#1d4ed8")
+        discussion_plan = result.plan_snapshot and result.plan_snapshot.active[4]
+        self.assertEqual(discussion_plan and discussion_plan.status, "暂停")
+        self.assertEqual(discussion_plan and discussion_plan.display_status, "待讨论")
+        self.assertEqual(discussion_plan and discussion_plan.display_tone, "discussion")
+        self.assertEqual(discussion_plan and discussion_plan.display_sort_bucket, 1)
+        self.assertEqual(discussion_plan and discussion_plan.steps[0].discussion_state, "pending")
         self.assertEqual(result.context_snapshot and result.context_snapshot.recent_memory[0].title, "API memory")
         self.assertEqual(result.role_messages, [{"id": "message-1"}])
         self.assertEqual(result.context_snapshot and result.context_snapshot.avatar_data, b"avatar-bytes")

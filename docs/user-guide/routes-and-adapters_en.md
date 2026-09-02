@@ -36,6 +36,7 @@ Cross-persona delivery does not require another Route kind or message adapter. I
 | WeCom | Experimental | WeCom groups | Bot ID, Secret, environment acceptance |
 | Remote Agent | Experimental | Independent bridge devices | Remote bridge and password challenge |
 | FenneNote / XiaoAI | Experimental | Speech transcripts | Matching bridge or device |
+| Xiaomi Home | Experimental | Home Assistant device state, motion events, and camera event clips | Home Assistant, access token in the runtime environment, and real-device acceptance |
 | RabiLink | Experimental | Relay, glasses, and proactive output | Relay setup and real-device acceptance |
 | Generic Webhook | Experimental | POST from an unnamed system | External callback system |
 
@@ -46,6 +47,8 @@ Verified means the repository path, configuration, and contracts are complete. A
 Open **Message Adapters** and add an entry under **Message sources**. The catalog groups local desktop, real-time chat, remote devices, internal triggers, speech, and external interfaces.
 
 Each adapter shows maturity, connection state, dependency checks, and its own settings. Stabilize one source before adding another.
+
+Configure the Home Assistant address, event monitor, device-control gate, and camera options inside the **Xiaomi Home** message endpoint. They do not appear again on the host-wide **Settings** page. An authorized LAN WebGUI can maintain this configuration; device inventory, control actions, and recording content remain available only on the Manager PC.
 
 To inspect the complete delivery path for the current Route, select **Channel check** at the top of the page. The dialog uses three columns: **Message inputs → Manager → Agent handlers**. The left side lists added message inputs, the center shows the Manager state for the current Route, and the right side lists configured Agents with their primary or secondary role. Select a message node or **View settings** to return to its settings; **Check again** refreshes both message-input and Agent status.
 

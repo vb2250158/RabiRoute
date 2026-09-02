@@ -5,17 +5,17 @@ export const activate = definePlugin({
     const runtime = context.services.require("host.manager.xiaomi-home@1");
     context.services.provide("manager.xiaomi-home@1", Object.freeze({ instanceId: context.identity.instanceId }));
     context.contributions.register({
-      kind: "settings-section",
-      id: "xiaomi-home-settings",
+      kind: "message-endpoint-settings",
+      id: "xiaomi-home-message-endpoint",
       value: {
-        surface: "shared.settings",
+        surface: "route.adapters",
         label: { fallback: "米家 / Xiaomi Home" },
-        rendererId: "builtin.xiaomi-home-settings.v1",
+        rendererId: "builtin.xiaomi-home-message-endpoint.v1",
         schemaId: "xiaomi-home.settings.v1",
         readCommandId: "manager.xiaomi-home-settings.read",
         writeCommandId: "manager.xiaomi-home-settings.write",
         icon: "mdi-home-automation",
-        slot: "xiaomi-home",
+        slot: "xiaomiHome",
         hosts: ["web"],
         order: 50
       }
@@ -38,6 +38,7 @@ export const activate = definePlugin({
           lifecycleFence: runtime.lifecycleFence,
           readJsonBody: runtime.readJsonBody,
           jsonResponse: runtime.jsonResponse,
+          controlPlaneAccessAllowed: runtime.webguiLanRequestAllowed,
           deliverEvent: runtime.deliverXiaomiHomeEvent,
           trackOperation: operation => tracker.trackOperation(operation)
         });

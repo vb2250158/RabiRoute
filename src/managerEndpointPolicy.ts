@@ -14,7 +14,8 @@ const FETCH_BLOCKED_PORTS = new Set([
 
 export type ManagerPortPolicy =
   | { mode: "auto" }
-  | { mode: "fixed"; port: number };
+  | { mode: "fixed"; port: number }
+  | { mode: "preferred"; port: number };
 
 export type ManagerListeningEndpoint = {
   host: string;
@@ -27,11 +28,12 @@ export function parseManagerPortPolicy(value: string | undefined): ManagerPortPo
   if (!normalized || normalized === "auto" || normalized === "0") {
     return { mode: "auto" };
   }
-  const port = Number(normalized);
+  const preferredMatch = /^prefer:(\d+)$/.exec(normalized);
+  const port = Number(preferredMatch?.[1] ?? normalized);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error(`GATEWAY_MANAGER_PORT must be auto, 0, or an integer from 1 to 65535; received ${value}.`);
+    throw new Error(`GATEWAY_MANAGER_PORT must be auto, 0, prefer:<port>, or an integer from 1 to 65535; received ${value}.`);
   }
-  return { mode: "fixed", port };
+  return preferredMatch ? { mode: "preferred", port } : { mode: "fixed", port };
 }
 
 export function managerHostIsLoopback(host: string): boolean {
@@ -82,6 +84,22 @@ function closeListeningServer(server: http.Server): Promise<void> {
   });
 }
 
+async function listenOnAutomaticSafePort(server: http.Server, host: string): Promise<void> {
+  const maxAttempts = 128;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await listen(server, 0, host);
+    if (managerPortIsFetchSafe(listeningPort(server))) return;
+    await closeListeningServer(server);
+    if (attempt === maxAttempts) {
+      throw new Error(`Windows did not allocate a browser-safe Manager port after ${maxAttempts} attempts.`);
+    }
+  }
+}
+
+function portIsAlreadyInUse(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EADDRINUSE";
+}
+
 export async function listenManagerEndpoint(options: {
   server: http.Server;
   host: string;
@@ -93,16 +111,15 @@ export async function listenManagerEndpoint(options: {
       throw new Error(`GATEWAY_MANAGER_PORT ${policy.port} is blocked by browser Fetch and cannot publish a usable Manager endpoint.`);
     }
     await listen(server, policy.port, host);
-  } else {
-    const maxAttempts = 128;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      await listen(server, 0, host);
-      if (managerPortIsFetchSafe(listeningPort(server))) break;
-      await closeListeningServer(server);
-      if (attempt === maxAttempts) {
-        throw new Error(`Windows did not allocate a browser-safe Manager port after ${maxAttempts} attempts.`);
-      }
+  } else if (policy.mode === "preferred" && managerPortIsFetchSafe(policy.port)) {
+    try {
+      await listen(server, policy.port, host);
+    } catch (error) {
+      if (!portIsAlreadyInUse(error)) throw error;
+      await listenOnAutomaticSafePort(server, host);
     }
+  } else {
+    await listenOnAutomaticSafePort(server, host);
   }
 
   const port = listeningPort(server);

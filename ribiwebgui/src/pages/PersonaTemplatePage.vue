@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
+import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
 import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n";
@@ -66,7 +67,7 @@ const { t } = useI18n();
 const ruleDialog = ref(false);
 const automationDialog = ref(false);
 const automationWorkspaceTab = ref<"messages" | "schedule">("messages");
-type PersonaPageTab = "profile" | "expression" | "identity" | "context" | "automation";
+type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
 const activeAutomationId = ref("");
 const activeRuleIndex = ref(0);
@@ -878,7 +879,7 @@ watch(() => gateway.value?.agentRoleId, (roleId) => {
 }, { immediate: true });
 
 watch(hasPersona, (enabled) => {
-  if (!enabled && (activePersonaPageTab.value === "expression" || activePersonaPageTab.value === "identity")) {
+  if (!enabled && ["expression", "avatar", "identity"].includes(activePersonaPageTab.value)) {
     activePersonaPageTab.value = "profile";
   }
 });
@@ -971,6 +972,7 @@ watch(() => store.selectedGatewayId, (id) => {
         >
           <v-tab value="profile" prepend-icon="mdi-account-card-outline">基础资料</v-tab>
           <v-tab value="expression" prepend-icon="mdi-account-voice" :disabled="!hasPersona">表达与语音</v-tab>
+          <v-tab value="avatar" prepend-icon="mdi-account-box-outline" :disabled="!hasPersona">虚拟形象</v-tab>
           <v-tab value="identity" prepend-icon="mdi-account-group-outline" :disabled="!hasPersona">身份关系</v-tab>
           <v-tab value="context" prepend-icon="mdi-message-text-clock-outline">消息上下文</v-tab>
           <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
@@ -1230,6 +1232,12 @@ watch(() => store.selectedGatewayId, (id) => {
         </v-card>
       </div>
 
+          </div>
+        </v-window-item>
+
+        <v-window-item value="avatar">
+          <div class="persona-tab-panel">
+            <PersonaDesktopPetPanel v-if="hasPersona" :persona-id="gateway.agentRoleId || ''" />
           </div>
         </v-window-item>
 

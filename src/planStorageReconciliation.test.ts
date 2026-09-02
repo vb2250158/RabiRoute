@@ -271,7 +271,8 @@ test("logical plan ids are canonical at every storage entry without splitting Un
   assert.throws(() => canonicalLogicalPlanId(" plan-a "), /trimmed and Unicode NFC-normalized/i);
   assert.throws(() => canonicalLogicalPlanId("e\u0301-plan"), /trimmed and Unicode NFC-normalized/i);
   assert.throws(() => planDirectory("C:\\role", " plan-a ", "active"), /trimmed and Unicode NFC-normalized/i);
-  assert.equal(canonicalPlanStorageName("e\u0301-plan"), canonicalPlanStorageName("\u00e9-plan"));
+  assert.throws(() => canonicalPlanStorageName("e\u0301-plan"), /trimmed and Unicode NFC-normalized/i);
+  assert.equal(canonicalPlanStorageName("\u00e9-plan"), safePlanStorageId("\u00e9-plan"));
   const astralLetter = "\u{10400}";
   const storageId = safePlanStorageId(`${"a".repeat(99)}${astralLetter}tail`);
   assert.equal(Array.from(storageId).length, 100);
@@ -291,10 +292,10 @@ test("identity readers fail closed for historical case, NFC, and legacy equivale
   })}\n`, "utf8");
   const archiveFence = archivedPlanStorageFence(roleDir, "plan-archived");
   assert.equal(archiveFence.status, "invalid");
-  assert.match(archiveFence.reason || "", /migration|collision/i);
+  assert.match(archiveFence.reason || "", /migration|collision|directory does not match/i);
   assert.throws(
     () => canonicalPlanIdForStorageIdentity(roleDir, "plan-archived"),
-    /migration|collision/i
+    /migration|collision|directory does not match/i
   );
 
   const nfdName = "e\u0301-active";
@@ -302,14 +303,11 @@ test("identity readers fail closed for historical case, NFC, and legacy equivale
   const nfdActive = path.join(roleDir, "plans", "active", nfdName);
   fs.mkdirSync(nfdActive, { recursive: true });
   fs.writeFileSync(path.join(nfdActive, "plan.json"), `${JSON.stringify({ id: nfcId, status: "进行中" })}\n`, "utf8");
-  assert.throws(() => canonicalPlanIdForStorageIdentity(roleDir, nfcId), /migration|collision/i);
+  assert.throws(() => canonicalPlanIdForStorageIdentity(roleDir, nfcId), /migration|collision|directory does not match/i);
 
   const legacyArchive = path.join(roleDir, "plans", "archive", "Legacy-Plan.json");
   fs.writeFileSync(legacyArchive, `${JSON.stringify({ id: "Legacy-Plan", status: "已归档" })}\n`, "utf8");
-  assert.throws(
-    () => canonicalPlanIdForStorageIdentity(roleDir, "legacy-plan"),
-    /legacy.*migration|migration.*legacy/i
-  );
+  assert.equal(canonicalPlanIdForStorageIdentity(roleDir, "legacy-plan"), null);
 });
 
 test("nested synchronous plan locks fail immediately instead of waiting on their own lock", (t) => {

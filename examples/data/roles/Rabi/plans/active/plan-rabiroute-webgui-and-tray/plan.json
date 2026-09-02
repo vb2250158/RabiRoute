@@ -61,6 +61,24 @@
       "completedAt": "2026-08-27T11:44:45+08:00"
     },
     {
+      "id": "persona-scoped-desktop-pets",
+      "title": "把虚拟形象配置归入人格并按启用人格显示多个桌宠",
+      "status": "已完成",
+      "completedAt": "2026-09-02T20:33:58+08:00"
+    },
+    {
+      "id": "plan-session-cache-and-filters",
+      "title": "保留计划页会话状态并减少排序筛选弹窗的重复读取",
+      "status": "已完成",
+      "completedAt": "2026-09-02T20:33:58+08:00"
+    },
+    {
+      "id": "plan-work-phase-presentation",
+      "title": "统一分析中、执行中、待讨论和暂停的计划展示",
+      "status": "已完成",
+      "completedAt": "2026-09-02T20:33:58+08:00"
+    },
+    {
       "id": "napcat-owner-and-portable-node",
       "title": "展示 NapCat 登录归属并让托盘优先使用便携 Node",
       "status": "已完成"
@@ -127,7 +145,7 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-08-27T11:44:45+08:00",
+  "updatedAt": "2026-09-02T20:33:58+08:00",
   "keywords": [
     "RibiWebGUI",
     "Manager API",
@@ -154,6 +172,12 @@
     "冷启动",
     "知识页",
     "消息看板保留期",
-    "replay_suppressed"
+    "replay_suppressed",
+    "人格虚拟形象",
+    "多桌宠",
+    "计划页会话缓存",
+    "分析中",
+    "执行中",
+    "待讨论"
   ]
 }

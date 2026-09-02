@@ -156,6 +156,7 @@ completedArchiveAfterHours = 72
       "id": "confirm-contract",
       "title": "确认结构化步骤契约",
       "status": "进行中",
+      "workPhase": "analysis",
       "startedAt": "2026-06-08T00:10:00+08:00",
       "waitingFor": "秋雨批准结构化步骤契约",
       "blockedBy": "秋雨尚未批准是否按当前文件、命令和界面方案更新计划契约",
@@ -227,7 +228,9 @@ completedArchiveAfterHours = 72
 
 WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId` 获取受控文件。PNG、JPEG、WebP 和 GIF 图片，MP4/M4V、WebM、Ogg Video、MOV/QuickTime 视频，以及 Markdown 文件统一显示紧凑固定宽度的 16:9 预览卡片，仅在容器不足时等比缩小。Markdown 卡片流式读取最多 12 KiB 的正文开头，转成最多 180 字的纯文本摘要并截断显示，不执行 HTML、链接或图片；点击后才打开完整文档弹窗。点击图片打开页内大图，点击视频打开带播放控制的页内预览。视频响应支持字节范围读取，实际可播放编码仍取决于当前浏览器。Markdown 不超过 2 MiB 时可在页内预览 GFM 标题、列表、表格、引用与代码，原始 HTML、危险/相对链接和远程图片加载均被禁用，弹窗保留原文件下载入口。其它文件显示名称、类型与大小，并通过附件响应打开或下载。读取接口会再次确认真实路径仍在该计划的受管目录内，路径穿越或 symlink 越界均失败关闭。
 
-`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“执行到哪一步”。顶层状态改为 `暂停` 时，必须继续保留恰好一条 `进行中` 恢复步骤，并由 `currentStepId` 精确指向；缺少指针、指错步骤、0 条或多条 `进行中` 步骤都会被 Manager 写入校验、work-cycle finish preflight 和 strict audit 一致拒绝。恢复时只把顶层状态改回 `进行中`，不重建步骤或改写恢复点。步骤可带 `detail`、`waitingFor`、`blockedBy`、`startedAt`、`completedAt` 和 `approvalRequest`。`waitingFor` 说明本轮要询问或追问谁/什么；所有普通等待、失败和资源缺口都保持可推进，Agent 每次巡检必须选择询问、升级、重试、改道、拆分、替代方案或补证据。只有完整、可提交且 `responseStatus=pending` 的当前审批合同会由 Manager 派生阻塞。`isBlocked` 仍为旧客户端保留，但只是 Manager 写出的兼容投影，不是 Agent 输入或状态真源；`blockedBy` 只保存人类可读说明，也不参与阻塞判定。Manager 在步骤首次写为 `进行中` 时自动补 `startedAt`，写为 `已完成` 时自动补 `completedAt` 并保留开始时间；重开已完成步骤会清除旧 `completedAt`，退回 `未开始` 会清除两个时间。创建时直接标为已完成、或旧步骤缺少时间字段时，会在下一次计划写入用该次写入时间补齐，不能据此还原更早的真实历史。RibiWebGUI 对进行中步骤只显示开始时间，对已完成步骤只显示完成时间，未开始步骤不显示时间。`currentStep` 保留为当前进展说明，不再承担步骤列表、步骤身份或阶段分类。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用，也不参与阶段分类。
+`steps` 是计划的有序执行路径。新建计划必须完整列出步骤；同一时间最多一条步骤为 `进行中`。顶层 `currentStepId` 必须指向这条步骤，让界面和 Agent 都能准确回答“推进到哪一步”。进行中步骤用 `workPhase=analysis | execution` 记录当前阶段：调查、补证据、方案设计和审批前准备写 `analysis`；审批通过或用户已经明确直接授权后的实施与开发验证写 `execution`。QA 失败回到调查时必须重新写 `analysis`。旧步骤缺少字段时，当前步骤以前存在 `responseStatus=approved` 的审批记录才回退为 `execution`，否则按 `analysis` 展示；不从标题或说明猜测。顶层状态改为 `暂停` 时，必须继续保留恰好一条 `进行中` 恢复步骤，并由 `currentStepId` 精确指向；缺少指针、指错步骤、0 条或多条 `进行中` 步骤都会被 Manager 写入校验、work-cycle finish preflight 和 strict audit 一致拒绝。恢复时只把顶层状态改回 `进行中`，不重建步骤或改写恢复点。步骤还可带 `detail`、`waitingFor`、`blockedBy`、`startedAt`、`completedAt` 和 `approvalRequest`。`waitingFor` 说明本轮要询问或追问谁/什么；所有普通等待、失败和资源缺口都保持可推进，Agent 每次巡检必须选择询问、升级、重试、改道、拆分、替代方案或补证据。只有完整、可提交且 `responseStatus=pending` 的当前审批合同会由 Manager 派生阻塞。`isBlocked` 仍为旧客户端保留，但只是 Manager 写出的兼容投影，不是 Agent 输入或状态真源；`blockedBy` 只保存人类可读说明，也不参与阻塞判定。Manager 在步骤首次写为 `进行中` 时自动补 `startedAt`，写为 `已完成` 时自动补 `completedAt` 并保留开始时间；重开已完成步骤会清除旧 `completedAt`，退回 `未开始` 会清除两个时间。创建时直接标为已完成、或旧步骤缺少时间字段时，会在下一次计划写入用该次写入时间补齐，不能据此还原更早的真实历史。RibiWebGUI 对进行中步骤只显示开始时间，对已完成步骤只显示完成时间，未开始步骤不显示时间。`currentStep` 保留为当前进展说明，不再承担步骤列表、步骤身份或阶段分类。结构化步骤已经表达后续路径，界面不再重复展示 `nextAction`；`nextAction` 仍供 Agent 恢复和旧版计划兼容使用，也不参与阶段分类。
+
+明确等待讨论的暂停计划在当前恢复步骤写 `discussionState=pending`。该标记只允许出现在顶层 `status=暂停` 且由 `currentStepId` 指向的唯一进行中步骤；Manager 对外显示“待讨论”。讨论结束时必须清除标记，再恢复执行、继续普通暂停或进入终态。“待讨论”不是可写顶层状态，也不能从标题、说明或 `waitingFor` 推断。
 
 需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。读取旧计划仍兼容；缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`，计划保持进行中并由 Agent 补齐。合同完整且 `responseStatus=pending` 后，`presentation.approval.state=ready`、`enabled=true`，同一 Manager 状态机派生内部 `blocked` tone 和用户可见阶段“待审批”。
 
@@ -639,15 +642,15 @@ Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视�
 
 Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批门真源：合同完整、可提交且 `responseStatus=pending` 时，同时派生 `presentation.approval.state=ready`、`enabled=true`、内部 `blocked` tone 和用户可见“待审批”；因此每个待审批项都存在可用审批入口。合同缺项时派生 `incomplete`，计划保持进行中，由 Agent 继续调查和补齐。旧 `isBlocked` 仅为兼容投影，`blockedBy` 仅为说明，二者都不能独立制造展示阶段。
 
-Manager 为未终态计划只公开“进行中、等待打包、等待 QA、暂停、待审批、待人工核验”六种展示状态，分别使用绿色、蓝色、紫色、灰色、红色、橙色。外部资料、素材、owner、账号、设备、授权和回执只保留在 `waitingFor` 等内部字段，不进入状态文案。顶层生命周期仍保存 `未开始 / 进行中 / 暂停 / 已完成 / 已归档`。
+Manager 为未终态计划公开“分析中、执行中、待讨论、等待打包、等待 QA、暂停、待审批、待人工核验”八种展示状态。分析中使用青色，执行中使用绿色，待讨论使用琥珀色，其余依次使用蓝色、紫色、灰色、红色和橙色。外部资料、素材、owner、账号、设备、授权和回执只保留在 `waitingFor` 等内部字段，不进入状态文案。顶层生命周期仍保存 `未开始 / 进行中 / 暂停 / 已完成 / 已归档`。
 
-存在 CLI、静态检查、替代验证、重试、发送或协调动作时显示绿色“进行中”。开发闭环后只缺目标包身份或纳入证明时显示蓝色“等待打包”；目标包纳入后显示紫色“等待 QA”。完整审批合同显示红色“待审批”。开发闭环后只剩人工视觉或交互确认的 `manual-verify-*` 步骤显示橙色“待人工核验”。完全没有安全动作时显示灰色“暂停”，内部 reconcile 仍保留测试环境、重新授权、外部资料和回执等精确分类。
+当前步骤仍有安全动作时，Manager 先按 `workPhase` 显示青色“分析中”或绿色“执行中”。完整待决审批合同显示红色“待审批”；暂停计划的当前恢复步骤带 `discussionState=pending` 时显示琥珀色“待讨论”；开发闭环后只缺目标包身份或纳入证明时显示蓝色“等待打包”；目标包纳入后显示紫色“等待 QA”；只剩人工视觉或交互确认的 `manual-verify-*` 步骤显示橙色“待人工核验”。完全没有安全动作时显示灰色“暂停”。这些特殊状态优先于 `workPhase`。
 
 展示层只把 `nextAction` 和当前步骤标题中的明确执行句当作当前替代动作。`currentStep` 或步骤 `detail` 中“运行截图已发送”“测试已完成”“禁止重复发送”等历史完成证据不能把只等结果的计划重新显示为“正在执行”；相反，“先运行 CLI 并发送校对请求”这类仍未完成的明确动作继续保持可执行。
 
 “实施/开发验证及适用 Main/Release/Art 同步、SVN 提交和无冲突回读 → 等待打包 → 等待 QA 验收 → QA 通过完成；QA 失败回到同一计划继续调查和实施”只适用于代码、Prefab、资源、配置等会产生项目内容变动的计划。只改 Main、适用同步未完成、未提交或无冲突回读不完整时保持“正在执行”。Manager 从结构化当前步骤和已完成交付步骤的组合记录判断：同一次交付的修订、适用性、匹配测试结果、提交和无冲突回读都齐全，而目标包身份或纳入证明仍缺失时，reconcile 后的交付核对步骤继续派生“等待打包”。目标包完成并证明纳入后进入 QA 步骤；QA 发送回执是该步骤的证据，不创建“打包完成，待发送 QA”主阶段。调查、设计评审、运营、资料收集、外部依赖和控制面维护必须保留自身真实步骤与 `waitingFor`，不得为了套用流程而补造 package 或 QA 步骤。Manager 不按计划标题、正文或 `kind` 猜测并强制补齐流程。
 
-`presentation` 返回 `status`、`tone`、`statusLevel`、`sortBucket`、统一色板和审批合同；`counts.stages` 只汇总上述公开阶段，其中橙色“待人工核验”使用 `manualVerification`。未终态展示按“待审批、等待 QA、待人工核验、进行中、等待打包、暂停”排序，暂停绝对末尾。
+`presentation` 返回 `status`、`tone`、`statusLevel`、`sortBucket`、统一色板和审批合同；`counts.stages` 只汇总上述公开阶段，其中“分析中”使用 `analyzing`，“执行中”使用 `executing`，“待讨论”使用 `discussion`，橙色“待人工核验”使用 `manualVerification`。未终态展示按“待审批、待讨论、等待 QA、待人工核验、分析中/执行中、等待打包、暂停”排序；分析和执行沿用同一排序等级，再按更新时间排列，暂停绝对末尾。
 
 秘书执行 `reconcile-thread-statuses` 时也消费同一份 Manager `presentation`，再与问题账本和最近闭环中的结构化发送/环境证据交叉核对。终态与完整待审批分别归为 `terminal / blocked`；暂停计划归为 `frozen + paused`，且固定 `implementationDispatchAllowed=false`；`waiting_package` 和具有当前、未被同一 PID/工程权威 release 证据覆盖的 `waiting_environment* + environment-owner` 唯一环境占用归为 `frozen`。结构化 dependency 当前步骤或 tracking 状态只有在明确等待其它计划原 owner 完成、同时 plan/issue/cycle 明确当前没有独立 CLI、控制面或业务动作时，才进入 `frozen_until_dependencies`；仍需联系或协调 owner、补合同、取得回复，或仍有 CLI、重试和替代路径时继续 `actionable`。QA 或普通询问已有真实 `status=sent / sentMessageId` 回执，且 issue/cycle 明确当前只等待结果、无独立本地动作、没有另一个待发送或待结果的校对/确认请求并禁止重发时，归为稳定 `waiting_result`；旧 QA 回执不能覆盖后来新增的负责人校对或位置确认。回执可来自结构化 issue evidence 或最近 cycle summary，不受后续计划更新时间和普通去重窗口影响。普通询问仅有近期发送证据时仍使用 `waiting_result_dedup`。只有仍有本地动作、缺真实发送/回执、已到追问时间且明确需要追问、存在另一项独立询问、可重试或存在替代路径的空闲计划保留为 `actionable`；已发送但仍有本地动作时不重复询问。对账结果分别返回 `frozenIdle`、`waitingResultIdle` 和 `actionableIdle`。`implementationDispatchAllowed` 只在当前仍允许实施任务继续运行时为 `true`；终态、暂停、审批阻塞以及没有实施动作可做的包、跨计划依赖、测试环境、重新授权和 QA 结论等待都返回 `false`。
 

@@ -335,7 +335,11 @@ export function handlePersonaSyncApi(
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/persona-sync/plan-packages/archive") {
     void readJsonBody<PersonaSyncArchivedPlanPackageCommand>(request, 128 * 1024 * 1024)
-      .then(command => ctx.service.applyArchivedPlanPackage(command))
+      .then(async command => {
+        const result = ctx.service.applyArchivedPlanPackage(command);
+        await ctx.service.manifest(command.roleId);
+        return result;
+      })
       .then(result => jsonResponse(response, result.status === "conflict" ? 409 : 200, {
         code: result.status === "conflict" ? 1 : 0,
         data: result
@@ -345,7 +349,11 @@ export function handlePersonaSyncApi(
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/persona-sync/plan-packages/active") {
     void readJsonBody<PersonaSyncActivePlanPackageCommand>(request, 128 * 1024 * 1024)
-      .then(command => ctx.service.applyActivePlanPackage(command))
+      .then(async command => {
+        const result = ctx.service.applyActivePlanPackage(command);
+        await ctx.service.manifest(command.roleId);
+        return result;
+      })
       .then(result => jsonResponse(response, result.status === "conflict" ? 409 : 200, {
         code: result.status === "conflict" ? 1 : 0,
         data: result

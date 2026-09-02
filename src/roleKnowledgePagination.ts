@@ -7,7 +7,9 @@ export type RolePlanPageCounts = {
   qa: number;
   active: number;
   stages: {
+    analyzing: number;
     executing: number;
+    discussion: number;
     qa: number;
     waitingPackage: number;
     approval: number;
@@ -198,9 +200,11 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
     archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length,
     blocked: plans.filter((plan) => plan.presentation.tone === "blocked").length,
     qa: plans.filter((plan) => plan.presentation.tone === "qa").length,
-    active: plans.filter((plan) => !["paused", "done", "archived"].includes(plan.presentation.tone)).length,
+    active: plans.filter((plan) => !["discussion", "paused", "done", "archived"].includes(plan.presentation.tone)).length,
     stages: {
-      executing: plans.filter((plan) => plan.presentation.tone === "running").length,
+      analyzing: plans.filter((plan) => plan.presentation.tone === "analyzing").length,
+      executing: plans.filter((plan) => plan.presentation.tone === "executing" || plan.presentation.tone === "running").length,
+      discussion: plans.filter((plan) => plan.presentation.tone === "discussion").length,
       qa: plans.filter((plan) => plan.presentation.tone === "qa").length,
       waitingPackage: plans.filter((plan) => plan.presentation.tone === "waiting_package").length,
       approval: plans.filter((plan) => plan.presentation.tone === "blocked").length,
@@ -270,7 +274,9 @@ function planStepSummary(plan: RolePlanSummarySource) {
   return {
     id: step.id,
     title: step.title,
-    status: step.status
+    status: step.status,
+    workPhase: step.workPhase,
+    discussionState: step.discussionState
   };
 }
 

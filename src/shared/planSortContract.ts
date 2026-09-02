@@ -6,8 +6,9 @@ export type PlanSortPalette = {
 
 export enum PlanStatusSortLevel {
   Approval = 0,
-  Qa = 1,
-  Running = 2,
+  Discussion = 1,
+  Qa = 2,
+  Running = 3,
   WaitingPackage = 4,
   Done = 6,
   Archived = 7,

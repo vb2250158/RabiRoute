@@ -1,10 +1,16 @@
+<!-- docs-language-switch -->
+<div align="center">
+<a href="./README_en.md">English</a> | 简体中文
+</div>
+<!-- /docs-language-switch -->
+
 # Xiaomi Home Manager 插件
 
 RabiRoute 的唯一 `xiaomiHome` 消息端。它通过 Home Assistant REST API 提供设备目录和状态查询，通过 WebSocket 订阅状态变化，并提供 typed capability 动作门、有人移动事件和本机摄像头 artifact 账本。
 
 ## 配置与授权
 
-WebGUI 的“设置 → 米家 / Xiaomi Home”是配置入口。首次保存前，完整配置来自插件 Profile；首次保存后，完整配置由本机 Xiaomi Home 运行目录中的 `settings.json` 唯一负责。Manager 采用原子写入和 revision 乐观锁，保存后热加载客户端、事件监听和录像抓取，无需编辑 `dist/plugins/profiles/desktop.json`。
+在 WebGUI 的“消息适配器”中为当前 Route 添加“米家 / Xiaomi Home”，展开该消息端即可配置 Home Assistant。首次保存前，完整配置来自插件 Profile；首次保存后，完整配置由本机 Xiaomi Home 运行目录中的 `settings.json` 唯一负责。Manager 采用原子写入和 revision 乐观锁，保存后热加载客户端、事件监听和录像抓取，无需编辑 `dist/plugins/profiles/desktop.json`。
 
 设置文件只保存 Home Assistant 地址、环境变量名、实体 ID 和安全策略，不保存 OAuth 凭据或 token。请在可信本机环境设置：
 
@@ -17,6 +23,8 @@ WebGUI 的“设置 → 米家 / Xiaomi Home”是配置入口。首次保存前
 - `x-rabiroute-expected-manager-instance-id`
 
 WebGUI 使用相对 Manager API，并在每次保存前重新读取 `/meta`，不固定或扫描 Manager 端口。
+
+从已授权的局域网 WebGUI 可以读取健康状态并保存该消息端配置。设备目录、控制动作和录像内容接口仍只接受本机回环请求。
 
 插件默认 `writeEnabled=false`。先保持只读，完成地址、token、资源枚举和事件订阅验收后，再在 WebGUI 显式开启设备控制。动作还要求 `Idempotency-Key` 与最新 `expectedStateVersion`。
 

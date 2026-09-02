@@ -107,9 +107,12 @@ export function normalizeDesktopPetBinding(value: unknown): DesktopPetBinding {
       }
     : null;
   const fps = [6, 12, 15, 24].includes(Number(row.fpsCap)) ? Number(row.fpsCap) as 6 | 12 | 15 | 24 : 15;
+  const packId = typeof row.packId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(row.packId.trim())
+    ? row.packId.trim()
+    : "";
   return {
-    enabled: row.enabled === true,
-    packId: typeof row.packId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(row.packId.trim()) ? row.packId.trim() : "",
+    enabled: row.enabled === true && Boolean(packId),
+    packId,
     placement,
     scale: boundedNumber(row.scale, DEFAULT_DESKTOP_PET_BINDING.scale, 0.1, 2),
     opacity: boundedNumber(row.opacity, DEFAULT_DESKTOP_PET_BINDING.opacity, 0.2, 1),

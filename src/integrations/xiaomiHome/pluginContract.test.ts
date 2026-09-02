@@ -37,6 +37,7 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
       return handler;
     },
     deliverXiaomiHomeEvent: async () => undefined,
+    webguiLanRequestAllowed: () => true,
     readJsonBody: async () => ({}),
     jsonResponse: () => undefined,
     managerPluginRoutes: registry,
@@ -81,6 +82,20 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
   assert.equal(snapshot.length, 1);
   assert.ok(routeContext?.runtime instanceof RuntimeController);
   assert.deepEqual(routeContext?.lifecycleFence, runtime.lifecycleFence);
+  assert.equal(routeContext?.controlPlaneAccessAllowed, runtime.webguiLanRequestAllowed);
+  assert.deepEqual(harness.contributions.list().map(contribution => ({
+    kind: contribution.kind,
+    id: contribution.id,
+    surface: (contribution.value as Record<string, unknown>).surface,
+    slot: (contribution.value as Record<string, unknown>).slot,
+    rendererId: (contribution.value as Record<string, unknown>).rendererId
+  })), [{
+    kind: "message-endpoint-settings",
+    id: "xiaomi-home-message-endpoint",
+    surface: "route.adapters",
+    slot: "xiaomiHome",
+    rendererId: "builtin.xiaomi-home-message-endpoint.v1"
+  }]);
   assert.equal(snapshot[0]?.routeCount, 8);
   assert.deepEqual(
     snapshot[0]?.routes

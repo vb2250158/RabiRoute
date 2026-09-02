@@ -18,9 +18,8 @@ _BUILTIN_FEATURE_MODULES = {
 class DesktopFeatureContext:
     manager_url: str
     application: object
-    desktop_pet_action: object
-    desktop_pet_click_through_action: object
-    open_desktop_pet_persona: Callable[[], None]
+    desktop_pet_menu: object
+    open_desktop_pet_persona: Callable[[str], None]
 
 
 def enabled_builtin_feature_ids(profile_path: Path | None = None) -> tuple[str, ...]:

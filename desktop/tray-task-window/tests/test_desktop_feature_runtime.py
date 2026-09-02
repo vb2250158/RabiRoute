@@ -39,7 +39,7 @@ class DesktopFeatureProfileTest(unittest.TestCase):
 
     def test_feature_activation_returns_lifecycle_disposer(self) -> None:
         disposed: list[str] = []
-        context = DesktopFeatureContext("http://127.0.0.1:8790", object(), object(), object(), lambda: None)
+        context = DesktopFeatureContext("http://127.0.0.1:8790", object(), object(), lambda _persona_id: None)
         module = SimpleNamespace(activate=lambda _context: lambda: disposed.append("pet"))
         with patch("rabiroute_tray.desktop_feature_runtime.importlib.import_module", return_value=module):
             disposers = activate_builtin_features(("io.rabiroute.desktop.pet-renderer@1",), context)

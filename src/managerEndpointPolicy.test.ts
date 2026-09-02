@@ -8,13 +8,57 @@ import {
   parseManagerPortPolicy
 } from "./managerEndpointPolicy.js";
 
-test("Manager port policy defaults to OS-assigned local endpoints", () => {
+test("Manager port policy supports Host's last-known-port preference without changing explicit port behavior", () => {
   assert.deepEqual(parseManagerPortPolicy(undefined), { mode: "auto" });
   assert.deepEqual(parseManagerPortPolicy("auto"), { mode: "auto" });
   assert.deepEqual(parseManagerPortPolicy("0"), { mode: "auto" });
   assert.deepEqual(parseManagerPortPolicy("8790"), { mode: "fixed", port: 8790 });
+  assert.deepEqual(parseManagerPortPolicy("prefer:8790"), { mode: "preferred", port: 8790 });
   assert.throws(() => parseManagerPortPolicy("nope"), /GATEWAY_MANAGER_PORT/);
   assert.throws(() => parseManagerPortPolicy("70000"), /GATEWAY_MANAGER_PORT/);
+});
+
+test("Preferred Manager port is retained when available and falls back only when occupied", async () => {
+  const preferredPort = 0;
+  const seed = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    seed.once("error", reject);
+    seed.listen(preferredPort, "127.0.0.1", resolve);
+  });
+  const availablePort = (seed.address() as { port: number }).port;
+  await new Promise<void>(resolve => seed.close(() => resolve()));
+
+  const retained = http.createServer();
+  try {
+    const endpoint = await listenManagerEndpoint({
+      server: retained,
+      host: "127.0.0.1",
+      policy: { mode: "preferred", port: availablePort }
+    });
+    assert.equal(endpoint.port, availablePort);
+  } finally {
+    if (retained.listening) await new Promise<void>(resolve => retained.close(() => resolve()));
+  }
+
+  const occupier = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    occupier.once("error", reject);
+    occupier.listen(0, "127.0.0.1", resolve);
+  });
+  const occupiedPort = (occupier.address() as { port: number }).port;
+  const fallback = http.createServer();
+  try {
+    const endpoint = await listenManagerEndpoint({
+      server: fallback,
+      host: "127.0.0.1",
+      policy: { mode: "preferred", port: occupiedPort }
+    });
+    assert.notEqual(endpoint.port, occupiedPort);
+    assert.equal(managerPortIsFetchSafe(endpoint.port), true);
+  } finally {
+    if (fallback.listening) await new Promise<void>(resolve => fallback.close(() => resolve()));
+    await new Promise<void>(resolve => occupier.close(() => resolve()));
+  }
 });
 
 test("Manager loopback detection keeps LAN and local allocation policies separate", () => {

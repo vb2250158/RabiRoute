@@ -13,6 +13,7 @@ class PlanStep:
     step_id: str = ""
     waiting_for: str = ""
     blocked_by: str = ""
+    discussion_state: str = ""
 
 
 @dataclass(frozen=True)

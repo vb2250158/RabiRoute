@@ -15,6 +15,8 @@ A Route decides how messages enter and which handler receives them. A persona su
 | Sources, ports, handler, workspace, pipeline | Route |
 | Selected persona | Route `agentRoleId` |
 | Persona avatar, text, rules, plans, memory, skills | Persona directory |
+| Desktop-pet animation assets | Persona `desktop-pet/` directory |
+| Whether this PC shows the pet, plus its size, position, and window behavior | Current PC desktop settings |
 | Route served by a rule | Rule `configName` |
 
 One persona can serve several Routes. Editing its text or rules affects every bound Route that matches the relevant `configName`.
@@ -25,15 +27,22 @@ Open **Persona Configuration** and select an existing role under **Persona bindi
 
 - **Profile**: persona binding, avatar, and the `persona.md` summary.
 - **Expression & voice**: language-style validation, persona TTS settings, and speech wake-up keywords.
+- **Virtual avatar**: desktop-pet animation assets for the current persona and whether this PC displays the pet.
 - **Identity relations**: recognized identities, unrecognized accounts, and voiceprint classification.
 - **Message context**: recent-message limits per endpoint and Route variables.
 - **Automation**: message triggers, scheduled tasks, and available template variables.
 
-When no persona is selected, **Expression & voice** and **Identity relations** are unavailable. Profile settings, Route variables, and default message rules remain accessible.
+When no persona is selected, **Expression & voice**, **Virtual avatar**, and **Identity relations** are unavailable. Profile settings, Route variables, and default message rules remain accessible.
 
 After selecting a persona, use the same configuration card to set or replace its avatar. PNG, JPEG, WebP, and GIF images up to 5 MB are supported. The avatar follows the persona into selectors, the Route overview, speech persona selection, and the local role panel; the first character of the persona ID is used as the fallback. Because the image belongs to the persona directory, it does not need to be uploaded again for each Route.
 
 Use **Open persona configuration** to edit the full text. Do not mechanically translate runtime-semantic files; language and wording changes can change Agent behavior.
+
+## Configure a virtual avatar
+
+Open **Virtual avatar**, select or import a GIF, PNG, or ZIP animation pack for the current persona, then turn on **Enable on this PC**. The switch stays unavailable until a runnable pack is selected, and no empty window is shown. Each enabled persona gets its own pet: enabling several personas displays several pets, while disabling one removes only that persona's pet. Window names use persona names.
+
+Animation assets live under the current persona's `desktop-pet/packs/` directory and can travel with persona-folder synchronization. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate remain display preferences for this PC and do not synchronize with the persona.
 
 ## Let personas contact each other
 

@@ -198,6 +198,44 @@ test("manager read workers publish a deeply immutable RoleKnowledge catalog", as
   }
 });
 
+test("knowledge plan pages coalesce identical concurrent summary reads", async () => {
+  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-plan-page-worker-"));
+  const pool = new ManagerReadWorkerPool({ maxConcurrency: 2, maxQueue: 0, timeoutMs: 10_000 });
+  try {
+    for (let index = 0; index < 12; index += 1) {
+      createPlan(roleDir, {
+        id: `page-${index}`,
+        title: `Page ${index}`,
+        focus: "Keep knowledge pages bounded",
+        status: "进行中",
+        currentStepId: "read",
+        steps: [{ id: "read", title: "Read", status: "进行中" }],
+        keywords: ["page"]
+      });
+    }
+    const input = {
+      cursor: "",
+      limit: 8,
+      query: "",
+      sort: "status" as const,
+      statuses: [],
+      tags: [],
+      includeFacets: true,
+      summary: true
+    };
+    const [first, second] = await Promise.all([
+      pool.queryRolePlanPage<{ items: Array<{ id: string }>; total: number }>(roleDir, input),
+      pool.queryRolePlanPage<{ items: Array<{ id: string }>; total: number }>(roleDir, input)
+    ]);
+    assert.equal(first.items.length, 8);
+    assert.deepEqual(second, first);
+    assert.equal(pool.status().spawnedWorkers, 1);
+  } finally {
+    await pool.stop();
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
+});
+
 test("role panel timeline reads resolve a validated role id inside the read child", async () => {
   const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-role-panel-read-worker-"));
   const roleDir = path.join(rolesRoot, "YeYu");
@@ -252,24 +290,29 @@ test("manager read workers reject excess heavy reads instead of growing an unbou
   await first;
 });
 
-test("manager read worker pools leave one low-priority slot available beside a long agent scan", async () => {
+test("manager read worker pools keep six bounded lanes available for concurrent interactive reads", async () => {
   const roleDir = voiceArchiveFixture(6, 400);
-  const pools = Array.from({ length: 3 }, () => new ManagerReadWorkerPool({
+  const pools = Array.from({ length: 7 }, () => new ManagerReadWorkerPool({
     maxConcurrency: 1,
     maxQueue: 1,
     timeoutMs: 30_000
   }));
-  const tasks = pools.map(pool => pool.queryPersonaVoiceTranscripts(roleDir, {
-    includeArchives: true,
-    includeDetails: true,
-    limit: 200
-  }));
-  const statuses = pools.map(pool => pool.status());
-  await Promise.all(tasks);
-  assert.equal(statuses.reduce((sum, status) => sum + status.active, 0), 2);
-  assert.equal(statuses.reduce((sum, status) => sum + status.queued, 0), 1);
-  assert.equal(statuses[0].globalActive, 2);
-  assert.equal(statuses[0].globalMaxConcurrency, 2);
+  try {
+    const tasks = pools.map(pool => pool.queryPersonaVoiceTranscripts(roleDir, {
+      includeArchives: true,
+      includeDetails: true,
+      limit: 200
+    }));
+    const statuses = pools.map(pool => pool.status());
+    await Promise.all(tasks);
+    assert.equal(statuses.reduce((sum, status) => sum + status.active, 0), 6);
+    assert.equal(statuses.reduce((sum, status) => sum + status.queued, 0), 1);
+    assert.equal(statuses[0].globalActive, 6);
+    assert.equal(statuses[0].globalMaxConcurrency, 6);
+  } finally {
+    await Promise.all(pools.map(pool => pool.stop()));
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
 });
 
 test("manager read workers coalesce simultaneous voice-summary scans", async () => {

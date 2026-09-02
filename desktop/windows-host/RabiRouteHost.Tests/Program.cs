@@ -92,6 +92,31 @@ finally
     Directory.Delete(stableNodeRoot, recursive: true);
 }
 
+var portPreferenceRoot = Path.Combine(Path.GetTempPath(), $"rabiroute-port-preference-{Guid.NewGuid():N}");
+Directory.CreateDirectory(portPreferenceRoot);
+try
+{
+    await using var portPreferenceLog = new HostLog(Path.Combine(portPreferenceRoot, "diagnostics"));
+    Check(
+        ManagerPortPreference.ResolveStartupPolicy(portPreferenceRoot, portPreferenceLog) == "auto",
+        "Host uses OS allocation before a successful Manager endpoint has been cached");
+    ManagerPortPreference.SaveSuccessfulEndpoint(portPreferenceRoot, "http://127.0.0.1:54321", portPreferenceLog);
+    Check(
+        ManagerPortPreference.ResolveStartupPolicy(portPreferenceRoot, portPreferenceLog) == "prefer:54321",
+        "Host supplies the last successful Manager port as a preference to the next generation");
+    var preferenceFile = Path.Combine(portPreferenceRoot, "host", "manager-port-preference.json");
+    var preferenceJson = File.ReadAllText(preferenceFile);
+    Check(preferenceJson.Contains("54321", StringComparison.Ordinal), "Host persists the successful Manager port");
+    Check(
+        !preferenceJson.Contains("baseUrl", StringComparison.OrdinalIgnoreCase) &&
+        !preferenceJson.Contains("generation", StringComparison.OrdinalIgnoreCase),
+        "Host port preference never persists an endpoint URL or generation identity");
+}
+finally
+{
+    Directory.Delete(portPreferenceRoot, recursive: true);
+}
+
 var portableRoot = Path.Combine(Path.GetTempPath(), $"rabiroute-portable-guard-{Guid.NewGuid():N}");
 var portablePackageRoot = Path.Combine(portableRoot, "versions", "release-a");
 var portableStateRoot = portableRoot;

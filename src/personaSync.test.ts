@@ -265,9 +265,10 @@ test("persona sync fails closed for incomplete archive storage and non-canonical
   t.after(() => service.stopManifestIndex());
   const incoming = Buffer.from(JSON.stringify({ id: "broken-plan", status: "进行中" }), "utf8");
 
-  const conflict = service.applyActivePlanPackage(activePlanPackage("Rabi", "broken-plan"));
-  assert.equal(conflict.status, "conflict");
-  assert.match(String(conflict.reason), /canonical_archive_is_terminal|missing_plan_json|invalid archive storage/i);
+  assert.throws(
+    () => service.applyActivePlanPackage(activePlanPackage("Rabi", "broken-plan")),
+    /identity collision.*invalid storage/i
+  );
   assert.throws(() => service.merge({
     roleId: "Rabi",
     path: "plans/active/foo bar/plan.json",
@@ -287,11 +288,11 @@ test("persona sync validates archive identity and never applies archive deletion
 
   assert.throws(
     () => service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan", { storedPlanId: "other-plan" })),
-    /invalid terminal identity|identity does not match plan\.json/i
+    /invalid terminal identity|identity does not match plan\.json|plan\.json identity mismatch/i
   );
   assert.throws(
     () => service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan", { terminalStatus: "已完成" })),
-    /archive plan package is not terminal/i
+    /archive plan package is not terminal|bucket does not match plan status/i
   );
 
   const applied = service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan"));

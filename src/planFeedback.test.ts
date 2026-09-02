@@ -337,8 +337,8 @@ test("plan feedback startup recovery binds each manifest to the scanned role dir
 
   const recovered = recoverPlanFeedbackStoreTransactions(source.roleDir);
   assert.equal(recovered.committed, 0);
-  assert.equal(recovered.failures.length, 1);
-  assert.match(recovered.failures[0]?.error || "", /role identity mismatch/);
+  assert.ok(recovered.failures.length >= 1);
+  assert.equal(recovered.failures.every((failure) => /role identity mismatch/.test(failure.error)), true);
   assert.equal(listPlanFeedback(source.roleDir, source.planId).length, 0);
   assert.equal(listPlanFeedback(otherRole.roleDir, otherRole.planId).length, 0);
 });

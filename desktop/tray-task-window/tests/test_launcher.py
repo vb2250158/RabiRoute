@@ -112,7 +112,6 @@ class LauncherContractTest(unittest.TestCase):
                 str(host),
                 "--host-lifecycle-pipe",
                 "RabiRoute.Tray.generation-1.channel",
-                "--show-desktop-pet",
             ])
 
             self.assertTrue(args.surface_child)
@@ -121,7 +120,6 @@ class LauncherContractTest(unittest.TestCase):
             self.assertEqual(args.manager_instance_id, "manager-1")
             self.assertEqual(args.host_executable, host.resolve())
             self.assertEqual(args.host_lifecycle_pipe, "RabiRoute.Tray.generation-1.channel")
-            self.assertTrue(args.show_desktop_pet)
 
     def test_launcher_rejects_direct_execution_without_surface_child_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -168,12 +166,12 @@ class LauncherContractTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_qt_dll_bootstrap_and_desktop_pet_flag_remain_supported(self) -> None:
+    def test_qt_dll_bootstrap_remains_supported_without_the_legacy_single_pet_flag(self) -> None:
         source = (TRAY_ROOT / "main.py").read_text(encoding="utf-8")
 
         self.assertIn("_configure_frozen_qt_dll_search_paths", source)
-        self.assertIn('"--show-desktop-pet"', source)
-        self.assertIn("show_desktop_pet=args.show_desktop_pet", source)
+        self.assertNotIn('"--show-desktop-pet"', source)
+        self.assertNotIn("show_desktop_pet=args.show_desktop_pet", source)
         self.assertIn("package_root, state_root = _resolve_runtime_roots()", source)
         self.assertIn("run(\n            package_root,\n            state_root,", source)
 

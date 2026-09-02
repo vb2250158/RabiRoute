@@ -51,7 +51,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 系统截图与人格投递 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页可保存 RabiRoute Desktop 的系统截图开关、全局快捷键和 Windows 登录启动。截图预览支持附加文字并选择已激活人格，图片和文字复用角色面板入口；Codex/DSH 通过图片路径接收真实图片输入。 |
 | 界面主题 | 代码与自动化合同已验证；WebGUI / Desktop 安装包实机验收待完成 | 主题保存在主机级 `data/desktop/settings.json`。`theme`、`webTheme` 与 `customThemes` 分别保存 Desktop 选择、WebGUI 选择和共享自定义声明；浏览器旧主题键仅做一次迁移。自定义编辑器校验色值与文字对比度，两端从同一受限声明生成 Web token 与 Qt 样式。 |
 | 任务结束事件与本机播报 | 代码与自动化合同已验证；真实 Codex / DSH 生产者及设备播放待验收 | Manager 提供 `/api/work-events/ended`、Manager 事件流与 `/api/speech/task-completion/*`。任务摘要先脱敏，任务事件按日期物理分卷保留；播报账本只留决策、哈希和回执元数据。Codex 默认启用播报，DSH 默认关闭且尚无真实生产者接入。 |
-| YeYu 桌宠 | 代码与自动化合同已验证；Windows 安装包和动效实机验收待完成 | Manager 单点持有资源包、人格绑定和设置；WebGUI 只调用受限 API，Qt Desktop 消费同一绑定与任务结束事件。导入限制归属、路径、类型、条目数和展开大小，不直接读取浏览器或 Qt 私有配置。 |
+| 人格桌宠 | 代码与自动化合同已验证；Windows 安装包和多实例动效实机验收待完成 | Manager 单点持有资源包、人格名称、逐人格绑定和设置；WebGUI 只调用受限 API，Qt Desktop 为每个已启用且已绑定动作包的人格创建一个窗口，并只消费匹配人格的任务结束事件。没有动作包的旧启用记录不会生成空窗口。 |
 | 滑词菜单 | 代码与自动化测试已验证；Windows 实机验收待完成 | WebGUI“设置”页卡片“开启滑词菜单”。支持鼠标拖选和 `Shift` 键盘扩选；悬浮条按选区范围横向居中，向上拖选放上方，向下或同一行拖选放下方。Unity 编辑器在 UI Automation 不可用时发送受保护的临时复制并恢复原剪贴板；无系统插入符时使用同一窗口最近一次点击位置。点击才执行；关闭“滑词朗读”后只保留“投递至”。 |
 | 跨人格消息 | 自动化合同已验证；待真实双人格 Desktop 验收 | `GET /api/personas` 提供不含正文和本机目录的人格列表；`POST /api/personas/:personaId/messages` 校验 AgentPacket 注入的 Route + 人格绑定凭据，并复用目标 Route 的固定 `role_panel_message` 链。请求必须带稳定 `deliveryId`；同 ID 同内容复用回执，内容变化返回冲突。目标有多个已启用 Route 时必须明确选择，给自己发送和超过 8 跳都会拒绝。普通回复不会自动返回来源人格，回复时必须显式反向投递并沿用会话关联字段。 |
 | 计划审批事件 | 已验证 | 审批意见落盘后由 Manager 生成独立 `plan_feedback` 系统事件；不依赖可编辑消息规则，不写聊天 timeline/会话账本，不注入最近消息。 |
@@ -60,6 +60,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | RabiSpeech 语音消息端 | 实验支持 | RabiSpeech 只维护一份 ASR/VAD、声纹处理和 FIFO。Android 手机/眼镜与独立语音客户端一样只持续传 PCM，不切句、不跑模型；PC 对手机流完成处理后只投 `rabilink` Route，本机/普通远程声卡只投 `speech` Route。每段转写先写一次主机级语音消息库，各绑定人格再分别写自己的原始记录和会话上下文。主机只保存不透明声纹/聚类证据，不判断声纹是谁或谁是“用户”；手机回复默认回原设备。正式自动声纹只接受显式确认的真人私有数据集及完整哈希门禁报告，合成 TTS/旧报告始终只作预检。标准安装不含语音环境或模型；模型管理页可列出允许清单并逐个下载权重，但“已下载”不代表独立运行环境或真实推理已经验收。 |
 | FenneNote | 已退役兼容 | 不再出现在新增消息端或新规则 UI；只读取旧 Route，并保留历史 webhook/Outbox 兼容以便迁移。 |
 | 小米音箱 / 小爱 | 实验支持 | RabiRoute 提供命名回调入口和 PC 侧桥接目录，但必须依赖 open-xiaoai、xiaogpt 或自定义桥把音箱事件送到 PC；不是音箱直连核心。 |
+| 米家 / Xiaomi Home | 实验支持 | 它是独立的 `xiaomiHome` 消息端。Home Assistant 连接、事件监听、设备控制门和录像参数都在当前 Route 的消息适配器页配置；本机全局设置页不再提供第二入口。已授权的局域网 WebGUI 可读写健康状态与配置，设备目录、控制动作和录像内容接口保持本机回环限定。真实 Home Assistant、米家设备和摄像头事件仍需环境验收。 |
 | RabiLink | 实验支持 | 同时存在本地兼容入口、全局 Relay Runtime 和 Route worker；Android 手机/眼镜通过 Relay SSE 收到队列事件后按 cursor 单次补漏，音频只传 PCM，PC 完成 ASR 后进入主机通用语音库和选定 RabiLink Route；主动消息与回复走独立 Relay 下行队列。明确目标下行在 `delivered` 前不按 TTL 删除，手机持久补传 `delivered/played/playback_failed`，而 `played` 只能由手机/眼镜各自 AudioTrack marker 产生。Rokid AIUI AIX 的宿主只提供整包 HTTP、没有 SSE/WS/分块回调，为保证前台主动消息功能保留 25 秒长等待这一受控例外。代码回执闭环已完成，手机/眼镜实际扬声器和穿戴设备仍需真机验收。 |
 | 智能手表 / 手环健康消息端 | 实验支持 | `wearable.health` 结构化观测进入按角色分日的健康时间线；Manager 可查询当前状态、历史和摘要，阈值/冷却命中后以 `wearable_health_alert` 投递 Agent。Android 可选 Health Connect 或 PC ADB Companion；Companion 由唯一 Host 下的 Manager Plugin Kernel 与 generation-scoped process lease 持有，动态 READY URL 经 `/meta` 和双身份 header 围栏，不再拥有登录计划任务或固定 Manager 端口。小米真机已闭环心率、睡眠会话、阶段、睡/醒状态、去重和查询；无需 ADB 的 MiWear SPP 直连仍未作为默认采集器。 |
 | 通用 Webhook | 实验支持 | 接收没有专用适配器的外部 POST；已有命名平台应使用自己的适配器，以保留日志和回传语义。 |

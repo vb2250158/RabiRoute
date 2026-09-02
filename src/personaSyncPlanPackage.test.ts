@@ -266,6 +266,28 @@ test("a terminal archive package atomically wins only when it proves dominance o
   assert.ok(result.receiptPath && fs.existsSync(result.receiptPath));
 });
 
+test("an applied archive receipt recreates its missing canonical payload", (t) => {
+  const source = fixture(t);
+  const destination = fixture(t);
+  const planId = "archive-replay";
+  const command = createArchivedPlanPackageCommand(
+    "Rabi",
+    planId,
+    writeArchivePackage(source.roleDir, planId),
+    "peer-a"
+  );
+  const archive = path.join(destination.roleDir, "plans", "archive", command.storageId);
+
+  const first = applyArchivedPlanPackage(destination.roleDir, command);
+  assert.equal(first.status, "applied");
+  fs.rmSync(archive, { recursive: true, force: true });
+
+  const replayed = applyArchivedPlanPackage(destination.roleDir, command);
+  assert.equal(replayed.status, "applied");
+  assert.equal(archivedPlanPackageInventory(archive).hash, command.inventoryHash);
+  assert.equal(replayed.receiptPath, first.receiptPath);
+});
+
 test("an archive that cannot prove full active preservation stays out of the live archive root", (t) => {
   const source = fixture(t);
   const destination = fixture(t);
@@ -287,7 +309,7 @@ test("an archive that cannot prove full active preservation stays out of the liv
   assert.equal(archivedPlanPackageInventory(result.quarantinePath!).hash, command.inventoryHash);
 });
 
-test("divergent and orphan canonical storage preserves the complete incoming package as conflict evidence", (t) => {
+test("divergent canonical storage preserves incoming evidence while invalid orphan storage fails closed", (t) => {
   const source = fixture(t);
   const destination = fixture(t);
   const planId = "divergent-active";
@@ -314,11 +336,11 @@ test("divergent and orphan canonical storage preserves the complete incoming pac
   const orphan = path.join(orphanDestination.roleDir, "plans", "active", orphanCommand.storageId);
   fs.mkdirSync(orphan, { recursive: true });
   fs.writeFileSync(path.join(orphan, "history.jsonl"), "orphan\n", "utf8");
-  const orphanResult = applyActivePlanPackage(orphanDestination.roleDir, orphanCommand);
-  assert.equal(orphanResult.status, "conflict");
+  assert.throws(
+    () => applyActivePlanPackage(orphanDestination.roleDir, orphanCommand),
+    /identity collision.*invalid storage/i
+  );
   assert.equal(fs.existsSync(path.join(orphan, "plan.json")), false);
-  assert.ok(orphanResult.quarantinePath && fs.existsSync(orphanResult.quarantinePath));
-  assert.equal(archivedPlanPackageInventory(orphanResult.quarantinePath!).hash, orphanCommand.inventoryHash);
 });
 
 test("an archived plan is terminal and quarantines a later active package without resurrection", (t) => {

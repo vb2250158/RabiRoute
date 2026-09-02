@@ -7,12 +7,21 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### Plan presentation states
+
+- In-progress plans now distinguish `Analyzing` from `Executing`: pre-approval work is analyzing, while approved or explicitly authorized implementation is executing. Paused plans explicitly mapped from Tencent `F待讨论` show `Awaiting discussion`; ordinary pauses remain `Paused`. WebGUI and the tray share Manager status, counts, order, and palette.
+
+### Persona virtual-avatar entry
+
+- Desktop-pet assets, enablement, and local presentation controls moved from global Settings to **Persona Configuration → Virtual avatar**. Packs are read and imported for the current persona, and enablement remains unavailable until a runnable pack is selected; stale enabled records without a pack no longer show an empty window. Desktop now adds or removes one pet per enabled persona, displays as many pets as are enabled, and loads window and menu labels from persona names instead of hard-coding YeYu. Local size, position, and window behavior stay in desktop settings and do not synchronize with the persona folder.
+
 ### Source Manager startup and legacy-data migration
 
 - Fixed source Manager route/persona catalog snapshots producing different hashes after optional fields crossed child-process JSON IPC, which kept `/meta` degraded with `ROUTE_CATALOG_STARTUP_FAILED`. Route catalog hashing now follows JSON transport semantics.
 - Startup migration now backfills a verifiable `history.jsonl` for legacy canonical plan directories that contain only `plan.json`. Active plans receive an imported-created record and archived plans receive an imported-archived record without inventing a previous state; later startups remain idempotent.
 - Configuration watching no longer treats route directories that contain only logs or retired state and no `adapterConfig.json` as broken configuration, so keeping source-runtime directories does not degrade Manager health.
 - Configuration and plugin watch workers now get a grace period to exit naturally after returning a snapshot, with termination used only after that deadline. This prevents completed workers from being recorded as `termination_failed` and keeping `/meta` degraded during Windows source startup.
+- Watch-worker lifecycle confirmation now also accepts the operating-system `exit` signal. A PID that no longer exists cannot block later configuration and plugin-catalog refreshes even if Node does not emit a subsequent stream-close notification.
 
 ### Desktop runtime data directory
 
@@ -33,6 +42,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 ### Plan attachment directory moves
 
 - After `data/` is copied as a unit or the installation root changes, attachment reads locate the same filename inside the current plan directory and verify its size and SHA-256. An absolute path in `plan.json` that still points to the previous root no longer makes image, video, or file attachments return 404.
+
+### Plans page session cache
+
+- Plans & Memory now retains loaded plans, details, filters, expansion state, and reading position for the current browser session. Opening the screenshot overlay, switching browser tabs, or visiting another WebGUI page pauses reads and restores the cached page on return. The full page is requested again only after selecting Refresh or reloading the browser page.
+
+### Plan sorting and filter dialog
+
+- The dialog now uses a wider two-column layout, grouping sorting and statuses on the left and tag search on the right. It paints the frame first and mounts controls on the next frame. The tag list creates only visible rows and reuses filter candidates already loaded by the page, so opening, closing, and reopening the dialog adds no plan-data request.
 
 ## 0.2.3 - 2026-09-01
 
@@ -56,6 +73,7 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - Route-catalog capture, validation, mutation, and recovery now run through a dedicated startup lifecycle. Gateway, persona-presentation, and configuration revisions use canonical SHA-256 identities. After a catalog refresh, the WebGUI and AIUI mutation ledgers still replay the original `Idempotency-Key + If-Match` to query an uncertain receipt. They release records only for definitive 4xx rejections; timeout, throttling, client disconnect, and 5xx remain an unknown commit state.
 - RibiWebGUI plan-feedback, Route-settings, and Xiaomi Home clients now carry the same revision/idempotency contract. Role Knowledge separates preview from full detail and cancels stale requests when cards collapse, routes change, or the page unmounts.
+- Xiaomi Home configuration now appears only inside the current Route's **Message Adapters** page. Plugin contributions, Web Bundle registration, and documentation no longer retain a global Settings entry. An authorized LAN WebGUI may read Xiaomi Home health and configuration, while device and recording APIs remain loopback-only.
 - The Windows tray, Android SDK, and RabiLink AIUI no longer cache a fixed Manager endpoint. They rediscover and verify `/meta` after Host generation or endpoint changes, retaining the original key and evidence for offline mutations instead of treating reconnection as a successful write. The Android SDK preserves the legacy route-read JVM descriptors; legacy revisionless mutation overloads remain linkable but fail closed before network access, while the new catalog APIs and mutation overloads require a caller-owned operation ID and strong revision.
 - Xiaomi Home device actions atomically claim a complete intent digest in a local runtime receipt store before checking `expectedStateVersion` and issuing at most one Home Assistant service POST. Concurrent calls, process restarts, and lost responses only replay the receipt or perform read-only state verification; uncertain actions are never resent automatically. Bearer tokens are sent by default only to `localhost` or literal loopback/private IPs; hostnames require explicit trust, and credentials, URL paths, and redirects are rejected.
 - Manager-spawned Xiaomi Home event children verify the current `applicationGenerationId + managerInstanceId + managerBaseUrl` before reading stdin or delivering to a Route, so stale or identity-less children fail closed.

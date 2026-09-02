@@ -14,7 +14,7 @@ import {
   type PlanFeedbackDeliveryStatus,
   type PlanFeedbackRecord
 } from "../planFeedback.js";
-import { createPlan, listPlans } from "../roleKnowledge.js";
+import { createPlan, readPlansFromStorageInWorker } from "../roleKnowledge.js";
 import { storageRevisionToken } from "../shared/storageRevision.js";
 import {
   recoverPlanFeedbackCandidate,
@@ -35,7 +35,7 @@ function updateDeliveryForTest(
 }
 
 async function queryRecoveryForTest(candidate: PlanFeedbackRecoveryCandidate) {
-  const plan = listPlans(candidate.roleDir).find((item) => item.id === candidate.plan.id);
+  const plan = readPlansFromStorageInWorker(candidate.roleDir).find((item) => item.id === candidate.plan.id);
   return plan ? { plan, records: listPlanFeedback(candidate.roleDir, plan.id) } : null;
 }
 

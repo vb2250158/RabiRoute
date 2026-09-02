@@ -57,6 +57,17 @@ test("console is route-card-only while host settings live on the Settings page",
   assert.match(settingsSource, /class="section-title small-title">局域网访问 WebGUI<\/div>/);
 });
 
+test("Route cards present only the persisted enabled state", () => {
+  const labelStart = overviewSource.indexOf("function gatewayRuntimeLabel");
+  const colorStart = overviewSource.indexOf("function gatewayRuntimeColor");
+  const label = overviewSource.slice(labelStart, colorStart);
+  const color = overviewSource.slice(colorStart, overviewSource.indexOf("</script>"));
+  assert.match(label, /"已禁用"/);
+  assert.match(label, /"已启用"/);
+  assert.doesNotMatch(label, /runtime\.running|运行中|已停止|启用中|禁用中/);
+  assert.doesNotMatch(color, /runtime\.running/);
+});
+
 test("system selection settings render through the trusted Desktop renderer on Settings", () => {
   assert.match(settingsSource, /TrustedWebRendererHost/);
   assert.doesNotMatch(settingsSource, /selectionSpeechEnabled|selectionSpeechAdvanced|selectionSpeechModel/);

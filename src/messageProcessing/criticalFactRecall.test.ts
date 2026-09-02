@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createRecentMemory, roleKnowledgeSnapshot } from "../roleKnowledge.js";
+import {
+  createRecentMemory,
+  publishRoleKnowledgeCatalogSnapshot,
+  readRoleKnowledgeCatalogSnapshot,
+  roleKnowledgeSnapshot
+} from "../roleKnowledge.js";
 
 test("common public-test and launch-date questions require the recorded group fact", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "critical-fact-recall-"));
@@ -17,6 +22,7 @@ test("common public-test and launch-date questions require the recorded group fa
       "发布日期", "定档", "定档日期", "2030年10月15", "宣发", "宣发日期"
     ]
   });
+  publishRoleKnowledgeCatalogSnapshot(root, readRoleKnowledgeCatalogSnapshot(root));
   for (const query of [
     "什么时候公测？",
     "上线日期是什么？",

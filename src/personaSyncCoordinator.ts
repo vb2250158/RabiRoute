@@ -206,6 +206,7 @@ type PersonaPlanScopePlan = {
 
 type CompletedPersonaPlanScope = {
   key: string;
+  action: PersonaPlanScopeAction;
   bucket: "active" | "archive";
   storageId: string;
   expectedFiles: PersonaSyncFile[];
@@ -791,11 +792,17 @@ export class PersonaSyncCoordinator {
           throw new PersonaSyncStaleManifestError(
             error.roleId,
             error.relativePath,
-            `Persona sync manifest changed again after one complete transaction restart: ${error.roleId}/${error.relativePath}`,
+            `Persona sync manifest changed again after one complete transaction restart: ${error.message}`,
             error.manifestRevision
           );
         }
-        await this.waitForPeerManifestAdvance(peer, relay, roleId, error.manifestRevision);
+        await this.waitForPeerManifestAdvance(
+          peer,
+          relay,
+          roleId,
+          error.manifestRevision,
+          { roleId: error.roleId, path: error.relativePath }
+        );
       }
     }
     throw new Error("Persona sync transaction restart invariant was not satisfied.");
@@ -854,6 +861,7 @@ export class PersonaSyncCoordinator {
         }
         completedPlanScopes.push({
           key: plan.scope.key,
+          action: plan.action,
           bucket: source.bucket,
           storageId: source.storageId,
           expectedFiles: source.files
@@ -933,6 +941,7 @@ export class PersonaSyncCoordinator {
       }
       completedPlanScopes.push({
         key: plan.scope.key,
+        action: plan.action,
         bucket,
         storageId: source.storageId,
         expectedFiles: source.files
@@ -1043,6 +1052,8 @@ export class PersonaSyncCoordinator {
         const scope = verifiedScopes.get(expected.key);
         const local = scope ? describePlanScopeSide(scope, scope.local, "local postverify") : null;
         const remote = scope ? describePlanScopeSide(scope, scope.remote, "remote postverify") : null;
+        const localMatchesExpected = Boolean(local && sameFileSet(local.files, expected.expectedFiles));
+        const remoteMatchesExpected = Boolean(remote && sameFileSet(remote.files, expected.expectedFiles));
         if (!scope
           || !local
           || !remote
@@ -1056,7 +1067,7 @@ export class PersonaSyncCoordinator {
           throw new PersonaSyncStaleManifestError(
             representative?.roleId || roleId || "*",
             representative?.path || `${expected.bucket}-plan-package`,
-            `Persona sync ${expected.bucket} plan package post-verification observed a stale manifest: ${expected.key}`,
+            `Persona sync ${expected.bucket} plan package post-verification observed a stale manifest after ${expected.action}: ${expected.key}; local=${local?.bucket || "missing"}/${local?.storageId || "missing"}/${local?.files.length ?? 0}/${localMatchesExpected}; remote=${remote?.bucket || "missing"}/${remote?.storageId || "missing"}/${remote?.files.length ?? 0}/${remoteMatchesExpected}; expected=${expected.expectedFiles.length}`,
             verifiedRemote.manifestRevision
           );
         }
@@ -1211,7 +1222,8 @@ export class PersonaSyncCoordinator {
     peer: PersonaSyncPeer,
     relay: PersonaSyncRelayConfig,
     roleId: string | undefined,
-    previousRevision: number | undefined
+    previousRevision: number | undefined,
+    staleFile: Pick<PersonaSyncFile, "roleId" | "path">
   ): Promise<void> {
     if (previousRevision === undefined) return;
     const deadline = Date.now() + PERSONA_SYNC_PUBLICATION_ADVANCE_TIMEOUT_MS;
@@ -1223,6 +1235,11 @@ export class PersonaSyncCoordinator {
         const revision = refreshed.manifestRevision;
         if (revision === undefined) return;
         if (revision > previousRevision) {
+          if (!await this.peerManifestPathMatches(refreshed, relay, staleFile)) {
+            stableProbes = 0;
+            await new Promise<void>(resolve => setTimeout(resolve, PERSONA_SYNC_PUBLICATION_PROBE_INTERVAL_MS));
+            continue;
+          }
           if (revision === observedRevision) stableProbes += 1;
           else {
             observedRevision = revision;
@@ -1235,6 +1252,31 @@ export class PersonaSyncCoordinator {
       }
       await new Promise<void>(resolve => setTimeout(resolve, PERSONA_SYNC_PUBLICATION_PROBE_INTERVAL_MS));
     }
+  }
+
+  private async peerManifestPathMatches(
+    connection: { baseUrl: string; transport: "lan" | "relay"; peerId: string; manifest: PersonaSyncManifest; manifestRevision?: number },
+    relay: PersonaSyncRelayConfig,
+    expected: Pick<PersonaSyncFile, "roleId" | "path">
+  ): Promise<boolean> {
+    const file = connection.manifest.roles
+      .flatMap(role => role.files)
+      .find(item => item.roleId === expected.roleId && item.path === expected.path);
+    if (file) {
+      try {
+        await this.remoteFile(connection, relay, file);
+        return true;
+      } catch (error) {
+        if (error instanceof PersonaSyncStaleManifestError) return false;
+        throw error;
+      }
+    }
+    const remotePath = `/api/persona-sync/files/${encodeURIComponent(expected.roleId)}/${encodeURIComponent(expected.path)}`;
+    const response = connection.transport === "lan"
+      ? await fetchWithTimeout(`${connection.baseUrl}${remotePath}`, { headers: { "x-rabilink-token": relay.token } })
+      : await this.relayProxy(relay, connection.peerId, "GET", remotePath, undefined, "application/octet-stream");
+    await response.arrayBuffer();
+    return response.status === 404;
   }
 
   private async readRemoteArchivedPlanPackage(

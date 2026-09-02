@@ -12,6 +12,9 @@ import {
 
 test("plan sort levels use integers while labels and colors stay presentation-only", () => {
   assert.equal(PlanStatusSortLevel.Approval, 0);
+  assert.equal(PlanStatusSortLevel.Discussion, 1);
+  assert.equal(PlanStatusSortLevel.Qa, 2);
+  assert.equal(PlanStatusSortLevel.Running, 3);
   assert.equal(PlanImportanceLevel.Highest, 0);
   assert.equal(PlanUrgencyLevel.Critical, 0);
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { DesktopPetBinding, DesktopTheme } from "@shared/desktopSettingsContract";
+import type { DesktopTheme } from "@shared/desktopSettingsContract";
 import {
   cloneBuiltinInterfaceTheme,
   interfaceThemeContrastFailures,
@@ -14,7 +14,6 @@ import {
 import { resolveSelectionSpeechModel, type SelectionSpeechSettings } from "@shared/selectionSpeechContract";
 import type { SpeechModel } from "@shared/speechControlContract";
 import { desktopSettingsClient } from "../../desktopSettingsClient";
-import { desktopPetClient, type DesktopPetPackSummary } from "../../desktopPetClient";
 import { publishInterfaceTheme } from "../../interfaceTheme";
 import { registerPageSaveAction } from "../../pageSaveAction";
 import { pluginCatalogStore } from "../../pluginCatalogStore";
@@ -50,22 +49,12 @@ const selectionSpeechModel = ref("");
 const selectionSpeechModels = ref<SpeechModel[]>([]);
 const selectionSpeechLoaded = ref(false);
 const selectionSpeechError = ref("");
-const petPersonaId = "YeYu";
-const petBinding = ref<DesktopPetBinding | null>(null);
-const petPacks = ref<DesktopPetPackSummary[]>([]);
-const petLoaded = ref(false);
-const petDirty = ref(false);
-const petError = ref("");
-const petImportFile = ref<File | null>(null);
-const petImportPackId = ref("");
-const petImportName = ref("");
-const petImporting = ref(false);
 const loaded = ref(false);
 const hydrating = ref(true);
 const saving = ref(false);
 const desktopDirty = ref(false);
 const selectionSpeechDirty = ref(false);
-const dirty = computed(() => desktopDirty.value || selectionSpeechDirty.value || petDirty.value);
+const dirty = computed(() => desktopDirty.value || selectionSpeechDirty.value);
 const error = ref("");
 const themeOptions = computed(() => pluginCatalogStore.themes.value.options);
 const selectedCustomTheme = computed(() => customThemes.value.find(item => item.id === desktopTheme.value));
@@ -107,7 +96,7 @@ const customThemePreviewButtonStyle = computed(() => {
   if (!accent) return {};
   return { background: accent, color: readableInterfaceThemeForeground(accent) };
 });
-const ready = computed(() => loaded.value && (!selectionSpeechDirty.value || selectionSpeechLoaded.value) && (!petDirty.value || petLoaded.value));
+const ready = computed(() => loaded.value && (!selectionSpeechDirty.value || selectionSpeechLoaded.value));
 let unregisterSaveAction: (() => void) | undefined;
 
 async function loadDesktopSettings(): Promise<void> {
@@ -150,61 +139,13 @@ async function loadSelectionSpeechSettings(): Promise<void> {
   }
 }
 
-async function loadDesktopPetSettings(): Promise<void> {
-  try {
-    const [binding, catalog] = await Promise.all([
-      desktopPetClient.binding(petPersonaId),
-      desktopPetClient.packs(petPersonaId)
-    ]);
-    petBinding.value = binding;
-    petPacks.value = catalog.packs;
-    petLoaded.value = true;
-    petError.value = catalog.diagnostics[0]?.message || "";
-  } catch (cause) {
-    petError.value = cause instanceof Error ? cause.message : String(cause);
-  }
-}
-
-function selectedImportFile(): File | null {
-  const value = petImportFile.value as File | File[] | null;
-  return Array.isArray(value) ? value[0] || null : value;
-}
-
-async function importDesktopPetPack(): Promise<void> {
-  const file = selectedImportFile();
-  const packId = petImportPackId.value.trim();
-  if (!file || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(packId)) {
-    petError.value = "请选择 GIF、PNG 或 ZIP，并填写只含字母、数字、点、横线、下划线的动作包 ID。";
-    return;
-  }
-  petImporting.value = true;
-  try {
-    const pack = await desktopPetClient.importFile(petPersonaId, file, {
-      packId,
-      state: "idle",
-      name: petImportName.value.trim() || packId
-    });
-    petPacks.value = [...petPacks.value.filter(item => item.id !== pack.id), pack];
-    if (petBinding.value) petBinding.value.packId = pack.id;
-    petImportFile.value = null;
-    petImportPackId.value = "";
-    petImportName.value = "";
-    petError.value = "";
-  } catch (cause) {
-    petError.value = cause instanceof Error ? cause.message : String(cause);
-  } finally {
-    petImporting.value = false;
-  }
-}
-
 async function load(): Promise<void> {
   hydrating.value = true;
   try {
-    await Promise.all([loadDesktopSettings(), loadSelectionSpeechSettings(), loadDesktopPetSettings()]);
+    await Promise.all([loadDesktopSettings(), loadSelectionSpeechSettings()]);
     await nextTick();
     desktopDirty.value = false;
     selectionSpeechDirty.value = false;
-    petDirty.value = false;
   } finally {
     hydrating.value = false;
   }
@@ -373,23 +314,11 @@ async function saveSelectionSpeechSettings(): Promise<void> {
   }
 }
 
-async function saveDesktopPetSettings(): Promise<void> {
-  if (!petBinding.value) return;
-  try {
-    petBinding.value = await desktopPetClient.update(petPersonaId, petBinding.value);
-    petError.value = "";
-  } catch (cause) {
-    petError.value = cause instanceof Error ? cause.message : String(cause);
-    throw cause;
-  }
-}
-
 async function save(): Promise<void> {
   if (!ready.value || saving.value) throw new Error("桌面设置尚未加载完成。");
   const tasks = [
     ...(desktopDirty.value ? [{ dirty: desktopDirty, run: saveDesktopSettings }] : []),
-    ...(selectionSpeechDirty.value ? [{ dirty: selectionSpeechDirty, run: saveSelectionSpeechSettings }] : []),
-    ...(petDirty.value ? [{ dirty: petDirty, run: saveDesktopPetSettings }] : [])
+    ...(selectionSpeechDirty.value ? [{ dirty: selectionSpeechDirty, run: saveSelectionSpeechSettings }] : [])
   ];
   if (!tasks.length) return;
 
@@ -475,10 +404,6 @@ watch([
 ], () => {
   if (!hydrating.value && selectionSpeechLoaded.value) selectionSpeechDirty.value = true;
 });
-
-watch(petBinding, () => {
-  if (!hydrating.value && petLoaded.value) petDirty.value = true;
-}, { deep: true });
 
 watch(themeOptions, options => {
   if (!loaded.value || options.some(option => option.themeId === desktopTheme.value)) return;
@@ -611,53 +536,6 @@ onBeforeUnmount(() => {
     <v-divider class="my-4" />
     <div class="section-title-row compact-row mb-2">
       <div>
-        <div class="section-title small-title">夜雨桌宠</div>
-        <div class="section-note">素材只从 YeYu 人格目录加载；结束事件只触发同一人格的动作与气泡。</div>
-      </div>
-      <v-switch v-if="petBinding" v-model="petBinding.enabled" label="启用桌宠" color="success" density="compact" inset hide-details :disabled="!petLoaded" />
-    </div>
-    <v-alert v-if="petError" type="warning" variant="tonal" density="compact" class="mb-3">{{ petError }}</v-alert>
-    <template v-if="petBinding">
-      <div class="desktop-pet-import-grid mb-3">
-        <v-file-input v-model="petImportFile" label="导入 GIF、PNG 或 ZIP" accept=".gif,.png,.zip,image/gif,image/png,application/zip" density="compact" hide-details />
-        <v-text-field v-model="petImportPackId" label="动作包 ID" placeholder="yeyu-library-default" density="compact" hide-details />
-        <v-text-field v-model="petImportName" label="显示名称" placeholder="夜雨 · 图书馆日常" density="compact" hide-details />
-        <v-btn color="secondary" variant="outlined" :loading="petImporting" :disabled="!petImportFile || !petImportPackId.trim()" @click="importDesktopPetPack">导入并选用</v-btn>
-      </div>
-      <v-select
-        v-model="petBinding.packId"
-        label="动作包"
-        :items="petPacks"
-        item-title="name"
-        item-value="id"
-        clearable
-        no-data-text="动作素材还没有放入 YeYu/desktop-pet/packs"
-        :disabled="!petLoaded"
-      />
-      <div class="desktop-pet-slider-grid">
-        <div>
-          <div class="custom-theme-field-label">大小：{{ Math.round(petBinding.scale * 100) }}%</div>
-          <v-slider v-model="petBinding.scale" :min="0.1" :max="2" :step="0.05" color="secondary" hide-details />
-        </div>
-        <div>
-          <div class="custom-theme-field-label">透明度：{{ Math.round(petBinding.opacity * 100) }}%</div>
-          <v-slider v-model="petBinding.opacity" :min="0.2" :max="1" :step="0.05" color="secondary" hide-details />
-        </div>
-      </div>
-      <div class="desktop-pet-switch-grid">
-        <v-switch v-model="petBinding.alwaysOnTop" label="总在最前" color="secondary" density="compact" hide-details />
-        <v-switch v-model="petBinding.clickThrough" label="鼠标点透" color="secondary" density="compact" hide-details />
-        <v-switch v-model="petBinding.locked" label="锁定位置" color="secondary" density="compact" hide-details />
-        <v-switch v-model="petBinding.hideOnFullscreen" label="全屏时隐藏" color="secondary" density="compact" hide-details />
-        <v-switch v-model="petBinding.bubbleEnabled" label="显示结果气泡" color="secondary" density="compact" hide-details />
-      </div>
-      <v-btn-toggle v-model="petBinding.fpsCap" color="secondary" density="compact" mandatory divided class="mt-3">
-        <v-btn v-for="fps in [6, 12, 15, 24]" :key="fps" :value="fps">{{ fps }} FPS</v-btn>
-      </v-btn-toggle>
-    </template>
-    <v-divider class="my-4" />
-    <div class="section-title-row compact-row mb-2">
-      <div>
         <div class="section-title small-title">系统级截图</div>
         <div class="section-note">框选截图后可复制到剪贴板、贴到屏幕或发送给已激活人格；在截图窗口按 F2 发送，按 &lt; / &gt; 切换上一张和下一张。</div>
       </div>
@@ -761,24 +639,10 @@ onBeforeUnmount(() => {
 }
 
 .custom-theme-heading-grid,
-.custom-theme-style-grid,
-.desktop-pet-slider-grid {
+.custom-theme-style-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-}
-
-.desktop-pet-switch-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px 14px;
-}
-
-.desktop-pet-import-grid {
-  display: grid;
-  grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr) minmax(180px, 1fr) auto;
-  gap: 10px;
-  align-items: center;
 }
 
 .custom-theme-color-grid {
@@ -863,9 +727,6 @@ onBeforeUnmount(() => {
 @media (max-width: 760px) {
   .custom-theme-heading-grid,
   .custom-theme-style-grid,
-  .desktop-pet-slider-grid,
-  .desktop-pet-switch-grid,
-  .desktop-pet-import-grid,
   .custom-theme-color-grid {
     grid-template-columns: 1fr;
   }

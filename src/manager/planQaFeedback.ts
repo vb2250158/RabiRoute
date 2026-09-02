@@ -218,6 +218,7 @@ function reopenForInvestigation(
       status: "未开始" as const
     }),
     status: "进行中",
+    workPhase: "analysis",
     detail: feedbackDetail(feedback),
     waitingFor: missingEvidence.length ? "QA 补充：" + missingEvidence.join("、") : undefined,
     isBlocked: false,
@@ -237,10 +238,10 @@ function reopenForInvestigation(
     nextAction: missingEvidence.length
       ? "取得" + missingEvidence.join("、") + "后继续深化调查并安排复测"
       : "原业务任务根据新证据深化根因分析、修正并重新安排 QA",
-    waitingFor: missingEvidence.length ? "QA 补充：" + missingEvidence.join("、") : undefined,
+    waitingFor: missingEvidence.length ? "QA 补充：" + missingEvidence.join("、") : null,
     isBlocked: false,
-    blockedBy: undefined,
-    completedAt: undefined,
+    blockedBy: null,
+    completedAt: null,
     steps
   };
 }
@@ -282,20 +283,20 @@ function completeAcceptance(
       currentStepId: steps[nextIndex].id,
       currentStep: steps[nextIndex].title,
       nextAction: steps[nextIndex].title,
-      waitingFor: undefined,
+      waitingFor: null,
       isBlocked: false,
-      blockedBy: undefined,
+      blockedBy: null,
       steps
     };
   }
   return {
     status: "已完成",
-    currentStepId: undefined,
+    currentStepId: null,
     currentStep: "QA 明确通过，验收完成",
-    nextAction: undefined,
-    waitingFor: undefined,
+    nextAction: null,
+    waitingFor: null,
     isBlocked: false,
-    blockedBy: undefined,
+    blockedBy: null,
     steps
   };
 }

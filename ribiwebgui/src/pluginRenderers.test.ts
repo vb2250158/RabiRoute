@@ -58,6 +58,8 @@ test("custom trusted renderers resolve to real components and disappear after di
     rendererId: settingsId,
     placementId: "trusted.settings.placement",
     allowedSlots: ["trusted"],
+    contributionKind: "settings-section",
+    contributionSurface: "shared.settings",
     schemaId: "trusted.settings.v1",
     readCommandId: "trusted.settings.read",
     writeCommandId: "trusted.settings.write",
@@ -105,6 +107,34 @@ test("trusted renderer registration rejects duplicate renderer IDs", () => {
       loader: async () => defineComponent({ template: "<div />" })
     }), /already registered/);
   } finally { dispose(); }
+});
+test("message-endpoint settings resolve only through their Route adapter surface", () => {
+  const rendererId = "trusted.message-endpoint-settings.v1";
+  const dispose = registerTrustedWebSettingsRenderer({
+    instanceId: "manager:trusted",
+    pluginId: "package:trusted",
+    rendererId,
+    placementId: "route.adapters.message-endpoint-settings",
+    allowedSlots: ["xiaomiHome"],
+    contributionKind: "message-endpoint-settings",
+    contributionSurface: "route.adapters",
+    schemaId: "trusted.settings.v1",
+    readCommandId: "trusted.settings.read",
+    writeCommandId: "trusted.settings.write",
+    loader: async () => defineComponent({ template: "<div>message endpoint</div>" })
+  });
+  try {
+    const catalog = resolveWebSettingsCatalog([settings(rendererId, {
+      kind: "message-endpoint-settings",
+      surface: "route.adapters",
+      slot: "xiaomiHome"
+    })]);
+    assert.equal(webRenderersAt(catalog, "route.adapters.message-endpoint-settings").length, 1);
+    assert.equal(webRenderersAt(catalog, "global.settings.sections").length, 0);
+    assert.deepEqual(resolveWebSettingsCatalog([settings(rendererId)]), []);
+  } finally {
+    dispose();
+  }
 });
 test("system selection settings are owned by the Desktop settings renderer", () => {
   const settingsPage = readFileSync(new URL("./pages/SettingsPage.vue", import.meta.url), "utf8");

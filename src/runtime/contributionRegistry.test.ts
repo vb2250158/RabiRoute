@@ -68,6 +68,20 @@ const systemTheme = {
   order: 5
 };
 
+const xiaomiHomeMessageEndpointSettings = {
+  kind: "message-endpoint-settings" as const,
+  id: "xiaomi-home-message-endpoint",
+  label: { key: "adapter.xiaomiHome.settings", fallback: "Xiaomi Home" },
+  rendererId: "builtin.xiaomi-home-message-endpoint.v1",
+  schemaId: "xiaomi-home.settings.v1",
+  readCommandId: "manager.xiaomi-home-settings.read",
+  writeCommandId: "manager.xiaomi-home-settings.write",
+  hosts: ["web"] as const,
+  surface: "route.adapters",
+  slot: "xiaomiHome",
+  order: 10
+};
+
 const sharedContributions = [
   diagnosticsPage,
   diagnosticsNavigation,
@@ -114,6 +128,17 @@ test("Contribution Registry keeps plugin implementation and instance identities 
   const records = registry.catalog().contributions;
   assert.equal(records.every(item => item.pluginId === "package:diagnostics"), true);
   assert.equal(records.every(item => item.instanceId === "manager:diagnostics-primary"), true);
+});
+
+test("Contribution Registry preserves message endpoint settings on the Route adapter surface", () => {
+  const registry = new ContributionRegistry();
+  registry.register("builtin:xiaomi-home", xiaomiHomeMessageEndpointSettings);
+
+  const contribution = registry.catalog("web").contributions[0];
+  assert.equal(contribution.kind, "message-endpoint-settings");
+  assert.equal(contribution.surface, "route.adapters");
+  assert.equal(contribution.slot, "xiaomiHome");
+  assert.equal(contribution.rendererId, "builtin.xiaomi-home-message-endpoint.v1");
 });
 
 test("Contribution Registry rejects duplicate contribution and contract ids atomically", () => {

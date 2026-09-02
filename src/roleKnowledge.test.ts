@@ -30,6 +30,7 @@ import {
   planAcceptsGuidance,
   planApprovalGate,
   planIsBlocked,
+  planWorkPhase,
   presentRoleMemory,
   presentRoleMemories,
   publishRoleKnowledgeCatalogSnapshot,
@@ -2319,7 +2320,7 @@ test("plans require ordered steps and one explicit current step", () => {
     blockedBy: "设计稿缺失",
     steps: [
       { id: "inspect", title: "检查现状", status: "已完成" },
-      { id: "implement", title: "实现页面", status: "进行中", blockedBy: "缺少最终设计稿" },
+      { id: "implement", title: "实现页面", status: "进行中", workPhase: "execution", blockedBy: "缺少最终设计稿" },
       { id: "verify", title: "验证结果", status: "未开始" }
     ],
     keywords: ["步骤"]
@@ -2329,6 +2330,8 @@ test("plans require ordered steps and one explicit current step", () => {
   assert.equal(plan.currentStepId, "implement");
   assert.equal(plan.blockedBy, "设计稿缺失");
   assert.equal(plan.steps[1]?.status, "进行中");
+  assert.equal(plan.steps[1]?.workPhase, "execution");
+  assert.equal(planWorkPhase(plan), "execution");
   assert.equal(plan.steps[1]?.blockedBy, "缺少最终设计稿");
 
   assert.throws(() => createPlan(roleDir, {
@@ -2364,6 +2367,7 @@ test("paused plans preserve their resume step without remaining approval-active"
         id: "implement",
         title: "继续实现",
         status: "进行中",
+        discussionState: "pending",
         blockedBy: "用户要求暂时跳过",
         approvalRequest: {
           request: "批准继续实现。",
@@ -2382,9 +2386,11 @@ test("paused plans preserve their resume step without remaining approval-active"
 
   assert.equal(plan.status, "暂停");
   assert.equal(plan.currentStepId, "implement");
+  assert.equal(plan.steps[1]?.discussionState, "pending");
   assert.equal(planRequiresApproval(plan), false);
   const resumed = updatePlan(roleDir, plan.id, {
     status: "进行中",
+    steps: plan.steps.map(({ discussionState: _discussionState, ...step }) => step),
     isBlocked: true,
     blockedBy: "用户尚未批准继续实现当前文件改动"
   });
@@ -2407,6 +2413,27 @@ test("paused plans require exactly one preserved resume step", () => {
     ],
     keywords: ["暂停"]
   }), /paused plan must preserve currentStepId/i);
+
+  assert.throws(() => createPlan(roleDir, {
+    title: "进行中计划不能标记待讨论",
+    focus: "进行中计划不能标记待讨论",
+    status: "进行中",
+    currentStepId: "implement",
+    steps: [{ id: "implement", title: "继续实现", status: "进行中", discussionState: "pending" }],
+    keywords: ["讨论"]
+  }), /discussionState=pending/);
+
+  assert.throws(() => createPlan(roleDir, {
+    title: "待讨论标记必须位于当前步骤",
+    focus: "待讨论标记必须位于当前步骤",
+    status: "暂停",
+    currentStepId: "hold",
+    steps: [
+      { id: "inspect", title: "检查现状", status: "已完成", discussionState: "pending" },
+      { id: "hold", title: "保留恢复位置", status: "进行中" }
+    ],
+    keywords: ["讨论"]
+  }), /discussionState=pending/);
 });
 
 test("approval steps remain writable while Manager can distinguish incomplete and concrete contracts", () => {

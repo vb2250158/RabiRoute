@@ -156,6 +156,11 @@ export function spawnConfigWatchSnapshotAttempt(
     settled = true;
     rejectResult(error);
   };
+  // `exit` is the authoritative signal that the OS process no longer exists.
+  // Keep `close` below for the stronger "exited before responding" diagnosis,
+  // but do not leave the broker blocked when an already-reaped child never
+  // produces a later stream-close notification.
+  worker.once("exit", () => resolveClosed());
   worker.once("close", (code, signal) => {
     resolveClosed();
     if (!settled) fail(new Error(

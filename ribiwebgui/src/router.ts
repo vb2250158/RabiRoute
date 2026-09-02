@@ -43,7 +43,11 @@ function registeredPageRoutes(registration: TrustedWebPageRegistration): RouteRe
     path: entry.path,
     name: `trusted-web-page:${registration.routeId}:${index}`,
     component,
-    meta: { title: entry.title, pluginRouteId: registration.routeId }
+    meta: {
+      title: entry.title,
+      pluginRouteId: registration.routeId,
+      keepAlive: registration.routeId === "route.knowledge"
+    }
   }));
 }
 

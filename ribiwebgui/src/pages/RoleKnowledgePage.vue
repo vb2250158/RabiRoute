@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, markRaw, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES,
@@ -95,6 +95,7 @@ const planListDraftHiddenStatuses = ref<string[]>([]);
 const planListDraftSelectedTags = ref<string[]>([]);
 const planListTagQuery = ref("");
 const planListDialogOpen = ref(false);
+const planListDialogContentCached = ref(false);
 const planListResultTotal = ref(0);
 const planListStatusOptions = ref<Array<{
   status: string;
@@ -148,7 +149,9 @@ const planPageCounts = ref<RolePlanPageCounts>({
   qa: 0,
   active: 0,
   stages: {
+    analyzing: 0,
     executing: 0,
+    discussion: 0,
     qa: 0,
     waitingPackage: 0,
     approval: 0,
@@ -197,6 +200,8 @@ let knowledgeFilterTimer = 0;
 let memoryClockTimer = 0;
 let planPageBackgroundRequest = 0;
 let planAgentStatusGeneration = 0;
+let cachedKnowledgeScrollY = 0;
+let planListDialogContentRequest: Promise<void> | null = null;
 
 const routeSummary = computed(() => store.routeSummaryForKey(String(route.params.id || "")) || store.selectedRouteSummary);
 const roleId = computed(() => String(store.selectedGateway?.agentRoleId || routeSummary.value?.agentRoleId || "").trim());
@@ -500,7 +505,9 @@ function resetPlanPageCounts(): void {
     qa: 0,
     active: 0,
     stages: {
+      analyzing: 0,
       executing: 0,
+      discussion: 0,
       qa: 0,
       waitingPackage: 0,
       approval: 0,
@@ -1608,12 +1615,24 @@ const visiblePlanListTagOptions = computed(() => {
   return planListTagOptions.value.filter((option) => option.tag.toLocaleLowerCase().includes(normalizedPlanListTagQuery.value));
 });
 
+function ensurePlanListDialogContentCached(): void {
+  if (planListDialogContentCached.value || planListDialogContentRequest) return;
+  planListDialogContentRequest = (async () => {
+    await nextTick();
+    await yieldToKnowledgePaint();
+    if (planDirectoryMounted) planListDialogContentCached.value = true;
+  })().finally(() => {
+    planListDialogContentRequest = null;
+  });
+}
+
 function openPlanListDialog(): void {
   planListDraftSortMode.value = planListSortMode.value;
   planListDraftHiddenStatuses.value = [...planListHiddenStatuses.value];
   planListDraftSelectedTags.value = [...planListSelectedTags.value];
   planListTagQuery.value = "";
   planListDialogOpen.value = true;
+  ensurePlanListDialogContentCached();
 }
 
 function applyPlanListDialog(): void {
@@ -2147,15 +2166,9 @@ function scheduleMemoryClockDeadline(): void {
 
 function handleKnowledgeVisibilityChange(): void {
   if (!knowledgePageShouldWork(document.visibilityState, planDirectoryMounted)) {
-    requestVersion += 1;
-    loading.value = false;
-    loadingMorePlans.value = false;
-    memoryLoading.value = false;
-    resetPlanAgentStatusState();
     planPageObserver?.disconnect();
     memoryPageObserver?.disconnect();
     planDetailObserver?.disconnect();
-    disconnectManagerEvents();
     if (memoryClockTimer) window.clearTimeout(memoryClockTimer);
     memoryClockTimer = 0;
     return;
@@ -2163,17 +2176,27 @@ function handleKnowledgeVisibilityChange(): void {
   connectManagerEvents();
   memoryClock.value = Date.now();
   scheduleMemoryClockDeadline();
-  void refreshKnowledge();
+  schedulePlanCardObserverRefresh();
+  schedulePlanDetailObserverRefresh();
+  scheduleProgressiveSentinelRefresh();
+  window.setTimeout(() => {
+    if (showsPlanList.value && planNextCursor.value && !planPageBackgroundRequest) {
+      loadAllRemainingPlans(roleId.value, requestVersion);
+    }
+  }, 0);
 }
 
-onMounted(() => {
+function activateKnowledgePage(): void {
+  if (planDirectoryMounted) return;
   planDirectoryMounted = true;
-  lastKnowledgeScrollY = Math.max(0, window.scrollY);
+  lastKnowledgeScrollY = cachedKnowledgeScrollY;
   document.addEventListener("visibilitychange", handleKnowledgeVisibilityChange);
   window.addEventListener("scroll", handleKnowledgeWindowScroll, { passive: true });
   window.addEventListener("resize", schedulePlanCardObserverRefresh, { passive: true });
-  if (typeof ResizeObserver !== "undefined" && knowledgeToolbar.value) {
+  if (typeof ResizeObserver !== "undefined" && !toolbarResizeObserver) {
     toolbarResizeObserver = new ResizeObserver(schedulePlanCardObserverRefresh);
+  }
+  if (toolbarResizeObserver && knowledgeToolbar.value) {
     toolbarResizeObserver.observe(knowledgeToolbar.value);
   }
   schedulePlanCardObserverRefresh();
@@ -2181,15 +2204,23 @@ onMounted(() => {
   scheduleProgressiveSentinelRefresh();
   connectManagerEvents();
   scheduleMemoryClockDeadline();
-  void refreshKnowledge();
-});
+  void nextTick(() => {
+    window.scrollTo({ top: cachedKnowledgeScrollY, behavior: "auto" });
+  });
+  window.setTimeout(() => {
+    if (showsPlanList.value && planNextCursor.value && !planPageBackgroundRequest) {
+      loadAllRemainingPlans(roleId.value, requestVersion);
+    }
+  }, 0);
+}
 
-onBeforeUnmount(() => {
-  requestVersion += 1;
-  planPageBackgroundRequest = 0;
+function deactivateKnowledgePage(): void {
+  if (!planDirectoryMounted) return;
+  cachedKnowledgeScrollY = Math.max(0, window.scrollY);
   planDirectoryMounted = false;
   document.removeEventListener("visibilitychange", handleKnowledgeVisibilityChange);
   window.removeEventListener("scroll", handleKnowledgeWindowScroll);
+  window.removeEventListener("resize", schedulePlanCardObserverRefresh);
   releaseDirectoryJumpTarget(false, false);
   planCardObserver?.disconnect();
   toolbarResizeObserver?.disconnect();
@@ -2197,13 +2228,30 @@ onBeforeUnmount(() => {
   memoryPageObserver?.disconnect();
   planDetailObserver?.disconnect();
   enablePlanScrollFallback(false);
-  window.removeEventListener("resize", schedulePlanCardObserverRefresh);
   if (planDirectorySyncFrame) window.cancelAnimationFrame(planDirectorySyncFrame);
+  planDirectorySyncFrame = 0;
   if (planObserverRefreshFrame) window.cancelAnimationFrame(planObserverRefreshFrame);
-  if (knowledgeFilterTimer) window.clearTimeout(knowledgeFilterTimer);
+  planObserverRefreshFrame = 0;
   if (memoryClockTimer) window.clearTimeout(memoryClockTimer);
-  resetPlanAgentStatusState();
+  memoryClockTimer = 0;
   disconnectManagerEvents();
+}
+
+onMounted(() => {
+  cachedKnowledgeScrollY = Math.max(0, window.scrollY);
+  activateKnowledgePage();
+  void refreshKnowledge();
+});
+
+onActivated(activateKnowledgePage);
+onDeactivated(deactivateKnowledgePage);
+
+onBeforeUnmount(() => {
+  requestVersion += 1;
+  planPageBackgroundRequest = 0;
+  deactivateKnowledgePage();
+  if (knowledgeFilterTimer) window.clearTimeout(knowledgeFilterTimer);
+  resetPlanAgentStatusState();
   closePlanMarkdownPreview();
   closeMemoryDetail();
   resetPlanMarkdownTeasers();
@@ -2368,7 +2416,8 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           </v-btn>
           <v-dialog
             v-model="planListDialogOpen"
-            max-width="820"
+            width="calc(100vw - 48px)"
+            max-width="1180"
             scrollable
             scrim="rgba(9, 22, 36, 0.56)"
             aria-labelledby="plan-list-dialog-title"
@@ -2416,88 +2465,97 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     >{{ t("清除筛选") }}</v-btn>
                   </div>
                 </div>
-                <fieldset class="knowledge-plan-list-panel knowledge-plan-list-sort-panel">
-                  <legend>{{ t("排序方式") }}</legend>
-                  <p>{{ t("选择整个计划列表的排列方式") }}</p>
-                  <div class="knowledge-plan-list-sort-options">
-                    <button
-                      type="button"
-                      :class="{ selected: planListDraftSortMode === 'status' }"
-                      :aria-pressed="planListDraftSortMode === 'status'"
-                      @click="planListDraftSortMode = 'status'"
-                    >
-                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-sort-variant</v-icon></span>
-                      <span><b>{{ t("状态排序") }}</b><small>{{ t("相同工作阶段集中显示") }}</small></span>
-                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "status" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                    </button>
-                    <button
-                      type="button"
-                      :class="{ selected: planListDraftSortMode === 'updated' }"
-                      :aria-pressed="planListDraftSortMode === 'updated'"
-                      @click="planListDraftSortMode = 'updated'"
-                    >
-                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-clock-outline</v-icon></span>
-                      <span><b>{{ t("时间排序") }}</b><small>{{ t("最近更新的计划优先") }}</small></span>
-                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "updated" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                    </button>
-                    <button
-                      type="button"
-                      :class="{ selected: planListDraftSortMode === 'importance' }"
-                      :aria-pressed="planListDraftSortMode === 'importance'"
-                      @click="planListDraftSortMode = 'importance'"
-                    >
-                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-star-outline</v-icon></span>
-                      <span><b>{{ t("重要程度") }}</b><small>{{ t("重要程度高的计划优先") }}</small></span>
-                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "importance" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                    </button>
-                    <button
-                      type="button"
-                      :class="{ selected: planListDraftSortMode === 'urgency' }"
-                      :aria-pressed="planListDraftSortMode === 'urgency'"
-                      @click="planListDraftSortMode = 'urgency'"
-                    >
-                      <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-calendar-clock-outline</v-icon></span>
-                      <span><b>{{ t("紧急程度") }}</b><small>{{ t("截止时间近的计划优先") }}</small></span>
-                      <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "urgency" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                    </button>
-                  </div>
-                </fieldset>
-                <div class="knowledge-plan-list-dialog-grid">
-                  <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel">
-                    <legend>{{ t("筛选状态") }}</legend>
-                    <div class="knowledge-plan-list-filter-head">
-                      <p>{{ t("可多选，同组匹配任一状态") }}</p>
-                      <v-btn
-                        class="knowledge-plan-list-show-all"
-                        size="small"
-                        variant="text"
-                        :disabled="!planListDraftHiddenStatuses.length"
-                        @click="planListDraftHiddenStatuses = []"
-                      >
-                        {{ t("显示全部") }}
-                      </v-btn>
-                    </div>
-                    <div class="knowledge-plan-list-filter-options">
-                      <label
-                        v-for="option in planListStatusOptions"
-                        :key="option.status"
-                        :class="{
-                          disabled: planListStatusIsOnlyVisible(option.status),
-                          selected: !planListDraftHiddenStatuses.includes(option.status)
-                        }"
-                      >
-                        <input
-                          type="checkbox"
-                          :checked="!planListDraftHiddenStatuses.includes(option.status)"
-                          :disabled="planListStatusIsOnlyVisible(option.status)"
-                          @change="togglePlanListStatus(option.status)"
+                <div v-if="!planListDialogContentCached" class="knowledge-plan-list-dialog-loading" aria-live="polite">
+                  <v-progress-circular indeterminate color="primary" size="32" width="3" />
+                  <span>
+                    <b>{{ t("正在准备筛选项…") }}</b>
+                    <small>{{ t("弹窗已经打开，状态和标签将在下一帧显示。") }}</small>
+                  </span>
+                </div>
+                <div v-else class="knowledge-plan-list-control-layout">
+                  <div class="knowledge-plan-list-control-column">
+                    <fieldset class="knowledge-plan-list-panel knowledge-plan-list-sort-panel">
+                      <legend>{{ t("排序方式") }}</legend>
+                      <p>{{ t("选择整个计划列表的排列方式") }}</p>
+                      <div class="knowledge-plan-list-sort-options">
+                        <button
+                          type="button"
+                          :class="{ selected: planListDraftSortMode === 'status' }"
+                          :aria-pressed="planListDraftSortMode === 'status'"
+                          @click="planListDraftSortMode = 'status'"
                         >
-                        <span class="knowledge-plan-list-filter-swatch" :style="{ backgroundColor: option.palette.accent }" />
-                        <span>{{ t(option.status) }}</span>
-                        <b>{{ option.count }}</b>
-                      </label>
-                    </div>
-                  </fieldset>
+                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-sort-variant</v-icon></span>
+                          <span><b>{{ t("状态排序") }}</b><small>{{ t("相同工作阶段集中显示") }}</small></span>
+                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "status" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                        </button>
+                        <button
+                          type="button"
+                          :class="{ selected: planListDraftSortMode === 'updated' }"
+                          :aria-pressed="planListDraftSortMode === 'updated'"
+                          @click="planListDraftSortMode = 'updated'"
+                        >
+                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-clock-outline</v-icon></span>
+                          <span><b>{{ t("时间排序") }}</b><small>{{ t("最近更新的计划优先") }}</small></span>
+                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "updated" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                        </button>
+                        <button
+                          type="button"
+                          :class="{ selected: planListDraftSortMode === 'importance' }"
+                          :aria-pressed="planListDraftSortMode === 'importance'"
+                          @click="planListDraftSortMode = 'importance'"
+                        >
+                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-star-outline</v-icon></span>
+                          <span><b>{{ t("重要程度") }}</b><small>{{ t("重要程度高的计划优先") }}</small></span>
+                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "importance" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                        </button>
+                        <button
+                          type="button"
+                          :class="{ selected: planListDraftSortMode === 'urgency' }"
+                          :aria-pressed="planListDraftSortMode === 'urgency'"
+                          @click="planListDraftSortMode = 'urgency'"
+                        >
+                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-calendar-clock-outline</v-icon></span>
+                          <span><b>{{ t("紧急程度") }}</b><small>{{ t("截止时间近的计划优先") }}</small></span>
+                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "urgency" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
+                        </button>
+                      </div>
+                    </fieldset>
+                    <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel">
+                      <legend>{{ t("筛选状态") }}</legend>
+                      <div class="knowledge-plan-list-filter-head">
+                        <p>{{ t("可多选，同组匹配任一状态") }}</p>
+                        <v-btn
+                          class="knowledge-plan-list-show-all"
+                          size="small"
+                          variant="text"
+                          :disabled="!planListDraftHiddenStatuses.length"
+                          @click="planListDraftHiddenStatuses = []"
+                        >
+                          {{ t("显示全部") }}
+                        </v-btn>
+                      </div>
+                      <div class="knowledge-plan-list-filter-options knowledge-plan-list-status-options">
+                        <label
+                          v-for="option in planListStatusOptions"
+                          :key="option.status"
+                          :class="{
+                            disabled: planListStatusIsOnlyVisible(option.status),
+                            selected: !planListDraftHiddenStatuses.includes(option.status)
+                          }"
+                        >
+                          <input
+                            type="checkbox"
+                            :checked="!planListDraftHiddenStatuses.includes(option.status)"
+                            :disabled="planListStatusIsOnlyVisible(option.status)"
+                            @change="togglePlanListStatus(option.status)"
+                          >
+                          <span class="knowledge-plan-list-filter-swatch" :style="{ backgroundColor: option.palette.accent }" />
+                          <span>{{ t(option.status) }}</span>
+                          <b>{{ option.count }}</b>
+                        </label>
+                      </div>
+                    </fieldset>
+                  </div>
                   <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel knowledge-plan-list-tag-panel">
                     <legend>{{ t("筛选标签") }}</legend>
                     <div class="knowledge-plan-list-filter-head">
@@ -2521,24 +2579,28 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       clearable
                       hide-details
                     />
-                    <div class="knowledge-plan-list-filter-options knowledge-plan-list-tag-options">
-                      <label
-                        v-for="option in visiblePlanListTagOptions"
-                        :key="option.tag"
-                        :class="{ selected: planListDraftSelectedTags.includes(option.tag) }"
-                      >
-                        <input
-                          type="checkbox"
-                          :checked="planListDraftSelectedTags.includes(option.tag)"
-                          @change="togglePlanListTag(option.tag)"
-                        >
-                        <v-icon class="knowledge-plan-list-tag-icon" size="15">mdi-tag-outline</v-icon>
-                        <span data-no-i18n>{{ option.tag }}</span>
-                        <b>{{ option.count }}</b>
-                      </label>
-                      <div v-if="!visiblePlanListTagOptions.length" class="knowledge-plan-list-no-tags">
-                        {{ planListTagOptions.length ? t("没有匹配的标签") : t("当前计划没有标签") }}
-                      </div>
+                    <v-virtual-scroll
+                      v-if="visiblePlanListTagOptions.length"
+                      class="knowledge-plan-list-filter-options knowledge-plan-list-tag-options"
+                      :items="visiblePlanListTagOptions"
+                      height="420"
+                      item-height="44"
+                    >
+                      <template #default="{ item: option }">
+                        <label :class="{ selected: planListDraftSelectedTags.includes(option.tag) }">
+                          <input
+                            type="checkbox"
+                            :checked="planListDraftSelectedTags.includes(option.tag)"
+                            @change="togglePlanListTag(option.tag)"
+                          >
+                          <v-icon class="knowledge-plan-list-tag-icon" size="15">mdi-tag-outline</v-icon>
+                          <span data-no-i18n>{{ option.tag }}</span>
+                          <b>{{ option.count }}</b>
+                        </label>
+                      </template>
+                    </v-virtual-scroll>
+                    <div v-else class="knowledge-plan-list-no-tags">
+                      {{ planListTagOptions.length ? t("没有匹配的标签") : t("当前计划没有标签") }}
                     </div>
                   </fieldset>
                 </div>

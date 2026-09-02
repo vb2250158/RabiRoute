@@ -363,7 +363,22 @@ test("Manager publishes fenced READY before route catalog recovery and gates HTT
   assert.match(source, /routeCatalogStartupUnavailable\([\s\S]*?routeCatalogStartupLifecycle\.snapshot\(\)[\s\S]*?\)/);
   assert.match(source, /response\.setHeader\("cache-control", "no-store"\)/);
   assert.match(source, /response\.setHeader\("retry-after", String\(routeCatalogRejection\.retryAfterSeconds\)\)/);
-  assert.match(source, /if \(!roleKnowledgeCatalogsReady\) return;[\s\S]*?gatewayRuntimeService\.reconcile\(\)/);
+  const syncRunningGatewaysSource = source.slice(
+    source.indexOf("function syncRunningGateways"),
+    source.indexOf("async function reloadChangedConfig")
+  );
+  const startGatewayRuntimeSource = source.slice(
+    source.indexOf("function startGatewayRuntime"),
+    source.indexOf("function stopGatewayRuntime")
+  );
+  assert.doesNotMatch(syncRunningGatewaysSource, /planStorageStartupStatus/);
+  assert.doesNotMatch(syncRunningGatewaysSource, /roleKnowledgeCatalogsReady/);
+  assert.doesNotMatch(startGatewayRuntimeSource, /planStorageStartupStatus/);
+  const routeCatalogReadyHandler = startManagerSource.slice(
+    startManagerSource.indexOf("routeCatalogStartupLifecycle.onReady"),
+    startManagerSource.indexOf("const lanDiscoveryEnabled")
+  );
+  assert.match(routeCatalogReadyHandler, /syncRunningGateways\(\);[\s\S]*?startPlanDependentBackground\(\)/);
   assert.match(source, /roleKnowledgeCatalogsReady = await prewarmRolePlanCatalogs\(\);/);
   assert.equal(source.includes("readConfigAsync"), false);
   assert.equal(source.includes("loadRuntimesAsync"), false);

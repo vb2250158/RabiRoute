@@ -728,7 +728,7 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
           const id = step.id.trim();
           const status = step.status;
           const isCurrent = id === currentStep?.id;
-          const currentMarker = isCurrent ? " ← 当前执行" : "";
+          const currentMarker = isCurrent ? " ← 当前步骤" : "";
           const waitingFor = String(step.waitingFor || "").trim();
           const isBlocked = blocked && isCurrent;
           const blockedBy = String(step.blockedBy || "").trim();

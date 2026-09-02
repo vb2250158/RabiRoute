@@ -346,8 +346,9 @@ export class PersonaSyncManifestIndex {
   private readonly pendingPaths = new Map<string, PendingPath>();
   private watcher: fs.FSWatcher | null = null;
   private readyPromise: Promise<void> | null = null;
-  private reconcileFlight: Promise<void> | null = null;
+  private scanMutationTail: Promise<void> = Promise.resolve();
   private workerRefreshFlight: Promise<void> | null = null;
+  private workerRefreshQueuedReason: string | null = null;
   private workerRefreshAbort: AbortController | null = null;
   private pendingFlush: Promise<void> | null = null;
   private eventTimer: NodeJS.Timeout | null = null;
@@ -784,7 +785,11 @@ export class PersonaSyncManifestIndex {
     }
   }
 
-  private async refreshPath(roleId: string, relativePath: string): Promise<void> {
+  private refreshPath(roleId: string, relativePath: string): Promise<void> {
+    return this.enqueueScanMutation(() => this.performRefreshPath(roleId, relativePath));
+  }
+
+  private async performRefreshPath(roleId: string, relativePath: string): Promise<void> {
     const root = path.join(this.rolesRoot(), roleId);
     const target = path.join(root, relativePath);
     let stat: fs.Stats | undefined;
@@ -794,7 +799,7 @@ export class PersonaSyncManifestIndex {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (stat?.isDirectory() && !stat.isSymbolicLink()) {
-      await this.reconcileDirectory(roleId, relativePath, "directory_event");
+      await this.performReconcileDirectory(roleId, relativePath, "directory_event");
       return;
     }
     const key = cacheKey(roleId, relativePath);
@@ -828,7 +833,11 @@ export class PersonaSyncManifestIndex {
     }
   }
 
-  private async reconcileRole(roleId: string, reason: string): Promise<void> {
+  private reconcileRole(roleId: string, reason: string): Promise<void> {
+    return this.enqueueScanMutation(() => this.performReconcileRole(roleId, reason));
+  }
+
+  private async performReconcileRole(roleId: string, reason: string): Promise<void> {
     const root = path.join(this.rolesRoot(), roleId);
     let stat: fs.Stats | undefined;
     try {
@@ -867,7 +876,11 @@ export class PersonaSyncManifestIndex {
     if (changed) this.changed("reconciled", roleId);
   }
 
-  private async reconcileDirectory(roleId: string, relativePath: string, reason: string): Promise<void> {
+  private reconcileDirectory(roleId: string, relativePath: string, reason: string): Promise<void> {
+    return this.enqueueScanMutation(() => this.performReconcileDirectory(roleId, relativePath, reason));
+  }
+
+  private async performReconcileDirectory(roleId: string, relativePath: string, reason: string): Promise<void> {
     const normalized = normalizedRelativePath(relativePath);
     const keyPrefix = `${cacheKey(roleId, normalized)}/`;
     const previous = new Map([...this.filesCache].filter(([key]) => key.startsWith(keyPrefix)));
@@ -890,11 +903,13 @@ export class PersonaSyncManifestIndex {
   }
 
   private reconcileAll(reason: string): Promise<void> {
-    if (this.reconcileFlight) return this.reconcileFlight;
-    this.reconcileFlight = this.performReconcileAll(reason).finally(() => {
-      this.reconcileFlight = null;
-    });
-    return this.reconcileFlight;
+    return this.enqueueScanMutation(() => this.performReconcileAll(reason));
+  }
+
+  private enqueueScanMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.scanMutationTail.catch(() => undefined).then(operation);
+    this.scanMutationTail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private async performReconcileAll(reason: string): Promise<void> {
@@ -1010,40 +1025,59 @@ export class PersonaSyncManifestIndex {
   }
 
   private refreshManifestInWorker(reason: string): Promise<void> {
-    if (this.workerRefreshFlight) return this.workerRefreshFlight;
+    if (this.workerRefreshFlight) {
+      this.workerRefreshQueuedReason = reason;
+      return this.workerRefreshFlight;
+    }
+    this.workerRefreshQueuedReason = null;
+    this.workerRefreshFlight = this.runManifestWorkerRefreshes(reason).finally(() => {
+      this.workerRefreshFlight = null;
+      this.scheduleWorkerRefreshPoll();
+    });
+    return this.workerRefreshFlight;
+  }
+
+  private async runManifestWorkerRefreshes(initialReason: string): Promise<void> {
+    let reason: string | null = initialReason;
+    while (reason && !this.stopped) {
+      await this.runManifestWorkerRefresh(reason);
+      reason = this.workerRefreshQueuedReason;
+      this.workerRefreshQueuedReason = null;
+    }
+  }
+
+  private async runManifestWorkerRefresh(reason: string): Promise<void> {
     const controller = new AbortController();
     this.workerRefreshAbort = controller;
     this.publicationState = "refreshing";
     this.publicationStale = this.publishedAvailable;
     this.publicationRefreshStartedAt = new Date().toISOString();
     this.publicationError = "";
-    this.workerRefreshFlight = this.options.runManifestWorker(
-      this.rolesRoot(),
-      this.stateRoot,
-      {
-        timeoutMs: this.options.refreshTimeoutMs,
-        signal: controller.signal,
-        onSpawn: pid => { this.publicationWorkerPid = pid; }
-      }
-    ).then(result => {
+    try {
+      const result = await this.options.runManifestWorker(
+        this.rolesRoot(),
+        this.stateRoot,
+        {
+          timeoutMs: this.options.refreshTimeoutMs,
+          signal: controller.signal,
+          onSpawn: pid => { this.publicationWorkerPid = pid; }
+        }
+      );
       if (this.stopped) return;
       this.publishWorkerResult(result, reason);
       this.state = this.fallbackRequired ? "fallback" : "ready";
       this.lastError = "";
-    }).catch(error => {
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.publicationState = "degraded";
       this.publicationStale = true;
       this.publicationError = message;
       this.lastError = message;
       throw error;
-    }).finally(() => {
+    } finally {
       this.publicationWorkerPid = undefined;
       if (this.workerRefreshAbort === controller) this.workerRefreshAbort = null;
-      this.workerRefreshFlight = null;
-      this.scheduleWorkerRefreshPoll();
-    });
-    return this.workerRefreshFlight;
+    }
   }
 
   private publishWorkerResult(result: PersonaSyncManifestRefreshResult, reason: string): void {

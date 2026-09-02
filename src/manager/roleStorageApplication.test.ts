@@ -76,7 +76,15 @@ test("active-child failures expose an unknown commit state and same-key-only ret
 
   for (const code of uncertainCodes) {
     const mutationPool = {
-      status: () => ({ state: "idle" }),
+      status: () => ({
+        state: "idle",
+        active: 0,
+        queued: 0,
+        spawnedChildren: 0,
+        applicationGenerationId: "uncertain-application-generation",
+        managerInstanceId: "uncertain-manager-instance",
+        storageGenerationLease: "uncertain-storage-generation"
+      }),
       stop: async () => undefined,
       createRecentMemory: async () => {
         throw new ManagerStorageMutationError("private child diagnostic", code);

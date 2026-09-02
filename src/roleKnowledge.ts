@@ -57,6 +57,9 @@ export type PlanStatus = "未开始" | "进行中" | "暂停" | "已完成" | "�
 const PLAN_STATUSES = new Set<PlanStatus>(["未开始", "进行中", "暂停", "已完成", "已归档"]);
 export type PlanStepStatus = "未开始" | "进行中" | "已完成";
 
+export type PlanWorkPhase = "analysis" | "execution";
+export type PlanDiscussionState = "pending";
+
 export type PlanApprovalFileAction = "create" | "modify" | "delete" | "move";
 
 export type PlanApprovalFileChange = {
@@ -109,6 +112,10 @@ export type PlanStep = {
   id: string;
   title: string;
   status: PlanStepStatus;
+  /** Current work phase. Analysis precedes approval; execution follows approval or explicit direct authorization. */
+  workPhase?: PlanWorkPhase;
+  /** Marks the paused current step as awaiting a discussion decision without adding a writable lifecycle status. */
+  discussionState?: PlanDiscussionState;
   detail?: string;
   waitingFor?: string;
   /** Compatibility projection. Manager derives this from a complete pending approvalRequest. */
@@ -942,6 +949,8 @@ function planTextTotal(plan: PlanItem): number {
     ...plan.steps.flatMap((step) => [
       step.id,
       step.title,
+      step.workPhase,
+      step.discussionState,
       step.detail,
       step.waitingFor,
       step.blockedBy,
@@ -1039,6 +1048,21 @@ export function planAcceptsGuidance(plan: PlanItem): boolean {
   return plan.status === "进行中" && planApprovalGate(plan).state === "none";
 }
 
+export function planWorkPhase(plan: PlanItem): PlanWorkPhase {
+  const step = currentPlanStep(plan);
+  if (planApprovalGate(plan).state !== "none") return "analysis";
+  if (step?.workPhase) return step.workPhase;
+  const currentIndex = step ? plan.steps.findIndex((item) => item.id === step.id) : plan.steps.length - 1;
+  const reachedSteps = currentIndex >= 0 ? plan.steps.slice(0, currentIndex + 1) : plan.steps;
+  return reachedSteps.some((item) => item.approvalRequest?.responseStatus === "approved")
+    ? "execution"
+    : "analysis";
+}
+
+export function planIsAwaitingDiscussion(plan: PlanItem): boolean {
+  return plan.status === "暂停" && currentPlanStep(plan)?.discussionState === "pending";
+}
+
 function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWriteLimits): void {
   assertTextLimit("Plan approvalRequest.approver", contract.approver, limits.approvalDetailChars);
   assertTextLimit("Plan approvalRequest.request", contract.request, limits.approvalRequestChars);
@@ -1127,6 +1151,11 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
   }
   if (plan.status === "暂停" && (!plan.currentStepId || currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
     throw new Error("A paused plan must preserve currentStepId for its only in-progress resume step.");
+  }
+  const discussionSteps = plan.steps.filter((step) => step.discussionState === "pending");
+  if (discussionSteps.length > 0
+    && (plan.status !== "暂停" || discussionSteps.length !== 1 || discussionSteps[0]?.id !== plan.currentStepId)) {
+    throw new Error("discussionState=pending is only valid on the current resume step of a paused plan.");
   }
   if (plan.status !== "进行中" && plan.status !== "暂停" && plan.currentStepId) {
     throw new Error("Only an in-progress or paused plan can provide currentStepId.");
@@ -1281,6 +1310,8 @@ function normalizePlanSteps(value: unknown): PlanStep[] {
       id: String(raw.id || raw.stepId || `step-${index + 1}`).trim(),
       title,
       status,
+      workPhase: raw.workPhase === "analysis" || raw.workPhase === "execution" ? raw.workPhase : undefined,
+      discussionState: raw.discussionState === "pending" ? "pending" : undefined,
       detail: typeof raw.detail === "string" ? raw.detail : typeof raw.description === "string" ? raw.description : undefined,
       waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
       isBlocked: typeof raw.isBlocked === "boolean" ? raw.isBlocked : undefined,

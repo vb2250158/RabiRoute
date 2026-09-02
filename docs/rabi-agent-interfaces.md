@@ -976,7 +976,7 @@ POST /roles/:roleId/plans
   ],
   "steps": [
     { "id": "inspect-existing", "title": "检查现有计划接口", "status": "已完成", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中", "startedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中", "workPhase": "analysis", "startedAt": "2026-07-27T08:10:00.000Z" },
     { "id": "update-docs", "title": "更新双语接口文档", "status": "未开始" }
   ],
   "keywords": ["计划", "记忆", "接口", "上下文"],
@@ -997,9 +997,9 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。写入 API 仍只接受五种顶层生命周期状态；Manager 为未终态计划只派生绿色“进行中”、蓝色“等待打包”、紫色“等待 QA”、灰色“暂停”、红色“待审批”、橙色“待人工核验”。Agent 与客户端不得手写展示阶段。外部资料、素材、owner、账号、设备、授权和回执只保留在 `waitingFor` 等内部字段。
+新增计划必须提供有序的 `steps`。顶层 `status=进行中` 时，当前步骤写 `workPhase=analysis | execution`：调查、补证据、方案和审批前准备使用 `analysis`；审批通过或用户明确直接授权后的实施与开发验证使用 `execution`。明确等待讨论时保持顶层 `status=暂停` 和原 `currentStepId`，并在唯一进行中的恢复步骤写 `discussionState=pending`；讨论结束时清除该标记。写入 API 仍只接受五种顶层生命周期状态；Manager 为未终态计划派生青色“分析中”、绿色“执行中”、琥珀色“待讨论”、蓝色“等待打包”、紫色“等待 QA”、灰色“暂停”、红色“待审批”、橙色“待人工核验”。Agent 与客户端不得手写展示阶段。外部资料、素材、owner、账号、设备、授权和回执只保留在 `waitingFor` 等内部字段。
 
-Manager 仍使用精确内部分类驱动 reconcile：存在 CLI、替代验证、重试、发送或协调动作时公开显示“进行中”；开发闭环后只缺目标包时显示“等待打包”；目标包已纳入时显示“等待 QA”；开发闭环后只剩人工视觉或交互确认的 `manual-verify-*` 步骤显示“待人工核验”；完整审批合同显示“待审批”；完全没有安全动作时显示“暂停”。内部原因不得成为新的公开状态。
+Manager 仍使用精确内部分类驱动 reconcile：有安全动作时按 `workPhase` 显示“分析中”或“执行中”；暂停计划的当前恢复步骤带 `discussionState=pending` 时显示“待讨论”；开发闭环后只缺目标包时显示“等待打包”；目标包已纳入时显示“等待 QA”；开发闭环后只剩人工视觉或交互确认的 `manual-verify-*` 步骤显示“待人工核验”；完整审批合同显示“待审批”；完全没有安全动作时显示“暂停”。这些特殊状态优先于 `workPhase`，内部原因不得成为新的公开状态。
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 

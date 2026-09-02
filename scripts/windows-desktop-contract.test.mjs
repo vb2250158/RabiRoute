@@ -155,7 +155,9 @@ test("Host owns one complete Manager and Tray application generation", () => {
   assert.match(windowsJob, /CREATE_SUSPENDED/);
   assert.match(windowsJob, /AssignProcessToJobObject/);
 
-  assert.match(hostRuntime, /\["GATEWAY_MANAGER_PORT"\] = "auto"/);
+  assert.match(hostRuntime, /ManagerPortPreference\.ResolveStartupPolicy\(stateRoot, log\)/);
+  assert.match(hostRuntime, /\["GATEWAY_MANAGER_PORT"\] = managerPortPolicy/);
+  assert.match(hostRuntime, /ManagerPortPreference\.SaveSuccessfulEndpoint\(stateRoot, ready\.BaseUrl, log\)/);
   assert.match(hostRuntime, /RABIROUTE_MANAGER_READY/);
   assert.ok(
     hostRuntime.indexOf("var ready = await readiness.Task")
@@ -364,7 +366,7 @@ test("RabiSpeech task migration mutates only the fully fingerprinted app-owned t
   skip: process.platform !== "win32",
   timeout: 30_000,
 }, () => {
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "rabispeech task migration contract-"));
+  const sandbox = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "rabispeech task migration contract-"));
   const installRoot = path.join(sandbox, "RabiPC");
   const localAppData = path.join(sandbox, "LocalAppData");
   const speechRoot = path.join(installRoot, "plugin-adapters", "rabi-speech");
@@ -619,7 +621,7 @@ test("legacy migration stops a real root Manager and watcher without matching pa
   skip: process.platform !== "win32",
   timeout: 30_000,
 }, async () => {
-  const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabi route legacy contract-"));
+  const installRoot = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "rabi route legacy contract-"));
   const nodeExe = path.join(installRoot, "node.exe");
   const managerEntry = path.join(installRoot, "dist", "manager.js");
   const managerSuffixEntry = `${managerEntry}.backup`;

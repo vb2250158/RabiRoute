@@ -114,11 +114,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manager-instance-id", required=True, type=_required_identity, help=argparse.SUPPRESS)
     parser.add_argument("--host-executable", required=True, type=_host_executable, help=argparse.SUPPRESS)
     parser.add_argument("--host-lifecycle-pipe", required=True, type=_required_identity, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--show-desktop-pet",
-        action="store_true",
-        help="Show the configured desktop pet after the Qt host is ready.",
-    )
     return parser
 
 
@@ -161,7 +156,6 @@ def main(argv: list[str] | None = None) -> int:
             manager_instance_id=args.manager_instance_id,
             host_executable=args.host_executable,
             host_lifecycle_pipe=args.host_lifecycle_pipe,
-            show_desktop_pet=args.show_desktop_pet,
         )
         diagnostics.mark_clean_exit(exit_code)
         return exit_code

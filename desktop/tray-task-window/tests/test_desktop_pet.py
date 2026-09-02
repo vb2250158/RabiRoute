@@ -19,7 +19,9 @@ from rabiroute_tray.desktop_pet_client import (
     DesktopPetClient,
     DesktopPetIdleBehavior,
     DesktopPetBinding,
+    DesktopPetPersona,
     DesktopPetPack,
+    DesktopPetRosterClient,
     DesktopPetState,
     LoadedDesktopPetAnimation,
     parse_desktop_pet_catalog,
@@ -30,6 +32,11 @@ from rabiroute_tray.desktop_pet_events import iter_sse_events
 from rabiroute_tray.desktop_pet_fullscreen import covers_monitor
 from rabiroute_tray.desktop_pet_idle import DesktopPetIdleScheduler
 from rabiroute_tray.desktop_pet_window import DesktopPetWindow
+from rabiroute_tray.desktop_pet_manager import DesktopPetManager
+
+
+def _skip_desktop_pet_binding_load(_controller: DesktopPetController) -> None:
+    return None
 
 
 class _BinaryResponse:
@@ -234,6 +241,36 @@ class DesktopPetIdleSchedulerTest(unittest.TestCase):
 
 
 class DesktopPetClientTest(unittest.TestCase):
+    def test_roster_uses_persona_names_and_only_keeps_enabled_bound_pets(self) -> None:
+        client = DesktopPetRosterClient("http://127.0.0.1:8790")
+        responses = {
+            "/api/desktop/settings": {
+                "data": {
+                    "pets": {
+                        "YeYu": {"enabled": True, "packId": ""},
+                        "XinghaiBuilder": {"enabled": True, "packId": "xinghai"},
+                        "Writer": {"enabled": False, "packId": "writer"},
+                        "RemovedPersona": {"enabled": True, "packId": "removed"},
+                    }
+                }
+            },
+            "/api/personas": {
+                "personas": [
+                    {"personaId": "YeYu", "name": "夜雨"},
+                    {"personaId": "XinghaiBuilder", "name": "星海建造师"},
+                    {"personaId": "Writer", "name": "写作者"},
+                ]
+            },
+        }
+        client._get_json = lambda path: responses[path]  # type: ignore[method-assign]
+
+        roster = client.roster()
+
+        self.assertEqual(
+            roster,
+            (DesktopPetPersona("XinghaiBuilder", "星海建造师", DesktopPetBinding(enabled=True, pack_id="xinghai")),),
+        )
+
     def test_catalog_rejects_cross_persona_response(self) -> None:
         with self.assertRaisesRegex(ValueError, "different persona"):
             parse_desktop_pet_catalog({"data": {"personaId": "Other", "packs": []}}, "YeYu")
@@ -289,12 +326,12 @@ class DesktopPetWindowTest(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_window_is_translucent_frameless_and_non_activating(self) -> None:
-        window = DesktopPetWindow()
+        window = DesktopPetWindow("星海建造师")
         try:
             self.assertTrue(window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
             self.assertTrue(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
             self.assertTrue(window.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)
-            self.assertEqual(window.windowTitle(), "夜雨桌宠")
+            self.assertEqual(window.windowTitle(), "星海建造师桌宠")
         finally:
             window.close()
 
@@ -344,10 +381,10 @@ class DesktopPetWindowTest(unittest.TestCase):
         with (
             patch.object(DesktopPetEventStream, "start"),
             patch.object(DesktopPetEventStream, "stop"),
-            patch.object(DesktopPetController, "_load_binding"),
+            patch.object(DesktopPetController, "_load_binding", new=_skip_desktop_pet_binding_load),
             patch("rabiroute_tray.desktop_pet_controller.QMenu.popup"),
         ):
-            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda _persona_id: None)
             controller._pack = pack
             controller._idle_scheduler = MagicMock()
             try:
@@ -383,10 +420,10 @@ class DesktopPetWindowTest(unittest.TestCase):
         with (
             patch.object(DesktopPetEventStream, "start"),
             patch.object(DesktopPetEventStream, "stop"),
-            patch.object(DesktopPetController, "_load_binding"),
+            patch.object(DesktopPetController, "_load_binding", new=_skip_desktop_pet_binding_load),
             patch("rabiroute_tray.desktop_pet_controller.QMenu.popup"),
         ):
-            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda _persona_id: None)
             controller._pack = pack
             try:
                 controller._show_context_menu(QPoint(30, 40))
@@ -400,9 +437,9 @@ class DesktopPetWindowTest(unittest.TestCase):
         with (
             patch.object(DesktopPetEventStream, "start"),
             patch.object(DesktopPetEventStream, "stop"),
-            patch.object(DesktopPetController, "_load_binding"),
+            patch.object(DesktopPetController, "_load_binding", new=_skip_desktop_pet_binding_load),
         ):
-            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda _persona_id: None)
             try:
                 controller.window.show()
                 controller._binding_snapshot = DesktopPetBinding(enabled=True, pack_id="old-pack")
@@ -416,6 +453,25 @@ class DesktopPetWindowTest(unittest.TestCase):
                 self.assertIsNone(controller._pack)
                 self.assertEqual(controller._animation_cache, {})
                 reload_catalog.assert_called_once()
+            finally:
+                controller.close()
+
+    def test_enabled_binding_without_a_pack_never_shows_a_placeholder_window(self) -> None:
+        with (
+            patch.object(DesktopPetEventStream, "start"),
+            patch.object(DesktopPetEventStream, "stop"),
+            patch.object(DesktopPetController, "_load_binding", new=_skip_desktop_pet_binding_load),
+        ):
+            controller = DesktopPetController(
+                "http://127.0.0.1:8790",
+                "YeYu",
+                lambda _persona_id: None,
+                persona_name="夜雨",
+            )
+            try:
+                controller.window.show()
+                controller._apply_binding(DesktopPetBinding(enabled=True, pack_id=""))
+                self.assertFalse(controller.visible)
             finally:
                 controller.close()
 
@@ -455,9 +511,9 @@ class DesktopPetWindowTest(unittest.TestCase):
         with (
             patch.object(DesktopPetEventStream, "start"),
             patch.object(DesktopPetEventStream, "stop"),
-            patch.object(DesktopPetController, "_load_binding"),
+            patch.object(DesktopPetController, "_load_binding", new=_skip_desktop_pet_binding_load),
         ):
-            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda _persona_id: None)
             controller._pack = pack
             controller._requested_state = "sleep"
             controller._animation_cache["attention"] = animation
@@ -493,9 +549,9 @@ class DesktopPetWindowTest(unittest.TestCase):
         with (
             patch.object(DesktopPetEventStream, "start"),
             patch.object(DesktopPetEventStream, "stop"),
-            patch.object(DesktopPetController, "_load_binding"),
+            patch.object(DesktopPetController, "_load_binding", new=_skip_desktop_pet_binding_load),
         ):
-            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda: None)
+            controller = DesktopPetController("http://127.0.0.1:8790", "YeYu", lambda _persona_id: None)
             controller._pack = pack
             controller.window.show()
             try:
@@ -551,6 +607,59 @@ class DesktopPetWindowTest(unittest.TestCase):
             self.assertEqual(double_clicked.count(), 1)
         finally:
             window.close()
+
+
+class DesktopPetManagerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_reconcile_creates_one_named_controller_per_enabled_persona_and_removes_disabled_ones(self) -> None:
+        binding = DesktopPetBinding(enabled=True, pack_id="default")
+        fake_menu = MagicMock()
+        with (
+            patch("rabiroute_tray.desktop_pet_manager.DesktopPetEventStream") as event_stream,
+            patch("rabiroute_tray.desktop_pet_manager.DesktopPetController") as controller_type,
+            patch.object(DesktopPetManager, "refresh"),
+        ):
+            controllers = [MagicMock(), MagicMock()]
+            controller_type.side_effect = controllers
+            manager = DesktopPetManager("http://127.0.0.1:8790", fake_menu, lambda _persona_id: None)
+            manager._apply_roster((
+                DesktopPetPersona("YeYu", "夜雨", binding),
+                DesktopPetPersona("XinghaiBuilder", "星海建造师", binding),
+            ))
+
+            self.assertEqual(controller_type.call_count, 2)
+            self.assertEqual(controller_type.call_args_list[0].kwargs["persona_name"], "夜雨")
+            self.assertEqual(controller_type.call_args_list[1].kwargs["persona_name"], "星海建造师")
+            self.assertEqual(set(manager.controllers), {"YeYu", "XinghaiBuilder"})
+
+            manager._apply_roster((DesktopPetPersona("XinghaiBuilder", "星海建造师", binding),))
+
+            controllers[0].close.assert_called_once()
+            self.assertEqual(set(manager.controllers), {"XinghaiBuilder"})
+            manager.close()
+            event_stream.return_value.stop.assert_called_once()
+
+    def test_close_ignores_a_late_roster_refresh(self) -> None:
+        fake_menu = MagicMock()
+        binding = DesktopPetBinding(enabled=True, pack_id="default")
+        with (
+            patch("rabiroute_tray.desktop_pet_manager.DesktopPetEventStream"),
+            patch("rabiroute_tray.desktop_pet_manager.DesktopPetController") as controller_type,
+            patch("rabiroute_tray.desktop_pet_manager.start_qt_task") as start_task,
+        ):
+            task = MagicMock()
+            start_task.return_value = task
+            manager = DesktopPetManager("http://127.0.0.1:8790", fake_menu, lambda _persona_id: None)
+            completed = start_task.call_args.args[1]
+
+            manager.close()
+            completed(task, (DesktopPetPersona("YeYu", "夜雨", binding),))
+
+            controller_type.assert_not_called()
+            self.assertEqual(manager.controllers, {})
 
 
 if __name__ == "__main__":

@@ -260,11 +260,11 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /v-for="plan in visiblePlansForView"/);
   assert.match(page, /const renderedPlansForView = computed\(\(\) => knowledgeRenderWindow\(\s*visiblePlansForView\.value/);
   assert.match(page, /function currentPlanPageFilter[\s\S]*?sort:\s*planListSortMode\.value[\s\S]*?statuses[\s\S]*?tags/);
-  assert.match(page, /v-model="planListDialogOpen"[\s\S]*?max-width="820"[\s\S]*?scrollable[\s\S]*?aria-labelledby="plan-list-dialog-title"/);
+  assert.match(page, /v-model="planListDialogOpen"[\s\S]*?max-width="1180"[\s\S]*?scrollable[\s\S]*?aria-labelledby="plan-list-dialog-title"/);
   assert.doesNotMatch(page, /<v-menu v-model="planList/);
   assert.match(page, /@click="openPlanListDialog"/);
   assert.match(page, /icon="mdi-close"[\s\S]*?@click="planListDialogOpen = false"/);
-  assert.match(page, /class="knowledge-plan-list-dialog-grid"/);
+  assert.match(page, /class="knowledge-plan-list-control-layout"/);
   assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-sort-panel"/);
   assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-filter-panel"/);
   assert.match(page, /class="knowledge-plan-list-panel knowledge-plan-list-filter-panel knowledge-plan-list-tag-panel"/);
@@ -315,9 +315,9 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(styles, /\.knowledge-plan-directory-link\s*\{[\s\S]*?overflow:\s*hidden/);
   assert.doesNotMatch(styles, /\.knowledge-plan-directory-status\s*\{/);
   assert.match(styles, /\.knowledge-plan-directory-count\s*\{[\s\S]*?font-variant-numeric:\s*tabular-nums/);
-  assert.match(styles, /\.knowledge-plan-list-dialog\s*\{[\s\S]*?max-height:\s*min\(720px/);
-  assert.match(styles, /\.knowledge-plan-list-dialog-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
-  assert.match(styles, /@media \(max-width: 600px\)[\s\S]*?\.knowledge-plan-list-dialog-grid\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
+  assert.match(styles, /\.knowledge-plan-list-dialog\s*\{[\s\S]*?max-height:\s*min\(840px/);
+  assert.match(styles, /\.knowledge-plan-list-control-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(360px, \.86fr\) minmax\(480px, 1\.14fr\)/);
+  assert.match(styles, /@media \(max-width: 900px\)[\s\S]*?\.knowledge-plan-list-control-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
   assert.doesNotMatch(page, /class="knowledge-plan-directory-updated"/);
   assert.match(styles, /\.knowledge-plan-directory-sort-label\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?white-space:\s*nowrap/);
   assert.match(page, /@mouseenter="setPlanDirectoryMarquee\(\$event, true\)"/);

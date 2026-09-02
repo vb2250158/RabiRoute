@@ -18,6 +18,7 @@ export type XiaomiHomeManagerRoutesContext = {
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
+  controlPlaneAccessAllowed?: (request: http.IncomingMessage, requestUrl: URL) => boolean;
   deliverEvent: (event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext) => Promise<unknown>;
 };
 
@@ -25,6 +26,12 @@ function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
   const normalized = address.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0];
   return normalized === "::1" || normalized === "localhost" || normalized.startsWith("127.") || normalized.startsWith("::ffff:127.");
+}
+
+function isMessageEndpointConfigurationRequest(request: http.IncomingMessage, requestUrl: URL): boolean {
+  const root = "/api/agent/xiaomi-home";
+  return (request.method === "GET" && requestUrl.pathname === `${root}/health`)
+    || (["GET", "PUT"].includes(request.method || "") && requestUrl.pathname === `${root}/settings`);
 }
 
 function presentedError(error: unknown): { status: number; code: string; message: string } {
@@ -75,8 +82,11 @@ export function handleXiaomiHomeManagerApi(
 ): boolean {
   const root = "/api/agent/xiaomi-home";
   if (!requestUrl.pathname.startsWith(root)) return false;
-  if (!isLoopbackAddress(request.socket.remoteAddress)) {
-    context.jsonResponse(response, 403, { code: -1, error: { code: "xiaomi_home_loopback_required", message: "Xiaomi Home Agent API is available only on loopback." } });
+  const loopback = isLoopbackAddress(request.socket.remoteAddress);
+  const controlPlaneConfigurationAccess = isMessageEndpointConfigurationRequest(request, requestUrl)
+    && context.controlPlaneAccessAllowed?.(request, requestUrl) === true;
+  if (!loopback && !controlPlaneConfigurationAccess) {
+    context.jsonResponse(response, 403, { code: -1, error: { code: "xiaomi_home_loopback_required", message: "Xiaomi Home device and artifact APIs are available only on loopback." } });
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/health`) {

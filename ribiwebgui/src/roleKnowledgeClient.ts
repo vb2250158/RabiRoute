@@ -12,7 +12,9 @@ export type RolePlanPageCounts = {
   qa: number;
   active: number;
   stages: {
+    analyzing: number;
     executing: number;
+    discussion: number;
     qa: number;
     waitingPackage: number;
     approval: number;

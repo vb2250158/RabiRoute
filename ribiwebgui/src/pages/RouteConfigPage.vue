@@ -4,7 +4,10 @@ import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
+import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
 import { managerEventSource } from "../managerApi";
+import { pluginCatalogStore } from "../pluginCatalogStore";
+import { webRenderersAt } from "../pluginRenderers";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, CodexHookSettings, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { codexModelPickerItems, dshModelPickerItems, dshModelValue, parseDshModelValue, reasoningEffortPickerItems } from "../agentModelPicker";
@@ -25,6 +28,15 @@ import { copyTextToClipboard } from "../clipboard";
 import { routeScopedAdaptersPath, routeScopedRuntimePath } from "../routeScopedNavigation";
 
 const MessageProcessingBoard = defineAsyncComponent(() => import("../components/MessageProcessingBoard.vue"));
+
+const messageEndpointSettingsRenderers = computed(() => webRenderersAt(
+  pluginCatalogStore.settingsRenderers.value,
+  "route.adapters.message-endpoint-settings"
+));
+
+function settingsRenderersForMessageEndpoint(type: MessageAdapterType) {
+  return messageEndpointSettingsRenderers.value.filter(renderer => renderer.slot === type);
+}
 
 const store = useGatewayStore();
 const speech = useSpeechStore();
@@ -3423,19 +3435,17 @@ const channelCheckAgentItems = computed(() => visibleAgentItems.value.map(agent 
 })));
 
 function channelManagerConnectionLabel(): string {
-  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "已停用";
-  return runtime.value.running ? "运行中" : "已停止";
+  return gateway.value?.enabled === false || runtime.value.enabled === false ? "已禁用" : "已启用";
 }
 
 function channelManagerConnectionColor(): string {
-  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "secondary";
-  return runtime.value.running ? "success" : "warning";
+  return gateway.value?.enabled === false || runtime.value.enabled === false ? "secondary" : "success";
 }
 
 function channelManagerDetail(): string {
-  if (gateway.value?.enabled === false || runtime.value.enabled === false) return "当前 Route 已停用。";
-  if (runtime.value.running) return "Manager 正在承载当前 Route。";
-  return "Manager 尚未运行当前 Route。";
+  return gateway.value?.enabled === false || runtime.value.enabled === false
+    ? "当前 Route 已禁用。"
+    : "当前 Route 已启用。";
 }
 
 function channelAgentConnectionLabel(type: AgentAdapterType): string {
@@ -4395,13 +4405,11 @@ watch(
 
                     <div v-else class="section-note">尚未扫描。展开面板后会自动扫描，也可以手动刷新。</div>
                   </div>
-                  <div v-if="choice.type === 'xiaomiHome'" class="dependency-panel mb-3">
-                    <div class="section-title small-title">米家事件入口</div>
-                    <div class="section-note">状态来自 /api/agent/xiaomi-home/health。此入口只把 Home Assistant 状态与摄像头事件投递到当前人格，不是 Gateway 常驻 adapter，也不同于小米音箱 / 小爱。</div>
-                    <v-alert type="info" variant="tonal" density="compact" class="mt-2 mb-0">
-                      授权 token 只放在本机受保护运行环境中；本页不会收集或回显 token。设备控制默认关闭。
-                    </v-alert>
-                  </div>
+                  <TrustedWebRendererHost
+                    v-if="settingsRenderersForMessageEndpoint(choice.type).length"
+                    :renderers="settingsRenderersForMessageEndpoint(choice.type)"
+                    :context="{ messageEndpointType: choice.type, routeId: gateway?.id ?? '' }"
+                  />
                   <div v-if="usesAutomaticMessageGrouping(choice.type)" class="dependency-panel mb-3">
                     <div class="section-title small-title">消息组等待</div>
                     <div class="section-note">聊天消息默认使用消息组，不需要单独开启。这里仅调整等待一句话说完的时间。</div>

@@ -16,7 +16,7 @@ class DesktopPetWindow(QWidget):
     drag_started = Signal()
     drag_finished = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, persona_name: str = "人格", default_slot: int = 0) -> None:
         flags = (
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -26,7 +26,9 @@ class DesktopPetWindow(QWidget):
         super().__init__(None, flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setWindowTitle("夜雨桌宠")
+        self._persona_name = str(persona_name or "人格")
+        self._default_slot = max(0, int(default_slot))
+        self.setWindowTitle(f"{self._persona_name}桌宠")
         self._label = QLabel(self)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -66,7 +68,11 @@ class DesktopPetWindow(QWidget):
         self._fps_cap = 15
         self._locked = False
         self._bubble_enabled = True
-        self.show_placeholder("夜雨\n素材准备中")
+        self.show_placeholder(f"{self._persona_name}\n素材准备中")
+
+    def set_persona_name(self, persona_name: str) -> None:
+        self._persona_name = str(persona_name or "人格")
+        self.setWindowTitle(f"{self._persona_name}桌宠")
 
     def show_placeholder(self, text: str) -> None:
         self.stop_animation()
@@ -136,7 +142,9 @@ class DesktopPetWindow(QWidget):
             screen = QApplication.primaryScreen()
             if screen is not None:
                 area = screen.availableGeometry()
-                self.move(area.right() - self.width() - 24, area.bottom() - self.height() - 24)
+                spacing = self.width() + 16
+                x = area.right() - self.width() - 24 - (self._default_slot * spacing)
+                self.move(max(area.left(), x), area.bottom() - self.height() - 24)
             self._placed = True
         self.show()
         self.raise_()
@@ -272,7 +280,7 @@ class DesktopPetWindow(QWidget):
             if frames:
                 self._prepared_png_frames[cache_key] = frames
         if not frames:
-            self.show_placeholder("夜雨\n素材无法解码")
+            self.show_placeholder(f"{self._persona_name}\n素材无法解码")
             return
         self._png_frames = frames
         self._png_index = 0

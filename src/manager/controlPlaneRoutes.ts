@@ -404,6 +404,7 @@ import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.
 import {
   ManagerReadWorkerError,
   managerCatalogWorkerPool,
+  managerKnowledgePageWorkerPool,
   managerPerformanceWorkerPool,
   managerReadWorkerPool
 } from "./managerReadWorkerPool.js";
@@ -503,9 +504,7 @@ import { presentPlan, presentPlans } from "../roleKnowledgePresentation.js";
 import {
   normalizeRoleMemoryPageLimit,
   normalizeRolePlanPageLimit,
-  paginateRolePlans,
-  previewRolePlan,
-  summarizeRolePlan
+  previewRolePlan
 } from "../roleKnowledgePagination.js";
 import { verifyCriticalProjectFactRecord } from "../messageProcessing/criticalFactRecord.js";
 import {
@@ -2029,9 +2028,7 @@ function applyRouteCatalogSnapshot(snapshot: RouteCatalogSnapshot): void {
 
 function syncRunningGateways(): void {
   if (!gatewayRuntimePluginLease.active) return;
-  if (planStorageStartupStatus().state !== "ready") return;
   if (routeCatalogStartupStatus().state !== "ready") return;
-  if (!roleKnowledgeCatalogsReady) return;
   gatewayRuntimeService.reconcile();
 }
 
@@ -2305,12 +2302,6 @@ function startGatewayRuntime(id: string): void {
     runtime.readiness = "blocked";
     runtime.lastError = "Route catalog startup is not ready.";
     appendLog(runtime, "skip start until route catalog startup is ready");
-    return;
-  }
-  if (planStorageStartupStatus().state !== "ready") {
-    runtime.readiness = "blocked";
-    runtime.lastError = "Plan storage startup recovery is not ready.";
-    appendLog(runtime, "skip start until plan storage startup recovery is ready");
     return;
   }
   const runtimeAdapters = sharedGatewayMessageAdapterTypes(runtime.definition);
@@ -5909,7 +5900,8 @@ function schedulePlanFeedbackPostCommit(
   roleId: string,
   gatewayId: string,
   plan: PlanItem,
-  inputRecord: PlanFeedbackRecord
+  inputRecord: PlanFeedbackRecord,
+  application: RoleStorageApplication = currentRoleStorageApplication()
 ): void {
   if (!inputRecord.postCommit || inputRecord.postCommit.status === "completed") return;
   const deliveryKey = planFeedbackDeliveryKey(roleId, inputRecord.planId, inputRecord.id);
@@ -5917,11 +5909,11 @@ function schedulePlanFeedbackPostCommit(
   if (activePlanFeedbackDeliveryFlights.has(postCommitKey)) return;
   const flight = new Promise<void>((resolve) => setImmediate(resolve))
     .then(async () => {
-      const processed = await processPlanFeedbackPostCommit(roleDir, roleId, gatewayId, inputRecord);
+      const processed = await processPlanFeedbackPostCommit(roleDir, roleId, gatewayId, inputRecord, undefined, application);
       if (processed.outcome === "ignored"
         && processed.record.deliveryStatus !== "record_only"
         && processed.record.deliveryStatus !== "delivered") {
-        await schedulePlanFeedbackDelivery(roleDir, roleId, gatewayId, plan, processed.record);
+        await schedulePlanFeedbackDelivery(roleDir, roleId, gatewayId, plan, processed.record, application);
       }
     })
     .catch(() => {})
@@ -6076,9 +6068,9 @@ function schedulePlanFeedbackDelivery(
   roleId: string,
   gatewayId: string,
   plan: PlanItem,
-  inputRecord: PlanFeedbackRecord
+  inputRecord: PlanFeedbackRecord,
+  application: RoleStorageApplication = currentRoleStorageApplication()
 ): Promise<PlanFeedbackRecord> {
-  const application = currentRoleStorageApplication();
   const deliveryKey = planFeedbackDeliveryKey(roleId, inputRecord.planId, inputRecord.id);
   const existing = activePlanFeedbackDeliveryFlights.get(deliveryKey);
   if (existing) {
@@ -7256,7 +7248,8 @@ function handleRoleKnowledgeApi(
   request: http.IncomingMessage,
   pathname: string,
   response: http.ServerResponse,
-  resolveRoleDir: (roleId: string) => string = roleDirForApi
+  resolveRoleDir: (roleId: string) => string = roleDirForApi,
+  resolveRoleStorageApplication: () => RoleStorageApplication = currentRoleStorageApplication
 ): boolean {
   if (handleWearableHealthApi(request, pathname, response)) return true;
   if (handlePersonaVoiceTranscriptApi(
@@ -7541,7 +7534,7 @@ function handleRoleKnowledgeApi(
       const planId = canonicalLogicalPlanId(decodeURIComponent(planFeedbackMatch[2]));
       const roleDir = resolveRoleDir(roleId);
       if (request.method === "GET") {
-        void currentRoleStorageApplication().queries.planFeedback(roleId, planId).then((data) => {
+        void resolveRoleStorageApplication().queries.planFeedback(roleId, planId).then((data) => {
           if (!data) {
             jsonResponse(response, 404, { code: -1, message: `Plan not found: ${planId}` });
             return;
@@ -7559,7 +7552,7 @@ function handleRoleKnowledgeApi(
         void readRoleStorageJsonBody<PlanFeedbackRequest>(request, PLAN_FEEDBACK_REQUEST_MAX_BYTES)
           .then(async (body) => ({
             body,
-            committed: await currentRoleStorageApplication().commands.submitPlanFeedback(roleId, planId, {
+            committed: await resolveRoleStorageApplication().commands.submitPlanFeedback(roleId, planId, {
               feedbackId: body.feedbackId,
               stepId: body.stepId,
               gatewayId: body.gatewayId,
@@ -7580,7 +7573,8 @@ function handleRoleKnowledgeApi(
                 roleId,
                 String(body.gatewayId || record.gatewayId || "").trim(),
                 currentPlan,
-                record
+                record,
+                resolveRoleStorageApplication()
               );
               if (created) publishManagerEvent("plan_feedback_changed", { roleId, planId, feedbackId: record.id });
             } catch (error) {
@@ -7610,7 +7604,7 @@ function handleRoleKnowledgeApi(
       if (request.method === "POST") {
         const context = roleStorageRequestContext(request, response);
         void readRoleStorageJsonBody<Record<string, unknown>>(request)
-          .then((body) => currentRoleStorageApplication().commands.applyMemoryConsolidation(roleId, runId, body, context))
+          .then((body) => resolveRoleStorageApplication().commands.applyMemoryConsolidation(roleId, runId, body, context))
           .then((committed) => {
             memoryConsolidationScheduler?.noteRunCompleted(runId);
             memoryConsolidationScheduler?.reschedule();
@@ -7651,7 +7645,7 @@ function handleRoleKnowledgeApi(
       const wantsPage = !itemId && requestUrl.searchParams.has("limit");
       const wantsSummary = wantsPage && requestUrl.searchParams.get("detail") === "summary";
       if (itemId) {
-        void currentRoleStorageApplication().queries.plan(roleId, itemId).then((result) => {
+        void resolveRoleStorageApplication().queries.plan(roleId, itemId).then((result) => {
           if (!result) {
             jsonResponse(response, 404, { code: -1, message: `Plan not found: ${itemId}` });
             return;
@@ -7665,42 +7659,36 @@ function handleRoleKnowledgeApi(
         }).catch((error) => respondRoleStorageError(response, error));
         return true;
       }
+      const requestedView = requestUrl.searchParams.get("view")?.trim() || undefined;
+      if (requestedView && !["current", "plans", "archived"].includes(requestedView)) {
+        throw new Error("Invalid plan page view.");
+      }
+      const requestedSort = requestUrl.searchParams.get("sort")?.trim() || "status";
+      if (!["status", "updated", "importance", "urgency"].includes(requestedSort)) {
+        throw new Error("Invalid plan page sort.");
+      }
+      if (wantsPage) {
+        void managerKnowledgePageWorkerPool.queryRolePlanPage(roleDir, {
+          cursor: requestUrl.searchParams.get("cursor")?.trim() || "",
+          limit: normalizeRolePlanPageLimit(requestUrl.searchParams.get("limit")),
+          view: requestedView as "current" | "plans" | "archived" | undefined,
+          query: requestUrl.searchParams.get("query") || "",
+          sort: requestedSort as "status" | "updated" | "importance" | "urgency",
+          statuses: requestUrl.searchParams.getAll("status").map((value) => value.trim()).filter(Boolean),
+          tags: requestUrl.searchParams.getAll("tag").map((value) => value.trim()).filter(Boolean),
+          includeFacets: requestUrl.searchParams.get("facets") !== "0",
+          summary: wantsSummary
+        })
+          .then((data) => jsonResponse(response, 200, { code: 0, data }))
+          .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
+            code: -1,
+            message: error instanceof Error ? error.message : String(error)
+          }));
+        return true;
+      }
       void managerCatalogWorkerPool.queryRolePlanCatalog(roleDir)
         .then(({ plans, approvalByPlanId }) => {
-          const data = wantsPage
-            ? (() => {
-              const requestedView = requestUrl.searchParams.get("view")?.trim() || undefined;
-              if (requestedView && !["current", "plans", "archived"].includes(requestedView)) {
-                throw new Error("Invalid plan page view.");
-              }
-              const requestedSort = requestUrl.searchParams.get("sort")?.trim() || "status";
-              if (!["status", "updated", "importance", "urgency"].includes(requestedSort)) {
-                throw new Error("Invalid plan page sort.");
-              }
-              const page = paginateRolePlans(
-                presentPlans(plans),
-                requestUrl.searchParams.get("cursor")?.trim() || "",
-                normalizeRolePlanPageLimit(requestUrl.searchParams.get("limit")),
-                {
-                  view: requestedView,
-                  query: requestUrl.searchParams.get("query") || "",
-                  sort: requestedSort as "status" | "updated" | "importance" | "urgency",
-                  statuses: requestUrl.searchParams.getAll("status").map((value) => value.trim()).filter(Boolean),
-                  tags: requestUrl.searchParams.getAll("tag").map((value) => value.trim()).filter(Boolean),
-                  includeFacets: requestUrl.searchParams.get("facets") !== "0"
-                }
-              );
-              return {
-                ...page,
-                items: page.items.map((plan) => wantsSummary
-                 ? summarizeRolePlan(plan)
-                  : {
-                    ...plan,
-                    approval: approvalByPlanId[plan.id]
-                  })
-              };
-            })()
-            : presentPlans(plans).map((plan) => ({
+          const data = presentPlans(plans).map((plan) => ({
               ...plan,
               approval: approvalByPlanId[plan.id]
             }));
@@ -7730,7 +7718,7 @@ function handleRoleKnowledgeApi(
     if (request.method === "GET" && resource === "memory" && !itemId) {
       const requestUrl = new URL(request.url || pathname, "http://127.0.0.1");
       if (requestUrl.searchParams.get("counts") === "1") {
-        void managerReadWorkerPool.queryRoleMemoryCounts(roleDir)
+        void managerKnowledgePageWorkerPool.queryRoleMemoryCounts(roleDir)
           .then((data) => jsonResponse(response, 200, { code: 0, data }))
           .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
             code: -1,
@@ -7743,7 +7731,7 @@ function handleRoleKnowledgeApi(
         if (kind !== "recent" && kind !== "consolidated" && kind !== "archived") {
           throw new Error("Invalid memory page kind.");
         }
-        void managerReadWorkerPool.queryRoleMemoryPage(roleDir, {
+        void managerKnowledgePageWorkerPool.queryRoleMemoryPage(roleDir, {
           kind,
           cursor: requestUrl.searchParams.get("cursor")?.trim() || "",
           limit: normalizeRoleMemoryPageLimit(requestUrl.searchParams.get("limit")),
@@ -7756,7 +7744,7 @@ function handleRoleKnowledgeApi(
           }));
         return true;
       }
-      void managerReadWorkerPool.queryRoleMemoryOverview(roleDir)
+      void managerKnowledgePageWorkerPool.queryRoleMemoryOverview(roleDir)
         .then((data) => jsonResponse(response, 200, { code: 0, data }))
         .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
           code: -1,
@@ -7767,7 +7755,7 @@ function handleRoleKnowledgeApi(
     if (request.method === "POST" && resource === "plans" && !itemId) {
       const context = roleStorageRequestContext(request, response);
       void readRoleStorageJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
-        .then((body) => currentRoleStorageApplication().commands.createPlan(roleId, body, context))
+        .then((body) => resolveRoleStorageApplication().commands.createPlan(roleId, body, context))
         .then((committed) => respondRoleStorageCommit(
           response,
           201,
@@ -7781,7 +7769,7 @@ function handleRoleKnowledgeApi(
     if (request.method === "PATCH" && resource === "plans" && itemId) {
       const context = roleStorageRequestContext(request, response);
       void readRoleStorageJsonBody<Record<string, unknown>>(request, PLAN_ATTACHMENT_REQUEST_MAX_BYTES)
-        .then((body) => currentRoleStorageApplication().commands.updatePlan(roleId, itemId, body, context))
+        .then((body) => resolveRoleStorageApplication().commands.updatePlan(roleId, itemId, body, context))
         .then((committed) => respondRoleStorageCommit(
           response,
           200,
@@ -7810,7 +7798,7 @@ function handleRoleKnowledgeApi(
           return true;
         }
         const context = roleStorageRequestContext(request, response);
-        void currentRoleStorageApplication().commands.touchRecentMemory(roleId, itemId, context)
+        void resolveRoleStorageApplication().commands.touchRecentMemory(roleId, itemId, context)
           .then((committed) => respondRoleStorageCommit(
             response,
             200,
@@ -7853,7 +7841,7 @@ function handleRoleKnowledgeApi(
     if (request.method === "POST" && resource === "memory/recent" && !itemId) {
       const context = roleStorageRequestContext(request, response);
       void readRoleStorageJsonBody<Record<string, unknown>>(request)
-        .then((body) => currentRoleStorageApplication().commands.createRecentMemory(roleId, body, context))
+        .then((body) => resolveRoleStorageApplication().commands.createRecentMemory(roleId, body, context))
         .then((committed) => {
           memoryConsolidationScheduler?.reschedule();
           respondRoleStorageCommit(response, 201, committed.operationId, committed.projection.memory, committed.projection.revision);
@@ -7864,7 +7852,7 @@ function handleRoleKnowledgeApi(
     if (request.method === "PATCH" && resource === "memory/recent" && itemId) {
       const context = roleStorageRequestContext(request, response);
       void readRoleStorageJsonBody<Record<string, unknown>>(request)
-        .then((body) => currentRoleStorageApplication().commands.updateRecentMemory(roleId, itemId, body, context))
+        .then((body) => resolveRoleStorageApplication().commands.updateRecentMemory(roleId, itemId, body, context))
         .then((committed) => {
           memoryConsolidationScheduler?.reschedule();
           respondRoleStorageCommit(response, 200, committed.operationId, committed.projection.memory, committed.projection.revision);
@@ -7874,7 +7862,7 @@ function handleRoleKnowledgeApi(
     }
     if (request.method === "GET" && resource === "memory/consolidation-runs") {
       if (itemId) {
-        void currentRoleStorageApplication().queries.consolidationRun(roleId, itemId)
+        void resolveRoleStorageApplication().queries.consolidationRun(roleId, itemId)
           .then((data) => {
             if (!data) {
               jsonResponse(response, 404, { code: -1, message: `Consolidation run not found: ${itemId}` });
@@ -7900,7 +7888,7 @@ function handleRoleKnowledgeApi(
     if (request.method === "POST" && resource === "memory/consolidation-requests" && !itemId) {
       const context = roleStorageRequestContext(request, response);
       void readRoleStorageJsonBody<Record<string, unknown>>(request)
-        .then((body) => currentRoleStorageApplication().commands.requestMemoryConsolidation(roleId, {
+        .then((body) => resolveRoleStorageApplication().commands.requestMemoryConsolidation(roleId, {
           triggerSource: body.triggerSource === "auto" ? "auto" : "api",
           includeOlderThanHours: typeof body.includeOlderThanHours === "number" ? body.includeOlderThanHours : undefined,
           triggerOlderThanHours: typeof body.triggerOlderThanHours === "number" ? body.triggerOlderThanHours : undefined,
@@ -8404,6 +8392,7 @@ function handleAgentStateReport(request: http.IncomingMessage, pathname: string,
 export type PersonaPluginApiContext = {
   rolesRoot?: string;
   roleDir?: (roleId: string) => string;
+  roleStorageApplication?: () => RoleStorageApplication;
 };
 
 export function handleManagerEventApi(
@@ -8441,7 +8430,13 @@ export function handlePersonaPluginApi(
   if (handlePlanAgentStatusApi(request, requestUrl, response, { roleDir: resolveRoleDir })) return true;
   if (handlePlanAttachmentApi(request, requestUrl.pathname, response, resolveRoleDir)) return true;
   if (handleRolePanelApi(request, requestUrl, response, activeRolesRoot)) return true;
-  return handleRoleKnowledgeApi(request, requestUrl.pathname, response, resolveRoleDir);
+  return handleRoleKnowledgeApi(
+    request,
+    requestUrl.pathname,
+    response,
+    resolveRoleDir,
+    context.roleStorageApplication ?? currentRoleStorageApplication
+  );
 }
 
 export type StartManagerOptions = {
@@ -9167,6 +9162,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       XiaomiHomeSettingsStore,
       createXiaomiHomeManagerRouteHandler,
       deliverXiaomiHomeEvent,
+      webguiLanRequestAllowed,
       lifecycleFence: Object.freeze({
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
         managerInstanceId
@@ -9553,12 +9549,12 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   };
   planStorageStartupLifecycle.onReady(() => startPlanDependentBackground());
   routeCatalogStartupLifecycle.onReady(() => {
+    syncRunningGateways();
     if (!planDependentBackgroundStarted) {
       startPlanDependentBackground();
-      return;
+    } else {
+      memoryConsolidationScheduler?.reschedule();
     }
-    syncRunningGateways();
-    memoryConsolidationScheduler?.reschedule();
   });
   const lanDiscoveryEnabled = !managerReadOnly
     && managerListensOnLan(managerHost)

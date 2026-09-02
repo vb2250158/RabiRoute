@@ -13,7 +13,7 @@ import type { PlanQaFeedbackHandling } from "../planFeedback.js";
 import { readPlanStoragePackage } from "../planStorageRepository.js";
 import {
   createPlan,
-  listPlans,
+  readPlansFromStorageInWorker,
   updatePlan as updateStoredPlan,
   type PlanItem
 } from "../roleKnowledge.js";
@@ -38,7 +38,7 @@ function planRevision(roleDir: string, plan: PlanItem): string {
 }
 
 function storageProjection(roleDir: string, planId: string): PlanQaStorageProjection | null {
-  const plan = listPlans(roleDir).find((candidate) => candidate.id === planId);
+  const plan = readPlansFromStorageInWorker(roleDir).find((candidate) => candidate.id === planId);
   if (!plan) return null;
   const records = listPlanFeedback(roleDir, planId);
   return {
@@ -278,7 +278,7 @@ test("QA plan transition rejects a stale projection instead of overwriting a con
     /STORAGE_MUTATION_REVISION_CONFLICT/
   );
 
-  const plan = listPlans(roleDir).find((candidate) => candidate.id === planId)!;
+  const plan = readPlansFromStorageInWorker(roleDir).find((candidate) => candidate.id === planId)!;
   assert.equal(plan.nextAction, "preserve this concurrent Manager edit");
   assert.equal(plan.steps.some((step) => step.id === "investigate-verify-post-commit"), false);
   assert.equal(listPlanFeedback(roleDir, planId)[0]?.qaHandling, undefined);
@@ -290,15 +290,16 @@ test("QA plan transition rejects a stale projection instead of overwriting a con
 
 test("QA feedback transition rejects a stale record revision and preserves the concurrent handling", async (t) => {
   const { roleDir, planId } = fixture(t);
-  const initialPlan = listPlans(roleDir).find((candidate) => candidate.id === planId)!;
+  const initialPlan = readPlansFromStorageInWorker(roleDir).find((candidate) => candidate.id === planId)!;
   updateStoredPlan(roleDir, planId, {
     status: "已完成",
+    currentStepId: null,
     steps: initialPlan.steps.map((step) => ({ ...step, status: "已完成" }))
   }, planRevision(roleDir, initialPlan), {
     requestId: "prepare-completed-qa-step",
     revision: storageMutationRevision("prepare-completed-qa-step")
   });
-  const feedback = appendPlanFeedback(roleDir, createPlanFeedbackRecord({
+  const preparedFeedback = createPlanFeedbackRecord({
     id: "qa-stale-feedback-projection",
     roleId: "Rabi",
     planId,
@@ -309,7 +310,16 @@ test("QA feedback transition rejects a stale record revision and preserves the c
     author: "user",
     source: "webgui",
     notifyAgent: false
-  }));
+  });
+  const feedback = appendPlanFeedback(roleDir, {
+    ...preparedFeedback,
+    postCommit: {
+      deliveryId: preparedFeedback.id,
+      status: "processing",
+      attempts: 1,
+      updatedAt: new Date().toISOString()
+    }
+  });
   const contexts: PlanQaMutationContext[] = [];
   let injected = false;
   const concurrentHandling: PlanQaFeedbackHandling = {

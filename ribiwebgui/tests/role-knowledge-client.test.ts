@@ -356,17 +356,18 @@ test("WebGUI clears cached revisions when Manager lifecycle metadata cannot be r
 
 test("WebGUI preserves Manager stages and does not derive a second stage when presentation is absent", () => {
   const managerStage = normalizeRolePlanFromManager(plan({
-    status: "暂停",
-    tone: "paused",
-    sortBucket: 9,
-    views: ["current", "plans"],
-    palette: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" },
+    status: "待讨论",
+    tone: "discussion",
+    sortBucket: 1,
+    views: ["plans"],
+    palette: { accent: "#d97706", background: "#fffbeb", foreground: "#92400e" },
     approval: { state: "none", enabled: false, label: "无需审批", helper: "", missing: [] }
   }));
   const missingPresentation = normalizeRolePlanFromManager(plan(undefined));
 
-  assert.equal(managerStage.presentation.status, "暂停");
-  assert.equal(managerStage.presentation.tone, "paused");
+  assert.equal(managerStage.presentation.status, "待讨论");
+  assert.equal(managerStage.presentation.tone, "discussion");
+  assert.equal(managerStage.presentation.sortBucket, 1);
   assert.equal(missingPresentation.presentation.status, "状态未知");
   assert.equal(missingPresentation.presentation.tone, "unknown");
 });
@@ -410,7 +411,9 @@ test("WebGUI requests only the active plan view and current search query", async
           qa: 0,
           active: 0,
           stages: {
+            analyzing: 0,
             executing: 0,
+            discussion: 0,
             qa: 0,
             waitingPackage: 0,
             waitingExternal: 0,
@@ -466,7 +469,9 @@ test("WebGUI omits repeated facets from later plan pages", async () => {
           qa: 0,
           active: 0,
           stages: {
+            analyzing: 0,
             executing: 0,
+            discussion: 0,
             qa: 0,
             waitingPackage: 0,
             waitingExternal: 0,
@@ -510,7 +515,9 @@ test("WebGUI sends importance and urgency plan sorting to Manager", async () => 
           qa: 0,
           active: 0,
           stages: {
+            analyzing: 0,
             executing: 0,
+            discussion: 0,
             qa: 0,
             waitingPackage: 0,
             waitingExternal: 0,
@@ -625,7 +632,9 @@ test("WebGUI returns the first eight summaries without waiting for plan details"
           qa: 0,
           active: 1,
           stages: {
+            analyzing: 0,
             executing: 1,
+            discussion: 0,
             qa: 0,
             waitingPackage: 0,
             approval: 0,

@@ -48,18 +48,20 @@ Host 同时向 Manager 与 Desktop 提供只读的发布目录（`RABIROUTE_PACK
 - RabiRoute 的 Manager 是 Node.js，托盘是 Python/Qt，插件还需要独立故障域，因此采用 Host 加两个同代 child，而不是把托盘做成 Manager 线程。这是语言运行时和插件隔离造成的有意差异，不改变 Host 的唯一生命周期所有权。
 - DSH 只提供插件 scope 与依赖感知卸载的设计参考：RabiRoute 据此用 generation、`readyRequires`、process lease 和依赖逆序释放管理插件。DSH 式进程内 isolate 不被当作安全沙箱；RabiRoute 的 `in_process` 是受信任扩展，`isolated` 是独立故障域，名称不能替代操作系统权限边界。
 
-Sunshine 的固定 base-port 约定不属于这里采用的不变量。RabiRoute Manager 继续使用操作系统动态分配的端口，并由 Host 绑定、发布和验证本代地址。
+Sunshine 的固定 base-port 约定不属于这里采用的不变量。RabiRoute 不把端口写死为安装配置；Host 只缓存最近一次成功启动的端口，并由本代 Manager 重新绑定、发布和验证。
 
 ## 动态 Manager 端点
 
-Manager 默认把端口 `0` 交给操作系统，取得当前可用的回环端口。端点身份包含：
+第一次启动时，Manager 把端口 `0` 交给操作系统，取得当前可用的回环端口。之后 Host 会把最近一次完成整代健康校验的端口保存到 Host 自己的状态目录；下一代会优先尝试该端口。该端口已被占用、已被浏览器禁止访问或缓存无效时，Manager 自动重新向操作系统申请安全端口，Host 在新一代完成健康校验后覆盖缓存。因此正常重启会保持 WebGUI 地址，端口冲突时仍能自行恢复。
+
+缓存只保存端口，不保存 URL、`applicationGenerationId` 或 `managerInstanceId`。端点身份仍包含：
 
 - `applicationGenerationId`：Host 创建的一代应用身份；
 - `managerInstanceId`：本代 Manager 实例身份；
 - `managerBaseUrl`：本代真实回环地址；
 - Manager PID：READY 必须来自 Host 刚启动的子程序。
 
-这些字段由 Host 状态与托盘持有，不写成固定端口、不通过端口扫描猜测，也不把旧实例的 URL 当成下一代地址。托盘调用 `/meta` 时必须同时验证应用代和 Manager 实例，失败时只显示离线；Host 的独立健康探针连续发现不可达或身份不匹配后，才按唯一 owner 的职责重建整代。
+这些字段由 Host 状态与托盘持有，不通过端口扫描猜测，也不把旧实例的 URL 当成下一代地址。托盘调用 `/meta` 时必须同时验证应用代和 Manager 实例，失败时只显示离线；Host 的独立健康探针连续发现不可达或身份不匹配后，才按唯一 owner 的职责重建整代。
 
 查询当前状态：
 

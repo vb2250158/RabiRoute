@@ -97,6 +97,43 @@ test("built Manager read-only summary fails persona-scoped coverage when no pers
   assert.equal(summary.counts.personasProbed, 0);
 });
 
+test("built Manager read-only summary retries while the initial route catalog is still loading", async () => {
+  let gatewayAttempts = 0;
+  const fetchImpl = async url => {
+    const request = new URL(url);
+    if (request.pathname === "/gateways") {
+      gatewayAttempts += 1;
+      if (gatewayAttempts === 1) {
+        return new Response(JSON.stringify({
+          message: "The initial route catalog snapshot is not installed. Retry after startup recovery completes."
+        }), {
+          status: 503,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return jsonResponse({ data: { manager: [] } });
+    }
+    assert.equal(gatewayAttempts, 2, "persona reads must wait for the route catalog readiness barrier");
+    if (request.pathname === "/api/persona-sync/manifest") return jsonResponse({ data: { roles: [] } });
+    if (request.pathname === "/api/persona-sync/conflicts") return jsonResponse({ data: { conflicts: [] } });
+    if (request.pathname === "/api/persona-sync/index-status") {
+      return jsonResponse({ data: { state: "ready", watchMode: "disabled", files: 0 } });
+    }
+    if (request.pathname === "/api/speech/messages") return jsonResponse({ data: { records: [] } });
+    if (request.pathname === "/api/scan/message-adapters") {
+      return jsonResponse({
+        adapters: { napcat: {} },
+        repair: { changed: false, messages: [] },
+        scan: { partial: false, durationMs: 12 }
+      });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await collectBuiltManagerReadOnlySummary("http://127.0.0.1:45678", fetchImpl);
+  assert.equal(gatewayAttempts, 2);
+});
+
 test("built Manager read-only failures redact the persona id from boundary errors", async () => {
   const fetchImpl = async url => {
     const request = new URL(url);

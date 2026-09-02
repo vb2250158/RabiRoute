@@ -101,6 +101,15 @@ test("desktop settings keep persona-scoped pet bindings bounded and isolated", (
   assert.equal(settings.pets.YeYu?.fpsCap, 24);
 });
 
+test("desktop settings disable legacy pet bindings that have no runnable pack", () => {
+  const settings = normalizeDesktopSettings({ pets: {
+    YeYu: { enabled: true, packId: "" }
+  } });
+
+  assert.equal(settings.pets.YeYu?.enabled, false);
+  assert.equal(settings.pets.YeYu?.packId, "");
+});
+
 test("autostart configuration remains tri-state for missing or corrupt settings", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-desktop-autostart-state-"));
   const filePath = path.join(root, "settings.json");

@@ -38,6 +38,14 @@ export type RabiUiContribution =
     writeCommandId: string;
   })
   | (RabiContributionBase & {
+    kind: "message-endpoint-settings";
+    label: RabiContributionLabel;
+    rendererId: string;
+    schemaId: string;
+    readCommandId: string;
+    writeCommandId: string;
+  })
+  | (RabiContributionBase & {
     kind: "status-card";
     label: RabiContributionLabel;
     queryId: string;
@@ -158,9 +166,10 @@ function normalizeContribution(value: RabiUiContribution): RabiUiContribution {
         routeId: normalizeSymbol(value.routeId, `Contribution routeId (${id})`)
       };
     case "settings-section":
+    case "message-endpoint-settings":
       return {
         ...base,
-        kind: "settings-section",
+        kind: value.kind,
         rendererId: normalizeSymbol(value.rendererId, `Contribution rendererId (${id})`),
         schemaId: normalizeSymbol(value.schemaId, `Contribution schemaId (${id})`),
         readCommandId: normalizeSymbol(value.readCommandId, `Contribution readCommandId (${id})`),

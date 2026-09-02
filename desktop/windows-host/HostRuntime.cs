@@ -343,6 +343,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
             log.Write($"generation={generationId} stable Node.js runtime={node}");
             var managerEntry = Path.Combine(packageRoot, "dist", "manager.js");
             if (!File.Exists(managerEntry)) throw new FileNotFoundException("Manager build is missing.", managerEntry);
+            var managerPortPolicy = ManagerPortPreference.ResolveStartupPolicy(stateRoot, log);
             manager = NativeChildProcess.StartSuspendedInJob(
                 job,
                 node,
@@ -350,7 +351,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
                 stateRoot,
                 new Dictionary<string, string?>
                 {
-                    ["GATEWAY_MANAGER_PORT"] = "auto",
+                    ["GATEWAY_MANAGER_PORT"] = managerPortPolicy,
                      ["RABIROUTE_HOSTED"] = "1",
                      ["RABIROUTE_APPLICATION_GENERATION_ID"] = generationId,
                      ["RABIROUTE_HOST_CONTROL_TOKEN"] = controlToken,
@@ -458,6 +459,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
                     throw new InvalidOperationException($"Manager failed final generation admission: {finalProbe.Message}");
                 }
             }
+            ManagerPortPreference.SaveSuccessfulEndpoint(stateRoot, ready.BaseUrl, log);
             log.Write($"generation={generationId} tray pid={tray.ProcessId} published exact lifecycle READY after exact Manager READY");
             return new ApplicationGeneration(
                 generationId,

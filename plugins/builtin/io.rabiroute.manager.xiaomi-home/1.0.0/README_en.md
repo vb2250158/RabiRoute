@@ -1,10 +1,16 @@
+<!-- docs-language-switch -->
+<div align="center">
+English | <a href="./README.md">简体中文</a>
+</div>
+<!-- /docs-language-switch -->
+
 # Xiaomi Home Manager plugin
 
 RabiRoute's single `xiaomiHome` message endpoint. It uses the Home Assistant REST API for resource discovery and state reads, subscribes to state changes over WebSocket, and exposes typed capability actions, motion events, and a local camera artifact ledger.
 
 ## Configuration and authorization
 
-Use **Settings → Xiaomi Home** in WebGUI. Before the first save, the complete configuration comes from the plugin Profile. After the first save, the complete local `settings.json` in the Xiaomi Home runtime directory becomes the single runtime source. Manager writes it atomically with optimistic revision checks and hot-loads the client, event monitor, and capture worker.
+In WebGUI, add **Xiaomi Home** to the current Route under **Message Adapters**, then expand that message endpoint to configure Home Assistant. Before the first save, the complete configuration comes from the plugin Profile. After the first save, the complete local `settings.json` in the Xiaomi Home runtime directory becomes the single runtime source. Manager writes it atomically with optimistic revision checks and hot-loads the client, event monitor, and capture worker.
 
 The settings file contains only the Home Assistant address, environment-variable names, entity IDs, and safety policy. It never stores OAuth credentials or token values. Configure these only in the trusted local runtime environment:
 
@@ -17,6 +23,8 @@ Every PUT/POST mutation requires the current Manager identity from `/meta` in th
 - `x-rabiroute-expected-manager-instance-id`
 
 WebGUI uses relative Manager APIs and refreshes `/meta` before each save. It never fixes or scans a Manager port.
+
+An authorized LAN WebGUI may read health and save this message-endpoint configuration. Device inventory, control actions, and recording-content APIs remain loopback-only.
 
 `writeEnabled` defaults to `false`. Verify the address, token, resource inventory, and event subscription in read-only mode before enabling control. Actions additionally require an `Idempotency-Key` and the latest `expectedStateVersion`.
 

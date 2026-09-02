@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import { routeScopedAdaptersPath, routeScopedOverviewPath } from "../routeScopedNavigation";
-import { adapterLabel, adaptersNeedGatewayRuntime, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
+import { adapterLabel, configNameFor, gatewayAdapterTypes, isMessageInputsDisabled } from "../utils/gatewayHelpers";
 
 const store = useGatewayStore();
 const router = useRouter();
@@ -65,22 +65,14 @@ async function deleteGatewayFromConsole(gateway: any): Promise<void> {
   }
 }
 
-function gatewayNeedsRuntime(gateway: any): boolean {
-  return adaptersNeedGatewayRuntime(gatewayAdapterTypes(gateway));
-}
-
 function gatewayRuntimeLabel(gateway: any): string {
   const runtime = store.runtimeFor(gateway.id);
-  if (gateway.enabled === false || runtime.enabled === false) return "禁用中";
-  if (!gatewayNeedsRuntime(gateway)) return "启用中";
-  return runtime.running ? "运行中" : "已停止";
+  return gateway.enabled === false || runtime.enabled === false ? "已禁用" : "已启用";
 }
 
 function gatewayRuntimeColor(gateway: any): string {
   const runtime = store.runtimeFor(gateway.id);
-  if (gateway.enabled === false || runtime.enabled === false) return "grey";
-  if (!gatewayNeedsRuntime(gateway)) return "success";
-  return runtime.running ? "success" : "error";
+  return gateway.enabled === false || runtime.enabled === false ? "grey" : "success";
 }
 </script>
 

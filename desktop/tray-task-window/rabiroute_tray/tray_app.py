@@ -220,7 +220,6 @@ def run(
     manager_instance_id: str,
     host_executable: Path,
     host_lifecycle_pipe: str,
-    show_desktop_pet: bool = False,
 ) -> int:
     enabled_features = enabled_builtin_feature_ids()
     desktop_pet_enabled = "io.rabiroute.desktop.pet-renderer@1" in enabled_features
@@ -247,10 +246,7 @@ def run(
 
     refresh_action = QAction("刷新")
     webgui_action = QAction("打开 RabiRoute WebGUI")
-    desktop_pet_action = QAction("显示夜雨桌宠") if desktop_pet_enabled else None
-    desktop_pet_click_through_action = QAction("桌宠鼠标点透") if desktop_pet_enabled else None
-    if desktop_pet_click_through_action is not None:
-        desktop_pet_click_through_action.setCheckable(True)
+    desktop_pet_menu = QMenu("虚拟形象") if desktop_pet_enabled else None
     status_action = QAction("状态：加载中")
     persona_heading_action = QAction("人格聊天")
     more_personas_menu = QMenu("更多人格")
@@ -260,14 +256,16 @@ def run(
 
     menu = QMenu()
     plugin_menu = QMenu("插件", menu)
-    apply_rabi_menu_theme(menu, more_personas_menu, plugin_menu)
+    themed_menus = [menu, more_personas_menu, plugin_menu]
+    if desktop_pet_menu is not None:
+        themed_menus.append(desktop_pet_menu)
+    apply_rabi_menu_theme(*themed_menus)
     menu.addAction(status_action)
     menu.addSeparator()
     menu.addAction(persona_heading_action)
     persona_actions_end = menu.addSeparator()
-    if desktop_pet_action is not None and desktop_pet_click_through_action is not None:
-        menu.addAction(desktop_pet_action)
-        menu.addAction(desktop_pet_click_through_action)
+    if desktop_pet_menu is not None:
+        menu.addMenu(desktop_pet_menu)
     menu.addAction(webgui_action)
     menu.addAction(refresh_action)
     menu.addSeparator()
@@ -329,7 +327,7 @@ def run(
         state["theme"] = theme if isinstance(theme, str) else "system"
         state["theme_definition"] = custom_theme if isinstance(custom_theme, dict) else None
         state["resolved_theme"] = resolved
-        apply_rabi_menu_theme(menu, more_personas_menu, plugin_menu, theme=resolved)
+        apply_rabi_menu_theme(*themed_menus, theme=resolved)
         if panel is not None:
             panel.apply_theme(resolved)
 
@@ -470,35 +468,32 @@ def run(
                 5000,
             )
 
-    def open_desktop_pet_persona() -> None:
+    def open_desktop_pet_persona(persona_id: str) -> None:
         gateway = next(
-            (item for item in state["manager"].gateways if role_id_from_gateway(item, "") == "YeYu"),
+            (item for item in state["manager"].gateways if role_id_from_gateway(item, "") == persona_id),
             None,
         )
         if gateway is None:
             _show_message(
                 tray,
                 tray_available,
-                "夜雨桌宠",
-                "Manager 当前没有提供 YeYu 人格入口。",
+                "虚拟形象",
+                f"Manager 当前没有提供 {persona_id} 的人格入口。",
                 QSystemTrayIcon.Warning,
                 4000,
             )
             return
         open_chat(gateway)
 
-    if desktop_pet_action is not None and desktop_pet_click_through_action is not None:
+    if desktop_pet_menu is not None:
         feature_context = DesktopFeatureContext(
             manager_url=manager.manager_url,
             application=app,
-            desktop_pet_action=desktop_pet_action,
-            desktop_pet_click_through_action=desktop_pet_click_through_action,
+            desktop_pet_menu=desktop_pet_menu,
             open_desktop_pet_persona=open_desktop_pet_persona,
         )
         for dispose in activate_builtin_features(enabled_features, feature_context):
             app.aboutToQuit.connect(dispose)
-        if show_desktop_pet:
-            QTimer.singleShot(0, desktop_pet_action.trigger)
 
     def apply_refresh(result: DesktopRefreshResult, auto: bool) -> None:
         previous_manager = state["manager"]

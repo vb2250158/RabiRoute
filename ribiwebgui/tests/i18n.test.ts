@@ -53,6 +53,9 @@ test("translates dynamic counts and adapter summaries", () => {
 test("translates speech delivery and persona configuration copy", () => {
   assert.equal(translateText("基础资料", "en"), "Profile");
   assert.equal(translateText("表达与语音", "en"), "Expression & voice");
+  assert.equal(translateText("虚拟形象", "en"), "Virtual avatar");
+  assert.equal(translateText("在本机启用", "en"), "Enable on this PC");
+  assert.equal(translateText("本机显示方式", "en"), "Display on this PC");
   assert.equal(translateText("身份关系", "en"), "Identity relations");
   assert.equal(translateText("消息上下文", "en"), "Message context");
   assert.equal(translateText("自动化", "en"), "Automation");
@@ -215,6 +218,9 @@ test("translates plan directory and step-local approval copy", () => {
   assert.equal(translateText("点击计划快速跳转", "en"), "Select a plan to jump");
   assert.equal(translateText("当前结果", "en"), "Current results");
   assert.equal(translateText("状态排序", "en"), "Status order");
+  assert.equal(translateText("分析中", "en"), "Analyzing");
+  assert.equal(translateText("执行中", "en"), "Executing");
+  assert.equal(translateText("待讨论", "en"), "Awaiting discussion");
   assert.equal(translateText("时间排序", "en"), "Update time");
   assert.equal(translateText("筛选状态", "en"), "Filter statuses");
   assert.equal(translateText("筛选标签", "en"), "Filter tags");

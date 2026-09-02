@@ -421,7 +421,16 @@ function selectGateway(id: string): void {
 
     <v-main>
       <v-alert v-if="store.error" type="error" variant="tonal" class="ma-4">{{ store.error }}</v-alert>
-      <router-view />
+      <router-view v-slot="{ Component, route: activeRoute }">
+        <KeepAlive>
+          <component
+            :is="Component"
+            v-if="activeRoute.meta.keepAlive"
+            :key="`${String(activeRoute.meta.pluginRouteId || activeRoute.name || activeRoute.path)}:${String(activeRoute.params.id || '')}`"
+          />
+        </KeepAlive>
+        <component :is="Component" v-if="!activeRoute.meta.keepAlive" />
+      </router-view>
     </v-main>
 
     <QuickSetupDialog v-model="store.quickSetupDialogOpen" />

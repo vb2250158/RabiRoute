@@ -174,8 +174,11 @@ async function requestJson(fetchImpl, baseUrl, pathname, boundaryName = pathname
       throw new Error(`Built Manager returned non-JSON for ${boundaryName} (HTTP ${response.status}).`);
     }
     if (response.status === 200) return { status: response.status, body };
-    const busy = response.status === 503 && body?.message === "Manager read workers are busy; retry shortly.";
-    if (busy && attempt < 4) {
+    const retryableStartupState = response.status === 503 && (
+      body?.message === "Manager read workers are busy; retry shortly."
+      || body?.message === "The initial route catalog snapshot is not installed. Retry after startup recovery completes."
+    );
+    if (retryableStartupState && attempt < 4) {
       await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
       continue;
     }
@@ -190,8 +193,8 @@ function endpointCheck(id, response, count) {
 }
 
 export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = globalThis.fetch) {
-  const [gateways, manifest, conflicts, speechMessages] = await Promise.all([
-    requestJson(fetchImpl, baseUrl, "/gateways?summary=1"),
+  const gateways = await requestJson(fetchImpl, baseUrl, "/gateways?summary=1");
+  const [manifest, conflicts, speechMessages] = await Promise.all([
     requestJson(fetchImpl, baseUrl, "/api/persona-sync/manifest"),
     requestJson(fetchImpl, baseUrl, "/api/persona-sync/conflicts"),
     requestJson(fetchImpl, baseUrl, "/api/speech/messages?limit=1")

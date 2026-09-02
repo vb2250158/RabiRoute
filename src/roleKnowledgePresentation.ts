@@ -8,7 +8,9 @@ import type { PlanAttachmentPresentation } from "./shared/planAttachmentContract
 import {
   currentPlanStep,
   planApprovalGate,
-  planIsBlocked
+  planIsBlocked,
+  planIsAwaitingDiscussion,
+  planWorkPhase
 } from "./roleKnowledge.js";
 import {
   planHasPackageLifecycle,
@@ -25,7 +27,7 @@ import {
   resolvePlanUrgencyLevel
 } from "./shared/planSortContract.js";
 
-export type PlanPresentationTone = "blocked" | "manual_verification" | "qa" | "running" | "waiting_package" | "done" | "archived" | "paused" | "unknown";
+export type PlanPresentationTone = "blocked" | "discussion" | "manual_verification" | "qa" | "analyzing" | "executing" | "running" | "waiting_package" | "done" | "archived" | "paused" | "unknown";
 export type PlanPresentationView = "current" | "plans" | "archived";
 
 export type PlanPresentationPalette = {
@@ -73,8 +75,11 @@ type DatedKnowledgeItem = Pick<RecentMemoryItem | ConsolidatedMemoryItem, "id" |
 
 const PLAN_STATUS_RANK: Record<PlanPresentationTone, PlanStatusSortLevel> = {
   blocked: PlanStatusSortLevel.Approval,
+  discussion: PlanStatusSortLevel.Discussion,
   manual_verification: PlanStatusSortLevel.Qa,
   qa: PlanStatusSortLevel.Qa,
+  analyzing: PlanStatusSortLevel.Running,
+  executing: PlanStatusSortLevel.Running,
   running: PlanStatusSortLevel.Running,
   waiting_package: PlanStatusSortLevel.WaitingPackage,
   done: PlanStatusSortLevel.Done,
@@ -85,8 +90,11 @@ const PLAN_STATUS_RANK: Record<PlanPresentationTone, PlanStatusSortLevel> = {
 
 const PLAN_PRESENTATION_PALETTE: Record<PlanPresentationTone, PlanPresentationPalette> = {
   blocked: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" },
+  discussion: { accent: "#d97706", background: "#fffbeb", foreground: "#92400e" },
   manual_verification: { accent: "#f97316", background: "#fff7ed", foreground: "#c2410c" },
   qa: { accent: "#7c3aed", background: "#f3e8ff", foreground: "#6d28d9" },
+  analyzing: { accent: "#0891b2", background: "#ecfeff", foreground: "#0e7490" },
+  executing: { accent: "#16a34a", background: "#eaf8ef", foreground: "#15803d" },
   running: { accent: "#16a34a", background: "#eaf8ef", foreground: "#15803d" },
   waiting_package: { accent: "#2563eb", background: "#eff6ff", foreground: "#1d4ed8" },
   done: { accent: "#607d8b", background: "#eaf4f7", foreground: "#52677a" },
@@ -192,22 +200,29 @@ export function planPresentation(plan: PlanItem): PlanPresentation {
       ? ["current", "plans"]
       : ["plans"];
   const build = (status: string, tone: PlanPresentationTone) => buildPlanPresentation(plan, status, tone, views, approval);
+  const buildWorkPhase = () => planWorkPhase(plan) === "execution"
+    ? build("执行中", "executing")
+    : build("分析中", "analyzing");
   if (plan.status === "进行中") {
     if (planIsBlocked(plan)) {
       return build("待审批", "blocked");
     }
     if (isWaitingForRenewedAuthorization(plan)) return build("暂停", "paused");
-    if (isPangHuSharedUnityContention(plan)) return build("进行中", "running");
+    if (isPangHuSharedUnityContention(plan)) return buildWorkPhase();
     if (planIsWaitingForManualVerification(plan)) return build("待人工核验", "manual_verification");
     if (planIsWaitingForPackage(plan)) return build("等待打包", "waiting_package");
     if (planIsWaitingForQaAcceptance(plan) && (planHasPackageLifecycle(plan) || !hasExecutableAlternative(plan))) {
       return build("等待 QA", "qa");
     }
     if (approval.state !== "incomplete" && hasUnactionableWait(plan)) return build("暂停", "paused");
-    return build("进行中", "running");
+    return buildWorkPhase();
   }
   if (plan.status === "未开始") return build("暂停", "paused");
-  if (plan.status === "暂停") return build(plan.status, "paused");
+  if (plan.status === "暂停") {
+    return planIsAwaitingDiscussion(plan)
+      ? build("待讨论", "discussion")
+      : build(plan.status, "paused");
+  }
   if (plan.status === "已完成") return build(plan.status, "done");
   if (plan.status === "已归档") return build(plan.status, "archived");
   return build(plan.status, "unknown");

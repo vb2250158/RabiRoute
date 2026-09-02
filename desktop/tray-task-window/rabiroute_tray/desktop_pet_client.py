@@ -62,12 +62,83 @@ class DesktopPetBinding:
     fps_cap: int = 15
 
 
+@dataclass(frozen=True)
+class DesktopPetPersona:
+    persona_id: str
+    name: str
+    binding: DesktopPetBinding
+
+
 def _bounded_number(value: object, fallback: float, minimum: float, maximum: float) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return fallback
     return max(minimum, min(maximum, parsed))
+
+
+def parse_desktop_pet_binding(value: object) -> DesktopPetBinding:
+    row = value if isinstance(value, dict) else {}
+    pack_id = str(row.get("packId") or "").strip()
+    return DesktopPetBinding(
+        enabled=row.get("enabled") is True and bool(pack_id),
+        pack_id=pack_id,
+        placement=row.get("placement") if isinstance(row.get("placement"), dict) else None,
+        scale=_bounded_number(row.get("scale"), 0.5, 0.1, 2),
+        opacity=_bounded_number(row.get("opacity"), 1, 0.2, 1),
+        always_on_top=row.get("alwaysOnTop") is not False,
+        click_through=row.get("clickThrough") is True,
+        locked=row.get("locked") is True,
+        hide_on_fullscreen=row.get("hideOnFullscreen") is not False,
+        bubble_enabled=row.get("bubbleEnabled") is not False,
+        fps_cap=int(_bounded_number(row.get("fpsCap"), 15, 6, 24)),
+    )
+
+
+class DesktopPetRosterClient:
+    """Reads the Manager-owned persona roster and its per-persona pet bindings."""
+
+    def __init__(self, manager_url: str, timeout_seconds: float = 10.0) -> None:
+        self.manager_url = manager_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+
+    def roster(self) -> tuple[DesktopPetPersona, ...]:
+        settings_payload = self._get_json("/api/desktop/settings")
+        personas_payload = self._get_json("/api/personas")
+        settings = (
+            settings_payload.get("data")
+            if isinstance(settings_payload, dict) and isinstance(settings_payload.get("data"), dict)
+            else {}
+        )
+        pets = settings.get("pets") if isinstance(settings.get("pets"), dict) else {}
+        persona_rows = (
+            personas_payload.get("personas")
+            if isinstance(personas_payload, dict) and isinstance(personas_payload.get("personas"), list)
+            else []
+        )
+        names: dict[str, str] = {}
+        for row in persona_rows:
+            if not isinstance(row, dict):
+                continue
+            persona_id = str(row.get("personaId") or "").strip()
+            if persona_id:
+                names[persona_id] = str(row.get("name") or persona_id).strip() or persona_id
+
+        roster: list[DesktopPetPersona] = []
+        for persona_id, raw_binding in pets.items():
+            if not isinstance(persona_id, str) or persona_id not in names:
+                continue
+            binding = parse_desktop_pet_binding(raw_binding)
+            if not binding.enabled or not binding.pack_id:
+                continue
+            roster.append(DesktopPetPersona(persona_id, names[persona_id], binding))
+        return tuple(sorted(roster, key=lambda item: (item.name, item.persona_id)))
+
+    def _get_json(self, path: str) -> object:
+        url = urljoin(f"{self.manager_url}/", path.lstrip("/"))
+        request = Request(url, method="GET", headers={"accept": "application/json"})
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            return json.loads(response.read().decode("utf-8"))
 
 
 def parse_desktop_pet_catalog(payload: object, persona_id: str) -> tuple[DesktopPetPack, ...]:
@@ -178,21 +249,7 @@ class DesktopPetClient:
         data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
         if data.get("personaId") != self.persona_id:
             raise ValueError("Manager desktop pet binding returned a different persona.")
-        row = data.get("binding") if isinstance(data.get("binding"), dict) else {}
-        placement = row.get("placement") if isinstance(row.get("placement"), dict) else None
-        return DesktopPetBinding(
-            enabled=row.get("enabled") is True,
-            pack_id=str(row.get("packId") or ""),
-            placement=placement,
-            scale=_bounded_number(row.get("scale"), 0.5, 0.1, 2),
-            opacity=_bounded_number(row.get("opacity"), 1, 0.2, 1),
-            always_on_top=row.get("alwaysOnTop") is not False,
-            click_through=row.get("clickThrough") is True,
-            locked=row.get("locked") is True,
-            hide_on_fullscreen=row.get("hideOnFullscreen") is not False,
-            bubble_enabled=row.get("bubbleEnabled") is not False,
-            fps_cap=int(_bounded_number(row.get("fpsCap"), 15, 6, 24)),
-        )
+        return parse_desktop_pet_binding(data.get("binding"))
 
     def update_binding(self, patch: dict[str, object]) -> DesktopPetBinding:
         role_id = quote(self.persona_id, safe="")
@@ -202,20 +259,7 @@ class DesktopPetClient:
         with urlopen(request, timeout=self.timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
         data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
-        row = data.get("binding") if isinstance(data.get("binding"), dict) else {}
-        return DesktopPetBinding(
-            enabled=row.get("enabled") is True,
-            pack_id=str(row.get("packId") or ""),
-            placement=row.get("placement") if isinstance(row.get("placement"), dict) else None,
-            scale=_bounded_number(row.get("scale"), 0.5, 0.1, 2),
-            opacity=_bounded_number(row.get("opacity"), 1, 0.2, 1),
-            always_on_top=row.get("alwaysOnTop") is not False,
-            click_through=row.get("clickThrough") is True,
-            locked=row.get("locked") is True,
-            hide_on_fullscreen=row.get("hideOnFullscreen") is not False,
-            bubble_enabled=row.get("bubbleEnabled") is not False,
-            fps_cap=int(_bounded_number(row.get("fpsCap"), 15, 6, 24)),
-        )
+        return parse_desktop_pet_binding(data.get("binding"))
 
     def load_animation(
         self,

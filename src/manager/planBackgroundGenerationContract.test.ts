@@ -62,15 +62,18 @@ test("Manager gives every child one dynamic READY identity tuple", () => {
   assert.doesNotMatch(environmentFactory, /879[0-9]/);
 });
 
-test("manual and Gateway children validate the active plan-storage generation without migration code", () => {
-  for (const relativePath of ["src/gatewayCommands.ts", "src/gatewayMain.ts"]) {
-    const source = read(relativePath);
-    assert.match(source, /\.\/runtime\/planStorageGenerationFence\.js/);
-    assert.doesNotMatch(source, /\.\/manager\/planStorageGenerationFence\.js/);
-    assert.match(source, /planStorageGenerationLeaseFromEnvironment\(\)/);
-    assert.match(source, /verifyPlanStorageGenerationLease\(/);
-    assert.doesNotMatch(source, /migrateRolePlanLayout|planStorageMigration|planStorageLegacyLayout/);
-  }
+test("plan-storage commands validate the active generation without blocking the Gateway runtime", () => {
+  const gatewayCommands = read("src/gatewayCommands.ts");
+  assert.match(gatewayCommands, /\.\/runtime\/planStorageGenerationFence\.js/);
+  assert.doesNotMatch(gatewayCommands, /\.\/manager\/planStorageGenerationFence\.js/);
+  assert.match(gatewayCommands, /planStorageGenerationLeaseFromEnvironment\(\)/);
+  assert.match(gatewayCommands, /verifyPlanStorageGenerationLease\(/);
+  assert.doesNotMatch(gatewayCommands, /migrateRolePlanLayout|planStorageMigration|planStorageLegacyLayout/);
+
+  const gatewayMain = read("src/gatewayMain.ts");
+  assert.doesNotMatch(gatewayMain, /planStorageGenerationFence/);
+  assert.doesNotMatch(gatewayMain, /planStorageGenerationLeaseFromEnvironment|verifyPlanStorageGenerationLease/);
+  assert.doesNotMatch(gatewayMain, /migrateRolePlanLayout|planStorageMigration|planStorageLegacyLayout/);
 
   const migrationImporters = productionTypeScriptFiles(sourceRoot)
     .filter(filePath => /from\s+["'][^"']*planStorageMigration\.js["']/.test(fs.readFileSync(filePath, "utf8")))
@@ -88,9 +91,9 @@ test("Xiaomi Home event children verify the READY generation before reading or d
   const command = gatewayCommands.slice(start, end);
   const lease = command.indexOf("planStorageGenerationLeaseFromEnvironment()");
   const verification = command.indexOf("await verifyPlanStorageGenerationLease(storageGenerationLease)");
-  const read = command.indexOf("await readStandardInputJson<XiaomiHomeEventCliPayload>()");
-  const delivery = command.indexOf('await forwardMessageAndWait(\n        "xiaomi_home_event"');
+  const stdinRead = command.indexOf("await readStandardInputJson<XiaomiHomeEventCliPayload>()");
+  const delivery = command.search(/await forwardMessageAndWait\(\s*"xiaomi_home_event"/);
   assert.ok(lease >= 0 && verification > lease, "Xiaomi Home child does not verify its Manager generation lease");
-  assert.ok(read > verification, "Xiaomi Home child reads work before its generation is verified");
-  assert.ok(delivery > read, "Xiaomi Home child delivery is not fenced behind generation verification");
+  assert.ok(stdinRead > verification, "Xiaomi Home child reads work before its generation is verified");
+  assert.ok(delivery > stdinRead, "Xiaomi Home child delivery is not fenced behind generation verification");
 });

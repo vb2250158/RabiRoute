@@ -93,18 +93,22 @@ Use this state machine for a bug, requested modification, document change, UI ch
 
 `待验收 --验收失败--> 调查中`
 
-These labels describe the current workflow step, not new top-level plan statuses. Keep top-level `status=进行中` until acceptance passes. Prefix the current step title with the exact applicable label so the user sees `调查中：<对象>`, `信息不足：<对象>`, `待审批：<对象>`, `执行中：<对象>`, or `待验收：<对象>` rather than an internal activity name.
+Keep top-level `status=进行中` until acceptance passes. Record the machine-readable phase on the current step: investigation, information gathering, solution design, and approval preparation use `workPhase=analysis`; implementation and development validation after approval or explicit direct authorization use `workPhase=execution`. Manager turns those two values into the public `分析中` and `执行中` statuses. `信息不足`、`待审批`、`待验收` remain precise workflow steps or Manager-derived special statuses, not new top-level lifecycle values. Prefix the current step title with the applicable workflow label so the user sees `调查中：<对象>`, `信息不足：<对象>`, `待审批：<对象>`, `执行中：<对象>`, or `待验收：<对象>` rather than an internal activity name.
+
+When an external collaboration source explicitly marks the item as waiting for discussion, keep top-level `status=暂停`, preserve `currentStepId` and its single in-progress resume step, and set `discussionState=pending` on that step. Manager derives the public `待讨论` presentation. Clear the marker when discussion ends before resuming or moving to another lifecycle state. Do not write `待讨论` as a top-level status and do not infer it from titles, detail, `waitingFor`, or generic paused plans.
 
 Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptance. Use `audit-*`, `review-*`, `validate-*`, or another concrete non-QA prefix for developer checks, policy audits, prompt validation, compilation, and static verification; otherwise Manager presentation may incorrectly show `等待 QA`.
 
 #### 调查中
 
+- Set the current step to `workPhase=analysis`.
 - Collect the relevant source, code, configuration, Prefab, runtime, screenshot, log, history, and owner evidence in the largest safe batch.
 - Before leaving investigation, write a reviewable conclusion containing: the observed problem and scope, evidence, root cause or decision reason, exact files/components/configuration to change, concrete changes, impact and out-of-scope items, and validation method.
 - Do not enter approval merely because investigation started, an Agent has a guess, or someone must answer a question. Approval is only for a complete proposed change.
 
 #### 信息不足
 
+- Keep the current step at `workPhase=analysis`.
 - Enter `信息不足` when a load-bearing fact is missing and the Agent cannot produce a defensible cause plus concrete change proposal.
 - Set the current step ID to `information-needed-*`. In `detail`, list what is already known, why it is insufficient, and which conclusion cannot yet be made. In `waitingFor`, name the responsible person or source and the exact questions, screenshots, reproduction steps, configuration IDs, logs, decisions, or other evidence required.
 - Clear any stale `approvalRequest`. Information collection is not approval.
@@ -112,18 +116,20 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 
 #### 待审批
 
+- Keep the approval step at `workPhase=analysis`; Manager's complete pending approval contract overrides it with the public `待审批` status.
 - Enter `待审批` only after investigation produced a complete review package. The current `approve-*` step must carry a complete `approvalRequest`, and the plan must already state the cause, exact changes, affected files/components/configuration, impact, validation, rollback, and exclusions.
 - If any of those items is missing, remove the incomplete approval contract and return to `调查中` or `信息不足`. Do not leave a plan in pending approval with only a title, generic request, or unexplained waiting text.
 - An approval request asks the responsible owner to approve or revise the written proposal. It must not ask the owner to perform the Agent's investigation or invent the change plan.
-- On approval, complete the approval decision step, select `implement-*`, and dispatch implementation in the same orchestration turn.
+- On approval, complete the approval decision step, select `implement-*` with `workPhase=execution`, and dispatch implementation in the same orchestration turn.
 - When the owner adds a correction, objection, or note, record that approval decision, preserve the feedback, and create `investigate-revision-*` as the single current step. Recheck the evidence and rewrite the proposal before requesting approval again; do not keep the rejected proposal in `待审批`.
 
 #### 执行中与待验收
 
 - `执行中` starts only from an approved proposal or an explicit user instruction that already authorizes the same concrete change. Bind the implementation package to that approved cause, change list, scope, and validation method.
+- Every current implementation or development-validation step must carry `workPhase=execution`; do not rely on its title to classify the plan.
 - After implementation, Agent-owned review, required tests, applicable synchronization/submission, and conflict-free readback pass, leave `执行中`. Do not send the item back to approval merely because implementation finished.
 - Move to the applicable acceptance path: use `manual-verify-*` for direct owner acceptance, or the existing package and `qa-*` / `verify-*` steps when a target package is required. These are mechanical substeps of `待验收`; do not invent extra status names between implementation and acceptance.
-- On acceptance failure, preserve the failure evidence and return to `investigate-revision-*`. Re-establish the cause and proposal before another implementation attempt.
+- On acceptance failure, preserve the failure evidence and return to `investigate-revision-*` with `workPhase=analysis`. Re-establish the cause and proposal before another implementation attempt.
 - Complete the plan only when the acceptance result passes and every required delivery step has evidence.
 
 When opening or reconciling an existing plan, repair state drift before dispatch: incomplete approval becomes `调查中` or `信息不足`; implemented work becomes the applicable `待验收` path; rejected approval or failed acceptance returns to investigation. Perform the repair and the next authorized action in the same orchestration turn.

@@ -10,11 +10,11 @@ const lifecycleFence = {
   managerInstanceId: "manager-instance-current"
 };
 
-function request(headers: Record<string, string> = {}, method = "PUT"): http.IncomingMessage {
+function request(headers: Record<string, string> = {}, method = "PUT", remoteAddress = "127.0.0.1"): http.IncomingMessage {
   return {
     method,
     headers,
-    socket: { remoteAddress: "127.0.0.1" }
+    socket: { remoteAddress }
   } as unknown as http.IncomingMessage;
 }
 
@@ -31,6 +31,40 @@ function context(onRead: () => void, onUpdate: () => void, responses: Array<{ st
     deliverEvent: async () => undefined
   };
 }
+
+test("Xiaomi Home message-endpoint configuration accepts an authorized LAN control-plane request", async () => {
+  const responses: Array<{ status: number; body: any }> = [];
+  const routeContext = context(() => undefined, () => undefined, responses);
+  routeContext.controlPlaneAccessAllowed = () => true;
+  handleXiaomiHomeManagerApi(
+    request({}, "GET", "192.168.0.20"),
+    new URL("http://192.168.0.57/api/agent/xiaomi-home/settings"),
+    {} as http.ServerResponse,
+    routeContext
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(responses[0]?.status, 200);
+});
+
+test("Xiaomi Home LAN access remains closed for unauthorized configuration and device actions", () => {
+  const responses: Array<{ status: number; body: any }> = [];
+  const routeContext = context(() => undefined, () => undefined, responses);
+  routeContext.controlPlaneAccessAllowed = () => false;
+  handleXiaomiHomeManagerApi(
+    request({}, "GET", "192.168.0.20"),
+    new URL("http://192.168.0.57/api/agent/xiaomi-home/settings"),
+    {} as http.ServerResponse,
+    routeContext
+  );
+  routeContext.controlPlaneAccessAllowed = () => true;
+  handleXiaomiHomeManagerApi(
+    request({}, "POST", "192.168.0.20"),
+    new URL("http://192.168.0.57/api/agent/xiaomi-home/action-requests"),
+    {} as http.ServerResponse,
+    routeContext
+  );
+  assert.deepEqual(responses.map(item => item.status), [403, 403]);
+});
 
 test("Xiaomi Home settings mutation rejects a missing lifecycle fence before reading the body", () => {
   let reads = 0;

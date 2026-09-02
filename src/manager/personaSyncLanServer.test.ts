@@ -15,6 +15,8 @@ test("dedicated persona sync LAN listener exposes only the merge data plane", as
   fs.mkdirSync(roleDir, { recursive: true });
   fs.writeFileSync(path.join(roleDir, "persona.md"), "# Rabi\n", "utf8");
   const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"));
+  await service.startManifestIndex();
+  t.after(() => service.stopManifestIndex());
   const coordinator = new PersonaSyncCoordinator(service, path.join(root, "state"), () => ({
     url: "http://127.0.0.1:1",
     token: "shared-app-token",

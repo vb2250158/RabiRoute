@@ -63,6 +63,52 @@ test("hidden knowledge tabs suspend requests and resume only after becoming visi
   assert.equal(knowledgePageShouldWork("visible", false), false);
 });
 
+test("knowledge navigation reuses the session cache until the user explicitly refreshes", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const app = fs.readFileSync(path.join(root, "src", "App.vue"), "utf8");
+  const router = fs.readFileSync(path.join(root, "src", "router.ts"), "utf8");
+  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const visibilityHandler = page.slice(
+    page.indexOf("function handleKnowledgeVisibilityChange(): void"),
+    page.indexOf("onMounted(() =>", page.indexOf("function handleKnowledgeVisibilityChange(): void"))
+  );
+  const activationHandler = page.slice(
+    page.indexOf("function activateKnowledgePage(): void"),
+    page.indexOf("function deactivateKnowledgePage(): void")
+  );
+
+  assert.match(app, /<KeepAlive>/);
+  assert.match(router, /keepAlive: registration\.routeId === "route\.knowledge"/);
+  assert.doesNotMatch(visibilityHandler, /refreshKnowledge\(\)/);
+  assert.doesNotMatch(activationHandler, /refreshKnowledge\(\)/);
+  assert.match(page, /onActivated\(activateKnowledgePage\)/);
+  assert.match(page, /onDeactivated\(deactivateKnowledgePage\)/);
+  assert.match(page, /@click="refreshKnowledge"/);
+});
+
+test("plan list controls paint before deferred virtualized filters and reuse their session view", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
+  const openDialog = page.slice(
+    page.indexOf("function openPlanListDialog(): void"),
+    page.indexOf("function applyPlanListDialog(): void")
+  );
+  const prepareDialog = page.slice(
+    page.indexOf("function ensurePlanListDialogContentCached(): void"),
+    page.indexOf("function openPlanListDialog(): void")
+  );
+
+  assert.match(page, /max-width="1180"/);
+  assert.match(page, /v-if="!planListDialogContentCached"/);
+  assert.match(page, /v-else class="knowledge-plan-list-control-layout"/);
+  assert.match(page, /<v-virtual-scroll[\s\S]{0,300}:items="visiblePlanListTagOptions"/);
+  assert.match(openDialog, /planListDialogOpen\.value = true;[\s\S]{0,200}ensurePlanListDialogContentCached\(\)/);
+  assert.match(prepareDialog, /await nextTick\(\)[\s\S]{0,200}await yieldToKnowledgePaint\(\)/);
+  assert.doesNotMatch(openDialog, /refreshKnowledge\(\)/);
+  assert.match(styles, /\.knowledge-plan-list-control-layout\s*\{[\s\S]{0,200}grid-template-columns:/);
+});
+
 test("visible knowledge pages keep requesting background pages until the active result set is complete", async () => {
   let cursor = "8";
   const requested: string[] = [];

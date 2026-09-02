@@ -31,6 +31,7 @@ export function planMemoryApiHint(roleId: unknown): string[] {
     `- 查看/更新计划：GET ${base}/plans、GET ${base}/plans/{planId}、POST ${base}/plans、PATCH ${base}/plans/{planId}`,
       "- 待审批计划如有实际效果图、演示视频、设计稿、报告或其它相关文件，应通过计划 POST/PATCH 的 attachments 一并提交：本机文件使用 path，内存内容使用 name/mimeType/contentBase64；不要只把文件路径写进标题、focus 或审批说明",
     "- 用户要求暂停计划时，PATCH 顶层 status=暂停，保留当前进行中步骤和 currentStepId 作为恢复位置，并停止继续驱动绑定任务；恢复时把顶层 status 改回进行中",
+    "- 顶层 status=进行中时，当前步骤必须写 workPhase=analysis 或 execution：调查、补证据、设计和审批前准备属于 analysis；审批通过或用户已明确直接授权后的实施与开发验证属于 execution。腾讯表 F待讨论等明确讨论等待使用顶层 status=暂停，并在保留的当前恢复步骤写 discussionState=pending；Manager 显示待讨论。待审批、等待打包、等待 QA、待人工核验和普通暂停仍由 Manager 优先派生",
     "- 只有完整、可提交且 responseStatus=pending 的 approvalRequest 会由 Manager 自动派生阻塞；isBlocked 是兼容投影，不要手写。其它等待、失败和资源缺口必须继续询问、重试、改道、拆分或补证据",
     "- 请求审批前必须补齐 approvalRequest：approver、request、recommendation、alternatives、reason、files/commands/changes、validation、rollback、outOfScope、requestedAt、sourceMessageId 或 feedbackId、responseStatus；信息不完整时计划保持进行中并禁止正式审批",
     `- 记录计划反馈：GET ${base}/plans/{planId}/feedback、POST ${base}/plans/{planId}/feedback；计划级引导用 kind=guidance 且不带 stepId，审批意见用 kind=approval_suggestion；QQ 等外部入口记录用户反馈时使用 author=user、source=qq、notifyAgent=false；Agent 处理说明分别用 kind=guidance_response / kind=approval_response、author=agent、notifyAgent=false`,
@@ -50,6 +51,7 @@ function focusedApiHint(roleId: unknown): string[] {
   return [
     "计划、记忆和技能默认只注入与当前输入高相关的摘要；长历史与完整内容按需查询。",
     `按需查询/维护：${base}/plans、${base}/memory、${base}/skills；执行写入前仍须遵守对应接口校验与 Action Gate。`,
+    "计划顶层 status=进行中时，当前步骤写 workPhase=analysis 或 execution：审批前的调查、补证据和方案属于 analysis；审批通过或用户明确直接授权后的实施与开发验证属于 execution。明确等待讨论时保持顶层 status=暂停、currentStepId 和恢复步骤，并在该步骤写 discussionState=pending；Manager 显示待讨论。其它特殊等待状态仍由 Manager 优先派生。",
     "需要联系其它人格时，先 GET /api/personas?addressable=true，再 POST /api/personas/{personaId}/messages；请求带唯一 deliveryId，sourceRouteId 使用当前 replyContext.runtimeRouteId，sourceCapability 原样使用 personaMessagingCapability。多目标 Route 必须明确选择；回复沿用会话 ID、引用当前消息并增加 hopCount，不得超过注入上限。",
       "待审批计划如果已有实际效果图、演示视频、设计稿、报告或其它文件，应写入计划 attachments；可传本机 path 或 name/mimeType/contentBase64，页面会展示附件并支持图片、视频预览。",
     ...roleStorageMutationContractLines(base)

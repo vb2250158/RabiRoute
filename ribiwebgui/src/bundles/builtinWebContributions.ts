@@ -145,6 +145,7 @@ export function activateDiagnostics(api: BaseWebBundleApi): readonly Dispose[] {
 export function activateDesktop(api: BaseWebBundleApi): readonly Dispose[] {
   return [api.registerSettingsRenderer({
     rendererId: "builtin.desktop-settings.v1", placementId: "global.settings.sections", allowedSlots: ["desktop"],
+    contributionKind: "settings-section", contributionSurface: "shared.settings",
     schemaId: "desktop.settings.v1", readCommandId: "manager.desktop-settings.read", writeCommandId: "manager.desktop-settings.write",
     loader: () => import("../components/renderers/DesktopSettingsRenderer.vue")
   })];
@@ -152,7 +153,8 @@ export function activateDesktop(api: BaseWebBundleApi): readonly Dispose[] {
 
 export function activateXiaomiHome(api: BaseWebBundleApi): readonly Dispose[] {
   return [api.registerSettingsRenderer({
-    rendererId: "builtin.xiaomi-home-settings.v1", placementId: "global.settings.sections", allowedSlots: ["xiaomi-home"],
+    rendererId: "builtin.xiaomi-home-message-endpoint.v1", placementId: "route.adapters.message-endpoint-settings", allowedSlots: ["xiaomiHome"],
+    contributionKind: "message-endpoint-settings", contributionSurface: "route.adapters",
     schemaId: "xiaomi-home.settings.v1", readCommandId: "manager.xiaomi-home-settings.read", writeCommandId: "manager.xiaomi-home-settings.write",
     loader: () => import("../components/renderers/XiaomiHomeSettingsRenderer.vue")
   })];

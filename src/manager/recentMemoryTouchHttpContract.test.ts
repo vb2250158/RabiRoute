@@ -28,7 +28,7 @@ test("recent-memory detail GET is pure in read-only mode and fenced in writable 
 
   assert.match(readOnlyDetail, /managerReadWorkerPool\.queryRecentMemoryDetail\(roleDir, itemId\)/);
   assert.doesNotMatch(readOnlyDetail, /touchRecentMemory\(|respondRoleStorageCommit\(/);
-  assert.match(writableDetail, /currentRoleStorageApplication\(\)\.commands\.touchRecentMemory\(roleId, itemId, context\)/);
+  assert.match(writableDetail, /resolveRoleStorageApplication\(\)\.commands\.touchRecentMemory\(roleId, itemId, context\)/);
   assert.match(
     writableDetail,
     /respondRoleStorageCommit\(\s*response,\s*200,\s*committed\.operationId,\s*committed\.projection\.memory,\s*committed\.projection\.revision\s*\)/

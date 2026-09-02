@@ -4,9 +4,35 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listPlanFeedback } from "../planFeedback.js";
-import { createPlan, listPlans } from "../roleKnowledge.js";
+import { readPlanStoragePackage } from "../planStorageRepository.js";
+import { createPlan } from "../roleKnowledge.js";
+import { storageInventoryRevisionToken } from "../shared/storageRevision.js";
 import { handlePersonaPluginApi } from "./controlPlaneRoutes.js";
+import { RoleStorageApplication } from "./roleStorageApplication.js";
+
+function createTestRoleStorage(t: test.TestContext, prefix: string) {
+  const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const roleDir = path.join(rolesRoot, "Rabi");
+  fs.mkdirSync(roleDir, { recursive: true });
+  const identity = {
+    applicationGenerationId: `${prefix}generation`,
+    managerInstanceId: `${prefix}manager`
+  };
+  const application = new RoleStorageApplication({
+    rolesRoot,
+    ...identity,
+    currentIdentity: () => identity
+  });
+  t.after(async () => {
+    await application.stop();
+    fs.rmSync(rolesRoot, { recursive: true, force: true });
+  });
+  return { application, roleDir, roleStorageApplication: () => application };
+}
+
+function planRevision(roleDir: string, planId: string): string {
+  return storageInventoryRevisionToken(readPlanStoragePackage(roleDir, planId, "active").inventoryHash);
+}
 
 function listen(server: http.Server): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -19,17 +45,16 @@ function listen(server: http.Server): Promise<number> {
   });
 }
 
-async function waitUntil(check: () => boolean, timeoutMs = 2_000): Promise<void> {
+async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for plan feedback post-commit state.");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
 test("the feedback route ignores Agent guidance summaries but consumes explicit user QA verdicts", async (t) => {
-  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-control-plane-qa-feedback-"));
-  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const { application, roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-control-plane-qa-feedback-");
   createPlan(roleDir, {
     id: "plan-route-qa-verdict",
     title: "验证 QA 回传入口",
@@ -46,7 +71,7 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
   });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir })) return;
+    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -55,7 +80,11 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
   const postFeedback = async (body: Record<string, unknown>) => {
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": `feedback-test:${String(body.feedbackId)}`,
+        "if-match": planRevision(roleDir, "plan-route-qa-verdict")
+      },
       body: JSON.stringify({ ...body, notifyAgent: false })
     });
     const result = await response.json() as Record<string, any>;
@@ -71,8 +100,7 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
     source: "agent"
   });
   assert.equal(ignored.data.qaHandling, undefined);
-  assert.equal(listPlans(roleDir)[0].status, "进行中");
-
+  assert.equal((await application.queries.planFeedback("Rabi", "plan-route-qa-verdict"))?.plan.status, "进行中");
   const passed = await postFeedback({
     feedbackId: "route-user-qa-pass",
     stepId: "verify-route",
@@ -81,20 +109,19 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
     source: "webgui"
   });
   assert.equal(passed.data.postCommit.status, "pending");
-  await waitUntil(() => {
-    const record = listPlanFeedback(roleDir, "plan-route-qa-verdict")
-      .find((item) => item.id === "route-user-qa-pass") as any;
+  await waitUntil(async () => {
+    const record = (await application.queries.planFeedback("Rabi", "plan-route-qa-verdict"))?.records
+      .find((item) => item.id === "route-user-qa-pass");
     return record?.postCommit?.status === "completed";
   });
-  const consumed = listPlanFeedback(roleDir, "plan-route-qa-verdict")
-    .find((item) => item.id === "route-user-qa-pass");
+  const completedProjection = await application.queries.planFeedback("Rabi", "plan-route-qa-verdict");
+  const consumed = completedProjection?.records.find((item) => item.id === "route-user-qa-pass");
   assert.equal(consumed?.qaHandling?.outcome, "passed");
-  assert.equal(listPlans(roleDir)[0].status, "已完成");
+  assert.equal(completedProjection?.plan.status, "已完成");
 });
 
 test("the feedback route commits concurrent attachment retries as one durable record", async (t) => {
-  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-control-plane-feedback-transaction-"));
-  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const { application, roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-control-plane-feedback-transaction-");
   createPlan(roleDir, {
     id: "plan-route-feedback-transaction",
     title: "验证反馈原子事务",
@@ -106,7 +133,7 @@ test("the feedback route commits concurrent attachment retries as one durable re
   });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir })) return;
+    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -129,7 +156,11 @@ test("the feedback route commits concurrent attachment retries as one durable re
   const post = async () => {
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "feedback-test:route-feedback-transaction",
+        "if-match": planRevision(roleDir, "plan-route-feedback-transaction")
+      },
       body: JSON.stringify(body)
     });
     const result = await response.json() as Record<string, any>;
@@ -141,7 +172,11 @@ test("the feedback route commits concurrent attachment retries as one durable re
     `http://127.0.0.1:${port}/api/roles/Rabi/plans/%20plan-route-feedback-transaction/feedback`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "feedback-test:route-feedback-transaction-invalid",
+        "if-match": planRevision(roleDir, "plan-route-feedback-transaction")
+      },
       body: JSON.stringify(body)
     }
   );
@@ -152,7 +187,7 @@ test("the feedback route commits concurrent attachment retries as one durable re
   const [first, retry] = await Promise.all([post(), post()]);
   assert.equal(first.id, body.feedbackId);
   assert.equal(retry.id, body.feedbackId);
-  const records = listPlanFeedback(roleDir, "plan-route-feedback-transaction");
+  const records = (await application.queries.planFeedback("Rabi", "plan-route-feedback-transaction"))?.records ?? [];
   assert.equal(records.length, 1);
   assert.equal(records[0].attachments.length, 1);
   assert.equal(
@@ -162,8 +197,7 @@ test("the feedback route commits concurrent attachment retries as one durable re
 });
 
 test("the feedback route returns 202 after durable commit even when QA post-commit fails", async (t) => {
-  const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-control-plane-feedback-post-commit-"));
-  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const { application, roleDir, roleStorageApplication } = createTestRoleStorage(t, "rabi-control-plane-feedback-post-commit-");
   createPlan(roleDir, {
     id: "plan-route-feedback-post-commit",
     title: "验证反馈提交边界",
@@ -175,7 +209,7 @@ test("the feedback route returns 202 after durable commit even when QA post-comm
   });
   const server = http.createServer((request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
-    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir })) return;
+    if (handlePersonaPluginApi(request, requestUrl, response, { roleDir: () => roleDir, roleStorageApplication })) return;
     response.writeHead(404).end();
   });
   const port = await listen(server);
@@ -185,7 +219,11 @@ test("the feedback route returns 202 after durable commit even when QA post-comm
     `http://127.0.0.1:${port}/api/roles/Rabi/plans/plan-route-feedback-post-commit/feedback`,
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": "feedback-test:route-feedback-post-commit",
+        "if-match": planRevision(roleDir, "plan-route-feedback-post-commit")
+      },
       body: JSON.stringify({
         feedbackId: "route-feedback-post-commit",
         stepId: "verify-post-commit",
@@ -200,11 +238,11 @@ test("the feedback route returns 202 after durable commit even when QA post-comm
   assert.equal(response.status, 202, JSON.stringify(result));
   assert.equal(result.data.id, "route-feedback-post-commit");
 
-  await waitUntil(() => {
-    const record = listPlanFeedback(roleDir, "plan-route-feedback-post-commit")[0] as any;
+  await waitUntil(async () => {
+    const record = (await application.queries.planFeedback("Rabi", "plan-route-feedback-post-commit"))?.records[0];
     return record?.postCommit?.status === "failed";
   });
-  const records = listPlanFeedback(roleDir, "plan-route-feedback-post-commit");
+  const records = (await application.queries.planFeedback("Rabi", "plan-route-feedback-post-commit"))?.records ?? [];
   assert.equal(records.length, 1);
   assert.equal((records[0] as any).postCommit.status, "failed");
   assert.equal(records[0].qaHandling?.status, "dispatch_failed");

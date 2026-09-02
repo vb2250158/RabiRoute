@@ -370,6 +370,46 @@ test("child-process manifest refresh atomically publishes a deeply immutable sna
   assert.deepEqual(published.manifest!.roles[0].files.map(file => file.path), ["memory/0.md", "memory/1.md"]);
 });
 
+test("child-process manifest refresh runs one trailing scan when a file event arrives in flight", async (t) => {
+  const data = fixture(0);
+  t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));
+  let workerRuns = 0;
+  let releaseFirstRun: (() => void) | undefined;
+  const firstRunBlocked = new Promise<void>(resolve => { releaseFirstRun = resolve; });
+  const result = () => ({
+    schemaVersion: 1 as const,
+    cache: {
+      schemaVersion: 1 as const,
+      generatedAt: new Date().toISOString(),
+      roles: [],
+      files: []
+    },
+    scan: { hashedFiles: 0, reusedFiles: 0, completedAt: new Date().toISOString() }
+  });
+  const index = new PersonaSyncManifestIndex(() => data.rolesRoot, data.stateRoot, {
+    watch: false,
+    reconcileOnQueryFallback: false,
+    scanExecutionMode: "child_process",
+    runManifestWorker: async () => {
+      workerRuns += 1;
+      if (workerRuns === 1) await firstRunBlocked;
+      return result();
+    }
+  });
+  t.after(() => index.stop());
+
+  const started = index.start();
+  await waitFor(() => workerRuns === 1);
+  index.notePathChanged("Rabi", "memory/added.md");
+  await new Promise(resolve => setTimeout(resolve, 120));
+  releaseFirstRun?.();
+  await started;
+
+  assert.equal(workerRuns, 2);
+  assert.equal(index.status().lastReconcile?.reason, "file_event");
+  assert.equal(index.status().publication.revision, 2);
+});
+
 test("UNC persona roots never reach Manager fs.watch and use the single child refresh loop", async (t) => {
   const data = fixture(0);
   t.after(() => fs.rmSync(data.root, { recursive: true, force: true }));

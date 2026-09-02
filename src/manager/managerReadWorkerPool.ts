@@ -73,6 +73,18 @@ export type RolePlanCatalogRead = {
   approvalByPlanId: Record<string, { count: number; latest?: unknown }>;
 };
 
+export type RolePlanPageReadInput = {
+  cursor: string;
+  limit: number;
+  view?: "current" | "plans" | "archived";
+  query: string;
+  sort: "status" | "updated" | "importance" | "urgency";
+  statuses: string[];
+  tags: string[];
+  includeFacets: boolean;
+  summary: boolean;
+};
+
 type PendingRead = {
   task: ManagerReadWorkerTask;
   queuedAt: number;
@@ -168,7 +180,10 @@ function unrefWorker(worker: ManagerReadWorkerChild): void {
 
 export class ManagerReadWorkerPool {
   private static readonly instances = new Set<ManagerReadWorkerPool>();
-  private static readonly globalMaxConcurrency = 2;
+  // Read workers run below normal priority and never own message delivery. Keep
+  // enough lanes for a visible knowledge page while a background catalog refresh
+  // and an unrelated diagnostic are in flight.
+  private static readonly globalMaxConcurrency = 6;
   private static readonly terminationPendingWorkers = new Set<WorkerSlot>();
   private static readonly terminationBlockedWorkers = new Set<WorkerSlot>();
   private static globalActive = 0;
@@ -182,6 +197,8 @@ export class ManagerReadWorkerPool {
   private readonly queue: PendingRead[] = [];
   private readonly voiceSummaryInFlight = new Map<string, SharedRead<PersonaVoiceTranscriptQueryResult>>();
   private readonly performanceInFlight = new Map<string, SharedRead<string>>();
+  private readonly rolePlanPageInFlight = new Map<string, SharedRead<unknown>>();
+  private readonly roleMemoryPageInFlight = new Map<string, SharedRead<unknown>>();
   private readonly workers = new Set<WorkerSlot>();
   private active = 0;
   private spawnedWorkers = 0;
@@ -237,6 +254,8 @@ export class ManagerReadWorkerPool {
     this.rejectQueue(stoppingError);
     for (const shared of this.voiceSummaryInFlight.values()) shared.controller.abort();
     for (const shared of this.performanceInFlight.values()) shared.controller.abort();
+    for (const shared of this.rolePlanPageInFlight.values()) shared.controller.abort();
+    for (const shared of this.roleMemoryPageInFlight.values()) shared.controller.abort();
     const slots = [...this.workers];
     const closed = await Promise.all(slots.map(slot => this.discardWorker(slot, stoppingError)));
     const unconfirmed = slots.filter((_slot, index) => !closed[index]);
@@ -252,6 +271,8 @@ export class ManagerReadWorkerPool {
     }
     this.voiceSummaryInFlight.clear();
     this.performanceInFlight.clear();
+    this.rolePlanPageInFlight.clear();
+    this.roleMemoryPageInFlight.clear();
     this.stopped = true;
   }
 
@@ -318,6 +339,20 @@ export class ManagerReadWorkerPool {
         ...result,
         plans: [...publishRolePlanCatalog(roleDir, result.plans)]
       }));
+  }
+
+  queryRolePlanPage<T>(
+    roleDir: string,
+    input: RolePlanPageReadInput,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
+  ): Promise<T> {
+    const key = JSON.stringify(["role_plan_page", roleDir, input]);
+    return this.querySharedRead<T>(
+      this.rolePlanPageInFlight,
+      key,
+      { type: "role_plan_page", roleDir, ...input },
+      options
+    );
   }
 
   queryPersonaVoiceTranscripts(
@@ -421,7 +456,13 @@ export class ManagerReadWorkerPool {
     },
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<T> {
-    return this.run<T>({ type: "role_memory_page", roleDir, ...input }, options);
+    const key = JSON.stringify(["role_memory_page", roleDir, input]);
+    return this.querySharedRead<T>(
+      this.roleMemoryPageInFlight,
+      key,
+      { type: "role_memory_page", roleDir, ...input },
+      options
+    );
   }
 
   queryRoleMemoryOverview<T>(
@@ -531,24 +572,33 @@ export class ManagerReadWorkerPool {
     task: ManagerReadWorkerTask,
     options: { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<string> {
-    let shared = this.performanceInFlight.get(key);
+    return this.querySharedRead<string>(this.performanceInFlight, key, task, options);
+  }
+
+  private querySharedRead<T>(
+    inFlight: Map<string, SharedRead<unknown>> | Map<string, SharedRead<T>>,
+    key: string,
+    task: ManagerReadWorkerTask,
+    options: { signal?: AbortSignal; timeoutMs?: number }
+  ): Promise<T> {
+    let shared = inFlight.get(key) as SharedRead<T> | undefined;
     if (!shared) {
       const controller = new AbortController();
       shared = {
         controller,
-        promise: Promise.resolve(""),
+        promise: Promise.resolve(undefined as never),
         subscribers: 0,
         completed: false
       };
       const current = shared;
-      current.promise = this.run<string>(task, {
+      current.promise = this.run<T>(task, {
         signal: controller.signal,
         timeoutMs: options.timeoutMs
       }).finally(() => {
         current.completed = true;
-        if (this.performanceInFlight.get(key) === current) this.performanceInFlight.delete(key);
+        if (inFlight.get(key) === current) inFlight.delete(key);
       });
-      this.performanceInFlight.set(key, current);
+      inFlight.set(key, current);
     }
     return this.subscribe(shared, options.signal);
   }
@@ -813,10 +863,20 @@ export class ManagerReadWorkerPool {
 }
 
 export const managerReadWorkerPool = new ManagerReadWorkerPool();
+/**
+ * User-driven knowledge pages must not wait behind startup reconciliation or
+ * background catalog refreshes. Requests still share the global bounded budget.
+ */
+export const managerKnowledgePageWorkerPool = new ManagerReadWorkerPool({
+  maxConcurrency: 4,
+  maxQueue: 32,
+  timeoutMs: 30_000
+});
 export const managerCatalogWorkerPool = new ManagerReadWorkerPool({
   maxConcurrency: 1,
-  maxQueue: 1,
-  timeoutMs: 5 * 60_000
+  maxQueue: 16,
+  timeoutMs: 5 * 60_000,
+  setWorkerPriority: (pid) => os.setPriority(pid, os.constants.priority.PRIORITY_LOW)
 });
 export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({
   maxConcurrency: 1,
@@ -826,6 +886,7 @@ export const managerPerformanceWorkerPool = new ManagerReadWorkerPool({
 
 const builtinManagerReadWorkerPools = [
   managerReadWorkerPool,
+  managerKnowledgePageWorkerPool,
   managerCatalogWorkerPool,
   managerPerformanceWorkerPool
 ] as const;

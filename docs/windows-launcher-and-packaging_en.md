@@ -48,18 +48,20 @@ This design borrows lifecycle invariants, not another project's process layout o
 - RabiRoute Manager runs on Node.js, the tray runs on Python/Qt, and plugins need separate fault domains. RabiRoute therefore uses Host plus two same-generation children instead of putting the tray on a Manager thread. This intentional runtime difference does not dilute Host's sole lifecycle ownership.
 - DSH informs only plugin scopes and dependency-aware unload: RabiRoute applies generations, `readyRequires`, process leases, and reverse-dependency release. A DSH-style in-process isolate is not treated as a security sandbox; RabiRoute `in_process` is a trusted extension and `isolated` is a separate fault domain, while OS permissions remain the actual security boundary.
 
-Sunshine's fixed base-port convention is not one of the adopted invariants. RabiRoute Manager continues to use an operating-system-assigned port that Host binds, publishes, and validates for the current generation.
+Sunshine's fixed base-port convention is not one of the adopted invariants. RabiRoute does not write a fixed installation port; Host caches only the last successfully started port, while the current generation still binds, publishes, and validates it again.
 
 ## Dynamic Manager endpoint
 
-Manager passes port `0` to the operating system and receives an available loopback port. Endpoint identity consists of:
+On its first launch, Manager passes port `0` to the operating system and receives an available loopback port. Host then records the port only after the complete generation passes health admission. The next generation tries that port first. If it is occupied, blocked by browser Fetch, or the cache is invalid, Manager automatically asks the operating system for another safe port and Host replaces the cache after the new generation passes health admission. Normal restarts therefore retain the WebGUI address while port conflicts still self-recover.
+
+The cache stores only a port, never a URL, `applicationGenerationId`, or `managerInstanceId`. Endpoint identity still consists of:
 
 - `applicationGenerationId`: the generation created by Host;
 - `managerInstanceId`: the Manager instance in that generation;
 - `managerBaseUrl`: the generation's actual loopback URL;
 - Manager PID: READY must come from the child Host just created.
 
-Host status and the tray carry these fields. They are not replaced with a fixed port, guessed by scanning ports, or reused across generations. The tray validates both generation and Manager instance through `/meta` and only presents Offline on failure. Host's independent health probe is the sole owner that rebuilds the complete generation after consecutive unreachable or identity-mismatch results.
+Host status and the tray carry these fields. They are not guessed by scanning ports or reused across generations. The tray validates both generation and Manager instance through `/meta` and only presents Offline on failure. Host's independent health probe is the sole owner that rebuilds the complete generation after consecutive unreachable or identity-mismatch results.
 
 Query the current state with:
 
