@@ -298,11 +298,10 @@ export function scanXiaomiHomeEndpoint(healthInput: Record<string, unknown>): Me
   const monitorState = String(monitor.connectionState || (tokenConfigured ? "stopped" : "authorization_required"));
   const monitorReady = ready && monitor.enabled === true && monitorState === "subscribed";
   const cameraReady = camera.ready === true;
-  const tokenEnv = String(health.tokenEnv || "RABIROUTE_XIAOMI_HOME_HA_TOKEN");
   const authorizationDetail = status === "authorization_required"
-    ? `待授权：只在本机受保护运行环境中配置 ${tokenEnv}；WebGUI 不接收 token。`
+    ? "待授权：请在当前 Route 的米家消息端卡片连接 Home Assistant；凭证只写入本机受保护凭证库。"
     : status === "authorization_failed"
-      ? "本机已有授权配置，但 Home Assistant 已拒绝；请在本机更新授权。"
+      ? "本机凭证已被 Home Assistant 拒绝；请在米家消息端卡片验证并替换。"
       : status === "timeout"
         ? "本机已有授权配置，但 Home Assistant 健康检查超时。"
         : status === "unreachable"

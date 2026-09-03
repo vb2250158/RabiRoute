@@ -95,8 +95,14 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
     surface: "route.adapters",
     slot: "xiaomiHome",
     rendererId: "builtin.xiaomi-home-message-endpoint.v1"
+  }, {
+    kind: "message-endpoint-settings",
+    id: "xiaomi-home-message-endpoint-auth",
+    surface: "route.adapters",
+    slot: "xiaomiHome",
+    rendererId: "builtin.xiaomi-home-auth.v1"
   }]);
-  assert.equal(snapshot[0]?.routeCount, 8);
+  assert.equal(snapshot[0]?.routeCount, 10);
   assert.deepEqual(
     snapshot[0]?.routes
       .filter(route => route.match.kind === "prefix")

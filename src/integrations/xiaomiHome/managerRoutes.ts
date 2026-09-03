@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type http from "node:http";
 import {
   XiaomiHomeManagerApiError,
@@ -7,7 +8,12 @@ import type { ManagerPluginRouteHandler } from "../../manager/managerPluginRoute
 import type { XiaomiHomeEvent, XiaomiHomeEventDeliveryContext } from "../../xiaomiHomeEventDelivery.js";
 import type { XiaomiHomeArtifactInput } from "./artifactStore.js";
 import type { XiaomiHomeSettingsUpdate } from "../../shared/xiaomiHomeSettingsContract.js";
+import type {
+  XiaomiHomeAuthorizationMutationRequest,
+  XiaomiHomeAuthorizeRequest
+} from "../../shared/xiaomiHomeAuthContract.js";
 import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
+import { XiaomiHomeAuthMutationReceipts } from "./authMutationReceipts.js";
 
 export type XiaomiHomeManagerRoutesContext = {
   runtime: XiaomiHomeRuntimeController;
@@ -15,6 +21,7 @@ export type XiaomiHomeManagerRoutesContext = {
     applicationGenerationId: string;
     managerInstanceId: string;
   }>;
+  authMutationReceipts?: XiaomiHomeAuthMutationReceipts;
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   trackOperation?: <T>(operation: Promise<T>) => Promise<T>;
@@ -31,7 +38,11 @@ function isLoopbackAddress(address: string | undefined): boolean {
 function isMessageEndpointConfigurationRequest(request: http.IncomingMessage, requestUrl: URL): boolean {
   const root = "/api/agent/xiaomi-home";
   return (request.method === "GET" && requestUrl.pathname === `${root}/health`)
-    || (["GET", "PUT"].includes(request.method || "") && requestUrl.pathname === `${root}/settings`);
+    || (["GET", "PUT"].includes(request.method || "") && requestUrl.pathname === `${root}/settings`)
+    || (request.method === "GET" && requestUrl.pathname === `${root}/auth`)
+    || (request.method === "POST" && requestUrl.pathname === `${root}/auth`)
+    || (request.method === "POST" && requestUrl.pathname === `${root}/auth/refresh`)
+    || (request.method === "DELETE" && requestUrl.pathname === `${root}/auth`);
 }
 
 function presentedError(error: unknown): { status: number; code: string; message: string } {
@@ -45,6 +56,33 @@ function respond<T>(response: http.ServerResponse, context: XiaomiHomeManagerRou
     const presented = presentedError(error);
     context.jsonResponse(response, presented.status, { code: -1, error: { code: presented.code, message: presented.message } });
   });
+}
+
+function requireIdempotencyKey(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  context: XiaomiHomeManagerRoutesContext
+): string | undefined {
+  const key = String(request.headers["idempotency-key"] || "").trim();
+  if (!/^[A-Za-z0-9._:-]{16,200}$/.test(key)) {
+    context.jsonResponse(response, 400, {
+      code: -1,
+      error: { code: "xiaomi_home_idempotency_key_required", message: "A stable Idempotency-Key is required." }
+    });
+    return undefined;
+  }
+  return key;
+}
+
+const receiptStores = new WeakMap<XiaomiHomeRuntimeController, XiaomiHomeAuthMutationReceipts>();
+
+function authReceipts(context: XiaomiHomeManagerRoutesContext): XiaomiHomeAuthMutationReceipts {
+  if (context.authMutationReceipts) return context.authMutationReceipts;
+  const existing = receiptStores.get(context.runtime);
+  if (existing) return existing;
+  const created = new XiaomiHomeAuthMutationReceipts(context.runtime.artifacts.runtimeDir);
+  receiptStores.set(context.runtime, created);
+  return created;
 }
 
 function requireLifecycleFence(
@@ -91,6 +129,39 @@ export function handleXiaomiHomeManagerApi(
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/health`) {
     respond(response, context, context.runtime.health());
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === `${root}/auth`) {
+    respond(response, context, context.runtime.authorization());
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === `${root}/auth`) {
+    const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
+    if (!key) return true;
+    respond(response, context, context.readJsonBody<XiaomiHomeAuthorizeRequest>(request).then(body =>
+      authReceipts(context).execute(key, {
+        operation: "connect",
+        baseUrl: body.baseUrl,
+        settingsRevision: body.settingsRevision,
+        authorizationRevision: body.authorizationRevision,
+        tokenHash: createHash("sha256").update(String(body.accessToken || "")).digest("hex")
+      }, () => context.runtime.authorize(body.accessToken, body.baseUrl, body.settingsRevision, body.authorizationRevision))));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === `${root}/auth/refresh`) {
+    const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
+    if (!key) return true;
+    respond(response, context, context.readJsonBody<XiaomiHomeAuthorizationMutationRequest>(request).then(body =>
+      authReceipts(context).execute(key, { operation: "refresh", authorizationRevision: body.authorizationRevision },
+        () => context.runtime.refreshAuthorization(body.authorizationRevision))));
+    return true;
+  }
+  if (request.method === "DELETE" && requestUrl.pathname === `${root}/auth`) {
+    const key = requireLifecycleFence(request, response, context) && requireIdempotencyKey(request, response, context);
+    if (!key) return true;
+    respond(response, context, context.readJsonBody<XiaomiHomeAuthorizationMutationRequest>(request).then(body =>
+      authReceipts(context).execute(key, { operation: "disconnect", authorizationRevision: body.authorizationRevision },
+        () => context.runtime.disconnect(body.authorizationRevision))));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/settings`) {

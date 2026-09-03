@@ -66,6 +66,8 @@ Protocol translation for live gateway inputs:
 - RabiLink compatibility/input paths.
 - heartbeat/manual and other internal adapters.
 
+Xiaomi Home is a Manager-owned plugin endpoint and does not duplicate a resident listener in Gateway. `src/integrations/xiaomiHome/` owns the Home Assistant REST/WebSocket client, one protected local account credential, settings revision, event monitor, action receipts, and recording artifacts. The Route card submits the candidate address, candidate token, and settings revision together to `/api/agent/xiaomi-home/auth`. Manager verifies the candidate origin with the candidate token before atomically replacing settings and the address-bound credential; a credential bound to an old origin is never loaded for a new one. Authentication mutations also carry the current lifecycle fence and an `Idempotency-Key`, and non-loopback targets require HTTPS by default.
+
 An adapter should parse, normalize, record, report health, and call forwarding. It should not build handler prompts or send an immediate external reply from an inbound callback.
 
 Shared delivery wording is owned by `shared/agentCommunicationPolicy.ts`, `agentThreads.ts`, `messageAgentPool.ts`, and the Plan Secretary modules. Stable rules appear once; persona automation templates describe only persona-, endpoint-, or schedule-specific differences. API fields, safety boundaries, and receipt requirements remain in the delivery prompt, while full procedures live in documentation or Skills.

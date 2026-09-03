@@ -25,6 +25,8 @@ test("Xiaomi Home scan maps the owner health contract without treating pending a
   assert.equal(pending.endpoints?.[0]?.healthy, false);
   assert.equal(pending.requirements?.find(item => item.id === "authorization")?.ok, false);
   assert.match(pending.requirements?.find(item => item.id === "authorization")?.detail ?? "", /待授权/);
+  assert.match(pending.requirements?.find(item => item.id === "authorization")?.detail ?? "", /米家消息端卡片/);
+  assert.doesNotMatch(pending.requirements?.find(item => item.id === "authorization")?.detail ?? "", /环境变量|RABIROUTE_/);
   assert.equal(JSON.stringify(pending).includes("secret"), false);
   assert.equal(JSON.stringify(pending).includes("hidden"), false);
 

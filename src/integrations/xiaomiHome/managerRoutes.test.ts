@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type http from "node:http";
 import test from "node:test";
 import { handleXiaomiHomeManagerApi, type XiaomiHomeManagerRoutesContext } from "./managerRoutes.js";
+import type { XiaomiHomeAuthMutationReceipts } from "./authMutationReceipts.js";
 import { XiaomiHomeManagerApiError, type XiaomiHomeActionRequest } from "./managerApi.js";
 import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
 
@@ -117,6 +118,87 @@ test("Xiaomi Home settings mutation accepts the current /meta lifecycle identity
   assert.equal(reads, 1);
   assert.equal(updates, 1);
   assert.equal(responses[0]?.status, 200);
+});
+
+test("Xiaomi Home credential mutation requires the current lifecycle fence before reading a secret", () => {
+  let reads = 0;
+  let authorizations = 0;
+  const rejectedToken = ["must", "not", "be", "read"].join("-");
+  const responses: Array<{ status: number; body: any }> = [];
+  const runtime = {
+    authorize: async () => { authorizations += 1; return {}; }
+  } as unknown as XiaomiHomeRuntimeController;
+  handleXiaomiHomeManagerApi(
+    request({}, "POST"),
+    new URL("http://127.0.0.1/api/agent/xiaomi-home/auth"),
+    {} as http.ServerResponse,
+    {
+      runtime,
+      lifecycleFence,
+      readJsonBody: async () => { reads += 1; return { accessToken: rejectedToken } as never; },
+      jsonResponse: (_response, status, body) => responses.push({ status, body }),
+      deliverEvent: async () => undefined
+    }
+  );
+  assert.equal(reads, 0);
+  assert.equal(authorizations, 0);
+  assert.equal(responses[0]?.status, 400);
+});
+
+test("Xiaomi Home credential API accepts a fenced token once and never returns it", async () => {
+  let presentedToken = "";
+  let presentedBaseUrl = "";
+  let presentedRevision = "";
+  const candidateToken = ["candidate", "secret"].join("-");
+  const responses: Array<{ status: number; body: any }> = [];
+  const runtime = {
+    authorize: async (token: string, baseUrl: string, revision: string) => {
+      presentedToken = token;
+      presentedBaseUrl = baseUrl;
+      presentedRevision = revision;
+      return {
+        schemaVersion: 1,
+        state: "ready",
+        configured: true,
+        credentialSource: "protected",
+        removable: true,
+        baseUrl: "http://127.0.0.1:8123",
+        endpointAccountId: "account-stable",
+        revision: "authorization-current"
+      };
+    }
+  } as unknown as XiaomiHomeRuntimeController;
+  handleXiaomiHomeManagerApi(
+    request({
+      "x-rabiroute-expected-application-generation-id": lifecycleFence.applicationGenerationId,
+      "x-rabiroute-expected-manager-instance-id": lifecycleFence.managerInstanceId,
+      "idempotency-key": "xiaomi-home-connect-test-0001"
+    }, "POST"),
+    new URL("http://127.0.0.1/api/agent/xiaomi-home/auth"),
+    {} as http.ServerResponse,
+    {
+      runtime,
+      lifecycleFence,
+      authMutationReceipts: {
+        execute: (_key: string, _intent: unknown, operation: () => Promise<unknown>) => operation()
+      } as XiaomiHomeAuthMutationReceipts,
+      readJsonBody: async () => ({
+        accessToken: candidateToken,
+        baseUrl: "http://127.0.0.1:8123",
+        settingsRevision: "settings-current",
+        authorizationRevision: "authorization-current"
+      } as never),
+      jsonResponse: (_response, status, body) => responses.push({ status, body }),
+      deliverEvent: async () => undefined
+    }
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(presentedToken, candidateToken);
+  assert.equal(presentedBaseUrl, "http://127.0.0.1:8123");
+  assert.equal(presentedRevision, "settings-current");
+  assert.equal(responses[0]?.status, 200);
+  assert.equal(JSON.stringify(responses[0]?.body).includes(candidateToken), false);
+  assert.doesNotMatch(JSON.stringify(responses[0]?.body), /accessToken/);
 });
 
 test("Xiaomi Home action route forwards Idempotency-Key and presents stable conflict errors", async () => {

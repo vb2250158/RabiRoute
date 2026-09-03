@@ -7,6 +7,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### Xiaomi Home Route authorization
+
+- Merged the upstream Route message-endpoint placement: the current Route's Xiaomi Home cards manage connection credentials and event, device-control, and recording policy, rather than placing configuration in global Settings. The long-lived token is submitted only through one lifecycle-fenced, `Idempotency-Key`-protected request; after verification it is stored with current-user DPAPI on Windows or an access-restricted local AES-256-GCM key elsewhere. Configuration, logs, and APIs never echo it.
+- The address and candidate token are verified together before runtime replacement; a credential bound to an old address is never used for a new one. Non-loopback targets require HTTPS by default; `allowInsecurePrivateHttp` permits literal private addresses only, and public HTTP is always rejected. Authentication mutations use durable receipts and an authorization revision: a duplicate key replays its result, a different intent conflicts, and a delayed old disconnect cannot remove a newer connection.
+
 ### Plan presentation states
 
 - In-progress plans now distinguish `Analyzing` from `Executing`: pre-approval work is analyzing, while approved or explicitly authorized implementation is executing. Paused plans explicitly mapped from Tencent `F待讨论` show `Awaiting discussion`; ordinary pauses remain `Paused`. WebGUI and the tray share Manager status, counts, order, and palette.

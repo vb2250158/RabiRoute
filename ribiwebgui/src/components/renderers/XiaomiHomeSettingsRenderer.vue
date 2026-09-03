@@ -97,12 +97,8 @@ onBeforeUnmount(() => unregisterSaveAction?.());
 
     <template v-if="draft">
       <v-alert type="info" variant="tonal" density="compact" class="mb-4">
-        页面只保存 Home Assistant 地址和环境变量名，不读取或保存 token。请在本机可信环境设置 token 后再做授权验收。
+        地址与登录凭据都在当前 Route 的“米家 / Xiaomi Home 连接”卡片完成；此页只保存事件、设备控制与录像策略。
       </v-alert>
-      <div class="xiaomi-form-grid">
-        <v-text-field v-model="draft.baseUrl" label="Home Assistant 地址" placeholder="http://127.0.0.1:8123" hint="默认仅允许 localhost 或字面量私网 IP；域名需在高级设置中显式允许。" persistent-hint />
-        <v-text-field v-model="draft.tokenEnv" label="Home Assistant token 环境变量" placeholder="RABIROUTE_XIAOMI_HOME_HA_TOKEN" />
-      </div>
       <div class="xiaomi-switch-grid mt-2">
         <v-switch v-model="draft.eventMonitorEnabled" label="监听设备事件" color="success" inset hide-details />
         <v-switch v-model="draft.writeEnabled" label="允许控制设备" color="warning" inset hide-details />
@@ -134,6 +130,7 @@ onBeforeUnmount(() => unregisterSaveAction?.());
               <v-text-field v-model.number="draft.cameraClipMaxSegmentBytes" type="number" min="1024" max="134217728" label="单分片最大字节数" />
             </div>
             <v-switch v-model="draft.allowPublicBaseUrl" label="允许 Home Assistant 域名或公网地址（仍禁止重定向）" color="warning" inset hide-details />
+            <v-switch v-model="draft.allowInsecurePrivateHttp" label="允许非回环私网使用不安全 HTTP（令牌可能被局域网截获）" color="error" inset hide-details />
           </v-expansion-panel-text>
         </v-expansion-panel>
       </v-expansion-panels>

@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import {
+  createLocalSecretProtector,
+  type LocalSecretProtector
+} from "./shared/localSecretProtection.js";
 
 export const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
 export const DEFAULT_WEIXIN_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
@@ -34,11 +37,7 @@ export type WeixinOpenClawState = {
   updatedAt: string;
 };
 
-export type WeixinStateProtector = {
-  scheme: string;
-  protect(plaintext: string): string;
-  unprotect(protectedValue: string): string;
-};
+export type WeixinStateProtector = LocalSecretProtector;
 
 type PersistedWeixinState = {
   schemaVersion: 2;
@@ -163,85 +162,8 @@ export function weixinStatePath(dataDir: string): string {
   return path.join(dataDir, "weixin-openclaw-state.json");
 }
 
-function powerShellDpapi(script: string, input: string): string {
-  const executable = path.join(
-    process.env.SystemRoot || "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe"
-  );
-  const result = spawnSync(executable, ["-NoProfile", "-NonInteractive", "-Command", script], {
-    input,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 5000,
-    maxBuffer: 4 * 1024 * 1024
-  });
-  if (result.status !== 0 || result.error || !String(result.stdout || "").trim()) {
-    throw new Error("Windows DPAPI operation failed.");
-  }
-  return String(result.stdout).trim();
-}
-
-function windowsStateProtector(): WeixinStateProtector {
-  const protectScript = [
-    "Add-Type -AssemblyName System.Security",
-    "$plain=[Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd())",
-    "$cipher=[Security.Cryptography.ProtectedData]::Protect($plain,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)",
-    "[Console]::Out.Write([Convert]::ToBase64String($cipher))"
-  ].join(";");
-  const unprotectScript = [
-    "Add-Type -AssemblyName System.Security",
-    "$cipher=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())",
-    "$plain=[Security.Cryptography.ProtectedData]::Unprotect($cipher,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)",
-    "[Console]::Out.Write([Convert]::ToBase64String($plain))"
-  ].join(";");
-  return {
-    scheme: "windows-dpapi-current-user",
-    protect: plaintext => powerShellDpapi(protectScript, plaintext),
-    unprotect: protectedValue => Buffer.from(powerShellDpapi(unprotectScript, protectedValue), "base64").toString("utf8")
-  };
-}
-
-function localKeyStateProtector(dataDir: string): WeixinStateProtector {
-  const keyPath = path.join(dataDir, ".weixin-session.key");
-  const readKey = (): Buffer => {
-    fs.mkdirSync(dataDir, { recursive: true });
-    if (!fs.existsSync(keyPath)) {
-      try {
-        fs.writeFileSync(keyPath, randomBytes(32), { flag: "wx", mode: 0o600 });
-      } catch (error) {
-        if (!fs.existsSync(keyPath)) throw error;
-      }
-    }
-    const key = fs.readFileSync(keyPath);
-    if (key.length !== 32) throw new Error("Local Weixin session key is invalid.");
-    return key;
-  };
-  return {
-    scheme: "local-aes-256-gcm-v1",
-    protect: plaintext => {
-      const iv = randomBytes(12);
-      const cipher = createCipheriv("aes-256-gcm", readKey(), iv);
-      const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-      return [iv, cipher.getAuthTag(), encrypted].map(value => value.toString("base64")).join(".");
-    },
-    unprotect: protectedValue => {
-      const [ivText, tagText, encryptedText] = protectedValue.split(".");
-      if (!ivText || !tagText || !encryptedText) throw new Error("Protected Weixin session payload is invalid.");
-      const decipher = createDecipheriv("aes-256-gcm", readKey(), Buffer.from(ivText, "base64"));
-      decipher.setAuthTag(Buffer.from(tagText, "base64"));
-      return Buffer.concat([
-        decipher.update(Buffer.from(encryptedText, "base64")),
-        decipher.final()
-      ]).toString("utf8");
-    }
-  };
-}
-
 function defaultStateProtector(dataDir: string): WeixinStateProtector {
-  return process.platform === "win32" ? windowsStateProtector() : localKeyStateProtector(dataDir);
+  return createLocalSecretProtector(dataDir, ".weixin-session.key");
 }
 
 export function readWeixinState(

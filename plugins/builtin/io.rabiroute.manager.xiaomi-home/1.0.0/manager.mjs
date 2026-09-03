@@ -20,6 +20,22 @@ export const activate = definePlugin({
         order: 50
       }
     });
+    context.contributions.register({
+      kind: "message-endpoint-settings",
+      id: "xiaomi-home-message-endpoint-auth",
+      value: {
+        surface: "route.adapters",
+        label: { fallback: "米家 / Xiaomi Home 连接" },
+        rendererId: "builtin.xiaomi-home-auth.v1",
+        schemaId: "xiaomi-home.auth.v1",
+        readCommandId: "manager.xiaomi-home-auth.read",
+        writeCommandId: "manager.xiaomi-home-auth.write",
+        icon: "mdi-shield-key-outline",
+        slot: "xiaomiHome",
+        hosts: ["web"],
+        order: 51
+      }
+    });
     context.effects.add(() => {
       let activationStage = "request tracker";
       try {
@@ -50,6 +66,8 @@ export const activate = definePlugin({
           [tracker.wrap(handler)],
           [
             { routeId: "health", kind: "exact", path: "/api/agent/xiaomi-home/health", methods: ["GET"] },
+            { routeId: "auth", kind: "exact", path: "/api/agent/xiaomi-home/auth", methods: ["GET", "POST", "DELETE"] },
+            { routeId: "auth-refresh", kind: "exact", path: "/api/agent/xiaomi-home/auth/refresh", methods: ["POST"] },
             { routeId: "settings", kind: "exact", path: "/api/agent/xiaomi-home/settings", methods: ["GET", "PUT"] },
             { routeId: "resources", kind: "exact", path: "/api/agent/xiaomi-home/resources", methods: ["GET"] },
             { routeId: "resource", kind: "prefix", pathPrefix: "/api/agent/xiaomi-home/resources/", methods: ["GET"] },

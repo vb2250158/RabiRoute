@@ -11,7 +11,6 @@ class FakeSocket extends EventEmitter {
 
 test("event monitor exposes authorization and subscription state without exposing credentials", () => {
   const missing = new XiaomiHomeEventMonitor({}, {
-    env: {},
     deliverEvent: async () => undefined
   });
   assert.equal(missing.start(), false);
@@ -27,7 +26,7 @@ test("event monitor exposes authorization and subscription state without exposin
 
   const socket = new FakeSocket();
   const connected = new XiaomiHomeEventMonitor({}, {
-    env: { RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-value" },
+    credentialToken: "private-value",
     createSocket: () => socket,
     deliverEvent: async () => undefined
   });

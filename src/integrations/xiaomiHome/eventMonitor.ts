@@ -42,7 +42,7 @@ export type XiaomiHomeEventMonitorConfig = XiaomiHomeManagerConfigInput & {
 };
 
 type XiaomiHomeEventMonitorDependencies = {
-  env?: NodeJS.ProcessEnv;
+  credentialToken?: string;
   createSocket?: (url: string) => SocketLike;
   deliverEvent: (event: XiaomiHomeEvent, context: XiaomiHomeEventDeliveryContext) => Promise<unknown>;
   captureMotionClip?: (candidate: XiaomiMiotMotionClipCandidate) => Promise<XiaomiHomeArtifactPublicRecord>;
@@ -186,8 +186,7 @@ export class XiaomiHomeEventMonitor {
 
   constructor(config: XiaomiHomeEventMonitorConfig, private readonly dependencies: XiaomiHomeEventMonitorDependencies) {
     this.resolved = resolveXiaomiHomeManagerConfig(config);
-    const env = dependencies.env ?? process.env;
-    this.token = String(env[this.resolved.tokenEnv] || "").trim();
+    this.token = String(dependencies.credentialToken || "").trim();
     this.agentRoleId = String(config.agentRoleId || "YeYu").trim();
     this.enabled = config.eventMonitorEnabled !== false;
     this.deliveryMode = config.eventDeliveryMode === "all" ? "all" : "significant";

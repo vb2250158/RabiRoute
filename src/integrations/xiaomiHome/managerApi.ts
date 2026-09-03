@@ -9,10 +9,10 @@ import {
 
 export type XiaomiHomeManagerConfigInput = {
   baseUrl?: string;
-  tokenEnv?: string;
   requestTimeoutMs?: number;
   writeEnabled?: boolean;
   allowPublicBaseUrl?: boolean;
+  allowInsecurePrivateHttp?: boolean;
   runtimeDir?: string;
 };
 
@@ -65,7 +65,6 @@ type FetchLike = typeof fetch;
 
 export type ResolvedXiaomiHomeManagerConfig = {
   baseUrl: string;
-  tokenEnv: string;
   requestTimeoutMs: number;
   writeEnabled: boolean;
 };
@@ -77,7 +76,6 @@ type ActionMapping = {
 };
 
 const defaultBaseUrl = "http://127.0.0.1:8123";
-const defaultTokenEnv = "RABIROUTE_XIAOMI_HOME_HA_TOKEN";
 const actionReceiptNamespace = "xiaomi-home-actions";
 const stateVersionChangedReceiptError = "xiaomi_home_state_version_changed";
 
@@ -156,15 +154,16 @@ export function resolveXiaomiHomeManagerConfig(input: XiaomiHomeManagerConfigInp
   } else if (input.allowPublicBaseUrl !== true && !isPrivateIpLiteral(hostname)) {
     throw new XiaomiHomeManagerApiError(500, "xiaomi_home_public_url_rejected", "Home Assistant baseUrl must use a literal loopback or private IP unless external hostnames are explicitly allowed.");
   }
-  const tokenEnv = String(input.tokenEnv || defaultTokenEnv).trim();
-  if (!/^[A-Z][A-Z0-9_]{2,127}$/.test(tokenEnv)) {
-    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "tokenEnv must be an uppercase environment variable name.");
+  const normalizedHostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const loopback = normalizedHostname === "::1" || normalizedHostname.startsWith("127.");
+  if (parsed.protocol === "http:" && !loopback && (!isPrivateIpLiteral(normalizedHostname) || input.allowInsecurePrivateHttp !== true)) {
+    throw new XiaomiHomeManagerApiError(500, "xiaomi_home_insecure_http_rejected", "Non-loopback Home Assistant addresses must use HTTPS; insecure HTTP can be enabled only for literal private addresses.");
   }
   const requestTimeoutMs = Number(input.requestTimeoutMs ?? 5000);
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 250 || requestTimeoutMs > 30000) {
     throw new XiaomiHomeManagerApiError(500, "xiaomi_home_config_invalid", "requestTimeoutMs must be between 250 and 30000.");
   }
-  return { baseUrl: parsed.origin, tokenEnv, requestTimeoutMs, writeEnabled: input.writeEnabled === true };
+  return { baseUrl: parsed.origin, requestTimeoutMs, writeEnabled: input.writeEnabled === true };
 }
 
 function stateVersion(state: HomeAssistantState): string {
@@ -306,16 +305,16 @@ export class XiaomiHomeManagerApiClient {
   constructor(
     input: XiaomiHomeManagerConfigInput = {},
     private readonly fetchImpl: FetchLike = fetch,
-    private readonly env: NodeJS.ProcessEnv = process.env
+    private readonly credentialToken = ""
   ) {
     this.config = resolveXiaomiHomeManagerConfig(input);
     this.actionReceiptRoot = resolveActionReceiptRoot(input.runtimeDir);
   }
 
   private token(): string {
-    const token = String(this.env[this.config.tokenEnv] || "").trim();
+    const token = String(this.credentialToken || "").trim();
     if (!token) {
-      throw new XiaomiHomeManagerApiError(503, "xiaomi_home_authorization_required", `Set ${this.config.tokenEnv} in the local RabiRoute runtime environment after Home Assistant authorization.`);
+      throw new XiaomiHomeManagerApiError(503, "xiaomi_home_authorization_required", "Connect Home Assistant from the Xiaomi Home message endpoint card.");
     }
     return token;
   }
@@ -353,13 +352,14 @@ export class XiaomiHomeManagerApiClient {
   }
 
   async getHealth(): Promise<Record<string, unknown>> {
-    const tokenConfigured = Boolean(String(this.env[this.config.tokenEnv] || "").trim());
+    const tokenConfigured = Boolean(String(this.credentialToken || "").trim());
+    const credentialSource = tokenConfigured ? "protected" : "none";
     if (!tokenConfigured) {
       return {
         status: "authorization_required",
         provider: "home_assistant",
         baseUrl: this.config.baseUrl,
-        tokenEnv: this.config.tokenEnv,
+        credentialSource,
         tokenConfigured: false,
         writeEnabled: this.config.writeEnabled
       };
@@ -376,7 +376,7 @@ export class XiaomiHomeManagerApiClient {
             : "unreachable",
         provider: "home_assistant",
         baseUrl: this.config.baseUrl,
-        tokenEnv: this.config.tokenEnv,
+        credentialSource,
         tokenConfigured: true,
         writeEnabled: this.config.writeEnabled,
         errorCode: error.code
@@ -386,10 +386,20 @@ export class XiaomiHomeManagerApiClient {
       status: "ready",
       provider: "home_assistant",
       baseUrl: this.config.baseUrl,
-      tokenEnv: this.config.tokenEnv,
+      credentialSource,
       tokenConfigured: true,
       writeEnabled: this.config.writeEnabled
     };
+  }
+
+  async verifyAuthorization(): Promise<Readonly<{ providerName?: string; providerVersion?: string }>> {
+    const config = await this.request<Record<string, unknown>>("/api/config");
+    const providerName = String(config.location_name || config.name || "").trim();
+    const providerVersion = String(config.version || "").trim();
+    return Object.freeze({
+      providerName: providerName || undefined,
+      providerVersion: providerVersion || undefined
+    });
   }
 
   async listResources(): Promise<XiaomiHomeResource[]> {

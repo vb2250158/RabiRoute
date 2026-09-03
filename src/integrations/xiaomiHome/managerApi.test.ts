@@ -69,12 +69,20 @@ test("maps only typed capabilities and rejects cross-domain actions", () => {
   }), (error: unknown) => error instanceof XiaomiHomeManagerApiError && error.status === 403);
 });
 
-test("baseUrl accepts private IP literals, pins localhost, and rejects DNS lookalikes by default", () => {
+test("baseUrl requires HTTPS away from loopback and rejects DNS lookalikes by default", () => {
   assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://localhost:8123" }).baseUrl, "http://127.0.0.1:8123");
-  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://192.168.10.5:8123" }).baseUrl, "http://192.168.10.5:8123");
-  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://[fd12:3456::1]:8123" }).baseUrl, "http://[fd12:3456::1]:8123");
-  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://[fe80::1]:8123" }).baseUrl, "http://[fe80::1]:8123");
   assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "http://[::1]:8123" }).baseUrl, "http://[::1]:8123");
+  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "https://192.168.10.5:8123" }).baseUrl, "https://192.168.10.5:8123");
+  assert.equal(resolveXiaomiHomeManagerConfig({ baseUrl: "https://[fd12:3456::1]:8123" }).baseUrl, "https://[fd12:3456::1]:8123");
+  assert.equal(resolveXiaomiHomeManagerConfig({
+    baseUrl: "http://192.168.10.5:8123",
+    allowInsecurePrivateHttp: true
+  }).baseUrl, "http://192.168.10.5:8123");
+  assert.throws(
+    () => resolveXiaomiHomeManagerConfig({ baseUrl: "http://192.168.10.5:8123" }),
+    (error: unknown) => error instanceof XiaomiHomeManagerApiError
+      && error.code === "xiaomi_home_insecure_http_rejected"
+  );
 
   for (const baseUrl of [
     "http://fd-example.com:8123",
@@ -92,6 +100,17 @@ test("baseUrl accepts private IP literals, pins localhost, and rejects DNS looka
     baseUrl: "https://home.example",
     allowPublicBaseUrl: true
   }).baseUrl, "https://home.example");
+  for (const baseUrl of ["http://home.example", "http://8.8.8.8:8123"]) {
+    assert.throws(
+      () => resolveXiaomiHomeManagerConfig({
+        baseUrl,
+        allowPublicBaseUrl: true,
+        allowInsecurePrivateHttp: true
+      }),
+      (error: unknown) => error instanceof XiaomiHomeManagerApiError
+        && error.code === "xiaomi_home_insecure_http_rejected"
+    );
+  }
 });
 
 test("baseUrl rejects credentials and non-origin URL components", () => {
@@ -128,7 +147,7 @@ test("REST requests never follow redirects or forward the Bearer token to a seco
       status: 302,
       headers: { location: "https://attacker.example/collect" }
     });
-  }, { RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-value" });
+  }, "private-value");
 
   await assert.rejects(
     () => client.listResources(),
@@ -145,12 +164,12 @@ test("REST requests never follow redirects or forward the Bearer token to a seco
 });
 
 test("health stays explicit while Home Assistant authorization is missing", async () => {
-  const client = new XiaomiHomeManagerApiClient({}, fetch, {});
+  const client = new XiaomiHomeManagerApiClient({}, fetch);
   assert.deepEqual(await client.getHealth(), {
     status: "authorization_required",
     provider: "home_assistant",
     baseUrl: "http://127.0.0.1:8123",
-    tokenEnv: "RABIROUTE_XIAOMI_HOME_HA_TOKEN",
+    credentialSource: "none",
     tokenConfigured: false,
     writeEnabled: false
   });
@@ -161,7 +180,7 @@ test("health stays explicit while Home Assistant authorization is missing", asyn
 test("health reports configured-but-unreachable authorization without exposing token contents", async () => {
   const client = new XiaomiHomeManagerApiClient({}, async () => {
     throw new TypeError("offline");
-  }, { RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-value" });
+  }, "private-value");
   const health = await client.getHealth();
   assert.equal(health.status, "unreachable");
   assert.equal(health.tokenConfigured, true);
@@ -182,7 +201,7 @@ test("write-disabled action returns a stable planned receipt without calling a s
     }), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
-    const client = new XiaomiHomeManagerApiClient({ runtimeDir }, fakeFetch, { RABIROUTE_XIAOMI_HOME_HA_TOKEN: "secret" });
+    const client = new XiaomiHomeManagerApiClient({ runtimeDir }, fakeFetch, "secret");
     const before = await client.getResource("home:ha:switch.desk");
     const request = {
       resourceId: before.resourceId,
@@ -208,7 +227,7 @@ test("receipt-store failures stop before provider I/O and do not expose the runt
     const client = new XiaomiHomeManagerApiClient({ runtimeDir: blockedRoot, writeEnabled: true }, async () => {
       providerCalls += 1;
       return jsonResponse(providerState("switch.desk", "off", 0));
-    }, { RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-token" });
+    }, "private-token");
     await assert.rejects(
       () => client.executeAction({
         resourceId: "home:ha:switch.desk",
@@ -251,9 +270,7 @@ test("concurrent callers with one action intent publish exactly one Home Assista
     return jsonResponse(providerState("switch.desk", currentState, currentSequence));
   };
   try {
-    const client = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, {
-      RABIROUTE_XIAOMI_HOME_HA_TOKEN: "secret"
-    });
+    const client = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, "secret");
     const request = {
       resourceId: expected.resourceId,
       capability: "home.switch.turn_on@1",
@@ -288,9 +305,7 @@ test("same Idempotency-Key conflicts when any canonical action intent field chan
     return jsonResponse(providerState("light.desk", "off", 0));
   };
   try {
-    const client = new XiaomiHomeManagerApiClient({ runtimeDir }, fakeFetch, {
-      RABIROUTE_XIAOMI_HOME_HA_TOKEN: "secret"
-    });
+    const client = new XiaomiHomeManagerApiClient({ runtimeDir }, fakeFetch, "secret");
     const first = {
       requestId: "request-one",
       resourceId: expected.resourceId,
@@ -338,9 +353,7 @@ test("state-version rejection happens inside the durable claim and releases the 
     return jsonResponse(providerState("switch.desk", state, sequence));
   };
   try {
-    const client = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, {
-      RABIROUTE_XIAOMI_HOME_HA_TOKEN: "secret"
-    });
+    const client = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, "secret");
     const staleRequest = {
       resourceId: stale.resourceId,
       capability: "home.switch.turn_on@1",
@@ -389,16 +402,12 @@ test("a lost POST response is recovered only by read-back and terminal receipt r
     reason: "recover by state read"
   };
   try {
-    const firstClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, {
-      RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-token"
-    });
+    const firstClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, "private-token");
     const first = await firstClient.executeAction(request, "restart-key");
     assert.equal(first.status, "succeeded");
     assert.equal(serviceCalls, 1);
 
-    const restartedClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, {
-      RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-token"
-    });
+    const restartedClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, "private-token");
     const replay = await restartedClient.executeAction({ ...request, requestId: "retry-request" }, "restart-key");
     assert.deepEqual(replay, first);
     assert.equal(serviceCalls, 1);
@@ -430,9 +439,7 @@ test("uncertain receipt remains fail-closed across restart and never replays the
     expectedStateVersion: expected.stateVersion
   };
   try {
-    const firstClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, {
-      RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-token"
-    });
+    const firstClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, "private-token");
     await assert.rejects(
       () => firstClient.executeAction(request, "uncertain-key"),
       (error: unknown) => error instanceof XiaomiHomeManagerApiError
@@ -442,9 +449,7 @@ test("uncertain receipt remains fail-closed across restart and never replays the
     );
     assert.equal(serviceCalls, 1);
 
-    const restartedClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, {
-      RABIROUTE_XIAOMI_HOME_HA_TOKEN: "private-token"
-    });
+    const restartedClient = new XiaomiHomeManagerApiClient({ runtimeDir, writeEnabled: true }, fakeFetch, "private-token");
     await assert.rejects(
       () => restartedClient.executeAction(request, "uncertain-key"),
       (error: unknown) => error instanceof XiaomiHomeManagerApiError

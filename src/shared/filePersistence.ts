@@ -13,6 +13,7 @@ export type FileLockOptions = {
 export type AtomicWriteFileOptions = {
   maxRenameAttempts?: number;
   retryDelayMs?: number;
+  mode?: number;
   renameSync?: (source: string, destination: string) => void;
 };
 
@@ -137,7 +138,7 @@ export function atomicWriteFileSync(
   const retryDelayMs = Math.max(1, Math.floor(options.retryDelayMs ?? 25));
   const renameSync = options.renameSync ?? fs.renameSync;
   try {
-    const descriptor = fs.openSync(temporary, "wx");
+    const descriptor = fs.openSync(temporary, "wx", options.mode ?? 0o666);
     try {
       fs.writeFileSync(descriptor, content);
       fs.fsyncSync(descriptor);

@@ -11,6 +11,7 @@ import {
 const routeConfigSource = fs.readFileSync(new URL("../src/pages/RouteConfigPage.vue", import.meta.url), "utf8");
 const settingsPageSource = fs.readFileSync(new URL("../src/pages/SettingsPage.vue", import.meta.url), "utf8");
 const endpointRendererSource = fs.readFileSync(new URL("../src/components/renderers/XiaomiHomeSettingsRenderer.vue", import.meta.url), "utf8");
+const authRendererSource = fs.readFileSync(new URL("../src/components/renderers/XiaomiHomeMessageEndpointRenderer.vue", import.meta.url), "utf8");
 
 test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-home input", () => {
   assert.match(routeConfigSource, /title: "智能家居"/);
@@ -19,7 +20,10 @@ test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-ho
   assert.match(routeConfigSource, /route\.adapters\.message-endpoint-settings/);
   assert.match(routeConfigSource, /settingsRenderersForMessageEndpoint/);
   assert.match(endpointRendererSource, /此配置属于米家消息端/);
-  assert.match(endpointRendererSource, /不读取或保存 token/);
+  assert.match(endpointRendererSource, /地址与登录凭据都在当前 Route/);
+  assert.match(authRendererSource, /type="password"/);
+  assert.match(authRendererSource, /xiaomiHomeAuthClient\.connect\(\{/);
+  assert.match(authRendererSource, /accessToken\.value = ""/);
   assert.doesNotMatch(settingsPageSource, /XiaomiHome|xiaomi-home|米家/);
   assert.equal(adapterLabel("xiaomiHome"), "米家 / Xiaomi Home");
   assert.notEqual(adapterLabel("xiaomiHome"), adapterLabel("xiaoai"));
@@ -37,5 +41,5 @@ test("Xiaomi Home UI copy is present in the English catalog", () => {
   assert.equal(translateText("米家 / Xiaomi Home", "en"), "Xiaomi Home");
   assert.equal(translateText("智能家居", "en"), "Smart home");
   assert.equal(translateText("Home Assistant 连接与事件", "en"), "Home Assistant connection and events");
-  assert.match(translateText("页面只保存 Home Assistant 地址和环境变量名，不读取或保存 token。请在本机可信环境设置 token 后再做授权验收。", "en"), /never reads or stores token values/);
+  assert.match(authRendererSource, /本机受保护凭证/);
 });

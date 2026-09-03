@@ -2,10 +2,10 @@ export type XiaomiHomeEventDeliveryMode = "significant" | "all";
 
 export type XiaomiHomeRuntimeSettings = Readonly<{
   baseUrl: string;
-  tokenEnv: string;
   requestTimeoutMs: number;
   writeEnabled: boolean;
   allowPublicBaseUrl: boolean;
+  allowInsecurePrivateHttp: boolean;
   agentRoleId: string;
   eventMonitorEnabled: boolean;
   eventDeliveryMode: XiaomiHomeEventDeliveryMode;

@@ -30,11 +30,6 @@
         "type": "string",
         "default": "http://127.0.0.1:8123"
       },
-      "tokenEnv": {
-        "type": "string",
-        "pattern": "^[A-Z][A-Z0-9_]{2,127}$",
-        "default": "RABIROUTE_XIAOMI_HOME_HA_TOKEN"
-      },
       "requestTimeoutMs": {
         "type": "integer",
         "minimum": 250,
@@ -48,6 +43,11 @@
       "allowPublicBaseUrl": {
         "type": "boolean",
         "description": "Explicitly trust a Home Assistant hostname or public address. Redirects and URL credentials remain forbidden.",
+        "default": false
+      },
+      "allowInsecurePrivateHttp": {
+        "type": "boolean",
+        "description": "Explicitly allow plaintext HTTP to a non-loopback private IP. Long-lived tokens may be exposed on the local network.",
         "default": false
       },
       "runtimeDir": {

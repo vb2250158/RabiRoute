@@ -114,6 +114,8 @@ skills/
 - `heartbeatAdapter.ts`：定时触发心跳消息。
 - `messageAdapter.ts`：消息端 Adapter 的最小 Interface。
 
+Xiaomi Home 是 Manager 持有的插件消息端，不在 Gateway 内复制常驻 listener。`src/integrations/xiaomiHome/` 统一拥有 Home Assistant REST/WebSocket 客户端、受保护单账号凭据、设置 revision、事件监听、动作 receipt 和录像 artifact；Route 卡片通过 `/api/agent/xiaomi-home/auth` 同时提交候选地址、候选令牌和设置 revision。Manager 必须先用候选令牌验证候选 origin，再原子替换设置与地址绑定凭据；运行时不得把旧地址的凭据装入新地址。认证 mutation 还接受当前 lifecycle fence 与 `Idempotency-Key`，非回环地址默认要求 HTTPS。
+
 `rolePanel` 和 `remoteAgent` 出现在 MessageAdapter 类型中，但它们的真实入口由 Manager 提供：角色面板走 Manager/托盘 timeline，Remote Agent v3 由 RabiGUI 主动扫描连接远端 bridge。Gateway 子进程只上报对应状态，不另开网络 listener。
 
 Adapter 的职责是协议翻译和轻量入口判断。它们应该把事件转成 RabiRoute 内部 record，然后交给 `forwarding.ts`。Adapter 不应该知道 prompt 怎么拼，也不应该知道处理端怎么投递。
