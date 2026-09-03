@@ -825,7 +825,7 @@ test("AgentPacket keeps incomplete approval preparation actionable instead of bl
     dataDir: roleDir
   });
 
-  assert.match(packet.message, /审批合同尚未完整，计划保持分析中/);
+  assert.match(packet.message, /审批合同尚未完整，计划保持审批前分析阶段/);
   assert.match(packet.message, /不能把资料缺失标成阻塞/);
   assert.match(packet.message, /待确认说明：缺少正式资源与执行范围/);
   assert.doesNotMatch(packet.message, /阻塞原因：缺少正式资源与执行范围/);

@@ -4,23 +4,12 @@ import {
   PLAN_IMPORTANCE_PRESENTATION,
   PLAN_URGENCY_PRESENTATION,
   PlanImportanceLevel,
-  PlanStatusSortLevel,
   PlanUrgencyLevel,
   resolvePlanImportanceLevel,
   resolvePlanUrgencyLevel
 } from "./planSortContract.js";
 
-test("plan sort levels use integers while labels and colors stay presentation-only", () => {
-  assert.equal(PlanStatusSortLevel.Analyzing, 0);
-  assert.equal(PlanStatusSortLevel.Approval, 1);
-  assert.equal(PlanStatusSortLevel.Executing, 2);
-  assert.equal(PlanStatusSortLevel.WaitingPackage, 3);
-  assert.equal(PlanStatusSortLevel.Qa, 4);
-  assert.equal(PlanStatusSortLevel.Discussion, 5);
-  assert.equal(PlanStatusSortLevel.Paused, 6);
-  assert.equal(PlanStatusSortLevel.Done, 7);
-  assert.equal(PlanStatusSortLevel.Closed, 8);
-  assert.equal(PlanStatusSortLevel.Unknown, 9);
+test("importance and urgency sort levels use integers while labels and colors stay presentation-only", () => {
   assert.equal(PlanImportanceLevel.Highest, 0);
   assert.equal(PlanUrgencyLevel.Critical, 0);
 

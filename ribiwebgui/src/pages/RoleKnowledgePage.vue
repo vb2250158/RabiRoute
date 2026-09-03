@@ -61,7 +61,7 @@ import {
 } from "../roleKnowledgeClient";
 import { planFeedbackSubmissionErrorMessage } from "../approvalFeedbackUi";
 import { planFeedbackMutationLedger } from "../planFeedbackMutationLedger";
-import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
+import { formatPlanDirectorySortLabel, formatPlanDirectorySortLabelTitle, formatPlanVideoDuration, planCardStyle, planDescriptionForDisplay, planDirectorySortPalette, planStatusDescriptionForDisplay, planStatusLabelForDisplay, planStatusStyle, plansForKnowledgeView, planTitleForDirectory } from "../planPresentationStyles";
 import type { PlanKnowledgeView, PlanListSortMode } from "../planPresentationStyles";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { PlanAttachmentPresentation } from "@shared/planAttachmentContract";
@@ -97,11 +97,18 @@ const planListTagQuery = ref("");
 const planListDialogOpen = ref(false);
 const planListDialogContentCached = ref(false);
 const planListResultTotal = ref(0);
-const planListStatusOptions = ref<Array<{
+type PlanStatusOption = {
   status: string;
   count: number;
+  label: string;
+  labelEn: string;
+  description: string;
+  descriptionEn: string;
+  tone: string;
+  statusLevel: number;
   palette: RolePlan["presentation"]["palette"];
-}>>([]);
+};
+const planListStatusOptions = ref<PlanStatusOption[]>([]);
 const planListTagOptions = ref<Array<{
   tag: string;
   count: number;
@@ -1297,8 +1304,7 @@ function planDirectorySortValue(plan: RolePlan): string {
     plan,
     planListSortMode.value,
     Date.now(),
-    isEnglish.value ? "en" : "zh",
-    t(plan.status)
+    isEnglish.value ? "en" : "zh"
   );
 }
 
@@ -1307,8 +1313,7 @@ function planDirectorySortTitle(plan: RolePlan): string {
     plan,
     planListSortMode.value,
     Date.now(),
-    isEnglish.value ? "en" : "zh",
-    t(plan.status)
+    isEnglish.value ? "en" : "zh"
   );
 }
 
@@ -1530,7 +1535,23 @@ function planHistoryCurrentStep(record: RolePlanHistoryRecord): RolePlanStep | u
 }
 
 function planAcceptsGuidance(plan: RolePlan): boolean {
-  return (plan.status === "分析中" || plan.status === "执行中") && plan.presentation.approval.state === "none";
+  return plan.presentation.acceptsGuidance === true && plan.presentation.approval.state === "none";
+}
+
+function planStatusLabel(plan: RolePlan): string {
+  return planStatusLabelForDisplay(plan.presentation, isEnglish.value ? "en" : "zh");
+}
+
+function planStatusDescription(plan: RolePlan): string {
+  return planStatusDescriptionForDisplay(plan.presentation, isEnglish.value ? "en" : "zh");
+}
+
+function planStatusOptionLabel(option: PlanStatusOption): string {
+  return planStatusLabelForDisplay(option, isEnglish.value ? "en" : "zh");
+}
+
+function planStatusOptionDescription(option: PlanStatusOption): string {
+  return planStatusDescriptionForDisplay(option, isEnglish.value ? "en" : "zh");
 }
 
 function planCardDomId(planId: string): string {
@@ -1980,7 +2001,9 @@ function guidanceComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
   if (!planAcceptsGuidance(plan)) {
     return {
       icon: "mdi-alert-circle-outline",
-      text: t("只有分析中或执行中且未进入审批的计划可以填写引导。"),
+      text: isEnglish.value
+        ? "This plan status does not accept guidance, or the plan has already entered approval."
+        : "当前计划状态不接受引导，或计划已经进入审批。",
       title: t("当前计划不能填写引导"),
       tone: "warning"
     };
@@ -2368,12 +2391,14 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <div class="knowledge-hero-copy">
         <div class="eyebrow">ROLE KNOWLEDGE LEDGER</div>
         <h1>计划与记忆</h1>
-        <p>{{ t("计划主体与记忆由 Agent 维护；plan.status 是唯一状态真源，列表、排序和详情使用同一个值。分析中或执行中且未进入审批的计划可提交计划级引导，审批计划只在对应步骤处理审批。") }}</p>
+        <p>{{ isEnglish
+          ? "Plan content and memory are maintained by the Agent. plan.status stores the configured status key; labels, colors, order, views, and guidance availability come from the current persona."
+          : "计划主体与记忆由 Agent 维护。plan.status 只记录配置中的状态 key；名称、颜色、顺序、视图归属和是否接受引导均来自当前人格配置。" }}</p>
       </div>
       <div class="knowledge-identity">
         <span>当前人格</span>
         <strong data-no-i18n>{{ roleLabel }}</strong>
-        <small>{{ t("待审批优先，再按状态与更新时间排序") }}</small>
+        <small>{{ isEnglish ? "Sorted by the configured status order, then update time" : "按人格配置中的状态顺序，再按更新时间排序" }}</small>
       </div>
     </section>
 
@@ -2548,7 +2573,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                             @change="togglePlanListStatus(option.status)"
                           >
                           <span class="knowledge-plan-list-filter-swatch" :style="{ backgroundColor: option.palette.accent }" />
-                          <span>{{ t(option.status) }}</span>
+                          <span :title="planStatusOptionDescription(option)">{{ planStatusOptionLabel(option) }}</span>
                           <b>{{ option.count }}</b>
                         </label>
                       </div>
@@ -2724,7 +2749,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <h2 data-no-i18n>{{ plan.title }}</h2>
               </div>
               <div class="knowledge-plan-head-actions">
-                <v-chip class="knowledge-plan-status" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.status) }}</v-chip>
+                <v-chip class="knowledge-plan-status" :title="planStatusDescription(plan)" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ planStatusLabel(plan) }}</v-chip>
                 <v-btn
                   v-if="planAgentBindingStatus(plan, 'task')?.canOpen && !planTaskAgentWorking(plan)"
                   class="knowledge-plan-open-task"

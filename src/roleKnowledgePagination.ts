@@ -7,14 +7,7 @@ export type RolePlanPageCounts = {
   qa: number;
   active: number;
   stages: {
-    analyzing: number;
-    executing: number;
-    discussion: number;
-    qa: number;
-    waitingPackage: number;
-    approval: number;
-    paused: number;
-    completed: number;
+    byStatus: Record<string, number>;
     archived: number;
   };
 };
@@ -27,6 +20,12 @@ export type RolePlanPage<T> = {
   facets: {
     statuses: Array<{
       status: string;
+      label: string;
+      labelEn: string;
+      description: string;
+      descriptionEn: string;
+      tone: string;
+      statusLevel: number;
       count: number;
       palette: {
         accent: string;
@@ -70,9 +69,14 @@ type PresentedPlanLike = {
   keywords: string[];
   presentation: {
     status: string;
+    label: string;
+    labelEn: string;
+    description: string;
+    descriptionEn: string;
     tone: string;
     statusLevel: number;
     views: string[];
+    roles: string[];
     palette: {
       accent: string;
       background: string;
@@ -169,7 +173,17 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
       const status = plan.status;
       const current = statusFacets.get(status);
       if (current) current.count += 1;
-      else statusFacets.set(status, { status, count: 1, palette: plan.presentation.palette });
+      else statusFacets.set(status, {
+        status,
+        count: 1,
+        label: plan.presentation.label,
+        labelEn: plan.presentation.labelEn,
+        description: plan.presentation.description,
+        descriptionEn: plan.presentation.descriptionEn,
+        tone: plan.presentation.tone,
+        statusLevel: plan.presentation.statusLevel,
+        palette: plan.presentation.palette
+      });
     }
     for (const plan of viewAndQueryPlans) {
       const planTags = new Set<string>();
@@ -197,23 +211,18 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
   const orderedPlans = sortPlans(filteredPlans, filter.sort);
   const items = orderedPlans.slice(offset, offset + limit);
   const nextOffset = offset + items.length;
+  const byStatus = Object.fromEntries([...new Set(plans.map((plan) => plan.status))]
+    .map((status) => [status, plans.filter((plan) => plan.status === status).length]));
   const counts: RolePlanPageCounts = {
     total: plans.length,
     current: plans.filter((plan) => plan.presentation.views.includes("current")).length,
     plans: plans.filter((plan) => plan.presentation.views.includes("plans")).length,
     archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length,
-    blocked: plans.filter((plan) => plan.status === "待审批").length,
-    qa: plans.filter((plan) => plan.status === "等待 QA").length,
-    active: plans.filter((plan) => ["分析中", "待审批", "执行中", "等待打包", "等待 QA"].includes(plan.status)).length,
+    blocked: plans.filter((plan) => plan.presentation.roles.includes("approval")).length,
+    qa: plans.filter((plan) => plan.presentation.roles.includes("waitingQa")).length,
+    active: plans.filter((plan) => plan.presentation.views.includes("current")).length,
     stages: {
-      analyzing: plans.filter((plan) => plan.status === "分析中").length,
-      executing: plans.filter((plan) => plan.status === "执行中").length,
-      discussion: plans.filter((plan) => plan.status === "待讨论").length,
-      qa: plans.filter((plan) => plan.status === "等待 QA").length,
-      waitingPackage: plans.filter((plan) => plan.status === "等待打包").length,
-      approval: plans.filter((plan) => plan.status === "待审批").length,
-      paused: plans.filter((plan) => plan.status === "暂停").length,
-      completed: plans.filter((plan) => plan.status === "完成").length,
+      byStatus,
       archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length
     }
   };

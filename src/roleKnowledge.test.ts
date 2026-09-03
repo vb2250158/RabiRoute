@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 import {
   archiveCompletedPlans,
   applyMemoryConsolidationResult,
@@ -428,6 +429,45 @@ test("plan writes accept only the configured plan status vocabulary", () => {
   });
   assert.throws(() => updatePlan(roleDir, created.id, { status: "等待 QA 验收" }), /Unsupported plan status/);
   assert.equal(getPlan(roleDir, created.id)?.status, "等待打包");
+});
+
+test("startup migration rewrites legacy plan status aliases without changing archive ownership", () => {
+  const roleDir = makeRoleDir();
+  const created = createPlan(roleDir, {
+    id: "legacy-status-key",
+    title: "Legacy status key",
+    focus: "Rewrite legacy status aliases once at startup",
+    status: "分析中",
+    currentStepId: "inspect",
+    steps: [{
+      id: "inspect",
+      title: "Inspect",
+      status: "进行中",
+      workPhase: "execution",
+      discussionState: "pending"
+    }],
+    keywords: ["legacy", "status"]
+  });
+  const filePath = planJsonFile(roleDir, created.id, "active");
+  const legacy = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  legacy.status = "进行中";
+  fs.writeFileSync(filePath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+
+  const migrated = migrateRolePlanLayoutAtStartup(roleDir);
+  assert.equal(migrated.migrated, 1);
+  assert.deepEqual(migrated.failures, []);
+  const stored = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+    status: string;
+    archiveStatus: string;
+    steps: Array<Record<string, unknown>>;
+  };
+  assert.equal(stored.status, "分析中");
+  assert.equal(stored.archiveStatus, "未归档");
+  assert.equal("workPhase" in stored.steps[0]!, false);
+  assert.equal("discussionState" in stored.steps[0]!, false);
+  assert.equal(listPlanHistory(roleDir, created.id).at(-1)?.before?.status, "进行中");
+  assert.equal(listPlanHistory(roleDir, created.id).at(-1)?.after.status, "分析中");
+  assert.equal(migrateRolePlanLayoutAtStartup(roleDir).migrated, 0);
 });
 
 test("cold plan catalogs load asynchronously and share one in-flight cache fill", async () => {
@@ -1414,9 +1454,10 @@ test("only running plans outside approval accept whole-plan guidance", () => {
     keywords: ["审批"]
   });
 
-  assert.equal(planAcceptsGuidance(running), true);
-  assert.equal(planAcceptsGuidance(pending), false);
-  assert.equal(planAcceptsGuidance(approval), false);
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+  assert.equal(planAcceptsGuidance(running, workflow), true);
+  assert.equal(planAcceptsGuidance(pending, workflow), false);
+  assert.equal(planAcceptsGuidance(approval, workflow), false);
 });
 
 test("plan attachments enforce count, per-file, and total size limits", () => {

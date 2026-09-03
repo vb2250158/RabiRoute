@@ -33,6 +33,12 @@ export type RolePlanPage = {
     statuses: Array<{
       status: string;
       count: number;
+      label: string;
+      labelEn: string;
+      description: string;
+      descriptionEn: string;
+      tone: string;
+      statusLevel: number;
       palette: RolePlan["presentation"]["palette"];
     }>;
     tags: Array<{
@@ -261,17 +267,20 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
       : steps.filter((step) => step.status === "已完成").length,
     detailLevel: plan.detailLevel || (steps.length || attachments.length || plan.focus ? "full" : "summary")
   } satisfies Pick<RolePlan, "attachments" | "steps" | "attachmentCount" | "stepCount" | "completedStepCount" | "detailLevel">;
-  if (plan.presentation?.status && plan.presentation?.tone && plan.presentation.approval) {
+  if (plan.presentation && plan.presentation.approval) {
     return {
       ...plan,
       ...normalizedCounts,
       presentation: {
         ...plan.presentation,
-        status: plan.status,
-        statusLevel: Number.isFinite(plan.presentation.statusLevel)
-          ? plan.presentation.statusLevel
-          : plan.presentation.sortBucket,
-        sortBucket: Number.isFinite(plan.presentation.sortBucket) ? plan.presentation.sortBucket : -1,
+        status: String(plan.presentation.status || ""),
+        label: String(plan.presentation.label || ""),
+        labelEn: String(plan.presentation.labelEn || ""),
+        description: String(plan.presentation.description || ""),
+        descriptionEn: String(plan.presentation.descriptionEn || ""),
+        tone: String(plan.presentation.tone || "unknown"),
+        statusLevel: Number.isFinite(plan.presentation.statusLevel) ? plan.presentation.statusLevel : Number.MAX_SAFE_INTEGER,
+        acceptsGuidance: plan.presentation.acceptsGuidance === true,
         views: Array.isArray(plan.presentation.views) ? plan.presentation.views : [],
         palette: normalizePlanPresentationPalette(plan.presentation.palette),
         importance: plan.presentation.importance ? {
@@ -295,9 +304,14 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
     ...plan,
     ...normalizedCounts,
     presentation: {
-      status: plan.status,
+      status: "",
+      label: "",
+      labelEn: "",
+      description: "",
+      descriptionEn: "",
       tone: "unknown",
-      sortBucket: -1,
+      statusLevel: Number.MAX_SAFE_INTEGER,
+      acceptsGuidance: false,
       views: [],
       palette: { ...FALLBACK_PLAN_PRESENTATION_PALETTE },
       approval: {
@@ -383,6 +397,22 @@ function summaryAsPlan(summary: RolePlanSummary): RolePlan {
   });
 }
 
+function normalizedPlanStatusFacet(
+  facet: RolePlanPage["facets"]["statuses"][number]
+): RolePlanPage["facets"]["statuses"][number] {
+  return {
+    status: String(facet.status || ""),
+    count: Number.isFinite(facet.count) ? facet.count : 0,
+    label: String(facet.label || ""),
+    labelEn: String(facet.labelEn || ""),
+    description: String(facet.description || ""),
+    descriptionEn: String(facet.descriptionEn || ""),
+    tone: String(facet.tone || "unknown"),
+    statusLevel: Number.isFinite(facet.statusLevel) ? facet.statusLevel : Number.MAX_SAFE_INTEGER,
+    palette: normalizePlanPresentationPalette(facet.palette)
+  };
+}
+
 export async function loadRolePlanPage(
   roleId: string,
   cursor = "",
@@ -402,7 +432,11 @@ export async function loadRolePlanPage(
   );
   return {
     ...page,
-    items: page.items.map(summaryAsPlan)
+    items: page.items.map(summaryAsPlan),
+    facets: page.facets ? {
+      ...page.facets,
+      statuses: page.facets.statuses.map(normalizedPlanStatusFacet)
+    } : page.facets
   };
 }
 

@@ -10,7 +10,7 @@
 
 本文说明 Agent 在处理 RabiRoute 消息时需要关注的 Rabi 内置接口。它不是普通用户操作手册，而是给 Agent 注入上下文后使用的接口说明。
 
-这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、已完成计划的延迟归档、到点或显式发起的记忆整理请求、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理请求时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
+这些接口用于让 Agent 主动维护计划和记忆，并把普通回复交回 RabiRoute。RabiRoute 负责存储、权限边界、符合人格配置条件的计划延迟归档、到点或显式发起的记忆整理请求、上下文注入和回复回传；Agent 需要关注的是：什么时候新增或更新计划、什么时候记录近期记忆、收到记忆整理请求时如何返回沉淀记忆，以及需要普通聊天回复时把内容交给回传接口。
 
 ## 上下文注入
 
@@ -934,7 +934,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 
 ## 计划接口
 
-计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。
+计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。`plan.status` 只保存当前人格 `personaConfig.json.planWorkflow.statuses` 中启用状态的 key；下面九项是默认模板，不是代码枚举。
 
 ```text
 分析中
@@ -954,6 +954,17 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 GET /roles/:roleId/plans
 GET /roles/:roleId/plans/:planId
 ```
+
+查询和维护人格计划状态：
+
+```http
+GET    /api/roles/:roleId/plan-statuses
+POST   /api/roles/:roleId/plan-statuses
+PATCH  /api/roles/:roleId/plan-statuses/:statusKey
+DELETE /api/roles/:roleId/plan-statuses/:statusKey
+```
+
+写请求必须携带 `If-Match` 和 `Idempotency-Key`。新增或修改请求体使用状态定义字段；状态 key 不可原地修改。删除请求体必须提供 `replacementKey`，Manager 会先迁移未归档计划，再将旧定义保留为 `retired`，使归档计划和历史快照继续可读。
 
 新增计划：
 
@@ -1002,9 +1013,9 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。`plan.status` 是唯一计划状态真源，只允许“分析中、待审批、执行中、等待打包、等待 QA、待讨论、暂停、完成、关闭”。`archiveStatus` 独立，只允许“未归档、已归档”。步骤仍只使用“未开始、进行中、已完成”，不再写 `workPhase` 或 `discussionState`。Manager、WebGUI 和托盘直接显示 `plan.status`。
+新增计划必须提供有序的 `steps`。`plan.status` 只能写当前人格状态目录中的 enabled key。`archiveStatus` 独立，只允许“未归档、已归档”。步骤仍只使用“未开始、进行中、已完成”，不再写 `workPhase` 或 `discussionState`。Manager 返回 key 及其配置的 label、description、palette、order 和 views，WebGUI 与托盘只消费这些字段。
 
-审批资料准备阶段写“分析中”，完整审批合同正式等待回执时写“待审批”，批准或用户直接授权后写“执行中”。包体、QA、讨论和暂停直接写对应状态；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
+审批资料准备、完整审批等待和获批执行分别写 `planWorkflow.roles.analysis`、`roles.approval`、`roles.execution` 所指的 key。包体、QA、讨论和暂停同样通过 roles 查找；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
@@ -1033,7 +1044,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI 用该接口记录状态为分析中或执行中且未进入审批的计划级引导；WebGUI/托盘也继续用它记录当前审批步骤的正式意见。两者都会请求 Manager 通过独立 `plan_feedback` 系统事件通知 Agent。计划引导只带 `planId`，不能带 `stepId`：
+RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入审批的计划级引导；WebGUI/托盘也继续用它记录当前审批步骤的正式意见。两者都会请求 Manager 通过独立 `plan_feedback` 系统事件通知 Agent。计划引导只带 `planId`，不能带 `stepId`：
 
 ```json
 {
@@ -1091,13 +1102,13 @@ PATCH /roles/:roleId/plans/:planId
 - 更新全部步骤及唯一的当前步骤。
 - 更新下一步、等待对象和阻塞原因。
 - 更新关键词。
-- 将状态改为九种受支持状态之一。
-- 暂停或待讨论结束后，按实际阶段恢复为 `分析中` 或 `执行中`。
-- 验收完成后改为 `完成`；取消、失效或由后继计划替代时改为 `关闭`。
+- 将状态改为当前人格状态目录中的 enabled key；需要表达生命周期语义时，通过 `planWorkflow.roles` 选择对应 key。
+- 暂停或讨论结束后，按实际阶段恢复为 analysis 或 execution role 指向的 key。
+- 验收完成后使用 completed role；取消、失效或由后继计划替代时使用 closed role。
 
-计划归档通常不需要 Agent 处理。`完成` 或 `关闭` 的计划超过当前固定的 72 小时窗口后，角色知识快照把独立的 `archiveStatus` 改为 `已归档`，但保留原 `plan.status`。已归档计划不参与关键词召回。
+计划归档通常不需要 Agent 处理。状态定义同时满足 `terminal=true` 与 `archiveEligible=true` 的未归档计划，超过 `personaConfig.json.planWorkflow.archiveAfterHours` 后，由角色知识快照把独立的 `archiveStatus` 改为 `已归档`，但保留原 `plan.status` key。默认模板延迟为 72 小时；已归档计划不参与关键词召回。
 
-归档计时以计划的 `updatedAt` 为准。Agent 更新计划后，RabiRoute 会刷新 `updatedAt`，该计划重新进入活跃窗口；只有 `status=完成或关闭` 且 `archiveStatus=未归档` 时才会自动归档。
+归档计时以计划的 `updatedAt` 为准。Agent 更新计划后，RabiRoute 会刷新 `updatedAt`，该计划重新进入活跃窗口；是否可归档由当前状态配置决定，不由显示名称判断。
 
 ## 近期记忆接口
 
@@ -1282,7 +1293,7 @@ API 返回示例：
     {
       "title": "计划和记忆维护边界",
       "focus": "计划和记忆的维护责任",
-      "content": "计划和记忆由 Agent 主动维护；RabiRoute 负责提供接口、注入索引、自动归档已完成计划，并触发记忆沉淀流程。"
+      "content": "计划和记忆由 Agent 主动维护；RabiRoute 负责提供接口、注入索引、按人格配置归档符合条件的计划，并触发记忆沉淀流程。"
     }
   ]
 }

@@ -759,7 +759,7 @@ When the current Route enables **Require the RabiAgent message delivery API**, C
 
 ## Plan API
 
-Statuses:
+`plan.status` stores only an enabled key from the owning persona's `personaConfig.json.planWorkflow.statuses`. The following entries are defaults, not a code enum:
 
 ```text
 `分析中`  analyzing
@@ -779,6 +779,15 @@ GET   /api/roles/:roleId/plans/:planId
 POST  /api/roles/:roleId/plans
 PATCH /api/roles/:roleId/plans/:planId
 ```
+
+```http
+GET    /api/roles/:roleId/plan-statuses
+POST   /api/roles/:roleId/plan-statuses
+PATCH  /api/roles/:roleId/plan-statuses/:statusKey
+DELETE /api/roles/:roleId/plan-statuses/:statusKey
+```
+
+Status mutations require both `If-Match` and `Idempotency-Key`. Keys are immutable. DELETE requires `replacementKey`; Manager migrates unarchived plans first and retains the old definition as `retired` so archived plans and history remain readable.
 
 ```json
 {
@@ -819,9 +828,9 @@ PATCH /api/roles/:roleId/plans/:planId
 }
 ```
 
-New plans must provide ordered `steps`. `plan.status` is the single plan-status source and accepts only the nine values above. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Steps keep their own `未开始 / 进行中 / 已完成` progress values; `workPhase` and `discussionState` are retired. Manager, WebGUI, and the tray display `plan.status` directly.
+New plans must provide ordered `steps`. `plan.status` accepts only an enabled key from the persona's current status catalog. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Steps keep their own `未开始 / 进行中 / 已完成` progress values; `workPhase` and `discussionState` are retired. Manager returns the key with configured label, description, palette, order, and views; WebGUI and the tray consume those fields.
 
-Approval preparation uses `分析中`; a complete submitted approval contract uses `待审批`; approval or direct authorization moves the plan to `执行中`. Package, QA, discussion, and pause states are written directly and are never derived from step text or waiting details.
+Approval preparation, a complete pending approval, and approved execution use the keys referenced by `planWorkflow.roles.analysis`, `roles.approval`, and `roles.execution`. Package, QA, discussion, and pause use their configured role keys and are never derived from step text or waiting details.
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 
@@ -850,7 +859,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI uses this endpoint for whole-plan guidance on Analyzing or Executing plans outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both notify the Agent through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
+RibiWebGUI uses this endpoint for whole-plan guidance when `presentation.acceptsGuidance=true` outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both notify the Agent through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
 
 ```json
 {
@@ -895,7 +904,7 @@ Agent handling notes for plan guidance use `kind=guidance_response`, `author=age
 
 The shared plan API hints in every AgentPacket include both guidance and approval feedback contracts plus the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface.
 
-Completed or Closed plans whose `archiveStatus=未归档` are archived by a role-knowledge snapshot after their latest `updatedAt` is more than the current fixed 72-hour window old. Archival changes only `archiveStatus` to `已归档`, preserves `plan.status`, and moves the plan directory into the archive bucket. This window is not yet a public `personaConfig.json` field.
+An unarchived plan is eligible for delayed archival only when its configured status has both `terminal=true` and `archiveEligible=true`. After its latest `updatedAt` exceeds `personaConfig.json.planWorkflow.archiveAfterHours`, a role-knowledge snapshot changes only `archiveStatus` to `已归档`, preserves the status key, and moves the plan directory into the archive bucket. The default template uses 72 hours, while each persona may configure a different delay. Archived plans do not participate in keyword recall.
 
 ## Recent-memory API
 

@@ -74,7 +74,7 @@ export function formatPlanRelativeTime(value: string, now = Date.now(), locale: 
   return locale === "en" ? `${years} yr ago` : `${years}年前`;
 }
 
-type PlanDirectorySortSource = Pick<RolePlan, "status" | "updatedAt" | "presentation">;
+type PlanDirectorySortSource = Pick<RolePlan, "updatedAt" | "presentation">;
 
 const UPDATED_SORT_PALETTE: PlanPresentationPalette = {
   accent: "#0891b2",
@@ -90,17 +90,39 @@ function levelLabel(
   return locale === "en" ? presentation.labelEn : presentation.label;
 }
 
+type StatusPresentation = Pick<
+  RolePlan["presentation"],
+  "label" | "labelEn" | "description" | "descriptionEn"
+>;
+
+export function planStatusLabelForDisplay(
+  presentation: StatusPresentation,
+  locale: "zh" | "en" = "zh"
+): string {
+  const preferred = locale === "en" ? presentation.labelEn : presentation.label;
+  const alternate = locale === "en" ? presentation.label : presentation.labelEn;
+  return String(preferred || alternate || "").trim() || (locale === "en" ? "Status unavailable" : "状态信息不可用");
+}
+
+export function planStatusDescriptionForDisplay(
+  presentation: StatusPresentation,
+  locale: "zh" | "en" = "zh"
+): string {
+  const preferred = locale === "en" ? presentation.descriptionEn : presentation.description;
+  const alternate = locale === "en" ? presentation.description : presentation.descriptionEn;
+  return String(preferred || alternate || "").trim();
+}
+
 export function formatPlanDirectorySortLabel(
   plan: PlanDirectorySortSource,
   mode: PlanListSortMode,
   now = Date.now(),
-  locale: "zh" | "en" = "zh",
-  statusLabel: string = plan.status
+  locale: "zh" | "en" = "zh"
 ): string {
   if (mode === "updated") return formatPlanRelativeTime(plan.updatedAt, now, locale);
   if (mode === "importance") return levelLabel(plan.presentation.importance, locale);
   if (mode === "urgency") return levelLabel(plan.presentation.urgency, locale);
-  return statusLabel;
+  return planStatusLabelForDisplay(plan.presentation, locale);
 }
 
 export function planDirectorySortPalette(
@@ -117,10 +139,9 @@ export function formatPlanDirectorySortLabelTitle(
   plan: PlanDirectorySortSource,
   mode: PlanListSortMode,
   now = Date.now(),
-  locale: "zh" | "en" = "zh",
-  statusLabel: string = plan.status
+  locale: "zh" | "en" = "zh"
 ): string {
-  const label = formatPlanDirectorySortLabel(plan, mode, now, locale, statusLabel);
+  const label = formatPlanDirectorySortLabel(plan, mode, now, locale);
   if (mode === "updated") return locale === "en" ? `Last updated: ${label}` : `最后更新：${label}`;
   if (mode === "importance") return locale === "en" ? `Importance: ${label}` : `重要程度：${label}`;
   if (mode === "urgency") return locale === "en" ? `Urgency: ${label}` : `紧急程度：${label}`;

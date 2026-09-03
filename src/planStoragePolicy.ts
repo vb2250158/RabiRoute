@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
-import { isArchivedPlanStatus, isCompletedPlanStatus, planStorageDirectory } from "./planStorageLayout.js";
+import { isArchivedPlanStatus, planStorageDirectory } from "./planStorageLayout.js";
 import {
   inventoryPlanStorageDirectory,
   type PlanStorageInventory
@@ -97,8 +97,7 @@ export function planLineageDominanceReason(
   if (activeHistoryBytes.byteLength === 0 && archiveHistoryBytes.byteLength === 0) {
     return "terminal_archive_temporally_dominates_legacy_active_snapshot";
   }
-  if ((!isCompletedPlanStatus(activePlan.status) && activePlan.status !== "关闭")
-    || archiveHistoryBytes.byteLength < activeHistoryBytes.byteLength
+  if (archiveHistoryBytes.byteLength < activeHistoryBytes.byteLength
     || !archiveHistoryBytes.subarray(0, activeHistoryBytes.byteLength).equals(activeHistoryBytes)) return null;
 
   const archiveHistory = readHistory(archiveHistoryFile, id);

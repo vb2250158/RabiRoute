@@ -4,19 +4,6 @@ export type PlanSortPalette = {
   foreground: string;
 };
 
-export enum PlanStatusSortLevel {
-  Analyzing = 0,
-  Approval = 1,
-  Executing = 2,
-  WaitingPackage = 3,
-  Qa = 4,
-  Discussion = 5,
-  Paused = 6,
-  Done = 7,
-  Closed = 8,
-  Unknown = 9
-}
-
 export enum PlanImportanceLevel {
   Highest = 0,
   High = 1,

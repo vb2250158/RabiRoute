@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { rabiContextManager, type RabiContextTriggerKind } from "../context/rabiContextManager.js";
 import { listPlans, type PlanItem } from "../roleKnowledge.js";
+import { ensurePersonaPlanWorkflow, planStatusDefinition } from "../personaPlanWorkflow.js";
 import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { roleFolderPath } from "../shared/routePaths.js";
@@ -580,8 +581,9 @@ export class CodexHookContextService {
     const sessionId = this.requireSessionId(request.sessionId);
     const matches = this.listRoles().flatMap((roleId) => {
       const role = this.requireRole(roleId);
+      const workflow = ensurePersonaPlanWorkflow(role.roleDir).workflow;
       return listPlans(role.roleDir)
-        .filter((plan) => (["分析中", "执行中", "等待打包", "等待 QA"].includes(plan.status))
+        .filter((plan) => (planStatusDefinition(workflow, plan.status)?.views.includes("current") === true)
           && plan.taskBinding?.agentType === "codex"
           && plan.taskBinding.sessionId === sessionId
           && isPangHuWorkspace(plan.taskBinding.workspace || request.cwd))
@@ -637,9 +639,10 @@ export class CodexHookContextService {
     const binding = this.getBinding(sessionId);
     const matches = this.listRoles().flatMap((roleId) => {
       const role = this.requireRole(roleId);
+      const workflow = ensurePersonaPlanWorkflow(role.roleDir).workflow;
       return listPlans(role.roleDir)
         .filter((plan) => (
-          (["分析中", "执行中", "等待打包", "等待 QA"].includes(plan.status))
+          (planStatusDefinition(workflow, plan.status)?.views.includes("current") === true)
           && plan.taskBinding?.agentType === "codex"
           && plan.taskBinding.sessionId === sessionId
           && plan.taskBinding.completionHook?.enabled === true

@@ -35,6 +35,7 @@ test("verifies a persisted plan contains the original group message id", (t) => 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "critical-fact-plan-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const roleDir = path.join(root, "roles", "DemoPersona");
+  fs.mkdirSync(roleDir, { recursive: true });
   const plan = createPlan(roleDir, {
     title: "公测上线目标",
     focus: "公测上线目标",
@@ -64,6 +65,7 @@ test("rejects a real plan or memory that omitted the original group message id",
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "critical-fact-missing-source-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const roleDir = path.join(root, "roles", "DemoPersona");
+  fs.mkdirSync(roleDir, { recursive: true });
   const memory = createRecentMemory(roleDir, {
     title: "上线目标",
     focus: "排期",

@@ -104,6 +104,7 @@ test("plan attachment route resolves copied plan data after the runtime root mov
   t.after(() => fs.rmSync(targetRoot, { recursive: true, force: true }));
   const sourceRoleDir = path.join(sourceRoot, "roles", "Rabi");
   const targetRoleDir = path.join(targetRoot, "roles", "Rabi");
+  fs.mkdirSync(sourceRoleDir, { recursive: true });
   const content = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z5ZsAAAAASUVORK5CYII=", "base64");
   const plan = createPlan(sourceRoleDir, {
     id: "plan-relocated-preview",

@@ -27,7 +27,19 @@ import {
 } from "../roleKnowledge.js";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { ROLE_MEMORY_CATALOG_LEASE_ID } from "../memoryStorageIdentity.js";
+import {
+  addPersonaPlanStatusDefinition,
+  assertWritablePlanStatus,
+  beginPersonaPlanStatusRetirement,
+  completePersonaPlanStatusRetirement,
+  readPersonaPlanWorkflow,
+  updatePersonaPlanStatusDefinition,
+  writePersonaPlanWorkflow,
+  type PersonaPlanWorkflow,
+  type PersonaPlanWorkflowStatus
+} from "../personaPlanWorkflow.js";
 import {
   readPlanStoragePackage,
   recoverPlanLifecycleTransitions,
@@ -104,6 +116,10 @@ function currentRevision(request: ManagerStorageMutationRequest, roleDir: string
   const planId = request.fence.planId;
   const task = request.task;
   switch (task.type) {
+    case "plan_status_create":
+    case "plan_status_update":
+    case "plan_status_delete":
+      return readPersonaPlanWorkflow(roleDir)?.revision ?? null;
     case "plan_create":
       return currentPlanRevision(roleDir, planId);
     case "recent_memory_create": {
@@ -134,6 +150,74 @@ function currentRevision(request: ManagerStorageMutationRequest, roleDir: string
       return storageMutationRevisionToken(listPlanFeedback(roleDir, planId!)
         .find(item => item.id === task.record.id));
   }
+}
+
+type PersonaPlanStatusMutationResult = Readonly<{
+  workflow: PersonaPlanWorkflow;
+  revision: string;
+  status: PersonaPlanWorkflowStatus;
+  migratedPlanIds: string[];
+}>;
+
+function requiredPlanWorkflow(roleDir: string) {
+  const current = readPersonaPlanWorkflow(roleDir);
+  if (!current) throw new Error("Persona plan workflow is required before changing plan statuses.");
+  return current;
+}
+
+function mutatePersonaPlanStatus(
+  validated: ManagerStorageMutationRequest,
+  roleDir: string,
+  mutation: StorageMutationStamp
+): PersonaPlanStatusMutationResult {
+  return withPlanStorageLease(roleDir, nonPlanStorageLeaseId(validated), lease => {
+    const checkpoint = (): void => assertPlanStorageLeaseOwner(lease);
+    checkpoint();
+    assertExpectedRevision(validated, roleDir);
+    const current = requiredPlanWorkflow(roleDir);
+    const task = validated.task;
+    const workflow: PersonaPlanWorkflow = JSON.parse(JSON.stringify(current.workflow)) as PersonaPlanWorkflow;
+    let status: PersonaPlanWorkflowStatus;
+    const migratedPlanIds: string[] = [];
+    if (task.type === "plan_status_create") {
+      const input = { ...task.input } as PersonaPlanWorkflowStatus;
+      const nextWorkflow = addPersonaPlanStatusDefinition(workflow, input);
+      status = nextWorkflow.statuses.find(candidate => candidate.key === input.key)!;
+      const written = writePersonaPlanWorkflow(roleDir, nextWorkflow, current.revision);
+      checkpoint();
+      return { ...written, status, migratedPlanIds };
+    }
+    if (task.type === "plan_status_update") {
+      const index = workflow.statuses.findIndex(candidate => candidate.key === task.statusKey);
+      if (index < 0) throw new Error(`Plan status not found: ${task.statusKey}.`);
+      const nextWorkflow = updatePersonaPlanStatusDefinition(workflow, task.statusKey, task.patch);
+      status = nextWorkflow.statuses.find(candidate => candidate.key === task.statusKey)!;
+      const written = writePersonaPlanWorkflow(roleDir, nextWorkflow, current.revision);
+      checkpoint();
+      return { ...written, status, migratedPlanIds };
+    }
+    if (task.type !== "plan_status_delete") {
+      throw new Error(`Unsupported persona plan status mutation: ${task.type}.`);
+    }
+    if (task.statusKey === task.replacementKey) {
+      throw new Error("replacementKey must differ from the retired plan status key.");
+    }
+    const index = workflow.statuses.findIndex(candidate => candidate.key === task.statusKey);
+    if (index < 0) throw new Error(`Plan status not found: ${task.statusKey}.`);
+    const replacement = assertWritablePlanStatus(workflow, task.replacementKey);
+    const retiringWorkflow = beginPersonaPlanStatusRetirement(workflow, task.statusKey, replacement.key);
+    for (const plan of readPlansFromStorageInWorker(roleDir)) {
+      if (plan.archiveStatus === "已归档" || plan.status !== task.statusKey) continue;
+      updatePlan(roleDir, plan.id, { status: replacement.key }, undefined, mutation);
+      migratedPlanIds.push(plan.id);
+      checkpoint();
+    }
+    const retiredWorkflow = completePersonaPlanStatusRetirement(retiringWorkflow, task.statusKey);
+    status = retiredWorkflow.statuses.find(candidate => candidate.key === task.statusKey)!;
+    const written = writePersonaPlanWorkflow(roleDir, retiredWorkflow, current.revision);
+    checkpoint();
+    return { ...written, status, migratedPlanIds };
+  });
 }
 
 function assertExpectedRevision(request: ManagerStorageMutationRequest, roleDir: string): void {
@@ -170,9 +254,11 @@ function deterministicDomainRejection(error: unknown): string | undefined {
     && (error as Error & { code?: string }).code === "PLAN_STORAGE_LEASE_LOST") return undefined;
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("STORAGE_MUTATION_REVISION_CONFLICT:")
+    || message.startsWith("PERSONA_PLAN_WORKFLOW_REVISION_CONFLICT:")
     || /\bnot found\b/i.test(message)
     || /\balready exists\b/i.test(message)
-    || /\b(?:required|invalid|unsupported)\b/i.test(message)
+    || /\b(?:required|invalid|unsupported|immutable)\b/i.test(message)
+    || /\bnot enabled\b/i.test(message)
     || /immutable terminal/i.test(message)
     || /does not match/i.test(message)) return message;
   return undefined;
@@ -188,6 +274,10 @@ async function executeDomainMutation(
     revision: storageMutationRevision(validated.requestId)
   });
   switch (validated.task.type) {
+    case "plan_status_create":
+    case "plan_status_update":
+    case "plan_status_delete":
+      return mutatePersonaPlanStatus(validated, roleDir, mutation);
     case "plan_create":
       return createPlan(roleDir, { ...validated.task.input, id: planId }, mutation);
     case "plan_update":
@@ -315,6 +405,33 @@ function recoveredDomainValue(
   const planId = validated.fence.planId;
   const task = validated.task;
   switch (task.type) {
+    case "plan_status_create": {
+      const current = readPersonaPlanWorkflow(roleDir);
+      if (!current) return undefined;
+      const input = task.input as Partial<PersonaPlanWorkflowStatus>;
+      const status = current.workflow.statuses.find(candidate => candidate.key === input.key);
+      return status && isDeepStrictEqual(status, input)
+        ? { ...current, status, migratedPlanIds: [] }
+        : undefined;
+    }
+    case "plan_status_update": {
+      const current = readPersonaPlanWorkflow(roleDir);
+      const status = current?.workflow.statuses.find(candidate => candidate.key === task.statusKey);
+      if (!current || !status) return undefined;
+      const desired = { ...status, ...task.patch, key: status.key };
+      return isDeepStrictEqual(status, desired)
+        ? { ...current, status, migratedPlanIds: [] }
+        : undefined;
+    }
+    case "plan_status_delete": {
+      const current = readPersonaPlanWorkflow(roleDir);
+      const status = current?.workflow.statuses.find(candidate => candidate.key === task.statusKey);
+      if (!current || status?.state !== "retired") return undefined;
+      const remaining = readPlansFromStorageInWorker(roleDir)
+        .filter(plan => plan.archiveStatus !== "已归档" && plan.status === task.statusKey);
+      if (remaining.length > 0 || Object.values(current.workflow.roles).includes(task.statusKey)) return undefined;
+      return { ...current, status, migratedPlanIds: [] };
+    }
     case "plan_create":
     case "plan_update":
     case "plan_secretary_binding_update":

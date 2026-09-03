@@ -23,11 +23,7 @@ function plan(presentation?: RolePlan["presentation"]): RolePlan {
     id: "plan",
     title: "Plan",
     focus: "Plan",
-    status: presentation?.status === "待讨论"
-      ? "待讨论"
-      : presentation?.status === "等待 QA"
-        ? "等待 QA"
-        : "分析中",
+    status: presentation?.status || "analysis-key",
     attachments: [],
     steps: [],
     createdAt: "2026-07-30T00:00:00.000Z",
@@ -360,34 +356,50 @@ test("WebGUI clears cached revisions when Manager lifecycle metadata cannot be r
 
 test("WebGUI preserves plan.status and does not derive a second status when presentation is absent", () => {
   const managerStage = normalizeRolePlanFromManager(plan({
-    status: "待讨论",
-    tone: "discussion",
-    sortBucket: 1,
+    status: "design-review-key",
+    label: "设计复核",
+    labelEn: "Design review",
+    description: "等待设计负责人复核",
+    descriptionEn: "Waiting for design owner review",
+    tone: "custom-review",
+    statusLevel: 17,
+    acceptsGuidance: true,
     views: ["plans"],
     palette: { accent: "#d97706", background: "#fffbeb", foreground: "#92400e" },
     approval: { state: "none", enabled: false, label: "无需审批", helper: "", missing: [] }
   }));
   const missingPresentation = normalizeRolePlanFromManager(plan(undefined));
 
-  assert.equal(managerStage.presentation.status, "待讨论");
-  assert.equal(managerStage.presentation.tone, "discussion");
-  assert.equal(managerStage.presentation.sortBucket, 1);
-  assert.equal(missingPresentation.presentation.status, "分析中");
+  assert.equal(managerStage.status, "design-review-key");
+  assert.equal(managerStage.presentation.status, "design-review-key");
+  assert.equal(managerStage.presentation.label, "设计复核");
+  assert.equal(managerStage.presentation.tone, "custom-review");
+  assert.equal(managerStage.presentation.statusLevel, 17);
+  assert.equal(managerStage.presentation.acceptsGuidance, true);
+  assert.equal(missingPresentation.presentation.status, "");
   assert.equal(missingPresentation.presentation.tone, "unknown");
+  assert.equal(missingPresentation.presentation.acceptsGuidance, false);
 });
 
-test("WebGUI preserves the Manager-owned QA acceptance label, tone, and palette", () => {
+test("WebGUI preserves a Manager-owned custom status label, tone, and palette", () => {
   const qa = normalizeRolePlanFromManager(plan({
-    status: "等待 QA",
-    tone: "qa",
-    sortBucket: 1,
+    status: "qa-candidate-key",
+    label: "候选包复测",
+    labelEn: "Candidate retest",
+    description: "复测候选包",
+    descriptionEn: "Retest the candidate package",
+    tone: "candidate-retest",
+    statusLevel: 23,
+    acceptsGuidance: false,
     views: ["current", "plans"],
     palette: { accent: "#8e63c7", background: "#f3e8ff", foreground: "#7e22ce" },
     approval: { state: "none", enabled: false, label: "无需审批", helper: "", missing: [] }
   }));
 
-  assert.equal(qa.presentation.status, "等待 QA");
-  assert.equal(qa.presentation.tone, "qa");
+  assert.equal(qa.presentation.status, "qa-candidate-key");
+  assert.equal(qa.presentation.label, "候选包复测");
+  assert.equal(qa.presentation.labelEn, "Candidate retest");
+  assert.equal(qa.presentation.tone, "candidate-retest");
   assert.deepEqual(qa.presentation.palette, {
     accent: "#8e63c7",
     background: "#f3e8ff",
@@ -406,6 +418,20 @@ test("WebGUI requests only the active plan view and current search query", async
         items: [],
         total: 0,
         nextCursor: "",
+        facets: {
+          statuses: [{
+            status: "design-review-key",
+            count: 2,
+            label: "设计复核",
+            labelEn: "Design review",
+            description: "等待设计负责人复核",
+            descriptionEn: "Waiting for design owner review",
+            tone: "custom-review",
+            statusLevel: 17,
+            palette: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" }
+          }],
+          tags: []
+        },
         counts: {
           total: 0,
           current: 0,
@@ -432,13 +458,17 @@ test("WebGUI requests only the active plan view and current search query", async
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   try {
-    await loadRolePlanPage("Rabi", "", 8, {
+    const result = await loadRolePlanPage("Rabi", "", 8, {
       view: "current",
       query: "掉线 性能",
       sort: "updated",
-      statuses: ["进行中", "待审批"],
+      statuses: ["design-review-key", "package-candidate-key"],
       tags: ["WebGUI", "性能"]
     });
+    assert.equal(result.facets.statuses[0]?.status, "design-review-key");
+    assert.equal(result.facets.statuses[0]?.label, "设计复核");
+    assert.equal(result.facets.statuses[0]?.labelEn, "Design review");
+    assert.equal(result.facets.statuses[0]?.statusLevel, 17);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -448,7 +478,7 @@ test("WebGUI requests only the active plan view and current search query", async
   assert.equal(requestUrl.searchParams.get("view"), "current");
   assert.equal(requestUrl.searchParams.get("query"), "掉线 性能");
   assert.equal(requestUrl.searchParams.get("sort"), "updated");
-  assert.deepEqual(requestUrl.searchParams.getAll("status"), ["进行中", "待审批"]);
+  assert.deepEqual(requestUrl.searchParams.getAll("status"), ["design-review-key", "package-candidate-key"]);
   assert.deepEqual(requestUrl.searchParams.getAll("tag"), ["WebGUI", "性能"]);
 });
 

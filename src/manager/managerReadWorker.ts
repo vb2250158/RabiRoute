@@ -6,6 +6,7 @@ import {
   type PersonaVoiceTranscriptQuery
 } from "../personaVoiceTranscriptView.js";
 import { PersonaSyncService } from "../personaSync.js";
+import { readPersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   getPlan,
   getRoleSkill,
@@ -76,6 +77,10 @@ export type ManagerReadWorkerTask =
     }
   | {
       type: "role_plan_catalog";
+      roleDir: string;
+    }
+  | {
+      type: "role_plan_workflow";
       roleDir: string;
     }
   | {
@@ -279,9 +284,13 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
         )
       };
     }
+    case "role_plan_workflow":
+      return readPersonaPlanWorkflow(task.roleDir);
     case "role_plan_page": {
+      const workflow = readPersonaPlanWorkflow(task.roleDir)?.workflow;
+      if (!workflow) throw new Error(`PLAN_STATUS_CONFIG_MISSING: ${task.roleDir}`);
       const page = paginateRolePlans(
-        presentPlans(readPlansFromStorageInWorker(task.roleDir)),
+        presentPlans(readPlansFromStorageInWorker(task.roleDir), workflow),
         task.cursor,
         task.limit,
         {

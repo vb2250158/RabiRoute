@@ -59,7 +59,7 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 
 计划用于保存可推进、可等待、可完成、可归档的关注项。计划数据是角色要盯住的事项，不是普通聊天记录，也不是执行器队列。
 
-`plan.status` 是计划状态的唯一真源，只允许九个值：
+`plan.status` 只保存所属人格 `personaConfig.json.planWorkflow.statuses` 中启用状态的 `key`。状态的名称、说明、颜色、顺序、所在视图、步骤约束、审批约束、完成行为和归档资格都由同一份人格配置提供；代码、WebGUI 和托盘不维护第二份状态枚举。默认模板提供以下九个状态，`key` 与显示名称彼此独立：
 
 ```text
 分析中
@@ -73,7 +73,9 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 关闭
 ```
 
-审批准备前使用 `分析中`；完整审批合同正式等待回执时使用 `待审批`；批准或用户直接授权后使用 `执行中`。其它等待和终态直接写对应状态。Manager、WebGUI 与托盘都直接显示 `plan.status`，不再从步骤、`waitingFor` 或审批资料派生第二套状态。
+业务代码通过 `planWorkflow.roles` 查找分析、审批、执行、打包、QA、讨论、暂停、完成和关闭对应的 key。默认配置下，审批准备前使用“分析中”，完整审批合同正式等待回执时使用“待审批”，批准或用户直接授权后使用“执行中”。Manager 将 `plan.status` 的 key 与配置中的 label、description、palette、order 和 views 一起返回；客户端不解释 key，也不从步骤、`waitingFor` 或审批资料派生第二套状态。
+
+状态目录通过 `GET /api/roles/:roleId/plan-statuses` 读取；Agent 可使用同一路径的 `POST` 新增状态、`PATCH /:statusKey` 修改展示和行为、`DELETE /:statusKey` 移除状态。写请求必须携带 `If-Match` 与 `Idempotency-Key`。状态 key 不允许原地改名。移除时必须提供 `replacementKey`：Manager 先迁移仍在使用该状态的未归档计划，再把旧定义保留为 `retired`，使已归档计划和追加式历史仍可解析。只有历史引用也不存在时，后续维护才可物理删除定义。
 
 计划按“一个计划一个目录”保存：
 
@@ -95,29 +97,15 @@ data/roles/<RoleId>/plans/
       feedback-attachments/<feedbackId>/
 ```
 
-`plan.json` 是当前业务状态的唯一真源。计划状态与归档状态彼此独立：`status` 使用上面的九个值；`archiveStatus` 只允许 `未归档` 或 `已归档`。`active/` 放 `archiveStatus=未归档` 的计划，`archive/` 只放 `archiveStatus=已归档` 的计划。已归档计划不参加关键词召回，只能通过明确 ID 或归档视图读取。
+`plan.json` 是当前业务状态的唯一真源。计划状态与归档状态彼此独立：`status` 使用当前人格配置中的 key；`archiveStatus` 只允许 `未归档` 或 `已归档`。`active/` 放 `archiveStatus=未归档` 的计划，`archive/` 只放 `archiveStatus=已归档` 的计划。已归档计划不参加关键词召回，只能通过明确 ID 或归档视图读取。
 
 Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧布局迁移、未完成事务恢复和规范目录核对共同决定计划存储的读取/变更资格，每次尝试都在可终止的 one-shot child 中执行。Manager 端点与身份、完整必需插件集和 handler READY 不等待 NAS 恢复，Host 与 Tray 因此保持当前 application generation。资格状态为 `running` 或 `degraded` 时，现有只读端点仍可响应，计划变更请求失败关闭，`/health` 明确报告降级；资格就绪后，运行模块只使用已恢复的规范布局，不再扫描或读取旧布局。迁移不会读取附件正文；旧数据与规范目录内容相同时，以带清单和回执的事务退役重复副本，内容分歧时保存证据并失败关闭，禁止带着半迁移状态继续变更计划。计划从 `active/` 进入 `archive/` 同样是 Repository 持有 lease 的完整生命周期事务，不是裸 `rename`，也不是后台迁移。
 
-`完成` 或 `关闭` 的计划不会立即归档。距离最后更新时间超过当前固定的 72 小时后，角色知识快照只把 `archiveStatus` 改为 `已归档`，并将整个计划目录从 `plans/active/<planId>/` 移到 `plans/archive/<planId>/`；原 `status` 保持 `完成` 或 `关闭`。
+配置为 `terminal=true` 且 `archiveEligible=true` 的计划不会立即归档。距离最后更新时间超过该人格 `planWorkflow.archiveAfterHours` 后，角色知识快照只把 `archiveStatus` 改为 `已归档`，并将整个计划目录从 `plans/active/<planId>/` 移到 `plans/archive/<planId>/`；原 `status` key 保持不变。默认模板的完成和关闭状态符合该条件，延迟为 72 小时。
 
 计划归档不需要经过 Agent 处理。它是 RabiRoute 的机械生命周期维护，不触发 Agent 总结，不要求 Agent 判断，只更新 `archiveStatus`、`archivedAt` 和存放位置。
 
-当前归档窗口：
-
-```json
-{
-  "completedArchiveAfterHours": 72
-}
-```
-
-默认值：
-
-```text
-completedArchiveAfterHours = 72
-```
-
-归档计时以计划的 `updatedAt` 为准，不以 `createdAt` 为准。计划只要被 Agent 或用户更新过，就重新进入活跃窗口；只有 `status=完成或关闭` 且 `archiveStatus=未归档`，距离最后更新时间超过 72 小时后才会归档。目前 `completedArchiveAfterHours` 还不是 `personaConfig.json` 的公开配置字段。
+归档计时以计划的 `updatedAt` 为准，不以 `createdAt` 为准。计划只要被 Agent 或用户更新过，就重新进入活跃窗口。归档资格由状态定义的 `terminal` 与 `archiveEligible` 决定，延迟由 `personaConfig.json.planWorkflow.archiveAfterHours` 决定；默认模板使用 72 小时，具体人格可以调整。
 
 ## 计划字段
 
@@ -234,15 +222,15 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 `steps` 是计划的有序执行路径，步骤自身仍只使用 `未开始 / 进行中 / 已完成`。顶层 `currentStepId` 指向唯一进行中的步骤。步骤状态只说明这一步是否完成，不代表计划阶段；`workPhase` 和 `discussionState` 已废止。计划阶段只写入 `plan.status`。`detail`、`waitingFor`、`blockedBy`、`approvalRequest` 和步骤 ID 只提供执行、等待与审批证据，不改变公开状态。Manager 仍维护步骤的 `startedAt` 与 `completedAt`。
 
-明确等待讨论时直接写 `status=待讨论`。普通暂停写 `status=暂停`；恢复时按实际阶段改为 `分析中` 或 `执行中`。
+明确等待讨论时写入 `planWorkflow.roles.discussion` 指向的 key；普通暂停使用 `roles.paused`。恢复时按实际阶段选择 analysis 或 execution role 指向的 key。
 
-需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`，计划必须保持 `status=分析中` 并由 Agent 补齐。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 `待审批`；Manager 同时返回 `presentation.approval.state=ready`、`enabled=true` 和内部 `blocked` tone，但不会替 Agent 改写状态。
+需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation`、`alternatives` 和 `reason` 说明审批人、决定、推荐、备选与原因；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`，计划必须保持 analysis role 指向的 key 并由 Agent 补齐。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 approval role 指向的 key；Manager 同时返回 `presentation.approval.state=ready` 和 `enabled=true`，但不会替 Agent 改写状态。
 
 Manager 在读取边界兼容旧计划：旧 `未开始` 读为 `暂停`；旧 `进行中` 按完整待审批合同、旧步骤执行标记依次映射为 `待审批 / 执行中 / 分析中`；旧 `已完成` 读为 `完成`；旧 `已归档` 读为 `status=关闭, archiveStatus=已归档`。旧 `workPhase`、`discussionState` 和手写 `isBlocked` 只参与一次兼容读取，并在下一次规范 POST/PATCH 时清理。系统不会猜测审批人、来源、推荐方案、备选或请求时间。
 
 `secretaryBinding` 是计划当前控制面负责人的精确绑定，和业务 `taskBinding` 分开。它保存绑定 Agent 类型、完整会话 ID、展示名称、workspace、可选 DSH apiproxy 地址和分配时间。Manager 首次需要投递计划控制通知时从当前 Route 已启用的秘书池稳定选择一个并保存；秘书执行治理 `begin/finish` 时会把实际负责者更新为自己。已绑定秘书仍在当前池中时固定复用，只有绑定失效或秘书被移出配置后才重新分配。
 
-`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。`agentType` 决定会话所在的处理端：`codex` 使用 Codex Desktop 任务，`dsh` 使用 DSH 会话。`sessionId` 是必填的完整 ID；`sessionTitle` 只用于展示；`workspace` 决定该计划每次投递的执行目录，不要求等于 Codex 任务保存的默认 cwd。DSH 绑定仍按其 workspace 所有权校验，并可保存 `baseUrl` 指向实际 apiproxy。`completionHook.enabled=true` 仅适用于 Codex 完成回传：Manager 在该任务完成一轮后处理官方最终回答；启用并绑定计划秘书时直接投给 `secretaryBinding`，不写主人格角色面板；没有可用秘书时才回退到同人格 Route。`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划顶层为 `暂停` 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
+`taskBinding` 是可选的“计划 ↔ 执行会话”精确绑定。`agentType` 决定会话所在的处理端：`codex` 使用 Codex Desktop 任务，`dsh` 使用 DSH 会话。`sessionId` 是必填的完整 ID；`sessionTitle` 只用于展示；`workspace` 决定该计划每次投递的执行目录，不要求等于 Codex 任务保存的默认 cwd。DSH 绑定仍按其 workspace 所有权校验，并可保存 `baseUrl` 指向实际 apiproxy。`completionHook.enabled=true` 仅适用于 Codex 完成回传：Manager 在该任务完成一轮后处理官方最终回答；启用并绑定计划秘书时直接投给 `secretaryBinding`，不写主人格角色面板；没有可用秘书时才回退到同人格 Route。`gatewayId` 用于多 Route 消歧。该提醒按 `sessionId + turnId` 去重，只记录阶段完成事实，不自动推进步骤、修改计划状态或写入记忆；计划状态为 `planWorkflow.roles.paused` 指向的 key 时不投递完成提醒，避免暂停期间重新驱动绑定任务。
 
 Manager 提供只读批量状态接口 `GET /api/roles/:roleId/plan-agents/status?planId=...`，按每项绑定的 `agentType + sessionId` 查询 `taskBinding` 和可选 `secretaryBinding`，并把绑定的 workspace 作为下一轮执行目录。Codex 按完整 ID 读取 Desktop 任务，不比较任务保存的默认 cwd；DSH 通过绑定的 `baseUrl`（未保存时使用本机默认 apiproxy）读取会话并继续校验 workspace 所有权。结果把 Agent 是否工作与会话的 `active / idle / not_loaded / unavailable / archived / missing / workspace_mismatch` 分开返回；其中 `workspace_mismatch` 只适用于拥有固定 workspace 的处理端。超时或读取失败是 `unknown`，不能从计划生命周期状态猜测。`POST /api/roles/:roleId/plan-agents/:planId/open` 对 Codex 定位已核对、未归档的完整任务 ID；DSH 还要求 workspace 一致。它不发送 prompt、不创建会话，也不切换绑定。
 
@@ -311,7 +299,7 @@ GET /api/roles/:roleId/knowledge-validation
 
 字符数按 Unicode code point 计算；`totalChars` 统计该条目的主要文本字段和关键词。一个记忆只记录一个事实、偏好、结论或问题；一个计划只记录一个可推进目标。系统用必填单行 `focus` 和硬长度上限约束结构，语义是否混题仍由写入 Agent 负责拆分。
 
-计划状态含义：
+默认模板的计划状态含义如下；自定义人格以 `personaConfig.json.planWorkflow` 为准：
 
 ```text
 分析中      Agent 正在调查、拆解或补充执行条件
@@ -325,7 +313,7 @@ GET /api/roles/:roleId/knowledge-validation
 关闭        计划已经结束，不再继续执行
 ```
 
-`archiveStatus=未归档 | 已归档` 单独控制计划是否出现在普通列表中。只有 `完成` 或 `关闭` 计划可以归档，归档不会改写 `status`。
+`archiveStatus=未归档 | 已归档` 单独控制计划是否出现在普通列表中。只有当前状态配置同时满足 `terminal=true` 和 `archiveEligible=true` 的计划可以归档，归档不会改写 `status` key。
 
 ## 记忆机制
 
@@ -333,7 +321,7 @@ GET /api/roles/:roleId/knowledge-validation
 
 聊天记录、语音转写和心跳事件属于原始事件日志。Agent 本身可以按路径或工具查询这些日志，所以托盘面板不需要把聊天记录伪装成记忆展示。记忆应该是 Agent 看过上下文之后，认为以后仍有价值而主动写入的内容。
 
-记忆不使用计划的九种状态。页面按记忆自身的生命周期分成三类：尚未沉淀的近期记忆、整理后仍可召回的沉淀记忆，以及已经作为沉淀输入的归档来源。归档来源以 `consolidatedAt` 为准，不新增一套计划状态字段。
+记忆不使用人格配置的计划状态目录。页面按记忆自身的生命周期分成三类：尚未沉淀的近期记忆、整理后仍可召回的沉淀记忆，以及已经作为沉淀输入的归档来源。归档来源以 `consolidatedAt` 为准，不新增一套计划状态字段。
 
 推荐目录：
 
@@ -607,17 +595,13 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 计划更新要留下状态和来源。任何写操作都应该更新 `updatedAt`，并尽量保留 `source`，方便以后知道计划为什么出现。
 
-建议更新规则：
+建议更新规则通过 `planWorkflow.roles` 执行。默认模板中，调查、补证据或准备审批使用“分析中”，完整审批合同正式等待回执使用“待审批”，批准或用户明确直接授权后使用“执行中”；包、QA、讨论、暂停、完成和关闭也各自由对应 role 指向状态 key。自定义人格可以调整 key 和显示名称，但不能绕过角色约束。
 
-- 新计划在调查、补证据或准备审批时设为 `分析中`。
-- 完整审批合同正式等待回执时设为 `待审批`；审批通过或用户明确直接授权后设为 `执行中`。
-- 包、QA、讨论分别使用 `等待打包`、`等待 QA`、`待讨论`；明确暂停时使用 `暂停`。
-- 正常完成设为 `完成`；取消、失效或被替代设为 `关闭`。
-- 只有 `完成` 或 `关闭` 且 `archiveStatus=未归档` 的计划，超过固定 72 小时后才自动改为 `archiveStatus=已归档` 并移动到 `archive/`。归档不改变 `plan.status`。
+只有当前状态定义同时满足 `terminal=true`、`archiveEligible=true` 且 `archiveStatus=未归档` 的计划，才会在超过 `planWorkflow.archiveAfterHours` 后改为 `archiveStatus=已归档` 并移动到 `archive/`。归档不改变 `plan.status`。
 
-Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 对状态为分析中或执行中且没有进入审批步骤的计划额外提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和未开始步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。
+Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 只在 Manager 返回 `presentation.acceptsGuidance=true` 且计划没有进入审批步骤时提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和未开始步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。
 
-计划分页接口还支持 `sort=<status|updated|importance|urgency>`、可重复的 `status=<展示状态>`、可重复的 `tag=<keywords 标签>` 和 `facets=0`。`updated` 比较 `updatedAt` 时间戳；其余三种排序比较 Manager 生成的整数等级。状态等级沿用 `statusLevel`；重要程度 `importance` 和紧急程度 `urgency` 都使用 `0–4`：`0` 最高，`1` 高，`2` 中，`3` 低，`4` 未设置。旧 `priority` 字符串只在读取边界转换为重要程度整数；旧计划没有 `urgency` 时，可由 `dueAt` 转为兼容等级。排序过程不比较标签文字。响应同时返回等级对应的中英文文字和色板，WebGUI 只负责显示。筛选与排序都在分页前执行。
+计划分页接口还支持 `sort=<status|updated|importance|urgency>`、可重复的 `status=<状态 key>`、可重复的 `tag=<keywords 标签>` 和 `facets=0`。`updated` 比较 `updatedAt` 时间戳；其余三种排序比较 Manager 生成的整数等级。状态等级来自状态配置的 `order`，并通过 `statusLevel` 返回；重要程度 `importance` 和紧急程度 `urgency` 都使用 `0–4`：`0` 最高，`1` 高，`2` 中，`3` 低，`4` 未设置。旧 `priority` 字符串只在读取边界转换为重要程度整数；旧计划没有 `urgency` 时，可由 `dueAt` 转为兼容等级。排序过程不比较标签文字。响应同时返回状态 key、配置的中英文名称与说明、色板、视图和等级，WebGUI 只负责显示。筛选与排序都在分页前执行。
 
 ## 计划引导与审批意见
 
@@ -640,29 +624,29 @@ GET /api/roles/:roleId/plans/:planId/history
 
 RibiWebGUI 在计划详情中提供默认折叠的“工作留痕”。其中分别显示计划引导、步骤审批意见和计划版本记录；计划完成、整个目录移动到 `plans/archive/<planId>/` 或不再处于待审批状态，都不会让这些记录从界面消失。归档只改变计划默认所在视图和计划 JSON 的目录，不删除反馈文件、反馈附件或版本留痕。删除本地运行数据仍属于单独的人工文件操作，不是计划生命周期动作。
 
-RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受状态为分析中或执行中且没有进入审批步骤的计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入同一计划目录的 `feedback-attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
+RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受状态定义允许引导，即 `presentation.acceptsGuidance=true`，且没有进入审批步骤的计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入同一计划目录的 `feedback-attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
 
 Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视为整个计划的方向输入；如果范围、优先级、方法或后续路径变化，显式 `PATCH` 计划并同步调整尚未开始的步骤，随后以 `kind=guidance_response`、`author=agent`、`notifyAgent=false` 回写同一 `planId`，且不带 `stepId`。收到 `approval_suggestion` 时仍更新对应计划/步骤与审批回执，并以 `approval_response` 回写同一 `planId / stepId`。两种记录本身都不会自动推进计划。
 
-后台通知上一条反馈期间，WebGUI 允许继续编辑下一条内容，但在上一条取得终态前禁止再次提交，并显示原因与恢复条件。计划引导入口只出现在状态为分析中或执行中且未进入审批的计划；审批计划继续只显示对应步骤内的审批合同与审批输入。
+后台通知上一条反馈期间，WebGUI 允许继续编辑下一条内容，但在上一条取得终态前禁止再次提交，并显示原因与恢复条件。计划引导入口只出现在 `presentation.acceptsGuidance=true` 且未进入审批的计划；审批计划继续只显示对应步骤内的审批合同与审批输入。
 
 ## Manager 展示顺序与计划视图
 
-Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批入口合同：合同完整、可提交且 `responseStatus=pending` 时，`presentation.approval.state=ready`、`enabled=true`，并要求存储状态为 `待审批`；合同缺项时返回 `incomplete`，计划必须保持 `分析中`。旧 `isBlocked` 仅为兼容投影，`blockedBy` 仅为说明，二者都不能改变计划状态。
+Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批入口合同：合同完整、可提交且 `responseStatus=pending` 时，`presentation.approval.state=ready`、`enabled=true`，并要求存储状态为 `planWorkflow.roles.approval` 指向的 key；合同缺项时返回 `incomplete`，计划必须保持 `roles.analysis` 指向的 key。旧 `isBlocked` 仅为兼容投影，`blockedBy` 仅为说明，二者都不能改变计划状态。
 
-Manager 直接显示 `plan.status`：分析中、待审批、执行中、等待打包、等待 QA、待讨论、暂停、完成或关闭。`presentation` 只按该值返回色板和排序等级，不再产生另一项显示状态。
+Manager 把 `plan.status` 作为状态 key，并通过 `presentation.label / labelEn` 提供显示名称；说明、色板、顺序和视图也来自同一条状态配置。客户端显示配置名称，不直接把 key 当作界面文字，也不产生另一项显示状态。
 
 `nextAction`、`currentStep`、步骤标题和 `waitingFor` 只解释下一步与等待原因，不能改写 `plan.status`。
 
-“执行中 → 等待打包 → 等待 QA → 完成；QA 失败回到分析中或执行中”适用于会产生项目内容变动的计划。Agent 只在同步、提交和无冲突回读证据齐全后写 `等待打包`，只在目标包证明纳入后写 `等待 QA`；Manager 校验这些证据，但不从步骤或正文自动切换状态。QA 发送回执属于 `等待 QA` 阶段内的证据，不创建额外主状态。
+内容变更计划通过 `planWorkflow.roles.execution / package / qa / completed` 对应的状态推进；QA 失败回到 `roles.analysis` 或 `roles.execution`。默认模板显示为“执行中 → 等待打包 → 等待 QA → 完成”。Agent 只在同步、提交和无冲突回读证据齐全后写 package role 的 key，只在目标包证明纳入后写 QA role 的 key；Manager 校验这些证据，但不从步骤或正文自动切换状态。QA 发送回执属于 QA 阶段内的证据，不创建额外主状态。
 
-`presentation.status` 必须与 `plan.status` 完全相同。状态排序为“分析中、待审批、执行中、等待打包、等待 QA、待讨论、暂停、完成、关闭”；同一状态内再按更新时间排列。归档视图由 `archiveStatus` 决定，与 `status=关闭` 无关。
+`presentation.status` 必须与 `plan.status` 的 key 完全相同，显示使用配置的 `label / labelEn`。状态排序取配置 `order`，视图成员关系取配置 `views`；同一状态内再按更新时间排列。归档视图只由 `archiveStatus` 决定，与任何关闭 role 的 key 无关。
 
 秘书执行 `reconcile-thread-statuses` 时也消费同一份 Manager `presentation`，再与问题账本和最近闭环中的结构化发送/环境证据交叉核对。终态与完整待审批分别归为 `terminal / blocked`；暂停计划归为 `frozen + paused`，且固定 `implementationDispatchAllowed=false`；`waiting_package` 和具有当前、未被同一 PID/工程权威 release 证据覆盖的 `waiting_environment* + environment-owner` 唯一环境占用归为 `frozen`。结构化 dependency 当前步骤或 tracking 状态只有在明确等待其它计划原 owner 完成、同时 plan/issue/cycle 明确当前没有独立 CLI、控制面或业务动作时，才进入 `frozen_until_dependencies`；仍需联系或协调 owner、补合同、取得回复，或仍有 CLI、重试和替代路径时继续 `actionable`。QA 或普通询问已有真实 `status=sent / sentMessageId` 回执，且 issue/cycle 明确当前只等待结果、无独立本地动作、没有另一个待发送或待结果的校对/确认请求并禁止重发时，归为稳定 `waiting_result`；旧 QA 回执不能覆盖后来新增的负责人校对或位置确认。回执可来自结构化 issue evidence 或最近 cycle summary，不受后续计划更新时间和普通去重窗口影响。普通询问仅有近期发送证据时仍使用 `waiting_result_dedup`。只有仍有本地动作、缺真实发送/回执、已到追问时间且明确需要追问、存在另一项独立询问、可重试或存在替代路径的空闲计划保留为 `actionable`；已发送但仍有本地动作时不重复询问。对账结果分别返回 `frozenIdle`、`waitingResultIdle` 和 `actionableIdle`。`implementationDispatchAllowed` 只在当前仍允许实施任务继续运行时为 `true`；终态、暂停、审批阻塞以及没有实施动作可做的包、跨计划依赖、测试环境、重新授权和 QA 结论等待都返回 `false`。
 
 对新增细分状态，`waiting_package` 返回 `frozen_until_package + wait_for_target_package`，无独立动作的跨计划依赖返回 `frozen_until_dependencies` 且 `requiredAction=null`，真实测试环境等待返回 `frozen_until_test_environment + wait_for_test_environment`，等待重新授权返回 `waiting_for_authorization + request_authorization`；这些等待的 `implementationDispatchAllowed` 都是 `false`。绿色 QA 阶段同样禁止实施投递：缺回执但仍可发送或修复时返回 `actionable + send_qa_request`；已有真实 QA 回执且只等结论时返回 `waiting_result + wait_for_qa_result`。strict audit 会拒绝“QA 步骤已写只等结论但没有本轮真实回执”的矛盾计划。CLI 或替代验证仍可执行时保持 `actionable`；普通外部资料继续使用 `inquire_until_result`。
 
-Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶段汇总、视图分类、状态色板和既有顺序。RibiWebGUI 使用“当前计划 / 近期记忆 / 沉淀记忆 / 已归档”四个标签；已归档同时包含 `archiveStatus=已归档` 的计划和带 `consolidatedAt` 的来源记忆。已归档计划不参加关键词召回。两端都直接显示 `plan.status`；即使缺少 `presentation`，也不能从步骤或正文派生替代状态。
+Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶段汇总、配置视图、状态色板和配置顺序。RibiWebGUI 使用“当前计划 / 近期记忆 / 沉淀记忆 / 已归档”四个标签；已归档同时包含 `archiveStatus=已归档` 的计划和带 `consolidatedAt` 的来源记忆。已归档计划不参加关键词召回。两端显示 `presentation.label / labelEn`；缺少有效 `presentation` 时失败关闭，不能把 key 当显示名称，也不能从步骤或正文派生替代状态。
 
 首次进入 RibiWebGUI 只请求当前标签的一页：计划摘要最多 8 条并优先补齐这 8 条详情，记忆最多 24 条；后续页只在滚动到加载哨兵或点击“加载更多”后请求。保留下一页 cursor 不代表仍在加载，首屏不再自动遍历全部计划或记忆分页。
 
@@ -671,7 +655,7 @@ Qt 托盘和 RibiWebGUI 的角色知识界面都消费这份 Manager DTO、阶�
 当前：
 
 ```text
-“当前”展示未归档的分析中、待审批、执行中、等待打包和等待 QA 计划；“计划”展示全部未归档计划；“已归档”只由 `archiveStatus=已归档` 决定。已归档计划不参与关键词召回。客户端直接显示 `plan.status`，不从内部等待原因创建新徽标。
+“当前”展示 `archiveStatus=未归档` 且状态配置的 `views` 包含 current 的计划；“计划”展示配置允许进入 plan 视图的未归档计划；“已归档”只由 `archiveStatus=已归档` 决定。已归档计划不参与关键词召回。客户端显示配置 label，不从内部等待原因创建新徽标。
 ```
 
 近期记忆：

@@ -242,6 +242,7 @@ test("AgentPacket exposes workspace paths as relative paths", () => {
     const dataDir = path.join(fixtureRoot, "data", "route", "main");
     const roleDir = path.join(fixtureRoot, "data", "roles", "Rabi");
     const rolePath = path.join(roleDir, "persona.md");
+    fs.mkdirSync(roleDir, { recursive: true });
     const relativeRoot = path.relative(process.cwd(), fixtureRoot).replaceAll("\\", "/");
     const packet = buildAgentPacket(decision, decision.matchedRules[0], {
       roleId: "Rabi",

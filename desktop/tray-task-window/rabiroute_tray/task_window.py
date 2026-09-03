@@ -51,18 +51,6 @@ VIEW_LABELS = (
     ("status", "诊断"),
 )
 
-STATUS_TONES = {
-    "分析中": "analyzing",
-    "待审批": "approval",
-    "执行中": "executing",
-    "等待打包": "waiting_package",
-    "等待 QA": "qa",
-    "待讨论": "discussion",
-    "暂停": "paused",
-    "完成": "done",
-    "关闭": "closed",
-}
-
 PLAN_PRIORITY_LABELS = {"low": "低", "medium": "中", "high": "高"}
 PLAN_KIND_LABELS = {"human-gate": "需人工接管"}
 
@@ -785,8 +773,8 @@ def _plan_current_step_summary(plan: PlanItem) -> str:
     return plan.current_step.strip() or "暂无进行中的步骤"
 
 
-def _plan_status_presentation(plan: PlanItem, status: str) -> tuple[str, str]:
-    return status or "状态未知", plan.display_tone or "unknown"
+def _plan_status_presentation(plan: PlanItem) -> tuple[str, str]:
+    return plan.display_status or "状态信息不可用", plan.display_tone or "unknown"
 
 
 def _plan_card_palette_stylesheet(plan: PlanItem, theme: object = "light") -> str:
@@ -803,11 +791,11 @@ def _plan_card_palette_stylesheet(plan: PlanItem, theme: object = "light") -> st
     return theme_stylesheet(stylesheet, theme)
 
 
-def _plan_status_palette_stylesheet(plan: PlanItem, status_tone: str, theme: object = "light") -> str:
+def _plan_status_palette_stylesheet(plan: PlanItem, theme: object = "light") -> str:
     if not plan.display_background or not plan.display_foreground:
         return ""
     stylesheet = (
-        f"QLabel#planStatus[statusTone=\"{status_tone}\"] {{"
+        "QLabel#planStatus {"
         f"background: {plan.display_background};"
         f"color: {plan.display_foreground};"
         "border-radius: 8px;"
@@ -876,15 +864,15 @@ class ExpandableCard(QFrame):
         title_row.addWidget(title_label, 1)
         if status:
             display_status, status_tone = (
-                _plan_status_presentation(plan, status)
+                _plan_status_presentation(plan)
                 if plan is not None
-                else (status, STATUS_TONES.get(status, "unknown"))
+                else (status, "unknown")
             )
             self.status_label = QLabel(f"状态：{display_status}")
             self.status_label.setObjectName("planStatus")
             self.status_label.setProperty("statusTone", status_tone)
             if plan is not None:
-                self.status_label.setStyleSheet(_plan_status_palette_stylesheet(plan, status_tone, theme))
+                self.status_label.setStyleSheet(_plan_status_palette_stylesheet(plan, theme))
             title_row.addWidget(self.status_label, 0, Qt.AlignTop)
         else:
             self.status_label = None
@@ -1655,7 +1643,7 @@ class TaskWindow(QWidget):
         if self.plans.current:
             self._add_plan_cards(self.plans.current, "当前计划")
         else:
-            self._add_info_card("当前计划", "暂无分析中、待审批、执行中、等待打包或等待 QA 的计划。", [("计划目录", str(self.plans.plans_dir))], "empty")
+            self._add_info_card("当前计划", "暂无由当前人格状态配置归入“当前”的计划。", [("计划目录", str(self.plans.plans_dir))], "empty")
         self._add_section_header("近期记忆", "Agent 维护的近期上下文条目，只读展示。", "memory")
         if self.context.recent_memory:
             self._add_context_cards(self.context.recent_memory, "近期记忆")
@@ -1841,6 +1829,8 @@ class TaskWindow(QWidget):
                 fields.append(("创建时间", plan.created_at))
             if plan.updated_at:
                 fields.append(("更新时间", plan.updated_at))
+            if plan.display_description:
+                fields.append(("状态说明", plan.display_description))
             if plan.path:
                 fields.append(("文件", str(plan.path)))
             self._add_expandable_card(
@@ -1849,7 +1839,7 @@ class TaskWindow(QWidget):
                 fields,
                 "plan",
                 plan.keywords,
-                status=plan.status,
+                status=plan.display_status,
                 card_key=f"plan:{plan.plan_id or plan.path or plan.title}",
                 plan=plan,
             )

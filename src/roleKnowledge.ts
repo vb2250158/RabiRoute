@@ -48,16 +48,25 @@ import {
   planJsonFile,
   type PlanStorageBucket
 } from "./planStorageLayout.js";
+import {
+  assertWritablePlanStatus,
+  ensurePersonaPlanWorkflow,
+  planStatusDefinition,
+  planStatusKeyForRole,
+  readPersonaPlanWorkflow,
+  resolvePersonaPlanStatus,
+  validatePersonaPlanWorkflow,
+  type PersonaPlanWorkflow,
+  type PersonaPlanWorkflowRole
+} from "./personaPlanWorkflow.js";
 
 const packageRoot = resolveRuntimeLayout(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 ).packageRoot;
 
-export type PlanStatus = "分析中" | "待审批" | "执行中" | "等待打包" | "等待 QA" | "待讨论" | "暂停" | "完成" | "关闭";
+/** Stable key from the owning persona's personaConfig.planWorkflow.statuses. */
+export type PlanStatus = string;
 export type PlanArchiveStatus = "未归档" | "已归档";
-const PLAN_STATUSES = new Set<PlanStatus>(["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"]);
-const ACTIVE_PLAN_STATUSES = new Set<PlanStatus>(["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论"]);
-const CURRENT_PLAN_STATUSES = new Set<PlanStatus>(["分析中", "待审批", "执行中", "等待打包", "等待 QA"]);
 export type PlanStepStatus = "未开始" | "进行中" | "已完成";
 
 export type PlanApprovalFileAction = "create" | "modify" | "delete" | "move";
@@ -480,6 +489,7 @@ export class RoleKnowledgeCacheUnavailableError extends Error {
  */
 export type RoleKnowledgeCatalogSnapshot = {
   plans: PlanItem[];
+  planWorkflow: PersonaPlanWorkflow;
   recentMemories: RecentMemoryItem[];
   consolidatedMemories: ConsolidatedMemoryItem[];
   skills: RoleSkillItem[];
@@ -966,7 +976,6 @@ export function currentPlanStep(plan: PlanItem): PlanStep | undefined {
 }
 
 function planHasApprovalIntent(plan: PlanItem): boolean {
-  if (plan.status !== "分析中" && plan.status !== "待审批") return false;
   const step = currentPlanStep(plan);
   if (step?.approvalRequest) {
     const responseStatus = step.approvalRequest.responseStatus;
@@ -1039,8 +1048,9 @@ export function planRequiresApproval(plan: PlanItem): boolean {
   return planApprovalGate(plan).state !== "none";
 }
 
-export function planAcceptsGuidance(plan: PlanItem): boolean {
-  return (plan.status === "分析中" || plan.status === "执行中") && planApprovalGate(plan).state === "none";
+export function planAcceptsGuidance(plan: PlanItem, workflow: PersonaPlanWorkflow): boolean {
+  return planStatusDefinition(workflow, plan.status, { allowRetired: true })?.acceptsGuidance === true
+    && planApprovalGate(plan).state === "none";
 }
 
 function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWriteLimits): void {
@@ -1091,7 +1101,13 @@ function memoryTextTotal(memory: RecentMemoryItem | ConsolidatedMemoryItem): num
   ].reduce((total, value) => total + textChars(value), 0);
 }
 
-function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps: boolean): void {
+function validatePlanSteps(
+  plan: PlanItem,
+  limits: PlanWriteLimits,
+  requireSteps: boolean,
+  workflow: PersonaPlanWorkflow
+): void {
+  const status = assertWritablePlanStatus(workflow, plan.status);
   if (requireSteps && plan.steps.length === 0) {
     throw new Error("Plan steps are required. List every ordered step and identify the current step when work is in progress.");
   }
@@ -1123,33 +1139,33 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
   if (plan.currentStepId && !ids.has(plan.currentStepId)) {
     throw new Error(`Plan currentStepId does not match a step: ${plan.currentStepId}`);
   }
-  if (plan.steps.length > 0 && ACTIVE_PLAN_STATUSES.has(plan.status)) {
+  if (plan.steps.length > 0 && status.currentStep === "required") {
     if (!plan.currentStepId) throw new Error("An active plan must provide currentStepId.");
     if (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId) {
       throw new Error("Plan currentStepId must identify the only step whose status is 进行中.");
     }
   }
-  if (plan.status === "暂停" && plan.currentStepId
+  if (status.currentStep === "optional" && plan.currentStepId
     && (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
     throw new Error("A paused plan currentStepId must identify its only in-progress resume step.");
   }
-  if (!ACTIVE_PLAN_STATUSES.has(plan.status) && plan.status !== "暂停" && plan.currentStepId) {
-    throw new Error("Only an active or paused plan can provide currentStepId.");
+  if (status.currentStep === "forbidden" && plan.currentStepId) {
+    throw new Error(`Plan status ${status.key} forbids currentStepId.`);
   }
-  if (plan.steps.length > 0 && plan.status === "完成") {
+  if (plan.steps.length > 0 && status.requiresCompletedSteps) {
     if (plan.steps.some((step) => step.status !== "已完成")) {
       throw new Error("Every plan step must be completed before the plan can be completed or archived.");
     }
   }
-  if (plan.archiveStatus === "已归档" && plan.status !== "完成" && plan.status !== "关闭") {
-    throw new Error("Only completed or closed plans can be archived.");
+  if (plan.archiveStatus === "已归档" && !status.archiveEligible) {
+    throw new Error(`Plan status ${status.key} is not eligible for archival.`);
   }
   const approvalGate = planApprovalGate(plan);
-  if (plan.status === "待审批" && approvalGate.state !== "pending") {
-    throw new Error("A plan whose status is 待审批 must provide one complete pending approvalRequest on its current step.");
+  if (status.requiresApproval && approvalGate.state !== "pending") {
+    throw new Error(`Plan status ${status.key} requires one complete pending approvalRequest on its current step.`);
   }
-  if (approvalGate.state === "pending" && plan.status !== "待审批") {
-    throw new Error("A complete pending approvalRequest requires plan status 待审批.");
+  if (approvalGate.state === "pending" && !status.requiresApproval) {
+    throw new Error("A complete pending approvalRequest requires a plan status configured with requiresApproval=true.");
   }
 }
 
@@ -1159,6 +1175,8 @@ function validatePlanWrite(
   requireSteps = false,
   limits = roleKnowledgeWriteLimits(roleDir).plan
 ): void {
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+  const status = assertWritablePlanStatus(workflow, plan.status);
   assertTextLimit("Plan title", plan.title, limits.titleChars);
   assertSingleFocus("Plan", plan.focus, limits.focusChars);
   assertTextLimit("Plan currentStep", plan.currentStep, limits.currentStepChars);
@@ -1168,8 +1186,8 @@ function validatePlanWrite(
   if (plan.isBlocked === true && !plan.blockedBy?.trim()) {
     throw new Error("A blocked plan must provide blockedBy.");
   }
-  if (plan.isBlocked === true && plan.status !== "待审批") {
-    throw new Error("Only a plan whose status is 待审批 can be blocked by a pending approval.");
+  if (plan.isBlocked === true && !status.requiresApproval) {
+    throw new Error("Only a plan status configured to require approval can be blocked by a pending approval.");
   }
   assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
   assertTextLimit("Plan taskBinding.sessionId", plan.taskBinding?.sessionId, 240);
@@ -1177,7 +1195,7 @@ function validatePlanWrite(
   assertTextLimit("Plan taskBinding.workspace", plan.taskBinding?.workspace, 1000);
   assertTextLimit("Plan taskBinding.completionHook.gatewayId", plan.taskBinding?.completionHook?.gatewayId, 120);
   assertKeywordLimits("Plan", plan.keywords, limits.maxKeywords, limits.keywordChars);
-  validatePlanSteps(plan, limits, requireSteps);
+  validatePlanSteps(plan, limits, requireSteps, workflow);
   const approvalGate = planApprovalGate(plan);
   if (approvalGate.state === "pending") {
     const step = currentPlanStep(plan);
@@ -1433,39 +1451,14 @@ function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
   };
 }
 
-function validatePlanStatusInput(value: unknown): void {
+function validatePlanStatusInput(workflow: PersonaPlanWorkflow, value: unknown): void {
   if (value === undefined) return;
-  const status = typeof value === "string" ? value.trim() : "";
-  if (!PLAN_STATUSES.has(status as PlanStatus)) {
-    throw new Error(`Unsupported plan status: ${String(value)}. Use 分析中, 待审批, 执行中, 等待打包, 等待 QA, 待讨论, 暂停, 完成, or 关闭.`);
-  }
+  assertWritablePlanStatus(workflow, value);
 }
 
 function normalizedPlanStatus(raw: Partial<PlanItem> & Record<string, unknown>): PlanStatus {
   const value = typeof raw.status === "string" ? raw.status.trim() : "";
-  if (value === "暂停") {
-    const currentStepId = typeof raw.currentStepId === "string" ? raw.currentStepId : "";
-    const steps = Array.isArray(raw.steps) ? raw.steps.map(recordValue) : [];
-    const current = steps.find((step) => String(step.id || step.stepId || "") === currentStepId)
-      ?? steps.find((step) => step.status === "进行中" || step.current === true);
-    return current?.discussionState === "pending" ? "待讨论" : "暂停";
-  }
-  if (PLAN_STATUSES.has(value as PlanStatus)) return value as PlanStatus;
-  if (value === "已归档") return "关闭";
-  if (value === "已完成") return "完成";
-  if (value === "未开始") return "暂停";
-  if (value === "进行中") {
-    const currentStepId = typeof raw.currentStepId === "string" ? raw.currentStepId : "";
-    const steps = Array.isArray(raw.steps) ? raw.steps.map(recordValue) : [];
-    const current = steps.find((step) => String(step.id || step.stepId || "") === currentStepId)
-      ?? steps.find((step) => step.status === "进行中" || step.current === true);
-    const approvalRequest = normalizeApprovalRequest(current?.approvalRequest);
-    if (approvalRequest?.responseStatus === "pending" && approvalRequestMissingFields(approvalRequest).length === 0) {
-      return "待审批";
-    }
-    return current?.workPhase === "execution" ? "执行中" : "分析中";
-  }
-  return "暂停";
+  return value;
 }
 
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
@@ -2337,6 +2330,7 @@ const roleKnowledgeCatalogMetadataCache = new Map<string, {
   skills: RoleSkillItem[];
   limits: RoleKnowledgeWriteLimits;
   contextInjection: RoleContextInjectionPolicy;
+  planWorkflow: PersonaPlanWorkflow;
 }>();
 
 function memoryCatalogDirectory(roleDir: string, kind: "recent" | "consolidated"): string {
@@ -2756,6 +2750,7 @@ export function publishRoleKnowledgeCatalogSnapshot(
   const contextInjection = normalizeRoleContextInjection(rawSnapshot.contextInjection);
   const published = immutablePublication({
     plans,
+    planWorkflow: validatePersonaPlanWorkflow(rawSnapshot.planWorkflow),
     recentMemories,
     consolidatedMemories,
     skills,
@@ -2774,7 +2769,8 @@ export function publishRoleKnowledgeCatalogSnapshot(
   roleKnowledgeCatalogMetadataCache.set(planListCacheKey(roleDir), {
     skills: published.skills,
     limits: published.limits,
-    contextInjection: published.contextInjection
+    contextInjection: published.contextInjection,
+    planWorkflow: published.planWorkflow
   });
   return published;
 }
@@ -2788,6 +2784,7 @@ export function readRoleKnowledgeCatalogSnapshot(roleDir: string): RoleKnowledge
   invalidateMemoryCatalog(memoryCatalogDirectory(roleDir, "consolidated"));
   return {
     plans: readPlansFromStorageInWorker(roleDir),
+    planWorkflow: ensurePersonaPlanWorkflow(roleDir).workflow,
     recentMemories: listRecentMemories(roleDir),
     consolidatedMemories: listConsolidatedMemories(roleDir),
     skills: listRoleSkills(roleDir),
@@ -2812,7 +2809,8 @@ export function publishedRoleKnowledgeCatalogSnapshot(
     consolidatedMemories: consolidatedMemories as ConsolidatedMemoryItem[],
     skills: metadata.skills,
     limits: metadata.limits,
-    contextInjection: metadata.contextInjection
+    contextInjection: metadata.contextInjection,
+    planWorkflow: metadata.planWorkflow
   });
 }
 
@@ -3002,6 +3000,79 @@ export function normalizePlanForStartupMigration(
   return normalizePlan(raw, fallbackId);
 }
 
+export type PersonaPlanStatusStartupMigrationResult = {
+  migrated: number;
+  failures: Array<{ planId: string; error: string }>;
+};
+
+/** Startup-only canonicalization from configured legacy aliases to status keys. */
+export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPlanStatusStartupMigrationResult {
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+  const result: PersonaPlanStatusStartupMigrationResult = { migrated: 0, failures: [] };
+  for (const filePath of allPlanFiles(roleDir)) {
+    const stored = readJson<Record<string, unknown>>(filePath);
+    const fallbackId = path.basename(path.dirname(filePath));
+    if (!stored) {
+      result.failures.push({ planId: fallbackId, error: `Cannot read plan JSON: ${filePath}` });
+      continue;
+    }
+    const normalized = normalizePlan(stored, fallbackId);
+    if (!normalized) {
+      result.failures.push({ planId: fallbackId, error: `Cannot normalize plan JSON: ${filePath}` });
+      continue;
+    }
+    const resolved = resolvePersonaPlanStatus(workflow, normalized.status, { includeLegacyAliases: true });
+    if (!resolved) {
+      result.failures.push({ planId: normalized.id, error: `PLAN_STATUS_CONFIG_INVALID: ${normalized.status}` });
+      continue;
+    }
+    if (resolved.matchedBy === "key") continue;
+    try {
+      withPlanStorageLock(roleDir, normalized.id, (lease) => {
+        const sourcePackage = readCanonicalPlanStoragePackageUnderLease(lease);
+        const rawPlanFile = sourcePackage.files.find((file) => file.path === "plan.json");
+        if (!rawPlanFile) throw new Error("Canonical plan package has no plan.json.");
+        const beforeRaw = JSON.parse(rawPlanFile.content.toString("utf8")) as Record<string, unknown>;
+        const latestStatus = resolvePersonaPlanStatus(workflow, beforeRaw.status, { includeLegacyAliases: true });
+        if (!latestStatus) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${String(beforeRaw.status)}`);
+        if (latestStatus.matchedBy === "key") return;
+        const recordedAt = nowIso();
+        const next = normalizePlan({
+          ...beforeRaw,
+          status: latestStatus.key,
+          archiveStatus: beforeRaw.archiveStatus === "已归档" || beforeRaw.status === "已归档" ? "已归档" : "未归档",
+          steps: Array.isArray(beforeRaw.steps)
+            ? beforeRaw.steps.map((step) => {
+                const { workPhase: _workPhase, discussionState: _discussionState, ...clean } = recordValue(step);
+                return clean;
+              }) as unknown as PlanStep[]
+            : [],
+          updatedAt: recordedAt,
+          storageRevision: createStorageRevision()
+        }, normalized.id);
+        if (!next) throw new Error("Canonical status migration produced an invalid plan.");
+        const files = planStoragePackageMap(sourcePackage.files);
+        const history = createPlanHistoryRecord(beforeRaw as unknown as PlanItem, next);
+        files.set("history.jsonl", Buffer.from(appendPlanHistoryContent(files.get("history.jsonl")?.toString("utf8") || "", history), "utf8"));
+        files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
+        commitPlanLifecycleTransitionUnderLease(lease, {
+          transactionId: planLifecycleTransactionId("plan-update", next.id, "status-config-v1", sourcePackage.inventoryHash),
+          kind: "plan-update",
+          fromBucket: sourcePackage.bucket,
+          toBucket: sourcePackage.bucket,
+          expectedSourceInventoryHash: sourcePackage.inventoryHash,
+          files: planStoragePackageFiles(files)
+        });
+        result.migrated += 1;
+      });
+    } catch (error) {
+      result.failures.push({ planId: normalized.id, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  if (result.migrated > 0) clearPlanListCache(roleDir);
+  return result;
+}
+
 /** Startup-child adapter; a completed migration invalidates any test/preflight cache. */
 export function clearPlanCatalogAfterStartupMigration(roleDir: string): void {
   clearPlanListCache(roleDir);
@@ -3013,7 +3084,8 @@ export function createPlan(
   mutation?: StorageMutationStamp
 ): PlanItem {
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
-  validatePlanStatusInput(input.status);
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+  validatePlanStatusInput(workflow, input.status);
   if (input.archiveStatus !== undefined && input.archiveStatus !== "未归档" && input.archiveStatus !== "已归档") {
     throw new Error("Unsupported plan archiveStatus. Use 未归档 or 已归档.");
   }
@@ -3033,7 +3105,7 @@ export function createPlan(
     const recordedAt = nowIso();
     const plan = normalizePlan({
       ...input,
-      status: input.status === undefined ? "分析中" : input.status as PlanStatus,
+      status: input.status === undefined ? planStatusKeyForRole(workflow, "initial") : input.status as PlanStatus,
       attachments: [],
       id,
       createdAt: recordedAt,
@@ -3077,6 +3149,7 @@ export function updatePlan(
   expectedRevision?: string,
   mutation?: StorageMutationStamp
 ): PlanItem {
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   const canonicalPlanId = canonicalLogicalPlanId(planId);
   const cacheKey = planListCacheKey(roleDir);
   const previousCache = {
@@ -3095,7 +3168,7 @@ export function updatePlan(
     if (existing.archiveStatus === "已归档") {
       throw new Error(`Archived plans are immutable terminal records: ${canonicalPlanId}`);
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "status")) validatePlanStatusInput(patch.status);
+    if (Object.prototype.hasOwnProperty.call(patch, "status")) validatePlanStatusInput(workflow, patch.status);
     if (Object.prototype.hasOwnProperty.call(patch, "archiveStatus") && patch.archiveStatus !== "未归档" && patch.archiveStatus !== "已归档") {
       throw new Error("Unsupported plan archiveStatus. Use 未归档 or 已归档.");
     }
@@ -3116,7 +3189,9 @@ export function updatePlan(
     next.steps = recordPlanStepTimes(next.steps, existing.steps, recordedAt);
     requireKeywords(next.keywords, "Plan");
     validatePlanWrite(roleDir, next);
-    if (next.status === "完成" && existing.status !== "完成" && !next.completedAt) {
+    const nextStatusDefinition = assertWritablePlanStatus(workflow, next.status);
+    const previousStatusDefinition = planStatusDefinition(workflow, existing.status, { allowRetired: true });
+    if (nextStatusDefinition.setsCompletedAt && previousStatusDefinition?.setsCompletedAt !== true && !next.completedAt) {
       next.completedAt = next.updatedAt;
     }
     const currentBucket = planBucketForArchiveStatus(existing.archiveStatus);
@@ -3247,12 +3322,15 @@ export function updateRecentMemory(
   return next;
 }
 
-export function archiveCompletedPlans(roleDir: string, archiveAfterHours = DEFAULT_PLAN_ARCHIVE_AFTER_HOURS): PlanItem[] {
+export function archiveCompletedPlans(roleDir: string, archiveAfterHours?: number): PlanItem[] {
   const archived: PlanItem[] = [];
   const plans = publishedRolePlans(roleDir);
   if (!plans) return archived;
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+  const effectiveArchiveAfterHours = archiveAfterHours ?? workflow.archiveAfterHours;
   for (const plan of plans) {
-    if ((plan.status !== "完成" && plan.status !== "关闭") || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
+    const definition = planStatusDefinition(workflow, plan.status, { allowRetired: true });
+    if (definition?.archiveEligible !== true || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= effectiveArchiveAfterHours) continue;
     const next = {
       ...plan,
       archiveStatus: "已归档" as const,
@@ -3268,8 +3346,10 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours = DEFAU
 
 function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: number): PlanItem[] {
   const archived: PlanItem[] = [];
+  const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   for (const plan of readPlansFromStorageInWorker(roleDir)) {
-    if ((plan.status !== "完成" && plan.status !== "关闭") || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
+    const definition = planStatusDefinition(workflow, plan.status, { allowRetired: true });
+    if (definition?.archiveEligible !== true || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
     const next = {
       ...plan,
       archiveStatus: "已归档" as const,
@@ -3778,15 +3858,19 @@ function buildRoleKnowledgeSnapshot(
   options: RoleKnowledgeSnapshotOptions,
   catalog: Pick<
     RoleKnowledgeCatalogSnapshot,
-    "plans" | "recentMemories" | "consolidatedMemories" | "skills" | "contextInjection"
+    "plans" | "planWorkflow" | "recentMemories" | "consolidatedMemories" | "skills" | "contextInjection"
   >,
   allowPersistence: boolean
 ): RoleKnowledgeSnapshot {
   const plans = catalog.plans;
+  const workflow = catalog.planWorkflow;
   const memories = catalog.recentMemories;
   const consolidatedMemories = catalog.consolidatedMemories;
   const skills = catalog.skills;
-  const activePlans = plans.filter((item) => item.archiveStatus !== "已归档" && CURRENT_PLAN_STATUSES.has(item.status));
+  const appearsInCurrent = (plan: PlanItem): boolean =>
+    plan.archiveStatus !== "已归档"
+      && planStatusDefinition(workflow, plan.status, { allowRetired: true })?.views.includes("current") === true;
+  const activePlans = plans.filter(appearsInCurrent);
   const activeSkills = skills.filter((item) => item.status === "active");
   const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(memoryActivityAt(item)) <= DEFAULT_RECENT_EDITABLE_HOURS);
   const roleId = options.roleId || path.basename(roleDir);
@@ -3801,7 +3885,7 @@ function buildRoleKnowledgeSnapshot(
         summary: item.focus,
         type: "plan" as const,
         endpoint: requiredReadEndpoint(roleId, "plan", item.id),
-        score: scoreKnowledgeMatch(messageText, item, CURRENT_PLAN_STATUSES.has(item.status) ? 5 : 0),
+        score: scoreKnowledgeMatch(messageText, item, appearsInCurrent(item) ? 5 : 0),
         activityAt: item.updatedAt,
         revisionAt: item.updatedAt
       })),
@@ -3920,10 +4004,12 @@ export function roleKnowledgeSnapshotFromStorage(
   options: RoleKnowledgeSnapshotOptions = {}
 ): RoleKnowledgeSnapshot {
   if (options.archiveCompletedPlans === true) {
-    archiveCompletedPlansFromStorage(roleDir, DEFAULT_PLAN_ARCHIVE_AFTER_HOURS);
+    const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
+    archiveCompletedPlansFromStorage(roleDir, workflow.archiveAfterHours);
   }
   return buildRoleKnowledgeSnapshot(roleDir, messageText, options, {
     plans: readPlansFromStorageInWorker(roleDir),
+    planWorkflow: ensurePersonaPlanWorkflow(roleDir).workflow,
     recentMemories: listRecentMemories(roleDir),
     consolidatedMemories: listConsolidatedMemories(roleDir),
     skills: listRoleSkills(roleDir),

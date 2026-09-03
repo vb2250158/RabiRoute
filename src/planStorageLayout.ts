@@ -14,10 +14,6 @@ export function isArchivedPlanStatus(archiveStatus: unknown): boolean {
   return archiveStatus === "已归档";
 }
 
-export function isCompletedPlanStatus(status: unknown): boolean {
-  return status === "完成" || status === "已完成";
-}
-
 export function safePlanStorageId(value: unknown): string {
   return safePlanStorageSegment(value);
 }

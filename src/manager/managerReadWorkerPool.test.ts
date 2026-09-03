@@ -129,6 +129,7 @@ function planFeedbackRecoveryFixture(unrelatedPlanDirectories = 500): string {
   const rolesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-recovery-worker-"));
   const roleId = "Planner";
   const roleDir = path.join(rolesRoot, roleId);
+  fs.mkdirSync(roleDir, { recursive: true });
   const plan = createPlan(roleDir, {
     id: "worker-recovery-plan",
     title: "Worker recovery plan",

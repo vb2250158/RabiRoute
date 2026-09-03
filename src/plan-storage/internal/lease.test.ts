@@ -114,6 +114,24 @@ test("orphan candidate from a dead local process is reclaimed before acquisition
   assert.equal(fs.existsSync(orphanPath), false);
 });
 
+test("an expired malformed reclaim fence cannot permanently block plan storage", (t) => {
+  const roleDir = temporaryRole(t);
+  const planId = "malformed-reclaim-fence";
+  const lockPath = planStorageLeasePath(roleDir, planId);
+  const fencePath = `${lockPath}.reclaim`;
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(fencePath, "", "utf8");
+  const expired = new Date(Date.now() - 120_000);
+  fs.utimesSync(fencePath, expired, expired);
+
+  withPlanStorageLease(roleDir, planId, () => {
+    assert.equal(fs.existsSync(fencePath), false);
+  });
+
+  assert.equal(fs.existsSync(lockPath), false);
+  assert.equal(fs.existsSync(fencePath), false);
+});
+
 test("a renewal during stale fencing restores the previous owner instead of deleting it", (t) => {
   const roleDir = temporaryRole(t);
   const planId = "renewed-during-fence";

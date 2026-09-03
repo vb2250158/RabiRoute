@@ -7,6 +7,9 @@ import {
   planIsWaitingForPackage,
   planIsWaitingForQaAcceptance
 } from "./planPackageWaiting.js";
+import { loadDefaultPersonaPlanWorkflow } from "./personaPlanWorkflow.js";
+
+const workflow = loadDefaultPersonaPlanWorkflow();
 
 function plan(status: PlanItem["status"], patch: Partial<PlanItem> = {}): PlanItem {
   return {
@@ -30,11 +33,11 @@ test("package and QA waits use plan.status as their only truth", () => {
   const waitingQa = plan("等待 QA", { waitingFor: "没有包体关键词" });
   const executing = plan("执行中", { waitingFor: "等待打包和 QA" });
 
-  assert.equal(planIsWaitingForPackage(waitingPackage), true);
-  assert.equal(planIsWaitingForQaAcceptance(waitingPackage), false);
-  assert.equal(planIsWaitingForQaAcceptance(waitingQa), true);
-  assert.equal(planIsWaitingForPackage(executing), false);
-  assert.equal(planIsWaitingForQaAcceptance(executing), false);
+  assert.equal(planIsWaitingForPackage(waitingPackage, workflow), true);
+  assert.equal(planIsWaitingForQaAcceptance(waitingPackage, workflow), false);
+  assert.equal(planIsWaitingForQaAcceptance(waitingQa, workflow), true);
+  assert.equal(planIsWaitingForPackage(executing, workflow), false);
+  assert.equal(planIsWaitingForQaAcceptance(executing, workflow), false);
 });
 
 test("package lifecycle detection remains evidence-only and does not change status", () => {
@@ -46,7 +49,7 @@ test("package lifecycle detection remains evidence-only and does not change stat
     currentStepId: "package-build"
   });
   assert.equal(planHasPackageLifecycle(item), true);
-  assert.equal(planIsWaitingForPackage(item), false);
+  assert.equal(planIsWaitingForPackage(item, workflow), false);
 });
 
 test("legacy global package gate migration writes a canonical single status", () => {
@@ -63,7 +66,7 @@ test("legacy global package gate migration writes a canonical single status", ()
     }],
     currentStepId: "package-build"
   } as unknown as PlanItem;
-  const migrated = migrateLegacyPackageGatePlan(legacy, "2026-09-03T01:00:00.000Z");
+  const migrated = migrateLegacyPackageGatePlan(legacy, workflow, "2026-09-03T01:00:00.000Z");
   assert.ok(migrated);
   assert.ok(["执行中", "等待打包"].includes(migrated.plan.status));
   assert.notEqual(migrated.plan.status, "进行中");

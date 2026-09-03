@@ -28,4 +28,14 @@ test("role knowledge routes prefer specific memory resources over memory item id
     resource: "memory",
     itemId: ""
   });
+  assert.deepEqual(parseRoleKnowledgeResourceRoute("/api/roles/Rabi/plan-statuses"), {
+    roleId: "Rabi",
+    resource: "plan-statuses",
+    itemId: ""
+  });
+  assert.deepEqual(parseRoleKnowledgeResourceRoute("/api/roles/Rabi/plan-statuses/waiting_qa"), {
+    roleId: "Rabi",
+    resource: "plan-statuses",
+    itemId: "waiting_qa"
+  });
 });

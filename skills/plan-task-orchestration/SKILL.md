@@ -60,11 +60,9 @@ Resolve the current Manager generation before every plan read or write. Installe
 5. Create a new plan only when no candidate represents the same commitment. Split independent outcomes into child or sibling plans, each with its own task binding.
 6. If the matching plan is bound to another valid business task, stop business work in the current task and deliver only the new user requirements, evidence, attachments, and acceptance changes to that exact binding. Do not run a second investigation or implementation in parallel.
 
-When creating or repairing a plan, write exactly one of these values to `plan.status`:
+Before creating or repairing a plan, GET `/api/roles/:roleId/plan-statuses`. Write only an enabled status `key` from that persona's `planWorkflow.statuses` to `plan.status`. Use `planWorkflow.roles` to resolve analysis, approval, execution, package, QA, discussion, pause, completion, and closure semantics. Labels, descriptions, colors, order, views, and lifecycle behavior come from the same persona configuration and must never be copied into code as a status enum.
 
-`分析中 → 待审批 → 执行中 → 等待打包 → 等待 QA → 完成`
-
-`待讨论` and `暂停` preserve a recoverable interruption; `关闭` ends a cancelled, invalid, or replaced plan. `archiveStatus` is separate and accepts only `未归档` or `已归档`. Only `完成` or `关闭` plans may become `已归档` after the archive delay. Archived plans do not participate in keyword recall.
+`archiveStatus` is separate and accepts only `未归档` or `已归档`. Only a terminal status configured with `archiveEligible=true` may become `已归档` after `archiveAfterHours`. Archived plans do not participate in keyword recall.
 
 Maintain exactly one `进行中` step for an active plan and point `currentStepId` to it. Step status still uses `未开始 / 进行中 / 已完成`; it is not a second plan status.
 
@@ -89,28 +87,28 @@ Use this state machine for a bug, requested modification, document change, UI ch
 
 `调查中 → 信息不足 → 调查中`
 
-`分析中 → 待审批 → 执行中 → 等待打包 → 等待 QA → 完成`
+`roles.analysis → roles.approval → roles.execution → roles.waitingPackage → roles.waitingQa → roles.completed`
 
 `待审批 --负责人要求修改--> 调查中`
 
 `待验收 --验收失败--> 调查中`
 
-Investigation, information gathering, solution design, and approval preparation use `status=分析中`. A complete submitted approval contract uses `status=待审批`. Implementation and development validation after approval or explicit direct authorization use `status=执行中`. Package and QA waits use their exact statuses. Manager, WebGUI, and Qt display `plan.status` verbatim and use presentation metadata only for color and ordering.
+Investigation, information gathering, solution design, and approval preparation use the key referenced by `roles.analysis`. A complete submitted approval contract uses `roles.approval`. Implementation and development validation after approval or explicit direct authorization use `roles.execution`. Package and QA waits use their configured role keys. Manager returns the key separately from the configured label, description, palette, order, and views; WebGUI and Qt consume that presentation instead of interpreting the key.
 
-When an external collaboration source explicitly marks the item as waiting for discussion, write `status=待讨论` and preserve the recoverable current step. Do not infer it from titles, detail, or `waitingFor`.
+When an external collaboration source explicitly marks the item as waiting for discussion, write the key referenced by `roles.discussion` and preserve the recoverable current step. Do not infer it from titles, detail, or `waitingFor`.
 
 Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptance. Use `audit-*`, `review-*`, `validate-*`, or another concrete non-QA prefix for developer checks, policy audits, prompt validation, compilation, and static verification. Step IDs help orchestration but never decide `plan.status`.
 
 #### 调查中
 
-- Set `plan.status=分析中`.
+- Set `plan.status` to the key referenced by `roles.analysis`.
 - Collect the relevant source, code, configuration, Prefab, runtime, screenshot, log, history, and owner evidence in the largest safe batch.
 - Before leaving investigation, write a reviewable conclusion containing: the observed problem and scope, evidence, root cause or decision reason, exact files/components/configuration to change, concrete changes, impact and out-of-scope items, and validation method.
 - Do not enter approval merely because investigation started, an Agent has a guess, or someone must answer a question. Approval is only for a complete proposed change.
 
 #### 信息不足
 
-- Keep `plan.status=分析中`.
+- Keep `plan.status` at `roles.analysis`.
 - Enter `信息不足` when a load-bearing fact is missing and the Agent cannot produce a defensible cause plus concrete change proposal.
 - Set the current step ID to `information-needed-*`. In `detail`, list what is already known, why it is insufficient, and which conclusion cannot yet be made. In `waitingFor`, name the responsible person or source and the exact questions, screenshots, reproduction steps, configuration IDs, logs, decisions, or other evidence required.
 - Clear any stale `approvalRequest`. Information collection is not approval.
@@ -118,20 +116,20 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 
 #### 待审批
 
-- Set `plan.status=待审批` only when the current approval contract is complete and `responseStatus=pending`.
+- Set `plan.status` to `roles.approval` only when the current approval contract is complete and `responseStatus=pending`.
 - Enter `待审批` only after investigation produced a complete review package. The current `approve-*` step must carry a complete `approvalRequest`, and the plan must already state the cause, exact changes, affected files/components/configuration, impact, validation, rollback, and exclusions.
 - If any of those items is missing, remove the incomplete approval contract and return to `调查中` or `信息不足`. Do not leave a plan in pending approval with only a title, generic request, or unexplained waiting text.
 - An approval request asks the responsible owner to approve or revise the written proposal. It must not ask the owner to perform the Agent's investigation or invent the change plan.
-- On approval, complete the approval decision step, set `plan.status=执行中`, select `implement-*`, and dispatch implementation in the same orchestration turn.
+- On approval, complete the approval decision step, set `plan.status` to `roles.execution`, select `implement-*`, and dispatch implementation in the same orchestration turn.
 - When the owner adds a correction, objection, or note, record that approval decision, preserve the feedback, and create `investigate-revision-*` as the single current step. Recheck the evidence and rewrite the proposal before requesting approval again; do not keep the rejected proposal in `待审批`.
 
 #### 执行中与待验收
 
 - `执行中` starts only from an approved proposal or an explicit user instruction that already authorizes the same concrete change. Bind the implementation package to that approved cause, change list, scope, and validation method.
-- Every current implementation or development-validation plan must use `status=执行中`; do not rely on its title to classify the plan.
+- Every current implementation or development-validation plan must use the key referenced by `roles.execution`; do not rely on its title to classify the plan.
 - After implementation, Agent-owned review, required tests, applicable synchronization/submission, and conflict-free readback pass, leave `执行中`. Do not send the item back to approval merely because implementation finished.
 - Move to the applicable acceptance path: use `manual-verify-*` for direct owner acceptance, or the existing package and `qa-*` / `verify-*` steps when a target package is required. These are mechanical substeps of `待验收`; do not invent extra status names between implementation and acceptance.
-- On acceptance failure, preserve the failure evidence and return to `status=分析中` with `investigate-revision-*`. Re-establish the cause and proposal before another implementation attempt.
+- On acceptance failure, preserve the failure evidence and return to `roles.analysis` with `investigate-revision-*`. Re-establish the cause and proposal before another implementation attempt.
 - Complete the plan only when the acceptance result passes and every required delivery step has evidence.
 
 When opening or reconciling an existing plan, repair state drift before dispatch: incomplete approval becomes `调查中` or `信息不足`; implemented work becomes the applicable `待验收` path; rejected approval or failed acceptance returns to investigation. Perform the repair and the next authorized action in the same orchestration turn.
@@ -189,11 +187,11 @@ Completion reminders are deduplicated by `sessionId + turnId`, but they do not u
 
 ### 8. Handle waiting, feedback, and approval
 
-- Keep `plan.status` equal to the actual canonical phase. Missing load-bearing data remains `分析中` with `information-needed-*`; a submitted complete proposal becomes `待审批`; implementation uses `执行中`; package and QA waits use their exact statuses.
+- Keep `plan.status` equal to the enabled key for the actual configured phase. Missing load-bearing data uses `roles.analysis` with `information-needed-*`; a submitted complete proposal uses `roles.approval`; implementation uses `roles.execution`; package and QA waits use their configured role keys.
 - Do not put a PangHu plan into a wait-only state merely because Main Unity is open, importing, running another test, unavailable through MCP, or shared by another task. Remove that condition from `waitingFor` when independent implementation or verification remains. Dispatch the original bound task to continue in formal Main without stopping the Editor; prefer static resource contracts, direct serialization checks, non-Unity runners, and CLI validation. Leave only the specific runtime interaction for human or later Unity acceptance when it cannot run concurrently.
 - For PangHu plans whose business implementation is already authorized, treat routine Main/Release/Art synchronization and SVN submission inside the verified plan scope as an actionable delivery step, not a new approval gate. When source, direction, files, dependency closure, ownership, and conflict-free status are verified, remove stale sync-only `approvalRequest` / `waitingFor` text and dispatch the original bound task to update, merge, synchronize, submit, and read back. Stop only for an explicit read-only or no-submit instruction, unresolved ownership, semantic conflict, extra files, scope expansion, frozen-build changes, production, upload, publish, or external delivery.
 - A lifecycle audit correction is incomplete if it only rewrites `steps`, `currentStep`, or `nextAction`. When synchronization, submission, or conflict-free readback is still missing and the bound task is idle, write an executable delivery-closure step, clear evidence-request wording from `waitingFor`, and dispatch that original task in the same orchestration turn. Do not stop after correcting structured fields or ask the task to merely report what another actor should execute. “Do not expand business scope” excludes extra files and new semantics; it does not exclude synchronization, SVN submission, or readback already required by the approved plan.
-- Store only supported `plan.status` values: `分析中`, `待审批`, `执行中`, `等待打包`, `等待 QA`, `待讨论`, `暂停`, `完成`, or `关闭`. Store archival separately as `archiveStatus=未归档 | 已归档`.
+- Store only enabled keys returned by the persona's plan-status catalog. Store archival separately as `archiveStatus=未归档 | 已归档`; never infer it from a status label or key.
 - A delivery-closure dispatch must require the bound task to write revision, exact changed paths, and the machine-readable sentence `无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *`. Generic text such as “已回读”, “无目标 diff”, or “无远端更新” is not enough.
 - PangHu Main Unity Editor is continuously user-owned. Every renamed wait for a test environment, Unity, Editor, MCP, runner, import, compilation, PlayMode, GameView, shared tests, or a test slot is actionable rather than a valid waiting stage. Keep the existing Editor running and dispatch all independent implementation, static/CLI/non-Unity tests, synchronization, submission, and readback; after that delivery closure, enter package waiting. Put UI, Prefab, Scene, serialized-reference, Unity-lifecycle, and real-interaction checks in target-package QA: immediately visible checks go to the user, ordinary repeatable checks go to QA, and difficult checks go to QA first and reach the user only if QA explicitly cannot cover them. Compilation or `matched=0` is never acceptance evidence.
 - QA tests only the already-built target package. Write human-executable instructions that identify the page, button, and visible visual or numeric result. Never ask QA to inspect logs, SVN revisions, hashes, fields, static contracts, or to run callback/validation tools; keep those as development-side package-entry evidence.

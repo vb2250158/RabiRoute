@@ -742,7 +742,7 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
             approvalPending
               ? "       巡检动作：当前合同已可审批，计划保持审批阻塞；继续追问审批回执，不得续投合同外实施。"
               : approvalPreparing
-                ? "       巡检动作：审批合同尚未完整，计划保持分析中；继续调查、补证据并补齐合同，不能把资料缺失标成阻塞。"
+                ? "       巡检动作：审批合同尚未完整，计划保持审批前分析阶段；继续调查、补证据并补齐合同，不能把资料缺失标成阻塞。"
                 : status === "进行中" && waitingFor
                   ? "       巡检动作：主动询问、重试、改道或补证据，直到取得明确结果；不得仅记录等待。"
                   : ""

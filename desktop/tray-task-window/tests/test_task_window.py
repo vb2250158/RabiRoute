@@ -326,29 +326,29 @@ class TaskWindowLayoutTest(unittest.TestCase):
     def test_plan_card_uses_manager_palette_for_accent_and_status_badge(self) -> None:
         plan = PlanItem(
             title="统一颜色",
-            status="进行中",
-            display_status="待审批",
-            display_tone="blocked",
+            status="design-review-key",
+            display_status="设计复核",
+            display_tone="custom-review",
             display_accent="#ef6c52",
             display_background="#fff1ed",
             display_foreground="#b42318",
         )
         self.assertIn("border-left: 4px solid #ef6c52", _plan_card_palette_stylesheet(plan))
-        status_stylesheet = _plan_status_palette_stylesheet(plan, "blocked")
+        status_stylesheet = _plan_status_palette_stylesheet(plan)
         self.assertIn("background: #fff1ed", status_stylesheet)
         self.assertIn("color: #b42318", status_stylesheet)
 
     def test_plan_status_without_manager_presentation_stays_unknown(self) -> None:
         plan = PlanItem(title="缺少Manager表现", status="")
 
-        self.assertEqual(_plan_status_presentation(plan, plan.status), ("状态未知", "unknown"))
+        self.assertEqual(_plan_status_presentation(plan), ("状态信息不可用", "unknown"))
 
-    def test_waiting_package_card_uses_manager_status_and_green_palette(self) -> None:
+    def test_custom_plan_status_card_uses_manager_label_tone_and_palette(self) -> None:
         plan = PlanItem(
             title="等待目标包",
-            status="等待打包",
-            display_status="等待打包",
-            display_tone="waiting_package",
+            status="package-candidate-key",
+            display_status="候选包准备",
+            display_tone="candidate-package",
             display_accent="#16a34a",
             display_background="#eaf8ef",
             display_foreground="#15803d",
@@ -357,18 +357,18 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：等待打包")
-        self.assertEqual(card.status_label.property("statusTone"), "waiting_package")
+        self.assertEqual(card.status_label.text(), "状态：候选包准备")
+        self.assertEqual(card.status_label.property("statusTone"), "candidate-package")
         self.assertIn("border-left: 4px solid #16a34a", card.styleSheet())
         self.assertIn("background: #eaf8ef", card.status_label.styleSheet())
         self.assertIn("color: #15803d", card.status_label.styleSheet())
 
-    def test_external_wait_card_uses_manager_status_without_local_classification(self) -> None:
+    def test_plan_card_does_not_classify_the_status_key_locally(self) -> None:
         plan = PlanItem(
             title="内部等待条件",
-            status="暂停",
-            display_status="暂停",
-            display_tone="paused",
+            status="hold-for-owner-key",
+            display_status="等待负责人",
+            display_tone="owner-hold",
             display_accent="#ef6c52",
             display_background="#fff1ed",
             display_foreground="#b42318",
@@ -377,8 +377,8 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：暂停")
-        self.assertEqual(card.status_label.property("statusTone"), "paused")
+        self.assertEqual(card.status_label.text(), "状态：等待负责人")
+        self.assertEqual(card.status_label.property("statusTone"), "owner-hold")
         card.close()
 
     def test_overflow_menu_contains_actions_not_duplicate_views(self) -> None:

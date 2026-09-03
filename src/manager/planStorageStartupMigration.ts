@@ -1,7 +1,9 @@
 import {
   clearPlanCatalogAfterStartupMigration,
+  migratePersonaPlanStatusesAtStartup,
   normalizePlanForStartupMigration
 } from "../roleKnowledge.js";
+import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   migrateRolePlanLayout,
   type PlanLayoutMigrationResult
@@ -14,8 +16,14 @@ export type { PlanLayoutMigrationResult } from "../planStorageMigration.js";
  * This module is imported exclusively by the PlanStorageStartupLifecycle child.
  */
 export function migrateRolePlanLayoutAtStartup(roleDir: string): PlanLayoutMigrationResult {
-  return migrateRolePlanLayout(roleDir, {
+  ensurePersonaPlanWorkflow(roleDir);
+  const result = migrateRolePlanLayout(roleDir, {
     normalizePlan: normalizePlanForStartupMigration,
     onChanged: () => clearPlanCatalogAfterStartupMigration(roleDir)
   });
+  if (result.failures.length > 0) return result;
+  const statuses = migratePersonaPlanStatusesAtStartup(roleDir);
+  result.migrated += statuses.migrated;
+  result.failures.push(...statuses.failures);
+  return result;
 }

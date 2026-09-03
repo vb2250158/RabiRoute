@@ -291,13 +291,13 @@ export type RolePlanApprovalContract = {
   responseStatus?: "pending" | "approved" | "rejected" | "changes_requested" | "cancelled";
 };
 
-export type RolePlanStatus = "分析中" | "待审批" | "执行中" | "等待打包" | "等待 QA" | "待讨论" | "暂停" | "完成" | "关闭";
+export type RolePlanStatusKey = string;
 
 export type RolePlan = {
   id: string;
   title: string;
   focus: string;
-  status: RolePlanStatus;
+  status: RolePlanStatusKey;
   archiveStatus: "未归档" | "已归档";
   importance?: number;
   urgency?: number;
@@ -342,10 +342,14 @@ export type RolePlan = {
   updatedAt: string;
   keywords: string[];
   presentation: {
-    status: RolePlanStatus;
-    tone: "blocked" | "discussion" | "qa" | "analyzing" | "executing" | "waiting_package" | "done" | "closed" | "paused" | "unknown";
-    statusLevel?: number;
-    sortBucket: number;
+    status: RolePlanStatusKey;
+    label: string;
+    labelEn: string;
+    description: string;
+    descriptionEn: string;
+    tone: string;
+    statusLevel: number;
+    acceptsGuidance: boolean;
     views: Array<"current" | "plans" | "archived">;
     palette: {
       accent: string;

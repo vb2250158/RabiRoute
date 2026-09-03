@@ -213,6 +213,7 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     const roleId = profile.agentRoleId?.trim();
     if (!roleId) continue;
     const roleDir = path.join(profile.rolesDir ?? config.rolesDir, roleId);
+    fs.mkdirSync(roleDir, { recursive: true });
     publishRoleKnowledgeCatalogSnapshot(roleDir, readRoleKnowledgeCatalogSnapshot(roleDir));
   }
   try {

@@ -10,6 +10,9 @@ import {
   summarizeRolePlan
 } from "./roleKnowledgePagination.js";
 import { planPresentation, presentPlan, presentPlans, sortKnowledgeByUpdatedAt } from "./roleKnowledgePresentation.js";
+import { loadDefaultPersonaPlanWorkflow } from "./personaPlanWorkflow.js";
+
+const workflow = loadDefaultPersonaPlanWorkflow();
 
 function plan(status: PlanStatus, patch: Partial<PlanItem> = {}): PlanItem {
   const terminal = status === "完成";
@@ -49,24 +52,14 @@ const approvalRequest = {
 };
 
 test("presentation status is always the exact plan.status", () => {
-  const cases: Array<[PlanStatus, string]> = [
-    ["分析中", "analyzing"],
-    ["待审批", "blocked"],
-    ["执行中", "executing"],
-    ["等待打包", "waiting_package"],
-    ["等待 QA", "qa"],
-    ["待讨论", "discussion"],
-    ["暂停", "paused"],
-    ["完成", "done"],
-    ["关闭", "closed"]
-  ];
-  for (const [status, tone] of cases) {
+  const cases: PlanStatus[] = ["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"];
+  for (const status of cases) {
     const item = status === "待审批"
       ? plan(status, { steps: [{ id: "work", title: "Approve", status: "进行中", approvalRequest }] })
       : plan(status);
-    const presentation = planPresentation(item);
+    const presentation = planPresentation(item, workflow);
     assert.equal(presentation.status, status);
-    assert.equal(presentation.tone, tone);
+    assert.equal(presentation.tone, status);
     assert.equal("stage" in presentation, false);
   }
 });
@@ -77,24 +70,24 @@ test("waiting text and step ids never override plan.status", () => {
     waitingFor: "等待打包、等待 QA、待讨论、待审批",
     steps: [{ id: "manual-verify-package-qa", title: "等待 QA", status: "进行中", waitingFor: "暂停" }]
   });
-  assert.equal(planPresentation(item).status, "执行中");
-  assert.equal(planPresentation(item).tone, "executing");
+  assert.equal(planPresentation(item, workflow).status, "执行中");
+  assert.equal(planPresentation(item, workflow).tone, "执行中");
 });
 
 test("archiveStatus controls archive visibility without replacing status", () => {
   const archivedCompleted = plan("完成", { archiveStatus: "已归档", archivedAt: "2026-09-03T01:00:00.000Z" });
   const closed = plan("关闭", { archiveStatus: "未归档" });
-  assert.deepEqual(planPresentation(archivedCompleted).views, ["archived"]);
-  assert.equal(planPresentation(archivedCompleted).status, "完成");
-  assert.deepEqual(planPresentation(closed).views, ["plans"]);
-  assert.equal(planPresentation(closed).status, "关闭");
+  assert.deepEqual(planPresentation(archivedCompleted, workflow).views, ["archived"]);
+  assert.equal(planPresentation(archivedCompleted, workflow).status, "完成");
+  assert.deepEqual(planPresentation(closed, workflow).views, ["plans"]);
+  assert.equal(planPresentation(closed, workflow).status, "关闭");
 });
 
 test("pending approval remains metadata under the explicit 待审批 status", () => {
   const item = plan("待审批", {
     steps: [{ id: "work", title: "Approve", status: "进行中", approvalRequest }]
   });
-  const presentation = planPresentation(item);
+  const presentation = planPresentation(item, workflow);
   assert.equal(presentation.status, "待审批");
   assert.equal(presentation.approval.state, "ready");
   assert.equal(presentation.approval.enabled, true);
@@ -105,20 +98,20 @@ test("status ordering follows the canonical status vocabulary", () => {
   const ordered = presentPlans(statuses.map((status, index) => plan(status, {
     id: `p-${index}`,
     ...(status === "待审批" ? { steps: [{ id: "work", title: "Approve", status: "进行中", approvalRequest }] } : {})
-  })));
+  })), workflow);
   assert.deepEqual(ordered.map((item) => item.status), ["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"]);
 });
 
 test("pagination facets and filters use plan.status and exclude archived plans from current view", () => {
   const items = [
-    presentPlan(plan("分析中", { id: "analysis", keywords: ["recall-target"] })),
-    presentPlan(plan("执行中", { id: "execution", keywords: ["recall-target"] })),
+    presentPlan(plan("分析中", { id: "analysis", keywords: ["recall-target"] }), workflow),
+    presentPlan(plan("执行中", { id: "execution", keywords: ["recall-target"] }), workflow),
     presentPlan(plan("完成", {
       id: "archived",
       archiveStatus: "已归档",
       archivedAt: "2026-09-03T01:00:00.000Z",
       keywords: ["recall-target"]
-    }))
+    }), workflow)
   ];
   const page = paginateRolePlans(items, "", 20, { includeFacets: true });
   assert.equal(page.counts.current, 2);
@@ -140,7 +133,7 @@ test("summary and preview keep the canonical status and omit attachment paths", 
       sha256: "abc",
       path: "C:/private/report.md"
     }]
-  }));
+  }), workflow);
   const summary = summarizeRolePlan(item);
   const preview = previewRolePlan(item);
   assert.equal(summary.status, "执行中");

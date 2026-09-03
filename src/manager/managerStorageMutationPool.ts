@@ -190,7 +190,8 @@ function cloneSerializable<T>(value: T): T {
 }
 
 function mutationResponseError(message: string): ManagerStorageMutationError {
-  if (message.startsWith("STORAGE_MUTATION_REVISION_CONFLICT:")) {
+  if (message.startsWith("STORAGE_MUTATION_REVISION_CONFLICT:")
+    || message.startsWith("PERSONA_PLAN_WORKFLOW_REVISION_CONFLICT:")) {
     return new ManagerStorageMutationError(message, "revision_conflict");
   }
   if (message.startsWith("STORAGE_MUTATION_CONFLICT:")) {
@@ -332,6 +333,32 @@ export class ManagerStorageMutationPool {
       type: "plan_create",
       input: { ...input, id: canonicalPlanId }
     }, options);
+  }
+
+  createPlanStatus(
+    roleId: string,
+    input: Record<string, unknown>,
+    options: ManagerStorageMutationOptions
+  ): Promise<unknown> {
+    return this.execute(roleId, undefined, { type: "plan_status_create", input }, options);
+  }
+
+  updatePlanStatus(
+    roleId: string,
+    statusKey: string,
+    patch: Record<string, unknown>,
+    options: ManagerStorageMutationOptions
+  ): Promise<unknown> {
+    return this.execute(roleId, undefined, { type: "plan_status_update", statusKey, patch }, options);
+  }
+
+  deletePlanStatus(
+    roleId: string,
+    statusKey: string,
+    replacementKey: string,
+    options: ManagerStorageMutationOptions
+  ): Promise<unknown> {
+    return this.execute(roleId, undefined, { type: "plan_status_delete", statusKey, replacementKey }, options);
   }
 
   updatePlan(

@@ -19,6 +19,7 @@ import {
   planAcceptsGuidance,
   type PlanItem
 } from "./roleKnowledge.js";
+import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 
 export type SubmitPlanFeedbackInput = {
   roleDir: string;
@@ -63,7 +64,7 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
     const plan = readCanonicalPlanJsonUnderLease(lease) as unknown as PlanItem;
     const feedbackKind = String(input.kind || "approval_suggestion") as PlanFeedbackKind;
     const planLevelFeedback = feedbackKind === "guidance" || feedbackKind === "guidance_response";
-    if (feedbackKind === "guidance" && !planAcceptsGuidance(plan)) {
+    if (feedbackKind === "guidance" && !planAcceptsGuidance(plan, ensurePersonaPlanWorkflow(input.roleDir).workflow)) {
       throw new Error("Plan guidance is available only for Analyzing or Executing plans outside approval.");
     }
     const requestedStepId = String(input.stepId || "").trim();

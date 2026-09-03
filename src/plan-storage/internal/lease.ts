@@ -416,6 +416,11 @@ function isRecoverableSnapshot(snapshot: LeaseFileSnapshot, now = Date.now()): b
   return Number(record.expiresAt) <= now && snapshot.mtimeMs + leaseDurationMs <= now;
 }
 
+function isRecoverableUnpublishedSnapshot(snapshot: LeaseFileSnapshot, now = Date.now()): boolean {
+  if (parseLeaseRecord(snapshot.raw)) return isRecoverableSnapshot(snapshot, now);
+  return snapshot.mtimeMs + PLAN_LOCK_EXPIRY_MS <= now;
+}
+
 function writeRecordSync(filePath: string, record: LeaseRecord): void {
   const descriptor = fs.openSync(filePath, "wx");
   try {
@@ -438,7 +443,7 @@ async function writeRecord(filePath: string, record: LeaseRecord): Promise<void>
 
 function reclaimUnpublishedFileSync(filePath: string): boolean {
   const before = readStableSnapshotSync(filePath);
-  if (!before || !isRecoverableSnapshot(before)) return before === null;
+  if (!before || !isRecoverableUnpublishedSnapshot(before)) return before === null;
   const after = readStableSnapshotSync(filePath);
   if (!after || !sameSnapshot(before, after)) return false;
   try {
@@ -452,7 +457,7 @@ function reclaimUnpublishedFileSync(filePath: string): boolean {
 
 async function reclaimUnpublishedFile(filePath: string): Promise<boolean> {
   const before = await readStableSnapshot(filePath);
-  if (!before || !isRecoverableSnapshot(before)) return before === null;
+  if (!before || !isRecoverableUnpublishedSnapshot(before)) return before === null;
   const after = await readStableSnapshot(filePath);
   if (!after || !sameSnapshot(before, after)) return false;
   try {

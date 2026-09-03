@@ -18,8 +18,9 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 ### Plan status and archival
 
-- `plan.status` is now the only status source for lists, sorting, details, and the tray. It accepts `Analyzing`, `Awaiting approval`, `Executing`, `Awaiting package`, `Awaiting QA`, `Awaiting discussion`, `Paused`, `Completed`, or `Closed`; Manager no longer derives a second display status from steps or waiting text.
-- Archival is independent through `archiveStatus=未归档 | 已归档`. Only completed or closed plans archive after the delay, archival preserves their plan status, and archived plans no longer participate in keyword recall.
+- Each persona's `personaConfig.json.planWorkflow` is now the single configuration source for its plan workflow. `plan.status` stores only an enabled status key; labels, descriptions, colors, order, views, step constraints, approval behavior, completion behavior, and archive eligibility come from configuration. The default template supplies Analyzing, Awaiting approval, Executing, Awaiting package, Awaiting QA, Awaiting discussion, Paused, Completed, and Closed, but code and clients keep no second enum.
+- Manager adds status-catalog APIs protected by `Idempotency-Key` and revision preconditions. Agents can add or update statuses; removal requires a replacement key, migrates unarchived plans first, and retains a retired definition for archived plans and history. Startup migration rewrites legacy aliases to current keys and removes retired step-phase fields.
+- Archival remains independent through `archiveStatus=未归档 | 已归档`. The persona workflow config determines eligible statuses and delay, archival preserves the plan status, and archived plans are excluded from keyword recall while remaining available by explicit ID or the Archived view.
 
 ### Persona virtual-avatar entry
 

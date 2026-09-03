@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PlanItem } from "./roleKnowledge.js";
 import { migrateLegacyPackageGatePlan, planIsWaitingForPackage } from "./planPackageWaiting.js";
+import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
 
 export type PackageWaitingMigrationOptions = {
   roleDir?: string;
@@ -73,6 +74,7 @@ export function migratePackageWaitingPlans(options: PackageWaitingMigrationOptio
   let skippedInvalidPlanCount = 0;
 
   for (const roleDir of roleDirs) {
+    const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
     const activeRoot = path.join(roleDir, "plans", "items", "active");
     for (const file of planFiles(activeRoot)) {
       scannedPlanCount += 1;
@@ -83,9 +85,9 @@ export function migratePackageWaitingPlans(options: PackageWaitingMigrationOptio
         skippedInvalidPlanCount += 1;
         continue;
       }
-      const migrated = migrateLegacyPackageGatePlan(plan, now);
+      const migrated = migrateLegacyPackageGatePlan(plan, workflow, now);
       const effectivePlan = migrated?.plan || plan;
-      if (planIsWaitingForPackage(effectivePlan)) waitingPackagePlanCount += 1;
+      if (planIsWaitingForPackage(effectivePlan, workflow)) waitingPackagePlanCount += 1;
       if (!migrated) continue;
 
       const originalTaskBinding = JSON.stringify(plan.taskBinding || null);

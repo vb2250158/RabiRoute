@@ -501,6 +501,7 @@ import {
   validateRoleKnowledge
 } from "../roleKnowledge.js";
 import { presentPlan, presentPlans } from "../roleKnowledgePresentation.js";
+import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   normalizeRoleMemoryPageLimit,
   normalizeRolePlanPageLimit,
@@ -5814,7 +5815,7 @@ async function transitionPlanFeedbackPostCommit(
 }
 
 async function processPlanFeedbackPostCommit(
-  _roleDir: string,
+  roleDir: string,
   roleId: string,
   gatewayId: string,
   inputRecord: PlanFeedbackRecord,
@@ -5841,6 +5842,7 @@ async function processPlanFeedbackPostCommit(
   try {
     const qaResult = await consumePlanQaFeedback({
       roleId,
+      workflow: ensurePersonaPlanWorkflow(roleDir).workflow,
       storage: planQaStoragePort(application),
       feedback: record,
       signal,
@@ -6143,7 +6145,7 @@ async function recoverPlanFeedbackCandidate(
 
 function presentedPlanWithFeedback(roleDir: string, plan: PlanItem) {
   return {
-    ...presentPlan(plan),
+    ...presentPlan(plan, ensurePersonaPlanWorkflow(roleDir).workflow),
     approval: planFeedbackSummary(roleDir, plan.id)
   };
 }
@@ -7653,8 +7655,8 @@ function handleRoleKnowledgeApi(
           response.setHeader("etag", `"${result.revision}"`);
           const detail = requestUrl.searchParams.get("detail")?.trim();
           const data = detail === "preview"
-            ? { ...previewRolePlan(presentPlan(result.plan)), approval: result.approval }
-            : { ...presentPlan(result.plan), approval: result.approval };
+            ? { ...previewRolePlan(presentPlan(result.plan, ensurePersonaPlanWorkflow(roleDir).workflow)), approval: result.approval }
+            : { ...presentPlan(result.plan, ensurePersonaPlanWorkflow(roleDir).workflow), approval: result.approval };
           jsonResponse(response, 200, { code: 0, data });
         }).catch((error) => respondRoleStorageError(response, error));
         return true;
@@ -7688,7 +7690,7 @@ function handleRoleKnowledgeApi(
       }
       void managerCatalogWorkerPool.queryRolePlanCatalog(roleDir)
         .then(({ plans, approvalByPlanId }) => {
-          const data = presentPlans(plans).map((plan) => ({
+          const data = presentPlans(plans, ensurePersonaPlanWorkflow(roleDir).workflow).map((plan) => ({
               ...plan,
               approval: approvalByPlanId[plan.id]
             }));
@@ -7698,6 +7700,64 @@ function handleRoleKnowledgeApi(
           code: -1,
           message: error instanceof Error ? error.message : String(error)
         }));
+      return true;
+    }
+    if (resource === "plan-statuses") {
+      if (request.method === "GET" && !itemId) {
+        void resolveRoleStorageApplication().queries.planWorkflow(roleId).then((data) => {
+          if (!data) {
+            jsonResponse(response, 404, { code: -1, message: `Plan status catalog not found for role: ${roleId}` });
+            return;
+          }
+          response.setHeader("etag", `"${data.revision}"`);
+          jsonResponse(response, 200, { code: 0, data: { ...data.workflow, revision: data.revision } });
+        }).catch((error) => respondRoleStorageError(response, error));
+        return true;
+      }
+      if (request.method === "POST" && !itemId) {
+        const context = roleStorageRequestContext(request, response);
+        void readRoleStorageJsonBody<Record<string, unknown>>(request)
+          .then((body) => resolveRoleStorageApplication().commands.createPlanStatus(roleId, body, context))
+          .then((committed) => {
+            publishManagerEvent("plan_status_catalog_changed", { roleId, statusKey: committed.commit.status.key, action: "created" });
+            respondRoleStorageCommit(response, 201, committed.operationId, committed.commit, committed.projection.revision);
+          })
+          .catch((error) => respondRoleStorageError(response, error));
+        return true;
+      }
+      if (request.method === "PATCH" && itemId) {
+        const context = roleStorageRequestContext(request, response);
+        void readRoleStorageJsonBody<Record<string, unknown>>(request)
+          .then((body) => resolveRoleStorageApplication().commands.updatePlanStatus(roleId, itemId, body, context))
+          .then((committed) => {
+            publishManagerEvent("plan_status_catalog_changed", { roleId, statusKey: committed.commit.status.key, action: "updated" });
+            respondRoleStorageCommit(response, 200, committed.operationId, committed.commit, committed.projection.revision);
+          })
+          .catch((error) => respondRoleStorageError(response, error));
+        return true;
+      }
+      if (request.method === "DELETE" && itemId) {
+        const context = roleStorageRequestContext(request, response);
+        void readRoleStorageJsonBody<{ replacementKey?: unknown }>(request)
+          .then((body) => resolveRoleStorageApplication().commands.deletePlanStatus(
+            roleId,
+            itemId,
+            typeof body.replacementKey === "string" ? body.replacementKey : "",
+            context
+          ))
+          .then((committed) => {
+            publishManagerEvent("plan_status_catalog_changed", {
+              roleId,
+              statusKey: committed.commit.status.key,
+              action: "retired",
+              migratedPlanIds: committed.commit.migratedPlanIds
+            });
+            respondRoleStorageCommit(response, 200, committed.operationId, committed.commit, committed.projection.revision);
+          })
+          .catch((error) => respondRoleStorageError(response, error));
+        return true;
+      }
+      jsonResponse(response, 405, { code: -1, message: "Method not allowed." });
       return true;
     }
     if (request.method === "GET" && resource === "skills") {
@@ -7760,7 +7820,7 @@ function handleRoleKnowledgeApi(
           response,
           201,
           committed.operationId,
-          { ...presentPlan(committed.projection.plan), approval: committed.projection.approval },
+          { ...presentPlan(committed.projection.plan, ensurePersonaPlanWorkflow(roleDir).workflow), approval: committed.projection.approval },
           committed.projection.revision
         ))
         .catch((error) => respondRoleStorageError(response, error));
@@ -7774,7 +7834,7 @@ function handleRoleKnowledgeApi(
           response,
           200,
           committed.operationId,
-          { ...presentPlan(committed.projection.plan), approval: committed.projection.approval },
+          { ...presentPlan(committed.projection.plan, ensurePersonaPlanWorkflow(roleDir).workflow), approval: committed.projection.approval },
           committed.projection.revision
         ))
         .catch((error) => respondRoleStorageError(response, error));

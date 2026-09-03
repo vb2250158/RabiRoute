@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { GatewayConfigFile, GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { readPersonaAvatar } from "../personaAvatar.js";
+import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { routeRuntimeParts, sanitizeConfigName, sanitizeRoleId } from "../shared/routeIdentity.js";
 import { normalizePersonaFile, roleFilePath, roleFolderPath } from "../shared/routePaths.js";
 import { ManagerConfigRepository, migrateLegacyCopilotThreadName } from "./configRepository.js";
@@ -431,6 +432,7 @@ export function executeRouteCatalogTransaction(input: RouteCatalogTransactionInp
         mutate: () => {
           const configPath = repository.personaConfigPath(roleId);
           if (!fs.existsSync(configPath)) repository.writePersonaConfig(roleId, { notificationRules: [] });
+          ensurePersonaPlanWorkflow(roleFolderPath(repository.rolesRoot, roleId));
         }
       });
     }

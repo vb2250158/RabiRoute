@@ -1,5 +1,11 @@
 import type { PlanItem, PlanStep } from "./roleKnowledge.js";
 import { currentPlanStep } from "./roleKnowledge.js";
+import {
+  planStatusDefinition,
+  planStatusKeyForRole,
+  resolvePersonaPlanStatus,
+  type PersonaPlanWorkflow
+} from "./personaPlanWorkflow.js";
 
 const QA_STEP_TOKEN = /(?:^|[-_:])(?:qa|verify)(?:[-_:]|$)/i;
 const PACKAGE_STEP_ID = /(?:^|[-_:])(?:package|packaging|pack|bundle|build|artifact)(?:[-_:]|$)/i;
@@ -124,8 +130,8 @@ export function planHasTargetPackageInclusionEvidence(plan: PlanItem): boolean {
     });
 }
 
-export function planIsWaitingForQaAcceptance(plan: PlanItem): boolean {
-  return plan.status === "等待 QA";
+export function planIsWaitingForQaAcceptance(plan: PlanItem, workflow: PersonaPlanWorkflow): boolean {
+  return plan.status === planStatusKeyForRole(workflow, "waitingQa");
 }
 
 function legacyPlanIsWaitingForPackage(plan: PlanItem): boolean {
@@ -151,8 +157,8 @@ function legacyPlanIsWaitingForPackage(plan: PlanItem): boolean {
   return waiting.some((value) => PACKAGE_WAIT.test(value));
 }
 
-export function planIsWaitingForPackage(plan: PlanItem): boolean {
-  return plan.status === "等待打包";
+export function planIsWaitingForPackage(plan: PlanItem, workflow: PersonaPlanWorkflow): boolean {
+  return plan.status === planStatusKeyForRole(workflow, "waitingPackage");
 }
 
 export type PackageGateMigration = {
@@ -162,9 +168,10 @@ export type PackageGateMigration = {
 
 export function migrateLegacyPackageGatePlan(
   plan: PlanItem,
+  workflow: PersonaPlanWorkflow,
   updatedAt = new Date().toISOString()
 ): PackageGateMigration | null {
-  if (String(plan.status) !== "进行中") return null;
+  if (resolvePersonaPlanStatus(workflow, plan.status)?.matchedBy !== "legacyAlias") return null;
   const step = currentPlanStep(plan);
   if (!step) return null;
   const gateText = [text(plan.blockedBy), text(step.blockedBy)].filter(Boolean).join("\n");
@@ -196,8 +203,10 @@ export function migrateLegacyPackageGatePlan(
     plan: {
       ...migrated,
       status: waitingPackage
-        ? "等待打包"
-        : (step as PlanStep & { workPhase?: string }).workPhase === "execution" ? "执行中" : "分析中"
+        ? planStatusKeyForRole(workflow, "waitingPackage")
+        : (step as PlanStep & { workPhase?: string }).workPhase === "execution"
+          ? planStatusKeyForRole(workflow, "execution")
+          : planStatusKeyForRole(workflow, "analysis")
     }
   };
 }

@@ -17,6 +17,7 @@ import {
   updatePlan as updateStoredPlan,
   type PlanItem
 } from "../roleKnowledge.js";
+import { loadDefaultPersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   storageInventoryRevisionToken,
   storageMutationRevision,
@@ -125,6 +126,7 @@ test("QA post-commit confirms an uncertain send by deliveryId and never replays 
   let readbacks = 0;
   const consume = () => consumePlanQaFeedback({
     roleId: "Rabi",
+    workflow: loadDefaultPersonaPlanWorkflow(),
     storage: storagePort(roleDir),
     feedback,
     sendToTask: async (request) => {
@@ -175,6 +177,7 @@ test("QA post-commit reads back persisted dispatching before any replay", async 
   let sends = 0;
   const result = await consumePlanQaFeedback({
     roleId: "Rabi",
+    workflow: loadDefaultPersonaPlanWorkflow(),
     storage: storagePort(roleDir),
     feedback: dispatching,
     sendToTask: async () => { sends += 1; },
@@ -215,6 +218,7 @@ test("QA post-commit retries dispatch-failed only after readback proves it missi
   let readbacks = 0;
   const consume = () => consumePlanQaFeedback({
     roleId: "Rabi",
+    workflow: loadDefaultPersonaPlanWorkflow(),
     storage: storagePort(roleDir),
     feedback: failed,
     sendToTask: async (request) => {
@@ -271,6 +275,7 @@ test("QA plan transition rejects a stale projection instead of overwriting a con
   await assert.rejects(
     consumePlanQaFeedback({
       roleId: "Rabi",
+      workflow: loadDefaultPersonaPlanWorkflow(),
       storage: port,
       feedback,
       sendToTask: async () => { sends += 1; }
@@ -345,6 +350,7 @@ test("QA feedback transition rejects a stale record revision and preserves the c
   await assert.rejects(
     consumePlanQaFeedback({
       roleId: "Rabi",
+      workflow: loadDefaultPersonaPlanWorkflow(),
       storage: port,
       feedback,
       sendToTask: async () => { throw new Error("must not send"); }

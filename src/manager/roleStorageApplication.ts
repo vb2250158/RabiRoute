@@ -17,6 +17,11 @@ import type {
 } from "../planFeedback.js";
 import type { SubmitPlanFeedbackInput, SubmitPlanFeedbackResult } from "../planFeedbackSubmission.js";
 import type { RolePanelTimelineAppendResult, RolePanelTimelineMessage } from "../rolePanelTimeline.js";
+import type {
+  PersonaPlanWorkflow,
+  PersonaPlanWorkflowReadResult,
+  PersonaPlanWorkflowStatus
+} from "../personaPlanWorkflow.js";
 import {
   ManagerStorageMutationError,
   ManagerStorageMutationPool,
@@ -87,6 +92,13 @@ export type RoleStorageConsolidationProjection = Readonly<{
   revision: string;
 }>;
 
+export type RoleStoragePlanStatusMutationResult = Readonly<{
+  workflow: PersonaPlanWorkflow;
+  revision: string;
+  status: PersonaPlanWorkflowStatus;
+  migratedPlanIds: string[];
+}>;
+
 export class RoleStorageApplicationError extends Error {
   constructor(
     message: string,
@@ -119,6 +131,9 @@ type RoleStorageMutationPool = Pick<
   | "status"
   | "stop"
   | "createPlan"
+  | "createPlanStatus"
+  | "updatePlanStatus"
+  | "deletePlanStatus"
   | "updatePlan"
   | "updatePlanSecretaryBinding"
   | "updatePlanTaskBinding"
@@ -359,6 +374,10 @@ export class RoleStorageQueries {
     return this.run(roleId, roleDir => ({ type: "role_storage_plan_projection", roleDir, planId: canonicalPlanId }), options);
   }
 
+  planWorkflow(roleId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<PersonaPlanWorkflowReadResult | null> {
+    return this.run(roleId, roleDir => ({ type: "role_plan_workflow", roleDir }), options);
+  }
+
   planFeedback(roleId: string, planId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<RoleStoragePlanFeedbackProjection | null> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
     return this.run(roleId, roleDir => ({ type: "role_storage_plan_feedback_projection", roleDir, planId: canonicalPlanId }), options);
@@ -481,6 +500,81 @@ export class RoleStorageCommands {
       project: async () => {
         const projection = await this.queries.plan(roleId, planId, context);
         if (!projection) throw new RoleStorageApplicationError("The committed plan projection is unavailable.", "projection_unavailable", 503, operationId, "committed");
+        return projection;
+      }
+    });
+  }
+
+  async createPlanStatus(
+    roleId: string,
+    input: Record<string, unknown>,
+    context: RoleStorageCommandContext = {}
+  ): Promise<RoleStorageCommit<RoleStoragePlanStatusMutationResult, PersonaPlanWorkflowReadResult>> {
+    const statusKey = requiredIdentity(input.key, "status key");
+    return this.commit({
+      operation: "plan-status-create",
+      roleId,
+      resourceId: statusKey,
+      payload: input,
+      context,
+      expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
+      mutate: options => this.mutationPool.createPlanStatus(roleId, input, options) as Promise<RoleStoragePlanStatusMutationResult>,
+      project: async () => {
+        const projection = await this.queries.planWorkflow(roleId, context);
+        if (!projection) throw new RoleStorageApplicationError("The committed plan status catalog is unavailable.", "projection_unavailable", 503, undefined, "committed");
+        return projection;
+      }
+    });
+  }
+
+  async updatePlanStatus(
+    roleId: string,
+    statusKey: string,
+    patch: Record<string, unknown>,
+    context: RoleStorageCommandContext = {}
+  ): Promise<RoleStorageCommit<RoleStoragePlanStatusMutationResult, PersonaPlanWorkflowReadResult>> {
+    const key = requiredIdentity(statusKey, "status key");
+    if (patch.key !== undefined && patch.key !== key) {
+      throw new RoleStorageApplicationError("Plan status key is immutable.", "invalid_request", 400);
+    }
+    return this.commit({
+      operation: "plan-status-update",
+      roleId,
+      resourceId: key,
+      payload: patch,
+      context,
+      expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
+      mutate: options => this.mutationPool.updatePlanStatus(roleId, key, patch, options) as Promise<RoleStoragePlanStatusMutationResult>,
+      project: async () => {
+        const projection = await this.queries.planWorkflow(roleId, context);
+        if (!projection) throw new RoleStorageApplicationError("The committed plan status catalog is unavailable.", "projection_unavailable", 503, undefined, "committed");
+        return projection;
+      }
+    });
+  }
+
+  async deletePlanStatus(
+    roleId: string,
+    statusKey: string,
+    replacementKey: string,
+    context: RoleStorageCommandContext = {}
+  ): Promise<RoleStorageCommit<RoleStoragePlanStatusMutationResult, PersonaPlanWorkflowReadResult>> {
+    const key = requiredIdentity(statusKey, "status key");
+    const replacement = requiredIdentity(replacementKey, "replacementKey");
+    if (key === replacement) {
+      throw new RoleStorageApplicationError("replacementKey must differ from the retired plan status key.", "invalid_request", 400);
+    }
+    return this.commit({
+      operation: "plan-status-delete",
+      roleId,
+      resourceId: key,
+      payload: { replacementKey: replacement },
+      context,
+      expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
+      mutate: options => this.mutationPool.deletePlanStatus(roleId, key, replacement, options) as Promise<RoleStoragePlanStatusMutationResult>,
+      project: async () => {
+        const projection = await this.queries.planWorkflow(roleId, context);
+        if (!projection) throw new RoleStorageApplicationError("The committed plan status catalog is unavailable.", "projection_unavailable", 503, undefined, "committed");
         return projection;
       }
     });

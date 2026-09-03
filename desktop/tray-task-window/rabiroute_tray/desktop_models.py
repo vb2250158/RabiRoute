@@ -53,11 +53,14 @@ class PlanApprovalContract:
 class PlanItem:
     title: str
     plan_id: str = ""
-    status: str = "暂停"
+    status: str = ""
     archive_status: str = "未归档"
     display_status: str = ""
+    display_status_en: str = ""
+    display_description: str = ""
+    display_description_en: str = ""
     display_tone: str = ""
-    display_sort_bucket: int = -1
+    display_status_level: int = -1
     display_views: tuple[str, ...] = field(default_factory=tuple)
     display_accent: str = ""
     display_background: str = ""

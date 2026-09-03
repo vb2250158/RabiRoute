@@ -8,6 +8,7 @@ TRAY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TRAY_ROOT))
 
 from rabiroute_tray.desktop_refresh import DesktopRefreshService
+from rabiroute_tray.desktop_read_model import plan_snapshot_from_manager
 from rabiroute_tray.manager_client import ManagerSnapshot
 
 
@@ -35,11 +36,16 @@ class _ApiManager:
             {
                 "id": "plan-1",
                 "title": "API plan",
-                "status": "待审批",
+                "status": "design-review-key",
                 "archiveStatus": "未归档",
                 "presentation": {
-                    "status": "待审批",
-                    "tone": "blocked",
+                    "status": "design-review-key",
+                    "label": "设计复核",
+                    "labelEn": "Design review",
+                    "description": "等待设计负责人复核",
+                    "descriptionEn": "Waiting for design owner review",
+                    "tone": "custom-review",
+                    "statusLevel": 17,
                     "views": ["current", "plans"],
                     "palette": {
                         "accent": "#ef6c52",
@@ -57,7 +63,12 @@ class _ApiManager:
                 "archiveStatus": "未归档",
                 "presentation": {
                     "status": "等待 QA",
+                    "label": "等待 QA",
+                    "labelEn": "Awaiting QA",
+                    "description": "等待 QA 验收",
+                    "descriptionEn": "Awaiting QA acceptance",
                     "tone": "qa",
+                    "statusLevel": 5,
                     "views": ["current", "plans"],
                     "palette": {
                         "accent": "#8e63c7",
@@ -109,8 +120,12 @@ class _ApiManager:
                 "archiveStatus": "未归档",
                 "presentation": {
                     "status": "分析中",
+                    "label": "分析中",
+                    "labelEn": "Analyzing",
+                    "description": "正在分析",
+                    "descriptionEn": "Analysis in progress",
                     "tone": "analyzing",
-                    "sortBucket": 3,
+                    "statusLevel": 3,
                     "views": ["current", "plans"],
                     "palette": {
                         "accent": "#f59e0b",
@@ -135,8 +150,12 @@ class _ApiManager:
                 "archiveStatus": "未归档",
                 "presentation": {
                     "status": "等待打包",
+                    "label": "等待打包",
+                    "labelEn": "Awaiting package",
+                    "description": "等待目标包",
+                    "descriptionEn": "Awaiting target package",
                     "tone": "waiting_package",
-                    "sortBucket": 4,
+                    "statusLevel": 4,
                     "views": ["current", "plans"],
                     "palette": {
                         "accent": "#2563eb",
@@ -162,8 +181,12 @@ class _ApiManager:
                 "currentStepId": "discuss",
                 "presentation": {
                     "status": "待讨论",
+                    "label": "待讨论",
+                    "labelEn": "Awaiting discussion",
+                    "description": "等待讨论",
+                    "descriptionEn": "Awaiting discussion",
                     "tone": "discussion",
-                    "sortBucket": 1,
+                    "statusLevel": 1,
                     "views": ["plans"],
                     "palette": {
                         "accent": "#d97706",
@@ -204,6 +227,29 @@ class _ApiManager:
 
 
 class DesktopRefreshServiceTest(unittest.TestCase):
+    def test_plan_views_are_not_inferred_from_status_keys_or_archive_flags(self) -> None:
+        snapshot = plan_snapshot_from_manager(Path("C:/repo"), None, "Rabi", [{
+            "id": "custom-status",
+            "title": "Custom status",
+            "status": "looks-current-but-is-only-a-key",
+            "archiveStatus": "未归档",
+            "presentation": {
+                "status": "looks-current-but-is-only-a-key",
+                "label": "自定义阶段",
+                "labelEn": "Custom phase",
+                "description": "没有视图归属",
+                "descriptionEn": "No view membership",
+                "tone": "custom-phase",
+                "statusLevel": 42,
+                "views": [],
+                "palette": {},
+            },
+        }])
+
+        self.assertEqual(snapshot.current, [])
+        self.assertEqual(snapshot.active, [])
+        self.assertEqual(snapshot.archived, [])
+
     def test_builds_tray_read_model_exclusively_from_manager_apis(self) -> None:
         manager = _ApiManager()
         service = DesktopRefreshService(manager, Path("C:/repo"))  # type: ignore[arg-type]
@@ -216,7 +262,12 @@ class DesktopRefreshServiceTest(unittest.TestCase):
 
         self.assertTrue(result.manager.connected)
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].title, "API plan")
-        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status, "待审批")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].status, "design-review-key")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status, "设计复核")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status_en, "Design review")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_description, "等待设计负责人复核")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_tone, "custom-review")
+        self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_status_level, 17)
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_views, ("current", "plans"))
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_accent, "#ef6c52")
         self.assertEqual(result.plan_snapshot and result.plan_snapshot.current[0].display_background, "#fff1ed")
@@ -236,11 +287,11 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         external_plan = result.plan_snapshot and result.plan_snapshot.active[2]
         self.assertEqual(external_plan and external_plan.display_status, "分析中")
         self.assertEqual(external_plan and external_plan.display_tone, "analyzing")
-        self.assertEqual(external_plan and external_plan.display_sort_bucket, 3)
+        self.assertEqual(external_plan and external_plan.display_status_level, 3)
         package_plan = result.plan_snapshot and result.plan_snapshot.active[3]
         self.assertEqual(package_plan and package_plan.display_status, "等待打包")
         self.assertEqual(package_plan and package_plan.display_tone, "waiting_package")
-        self.assertEqual(package_plan and package_plan.display_sort_bucket, 4)
+        self.assertEqual(package_plan and package_plan.display_status_level, 4)
         self.assertEqual(package_plan and package_plan.display_accent, "#2563eb")
         self.assertEqual(package_plan and package_plan.display_background, "#eff6ff")
         self.assertEqual(package_plan and package_plan.display_foreground, "#1d4ed8")
@@ -248,7 +299,7 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(discussion_plan and discussion_plan.status, "待讨论")
         self.assertEqual(discussion_plan and discussion_plan.display_status, "待讨论")
         self.assertEqual(discussion_plan and discussion_plan.display_tone, "discussion")
-        self.assertEqual(discussion_plan and discussion_plan.display_sort_bucket, 1)
+        self.assertEqual(discussion_plan and discussion_plan.display_status_level, 1)
         self.assertEqual(result.context_snapshot and result.context_snapshot.recent_memory[0].title, "API memory")
         self.assertEqual(result.role_messages, [{"id": "message-1"}])
         self.assertEqual(result.context_snapshot and result.context_snapshot.avatar_data, b"avatar-bytes")

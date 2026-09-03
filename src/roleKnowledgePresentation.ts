@@ -7,16 +7,21 @@ import type {
 import type { PlanAttachmentPresentation } from "./shared/planAttachmentContract.js";
 import { planApprovalGate } from "./roleKnowledge.js";
 import {
+  personaPlanWorkflowRevision,
+  planStatusDefinition,
+  type PersonaPlanStatusDefinition,
+  type PersonaPlanWorkflow
+} from "./personaPlanWorkflow.js";
+import {
   PLAN_IMPORTANCE_PRESENTATION,
   PLAN_URGENCY_PRESENTATION,
   PlanImportanceLevel,
-  PlanStatusSortLevel,
   PlanUrgencyLevel,
   resolvePlanImportanceLevel,
   resolvePlanUrgencyLevel
 } from "./shared/planSortContract.js";
 
-export type PlanPresentationTone = "blocked" | "discussion" | "qa" | "analyzing" | "executing" | "waiting_package" | "done" | "closed" | "paused" | "unknown";
+export type PlanPresentationTone = string;
 export type PlanPresentationView = "current" | "plans" | "archived";
 
 export type PlanPresentationPalette = {
@@ -27,11 +32,20 @@ export type PlanPresentationPalette = {
 
 export type PlanPresentation = {
   status: string;
+  label: string;
+  labelEn: string;
+  description: string;
+  descriptionEn: string;
   tone: PlanPresentationTone;
-  statusLevel: PlanStatusSortLevel;
+  statusLevel: number;
   sortBucket: number;
   views: PlanPresentationView[];
   palette: PlanPresentationPalette;
+  acceptsGuidance: boolean;
+  terminal: boolean;
+  archiveEligible: boolean;
+  currentStep: "required" | "optional" | "forbidden";
+  roles: string[];
   importance: {
     level: PlanImportanceLevel;
     label: string;
@@ -61,32 +75,6 @@ export type PresentedPlanItem = Omit<PlanItem, "attachments"> & {
 };
 
 type DatedKnowledgeItem = Pick<RecentMemoryItem | ConsolidatedMemoryItem, "id" | "createdAt" | "updatedAt">;
-
-const PLAN_STATUS_RANK: Record<PlanPresentationTone, PlanStatusSortLevel> = {
-  blocked: PlanStatusSortLevel.Approval,
-  discussion: PlanStatusSortLevel.Discussion,
-  qa: PlanStatusSortLevel.Qa,
-  analyzing: PlanStatusSortLevel.Analyzing,
-  executing: PlanStatusSortLevel.Executing,
-  waiting_package: PlanStatusSortLevel.WaitingPackage,
-  done: PlanStatusSortLevel.Done,
-  closed: PlanStatusSortLevel.Closed,
-  paused: PlanStatusSortLevel.Paused,
-  unknown: PlanStatusSortLevel.Unknown
-};
-
-const PLAN_PRESENTATION_PALETTE: Record<PlanPresentationTone, PlanPresentationPalette> = {
-  blocked: { accent: "#ef6c52", background: "#fff1ed", foreground: "#b42318" },
-  discussion: { accent: "#d97706", background: "#fffbeb", foreground: "#92400e" },
-  qa: { accent: "#7c3aed", background: "#f3e8ff", foreground: "#6d28d9" },
-  analyzing: { accent: "#0891b2", background: "#ecfeff", foreground: "#0e7490" },
-  executing: { accent: "#16a34a", background: "#eaf8ef", foreground: "#15803d" },
-  waiting_package: { accent: "#2563eb", background: "#eff6ff", foreground: "#1d4ed8" },
-  done: { accent: "#607d8b", background: "#eaf4f7", foreground: "#52677a" },
-  closed: { accent: "#475569", background: "#f1f5f9", foreground: "#334155" },
-  paused: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" },
-  unknown: { accent: "#8795a1", background: "#eef1f4", foreground: "#687786" }
-};
 
 function approvalPresentation(plan: PlanItem): PlanPresentation["approval"] {
   const gate = planApprovalGate(plan);
@@ -118,30 +106,25 @@ function dateValue(primary: string | undefined, fallback: string | undefined): n
   return Number.isFinite(value) ? value : 0;
 }
 
-function planStatusTone(plan: PlanItem): PlanPresentationTone {
-  if (plan.status === "分析中") return "analyzing";
-  if (plan.status === "待审批") return "blocked";
-  if (plan.status === "执行中") return "executing";
-  if (plan.status === "等待打包") return "waiting_package";
-  if (plan.status === "等待 QA") return "qa";
-  if (plan.status === "待讨论") return "discussion";
-  if (plan.status === "暂停") return "paused";
-  if (plan.status === "完成") return "done";
-  if (plan.status === "关闭") return "closed";
-  return "unknown";
+function definitionFor(plan: PlanItem, workflow: PersonaPlanWorkflow): PersonaPlanStatusDefinition {
+  const definition = planStatusDefinition(workflow, plan.status, { allowRetired: true });
+  if (!definition) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${plan.status} is not defined by this persona.`);
+  return definition;
 }
 
-export function planPresentation(plan: PlanItem): PlanPresentation {
+export function planPresentation(
+  plan: PlanItem,
+  workflow: PersonaPlanWorkflow
+): PlanPresentation {
   const approval = approvalPresentation(plan);
+  const definition = definitionFor(plan, workflow);
   const views: PlanPresentationView[] = plan.archiveStatus === "已归档"
     ? ["archived"]
-    : ["分析中", "待审批", "执行中", "等待打包", "等待 QA"].includes(plan.status)
-      ? ["current", "plans"]
-      : ["plans"];
+    : [...definition.views];
   return buildPlanPresentation(
     plan,
-    plan.status,
-    planStatusTone(plan),
+    definition,
+    workflow,
     views,
     approval
   );
@@ -149,23 +132,34 @@ export function planPresentation(plan: PlanItem): PlanPresentation {
 
 function buildPlanPresentation(
   plan: PlanItem,
-  status: string,
-  tone: PlanPresentationTone,
+  definition: PersonaPlanStatusDefinition,
+  workflow: PersonaPlanWorkflow,
   views: PlanPresentationView[],
   approval: PlanPresentation["approval"]
 ): PlanPresentation {
-  const statusLevel = PLAN_STATUS_RANK[tone];
+  const statusLevel = definition.order;
   const importanceLevel = resolvePlanImportanceLevel(plan.importance ?? plan.priority);
   const urgencyLevel = resolvePlanUrgencyLevel(plan.urgency, plan.dueAt);
   const importance = PLAN_IMPORTANCE_PRESENTATION[importanceLevel];
   const urgency = PLAN_URGENCY_PRESENTATION[urgencyLevel];
   return {
-    status,
-    tone,
+    status: definition.key,
+    label: definition.label,
+    labelEn: definition.labelEn,
+    description: definition.description,
+    descriptionEn: definition.descriptionEn,
+    tone: definition.key,
     statusLevel,
     sortBucket: statusLevel,
     views: [...views],
-    palette: { ...PLAN_PRESENTATION_PALETTE[tone] },
+    palette: { ...definition.palette },
+    acceptsGuidance: definition.acceptsGuidance,
+    terminal: definition.terminal,
+    archiveEligible: definition.archiveEligible,
+    currentStep: definition.currentStep,
+    roles: Object.entries(workflow.roles)
+      .filter(([, key]) => key === definition.key)
+      .map(([role]) => role),
     importance: {
       level: importanceLevel,
       label: importance.labelZh,
@@ -182,21 +176,29 @@ function buildPlanPresentation(
   };
 }
 
-export function presentPlan(plan: PlanItem): PresentedPlanItem {
+export function presentPlan(
+  plan: PlanItem,
+  workflow: PersonaPlanWorkflow
+): PresentedPlanItem {
   return {
     ...plan,
     attachments: plan.attachments.map(({ path: _path, ...attachment }) => attachment),
-    presentation: planPresentation(plan)
+    presentation: planPresentation(plan, workflow)
   };
 }
 
-const presentedPlanCatalogCache = new WeakMap<PlanItem[], PresentedPlanItem[]>();
+const presentedPlanCatalogCache = new WeakMap<PlanItem[], Map<string, PresentedPlanItem[]>>();
 
-export function presentPlans(plans: PlanItem[]): PresentedPlanItem[] {
-  const cached = presentedPlanCatalogCache.get(plans);
+export function presentPlans(
+  plans: PlanItem[],
+  workflow: PersonaPlanWorkflow
+): PresentedPlanItem[] {
+  const revision = personaPlanWorkflowRevision(workflow);
+  const byRevision = presentedPlanCatalogCache.get(plans);
+  const cached = byRevision?.get(revision);
   if (cached) return cached;
   const presented = plans
-    .map(presentPlan)
+    .map(plan => presentPlan(plan, workflow))
     .sort((left, right) => {
       const statusDelta = left.presentation.statusLevel - right.presentation.statusLevel;
       if (statusDelta !== 0) return statusDelta;
@@ -207,7 +209,9 @@ export function presentPlans(plans: PlanItem[]): PresentedPlanItem[] {
       if (dateDelta !== 0) return dateDelta;
       return left.id.localeCompare(right.id);
     });
-  presentedPlanCatalogCache.set(plans, presented);
+  const nextByRevision = byRevision ?? new Map<string, PresentedPlanItem[]>();
+  nextByRevision.set(revision, presented);
+  presentedPlanCatalogCache.set(plans, nextByRevision);
   return presented;
 }
 

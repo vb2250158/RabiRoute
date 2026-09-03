@@ -48,6 +48,20 @@ export type ManagerStorageMutationTask =
       input: Record<string, unknown>;
     }>
   | Readonly<{
+      type: "plan_status_create";
+      input: Record<string, unknown>;
+    }>
+  | Readonly<{
+      type: "plan_status_update";
+      statusKey: string;
+      patch: Record<string, unknown>;
+    }>
+  | Readonly<{
+      type: "plan_status_delete";
+      statusKey: string;
+      replacementKey: string;
+    }>
+  | Readonly<{
       type: "plan_update";
       patch: Record<string, unknown>;
     }>
@@ -202,6 +216,15 @@ export function validateManagerStorageMutationRequest(
     throw new Error("Plan creation input id does not match its plan fence.");
   }
   const task = request.task;
+  if (task.type === "plan_status_update" || task.type === "plan_status_delete") {
+    if (!String(task.statusKey || "").trim() || String(task.statusKey).length > 80) {
+      throw new Error("Plan status key is invalid.");
+    }
+  }
+  if (task.type === "plan_status_delete"
+    && (!String(task.replacementKey || "").trim() || String(task.replacementKey).length > 80)) {
+    throw new Error("Replacement plan status key is invalid.");
+  }
   if (task.type === "recent_memory_touch") {
     if (!String(task.memoryId || "").trim() || String(task.memoryId).length > 256) {
       throw new Error("Recent-memory touch memoryId is invalid.");

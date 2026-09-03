@@ -2,6 +2,7 @@ import type { PlanFeedbackRecord, PlanQaFeedbackHandling } from "../planFeedback
 import type { PlanItem, PlanStep } from "../roleKnowledge.js";
 import { roleStorageOperationKey } from "./roleStorageApplication.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
+import { planStatusKeyForRole, type PersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 
 export type PlanQaTaskRequest = {
   agentAdapter: "codex" | "dsh";
@@ -56,6 +57,7 @@ export type PlanQaStoragePort = Readonly<{
 
 export type ConsumePlanQaFeedbackOptions = {
   roleId: string;
+  workflow: PersonaPlanWorkflow;
   storage: PlanQaStoragePort;
   feedback: PlanFeedbackRecord;
   signal?: AbortSignal;
@@ -207,7 +209,8 @@ function reopenForInvestigation(
   plan: PlanItem,
   qaStep: PlanStep,
   feedback: PlanFeedbackRecord,
-  missingEvidence: string[]
+  missingEvidence: string[],
+  workflow: PersonaPlanWorkflow
 ): Record<string, unknown> {
   const investigateId = investigationStepId(qaStep);
   const existingInvestigation = plan.steps.find((step) => step.id === investigateId);
@@ -231,7 +234,7 @@ function reopenForInvestigation(
   const qaIndex = steps.findIndex((step) => step.id === qaStep.id);
   steps.splice(qaIndex < 0 ? steps.length : qaIndex, 0, investigation);
   return {
-    status: "分析中",
+    status: planStatusKeyForRole(workflow, "analysis"),
     currentStepId: investigateId,
     currentStep: "QA 失败回传已消费，进入深化根因调查",
     nextAction: missingEvidence.length
@@ -261,7 +264,8 @@ function taskPrompt(plan: PlanItem, feedback: PlanFeedbackRecord): string {
 function completeAcceptance(
   plan: PlanItem,
   qaStep: PlanStep,
-  feedback: PlanFeedbackRecord
+  feedback: PlanFeedbackRecord,
+  workflow: PersonaPlanWorkflow
 ): Record<string, unknown> {
   const steps = plan.steps.map((step) => step.id === qaStep.id
     ? {
@@ -278,7 +282,7 @@ function completeAcceptance(
   if (nextIndex >= 0) {
     steps[nextIndex] = { ...steps[nextIndex], status: "进行中" };
     return {
-      status: "执行中",
+      status: planStatusKeyForRole(workflow, "execution"),
       currentStepId: steps[nextIndex].id,
       currentStep: steps[nextIndex].title,
       nextAction: steps[nextIndex].title,
@@ -289,7 +293,7 @@ function completeAcceptance(
     };
   }
   return {
-    status: "完成",
+    status: planStatusKeyForRole(workflow, "completed"),
     currentStepId: null,
     currentStep: "QA 明确通过，验收完成",
     nextAction: null,
@@ -443,7 +447,7 @@ export async function consumePlanQaFeedback(
   if (passed) {
     const updatedPlan = qaStep.status === "已完成"
       ? plan
-      : await commitPlanPatch(options, projection, latest.id, completeAcceptance(plan, qaStep, latest));
+      : await commitPlanPatch(options, projection, latest.id, completeAcceptance(plan, qaStep, latest, options.workflow));
     await commitQaHandling(options, projection, latest.id, {
       outcome: "passed",
       issueType: "generic",
@@ -461,7 +465,7 @@ export async function consumePlanQaFeedback(
         options,
         projection,
         latest.id,
-        reopenForInvestigation(plan, qaStep, effectiveFeedback, missingEvidence)
+        reopenForInvestigation(plan, qaStep, effectiveFeedback, missingEvidence, options.workflow)
       );
   if (missingEvidence.length) {
     await commitQaHandling(options, projection, latest.id, {
