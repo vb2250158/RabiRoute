@@ -84,6 +84,7 @@ test("plan directory relative time uses one largest suitable unit", () => {
 test("plan directory shows one trailing label for the active sort mode", () => {
   const now = Date.UTC(2026, 7, 14, 12, 0, 0);
   const plan = {
+    status: "待审批",
     updatedAt: new Date(now - 4 * 60 * 60_000).toISOString(),
     presentation: {
       status: "待审批",
@@ -215,7 +216,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /function resetApprovalAttachmentState\(\): void\s*\{/);
   assert.match(page, /onBeforeUnmount\(\(\) => \{[\s\S]*?resetApprovalAttachmentState\(\)/);
   assert.match(styles, /\.knowledge-approval-attachment\s*\{[\s\S]*?grid-template-columns:\s*46px minmax\(0, 1fr\) 28px/);
-  assert.match(page, /function planAcceptsGuidance[\s\S]*?plan\.status === "进行中" && plan\.presentation\.approval\.state === "none"/);
+  assert.match(page, /function planAcceptsGuidance[\s\S]*?plan\.status === "分析中" \|\| plan\.status === "执行中"[\s\S]*?plan\.presentation\.approval\.state === "none"/);
   assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)" class="knowledge-approval-panel" data-state="guidance">/);
   assert.match(page, /引导属于整个计划，不绑定某个步骤/);
   assert.match(page, /调整尚未开始的步骤/);
@@ -300,7 +301,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /class="knowledge-plan-directory-sort-label"/);
   assert.match(page, /:style="planDirectorySortStyle\(plan\)"/);
   assert.match(page, /formatPlanDirectorySortLabel\([\s\S]*?plan,[\s\S]*?planListSortMode\.value/);
-  assert.match(page, /<v-chip[^>]*>\{\{ t\(plan\.presentation\.status\) \}\}<\/v-chip>/);
+  assert.match(page, /<v-chip[^>]*>\{\{ t\(plan\.status\) \}\}<\/v-chip>/);
   assert.match(page, /planTitleForDirectory\(plan\.title\)/);
   assert.doesNotMatch(page, /knowledge-plan-toc|jumpToPlanStep|planStepDomId|activePlanSteps/);
   assert.match(styles, /\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*minmax\(324px, 360px\) minmax\(0, 1fr\)/);
@@ -415,11 +416,11 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(styles, /\.knowledge-plan-markdown-document pre\s*\{[\s\S]*?overflow:\s*auto/);
 });
 
-test("step blocker styling follows Manager presentation instead of raw blockedBy text", () => {
+test("step blocker styling follows the structured approval contract instead of status text", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
 
-  assert.match(page, /function stepIsBlocked[\s\S]*?plan\.presentation\.tone === "blocked"/);
+  assert.match(page, /function stepIsBlocked[\s\S]*?plan\.presentation\.approval\.state === "ready"/);
   assert.match(page, /blocked: stepIsBlocked\(plan, step\)/);
   assert.match(page, /stepIsBlocked\(plan, step\) && step\.blockedBy/);
   assert.match(page, /stepIsBlocked\(plan, step\) \? "已阻塞" : step\.status/);

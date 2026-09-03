@@ -64,7 +64,7 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
     const feedbackKind = String(input.kind || "approval_suggestion") as PlanFeedbackKind;
     const planLevelFeedback = feedbackKind === "guidance" || feedbackKind === "guidance_response";
     if (feedbackKind === "guidance" && !planAcceptsGuidance(plan)) {
-      throw new Error("Plan guidance is available only for running plans outside approval.");
+      throw new Error("Plan guidance is available only for Analyzing or Executing plans outside approval.");
     }
     const requestedStepId = String(input.stepId || "").trim();
     if (planLevelFeedback && requestedStepId) {

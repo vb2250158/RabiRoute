@@ -427,6 +427,7 @@ export function ensureCodexDesktopDeliveryMarkerForTest(
 async function deliverDesktopMessage(params: {
   thread: CodexDesktopThread;
   prompt: string;
+  cwd: string;
   sandbox: CodexTurnSandbox;
   deliveryId?: string;
   model?: string;
@@ -438,7 +439,7 @@ async function deliverDesktopMessage(params: {
   const delivery = await desktopBridge.deliver({
     threadId: params.thread.id,
     prompt: prepared.prompt,
-    cwd: params.thread.cwd,
+    cwd: params.cwd,
     sandbox: params.sandbox,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
@@ -447,7 +448,7 @@ async function deliverDesktopMessage(params: {
   if (preserveEmptyTaskTitle) {
     try {
       await waitForDesktopFirstMessage(params.thread.id);
-      await setCodexTaskName(params.thread.id, params.thread.title, params.thread.cwd);
+      await setCodexTaskName(params.thread.id, params.thread.title, params.cwd);
     } catch (error) {
       return {
         ...delivery,
@@ -541,11 +542,8 @@ export async function renameCodexThread(params: {
   const thread = readCodexDesktopThread(params.threadId);
   if (!thread) throw new Error(`Codex Desktop task was not found: ${params.threadId}`);
   if (thread.archived) throw new Error(`Codex Desktop task is archived: ${params.threadId}`);
-  if (!sameCodexWorkspace(thread.cwd, params.cwd)) {
-    throw new Error(`Codex Desktop task belongs to another workspace: ${thread.cwd} != ${params.cwd}`);
-  }
   const title = normalizeCodexThreadTitle(params.title);
-  await setCodexTaskName(thread.id, title, thread.cwd);
+  await setCodexTaskName(thread.id, title, params.cwd);
   return {
     id: thread.id,
     title,
@@ -626,10 +624,13 @@ export async function sendCodexThreadMessage(params: {
   reasoningEffort?: CodexDesktopReasoningEffort;
   imagePaths?: string[];
 }): Promise<CodexDesktopDelivery & { warning?: string }> {
-  const thread = await waitForCodexDesktopThreadForTest({ threadId: params.threadId, cwd: params.cwd });
+  const thread = readCodexDesktopThread(params.threadId);
+  if (!thread) throw new Error(`Codex Desktop task was not found: ${params.threadId}`);
+  if (thread.archived) throw new Error(`Codex Desktop task is archived: ${params.threadId}`);
   return deliverDesktopMessage({
     thread,
     prompt: params.prompt,
+    cwd: params.cwd,
     sandbox: params.sandbox,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
@@ -713,9 +714,6 @@ async function resolveMonitorThread(createIfMissing: boolean): Promise<{
   if (resolution.kind === "ambiguous") {
     throw new Error(`Codex Desktop task name is ambiguous; select the exact task in RibiWebGUI: ${config.codexThreadName}`);
   }
-  if (resolution.kind === "workspace-mismatch") {
-    throw new Error(`Codex Desktop task belongs to another workspace. Task: ${resolution.thread.cwd}; configured: ${config.codexCwd}`);
-  }
   if (resolution.kind === "archived") {
     throw new Error(`Codex Desktop task is archived; restore it or select another task in RibiWebGUI: ${config.codexThreadName}`);
   }
@@ -789,6 +787,7 @@ async function deliverNotification(message: string, deliveryId: string, imagePat
     deliver: ({ thread, prompt }) => deliverDesktopMessage({
       thread,
       prompt,
+      cwd: config.codexCwd,
       deliveryId,
       sandbox: "workspace-write",
       imagePaths,
@@ -835,6 +834,7 @@ export async function notifyCodexWhenIdle(message: string): Promise<CodexIdleNot
       await deliverDesktopMessage({
         thread: resolved.thread,
         prompt: message,
+        cwd: config.codexCwd,
         deliveryId,
         sandbox: "workspace-write",
         ...resolvePrimaryCodexTurnOptions(config)

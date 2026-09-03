@@ -125,12 +125,11 @@ export function planHasTargetPackageInclusionEvidence(plan: PlanItem): boolean {
 }
 
 export function planIsWaitingForQaAcceptance(plan: PlanItem): boolean {
-  if (plan.status !== "进行中" || !planIsStructuredQaPhase(plan)) return false;
-  return !planHasPackageLifecycle(plan) || planHasTargetPackageInclusionEvidence(plan);
+  return plan.status === "等待 QA";
 }
 
-export function planIsWaitingForPackage(plan: PlanItem): boolean {
-  if (plan.status !== "进行中") return false;
+function legacyPlanIsWaitingForPackage(plan: PlanItem): boolean {
+  if (String(plan.status) !== "进行中") return false;
   const step = currentPlanStep(plan);
   if (!step || step.status !== "进行中") return false;
   if (planIsStructuredQaPhase(plan) && planHasPackageLifecycle(plan)) {
@@ -152,6 +151,10 @@ export function planIsWaitingForPackage(plan: PlanItem): boolean {
   return waiting.some((value) => PACKAGE_WAIT.test(value));
 }
 
+export function planIsWaitingForPackage(plan: PlanItem): boolean {
+  return plan.status === "等待打包";
+}
+
 export type PackageGateMigration = {
   action: "waiting_package" | "resume_running";
   plan: PlanItem;
@@ -161,7 +164,7 @@ export function migrateLegacyPackageGatePlan(
   plan: PlanItem,
   updatedAt = new Date().toISOString()
 ): PackageGateMigration | null {
-  if (plan.status !== "进行中") return null;
+  if (String(plan.status) !== "进行中") return null;
   const step = currentPlanStep(plan);
   if (!step) return null;
   const gateText = [text(plan.blockedBy), text(step.blockedBy)].filter(Boolean).join("\n");
@@ -175,7 +178,7 @@ export function migrateLegacyPackageGatePlan(
     steps: plan.steps.map((item) => item.id === step.id ? nextStep : item),
     updatedAt
   };
-  const waitingPackage = planIsWaitingForPackage(migrated);
+  const waitingPackage = legacyPlanIsWaitingForPackage(migrated);
   if (!waitingPackage) {
     nextStep = {
       ...nextStep,
@@ -190,6 +193,11 @@ export function migrateLegacyPackageGatePlan(
   }
   return {
     action: waitingPackage ? "waiting_package" : "resume_running",
-    plan: migrated
+    plan: {
+      ...migrated,
+      status: waitingPackage
+        ? "等待打包"
+        : (step as PlanStep & { workPhase?: string }).workPhase === "execution" ? "执行中" : "分析中"
+    }
   };
 }

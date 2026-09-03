@@ -25,7 +25,7 @@ function fixture(fileCount = 3): { root: string; rolesRoot: string; roleRoot: st
 function writeCanonicalActivePlan(roleRoot: string, planId: string): string[] {
   const directory = path.join(roleRoot, "plans", "active", planId);
   const recordedAt = "2026-08-31T00:00:00.000Z";
-  const plan = { id: planId, title: planId, focus: planId, status: "进行中", updatedAt: recordedAt };
+  const plan = { id: planId, title: planId, focus: planId, status: "执行中", updatedAt: recordedAt };
   const history = {
     id: `history-${planId}`,
     planId,

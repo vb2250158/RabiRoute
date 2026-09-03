@@ -25,13 +25,13 @@ test("plan history endpoint keeps completed-plan revisions readable", async (t) 
     id: "history-endpoint",
     title: "保留历史",
     focus: "读取计划历史",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "review",
     steps: [{ id: "review", title: "复核", status: "进行中" }],
     keywords: ["历史"]
   });
   updatePlan(roleDir, plan.id, {
-    status: "已完成",
+    status: "完成",
     currentStepId: "",
     steps: [{ id: "review", title: "复核", status: "已完成" }]
   });
@@ -49,5 +49,5 @@ test("plan history endpoint keeps completed-plan revisions readable", async (t) 
   assert.equal(payload.code, 0);
   assert.equal(payload.data?.count, 2);
   assert.deepEqual(payload.data?.records.map((record) => record.kind), ["created", "updated"]);
-  assert.equal(payload.data?.records[1]?.after.status, "已完成");
+  assert.equal(payload.data?.records[1]?.after.status, "完成");
 });

@@ -18,11 +18,11 @@ Not every handler has projects, persistent sessions, tools, streaming, or cancel
 
 Every adapter must satisfy these rules before advanced features matter:
 
-1. Reuse the bound session when the immutable ID exists in the configured workspace and its owner record is not archived. The owner title or SQLite `title` is mutable display metadata and must not participate in identity. If the saved ID is archived, do not reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist its ID, and deliver there. If Desktop wake-and-retry has completed and the exact ID can no longer be read from local state, create a replacement scoped to the old ID, deliver there, and return a warning.
+1. For Codex, reuse the bound task when its immutable ID exists and the owner record is not archived, then deliver with the currently configured workspace. The task's saved default cwd, owner title, and SQLite `title` must not participate in identity. Other adapters with fixed workspace ownership still enforce their own contract. If the saved ID is archived, do not reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist its ID, and deliver there. If Desktop wake-and-retry has completed and the exact ID can no longer be read from local state, create a replacement scoped to the old ID, deliver there, and return a warning.
 2. Only when the ID is empty, invalid, or actually missing, search by the Manager-saved name plus normalized workspace. Rebind the unique most recently updated match when one or more candidates exist, create once only when there is no match, and ask the user only when the maximum update time is tied or unusable.
 3. Deliver to the real owner that provides the user-visible task and tool context. Sharing a database, title, or session ID with a second Runtime is not unified ownership.
 4. Saving settings completes the binding transaction and persists visible name, full session ID, and workspace together.
-5. A Desktop/owner rename or stale title metadata must not change the target: the full ID plus workspace remains authoritative. When the user explicitly types a new name in Rabi, the UI clears the old ID before the same lookup/create flow persists a new binding.
+5. A Desktop/owner rename, saved-cwd drift, or stale title metadata must not change a Codex target: the full ID remains authoritative and the current workspace controls only that delivery. When the user explicitly types a new name in Rabi, the UI clears the old ID before the same lookup/create flow persists a new binding.
 6. Scan once when the settings surface opens, then only on explicit refresh. Input, blur, save, health polling, and timers must not create an uncontrolled scan loop.
 
 If a handler cannot reach the product's real owner through an official or verified bridge, mark it `experimental` and say that user-visible session delivery is not guaranteed.
@@ -109,7 +109,7 @@ The adapter has real owner-level delivery, configuration/diagnostics, automated 
 
 ### Session discovery and display
 
-- Use full IDs internally, but validate them together with the saved visible name and workspace.
+- Use full IDs internally. For Codex, validate the exact ID and archived state; treat the saved name and default cwd as metadata, and the current workspace as the delivery context.
 - Show a human-readable name and last activity in the UI.
 - Support complete listing or reliable pagination.
 - For same-name sessions in one workspace, sort by parseable `updatedAt` and bind the unique maximum; do not depend on database return order. Preserve ambiguity only when the maximum time is tied or all candidate times are unusable.
@@ -193,7 +193,7 @@ Unsupported fields should be false or absent—not simulated.
 - `scan`: explicit discovery with maturity, requirements, warnings, and endpoints.
 - `list`: paginated session/project listing.
 - `read`: read exact immutable ID.
-- `resolve`: validate full ID plus workspace first without comparing mutable title metadata; only then fall back to name plus workspace and optional idempotent creation.
+- `resolve`: for Codex, validate the full ID and archived state first without comparing saved cwd or mutable title metadata; only then fall back to name plus workspace and optional idempotent creation.
 - `create`: controlled creation with a returned immutable ID.
 - `send`: deliver through the real owner.
 - `status`: owner/binding/turn/result state, not just process existence.
@@ -214,7 +214,7 @@ Mutating APIs must be explicit. Health scans remain read-only.
 At minimum, cover:
 
 - installation/authentication states;
-- valid ID/workspace binding reuse despite title mutation, archived-binding replacement and persistence, and workspace mismatch;
+- valid Codex ID reuse across saved-cwd or title changes, archived-binding replacement and persistence, plus fixed-workspace mismatch behavior for adapters that own workspaces;
 - unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation;
 - delayed indexing and concurrent single-flight creation;
 - Desktop-side rename continuity and explicit Rabi-side target switching;

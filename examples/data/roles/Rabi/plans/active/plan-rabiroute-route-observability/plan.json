@@ -1,7 +1,8 @@
 {
   "id": "plan-rabiroute-route-observability",
   "title": "补齐路由决策和投递包可观测记录",
-  "status": "进行中",
+  "status": "分析中",
+  "archiveStatus": "未归档",
   "priority": "medium",
   "kind": "observability",
   "currentStep": "RouteDecision、AgentPacket 和 Manager operational logs 已从 forwarding 主链路拆出，项目功能手册和 WebGUI 文档页已补充真源、消费点和副作用索引；消息处理看板显示 stage、worker、handoff、decision、Outbox 回执、失败和逾期，request ID 与脱敏 operation JSONL 可关联，计划 Agent 状态和业务任务状态分开展示。Codex 投递仍收敛到 Desktop IPC 单一执行路径，目标任务由 Desktop owner 执行并展示真实消息。",

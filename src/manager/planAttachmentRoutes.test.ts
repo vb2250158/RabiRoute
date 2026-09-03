@@ -47,6 +47,7 @@ test("plan attachment route serves a managed image inline", async () => {
     id: "plan-preview",
     title: "图片预览",
     focus: "图片预览",
+    status: "暂停",
     steps: [{ id: "view", title: "查看图片", status: "未开始" }],
     keywords: ["图片"],
     attachments: [{ name: "preview.png", mimeType: "image/png", contentBase64: content.toString("base64") }]
@@ -75,6 +76,7 @@ test("plan attachment route serves managed video inline with byte ranges", async
     id: "plan-video-preview",
     title: "视频预览",
     focus: "视频预览",
+    status: "暂停",
     steps: [{ id: "view", title: "查看视频", status: "未开始" }],
     keywords: ["视频"],
     attachments: [{ name: "demo.mp4", mimeType: "video/mp4", contentBase64: content.toString("base64") }]
@@ -107,6 +109,7 @@ test("plan attachment route resolves copied plan data after the runtime root mov
     id: "plan-relocated-preview",
     title: "迁移后的图片预览",
     focus: "迁移后的图片预览",
+    status: "暂停",
     steps: [{ id: "view", title: "查看图片", status: "未开始" }],
     keywords: ["图片"],
     attachments: [{ name: "preview.png", mimeType: "image/png", contentBase64: content.toString("base64") }]
@@ -141,6 +144,7 @@ test("plan attachment route returns 404 for missing or unmanaged paths", async (
     id: "plan-guard",
     title: "附件路径门禁",
     focus: "附件路径门禁",
+    status: "暂停",
     steps: [{ id: "guard", title: "检查路径", status: "未开始" }],
     keywords: ["附件"],
     attachments: [{ path: sourceFile }]

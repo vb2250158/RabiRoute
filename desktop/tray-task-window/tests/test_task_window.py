@@ -98,7 +98,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         )
         current_plan = PlanItem(
             title="优化托盘角色面板布局",
-            status="进行中",
+            status="待审批",
             priority="高",
             current_step="核对视图",
             next_action="完成实装",
@@ -231,7 +231,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.window.set_view("current")
         self.app.processEvents()
         titles = [label.text() for label in self.window.findChildren(QLabel, "sectionTitle")]
-        self.assertEqual(titles, ["进行中计划", "近期记忆"])
+        self.assertEqual(titles, ["当前计划", "近期记忆"])
 
     def test_status_view_uses_read_only_status_table(self) -> None:
         self.window.set_view("status")
@@ -339,14 +339,14 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertIn("color: #b42318", status_stylesheet)
 
     def test_plan_status_without_manager_presentation_stays_unknown(self) -> None:
-        plan = PlanItem(title="缺少Manager表现", status="进行中")
+        plan = PlanItem(title="缺少Manager表现", status="")
 
         self.assertEqual(_plan_status_presentation(plan, plan.status), ("状态未知", "unknown"))
 
     def test_waiting_package_card_uses_manager_status_and_green_palette(self) -> None:
         plan = PlanItem(
             title="等待目标包",
-            status="进行中",
+            status="等待打包",
             display_status="等待打包",
             display_tone="waiting_package",
             display_accent="#16a34a",
@@ -366,7 +366,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
     def test_external_wait_card_uses_manager_status_without_local_classification(self) -> None:
         plan = PlanItem(
             title="内部等待条件",
-            status="进行中",
+            status="暂停",
             display_status="暂停",
             display_tone="paused",
             display_accent="#ef6c52",
@@ -424,7 +424,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
     def test_collapsed_plan_adds_current_step_as_third_summary_row(self) -> None:
         plan = PlanItem(
             title="折叠计划摘要测试",
-            status="进行中",
+            status="待审批",
             current_step_id="implementation",
             steps=[
                 PlanStep("需求确认", "已完成", step_id="requirements"),
@@ -465,7 +465,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         ]
         plan = PlanItem(
             title="计划展开结构测试",
-            status="进行中",
+            status="等待 QA",
             current_step="信息架构",
             current_step_id="step-3",
             next_action="完成页面实现",
@@ -500,7 +500,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         blocker = "私人订阅尚未导入，VPN 未恢复。"
         plan = PlanItem(
             title="阻塞计划测试",
-            status="进行中",
+            status="待审批",
             display_status="待审批",
             display_tone="blocked",
             current_step_id="restore-vpn",
@@ -538,8 +538,8 @@ class TaskWindowLayoutTest(unittest.TestCase):
     def test_running_plan_does_not_treat_waiting_text_as_a_blocker(self) -> None:
         plan = PlanItem(
             title="等待负责人回复",
-            status="进行中",
-            display_status="进行中",
+            status="执行中",
+            display_status="执行中",
             display_tone="running",
             current_step_id="ask-owner",
             blocked_by="负责人尚未确认",
@@ -567,7 +567,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
     def test_waiting_qa_plan_uses_manager_status_badge(self) -> None:
         plan = PlanItem(
             title="等待 QA 的计划",
-            status="进行中",
+            status="等待 QA",
             display_status="等待 QA",
             display_tone="qa",
             current_step="修复已完成，等待 QA 真机结果",

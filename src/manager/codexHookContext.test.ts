@@ -44,7 +44,7 @@ function fixture(options: {
     id: "plan-hook",
     title: "统一 Codex Hook 上下文",
     focus: "统一 Codex Hook 上下文",
-    status: "进行中",
+    status: "执行中",
     currentStep: "复用 RabiRoute 管理机制",
     nextAction: "验证 Manager API",
     steps: [],
@@ -422,7 +422,7 @@ test("completed plans suppress completion reminders while retaining business bin
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const planPath = planJsonFile(roleDir, "plan-hook", "active");
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-  fs.writeFileSync(planPath, JSON.stringify({ ...plan, status: "已完成" }, null, 2), "utf8");
+  fs.writeFileSync(planPath, JSON.stringify({ ...plan, status: "完成" }, null, 2), "utf8");
   publishFixtureRoleKnowledge(roleDir);
 
   const result = await service.handleHook({

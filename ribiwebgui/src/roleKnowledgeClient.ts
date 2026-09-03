@@ -18,7 +18,6 @@ export type RolePlanPageCounts = {
     qa: number;
     waitingPackage: number;
     approval: number;
-    manualVerification: number;
     paused: number;
     completed: number;
     archived: number;
@@ -122,7 +121,7 @@ export type RolePlanPageFilter = {
 
 type RolePlanSummary = Pick<
   RolePlan,
-  "id" | "title" | "status" | "importance" | "urgency" | "priority" | "kind" | "currentStep" | "currentStepId" | "currentStepPreview" | "currentStepPosition" | "dueAt" | "project" | "secretaryBinding" | "taskBinding" | "createdAt" | "updatedAt" | "keywords" | "presentation" | "detailLevel"
+  "id" | "title" | "status" | "archiveStatus" | "importance" | "urgency" | "priority" | "kind" | "currentStep" | "currentStepId" | "currentStepPreview" | "currentStepPosition" | "dueAt" | "project" | "secretaryBinding" | "taskBinding" | "createdAt" | "updatedAt" | "keywords" | "presentation" | "detailLevel"
 > & {
   attachmentCount: number;
   stepCount: number;
@@ -268,6 +267,7 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
       ...normalizedCounts,
       presentation: {
         ...plan.presentation,
+        status: plan.status,
         statusLevel: Number.isFinite(plan.presentation.statusLevel)
           ? plan.presentation.statusLevel
           : plan.presentation.sortBucket,
@@ -295,7 +295,7 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
     ...plan,
     ...normalizedCounts,
     presentation: {
-      status: "状态未知",
+      status: plan.status,
       tone: "unknown",
       sortBucket: -1,
       views: [],

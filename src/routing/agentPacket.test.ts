@@ -698,7 +698,7 @@ test("AgentPacket tells the Agent to inquire on every inspection while a plan is
     id: planId,
     title: "等待负责人答复",
     focus: "取得明确业务口径",
-    status: "进行中",
+    status: "待讨论",
     currentStepId: "ask-owner",
     waitingFor: "负责人回复",
     isBlocked: true,
@@ -764,7 +764,7 @@ test("AgentPacket keeps incomplete approval preparation actionable instead of bl
     id: planId,
     title: "准备审批合同",
     focus: "补齐真实执行边界后再请求审批",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "approve",
     isBlocked: true,
     blockedBy: "缺少正式资源与执行范围",
@@ -825,7 +825,7 @@ test("AgentPacket keeps incomplete approval preparation actionable instead of bl
     dataDir: roleDir
   });
 
-  assert.match(packet.message, /审批合同尚未完整，计划保持进行中/);
+  assert.match(packet.message, /审批合同尚未完整，计划保持分析中/);
   assert.match(packet.message, /不能把资料缺失标成阻塞/);
   assert.match(packet.message, /待确认说明：缺少正式资源与执行范围/);
   assert.doesNotMatch(packet.message, /阻塞原因：缺少正式资源与执行范围/);

@@ -131,14 +131,14 @@ test("Agent task list exposes every page instead of hiding tasks after a fixed c
   assert.equal(result.data.nextOffset, 200);
 });
 
-test("Agent task resolver binds an existing Desktop task by saved id and workspace", async () => {
+test("Agent task resolver binds an existing Desktop task by exact id independently of its saved cwd", async () => {
   const calls: string[] = [];
   const driver: AgentThreadDriver = {
     list: async () => { calls.push("list"); return []; },
     read: async (threadId) => ({
       id: threadId,
       title: "[RabiRoute 事件] Desktop 自动写入的首条消息",
-      cwd: process.cwd(),
+      cwd: path.dirname(process.cwd()),
       updatedAt: "2026-07-15T00:00:00Z"
     }),
     create: async () => { calls.push("create"); throw new Error("not used"); },
@@ -155,6 +155,34 @@ test("Agent task resolver binds an existing Desktop task by saved id and workspa
   assert.equal(result.statusCode, 200);
   assert.equal(result.data.resolution, "id");
   assert.deepEqual(calls, []);
+});
+
+test("Agent task continuation keeps the requested workspace for an exact existing task", async () => {
+  const threadId = "019f0000-0000-7000-8000-000000000011";
+  const sent: Array<{ threadId: string; cwd: string }> = [];
+  const driver: AgentThreadDriver = {
+    list: async () => { throw new Error("must not list"); },
+    read: async () => ({
+      id: threadId,
+      title: "Existing task",
+      cwd: path.dirname(process.cwd()),
+      updatedAt: "2026-07-15T00:00:00Z"
+    }),
+    create: async () => { throw new Error("must not create"); },
+    send: async (params) => { sent.push({ threadId: params.threadId, cwd: params.cwd }); }
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    threadId,
+    title: "Existing task",
+    prompt: "Continue in the configured workspace",
+    cwd: process.cwd(),
+    messageSource: defaultSystemMessageSource
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 202);
+  assert.deepEqual(sent, [{ threadId, cwd: path.resolve(process.cwd()) }]);
 });
 
 test("Agent task resolver keeps a valid saved id even when the display title exceeds the create limit", async () => {
@@ -2014,7 +2042,7 @@ test("DSH Agent-to-Agent delivery verifies the DSH source and does not relabel i
   assert.doesNotMatch(String(calls[0]?.prompt), /Agent 端：codex/);
 });
 
-test("Agent thread open verifies the exact Codex task before locating it", async () => {
+test("Agent thread open verifies the exact Codex task independently of its saved cwd", async () => {
   const threadId = "019f0000-0000-7000-8000-000000000041";
   const opened: string[] = [];
   let archived = false;
@@ -2022,7 +2050,7 @@ test("Agent thread open verifies the exact Codex task before locating it", async
     read: async () => ({
       id: threadId,
       title: "主人格任务",
-      cwd: process.cwd(),
+      cwd: path.dirname(process.cwd()),
       updatedAt: "2026-08-20T00:00:00.000Z",
       archived
     }),

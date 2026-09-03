@@ -1323,7 +1323,7 @@ def _tooltip(manager_snapshot, plan_snapshot) -> str:
     active_count = len(plan_snapshot.active)
     manager_text = "已连接" if manager_snapshot.connected else "离线"
     warning = "\nGateway 状态：刷新失败，显示上次结果" if manager_snapshot.error and manager_snapshot.gateways else ""
-    return f"RabiRoute / {plan_snapshot.role_id}\nManager：{manager_text}\n进行中计划：{current_count}\n未归档计划：{active_count}{warning}"
+    return f"RabiRoute / {plan_snapshot.role_id}\nManager：{manager_text}\n当前计划：{current_count}\n未归档计划：{active_count}{warning}"
 
 
 def _status_text(manager_snapshot) -> str:

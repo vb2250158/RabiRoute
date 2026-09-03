@@ -35,7 +35,8 @@ class _ApiManager:
             {
                 "id": "plan-1",
                 "title": "API plan",
-                "status": "进行中",
+                "status": "待审批",
+                "archiveStatus": "未归档",
                 "presentation": {
                     "status": "待审批",
                     "tone": "blocked",
@@ -52,9 +53,10 @@ class _ApiManager:
             {
                 "id": "plan-2",
                 "title": "API QA plan",
-                "status": "进行中",
+                "status": "等待 QA",
+                "archiveStatus": "未归档",
                 "presentation": {
-                    "status": "等待 QA 验收",
+                    "status": "等待 QA",
                     "tone": "qa",
                     "views": ["current", "plans"],
                     "palette": {
@@ -103,10 +105,11 @@ class _ApiManager:
             {
                 "id": "plan-3",
                 "title": "API external wait plan",
-                "status": "进行中",
+                "status": "分析中",
+                "archiveStatus": "未归档",
                 "presentation": {
-                    "status": "待资料",
-                    "tone": "waiting_external",
+                    "status": "分析中",
+                    "tone": "analyzing",
                     "sortBucket": 3,
                     "views": ["current", "plans"],
                     "palette": {
@@ -128,7 +131,8 @@ class _ApiManager:
             {
                 "id": "plan-1784037085080",
                 "title": "API package plan",
-                "status": "进行中",
+                "status": "等待打包",
+                "archiveStatus": "未归档",
                 "presentation": {
                     "status": "等待打包",
                     "tone": "waiting_package",
@@ -153,7 +157,8 @@ class _ApiManager:
             {
                 "id": "plan-discussion",
                 "title": "API discussion plan",
-                "status": "暂停",
+                "status": "待讨论",
+                "archiveStatus": "未归档",
                 "currentStepId": "discuss",
                 "presentation": {
                     "status": "待讨论",
@@ -177,7 +182,6 @@ class _ApiManager:
                     "id": "discuss",
                     "title": "等待负责人讨论范围",
                     "status": "进行中",
-                    "discussionState": "pending",
                 }],
                 "keywords": [],
             },
@@ -225,13 +229,13 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertTrue(qa_plan and qa_plan.approval_enabled)
         self.assertEqual(qa_plan and qa_plan.approval_state, "ready")
         self.assertEqual(qa_plan and qa_plan.approval_step_id, "verify")
-        self.assertEqual(qa_plan and qa_plan.display_status, "等待 QA 验收")
+        self.assertEqual(qa_plan and qa_plan.display_status, "等待 QA")
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.request, "批准运行验收。")
         self.assertEqual(qa_plan and qa_plan.approval_contract and qa_plan.approval_contract.commands[0].command, "npm test")
         self.assertEqual(qa_plan and qa_plan.latest_approval_text, "补充回归范围")
         external_plan = result.plan_snapshot and result.plan_snapshot.active[2]
-        self.assertEqual(external_plan and external_plan.display_status, "待资料")
-        self.assertEqual(external_plan and external_plan.display_tone, "waiting_external")
+        self.assertEqual(external_plan and external_plan.display_status, "分析中")
+        self.assertEqual(external_plan and external_plan.display_tone, "analyzing")
         self.assertEqual(external_plan and external_plan.display_sort_bucket, 3)
         package_plan = result.plan_snapshot and result.plan_snapshot.active[3]
         self.assertEqual(package_plan and package_plan.display_status, "等待打包")
@@ -241,11 +245,10 @@ class DesktopRefreshServiceTest(unittest.TestCase):
         self.assertEqual(package_plan and package_plan.display_background, "#eff6ff")
         self.assertEqual(package_plan and package_plan.display_foreground, "#1d4ed8")
         discussion_plan = result.plan_snapshot and result.plan_snapshot.active[4]
-        self.assertEqual(discussion_plan and discussion_plan.status, "暂停")
+        self.assertEqual(discussion_plan and discussion_plan.status, "待讨论")
         self.assertEqual(discussion_plan and discussion_plan.display_status, "待讨论")
         self.assertEqual(discussion_plan and discussion_plan.display_tone, "discussion")
         self.assertEqual(discussion_plan and discussion_plan.display_sort_bucket, 1)
-        self.assertEqual(discussion_plan and discussion_plan.steps[0].discussion_state, "pending")
         self.assertEqual(result.context_snapshot and result.context_snapshot.recent_memory[0].title, "API memory")
         self.assertEqual(result.role_messages, [{"id": "message-1"}])
         self.assertEqual(result.context_snapshot and result.context_snapshot.avatar_data, b"avatar-bytes")

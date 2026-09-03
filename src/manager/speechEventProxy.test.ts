@@ -75,9 +75,18 @@ test("speech SSE proxy rejects a non-event upstream before streaming", async () 
   });
   const port = await listen(server);
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/events`);
-    assert.equal(response.status, 502);
-    assert.match(String((await response.json()).message), /did not return an SSE stream/);
+    const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      http.get(`http://127.0.0.1:${port}/events`, response => {
+        const chunks: Buffer[] = [];
+        response.on("data", chunk => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => resolve({
+          status: response.statusCode || 0,
+          body: Buffer.concat(chunks).toString("utf8")
+        }));
+      }).once("error", reject);
+    });
+    assert.equal(result.status, 502);
+    assert.match(String(JSON.parse(result.body).message), /did not return an SSE stream/);
   } finally {
     await close(server);
   }

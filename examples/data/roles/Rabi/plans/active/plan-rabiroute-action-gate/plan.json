@@ -1,7 +1,8 @@
 {
   "id": "plan-rabiroute-action-gate",
   "title": "把外发回复沉淀成通用 Action Gate",
-  "status": "进行中",
+  "status": "分析中",
+  "archiveStatus": "未归档",
   "priority": "high",
   "kind": "feature",
   "currentStep": "QQ、WeCom、RabiLink 回复已进入统一 Outbox；NapCat 本地群文件会校验 allowedFileRoots 后上传，并分别审计文件与说明文本结果。对正式项目任务的进展工作群通知只有在 Outbox 返回 sentMessageId 且平台引用回读成功时才允许通过；缺少映射或回执保持任务未完成。",

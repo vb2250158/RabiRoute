@@ -18,8 +18,7 @@ export type CodexSessionResolution<TThread extends CodexSessionThread> =
   | { kind: "id" | "name" | "created"; thread: TThread }
   | { kind: "missing" }
   | { kind: "ambiguous"; candidates: TThread[] }
-  | { kind: "archived"; thread: TThread }
-  | { kind: "workspace-mismatch"; thread: TThread };
+  | { kind: "archived"; thread: TThread };
 
 export type CodexSessionResolverDependencies<TThread extends CodexSessionThread> = {
   /** Stable owner used to share in-flight/recent creations across requests. */
@@ -113,14 +112,11 @@ export async function resolveCodexSession<TThread extends CodexSessionThread>(
   const threadId = params.threadId?.trim() || "";
   if (isCodexTaskId(threadId)) {
     const exact = await dependencies.read(threadId);
-    // The Desktop sidebar Name can change without changing task identity. The
-    // opaque id plus workspace is the stable identity; app-server and SQLite
-    // titles never participate in this exact-ID delivery decision.
+    // The Desktop sidebar Name and saved cwd can change independently of task
+    // identity. The opaque id alone identifies an exact existing task; cwd is
+    // the execution context requested for the next turn.
     // Explicit name edits clear threadId in the UI before this resolver runs.
     if (exact) {
-      if (exact.cwd && !sameCodexWorkspace(exact.cwd, params.cwd)) {
-        return { kind: "workspace-mismatch", thread: exact };
-      }
       if (!exact.archived) return { kind: "id", thread: exact };
       // An archived binding is terminal history. Delivery must create one
       // replacement even when another task happens to share its title; name
@@ -174,9 +170,6 @@ export async function resolveAndDeliverCodexSession<TThread extends CodexSession
 
   if (resolution.kind === "ambiguous") {
     throw new Error(`Codex Desktop task name is ambiguous: ${params.title}`);
-  }
-  if (resolution.kind === "workspace-mismatch") {
-    throw new Error(`Codex Desktop task belongs to another workspace: ${resolution.thread.cwd || "unknown"}`);
   }
   if (resolution.kind === "archived") {
     throw new Error(`Codex Desktop task is archived; restore or select it before delivery: ${params.title}`);

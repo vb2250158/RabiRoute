@@ -31,7 +31,7 @@ test("progress delivery IDs are stable and message has no internal identifiers",
   const message = pangHuProgressMessage({
     roleId: "XinghaiBuilder",
     roleDir: "C:\\Data\\CottonProject\\RabiRoute",
-    plan: { id: "p", title: "计划", focus: "计划", status: "进行中", attachments: [], steps: [], updatedAt: "", createdAt: "", keywords: [], nextAction: "继续验证" },
+    plan: { id: "p", title: "计划", focus: "计划", status: "执行中", archiveStatus: "未归档", attachments: [], steps: [], updatedAt: "", createdAt: "", keywords: [], nextAction: "继续验证" },
     issue: { groupId: "example-managed-group", sourceMessageId: "source", module: "调查", summary: "回执链" },
     sourceSessionId: "session",
     sourceTurnId: "turn",

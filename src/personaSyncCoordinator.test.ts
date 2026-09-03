@@ -60,7 +60,7 @@ function writeCoordinatorArchive(roleRoot: string, planId: string): { archive: s
     id: planId,
     title: "Coordinator archive",
     focus: "Keep archive canonical",
-    status: "已完成",
+    status: "完成",
     createdAt: "2026-08-01T00:00:00.000Z",
     completedAt: "2026-08-01T01:00:00.000Z",
     updatedAt: "2026-08-01T01:00:00.000Z",
@@ -69,7 +69,7 @@ function writeCoordinatorArchive(roleRoot: string, planId: string): { archive: s
   };
   const archived = {
     ...completed,
-    status: "已归档",
+    archiveStatus: "已归档",
     archivedAt: "2026-08-24T00:00:00.000Z",
     updatedAt: "2026-08-24T00:00:00.000Z"
   };
@@ -90,16 +90,16 @@ function writeCoordinatorArchive(roleRoot: string, planId: string): { archive: s
 function writeCoordinatorActive(
   roleRoot: string,
   planId: string,
-  options: { title?: string; status?: "进行中" | "已完成"; extraFiles?: Record<string, string | Buffer> } = {}
+  options: { title?: string; status?: "执行中" | "完成"; extraFiles?: Record<string, string | Buffer> } = {}
 ): { active: string; plan: Record<string, unknown> } {
   const active = planStorageDirectory(roleRoot, planId, "active");
   fs.mkdirSync(active, { recursive: true });
-  const completed = options.status === "已完成";
+  const completed = options.status === "完成";
   const plan = {
     id: planId,
     title: options.title || "Coordinator active",
     focus: "Keep the plan package atomic",
-    status: completed ? "已完成" : "进行中",
+    status: completed ? "完成" : "执行中",
     createdAt: "2026-08-01T00:00:00.000Z",
     ...(completed ? { completedAt: "2026-08-01T01:00:00.000Z" } : {}),
     updatedAt: completed ? "2026-08-01T01:00:00.000Z" : "2026-08-01T00:00:00.000Z",
@@ -127,12 +127,12 @@ function archiveCoordinatorActive(roleRoot: string, planId: string): string {
   const active = planStorageDirectory(roleRoot, planId, "active");
   const archive = planStorageDirectory(roleRoot, planId, "archive");
   const completed = JSON.parse(fs.readFileSync(path.join(active, "plan.json"), "utf8")) as Record<string, unknown>;
-  assert.equal(completed.status, "已完成");
+  assert.equal(completed.status, "完成");
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   fs.renameSync(active, archive);
   const archived = {
     ...completed,
-    status: "已归档",
+    archiveStatus: "已归档",
     archivedAt: "2026-08-24T00:00:00.000Z",
     updatedAt: "2026-08-24T00:00:00.000Z"
   };

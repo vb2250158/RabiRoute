@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveAndDeliverCodexSession } from "./codexSessionResolver.js";
 
-test("an existing Rabi binding delivers directly to its exact Desktop task without creating", async () => {
+test("an exact task id remains authoritative when a turn uses another configured workspace", async () => {
   const existing = {
     id: "019f0000-0000-7000-8000-000000000031",
     title: "Rabi",
@@ -14,7 +14,7 @@ test("an existing Rabi binding delivers directly to its exact Desktop task witho
   const result = await resolveAndDeliverCodexSession({
     threadId: existing.id,
     title: existing.title,
-    cwd: existing.cwd,
+    cwd: `${existing.cwd}-target`,
     prompt: "现有会话投递测试"
   }, {
     scope: {},

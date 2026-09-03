@@ -59,7 +59,7 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
     id: "plan-route-qa-verdict",
     title: "验证 QA 回传入口",
     focus: "QA 回传",
-    status: "进行中",
+    status: "等待 QA",
     currentStepId: "verify-route",
     steps: [{ id: "verify-route", title: "QA 验收", status: "进行中" }],
     taskBinding: {
@@ -100,7 +100,7 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
     source: "agent"
   });
   assert.equal(ignored.data.qaHandling, undefined);
-  assert.equal((await application.queries.planFeedback("Rabi", "plan-route-qa-verdict"))?.plan.status, "进行中");
+  assert.equal((await application.queries.planFeedback("Rabi", "plan-route-qa-verdict"))?.plan.status, "等待 QA");
   const passed = await postFeedback({
     feedbackId: "route-user-qa-pass",
     stepId: "verify-route",
@@ -117,7 +117,7 @@ test("the feedback route ignores Agent guidance summaries but consumes explicit 
   const completedProjection = await application.queries.planFeedback("Rabi", "plan-route-qa-verdict");
   const consumed = completedProjection?.records.find((item) => item.id === "route-user-qa-pass");
   assert.equal(consumed?.qaHandling?.outcome, "passed");
-  assert.equal(completedProjection?.plan.status, "已完成");
+  assert.equal(completedProjection?.plan.status, "完成");
 });
 
 test("the feedback route commits concurrent attachment retries as one durable record", async (t) => {
@@ -126,7 +126,7 @@ test("the feedback route commits concurrent attachment retries as one durable re
     id: "plan-route-feedback-transaction",
     title: "验证反馈原子事务",
     focus: "反馈原子事务",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "verify-transaction",
     steps: [{ id: "verify-transaction", title: "事务验收", status: "进行中" }],
     keywords: ["反馈", "事务"]
@@ -153,19 +153,19 @@ test("the feedback route commits concurrent attachment retries as one durable re
       contentBase64: Buffer.from("one durable attachment", "utf8").toString("base64")
     }]
   };
+  const expectedRevision = planRevision(roleDir, "plan-route-feedback-transaction");
   const post = async () => {
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "idempotency-key": "feedback-test:route-feedback-transaction",
-        "if-match": planRevision(roleDir, "plan-route-feedback-transaction")
+        "if-match": expectedRevision
       },
       body: JSON.stringify(body)
     });
     const result = await response.json() as Record<string, any>;
-    assert.equal(response.status, 202, JSON.stringify(result));
-    return result.data as Record<string, any>;
+    return { status: response.status, result };
   };
 
   const nonCanonical = await fetch(
@@ -184,9 +184,17 @@ test("the feedback route commits concurrent attachment retries as one durable re
   assert.equal(nonCanonical.status, 400);
   assert.match(String(nonCanonicalResult.message || ""), /trimmed and Unicode NFC-normalized/);
 
-  const [first, retry] = await Promise.all([post(), post()]);
-  assert.equal(first.id, body.feedbackId);
-  assert.equal(retry.id, body.feedbackId);
+  const concurrent = await Promise.all([post(), post()]);
+  for (const response of concurrent) {
+    if (response.status === 202) {
+      assert.equal(response.result.data.id, body.feedbackId);
+      continue;
+    }
+    assert.equal(response.status, 503, JSON.stringify(response.result));
+    assert.equal(response.result.state, "indeterminate", JSON.stringify(response.result));
+    assert.equal(response.result.retry, "same_idempotency_key_only", JSON.stringify(response.result));
+    assert.equal(response.result.idempotencyKey, "feedback-test:route-feedback-transaction");
+  }
   const records = (await application.queries.planFeedback("Rabi", "plan-route-feedback-transaction"))?.records ?? [];
   assert.equal(records.length, 1);
   assert.equal(records[0].attachments.length, 1);
@@ -202,7 +210,7 @@ test("the feedback route returns 202 after durable commit even when QA post-comm
     id: "plan-route-feedback-post-commit",
     title: "验证反馈提交边界",
     focus: "反馈持久化后再执行 QA 副作用",
-    status: "进行中",
+    status: "等待 QA",
     currentStepId: "verify-post-commit",
     steps: [{ id: "verify-post-commit", title: "QA 验收", status: "进行中" }],
     keywords: ["反馈", "QA"]

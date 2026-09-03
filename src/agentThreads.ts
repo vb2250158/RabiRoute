@@ -889,7 +889,7 @@ export async function handleAgentThreadRequest(
     if (thread.archived) {
       throw new Error(`Agent ${agentAdapter === "dsh" ? "session" : "task"} is archived: ${threadId}`);
     }
-    if (!thread.cwd || canonicalWorkspace(thread.cwd) !== canonicalWorkspace(cwd)) {
+    if (agentAdapter === "dsh" && (!thread.cwd || canonicalWorkspace(thread.cwd) !== canonicalWorkspace(cwd))) {
       throw new Error(`Agent ${agentAdapter === "dsh" ? "session" : "task"} belongs to another workspace: ${thread.cwd || "unknown"}`);
     }
     if (agentAdapter === "dsh") {
@@ -1010,17 +1010,6 @@ export async function handleAgentThreadRequest(
       };
     }
 
-    if (resolution.kind === "workspace-mismatch") {
-      return {
-        statusCode: 409,
-        data: {
-          action,
-          resolution: "workspace-mismatch",
-          message: `Codex Desktop task belongs to another workspace. Task: ${resolution.thread.cwd}; configured: ${requestedWorkspace}`,
-          thread: resolution.thread
-        }
-      };
-    }
     if (resolution.kind === "ambiguous") {
       return {
         statusCode: 409,
@@ -1221,19 +1210,6 @@ export async function handleAgentThreadRequest(
         }
       };
     }
-    if (resolution.kind === "workspace-mismatch") {
-      return {
-        statusCode: 409,
-        data: {
-          action,
-          resolution: "workspace-mismatch",
-          message: `Codex Desktop task belongs to another workspace. Task: ${resolution.thread.cwd}; configured: ${cwd}`,
-          thread: resolution.thread,
-          sandbox,
-          ...(messageSource ? { messageSource } : {})
-        }
-      };
-    }
     if (resolution.kind === "missing") {
       return {
         statusCode: 404,
@@ -1369,9 +1345,6 @@ export async function handleAgentThreadRequest(
       if (resolution.kind === "ambiguous") {
         throw new Error(`Codex Desktop task name is ambiguous: ${title}`);
       }
-      if (resolution.kind === "workspace-mismatch") {
-        throw new Error(`Codex Desktop task belongs to another workspace: ${resolution.thread.cwd || "unknown"}`);
-      }
       if (resolution.kind === "archived") {
         throw new Error(`Codex Desktop task is archived: ${title}`);
       }
@@ -1380,7 +1353,9 @@ export async function handleAgentThreadRequest(
       }
       targetResolution = resolution;
       threadId = resolution.thread.id;
-      cwd = resolveAgentThreadWorkspaceForTest(resolution.thread.cwd || cwd, options);
+      if (resolution.kind !== "id") {
+        cwd = resolveAgentThreadWorkspaceForTest(resolution.thread.cwd || cwd, options);
+      }
     }
     if (targetResolution?.kind === "created") {
       reconcileOpenAgentRequestPartiesForReplacement(

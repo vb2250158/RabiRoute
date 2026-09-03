@@ -13,7 +13,6 @@ class PlanStep:
     step_id: str = ""
     waiting_for: str = ""
     blocked_by: str = ""
-    discussion_state: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,7 +53,8 @@ class PlanApprovalContract:
 class PlanItem:
     title: str
     plan_id: str = ""
-    status: str = "未开始"
+    status: str = "暂停"
+    archive_status: str = "未归档"
     display_status: str = ""
     display_tone: str = ""
     display_sort_bucket: int = -1

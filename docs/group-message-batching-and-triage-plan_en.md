@@ -49,7 +49,7 @@ RabiRoute already provides:
 - `recentMessageLimits` for bounded context on ordinary endpoints.
 - QQ route kinds for ordinary group messages, explicit mentions, direct replies, and indirect replies.
 - Outbox delivery, receipt, and deduplication boundaries.
-- One Plan Agent binding per plan through `taskBinding.sessionId + workspace`.
+- One independent business-task binding per plan through `taskBinding.sessionId`, with `workspace` selecting each turn's execution directory.
 - Existing Primary Persona and Secretary Agents, which remain in place.
 - WebGUI separates endpoint behavior from Codex Message Agent eligibility. Codex Message Agents default to `gpt-5.6-luna` with `medium` reasoning without changing the model used by Primary Persona, Secretary, or Plan Agents. **Message Agent mode**, **Plan assistant tasks**, and **Hook management** are opt-in managed-task capabilities currently declared only by Codex; platforms with their own Agent orchestration do not inherit them.
 

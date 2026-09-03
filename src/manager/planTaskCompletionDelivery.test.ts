@@ -34,7 +34,8 @@ function plan(gatewayId?: string): PlanItem {
     id: "plan-hook",
     title: "计划任务完成提醒",
     focus: "计划任务完成提醒",
-    status: "进行中",
+    status: "执行中",
+    archiveStatus: "未归档",
     attachments: [],
     steps: [{ id: "run", title: "执行任务", status: "进行中" }],
     taskBinding: {

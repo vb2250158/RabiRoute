@@ -80,7 +80,7 @@ function currentPlanRevision(roleDir: string, planId: string | undefined): strin
   return storageInventoryRevisionToken(readPlanStoragePackage(
     roleDir,
     plan.id,
-    plan.status === "已归档" ? "archive" : "active"
+    plan.archiveStatus === "已归档" ? "archive" : "active"
   ).inventoryHash);
 }
 

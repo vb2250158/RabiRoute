@@ -33,7 +33,7 @@ The Codex path needs all three:
 
 1. Codex/ChatGPT Desktop is running.
 2. The Route stores the correct project workspace.
-3. The Route binds the exact task ID from that workspace.
+3. The Route binds the exact task ID and uses the project workspace for the next turn.
 
 RabiRoute does not execute real messages through a hidden CLI, shared port, or fallback Runtime. Desktop owns the visible task where the message appears.
 
@@ -57,9 +57,9 @@ Enter an absolute path when no candidate appears, then save. Do not publish priv
 
 ## Select an existing task
 
-Prefer an existing item from the selector. RabiRoute stores its complete task ID and adopts the task's actual workspace.
+Prefer an existing item from the selector. RabiRoute stores its complete task ID; you may still choose the next-turn workspace independently of the task's saved default cwd.
 
-While the ID and workspace remain valid, these changes do not create a task:
+While the ID remains valid and the requested workspace is allowed, these changes do not create a task:
 
 - a Desktop title change;
 - a temporarily stale local index title;
@@ -93,8 +93,8 @@ Check in order:
 1. Does `agent-packets.jsonl` contain the delivery? If not, inspect rules first.
 2. Does Log Diagnostics report Codex Desktop IPC?
 3. Is Desktop open and able to enter the task?
-4. Do the workspace and task match?
-5. Does the last error mention `no-client-found`, missing task, or workspace conflict?
+4. Is the requested workspace the project you intend to handle now?
+5. Does the last error mention `no-client-found` or a missing task?
 
 See [Operations, logs, and troubleshooting](operations-and-troubleshooting_en.md) for the full path.
 

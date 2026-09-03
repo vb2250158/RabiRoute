@@ -40,7 +40,7 @@ import {
 } from "./planStorageRepository.js";
 import {
   planAttachmentDirectory,
-  planBucketForStatus,
+  planBucketForArchiveStatus,
   planDirectory,
   planFeedbackAttachmentDirectory,
   planFeedbackFile as planStorageFeedbackFile,
@@ -53,12 +53,12 @@ const packageRoot = resolveRuntimeLayout(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 ).packageRoot;
 
-export type PlanStatus = "未开始" | "进行中" | "暂停" | "已完成" | "已归档";
-const PLAN_STATUSES = new Set<PlanStatus>(["未开始", "进行中", "暂停", "已完成", "已归档"]);
+export type PlanStatus = "分析中" | "待审批" | "执行中" | "等待打包" | "等待 QA" | "待讨论" | "暂停" | "完成" | "关闭";
+export type PlanArchiveStatus = "未归档" | "已归档";
+const PLAN_STATUSES = new Set<PlanStatus>(["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"]);
+const ACTIVE_PLAN_STATUSES = new Set<PlanStatus>(["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论"]);
+const CURRENT_PLAN_STATUSES = new Set<PlanStatus>(["分析中", "待审批", "执行中", "等待打包", "等待 QA"]);
 export type PlanStepStatus = "未开始" | "进行中" | "已完成";
-
-export type PlanWorkPhase = "analysis" | "execution";
-export type PlanDiscussionState = "pending";
 
 export type PlanApprovalFileAction = "create" | "modify" | "delete" | "move";
 
@@ -112,10 +112,6 @@ export type PlanStep = {
   id: string;
   title: string;
   status: PlanStepStatus;
-  /** Current work phase. Analysis precedes approval; execution follows approval or explicit direct authorization. */
-  workPhase?: PlanWorkPhase;
-  /** Marks the paused current step as awaiting a discussion decision without adding a writable lifecycle status. */
-  discussionState?: PlanDiscussionState;
   detail?: string;
   waitingFor?: string;
   /** Compatibility projection. Manager derives this from a complete pending approvalRequest. */
@@ -162,6 +158,7 @@ export type PlanItem = {
   title: string;
   focus: string;
   status: PlanStatus;
+  archiveStatus: PlanArchiveStatus;
   /** Integer sort value. 0 is highest; 4 means unset. */
   importance?: PlanImportanceLevel;
   /** Integer sort value. 0 is most urgent; 4 means unset. */
@@ -949,8 +946,6 @@ function planTextTotal(plan: PlanItem): number {
     ...plan.steps.flatMap((step) => [
       step.id,
       step.title,
-      step.workPhase,
-      step.discussionState,
       step.detail,
       step.waitingFor,
       step.blockedBy,
@@ -971,7 +966,7 @@ export function currentPlanStep(plan: PlanItem): PlanStep | undefined {
 }
 
 function planHasApprovalIntent(plan: PlanItem): boolean {
-  if (plan.status === "暂停" || plan.status === "已完成" || plan.status === "已归档") return false;
+  if (plan.status !== "分析中" && plan.status !== "待审批") return false;
   const step = currentPlanStep(plan);
   if (step?.approvalRequest) {
     const responseStatus = step.approvalRequest.responseStatus;
@@ -1045,22 +1040,7 @@ export function planRequiresApproval(plan: PlanItem): boolean {
 }
 
 export function planAcceptsGuidance(plan: PlanItem): boolean {
-  return plan.status === "进行中" && planApprovalGate(plan).state === "none";
-}
-
-export function planWorkPhase(plan: PlanItem): PlanWorkPhase {
-  const step = currentPlanStep(plan);
-  if (planApprovalGate(plan).state !== "none") return "analysis";
-  if (step?.workPhase) return step.workPhase;
-  const currentIndex = step ? plan.steps.findIndex((item) => item.id === step.id) : plan.steps.length - 1;
-  const reachedSteps = currentIndex >= 0 ? plan.steps.slice(0, currentIndex + 1) : plan.steps;
-  return reachedSteps.some((item) => item.approvalRequest?.responseStatus === "approved")
-    ? "execution"
-    : "analysis";
-}
-
-export function planIsAwaitingDiscussion(plan: PlanItem): boolean {
-  return plan.status === "暂停" && currentPlanStep(plan)?.discussionState === "pending";
+  return (plan.status === "分析中" || plan.status === "执行中") && planApprovalGate(plan).state === "none";
 }
 
 function validateApprovalRequest(contract: PlanApprovalRequest, limits: PlanWriteLimits): void {
@@ -1143,30 +1123,33 @@ function validatePlanSteps(plan: PlanItem, limits: PlanWriteLimits, requireSteps
   if (plan.currentStepId && !ids.has(plan.currentStepId)) {
     throw new Error(`Plan currentStepId does not match a step: ${plan.currentStepId}`);
   }
-  if (plan.steps.length > 0 && plan.status === "进行中") {
-    if (!plan.currentStepId) throw new Error("An in-progress plan must provide currentStepId.");
+  if (plan.steps.length > 0 && ACTIVE_PLAN_STATUSES.has(plan.status)) {
+    if (!plan.currentStepId) throw new Error("An active plan must provide currentStepId.");
     if (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId) {
       throw new Error("Plan currentStepId must identify the only step whose status is 进行中.");
     }
   }
-  if (plan.status === "暂停" && (!plan.currentStepId || currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
-    throw new Error("A paused plan must preserve currentStepId for its only in-progress resume step.");
+  if (plan.status === "暂停" && plan.currentStepId
+    && (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
+    throw new Error("A paused plan currentStepId must identify its only in-progress resume step.");
   }
-  const discussionSteps = plan.steps.filter((step) => step.discussionState === "pending");
-  if (discussionSteps.length > 0
-    && (plan.status !== "暂停" || discussionSteps.length !== 1 || discussionSteps[0]?.id !== plan.currentStepId)) {
-    throw new Error("discussionState=pending is only valid on the current resume step of a paused plan.");
+  if (!ACTIVE_PLAN_STATUSES.has(plan.status) && plan.status !== "暂停" && plan.currentStepId) {
+    throw new Error("Only an active or paused plan can provide currentStepId.");
   }
-  if (plan.status !== "进行中" && plan.status !== "暂停" && plan.currentStepId) {
-    throw new Error("Only an in-progress or paused plan can provide currentStepId.");
-  }
-  if (plan.status === "未开始" && currentSteps.length > 0) {
-    throw new Error("A not-started plan cannot contain an in-progress step.");
-  }
-  if (plan.steps.length > 0 && (plan.status === "已完成" || plan.status === "已归档")) {
+  if (plan.steps.length > 0 && plan.status === "完成") {
     if (plan.steps.some((step) => step.status !== "已完成")) {
       throw new Error("Every plan step must be completed before the plan can be completed or archived.");
     }
+  }
+  if (plan.archiveStatus === "已归档" && plan.status !== "完成" && plan.status !== "关闭") {
+    throw new Error("Only completed or closed plans can be archived.");
+  }
+  const approvalGate = planApprovalGate(plan);
+  if (plan.status === "待审批" && approvalGate.state !== "pending") {
+    throw new Error("A plan whose status is 待审批 must provide one complete pending approvalRequest on its current step.");
+  }
+  if (approvalGate.state === "pending" && plan.status !== "待审批") {
+    throw new Error("A complete pending approvalRequest requires plan status 待审批.");
   }
 }
 
@@ -1185,8 +1168,8 @@ function validatePlanWrite(
   if (plan.isBlocked === true && !plan.blockedBy?.trim()) {
     throw new Error("A blocked plan must provide blockedBy.");
   }
-  if (plan.isBlocked === true && plan.status !== "进行中") {
-    throw new Error("Only an in-progress plan can be blocked.");
+  if (plan.isBlocked === true && plan.status !== "待审批") {
+    throw new Error("Only a plan whose status is 待审批 can be blocked by a pending approval.");
   }
   assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
   assertTextLimit("Plan taskBinding.sessionId", plan.taskBinding?.sessionId, 240);
@@ -1310,8 +1293,6 @@ function normalizePlanSteps(value: unknown): PlanStep[] {
       id: String(raw.id || raw.stepId || `step-${index + 1}`).trim(),
       title,
       status,
-      workPhase: raw.workPhase === "analysis" || raw.workPhase === "execution" ? raw.workPhase : undefined,
-      discussionState: raw.discussionState === "pending" ? "pending" : undefined,
       detail: typeof raw.detail === "string" ? raw.detail : typeof raw.description === "string" ? raw.description : undefined,
       waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
       isBlocked: typeof raw.isBlocked === "boolean" ? raw.isBlocked : undefined,
@@ -1456,22 +1437,55 @@ function validatePlanStatusInput(value: unknown): void {
   if (value === undefined) return;
   const status = typeof value === "string" ? value.trim() : "";
   if (!PLAN_STATUSES.has(status as PlanStatus)) {
-    throw new Error(`Unsupported plan status: ${String(value)}. Use 未开始, 进行中, 暂停, 已完成, or 已归档; lifecycle presentation labels are derived.`);
+    throw new Error(`Unsupported plan status: ${String(value)}. Use 分析中, 待审批, 执行中, 等待打包, 等待 QA, 待讨论, 暂停, 完成, or 关闭.`);
   }
+}
+
+function normalizedPlanStatus(raw: Partial<PlanItem> & Record<string, unknown>): PlanStatus {
+  const value = typeof raw.status === "string" ? raw.status.trim() : "";
+  if (value === "暂停") {
+    const currentStepId = typeof raw.currentStepId === "string" ? raw.currentStepId : "";
+    const steps = Array.isArray(raw.steps) ? raw.steps.map(recordValue) : [];
+    const current = steps.find((step) => String(step.id || step.stepId || "") === currentStepId)
+      ?? steps.find((step) => step.status === "进行中" || step.current === true);
+    return current?.discussionState === "pending" ? "待讨论" : "暂停";
+  }
+  if (PLAN_STATUSES.has(value as PlanStatus)) return value as PlanStatus;
+  if (value === "已归档") return "关闭";
+  if (value === "已完成") return "完成";
+  if (value === "未开始") return "暂停";
+  if (value === "进行中") {
+    const currentStepId = typeof raw.currentStepId === "string" ? raw.currentStepId : "";
+    const steps = Array.isArray(raw.steps) ? raw.steps.map(recordValue) : [];
+    const current = steps.find((step) => String(step.id || step.stepId || "") === currentStepId)
+      ?? steps.find((step) => step.status === "进行中" || step.current === true);
+    const approvalRequest = normalizeApprovalRequest(current?.approvalRequest);
+    if (approvalRequest?.responseStatus === "pending" && approvalRequestMissingFields(approvalRequest).length === 0) {
+      return "待审批";
+    }
+    return current?.workPhase === "execution" ? "执行中" : "分析中";
+  }
+  return "暂停";
 }
 
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
   const title = String(raw.title || "").trim();
   if (!title) return null;
   const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt ? raw.updatedAt : nowIso();
-  const status: PlanStatus = raw.status === "未开始" || raw.status === "进行中" || raw.status === "暂停" || raw.status === "已完成" || raw.status === "已归档"
-    ? raw.status
-    : "未开始";
+  const status = normalizedPlanStatus(raw);
+  const archiveStatus: PlanArchiveStatus = raw.archiveStatus === "已归档"
+    ? "已归档"
+    : raw.archiveStatus === "未归档"
+      ? "未归档"
+      : (raw as Record<string, unknown>).status === "已归档" || (typeof raw.archivedAt === "string" && Boolean(raw.archivedAt.trim()))
+        ? "已归档"
+        : "未归档";
   return withDerivedPlanBlockingState({
     id: canonicalLogicalPlanId(raw.id || fallbackId || generatedId("plan", title)),
     title,
     focus: String(raw.focus || title).trim(),
     status,
+    archiveStatus,
     importance: typeof raw.importance === "number" && Number.isInteger(raw.importance) && raw.importance >= 0 && raw.importance <= 4
       ? raw.importance as PlanImportanceLevel
       : undefined,
@@ -1494,7 +1508,7 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     taskBinding: normalizePlanTaskBinding(raw.taskBinding),
     dueAt: typeof raw.dueAt === "string" ? raw.dueAt : undefined,
     completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
-    archivedAt: typeof raw.archivedAt === "string" ? raw.archivedAt : undefined,
+    archivedAt: archiveStatus === "已归档" && typeof raw.archivedAt === "string" ? raw.archivedAt : undefined,
     createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : updatedAt,
     updatedAt,
     storageRevision: typeof raw.storageRevision === "string" && raw.storageRevision
@@ -1611,7 +1625,7 @@ function skillsDir(roleDir: string): string {
 }
 
 function planFile(roleDir: string, plan: PlanItem): string {
-  return planJsonFile(roleDir, plan.id, planBucketForStatus(plan.status));
+  return planJsonFile(roleDir, plan.id, planBucketForArchiveStatus(plan.archiveStatus));
 }
 
 function planHistoryFiles(roleDir: string, planId: string): string[] {
@@ -1626,13 +1640,13 @@ function planLifecycleTransactionId(kind: "plan-create" | "plan-update" | "plan-
   return `${kind}-${digest.slice(0, 48)}`;
 }
 
-function planHistoryFile(roleDir: string, plan: Pick<PlanItem, "id" | "status">): string {
-  return planStorageHistoryFile(roleDir, plan.id, planBucketForStatus(plan.status));
+function planHistoryFile(roleDir: string, plan: Pick<PlanItem, "id" | "archiveStatus">): string {
+  return planStorageHistoryFile(roleDir, plan.id, planBucketForArchiveStatus(plan.archiveStatus));
 }
 
 function planHistoryKind(before: PlanItem | undefined, after: PlanItem): PlanHistoryRecord["kind"] {
   if (!before) return "created";
-  if (before.status !== "已归档" && after.status === "已归档") return "archived";
+  if (before.archiveStatus !== "已归档" && after.archiveStatus === "已归档") return "archived";
   return "updated";
 }
 
@@ -2984,7 +2998,7 @@ function applyPreparedPlanAttachments(
 export function normalizePlanForStartupMigration(
   raw: Record<string, unknown>,
   fallbackId: string
-): Pick<PlanItem, "id" | "status"> | null {
+): Pick<PlanItem, "id" | "status" | "archiveStatus"> | null {
   return normalizePlan(raw, fallbackId);
 }
 
@@ -3000,6 +3014,9 @@ export function createPlan(
 ): PlanItem {
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   validatePlanStatusInput(input.status);
+  if (input.archiveStatus !== undefined && input.archiveStatus !== "未归档" && input.archiveStatus !== "已归档") {
+    throw new Error("Unsupported plan archiveStatus. Use 未归档 or 已归档.");
+  }
   validatePlanSecretaryBindingInput(input.secretaryBinding);
   validatePlanTaskBindingInput(input.taskBinding);
   const id = typeof input.id === "string" && input.id.trim()
@@ -3016,6 +3033,7 @@ export function createPlan(
     const recordedAt = nowIso();
     const plan = normalizePlan({
       ...input,
+      status: input.status === undefined ? "分析中" : input.status as PlanStatus,
       attachments: [],
       id,
       createdAt: recordedAt,
@@ -3029,10 +3047,10 @@ export function createPlan(
     validatePlanWrite(roleDir, plan, true);
     const files = new Map<string, Buffer>();
     if (Object.prototype.hasOwnProperty.call(input, "attachments")) {
-      const prepared = preparePlanAttachments(roleDir, plan.id, input.attachments, [], planBucketForStatus(plan.status));
+      const prepared = preparePlanAttachments(roleDir, plan.id, input.attachments, [], planBucketForArchiveStatus(plan.archiveStatus));
       plan.attachments = applyPreparedPlanAttachments(
         files,
-        planDirectory(roleDir, plan.id, planBucketForStatus(plan.status)),
+        planDirectory(roleDir, plan.id, planBucketForArchiveStatus(plan.archiveStatus)),
         prepared
       );
     }
@@ -3043,7 +3061,7 @@ export function createPlan(
       transactionId: planLifecycleTransactionId("plan-create", plan.id, recordedAt),
       kind: "plan-create",
       fromBucket: null,
-      toBucket: planBucketForStatus(plan.status),
+      toBucket: planBucketForArchiveStatus(plan.archiveStatus),
       files: planStoragePackageFiles(files)
     });
     const destination = planFile(roleDir, plan);
@@ -3074,10 +3092,13 @@ export function updatePlan(
       throw new Error(`STORAGE_MUTATION_REVISION_CONFLICT: expected=${expectedRevision}; current=${currentRevision}.`);
     }
     const existing = record.plan;
-    if (existing.status === "已归档") {
+    if (existing.archiveStatus === "已归档") {
       throw new Error(`Archived plans are immutable terminal records: ${canonicalPlanId}`);
     }
     if (Object.prototype.hasOwnProperty.call(patch, "status")) validatePlanStatusInput(patch.status);
+    if (Object.prototype.hasOwnProperty.call(patch, "archiveStatus") && patch.archiveStatus !== "未归档" && patch.archiveStatus !== "已归档") {
+      throw new Error("Unsupported plan archiveStatus. Use 未归档 or 已归档.");
+    }
     if (Object.prototype.hasOwnProperty.call(patch, "secretaryBinding")) validatePlanSecretaryBindingInput(patch.secretaryBinding);
     if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
     const recordedAt = nowIso();
@@ -3095,11 +3116,11 @@ export function updatePlan(
     next.steps = recordPlanStepTimes(next.steps, existing.steps, recordedAt);
     requireKeywords(next.keywords, "Plan");
     validatePlanWrite(roleDir, next);
-    if (next.status === "已完成" && existing.status !== "已完成" && !next.completedAt) {
+    if (next.status === "完成" && existing.status !== "完成" && !next.completedAt) {
       next.completedAt = next.updatedAt;
     }
-    const currentBucket = planBucketForStatus(existing.status);
-    const destinationBucket = planBucketForStatus(next.status);
+    const currentBucket = planBucketForArchiveStatus(existing.archiveStatus);
+    const destinationBucket = planBucketForArchiveStatus(next.archiveStatus);
     if (sourcePackage.bucket !== currentBucket) {
       throw new Error(`Plan storage bucket changed while updating: ${canonicalPlanId}`);
     }
@@ -3134,9 +3155,10 @@ export function updatePlan(
         preparedAttachments
       );
     }
+    const storedBefore = JSON.parse(sourcePackage.files.find((file) => file.path === "plan.json")?.content.toString("utf8") || "{}") as PlanItem;
     const historyBefore = currentBucket === destinationBucket
-      ? existing
-      : rewritePlanStoragePaths(existing, [{
+      ? storedBefore
+      : rewritePlanStoragePaths(storedBefore, [{
         from: planDirectory(roleDir, next.id, currentBucket),
         to: planDirectory(roleDir, next.id, destinationBucket)
       }]) as PlanItem;
@@ -3230,10 +3252,10 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours = DEFAU
   const plans = publishedRolePlans(roleDir);
   if (!plans) return archived;
   for (const plan of plans) {
-    if (plan.status !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
+    if ((plan.status !== "完成" && plan.status !== "关闭") || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
     const next = {
       ...plan,
-      status: "已归档" as const,
+      archiveStatus: "已归档" as const,
       currentStepId: undefined,
       archivedAt: nowIso(),
       updatedAt: nowIso()
@@ -3247,10 +3269,10 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours = DEFAU
 function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: number): PlanItem[] {
   const archived: PlanItem[] = [];
   for (const plan of readPlansFromStorageInWorker(roleDir)) {
-    if (plan.status !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
+    if ((plan.status !== "完成" && plan.status !== "关闭") || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
     const next = {
       ...plan,
-      status: "已归档" as const,
+      archiveStatus: "已归档" as const,
       currentStepId: undefined,
       archivedAt: nowIso(),
       updatedAt: nowIso()
@@ -3764,7 +3786,7 @@ function buildRoleKnowledgeSnapshot(
   const memories = catalog.recentMemories;
   const consolidatedMemories = catalog.consolidatedMemories;
   const skills = catalog.skills;
-  const activePlans = plans.filter((item) => item.status === "进行中");
+  const activePlans = plans.filter((item) => item.archiveStatus !== "已归档" && CURRENT_PLAN_STATUSES.has(item.status));
   const activeSkills = skills.filter((item) => item.status === "active");
   const recentMemories = memories.filter((item) => !item.consolidatedAt && ageHours(memoryActivityAt(item)) <= DEFAULT_RECENT_EDITABLE_HOURS);
   const roleId = options.roleId || path.basename(roleDir);
@@ -3772,14 +3794,14 @@ function buildRoleKnowledgeSnapshot(
   const recentMemoryIds = new Set(recentMemories.map((item) => item.id));
   const scoredCandidates: ScoredKnowledgeCandidate[] = [
     ...plans
-      .filter((item) => item.status !== "已归档")
+      .filter((item) => item.archiveStatus !== "已归档")
       .map((item) => ({
         id: item.id,
         title: item.title,
         summary: item.focus,
         type: "plan" as const,
         endpoint: requiredReadEndpoint(roleId, "plan", item.id),
-        score: scoreKnowledgeMatch(messageText, item, item.status === "进行中" ? 5 : 0),
+        score: scoreKnowledgeMatch(messageText, item, CURRENT_PLAN_STATUSES.has(item.status) ? 5 : 0),
         activityAt: item.updatedAt,
         revisionAt: item.updatedAt
       })),

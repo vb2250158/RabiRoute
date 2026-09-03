@@ -83,7 +83,7 @@ RabiRoute 当前已验证的处理端是 Codex。WebUI 的 `Agent 端` 里需要
 
 - `Agent 配置`：选择 `Codex`。
 - `Agent 会话`：下拉显示“任务名 + 最后会话时间”，选择后内部保存完整任务 ID；直接输入不存在的名称会创建 Desktop 任务。
-- `Agent 工作目录`：选择或填写该 Desktop 任务所属项目。RabiRoute 用它筛选任务并在投递前校验，防止同名任务串线。
+- `Agent 工作目录`：选择或填写下一轮要处理的项目。没有有效任务 ID 时，RabiRoute 用它筛选同名任务；已有完整 ID 时，它直接作为本次投递目录，不要求等于任务保存的默认 cwd。
 
 投递时 Codex/ChatGPT Desktop 必须已经启动。RabiRoute 会让 Desktop 加载目标任务，再通过 Desktop IPC 交付消息；成功后消息会立即出现在桌面任务中，并沿用该任务自己的工具、模型和权限。
 

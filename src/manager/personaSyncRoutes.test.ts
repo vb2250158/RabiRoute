@@ -34,7 +34,7 @@ function activePackage(roleId: string, planId: string, title = "Route active pla
     id: planId,
     title,
     focus: "Exercise the active plan package route",
-    status: "进行中",
+    status: "执行中",
     createdAt: recordedAt,
     updatedAt: recordedAt,
     steps: [{ id: "route", title: "Route", status: "进行中" }],
@@ -61,14 +61,14 @@ function archivePackage(roleId: string, planId: string) {
     id: planId,
     title: "Route archived plan",
     focus: "Exercise the archive plan package route",
-    status: "已完成",
+    status: "完成",
     createdAt,
     completedAt,
     updatedAt: completedAt,
     steps: [{ id: "done", title: "Done", status: "已完成" }],
     keywords: ["route", "archive"]
   };
-  const archived = { ...completed, status: "已归档", archivedAt, updatedAt: archivedAt };
+  const archived = { ...completed, archiveStatus: "已归档", archivedAt, updatedAt: archivedAt };
   const history = [
     { id: `created-${planId}`, planId, kind: "created", recordedAt: completedAt, after: completed },
     { id: `archived-${planId}`, planId, kind: "archived", recordedAt: archivedAt, before: completed, after: archived }

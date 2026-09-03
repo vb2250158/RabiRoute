@@ -173,9 +173,9 @@ function statusFromSession(
 ): PlanAgentBindingStatus {
   const identity = bindingIdentity(role, binding, checkedAt);
   const threadTitle = session.title || identity.threadTitle;
-  const workspace = session.cwd || identity.workspace;
+  const workspace = identity.workspace || session.cwd;
   const label = agentLabel(binding.agentType);
-  if (!workspaceMatches(identity.workspace, session.cwd)) {
+  if (binding.agentType === "dsh" && !workspaceMatches(identity.workspace, session.cwd)) {
     return {
       ...identity,
       threadTitle,
@@ -309,7 +309,7 @@ export function createPlanAgentStatusService(
       const session = normalizeSession(value);
       const label = agentLabel(binding.agentType);
       if (!session) throw new Error(`${label} session status response is invalid.`);
-      if (!workspaceMatches(String(binding.workspace || "").trim(), session.cwd)) {
+      if (binding.agentType === "dsh" && !workspaceMatches(String(binding.workspace || "").trim(), session.cwd)) {
         throw new Error(`Bound workspace does not match the ${label} session: ${binding.workspace || ""} != ${session.cwd}`);
       }
       if (session.archived) throw new Error(`${label} session is archived; restore it before opening from the plan.`);
@@ -320,7 +320,7 @@ export function createPlanAgentStatusService(
         agentType: binding.agentType,
         threadId: session.id,
         threadTitle: session.title || String(binding.sessionTitle || "").trim(),
-        workspace: session.cwd || String(binding.workspace || "").trim(),
+        workspace: String(binding.workspace || "").trim() || session.cwd,
         opened: true
       };
     }

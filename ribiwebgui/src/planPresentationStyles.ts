@@ -74,7 +74,7 @@ export function formatPlanRelativeTime(value: string, now = Date.now(), locale: 
   return locale === "en" ? `${years} yr ago` : `${years}年前`;
 }
 
-type PlanDirectorySortSource = Pick<RolePlan, "updatedAt" | "presentation">;
+type PlanDirectorySortSource = Pick<RolePlan, "status" | "updatedAt" | "presentation">;
 
 const UPDATED_SORT_PALETTE: PlanPresentationPalette = {
   accent: "#0891b2",
@@ -95,7 +95,7 @@ export function formatPlanDirectorySortLabel(
   mode: PlanListSortMode,
   now = Date.now(),
   locale: "zh" | "en" = "zh",
-  statusLabel = plan.presentation.status
+  statusLabel: string = plan.status
 ): string {
   if (mode === "updated") return formatPlanRelativeTime(plan.updatedAt, now, locale);
   if (mode === "importance") return levelLabel(plan.presentation.importance, locale);
@@ -118,7 +118,7 @@ export function formatPlanDirectorySortLabelTitle(
   mode: PlanListSortMode,
   now = Date.now(),
   locale: "zh" | "en" = "zh",
-  statusLabel = plan.presentation.status
+  statusLabel: string = plan.status
 ): string {
   const label = formatPlanDirectorySortLabel(plan, mode, now, locale, statusLabel);
   if (mode === "updated") return locale === "en" ? `Last updated: ${label}` : `最后更新：${label}`;

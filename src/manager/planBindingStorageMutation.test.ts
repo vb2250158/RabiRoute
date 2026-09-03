@@ -18,7 +18,7 @@ function planWithBinding(binding: PlanTaskBinding): PlanItem {
     id: "plan-one",
     title: "Plan one",
     focus: "Exercise exact CAS",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "step-one",
     steps: [{ id: "step-one", title: "Step one", status: "进行中" }],
     keywords: ["cas"],

@@ -51,7 +51,7 @@
 - `recentMessageLimits` 控制普通消息端自动附带多少条最近消息。
 - QQ 已区分普通群消息、明确 @、直接回复和间接回复。
 - Outbox 负责外部发送、回执和防重复边界。
-- 每个计划通过 `taskBinding.sessionId + workspace` 绑定独立计划 Agent。
+- 每个计划用 `taskBinding.sessionId` 绑定一个独立业务任务，并用 `workspace` 指定每轮执行目录。
 - 现有秘书 Agent和主人格 Agent继续保留，不因新增消息处理 Agent而删除。
 - WebGUI 已把入口规则与 Codex 消息处理资格分开；Codex 消息处理 Agent 默认使用 `gpt-5.6-luna`、`medium`，不会改写主人格、秘书或计划 Agent 的模型。“消息处理 Agent 模式”“计划协助会话”和“Hook 管理”属于可声明的托管任务能力，当前只由 Codex 声明；自带 Agent 编排的平台不继承这些设置。
 

@@ -99,11 +99,13 @@ def _plan_item_from_manager(item: dict[str, Any]) -> PlanItem:
     approval_contract = _approval_contract_from_manager(approval_presentation.get("contract"))
     approval = item.get("approval") if isinstance(item.get("approval"), dict) else {}
     latest_approval = approval.get("latest") if isinstance(approval.get("latest"), dict) else {}
+    status = str(item.get("status") or "暂停")
     return PlanItem(
         plan_id=str(item.get("id") or ""),
         title=str(item.get("title") or item.get("id") or "Untitled plan"),
-        status=str(item.get("status") or "未开始"),
-        display_status=str(presentation.get("status") or ""),
+        status=status,
+        archive_status=str(item.get("archiveStatus") or "未归档"),
+        display_status=status,
         display_tone=str(presentation.get("tone") or ""),
         display_sort_bucket=int(presentation.get("sortBucket") if presentation.get("sortBucket") is not None else -1),
         display_views=_plan_views(presentation.get("views")),
@@ -197,7 +199,6 @@ def _plan_steps_from_manager(value: Any) -> list[PlanStep]:
             PlanStep(
                 title=title,
                 status=str(raw_step.get("status") or "未开始"),
-                discussion_state=str(raw_step.get("discussionState") or ""),
                 detail=str(raw_step.get("detail") or ""),
                 completed_at=str(raw_step.get("completedAt") or ""),
                 step_id=str(raw_step.get("id") or f"step-{index}"),
@@ -242,7 +243,9 @@ def _plan_in_view(plan: PlanItem, view: str) -> bool:
     if plan.display_views:
         return view in plan.display_views
     if view == "archived":
-        return plan.status == "已归档"
+        return plan.archive_status == "已归档"
     if view == "current":
-        return plan.status == "进行中"
-    return plan.status != "已归档"
+        return plan.archive_status == "未归档" and plan.status in {
+            "分析中", "待审批", "执行中", "等待打包", "等待 QA"
+        }
+    return plan.archive_status == "未归档"

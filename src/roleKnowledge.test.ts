@@ -30,7 +30,6 @@ import {
   planAcceptsGuidance,
   planApprovalGate,
   planIsBlocked,
-  planWorkPhase,
   presentRoleMemory,
   presentRoleMemories,
   publishRoleKnowledgeCatalogSnapshot,
@@ -130,7 +129,7 @@ test("plan list cache is invalidated by canonical create and update writes", () 
     id: "cache-plan",
     title: "Cache plan",
     focus: "Verify plan list cache invalidation",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "cache",
     steps: [{ id: "cache", title: "Verify cache invalidation", status: "进行中" }],
     keywords: ["cache"]
@@ -150,7 +149,7 @@ test("published role knowledge is cloned and deeply frozen before hot-path reads
     id: "immutable-publication",
     title: "Immutable publication",
     focus: "Protect the published catalog",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "serve",
     steps: [{ id: "serve", title: "Serve snapshot", status: "进行中" }],
     keywords: ["immutable"]
@@ -219,7 +218,7 @@ test("plan history keeps snapshots after updates and archive moves", () => {
     id: "history-plan",
     title: "保留审批留痕",
     focus: "验证计划版本记录",
-    status: "已完成",
+    status: "完成",
     steps: [{ id: "approve", title: "审批", status: "已完成", approvalRequest: {
       approver: "负责人",
       request: "批准计划留痕实现",
@@ -262,7 +261,8 @@ test("plan history keeps snapshots after updates and archive moves", () => {
   assert.deepEqual(history.map((item) => item.kind), ["created", "updated", "archived"]);
   assert.equal(history[0]?.after.steps[0]?.approvalRequest?.request, "批准计划留痕实现");
   assert.equal(history[1]?.before?.title, "保留审批留痕");
-  assert.equal(history[2]?.after.status, "已归档");
+  assert.equal(history[2]?.after.status, "完成");
+  assert.equal(history[2]?.after.archiveStatus, "已归档");
   assert.equal(history[2]?.after.currentStepId, undefined);
   assert.equal(archived[0]?.id, plan.id);
   assert.equal(listPlanFeedback(roleDir, plan.id)[0]?.text, "批准并保留完整记录。");
@@ -275,7 +275,7 @@ test("automatic archival clears a completed-plan current step from canonical sto
     id: planId,
     title: "Canonical completed plan",
     focus: "Archive a canonical completed record safely",
-    status: "已完成",
+    status: "完成",
     steps: [{ id: "done", title: "Done", status: "已完成" }],
     keywords: ["canonical"]
   });
@@ -286,9 +286,30 @@ test("automatic archival clears a completed-plan current step from canonical sto
   readPlansFromStorageInWorker(roleDir);
   const archived = archiveCompletedPlans(roleDir, -1);
 
-  assert.equal(archived[0]?.status, "已归档");
+  assert.equal(archived[0]?.status, "完成");
+  assert.equal(archived[0]?.archiveStatus, "已归档");
   assert.equal(archived[0]?.currentStepId, undefined);
   assert.equal(getPlan(roleDir, planId)?.currentStepId, undefined);
+});
+
+test("archived plans never participate in keyword recall but remain readable by explicit id", () => {
+  const roleDir = makeRoleDir();
+  const plan = createPlan(roleDir, {
+    id: "archived-keyword-plan",
+    title: "归档关键词计划",
+    focus: "验证归档计划不参与召回",
+    status: "完成",
+    steps: [{ id: "done", title: "完成验证", status: "已完成" }],
+    keywords: ["绝不召回词"]
+  });
+
+  readPlansFromStorageInWorker(roleDir);
+  archiveCompletedPlans(roleDir, -1);
+  const snapshot = roleKnowledgeSnapshotFromStorage(roleDir, "请查询绝不召回词");
+
+  assert.equal(snapshot.matchedItems.some((item) => item.id === plan.id), false);
+  assert.equal(snapshot.requiredReadItems.some((item) => item.id === plan.id), false);
+  assert.equal(getPlan(roleDir, plan.id)?.archiveStatus, "已归档");
 });
 
 
@@ -298,7 +319,7 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
     id: "legacy-layout-plan",
     title: "Legacy layout plan",
     focus: "Move one plan into one directory",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "move",
     steps: [{ id: "move", title: "Move plan", status: "进行中" }],
     keywords: ["legacy", "migration"],
@@ -372,7 +393,8 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
   });
 
   updatePlan(roleDir, plan.id, {
-    status: "已归档",
+    status: "关闭",
+    archiveStatus: "已归档",
     currentStepId: "",
     steps: [{ id: "move", title: "Move plan", status: "已完成" }]
   });
@@ -383,13 +405,13 @@ test("legacy plan artifacts migrate into one plan directory without reading atta
   assert.equal(listPlanHistory(roleDir, plan.id).at(-1)?.kind, "archived");
 });
 
-test("plan writes reject presentation-only lifecycle labels as top-level status", () => {
+test("plan writes accept only the configured plan status vocabulary", () => {
   const roleDir = makeRoleDir();
   assert.throws(() => createPlan(roleDir, {
     id: "invalid-lifecycle-status",
     title: "Invalid lifecycle status",
     focus: "Reject presentation-only lifecycle labels",
-    status: "等待打包",
+    status: "等待人工确认",
     currentStepId: "package",
     steps: [{ id: "package", title: "等待打包", status: "进行中" }],
     keywords: ["lifecycle"]
@@ -399,13 +421,13 @@ test("plan writes reject presentation-only lifecycle labels as top-level status"
     id: "valid-lifecycle-status",
     title: "Valid lifecycle status",
     focus: "Keep the stored lifecycle status supported",
-    status: "进行中",
+    status: "等待打包",
     currentStepId: "package",
     steps: [{ id: "package", title: "等待打包", status: "进行中" }],
     keywords: ["lifecycle"]
   });
   assert.throws(() => updatePlan(roleDir, created.id, { status: "等待 QA 验收" }), /Unsupported plan status/);
-  assert.equal(getPlan(roleDir, created.id)?.status, "进行中");
+  assert.equal(getPlan(roleDir, created.id)?.status, "等待打包");
 });
 
 test("cold plan catalogs load asynchronously and share one in-flight cache fill", async () => {
@@ -415,6 +437,7 @@ test("cold plan catalogs load asynchronously and share one in-flight cache fill"
       id: `async-plan-${String(index).padStart(3, "0")}`,
       title: `异步计划 ${index}`,
       focus: `验证异步目录 ${index}`,
+      status: "暂停",
       steps: [{ id: "load", title: "加载", status: "未开始" }],
       keywords: ["异步目录"]
     });
@@ -448,7 +471,7 @@ test("runtime plan reads and archive sweeps never migrate or consume legacy layo
     id: "runtime-canonical-only",
     title: "运行期只读 canonical 计划",
     focus: "禁止运行期迁移扫描",
-    status: "进行中",
+    status: "分析中",
     steps: [{ id: "observe", title: "观察健康状态", status: "进行中" }],
     currentStepId: "observe",
     keywords: ["canonical", "health"]
@@ -486,7 +509,7 @@ test("plan storage rejects sanitized identity collisions before overwriting anot
     id: "Plan A",
     title: "First logical plan",
     focus: "Keep the first plan intact",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "one",
     steps: [{ id: "one", title: "One", status: "进行中" }],
     keywords: ["collision"]
@@ -497,7 +520,7 @@ test("plan storage rejects sanitized identity collisions before overwriting anot
     id: "Plan-A",
     title: "Colliding logical plan",
     focus: "Must not overwrite the first plan",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "two",
     steps: [{ id: "two", title: "Two", status: "进行中" }],
     keywords: ["collision"]
@@ -506,7 +529,7 @@ test("plan storage rejects sanitized identity collisions before overwriting anot
     id: " Plan A ",
     title: "Padded logical plan",
     focus: "Must be rejected before storage lookup",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "padded",
     steps: [{ id: "padded", title: "Padded", status: "进行中" }],
     keywords: ["collision"]
@@ -515,7 +538,7 @@ test("plan storage rejects sanitized identity collisions before overwriting anot
     id: "plan a",
     title: "Case-fold collision",
     focus: "Must share the physical identity lock",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "case",
     steps: [{ id: "case", title: "Case", status: "进行中" }],
     keywords: ["collision"]
@@ -524,7 +547,7 @@ test("plan storage rejects sanitized identity collisions before overwriting anot
     id: "e\u0301-plan",
     title: "Non-NFC plan",
     focus: "Must not create a normalization-equivalent identity",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "nfc",
     steps: [{ id: "nfc", title: "NFC", status: "进行中" }],
     keywords: ["collision"]
@@ -568,7 +591,7 @@ test("plan storage rejects a Windows ordinal-ignore-case sigma collision before 
     id: firstPlanId,
     title: "Original sigma owner",
     focus: "Keep every persisted byte intact",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "one",
     steps: [{ id: "one", title: "One", status: "进行中" }],
     keywords: ["ordinal-ignore-case", "collision"]
@@ -580,7 +603,7 @@ test("plan storage rejects a Windows ordinal-ignore-case sigma collision before 
     id: collidingPlanId,
     title: "Final sigma alias",
     focus: "Must be rejected before identity, WAL, or plan publication",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "two",
     steps: [{ id: "two", title: "Two", status: "进行中" }],
     keywords: ["ordinal-ignore-case", "collision"]
@@ -597,11 +620,11 @@ test("archived plans are immutable terminal records", (t) => {
     id: "terminal-plan",
     title: "Terminal plan",
     focus: "Prove archive immutability",
-    status: "已完成",
+    status: "完成",
     steps: [{ id: "done", title: "Done", status: "已完成" }],
     keywords: ["archive"]
   });
-  updatePlan(roleDir, created.id, { status: "已归档", archivedAt: "2026-08-31T00:00:00.000Z" });
+  updatePlan(roleDir, created.id, { archiveStatus: "已归档", archivedAt: "2026-08-31T00:00:00.000Z" });
   assert.throws(() => updatePlan(roleDir, created.id, { title: "Edited after archive" }), /immutable terminal/i);
   assert.equal(getPlan(roleDir, created.id)?.title, "Terminal plan");
 });
@@ -613,7 +636,7 @@ test("sync and async plan reads fail closed on duplicate physical records", asyn
     id: "duplicate-plan",
     title: "Duplicate plan",
     focus: "Reject active and archive duplicates",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "one",
     steps: [{ id: "one", title: "One", status: "进行中" }],
     keywords: ["duplicate"]
@@ -637,6 +660,7 @@ test("plan-by-id recovery reads asynchronously and forwards cancellation to file
     id: "async-recovery-plan",
     title: "异步恢复计划",
     focus: "验证恢复读取不会同步阻塞 UNC event loop",
+    status: "暂停",
     steps: [{ id: "recover", title: "恢复", status: "未开始" }],
     keywords: ["恢复", "异步"]
   });
@@ -711,6 +735,7 @@ test("plan catalog prewarm can skip synchronous filesystem watcher setup", async
     id: "prewarm-without-watchers",
     title: "不建立同步 watcher 的预热计划",
     focus: "验证启动预热只走异步文件读取",
+    status: "暂停",
     steps: [{ id: "load", title: "加载", status: "未开始" }],
     keywords: ["预热"]
   });
@@ -736,7 +761,7 @@ test("a prewarmed runtime catalog never falls back to a synchronous NAS rescan",
     focus: "禁止热请求同步全量扫描",
     steps: [{ id: "serve", title: "服务缓存快照", status: "进行中" }],
     currentStepId: "serve",
-    status: "进行中",
+    status: "分析中",
     keywords: ["prewarm", "health"]
   });
   assert.equal((await listPlansAsync(roleDir, { watch: false }))[0]?.id, "prewarmed-health-safe");
@@ -760,6 +785,7 @@ test("an async plan catalog retries when a canonical write invalidates the in-fl
     id: "async-invalidation-plan",
     title: "写入前标题",
     focus: "验证异步缓存失效",
+    status: "暂停",
     steps: [{ id: "load", title: "加载", status: "未开始" }],
     keywords: ["异步缓存失效"]
   });
@@ -992,7 +1018,7 @@ test("canonical plan updates publish one event after persistence", () => {
     id: "plan-update-event",
     title: "Plan update event",
     focus: "Notify Manager after the canonical plan write",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "work",
     steps: [{ id: "work", title: "Work", status: "进行中" }],
     keywords: ["event"]
@@ -1025,7 +1051,7 @@ test("plan list cache observes direct external plan-file changes", async () => {
     id: "external-cache-plan",
     title: "External cache plan",
     focus: "Verify direct file changes invalidate the plan cache",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "cache",
     steps: [{ id: "cache", title: "Verify external invalidation", status: "进行中" }],
     keywords: ["cache", "external"]
@@ -1101,7 +1127,7 @@ test("plan list cache reparses only the externally changed plan file", { concurr
       id: `incremental-cache-${String(index).padStart(2, "0")}`,
       title: `Incremental cache plan ${index}`,
       focus: `Verify incremental plan parsing ${index}`,
-      status: "进行中",
+      status: "分析中",
       currentStepId: "cache",
       steps: [{ id: "cache", title: "Verify incremental parsing", status: "进行中" }],
       keywords: ["cache", "incremental"]
@@ -1160,7 +1186,7 @@ test("plan detail reads reuse the warm plan list cache", { concurrency: false },
       id: `detail-cache-${index}`,
       title: `Detail cache ${index}`,
       focus: `Reuse the warm catalog for detail ${index}`,
-      status: "进行中",
+      status: "分析中",
       currentStepId: "inspect",
       steps: [{ id: "inspect", title: "Inspect", status: "进行中" }],
       keywords: ["cache", "detail"]
@@ -1195,6 +1221,7 @@ test("plans store managed image, video, and file attachments without persisting 
     id: "plan-attachments",
     title: "带附件的计划",
     focus: "带附件的计划",
+    status: "暂停",
     steps: [{ id: "inspect", title: "查看附件", status: "未开始" }],
     keywords: ["附件"],
     attachments: [
@@ -1227,6 +1254,7 @@ test("plans can be read and updated directly by id without depending on unrelate
       id: `plan-${String(index).padStart(3, "0")}`,
       title: `计划 ${index}`,
       focus: `计划 ${index}`,
+      status: "暂停",
       steps: [{ id: "run", title: "执行", status: "未开始" }],
       keywords: ["计划"]
     });
@@ -1244,6 +1272,7 @@ test("plan attachments reject content that does not match a claimed video type",
     id: "invalid-video-attachment",
     title: "无效视频附件",
     focus: "无效视频附件",
+    status: "暂停",
     steps: [{ id: "inspect", title: "检查视频", status: "未开始" }],
     keywords: ["视频"],
     attachments: [{
@@ -1260,7 +1289,7 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
     id: "plan-step-times",
     title: "记录步骤时间",
     focus: "步骤生命周期时间",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "implement",
     steps: [
       { id: "inspect", title: "检查现状", status: "已完成" },
@@ -1281,7 +1310,7 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
   assert.equal(verify.completedAt, undefined);
 
   const completed = updatePlan(roleDir, created.id, {
-    status: "进行中",
+    status: "分析中",
     currentStepId: "verify",
     steps: [
       { id: "inspect", title: "检查现状", status: "已完成" },
@@ -1294,7 +1323,7 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
   assert.equal(Number.isFinite(Date.parse(completed.steps[2]?.startedAt || "")), true);
 
   const reopened = updatePlan(roleDir, created.id, {
-    status: "进行中",
+    status: "分析中",
     currentStepId: "implement",
     steps: [
       { id: "inspect", title: "检查现状", status: "已完成" },
@@ -1307,7 +1336,7 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
   assert.equal(reopened.steps[2]?.startedAt, undefined);
 
   const reset = updatePlan(roleDir, created.id, {
-    status: "未开始",
+    status: "暂停",
     currentStepId: undefined,
     steps: reopened.steps.map((step) => ({ ...step, status: "未开始" }))
   });
@@ -1320,7 +1349,7 @@ test("non-approval blockers are normalized into actionable running plans", () =>
     id: "plan-waiting-inquiry",
     title: "询问负责人",
     focus: "等待时持续询问直至得到结果",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "ask-owner",
     waitingFor: "负责人回复",
     blockedBy: "负责人尚未确认",
@@ -1341,7 +1370,7 @@ test("non-approval blockers are normalized into actionable running plans", () =>
     id: "plan-blocked-without-reason",
     title: "缺少阻塞原因",
     focus: "验证显式阻塞合同",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "blocked",
     steps: [{ id: "blocked", title: "无法继续", status: "进行中", isBlocked: true }],
     keywords: ["计划", "阻塞"]
@@ -1357,7 +1386,7 @@ test("only running plans outside approval accept whole-plan guidance", () => {
     id: "plan-guidance-running",
     title: "可引导计划",
     focus: "允许用户调整整个计划方向",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "implement",
     steps: [{ id: "implement", title: "继续实施", status: "进行中" }],
     keywords: ["引导"]
@@ -1366,7 +1395,7 @@ test("only running plans outside approval accept whole-plan guidance", () => {
     id: "plan-guidance-pending",
     title: "未开始计划",
     focus: "尚未开始",
-    status: "未开始",
+    status: "暂停",
     steps: [{ id: "prepare", title: "准备", status: "未开始" }],
     keywords: ["引导"]
   });
@@ -1374,7 +1403,7 @@ test("only running plans outside approval accept whole-plan guidance", () => {
     id: "plan-guidance-approval",
     title: "审批计划",
     focus: "等待正式审批",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "approve",
     steps: [{
       id: "approve",
@@ -1395,6 +1424,7 @@ test("plan attachments enforce count, per-file, and total size limits", () => {
   const base = {
     title: "附件限制",
     focus: "附件限制",
+    status: "暂停" as const,
     steps: [{ id: "inspect", title: "检查附件", status: "未开始" }],
     keywords: ["附件"]
   };
@@ -2166,7 +2196,7 @@ test("consolidation stops after the first publication when its lease owner is at
         assertPlanStorageLeaseOwner(lease);
       }
     ),
-    { heartbeatIntervalMs: 10 }
+    { heartbeatIntervalMs: 60_000 }
   ), error => error instanceof Error
     && (error as Error & { code?: string }).code === "PLAN_STORAGE_LEASE_LOST");
 
@@ -2259,6 +2289,7 @@ test("role knowledge writes enforce configured limits and a single-line focus", 
   const plan = createPlan(roleDir, {
     title: "每日证据检查",
     focus: "每日证据检查",
+    status: "暂停",
     currentStep: "读取权威状态",
     steps: [{ id: "read-status", title: "读取权威状态", status: "未开始" }],
     keywords: ["每日", "证据"]
@@ -2314,13 +2345,13 @@ test("plans require ordered steps and one explicit current step", () => {
   const plan = createPlan(roleDir, {
     title: "结构化计划",
     focus: "结构化计划",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "implement",
     currentStep: "正在实现页面",
     blockedBy: "设计稿缺失",
     steps: [
       { id: "inspect", title: "检查现状", status: "已完成" },
-      { id: "implement", title: "实现页面", status: "进行中", workPhase: "execution", blockedBy: "缺少最终设计稿" },
+      { id: "implement", title: "实现页面", status: "进行中", blockedBy: "缺少最终设计稿" },
       { id: "verify", title: "验证结果", status: "未开始" }
     ],
     keywords: ["步骤"]
@@ -2330,8 +2361,7 @@ test("plans require ordered steps and one explicit current step", () => {
   assert.equal(plan.currentStepId, "implement");
   assert.equal(plan.blockedBy, "设计稿缺失");
   assert.equal(plan.steps[1]?.status, "进行中");
-  assert.equal(plan.steps[1]?.workPhase, "execution");
-  assert.equal(planWorkPhase(plan), "execution");
+  assert.equal(plan.status, "执行中");
   assert.equal(plan.steps[1]?.blockedBy, "缺少最终设计稿");
 
   assert.throws(() => createPlan(roleDir, {
@@ -2343,7 +2373,7 @@ test("plans require ordered steps and one explicit current step", () => {
   assert.throws(() => createPlan(roleDir, {
     title: "两个当前步骤",
     focus: "两个当前步骤",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "one",
     steps: [
       { id: "one", title: "第一步", status: "进行中" },
@@ -2353,87 +2383,28 @@ test("plans require ordered steps and one explicit current step", () => {
   }), /only one in-progress step/);
 });
 
-test("paused plans preserve their resume step without remaining approval-active", () => {
+test("discussion and pause are explicit plan statuses", () => {
   const roleDir = makeRoleDir();
-  const plan = createPlan(roleDir, {
-    title: "暂停中的实施计划",
-    focus: "暂停中的实施计划",
+  const discussion = createPlan(roleDir, {
+    title: "待讨论计划",
+    focus: "待讨论计划",
+    status: "待讨论",
+    currentStepId: "discuss",
+    steps: [{ id: "discuss", title: "讨论范围", status: "进行中" }],
+    keywords: ["讨论"]
+  });
+  assert.equal(discussion.status, "待讨论");
+  assert.equal(planRequiresApproval(discussion), false);
+
+  const paused = createPlan(roleDir, {
+    title: "暂停计划",
+    focus: "暂停计划",
     status: "暂停",
-    currentStepId: "implement",
-    currentStep: "保留当前实现位置，等待恢复",
-    steps: [
-      { id: "inspect", title: "检查现状", status: "已完成" },
-      {
-        id: "implement",
-        title: "继续实现",
-        status: "进行中",
-        discussionState: "pending",
-        blockedBy: "用户要求暂时跳过",
-        approvalRequest: {
-          request: "批准继续实现。",
-          reason: "恢复后才需要审批。",
-          files: [{ path: "src/example.ts", action: "modify", change: "继续实现。" }],
-          commands: [],
-          changes: [],
-          validation: ["运行测试。"],
-          rollback: ["回退改动。"],
-          outOfScope: ["不发布。"]
-        }
-      }
-    ],
+    steps: [{ id: "resume", title: "恢复后继续", status: "未开始" }],
     keywords: ["暂停"]
   });
-
-  assert.equal(plan.status, "暂停");
-  assert.equal(plan.currentStepId, "implement");
-  assert.equal(plan.steps[1]?.discussionState, "pending");
-  assert.equal(planRequiresApproval(plan), false);
-  const resumed = updatePlan(roleDir, plan.id, {
-    status: "进行中",
-    steps: plan.steps.map(({ discussionState: _discussionState, ...step }) => step),
-    isBlocked: true,
-    blockedBy: "用户尚未批准继续实现当前文件改动"
-  });
-  assert.equal(resumed.status, "进行中");
-  assert.equal(resumed.isBlocked, undefined);
-  assert.equal(planApprovalGate(resumed).state, "preparing");
-});
-
-test("paused plans require exactly one preserved resume step", () => {
-  const roleDir = makeRoleDir();
-
-  assert.throws(() => createPlan(roleDir, {
-    title: "缺少恢复点的暂停计划",
-    focus: "缺少恢复点的暂停计划",
-    status: "暂停",
-    currentStep: "暂停但没有结构化恢复位置",
-    steps: [
-      { id: "inspect", title: "检查现状", status: "已完成" },
-      { id: "implement", title: "继续实现", status: "未开始" }
-    ],
-    keywords: ["暂停"]
-  }), /paused plan must preserve currentStepId/i);
-
-  assert.throws(() => createPlan(roleDir, {
-    title: "进行中计划不能标记待讨论",
-    focus: "进行中计划不能标记待讨论",
-    status: "进行中",
-    currentStepId: "implement",
-    steps: [{ id: "implement", title: "继续实现", status: "进行中", discussionState: "pending" }],
-    keywords: ["讨论"]
-  }), /discussionState=pending/);
-
-  assert.throws(() => createPlan(roleDir, {
-    title: "待讨论标记必须位于当前步骤",
-    focus: "待讨论标记必须位于当前步骤",
-    status: "暂停",
-    currentStepId: "hold",
-    steps: [
-      { id: "inspect", title: "检查现状", status: "已完成", discussionState: "pending" },
-      { id: "hold", title: "保留恢复位置", status: "进行中" }
-    ],
-    keywords: ["讨论"]
-  }), /discussionState=pending/);
+  assert.equal(paused.status, "暂停");
+  assert.equal(paused.currentStepId, undefined);
 });
 
 test("approval steps remain writable while Manager can distinguish incomplete and concrete contracts", () => {
@@ -2441,7 +2412,7 @@ test("approval steps remain writable while Manager can distinguish incomplete an
   const base = {
     title: "审批具体修改",
     focus: "审批具体修改",
-    status: "进行中",
+    status: "分析中",
     currentStepId: "approve",
     currentStep: "等待用户审批执行范围",
     keywords: ["审批"]
@@ -2458,6 +2429,7 @@ test("approval steps remain writable while Manager can distinguish incomplete an
   assert.equal(planApprovalGate(incomplete).state, "preparing");
 
   const plan = updatePlan(roleDir, incomplete.id, {
+    status: "待审批",
     steps: [{
       id: "approve",
       title: "等待修改审批",
@@ -2496,12 +2468,14 @@ test("approval steps remain writable while Manager can distinguish incomplete an
   assert.equal(plan.steps[0]?.isBlocked, true);
   assert.equal(planApprovalGate(plan).state, "pending");
   const returnedToIncomplete = updatePlan(roleDir, plan.id, {
+    status: "分析中",
     steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: true, blockedBy: "用户尚未批准是否执行结构化审批改动" }]
   });
   assert.equal(returnedToIncomplete.steps[0]?.approvalRequest, undefined);
   assert.equal(returnedToIncomplete.isBlocked, undefined);
   assert.equal(updatePlan(roleDir, plan.id, { priority: "high" }).priority, "high");
   const rederived = updatePlan(roleDir, plan.id, {
+    status: "待审批",
     isBlocked: false,
     blockedBy: "",
     steps: [{ id: "approve", title: "等待修改审批", status: "进行中", isBlocked: false, blockedBy: "", approvalRequest: plan.steps[0]?.approvalRequest }]
@@ -2510,6 +2484,7 @@ test("approval steps remain writable while Manager can distinguish incomplete an
   assert.equal(rederived.steps[0]?.isBlocked, true);
 
   const approved = updatePlan(roleDir, plan.id, {
+    status: "执行中",
     isBlocked: false,
     blockedBy: "",
     steps: [{
@@ -2528,7 +2503,7 @@ test("plans persist an exact Codex task binding and completion hook target", () 
   const plan = createPlan(roleDir, {
     title: "会话任务完成提醒",
     focus: "会话任务完成提醒",
-    status: "未开始",
+    status: "暂停",
     steps: [{ id: "run", title: "运行绑定任务", status: "未开始" }],
     taskBinding: {
       agentType: "codex",
@@ -2550,7 +2525,7 @@ test("plans persist an exact Codex task binding and completion hook target", () 
   const defaultEnabled = createPlan(roleDir, {
     title: "默认开启完成提醒",
     focus: "默认开启完成提醒",
-    status: "未开始",
+    status: "暂停",
     steps: [{ id: "run", title: "运行绑定任务", status: "未开始" }],
     taskBinding: { agentType: "codex", sessionId: "session-default-hook" },
     keywords: ["会话任务"]
@@ -2581,7 +2556,7 @@ test("plans persist the responsible secretary separately from the business task 
   const plan = createPlan(roleDir, {
     title: "秘书与业务任务分离",
     focus: "秘书与业务任务分离",
-    status: "未开始",
+    status: "暂停",
     steps: [{ id: "run", title: "运行绑定任务", status: "未开始" }],
     secretaryBinding: {
       agentType: "codex",

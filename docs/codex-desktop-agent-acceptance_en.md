@@ -10,7 +10,7 @@ This is the release gate for the Codex/ChatGPT Desktop adapter. Success does not
 
 ## Non-negotiable product contract
 
-1. Deliver to the saved task when the full task ID exists in the configured workspace and the owner record is not archived. A mutable Desktop/SQLite title does not invalidate that identity. When the saved ID is archived, do not locate or reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist the replacement binding, and deliver there.
+1. Deliver to the saved task with the current workspace when the full task ID exists and the owner record is not archived. A different saved default cwd or mutable Desktop/SQLite title does not invalidate that identity. When the saved ID is archived, do not locate or reuse another same-name task. At a real delivery or save commit point, idempotently create a new task, persist the replacement binding, and deliver there.
 2. Approval, execution guidance, and QA-failure continuation for a plan must reuse that same plan. When its bound task is archived, or Desktop wake-and-retry has completed and the exact ID can no longer be read from local state, create a replacement using the saved title and, after delivery succeeds, update only that plan's existing `taskBinding` and return a warning; do not reuse an active same-name task or create a duplicate plan.
 3. If the ID is empty, invalid, or actually missing, search by the saved visible name plus normalized workspace. When one or more candidates match, bind the unique most recently updated task; create once only when there is no match. Ask the user only when the maximum update time is tied or unusable.
 4. A Desktop-side rename or automatic title-metadata rewrite keeps the same ID target. Explicitly typing a new Rabi name clears the old ID before lookup/create and persists the selected replacement target.
@@ -42,7 +42,7 @@ Required cold-start checks:
 ```mermaid
 flowchart TD
     P["RabiRoute AgentPacket"] --> R["Shared session resolver"]
-    R --> I{"Saved ID exists in the configured workspace?"}
+    R --> I{"Saved ID exists?"}
     I -->|"Active"| B["Reuse binding"]
     I -->|"Archived or confirmed deleted after delivery"| C2["Create a new task with an old-ID-scoped idempotency key"]
     I -->|"Missing"| N["Find active tasks by visible name + workspace"]
@@ -65,7 +65,7 @@ The creation transaction must also persist a runtime Manager reservation. It rec
 ## Identity and state rules
 
 - The UI shows task name and last activity; users do not type UUIDs.
-- Internally, identity is the complete task ID plus workspace. The visible name is display and no-ID lookup metadata.
+- Internally, the complete task ID is the task identity. Workspace controls the current execution, while the task's saved default cwd is metadata. The visible name is display and no-ID lookup metadata.
 - For Codex, the user-visible name comes only from the Desktop left sidebar: full scans and exact-ID reads both use `thread_name` from the same sidebar session index, exposed through the single task read model in `codexDesktopBridge.ts`. SQLite `threads.title` may contain the first prompt and can supplement owner state only; it must not become the task name or drive dropdown labels and same-name lookup.
 - Last activity is display/sorting data, not identity.
 - Listing must support all tasks or reliable pagination. A first-page-only list must not claim to be complete.
@@ -104,7 +104,7 @@ Do not deliver after a failed save. Do not roll back a successfully created task
 
 | Scenario | Expected result |
 | --- | --- |
-| Valid ID + workspace after SQLite title mutation | Direct delivery to the same ID; task count unchanged |
+| Valid ID after saved-cwd or SQLite-title mutation | Deliver to the same ID with the current workspace; task count unchanged |
 | UI name differs from SQLite `title` | Find and display the original task by app-server `thread.name`; do not create |
 | Saved ID points to an archived task and an active same-name task exists | Create a new task and persist its ID; do not reuse the same-name task |
 | Saved ID points to an archived task with no active same-name task | Create a new task, persist the replacement binding, and deliver there |
@@ -134,7 +134,7 @@ Mocks and unit tests prove resolver and failure behavior only. Release acceptanc
 1. Define the user-visible destination, unique owner, session identity, and forbidden fallbacks.
 2. Test independent lifecycle and port-4510 safety before polishing the session UI.
 3. Reuse one resolver for settings save, normal delivery, and automatic initialization.
-4. Lock stable ID/workspace reuse, title-mutation continuity, replacement and persistence after archival or confirmed deletion after delivery, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
+4. Lock stable exact-ID reuse across saved-cwd changes, current-workspace delivery, title-mutation continuity, replacement and persistence after archival or confirmed deletion after delivery, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
 5. Mark Codex `verified` only after a real Desktop task receives and executes the prompt visibly.
 
 See [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) for the general contract and [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) for the failed designs and their root causes.

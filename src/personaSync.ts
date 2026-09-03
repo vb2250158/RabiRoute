@@ -183,10 +183,11 @@ function validatePersonaPlanIdentity(
   if (existingPlanId && existingPlanId !== logicalPlanId) {
     throw new Error(`Persona sync plan identity collides with an existing logical plan: ${relativePath}`);
   }
-  if (planPath.bucket === "archive" && incoming.status !== "已归档") {
+  const incomingArchived = (incoming as { archiveStatus?: unknown }).archiveStatus === "已归档" || incoming.status === "已归档";
+  if (planPath.bucket === "archive" && !incomingArchived) {
     throw new Error(`Persona sync archive identity is not terminal: ${relativePath}`);
   }
-  if (planPath.bucket === "active" && incoming.status === "已归档") {
+  if (planPath.bucket === "active" && incomingArchived) {
     throw new Error(`Persona sync active identity cannot contain an archived plan: ${relativePath}`);
   }
 }

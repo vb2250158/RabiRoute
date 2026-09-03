@@ -212,7 +212,7 @@ This avoids leaking usernames or machine-specific absolute paths into prompts an
 
 ## Recall and required reads
 
-`[Memory and plans]` lists active plans and recent memories by ID and title. Only top-level `进行中` plans are active; `暂停` plans remain non-archived and searchable but are not injected as active work. A recent memory is considered active using the later of `updatedAt` and `viewedAt`; the default direct-display window is 24 hours.
+`[Memory and plans]` lists current plans and recent memories by ID and title. Current plans are unarchived plans whose status is Analyzing, Awaiting approval, Executing, Awaiting package, or Awaiting QA. Discussion, Paused, Completed, and Closed plans remain available in the unarchived plan view. `archiveStatus=已归档` plans are excluded before keyword scoring even when ID, title, or keywords match; only an explicit plan-ID read or Archived view can return them. A recent memory is considered active using the later of `updatedAt` and `viewedAt`; the default direct-display window is 24 hours.
 
 Before delivery, RabiRoute performs lightweight matching over metadata only:
 

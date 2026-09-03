@@ -218,7 +218,6 @@ function reopenForInvestigation(
       status: "未开始" as const
     }),
     status: "进行中",
-    workPhase: "analysis",
     detail: feedbackDetail(feedback),
     waitingFor: missingEvidence.length ? "QA 补充：" + missingEvidence.join("、") : undefined,
     isBlocked: false,
@@ -232,7 +231,7 @@ function reopenForInvestigation(
   const qaIndex = steps.findIndex((step) => step.id === qaStep.id);
   steps.splice(qaIndex < 0 ? steps.length : qaIndex, 0, investigation);
   return {
-    status: "进行中",
+    status: "分析中",
     currentStepId: investigateId,
     currentStep: "QA 失败回传已消费，进入深化根因调查",
     nextAction: missingEvidence.length
@@ -279,7 +278,7 @@ function completeAcceptance(
   if (nextIndex >= 0) {
     steps[nextIndex] = { ...steps[nextIndex], status: "进行中" };
     return {
-      status: "进行中",
+      status: "执行中",
       currentStepId: steps[nextIndex].id,
       currentStep: steps[nextIndex].title,
       nextAction: steps[nextIndex].title,
@@ -290,7 +289,7 @@ function completeAcceptance(
     };
   }
   return {
-    status: "已完成",
+    status: "完成",
     currentStepId: null,
     currentStep: "QA 明确通过，验收完成",
     nextAction: null,

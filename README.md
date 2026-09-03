@@ -76,7 +76,7 @@ The repository version is `0.2.3`. The table lists behavior backed by current co
 | Routing core | Verified | Receive messages, persist events, match rules, build Agent context, deliver to a handler, and record replies. |
 | NapCat / OneBot | Verified | Bind one NapCat to each Route, manage quick/password/QR login and security confirmation inside the Route card, receive QQ group/direct messages, preserve media evidence, and send replies through OneBot HTTP. |
 | Schedules and persona automation | Verified | Trigger an Agent from messages or time rules; run persona-local scripts only after separate permission is enabled. |
-| Codex Desktop | Verified | Deliver by full task ID and workspace; report success only after the target rollout records the `deliveryId`. Deleted or archived bindings can be replaced under controlled rules. |
+| Codex Desktop | Verified | A full task ID selects the existing task, and each delivery supplies its workspace; report success only after the target rollout records the `deliveryId`. Deleted or archived bindings can be replaced under controlled rules. |
 | RibiWebGUI | Verified | Manage Routes, personas, message inputs, Agents, plans, memories, logs, diagnostics, themes, and desktop settings. |
 | Plans, memories, and message processing | Verified | Page through plans and memories, submit plan feedback, assign message-processing work, and preserve state and receipts. |
 | Windows desktop | Core path implemented | Host owns one application generation containing Manager and the tray/task-window surface; use selected-text actions, screenshots, and annotations. Some system interactions still need Windows device acceptance. |

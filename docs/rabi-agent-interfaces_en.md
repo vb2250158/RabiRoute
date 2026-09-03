@@ -631,10 +631,10 @@ POST actions:
 
 - `list`: list matching threads, optionally restricted by a configured cwd.
 - `read`: read a thread by `threadId`. The returned task name always comes from the Codex left-sidebar index; SQLite `threads.title`, an initialization prompt, or a stale Route-cached name cannot override it.
-- `resolve`: reuse a valid saved ID when its workspace matches and the task is unarchived; mutable Desktop/SQLite title metadata is not identity, and an overlong display title cannot invalidate that binding. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
+- `resolve`: for Codex, reuse a valid saved ID when the task is unarchived, even if its saved default cwd differs; the request workspace supplies the next execution context. Mutable Desktop/SQLite title metadata and an overlong display title cannot invalidate that binding. An archived saved binding returns `409 archived` and never creates a replacement. Only when the ID is empty, invalid, or genuinely missing, resolve by visible name plus cwd. One or more exact matches bind the unique latest `updatedAt`; create one empty task only when no match exists. A tied maximum returns candidates for selection.
 - `create`: idempotently resolve by task name plus configured workspace, bootstrap one empty task only when no match exists, then deliver any initial prompt to that task's Desktop owner through Desktop IPC. Concurrent calls and retries after an HTTP timeout share or reuse the same creation result instead of creating duplicate tasks. The response uses `resolution=created` for a new task and `resolution=name` for an existing same-name task. Codex task names are limited to 240 JavaScript code units; RabiRoute safely truncates longer inputs with an ellipsis and returns the actual created name for persistence.
 - Manager persists the create reservation under runtime `data/.runtime/codex-thread-creations/`. It advances through `reserved → creating → thread_created → naming → initial_turn → completed`. A `creating` reservation may move through `failed_before_create` and retry with the same key only after it is older than five minutes, has no `threadId`, and a second `action=list + lookupMode=state_db` check authoritatively finds no task with the same name and workspace. An existing `threadId`, a failed index query, a candidate task, or any other insufficient evidence changes the reservation to `uncertain`; later requests return `409` and automatic recreation is forbidden.
-- `rename`: rename a Desktop task by full `threadId` plus configured cwd without changing its identity. Persistent plan-assistant slots use this when expanding from one unnumbered assistant to multiple numbered assistants.
+- `rename`: rename a Desktop task by full `threadId`; the configured cwd supplies only the Desktop IPC context and does not change task identity. Persistent plan-assistant slots use this when expanding from one unnumbered assistant to multiple numbered assistants.
 - `send`: ask the existing Desktop task owner to start or steer the real turn through Desktop IPC.
 
 `send` optionally accepts up to eight absolute `imagePaths`. Every file must exist inside the target `cwd` workspace and use a PNG, JPEG, GIF, WebP, or BMP extension. After validation, Manager sends each file as Desktop `localImage` input. This is intended for message adapters to pass already-materialized source images and cannot read files outside the target workspace.
@@ -649,11 +649,11 @@ POST actions:
 }
 ```
 
-Callers must not edit UUIDs manually. Selecting a different task supplies its ID; typing a new name must explicitly clear the previous ID before `resolve` performs name lookup or creation. A valid ID plus workspace remains authoritative even when display metadata is longer than the creation limit.
+Callers must not edit UUIDs manually. Selecting a different task supplies its ID; typing a new name must explicitly clear the previous ID before `resolve` performs name lookup or creation. For Codex, a valid ID remains authoritative across saved-cwd or display-metadata changes, and the request workspace controls the current delivery.
 
 After a create call times out, first call `list` with the original title and `lookupMode=state_db`. This reads the local Desktop task database and sidebar index without starting the metadata app-server, so it can find an empty task whose first prompt has not started yet. Do not infer “no side effect” from an immediate complete-mode lookup and do not create the same title again.
 
-Formal Agent response workspace validation uses the same canonical identity rule as Codex tasks. Equivalent Windows drive, `\\?\` extended-drive, UNC, and extended UNC forms are not rejected merely because their string forms differ.
+Formal Agent responses still validate the current-turn workspace using the shared path-canonicalization rule. Equivalent Windows drive, `\\?\` extended-drive, UNC, and extended UNC forms are not rejected merely because their string forms differ. This validation does not participate in Codex task identity.
 
 ```json
 {
@@ -762,11 +762,15 @@ When the current Route enables **Require the RabiAgent message delivery API**, C
 Statuses:
 
 ```text
-`未开始`  not started
-`进行中`  in progress
+`分析中`  analyzing
+`待审批`  awaiting approval
+`执行中`  executing
+`等待打包` awaiting package
+`等待 QA` awaiting QA
+`待讨论` awaiting discussion
 `暂停`    paused
-`已完成`  completed
-`已归档`  archived
+`完成`    completed
+`关闭`    closed
 ```
 
 ```http
@@ -780,7 +784,8 @@ PATCH /api/roles/:roleId/plans/:planId
 {
   "title": "Refresh routing documentation",
   "focus": "routing documentation accuracy",
-  "status": "进行中",
+  "status": "分析中",
+  "archiveStatus": "未归档",
   "priority": "medium",
   "kind": "documentation",
   "currentStepId": "verify-schema",
@@ -793,7 +798,7 @@ PATCH /api/roles/:roleId/plans/:planId
   ],
   "steps": [
     { "id": "inspect-current", "title": "Inspect the existing plan API", "status": "已完成", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中", "workPhase": "analysis", "startedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中", "startedAt": "2026-07-27T08:10:00.000Z" },
     { "id": "update-guides", "title": "Update both language guides", "status": "未开始" }
   ],
   "keywords": ["routing", "configuration", "documentation"],
@@ -814,9 +819,9 @@ PATCH /api/roles/:roleId/plans/:planId
 }
 ```
 
-New plans must provide ordered `steps`. While top-level `status=进行中`, the current step uses `workPhase=analysis | execution`: investigation, evidence gathering, solution design, and pre-approval preparation use `analysis`; implementation and development validation after approval or explicit direct user authorization use `execution`. An explicit discussion wait keeps top-level `status=暂停` and the original `currentStepId`, and sets `discussionState=pending` on the single in-progress resume step; producers clear that marker when discussion ends. Manager exposes cyan `Analyzing`, green `Executing`, amber `Awaiting discussion`, blue `Awaiting package`, purple `Awaiting QA`, gray `Paused`, red `Awaiting approval`, and orange `Awaiting manual verification` for non-terminal plans. Agents and clients must not write presentation stages. External information, assets, owners, accounts, devices, authorization, and receipts remain internal wait details.
+New plans must provide ordered `steps`. `plan.status` is the single plan-status source and accepts only the nine values above. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Steps keep their own `未开始 / 进行中 / 已完成` progress values; `workPhase` and `discussionState` are retired. Manager, WebGUI, and the tray display `plan.status` directly.
 
-Manager retains precise internal reconcile reasons. Safe actions use `workPhase` to present cyan `Analyzing` or green `Executing`; a paused current resume step with `discussionState=pending` is amber `Awaiting discussion`; delivery closure with only package proof missing is blue `Awaiting package`; proven inclusion is purple `Awaiting QA`; a development-closed `manual-verify-*` step is orange `Awaiting manual verification`; a complete approval contract is red `Awaiting approval`; no safe action is gray `Paused`. These special states override `workPhase`.
+Approval preparation uses `分析中`; a complete submitted approval contract uses `待审批`; approval or direct authorization moves the plan to `执行中`. Package, QA, discussion, and pause states are written directly and are never derived from step text or waiting details.
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 
@@ -845,7 +850,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI uses this endpoint for whole-plan guidance on running plans outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both notify the Agent through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
+RibiWebGUI uses this endpoint for whole-plan guidance on Analyzing or Executing plans outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both notify the Agent through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
 
 ```json
 {
@@ -890,7 +895,7 @@ Agent handling notes for plan guidance use `kind=guidance_response`, `author=age
 
 The shared plan API hints in every AgentPacket include both guidance and approval feedback contracts plus the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface.
 
-Completed plans are archived by a role-knowledge snapshot after their latest `updatedAt` is more than the current fixed 72-hour window old. This window is not yet a public `personaConfig.json` field.
+Completed or Closed plans whose `archiveStatus=未归档` are archived by a role-knowledge snapshot after their latest `updatedAt` is more than the current fixed 72-hour window old. Archival changes only `archiveStatus` to `已归档`, preserves `plan.status`, and moves the plan directory into the archive bucket. This window is not yet a public `personaConfig.json` field.
 
 ## Recent-memory API
 

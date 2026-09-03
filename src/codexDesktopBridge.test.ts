@@ -543,7 +543,7 @@ test("Desktop bridge starts a message processing turn with the configured Luna m
   }
 });
 
-test("Desktop bridge serializes deliveries to the same task", async () => {
+test("Desktop bridge serializes deliveries to the same task across requested workspaces", async () => {
   const pendingSteers: Array<{
     requestId?: string;
     threadId: string;
@@ -567,7 +567,7 @@ test("Desktop bridge serializes deliveries to the same task", async () => {
 
   try {
     const first = bridge.deliver({ threadId, prompt: "first", cwd: process.cwd(), sandbox: "workspace-write" });
-    const second = bridge.deliver({ threadId, prompt: "second", cwd: process.cwd(), sandbox: "workspace-write" });
+    const second = bridge.deliver({ threadId, prompt: "second", cwd: path.dirname(process.cwd()), sandbox: "workspace-write" });
     await waitFor(() => pendingSteers.length >= 1);
     await wait(20);
     const pendingBeforeFirstCompletes = pendingSteers.length;

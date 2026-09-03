@@ -122,7 +122,7 @@ test("storage mutation child serializes plan, memory, secretary, and feedback wr
   const createdPlan = await pool.createPlan("YeYu", "plan-one", {
     title: "Storage mutation plan",
     focus: "Prove one fenced mutation channel",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "verify",
     nextAction: "Run the next command",
     steps: [{ id: "verify", title: "Verify the channel", status: "进行中" }],
@@ -133,7 +133,7 @@ test("storage mutation child serializes plan, memory, secretary, and feedback wr
   const replayedPlan = await pool.createPlan("YeYu", "plan-one", {
     title: "Storage mutation plan",
     focus: "Prove one fenced mutation channel",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "verify",
     nextAction: "Run the next command",
     steps: [{ id: "verify", title: "Verify the channel", status: "进行中" }],
@@ -466,7 +466,7 @@ test("storage mutation pool rejects stale expected revisions before reserving a 
   const plan = await pool.createPlan("YeYu", "plan-revision", {
     title: "Revision plan",
     focus: "Reject stale revisions",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "reject",
     steps: [{ id: "reject", title: "Reject stale revisions", status: "进行中" }],
     keywords: ["revision"]
@@ -485,7 +485,7 @@ test("a completed commit replays across Manager generations without a second dom
   const input = {
     title: "Lost response plan",
     focus: "Recover a committed mutation by request id",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "recover",
     steps: [{ id: "recover", title: "Recover the receipt", status: "进行中" }],
     keywords: ["idempotency", "receipt"]
@@ -533,7 +533,7 @@ test("a committed domain mutation with a sending receipt is indeterminate and ne
   const input = {
     title: "Committed without terminal receipt",
     focus: "Do not repeat an indeterminate commit",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "recover",
     steps: [{ id: "recover", title: "Recover from the ledger", status: "进行中" }],
     keywords: ["idempotency", "indeterminate"]
@@ -587,7 +587,7 @@ test("a replacement child proves an uncertain committed mutation by exact reques
   const input = {
     title: "Uncertain proof plan",
     focus: "Recover by exact mutation identity",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "recover",
     steps: [{ id: "recover", title: "Recover", status: "进行中" }],
     keywords: ["proof"]
@@ -683,7 +683,7 @@ test("an unrelated completed mutation never satisfies uncertain recovery proof",
   const input = {
     title: "Unrelated proof plan",
     focus: "Reject unrelated mutation evidence",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "verify",
     steps: [{ id: "verify", title: "Verify", status: "进行中" }],
     keywords: ["proof"]

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { canonicalLogicalPlanId } from "./planStorageIdentity.js";
-import { planStorageDirectory } from "./planStorageLayout.js";
+import { isArchivedPlanStatus, isCompletedPlanStatus, planStorageDirectory } from "./planStorageLayout.js";
 import {
   inventoryPlanStorageDirectory,
   type PlanStorageInventory
@@ -77,7 +77,8 @@ export function planLineageDominanceReason(
   const activePlan = readPlanStorageJsonObject(path.join(activeDirectory, PLAN_FILE));
   const archivePlan = readPlanStorageJsonObject(path.join(archiveDirectory, PLAN_FILE));
   if (activePlan.id !== id || archivePlan.id !== id) return null;
-  if (activePlan.status === "已归档" || archivePlan.status !== "已归档") return null;
+  if (isArchivedPlanStatus(activePlan.archiveStatus ?? activePlan.status)
+    || !isArchivedPlanStatus(archivePlan.archiveStatus ?? archivePlan.status)) return null;
   if (activePlan.createdAt !== archivePlan.createdAt) return null;
   const activeUpdatedAt = Date.parse(String(activePlan.updatedAt || ""));
   const archiveUpdatedAt = Date.parse(String(archivePlan.updatedAt || ""));
@@ -96,7 +97,7 @@ export function planLineageDominanceReason(
   if (activeHistoryBytes.byteLength === 0 && archiveHistoryBytes.byteLength === 0) {
     return "terminal_archive_temporally_dominates_legacy_active_snapshot";
   }
-  if (activePlan.status !== "已完成"
+  if ((!isCompletedPlanStatus(activePlan.status) && activePlan.status !== "关闭")
     || archiveHistoryBytes.byteLength < activeHistoryBytes.byteLength
     || !archiveHistoryBytes.subarray(0, activeHistoryBytes.byteLength).equals(activeHistoryBytes)) return null;
 
@@ -108,7 +109,8 @@ export function planLineageDominanceReason(
     const record = archiveHistory[index]!;
     if (record.kind === "archived"
       && isDeepStrictEqual(record.before, activePlan)
-      && (record.after as { status?: unknown })?.status === "已归档") {
+      && isArchivedPlanStatus((record.after as { archiveStatus?: unknown; status?: unknown })?.archiveStatus
+        ?? (record.after as { status?: unknown })?.status)) {
       transitionIndex = index;
       break;
     }
@@ -118,7 +120,8 @@ export function planLineageDominanceReason(
   for (const record of archiveHistory.slice(transitionIndex + 1)) {
     if (record.kind !== "updated"
       || !isDeepStrictEqual(record.before, expected)
-      || (record.after as { status?: unknown })?.status !== "已归档") return null;
+      || !isArchivedPlanStatus((record.after as { archiveStatus?: unknown; status?: unknown })?.archiveStatus
+        ?? (record.after as { status?: unknown })?.status)) return null;
     expected = record.after;
   }
   return isDeepStrictEqual(expected, archivePlan)
@@ -134,19 +137,21 @@ export function validateCanonicalArchivedPlanDirectory(archiveDirectory: string,
     throw new Error(`Archived plan package is missing plan.json or history.jsonl: ${id}`);
   }
   const archivePlan = readPlanStorageJsonObject(path.join(archiveDirectory, PLAN_FILE));
-  if (archivePlan.id !== id || archivePlan.status !== "已归档") {
+  if (archivePlan.id !== id || !isArchivedPlanStatus(archivePlan.archiveStatus ?? archivePlan.status)) {
     throw new Error(`Archived plan package has an invalid terminal identity: ${id}`);
   }
   const history = readHistory(path.join(archiveDirectory, HISTORY_FILE), id);
   const transitionIndex = history.findIndex(record =>
-    record.kind === "archived" && (record.after as { status?: unknown })?.status === "已归档"
+    record.kind === "archived" && isArchivedPlanStatus((record.after as { archiveStatus?: unknown; status?: unknown })?.archiveStatus
+      ?? (record.after as { status?: unknown })?.status)
   );
   if (transitionIndex < 0) throw new Error(`Archived plan package has no archived transition: ${id}`);
   let expected = history[transitionIndex]!.after;
   for (const record of history.slice(transitionIndex + 1)) {
     if (record.kind !== "updated"
       || !isDeepStrictEqual(record.before, expected)
-      || (record.after as { status?: unknown })?.status !== "已归档") {
+      || !isArchivedPlanStatus((record.after as { archiveStatus?: unknown; status?: unknown })?.archiveStatus
+        ?? (record.after as { status?: unknown })?.status)) {
       throw new Error(`Archived plan package history is not a terminal chain: ${id}`);
     }
     expected = record.after;
@@ -164,7 +169,7 @@ export function validateCanonicalActivePlanDirectory(activeDirectory: string, pl
     throw new Error(`Active plan package is missing plan.json or history.jsonl: ${id}`);
   }
   const activePlan = readPlanStorageJsonObject(path.join(activeDirectory, PLAN_FILE));
-  if (activePlan.id !== id || activePlan.status === "已归档") {
+  if (activePlan.id !== id || isArchivedPlanStatus(activePlan.archiveStatus ?? activePlan.status)) {
     throw new Error(`Active plan package has an invalid live identity: ${id}`);
   }
   const history = readHistory(path.join(activeDirectory, HISTORY_FILE), id);

@@ -46,7 +46,7 @@ function fixture(): {
     id: PLAN_ID,
     title: "Archive terminal contract",
     focus: "Keep one canonical archived plan",
-    status: "已完成",
+    status: "完成",
     createdAt: "2026-08-01T00:00:00.000Z",
     completedAt: "2026-08-01T01:00:00.000Z",
     updatedAt: "2026-08-01T01:00:00.000Z",
@@ -55,7 +55,7 @@ function fixture(): {
   };
   const archivePlan = {
     ...activePlan,
-    status: "已归档",
+    archiveStatus: "已归档",
     updatedAt: "2026-08-24T00:00:00.000Z",
     archivedAt: "2026-08-24T00:00:00.000Z"
   };
@@ -205,7 +205,7 @@ test("historical mixed-case plan directories migrate atomically and recover afte
   fs.mkdirSync(legacyDirectory, { recursive: true });
   fs.writeFileSync(path.join(legacyDirectory, "plan.json"), `${JSON.stringify({
     id: planId,
-    status: "进行中",
+    status: "执行中",
     createdAt: "2026-08-31T00:00:00.000Z",
     updatedAt: "2026-08-31T00:00:00.000Z",
     attachments: [{ path: path.join(legacyDirectory, "attachments", "proof.txt") }]
@@ -288,7 +288,8 @@ test("identity readers fail closed for historical case, NFC, and legacy equivale
   fs.mkdirSync(caseArchive, { recursive: true });
   fs.writeFileSync(path.join(caseArchive, "plan.json"), `${JSON.stringify({
     id: "Plan-Archived",
-    status: "已归档"
+    status: "关闭",
+    archiveStatus: "已归档"
   })}\n`, "utf8");
   const archiveFence = archivedPlanStorageFence(roleDir, "plan-archived");
   assert.equal(archiveFence.status, "invalid");
@@ -302,7 +303,7 @@ test("identity readers fail closed for historical case, NFC, and legacy equivale
   const nfcId = "\u00e9-active";
   const nfdActive = path.join(roleDir, "plans", "active", nfdName);
   fs.mkdirSync(nfdActive, { recursive: true });
-  fs.writeFileSync(path.join(nfdActive, "plan.json"), `${JSON.stringify({ id: nfcId, status: "进行中" })}\n`, "utf8");
+  fs.writeFileSync(path.join(nfdActive, "plan.json"), `${JSON.stringify({ id: nfcId, status: "执行中" })}\n`, "utf8");
   assert.throws(() => canonicalPlanIdForStorageIdentity(roleDir, nfcId), /migration|collision|directory does not match/i);
 
   const legacyArchive = path.join(roleDir, "plans", "archive", "Legacy-Plan.json");

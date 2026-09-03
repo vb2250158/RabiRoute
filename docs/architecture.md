@@ -203,7 +203,7 @@ routes:
 
 当前 Codex 规则：
 
-- 下拉显示任务名和最后时间，配置内部保存完整任务 ID，并用 `cwd` 交叉校验。
+- 下拉显示任务名和最后时间，配置内部保存完整任务 ID；`cwd` 是下一轮执行目录，不参与否定已有任务 ID。
 - 有效且同工作目录的已保存 ID 是稳定身份；Desktop 改名、SQLite 标题滞后或 goal 完成都不会触发重复创建。只有 ID 被明确清空或确实不存在时才按名称查找/创建。
 - RabiRoute 连接 Desktop IPC；目标任务未加载时用 `codex://threads/<id>` 请 Desktop 打开，再重试投递。
 - 有活动轮次时使用 Desktop follower steer，否则由 Desktop owner start。

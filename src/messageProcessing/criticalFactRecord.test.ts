@@ -39,7 +39,7 @@ test("verifies a persisted plan contains the original group message id", (t) => 
     title: "公测上线目标",
     focus: "公测上线目标",
     goal: "记录内部上线目标",
-    status: "进行中",
+    status: "待讨论",
     currentStep: "记录群内排期",
     currentStepId: "record-schedule",
     nextAction: "等待正式定档",

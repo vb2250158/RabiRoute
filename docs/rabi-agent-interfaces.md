@@ -116,7 +116,7 @@ GET /api/roles/:roleId/conversation-situations/:situationId
 同时默认注入轻量索引：
 
 ```text
-进行中计划：
+当前计划：
 - plan-001：完善计划和记忆机制文档
 
 近期记忆：
@@ -776,9 +776,9 @@ POST <managerBaseUrl>/api/agent/threads
 
 - `list`：从 Desktop 状态按标题查询本机任务，使用 `offset` / `limit` 分页访问全部结果。
 - `read`：通过完整 `threadId` 只读读取 Desktop 任务元数据。返回的任务名统一来自 Codex 左侧聊天栏索引；SQLite `threads.title`、首轮初始化提示和 Route 中缓存的旧名称都不能覆盖它。
-- `resolve`：先读取精确 ID。有效 ID、cwd 一致且未归档时直接绑定，不比较可变的 Desktop/SQLite 标题，也不会因展示标题超过新建上限而否定绑定；保存 ID 指向已归档任务时返回 `409 archived`。只有 ID 为空、非法或确实失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列时返回候选。
+- `resolve`：先读取精确 ID。有效 ID 且未归档时直接绑定；请求中的 cwd 作为本轮执行目录，不与任务保存的默认 cwd 比较。可变的 Desktop/SQLite 标题和超过新建上限的展示标题也不会否定该绑定；保存 ID 指向已归档任务时返回 `409 archived`。只有 ID 为空、非法或确实失效时才按保存名称和可选 cwd 查找，一个或多个同名同 cwd 候选按 `updatedAt` 自动绑定唯一最新者、零匹配按需幂等创建、最大时间并列时返回候选。
 - `create`：在已配置工作区创建空任务，再把初始提示词通过 Desktop IPC 投给该任务 owner。Codex 任务名上限为 240 个 JavaScript 字符单元；更长的输入会由 RabiRoute 安全截断并加省略号，响应和后续配置保存实际创建的名称。
-- `rename`：按完整 `threadId` 和已配置 cwd 修改 Desktop 任务名称，不改变任务身份；用于持久计划协助槽从单个扩容为多个时，把原“协助处理计划”任务改名为“协助处理计划1”。
+- `rename`：按完整 `threadId` 修改 Desktop 任务名称，已配置 cwd 只提供本次 Desktop IPC 上下文，不改变任务身份；用于持久计划协助槽从单个扩容为多个时，把原“协助处理计划”任务改名为“协助处理计划1”。
 - `send`：通过 Desktop IPC 向已有任务 owner start/steer。
 
 `send` 可选传 `imagePaths`，最多 8 个图片绝对路径。每个文件必须存在、位于目标 `cwd` 工作区内，并使用 PNG/JPEG/GIF/WebP/BMP 扩展名。Manager 校验后把它们作为 Desktop `localImage` 输入发送；该字段主要供消息入口把已经保存的来源图片交给处理任务，不能用于读取工作区外文件。
@@ -806,7 +806,7 @@ POST <managerBaseUrl>/api/agent/threads
 }
 ```
 
-调用方不要让 AI 或用户手改 UUID。下拉保存名称、完整 ID 和 workspace；用户明确输入新名称时前端先清空旧 ID。有效 ID + workspace 是稳定身份，即使返回标题已变成首条 prompt 或长度超过新建限制也继续该 ID。`resolve` 返回 `id`、`name` 或 `created`；重名最大时间并列时返回 HTTP 409 和 `candidates`。
+调用方不要让 AI 或用户手改 UUID。下拉保存名称、完整 ID 和 workspace；用户明确输入新名称时前端先清空旧 ID。对 Codex，有效 ID 是稳定任务身份，workspace 决定本次执行目录；任务保存的默认 cwd、返回标题变化或标题长度超过新建限制都不影响继续该 ID。`resolve` 返回 `id`、`name` 或 `created`；重名最大时间并列时返回 HTTP 409 和 `candidates`。
 
 读取示例：
 
@@ -927,7 +927,7 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 - Manager 在运行期 `data/.runtime/codex-thread-creations/` 持久保存创建 reservation。状态按 `reserved → creating → thread_created → naming → initial_turn → completed` 推进。`creating` 超过 5 分钟、没有 `threadId`，并且第二次 `action=list + lookupMode=state_db` 明确确认同名同工作目录任务不存在时，Manager 才先转为 `failed_before_create`，再允许同键重试。记录已有 `threadId`、索引查询失败、查到候选任务或其它证据不足时转为 `uncertain`，后续请求返回 `409` 并禁止自动再次创建。
 - `create` 返回 `initialTurnStatus`。若任务已经创建但初始 turn 启动失败，应记录返回的 `threadId` 并用 `send` 重试，不能重复创建同名任务。
 - 创建调用超时后，先用 `action=list + lookupMode=state_db + 原任务名` 从本地任务索引回读。这个模式不启动 app-server 元数据扫描，适合判断慢创建是否稍后产生了任务；完整任务列表仍使用默认 `lookupMode=complete`。
-- Agent 正式回复中的 workspace 使用与 Codex 任务身份相同的规范化规则比较；Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式不会因为字符串写法不同而被误判为其它工作区。
+- Agent 正式回复仍会比较本轮 workspace，并使用统一的路径规范化规则；Windows 普通盘符路径、`\\?\` 扩展盘符路径、UNC 与扩展 UNC 的等价形式不会因为字符串写法不同而被误判为其它工作区。该校验不参与 Codex 任务身份判定。
 - 当前 Route 开启“强制使用 RabiAgent 消息投递接口”后，Codex Hook 会拒绝绕过 Rabi 的持久任务工具；DSH `RabiRoute Agent` 插件会拒绝 Shell 直接调用 `/api/agent/threads`、`/api/agent/send` 或 `session.prompt`。两端都必须使用线程桥并填写 `sourceThreadId`、`sourceAgentType` 和 `responsePolicy`。临时子 Agent 的本地协作不属于这项限制；关闭开关只停止绕过检查，已有待回复请求仍继续检查和提醒。
 - Manager 线程桥最终投给目标会话的同一个 owner：Codex 使用 Desktop IPC，DSH 使用该会话的 apiproxy owner。两者都不启动或改投备用 Runtime。
 - Codex Desktop 未启动、IPC 不可用或目标任务无法加载时返回失败；DSH Endpoint 不可用、会话不存在或工作目录冲突时也返回失败。两端都不得转给另一 Agent adapter 或备用 Runtime。
@@ -937,11 +937,15 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。
 
 ```text
-未开始
-进行中
+分析中
+待审批
+执行中
+等待打包
+等待 QA
+待讨论
 暂停
-已完成
-已归档
+完成
+关闭
 ```
 
 查询计划：
@@ -963,7 +967,8 @@ POST /roles/:roleId/plans
 {
   "title": "完善计划和记忆机制文档",
   "focus": "计划和记忆机制文档",
-  "status": "进行中",
+  "status": "分析中",
+  "archiveStatus": "未归档",
   "priority": "medium",
   "kind": "documentation",
   "currentStepId": "confirm-contract",
@@ -976,7 +981,7 @@ POST /roles/:roleId/plans
   ],
   "steps": [
     { "id": "inspect-existing", "title": "检查现有计划接口", "status": "已完成", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中", "workPhase": "analysis", "startedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中", "startedAt": "2026-07-27T08:10:00.000Z" },
     { "id": "update-docs", "title": "更新双语接口文档", "status": "未开始" }
   ],
   "keywords": ["计划", "记忆", "接口", "上下文"],
@@ -997,9 +1002,9 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。顶层 `status=进行中` 时，当前步骤写 `workPhase=analysis | execution`：调查、补证据、方案和审批前准备使用 `analysis`；审批通过或用户明确直接授权后的实施与开发验证使用 `execution`。明确等待讨论时保持顶层 `status=暂停` 和原 `currentStepId`，并在唯一进行中的恢复步骤写 `discussionState=pending`；讨论结束时清除该标记。写入 API 仍只接受五种顶层生命周期状态；Manager 为未终态计划派生青色“分析中”、绿色“执行中”、琥珀色“待讨论”、蓝色“等待打包”、紫色“等待 QA”、灰色“暂停”、红色“待审批”、橙色“待人工核验”。Agent 与客户端不得手写展示阶段。外部资料、素材、owner、账号、设备、授权和回执只保留在 `waitingFor` 等内部字段。
+新增计划必须提供有序的 `steps`。`plan.status` 是唯一计划状态真源，只允许“分析中、待审批、执行中、等待打包、等待 QA、待讨论、暂停、完成、关闭”。`archiveStatus` 独立，只允许“未归档、已归档”。步骤仍只使用“未开始、进行中、已完成”，不再写 `workPhase` 或 `discussionState`。Manager、WebGUI 和托盘直接显示 `plan.status`。
 
-Manager 仍使用精确内部分类驱动 reconcile：有安全动作时按 `workPhase` 显示“分析中”或“执行中”；暂停计划的当前恢复步骤带 `discussionState=pending` 时显示“待讨论”；开发闭环后只缺目标包时显示“等待打包”；目标包已纳入时显示“等待 QA”；开发闭环后只剩人工视觉或交互确认的 `manual-verify-*` 步骤显示“待人工核验”；完整审批合同显示“待审批”；完全没有安全动作时显示“暂停”。这些特殊状态优先于 `workPhase`，内部原因不得成为新的公开状态。
+审批资料准备阶段写“分析中”，完整审批合同正式等待回执时写“待审批”，批准或用户直接授权后写“执行中”。包体、QA、讨论和暂停直接写对应状态；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
@@ -1028,7 +1033,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI 用该接口记录非审批中进行中计划的计划级引导；WebGUI/托盘也继续用它记录当前审批步骤的正式意见。两者都会请求 Manager 通过独立 `plan_feedback` 系统事件通知 Agent。计划引导只带 `planId`，不能带 `stepId`：
+RibiWebGUI 用该接口记录状态为分析中或执行中且未进入审批的计划级引导；WebGUI/托盘也继续用它记录当前审批步骤的正式意见。两者都会请求 Manager 通过独立 `plan_feedback` 系统事件通知 Agent。计划引导只带 `planId`，不能带 `stepId`：
 
 ```json
 {
@@ -1086,13 +1091,13 @@ PATCH /roles/:roleId/plans/:planId
 - 更新全部步骤及唯一的当前步骤。
 - 更新下一步、等待对象和阻塞原因。
 - 更新关键词。
-- 将状态改为 `进行中`。
-- 将状态改为 `暂停` 或从 `暂停` 恢复为 `进行中`。
-- 将状态改为 `已完成`。
+- 将状态改为九种受支持状态之一。
+- 暂停或待讨论结束后，按实际阶段恢复为 `分析中` 或 `执行中`。
+- 验收完成后改为 `完成`；取消、失效或由后继计划替代时改为 `关闭`。
 
-计划归档通常不需要 Agent 处理。计划变为 `已完成` 后，角色知识快照会按当前固定的 72 小时窗口把它转为 `已归档`；目前这个归档窗口还不是 `personaConfig.json` 的公开配置字段。
+计划归档通常不需要 Agent 处理。`完成` 或 `关闭` 的计划超过当前固定的 72 小时窗口后，角色知识快照把独立的 `archiveStatus` 改为 `已归档`，但保留原 `plan.status`。已归档计划不参与关键词召回。
 
-归档计时以计划的 `updatedAt` 为准。Agent 更新计划后，RabiRoute 会刷新 `updatedAt`，该计划重新进入活跃窗口；只有 `已完成` 且距离最后更新时间超过归档窗口时才会自动归档。
+归档计时以计划的 `updatedAt` 为准。Agent 更新计划后，RabiRoute 会刷新 `updatedAt`，该计划重新进入活跃窗口；只有 `status=完成或关闭` 且 `archiveStatus=未归档` 时才会自动归档。
 
 ## 近期记忆接口
 

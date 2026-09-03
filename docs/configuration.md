@@ -164,7 +164,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `messageProcessingAgents.codex` / `messageProcessingAgents.dsh`：当前主 Agent 的消息处理 Agent 调度资格、任务数量上限和运行参数。只有与 `primaryAgentAdapter` 相同的条目生效；Codex 使用独立模型与推理强度，DSH 会话沿用 DSH 端配置的模型。默认关闭；开启后，聊天消息形成消息组并按不同话题复用或动态创建消息处理会话，ASR 和结构化事件照常直接投递。Agent 列表、上限截取和实际投递共用同一套权重顺序：依次考虑引用的 Agent 外发消息、原消息组、消息端、会话、说话人和最近使用时间，同分时才使用固定序号。`maxAgents` 可选，范围 `1–32`；未设置时默认为 `1`，达到上限后继续复用唯一消息处理会话。降低上限只解除超额会话与当前 Route 的消息处理池关联，不删除 owner 会话。消息端、计划回调、记忆回调和 Agent 待回复继续使用当前主 Agent 端，不会失败后切换到另一端。 Codex 新建或改名消息处理任务时，名称前缀取 Desktop 侧栏显示的 `Name`；不会使用状态库中的原始 `name`。
 - 关闭 `messageProcessingAgents.codex.enabled` 后，普通聊天恢复逐条投递给主人格；已关联消息组产生的计划进展通知、知识回调提醒和 Agent 间待回复也迁移到当前 Route 的主人格任务。旧消息处理任务和审计记录保留，但不会再因这些后续工作自动打开。
 - 开启 `messageProcessingAgents.codex.enabled` 后，同一设置区域会显示消息处理看板。看板不是另一套统计：它读取 Manager 保存的消息发送需求，明确区分必须回复、由 Agent 判断、已转交、等待发送、等待审批、已发送、不需要回复和发送失败。直接 @、直接回复和私聊默认必须处理；普通群消息允许 Agent 主动参与讨论，也允许提交有原因的“不回复”。计划与来源消息完成结构化关联后，统一计划写入函数会在进展变化时生成通知需求，并复用原消息处理任务把结果发回来源群或私聊。看板通过 Manager 事件刷新，不定时扫描聊天或计划目录。
-- `codexThreadId` / `codexThreadName`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID 与可见名称。有效且同工作目录的未归档 ID 是稳定身份；保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录完整查找。只有 RabiRoute 自己按稳定名称动态建立的消息处理任务使用 app-server 状态库的名称过滤，避免首次投递扫描完整任务目录；普通会话绑定仍保留完整查找。一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
+- `codexThreadId` / `codexThreadName` / `codexCwd`：下拉显示 Desktop 任务的名称和最后时间，内部保存完整任务 ID、可见名称和投递目录。有效的未归档 ID 是稳定身份；任务保存的默认 cwd 可以不同，下一轮使用当前配置的 `codexCwd`。保存 ID 指向已归档任务时先复用同目录唯一最新的未归档同名任务，没有候选才要求恢复/重选，且绝不自动创建替代任务。用户明确输入新名称时前端会清空旧 ID，后端才按名称 + 目录完整查找。只有 RabiRoute 自己按稳定名称动态建立的消息处理任务使用 app-server 状态库的名称过滤，避免首次投递扫描完整任务目录；普通会话绑定仍保留完整查找。一个或多个同名同目录候选按最后更新时间绑定唯一最新者，零匹配时幂等创建，最大时间并列时要求选择。
 - `codexCwd`：目标 Desktop 任务的项目目录。它用于校验已保存 ID、同名任务消歧和新建位置；选择已有任务时自动采用任务自己的目录。
 - `codexMemoryConsolidationAgentEnabled`：是否把自动到点或手动发起的记忆沉淀交给独立 Codex Desktop 任务。默认关闭。关闭时仍按 72 小时自动触发，但由主人格处理；开启后任务名固定由主人格任务名派生为“`<主人格任务名> 记忆整理`”，主人格不再收到同一请求。独立任务投递失败时明确失败，不回退给主人格或备用 Runtime。
 - `codexMemoryConsolidationAgentModel`：独立记忆整理 Agent 的模型，默认 `gpt-5.6-terra`。只影响该独立任务的新轮次，不改变主人格、消息处理 Agent、计划秘书或计划执行 Agent。
@@ -302,7 +302,7 @@ URL 可指向 Skill 目录、`SKILL.md` 或 `references/style-data.json`。`/api
 
 当前内置 Agent 端适配器：
 
-- `codex`：从 Desktop 左侧栏共用索引读取用户可见 `Name`，并按完整 ID 合并本地 cwd、归档、时间和 owner/rollout 状态；以完整任务 ID 和工作目录绑定。投递时让 Desktop 加载目标任务，再通过 Desktop IPC start 或 steer，实际消息只由 Desktop owner 执行。
+- `codex`：从 Desktop 左侧栏共用索引读取用户可见 `Name`，并按完整 ID 合并本地默认 cwd、归档、时间和 owner/rollout 状态；完整任务 ID 定位任务，当前配置的工作目录用于本次投递。投递时让 Desktop 加载目标任务，再通过 Desktop IPC start 或 steer，实际消息只由 Desktop owner 执行。
 - `copilotCli`：通过本机 Copilot CLI 命令投递一次性 prompt，输出写入 `copilot-output.jsonl`，运行态上报给 Manager。它不会注入已有 VS Code Copilot 面板线程；如需后台调用，请确保 CLI 可执行文件在 PATH 中，或设置 `COPILOT_CLI_BIN`。
 - `astrbot`：使用 `ASTRBOT_URL`、Dashboard 登录凭据和必需的 `ASTRBOT_SESSION_ID`。发送时只调用 ChatUI `POST /api/chat/send`；缺少 Session ID 时失败关闭。旧 AstrBot 插件回退与部署入口已经删除。
 - `marvis`：通过本机 handoff 方式接入 Marvis 桌面端。RabiRoute 会把 prompt 写入 `marvis-prompts/`、复制到剪贴板，并优先启动/聚焦 Windows 桌面应用 `Tencent.Marvis`；由于 Marvis 当前未提供稳定公开后台 API，这个适配器不会自动点击发送。
@@ -323,7 +323,7 @@ Codex adapter 的默认安全边界：
 - 有效 ID 且工作目录一致时始终复用，不因标题索引滞后、Desktop 改名或 goal 完成而新建。ID 被明确清空或确实失效时，才按保存名称和规范化工作目录查找/创建。
 - 无 ID 查找和下拉名称只以 Codex Desktop 左侧栏显示的 `Name` 为准。app-server `thread.name` 和 SQLite `threads.title` 都可能与侧栏不同，不能用于同名查找；任务 ID、工作目录、归档和时间从本地任务状态按完整 ID 读取；侧栏缺少 `Name` 时名称查找失败关闭。
 - 项目与任务列表只在进入设置界面时自动扫描一次；之后只有点击“扫描/重新扫描”按钮才刷新。
-- 主人格已有完整 ID 和工作目录时，配置页显示“定位会话”：Manager 先按 ID 读取并校验未归档状态和工作目录，再打开 Codex Desktop 任务或携带 `rabiSessionId` 的 DSH Web；该动作不发送 prompt、不创建会话、不修改绑定。“自动初始化会话”只在主人格尚无完整绑定时显示，先保存并解析稳定绑定，再通过角色面板/AgentPacket 正式链路把人格资料交给同一个 owner。
+- 主人格已有完整 ID 和工作目录时，配置页显示“定位会话”：Codex 只按完整 ID 读取并校验未归档状态，DSH 仍同时校验所属工作目录；随后打开 Codex Desktop 任务或携带 `rabiSessionId` 的 DSH Web。该动作不发送 prompt、不创建会话、不修改绑定。“自动初始化会话”只在主人格尚无完整绑定时显示，先保存并解析稳定绑定，再通过角色面板/AgentPacket 正式链路把人格资料交给同一个 owner。
 - 模型、工具、文件/网络权限和审批沿用目标 Desktop 任务；RabiRoute 不伪造或覆盖。
 - app-server WebSocket 与 `CODEX_APP_SERVER_WS_URL` 不进入主链，也不得由普通 adapter 配置写入用户环境。
 - `codexCwd` 是主人格工作目录。消息处理 Agent、计划秘书和记忆整理 Agent 只复用同一规范化目录的任务。主人格切换目录后，旧目录的辅助绑定不再投递；消息处理任务会从持久化池移除，计划秘书和记忆整理任务会在新目录查找或创建替代任务。

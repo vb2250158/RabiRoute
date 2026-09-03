@@ -20,11 +20,11 @@ test("AgentPacket plan hints explain shared guidance and approval feedback workf
   assert.match(hints, /approver/);
   assert.match(hints, /recommendation/);
   assert.match(hints, /sourceMessageId/);
-  assert.match(hints, /信息不完整时计划保持进行中并禁止正式审批/);
+  assert.match(hints, /信息不完整时计划保持分析中并禁止正式审批/);
   assert.match(hints, /status=暂停/);
-  assert.match(hints, /currentStepId/);
-  assert.match(hints, /workPhase=analysis 或 execution/);
-  assert.match(hints, /审批通过或用户已明确直接授权/);
+  assert.match(hints, /status 是唯一状态真源/);
+  assert.match(hints, /分析中、待审批、执行中、等待打包、等待 QA、待讨论、暂停、完成、关闭/);
+  assert.match(hints, /审批通过或用户明确直接授权/);
   assert.match(hints, /计划 POST\/PATCH 的 attachments/);
   assert.match(hints, /name\/mimeType\/contentBase64/);
   assert.match(hints, /GET \/api\/personas\?addressable=true/);
@@ -58,7 +58,8 @@ test("focused AgentPacket hints keep plan attachment discovery available", () =>
     assert.match(hints, /待审批计划/);
     assert.match(hints, /计划 attachments/);
     assert.match(hints, /图片、视频预览/);
-    assert.match(hints, /workPhase=analysis 或 execution/);
+    assert.match(hints, /status 是唯一状态真源/);
+    assert.match(hints, /审批准备使用分析中/);
     assert.match(hints, /POST \/api\/personas\/\{personaId\}\/messages/);
     assert.match(hints, /Idempotency-Key/);
     assert.match(hints, /有界超时/);

@@ -149,12 +149,24 @@ test("desktop pet runtime catalog does not scan or return shared-source packs", 
   const address = server.address();
   assert.ok(address && typeof address === "object");
 
-  const response = await fetch(
-    `http://127.0.0.1:${address.port}/api/desktop-pet/roles/YeYu/packs?scope=runtime`
-  );
-  const catalog = await response.json() as { data: DesktopPetPackCatalog };
+  const { statusCode, catalog } = await new Promise<{
+    statusCode: number | undefined;
+    catalog: { data: DesktopPetPackCatalog };
+  }>((resolve, reject) => {
+    http.get(
+      `http://127.0.0.1:${address.port}/api/desktop-pet/roles/YeYu/packs?scope=runtime`,
+      response => {
+        const chunks: Buffer[] = [];
+        response.on("data", chunk => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => resolve({
+          statusCode: response.statusCode,
+          catalog: JSON.parse(Buffer.concat(chunks).toString("utf8")) as { data: DesktopPetPackCatalog }
+        }));
+      }
+    ).once("error", reject);
+  });
 
-  assert.equal(response.status, 200);
+  assert.equal(statusCode, 200);
   assert.deepEqual(catalog.data.packs.map(pack => pack.id), ["yeyu-library-default"]);
 });
 

@@ -22,7 +22,8 @@ function packageFile(filePath: string, content: string): PlanStoragePackageFile 
   };
 }
 
-function revision(planId: string, status: "进行中" | "已完成" | "已归档", sequence: number): PlanStoragePackageFile[] {
+function revision(planId: string, status: "执行中" | "完成", sequence: number): PlanStoragePackageFile[] {
+  const archived = sequence === 3;
   const plan = {
     id: planId,
     title: "Lifecycle snapshot",
@@ -30,15 +31,15 @@ function revision(planId: string, status: "进行中" | "已完成" | "已归档
     status,
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: `2026-09-01T00:0${sequence}:00.000Z`,
-    ...(status === "已完成" || status === "已归档"
+    ...(status === "完成"
       ? { completedAt: "2026-09-01T00:01:00.000Z" }
       : {}),
-    ...(status === "已归档" ? { archivedAt: "2026-09-01T00:02:00.000Z" } : {})
+    ...(archived ? { archiveStatus: "已归档", archivedAt: "2026-09-01T00:02:00.000Z" } : {})
   };
   const history = Array.from({ length: sequence }, (_, index) => JSON.stringify({
     id: `${planId}-history-${index + 1}`,
     planId,
-    kind: index === sequence - 1 && status === "已归档" ? "archived" : index ? "updated" : "created",
+    kind: index === sequence - 1 && archived ? "archived" : index ? "updated" : "created",
     recordedAt: plan.updatedAt,
     after: plan
   })).join("\n") + "\n";
@@ -61,7 +62,7 @@ test("lifecycle repository publishes complete create, update, and archive snapsh
       kind: "plan-create",
       fromBucket: null,
       toBucket: "active",
-      files: revision(planId, "进行中", 1)
+      files: revision(planId, "执行中", 1)
     })
   );
   assert.equal(created.status, "committed");
@@ -74,7 +75,7 @@ test("lifecycle repository publishes complete create, update, and archive snapsh
       fromBucket: "active",
       toBucket: "active",
       expectedSourceInventoryHash: active.inventoryHash,
-      files: revision(planId, "已完成", 2)
+      files: revision(planId, "完成", 2)
     })
   );
   assert.equal(updated.status, "committed");
@@ -87,7 +88,7 @@ test("lifecycle repository publishes complete create, update, and archive snapsh
       fromBucket: "active",
       toBucket: "archive",
       expectedSourceInventoryHash: completed.inventoryHash,
-      files: revision(planId, "已归档", 3)
+      files: revision(planId, "完成", 3)
     })
   );
   assert.equal(archived.status, "committed");

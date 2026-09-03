@@ -363,7 +363,14 @@ export function handlePersonaSyncApi(
   }
   if (request.method === "POST" && requestUrl.pathname === "/api/persona-sync/merge") {
     void readJsonBody<PersonaSyncMergeCommand>(request)
-      .then(command => ctx.service.merge(command))
+      .then(async command => {
+        const result = ctx.service.merge(command);
+        // The manifest endpoint intentionally serves only the last published
+        // snapshot. Publish the owner mutation before acknowledging it so a
+        // following sync transaction cannot receive the previous file hash.
+        await ctx.service.manifest(command.roleId);
+        return result;
+      })
       .then(result => jsonResponse(response, result.status === "conflict" ? 409 : 200, { code: result.status === "conflict" ? 1 : 0, data: result }))
       .catch(error => jsonResponse(response, 400, { code: -1, message: error instanceof Error ? error.message : String(error) }));
     return true;

@@ -38,7 +38,7 @@ triggerAfterHours = 72
 | RabiSpeech 诊断记录 | `plugin-adapters/rabi-speech/output/records/YYYY-MM-DD.jsonl` | 日期分卷的诊断流水 | 与人格路由记录分离 |
 | 音频流收发与处理事件 | `plugin-adapters/rabi-speech/output/audio-stream-events/current.jsonl` | 动态归档的运行账本 | 稳定 `id/sequence`；有事件超过 72 小时时，将超过 24 小时的最大连续前缀移入 `archive/<first>~<last>.jsonl` 并原子更新索引 |
 | 人格语音兼容记录 | `data/roles/<RoleId>/voice-transcripts.jsonl` | 兼容/审计记录 | 不替代统一双向账本 |
-| 已完成计划 | `plans/items/active/*.json` | 延迟归档 | `updatedAt` 超过 72 小时后移入 `plans/archive/` |
+| 完成或关闭且尚未归档的计划 | `plans/active/<planId>/plan.json` | 延迟归档 | `updatedAt` 超过 72 小时后只将 `archiveStatus` 改为 `已归档`，保留原 `status`，并将整个目录移入 `plans/archive/<planId>/` |
 | TTS 音频缓存 | 人格或 RabiSpeech 音频缓存 | 到期回收 | 独立保留策略，不从账本归档规则推导 |
 | ASR 短语音缓存 | `plugin-adapters/rabi-speech/output/asr-audio/` | 24 小时到期回收 | 只保存实际送入识别的 VAD 语段，供本机回听；不保存全天连续 PCM |
 

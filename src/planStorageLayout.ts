@@ -10,6 +10,14 @@ export { canonicalLogicalPlanId } from "./planStorageIdentity.js";
 
 export type PlanStorageBucket = "active" | "archive";
 
+export function isArchivedPlanStatus(archiveStatus: unknown): boolean {
+  return archiveStatus === "已归档";
+}
+
+export function isCompletedPlanStatus(status: unknown): boolean {
+  return status === "完成" || status === "已完成";
+}
+
 export function safePlanStorageId(value: unknown): string {
   return safePlanStorageSegment(value);
 }
@@ -26,8 +34,8 @@ export function canonicalPlanStorageCollisionIdentity(planId: unknown): string {
   return canonicalPlanStorageCollisionKey(canonicalLogicalPlanId(planId));
 }
 
-export function planBucketForStatus(status: unknown): PlanStorageBucket {
-  return status === "已归档" ? "archive" : "active";
+export function planBucketForArchiveStatus(archiveStatus: unknown): PlanStorageBucket {
+  return isArchivedPlanStatus(archiveStatus) ? "archive" : "active";
 }
 
 export function planDirectory(roleDir: string, planId: unknown, bucket: PlanStorageBucket): string {

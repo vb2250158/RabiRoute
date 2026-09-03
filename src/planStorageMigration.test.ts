@@ -48,7 +48,7 @@ function fixture(t: test.TestContext, divergent: boolean) {
     id: planId,
     title: "Canonical plan",
     focus: divergent ? "canonical version" : "same version",
-    status: "进行中",
+    status: "执行中",
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: "2026-09-01T00:00:00.000Z"
   };
@@ -86,7 +86,7 @@ function firstLayoutFixture(t: test.TestContext, suffix: string) {
     id: planId,
     title: "Legacy-only plan",
     focus: "preserve the only copy",
-    status: "进行中",
+    status: "执行中",
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: "2026-09-01T00:00:00.000Z",
     evidence: { path: legacyAttachment }
@@ -445,14 +445,15 @@ test("startup migration backfills missing canonical plan history", (t) => {
   const activePlan = {
     id: "legacy-active",
     title: "Legacy active",
-    status: "进行中",
+    status: "执行中",
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-02T00:00:00.000Z"
   };
   const archivedPlan = {
     id: "legacy-archive",
     title: "Legacy archive",
-    status: "已归档",
+    status: "关闭",
+    archiveStatus: "已归档",
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-08-03T00:00:00.000Z",
     archivedAt: "2026-08-03T00:00:00.000Z"

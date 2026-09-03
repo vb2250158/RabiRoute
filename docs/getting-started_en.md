@@ -84,7 +84,7 @@ Codex is the verified handler path. Configure:
 - `codexThreadName`: the visible task name, such as `QQ message listener`.
 - `codexCwd`: the project directory in which Codex should work.
 
-A valid saved ID plus working directory is the stable identity. A Desktop rename, a stale SQLite title, or a completed goal does not create a duplicate. Typing a new name explicitly clears the old ID; only then may RabiRoute search by name and workspace or create an empty task.
+A valid saved Codex ID is the stable task identity, while the configured working directory controls the next turn. A different saved default cwd, Desktop rename, stale SQLite title, or completed goal does not create a duplicate. Typing a new name explicitly clears the old ID; only then may RabiRoute search by name and workspace or create an empty task.
 
 Codex/ChatGPT Desktop must be running for real delivery. RabiRoute uses Desktop IPC and may deeplink an unloaded task before retrying. The project-pinned app-server is used only to create and name an empty task; it never executes a routed prompt.
 

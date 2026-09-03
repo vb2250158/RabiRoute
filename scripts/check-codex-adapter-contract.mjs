@@ -33,8 +33,9 @@ assert.match(runtime, /resolveAndDeliverCodexSession/);
 assert.match(sessionResolver, /resolveCodexSession/);
 assert.match(sessionResolver, /dependencies\.deliver/);
 assert.match(sessionResolver, /if \(exact\)/);
-assert.match(sessionResolver, /exact\.cwd[\s\S]*sameCodexWorkspace/);
 assert.match(sessionResolver, /if \(!exact\.archived\) return \{ kind: "id", thread: exact \}/);
+assert.doesNotMatch(sessionResolver, /if \(exact\.cwd[\s\S]{0,200}workspace-mismatch/,
+  "An exact task ID must not be rejected because its saved cwd differs from the next turn workspace.");
 assert.match(sessionResolver, /reason: "archived"/);
 assert.match(sessionResolver, /previousThread: exact/);
 assert.ok(sessionResolver.indexOf('reason: "archived"') < sessionResolver.indexOf("const matches ="),
@@ -72,7 +73,7 @@ assert.equal(packageJson.scripts["configure:codex-desktop"], undefined);
 assert.equal(packageJson.scripts["codex:shared"], undefined);
 assert.match(adapterSkill, /冻结用户可观察合同/);
 assert.match(adapterSkill, /一个 adapter 只能有一条真实消息执行路径/);
-assert.match(adapterSkill, /会话身份是“完整线程 ID \+ workspace”/);
+assert.match(adapterSkill, /完整任务 ID 是任务身份/);
 assert.match(adapterSkill, /项目和会话扫描只允许在进入设置界面时自动执行一次/);
 assert.match(adapterSkill, /自动初始化会话/);
 assert.match(ownerFirstGate, /同一 session ID ≠ 同一 live task owner/);
@@ -83,4 +84,4 @@ if (fs.existsSync(builtAgentThreadsPath)) {
     "The runnable dist/agentThreads.js must contain the canonical resolver.");
 }
 
-console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID plus workspace remains stable across title changes; archived bindings create and persist a new task without same-name reuse.");
+console.log("Codex adapter contract OK: Desktop IPC is the only real-message owner; full task ID identifies an existing task while each delivery supplies its workspace; archived bindings create and persist a new task without same-name reuse.");

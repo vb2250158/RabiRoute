@@ -155,7 +155,6 @@ const planPageCounts = ref<RolePlanPageCounts>({
     qa: 0,
     waitingPackage: 0,
     approval: 0,
-    manualVerification: 0,
     paused: 0,
     completed: 0,
     archived: 0
@@ -511,7 +510,6 @@ function resetPlanPageCounts(): void {
       qa: 0,
       waitingPackage: 0,
       approval: 0,
-      manualVerification: 0,
       paused: 0,
       completed: 0,
       archived: 0
@@ -1217,12 +1215,12 @@ function planStepCount(plan: RolePlan): number {
 }
 
 function blocker(plan: RolePlan): string {
-  if (plan.presentation.tone !== "blocked") return "";
+  if (plan.presentation.approval.state !== "ready") return "";
   return currentStep(plan)?.blockedBy || plan.blockedBy || "";
 }
 
 function stepIsBlocked(plan: RolePlan, step: RolePlanStep): boolean {
-  return plan.presentation.tone === "blocked" && step.id === currentStep(plan)?.id;
+  return plan.presentation.approval.state === "ready" && step.id === currentStep(plan)?.id;
 }
 
 function completedSteps(plan: RolePlan): number {
@@ -1300,7 +1298,7 @@ function planDirectorySortValue(plan: RolePlan): string {
     planListSortMode.value,
     Date.now(),
     isEnglish.value ? "en" : "zh",
-    t(plan.presentation.status)
+    t(plan.status)
   );
 }
 
@@ -1310,7 +1308,7 @@ function planDirectorySortTitle(plan: RolePlan): string {
     planListSortMode.value,
     Date.now(),
     isEnglish.value ? "en" : "zh",
-    t(plan.presentation.status)
+    t(plan.status)
   );
 }
 
@@ -1532,7 +1530,7 @@ function planHistoryCurrentStep(record: RolePlanHistoryRecord): RolePlanStep | u
 }
 
 function planAcceptsGuidance(plan: RolePlan): boolean {
-  return plan.status === "进行中" && plan.presentation.approval.state === "none";
+  return (plan.status === "分析中" || plan.status === "执行中") && plan.presentation.approval.state === "none";
 }
 
 function planCardDomId(planId: string): string {
@@ -1982,7 +1980,7 @@ function guidanceComposeStatus(plan: RolePlan): ApprovalComposeStatus | null {
   if (!planAcceptsGuidance(plan)) {
     return {
       icon: "mdi-alert-circle-outline",
-      text: t("当前计划不在可引导的进行中状态。"),
+      text: t("只有分析中或执行中且未进入审批的计划可以填写引导。"),
       title: t("当前计划不能填写引导"),
       tone: "warning"
     };
@@ -2370,7 +2368,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <div class="knowledge-hero-copy">
         <div class="eyebrow">ROLE KNOWLEDGE LEDGER</div>
         <h1>计划与记忆</h1>
-        <p>{{ t("计划主体与记忆由 Agent 维护；数据、显示状态、排序和反馈记录均来自 Rabi Manager。进行中且未进入审批的计划可提交计划级引导，审批计划只在对应步骤处理审批。") }}</p>
+        <p>{{ t("计划主体与记忆由 Agent 维护；plan.status 是唯一状态真源，列表、排序和详情使用同一个值。分析中或执行中且未进入审批的计划可提交计划级引导，审批计划只在对应步骤处理审批。") }}</p>
       </div>
       <div class="knowledge-identity">
         <span>当前人格</span>
@@ -2726,7 +2724,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <h2 data-no-i18n>{{ plan.title }}</h2>
               </div>
               <div class="knowledge-plan-head-actions">
-                <v-chip class="knowledge-plan-status" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.presentation.status) }}</v-chip>
+                <v-chip class="knowledge-plan-status" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t(plan.status) }}</v-chip>
                 <v-btn
                   v-if="planAgentBindingStatus(plan, 'task')?.canOpen && !planTaskAgentWorking(plan)"
                   class="knowledge-plan-open-task"

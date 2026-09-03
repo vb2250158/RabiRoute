@@ -52,7 +52,7 @@ function createCandidateFixture(status: "pending" | "failed" = "pending") {
     id: "plan-recovery",
     title: "Recovery plan",
     focus: "Recover interrupted plan feedback",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "work",
     steps: [{ id: "work", title: "Work", status: "进行中" }],
     keywords: ["recovery"],

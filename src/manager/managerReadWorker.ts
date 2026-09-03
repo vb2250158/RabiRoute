@@ -195,11 +195,11 @@ function parsePerformanceLines(content: string): PerformanceSample[] {
   return samples;
 }
 
-function planStorageRevision(roleDir: string, plan: { id: string; status: string }): string {
+function planStorageRevision(roleDir: string, plan: { id: string; status: string; archiveStatus: string }): string {
   const storagePackage = readPlanStoragePackage(
     roleDir,
     plan.id,
-    plan.status === "已归档" ? "archive" : "active"
+    plan.archiveStatus === "已归档" ? "archive" : "active"
   );
   return storageInventoryRevisionToken(storagePackage.inventoryHash);
 }

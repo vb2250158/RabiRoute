@@ -29,7 +29,8 @@ function canonicalPlanFixture(bucket: PlanStorageBucket = "active") {
   fs.mkdirSync(path.dirname(planFile), { recursive: true });
   fs.writeFileSync(planFile, `${JSON.stringify({
     id: planId,
-    status: bucket === "archive" ? "已归档" : "进行中"
+    status: bucket === "archive" ? "关闭" : "执行中",
+    archiveStatus: bucket === "archive" ? "已归档" : "未归档"
   })}\n`, "utf8");
   return { roleDir, planId, bucket };
 }
@@ -358,7 +359,8 @@ test("plan feedback transaction follows the canonical package when the plan is a
   fs.renameSync(activeDirectory, archiveDirectory);
   fs.writeFileSync(planJsonFile(roleDir, planId, "archive"), `${JSON.stringify({
     id: planId,
-    status: "已归档"
+    status: "关闭",
+    archiveStatus: "已归档"
   })}\n`, "utf8");
 
   const recovered = commitPlanFeedback(roleDir, transactionCandidate(planId), transactionUploads());

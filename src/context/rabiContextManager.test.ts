@@ -25,7 +25,7 @@ function fixture(): { root: string; roleDir: string; memoryPath: string; complet
     id: "plan-complete",
     title: "已完成旧计划",
     focus: "已完成旧计划",
-    status: "已完成",
+    status: "完成",
     currentStep: "完成",
     nextAction: "归档",
     steps: [],

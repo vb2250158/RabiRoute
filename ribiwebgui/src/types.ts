@@ -251,8 +251,6 @@ export type RolePlanStep = {
   id: string;
   title: string;
   status: "未开始" | "进行中" | "已完成";
-  workPhase?: "analysis" | "execution";
-  discussionState?: "pending";
   detail?: string;
   waitingFor?: string;
   isBlocked?: boolean;
@@ -293,11 +291,14 @@ export type RolePlanApprovalContract = {
   responseStatus?: "pending" | "approved" | "rejected" | "changes_requested" | "cancelled";
 };
 
+export type RolePlanStatus = "分析中" | "待审批" | "执行中" | "等待打包" | "等待 QA" | "待讨论" | "暂停" | "完成" | "关闭";
+
 export type RolePlan = {
   id: string;
   title: string;
   focus: string;
-  status: "未开始" | "进行中" | "暂停" | "已完成" | "已归档";
+  status: RolePlanStatus;
+  archiveStatus: "未归档" | "已归档";
   importance?: number;
   urgency?: number;
   priority?: string;
@@ -341,8 +342,8 @@ export type RolePlan = {
   updatedAt: string;
   keywords: string[];
   presentation: {
-    status: string;
-    tone: "blocked" | "discussion" | "manual_verification" | "qa" | "analyzing" | "executing" | "running" | "waiting_package" | "pending" | "done" | "archived" | "paused" | "unknown";
+    status: RolePlanStatus;
+    tone: "blocked" | "discussion" | "qa" | "analyzing" | "executing" | "waiting_package" | "done" | "closed" | "paused" | "unknown";
     statusLevel?: number;
     sortBucket: number;
     views: Array<"current" | "plans" | "archived">;

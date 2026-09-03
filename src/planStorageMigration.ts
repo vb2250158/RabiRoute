@@ -10,7 +10,7 @@ import {
 } from "./planStorageLegacyLayout.js";
 import {
   planAttachmentDirectory,
-  planBucketForStatus,
+  planBucketForArchiveStatus,
   planDirectory,
   planFeedbackAttachmentDirectory
 } from "./planStorageLayout.js";
@@ -40,7 +40,7 @@ export type PlanLayoutMigrationResult = {
 };
 
 export type PlanStorageMigrationDependencies = {
-  normalizePlan: (raw: Record<string, unknown>, fallbackId: string) => { id: string; status: unknown } | null;
+  normalizePlan: (raw: Record<string, unknown>, fallbackId: string) => { id: string; status: unknown; archiveStatus?: unknown } | null;
   onChanged?: () => void;
 };
 
@@ -202,7 +202,7 @@ function backfillCanonicalPlanHistories(
           if (path.resolve(expectedDirectory) !== path.resolve(directory)) {
             throw new Error(`Canonical plan history target does not match plan identity: ${directory}`);
           }
-          if (planBucketForStatus(plan.status) !== bucket) {
+          if (planBucketForArchiveStatus(plan.archiveStatus ?? (raw.status === "已归档" ? "已归档" : "未归档")) !== bucket) {
             throw new Error(`Canonical plan history target does not match plan status: ${plan.id}`);
           }
           const recordedAt = migrationRecordedAt(raw);
@@ -267,7 +267,7 @@ export function migrateRolePlanLayout(
       result.failures.push({ planId: fallbackId, error: `Cannot read legacy plan JSON: ${sourcePlanFile}` });
       continue;
     }
-    const bucket = planBucketForStatus(plan.status);
+    const bucket = planBucketForArchiveStatus(plan.archiveStatus ?? (raw?.status === "已归档" ? "已归档" : "未归档"));
     const destinationDirectory = planDirectory(roleDir, plan.id, bucket);
     const legacyHistory = legacyPlanHistoryFile(roleDir, plan.id);
     const legacyFeedback = legacyPlanFeedbackFile(roleDir, plan.id);

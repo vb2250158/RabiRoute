@@ -87,7 +87,7 @@ Check in order:
 
 1. Desktop is open and can enter the target task.
 2. Agent scan sees that task and workspace.
-3. The saved task ID exists and the workspace has not moved.
+3. The saved task ID exists and the requested workspace is still allowed.
 4. Log Diagnostics reports `desktop-ipc`.
 5. A `no-client-found` wake-and-retry still fails.
 

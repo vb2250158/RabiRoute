@@ -45,7 +45,7 @@ Complete these fields:
 2. Select an existing item under **Task name and last activity**.
 3. To create a task, enter a new name. Saving creates only the empty task and binding.
 
-RabiRoute stores the complete task ID. A Desktop rename or completed goal does not create a duplicate while the ID and workspace remain valid.
+RabiRoute stores the complete task ID and supplies the workspace on each delivery. A different saved default cwd, Desktop rename, or completed goal does not create a duplicate while the ID remains valid.
 
 
 ## Step 3: confirm the persona

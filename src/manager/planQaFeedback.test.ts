@@ -33,7 +33,7 @@ function planRevision(roleDir: string, plan: PlanItem): string {
   return storageInventoryRevisionToken(readPlanStoragePackage(
     roleDir,
     plan.id,
-    plan.status === "已归档" ? "archive" : "active"
+    plan.archiveStatus === "已归档" ? "archive" : "active"
   ).inventoryHash);
 }
 
@@ -94,7 +94,7 @@ function fixture(t: test.TestContext): { roleDir: string; planId: string } {
     id: planId,
     title: "QA post-commit",
     focus: "Recover uncertain QA dispatch without replay",
-    status: "进行中",
+    status: "等待 QA",
     currentStepId: "verify-post-commit",
     steps: [{ id: "verify-post-commit", title: "QA 验收", status: "进行中" }],
     taskBinding: {
@@ -292,7 +292,7 @@ test("QA feedback transition rejects a stale record revision and preserves the c
   const { roleDir, planId } = fixture(t);
   const initialPlan = readPlansFromStorageInWorker(roleDir).find((candidate) => candidate.id === planId)!;
   updateStoredPlan(roleDir, planId, {
-    status: "已完成",
+    status: "完成",
     currentStepId: null,
     steps: initialPlan.steps.map((step) => ({ ...step, status: "已完成" }))
   }, planRevision(roleDir, initialPlan), {

@@ -85,7 +85,7 @@ Handler adapters receive packets. They do not own platform routing semantics or 
 
 ### 6. Session / turn control
 
-Codex delivery prefers a valid saved task ID in the same workspace. Desktop renames, stale SQLite titles, and completed goals do not create duplicates. Only an explicitly cleared or missing ID falls back to name-plus-cwd lookup or idempotent empty-task creation. Desktop owns turn start/steer, model, tools, sandbox, and approvals.
+Codex delivery prefers a valid saved task ID even when the task's saved default cwd differs from the next turn workspace. Desktop renames, cwd drift, stale SQLite titles, and completed goals do not create duplicates. Only an explicitly cleared or missing ID falls back to name-plus-cwd lookup or idempotent empty-task creation. Desktop owns turn start/steer, model, tools, sandbox, and approvals.
 
 The local `/api/agent/threads` bridge exposes controlled list/read/resolve/create/send operations for background handlers that lack Desktop task tools. App-server is used only for empty-task metadata bootstrap; real prompts still go to the Desktop owner.
 

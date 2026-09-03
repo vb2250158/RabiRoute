@@ -5,15 +5,16 @@ export type PlanSortPalette = {
 };
 
 export enum PlanStatusSortLevel {
-  Approval = 0,
-  Discussion = 1,
-  Qa = 2,
-  Running = 3,
-  WaitingPackage = 4,
-  Done = 6,
-  Archived = 7,
-  Unknown = 8,
-  Paused = 9
+  Analyzing = 0,
+  Approval = 1,
+  Executing = 2,
+  WaitingPackage = 3,
+  Qa = 4,
+  Discussion = 5,
+  Paused = 6,
+  Done = 7,
+  Closed = 8,
+  Unknown = 9
 }
 
 export enum PlanImportanceLevel {

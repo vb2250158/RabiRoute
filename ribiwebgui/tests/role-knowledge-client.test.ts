@@ -23,7 +23,11 @@ function plan(presentation?: RolePlan["presentation"]): RolePlan {
     id: "plan",
     title: "Plan",
     focus: "Plan",
-    status: "进行中",
+    status: presentation?.status === "待讨论"
+      ? "待讨论"
+      : presentation?.status === "等待 QA"
+        ? "等待 QA"
+        : "分析中",
     attachments: [],
     steps: [],
     createdAt: "2026-07-30T00:00:00.000Z",
@@ -354,7 +358,7 @@ test("WebGUI clears cached revisions when Manager lifecycle metadata cannot be r
   }
 });
 
-test("WebGUI preserves Manager stages and does not derive a second stage when presentation is absent", () => {
+test("WebGUI preserves plan.status and does not derive a second status when presentation is absent", () => {
   const managerStage = normalizeRolePlanFromManager(plan({
     status: "待讨论",
     tone: "discussion",
@@ -368,7 +372,7 @@ test("WebGUI preserves Manager stages and does not derive a second stage when pr
   assert.equal(managerStage.presentation.status, "待讨论");
   assert.equal(managerStage.presentation.tone, "discussion");
   assert.equal(managerStage.presentation.sortBucket, 1);
-  assert.equal(missingPresentation.presentation.status, "状态未知");
+  assert.equal(missingPresentation.presentation.status, "分析中");
   assert.equal(missingPresentation.presentation.tone, "unknown");
 });
 

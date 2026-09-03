@@ -482,7 +482,7 @@ export class CodexHookContextService {
         "可用技能：",
         view.activeSkillIndex,
         "",
-        "进行中计划：",
+        "当前计划：",
         view.activePlanIndex,
         "",
         "近期记忆：",
@@ -581,7 +581,7 @@ export class CodexHookContextService {
     const matches = this.listRoles().flatMap((roleId) => {
       const role = this.requireRole(roleId);
       return listPlans(role.roleDir)
-        .filter((plan) => (plan.status === "未开始" || plan.status === "进行中")
+        .filter((plan) => (["分析中", "执行中", "等待打包", "等待 QA"].includes(plan.status))
           && plan.taskBinding?.agentType === "codex"
           && plan.taskBinding.sessionId === sessionId
           && isPangHuWorkspace(plan.taskBinding.workspace || request.cwd))
@@ -639,7 +639,7 @@ export class CodexHookContextService {
       const role = this.requireRole(roleId);
       return listPlans(role.roleDir)
         .filter((plan) => (
-          (plan.status === "未开始" || plan.status === "进行中")
+          (["分析中", "执行中", "等待打包", "等待 QA"].includes(plan.status))
           && plan.taskBinding?.agentType === "codex"
           && plan.taskBinding.sessionId === sessionId
           && plan.taskBinding.completionHook?.enabled === true

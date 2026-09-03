@@ -795,7 +795,7 @@ export class CodexDesktopBridge {
 
   async deliver(params: CodexDesktopTurnDelivery): Promise<CodexDesktopDelivery> {
     this.deliveryEvent(params, "queued");
-    const key = `${params.threadId}\n${canonicalCodexWorkspacePath(params.cwd)}`;
+    const key = params.threadId;
     const previous = this.deliveryQueues.get(key);
     const scheduled = (previous ? previous.catch(() => undefined) : Promise.resolve())
       .then(() => this.deliverNow(params));

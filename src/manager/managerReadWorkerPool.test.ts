@@ -133,7 +133,7 @@ function planFeedbackRecoveryFixture(unrelatedPlanDirectories = 500): string {
     id: "worker-recovery-plan",
     title: "Worker recovery plan",
     focus: "Keep UNC recovery outside the Manager event loop",
-    status: "进行中",
+    status: "执行中",
     currentStepId: "recover",
     steps: [{ id: "recover", title: "Recover", status: "进行中" }],
     keywords: ["worker", "recovery"]
@@ -182,7 +182,7 @@ test("manager read workers publish a deeply immutable RoleKnowledge catalog", as
       id: "worker-catalog",
       title: "Worker catalog",
       focus: "Publish the RoleKnowledge catalog",
-      status: "进行中",
+      status: "执行中",
       currentStepId: "read",
       steps: [{ id: "read", title: "Read in worker", status: "进行中" }],
       keywords: ["worker"]
@@ -207,7 +207,7 @@ test("knowledge plan pages coalesce identical concurrent summary reads", async (
         id: `page-${index}`,
         title: `Page ${index}`,
         focus: "Keep knowledge pages bounded",
-        status: "进行中",
+        status: "执行中",
         currentStepId: "read",
         steps: [{ id: "read", title: "Read", status: "进行中" }],
         keywords: ["page"]

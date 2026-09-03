@@ -1324,7 +1324,8 @@ export class PersonaSyncCoordinator {
       if (canonicalPlanStorageName(planId) !== side.storageId) {
         throw new Error("non-canonical logical identity");
       }
-      if (side.bucket === "archive" ? parsed.status !== "已归档" : parsed.status === "已归档") {
+      const archived = (parsed as { archiveStatus?: unknown }).archiveStatus === "已归档" || parsed.status === "已归档";
+      if (side.bucket === "archive" ? !archived : archived) {
         throw new Error("bucket/status mismatch");
       }
     } catch {

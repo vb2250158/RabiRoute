@@ -26,7 +26,7 @@ Confirm the unsaved notice disappeared. Some changes synchronize or reload the R
 
 ## Why does a renamed Codex task still receive messages?
 
-RabiRoute uses the complete task ID and workspace as a stable binding. The title is display information; a rename or completed goal does not invalidate the task.
+RabiRoute uses the complete Codex task ID as the stable task identity and the configured workspace for the current turn. A different saved default cwd, rename, or completed goal does not invalidate the task.
 
 ## Why does the task use a different model or tool set?
 

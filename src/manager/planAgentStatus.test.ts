@@ -8,13 +8,14 @@ function plan(overrides: Partial<PlanItem> = {}): PlanItem {
     id: "plan-1",
     title: "Plan",
     focus: "Plan",
-    status: "进行中",
+    status: "执行中",
     attachments: [],
     steps: [],
     createdAt: "2026-08-07T00:00:00.000Z",
     updatedAt: "2026-08-07T00:00:00.000Z",
     keywords: [],
-    ...overrides
+    ...overrides,
+    archiveStatus: overrides.archiveStatus ?? "未归档"
   };
 }
 
@@ -87,7 +88,7 @@ test("plan Agent status deduplicates one task used by task and secretary binding
   assert.equal(status?.secretaryAgent?.working, true);
 });
 
-test("plan Agent status turns timeout and workspace mismatch into non-working diagnostic states", async () => {
+test("plan Agent status keeps read failures separate and uses the plan workspace for an exact task", async () => {
   const timeoutService = createPlanAgentStatusService({
     readThread: async () => new Promise(() => undefined),
     timeoutMs: 10
@@ -104,8 +105,9 @@ test("plan Agent status turns timeout and workspace mismatch into non-working di
   const [mismatch] = await mismatchService.inspectPlans([plan({
     taskBinding: { agentType: "codex", sessionId: "thread-1", workspace: "C:\\work" }
   })]);
-  assert.equal(mismatch?.taskAgent.sessionStatus, "workspace_mismatch");
-  assert.equal(mismatch?.taskAgent.canOpen, false);
+  assert.equal(mismatch?.taskAgent.sessionStatus, "idle");
+  assert.equal(mismatch?.taskAgent.workspace, "C:\\work");
+  assert.equal(mismatch?.taskAgent.canOpen, true);
 });
 
 test("opening a plan Agent only opens the exact verified Codex task", async () => {

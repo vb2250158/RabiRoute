@@ -154,7 +154,7 @@ test("plan feedback replies are written to the plan audit record and published t
     id: "plan-1",
     title: "说明原问题",
     focus: "补齐计划背景和修改边界",
-    status: "进行中",
+    status: "待审批",
     currentStepId: "approval",
     steps: [{ id: "approval", title: "等待审批", status: "进行中" }],
     createdAt: "2026-07-27T00:00:00.000Z",

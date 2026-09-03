@@ -16,10 +16,10 @@ Four rules follow:
 
 1. Desktop applications, CLIs, and services must retain independent startup, shutdown, and upgrade lifecycles unless their product contract explicitly says otherwise.
 2. If the requirement is “visible in this Desktop task with this task's tools,” that Desktop task owner must execute the real turn. RabiRoute must not start a second executor.
-3. Persist the visible name, immutable ID, and workspace together, but use full ID plus workspace as identity. The owner/SQLite title is mutable display metadata; only an explicit Rabi-side name edit clears the ID and switches targets.
+3. Persist the visible name, immutable ID, and workspace together. For Codex, the full ID is the task identity and workspace is the current delivery context; the saved default cwd and owner/SQLite title are mutable metadata. Only an explicit Rabi-side name edit clears the ID and switches targets.
 4. Tools exist only when the actual owner/runtime registers them. Prompt wording cannot create a missing tool.
 
-Codex Desktop IPC is a verified, version-sensitive contract. It must fail closed, wake/load the exact owner, validate full ID plus workspace, and have no alternate execution path.
+Codex Desktop IPC is a verified, version-sensitive contract. It must fail closed, wake/load the exact owner by full ID, supply the current workspace for the turn, and have no alternate execution path.
 
 ## Vocabulary
 
@@ -86,7 +86,7 @@ Typical causes are name-as-identity, delayed indexing treated as absence, concur
 
 ### The first message works and the second creates a duplicate
 
-Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Building the name index directly from SQLite is equally unsafe: lookup returns zero even though the sidebar still shows the task, then creates a duplicate. Reuse a valid unarchived ID in the same workspace regardless of title metadata. For no-ID lookup and dropdown labels, use only `session_index.jsonl.thread_name`, the same Name shown in the Desktop left sidebar. Use local task state only to merge ID, workspace, archive, recency, and owner state by exact ID. If the saved ID is archived, a real delivery creates a new task and persists the replacement binding without locating or reusing another same-name task. If Desktop wake-and-retry still fails and the exact ID can no longer be read from local state, create a replacement scoped to the old ID, redeliver, and return a warning; keep the original failure when the task still exists. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
+Desktop's SQLite `title` can change to the first routed prompt while the UI keeps the user-visible task name. Treating that mutable title as identity invalidates a good binding after the first turn. Building the name index directly from SQLite is equally unsafe: lookup returns zero even though the sidebar still shows the task, then creates a duplicate. Reuse a valid unarchived ID regardless of its saved default cwd or title metadata, and supply the current workspace for each delivery. For no-ID lookup and dropdown labels, use only `session_index.jsonl.thread_name`, the same Name shown in the Desktop left sidebar. Use local task state only to merge ID, default cwd, archive, recency, and owner state by exact ID. If the saved ID is archived, a real delivery creates a new task and persists the replacement binding without locating or reusing another same-name task. If Desktop wake-and-retry still fails and the exact ID can no longer be read from local state, create a replacement scoped to the old ID, redeliver, and return a warning; keep the original failure when the task still exists. When the user explicitly types a new Rabi name, the UI clears the old ID before name lookup or creation.
 
 ### The settings page becomes slow or scans continuously
 
@@ -110,7 +110,7 @@ Installation, authentication, and endpoint checks are prerequisites. Verificatio
 flowchart TD
     R["RabiRoute AgentPacket"] --> S["Session resolver"]
     S --> I{"Read saved ID state"}
-    I -->|"Exists, same workspace, unarchived"| B["Reuse exact binding despite title mutation"]
+    I -->|"Exists and unarchived"| B["Reuse exact ID with the current workspace"]
     I -->|"Empty / invalid / genuinely missing"| N["Find by saved name + workspace"]
     I -->|"Archived"| C2["Create a new task with an old-ID-scoped idempotency key"]
     I -->|"Workspace mismatch"| F["Stop with actionable error"]
@@ -135,7 +135,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 
 - Read the visible Name from the Desktop sidebar index. Use local task state for pagination, workspace, archive, recency, and owner data by exact ID without allowing its metadata title to override the sidebar Name.
 - Persist visible name, full task ID, and workspace as one binding.
-- Keep a valid ID/workspace binding even when owner or SQLite title metadata changes.
+- Keep a valid Codex ID binding even when saved cwd, owner name, or SQLite title metadata changes; use the current workspace for delivery.
 - For exact same-name tasks in the workspace, bind the unique latest `updatedAt`; create only when none exist and require selection on a latest-time tie.
 - Deeplink an unloaded task, retry for a bounded period, then fail closed.
 - Deliver real prompts only through Desktop IPC.
@@ -187,7 +187,7 @@ The metadata bootstrap must never receive the real prompt. Model, tools, sandbox
 ## Release test matrix
 
 - Independent cold start and shutdown.
-- Valid ID reuse after title mutation, archived-binding replacement and persistence, workspace mismatch, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
+- Valid Codex ID reuse after saved-cwd or title mutation, current-workspace delivery, archived-binding replacement and persistence, unique/latest same-name rebind, tied-latest ambiguity, and zero-match creation.
 - Desktop rename continuity and explicit Rabi-side target switching after clearing the old ID.
 - Delayed index and concurrent single-flight creation.
 - Full pagination and bounded scan count.

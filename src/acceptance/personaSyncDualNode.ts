@@ -368,6 +368,9 @@ export async function runPersonaSyncDualNodeAcceptance(
     ));
 
     fs.rmSync(path.join(roleB, "local.md"));
+    // These fixture edits deliberately bypass the peer API. Publish each one
+    // before syncing so the test exercises the Manager's snapshot boundary.
+    await serviceB.manifest(roleId);
     const pulledDeletion = await coordinator.sync("pc-b", roleId);
     fs.rmSync(path.join(roleA, "remote.md"));
     const pushedDeletion = await coordinator.sync("pc-b", roleId);
@@ -378,6 +381,7 @@ export async function runPersonaSyncDualNodeAcceptance(
 
     fs.writeFileSync(path.join(roleA, "decision.md"), "LAN local decision\n", "utf8");
     fs.writeFileSync(path.join(roleB, "decision.md"), "LAN remote decision\n", "utf8");
+    await serviceB.manifest(roleId);
     const lanConflict = await coordinator.sync("pc-b", roleId);
     const conflict = serviceA.listConflicts(roleId).find(item => item.path === "decision.md");
     if (!conflict) throw new Error("LAN divergence did not create conflict evidence.");
@@ -409,6 +413,7 @@ export async function runPersonaSyncDualNodeAcceptance(
     });
     await onlineEvent;
     fs.writeFileSync(path.join(roleB, "relay-only.md"), "relay fallback file\n", "utf8");
+    await serviceB.manifest(roleId);
     const relayPull = await coordinator.sync("pc-b", roleId);
     const relayChecks = [
       check("relay_fallback_transport", relayPull.transport === "relay", relayPull.transport),
@@ -417,6 +422,7 @@ export async function runPersonaSyncDualNodeAcceptance(
 
     fs.writeFileSync(path.join(roleA, "decision.md"), "Relay local decision\n", "utf8");
     fs.writeFileSync(path.join(roleB, "decision.md"), "Relay remote decision\n", "utf8");
+    await serviceB.manifest(roleId);
     const relayConflict = await coordinator.sync("pc-b", roleId);
     const relayEvidence = serviceA.listConflicts(roleId).find(item => item.path === "decision.md");
     if (!relayEvidence) throw new Error("Relay divergence did not create conflict evidence.");

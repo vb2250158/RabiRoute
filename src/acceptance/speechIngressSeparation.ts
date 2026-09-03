@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { handleRoleContextProjectionRequest } from "../manager/roleContextProjection.js";
+import type { RoleKnowledgeSnapshot } from "../roleKnowledge.js";
 import { parseSpeechProcessResult } from "../speechMessageDelivery.js";
 import { SpeechIngressStore } from "../speechIngressStore.js";
 
@@ -169,6 +172,77 @@ function speechEnvironment(
   };
 }
 
+async function startRoleContextFixture(
+  roles: Array<{ gatewayId: string; roleId: string; roleDir: string }>
+): Promise<{ env: NodeJS.ProcessEnv; close: () => Promise<void> }> {
+  const identity = {
+    applicationGenerationId: "speech-acceptance-generation",
+    managerInstanceId: "speech-acceptance-manager"
+  };
+  const capability = "speech-acceptance-capability";
+  const routeRoles = new Map(roles.map(role => [role.gatewayId, role.roleId]));
+  const projections = new Map(roles.map(role => [role.roleId, {
+    roleDir: role.roleDir,
+    plansDir: path.join(role.roleDir, "plans"),
+    memoryDir: path.join(role.roleDir, "memory"),
+    agentInterfaceDocPath: "docs/rabi-agent-interfaces.md",
+    activePlans: [],
+    activeSkills: [],
+    recentMemories: [],
+    matchedItems: [],
+    matchedSkills: [],
+    requiredReadItems: [],
+    contextInjection: { mode: "focused" as const, requiredReadLimit: 3, matchedItemLimit: 3, personaMaxChars: 1_600 }
+  } satisfies RoleKnowledgeSnapshot]));
+  const readJsonBody = <T>(request: http.IncomingMessage): Promise<T> => new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+    request.on("end", () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as T);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+  const jsonResponse = (response: http.ServerResponse, statusCode: number, body: unknown): void => {
+    response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify(body));
+  };
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", `http://${request.headers.host || "127.0.0.1"}`);
+    if (!handleRoleContextProjectionRequest(request, url, response, {
+      identity,
+      isLoopback: () => true,
+      verifyCapability: (gatewayId, roleId, actualCapability) =>
+        actualCapability === capability && routeRoles.get(gatewayId) === roleId,
+      readJsonBody,
+      resolve: body => projections.get(body.roleId),
+      requestRefresh: () => undefined,
+      jsonResponse
+    })) jsonResponse(response, 404, {});
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    throw new Error("Unable to resolve isolated role-context listener port.");
+  }
+  return {
+    env: {
+      GATEWAY_MANAGER_URL: `http://127.0.0.1:${address.port}`,
+      RABIROUTE_APPLICATION_GENERATION_ID: identity.applicationGenerationId,
+      RABIROUTE_MANAGER_INSTANCE_ID: identity.managerInstanceId,
+      PERSONA_MESSAGING_CAPABILITY: capability
+    },
+    close: () => new Promise<void>(resolve => server.close(() => resolve()))
+  };
+}
+
 function hasFullHostEvidence(record: Record<string, unknown>): boolean {
   const segments = Array.isArray(record.segments) ? record.segments as Array<Record<string, unknown>> : [];
   return Boolean(
@@ -227,6 +301,7 @@ export async function runSpeechIngressSeparationAcceptance(
     checks: []
   };
   let exitCode = 1;
+  let roleContextFixture: Awaited<ReturnType<typeof startRoleContextFixture>> | undefined;
   try {
     if (!fs.existsSync(entryPath)) throw new Error("Speech acceptance entry is missing. Run npm run build:backend first.");
     fs.mkdirSync(pcRoleDir, { recursive: true });
@@ -311,6 +386,10 @@ export async function runSpeechIngressSeparationAcceptance(
 
     const pcProfile = routeProfile("acceptance-pc-route", pcRoleId, rolesDir, "voice_transcript");
     const mobileProfile = routeProfile("acceptance-mobile-route", mobileRoleId, rolesDir, "rabilink");
+    roleContextFixture = await startRoleContextFixture([
+      { gatewayId: "AcceptancePcGateway", roleId: pcRoleId, roleDir: pcRoleDir },
+      { gatewayId: "AcceptanceMobileGateway", roleId: mobileRoleId, roleDir: mobileRoleDir }
+    ]);
     const [pcChild, mobileChild] = await Promise.all([
       runSpeechChild(
         entryPath,
@@ -320,7 +399,10 @@ export async function runSpeechIngressSeparationAcceptance(
           "--speech-gateway=AcceptancePcGateway",
           "--speech-route-profile=acceptance-pc-route"
         ],
-        speechEnvironment(fixtureRoot, ingressDir, rolesDir, "AcceptancePcGateway", pcRoleId, "speech", pcProfile),
+        {
+          ...speechEnvironment(fixtureRoot, ingressDir, rolesDir, "AcceptancePcGateway", pcRoleId, "speech", pcProfile),
+          ...roleContextFixture.env
+        },
         timeoutMs
       ),
       runSpeechChild(
@@ -331,7 +413,10 @@ export async function runSpeechIngressSeparationAcceptance(
           "--speech-gateway=AcceptanceMobileGateway",
           "--speech-route-profile=acceptance-mobile-route"
         ],
-        speechEnvironment(fixtureRoot, ingressDir, rolesDir, "AcceptanceMobileGateway", mobileRoleId, "rabilink", mobileProfile),
+        {
+          ...speechEnvironment(fixtureRoot, ingressDir, rolesDir, "AcceptanceMobileGateway", mobileRoleId, "rabilink", mobileProfile),
+          ...roleContextFixture.env
+        },
         timeoutMs
       )
     ]);
@@ -407,6 +492,7 @@ export async function runSpeechIngressSeparationAcceptance(
     report.error = error instanceof Error ? error.message.replace(fixtureRoot, "<isolated-fixture>") : String(error);
     exitCode = 1;
   } finally {
+    await roleContextFixture?.close();
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
   report.exitCode = exitCode;

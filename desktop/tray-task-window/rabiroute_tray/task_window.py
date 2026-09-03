@@ -52,11 +52,15 @@ VIEW_LABELS = (
 )
 
 STATUS_TONES = {
-    "进行中": "running",
+    "分析中": "analyzing",
+    "待审批": "approval",
+    "执行中": "executing",
+    "等待打包": "waiting_package",
+    "等待 QA": "qa",
+    "待讨论": "discussion",
     "暂停": "paused",
-    "未开始": "pending",
-    "已完成": "done",
-    "已归档": "archived",
+    "完成": "done",
+    "关闭": "closed",
 }
 
 PLAN_PRIORITY_LABELS = {"low": "低", "medium": "中", "high": "高"}
@@ -782,9 +786,7 @@ def _plan_current_step_summary(plan: PlanItem) -> str:
 
 
 def _plan_status_presentation(plan: PlanItem, status: str) -> tuple[str, str]:
-    if plan.display_status:
-        return plan.display_status, plan.display_tone or "unknown"
-    return "状态未知", "unknown"
+    return status or "状态未知", plan.display_tone or "unknown"
 
 
 def _plan_card_palette_stylesheet(plan: PlanItem, theme: object = "light") -> str:
@@ -1649,11 +1651,11 @@ class TaskWindow(QWidget):
     def _render_current(self) -> None:
         assert self.plans is not None
         assert self.context is not None
-        self._add_section_header("进行中计划", "计划主体只读；展开需审批计划可填写建议。", "plan")
+        self._add_section_header("当前计划", "计划主体只读；展开需审批计划可填写建议。", "plan")
         if self.plans.current:
-            self._add_plan_cards(self.plans.current, "进行中计划")
+            self._add_plan_cards(self.plans.current, "当前计划")
         else:
-            self._add_info_card("进行中计划", "暂无 status=进行中 的计划。", [("计划目录", str(self.plans.plans_dir))], "empty")
+            self._add_info_card("当前计划", "暂无分析中、待审批、执行中、等待打包或等待 QA 的计划。", [("计划目录", str(self.plans.plans_dir))], "empty")
         self._add_section_header("近期记忆", "Agent 维护的近期上下文条目，只读展示。", "memory")
         if self.context.recent_memory:
             self._add_context_cards(self.context.recent_memory, "近期记忆")

@@ -87,12 +87,12 @@ test("bulk package-gate migration is dry-run by default, preserves task bindings
   const readyBefore = fs.readFileSync(readyFile, "utf8");
   const dryRun = migratePackageWaitingPlans({ rolesRoot, apply: false, now: "2026-07-28T10:00:00.000Z" });
   assert.equal(dryRun.changedPlanCount, 2);
-  assert.equal(dryRun.waitingPackagePlanCount, 2);
+  assert.equal(dryRun.waitingPackagePlanCount, 1);
   assert.equal(fs.readFileSync(readyFile, "utf8"), readyBefore);
 
   const applied = migratePackageWaitingPlans({ rolesRoot, apply: true, now: "2026-07-28T10:00:00.000Z" });
   assert.equal(applied.changedPlanCount, 2);
-  assert.equal(applied.waitingPackagePlanCount, 2);
+  assert.equal(applied.waitingPackagePlanCount, 1);
   assert.equal(typeof applied.backupRoot, "string");
   const ready = JSON.parse(fs.readFileSync(readyFile, "utf8"));
   const unfinished = JSON.parse(fs.readFileSync(unfinishedFile, "utf8"));
@@ -103,6 +103,6 @@ test("bulk package-gate migration is dry-run by default, preserves task bindings
 
   const secondApply = migratePackageWaitingPlans({ rolesRoot, apply: true, now: "2026-07-28T11:00:00.000Z" });
   assert.equal(secondApply.changedPlanCount, 0);
-  assert.equal(secondApply.waitingPackagePlanCount, 2);
+  assert.equal(secondApply.waitingPackagePlanCount, 1);
   assert.equal(secondApply.backupRoot, null);
 });

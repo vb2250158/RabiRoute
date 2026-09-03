@@ -47,7 +47,7 @@ function directoryByteSnapshot(root: string): Array<[string, string]> {
   return files;
 }
 
-function activePlan(planId: string, status = "进行中", updatedAt = "2026-08-31T10:00:00.000Z") {
+function activePlan(planId: string, status = "执行中", updatedAt = "2026-08-31T10:00:00.000Z") {
   return {
     id: planId,
     title: `Plan ${planId}`,
@@ -55,7 +55,7 @@ function activePlan(planId: string, status = "进行中", updatedAt = "2026-08-3
     status,
     createdAt: "2026-08-31T09:00:00.000Z",
     updatedAt,
-    ...(status === "已完成" ? { completedAt: "2026-08-31T10:00:00.000Z" } : {})
+    ...(status === "完成" ? { completedAt: "2026-08-31T10:00:00.000Z" } : {})
   };
 }
 
@@ -82,10 +82,10 @@ function writeActivePackage(
 
 function writeArchivePackage(roleDir: string, planId: string, attachment = "active evidence\n"): string {
   const directory = path.join(roleDir, "plans", "archive", canonicalPlanStorageName(planId));
-  const completed = activePlan(planId, "已完成");
+  const completed = activePlan(planId, "完成");
   const archived = {
     ...completed,
-    status: "已归档",
+    archiveStatus: "已归档",
     archivedAt: "2026-08-31T11:00:00.000Z",
     updatedAt: "2026-08-31T11:00:00.000Z"
   };
@@ -253,7 +253,7 @@ test("a terminal archive package atomically wins only when it proves dominance o
   const destination = fixture(t);
   const planId = "archive-dominates";
   const archiveSource = writeArchivePackage(source.roleDir, planId);
-  writeActivePackage(destination.roleDir, planId, { status: "已完成" });
+  writeActivePackage(destination.roleDir, planId, { status: "完成" });
   const command = createArchivedPlanPackageCommand("Rabi", planId, archiveSource, "peer-a");
 
   const result = applyArchivedPlanPackage(destination.roleDir, command);
@@ -294,7 +294,7 @@ test("an archive that cannot prove full active preservation stays out of the liv
   const planId = "archive-not-dominant";
   const archiveSource = writeArchivePackage(source.roleDir, planId, "old evidence\n");
   const active = writeActivePackage(destination.roleDir, planId, {
-    status: "已完成",
+    status: "完成",
     attachment: "newer active-only evidence\n"
   });
   const activeHash = archivedPlanPackageInventory(active).hash;

@@ -67,7 +67,7 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 
 ### E. 身份与能力
 
-- 用 owner 返回的完整 opaque ID、可见名称和 workspace 持久化绑定；身份由完整 ID + workspace 决定，owner/SQLite 标题是可变元数据。
+- 用 owner 返回的完整 opaque ID、可见名称和 workspace 持久化绑定；完整 ID 决定任务身份，workspace 决定每次投递的执行目录，owner 保存的默认 cwd 和标题都是可变元数据。
 - 最后时间和名称只供人识别/无 ID 查找，cwd/project 用于安全边界和消歧；标题变化不能否定有效 ID。
 - ID 必须由扫描、创建或受控迁移自动产生，不能让用户或 AI 手填。resolver 固定顺序：读取有效 ID → ID 存在、cwd 匹配且未归档就精确绑定 → ID 为空/非法/失效才按保存名称 + 规范化 cwd 查询 → 一个或多个同名候选按 `updatedAt` 选择唯一最新者 → 零匹配幂等创建 → 最新时间并列等待选择。Rabi 端显式输入新名称必须先清空旧 ID。
 - 从执行该 turn 的 Runtime 探测工具和权限，不从 session 文本或另一客户端推断。
@@ -97,7 +97,7 @@ RabiRoute event -> adapter -> transport -> exact session/task owner -> turn -> o
 | 旧 endpoint 或环境变量残留 | 不形成隐藏依赖 |
 | 非法、失效 ID | 名称 + cwd 匹配时按 `updatedAt` 绑定唯一最新者；最大时间并列不随机选择；零匹配只按明确名称创建 |
 | 保存 ID 指向已归档任务 | 真实投递或保存提交点幂等创建新任务并持久化新 ID；不得复用其它同名任务 |
-| owner 改名/SQLite 标题变化 | 完整 ID + cwd 仍续投，不按名称误建替代任务 |
+| owner 改名、默认 cwd 或 SQLite 标题变化 | 完整 ID 仍续投，并使用当前绑定的 workspace，不按名称误建替代任务 |
 | Rabi 显式输入新名称 | UI 清空旧 ID 后按新名称重绑或幂等创建，并持久化新 ID |
 | 设置页长期停留 | 扫描请求次数不随时间、展开、输入、`blur` 或保存增长；仅页面进入和显式刷新触发 |
 | 自动初始化首投 | 先持久化绑定，再由目标 owner 显示人格初始化消息；失败时不重复创建任务、不走备用 Runtime |

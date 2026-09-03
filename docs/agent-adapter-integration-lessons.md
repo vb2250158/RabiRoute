@@ -100,7 +100,7 @@ connect ECONNREFUSED 127.0.0.1:4510
 | `1a8d786` | `no-client-found` 后消息仍能被某个 app-server 接收 | 消息必须立即进入原 Desktop 任务，并使用 Desktop 工具 | “可靠投递”变成了第二 Runtime 后台执行 |
 | `d6b56fc` | Desktop 与 RabiRoute 可以独立启动；stdio 协议和审批可控 | Desktop 必须实时显示并拥有实际轮次 | 修复生命周期，却失去实时事件和 Desktop 工具 |
 | `d4dd964` | 两个 WebSocket client 能读同一 thread 和通知 | RabiRoute 缺席时 Desktop 仍必须冷启动 | 用用户级环境变量把 Desktop 永久绑定到 4510，形成所有权倒置 |
-| 当前方案 | Desktop owner 接受真实消息；完整 ID + cwd 稳定绑定；失败关闭 | 同一套用户合同 | 消息、状态、工具和生命周期重新由同一个 owner 对齐 |
+| 当前方案 | Desktop owner 接受真实消息；完整 ID 定位任务、每次投递携带 cwd；失败关闭 | 同一套用户合同 | 消息、状态、工具和生命周期重新由同一个 owner 对齐 |
 
 共同根因有十一个：
 
@@ -183,7 +183,7 @@ connect ECONNREFUSED 127.0.0.1:4510
 
 正确处理：
 
-1. 持久化身份是“完整 opaque ID + workspace”；可见名称用于下拉显示、无 ID 查找和用户显式切换。
+1. Codex 持久化身份是完整 opaque ID；workspace 是每次投递的执行目录，可见名称用于下拉显示、无 ID 查找和用户显式切换。
 2. 精确 ID 存在、cwd 一致且未归档时直接续投，不比较可变标题。
 3. 用户在 Rabi 端输入新名称时，UI 必须先清空旧 ID；resolver 看到无 ID 后才按名称 + cwd 查找/创建。
 4. 保存和真实投递必须走同一个 resolver；已创建 ID 要先持久化，后续消息只复用它。
@@ -246,7 +246,7 @@ connect ECONNREFUSED 127.0.0.1:4510
 flowchart LR
     I["QQ / Webhook / 语音 / 定时器"] --> R["RabiRoute：上下文、路由、动作门"]
     R --> A["Agent Adapter"]
-    A -->|"精确任务 ID + cwd"| B["Codex Desktop IPC bridge"]
+    A -->|"精确任务 ID；本轮 cwd"| B["Codex Desktop IPC bridge"]
     B -->|"任务未加载：codex://threads/id"| D["Codex / ChatGPT Desktop"]
     B -->|"follower start / steer"| D
     D --> O["Desktop task owner"]
@@ -274,7 +274,7 @@ flowchart LR
 ### Codex
 
 - Desktop 左侧栏共用的 `session_index.jsonl.thread_name` 提供唯一用户可见名称；本地状态库提供任务 ID、cwd、归档、时间和 owner/rollout 定位。两者按完整 ID 合并，下拉显示侧栏 `Name` 和最后时间，内部保存完整 opaque ID。
-- 配置绑定统一走一个 resolver：有效 ID + cwd 且未归档 → 精确绑定，不比较可变标题；ID 为空/非法/失效 → 保存名称 + 规范化 cwd；一个或多个同名 → 按 `updatedAt` 自动绑定唯一最新者；零匹配 → 创建空任务；最大时间并列 → 返回候选。
+- 配置绑定统一走一个 resolver：有效 ID 且未归档 → 精确绑定并使用本轮 cwd，不比较任务保存的默认 cwd 或可变标题；ID 为空/非法/失效 → 保存名称 + 规范化 cwd；一个或多个同名 → 按 `updatedAt` 自动绑定唯一最新者；零匹配 → 创建空任务；最大时间并列 → 返回候选。
 - 投递前按最终 ID 读取任务并校验规范化 `cwd`；目录冲突、重名未消歧或 owner 无法加载都停止。
 - 通过 Desktop IPC 先 steer；确认没有活动轮次时再 start。
 - `no-client-found` 时先只用 deeplink 加载目标任务并重试，绝不转给独立 app-server。重试后精确 ID 已无法从本地状态读取，才按旧 ID 隔离地创建替代任务、重新投递并返回警告；任务仍存在时保留原失败。
@@ -364,7 +364,7 @@ Adapter 需要分别报告：
 | 会话重名 | UI 以时间/项目区分，内部按 ID |
 | 会话 ID 不是 UUID、过期或删除 | 按名称 + 规范化 cwd 自动解析；一个或多个匹配绑定唯一最新者，零匹配创建，最大时间并列要求选择 |
 | 保存 ID 指向已归档任务 | 真实投递创建新任务并更新绑定；不复用其它同名任务 |
-| Desktop 改名或 SQLite 标题变成首条 prompt | 完整 ID + cwd 继续续投；不查名、不创建 |
+| Desktop 改名、默认 cwd 不同或 SQLite 标题变成首条 prompt | 完整 ID 继续按当前 cwd 续投；不查名、不创建 |
 | Rabi 端明确输入新名称 | UI 先清空旧 ID，再按新名称唯一重绑或只创建一次 |
 | 会话总数超过 100 | 分页/搜索仍能访问全部任务；WebGUI 不固定截断 |
 | 设置页进入、展开、输入、blur、保存和空闲等待 | 只有页面进入和显式点击扫描增加扫描请求；其余操作请求数不变 |

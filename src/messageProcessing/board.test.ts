@@ -49,7 +49,7 @@ function plan(overrides: Partial<PlanItem> = {}): PlanItem {
     id: "plan-1",
     title: "实现选择界面",
     focus: "实现选择界面",
-    status: "进行中",
+    status: "执行中",
     currentStep: "实现",
     currentStepId: "implement",
     nextAction: "完成 Prefab",
@@ -58,7 +58,8 @@ function plan(overrides: Partial<PlanItem> = {}): PlanItem {
     createdAt: "2026-08-05T00:00:00.000Z",
     updatedAt: "2026-08-05T00:00:00.000Z",
     keywords: ["选择界面"],
-    ...overrides
+    ...overrides,
+    archiveStatus: overrides.archiveStatus ?? "未归档"
   };
 }
 
@@ -468,7 +469,7 @@ test("failed plan notifications leave the control board after the transient retr
     planTitle: "实现选择界面"
   });
   const notification = store.registerPlanChange("DemoPersona", plan(), plan({
-    status: "已完成",
+    status: "完成",
     updatedAt: "2026-08-26T12:00:00.000Z"
   }));
   assert.equal(notification?.kind, "plan_progress_notification");
@@ -782,7 +783,7 @@ test("linked plans generate required notifications only for communication-releva
   const unchangedCommunication = plan({ updatedAt: "2026-08-05T00:01:00.000Z", priority: "high" });
   assert.equal(store.registerPlanChange("DemoPersona", before, unchangedCommunication), undefined);
   const progressed = plan({
-    status: "已完成",
+    status: "完成",
     currentStep: "完成",
     currentStepId: "done",
     nextAction: "通知需求群",

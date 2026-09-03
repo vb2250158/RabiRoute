@@ -118,7 +118,7 @@ export function archivedPlanStorageFence(
     if (storedStorageId !== storageId) {
       return { status: "invalid", reason: "archive_plan_identity_mismatch" };
     }
-    if (plan.status !== "已归档") {
+    if (plan.archiveStatus !== "已归档" && plan.status !== "已归档") {
       return { status: "invalid", planId, reason: "archive_bucket_contains_non_archived_plan" };
     }
     return { status: "archived", planId };

@@ -33,7 +33,7 @@ Codex 主链需要同时满足：
 
 1. Codex/ChatGPT Desktop 正在运行。
 2. Route 保存了正确的项目工作目录。
-3. Route 绑定了该目录中的准确任务 ID。
+3. Route 绑定了准确任务 ID，并把项目目录作为下一轮执行位置。
 
 RabiRoute 不通过隐藏 CLI、共享端口或备用 Runtime 执行真实消息。Desktop 是实际任务 owner，消息会出现在用户可见任务中。
 
@@ -57,9 +57,9 @@ RabiRoute 不通过隐藏 CLI、共享端口或备用 Runtime 执行真实消息
 
 ## 选择已有任务
 
-优先从下拉选择已有任务。选择后，RabiRoute 保存完整任务 ID，并采用任务自己的工作目录。
+优先从下拉选择已有任务。选择后，RabiRoute 保存完整任务 ID；你仍可单独选择下一轮使用的工作目录，不受任务保存的默认 cwd 限制。
 
-只要 ID 与目录仍有效，下面变化不会自动创建新任务：
+只要 ID 仍有效且本轮目录属于允许范围，下面变化不会自动创建新任务：
 
 - Desktop 中修改任务标题。
 - 本地索引标题暂时滞后。
@@ -93,7 +93,7 @@ Desktop 的命令审批只授权 Agent 执行；它不自动授权向 QQ、文�
 1. `agent-packets.jsonl` 是否有对应投递；没有则先查规则。
 2. 日志诊断是否显示 Codex Desktop IPC。
 3. Desktop 是否打开并能进入目标任务。
-4. 工作目录与任务是否匹配。
+4. 本轮工作目录是否是你准备处理的项目。
 5. 最后错误是否为 `no-client-found`、任务不存在或目录冲突。
 
 完整流程见[运行、日志与排障](operations-and-troubleshooting.md)。

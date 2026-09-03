@@ -40,7 +40,7 @@ function activePlanPackage(
     id: planId,
     title: "Active plan",
     focus: "Remain active",
-    status: "进行中",
+    status: "执行中",
     createdAt: recordedAt,
     updatedAt: recordedAt,
     steps: [{ id: "working", title: "Working", status: "进行中" }],
@@ -63,14 +63,14 @@ function activePlanPackage(
 function archivedPlanPackage(
   roleId: string,
   planId: string,
-  options: { storedPlanId?: string; terminalStatus?: string } = {}
+  options: { storedPlanId?: string; archiveStatus?: string } = {}
 ): PersonaSyncArchivedPlanPackageCommand {
   const storedPlanId = options.storedPlanId || planId;
   const completed = {
     id: storedPlanId,
     title: "Archived plan",
     focus: "Remain archived",
-    status: "已完成",
+    status: "完成",
     createdAt: "2026-08-01T00:00:00.000Z",
     completedAt: "2026-08-01T01:00:00.000Z",
     updatedAt: "2026-08-01T01:00:00.000Z",
@@ -79,7 +79,7 @@ function archivedPlanPackage(
   };
   const archived = {
     ...completed,
-    status: options.terminalStatus || "已归档",
+    archiveStatus: options.archiveStatus || "已归档",
     archivedAt: "2026-08-24T00:00:00.000Z",
     updatedAt: "2026-08-24T00:00:00.000Z"
   };
@@ -246,7 +246,7 @@ test("persona sync treats canonical archive as a terminal fence against active r
     /already archived/i
   );
   const result = service.applyActivePlanPackage(activePlanPackage("Rabi", "archived-plan", {
-    status: "已完成",
+    status: "完成",
     completedAt: "2026-08-01T01:00:00.000Z",
     updatedAt: "2026-08-01T01:00:00.000Z"
   }));
@@ -263,7 +263,7 @@ test("persona sync fails closed for incomplete archive storage and non-canonical
   fs.mkdirSync(path.join(roleRoot, "plans", "archive", "broken-plan"), { recursive: true });
   const service = new PersonaSyncService(() => rolesRoot, path.join(root, "state"), { watch: false });
   t.after(() => service.stopManifestIndex());
-  const incoming = Buffer.from(JSON.stringify({ id: "broken-plan", status: "进行中" }), "utf8");
+  const incoming = Buffer.from(JSON.stringify({ id: "broken-plan", status: "执行中" }), "utf8");
 
   assert.throws(
     () => service.applyActivePlanPackage(activePlanPackage("Rabi", "broken-plan")),
@@ -291,7 +291,7 @@ test("persona sync validates archive identity and never applies archive deletion
     /invalid terminal identity|identity does not match plan\.json|plan\.json identity mismatch/i
   );
   assert.throws(
-    () => service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan", { terminalStatus: "已完成" })),
+    () => service.applyArchivedPlanPackage(archivedPlanPackage("Rabi", "archive-plan", { archiveStatus: "未归档" })),
     /archive plan package is not terminal|bucket does not match plan status/i
   );
 
@@ -318,7 +318,7 @@ test("generic persona merge cannot bypass plan package identity or lifecycle fen
   assert.equal(applied.status, "applied");
   const planFile = path.join(roleRoot, "plans", "active", "resolve-plan", "plan.json");
   const local = fs.readFileSync(planFile);
-  const remote = Buffer.from(JSON.stringify({ id: "resolve-plan", status: "已完成", title: "remote" }), "utf8");
+  const remote = Buffer.from(JSON.stringify({ id: "resolve-plan", status: "完成", title: "remote" }), "utf8");
   assert.throws(() => service.merge({
     roleId: "Rabi",
     path: "plans/active/resolve-plan/plan.json",

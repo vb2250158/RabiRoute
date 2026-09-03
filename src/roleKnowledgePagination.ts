@@ -13,7 +13,6 @@ export type RolePlanPageCounts = {
     qa: number;
     waitingPackage: number;
     approval: number;
-    manualVerification: number;
     paused: number;
     completed: number;
     archived: number;
@@ -62,6 +61,7 @@ export type RolePlanSummary = ReturnType<typeof summarizeRolePlan>;
 export type RolePlanPreview = ReturnType<typeof previewRolePlan>;
 
 type PresentedPlanLike = {
+  status: string;
   updatedAt: string;
   dueAt?: string;
   importance?: number;
@@ -83,6 +83,9 @@ type PresentedPlanLike = {
     };
     urgency: {
       level: number;
+    };
+    approval: {
+      state: "none" | "incomplete" | "ready";
     };
   };
 };
@@ -155,6 +158,7 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
   const normalizedQuery = String(filter.query || "").trim().toLowerCase();
   const viewAndQueryPlans = plans.filter((plan) => {
     if (filter.view && !plan.presentation.views.includes(filter.view)) return false;
+    if (normalizedQuery && filter.view !== "archived" && plan.presentation.views.includes("archived")) return false;
     return !normalizedQuery || searchableKnowledgeStrings(plan).some((value) => value.includes(normalizedQuery));
   });
   const includeFacets = filter.includeFacets !== false;
@@ -162,7 +166,7 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
   const tagFacets = new Map<string, RolePlanPage<T>["facets"]["tags"][number]>();
   if (includeFacets) {
     for (const plan of viewAndQueryPlans) {
-      const status = plan.presentation.status;
+      const status = plan.status;
       const current = statusFacets.get(status);
       if (current) current.count += 1;
       else statusFacets.set(status, { status, count: 1, palette: plan.presentation.palette });
@@ -182,7 +186,7 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
   }
   const selectedStatuses = filter.statuses?.length ? new Set(filter.statuses) : undefined;
   const statusFilteredPlans = selectedStatuses
-    ? viewAndQueryPlans.filter((plan) => selectedStatuses.has(plan.presentation.status))
+    ? viewAndQueryPlans.filter((plan) => selectedStatuses.has(plan.status))
     : viewAndQueryPlans;
   const selectedTags = filter.tags?.length
     ? new Set(filter.tags.map((tag) => tag.trim().toLocaleLowerCase()).filter(Boolean))
@@ -198,20 +202,19 @@ export function paginateRolePlans<T extends PresentedPlanLike>(
     current: plans.filter((plan) => plan.presentation.views.includes("current")).length,
     plans: plans.filter((plan) => plan.presentation.views.includes("plans")).length,
     archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length,
-    blocked: plans.filter((plan) => plan.presentation.tone === "blocked").length,
-    qa: plans.filter((plan) => plan.presentation.tone === "qa").length,
-    active: plans.filter((plan) => !["discussion", "paused", "done", "archived"].includes(plan.presentation.tone)).length,
+    blocked: plans.filter((plan) => plan.status === "待审批").length,
+    qa: plans.filter((plan) => plan.status === "等待 QA").length,
+    active: plans.filter((plan) => ["分析中", "待审批", "执行中", "等待打包", "等待 QA"].includes(plan.status)).length,
     stages: {
-      analyzing: plans.filter((plan) => plan.presentation.tone === "analyzing").length,
-      executing: plans.filter((plan) => plan.presentation.tone === "executing" || plan.presentation.tone === "running").length,
-      discussion: plans.filter((plan) => plan.presentation.tone === "discussion").length,
-      qa: plans.filter((plan) => plan.presentation.tone === "qa").length,
-      waitingPackage: plans.filter((plan) => plan.presentation.tone === "waiting_package").length,
-      approval: plans.filter((plan) => plan.presentation.tone === "blocked").length,
-      manualVerification: plans.filter((plan) => plan.presentation.tone === "manual_verification").length,
-      paused: plans.filter((plan) => plan.presentation.tone === "paused").length,
-      completed: plans.filter((plan) => plan.presentation.tone === "done").length,
-      archived: plans.filter((plan) => plan.presentation.tone === "archived").length
+      analyzing: plans.filter((plan) => plan.status === "分析中").length,
+      executing: plans.filter((plan) => plan.status === "执行中").length,
+      discussion: plans.filter((plan) => plan.status === "待讨论").length,
+      qa: plans.filter((plan) => plan.status === "等待 QA").length,
+      waitingPackage: plans.filter((plan) => plan.status === "等待打包").length,
+      approval: plans.filter((plan) => plan.status === "待审批").length,
+      paused: plans.filter((plan) => plan.status === "暂停").length,
+      completed: plans.filter((plan) => plan.status === "完成").length,
+      archived: plans.filter((plan) => plan.presentation.views.includes("archived")).length
     }
   };
   return {
@@ -274,9 +277,7 @@ function planStepSummary(plan: RolePlanSummarySource) {
   return {
     id: step.id,
     title: step.title,
-    status: step.status,
-    workPhase: step.workPhase,
-    discussionState: step.discussionState
+    status: step.status
   };
 }
 

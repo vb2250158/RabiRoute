@@ -1,7 +1,8 @@
 {
   "id": "plan-rabiroute-example-data-safety",
   "title": "维护公开示例数据的脱敏边界",
-  "status": "进行中",
+  "status": "分析中",
+  "archiveStatus": "未归档",
   "priority": "high",
   "kind": "maintenance",
   "currentStep": "examples/data 只保留可公开复制的路由、人格式、计划和记忆示例",

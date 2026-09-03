@@ -18,11 +18,11 @@ description: 新增、改造或排障 RabiRoute Agent 端适配器时使用。�
 
 所有带会话概念的 Agent 端还必须满足以下 P0 合同，缺一项都不能标记为 `verified`：
 
-1. 已保存的完整线程 ID 存在、workspace 一致且 owner 记录未归档时，直接投递到该会话，不创建新会话。owner 标题或 SQLite `title` 是可变展示元数据，不能否定有效 ID。保存 ID 指向已归档会话时，真实投递或保存提交点幂等创建新会话并持久化新 ID；不查找或复用其它同名会话。扫描、刷新和失焦仍只报告归档状态。
+1. 已保存的完整任务 ID 存在且 owner 记录未归档时，直接投递到该任务，不创建新任务。owner 保存的默认 cwd、标题或 SQLite `title` 都不能否定有效 ID；本次执行目录由当前 Route 或计划绑定单独提供。保存 ID 指向已归档任务时，真实投递或保存提交点幂等创建新任务并持久化新 ID；不查找或复用其它同名任务。扫描、刷新和失焦仍只报告归档状态。
 2. 目标不存在时，先按 RabiPC Manager 保存的明确名称 + workspace 查找；存在一个或多个匹配时按 `updatedAt` 降序绑定唯一最新任务，只有最新时间并列时才要求用户选择；零匹配才幂等创建一个会话，再把真实消息投给新会话，并发、重试和索引延迟期间仍只能创建一次。允许提供用户显式点击的“自动初始化会话”：它必须先完成同一保存/解析事务，再通过唯一 owner 投递一条携带角色文件、记忆、计划和必读项的人格初始化消息。
 3. 真实消息必须通过 Agent 桌面应用实际使用的 owner 接口执行，保证桌面端统一可见并沿用同一任务的模型、工具、权限和状态；不得用第二 Runtime 冒充。
 4. 用户在 Rabi 设置中选择已有会话或输入新名称后，点击保存必须完成解析/创建并持久化新的名称、完整 ID 和 workspace。
-5. 会话身份是“完整线程 ID + workspace”；名称用于显示和无 ID 查找。Agent/Desktop 改名或首投后 `title` 自动变化时继续同一 ID；用户在 Rabi 端明确输入新名称时，UI 先清空旧 ID，再按新名称查找/创建并保存新 ID。
+5. 完整任务 ID 是任务身份；workspace 是每次投递的执行目录，名称用于显示和无 ID 查找。Agent/Desktop 改名、默认 cwd 不同或首投后 `title` 自动变化时继续同一 ID；用户在 Rabi 端明确输入新名称时，UI 先清空旧 ID，再按新名称和 workspace 查找/创建并保存新 ID。
 6. 项目和会话扫描只允许在进入设置界面时自动执行一次，或由用户点击扫描/刷新按钮显式触发；禁止定时轮询、展开面板、输入、`blur`、保存或普通状态刷新持续扫描。
 
 Codex 目前的产品基线是 Desktop owner：RabiRoute 从 Codex Desktop 左侧栏共用的 `session_index.jsonl.thread_name` 读取用户可见 `Name`，再按完整 ID 合并本地状态提供的 cwd、归档、时间和 owner/rollout 状态，以“完整 ID + 工作目录”稳定绑定，并通过 Desktop IPC 把真实消息交给 Codex/ChatGPT Desktop 当前任务。SQLite `threads.title` 可能是首条 prompt，不得用于下拉名称或同名查找。Desktop 必须在线；任务无法加载就失败，禁止启动备用执行 Runtime。
@@ -116,7 +116,7 @@ type AgentAdapterCapability = {
 
 | Agent | 默认等级 | 说明 |
 | --- | --- | --- |
-| Codex Desktop | `verified` | 只读发现 Desktop 任务，按完整 ID + cwd 绑定，通过 Desktop IPC 唤醒并向任务 owner start/steer；无 fallback。 |
+| Codex Desktop | `verified` | 只读发现 Desktop 任务；完整任务 ID 是任务身份，每次投递单独指定执行目录；通过 Desktop IPC 唤醒并向任务 owner start/steer，无 fallback。 |
 | Copilot CLI | `experimental` | 需要验证安装检测、登录、`-C` 项目目录、`--resume` 会话和 Windows 长 prompt 路径。 |
 | Marvis | `stub`/`experimental` | 目前更像打开 App/复制 prompt，不应宣称有可靠会话绑定或回传。 |
 | AstrBot | `experimental` | 只使用 ChatUI `/api/chat/send`；必须配置明确的 `ASTRBOT_SESSION_ID`，缺失时失败关闭。 |
@@ -337,7 +337,7 @@ WebGUI 读取 `agents[type]` 优先；旧字段只作为迁移兼容。
 
 - 下拉显示 `name + updatedAt`，内部 value 和持久化绑定使用 Agent 返回的完整 opaque ID。
 - Codex 的 `name` 必须来自 Desktop 左侧栏共用的 `session_index.jsonl.thread_name`；SQLite 只按完整 ID 补充 cwd、归档、时间和 owner/rollout 定位。禁止使用 app-server `thread.name` 或 SQLite `threads.title` 覆盖侧栏 `Name`。
-- 会话绑定同时持久化可见名称、完整 ID 和 workspace，但身份由完整 ID + workspace 决定。名称和时间是展示/查找元数据，不能因自动变化而让有效 ID 失效。
+- 会话绑定同时持久化可见名称、完整 ID 和 workspace；完整 ID 决定任务身份，workspace 决定下一轮执行目录。名称、时间和任务保存的默认 cwd 是展示或运行元数据，不能让有效 ID 失效。
 - 投递前必须通过实际 owner 的合同验证精确 ID，并校验规范化 cwd。Codex 还必须验证 Desktop IPC 及目标任务 owner。
 - 统一 resolver 先读取有效 ID；ID 存在、cwd 匹配且未归档就精确绑定，不比较 owner 的可变标题。ID 已归档时，真实投递或保存提交点按旧 ID 隔离的幂等键创建新任务并更新绑定，不复用其它同名任务。ID 为空、非法或确实失效时走名称查找，零匹配才按用户输入的新名称创建；最新时间并列才要求选择。
 - 扫描、刷新、输入和 `blur` 只能 lookup，禁止创建；保存/应用、第一条真实投递或用户显式点击“自动初始化会话”才是 create 提交点。
@@ -470,7 +470,7 @@ npm run build
 - Agent/Desktop 缺席时 Manager 独立启动；Codex 显示 Desktop 未就绪且不启动 fallback。
 - 分别关闭、重启两端，不互相拖死。
 - 用户环境残留旧 endpoint 时不产生隐藏依赖。
-- 重名会话和精确 ID 的错误 cwd fail closed；非法/失效 ID 按名称 + cwd 自动解析，一个或多个匹配选择唯一最新者，零匹配创建，最新时间并列要求选择；已归档 ID 必须创建新任务、更新绑定且不复用同名任务。
+- 重名会话按名称 + cwd 限定候选；精确 Codex ID 不因任务保存的默认 cwd 与本轮 workspace 不同而失效。非法/失效 ID 按名称 + cwd 自动解析，一个或多个匹配选择唯一最新者，零匹配创建，最新时间并列要求选择；已归档 ID 必须创建新任务、更新绑定且不复用同名任务。
 - Desktop/Agent 端改名或 SQLite 标题在首投后变化时，连续两次真实投递仍使用同一 ID；Rabi 端明确输入新名称时先清空旧 ID，再按新名称查找/创建并保存新 ID。
 - Codex 下拉和无 ID lookup 能按左侧栏 `Name` 找到 UI 可见任务，即使同一 ID 的 app-server `thread.name` 与 SQLite `threads.title` 都不同；该场景不得创建新任务。侧栏索引缺少 `Name` 时，名称查找失败关闭，不得退回其它标题源。
 - 自动初始化按钮先持久化名称 + ID，再投递包含角色文件、记忆/计划索引和必读项的初始化消息；Desktop 中真实可见，初始化失败不产生第二会话。

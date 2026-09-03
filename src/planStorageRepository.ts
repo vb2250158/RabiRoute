@@ -423,7 +423,7 @@ export function resolveCanonicalPlanStorageLocation(
       }
       const planFile = path.join(directory, "plan.json");
       if (!fs.existsSync(planFile)) throw new Error(`Plan storage directory is missing plan.json: ${directory}`);
-      const plan = JSON.parse(fs.readFileSync(planFile, "utf8")) as { id?: unknown; status?: unknown };
+      const plan = JSON.parse(fs.readFileSync(planFile, "utf8")) as { id?: unknown; status?: unknown; archiveStatus?: unknown };
       const storedPlanId = canonicalLogicalPlanId(plan.id);
       if (canonicalPlanStorageCollisionKey(storedPlanId) !== collisionId || storedPlanId !== logicalPlanId) {
         throw new Error(`Plan storage identity collision: ${logicalPlanId} is owned by ${storedPlanId}`);
@@ -431,7 +431,7 @@ export function resolveCanonicalPlanStorageLocation(
       if (canonicalPlanStorageKey(storedPlanId) !== entry.name || entry.name !== storageId) {
         throw new Error(`Plan storage identity requires canonical case/NFC migration: ${directory}`);
       }
-      const expectedBucket: PlanStorageBucket = plan.status === "已归档" ? "archive" : "active";
+      const expectedBucket: PlanStorageBucket = plan.archiveStatus === "已归档" || plan.status === "已归档" ? "archive" : "active";
       if (expectedBucket !== bucket) throw new Error(`Plan storage bucket does not match plan status: ${directory}`);
       matches.push({ roleDir: path.resolve(roleDir), planId: logicalPlanId, storageId, bucket, directory, planFile });
     }
@@ -513,9 +513,9 @@ function validatePackageIdentity(planId: string, bucket: PlanStorageBucket, file
   const planBytes = byPath.get("plan.json");
   const historyBytes = byPath.get("history.jsonl");
   if (!planBytes || !historyBytes) throw new Error("Plan storage package requires plan.json and history.jsonl.");
-  const plan = JSON.parse(planBytes.toString("utf8")) as { id?: unknown; status?: unknown };
+  const plan = JSON.parse(planBytes.toString("utf8")) as { id?: unknown; status?: unknown; archiveStatus?: unknown };
   if (canonicalLogicalPlanId(plan.id) !== planId) throw new Error("Plan storage package plan.json identity mismatch.");
-  if ((bucket === "archive") !== (plan.status === "已归档")) {
+  if ((bucket === "archive") !== (plan.archiveStatus === "已归档" || plan.status === "已归档")) {
     throw new Error("Plan storage package bucket does not match plan status.");
   }
   const historyLines = historyBytes.toString("utf8").split(/\r?\n/).filter(Boolean);
