@@ -32,6 +32,7 @@ import {
   messageContextFromOutboxEvent
 } from "./messageContextStore.js";
 import { postFenneNoteOutput } from "./fenneNoteOutput.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export type AgentReplyRequest = {
   text?: unknown;
@@ -1023,7 +1024,8 @@ function appendAdapterReply(
   const dir = dataDirsForRoute(options, route)[0];
   fs.mkdirSync(dir, { recursive: true });
   const id = `${adapterType}-reply-${Date.now()}`;
-  fs.appendFileSync(path.join(dir, `${adapterType}-replies.jsonl`), `${JSON.stringify({
+  const replyFileName = `${adapterType}-replies.jsonl`;
+  const serialized = `${JSON.stringify({
     time: Math.floor(Date.now() / 1000),
     id,
     messageId: target.messageId,
@@ -1041,7 +1043,34 @@ function appendAdapterReply(
     ...(adapterType === "rabilink" ? { final: true } : {}),
     replyContext: contextObject(request),
     payload: payloadObject(request)
-  })}\n`, "utf8");
+  })}\n`;
+  try {
+    fs.appendFileSync(path.join(dir, replyFileName), serialized, "utf8");
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "delivery",
+      event: "adapter_reply_append_failed",
+      owner: "outbox",
+      action: "append-adapter-reply",
+      target: { type: "adapter-reply", id },
+      dataSource: { kind: "ledger", id: replyFileName },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "delivery",
+    event: "adapter_reply_appended",
+    owner: "outbox",
+    action: "append-adapter-reply",
+    target: { type: "adapter-reply", id },
+    dataSource: { kind: "ledger", id: replyFileName },
+    outcome: "committed",
+    after: { revision: id },
+    result: adapterType
+  });
   return {
     ok: true,
     status: "sent",

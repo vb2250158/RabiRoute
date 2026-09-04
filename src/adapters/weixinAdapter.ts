@@ -35,6 +35,7 @@ import {
   clearWeixinLoginRequest,
   hasActiveWeixinLoginRequest
 } from "../weixinLoginRequest.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 type GatewayStatus = { messageAdapters?: Record<string, Record<string, unknown>> };
 const MAX_RECENT_IDS = 5000;
@@ -78,10 +79,25 @@ function patchWeixinStatus(dataDir: string, patch: Record<string, unknown>, now 
     maturity: "experimental",
     updatedAt: now.toISOString()
   };
-  fs.writeFileSync(statusPath, JSON.stringify({
-    ...status,
-    messageAdapters: { ...status.messageAdapters, weixin: next }
-  }, null, 2), "utf8");
+  try {
+    fs.writeFileSync(statusPath, JSON.stringify({
+      ...status,
+      messageAdapters: { ...status.messageAdapters, weixin: next }
+    }, null, 2), "utf8");
+    recordDataMutationAudit({
+      group: "gateway",
+      event: "weixin_adapter_status_committed",
+      owner: "weixin-adapter",
+      action: "patch-runtime-status",
+      target: { type: "message-adapter", id: "weixin" },
+      dataSource: { kind: "runtime", id: "gateway-status" },
+      outcome: "committed",
+      changes: Object.keys(patch).sort().map(field => ({ field }))
+    });
+  } catch (error) {
+    recordDataMutationAudit({ level: "error", group: "gateway", event: "weixin_adapter_status_write_failed", owner: "weixin-adapter", action: "patch-runtime-status", target: { type: "message-adapter", id: "weixin" }, dataSource: { kind: "runtime", id: "gateway-status" }, outcome: "failed", error });
+    throw error;
+  }
 }
 
 function rememberMessageId(recentMessageIds: Set<string>, messageId: string): void {

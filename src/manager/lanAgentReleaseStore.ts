@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type LanAgentReleaseFile = {
   path: string;
@@ -85,7 +86,32 @@ function readSigningKeys(filePath: string): SigningKeyRecord {
     privateKey: pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString()
   };
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  try {
+    fs.writeFileSync(filePath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "lan-agent",
+      event: "lan_agent_signing_key_create_failed",
+      owner: "lan-agent-release",
+      action: "create-signing-key",
+      target: { type: "signing-key", id: "lan-agent-release" },
+      dataSource: { kind: "file", id: path.basename(filePath) },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "lan-agent",
+    event: "lan_agent_signing_key_created",
+    owner: "lan-agent-release",
+    action: "create-signing-key",
+    target: { type: "signing-key", id: "lan-agent-release" },
+    dataSource: { kind: "file", id: path.basename(filePath) },
+    outcome: "committed",
+    after: { digest: lanAgentReleasePublicKeySha256(record.publicKey) }
+  });
   return record;
 }
 

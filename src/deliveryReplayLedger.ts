@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ForwardDeliveryResult } from "./forwarding.js";
 import type { ForwardRecord, ForwardRouteKind, ForwardTemplateValues } from "./routing/types.js";
 import type { RabiMessageSource } from "./shared/rabiMessage.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export const deliveryReplayLedgerFileName = "delivery-replay-ledger.jsonl";
 
@@ -41,8 +42,34 @@ export function createDeliveryReplayAttemptId(routeKind: ForwardRouteKind, messa
 }
 
 export function appendDeliveryReplayAttempt(dataDir: string, attempt: DeliveryReplayAttempt): void {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.appendFileSync(deliveryReplayLedgerPath(dataDir), `${JSON.stringify(attempt)}\n`, "utf8");
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.appendFileSync(deliveryReplayLedgerPath(dataDir), `${JSON.stringify(attempt)}\n`, "utf8");
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "delivery",
+      event: "delivery_replay_attempt_append_failed",
+      owner: "delivery-replay-ledger",
+      action: "append-attempt",
+      target: { type: "delivery-attempt", id: attempt.attemptId },
+      dataSource: { kind: "ledger", id: deliveryReplayLedgerFileName },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "delivery",
+    event: "delivery_replay_attempt_appended",
+    owner: "delivery-replay-ledger",
+    action: "append-attempt",
+    target: { type: "delivery-attempt", id: attempt.attemptId },
+    dataSource: { kind: "ledger", id: deliveryReplayLedgerFileName },
+    outcome: "committed",
+    after: { revision: attempt.attemptId },
+    result: attempt.result.status
+  });
 }
 
 export function readDeliveryReplayAttempts(dataDir: string): DeliveryReplayAttempt[] {

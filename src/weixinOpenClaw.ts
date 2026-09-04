@@ -5,6 +5,7 @@ import {
   createLocalSecretProtector,
   type LocalSecretProtector
 } from "./shared/localSecretProtection.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
 export const DEFAULT_WEIXIN_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
@@ -148,7 +149,33 @@ export async function downloadWeixinImages(
       fs.mkdirSync(dir, { recursive: true });
       const name = `image-${index}.${format.extension}`;
       const filePath = path.join(dir, name);
-      fs.writeFileSync(filePath, bytes);
+      try {
+        fs.writeFileSync(filePath, bytes);
+      } catch (error) {
+        recordDataMutationAudit({
+          level: "error",
+          group: "weixin",
+          event: "weixin_media_write_failed",
+          owner: "weixin-openclaw",
+          action: "store-inbound-image",
+          target: { type: "message-media", id: `${messageId}:${index}` },
+          dataSource: { kind: "file", id: `weixin-media/${name}` },
+          outcome: "failed",
+          error
+        });
+        throw error;
+      }
+      recordDataMutationAudit({
+        group: "weixin",
+        event: "weixin_media_written",
+        owner: "weixin-openclaw",
+        action: "store-inbound-image",
+        target: { type: "message-media", id: `${messageId}:${index}` },
+        dataSource: { kind: "file", id: `weixin-media/${name}` },
+        outcome: "committed",
+        after: { digest: createHash("sha256").update(bytes).digest("hex") },
+        changes: [{ field: "size", to: bytes.length }]
+      });
       output.push({ path: filePath, name, mimeType: format.mimeType, size: bytes.length });
     } finally {
       clearTimeout(timeout);
@@ -304,8 +331,35 @@ export function writeWeixinState(
     invalidatedAt: state.invalidatedAt,
     updatedAt: now
   };
-  fs.writeFileSync(tempPath, JSON.stringify(persisted, null, 2), "utf8");
-  fs.renameSync(tempPath, filePath);
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(persisted, null, 2), "utf8");
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "weixin",
+      event: "weixin_state_write_failed",
+      owner: "weixin-openclaw",
+      action: "persist-session-state",
+      target: { type: "weixin-session", id: "current" },
+      dataSource: { kind: "file", id: "weixin-openclaw-state.json" },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "weixin",
+    event: "weixin_state_written",
+    owner: "weixin-openclaw",
+    action: "persist-session-state",
+    target: { type: "weixin-session", id: "current" },
+    dataSource: { kind: "file", id: "weixin-openclaw-state.json" },
+    outcome: "committed",
+    after: { revision: now },
+    result: authState,
+    changes: [{ field: "credentialsRetained", to: Boolean(secret) }]
+  });
 }
 
 function base64RandomUin(): string {

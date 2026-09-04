@@ -14,6 +14,7 @@ import {
   type WeComEndpoint
 } from "../wecom.js";
 import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 type GatewayStatus = {
   messageAdapters?: Record<string, Record<string, unknown>>;
@@ -39,8 +40,14 @@ function readGatewayStatus(dataDir = config.dataDir): GatewayStatus {
 
 function writeGatewayStatus(nextStatus: GatewayStatus, dataDir = config.dataDir): void {
   const statusPath = gatewayStatusPath(dataDir);
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
+    recordDataMutationAudit({ group: "gateway", event: "wecom_adapter_status_committed", owner: "wecom-adapter", action: "write-runtime-status", target: { type: "message-adapter", id: "wecom" }, dataSource: { kind: "runtime", id: "gateway-status" }, outcome: "committed" });
+  } catch (error) {
+    recordDataMutationAudit({ level: "error", group: "gateway", event: "wecom_adapter_status_write_failed", owner: "wecom-adapter", action: "write-runtime-status", target: { type: "message-adapter", id: "wecom" }, dataSource: { kind: "runtime", id: "gateway-status" }, outcome: "failed", error });
+    throw error;
+  }
 }
 
 function patchWeComStatus(

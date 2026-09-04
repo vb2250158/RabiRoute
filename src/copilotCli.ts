@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { config } from "./config.js";
 import { reportAgentState } from "./agentAdapters/stateReporter.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 type CopilotCliState = {
   agentAdapterType: "copilotCli";
@@ -193,8 +194,32 @@ function truncate(value: string, maxLength = 4000): string {
 }
 
 function appendJsonl(filePath: string, item: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.appendFileSync(filePath, `${JSON.stringify(item)}\n`, "utf8");
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.appendFileSync(filePath, `${JSON.stringify(item)}\n`, "utf8");
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "agent-session",
+      event: "copilot_cli_record_append_failed",
+      owner: "copilot-cli",
+      action: "append-record",
+      target: { type: "copilot-cli-record", id: path.basename(filePath) },
+      dataSource: { kind: "ledger", id: path.basename(filePath) },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "agent-session",
+    event: "copilot_cli_record_appended",
+    owner: "copilot-cli",
+    action: "append-record",
+    target: { type: "copilot-cli-record", id: path.basename(filePath) },
+    dataSource: { kind: "ledger", id: path.basename(filePath) },
+    outcome: "committed"
+  });
 }
 
 async function runCopilotCli(message: string): Promise<{ stdout: string; stderr: string; code: number | null; signal: NodeJS.Signals | null }> {

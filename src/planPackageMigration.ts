@@ -3,6 +3,7 @@ import path from "node:path";
 import type { PlanItem } from "./roleKnowledge.js";
 import { migrateLegacyPackageGatePlan, planIsWaitingForPackage } from "./planPackageWaiting.js";
 import { ensurePersonaPlanWorkflow } from "./personaPlanWorkflow.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export type PackageWaitingMigrationOptions = {
   roleDir?: string;
@@ -103,10 +104,22 @@ export function migratePackageWaitingPlans(options: PackageWaitingMigrationOptio
       fs.mkdirSync(path.dirname(backupFile), { recursive: true });
       fs.copyFileSync(file, backupFile);
       writeJsonAtomic(file, migrated.plan);
+      recordDataMutationAudit({
+        group: "plan",
+        event: "plan_package_waiting_migrated",
+        owner: "plan-package-migration",
+        action: migrated.action,
+        target: { type: "plan", id: String(plan.id || path.basename(file, ".json")) },
+        dataSource: { kind: "file", id: `plans/${path.basename(file)}` },
+        outcome: "committed",
+        before: { revision: String(plan.updatedAt ?? "legacy") },
+        after: { revision: String(migrated.plan.updatedAt ?? now) },
+        result: "backup_created"
+      });
     }
   }
 
-  return {
+  const report: PackageWaitingMigrationReport = {
     ok: true,
     mode: apply ? "apply" : "dry-run",
     scopeRoot,
@@ -118,4 +131,21 @@ export function migratePackageWaitingPlans(options: PackageWaitingMigrationOptio
     backupRoot: apply && changes.length > 0 ? backupRoot : null,
     changes
   };
+  if (apply) {
+    recordDataMutationAudit({
+      group: "plan",
+      event: "plan_package_waiting_migration_completed",
+      owner: "plan-package-migration",
+      action: "migrate-package-waiting",
+      target: { type: "plan-catalog", id: path.basename(scopeRoot) || "roles" },
+      dataSource: { kind: "file", id: "plans" },
+      outcome: "committed",
+      changes: [
+        { field: "scannedPlanCount", to: scannedPlanCount },
+        { field: "changedPlanCount", to: changes.length },
+        { field: "skippedInvalidPlanCount", to: skippedInvalidPlanCount }
+      ]
+    });
+  }
+  return report;
 }

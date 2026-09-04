@@ -32,6 +32,7 @@ import {
   writePersonaConfig as writePersonaConfigFile,
   writePersonaRules
 } from "./configMigration.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type ManagerConfig = {
   routeDir?: string;
@@ -97,8 +98,34 @@ export class ManagerConfigRepository {
   }
 
   writeManagerConfig(cfg: ManagerConfig): void {
-    fs.mkdirSync(path.dirname(this.managerConfigPath), { recursive: true });
-    fs.writeFileSync(this.managerConfigPath, JSON.stringify(cfg, null, 2), "utf8");
+    const existed = fs.existsSync(this.managerConfigPath);
+    try {
+      fs.mkdirSync(path.dirname(this.managerConfigPath), { recursive: true });
+      fs.writeFileSync(this.managerConfigPath, JSON.stringify(cfg, null, 2), "utf8");
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "config",
+        event: "manager_config_write_failed",
+        owner: "config-repository",
+        action: existed ? "replace" : "create",
+        target: { type: "manager-config", id: "manager" },
+        dataSource: { kind: "file", id: "data/manager.json" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "config",
+      event: "manager_config_written",
+      owner: "config-repository",
+      action: existed ? "replace" : "create",
+      target: { type: "manager-config", id: "manager" },
+      dataSource: { kind: "file", id: "data/manager.json" },
+      outcome: "committed",
+      changes: Object.keys(cfg).sort().map(field => ({ field }))
+    });
     this.routeRoot = path.resolve(this.rootDir, cfg.routeDir ?? process.env.ROUTE_DIR ?? path.join("data", "route"));
     this.rolesRoot = path.resolve(this.rootDir, cfg.rolesDir ?? process.env.ROLES_DIR ?? path.join("data", "roles"));
   }
@@ -109,15 +136,42 @@ export class ManagerConfigRepository {
     if (!fs.existsSync(this.managerConfigPath) && fs.existsSync(exampleManagerConfig)) {
       fs.mkdirSync(path.dirname(this.managerConfigPath), { recursive: true });
       fs.copyFileSync(exampleManagerConfig, this.managerConfigPath, fs.constants.COPYFILE_EXCL);
+      recordDataMutationAudit({
+        group: "config",
+        event: "default_manager_config_installed",
+        owner: "config-repository",
+        action: "install-default",
+        target: { type: "manager-config", id: "manager" },
+        dataSource: { kind: "file", id: "data/manager.json" },
+        outcome: "committed"
+      });
       this.refreshManagerConfig();
     }
     if (!fs.existsSync(this.rolesRoot) && fs.existsSync(path.join(exampleDataDir, "roles"))) {
       fs.mkdirSync(path.dirname(this.rolesRoot), { recursive: true });
       fs.cpSync(path.join(exampleDataDir, "roles"), this.rolesRoot, { recursive: true, force: false, errorOnExist: false });
+      recordDataMutationAudit({
+        group: "persona",
+        event: "default_roles_installed",
+        owner: "config-repository",
+        action: "install-default",
+        target: { type: "role-catalog", id: "roles" },
+        dataSource: { kind: "file", id: "data/roles" },
+        outcome: "committed"
+      });
     }
     if (!fs.existsSync(this.routeRoot) && fs.existsSync(path.join(exampleDataDir, "route"))) {
       fs.mkdirSync(path.dirname(this.routeRoot), { recursive: true });
       fs.cpSync(path.join(exampleDataDir, "route"), this.routeRoot, { recursive: true, force: false, errorOnExist: false });
+      recordDataMutationAudit({
+        group: "route",
+        event: "default_routes_installed",
+        owner: "config-repository",
+        action: "install-default",
+        target: { type: "route-catalog", id: "routes" },
+        dataSource: { kind: "file", id: "data/route" },
+        outcome: "committed"
+      });
     }
     fs.mkdirSync(this.rolesRoot, { recursive: true });
     fs.mkdirSync(this.routeRoot, { recursive: true });
@@ -140,10 +194,23 @@ export class ManagerConfigRepository {
     const exampleManagerConfig = path.join(exampleDataDir, "manager.json");
     if (!await exists(this.managerConfigPath) && await exists(exampleManagerConfig)) {
       await fs.promises.mkdir(path.dirname(this.managerConfigPath), { recursive: true });
+      let copied = false;
       try {
         await fs.promises.copyFile(exampleManagerConfig, this.managerConfigPath, fs.constants.COPYFILE_EXCL);
+        copied = true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      if (copied) {
+        recordDataMutationAudit({
+          group: "config",
+          event: "default_manager_config_installed",
+          owner: "config-repository",
+          action: "install-default",
+          target: { type: "manager-config", id: "manager" },
+          dataSource: { kind: "file", id: "data/manager.json" },
+          outcome: "committed"
+        });
       }
       this.refreshManagerConfig();
     }
@@ -154,6 +221,15 @@ export class ManagerConfigRepository {
         force: false,
         errorOnExist: false
       });
+      recordDataMutationAudit({
+        group: "persona",
+        event: "default_roles_installed",
+        owner: "config-repository",
+        action: "install-default",
+        target: { type: "role-catalog", id: "roles" },
+        dataSource: { kind: "file", id: "data/roles" },
+        outcome: "committed"
+      });
     }
     if (!await exists(this.routeRoot) && await exists(path.join(exampleDataDir, "route"))) {
       await fs.promises.mkdir(path.dirname(this.routeRoot), { recursive: true });
@@ -161,6 +237,15 @@ export class ManagerConfigRepository {
         recursive: true,
         force: false,
         errorOnExist: false
+      });
+      recordDataMutationAudit({
+        group: "route",
+        event: "default_routes_installed",
+        owner: "config-repository",
+        action: "install-default",
+        target: { type: "route-catalog", id: "routes" },
+        dataSource: { kind: "file", id: "data/route" },
+        outcome: "committed"
       });
     }
     await Promise.all([

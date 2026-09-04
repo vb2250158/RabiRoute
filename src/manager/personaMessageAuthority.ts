@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 type StoredPersonaMessageAuthority = {
   version: 1;
@@ -48,9 +49,31 @@ function loadOrCreateSecret(rootDir: string): Buffer {
     descriptor = fs.openSync(filePath, "wx");
     fs.writeFileSync(descriptor, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
     fs.fsyncSync(descriptor);
+    recordDataMutationAudit({
+      group: "security",
+      event: "persona_message_authority_created",
+      owner: "persona-message-authority",
+      action: "create-secret",
+      target: { type: "authority", id: "persona-messaging" },
+      dataSource: { kind: "file", id: "persona-messaging/authority.json" },
+      outcome: "committed"
+    });
     return secret;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      recordDataMutationAudit({
+        level: "error",
+        group: "security",
+        event: "persona_message_authority_create_failed",
+        owner: "persona-message-authority",
+        action: "create-secret",
+        target: { type: "authority", id: "persona-messaging" },
+        dataSource: { kind: "file", id: "persona-messaging/authority.json" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
     return parseSecret(filePath);
   } finally {
     if (descriptor != null) fs.closeSync(descriptor);

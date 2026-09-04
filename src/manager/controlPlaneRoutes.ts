@@ -71,11 +71,16 @@ import { RemoteAgentHub, type RemoteAgentTask, type RemoteAgentTaskEvent, type R
 import { appendMessageContextToDir } from "../messageContextStore.js";
 import { SpeechIngressStore } from "../speechIngressStore.js";
 import { managerRuntimeDiagnosticsSummary } from "../managerRuntimeDiagnostics.js";
-import { createManagerOperationalLog, managerOperationalError } from "./operationalLog.js";
+import { createManagerOperationalLog, installOperationalMutationAuditSink, managerOperationalError } from "./operationalLog.js";
 import { PerformanceMonitoringService } from "./performanceMonitoring.js";
 import { PerformanceApi } from "./performanceRoutes.js";
 import { measureSyncPerformanceOperation } from "../performance/performanceInstrumentation.js";
 import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
+import {
+  createOperationContext,
+  recordDataMutationAudit,
+  runWithOperationContext
+} from "../observability/dataMutationAudit.js";
 import { readJsonlTail } from "./jsonlTail.js";
 import { requestWeixinLogin } from "../weixinLoginRequest.js";
 import { PersonaSyncService } from "../personaSync.js";
@@ -942,8 +947,40 @@ const managerHttpLimits = {
   maxRequestsPerSocket: 100
 } as const;
 const managerOperationalLog = createManagerOperationalLog({ rootDir });
+const uninstallDataMutationAuditSink = installOperationalMutationAuditSink(managerOperationalLog, rootDir);
 const messageProcessingBoardPersistence = new CoalescingMessageProcessingBoardPersistence(
-  messageProcessingBoardStatePath(rootDir)
+  messageProcessingBoardStatePath(rootDir),
+  {
+    onCommitted: (state, durationMs) => {
+      const revision = state && typeof state === "object" && !Array.isArray(state)
+        ? String((state as { updatedAt?: unknown }).updatedAt ?? "").trim() || undefined
+        : undefined;
+      recordDataMutationAudit({
+        group: "message.processing",
+        event: "message_processing_snapshot_committed",
+        owner: "CoalescingMessageProcessingBoardPersistence",
+        action: "persist_snapshot",
+        target: { type: "message_processing_board", id: "board" },
+        dataSource: { kind: "file", id: "data/.runtime/message-processing-board.json" },
+        outcome: "committed",
+        after: revision ? { revision } : undefined,
+        durationMs
+      });
+    },
+    onError: error => {
+      recordDataMutationAudit({
+        level: "error",
+        group: "message.processing",
+        event: "message_processing_snapshot_commit_failed",
+        owner: "CoalescingMessageProcessingBoardPersistence",
+        action: "persist_snapshot",
+        target: { type: "message_processing_board", id: "board" },
+        dataSource: { kind: "file", id: "data/.runtime/message-processing-board.json" },
+        outcome: "failed",
+        error
+      });
+    }
+  }
 );
 const messageProcessingBoard = new MessageProcessingBoardStore(messageProcessingBoardPersistence);
 const agentRequests = new AgentRequestStore(agentRequestStatePath(rootDir));
@@ -8170,11 +8207,13 @@ function managerHealthPayload(): Record<string, unknown> {
     && routeLifecycle.ready === routeLifecycle.required;
   const planStorageStartupSnapshot = planStorageStartupStatus();
   const planStorageStartup = publicPlanStorageStartupSnapshot(planStorageStartupSnapshot);
+  const operationalLog = managerOperationalLog.status();
   const backgroundLifecycle = {
     planStorageStartup,
     routeCatalog: routeCatalogStartup,
     memoryConsolidation: memoryConsolidationScheduler?.failureSummary() ?? { backoff: 0, incidents: 0 },
     planFeedbackRecovery: planFeedbackRecoveryService?.failureSummary() ?? { backoff: 0, incidents: 0 },
+    operationalLog,
     configWatch: publicManagerWatchBrokerStatus(configWatchLifecycle),
     pluginPackageWatch: publicManagerWatchBrokerStatus(pluginPackageWatchLifecycle)
   };
@@ -8185,6 +8224,7 @@ function managerHealthPayload(): Record<string, unknown> {
     + backgroundLifecycle.planFeedbackRecovery.incidents
     + planStorageStartupSnapshot.incidents
     + (routeCatalogStartup.state === "degraded" ? routeCatalogStartup.incidents : 0)
+    + (operationalLog.state === "degraded" ? 1 : 0)
     + watchIncidentCount;
   return {
     protocolVersion: 1,
@@ -8241,6 +8281,7 @@ function metaPayload(): Record<string, unknown> {
     rabiLinkRelayRuntime: rabiLinkRelayRuntime.status(),
     managerRuntime: managerRuntimeDiagnosticsSummary(),
     performance: performanceMonitoring.store.status(),
+    operationalLog: managerOperationalLog.status(),
     messageProcessingPersistence: messageProcessingBoardPersistence.status(),
     readWorkers: managerReadWorkerPool.status(),
     catalogWorkers: managerCatalogWorkerPool.status(),
@@ -8565,6 +8606,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     throw error;
   };
   managerRuntimeOwner.register("operational_log_flush", () => managerOperationalLog.flush());
+  managerRuntimeOwner.register("data_mutation_audit_sink", () => uninstallDataMutationAuditSink());
   let signalExitScheduled = false;
   const shutdownManager = (reason: string): void => {
     console.log(`gateway-manager shutting down: ${reason}`);
@@ -9383,6 +9425,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     const requestStartedAt = Date.now();
     const method = request.method ?? "UNKNOWN";
     let pathname = "/";
+    return runWithOperationContext(createOperationContext({
+      traceId: requestId,
+      spanId: requestId,
+      requestId,
+      source: "http",
+      actor: { kind: "system", id: "manager-http" }
+    }), () => {
     managerRequestContexts.set(response, {
       requestId,
       method,
@@ -9564,6 +9613,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       });
       jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }
+    });
   };
 
   activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;

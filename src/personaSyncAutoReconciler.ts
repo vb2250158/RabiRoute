@@ -3,6 +3,7 @@ import path from "node:path";
 import type { PersonaSyncResult, PersonaSyncPeer } from "./personaSyncCoordinator.js";
 import type { PersonaSyncManifestIndexEvent } from "./personaSyncManifestIndex.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import { sanitizeRoleId } from "./shared/routeIdentity.js";
 
 const AUTO_SYNC_STATE_VERSION = 1;
@@ -329,7 +330,36 @@ export class PersonaSyncAutoReconciler {
       roleIds: [...this.pendingRoleIds].sort((left, right) => left.localeCompare(right)),
       updatedAt: new Date().toISOString()
     };
-    atomicWriteFileSync(this.statePath, `${JSON.stringify(payload, null, 2)}\n`);
+    try {
+      atomicWriteFileSync(this.statePath, `${JSON.stringify(payload, null, 2)}\n`);
+      recordDataMutationAudit({
+        group: "persona.sync",
+        event: "persona_sync_pending_state_updated",
+        owner: "PersonaSyncAutoReconciler",
+        action: "persist_pending_state",
+        target: { type: "persona_sync_pending_state", id: "auto-sync" },
+        dataSource: { kind: "file", id: "data/persona-sync/auto-sync-state.json" },
+        outcome: "committed",
+        after: { revision: String(this.revision) },
+        changes: [
+          { field: "needsFullSync", to: payload.needsFullSync },
+          { field: "pendingRoleCount", to: payload.roleIds.length }
+        ]
+      });
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "persona.sync",
+        event: "persona_sync_pending_state_update_failed",
+        owner: "PersonaSyncAutoReconciler",
+        action: "persist_pending_state",
+        target: { type: "persona_sync_pending_state", id: "auto-sync" },
+        dataSource: { kind: "file", id: "data/persona-sync/auto-sync-state.json" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
   }
 
   private loadPendingState(): void {

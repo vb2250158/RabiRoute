@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 import { withFileLockSync } from "./shared/filePersistence.js";
 
 const MAX_TEXT = 2_000;
@@ -687,6 +688,16 @@ export function updateIdentityRelation(roleDir: string, patch: IdentityRelationP
         ? current.participants.get(record.id)?.record
         : current.relations.get(record.id)?.record;
     if (!existing?.conflicted && existing && comparableRecord(existing) === comparableRecord(record)) {
+      recordDataMutationAudit({
+        group: "identity",
+        event: "identity_relation_unchanged",
+        owner: "identity-relations",
+        action: `update-${patch.kind}`,
+        target: { type: patch.kind, id: record.id },
+        dataSource: { kind: "ledger", id: "identity/relations.jsonl" },
+        outcome: "no_change",
+        after: { revision: existing.updatedAt }
+      });
       return { record: existing, appended: false };
     }
     const event: IdentityRelationEvent = {
@@ -698,8 +709,35 @@ export function updateIdentityRelation(roleDir: string, patch: IdentityRelationP
       createdAt: now,
       supersedes: heads.map(item => item.id).sort()
     };
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`, "utf8");
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`, "utf8");
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "identity",
+        event: "identity_relation_append_failed",
+        owner: "identity-relations",
+        action: `update-${patch.kind}`,
+        target: { type: patch.kind, id: record.id },
+        dataSource: { kind: "ledger", id: "identity/relations.jsonl" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "identity",
+      event: "identity_relation_appended",
+      owner: "identity-relations",
+      action: `update-${patch.kind}`,
+      target: { type: patch.kind, id: record.id },
+      dataSource: { kind: "ledger", id: "identity/relations.jsonl" },
+      outcome: "committed",
+      before: heads.length > 0 ? { revision: heads.map(item => item.id).sort().join(",") } : undefined,
+      after: { revision: event.id },
+      changes: [{ field: "supersededHeadCount", to: heads.length }]
+    });
     return { record, appended: true };
   });
 }

@@ -55,6 +55,19 @@ It does not simulate an external QQ event and is not a side-effect-free preview.
 
 After an upgrade, rebuild and restart the Manager and Route, then verify the startup directory and `dist/` timestamp. Historical logs can remain for audit but do not define current state.
 
+## Data-mutation log
+
+Manager and Gateway write configuration, plan, memory, message-record, delivery-receipt, identity, speech, health-record, attachment, and runtime-state mutations to `logs/manager/manager-operations-YYYY-MM-DD.jsonl`. Every record includes `group`, `owner`, `action`, `target`, `dataSource`, and `outcome`. Records from one HTTP request also carry `traceId` and `requestId`, so started, committed, rejected, and failed stages can be correlated. Mutation records contain business IDs, field names, digests, counts, and outcomes rather than message bodies, credentials, health measurements, or media content.
+
+`GET /meta` exposes `operationalLog` with `healthy` or `degraded`, the pending record count, and the latest persistence error. A failed batch stays in memory and retries with backoff while Manager health reports degradation. Log persistence never changes the business mutation result.
+
+The default retention is 30 days with a 512 MiB cap across historical shards. Operators can change it in the startup environment:
+
+- `RABIROUTE_OPERATION_LOG_RETENTION_DAYS`: retention period in days.
+- `RABIROUTE_OPERATION_LOG_MAX_BYTES`: total byte cap for historical log shards.
+- `RABIROUTE_OPERATION_LOG_GROUPS`: comma-separated group allowlist.
+- `RABIROUTE_DIAGNOSTIC_LOG_GROUPS`: add call stacks for selected groups; enable briefly while locating a caller.
+
 ## NapCat opens with Unauthorized or an empty token login
 
 When **Open NapCat** is clicked from a Route, RabiRoute now opens the token-bearing `/web_login` URL directly. This creates a fresh WebUI session instead of letting credentials left in an old tab continue to produce `Unauthorized` after a NapCat restart.

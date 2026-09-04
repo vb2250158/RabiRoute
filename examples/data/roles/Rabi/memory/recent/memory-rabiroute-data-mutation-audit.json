@@ -1,0 +1,23 @@
+{
+  "id": "memory-rabiroute-data-mutation-audit",
+  "title": "持久化数据变动统一写入可追踪日志",
+  "content": "RabiRoute 的持久化数据写入通过统一审计入口记录 owner、action、target、dataSource、outcome、traceId、operationId、耗时和字段级变化摘要。Manager 与 Gateway 共用同一日志接收器，日志按日期写入 logs/manager，并提供分组筛选、诊断筛选、失败重试、容量与天数保留策略；日志写入失败只让 /meta 的 operationalLog 状态降级，不改变业务写入结果。审计记录禁止保存消息正文、附件内容、凭据和健康数据原值。新增直接文件写入时，静态覆盖测试要求接入审计入口，或明确标记为审计基础设施。排障时先从 /meta 确认 operationalLog 健康状态，再按 traceId、operationId、owner、action 和 target 关联同一次操作。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：持久化数据变动日志和排障入口"
+  },
+  "createdAt": "2026-09-04T00:00:00+08:00",
+  "updatedAt": "2026-09-04T00:00:00+08:00",
+  "keywords": [
+    "数据变动日志",
+    "data mutation audit",
+    "operationalLog",
+    "traceId",
+    "operationId",
+    "owner",
+    "action",
+    "target",
+    "日志脱敏",
+    "静态覆盖测试"
+  ]
+}

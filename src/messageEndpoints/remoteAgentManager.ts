@@ -5,6 +5,7 @@ import path from "node:path";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocket } from "ws";
 import type { MessageContextAttachment, MessageContextRecord } from "../messageContextStore.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export const REMOTE_AGENT_CONTROL_PORT_START = 8797;
 export const REMOTE_AGENT_DISCOVERY_PORT_START = 8798;
@@ -908,7 +909,32 @@ export class RemoteAgentHub {
   private writePasswordStore(store: PasswordStore): void {
     const file = this.passwordStorePath();
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
+    try {
+      fs.writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "remote-agent",
+        event: "remote_agent_password_store_write_failed",
+        owner: "remote-agent-manager",
+        action: "persist-device-password",
+        target: { type: "password-store", id: "remote-agent-devices" },
+        dataSource: { kind: "file", id: path.basename(file) },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "remote-agent",
+      event: "remote_agent_password_store_written",
+      owner: "remote-agent-manager",
+      action: "persist-device-password",
+      target: { type: "password-store", id: "remote-agent-devices" },
+      dataSource: { kind: "file", id: path.basename(file) },
+      outcome: "committed",
+      changes: [{ field: "deviceCount", to: Object.keys(store.devices ?? {}).length }]
+    });
   }
 
   private savedPassword(deviceId: string): string {
@@ -989,14 +1015,41 @@ export class RemoteAgentHub {
       this.assertFileTransferSize(buffer.byteLength, total, file.name || `returned-${index + 1}`);
       const name = safeFileName(file.name || file.path || `returned-${index + 1}`, `returned-${index + 1}`);
       const outPath = path.join(dir, name);
-      fs.writeFileSync(outPath, buffer);
+      const digest = sha256(buffer);
+      try {
+        fs.writeFileSync(outPath, buffer);
+      } catch (error) {
+        recordDataMutationAudit({
+          level: "error",
+          group: "remote-agent",
+          event: "remote_agent_returned_file_write_failed",
+          owner: "remote-agent-manager",
+          action: "store-returned-file",
+          target: { type: "task-file", id: `${task.taskId}:${index + 1}` },
+          dataSource: { kind: "file", id: `remote-agent-files/${name}` },
+          outcome: "failed",
+          error
+        });
+        throw error;
+      }
+      recordDataMutationAudit({
+        group: "remote-agent",
+        event: "remote_agent_returned_file_written",
+        owner: "remote-agent-manager",
+        action: "store-returned-file",
+        target: { type: "task-file", id: `${task.taskId}:${index + 1}` },
+        dataSource: { kind: "file", id: `remote-agent-files/${name}` },
+        outcome: "committed",
+        after: { digest },
+        changes: [{ field: "size", to: buffer.byteLength }]
+      });
       return {
         name,
         path: outPath,
         relativePath: file.relativePath,
         mimeType: file.mimeType,
         size: buffer.byteLength,
-        sha256: sha256(buffer)
+        sha256: digest
       };
     });
   }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { readRabiLinkConversationTimeline } from "./rabilinkConversationLedger.js";
 import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
 import { normalizeSpeechTranscriptSegment } from "./shared/speechTranscript.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export const MESSAGE_CONTEXT_FILE = "message-context.jsonl";
 export const MESSAGE_CONTEXT_DIR = "conversation";
@@ -796,12 +797,52 @@ export function appendMessageContextToDir(
     const existing = findExistingRecord(dataDir, index, current, candidate);
     if (existing) {
       writeIndex(dataDir, index);
+      recordDataMutationAudit({
+        group: "conversation",
+        event: "message_context_replayed",
+        owner: "message-context",
+        action: "append",
+        target: { type: "message-context", id: existing.id ?? dedupeKey(existing) },
+        dataSource: { kind: "ledger", id: `${MESSAGE_CONTEXT_DIR}/${MESSAGE_CONTEXT_CURRENT_FILE}` },
+        outcome: "replayed",
+        after: existing.sequence ? { revision: String(existing.sequence) } : undefined,
+        result: archived.archivedPath ? "archive_rotated" : undefined
+      });
       return { record: existing, appended: false, archivedPath: archived.archivedPath };
     }
-    fs.mkdirSync(path.dirname(messageContextCurrentPath(dataDir)), { recursive: true });
-    fs.appendFileSync(messageContextCurrentPath(dataDir), `${JSON.stringify(candidate)}\n`, "utf8");
-    index.nextSequence += 1;
-    writeIndex(dataDir, index);
+    try {
+      fs.mkdirSync(path.dirname(messageContextCurrentPath(dataDir)), { recursive: true });
+      fs.appendFileSync(messageContextCurrentPath(dataDir), `${JSON.stringify(candidate)}\n`, "utf8");
+      index.nextSequence += 1;
+      writeIndex(dataDir, index);
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "conversation",
+        event: "message_context_append_failed",
+        owner: "message-context",
+        action: "append",
+        target: { type: "message-context", id: candidate.id ?? dedupeKey(candidate) },
+        dataSource: { kind: "ledger", id: `${MESSAGE_CONTEXT_DIR}/${MESSAGE_CONTEXT_CURRENT_FILE}` },
+        outcome: "failed",
+        after: candidate.sequence ? { revision: String(candidate.sequence) } : undefined,
+        result: "current_or_index_write_failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "conversation",
+      event: "message_context_appended",
+      owner: "message-context",
+      action: "append",
+      target: { type: "message-context", id: candidate.id ?? dedupeKey(candidate) },
+      dataSource: { kind: "ledger", id: `${MESSAGE_CONTEXT_DIR}/${MESSAGE_CONTEXT_CURRENT_FILE}` },
+      outcome: "committed",
+      after: candidate.sequence ? { revision: String(candidate.sequence) } : undefined,
+      result: archived.archivedPath ? "archive_rotated" : undefined,
+      changes: [{ field: "attachmentCount", to: candidate.attachments?.length ?? 0 }]
+    });
     return { record: candidate, appended: true, archivedPath: archived.archivedPath };
   } finally {
     release();

@@ -27,6 +27,7 @@ type CoalescingMessageProcessingBoardPersistenceOptions = {
   retryDelayMs?: number;
   writer?: MessageProcessingBoardSnapshotWriter;
   onError?: (error: Error) => void;
+  onCommitted?: (state: unknown, durationMs: number) => void;
 };
 
 const MESSAGE_PROCESSING_BOARD_WRITE_WORKER_SOURCE = String.raw`
@@ -137,6 +138,7 @@ export class CoalescingMessageProcessingBoardPersistence implements MessageProce
   private readonly retryDelayMs: number;
   private readonly writer: MessageProcessingBoardSnapshotWriter;
   private readonly onError: (error: Error) => void;
+  private readonly onCommitted?: (state: unknown, durationMs: number) => void;
   private pendingState: unknown;
   private hasPendingState = false;
   private flushTimer?: NodeJS.Timeout;
@@ -157,6 +159,7 @@ export class CoalescingMessageProcessingBoardPersistence implements MessageProce
     this.retryDelayMs = Math.max(100, Math.floor(options.retryDelayMs ?? 1_000));
     this.writer = options.writer ?? writeMessageProcessingBoardSnapshotInWorker;
     this.onError = options.onError ?? ((error) => console.error("Message-processing board persistence failed:", error));
+    this.onCommitted = options.onCommitted;
   }
 
   read(): unknown {
@@ -253,6 +256,7 @@ export class CoalescingMessageProcessingBoardPersistence implements MessageProce
         this.lastCompletedAt = new Date().toISOString();
         this.lastErrorAt = undefined;
         this.lastError = undefined;
+        this.onCommitted?.(state, this.lastWriteDurationMs);
       })
       .catch((error) => {
         const normalized = error instanceof Error ? error : new Error(String(error));

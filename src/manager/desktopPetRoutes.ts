@@ -9,6 +9,7 @@ import {
   type DesktopSettings
 } from "../shared/desktopSettingsContract.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const PACK_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}$/;
 const IMAGE_EXTENSIONS = new Set([".gif", ".png"]);
@@ -443,7 +444,33 @@ export function handleDesktopPetApi(
         const pack = catalog.packs.find(item => item.id === packId);
         if (!pack) {
           const target = path.join(roleDir, "desktop-pet", "packs", packId);
-          if (inside(path.join(roleDir, "desktop-pet", "packs"), target)) fs.rmSync(target, { recursive: true, force: true });
+          if (inside(path.join(roleDir, "desktop-pet", "packs"), target)) {
+            try {
+              fs.rmSync(target, { recursive: true, force: true });
+              recordDataMutationAudit({
+                group: "role",
+                event: "desktop_pet_pack_rollback_committed",
+                owner: "desktop-pet-pack-import",
+                action: "rollback-invalid-pack",
+                target: { type: "desktop-pet-pack", id: packId },
+                dataSource: { kind: "file", id: `roles/${roleId}/desktop-pet/packs/${packId}` },
+                outcome: "committed"
+              });
+            } catch (error) {
+              recordDataMutationAudit({
+                level: "error",
+                group: "role",
+                event: "desktop_pet_pack_rollback_failed",
+                owner: "desktop-pet-pack-import",
+                action: "rollback-invalid-pack",
+                target: { type: "desktop-pet-pack", id: packId },
+                dataSource: { kind: "file", id: `roles/${roleId}/desktop-pet/packs/${packId}` },
+                outcome: "failed",
+                error
+              });
+              throw error;
+            }
+          }
           throw new Error(catalog.diagnostics.find(item => item.packId === packId)?.message || "Imported desktop pet pack is not runnable.");
         }
         return pack;

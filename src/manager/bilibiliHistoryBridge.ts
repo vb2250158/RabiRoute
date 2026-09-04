@@ -3,6 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import {
   BilibiliHistoryRecordStore,
   type BilibiliHistoryApiItem
@@ -236,8 +237,33 @@ export class BilibiliHistoryBridge {
   private save(): void {
     fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
     const temporary = `${this.statePath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, `${JSON.stringify(this.state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(temporary, this.statePath);
+    try {
+      fs.writeFileSync(temporary, `${JSON.stringify(this.state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+      fs.renameSync(temporary, this.statePath);
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "bilibili-history",
+        event: "bilibili_history_bridge_state_write_failed",
+        owner: "bilibili-history-bridge",
+        action: "persist-state",
+        target: { type: "bridge-state", id: "bilibili-history" },
+        dataSource: { kind: "file", id: "bilibili-history/state.json" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "bilibili-history",
+      event: "bilibili_history_bridge_state_written",
+      owner: "bilibili-history-bridge",
+      action: "persist-state",
+      target: { type: "bridge-state", id: "bilibili-history" },
+      dataSource: { kind: "file", id: "bilibili-history/state.json" },
+      outcome: "committed",
+      changes: [{ field: "jobCount", to: this.state.jobs.length }]
+    });
   }
 
   private tokenMatches(request: http.IncomingMessage): boolean {

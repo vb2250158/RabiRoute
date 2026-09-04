@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type FailureCircuitPhase = "backoff" | "incident";
 
@@ -234,7 +235,28 @@ export class FailureCircuitRegistry {
         states: Object.fromEntries(this.states)
       })}\n`, "utf8");
       fs.renameSync(temporaryPath, this.persistencePath);
+      recordDataMutationAudit({
+        group: "runtime",
+        event: "failure_circuit_state_written",
+        owner: "failure-circuit",
+        action: "persist-state",
+        target: { type: "failure-circuit", id: path.basename(this.persistencePath) },
+        dataSource: { kind: "file", id: path.basename(this.persistencePath) },
+        outcome: "committed",
+        changes: [{ field: "stateCount", to: this.states.size }]
+      });
     } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "runtime",
+        event: "failure_circuit_state_write_failed",
+        owner: "failure-circuit",
+        action: "persist-state",
+        target: { type: "failure-circuit", id: path.basename(this.persistencePath) },
+        dataSource: { kind: "file", id: path.basename(this.persistencePath) },
+        outcome: "failed",
+        error
+      });
       if (!this.persistenceErrorReported) {
         this.persistenceErrorReported = true;
         this.onPersistenceError?.(error);

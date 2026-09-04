@@ -7,6 +7,7 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { promisify } from "node:util";
 import QRCode from "qrcode";
 import { KeyedAsyncLock } from "../shared/keyedAsyncLock.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const execFileAsync = promisify(execFile);
 const napcatLifecycleLock = new KeyedAsyncLock();
@@ -686,6 +687,20 @@ function writeManagedNapcatConfigs(instance: NapCatInstanceDefinition): { steps:
       plugins: []
     }
   }, null, 2), "utf8");
+  recordDataMutationAudit({
+    group: "napcat",
+    event: "napcat_instance_configs_written",
+    owner: "napcat-manager",
+    action: "configure-instance",
+    target: { type: "napcat-instance", id: instance.id },
+    dataSource: { kind: "file", id: "napcat/config" },
+    outcome: "committed",
+    changes: [
+      { field: "webuiPort", to: webuiPort },
+      { field: "httpPort", to: httpPort },
+      { field: "gatewayPort", to: instance.gatewayPort }
+    ]
+  });
   steps.push(`HTTP 端口：${httpPort}`);
   steps.push(`WS 地址：${wsUrl}`);
   return {
@@ -712,6 +727,15 @@ export function prepareManagedNapcatInstance(ctx: NapcatManagerContext, request:
   };
   const written = writeManagedNapcatConfigs(instance);
   instance.webuiToken = written.webuiToken;
+  recordDataMutationAudit({
+    group: "napcat",
+    event: "napcat_instance_prepared",
+    owner: "napcat-manager",
+    action: "prepare-instance",
+    target: { type: "napcat-instance", id: instance.id },
+    dataSource: { kind: "file", id: `data/napcat/${instance.id}` },
+    outcome: "committed"
+  });
   return {
     instance,
     steps: [...prepared.steps, ...written.steps]
@@ -1670,6 +1694,15 @@ function writeRabiRouteOneBotConfig(
     verifyCertificate: true
   }, "url");
   fs.writeFileSync(onebotPath, JSON.stringify(config, null, 2), "utf8");
+  recordDataMutationAudit({
+    group: "napcat",
+    event: "napcat_onebot_config_written",
+    owner: "napcat-manager",
+    action: "configure-onebot",
+    target: { type: "napcat-config", id: path.basename(onebotPath) },
+    dataSource: { kind: "file", id: "napcat/config/onebot.json" },
+    outcome: changedHttp || changedWs ? "committed" : "no_change"
+  });
   return { changed: changedHttp || changedWs, config };
 }
 
@@ -1693,6 +1726,15 @@ function writeRabiRouteNapcatProtocolConfig(
   };
   const changed = JSON.stringify(parsed) !== JSON.stringify(next);
   fs.writeFileSync(protocolPath, JSON.stringify(next, null, 2), "utf8");
+  recordDataMutationAudit({
+    group: "napcat",
+    event: "napcat_protocol_config_written",
+    owner: "napcat-manager",
+    action: "configure-protocol",
+    target: { type: "napcat-config", id: path.basename(protocolPath) },
+    dataSource: { kind: "file", id: "napcat/config/protocol.json" },
+    outcome: changed ? "committed" : "no_change"
+  });
   return changed;
 }
 

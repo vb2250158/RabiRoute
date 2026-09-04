@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { withFileLockSync } from "./shared/filePersistence.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export type RolePanelAttachment = {
   kind: "file" | "image" | "voice";
@@ -97,7 +98,18 @@ export function appendRolePanelTimelineMessageIfAbsent(
   const filePath = rolePanelMessagesPath(roleDir);
   return withFileLockSync(`${filePath}.lock`, () => {
     const existing = findRolePanelTimelineMessage(roleDir, normalized.roleId, normalized.id);
-    if (existing) return Object.freeze({ message: existing, appended: false });
+    if (existing) {
+      recordDataMutationAudit({
+        group: "role",
+        event: "role_panel_timeline_message_replayed",
+        owner: "role-panel-timeline",
+        action: "append-message",
+        target: { type: "role-panel-message", id: normalized.id },
+        dataSource: { kind: "ledger", id: `roles/${normalized.roleId}/role-panel-timeline` },
+        outcome: "replayed"
+      });
+      return Object.freeze({ message: existing, appended: false });
+    }
     fs.mkdirSync(rolePanelDir(roleDir), { recursive: true });
     const descriptor = fs.openSync(filePath, "a+");
     try {
@@ -110,6 +122,29 @@ export function appendRolePanelTimelineMessageIfAbsent(
       }
       fs.writeSync(descriptor, `${prefix}${JSON.stringify(normalized)}\n`, undefined, "utf8");
       fs.fsyncSync(descriptor);
+      recordDataMutationAudit({
+        group: "role",
+        event: "role_panel_timeline_message_appended",
+        owner: "role-panel-timeline",
+        action: "append-message",
+        target: { type: "role-panel-message", id: normalized.id },
+        dataSource: { kind: "ledger", id: `roles/${normalized.roleId}/role-panel-timeline` },
+        outcome: "committed",
+        result: normalized.status
+      });
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "role",
+        event: "role_panel_timeline_message_append_failed",
+        owner: "role-panel-timeline",
+        action: "append-message",
+        target: { type: "role-panel-message", id: normalized.id },
+        dataSource: { kind: "ledger", id: `roles/${normalized.roleId}/role-panel-timeline` },
+        outcome: "failed",
+        error
+      });
+      throw error;
     } finally {
       fs.closeSync(descriptor);
     }

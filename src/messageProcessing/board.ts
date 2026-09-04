@@ -7,6 +7,7 @@ import {
   JsonFileMessageProcessingBoardPersistence,
   type MessageProcessingBoardPersistence
 } from "./persistence.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export const MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION = 2;
 export const MESSAGE_PROCESSING_REQUIRED_DUE_MS = 10 * 60 * 1_000;
@@ -984,7 +985,7 @@ export class MessageProcessingBoardStore {
         : MESSAGE_PROCESSING_DECISION_DUE_MS)).toISOString()
     };
     this.requirements.set(requirement.id, requirement);
-    this.persist();
+    this.persist("registered", requirement.id, undefined, requirement.status);
     return { outcome: "created", requirement: structuredClone(requirement) };
   }
 
@@ -996,7 +997,7 @@ export class MessageProcessingBoardStore {
     requirement.status = "processing";
     requirement.lastError = undefined;
     requirement.updatedAt = nowIso(this.now);
-    this.persist();
+    this.persist("dispatched", requirement.id, undefined, requirement.status);
     return structuredClone(requirement);
   }
 
@@ -1006,7 +1007,7 @@ export class MessageProcessingBoardStore {
     if (!normalized) throw new Error("Invalid message-processing worker.");
     requirement.worker = normalized;
     requirement.updatedAt = nowIso(this.now);
-    this.persist();
+    this.persist("worker_reference_updated", requirement.id, requirement.status, requirement.status);
     return structuredClone(requirement);
   }
 
@@ -1039,7 +1040,7 @@ export class MessageProcessingBoardStore {
     requirement.status = "send_failed";
     requirement.lastError = cleanText(error instanceof Error ? error.message : error, 4_000) || "消息没有成功交给处理 Agent。";
     requirement.updatedAt = nowIso(this.now);
-    this.persist();
+    this.persist("dispatch_failed", requirement.id, undefined, requirement.status);
     return structuredClone(requirement);
   }
 
@@ -1056,7 +1057,7 @@ export class MessageProcessingBoardStore {
     requirement.status = "processing";
     requirement.lastError = undefined;
     requirement.updatedAt = updatedAt;
-    this.persist();
+    this.persist("handoff_returned", requirement.id, undefined, requirement.status);
     return structuredClone(requirement);
   }
 
@@ -1151,7 +1152,7 @@ export class MessageProcessingBoardStore {
     if (criticalFactDisposition) requirement.criticalFactDisposition = criticalFactDisposition;
     requirement.updatedAt = decidedAt;
     if (input.planId) this.linkPlan(requirement, input);
-    this.persist();
+    this.persist("reply_recorded", requirement.id, undefined, requirement.status);
     return structuredClone(requirement);
   }
 
@@ -1178,7 +1179,7 @@ export class MessageProcessingBoardStore {
       ? cleanText(result.reason, 4_000) || `Outbox ${result.status}.`
       : undefined;
     requirement.updatedAt = updatedAt;
-    this.persist();
+    this.persist("knowledge_callback_recorded", requirement.id, requirement.status, requirement.status);
     return structuredClone(requirement);
   }
 
@@ -1571,15 +1572,49 @@ export class MessageProcessingBoardStore {
     return requirement;
   }
 
-  private persist(): void {
+  private persist(
+    action = "state_updated",
+    targetId = "board",
+    beforeStatus?: MessageProcessingRequirementStatus,
+    afterStatus?: MessageProcessingRequirementStatus
+  ): void {
     this.pruneExpiredState();
-    this.persistence.write({
+    const updatedAt = nowIso(this.now);
+    try {
+      this.persistence.write({
       schemaVersion: MESSAGE_PROCESSING_BOARD_SCHEMA_VERSION,
-      updatedAt: nowIso(this.now),
+      updatedAt,
       requirements: [...this.requirements.values()],
       planOrigins: [...this.planOrigins.values()],
       dedupeRecords: [...this.dedupeRecords.values()]
-    } satisfies MessageProcessingBoardState);
+      } satisfies MessageProcessingBoardState);
+      recordDataMutationAudit({
+        group: "message.processing",
+        event: `message_processing_${action}`,
+        owner: "MessageProcessingBoardStore",
+        action,
+        target: { type: targetId === "board" ? "message_processing_board" : "message_processing_requirement", id: targetId },
+        dataSource: { kind: "runtime", id: "message-processing-board" },
+        outcome: "queued",
+        after: { revision: updatedAt },
+        changes: beforeStatus !== afterStatus
+          ? [{ field: "status", from: beforeStatus, to: afterStatus }]
+          : undefined
+      });
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "message.processing",
+        event: `message_processing_${action}_failed`,
+        owner: "MessageProcessingBoardStore",
+        action,
+        target: { type: targetId === "board" ? "message_processing_board" : "message_processing_requirement", id: targetId },
+        dataSource: { kind: "runtime", id: "message-processing-board" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
   }
 
   private retainDedupeKey(dedupeKey: string, createdAt: string, now: number): void {

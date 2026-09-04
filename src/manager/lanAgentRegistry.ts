@@ -5,6 +5,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
 import { webguiTokenMatches } from "./webguiLanAccess.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type LanAgentNodeHello = {
   nodeId: string;
@@ -399,7 +400,35 @@ export class LanAgentRegistry {
     fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
     const state: PersistedState = { schemaVersion: 2, nodes: this.listNodes(), tasks: this.listTasks(500) };
     const tempPath = `${this.statePath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-    fs.renameSync(tempPath, this.statePath);
+    try {
+      fs.writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+      fs.renameSync(tempPath, this.statePath);
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "lan-agent",
+        event: "lan_agent_registry_write_failed",
+        owner: "lan-agent-registry",
+        action: "persist-state",
+        target: { type: "lan-agent-registry", id: "registry" },
+        dataSource: { kind: "file", id: "lan-agent/registry.json" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "lan-agent",
+      event: "lan_agent_registry_written",
+      owner: "lan-agent-registry",
+      action: "persist-state",
+      target: { type: "lan-agent-registry", id: "registry" },
+      dataSource: { kind: "file", id: "lan-agent/registry.json" },
+      outcome: "committed",
+      changes: [
+        { field: "nodeCount", to: state.nodes.length },
+        { field: "taskCount", to: state.tasks.length }
+      ]
+    });
   }
 }

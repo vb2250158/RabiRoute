@@ -4,6 +4,7 @@ import path from "node:path";
 import { atomicWriteFileSync, withFileLockSync } from "./shared/filePersistence.js";
 import type { ConversationSituation } from "./routing/conversationSituation.js";
 import type { ForwardRouteKind } from "./routing/types.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 const MAX_RETAINED_SITUATIONS = 200;
 
@@ -72,14 +73,65 @@ export function recordConversationSituation(
       routeId,
       routeKind
     };
-    atomicWriteFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`);
+    const beforeDigest = previous ? createHash("sha256").update(JSON.stringify(previous)).digest("hex") : undefined;
+    const afterDigest = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+    try {
+      atomicWriteFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`);
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "conversation",
+        event: "conversation_situation_write_failed",
+        owner: "conversation-situation",
+        action: previous ? "replace" : "create",
+        target: { type: "conversation-situation", id },
+        dataSource: { kind: "file", id: "conversation/situations" },
+        outcome: "failed",
+        before: beforeDigest ? { digest: beforeDigest } : undefined,
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "conversation",
+      event: "conversation_situation_written",
+      owner: "conversation-situation",
+      action: previous ? "replace" : "create",
+      target: { type: "conversation-situation", id },
+      dataSource: { kind: "file", id: "conversation/situations" },
+      outcome: beforeDigest === afterDigest ? "no_change" : "committed",
+      before: beforeDigest ? { digest: beforeDigest } : undefined,
+      after: { digest: afterDigest }
+    });
     const count = fs.readdirSync(directory, { withFileTypes: true })
       .filter(entry => entry.isFile() && entry.name.endsWith(".json")).length;
     if (count > MAX_RETAINED_SITUATIONS) {
       const stale = listConversationSituations(roleDir, 1_000).slice(MAX_RETAINED_SITUATIONS);
+      let removed = 0;
+      let failed = 0;
       for (const item of stale) {
-        try { fs.unlinkSync(path.join(directory, `${item.id}.json`)); } catch { /* Derived shadow records may be reconstructed from the ledger. */ }
+        try {
+          fs.unlinkSync(path.join(directory, `${item.id}.json`));
+          removed += 1;
+        } catch {
+          failed += 1;
+          /* Derived shadow records may be reconstructed from the ledger. */
+        }
       }
+      recordDataMutationAudit({
+        level: failed > 0 ? "warn" : "info",
+        group: "conversation",
+        event: "conversation_situation_retention_applied",
+        owner: "conversation-situation",
+        action: "retention-cleanup",
+        target: { type: "conversation-situation-set", id: routeId },
+        dataSource: { kind: "file", id: "conversation/situations" },
+        outcome: failed > 0 ? "failed" : "committed",
+        changes: [
+          { field: "removedCount", to: removed },
+          { field: "failedCount", to: failed }
+        ]
+      });
     }
     return snapshot;
   });

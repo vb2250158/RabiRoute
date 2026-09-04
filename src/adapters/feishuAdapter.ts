@@ -12,6 +12,7 @@ import {
 } from "../history.js";
 import { forwardMessage } from "../forwarding.js";
 import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const MAX_CALLBACK_BYTES = 1024 * 1024;
 const MAX_SIGNATURE_AGE_SECONDS = 5 * 60;
@@ -67,11 +68,26 @@ function patchFeishuStatus(
     updatedAt: now.toISOString()
   };
   fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(statusPath, JSON.stringify({
-    ...status,
-    feishu: { ...status.feishu, ...next },
-    messageAdapters: { ...status.messageAdapters, feishu: next }
-  }, null, 2), "utf8");
+  try {
+    fs.writeFileSync(statusPath, JSON.stringify({
+      ...status,
+      feishu: { ...status.feishu, ...next },
+      messageAdapters: { ...status.messageAdapters, feishu: next }
+    }, null, 2), "utf8");
+    recordDataMutationAudit({
+      group: "gateway",
+      event: "feishu_adapter_status_committed",
+      owner: "feishu-adapter",
+      action: "patch-runtime-status",
+      target: { type: "message-adapter", id: "feishu" },
+      dataSource: { kind: "runtime", id: "gateway-status" },
+      outcome: "committed",
+      changes: Object.keys(patch).sort().map(field => ({ field }))
+    });
+  } catch (error) {
+    recordDataMutationAudit({ level: "error", group: "gateway", event: "feishu_adapter_status_write_failed", owner: "feishu-adapter", action: "patch-runtime-status", target: { type: "message-adapter", id: "feishu" }, dataSource: { kind: "runtime", id: "gateway-status" }, outcome: "failed", error });
+    throw error;
+  }
 }
 function safeEqual(left: string, right: string): boolean {
   const leftBytes = Buffer.from(left, "utf8");

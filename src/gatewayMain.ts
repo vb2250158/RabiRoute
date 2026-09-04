@@ -1,4 +1,4 @@
-import { config } from "./config.js";
+import { config, runtimeLayout } from "./config.js";
 import { gatewayReadyLine, type GatewayEndpoint } from "./gatewayLifecycle.js";
 import type { GatewayMessageAdapterType } from "./adapters/messageAdapter.js";
 import { startGatewayPerformanceReporter } from "./performance/gatewayPerformanceReporter.js";
@@ -19,6 +19,7 @@ import {
   mountMessageAdapterRuntime,
   type MessageAdapterRuntimeMount
 } from "./runtime/messageAdapterRuntime.js";
+import { createManagerOperationalLog, installOperationalMutationAuditSink } from "./manager/operationalLog.js";
 
 const GATEWAY_CONTRIBUTION_RUNTIME_KEY = "rabi.runtime.contributions.gateway";
 const GATEWAY_MESSAGE_ADAPTER_RUNTIME_KEY = "rabi.runtime.messageAdapters.gateway";
@@ -132,7 +133,27 @@ export function startGatewayMain(
 }
 
 export async function runGatewayMain(): Promise<void> {
-  await startGatewayMain();
+  const operationalLog = createManagerOperationalLog({ rootDir: runtimeLayout.stateRoot });
+  const uninstallMutationAuditSink = installOperationalMutationAuditSink(operationalLog, runtimeLayout.stateRoot);
+  const flushOperationalLog = (): void => {
+    uninstallMutationAuditSink();
+    void operationalLog.flush().catch(error => {
+      process.stderr.write(`[RabiRoute Gateway operations] failed to flush: ${error instanceof Error ? error.message : String(error)}\n`);
+    });
+  };
+  process.once("SIGINT", flushOperationalLog);
+  process.once("SIGTERM", flushOperationalLog);
+  process.once("beforeExit", flushOperationalLog);
+  try {
+    await startGatewayMain();
+  } catch (error) {
+    process.removeListener("SIGINT", flushOperationalLog);
+    process.removeListener("SIGTERM", flushOperationalLog);
+    process.removeListener("beforeExit", flushOperationalLog);
+    uninstallMutationAuditSink();
+    await operationalLog.flush();
+    throw error;
+  }
   const gatewayId = String(process.env.GATEWAY_ID || "").trim();
   const gatewayGenerationId = String(process.env.RABIROUTE_GATEWAY_GENERATION_ID || "").trim();
   if (!gatewayId || !gatewayGenerationId) {

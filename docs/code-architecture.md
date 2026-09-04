@@ -420,6 +420,8 @@ Manager 端点、身份、完整必需插件集与 handler READY 不等待计划
 
 可能遍历大量历史文件的读操作不能直接占用 Manager 的 HTTP 主线程。`manager/managerReadWorkerPool.ts` 用有界常驻低优先级子进程执行语音历史、人格同步冲突、记忆目录、Agent 扫描、性能 JSONL 解析、性能汇总和响应 JSON 序列化，并分别限制同时执行数、等待队列和执行时限；所有池合计最多执行 2 项重任务，避免一次 Agent 扫描让其他只读请求长期排队。请求断开或超时时终止对应子进程，后续请求再创建替代进程。子进程在请求之间复用模块缓存，避免记忆目录读取反复支付进程启动和模块加载成本。范围相同且只要统计的并发语音请求、相同参数的并发 Agent 扫描及相同性能查询共享一个任务。性能池同时执行 1 项、等待 1 项、超时 60 秒；队列满时返回 503，不在主线程回退。Codex 任务扫描按 200 条分页，Desktop 任务目录阶段最多等待 8 秒，并记录 `manager.agent_scan.desktop_ready` 与 `manager.agent_scan.codex_catalog`；WebGUI 只在用户要求时继续加载后续页。消息处理看板列表只构建界面摘要，附件、原始回复上下文和完整证据由单项详情接口读取。计划目录冷读使用异步并发文件 I/O，同一人格的并发请求共享一个缓存填充任务；热读直接复用内存目录，文件监听只刷新变化项。Manager 开始监听后在后台预热各人格计划目录，不延迟 HTTP 就绪。`messageContextStore.ts` 先用归档索引的起止时间过滤文件，再读取可能命中的正文。性能存储启动时按流逐条读取已有 JSONL，不整文件读取和拆分。冲突目录没有快照时立即返回 202，再交给独立的单子进程目录池限速整理，避免占用语音名额或用满速目录遍历争抢磁盘。`manager/operationalLog.ts` 把同一时间片的请求日志合并后异步追加，避免每个响应都在主线程同步写盘。正常退出会等待消息处理快照和操作日志完成写入，再结束进程。控制面诊断通过 `manager/jsonlTail.ts` 从文件尾部读取有限记录，同一次响应使用请求级缓存，避免不同卡片重复读取同一份日志。`/meta.readWorkers`、`/meta.catalogWorkers`、`/meta.agentScanWorkers`、`/meta.performanceWorkers`、`/meta.messageProcessingPersistence` 和 `/meta.httpLimits` 提供不含业务正文的运行诊断；各子进程状态中的 `executionMode`、`workerPids`、`globalActive`、`globalMaxConcurrency`、`workers` 与 `spawnedWorkers` 用于检查隔离方式、总预算和异常重启。
 
+`manager/operationalLog.ts` 现在接收 Manager 与 Gateway 共用的数据变动事件，并按时间片异步追加到每日分片。记录包含 owner、action、target、dataSource、outcome 和请求追踪字段，不包含业务正文。失败批次保留在内存中退避重试，并通过 `/meta.operationalLog` 和 Manager 健康状态报告降级。历史分片默认保留 30 天，总量上限为 512 MiB；正常退出会等待待写记录完成。
+
 它已经接入：
 
 - `ManagerConfigRepository`

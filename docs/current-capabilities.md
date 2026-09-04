@@ -153,6 +153,7 @@ Manager 的 29 个内置插件与树外插件统一使用 schema/profile v2。�
 - 命中记忆会按统一策略刷新 `viewedAt`；同一 turn 的相同条目修订不会重复刷新。只有显式 `memory-consolidation` 手动触发或 Manager API request 才会创建整理 run，提交结果后才标记输入并写入沉淀记忆；当前没有仅凭时间流逝自动启动的后台整理调度器。Codex Route 可把手动触发投给独立“`<主人格任务名> 记忆整理`”Desktop 任务，默认模型 `gpt-5.6-terra`，失败不回退给主人格。
 - Codex 插件只转发 lifecycle 事件和注入 Manager 返回值，不拥有绑定、触发策略或知识副本。内部 `preview` 策略无副作用，但当前仍没有 WebGUI 预览界面。
 - 运行记录以 JSONL 为主，包括消息、适配器日志、AgentPacket、Outbox、heartbeat、manual trigger、role panel、RabiLink conversation、按角色的 wearable health 时间线和 delivery replay。
+- Manager 与 Gateway 的数据变动同时写入 `logs/manager/manager-operations-YYYY-MM-DD.jsonl`，以 owner、action、target、dataSource、outcome、revision/digest 和 trace 字段串联开始、提交、重放、拒绝与失败；默认保留 30 天，写盘失败会在 `/meta.operationalLog` 和健康状态中报告降级。
 - 运行期 `data/`、日志、token、真实账号、真实群号和 Cookie 不应进入仓库。
 - 多电脑人格同步为实验支持：同一 RabiLink 应用 token 下的 PC 可查询 peers，优先经专用局域网数据面直连，失败后经 Relay 受限中转；JSONL 做集合合并，普通文件按共同基线快进，已知基线上的单边删除可传播，删除/编辑并发或双方修改的冲突保存在 `data/persona-sync/conflicts/`。同一人格、路径、peer、远端哈希、删除状态和基线哈希使用固定证据哈希直接定位，不再为自动去重同步遍历旧冲突目录；历史副本只在用户明确检查冲突时异步归组。可重建 manifest 索引只做一次启动校准，之后由文件事件重算变化路径；事件不可用时才在查询前做一次校准。`PersonaSyncAutoReconciler` 把本机文件变化、peer 上下线和 Relay `ready` 作为唤醒信号，持久保存待对账范围并执行一次 manifest 补漏；目标离线时等待事件，在线临时失败只做有界退避，不运行固定业务轮询。本机 Agent 或人格页可查看远端证据并选择保留本地、采用远端/删除或提交合并内容；处理过程校验本地哈希并保留解决审计，随后仅在两端仍匹配证据时把结果即时发布回来源 peer。冲突控制、索引和自动状态诊断不经 LAN/Relay 暴露。语音消息端账号的兼容归类事件带 `supersedes` 分支关系，多 PC 并发判断会保留冲突头并由人格后续 PUT 显式收敛；同步响应立即返回 `semanticConflicts`。`scripts/test-rabi-persona-sync.mjs` 仍可在两台实体 PC 上执行一次显式同步并留下脱敏 JSON 证据。
 

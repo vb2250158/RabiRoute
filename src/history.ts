@@ -6,6 +6,7 @@ import { withFileLockSync } from "./shared/filePersistence.js";
 import { PERFORMANCE_OPERATIONS } from "./shared/performanceOperations.js";
 import type { ResolvedForwardMessage } from "./napcatForwardMessages.js";
 import type { SpeechTranscriptSegment } from "./shared/speechControlContract.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export type MessageAttachmentRecord = {
   id: string;
@@ -230,8 +231,38 @@ export type AdapterLogRecord = {
 };
 
 function appendHistoryRecord(filePath: string, record: unknown): void {
-  measureSyncPerformanceOperation(PERFORMANCE_OPERATIONS.runtimeHistoryAppend, () => {
-    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+  const fileName = path.basename(filePath);
+  const fields = record && typeof record === "object" && !Array.isArray(record)
+    ? record as Record<string, unknown>
+    : {};
+  const recordId = String(fields.id ?? fields.eventId ?? fields.messageId ?? fields.recordId ?? fields.deliveryId ?? fields.time ?? "record").trim();
+  try {
+    measureSyncPerformanceOperation(PERFORMANCE_OPERATIONS.runtimeHistoryAppend, () => {
+      fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+    });
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: fileName.includes("adapter.log") ? "adapter" : "conversation",
+      event: "runtime_history_append_failed",
+      owner: "runtime-history",
+      action: "append",
+      target: { type: "history-record", id: recordId || "record" },
+      dataSource: { kind: "ledger", id: `route-data/${fileName}` },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: fileName.includes("adapter.log") ? "adapter" : "conversation",
+    event: "runtime_history_appended",
+    owner: "runtime-history",
+    action: "append",
+    target: { type: "history-record", id: recordId || "record" },
+    dataSource: { kind: "ledger", id: `route-data/${fileName}` },
+    outcome: "committed",
+    after: { revision: recordId || String(fields.time ?? "appended") }
   });
 }
 

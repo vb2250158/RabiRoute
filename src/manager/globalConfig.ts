@@ -12,6 +12,7 @@ import {
   normalizePerformanceMonitoringConfig,
   type PerformanceMonitoringConfig
 } from "../shared/performanceContract.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type RabiGlobalConfig = {
   rabiGuid: string;
@@ -71,7 +72,7 @@ export class RabiGlobalConfigStore {
       createdAt: now,
       updatedAt: now
     };
-    this.persist(created);
+    this.persist(created, "create", undefined, created.updatedAt);
     return freezeGlobalConfig(created);
   }
 
@@ -97,7 +98,13 @@ export class RabiGlobalConfigStore {
         : current.performance,
       updatedAt: new Date().toISOString()
     };
-    this.persist(next);
+    const changedFields = [
+      current.rabiName !== next.rabiName ? "rabiName" : "",
+      JSON.stringify(current.rabiLinkRelay) !== JSON.stringify(next.rabiLinkRelay) ? "rabiLinkRelay" : "",
+      JSON.stringify(current.webguiLan) !== JSON.stringify(next.webguiLan) ? "webguiLan" : "",
+      JSON.stringify(current.performance) !== JSON.stringify(next.performance) ? "performance" : ""
+    ].filter(Boolean);
+    this.persist(next, changedFields.length ? "patch" : "normalize", current.updatedAt, next.updatedAt, changedFields);
     this.current = freezeGlobalConfig(next);
     return this.read();
   }
@@ -125,7 +132,7 @@ export class RabiGlobalConfigStore {
         || normalized.createdAt !== parsed.createdAt
         || normalized.updatedAt !== parsed.updatedAt
       ) {
-        this.persist(normalized);
+        this.persist(normalized, "normalize", typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined, normalized.updatedAt);
       }
       return normalized;
     } catch {
@@ -133,9 +140,43 @@ export class RabiGlobalConfigStore {
     }
   }
 
-  private persist(config: RabiGlobalConfig): void {
-    fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
-    fs.writeFileSync(this.configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  private persist(
+    config: RabiGlobalConfig,
+    action: "create" | "patch" | "normalize",
+    beforeRevision?: string,
+    afterRevision?: string,
+    changedFields: string[] = []
+  ): void {
+    try {
+      fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
+      fs.writeFileSync(this.configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      recordDataMutationAudit({
+        group: "config.global",
+        event: `global_config_${action}`,
+        owner: "RabiGlobalConfigStore",
+        action,
+        target: { type: "global_config", id: "Config.json" },
+        dataSource: { kind: "file", id: "data/Config.json" },
+        outcome: changedFields.length === 0 && action === "patch" ? "no_change" : "committed",
+        before: beforeRevision ? { revision: beforeRevision } : undefined,
+        after: afterRevision ? { revision: afterRevision } : undefined,
+        changes: changedFields.map(field => ({ field }))
+      });
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "config.global",
+        event: `global_config_${action}_failed`,
+        owner: "RabiGlobalConfigStore",
+        action,
+        target: { type: "global_config", id: "Config.json" },
+        dataSource: { kind: "file", id: "data/Config.json" },
+        outcome: "failed",
+        before: beforeRevision ? { revision: beforeRevision } : undefined,
+        error
+      });
+      throw error;
+    }
   }
 }
 

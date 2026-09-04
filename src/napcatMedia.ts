@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { MessageAttachmentRecord } from "./history.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 const MAX_NAPCAT_MEDIA_BYTES = 20 * 1024 * 1024;
 const NAPCAT_MEDIA_TIMEOUT_MS = 12_000;
@@ -120,6 +121,16 @@ export async function materializeNapCatAttachments(
       fs.mkdirSync(directory, { recursive: true });
       const localPath = path.join(directory, `${String(index + 1).padStart(2, "0")}-${name}`);
       fs.writeFileSync(localPath, downloaded.body);
+      recordDataMutationAudit({
+        group: "media",
+        event: "napcat_media_written",
+        owner: "napcat-media",
+        action: "store-inbound-image",
+        target: { type: "message-attachment", id },
+        dataSource: { kind: "file", id: `napcat-media/${path.basename(localPath)}` },
+        outcome: "committed",
+        changes: [{ field: "size", to: downloaded.body.length }]
+      });
       output.push({
         id,
         kind: "image",
@@ -131,6 +142,17 @@ export async function materializeNapCatAttachments(
         sourceMessageId: messageId
       });
     } catch (error) {
+      recordDataMutationAudit({
+        level: "warn",
+        group: "media",
+        event: "napcat_media_materialize_failed",
+        owner: "napcat-media",
+        action: "materialize-inbound-image",
+        target: { type: "message-attachment", id },
+        dataSource: { kind: "file", id: "napcat-media" },
+        outcome: "failed",
+        error
+      });
       output.push({
         id,
         kind: "image",

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { roleFolderPath } from "../shared/routePaths.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export const BILIBILI_HISTORY_RUNTIME_DIR = "bilibili-history";
 export const BILIBILI_HISTORY_DAILY_DIR = "daily";
@@ -242,6 +243,29 @@ function atomicWrite(filePath: string, content: string): void {
   try {
     fs.writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
     fs.renameSync(temporaryPath, filePath);
+    recordDataMutationAudit({
+      group: "bilibili-history",
+      event: "bilibili_history_file_written",
+      owner: "bilibili-history-records",
+      action: "replace",
+      target: { type: "history-file", id: path.basename(filePath) },
+      dataSource: { kind: "file", id: `bilibili-history/${path.basename(filePath)}` },
+      outcome: "committed",
+      after: { digest: createHash("sha256").update(content).digest("hex") }
+    });
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "bilibili-history",
+      event: "bilibili_history_file_write_failed",
+      owner: "bilibili-history-records",
+      action: "replace",
+      target: { type: "history-file", id: path.basename(filePath) },
+      dataSource: { kind: "file", id: `bilibili-history/${path.basename(filePath)}` },
+      outcome: "failed",
+      error
+    });
+    throw error;
   } finally {
     try {
       fs.unlinkSync(temporaryPath);

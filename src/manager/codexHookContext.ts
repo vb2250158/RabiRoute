@@ -16,6 +16,7 @@ import {
   type PangHuProgressNotificationDelivery,
   type PangHuProgressNotificationResult
 } from "./panghuProgressNotificationGate.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const STORE_VERSION = 5;
 const MAX_CONTEXT_CHARS = 6200;
@@ -184,9 +185,33 @@ function readText(filePath: string): string {
 function writeJsonAtomic(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  const content = `${JSON.stringify(value, null, 2)}\n`;
   try {
-    fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.writeFileSync(temporaryPath, content, "utf8");
     fs.renameSync(temporaryPath, filePath);
+    recordDataMutationAudit({
+      group: "agent-session",
+      event: "codex_hook_context_written",
+      owner: "codex-hook-context",
+      action: "persist-state",
+      target: { type: "hook-context-store", id: path.basename(filePath) },
+      dataSource: { kind: "file", id: `runtime/${path.basename(filePath)}` },
+      outcome: "committed",
+      after: { digest: crypto.createHash("sha256").update(content).digest("hex") }
+    });
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "agent-session",
+      event: "codex_hook_context_write_failed",
+      owner: "codex-hook-context",
+      action: "persist-state",
+      target: { type: "hook-context-store", id: path.basename(filePath) },
+      dataSource: { kind: "file", id: `runtime/${path.basename(filePath)}` },
+      outcome: "failed",
+      error
+    });
+    throw error;
   } finally {
     if (fs.existsSync(temporaryPath)) fs.rmSync(temporaryPath, { force: true });
   }

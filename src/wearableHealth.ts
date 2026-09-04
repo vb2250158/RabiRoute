@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export const WEARABLE_HEALTH_DIR = "wearable-health";
 export const WEARABLE_HEALTH_EVENTS_DIR = "events";
@@ -311,7 +312,39 @@ export function updateWearableHealthConfig(
       };
     }
   }
-  writeJsonAtomic(wearableHealthConfigPath(roleDir), next);
+  const roleId = path.basename(path.resolve(roleDir));
+  try {
+    writeJsonAtomic(wearableHealthConfigPath(roleDir), next);
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "wearable-health",
+      event: "wearable_health_config_write_failed",
+      owner: "wearable-health",
+      action: "update-config",
+      target: { type: "role-health-config", id: roleId },
+      dataSource: { kind: "file", id: `roles/${roleId}/wearable-health/config.json` },
+      outcome: "failed",
+      before: { revision: current.updatedAt },
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "wearable-health",
+    event: "wearable_health_config_written",
+    owner: "wearable-health",
+    action: "update-config",
+    target: { type: "role-health-config", id: roleId },
+    dataSource: { kind: "file", id: `roles/${roleId}/wearable-health/config.json` },
+    outcome: "committed",
+    before: { revision: current.updatedAt },
+    after: { revision: next.updatedAt },
+    changes: [
+      ...(patch.defaultPolicy === undefined ? [] : [{ field: "defaultPolicy" }]),
+      ...(patch.devices === undefined ? [] : [{ field: "devices" }])
+    ]
+  });
   return next;
 }
 
@@ -655,7 +688,48 @@ export function ingestWearableHealthObservation(
     known.add(sample.id);
     accepted.push(sample);
   }
-  if (accepted.length > 0) appendSamples(roleDir, accepted);
+  const roleId = path.basename(path.resolve(roleDir));
+  if (accepted.length > 0) {
+    try {
+      appendSamples(roleDir, accepted);
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "wearable-health",
+        event: "wearable_health_samples_append_failed",
+        owner: "wearable-health",
+        action: "ingest-samples",
+        target: { type: "health-event", id: eventId },
+        dataSource: { kind: "ledger", id: `roles/${roleId}/wearable-health/events` },
+        outcome: "failed",
+        changes: [{ field: "sampleCount", to: accepted.length }],
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "wearable-health",
+      event: "wearable_health_samples_appended",
+      owner: "wearable-health",
+      action: "ingest-samples",
+      target: { type: "health-event", id: eventId },
+      dataSource: { kind: "ledger", id: `roles/${roleId}/wearable-health/events` },
+      outcome: "committed",
+      after: { revision: eventId },
+      changes: [{ field: "sampleCount", to: accepted.length }]
+    });
+  } else {
+    recordDataMutationAudit({
+      group: "wearable-health",
+      event: "wearable_health_samples_replayed",
+      owner: "wearable-health",
+      action: "ingest-samples",
+      target: { type: "health-event", id: eventId },
+      dataSource: { kind: "ledger", id: `roles/${roleId}/wearable-health/events` },
+      outcome: "replayed",
+      changes: [{ field: "deduplicatedSampleCount", to: deduplicated.length }]
+    });
+  }
   const alerts = evaluateAlerts(accepted, previous, policy, now);
   const next: WearableHealthState = {
     schemaVersion: 1,
@@ -666,7 +740,39 @@ export function ingestWearableHealthObservation(
   };
   for (const sample of accepted) next.latestByMetric[sample.metric] = laterSample(next.latestByMetric[sample.metric], sample);
   for (const alert of alerts) next.lastAlertAtByRule[alert.ruleKey] = alert.createdAt;
-  writeJsonAtomic(wearableHealthStatePath(roleDir), next);
+  try {
+    writeJsonAtomic(wearableHealthStatePath(roleDir), next);
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "wearable-health",
+      event: "wearable_health_state_write_failed",
+      owner: "wearable-health",
+      action: "update-current-state",
+      target: { type: "role-health-state", id: roleId },
+      dataSource: { kind: "file", id: `roles/${roleId}/wearable-health/state.json` },
+      outcome: "failed",
+      before: { revision: previous.updatedAt },
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "wearable-health",
+    event: "wearable_health_state_written",
+    owner: "wearable-health",
+    action: "update-current-state",
+    target: { type: "role-health-state", id: roleId },
+    dataSource: { kind: "file", id: `roles/${roleId}/wearable-health/state.json` },
+    outcome: "committed",
+    before: { revision: previous.updatedAt },
+    after: { revision: next.updatedAt },
+    changes: [
+      { field: "acceptedSampleCount", to: accepted.length },
+      { field: "deduplicatedSampleCount", to: deduplicated.length },
+      { field: "alertCount", to: alerts.length }
+    ]
+  });
   return {
     eventId,
     accepted,

@@ -226,6 +226,8 @@ The 28 built-in capabilities under `plugins/builtin/` each own an independent pa
 
 Manager endpoint, identity, complete required-plugin set, and handler READY do not wait for plan-storage NAS recovery. After READY, the parent process's main thread must not touch a remote filesystem. `managerWatchBroker.ts` uses native watchers only for local roots; UNC configuration and plugin roots run bounded `readdir/stat` work in a terminable child, and a timed-out child must be confirmed exited before replacement. `gatewayDiagnosticsSnapshot.ts` moves persona, status, and log diagnostics to `managerReadWorker`; `/gateways` and `/api/gateways` read only a deeply frozen in-memory snapshot with a monotonic revision. Refresh failure retains the preceding snapshot and marks it stale/degraded. Persona manifests follow the same boundary: GET reads only the immutable snapshot published by the parent, while scanning, hashing, and plan locks run in a one-shot child. Watcher or snapshot degradation enters `/health` diagnostics but cannot block the loopback control plane.
 
+`manager/operationalLog.ts` receives the shared Manager and Gateway data-mutation stream and appends time-windowed batches to one daily shard. Records carry owner, action, target, data source, outcome, and request-trace fields without business payloads. Failed batches remain pending and retry with backoff; `/meta.operationalLog` and Manager health report degradation. Retention defaults to 30 days with a 512 MiB cap across historical shards, and normal shutdown waits for pending records to flush.
+
 ```text
 plugins/contracts/plugin-sdk/
 plugins/builtin/<package-id>/1.0.0/

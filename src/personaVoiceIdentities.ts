@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { withFileLockSync } from "./shared/filePersistence.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 const MAX_TEXT = 2_000;
 const MAX_ALIASES = 50;
@@ -259,10 +260,31 @@ export function updatePersonaVoiceIdentity(
       ...item,
       updatedAt: undefined
     }) : "";
-    if (!deleted && !existing?.conflicted && comparable(existing) === comparable(next)) {
+    if (!deleted && existing && !existing.conflicted && comparable(existing) === comparable(next)) {
+      recordDataMutationAudit({
+        group: "identity",
+        event: "voice_identity_unchanged",
+        owner: "persona-voice-identities",
+        action: "update",
+        target: { type: "voice-identity", id: key },
+        dataSource: { kind: "ledger", id: "voice/voice-identities.jsonl" },
+        outcome: "no_change",
+        after: { revision: existing.updatedAt }
+      });
       return { identity: existing, appended: false, deleted: false };
     }
-    if (deleted && !existing) return { identity: undefined, appended: false, deleted: true };
+    if (deleted && !existing) {
+      recordDataMutationAudit({
+        group: "identity",
+        event: "voice_identity_delete_replayed",
+        owner: "persona-voice-identities",
+        action: "delete",
+        target: { type: "voice-identity", id: key },
+        dataSource: { kind: "ledger", id: "voice/voice-identities.jsonl" },
+        outcome: "replayed"
+      });
+      return { identity: undefined, appended: false, deleted: true };
+    }
     const event: PersonaVoiceIdentityEvent = {
       schemaVersion: 1,
       id: `voice-identity-event-${randomUUID()}`,
@@ -270,8 +292,34 @@ export function updatePersonaVoiceIdentity(
       supersedes: (state?.heads ?? []).map(item => item.id).sort(),
       deleted: deleted || undefined
     };
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`, "utf8");
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.appendFileSync(filePath, `${JSON.stringify(event)}\n`, "utf8");
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "identity",
+        event: "voice_identity_append_failed",
+        owner: "persona-voice-identities",
+        action: deleted ? "delete" : "update",
+        target: { type: "voice-identity", id: key },
+        dataSource: { kind: "ledger", id: "voice/voice-identities.jsonl" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "identity",
+      event: "voice_identity_appended",
+      owner: "persona-voice-identities",
+      action: deleted ? "delete" : "update",
+      target: { type: "voice-identity", id: key },
+      dataSource: { kind: "ledger", id: "voice/voice-identities.jsonl" },
+      outcome: "committed",
+      before: state?.heads.length ? { revision: state.heads.map(item => item.id).sort().join(",") } : undefined,
+      after: { revision: event.id }
+    });
     return { identity: deleted ? undefined : next, appended: true, deleted };
   });
 }

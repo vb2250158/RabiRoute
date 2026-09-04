@@ -9,6 +9,7 @@ import type {
 } from "./shared/speechControlContract.js";
 import { normalizeSpeechTranscriptSegment } from "./shared/speechTranscript.js";
 import { withFileLockSync } from "./shared/filePersistence.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 const MAX_TEXT_LENGTH = 100_000;
 const MAX_SEGMENTS = 10_000;
@@ -145,10 +146,48 @@ export class SpeechIngressStore {
     const record = normalizeSpeechIngressRecord(command, fallbackId);
     return withFileLockSync(path.join(this.root, ".speech-ingress.lock"), () => {
       const existing = this.read(record.id);
-      if (existing) return { record: existing, appended: false };
-      fs.mkdirSync(this.root, { recursive: true });
+      if (existing) {
+        recordDataMutationAudit({
+          group: "speech",
+          event: "speech_ingress_replayed",
+          owner: "speech-ingress",
+          action: "append",
+          target: { type: "speech-record", id: record.id },
+          dataSource: { kind: "ledger", id: "speech/ingress" },
+          outcome: "replayed",
+          after: { revision: existing.ingestedAt }
+        });
+        return { record: existing, appended: false };
+      }
       const filePath = path.join(this.root, `${record.recordedAt.slice(0, 10)}.jsonl`);
-      fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+      try {
+        fs.mkdirSync(this.root, { recursive: true });
+        fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+      } catch (error) {
+        recordDataMutationAudit({
+          level: "error",
+          group: "speech",
+          event: "speech_ingress_append_failed",
+          owner: "speech-ingress",
+          action: "append",
+          target: { type: "speech-record", id: record.id },
+          dataSource: { kind: "ledger", id: `speech/ingress/${record.recordedAt.slice(0, 10)}.jsonl` },
+          outcome: "failed",
+          error
+        });
+        throw error;
+      }
+      recordDataMutationAudit({
+        group: "speech",
+        event: "speech_ingress_appended",
+        owner: "speech-ingress",
+        action: "append",
+        target: { type: "speech-record", id: record.id },
+        dataSource: { kind: "ledger", id: `speech/ingress/${record.recordedAt.slice(0, 10)}.jsonl` },
+        outcome: "committed",
+        after: { revision: record.ingestedAt },
+        changes: [{ field: "segmentCount", to: record.segments.length }]
+      });
       return { record, appended: true };
     });
   }
@@ -258,7 +297,19 @@ export class SpeechIngressStore {
     const lockPath = path.join(this.deliveryRoot, ".locks", `${encodeURIComponent(recordId)}--${encodeURIComponent(routeId)}.lock`);
     return withFileLockSync(lockPath, () => {
       const existing = this.readDeliveryReceipt(recordId, routeId);
-      if (existing) return existing;
+      if (existing) {
+        recordDataMutationAudit({
+          group: "speech",
+          event: "speech_delivery_receipt_replayed",
+          owner: "speech-ingress",
+          action: "append-delivery-receipt",
+          target: { type: "speech-delivery", id: `${recordId}:${routeId}` },
+          dataSource: { kind: "ledger", id: "speech/deliveries" },
+          outcome: "replayed",
+          after: { revision: existing.completedAt }
+        });
+        return existing;
+      }
       const completedAt = new Date(receipt.completedAt || Date.now()).toISOString();
       const normalized: SpeechRouteDeliveryReceipt = {
         schemaVersion: 1,
@@ -270,13 +321,39 @@ export class SpeechIngressStore {
         detail: String(receipt.detail ?? "").trim().slice(0, 2_000) || undefined,
         completedAt
       };
-      fs.mkdirSync(this.deliveryRoot, { recursive: true });
-      withFileLockSync(path.join(this.deliveryRoot, ".delivery-append.lock"), () => {
-        fs.appendFileSync(
-          path.join(this.deliveryRoot, `${completedAt.slice(0, 10)}.jsonl`),
-          `${JSON.stringify(normalized)}\n`,
-          "utf8"
-        );
+      try {
+        fs.mkdirSync(this.deliveryRoot, { recursive: true });
+        withFileLockSync(path.join(this.deliveryRoot, ".delivery-append.lock"), () => {
+          fs.appendFileSync(
+            path.join(this.deliveryRoot, `${completedAt.slice(0, 10)}.jsonl`),
+            `${JSON.stringify(normalized)}\n`,
+            "utf8"
+          );
+        });
+      } catch (error) {
+        recordDataMutationAudit({
+          level: "error",
+          group: "speech",
+          event: "speech_delivery_receipt_append_failed",
+          owner: "speech-ingress",
+          action: "append-delivery-receipt",
+          target: { type: "speech-delivery", id: `${recordId}:${routeId}` },
+          dataSource: { kind: "ledger", id: "speech/deliveries" },
+          outcome: "failed",
+          error
+        });
+        throw error;
+      }
+      recordDataMutationAudit({
+        group: "speech",
+        event: "speech_delivery_receipt_appended",
+        owner: "speech-ingress",
+        action: "append-delivery-receipt",
+        target: { type: "speech-delivery", id: `${recordId}:${routeId}` },
+        dataSource: { kind: "ledger", id: `speech/deliveries/${completedAt.slice(0, 10)}.jsonl` },
+        outcome: "committed",
+        after: { revision: completedAt },
+        changes: [{ field: "status", to: normalized.status }]
       });
       return normalized;
     });

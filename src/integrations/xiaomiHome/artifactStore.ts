@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 
 export type XiaomiHomeArtifactInput = {
   sourceEventId: string;
@@ -124,6 +125,16 @@ export class XiaomiHomeArtifactStore {
       if (existing.sha256 !== input.sha256 || existing.resourceId !== input.resourceId) {
         throw new Error("sourceEventId already belongs to another artifact payload.");
       }
+      recordDataMutationAudit({
+        group: "xiaomi-home",
+        event: "xiaomi_home_artifact_replayed",
+        owner: "xiaomi-home-artifacts",
+        action: "register-artifact",
+        target: { type: "artifact", id: existing.artifactId },
+        dataSource: { kind: "ledger", id: "xiaomi-home/artifacts" },
+        outcome: "replayed",
+        after: { digest: existing.sha256 }
+      });
       return publicRecord(existing);
     }
     const mediaPath = localAbsolutePath(input.localPath, "localPath");
@@ -149,6 +160,17 @@ export class XiaomiHomeArtifactStore {
     this.index.byArtifactId[record.artifactId] = record;
     this.index.bySourceEventId[record.sourceEventId] = record.artifactId;
     atomicWrite(this.indexPath, `${JSON.stringify(this.index, null, 2)}\n`);
+    recordDataMutationAudit({
+      group: "xiaomi-home",
+      event: "xiaomi_home_artifact_registered",
+      owner: "xiaomi-home-artifacts",
+      action: "register-artifact",
+      target: { type: "artifact", id: record.artifactId },
+      dataSource: { kind: "ledger", id: `xiaomi-home/artifacts/${record.occurredAt.slice(0, 10)}.jsonl` },
+      outcome: "committed",
+      after: { revision: record.ingestedAt, digest: record.sha256 },
+      changes: [{ field: "byteLength", to: record.byteLength }]
+    });
     return publicRecord(record);
   }
 
@@ -178,6 +200,16 @@ export class XiaomiHomeArtifactStore {
     const ledgerPath = path.join(this.accessDir, `${record.accessedAt.slice(0, 10)}.jsonl`);
     const current = fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath, "utf8") : "";
     atomicWrite(ledgerPath, `${current}${JSON.stringify(record)}\n`);
+    recordDataMutationAudit({
+      group: "xiaomi-home",
+      event: "xiaomi_home_artifact_access_recorded",
+      owner: "xiaomi-home-artifacts",
+      action: "record-access",
+      target: { type: "artifact", id: record.artifactId },
+      dataSource: { kind: "ledger", id: `xiaomi-home/access/${record.accessedAt.slice(0, 10)}.jsonl` },
+      outcome: "committed",
+      after: { revision: record.accessId }
+    });
     return record;
   }
 

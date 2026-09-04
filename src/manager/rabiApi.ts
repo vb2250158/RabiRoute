@@ -9,6 +9,7 @@ import { routeFolderPath } from "../shared/routePaths.js";
 import type { RabiGlobalConfigStore, RabiLinkRelayGlobalConfig } from "./globalConfig.js";
 import type { GatewayRuntime } from "./runtimeRegistry.js";
 import type { RouteCatalogPersonaPresentation } from "./routeCatalogTransaction.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import {
   discoverManagerLanEndpoints,
   verifyManagerDiscoveryEndpoint,
@@ -707,8 +708,32 @@ function readJsonFile<T>(filePath: string, fallback: T): T {
 }
 
 function writeJsonFile(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "message.processing",
+      event: "message_agent_state_write_failed",
+      owner: "rabi-api",
+      action: "persist-message-agent-state",
+      target: { type: "message-agent-state", id: path.basename(filePath) },
+      dataSource: { kind: "file", id: `message-groups/${path.basename(filePath)}` },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "message.processing",
+    event: "message_agent_state_written",
+    owner: "rabi-api",
+    action: "persist-message-agent-state",
+    target: { type: "message-agent-state", id: path.basename(filePath) },
+    dataSource: { kind: "file", id: `message-groups/${path.basename(filePath)}` },
+    outcome: "committed"
+  });
 }
 
 function messageProcessingPayload(ctx: RabiApiContext, route: GatewayDefinition): Record<string, unknown> {

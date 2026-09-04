@@ -6,6 +6,7 @@ import {
   JsonFileAgentRequestPersistence,
   type AgentRequestPersistence
 } from "./persistence.js";
+import { recordDataMutationAudit, type MutationAuditChange } from "../observability/dataMutationAudit.js";
 export type { AgentRequestPersistence } from "./persistence.js";
 
 export const AGENT_REQUEST_SCHEMA_VERSION = 1;
@@ -182,6 +183,49 @@ export class AgentRequestStore {
     } satisfies AgentRequestStoreFile);
   }
 
+  private persistMutations(records: Array<{
+    action: string;
+    requestId: string;
+    beforeStatus?: AgentRequestStatus;
+    afterStatus?: AgentRequestStatus;
+    changes?: MutationAuditChange[];
+    result?: string;
+  }>): void {
+    try {
+      this.persist();
+      for (const record of records) {
+        recordDataMutationAudit({
+          group: "agent.request",
+          event: `agent_request_${record.action}`,
+          owner: "AgentRequestStore",
+          action: record.action,
+          target: { type: "agent_request", id: record.requestId },
+          dataSource: { kind: "file", id: "data/.runtime/agent-requests.json" },
+          outcome: "committed",
+          changes: record.changes ?? (record.beforeStatus !== record.afterStatus
+            ? [{ field: "status", from: record.beforeStatus, to: record.afterStatus }]
+            : undefined),
+          result: record.result
+        });
+      }
+    } catch (error) {
+      for (const record of records) {
+        recordDataMutationAudit({
+          level: "error",
+          group: "agent.request",
+          event: `agent_request_${record.action}_failed`,
+          owner: "AgentRequestStore",
+          action: record.action,
+          target: { type: "agent_request", id: record.requestId },
+          dataSource: { kind: "file", id: "data/.runtime/agent-requests.json" },
+          outcome: "failed",
+          error
+        });
+      }
+      throw error;
+    }
+  }
+
   get(requestId: string): AgentRequestRecord | undefined {
     const record = this.requests.get(cleanText(requestId, 100));
     return record ? structuredClone(record) : undefined;
@@ -244,7 +288,22 @@ export class AgentRequestStore {
       record.updatedAt = timestamp;
       reassigned.push(structuredClone(record));
     }
-    if (reassigned.length || cancelled.length) this.persist();
+    if (reassigned.length || cancelled.length) {
+      this.persistMutations([
+        ...reassigned.map(record => ({
+          action: "reassigned",
+          requestId: record.id,
+          afterStatus: record.status,
+          changes: [{ field: "party_binding" }]
+        })),
+        ...cancelled.map(record => ({
+          action: "cancelled",
+          requestId: record.id,
+          afterStatus: record.status,
+          changes: [{ field: "status", to: record.status }]
+        }))
+      ]);
+    }
     return { reassigned, cancelled };
   }
 
@@ -330,7 +389,22 @@ export class AgentRequestStore {
         updatedAt: timestamp
       });
     }
-    if (repliedRequest || requestId) this.persist();
+    if (repliedRequest || requestId) {
+      this.persistMutations([
+        ...(repliedRequest ? [{
+          action: "response_reserved",
+          requestId: repliedRequest.id,
+          afterStatus: repliedRequest.status,
+          changes: [{ field: "pendingResponseDeliveryId" }]
+        }] : []),
+        ...(requestId ? [{
+          action: "prepared",
+          requestId,
+          afterStatus: "pending_delivery" as AgentRequestStatus,
+          changes: [{ field: "created" }]
+        }] : [])
+      ]);
+    }
     return {
       deliveryId,
       requestId,
@@ -384,7 +458,22 @@ export class AgentRequestStore {
       current.updatedAt = timestamp;
       request = current;
     }
-    if (repliedRequest || request) this.persist();
+    if (repliedRequest || request) {
+      this.persistMutations([
+        ...(repliedRequest ? [{
+          action: "responded",
+          requestId: repliedRequest.id,
+          beforeStatus: "awaiting_response" as AgentRequestStatus,
+          afterStatus: repliedRequest.status
+        }] : []),
+        ...(request ? [{
+          action: "delivered",
+          requestId: request.id,
+          beforeStatus: "pending_delivery" as AgentRequestStatus,
+          afterStatus: request.status
+        }] : [])
+      ]);
+    }
     return {
       request: request ? structuredClone(request) : undefined,
       repliedRequest: repliedRequest ? structuredClone(repliedRequest) : undefined
@@ -408,7 +497,13 @@ export class AgentRequestStore {
         changed = true;
       }
     }
-    if (changed) this.persist();
+    if (changed) {
+      this.persistMutations([{
+        action: "preparation_aborted",
+        requestId: preparation.inReplyToRequestId ?? preparation.requestId ?? preparation.deliveryId,
+        changes: [{ field: "delivery_reservation" }]
+      }]);
+    }
   }
 
   recordTargetTurnEnded(threadId: string, workspace: string | undefined, turnId: string, endedAt = this.now()): AgentRequestRecord[] {
@@ -428,7 +523,17 @@ export class AgentRequestStore {
       record.updatedAt = timestamp;
       changed.push(structuredClone(record));
     }
-    if (changed.length) this.persist();
+    if (changed.length) {
+      this.persistMutations(changed.map(record => ({
+        action: "target_turn_ended",
+        requestId: record.id,
+        afterStatus: record.status,
+        changes: [
+          { field: "lastTargetTurnId" },
+          { field: "nextReminderAt" }
+        ]
+      })));
+    }
     return changed;
   }
 
@@ -456,7 +561,15 @@ export class AgentRequestStore {
       ? undefined
       : new Date(this.now().getTime() + AGENT_REQUEST_REMINDER_MS).toISOString();
     record.updatedAt = timestamp;
-    this.persist();
+    this.persistMutations([{
+      action: delivered ? "reminder_delivered" : "reminder_failed",
+      requestId: record.id,
+      afterStatus: record.status,
+      changes: [
+        { field: "reminderCount", to: record.reminderCount },
+        { field: "nextReminderAt" }
+      ]
+    }]);
     return structuredClone(record);
   }
 
@@ -464,6 +577,7 @@ export class AgentRequestStore {
     const record = this.requests.get(cleanText(requestId, 100));
     if (!record) throw new Error(`Agent request not found: ${requestId}`);
     if (record.status === "responded" || record.status === "cancelled") return structuredClone(record);
+    const beforeStatus = record.status;
     const timestamp = nowIso(this.now);
     record.status = "cancelled";
     record.cancelledAt = timestamp;
@@ -471,7 +585,12 @@ export class AgentRequestStore {
     record.nextReminderAt = undefined;
     record.pendingResponseDeliveryId = undefined;
     record.updatedAt = timestamp;
-    this.persist();
+    this.persistMutations([{
+      action: "cancelled",
+      requestId: record.id,
+      beforeStatus,
+      afterStatus: record.status
+    }]);
     return structuredClone(record);
   }
 }

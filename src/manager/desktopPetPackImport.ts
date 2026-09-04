@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 256 * 1024 * 1024;
@@ -269,6 +270,16 @@ export function importDesktopPetPack(
     assertImportRoot(roleDir, finalDir);
     if (fs.existsSync(finalDir)) throw new Error("A desktop pet pack with this id already exists.");
     commitDesktopPetPackDirectory(manifestDir, finalDir);
+    recordDataMutationAudit({
+      group: "desktop-pet",
+      event: "desktop_pet_pack_imported",
+      owner: "desktop-pet-pack-import",
+      action: "import-pack",
+      target: { type: "desktop-pet-pack", id: packId },
+      dataSource: { kind: "file", id: `roles/${roleId}/desktop-pet/packs/${packId}` },
+      outcome: "committed",
+      changes: [{ field: "payloadBytes", to: payload.byteLength }]
+    });
     return packId;
   } catch (error) {
     if (finalDir && fs.existsSync(finalDir)) removeDirectoryBestEffort(finalDir);

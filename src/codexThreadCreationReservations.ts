@@ -5,6 +5,7 @@ import type { CodexThreadCreateResult } from "./codexRuntime.js";
 import { canonicalCodexWorkspacePath } from "./codexTaskIdentity.js";
 import { atomicWriteFileSync } from "./shared/filePersistence.js";
 import { projectDirectoryLayout } from "./shared/projectDirectoryLayout.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export type CodexThreadCreationState =
   | "reserved"
@@ -72,6 +73,17 @@ function writeReservation(rootDir: string, reservation: CodexThreadCreationReser
     reservationPath(rootDir, reservation.key),
     `${JSON.stringify(reservation, null, 2)}\n`
   );
+  recordDataMutationAudit({
+    group: "agent-session",
+    event: "codex_thread_creation_reservation_written",
+    owner: "codex-thread-creation",
+    action: "update-reservation",
+    target: { type: "thread-creation-reservation", id: createHash("sha256").update(reservation.key).digest("hex").slice(0, 24) },
+    dataSource: { kind: "file", id: "runtime/codex-thread-creations" },
+    outcome: "committed",
+    after: { revision: reservation.updatedAt },
+    result: reservation.state
+  });
 }
 
 function reserveCreation(rootDir: string, title: string, workspace: string, replacementForThreadId = ""): {
@@ -103,6 +115,17 @@ function reserveCreation(rootDir: string, title: string, workspace: string, repl
     descriptor = fs.openSync(filePath, "wx");
     fs.writeFileSync(descriptor, `${JSON.stringify(reservation, null, 2)}\n`, "utf8");
     fs.fsyncSync(descriptor);
+    recordDataMutationAudit({
+      group: "agent-session",
+      event: "codex_thread_creation_reserved",
+      owner: "codex-thread-creation",
+      action: "create-reservation",
+      target: { type: "thread-creation-reservation", id: path.basename(filePath, ".json") },
+      dataSource: { kind: "file", id: "runtime/codex-thread-creations" },
+      outcome: "committed",
+      after: { revision: reservation.updatedAt },
+      result: reservation.state
+    });
     return { created: true, reservation };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -110,6 +133,17 @@ function reserveCreation(rootDir: string, title: string, workspace: string, repl
     if (!raced) {
       throw new Error(`Codex Desktop task creation reservation is unreadable: ${filePath}`);
     }
+    recordDataMutationAudit({
+      group: "agent-session",
+      event: "codex_thread_creation_reservation_replayed",
+      owner: "codex-thread-creation",
+      action: "create-reservation",
+      target: { type: "thread-creation-reservation", id: path.basename(filePath, ".json") },
+      dataSource: { kind: "file", id: "runtime/codex-thread-creations" },
+      outcome: "replayed",
+      after: { revision: raced.updatedAt },
+      result: raced.state
+    });
     return { created: false, reservation: raced };
   } finally {
     if (descriptor != null) fs.closeSync(descriptor);

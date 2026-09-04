@@ -36,7 +36,7 @@ Feature tests normally live beside the TypeScript source under the same module. 
 | `data/.runtime/` | Internal Manager state needed for recovery or reconstruction | No |
 | `data/.runtime/performance/` | Hourly local performance JSONL managed by retention and disk limits | No |
 | `data/.runtime/imports/` | Time-bounded import staging | No; remove after completion or expiry |
-| `logs/manager/` | Structured Manager operational logs | No; diagnostic evidence, not a business source of truth |
+| `logs/manager/` | Structured operational logs shared by Manager and Gateway, including data-mutation audit records with 30-day default retention | No; diagnostic evidence, not a business source of truth |
 
 Code obtains project-level locations through `src/shared/projectDirectoryLayout.ts` instead of rebuilding fixed paths such as `data/.runtime` or `logs/manager` in each module. Route data and persona data use separate `routeDataDir` and `personaDataDir` fields. Internal modules must not reuse an ambiguous `dataDir` for both. Legacy configuration may still read `dataDir`, but the configuration boundary converts it into the explicit fields.
 

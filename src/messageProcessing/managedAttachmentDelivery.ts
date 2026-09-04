@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type ManagedMessageImageInput = {
   id: string;
@@ -79,9 +80,43 @@ export function stageManagedMessageImages(input: {
       const extension = path.extname(sourcePath).toLowerCase() || ".png";
       const attachmentPart = safePart(attachment.id, "image");
       const targetPath = path.join(managedRoot, `${attachmentPart}-${hash}${extension}`);
-      if (!fs.existsSync(targetPath)) fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+      if (!fs.existsSync(targetPath)) {
+        fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+        recordDataMutationAudit({
+          group: "media",
+          event: "managed_message_image_staged",
+          owner: "managed-attachment-delivery",
+          action: "stage-image",
+          target: { type: "message-attachment", id: attachment.id },
+          dataSource: { kind: "file", id: `${MANAGED_IMAGE_DIRECTORY}/${path.basename(targetPath)}` },
+          outcome: "committed",
+          after: { digest: hash }
+        });
+      } else {
+        recordDataMutationAudit({
+          group: "media",
+          event: "managed_message_image_reused",
+          owner: "managed-attachment-delivery",
+          action: "stage-image",
+          target: { type: "message-attachment", id: attachment.id },
+          dataSource: { kind: "file", id: `${MANAGED_IMAGE_DIRECTORY}/${path.basename(targetPath)}` },
+          outcome: "replayed",
+          after: { digest: hash }
+        });
+      }
       ready.push({ id: attachment.id, path: targetPath, contentHash: hash });
     } catch (error) {
+      recordDataMutationAudit({
+        level: "warn",
+        group: "media",
+        event: "managed_message_image_stage_failed",
+        owner: "managed-attachment-delivery",
+        action: "stage-image",
+        target: { type: "message-attachment", id: attachment.id },
+        dataSource: { kind: "file", id: MANAGED_IMAGE_DIRECTORY },
+        outcome: "failed",
+        error
+      });
       unavailable.push({
         id: attachment.id,
         path: attachment.path,

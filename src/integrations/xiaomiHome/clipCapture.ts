@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { XiaomiHomeArtifactPublicRecord } from "./artifactStore.js";
 import { XiaomiHomeArtifactStore } from "./artifactStore.js";
+import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 
 export type XiaomiMiotMotionClipCandidate = {
   sourceEventId: string;
@@ -262,10 +263,35 @@ export class XiaomiHomeClipCaptureWorker {
       const temporaryOutput = path.join(workDir, "output.mp4");
       await this.runTool(this.ffmpegPath, ["-loglevel", "error", "-y", "-f", "concat", "-safe", "1", "-i", concatPath, "-c", "copy", temporaryOutput], workDir, 60000);
       const finalPath = this.artifacts.allocateMediaPath(candidate.sourceEventId, candidate.occurredAt, ".mp4");
-      if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
-      fs.renameSync(temporaryOutput, finalPath);
+      try {
+        if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
+        fs.renameSync(temporaryOutput, finalPath);
+      } catch (error) {
+        recordDataMutationAudit({
+          level: "error",
+          group: "media",
+          event: "xiaomi_camera_clip_write_failed",
+          owner: "xiaomi-home-clip-capture",
+          action: "materialize-camera-clip",
+          target: { type: "xiaomi-home-artifact", id: candidate.sourceEventId },
+          dataSource: { kind: "file", id: `xiaomi-home-artifacts/${path.basename(finalPath)}` },
+          outcome: "failed",
+          error
+        });
+        throw error;
+      }
       const stat = fs.statSync(finalPath);
       const sha256 = await hashFile(finalPath);
+      recordDataMutationAudit({
+        group: "media",
+        event: "xiaomi_camera_clip_written",
+        owner: "xiaomi-home-clip-capture",
+        action: "materialize-camera-clip",
+        target: { type: "xiaomi-home-artifact", id: candidate.sourceEventId },
+        dataSource: { kind: "file", id: `xiaomi-home-artifacts/${path.basename(finalPath)}` },
+        outcome: "committed",
+        result: `byteLength=${stat.size};sha256=${sha256}`
+      });
       const durationMs = await this.probeDuration(finalPath);
       return this.artifacts.register({
         sourceEventId: candidate.sourceEventId,

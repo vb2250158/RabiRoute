@@ -7,6 +7,11 @@ English | <a href="./版本更新日志.md">简体中文</a>
 # Version update
 
 ## Unreleased
+### Data-mutation logging
+
+- Manager and Gateway now write configuration, plan, memory, message-record, delivery-receipt, identity, speech, health-record, attachment, and runtime-state mutations to one daily JSONL stream. Records carry the owning module, action, target, data source, outcome, revision/digest, and request trace fields without storing message bodies, credentials, health measurements, or media content.
+- Failed operational-log batches remain pending and retry with backoff; `/meta.operationalLog` and Manager health report degradation. Logs retain 30 days by default with a 512 MiB cap across historical shards. An automated coverage check requires every new direct file mutation to declare an audit path or a reviewed infrastructure exclusion.
+
 ### Xiaomi Home Route authorization
 
 - Merged the upstream Route message-endpoint placement: the current Route's Xiaomi Home cards manage connection credentials and event, device-control, and recording policy, rather than placing configuration in global Settings. The long-lived token is submitted only through one lifecycle-fenced, `Idempotency-Key`-protected request; after verification it is stored with current-user DPAPI on Windows or an access-restricted local AES-256-GCM key elsewhere. Configuration, logs, and APIs never echo it.

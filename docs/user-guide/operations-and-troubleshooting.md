@@ -55,6 +55,19 @@
 
 升级代码后如果仍看到旧行为，重新构建并重启 Manager 与 Route，再核对启动目录和 `dist/` 时间。历史日志可以保留，但不能代表本次运行状态。
 
+## 数据变动日志
+
+Manager 和 Gateway 会把配置、计划、记忆、消息记录、发送回执、身份、语音、健康记录、附件及运行状态等数据变动写入 `logs/manager/manager-operations-YYYY-MM-DD.jsonl`。每条记录都包含 `group`、`owner`、`action`、`target`、`dataSource` 和 `outcome`；同一个 HTTP 请求还会带 `traceId` 与 `requestId`，可用来串起“开始、提交、拒绝或失败”。日志只记录业务 ID、字段名、摘要、数量和结果，不写消息正文、凭据、健康测量值或媒体内容。
+
+`GET /meta` 的 `operationalLog` 会报告 `healthy` 或 `degraded`、待写条数和最后一次写入错误。写盘失败时，记录会留在内存中按退避重试，同时 Manager 健康诊断会显示降级；业务写入的返回结果不由日志成败决定。
+
+默认保留 30 天，历史分片总量上限为 512 MiB。运维人员可以在启动环境中调整：
+
+- `RABIROUTE_OPERATION_LOG_RETENTION_DAYS`：保留天数。
+- `RABIROUTE_OPERATION_LOG_MAX_BYTES`：历史日志总字节上限。
+- `RABIROUTE_OPERATION_LOG_GROUPS`：逗号分隔的记录分组白名单。
+- `RABIROUTE_DIAGNOSTIC_LOG_GROUPS`：为指定分组增加调用栈，只在定位调用来源时短时启用。
+
 ## NapCat 打开后显示 Unauthorized 或 Token 登录页
 
 从 Route 页点击“打开 NapCat”时，RabiRoute 会直接打开带当前 WebUI token 的 `/web_login` 地址。这个入口会重新建立 WebUI 会话，避免 NapCat 重启后旧标签页残留的凭据继续触发 `Unauthorized`。

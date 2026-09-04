@@ -16,6 +16,7 @@ import {
   type ScheduledAutomationTask
 } from "../automation/personaAutomationRuntime.js";
 import type { MessageAdapter, MessageAdapterDispose } from "./messageAdapter.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 type GatewayStatus = {
   messageAdapters?: Record<string, {
@@ -112,8 +113,14 @@ function readGatewayStatus(dataDir = config.dataDir): GatewayStatus {
 
 function writeGatewayStatus(nextStatus: GatewayStatus, dataDir = config.dataDir): void {
   const statusPath = gatewayStatusPath(dataDir);
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(statusPath, JSON.stringify(nextStatus, null, 2), "utf8");
+    recordDataMutationAudit({ group: "gateway", event: "heartbeat_adapter_status_committed", owner: "heartbeat-adapter", action: "write-runtime-status", target: { type: "message-adapter", id: "heartbeat" }, dataSource: { kind: "runtime", id: "gateway-status" }, outcome: "committed" });
+  } catch (error) {
+    recordDataMutationAudit({ level: "error", group: "gateway", event: "heartbeat_adapter_status_write_failed", owner: "heartbeat-adapter", action: "write-runtime-status", target: { type: "message-adapter", id: "heartbeat" }, dataSource: { kind: "runtime", id: "gateway-status" }, outcome: "failed", error });
+    throw error;
+  }
 }
 
 function patchHeartbeatStatus(

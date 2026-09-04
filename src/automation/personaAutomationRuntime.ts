@@ -6,6 +6,7 @@ import { config, rolePathsForRoute, type NotificationRule, type RouteProfile } f
 import type { PersonaAutomationRuleDefinition } from "../shared/gatewayConfigModel.js";
 import { notificationRuleMatches } from "../routing/routeDecision.js";
 import type { ForwardRecord, ForwardRouteKind, ForwardTemplateValues } from "../routing/types.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type ScheduledAutomationTask = {
   route: RouteProfile;
@@ -55,8 +56,35 @@ function loadRecentClaims(): void {
 loadRecentClaims();
 
 function appendClaim(record: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  fs.appendFileSync(ledgerPath, `${JSON.stringify(record)}\n`, "utf8");
+  const runId = String(record.runId ?? "automation-run");
+  try {
+    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    fs.appendFileSync(ledgerPath, `${JSON.stringify(record)}\n`, "utf8");
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "automation",
+      event: "automation_execution_append_failed",
+      owner: "persona-automation",
+      action: "append-execution",
+      target: { type: "automation-run", id: runId },
+      dataSource: { kind: "ledger", id: "automation-executions.jsonl" },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "automation",
+    event: "automation_execution_appended",
+    owner: "persona-automation",
+    action: "append-execution",
+    target: { type: "automation-run", id: runId },
+    dataSource: { kind: "ledger", id: "automation-executions.jsonl" },
+    outcome: "committed",
+    after: { revision: String(record.time ?? Date.now()) },
+    result: String(record.status ?? "recorded")
+  });
 }
 
 export function automationRunId(

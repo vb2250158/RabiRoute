@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { atomicWriteFileSync, withFileLockSync } from "../shared/filePersistence.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type DurableDeliveryReceiptState = "reserved" | "sending" | "completed" | "uncertain";
 
@@ -279,11 +280,36 @@ function writeReceipt<TResult>(
   namespace: string,
   receipt: DurableDeliveryReceipt<TResult>
 ): DurableDeliveryReceipt<TResult> {
-  atomicWriteFileSync(
-    durableDeliveryReceiptPath(rootDir, namespace, receipt.deliveryId),
-    `${JSON.stringify(receipt, null, 2)}\n`
-  );
-  return receipt;
+  try {
+    atomicWriteFileSync(
+      durableDeliveryReceiptPath(rootDir, namespace, receipt.deliveryId),
+      `${JSON.stringify(receipt, null, 2)}\n`
+    );
+    recordDataMutationAudit({
+      group: "delivery",
+      event: "durable_delivery_receipt_committed",
+      owner: "durable-delivery-idempotency",
+      action: "write-receipt",
+      target: { type: "delivery", id: receipt.deliveryId },
+      dataSource: { kind: "file", id: `delivery-receipts/${namespace}` },
+      outcome: "committed",
+      result: receipt.state
+    });
+    return receipt;
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "delivery",
+      event: "durable_delivery_receipt_write_failed",
+      owner: "durable-delivery-idempotency",
+      action: "write-receipt",
+      target: { type: "delivery", id: receipt.deliveryId },
+      dataSource: { kind: "file", id: `delivery-receipts/${namespace}` },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
 }
 
 function reserveReceipt<TResult>(
@@ -318,9 +344,42 @@ function reserveReceipt<TResult>(
     descriptor = fs.openSync(filePath, "wx");
     fs.writeFileSync(descriptor, `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
     fs.fsyncSync(descriptor);
+    recordDataMutationAudit({
+      group: "delivery",
+      event: "durable_delivery_reserved",
+      owner: "durable-delivery-idempotency",
+      action: "reserve-delivery",
+      target: { type: "delivery", id: deliveryId },
+      dataSource: { kind: "file", id: `delivery-receipts/${namespace}` },
+      outcome: "committed",
+      after: { digest }
+    });
     return { created: true, receipt };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      recordDataMutationAudit({
+        level: "error",
+        group: "delivery",
+        event: "durable_delivery_reserve_failed",
+        owner: "durable-delivery-idempotency",
+        action: "reserve-delivery",
+        target: { type: "delivery", id: deliveryId },
+        dataSource: { kind: "file", id: `delivery-receipts/${namespace}` },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
+    recordDataMutationAudit({
+      group: "delivery",
+      event: "durable_delivery_reservation_replayed",
+      owner: "durable-delivery-idempotency",
+      action: "reserve-delivery",
+      target: { type: "delivery", id: deliveryId },
+      dataSource: { kind: "file", id: `delivery-receipts/${namespace}` },
+      outcome: "replayed",
+      after: { digest }
+    });
     return { created: false, receipt: readDurableDeliveryReceipt<TResult>(rootDir, namespace, deliveryId) };
   } finally {
     if (descriptor != null) fs.closeSync(descriptor);
@@ -415,7 +474,32 @@ function mutateOwnedReceipt<TResult>(input: Readonly<{
       || current.state !== "sending") return null;
     const next = input.mutate(current);
     if (!next) {
-      fs.unlinkSync(durableDeliveryReceiptPath(input.rootDir, input.namespace, input.deliveryId));
+      try {
+        fs.unlinkSync(durableDeliveryReceiptPath(input.rootDir, input.namespace, input.deliveryId));
+        recordDataMutationAudit({
+          group: "delivery",
+          event: "durable_delivery_receipt_removed",
+          owner: "durable-delivery-idempotency",
+          action: "remove-retryable-receipt",
+          target: { type: "delivery", id: input.deliveryId },
+          dataSource: { kind: "file", id: `delivery-receipts/${input.namespace}` },
+          outcome: "committed",
+          before: { digest: input.digest }
+        });
+      } catch (error) {
+        recordDataMutationAudit({
+          level: "error",
+          group: "delivery",
+          event: "durable_delivery_receipt_remove_failed",
+          owner: "durable-delivery-idempotency",
+          action: "remove-retryable-receipt",
+          target: { type: "delivery", id: input.deliveryId },
+          dataSource: { kind: "file", id: `delivery-receipts/${input.namespace}` },
+          outcome: "failed",
+          error
+        });
+        throw error;
+      }
       return current;
     }
     return writeReceipt(input.rootDir, input.namespace, next);

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
@@ -126,6 +127,15 @@ export function atomicWriteFileSync(
   content: string | Buffer,
   options: AtomicWriteFileOptions = {}
 ): void {
+  const startedAt = Date.now();
+  const targetId = path.basename(filePath);
+  let beforeRevision: string | undefined;
+  try {
+    const current = fs.statSync(filePath);
+    beforeRevision = `${current.size}:${Math.floor(current.mtimeMs)}`;
+  } catch {
+    beforeRevision = undefined;
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const temporary = path.join(
     path.dirname(filePath),
@@ -155,6 +165,34 @@ export function atomicWriteFileSync(
         Atomics.wait(lockWaitBuffer, 0, 0, delay);
       }
     }
+    const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
+    recordDataMutationAudit({
+      group: "storage",
+      event: "atomic_file_replaced",
+      owner: "file-persistence",
+      action: beforeRevision ? "replace" : "create",
+      target: { type: "file", id: targetId },
+      dataSource: { kind: "file", id: targetId },
+      outcome: "committed",
+      before: beforeRevision ? { revision: beforeRevision } : undefined,
+      after: { digest: createHash("sha256").update(bytes).digest("hex") },
+      durationMs: Date.now() - startedAt
+    });
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "storage",
+      event: "atomic_file_replace_failed",
+      owner: "file-persistence",
+      action: beforeRevision ? "replace" : "create",
+      target: { type: "file", id: targetId },
+      dataSource: { kind: "file", id: targetId },
+      outcome: "failed",
+      before: beforeRevision ? { revision: beforeRevision } : undefined,
+      durationMs: Date.now() - startedAt,
+      error
+    });
+    throw error;
   } finally {
     if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
   }

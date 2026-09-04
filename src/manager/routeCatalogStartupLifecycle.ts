@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import type { GatewayConfigFile, GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import {
   type RouteCatalogChildResult,
@@ -493,6 +494,34 @@ export class RouteCatalogStartupLifecycle {
         "Route catalog operationId is invalid."
       ));
     }
+    const isMutation = operation.kind !== "capture";
+    const startedAt = Date.now();
+    const targetId = operation.kind === "replace"
+      ? "catalog"
+      : operation.kind === "upsert"
+        ? operation.definition.id
+        : operation.kind === "remove"
+          ? operation.routeId
+          : "roleId" in operation ? operation.roleId : "catalog";
+    const dataSourceId = operation.kind === "replace" || operation.kind === "upsert" || operation.kind === "remove"
+      ? "config/gateways.json"
+      : `roles/${"roleId" in operation ? operation.roleId : "unknown"}`;
+    const expectedContentHash = operation.kind === "replace" || operation.kind === "upsert" || operation.kind === "remove"
+      ? operation.expectedContentHash
+      : undefined;
+    if (isMutation) {
+      recordDataMutationAudit({
+        group: operation.kind.startsWith("ensure_") ? "persona" : "route",
+        event: "route_catalog_mutation_queued",
+        owner: "route-catalog",
+        action: operation.kind,
+        target: { type: operation.kind.startsWith("ensure_") ? "persona" : "route", id: targetId },
+        dataSource: { kind: "file", id: dataSourceId },
+        outcome: "queued",
+        operationId,
+        before: expectedContentHash ? { digest: expectedContentHash } : undefined
+      });
+    }
     const promise = new Promise<RouteCatalogSnapshot>((resolve, reject) => {
       this.queue.push({
         requestId: randomUUID(),
@@ -504,7 +533,42 @@ export class RouteCatalogStartupLifecycle {
       });
     });
     this.pump();
-    return promise;
+    if (!isMutation) return promise;
+    return promise.then(snapshot => {
+      recordDataMutationAudit({
+        group: operation.kind.startsWith("ensure_") ? "persona" : "route",
+        event: "route_catalog_mutation_committed",
+        owner: "route-catalog",
+        action: operation.kind,
+        target: { type: operation.kind.startsWith("ensure_") ? "persona" : "route", id: targetId },
+        dataSource: { kind: "file", id: dataSourceId },
+        outcome: "committed",
+        operationId,
+        before: expectedContentHash ? { digest: expectedContentHash } : undefined,
+        after: { digest: snapshot.contentHash, revision: snapshot.routeConfigHash },
+        durationMs: Date.now() - startedAt
+      });
+      return snapshot;
+    }, error => {
+      const rejected = error instanceof RouteCatalogOperationError
+        && (error.code === "ROUTE_CATALOG_REVISION_CONFLICT" || error.code === "ROUTE_CATALOG_IDEMPOTENCY_CONFLICT");
+      recordDataMutationAudit({
+        level: rejected ? "warn" : "error",
+        group: operation.kind.startsWith("ensure_") ? "persona" : "route",
+        event: "route_catalog_mutation_failed",
+        owner: "route-catalog",
+        action: operation.kind,
+        target: { type: operation.kind.startsWith("ensure_") ? "persona" : "route", id: targetId },
+        dataSource: { kind: "file", id: dataSourceId },
+        outcome: rejected ? "rejected" : "failed",
+        operationId,
+        before: expectedContentHash ? { digest: expectedContentHash } : undefined,
+        durationMs: Date.now() - startedAt,
+        result: error instanceof RouteCatalogOperationError ? error.code : "route_catalog_transaction_failed",
+        error
+      });
+      throw error;
+    });
   }
 
   private pump(): void {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 export const RABILINK_CONVERSATION_LEDGER_FILE = "rabilink-conversation.jsonl";
 export const RABILINK_CONVERSATION_ARCHIVE_DIR = "rabilink-conversations";
@@ -451,10 +452,35 @@ export function appendRabiLinkConversationEntry(
     let cache = knownEntryIds(filePath);
     if (cache.ids.has(entryId)) {
       const existing = readRabiLinkConversationEntries(dir).find((entry) => entry.entryId === entryId);
-      if (existing) return { entry: existing, appended: false };
+      if (existing) {
+        recordDataMutationAudit({
+          group: "conversation",
+          event: "rabilink_conversation_entry_replayed",
+          owner: "rabilink-conversation",
+          action: "append",
+          target: { type: "conversation-entry", id: entryId },
+          dataSource: { kind: "ledger", id: RABILINK_CONVERSATION_LEDGER_FILE },
+          outcome: "replayed",
+          after: { revision: existing.recordedAt }
+        });
+        return { entry: existing, appended: false };
+      }
     }
     const archivedExisting = archivedEntriesById(dir).get(entryId);
-    if (archivedExisting) return { entry: archivedExisting, appended: false };
+    if (archivedExisting) {
+      recordDataMutationAudit({
+        group: "conversation",
+        event: "rabilink_conversation_entry_replayed",
+        owner: "rabilink-conversation",
+        action: "append",
+        target: { type: "conversation-entry", id: entryId },
+        dataSource: { kind: "ledger", id: RABILINK_CONVERSATION_LEDGER_FILE },
+        outcome: "replayed",
+        after: { revision: archivedExisting.recordedAt },
+        result: "archived"
+      });
+      return { entry: archivedExisting, appended: false };
+    }
     const archivedPath = rotateConversationIfNeeded(dir, recordedAt, splitAfterMs);
     cache = knownEntryIds(filePath);
 
@@ -505,9 +531,39 @@ export function appendRabiLinkConversationEntry(
       attachments: Array.isArray(input.attachments) ? input.attachments.slice(0, 8) as RabiLinkConversationAttachment[] : undefined
     };
     const line = `${JSON.stringify(entry)}\n`;
-    fs.appendFileSync(filePath, line, "utf8");
+    try {
+      fs.appendFileSync(filePath, line, "utf8");
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "conversation",
+        event: "rabilink_conversation_entry_append_failed",
+        owner: "rabilink-conversation",
+        action: "append",
+        target: { type: "conversation-entry", id: entryId },
+        dataSource: { kind: "ledger", id: RABILINK_CONVERSATION_LEDGER_FILE },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
     cache.ids.add(entryId);
     cache.size += Buffer.byteLength(line);
+    recordDataMutationAudit({
+      group: "conversation",
+      event: "rabilink_conversation_entry_appended",
+      owner: "rabilink-conversation",
+      action: "append",
+      target: { type: "conversation-entry", id: entryId },
+      dataSource: { kind: "ledger", id: RABILINK_CONVERSATION_LEDGER_FILE },
+      outcome: "committed",
+      after: { revision: recordedAt },
+      result: archivedPath ? "archive_rotated" : undefined,
+      changes: [
+        { field: "attachmentCount", to: entry.attachments?.length ?? 0 },
+        { field: "identityEndpointCount", to: entry.identityEndpoints?.length ?? 0 }
+      ]
+    });
     return { entry, appended: true, archivedPath };
   } finally {
     releaseLock();

@@ -36,7 +36,7 @@
 | `data/.runtime/` | Manager 可重建或恢复所需的内部状态 | 否 |
 | `data/.runtime/performance/` | 按小时分片的本机性能 JSONL，受保留时间和空间上限管理 | 否 |
 | `data/.runtime/imports/` | 有时限的导入暂存文件 | 否；处理完成或过期后清理 |
-| `logs/manager/` | Manager 结构化运行日志 | 否；用于排障，不是业务真源 |
+| `logs/manager/` | Manager 与 Gateway 共用的结构化运行日志；包含数据变动审计，默认保留 30 天并清理历史分片 | 否；用于排障，不是业务真源 |
 
 代码通过 `src/shared/projectDirectoryLayout.ts` 取得项目级目录，不在各模块重复拼接 `data/.runtime`、`logs/manager` 等固定路径。路线数据和人格资料分别使用 `routeDataDir`、`personaDataDir`；不得再用一个含义不清的 `dataDir` 在模块内部同时代表两者。旧配置入口仍可读取 `dataDir`，但必须在配置边界转换成上述明确字段。
 

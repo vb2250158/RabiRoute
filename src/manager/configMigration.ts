@@ -25,6 +25,7 @@ import {
   roleMessageConfigPath,
   routesConfigPath
 } from "../shared/routePaths.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type ConfigMigrationOptions = {
   routeRoot: string;
@@ -192,9 +193,46 @@ function writePersonaConfigValue(
 ): void {
   const existing = readJsonFile(personaConfigPath);
   const next = normalizedPersonaConfigValue(existing, fragment, options);
-  if (sameJson(existing, next)) return;
-  fs.mkdirSync(path.dirname(personaConfigPath), { recursive: true });
-  fs.writeFileSync(personaConfigPath, JSON.stringify(next, null, 2), "utf8");
+  const roleId = path.basename(path.dirname(personaConfigPath));
+  if (sameJson(existing, next)) {
+    recordDataMutationAudit({
+      group: "config",
+      event: "persona_config_migration_unchanged",
+      owner: "config-migration",
+      action: "migrate-persona-config",
+      target: { type: "persona", id: roleId },
+      dataSource: { kind: "file", id: `roles/${roleId}/${path.basename(personaConfigPath)}` },
+      outcome: "no_change"
+    });
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(personaConfigPath), { recursive: true });
+    fs.writeFileSync(personaConfigPath, JSON.stringify(next, null, 2), "utf8");
+    recordDataMutationAudit({
+      group: "config",
+      event: "persona_config_migration_committed",
+      owner: "config-migration",
+      action: "migrate-persona-config",
+      target: { type: "persona", id: roleId },
+      dataSource: { kind: "file", id: `roles/${roleId}/${path.basename(personaConfigPath)}` },
+      outcome: "committed",
+      changes: Object.keys(next).sort().map(field => ({ field }))
+    });
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "config",
+      event: "persona_config_migration_failed",
+      owner: "config-migration",
+      action: "migrate-persona-config",
+      target: { type: "persona", id: roleId },
+      dataSource: { kind: "file", id: `roles/${roleId}/${path.basename(personaConfigPath)}` },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
 }
 
 export function writePersonaConfig(
@@ -297,7 +335,30 @@ function migrateRoleConfig(rolesRoot: string, roleId: string, materializeDefault
   }, { materializeDefaults });
   for (const legacyPath of [roleMessageConfigPath(rolesRoot, roleId), routesConfigPath(rolesRoot, roleId)]) {
     if (fs.existsSync(legacyPath)) {
-      try { fs.unlinkSync(legacyPath); } catch { /* non-fatal */ }
+      try {
+        fs.unlinkSync(legacyPath);
+        recordDataMutationAudit({
+          group: "config",
+          event: "legacy_role_config_removed",
+          owner: "config-migration",
+          action: "remove-legacy-role-config",
+          target: { type: "persona", id: roleId },
+          dataSource: { kind: "file", id: `roles/${roleId}/${path.basename(legacyPath)}` },
+          outcome: "committed"
+        });
+      } catch (error) {
+        recordDataMutationAudit({
+          level: "warn",
+          group: "config",
+          event: "legacy_role_config_remove_failed",
+          owner: "config-migration",
+          action: "remove-legacy-role-config",
+          target: { type: "persona", id: roleId },
+          dataSource: { kind: "file", id: `roles/${roleId}/${path.basename(legacyPath)}` },
+          outcome: "failed",
+          error
+        });
+      }
     }
   }
 }
@@ -364,7 +425,32 @@ function migrateAdapterConfig(options: ConfigMigrationOptions, configName: strin
   if (adapterOnly.speechPushMode == null && legacySpeechPushMode != null) {
     adapterOnly.speechPushMode = legacySpeechPushMode;
   }
-  fs.writeFileSync(configPath, JSON.stringify(adapterOnly, null, 2), "utf8");
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(adapterOnly, null, 2), "utf8");
+    recordDataMutationAudit({
+      group: "config",
+      event: "adapter_config_migration_committed",
+      owner: "config-migration",
+      action: "migrate-adapter-config",
+      target: { type: "adapter-config", id: configName },
+      dataSource: { kind: "file", id: `routes/${configName}/${path.basename(configPath)}` },
+      outcome: "committed",
+      changes: Object.keys(adapterOnly).sort().map(field => ({ field }))
+    });
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "config",
+      event: "adapter_config_migration_failed",
+      owner: "config-migration",
+      action: "migrate-adapter-config",
+      target: { type: "adapter-config", id: configName },
+      dataSource: { kind: "file", id: `routes/${configName}/${path.basename(configPath)}` },
+      outcome: "failed",
+      error
+    });
+    throw error;
+  }
 }
 
 export function migrateLegacyConfigs(options: ConfigMigrationOptions): void {

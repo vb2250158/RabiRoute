@@ -6,6 +6,7 @@ import {
   PERSONA_AVATAR_MAX_BYTES,
   type PersonaAvatarContentType
 } from "./shared/personaAvatarContract.js";
+import { recordDataMutationAudit } from "./observability/dataMutationAudit.js";
 
 const PERSONA_CONFIG_FILE = "personaConfig.json";
 const PERSONA_FILE = "persona.md";
@@ -144,17 +145,45 @@ export function savePersonaAvatar(roleDir: string, contentTypeValue: string, bod
   const fileName = `avatar-${digest}${AVATAR_EXTENSIONS[contentType]}`;
   const filePath = path.join(roleDir, fileName);
 
-  if (!fs.existsSync(filePath)) atomicWrite(filePath, body);
   try {
-    atomicWrite(configPath, JSON.stringify({ ...config, avatar: fileName }, null, 2));
+    if (!fs.existsSync(filePath)) atomicWrite(filePath, body);
+    try {
+      atomicWrite(configPath, JSON.stringify({ ...config, avatar: fileName }, null, 2));
+    } catch (error) {
+      if (previousFileName !== fileName) removeFileIfPresent(filePath);
+      throw error;
+    }
+
+    const previousManagedPath = managedAvatarPath(roleDir, previousFileName);
+    if (previousManagedPath !== filePath) removeFileIfPresent(previousManagedPath);
+    const result = readPersonaAvatar(roleDir);
+    recordDataMutationAudit({
+      group: "persona",
+      event: "persona_avatar_saved",
+      owner: "persona-avatar",
+      action: "save-avatar",
+      target: { type: "persona", id: path.basename(path.resolve(roleDir)) },
+      dataSource: { kind: "file", id: `persona/${fileName}` },
+      outcome: previousFileName === fileName ? "no_change" : "committed",
+      before: previousFileName ? { revision: previousFileName } : undefined,
+      after: { revision: result.version, digest }
+    });
+    return result;
   } catch (error) {
-    if (previousFileName !== fileName) removeFileIfPresent(filePath);
+    recordDataMutationAudit({
+      level: "error",
+      group: "persona",
+      event: "persona_avatar_save_failed",
+      owner: "persona-avatar",
+      action: "save-avatar",
+      target: { type: "persona", id: path.basename(path.resolve(roleDir)) },
+      dataSource: { kind: "file", id: `persona/${fileName}` },
+      outcome: "failed",
+      before: previousFileName ? { revision: previousFileName } : undefined,
+      error
+    });
     throw error;
   }
-
-  const previousManagedPath = managedAvatarPath(roleDir, previousFileName);
-  if (previousManagedPath !== filePath) removeFileIfPresent(previousManagedPath);
-  return readPersonaAvatar(roleDir);
 }
 
 export function removePersonaAvatar(roleDir: string): void {
@@ -163,6 +192,32 @@ export function removePersonaAvatar(roleDir: string): void {
   const config = readConfig(configPath, true);
   const previousFileName = typeof config.avatar === "string" ? config.avatar : undefined;
   delete config.avatar;
-  atomicWrite(configPath, JSON.stringify(config, null, 2));
-  removeFileIfPresent(managedAvatarPath(roleDir, previousFileName));
+  try {
+    atomicWrite(configPath, JSON.stringify(config, null, 2));
+    removeFileIfPresent(managedAvatarPath(roleDir, previousFileName));
+  } catch (error) {
+    recordDataMutationAudit({
+      level: "error",
+      group: "persona",
+      event: "persona_avatar_remove_failed",
+      owner: "persona-avatar",
+      action: "remove-avatar",
+      target: { type: "persona", id: path.basename(path.resolve(roleDir)) },
+      dataSource: { kind: "file", id: "persona/personaConfig.json" },
+      outcome: "failed",
+      before: previousFileName ? { revision: previousFileName } : undefined,
+      error
+    });
+    throw error;
+  }
+  recordDataMutationAudit({
+    group: "persona",
+    event: "persona_avatar_removed",
+    owner: "persona-avatar",
+    action: "remove-avatar",
+    target: { type: "persona", id: path.basename(path.resolve(roleDir)) },
+    dataSource: { kind: "file", id: "persona/personaConfig.json" },
+    outcome: previousFileName ? "committed" : "no_change",
+    before: previousFileName ? { revision: previousFileName } : undefined
+  });
 }

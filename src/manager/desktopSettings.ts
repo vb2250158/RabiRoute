@@ -6,6 +6,7 @@ import {
   normalizeDesktopSettings,
   type DesktopSettings
 } from "../shared/desktopSettingsContract.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export function desktopSettingsPath(rootDir: string): string {
   return path.join(rootDir, "data", "desktop", "settings.json");
@@ -34,8 +35,36 @@ export class DesktopSettingsStore {
   }
 
   write(value: unknown): DesktopSettings {
+    const previous = this.read();
     const settings = normalizeDesktopSettings(value);
-    atomicWriteFileSync(this.filePath, `${JSON.stringify(settings, null, 2)}\n`);
-    return settings;
+    try {
+      atomicWriteFileSync(this.filePath, `${JSON.stringify(settings, null, 2)}\n`);
+      const changedFields = Object.keys(settings as unknown as Record<string, unknown>)
+        .filter(key => JSON.stringify((previous as unknown as Record<string, unknown>)[key]) !== JSON.stringify((settings as unknown as Record<string, unknown>)[key]));
+      recordDataMutationAudit({
+        group: "config.desktop",
+        event: "desktop_settings_updated",
+        owner: "DesktopSettingsStore",
+        action: "write",
+        target: { type: "desktop_settings", id: "settings" },
+        dataSource: { kind: "file", id: "data/desktop/settings.json" },
+        outcome: changedFields.length ? "committed" : "no_change",
+        changes: changedFields.map(field => ({ field }))
+      });
+      return settings;
+    } catch (error) {
+      recordDataMutationAudit({
+        level: "error",
+        group: "config.desktop",
+        event: "desktop_settings_update_failed",
+        owner: "DesktopSettingsStore",
+        action: "write",
+        target: { type: "desktop_settings", id: "settings" },
+        dataSource: { kind: "file", id: "data/desktop/settings.json" },
+        outcome: "failed",
+        error
+      });
+      throw error;
+    }
   }
 }

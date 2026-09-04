@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 export type LocalSecretProtector = Readonly<{
   scheme: string;
@@ -61,8 +62,30 @@ function localKeyProtector(dataDir: string, keyFileName: string): LocalSecretPro
     if (!fs.existsSync(keyPath)) {
       try {
         fs.writeFileSync(keyPath, randomBytes(32), { flag: "wx", mode: 0o600 });
+        recordDataMutationAudit({
+          group: "security",
+          event: "local_secret_key_created",
+          owner: "local-secret-protection",
+          action: "create-key",
+          target: { type: "encryption-key", id: keyFileName },
+          dataSource: { kind: "file", id: keyFileName },
+          outcome: "committed"
+        });
       } catch (error) {
-        if (!fs.existsSync(keyPath)) throw error;
+        if (!fs.existsSync(keyPath)) {
+          recordDataMutationAudit({
+            level: "error",
+            group: "security",
+            event: "local_secret_key_create_failed",
+            owner: "local-secret-protection",
+            action: "create-key",
+            target: { type: "encryption-key", id: keyFileName },
+            dataSource: { kind: "file", id: keyFileName },
+            outcome: "failed",
+            error
+          });
+          throw error;
+        }
       }
     }
     const status = fs.lstatSync(keyPath);

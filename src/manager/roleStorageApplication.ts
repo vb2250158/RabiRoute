@@ -17,6 +17,7 @@ import type {
 } from "../planFeedback.js";
 import type { SubmitPlanFeedbackInput, SubmitPlanFeedbackResult } from "../planFeedbackSubmission.js";
 import type { RolePanelTimelineAppendResult, RolePanelTimelineMessage } from "../rolePanelTimeline.js";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 import type {
   PersonaPlanWorkflow,
   PersonaPlanWorkflowReadResult,
@@ -317,6 +318,27 @@ function publicReadError(error: unknown, operationId?: string, committed = false
   );
 }
 
+function roleStorageAuditGroup(operation: string): string {
+  if (operation.startsWith("plan-")) return "plan";
+  if (operation.includes("memory")) return "memory";
+  return "role.storage";
+}
+
+function roleStorageDataSource(roleId: string, operation: string): string {
+  if (operation.startsWith("plan-")) return `roles/${roleId}/plans`;
+  if (operation.includes("memory")) return `roles/${roleId}/memory`;
+  if (operation === "role-panel-timeline-append") return `roles/${roleId}/timeline`;
+  return `roles/${roleId}`;
+}
+
+function roleStorageMutationOutcome(error: RoleStorageApplicationError): "rejected" | "failed" {
+  return error.code === "revision_conflict"
+    || error.code === "idempotency_conflict"
+    || error.code === "invalid_request"
+    ? "rejected"
+    : "failed";
+}
+
 export class RoleStorageQueries {
   private readonly rolesRoot: string;
   private readonly identity: RoleStorageGenerationIdentity;
@@ -447,6 +469,17 @@ export class RoleStorageCommands {
     });
     this.assertPoolGeneration();
     const expectedRevision = await input.expectedRevision();
+    const auditBase = {
+      group: roleStorageAuditGroup(input.operation),
+      owner: "role-storage",
+      action: input.operation,
+      target: { type: input.resourceId ? "role-resource" : "role", id: input.resourceId ?? roleId },
+      dataSource: { kind: "file" as const, id: roleStorageDataSource(roleId, input.operation) },
+      operationId,
+      before: expectedRevision ? { revision: expectedRevision } : undefined
+    };
+    const startedAt = Date.now();
+    recordDataMutationAudit({ ...auditBase, event: "role_storage_mutation_started", outcome: "started" });
     let commit: TCommit;
     try {
       commit = await input.mutate({
@@ -456,8 +489,27 @@ export class RoleStorageCommands {
         timeoutMs: input.context.timeoutMs
       });
     } catch (error) {
-      throw publicMutationError(error, operationId);
+      const publicError = publicMutationError(error, operationId);
+      const outcome = roleStorageMutationOutcome(publicError);
+      recordDataMutationAudit({
+        ...auditBase,
+        level: outcome === "rejected" ? "warn" : "error",
+        event: "role_storage_mutation_failed",
+        outcome,
+        durationMs: Date.now() - startedAt,
+        result: publicError.code,
+        error: publicError
+      });
+      throw publicError;
     }
+    const afterRevision = storageMutationRevisionToken(commit);
+    recordDataMutationAudit({
+      ...auditBase,
+      event: "role_storage_mutation_committed",
+      outcome: "committed",
+      after: afterRevision ? { revision: afterRevision } : undefined,
+      durationMs: Date.now() - startedAt
+    });
     try {
       const catalog = await this.queries.recaptureCatalog(roleId, {
         signal: input.context.signal,
@@ -467,7 +519,18 @@ export class RoleStorageCommands {
       this.assertPoolGeneration();
       return Object.freeze({ operationId, expectedRevision, commit, projection, catalog });
     } catch (error) {
-      throw publicReadError(error, operationId, true);
+      const publicError = publicReadError(error, operationId, true);
+      recordDataMutationAudit({
+        ...auditBase,
+        level: "error",
+        event: "role_storage_projection_failed",
+        outcome: "failed",
+        after: afterRevision ? { revision: afterRevision } : undefined,
+        durationMs: Date.now() - startedAt,
+        result: "mutation_committed",
+        error: publicError
+      });
+      throw publicError;
     }
   }
 
@@ -878,6 +941,16 @@ export class RoleStorageCommands {
       allowResourceDerivedKey: true
     });
     this.assertPoolGeneration();
+    const auditBase = {
+      group: roleStorageAuditGroup("role-panel-timeline-append"),
+      owner: "role-storage",
+      action: "role-panel-timeline-append",
+      target: { type: "timeline-message", id: message.id },
+      dataSource: { kind: "ledger" as const, id: roleStorageDataSource(canonicalRoleId, "role-panel-timeline-append") },
+      operationId
+    };
+    const startedAt = Date.now();
+    recordDataMutationAudit({ ...auditBase, event: "role_storage_mutation_started", outcome: "started" });
     let commit: RolePanelTimelineAppendResult;
     try {
       commit = await this.mutationPool.appendRolePanelTimeline(canonicalRoleId, message, {
@@ -887,12 +960,42 @@ export class RoleStorageCommands {
         timeoutMs: context.timeoutMs
       });
     } catch (error) {
-      throw publicMutationError(error, operationId);
+      const publicError = publicMutationError(error, operationId);
+      const outcome = roleStorageMutationOutcome(publicError);
+      recordDataMutationAudit({
+        ...auditBase,
+        level: outcome === "rejected" ? "warn" : "error",
+        event: "role_storage_mutation_failed",
+        outcome,
+        durationMs: Date.now() - startedAt,
+        result: publicError.code,
+        error: publicError
+      });
+      throw publicError;
     }
+    const afterRevision = storageMutationRevisionToken(commit);
+    recordDataMutationAudit({
+      ...auditBase,
+      event: "role_storage_mutation_committed",
+      outcome: "committed",
+      after: afterRevision ? { revision: afterRevision } : undefined,
+      durationMs: Date.now() - startedAt
+    });
     try {
       this.assertPoolGeneration();
     } catch (error) {
-      throw publicReadError(error, operationId, true);
+      const publicError = publicReadError(error, operationId, true);
+      recordDataMutationAudit({
+        ...auditBase,
+        level: "error",
+        event: "role_storage_projection_failed",
+        outcome: "failed",
+        after: afterRevision ? { revision: afterRevision } : undefined,
+        durationMs: Date.now() - startedAt,
+        result: "mutation_committed",
+        error: publicError
+      });
+      throw publicError;
     }
     return Object.freeze({ operationId, expectedRevision: null, commit });
   }
