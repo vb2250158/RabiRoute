@@ -54,7 +54,7 @@ function plan(overrides: Partial<PlanItem> = {}): PlanItem {
     currentStepId: "implement",
     nextAction: "完成 Prefab",
     attachments: [],
-    steps: [{ id: "implement", title: "实现", status: "进行中" }],
+    steps: [{ id: "implement", title: "实现" }],
     createdAt: "2026-08-05T00:00:00.000Z",
     updatedAt: "2026-08-05T00:00:00.000Z",
     keywords: ["选择界面"],
@@ -787,7 +787,7 @@ test("linked plans generate required notifications only for communication-releva
     currentStep: "完成",
     currentStepId: "done",
     nextAction: "通知需求群",
-    steps: [{ id: "implement", title: "实现", status: "已完成", completedAt: "2026-08-05T00:02:00.000Z" }],
+    steps: [{ id: "implement", title: "实现", completedAt: "2026-08-05T00:02:00.000Z" }],
     updatedAt: "2026-08-05T00:02:00.000Z"
   });
   const notification = store.registerPlanChange("DemoPersona", before, progressed);

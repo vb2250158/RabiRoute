@@ -12,7 +12,7 @@ function plan(id: string, secretaryBinding?: PlanItem["secretaryBinding"]): Plan
     status: "执行中",
     archiveStatus: "未归档",
     attachments: [],
-    steps: [{ id: "run", title: "执行", status: "进行中" }],
+    steps: [{ id: "run", title: "执行" }],
     secretaryBinding,
     createdAt: "2026-08-06T00:00:00.000Z",
     updatedAt: "2026-08-06T00:00:00.000Z",

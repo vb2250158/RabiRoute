@@ -51,7 +51,7 @@ test("invalid or missing Manager colors use one neutral compatibility palette", 
 test("knowledge categories consume Manager view membership instead of raw status", () => {
   const plan = {
     id: "plan-1",
-    status: "未开始",
+    status: "自定义状态",
     presentation: { views: ["current", "plans"] }
   } as unknown as RolePlan;
 
@@ -234,7 +234,7 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.doesNotMatch(page, /t\(plan\.status\)/);
   assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)" class="knowledge-approval-panel" data-state="guidance">/);
   assert.match(page, /引导属于整个计划，不绑定某个步骤/);
-  assert.match(page, /调整尚未开始的步骤/);
+  assert.match(page, /调整后续步骤/);
   assert.match(page, /:composer-id="`guidance-\$\{plan\.id\}`"[\s\S]*?@submit="sendPlanGuidance\(plan\)"/);
   assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance"\)/);
   assert.match(page, /const stepId = guidance \? undefined : plan\.presentation\.approval\.stepId/);
@@ -305,7 +305,8 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /function holdDirectoryJumpTarget\(planId: string, smooth: boolean\)/);
   assert.match(page, /if \(directoryJumpTargetId\) return;/);
   assert.match(page, /window\.addEventListener\("scroll", waitForDirectoryJumpSettle, \{ passive: true \}\)/);
-  assert.match(page, /holdDirectoryJumpTarget\(plan\.id, !reduceMotion\)/);
+  assert.match(page, /async function focusPlanCardAfterDirectoryJump/);
+  assert.match(page, /holdDirectoryJumpTarget\(planId, !reduceMotion\)/);
   assert.match(page, /ref="planDirectoryList"/);
   assert.match(page, /:data-plan-directory-id="plan\.id"/);
   assert.match(page, /:id="planCardDomId\(plan\.id\)"/);
@@ -431,22 +432,23 @@ test("plan cards render managed attachments and preview 16:9 image and video med
   assert.match(styles, /\.knowledge-plan-markdown-document pre\s*\{[\s\S]*?overflow:\s*auto/);
 });
 
-test("step blocker styling follows the structured approval contract instead of status text", () => {
+test("step blocker styling follows the structured approval contract", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
 
   assert.match(page, /function stepIsBlocked[\s\S]*?plan\.presentation\.approval\.state === "ready"/);
   assert.match(page, /blocked: stepIsBlocked\(plan, step\)/);
   assert.match(page, /stepIsBlocked\(plan, step\) && step\.blockedBy/);
-  assert.match(page, /stepIsBlocked\(plan, step\) \? "已阻塞" : step\.status/);
+  assert.match(page, /stepIsBlocked\(plan, step\) \? "已阻塞" : step\.completedAt \? "已完成" : "进行中"/);
+  assert.doesNotMatch(page, /step\.status/);
   assert.doesNotMatch(page, /plan\.presentation\.tone !== ['"]paused['"] && step\.blockedBy/);
 });
 
-test("plan steps show only the lifecycle time relevant to their current status", () => {
+test("plan steps derive current and completed presentation without a stored status", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
 
-  assert.match(page, /step\.status === '进行中' && step\.startedAt[\s\S]*?开始时间[\s\S]*?formatDate\(step\.startedAt\)/);
-  assert.match(page, /step\.status === '已完成' && step\.completedAt[\s\S]*?完成时间[\s\S]*?formatDate\(step\.completedAt\)/);
-  assert.doesNotMatch(page, /step\.status === '未开始'[\s\S]{0,120}formatDate/);
+  assert.match(page, /step\.id === plan\.currentStepId && step\.startedAt[\s\S]*?开始时间[\s\S]*?formatDate\(step\.startedAt\)/);
+  assert.match(page, /v-else-if="step\.completedAt"[\s\S]*?完成时间[\s\S]*?formatDate\(step\.completedAt\)/);
+  assert.doesNotMatch(page, /未开始/);
 });

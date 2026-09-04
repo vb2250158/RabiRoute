@@ -250,7 +250,6 @@ export type MetaPayload = {
 export type RolePlanStep = {
   id: string;
   title: string;
-  status: "未开始" | "进行中" | "已完成";
   detail?: string;
   waitingFor?: string;
   isBlocked?: boolean;

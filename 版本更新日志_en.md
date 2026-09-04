@@ -21,9 +21,15 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 - A Codex task's complete ID now determines task identity on its own; a Route or plan binding workspace controls only the current turn. A different saved default cwd no longer blocks resolution, managed registration, opening, or continuation and does not create a replacement task. Deliveries to the same task remain serialized by task ID across workspaces.
 
+### Codex plan-update reminders
+
+- After a Codex task changes project files inside its plan-bound workspace, the Stop Hook reminds the Agent in that same task to check whether the bound plan needs an update. It emits at most one reminder per turn, merges multiple plans bound to the same context, and never changes plan status automatically.
+- Read-only Windows Host status queries now read the active generation's control pipe directly while preserving the existing camelCase JSON contract. Startup, quit, restart, and release activation still perform complete payload validation.
+
 ### Plan status and archival
 
-- Each persona's `personaConfig.json.planWorkflow` is now the single configuration source for its plan workflow. `plan.status` stores only an enabled status key; labels, descriptions, colors, order, views, step constraints, approval behavior, completion behavior, and archive eligibility come from configuration. The default template supplies Analyzing, Awaiting approval, Executing, Awaiting package, Awaiting QA, Awaiting discussion, Paused, Completed, and Closed, but code and clients keep no second enum.
+- Each persona's `personaConfig.json.planWorkflow` is now the single configuration source for its plan workflow. `plan.status` stores only an enabled status key; labels, descriptions, colors, order, views, step constraints, approval behavior, completion behavior, and archive eligibility come from configuration. The default template supplies Analyzing, Awaiting information, Awaiting approval, Executing, Awaiting package, Awaiting QA, Awaiting discussion, Paused, Completed, and Closed, but code and clients keep no second enum. Awaiting information is used after analysis has established that the goal, scope, acceptance criteria, or implementation evidence is still insufficient.
+- `planWorkflow.schemaVersion=2` adds a distinct role mapping for Awaiting information. The first read of an existing v1 persona configuration preserves custom statuses and relative order while upgrading once; startup does not restore statuses an Agent later removes through the catalog API.
 - Manager adds status-catalog APIs protected by `Idempotency-Key` and revision preconditions. Agents can add or update statuses; removal requires a replacement key, migrates unarchived plans first, and retains a retired definition for archived plans and history. Startup migration rewrites legacy aliases to current keys and removes retired step-phase fields.
 - Archival remains independent through `archiveStatus=未归档 | 已归档`. The persona workflow config determines eligible statuses and delay, archival preserves the plan status, and archived plans are excluded from keyword recall while remaining available by explicit ID or the Archived view.
 

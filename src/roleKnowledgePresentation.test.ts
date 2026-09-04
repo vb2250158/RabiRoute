@@ -24,8 +24,8 @@ function plan(status: PlanStatus, patch: Partial<PlanItem> = {}): PlanItem {
     archiveStatus: "未归档",
     attachments: [],
     steps: terminal
-      ? [{ id: "work", title: "Work", status: "已完成" }]
-      : [{ id: "work", title: "Work", status: "进行中" }],
+      ? [{ id: "work", title: "Work", completedAt: "2026-09-03T00:00:00.000Z" }]
+      : [{ id: "work", title: "Work" }],
     currentStepId: terminal || status === "关闭" ? undefined : "work",
     createdAt: "2026-09-03T00:00:00.000Z",
     updatedAt: "2026-09-03T00:00:00.000Z",
@@ -52,10 +52,10 @@ const approvalRequest = {
 };
 
 test("presentation status is always the exact plan.status", () => {
-  const cases: PlanStatus[] = ["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"];
+  const cases: PlanStatus[] = ["分析中", "待补充信息", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"];
   for (const status of cases) {
     const item = status === "待审批"
-      ? plan(status, { steps: [{ id: "work", title: "Approve", status: "进行中", approvalRequest }] })
+      ? plan(status, { steps: [{ id: "work", title: "Approve", approvalRequest }] })
       : plan(status);
     const presentation = planPresentation(item, workflow);
     assert.equal(presentation.status, status);
@@ -68,7 +68,7 @@ test("waiting text and step ids never override plan.status", () => {
   const item = plan("执行中", {
     currentStepId: "manual-verify-package-qa",
     waitingFor: "等待打包、等待 QA、待讨论、待审批",
-    steps: [{ id: "manual-verify-package-qa", title: "等待 QA", status: "进行中", waitingFor: "暂停" }]
+    steps: [{ id: "manual-verify-package-qa", title: "等待 QA", waitingFor: "暂停" }]
   });
   assert.equal(planPresentation(item, workflow).status, "执行中");
   assert.equal(planPresentation(item, workflow).tone, "执行中");
@@ -85,7 +85,7 @@ test("archiveStatus controls archive visibility without replacing status", () =>
 
 test("pending approval remains metadata under the explicit 待审批 status", () => {
   const item = plan("待审批", {
-    steps: [{ id: "work", title: "Approve", status: "进行中", approvalRequest }]
+    steps: [{ id: "work", title: "Approve", approvalRequest }]
   });
   const presentation = planPresentation(item, workflow);
   assert.equal(presentation.status, "待审批");
@@ -93,13 +93,13 @@ test("pending approval remains metadata under the explicit 待审批 status", ()
   assert.equal(presentation.approval.enabled, true);
 });
 
-test("status ordering follows the canonical status vocabulary", () => {
-  const statuses: PlanStatus[] = ["关闭", "完成", "暂停", "待讨论", "等待 QA", "等待打包", "执行中", "待审批", "分析中"];
+test("status ordering follows the configured status vocabulary", () => {
+  const statuses: PlanStatus[] = ["关闭", "完成", "暂停", "待讨论", "等待 QA", "等待打包", "执行中", "待审批", "待补充信息", "分析中"];
   const ordered = presentPlans(statuses.map((status, index) => plan(status, {
     id: `p-${index}`,
-    ...(status === "待审批" ? { steps: [{ id: "work", title: "Approve", status: "进行中", approvalRequest }] } : {})
+    ...(status === "待审批" ? { steps: [{ id: "work", title: "Approve", approvalRequest }] } : {})
   })), workflow);
-  assert.deepEqual(ordered.map((item) => item.status), ["分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"]);
+  assert.deepEqual(ordered.map((item) => item.status), ["分析中", "待补充信息", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"]);
 });
 
 test("pagination facets and filters use plan.status and exclude archived plans from current view", () => {

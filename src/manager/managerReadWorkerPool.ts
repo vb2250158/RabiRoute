@@ -61,7 +61,7 @@ export type ManagerReadWorkerPoolStatus = {
   spawnedWorkers: number;
   globalActive: number;
   globalMaxConcurrency: number;
-  globalTerminationBlocked: boolean;
+  terminationBlocked: boolean;
   blockedWorkerPids: number[];
   maxConcurrency: number;
   maxQueue: number;
@@ -184,8 +184,6 @@ export class ManagerReadWorkerPool {
   // enough lanes for a visible knowledge page while a background catalog refresh
   // and an unrelated diagnostic are in flight.
   private static readonly globalMaxConcurrency = 6;
-  private static readonly terminationPendingWorkers = new Set<WorkerSlot>();
-  private static readonly terminationBlockedWorkers = new Set<WorkerSlot>();
   private static globalActive = 0;
   private readonly maxConcurrency: number;
   private readonly maxQueue: number;
@@ -200,6 +198,8 @@ export class ManagerReadWorkerPool {
   private readonly rolePlanPageInFlight = new Map<string, SharedRead<unknown>>();
   private readonly roleMemoryPageInFlight = new Map<string, SharedRead<unknown>>();
   private readonly workers = new Set<WorkerSlot>();
+  private readonly terminationPendingWorkers = new Set<WorkerSlot>();
+  private readonly terminationBlockedWorkers = new Set<WorkerSlot>();
   private active = 0;
   private spawnedWorkers = 0;
   private nextRequestId = 1;
@@ -221,10 +221,10 @@ export class ManagerReadWorkerPool {
 
   start(): void {
     if (!this.stopped) return;
-    if (ManagerReadWorkerPool.terminationBlockedWorkers.size > 0) {
-      throw ManagerReadWorkerPool.globalTerminationBlockedError();
+    if (this.terminationBlockedWorkers.size > 0) {
+      throw this.terminationBlockedError();
     }
-    if (ManagerReadWorkerPool.terminationPendingWorkers.size > 0) {
+    if (this.terminationPendingWorkers.size > 0) {
       throw new ManagerReadWorkerError("Manager read worker termination is still in progress.", "busy");
     }
     if (this.active || this.queue.length || this.workers.size) {
@@ -280,10 +280,10 @@ export class ManagerReadWorkerPool {
     if (!this.accepting) {
       return Promise.reject(new ManagerReadWorkerError("Manager read worker pool is stopped.", "aborted"));
     }
-    if (ManagerReadWorkerPool.terminationBlockedWorkers.size > 0) {
-      return Promise.reject(ManagerReadWorkerPool.globalTerminationBlockedError());
+    if (this.terminationBlockedWorkers.size > 0) {
+      return Promise.reject(this.terminationBlockedError());
     }
-    if (ManagerReadWorkerPool.terminationPendingWorkers.size > 0) {
+    if (this.terminationPendingWorkers.size > 0) {
       return Promise.reject(new ManagerReadWorkerError(
         "Manager read worker termination is still in progress; retry shortly.",
         "busy"
@@ -532,8 +532,8 @@ export class ManagerReadWorkerPool {
       spawnedWorkers: this.spawnedWorkers,
       globalActive: ManagerReadWorkerPool.globalActive,
       globalMaxConcurrency: ManagerReadWorkerPool.globalMaxConcurrency,
-      globalTerminationBlocked: ManagerReadWorkerPool.terminationBlockedWorkers.size > 0,
-      blockedWorkerPids: [...ManagerReadWorkerPool.terminationBlockedWorkers]
+      terminationBlocked: this.terminationBlockedWorkers.size > 0,
+      blockedWorkerPids: [...this.terminationBlockedWorkers]
         .map(slot => slot.worker.pid)
         .filter((pid): pid is number => typeof pid === "number"),
       maxConcurrency: this.maxConcurrency,
@@ -606,8 +606,8 @@ export class ManagerReadWorkerPool {
   private drain(): void {
     while (
       this.accepting
-      && ManagerReadWorkerPool.terminationPendingWorkers.size === 0
-      && ManagerReadWorkerPool.terminationBlockedWorkers.size === 0
+      && this.terminationPendingWorkers.size === 0
+      && this.terminationBlockedWorkers.size === 0
       && this.active < this.maxConcurrency
       && ManagerReadWorkerPool.globalActive < ManagerReadWorkerPool.globalMaxConcurrency
       && this.queue.length > 0
@@ -748,7 +748,7 @@ export class ManagerReadWorkerPool {
     if (slot.closed) return true;
     if (error && !slot.terminationCause) slot.terminationCause = error;
     slot.terminating = true;
-    ManagerReadWorkerPool.terminationPendingWorkers.add(slot);
+    this.terminationPendingWorkers.add(slot);
     const current = slot.active;
     if (current) {
       this.clearActiveDeadline(current);
@@ -760,7 +760,7 @@ export class ManagerReadWorkerPool {
         + `Worker termination was not confirmed: pid=${slot.worker.pid ?? "unknown"}.`,
       "termination_unconfirmed"
     );
-    ManagerReadWorkerPool.blockTermination(slot, blockedError);
+    this.blockTermination(slot, blockedError);
     if (current && !current.settled) this.settleActivePromise(current, blockedError);
     this.rejectQueue(blockedError);
     return false;
@@ -787,8 +787,8 @@ export class ManagerReadWorkerPool {
     slot.terminating = false;
     slot.resolveClosed();
     this.workers.delete(slot);
-    ManagerReadWorkerPool.terminationPendingWorkers.delete(slot);
-    ManagerReadWorkerPool.terminationBlockedWorkers.delete(slot);
+    this.terminationPendingWorkers.delete(slot);
+    this.terminationBlockedWorkers.delete(slot);
     const current = slot.active;
     if (current) {
       this.clearActiveDeadline(current);
@@ -803,9 +803,7 @@ export class ManagerReadWorkerPool {
       }
       this.releaseActiveLease(slot, current);
     }
-    if (ManagerReadWorkerPool.terminationBlockedWorkers.size === 0) {
-      ManagerReadWorkerPool.drainAll();
-    }
+    ManagerReadWorkerPool.drainAll();
   }
 
   private clearActiveDeadline(current: ActiveRead): void {
@@ -840,8 +838,8 @@ export class ManagerReadWorkerPool {
     }
   }
 
-  private static globalTerminationBlockedError(): ManagerReadWorkerError {
-    const pids = [...ManagerReadWorkerPool.terminationBlockedWorkers]
+  private terminationBlockedError(): ManagerReadWorkerError {
+    const pids = [...this.terminationBlockedWorkers]
       .map(slot => slot.worker.pid)
       .filter((pid): pid is number => typeof pid === "number");
     return new ManagerReadWorkerError(
@@ -850,14 +848,12 @@ export class ManagerReadWorkerPool {
     );
   }
 
-  private static blockTermination(slot: WorkerSlot, error: ManagerReadWorkerError): void {
-    ManagerReadWorkerPool.terminationBlockedWorkers.add(slot);
-    for (const pool of ManagerReadWorkerPool.instances) pool.rejectQueue(error);
+  private blockTermination(slot: WorkerSlot, error: ManagerReadWorkerError): void {
+    this.terminationBlockedWorkers.add(slot);
+    this.rejectQueue(error);
   }
 
   private static drainAll(): void {
-    if (ManagerReadWorkerPool.terminationPendingWorkers.size > 0
-      || ManagerReadWorkerPool.terminationBlockedWorkers.size > 0) return;
     for (const pool of ManagerReadWorkerPool.instances) pool.drain();
   }
 }

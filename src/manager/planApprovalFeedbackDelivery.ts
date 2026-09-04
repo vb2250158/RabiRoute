@@ -124,7 +124,7 @@ function boundTaskPrompt(options: DeliverPlanApprovalFeedbackOptions): string {
       "[计划引导：已直接投递到绑定业务会话]",
       ...feedbackLines(options.feedback),
       "这是原业务任务。直接消费引导；秘书同步跟进控制面。",
-      "读取当前计划与反馈。引导影响范围、优先级或路径时，PATCH 计划和未开始步骤；引导不等于审批。",
+      "读取当前计划与反馈。引导影响范围、优先级或路径时，PATCH 计划和后续步骤；引导不等于审批。",
       planFeedbackResponseMutationInstruction({
         endpoint: feedbackApiUrl(options),
         planId: options.plan.id,
@@ -187,7 +187,7 @@ function controlFeedbackText(
       ? `引导未直达业务任务。由${recipient}记录失败并续投原任务。`
       : `审批未直达业务任务。由${recipient}记录失败并续投原任务。`,
     guidance
-      ? "读取计划与反馈；必要时调整未开始步骤。引导不等于审批。"
+      ? "读取计划与反馈；必要时调整后续步骤。引导不等于审批。"
       : "读取计划与审批记录，按意见更新计划或步骤。"
   ].join("\n");
 }

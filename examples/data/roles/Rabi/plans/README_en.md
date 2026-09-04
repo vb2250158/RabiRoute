@@ -14,6 +14,6 @@ Recommended statuses are `未开始`, `进行中`, `暂停`, `已完成`, and `�
 
 Unarchived examples live under `active/<planId>/plan.json`. RabiRoute moves the whole archived plan directory to `archive/<planId>/`.
 
-`index.json` is a lightweight preview for UIs and Agents. `unarchivedPlanIds` includes plans in the not-started, active, paused, and completed states. The `plan.json` file under `active/<planId>/` remains authoritative.
+`index.json` is a lightweight preview for UIs and Agents. `unarchivedPlanIds` includes active, paused, and completed plans. The `plan.json` file under `active/<planId>/` remains authoritative.
 
 All examples are sanitized. Do not include real conversations, account IDs, tokens, cookies, usernames, private paths, or runtime data.

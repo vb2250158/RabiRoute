@@ -50,6 +50,18 @@ test("directory jumps render a bounded forward window instead of inserting old c
   assert.equal(hasMoreKnowledgeAfterWindow(ids.length, 65, 18), false);
 });
 
+test("directory jump waits for its virtualized target card to paint before scrolling", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const jump = page.slice(
+    page.indexOf("function jumpToPlan(event: MouseEvent, plan: RolePlan): void"),
+    page.indexOf("function isApprovalStep", page.indexOf("function jumpToPlan(event: MouseEvent, plan: RolePlan): void"))
+  );
+
+  assert.match(jump, /void focusPlanCardAfterDirectoryJump\(plan\.id, reduceMotion\);/);
+  assert.match(page, /async function focusPlanCardAfterDirectoryJump[\s\S]{0,900}await yieldToKnowledgePaint\(\)[\s\S]{0,900}await yieldToKnowledgePaint\(\)[\s\S]{0,900}target\.scrollIntoView/);
+});
+
 test("scrolling upward expands the render window before the current plans", () => {
   assert.equal(hasMoreKnowledgeBeforeWindow(65), true);
   assert.equal(hasMoreKnowledgeBeforeWindow(0), false);

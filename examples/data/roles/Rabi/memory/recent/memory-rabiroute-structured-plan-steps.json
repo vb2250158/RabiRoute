@@ -2,7 +2,7 @@
   "id": "memory-rabiroute-structured-plan-steps",
   "title": "计划步骤、审批门、QA 恢复和等待打包由 Manager 统一表达",
   "focus": "结构化步骤、Manager 派生审批门、计划级引导、QA 原任务恢复与等待打包",
-  "content": "新建计划必须提供完整有序的 steps，currentStepId 指向唯一进行中步骤；暂停时保留恢复位置并停止驱动。只有当前步骤拥有字段完整、可提交且 responseStatus=pending 的 approvalRequest 时，Manager 才派生 isBlocked 与审批入口；Agent 不得手写 isBlocked，合同缺项时计划保持进行中并继续补证据。没有进入审批的进行中计划可以接收只关联 planId 的计划级引导，Agent 应重读整个计划、调整说明或未开始步骤，并用 guidance_response 回写。QA 明确失败或仍复现时，Manager 重开调查步骤并续投原 taskBinding；只有明确通过才完成验收。结构化打包步骤在前序完成且明确等待目标包时派生 waiting_package，不把 QA、资料或审批等待混进去。",
+  "content": "新建计划必须提供完整有序的 steps，currentStepId 指向当前步骤，步骤不保存独立状态，completedAt 记录完成时间；暂停时保留恢复位置并停止驱动。只有当前步骤拥有字段完整、可提交且 responseStatus=pending 的 approvalRequest 时，Manager 才派生 isBlocked 与审批入口；Agent 不得手写 isBlocked，合同缺项时计划保持进行中并继续补证据。没有进入审批的进行中计划可以接收只关联 planId 的计划级引导，Agent 应重读整个计划、调整说明或后续步骤，并用 guidance_response 回写。QA 明确失败或仍复现时，Manager 重开调查步骤并续投原 taskBinding；只有明确通过才完成验收。结构化打包步骤在前序完成且明确等待目标包时派生 waiting_package，不把 QA、资料或审批等待混进去。",
   "source": {
     "kind": "example",
     "summary": "公开示例记忆：结构化计划步骤、当前位置和阻塞语义"

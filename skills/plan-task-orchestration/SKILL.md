@@ -1,6 +1,6 @@
 ---
 name: plan-task-orchestration
-description: Use before any PangHu project change or any repository task governed by RabiRoute plan admission, including bug fixes, features, UI, assets, config, data, docs, prompts, skills, builds, deployments, and external writes; also use to create, deduplicate, bind, resume, audit, migrate, or complete a formal plan. Drive the unique bound task through 调查中 → 信息不足/待审批 → 执行中 → 待验收 with evidence, owner-feedback rollback, parallel work, and no duplicate dispatches. Do not use for strictly read-only investigation that will not produce or execute a change.
+description: Use before any PangHu project change or any repository task governed by RabiRoute plan admission, including bug fixes, features, UI, assets, config, data, docs, prompts, skills, builds, deployments, and external writes; also use to create, deduplicate, bind, resume, audit, migrate, or complete a formal plan. Drive the unique bound task through 分析中 → 待补充信息/待审批 → 执行中 → 待验收 with evidence, owner-feedback rollback, parallel work, and no duplicate dispatches. Do not use for strictly read-only investigation that will not produce or execute a change.
 ---
 
 # Plan Task Orchestration
@@ -60,23 +60,25 @@ Resolve the current Manager generation before every plan read or write. Installe
 5. Create a new plan only when no candidate represents the same commitment. Split independent outcomes into child or sibling plans, each with its own task binding.
 6. If the matching plan is bound to another valid business task, stop business work in the current task and deliver only the new user requirements, evidence, attachments, and acceptance changes to that exact binding. Do not run a second investigation or implementation in parallel.
 
-Before creating or repairing a plan, GET `/api/roles/:roleId/plan-statuses`. Write only an enabled status `key` from that persona's `planWorkflow.statuses` to `plan.status`. Use `planWorkflow.roles` to resolve analysis, approval, execution, package, QA, discussion, pause, completion, and closure semantics. Labels, descriptions, colors, order, views, and lifecycle behavior come from the same persona configuration and must never be copied into code as a status enum.
+Before creating or repairing a plan, GET `/api/roles/:roleId/plan-statuses`. Write only an enabled status `key` from that persona's `planWorkflow.statuses` to `plan.status`. Use `planWorkflow.roles` to resolve analysis, information-needed, approval, execution, package, QA, discussion, pause, completion, and closure semantics. Labels, descriptions, colors, order, views, and lifecycle behavior come from the same persona configuration and must never be copied into code as a status enum.
 
 `archiveStatus` is separate and accepts only `未归档` or `已归档`. Only a terminal status configured with `archiveEligible=true` may become `已归档` after `archiveAfterHours`. Archived plans do not participate in keyword recall.
 
-Maintain exactly one `进行中` step for an active plan and point `currentStepId` to it. Step status still uses `未开始 / 进行中 / 已完成`; it is not a second plan status.
+Maintain exactly one current step for an active plan and point `currentStepId` to it. Steps do not store a status. `currentStepId` identifies the step being handled, `completedAt` records a finished step, and later steps carry neither field until selected.
+
+Plan status is the single lifecycle state. Read the enabled keys and their meaning from the persona's `personaConfig.json.planWorkflow.statuses` through the Manager workflow endpoint; each plan stores only the selected key in `plan.status` and does not repeat the status catalog.
 
 ### 2. Design the executable step path
 
 Before binding or dispatching work, classify the plan's actual phase from the latest plan, bound-task history, feedback, and evidence. Do not infer the phase from the title, an old local note, or a generic lifecycle status.
 
-1. If the plan already has a `进行中` step, treat it as the highest-priority work item. Finish it, revise it, or explicitly replace it before starting an untouched later step. Do not skip claimed work merely because a newer request looks easier.
-2. For a single change item, keep the visible path to the canonical milestones: `调查中`, optional `信息不足`, `待审批` when owner approval is required, `执行中`, and `待验收`. Put evidence collection inside investigation; put implementation review, tests, synchronization, submission, and readback inside execution; put package and QA mechanics inside the acceptance path only when required. Do not create separate visible steps for every control-plane read, command, file, test, attachment update, or status write.
+1. If the plan already has a `currentStepId`, treat that step as the highest-priority work item. Finish it, revise it, or explicitly replace it before selecting a later step. Do not skip claimed work merely because a newer request looks easier.
+2. For a single change item, keep the visible path to the canonical milestones: `分析中`, optional `待补充信息`, `待审批` when owner approval is required, `执行中`, and `待验收`. Put evidence collection inside analysis; put implementation review, tests, synchronization, submission, and readback inside execution; put package and QA mechanics inside the acceptance path only when required. Do not create separate visible steps for every control-plane read, command, file, test, attachment update, or status write.
 3. Give every step one observable outcome. Its title and `detail` should make the following recoverable: entry evidence, concrete action, expected artifact or state change, pass/fail check, and failure route. Put a real external dependency in `waitingFor`; put a real decision gate in `approvalRequest`. Do not use titles such as `继续处理`, `推进任务`, `等待环境`, or `验证一下` without the object and success condition.
 4. Keep steps coarse enough to represent business state, not Agent activity. Combine all actions that must succeed for one state transition into the same step. Split different features, bugs, pages, or independently accepted outcomes into separate plans rather than adding unrelated steps to one plan.
-5. Use `未开始 → 进行中 → 已完成` as the normal step transition. Reopen a completed step only when later evidence invalidates its check, QA fails, or the user changes the accepted contract; record the reason and update downstream steps affected by that change.
-6. Before dispatching a newly selected step, PATCH the same plan so exactly that step is `进行中`, update `currentStepId`, `currentStep`, `nextAction`, and `waitingFor`, then reread the Manager result. If the write or readback fails, do not dispatch. This is the claim boundary that prevents two tasks or turns from starting the same work.
-7. If the current step is no longer executable, do not leave it indefinitely as generic `进行中`. Revise it into a concrete clarification, approval, dependency, recovery, or evidence step; update later steps to match the new facts. If the new outcome is independently acceptable, split it into another plan.
+5. When a step passes its check, write `completedAt`. When work advances, set `currentStepId` to the next step; a later step has no separate “未开始” value. Reopen a completed step only when later evidence invalidates its check, QA fails, or the user changes the accepted contract; clear its `completedAt`, record the reason, and update affected later steps.
+6. Before dispatching a newly selected step, PATCH the same plan with that `currentStepId`, update `currentStep`, `nextAction`, and `waitingFor`, then reread the Manager result. If the write or readback fails, do not dispatch. This is the claim boundary that prevents two tasks or turns from starting the same work.
+7. If the current step is no longer executable, revise it into a concrete clarification, approval, dependency, recovery, or evidence step; update later steps to match the new facts. If the new outcome is independently acceptable, split it into another plan.
 8. When guidance, approval feedback, QA failure, or new source evidence arrives, consume every unhandled item that affects the plan, update the remaining step path first, and only then continue the bound task. Preserve feedback and prior evidence as audit history instead of overwriting why the path changed.
 
 Borrow execution mechanics from specialized workflows without copying their external table columns. For a single change item, write the canonical workflow phase directly to `plan.status`; `currentStep`, `waitingFor`, approval metadata, and step IDs must not derive another displayed status.
@@ -85,31 +87,31 @@ Borrow execution mechanics from specialized workflows without copying their exte
 
 Use this state machine for a bug, requested modification, document change, UI change, configuration change, or other single item that needs investigation, owner approval, implementation, and acceptance:
 
-`调查中 → 信息不足 → 调查中`
+`roles.analysis → roles.informationNeeded → roles.analysis`
 
 `roles.analysis → roles.approval → roles.execution → roles.waitingPackage → roles.waitingQa → roles.completed`
 
-`待审批 --负责人要求修改--> 调查中`
+`待审批 --负责人要求修改--> 分析中`
 
-`待验收 --验收失败--> 调查中`
+`待验收 --验收失败--> 分析中`
 
-Investigation, information gathering, solution design, and approval preparation use the key referenced by `roles.analysis`. A complete submitted approval contract uses `roles.approval`. Implementation and development validation after approval or explicit direct authorization use `roles.execution`. Package and QA waits use their configured role keys. Manager returns the key separately from the configured label, description, palette, order, and views; WebGUI and Qt consume that presentation instead of interpreting the key.
+Investigation, solution design, and approval preparation use the key referenced by `roles.analysis`. When analysis is complete but a load-bearing fact is still missing, use `roles.informationNeeded`. A complete submitted approval contract uses `roles.approval`. Implementation and development validation after approval or explicit direct authorization use `roles.execution`. Package and QA waits use their configured role keys. Manager returns the key separately from the configured label, description, palette, order, and views; WebGUI and Qt consume that presentation instead of interpreting the key.
 
 When an external collaboration source explicitly marks the item as waiting for discussion, write the key referenced by `roles.discussion` and preserve the recoverable current step. Do not infer it from titles, detail, or `waitingFor`.
 
 Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptance. Use `audit-*`, `review-*`, `validate-*`, or another concrete non-QA prefix for developer checks, policy audits, prompt validation, compilation, and static verification. Step IDs help orchestration but never decide `plan.status`.
 
-#### 调查中
+#### 分析中
 
 - Set `plan.status` to the key referenced by `roles.analysis`.
 - Collect the relevant source, code, configuration, Prefab, runtime, screenshot, log, history, and owner evidence in the largest safe batch.
 - Before leaving investigation, write a reviewable conclusion containing: the observed problem and scope, evidence, root cause or decision reason, exact files/components/configuration to change, concrete changes, impact and out-of-scope items, and validation method.
 - Do not enter approval merely because investigation started, an Agent has a guess, or someone must answer a question. Approval is only for a complete proposed change.
 
-#### 信息不足
+#### 待补充信息
 
-- Keep `plan.status` at `roles.analysis`.
-- Enter `信息不足` when a load-bearing fact is missing and the Agent cannot produce a defensible cause plus concrete change proposal.
+- Set `plan.status` to the key referenced by `roles.informationNeeded`.
+- Enter `待补充信息` when analysis has finished but a load-bearing fact is missing and the Agent cannot produce a defensible cause plus concrete change proposal.
 - Set the current step ID to `information-needed-*`. In `detail`, list what is already known, why it is insufficient, and which conclusion cannot yet be made. In `waitingFor`, name the responsible person or source and the exact questions, screenshots, reproduction steps, configuration IDs, logs, decisions, or other evidence required.
 - Clear any stale `approvalRequest`. Information collection is not approval.
 - Continue every authorized independent investigation while waiting. When the requested information arrives, complete the information step and create or reopen an `investigate-*` step before drafting approval.
@@ -118,7 +120,7 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 
 - Set `plan.status` to `roles.approval` only when the current approval contract is complete and `responseStatus=pending`.
 - Enter `待审批` only after investigation produced a complete review package. The current `approve-*` step must carry a complete `approvalRequest`, and the plan must already state the cause, exact changes, affected files/components/configuration, impact, validation, rollback, and exclusions.
-- If any of those items is missing, remove the incomplete approval contract and return to `调查中` or `信息不足`. Do not leave a plan in pending approval with only a title, generic request, or unexplained waiting text.
+- If any of those items is missing, remove the incomplete approval contract and return to `roles.analysis` or `roles.informationNeeded`, based on whether independent analysis remains. Do not leave a plan in pending approval with only a title, generic request, or unexplained waiting text.
 - An approval request asks the responsible owner to approve or revise the written proposal. It must not ask the owner to perform the Agent's investigation or invent the change plan.
 - On approval, complete the approval decision step, set `plan.status` to `roles.execution`, select `implement-*`, and dispatch implementation in the same orchestration turn.
 - When the owner adds a correction, objection, or note, record that approval decision, preserve the feedback, and create `investigate-revision-*` as the single current step. Recheck the evidence and rewrite the proposal before requesting approval again; do not keep the rejected proposal in `待审批`.
@@ -132,7 +134,7 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 - On acceptance failure, preserve the failure evidence and return to `roles.analysis` with `investigate-revision-*`. Re-establish the cause and proposal before another implementation attempt.
 - Complete the plan only when the acceptance result passes and every required delivery step has evidence.
 
-When opening or reconciling an existing plan, repair state drift before dispatch: incomplete approval becomes `调查中` or `信息不足`; implemented work becomes the applicable `待验收` path; rejected approval or failed acceptance returns to investigation. Perform the repair and the next authorized action in the same orchestration turn.
+When opening or reconciling an existing plan, repair state drift before dispatch: incomplete approval becomes `roles.analysis` or `roles.informationNeeded`; implemented work becomes the applicable `待验收` path; rejected approval or failed acceptance returns to investigation. Perform the repair and the next authorized action in the same orchestration turn.
 
 ### 4. Resolve the unique task binding
 
@@ -177,7 +179,7 @@ After a task turn or completion-hook reminder:
 
 1. Read every unconsumed official result together with the artifacts or test evidence it cites.
 2. Compare the combined evidence with the current step and plan acceptance criteria.
-3. Mark a step `已完成` only when its own check passes. Then select the next step as the single `进行中` step.
+3. Set a step's `completedAt` only when its own check passes. Then point `currentStepId` to the next step.
 4. PATCH the plan once with real progress, output references, waiting state, next action, and the latest consumption checkpoint.
 5. Add or update the material stage attachments, or record why no useful attachment exists.
 6. Reread the returned plan and current task state. If the task is idle and the next step is authorized and actionable, dispatch its work package in the same orchestration turn. Do not wait for another reminder or user message merely because the previous step completed.
@@ -187,7 +189,7 @@ Completion reminders are deduplicated by `sessionId + turnId`, but they do not u
 
 ### 8. Handle waiting, feedback, and approval
 
-- Keep `plan.status` equal to the enabled key for the actual configured phase. Missing load-bearing data uses `roles.analysis` with `information-needed-*`; a submitted complete proposal uses `roles.approval`; implementation uses `roles.execution`; package and QA waits use their configured role keys.
+- Keep `plan.status` equal to the enabled key for the actual configured phase. Missing load-bearing data after analysis uses `roles.informationNeeded` with `information-needed-*`; ongoing investigation uses `roles.analysis`; a submitted complete proposal uses `roles.approval`; implementation uses `roles.execution`; package and QA waits use their configured role keys.
 - Do not put a PangHu plan into a wait-only state merely because Main Unity is open, importing, running another test, unavailable through MCP, or shared by another task. Remove that condition from `waitingFor` when independent implementation or verification remains. Dispatch the original bound task to continue in formal Main without stopping the Editor; prefer static resource contracts, direct serialization checks, non-Unity runners, and CLI validation. Leave only the specific runtime interaction for human or later Unity acceptance when it cannot run concurrently.
 - For PangHu plans whose business implementation is already authorized, treat routine Main/Release/Art synchronization and SVN submission inside the verified plan scope as an actionable delivery step, not a new approval gate. When source, direction, files, dependency closure, ownership, and conflict-free status are verified, remove stale sync-only `approvalRequest` / `waitingFor` text and dispatch the original bound task to update, merge, synchronize, submit, and read back. Stop only for an explicit read-only or no-submit instruction, unresolved ownership, semantic conflict, extra files, scope expansion, frozen-build changes, production, upload, publish, or external delivery.
 - A lifecycle audit correction is incomplete if it only rewrites `steps`, `currentStep`, or `nextAction`. When synchronization, submission, or conflict-free readback is still missing and the bound task is idle, write an executable delivery-closure step, clear evidence-request wording from `waitingFor`, and dispatch that original task in the same orchestration turn. Do not stop after correcting structured fields or ask the task to merely report what another actor should execute. “Do not expand business scope” excludes extra files and new semantics; it does not exclude synchronization, SVN submission, or readback already required by the approved plan.
@@ -203,7 +205,7 @@ Completion reminders are deduplicated by `sessionId + turnId`, but they do not u
 
 ### 9. Pause, resume, and close
 
-- Pause only after an explicit user, owner, or policy instruction. Keep the current `进行中` step and `currentStepId` as the recovery point, and stop task dispatches.
+- Pause only after an explicit user, owner, or policy instruction. Keep `currentStepId` as the recovery point, and stop task dispatches.
 - Resume by PATCHing the top-level status to the actual phase, normally `分析中` or `执行中`, rereading the recovery point, and continuing the original bound task.
 - Mark the plan `完成` only after every acceptance criterion has evidence. Keep failed validation in the same plan and task.
 - For bulk cleanup, migration, or synchronization, record a `completionCoverage` evidence block with `baselineTotal`, `processed`, `deleted`, `alreadyAbsent`, `retained`, `blocked`, and `remaining`. Before completion, verify `processed + remaining = baselineTotal` and `deleted + alreadyAbsent + retained + blocked = processed`; `remaining`, `retained`, and `blocked` must all be zero. A conflict-free SVN status, a commit revision, or a few exact paths only proves that level. A screenshot, later message, or temporary path list that narrows work must be recorded as `仅完成子范围`; keep the original plan active or split an independent subgoal. Without `baselineTotal`, report `目标清单待恢复`, not plan completion.

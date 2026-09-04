@@ -17,7 +17,6 @@ const plan = {
   steps: [{
     id: "implementation",
     title: "实现全文搜索",
-    status: "进行中",
     detail: "步骤详情也应该被搜索到",
     approvalRequest: {
       approver: "秋雨",

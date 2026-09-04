@@ -32,15 +32,17 @@ function cloneDefault(): PersonaPlanWorkflow {
   return structuredClone(loadDefaultPersonaPlanWorkflow());
 }
 
-test("default persona plan workflow defines the nine current statuses and legacy read aliases", () => {
+test("default persona plan workflow defines the ten current statuses and legacy read aliases", () => {
   const workflow = loadDefaultPersonaPlanWorkflow();
+  assert.equal(workflow.schemaVersion, 3);
   assert.equal(workflow.archiveAfterHours, 72);
   assert.deepEqual(workflow.statuses.map((status) => status.key), [
-    "分析中", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
+    "分析中", "待补充信息", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
   ]);
   assert.deepEqual(workflow.roles, {
     initial: "分析中",
     analysis: "分析中",
+    informationNeeded: "待补充信息",
     approval: "待审批",
     execution: "执行中",
     waitingPackage: "等待打包",
@@ -55,6 +57,7 @@ test("default persona plan workflow defines the nine current statuses and legacy
   assert.equal(resolvePersonaPlanStatus(workflow, "已归档")?.key, "关闭");
   assert.equal(resolvePersonaPlanStatus(workflow, "未开始")?.key, "暂停");
   assert.equal(planStatusKeyForRole(workflow, "approval"), "待审批");
+  assert.equal(planStatusKeyForRole(workflow, "informationNeeded"), "待补充信息");
   assert.equal(planStatusDefinition(workflow, "执行中")?.label, "执行中");
   assert.throws(() => requireEnabledPersonaPlanStatus(workflow, "进行中"), /Unsupported plan status key/);
 });
@@ -157,6 +160,45 @@ test("first materialization preserves unrelated persona settings and is idempote
   const second = ensurePersonaPlanWorkflow(roleDir);
   assert.equal(second.revision, first.revision);
   assert.equal(fs.readFileSync(configPath, "utf8"), firstBytes);
+});
+
+test("schema v1 workflows migrate once without restoring removed statuses later", (t) => {
+  const roleDir = roleFixture(t);
+  const configPath = path.join(roleDir, "personaConfig.json");
+  const current = cloneDefault();
+  const legacyWorkflow = {
+    ...current,
+    schemaVersion: 1,
+    statuses: current.statuses
+      .filter((status) => status.key !== current.roles.informationNeeded)
+      .map((status, order) => ({ ...status, order })),
+    roles: Object.fromEntries(
+      Object.entries(current.roles).filter(([role]) => role !== "informationNeeded")
+    )
+  };
+  fs.writeFileSync(configPath, `${JSON.stringify({ custom: { keep: true }, planWorkflow: legacyWorkflow }, null, 2)}\n`, "utf8");
+
+  const migrated = ensurePersonaPlanWorkflow(roleDir);
+  assert.equal(migrated.workflow.schemaVersion, 3);
+  assert.equal(migrated.workflow.roles.informationNeeded, "待补充信息");
+  assert.deepEqual(migrated.workflow.statuses.map((status) => status.key), [
+    "分析中", "待补充信息", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
+  ]);
+  const firstBytes = fs.readFileSync(configPath, "utf8");
+  assert.equal((JSON.parse(firstBytes) as Record<string, unknown>).custom != null, true);
+  assert.equal(ensurePersonaPlanWorkflow(roleDir).revision, migrated.revision);
+  assert.equal(fs.readFileSync(configPath, "utf8"), firstBytes);
+
+  const withoutInformationNeeded = beginPersonaPlanStatusRetirement(
+    migrated.workflow,
+    migrated.workflow.roles.informationNeeded,
+    migrated.workflow.roles.analysis
+  );
+  const retired = completePersonaPlanStatusRetirement(withoutInformationNeeded, "待补充信息");
+  writePersonaPlanWorkflow(roleDir, retired, { expectedRevision: migrated.revision });
+  const afterRemoval = ensurePersonaPlanWorkflow(roleDir);
+  assert.equal(afterRemoval.workflow.roles.informationNeeded, "分析中");
+  assert.equal(planStatusDefinition(afterRemoval.workflow, "待补充信息", { allowRetired: true })?.state, "retired");
 });
 
 test("atomic workflow writes use revision fencing and preserve the rest of personaConfig", (t) => {

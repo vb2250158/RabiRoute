@@ -299,7 +299,7 @@ test("QA feedback transition rejects a stale record revision and preserves the c
   updateStoredPlan(roleDir, planId, {
     status: "完成",
     currentStepId: null,
-    steps: initialPlan.steps.map((step) => ({ ...step, status: "已完成" }))
+    steps: initialPlan.steps.map((step) => ({ ...step, completedAt: "2026-09-03T00:00:00.000Z" }))
   }, planRevision(roleDir, initialPlan), {
     requestId: "prepare-completed-qa-step",
     revision: storageMutationRevision("prepare-completed-qa-step")

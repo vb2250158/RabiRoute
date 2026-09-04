@@ -104,6 +104,7 @@ public static class HostEntry
                 argument.Equals("--restart", StringComparison.OrdinalIgnoreCase) ||
                 argument.Equals("--status", StringComparison.OrdinalIgnoreCase) ||
                 argument.Equals("--activate", StringComparison.OrdinalIgnoreCase))) return "invalid";
+        if (args.Length > 0) return "invalid";
         return null;
     }
 

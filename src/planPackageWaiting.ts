@@ -1,5 +1,5 @@
 import type { PlanItem, PlanStep } from "./roleKnowledge.js";
-import { currentPlanStep } from "./roleKnowledge.js";
+import { currentPlanStep, planStepIsCompleted } from "./roleKnowledge.js";
 import {
   planStatusDefinition,
   planStatusKeyForRole,
@@ -32,7 +32,7 @@ function text(value: unknown): string {
 
 function priorStepsAreComplete(plan: PlanItem, step: PlanStep): boolean {
   const currentIndex = plan.steps.findIndex((item) => item.id === step.id);
-  return currentIndex >= 0 && plan.steps.slice(0, currentIndex).every((item) => item.status === "已完成");
+  return currentIndex >= 0 && plan.steps.slice(0, currentIndex).every(planStepIsCompleted);
 }
 
 function packageWaitingText(plan: PlanItem, step: PlanStep): string[] {
@@ -50,7 +50,7 @@ function completedDeliveryEvidence(plan: PlanItem, step: PlanStep): string {
     plan.nextAction,
     [step.title, step.detail, step.waitingFor].map(text).filter(Boolean).join(" "),
     ...plan.steps
-      .filter((item) => item.id !== step.id && item.status === "已完成")
+      .filter((item) => item.id !== step.id && planStepIsCompleted(item))
       .map((item) => [item.title, item.detail, item.waitingFor].map(text).filter(Boolean).join(" "))
   ].map(text).filter(Boolean).join("\n");
 }
@@ -104,7 +104,7 @@ export function planHasPackageLifecycle(plan: PlanItem): boolean {
 
 export function planIsStructuredQaPhase(plan: PlanItem): boolean {
   const step = currentPlanStep(plan);
-  return Boolean(step && step.status === "进行中" && isStructuredQaStep(plan, step));
+  return Boolean(step && isStructuredQaStep(plan, step));
 }
 
 export function planHasTargetPackageInclusionEvidence(plan: PlanItem): boolean {
@@ -116,7 +116,7 @@ export function planHasTargetPackageInclusionEvidence(plan: PlanItem): boolean {
         .join("\n")
     : "";
   return packageLifecycleSteps(plan)
-    .filter((step) => step.status === "已完成")
+    .filter(planStepIsCompleted)
     .some((step) => {
       const packageEvidence = [step.title, step.detail, step.waitingFor].map(text).filter(Boolean).join("\n");
       const evidence = [packageEvidence, currentQaEvidence].filter(Boolean).join("\n");
@@ -137,7 +137,7 @@ export function planIsWaitingForQaAcceptance(plan: PlanItem, workflow: PersonaPl
 function legacyPlanIsWaitingForPackage(plan: PlanItem): boolean {
   if (String(plan.status) !== "进行中") return false;
   const step = currentPlanStep(plan);
-  if (!step || step.status !== "进行中") return false;
+  if (!step) return false;
   if (planIsStructuredQaPhase(plan) && planHasPackageLifecycle(plan)) {
     return priorStepsAreComplete(plan, step)
       && hasCompletedDeliverySync(plan, step)

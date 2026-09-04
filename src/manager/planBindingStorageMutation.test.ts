@@ -19,13 +19,15 @@ function planWithBinding(binding: PlanTaskBinding): PlanItem {
     title: "Plan one",
     focus: "Exercise exact CAS",
     status: "执行中",
+    archiveStatus: "未归档",
+    attachments: [],
     currentStepId: "step-one",
-    steps: [{ id: "step-one", title: "Step one", status: "进行中" }],
+    steps: [{ id: "step-one", title: "Step one" }],
     keywords: ["cas"],
     taskBinding: binding,
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt: "2026-09-01T00:00:00.000Z"
-  } as PlanItem;
+  };
 }
 
 function storageHarness(initial: PlanItem) {

@@ -763,6 +763,7 @@ When the current Route enables **Require the RabiAgent message delivery API**, C
 
 ```text
 `分析中`  analyzing
+`待补充信息` awaiting information
 `待审批`  awaiting approval
 `执行中`  executing
 `等待打包` awaiting package
@@ -806,9 +807,9 @@ Status mutations require both `If-Match` and `Idempotency-Key`. Keys are immutab
     { "name": "acceptance-checklist.pdf", "path": "C:/Path/To/acceptance-checklist.pdf" }
   ],
   "steps": [
-    { "id": "inspect-current", "title": "Inspect the existing plan API", "status": "已完成", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "verify-schema", "title": "Verify the structured step contract", "status": "进行中", "startedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "update-guides", "title": "Update both language guides", "status": "未开始" }
+    { "id": "inspect-current", "title": "Inspect the existing plan API", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "verify-schema", "title": "Verify the structured step contract", "startedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "update-guides", "title": "Update both language guides" }
   ],
   "keywords": ["routing", "configuration", "documentation"],
   "source": {
@@ -828,9 +829,9 @@ Status mutations require both `If-Match` and `Idempotency-Key`. Keys are immutab
 }
 ```
 
-New plans must provide ordered `steps`. `plan.status` accepts only an enabled key from the persona's current status catalog. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Steps keep their own `未开始 / 进行中 / 已完成` progress values; `workPhase` and `discussionState` are retired. Manager returns the key with configured label, description, palette, order, and views; WebGUI and the tray consume those fields.
+New plans must provide ordered `steps`. `plan.status` accepts only an enabled key from the persona's current status catalog. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Steps store no separate status; `currentStepId` identifies the current step and `completedAt` records completion. Manager returns the key with configured label, description, palette, order, and views; WebGUI and the tray consume those fields.
 
-Approval preparation, a complete pending approval, and approved execution use the keys referenced by `planWorkflow.roles.analysis`, `roles.approval`, and `roles.execution`. Package, QA, discussion, and pause use their configured role keys and are never derived from step text or waiting details.
+Ongoing analysis, analysis that has established missing information, a complete pending approval, and approved execution use the keys referenced by `planWorkflow.roles.analysis`, `roles.informationNeeded`, `roles.approval`, and `roles.execution`. Package, QA, discussion, and pause use their configured role keys and are never derived from step text or waiting details.
 
 Only plans that change project content, such as code, prefabs, assets, or configuration, should follow `implementation/development validation/applicable sync and commit → Awaiting package → Awaiting QA → complete on QA pass; return to implementation on failure`. QA sending and its `sentMessageId` are actions and evidence inside the purple QA stage: missing receipt means `send_qa_request`, while a receipt with only the verdict outstanding means `wait_for_qa_result`. Investigation, design review, operations, information gathering, external dependencies, and control-plane maintenance follow their real steps. Agents and batch jobs must not manufacture package or QA steps for those plans, and Manager does not infer the lifecycle from a title, description, or `kind`.
 
@@ -865,7 +866,7 @@ RibiWebGUI uses this endpoint for whole-plan guidance when `presentation.accepts
 {
   "feedbackId": "webgui-guidance-12345",
   "gatewayId": "route-id",
-  "text": "Narrow the overall scope first, then adjust later not-started steps from the result.",
+  "text": "Narrow the overall scope first, then adjust later steps from the result.",
   "kind": "guidance",
   "author": "user",
   "source": "webgui",
@@ -900,7 +901,7 @@ When feedback targets the current structured `qa-* / verify-*` step, Manager tre
 
 With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`. Guidance and approval feedback reuse the same exact `taskBinding` delivery path. A complete binding uses `/api/agent/threads` and Desktop IPC to the original business task; only an incomplete binding sends the full feedback to the persona Agent. An unloaded owner remains `pending` under bounded retries, and only an accepted `start/steer` becomes `delivered`. The event does not enter the role-panel timeline or unified conversation ledger, and terminal state is announced as `plan_feedback_changed`.
 
-Agent handling notes for plan guidance use `kind=guidance_response`, `author=agent`, `source=agent`, and `notifyAgent=false`, associated only with `planId`. The Agent first reads the whole plan, updates its direction and any affected not-started steps, then writes the handling note without `stepId`. Approval handling continues to use `approval_response` under `planId / stepId`. Both are stored as `record_only`; feedback itself does not advance the plan.
+Agent handling notes for plan guidance use `kind=guidance_response`, `author=agent`, `source=agent`, and `notifyAgent=false`, associated only with `planId`. The Agent first reads the whole plan, updates its direction and any affected later steps, then writes the handling note without `stepId`. Approval handling continues to use `approval_response` under `planId / stepId`. Both are stored as `record_only`; feedback itself does not advance the plan.
 
 The shared plan API hints in every AgentPacket include both guidance and approval feedback contracts plus the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface.
 

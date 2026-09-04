@@ -117,29 +117,31 @@ export async function handleHookInput(input, options = {}) {
     if (eventName === "Stop") {
       const completion = data?.planTaskCompletion;
       const progress = data?.pangHuProgressNotification;
+      const projectFileChangeReminder = data?.projectFileChangeReminder;
       const agentRequestStop = data?.agentRequestStop;
+      const messages = [];
       if (agentRequestStop?.status === "failed") {
-        return {
-          systemMessage: `Rabi Agent request Stop check failed: ${agentRequestStop.error || agentRequestStop.reason || "unknown error"}`
-        };
+        messages.push(`Rabi Agent request Stop check failed: ${agentRequestStop.error || agentRequestStop.reason || "unknown error"}`);
       }
       if (progress?.status === "failed") {
-        return {
-          systemMessage: `PangHu 工作群进度同步未取得完整回执，当前任务保持进行中：${progress.error || progress.reason || "unknown error"}`
-        };
+        messages.push(`PangHu 工作群进度同步未取得完整回执，当前任务保持进行中：${progress.error || progress.reason || "unknown error"}`);
+      }
+      if (projectFileChangeReminder?.status === "failed") {
+        messages.push(`Rabi 项目文件改动后的计划检查提醒未完成：${projectFileChangeReminder.error || projectFileChangeReminder.reason || "unknown error"}`);
+      }
+      if (projectFileChangeReminder?.status === "delivered") {
+        messages.push("本轮已修改项目文件。请检查绑定计划的 status、currentStep、steps、证据和附件是否需要按实际进展更新；RabiRoute 没有自动修改计划。");
       }
       if (completion?.status === "failed") {
-        return {
-          systemMessage: `Rabi plan-task completion reminder failed: ${completion.error || completion.reason || "unknown error"}`
-        };
+        messages.push(`Rabi plan-task completion reminder failed: ${completion.error || completion.reason || "unknown error"}`);
       }
-      return null;
+      return messages.length > 0 ? { systemMessage: messages.join("\n") } : null;
     }
     return hookOutput(eventName, String(data?.additionalContext || ""));
   } catch (error) {
     if (eventName === "Stop") {
       const message = error instanceof Error ? error.message : String(error);
-      return { systemMessage: `Rabi plan-task completion reminder was not delivered: ${message}` };
+      return { systemMessage: `Rabi 计划完成提醒或项目文件改动检查提醒未送达：${message}` };
     }
     if (!shouldExposeManagerFailure(input)) return null;
     const message = error instanceof Error ? error.message : String(error);

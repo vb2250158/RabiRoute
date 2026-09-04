@@ -57,10 +57,11 @@ This data resolves participants only. It must not turn platform privileges, a te
 
 ## Plans
 
-`plan.status` stores only an enabled status `key` from the owning persona's `personaConfig.json.planWorkflow.statuses`. The same persona configuration owns labels, descriptions, colors, order, views, step rules, approval rules, completion behavior, and archive eligibility; code, WebGUI, and the tray keep no second status enum. The default template contains these nine statuses, with keys independent from display labels:
+`plan.status` stores only an enabled status `key` from the owning persona's `personaConfig.json.planWorkflow.statuses`. The same persona configuration owns labels, descriptions, colors, order, views, step rules, approval rules, completion behavior, and archive eligibility; code, WebGUI, and the tray keep no second status enum. The default template contains these ten statuses, with keys independent from display labels:
 
 ```text
 `分析中`  analyzing
+`待补充信息` awaiting information
 `待审批`  awaiting approval
 `执行中`  executing
 `等待打包` awaiting package
@@ -71,7 +72,9 @@ This data resolves participants only. It must not turn platform privileges, a te
 `关闭`    closed
 ```
 
-Business code resolves lifecycle meanings through `planWorkflow.roles`. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Only a status configured with `terminal=true` and `archiveEligible=true` is archived after `planWorkflow.archiveAfterHours`, without changing its key. Archived plans do not participate in keyword recall. Manager returns the key with its configured label, description, palette, order, and views; clients never interpret the key or derive another status from step text.
+Business code resolves lifecycle meanings through `planWorkflow.roles`. `roles.informationNeeded` is used after analysis establishes that the goal, scope, acceptance criteria, or implementation evidence is still insufficient; when the missing information arrives, the plan returns to `roles.analysis`. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Only a status configured with `terminal=true` and `archiveEligible=true` is archived after `planWorkflow.archiveAfterHours`, without changing its key. Archived plans do not participate in keyword recall. Manager returns the key with its configured label, description, palette, order, and views; clients never interpret the key or derive another status from step text.
+
+`planWorkflow.schemaVersion=3` removes the step status field. The first read of a v1 or v2 persona configuration preserves custom statuses and their relative order; v1 also inserts the default information-needed definition after analysis, then writes v3. Once migrated, a status removed through the Agent status API is not restored.
 
 Read the status catalog with `GET /api/roles/:roleId/plan-statuses`. An Agent can add a status with `POST`, change presentation or behavior with `PATCH /:statusKey`, and remove one with `DELETE /:statusKey`; writes require both `If-Match` and `Idempotency-Key`. Keys are immutable. Removal requires `replacementKey`: Manager first migrates unarchived plans still using the old key, then retains the old definition as `retired` so archived plans and append-only history remain readable. Physical deletion is allowed only after historical references are gone.
 
@@ -107,14 +110,12 @@ A plan describes one focused objective. Common fields:
     {
       "id": "inspect-current",
       "title": "Inspect the current model and UI",
-      "status": "已完成",
       "startedAt": "2026-07-16T00:00:00.000Z",
       "completedAt": "2026-07-16T00:10:00.000Z"
     },
     {
       "id": "verify-schema",
       "title": "Verify the structured step contract",
-      "status": "进行中",
       "startedAt": "2026-07-16T00:10:00.000Z",
       "approvalRequest": {
         "approver": "Project owner",
@@ -138,7 +139,7 @@ A plan describes one focused objective. Common fields:
         "responseStatus": "pending"
       }
     },
-    { "id": "update-readers", "title": "Update APIs, readers, and docs", "status": "未开始" }
+    { "id": "update-readers", "title": "Update APIs, readers, and docs" }
   ],
   "project": {
     "name": "RabiRoute",
@@ -171,7 +172,7 @@ A plan describes one focused objective. Common fields:
 }
 ```
 
-`steps` is the ordered execution path and keeps its own `未开始 / 进行中 / 已完成` progress values. `currentStepId` points to the single in-progress step. Step progress is not a second plan status: `workPhase` and `discussionState` are retired, while `detail`, `waitingFor`, `approvalRequest`, and step IDs provide evidence only. The actual plan phase is always written to `plan.status`. Manager still maintains step `startedAt` and `completedAt` timestamps.
+`steps` is the ordered execution path and stores no separate status. `currentStepId` points to the current step, while `completedAt` records a finished step; later steps carry no state field. The actual plan phase is stored only in `plan.status`, and its definition comes from `personaConfig.json.planWorkflow.statuses`. `detail`, `waitingFor`, `approvalRequest`, and step IDs provide execution evidence. Manager maintains step `startedAt` and `completedAt` timestamps.
 
 An explicit discussion wait writes the key referenced by `planWorkflow.roles.discussion`. An ordinary pause uses `roles.paused`; resumption chooses the key referenced by the real next role, normally analysis or execution.
 
@@ -181,7 +182,7 @@ After runtime data is copied as a unit or the installation root changes, an olde
 
 WebGUI never reads the stored local path directly. It requests files through `GET /api/roles/:roleId/plans/:planId/attachments/:attachmentId`. PNG, JPEG, WebP, and GIF images; MP4/M4V, WebM, Ogg Video, and MOV/QuickTime videos; and Markdown files all render in compact, fixed-width 16:9 preview cards that shrink only when their container is narrower. A Markdown card streams at most the first 12 KiB of source, turns it into a plain-text excerpt capped at 180 characters, and clamps the visible lines without executing HTML, links, or images; clicking it opens the complete document dialog. Images open in an in-page large-image preview, while videos open in an in-page player with controls. Video responses support byte ranges; actual playback codecs still depend on the current browser. Markdown files up to 2 MiB render GFM headings, lists, tables, blockquotes, and code in-page; raw HTML, dangerous or relative links, and remote image loading are disabled, while the dialog retains a source-download action. Other files show name, type, and size and open or download through the attachment response. The read boundary rechecks that the real path remains inside that plan's managed directory, failing closed on traversal or symlink escape.
 
-A current step that requires approval should include a complete `approvalRequest`. `approver`, `request`, `recommendation`, `alternatives`, and `reason` state the owner, decision, preferred and fallback choices, and rationale. `files` lists exact paths, `create/modify/delete/move`, and the concrete edit; `commands` contains complete commands, purpose, and expected effects; `changes` identifies configuration, database, cloud, or external-system targets. `validation`, `rollback`, and `outOfScope` define acceptance, recovery, and explicit exclusions. `requestedAt`, `sourceMessageId / feedbackId`, and `responseStatus` record request provenance and receipt state. At least one of `files / commands / changes` must be concrete. Missing fields produce `presentation.approval.state=incomplete` and `enabled=false`, while the plan keeps the key referenced by `planWorkflow.roles.analysis`. Once the contract is complete with `responseStatus=pending`, the Agent stores the approval-role key; Manager returns `ready/enabled=true` without rewriting the status.
+A current step that requires approval should include a complete `approvalRequest`. `approver`, `request`, `recommendation`, `alternatives`, and `reason` state the owner, decision, preferred and fallback choices, and rationale. `files` lists exact paths, `create/modify/delete/move`, and the concrete edit; `commands` contains complete commands, purpose, and expected effects; `changes` identifies configuration, database, cloud, or external-system targets. `validation`, `rollback`, and `outOfScope` define acceptance, recovery, and explicit exclusions. `requestedAt`, `sourceMessageId / feedbackId`, and `responseStatus` record request provenance and receipt state. At least one of `files / commands / changes` must be concrete. Missing fields produce `presentation.approval.state=incomplete` and `enabled=false`. The plan uses `roles.analysis` while independent analysis remains possible, or `roles.informationNeeded` after analysis confirms that a load-bearing fact is missing. Once the contract is complete with `responseStatus=pending`, the Agent stores the approval-role key; Manager returns `ready/enabled=true` without rewriting the status.
 
 Manager normalizes legacy plans at the read boundary: `未开始 → 暂停`; `进行中 → 待审批 / 执行中 / 分析中` according to a complete pending approval contract or the retired execution marker; `已完成 → 完成`; and `已归档 → status=关闭, archiveStatus=已归档`. Retired `workPhase`, `discussionState`, and handwritten `isBlocked` participate only in compatibility reads and are removed by the next canonical POST/PATCH. The system never invents an approver, provenance, recommendation, alternatives, or request time.
 
@@ -438,7 +439,7 @@ RibiWebGUI provides a collapsed **Work history** section in every plan detail. I
 
 RibiWebGUI submits plan guidance with `kind=guidance`, `author=user`, `source=webgui`, and `notifyAgent=true`, without `stepId`; Manager accepts it only for running plans that are not currently in an approval step. WebGUI and tray approval submissions continue to use `kind=approval_suggestion`, `author=user`, `source=webgui|tray`, and `notifyAgent=true`. Plan guidance and approval use the same feedback composer, so both support `@` references to plan attachments, keyboard submission, file selection, clipboard paste, attachment previews, and removal. Future composer capabilities must be added through this shared component so both inputs receive them together. Newly uploaded content is stored under the same plan directory's private `feedback-attachments/<feedbackId>/` directory; JSONL records never embed the binary content. Both feedback types are durably recorded before returning `deliveryStatus=pending`. A complete business binding goes through `/api/agent/threads` and Desktop IPC to the original task; with Plan Secretary enabled, the responsible `secretaryBinding` simultaneously receives the control notice and the Primary Persona is not notified for every automatic delivery. An incomplete business binding sends the full feedback to the Secretary first, falling back to the Primary Persona only when no usable Secretary is enabled. Retry, terminal status, and `plan_feedback_changed` semantics remain shared.
 
-After receiving `guidance`, the Agent first reads the current plan and feedback, treats the guidance as whole-plan direction, and explicitly `PATCH`es the plan plus any not-started steps affected by changed scope, priority, method, or path. It then writes `kind=guidance_response`, `author=agent`, and `notifyAgent=false` under the same `planId` without `stepId`. Approval feedback still updates the affected plan/step and approval receipt before writing `approval_response` under the same `planId / stepId`. Neither record advances a plan automatically.
+After receiving `guidance`, the Agent first reads the current plan and feedback, treats the guidance as whole-plan direction, and explicitly `PATCH`es the plan plus any later steps affected by changed scope, priority, method, or path. It then writes `kind=guidance_response`, `author=agent`, and `notifyAgent=false` under the same `planId` without `stepId`. Approval feedback still updates the affected plan/step and approval receipt before writing `approval_response` under the same `planId / stepId`. Neither record advances a plan automatically.
 
 While background delivery is pending, WebGUI keeps the next draft editable but prevents another submission until the prior feedback reaches a terminal state. Plan guidance appears only when `presentation.acceptsGuidance=true` outside approval; approval plans continue to expose only the approval contract and approval input inside the owning step.
 

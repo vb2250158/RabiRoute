@@ -232,7 +232,7 @@ test("plan feedback replies are written to the plan audit record and published t
 
   const guidanceResult = await handleAgentReply({
     deliveryId: "delivery-response-guidance-1",
-    text: "已按计划引导调整后续未开始步骤。",
+    text: "已按计划引导调整后续步骤。",
     replyContext: {
       runtimeRouteId: "main",
       routeProfileId: "main",

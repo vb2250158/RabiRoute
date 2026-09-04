@@ -67,7 +67,6 @@ const packageRoot = resolveRuntimeLayout(
 /** Stable key from the owning persona's personaConfig.planWorkflow.statuses. */
 export type PlanStatus = string;
 export type PlanArchiveStatus = "未归档" | "已归档";
-export type PlanStepStatus = "未开始" | "进行中" | "已完成";
 
 export type PlanApprovalFileAction = "create" | "modify" | "delete" | "move";
 
@@ -120,7 +119,6 @@ export type PlanApprovalGate = {
 export type PlanStep = {
   id: string;
   title: string;
-  status: PlanStepStatus;
   detail?: string;
   waitingFor?: string;
   /** Compatibility projection. Manager derives this from a complete pending approvalRequest. */
@@ -968,11 +966,13 @@ function planTextTotal(plan: PlanItem): number {
 }
 
 export function currentPlanStep(plan: PlanItem): PlanStep | undefined {
-  if (plan.currentStepId) {
-    const explicit = plan.steps.find((step) => step.id === plan.currentStepId);
-    if (explicit) return explicit;
-  }
-  return plan.steps.find((step) => step.status === "进行中");
+  return plan.currentStepId
+    ? plan.steps.find((step) => step.id === plan.currentStepId)
+    : undefined;
+}
+
+export function planStepIsCompleted(step: PlanStep): boolean {
+  return Boolean(step.completedAt);
 }
 
 function planHasApprovalIntent(plan: PlanItem): boolean {
@@ -1128,34 +1128,20 @@ function validatePlanSteps(
     if (step.isBlocked === true && !step.blockedBy?.trim()) {
       throw new Error("A blocked plan step must provide blockedBy.");
     }
-    if (step.isBlocked === true && step.status !== "进行中") {
-      throw new Error("Only the in-progress plan step can be blocked.");
+    if (step.isBlocked === true && step.id !== plan.currentStepId) {
+      throw new Error("Only the current plan step can be blocked.");
     }
     if (step.approvalRequest) validateApprovalRequest(step.approvalRequest, limits);
   }
 
-  const currentSteps = plan.steps.filter((step) => step.status === "进行中");
-  if (currentSteps.length > 1) throw new Error("Plan can have only one in-progress step.");
   if (plan.currentStepId && !ids.has(plan.currentStepId)) {
     throw new Error(`Plan currentStepId does not match a step: ${plan.currentStepId}`);
   }
   if (plan.steps.length > 0 && status.currentStep === "required") {
     if (!plan.currentStepId) throw new Error("An active plan must provide currentStepId.");
-    if (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId) {
-      throw new Error("Plan currentStepId must identify the only step whose status is 进行中.");
-    }
-  }
-  if (status.currentStep === "optional" && plan.currentStepId
-    && (currentSteps.length !== 1 || currentSteps[0]?.id !== plan.currentStepId)) {
-    throw new Error("A paused plan currentStepId must identify its only in-progress resume step.");
   }
   if (status.currentStep === "forbidden" && plan.currentStepId) {
     throw new Error(`Plan status ${status.key} forbids currentStepId.`);
-  }
-  if (plan.steps.length > 0 && status.requiresCompletedSteps) {
-    if (plan.steps.some((step) => step.status !== "已完成")) {
-      throw new Error("Every plan step must be completed before the plan can be completed or archived.");
-    }
   }
   if (plan.archiveStatus === "已归档" && !status.archiveEligible) {
     throw new Error(`Plan status ${status.key} is not eligible for archival.`);
@@ -1291,35 +1277,44 @@ function normalizeApprovalRequest(value: unknown): PlanApprovalRequest | undefin
   };
 }
 
-function normalizePlanSteps(value: unknown): PlanStep[] {
+function normalizePlanSteps(value: unknown, legacyCompletedAt: string): PlanStep[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap<PlanStep>((rawStep, index) => {
     if (typeof rawStep === "string") {
       const title = rawStep.trim();
-      return title ? [{ id: `step-${index + 1}`, title, status: "未开始" }] : [];
+      return title ? [{ id: `step-${index + 1}`, title }] : [];
     }
     const raw = recordValue(rawStep);
     const title = String(raw.title || raw.name || raw.label || "").trim();
     if (!title) return [];
     const rawStatus = String(raw.status || "").trim();
-    const status: PlanStepStatus = rawStatus === "已完成" || raw.completed === true
-      ? "已完成"
-      : rawStatus === "进行中" || raw.current === true
-        ? "进行中"
-        : "未开始";
+    const completedAt = typeof raw.completedAt === "string" && raw.completedAt
+      ? raw.completedAt
+      : rawStatus === "已完成" || raw.completed === true
+        ? legacyCompletedAt
+        : undefined;
     return [{
       id: String(raw.id || raw.stepId || `step-${index + 1}`).trim(),
       title,
-      status,
       detail: typeof raw.detail === "string" ? raw.detail : typeof raw.description === "string" ? raw.description : undefined,
       waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
       isBlocked: typeof raw.isBlocked === "boolean" ? raw.isBlocked : undefined,
       blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
-      startedAt: typeof raw.startedAt === "string" ? raw.startedAt : undefined,
-      completedAt: typeof raw.completedAt === "string" ? raw.completedAt : undefined,
+      startedAt: typeof raw.startedAt === "string" ? raw.startedAt : completedAt,
+      completedAt,
       approvalRequest: normalizeApprovalRequest(raw.approvalRequest)
     }];
   });
+}
+
+function planStepIdsWithClearedTime(value: unknown, field: "startedAt" | "completedAt"): Set<string> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.flatMap((rawStep, index) => {
+    const raw = recordValue(rawStep);
+    if (!Object.prototype.hasOwnProperty.call(raw, field) || raw[field]) return [];
+    const id = String(raw.id || raw.stepId || `step-${index + 1}`).trim();
+    return id ? [id] : [];
+  }));
 }
 
 export function planIsBlocked(plan: PlanItem): boolean {
@@ -1354,24 +1349,29 @@ function withDerivedPlanBlockingState(plan: PlanItem): PlanItem {
   };
 }
 
-function recordPlanStepTimes(steps: PlanStep[], previousSteps: PlanStep[], recordedAt: string): PlanStep[] {
+function recordPlanStepTimes(
+  steps: PlanStep[],
+  previousSteps: PlanStep[],
+  currentStepId: string | undefined,
+  recordedAt: string,
+  clearedStartedAt = new Set<string>(),
+  clearedCompletedAt = new Set<string>()
+): PlanStep[] {
   const previousById = new Map(previousSteps.map((step) => [step.id, step]));
   return steps.map((step) => {
     const previous = previousById.get(step.id);
-    if (step.status === "未开始") {
-      return { ...step, startedAt: undefined, completedAt: undefined };
-    }
-    if (step.status === "进行中") {
+    if (step.id === currentStepId) {
       return {
         ...step,
-        startedAt: step.startedAt || previous?.startedAt || recordedAt,
+        startedAt: step.startedAt || (clearedStartedAt.has(step.id) ? undefined : previous?.startedAt) || recordedAt,
         completedAt: undefined
       };
     }
-    const completedAt = step.completedAt || previous?.completedAt || recordedAt;
+    const completedAt = step.completedAt || (clearedCompletedAt.has(step.id) ? undefined : previous?.completedAt);
+    if (!completedAt) return { ...step, startedAt: undefined, completedAt: undefined };
     return {
       ...step,
-      startedAt: step.startedAt || previous?.startedAt || completedAt,
+      startedAt: step.startedAt || (clearedStartedAt.has(step.id) ? undefined : previous?.startedAt) || completedAt,
       completedAt
     };
   });
@@ -1466,6 +1466,16 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
   if (!title) return null;
   const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt ? raw.updatedAt : nowIso();
   const status = normalizedPlanStatus(raw);
+  const steps = normalizePlanSteps(raw.steps, updatedAt);
+  const explicitCurrentStepId = typeof raw.currentStepId === "string" ? raw.currentStepId.trim() : "";
+  const legacyCurrentStepId = Array.isArray(raw.steps)
+    ? raw.steps.flatMap((rawStep, index) => {
+        const value = recordValue(rawStep);
+        const isCurrent = value.status === "进行中" || value.current === true;
+        return isCurrent ? [String(value.id || value.stepId || `step-${index + 1}`).trim()] : [];
+      })[0]
+    : undefined;
+  const currentStepId = explicitCurrentStepId || legacyCurrentStepId;
   const archiveStatus: PlanArchiveStatus = raw.archiveStatus === "已归档"
     ? "已归档"
     : raw.archiveStatus === "未归档"
@@ -1488,13 +1498,13 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
     priority: typeof raw.priority === "string" ? raw.priority : undefined,
     kind: typeof raw.kind === "string" ? raw.kind : undefined,
     currentStep: typeof raw.currentStep === "string" ? raw.currentStep : undefined,
-    currentStepId: typeof raw.currentStepId === "string" ? raw.currentStepId : undefined,
+    currentStepId: currentStepId || undefined,
     nextAction: typeof raw.nextAction === "string" ? raw.nextAction : undefined,
     waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : undefined,
     isBlocked: typeof raw.isBlocked === "boolean" ? raw.isBlocked : undefined,
     blockedBy: typeof raw.blockedBy === "string" ? raw.blockedBy : undefined,
     attachments: normalizeStoredPlanAttachments(raw.attachments),
-    steps: normalizePlanSteps(raw.steps),
+    steps,
     project: raw.project && typeof raw.project === "object" && !Array.isArray(raw.project) ? raw.project as PlanItem["project"] : undefined,
     source: raw.source && typeof raw.source === "object" && !Array.isArray(raw.source) ? raw.source as KnowledgeSource : undefined,
     secretaryBinding: normalizePlanSecretaryBinding(raw.secretaryBinding),
@@ -2722,6 +2732,30 @@ export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): read
   return plans;
 }
 
+/**
+ * Publishes one committed plan into an already complete parent-process catalog.
+ * A cold catalog stays cold: one committed item must never masquerade as a full
+ * role catalog.
+ */
+export function publishCommittedRolePlan(roleDir: string, rawPlan: unknown): Readonly<PlanItem> {
+  const [plan] = immutablePlanCatalog(normalizedPublishedPlans([rawPlan]));
+  const cacheKey = planListCacheKey(roleDir);
+  const cached = planListCache.get(cacheKey);
+  if (!cached) return plan;
+  const replaced = cached.plans.some(item => item.id === plan.id);
+  const plans = immutablePlanCatalog(uniquePlans(replaced
+    ? cached.plans.map(item => item.id === plan.id ? plan : item)
+    : [...cached.plans, plan]));
+  planListCache.set(cacheKey, {
+    signature: JSON.stringify(plans.map(item => [item.id, item.status, item.updatedAt])),
+    validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS,
+    plans
+  });
+  // The child commit does not publish parent-process file stat metadata.
+  planFileCache.delete(cacheKey);
+  return plan;
+}
+
 /** Publishes a complete, rebuildable RoleKnowledge read projection. */
 export function publishRoleKnowledgeCatalogSnapshot(
   roleDir: string,
@@ -3005,7 +3039,16 @@ export type PersonaPlanStatusStartupMigrationResult = {
   failures: Array<{ planId: string; error: string }>;
 };
 
-/** Startup-only canonicalization from configured legacy aliases to status keys. */
+function hasLegacyPlanStepState(value: unknown): boolean {
+  return Array.isArray(value) && value.some((step) => {
+    const raw = recordValue(step);
+    return Object.prototype.hasOwnProperty.call(raw, "status")
+      || Object.prototype.hasOwnProperty.call(raw, "completed")
+      || Object.prototype.hasOwnProperty.call(raw, "current");
+  });
+}
+
+/** Startup-only canonicalization of plan status keys and legacy step state fields. */
 export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPlanStatusStartupMigrationResult {
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   const result: PersonaPlanStatusStartupMigrationResult = { migrated: 0, failures: [] };
@@ -3026,7 +3069,7 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
       result.failures.push({ planId: normalized.id, error: `PLAN_STATUS_CONFIG_INVALID: ${normalized.status}` });
       continue;
     }
-    if (resolved.matchedBy === "key") continue;
+    if (resolved.matchedBy === "key" && !hasLegacyPlanStepState(stored.steps)) continue;
     try {
       withPlanStorageLock(roleDir, normalized.id, (lease) => {
         const sourcePackage = readCanonicalPlanStoragePackageUnderLease(lease);
@@ -3035,7 +3078,7 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
         const beforeRaw = JSON.parse(rawPlanFile.content.toString("utf8")) as Record<string, unknown>;
         const latestStatus = resolvePersonaPlanStatus(workflow, beforeRaw.status, { includeLegacyAliases: true });
         if (!latestStatus) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${String(beforeRaw.status)}`);
-        if (latestStatus.matchedBy === "key") return;
+        if (latestStatus.matchedBy === "key" && !hasLegacyPlanStepState(beforeRaw.steps)) return;
         const recordedAt = nowIso();
         const next = normalizePlan({
           ...beforeRaw,
@@ -3056,7 +3099,7 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
         files.set("history.jsonl", Buffer.from(appendPlanHistoryContent(files.get("history.jsonl")?.toString("utf8") || "", history), "utf8"));
         files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
         commitPlanLifecycleTransitionUnderLease(lease, {
-          transactionId: planLifecycleTransactionId("plan-update", next.id, "status-config-v1", sourcePackage.inventoryHash),
+          transactionId: planLifecycleTransactionId("plan-update", next.id, "plan-state-v2", sourcePackage.inventoryHash),
           kind: "plan-update",
           fromBucket: sourcePackage.bucket,
           toBucket: sourcePackage.bucket,
@@ -3114,7 +3157,7 @@ export function createPlan(
       storageMutationRequestId: mutation?.requestId
     });
     if (!plan) throw new Error("Plan title is required.");
-    plan.steps = recordPlanStepTimes(plan.steps, [], recordedAt);
+    plan.steps = recordPlanStepTimes(plan.steps, [], plan.currentStepId, recordedAt);
     requireKeywords(plan.keywords, "Plan");
     validatePlanWrite(roleDir, plan, true);
     const files = new Map<string, Buffer>();
@@ -3175,6 +3218,8 @@ export function updatePlan(
     if (Object.prototype.hasOwnProperty.call(patch, "secretaryBinding")) validatePlanSecretaryBindingInput(patch.secretaryBinding);
     if (Object.prototype.hasOwnProperty.call(patch, "taskBinding")) validatePlanTaskBindingInput(patch.taskBinding);
     const recordedAt = nowIso();
+    const clearedStartedAt = planStepIdsWithClearedTime(patch.steps, "startedAt");
+    const clearedCompletedAt = planStepIdsWithClearedTime(patch.steps, "completedAt");
     const next = normalizePlan({
       ...existing,
       ...patch,
@@ -3186,7 +3231,14 @@ export function updatePlan(
       storageMutationRequestId: mutation?.requestId
     });
     if (!next) throw new Error("Plan title is required.");
-    next.steps = recordPlanStepTimes(next.steps, existing.steps, recordedAt);
+    next.steps = recordPlanStepTimes(
+      next.steps,
+      existing.steps,
+      next.currentStepId,
+      recordedAt,
+      clearedStartedAt,
+      clearedCompletedAt
+    );
     requireKeywords(next.keywords, "Plan");
     validatePlanWrite(roleDir, next);
     const nextStatusDefinition = assertWritablePlanStatus(workflow, next.status);

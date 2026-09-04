@@ -223,6 +223,9 @@ internal sealed class HostLog : IAsyncDisposable
 
 internal sealed class ApplicationGeneration : IAsyncDisposable
 {
+    internal static readonly TimeSpan ManagerReadyTimeout = TimeSpan.FromMinutes(3);
+    internal static readonly TimeSpan TrayReadyTimeout = TimeSpan.FromMinutes(2);
+
     private static readonly TimeSpan HealthProbeInterval = TimeSpan.FromSeconds(2);
     private const int ConsecutiveProbeFailureLimit = 3;
     private readonly WindowsJob _job;
@@ -367,7 +370,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
             var managerOutput = PumpManagerOutputAsync(manager, generationId, readiness, log);
             var managerErrors = PumpLinesAsync(manager.StandardError, "manager stderr", generationId, log);
             var managerExit = manager.WaitForExitAsync(cancellationToken);
-            var timeout = Task.Delay(TimeSpan.FromSeconds(90), cancellationToken);
+            var timeout = Task.Delay(ManagerReadyTimeout, cancellationToken);
             var first = await Task.WhenAny(readiness.Task, managerExit, timeout);
             cancellationToken.ThrowIfCancellationRequested();
             if (first == managerExit)
@@ -376,7 +379,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
             }
             if (first == timeout)
             {
-                throw new TimeoutException("Manager did not publish structured READY within 90 seconds.");
+                throw new TimeoutException($"Manager did not publish structured READY within {ManagerReadyTimeout.TotalSeconds:0} seconds.");
             }
             var ready = await readiness.Task;
             log.Write($"generation={generationId} manager READY instance={ready.ManagerInstanceId} endpoint={ready.BaseUrl}");
@@ -429,7 +432,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
                 generationId,
                 ready.ManagerInstanceId,
                 tray.ProcessId,
-                TimeSpan.FromSeconds(30),
+                TrayReadyTimeout,
                 cancellationToken);
             var trayFirst = await Task.WhenAny(managerExit, trayExit, trayReady);
             cancellationToken.ThrowIfCancellationRequested();
@@ -444,7 +447,7 @@ internal sealed class ApplicationGeneration : IAsyncDisposable
             var acceptedTrayReady = await trayReady;
             if (acceptedTrayReady is null)
             {
-                throw new TimeoutException("Tray did not publish exact Host lifecycle READY within 30 seconds.");
+                throw new TimeoutException($"Tray did not publish exact Host lifecycle READY within {TrayReadyTimeout.TotalSeconds:0} seconds.");
             }
             if (manager.HasExited || tray.HasExited)
             {
@@ -1370,6 +1373,11 @@ internal sealed class HostRuntime
                 requestedCommand = string.IsNullOrWhiteSpace(request.Command)
                     ? "empty"
                     : request.Command.Trim().ToLowerInvariant();
+                if (!RequiresDurableAudit(requestedCommand))
+                {
+                    await HostProtocol.WriteAsync(server, CurrentResponse(true), cancellationToken);
+                    return;
+                }
                 requestedAuditPersisted = AppendAudit(
                     operation,
                     "requested",
@@ -1391,11 +1399,6 @@ internal sealed class HostRuntime
                 {
                     var denied = Response(false, "unauthorized", "The lifecycle mutation peer could not be proven as the packaged Host CLI.");
                     await WriteAuditedResponseAsync(server, operation, normalizedCommand, "peer_not_authorized", request.ApplicationGenerationId, denied, requestedAuditPersisted, () => terminalAuditAppended = true, cancellationToken);
-                    return;
-                }
-                if (normalizedCommand == "status")
-                {
-                    await WriteAuditedResponseAsync(server, operation, normalizedCommand, "status_query", request.ApplicationGenerationId, CurrentResponse(true), requestedAuditPersisted, () => terminalAuditAppended = true, cancellationToken);
                     return;
                 }
                 if (!AuditAllowsDispatch(normalizedCommand, requestedAuditPersisted))
@@ -1451,7 +1454,7 @@ internal sealed class HostRuntime
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 _log.Write($"host control request timed out: {exception.Message}");
-                if (operation is not null && !terminalAuditAppended)
+                if (operation is not null && RequiresDurableAudit(requestedCommand) && !terminalAuditAppended)
                 {
                     if (!requestedAuditAppended)
                     {
@@ -1465,7 +1468,7 @@ internal sealed class HostRuntime
             catch (Exception exception)
             {
                 _log.Write($"host control request failed: {exception.Message}");
-                if (operation is not null && !terminalAuditAppended)
+                if (operation is not null && RequiresDurableAudit(requestedCommand) && !terminalAuditAppended)
                 {
                     if (!requestedAuditAppended)
                     {
@@ -1615,6 +1618,9 @@ internal sealed class HostRuntime
 
     internal static bool AuditAllowsDispatch(string command, bool requestedAuditPersisted) =>
         string.Equals(command, "status", StringComparison.Ordinal) || requestedAuditPersisted;
+
+    internal static bool RequiresDurableAudit(string command) =>
+        !string.Equals(command, "status", StringComparison.Ordinal);
 
     private HostOperationContext InternalOperation() => new(
         Guid.NewGuid().ToString("N"),

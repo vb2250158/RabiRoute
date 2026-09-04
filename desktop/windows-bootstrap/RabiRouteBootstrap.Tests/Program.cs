@@ -1,4 +1,5 @@
 using RabiRoute.WindowsBootstrap;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 var failures = new List<string>();
@@ -20,6 +21,24 @@ var nodeLocalePayloadSha256 = ReleasePayloadValidator.ComputePayloadSha256(nodeL
 Check(
     nodeLocalePayloadSha256 == "e51fbba16bfa8319825f070ea87269a1155553c62a2cc5dc54f29d01f4744279",
     $"payload canonicalization matches Node localeCompare(path, 'en') ordering; actual={nodeLocalePayloadSha256}");
+Check(
+    ReadOnlyHostStatusProbe.IsStatusInvocation(new[] { "--command", "status", "--json" }),
+    "read-only status is recognized before immutable payload validation");
+Check(
+    !ReadOnlyHostStatusProbe.IsStatusInvocation(new[] { "--command", "restart", "--json" }),
+    "restart remains on the fully validated lifecycle path");
+Check(
+    !ReadOnlyHostStatusProbe.IsStatusInvocation(new[] { "--command", "status", "--allow-unfenced-quit" }),
+    "status fast path rejects unrelated lifecycle flags");
+Check(
+    JsonSerializer.Serialize(new ReadOnlyHostStatusRequest("status", null)) ==
+        "{\"Command\":\"status\",\"ApplicationGenerationId\":null}",
+    "read-only status uses the Host protocol's strict property names");
+Check(
+    ReadOnlyHostStatusProbe.NormalizeResponseJson(
+        "{\"Ok\":true,\"State\":\"healthy\",\"ManagerBaseUrl\":\"http://127.0.0.1:1234\"}") ==
+        "{\"ok\":true,\"state\":\"healthy\",\"managerBaseUrl\":\"http://127.0.0.1:1234\"}",
+    "read-only status preserves the public camelCase JSON contract");
 
 void ExpectReject(ReleaseFixture fixture, Action mutation, Action restore, string message)
 {

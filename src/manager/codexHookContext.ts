@@ -18,7 +18,7 @@ import {
 } from "./panghuProgressNotificationGate.js";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
-const STORE_VERSION = 5;
+const STORE_VERSION = 7;
 const MAX_CONTEXT_CHARS = 6200;
 const CONTROL_PATTERN = /\[rabi:(use|bind)\s+([^\]\r\n]{1,80})\]|\[rabi:(status|refresh|off)\]/i;
 
@@ -66,6 +66,16 @@ export type AgentRequestStopResult = {
   error?: string;
 };
 
+export type ProjectFileChangeReminderResult = {
+  status: "ignored" | "delivered" | "failed";
+  reason: string;
+  planId?: string;
+  planIds?: string[];
+  turnId?: string;
+  files?: string[];
+  error?: string;
+};
+
 export type CodexHookSessionBinding = {
   sessionId: string;
   roleId: string;
@@ -95,11 +105,18 @@ export type PlanTaskCompletionState = {
   error?: string;
 };
 
+export type ProjectFileChangeState = {
+  files: string[];
+  workspaces: string[];
+};
+
 type CodexHookSessionStoreFile = {
   version: number;
   sessions: Record<string, CodexHookSessionBinding>;
   planTaskCompletions: Record<string, PlanTaskCompletionState>;
   pangHuProgressNotifications: Record<string, PangHuProgressNotificationState>;
+  projectFileChanges: Record<string, Record<string, ProjectFileChangeState>>;
+  projectFileChangeReminders: Record<string, Record<string, string>>;
 };
 
 export type CodexHookContextRequest = {
@@ -123,6 +140,7 @@ export type CodexHookContextResult = {
   binding: CodexHookSessionBinding | null;
   additionalContext: string;
   planTaskCompletion?: PlanTaskCompletionResult;
+  projectFileChangeReminder?: ProjectFileChangeReminderResult;
   pangHuProgressNotification?: PangHuProgressNotificationResult;
   agentRequestStop?: AgentRequestStopResult;
   toolDecision?: { permissionDecision: "deny"; reason: string };
@@ -266,6 +284,87 @@ function triggerSignal(request: CodexHookContextRequest): string {
       ? `tool_response:\n${boundedJson(request.toolResponse, 18_000)}`
       : ""
   ].filter(Boolean).join("\n\n");
+}
+
+function toolText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function filePathsFromPatch(value: unknown): string[] {
+  const patch = value && typeof value === "object" && typeof (value as Record<string, unknown>).patch === "string"
+    ? (value as Record<string, unknown>).patch as string
+    : toolText(value);
+  return patch.split(/\r?\n/)
+    .map((line) => line.match(/^(?:\*\*\*|\+\+\+)\s+(?:Add|Update|Delete) File:\s+(.+)$/)?.[1]?.trim() || "")
+    .filter(Boolean);
+}
+
+function filePathsFromToolInput(toolName: string | undefined, input: unknown): string[] {
+  const name = String(toolName || "").toLowerCase();
+  const text = toolText(input);
+  if (name.includes("apply_patch") || name.includes("applypatch")) return filePathsFromPatch(input);
+  if (/(^|[._-])(edit|write|create|delete|move|copy)([._-]|$)/.test(name)) {
+    const record = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    return [record.path, record.filePath, record.file_path, record.destination, record.destinationPath]
+      .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+      .map((value) => value.trim());
+  }
+  if (!/(bash|shell|command|terminal|exec)/.test(name)) return [];
+  const command = input && typeof input === "object"
+    ? String((input as Record<string, unknown>).command || (input as Record<string, unknown>).cmd || "")
+    : text;
+  if (!/(?:>|>>|\b(?:set-content|add-content|out-file|copy-item|move-item|remove-item|new-item|touch)\b)/i.test(command)) return [];
+  const powerShellPath = (verb: string, option: string) => [...command.matchAll(new RegExp(`\\b${verb}\\b[^\\r\\n;|&]*?-${option}\\s+['\"]?([^\\s'\";|&]+)`, "gi"))];
+  const directPathMatches = [
+    ...powerShellPath("set-content", "(?:path|literalpath)"),
+    ...powerShellPath("add-content", "(?:path|literalpath)"),
+    ...powerShellPath("out-file", "(?:filepath|literalpath)"),
+    ...powerShellPath("new-item", "(?:path|literalpath)"),
+    ...powerShellPath("remove-item", "(?:path|literalpath)"),
+    ...powerShellPath("copy-item", "destination"),
+    ...powerShellPath("move-item", "destination")
+  ];
+  const redirectMatches = [...command.matchAll(/(?:^|\s)>>?\s*['\"]?([^\s'\";|&]+)/g)];
+  const touchMatches = [...command.matchAll(/\btouch\b\s+['\"]?([^\s'\";|&]+)/gi)];
+  return [...directPathMatches, ...redirectMatches, ...touchMatches].map((match) => match[1]).filter(Boolean);
+}
+
+function successfulWriteResponse(value: unknown): boolean {
+  const text = toolText(value).trim();
+  if (!text) return false;
+  return !/(?:\bfailed\b|\berror\b|\bno changes?\b|\bunchanged\b|exit code\s*[1-9])/i.test(text);
+}
+
+function projectRelativePaths(workspaces: string[], cwd: string | undefined, candidates: string[]): string[] {
+  if (!cwd || workspaces.length === 0) return [];
+  return [...new Set(candidates.flatMap((candidate) => {
+    const absolutePath = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
+    const root = workspaces.find((workspace) => {
+      const normalizedRoot = normalizedWorkspace(workspace);
+      const resolved = normalizedWorkspace(absolutePath);
+      return normalizedRoot && (resolved === normalizedRoot || resolved.startsWith(`${normalizedRoot}/`));
+    });
+    if (!root) return [];
+    const relative = path.relative(root, absolutePath).replace(/\\/g, "/");
+    return relative && !relative.startsWith("../") ? [relative] : [];
+  }))].sort((left, right) => left.localeCompare(right));
+}
+
+function matchedProjectWorkspaces(workspaces: string[], cwd: string | undefined, candidates: string[]): string[] {
+  if (!cwd) return [];
+  return [...new Set(candidates.flatMap((candidate) => {
+    const resolved = normalizedWorkspace(path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate));
+    return workspaces.filter((workspace) => {
+      const root = normalizedWorkspace(workspace);
+      return root && (resolved === root || resolved.startsWith(`${root}/`));
+    }).map(normalizedWorkspace);
+  }))];
+}
+
+function retainNewest<T>(record: Record<string, T>, maximumEntries: number): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).slice(-maximumEntries));
 }
 
 export function parseCodexHookControl(prompt: string): CodexHookControl | null {
@@ -429,6 +528,10 @@ export class CodexHookContextService {
       forceBase = true;
     }
 
+    if (request.eventName === "PostToolUse") {
+      this.recordProjectFileChange(sessionId, request);
+    }
+
     if (!binding) return { action, binding: null, additionalContext: "" };
 
     const role = this.requireRole(binding.roleId);
@@ -587,6 +690,23 @@ export class CodexHookContextService {
         agentRequestStop
       };
     }
+    const projectFileChangeReminder = await this.handleProjectFileChangeStop(request);
+    if (projectFileChangeReminder.result.status === "delivered") {
+      if (planCompletionEnabled) void this.handlePlanStop(request).catch(() => undefined);
+      return {
+        action: "none",
+        binding: this.getBinding(request.sessionId),
+        additionalContext: projectFileChangeReminder.message,
+        planTaskCompletion: {
+          status: "ignored",
+          reason: planCompletionEnabled ? "deferred_after_project_file_change_reminder" : "hook_disabled_by_codex_endpoint",
+          turnId: request.turnId
+        },
+        agentRequestStop,
+        ...(progress ? { pangHuProgressNotification: progress } : {}),
+        projectFileChangeReminder: projectFileChangeReminder.result
+      };
+    }
     const planResult = planCompletionEnabled
       ? await this.handlePlanStop(request)
       : {
@@ -599,7 +719,84 @@ export class CodexHookContextService {
             turnId: request.turnId
           }
         };
-    return { ...planResult, agentRequestStop, ...(progress ? { pangHuProgressNotification: progress } : {}) };
+    const additionalContext = [planResult.additionalContext, projectFileChangeReminder.message].filter(Boolean).join("\n\n");
+    return {
+      ...planResult,
+      additionalContext,
+      agentRequestStop,
+      ...(progress ? { pangHuProgressNotification: progress } : {}),
+      projectFileChangeReminder: projectFileChangeReminder.result
+    };
+  }
+
+  private recordProjectFileChange(sessionId: string, request: CodexHookContextRequest): void {
+    const turnId = String(request.turnId || "").trim();
+    const candidates = filePathsFromToolInput(request.toolName, request.toolInput);
+    if (!turnId || candidates.length === 0 || !successfulWriteResponse(request.toolResponse)) return;
+    const workspaces = this.taskBindingWorkspaces(sessionId);
+    const files = projectRelativePaths(workspaces, request.cwd, candidates);
+    const changedWorkspaces = files.length > 0 ? matchedProjectWorkspaces(workspaces, request.cwd, candidates) : [];
+    if (files.length === 0) return;
+    const store = this.readStore();
+    const current = store.projectFileChanges[sessionId]?.[turnId];
+    const changed = new Set(current?.files ?? []);
+    const workspaceSet = new Set(current?.workspaces ?? []);
+    files.forEach((file) => changed.add(file));
+    changedWorkspaces.forEach((workspace) => workspaceSet.add(workspace));
+    store.projectFileChanges[sessionId] = retainNewest({
+      ...store.projectFileChanges[sessionId],
+      [turnId]: { files: [...changed].sort((left, right) => left.localeCompare(right)), workspaces: [...workspaceSet].sort((left, right) => left.localeCompare(right)) }
+    }, 64);
+    this.writeStore(store);
+  }
+
+  private async handleProjectFileChangeStop(request: CodexHookContextRequest): Promise<{ result: ProjectFileChangeReminderResult; message: string }> {
+    const sessionId = this.requireSessionId(request.sessionId);
+    const turnId = String(request.turnId || "").trim();
+    const store = this.readStore();
+    const state = turnId ? store.projectFileChanges[sessionId]?.[turnId] : undefined;
+    const files = state?.files ?? [];
+    const changedWorkspaces = state?.workspaces ?? [];
+    if (!turnId) return { result: { status: "failed", reason: "missing_turn_id", error: "Project file changes cannot be associated with a Stop turn." }, message: "" };
+    if (store.projectFileChangeReminders[sessionId]?.[turnId]) {
+      return { result: { status: "ignored", reason: "turn_already_reminded", turnId, files }, message: "" };
+    }
+    if (files.length === 0) return { result: { status: "ignored", reason: "no_confirmed_project_file_change", turnId }, message: "" };
+    const matches = this.listRoles().flatMap((roleId) => {
+      const role = this.requireRole(roleId);
+      return listPlans(role.roleDir)
+        .filter((plan) => plan.taskBinding?.agentType === "codex"
+          && plan.taskBinding.sessionId === sessionId
+          && changedWorkspaces.includes(normalizedWorkspace(plan.taskBinding.workspace)))
+        .map((plan) => ({ ...role, plan }));
+    });
+    if (matches.length === 0) return { result: { status: "ignored", reason: "no_matching_plan_task_binding", turnId, files }, message: "" };
+    const plans = matches.map((match) => match.plan);
+    const reminders = retainNewest({ ...store.projectFileChangeReminders[sessionId], [turnId]: nowIso() }, 64);
+    store.projectFileChangeReminders[sessionId] = reminders;
+    const remainingChanges = { ...store.projectFileChanges[sessionId] };
+    delete remainingChanges[turnId];
+    store.projectFileChanges[sessionId] = remainingChanges;
+    this.writeStore(store);
+    return {
+      result: { status: "delivered", reason: "project_file_changes_detected", planId: plans[0]?.id, planIds: plans.map((plan) => plan.id), turnId, files },
+      message: [
+        "[Rabi 计划检查提醒]",
+        `本轮已修改项目文件：${files.join("、")}。`,
+        `请检查绑定计划${plans.map((plan) => `“${plan.title}”`).join("、")}的 status、currentStep、steps、证据和附件是否需要按实际进展更新。`,
+        "本提醒不会自动修改计划。"
+      ].join("\n")
+    };
+  }
+
+  private taskBindingWorkspaces(sessionId: string): string[] {
+    return [...new Set(this.listRoles().flatMap((roleId) => {
+      const role = this.requireRole(roleId);
+      return listPlans(role.roleDir)
+        .filter((plan) => plan.taskBinding?.agentType === "codex" && plan.taskBinding.sessionId === sessionId)
+        .map((plan) => String(plan.taskBinding?.workspace || "").trim())
+        .filter(Boolean);
+    }))];
   }
 
   private async handlePangHuProgressStop(request: CodexHookContextRequest): Promise<PangHuProgressNotificationResult | undefined> {
@@ -869,7 +1066,7 @@ export class CodexHookContextService {
 
   private readStore(): CodexHookSessionStoreFile {
     if (!fs.existsSync(this.storePath)) {
-      const empty: CodexHookSessionStoreFile = { version: STORE_VERSION, sessions: {}, planTaskCompletions: {}, pangHuProgressNotifications: {} };
+      const empty: CodexHookSessionStoreFile = { version: STORE_VERSION, sessions: {}, planTaskCompletions: {}, pangHuProgressNotifications: {}, projectFileChanges: {}, projectFileChangeReminders: {} };
       this.writeStore(empty);
       return empty;
     }
@@ -882,7 +1079,9 @@ export class CodexHookContextService {
         : {},
       pangHuProgressNotifications: raw.pangHuProgressNotifications && typeof raw.pangHuProgressNotifications === "object"
         ? raw.pangHuProgressNotifications
-        : {}
+        : {},
+      projectFileChanges: raw.projectFileChanges && typeof raw.projectFileChanges === "object" ? raw.projectFileChanges : {},
+      projectFileChangeReminders: raw.projectFileChangeReminders && typeof raw.projectFileChangeReminders === "object" ? raw.projectFileChangeReminders : {}
     };
   }
 
@@ -891,7 +1090,9 @@ export class CodexHookContextService {
       version: STORE_VERSION,
       sessions: store.sessions,
       planTaskCompletions: store.planTaskCompletions,
-      pangHuProgressNotifications: store.pangHuProgressNotifications
+      pangHuProgressNotifications: store.pangHuProgressNotifications,
+      projectFileChanges: store.projectFileChanges,
+      projectFileChangeReminders: store.projectFileChangeReminders
     });
   }
 

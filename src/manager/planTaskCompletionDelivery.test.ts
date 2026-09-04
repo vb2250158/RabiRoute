@@ -37,7 +37,7 @@ function plan(gatewayId?: string): PlanItem {
     status: "执行中",
     archiveStatus: "未归档",
     attachments: [],
-    steps: [{ id: "run", title: "执行任务", status: "进行中" }],
+    steps: [{ id: "run", title: "执行任务" }],
     taskBinding: {
       agentType: "codex",
       sessionId: "source-session",

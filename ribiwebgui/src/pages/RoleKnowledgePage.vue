@@ -1206,14 +1206,13 @@ watch(
 
 function stepColor(plan: RolePlan, step: RolePlanStep): string {
   if (stepIsBlocked(plan, step)) return "error";
-  if (step.status === "已完成") return "success";
-  if (step.status === "进行中") return "primary";
+  if (step.completedAt) return "success";
+  if (step.id === plan.currentStepId) return "primary";
   return "grey";
 }
 
 function currentStep(plan: RolePlan): RolePlanStep | undefined {
   return plan.steps.find((step) => step.id === plan.currentStepId)
-    || plan.steps.find((step) => step.status === "进行中")
     || plan.currentStepPreview;
 }
 
@@ -1233,7 +1232,7 @@ function stepIsBlocked(plan: RolePlan, step: RolePlanStep): boolean {
 function completedSteps(plan: RolePlan): number {
   return Number.isFinite(plan.completedStepCount)
     ? Number(plan.completedStepCount)
-    : plan.steps.filter((step) => step.status === "已完成").length;
+    : plan.steps.filter((step) => Boolean(step.completedAt)).length;
 }
 
 function progressValue(plan: RolePlan): number {
@@ -1530,8 +1529,7 @@ function planApprovalContractsForHistory(plan: RolePlan): RolePlanStep[] {
 }
 
 function planHistoryCurrentStep(record: RolePlanHistoryRecord): RolePlanStep | undefined {
-  return record.after.steps.find((step) => step.id === record.after.currentStepId)
-    || record.after.steps.find((step) => step.status === "进行中");
+  return record.after.steps.find((step) => step.id === record.after.currentStepId);
 }
 
 function planAcceptsGuidance(plan: RolePlan): boolean {
@@ -1692,6 +1690,22 @@ function planListStatusIsOnlyVisible(status: string): boolean {
     && planListStatusOptions.value.length - planListDraftHiddenStatuses.value.length <= 1;
 }
 
+async function focusPlanCardAfterDirectoryJump(planId: string, reduceMotion: boolean): Promise<void> {
+  await yieldToKnowledgePaint();
+  let target = document.getElementById(planCardDomId(planId));
+  if (!target) {
+    // The card window can take one additional frame to mount after a large directory jump.
+    await yieldToKnowledgePaint();
+    target = document.getElementById(planCardDomId(planId));
+  }
+  if (!target) return;
+  holdDirectoryJumpTarget(planId, !reduceMotion);
+  target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  target.focus({ preventScroll: true });
+  schedulePlanCardObserverRefresh();
+  schedulePlanDetailObserverRefresh();
+}
+
 function jumpToPlan(event: MouseEvent, plan: RolePlan): void {
   event.preventDefault();
   const targetIndex = visiblePlansForView.value.findIndex((item) => item.id === plan.id);
@@ -1701,15 +1715,7 @@ function jumpToPlan(event: MouseEvent, plan: RolePlan): void {
   planRenderStart.value = Math.max(0, targetIndex);
   planRenderLimit.value = 8;
   queuePlanDetails([plan], requestVersion, true);
-  void nextTick(() => {
-    const target = document.getElementById(planCardDomId(plan.id));
-    if (!target) return;
-    holdDirectoryJumpTarget(plan.id, !reduceMotion);
-    target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
-    target.focus({ preventScroll: true });
-    schedulePlanCardObserverRefresh();
-    schedulePlanDetailObserverRefresh();
-  });
+  void focusPlanCardAfterDirectoryJump(plan.id, reduceMotion);
 }
 
 function isApprovalStep(plan: RolePlan, step: RolePlanStep): boolean {
@@ -3069,7 +3075,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   </div>
                   <v-chip color="primary" size="x-small" variant="tonal">{{ t("可引导") }}</v-chip>
                 </div>
-                <p>{{ t("引导属于整个计划，不绑定某个步骤。Agent 会据此继续推进，并在需要时调整尚未开始的步骤；引导不会被视为审批，也不会自动改变计划状态。") }}</p>
+                <p>{{ t("引导属于整个计划，不绑定某个步骤。Agent 会据此继续推进，并在需要时调整后续步骤；引导不会被视为审批，也不会自动改变计划状态。") }}</p>
                 <div v-if="guidanceRecordsForDisplay(plan).length" class="knowledge-approval-history" :aria-label="t('计划引导记录')">
                   <article
                     v-for="feedback in guidanceRecordsForDisplay(plan)"
@@ -3127,7 +3133,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   :attachments="approvalAttachmentsFor(plan.id)"
                   :attachment-url="(attachmentId) => planAttachmentUrl(plan.id, attachmentId)"
                   :label="t('计划引导')"
-                  :placeholder="t('例如：先确认入口关闭后的整体体验，再根据结果调整后续未开始步骤。')"
+                  :placeholder="t('例如：先确认入口关闭后的整体体验，再根据结果调整后续步骤。')"
                   :hint="t('输入 @ 可引用计划附件；Enter 直接提交，Shift+Enter 换行。引导会投递给当前计划绑定的 Agent，不会作为步骤审批。')"
                   :disabled="!canEditPlanGuidance(plan)"
                   :submit-disabled="!canSubmitPlanGuidance(plan)"
@@ -3135,7 +3141,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   :notice="approvalNotices[plan.id]"
                   :submit-label="t('提交计划引导')"
                   submit-icon="mdi-send-outline"
-                  :footer-text="t('引导只关联当前 planId；Agent 可据此更新计划说明和未开始步骤。')"
+                  :footer-text="t('引导只关联当前 planId；Agent 可据此更新计划说明和后续步骤。')"
                   @update:model-value="approvalDrafts[plan.id] = $event"
                   @add-files="addApprovalFiles(plan.id, $event.files, $event.fromClipboard)"
                   @remove-attachment="removeApprovalAttachment(plan.id, $event)"
@@ -3156,7 +3162,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   class="knowledge-step"
                   :class="{
                     current: step.id === plan.currentStepId,
-                    completed: step.status === '已完成',
+                    completed: Boolean(step.completedAt),
                     blocked: stepIsBlocked(plan, step),
                     'has-approval': isApprovalStep(plan, step)
                   }"
@@ -3170,16 +3176,21 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       <PlanStepDetail v-if="step.detail" class="knowledge-step-detail" :text="step.detail" />
                       <small v-if="step.waitingFor" data-no-i18n>等待：{{ step.waitingFor }}</small>
                       <small v-if="stepIsBlocked(plan, step) && step.blockedBy" data-no-i18n>{{ step.blockedBy }}</small>
-                      <small v-if="step.status === '进行中' && step.startedAt" class="knowledge-step-time">
+                      <small v-if="step.id === plan.currentStepId && step.startedAt" class="knowledge-step-time">
                         <span>{{ t("开始时间") }}</span>
                         <b data-no-i18n>{{ formatDate(step.startedAt) }}</b>
                       </small>
-                      <small v-else-if="step.status === '已完成' && step.completedAt" class="knowledge-step-time">
+                      <small v-else-if="step.completedAt" class="knowledge-step-time">
                         <span>{{ t("完成时间") }}</span>
                         <b data-no-i18n>{{ formatDate(step.completedAt) }}</b>
                       </small>
                     </div>
-                    <v-chip :color="stepColor(plan, step)" size="x-small" variant="tonal">{{ stepIsBlocked(plan, step) ? "已阻塞" : step.status }}</v-chip>
+                    <v-chip
+                      v-if="stepIsBlocked(plan, step) || step.id === plan.currentStepId || step.completedAt"
+                      :color="stepColor(plan, step)"
+                      size="x-small"
+                      variant="tonal"
+                    >{{ stepIsBlocked(plan, step) ? "已阻塞" : step.completedAt ? "已完成" : "进行中" }}</v-chip>
                     <section v-if="isApprovalStep(plan, step)" class="knowledge-approval-panel" :data-state="plan.presentation.approval.state">
                   <div class="knowledge-approval-head">
                     <div>

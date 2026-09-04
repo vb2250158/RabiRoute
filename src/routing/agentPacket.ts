@@ -250,7 +250,7 @@ function replyDeliveryLines(values: ForwardTemplateValues, forceMessagePipeline 
 
   const intro = isPlanGuidance
     ? [
-        "读取计划与反馈，按引导推进。范围、优先级或路径变化时 PATCH 计划和未开始步骤。",
+        "读取计划与反馈，按引导推进。范围、优先级或路径变化时 PATCH 计划和后续步骤。",
         "处理说明通过明确发送 API 写入当前 planId 的 guidance_response。"
       ]
     : isPlanFeedback
@@ -726,8 +726,8 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
       const stepLines = parsed.steps.flatMap((step, index) => {
           const title = step.title.trim();
           const id = step.id.trim();
-          const status = step.status;
           const isCurrent = id === currentStep?.id;
+          const state = step.completedAt ? "已完成" : isCurrent ? "进行中" : "";
           const currentMarker = isCurrent ? " ← 当前步骤" : "";
           const waitingFor = String(step.waitingFor || "").trim();
           const isBlocked = blocked && isCurrent;
@@ -735,7 +735,7 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
           const approvalPreparing = approvalGate.state === "preparing" && id === approvalGate.stepId;
           const approvalPending = approvalGate.state === "pending" && id === approvalGate.stepId;
           return [
-            `    ${index + 1}. [${status}] ${title} (${id})${currentMarker}`,
+            `    ${index + 1}. ${state ? `[${state}] ` : ""}${title} (${id})${currentMarker}`,
             waitingFor ? `       等待对象：${waitingFor}` : "",
             isBlocked && blockedBy ? `       阻塞原因：${blockedBy}` : "",
             !isBlocked && blockedBy ? `       待确认说明：${blockedBy}` : "",
@@ -743,7 +743,7 @@ function readReferencedPlanSummaries(roleDir: string, text: string): string[] {
               ? "       巡检动作：当前合同已可审批，计划保持审批阻塞；继续追问审批回执，不得续投合同外实施。"
               : approvalPreparing
                 ? "       巡检动作：审批合同尚未完整，计划保持审批前分析阶段；继续调查、补证据并补齐合同，不能把资料缺失标成阻塞。"
-                : status === "进行中" && waitingFor
+                : isCurrent && waitingFor
                   ? "       巡检动作：主动询问、重试、改道或补证据，直到取得明确结果；不得仅记录等待。"
                   : ""
           ].filter(Boolean);

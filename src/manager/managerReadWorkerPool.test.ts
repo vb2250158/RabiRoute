@@ -172,6 +172,8 @@ test("manager read workers keep the main event loop responsive during archive qu
     assert.ok(ticks >= 5, `expected the Manager event loop to keep ticking, got ${ticks}`);
   } finally {
     clearInterval(timer);
+    await pool.stop();
+    fs.rmSync(roleDir, { recursive: true, force: true });
   }
 });
 
@@ -283,12 +285,17 @@ test("plan feedback recovery stays ledger-first inside a bounded read worker", a
 test("manager read workers reject excess heavy reads instead of growing an unbounded queue", async () => {
   const roleDir = voiceArchiveFixture(4, 250);
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 0, timeoutMs: 30_000 });
-  const first = pool.queryPersonaVoiceTranscripts(roleDir, { includeArchives: true, includeDetails: true });
-  await assert.rejects(
-    pool.queryPersonaVoiceTranscripts(roleDir, { includeArchives: true, includeDetails: true }),
-    (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "busy"
-  );
-  await first;
+  try {
+    const first = pool.queryPersonaVoiceTranscripts(roleDir, { includeArchives: true, includeDetails: true });
+    await assert.rejects(
+      pool.queryPersonaVoiceTranscripts(roleDir, { includeArchives: true, includeDetails: true }),
+      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "busy"
+    );
+    await first;
+  } finally {
+    await pool.stop();
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
 });
 
 test("manager read worker pools keep six bounded lanes available for concurrent interactive reads", async () => {
@@ -319,21 +326,26 @@ test("manager read worker pools keep six bounded lanes available for concurrent 
 test("manager read workers coalesce simultaneous voice-summary scans", async () => {
   const roleDir = voiceArchiveFixture(6, 400);
   const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 0, timeoutMs: 30_000 });
-  const first = pool.queryPersonaVoiceTranscripts(roleDir, {
-    includeArchives: true,
-    includeDetails: false,
-    from: 0,
-    limit: 200
-  });
-  const second = pool.queryPersonaVoiceTranscripts(roleDir, {
-    includeArchives: true,
-    includeDetails: false,
-    from: 0,
-    limit: 50
-  });
-  const [firstResult, secondResult] = await Promise.all([first, second]);
-  assert.equal(firstResult.matchedCount, 2_400);
-  assert.deepEqual(secondResult, firstResult);
+  try {
+    const first = pool.queryPersonaVoiceTranscripts(roleDir, {
+      includeArchives: true,
+      includeDetails: false,
+      from: 0,
+      limit: 200
+    });
+    const second = pool.queryPersonaVoiceTranscripts(roleDir, {
+      includeArchives: true,
+      includeDetails: false,
+      from: 0,
+      limit: 50
+    });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    assert.equal(firstResult.matchedCount, 2_400);
+    assert.deepEqual(secondResult, firstResult);
+  } finally {
+    await pool.stop();
+    fs.rmSync(roleDir, { recursive: true, force: true });
+  }
 });
 
 test("manager read workers keep conflict-history scans off the main event loop", async () => {
@@ -368,6 +380,8 @@ test("manager read workers keep conflict-history scans off the main event loop",
     assert.ok(ticks >= 5, `expected the Manager event loop to keep ticking, got ${ticks}`);
   } finally {
     clearInterval(timer);
+    await pool.stop();
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -396,6 +410,8 @@ test("manager read workers keep recent-memory detail scans pure and off the main
     assert.ok(ticks >= 5, `expected the Manager event loop to keep ticking, got ${ticks}`);
   } finally {
     clearInterval(timer);
+    await pool.stop();
+    fs.rmSync(roleDir, { recursive: true, force: true });
   }
 });
 
@@ -417,6 +433,7 @@ test("manager read workers reuse a resident worker across sequential memory read
     assert.equal(pool.status().workers, 1);
     assert.equal(pool.status().spawnedWorkers, 1);
   } finally {
+    await pool.stop();
     fs.rmSync(roleDir, { recursive: true, force: true });
   }
 });
@@ -441,6 +458,7 @@ test("manager heavy reads run in a separate low-priority process", async () => {
     assert.notEqual(status.workerPids[0], process.pid);
     assert.equal(os.getPriority(status.workerPids[0]), os.constants.priority.PRIORITY_BELOW_NORMAL);
   } finally {
+    await pool.stop();
     fs.rmSync(roleDir, { recursive: true, force: true });
   }
 });
@@ -497,6 +515,7 @@ test("manager read workers build performance summaries and JSON outside the main
       clearInterval(timer);
     }
   } finally {
+    await pool.stop();
     await store.stop();
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -651,7 +670,7 @@ test("manager read abort keeps its lease until SIGTERM close is observed", async
   }
 });
 
-test("unconfirmed read-worker termination globally blocks queues and stop until a real close", async () => {
+test("unconfirmed read-worker termination blocks only its owning pool until a real close", async () => {
   const blockedChild = new FakeReadWorker(53_001, () => {}, () => {});
   const blockedPool = new ManagerReadWorkerPool({
     maxConcurrency: 1,
@@ -681,14 +700,15 @@ test("unconfirmed read-worker termination globally blocks queues and stop until 
     );
     assert.equal(blockedPool.status().active, 1);
     assert.equal(blockedPool.status().workers, 1);
-    assert.equal(blockedPool.status().globalTerminationBlocked, true);
+    assert.equal(blockedPool.status().terminationBlocked, true);
     assert.deepEqual(blockedPool.status().blockedWorkerPids, [53_001]);
 
-    await assert.rejects(
-      recoveryPool.run(fakeReadTask("globally-blocked")),
-      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
+    assert.deepEqual(
+      await recoveryPool.run<{ restored: boolean }>(fakeReadTask("other-pool-still-serves")),
+      { restored: true }
     );
     assert.equal(recoveryPool.status().queued, 0);
+    assert.equal(recoveryPool.status().terminationBlocked, false);
     await assert.rejects(
       blockedPool.stop(),
       (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
@@ -700,7 +720,7 @@ test("unconfirmed read-worker termination globally blocks queues and stop until 
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(blockedPool.status().active, 0);
     assert.equal(blockedPool.status().workers, 0);
-    assert.equal(recoveryPool.status().globalTerminationBlocked, false);
+    assert.equal(recoveryPool.status().terminationBlocked, false);
     assert.deepEqual(
       await recoveryPool.run<{ restored: boolean }>(fakeReadTask("after-close")),
       { restored: true }
@@ -759,7 +779,7 @@ test("no-pid and priority setup failures cannot dispatch another child before cl
   }
 });
 
-test("a stopped pool cannot restart through another worker's unconfirmed termination gate", async () => {
+test("a stopped pool can restart while another pool has an unconfirmed worker", async () => {
   const blockedChild = new FakeReadWorker(55_001, () => {}, () => {});
   const blockedPool = new ManagerReadWorkerPool({
     maxConcurrency: 1,
@@ -788,22 +808,14 @@ test("a stopped pool cannot restart through another worker's unconfirmed termina
       blockedPool.run(fakeReadTask("block-restart")),
       (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
     );
-    assert.throws(
-      () => stoppedPool.start(),
-      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
-    );
-    await assert.rejects(
-      stoppedPool.run(fakeReadTask("must-stay-stopped")),
-      (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "aborted"
+    stoppedPool.start();
+    assert.deepEqual(
+      await stoppedPool.run(fakeReadTask("restart-isolated")),
+      { restarted: true }
     );
 
     blockedChild.close(null, "SIGKILL");
     await new Promise<void>(resolve => setImmediate(resolve));
-    stoppedPool.start();
-    assert.deepEqual(
-      await stoppedPool.run(fakeReadTask("restart-after-close")),
-      { restarted: true }
-    );
     await blockedPool.stop();
   } finally {
     blockedChild.close(null, "SIGKILL");

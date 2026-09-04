@@ -65,7 +65,7 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
     const feedbackKind = String(input.kind || "approval_suggestion") as PlanFeedbackKind;
     const planLevelFeedback = feedbackKind === "guidance" || feedbackKind === "guidance_response";
     if (feedbackKind === "guidance" && !planAcceptsGuidance(plan, ensurePersonaPlanWorkflow(input.roleDir).workflow)) {
-      throw new Error("Plan guidance is available only for Analyzing or Executing plans outside approval.");
+      throw new Error("Plan guidance is available only for configured guidance-enabled statuses outside approval.");
     }
     const requestedStepId = String(input.stepId || "").trim();
     if (planLevelFeedback && requestedStepId) {
@@ -75,8 +75,7 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
       ? undefined
       : requestedStepId
         ? plan.steps.find((item) => item.id === requestedStepId)
-        : plan.steps.find((item) => item.id === plan.currentStepId)
-          || plan.steps.find((item) => item.status === "进行中");
+        : plan.steps.find((item) => item.id === plan.currentStepId);
     if (requestedStepId && !step) throw new Error(`Plan step not found: ${requestedStepId}`);
 
     const baseCandidate = createPlanFeedbackRecord({

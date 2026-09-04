@@ -8,7 +8,7 @@ import type {
   RecentMemoryItem,
   RoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
-import { presentRoleMemory } from "../roleKnowledge.js";
+import { presentRoleMemory, publishCommittedRolePlan } from "../roleKnowledge.js";
 import type {
   PlanFeedbackDeliveryStatus,
   PlanFeedbackPostCommit,
@@ -62,6 +62,13 @@ export type RoleStorageCommit<TCommit, TProjection> = Readonly<{
   commit: TCommit;
   projection: TProjection;
   catalog: RoleKnowledgeCatalogSnapshot;
+}>;
+
+export type RoleStorageProjectedCommit<TCommit, TProjection> = Readonly<{
+  operationId: string;
+  expectedRevision: string | null;
+  commit: TCommit;
+  projection: TProjection;
 }>;
 
 export type RoleStorageCommandReceipt<TCommit> = Readonly<{
@@ -396,6 +403,13 @@ export class RoleStorageQueries {
     return this.run(roleId, roleDir => ({ type: "role_storage_plan_projection", roleDir, planId: canonicalPlanId }), options);
   }
 
+  publishPlan(roleId: string, plan: PlanItem): Readonly<PlanItem> {
+    this.assertCurrentGeneration();
+    const published = publishCommittedRolePlan(this.roleDir(roleId), plan);
+    this.assertCurrentGeneration();
+    return published;
+  }
+
   planWorkflow(roleId: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<PersonaPlanWorkflowReadResult | null> {
     return this.run(roleId, roleDir => ({ type: "role_plan_workflow", roleDir }), options);
   }
@@ -534,7 +548,110 @@ export class RoleStorageCommands {
     }
   }
 
-  async createPlan(roleId: string, rawInput: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<PlanItem, RoleStoragePlanProjection>> {
+  private async commitProjection<TCommit, TProjection>(input: {
+    operation: string;
+    roleId: string;
+    resourceId?: string;
+    payload: unknown;
+    allowResourceDerivedKey?: boolean;
+    context: RoleStorageCommandContext;
+    expectedRevision: () => Promise<string | null>;
+    mutate(options: { idempotencyKey: string; expectedRevision: string | null; signal?: AbortSignal; timeoutMs?: number }): Promise<TCommit>;
+    project(commit: TCommit): Promise<TProjection>;
+  }): Promise<RoleStorageProjectedCommit<TCommit, TProjection>> {
+    const roleId = canonicalStorageMutationRoleId(input.roleId);
+    const operationId = stableRoleStorageOperationId({
+      operation: input.operation,
+      roleId,
+      resourceId: input.resourceId,
+      payload: input.payload,
+      explicitIdempotencyKey: input.context.idempotencyKey,
+      allowResourceDerivedKey: input.allowResourceDerivedKey
+    });
+    this.assertPoolGeneration();
+    const expectedRevision = await input.expectedRevision();
+    const auditBase = {
+      group: roleStorageAuditGroup(input.operation),
+      owner: "role-storage",
+      action: input.operation,
+      target: { type: input.resourceId ? "role-resource" : "role", id: input.resourceId ?? roleId },
+      dataSource: { kind: "file" as const, id: roleStorageDataSource(roleId, input.operation) },
+      operationId,
+      before: expectedRevision ? { revision: expectedRevision } : undefined
+    };
+    const startedAt = Date.now();
+    recordDataMutationAudit({ ...auditBase, event: "role_storage_mutation_started", outcome: "started" });
+    let commit: TCommit;
+    try {
+      commit = await input.mutate({
+        idempotencyKey: operationId,
+        expectedRevision,
+        signal: input.context.signal,
+        timeoutMs: input.context.timeoutMs
+      });
+    } catch (error) {
+      const publicError = publicMutationError(error, operationId);
+      const outcome = roleStorageMutationOutcome(publicError);
+      recordDataMutationAudit({
+        ...auditBase,
+        level: outcome === "rejected" ? "warn" : "error",
+        event: "role_storage_mutation_failed",
+        outcome,
+        durationMs: Date.now() - startedAt,
+        result: publicError.code,
+        error: publicError
+      });
+      throw publicError;
+    }
+    const afterRevision = storageMutationRevisionToken(commit);
+    recordDataMutationAudit({
+      ...auditBase,
+      event: "role_storage_mutation_committed",
+      outcome: "committed",
+      after: afterRevision ? { revision: afterRevision } : undefined,
+      durationMs: Date.now() - startedAt
+    });
+    try {
+      const projection = await input.project(commit);
+      this.assertPoolGeneration();
+      return Object.freeze({ operationId, expectedRevision, commit, projection });
+    } catch (error) {
+      const publicError = publicReadError(error, operationId, true);
+      recordDataMutationAudit({
+        ...auditBase,
+        level: "error",
+        event: "role_storage_projection_failed",
+        outcome: "failed",
+        after: afterRevision ? { revision: afterRevision } : undefined,
+        durationMs: Date.now() - startedAt,
+        result: "mutation_committed",
+        error: publicError
+      });
+      throw publicError;
+    }
+  }
+
+  private async requiredPlanProjection(
+    roleId: string,
+    planId: string,
+    context: RoleStorageCommandContext,
+    operationId?: string
+  ): Promise<RoleStoragePlanProjection> {
+    const projection = await this.queries.plan(roleId, planId, context);
+    if (!projection) {
+      throw new RoleStorageApplicationError(
+        "The committed plan projection is unavailable.",
+        "projection_unavailable",
+        503,
+        operationId,
+        "committed"
+      );
+    }
+    this.queries.publishPlan(roleId, projection.plan);
+    return projection;
+  }
+
+  async createPlan(roleId: string, rawInput: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanItem, RoleStoragePlanProjection>> {
     const requestedPlanId = typeof rawInput.id === "string" && rawInput.id.trim()
       ? canonicalStorageMutationPlanId(rawInput.id)
       : undefined;
@@ -551,7 +668,7 @@ export class RoleStorageCommands {
         : `plan-${createHash("sha256").update(operationId).digest("hex").slice(0, 32)}`
     );
     const input = { ...rawInput, id: planId };
-    return this.commit({
+    return this.commitProjection({
       operation: "plan-create",
       roleId,
       resourceId: planId,
@@ -560,11 +677,7 @@ export class RoleStorageCommands {
       context: { ...context, idempotencyKey: operationId },
       expectedRevision: async () => null,
       mutate: options => this.mutationPool.createPlan(roleId, planId, input, options),
-      project: async () => {
-        const projection = await this.queries.plan(roleId, planId, context);
-        if (!projection) throw new RoleStorageApplicationError("The committed plan projection is unavailable.", "projection_unavailable", 503, operationId, "committed");
-        return projection;
-      }
+      project: () => this.requiredPlanProjection(roleId, planId, context, operationId)
     });
   }
 
@@ -643,9 +756,9 @@ export class RoleStorageCommands {
     });
   }
 
-  async updatePlan(roleId: string, planId: string, patch: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<PlanItem, RoleStoragePlanProjection>> {
+  async updatePlan(roleId: string, planId: string, patch: Record<string, unknown>, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanItem, RoleStoragePlanProjection>> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
-    return this.commit({
+    return this.commitProjection({
       operation: "plan-update",
       roleId,
       resourceId: canonicalPlanId,
@@ -653,17 +766,13 @@ export class RoleStorageCommands {
       context,
       expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
       mutate: options => this.mutationPool.updatePlan(roleId, canonicalPlanId, patch, options),
-      project: async () => {
-        const projection = await this.queries.plan(roleId, canonicalPlanId, context);
-        if (!projection) throw new RoleStorageApplicationError("The committed plan projection is unavailable.", "projection_unavailable", 503, undefined, "committed");
-        return projection;
-      }
+      project: () => this.requiredPlanProjection(roleId, canonicalPlanId, context)
     });
   }
 
-  async updatePlanSecretaryBinding(roleId: string, planId: string, binding: PlanSecretaryBinding | null, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<PlanItem, RoleStoragePlanProjection>> {
+  async updatePlanSecretaryBinding(roleId: string, planId: string, binding: PlanSecretaryBinding | null, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanItem, RoleStoragePlanProjection>> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
-    return this.commit({
+    return this.commitProjection({
       operation: "plan-secretary-binding-update",
       roleId,
       resourceId: canonicalPlanId,
@@ -671,17 +780,13 @@ export class RoleStorageCommands {
       context,
       expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
       mutate: options => this.mutationPool.updatePlanSecretaryBinding(roleId, canonicalPlanId, binding, options),
-      project: async () => {
-        const projection = await this.queries.plan(roleId, canonicalPlanId, context);
-        if (!projection) throw new RoleStorageApplicationError("The committed plan projection is unavailable.", "projection_unavailable", 503, undefined, "committed");
-        return projection;
-      }
+      project: () => this.requiredPlanProjection(roleId, canonicalPlanId, context)
     });
   }
 
-  async updatePlanTaskBinding(roleId: string, planId: string, binding: PlanTaskBinding | null, context: RoleStorageCommandContext = {}): Promise<RoleStorageCommit<PlanItem, RoleStoragePlanProjection>> {
+  async updatePlanTaskBinding(roleId: string, planId: string, binding: PlanTaskBinding | null, context: RoleStorageCommandContext = {}): Promise<RoleStorageProjectedCommit<PlanItem, RoleStoragePlanProjection>> {
     const canonicalPlanId = canonicalStorageMutationPlanId(planId);
-    return this.commit({
+    return this.commitProjection({
       operation: "plan-task-binding-update",
       roleId,
       resourceId: canonicalPlanId,
@@ -689,11 +794,7 @@ export class RoleStorageCommands {
       context,
       expectedRevision: () => this.requiredExpectedRevision(context.expectedRevision),
       mutate: options => this.mutationPool.updatePlanTaskBinding(roleId, canonicalPlanId, binding, options),
-      project: async () => {
-        const projection = await this.queries.plan(roleId, canonicalPlanId, context);
-        if (!projection) throw new RoleStorageApplicationError("The committed plan projection is unavailable.", "projection_unavailable", 503, undefined, "committed");
-        return projection;
-      }
+      project: () => this.requiredPlanProjection(roleId, canonicalPlanId, context)
     });
   }
 

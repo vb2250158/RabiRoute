@@ -169,7 +169,7 @@ test("Host owns one complete Manager and Tray application generation", () => {
   assert.match(hostRuntime, /BuildTrayArguments\([\s\S]{0,300}trayLifecycle\.PipeName\)/);
   assert.match(
     hostRuntime,
-    /trayLifecycle\.WaitForReadyAsync\([\s\S]*generationId,[\s\S]*ready\.ManagerInstanceId,[\s\S]*tray\.ProcessId,[\s\S]*TimeSpan\.FromSeconds\(30\)/,
+    /trayLifecycle\.WaitForReadyAsync\([\s\S]*generationId,[\s\S]*ready\.ManagerInstanceId,[\s\S]*tray\.ProcessId,[\s\S]*TrayReadyTimeout/,
   );
   assert.match(hostRuntime, /Tray exited before publishing exact Host lifecycle READY/);
   assert.match(hostRuntime, /\["RABIROUTE_HOST_CONTROL_TOKEN"\] = null/);

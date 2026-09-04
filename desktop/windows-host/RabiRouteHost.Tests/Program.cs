@@ -53,9 +53,13 @@ var trayEnvironment = ApplicationGeneration.BuildTrayEnvironment("C:\\immutable"
 Check(trayEnvironment["PYTHONDONTWRITEBYTECODE"] == "1", "Tray environment prevents __pycache__ writes into the immutable package");
 Check(trayEnvironment["RABIROUTE_STATE_ROOT"] == "C:\\state", "Tray mutable state remains fenced to the state root");
 Check(HostRuntime.AuditAllowsDispatch("status", false), "status remains read-only when audit storage is unavailable");
+Check(!HostRuntime.RequiresDurableAudit("status"), "status bypasses durable lifecycle audit and returns the current Host snapshot");
+Check(HostRuntime.RequiresDurableAudit("restart"), "restart keeps durable lifecycle audit before dispatch");
 Check(!HostRuntime.AuditAllowsDispatch("quit", false), "quit fails closed before dispatch when audit storage is unavailable");
 Check(!HostRuntime.AuditAllowsDispatch("restart", false), "restart fails closed before dispatch when audit storage is unavailable");
 Check(!HostRuntime.AuditAllowsDispatch("activate", false), "activate fails closed before dispatch when audit storage is unavailable");
+Check(ApplicationGeneration.ManagerReadyTimeout >= TimeSpan.FromMinutes(3), "Manager cold startup tolerates temporary machine pressure without a restart storm");
+Check(ApplicationGeneration.TrayReadyTimeout >= TimeSpan.FromMinutes(2), "Tray cold startup tolerates temporary machine pressure without restarting a healthy Manager");
 Check(HostRuntime.AuditAllowsDispatch("quit", true), "durably audited fenced quit may enter the lifecycle queue");
 Check(
     HostIdentity.UserKey("S-1-5-21-test") == HostIdentity.UserKey("S-1-5-21-test"),
@@ -531,6 +535,7 @@ Check(lifecycleShutdownRequest?.StartsWith("POST /_rabiroute/host/shutdown HTTP/
 Check(lifecycleShutdownRequest?.Contains("x-rabiroute-host-token: host-secret", StringComparison.OrdinalIgnoreCase) == true, "shutdown carries the generation secret");
 Check(RabiRoute.WindowsHost.HostEntry.ParseCommand(new[] { "--command", "status" }) == "status", "accept formal lifecycle command");
 Check(RabiRoute.WindowsHost.HostEntry.ParseCommand(new[] { "--command" }) == "invalid", "reject incomplete formal lifecycle command");
+Check(RabiRoute.WindowsHost.HostEntry.ParseCommand(new[] { "--help" }) == "invalid", "reject unsupported arguments instead of treating them as activation");
 Check(RabiRoute.WindowsHost.HostEntry.ParseCommand(new[] { "--command", "quit", "--allow-unfenced-quit" }) == "invalid", "reject retired unfenced quit escape hatch");
 foreach (var legacyAlias in new[] { "--quit", "--restart", "--status", "--activate" })
 {

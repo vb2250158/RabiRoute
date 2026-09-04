@@ -264,7 +264,7 @@ export function normalizeRolePlanFromManager(plan: RolePlan): RolePlan {
     stepCount: Number.isFinite(plan.stepCount) ? plan.stepCount : steps.length,
     completedStepCount: Number.isFinite(plan.completedStepCount)
       ? plan.completedStepCount
-      : steps.filter((step) => step.status === "已完成").length,
+      : steps.filter((step) => Boolean(step.completedAt)).length,
     detailLevel: plan.detailLevel || (steps.length || attachments.length || plan.focus ? "full" : "summary")
   } satisfies Pick<RolePlan, "attachments" | "steps" | "attachmentCount" | "stepCount" | "completedStepCount" | "detailLevel">;
   if (plan.presentation && plan.presentation.approval) {
@@ -454,7 +454,7 @@ export async function loadRolePlan(roleId: string, planId: string): Promise<Role
     ...plan,
     attachmentCount: plan.attachments.length,
     stepCount: plan.steps.length,
-    completedStepCount: plan.steps.filter((step) => step.status === "已完成").length,
+    completedStepCount: plan.steps.filter((step) => Boolean(step.completedAt)).length,
     detailLevel: "full"
   };
 }

@@ -1,5 +1,5 @@
 import type { PlanFeedbackRecord, PlanQaFeedbackHandling } from "../planFeedback.js";
-import type { PlanItem, PlanStep } from "../roleKnowledge.js";
+import { planStepIsCompleted, type PlanItem, type PlanStep } from "../roleKnowledge.js";
 import { roleStorageOperationKey } from "./roleStorageApplication.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 import { planStatusKeyForRole, type PersonaPlanWorkflow } from "../personaPlanWorkflow.js";
@@ -95,10 +95,8 @@ function qaStepFor(plan: PlanItem, feedback: PlanFeedbackRecord, allowHistorical
   if (isQaStep(requested) && (
     allowHistorical
     || requested.id === plan.currentStepId
-    || requested.status === "进行中"
   )) return requested;
-  const current = plan.steps.find((step) => step.id === plan.currentStepId)
-    || plan.steps.find((step) => step.status === "进行中");
+  const current = plan.steps.find((step) => step.id === plan.currentStepId);
   return isQaStep(current) ? current : undefined;
 }
 
@@ -217,10 +215,9 @@ function reopenForInvestigation(
   const investigation: PlanStep = {
     ...(existingInvestigation || {
       id: investigateId,
-      title: "深化调查：" + qaStep.title,
-      status: "未开始" as const
+      title: "深化调查：" + qaStep.title
     }),
-    status: "进行中",
+    completedAt: undefined,
     detail: feedbackDetail(feedback),
     waitingFor: missingEvidence.length ? "QA 补充：" + missingEvidence.join("、") : undefined,
     isBlocked: false,
@@ -229,7 +226,7 @@ function reopenForInvestigation(
   const steps = plan.steps
     .filter((step) => step.id !== investigateId)
     .map((step) => step.id === qaStep.id
-      ? { ...step, status: "未开始" as const, waitingFor: undefined, isBlocked: false, blockedBy: undefined }
+      ? { ...step, startedAt: null, completedAt: null, waitingFor: undefined, isBlocked: false, blockedBy: undefined }
       : step);
   const qaIndex = steps.findIndex((step) => step.id === qaStep.id);
   steps.splice(qaIndex < 0 ? steps.length : qaIndex, 0, investigation);
@@ -267,10 +264,12 @@ function completeAcceptance(
   feedback: PlanFeedbackRecord,
   workflow: PersonaPlanWorkflow
 ): Record<string, unknown> {
+  const completedAt = new Date().toISOString();
   const steps = plan.steps.map((step) => step.id === qaStep.id
     ? {
         ...step,
-        status: "已完成" as const,
+        completedAt,
+        startedAt: step.startedAt || completedAt,
         detail: "QA 明确通过（" + feedback.id + "）：" + feedback.text.slice(0, 500),
         waitingFor: undefined,
         isBlocked: false,
@@ -278,9 +277,8 @@ function completeAcceptance(
       }
     : step);
   const qaIndex = steps.findIndex((step) => step.id === qaStep.id);
-  const nextIndex = steps.findIndex((step, index) => index > qaIndex && step.status === "未开始");
+  const nextIndex = steps.findIndex((step, index) => index > qaIndex && !planStepIsCompleted(step));
   if (nextIndex >= 0) {
-    steps[nextIndex] = { ...steps[nextIndex], status: "进行中" };
     return {
       status: planStatusKeyForRole(workflow, "execution"),
       currentStepId: steps[nextIndex].id,
@@ -445,7 +443,7 @@ export async function consumePlanQaFeedback(
   );
   if (!qaStep) return { outcome: "ignored", status: "ignored", missingEvidence: [] };
   if (passed) {
-    const updatedPlan = qaStep.status === "已完成"
+    const updatedPlan = planStepIsCompleted(qaStep)
       ? plan
       : await commitPlanPatch(options, projection, latest.id, completeAcceptance(plan, qaStep, latest, options.workflow));
     await commitQaHandling(options, projection, latest.id, {

@@ -136,6 +136,26 @@ test("Stop forwards the final assistant message but emits no hook output", async
   assert.equal(output, null);
 });
 
+test("Stop returns one non-blocking reminder after confirmed project file changes", async (t) => {
+  const mock = await server((_request, response) => json(response, 200, {
+    code: 0,
+    data: {
+      planTaskCompletion: { status: "failed", error: "completion recipient unavailable" },
+      projectFileChangeReminder: { status: "delivered", planId: "plan-hook", files: ["src/example.ts"] }
+    }
+  }));
+  t.after(() => mock.close());
+  const output = await handleHookInput({
+    hook_event_name: "Stop",
+    session_id: "session-plan-worker",
+    turn_id: "turn-project-change"
+  }, { managerUrl: mock.url });
+  assert.match(output.systemMessage, /项目文件/);
+  assert.match(output.systemMessage, /currentStep/);
+  assert.match(output.systemMessage, /completion recipient unavailable/);
+  assert.equal(output.continue, undefined);
+});
+
 test("Stop blocks completion when PangHu progress lacks its required group receipt context", async (t) => {
   const mock = await server((_request, response) => json(response, 200, {
     code: 0,
@@ -171,6 +191,17 @@ test("Stop surfaces a non-blocking system warning when reminder delivery fails",
     last_assistant_message: "阶段结果"
   }, { managerUrl: mock.url });
   assert.match(output.systemMessage, /reminder gateway offline/);
+  assert.equal(output.continue, undefined);
+});
+
+test("Stop names both reminder kinds when Manager cannot be reached", async () => {
+  const output = await handleHookInput({ hook_event_name: "Stop", session_id: "offline-stop", turn_id: "turn-offline" }, {
+    managerUrl: "http://127.0.0.1:1",
+    timeoutMs: 200
+  });
+  assert.match(output.systemMessage, /计划完成提醒/);
+  assert.match(output.systemMessage, /项目文件改动检查提醒/);
+  assert.match(output.systemMessage, /未送达/);
   assert.equal(output.continue, undefined);
 });
 

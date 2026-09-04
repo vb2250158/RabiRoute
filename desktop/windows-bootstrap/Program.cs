@@ -7,6 +7,16 @@ internal static class Program
     {
         try
         {
+            if (ReadOnlyHostStatusProbe.IsStatusInvocation(args))
+            {
+                var response = await ReadOnlyHostStatusProbe.QueryAsync();
+                if (args.Contains("--json", StringComparer.OrdinalIgnoreCase))
+                {
+                    BootstrapConsole.AttachToParent();
+                    Console.WriteLine(response.Json);
+                }
+                return response.Ok ? 0 : 2;
+            }
             var installRoot = Path.GetFullPath(AppContext.BaseDirectory);
             var selfTest = args.Contains("--self-test", StringComparer.OrdinalIgnoreCase);
             var release = ReleasePointerResolver.Resolve(installRoot, allowFlatSelfTest: selfTest);

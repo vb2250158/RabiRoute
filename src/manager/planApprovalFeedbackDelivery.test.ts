@@ -17,7 +17,7 @@ function plan(taskBinding: PlanItem["taskBinding"]): PlanItem {
     status: "分析中",
     archiveStatus: "未归档",
     attachments: [],
-    steps: [{ id: "approve", title: "等待审批", status: "进行中" }],
+    steps: [{ id: "approve", title: "等待审批" }],
     currentStepId: "approve",
     taskBinding,
     createdAt: "2026-07-29T00:00:00.000Z",
@@ -50,7 +50,7 @@ const guidance: PlanFeedbackRecord = {
   stepId: undefined,
   stepTitle: undefined,
   kind: "guidance",
-  text: "先确认整体入口体验，再调整后续未开始步骤。"
+  text: "先确认整体入口体验，再调整后续步骤。"
 };
 
 const secretary: PlanApprovalFeedbackSecretaryTarget = {
@@ -179,7 +179,7 @@ test("plan guidance reaches the bound task without pretending to approve a step"
   assert.equal(taskRequests[0]?.title, "审批直达原业务任务");
   assert.equal(taskRequests[0]?.createIfMissing, true);
   assert.match(taskRequests[0]?.prompt || "", /引导影响范围、优先级或路径时/);
-  assert.match(taskRequests[0]?.prompt || "", /PATCH 计划和未开始步骤/);
+  assert.match(taskRequests[0]?.prompt || "", /PATCH 计划和后续步骤/);
   assert.match(taskRequests[0]?.prompt || "", /kind=guidance_response/);
   assert.match(taskRequests[0]?.prompt || "", /feedbackId=response-feedback-plan-guidance/);
   assert.match(taskRequests[0]?.prompt || "", /只写当前 planId/);

@@ -137,7 +137,7 @@ test("plan guidance remains plan-level and uses a distinct response kind", () =>
     planId: "plan-1",
     planTitle: "Running plan",
     kind: "guidance",
-    text: "先收窄范围，再调整后续未开始步骤。"
+    text: "先收窄范围，再调整后续步骤。"
   });
   const response = createPlanFeedbackRecord({
     roleId: "Rabi",

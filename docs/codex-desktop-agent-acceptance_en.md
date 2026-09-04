@@ -137,4 +137,10 @@ Mocks and unit tests prove resolver and failure behavior only. Release acceptanc
 4. Lock stable exact-ID reuse across saved-cwd changes, current-workspace delivery, title-mutation continuity, replacement and persistence after archival or confirmed deletion after delivery, explicit Rabi-side switching, single-flight creation, delayed indexing, full listing, and scan counts with tests.
 5. Mark Codex `verified` only after a real Desktop task receives and executes the prompt visibly.
 
+## Plan check reminder after project file changes
+
+When one Codex task actually changes project files inside its bound workspace during a turn, the Hook records the change at `PostToolUse` and returns one reminder to that same Desktop owner at `Stop`: check whether the bound plan's `status`, `currentStep`, `steps`, evidence, and attachments need updating for the actual progress.
+
+The reminder never PATCHes a plan, creates a task, or replaces `taskBinding`. Read-only tools, failed or unchanged writes, paths outside the workspace, and tasks without a matching plan binding do not produce a reminder. If the Manager is unavailable, the task remains non-blocking and receives a delivery diagnostic.
+
 See [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) for the general contract and [Agent Adapter Integration Lessons](agent-adapter-integration-lessons_en.md) for the failed designs and their root causes.

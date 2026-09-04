@@ -48,6 +48,7 @@ function createDeveloperCandidate(options) {
     fs.rmSync(path.join(stagingRoot, "release-manifest.json"), { force: true });
     replaceDirectory(path.join(buildRoot, "dist"), path.join(stagingRoot, "dist"));
     replaceDirectory(path.join(buildRoot, "ribiwebgui", "dist"), path.join(stagingRoot, "ribiwebgui", "dist"));
+    replaceDirectory(path.join(buildRoot, "assets"), path.join(stagingRoot, "assets"));
     if (fs.statSync(path.join(buildRoot, "scripts"), { throwIfNoEntry: false })?.isDirectory()) {
       replaceDirectory(path.join(buildRoot, "scripts"), path.join(stagingRoot, "scripts"));
     }

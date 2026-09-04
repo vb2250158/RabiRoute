@@ -7,6 +7,7 @@ import { planJsonFile } from "../planStorageLayout.js";
 import {
   listRecentMemories,
   publishRoleKnowledgeCatalogSnapshot,
+  readPlansFromStorageInWorker,
   readRoleKnowledgeCatalogSnapshot
 } from "../roleKnowledge.js";
 import {
@@ -122,6 +123,191 @@ test("an unbound Codex session receives no Rabi context", (t) => {
   const result = service.handleContext({ sessionId: "session-unbound", eventName: "UserPromptSubmit", prompt: "hello" });
   assert.equal(result.binding, null);
   assert.equal(result.additionalContext, "");
+});
+
+test("a changed project file produces one Stop reminder for the bound plan", async (t) => {
+  const { root, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.handleContext({
+    sessionId: "session-plan-worker",
+    eventName: "UserPromptSubmit",
+    prompt: "[rabi:use YeYu]",
+    managerBaseUrl: "http://127.0.0.1:8790"
+  });
+  service.handleContext({
+    sessionId: "session-plan-worker",
+    eventName: "PostToolUse",
+    turnId: "turn-project-change",
+    cwd: root,
+    toolName: "apply_patch",
+    toolInput: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch",
+    toolResponse: "Done!"
+  });
+  const first = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-project-change",
+    cwd: root,
+    lastAssistantMessage: "已完成实现。"
+  });
+  assert.equal(first.projectFileChangeReminder?.status, "delivered");
+  assert.deepEqual(first.projectFileChangeReminder?.files, ["src/example.ts"]);
+  assert.match(first.additionalContext, /请检查绑定计划/);
+  const duplicate = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-project-change",
+    cwd: root,
+    lastAssistantMessage: "已完成实现。"
+  });
+  assert.equal(duplicate.projectFileChangeReminder?.reason, "turn_already_reminded");
+});
+
+test("a project-file reminder does not wait for slow plan-completion delivery", async (t) => {
+  let completionStarted = false;
+  const { root, service } = fixture({
+    deliverPlanTaskCompletion: async () => {
+      completionStarted = true;
+      await new Promise<void>(() => undefined);
+    }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.handleContext({
+    sessionId: "session-plan-worker",
+    eventName: "PostToolUse",
+    turnId: "turn-fast-reminder",
+    cwd: root,
+    toolName: "apply_patch",
+    toolInput: "*** Begin Patch\n*** Update File: src/example.ts\n*** End Patch",
+    toolResponse: "Done!"
+  });
+  const result = await Promise.race([
+    service.handleHook({
+      sessionId: "session-plan-worker",
+      eventName: "Stop",
+      turnId: "turn-fast-reminder",
+      cwd: root,
+      lastAssistantMessage: "已完成实现。"
+    }),
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("reminder response timed out")), 200))
+  ]);
+  assert.equal(completionStarted, true);
+  assert.equal(result.projectFileChangeReminder?.status, "delivered");
+  assert.equal(result.planTaskCompletion?.reason, "deferred_after_project_file_change_reminder");
+});
+
+test("read-only, failed, and out-of-workspace tools do not create a plan reminder", async (t) => {
+  const { root, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.handleContext({ sessionId: "session-plan-worker", eventName: "UserPromptSubmit", prompt: "[rabi:use YeYu]", managerBaseUrl: "http://127.0.0.1:8790" });
+  for (const request of [
+    { turnId: "turn-read", toolName: "exec_command", toolInput: { cmd: "rg TODO" }, toolResponse: "ok" },
+    { turnId: "turn-failed", toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: src/nope.ts\n*** End Patch", toolResponse: "Patch failed" },
+    { turnId: "turn-outside", toolName: "apply_patch", toolInput: "*** Begin Patch\n*** Update File: C:/outside/nope.ts\n*** End Patch", toolResponse: "Done!" }
+  ]) service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", cwd: root, ...request });
+  for (const turnId of ["turn-read", "turn-failed", "turn-outside"]) {
+    const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId, cwd: root });
+    assert.equal(result.projectFileChangeReminder?.status, "ignored");
+    assert.equal(result.projectFileChangeReminder?.reason, "no_confirmed_project_file_change");
+  }
+});
+
+test("a plan task without a persona binding still receives one project-change reminder", async (t) => {
+  const { root, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  service.handleContext({
+    sessionId: "session-plan-worker",
+    eventName: "PostToolUse",
+    turnId: "turn-unbound-plan",
+    cwd: path.join(root, "src"),
+    toolName: "apply_patch",
+    toolInput: "*** Begin Patch\n*** Update File: example.ts\n*** End Patch",
+    toolResponse: "Done!"
+  });
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-unbound-plan",
+    cwd: path.join(root, "src")
+  });
+  assert.equal(result.projectFileChangeReminder?.status, "delivered");
+  assert.deepEqual(result.projectFileChangeReminder?.files, ["src/example.ts"]);
+});
+
+test("structured patches and supported PowerShell writes merge into one turn reminder", async (t) => {
+  const { root, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const request of [
+    { toolName: "apply_patch", toolInput: { patch: "*** Begin Patch\n*** Update File: src/first.ts\n*** End Patch" } },
+    { toolName: "exec_command", toolInput: { cmd: "Set-Content -Path src/second.ts -Value ready" } }
+  ]) service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", turnId: "turn-structured-write", cwd: root, toolResponse: "Done!", ...request });
+  const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "turn-structured-write", cwd: root });
+  assert.equal(result.projectFileChangeReminder?.status, "delivered");
+  assert.deepEqual(result.projectFileChangeReminder?.files, ["src/first.ts", "src/second.ts"]);
+});
+
+test("PowerShell named write destinations are tracked without treating flags or copy sources as files", async (t) => {
+  const { root, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const command of [
+    "Out-File -FilePath src/output.md -InputObject ready",
+    "New-Item -Path src/new.ts -ItemType File",
+    "Remove-Item -LiteralPath src/removed.ts",
+    "Copy-Item -Path src/source.ts -Destination src/copied.ts",
+    "Move-Item -Path src/old.ts -Destination src/moved.ts"
+  ]) service.handleContext({ sessionId: "session-plan-worker", eventName: "PostToolUse", turnId: "turn-powershell-named", cwd: root, toolName: "exec_command", toolInput: { cmd: command }, toolResponse: "Done!" });
+  const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "turn-powershell-named", cwd: root });
+  assert.equal(result.projectFileChangeReminder?.status, "delivered");
+  assert.deepEqual(result.projectFileChangeReminder?.files, ["src/copied.ts", "src/moved.ts", "src/new.ts", "src/output.md", "src/removed.ts"]);
+});
+
+test("one task may receive one reminder covering multiple bound plans in the same workspace", async (t) => {
+  const { root, roleDir, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const original = JSON.parse(fs.readFileSync(planJsonFile(roleDir, "plan-hook", "active"), "utf8"));
+  const secondPlanPath = planJsonFile(roleDir, "plan-hook-second", "active");
+  fs.mkdirSync(path.dirname(secondPlanPath), { recursive: true });
+  fs.writeFileSync(secondPlanPath, JSON.stringify({
+    ...original,
+    id: "plan-hook-second",
+    title: "第二个绑定计划",
+    updatedAt: new Date().toISOString()
+  }, null, 2), "utf8");
+  readPlansFromStorageInWorker(roleDir);
+  service.handleContext({
+    sessionId: "session-plan-worker",
+    eventName: "PostToolUse",
+    turnId: "turn-multiple-plans",
+    cwd: root,
+    toolName: "apply_patch",
+    toolInput: "*** Begin Patch\n*** Update File: src/shared.ts\n*** End Patch",
+    toolResponse: "Done!"
+  });
+  const result = await service.handleHook({ sessionId: "session-plan-worker", eventName: "Stop", turnId: "turn-multiple-plans", cwd: root });
+  assert.equal(result.projectFileChangeReminder?.status, "delivered");
+  assert.deepEqual(new Set(result.projectFileChangeReminder?.planIds), new Set(["plan-hook", "plan-hook-second"]));
+  assert.match(result.additionalContext, /第二个绑定计划/);
+});
+
+test("unfinished project-change turns are bounded per Codex session", (t) => {
+  const { root, storePath, service } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (let index = 0; index < 65; index += 1) {
+    service.handleContext({
+      sessionId: "session-plan-worker",
+      eventName: "PostToolUse",
+      turnId: `turn-unfinished-${index}`,
+      cwd: root,
+      toolName: "apply_patch",
+      toolInput: `*** Begin Patch\n*** Update File: src/${index}.ts\n*** End Patch`,
+      toolResponse: "Done!"
+    });
+  }
+  const stored = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  const changes = stored.projectFileChanges["session-plan-worker"];
+  assert.equal(Object.keys(changes).length, 64);
+  assert.equal(changes["turn-unfinished-0"], undefined);
+  assert.ok(changes["turn-unfinished-64"]);
 });
 
 test("binding and base context are owned by Rabi Manager", (t) => {

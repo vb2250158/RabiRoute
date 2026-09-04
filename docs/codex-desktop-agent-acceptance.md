@@ -134,4 +134,10 @@ flowchart TD
 4. 用测试锁定完整 ID 跨默认 cwd 稳定续投、按当前 workspace 执行、标题改写、归档或投递后确认删除时新建与绑定更新、Rabi 显式改绑、single-flight、索引延迟、全量列表和扫描次数。
 5. 完成 Desktop 实机投递后才能标记 `verified`；仅扫描成功或后台 Runtime 成功都不算。
 
+## 项目文件改动后的计划检查提醒
+
+同一 Codex 任务在一轮中实际修改绑定 workspace 内的项目文件时，Hook 在 `PostToolUse` 记录变化，并在该轮 `Stop` 只向同一 Desktop owner 提醒一次：检查绑定计划的 `status`、`currentStep`、`steps`、证据和附件是否需要按实际进展更新。
+
+提醒不自动 PATCH 计划，不创建任务，也不替换 `taskBinding`。只读工具、失败或无变化的写入、工作区外路径和没有匹配绑定计划的任务均不提醒。Manager 不可用时保持任务非阻断，并显示未送达诊断。
+
 配套实现规范见[标准 Agent 端接入需求](agent-adapter-standard-requirements.md)，历史失误与原因见[Agent 端接入：历史问题、正确边界与验证手册](agent-adapter-integration-lessons.md)。

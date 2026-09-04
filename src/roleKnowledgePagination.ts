@@ -276,8 +276,7 @@ function searchableKnowledgeStrings(value: unknown, output: string[] = [], seen 
 }
 
 function currentPlanStep(plan: RolePlanSummarySource) {
-  return plan.steps.find((step) => step.id === plan.currentStepId)
-    || plan.steps.find((step) => step.status === "进行中");
+  return plan.steps.find((step) => step.id === plan.currentStepId);
 }
 
 function planStepSummary(plan: RolePlanSummarySource) {
@@ -285,8 +284,7 @@ function planStepSummary(plan: RolePlanSummarySource) {
   if (!step) return undefined;
   return {
     id: step.id,
-    title: step.title,
-    status: step.status
+    title: step.title
   };
 }
 
@@ -303,7 +301,7 @@ function planProgressSummary(plan: RolePlanSummarySource) {
   return {
     attachmentCount: plan.attachments.length,
     stepCount: plan.steps.length,
-    completedStepCount: plan.steps.filter((step) => step.status === "已完成").length,
+    completedStepCount: plan.steps.filter((step) => Boolean(step.completedAt)).length,
     currentStepPosition: currentIndex >= 0 ? currentIndex + 1 : 0
   };
 }

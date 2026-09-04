@@ -18,7 +18,7 @@ function plan(status: PlanItem["status"], patch: Partial<PlanItem> = {}): PlanIt
     focus: "Plan status",
     status,
     attachments: [],
-    steps: [{ id: "work", title: "Work", status: "进行中" }],
+    steps: [{ id: "work", title: "Work" }],
     currentStepId: "work",
     createdAt: "2026-09-03T00:00:00.000Z",
     updatedAt: "2026-09-03T00:00:00.000Z",
@@ -43,8 +43,8 @@ test("package and QA waits use plan.status as their only truth", () => {
 test("package lifecycle detection remains evidence-only and does not change status", () => {
   const item = plan("执行中", {
     steps: [
-      { id: "implement", title: "Implement", status: "已完成" },
-      { id: "package-build", title: "Build package", status: "进行中" }
+      { id: "implement", title: "Implement", completedAt: "2026-09-03T00:00:00.000Z" },
+      { id: "package-build", title: "Build package" }
     ],
     currentStepId: "package-build"
   });

@@ -33,6 +33,7 @@ import {
   planIsBlocked,
   presentRoleMemory,
   presentRoleMemories,
+  publishCommittedRolePlan,
   publishRoleKnowledgeCatalogSnapshot,
   readPlansFromStorageInWorker,
   readRoleKnowledgeCatalogSnapshot,
@@ -206,6 +207,37 @@ Body is not published.
   fs.readFileSync = (() => { throw new Error("hot path read storage"); }) as typeof fs.readFileSync;
   try {
     assert.equal(roleKnowledgeSnapshot(roleDir, "immutable").activePlans[0]?.id, "immutable-publication");
+  } finally {
+    fs.existsSync = originalExistsSync;
+    fs.readdirSync = originalReaddirSync;
+    fs.readFileSync = originalReadFileSync;
+  }
+});
+
+test("one committed plan updates an existing published catalog without a storage scan", { concurrency: false }, () => {
+  const roleDir = makeRoleDir();
+  const created = createPlan(roleDir, {
+    id: "published-point-plan",
+    title: "Before published point update",
+    focus: "Keep the complete parent catalog current",
+    status: "分析中",
+    currentStepId: "publish",
+    steps: [{ id: "publish", title: "Publish point update", status: "进行中" }],
+    keywords: ["cache"]
+  });
+  publishStoredRoleKnowledge(roleDir);
+  const committed = { ...created, title: "After published point update", updatedAt: "2026-09-04T00:00:00.000Z" };
+
+  const originalExistsSync = fs.existsSync;
+  const originalReaddirSync = fs.readdirSync;
+  const originalReadFileSync = fs.readFileSync;
+  fs.existsSync = (() => { throw new Error("point publication probed storage"); }) as typeof fs.existsSync;
+  fs.readdirSync = (() => { throw new Error("point publication enumerated storage"); }) as typeof fs.readdirSync;
+  fs.readFileSync = (() => { throw new Error("point publication read storage"); }) as typeof fs.readFileSync;
+  try {
+    const published = publishCommittedRolePlan(roleDir, committed);
+    assert.equal(published.title, committed.title);
+    assert.equal(listPlans(roleDir).find(plan => plan.id === created.id)?.title, committed.title);
   } finally {
     fs.existsSync = originalExistsSync;
     fs.readdirSync = originalReaddirSync;
@@ -463,6 +495,7 @@ test("startup migration rewrites legacy plan status aliases without changing arc
   };
   assert.equal(stored.status, "分析中");
   assert.equal(stored.archiveStatus, "未归档");
+  assert.equal("status" in stored.steps[0]!, false);
   assert.equal("workPhase" in stored.steps[0]!, false);
   assert.equal("discussionState" in stored.steps[0]!, false);
   assert.equal(listPlanHistory(roleDir, created.id).at(-1)?.before?.status, "进行中");
@@ -1323,7 +1356,7 @@ test("plan attachments reject content that does not match a claimed video type",
   }), /does not match its video type/);
 });
 
-test("plan step status transitions record and clear lifecycle timestamps", () => {
+test("plan steps use currentStepId and completion timestamps without a stored status", () => {
   const roleDir = makeRoleDir();
   const created = createPlan(roleDir, {
     id: "plan-step-times",
@@ -1332,9 +1365,9 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
     status: "分析中",
     currentStepId: "implement",
     steps: [
-      { id: "inspect", title: "检查现状", status: "已完成" },
-      { id: "implement", title: "实现时间记录", status: "进行中" },
-      { id: "verify", title: "验证结果", status: "未开始" }
+      { id: "inspect", title: "检查现状", completedAt: "2026-09-04T00:00:00.000Z" },
+      { id: "implement", title: "实现时间记录" },
+      { id: "verify", title: "验证结果" }
     ],
     keywords: ["计划", "时间"]
   });
@@ -1353,9 +1386,9 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
     status: "分析中",
     currentStepId: "verify",
     steps: [
-      { id: "inspect", title: "检查现状", status: "已完成" },
-      { id: "implement", title: "实现时间记录", status: "已完成" },
-      { id: "verify", title: "验证结果", status: "进行中" }
+      { ...created.steps[0] },
+      { ...created.steps[1], completedAt: "2026-09-04T00:10:00.000Z" },
+      { id: "verify", title: "验证结果" }
     ]
   });
   assert.equal(completed.steps[1]?.startedAt, implement.startedAt);
@@ -1366,9 +1399,9 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
     status: "分析中",
     currentStepId: "implement",
     steps: [
-      { id: "inspect", title: "检查现状", status: "已完成" },
-      { id: "implement", title: "实现时间记录", status: "进行中" },
-      { id: "verify", title: "验证结果", status: "未开始" }
+      { ...completed.steps[0] },
+      { ...completed.steps[1], completedAt: null },
+      { ...completed.steps[2], startedAt: null, completedAt: null }
     ]
   });
   assert.equal(reopened.steps[1]?.startedAt, implement.startedAt);
@@ -1378,7 +1411,7 @@ test("plan step status transitions record and clear lifecycle timestamps", () =>
   const reset = updatePlan(roleDir, created.id, {
     status: "暂停",
     currentStepId: undefined,
-    steps: reopened.steps.map((step) => ({ ...step, status: "未开始" }))
+    steps: reopened.steps.map((step) => ({ ...step, startedAt: null, completedAt: null }))
   });
   assert.equal(reset.steps.every((step) => step.startedAt == null && step.completedAt == null), true);
 });
@@ -1428,15 +1461,15 @@ test("only running plans outside approval accept whole-plan guidance", () => {
     focus: "允许用户调整整个计划方向",
     status: "分析中",
     currentStepId: "implement",
-    steps: [{ id: "implement", title: "继续实施", status: "进行中" }],
+    steps: [{ id: "implement", title: "继续实施" }],
     keywords: ["引导"]
   });
   const pending = createPlan(roleDir, {
     id: "plan-guidance-pending",
-    title: "未开始计划",
-    focus: "尚未开始",
+    title: "暂停计划",
+    focus: "暂不推进",
     status: "暂停",
-    steps: [{ id: "prepare", title: "准备", status: "未开始" }],
+    steps: [{ id: "prepare", title: "准备" }],
     keywords: ["引导"]
   });
   const approval = createPlan(roleDir, {
@@ -1448,7 +1481,6 @@ test("only running plans outside approval accept whole-plan guidance", () => {
     steps: [{
       id: "approve",
       title: "等待审批",
-      status: "进行中",
       approvalRequest: { request: "批准方案", reason: "涉及外部变更" }
     }],
     keywords: ["审批"]
@@ -1466,7 +1498,7 @@ test("plan attachments enforce count, per-file, and total size limits", () => {
     title: "附件限制",
     focus: "附件限制",
     status: "暂停" as const,
-    steps: [{ id: "inspect", title: "检查附件", status: "未开始" }],
+    steps: [{ id: "inspect", title: "检查附件" }],
     keywords: ["附件"]
   };
   assert.throws(() => createPlan(roleDir, {
@@ -2391,9 +2423,9 @@ test("plans require ordered steps and one explicit current step", () => {
     currentStep: "正在实现页面",
     blockedBy: "设计稿缺失",
     steps: [
-      { id: "inspect", title: "检查现状", status: "已完成" },
-      { id: "implement", title: "实现页面", status: "进行中", blockedBy: "缺少最终设计稿" },
-      { id: "verify", title: "验证结果", status: "未开始" }
+      { id: "inspect", title: "检查现状", completedAt: "2026-09-04T00:00:00.000Z" },
+      { id: "implement", title: "实现页面", blockedBy: "缺少最终设计稿" },
+      { id: "verify", title: "验证结果" }
     ],
     keywords: ["步骤"]
   });
@@ -2401,7 +2433,7 @@ test("plans require ordered steps and one explicit current step", () => {
   assert.equal(plan.steps.length, 3);
   assert.equal(plan.currentStepId, "implement");
   assert.equal(plan.blockedBy, "设计稿缺失");
-  assert.equal(plan.steps[1]?.status, "进行中");
+  assert.equal("status" in plan.steps[1]!, false);
   assert.equal(plan.status, "执行中");
   assert.equal(plan.steps[1]?.blockedBy, "缺少最终设计稿");
 
@@ -2411,17 +2443,16 @@ test("plans require ordered steps and one explicit current step", () => {
     keywords: ["步骤"]
   }), /Plan steps are required/);
 
-  assert.throws(() => createPlan(roleDir, {
-    title: "两个当前步骤",
-    focus: "两个当前步骤",
-    status: "执行中",
-    currentStepId: "one",
-    steps: [
-      { id: "one", title: "第一步", status: "进行中" },
-      { id: "two", title: "第二步", status: "进行中" }
-    ],
-    keywords: ["步骤"]
-  }), /only one in-progress step/);
+  assert.equal(plan.steps[0]?.completedAt, "2026-09-04T00:00:00.000Z");
+  assert.equal(plan.steps[2]?.completedAt, undefined);
+
+  const finished = updatePlan(roleDir, plan.id, {
+    status: "完成",
+    currentStepId: null
+  });
+  assert.equal(finished.status, "完成");
+  assert.equal(finished.currentStepId, undefined);
+  assert.equal(Number.isFinite(Date.parse(finished.completedAt || "")), true);
 });
 
 test("discussion and pause are explicit plan statuses", () => {

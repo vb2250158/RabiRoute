@@ -855,7 +855,7 @@ function requiresBoardStateMigration(value: unknown): boolean {
 function planStepsSignature(plan: PlanItem): string {
   return JSON.stringify(plan.steps.map((step) => ({
     id: step.id,
-    status: step.status,
+    startedAt: step.startedAt,
     waitingFor: step.waitingFor,
     completedAt: step.completedAt,
     blockedBy: step.blockedBy

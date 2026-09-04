@@ -934,10 +934,11 @@ Agent 间 `create` 与 `send` 投递时，Manager 按 `messageSource.agentAdapte
 
 ## 计划接口
 
-计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。`plan.status` 只保存当前人格 `personaConfig.json.planWorkflow.statuses` 中启用状态的 key；下面九项是默认模板，不是代码枚举。
+计划是 Agent 需要关注的事项。计划不按短期、长期拆目录，而是通过状态和字段表达当前进展、优先级、项目归属和下一步。`plan.status` 只保存当前人格 `personaConfig.json.planWorkflow.statuses` 中启用状态的 key；下面十项是默认模板，不是代码枚举。
 
 ```text
 分析中
+待补充信息
 待审批
 执行中
 等待打包
@@ -991,9 +992,9 @@ POST /roles/:roleId/plans
     { "name": "acceptance-checklist.pdf", "path": "C:/Path/To/acceptance-checklist.pdf" }
   ],
   "steps": [
-    { "id": "inspect-existing", "title": "检查现有计划接口", "status": "已完成", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "confirm-contract", "title": "确认步骤数据契约", "status": "进行中", "startedAt": "2026-07-27T08:10:00.000Z" },
-    { "id": "update-docs", "title": "更新双语接口文档", "status": "未开始" }
+    { "id": "inspect-existing", "title": "检查现有计划接口", "startedAt": "2026-07-27T08:00:00.000Z", "completedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "confirm-contract", "title": "确认步骤数据契约", "startedAt": "2026-07-27T08:10:00.000Z" },
+    { "id": "update-docs", "title": "更新双语接口文档" }
   ],
   "keywords": ["计划", "记忆", "接口", "上下文"],
   "source": {
@@ -1013,9 +1014,9 @@ POST /roles/:roleId/plans
 }
 ```
 
-新增计划必须提供有序的 `steps`。`plan.status` 只能写当前人格状态目录中的 enabled key。`archiveStatus` 独立，只允许“未归档、已归档”。步骤仍只使用“未开始、进行中、已完成”，不再写 `workPhase` 或 `discussionState`。Manager 返回 key 及其配置的 label、description、palette、order 和 views，WebGUI 与托盘只消费这些字段。
+新增计划必须提供有序的 `steps`。`plan.status` 只能写当前人格状态目录中的 enabled key。`archiveStatus` 独立，只允许“未归档、已归档”。步骤不保存独立状态；`currentStepId` 表示当前步骤，`completedAt` 表示已经完成。Manager 返回 key 及其配置的 label、description、palette、order 和 views，WebGUI 与托盘只消费这些字段。
 
-审批资料准备、完整审批等待和获批执行分别写 `planWorkflow.roles.analysis`、`roles.approval`、`roles.execution` 所指的 key。包体、QA、讨论和暂停同样通过 roles 查找；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
+仍在调查、分析后确认信息不足、完整审批等待和获批执行分别写 `planWorkflow.roles.analysis`、`roles.informationNeeded`、`roles.approval`、`roles.execution` 所指的 key。包体、QA、讨论和暂停同样通过 roles 查找；步骤名称、说明、`waitingFor` 与审批合同不再覆盖 `plan.status`。
 
 只有代码、Prefab、资源、配置等会产生项目内容变动的计划才应采用“实施/开发验证/适用同步提交 → 等待打包 → 等待 QA → QA 通过完成；失败回实施”的流程。调查、设计评审、运营、资料收集、外部依赖与控制面维护按自身真实步骤推进；Agent 或批处理不得为这些计划虚构 package 或 QA 步骤。Manager 不根据标题、说明或 `kind` 自动补流程。
 
@@ -1050,7 +1051,7 @@ RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入�
 {
   "feedbackId": "webgui-guidance-12345",
   "gatewayId": "route-id",
-  "text": "先收窄整体范围，再根据结果调整后续未开始步骤。",
+  "text": "先收窄整体范围，再根据结果调整后续步骤。",
   "kind": "guidance",
   "author": "user",
   "source": "webgui",
@@ -1081,11 +1082,11 @@ RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入�
 
 `planAttachmentIds` 也可选，用于引用当前计划顶层 `attachments` 中已有的受管附件；最多 8 个且必须唯一。RibiWebGUI 在审批输入框键入 `@` 时显示当前计划附件候选，选中后插入可读的 `@附件「文件名」` 标记，并提交对应附件 ID。Manager 以 ID 校验附件确实属于当前计划，把附件元数据与本地路径作为本次审批审计快照保存，并随同一 `plan_feedback` 投递给 Agent；WebGUI 不读取或提交任意本机路径。同一 `feedbackId` 重试也必须保持相同的计划附件引用。
 
-当反馈关联当前结构化 `qa-* / verify-*` 步骤时，Manager 只把用户或外部入口提交的 `approval_suggestion` 视为 QA 判定候选。`guidance`、`guidance_response`、`approval_response`、`author=agent` 的执行报告，以及正文里的裸 `passed / verified` 测试计数都只作普通反馈记录，不会完成或回退 QA。候选正文明确表示失败或仍复现时，Manager 在同一计划插入或复用 `investigate-<qaStepId>`，把 QA 步骤改回未开始，按问题类型把最小缺失证据写入 `waitingFor`；证据齐全后继续原 `taskBinding.sessionId + workspace`。只有“QA 明确通过”“验收通过”“确认未再复现”等明确结论才完成当前 QA 步骤。
+当反馈关联当前结构化 `qa-* / verify-*` 步骤时，Manager 只把用户或外部入口提交的 `approval_suggestion` 视为 QA 判定候选。`guidance`、`guidance_response`、`approval_response`、`author=agent` 的执行报告，以及正文里的裸 `passed / verified` 测试计数都只作普通反馈记录，不会完成或回退 QA。候选正文明确表示失败或仍复现时，Manager 在同一计划插入或复用 `investigate-<qaStepId>`，清除 QA 步骤的 `completedAt`，按问题类型把最小缺失证据写入 `waitingFor`；证据齐全后继续原 `taskBinding.sessionId + workspace`。只有“QA 明确通过”“验收通过”“确认未再复现”等明确结论才完成当前 QA 步骤。
 
 当 `notifyAgent=true` 时，POST 在反馈成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`。计划引导与审批意见复用同一 `taskBinding` 投递链：存在完整绑定时，Manager 只通过 `/api/agent/threads` 的 Desktop IPC 主链投向原业务任务；绑定不完整时才把完整反馈交给人格 Agent。owner 未加载时保持 `pending` 并有界重试，只有目标 owner 接受 `start/steer` 才记录 `delivered`。事件不写角色面板 timeline 或统一会话账本，也不注入最近消息；终态通过 `plan_feedback_changed` 通知。
 
-Agent 处理计划引导时使用 `kind=guidance_response`、`author=agent`、`source=agent`、`notifyAgent=false`，只回写 `planId`，不带 `stepId`。Agent 必须先读取整个计划，按引导更新计划说明、范围、优先级或路径，并在需要时调整尚未开始的步骤。审批处理仍使用 `kind=approval_response` 并关联 `planId / stepId`。两类 Agent 记录都按 `record_only` 保存，反馈本身不推进计划。
+Agent 处理计划引导时使用 `kind=guidance_response`、`author=agent`、`source=agent`、`notifyAgent=false`，只回写 `planId`，不带 `stepId`。Agent 必须先读取整个计划，按引导更新计划说明、范围、优先级或路径，并在需要时调整后续步骤。审批处理仍使用 `kind=approval_response` 并关联 `planId / stepId`。两类 Agent 记录都按 `record_only` 保存，反馈本身不推进计划。
 
 AgentPacket 的共用计划 API 提示会直接包含上述计划引导、审批记录入口与“记录后另行 PATCH 计划”的约束，因此不要求每个人格 Skill 重复维护同一套接口。
 

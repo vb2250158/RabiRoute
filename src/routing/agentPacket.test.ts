@@ -921,7 +921,7 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
     routeKind: "plan_feedback",
     record: {
       ...record,
-      rawMessage: "先收窄整体范围，再调整后续未开始步骤。",
+      rawMessage: "先收窄整体范围，再调整后续步骤。",
       messageId: "plan-feedback-guidance-1",
       replyContext: {
         targetType: "plan_feedback",
@@ -935,7 +935,7 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
     extraValues: {},
     matchedRules: [rule],
     routeVariables: {},
-    routeText: "先收窄整体范围，再调整后续未开始步骤。"
+    routeText: "先收窄整体范围，再调整后续步骤。"
   }, rule, {
     roleId: "Rabi",
     roleDir,
@@ -945,7 +945,7 @@ test("AgentPacket routes plan approval responses back to the plan instead of lea
 
   assert.match(guidancePacket.message, /读取计划与反馈，按引导推进/);
   assert.match(guidancePacket.message, /范围、优先级或路径变化时 PATCH 计划/);
-  assert.match(guidancePacket.message, /PATCH 计划和未开始步骤/);
+  assert.match(guidancePacket.message, /PATCH 计划和后续步骤/);
   assert.match(guidancePacket.message, /当前 planId 的 guidance_response/);
   assert.doesNotMatch(guidancePacket.message, /approvalRequest\.responseStatus/);
 });

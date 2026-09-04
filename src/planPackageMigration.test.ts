@@ -14,14 +14,18 @@ function writePlan(roleDir: string, fileName: string, plan: Record<string, unkno
 
 function packageSteps(currentId = "package") {
   return [
-    { id: "implement", title: "完成 Main / Release 实现", status: currentId === "implement" ? "进行中" : "已完成" },
+    {
+      id: "implement",
+      title: "完成 Main / Release 实现",
+      ...(currentId === "implement" ? {} : { completedAt: "2026-07-28T00:00:00.000Z" })
+    },
     {
       id: "matching-tests",
       title: "完成双分支目标测试 3/3",
       detail: "Main→Release 已同步，Art 不适用；SVN 提交 r224818；无文本/属性/树冲突或 obstruction，svn status --show-updates 无 *。",
-      status: currentId === "implement" ? "未开始" : "已完成"
+      ...(currentId === "implement" ? {} : { completedAt: "2026-07-28T00:00:00.000Z" })
     },
-    { id: "package", title: "等待目标包产物", status: currentId === "package" ? "进行中" : "未开始", waitingFor: currentId === "package" ? "等待目标包身份与进包结果" : "" }
+    { id: "package", title: "等待目标包产物", waitingFor: currentId === "package" ? "等待目标包身份与进包结果" : "" }
   ];
 }
 
