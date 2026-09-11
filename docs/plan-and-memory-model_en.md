@@ -459,6 +459,8 @@ Memory lists can call `GET /api/roles/:roleId/memory?kind=<recent|consolidated|a
 
 Plan pagination also accepts `sort=<status|updated|importance|urgency>`, repeated `status=<presentation-status>`, repeated `tag=<keywords-tag>`, and `facets=0`. `updated` compares the `updatedAt` timestamp. The other three modes compare Manager-projected integer levels. Status uses `statusLevel`; importance and urgency use `0–4`, where `0` is highest, `1` high, `2` medium, `3` low, and `4` not set. Legacy `priority` strings are converted once at the read boundary. A legacy plan without `urgency` may derive a compatibility level from `dueAt`. Sorting never compares display labels. The response also carries the Chinese and English labels plus palettes for each level, and WebGUI only renders them. Manager applies filters and sorting before pagination.
 
+The plan list sorting and filtering dialog uses separate horizontal rows for sorting, statuses, and tags, wrapping on narrow screens. Statuses and tags support multiple selection and an all-items reset; tag search covers every tag. A plan must match any selected item within each group and satisfy both groups. Initially 40 tags are shown, with further expansion available. Changes apply to both the directory and cards only after clicking Done; closing the dialog discards unapplied choices.
+
 ## Plan guidance and approval feedback
 
 Plan feedback is an independent JSONL audit record stored as `feedback.jsonl` inside the same plan directory. `kind=guidance` is plan-level guidance associated only with `planId` and must not carry `stepId`; `kind=approval_suggestion` is formal feedback associated with an approval step. Neither is a second copy of the plan JSON or the generic Outbox Action Queue.
@@ -523,3 +525,7 @@ Point reads still check all active/archive file locations, including duplicate l
 
 
 See [knowledge search](knowledge-search_en.md) for summary search and automatic incremental cache APIs.
+
+### Current-step status labels
+
+The current step displays the plan’s actual status. Steps awaiting approval or information, and steps under analysis, are not labeled as executing. Approval waits are not labeled as technical blocks. Completed steps remain marked as completed.

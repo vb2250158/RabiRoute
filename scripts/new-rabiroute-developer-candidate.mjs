@@ -3,6 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
+import { assertDeveloperLocksCompatible } from "./lib/developer-lock-compatibility.mjs";
+
 import { writeManifest } from "./create-windows-release-manifest.mjs";
 
 function requireFile(root, relativePath) {
@@ -39,6 +41,10 @@ function createDeveloperCandidate(options) {
   requireFile(buildRoot, "dist/manager.js");
   requireFile(buildRoot, "ribiwebgui/dist/index.html");
   requireFile(traySourceRoot, "main.py");
+  requireFile(buildRoot, "package.json");
+  const baseLock = fs.readFileSync(requireFile(baseRoot, "package-lock.json"));
+  const buildLock = fs.readFileSync(requireFile(buildRoot, "package-lock.json"));
+  assertDeveloperLocksCompatible(baseLock.toString("utf8"), buildLock.toString("utf8"));
   requireFile(hostCoreRoot, "RabiRouteHost.Core.dll");
 
   fs.mkdirSync(versionsRoot, { recursive: true });
@@ -46,6 +52,9 @@ function createDeveloperCandidate(options) {
   try {
     fs.cpSync(baseRoot, stagingRoot, { recursive: true, dereference: false, errorOnExist: true });
     fs.rmSync(path.join(stagingRoot, "release-manifest.json"), { force: true });
+    for (const name of ["package.json", "package-lock.json"]) {
+      fs.copyFileSync(path.join(buildRoot, name), path.join(stagingRoot, name));
+    }
     replaceDirectory(path.join(buildRoot, "dist"), path.join(stagingRoot, "dist"));
     replaceDirectory(path.join(buildRoot, "ribiwebgui", "dist"), path.join(stagingRoot, "ribiwebgui", "dist"));
     replaceDirectory(path.join(buildRoot, "assets"), path.join(stagingRoot, "assets"));

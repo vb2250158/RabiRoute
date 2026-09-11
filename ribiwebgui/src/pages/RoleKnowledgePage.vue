@@ -99,6 +99,8 @@ const planListDraftSortMode = ref<PlanListSortMode>("status");
 const planListDraftHiddenStatuses = ref<string[]>([]);
 const planListDraftSelectedTags = ref<string[]>([]);
 const planListTagQuery = ref("");
+const planListTagDisplayLimit = ref(40);
+watch(planListTagQuery, () => { planListTagDisplayLimit.value = 40; });
 const planListDialogOpen = ref(false);
 const planListDialogContentCached = ref(false);
 const planListResultTotal = ref(0);
@@ -1665,7 +1667,7 @@ const planListDraftSortLabel = computed(() => planListSortLabelFor(planListDraft
 const planListDraftHasFilters = computed(() => planListDraftHiddenStatuses.value.length > 0 || planListDraftSelectedTags.value.length > 0);
 const planListActiveFilterCount = computed(() => (planListHiddenStatuses.value.length ? 1 : 0) + planListSelectedTags.value.length);
 const planListDraftActiveFilterCount = computed(() => (planListDraftHiddenStatuses.value.length ? 1 : 0) + planListDraftSelectedTags.value.length);
-const normalizedPlanListTagQuery = computed(() => planListTagQuery.value.trim().toLocaleLowerCase());
+const normalizedPlanListTagQuery = computed(() => (planListTagQuery.value || "").trim().toLocaleLowerCase());
 const visiblePlanListTagOptions = computed(() => {
   if (!normalizedPlanListTagQuery.value) return planListTagOptions.value;
   return planListTagOptions.value.filter((option) => option.tag.toLocaleLowerCase().includes(normalizedPlanListTagQuery.value));
@@ -1687,6 +1689,7 @@ function openPlanListDialog(): void {
   planListDraftHiddenStatuses.value = [...planListHiddenStatuses.value];
   planListDraftSelectedTags.value = [...planListSelectedTags.value];
   planListTagQuery.value = "";
+  planListTagDisplayLimit.value = 40;
   planListDialogOpen.value = true;
   ensurePlanListDialogContentCached();
 }
@@ -2547,136 +2550,116 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   </span>
                 </div>
                 <div v-else class="knowledge-plan-list-control-layout">
-                  <div class="knowledge-plan-list-control-column">
-                    <fieldset class="knowledge-plan-list-panel knowledge-plan-list-sort-panel">
-                      <legend>{{ t("排序方式") }}</legend>
-                      <p>{{ t("选择整个计划列表的排列方式") }}</p>
-                      <div class="knowledge-plan-list-sort-options">
-                        <button
-                          type="button"
-                          :class="{ selected: planListDraftSortMode === 'status' }"
-                          :aria-pressed="planListDraftSortMode === 'status'"
-                          @click="planListDraftSortMode = 'status'"
-                        >
-                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-sort-variant</v-icon></span>
-                          <span><b>{{ t("状态排序") }}</b><small>{{ t("相同工作阶段集中显示") }}</small></span>
-                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "status" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                        </button>
-                        <button
-                          type="button"
-                          :class="{ selected: planListDraftSortMode === 'updated' }"
-                          :aria-pressed="planListDraftSortMode === 'updated'"
-                          @click="planListDraftSortMode = 'updated'"
-                        >
-                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-clock-outline</v-icon></span>
-                          <span><b>{{ t("时间排序") }}</b><small>{{ t("最近更新的计划优先") }}</small></span>
-                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "updated" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                        </button>
-                        <button
-                          type="button"
-                          :class="{ selected: planListDraftSortMode === 'importance' }"
-                          :aria-pressed="planListDraftSortMode === 'importance'"
-                          @click="planListDraftSortMode = 'importance'"
-                        >
-                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-star-outline</v-icon></span>
-                          <span><b>{{ t("重要程度") }}</b><small>{{ t("重要程度高的计划优先") }}</small></span>
-                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "importance" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                        </button>
-                        <button
-                          type="button"
-                          :class="{ selected: planListDraftSortMode === 'urgency' }"
-                          :aria-pressed="planListDraftSortMode === 'urgency'"
-                          @click="planListDraftSortMode = 'urgency'"
-                        >
-                          <span class="knowledge-plan-list-sort-icon"><v-icon size="20">mdi-calendar-clock-outline</v-icon></span>
-                          <span><b>{{ t("紧急程度") }}</b><small>{{ t("截止时间近的计划优先") }}</small></span>
-                          <v-icon class="knowledge-plan-list-sort-check" size="18">{{ planListDraftSortMode === "urgency" ? "mdi-check-circle" : "mdi-circle-outline" }}</v-icon>
-                        </button>
-                      </div>
-                    </fieldset>
-                    <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel">
-                      <legend>{{ t("筛选状态") }}</legend>
-                      <div class="knowledge-plan-list-filter-head">
-                        <p>{{ t("可多选，同组匹配任一状态") }}</p>
-                        <v-btn
-                          class="knowledge-plan-list-show-all"
-                          size="small"
-                          variant="text"
-                          :disabled="!planListDraftHiddenStatuses.length"
-                          @click="planListDraftHiddenStatuses = []"
-                        >
-                          {{ t("显示全部") }}
-                        </v-btn>
-                      </div>
-                      <div class="knowledge-plan-list-filter-options knowledge-plan-list-status-options">
-                        <label
-                          v-for="option in planListStatusOptions"
-                          :key="option.status"
-                          :class="{
-                            disabled: planListStatusIsOnlyVisible(option.status),
-                            selected: !planListDraftHiddenStatuses.includes(option.status)
-                          }"
-                        >
-                          <input
-                            type="checkbox"
-                            :checked="!planListDraftHiddenStatuses.includes(option.status)"
-                            :disabled="planListStatusIsOnlyVisible(option.status)"
-                            @change="togglePlanListStatus(option.status)"
-                          >
-                          <span class="knowledge-plan-list-filter-swatch" :style="{ backgroundColor: option.palette.accent }" />
-                          <span :title="planStatusOptionDescription(option)">{{ planStatusOptionLabel(option) }}</span>
-                          <b>{{ option.count }}</b>
-                        </label>
-                      </div>
-                    </fieldset>
-                  </div>
-                  <fieldset class="knowledge-plan-list-panel knowledge-plan-list-filter-panel knowledge-plan-list-tag-panel">
-                    <legend>{{ t("筛选标签") }}</legend>
-                    <div class="knowledge-plan-list-filter-head">
-                      <p>{{ t("可多选，同组匹配任一标签") }}</p>
-                      <v-btn
-                        class="knowledge-plan-list-show-all"
-                        size="small"
-                        variant="text"
-                        :disabled="!planListDraftSelectedTags.length"
-                        @click="planListDraftSelectedTags = []"
-                      >{{ t("清除") }}</v-btn>
+                  <section class="knowledge-plan-list-panel knowledge-plan-list-sort-panel" :aria-label="t('排序方式')">
+                    <b class="knowledge-plan-list-row-title">{{ t("排序方式") }}</b>
+                    <div class="knowledge-plan-list-sort-options">
+                      <button
+                        type="button"
+                        :class="{ selected: planListDraftSortMode === 'status' }"
+                        :aria-pressed="planListDraftSortMode === 'status'"
+                        :title="t('相同工作阶段集中显示')"
+                        @click="planListDraftSortMode = 'status'"
+                      >{{ t("状态排序") }}</button>
+                      <button
+                        type="button"
+                        :class="{ selected: planListDraftSortMode === 'updated' }"
+                        :aria-pressed="planListDraftSortMode === 'updated'"
+                        :title="t('最近更新的计划优先')"
+                        @click="planListDraftSortMode = 'updated'"
+                      >{{ t("时间排序") }}</button>
+                      <button
+                        type="button"
+                        :class="{ selected: planListDraftSortMode === 'importance' }"
+                        :aria-pressed="planListDraftSortMode === 'importance'"
+                        :title="t('重要程度高的计划优先')"
+                        @click="planListDraftSortMode = 'importance'"
+                      >{{ t("重要程度") }}</button>
+                      <button
+                        type="button"
+                        :class="{ selected: planListDraftSortMode === 'urgency' }"
+                        :aria-pressed="planListDraftSortMode === 'urgency'"
+                        :title="t('截止时间近的计划优先')"
+                        @click="planListDraftSortMode = 'urgency'"
+                      >{{ t("紧急程度") }}</button>
                     </div>
-                    <v-text-field
-                      v-model="planListTagQuery"
-                      class="knowledge-plan-list-tag-search"
-                      density="compact"
-                      variant="outlined"
-                      prepend-inner-icon="mdi-magnify"
-                      :placeholder="t('搜索标签')"
-                      :aria-label="t('搜索标签')"
-                      clearable
-                      hide-details
-                    />
-                    <v-virtual-scroll
-                      v-if="visiblePlanListTagOptions.length"
-                      class="knowledge-plan-list-filter-options knowledge-plan-list-tag-options"
-                      :items="visiblePlanListTagOptions"
-                      height="420"
-                      item-height="44"
-                    >
-                      <template #default="{ item: option }">
-                        <label :class="{ selected: planListDraftSelectedTags.includes(option.tag) }">
+                  </section>
+                  <section class="knowledge-plan-list-panel knowledge-plan-list-filter-panel" :aria-label="t('筛选状态')">
+                    <b class="knowledge-plan-list-row-title" :title="t('可多选，同组匹配任一状态')">{{ t("筛选状态") }}</b>
+                    <div class="knowledge-plan-list-filter-options knowledge-plan-list-status-options">
+                      <button
+                        type="button"
+                        class="knowledge-plan-list-all-option"
+                        :class="{ selected: !planListDraftHiddenStatuses.length }"
+                        :aria-pressed="!planListDraftHiddenStatuses.length"
+                        @click="planListDraftHiddenStatuses = []"
+                      >{{ t("全部状态") }}</button>
+                      <label
+                        v-for="option in planListStatusOptions"
+                        :key="option.status"
+                        :class="{ disabled: planListStatusIsOnlyVisible(option.status), selected: !planListDraftHiddenStatuses.includes(option.status) }"
+                      >
+                        <input
+                          type="checkbox"
+                          :checked="!planListDraftHiddenStatuses.includes(option.status)"
+                          :disabled="planListStatusIsOnlyVisible(option.status)"
+                          @change="togglePlanListStatus(option.status)"
+                        >
+                        <span class="knowledge-plan-list-filter-swatch" :style="{ backgroundColor: option.palette.accent }" />
+                        <span :title="planStatusOptionDescription(option)">{{ planStatusOptionLabel(option) }}</span>
+                        <b>{{ option.count }}</b>
+                      </label>
+                    </div>
+                  </section>
+                  <section class="knowledge-plan-list-panel knowledge-plan-list-filter-panel knowledge-plan-list-tag-panel" :aria-label="t('筛选标签')">
+                    <b class="knowledge-plan-list-row-title" :title="t('可多选，同组匹配任一标签')">{{ t("筛选标签") }}</b>
+                    <div class="knowledge-plan-list-tag-content">
+                      <div class="knowledge-plan-list-tag-toolbar">
+                        <button
+                          type="button"
+                          class="knowledge-plan-list-all-option"
+                          :class="{ selected: !planListDraftSelectedTags.length }"
+                          :aria-pressed="!planListDraftSelectedTags.length"
+                          @click="planListDraftSelectedTags = []"
+                        >{{ t("全部标签") }}</button>
+                        <v-text-field
+                          v-model="planListTagQuery"
+                          class="knowledge-plan-list-tag-search"
+                          density="compact"
+                          variant="outlined"
+                          prepend-inner-icon="mdi-magnify"
+                          :placeholder="t('搜索标签')"
+                          :aria-label="t('搜索标签')"
+                          clearable
+                          hide-details
+                        />
+                      </div>
+                      <div v-if="visiblePlanListTagOptions.length" class="knowledge-plan-list-filter-options knowledge-plan-list-tag-options">
+                        <label
+                          v-for="option in visiblePlanListTagOptions.slice(0, planListTagDisplayLimit)"
+                          :key="option.tag"
+                          :class="{ selected: planListDraftSelectedTags.includes(option.tag) }"
+                          :title="option.tag"
+                        >
                           <input
                             type="checkbox"
                             :checked="planListDraftSelectedTags.includes(option.tag)"
                             @change="togglePlanListTag(option.tag)"
                           >
-                          <v-icon class="knowledge-plan-list-tag-icon" size="15">mdi-tag-outline</v-icon>
                           <span data-no-i18n>{{ option.tag }}</span>
                           <b>{{ option.count }}</b>
                         </label>
-                      </template>
-                    </v-virtual-scroll>
-                    <div v-else class="knowledge-plan-list-no-tags">
-                      {{ planListTagOptions.length ? t("没有匹配的标签") : t("当前计划没有标签") }}
+                        <button
+                          v-if="visiblePlanListTagOptions.length > planListTagDisplayLimit"
+                          type="button"
+                          class="knowledge-plan-list-more-tags"
+                          @click="planListTagDisplayLimit += 40"
+                        >{{ t("显示更多标签") }}</button>
+                      </div>
+                      <div v-else class="knowledge-plan-list-no-tags">
+                        {{ planListTagOptions.length ? t("没有匹配的标签") : t("当前计划没有标签") }}
+                      </div>
                     </div>
-                  </fieldset>
+                  </section>
                 </div>
                 <p class="knowledge-plan-list-filter-rule">{{ t("状态与标签同时满足时，计划才会显示。") }}</p>
               </v-card-text>
@@ -2894,7 +2877,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <div class="knowledge-plan-current-copy">
                   <div class="knowledge-plan-current-heading">
                     <span>{{ blocker(plan) ? "当前阻塞" : "当前步骤" }}</span>
-                    <small v-if="planStepCount(plan)">{{ currentStepPosition(plan) || "—" }}/{{ planStepCount(plan) }} · {{ t("执行步骤") }}</small>
+                    <small v-if="planStepCount(plan)">{{ currentStepPosition(plan) || "—" }}/{{ planStepCount(plan) }} · {{ t("计划步骤") }}</small>
                   </div>
                   <b
                     v-if="currentStep(plan)?.title || plan.currentStep"
@@ -2939,7 +2922,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               :aria-expanded="Boolean(expandedPlans[plan.id])"
               @click="togglePlan(plan)"
             >
-              <span>{{ expandedPlans[plan.id] ? t("收起计划详情") : plan.presentation.approval.state === "ready" ? t("查看执行合同并审批") : plan.presentation.approval.state === "incomplete" ? t("查看缺失的审批信息") : planAcceptsGuidance(plan) ? t("查看计划详情并引导") : planStepCount(plan) ? `${t("查看全部")} ${planStepCount(plan)} ${t("个步骤")}` : t("查看计划详情") }}</span>
+              <span>{{ expandedPlans[plan.id] ? t("收起计划详情") : plan.presentation.approval.state === "ready" ? t("查看修改方案并审批") : plan.presentation.approval.state === "incomplete" ? t("查看方案还缺什么") : planAcceptsGuidance(plan) ? t("查看计划详情并引导") : planStepCount(plan) ? `${t("查看全部")} ${planStepCount(plan)} ${t("个步骤")}` : t("查看计划详情") }}</span>
               <v-icon size="18">{{ expandedPlans[plan.id] ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
             </button>
 
@@ -3039,12 +3022,12 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               <section v-if="planAcceptsGuidance(plan)" class="knowledge-approval-panel" data-state="guidance">
                 <div class="knowledge-approval-head">
                   <div>
-                    <span>{{ t("计划引导") }}</span>
-                    <b>{{ t("给 Agent 补充整个计划的方向、范围或优先级") }}</b>
+                    <span>{{ t(feedbackQuestions(plan).length ? "补充信息" : "计划引导") }}</span>
+                    <b>{{ t(feedbackQuestions(plan).length ? "回答 Agent 的问题" : "补充计划的方向、范围或优先级") }}</b>
                   </div>
                   <v-chip color="primary" size="x-small" variant="tonal">{{ t("可引导") }}</v-chip>
                 </div>
-                <p>{{ t("引导属于整个计划，不绑定某个步骤。Agent 会据此继续推进，并在需要时调整后续步骤；引导不会被视为审批，也不会自动改变计划状态。") }}</p>
+                <p>{{ t(feedbackQuestions(plan).length ? "Agent 收到补充后会重新分析，再判断是否还需信息，或已能提交方案审批。" : "补充内容会交给原任务。Agent 会重新核对计划，再决定下一步。") }}</p>
                 <div v-if="guidanceRecordsForDisplay(plan).length" class="knowledge-approval-history" :aria-label="t('计划引导记录')">
                   <article
                     v-for="feedback in guidanceRecordsForDisplay(plan)"
@@ -3134,7 +3117,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               <div v-if="planFullDetailsLoaded[plan.id] && plan.steps.length" class="knowledge-steps">
                 <div class="knowledge-steps-head">
                   <div>
-                    <span>{{ t("执行计划") }}</span>
+                    <span>{{ t("计划步骤") }}</span>
                     <b>{{ plan.steps.length }} {{ t("个步骤") }}</b>
                   </div>
                   <small>{{ completedSteps(plan) }}/{{ plan.steps.length }} {{ t("已完成") }}</small>
@@ -3154,7 +3137,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     <div class="knowledge-step-copy">
                       <div class="knowledge-step-title-row">
                         <b data-no-i18n>{{ step.title }}</b>
-                        <span v-if="step.id === plan.currentStepId">{{ blocker(plan) ? t("当前阻塞") : t("正在执行") }}</span>
+                        <span v-if="step.id === plan.currentStepId">{{ planStatusLabel(plan) }}</span>
                       </div>
                       <details v-if="step.detail && isApprovalStep(plan, step)" class="knowledge-approval-disclosure">
                         <summary>{{ t('步骤说明') }}</summary>
@@ -3177,7 +3160,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                       :color="stepColor(plan, step)"
                       size="x-small"
                       variant="tonal"
-                    >{{ stepIsBlocked(plan, step) ? "已阻塞" : step.completedAt ? "已完成" : "进行中" }}</v-chip>
+                    >{{ step.completedAt ? t("已完成") : planStatusLabel(plan) }}</v-chip>
                     <section v-if="isApprovalStep(plan, step)" class="knowledge-approval-panel" :data-state="plan.presentation.approval.state">
                   <div class="knowledge-approval-head">
                     <div>

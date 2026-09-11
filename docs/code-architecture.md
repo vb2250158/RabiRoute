@@ -10,6 +10,8 @@
 
 Android 日常入口由 `recording/RabiRecordingHubActivity` 提供四页导航；`CaptureOwnership` 协调会话录音、本地录音和录像互斥，`RecordingStore` 保存会话清单。采集与媒体文件分别由 `RabiLocalAudioService`、`RabiLiveRecordingService` 持有。`RabiConversationService` 的历史队列初始化在单线程执行器中完成，就绪前命令有序等待，避免阻塞主线程与后台录像。见[移动端记录界面](rabilink-mobile-recording-ui.md)。
 
+通用跨 PC 连接由 `src/peerTunnel/` 拥有：认证、三线路选择、流复用、RTT 和请求转发。语音页面使用同一目标选择，设备采集与播放保留本机归属。见[通用连接](rabilink-peer-tunnel.md)。
+
 跨 PC 只读调用由 `rabiPeerProtocol.ts` 拥有加密合同和目标授权分派，`rabiPeerClient.ts` 编排 LAN/P2P/Relay，`rabiPeerDirect.ts` 拥有有界 WebRTC 连接。`rabiPeerDiscovery.ts` 同时服务 RPC 与人格同步；RabiLink 插件拥有 HTTP 入口及释放，现有专用 LAN listener 额外接受加密的 `/api/rabilink/peer/receive`，不开放完整 Manager。见[跨电脑接口调用](rabilink-peer-rpc.md)。
 
 实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。

@@ -6,6 +6,7 @@ import { RabiPeerDispatcher, PEER_RPC_PATH, type PeerIdentity, type PeerOperatio
 
 export function createRabiPeerRuntime(options: {
   identity(): PeerIdentity; token(): string; allowed(): string[];
+  tunnelOffer?(input: unknown): Promise<unknown>;
   operations: PeerOperation[]; peers(): Promise<RabiPeer[]>;
   relay(): { url: string; token: string };
   readJson(request: IncomingMessage, maxBytes: number): Promise<unknown>;
@@ -14,8 +15,9 @@ export function createRabiPeerRuntime(options: {
 }) {
   let active = true;
   const dispatcher: RabiPeerDispatcher = new RabiPeerDispatcher({ ...options,
-    allowed: () => [...options.allowed(), "transport.offer"],
-    operations: [...options.operations, { capability: "transport", operation: "offer", execute: input => direct.offer(input) }]
+    allowed: () => [...options.allowed(), "transport.offer", ...(options.tunnelOffer ? ["transport.tunnel"] : [])],
+    operations: [...options.operations, { capability: "transport", operation: "offer", execute: input => direct.offer(input) },
+      ...(options.tunnelOffer ? [{ capability: "transport", operation: "tunnel", execute: options.tunnelOffer }] : [])]
   });
   const direct: RabiPeerDirect = new RabiPeerDirect(packet => dispatcher.receive(packet));
   const client = new RabiPeerClient({ peers: options.peers, relay: options.relay, direct });
@@ -50,5 +52,5 @@ export function createRabiPeerRuntime(options: {
     void run.then(() => pending.delete(run), () => pending.delete(run));
     return true;
   };
-  return { handler, async stop() { active = false; await direct.stop(); await Promise.allSettled([...pending]); } };
+  return { handler, call: (call: PeerCall) => client.call(call), signal: (call: PeerCall, signal?: AbortSignal) => client.signal(call, signal), async stop() { active = false; await direct.stop(); await Promise.allSettled([...pending]); } };
 }

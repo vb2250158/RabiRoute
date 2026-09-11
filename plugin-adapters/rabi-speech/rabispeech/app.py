@@ -11,6 +11,7 @@ import os
 import socket
 import tempfile
 import time
+import wave
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
@@ -38,6 +39,7 @@ from .persona_voice import (
     resolve_persona_role_dir,
 )
 from .playback import PlaybackCoordinator
+from .peer_compute import selected_remote_transcription
 from .providers import ApiAsrProvider, ApiTtsProvider, DashScopeAsrProvider, DashScopeTtsProvider, FasterWhisperProvider, LocalHttpAsrProvider, LocalTtsProvider
 from .registry import ProviderRegistry
 from .remote_audio import RemoteAudioHub, RemoteAudioServerConfig
@@ -227,7 +229,10 @@ def create_app(
 
     async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig) -> TranscriptionResult:
         record_id = f"speech-{uuid4().hex}"
-        result = await _transcribe(
+        remote = None
+        if os.environ.get("RABIROUTE_MANAGER_URL", "").strip() or os.environ.get("GATEWAY_MANAGER_URL", "").strip():
+            remote = await selected_remote_transcription(_manager_loopback_url(), audio_path, model=config.asr_model, language=config.language, prompt=config.prompt)
+        result = remote or await _transcribe(
             providers,
             audio_path,
             model=config.asr_model,
@@ -750,6 +755,33 @@ def create_app(
     ) -> dict[str, object]:
         _require_loopback(request)
         return playback_queue.set_volume(body.volume)
+
+    @api.post("/v1/playback/audio")
+    async def playback_audio(
+        file: Annotated[UploadFile, File()],
+        model: Annotated[str, Form()] = "remote",
+        voice: Annotated[str, Form()] = "default",
+    ) -> dict[str, Any]:
+        """Queue completed remote WAV in the existing local host FIFO."""
+        audio = await file.read(32 * 1024 * 1024 + 1)
+        await file.close()
+        if not audio or len(audio) > 32 * 1024 * 1024:
+            raise HTTPException(413, "Playback WAV exceeds 32 MiB.")
+        current.server.temp_dir.mkdir(parents=True, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(prefix="peer-playback-", suffix=".wav", dir=current.server.temp_dir, delete=False)
+        source = Path(handle.name)
+        try:
+            with handle:
+                handle.write(audio)
+            try:
+                with wave.open(str(source), "rb") as wav:
+                    if wav.getnchannels() not in (1, 2) or wav.getsampwidth() not in (1, 2, 3, 4) or not 8000 <= wav.getframerate() <= 192000:
+                        raise ValueError("Unsupported PCM format.")
+            except (wave.Error, EOFError, ValueError) as error:
+                raise HTTPException(415, "Expected a completed PCM WAV.") from error
+            return playback_queue.enqueue(source, provider="peer", model=model[:200], voice=voice[:200])
+        finally:
+            source.unlink(missing_ok=True)
 
     @api.post("/v1/playback/stop")
     async def playback_stop() -> dict[str, object]:

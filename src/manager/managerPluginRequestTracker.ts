@@ -1,5 +1,6 @@
 import type http from "node:http";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
+import { automaticCodeRuntime } from "../plugin-kernel/automaticCodeRuntime.js";
 
 export class ManagerPluginRequestTracker {
   private accepting = true;
@@ -44,7 +45,7 @@ export class ManagerPluginRequestTracker {
   }
 
   trackOperation<T>(operation: Promise<T>): Promise<T> {
-    const tracked = Promise.resolve(operation);
+    const tracked = automaticCodeRuntime.trackOperation(Promise.resolve(operation));
     this.activeOperations.add(tracked);
     void tracked.then(
       () => this.activeOperations.delete(tracked),

@@ -267,6 +267,7 @@ if ($IncludeSpeech -and -not $SkipBuild) {
 
 $required = @(
     "dist\manager.js",
+    "dist\plugins\profiles\desktop.json",
     "ribiwebgui\dist\index.html",
     "desktop-runtime\main.py",
     "desktop-runtime\python\python.exe",

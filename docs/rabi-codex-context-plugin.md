@@ -18,6 +18,8 @@
 
 ## 人格聊天记录
 
+计划反馈实际投递给绑定任务或计划秘书后，以 `user_delivery` 写入同一文件。记录保留实际 `deliveryId`、`feedbackId`、计划名称和目标任务；以计划、反馈及目标任务组合去重。用户来源不解析为 Codex 任务，目标名称和定位链接按页解析。只保存、Agent 反馈和失败投递不新增用户消息；未确认投递保留记录时状态。追加后使用相同事件增量更新。
+
 Manager 在 `Stop` 收到非空 `last_assistant_message`（或 `lastAssistantMessage`）和 `turn_id`（或 `turnId`）时，将完整正文追加到唯一归属人格的 `chat-history/final-replies.jsonl`。归属复用显式 Hook 绑定、Route 任务及计划/秘书/消息处理任务绑定；归属冲突或缺失时不写入。Codex 和通过同一 Hook API 上报的 DSH 回复共用此入口，不读取桌面聊天数据库或补录旧消息。
 
 `GET /api/roles/:roleId/chat-history?limit=50&cursor=<byte-offset>` 返回 `entries` 和 `nextCursor`，按追加顺序倒序读取；cursor 省略时从最新位置开始，`nextCursor=null` 表示已到最早记录。正文不截断，分页最多 100 条且达到约 1 MiB 后提前返回游标。`sessionId + turnId + 正文` 的摘要用于重复回调去重。追加成功后发布 `persona_chat_history_changed`，WebGUI 仅在聊天记录标签激活时读取，收到事件或重连后按消息 ID 增量补入顶部，不清空已有记录；跨页补齐断线期间的新回复，保留更早记录游标、展开状态和阅读位置，请求期间到达的事件合并为随后一次补读。支持手动翻页与补读，只有切换人格时重置列表。该记录动作独立于计划完成通知开关，并保留现有启动恢复门禁。
@@ -188,3 +190,5 @@ codex plugin add rabi-codex-context@rabiroute-local
 完成通知只读取人格 `codexHooks.completionDeliveries` 与绑定计划 `messageChannels` 的显式目标，不根据私有项目路径或问题记录推断发送对象。两者命中同一目标时，每个任务轮次只发送一次。来源任务名称按完整任务 ID 从 Desktop 当前名称读取，无法读取时显示“未命名任务”，不使用旧计划绑定名称。正文保留完整最终回复，不追加计划中的旧“下一步”；QQ 长消息按最多 3000 个 UTF-16 单元分段，保留换行与完整 Unicode 字符，每段复用独立 Outbox 回执，失败时不继续发送后续段。
 
 旧的按业务项目自动发送摘要的入口已移除；升级前在相应人格或计划中确认通知目标。私有项目路径、群号与业务规则仅保存在 Git 忽略的人格数据中。升级不会重发历史回复。
+
+

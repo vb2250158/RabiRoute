@@ -32,3 +32,23 @@ export async function readSourcePatchCatalog(root: string): Promise<readonly Sou
   }
   return configuration.modules;
 }
+export async function discoverSourcePatchModules(root: string, definitions: readonly SourcePatchDefinition[]): Promise<readonly SourcePatchDefinition[]> {
+  const known = new Set(definitions.map(entry => path.resolve(root, entry.source)));
+  const discovered: SourcePatchDefinition[] = [...definitions];
+  const walk = async (directory: string): Promise<void> => {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      if (entry.name === "modules.json" || entry.name.startsWith(".")) continue;
+      const filename = path.join(directory, entry.name);
+      if (entry.isDirectory()) { await walk(filename); continue; }
+      if (!entry.isFile() || !entry.name.endsWith(".ts") || known.has(path.resolve(filename))) continue;
+      const source = await fs.readFile(filename, 'utf8');
+      if (!source.includes('export function ') && !source.includes('export class ') && !source.includes('export const ') && !source.includes('export {')) continue;
+      const relative = path.relative(root, filename).replaceAll(path.sep, "/");
+      const id = `auto.${relative.slice(0, -3).replaceAll("/", ".").replace(/[^a-z0-9._-]/gi, "-")}`;
+      discovered.push({ id, source: relative, contract: { discovery: "filesystem", schemaVersion: 1 } });
+      known.add(path.resolve(filename));
+    }
+  };
+  try { await walk(path.join(root, "source-patches")); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  return discovered;
+}

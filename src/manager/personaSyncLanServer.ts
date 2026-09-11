@@ -14,6 +14,7 @@ export type PersonaSyncLanStatus = {
 
 export type PersonaSyncLanServerOptions = {
   peerHandler?: (request: http.IncomingMessage, url: URL, response: http.ServerResponse) => boolean;
+  peerUpgrade?: (request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => boolean;
   host?: string;
   port?: number;
   addresses?: () => string[];
@@ -121,6 +122,7 @@ export class PersonaSyncLanServer {
           }
         });
       });
+      server.on("upgrade", (request, socket, head) => { if (!this.options.peerUpgrade?.(request, socket, head)) socket.destroy(); });
       this.server = server;
       const current = (): boolean => generation === this.startGeneration && this.server === server;
       const fail = (error: Error) => {

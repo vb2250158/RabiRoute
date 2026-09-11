@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { attachTunnelBroker } from "./lib/rabilink-tunnel-broker.mjs";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -5807,6 +5808,12 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, statusCode, { code: error?.code || -1, ok: false, message });
   }
 });
+
+const tunnelBroker = attachTunnelBroker(server, (req, url) => {
+  const auth = authorizeRabiLinkRequest(req, url);
+  return auth.ok && !auth.deviceBinding ? String(auth.app.id) : null;
+});
+server.on("close", () => tunnelBroker.close());
 
 server.listen(port, host, () => {
   console.log(`RabiLink Relay listening on http://${host}:${port}`);

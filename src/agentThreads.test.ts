@@ -868,6 +868,36 @@ test("Agent thread send forwards the Message Agent model independently", async (
   assert.match(sent.prompt, /\[消息内容\]\n处理这个消息组/);
 });
 
+for (const scenario of [
+  { name: "configured target default", request: {}, defaults: { model: "tool-default", reasoningEffort: "high" as const }, expected: { model: "tool-default", reasoningEffort: "high" } },
+  { name: "explicit primary persona decision", request: { model: "chosen-model", reasoningEffort: "low" as const }, defaults: { model: "tool-default", reasoningEffort: "high" as const }, expected: { model: "chosen-model", reasoningEffort: "low" } },
+  { name: "explicit model does not inherit another model effort", request: { model: "chosen-model" }, defaults: { model: "tool-default", reasoningEffort: "high" as const }, expected: { model: "chosen-model", reasoningEffort: undefined } },
+  { name: "native Agent default", request: {}, defaults: {}, expected: { model: undefined, reasoningEffort: undefined } }
+]) {
+  test(`Agent thread send model selection: ${scenario.name}`, async () => {
+    const calls: Parameters<AgentThreadDriver["send"]>[0][] = [];
+    const targetId = "019f0000-0000-7000-8000-000000000005";
+    const driver: AgentThreadDriver = {
+      read: async () => ({}),
+      create: async () => { throw new Error("must preserve the existing task binding"); },
+      send: async params => { calls.push(params); }
+    };
+    for (let n = 0; n < 2; n++) {
+      await handleAgentThreadRequest({
+        action: "send", threadId: targetId, prompt: `model selection test ${n}`,
+        cwd: process.cwd(), messageSource: defaultSystemMessageSource, ...scenario.request
+      }, { allowedWorkspaces: [process.cwd()], codexDefaults: scenario.defaults }, driver);
+    }
+    assert.equal(calls.length, 2);
+    for (const sent of calls) {
+      assert.equal(sent.threadId, targetId);
+      assert.equal(sent.model, scenario.expected.model);
+      assert.equal(sent.reasoningEffort, scenario.expected.reasoningEffort);
+      if (!scenario.expected.model) assert.equal(Object.hasOwn(sent, "model"), false);
+    }
+  });
+}
+
 test("Agent-to-Agent send shows the verified source task, Agent type, and session id", async () => {
   const calls: unknown[] = [];
   const targetThreadId = "019f0000-0000-7000-8000-000000000002";

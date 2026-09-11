@@ -255,8 +255,8 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.doesNotMatch(page, /plan\.status ===/);
   assert.doesNotMatch(page, /t\(plan\.status\)/);
   assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)" class="knowledge-approval-panel" data-state="guidance">/);
-  assert.match(page, /引导属于整个计划，不绑定某个步骤/);
-  assert.match(page, /调整后续步骤/);
+  assert.match(page, /补充内容会交给原任务/);
+  assert.match(page, /重新核对计划，再决定下一步/);
   assert.match(page, /:composer-id="`guidance-\$\{plan\.id\}`"[\s\S]*?@submit="sendPlanGuidance\(plan\)"/);
   assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance", notifyAgent\)/);
   assert.match(page, /const stepId = guidance \? undefined : plan\.presentation\.approval\.stepId/);
@@ -355,8 +355,8 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.doesNotMatch(styles, /\.knowledge-plan-directory-status\s*\{/);
   assert.match(styles, /\.knowledge-plan-directory-count\s*\{[\s\S]*?font-variant-numeric:\s*tabular-nums/);
   assert.match(styles, /\.knowledge-plan-list-dialog\s*\{[\s\S]*?max-height:\s*min\(840px/);
-  assert.match(styles, /\.knowledge-plan-list-control-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(360px, \.86fr\) minmax\(480px, 1\.14fr\)/);
-  assert.match(styles, /@media \(max-width: 900px\)[\s\S]*?\.knowledge-plan-list-control-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
+  assert.match(styles, /\.knowledge-plan-list-control-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(styles, /@media \(max-width: 600px\)[\s\S]*?\.knowledge-plan-list-panel\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
   assert.doesNotMatch(page, /class="knowledge-plan-directory-updated"/);
   assert.match(styles, /\.knowledge-plan-directory-sort-label\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?white-space:\s*nowrap/);
   assert.match(page, /@mouseenter="setPlanDirectoryMarquee\(\$event, true\)"/);
@@ -461,7 +461,8 @@ test("step blocker styling follows the structured approval contract", () => {
   assert.match(page, /function stepIsBlocked[\s\S]*?plan\.presentation\.approval\.state === "ready"/);
   assert.match(page, /blocked: stepIsBlocked\(plan, step\)/);
   assert.match(page, /stepIsBlocked\(plan, step\) && step\.blockedBy/);
-  assert.match(page, /stepIsBlocked\(plan, step\) \? "已阻塞" : step\.completedAt \? "已完成" : "进行中"/);
+  assert.ok(page.includes('step.completedAt ? t("已完成") : planStatusLabel(plan)'));
+  assert.doesNotMatch(page, /blocker\(plan\) \? t\("当前阻塞"\) : t\("正在执行"\)/);
   assert.doesNotMatch(page, /step\.status/);
   assert.doesNotMatch(page, /plan\.presentation\.tone !== ['"]paused['"] && step\.blockedBy/);
 });
@@ -505,4 +506,20 @@ test("approval review prioritizes decisions and shared previews without hiding v
   assert.match(page, /:submit-disabled="!canSubmitApproval\(plan\)"/);
   assert.match(app, /'navigation-collapsed': !drawer/);
   assert.match(styles, /\.navigation-collapsed \.knowledge-page\s*\{[^}]*max-width: min\(1880px, 100%\);/);
+});
+
+ test("plan filters use compact rows with accessible wrapping options and bounded tag expansion", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
+  const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
+  assert.match(styles, /\.knowledge-plan-list-panel\s*\{[^}]*grid-template-columns: 84px minmax\(0, 1fr\)/);
+  assert.match(styles, /\.knowledge-plan-list-filter-options\s*\{[^}]*display: flex;[^}]*flex-wrap: wrap/);
+  assert.match(styles, /label:has\(input:focus-visible\)/);
+  assert.match(page, /visiblePlanListTagOptions\.slice\(0, planListTagDisplayLimit\)/);
+  assert.match(page, /@click="planListTagDisplayLimit \+= 40"/);
+  assert.match(page, /watch\(planListTagQuery, \(\) => \{ planListTagDisplayLimit\.value = 40/);
+  assert.match(page, /:aria-pressed="!planListDraftHiddenStatuses.length"/);
+  assert.match(page, /:aria-pressed="!planListDraftSelectedTags.length"/);
+  assert.doesNotMatch(page, /knowledge-plan-list-control-column|knowledge-plan-list-sort-icon|knowledge-plan-list-sort-check/);
+  assert.doesNotMatch(styles, /height: 420px|knowledge-plan-list-control-column/);
 });

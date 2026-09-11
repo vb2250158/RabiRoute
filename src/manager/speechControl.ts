@@ -93,6 +93,7 @@ export type ManagerSpeechIngressStore = {
 
 export type ManagerSpeechControlDependencies = {
   serviceUrl(): string;
+  contextKey?(): string;
   personas(): readonly RouteCatalogPersonaPresentation[];
   route(routeId: string): ManagerSpeechRoute | undefined;
   routes(): ManagerSpeechRoute[];
@@ -670,7 +671,8 @@ export class ManagerSpeechControl {
   }
 
   status(): Promise<SpeechRuntimeStatus> {
-    const serviceUrl = this.dependencies.serviceUrl();
+    const endpoint = this.dependencies.serviceUrl();
+    const serviceUrl = endpoint + "#" + (this.dependencies.contextKey?.() || "");
     if (this.statusCache?.serviceUrl === serviceUrl && this.statusCache.expiresAt > Date.now()) {
       recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerSpeechStatusCacheHit, 0);
       return Promise.resolve(this.statusCache.status);
@@ -679,7 +681,7 @@ export class ManagerSpeechControl {
       recordPerformanceOperation(PERFORMANCE_OPERATIONS.managerSpeechStatusSharedFlight, 0);
       return this.statusFlight.promise;
     }
-    const promise = this.localSpeech.inspect(serviceUrl)
+    const promise = this.localSpeech.inspect(endpoint)
       .then(status => {
         this.statusCache = {
           serviceUrl,

@@ -882,3 +882,18 @@ def test_agent_speaker_identity_api_requires_explicit_id_for_ambiguous_metadata(
     )
     assert explicit.status_code == 200
     assert explicit.json()["profile"]["id"] == first["id"]
+
+
+def test_remote_audio_enters_existing_host_fifo_and_rejects_invalid_wav(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from rabispeech.playback import PlaybackCoordinator
+    monkeypatch.setattr(PlaybackCoordinator, "_default_player", staticmethod(lambda *_args: None))
+    client, _tts, _asr = fixture(tmp_path)
+    data = wav_file(tmp_path / "remote.wav").read_bytes()
+    response = client.post("/v1/playback/audio", files={"file": ("remote.wav", data, "audio/wav")}, data={"model": "remote-model", "voice": "sample"})
+    assert response.status_code == 200
+    job = response.json()
+    assert job["provider"] == "peer"
+    assert job["model"] == "remote-model"
+    assert job["id"]
+    invalid = client.post("/v1/playback/audio", files={"file": ("bad.wav", b"not a wave", "audio/wav")})
+    assert invalid.status_code == 415

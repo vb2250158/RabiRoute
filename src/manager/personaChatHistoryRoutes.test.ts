@@ -30,6 +30,7 @@ test("Hook HTTP ingestion and persona history API preserve scope, replay and pag
     }, ids => {
       if (unavailable) throw new Error("Desktop unavailable");
       assert.ok(ids.length <= 2);
+      assert.ok(!ids.includes("webgui"));
       return ids.map(id => ({ id, title, cwd: "", rolloutPath: "", firstUserMessage: "", updatedAt: "" }));
     })) return;
     response.writeHead(404).end();
@@ -71,4 +72,13 @@ test("Hook HTTP ingestion and persona history API preserve scope, replay and pag
   assert.equal(delivery.sessionTitle, title);
   assert.equal(delivery.targetSessionTitle, title);
   assert.equal(delivery.targetTaskUrl, "codex://threads/target");
+  await appendPersonaChatReply(path.join(root, "Example"), {
+    kind: "user_delivery", sessionId: "webgui", sourceLabel: "webgui", targetSessionId: "target",
+    text: "User answer", deliveryId: "user-delivery", feedbackId: "feedback", planId: "plan", deliveryStatus: "delivered"
+  });
+  const user = (await (await fetch(baseUrl + "/api/roles/Example/chat-history?limit=1")).json()).data.entries[0];
+  assert.equal(user.taskUrl, undefined);
+  assert.equal(user.sessionTitle, undefined);
+  assert.equal(user.targetTaskUrl, "codex://threads/target");
+
 });

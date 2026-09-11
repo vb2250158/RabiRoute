@@ -34,7 +34,8 @@ export const activate = definePlugin({
             registerRoutes: (instanceId, routeIdPrefix, handlers) => runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, instanceId, routeIdPrefix, handlers, [
                 { routeId: "catalog", kind: "exact", path: "/api/agent-adapters/catalog", methods: ["GET"] },
                 { routeId: "scan-agents", kind: "exact", path: "/api/scan/agents", methods: ["GET"] },
-                { routeId: "scan-dsh", kind: "exact", path: "/api/scan/agents/dsh", methods: ["GET"] }
+                { routeId: "scan-dsh", kind: "exact", path: "/api/scan/agents/dsh", methods: ["GET"] },
+                { routeId: "hooks-update", kind: "exact", path: "/api/agent-adapters/hooks/update", methods: ["POST"] }
             ])
         });
         runtime.agentAdapterCatalogService = mount.service;
@@ -54,3 +55,4 @@ export const activate = definePlugin({
         }, "activate io.rabiroute.manager.agent-adapter-catalog");
     }
 }).activate;
+

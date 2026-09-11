@@ -595,28 +595,50 @@ test("Desktop bridge drops connection-scoped active state when it closes", async
   }
 });
 
-for (const scenario of [
-  { name: "blank owner collaboration overrides valid latestModel", snapshot: { latestModel: "valid-model", latestCollaborationMode: { settings: { model: "" } } } },
-  { name: "blank explicit request model", snapshot: { latestModel: "valid-model" }, model: "  " },
-  { name: "owner snapshot unavailable", snapshot: null }
-]) {
-  test(`Desktop bridge refuses start: ${scenario.name}`, async () => {
+for (const snapshot of [null, {}, { latestModel: "" }, {
+  latestModel: "previous-model", latestCollaborationMode: { settings: { model: "" } }
+}]) {
+  test(`Desktop bridge delegates default model selection without a snapshot prerequisite: ${JSON.stringify(snapshot)}`, async () => {
     const events: CodexDesktopDeliveryEvent[] = [];
-    const router = await createMockDesktopRouter(request => ({
-      type: "response", requestId: request.requestId,
-      resultType: request.method === "thread-follower-steer-turn" ? "error" : "success",
-      error: request.method === "thread-follower-steer-turn" ? "NoActiveTurn" : undefined,
-      result: { clientId: "rabi" }
-    }), scenario.snapshot);
+    let sent: Record<string, any> | undefined;
+    const router = await createMockDesktopRouter(request => {
+      if (request.method === "thread-follower-start-turn") sent = request.params?.turnStart?.request;
+      return {
+        type: "response", requestId: request.requestId,
+        resultType: request.method === "thread-follower-steer-turn" ? "error" : "success",
+        error: request.method === "thread-follower-steer-turn" ? "NoActiveTurn" : undefined,
+        result: { clientId: "rabi" }
+      };
+    }, snapshot);
     const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath], requestTimeoutMs: 100, onDeliveryEvent: event => events.push(event) });
     try {
-      await assert.rejects(bridge.deliver({ threadId: "model-test", prompt: "private message", cwd: process.cwd(), sandbox: "workspace-write", model: scenario.model }), { name: "CodexDesktopModelSettingsError" });
-      assert.equal(router.methods.includes("thread-follower-start-turn"), false);
-      assert.equal(events.filter(event => event.stage === "model_rejected").length, 1);
+      const result = await bridge.deliver({ threadId: "model-test", prompt: "private message", cwd: process.cwd(), sandbox: "workspace-write" });
+      assert.equal(result.threadId, "model-test");
+      assert.equal(result.action, "started");
+      assert.equal(sent?.threadId, "model-test");
+      for (const key of ["model", "effort", "collaborationMode"]) assert.equal(Object.hasOwn(sent!, key), false);
+      assert.equal(router.methods.filter(method => method === "thread-follower-start-turn").length, 1);
+      assert.equal(events.find(event => event.stage === "model_checked")?.modelSource, "desktop-default");
       assert.equal(JSON.stringify(events).includes("private message"), false);
     } finally { bridge.close(); await router.close(); }
   });
 }
+
+test("Desktop bridge rejects an explicitly blank model before start", async () => {
+  const events: CodexDesktopDeliveryEvent[] = [];
+  const router = await createMockDesktopRouter(request => ({
+    type: "response", requestId: request.requestId,
+    resultType: request.method === "thread-follower-steer-turn" ? "error" : "success",
+    error: request.method === "thread-follower-steer-turn" ? "NoActiveTurn" : undefined,
+    result: { clientId: "rabi" }
+  }), null);
+  const bridge = new CodexDesktopBridge({ pipePaths: [router.pipePath], onDeliveryEvent: event => events.push(event) });
+  try {
+    await assert.rejects(bridge.deliver({ threadId: "model-test", prompt: "private message", cwd: process.cwd(), sandbox: "workspace-write", model: "  " }), { name: "CodexDesktopModelSettingsError" });
+    assert.equal(router.methods.includes("thread-follower-start-turn"), false);
+    assert.equal(events.filter(event => event.stage === "model_rejected").length, 1);
+  } finally { bridge.close(); await router.close(); }
+});
 
 test("Desktop bridge starts a message processing turn with the configured Luna model", async () => {
   let turnStartParams: Record<string, any> | undefined;

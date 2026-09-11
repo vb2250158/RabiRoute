@@ -4,8 +4,12 @@ export type PersonaChatReply = {
   receivedAt: string;
   sessionId: string;
   turnId?: string;
-  kind?: "final_reply" | "agent_delivery";
+  kind?: "final_reply" | "agent_delivery" | "user_delivery";
   deliveryId?: string;
+  sourceLabel?: string;
+  planId?: string;
+  planTitle?: string;
+  feedbackId?: string;
   deliveryStatus?: "delivered" | "unconfirmed";
   targetSessionId?: string;
   targetSessionTitle?: string;

@@ -98,7 +98,7 @@ test("knowledge navigation reuses the session cache until the user explicitly re
   assert.match(page, /@click="refreshKnowledge"/);
 });
 
-test("plan list controls paint before deferred virtualized filters and reuse their session view", () => {
+test("plan list controls paint before deferred bounded filters and reuse their session view", () => {
   const root = path.resolve(import.meta.dirname, "..");
   const page = fs.readFileSync(path.join(root, "src", "pages", "RoleKnowledgePage.vue"), "utf8");
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
@@ -114,7 +114,8 @@ test("plan list controls paint before deferred virtualized filters and reuse the
   assert.match(page, /max-width="1180"/);
   assert.match(page, /v-if="!planListDialogContentCached"/);
   assert.match(page, /v-else class="knowledge-plan-list-control-layout"/);
-  assert.match(page, /<v-virtual-scroll[\s\S]{0,300}:items="visiblePlanListTagOptions"/);
+  assert.match(page, /v-for="option in visiblePlanListTagOptions\.slice\(0, planListTagDisplayLimit\)"/);
+  assert.match(page, /const planListTagDisplayLimit = ref\(40\)/);
   assert.match(openDialog, /planListDialogOpen\.value = true;[\s\S]{0,200}ensurePlanListDialogContentCached\(\)/);
   assert.match(prepareDialog, /await nextTick\(\)[\s\S]{0,200}await yieldToKnowledgePaint\(\)/);
   assert.doesNotMatch(openDialog, /refreshKnowledge\(\)/);

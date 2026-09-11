@@ -4,6 +4,8 @@
 
 状态：实验支持。当前提供只读能力调用，使用局域网直连、公网 WebRTC 打洞尝试和受限 Relay 中转。自动化验证包含真实本机 WebRTC 数据通道、LAN 优先、直连失败后的 Relay 回退及应用隔离；跨运营商公网和真实双 PC 持续运行仍需各自验收。
 
+新的通用接口与语音服务器选择见[跨电脑通用连接](rabilink-peer-tunnel.md)。本页保留旧只读协议的兼容说明。
+
 ## 调用另一台 PC
 
 两台 PC 使用同一个 RabiLink 应用 token，并在线运行包含 `peer-rpc-v1` 的版本。Relay 也需要包含 `/api/rabilink/peer/proxy`。调用方通过当前 Host `status --json` 的 `managerBaseUrl` 读取 `/meta`，核对健康状态、application generation 和 Manager 实例后，再调用本机接口：

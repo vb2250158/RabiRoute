@@ -25,9 +25,9 @@ export function handlePersonaChatHistoryApi(
   )).then(data => {
     // Missing/unavailable Desktop metadata must not hide recorded replies.
     try {
-      const tasks = new Map(readTasks([...new Set(data.entries.flatMap(entry => [entry.sessionId, ...(entry.targetSessionId ? [entry.targetSessionId] : [])]))]).map(task => [task.id, task]));
+      const tasks = new Map(readTasks([...new Set(data.entries.flatMap(entry => [...(entry.kind === "user_delivery" ? [] : [entry.sessionId]), ...(entry.targetSessionId ? [entry.targetSessionId] : [])]))]).map(task => [task.id, task]));
       data.entries = data.entries.map(entry => {
-        const task = tasks.get(entry.sessionId);
+        const task = entry.kind === "user_delivery" ? undefined : tasks.get(entry.sessionId);
         const target = entry.targetSessionId ? tasks.get(entry.targetSessionId) : undefined;
         return {
           ...entry,

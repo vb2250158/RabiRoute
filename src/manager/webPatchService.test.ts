@@ -85,6 +85,73 @@ test("atomic release keeps old HTML, lazy assets, documentation and module entry
   assert.deepEqual(restored.operation("publish"), receipt);
 });
 
+test("code and Web share one durable publication and recover together", async context => {
+  const sample = await fixture(context);
+  const service = sample.start();
+  const codeRevision = webPatchHash("fixture code candidate");
+  let activeCode = "baseline";
+  let commits = 0;
+  service.registerCodePublication(async revision => {
+    assert.equal(revision, codeRevision);
+    return () => { activeCode = revision; commits++; };
+  });
+  await service.ready;
+  const next = await sample.candidate();
+  await service.importCandidate(next.source, next.revision);
+  const request = { ...identity, operationId: "joint-publication", candidate: next.revision, expectedRevision: 0 };
+  const receipt = await service.publish(request, codeRevision);
+  assert.equal(activeCode, codeRevision);
+  assert.equal(service.status().active, next.revision);
+  assert.equal(service.status().codeRevision, codeRevision);
+  assert.deepEqual(await service.publish(request, codeRevision), receipt);
+  assert.equal(commits, 1);
+  await assert.rejects(service.publish(request, webPatchHash("other code")), /conflict/);
+  await service.stop();
+  activeCode = "baseline";
+  const restored = sample.start();
+  restored.registerCodePublication(async revision => () => { activeCode = revision; });
+  await restored.ready;
+  assert.equal(restored.status().state, "ready", restored.status().error);
+  assert.equal(restored.status().active, next.revision);
+  assert.equal(activeCode, codeRevision);
+  assert.equal(restored.operation(request.operationId)?.codeRevision, codeRevision);
+});
+
+test("code preparation failure keeps both published versions unchanged", async context => {
+  const sample = await fixture(context);
+  const service = sample.start();
+  service.registerCodePublication(async () => { throw new Error("incompatible code fixture"); });
+  await service.ready;
+  const original = service.status().active;
+  const next = await sample.candidate();
+  await service.importCandidate(next.source, next.revision);
+  await assert.rejects(service.publish({ ...identity, operationId: "bad-code", candidate: next.revision, expectedRevision: 0 }, webPatchHash("bad")), /incompatible code fixture/);
+  assert.equal(service.status().active, original);
+  assert.equal(service.status().revision, 0);
+  assert.equal(service.operation("bad-code"), undefined);
+});
+
+test("a persisted code revision without its owner fails closed on restart", async context => {
+  const sample = await fixture(context);
+  const service = sample.start();
+  service.registerCodePublication(async () => () => {});
+  await service.ready;
+  await service.publish({ ...identity, operationId: "code-only", candidate: service.status().active!, expectedRevision: 0 }, webPatchHash("code"));
+  await service.stop();
+  const missingOwner = sample.start();
+  await missingOwner.ready;
+  assert.equal(missingOwner.status().state, "blocked");
+  assert.match(missingOwner.status().error!, /owner is unavailable/);
+});
+
+test("a missing optional Web entry does not block the complete Web baseline", async context => {
+  const sample = await fixture(context);
+  await sample.write("dist/plugins/packages/optional/rabi.plugin.json", JSON.stringify({ id: "optional", version: "1", entries: { web: { module: "web/client.mjs" } } }));
+  const baseline = await buildWebPatch(sample.packageRoot, path.join(sample.packageRoot, "candidate")).catch(error => { throw error; });
+  const manifest = await verifyWebPatch(path.join(sample.packageRoot, "candidate", baseline), baseline);
+  assert.equal(manifest.modules.some(module => module.pluginId === "optional"), false);
+});
+
 test("backend mismatch, corrupt candidate and missing entry fail without changing the live release", async context => {
   const sample = await fixture(context);
   const baseline = sample.service.status().active;

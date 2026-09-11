@@ -45,6 +45,8 @@ When no persona is selected, **Expression & voice**, **Virtual avatar**, **Ident
 
 History starts with Hook replies received after this feature becomes available; it does not import earlier conversations. Install Agent Hooks and bind the task to a persona or its Route/plan. Tasks without an unambiguous persona owner are not recorded under any persona. The complete body supplied by the Hook is retained and displayed as a Markdown preview, including headings, emphasis, lists, code blocks, and tables. Web links can be opened; local-path links remain text, and embedded HTML is not executed. Replayed callbacks appear once, while different later replies in the same turn are retained. The plan-task completion notification switch only controls notifications; it does not disable recording received final replies.
 
+When you select **Submit and deliver** in plan feedback, user content sent to the bound task or plan secretary also appears in the chat log. The left side shows **From user** and the plan title; the right side links to the destination task. The body contains the submitted answers and attachment names. Save-only submissions are excluded. Unconfirmed deliveries show their status at recording time, and retries of the same feedback do not add duplicate entries.
+
 After selecting a persona, use the same configuration card to set or replace its avatar. PNG, JPEG, WebP, and GIF images up to 5 MB are supported. The avatar follows the persona into selectors, the Route overview, speech persona selection, and the local role panel; the first character of the persona ID is used as the fallback. Because the image belongs to the persona directory, it does not need to be uploaded again for each Route.
 
 Use **Open persona configuration** to edit the full text. Do not mechanically translate runtime-semantic files; language and wording changes can change Agent behavior.
@@ -201,3 +203,5 @@ The current WebGUI has no side-effect-free RouteDecision or AgentPacket preview.
 
 - Validate rules and delivery: [Operations, logs, and troubleshooting](operations-and-troubleshooting_en.md).
 - Understand reply permission: [Safety, replies, and data](safety-and-data_en.md).
+
+

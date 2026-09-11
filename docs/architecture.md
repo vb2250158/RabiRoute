@@ -298,7 +298,7 @@ NapCat plugin page
   -> start / stop / restart route process
 ```
 
-Windows 应用的运行主干不属于普通插件：`RabiRouteHost.exe` 创建一代 Windows Job，先启动动态端口 Manager，验证 `applicationGenerationId + managerInstanceId + PID + baseUrl` 的 READY，再启动同代托盘/任务窗口。Manager 与托盘任一异常都会结束整代并有界重建；托盘不能独立运行，插件也不能取得应用生命周期 owner 权限。
+Windows 应用的运行主干不属于普通插件：`RabiRouteHost.exe` 创建一代 Windows Job，先启动动态端口 Manager，验证 `applicationGenerationId + managerInstanceId + PID + baseUrl` 的 READY，再启动同代托盘/任务窗口。只有 `healthy` 或“必需能力已就绪但可选集成降级”的 `degraded` 代才发布 Manager 身份；`starting`/`stopping` 会撤销 endpoint，所有调用方必须以 Host `status --json` 和该代 `/meta` 为唯一真源。Manager 与托盘任一异常都会结束整代并有界重建；托盘不能独立运行，插件也不能取得应用生命周期 owner 权限。
 
 ## 后续演进顺序
 

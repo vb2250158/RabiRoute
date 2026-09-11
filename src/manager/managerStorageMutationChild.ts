@@ -506,7 +506,7 @@ function recoverDomainTransactions(validated: ManagerStorageMutationRequest, rol
   if (!validated.fence.planId) return [];
   const failures = recoverPlanLifecycleTransitions(roleDir).failures.map(item => item.error);
   if (validated.task.type.startsWith("plan_feedback_")) {
-    failures.push(...recoverPlanStorageTransactions(roleDir).failures.map(item => item.error));
+    failures.push(...recoverPlanStorageTransactions(roleDir, { planId: validated.fence.planId }).failures.map(item => item.error));
   }
   return failures;
 }

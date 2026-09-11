@@ -12,6 +12,11 @@ These are local RabiRoute interfaces used by a handler after it receives an `Age
 
 RabiRoute owns storage, policy checks, delayed plan archiving, explicit memory-consolidation runs, context injection, and Outbox delivery. The handler decides when a plan or memory should change and what response or task is appropriate.
 
+### Model settings for Agent handoffs
+
+For `POST /api/agent/threads` with `action=send`, an explicit request `model` takes precedence. Otherwise use `agentModel` from the Route uniquely owning the target task; if unset, omit model fields and inherit the target Desktop Agent's native default. Missing task model metadata must not stop a handoff, and the current coding Agent's configuration must not substitute for the target's configuration. The primary persona can choose a different `model` and optional `reasoningEffort` on the original task delivery while retaining `taskBinding`. This selection applies to new turns; active turns continue through `steer`. Reconcile uncertain receipts before retrying; do not automatically reroute or resend.
+
+
 ## Plan and memory mutation contract
 
 A `focused` packet links to this contract instead of repeating it. Before mutating plans, recent memories, feedback or consolidation results, read this section and the target endpoint section. Stop that operation if the documentation is unavailable. Current authorization and Action Gate still apply. Read the persona's `plan-statuses` before choosing a status key; submit files through plan `attachments`.

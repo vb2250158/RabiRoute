@@ -107,7 +107,7 @@ export type CodexDesktopDeliveryEvent = {
   elapsedMs?: number;
   receiptWaitMs?: number;
   model?: string;
-  modelSource?: "request" | "desktop-owner";
+  modelSource?: "request" | "desktop-default";
   outcome?: "accepted" | "rejected" | "timeout" | "confirmed" | "unconfirmed";
 };
 
@@ -462,7 +462,6 @@ export class CodexDesktopBridge {
   private readonly activeThreads = new Set<string>();
   private readonly activeThreadSinceMs = new Map<string, number>();
   private readonly deliveryQueues = new Map<string, Promise<CodexDesktopDelivery>>();
-  private readonly snapshotReaders = new Map<string, (state: Record<string, any>) => void>();
 
   constructor(options: CodexDesktopBridgeOptions = {}) {
     this.options = {
@@ -519,10 +518,6 @@ export class CodexDesktopBridge {
       if (message.method === "thread-stream-state-changed" && message.params && typeof message.params === "object") {
         const params = message.params as { conversationId?: unknown; threadId?: unknown; change?: unknown };
         const threadId = nonEmptyString(params.conversationId) || nonEmptyString(params.threadId);
-        const snapshot = params.change as { type?: string; conversationState?: Record<string, any> } | undefined;
-        if (snapshot?.type === "snapshot" && snapshot.conversationState) {
-          this.snapshotReaders.get(threadId)?.(snapshot.conversationState);
-        }
         const change = JSON.stringify(params.change ?? params);
         if (threadId && (change.includes('"threadRuntimeStatus":{"type":"active"') || change.includes('"status":"inProgress"'))) {
           this.activeThreads.add(threadId);
@@ -764,50 +759,22 @@ export class CodexDesktopBridge {
     }
   }
 
-  /** Read the live owner, never a cached rollout or an independently resumed runtime. */
-  async readThreadModel(threadId: string): Promise<string> {
-    await this.connect();
-    if (this.snapshotReaders.has(threadId)) throw new Error("Codex Desktop model check already pending");
-    let timer: NodeJS.Timeout | undefined;
-    const following = (value: boolean) => this.write({
-      type: "broadcast", sourceClientId: this.clientId, version: 1,
-      method: "thread-stream-following-changed",
-      params: { conversationId: threadId, hostId: "local", following: value }
-    });
-    try {
-      const snapshot = new Promise<string>((resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("Codex Desktop 未返回任务模型设置；消息未发送，请打开目标任务后重试。")), Math.min(this.options.requestTimeoutMs, 3_000));
-        this.snapshotReaders.set(threadId, (state) => {
-          const collaboration = state.latestThreadSettings?.collaborationMode ?? state.latestCollaborationMode;
-          // Collaboration settings override the model in Desktop's turn/start preparation.
-          const model = collaboration != null
-            ? collaboration.settings?.model
-            : state.latestThreadSettings?.model ?? state.latestModel;
-          resolve(nonEmptyString(model));
-        });
-      });
-      following(true);
-      return await snapshot;
-    } finally {
-      clearTimeout(timer);
-      this.snapshotReaders.delete(threadId);
-      if (this.socket && !this.socket.destroyed) following(false);
+  private checkStartModel(params: CodexDesktopTurnDelivery): void {
+    // Omission is Desktop's native default-selection contract. A missing stream
+    // snapshot is not proof that the owner has no configured default model.
+    if (params.model === undefined) {
+      this.deliveryEvent(params, "model_checked", { modelSource: "desktop-default" });
+      return;
     }
-  }
-
-  private async checkStartModel(params: CodexDesktopTurnDelivery): Promise<void> {
-    const startedAt = Date.now();
-    const modelSource = params.model === undefined ? "desktop-owner" : "request";
-    try {
-      const model = params.model === undefined ? await this.readThreadModel(params.threadId) : nonEmptyString(params.model);
-      if (!model) throw new Error("Codex Desktop 任务的模型名称为空；消息未发送。请在该任务选择模型后重试。");
-      this.deliveryEvent(params, "model_checked", { model, modelSource, elapsedMs: Date.now() - startedAt });
-    } catch (error) {
-      this.deliveryEvent(params, "model_rejected", { modelSource, elapsedMs: Date.now() - startedAt, error: diagnosticErrorMessage(error) });
-      const failure = new Error(diagnosticErrorMessage(error));
-      failure.name = "CodexDesktopModelSettingsError";
-      throw failure;
+    const model = nonEmptyString(params.model);
+    if (model) {
+      this.deliveryEvent(params, "model_checked", { model, modelSource: "request" });
+      return;
     }
+    const failure = new Error("Codex Desktop 显式指定的模型名称为空；请省略 model 使用 Agent 默认设置，或指定有效模型。");
+    failure.name = "CodexDesktopModelSettingsError";
+    this.deliveryEvent(params, "model_rejected", { modelSource: "request", error: failure.message });
+    throw failure;
   }
 
   private startTurnEnvelope(params: CodexDesktopTurnDelivery): Record<string, unknown> {
@@ -841,7 +808,7 @@ export class CodexDesktopBridge {
   }
 
   private async start(params: CodexDesktopTurnDelivery): Promise<boolean> {
-    await this.checkStartModel(params);
+    this.checkStartModel(params);
     const method = "thread-follower-start-turn";
     const requestId = randomUUID();
     const startedAt = Date.now();

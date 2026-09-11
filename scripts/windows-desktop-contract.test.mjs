@@ -216,7 +216,7 @@ test("Host control and diagnostics cannot wedge the lifecycle owner", () => {
   assert.match(hostRuntime, /readCancellation\.CancelAfter\(TimeSpan\.FromSeconds\(5\)\)/);
   assert.doesNotMatch(hostRuntime, /completion\.Task\.WaitAsync\(TimeSpan/);
   assert.match(hostProtocol, /ControlFenceGenerationId/);
-  assert.match(hostRuntime, /string\.Equals\(_state, "healthy"[\s\S]{0,100}\? _generation : null/);
+  assert.match(hostRuntime, /IsPublishedGenerationState\(_state\) \? _generation : null/);
   assert.match(hostRuntime, /ObserveCompletedHandlersAsync/);
   assert.match(hostRuntime, /controlAcceptCancellation\.Cancel\(\)[\s\S]*CompleteAcceptedMutationsForHostShutdownAsync[\s\S]*controlHandlerCancellation\.Cancel\(\)/);
   assert.match(hostRuntime, /ConcurrentDictionary<string, QueuedCommand> _acceptedMutations/);

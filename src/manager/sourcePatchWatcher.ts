@@ -6,7 +6,7 @@ import type { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import type { ManagerSourcePatchService, SourcePatchBundleRequest } from "./sourcePatchService.js";
 import { SourcePatchCompiler } from "./sourcePatchCompiler.js";
 import { HotPatchResourceStore } from "../plugin-kernel/hotPatchResourceStore.js";
-import { readSourcePatchCatalog, sourcePatchDependencyHash, type SourcePatchDefinition } from "./sourcePatchCatalog.js";
+import { discoverSourcePatchModules, readSourcePatchCatalog, sourcePatchDependencyHash, type SourcePatchDefinition } from "./sourcePatchCatalog.js";
 
 type CandidateBuilder = (options: Readonly<{ sourcePath: string; sourceContent?: string; outputDirectory: string; resourceData?: HotPatchResourceStore["data"] }>) => Promise<Readonly<{ changed: boolean; sha256: string }>>;
 
@@ -39,6 +39,7 @@ export class SourcePatchWatcher {
     let definitions: readonly SourcePatchDefinition[];
     try { definitions = await readSourcePatchCatalog(sourceRoot); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") definitions = []; else throw error; }
+    definitions = await discoverSourcePatchModules(sourceRoot, definitions);
     const compiler = new SourcePatchCompiler();
     const watcher = new SourcePatchWatcher(sourceRoot, definitions, options.service, options.runtime, options.outputDirectory, compiler.build.bind(compiler), options.onError ?? (() => undefined), compiler, new Map());
     try { await watcher.refreshWatches(definitions); }
@@ -50,7 +51,7 @@ export class SourcePatchWatcher {
 
   private async refreshWatches(definitions: readonly SourcePatchDefinition[]): Promise<void> {
     const dependencyGraph = await this.compiler.inspect(this.root, definitions.map(entry => entry.source));
-    const dependencyFiles = new Map(definitions.map((entry, index) => [entry.id, new Set(Object.keys(dependencyGraph.modules[index]!.files))] as const));
+    const dependencyFiles = new Map(definitions.map((entry, index) => [entry.id, new Set(Object.keys(dependencyGraph.modules[index]!.files).map(file => path.resolve(this.root, file)))] as const));
     const watchedFiles = new Set([path.join(this.root, "source-patches", "modules.json"), ...definitions.flatMap(entry => [entry.source, ...(entry.resources ?? [])].map(file => path.resolve(this.root, file)))]);
     for (const files of dependencyFiles.values()) for (const file of files) watchedFiles.add(file);
     const directories = new Set<string>();
@@ -120,7 +121,7 @@ export class SourcePatchWatcher {
         this.catalogDirty = false;
         const catalog = await readSourcePatchCatalog(this.root);
         await this.refreshWatches(catalog);
-        for (const entry of catalog) this.pending.add(entry.id);
+        for (const entry of this.definitions) this.pending.add(entry.id);
       } else { await this.refreshWatches(this.definitions); }
       definitions = this.definitions.filter(definition => this.pending.has(definition.id)).sort((left, right) => left.id.localeCompare(right.id));
       this.pending.clear();

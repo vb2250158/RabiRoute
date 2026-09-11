@@ -4,6 +4,9 @@ English | [简体中文](source-hot-patches.md)
 
 Installed pages and independent Web Bundles use [Web hot patches](web-hot-patches_en.md), validated and published separately from backend source patches.
 
+
+Developer candidates copy the current `package.json` and `package-lock.json`. Construction and publishing share one compatibility check: only the application version metadata may change while reusing installed dependencies. Changes to dependency versions, integrity, declarations, or other lock content require a full immutable release.
+
 ## Upgrade and legacy checks
 
 - Before a full release, run the candidate's `scripts/check-source-patch-upgrade.mjs <absolute candidate root> <absolute source-patch state root>`. Developer activation performs this read-only check before stopping Host. Active overrides, contract overrides and unresolved operations block the upgrade while preserving the current service. Use formal rollback/reconciliation in the original version to restore a confirmed baseline before retrying.
@@ -22,6 +25,8 @@ Status: partial runtime acceptance passed; full coverage remains in development.
 Watching uses a bounded compiler Worker. Catalog edits update resource and relative TypeScript dependency watches; invalid edits retain the last valid configuration. Saves during compilation discard stale candidates. Existing modules sharing dependencies or resources publish through the managed two-phase transaction; independent groups continue when another group fails compilation. New modules compile and register automatically without changing the hot-patch core, adding business-specific branches, or restarting Manager.
 
 ## Current implementation
+
+Automatic updates use one bounded queue to discover, isolate-build, validate, and jointly commit trusted source, Web, asset, and documentation changes without asking for publication each time. Input changes, compiler errors, compatibility failures, and persistence failures discard the candidate and keep the old service; code and Web are never published as a half-updated pair. New files belonging to an existing plugin contract are discovered automatically; new initialization, exports, dependency layouts, or state owners return a specific `requires_switch` reason instead of being silently skipped or requiring a restart for ordinary edits.
 
 ### Add a module without changing the core
 
@@ -45,7 +50,7 @@ First registration writes `data/.runtime/source-patches/registrations/<moduleId>
 
 Normal restart restores the registered baseline, confirmed patches, and declared dependencies, not a heap snapshot. Removing an entry stops automatic watching but does not terminate serving calls or delete durable records. Re-adding the same ID retains its instance and baseline. Moving a dynamic module into an installed package requires explicit rebase on baseline conflict. Multiple newly declared modules have independent registration outcomes; first initialization is not a cross-module business transaction.
 
-Unless `RABIROUTE_HOT_PATCH_WATCH` is `0`, Manager watches `source-patches/modules.json` under its source root and the declared source, dependencies, and resources. The catalog may first be created after startup; missing modules are registered in the background. Installed builds may set `RABIROUTE_HOT_PATCH_SOURCE_ROOT` to an existing external source root. Changes debounce for 200 ms and compile into immutable candidates carrying resource bytes and SHA-256 hashes. Request leases select matching code and resources. Compilation, compatibility, or publication failures retain the old version; uncertain operations are fenced without replay. Without an external source root, installed builds watch only their own catalog path, not unrelated user directories.
+Unless `RABIROUTE_HOT_PATCH_WATCH` is `0`, Manager watches the convention-based `source-patches/` directory under its source root. Explicit `modules.json` contracts take precedence; new `.ts` files receive stable module identities and enter the watcher without manual catalog edits. The catalog may first be created after startup; missing modules are registered in the background. Installed builds may set `RABIROUTE_HOT_PATCH_SOURCE_ROOT` to an existing external source root. Changes debounce for 200 ms and compile into immutable candidates carrying resource bytes and SHA-256 hashes. Request leases select matching code and resources. Compilation, compatibility, or publication failures retain the old version; uncertain operations are fenced without replay. Without an external source root, installed builds watch only their own catalog path, not unrelated user directories.
 
 `scripts/lib/hot-patch-compiler.mjs` parses TypeScript modules, resolves symbols to preserve local shadowing, and rewrites module binding references into environment access. Initialization runs once; subsequent implementations of named functions use stable dispatch. Supported constructs include named top-level functions, recursion, internal calls, async functions, ordinary module variables, instance and static methods of ordinary classes, and host-provided dependencies expressed with `declare`. Method patches preserve class identity, existing instance fields, and bound callbacks. Constructor and field-initializer changes still reject.
 

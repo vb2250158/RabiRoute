@@ -6,8 +6,12 @@ import type { WebPluginModule } from "./webPluginModules.js";
 
 export type WebPatchIdentity = { applicationGenerationId: string; managerInstanceId: string; pluginGenerationId: string };
 export type WebPatchRequest = WebPatchIdentity & { operationId: string; candidate: string; expectedRevision: number };
-type Receipt = { operationId: string; fingerprint: string; state: "committed"; revision: number; active: string; previous: string };
-type State = { schemaVersion: 1; backend: string; active: string; previous?: string; revision: number; operations: Receipt[] };
+type Receipt = { operationId: string; fingerprint: string; state: "committed"; revision: number; active: string; previous: string; codeRevision?: string };
+type State = { schemaVersion: 1; backend: string; active: string; previous?: string; revision: number; operations: Receipt[]; codeRevision?: string };
+
+function publicationFingerprint(operationId: string, candidate: string, expectedRevision: number, codeRevision?: string): string {
+  return webPatchHash(JSON.stringify(codeRevision === undefined ? [operationId, candidate, expectedRevision] : [operationId, candidate, expectedRevision, codeRevision]));
+}
 
 function validateState(saved: State, backend: string): void {
   if (!saved || saved.schemaVersion !== 1 || saved.backend !== backend || !WEB_PATCH_HASH.test(saved.active)
@@ -15,19 +19,23 @@ function validateState(saved: State, backend: string): void {
     || saved.operations.length > 2048 || saved.operations.length !== saved.revision) throw new Error("Invalid persisted Web patch state; do not replay.");
   const operations = new Set<string>();
   let previous: Receipt | undefined;
+  let codeRevision: string | undefined;
   for (const receipt of saved.operations) {
     if (!receipt || typeof receipt.operationId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(receipt.operationId)
       || operations.has(receipt.operationId) || receipt.state !== "committed" || !WEB_PATCH_HASH.test(receipt.active)
       || !WEB_PATCH_HASH.test(receipt.previous) || receipt.revision !== operations.size + 1
       || (previous && receipt.previous !== previous.active)
-      || receipt.fingerprint !== webPatchHash(JSON.stringify([receipt.operationId, receipt.active, receipt.revision - 1]))) {
+      || (receipt.codeRevision !== undefined && !WEB_PATCH_HASH.test(receipt.codeRevision))
+      || receipt.fingerprint !== publicationFingerprint(receipt.operationId, receipt.active, receipt.revision - 1, receipt.codeRevision)) {
       throw new Error("Invalid persisted Web patch receipt; do not replay.");
     }
     operations.add(receipt.operationId);
     previous = receipt;
+    codeRevision = receipt.codeRevision ?? codeRevision;
   }
   if (previous && (saved.active !== previous.active || saved.previous !== previous.previous)) throw new Error("Web patch state and receipt disagree.");
   if (!previous && saved.previous !== undefined) throw new Error("Invalid initial Web patch state.");
+  if (saved.codeRevision !== codeRevision) throw new Error("Code revision and publication receipt disagree.");
 }
 
 export class WebPatchService {
@@ -44,6 +52,18 @@ export class WebPatchService {
   private importTail: Promise<unknown> = Promise.resolve();
   private pending?: State;
   private readonly manifests = new Map<string, WebPatchManifest>();
+  private prepareCode?: (revision: string) => Promise<() => void>;
+
+  registerCodePublication(prepare: (revision: string) => Promise<() => void>): void {
+    if (this.prepareCode || !this.initializing) throw new Error("Code publication owner must register once before Web initialization completes.");
+    this.prepareCode = prepare;
+  }
+
+  private async codeCommit(revision?: string): Promise<(() => void) | undefined> {
+    if (revision === undefined) return undefined;
+    if (!WEB_PATCH_HASH.test(revision) || !this.prepareCode) throw new Error("The automatic code publication owner is unavailable.");
+    return this.prepareCode(revision);
+  }
 
   constructor(private readonly options: {
     packageRoot: string; stateRoot: string; identity(): WebPatchIdentity;
@@ -69,6 +89,8 @@ export class WebPatchService {
       const saved = JSON.parse(raw) as State;
       validateState(saved, manifest.backend);
       await this.compatible(saved.active);
+      const commit = await this.codeCommit(saved.codeRevision);
+      commit?.();
       this.state = saved;
     }
   }
@@ -76,7 +98,7 @@ export class WebPatchService {
   status() {
     return { state: this.fault ? "blocked" : this.initializing ? "starting" : "ready", baseline: this.baseline,
       backend: this.state?.backend, active: this.state?.active, previous: this.state?.previous,
-      revision: this.state?.revision, queued: this.queued, activeReads: this.readers, error: this.fault,
+      revision: this.state?.revision, codeRevision: this.state?.codeRevision, queued: this.queued, activeReads: this.readers, error: this.fault,
       identity: this.options.identity(), limits: { candidateBytes: 128 * 1024 * 1024, operations: 2048, candidates: 64 } };
   }
 
@@ -130,12 +152,13 @@ export class WebPatchService {
     } finally { await fs.rm(temporary, { recursive: true, force: true }); }
   }
 
-  async publish(input: WebPatchRequest): Promise<Receipt> {
+  async publish(input: WebPatchRequest, codeRevision?: string): Promise<Receipt> {
     if (!input || typeof input.operationId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(input.operationId) || !WEB_PATCH_HASH.test(input.candidate)
       || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) throw new Error("Invalid Web patch publication.");
     if (this.closed || this.queued >= 8) throw new Error("Web patch publication is unavailable or busy.");
     const request = structuredClone(input);
-    const fingerprint = webPatchHash(JSON.stringify([request.operationId, request.candidate, request.expectedRevision]));
+    if (codeRevision !== undefined && !WEB_PATCH_HASH.test(codeRevision)) throw new Error("Invalid automatic code publication revision.");
+    const fingerprint = publicationFingerprint(request.operationId, request.candidate, request.expectedRevision, codeRevision);
     this.queued++;
     try {
       const result = this.tail.then(async () => {
@@ -149,16 +172,19 @@ export class WebPatchService {
         return this.options.serialize(request.pluginGenerationId, async () => {
           if (this.closed || request.expectedRevision !== this.state!.revision) throw new Error("Web patch baseline changed.");
           if (this.state!.operations.length >= 2048) throw new Error("Web patch receipt limit reached; no history is silently discarded.");
+          const commitCode = await this.codeCommit(codeRevision);
           const receipt: Receipt = { operationId: request.operationId, fingerprint, state: "committed", revision: this.state!.revision + 1,
-            active: request.candidate, previous: this.state!.active };
+            active: request.candidate, previous: this.state!.active, ...(codeRevision === undefined ? {} : { codeRevision }) };
           const next: State = { ...this.state!, active: receipt.active, previous: receipt.previous, revision: receipt.revision,
-            operations: [...this.state!.operations, receipt] };
+            operations: [...this.state!.operations, receipt], ...(codeRevision === undefined ? {} : { codeRevision }) };
           this.pending = next;
           try { await writeWebPatchJson(this.statePath, next); }
           catch (error) {
             const saved = await fs.readFile(this.statePath, "utf8").catch(() => undefined);
             if (saved !== JSON.stringify(next)) { this.fault = "Publication persistence is unconfirmed; do not replay."; throw error; }
           }
+          try { commitCode?.(); }
+          catch (error) { this.fault = "The saved code publication requires recovery; do not replay."; throw error; }
           this.state = next;
           this.pending = undefined;
           try { this.options.audit?.("web_patch_committed", { operationId: receipt.operationId, revision: receipt.revision, active: receipt.active, previous: receipt.previous }); }
@@ -183,6 +209,8 @@ export class WebPatchService {
     });
     if (raw === JSON.stringify(this.pending)) {
       await this.compatible(this.pending.active);
+      const commitCode = await this.codeCommit(this.pending.codeRevision);
+      commitCode?.();
       this.state = this.pending;
       this.pending = undefined;
       this.fault = undefined;

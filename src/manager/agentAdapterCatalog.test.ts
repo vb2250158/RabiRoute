@@ -31,6 +31,10 @@ test("Agent adapter catalog exposes only the catalog and scan routes", async () 
   const calls: Array<{ kind: string; options?: unknown; signal?: AbortSignal }> = [];
   const responses: RecordedResponse[] = [];
   const service = {
+    async updateHooks(adapter: string) {
+      calls.push({ kind: `hooks:${adapter}` });
+      return { message: "updated" };
+    },
     async catalog() {
       calls.push({ kind: "catalog" });
       return { schemaVersion: 1, adapters: [] };
@@ -50,6 +54,14 @@ test("Agent adapter catalog exposes only the catalog and scan routes", async () 
       responses.push({ statusCode, body });
     }
   };
+
+  assert.equal(handleAgentAdapterCatalogApi(
+    request("POST"),
+    new URL("http://localhost/api/agent-adapters/hooks/update?adapter=codex"),
+    response(),
+    context
+  ), true);
+  await settleRoute();
 
   assert.equal(handleAgentAdapterCatalogApi(
     request(),
@@ -88,8 +100,8 @@ test("Agent adapter catalog exposes only the catalog and scan routes", async () 
     context
   ), false);
 
-  assert.deepEqual(calls.map(call => call.kind), ["catalog", "all", "dsh"]);
-  assert.deepEqual(calls[1]?.options, {
+  assert.deepEqual(calls.map(call => call.kind), ["hooks:codex", "catalog", "all", "dsh"]);
+  assert.deepEqual(calls[2]?.options, {
     codexLimit: 12,
     codexOffset: 3,
     codexQuery: undefined,
@@ -98,17 +110,19 @@ test("Agent adapter catalog exposes only the catalog and scan routes", async () 
     dshQuery: "Rabi",
     dshBaseUrl: undefined
   });
-  assert.deepEqual(calls[2]?.options, {
+  assert.deepEqual(calls[3]?.options, {
     dshLimit: 9,
     dshOffset: 2,
     dshQuery: undefined,
     dshBaseUrl: "http://127.0.0.1:3000"
   });
-  assert.equal(calls[1]?.signal?.aborted, false);
   assert.equal(calls[2]?.signal?.aborted, false);
+  assert.equal(calls[3]?.signal?.aborted, false);
   assert.deepEqual(responses, [
+    { statusCode: 200, body: { ok: true, message: "updated" } },
     { statusCode: 200, body: { code: 0, data: { schemaVersion: 1, adapters: [] } } },
     { statusCode: 200, body: { kind: "all" } },
     { statusCode: 200, body: { kind: "dsh" } }
   ]);
 });
+

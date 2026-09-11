@@ -113,7 +113,7 @@ RabiRoute Host (Windows application-generation owner)
 RibiWebGUI / tray presentation / CLI
           |
           v
-Current Manager URL from Host status or explicit source-mode stdout
+Current Manager URL from Host status or explicit source-mode stdout. Only `healthy` or required-ready `degraded` generations publish the fenced Manager identity; `starting` and `stopping` revoke the endpoint, so callers use Host `status --json` and that generation's `/meta` as the single source of truth.
   |-- configuration and scan APIs
   |-- gateway subprocess lifecycle
   |-- role knowledge and Agent send APIs

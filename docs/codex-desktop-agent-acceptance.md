@@ -58,6 +58,14 @@ flowchart TD
 
 创建事务还必须在 Manager 运行期保存持久 reservation。`thread/start` 前先记录 `reserved/creating`，取得 ID 后立即记录 `thread_created`，再进入命名和初始 turn；HTTP 回执丢失、命名失败或 Manager 重启后，只要无法证明 `thread/start` 尚未执行，就保持 `uncertain` 并禁止自动再次创建。`state_db` 回读负责补充证据，不能替代 reservation 成为幂等真源。
 
+## 模型选择
+
+新轮次按以下顺序确定模型：投递请求明确指定的 `model` → 目标任务唯一所属 Route 的 Agent 模型设置（`agentModel`）→ Desktop 自身的默认选择。无法唯一确认目标 Route 时，不借用发送方人格的模型；不读取当前编码 Agent 的全局配置充当目标设置。
+
+未配置模型时省略 `model`、`effort` 和 `collaborationMode`，由目标 Desktop owner 使用自身设置。任务快照缺失或模型字段为空不再作为发送前置门禁。`model_checked` 的 `modelSource=desktop-default` 只表示交由宿主选择，不声称已读取具体模型名。显式提供空白模型仍在桥接层拒绝。
+
+主人格可以通过现有 Agent 转投接口明确传入 `model` 和 `reasoningEffort`。显式模型不继承另一个默认模型的推理档位。该选择只用于新轮次，向正在执行的轮次 `steer` 不切换模型。保留原任务 ID 和 `taskBinding`；模型缺失不触发创建替代任务或自动换投。Desktop 离线、owner 不可用和回执不确定仍按原合同处理。
+
 ## 身份与状态规则
 
 - 用户界面显示 `任务名称 + 最后会话时间`，不要求用户查看或输入 UUID。

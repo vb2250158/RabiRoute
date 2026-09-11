@@ -159,6 +159,7 @@ export type AgentThreadRequestOptions = {
   onChatHistoryDelivery?: (request: AgentThreadRequest, result: AgentThreadRequestResult) => Promise<void>;
   allowedWorkspaces: string[];
   defaultWorkspace?: string;
+  codexDefaults?: { model?: string; reasoningEffort?: CodexReasoningEffort };
   dshBaseUrl?: string;
   dshAgentPreset?: string;
   openCodexThread?: (threadId: string) => Promise<void>;
@@ -1426,8 +1427,11 @@ async function executeAgentThreadRequest(
       validateAgentThreadHandoffPromptForTest(rawPrompt);
     }
     const sandbox = normalizeSandbox(request.sandbox);
-    const model = optionalText(request.model, "model", 120) || undefined;
-    const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort);
+    const requestedModel = optionalText(request.model, "model", 120) || undefined;
+    const defaults = targetAgentAdapter === "codex" ? options.codexDefaults : undefined;
+    const model = requestedModel || optionalText(defaults?.model, "codexDefaults.model", 120) || undefined;
+    const reasoningEffort = normalizeReasoningEffort(request.reasoningEffort)
+      ?? (requestedModel ? undefined : normalizeReasoningEffort(defaults?.reasoningEffort));
     const imagePaths = imagePathsForDelivery(request.imagePaths, cwd);
     const messageProcessing = request.messageProcessing;
     const responsePolicy = sendSource ? normalizeAgentResponsePolicy(request.responsePolicy) : undefined;

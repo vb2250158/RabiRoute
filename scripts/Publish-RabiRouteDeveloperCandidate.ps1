@@ -34,10 +34,7 @@ $versionsRoot = Join-Path $InstallRoot "versions"
 
 $sourceLock = Join-Path $SourceRoot "package-lock.json"
 $baseLock = Join-Path $baseRoot "package-lock.json"
-if ((Get-FileHash -LiteralPath $sourceLock -Algorithm SHA256).Hash -ne
-    (Get-FileHash -LiteralPath $baseLock -Algorithm SHA256).Hash) {
-    throw "package-lock.json changed. Dependency changes require an immutable full release."
-}
+Invoke-Checked "node.exe" @((Join-Path $SourceRoot "scripts\lib\developer-lock-compatibility.mjs"), $baseLock, $sourceLock) "Developer dependency compatibility check failed"
 
 Set-Location $SourceRoot
 if (-not $SkipBuild) {

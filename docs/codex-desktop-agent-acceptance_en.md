@@ -62,6 +62,14 @@ Creating a task and delivering its first prompt are separate operations. A short
 
 The creation transaction must also persist a runtime Manager reservation. It records `reserved/creating` before `thread/start`, records `thread_created` as soon as the ID is known, and only then advances through naming and the initial turn. After a lost HTTP response, naming failure, or Manager restart, any outcome that cannot prove `thread/start` was never called remains `uncertain` and must not create automatically again. `state_db` readback supplies evidence; it is not the idempotency source of truth.
 
+## Model selection
+
+For a new turn, use an explicitly requested `model`, then the Agent model setting (`agentModel`) of the Route uniquely owning the target task, then Desktop's native selection. If the target Route cannot be uniquely identified, do not borrow the sending persona's model. Never substitute the current coding Agent's global configuration for the target's settings.
+
+With no configured model, omit `model`, `effort`, and `collaborationMode` and let the target Desktop owner select its own default. A missing snapshot or blank snapshot model no longer blocks delivery before start. `model_checked` with `modelSource=desktop-default` records delegation to the host, not a verified model name. An explicitly blank model is still rejected by the bridge.
+
+The primary persona can select `model` and `reasoningEffort` through the existing Agent handoff API. An explicit model does not inherit another default model's reasoning effort. Selection applies to new turns; steering an active turn does not switch its model. Preserve the task ID and `taskBinding`; missing model metadata never creates a replacement task or triggers automatic rerouting. Desktop absence, unavailable owners, and uncertain receipts retain their existing failure handling.
+
 ## Identity and state rules
 
 - The UI shows task name and last activity; users do not type UUIDs.

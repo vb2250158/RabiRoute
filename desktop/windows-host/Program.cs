@@ -31,7 +31,7 @@ public static class HostEntry
             var response = await HostProtocol.SendAsync(
                 command ?? "activate",
                 generationId,
-                command == "restart" ? TimeSpan.FromSeconds(210) : TimeSpan.FromSeconds(30),
+                CommandTimeout(command ?? "activate"),
                 sourcePatch: isWebPatch ? null : sourcePatch,
                 webPatch: isWebPatch ? sourcePatch : null);
             if (jsonOutput) WriteJson(response ?? new HostResponse(false, "unreachable", "The Host control pipe did not respond."));
@@ -98,6 +98,11 @@ public static class HostEntry
             AppDomain.CurrentDomain.ProcessExit -= exitHandler;
         }
     }
+
+    internal static TimeSpan CommandTimeout(string command) =>
+        command is "activate" or "restart"
+            ? ApplicationGeneration.ManagerReadyTimeout + ApplicationGeneration.TrayReadyTimeout + TimeSpan.FromSeconds(90)
+            : TimeSpan.FromSeconds(30);
 
     internal static string? ParseCommand(string[] args)
     {

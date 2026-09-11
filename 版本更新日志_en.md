@@ -6,6 +6,10 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## In development
+
+- Added an experimental generic cross-PC tunnel and speech server selector with automatic LAN, P2P and Relay ordering, presence, actual transport and measured RTT. Includes streaming HTTP, WebSocket, pinned device grants and local FIFO playback. Physical dual-PC and public-network acceptance remain separate. See [usage](docs/rabilink-peer-tunnel_en.md).
+
 ## 0.3.1 - 2026-09-10
 
 - Validation: the frozen source passed the full `npm run build`; WebGUI 297/297, source hot patches 87/87, Web patches 11/11, Host contracts, and isolated Manager update/rollback tests passed. The initial backend suite reported 2020 passed, 2 failed, and 3 skipped; the Agent case passed after its build prerequisite was generated, and the Relay case passed in an isolated rerun. Real installation and device acceptance remain separate.

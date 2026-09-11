@@ -15,6 +15,7 @@ void Check(bool condition, string message)
 }
 
 await SourcePatchTests.RunAsync(Check);
+await ShortcutRecoveryTests.RunAsync(Check);
 
 Check(NativeChildProcess.QuoteWindowsArgument("plain") == "plain", "plain argument quoting");
 Check(NativeChildProcess.QuoteWindowsArgument("two words") == "\"two words\"", "space argument quoting");
@@ -62,6 +63,10 @@ Check(!HostRuntime.AuditAllowsDispatch("restart", false), "restart fails closed 
 Check(!HostRuntime.AuditAllowsDispatch("activate", false), "activate fails closed before dispatch when audit storage is unavailable");
 Check(ApplicationGeneration.ManagerReadyTimeout >= TimeSpan.FromMinutes(3), "Manager cold startup tolerates temporary machine pressure without a restart storm");
 Check(ApplicationGeneration.TrayReadyTimeout >= TimeSpan.FromMinutes(2), "Tray cold startup tolerates temporary machine pressure without restarting a healthy Manager");
+Check(HostRuntime.IsPublishedGenerationState("healthy"), "healthy generation publishes its fenced Manager identity");
+Check(HostRuntime.IsPublishedGenerationState("degraded"), "required-ready degraded generation keeps its fenced Manager identity");
+Check(!HostRuntime.IsPublishedGenerationState("starting"), "starting generation does not publish a Manager endpoint");
+Check(!HostRuntime.IsPublishedGenerationState("stopping"), "stopping generation revokes its Manager endpoint");
 Check(HostRuntime.AuditAllowsDispatch("quit", true), "durably audited fenced quit may enter the lifecycle queue");
 Check(
     HostIdentity.UserKey("S-1-5-21-test") == HostIdentity.UserKey("S-1-5-21-test"),

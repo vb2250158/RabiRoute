@@ -782,6 +782,11 @@ internal sealed class HostRuntime
                                 CurrentState(),
                                 ElapsedMilliseconds(transition.Operation));
                         _pendingTransition = null;
+                        if (transition.ClientCommand?.Command == "activate" &&
+                            TryGetPublishedManagerUrl(admittedGeneration.Id, out var recoveredManagerUrl))
+                        {
+                            TryOpenManager(recoveredManagerUrl);
+                        }
                         transition.ClientCommand?.Completion.TrySetResult(
                             CurrentResponse(true, "The replacement application generation is ready.") with
                             {
@@ -1184,8 +1189,17 @@ internal sealed class HostRuntime
             }
             if (command.Command == "activate")
             {
-                command.Completion.TrySetResult(Response(false, _state, "The application is faulted; query status and issue an exact generation-fenced restart."));
-                continue;
+                // Capture the retained fence inside the lifecycle owner. A
+                // shortcut may recover a faulted generation, never replace a
+                // healthy one or bypass the existing peer/audit admission.
+                var recovery = command with { ApplicationGenerationId = _publication.ControlFenceGenerationId };
+                if (!CanQuit(recovery))
+                {
+                    command.Completion.TrySetResult(CurrentResponse(false, "No retained generation is available for recovery."));
+                    continue;
+                }
+                BeginClientRecovery(recovery);
+                return "restart";
             }
             if (command.Command == "status")
             {
@@ -1249,6 +1263,10 @@ internal sealed class HostRuntime
         }
     }
 
+    internal static bool IsPublishedGenerationState(string state) =>
+        string.Equals(state, "healthy", StringComparison.Ordinal) ||
+        string.Equals(state, "degraded", StringComparison.Ordinal);
+
     private void RefreshPublication()
     {
         lock (_publicationGate) RefreshPublicationLocked();
@@ -1256,7 +1274,9 @@ internal sealed class HostRuntime
 
     private void RefreshPublicationLocked()
     {
-        var active = string.Equals(_state, "healthy", StringComparison.Ordinal) ? _generation : null;
+        // Required-ready degraded generations still own a valid Manager endpoint.
+        // Keep the fenced identity published until the generation is stopping.
+        var active = IsPublishedGenerationState(_state) ? _generation : null;
         _publication = active is null
             ? new LifecyclePublication(_state, _fenceGenerationId)
             : new LifecyclePublication(

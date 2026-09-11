@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { assertDeveloperLocksCompatible } from "./lib/developer-lock-compatibility.mjs";
+
 import { createDeveloperCandidate } from "./new-rabiroute-developer-candidate.mjs";
 
 function write(root, relative, content) {
@@ -32,6 +34,10 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, "skills/retired/SKILL.md", "retired skill\n");
     write(base, "source-patches/retired.json", "retired catalog\n");
     write(base, "node.exe", "node\n");
+    write(base, "package.json", '{"scripts":{"build":"old"}}');
+    write(build, "package.json", '{"scripts":{"build":"current"}}');
+    write(base, "package-lock.json", '{"version":"0.3.0","lockfileVersion":3,"packages":{"":{"version":"0.3.0"}}}');
+    write(build, "package-lock.json", '{"version":"0.3.1","lockfileVersion":3,"packages":{"":{"version":"0.3.1"}}}');
     write(base, "node_modules/dep/index.js", "dependency\n");
     write(base, "release-manifest.json", "old manifest\n");
     write(build, "dist/manager.js", "new manager\n");
@@ -60,6 +66,11 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     });
 
     assert.equal(fs.readFileSync(path.join(base, "dist", "manager.js"), "utf8"), "old manager\n");
+    assert.equal(fs.readFileSync(path.join(result.packageRoot, "package.json"), "utf8"), '{"scripts":{"build":"current"}}');
+    assert.equal(fs.readFileSync(path.join(base, "package.json"), "utf8"), '{"scripts":{"build":"old"}}');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(result.packageRoot, "package-lock.json"), "utf8")).version, "0.3.1");
+    write(build, "package-lock.json", '{"lockfileVersion":3,"changed":true}');
+    assert.throws(() => createDeveloperCandidate({ baseRoot: base, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.lock-change" }), /Dependency changes/);
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "dist", "manager.js"), "utf8"), "new manager\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "ribiwebgui", "dist", "index.html"), "utf8"), "new web\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "assets", "default-persona-plan-workflow.json"), "utf8"), "new workflow\n");
@@ -175,4 +186,16 @@ test("developer publishing rebuilds the Desktop runtime and Host Core by default
   assert.match(publish, /\[switch\]\$RebuildHostCore\s*=\s*\$true/);
   assert.match(publish, /build-desktop-runtime\.ps1/);
   assert.match(publish, /build-windows-host\.ps1/);
+});
+
+test("developer lock compatibility permits only app version metadata, not dependency graph changes", () => {
+  const base = { version: "0.3.0", lockfileVersion: 3, packages: { "": { version: "0.3.0", dependencies: { dep: "1.0.0" } }, "node_modules/dep": { version: "1.0.0", integrity: "original" } } };
+  const next = structuredClone(base); next.version = "0.3.1"; next.packages[""].version = "0.3.1";
+  assert.doesNotThrow(() => assertDeveloperLocksCompatible(JSON.stringify(base), JSON.stringify(next)));
+  for (const change of [lock => { lock.packages["node_modules/dep"].version = "2.0.0"; }, lock => { lock.packages["node_modules/dep"].integrity = "changed"; }, lock => { lock.packages[""].dependencies.dep = "2.0.0"; }]) {
+    const changed = structuredClone(next); change(changed);
+    assert.throws(() => assertDeveloperLocksCompatible(JSON.stringify(base), JSON.stringify(changed)), /Dependency changes/);
+  }
+  assert.throws(() => assertDeveloperLocksCompatible("null", "null"), /valid v3/);
+  assert.throws(() => assertDeveloperLocksCompatible("{", "{}"));
 });

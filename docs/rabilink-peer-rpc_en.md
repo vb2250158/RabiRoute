@@ -2,6 +2,8 @@
 
 English | [简体中文](rabilink-peer-rpc.md)
 
+For generic endpoint tunnelling and speech server selection, see [Cross-PC tunnels](rabilink-peer-tunnel_en.md). This page documents the legacy read-only protocol.
+
 Status: experimental. Read operations support LAN, a public WebRTC connection attempt, and bounded Relay fallback. Automated coverage includes real local WebRTC channels, LAN preference, Relay fallback and application isolation. Cross-carrier public connectivity and sustained operation on two physical PCs require separate acceptance.
 
 ## Call another PC

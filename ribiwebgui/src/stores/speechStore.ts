@@ -54,6 +54,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
   const listening = computed(() => microphone.value?.running === true);
   const playbackBusy = computed(() => Boolean(playback.value?.current));
 
+  let serverEpoch = 0;
   let subscribers = 0;
   let eventSource: EventSource | null = null;
   let readyReceived = false;
@@ -66,18 +67,27 @@ export const useSpeechStore = defineStore("speech-control", () => {
 
   async function refreshStatus(silent = false): Promise<void> {
     if (!silent) loading.value = true;
+    const epoch = serverEpoch;
     try {
-      status.value = await speechControlClient.status();
+      const value = await speechControlClient.status();
+      if (epoch !== serverEpoch) return;
+      status.value = value;
       error.value = "";
       if (status.value.state === "online" && subscribers > 0) startEvents();
       if (status.value.state !== "online") stopEvents();
     } finally {
-      if (!silent) loading.value = false;
+      if (!silent && epoch === serverEpoch) loading.value = false;
     }
   }
 
+  async function changeServer(): Promise<void> {
+    serverEpoch++; recordsLoading.value = false; speakersLoading.value = false; stopEvents(); status.value = null; models.value = []; records.value = []; speakerRegistry.value = null;
+    await Promise.all([refreshStatus(), refreshModels()]);
+  }
   async function refreshModels(): Promise<void> {
-    models.value = (await speechControlClient.models()).models;
+    const epoch = serverEpoch;
+    const value = (await speechControlClient.models()).models;
+    if (epoch === serverEpoch) models.value = value;
   }
 
   async function refreshPersonas(): Promise<void> {
@@ -86,19 +96,23 @@ export const useSpeechStore = defineStore("speech-control", () => {
 
   async function refreshRecords(query: SpeechRecordsQuery = {}): Promise<void> {
     recordsLoading.value = true;
+    const epoch = serverEpoch;
     try {
-      records.value = (await speechControlClient.records(query)).records;
+      const value = (await speechControlClient.records(query)).records;
+      if (epoch === serverEpoch) records.value = value;
     } finally {
-      recordsLoading.value = false;
+      if (epoch === serverEpoch) recordsLoading.value = false;
     }
   }
 
   async function refreshSpeakers(sessionId?: string): Promise<void> {
     speakersLoading.value = true;
+    const epoch = serverEpoch;
     try {
-      speakerRegistry.value = await speechControlClient.speakers(sessionId);
+      const value = await speechControlClient.speakers(sessionId);
+      if (epoch === serverEpoch) speakerRegistry.value = value;
     } finally {
-      speakersLoading.value = false;
+      if (epoch === serverEpoch) speakersLoading.value = false;
     }
   }
 
@@ -366,6 +380,7 @@ export const useSpeechStore = defineStore("speech-control", () => {
     playbackBusy,
     acquire,
     refreshStatus,
+    changeServer,
     startRuntime,
     stopRuntime,
     refreshModels,

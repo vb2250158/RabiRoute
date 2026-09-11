@@ -85,14 +85,14 @@ onBeforeUnmount(() => { pendingUpdate = false; request?.abort(); request = undef
     <div class="d-flex align-center justify-space-between ga-3 mb-3">
       <div>
         <div class="text-h6">{{ t('聊天记录') }}</div>
-        <div class="text-body-2 text-medium-emphasis">{{ t('显示当前人格的最终回复和 Agent 之间的投递，最新在前。') }}</div>
+        <div class="text-body-2 text-medium-emphasis">{{ t('显示当前人格的用户消息、最终回复和 Agent 之间的投递，最新在前。') }}</div>
       </div>
       <v-btn variant="text" prepend-icon="mdi-refresh" :loading="loading" @click="load()">{{ t('刷新') }}</v-btn>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <v-progress-linear v-if="loading && !entries.length" indeterminate color="secondary" :aria-label="t('正在读取聊天记录')" />
     <v-alert v-else-if="!entries.length && !error" type="info" variant="tonal">
-      {{ t('暂无聊天记录。绑定人格后，新产生的 Hook 最终回复和 Agent 投递会显示在这里。') }}
+      {{ t('暂无聊天记录。用户提交并投递的消息、Hook 最终回复和 Agent 投递会显示在这里。') }}
     </v-alert>
     <div ref="listElement" class="chat-history-list" aria-live="polite" :aria-busy="loading">
       <article v-for="entry in entries" :key="entry.id" class="chat-reply">
@@ -100,9 +100,12 @@ onBeforeUnmount(() => { pendingUpdate = false; request?.abort(); request = undef
           <time :datetime="entry.receivedAt">{{ new Date(entry.receivedAt).toLocaleString() }}</time>
           <div class="chat-task-row mt-1">
             <div class="chat-task-source">
+            <template v-if="entry.kind === 'user_delivery'">{{ t('来自用户') }} · {{ entry.sourceLabel }}<span v-if="entry.planTitle"> · {{ entry.planTitle }}</span></template>
+            <template v-else>
             {{ t('来源任务') }}：
             <a v-if="entry.taskUrl" :href="entry.taskUrl" class="chat-task-link" :title="entry.sessionId" data-no-i18n>{{ entry.sessionTitle || entry.sessionId }}</a>
             <span v-else :title="entry.sessionId" data-no-i18n>{{ entry.sessionTitle || entry.sessionId }}</span>
+            </template>
             </div>
             <div v-if="entry.targetSessionId" class="chat-task-target">
               {{ t('目标任务') }}：
@@ -110,12 +113,14 @@ onBeforeUnmount(() => { pendingUpdate = false; request?.abort(); request = undef
               <span v-else :title="entry.targetSessionId" data-no-i18n>{{ entry.targetSessionTitle || entry.targetSessionId }}</span>
             </div>
           </div>
+          <div v-if="entry.kind === 'user_delivery'" class="mt-1">{{ t(entry.deliveryStatus === 'unconfirmed' ? '用户投递（记录时尚未确认送达）' : '用户投递') }}</div>
           <div v-if="entry.kind === 'agent_delivery'" class="mt-1">{{ t(entry.deliveryStatus === 'unconfirmed' ? 'Agent 投递（记录时尚未确认送达）' : 'Agent 投递') }}</div>
           <details class="mt-1">
             <summary>ID</summary>
-            <div data-no-i18n>Task: {{ entry.sessionId }}</div>
+            <div v-if="entry.kind !== 'user_delivery'" data-no-i18n>Task: {{ entry.sessionId }}</div>
             <div v-if="entry.targetSessionId" data-no-i18n>Target: {{ entry.targetSessionId }}</div>
             <div v-if="entry.turnId" data-no-i18n>Turn: {{ entry.turnId }}</div>
+            <div v-if="entry.feedbackId" data-no-i18n>Feedback: {{ entry.feedbackId }}</div>
             <div v-if="entry.deliveryId" data-no-i18n>Delivery: {{ entry.deliveryId }}</div>
           </details>
         </div>

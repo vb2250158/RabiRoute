@@ -91,6 +91,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Rabi Voice Client](../desktop/rabi-voice-client/README_en.md) — use a meeting-room Windows PC as a LAN microphone and speaker while segmentation and models stay on the RabiSpeech host.
 - [Local speech model downloads](local-speech-model-downloads_en.md) — use Model Management for on-demand weights and review each TTS/ASR model's source, isolated runtime, and validation requirements.
 - [RabiSpeech performance report](rabispeech-performance-report_en.md) — six TTS and five main ASR models, cold/warm timing, quality indicators, hardware, and CUDA issues.
+- [Speech servers and generic tunnels](rabilink-peer-tunnel_en.md) — Select a remote speech server and inspect presence, actual transport and round-trip latency.
 - [Cross-PC API calls](rabilink-peer-rpc_en.md) — Query another PC by device ID, configure target grants and inspect the actual LAN, P2P or Relay result.
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker_en.md)

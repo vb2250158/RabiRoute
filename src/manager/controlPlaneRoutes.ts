@@ -1,3 +1,5 @@
+import { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
+import { createPeerSpeechAdapter } from "../peerTunnel/speechAdapter.js";
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import { KnowledgeSearchService } from "./knowledgeSearchService.js";
 import { handleKnowledgeSearch } from "./knowledgeSearchRoutes.js";
@@ -27,6 +29,7 @@ import { agentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
 import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
+import { recordPersonaUserDelivery } from "./personaUserDeliveryHistory.js";
 import { recordPersonaAgentDelivery } from "./personaAgentDeliveryHistory.js";
 import { agentIdentityForMessageSource, type RabiAgentMessageSource, type RabiDeliveryEnvelope, type RabiMessageSource } from "../shared/rabiMessage.js";
 import { AgentRequestStore, type AgentRequestRecord } from "../agentRequests/store.js";
@@ -254,9 +257,11 @@ import { handleLanguageStyleApi } from "./languageStyleRoutes.js";
 import { handlePluginCatalogApi } from "./pluginCatalogRoutes.js";
 import { createSourcePatchHostService, ManagerSourcePatchService } from "./sourcePatchService.js";
 import { SourcePatchWatcher } from "./sourcePatchWatcher.js";
+import { AutomaticCodeService } from "./automaticCodeService.js";
+import { withAutomaticCodeRequest } from "./automaticCodeRequest.js";
+import { WebPatchWatcher } from "./webPatchWatcher.js";
 import { handleSourcePatchApi } from "./sourcePatchRoutes.js";
 import { WebPatchService } from "./webPatchService.js";
-import { WebPatchWatcher } from "./webPatchWatcher.js";
 import { handleWebPatchApi } from "./webPatchRoutes.js";
 import {
   GenerationRuntime,
@@ -908,10 +913,20 @@ function agentThreadRequestOptions(
   extra: Partial<AgentThreadRequestOptions> = {}
 ): AgentThreadRequestOptions {
   const runtime = runtimeForAgentThreadRequest(request);
+  const targetRuntime = request.threadId && request.agentAdapter !== "dsh"
+    ? runtimeForAgentThreadRequest({ threadId: request.threadId, agentAdapter: "codex" })
+    : undefined;
   const explicitDshBaseUrl = String(request.dshBaseUrl || "").trim();
   return {
     allowedWorkspaces: agentThreadAllowedWorkspaces(),
     defaultWorkspace: rootDir,
+    // Defaults belong to the target Route, never to an unrelated sending persona.
+    ...(targetRuntime ? {
+      codexDefaults: {
+        model: targetRuntime.definition.agentModel,
+        reasoningEffort: targetRuntime.definition.agentReasoningEffort
+      }
+    } : {}),
     onChatHistoryDelivery: (body, result) => recordPersonaAgentDelivery(body, result, {
       roleForTask: (sessionId, workspace) => {
         const binding = codexHookContextService.getBinding(sessionId);
@@ -1425,7 +1440,9 @@ function personaSyncRouteContext(controlPlaneAuthorized = false): PersonaSyncRou
   };
 }
 let activePeerRuntime: ReturnType<typeof createRabiPeerRuntime> | undefined;
+let activePeerTunnel: PeerTunnelRuntime | undefined;
 function createManagerPeerRuntime() {
+  let tunnel: PeerTunnelRuntime;
   const access = () => readRabiPeerAccess(path.join(rootDir, "data", "rabilink", "peer-access.json"));
   const role = (input: unknown) => {
     const roleId = (input as { roleId?: unknown })?.roleId;
@@ -1433,6 +1450,7 @@ function createManagerPeerRuntime() {
     return roleId;
   };
   const runtime = createRabiPeerRuntime({
+    tunnelOffer: input => tunnel.offer(input),
     identity: () => ({ deviceId: rabiLinkRelayConfigForMeta().deviceId,
       generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, instanceId: managerInstanceId }),
     token: () => rabiLinkRelayConfigForMeta().token,
@@ -1450,20 +1468,44 @@ function createManagerPeerRuntime() {
       { capability: "persona", operation: "manifest", execute: input => personaSyncService.manifest(role(input)) }
     ]
   });
-  activePeerRuntime = runtime;
-  return { handler: runtime.handler, async stop() {
-    if (activePeerRuntime === runtime) activePeerRuntime = undefined;
-    await runtime.stop();
+  tunnel = new PeerTunnelRuntime({
+    readOnly: managerReadOnly,
+    allowControl: (request, url) => request.socket.localPort === managerPort && webguiLanRequestAllowed(request, url),
+    dataDir: path.join(rootDir, "data", "rabilink"),
+    deviceId: rabiLinkRelayConfigForMeta().deviceId,
+    generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+    discover: () => discoverRabiPeers(personaSyncRouteContext().relay()),
+    signal: (call, signal) => runtime.signal(call, signal),
+    relay: () => personaSyncRouteContext().relay(),
+    services: () => ({ manager: { baseUrl: managerBaseUrl, headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, speech: { baseUrl: speechServiceUrl() } }),
+    onStatus: value => publishManagerEvent("peer_tunnel_status", value)
+  });
+  activePeerTunnel = tunnel;
+  const currentLan = personaSyncLanServer.status();
+  if (currentLan.state === "listening") tunnel.startLanDiscovery(currentLan.port || 0);
+  const handler: typeof runtime.handler = (request, url, response) => tunnel.handler(request, url, response, readJsonBody) || runtime.handler(request, url, response);
+  const combined = { ...runtime, handler };
+  activePeerRuntime = combined;
+  return { handler, async stop() {
+    if (activePeerRuntime === combined) activePeerRuntime = undefined;
+    if (activePeerTunnel === tunnel) activePeerTunnel = undefined;
+    tunnel.stop(); await runtime.stop();
   } };
 }
 const personaSyncLanServer = new PersonaSyncLanServer(personaSyncRouteContext(), {
   peerHandler: (request, url, response) => activePeerRuntime?.handler(request, url, response) ?? false,
+  peerUpgrade: (request, socket, head) => activePeerTunnel?.upgrade(request, socket, head) ?? false,
   port: Number(process.env.RABILINK_PERSONA_SYNC_LAN_PORT ?? 0),
-  onStatus: status => publishManagerEvent("persona_sync_lan_status", status)
+  onStatus: status => {
+    publishManagerEvent("persona_sync_lan_status", status);
+    if (status.state === "listening") activePeerTunnel?.startLanDiscovery(status.port || 0);
+  }
 });
 const selectionSpeechSettings = new SelectionSpeechSettingsStore(selectionSpeechSettingsPath(rootDir));
 const desktopSettings = new DesktopSettingsStore(desktopSettingsPath(rootDir));
 const speechControl = new ManagerSpeechControl({
+  localSpeech: createPeerSpeechAdapter(() => activePeerTunnel),
+  contextKey: () => activePeerTunnel?.selected() || "",
   serviceUrl: () => speechServiceUrl(),
   personas: routeCatalogPersonas,
   route: (routeId) => {
@@ -4846,17 +4888,18 @@ const speechModelManager = new SpeechModelManager({
 
 function applyManagedAgentThreadDefaults(request: AgentThreadRequest): AgentThreadRequest {
   if (request.action !== "send") return request;
+  if (request.model?.trim()) return request;
+  const targetRuntime = request.threadId ? runtimeForAgentThreadRequest({ threadId: request.threadId, agentAdapter: "codex" }) : undefined;
+  const roleId = targetRuntime ? roleIdForDefinition(targetRuntime.definition) : "";
+  const plans = roleId ? publishedRolePlans(roleDirForApi(roleId)) : undefined;
+  const bindingModel = plans?.find(plan => plan.taskBinding?.sessionId === request.threadId)?.taskBinding?.modelSnapshot?.trim();
+  if (bindingModel) return { ...request, model: bindingModel };
   const model = resolveCodexPlanAssistantTurnModel(
     [...runtimes.values()].flatMap((runtime) => runtime.definition.codexPlanAssistantEnabled === true
-      ? (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => ({
-          ...session,
-          model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel)
-        }))
-      : []),
-    request.threadId,
-    request.model
+      ? (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => ({ ...session, model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel) }))
+      : []), request.threadId, request.model
   );
-  return model && !request.model?.trim() ? { ...request, model } : request;
+  return model ? { ...request, model } : request;
 }
 
 function messageProcessingRequirementIdFromSend(request: AgentSendRequest): string | undefined {
@@ -5511,12 +5554,24 @@ async function handleMessageProcessingPlanUpdate(roleDir: string, plan: PlanItem
   }
 }
 
+async function recordUserFeedbackChat(roleId: string, feedback: PlanFeedbackRecord, result: { statusCode: number; data: Record<string, unknown> }): Promise<void> {
+  try {
+    await recordPersonaUserDelivery(roleDirForApi(roleId), feedback, result,
+      () => publishManagerEvent("persona_chat_history_changed", { roleId }));
+  } catch (error) {
+    managerOperationalLog.record("warn", "user_feedback_chat_history_failed", {
+      action: feedback.id, error: managerOperationalError(error, rootDir)
+    });
+  }
+}
+
 async function sendPlanFeedbackToTask(
   roleId: string,
   planId: string,
   dshBaseUrl: string | undefined,
   request: PlanQaTaskRequest | PlanApprovalFeedbackTaskRequest,
-  deliveryId = "deliveryId" in request ? request.deliveryId : undefined
+  deliveryId = "deliveryId" in request ? request.deliveryId : undefined,
+  userFeedback?: PlanFeedbackRecord
 ): Promise<void> {
   const projection = await currentRoleStorageApplication().queries.plan(roleId, planId, { timeoutMs: 30_000 });
   const plan = projection?.plan;
@@ -5542,6 +5597,7 @@ async function sendPlanFeedbackToTask(
     defaultWorkspace: rootDir,
     dshBaseUrl
   });
+  if (userFeedback) await recordUserFeedbackChat(roleId, userFeedback, result);
   requireConfirmedPlanDelivery(result);
   const thread = result.data.thread as { id?: unknown; title?: unknown; cwd?: unknown } | undefined;
   const resolvedId = String(thread?.id || "").trim();
@@ -5595,7 +5651,8 @@ async function sendPlanFeedbackToSecretary(
   plan: PlanItem,
   target: PlanApprovalFeedbackSecretaryTarget,
   request: PlanApprovalFeedbackPersonaRequest,
-  eventId: string
+  eventId: string,
+  userFeedback?: PlanFeedbackRecord
 ): Promise<void> {
   const resolved = await resolvePlanSecretaryDeliveryTarget(runtime, roleId, plan, target, eventId);
   const result = await handleAgentThreadRequest({
@@ -5618,6 +5675,7 @@ async function sendPlanFeedbackToSecretary(
     defaultWorkspace: rootDir,
     dshBaseUrl: runtime.definition.dshBaseUrl
   });
+  if (userFeedback && request.kind === "full_feedback") await recordUserFeedbackChat(roleId, userFeedback, result);
   requireConfirmedPlanDelivery(result);
   if (resolved.initializationPrompt) {
     await markPlanSecretaryInitialized(runtime, resolved.target.threadId);
@@ -6149,7 +6207,8 @@ async function runPlanFeedbackDelivery(
         secretaryAssignment.plan.id,
         runtime.definition.dshBaseUrl,
         request,
-        record.id
+        record.id,
+        record
       ),
       readTaskDelivery: inspectPlanFeedbackDelivery,
       sendToSecretary: (target, request) => sendPlanFeedbackToSecretary(
@@ -6158,7 +6217,8 @@ async function runPlanFeedbackDelivery(
         secretaryAssignment.plan,
         target,
         request,
-        `feedback:${record.id}`
+        `feedback:${record.id}`,
+        record
       ),
       sendToPersona: async (request) => {
         const routeProfileId = runtime.definition.routeProfiles?.[0]?.id ?? runtime.definition.id;
@@ -6815,6 +6875,12 @@ function writeSpeechModelManagerJson(
 }
 
 function handleSpeechApi(request: http.IncomingMessage, requestUrl: URL, response: http.ServerResponse): boolean {
+  const selectedSpeechServer = activePeerTunnel?.selected();
+  const targetLocal = request.headers["x-rabilink-tunnel-local"] === (managerHostIdentity?.applicationGenerationId ?? managerInstanceId);
+  if (selectedSpeechServer && !targetLocal && ["/api/speech/runtime/", "/api/speech/model-management"].some(prefix => requestUrl.pathname.startsWith(prefix))) {
+    void activePeerTunnel!.proxySelected(request, requestUrl, response).catch(() => jsonResponse(response, 502, { code: -1, message: "远端语音服务器操作失败，不会改为操作本机。" }));
+    return true;
+  }
   if (requestUrl.pathname === "/api/speech/model-management/settings") {
     response.setHeader("cache-control", "no-store");
     if (!localModelSettingsRequestAllowed(request)) {
@@ -9617,10 +9683,19 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     audit: (event, fields) => managerOperationalLog.record("info", event, { result: JSON.stringify(fields) })
   });
   managerRuntimeOwner.register("manager_web_patches", () => managerWebPatches.stop());
+  const fullRepositoryHotPatch = process.env.RABIROUTE_HOT_PATCH_FULL_REPO === "1";
+  const automaticCodeService = new AutomaticCodeService({
+    packageRoot, sourceRoot: fullRepositoryHotPatch ? process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT : undefined,
+    stateRoot: path.join(rootDir, "data/.runtime/automatic-code"),
+    watch: process.env.RABIROUTE_HOT_PATCH_WATCH !== "0", publication: managerWebPatches,
+    onError: error => managerOperationalLog.record("error", "automatic_update_failed", { result: String(error) })
+  });
+  managerRuntimeOwner.register("manager_automatic_updates", () => automaticCodeService.stop());
+  void automaticCodeService.start().catch(error => managerOperationalLog.record("error", "automatic_update_start_failed", { result: String(error) }));
   if (process.env.RABIROUTE_HOT_PATCH_WATCH !== "0" && process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT) {
     const webPatchWatcher = new WebPatchWatcher(process.env.RABIROUTE_HOT_PATCH_SOURCE_ROOT, managerWebPatches,
-      error => managerOperationalLog.record("error", "web_patch_watcher_failed", { result: String(error) }));
-    managerRuntimeOwner.register("manager_web_patch_watcher", () => webPatchWatcher.stop());
+      error => managerOperationalLog.record("error", "web_patch_marker_failed", { result: String(error) }));
+    managerRuntimeOwner.register("manager_web_patch_marker", () => webPatchWatcher.stop());
   }
   try {
     const sourcePatchWatcher = await SourcePatchWatcher.start({
@@ -9844,6 +9919,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         readJson: readJsonBody,
         json: jsonResponse
       })) return;
+      if (request.method === "GET" && requestUrl.pathname === "/api/automatic-updates") {
+        jsonResponse(response, 200, { code: 0, data: automaticCodeService?.snapshot() ?? { state: "disabled", reason: "No external source root is configured." } });
+        return;
+      }
       if (handleWebPatchApi(request, requestUrl, response, {
         service: managerWebPatches, identity: managerHostIdentity, readJson: readJsonBody, json: jsonResponse
       })) return;
@@ -9939,6 +10018,9 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
+  const peerTunnelUpgrade = (request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => { activePeerTunnel?.proxyUpgrade(request, socket, head); };
+  activeServer.on("upgrade", peerTunnelUpgrade);
+  managerRuntimeOwner.register("peer_tunnel_upgrade", () => { activeServer.removeListener("upgrade", peerTunnelUpgrade); });
   const detachLanAgentUpgrade = lanAgentRegistry.attach(activeServer, {
     getToken: () => rabiGlobalConfig.read().webguiLan.accessToken,
     enabled: () => rabiGlobalConfig.read().webguiLan.enabled
@@ -10073,7 +10155,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     roleStorage: roleStorageApplication,
     planStorage: planStorageStartupLifecycle,
     routeCatalog: routeCatalogStartupLifecycle,
-    requestHandler: handleManagerRequest
+    requestHandler: withAutomaticCodeRequest(handleManagerRequest)
   }));
   console.log(`gateway-manager listening on http://${managerHost}:${managerPort}`);
   console.log(`roles: ${rolesRoot}`);
@@ -10110,3 +10192,5 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     await failManagerStartup("manager_runtime_construction", error);
   }
 }
+
+

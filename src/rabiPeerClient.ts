@@ -7,9 +7,9 @@ export type RabiPeer = { id: string; guid?: string; deviceKind?: string; online:
 export type PeerCall = { targetDeviceId: string; capability: string; operation: string; input?: unknown };
 export type PeerTransport = "lan" | "p2p" | "relay";
 
-async function post(url: string, body: unknown, headers: Record<string, string>, timeoutMs: number): Promise<PeerPacket> {
+async function post(url: string, body: unknown, headers: Record<string, string>, timeoutMs: number, signal?: AbortSignal): Promise<PeerPacket> {
   const response = await fetch(url, { method: "POST", redirect: "error", headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+    body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs) });
   if (!response.ok) { await response.body?.cancel(); throw new Error(`Peer transport HTTP ${response.status}`); }
   const reader = response.body?.getReader();
   if (!reader) throw new Error("Empty peer reply.");
@@ -40,6 +40,22 @@ export class RabiPeerClient {
     peers(): Promise<RabiPeer[]>; relay(): { url: string; token: string };
     direct: RabiPeerDirect;
   }) {}
+  /** Signalling only: one authenticated exchange, never replay a tunnel allocation across routes. */
+  async signal(call: PeerCall, signal?: AbortSignal): Promise<unknown> {
+    if (call.capability !== "transport" || call.operation !== "tunnel") throw new Error("Invalid signalling operation.");
+    const relay = this.options.relay();
+    const url = relay.url.replace(/\/+$/, "") + "/api/rabilink/peer/proxy";
+    const exchange = async (request: PeerRequest) => {
+      const packet = await post(url, { targetDeviceId: call.targetDeviceId, packet: sealPeerPacket(request, relay.token) }, { "x-rabilink-token": relay.token }, 5_000, signal);
+      const reply = openPeerPacket<PeerReply>(packet, relay.token);
+      if (reply.requestId !== request.requestId || reply.identity.deviceId !== call.targetDeviceId || !reply.ok) throw new Error(reply.error || "Tunnel signalling rejected.");
+      return reply;
+    };
+    const base = { targetDeviceId: call.targetDeviceId, expiresAt: Date.now() + 60_000 };
+    const described = await exchange({ ...base, requestId: randomUUID(), capability: "system", operation: "describe", input: {} });
+    return (await exchange({ ...base, requestId: randomUUID(), generation: described.identity.generation,
+      capability: call.capability, operation: call.operation, input: call.input })).data;
+  }
   async call(call: PeerCall): Promise<{ transport: PeerTransport; reply: PeerReply }> {
     if (!call || typeof call.targetDeviceId !== "string" || typeof call.capability !== "string" || typeof call.operation !== "string") throw new Error("Invalid peer call.");
     const relay = this.options.relay();

@@ -30,7 +30,9 @@ function validSdp(value: unknown): string {
   return value;
 }
 
-/** One bounded RPC per connection. No TURN and no background reconnect loop. */
+/** Legacy peer-rpc-v1 compatibility only. New requests use peerTunnel/.
+ * Remove at the documented all-supported-peers tunnel migration milestone.
+ * One bounded read-only RPC per connection; no TURN or reconnect loop. */
 export class RabiPeerDirect {
   private readonly connections = new Set<RTCPeerConnection>();
   private readonly operations = new Set<Promise<void>>();

@@ -150,6 +150,8 @@ export type PlanTaskBinding = {
   agentType: "codex" | "dsh";
   sessionId: string;
   sessionTitle?: string;
+  /** Last model confirmed for this business task; not a permanent owner setting. */
+  modelSnapshot?: string;
   workspace?: string;
   /** DSH apiproxy origin used to read and open this DSH session. */
   baseUrl?: string;
@@ -956,6 +958,7 @@ function planTextTotal(plan: PlanItem): number {
     plan.taskBinding?.agentType,
     plan.taskBinding?.sessionId,
     plan.taskBinding?.sessionTitle,
+    plan.taskBinding?.modelSnapshot,
     plan.taskBinding?.workspace,
     plan.taskBinding?.baseUrl,
     plan.taskBinding?.completionHook?.gatewayId,
@@ -1156,9 +1159,8 @@ function validatePlanSteps(
   if (status.requiresApproval && approvalGate.state !== "pending") {
     throw new RoleStorageValidationError(`Plan status ${status.key} requires one complete pending approvalRequest on its current step.`);
   }
-  if (approvalGate.state === "pending" && !status.requiresApproval) {
-    throw new RoleStorageValidationError("A complete pending approvalRequest requires a plan status configured with requiresApproval=true.");
-  }
+  // Approval is a workflow/display concern and must not lock the lifecycle.
+  // Only statuses that explicitly require approval are gated above.
 }
 
 function validatePlanWrite(
@@ -1449,6 +1451,7 @@ function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
     agentType: raw.agentType === "dsh" ? "dsh" : "codex",
     sessionId,
     sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
+    ...(typeof raw.modelSnapshot === "string" && raw.modelSnapshot.trim() ? { modelSnapshot: raw.modelSnapshot.trim() } : {}),
     workspace: typeof raw.workspace === "string" ? raw.workspace.trim() || undefined : undefined,
     ...(typeof raw.baseUrl === "string" && raw.baseUrl.trim() ? { baseUrl: raw.baseUrl.trim() } : {}),
     completionHook: {

@@ -91,6 +91,7 @@
 - [Rabi 语音客户端](../desktop/rabi-voice-client/README.md) — 把会议室 Windows 电脑作为局域网远程麦克风和喇叭，切句与模型仍留在 RabiSpeech 主机。
 - [本地语音模型下载说明](local-speech-model-downloads.md) — 使用模型管理页按需下载，并查看每个 TTS/ASR 模型的来源、隔离环境与验证要求。
 - [RabiSpeech 性能与功能报告](rabispeech-performance-report.md) — 六个 TTS、五个主要 ASR 的冷/热态、效果、硬件与 CUDA 问题。
+- [语音服务器与通用连接](rabilink-peer-tunnel.md) — 选择另一台电脑的语音服务，查看在线状态、实际线路和往返延迟。
 - [跨电脑接口调用](rabilink-peer-rpc.md) — 按设备 ID 查询另一台 PC，配置目标授权并检查 LAN、P2P 或 Relay 的实际调用结果。
 - [RabiLink Relay](rabilink-relay-server.md) — Relay server、PC worker、远程 WebGUI、统一会话账本和下行流。
 - [RabiLink Cloudflare Worker](rabilink-relay-cloudflare-worker.md) — Relay 边缘代理实现。

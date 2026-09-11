@@ -12,6 +12,7 @@ import {
   type SpeechRecord,
   type SpeechRouteDeliveryHistory
 } from "@shared/speechControlContract";
+import SpeechServerSelect from "../components/SpeechServerSelect.vue";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
 import SpeechHostMonitor from "../components/SpeechHostMonitor.vue";
@@ -46,6 +47,12 @@ const {
   loading
 } = storeToRefs(speech);
 const activeKind = ref<"tts" | "asr">("tts");
+const speechServerId = ref("");
+async function onSpeechServerChanged(deviceId: string): Promise<void> {
+  speechServerId.value = deviceId;
+  ttsModel.value = ""; asrModel.value = ""; voice.value = "";
+  try { await speech.changeServer(); } catch (error) { requestError.value = error instanceof Error ? error.message : String(error); }
+}
 const modelManagementDialog = ref(false);
 const AUDIO_LOG_EXPANDED_STORAGE_KEY = "rabiroute:speech:audio-log-expanded";
 const audioLogExpanded = ref(loadAudioLogExpanded());
@@ -802,6 +809,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-shell speech-page">
+    <SpeechServerSelect @changed="onSpeechServerChanged" />
     <div class="page-header speech-page-header">
       <div>
         <div class="speech-eyebrow">LOCAL SPEECH RUNTIME</div>
@@ -814,7 +822,7 @@ onBeforeUnmount(() => {
         <v-btn icon="mdi-refresh" variant="text" :loading="loading" aria-label="刷新语音服务状态" @click="refreshStatus" />
         <div class="speech-runtime-switch">
           <div>
-            <span>RabiSpeech</span>
+            <span>{{ speechServerId ? "远端 RabiSpeech" : "本机 RabiSpeech" }}</span>
             <strong>{{ runtimeToggling ? "切换中" : serviceEnabled ? "已开启" : "已关闭" }}</strong>
           </div>
           <v-switch

@@ -45,6 +45,7 @@ export function replacementPlanTaskBinding(
     ...binding,
     sessionId,
     sessionTitle: resolved.title?.trim() || binding.sessionTitle || plan.title,
+    ...(binding.modelSnapshot ? { modelSnapshot: binding.modelSnapshot } : {}),
     workspace
   };
 }

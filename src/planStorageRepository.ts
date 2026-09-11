@@ -1749,7 +1749,7 @@ export function commitPlanStorageTransactionUnderLease(
 
 export function recoverPlanStorageTransactions(
   roleDir: string,
-  options: { kind?: "plan-feedback" | "plan-feedback-revision" } = {}
+  options: { kind?: "plan-feedback" | "plan-feedback-revision"; planId?: string } = {}
 ): PlanStorageTransactionRecoveryResult {
   const root = path.join(plansRoot(roleDir), "quarantine", "plan-storage-transactions");
   const result: PlanStorageTransactionRecoveryResult = { committed: 0, alreadyCommitted: 0, failures: [] };
@@ -1758,6 +1758,7 @@ export function recoverPlanStorageTransactions(
     try {
       const manifest = readStoredTransaction(manifestPath, roleDir);
       if (options.kind && manifest.transactionKind !== options.kind) continue;
+      if (options.planId && manifest.planId !== options.planId) continue;
       const transactionRoot = path.dirname(manifestPath);
       const outcome = withPlanStorageLease(manifest.roleDir, manifest.planId, (lease) =>
         applyStoredTransactionUnderLease(lease, manifest, transactionRoot)
