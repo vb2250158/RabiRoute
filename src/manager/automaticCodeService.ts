@@ -154,9 +154,14 @@ export class AutomaticCodeService {
   private async update(isCurrent: () => boolean): Promise<void> {
     if (this.stopped || this.options.publication.status().state !== "ready") return;
     this.state = { state: "building" };
-    const result = await this.compile();
+    let result: Prepared;
     try {
-      if (!isCurrent()) return;
+      result = await this.compile();
+    } catch (error) {
+      this.state = { state: "failed", reasons: [String(error)] };
+      return;
+    }
+    try {
       if (result.state !== "prepared") { this.state = result; return; }
       if (result.digest === this.digest && result.webInputDigest === this.webInputDigest) { this.state = { state: "ready" }; return; }
       const candidate: Candidate = { schemaVersion: 1, baseline: this.baseline, digest: result.digest!, webInputDigest: result.webInputDigest!, definitions: result.definitions! };
@@ -175,9 +180,10 @@ export class AutomaticCodeService {
       await this.options.publication.publish({ ...current.identity, operationId: randomUUID(),
         candidate: result.web?.revision ?? current.active!, expectedRevision: current.revision! }, revision);
       this.state = { state: "ready", changedFiles: result.changedFiles };
+    } catch (error) {
+      this.state = { state: "failed", reasons: [String(error)] };
     } finally { await this.discard(result.web); }
   }
-
   async stop(): Promise<void> {
     this.stopped = true;
     this.watcher?.close();
