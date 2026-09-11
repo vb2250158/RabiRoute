@@ -80,6 +80,6 @@ export function apply(ctx, config = {}, request = requestHook) {
     finals.delete(agent.id);
   }, { global: true });
   // Remove all per-session state when DSH disposes the agent.
-  ctx.on('agent/disposed', ({ agent }) =>{ starts.delete(agent.id); finals.delete(agent.id); turns.delete(agent.id); }, { global: true });
+  ctx.on('agent/disposed', ({ agent }) => { starts.delete(agent.id); finals.delete(agent.id); turns.delete(agent.id); }, { global: true });
   return status;
 }

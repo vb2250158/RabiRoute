@@ -27,7 +27,7 @@ async function settleRoute(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
 }
 
-test("Agent adapter catalog exposes only the catalog and scan routes", async () => {
+test("Agent adapter catalog exposes catalog, scan, and Hook update routes", async () => {
   const calls: Array<{ kind: string; options?: unknown; signal?: AbortSignal }> = [];
   const responses: RecordedResponse[] = [];
   const service = {

@@ -55,4 +55,3 @@ export const activate = definePlugin({
         }, "activate io.rabiroute.manager.agent-adapter-catalog");
     }
 }).activate;
-
