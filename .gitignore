@@ -29,6 +29,8 @@
 /.codex-logs/
 # WorkBuddy session notes and local tooling state, same class as /.codex-logs/.
 /.workbuddy/
+# Local hot-patch candidate distributions and packaged builds. Never publish these.
+/artifacts/
 /gateways.json
 
 # Temporary scratch from interactive/automation sessions (not project artifacts).
