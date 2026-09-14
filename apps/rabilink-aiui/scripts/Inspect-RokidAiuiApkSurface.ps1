@@ -127,10 +127,10 @@ function New-PackageReport {
 $projectRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
 $repoRoot = Resolve-Path -LiteralPath (Join-Path $projectRoot "..\..")
 if (-not $AdbPath) {
-  $AdbPath = Join-Path $repoRoot "apps\rabilink-android\out\tools\android-sdk\platform-tools\adb.exe"
+  $AdbPath = Join-Path $repoRoot "apps\rabi-mobile-android\out\tools\android-sdk\platform-tools\adb.exe"
 }
 if (-not $AaptPath) {
-  $AaptPath = Join-Path $repoRoot "apps\rabilink-android\out\tools\android-sdk\build-tools\34.0.0\aapt.exe"
+  $AaptPath = Join-Path $repoRoot "apps\rabi-mobile-android\out\tools\android-sdk\build-tools\34.0.0\aapt.exe"
 }
 if (-not $ReportPath) {
   $ReportPath = Join-Path $projectRoot "dist\apk-inspect\rokid-aiui-apk-surface.json"

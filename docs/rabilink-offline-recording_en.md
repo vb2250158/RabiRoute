@@ -4,13 +4,19 @@ English | [简体中文](rabilink-offline-recording.md)
 
 Status: native manual RTMP streaming has been device-tested; automatic recording with our glasses component remains blocked at installation and unaccepted. CXR-M is excluded. See [Rokid development and troubleshooting](rokid-development_en.md) for official sources, callbacks and follow-up checks.
 
+## All-day integration status
+
+Source now moves video reception into an ordinary controller under the sole `RabiConversationService` owner; old video/local-audio/device-status services have been removed. Video, audio and health-only share master runtime permission and one persistent status notification, separate from normal message notifications. Explicitly start after selecting audio-video; pause is no longer a media mode. Video audio is derived **after stop** for durable processing, not live transcription. PC transcription-only capability and worker fencing are connected in source; unsupported work is deferred, never sent silently to an Agent. CaptureId read-only association manually refreshes at most 200 results over 24 hours by processedAt; missing IDs are not guessed. autoResume remains internal false and boot pauses; automatic resume is not implemented and final overall acceptance remains pending.
+
+Video and new records are not automatically deleted using transport-ACK cache retention. Automatic rolling deletion is not implemented; space limits alone do not complete all-day capacity management. Manual-path evidence below belongs to the older version, not acceptance of this owner refactor. See the [all-day contract](rabilink-all-day-recording_en.md).
+
 ## Use
 
 ### Automatic Rabi streaming (experimental; device acceptance in progress)
 
 The video setup guide provides an experimental automatic connection action; Devices contains the startup recording switch, disabled by default. Initial use still requires Rokid authorization, a Bluetooth connection, and camera/microphone permission on the glasses. Rabi uses CXR-L to install and launch its own `GlassVideoActivity`, passing local phone addresses and the stream key automatically. Camera2 and RootEncoder 2.4.3 send H.264/AAC to the phone. This route does not require commercial CXR-M access or automate the native Rokid live-streaming screen.
 
-The glasses still need the phone hotspot or the same Wi-Fi; this first implementation does not establish Wi-Fi Direct automatically. The glasses check the supplied private addresses and select a reachable receiver. Independent phone audio capture and the separate glasses status connection stop before automatic video starts to avoid contention. Recording status requires received video. The glasses provide a stop button and stop capture after 15 seconds without a renewed control lease. Repeated commands for the same session cannot override a local manual stop.
+The glasses still need the phone hotspot or the same Wi-Fi; this first implementation does not establish Wi-Fi Direct automatically. The glasses check the supplied private addresses and select a reachable receiver. The sole owner releases conflicting audio/glasses resources before automatic video starts; it no longer starts/stops parallel standalone audio/status services. Recording status requires received video. The glasses provide a stop button and stop capture after 15 seconds without a renewed control lease. Repeated commands for the same session cannot override a local manual stop.
 
 Installation, capture, permission and startup-recovery acceptance remain in progress. The manual compatibility path below has been device-tested; removing it depends on acceptance and coverage by the new route.
 

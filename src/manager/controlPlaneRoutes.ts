@@ -1,8 +1,10 @@
 import { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
+import { PLAN_ACTIVATION_STATUSES } from "../planState.js";
 import { createPeerSpeechAdapter } from "../peerTunnel/speechAdapter.js";
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import { KnowledgeSearchService } from "./knowledgeSearchService.js";
 import { handleKnowledgeSearch } from "./knowledgeSearchRoutes.js";
+import { handleMessageEndpointHistoryApi } from "./messageEndpointHistoryRoutes.js";
 import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
 import { agentRequestReminderPrompt } from "../agentRequests/replyParameters.js";
@@ -7511,6 +7513,7 @@ function handleRoleKnowledgeApi(
   resolveRoleDir: (roleId: string) => string = roleDirForApi,
   resolveRoleStorageApplication: () => RoleStorageApplication = currentRoleStorageApplication
 ): boolean {
+  if (handleMessageEndpointHistoryApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response, { roleDirectory: resolveRoleDir, json: jsonResponse })) return true;
   if (handleKnowledgeSearch(request, pathname, response, {
     service: knowledgeSearchService, roleDirectory: resolveRoleDir,
     readBody: request => readRoleStorageJsonBody<Record<string, unknown>>(request), json: jsonResponse
@@ -7965,7 +7968,7 @@ function handleRoleKnowledgeApi(
         }));
       return true;
     }
-    if (resource === "plan-statuses") {
+    if (resource === "plan-statuses" || resource === "plan-marker-statuses") {
       if (request.method === "GET" && !itemId) {
         void resolveRoleStorageApplication().queries.planWorkflow(roleId).then((data) => {
           if (!data) {
@@ -7973,7 +7976,7 @@ function handleRoleKnowledgeApi(
             return;
           }
           response.setHeader("etag", `"${data.revision}"`);
-          jsonResponse(response, 200, { code: 0, data: { ...data.workflow, revision: data.revision } });
+          jsonResponse(response, 200, { code: 0, data: { ...data.workflow, activationStatuses: PLAN_ACTIVATION_STATUSES, markerStatuses: data.workflow.statuses, revision: data.revision } });
         }).catch((error) => respondRoleStorageError(response, error));
         return true;
       }

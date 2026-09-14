@@ -8,7 +8,7 @@ English | <a href="./code-architecture.md">简体中文</a>
 
 `webPatchCatalog.ts` validates immutable candidates. `WebPatchService` atomically saves pointers and receipts within existing generation serialization; `WebPatchWatcher` consumes completion markers. Host commands reuse fencing and auditing; clients pin modules to document versions. See [Web hot patches](web-hot-patches_en.md) for limits and legacy retirement.
 
-Android daily navigation lives in `recording/RabiRecordingHubActivity`. `CaptureOwnership` excludes simultaneous conversation audio, local audio and video, while `RecordingStore` owns session manifests. `RabiLocalAudioService` and `RabiLiveRecordingService` own capture and media files. `RabiConversationService` initializes historical queues on a single executor and defers commands in order until ready, avoiding main-thread stalls and interrupted recording. See [mobile recording UI](rabilink-mobile-recording-ui_en.md).
+Android all-day integration is in progress. `RabiConversationService` is the sole phone/glasses/health coordinator; separate local-audio, video and device-status services have been removed. Video becomes an ordinary controller, audio uses the durable spool with frozen record/source/route/policy, and health obeys master permission and capture windows. `AllDayRecordingSettings` separates audio/video/health from running; ordinary messages no longer overwrite the one persistent status notification. Video audio is derived only after stop, not transcribed live. PC transcription-only capability/worker fencing and captureId read-only association are connected in source; unsupported work is deferred, never downgraded to Agent delivery. Manual refresh queries at most 200 results over 24 hours by processedAt; missing IDs are not guessed. Health unifies capture/status only; full history remains on PC. autoResume is internal false, boot pauses, and automatic resume is not implemented. New records are not deleted by transport-ACK retention; automatic rolling deletion remains incomplete. Source changes are not proof of build/install/soak success. See [UI boundaries](rabilink-mobile-recording-ui_en.md) and [design and acceptance](rabilink-all-day-recording_en.md).
 
 Generic cross-PC connections are owned by `src/peerTunnel/`: authentication, transport selection, multiplexing, RTT and request forwarding. Speech selection uses the same target; capture and playback remain local. See [Generic tunnels](rabilink-peer-tunnel_en.md).
 
@@ -46,7 +46,7 @@ See [Path and Directory Conventions](path-and-directory-conventions_en.md) for c
 
 ## Client applications and shared SDK
 
-- `apps/rabilink-android/`: one Android project containing the phone controller and the `glass-app` module.
+- `apps/rabi-mobile-android/`: one Android project containing the phone controller and the `glass-app` module.
 - `apps/rabilink-aiui/`: the independent Rokid AIUI/Lingzhu client project.
 - `packages/android-sdk/`: shared Android event, message, and status contracts consumed by client apps.
 

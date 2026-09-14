@@ -1,6 +1,7 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Serial = "",
+    [string]$OutboxRoot = "",
     [string]$RelayUrl = $env:RABILINK_RELAY_URL,
     [string]$AppToken = $env:RABILINK_RELAY_APP_TOKEN,
     [string]$RabiRouteConfigPath = "",
@@ -10,7 +11,7 @@ param(
     [string]$ApplicationGenerationId = "",
     [string]$ManagerInstanceId = "",
     [string]$RoleId = "YeYu",
-    [bool]$DeliverAlerts = $true,
+    [bool]$DeliverAlerts = $false,
     [bool]$UseMobileSettings = $true,
     [string]$SourceDeviceId = "xiaomi-wearable-adb",
     [string]$SourceDeviceName = "小米手表/手环",
@@ -80,6 +81,25 @@ function Invoke-RabiLinkMobileAdb {
     return ($output -join "`n")
 }
 
+function Get-RabiLinkMobileRunPermit {
+    param([switch]$ForUpload)
+    $raw = Invoke-RabiLinkMobileAdb -Arguments @("exec-out", "run-as", "com.rabi.link", "cat", "shared_prefs/rabi_all_day_recording.xml")
+    try { [xml]$document = $raw } catch { throw "全天记录运行许可不可读，拒绝采集。" }
+    $values = @{}
+    foreach ($node in @($document.map.ChildNodes)) {
+        if ($node.NodeType -eq [System.Xml.XmlNodeType]::Element) { $values[[string]$node.GetAttribute("name")] = if ($node.LocalName -eq 'string') { [string]$node.InnerText } else { [string]$node.GetAttribute("value") } }
+    }
+    if ($ForUpload) { return ($values.uploadEnabled -eq "true") }
+    $script:ProcessingPolicy = [string]$values.processingPolicy
+    $script:FrozenRoute = [string]$values.routeProfileId
+    $window = 0L
+    [long]::TryParse([string]$values.windowStartedAt, [ref]$window) | Out-Null
+    if ($values.running -ne "true" -or $values.healthEnabled -ne "true" -or $window -le 0) {
+        throw "全天记录已暂停或未允许健康采集。"
+    }
+    return $window
+}
+
 function Get-RabiLinkMobileWearableSettings {
     $encodedOutput = Invoke-RabiLinkMobileAdb -Arguments @(
         "exec-out", "run-as", "com.rabi.link", "base64",
@@ -111,6 +131,7 @@ function Get-RabiLinkMobileWearableSettings {
     $sleepAlertValue = $false
     [bool]::TryParse([string]$values.sleepStateAlertEnabled, [ref]$sleepAlertValue) | Out-Null
     return [pscustomobject]@{
+        ParticipationStartedAt = if ($values.participationStartedAt) { [long]$values.participationStartedAt } else { 0L }
         Enabled = $enabledValue
         CollectorMode = if ($values.collectorMode) { [string]$values.collectorMode } else { "health_connect" }
         SourceDeviceId = [string]$values.sourceDeviceId
@@ -136,6 +157,7 @@ function Apply-RabiLinkMobileWearableSettings {
     if (-not [string]::IsNullOrWhiteSpace($Settings.SourceDeviceId)) { $script:SourceDeviceId = $Settings.SourceDeviceId.Trim() }
     if (-not [string]::IsNullOrWhiteSpace($Settings.SourceDeviceName)) { $script:SourceDeviceName = $Settings.SourceDeviceName.Trim() }
     if (-not [string]::IsNullOrWhiteSpace($Settings.SourceDeviceKind)) { $script:SourceDeviceKind = $Settings.SourceDeviceKind.Trim() }
+    $script:ParticipationStartedAt = $Settings.ParticipationStartedAt
     $script:HeartRateHighBpm = $Settings.HeartRateHighBpm
     $script:HeartRateLowBpm = $Settings.HeartRateLowBpm
     $script:AlertCooldownMinutes = $Settings.AlertCooldownMinutes
@@ -249,6 +271,7 @@ function New-SleepSamples {
         if ($endMillis -le $startMillis) {
             continue
         }
+        if ($startMillis -lt $script:RunWindowStartedAt) { continue }
         $sessions.Add([pscustomobject]@{ StartAt = $startAt; EndAt = $endAt; StartMillis = $startMillis; EndMillis = $endMillis })
         $samples.Add([ordered]@{
             id = "xiaomi-provider-sleep-session-$startMillis-$endMillis"
@@ -297,7 +320,7 @@ function New-SleepSamples {
         $endMillis = 0L
         [int64]::TryParse([string]$_.begin_time, [ref]$beginMillis) -and
         [int64]::TryParse([string]$_.end_time, [ref]$endMillis) -and
-        $beginMillis -le $nowMillis -and $endMillis -gt $nowMillis
+        $beginMillis -ge $script:RunWindowStartedAt -and $beginMillis -le $nowMillis -and $endMillis -gt $nowMillis
     } | Select-Object -First 1)
     $currentState = if ($activeStage.Count -gt 0) {
         "sleeping"
@@ -340,6 +363,16 @@ function New-WearablePayload {
     foreach ($sleepSample in @(New-SleepSamples -SleepReportResult $SleepReportResult -SleepStagesResult $SleepStagesResult -ObservedAt $ObservedAt)) {
         $samples.Add($sleepSample)
     }
+    # Entire intervals must belong to this run; never clip a sleep session across pause.
+    $samples = @($samples | Where-Object {
+        try {
+            $at = [DateTimeOffset]::Parse([string]$_.recordedAt).ToUnixTimeMilliseconds()
+            $start = if ($_.startAt) { [DateTimeOffset]::Parse([string]$_.startAt).ToUnixTimeMilliseconds() } else { $at }
+            $end = if ($_.endAt) { [DateTimeOffset]::Parse([string]$_.endAt).ToUnixTimeMilliseconds() } else { $at }
+            $at -ge $script:RunWindowStartedAt -and $start -ge $script:RunWindowStartedAt -and
+                $end -le $ObservedAt.ToUnixTimeMilliseconds() -and $end -ge $start
+        } catch { $false }
+    })
     if ($samples.Count -eq 0) {
         throw "小米健康当前没有可同步的心率或睡眠数据。"
     }
@@ -359,6 +392,8 @@ function New-WearablePayload {
         SleepStateCount = $sleepStateCount
         Body = [ordered]@{
             text = "智能手表/手环健康数据 $($samples.Count) 条：心率 $heartRateCount、睡眠会话 $sleepSessionCount、睡眠阶段 $sleepStageCount、睡眠状态 $sleepStateCount"
+            processingPolicy = $script:ProcessingPolicy
+            routeProfileId = $script:FrozenRoute
             type = "wearable.health"
             deliveryMode = "observe"
             source = "rabilink-wearable"
@@ -392,6 +427,7 @@ function Publish-WearableObservation {
     )
 
     if ($Target.Kind -eq "Relay") {
+        throw 'PC Companion Relay worker identity is not frozen by this adapter; deferred. Use the fenced local Manager transport.'
         $receipt = Invoke-RestMethod `
             -Uri "$($Target.Relay.Url)/api/rabilink/devices/input" `
             -Method Post `
@@ -410,7 +446,7 @@ function Publish-WearableObservation {
     }
 
     $encodedRoleId = [Uri]::EscapeDataString($RoleId.Trim())
-    $deliver = if ($DeliverAlerts) { "true" } else { "false" }
+    $deliver = if ($Observation.Body.processingPolicy -eq 'agent') { "true" } else { "false" }
     $receipt = Invoke-RestMethod `
         -Uri "$($Target.ManagerUrl)/api/roles/$encodedRoleId/health/observations?deliverAlerts=$deliver" `
         -Method Post `
@@ -456,17 +492,21 @@ if (-not $Execute) {
 }
 
 Import-Module $probeModule -Force
-if ($UseMobileSettings) {
-    Apply-RabiLinkMobileWearableSettings -Settings (Get-RabiLinkMobileWearableSettings)
-}
+. (Join-Path $PSScriptRoot "WearableTransportOutbox.ps1")
+if ([string]::IsNullOrWhiteSpace($OutboxRoot)) { throw "请显式提供本机运输队列目录 -OutboxRoot。" }
 $publishTarget = Resolve-PublishTarget
+$targetKey = if ($publishTarget.Kind -eq "Manager") { "manager-role:$RoleId" } else { "relay:$($publishTarget.Relay.Url)" }
 $lastBatchFingerprint = ""
 
 do {
     try {
+        try { Send-WearableTransportOutbox -Root $OutboxRoot -TargetKey $targetKey -Target $publishTarget } catch { Write-Warning '健康待传记录保留；继续检查本轮采集许可。' }
         if ($UseMobileSettings) {
             Apply-RabiLinkMobileWearableSettings -Settings (Get-RabiLinkMobileWearableSettings)
         }
+        # The persistent run permit is mandatory even for explicit CLI device configuration.
+        $script:PermitWindowStartedAt = Get-RabiLinkMobileRunPermit
+        $script:RunWindowStartedAt = [Math]::Max($script:PermitWindowStartedAt, [long]$script:ParticipationStartedAt)
         $observedAt = [DateTimeOffset]::Now
         $heartRate = Get-MiHealthLatestHeartRate -Serial $Serial
         $sleepReport = Get-MiHealthSleepReport -Serial $Serial -Date $observedAt
@@ -479,7 +519,11 @@ do {
         if ($observation.Fingerprint -eq $lastBatchFingerprint) {
             Write-Verbose "最新心率和睡眠样本未变化。"
         } else {
-            $receipt = Publish-WearableObservation -Observation $observation -Target $publishTarget
+            if ((Get-RabiLinkMobileRunPermit) -ne $script:PermitWindowStartedAt) { throw "运行窗口已变化，丢弃迟到采集结果。" }
+            if ($UseMobileSettings) { Apply-RabiLinkMobileWearableSettings -Settings (Get-RabiLinkMobileWearableSettings) }
+            Save-WearableTransportEnvelope -Observation $observation -Root $OutboxRoot -TargetKey $targetKey -Window $script:RunWindowStartedAt
+            Send-WearableTransportOutbox -Root $OutboxRoot -TargetKey $targetKey -Target $publishTarget
+            $receipt = @{ Transport = $publishTarget.Kind; Status = 'durably-queued-or-delivered'; AcceptedCount = 0 }
             $lastBatchFingerprint = $observation.Fingerprint
             [pscustomobject]@{
                 Transport = $receipt.Transport

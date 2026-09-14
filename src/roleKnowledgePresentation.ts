@@ -6,6 +6,7 @@ import type {
 } from "./roleKnowledge.js";
 import type { PlanAttachmentPresentation } from "./shared/planAttachmentContract.js";
 import { planApprovalGate } from "./roleKnowledge.js";
+import { planActivationStatus, planCanAutoAdvance, planState } from "./planState.js";
 import {
   personaPlanWorkflowRevision,
   planStatusDefinition,
@@ -118,9 +119,10 @@ export function planPresentation(
 ): PlanPresentation {
   const approval = approvalPresentation(plan);
   const definition = definitionFor(plan, workflow);
-  const views: PlanPresentationView[] = plan.archiveStatus === "已归档"
+  const activation = planActivationStatus(plan, workflow);
+  const views: PlanPresentationView[] = activation === "已归档"
     ? ["archived"]
-    : [...definition.views];
+    : activation === "已完成" ? ["plans"] : [...definition.views];
   return buildPlanPresentation(
     plan,
     definition,
@@ -153,9 +155,9 @@ function buildPlanPresentation(
     sortBucket: statusLevel,
     views: [...views],
     palette: { ...definition.palette },
-    acceptsGuidance: definition.acceptsGuidance,
-    terminal: definition.terminal,
-    archiveEligible: definition.archiveEligible,
+    acceptsGuidance: planCanAutoAdvance(plan, workflow) && definition.acceptsGuidance,
+    terminal: planActivationStatus(plan, workflow) !== "进行中",
+    archiveEligible: planActivationStatus(plan, workflow) === "已完成",
     currentStep: definition.currentStep,
     roles: Object.entries(workflow.roles)
       .filter(([, key]) => key === definition.key)
@@ -182,6 +184,7 @@ export function presentPlan(
 ): PresentedPlanItem {
   return {
     ...plan,
+    ...planState(plan, workflow),
     attachments: plan.attachments.map(({ path: _path, ...attachment }) => attachment),
     presentation: planPresentation(plan, workflow)
   };

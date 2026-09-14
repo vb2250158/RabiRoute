@@ -32,7 +32,7 @@ Classic Bluetooth and P2P may both carry control messages. Commands must therefo
 
 ## Current implementation
 
-- Default glasses entry: `com.rabi.link.glass.GlassAudioClientActivity`. Its module is `apps/rabilink-android/glass-app/`; the primary glasses path no longer runs ASR/TTS locally.
+- Default glasses entry: `com.rabi.link.glass.GlassAudioClientActivity`. Its module is `apps/rabi-mobile-android/glass-app/`; the primary glasses path no longer runs ASR/TTS locally.
 - Confirm starts recording and confirm again stops/sends. The UI uses a pure-black background, one horizontal action strip, and centered explicit focus.
 - The HUD uses fixed Connect, Listen, Upload, Speak, Paused, and Error state chips. Downlink PCM playback pauses capture and resumes after an audio-length-based delay to keep reply audio out of the next uplink.
 - Phone `RabiGlassPcBackend` continuously forwards ordered glasses PCM chunks to the Rabi PC and performs no VAD, segmentation, or ASR. PC RabiSpeech owns VAD, segmentation, ASR, and voiceprint processing and automatically enters the `rabilink` Route. The phone subscribes to Relay downlink events, reads a cursor-bounded delta only after `outbox_available` or reconnect `ready`, calls PC TTS, and streams PCM back to glasses.
@@ -83,5 +83,5 @@ Relay defaults to 64 MiB per attachment and can be configured. The phone now wri
 - [Phone edge hub](rabilink-phone-edge-hub_en.md)
 - [RabiLink Relay](rabilink-relay-server_en.md)
 - [RabiSpeech](rabispeech-plugin_en.md)
-- [Android project](../apps/rabilink-android/README_en.md)
+- [Android project](../apps/rabi-mobile-android/README_en.md)
 - [Paused AIUI route](rabilink-aiui-residency-plan_en.md)

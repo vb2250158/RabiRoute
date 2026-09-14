@@ -79,8 +79,9 @@ while ($true) {
             ManagerInstanceId = $ManagerInstanceId
             RoleId = $RoleId
             Transport = "Manager"
+            OutboxRoot = (Join-Path $state "transport-outbox")
             UseMobileSettings = $true
-            DeliverAlerts = $true
+            DeliverAlerts = $false
             Execute = $true
         }
         if (-not [string]::IsNullOrWhiteSpace($Serial)) { $arguments.Serial = $Serial }

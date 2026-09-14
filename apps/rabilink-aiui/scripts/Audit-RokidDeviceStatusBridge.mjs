@@ -3,18 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
-const androidRoot = path.join(repoRoot, "apps", "rabilink-android");
+const androidRoot = path.join(repoRoot, "apps", "rabi-mobile-android");
 
 function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
-const controller = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RokidCxrController.java");
-const service = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RokidDeviceStatusSyncService.java");
-const callbacks = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RokidCxrCallbacks.java");
-const manifest = read("apps/rabilink-android/app/src/main/AndroidManifest.xml");
-const relaySettings = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiLinkRelaySettings.kt");
-const mainActivity = read("apps/rabilink-android/app/src/main/java/com/rabi/link/MainActivity.kt");
+const controller = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RokidCxrController.java");
+const service = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RokidDeviceStatusSyncService.java");
+const callbacks = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RokidCxrCallbacks.java");
+const manifest = read("apps/rabi-mobile-android/app/src/main/AndroidManifest.xml");
+const relaySettings = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiLinkRelaySettings.kt");
+const mainActivity = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/MainActivity.kt");
 const sdk = read("packages/android-sdk/rabiroute-sdk/src/main/java/com/rabiroute/sdk/RabiRouteSdk.kt");
 const aiui = read("apps/rabilink-aiui/pages/home/index.ink");
 const relay = read("scripts/rabilink-relay-server.mjs");

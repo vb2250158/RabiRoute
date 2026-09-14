@@ -1,40 +1,44 @@
-# Rabi mobile: recording, messages and devices
+# Rabi mobile: all-day recording, messages and devices
 
 English | [简体中文](rabilink-mobile-recording-ui.md)
 
-Slim build 0.3.22 introduces Home, Records, Messages and Devices. Startup opens Home without requiring a computer connection. Services own capture state; changing pages or turning off the screen does not stop recording.
+> Status: all-day integration is being implemented in source; installed-package and end-to-end acceptance remain unconfirmed. Current source direction and historical device evidence are separated below. Passing tests for an old version does not validate the new coordinator. See the [design, migration and acceptance contract](rabilink-all-day-recording_en.md).
 
-## Daily use
+## Unified daily entry
 
-1. Tap or drag the three-position control for Pause, Audio or Video. Selecting a mode does not start capture.
-2. Audio offers phone or glasses microphones. Use the fixed bottom start button and grant the system permission when requested. Phone recording works without internet; glasses audio still requires authorized CXR-L and Bluetooth connectivity.
-3. Video provides live preview, fullscreen, setup steps and a fixed receiver button. Video includes audio. Live preview is muted; saved media and replay retain the original audio.
-4. Select Pause or use Stop and save on Home, Messages or the notification. Switching mode stops the previous capture; another capture cannot start until saving and release finish.
-5. Records combines local audio, video and received transcripts. Each new recording has one session entry; minute segments play consecutively. Sharing explicitly exports original segments rather than claiming to merge them into one file.
-6. Messages retains existing chats, drafts, unread state and personas. Devices provides glasses authorization, separate audio/video state, computer connections, health devices and advanced settings.
+Home configures and starts all-day recording, Records provides replay, Messages provides chat, and Devices handles connections. Local storage does not require a PC connection first.
 
-Local audio is 16 kHz mono WAV. New local audio/video does not automatically submit transcription, so the UI does not claim it is queued for transcription when connectivity returns. Existing conversation speech processing remains under advanced settings. Received transcripts come from the original chat store without changing their historical ownership.
+1. Select Audio / Audio-video / Health-only. Running/paused is independent of mode and retains the selection; Pause is no longer a third media mode.
+2. Select phone or glasses audio and add supported health sources. Glasses need authorization and a real connection; health requires a working Provider. Health-only does not open a microphone.
+3. Select Save only / Transcribe / Send to Agent and upload permission, then explicitly start. A default transcription policy does not start capture; upgrades set `running=false` and do not automatically open the microphone.
+4. Pause stops permitted capture and saves its boundary. Source/mode changes finish previous input shutdown and storage first. Reconnect, restart and health lookback cannot bypass user pause by backfilling.
+5. Audio-video retains preview, fullscreen and streaming setup. Preview is muted; originals retain received audio. Video audio is derived for processing **after recording stops**, not transcribed live.
+6. Messages no longer owns a separate capture system. Ordinary replies use dismissible message notifications. The all-day owner maintains one persistent status notification that opens the recording entry.
 
-## State and compatibility
+## Storage, transcription and replay
 
-- Starting reception does not mean the glasses are streaming. Video timing and live pictures require received media.
-- Automatic streaming through our glasses app remains under installation acceptance, disabled by default and available as an experiment in setup. Native Rokid streaming remains the tested compatibility route. CXR-M is excluded.
-- Rokid controls native manual streaming. Pausing Rabi stops phone reception and saves files; end the native stream in Rokid to shut down that glasses camera.
-- Saved authorization does not mean audio or video is connected. Devices shows current reception evidence separately and marks unverified connections explicitly.
-- Historical video without session manifests remains an expandable collection of original segments. Similar timestamps are not treated as proof of one recording, and upgrades do not delete files.
-- The old recorder Activity only redirects existing notifications and Intents to Home. Legacy continuous-conversation settings remain advanced compatibility for existing PC speech processing. Remove those capture settings after reliable local-recording submission, transcript ownership and recovery have been implemented and accepted.
-- The original service still owns the raw audio queue. This change does not convert, delete or export old PCM queues. Records shows new local audio, old/new video and received text transcripts.
+- `RabiConversationService` is the sole runtime owner. The separate local-audio, recording and device-status services have been removed from this source refactor. Video uses an ordinary receiver controller, audio writes the durable spool, and the health controller obeys master permission and allowed windows.
+- New records freeze `captureId`, physical source, Route and processing policy. Switching chat personas does not retarget queued records. Associate media and transcripts by record rather than assigning history to the currently open conversation.
+- New transcripts are linked read-only by `captureId`. Manual refresh queries the last 24 hours by `processedAt`, at most 200 results; missing IDs never trigger guessed attribution. This is not full history browsing. Health currently unifies capture/status only; complete history remains on the PC.
+- The nonfunctional `autoResume` UI was removed; the internal field remains false. Boot explicitly pauses capture; automatic capture recovery is not implemented.
+- `local_only` submits no processing. `transcribe` requires PC support for transcription without Agent delivery. Capability and worker fencing are connected in source, pending final acceptance; unsupported work stays `deferred`, never falls back to Agent delivery. Queued, received and transcribed are separate states.
+- A video has one record and ordered original segments for replay. Sharing exports originals rather than claiming a merged file. Preserve old WAVs, videos, PCM queues and received transcripts without rewriting provenance.
+- Even after transport ACK, new records **are not automatically deleted using old transport-cache retention settings**. Complete automatic rolling deletion is not implemented; all-day capacity management cannot be called complete. Never silently delete unconfirmed/quarantined data; low space stops input with an error.
 
-## Storage and failures
+## State, privacy and device boundaries
 
-Cross-page testing exposed an ANR caused by old conversation-queue recovery on the main thread. Initialization now runs on one background executor after timely foreground promotion. Commands wait in order, and destruction prevents late execution. Recovery failure preserves original files and reports failure rather than claiming an established message connection.
+Starting reception is not proof of glasses publishing. Only received video counts as coverage. Authorization, connection, actual input and PC processing are separate facts. Mode/source changes and write failures expose gaps; service uptime is not audio coverage.
 
-Audio uses a bounded queue and single writer. WAV headers are checkpointed and synchronized on stop. Low space below 256 MiB or a write failure stops capture, preserves original files and marks interruption. Force-stop or power loss can still lose unfinished data and is not equivalent to normal saved stop.
+Pausing the phone does not necessarily stop a vendor glasses camera or watch measurement. End manual Rokid streaming in Rokid. If PC health Companion has not confirmed shutdown, expose that remote uncertainty. Allowed windows and historical privacy intervals must prevent late health samples from being imported after resume.
 
-Video retains the local MediaMTX receiver and original audio/video segments, with a new manifest per session. Preview errors do not stop recording. FileProvider grants the selected sharing app temporary read access. Export important records before uninstalling.
+Native manual Rokid streaming retains its existing device evidence. Custom-glasses automatic installation/streaming still needs separate acceptance; CXR-M is excluded. Any necessary legacy recorder redirect may reach only the unified owner, never restart an old standalone service.
 
-## Validation record
+## Failures and acceptance
 
-2026-09-08: Android build and unit tests passed, including concurrent capture exclusion and WAV length/content checks. The phone completed 80.46 seconds of recording, background continuation, saved stop and audible playback. The final installed APK recorded 49.42 seconds with mobile data and Wi-Fi disabled. Stopping from Messages saved a fully readable WAV before Wi-Fi was restored.
+Capture uses bounded queues, one writer, durable provenance, atomic sealing and independent upload. Queue recovery must not block the UI thread. Preserve evidence on save failure; force-stop/power loss is not normal saved shutdown. Preview errors must not stop otherwise healthy recording. FileProvider grants temporary read access for sharing; export important files before uninstalling.
 
-A 72-second LAN test stream verified phone preview, continued recording while opening Messages, saved stop and a single session entry. Both H.264/AAC segments (60.064 and 12.014 seconds) passed full decoding. The UI update does not establish successful glasses-app installation; glasses microphone and the custom glasses publisher still require separate acceptance. See [offline recording](rabilink-offline-recording_en.md) and [Rokid development sources](rokid-development_en.md).
+Final source regression passed 131 Android tests with zero failures plus assemble, and root npm run build. The development APK is 0.3.23-dev (versionCode 26). Successful builds do not imply installation or physical-device acceptance. Revalidate the single owner, notifications, provenance, privacy windows, transcription-only policy, video audio, health integration and 24/72-hour soak under the new architecture.
+
+### Historical evidence, not acceptance for this refactor
+
+The old UI version on 2026-09-08 passed Android build/unit, exclusion and WAV-content checks. The phone completed 80.46 seconds of recording/background/replay and 49.42 seconds of offline recording with saved output. A 72-second LAN test stream verified preview/background video and full decoding of 60.064/12.014-second segments. Preserve this evidence, but it does not validate the new owner, glasses microphone or custom-glasses publishing. See [offline recording](rabilink-offline-recording_en.md).

@@ -366,7 +366,7 @@ function appendWorkerDiscovery(params: URLSearchParams, config: RabiLinkRelayRun
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
     .filter(Boolean)
     .join(",");
 }

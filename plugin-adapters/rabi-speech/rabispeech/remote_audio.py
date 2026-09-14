@@ -91,7 +91,27 @@ class _DurableChunkLedger:
                 "decision TEXT NOT NULL, resolved_at REAL NOT NULL, operator TEXT NOT NULL, "
                 "action TEXT NOT NULL, result TEXT NOT NULL)"
             )
+            database.execute("CREATE TABLE IF NOT EXISTS stream_contracts (stream_id TEXT PRIMARY KEY, contract TEXT NOT NULL)")
+            database.execute("CREATE TABLE IF NOT EXISTS chunk_contracts (source_device_id TEXT NOT NULL, chunk_id TEXT NOT NULL, contract TEXT NOT NULL, PRIMARY KEY(source_device_id, chunk_id))")
             database.execute(f"PRAGMA user_version = {_DURABLE_LEDGER_SCHEMA_VERSION}")
+
+    def bind_contract(self, stream_id: str, contract: str, source_device_id: str = "", chunk_id: str = "") -> None:
+        with self._lock, self._connect() as database:
+            database.execute("BEGIN IMMEDIATE")
+            if chunk_id:
+                row = database.execute("SELECT contract FROM chunk_contracts WHERE source_device_id=? AND chunk_id=?", (source_device_id, chunk_id)).fetchone()
+                if row and row[0] != contract:
+                    raise ValueError("RabiLink chunk processing policy or source attribution conflicts with its frozen contract.")
+                if row is None and json.loads(contract)[5] != "agent":
+                    legacy = database.execute("SELECT 1 FROM processed_chunks WHERE source_device_id=? AND chunk_id=?", (source_device_id, chunk_id)).fetchone()
+                    if legacy:
+                        raise ValueError("Legacy processed chunk has agent policy and cannot become transcribe-only.")
+                database.execute("INSERT OR IGNORE INTO chunk_contracts VALUES (?, ?, ?)", (source_device_id, chunk_id, contract))
+            else:
+                row = database.execute("SELECT contract FROM stream_contracts WHERE stream_id=?", (stream_id,)).fetchone()
+                if row and row[0] != contract:
+                    raise ValueError("RabiLink stream processing policy or source attribution conflicts with its frozen contract.")
+                database.execute("INSERT OR IGNORE INTO stream_contracts VALUES (?, ?)", (stream_id, contract))
 
     def _connect(self) -> sqlite3.Connection:
         database = sqlite3.connect(self.path, timeout=10)
@@ -513,6 +533,9 @@ class _VirtualClient:
     route_profile_id: str
     session_id: str
     connected_at: float
+    processing_policy: str = "agent"
+    capture_id: str = ""
+    frozen_contract: str = ""
     last_audio_at: float = 0.0
     last_sequence: int = 0
     last_chunk_id: str = ""
@@ -616,6 +639,16 @@ class RemoteAudioHub:
             return virtual_client.message_adapter_type
         client = self._clients.get(self._selected_client_id or "")
         return client.message_adapter_type if client is not None else None
+
+    @property
+    def selected_capture_id(self) -> str:
+        client = self._selected_virtual_client()
+        return client.capture_id if client is not None else ""
+
+    @property
+    def selected_processing_policy(self) -> str:
+        client = self._selected_virtual_client()
+        return client.processing_policy if client is not None else "agent"
 
     @property
     def selected_route_profile_id(self) -> str | None:
@@ -808,6 +841,8 @@ class RemoteAudioHub:
                 "kind": client.kind,
                 "device_model": client.device_model or None,
                 "source_device_id": client.source_device_id or client.id,
+                "processingPolicy": client.processing_policy,
+                "captureId": client.capture_id,
                 "message_adapter_type": client.message_adapter_type,
                 "route_profile_id": client.route_profile_id or None,
                 "session_id": client.session_id or None,
@@ -894,9 +929,17 @@ class RemoteAudioHub:
         route_profile_id: str = "",
         session_id: str = "",
         resume_running: bool = False,
+        processing_policy: str = "agent",
+        capture_id: str = "",
     ) -> dict[str, object]:
         normalized_id = _safe_id(client_id)
         normalized_source_device_id = _safe_id(source_device_id or normalized_id)
+        if processing_policy not in ("agent", "transcribe"):
+            raise ValueError("Unsupported RabiLink processing policy.")
+        frozen_contract = json.dumps([normalized_source_device_id, _safe_kind(kind),
+            _message_adapter_type(message_adapter_type, _safe_kind(kind)),
+            str(route_profile_id or "").strip()[:200], str(session_id or "").strip()[:200], processing_policy, str(capture_id or "").strip()[:200]])
+        self._durable_chunk_ledger.bind_contract(normalized_id, frozen_contract)
         received_bytes, accepted_chunks = self._virtual_pcm_totals_by_source.get(
             normalized_source_device_id,
             (0, 0),
@@ -926,6 +969,9 @@ class RemoteAudioHub:
                 received_bytes=received_bytes,
                 accepted_chunks=accepted_chunks,
                 resume_running=resume_running,
+                processing_policy=processing_policy,
+                capture_id=str(capture_id or "").strip()[:200],
+                frozen_contract=frozen_contract,
             )
         if self._selected_client_id is None:
             # Preserve the single-phone zero-configuration experience. Later
@@ -963,6 +1009,13 @@ class RemoteAudioHub:
         self._emit_changed()
         return result
 
+    def assert_virtual_policy(self, client_id: str, policy: str | None) -> None:
+        if policy is None:
+            return
+        client = self._virtual_clients.get(_safe_id(client_id))
+        if client is None or policy != client.processing_policy:
+            raise ValueError("RabiLink request conflicts with frozen processing policy.")
+
     def feed_virtual_client(
         self,
         client_id: str,
@@ -982,6 +1035,7 @@ class RemoteAudioHub:
         if not normalized_chunk_id:
             raise ValueError("RabiLink audio chunk id is required for durable acknowledgement.")
         chunk_sha256 = hashlib.sha256(payload).hexdigest()
+        self._durable_chunk_ledger.bind_contract(client.id, client.frozen_contract, client.source_device_id, normalized_chunk_id)
         if sequence == client.last_sequence:
             if (
                 client.last_chunk_id != normalized_chunk_id

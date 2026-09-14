@@ -12,9 +12,11 @@ export async function sendDshTask(binding, prompt) {
   const { baseUrl, sessionId } = normalizeDshBinding(binding);
   const rpcId = randomUUID();
   const method = "session.prompt";
+  // Steer delivers into the running turn's nearest step boundary and opens a
+  // turn when the session is idle, so a task never waits for the current turn.
   const response = await fetch(`${baseUrl}/api/${method}`, {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type: "client-request", rpcId, method, payload: { sessionId, mode: "queue", content: [{ type: "text", text: prompt }] } }),
+    body: JSON.stringify({ type: "client-request", rpcId, method, payload: { sessionId, mode: "steer", content: [{ type: "text", text: prompt }] } }),
     signal: AbortSignal.timeout(30_000)
   });
   if (!response.ok) throw new Error(`DSH task delivery failed: HTTP ${response.status}`);

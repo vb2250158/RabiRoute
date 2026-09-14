@@ -1651,7 +1651,7 @@ function planListSortLabelFor(mode: PlanListSortMode): string {
   if (mode === "updated") return t("时间排序");
   if (mode === "importance") return t("重要程度");
   if (mode === "urgency") return t("紧急程度");
-  return t("状态排序");
+  return t("标记排序");
 }
 
 function planListSortIconFor(mode: PlanListSortMode): string {
@@ -2559,7 +2559,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                         :aria-pressed="planListDraftSortMode === 'status'"
                         :title="t('相同工作阶段集中显示')"
                         @click="planListDraftSortMode = 'status'"
-                      >{{ t("状态排序") }}</button>
+                      >{{ t("标记排序") }}</button>
                       <button
                         type="button"
                         :class="{ selected: planListDraftSortMode === 'updated' }"
@@ -2803,7 +2803,8 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <h2 data-no-i18n>{{ plan.title }}</h2>
               </div>
               <div class="knowledge-plan-head-actions">
-                <v-chip class="knowledge-plan-status" :title="planStatusDescription(plan)" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ planStatusLabel(plan) }}</v-chip>
+                <v-chip class="knowledge-plan-activation" variant="outlined" size="small">{{ t('激活状态') }}：{{ t(plan.activationStatus || '进行中') }}</v-chip>
+                <v-chip class="knowledge-plan-status" :title="planStatusDescription(plan)" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t('标记状态') }}：{{ planStatusLabel(plan) }}</v-chip>
                 <v-btn
                   v-if="planAgentBindingStatus(plan, 'task')?.canOpen && !planTaskAgentWorking(plan)"
                   class="knowledge-plan-open-task"

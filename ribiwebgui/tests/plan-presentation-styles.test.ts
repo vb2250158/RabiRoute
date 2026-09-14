@@ -339,7 +339,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /class="knowledge-plan-directory-sort-label"/);
   assert.match(page, /:style="planDirectorySortStyle\(plan\)"/);
   assert.match(page, /formatPlanDirectorySortLabel\([\s\S]*?plan,[\s\S]*?planListSortMode\.value/);
-  assert.match(page, /<v-chip[^>]*>\{\{ planStatusLabel\(plan\) \}\}<\/v-chip>/);
+  assert.match(page, /<v-chip[^>]*>\{\{ t\(\x27标记状态\x27\) \}\}：\{\{ planStatusLabel\(plan\) \}\}<\/v-chip>/);
   assert.match(page, /planTitleForDirectory\(plan\.title\)/);
   assert.doesNotMatch(page, /knowledge-plan-toc|jumpToPlanStep|planStepDomId|activePlanSteps/);
   assert.match(styles, /\.knowledge-browser-layout\.has-plan-directory\s*\{[\s\S]*?grid-template-columns:\s*var\(--plan-directory-width, 360px\) 1px minmax\(0, 1fr\)/);

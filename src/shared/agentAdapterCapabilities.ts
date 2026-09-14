@@ -1,4 +1,4 @@
-export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh"] as const;
+export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy"] as const;
 
 export type AgentAdapterType = typeof agentAdapterTypes[number];
 
@@ -71,6 +71,14 @@ const manifestsByAgentType = Object.freeze({
     transport: Object.freeze({ protocol: "http", mode: "session.list/create/rename/prompt" }),
     host: Object.freeze({ name: "DSH apiproxy", required: true }),
     capabilities: managedTaskCapabilities
+  }),
+  workbuddy: Object.freeze({
+    type: "workbuddy",
+    label: "WorkBuddy（腾讯 AI 办公工作台）",
+    maturity: "experimental",
+    transport: Object.freeze({ protocol: "http", mode: "session-gateway" }),
+    host: Object.freeze({ name: "WorkBuddy Desktop", required: true }),
+    capabilities: baseAgentCapabilities
   })
 }) satisfies Readonly<Record<AgentAdapterType, AgentAdapterManifest>>;
 

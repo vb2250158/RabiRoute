@@ -106,6 +106,8 @@ class SpeechInputSource:
     channel_type: str
     message_adapter_type: str
     route_profile_id: str | None = None
+    processing_policy: str = "agent"
+    capture_id: str = ""
     session_id: str | None = None
     device_id: str | None = None
     device_name: str | None = None
@@ -417,6 +419,13 @@ class MicrophoneService:
     def feed_remote(self, client_id: str, samples: np.ndarray) -> None:
         if self._remote_audio is None or client_id != self._remote_audio.selected_client_id:
             return
+        source = self._input_source()
+        if self._utterance_source is not None and self._utterance_source != source:
+            self._finish_segment()
+            self._reset_segment()
+        elif getattr(self, "_last_remote_source", None) != source:
+            self._reset_segment()
+        self._last_remote_source = source
         self._ingest(np.asarray(samples, dtype=np.float32).reshape(-1))
 
     def _audio_callback(self, indata: Any, _frames: int, _time_info: Any, status: Any) -> None:
@@ -643,6 +652,8 @@ class MicrophoneService:
                 channel_type="rabilink.mobile_audio" if adapter_type == "rabilink" else "speech.remote_audio_stream",
                 message_adapter_type=adapter_type,
                 route_profile_id=self._remote_audio.selected_route_profile_id,
+                processing_policy=getattr(self._remote_audio, "selected_processing_policy", "agent"),
+                capture_id=getattr(self._remote_audio, "selected_capture_id", ""),
                 session_id=self._remote_audio.selected_session_id,
                 device_id=self._remote_audio.selected_source_device_id or remote_id,
                 device_name=self._remote_audio.selected_client_name,
@@ -726,6 +737,8 @@ class MicrophoneService:
                     "source_device_name": input_source.device_name,
                     "source_device_kind": input_source.device_kind,
                     "source_stream_id": input_source.stream_id,
+                    "processing_policy": input_source.processing_policy,
+                    "captureId": input_source.capture_id,
                     "audio_format": input_source.audio_format,
                     "channels": input_source.channels,
                     "sample_rate": input_source.sample_rate,
@@ -749,7 +762,7 @@ class MicrophoneService:
                     self._emit_event(
                         "route",
                         "route_submission_started",
-                        "开始广播到已启用的语音消息端",
+                        "保存主机转写，不投递人格" if input_source.processing_policy == "transcribe" else "开始广播到已启用的语音消息端",
                         session_id=self.config.session_id,
                     )
                     try:

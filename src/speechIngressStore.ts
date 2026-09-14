@@ -85,6 +85,7 @@ export function normalizeSpeechIngressRecord(
     .filter((item): item is SpeechTranscriptSegment => Boolean(item));
   return {
     schemaVersion: 1,
+    processingPolicy: command.processingPolicy === "transcribe" ? "transcribe" : "agent",
     id,
     recordedAt: new Date(time * 1_000).toISOString(),
     ingestedAt: new Date(ingestedTime * 1_000).toISOString(),

@@ -267,6 +267,7 @@ test("wearable heart-rate thresholds create one Agent delivery and deduplicate r
     id: "relay-health-task-1",
     clientMessageId: "health-message-1",
     type: "wearable.health",
+    processingPolicy: "agent",
     deliveryMode: "observe",
     sourceDeviceId: "watch-test",
     sourceDeviceName: "Test Watch",
@@ -302,6 +303,11 @@ test("wearable heart-rate thresholds create one Agent delivery and deduplicate r
     assert.match(String(deliveries[0].record.rawMessage), /135 bpm/);
     assert.equal(deliveries[0].extra.inputAdapter, "wearable");
     assert.equal(deliveries[0].extra.heartRateBpm, 135);
+    assert.throws(() => handleWearableHealthRelayTask({ ...task, processingPolicy: undefined }, 'missing-policy', options), /policy/);
+    const recordOnly = { ...task, id: 'record-only', clientMessageId: 'record-only', processingPolicy: 'transcribe',
+      health: { ...task.health, samples: [{ ...task.health.samples[0], id: 'record-only-heart', value: 150 }] } };
+    assert.equal(handleWearableHealthRelayTask(recordOnly, recordOnly.id, options), true);
+    assert.equal(deliveries.length, 1, 'transcribe stores health without Agent delivery');
 
     assert.equal(handleWearableHealthRelayTask(task, task.id, options), true);
     assert.equal(deliveries.length, 1);
@@ -325,6 +331,7 @@ test("wearable sleep-state changes are recorded and delivered to the Agent", () 
   };
   const baseTask = {
     type: "wearable.health",
+    processingPolicy: "agent",
     deliveryMode: "observe",
     sourceDeviceId: "watch-sleep-test",
     sourceDeviceName: "Sleep Test Watch",

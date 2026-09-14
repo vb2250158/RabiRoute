@@ -157,7 +157,7 @@ if (-not $AixPath) {
 $resolvedAixPath = Resolve-OptionalPath $AixPath
 
 if (-not $AdbPath) {
-  $AdbPath = Join-Path $repoRoot "apps\rabilink-android\out\tools\android-sdk\platform-tools\adb.exe"
+  $AdbPath = Join-Path $repoRoot "apps\rabi-mobile-android\out\tools\android-sdk\platform-tools\adb.exe"
 }
 $resolvedAdbPath = Resolve-OptionalPath $AdbPath
 

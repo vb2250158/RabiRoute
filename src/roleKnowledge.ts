@@ -1,4 +1,5 @@
 import { RoleStorageValidationError } from "./shared/roleStorageValidationError.js";
+import { planActivationStatus, planState, planStateForWrite, planCanAutoAdvance } from "./planState.js";
 import { publishKnowledgeChange, type KnowledgeChange, type KnowledgeKind } from "./roleKnowledgeSearch.js";
 import { readPlanIdentity, readPlanIdentityAsync } from "./planIdentityReadCache.js";
 import { normalizePlanQuestions, type PlanQuestion } from "./shared/planQuestions.js";
@@ -169,6 +170,8 @@ export type PlanSecretaryBinding = {
 };
 
 export type PlanItem = {
+  activationStatus?: import("./planState.js").PlanActivationStatus;
+  markerStatus?: string;
   /** Optional final-result destinations. Persona event rules still apply when omitted. */
   messageChannels?: AgentHookDestination[];
   id: string;
@@ -1041,6 +1044,7 @@ export function approvalRequestMissingFields(contract: PlanApprovalRequest | und
 }
 
 export function planApprovalGate(plan: PlanItem): PlanApprovalGate {
+  if (planActivationStatus(plan) !== "进行中") return { state: "none", missing: [] };
   if (!planHasApprovalIntent(plan)) return { state: "none", missing: [] };
   const step = currentPlanStep(plan);
   const contract = step?.approvalRequest;
@@ -1058,7 +1062,8 @@ export function planRequiresApproval(plan: PlanItem): boolean {
 }
 
 export function planAcceptsGuidance(plan: PlanItem, workflow: PersonaPlanWorkflow): boolean {
-  return planStatusDefinition(workflow, plan.status, { allowRetired: true })?.acceptsGuidance === true
+  return planCanAutoAdvance(plan, workflow)
+    && planStatusDefinition(workflow, plan.status, { allowRetired: true })?.acceptsGuidance === true
     && planApprovalGate(plan).state === "none";
 }
 
@@ -1146,17 +1151,14 @@ function validatePlanSteps(
   if (plan.currentStepId && !ids.has(plan.currentStepId)) {
     throw new RoleStorageValidationError(`Plan currentStepId does not match a step: ${plan.currentStepId}`);
   }
-  if (plan.steps.length > 0 && status.currentStep === "required") {
+  if (planActivationStatus(plan) === "进行中" && plan.steps.length > 0 && status.currentStep === "required") {
     if (!plan.currentStepId) throw new RoleStorageValidationError("An active plan must provide currentStepId.");
   }
-  if (status.currentStep === "forbidden" && plan.currentStepId) {
+  if (planActivationStatus(plan) === "进行中" && status.currentStep === "forbidden" && plan.currentStepId) {
     throw new RoleStorageValidationError(`Plan status ${status.key} forbids currentStepId.`);
   }
-  if (plan.archiveStatus === "已归档" && !status.archiveEligible) {
-    throw new RoleStorageValidationError(`Plan status ${status.key} is not eligible for archival.`);
-  }
   const approvalGate = planApprovalGate(plan);
-  if (status.requiresApproval && approvalGate.state !== "pending") {
+  if (planActivationStatus(plan) === "进行中" && status.requiresApproval && approvalGate.state !== "pending") {
     throw new RoleStorageValidationError(`Plan status ${status.key} requires one complete pending approvalRequest on its current step.`);
   }
   // Approval is a workflow/display concern and must not lock the lifecycle.
@@ -1466,16 +1468,11 @@ function validatePlanStatusInput(workflow: PersonaPlanWorkflow, value: unknown):
   assertWritablePlanStatus(workflow, value);
 }
 
-function normalizedPlanStatus(raw: Partial<PlanItem> & Record<string, unknown>): PlanStatus {
-  const value = typeof raw.status === "string" ? raw.status.trim() : "";
-  return value;
-}
-
 function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbackId?: string): PlanItem | null {
   const title = String(raw.title || "").trim();
   if (!title) return null;
   const updatedAt = typeof raw.updatedAt === "string" && raw.updatedAt ? raw.updatedAt : nowIso();
-  const status = normalizedPlanStatus(raw);
+  const state = planState(raw);
   const steps = normalizePlanSteps(raw.steps, updatedAt);
   const explicitCurrentStepId = typeof raw.currentStepId === "string" ? raw.currentStepId.trim() : "";
   const legacyCurrentStepId = Array.isArray(raw.steps)
@@ -1486,19 +1483,12 @@ function normalizePlan(raw: Partial<PlanItem> & Record<string, unknown>, fallbac
       })[0]
     : undefined;
   const currentStepId = explicitCurrentStepId || legacyCurrentStepId;
-  const archiveStatus: PlanArchiveStatus = raw.archiveStatus === "已归档"
-    ? "已归档"
-    : raw.archiveStatus === "未归档"
-      ? "未归档"
-      : (raw as Record<string, unknown>).status === "已归档" || (typeof raw.archivedAt === "string" && Boolean(raw.archivedAt.trim()))
-        ? "已归档"
-        : "未归档";
+  const { archiveStatus } = state;
   return withDerivedPlanBlockingState({
     id: canonicalLogicalPlanId(raw.id || fallbackId || generatedId("plan", title)),
     title,
     focus: String(raw.focus || title).trim(),
-    status,
-    archiveStatus,
+    ...state,
     importance: typeof raw.importance === "number" && Number.isInteger(raw.importance) && raw.importance >= 0 && raw.importance <= 4
       ? raw.importance as PlanImportanceLevel
       : undefined,
@@ -3120,21 +3110,20 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
       result.failures.push({ planId: normalized.id, error: `PLAN_STATUS_CONFIG_INVALID: ${normalized.status}` });
       continue;
     }
-    if (resolved.matchedBy === "key" && !hasLegacyPlanStepState(stored.steps)) continue;
+    if (resolved.matchedBy === "key" && stored.activationStatus !== undefined && stored.markerStatus === resolved.key && !hasLegacyPlanStepState(stored.steps)) continue;
     try {
       withPlanStorageLock(roleDir, normalized.id, (lease) => {
         const sourcePackage = readCanonicalPlanStoragePackageUnderLease(lease);
         const rawPlanFile = sourcePackage.files.find((file) => file.path === "plan.json");
         if (!rawPlanFile) throw new Error("Canonical plan package has no plan.json.");
         const beforeRaw = JSON.parse(rawPlanFile.content.toString("utf8")) as Record<string, unknown>;
-        const latestStatus = resolvePersonaPlanStatus(workflow, beforeRaw.status, { includeLegacyAliases: true });
+        const latestStatus = resolvePersonaPlanStatus(workflow, beforeRaw.markerStatus ?? beforeRaw.status, { includeLegacyAliases: true });
         if (!latestStatus) throw new Error(`PLAN_STATUS_CONFIG_INVALID: ${String(beforeRaw.status)}`);
-        if (latestStatus.matchedBy === "key" && !hasLegacyPlanStepState(beforeRaw.steps)) return;
+        if (latestStatus.matchedBy === "key" && beforeRaw.activationStatus !== undefined && beforeRaw.markerStatus === latestStatus.key && !hasLegacyPlanStepState(beforeRaw.steps)) return;
         const recordedAt = nowIso();
         const next = normalizePlan({
           ...beforeRaw,
-          status: latestStatus.key,
-          archiveStatus: beforeRaw.archiveStatus === "已归档" || beforeRaw.status === "已归档" ? "已归档" : "未归档",
+          ...planState({ ...beforeRaw, markerStatus: latestStatus.key }, workflow),
           steps: Array.isArray(beforeRaw.steps)
             ? beforeRaw.steps.map((step) => {
                 const { workPhase: _workPhase, discussionState: _discussionState, ...clean } = recordValue(step);
@@ -3146,14 +3135,24 @@ export function migratePersonaPlanStatusesAtStartup(roleDir: string): PersonaPla
         }, normalized.id);
         if (!next) throw new Error("Canonical status migration produced an invalid plan.");
         const files = planStoragePackageMap(sourcePackage.files);
-        const history = createPlanHistoryRecord(beforeRaw as unknown as PlanItem, next);
+        const destinationBucket = planBucketForArchiveStatus(next.archiveStatus);
+        if (destinationBucket !== sourcePackage.bucket) {
+          remapPlanStoragePackage(files, roleDir, next.id, sourcePackage.bucket, destinationBucket);
+          next.attachments = remapPlanAttachmentPaths(roleDir, next.id, next.attachments, sourcePackage.bucket, destinationBucket);
+        }
+        if (next.activationStatus === "已归档" && !next.archivedAt) next.archivedAt = recordedAt;
+        const historyBefore = destinationBucket === sourcePackage.bucket ? beforeRaw : rewritePlanStoragePaths(beforeRaw, [{
+          from: planDirectory(roleDir, next.id, sourcePackage.bucket),
+          to: planDirectory(roleDir, next.id, destinationBucket)
+        }]);
+        const history = createPlanHistoryRecord(historyBefore as unknown as PlanItem, next);
         files.set("history.jsonl", Buffer.from(appendPlanHistoryContent(files.get("history.jsonl")?.toString("utf8") || "", history), "utf8"));
         files.set("plan.json", Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"));
         commitPlanLifecycleTransitionUnderLease(lease, {
-          transactionId: planLifecycleTransactionId("plan-update", next.id, "plan-state-v2", sourcePackage.inventoryHash),
-          kind: "plan-update",
+          transactionId: planLifecycleTransactionId("plan-update", next.id, "plan-state-v3", sourcePackage.inventoryHash),
+          kind: destinationBucket === sourcePackage.bucket ? "plan-update" : "plan-archive",
           fromBucket: sourcePackage.bucket,
-          toBucket: sourcePackage.bucket,
+          toBucket: destinationBucket,
           expectedSourceInventoryHash: sourcePackage.inventoryHash,
           files: planStoragePackageFiles(files)
         });
@@ -3180,6 +3179,8 @@ export function createPlan(
   if (!String(input.focus || "").trim()) throw new Error("Plan focus is required and must describe one subject.");
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   validatePlanStatusInput(workflow, input.status);
+  const state = planStateForWrite(input, undefined, workflow);
+  validatePlanStatusInput(workflow, state.markerStatus);
   if (input.archiveStatus !== undefined && input.archiveStatus !== "未归档" && input.archiveStatus !== "已归档") {
     throw new Error("Unsupported plan archiveStatus. Use 未归档 or 已归档.");
   }
@@ -3200,10 +3201,12 @@ export function createPlan(
     const recordedAt = nowIso();
     const plan = normalizePlan({
       ...input,
-      status: input.status === undefined ? planStatusKeyForRole(workflow, "initial") : input.status as PlanStatus,
+      ...state,
       attachments: [],
       id,
       createdAt: recordedAt,
+      completedAt: state.activationStatus === "已完成" ? recordedAt : undefined,
+      archivedAt: state.activationStatus === "已归档" ? recordedAt : undefined,
       updatedAt: recordedAt,
       storageRevision: mutation?.revision ?? createStorageRevision(),
       storageMutationRequestId: mutation?.requestId
@@ -3264,6 +3267,8 @@ export function updatePlan(
       throw new Error(`Archived plans are immutable terminal records: ${canonicalPlanId}`);
     }
     if (Object.prototype.hasOwnProperty.call(patch, "status")) validatePlanStatusInput(workflow, patch.status);
+    const state = planStateForWrite(patch, existing, workflow);
+    validatePlanStatusInput(workflow, state.markerStatus);
     if (Object.prototype.hasOwnProperty.call(patch, "archiveStatus") && patch.archiveStatus !== "未归档" && patch.archiveStatus !== "已归档") {
       throw new Error("Unsupported plan archiveStatus. Use 未归档 or 已归档.");
     }
@@ -3276,6 +3281,7 @@ export function updatePlan(
     const next = normalizePlan({
       ...existing,
       ...patch,
+      ...state,
       attachments: existing.attachments,
       id: existing.id,
       createdAt: existing.createdAt,
@@ -3294,11 +3300,10 @@ export function updatePlan(
     );
     requireKeywords(next.keywords, "Plan");
     validatePlanWrite(roleDir, next);
-    const nextStatusDefinition = assertWritablePlanStatus(workflow, next.status);
-    const previousStatusDefinition = planStatusDefinition(workflow, existing.status, { allowRetired: true });
-    if (nextStatusDefinition.setsCompletedAt && previousStatusDefinition?.setsCompletedAt !== true && !next.completedAt) {
+    if (next.activationStatus === "已完成" && existing.activationStatus !== "已完成" && !next.completedAt) {
       next.completedAt = next.updatedAt;
     }
+    if (next.activationStatus === "已归档" && !next.archivedAt) next.archivedAt = next.updatedAt;
     const currentBucket = planBucketForArchiveStatus(existing.archiveStatus);
     const destinationBucket = planBucketForArchiveStatus(next.archiveStatus);
     if (sourcePackage.bucket !== currentBucket) {
@@ -3434,10 +3439,10 @@ export function archiveCompletedPlans(roleDir: string, archiveAfterHours?: numbe
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   const effectiveArchiveAfterHours = archiveAfterHours ?? workflow.archiveAfterHours;
   for (const plan of plans) {
-    const definition = planStatusDefinition(workflow, plan.status, { allowRetired: true });
-    if (definition?.archiveEligible !== true || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= effectiveArchiveAfterHours) continue;
+    if (planActivationStatus(plan, workflow) !== "已完成" || ageHours(plan.updatedAt) <= effectiveArchiveAfterHours) continue;
     const next = {
       ...plan,
+      activationStatus: "已归档" as const,
       archiveStatus: "已归档" as const,
       currentStepId: undefined,
       archivedAt: nowIso(),
@@ -3453,10 +3458,10 @@ function archiveCompletedPlansFromStorage(roleDir: string, archiveAfterHours: nu
   const archived: PlanItem[] = [];
   const workflow = ensurePersonaPlanWorkflow(roleDir).workflow;
   for (const plan of readPlansFromStorageInWorker(roleDir)) {
-    const definition = planStatusDefinition(workflow, plan.status, { allowRetired: true });
-    if (definition?.archiveEligible !== true || plan.archiveStatus === "已归档" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
+    if (planActivationStatus(plan, workflow) !== "已完成" || ageHours(plan.updatedAt) <= archiveAfterHours) continue;
     const next = {
       ...plan,
+      activationStatus: "已归档" as const,
       archiveStatus: "已归档" as const,
       currentStepId: undefined,
       archivedAt: nowIso(),
@@ -3973,7 +3978,7 @@ function buildRoleKnowledgeSnapshot(
   const consolidatedMemories = catalog.consolidatedMemories;
   const skills = catalog.skills;
   const appearsInCurrent = (plan: PlanItem): boolean =>
-    plan.archiveStatus !== "已归档"
+    planCanAutoAdvance(plan, workflow)
       && planStatusDefinition(workflow, plan.status, { allowRetired: true })?.views.includes("current") === true;
   const activePlans = plans.filter(appearsInCurrent);
   const activeSkills = skills.filter((item) => item.status === "active");

@@ -13,9 +13,9 @@ watch(() => props.roleId, async (roleId, _, cleanup) => {
   statuses.value = []; error.value = "";
   if (!roleId) return;
   try {
-    const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}/plan-statuses`, { signal: controller.signal });
+    const response = await fetch(`/api/roles/${encodeURIComponent(roleId)}/plan-marker-statuses`, { signal: controller.signal });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.message || "读取计划状态失败");
+    if (!response.ok) throw new Error(result.message || "读取标记状态失败");
     statuses.value = result.data.statuses.filter((item: { state: string; terminal: boolean }) => item.state === "enabled" && !item.terminal)
       .map((item: { key: string; label: string }) => ({ title: item.label, value: item.key }));
   } catch (cause) { if (!controller.signal.aborted) error.value = userFacingError(cause); }
@@ -32,7 +32,7 @@ function add() {
 <template>
   <div class="dependency-panel mt-3">
     <div class="section-title small-title">计划任务结束后追问</div>
-    <div class="section-note">只追问绑定当前人格计划的任务。选择哪些计划状态触发，并填写追问内容；规则按顺序匹配第一条。</div>
+    <div class="section-note">只追问绑定当前人格计划的任务。选择哪些标记状态触发，并填写追问内容；规则按顺序匹配第一条。</div>
     <v-switch :model-value="settings.enabled" label="启用自动追问" color="primary" hide-details
       @update:model-value="value => update({ enabled: value === true })" />
     <v-alert v-if="error" type="warning" density="compact">{{ error }}</v-alert>
@@ -42,7 +42,7 @@ function add() {
     <v-card v-for="rule in settings.rules" :key="rule.id" variant="outlined" class="pa-3 mt-3">
       <v-switch :model-value="rule.enabled" label="启用这条规则" color="primary" hide-details
         @update:model-value="value => change(rule, { enabled: value === true })" />
-      <v-select :model-value="rule.statusKeys" :items="statuses" label="触发的计划状态" multiple chips
+      <v-select :model-value="rule.statusKeys" :items="statuses" label="触发的标记状态" multiple chips
         :error-messages="rule.statusKeys.some(key => !statuses.some(item => item.value === key)) ? '部分状态已移除，请重新选择' : []"
         @update:model-value="value => change(rule, { statusKeys: value })" />
       <v-textarea :model-value="rule.prompt" label="追问内容" rows="3" maxlength="4000" counter

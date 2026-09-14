@@ -16,6 +16,8 @@ Rabi's recent route also keeps live local speech capability separate from a stat
 
 In version 0.3.1, plan approvals can select independent changes per question and show implementation details. Additional information returns the task to analysis; only explicitly approved scope may run. Web hot patches remain experimental: initial installation or backend changes require a full upgrade, and a successful build does not establish installed rollback acceptance.
 
+In version 0.3.2, All-day Recording source is integrated into the phone app: phone, glasses and health devices share one capture coordinator, capture mode is independent from pause, the same durable audio segments serve local playback and later processing, and video audio is derived only after recording stops. New records freeze source, capture ID, persona, processing policy and target PC identity; local-only stays local, transcription-only does not invoke an Agent, and a missing new PC/Relay capability or target identity defers instead of downgrading or retargeting. The phone app is source-integrated only: build, deployment, glasses and 24/72-hour endurance acceptance are separate. Plan state is split into a fixed activation state plus Agent-configurable markers, and pause is a marker only; the DSH web session bridge now exchanges a cookie from the launch login URL, so the old unauthenticated bridge gets HTTP 401. The WorkBuddy Agent endpoint can be discovered but not yet delivered to.
+
 ## Directory contents
 
 - `persona.md` defines identity, voice, boundaries, and routing behavior.

@@ -3,13 +3,12 @@
  * Codex Desktop bridge. A route can bind its primary persona
  * (主人格) to a local DSH session; incoming RabiRoute deliveries are then
  * injected into that live session through the DSH apiproxy HTTP API
- * (`POST /api/session.prompt`, `POST /api/session.list`).
+ * (`POST /api/session/prompt`, `POST /api/session/list`).
  *
  * The DSH binding lives in the route's adapterConfig.json (dshSessionId +
- * dshSessionName + dshCwd + dshBaseUrl), which keeps a single source of truth
- * shared with the DSH-side preset plugin (`rabi-tools-v2.js` reads the same
- * file). This module deliberately reads the file at call time instead of
- * plumbing the binding through every delivery call site.
+ * dshSessionName + dshCwd + dshBaseUrl). RabiRoute owns these bindings;
+ * basic session operations use the DSH owner API and do not require a
+ * separate Rabi tool or UI extension inside DSH.
  */
 
 import { randomUUID } from "node:crypto";
@@ -17,16 +16,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dshAuthenticatedFetch } from "./dshHttpAuth.js";
 
 export const DEFAULT_DSH_BASE_URL = "http://127.0.0.1:3080";
 export const DEFAULT_DSH_SESSION_NAME = "Rabi Agent";
 export const DSH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-export const EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION = "0.1.2";
-export const DSH_RABIROUTE_TOOL_NAMES = [
-  "rabiroute_agent_threads",
-  "rabiroute_agent_send",
-  "rabiroute_manager_api"
-] as const;
 
 const dshSessionIdPattern = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -120,11 +114,8 @@ type DshRpcError = { ok: false; error: { code?: string; message?: string } };
 
 async function dshRpc<T>(baseUrl: string, method: string, payload: unknown): Promise<DshRpcOk<T> | DshRpcError> {
   const rpcId = randomUUID();
-  const response = await fetch(`${baseUrl}/api/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type: "client-request", rpcId, method, payload })
-  });
+  const response = await dshAuthenticatedFetch(baseUrl, method,
+    JSON.stringify({ type: "client-request", rpcId, method, payload: { args: payload } }));
   if (!response.ok) {
     throw new Error(`DSH ${method} transport failed with HTTP ${response.status}.`);
   }
@@ -228,9 +219,9 @@ export async function listDshModels(baseUrl: string = DEFAULT_DSH_BASE_URL): Pro
   models: DshModelCatalogEntry[];
   warnings: string[];
 }> {
-  const result = await dshRpc<DshModelCatalogResponse>(normalizedDshBaseUrl(baseUrl), "llm.models", {});
+  const result = await dshRpc<DshModelCatalogResponse>(normalizedDshBaseUrl(baseUrl), "session/modelCatalog", {});
   if (!result.ok) {
-    throw new Error(`DSH llm.models failed: ${result.error.message || result.error.code || "unknown error"}`);
+    throw new Error(`DSH session/modelCatalog failed: ${result.error.message || result.error.code || "unknown error"}`);
   }
   return normalizeDshModelCatalogForTest(result.value);
 }
@@ -241,105 +232,23 @@ async function applyDshSessionModel(
   selection: DshModelSelection | undefined
 ): Promise<void> {
   if (!selection) return;
-  const current = await dshRpc<{ current?: { provider?: string; model?: string; reasoningEffort?: string } }>(
-    baseUrl,
-    "session.models",
-    { sessionId }
-  );
-  if (!current.ok) {
-    throw new Error(`DSH session.models failed: ${current.error.message || current.error.code || "unknown error"}`);
-  }
-  const active = current.value.current;
+  const current = (await readDshSessionRows(baseUrl)).find((item) => item.sessionId === sessionId);
+  if (!current) throw new Error(`DSH session was not found: ${sessionId}`);
+  // The owner projects next (including its lastUsed fallback); session/models no longer exists.
+  const active = current.projections?.values?.modelSelection?.next;
   const modelMatches = active?.provider === selection.provider && active?.model === selection.model;
   const reasoningMatches = !selection.reasoningEffort || active?.reasoningEffort === selection.reasoningEffort;
   if (modelMatches && reasoningMatches) return;
-  const selected = await dshRpc<{ selected?: DshModelSelection }>(baseUrl, "session.selectModel", {
+  // Owner also persists this as its deployment default; only invoke for an explicit binding change.
+  const selected = await dshRpc<{ selected?: DshModelSelection }>(baseUrl, "session/selectModel", { request: {
     sessionId,
     provider: selection.provider,
     model: selection.model,
     ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {})
-  });
+  } });
   if (!selected.ok) {
     throw new Error(`DSH session.selectModel failed: ${selected.error.message || selected.error.code || "unknown error"}`);
   }
-}
-
-export type DshRabiRoutePluginStatus = {
-  active: boolean;
-  version?: string;
-  managerBaseUrl?: string;
-  enforceAgentCommunication?: boolean;
-  requestTimeoutMs?: number;
-  tools: string[];
-};
-
-async function dshRemoteRpc<T>(
-  baseUrl: string,
-  endpoint: string,
-  args: Record<string, unknown> = {}
-): Promise<DshRpcOk<T> | DshRpcError> {
-  const rpcId = randomUUID();
-  const response = await fetch(`${baseUrl}/api/${endpoint}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type: "client-request", rpcId, method: endpoint, payload: { args } })
-  });
-  if (!response.ok) {
-    throw new Error(`DSH ${endpoint} transport failed with HTTP ${response.status}.`);
-  }
-  const full = await response.json() as {
-    rpcId?: unknown;
-    result?: { ok?: boolean; value?: unknown; error?: unknown };
-  };
-  if (full.rpcId !== rpcId) {
-    throw new Error(`DSH ${endpoint} rpcId mismatch (possible cross-talk).`);
-  }
-  const result = full.result;
-  if (!result || result.ok !== true) {
-    const error = result?.error && typeof result.error === "object"
-      ? result.error as Record<string, unknown>
-      : {};
-    return {
-      ok: false,
-      error: {
-        code: typeof error.code === "string" ? error.code : undefined,
-        message: typeof error.message === "string" ? error.message : JSON.stringify(error)
-      }
-    };
-  }
-  return { ok: true, value: result.value as T };
-}
-
-export async function readDshRabiRoutePluginStatus(
-  baseUrl: string = DEFAULT_DSH_BASE_URL
-): Promise<DshRabiRoutePluginStatus> {
-  const result = await dshRemoteRpc<Record<string, unknown>>(
-    normalizedDshBaseUrl(baseUrl),
-    "rabirouteAgent/status"
-  );
-  if (!result.ok) {
-    throw new Error(`DSH RabiRoute plugin status failed: ${result.error.message || result.error.code || "unknown error"}`);
-  }
-  const runtime = result.value;
-  const version = typeof runtime.version === "string" && runtime.version.trim()
-    ? runtime.version.trim()
-    : undefined;
-  return {
-    active: runtime.active === true,
-    ...(version ? { version } : {}),
-    ...(typeof runtime.managerBaseUrl === "string" && runtime.managerBaseUrl.trim()
-      ? { managerBaseUrl: runtime.managerBaseUrl.trim().replace(/\/+$/, "") }
-      : {}),
-    ...(typeof runtime.enforceAgentCommunication === "boolean"
-      ? { enforceAgentCommunication: runtime.enforceAgentCommunication }
-      : {}),
-    ...(typeof runtime.requestTimeoutMs === "number" && Number.isFinite(runtime.requestTimeoutMs)
-      ? { requestTimeoutMs: runtime.requestTimeoutMs }
-      : {}),
-    tools: Array.isArray(runtime.tools)
-      ? runtime.tools.filter((item): item is string => typeof item === "string")
-      : []
-  };
 }
 
 type DshSessionListItem = {
@@ -349,7 +258,7 @@ type DshSessionListItem = {
   blank?: boolean;
   cwd?: string;
   agentPreset?: string;
-  projections?: { values?: { title?: string } };
+  projections?: { values?: { title?: string; modelSelection?: { next: DshModelSelection | null; lastUsed: DshModelSelection | null } } };
 };
 
 export type DshSessionSummary = {
@@ -416,12 +325,19 @@ function dshSessionSummary(item: DshSessionListItem): DshSessionSummary | null {
   };
 }
 
-async function readDshSessionCatalog(baseUrl: string): Promise<DshSessionSummary[]> {
-  const result = await dshRpc<{ items?: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session.list", {});
+async function readDshSessionRows(baseUrl: string): Promise<DshSessionListItem[]> {
+  // Current owner list ignores cursor and returns ALL visible rows (no continuation).
+  // Never cap this read: ID resolution and workspace/query filtering need the full catalog.
+  const result = await dshRpc<{ items: DshSessionListItem[] }>(normalizedDshBaseUrl(baseUrl), "session/list", { _request: {} });
   if (!result.ok) {
     throw new Error(`DSH session list failed: ${result.error.message || result.error.code || "unknown error"}`);
   }
-  return (result.value.items || [])
+  if (!Array.isArray(result.value?.items)) throw new Error("DSH session list returned an invalid catalog.");
+  return result.value.items;
+}
+
+async function readDshSessionCatalog(baseUrl: string): Promise<DshSessionSummary[]> {
+  return (await readDshSessionRows(baseUrl))
     .map(dshSessionSummary)
     .filter((item): item is DshSessionSummary => item !== null);
 }
@@ -465,7 +381,7 @@ export async function renameDshSession(params: {
   if (!existing.cwd || !sameDshWorkspace(existing.cwd, cwd)) {
     throw new Error(`DSH session workspace different from requested workspace: ${existing.cwd || "unknown"} != ${cwd}`);
   }
-  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session.rename", { sessionId, title });
+  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session/rename", { request: { sessionId, title } });
   if (!renamed.ok) {
     throw new Error(`DSH session rename failed: ${renamed.error.message || renamed.error.code || "unknown error"}`);
   }
@@ -489,8 +405,8 @@ export async function createDshSession(params: {
   }
   const registered = await dshRpc<{ workspace?: { workspaceId?: string; path?: string } }>(
     baseUrl,
-    "workspace.create",
-    { path: cwd }
+    "workspace/create",
+    { request: { path: cwd } }
   );
   if (!registered.ok) {
     throw new Error(`DSH workspace registration failed: ${registered.error.message || registered.error.code || "unknown error"}`);
@@ -507,13 +423,13 @@ export async function createDshSession(params: {
   const payload: Record<string, string> = { workspaceId };
   if (params.agentPreset?.trim()) payload.agentPreset = params.agentPreset.trim();
   if (params.sessionId?.trim()) payload.sessionId = params.sessionId.trim();
-  const created = await dshRpc<{ sessionId?: string }>(baseUrl, "session.create", payload);
+  const created = await dshRpc<{ sessionId?: string }>(baseUrl, "session/create", { request: payload });
   if (!created.ok) {
     throw new Error(`DSH session creation failed: ${created.error.message || created.error.code || "unknown error"}`);
   }
   const sessionId = typeof created.value.sessionId === "string" ? created.value.sessionId.trim() : "";
   if (!isDshSessionId(sessionId)) throw new Error("DSH session creation returned an invalid sessionId.");
-  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session.rename", { sessionId, title });
+  const renamed = await dshRpc<{ title?: string }>(baseUrl, "session/rename", { request: { sessionId, title } });
   if (!renamed.ok) {
     throw new Error(`DSH session was created but rename failed: ${renamed.error.message || renamed.error.code || "unknown error"}`);
   }
@@ -615,11 +531,7 @@ export async function readDshSession(
   active: boolean;
   status: { type: "active" | "idle" };
 }> {
-  const result = await dshRpc<{ items?: DshSessionListItem[] }>(baseUrl, "session.list", {});
-  if (!result.ok) {
-    throw new Error(`DSH session read failed: ${result.error.message || result.error.code || "unknown error"}`);
-  }
-  const item = (result.value.items || []).find((candidate) => candidate.sessionId === sessionId);
+  const item = (await readDshSessionRows(baseUrl)).find((candidate) => candidate.sessionId === sessionId);
   if (!item) {
     throw new Error(`DSH session was not found: ${sessionId}`);
   }
@@ -709,6 +621,8 @@ export async function sendDshSessionMessage(params: {
   baseUrl?: string;
   imagePaths?: string[];
   modelSelection?: DshModelSelection;
+  /** Reuse across retries of the same delivery; persisted by the owner on the user message. */
+  requestId?: string;
 }): Promise<DshSessionDelivery> {
   const baseUrl = (params.baseUrl || DEFAULT_DSH_BASE_URL).replace(/\/+$/, "");
   await applyDshSessionModel(baseUrl, params.sessionId, params.modelSelection);
@@ -719,11 +633,19 @@ export async function sendDshSessionMessage(params: {
   for (const imagePath of imagePaths) {
     content.push(imageContentPart(imagePath));
   }
-  const result = await dshRpc<{ accepted?: boolean }>(baseUrl, "session.prompt", {
+  const requestId = params.requestId ?? randomUUID();
+  const result = await dshRpc<{ accepted?: boolean }>(baseUrl, "session/prompt", { request: {
+    requestId,
     sessionId: params.sessionId,
-    mode: "queue",
+    // Steer, not queue: DSH injects the message at the running turn's nearest
+    // step boundary and opens a turn itself when the session is idle, so a
+    // delivery never waits for the current turn to finish. This matches the
+    // Codex desktop path, which steers first and only starts a turn when the
+    // target has no active turn.
+    mode: "steer",
     content
-  });
+  } });
+  if (result.ok && result.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");
   if (result.ok) {
     return {
       threadId: params.sessionId,
@@ -735,11 +657,13 @@ export async function sendDshSessionMessage(params: {
   const rejection = `${result.error.message || result.error.code || ""}`;
   if (imagePaths.length > 0 && /image input|image.*not support|not support.*image|image.*unsupported|unsupported.*image/i.test(rejection)) {
     const degraded = buildImagePathDegradedPrompt(params.prompt, imagePaths);
-    const retried = await dshRpc<{ accepted?: boolean }>(baseUrl, "session.prompt", {
+    const retried = await dshRpc<{ accepted?: boolean }>(baseUrl, "session/prompt", { request: {
+      requestId,
       sessionId: params.sessionId,
-      mode: "queue",
+      mode: "steer",
       content: [{ type: "text", text: degraded }]
-    });
+    } });
+    if (retried.ok && retried.value?.accepted !== true) throw new Error("DSH session delivery returned no acceptance receipt.");
     if (retried.ok) {
       return {
         threadId: params.sessionId,

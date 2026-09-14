@@ -211,7 +211,7 @@ function mutatePersonaPlanStatus(
     const retiringWorkflow = beginPersonaPlanStatusRetirement(workflow, task.statusKey, replacement.key);
     for (const plan of readPlansFromStorageInWorker(roleDir)) {
       if (plan.archiveStatus === "已归档" || plan.status !== task.statusKey) continue;
-      updatePlan(roleDir, plan.id, { status: replacement.key }, undefined, mutation);
+      updatePlan(roleDir, plan.id, { markerStatus: replacement.key }, undefined, mutation);
       migratedPlanIds.push(plan.id);
       checkpoint();
     }

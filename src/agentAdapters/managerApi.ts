@@ -13,14 +13,11 @@ import { CodexDesktopBridge } from "../codexDesktopBridge.js";
 import { listCodexModels, listCodexThreads, type CodexModelCatalogEntry } from "../codexRuntime.js";
 import {
   DEFAULT_DSH_BASE_URL,
-  DSH_RABIROUTE_TOOL_NAMES,
-  EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION,
   listDshModels,
   listDshSessions,
-  type DshModelCatalogEntry,
-  readDshRabiRoutePluginStatus,
-  type DshRabiRoutePluginStatus
+  type DshModelCatalogEntry
 } from "../dshSessionBridge.js";
+import { scanWorkbuddyAgentAdapter } from "./workbuddyManagerApi.js";
 
 type AgentMaturity = AgentAdapterMaturity;
 
@@ -35,7 +32,7 @@ export type AgentScanModel = {
   reasoningEfforts?: Array<{ id: string; description?: string }>;
 };
 
-type AgentScanSession = {
+export type AgentScanSession = {
   id?: string;
   name: string;
   projectPath?: string;
@@ -67,6 +64,10 @@ export type AgentScanOptions = {
   dshOffset?: number;
   dshQuery?: string;
   dshBaseUrl?: string;
+  workbuddyLimit?: number;
+  workbuddyOffset?: number;
+  workbuddyQuery?: string;
+  workbuddyWorkspace?: string;
 };
 
 export type AgentScanPerformanceOperation = {
@@ -75,13 +76,12 @@ export type AgentScanPerformanceOperation = {
   error: boolean;
 };
 
-type AgentScanProject = {
+export type AgentScanProject = {
   id?: string;
   label: string;
   path: string;
   exists: boolean;
 };
-
 export type AgentScanResult = {
   type: AgentAdapterType;
   label: string;
@@ -126,6 +126,10 @@ export type GatewayDefinitionLike = {
   dshSessionName?: string;
   dshCwd?: string;
   dshBaseUrl?: string;
+  workbuddySessionId?: string;
+  workbuddySessionName?: string;
+  workbuddyCwd?: string;
+  workbuddyEndpoint?: string;
   copilotThreadName?: string;
   copilotCwd?: string;
   astrbotUrl?: string;
@@ -187,7 +191,9 @@ export type AgentManagerApiContext = {
   dshSessions?: AgentScanSession[];
   listDshSessions?: (query: AgentSessionPageQuery & { baseUrl: string }) => Promise<AgentScanSession[]>;
   listDshModels?: (baseUrl: string) => Promise<{ models: DshModelCatalogEntry[]; warnings: string[] }>;
-  readDshRabiRoutePluginStatus?: (baseUrl: string) => Promise<DshRabiRoutePluginStatus>;
+  /** Overrides for the WorkBuddy session descriptor directory and task database. */
+  workbuddySessionsDir?: string;
+  workbuddyDatabasePath?: string;
 };
 
 
@@ -213,14 +219,9 @@ export async function scanDshAgentAdapter(
   })));
   const dshBaseUrl = configuredDshUrls[0] || DEFAULT_DSH_BASE_URL;
   const dshEndpointHealthy = dshEndpoints.some((endpoint) => endpoint.url === dshBaseUrl && endpoint.healthy);
-  const pluginStatusPromise = dshEndpointHealthy
-    ? (ctx.readDshRabiRoutePluginStatus ?? readDshRabiRoutePluginStatus)(dshBaseUrl)
-        .then((status) => ({ status, error: "" }))
-        .catch((error) => ({ status: undefined, error: error instanceof Error ? error.message : String(error) }))
-    : Promise.resolve({ status: undefined, error: "" });
   const shouldReadDshModels = dshEndpointHealthy && (
     ctx.listDshModels != null
-    || (ctx.dshSessions == null && ctx.listDshSessions == null && ctx.readDshRabiRoutePluginStatus == null)
+    || (ctx.dshSessions == null && ctx.listDshSessions == null)
   );
   const modelCatalogPromise = shouldReadDshModels
     ? (ctx.listDshModels ?? listDshModels)(dshBaseUrl)
@@ -278,28 +279,8 @@ export async function scanDshAgentAdapter(
     ...configuredDshCwds,
     ...dshSessions.map((session) => session.projectPath).filter((value): value is string => Boolean(value))
   ]);
-  const [pluginRead, modelRead] = await Promise.all([pluginStatusPromise, modelCatalogPromise]);
-  const pluginStatus = pluginRead.status;
-  const pluginVersionMatches = pluginStatus?.version === EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION;
-  const pluginToolCoverage = DSH_RABIROUTE_TOOL_NAMES.every((name) => pluginStatus?.tools.includes(name));
-  const pluginHealthy = Boolean(
-    pluginStatus?.active
-    && pluginVersionMatches
-    && pluginStatus.enforceAgentCommunication === true
-    && pluginToolCoverage
-  );
-  const pluginDetails = pluginStatus ? [
-    `Manager：${pluginStatus.managerBaseUrl || "未报告"}`,
-    `Agent 通信约束：${pluginStatus.enforceAgentCommunication === true ? "已启用" : "未启用"}`,
-    `模型工具：${pluginStatus.tools.length}/${DSH_RABIROUTE_TOOL_NAMES.length}`
-  ] : [];
-  const pluginWarnings = [
-    ...(pluginRead.error ? [`读取 DSH RabiRoute Agent 插件状态失败：${pluginRead.error}。请安装或更新 dsh-private-plugins，并重启 DSH。`] : []),
-    ...(pluginStatus && !pluginStatus.active ? ["DSH 已发现 RabiRoute Agent 插件，但运行组件尚未激活；请检查 tools/systemPrompt 依赖并重启 DSH。"] : []),
-    ...(pluginStatus?.version && !pluginVersionMatches ? [`DSH RabiRoute Agent 插件版本为 ${pluginStatus.version}，RabiRoute 当前要求 ${EXPECTED_DSH_RABIROUTE_PLUGIN_VERSION}；请更新插件并重启 DSH。`] : []),
-    ...(pluginStatus && pluginStatus.enforceAgentCommunication !== true ? ["DSH RabiRoute Agent 的 Agent 通信约束未启用；请设置 enforceAgentCommunication=true 并重启 DSH。"] : []),
-    ...(pluginStatus && !pluginToolCoverage ? [`DSH RabiRoute Agent 模型工具不完整；应包含 ${DSH_RABIROUTE_TOOL_NAMES.join("、")}。`] : [])
-  ];
+  // Base connectivity belongs to the DSH owner API, not optional Rabi UI/tools.
+  const modelRead = await modelCatalogPromise;
   return {
     agents: { dsh: {
       ...agentScanManifestFields("dsh"),
@@ -317,16 +298,7 @@ export async function scanDshAgentAdapter(
         ...(model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
         reasoningEfforts: model.reasoningEfforts
       })),
-      plugins: [{
-        id: "rabiroute-agent",
-        name: "RabiRoute Agent",
-        installed: Boolean(pluginStatus),
-        healthy: pluginHealthy,
-        ...(pluginStatus?.version ? { version: pluginStatus.version } : {}),
-        ...(pluginDetails.length ? { details: pluginDetails } : {})
-      }],
       warnings: [
-        ...pluginWarnings,
         ...(modelRead.error ? [`读取 DSH 模型目录失败：${modelRead.error}`] : []),
         ...modelRead.catalog.warnings.map((warning) => `DSH 模型目录：${warning}`),
         ...(dshSessionWarning ? [dshSessionWarning] : []),
@@ -476,6 +448,9 @@ export async function scanAgentAdapters(
   ].filter(Boolean) as string[])];
   const dshScan = await scanDshAgentAdapter({ ...ctx, runtimes }, options);
   const dshAgent = dshScan.agents.dsh;
+  const workbuddyScan = await scanWorkbuddyAgentAdapter({ ...ctx, runtimes }, options);
+  const workbuddyAgent = workbuddyScan.agents.workbuddy;
+  const workbuddyCwdOptions = workbuddyScan.cwdOptions;
 
   const astrbotEndpoints = await Promise.all(astrbotUrls.map(async (url) => ({
     label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 AstrBot" : "AstrBot",
@@ -568,7 +543,8 @@ export async function scanAgentAdapters(
         "尚未自动执行真实消息注入烟测；同会话连续两次发送需用户确认后再测。",
       ]
     },
-    dsh: dshAgent
+    dsh: dshAgent,
+    workbuddy: workbuddyAgent
   };
 
   return {
@@ -576,13 +552,13 @@ export async function scanAgentAdapters(
     agents,
     legacy: {
       threadNames,
-      cwdOptions,
+      cwdOptions: [...new Set([...cwdOptions, ...workbuddyCwdOptions])],
       copilotSessions: copilotSessions.map((s) => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
       copilotBins: [...new Set(copilotBins)],
       marvisAppIds: [...new Set(marvisAppIds)]
     },
     threadNames,
-    cwdOptions,
+    cwdOptions: [...new Set([...cwdOptions, ...workbuddyCwdOptions])],
     copilotSessions: copilotSessions.map((s) => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
     copilotBins: [...new Set(copilotBins)],
     marvisAppIds: [...new Set(marvisAppIds)]

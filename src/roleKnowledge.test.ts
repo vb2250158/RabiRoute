@@ -499,6 +499,8 @@ test("startup migration rewrites legacy plan status aliases without changing arc
   const filePath = planJsonFile(roleDir, created.id, "active");
   const legacy = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
   legacy.status = "进行中";
+  delete legacy.markerStatus;
+  delete legacy.activationStatus;
   fs.writeFileSync(filePath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
 
   const migrated = migrateRolePlanLayoutAtStartup(roleDir);

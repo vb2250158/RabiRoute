@@ -16,7 +16,7 @@ Received data is stored under the PC runtime directory as `data/rabilink/video/<
 
 ## Android entry
 
-Place an original local signing key at `apps/rabilink-android/secrets/rokid/signing/debug.keystore`. The `/secrets/` ignore rule protects this directory from normal Git additions; never commit it. Builds prefer this key with the standard Android debug alias and password, then the existing Vela configuration or the machine's default debug key. Compare APK certificate fingerprints before updating an installed app. Device `.lc` files and private SDK material also stay under `secrets/rokid/` and are not automatically bundled into the app.
+Place an original local signing key at `apps/rabi-mobile-android/secrets/rokid/signing/debug.keystore`. The `/secrets/` ignore rule protects this directory from normal Git additions; never commit it. Builds prefer this key with the standard Android debug alias and password, then the existing Vela configuration or the machine's default debug key. Compare APK certificate fingerprints before updating an installed app. Device `.lc` files and private SDK material also stay under `secrets/rokid/` and are not automatically bundled into the app.
 
 The original signing key has been recovered and version 0.3.20 has been installed while preserving configuration. CXR-M requires commercial partnership access that this project has not obtained, so it is not an available route here. Although the official Maven `client-m:1.2.2` artifact exposes `openCameraVideo()` and `MediaStreamListener.onCameraFrame()`, downloading an SDK or possessing a `.lc` file and signing key does not establish CXR-M access. The remaining requirement must not be described as merely a missing `CLIENT_SECRET`.
 

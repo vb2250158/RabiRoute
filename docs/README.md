@@ -35,6 +35,8 @@
 
 ## 本机安装、配置与恢复
 
+- [DSH Web 会话桥认证](dsh-browser-auth.md) — **双向投递已验收**。使用当前 owner 的启动认证流程连接会话，保留认证与禁止写入重放边界。
+
 - [配置与接入](configuration.md) — **现行指南**。查看 28 个内置 Manager 插件、`provides/requires/optional` 依赖、单一初始化入口、声明式路由、共享资源生命周期、WebGUI/Desktop 扩展入口，以及 AstrBot ChatUI-only 配置。
 - [常驻性能记录与查看](performance-monitoring.md) — **现行指南**。按开关持续记录 Manager、Gateway 和 WebGUI 的近期性能，查看趋势、慢操作和独立 JSONL 文件。
 - [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
@@ -110,10 +112,12 @@
 
 ## 设计与历史
 
+- [RabiLink 全天记录统一设计](rabilink-all-day-recording.md) — **设计 / 实施中，尚未整体验收**。手机、眼镜、手表唯一协调 owner，模式与暂停分离、通知、可靠记录/转写、隐私边界、无损迁移和验收合同。
 
 - [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、用户性格与偏好、心理状态、情景识别、主动行动、记忆和设备分工；当前实现范围以“当前能力与成熟度”为准。
 - [对话消息收集、消息组与四类 Agent 协作](group-message-batching-and-triage-plan.md)（[HTML 架构预览](group-message-batching-and-triage-plan.html)）— **实验支持**。自然语言消息可先立即记录并等待合并，再综合引用消息对应的 Agent 会话、原消息组、会话、说话人和消息端熟悉度，交给动态 Codex 消息处理 Agent；真实群聊/私聊和四类 Agent 完整联调仍待验收。
 - [人格路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
+- [WorkBuddy 作为 Agent 端接入方案](workbuddy-agent-adapter-plan.md) — **设计中，未实现**。把 WorkBuddy 任务接成处理端的提案：已核实会话进程描述文件、任务真源和本地网关 API，投递通道与凭据获取仍待 S0 探测，成熟度只能从 `experimental` 起步。
 - [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。
 - [远端 Agent 接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。复制提示词接入其他电脑，在当前 Manager 管理实例内 Agent，并在路由中选择处理端。

@@ -16,7 +16,7 @@ Relay 的 `POST /api/rabilink/video/offer` 只接受 `deviceId` 与 SDP，总请
 
 ## Android 入口
 
-本地原签名可放在 `apps/rabilink-android/secrets/rokid/signing/debug.keystore`。该目录由 `/secrets/` 忽略规则保护，不能提交；构建优先使用此文件的 Android 默认调试别名和密码，其次才使用既有 Vela 签名配置或本机默认调试签名。覆盖更新前必须比对 APK 证书指纹。设备 `.lc` 和私有 SDK 资料也只保存在 `secrets/rokid/`，不会自动打包进应用。
+本地原签名可放在 `apps/rabi-mobile-android/secrets/rokid/signing/debug.keystore`。该目录由 `/secrets/` 忽略规则保护，不能提交；构建优先使用此文件的 Android 默认调试别名和密码，其次才使用既有 Vela 签名配置或本机默认调试签名。覆盖更新前必须比对 APK 证书指纹。设备 `.lc` 和私有 SDK 资料也只保存在 `secrets/rokid/`，不会自动打包进应用。
 
 已恢复与目标手机原包匹配的签名，并完成保留配置的 0.3.20 覆盖更新。CXR-M 属于本项目尚未取得的商务合作接入条件，当前不作为可用路线。官方 Maven 的 `client-m:1.2.2` 虽然包含 `openCameraVideo()` / `MediaStreamListener.onCameraFrame()`，但 SDK 下载、`.lc` 文件存在、持有签名都不代表获得 CXR-M 使用权限；不能把任务写成仅缺 `CLIENT_SECRET`。
 

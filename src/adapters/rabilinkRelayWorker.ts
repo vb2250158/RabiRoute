@@ -402,6 +402,10 @@ export function handleWearableHealthRelayTask(
 ): boolean {
   const observation = wearableHealthObservationFromTask(task);
   if (!observation) return false;
+  const processingPolicy = relayTaskField(task, "processingPolicy");
+  if (processingPolicy !== "transcribe" && processingPolicy !== "agent") {
+    throw new Error("Wearable observation processing policy missing or unsupported; deferred.");
+  }
   const enabled = options.enabled ?? config.messageEndpointTypes.includes("wearable");
   const appendLog = options.appendLog ?? appendAdapterLog;
   if (!enabled) {
@@ -419,7 +423,7 @@ export function handleWearableHealthRelayTask(
   if (!managerPort) throw new Error("GATEWAY_MANAGER_PORT was not supplied by the owning RabiRoute Manager.");
   const deliver = options.forward ?? forwardMessage;
   const result = ingestWearableHealthObservation(memoryDataDir, observation);
-  for (const alert of result.alerts) {
+  for (const alert of processingPolicy === "agent" ? result.alerts : []) {
     const record = buildWearableHealthAlertRecord(alert, {
       agentRoleId,
       managerPort,

@@ -74,12 +74,12 @@ test("waiting text and step ids never override plan.status", () => {
   assert.equal(planPresentation(item, workflow).tone, "执行中");
 });
 
-test("archiveStatus controls archive visibility without replacing status", () => {
+test("legacy archive and closed states map to archived activation without replacing the marker", () => {
   const archivedCompleted = plan("完成", { archiveStatus: "已归档", archivedAt: "2026-09-03T01:00:00.000Z" });
   const closed = plan("关闭", { archiveStatus: "未归档" });
   assert.deepEqual(planPresentation(archivedCompleted, workflow).views, ["archived"]);
   assert.equal(planPresentation(archivedCompleted, workflow).status, "完成");
-  assert.deepEqual(planPresentation(closed, workflow).views, ["plans"]);
+  assert.deepEqual(planPresentation(closed, workflow).views, ["archived"]);
   assert.equal(planPresentation(closed, workflow).status, "关闭");
 });
 

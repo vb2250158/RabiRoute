@@ -6,7 +6,7 @@ const root = process.cwd();
 const runtimeRoots = [
   "src",
   "ribiwebgui/src",
-  "apps/rabilink-android/app/src/main",
+  "apps/rabi-mobile-android/app/src/main",
   "apps/rabilink-aiui/pages",
   "apps/rabilink-aiui/utils",
   "desktop/rabi-voice-client",
@@ -44,12 +44,12 @@ const checks = [
     message: "Relay consumers must subscribe to /api/rabilink/events and claim immediately."
   },
   {
-    files: ["apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java"],
+    files: ["apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java"],
     pattern: /pollLoop|scheduleWithFixedDelay\s*\(/,
     message: "Android downlink and reliable queues must be event/retry driven, not periodically polled."
   },
   {
-    files: ["apps/rabilink-android/app/src/main/java/com/rabi/link/modules/wearable"],
+    files: ["apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/wearable"],
     pattern: /pollInterval|delay\s*\([^)]*60_000|while\s*\(\s*isActive\s*\)/,
     message: "Wearable health reads must be triggered by explicit platform/user/startup events."
   },
@@ -121,7 +121,7 @@ for (const file of runtimeRoots.flatMap(filesUnder).filter(isRuntimeSource)) {
 
 const controlledPollingExceptions = [
   {
-    file: "apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationService.java",
+    file: "apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationService.java",
     pattern: /NETWORK_EVENT_FALLBACK_CHECK_MS = 5L \* 60L \* 1000L[\s\S]*postDelayed\(networkEventFallbackCheck, NETWORK_EVENT_FALLBACK_CHECK_MS\)/,
     reason: "Some Android vendors may miss a registered default-network callback. Only while already known offline, the foreground service checks OS connectivity every five minutes; it never queries Relay or business state and stops immediately after recovery."
   },
@@ -131,7 +131,7 @@ const controlledPollingExceptions = [
     reason: "DashScope meeting transcription exposes a remote asynchronous job without a callback/webhook in this provider contract; polling is bounded by the request deadline."
   },
   {
-    file: "apps/rabilink-android/scripts/Start-RabiLinkWearableCompanion.ps1",
+    file: "apps/rabi-mobile-android/scripts/Start-RabiLinkWearableCompanion.ps1",
     pattern: /while \(\$true\)[\s\S]*Start-Sleep -Seconds \$nextDelaySeconds/,
     reason: "The explicitly enabled Xiaomi Health ADB provider has no push/event API; its interval is user-configured and never below 60 seconds during normal collection."
   },

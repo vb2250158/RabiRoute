@@ -1,6 +1,6 @@
 ---
 name: create-rabiroute-agent-adapter
-description: 新增、改造或排障 RabiRoute Agent 端适配器时使用。覆盖 Runtime 所有权和启动独立性、会话找不到或串线、工具能力缺失、后端 agent adapter、独立 Agent Manager API、扫描/安装/登录/健康检查、RibiWebGUI 自动化配置、消息投递、诊断和验证；适用于 Codex runtime、Copilot CLI、Marvis、AstrBot、Hermes、脚本、Webhook 或其他 Agent 处理端。
+description: 新增、改造或排障 RabiRoute Agent 端适配器时使用。覆盖 Runtime 所有权和启动独立性、会话找不到或串线、工具能力缺失、后端 agent adapter、独立 Agent Manager API、扫描/安装/登录/健康检查、RibiWebGUI 自动化配置、消息投递、诊断和验证；适用于 Codex runtime、Copilot CLI、Marvis、AstrBot、DSH、脚本、Webhook 或其他 Agent 处理端。
 ---
 
 # 创建 RabiRoute Agent 端适配器

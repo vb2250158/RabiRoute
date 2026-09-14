@@ -47,6 +47,9 @@ class SpeechRecordStore:
         source_device_kind: str | None = None,
         source_stream_id: str | None = None,
         message_adapter_type: str | None = None,
+        processing_policy: str = "agent",
+        capture_id: str = "",
+        route_profile_id: str | None = None,
     ) -> dict[str, object]:
         record_id = str(record_id or result.record_id or f"speech-{uuid.uuid4().hex}")
         resolved = (
@@ -91,6 +94,10 @@ class SpeechRecordStore:
                 "source_device_kind": source_device_kind or None,
                 "source_stream_id": source_stream_id or None,
                 "message_adapter_type": message_adapter_type or None,
+                "processing_policy": processing_policy,
+                "captureId": capture_id,
+                "processedAt": time.time(),
+                "route_profile_id": route_profile_id,
             }
         )
 

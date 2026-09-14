@@ -6,9 +6,26 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
-## In development
+## 0.3.2 - 2026-09-14
+
+- Validation: TypeScript type check passed; WebGUI 302/302, RabiLink mobile endpoint audit and Relay media checks 5/5, and the Codex adapter contract, event-driven boundary and 31-package plugin architecture checks all passed; `git diff --check` is clean. The full backend suite ran 2075 tests: 1986 passed, 6 failed, 80 cascaded cancellations, 3 skipped. All 74 DSH tests (session bridge, auth protocol, concurrency and security, Agent threads) pass: this change gives `src/agentThreads.test.ts` its own endpoint mapping and launch fixture, and corrects the bridge stub's delivery-mode assertion from `queue` to `steer`. The remaining six failures are all process and lease cases (isolated instance, control-plane readiness, control-plane publication, plan storage validation, global Relay runtime) and reproduce at the pre-commit baseline `8ea347b` in a clean worktree, so they are local environment conditions rather than regressions. Installed-package, device and endurance acceptance remain separate.
+
+- Added experimental WorkBuddy Agent endpoint discovery: it reads the session process descriptors and the "workbuddy.db" task database, resolves a single newest task by full session ID or by saved name plus normalized workspace, reports a create-once state when nothing matches, and fails closed on cwd conflict or a stale ID; workspace comparison follows Windows case-insensitive semantics and dropdown names prefer the user-defined title. Message delivery is not implemented yet (gateway credential acquisition and desktop visibility are unverified), the delivery factory stays fail-closed, and WebGUI shows no card for this Agent. See the [WorkBuddy integration plan](docs/workbuddy-agent-adapter-plan_en.md).
+
+- Android All-day Recording unifies phone, glasses and health-device inputs: capture mode is separate from pause, one foreground coordinator owns the status notification, and chats use ordinary independent notifications. The same durable audio segments support local playback and later processing; video audio is derived after recording stops. Historical media and pending queues are preserved.
+- New records freeze source, capture ID, persona, processing policy and PC identity. Local-only stays local; transcription-only does not invoke an Agent. Missing PC/Relay capabilities or target identity defer processing without fallback or retargeting. Health inputs obey explicit participation windows and do not backfill paused intervals. Build, deployment, glasses and 24/72-hour endurance acceptance are separate; see the [design and implementation status](docs/rabilink-all-day-recording_en.md).
+
+- Split plans into three fixed activation states and Agent-configurable markers. Pause is a marker only. Explicit UI labels, transactional legacy migration with bindings retained, and follow-up guards for paused, completed, and archived plans.
 
 - Added an experimental generic cross-PC tunnel and speech server selector with automatic LAN, P2P and Relay ordering, presence, actual transport and measured RTT. Includes streaming HTTP, WebSocket, pinned device grants and local FIFO playback. Physical dual-PC and public-network acceptance remain separate. See [usage](docs/rabilink-peer-tunnel_en.md).
+
+- The DSH web session bridge now follows the affected owner's own launch login flow: it reads only the tail of the target launch log, strictly selects the last same-origin root-path URL carrying a single token, and accepts only a root-path 303 with one supported HttpOnly cookie. Cookies are cached in memory briefly and concurrent exchanges are merged. HTTP 401 clears the matching cache but never replays that RPC, and auth or RPC redirects are never followed; errors never echo the login URL, cookies or log body. Unauthenticated requests remain possible only when the default auth file is absent; an explicitly configured missing file or a config without the target mapping is rejected before any RPC instead of silently degrading. See [DSH web session bridge authentication](docs/dsh-browser-auth_en.md).
+
+- Speech records, message commands and ingress records now carry an explicit transcribe/Agent processing policy, and the policy, source attribution and capture ID are frozen together at the record boundary: RabiSpeech remote audio endpoints verify the same frozen contract across restarts, transcription-only must resolve to a runtime record, and a missing transcription-only capability must never silently retarget an Agent.
+
+- Added a read-only per-persona endpoint history API at `/api/roles/<roleId>/message-endpoint-history`, filtering by source, channel, conversation, sender, time range and keywords with optional archives; a matching audit script verifies the phone implementation against the protocol contract.
+
+- Migration: the phone app directory moved from `apps/rabilink-android` to `apps/rabi-mobile-android`, so local build scripts, documentation links and ignore rules must point at the new path. Each Android module's `build/`, `.gradle/`, signing and local credential directories, plus `.workbuddy/` session notes, stay excluded from submissions, and historical build output is never committed. Local personas, plans, credentials and patch receipts are preserved; examples never overwrite runtime data.
 
 ## 0.3.1 - 2026-09-10
 

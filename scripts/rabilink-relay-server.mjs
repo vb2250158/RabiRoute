@@ -1705,6 +1705,7 @@ function taskForResponse(task) {
     transport: stringValue(input.transport || input.sourceTransport).toLowerCase(),
     attachments: Array.isArray(input.attachments) ? input.attachments.slice(0, 8) : [],
     health: portableHealthPayload(input.health),
+    processingPolicy: stringValue(input.processingPolicy),
     messageCount: task.messages.length,
     nextMessageSeq: task.nextMessageSeq,
     replyText: task.replyText || "",
@@ -2247,6 +2248,10 @@ async function handleSpeechProxy(req, url, res) {
     return sendJson(res, 403, { code: -1, ok: false, message: "Speech API requires the RabiLink application token." });
   }
   const worker = requireRokidAppTarget(auth, "speech");
+  const expectedWorker = stringValue(req.headers["x-rabilink-expected-worker-id"]);
+  if (expectedWorker && expectedWorker !== worker.id) {
+    return sendJson(res, 409, { ok: false, message: "Frozen speech target worker changed; request was not queued." });
+  }
   const suffix = url.pathname.slice(speechProxyPrefix.length) || "/";
   const localPathname = speechProxyPaths.get(`${String(req.method || "GET").toUpperCase()} ${suffix}`);
   if (!localPathname) {
@@ -2258,6 +2263,14 @@ async function handleSpeechProxy(req, url, res) {
   const rawBody = ["GET", "HEAD"].includes(String(req.method || "GET").toUpperCase())
     ? Buffer.alloc(0)
     : await readRawBody(req, { maxBytes: speechBodyMaxBytes, label: "Speech" });
+  if (localPathname === "/v1/audio-streams/rabilink/start") {
+    try {
+      const start = JSON.parse(rawBody.toString("utf8"));
+      if ((start.captureId || start.processingPolicy === "transcribe") && !expectedWorker) {
+        return sendJson(res, 409, { ok: false, message: "New capture streams require X-RabiLink-Expected-Worker-Id." });
+      }
+    } catch { return sendJson(res, 400, { ok: false, message: "Invalid audio stream start JSON." }); }
+  }
   const request = createSpeechRequest(req, auth, worker, localPath, rawBody);
   const finalRequest = await speechRequests.waitForCompletion(request, speechRequestWaitMs);
   speechRequests.cleanup();
@@ -2272,6 +2285,15 @@ async function handleSpeechProxy(req, url, res) {
     path: finalRequest.path,
     error: finalRequest.error || ""
   });
+  if (localPathname === "/v1/capabilities" && finalRequest.response?.statusCode === 200) {
+    try {
+      const capabilities = JSON.parse(Buffer.from(finalRequest.response.bodyBase64, "base64").toString("utf8"));
+      if (capabilities.rabilinkAudioStream?.processingPolicyFrozen === true) {
+        capabilities.rabilinkAudioStream.expectedWorkerFencing = true;
+        finalRequest.response.bodyBase64 = Buffer.from(JSON.stringify(capabilities), "utf8").toString("base64");
+      }
+    } catch { /* Never advertise capabilities on an invalid upstream response. */ }
+  }
   return sendSpeechProxyResponse(res, finalRequest);
 }
 
@@ -3274,9 +3296,17 @@ function handlePortableInput(req, url, res, body) {
   const transport = portableTransport(body?.transport || body?.sourceTransport, "direct-network");
   const health = portableHealthPayload(body?.health);
   if (health) {
+    const auth = authorizeRabiLinkRequest(req, url, body);
+    if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+    const worker = requireRokidAppTarget(auth, "wearable-observation-policy-v1");
+    const expectedWorker = stringValue(req.headers["x-rabilink-expected-worker-id"]);
+    if (!expectedWorker || expectedWorker !== worker.id) return sendJson(res, 409, { ok: false, message: "Frozen wearable worker mismatch; not queued." });
+    if (!["transcribe", "agent"].includes(body?.processingPolicy) || !stringValue(body?.routeProfileId))
+      return sendJson(res, 400, { ok: false, message: "Explicit wearable processing policy and route required." });
     return handleRokidInput(req, url, res, {
       text: stringValue(body?.text || "Wearable health observation"),
       type: "wearable.health",
+      processingPolicy: body.processingPolicy,
       deliveryMode: "observe",
       source: "rabilink-wearable",
       sourceDeviceId: stringValue(body?.sourceDeviceId || body?.deviceId),
@@ -5730,6 +5760,16 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && (url.pathname === "/rokid/rabilink/input" || url.pathname === "/api/rokid/rabilink/input")) {
       return handleRokidInput(req, url, res, body);
+    }
+    if (req.method === "GET" && url.pathname === "/api/rabilink/devices/health-capabilities") {
+      const auth = authorizeRabiLinkRequest(req, url, body);
+      if (!auth.ok) return sendRabiLinkAuthError(res, auth);
+      const worker = requireRokidAppTarget(auth, "wearable-observation-policy-v1");
+      if (stringValue(req.headers["x-rabilink-expected-worker-id"]) !== worker.id)
+        return sendJson(res, 409, { ok: false, message: "Frozen wearable target changed." });
+      return sendJson(res, 200, { rabilinkWearableObservation: {
+        processingPolicies: ["transcribe", "agent"], expectedWorkerFencing: true, processingPolicyFrozen: true
+      } });
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/input") {
       return handlePortableInput(req, url, res, body);

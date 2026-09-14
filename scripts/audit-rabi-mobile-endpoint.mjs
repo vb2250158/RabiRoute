@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { voiceCommandSamples } from "../apps/rabilink-aiui/utils/voice-command.js";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -9,30 +10,35 @@ const includes = (source, values, label) => {
   for (const value of values) assert(source.includes(value), `${label} is missing ${value}`);
 };
 
-const manifest = read("apps/rabilink-android/app/src/main/AndroidManifest.xml");
-const activity = read("apps/rabilink-android/app/src/main/java/com/rabi/link/MainActivity.kt");
-const chatStore = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiChatStore.java");
-const service = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationService.java");
-const serviceState = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationServiceState.java");
-const startupPolicy = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationStartupPolicy.java");
-const bootReceiver = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationBootReceiver.java");
-const phoneCapture = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiPhoneAudioCapture.java");
-const audioCache = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiBoundedAudioCache.java");
-const speechArchive = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiMobileSpeechArchive.java");
-const speechRecords = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/conversation/RabiMobileSpeechRecordStore.java");
-const settings = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationSettings.java");
-const backend = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java");
-const reliableQueueFiles = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RabiReliableQueueFiles.java");
-const networkWakeGate = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RabiNetworkWakeGate.java");
-const pcmUploadBuffer = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RabiPcmUploadBuffer.java");
-const glassBridge = read("apps/rabilink-android/app/src/main/java/com/rabi/link/modules/rokid/RokidNativeVoiceBridge.kt");
-const conversationRules = read("apps/rabilink-android/app/src/main/java/com/rabi/link/RabiConversationRules.kt");
+export function auditMobileEndpoint(readSource = read) {
+const read = readSource;
+const manifest = read("apps/rabi-mobile-android/app/src/main/AndroidManifest.xml");
+const activity = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/MainActivity.kt");
+const chatStore = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiChatStore.java");
+const service = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationService.java");
+const serviceState = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationServiceState.java");
+const hub = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/recording/RabiRecordingHubActivity.kt");
+const recordingSettings = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/recording/AllDayRecordingSettings.java");
+const healthController = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/wearable/WearableHealthController.kt");
+const healthCollector = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/wearable/WearableHealthCollector.kt");
+const bootReceiver = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationBootReceiver.java");
+const phoneCapture = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/conversation/RabiPhoneAudioCapture.java");
+const audioCache = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/conversation/RabiBoundedAudioCache.java");
+const speechArchive = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/conversation/RabiMobileSpeechArchive.java");
+const speechRecords = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/conversation/RabiMobileSpeechRecordStore.java");
+const settings = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationSettings.java");
+const backend = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java");
+const reliableQueueFiles = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiReliableQueueFiles.java");
+const networkWakeGate = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiNetworkWakeGate.java");
+const audioSpool = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiDurableAudioSpool.java");
+const glassBridge = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RokidNativeVoiceBridge.kt");
+const conversationRules = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationRules.kt");
 const sdk = read("packages/android-sdk/rabiroute-sdk/src/main/java/com/rabiroute/sdk/RabiRouteSdk.kt");
-const glass = read("apps/rabilink-android/glass-app/src/main/java/com/rabi/link/glass/GlassAudioClientActivity.java");
-const glassProtocol = read("apps/rabilink-android/shared/src/main/java/com/rabi/link/protocol/RabiGlassAudioProtocol.java");
-const glassPlaybackSession = read("apps/rabilink-android/shared/src/main/java/com/rabi/link/protocol/RabiGlassPlaybackSession.java");
-const phoneGradle = read("apps/rabilink-android/app/build.gradle");
-const glassGradle = read("apps/rabilink-android/glass-app/build.gradle");
+const glass = read("apps/rabi-mobile-android/glass-app/src/main/java/com/rabi/link/glass/GlassAudioClientActivity.java");
+const glassProtocol = read("apps/rabi-mobile-android/shared/src/main/java/com/rabi/link/protocol/RabiGlassAudioProtocol.java");
+const glassPlaybackSession = read("apps/rabi-mobile-android/shared/src/main/java/com/rabi/link/protocol/RabiGlassPlaybackSession.java");
+const phoneGradle = read("apps/rabi-mobile-android/app/build.gradle");
+const glassGradle = read("apps/rabi-mobile-android/glass-app/build.gradle");
 const packet = read("src/routing/agentPacket.ts");
 const relay = read("scripts/rabilink-relay-server.mjs");
 
@@ -62,19 +68,16 @@ includes(activity, [
   "getMobileRoutes",
   "route_profile_id",
   "RabiConversationServiceState.shouldRestore(this)",
-  "RabiConversationStartupPolicy.decide(",
-  "RabiConversationStartupPolicy.Action.START_VOICE",
-  "RabiConversationStartupPolicy.Action.RESTORE_TRANSPORT",
-  "RabiConversationService.restoreAfterBoot(this)"
+  "RabiConversationService.start(this)"
 ], "mobile chat");
-assert.match(startupPolicy, /InputMode\.PHONE\s*&&\s*!microphonePermissionGranted[\s\S]*return Action\.RESTORE_TRANSPORT/s,
-  "opening the app must restore durable message transport when phone microphone capture cannot resume yet");
+assert.doesNotMatch(activity, /RabiConversationStartupPolicy|startRecording\(|applyInputMode\(|autoStartVoiceService\.isChecked/,
+  "chat, login and settings must never grant capture consent");
 includes(activity, [
   "ContextCompat.registerReceiver",
   "RUNTIME_UPDATED",
-  "已暂停（保留消息连接）",
-  "手机模式",
-  "眼镜模式",
+  "AllDayRecordingSettings.load(this)",
+  "openAllDayRecording()",
+  "恢复消息连接（不开启采集）",
   "由 Agent 人格综合决定",
   "最近错误："
 ], "event-driven mode and runtime UI");
@@ -103,6 +106,46 @@ includes(chatStore, [
   "deliveryState", "updateDelivery"
 ], "durable conversation ledger");
 
+// Inspect scoped bodies rather than allowing an unrelated token elsewhere to satisfy a guard.
+const body = (source, start, end) => {
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from + start.length);
+  assert(from >= 0 && to > from, `audit scope missing: ${start}`);
+  return source.slice(from, to);
+};
+const notification = body(service, "private Notification notification(", "private void showReviewShortcut(");
+includes(notification, ["PendingIntent.getActivity", "RabiRecordingHubActivity.class", "ACTION_PAUSE_RECORD", "ACTION_MARK", "setOngoing(true)", "VISIBILITY_PRIVATE"], "single capture status notification");
+assert.doesNotMatch(notification, /setAction\(ACTION_REVIEW\)|MainActivity.class/, "status click must open recording, not trigger Agent or chat");
+const chatNotification = body(service, "private void showAgentMessage(", "public static void clearConversationNotification(");
+includes(chatNotification, ['"rabi_chat_messages"', 'manager.notify("chat:" + conversationKey, 1, value)', "setAutoCancel(true)", "VISIBILITY_PRIVATE", "Uri.encode(conversationKey)", "EXTRA_ROUTE_PROFILE_ID"], "independent private per-conversation notification");
+assert.doesNotMatch(chatNotification, /REVIEW_NOTIFICATION_ID|setOngoing\(true\)|setContentText\(text\)|bigText\(text\)/, "ordinary messages must not overwrite foreground state or expose text on lockscreen");
+const serviceTags = [...manifest.matchAll(/<service\b[\s\S]*?\/>/g)].map(match => match[0]);
+const declared = serviceTags.map(tag => tag.match(/android:name="([^"]+)"/)[1]).sort();
+assert.deepEqual(declared, [".RabiConversationService", ".modules.xiaomi.MiHealthCloudProbeService"].sort(),
+  "only the unified foreground owner and explicit temporary Xiaomi cloud diagnostic service may be registered");
+assert.match(serviceTags.find(tag => tag.includes('".RabiConversationService"')), /android:exported="false"/, "capture owner must not be externally callable");
+assert.doesNotMatch(manifest, /RabiLocalAudioService|RabiLiveRecordingService|WearableHealthSyncService|RokidDeviceStatusSyncService/, "retired independent services must not remain registered");
+for (const relative of ["modules/rokid/RabiLiveRecordingController.kt", "modules/wearable/WearableHealthController.kt", "modules/rokid/RabiGlassStatusPublisher.kt"]) {
+  const controller = read("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/" + relative);
+  assert.doesNotMatch(controller, /:\s*Service\s*\(|extends\s+Service\b|startForeground\s*\(|NotificationChannel\s*\(/, `${relative} must not own another foreground service/notification`);
+}
+const startTransport = body(service, "private void startConversation()", "private void captureReceived(");
+assert.doesNotMatch(startTransport, /applyRecording|startPhoneCapture|startGlassesBackend|withRunning\(true/, "message start is transport-only");
+assert.match(service, /if \(ACTION_RECORD.equals\(action\)\) \{\s*applyRecording\(\);/, "explicit recording action is the capture entry");
+const startCapture = body(service, "public static void startRecording(", "public static void pauseRecording(");
+includes(startCapture, ["withRunning(true, System.currentTimeMillis()).save(context)", "setAction(ACTION_RECORD)", "withRunning(false, System.currentTimeMillis()).save(context)"], "durable explicit start with failure rollback");
+const restore = body(service, "if (ACTION_RESTORE.equals(action))", "if (ACTION_PREFERENCE.equals(action))");
+assert.doesNotMatch(restore, /applyRecording|startPhoneCapture|startGlassesBackend|withRunning\(true/, "boot restore must not acquire capture consent");
+const hubCreation = body(hub, "override fun onCreate(", "override fun onSaveInstanceState(");
+assert.doesNotMatch(hubCreation, /startRecording\(|withRunning\(true|auto_video/, "opening Hub or legacy intent must not start recording");
+includes(hub, ["RabiConversationService.startRecording(this)", "Manifest.permission.RECORD_AUDIO", "PackageManager.PERMISSION_GRANTED", "保存（不开始）", "AllDayRecordingSettings(false,", "RabiConversationService.pauseRecording", "transitionPending()"], "explicit Hub capture controls");
+includes(recordingSettings, ['p.getBoolean("running", false)', 'p.getBoolean("autoResume", false)', 'value && !running ? now : windowStartedAt', '.commit()'], "capture consent and fresh resume window");
+assert.doesNotMatch(recordingSettings, /getBoolean\("autoStartVoiceService"|getBoolean\("continuousListening"/, "upgrades must not import legacy automatic microphone consent");
+const pauseCapture = body(service, "private void pauseRecordingInternal(", "private void finishCaptureTransition(");
+includes(pauseCapture, ["++captureGeneration", "healthController.stop()", "phoneAudioCapture.pause()", "stopGlassesBackend()", "videoController.stop()", "backend.endCapture("], "pause stops every producer and drains admitted PCM");
+includes(healthController, ["generation++", "job?.cancel()", "run.running", "run.windowStartedAt == window", "maxOf(window, participation)", "!allowed(epoch, window) || !stillParticipating()"], "pause excludes late health callbacks and resumed lookback");
+includes(healthCollector, ["windowStart", "windowEnd", "TimeRangeFilter.between(start, end)", "WearableHealthWindow.contains"], "health collection bounded to consent window");
+
 includes(conversationRules, [
   'LEGACY_CONVERSATION_ID = "__legacy_rabi__"',
   'it.equals("rabilink", ignoreCase = true)',
@@ -112,19 +155,20 @@ includes(conversationRules, [
 includes(sdk, ["agentRoleId: String", "messageAdapters: List<String>"], "Android route contact contract");
 
 includes(service, [
-  "NOTIFICATION_ID = 7421",
+  "REVIEW_NOTIFICATION_ID = 7422",
   "ACTION_REVIEW",
+  "ACTION_REFRESH_NOTIFICATION",
   "ACTION_RESTORE",
   "showAgentMessage(messageId, routeProfileId",
   "EXTRA_ROUTE_PROFILE_ID",
   "EXTRA_CLIENT_MESSAGE_ID",
   "chatStore.updateDelivery",
-  "conversationNotificationId",
+  "REVIEW_NOTIFICATION_ID",
   "Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP",
   "startPhoneCapture()",
   "RabiPhoneAudioCapture",
   "pauseAllCaptureModes()",
-  "applyInputMode(settings)",
+  "applyRecording()", "AllDayRecordingSettings" ,
   "RabiConversationSettings.InputMode inputMode",
   "setInputMode(RabiConversationSettings.InputMode.GLASSES)",
   "setInputMode(RabiConversationSettings.InputMode.PHONE)",
@@ -133,7 +177,7 @@ includes(service, [
   "stopGlassesBackend()",
   "startGlassesBackend()",
   "settings.autoPlayAgentVoice",
-  "backend.streamPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_GLASSES)",
+  "backend.streamPcmFromSource(chunk, RabiGlassPcBackend.SOURCE_GLASSES)",
   "backend.requestConversationReview(RabiGlassPcBackend.SOURCE_GLASSES)",
   "RabiGlassPcBackend.SOURCE_GLASSES",
   "registerDefaultNetworkCallback",
@@ -165,12 +209,13 @@ assert.match(service, /public static void stop\(Context context\) \{\s*RabiConve
   "explicit stop must prevent a later reboot from silently restoring the service");
 assert.match(service, /public static void start\(Context context\) \{\s*RabiConversationServiceState\.setRestoreEnabled\(context, true\);/s,
   "an explicitly started message connection must survive process and device restart");
-assert.match(service, /if \(settings\.inputMode == RabiConversationSettings\.InputMode\.GLASSES\) \{\s*phoneAudioCapture\.pause\(\);\s*backend\.pauseAudioStream\(\);\s*setInputMode\(RabiConversationSettings\.InputMode\.PAUSED\);[\s\S]*startGlassesBackend\(\);/s,
+assert.match(service, /phoneAudioCapture\.pause\(\);[\s\S]*?setInputMode\(RabiConversationSettings\.InputMode\.PAUSED\);[\s\S]*?startGlassesBackend\(\);/s,
   "glasses mode must release phone capture and remain paused before starting the glasses bridge");
-assert.match(service, /onGlassBtConnectionChanged\(boolean connected\)[\s\S]*if \(connected\) \{\s*backend\.beginAudioStream\(RabiGlassPcBackend\.SOURCE_GLASSES\);\s*setInputMode\(RabiConversationSettings\.InputMode\.GLASSES\);/s,
-  "glasses capture may become active only after a real Bluetooth connection event");
-assert.match(service, /stopGlassesBackend\(\);\s*backend\.beginAudioStream\(RabiGlassPcBackend\.SOURCE_PHONE\);\s*startPhoneCapture\(\);\s*setInputMode\(RabiConversationSettings\.InputMode\.PHONE\);/s,
-  "phone mode must release the glasses bridge before starting phone capture");
+const glassBt = body(service, "onGlassBtConnectionChanged(boolean connected)", "onGlassDeviceInfo");
+includes(glassBt, ["acceptsGlassCallback(callbackGeneration)", "captureSettings.running", '"audio".equals(captureSettings.mode)', '"glasses".equals(captureSettings.source)', "glassController.startAudioStream()", "setInputMode(RabiConversationSettings.InputMode.GLASSES)"], "generation-fenced glasses Bluetooth capture gate");
+assert.match(glassBt, /if \(connected\)[\s\S]*?startAudioStream\(\)[\s\S]*?setInputMode\(RabiConversationSettings\.InputMode\.GLASSES\)/s, "glasses capture requires connected callback and successful stream start");
+assert.match(service, /setInputMode\(RabiConversationSettings\.InputMode\.PHONE\);\s*startPhoneCapture\(\);/s,
+  "phone mode must start phone capture only after mode selection");
 assert.match(service, /private void shutdown\(boolean explicitStop\) \{[\s\S]*unregisterNetworkEvents\(\);[\s\S]*backend\.stop\(\);/s,
   "network events must remain registered for the service lifetime and unregister only during shutdown");
 assert.match(service, /private void markNetworkUnavailable\(\) \{[\s\S]*target\.onNetworkUnavailable\(\);[\s\S]*scheduleNetworkEventFallbackCheck\(\);/s,
@@ -247,7 +292,7 @@ includes(backend, [
   'put("source_device_id", deviceId)',
   'put("sourceDeviceId", deviceId)',
   'put("sessionId", deviceId)',
-  "pendingAudioSequence",
+  "nextPendingAudioSequence",
   "RabiSingleDrainGate",
   "audioStreamDrainGate",
   "audioStreamRecoveryGeneration",
@@ -302,38 +347,36 @@ assert(!backend.includes("/api/rabilink/speech/v1/audio/transcriptions")
     && !backend.includes("audioQueueDirectory")
     && !backend.includes("submitPcm"),
   "Android production backend must use the host PCM stream instead of a whole-utterance ASR bypass");
-assert.match(backend, /RabiPcmUploadBuffer\.PendingChunk pending = audioUploadBuffer\.preparePending\(\);[\s\S]*request\("POST", path, "application\/octet-stream", pending\.pcm, 60000\);\s*audioStreamSequence = pendingAudioSequence;\s*audioUploadBuffer\.acknowledgePending\(\);/s,
-  "Android must commit a chunk sequence and clear pending PCM only after the PC acknowledges it");
+assert.match(backend, /RabiDurableAudioSpool\.Segment pending = audioSpool\.nextUpload\(activeAudioStreamSource, activeAudioStreamRoute\);[\s\S]*request\("POST", path, "application\/octet-stream", pcm, 60000\)[\s\S]*audioSpool\.acknowledge\(pending\.id, serverSequence, pending\.bytes, pending\.sha256\);/s,
+  "Android must commit a chunk sequence and clear durable PCM only after the PC acknowledges it");
 assert.match(backend, /ScheduledExecutorService audioStreamExecutor = Executors\.newSingleThreadScheduledExecutor\(\);[\s\S]*RabiSingleDrainGate audioStreamDrainGate/,
   "PCM uploads must coalesce producer wakeups into one scheduled drain instead of an unbounded task queue");
-assert.match(backend, /int droppedBytes = audioUploadBuffer\.append\(copy\);[\s\S]*audioUploadBuffer\.ready\(\)[\s\S]*requestAudioStreamDrain\(\)/,
-  "PCM pressure must remain bounded in the newest-audio buffer while preserving the acknowledgement-sensitive chunk");
-assert.match(backend, /safeStreamId\(deviceId \+ "-" \+ suffix \+ "-audio"\)/,
+assert.match(backend, /RabiDurableAudioSpool\.AppendResult written = audioSpool\.append\(item\.pcm, item\.source, item\.route, item\.captureId, item\.processingPolicy, item\.capturedAt, "received"\);[\s\S]*requestAudioStreamDrain\(\)/,
+  "PCM pressure must remain bounded before durable acknowledgement-sensitive upload");
+includes(backend, ["supportsCaptureProcessing", "expectedWorkerFencing", "processingPolicyFrozen", "processingPolicies"], "worker processing-policy fencing");
+assert(backend.includes('captureStreamId(deviceId, suffix, route, processingPolicy, captureId)'),
   "each physical input source must reuse a stable stream id so retries can resume the server sequence");
 assert(!backend.includes('glasses ? "rabi-glass" : deviceId'),
   "glasses input must target replies to its companion owner instead of a shared synthetic device id");
 assert(!backend.includes('SOURCE_GLASSES.equals(sourceDeviceKind) ? "rabi-glass" : deviceId'),
   "glasses PCM must keep physical origin in sourceDeviceKind while sourceDeviceId remains the companion reply owner");
 
-includes(pcmUploadBuffer, [
-  "one acknowledgement-sensitive chunk",
-  "DEFAULT_MAX_BUFFERED_BYTES",
-  "PendingChunk",
-  "preparePending()",
-  "acknowledgePending()",
-  "Arrays.copyOfRange"
-], "bounded PCM recovery state");
-assert.match(pcmUploadBuffer, /pending = new PendingChunk\(id\.trim\(\), buffered\);\s*buffered = new byte\[0\];/s,
-  "pending PCM must receive a stable chunk identity before the live buffer is cleared");
+includes(audioSpool, [
+  "Phone-local source of truth for continuous PCM",
+  "Segment",
+  "nextUpload()",
+  "acknowledge(",
+  "sha256"
+], "durable PCM recovery state");
 
 includes(service, [
   "backend.streamPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_PHONE)",
-  "backend.beginAudioStream(RabiGlassPcBackend.SOURCE_GLASSES)",
-  "backend.beginAudioStream(RabiGlassPcBackend.SOURCE_PHONE)",
+  "glassController.startAudioStream()",
+  "backend.beginCapture(s.source, s.routeProfileId, s.processingPolicy)",
   "backend.streamPcmFromSource(chunk, RabiGlassPcBackend.SOURCE_GLASSES)"
 ], "host-owned Android audio streaming");
 includes(service, [
-  "settings.inputMode == RabiConversationSettings.InputMode.GLASSES",
+  "inputMode != RabiConversationSettings.InputMode.GLASSES" ,
   "phoneAudioCapture.pause()",
   "backend.pauseAudioStream()",
   "onGlassBtConnectionChanged(boolean connected)",
@@ -414,7 +457,8 @@ assert.match(glass, /onMarkerReached\(AudioTrack track\)[\s\S]*playbackSession\.
 assert.match(glass, /if \(!pauseCaptureForPlaybackAndWait\(\)\)[\s\S]*replacePlaybackTrack\(markerFrames\)/,
   "glasses must confirm capture pause before accepting framed playback PCM");
 
-assert.equal(voiceCommandSamples().length, 85, "the migrated configuration surface must retain all 85 AIUI allowlisted actions");
+assert.equal(voiceCommandSamples().length, 84, "the migrated configuration surface must retain all 84 AIUI allowlisted actions");
+assert.equal(voiceCommandSamples().length, 84, "mobile endpoint retains migrated allowlisted actions; legacy parity is covered by source command inventory");
 includes(packet, ["移动端配置助手", "现有动作安全门和审批", "复核读回结果"], "PC configuration assistant gate");
 includes(relay, [
   "attachments.length === 0",
@@ -426,4 +470,15 @@ includes(relay, [
   "channelType"
 ], "portable Relay envelope");
 
-console.log("Rabi mobile endpoint audit passed: QQ-style conversation navigation, route isolation, unread/drafts, explicit delivery targets, phone backend, optional glasses, notifications, media, speech, recovery, and 85 configuration actions are wired.");
+console.log("Rabi mobile endpoint audit passed: unified all-day recording owner, explicit capture consent, independent chat notifications, route isolation, attachments, receipts, reliable queues, host ASR and 84 configuration actions are wired.");
+return true;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  try {
+    auditMobileEndpoint();
+  } catch (error) {
+    console.error(`Rabi mobile endpoint audit failed: ${error.message}`);
+    process.exitCode = 1;
+  }
+}

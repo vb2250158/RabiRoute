@@ -1,4 +1,5 @@
 import crypto, { randomUUID } from "node:crypto";
+import { planCanAutoAdvance } from "../planState.js";
 import fs from "node:fs";
 import path from "node:path";
 import { rabiContextManager, type RabiContextTriggerKind } from "../context/rabiContextManager.js";
@@ -843,7 +844,8 @@ export class CodexHookContextService {
       const workflow = ensurePersonaPlanWorkflow(role.roleDir).workflow;
       return listPlans(role.roleDir)
         .filter((plan) => (
-          (planStatusDefinition(workflow, plan.status)?.views.includes("current") === true)
+          planCanAutoAdvance(plan, workflow)
+          && (planStatusDefinition(workflow, plan.status)?.views.includes("current") === true)
           && plan.taskBinding?.agentType === "codex"
           && plan.taskBinding.sessionId === sessionId
           && plan.taskBinding.completionHook?.enabled === true

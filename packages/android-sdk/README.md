@@ -6,7 +6,7 @@
 
 # RabiRoute Android SDK
 
-> 状态：实验 SDK。源码已被 `apps/rabilink-android/` 直接引用，但尚未发布为独立 Maven/Gradle 制品。
+> 状态：实验 SDK。源码已被 `apps/rabi-mobile-android/` 直接引用，但尚未发布为独立 Maven/Gradle 制品。
 
 第一版原生 SDK 使用 Kotlin、`HttpURLConnection` 和 `org.json`，不依赖 Retrofit。
 
@@ -35,7 +35,7 @@ npm run start:manager
 
 ## 引用方式
 
-当前没有发布坐标。`apps/rabilink-android` 通过 Gradle `sourceSet` 直接引用：
+当前没有发布坐标。`apps/rabi-mobile-android` 通过 Gradle `sourceSet` 直接引用：
 
 ```text
 packages/android-sdk/rabiroute-sdk/src/main/java

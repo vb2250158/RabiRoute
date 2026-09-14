@@ -76,11 +76,11 @@ function resolveDefaults(options) {
       file => /^persona-sync-.*\.json$/i.test(path.basename(file))
     ),
     mobileSoak: options.mobileSoak || latestFile(
-      path.join(REPO_ROOT, "apps", "rabilink-android", "out"),
+      path.join(REPO_ROOT, "apps", "rabi-mobile-android", "out"),
       file => path.basename(file).toLowerCase() === "summary.json" && file.toLowerCase().includes("mobile-audio-soak")
     ),
     rokid: options.rokid || latestFile(
-      path.join(REPO_ROOT, "apps", "rabilink-android", "out", "rokid-native-voice"),
+      path.join(REPO_ROOT, "apps", "rabi-mobile-android", "out", "rokid-native-voice"),
       file => /^rokid-native-voice-real-summary-.*\.json$/i.test(path.basename(file))
     )
   };

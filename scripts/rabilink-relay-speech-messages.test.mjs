@@ -164,7 +164,14 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
     assert.equal(result.status, 200);
     assert.equal((await result.json()).data.status, "delivered");
 
+    const fenced = await fetch(`${baseUrl}/api/rabilink/speech/v1/audio-streams/rabilink/start`, {
+      method: "POST", headers: { "content-type": "application/json", "x-rabilink-token": token,
+        "X-RabiLink-Expected-Worker-Id": "another-pc" }, body: JSON.stringify({ stream_id: "must-not-start" })
+    });
+    assert.equal(fenced.status, 409);
     const startPayload = {
+      processingPolicy: "transcribe",
+      captureId: "capture-a",
       stream_id: "phone-a-audio",
       name: "Phone A",
       device_kind: "mobile",
@@ -175,8 +182,8 @@ test("speech proxy allowlists completed mobile ASR messages for the target Manag
     };
     const pendingStart = fetch(`${baseUrl}/api/rabilink/speech/v1/audio-streams/rabilink/start`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-rabilink-token": token },
-      body: JSON.stringify(startPayload)
+      body: JSON.stringify(startPayload),
+      headers: { "content-type": "application/json", "x-rabilink-token": token, "X-RabiLink-Expected-Worker-Id": "pc-a" }
     });
     let claimedStart;
     for (let attempt = 0; attempt < 50 && !claimedStart; attempt += 1) {

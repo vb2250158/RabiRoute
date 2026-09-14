@@ -6,7 +6,7 @@ English | <a href="./README.md">简体中文</a>
 
 # RabiRoute Android SDK
 
-> Status: experimental SDK. `apps/rabilink-android/` consumes the source directly, but no standalone Maven or Gradle artifact is published.
+> Status: experimental SDK. `apps/rabi-mobile-android/` consumes the source directly, but no standalone Maven or Gradle artifact is published.
 
 The first native SDK uses Kotlin, `HttpURLConnection`, and `org.json` without Retrofit.
 
@@ -35,7 +35,7 @@ Do not expose an unauthenticated local management surface to an untrusted networ
 
 ## Consumption
 
-There is no published dependency coordinate. `apps/rabilink-android` imports this source tree through a Gradle `sourceSet`:
+There is no published dependency coordinate. `apps/rabi-mobile-android` imports this source tree through a Gradle `sourceSet`:
 
 ```text
 packages/android-sdk/rabiroute-sdk/src/main/java

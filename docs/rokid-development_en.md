@@ -59,10 +59,10 @@ Older successful CustomApp records describe earlier devices/builds and do not ov
 
 ## Code ownership
 
-- `apps/rabilink-android/app/`: phone control, receiver, preview and recording.
-- `apps/rabilink-android/glass-app/`: existing glasses audio and diagnostics.
-- `apps/rabilink-android/glass-video-app/`: separate experimental `com.rabi.link.glass.video` recorder, bundled as `rabi-glass-video.apk` in the phone debug build; users do not install a second phone app.
-- `apps/rabilink-android/shared/`: private receiver validation and control protocol.
+- `apps/rabi-mobile-android/app/`: phone control, receiver, preview and recording.
+- `apps/rabi-mobile-android/glass-app/`: existing glasses audio and diagnostics.
+- `apps/rabi-mobile-android/glass-video-app/`: separate experimental `com.rabi.link.glass.video` recorder, bundled as `rabi-glass-video.apk` in the phone debug build; users do not install a second phone app.
+- `apps/rabi-mobile-android/shared/`: private receiver validation and control protocol.
 
 The new component uses RootEncoder 2.4.3 under Apache-2.0, with the license in its `src/main/assets/licenses/RootEncoder-2.4.3.txt`. CXR carries control and local RTMP carries H.264/AAC. This version still requires the same Wi-Fi or phone hotspot; it does not establish Wi-Fi Direct or send video through Relay.
 
@@ -79,4 +79,4 @@ Keep incomplete stages pending. Muting preview does not remove recorded audio. C
 
 - [Rokid development skill](../skills/rokid-development/SKILL.md): read before subsequent development or diagnosis.
 - [Offline recording and device results](rabilink-offline-recording_en.md): current usage and acceptance state.
-- [Historical voice research](../apps/rabilink-android/docs/rokid-ai-sdk-official-voice-plan_en.md): consult earlier interface evidence as needed; this page supersedes its CXR-M route suggestions.
+- [Historical voice research](../apps/rabi-mobile-android/docs/rokid-ai-sdk-official-voice-plan_en.md): consult earlier interface evidence as needed; this page supersedes its CXR-M route suggestions.

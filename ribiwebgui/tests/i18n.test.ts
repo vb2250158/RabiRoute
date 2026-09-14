@@ -217,7 +217,7 @@ test("translates plan directory and step-local approval copy", () => {
   assert.equal(translateText("计划目录", "en"), "Plan directory");
   assert.equal(translateText("点击计划快速跳转", "en"), "Select a plan to jump");
   assert.equal(translateText("当前结果", "en"), "Current results");
-  assert.equal(translateText("状态排序", "en"), "Status order");
+  assert.equal(translateText("标记排序", "en"), "Marker order");
   assert.equal(translateText("分析中", "en"), "Analyzing");
   assert.equal(translateText("执行中", "en"), "Executing");
   assert.equal(translateText("待讨论", "en"), "Awaiting discussion");

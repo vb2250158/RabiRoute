@@ -149,4 +149,4 @@ PC Agent -> Outbox 下行文本 -> 手机请求 Rabi PC TTS -> PCM -> 眼镜扬�
 - [RabiLink 手机边缘枢纽](rabilink-phone-edge-hub.md)
 - [RabiLink 原生应用历史设计](rabilink-glasses-app-design.md)
 - [AIUI 示例](../apps/rabilink-aiui/README.md)
-- [Android RabiLink probe](../apps/rabilink-android/README.md)
+- [Android RabiLink probe](../apps/rabi-mobile-android/README.md)

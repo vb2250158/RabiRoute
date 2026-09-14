@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { auditMobileEndpoint } from "./audit-rabi-mobile-endpoint.mjs";
+const root = path.resolve(import.meta.dirname, "..");
+const files = new Map();
+const read = (relative) => { if (!files.has(relative)) files.set(relative, fs.readFileSync(path.join(root, relative), "utf8")); return files.get(relative); };
+const mutate = (relative, from, to = "") => { const source = read(relative); assert.notEqual(source.indexOf(from), -1, `mutation anchor missing: ${from}`); files.set(relative, source.split(from).join(to)); };
+const expectReject = (name, mutation) => test(name, () => { files.clear(); mutation(); assert.throws(() => auditMobileEndpoint(read)); });
+test("baseline audit passes", () => { files.clear(); assert.equal(auditMobileEndpoint(read), true); });
+await expectReject("BT gate mutation is rejected", () => mutate("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/RabiConversationService.java", "acceptsGlassCallback(callbackGeneration)", "false"));
+await expectReject("worker policy fencing mutation is rejected", () => mutate("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/modules/rokid/RabiGlassPcBackend.java", "supportsCaptureProcessing", "processingSupportRemoved"));
+await expectReject("chat capture consent mutation is rejected", () => mutate("apps/rabi-mobile-android/app/src/main/java/com/rabi/link/MainActivity.kt", "RabiConversationService.start(this) // Message transport only.", "RabiConversationService.startRecording(this)"));

@@ -46,6 +46,18 @@ A bypass receipt proves platform acceptance only, not a recorded callback, knowl
 Query Rabi first for group chats, private messages, and recent feedback. Installed clients obtain `managerBaseUrl`, `applicationGenerationId`, and `managerInstanceId` through `RabiRouteHost.exe --command status --json`; source mode uses the structured READY address. Read `<managerBaseUrl>/meta` and verify `health.state=healthy`, `health.requiredReady=true`, and the generation/instance identity. Rediscover and retry within a bounded attempt when an address is stale or a failure is transient. A generic Hook message saying the Host is not running is not a substitute for the actual discovery failure. Do not scan ports, read retired instance locks, or directly start/stop Manager.
 
 Currently, `GET <managerBaseUrl>/api/gateways` provides Route diagnostics with recent message summaries in `messageFiles`. The NapCat summary merges group and private messages and returns only the latest 8 entries. Filter by the target Route, group/private conversation, message ID, and time; this is not a complete history search API. `GET /api/roles/{roleId}/chat-history` contains Agent final replies, not QQ group history.
+### Querying message-endpoint history
+
+Processing agents recovering QQ group, QQ private-chat, or other message-endpoint context use the read-only API:
+
+```http
+GET /api/roles/{roleId}/message-endpoint-history
+```
+
+Common parameters include `query` (multiple terms separated by whitespace, ASCII comma, Chinese comma, or enumeration comma), `match=any|all` (default `any`), `adapter`, `kind=group|private`, `sender`, `target`, `conversationKey`, `from`, `to`, `includeArchives=1`, and `limit`. The response contains `entries`, `count`, and `coverage`; records retain endpoint, group/private conversation key, sender, target, message ID, reply ID, and attachment summaries. `kind=group` limits results to inbound group messages and `kind=private` to inbound private messages; do not treat `reply_sent` outbound replies as original user feedback.
+
+For a new session, extract the object and keywords from the user message first, then query this API for endpoint history. Query `knowledge/search` separately for plans, memory, or original-task ownership, and finally verify current files, configuration, code, or runtime evidence. Always inspect coverage with the result; an empty result does not prove that the message never existed.
+
 
 Use the current NapCat connection or official logs only when Rabi is unreachable, an endpoint is unavailable, or the verified summary window cannot cover the requested history. When Rabi is available, obtain the connection from the current Route binding and status. Otherwise, use only a connection explicitly supplied for the current task, configuration belonging to the running instance, or a verified official log location. Before direct queries, verify online status and account identity with `get_status` and `get_login_info`, then call read-only history/message APIs. Do not try accounts or ports from old tasks, memory, or leftover installations. Never echo credentials or bypass an authorization denial.
 

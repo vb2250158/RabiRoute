@@ -57,8 +57,10 @@ test("persona plan status routes provide revision-fenced CRUD and retire after m
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  const first = await jsonRequest(baseUrl, "/api/roles/Rabi/plan-statuses");
+  const first = await jsonRequest(baseUrl, "/api/roles/Rabi/plan-marker-statuses");
   assert.equal(first.response.status, 200);
+  assert.deepEqual(first.payload.data.activationStatuses, ["进行中", "已完成", "已归档"]);
+  assert.deepEqual(first.payload.data.markerStatuses, first.payload.data.statuses);
   const firstRevision = String(first.payload.data.revision);
   const analysis = first.payload.data.statuses.find((status: { key: string }) =>
     status.key === first.payload.data.roles.analysis
@@ -106,7 +108,8 @@ test("persona plan status routes provide revision-fenced CRUD and retire after m
     id: "status-migration-plan",
     title: "状态迁移计划",
     focus: "验证状态定义移除",
-    status: "researching",
+    markerStatus: "researching",
+    activationStatus: "已完成",
     currentStepId: "inspect",
     steps: [{ id: "inspect", title: "检查", status: "进行中" }],
     keywords: ["状态迁移"]
@@ -124,6 +127,7 @@ test("persona plan status routes provide revision-fenced CRUD and retire after m
   assert.equal(retired.payload.data.status.state, "retired");
   assert.deepEqual(retired.payload.data.migratedPlanIds, [plan.id]);
   assert.equal(readPlansFromStorageInWorker(roleDir).find(item => item.id === plan.id)?.status, first.payload.data.roles.analysis);
+  assert.equal(readPlansFromStorageInWorker(roleDir).find(item => item.id === plan.id)?.activationStatus, "已完成");
   assert.equal(listPlanHistory(roleDir, plan.id)[0]?.after.status, "researching");
 
   const finalCatalog = await jsonRequest(baseUrl, "/api/roles/Rabi/plan-statuses");

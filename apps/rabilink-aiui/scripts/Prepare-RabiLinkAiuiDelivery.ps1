@@ -223,7 +223,7 @@ $craftFiles = Get-ChildItem -LiteralPath (Join-Path $resolvedDeliveryDir "craft-
   } |
   Sort-Object path
 
-$adbPath = Join-Path (Resolve-Path -LiteralPath (Join-Path $projectRoot "..\..")) "apps\rabilink-android\out\tools\android-sdk\platform-tools\adb.exe"
+$adbPath = Join-Path (Resolve-Path -LiteralPath (Join-Path $projectRoot "..\..")) "apps\rabi-mobile-android\out\tools\android-sdk\platform-tools\adb.exe"
 $adbDevices = @()
 if (Test-Path -LiteralPath $adbPath) {
   $adbDevices = @(& $adbPath devices -l | Where-Object { $_ -match "\sdevice\s" })

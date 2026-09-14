@@ -287,7 +287,7 @@ Cloud logs never upload raw ASR text, raw configuration requests, Agent replies,
 The computer can read live logs only when the glasses themselves appear in `adb devices -l` and RSA debugging authorization has been accepted on the glasses. A phone connected over ADB does not mean the glasses are connected. The current configuration chain emits safe markers that contain no user utterance: `configuration-asr:start/result/end` and `configuration-ai:dispatch:<command>`.
 
 ```powershell
-$adb = Resolve-Path ..\rabilink-android\out\tools\android-sdk\platform-tools\adb.exe
+$adb = Resolve-Path ..\rabi-mobile-android\out\tools\android-sdk\platform-tools\adb.exe
 & $adb devices -l
 & $adb logcat -c
 & $adb logcat -v threadtime |

@@ -59,10 +59,10 @@
 
 ## 工程归属
 
-- `apps/rabilink-android/app/`：手机控制、接收、预览和录像。
-- `apps/rabilink-android/glass-app/`：既有眼镜音频与诊断应用。
-- `apps/rabilink-android/glass-video-app/`：独立实验录像组件 `com.rabi.link.glass.video`，由手机调试包携带 `rabi-glass-video.apk`，不要求用户另装一个手机应用。
-- `apps/rabilink-android/shared/`：本地接收地址校验和控制协议。
+- `apps/rabi-mobile-android/app/`：手机控制、接收、预览和录像。
+- `apps/rabi-mobile-android/glass-app/`：既有眼镜音频与诊断应用。
+- `apps/rabi-mobile-android/glass-video-app/`：独立实验录像组件 `com.rabi.link.glass.video`，由手机调试包携带 `rabi-glass-video.apk`，不要求用户另装一个手机应用。
+- `apps/rabi-mobile-android/shared/`：本地接收地址校验和控制协议。
 
 新组件使用 RootEncoder 2.4.3（Apache-2.0），许可证位于其 `src/main/assets/licenses/RootEncoder-2.4.3.txt`。控制经 CXR，H.264/AAC 经本地 RTMP；首版仍要求同 Wi-Fi 或手机热点，不自动建立 Wi-Fi Direct，也不经过 Relay。
 
@@ -79,4 +79,4 @@
 
 - [乐奇开发 Skill](../skills/rokid-development/SKILL.md)：下次开发或排障先读。
 - [离线录像与真机结果](rabilink-offline-recording.md)：当前使用方式和验收状态。
-- [历史语音调查](../apps/rabilink-android/docs/rokid-ai-sdk-official-voice-plan.md)：仅按需查旧接口证据，涉及 CXR-M 的建议已被本页当前路线取代。
+- [历史语音调查](../apps/rabi-mobile-android/docs/rokid-ai-sdk-official-voice-plan.md)：仅按需查旧接口证据，涉及 CXR-M 的建议已被本页当前路线取代。

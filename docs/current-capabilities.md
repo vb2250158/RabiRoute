@@ -99,9 +99,10 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | DSH（DeepSeek Harness） | 实验支持 | 已实现 apiproxy Endpoint、工作目录和会话扫描，支持按完整 ID 续投、按名称 + 工作目录解析、唯一最新同名会话选择、零匹配幂等创建、改名、保存绑定和自动初始化。DSH 可作为主人格、消息处理 Agent、计划秘书、独立记忆整理 Agent 或业务 Agent；`RabiRoute Agent` 插件提供线程桥、外发、计划、记忆、消息处理和 Agent 间通信工具，Hook 约束与“仅允许主人格发送消息”也适用于 DSH 主 Agent。代码、WebGUI 和插件测试已覆盖；匿名测试 profile 已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、正式回复和无效 Endpoint 失败关闭。独立扫描可读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，并诊断插件缺失、未激活和版本不匹配。发布包与全新环境回归待完成。 |
 | Copilot CLI | 实验支持 | 调用本机 Copilot CLI，使用独立 session name 和 cwd，记录输出和状态；扫描接口明确提示尚未完成连续同会话端到端烟测。 |
 | AstrBot | 实验支持 | 支持 Dashboard 登录验证、项目/会话扫描、RabiRoute 插件部署和 ChatUI 会话投递；扫描接口明确提示仍需真实连续发送验收。 |
+| WorkBuddy（腾讯 AI 办公工作台） | 实验支持（仅发现层） | **消息投递尚未实现**。已实现任务发现与解析：读取会话进程描述文件（进程存活 + 心跳 + 是否发布本地网关）与 `workbuddy.db` 任务库，按完整会话 ID 或“保存名称 + 规范化工作目录”解析唯一最新任务，零匹配返回可创建状态，cwd 冲突与失效 ID 失败关闭。已实测会话网关需要桌面注入的网关密码，RabiRoute 作为独立进程无法读取，凭据获取方式未定；也尚未证明 `POST /api/v1/runs` 的消息会进入用户已有任务的对话区。因此投递保持失败关闭，WebGUI 暂不显示该 Agent 卡片。详见 [WorkBuddy 接入方案](workbuddy-agent-adapter-plan.md)。 |
 | Marvis | 人工接力 | 写 prompt、复制剪贴板并打开/聚焦 Marvis；不能可靠列出、创建或重复注入同一会话。 |
 
-处理端创建已接入 Cordis 运行时：五个内置 Agent Adapter 由独立 Fiber 注册到同一清单，类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入读取同一 manifest；兼容入口和原投递路径保持不变。单个 Fiber 与根 Context 的撤销已通过自动化测试。Manager 已通过 `/api/plugins/catalog` 发布统一插件目录；WebGUI 从目录生成受控导航并响应目录变化，Desktop 读取同一目录生成宿主预先注册的菜单、状态、设置、快捷键和主题入口。第三方 Vue 组件、脚本、样式和命令处理器仍未开放。
+处理端创建已接入 Cordis 运行时：六个内置 Agent Adapter 由独立 Fiber 注册到同一清单（WorkBuddy 目前只注册发现与解析能力，投递工厂失败关闭，未声明消息处理、计划秘书、记忆整理或 Hook 能力），类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入读取同一 manifest；兼容入口和原投递路径保持不变。单个 Fiber 与根 Context 的撤销已通过自动化测试。Manager 已通过 `/api/plugins/catalog` 发布统一插件目录；WebGUI 从目录生成受控导航并响应目录变化，Desktop 读取同一目录生成宿主预先注册的菜单、状态、设置、快捷键和主题入口。第三方 Vue 组件、脚本、样式和命令处理器仍未开放。
 
 Manager 的 29 个内置插件与树外插件统一使用 schema/profile v2。入口明确选择 `in_process`、`isolated` 或 `declarative`；Profile 的 `readyRequires` 决定 Manager 是否可对 Host 报 ready；Plugin Kernel 在替换时先释放消费者、再释放 provider，长期插件子进程由 Process Lease Registry 按 generation/activation/instance/revision 回收。任何非 v2 插件 Schema 都不进入运行链。
 

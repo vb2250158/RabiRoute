@@ -35,6 +35,8 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Local installation, configuration, and recovery
 
+- [DSH Web session bridge authentication](dsh-browser-auth_en.md) — **Round-trip delivery accepted**. Connect through the current owner's launch authentication without disabling security or replaying writes.
+
 - [Configuration](configuration_en.md) — **Current guide** for the 28 built-in Manager plugins, `provides/requires/optional` dependencies, the single initialization path, declarative routes, shared-resource lifecycle, WebGUI/Desktop extension entries, and AstrBot ChatUI-only configuration.
 - [Resident performance recording and inspection](performance-monitoring_en.md) — **Current guide** for optional continuous Manager, Gateway, and WebGUI metrics, trends, slow operations, and independent JSONL files.
 - [Troubleshooting](troubleshooting_en.md) — NapCat, encoding, Codex Desktop task ownership, models, and approval boundaries.
@@ -110,10 +112,12 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Designs and history
 
+- [RabiLink unified all-day recording design](rabilink-all-day-recording_en.md) — **Design / implementation in progress, not accepted end to end**. One coordination owner for phone, glasses and watches; independent mode/pause, notifications, durable recording/transcription, privacy boundaries, lossless migration and acceptance contracts.
 
 - [Proactive-intelligence system design overview](../主动智能设计思路_en.md) — **Planned**. Covers user modeling, scenarios, proactive action, memory, and device responsibilities. See Current Capabilities for implementation status.
 - [Conversational message collection, message groups, and four-Agent collaboration](group-message-batching-and-triage-plan_en.md) — **Experimental**. Natural-language traffic may be recorded immediately, settled into batches, and sent to dynamic Codex Message Agents by a combined ranking of the quoted message's Agent session, prior message group, conversation, speaker, and endpoint familiarity. Live group/DM and complete four-Agent acceptance remain pending.
 - [Persona route workbench plan](persona-route-workbench-plan_en.md) — **Partially implemented**. Speech-keyword and per-endpoint context controls are live; side-effect-free RouteDecision/AgentPacket preview is not implemented.
+- [WorkBuddy as an Agent endpoint](workbuddy-agent-adapter-plan_en.md) — **Designed, not implemented**. Proposal to wire WorkBuddy tasks in as a handler: the session process descriptor, task source of truth and local gateway API are verified, while the delivery path and credential acquisition still await the S0 probe; maturity starts at `experimental`.
 - [Windows tray task-window plan](rabiroute-windows-tray-task-window-plan_en.md) — design record; use `desktop/tray-task-window/` and the packaging guide for the actual implementation.
 - [UE/UX audit and refactor](rabiroute-ue-ux-audit-and-refactor_en.md) — phase audit.
 - [Remote Agent setup and updates](lan-rabi-agent-bootstrap_en.md) — **Experimental integration**. Copy a prompt to connect another computer, manage its Agents in the current Manager, and select them as route handlers.

@@ -8,6 +8,17 @@
 
 > 状态：**实验集成，真机主链路已闭环**。结构化健康时间线、Manager 查询 API、阈值告警路由、RibiWebGUI 消息端配置、Android 配置页、Health Connect 和 PC ADB Companion 均已实现。小米真机已由手机端配置驱动，持续读取本地 Provider 的最近心率、睡眠日报和睡眠阶段，并写入可查询时间线。小米运动健康仍未向该机的 Health Connect 写入数据；无需 ADB、会争用官方 App 连接的 MiWear SPP 直连仍未作为默认采集器。
 
+## 全天记录整合（Unreleased）
+
+本节描述新代码，尚未完成更新后的手机／手表真机验收，不以旧版闭环结果代替本轮验证。
+
+- 手机健康采集由唯一记录 owner 调用 `WearableHealthController.start/stop/syncNow/close`；控制器不是 Service，没有独立通知或开机入口。`stop` 可恢复，`close` 取消作用域并终结实例。
+- 设备 `enabled` 只表示用户选择参与；新采集还要求全天记录 `running && healthEnabled`。持久化总窗口 `windowStartedAt` 与设备参与窗口 `participationStartedAt` 限定回看范围。跨暂停睡眠整段保守排除，不剪接成虚假会话。
+- 手机采集先写私有 AtomicFile 运输队列；PC Companion 先 fsync/原子落盘运输 envelope，冻结采集窗口、目标、设备、策略和幂等 ID。不保存凭据，健康时间线真源仍在 PC。
+- `uploadEnabled` 单独决定已保存记录是否发送：暂停采集不删除或阻塞原已授权记录的后处理；关闭上传则保留队列。手机按 owner 启动、手动或网络事件触发，不新增采集轮询。PC Provider 缺少可靠事件，保留低频检查，每轮核对手机许可，暂停不读取新健康数据。
+- PC Companion 在 Host 提供的 StateRoot 下使用 `transport-outbox`；手动脚本必须传 `-OutboxRoot <本机私有运输目录>`。Manager 仍按动态身份与围栏调用。旧设备 `enabled` 不因总暂停改写。
+- 已发出的阻塞 HTTP 请求不能撤回；暂停不代表远端在途工作已停止。队列损坏或满时保留记录并报错，不静默删除。平台事件接入、断开 ADB、长时积压和真机暂停恢复仍需验收。
+
 ## 边界
 
 RabiRoute 保存归一化健康时间线、执行告警规则并给 Agent 提供查询接口。RabiLink 手机端保存设备侧配置、读取系统健康数据并经 Relay 上报。手表认证秘钥只保存在 Android Keystore 加密的本机配置中，不进入 Relay、日志、健康时间线或 Agent 上下文。
@@ -53,7 +64,7 @@ Agent / 主动智能
 
 ## 手机配置
 
-安装 `apps/rabilink-android` 构建的单一手机 APK，先在首页配置 RabiLink Relay，再进入“智能手表 / 手环”：
+安装 `apps/rabi-mobile-android` 构建的单一手机 APK，先在首页配置 RabiLink Relay，再进入“智能手表 / 手环”：
 
 1. 设置设备名称、稳定设备 ID 和设备类别。
 2. 选择采集来源：`Health Connect` 或“小米运动健康（PC ADB Companion）”，再设置同步间隔与回看时间。
@@ -75,7 +86,7 @@ Manager 默认绑定 `127.0.0.1:0`。worker 只接收 Host 当前 READY 发布�
 仓库中的脚本只保留单次诊断与人工验证入口；它们必须显式指向本机安装的 Host，由 Host `status --json` 返回当前动态身份：
 
 ```powershell
-.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
+.\apps\rabi-mobile-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
   -Execute `
   -Transport Manager `
   -HostExe "<本机安装目录>\RabiRouteHost.exe" `

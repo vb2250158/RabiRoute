@@ -6,6 +6,21 @@
 
 # 计划和记忆机制
 
+## 计划激活状态与标记状态
+
+- `activationStatus` 是固定的激活状态：`进行中`、`已完成`、`已归档`。暂停不属于激活状态；已归档记录保持只读。
+- `markerStatus` 是人格可配置的标记状态，例如分析中、待审批、待补充信息、暂停。Agent 通过 `/api/roles/:roleId/plan-marker-statuses` 增删改查目录，沿用强 ETag、`If-Match` 和 `Idempotency-Key`。删除标记需指定替代 key，迁移不改变激活状态；归档记录保留原标记。
+- 创建计划省略激活状态时默认进行中。只改 `markerStatus` 不完成、不归档、不重新激活计划；只改 `activationStatus` 保留标记、步骤、附件和任务绑定。完成时间与归档时间由激活状态维护。
+- 自动追问、引导及完成回传只推进激活状态为进行中且标记不等于人格 `roles.paused` 的计划。正文、步骤说明和任务是否空闲不能代替这两个字段。
+- 启动迁移将旧完成状态转为已完成、旧关闭或已归档转为已归档，其余转为进行中；标记原样保留（旧别名规范化除外）。迁移使用计划存储事务并记录历史，重复启动不重复迁移。
+
+兼容期内 `status` 是标记投影，`archiveStatus` 是激活状态的归档投影。旧客户端只写 `status` 时，仍按旧组合状态在入口转换；显式新字段与旧字段冲突会拒绝。`plan-statuses` 保留为同一目录接口的别名，目录中的旧 `terminal/setsCompletedAt/archiveEligible` 元数据不再控制新字段的生命周期。已有外部 Agent 客户端升级为两个新字段后，才能移除旧写入入口；禁止新增调用方继续使用组合状态。
+
+```json
+{ "activationStatus": "进行中", "markerStatus": "暂停" }
+```
+
+
 待审批页面优先显示 Agent 提供的问题和选项；只有所有问题都没有选项时，才补充“按此方案执行”和“提出审批建议”两个默认选项。均不预选，选择建议必须填写具体内容。每题的“补充说明或其他答案”复用反馈输入组件，支持 @ 引用计划附件、文件选择、剪贴板粘贴和键盘提交；附件统一预览、删除并随本次反馈提交，不再显示独立的审批建议输入框。审批资料变更后必须重新确认。选项 requiresText=true 要求附加文字，问题 requireOption=true 要求明确选择；普通待补充信息仍可直接输入答案。
 
 ## 计划问题与回答
@@ -142,11 +157,11 @@ data/roles/<RoleId>/plans/
 
 Manager 只通过计划存储 Repository 新建、更新和归档此目录。旧布局迁移、未完成事务恢复和规范目录核对共同决定计划存储的读取/变更资格，每次尝试都在可终止的 one-shot child 中执行。Manager 端点与身份、完整必需插件集和 handler READY 不等待 NAS 恢复，Host 与 Tray 因此保持当前 application generation。资格状态为 `running` 或 `degraded` 时，现有只读端点仍可响应，计划变更请求失败关闭，`/health` 明确报告降级；资格就绪后，运行模块只使用已恢复的规范布局，不再扫描或读取旧布局。迁移不会读取附件正文；旧数据与规范目录内容相同时，以带清单和回执的事务退役重复副本，内容分歧时保存证据并失败关闭，禁止带着半迁移状态继续变更计划。计划从 `active/` 进入 `archive/` 同样是 Repository 持有 lease 的完整生命周期事务，不是裸 `rename`，也不是后台迁移。
 
-配置为 `terminal=true` 且 `archiveEligible=true` 的计划不会立即归档。距离最后更新时间超过该人格 `planWorkflow.archiveAfterHours` 后，角色知识快照只把 `archiveStatus` 改为 `已归档`，并将整个计划目录从 `plans/active/<planId>/` 移到 `plans/archive/<planId>/`；原 `status` key 保持不变。默认模板的完成和关闭状态符合该条件，延迟为 72 小时。
+激活状态为 `已完成` 的计划，在 `updatedAt` 超过人格 `planWorkflow.archiveAfterHours`（默认 72 小时）后自动改为 `已归档`，并将整个目录从 `plans/active/<planId>/` 移至 `plans/archive/<planId>/`。标记状态保持不变；旧关闭计划在启动迁移时直接归档。
 
 计划归档不需要经过 Agent 处理。它是 RabiRoute 的机械生命周期维护，不触发 Agent 总结，不要求 Agent 判断，只更新 `archiveStatus`、`archivedAt` 和存放位置。
 
-归档计时以计划的 `updatedAt` 为准，不以 `createdAt` 为准。计划只要被 Agent 或用户更新过，就重新进入活跃窗口。归档资格由状态定义的 `terminal` 与 `archiveEligible` 决定，延迟由 `personaConfig.json.planWorkflow.archiveAfterHours` 决定；默认模板使用 72 小时，具体人格可以调整。
+归档计时以 `updatedAt` 为准。只有激活状态为已完成的计划参与自动归档，延迟由人格 `planWorkflow.archiveAfterHours` 配置。
 
 ## 计划字段
 
@@ -265,7 +280,7 @@ WebGUI 不直接读取元数据中的本机路径，而是通过 `GET /api/roles
 
 需要审批的当前步骤应带完整 `approvalRequest`。`approver`、`request`、`recommendation` 和 `reason` 说明审批人、决定、实施方案与原因；`alternatives` 为可选的设计候选，不提供也能通过完整性校验；`files` 逐项写路径、`create/modify/delete/move` 和具体改动；`commands` 写完整命令、用途和预期影响；`changes` 写配置、数据库、云环境或外部系统目标；`validation`、`rollback`、`outOfScope` 分别声明验收、回退和明确排除范围；`requestedAt`、`sourceMessageId / feedbackId`、`responseStatus` 记录请求来源与回执。`files / commands / changes` 至少一类非空。缺必要栏目的审批步骤由 Manager 标为 `presentation.approval.state=incomplete`、`enabled=false`。仍可继续独立分析时使用 analysis role；只有分析已结束但无法形成可审批具体方案时使用 informationNeeded role。合同完整且 `responseStatus=pending` 后，Agent 把 `plan.status` 写为 approval role 指向的 key；Manager 同时返回 `presentation.approval.state=ready` 和 `enabled=true`，但不会替 Agent 改写状态。
 
-Manager 在读取边界兼容旧计划：旧 `未开始` 读为 `暂停`；旧 `进行中` 按完整待审批合同、旧步骤执行标记依次映射为 `待审批 / 执行中 / 分析中`；旧 `已完成` 读为 `完成`；旧 `已归档` 读为 `status=关闭, archiveStatus=已归档`。旧 `workPhase`、`discussionState` 和手写 `isBlocked` 只参与一次兼容读取，并在下一次规范 POST/PATCH 时清理。系统不会猜测审批人、来源、推荐方案、备选或请求时间。
+Manager 在启动时按人格目录规范化旧标记别名，并事务迁移激活状态。旧 `进行中` 标记解析为人格初始标记，不从正文或旧执行提示推测审批、暂停或执行状态；旧步骤 `workPhase`、`discussionState` 在迁移时清理。审批人、来源和决定必须有显式证据。
 
 `secretaryBinding` 是计划当前控制面负责人的精确绑定，和业务 `taskBinding` 分开。它保存绑定 Agent 类型、完整会话 ID、展示名称、workspace、可选 DSH apiproxy 地址和分配时间。Manager 首次需要投递计划控制通知时从当前 Route 已启用的秘书池稳定选择一个并保存；秘书执行治理 `begin/finish` 时会把实际负责者更新为自己。已绑定秘书仍在当前池中时固定复用，只有绑定失效或秘书被移出配置后才重新分配。
 
@@ -352,7 +367,7 @@ GET /api/roles/:roleId/knowledge-validation
 关闭        计划已经结束，不再继续执行
 ```
 
-`archiveStatus=未归档 | 已归档` 单独控制计划是否出现在普通列表中。只有当前状态配置同时满足 `terminal=true` 和 `archiveEligible=true` 的计划可以归档，归档不会改写 `status` key。
+`activationStatus` 控制完成、归档及普通列表可见性。标记不决定激活状态；`archiveStatus` 仅保留兼容投影。
 
 ## 记忆机制
 
@@ -636,7 +651,7 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 建议更新规则通过 `planWorkflow.roles` 执行。默认模板中，调查、补证据或准备审批使用“分析中”，完整审批合同正式等待回执使用“待审批”，批准或用户明确直接授权后使用“执行中”；包、QA、讨论、暂停、完成和关闭也各自由对应 role 指向状态 key。自定义人格可以调整 key 和显示名称，但不能绕过角色约束。
 
-只有当前状态定义同时满足 `terminal=true`、`archiveEligible=true` 且 `archiveStatus=未归档` 的计划，才会在超过 `planWorkflow.archiveAfterHours` 后改为 `archiveStatus=已归档` 并移动到 `archive/`。归档不改变 `plan.status`。
+激活状态为 `已完成` 的计划，在 `updatedAt` 超过人格 `planWorkflow.archiveAfterHours`（默认 72 小时）后自动改为 `已归档`，并将整个目录从 `plans/active/<planId>/` 移至 `plans/archive/<planId>/`。标记状态保持不变；旧关闭计划在启动迁移时直接归档。
 
 Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 只在 Manager 返回 `presentation.acceptsGuidance=true` 且计划没有进入审批步骤时提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和后续步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。WebGUI 统一使用“提交并投递”和“提交”两个动作；“提交”只保存 `record_only` 记录，不要求 Route、不触发 Agent 或 QA 后处理，Agent 可在空闲时读取审阅。
 

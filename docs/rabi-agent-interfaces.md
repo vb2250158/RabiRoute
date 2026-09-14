@@ -46,6 +46,18 @@
 正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，核对 `health.state=healthy`、`health.requiredReady=true` 和 generation/实例身份。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
 
 当前 `GET <managerBaseUrl>/api/gateways` 提供 Route 诊断，其 `messageFiles` 包含近期消息摘要。NapCat 摘要合并群聊和私聊后仅返回最近 8 条，须按目标 Route、群/私聊、消息 ID 和时间筛选；它不是完整历史检索接口。`GET /api/roles/{roleId}/chat-history` 读取的是 Agent 最终回复，不能替代 QQ 群聊历史。
+### 查询消息端历史消息
+
+处理端需要恢复 QQ 群聊、QQ 私聊或其它消息端上下文时，使用只读接口：
+
+```http
+GET /api/roles/{roleId}/message-endpoint-history
+```
+
+常用参数：`query`（支持空格、英文逗号、中文逗号、顿号分隔的多个关键词）、`match=any|all`（默认 `any`）、`adapter`、`kind=group|private`、`sender`、`target`、`conversationKey`、`from`、`to`、`includeArchives=1`、`limit`。返回 `entries`、`count` 和 `coverage`；消息记录保留消息端、群/私聊会话键、发送者、目标、消息 ID、回复 ID 和附件摘要。`kind=group` 只查群聊入站消息，`kind=private` 只查私聊入站消息；`reply_sent` 等出站回复不应当当作用户原始反馈。
+
+新会话的上下文恢复顺序：先从用户原话提取对象和关键词；再查本接口恢复消息端历史；涉及计划、记忆或原任务归属时另查 `knowledge/search`；最后回到当前文件、配置、代码或运行证据。查询覆盖范围必须随结果一起判断，空结果不等于系统从未出现过该消息。
+
 
 只有 Rabi 无法访问、接口不可用或已确认摘要无法覆盖所需历史时，才使用当前 NapCat 或正式日志补查。Rabi 可用时从当前 Route 绑定和状态取得连接；不可用时只使用当前任务明确提供的连接、当前运行实例配置或已确认的正式日志。直连前用 `get_status`、`get_login_info` 核对在线状态及账号，再调用只读历史/消息接口。不得从旧任务、记忆或安装残留逐个试账号和端口；凭据不回显。鉴权拒绝不得通过旁路逃避权限。
 

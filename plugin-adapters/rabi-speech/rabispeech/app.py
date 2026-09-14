@@ -15,7 +15,7 @@ import wave
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -122,6 +122,8 @@ class RabiLinkAudioStreamBody(BaseModel):
     device_model: str | None = None
     source_device_id: str | None = None
     route_profile_id: str | None = None
+    processingPolicy: Literal["transcribe", "agent"] = "agent"
+    captureId: str = Field(default="", max_length=200)
     session_id: str | None = None
 
 
@@ -275,6 +277,7 @@ def create_app(
                     "channelType": input_source.channel_type,
                     "messageAdapterType": input_source.message_adapter_type,
                     "routeProfileId": input_source.route_profile_id,
+                    **({"processingPolicy": input_source.processing_policy} if input_source.message_adapter_type == "rabilink" else {}),
                     "sourceDeviceId": input_source.device_id,
                     "sourceDeviceName": input_source.device_name,
                     "sourceDeviceKind": input_source.device_kind,
@@ -361,6 +364,9 @@ def create_app(
             source_device_kind=input_source.device_kind if input_source else None,
             source_stream_id=input_source.stream_id if input_source else None,
             message_adapter_type=input_source.message_adapter_type if input_source else None,
+            processing_policy=input_source.processing_policy if input_source else "agent",
+            capture_id=input_source.capture_id if input_source else "",
+            route_profile_id=input_source.route_profile_id if input_source else None,
         )
 
     microphone = MicrophoneService(
@@ -544,6 +550,7 @@ def create_app(
         provider_capabilities = await asyncio.to_thread(providers.capabilities)
         return {
             "object": "rabispeech.capabilities",
+            "rabilinkAudioStream": {"version": 1, "processingPolicies": ["transcribe", "agent"], "processingPolicyFrozen": True},
             "providers": public_capabilities(provider_capabilities),
             "api": api_index(),
             "relay_safe": _provider_capabilities_are_local(provider_capabilities),
@@ -634,6 +641,8 @@ def create_app(
                     source_device_id=body.source_device_id or body.session_id or body.stream_id,
                     message_adapter_type="rabilink",
                     route_profile_id=body.route_profile_id or "",
+                    processing_policy=body.processingPolicy,
+                    capture_id=body.captureId,
                     session_id=body.session_id or "",
                     resume_running=was_running,
                 )
@@ -660,6 +669,7 @@ def create_app(
         chunk_id = str(request.query_params.get("chunkId") or "").strip()
         async with virtual_audio_lock:
             try:
+                remote_audio.assert_virtual_policy(stream_id, request.query_params.get("processingPolicy"))
                 accepted = remote_audio.feed_virtual_client(
                     stream_id,
                     payload,
@@ -740,8 +750,9 @@ def create_app(
         async with virtual_audio_lock:
             if not remote_audio.has_virtual_client(body.stream_id):
                 raise HTTPException(status_code=409, detail="The requested RabiLink audio stream is not active.")
-            cancel_virtual_audio_expiry(body.stream_id)
             try:
+                remote_audio.assert_virtual_policy(body.stream_id, body.processingPolicy if "processingPolicy" in body.model_fields_set else None)
+                cancel_virtual_audio_expiry(body.stream_id)
                 remote_audio.stop_virtual_client(body.stream_id)
                 return remote_audio.snapshot()
             except ValueError as exc:
@@ -813,6 +824,14 @@ def create_app(
             "object": "list",
             "data": rows,
         }
+
+    @api.get("/v1/records/{record_id}")
+    async def speech_record_detail(record_id: str, request: Request) -> dict[str, object]:
+        _require_loopback(request)
+        record = await asyncio.to_thread(records.read, record_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Speech record was not found.")
+        return record
 
     @api.get("/v1/records/{record_id}/audio")
     async def speech_record_audio(record_id: str, request: Request) -> FileResponse:

@@ -6,6 +6,7 @@ RabiRoute 是一个开源的消息网关 / Policy Router 项目。协作时先�
 
 - RabiRoute 负责：消息进入、事件记录、路由判断、上下文模板、处理端投递、后续审批/回传的边界。
 - 处理端负责：真正回答问题、写代码、跑流程、查系统、调用工具。
+- Agent 集成功能按 [统一接入规范的功能归属](docs/agent-adapter-standard-requirements.md#功能归属rabi-优先宿主只补必要能力)划分：能由 Rabi 统一实现的业务、策略和状态放在 Rabi，供 DSH、Codex 等端复用；宿主增强只补 Rabi 无法直接完成的内部事件、权限执行和界面能力。缺少 Rabi 接口时先补公共合同，不在单一处理端另建业务系统。
 - 本机 Codex 编码 Agent 的真实消息只通过 Desktop IPC 投给 Codex/ChatGPT Desktop 的目标任务 owner；Desktop 是必需宿主，任务未加载时失败关闭，不启动备用 Runtime。项目锁定的 `codex app-server` 只可用于创建、命名空任务等元数据操作，不能执行真实 prompt。
 
 ## 全局文档同步规则

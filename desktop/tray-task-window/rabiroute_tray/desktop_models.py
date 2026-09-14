@@ -55,6 +55,8 @@ class PlanItem:
     plan_id: str = ""
     status: str = ""
     archive_status: str = "未归档"
+    activation_status: str = ""
+    marker_status: str = ""
     display_status: str = ""
     display_status_en: str = ""
     display_description: str = ""

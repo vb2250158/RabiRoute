@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { planCanAutoAdvance } from "../planState.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import type { PersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import { normalizePlanFollowup } from "../shared/planFollowup.js";
@@ -13,10 +14,10 @@ export function decidePlanFollowup(input: {
   const { plan, previous } = input;
   if (!settings.enabled || input.stopHookActive || !input.turnId
     || plan.taskBinding?.agentType !== "codex" || plan.taskBinding.sessionId !== input.sessionId
-    || plan.archiveStatus === "已归档") return null;
+    || !planCanAutoAdvance(plan, input.workflow)) return null;
   const status = input.workflow.statuses.find(item => item.key === plan.status && item.state === "enabled");
   // Terminal plans never become implementation work merely because a rule matches.
-  if (!status || status.terminal) return null;
+  if (!status) return null;
   const rule = settings.rules.find(item => item.enabled && item.prompt && item.statusKeys.includes(plan.status));
   if (!rule) return null;
   const fingerprint = createHash("sha256").update(JSON.stringify({

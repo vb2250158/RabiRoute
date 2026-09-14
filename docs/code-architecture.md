@@ -8,7 +8,7 @@
 
 `webPatchCatalog.ts` 校验不可变候选；`WebPatchService` 通过既有 generation 串行边界原子保存指针和回执；`WebPatchWatcher` 消费完成标记。Host 命令复用身份校验与审计，客户端按文档版本请求模块。容量和旧入口退出条件见[Web 热补丁](web-hot-patches.md)。
 
-Android 日常入口由 `recording/RabiRecordingHubActivity` 提供四页导航；`CaptureOwnership` 协调会话录音、本地录音和录像互斥，`RecordingStore` 保存会话清单。采集与媒体文件分别由 `RabiLocalAudioService`、`RabiLiveRecordingService` 持有。`RabiConversationService` 的历史队列初始化在单线程执行器中完成，就绪前命令有序等待，避免阻塞主线程与后台录像。见[移动端记录界面](rabilink-mobile-recording-ui.md)。
+Android 全天记录整合正在实施：`RabiConversationService` 是手机/眼镜/健康的唯一协调 owner，旧独立本地音频、录像及设备状态 service 已移除；视频降为普通 controller，音频统一 durable spool 并冻结 record/source/route/policy，健康 controller 受总许可与采集窗口限制。`AllDayRecordingSettings` 将 audio/video/health 模式与 running 分离，唯一常驻状态通知不再被普通消息覆盖。视频停止后才派生音轨，不是实时视频转写。PC 仅转写能力/worker 围栏及 captureId 只读关联已接入源码；不支持时 deferred，不回退 Agent。手机人工刷新按 processedAt 最近24小时最多200条，无ID不猜。健康只统一采集/状态、完整历史仍PC；autoResume内部false、开机暂停，自动恢复未实现。新记录不按传输 ACK 保留期限自动删除，自动滚动删除尚未完成。源码变更不等于构建/安装/长稳通过；见[当前界面边界](rabilink-mobile-recording-ui.md)与[完整设计和验收](rabilink-all-day-recording.md)。
 
 通用跨 PC 连接由 `src/peerTunnel/` 拥有：认证、三线路选择、流复用、RTT 和请求转发。语音页面使用同一目标选择，设备采集与播放保留本机归属。见[通用连接](rabilink-peer-tunnel.md)。
 
@@ -71,7 +71,7 @@ skills/
 
 ## 客户端应用与共享 SDK
 
-- `apps/rabilink-android/`：同一工程内维护手机控制端和 `glass-app` 眼镜端模块。
+- `apps/rabi-mobile-android/`：同一工程内维护手机控制端和 `glass-app` 眼镜端模块。
 - `apps/rabilink-aiui/`：面向 Rokid AIUI/灵珠生态的独立客户端工程。
 - `packages/android-sdk/`：Android 客户端共享的 RabiRoute 事件、消息与状态契约。
 

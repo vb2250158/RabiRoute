@@ -147,4 +147,4 @@ All routes keep the same invariants:
 - [RabiLink phone edge hub](rabilink-phone-edge-hub_en.md)
 - [Historical RabiLink native-app design](rabilink-glasses-app-design_en.md)
 - [AIUI example](../apps/rabilink-aiui/README_en.md)
-- [Android RabiLink probe](../apps/rabilink-android/README_en.md)
+- [Android RabiLink probe](../apps/rabi-mobile-android/README_en.md)

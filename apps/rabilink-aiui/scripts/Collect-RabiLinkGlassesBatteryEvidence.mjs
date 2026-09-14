@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
-const probeRoot = path.resolve(projectRoot, "..", "rabilink-android");
+const probeRoot = path.resolve(projectRoot, "..", "rabi-mobile-android");
 const adb = String(process.env.RABILINK_E2E_ADB || path.join(probeRoot, "out", "tools", "android-sdk", "platform-tools", "adb.exe"));
 const statusFile = String(process.env.RABILINK_E2E_STATUS_FILE || "").trim();
 const reportPath = path.join(projectRoot, "dist", "real-glasses-device-status.json");

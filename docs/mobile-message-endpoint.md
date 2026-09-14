@@ -8,10 +8,12 @@
 
 Rabi 移动设备消息端是独立于 Rokid AIUI / 灵珠智能体 MCP 的新消息端。手机是完整客户端和可靠后端；眼镜只是在用户开启开关后增加的麦克风、扬声器、HUD、相机和触摸板外设。没有眼镜时，手机仍可完成登录、聊天、持续收音、ASR/TTS、附件、通知、配置和主动消息接收。
 
+> 本轮状态：全天记录源码整合中，整体验收待确认。唯一 owner 沿用 `RabiConversationService`；旧独立本地音频/录像/设备状态 service 已移除，视频为普通 controller、音频为统一 durable spool、健康 controller 受总许可和窗口约束。视频仅停止后派生音轨，不是实时转写；PC 仅转写能力与 worker 围栏已接入源码，无支持时 deferred。新转写按 captureId 只读关联，仅人工刷新最近 24 小时、最多 200 条、按 processedAt 查询；无 ID 不猜归属。健康仅统一采集/状态，完整历史仍 PC。autoResume 仅内部 false、无行为 UI 已移除，开机明确暂停；自动恢复未实现。最终总验收仍待。完整合同见[全天记录](rabilink-all-day-recording.md)。
+
 ## 初始化与日常界面
 
 - 未初始化时进入 RabiLink 全局登录、默认 Rabi PC、语音模型和眼镜授权设置。
-- 初始化后默认进入类似 QQ 的会话列表：头像、联系人名、最后一条消息、时间和逐会话未读数在一行内呈现；点联系人进入聊天，返回后继续选择其他人格。
+- 日常默认进入统一记录首页，聊天从“消息”打开类似 QQ 的会话列表：头像、联系人名、最后一条消息、时间和逐会话未读数在一行内呈现；点联系人进入聊天，返回后继续选择其他人格。
 - 联系人只来自启用了 `rabilink` 消息端的 Route。健康手表等非聊天 Route 不会被误当人格；未启用的 RabiLink Route 会明确显示原因和远程配置入口。
 - 聊天详情顶部只保留返回、当前身份和可信连接状态。消息按日期分组，气泡外显示发送者和时间，语音、配置请求与文件使用明确类型标签，附件气泡可直接点击打开。
 - 底部附件、输入框和发送按钮使用统一的 52dp 控件高度，支持多行输入、键盘发送和逐会话草稿恢复。
@@ -21,14 +23,13 @@ Rabi 移动设备消息端是独立于 Rokid AIUI / 灵珠智能体 MCP 的新�
 
 ## 常驻服务和通知
 
-连接后由 `RabiConversationService` 持有下行 cursor、可靠队列和手机/眼镜 I/O。通知栏有两个常驻入口：
-
-1. `Rabi 持续会话`：点击打开聊天页。
-2. `提示 Rabi`：点一下立即发送 `rabilink.review_request`，等价于 AIUI 连接会话中的触摸板单击。
+`RabiConversationService` 统一持有采集协调、下行 cursor、可靠队列和手机/眼镜/健康控制。正常运行只有一条常驻状态通知，点击进入记录入口；普通消息不覆盖它。“提示 Agent”仍是明确的审阅请求，不再作为第二条独立常驻通知。总暂停、标记与聊天提醒分别保持清晰语义。
 
 Agent 普通回复和主动投递使用按会话稳定聚合的普通消息通知。通知携带 `routeProfileId`，点击后以 `singleTop` 直达对应人格会话；返回落到会话列表。同一会话的新通知更新原通知，进入详情并标记已读后清除。设置可控制收到 Agent TTS 后是否立即播放；关闭时 WAV 仍保存在私有聊天记录中，点击语音气泡可手动播放。
 
-## 手机与眼镜模式
+## 全天模式与手机/眼镜来源
+
+`AllDayRecordingSettings` 使用 `mode=audio|video|health`、`source=mobile|glasses`、`processingPolicy=local_only|transcribe|agent` 和 `running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`。模式与暂停独立，升级 `running=false`；默认转写不自动开启录音。以下手机/眼镜描述是来源适配器行为，不是两套用户运行模式。处理策略在记录边界冻结；无仅转写支持时不得静默交给 Agent。
 
 - 手机模式：Android 麦克风前台服务持续采集 16 kHz 单声道 PCM，先写手机私有动态分片，再通过受限 `audio-streams/rabilink/start|chunk|stop` 接口按序补传。Android 不做 VAD、切句、ASR 或声纹；目标 PC RabiSpeech 把该流作为虚拟远程麦克风，统一完成 VAD、切句、ASR、声纹和自动消息提交。录音设备不按零点或固定 24 小时重启；分片由 5 秒、160 KiB 或输入/Route/暂停等状态边界触发。PC 超时回收的是网络虚拟流，不影响手机继续录音和落盘。
 - RabiSpeech 以 `source_device_id + chunk_id + bytes + sha256 + source_sequence` 保存处理真源；回环维护接口 `GET /v1/audio-streams/rabilink/ledger/tuples` 只按稳定来源和序号分页返回受限的终态元数据，不返回 PCM、路径、凭据或 worker lease。非事务 ASR feed 中断后保持 ambiguous，只有回环操作员明确 `replay` 或 `skip` 才能继续；每次决定都追加到独立 `resolution_audit`，进程重启与来源退休不会覆盖这份审计。
@@ -37,7 +38,7 @@ Agent 普通回复和主动投递使用按会话稳定聚合的普通消息通�
 - 两种模式共享路由人格、文字/control/媒体可靠队列、cursor、聊天记录、下行 TTS 设置和动作安全门，切换眼镜不会创建第二套账号或会话。ASR/VAD/切句/语言设置只归目标 PC RabiSpeech，不在 Android 保存第二份真源。
 - 手机/眼镜 PCM 与远程 Rabi TTS/ASR 客户端遵守同一宿主边界：远端只提交音频流，目标 PC 负责处理并把 `sourceHostId/sourceHostName`、不透明声纹 ID 和判定证据写入通用消息。主机不判断谁是谁或谁是用户；每个接通人格在自己的 `conversation/current.jsonl` 中保留会话，并可独立维护 `voice/voice-identities.jsonl`。
 - 手机仍是可靠会话与下行 owner，可靠队列用 `sourceDeviceKind` 冻结每条输入的真实物理来源。眼镜麦克风、照片和触摸板提示标记为 `sourceDeviceKind=glasses`，手机音频标记为 `sourceDeviceKind=mobile`；两者的 `sourceDeviceId` 都使用当前伴侣后端正在拉取下行的稳定设备 ID，确保普通回复能回到这台手机，再由手机送往屏幕或眼镜。本次 PCM 连接另记为 `sourceStreamId`，不能拿带 `-phone-audio` / `-glasses-audio` 后缀的流 ID 当回复设备。两者共用同一 `sessionId` 时，Agent 和审计仍可按 `sourceDeviceKind/channelType` 区分操作设备，又不会把切换设备误判为新会话。`routeProfileId` 只选择接收人格/Route，不表示来源是角色面板；手机语音 AgentPacket 必须保持 `targetType=rabilink` 与 `adapterType=rabilink`。
-- `RabiConversationService` 是输入模式的唯一状态 owner，模式只有 `PAUSED`、`PHONE`、`GLASSES`。每次应用设置都会先停止非目标采集端：切到眼镜会暂停手机 `AudioRecord`，切回手机会关闭 CXR/Phone SDK 眼镜桥，关闭持续聆听会同时停掉两端，避免两个麦克风在后台并行上送。
+- `RabiConversationService` 是输入模式的唯一状态 owner，用户模式改为 `audio/video/health`，`mobile/glasses` 是来源，暂停属于独立运行状态。每次应用设置都会先停止非目标采集端：切到眼镜会暂停手机 `AudioRecord`，切回手机会关闭 CXR/Phone SDK 眼镜桥，关闭持续聆听会同时停掉两端，避免两个麦克风在后台并行上送。
 
 ## 可靠性和安全
 
@@ -49,11 +50,11 @@ Agent 普通回复和主动投递使用按会话稳定聚合的普通消息通�
 - 眼镜语音下行只有在手机 SDK 已初始化、设备已认证，并且 Classic BT 的消息与音频通道都在线时才确认接收；通道未就绪会返回失败并进入既有延迟重试，不能因为 SDK 对象存在就提前移动 cursor。
 - 手机 APK 与眼镜 APK 共用 `RabiGlassAudioProtocol` 作为命令、消息前缀、client ID 和音频 stream tag 的唯一真源；两端不再各自复制协议字符串。
 - 纯附件下行不要求伪造正文：图片、视频、音频和任意文件即使没有文字，也会下载、写入聊天记录并产生普通消息通知。
-- Android 的 `RabiDurableAudioSpool` 是连续 PCM 真源。录音回调先进入有界接收队列，独立单写线程负责活动 `.pcm.partial`、每秒 fsync、原子封口和 metadata；单次超大回调也会按偶数字节边界拆成多个不超上限的分片。metadata 包含本地序号、起止时间、字节数、SHA-256、来源、Route、封口原因、上传尝试和状态。进程启动只根据 partial ownership sidecar 恢复归属；归属缺失、坏对齐、metadata 损坏、PCM 缺失或 SHA 不符会把关联文件一起移入 quarantine、写稳定 gap 并继续后项。上传按本地序号逐段切到分片自己的来源/Route 流，响应必须同时匹配 `sequence + chunkId + accepted_bytes + sha256` 才标记 ACK；RabiSpeech 把已处理的稳定设备、chunkId、字节数、SHA-256 和结果写入本机 SQLite 幂等账本，进程重启后的同分片重放不会再次进入 ASR。未 ACK 和 quarantine 不会被自动删除；存储压力先回收允许清理的 ACK 副本，仍不足才累计 `rejectedBytes` 并写 gap。
+- Android 的 `RabiDurableAudioSpool` 是连续 PCM 真源。录音回调先进入有界接收队列，独立单写线程负责活动 `.pcm.partial`、每秒 fsync、原子封口和 metadata；单次超大回调也会按偶数字节边界拆成多个不超上限的分片。metadata 包含本地序号、起止时间、字节数、SHA-256、来源、Route、封口原因、上传尝试和状态。进程启动只根据 partial ownership sidecar 恢复归属；归属缺失、坏对齐、metadata 损坏、PCM 缺失或 SHA 不符会把关联文件一起移入 quarantine、写稳定 gap 并继续后项。上传按本地序号逐段切到分片自己的来源/Route 流，响应必须同时匹配 `sequence + chunkId + accepted_bytes + sha256` 才标记 ACK；RabiSpeech 把已处理的稳定设备、chunkId、字节数、SHA-256 和结果写入本机 SQLite 幂等账本，进程重启后的同分片重放不会再次进入 ASR。未 ACK 和 quarantine 不会被自动删除；仅旧传输缓存可按原规则回收，新记录 ACK 分片不自动按传输期限删除；空间仍不足则累计 `rejectedBytes` 并写 gap。
 - 设备诊断：最多 500 条、7 天离线补传；相同事件一分钟内只落盘一次，只记录粗粒度事件和状态，不记录聊天正文、转写、token 或请求体。
 - 手机采集监督：`RabiPhoneAudioCapture` 独占 `AudioRecord`、partial WakeLock、采集指标、45 秒卡死检测和 1–30 秒受控退避重启；停滞检测根据最后一次成功读取安排一次性 deadline，暂停、切换模式或重启录音时取消旧 generation，不再固定间隔跑 watchdog。`RabiConversationService` 只负责编排传输、通知和手机/眼镜模式。聊天页显示本次采集时长、最近音频时间、累计 PCM 字节和自动恢复次数。
-- 音频缓存与记录：`audio-spool` 保存的是待可靠传输的原始 PCM 分片，不是 Android ASR 结果或人格历史。PC RabiSpeech 仍是 VAD/ASR/声纹和成功转写记录的唯一真源。设置可配置 ACK 后副本保留 0–168 小时、录音队列容量和设备剩余空间水位；存储压力可提前清理已 ACK 副本。下行 TTS 继续使用独立 `audio-cache/tts-audio/` 与 `speech-records/` 生命周期。
-- 重启恢复：消息连接的恢复意图与“持续聆听”分开持久化。已启动的文字、媒体和下行连接在进程或设备重启后，会先以 `dataSync` 前台类型恢复 cursor、可靠队列和两个通知；即使持续聆听关闭，也不会把消息队列永久留在旧状态。用户明确点击停止会关闭后续自动恢复。Android 不允许从开机广播直接启动麦克风时，用户打开 App 后再恢复持续收音，已排队消息不会丢失。
+- 音频缓存与记录：`audio-spool` 保存的是待可靠传输的原始 PCM 分片，不是 Android ASR 结果或人格历史。PC RabiSpeech 仍是 VAD/ASR/声纹和成功转写记录的唯一真源。旧传输分片保留规则不再用于自动删除带新记录归属的 ACK 分片；新记录尚未实现自动滚动删除，队列容量和剩余空间检查不等于全天容量管理完成。下行 TTS 继续使用独立 `audio-cache/tts-audio/` 与 `speech-records/` 生命周期。
+- 重启恢复：消息连接的恢复意图与“持续聆听”分开持久化。已启动的文字、媒体和下行连接在进程或设备重启后，会先以 `dataSync` 前台类型恢复 cursor、可靠队列和统一状态通知；即使持续聆听关闭，也不会把消息队列永久留在旧状态。用户明确点击停止会关闭后续自动恢复。Android 不允许从开机广播直接启动麦克风时，用户打开 App 后再恢复持续收音，已排队消息不会丢失。
 - 账号 token、聊天账本、TTS 和附件均在应用私有目录；PC 本地文件下行仍受 `allowedFileRoots` 限制。
 
 ## 验收边界

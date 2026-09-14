@@ -104,6 +104,8 @@ def _plan_item_from_manager(item: dict[str, Any]) -> PlanItem:
         plan_id=str(item.get("id") or ""),
         title=str(item.get("title") or item.get("id") or "Untitled plan"),
         status=status,
+        activation_status=str(item.get("activationStatus") or ""),
+        marker_status=str(item.get("markerStatus") or status),
         archive_status=str(item.get("archiveStatus") or "未归档"),
         display_status=str(presentation.get("label") or ""),
         display_status_en=str(presentation.get("labelEn") or ""),

@@ -27,6 +27,8 @@
 /voice-cache/
 /.rabiroute-message-images/
 /.codex-logs/
+# WorkBuddy session notes and local tooling state, same class as /.codex-logs/.
+/.workbuddy/
 /gateways.json
 
 # Temporary scratch from interactive/automation sessions (not project artifacts).
@@ -58,14 +60,15 @@ __pycache__/
 *.secret.*
 *.log
 npm-debug.log*
-apps/rabilink-android/mi-health-*.json
-apps/rabilink-android/mi-health-*.md
-apps/rabilink-android/.gradle/
-apps/rabilink-android/build/
-apps/rabilink-android/app/build/
-apps/rabilink-android/signing/
-apps/rabilink-android/out/
-apps/rabilink-android/*.log
+apps/rabi-mobile-android/mi-health-*.json
+apps/rabi-mobile-android/mi-health-*.md
+apps/rabi-mobile-android/.gradle/
+apps/rabi-mobile-android/**/.gradle/
+apps/rabi-mobile-android/**/build/
+apps/rabi-mobile-android/signing/
+apps/rabi-mobile-android/out/
+apps/rabi-mobile-android/build-artifacts/
+apps/rabi-mobile-android/*.log
 examples/rabi-link-vela-probe/node_modules/
 examples/rabi-link-vela-probe/build/
 examples/rabi-link-vela-probe/dist/
@@ -75,7 +78,7 @@ apps/rabilink-aiui/dist/
 # Legacy local probe workspaces kept out of public submissions.
 examples/android-band-probe/
 examples/vela-band-probe/
-examples/android-rabi-link-probe/
+archive/legacy-android-probe-builds-20260914/
 examples/rabilink-aiui/
 assets/reference-cache/
 /plugin-adapters/xiaoai-rabiroute/vendor/open-xiaoai/

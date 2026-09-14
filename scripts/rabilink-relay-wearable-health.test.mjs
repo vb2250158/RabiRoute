@@ -68,7 +68,7 @@ test("portable wearable health is allowlisted before a PC worker can claim it", 
     const appBody = await appResponse.json();
     const token = appBody.app.token;
 
-    const registerWorker = await fetch(`${baseUrl}/worker/tasks?waitMs=0&deviceId=pc-test`, {
+    const registerWorker = await fetch(`${baseUrl}/worker/tasks?waitMs=0&deviceId=pc-test&capabilities=tasks&deviceKind=pc`, {
       headers: { "x-rabilink-token": token }
     });
     assert.equal(registerWorker.status, 200);
@@ -79,13 +79,23 @@ test("portable wearable health is allowlisted before a PC worker can claim it", 
     });
     assert.equal(selectWorker.status, 200);
 
+    const healthHeaders = { 'x-rabilink-token': token, 'x-rabilink-expected-worker-id': 'pc-test' };
+    const unsupported = await fetch(`${baseUrl}/api/rabilink/devices/health-capabilities`, { headers: healthHeaders });
+    assert.notEqual(unsupported.status, 200, 'old worker must not advertise new contract');
+    await fetch(`${baseUrl}/worker/tasks?waitMs=0&deviceId=pc-test&capabilities=tasks,wearable-observation-policy-v1`, { headers: { 'x-rabilink-token': token } });
+    const caps = await fetch(`${baseUrl}/api/rabilink/devices/health-capabilities`, { headers: healthHeaders });
+    assert.equal(caps.status, 200);
+    assert.deepEqual((await caps.json()).rabilinkWearableObservation.processingPolicies, ['transcribe','agent']);
+    const changed = await fetch(`${baseUrl}/api/rabilink/devices/health-capabilities`, { headers: { ...healthHeaders, 'x-rabilink-expected-worker-id': 'other' } });
+    assert.equal(changed.status, 409);
     const recordedAt = "2026-07-18T12:00:00.000Z";
     const inputResponse = await fetch(`${baseUrl}/api/rabilink/devices/input`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-rabilink-token": token },
+      headers: { "content-type": "application/json", ...healthHeaders },
       body: JSON.stringify({
         text: "heart rate 135",
         type: "wearable.health",
+        processingPolicy: 'transcribe', routeProfileId: 'test-route',
         deliveryMode: "observe",
         sourceDeviceId: "watch-test",
         sourceDeviceName: "Test Watch",
@@ -138,7 +148,7 @@ test("portable wearable health is allowlisted before a PC worker can claim it", 
     });
     assert.equal(inputResponse.status, 202);
 
-    const claimResponse = await fetch(`${baseUrl}/worker/tasks?waitMs=0&deviceId=pc-test`, {
+    const claimResponse = await fetch(`${baseUrl}/worker/tasks?waitMs=0&deviceId=pc-test&capabilities=tasks&deviceKind=pc`, {
       headers: { "x-rabilink-token": token }
     });
     assert.equal(claimResponse.status, 200);
@@ -147,6 +157,8 @@ test("portable wearable health is allowlisted before a PC worker can claim it", 
     const task = claimBody.tasks[0];
     assert.equal(task.type, "wearable.health");
     assert.equal(task.deliveryMode, "observe");
+    assert.equal(task.processingPolicy, 'transcribe');
+    assert.equal(task.routeProfileId, 'test-route');
     assert.equal(task.health.samples[0].value, 135);
     assert.equal(task.health.samples.length, 4);
     assert.equal(task.health.samples[1].metric, "sleep_session");

@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.1" src="https://img.shields.io/badge/version-0.3.1-3178c6">
+  <img alt="当前版本：0.3.2" src="https://img.shields.io/badge/version-0.3.2-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.3.1`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.2`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -91,6 +91,13 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
 ## 近期变化
+
+### 0.3.2：全天记录、DSH 会话桥认证与计划状态拆分
+
+- 手机端并入「全天记录」源码：手机、眼镜和健康设备共用一条采集协调，采集模式与暂停独立，同一可靠音频分片同时服务本地回放和后续处理，视频只在停止后派生音轨。记录在创建时冻结来源、采集 ID、人格、处理策略和目标电脑身份；仅本地保存不上传，仅转写不投 Agent，缺少新版 PC / Relay 能力或目标身份时保留待处理而不降级改投。手机端目前只是源码整合，构建、部署、眼镜链路和长稳验收另行进行。
+- 计划状态拆成固定的激活状态与 Agent 可配置的标记状态，「暂停」只是一种标记；旧数据事务迁移并保留任务绑定，自动追问排除暂停、完成和归档的计划。
+- DSH Web 会话桥改为从目标 DSH 的启动登录 URL 换取 Cookie，401 只清除缓存而不自动重放，也不跟随认证与 RPC 重定向。移动消息端新增只读历史查询和端点审计；语音记录新增显式的「转写 / 投 Agent」处理策略，并在记录边界冻结。
+- 实验能力：WorkBuddy Agent 端目前只能发现任务、还不能投递；跨电脑隧道和语音服务器下拉仍为实验能力。见[当前能力与成熟度](docs/current-capabilities.md)。
 
 ### 0.3.1：媒体项目、H3 工作流与桌面截图
 

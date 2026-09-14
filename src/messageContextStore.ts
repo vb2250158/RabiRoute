@@ -133,6 +133,13 @@ export type RecentMessageContextQuery = {
   limit: number;
   adapter?: string;
   channel?: string;
+  kind?: string;
+  sender?: string;
+  target?: string;
+  /** Case-insensitive text search across message body and participants. Whitespace/comma-separated terms are supported. */
+  query?: string;
+  /** Defaults to any; all requires every term to match. */
+  queryMatch?: "any" | "all";
   conversationKey?: string;
   /** Exclude events already represented elsewhere in the current Agent packet. */
   excludedMessageIds?: readonly string[];
@@ -1071,7 +1078,16 @@ export function recentMessageContextItems(dataDirs: string[], limitOrQuery: numb
   const filtered = dedupeRecords(all).filter((item) =>
     (!query.adapter || item.adapter === query.adapter)
     && (!query.channel || item.channel === query.channel)
+    && (!query.kind || item.kind === query.kind)
+    && (!query.sender || item.sender === query.sender)
+    && (!query.target || item.target === query.target)
     && (!query.conversationKey || item.conversationKey === query.conversationKey)
+    && (!query.query || (() => {
+      const haystack = [item.text, item.sender, item.target].filter(Boolean).join(" ").toLocaleLowerCase();
+      const terms = query.query!.split(/[\s,，、]+/).map(term => term.trim().toLocaleLowerCase()).filter(Boolean);
+      if (!terms.length) return true;
+      return query.queryMatch === "all" ? terms.every(term => haystack.includes(term)) : terms.some(term => haystack.includes(term));
+    })())
     && (!Number.isFinite(query.from) || item.time >= Number(query.from))
     && (!Number.isFinite(query.to) || item.time <= Number(query.to))
     && (!query.excludedMessageIds?.length || !query.excludedMessageIds.includes(String(item.messageId ?? "")))

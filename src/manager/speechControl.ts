@@ -486,6 +486,8 @@ function normalizeSpeakerIdentityResult(value: Record<string, unknown>): SpeechS
 
 function normalizeSpeechRecord(value: Record<string, unknown>): SpeechRecord {
   return {
+    processingPolicy: value.processing_policy === "transcribe" ? "transcribe" : "agent",
+    routeProfileId: optionalString(value.route_profile_id),
     id: stringValue(value.id),
     kind: stringValue(value.kind) === "tts" ? "tts" : "asr",
     source: stringValue(value.source),
@@ -745,7 +747,7 @@ export class ManagerSpeechControl {
     const sourceDeviceKind = stringValue(command.sourceDeviceKind).trim().toLowerCase();
     const sourceStreamId = stringValue(command.sourceStreamId).trim();
     if (command.messageAdapterType !== "rabilink"
-      || (sourceDeviceKind !== "mobile" && sourceDeviceKind !== "phone")
+      || !["mobile", "phone", "glasses"].includes(sourceDeviceKind)
       || !recordId
       || !text
       || !sourceDeviceId
@@ -753,7 +755,14 @@ export class ManagerSpeechControl {
       return undefined;
     }
     try {
-      const records = await this.records({ sourceDeviceId, limit: 50 });
+      let records: SpeechRecord[];
+      if (command.processingPolicy != null) {
+        const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(),
+          `/v1/records/${encodeURIComponent(recordId)}`, {}, 10_000));
+        records = [normalizeSpeechRecord(raw)];
+      } else {
+        records = await this.records({ sourceDeviceId, limit: 50 });
+      }
       return records.find(record => (
         record.kind === "asr"
         && record.id === recordId
@@ -761,7 +770,7 @@ export class ManagerSpeechControl {
         && record.messageAdapterType === "rabilink"
         && record.sourceDeviceId === sourceDeviceId
         && record.sourceStreamId === sourceStreamId
-        && (record.sourceDeviceKind === "mobile" || record.sourceDeviceKind === "phone")
+        && record.sourceDeviceKind === sourceDeviceKind
       ));
     } catch {
       return undefined;
@@ -1135,10 +1144,37 @@ export class ManagerSpeechControl {
     if (!text) throw new SpeechControlError("Missing speech transcript text.", 400);
     const sessionId = (stringValue(command?.sessionId) || `speech-${Date.now()}`).trim().slice(0, 200);
     const mobileEvidence = await this.recordBoundMobileEvidence(command);
+    if (command.processingPolicy != null && !["agent", "transcribe"].includes(command.processingPolicy)) {
+      throw new SpeechControlError("Unsupported processing policy.", 400);
+    }
+    if (command.processingPolicy != null && (!mobileEvidence
+      || (command.processingPolicy === "transcribe" && mobileEvidence.processingPolicy !== "transcribe"))) {
+      throw new SpeechControlError("Explicit processing policy requires a matching frozen speech-runtime record.", 403);
+    }
+    let transcribeOnly = mobileEvidence?.processingPolicy === "transcribe";
+    if (command.recordId && !mobileEvidence) {
+      try {
+        const raw = assertSuccess(await this.localSpeech.requestJson(this.dependencies.serviceUrl(),
+          `/v1/records/${encodeURIComponent(command.recordId)}`, {}, 10_000));
+        if (raw.processing_policy === "transcribe") {
+          if (raw.text !== text || raw.source_device_id !== command.sourceDeviceId
+            || raw.source_stream_id !== command.sourceStreamId || raw.source_device_kind !== command.sourceDeviceKind
+            || command.messageAdapterType !== "rabilink") {
+            throw new SpeechControlError("Frozen transcribe record source attribution mismatch.", 403);
+          }
+          transcribeOnly = true;
+        }
+      } catch (error) {
+        if (error instanceof SpeechControlError && error.message.includes("attribution mismatch")) throw error;
+        if (command.processingPolicy === "transcribe" && !mobileEvidence) throw error;
+      }
+    }
     const trustedCommand: SpeechMessageCommand = mobileEvidence
       ? {
           ...command,
           source: mobileEvidence.source,
+          processingPolicy: mobileEvidence.processingPolicy,
+          routeProfileId: mobileEvidence.routeProfileId ?? command.routeProfileId,
           channelType: "rabilink.mobile_audio",
           messageAdapterType: "rabilink",
           sourceDeviceId: mobileEvidence.sourceDeviceId,
@@ -1155,12 +1191,16 @@ export class ManagerSpeechControl {
       : { ...command, sourceDeviceTrust: undefined };
     const fallbackId = this.createMessageId();
     const ingress = this.dependencies.speechIngressStore
-      ? this.dependencies.speechIngressStore.append({ ...trustedCommand, text, sessionId }, fallbackId)
+      ? this.dependencies.speechIngressStore.append({ ...trustedCommand, processingPolicy: transcribeOnly ? "transcribe" : trustedCommand.processingPolicy, text, sessionId }, fallbackId)
       : {
           record: normalizeSpeechIngressRecord({ ...trustedCommand, text, sessionId }, fallbackId),
           appended: true
         };
     const record = ingress.record;
+    if (transcribeOnly || record.processingPolicy === "transcribe") {
+      return { routeId: null, messageId: record.id, sessionId: record.sessionId,
+        status: "recorded", reason: "transcribe_only", deliveries: [] };
+    }
     const requestedRouteId = command?.routeId == null ? "" : sanitizeRoleId(command.routeId);
     if (command?.routeId != null && !requestedRouteId) {
       throw new SpeechControlError("Invalid speech Route id.", 400);
@@ -1218,6 +1258,7 @@ export class ManagerSpeechControl {
   }
 
   private routeAcceptsRecord(route: ManagerSpeechRoute, record: SpeechIngressRecord): boolean {
+    if (record.processingPolicy === "transcribe") return false;
     const endpointEnabled = record.messageAdapterType === "rabilink" ? route.rabiLinkEnabled === true : route.speechEnabled;
     if (!endpointEnabled) return false;
     return !record.routeProfileId || route.routeProfileIds?.includes(record.routeProfileId) === true;

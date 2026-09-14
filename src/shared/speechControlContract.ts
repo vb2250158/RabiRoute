@@ -336,6 +336,8 @@ export type SpeechTranscriptSegment = {
 };
 
 export type SpeechRecord = {
+  processingPolicy?: "transcribe" | "agent";
+  routeProfileId?: string;
   id: string;
   kind: "asr" | "tts";
   source: string;
@@ -448,6 +450,8 @@ export type SpeechSynthesisCommand = {
 };
 
 export type SpeechMessageCommand = {
+  /** A reduction only; transcribe requires a matching runtime record. */
+  processingPolicy?: "transcribe" | "agent";
   /** Omit to broadcast to every enabled speech message endpoint. */
   routeId?: string | null;
   /** Optional selected profile within a Route runtime, used by mobile audio. */
@@ -488,6 +492,7 @@ export type SpeechMessageCommand = {
 };
 
 export type SpeechIngressRecord = {
+  processingPolicy?: "transcribe" | "agent";
   schemaVersion: 1;
   id: string;
   recordedAt: string;

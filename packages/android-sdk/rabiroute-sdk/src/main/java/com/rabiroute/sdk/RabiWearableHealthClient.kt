@@ -53,6 +53,7 @@ data class RabiWearableHealthSample(
 class RabiWearableHealthClient(
     private val sdk: RabiRouteSdk = RabiRouteSdk()
 ) {
+    private val verifiedCapabilities = HashSet<String>()
     fun publish(
         relayBaseUrl: String,
         token: String,
@@ -63,10 +64,26 @@ class RabiWearableHealthClient(
         policy: RabiWearableHealthPolicy,
         clientMessageId: String = "wearable-health-${System.currentTimeMillis()}",
         capturedAt: Long = System.currentTimeMillis(),
-        transport: String = "phone-companion"
+        transport: String = "phone-companion",
+        expectedWorkerId: String = "",
+        processingPolicy: String = "transcribe",
+        routeProfileId: String = ""
     ): RabiLinkPortableObservationReceipt {
         require(samples.isNotEmpty()) { "Wearable health observation requires at least one sample." }
-        val payload = JSONObject()
+        require(expectedWorkerId.isNotBlank() && routeProfileId.isNotBlank()) { "Frozen wearable destination required" }
+        require(processingPolicy in listOf("transcribe", "agent")) { "Wearable policy not uploadable" }
+        val headers = mapOf("X-RabiLink-Token" to token, "X-RabiLink-Expected-Worker-Id" to expectedWorkerId)
+        val capabilityKey = "$relayBaseUrl\n$expectedWorkerId\n$processingPolicy\n${token.hashCode()}"
+        if (capabilityKey !in verifiedCapabilities) {
+        val capability = sdk.requestJson("${relayBaseUrl.trimEnd('/')}/api/rabilink/devices/health-capabilities", "GET", null, headers)
+            .optJSONObject("rabilinkWearableObservation")
+        check(capability?.optBoolean("expectedWorkerFencing") == true && capability.optBoolean("processingPolicyFrozen") &&
+            capability.optJSONArray("processingPolicies")?.let { array -> (0 until array.length()).any { array.optString(it) == processingPolicy } } == true) {
+            "PC health observation contract unavailable; deferred"
+        }
+        verifiedCapabilities.add(capabilityKey)
+        }
+        val payload = JSONObject().put("processingPolicy", processingPolicy).put("routeProfileId", routeProfileId)
             .put("text", observationSummary(samples))
             .put("type", "wearable.health")
             .put("deliveryMode", "observe")
@@ -88,7 +105,7 @@ class RabiWearableHealthClient(
             "${relayBaseUrl.trimEnd('/')}/api/rabilink/devices/input",
             "POST",
             payload.toString(),
-            mapOf("X-RabiLink-Token" to token),
+            headers,
             readTimeoutMs = 10000
         )
         return RabiLinkPortableObservationReceipt(

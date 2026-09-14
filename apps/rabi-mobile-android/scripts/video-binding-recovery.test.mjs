@@ -1,0 +1,6 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs';
+const read=p=>readFileSync(new URL('../app/src/main/java/com/rabi/link/'+p,import.meta.url),'utf8');
+const c=read('modules/rokid/RabiLiveRecordingController.kt'), d=read('modules/rokid/VideoAudioDerivation.kt'), s=read('recording/RecordingStore.kt');
+test('capture binding is persisted in original atomic session before receiver launch',()=>{assert.ok(c.includes('create("video", "glasses", binding)')); assert.ok(s.indexOf('data.put("processingBinding"')<s.indexOf('write(id, data)')); assert.ok(c.includes('.put("endpointRef", captureId)'));});
+test('stop completes only after durable derivation enqueue barrier',()=>{const save=c.indexOf('RecordingStore(this).finish(id, result)'),queue=c.indexOf('VideoAudioDerivation.enqueueFinalized(this, id)'),callback=c.indexOf('onStopped()',queue);assert.ok(save<queue&&queue<callback);});
+test('recovery rejects live and unknown receiver identity and never loads current route',()=>{assert.ok(d.includes('receiver-process.stat'));assert.ok(d.includes('if (sameProcess) continue'));assert.ok(d.includes('if (!proof.isFile)'));assert.ok(d.includes('store.finish(session.getString("id"), "interrupted")'));assert.ok(d.includes('binding.getString("route")'));assert.ok(!d.includes('RabiConversationTarget.load'));});

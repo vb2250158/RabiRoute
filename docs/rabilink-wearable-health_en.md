@@ -8,6 +8,17 @@ English | <a href="./rabilink-wearable-health.md">简体中文</a>
 
 > Status: **experimental integration with a closed real-device primary path**. The timeline, Manager query API, alert route, RibiWebGUI endpoint, Android settings UI, Health Connect source, and PC ADB Companion are implemented. On the tested Xiaomi phone, mobile-owned settings now drive continuous local-Provider heart-rate and sleep ingestion. Xiaomi Health still leaves Health Connect empty on that phone; direct MiWear SPP collection, which would contend with the official app connection, is not the default collector.
 
+## All-day recording integration (Unreleased)
+
+This section describes new code, not a completed phone/watch acceptance run. Earlier hardware results do not validate this revision.
+
+- The sole recording owner calls `WearableHealthController.start/stop/syncNow/close`. The controller is not a Service and owns no notification or boot entry. `stop` is resumable; `close` cancels the scope and terminates the instance.
+- Device `enabled` means participation, not permission to run. New collection also requires `running && healthEnabled`. Persistent `windowStartedAt` and `participationStartedAt` bound lookback. Sleep sessions crossing a pause are conservatively omitted, not clipped into invented sessions.
+- Phone collection first writes a private AtomicFile transport queue. PC Companion first fsyncs and atomically saves transport envelopes with frozen window, destination, device, policy and idempotency ID. No credentials are persisted. The PC remains the health-history authority.
+- Independent `uploadEnabled` controls delivery of already saved records. Pausing collection does not delete or block previously authorized processing; disabling upload retains the queue. Phone work is triggered by owner start, manual requests or network events, without a new collection timer. The PC Provider lacks reliable events, so existing low-frequency checks remain and verify mobile permission before reading new health data.
+- The hosted Companion uses `transport-outbox` under the Host-provided StateRoot. Manual scripts require `-OutboxRoot <private local transport directory>`. Manager access retains dynamic identity discovery and fencing. Global pause does not rewrite existing device `enabled`.
+- An already-dispatched blocking HTTP request cannot be recalled; pause is not proof that remote in-flight work stopped. Corrupt or full queues retain records and report failure rather than silently deleting them. Platform-event integration, ADB disconnection, long backlogs and real-device pause/resume still require validation.
+
 ## Ownership and flow
 
 RabiRoute owns normalized health history, alert rules, and Agent queries. The RabiLink phone owns device-side settings and collection. A wearable authentication key is encrypted locally with Android Keystore and must never enter Relay, logs, the health timeline, or Agent context.
@@ -67,7 +78,7 @@ The headers are `x-rabiroute-expected-application-generation-id` and `x-rabirout
 Repository scripts remain only as one-shot diagnostics. A manual Manager check must identify the locally installed Host so `status --json` can return the current dynamic identity:
 
 ```powershell
-.\apps\rabilink-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
+.\apps\rabi-mobile-android\scripts\Sync-MiHealthWearableToRabiLink.ps1 `
   -Execute -Transport Manager `
   -HostExe "<local-install-root>\RabiRouteHost.exe" `
   -UseMobileSettings:$true

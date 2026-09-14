@@ -868,7 +868,8 @@ class ExpandableCard(QFrame):
                 if plan is not None
                 else (status, "unknown")
             )
-            self.status_label = QLabel(f"状态：{display_status}")
+            activation = f"激活状态：{plan.activation_status} · " if plan is not None and plan.activation_status else ""
+            self.status_label = QLabel(f"{activation}标记状态：{display_status}")
             self.status_label.setObjectName("planStatus")
             self.status_label.setProperty("statusTone", status_tone)
             if plan is not None:

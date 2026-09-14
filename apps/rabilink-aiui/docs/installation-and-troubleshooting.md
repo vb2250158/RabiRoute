@@ -287,7 +287,7 @@ Content-Type: application/json
 只有眼镜本身出现在 `adb devices -l` 且已在眼镜端接受 RSA 调试授权时，电脑才能读取实时日志。手机连上 ADB 不等于眼镜已连上。当前配置链会输出不含用户原句的安全标记：`configuration-asr:start/result/end` 和 `configuration-ai:dispatch:<command>`。
 
 ```powershell
-$adb = Resolve-Path ..\rabilink-android\out\tools\android-sdk\platform-tools\adb.exe
+$adb = Resolve-Path ..\rabi-mobile-android\out\tools\android-sdk\platform-tools\adb.exe
 & $adb devices -l
 & $adb logcat -c
 & $adb logcat -v threadtime |

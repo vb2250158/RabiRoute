@@ -73,7 +73,7 @@ const lifecycleJvmTestPath = path.join(
 const probeActivityPath = path.join(
   repoRoot,
   "apps",
-  "rabilink-android",
+  "rabi-mobile-android",
   "app",
   "src",
   "main",

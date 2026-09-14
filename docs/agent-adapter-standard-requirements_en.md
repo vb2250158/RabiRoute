@@ -10,6 +10,42 @@ This document defines the product, architecture, interface, reliability, UI, sec
 
 Not every handler has projects, persistent sessions, tools, streaming, or cancellation. The adapter must declare what it actually supports, and the UI must not present an unverified capability as available.
 
+## Base integration and optional host enhancements
+
+RabiRoute owns the common binding, resolution, delivery and receipt contracts; each adapter translates only the session interface owned by its host. DSH uses its owner API. An additional Rabi tool plugin, pinned plugin version or enhancement status is not a prerequisite for base discovery/delivery. Scanning does not request the retired `rabirouteAgent/status` endpoint or recommend installing retired plugin collections.
+
+Host enhancements are separate and optional. Displaying a bound Rabi plan in a DSH task sidebar is a future UI extension, **not currently implemented**; Codex and future adapters need not reproduce that UI. Enhancements access Manager-owned plans through managed APIs without duplicating business truth. Lifecycle Hooks are installed, diagnosed and accepted separately as needed. Optional enhancements never waive existing approval, formal sending or permission contracts.
+
+Migration does not automatically uninstall extensions, change existing task bindings or roll back DSH profiles. First remove extension dependencies from base scanning, then independently verify host discovery, same-task continuation and enhancements. Passing source tests does not prove deployment in the running Manager; real delivery requires separate acceptance.
+
+## Feature ownership: Rabi first, host extensions only where necessary
+
+This section defines feature ownership across Rabi, DSH, Codex and other Agents; it is not a deployed-feature inventory. Business behavior and policies that Rabi can implement centrally belong in Rabi and must be exposed through shared contracts. Host enhancements only fill gaps that supported interfaces cannot address directly and that require access inside the host. A missing Rabi API is not a reason to move business logic into DSH; evaluate extending the Rabi API first.
+
+### Responsibilities
+
+- **Rabi owns business behavior and policies**: persona definitions, context selection, memory management and consolidation scheduling, plan state, secretary and business-task bindings, message routing, reply requests, channel sending and receipts. Rabi may delegate reasoning or tool execution to DSH, Codex or another handler; results return to Rabi without transferring policy or authoritative business state to the handler.
+- **Agents own actual execution**: model calls, answers, file and tool operations, host session lifecycle and local permission enforcement remain with the actual owner. Rabi business authorization neither expands host permissions nor replaces host approval or sandbox rules.
+- **Adapters translate and transmit**: Rabi-side adapters use host session APIs; the DSH tool plugin translates model requests into Manager calls and returns results; lifecycle Hooks report host events and apply context or decisions returned by Manager. Tool registration is not automatic scheduling. Forwarding Hook events does not implement persona or memory policies inside the host.
+- **Host enhancements address host-specific gaps only**: examples include capturing DSH internal events, injecting context through supported extension points, enforcing tool interception and displaying bound plans in local UI. These are ownership examples, not claims that every feature exists. Displays and temporary storage must not become authoritative business state; enhancements must not duplicate the Rabi plan engine, memory store, router or cross-Agent scheduler.
+
+### Decisions required before implementation
+
+Record the following in the design or task description before implementation:
+
+1. **Business ownership**: does the capability also apply to Codex or another Agent? Rabi owns shared business rules and state. DSH tool names or UI structure must not define the common business model.
+2. **API gap**: identify reusable Rabi APIs and any shared capability they need. Retain only the minimum host implementation that genuinely requires internal events, permissions or UI, and explain why Rabi cannot perform that part directly.
+3. **Minimum division**: list Rabi decisions and state, adapter protocol translation, and host actions and temporary state separately. Do not introduce a second plan, persona, memory, binding or reply queue for integration convenience. Necessary caches must declare their authority, invalidation and recovery rules.
+4. **Cross-Agent behavior and degradation**: identify the shared contract and actual capability differences across DSH, Codex and other Agents. Agents without optional enhancements still follow their base integration contract. Report missing host capabilities honestly; do not fabricate parity, silently switch Runtime or weaken security.
+5. **Acceptance evidence**: verify shared business behavior, host adaptation and the actual target session separately. Shared behavior should cover applicable DSH and Codex paths; mark any untested Agent as unverified rather than substituting another Agent's success. Report tool registration, Hook loading, Manager health and real delivery separately.
+
+### Ownership examples
+
+- Memory consolidation, plan progression, secretary selection and cross-Agent reply scheduling: Rabi owns policy, scheduling and state; handlers execute authorized delegated work.
+- Capturing a DSH pre-tool event and enforcing Manager's denial: the DSH Hook handles the local event and enforcement, Rabi owns business policy, and the host retains its permission restrictions.
+- Displaying a Rabi plan in the DSH sidebar: DSH may provide optional UI backed by Manager's authoritative state. Codex need not reproduce the UI and must not lose shared plan capabilities because of that difference. This sidebar example is not implemented.
+- Giving the model access to Rabi APIs: this is tool integration, not an independent DSH plan, memory or messaging system.
+
 ## One-sentence standard
 
 > A user should be able to discover the handler, bind the correct project/session, deliver a message reliably, and understand real status and results without learning ports, processes, or UUIDs. Failure must identify the broken layer and must not silently change Runtime, session, owner, or permissions.

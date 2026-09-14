@@ -357,7 +357,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：候选包准备")
+        self.assertEqual(card.status_label.text(), "标记状态：候选包准备")
         self.assertEqual(card.status_label.property("statusTone"), "candidate-package")
         self.assertIn("border-left: 4px solid #16a34a", card.styleSheet())
         self.assertIn("background: #eaf8ef", card.status_label.styleSheet())
@@ -377,7 +377,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：等待负责人")
+        self.assertEqual(card.status_label.text(), "标记状态：等待负责人")
         self.assertEqual(card.status_label.property("statusTone"), "owner-hold")
         card.close()
 
@@ -518,7 +518,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.set_expanded(True)
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：待审批")
+        self.assertEqual(card.status_label.text(), "标记状态：待审批")
         self.assertEqual(card.status_label.property("statusTone"), "blocked")
         current_callout = card.findChild(QLabel, "planCurrentStepCallout")
         self.assertEqual(current_callout.text(), "当前阻塞：第 2 步 · 恢复 VPN")
@@ -581,7 +581,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：等待 QA")
+        self.assertEqual(card.status_label.text(), "标记状态：等待 QA")
         self.assertEqual(card.status_label.property("statusTone"), "qa")
         card.close()
 
@@ -603,7 +603,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.set_expanded(True)
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：暂停")
+        self.assertEqual(card.status_label.text(), "标记状态：暂停")
         self.assertEqual(card.status_label.property("statusTone"), "paused")
         current_callout = card.findChild(QLabel, "planCurrentStepCallout")
         self.assertEqual(current_callout.text(), "当前执行：第 1 步 · 保留恢复位置")
@@ -821,7 +821,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         card.show()
         self.app.processEvents()
 
-        self.assertEqual(card.status_label.text(), "状态：进行中")
+        self.assertEqual(card.status_label.text(), "标记状态：进行中")
         self.assertEqual(card.status_label.property("statusTone"), "running")
         card.close()
 

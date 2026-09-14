@@ -294,6 +294,8 @@ export type RolePlanApprovalContract = {
 export type RolePlanStatusKey = string;
 
 export type RolePlan = {
+  activationStatus?: "进行中" | "已完成" | "已归档";
+  markerStatus?: string;
   id: string;
   title: string;
   focus: string;

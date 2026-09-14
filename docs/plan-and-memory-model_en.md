@@ -6,6 +6,21 @@ English | <a href="./plan-and-memory-model.md">简体中文</a>
 
 # Plans and Memory Model
 
+## Plan activation and marker status
+
+- `activationStatus` is fixed to `进行中` (active), `已完成` (completed), or `已归档` (archived). Pause is not an activation state. Archived records remain read-only.
+- `markerStatus` is a persona-configurable marker, such as analysis, approval, information needed, or pause. Agents manage the catalog through `/api/roles/:roleId/plan-marker-statuses`, using strong ETags, `If-Match`, and `Idempotency-Key`. Deletion requires a replacement key and preserves activation; archived records retain their historical marker.
+- New plans default to active. Marker-only writes never complete, archive, or reactivate a plan. Activation-only writes retain markers, steps, attachments, and task bindings. Activation owns completion and archive timestamps.
+- Automatic follow-up, guidance, and completion hooks require active activation and a marker different from the persona's `roles.paused`. Prose, step descriptions, and idle task state cannot replace these fields.
+- Startup migration maps legacy completed plans to completed, closed or archived plans to archived, and all others to active. Markers are retained except for legacy alias normalization. Storage transactions record history; repeated startup is idempotent.
+
+During external-client compatibility, `status` projects the marker and `archiveStatus` projects archive membership. A legacy status-only write is adapted at the boundary using the old combined semantics. Conflicting explicit and legacy fields are rejected. `plan-statuses` remains an alias of the same catalog. Legacy catalog `terminal/setsCompletedAt/archiveEligible` metadata no longer owns the lifecycle of new fields. Remove legacy writes only after existing external Agent clients adopt both new fields; new callers must not use combined state.
+
+```json
+{ "activationStatus": "进行中", "markerStatus": "暂停" }
+```
+
+
 Approval displays Agent-authored questions and choices first. Only when no question has choices does it add the default “Proceed with this plan” and “Suggest changes” options. Nothing is preselected; suggestions require written details. Each supplementary or custom answer uses the shared feedback composer, including @ references to plan attachments, file selection, clipboard paste and keyboard submission. Uploads share one preview and removal area and are submitted with the feedback; there is no separate approval suggestion text box. A changed approval contract requires renewed confirmation. Option requiresText=true requires accompanying text; question requireOption=true requires an explicit selection. Ordinary information requests still accept custom text answers.
 
 ## Plan questions and answers
@@ -110,7 +125,7 @@ This data resolves participants only. It must not turn platform privileges, a te
 `关闭`    closed
 ```
 
-Business code resolves lifecycle meanings through `planWorkflow.roles`. `roles.informationNeeded` is used only after analysis is complete and the available information cannot support a concrete proposal ready for approval; the missing fact must affect the cause, proposed fix, implementation scope, or acceptance contract. It is not used merely because the issue cannot currently be reproduced, may already have been fixed, lacks a target package, awaits QA acceptance, or awaits a closure decision. Development-side completion without target-package or inclusion proof uses `roles.waitingPackage`; a confirmed package without a QA conclusion uses the stable status key `等待 QA` and the default display label `等待 QA 验收`; an invalid or historically fixed issue that needs no acceptance closes with evidence through `roles.closed`. `archiveStatus` is independent and accepts only `未归档` or `已归档`. Only a status configured with `terminal=true` and `archiveEligible=true` is archived after `planWorkflow.archiveAfterHours`, without changing its key. Archived plans do not participate in keyword recall. Manager returns the key with its configured label, description, palette, order, and views; clients never interpret the key or derive another status from step text.
+Only plans with `activationStatus=已完成` are automatically archived after `updatedAt` exceeds the persona `planWorkflow.archiveAfterHours` (72 hours by default). The whole directory moves from active to archive and the marker stays unchanged. Legacy closed plans are archived during startup migration.
 
 `planWorkflow.schemaVersion=4` retains the v3 removal of step status fields and narrows the stock information-needed description. The first read of a v1, v2, or v3 persona configuration preserves custom statuses and their relative order; v1 also inserts the default information-needed definition after analysis. For v2/v3, migration updates only untouched stock Chinese and English descriptions with the stock key and labels. It preserves customized descriptions and never restores or re-enables a status removed by an Agent.
 
@@ -222,7 +237,7 @@ WebGUI never reads the stored local path directly. It requests files through `GE
 
 A current step that requires approval should include a complete `approvalRequest`. `approver`, `request`, `recommendation`, and `reason` state the owner, decision, proposed implementation, and rationale. `alternatives` is optional and is not required for approval completeness. `files` lists exact paths, `create/modify/delete/move`, and the concrete edit; `commands` contains complete commands, purpose, and expected effects; `changes` identifies configuration, database, cloud, or external-system targets. `validation`, `rollback`, and `outOfScope` define acceptance, recovery, and explicit exclusions. `requestedAt`, `sourceMessageId / feedbackId`, and `responseStatus` record request provenance and receipt state. At least one of `files / commands / changes` must be concrete. Missing fields produce `presentation.approval.state=incomplete` and `enabled=false`. The plan uses `roles.analysis` while independent analysis remains possible, or `roles.informationNeeded` after analysis confirms that a load-bearing fact is missing. Once the contract is complete with `responseStatus=pending`, the Agent stores the approval-role key; Manager returns `ready/enabled=true` without rewriting the status.
 
-Manager normalizes legacy plans at the read boundary: `未开始 → 暂停`; `进行中 → 待审批 / 执行中 / 分析中` according to a complete pending approval contract or the retired execution marker; `已完成 → 完成`; and `已归档 → status=关闭, archiveStatus=已归档`. Retired `workPhase`, `discussionState`, and handwritten `isBlocked` participate only in compatibility reads and are removed by the next canonical POST/PATCH. The system never invents an approver, provenance, recommendation, alternatives, or request time.
+At startup Manager canonicalizes configured marker aliases and transactionally migrates activation state. Legacy active markers resolve to the initial marker, never to inferred approval, pause, or execution from prose. Retired step fields are removed during migration; approver, provenance, and decisions require explicit evidence.
 
 `secretaryBinding` is the plan's exact current control-plane owner and is separate from the business `taskBinding`. It stores the bound Agent type, complete session ID, display name, workspace, optional DSH apiproxy origin, and assignment time. When control delivery first needs an owner, Manager selects one stable session from the enabled Route pool and persists it. A governance `begin/finish` updates the binding to the Secretary actually managing that plan. A still-configured binding is reused; reassignment happens only after the binding becomes unavailable or leaves the configured pool.
 
@@ -244,7 +259,7 @@ Global strict audit is observational and compares ledger snapshots from before a
 
 The target Codex Route must already have an exact task ID and must differ from the execution session. Multiple plans bound to one execution session, workspace mismatch, execution-context persona mismatch, a missing or wrong-persona gateway, or multiple same-persona gateways without `gatewayId` all fail closed. The capability remains experimental until verified between two real Desktop tasks.
 
-An unarchived plan remains visible until its configured status has both `terminal=true` and `archiveEligible=true` and its latest `updatedAt` exceeds `personaConfig.json.planWorkflow.archiveAfterHours`. A role-knowledge snapshot then changes only `archiveStatus` to `已归档`, preserves the status key, sets `archivedAt`, and moves the whole directory from `plans/active/<planId>/` to `plans/archive/<planId>/`. The default template uses 72 hours, while each persona may configure a different delay.
+Only plans with `activationStatus=已完成` are automatically archived after `updatedAt` exceeds the persona `planWorkflow.archiveAfterHours` (72 hours by default). The whole directory moves from active to archive and the marker stays unchanged. Legacy closed plans are archived during startup migration.
 
 ## Focus and write limits
 

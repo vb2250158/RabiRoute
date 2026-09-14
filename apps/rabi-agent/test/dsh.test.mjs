@@ -3,7 +3,7 @@ import http from "node:http";
 import test from "node:test";
 import { normalizeDshBinding, sendDshTask } from "../lib/dsh.mjs";
 
-test("DSH binds one exact local session and queues both messages without creation", async () => {
+test("DSH binds one exact local session and steers both messages without creation", async () => {
   const requests = [];
   const server = http.createServer(async (request, response) => {
     let text = "";
@@ -18,7 +18,7 @@ test("DSH binds one exact local session and queues both messages without creatio
   try {
     await sendDshTask(binding, "one");
     await sendDshTask(binding, "two");
-    assert.deepEqual(requests.map(item => [item.method, item.payload.sessionId, item.payload.mode]), [["session.prompt", "session-fixture", "queue"], ["session.prompt", "session-fixture", "queue"]]);
+    assert.deepEqual(requests.map(item => [item.method, item.payload.sessionId, item.payload.mode]), [["session.prompt", "session-fixture", "steer"], ["session.prompt", "session-fixture", "steer"]]);
     await assert.rejects(sendDshTask(binding, "reject"), /rejected/);
   } finally { await new Promise(resolve => server.close(resolve)); }
   await assert.rejects(sendDshTask(binding, "offline"));

@@ -10,7 +10,7 @@ const config = { enabled: true, cooldownSeconds: 10, rules: [
 ] };
 const plan = { id: "p", title: "Review", status: "review-custom", archiveStatus: "未归档", steps: [],
   taskBinding: { agentType: "codex", sessionId: "worker" } } as unknown as PlanItem;
-const workflow = { statuses: [{ key: "review-custom", label: "自定义审查", state: "enabled", terminal: false }] } as PersonaPlanWorkflow;
+const workflow = { roles: { paused: "paused", completed: "complete", closed: "closed" }, statuses: [{ key: "review-custom", label: "自定义审查", state: "enabled", terminal: false }] } as PersonaPlanWorkflow;
 const input = { config, plan, workflow, sessionId: "worker", turnId: "one", now: 10000 };
 
 test("persona selects custom status and text; missing configuration never prompts", () => {
@@ -29,10 +29,17 @@ test("duplicate, same-turn, cooldown, recursion and terminal guards", () => {
   assert.equal(decidePlanFollowup({ ...input, plan: changed, previous, turnId: "two", now: 15000 }), null);
   assert.ok(decidePlanFollowup({ ...input, plan: changed, previous, turnId: "two", now: 30000 }));
   assert.equal(decidePlanFollowup({ ...input, stopHookActive: true }), null);
-  assert.equal(decidePlanFollowup({ ...input, workflow: { ...workflow, statuses: workflow.statuses.map(s => ({ ...s, terminal: true })) } }), null);
+  assert.equal(decidePlanFollowup({ ...input, plan: { ...plan, activationStatus: "已完成" } }), null);
 });
 test("normalization preserves explicit empty selection and bounds invalid numbers", () => {
   assert.deepEqual(normalizePlanFollowup(undefined), { enabled: false, cooldownSeconds: 300, rules: [] });
   assert.equal(normalizePlanFollowup({ ...config, cooldownSeconds: NaN }).cooldownSeconds, 300);
   assert.deepEqual(normalizePlanFollowup(config), config);
+});
+
+test("显式暂停即使命中追问规则也不唤醒，旧正文不改变判定", () => {
+  const pausedWorkflow = { ...workflow, roles: { ...workflow.roles, paused: plan.status } };
+  assert.equal(decidePlanFollowup({ ...input, workflow: pausedWorkflow }), null);
+  assert.equal(decidePlanFollowup({ ...input, plan: { ...plan, activationStatus: "已归档" } }), null);
+  assert.ok(decidePlanFollowup({ ...input, plan: { ...plan, activationStatus: "进行中", currentStep: "旧记录：暂停" } }));
 });

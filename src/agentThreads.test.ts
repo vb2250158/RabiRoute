@@ -2057,8 +2057,39 @@ test("Agent thread send accepts danger-full-access for Windows sandbox recovery"
 });
 
 
+// The DSH bridge now authenticates through the affected owner's launch login URL, so any test that
+// drives real DSH RPC must supply its own endpoint mapping instead of reading the machine-wide
+// config. Without this fixture the bridge fails closed before the RPC ever reaches the fetch stub.
+const dshFixtureBaseUrl = "http://127.0.0.1:3080";
+const dshLoginUrl = `${dshFixtureBaseUrl}/?token=fixture-token`;
+
+function installDshAuthFixture(): () => void {
+  const originalAuthFile = process.env.RABI_DSH_AUTH_FILE;
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-threads-test-"));
+  const launchLogPath = path.join(temp, "launch.log");
+  fs.writeFileSync(launchLogPath, `dsh web: ${dshLoginUrl}\n`);
+  process.env.RABI_DSH_AUTH_FILE = path.join(temp, "auth.json");
+  fs.writeFileSync(process.env.RABI_DSH_AUTH_FILE, JSON.stringify({
+    endpoints: [{ baseUrl: dshFixtureBaseUrl, launchLogPath }]
+  }));
+  return () => {
+    if (originalAuthFile === undefined) delete process.env.RABI_DSH_AUTH_FILE;
+    else process.env.RABI_DSH_AUTH_FILE = originalAuthFile;
+    fs.rmSync(temp, { recursive: true, force: true });
+  };
+}
+
+/** Root-path 303 plus one supported HttpOnly cookie is the only accepted exchange result. */
+function dshAuthResponse(): Response {
+  return new Response(null, {
+    status: 303,
+    headers: { location: "/", "set-cookie": "dsh-auth-fixture=fixture-cookie; HttpOnly; Path=/" }
+  });
+}
+
 test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers through the selected owner", async () => {
   const originalFetch = globalThis.fetch;
+  const restoreDshAuth = installDshAuthFixture();
   const sessionId = "session-44444444-4444-4444-8444-444444444444";
   const rows: Array<{
     sessionId: string;
@@ -2069,31 +2100,41 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
   }> = [];
   const methods: string[] = [];
   globalThis.fetch = async (_input, init) => {
+    if (String(_input) === dshLoginUrl) return dshAuthResponse();
     const body = JSON.parse(String(init?.body || "{}")) as {
       rpcId: string;
       method: string;
-      payload?: Record<string, unknown>;
+      payload?: { args?: { request?: Record<string, any> } & Record<string, any> };
     };
+    const args = body.payload?.args ?? {};
     methods.push(body.method);
     let value: unknown = {};
-    if (body.method === "session.list") {
+    if (body.method === "session/list") {
       value = { items: rows };
-    } else if (body.method === "workspace.create") {
-      value = { workspace: { workspaceId: "workspace-rabi", path: body.payload?.path } };
-    } else if (body.method === "session.create") {
+    } else if (body.method === "session/modelCatalog") {
+      value = { groups: [], failures: [] };
+    } else if (body.method === "session/selectModel") {
+      value = { selected: args.request };
+    } else if (body.method === "workspace/create") {
+      value = {
+        workspace: { workspaceId: "workspace-rabi", path: args.request?.path, title: "Rabi",
+          sessionIds: [], createdAt: "", updatedAt: "" },
+        created: true
+      };
+    } else if (body.method === "session/create") {
       rows.push({
         sessionId,
         updatedAt: Date.now(),
         running: false,
-        cwd: body.payload?.workspaceId === "workspace-rabi" ? process.cwd() : String(body.payload?.cwd || ""),
+        cwd: args.request?.workspaceId === "workspace-rabi" ? process.cwd() : String(args.request?.cwd || ""),
         projections: { values: { title: sessionId } }
       });
       value = { sessionId };
-    } else if (body.method === "session.rename") {
-      const row = rows.find((item) => item.sessionId === body.payload?.sessionId);
-      if (row) row.projections.values.title = String(body.payload?.title || "");
-      value = { title: body.payload?.title };
-    } else if (body.method === "session.prompt") {
+    } else if (body.method === "session/rename") {
+      const row = rows.find((item) => item.sessionId === args.request?.sessionId);
+      if (row) row.projections.values.title = String(args.request?.title || "");
+      value = { title: args.request?.title, seq: 1 };
+    } else if (body.method === "session/prompt") {
       value = { accepted: true };
     }
     return new Response(JSON.stringify({
@@ -2151,11 +2192,12 @@ test("DSH Agent thread flow discovers, creates, renames, resolves, and delivers 
     assert.equal(sent.data.agentAdapter, "dsh");
     assert.equal((sent.data.delivery as { acceptedBy: string; transport: string }).acceptedBy, "dsh_session_owner");
     assert.equal((sent.data.delivery as { acceptedBy: string; transport: string }).transport, "http");
-    assert.equal(methods.filter((method) => method === "workspace.create").length, 1);
-    assert.equal(methods.filter((method) => method === "session.create").length, 1);
-    assert.equal(methods.filter((method) => method === "session.prompt").length, 2);
+    assert.equal(methods.filter((method) => method === "workspace/create").length, 1);
+    assert.equal(methods.filter((method) => method === "session/create").length, 1);
+    assert.equal(methods.filter((method) => method === "session/prompt").length, 2);
   } finally {
     globalThis.fetch = originalFetch;
+    restoreDshAuth();
   }
 });
 
@@ -2249,9 +2291,11 @@ test("Agent thread open locates the exact DSH session with its configured base U
   const baseUrl = "http://127.0.0.1:3080";
   const opened: Array<{ id: string; url: string }> = [];
   const originalFetch = globalThis.fetch;
+  const restoreDshAuth = installDshAuthFixture();
   globalThis.fetch = async (_input, init) => {
+    if (String(_input) === dshLoginUrl) return dshAuthResponse();
     const body = JSON.parse(String(init?.body || "{}"));
-    assert.equal(body.method, "session.list");
+    assert.equal(body.method, "session/list");
     return new Response(JSON.stringify({
       rpcId: body.rpcId,
       result: {
@@ -2285,5 +2329,6 @@ test("Agent thread open locates the exact DSH session with its configured base U
     assert.deepEqual(opened, [{ id: sessionId, url: baseUrl }]);
   } finally {
     globalThis.fetch = originalFetch;
+    restoreDshAuth();
   }
 });

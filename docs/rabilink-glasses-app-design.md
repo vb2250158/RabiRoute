@@ -49,7 +49,7 @@ sequenceDiagram
 
 ## 当前实现
 
-- 眼镜默认入口为 `com.rabi.link.glass.GlassAudioClientActivity`，工程模块为 `apps/rabilink-android/glass-app/`；眼镜主链已不在本地运行 ASR/TTS。
+- 眼镜默认入口为 `com.rabi.link.glass.GlassAudioClientActivity`，工程模块为 `apps/rabi-mobile-android/glass-app/`；眼镜主链已不在本地运行 ASR/TTS。
 - 确认键开始录音，再次确认停止并发送；界面使用纯黑背景、单条横向操作带和显式居中焦点。
 - HUD 使用固定的连接、聆听、上传、播报、暂停和异常状态角标；下行 PCM 播报时暂停采集，并按音频长度延迟恢复，避免回声重新进入上行。
 - 手机 `RabiGlassPcBackend` 把眼镜 PCM 按有序 chunk 持续传给 Rabi PC；手机不做 VAD、切句或 ASR。PC RabiSpeech 完成 VAD/切句/ASR/声纹并自动进入 `rabilink` Route；手机继续拉取下行消息，调用 PC TTS 并把 PCM 发回眼镜。
@@ -100,5 +100,5 @@ Relay 默认限制单个附件 64 MiB，可通过环境变量调整。手机现�
 - [手机边缘枢纽](rabilink-phone-edge-hub.md)
 - [RabiLink Relay](rabilink-relay-server.md)
 - [RabiSpeech](rabispeech-plugin.md)
-- [Android 工程](../apps/rabilink-android/README.md)
+- [Android 工程](../apps/rabi-mobile-android/README.md)
 - [AIUI 暂停路线](rabilink-aiui-residency-plan.md)
