@@ -154,7 +154,7 @@ export function resetMessageProcessingRuntime(): void {
 }
 
 function primaryManagedAgentBinding(): {
-  agentAdapter: "codex" | "dsh";
+  agentAdapter: "codex" | "dsh" | "workbuddy";
   sessionId: string;
   sessionName: string;
   workspace: string;
@@ -166,6 +166,14 @@ function primaryManagedAgentBinding(): {
       sessionId: config.dshSessionId,
       sessionName: config.dshSessionName,
       workspace: config.dshCwd
+    };
+  }
+  if (config.primaryAgentAdapter === "workbuddy" && config.workbuddySessionId && config.workbuddyCwd) {
+    return {
+      agentAdapter: "workbuddy",
+      sessionId: config.workbuddySessionId,
+      sessionName: config.workbuddySessionName || "WorkBuddy 主人格",
+      workspace: config.workbuddyCwd
     };
   }
   if (config.primaryAgentAdapter === "codex" && config.codexThreadId && config.codexThreadName && config.codexCwd) {

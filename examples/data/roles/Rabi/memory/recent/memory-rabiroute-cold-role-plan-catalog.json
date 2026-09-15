@@ -1,0 +1,22 @@
+{
+  "id": "memory-rabiroute-cold-role-plan-catalog",
+  "title": "没写过计划的角色是合法冷态，不能拖累其他角色的回传",
+  "focus": "角色计划目录缺失时的降级边界",
+  "content": "完成回传（计划完成提醒和项目文件改动检查提醒）要遍历全部角色找绑定计划。没写过计划的角色没有已发布计划目录，读取时抛 RoleKnowledgeCacheUnavailableError，以前会中断整个遍历，表现成提醒没送达——一个冷态角色就能把所有人的回传拖垮。现在把这种状态当合法冷态处理：跳过该角色，按需自动创建空的 plans/active 与 plans/archive 供首次写入落在规范分桶里，每个角色首次出现时只记一次警告；角色根目录不存在时返回空目录而不是抛错。判断这类问题的原则是：遍历型投递必须让单个角色的局部异常就地降级，不能让它升级成全局失败；同时降级要有可诊断的痕迹，静默吞掉异常和整体中断一样难查。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：角色计划目录冷态的降级与可诊断边界"
+  },
+  "createdAt": "2026-09-15T00:00:00+08:00",
+  "updatedAt": "2026-09-15T00:00:00+08:00",
+  "keywords": [
+    "完成回传",
+    "计划目录",
+    "RoleKnowledgeCacheUnavailableError",
+    "冷态",
+    "遍历降级",
+    "plans/active",
+    "plans/archive",
+    "失败关闭"
+  ]
+}

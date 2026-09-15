@@ -47,6 +47,7 @@ import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPo
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 import { normalizePathForComparison } from "./shared/pathPolicy.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
+import { agentAdapterSupportsReceiptRecovery } from "./shared/agentAdapterCapabilities.js";
 import {
   agentIdentityForMessageSource,
   normalizeRabiDeliveryBlock,
@@ -871,7 +872,7 @@ async function executeAgentThreadRequest(
     const deliveryId = optionalText(request.deliveryId, "deliveryId", 200) || undefined;
     const rolloutReceiptConfirmed = Boolean(
       deliveryId
-      && agentAdapter === "codex"
+      && agentAdapterSupportsReceiptRecovery(agentAdapter)
       && driver === defaultDriver
       && await codexDesktopDeliveryReceiptConfirmed(threadId, deliveryId)
     );
@@ -1278,7 +1279,7 @@ async function executeAgentThreadRequest(
     if (sendSource && inReplyToRequestId && options.agentRequests) {
       const pending = options.agentRequests.get(inReplyToRequestId);
       if (pending?.status === "pending_delivery") {
-        const reason = pending.target.agentAdapter !== "codex" ? "delivery_receipt_adapter_not_supported"
+        const reason = !agentAdapterSupportsReceiptRecovery(pending.target.agentAdapter) ? "delivery_receipt_adapter_not_supported"
           : pending.target.threadId !== sendSource.source.threadId ? "reply_sender_does_not_match_original_target"
           : pending.source.threadId !== threadId ? "reply_destination_does_not_match_original_source"
           : !sameCodexWorkspace(pending.target.workspace || "", sendSource.source.workspace || "") ? "reply_sender_workspace_mismatch"

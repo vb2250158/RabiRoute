@@ -875,7 +875,9 @@ export class MessageAgentPool {
       if (displayName && !displayName.includes("\n")) {
         this.sourceThreadDisplayName = displayName;
         this.sourceThreadName = displayName;
-      } else if (agentAdapter === "codex" && hasDisplayedNameField) {
+      } else if (hasDisplayedNameField) {
+        // The owner returned a name/title field but no usable text. Every adapter
+        // reports the same "display name unavailable" state instead of only Codex.
         this.sourceThreadDisplayNameUnavailable = true;
       }
     } catch {

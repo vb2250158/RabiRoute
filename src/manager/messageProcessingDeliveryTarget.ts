@@ -36,6 +36,17 @@ function primaryPersonaWorker(
       workspace
     };
   }
+  if (adapter === "workbuddy") {
+    const sessionId = definition.workbuddySessionId?.trim();
+    const workspace = definition.workbuddyCwd?.trim();
+    if (!sessionId || !workspace) return undefined;
+    return {
+      agentAdapter: "workbuddy",
+      threadId: sessionId,
+      threadName: definition.workbuddySessionName?.trim() || "WorkBuddy 主人格",
+      workspace
+    };
+  }
   if (adapter !== "codex") return undefined;
   const threadId = definition.codexThreadId?.trim();
   const workspace = definition.codexCwd?.trim();

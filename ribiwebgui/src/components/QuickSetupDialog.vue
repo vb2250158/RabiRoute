@@ -45,6 +45,10 @@ const form = reactive({
   dshSessionName: "",
   dshCwd: "",
   dshBaseUrl: "http://127.0.0.1:3080",
+  workbuddySessionId: "",
+  workbuddySessionName: "",
+  workbuddyCwd: "",
+  workbuddyEndpoint: "",
   gatewayPort: 8790,
   napcatHttpUrl: "http://127.0.0.1:3000",
   napcatWebuiUrl: "http://127.0.0.1:6099/webui",
@@ -85,7 +89,8 @@ const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: st
   { type: "copilotCli", title: "Copilot CLI", note: "实验支持，需要本机登录状态", icon: "mdi-robot-outline" },
   { type: "marvis", title: "Marvis", note: "占位支持，人工接力模式", icon: "mdi-message-processing-outline" },
   { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" },
-  { type: "dsh", title: "DSH（DeepSeek Harness）", note: "实验支持，通过 session.prompt API 投递消息", icon: "mdi-brain" }
+  { type: "dsh", title: "DSH（DeepSeek Harness）", note: "实验支持，通过 session.prompt API 投递消息", icon: "mdi-brain" },
+  { type: "workbuddy", title: "WorkBuddy（腾讯 AI 办公工作台）", note: "实验支持，投递到本机 WorkBuddy 任务的会话网关", icon: "mdi-briefcase-outline" }
 ];
 
 const agentModelChoices: string[] = [
@@ -186,6 +191,7 @@ const selectedSessionName = computed(() => {
   if (selectedAgent.value === "codex") return form.codexThreadId || form.codexThreadName;
   if (selectedAgent.value === "copilotCli") return form.copilotThreadName;
   if (selectedAgent.value === "dsh") return form.dshSessionId || form.dshSessionName;
+  if (selectedAgent.value === "workbuddy") return form.workbuddySessionId || form.workbuddySessionName;
   return "";
 });
 const roleOptions = computed(() => [
@@ -202,6 +208,7 @@ const agentNeedsCopilotProject = computed(() => selectedAgent.value === "copilot
 const agentNeedsAstrbotEndpoint = computed(() => selectedAgent.value === "astrbot");
 const agentNeedsMarvisApp = computed(() => selectedAgent.value === "marvis");
 const agentNeedsDshSession = computed(() => selectedAgent.value === "dsh");
+const agentNeedsWorkbuddySession = computed(() => selectedAgent.value === "workbuddy");
 
 function selectAgent(type: AgentAdapterType): void {
   form.agentAdapters = [type];
@@ -210,6 +217,9 @@ function selectAgent(type: AgentAdapterType): void {
   }
   if (type === "dsh" && !form.dshCwd && form.codexCwd) {
     form.dshCwd = form.codexCwd;
+  }
+  if (type === "workbuddy" && !form.workbuddyCwd && form.codexCwd) {
+    form.workbuddyCwd = form.codexCwd;
   }
 }
 
@@ -292,6 +302,7 @@ function currentProject(): string {
   if (agentNeedsAstrbotEndpoint.value) return astrbotProjectItems().find(project => project.value === form.astrbotProjectId)?.title || form.astrbotUrl;
   if (agentNeedsMarvisApp.value) return form.marvisAppId || "Tencent.Marvis";
   if (agentNeedsDshSession.value) return form.dshCwd || form.codexCwd;
+  if (agentNeedsWorkbuddySession.value) return form.workbuddyCwd || form.codexCwd;
   return agentNeedsCopilotProject.value ? form.copilotCwd : form.codexCwd;
 }
 
@@ -311,6 +322,7 @@ function agentPrimaryLabel(): string {
   if (agentNeedsAstrbotEndpoint.value) return "AstrBot 地址/项目";
   if (agentNeedsMarvisApp.value) return "应用 ID";
   if (agentNeedsDshSession.value) return "DSH 会话 ID";
+  if (agentNeedsWorkbuddySession.value) return "WorkBuddy 任务";
   return agentNeedsCopilotProject.value ? "项目目录 (-C)" : "项目目录";
 }
 
@@ -318,6 +330,7 @@ function agentSessionLabel(): string {
   if (agentNeedsAstrbotEndpoint.value) return "AstrBot 会话";
   if (agentNeedsMarvisApp.value) return "接力模式";
   if (agentNeedsDshSession.value) return "DSH 会话";
+  if (agentNeedsWorkbuddySession.value) return "WorkBuddy 任务";
   return "线程";
 }
 
@@ -327,6 +340,7 @@ function agentSessionSummary(): string {
   }
   if (agentNeedsMarvisApp.value) return "不绑定会话";
   if (agentNeedsDshSession.value) return form.dshSessionId || "未填写 DSH 会话 ID";
+  if (agentNeedsWorkbuddySession.value) return form.workbuddySessionId || "未选择 WorkBuddy 任务";
   if (selectedAgent.value === "codex") return form.codexThreadName || `自动：${fallbackCodexThreadName()}`;
   if (selectedAgent.value === "copilotCli") return form.copilotThreadName || "未填写";
   return "未填写";
@@ -367,6 +381,28 @@ function astrbotSessionItems(): Array<{ title: string; value: string; subtitle?:
       value: session.id || session.name,
       subtitle: session.projectPath || session.updatedAt
     }));
+}
+
+function workbuddyTaskItems(): Array<{ title: string; value: string; subtitle?: string }> {
+  return (agentScanFor("workbuddy")?.sessions ?? []).map(session => ({
+    title: session.name || session.id || "",
+    value: session.id || session.name,
+    // Surface liveness so a user does not bind a task whose owner is gone.
+    subtitle: [session.projectPath, session.status, session.live ? "会话在线" : "会话未打开"]
+      .filter(Boolean)
+      .join(" · ")
+  }));
+}
+
+function selectWorkbuddyTask(value: unknown): void {
+  form.workbuddySessionId = String(value || "");
+  const selected = (agentScanFor("workbuddy")?.sessions ?? [])
+    .find(session => (session.id || session.name) === form.workbuddySessionId);
+  if (!selected) return;
+  // Keep the display name and workspace aligned with the chosen task; the
+  // workspace must match at delivery time or the delivery fails closed.
+  if (!form.workbuddySessionName.trim()) form.workbuddySessionName = selected.name || "";
+  if (selected.projectPath) form.workbuddyCwd = selected.projectPath;
 }
 
 function selectAstrbotProject(value: unknown): void {
@@ -654,6 +690,7 @@ const agentReady = computed(() => {
   if (agentNeedsAstrbotEndpoint.value) return Boolean(form.astrbotUrl.trim());
   if (agentNeedsMarvisApp.value) return true;
   if (agentNeedsDshSession.value) return Boolean(form.dshSessionId.trim() && form.dshCwd.trim());
+  if (agentNeedsWorkbuddySession.value) return Boolean(form.workbuddySessionId.trim() && form.workbuddyCwd.trim());
   if (agentNeedsCopilotProject.value) return Boolean(form.copilotThreadName.trim() && form.copilotCwd.trim());
   if (agentNeedsCodexProject.value) return true;
   return true;
@@ -665,6 +702,9 @@ const saveBlockReason = computed(() => {
   if (!messageReady.value) return "消息入口还有必要字段没有填写，请回到第一步补全端口、地址或路径。";
   if (agentNeedsDshSession.value && (!form.dshSessionId.trim() || !form.dshCwd.trim())) {
     return "DSH 需要填写完整的 session-<uuid> 会话 ID 和工作目录；会话请先在 DSH WebGUI 中创建。";
+  }
+  if (agentNeedsWorkbuddySession.value && (!form.workbuddySessionId.trim() || !form.workbuddyCwd.trim())) {
+    return "WorkBuddy 需要选择任务并填写与任务一致的工作目录；请先在 WorkBuddy 中打开该任务。";
   }
   if (!agentReady.value) return "Agent 绑定还有必要字段没有填写，请回到第二步补全项目目录、会话或服务地址。";
   return "";
@@ -742,6 +782,10 @@ function syncFromGateway() {
   form.dshSessionName = gateway?.dshSessionName || "";
   form.dshCwd = gateway?.dshCwd || gateway?.codexCwd || "";
   form.dshBaseUrl = gateway?.dshBaseUrl || "http://127.0.0.1:3080";
+  form.workbuddySessionId = gateway?.workbuddySessionId || "";
+  form.workbuddySessionName = gateway?.workbuddySessionName || "";
+  form.workbuddyCwd = gateway?.workbuddyCwd || gateway?.codexCwd || "";
+  form.workbuddyEndpoint = gateway?.workbuddyEndpoint || "";
   napcatHealthResult.value = null;
   astrbotLoginResult.value = null;
   marvisOpenResult.value = null;
@@ -786,7 +830,10 @@ async function apply() {
     if (selectedAgent.value === "dsh" && !form.dshSessionName.trim()) {
       form.dshSessionName = fallbackCodexThreadName();
     }
-    if (selectedAgent.value === "codex" || selectedAgent.value === "dsh") {
+    if (selectedAgent.value === "workbuddy" && !form.workbuddySessionName.trim()) {
+      form.workbuddySessionName = fallbackCodexThreadName();
+    }
+    if (selectedAgent.value === "codex" || selectedAgent.value === "dsh" || selectedAgent.value === "workbuddy") {
       await bindAgentSessionsForSave(form, async (request) => {
         const response = await fetch("/api/agent/threads", {
           method: "POST",
@@ -1187,6 +1234,55 @@ async function apply() {
                         label="DSH API 基地址"
                         placeholder="http://127.0.0.1:3080"
                         hint="本机 DeepSeek Harness 的 apiproxy 入口；默认 http://127.0.0.1:3080"
+                        persistent-hint
+                        data-no-i18n
+                      />
+                    </div>
+                  </template>
+
+                  <template v-if="selectedAgent === 'workbuddy'">
+                    <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                      WorkBuddy 任务由本机 WorkBuddy 桌面应用承载。RabiRoute 把消息投递到该任务会话进程的本地网关（<code>POST /api/v1/runs</code>），由该任务以其自带的模型、工具和审批真实执行。
+                      会话 ID 是投递路由键：向同一任务连续投递不会新建任务。使用前请在 WorkBuddy 中打开目标任务，并准备本地网关凭据文件。
+                      仍为实验性：凭据需手工配置，桌面配对入口尚未提供。
+                    </v-alert>
+                    <div class="catalog-param-grid">
+                      <v-combobox
+                        v-model="form.workbuddySessionId"
+                        :items="workbuddyTaskItems()"
+                        label="WorkBuddy 任务 ID"
+                        placeholder="请选择或粘贴会话 ID"
+                        hint="来自 WorkBuddy 任务库的任务 ID；投递时它同时是会话路由键"
+                        persistent-hint
+                        data-no-i18n
+                        @update:model-value="selectWorkbuddyTask"
+                      >
+                        <template #append-inner>
+                          <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                          <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
+                        </template>
+                      </v-combobox>
+                      <v-text-field
+                        v-model="form.workbuddySessionName"
+                        label="任务名称"
+                        placeholder="WorkBuddy Example Task"
+                        hint="可选标识，只用于显示，不会改写 WorkBuddy 中的任务名"
+                        persistent-hint
+                        data-no-i18n
+                      />
+                      <v-combobox
+                        v-model="form.workbuddyCwd"
+                        :items="projectItems()"
+                        label="工作目录"
+                        placeholder="C:/Path/To/Project"
+                        hint="必须与 WorkBuddy 任务的目录一致；不一致会停止投递"
+                        persistent-hint
+                      />
+                      <v-text-field
+                        v-model="form.workbuddyEndpoint"
+                        label="上次网关地址（可选）"
+                        placeholder="http://127.0.0.1:5762"
+                        hint="WorkBuddy 端口每次启动都会变化；通常留空，投递时按会话描述文件动态发现"
                         persistent-hint
                         data-no-i18n
                       />

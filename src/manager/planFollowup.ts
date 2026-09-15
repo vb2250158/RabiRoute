@@ -13,7 +13,7 @@ export function decidePlanFollowup(input: {
   const settings = normalizePlanFollowup(input.config);
   const { plan, previous } = input;
   if (!settings.enabled || input.stopHookActive || !input.turnId
-    || plan.taskBinding?.agentType !== "codex" || plan.taskBinding.sessionId !== input.sessionId
+    || plan.taskBinding?.sessionId !== input.sessionId
     || !planCanAutoAdvance(plan, input.workflow)) return null;
   const status = input.workflow.statuses.find(item => item.key === plan.status && item.state === "enabled");
   // Terminal plans never become implementation work merely because a rule matches.

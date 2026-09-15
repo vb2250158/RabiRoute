@@ -1,0 +1,26 @@
+{
+  "id": "memory-rabiroute-workbuddy-delivery-boundary",
+  "title": "WorkBuddy 投递必须进入用户已有任务，凭据缺失时失败关闭",
+  "focus": "WorkBuddy Agent 端的投递真源、凭据边界与能力声明诚实性",
+  "content": "WorkBuddy 是 Desktop owner 型处理端，和 Codex 同类，差别在于它的 API 由每个会话进程自己提供。投递走绑定任务会话进程的本地网关，把 source.conversation.id 固定为完整会话 ID，消息才以正式用户回合进入那个任务的对话区，由该任务用自带模型、工具和审批执行；同一个 ID 连续投递不会新建任务。验收不能看「有没有新建任务」——那正是它必须失败的行为——要看目标会话流水里出现用户回合、紧随其后由同一 owner 产出完成回复、且任务总量不变。网关密码由桌面注入会话进程，RabiRoute 是独立进程读不到，必须由用户写入本地忽略文件；没配就失败关闭，绝不发未鉴权请求。投递结局要分开记：不可达可安全重试，被拒说明没生效，凭据被拒不许重放，结果未知必须先核对再决定。能力声明只写验证过的：WorkBuddy 声明消息处理与 Hook，不声明计划协助会话、记忆整理和回执恢复——网关只给一次性回执、没有可读的入站日志，声明了就会出现点了必然失败的面板。",
+  "source": {
+    "kind": "example",
+    "summary": "公开示例记忆：WorkBuddy 投递真源、凭据失败关闭与能力声明边界"
+  },
+  "createdAt": "2026-09-15T00:00:00+08:00",
+  "updatedAt": "2026-09-15T00:00:00+08:00",
+  "keywords": [
+    "WorkBuddy",
+    "Agent 端",
+    "会话网关",
+    "source.conversation.id",
+    "完整会话 ID",
+    "同 ID 续投",
+    "网关密码",
+    "失败关闭",
+    "deliveryReceiptRecovery",
+    "能力声明",
+    "计划协助会话",
+    "生命周期 Hook"
+  ]
+}

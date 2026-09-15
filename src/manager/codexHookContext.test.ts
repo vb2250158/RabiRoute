@@ -721,3 +721,53 @@ test("bound tasks forward the entire final to configured event delivery without 
   assert.deepEqual(messages, [final]);
   assert.deepEqual(result.completionDeliveries, [{ ruleId: "configured", status: "sent" }]);
 });
+
+test("a role with no published plan catalog is skipped instead of failing the whole traversal", async (t) => {
+  let deliveries = 0;
+  const { root, rolesRoot, service } = fixture({
+    deliverPlanTaskCompletion: async () => { deliveries += 1; }
+  });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // A role that only has persona.md: no plans/ bucket and no published catalog.
+  // This is a legitimate cold state, not a corrupt one.
+  const coldRoleDir = path.join(rolesRoot, "ColdRole");
+  fs.mkdirSync(coldRoleDir, { recursive: true });
+  fs.writeFileSync(path.join(coldRoleDir, "persona.md"), "# 冷角色\n\n尚未建立计划。", "utf8");
+
+  // The healthy bound role must still deliver while the cold role is present.
+  const result = await service.handleHook({
+    sessionId: "session-plan-worker",
+    eventName: "Stop",
+    turnId: "turn-cold-role",
+    cwd: root,
+    lastAssistantMessage: "正常计划已完成。"
+  });
+
+  assert.notEqual(result.planTaskCompletion?.status, "failed");
+  assert.equal(deliveries, 1);
+  // Reading a cold role creates the canonical plan storage layout so the first
+  // real write has somewhere to land.
+  assert.equal(fs.existsSync(path.join(coldRoleDir, "plans", "active")), true);
+  assert.equal(fs.existsSync(path.join(coldRoleDir, "plans", "archive")), true);
+});
+
+test("a missing roles root is an empty catalog, not a crash", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-codex-hook-empty-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const service = new CodexHookContextService({
+    rolesRoot: () => path.join(root, "roles-never-created"),
+    storePath: path.join(root, "data", "codex-hook", "sessions.json"),
+    deliverPlanTaskCompletion: async () => {}
+  });
+
+  assert.deepEqual(service.listRoles(), []);
+  const result = await service.handleHook({
+    sessionId: "session-absent-root",
+    eventName: "Stop",
+    turnId: "turn-absent-root",
+    cwd: root,
+    lastAssistantMessage: "无角色根目录。"
+  });
+  assert.equal(result.planTaskCompletion?.reason, "no_enabled_plan_task_binding");
+});

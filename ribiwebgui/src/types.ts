@@ -46,6 +46,12 @@ export type AgentScanSession = {
   projectId?: string;
   updatedAt?: string;
   userNamed?: boolean;
+  /** Task status as reported by the host, when the adapter can read one. */
+  status?: string;
+  /** True when a live session process can accept a delivery right now. */
+  live?: boolean;
+  /** Working directory; for host adapters this is the task workspace. */
+  cwd?: string;
 };
 
 export type AgentScanProject = {

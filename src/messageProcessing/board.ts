@@ -161,7 +161,7 @@ export type MessageProcessingSource = {
 };
 
 export type MessageProcessingWorker = {
-  agentAdapter?: "codex" | "dsh";
+  agentAdapter?: "codex" | "dsh" | "workbuddy";
   threadId: string;
   threadName: string;
   workspace: string;

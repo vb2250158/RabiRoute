@@ -1,0 +1,21 @@
+{
+  "name": "rabi-workbuddy-context",
+  "version": "0.4.0",
+  "description": "Inject Rabi PC-managed context into WorkBuddy sessions and forward plan-bound turn completions through thin lifecycle hooks.",
+  "author": {
+    "name": "RabiRoute contributors",
+    "url": "https://github.com/vb2250158/RabiRoute"
+  },
+  "repository": "https://github.com/vb2250158/RabiRoute",
+  "license": "MIT",
+  "keywords": ["Rabi", "WorkBuddy", "persona", "context", "memory", "plans"],
+  "interface": {
+    "displayName": "Rabi WorkBuddy Context",
+    "shortDescription": "Use Rabi PC context in one WorkBuddy task.",
+    "longDescription": "Forward WorkBuddy session, prompt, tool-loop and Stop lifecycle events to Rabi PC Manager; inject bounded persona context and let Manager route plan-task completion reminders without duplicating Rabi management logic in the plugin.",
+    "developerName": "RabiRoute",
+    "category": "Productivity",
+    "capabilities": ["Context", "Hooks"],
+    "defaultPrompt": "Bind this WorkBuddy task to my Rabi PC persona and report the Manager-owned context."
+  }
+}

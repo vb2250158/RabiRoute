@@ -64,8 +64,14 @@ async function scanProjects() {
   loading.value = true; error.value = "";
   try {
     const response = await fetch("/api/scan/agents"); const data = await response.json();
-    if (!response.ok) throw new Error(data.message || "读取 Codex 项目失败");
-    projects.value = (data.agents?.codex?.projects ?? []).map((item: { path: string }) => item.path);
+    if (!response.ok) throw new Error(data.message || "读取项目目录失败");
+    // Every adapter owns its own project list. Codex was the only one read here,
+    // which hid DSH (and future adapter) workspaces from the project condition.
+    const scanned = Object.values(data.agents ?? {}).flatMap((agent: unknown) => {
+      const projects = (agent as { projects?: { path?: string }[] } | null)?.projects;
+      return Array.isArray(projects) ? projects.map(item => String(item?.path || "")) : [];
+    }).filter(Boolean);
+    projects.value = [...new Set(scanned)];
     if (!projects.value.length) projects.value = data.cwdOptions ?? [];
   } catch (cause) { error.value = userFacingError(cause); }
   finally { loading.value = false; }
@@ -103,7 +109,7 @@ async function scanProjects() {
             </v-list>
           </v-menu>
         </div>
-        <p v-if="!rule.conditions.length" class="section-note">未设置条件，将匹配所有 Codex 任务。添加多个条件时，必须全部满足。</p>
+        <p v-if="!rule.conditions.length" class="section-note">未设置条件，将匹配所有已托管 Agent 任务。添加多个条件时，必须全部满足。</p>
         <div v-for="(item, conditionIndex) in rule.conditions" :key="item.type" class="hook-condition">
           <div class="d-flex align-center justify-space-between">
             <span>{{ AGENT_HOOK_CONDITIONS.find(option => option.value === item.type)?.title || item.type }}</span>
@@ -111,9 +117,9 @@ async function scanProjects() {
               @click="update(rule, { conditions: rule.conditions.filter((_, position) => position !== conditionIndex) })" />
           </div>
           <template v-if="item.type === 'project'">
-            <v-combobox :model-value="item.path" :items="projects" label="Codex 项目目录" hide-details class="mt-2"
+            <v-combobox :model-value="item.path" :items="projects" label="项目目录" hide-details class="mt-2"
               @update:model-value="value => condition(rule, conditionIndex, { path: String(value || '') })" />
-            <v-btn variant="text" size="small" :loading="loading" @click="scanProjects">读取 Codex 项目</v-btn>
+            <v-btn variant="text" size="small" :loading="loading" @click="scanProjects">读取项目目录</v-btn>
           </template>
           <p v-else-if="item.type === 'bound_plan'" class="section-note">仅投递绑定当前人格计划的任务，消息中包含计划名。</p>
           <template v-else-if="item.type === 'include_sessions' || item.type === 'exclude_sessions'">

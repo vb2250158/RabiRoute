@@ -9,12 +9,13 @@ import { handleAgentSend, inspectAgentSendDelivery, type AgentSendRequest } from
 import type { AgentReplyOptions } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import { AGENT_HOOK_EVENTS, agentHookRuleErrors } from "../shared/agentHookAutomation.js";
+import { agentAdapterSupportsLifecycleHooks as supportsHooks } from "../shared/agentAdapterCapabilities.js";
 
 const execute = promisify(execFile);
 export type CompletionDeliveryResult = { ruleId: string; status: "sent" | "failed"; reason?: string };
 export type CompletionRuleOwner = { roleId: string; rule: AgentCompletionDeliveryRule };
 export function planCompletionDeliveryRules(roleId: string, plans: readonly Pick<PlanItem, "id" | "taskBinding" | "messageChannels">[], sessionId: string): CompletionRuleOwner[] {
-  return plans.filter(plan => plan.taskBinding?.agentType === "codex" && plan.taskBinding.sessionId === sessionId)
+  return plans.filter(plan => plan.taskBinding?.sessionId === sessionId)
     .flatMap(plan => (plan.messageChannels ?? []).map((destination, index) => ({ roleId, rule: {
       id: `plan-${plan.id}-${index}`, enabled: true, event: "task_completed", conditions: [{ type: "bound_plan" }], destination
     } })));
@@ -40,7 +41,7 @@ export function splitCompletionMessage(text: string, maxChars = 3000): string[] 
 
 export function completionTaskContextFromPlans(sessionId: string,
   plans: readonly Pick<PlanItem, "id" | "title" | "taskBinding">[], currentTitle?: string): CompletionTaskContext {
-  const bound = plans.filter(plan => plan.taskBinding?.agentType === "codex" && plan.taskBinding.sessionId === sessionId);
+  const bound = plans.filter(plan => plan.taskBinding?.sessionId === sessionId);
   return {
     taskName: currentTitle?.trim() || undefined,
     plans: bound.map(plan => ({ id: plan.id, title: plan.title }))
@@ -105,7 +106,7 @@ export class AgentCompletionDeliveryService {
   }) {}
 
   handle(request: CodexHookContextRequest): Promise<CompletionDeliveryResult[]> {
-    if (!AGENT_HOOK_EVENTS.some(event => event.hookEvent === request.eventName) || (request.agentType && request.agentType !== "codex")
+    if (!AGENT_HOOK_EVENTS.some(event => event.hookEvent === request.eventName) || !supportsHooks(request.agentType)
       || !request.sessionId?.trim() || !request.turnId?.trim()
       || !request.lastAssistantMessage?.trim()) return Promise.resolve([]);
     const key = JSON.stringify([request.sessionId, request.turnId]);

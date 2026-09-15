@@ -1,0 +1,60 @@
+{
+  "description": "Inject explicitly bound Rabi persona context into individual WorkBuddy sessions.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path = require('node:path'); const { pathToFileURL } = require('node:url'); import(pathToFileURL(path.join(process.env.CODEBUDDY_PLUGIN_ROOT, 'scripts', 'rabi-workbuddy-hook.mjs')).href).catch((error) => { console.error(error); process.exit(1); })\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path = require('node:path'); const { pathToFileURL } = require('node:url'); import(pathToFileURL(path.join(process.env.CODEBUDDY_PLUGIN_ROOT, 'scripts', 'rabi-workbuddy-hook.mjs')).href).catch((error) => { console.error(error); process.exit(1); })\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path = require('node:path'); const { pathToFileURL } = require('node:url'); import(pathToFileURL(path.join(process.env.CODEBUDDY_PLUGIN_ROOT, 'scripts', 'rabi-workbuddy-hook.mjs')).href).catch((error) => { console.error(error); process.exit(1); })\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path = require('node:path'); const { pathToFileURL } = require('node:url'); import(pathToFileURL(path.join(process.env.CODEBUDDY_PLUGIN_ROOT, 'scripts', 'rabi-workbuddy-hook.mjs')).href).catch((error) => { console.error(error); process.exit(1); })\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const path = require('node:path'); const { pathToFileURL } = require('node:url'); import(pathToFileURL(path.join(process.env.CODEBUDDY_PLUGIN_ROOT, 'scripts', 'rabi-workbuddy-hook.mjs')).href).catch((error) => { console.error(error); process.exit(1); })\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

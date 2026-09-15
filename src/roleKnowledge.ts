@@ -1620,6 +1620,17 @@ function plansDir(roleDir: string): string {
   return path.join(roleDir, "plans");
 }
 
+/**
+ * A role that has never written a plan simply has no plan storage yet. Creating
+ * the empty layout is idempotent and makes the first real write land in the
+ * canonical buckets instead of failing a read that expects them to exist.
+ */
+export function ensurePlanStorageLayout(roleDir: string): void {
+  for (const bucket of ["active", "archive"] as const) {
+    fs.mkdirSync(path.join(plansDir(roleDir), bucket), { recursive: true });
+  }
+}
+
 function memoryDir(roleDir: string): string {
   return path.join(roleDir, "memory");
 }

@@ -48,9 +48,11 @@ import {
 export type { CodexPlanAssistantSession } from "./codexPlanAssistantSessions.js";
 export {
   agentAdapterCapabilities,
+  agentAdapterManifest,
   agentAdapterSupportsManagedTaskFeature,
   agentAdapterTypes,
   type AgentAdapterCapabilities,
+  type AgentAdapterManifest,
   type AgentAdapterType,
   type ManagedTaskAgentFeature
 } from "./agentAdapterCapabilities.js";
@@ -362,6 +364,15 @@ export type GatewayDefinition = {
   dshModelProvider?: string;
   dshModel?: string;
   dshReasoningEffort?: string;
+  workbuddySessionId?: string;
+  workbuddySessionName?: string;
+  workbuddyCwd?: string;
+  /**
+   * Last-known loopback gateway address. The desktop port changes on every
+   * launch, so this is a display/fallback value only: delivery always prefers
+   * the live address published in the session descriptor.
+   */
+  workbuddyEndpoint?: string;
   codexPlanAssistantEnabled?: boolean;
   codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
@@ -448,6 +459,32 @@ const dshSessionIdPattern = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 function normalizeDshSessionId(value: unknown): string | undefined {
   const raw = String(value || "").trim();
   return raw && dshSessionIdPattern.test(raw) ? raw : undefined;
+}
+
+/**
+ * WorkBuddy task ids are UUIDs from the desktop `sessions` table. Keep the
+ * check permissive (any non-empty, path-safe token) because the desktop also
+ * issues `interactive-<pid>` style ids for host sessions, and rejecting a
+ * valid id would silently unbind a route.
+ */
+function normalizeWorkbuddySessionId(value: unknown): string | undefined {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 200) return undefined;
+  return /^[A-Za-z0-9._-]+$/.test(raw) ? raw : undefined;
+}
+
+/** Only loopback http origins are accepted; the credential must never travel. */
+function normalizeWorkbuddyEndpoint(value: unknown): string | undefined {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" || url.username || url.password) return undefined;
+    if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(url.hostname)) return undefined;
+    return url.origin;
+  } catch {
+    return undefined;
+  }
 }
 
 export function normalizeCodexReasoningEffort(value: unknown): CodexReasoningEffort | undefined {
@@ -1419,6 +1456,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     dshModelProvider: definition.dshModelProvider?.trim() || undefined,
     dshModel: definition.dshModel?.trim() || undefined,
     dshReasoningEffort: definition.dshReasoningEffort?.trim() || undefined,
+    workbuddySessionId: normalizeWorkbuddySessionId(definition.workbuddySessionId),
+    workbuddySessionName: definition.workbuddySessionName?.trim() || undefined,
+    workbuddyCwd: normalizeCodexCwd(definition.workbuddyCwd) || normalizeCodexCwd(definition.codexCwd),
+    workbuddyEndpoint: normalizeWorkbuddyEndpoint(definition.workbuddyEndpoint),
     codexPlanAssistantEnabled: planAssistantSupported
       ? codexPlanAssistantEnabled
       : undefined,

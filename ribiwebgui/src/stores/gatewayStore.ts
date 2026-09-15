@@ -901,6 +901,10 @@ export const useGatewayStore = defineStore("gateway", () => {
     dshSessionName?: string;
     dshCwd?: string;
     dshBaseUrl?: string;
+    workbuddySessionId?: string;
+    workbuddySessionName?: string;
+    workbuddyCwd?: string;
+    workbuddyEndpoint?: string;
     gatewayPort: number;
     napcatHttpUrl: string;
     napcatWebuiUrl?: string;
@@ -967,6 +971,12 @@ export const useGatewayStore = defineStore("gateway", () => {
       gateway.dshSessionName = values.dshSessionName || gateway.dshSessionName;
       gateway.dshCwd = values.dshCwd || values.codexCwd;
       gateway.dshBaseUrl = values.dshBaseUrl || gateway.dshBaseUrl;
+    }
+    if (gateway.agentAdapters?.includes("workbuddy")) {
+      gateway.workbuddySessionId = values.workbuddySessionId || gateway.workbuddySessionId;
+      gateway.workbuddySessionName = values.workbuddySessionName || gateway.workbuddySessionName;
+      gateway.workbuddyCwd = values.workbuddyCwd || values.codexCwd;
+      gateway.workbuddyEndpoint = values.workbuddyEndpoint || gateway.workbuddyEndpoint;
     }
     gateway.gatewayPort = values.gatewayPort;
     gateway.napcatHttpUrl = values.napcatHttpUrl;

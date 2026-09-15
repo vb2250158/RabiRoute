@@ -46,7 +46,9 @@ function managerBaseUrl(request: http.IncomingMessage): string {
 
 export function hookContextRequest(body: Record<string, unknown>, request: http.IncomingMessage) {
   return {
-    agentType: typeof body.agentType === "string" ? body.agentType : "codex",
+    // Older Codex hook packages predate adapter tagging and omit `agentType`.
+    // Codex is the only untagged producer, so an absent value means Codex.
+    agentType: typeof body.agentType === "string" && body.agentType.trim() ? body.agentType : "codex",
     sessionId: String(body.session_id || body.sessionId || ""),
     eventName: String(body.hook_event_name || body.eventName || "") as CodexHookEventName,
     prompt: typeof body.prompt === "string" ? body.prompt : undefined,

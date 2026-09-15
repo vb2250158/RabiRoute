@@ -19,7 +19,7 @@ import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSour
 import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
-import { agentAdapterSupportsManagedTaskFeature, primaryMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
+import { agentAdapterManifest, agentAdapterSupportsManagedTaskFeature, primaryMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
 import {
   DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
   codexPlanAssistantInitializationPrompt,
@@ -3313,7 +3313,15 @@ const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; ic
   { type: "marvis",      title: "Marvis",         note: "打开 Marvis 并复制 prompt（人工接力）", icon: "mdi-message-processing-outline", hasCwd: false, hasThread: false },
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
   { type: "dsh",         title: "DSH（DeepSeek Harness 会话）", note: "通过 session.prompt API 投递到本机 DSH 会话", icon: "mdi-brain", hasCwd: true, hasThread: true },
+  { type: "workbuddy",   title: "WorkBuddy（腾讯 AI 办公工作台）", note: "通过会话网关投递到本机 WorkBuddy 已有任务", icon: "mdi-briefcase-outline", hasCwd: true, hasThread: true },
 ];
+
+/** Short display names for panels that name the bound session owner. Falls back to the manifest label so a newly registered adapter is never mislabelled as Codex. */
+const agentShortLabels: Partial<Record<AgentAdapterType, string>> = {
+  codex: "Codex Desktop",
+  dsh: "DSH",
+  workbuddy: "WorkBuddy"
+};
 
 const addAgentMenu = ref(false);
 const testingAstrbotLogin = ref(false);
@@ -3509,6 +3517,7 @@ function currentAgentProject(type: AgentAdapterType): string {
   if (type === "copilotCli") return gateway.value.copilotCwd || "";
   if (type === "codex") return gateway.value.codexCwd || "";
   if (type === "dsh") return gateway.value.dshCwd || "";
+  if (type === "workbuddy") return gateway.value.workbuddyCwd || "";
   return "";
 }
 
@@ -3628,14 +3637,44 @@ function selectDshSession(value: unknown): void {
   touch();
 }
 
+function workbuddySessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
+  return agentSessions("workbuddy")
+    .filter((session) => session.id)
+    .filter((session) => !gateway.value?.workbuddyCwd || !session.projectPath || samePath(session.projectPath, gateway.value.workbuddyCwd))
+    .map((session) => ({
+      title: session.name,
+      value: session.id!,
+      subtitle: [
+        session.projectPath,
+        session.live === true ? "在线" : session.live === false ? "已离线" : undefined,
+        session.updatedAt
+      ].filter(Boolean).join(" · ")
+    }));
+}
+
+function selectWorkbuddySession(value: unknown): void {
+  if (!gateway.value) return;
+  const raw = String(value || "").trim();
+  const selected = agentSessions("workbuddy").find((session) => session.id === raw);
+  if (selected?.id) {
+    gateway.value.workbuddySessionId = selected.id;
+    gateway.value.workbuddySessionName = selected.name;
+    if (selected.projectPath) gateway.value.workbuddyCwd = selected.projectPath;
+  } else {
+    gateway.value.workbuddySessionId = "";
+    gateway.value.workbuddySessionName = raw;
+  }
+  touch();
+}
+
 function managedAgentSessionContext(type: AgentAdapterType): {
-  agentAdapter: "codex" | "dsh";
+  agentAdapter: "codex" | "dsh" | "workbuddy";
   sessionId: string;
   sessionName: string;
   workspace: string;
   dshBaseUrl?: string;
 } | null {
-  if (!gateway.value || (type !== "codex" && type !== "dsh")) return null;
+  if (!gateway.value || (type !== "codex" && type !== "dsh" && type !== "workbuddy")) return null;
   if (gateway.value.agentInstanceBindings?.[type]) {
     const agent = boundInstanceAgent(type);
     if (!agent) return null;
@@ -3651,6 +3690,14 @@ function managedAgentSessionContext(type: AgentAdapterType): {
       dshBaseUrl: String(gateway.value.dshBaseUrl || "").trim() || undefined
     };
   }
+  if (type === "workbuddy") {
+    return {
+      agentAdapter: "workbuddy",
+      sessionId: String(gateway.value.workbuddySessionId || "").trim(),
+      sessionName: String(gateway.value.workbuddySessionName || fallbackCodexThreadName()).trim(),
+      workspace: String(gateway.value.workbuddyCwd || "").trim()
+    };
+  }
   return {
     agentAdapter: "codex",
     sessionId: String(gateway.value.codexThreadId || "").trim(),
@@ -3660,7 +3707,7 @@ function managedAgentSessionContext(type: AgentAdapterType): {
 }
 
 function managedAgentLabel(type: AgentAdapterType): string {
-  return type === "dsh" ? "DSH" : "Codex Desktop";
+  return agentShortLabels[type] || agentAdapterManifest(type).label;
 }
 
 function hasManagedAgentSessionBinding(type: "codex" | "dsh"): boolean {
@@ -3882,7 +3929,13 @@ async function initializePlanAssistants(): Promise<void> {
     }
     await store.save();
     const current = gateway.value;
-    const source = managedAgentSessionContext(primaryAgentType.value || "codex");
+    const rawSource = managedAgentSessionContext(primaryAgentType.value || "codex");
+    if (rawSource && rawSource.agentAdapter !== "codex" && rawSource.agentAdapter !== "dsh") {
+      throw new Error(`计划协助会话当前仅支持 Codex 与 DSH 主人格，${managedAgentLabel(rawSource.agentAdapter)} 尚未适配。`);
+    }
+    const source = rawSource
+      ? { ...rawSource, agentAdapter: rawSource.agentAdapter === "dsh" ? "dsh" as const : "codex" as const }
+      : null;
     if (!source?.sessionId || !source.workspace) {
       throw new Error(`主 ${managedAgentLabel(primaryAgentType.value || "codex")} 会话尚未完成名称 + ID + workspace 绑定。`);
     }
@@ -6025,6 +6078,80 @@ watch(
                     <div class="status-row">
                       <span>投递协议</span>
                       <b>session.prompt · mode=queue</b>
+                    </div>
+                  </div>
+                </template>
+                <template v-else-if="agent.type === 'workbuddy'">
+                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                    RabiRoute 通过会话网关投递到本机 WorkBuddy 的<b>已有任务</b>：任务 ID 就是路由键，同一任务续投不会新建任务，消息由该任务的 WorkBuddy owner 执行。
+                  </v-alert>
+                  <v-alert type="warning" variant="tonal" density="compact" class="mb-2">
+                    需要一次性录入本机网关凭据（<code>data/workbuddy-auth.json</code>）。凭据缺失、任务所属进程已退出或任务 ID 已归档时会明确失败，不会改投其它 Agent。
+                  </v-alert>
+                  <div class="catalog-param-grid">
+                    <v-combobox
+                      :model-value="gateway.workbuddySessionId || gateway.workbuddySessionName"
+                      :items="workbuddySessionItems()"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
+                      label="WorkBuddy 任务"
+                      placeholder="选择已有任务，或输入任务名称"
+                      hint="选择后保存完整任务 ID、名称和工作目录；同一任务续投不会新建任务"
+                      persistent-hint
+                      @update:model-value="selectWorkbuddySession"
+                    >
+                      <template #item="{ props, item }">
+                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+                      </template>
+                      <template #append-inner>
+                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描任务" @click.stop="runAgentScan" />
+                      </template>
+                    </v-combobox>
+                    <v-text-field
+                      v-model="gateway.workbuddySessionName"
+                      label="任务名称"
+                      hint="用于界面显示；任务 ID 为空时按名称查找"
+                      persistent-hint
+                      @update:model-value="touch"
+                    />
+                    <v-combobox
+                      v-model="gateway.workbuddyCwd"
+                      :items="agentProjectItems('workbuddy')"
+                      label="工作目录"
+                      placeholder="C:/Path/To/Project"
+                      hint="用于消歧同名任务；选择已有任务时自动采用任务目录"
+                      persistent-hint
+                      @update:model-value="touch"
+                    >
+                      <template #append-inner>
+                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                        <v-icon v-else-if="agentProjectItems('workbuddy').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runAgentScan" />
+                      </template>
+                    </v-combobox>
+                    <v-text-field
+                      v-model="gateway.workbuddyEndpoint"
+                      label="上次网关地址"
+                      placeholder="http://127.0.0.1:0000"
+                      hint="留空则从存活会话实时发现；端口每次启动都会变，不建议长期固定"
+                      persistent-hint
+                      data-no-i18n
+                      @update:model-value="touch"
+                    />
+                  </div>
+                  <div class="mt-2">
+                    <div class="status-row">
+                      <span>WorkBuddy 连接</span>
+                      <b :class="`text-${agentConnectionColor('workbuddy')}`">{{ agentConnectionLabel('workbuddy') }}</b>
+                    </div>
+                    <div class="status-row">
+                      <span>任务发现</span>
+                      <b :class="workbuddySessionItems().length ? 'text-success' : 'text-warning'">{{ workbuddySessionItems().length ? `可选 ${workbuddySessionItems().length} 个` : '未读取到任务' }}</b>
+                    </div>
+                    <div class="status-row">
+                      <span>投递协议</span>
+                      <b>会话网关 · 同 ID 续投</b>
                     </div>
                   </div>
                 </template>

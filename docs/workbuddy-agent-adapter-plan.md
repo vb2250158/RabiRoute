@@ -6,7 +6,7 @@
 
 # WorkBuddy 作为 Agent 端的接入方案
 
-> 状态：**设计中；发现层已实现，投递层未实现**。文中“已核实事实”来自对 WorkBuddy 5.5.6 本机安装的探测（只读 + 一次无害烟测消息）。会话发现、任务库读取与标准 resolver 已落地并通过自动化测试；投递与凭据获取仍未验收，`maturity` 保持 `experimental`，不得写成 `verified`。
+> 状态：**已实现；投递链路已端到端验证，凭据获取仍需手工一步**。文中“已核实事实”来自对 WorkBuddy 5.5.6 本机安装的探测与实测。会话发现、任务库读取、标准 resolver、凭据读取与投递桥均已落地并通过自动化测试，投递在独立进程（无 `CODEBUDDY_*` 环境变量）下验证：消息进入绑定任务的对话区、由同一任务 owner 执行、同 ID 复投不新建任务。因凭据仍需用户手工录入本地文件、桌面配对入口尚未提供，`maturity` 保持 `experimental`，不得写成 `verified`。
 >
 > 阅读前置：本文按 [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) 编写，执行流程受 `skills/create-rabiroute-agent-adapter/SKILL.md` 和其 [owner-first 设计门](../skills/create-rabiroute-agent-adapter/references/owner-first-design-gate.md) 约束。
 
@@ -154,7 +154,26 @@
 1. 内置 OpenAPI 规范写的 `{text, sender:{id,name}}` **是错的**，实测缺 `id`/`type` 会返回 `400 BAD_REQUEST: Invalid generic message format`。字段默认值：`version`、`source`、`payload` 可省略，`payload.text` 也可由顶层 `text` 或 `prompt` 提供，`source.conversation.id` 缺省为消息 `id`。
 2. **`source.conversation.id` 是会话路由键**：处理函数随后执行 `getOrCreateSession(source.conversation.id)`，同一个 `conversation.id` 复用同一个会话。这把 P0 的“同 ID 续投、不重复创建”变成协议原生能力：RabiRoute 把 `conversation.id` 固定为绑定的完整 `sessionId` 即可。
 
-未通过的一项：用临时会话键投递烟测消息后返回 `202`、`GET /runs/{runId}` 返回 `active:true`，但 30 秒内**没有**产生新的桌面任务行，也没有出现在 `sessions?cwd=*` 里。也就是说，消息确实被接收并执行了，但“进入用户已有任务、由该任务 owner 执行、在桌面任务列表可见”尚未得到证明——这是 P0 第 3 条，也是当前唯一的阻塞缺口。
+未通过的一项（**已解决**，见 5.5.1）：用临时会话键投递烟测消息后返回 `202`、`GET /runs/{runId}` 返回 `active:true`，但 30 秒内**没有**产生新的桌面任务行。当时的判断“消息没进用户任务”是错的——根因是把“新增任务行”当成了成功证据，而投递到指定 ID 的已有任务时**本来就不该**新建任务行。
+
+### 5.5.1 桌面可见性与同 ID 复投（本次实测通过）
+
+用绑定的真实 `sessionId` 作为 `source.conversation.id` 投递后，在 `~/.workbuddy/projects/<project-slug>/<sessionId>.jsonl` 中观察到：
+
+- 一条 `type: "message" / role: "user"` 记录，`parentId` 指向该会话原有的最后一条 assistant 消息，正文与投递内容逐字一致。也就是说它是一条**正式用户回合**，不是旁路作业。
+- 紧随其后是一条 `role: "assistant" / status: "completed"` 回复，`providerData.model` 为该会话自身的模型（实测 `deepseek-v4.1-flash`），由该任务的 Agent Runtime 执行。
+- 连续两次投递写入**同一个** `<sessionId>.jsonl`；`sessions` 表行数保持不变（18 → 18），确认“同 ID 续投不新建任务”为协议原生行为。
+
+独立进程复现（关键：该进程**没有** `CODEBUDDY_GATEWAY_PASSWORD`）：删除环境变量后，仅凭本地凭据文件读取网关密码，动态发现存活会话进程，投递成功返回 `202`，任务总数不变，消息出现在目标任务。这证明凭据获取路径与投递链路不依赖会话进程环境。
+
+### 5.5.2 凭据获取（已定：本地忽略文件）
+
+桌面把 `CODEBUDDY_GATEWAY_PASSWORD` 注入每个会话进程，RabiRoute Manager 是独立进程，读不到别人的环境。已实现的解析顺序：
+
+1. `RABI_WORKBUDDY_GATEWAY_PASSWORD` 进程环境变量（测试与包装脚本用）。
+2. `<state>/data/workbuddy-auth.json` 的 `{"password":"..."}`，与 `data/dsh-auth.json` 同址同形，已被 `.gitignore` 覆盖。
+
+两者都没有时投递直接失败关闭，绝不发未鉴权请求，也绝不重放被 401 拒绝的投递。该文件只需在一次投递前准备好；密码轮换后模块会在 5 分钟 TTL 或首个 401 时重新读取。
 
 
 ### 为什么这里需要凭据，而 Codex 端不需要
@@ -176,19 +195,43 @@ WorkBuddy 每个会话对外只有 loopback HTTP，操作系统不区分调用�
 已落地并测试通过：
 
 - `src/workbuddySessionStore.ts`：会话进程描述读取（含 `prewarm` 池的命名管道只作元数据）、任务库读取、工作目录规范化比较、标准 resolver。`deliverable` 判定要求**进程存活 + 心跳未过期 + 已发布网关地址 + 非 prewarm/teammate 类型**四条同时成立。
-- `src/agentAdapters/workbuddyManagerApi.ts`：Manager 侧扫描/状态（`installed`、`auth`、`endpoints`、`projects`、`sessions` + 分页、`warnings`）。
-- `workbuddy` 已注册进 `agentAdapterTypes` 与 manifest，`maturity: experimental`、`transport: http/session-gateway`、`host: WorkBuddy Desktop(required)`，并且**没有**声明 `managedTasks` 能力（避免在投递验收前虚报）。
-- 投递保持失败关闭：`builtinAgentAdapters.ts` 里的 `workbuddy` 工厂在 `deliver` 直接抛出“投递尚未实现”，不引入第二条执行路径。
-- WebGUI **故意不加卡片**：在投递未验收前让用户能选中一个必然失败的投递端，比不显示更糟。
+- `src/workbuddyHttpAuth.ts`：网关凭据读取与缓存。多来源按序解析（环境变量 → 本地忽略文件）；只允许回环地址；凭据只驻内存与本地文件，不入仓库、不入日志；5 分钟 TTL + 401 立即失效。
+- `src/workbuddySessionBridge.ts`：**唯一真实消息路径**。绑定读取、投递前 owner/目录再校验、`POST /api/v1/runs` 投递、`GET /runs/{runId}` 结算轮询。四种失败结局可区分：`unreachable`（可安全重试）/ `rejected`（未生效）/ `unauthorized`（未生效且不重放）/ `unknown`（可能已生效，必须先核对）。
+- `src/agentAdapters/workbuddyManagerApi.ts`：Manager 侧扫描/状态（`installed`、`auth`、`endpoints`、`projects`、`sessions` + 分页、`warnings`），并报告本地凭据是否已配置。
+- `workbuddy` 已注册进 `agentAdapterTypes` 与 manifest，`maturity: experimental`、`transport: http/session-gateway`、`host: WorkBuddy Desktop(required)`，并声明 `managedTasks.messageProcessingAgent`（投递已可用）与 `managedTasks.hooks`（生命周期 Hook 已可用）；**未**声明计划秘书与记忆整理（这两条路径走 Codex/DSH 线程驱动，尚未适配），也**未**声明 `deliveryReceiptRecovery`——网关只返回一次性受理回执，不保留可读的入站日志。
+- Route 绑定与 DSH 同形：`adapterConfig.json` 只保存 `workbuddySessionId` / `workbuddySessionName` / `workbuddyCwd` / `workbuddyEndpoint`（末项仅作展示与兜底，投递始终优先用会话描述文件里的实时地址），凭据不写入路由配置。
+- WebGUI：Agent 列表新增 WorkBuddy 卡片、任务下拉（带在线状态）、工作目录与可选网关地址字段。
+- 生命周期 Hook：`plugins/rabi-workbuddy-context` 插件包 + `updateAgentHooks` 的 WorkBuddy 安装分支（详见 5.5.3）。
+
+
+### 5.5.3 Hook 接入（本次交付）
+
+WorkBuddy 的 CLI 内核（CodeBuddy Code）提供与 Codex 同族的生命周期 Hook：同一批事件名（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`）、同样的 `matcher` + `hooks[]` JSON 结构、同样的输入契约（`session_id` / `transcript_path` / `cwd` / `hook_event_name` / `tool_name` / `tool_input`）与同样的 `hookSpecificOutput.additionalContext` 输出。插件声明同样放在插件根的 `hooks/hooks.json`，只是插件根环境变量为 `${CODEBUDDY_PLUGIN_ROOT}`、清单目录为 `.codebuddy-plugin/`。
+
+**已实测确认**（本机 WorkBuddy 5.5.6 / CLI 2.137.1）：在 `~/.workbuddy/settings.json` 写入 `hooks` 后，headless 会话确实触发并执行了 hook 脚本，输入 JSON 含 `session_id`、`cwd`、`hook_event_name`，`CODEBUDDY_CONFIG_DIR` 解析为 `~/.workbuddy`。所以用户级 settings 是本机可靠的安装位置。另有一条契约差异需要记住：CodeBuddy 的 `matcher` **只对 `PreToolUse` / `PostToolUse` 生效**，给生命周期事件挂 `matcher` 会让该 hook 静默不触发。
+
+**实现选择**：`plugins/rabi-workbuddy-context` 是与 `rabi-codex-context` 同构的插件包（`hooks/hooks.json` 为唯一声明源），但安装**不走插件 CLI**：
+
+- `codebuddy plugin` 子命令实测单次启动开销超过 90 秒（`--version` 很快，说明是子命令自身的加载与检查成本），会让「更新 Hook」按钮变成不可接受的等待；
+- CLI 可执行文件位于 WorkBuddy 安装目录内（`resources/app.asar.unpacked/cli/bin/codebuddy`），随桌面版升级移动，不适合写进长期配置；
+- Manager 是独立进程，调用 CLI 时的配置目录解析依赖环境变量。
+
+因此改为：`updateAgentHooks(rootDir, "workbuddy")` 把包内脚本复制到稳定路径 `<LOCALAPPDATA>\RabiRoute\agent-hooks\rabi-workbuddy-context\`，再读 `hooks/hooks.json`、把 `process.env.CODEBUDDY_PLUGIN_ROOT` 替换为该绝对路径，最后**合并**进 `~/.workbuddy/settings.json` 的 `hooks`。
+
+合并语义：只替换带 `rabi-workbuddy-hook.mjs` 指纹的条目，用户自己写的 hook 与其余 settings 键原样保留；重复执行幂等；settings 不是合法 JSON 时拒绝写入而**不是**覆盖用户配置。插件包仍随安装包分发，需要 `/plugin` 面板管理的用户可以自行 `codebuddy plugin marketplace add <安装目录>/dist/agent-hooks` 后安装——两条路径共用同一份 `hooks/hooks.json`。
+
+**与 Codex/DSH 的差异**：那两端通过各自插件管理器安装、由插件系统注入插件根；WorkBuddy 侧改由 RabiRoute 直接维护用户级配置。功能对等（同样五类事件、同样上下文注入与完成回传），差别只在安装载体，换来的是免去 CLI 启动成本与路径耦合。
+
+**尚未验收**：真实交互式任务上的 hook 端到端验证未执行（已打开的会话需重启后才加载新配置），因此 §11 验收矩阵的 Hook 一行仍标注为待验收。
 
 ### 5.6 待办与阻塞项
 
-1. **桌面可见性**（阻塞）：证明 `POST /api/v1/runs` 的消息进入用户已有任务的对话区并由同一 owner 执行。若证明不了，等级只能是 `experimental`，并必须在文档写清缺口。
-2. **凭据获取**：RabiRoute Manager 是独立进程，拿不到会话进程的 `CODEBUDDY_GATEWAY_PASSWORD`。候选路径：桌面“远程控制/配对”入口由用户一次性录入；或 user 设置显式写入 `gateway.password`；或宿主侧最小凭据交接。确定前不写投递代码。
-3. **凭据轮换**：`regeneratePassword()` 的触发条件与频次，决定内存缓存的失效策略。
-4. **steer / 排队**：任务正在执行时，投递是排队、`steer`，还是直接 busy。要求同会话连续两次投递不得新建任务。
+1. **桌面可见性**（**已解决**，见 5.5.1）：投递进入用户已有任务的对话区，并由同一 owner 以该会话自身的模型执行；同 ID 复投不新建任务。
+2. **凭据获取**（**已定，仍需手工一步**）：RabiRoute Manager 是独立进程，拿不到会话进程的 `CODEBUDDY_GATEWAY_PASSWORD`。当前由用户在 `<state>/data/workbuddy-auth.json` 一次性录入。**未解决问题**：桌面侧的“远程控制/配对”入口尚未提供自动交接，因此仍是手工步骤，也是等级停在 `experimental` 的主因。
+3. **凭据轮换**：`regeneratePassword()` 的触发条件与频次未知；当前用 5 分钟 TTL + 401 立即失效兜底，轮换足够快时表现为一次可行动的失败而非错误投递。
+4. **steer / 排队**：任务正在执行时，投递是排队、`steer`，还是直接 busy。已知同会话连续两次投递不新建任务且都能执行；具体排队语义尚未逐项验证。
 5. **幂等键**：`/api/v1/runs` 实测未发现调用方幂等键；需要时由 RabiRoute 侧的去重账本承担。
-6. **端点不一致**：`/api/v1/instances` 与 `/runs/{runId}/stream` 在实测网关上 404，说明内置 OpenAPI 规范包含未启用或模式相关的端点，集成时不能按规范假定可用。
+6. **端点不一致**：`/api/v1/instances` 与 `/runs/{runId}/stream` 在实测网关上 404，说明内置 OpenAPI 规范包含未启用或模式相关的端点，集成时不能按规范假定可用。当前未依赖这两个端点。
 
 ### 5.7 能力对照：WorkBuddy 有什么，Rabi 这边就要有什么
 
@@ -201,12 +244,13 @@ WorkBuddy 每个会话对外只有 loopback HTTP，操作系统不区分调用�
 | `isUserDefinedTitle` 区分用户命名与自动标题 | 下拉名称真源 + `userNamed` | **已实现**（`custom_title` 优先，`title` 只作展示与检索） |
 | `jobs/resumable`（`hasMore`/`nextOffset`） | 分页契约 `sessionPage` | **已实现**（`AgentScanSession` 分页字段） |
 | 会话进程描述 + 心跳 | `health()`、owner 是否加载 | **已实现**（进程存活 + 心跳 + 已发布端点三重判定） |
-| `POST /runs`（网关投递入口，`conversation.id` 即会话路由键） | `send(sessionId, delivery)` | **未实现**（凭据 + 桌面可见性未验收，当前失败关闭） |
-| `GET /runs/{runId}` → `active` | `getTurnStatus(turnId)` | 未实现（依赖投递） |
+| `POST /runs`（网关投递入口，`conversation.id` 即会话路由键） | `send(sessionId, delivery)` | **已实现**（`deliverWorkbuddyMessage`，失败关闭 + 四类结局可区分） |
+| `GET /runs/{runId}` → `active` | `getTurnStatus(turnId)` | **已实现**（`waitForWorkbuddyTurn` 结算轮询，超时不视为失败） |
+| CodeBuddy 生命周期 Hook（`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`） | `updateAgentHooks(adapter)`、上下文注入、计划完成回传 | **已实现**（`plugins/rabi-workbuddy-context` + 用户级 settings 安装器；安装已实测，真实任务端到端待验收，见 5.5.3） |
 | SSE `/jobs/events`、`/runs/{runId}/stream` | 流式事件 / `readResult` | 未实现；且实测部分网关上 404，须按能力探测后再声明 |
 | `jobs/{id}/reply`（活会话立即投递 / 退出会话存 pending） | `steer` / `queue` | 未实现（语义与 `/runs` 的差异需实测确定） |
 | `dispatch-context` 的 Agent 配置列表 | 模型/能力目录展示 | 未接；`modelInherited` 语义与 Rabi 的模型选择不同，需先定归属 |
-| `POST /auth/login`、`auth/status` | `auth` 状态与重新登录入口 | 部分实现（`auth.required=true` + 文案；`loggedIn` 未知时**不显示已登录**） |
+| `POST /auth/login`、`auth/status` | `auth` 状态与重新登录入口 | 部分实现（`auth.required=true` + 文案；只声明本地凭据**已配置**，不做假的登录校验） |
 | 会话重命名、删除、归档恢复 | — | 按需再定；Rabi 当前不主张改写宿主任务元数据 |
 | 附件（`payload.attachments`） | 图片/附件入站 | 未实现，等投递通道验收后再评估 |
 
@@ -236,7 +280,7 @@ create 幂等键：`agentProfile + normalizedWorkspace + requestedName`，single
 
 ## 8. 能力等级
 
-起步 **`experimental`**，已经在 `src/shared/agentAdapterCapabilities.ts` 注册，并且必须在扫描结果里写明“未完成端到端桌面可见性验证”。只有 S5 的真实端到端证据齐备后才可升 `verified`。
+**`experimental`**（投递可用，凭据手工配置）。已在 `src/shared/agentAdapterCapabilities.ts` 注册，并声明 `managedTasks.messageProcessingAgent` 与 `managedTasks.hooks`；**不声明**计划秘书与记忆整理（尚未适配），也**不声明** `deliveryReceiptRecovery`（网关只返回一次性受理回执，不保留可读的入站日志）。只有 S5 冷启动验证完成、且桌面配对入口可用后，才可升 `verified`。
 
 ```ts
 // 已落地的声明（只声明已经成立的事实）
@@ -246,11 +290,27 @@ workbuddy: {
   maturity: "experimental",
   transport: { protocol: "http", mode: "session-gateway" },
   host: { name: "WorkBuddy Desktop", required: true },
-  // 投递验收前不声明 managedTasks，避免把“消息处理 Agent / 计划秘书 /
-  // 记忆整理 / Hook”四项能力虚报成可用。
-  capabilities: {}
+  // 只声明已经验证过的两条路径：计划秘书与记忆整理要走 Codex/DSH 线程驱动，
+  // 适配完成前不声明，界面也就不会给出必然失败的操作面板。凭据仍需手工一步，
+  // 故同样不声明回执恢复。
+  capabilities: {
+    managedTasks: {
+      messageProcessingAgent: true,
+      hooks: true
+    }
+  }
 }
 ```
+
+## 8.1 凭据准备（使用前唯一的手工步骤）
+
+在 `<stateRoot>/data/workbuddy-auth.json` 写入（该路径已被 `.gitignore` 覆盖）：
+
+```json
+{ "password": "<WorkBuddy 会话网关密码>" }
+```
+
+未配置时扫描会给出可行动提示，投递直接失败关闭，不会发出未鉴权的请求。若已配置但被拒绝，请更新该文件后重试——RabiRoute 不会重放被 401 拒绝的投递。
 
 ## 9. 代码落点
 
@@ -276,14 +336,21 @@ workbuddy: {
 
 - [x] `src/workbuddySessionStore.ts`（新）— 描述文件 + 任务库 + 规范化 + resolver
 - [x] `src/workbuddySessionStore.test.ts`（新）— 8 个用例，含真实数据形态的回归
-- [x] `src/agentAdapters/workbuddyManagerApi.ts`（新）— `scanWorkbuddyAgentAdapter`
+- [x] `src/workbuddyHttpAuth.ts`（新）— 凭据读取与缓存、回环限制、TTL 与失效
+- [x] `src/workbuddySessionBridge.ts`（新）— 绑定解析、投递前校验、投递、结算轮询
+- [x] `src/workbuddySessionBridge.test.ts`（新）— 12 个用例：报文格式、路由键、401/不可达/无 runId/空正文、超时、绑定与失败关闭
+- [x] `src/agentAdapters/workbuddyManagerApi.ts`（新）— `scanWorkbuddyAgentAdapter`，含凭据配置状态
 - [x] `src/agentAdapters/workbuddyManagerApi.test.ts`（新）— 3 个用例：真实形态列会话、分页与筛选、干净机器上的可行动空结果
-- [x] `src/shared/agentAdapterCapabilities.ts` — 类型与 manifest
+- [x] `src/shared/agentAdapterCapabilities.ts` — 类型与 manifest（声明 `managedTasks.messageProcessingAgent` 与 `hooks`，不声明计划秘书、记忆整理与 `deliveryReceiptRecovery`）
+- [x] `plugins/rabi-workbuddy-context/` — WorkBuddy Hook 插件包（`.codebuddy-plugin/plugin.json` + `hooks/hooks.json` + `scripts/`），与 `rabi-codex-context` 同构
+- [x] `src/agentAdapters/hookInstallation.ts` — WorkBuddy 安装分支（复制到稳定路径 + 合并进 `~/.workbuddy/settings.json`，幂等、保留用户 hooks、拒绝覆盖非法 JSON）
+- [x] `.codebuddy-plugin/marketplace.json` + `scripts/build-agent-hook-packages.mjs` — 插件 marketplace 随包分发
 - [x] `src/agentAdapters/managerApi.ts` — 聚合到 `agents.workbuddy`、选项与 types 导出
-- [x] `src/agentAdapters/builtinAgentAdapters.ts` — 失败关闭的工厂
-- [ ] `src/workbuddyHttpAuth.ts`（新）— 凭据获取与缓存：等 S0 定下获取路径
-- [ ] `src/workbuddySessionBridge.ts`（新）— 投递与结果读取：等 P0 第 3 条验收
-- [ ] `ribiwebgui/` 卡片与参数面板：投递可用后再加；现在**故意不显示**，避免用户选中一个必然失败的投递端
+- [x] `src/agentAdapters/builtinAgentAdapters.ts` — 接入 `notifyWorkbuddySession`
+- [x] `src/manager/messageProcessingDeliveryTarget.ts`、`src/forwarding.ts` — 主人格投递目标支持 `workbuddy`
+- [x] `src/shared/gatewayConfigModel.ts`、`src/config.ts` — 绑定字段、规范化与回环校验
+- [x] `src/shared/agentInstance.ts` — 实例绑定白名单补齐 `workbuddy`
+- [x] `ribiwebgui/` — Agent 卡片、任务下拉（带在线状态）、工作目录与网关地址字段
 - [x] `README.md`、`docs/README.md`、`docs/current-capabilities.md`、`版本更新日志.md` 的本轮口径同步
 
 
@@ -291,13 +358,13 @@ workbuddy: {
 
 | 阶段 | 内容 | 退出条件（必须留证据） |
 | --- | --- | --- |
-| **S0 探测** | 用临时脚本回答 5.6 的问题；只读 + 一次无害烟测 | **部分完成**：鉴权模型、会话列表字段、`runs` 报文格式、`conversation.id` 路由键已确认；桌面可见性与凭据获取仍开放 |
-| **S1 最小纵向链路** | 发现一个真实任务 → 投递一条标记消息 → 在**桌面任务里**看到它 | 未通过：烟测消息被接受并执行，但没有进入用户已有任务，30 秒内未产生新的桌面任务 |
-| **S2 同 ID 复投** | 向同一 ID 投第二条消息 | 不新建任务；会话总数不变 |
-| **S3 负例** | owner 缺席、ID 归档、cwd 冲突、active turn、凭据失效 | 全部可行动失败，无 fallback，无第二会话 |
-| **S4 WorkGUI** | 卡片、参数面板、扫描、诊断、动作按钮 | 扫描计数符合 P0 第 6 条；不写脏配置 |
-| **S5 端到端与冷启动** | RabiRoute 停 → WorkBuddy 独立启动；WorkBuddy 停 → Manager 独立启动 | 双向冷启动通过；两次独立退出不互相拖死 |
-| **S6 文档与成熟度** | README、配置、当前能力、中英文同步；必要时升 `verified` | 文档与代码一致；`npm run build` 通过 |
+| **S0 探测** | 用临时脚本回答 5.6 的问题；只读 + 一次无害烟测 | **已完成**：鉴权模型、会话列表字段、`runs` 报文格式、`conversation.id` 路由键、凭据解析顺序全部确认 |
+| **S1 最小纵向链路** | 发现一个真实任务 → 投递一条标记消息 → 在**桌面任务里**看到它 | **已通过**：消息以正式用户回合写入目标 `<sessionId>.jsonl`，由该任务以自身模型执行并回复；独立进程（无环境变量）复现成功 |
+| **S2 同 ID 复投** | 向同一 ID 投第二条消息 | **已通过**：两次投递写入同一会话文件，任务总数 18 → 18 不变 |
+| **S3 负例** | owner 缺席、ID 归档、cwd 冲突、凭据失效 | 单测覆盖（不可达 / 401 / 无 runId / 空正文 / owner 缺席 / 无绑定）；尚未在真实网关上逐项制造 |
+| **S4 WorkGUI** | 卡片、参数面板、扫描、诊断、动作按钮 | 卡片与参数面板已落地；扫描计数符合 P0 第 6 条；不写脏配置 |
+| **S5 端到端与冷启动** | RabiRoute 停 → WorkBuddy 独立启动；WorkBuddy 停 → Manager 独立启动 | 未做：需在真实 Manager 进程上验证冷启动与重启后重新发现 |
+| **S6 文档与成熟度** | README、配置、当前能力、中英文同步；必要时升 `verified` | 文档与代码一致；构建通过。升 `verified` 的前置是 S5 完成且桌面配对入口可用 |
 
 任何阶段发现需要“第二条执行路径”“写用户级配置”或“只能证明记录可读”，立即停止并按停止条件回到设计门。
 

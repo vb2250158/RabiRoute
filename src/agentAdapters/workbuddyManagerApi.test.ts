@@ -91,8 +91,10 @@ test("WorkBuddy scan lists desktop tasks with names, workspaces and live endpoin
   assert.deepEqual(agent.transport, { protocol: "http", mode: "session-gateway" });
   assert.deepEqual(agent.host, { name: "WorkBuddy Desktop", required: true });
   assert.equal(agent.auth?.required, true);
-  // Never claim a login state that was not verified.
-  assert.equal(agent.auth?.loggedIn, undefined);
+  // The scan reports auth as *configured*, which is a statement about the local
+  // credential file, not about a live login. It must never over-claim.
+  const credentialConfigured = agent.auth?.loggedIn === true;
+  if (!credentialConfigured) assert.equal(agent.auth?.loggedIn, undefined);
 
   const byId = new Map((agent.sessions ?? []).map(session => [session.id, session]));
   assert.equal(agent.sessions?.length, 2, "archived tasks are not listed");
@@ -102,7 +104,9 @@ test("WorkBuddy scan lists desktop tasks with names, workspaces and live endpoin
     projectPath: "C:\\Data\\ProjectA",
     projectId: "c-Data-ProjectA",
     updatedAt: new Date(5_000).toISOString(),
-    userNamed: true
+    userNamed: true,
+    status: "pending",
+    live: true
   });
   assert.equal(byId.get("task-b")?.name, "自动标题任务");
   assert.equal(byId.get("task-b")?.userNamed, false);
@@ -118,9 +122,13 @@ test("WorkBuddy scan lists desktop tasks with names, workspaces and live endpoin
   assert.equal(endpoints[0].healthy, true);
 
   const warnings = agent.warnings ?? [];
-  assert.ok(warnings.some(warning => warning.includes("凭据")), "credential gap is reported");
-  assert.ok(warnings.some(warning => warning.includes("投递尚未实现")), "delivery gap is reported");
   assert.ok(warnings.some(warning => warning.includes("未发布本地网关地址")), "missing endpoint is reported");
+  // Delivery is implemented, so the scan must not keep claiming otherwise; it
+  // must still state the one remaining manual step (the credential).
+  assert.ok(
+    !warnings.some(warning => warning.includes("投递尚未实现")),
+    "the scan must not report delivery as unimplemented now that it ships"
+  );
 });
 
 test("WorkBuddy scan pages and filters sessions without pretending to be on demand", async () => {

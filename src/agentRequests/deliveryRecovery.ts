@@ -4,6 +4,7 @@ import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import { AgentRequestStore, agentDeliveryPromptHash, type AgentCommunicationPreparation } from "./store.js";
 import { readAgentResponseContent } from "./responseContent.js";
 import { currentEnvelopeDeliveryId, withoutLegacyTransportSuffix, deliveryUserMessagesFromRollout } from "../shared/deliveryIdentity.js";
+import { agentAdapterSupportsReceiptRecovery } from "../shared/agentAdapterCapabilities.js";
 export { deliveryUserMessagesFromRollout } from "../shared/deliveryIdentity.js";
 
 export function recoverAgentResponseDelivery(
@@ -21,8 +22,14 @@ export function recoverAgentResponseDelivery(
   if (original.status === "responded" && original.response?.deliveryId === deliveryId) {
     return { ...communication, status: "already_recorded" };
   }
-  if (original.status !== "awaiting_response" || original.source.agentAdapter !== "codex"
-    || original.target.agentAdapter !== "codex") return { ...communication, status: "not_recoverable" };
+  if (original.status !== "awaiting_response") return { ...communication, status: "not_recoverable" };
+  // Recovery replays evidence out of the Codex Desktop rollout files. An adapter
+  // whose transport exposes no equivalent log cannot prove delivery, so it reports
+  // a distinct reason instead of the generic "not_recoverable" dead end.
+  if (!agentAdapterSupportsReceiptRecovery(original.source.agentAdapter)
+    || !agentAdapterSupportsReceiptRecovery(original.target.agentAdapter)) {
+    return { ...communication, status: "adapter_has_no_receipt_log" };
+  }
   if (followup && (followup.status === "cancelled"
     || followup.source.threadId !== original.target.threadId
     || followup.target.threadId !== original.source.threadId

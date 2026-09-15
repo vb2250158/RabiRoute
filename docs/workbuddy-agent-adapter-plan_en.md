@@ -6,7 +6,7 @@ English | <a href="./workbuddy-agent-adapter-plan.md">简体中文</a>
 
 # WorkBuddy as an Agent Endpoint
 
-> Status: **designed; the discovery layer is implemented, delivery is not**. The verified facts come from probing a local WorkBuddy 5.5.6 installation (read-only plus one harmless smoke message). Session discovery, task-database reading and the standard resolver have landed and pass automated tests; delivery and credential acquisition are still unverified, so `maturity` stays `experimental` and must not be raised to `verified`.
+> Status: **implemented; the delivery path is verified end to end, credential setup is still one manual step**. The verified facts come from probing and testing a local WorkBuddy 5.5.6 installation. Session discovery, task-database reading, the standard resolver, credential reading and the delivery bridge have all landed and pass automated tests. Delivery was verified from a separate process with no `CODEBUDDY_*` environment variable: the message enters the bound task's conversation area, is executed by that same task owner, and same-id redelivery does not create a new task. Because the credential still has to be typed into a local file by hand and the desktop exposes no pairing handoff yet, `maturity` stays `experimental` and must not be raised to `verified`.
 >
 > Prerequisites: this plan follows [Standard Agent Endpoint Requirements](agent-adapter-standard-requirements.md) and is executed under `skills/create-rabiroute-agent-adapter/SKILL.md` and its [owner-first design gate](../skills/create-rabiroute-agent-adapter/references/owner-first-design-gate.md).
 
@@ -171,26 +171,70 @@ Requiring credentials for HTTP-based agent endpoints is already established in t
 
 Explicitly rejected alternative: setting WorkBuddy's `gateway.auth` to `none` to skip authentication. That is a security downgrade (any process on the machine could drive the session) and a host-configuration write, which RabiRoute must never perform; it is available only as a last resort if the user personally accepts the risk.
 
-### 5.5 Implemented in this change
+### 5.5 Verified delivery and redelivery (this test run)
+
+After delivering with the bound real `sessionId` as `source.conversation.id`, the target's `~/.workbuddy/projects/<project-slug>/<sessionId>.jsonl` shows:
+
+- A `type: "message" / role: "user"` record whose `parentId` points at the session's own previous assistant message and whose body matches the delivered text verbatim. It is a **genuine user turn**, not a side-channel job.
+- An immediately following `role: "assistant" / status: "completed"` reply whose `providerData.model` is that session's own model (observed: `deepseek-v4.1-flash`), executed by the task's Agent Runtime.
+- Two consecutive deliveries wrote to the **same** `<sessionId>.jsonl`, and the `sessions` table row count stayed unchanged (18 → 18), confirming that same-id redelivery not creating a new task is native protocol behaviour.
+
+Reproduced from a separate process (critically, one **without** `CODEBUDDY_GATEWAY_PASSWORD`): after unsetting the variable, the gateway password was read from the local credential file alone, a live session process was discovered dynamically, delivery returned `202`, the task count stayed the same, and the message appeared in the target task. This proves neither the credential path nor the delivery path depends on a session process's environment.
+
+The earlier "not proven" item was a **misdiagnosis**: it treated "a new task row appeared" as the success signal, but delivering into an existing task by ID is precisely why no new row should appear.
+
+### 5.6 Credential acquisition (settled: local ignored file)
+
+The desktop injects `CODEBUDDY_GATEWAY_PASSWORD` into every session process; RabiRoute Manager is a separate process and cannot read another process's environment. Implemented resolution order:
+
+1. `RABI_WORKBUDDY_GATEWAY_PASSWORD` process environment (tests and wrapper scripts).
+2. `{"password":"..."}` in `<state>/data/workbuddy-auth.json`, the same location and shape as `data/dsh-auth.json`, already covered by `.gitignore`.
+
+When neither exists, delivery fails closed: it never sends an unauthenticated request and never replays a delivery rejected with 401. The file only has to be prepared once before the first delivery; after a password rotation the module re-reads on a 5-minute TTL or the first 401.
+
+### 5.7 Implemented in this change
 
 Landed and tested:
 
 - `src/workbuddySessionStore.ts`: session descriptor reading (the `prewarm` pool's named pipe is metadata only), task-database reading, workspace normalization, and the standard resolver. `deliverable` requires all four of: process alive, heartbeat fresh, gateway address published, and kind not `prewarm`/`teammate`.
-- `src/agentAdapters/workbuddyManagerApi.ts`: Manager-side scan/status (`installed`, `auth`, `endpoints`, `projects`, paginated `sessions`, `warnings`).
-- `workbuddy` is registered in `agentAdapterTypes` and the manifest with `maturity: experimental`, `transport: http/session-gateway`, `host: WorkBuddy Desktop (required)`, and deliberately **without** `managedTasks` so no capability is overclaimed before delivery is verified.
-- Delivery fails closed: the `workbuddy` factory in `builtinAgentAdapters.ts` throws "delivery not implemented" from `deliver`, so no second execution path exists.
-- WebGUI intentionally has **no card** yet: letting users pick a handler whose delivery is guaranteed to fail is worse than not showing it.
+- `src/workbuddyHttpAuth.ts`: gateway credential reading and caching. Ordered multi-source resolution (environment → local ignored file); loopback-only; the credential stays in memory and a local file, never the repository or logs; 5-minute TTL plus immediate invalidation on 401.
+- `src/workbuddySessionBridge.ts`: the **single real message path**. Binding read, pre-delivery owner/workspace revalidation, `POST /api/v1/runs` delivery, and `GET /runs/{runId}` settlement polling. Four outcomes are distinguishable: `unreachable` (safe to retry), `rejected` (not applied), `unauthorized` (not applied, never replayed), and `unknown` (may have applied — check the receipt first).
+- `src/agentAdapters/workbuddyManagerApi.ts`: Manager-side scan/status (`installed`, `auth`, `endpoints`, `projects`, paginated `sessions`, `warnings`), including whether the local credential is configured.
+- `workbuddy` is registered in `agentAdapterTypes` and the manifest with `maturity: experimental`, `transport: http/session-gateway`, `host: WorkBuddy Desktop (required)`, and declares `managedTasks.messageProcessingAgent` (delivery works) plus `managedTasks.hooks` (lifecycle hooks work). It does **not** declare plan assistants or memory consolidation — those paths go through the Codex/DSH thread driver — nor `deliveryReceiptRecovery`: the gateway returns a one-shot acceptance receipt and keeps no readable inbound log.
+- Route binding mirrors DSH: `adapterConfig.json` stores only `workbuddySessionId` / `workbuddySessionName` / `workbuddyCwd` / `workbuddyEndpoint` (the last for display and fallback only — delivery always prefers the live address from the session descriptor). The credential is never written into route config.
+- WebGUI: a WorkBuddy card in the agent list, a task dropdown with liveness, and workspace plus optional gateway-address fields.
 
-### 5.6 Open items and blockers
 
-1. **Desktop visibility** (blocking): prove that a `POST /api/v1/runs` message lands in the conversation area of an existing user task and runs under the same owner. If it cannot be proven, maturity stays `experimental` and the gap must be documented.
-2. **Credential acquisition**: RabiRoute Manager is a separate process and cannot read the session process's `CODEBUDDY_GATEWAY_PASSWORD`. Candidates: a user-recorded password from the desktop's remote-control/pairing entry, an explicit user-scoped `gateway.password` setting, or a minimal host-side handoff. No delivery code until this is settled.
-3. **Credential rotation**: what triggers `regeneratePassword()` and how often, which decides the in-memory cache invalidation policy.
-4. **Steer / queueing**: whether delivery during an active turn queues, steers, or reports busy. Two deliveries to one session must not create a second task.
+### Hook integration (this delivery)
+
+The WorkBuddy CLI core (CodeBuddy Code) exposes the same lifecycle-hook family as Codex: the same event names (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`), the same `matcher` + `hooks[]` JSON shape, the same input contract (`session_id` / `transcript_path` / `cwd` / `hook_event_name` / `tool_name` / `tool_input`) and the same `hookSpecificOutput.additionalContext` output. The plugin declaration also lives in the plugin root's `hooks/hooks.json`; only the plugin-root variable is `${CODEBUDDY_PLUGIN_ROOT}` and the manifest directory is `.codebuddy-plugin/`.
+
+**Confirmed by measurement** (local WorkBuddy 5.5.6 / CLI 2.137.1): after writing `hooks` into `~/.workbuddy/settings.json`, a headless session really did fire and execute the hook script, with `session_id`, `cwd` and `hook_event_name` present in the input JSON, and `CODEBUDDY_CONFIG_DIR` resolving to `~/.workbuddy`. The user-level settings file is therefore the reliable installation point on this machine. One contract difference is worth remembering: CodeBuddy honours `matcher` **only on `PreToolUse` / `PostToolUse`**; attaching a matcher to a lifecycle event makes that hook silently never fire.
+
+**Implementation choice**: `plugins/rabi-workbuddy-context` is a plugin package isomorphic to `rabi-codex-context` (with `hooks/hooks.json` as the single declaration source), but installation does **not** go through the plugin CLI:
+
+- A `codebuddy plugin` subcommand measured over ninety seconds per invocation (`--version` is fast, so the cost is the subcommand's own loading and checks), which would make the "update hooks" button an unacceptable wait;
+- The CLI executable lives inside the WorkBuddy install directory (`resources/app.asar.unpacked/cli/bin/codebuddy`) and moves with every desktop upgrade, so it must not be written into long-lived configuration;
+- The Manager is a separate process whose config-directory resolution when calling the CLI depends on environment variables.
+
+So instead, `updateAgentHooks(rootDir, "workbuddy")` copies the packaged scripts to the stable path `<LOCALAPPDATA>\RabiRoute\agent-hooks\rabi-workbuddy-context\`, reads `hooks/hooks.json`, substitutes `process.env.CODEBUDDY_PLUGIN_ROOT` with that absolute path, and **merges** the result into `hooks` in `~/.workbuddy/settings.json`.
+
+Merge semantics: only entries carrying the `rabi-workbuddy-hook.mjs` fingerprint are replaced; hooks the user wrote and every other settings key survive untouched; re-running is idempotent; a settings file that is not valid JSON is refused rather than overwritten. The plugin package still ships with the release, so a user who prefers `/plugin` management can run `codebuddy plugin marketplace add <install>/dist/agent-hooks` and install from there — both paths share one `hooks/hooks.json`.
+
+**Difference from Codex/DSH**: those two install through their own plugin managers and let the plugin system inject the plugin root; WorkBuddy is configured directly in the user settings file by RabiRoute. The capability is equivalent (same five events, same context injection and completion reporting); only the installation vehicle differs, and it buys freedom from CLI startup cost and path coupling.
+
+**Not yet verified**: hook end-to-end validation on a real interactive task has not run (already-open sessions must restart before they load the new configuration), so the Hook row in the section 11 acceptance matrix is still marked as pending.
+
+### 5.8 Open items and blockers
+
+1. **Desktop visibility** (**resolved**, see 5.5): delivery enters an existing user task's conversation area and runs under the same owner with that session's own model; same-id redelivery creates no new task.
+2. **Credential acquisition** (**settled, still one manual step**): RabiRoute Manager is a separate process and cannot read the session process's `CODEBUDDY_GATEWAY_PASSWORD`, so the operator records it once in `<state>/data/workbuddy-auth.json`. **Still open**: the desktop exposes no remote-control/pairing handoff yet, so this remains manual — the main reason maturity stays `experimental`.
+3. **Credential rotation**: what triggers `regeneratePassword()` and how often is unknown; the current 5-minute TTL plus immediate invalidation on 401 means a rotation surfaces as one actionable failure rather than a misdelivery.
+4. **Steer / queueing**: whether delivery during an active turn queues, steers, or reports busy. Two consecutive deliveries to one session are known not to create a new task and both do execute; the exact queueing semantics are not yet verified item by item.
 5. **Idempotency keys**: none were observed on `/api/v1/runs`; RabiRoute must carry its own dedup ledger if needed.
-6. **Endpoint inconsistency**: `/api/v1/instances` and `/runs/{runId}/stream` returned 404 on the gateways probed here, so the built-in OpenAPI spec includes endpoints that are disabled or mode-specific; integrations must not assume they exist.
+6. **Endpoint inconsistency**: `/api/v1/instances` and `/runs/{runId}/stream` returned 404 on the gateways probed here, so the built-in OpenAPI spec includes endpoints that are disabled or mode-specific; integrations must not assume they exist. Neither endpoint is currently relied upon.
 
-### 5.7 Capability mapping: whatever WorkBuddy has, Rabi must expose
+### 5.9 Capability mapping: whatever WorkBuddy has, Rabi must expose
 
 "Whatever it has, we must have too" concretely means: every semantic the WorkBuddy gateway offers must have a named landing place in the Rabi adapter contract, and anything it cannot offer must be declared unsupported rather than overclaimed.
 
@@ -201,8 +245,9 @@ Landed and tested:
 | `isUserDefinedTitle` separating user names from auto titles | Dropdown name source plus `userNamed` | **Implemented** (`custom_title` preferred; `title` is display/search only) |
 | `jobs/resumable` (`hasMore`/`nextOffset`) | `sessionPage` pagination contract | **Implemented** |
 | Session descriptor plus heartbeat | `health()`, owner-loaded detection | **Implemented** (process alive + fresh heartbeat + published endpoint) |
-| `POST /runs` (gateway entry, `conversation.id` as routing key) | `send(sessionId, delivery)` | **Not implemented** (credential and desktop visibility unverified; fails closed) |
-| `GET /runs/{runId}` → `active` | `getTurnStatus(turnId)` | Not implemented (depends on delivery) |
+| `POST /runs` (gateway entry, `conversation.id` as routing key) | `send(sessionId, delivery)` | **Implemented** (`deliverWorkbuddyMessage`, fails closed, four distinguishable outcomes) |
+| `GET /runs/{runId}` → `active` | `getTurnStatus(turnId)` | **Implemented** (`waitForWorkbuddyTurn` settlement polling; a timeout is not a failure) |
+| CodeBuddy lifecycle hooks (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`) | `updateAgentHooks(adapter)`, context injection, plan completion reporting | **Implemented** (`plugins/rabi-workbuddy-context` plus the user-settings installer; installation is measured, real-task end-to-end is pending — see the hook integration section) |
 | SSE `/jobs/events`, `/runs/{runId}/stream` | Streaming events / `readResult` | Not implemented; 404 on some gateways, so availability must be probed before any claim |
 | `jobs/{id}/reply` (live session delivers immediately, exited session stores a pending reply) | `steer` / `queue` | Not implemented (its semantics versus `/runs` need measuring) |
 | Agent profiles from `dispatch-context` | Model/capability catalog display | Not wired; `modelInherited` does not map onto Rabi's model selection, so ownership must be decided first |
@@ -236,7 +281,7 @@ Create idempotency key: `agentProfile + normalizedWorkspace + requestedName`, si
 
 ## 8. Maturity
 
-Start at **`experimental`**; it is already registered in `src/shared/agentAdapterCapabilities.ts`, and scan output must state that end-to-end desktop visibility is unverified. `verified` only after the S5 evidence exists.
+**`experimental`** (delivery works, the credential is configured by hand). It is registered in `src/shared/agentAdapterCapabilities.ts` and declares `managedTasks.messageProcessingAgent` plus `managedTasks.hooks`; it declares neither plan assistants nor memory consolidation (not adapted yet), nor `deliveryReceiptRecovery` (the gateway returns a one-shot acceptance receipt and keeps no readable inbound log). `verified` only after S5 cold-start verification and once the desktop pairing handoff exists.
 
 ```ts
 // The declaration that landed (claims only what is already true)
@@ -246,11 +291,29 @@ workbuddy: {
   maturity: "experimental",
   transport: { protocol: "http", mode: "session-gateway" },
   host: { name: "WorkBuddy Desktop", required: true },
-  // No managedTasks before delivery is accepted, so "message agent / plan
-  // secretary / memory consolidation / hooks" are not overclaimed.
-  capabilities: {}
+  // Only the two verified paths are declared: plan assistants and memory
+  // consolidation go through the Codex/DSH thread driver, so neither is declared
+  // until adapted — the UI then offers no panel whose call would necessarily
+  // fail. The credential is still a manual step, so receipt recovery is not
+  // declared either.
+  capabilities: {
+    managedTasks: {
+      messageProcessingAgent: true,
+      hooks: true
+    }
+  }
 }
 ```
+
+## 8.1 Credential setup (the one manual step before use)
+
+Write to `<stateRoot>/data/workbuddy-auth.json` (already covered by `.gitignore`):
+
+```json
+{ "password": "<WorkBuddy session gateway password>" }
+```
+
+When it is missing, the scan reports an actionable note and delivery fails closed without ever sending an unauthenticated request. If it is present but rejected, update the file and retry — RabiRoute will not replay a delivery that was rejected with 401.
 
 ## 9. Code entry points
 
@@ -274,14 +337,21 @@ Landed (checked) versus pending:
 
 - [x] `src/workbuddySessionStore.ts` (new) — descriptors + task database + normalization + resolver
 - [x] `src/workbuddySessionStore.test.ts` (new) — 8 cases, including regressions for the real data shapes
-- [x] `src/agentAdapters/workbuddyManagerApi.ts` (new) — `scanWorkbuddyAgentAdapter`
+- [x] `src/workbuddyHttpAuth.ts` (new) — credential reading and caching, loopback restriction, TTL and invalidation
+- [x] `src/workbuddySessionBridge.ts` (new) — binding resolution, pre-delivery validation, delivery, settlement polling
+- [x] `src/workbuddySessionBridge.test.ts` (new) — 12 cases: body shape, routing key, 401/unreachable/no-runId/empty-body, timeout, binding and fail-closed
+- [x] `src/agentAdapters/workbuddyManagerApi.ts` (new) — `scanWorkbuddyAgentAdapter`, including credential-configured status
 - [x] `src/agentAdapters/workbuddyManagerApi.test.ts` (new) — 3 cases: listing sessions in the real shapes, paging and filtering, and an actionable empty result on a clean machine
-- [x] `src/shared/agentAdapterCapabilities.ts` — type and manifest
+- [x] `src/shared/agentAdapterCapabilities.ts` — type and manifest (declares `managedTasks.messageProcessingAgent` and `hooks`, not plan assistants, memory consolidation or `deliveryReceiptRecovery`)
+- [x] `plugins/rabi-workbuddy-context/` — the WorkBuddy hook package (`.codebuddy-plugin/plugin.json` + `hooks/hooks.json` + `scripts/`), isomorphic to `rabi-codex-context`
+- [x] `src/agentAdapters/hookInstallation.ts` — WorkBuddy install branch (copy to a stable path + merge into `~/.workbuddy/settings.json`; idempotent, preserves user hooks, refuses to overwrite invalid JSON)
+- [x] `.codebuddy-plugin/marketplace.json` + `scripts/build-agent-hook-packages.mjs` — the plugin marketplace ships with the release
 - [x] `src/agentAdapters/managerApi.ts` — aggregated into `agents.workbuddy`, options and type exports
-- [x] `src/agentAdapters/builtinAgentAdapters.ts` — fail-closed factory
-- [ ] `src/workbuddyHttpAuth.ts` (new) — credential acquisition and cache: awaiting the S0 decision
-- [ ] `src/workbuddySessionBridge.ts` (new) — delivery and result reading: awaiting P0 #3 acceptance
-- [ ] `ribiwebgui/` card and parameter panel: added only once delivery works; **deliberately hidden** for now so users cannot select a handler that must fail
+- [x] `src/agentAdapters/builtinAgentAdapters.ts` — wired to `notifyWorkbuddySession`
+- [x] `src/manager/messageProcessingDeliveryTarget.ts`, `src/forwarding.ts` — primary-persona delivery target supports `workbuddy`
+- [x] `src/shared/gatewayConfigModel.ts`, `src/config.ts` — binding fields, normalization and loopback validation
+- [x] `src/shared/agentInstance.ts` — instance-binding allowlist now includes `workbuddy`
+- [x] `ribiwebgui/` — agent card, task dropdown with liveness, workspace and gateway-address fields
 - [x] Rounded out this change's wording in `README.md`, `docs/README.md`, `docs/current-capabilities.md`, `版本更新日志.md`
 
 
@@ -289,13 +359,13 @@ Landed (checked) versus pending:
 
 | Stage | Work | Exit criteria (evidence required) |
 | --- | --- | --- |
-| **S0 Probe** | Temporary script answering the 5.6 questions; read-only plus one harmless smoke message | **Partially complete**: auth model, session-list fields, `runs` body shape and the `conversation.id` routing key are confirmed; desktop visibility and credential acquisition remain open |
-| **S1 Minimal vertical slice** | Discover one real task, deliver one marked message, see it **in the desktop task** | Not passed: the smoke message was accepted and executed, but did not enter an existing user task and produced no new desktop task within 30 seconds |
-| **S2 Repeat to same ID** | Deliver a second message to the same ID | No new task; session count unchanged |
-| **S3 Negative cases** | Owner absent, archived ID, cwd conflict, active turn, expired credential | All fail actionably, no fallback, no second session |
-| **S4 WebGUI** | Card, parameter panel, scan, diagnostics, action buttons | Scan counts satisfy P0 #6; dirty config never written |
-| **S5 End-to-end and cold start** | RabiRoute stopped, WorkBuddy cold-starts; WorkBuddy stopped, Manager starts | Both directions pass; each side exits independently |
-| **S6 Docs and maturity** | README, configuration, current capabilities, bilingual sync; raise to `verified` if earned | Docs match code; `npm run build` passes |
+| **S0 Probe** | Temporary script answering the open questions; read-only plus one harmless smoke message | **Complete**: auth model, session-list fields, `runs` body shape, the `conversation.id` routing key and the credential resolution order are all confirmed |
+| **S1 Minimal vertical slice** | Discover one real task, deliver one marked message, see it **in the desktop task** | **Passed**: the message is written into the target `<sessionId>.jsonl` as a genuine user turn, executed by that task with its own model, and reproduced from a separate process without the environment variable |
+| **S2 Repeat to same ID** | Deliver a second message to the same ID | **Passed**: both deliveries land in the same session file; task count stays 18 → 18 |
+| **S3 Negative cases** | Owner absent, archived ID, cwd conflict, expired credential | Covered by unit tests (unreachable / 401 / no runId / empty body / owner absent / no binding); not yet staged one by one against a real gateway |
+| **S4 WebGUI** | Card, parameter panel, scan, diagnostics, action buttons | Card and parameter panel landed; scan counts satisfy P0 #6; dirty config never written |
+| **S5 End-to-end and cold start** | RabiRoute stopped, WorkBuddy cold-starts; WorkBuddy stopped, Manager starts | Not done: needs verification on a real Manager process, including rediscovery after a restart |
+| **S6 Docs and maturity** | README, configuration, current capabilities, bilingual sync; raise to `verified` if earned | Docs match code; the build passes. Raising to `verified` requires S5 plus a working desktop pairing handoff |
 
 If any stage requires a second execution path, a user-level configuration write, or evidence that only proves a readable record, stop and return to the design gate.
 

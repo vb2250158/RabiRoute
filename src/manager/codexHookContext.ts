@@ -3,7 +3,7 @@ import { planCanAutoAdvance } from "../planState.js";
 import fs from "node:fs";
 import path from "node:path";
 import { rabiContextManager, type RabiContextTriggerKind } from "../context/rabiContextManager.js";
-import { listPlans, type PlanItem } from "../roleKnowledge.js";
+import { ensurePlanStorageLayout, listPlans, RoleKnowledgeCacheUnavailableError, type PlanItem } from "../roleKnowledge.js";
 import { ensurePersonaPlanWorkflow, planStatusDefinition } from "../personaPlanWorkflow.js";
 import { buildRoleKnowledgeContextView } from "../routing/roleKnowledgeContext.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
@@ -17,6 +17,9 @@ import { decidePlanFollowup, type PlanFollowupReceipt } from "./planFollowup.js"
 const STORE_VERSION = 8;
 const MAX_CONTEXT_CHARS = 6200;
 const CONTROL_PATTERN = /\[rabi:(use|bind)\s+([^\]\r\n]{1,80})\]|\[rabi:(status|refresh|off)\]/i;
+
+/** Role dirs already reported as having no published plan catalog, so a cold role logs once. */
+const coldPlanCatalogRoles = new Set<string>();
 
 export type CodexHookEventName = "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop";
 
@@ -391,12 +394,38 @@ export class CodexHookContextService {
 
   listRoles(): string[] {
     const root = path.resolve(this.rolesRoot());
+    if (!fs.existsSync(root)) return [];
     const entries = fs.readdirSync(root, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isDirectory() && Boolean(sanitizeRoleId(entry.name)))
       .filter((entry) => fs.existsSync(path.join(root, entry.name, "persona.md")))
       .map((entry) => entry.name)
       .sort((left, right) => left.localeCompare(right));
+  }
+
+  /**
+   * A role without a published plan catalog is a legitimate cold state, not a
+   * failure: one unprepared role must never abort the whole role traversal.
+   * The storage layout is created on demand so the first real write lands in
+   * the canonical buckets, and the cold state is reported once per role so a
+   * missing catalog stays diagnosable without failing a normal delivery.
+   */
+  private listPlansOrCold(roleDir: string): PlanItem[] {
+    try {
+      return listPlans(roleDir);
+    } catch (error) {
+      if (!(error instanceof RoleKnowledgeCacheUnavailableError)) throw error;
+      try {
+        ensurePlanStorageLayout(roleDir);
+      } catch {
+        // A read-only or unresolved role dir must still degrade to an empty catalog.
+      }
+      if (!coldPlanCatalogRoles.has(roleDir)) {
+        coldPlanCatalogRoles.add(roleDir);
+        console.warn(`[rabi] role plan catalog is cold; skipping this role: ${roleDir}`);
+      }
+      return [];
+    }
   }
 
   listBindings(): CodexHookSessionBinding[] {
@@ -495,7 +524,7 @@ export class CodexHookContextService {
       return {
         action,
         binding: null,
-        additionalContext: "[Rabi Codex]\nRabi PC 已解除当前 Codex 会话的人格绑定。后续不得继续沿用此前注入的人格、计划、记忆或角色技能。"
+        additionalContext: "[Rabi]\nRabi PC 已解除当前 Agent 会话的人格绑定。后续不得继续沿用此前注入的人格、计划、记忆或角色技能。"
       };
     }
 
@@ -509,8 +538,8 @@ export class CodexHookContextService {
         action,
         binding,
         additionalContext: binding
-          ? `[Rabi Codex 绑定状态]\n当前会话人格：${binding.roleId}\n绑定由 Rabi PC Manager 管理。`
-          : "[Rabi Codex 绑定状态]\n当前会话没有绑定 Rabi 人格。"
+          ? `[Rabi 绑定状态]\n当前会话人格：${binding.roleId}\n绑定由 Rabi PC Manager 管理。`
+          : "[Rabi 绑定状态]\n当前会话没有绑定 Rabi 人格。"
       };
     }
 
@@ -519,7 +548,7 @@ export class CodexHookContextService {
         return {
           action,
           binding: null,
-          additionalContext: "[Rabi Codex]\n当前会话没有绑定 Rabi 人格，无法刷新。"
+          additionalContext: "[Rabi]\n当前会话没有绑定 Rabi 人格，无法刷新。"
         };
       }
       this.requireRole(binding.roleId);
@@ -575,7 +604,7 @@ export class CodexHookContextService {
     const blocks: string[] = [];
 
     if (includeBase) {
-      blocks.push(section("Rabi Codex 会话人格", [
+      blocks.push(section("Rabi 会话人格", [
         "当前 Codex 会话已由 Rabi PC Manager 显式绑定人格。绑定只对当前 session_id 生效。",
         `角色 ID：${role.roleId}`,
         "人格、计划、记忆、技能、召回、viewedAt、归档与整理均由 Rabi PC 管理；Codex Hook 只是触发器和注入器。"
@@ -761,9 +790,8 @@ export class CodexHookContextService {
     if (files.length === 0) return { result: { status: "ignored", reason: "no_confirmed_project_file_change", turnId }, message: "" };
     const matches = this.listRoles().flatMap((roleId) => {
       const role = this.requireRole(roleId);
-      return listPlans(role.roleDir)
-        .filter((plan) => plan.taskBinding?.agentType === "codex"
-          && plan.taskBinding.sessionId === sessionId
+      return this.listPlansOrCold(role.roleDir)
+        .filter((plan) => plan.taskBinding?.sessionId === sessionId
           && changedWorkspaces.includes(normalizedWorkspace(plan.taskBinding.workspace)))
         .map((plan) => ({ ...role, plan }));
     });
@@ -789,8 +817,8 @@ export class CodexHookContextService {
   private taskBindingWorkspaces(sessionId: string): string[] {
     return [...new Set(this.listRoles().flatMap((roleId) => {
       const role = this.requireRole(roleId);
-      return listPlans(role.roleDir)
-        .filter((plan) => plan.taskBinding?.agentType === "codex" && plan.taskBinding.sessionId === sessionId)
+      return this.listPlansOrCold(role.roleDir)
+        .filter((plan) => plan.taskBinding?.sessionId === sessionId)
         .map((plan) => String(plan.taskBinding?.workspace || "").trim())
         .filter(Boolean);
     }))];
@@ -816,8 +844,8 @@ export class CodexHookContextService {
     if (request.stopHookActive || !request.turnId) return undefined;
     const matches = this.listRoles().flatMap(roleId => {
       const role = this.requireRole(roleId);
-      return listPlans(role.roleDir).filter(plan => plan.taskBinding?.agentType === "codex"
-        && plan.taskBinding.sessionId === request.sessionId && plan.archiveStatus !== "已归档")
+      return this.listPlansOrCold(role.roleDir).filter(plan => plan.taskBinding?.sessionId === request.sessionId
+        && plan.archiveStatus !== "已归档")
         .map(plan => ({ ...role, plan }));
     });
     if (matches.length !== 1) return undefined;
@@ -841,13 +869,14 @@ export class CodexHookContextService {
     const binding = this.getBinding(sessionId);
     const matches = this.listRoles().flatMap((roleId) => {
       const role = this.requireRole(roleId);
+      const plans = this.listPlansOrCold(role.roleDir);
+      if (plans.length === 0) return [];
       const workflow = ensurePersonaPlanWorkflow(role.roleDir).workflow;
-      return listPlans(role.roleDir)
+      return plans
         .filter((plan) => (
           planCanAutoAdvance(plan, workflow)
           && (planStatusDefinition(workflow, plan.status)?.views.includes("current") === true)
-          && plan.taskBinding?.agentType === "codex"
-          && plan.taskBinding.sessionId === sessionId
+          && plan.taskBinding?.sessionId === sessionId
           && plan.taskBinding.completionHook?.enabled === true
         ))
         .map((plan) => ({ ...role, plan }));

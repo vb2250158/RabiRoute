@@ -7,8 +7,8 @@
   "priority": "medium",
   "kind": "architecture",
   "currentStepId": "validate-real-devices",
-  "currentStep": "wearable、手机与可选眼镜继续沿用统一 adapter / routing / Outbox 边界；个人微信现在使用受保护会话存储、显式二维码请求和保守失效判定；飞书已作为独立企业应用消息端接入签名/加密回调、event_id 持久去重、chat_id 上下文和来源 chat 文本回传。当前用真实设备、个人微信账号和飞书应用凭据验证这些实验入口的长期运行边界。",
-  "nextAction": "完成 Rokid 眼镜物理交互、穿戴健康长时间采样、个人微信真实账号长期在线与风险验收，并用真实飞书企业应用完成 HTTPS 事件订阅、签名/加密入站和来源 chat 回传联调；全部保留独立 adapter、routing、context 与 Outbox policy 边界。",
+  "currentStep": "消息端与处理端适配器已解耦：消息端按 napcat、wecom、weixin、remoteAgent、heartbeat、webhook、rabilink 等入口拆分，处理端 adapter 独立负责投递并各自声明能力。处理端现在有 Codex Desktop、DSH、Copilot CLI、AstrBot、WorkBuddy 和人工接力的 Marvis：Codex 走 Desktop IPC，DSH 走独立 apiproxy，WorkBuddy 用每个会话进程自带的本地网关提供 API，投递固定完整会话 ID 因而进入用户已有任务而不新建任务。新端接入必须先过 owner 关卡——谁启动、谁是权威状态、RabiRoute 只读还是可写、失败如何关闭——再声明能力，且只声明已验证的项。当前用真实设备、个人微信账号、飞书应用凭据和真实 WorkBuddy 任务验证这些实验入口的长期运行边界。",
+  "nextAction": "完成 Rokid 眼镜物理交互、穿戴健康长时间采样、个人微信真实账号长期在线与风险验收，用真实飞书企业应用完成 HTTPS 事件订阅、签名/加密入站和来源 chat 回传联调，并补上 WorkBuddy 桌面配对入口与冷启动验收；全部保留独立 adapter、routing、context 与 Outbox policy 边界。新增消息平台时优先扩展 src/adapters/、src/routing/ 和 src/outbox.ts，新增处理端时优先扩展 src/agentAdapters/ 与统一能力清单。",
   "steps": [
     { "id": "split-message-adapters", "title": "拆分消息端 adapter 与处理端 adapter", "status": "已完成" },
     { "id": "stabilize-codex-owner", "title": "收敛 Codex Desktop 唯一 owner 与稳定任务 ID", "status": "已完成" },
@@ -17,10 +17,11 @@
     { "id": "add-personal-weixin", "title": "按独立消息端边界接入个人微信文本、入站图片和受控图片/文件回传", "status": "已完成" },
     { "id": "protect-personal-weixin-session", "title": "保护个人微信会话并把二维码生成收敛为显式用户动作", "status": "已完成" },
     { "id": "add-feishu", "title": "按独立消息端边界接入飞书企业应用事件和来源 chat 回传", "status": "已完成" },
-    { "id": "validate-real-devices", "title": "验证眼镜、穿戴健康、个人微信和飞书的真实环境长期运行", "status": "进行中", "blockedBy": "仍缺 Rokid 眼镜物理验收、更长时间的真实健康样本、个人微信真实账号长期在线，以及飞书真实应用凭据和事件订阅证据" },
+    { "id": "add-workbuddy-agent-endpoint", "title": "按统一处理端边界接入 WorkBuddy 任务投递与生命周期 Hook", "status": "已完成" },
+    { "id": "validate-real-devices", "title": "验证眼镜、穿戴健康、个人微信、飞书和 WorkBuddy 的真实环境长期运行", "status": "进行中", "blockedBy": "仍缺 Rokid 眼镜物理验收、更长时间的真实健康样本、个人微信真实账号长期在线、飞书真实应用凭据和事件订阅证据，以及 WorkBuddy 桌面配对入口与冷启动验收" },
     { "id": "extend-next-platform", "title": "按统一边界接入下一种消息平台或处理端", "status": "未开始" }
   ],
-  "waitingFor": "Rokid 眼镜真机、更长时间的健康样本、可控的个人微信真实账号，以及飞书企业应用凭据与 HTTPS 事件订阅验收",
+  "waitingFor": "Rokid 眼镜真机、更长时间的健康样本、可控的个人微信真实账号、飞书企业应用凭据与 HTTPS 事件订阅验收，以及 WorkBuddy 桌面配对入口和冷启动验收",
   "project": {
     "name": "RabiRoute",
     "path": "./"
@@ -33,6 +34,6 @@
   "completedAt": "",
   "archivedAt": "",
   "createdAt": "2026-06-10T00:00:00+08:00",
-  "updatedAt": "2026-07-31T14:30:00+08:00",
-  "keywords": ["message adapter", "agent adapter", "Desktop IPC", "task owner", "speechControl", "RabiLink", "手机消息端", "wearable", "健康告警", "weixin", "个人微信", "DPAPI", "AES-256-GCM", "显式二维码", "feishu", "飞书", "event_id", "chat_id", "签名校验", "Encrypt Key", "outbox", "解耦", "真机验收"]
+  "updatedAt": "2026-09-15T00:00:00+08:00",
+  "keywords": ["message adapter", "agent adapter", "Desktop IPC", "task owner", "speechControl", "RabiLink", "手机消息端", "wearable", "健康告警", "weixin", "个人微信", "DPAPI", "AES-256-GCM", "显式二维码", "feishu", "飞书", "event_id", "chat_id", "签名校验", "Encrypt Key", "WorkBuddy", "会话网关", "source.conversation.id", "生命周期 Hook", "outbox", "解耦", "能力声明", "真机验收"]
 }

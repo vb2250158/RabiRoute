@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.3" src="https://img.shields.io/badge/version-0.3.3-3178c6">
+  <img alt="Current version: 0.3.4" src="https://img.shields.io/badge/version-0.3.4-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.3.3`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.4`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -85,12 +85,19 @@ The repository version is `0.3.3`. The table lists behavior backed by current co
 | Plans, memories, and message processing | Verified | Page through plans and memories, submit plan feedback, assign message-processing work, and preserve state and receipts. |
 | Windows desktop | Core path implemented | Host owns one application generation containing Manager and the tray/task-window surface; use selected-text actions, screenshots, and annotations. Some system interactions still need Windows device acceptance. |
 | DSH | Experimental | Bind an explicit API address, workspace, and session as the primary or an auxiliary handler. |
+| WorkBuddy | Experimental | Deliver a message into a WorkBuddy task the user already owns, using that task's own model, tools and approvals. Delivery needs a one-time local gateway credential; without it, delivery fails closed. Discovery, binding, and lifecycle hooks are implemented; the desktop exposes no pairing handoff yet and cold start is unverified. |
 | RabiSpeech / RabiLink / mobile and wearables | Experimental | Connect speech, phones, glasses, Relay, and health-data paths, with separate acceptance for each device and network environment. |
 | LAN Rabi Agent | Experimental | Run a headless worker on another computer and deliver Manager tasks to a configured Codex Desktop owner on that machine. Real multi-computer acceptance remains pending. |
 
 See [Current capabilities and maturity](docs/current-capabilities_en.md) for complete status, limits, and sources of truth.
 
 ## Recent changes
+
+### 0.3.4: WorkBuddy delivery and hooks, cold-role completion callbacks
+
+- The WorkBuddy Agent endpoint can now deliver: a message goes through the bound task's own session-process local gateway with `source.conversation.id` pinned to the full session ID, so it enters that task's conversation area as a genuine user turn and same-id redelivery creates no new task. The gateway credential is read from a locally ignored file and delivery fails closed without it. WorkBuddy also supports lifecycle hooks on par with Codex and DSH.
+- Capability declarations narrow to what each adapter has actually verified: WorkBuddy declares message processing and hooks, not plan assistants, memory consolidation or receipt recovery.
+- A role that has never written a plan is now a legitimate cold state instead of aborting completion callbacks for every role. See the [version history](版本更新日志_en.md).
 
 ### 0.3.3: private-identifier scrub and repository hygiene
 
@@ -103,7 +110,7 @@ See [Current capabilities and maturity](docs/current-capabilities_en.md) for com
 - The phone app now carries the All-day Recording source: phone, glasses and health devices share one capture coordinator, capture mode is independent from pause, the same durable audio segments serve local playback and later processing, and video audio is derived only after recording stops. Records freeze source, capture ID, persona, processing policy and target PC identity at creation; local-only stays local, transcription-only does not invoke an Agent, and a missing new PC/Relay capability or target identity defers instead of downgrading. The phone app is source-integrated only, with build, deployment, glasses and endurance acceptance tracked separately.
 - Plan state is split into a fixed activation state plus Agent-configurable markers, and pause is a marker only. Legacy data migrates transactionally with task bindings retained, and automatic follow-up skips paused, completed and archived plans.
 - The DSH web session bridge exchanges its cookie from the target DSH launch login URL, clears the cache on HTTP 401 without replaying, and never follows auth or RPC redirects. Mobile message endpoints gained a read-only history query and an audit script; speech records carry an explicit transcribe/Agent processing policy frozen at the record boundary.
-- Experimental: the WorkBuddy Agent endpoint can be discovered but not delivered to yet, and the cross-PC tunnel plus speech server selector remain experimental. See [Current capabilities and maturity](docs/current-capabilities_en.md).
+- Experimental: the WorkBuddy Agent endpoint can deliver messages into a local WorkBuddy task (after a one-time local gateway credential), and the cross-PC tunnel plus speech server selector remain experimental. See [Current capabilities and maturity](docs/current-capabilities_en.md).
 
 ### 0.3.1: media projects, H3 workflow profiles and desktop capture
 

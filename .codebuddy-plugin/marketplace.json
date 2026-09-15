@@ -1,0 +1,15 @@
+{
+  "name": "rabiroute-local",
+  "owner": {
+    "name": "RabiRoute"
+  },
+  "description": "Local RabiRoute hook packages that forward Agent lifecycle events to the Rabi PC Manager.",
+  "plugins": [
+    {
+      "name": "rabi-workbuddy-context",
+      "source": "./plugins/rabi-workbuddy-context",
+      "description": "Inject Rabi PC-managed persona context into WorkBuddy sessions and forward plan-bound turn completions.",
+      "category": "Productivity"
+    }
+  ]
+}

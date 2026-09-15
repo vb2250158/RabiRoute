@@ -57,7 +57,7 @@ test("plan requirement skips unbound tasks and uses the current task title with 
   ];
   const context = completionTaskContextFromPlans("agent-1", plans, "当前任务名");
   assert.equal(context.taskName, "当前任务名");
-  assert.deepEqual(context.plans, [{ id: "plan-1", title: "修复登录窗口" }]);
+  assert.deepEqual(context.plans, [{ id: "plan-1", title: "修复登录窗口" }, { id: "plan-3", title: "DSH 的计划" }], "every adapter bound to the session participates");
   assert.equal(completionTaskContextFromPlans("agent-1", plans).taskName, undefined, "a stored plan label must not impersonate the current task title");
   const calls: string[] = [];
   const service = new AgentCompletionDeliveryService({ rules: () => [{ ...owner, rule: { ...owner.rule, conditions: [...owner.rule.conditions, { type: "bound_plan" }] } }],
@@ -72,18 +72,27 @@ test("plan requirement skips unbound tasks and uses the current task title with 
   assert.deepEqual(calls, ["agent-1", "unbound"]);
 });
 
-test("completion rules cover every session in the project, isolate other projects and DSH, and coalesce repeated targets", async () => {
+test("completion rules cover every session and every managed adapter, isolate other projects, and coalesce repeated targets", async () => {
   const sends: string[] = [];
   const service = new AgentCompletionDeliveryService({ rules: () => [owner, { ...owner, rule: { ...owner.rule, id: "duplicate" } }],
     projectIdentity: async value => value, deliver: async (_, __, id) => { sends.push(id); } });
   assert.equal((await service.handle(event)).length, 1);
   await service.handle({ ...event, sessionId: "agent-2" });
   await service.handle({ ...event, cwd: "/project-other" });
-  await service.handle({ ...event, agentType: "dsh" });
+  assert.equal((await service.handle({ ...event, agentType: "dsh" })).length, 1, "a DSH session drives the same completion deliveries as Codex");
   await service.handle({ ...event, turnId: "" });
   await service.handle({ ...event, lastAssistantMessage: " " });
-  assert.equal(sends.length, 2);
+  assert.equal(sends.length, 3);
   assert.notEqual(sends[0], sends[1]);
+});
+
+test("an unmanaged adapter never triggers completion deliveries", async () => {
+  const sends: string[] = [];
+  const service = new AgentCompletionDeliveryService({ rules: () => [owner],
+    projectIdentity: async value => value, deliver: async (_, __, id) => { sends.push(id); } });
+  assert.deepEqual(await service.handle({ ...event, agentType: "astrbot" }), []);
+  assert.deepEqual(await service.handle({ ...event, agentType: "not-an-adapter" }), []);
+  assert.equal(sends.length, 0);
 });
 
 test("concurrent Stop callbacks share one delivery and retain a stable identity after restart", async () => {

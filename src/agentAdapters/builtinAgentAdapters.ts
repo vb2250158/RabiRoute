@@ -2,6 +2,7 @@ import { notifyCodex } from "../codexRuntime.js";
 import { notifyCopilotCli } from "../copilotCli.js";
 import { notifyMarvis } from "../marvis.js";
 import { notifyDshSession } from "../dshSessionBridge.js";
+import { notifyWorkbuddySession } from "../workbuddySessionBridge.js";
 import { renderRabiDelivery } from "../shared/rabiMessage.js";
 import {
   agentAdapterTypes,
@@ -42,16 +43,10 @@ const factories = Object.freeze({
       await notifyDshSession(renderRabiDelivery(envelope), options?.imagePaths);
     }
   }),
-  // Discovery for WorkBuddy is implemented (src/workbuddySessionStore.ts), but
-  // delivery is not: the gateway credential acquisition path and the
-  // desktop-visibility contract are still open. Fail closed rather than open a
-  // second execution path. See docs/workbuddy-agent-adapter-plan.md.
   workbuddy: (): AgentAdapter => ({
     type: "workbuddy",
-    deliver: async () => {
-      throw new Error(
-        "WorkBuddy 投递尚未实现：网关凭据获取与桌面可见性合同未验收，按设计门要求失败关闭。"
-      );
+    deliver: async (envelope) => {
+      await notifyWorkbuddySession(renderRabiDelivery(envelope));
     }
   })
 }) satisfies Readonly<Record<AgentAdapterType, () => AgentAdapter>>;

@@ -39,6 +39,14 @@ export type AgentScanSession = {
   projectId?: string;
   updatedAt?: string;
   userNamed?: boolean;
+  /** Task status as reported by the host, when the adapter can read one. */
+  status?: string;
+  /**
+   * True when a live session process is currently serving this task, so it can
+   * accept a delivery. False or absent means the UI must not present it as
+   * immediately deliverable.
+   */
+  live?: boolean;
 };
 
 export type AgentSessionPageQuery = {
