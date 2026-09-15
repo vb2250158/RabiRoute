@@ -77,7 +77,7 @@ export function planTaskCompletionAgentText(delivery: PlanTaskCompletionDelivery
     `3. 计划仍可推进时，通过 POST /api/agent/threads 续投原业务任务 ${delivery.sourceSessionId}${boundWorkspace ? `（${boundWorkspace}）` : ""}；填写 messageSource={"type":"agent","agentAdapter":"${sourceAgentAdapter}","sessionId":"当前秘书会话 ID","sessionName":"当前秘书会话名称"}、sourceThreadId=当前秘书会话 ID、sourceAgentType=plan_secretary、responsePolicy=required，并给出可验证的下一步。`,
     "4. 仅把决定、批准、授权、缺少输入或计划最终复核升级给主人格。",
     "5. taskBinding 只指向业务任务；秘书只维护控制面，不执行调查、代码、构建、发布或外部操作。",
-    "6. PangHu 正式 Main 的 Editor 占用、导入、MCP 不可用或共享测试排队不构成全局等待；不得停止 Editor 或取消他人测试，原任务继续实现、静态资源/序列化合同、非 Unity runner、CLI 与收窄 SVN 工作，剩余运行交互转人工或后续验收。",
+    "6. 外部编辑器占用、依赖或工具不可用、共享测试排队都不构成全局等待；不得停止他人进程或取消他人测试，原任务继续实现、资产与序列化合同、非交互 runner、CLI 与范围收窄的工作，剩余运行交互转人工或后续验收。",
     "7. 检查可推进计划均有人管理，空闲业务任务已续投，运行中的任务未重复投递。"
   ].filter(Boolean).join("\n");
 }

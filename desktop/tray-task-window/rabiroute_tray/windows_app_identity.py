@@ -7,8 +7,8 @@ from pathlib import Path
 
 APP_NAME = "RabiRoute"
 APP_DISPLAY_NAME = "RabiRoute"
-APP_ORGANIZATION = "CottonProject"
-APP_USER_MODEL_ID = "CottonProject.RabiRoute.Desktop"
+APP_ORGANIZATION = "RabiRoute"
+APP_USER_MODEL_ID = "RabiRoute.Desktop"
 
 
 def configure_process_app_identity() -> None:

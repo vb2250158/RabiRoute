@@ -179,9 +179,9 @@ test("plan task completion reminder keeps the secretary control-only and continu
   assert.match(text, /原业务任务/);
   assert.match(text, /taskBinding 只指向业务任务/);
   assert.match(text, /不执行调查、代码、构建、发布或外部操作/);
-  assert.match(text, /PangHu 正式 Main 的 Editor 占用/);
-  assert.match(text, /静态资源\/序列化合同、非 Unity runner、CLI/);
-  assert.match(text, /不得停止 Editor 或取消他人测试/);
+  assert.match(text, /外部编辑器占用、依赖或工具不可用/);
+  assert.match(text, /资产与序列化合同、非交互 runner、CLI/);
+  assert.match(text, /不得停止他人进程或取消他人测试/);
   assert.match(text, /可推进计划均有人管理/);
   assert.match(text, /空闲业务任务已续投/);
   assert.match(text, /运行中的任务未重复投递/);

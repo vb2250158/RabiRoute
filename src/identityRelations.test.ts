@@ -320,7 +320,7 @@ test("identity corrections append a new event and replace the current relation s
 
 test("a shared endpoint account can belong to several known people without becoming a false unique identity", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-identity-shared-account-"));
-  for (const [participantId, displayName] of [["participant-liu", "刘云云"], ["participant-zhu", "猪皮糕糕"]] as const) {
+  for (const [participantId, displayName] of [["participant-a", "示例说话人"], ["participant-b", "示例昵称"]] as const) {
     updateIdentityRelation(roleDir, {
       kind: "participant",
       participantId,
@@ -333,12 +333,12 @@ test("a shared endpoint account can belong to several known people without becom
   }
   assert.throws(() => updateIdentityRelation(roleDir, {
     kind: "participant",
-    participantId: "participant-liu",
+    participantId: "participant-a",
     speakingHabits: [{ dimension: "sentence_opening", description: "常从结论开始", evidenceRefs: [] }]
   }), /confirmed-author messageId/);
   updateIdentityRelation(roleDir, {
     kind: "participant",
-    participantId: "participant-liu",
+    participantId: "participant-a",
     speakingHabits: [{
       dimension: "sentence_opening",
       description: "常从结论开始",
@@ -353,15 +353,15 @@ test("a shared endpoint account can belong to several known people without becom
     senderStableId: "shared-qq",
     displayName: "lovegd",
     participantLinks: [
-      { participantId: "participant-liu", status: "candidate", confidence: 0.5, evidenceRefs: [{ note: "公司 QA 共用账号。" }] },
-      { participantId: "participant-zhu", status: "candidate", confidence: 0.5, evidenceRefs: [{ note: "公司 QA 共用账号。" }] }
+      { participantId: "participant-a", status: "candidate", confidence: 0.5, evidenceRefs: [{ note: "公司 QA 共用账号。" }] },
+      { participantId: "participant-b", status: "candidate", confidence: 0.5, evidenceRefs: [{ note: "公司 QA 共用账号。" }] }
     ]
   });
 
   const lookup = { platform: "napcat", endpointIdentityNamespace: "bot:qa", senderStableId: "shared-qq" };
   const context = resolveIdentityRelationContext(roleDir, lookup);
   assert.equal(context?.confirmedParticipant, undefined);
-  assert.deepEqual(context?.possibleParticipants.map(item => item.participant.displayName), ["刘云云", "猪皮糕糕"]);
+  assert.deepEqual(context?.possibleParticipants.map(item => item.participant.displayName), ["示例说话人", "示例昵称"]);
   assert.equal(context?.possibleParticipants[0]?.participant.speakingHabits?.[0]?.dimension, "sentence_opening");
   assert.deepEqual(context?.candidateParticipants, []);
   assert.match(context?.unresolved.join("\n") ?? "", /结合本次对话另行判断/);

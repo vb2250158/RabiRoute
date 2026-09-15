@@ -391,7 +391,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertNotIn("诊断", menu_texts)
 
     def test_collapsed_keyword_summary_reveals_more_as_width_grows(self) -> None:
-        panel = KeywordPanel(["PangHu", "Bug", "工会", "Guild", "编号1187", "messageId:12345"])
+        panel = KeywordPanel(["Example", "Bug", "工会", "Guild", "编号1187", "messageId:12345"])
         narrow_text, narrow_count = panel._summary_for_width(150)
         wide_text, wide_count = panel._summary_for_width(1200)
         self.assertIn(KeywordPanel.OVERFLOW_INDICATOR, narrow_text)
@@ -405,7 +405,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
             "关键词展开测试",
             [("详情", "测试")],
             "plan",
-            ["PangHu", "Bug", "工会", "Guild", "编号1187", "messageId:12345"],
+            ["Example", "Bug", "工会", "Guild", "编号1187", "messageId:12345"],
         )
         card.resize(500, 240)
         card.show()
@@ -417,7 +417,7 @@ class TaskWindowLayoutTest(unittest.TestCase):
         self.assertFalse(card.keywords_panel.summary_line.isVisible())
         self.assertTrue(card.keywords_panel.expanded_panel.isVisible())
         self.assertTrue(card.keywords_panel.expanded_values.isVisible())
-        for keyword in ["PangHu", "Bug", "工会", "Guild", "编号1187", "messageId:12345"]:
+        for keyword in ["Example", "Bug", "工会", "Guild", "编号1187", "messageId:12345"]:
             self.assertIn(keyword, card.keywords_panel.expanded_values.text())
         card.close()
 

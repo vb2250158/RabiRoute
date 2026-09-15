@@ -7,17 +7,17 @@ test("a delivered replacement updates the exact archived Primary Persona binding
   const threadId = "019f0000-0000-7000-8000-000000000110";
   assert.deepEqual(resolveReportedCodexBindingUpdate({
     codexThreadId: previousThreadId,
-    codexCwd: "C:\\Data\\CottonProject\\RabiRoute"
+    codexCwd: "C:\\work\\example"
   }, {
     bindingUpdateRequestedAt: "2026-08-18T02:00:00.000Z",
     bindingPreviousThreadId: previousThreadId,
     bindingThreadId: threadId,
     bindingThreadName: "星海主任务",
-    bindingWorkspace: "c:\\data\\cottonproject\\rabiroute"
+    bindingWorkspace: "c:\\work\\example"
   }), {
     threadId,
     threadName: "星海主任务",
-    workspace: "c:\\data\\cottonproject\\rabiroute"
+    workspace: "c:\\work\\example"
   });
 });
 
@@ -31,6 +31,6 @@ test("a stale or cross-workspace binding update is ignored", () => {
   };
   assert.equal(resolveReportedCodexBindingUpdate({
     codexThreadId: "019f0000-0000-7000-8000-000000000113",
-    codexCwd: "C:\\Data\\CottonProject\\RabiRoute"
+    codexCwd: "C:\\work\\example"
   }, state), null);
 });

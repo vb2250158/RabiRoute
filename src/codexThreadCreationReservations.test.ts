@@ -87,8 +87,8 @@ test("Codex thread creation keeps a thread-start acknowledgement uncertain and n
 
 test("Codex thread creation key treats extended and normal Windows paths as the same workspace", async (t) => {
   const { rootDir, title } = fixture(t);
-  const normal = "C:\\Data\\CottonProject\\RabiRoute";
-  const extended = "\\\\?\\C:\\Data\\CottonProject\\RabiRoute";
+  const normal = "C:\\work\\example";
+  const extended = "\\\\?\\C:\\work\\example";
   let createCount = 0;
   const first = await createCodexThreadWithReservation({
     rootDir,

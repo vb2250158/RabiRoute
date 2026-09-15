@@ -177,19 +177,19 @@ test("identity context injects confirmed people but leaves project ownership to 
 test("shared accounts expose possible users and confirmed speaking habits without forcing a unique person", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-identity-shared-context-"));
   updateIdentityRelation(roleDir, {
-    kind: "participant", participantId: "participant-liu", participantKind: "person", displayName: "刘云云",
+    kind: "participant", participantId: "participant-a", participantKind: "person", displayName: "示例说话人",
     status: "confirmed", aliases: [], evidenceRefs: [],
     speakingHabits: [{ dimension: "sentence_opening", description: "习惯先给结论", confidence: 0.8, evidenceRefs: [{ messageId: "liu-known" }] }]
   });
   updateIdentityRelation(roleDir, {
-    kind: "participant", participantId: "participant-zhu", participantKind: "person", displayName: "猪皮糕糕",
+    kind: "participant", participantId: "participant-b", participantKind: "person", displayName: "示例昵称",
     status: "confirmed", aliases: [], evidenceRefs: []
   });
   updateIdentityRelation(roleDir, {
     kind: "endpoint_account", platform: "napcat", endpointIdentityNamespace: "instance:qq-main", senderStableId: "300",
     displayName: "lovegd", participantLinks: [
-      { participantId: "participant-liu", status: "candidate", confidence: 0.5, evidenceRefs: [{ messageId: "shared-account-proof" }] },
-      { participantId: "participant-zhu", status: "candidate", confidence: 0.5, evidenceRefs: [{ messageId: "shared-account-proof" }] }
+      { participantId: "participant-a", status: "candidate", confidence: 0.5, evidenceRefs: [{ messageId: "shared-account-proof" }] },
+      { participantId: "participant-b", status: "candidate", confidence: 0.5, evidenceRefs: [{ messageId: "shared-account-proof" }] }
     ]
   });
   const record: GroupMessageRecord = {
@@ -200,7 +200,7 @@ test("shared accounts expose possible users and confirmed speaking habits withou
   const lines = identityContextLines(context).join("\n");
   assert.equal(context?.confirmedParticipant, undefined);
   assert.equal(context?.possibleParticipants.length, 2);
-  assert.match(lines, /可能使用者：刘云云/);
+  assert.match(lines, /可能使用者：示例说话人/);
   assert.match(lines, /句首习惯=习惯先给结论/);
   assert.match(lines, /说话习惯一致性/);
   assert.match(lines, /不能把情境推断改写成永久的一对一账号映射/);

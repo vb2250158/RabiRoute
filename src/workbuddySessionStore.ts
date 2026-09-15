@@ -117,7 +117,7 @@ export function normalizeWorkbuddyWorkspace(value: string | undefined | null): s
 
 /**
  * The desktop's compressed project directory name, e.g.
- * `C:\Data\CottonProject\RabiRoute` becomes `c-Data-CottonProject-RabiRoute`.
+ * `C:\work\example` becomes `c-work-example`.
  * Case is meaningful here, so this must not use the lowercased comparison key.
  */
 export function workbuddyProjectId(value: string | undefined | null): string {

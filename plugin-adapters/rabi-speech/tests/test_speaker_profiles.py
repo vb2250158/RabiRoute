@@ -63,13 +63,13 @@ def test_profile_update_rebind_delete_and_archive_are_explicit(tmp_path) -> None
     path = tmp_path / "speaker-profiles.json"
     registry = SpeakerProfileRegistry(path)
     first = registry.create_profile("秋雨")
-    second = registry.create_profile("刘云云")
+    second = registry.create_profile("示例说话人")
     updated = registry.update_profile(str(first["id"]), display_name="秋雨（QA）", aliases=["秋雨"], aliases_provided=True)
     assert updated["display_name"] == "秋雨（QA）"
 
     registry.bind("meeting-one", "Speaker 1", str(first["id"]))
     rebound = registry.bind("meeting-one", "Speaker 1", str(second["id"]))
-    assert rebound["speaker_name"] == "刘云云"
+    assert rebound["speaker_name"] == "示例说话人"
     deleted = registry.delete_profile(str(second["id"]))
     assert deleted["removed_bindings"] == 1
     assert registry.resolve("meeting-one", "Speaker 1")["speaker_id"] is None
@@ -135,7 +135,7 @@ def test_agent_identity_command_atomically_creates_reuses_and_binds(tmp_path) ->
 def test_agent_identity_command_rejects_ambiguous_aliases_without_explicit_id(tmp_path) -> None:
     registry = SpeakerProfileRegistry(tmp_path / "speaker-profiles.json")
     registry.create_profile("秋雨", ["主持人"])
-    registry.create_profile("刘云云", ["主持人"])
+    registry.create_profile("示例说话人", ["主持人"])
 
     with pytest.raises(SpeakerRegistryConflictError):
         registry.identify_and_bind("meeting-one", "Speaker 1", display_name="主持人")

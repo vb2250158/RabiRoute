@@ -858,7 +858,7 @@ def test_local_speaker_profile_api_resolves_diarization_labels_in_response_and_r
 def test_agent_speaker_identity_api_requires_explicit_id_for_ambiguous_metadata(tmp_path: Path) -> None:
     client, _tts, _asr = fixture(tmp_path)
     first = client.post("/v1/speaker-profiles", json={"display_name": "秋雨", "aliases": ["主持人"]}).json()
-    client.post("/v1/speaker-profiles", json={"display_name": "刘云云", "aliases": ["主持人"]})
+    client.post("/v1/speaker-profiles", json={"display_name": "示例说话人", "aliases": ["主持人"]})
 
     ambiguous = client.put(
         "/v1/speaker-identities",

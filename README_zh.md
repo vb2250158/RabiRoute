@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.2" src="https://img.shields.io/badge/version-0.3.2-3178c6">
+  <img alt="当前版本：0.3.3" src="https://img.shields.io/badge/version-0.3.3-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -72,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.3.2`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.3`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -91,6 +91,12 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
 ## 近期变化
+
+### 0.3.3：私有标识清理与仓库治理
+
+- 计划秘书提示词里的项目专属条目改为通用表述，行为意图不变；管理端问题台账模块更名为 `roleIssueLedger`，导出符号随之统一。
+- 测试夹具和文档示例改用通用路径、通用人名与合成账号。Windows 托盘应用身份改为中立的 `RabiRoute.Desktop`，已固定的任务栏项和通知设置需要重新创建。
+- `RabiPlanCache/` 与 `artifacts/` 不再随源码提交，并移除指向已删除归档目录的过期忽略规则。详见[版本更新](版本更新日志.md)。
 
 ### 0.3.2：全天记录、DSH 会话桥认证与计划状态拆分
 

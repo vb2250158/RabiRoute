@@ -68,27 +68,27 @@ function writeDescriptor(root: string, name: string, value: unknown): string {
 
 test("normalizeWorkbuddyWorkspace treats drive case and separators as one workspace", () => {
   assert.equal(
-    normalizeWorkbuddyWorkspace("C:\\Data\\CottonProject\\RabiRoute"),
-    "c:\\data\\cottonproject\\rabiroute"
+    normalizeWorkbuddyWorkspace("C:\\work\\example"),
+    "c:\\work\\example"
   );
   assert.equal(
-    normalizeWorkbuddyWorkspace("c:/data/cottonproject/rabiroute/"),
-    "c:\\data\\cottonproject\\rabiroute"
+    normalizeWorkbuddyWorkspace("c:/work/example/"),
+    "c:\\work\\example"
   );
   assert.equal(normalizeWorkbuddyWorkspace("d:\\"), "d:\\");
   assert.equal(normalizeWorkbuddyWorkspace("  "), "");
   assert.ok(sameWorkbuddyWorkspace("C:\\Data\\Project", "c:\\Data\\Project\\"));
   assert.ok(sameWorkbuddyWorkspace(
-    "C:\\Data\\CottonProject\\RabiRoute",
-    "c:\\data\\cottonproject\\rabiroute"
+    "C:\\work\\example",
+    "c:\\work\\example"
   ));
   assert.ok(!sameWorkbuddyWorkspace("C:\\Data\\Project", "C:\\Data\\Other"));
   assert.ok(!sameWorkbuddyWorkspace("", "C:\\Data\\Project"));
 });
 
 test("workbuddyProjectId keeps path case and matches the desktop project directory", () => {
-  assert.equal(workbuddyProjectId("C:\\Data\\CottonProject\\RabiRoute"), "c-Data-CottonProject-RabiRoute");
-  assert.equal(workbuddyProjectId("c:\\Data\\CottonProject\\RabiRoute\\"), "c-Data-CottonProject-RabiRoute");
+  assert.equal(workbuddyProjectId("C:\\work\\example"), "c-work-example");
+  assert.equal(workbuddyProjectId("c:\\work\\example\\"), "c-work-example");
   assert.equal(workbuddyProjectId("D:/Work/Demo"), "d-Work-Demo");
   assert.equal(workbuddyProjectId(""), "");
 });
@@ -98,7 +98,7 @@ test("parseWorkbuddySessionDescriptor marks only live endpoint sessions delivera
   const live = parseWorkbuddySessionDescriptor({
     pid: 63808,
     sessionId: "eb2cb408-703a-45ad-88f8-35d0c7c4aa0e",
-    cwd: "C:\\Data\\CottonProject\\RabiRoute",
+    cwd: "C:\\work\\example",
     kind: "interactive",
     endpoint: "http://127.0.0.1:6762",
     lastHeartbeat: now - 1_000
@@ -110,7 +110,7 @@ test("parseWorkbuddySessionDescriptor marks only live endpoint sessions delivera
   const noEndpoint = parseWorkbuddySessionDescriptor({
     pid: 24616,
     sessionId: "eb2cb408-703a-45ad-88f8-35d0c7c4aa0e",
-    cwd: "C:\\Data\\CottonProject\\RabiRoute",
+    cwd: "C:\\work\\example",
     kind: "interactive",
     lastHeartbeat: now - 1_000
   }, { now, alive: () => true });

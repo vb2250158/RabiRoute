@@ -65,7 +65,7 @@
 {
   "pid": 63808,
   "sessionId": "eb2cb408-703a-45ad-88f8-35d0c7c4aa0e",
-  "cwd": "C:\\Data\\CottonProject\\RabiRoute",
+  "cwd": "C:\\work\\example",
   "kind": "interactive",
   "url": "http://127.0.0.1:6762",
   "endpoint": "http://127.0.0.1:6762",
@@ -103,7 +103,7 @@
 - `~/.workbuddy/projects/<workspace-slug>/<sessionId>.jsonl`：完整对话流水，可用于只读历史与回执核对。
 - 同目录 `<sessionId>.meta.json`：当前仅见 `codebuddy.ai/hostKind`、`acpConnectionId`。
 
-`<workspace-slug>` 由工作目录压缩而来（例如 `c-Data-CottonProject-RabiRoute`），因此“按项目列会话”可以只读文件系统完成，但**不作为绑定真源**。
+`<workspace-slug>` 由工作目录压缩而来（例如 `c-work-example`），因此“按项目列会话”可以只读文件系统完成，但**不作为绑定真源**。
 
 ### 5.4 会话本地 HTTP 网关
 

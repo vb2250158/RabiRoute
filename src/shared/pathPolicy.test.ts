@@ -38,8 +38,8 @@ test("path comparison treats Windows extended paths as the same workspace", (t) 
     return;
   }
   assert.equal(
-    normalizePathForComparison("C:\\Data\\CottonProject\\PangHu"),
-    normalizePathForComparison("\\\\?\\C:\\Data\\CottonProject\\PangHu")
+    normalizePathForComparison("C:\\work\\example"),
+    normalizePathForComparison("\\\\?\\C:\\work\\example")
   );
   assert.equal(
     normalizePathForComparison("\\\\server\\share\\project"),

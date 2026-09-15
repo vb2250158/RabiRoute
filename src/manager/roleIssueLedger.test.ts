@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readPangHuIssueForPlan } from "./pangHuIssueLedger.js";
+import { readRoleIssueForPlan } from "./roleIssueLedger.js";
 
 test("issue lookup uses the resolved external persona directory and exact plan identity", t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-issue-ledger-"));
@@ -13,9 +13,9 @@ test("issue lookup uses the resolved external persona directory and exact plan i
   const entry = { planId: "plan-1", signature: { groupId: "123", sourceMessageId: "456" } };
   const ledgerPath = path.join(roleDir, "state", "issue-threads.json");
   fs.writeFileSync(ledgerPath, JSON.stringify({ items: [null, { planId: "plan-10" }, entry] }));
-  assert.deepEqual(readPangHuIssueForPlan(roleDir, "plan-1"), entry);
-  assert.equal(readPangHuIssueForPlan(roleDir, "missing"), undefined);
-  assert.throws(() => readPangHuIssueForPlan(path.join(root, "install", "data", "roles", "XinghaiBuilder"), "plan-1"), { code: "ENOENT" });
+  assert.deepEqual(readRoleIssueForPlan(roleDir, "plan-1"), entry);
+  assert.equal(readRoleIssueForPlan(roleDir, "missing"), undefined);
+  assert.throws(() => readRoleIssueForPlan(path.join(root, "install", "data", "roles", "XinghaiBuilder"), "plan-1"), { code: "ENOENT" });
   fs.writeFileSync(ledgerPath, "invalid json");
-  assert.throws(() => readPangHuIssueForPlan(roleDir, "plan-1"), SyntaxError);
+  assert.throws(() => readRoleIssueForPlan(roleDir, "plan-1"), SyntaxError);
 });

@@ -65,7 +65,7 @@ A CLI-type adapter is rejected: a headless `codebuddy -p` process cannot satisfy
 {
   "pid": 63808,
   "sessionId": "eb2cb408-703a-45ad-88f8-35d0c7c4aa0e",
-  "cwd": "C:\\Data\\CottonProject\\RabiRoute",
+  "cwd": "C:\\work\\example",
   "kind": "interactive",
   "url": "http://127.0.0.1:6762",
   "endpoint": "http://127.0.0.1:6762",
@@ -103,7 +103,7 @@ The same database also holds `workspaces(path, last_opened_at)` as a workspace c
 - `~/.workbuddy/projects/<workspace-slug>/<sessionId>.jsonl`: full conversation stream, usable for read-only history and receipt checks.
 - `<sessionId>.meta.json` in the same directory: currently only `codebuddy.ai/hostKind` and `acpConnectionId`.
 
-`<workspace-slug>` is a compressed working directory (for example `c-Data-CottonProject-RabiRoute`), so listing sessions per project can be done from the filesystem alone, but the filesystem is **not** the binding source of truth.
+`<workspace-slug>` is a compressed working directory (for example `c-work-example`), so listing sessions per project can be done from the filesystem alone, but the filesystem is **not** the binding source of truth.
 
 ### 5.4 Per-session local HTTP gateway
 

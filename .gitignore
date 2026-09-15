@@ -31,6 +31,9 @@
 /.workbuddy/
 # Local hot-patch candidate distributions and packaged builds. Never publish these.
 /artifacts/
+
+# Manager plan-queue cache written at runtime.
+/RabiPlanCache/
 /gateways.json
 
 # Temporary scratch from interactive/automation sessions (not project artifacts).
@@ -80,7 +83,6 @@ apps/rabilink-aiui/dist/
 # Legacy local probe workspaces kept out of public submissions.
 examples/android-band-probe/
 examples/vela-band-probe/
-archive/legacy-android-probe-builds-20260914/
 examples/rabilink-aiui/
 assets/reference-cache/
 /plugin-adapters/xiaoai-rabiroute/vendor/open-xiaoai/

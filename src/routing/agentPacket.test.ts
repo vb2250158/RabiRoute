@@ -524,21 +524,21 @@ test("AgentPacket highlights the immediate addressed context before interpreting
     userId: 2324411326,
     rawMessage: "序号36自己操作测试一下，我无法搞定",
     messageId: 870690296,
-    senderName: "QA_刘云云"
+    senderName: "QA_示例用户"
   });
   appendGroupMessage(dataDir, {
     time: 106,
     groupId: 100200301,
     userId: 2324411326,
-    rawMessage: "[CQ:at,qq=1050739541]",
+    rawMessage: "[CQ:at,qq=10000001]",
     messageId: 2115680539,
-    senderName: "QA_刘云云"
+    senderName: "QA_示例用户"
   });
 
   const record: GroupMessageRecord = {
     time: 112,
     groupId: 100200301,
-    userId: 1050739541,
+    userId: 10000001,
     rawMessage: "1",
     messageId: 828490779,
     senderName: "秋雨Memories"
@@ -575,7 +575,7 @@ test("AgentPacket highlights the immediate addressed context before interpreting
 
   assert.match(packet.message, /\[紧邻对话\]/);
   assert.match(packet.message, /序号36自己操作测试一下，我无法搞定/);
-  assert.match(packet.message, /QA_刘云云：@1050739541/);
+  assert.match(packet.message, /QA_示例用户：@10000001/);
   assert.match(packet.message, /当前发言者刚被明确 @/);
   assert.match(packet.message, /先按这段连续对话解释短回复/);
   assert.doesNotMatch(packet.message, /另一个较早的话题/);
