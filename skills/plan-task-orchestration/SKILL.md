@@ -217,6 +217,16 @@ After a task turn or completion-hook reminder:
 
 Completion reminders are deduplicated by `sessionId + turnId`, but they do not update the plan automatically. Consume each result once.
 
+### 7.1 Flush plan status from the owning Agent end
+
+Every Agent end — codex, dsh, or another adapter — owns the flush of its own bound plans. No other session, secretary, or coordinator performs that write on its behalf.
+
+- Before ending a turn, going idle, or switching sessions, the Agent end that holds a plan must write that plan's real phase and step state itself and reread it with GET. Delivered, completed, or closed work must not stay in `执行中` or `分析中`.
+- When a deliverable lands through a side channel — asset sync, a commit made by another actor, another Agent end, or a manual commit — the plan's owning Agent end must still read the delivery evidence back and advance or close the plan accordingly. "Someone else delivered it" is not a reason to keep the previous state.
+- Re-validate `waitingFor` and `blockedBy` on every plan read and write. Once the blocking condition disappears, do not keep the previous wait: re-evaluate the next step and clear wording that requests a decision that is no longer needed.
+- Delivery evidence is a commit revision, a remote commit hash, or a runtime acceptance result. A local file change alone is not delivery and cannot advance a status.
+- When auditing state drift, treat plans in `执行中` or `分析中` whose `updatedAt` clearly lags and whose `waitingFor` no longer holds as mandatory review items.
+
 ### 8. Handle waiting, feedback, and approval
 
 - Keep `plan.status` equal to the enabled key for the actual configured phase. Missing load-bearing data after analysis uses `roles.informationNeeded` with `information-needed-*`; ongoing investigation uses `roles.analysis`; a submitted complete proposal uses `roles.approval`; implementation uses `roles.execution`; package and QA waits use their configured role keys.
