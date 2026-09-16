@@ -111,6 +111,7 @@ function isActiveManagerTruthPath(releasePath) {
     || normalized.startsWith("scripts/")
     || normalized.startsWith("plugin-adapters/")
     || normalized.startsWith("docs/")
+    || normalized.startsWith("skills/")
     || /^README(?:_zh)?\.md$/i.test(releasePath)
     || /^plugin-adapters\/[^/]+\/README(?:_en)?\.md$/i.test(releasePath);
 }

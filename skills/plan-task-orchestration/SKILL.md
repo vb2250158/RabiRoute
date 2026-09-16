@@ -17,6 +17,10 @@ Before writing a plan or binding a task, read the relevant sections of:
 
 Resolve the current Manager generation before every plan read or write. Installed mode obtains `managerBaseUrl`, `applicationGenerationId`, and `managerInstanceId` from `RabiRouteHost.exe --command status --json`; source mode uses only the Manager's freshly printed structured READY URL. Validate the address and identities against `/meta`, and rediscover after a restart instead of retaining the old URL. Prefer native Codex Desktop task tools for task ownership when they are available; otherwise call `POST /api/agent/threads` through the same validated Manager address.
 
+### Enrolled remote Agent transport
+
+On an enrolled remote Agent computer, use the installed `rabi-agent-launcher.mjs --config <private-config> --agent <approved-agent> --api METHOD /relative-path` command supplied by the session Hook. This transport validates Manager `/meta` and generation before and after calls. The Host discovery instructions above apply only on the Manager computer; absence of a local Host on a remote computer is not evidence that Manager is offline. Do not start another Host or fall back to local business files. Read public contracts through `/api/lan-agent/resources/read?id=<resource-id>` and discover available resources at `/api/lan-agent/resources`; for the two documents above use `docs/rabi-agent-interfaces.md` and `docs/plan-and-memory-model.md`. Preserve existing approval, ETag and idempotency requirements. Remote thread delivery currently supports only `responsePolicy:none`; do not promise required replies or silently replace unsupported task binding with a local session.
+
 ## Handle Manager availability without blocking project work
 
 1. Resolve the current generation endpoint before the first Manager call. A previous URL refusing connections means that URL is stale; rediscover it before classifying Manager availability.
@@ -166,6 +170,26 @@ Reserve `qa-*` and `verify-*` step IDs for actual target-package QA or acceptanc
 
 When opening or reconciling an existing plan, repair state drift before dispatch: incomplete approval becomes `roles.analysis` or, only when no approvable proposal can be formed, `roles.informationNeeded`; implemented work becomes `roles.waitingPackage`, `roles.waitingQa`, or direct acceptance in `roles.execution`; rejected approval or failed acceptance returns to investigation; invalid or historically fixed work with no acceptance remaining becomes `roles.closed`. Perform the repair and the next authorized action in the same orchestration turn.
 
+#### Stage exit routes (current requirement)
+
+Every Agent end bound to a plan moves it to its next stage on real evidence; a plan must not sit still in its current status. The current status decides the destination:
+
+| Current status | Destination | Condition |
+| --- | --- | --- |
+| Analysis | Approval | Evidence is sufficient and the proposal is executable: cause, exact change, file scope, validation, rollback, exclusions |
+| Analysis | Information needed | The key fact can only come from outside (reporter, product decision, real device, player data), and the minimal gap is listed |
+| Analysis | Execution, then complete | Compile or build failures: no approval is needed, fix it and mark it complete yourself |
+| Approval (pending or granted) | Stay in approval | The contract still holds and no user reply is unconsumed |
+| Approval (pending or granted) | Back to analysis | A user approval suggestion exists, or the proposal, its basis, or its file scope has changed |
+| Execution | Waiting for package | Acceptance needs a target package, and the game bug has a Tencent sheet record |
+| Execution | Waiting for QA | Editor extensions, tools, or governance work that needs no package |
+| Execution | Complete | Compile or build failures already fixed |
+
+- The UI label "待验收" maps to the `等待 QA` key; do not introduce a new status key.
+- Most analyzing plans should land in Approval or Information needed. Never package an unready proposal as an approval just to advance it, and never pass off a control-plane read failure as information-needed.
+- Execution means the direction is clear and no extra permission is required: carry the work to its exit route instead of stopping there.
+- Read the actual keys from the live stage configuration for the role; the names above describe the stages, not hardcoded strings.
+
 ### 4. Resolve the unique task binding
 
 1. If `taskBinding` exists, read the exact task by its full `sessionId`.
@@ -174,6 +198,38 @@ When opening or reconciling an existing plan, repair state drift before dispatch
 4. Reuse a task only when its full history confirms the same plan scope. Stop for the smallest necessary clarification when multiple candidates remain genuinely ambiguous.
 5. Create one task in the plan's project workspace only when no matching task exists. Put the plan ID, scope, current step, acceptance criteria, evidence, and authority boundaries in the initial prompt.
 6. Persist the returned full task ID and canonical workspace in `taskBinding` immediately. If task creation succeeded but its initial turn failed, retry with `send` to that same ID; never create another task.
+
+#### Bind a session that already exists
+
+Adopting a session that already exists — the usual case when each plan owns one Codex task or one DSH session — is a plan write, never a thread-bridge call:
+
+```http
+PATCH /api/roles/<roleId>/plans/<planId>
+If-Match: <current plan ETag>
+Idempotency-Key: <stable ASCII key for this intended change>
+```
+
+```json
+{ "taskBinding": { "agentType": "dsh", "sessionId": "<full session id>", "sessionTitle": "<left-side name>",
+                   "workspace": "C:\\Path\\To\\Project", "baseUrl": "http://127.0.0.1:3080" } }
+```
+
+- `agentType` is `codex` or `dsh` and decides which host owns the session. `sessionId` is the full ID and the only identity; `sessionTitle` only labels it.
+- `workspace` is the execution directory of every later delivery. It does not have to equal the task's saved default cwd, but a `dsh` session is still checked against its own workspace ownership.
+- A `dsh` binding carries the apiproxy `baseUrl` used to read and open that session; omit it to use the local default.
+- Keep `If-Match` and `Idempotency-Key` ASCII-only. A non-ASCII header value is refused by the HTTP client before the request ever reaches Manager, so a Chinese idempotency key fails without a Manager-side record.
+- Reread the plan and confirm `agentType`, `sessionId`, and `workspace`. Rewriting a binding that is still valid is a controlled migration, not cleanup; see [Recover or migrate a binding](#recover-or-migrate-a-binding).
+
+Do not "bind" by calling `POST /api/agent/threads` with `action=create`. `create` always builds a new task and never adopts an existing one, so the plan ends up pointing at a session nobody works in while the real session keeps its own history.
+
+#### Create a new session through the thread bridge
+
+Only when no matching session exists. `create` runs before any task identity exists, so nothing about the host can be inferred — every field that decides identity or directory must be explicit:
+
+- `agentAdapter` is optional in the schema and defaults to `codex`; only `codex` and `dsh` are supported for thread operations. Passing `agentAdapter: "dsh"` is what resolves or creates a DSH session, and omitting it silently creates a Codex task under the wrong host.
+- Pass `cwd` explicitly. Omitting it falls back to the Manager package directory, so the created task and every following delivery silently point at the wrong project; a `cwd` outside the configured workspaces is rejected. Configured workspaces are the RabiRoute package root, the Codex Desktop workspaces, and each Route's `codexCwd` / `dshCwd` / plan-assistant session workspaces — a project not declared there cannot host a created session at all.
+- DSH creation resolves by title plus `cwd` and answers `409 ambiguous` or `409 workspace-mismatch` instead of guessing. `resolution` and `initialTurnStatus` state separately whether an existing session was reused and whether the first turn started; a created session whose first turn failed is retried with `send`, never recreated.
+- Read the created or resolved session back through the same adapter and confirm its real workspace before writing `taskBinding`.
 
 ### 5. Maintain plan attachments
 
@@ -242,6 +298,9 @@ Every Agent end — codex, dsh, or another adapter — owns the flush of its own
 - Treat `presentation.approval.state=ready` and `enabled=true` as proof that the approval contract is submit-ready. While it is pending, do not dispatch implementation beyond the approved contract; continue only authorized clarification and evidence work.
 - Treat guidance and approval feedback as evidence that requires an Agent decision and explicit PATCH, not a Manager-side automatic transition. A correction, objection, or rejected proposal returns the same item to `investigate-revision-*`; an approval advances it to `implement-*` in the same orchestration turn. Then write the matching Agent response record once.
 - If no authorized outbound channel exists, prepare the exact question or draft and request authority instead of claiming that a person was contacted.
+- Before submitting or maintaining an approval, read `GET /api/roles/{roleId}/plans/{planId}/feedback` to check whether a user reply already exists. The records live under `data.records` in the response, not at the top-level `records`; reading the wrong level yields the false conclusion "no reply yet" and keeps an already-answered plan parked in approval.
+- Never re-solicit approval for a plan the user has already answered. An approval advances it to `implement-*` in the same turn and closes out the original `responseStatus`; an objection or revision request returns it to `investigate-revision-*`; a "do not implement for now" decision closes that branch or routes it to acceptance as decided.
+- Feedback records also carry `deliveryStatus` and `postCommit.deliveryMessage`. A `persona notification failed` message means the feedback reached the bound task but the wake-up notice failed — those plans are the most likely to be left dangling, so verify consumption individually.
 
 ### 9. Pause, resume, and close
 
@@ -282,7 +341,7 @@ Before reporting completion, verify:
 
 - no duplicate plan represents the same commitment;
 - the plan has one focus and one valid current step pointer;
-- exactly one business task is bound by full ID, with one explicit execution workspace recorded;
+- exactly one business task is bound by full ID, with one explicit execution workspace recorded, and that workspace matches the owner session's real workspace;
 - no identical instruction was dispatched twice;
 - waits and approvals match Manager-derived presentation;
 - every completed step and terminal state has acceptance evidence;

@@ -1,14 +1,3 @@
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowBackground">#F6F8FB</item>
-        <item name="android:statusBarColor">#F6F8FB</item>
-        <item name="android:navigationBarColor">#F6F8FB</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
-        <item name="android:colorAccent">#19BFC1</item>
-        <item name="android:colorControlActivated">#19BFC1</item>
-        <item name="android:colorControlHighlight">#2419BFC1</item>
-    </style>
+    <style name="AppTheme" parent="RabiLight" />
 </resources>

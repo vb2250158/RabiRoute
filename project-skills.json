@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "description": "RabiRoute-owned skills that downstream projects install under .agents/skills/ and localize. RabiRoute owns the rules; each project owns its localized copy.",
+  "targetDirectory": ".agents/skills",
+  "baselineFile": ".rabiroute-sync.json",
+  "skills": [
+    {
+      "name": "plan-task-orchestration",
+      "note": "Plan admission, unique task binding, and continuation through acceptance."
+    },
+    {
+      "name": "rabi-knowledge-search",
+      "note": "Read-only entry point for Rabi plans, memories, and message history."
+    }
+  ]
+}

@@ -24,7 +24,7 @@ public class AllDayRecordingSettingsTest {
         AllDayRecordingSettings value = new AllDayRecordingSettings(false, "bad", "bad", "bad", null, false, true, false, -4);
         assertEquals("transcribe", value.processingPolicy);
         assertEquals("audio", value.mode);
-        assertEquals("mobile", value.source);
+        assertEquals("auto", value.source);
         assertFalse(value.running);
         assertFalse(value.autoResume);
         assertEquals(0, value.windowStartedAt);

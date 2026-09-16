@@ -384,6 +384,9 @@ test("returns 400 for invalid JSON and false for unrelated routes", async () => 
   try {
     const invalid = await post(app.baseUrl, "/api/message-processing/requirements", "{");
     assert.equal(invalid.status, 400);
+    const oversized = await post(app.baseUrl, "/api/message-processing/requirements", { padding: "x".repeat(1024 * 1024) });
+    assert.equal(oversized.status, 400);
+    assert.match(JSON.stringify(await json(oversized)), /exceeds 1048576/);
 
     const unrelated = await fetch(`${app.baseUrl}/api/unrelated`);
     assert.equal(unrelated.status, 404);

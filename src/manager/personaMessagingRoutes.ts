@@ -1,5 +1,6 @@
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import http from "node:http";
+import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
 import path from "node:path";
 import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { routeRuntimeParts, sanitizeRoleId } from "../shared/routeIdentity.js";
@@ -116,7 +117,9 @@ function readJsonBody<T>(request: http.IncomingMessage, maxBytes: number): Promi
       try {
         if (tooLarge) throw new PersonaMessagingError(413, `Request body exceeds ${maxBytes} bytes.`);
         const text = Buffer.concat(chunks).toString("utf8");
-        resolve((text ? JSON.parse(text) : {}) as T);
+        const body = text ? JSON.parse(text) : {};
+        validateLanAgentRequestBody(request, body);
+        resolve(body as T);
       } catch (error) {
         reject(error);
       }

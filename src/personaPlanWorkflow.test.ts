@@ -32,18 +32,19 @@ function cloneDefault(): PersonaPlanWorkflow {
   return structuredClone(loadDefaultPersonaPlanWorkflow());
 }
 
-test("default persona plan workflow defines the ten current statuses and legacy read aliases", () => {
+test("default persona plan workflow defines eleven current statuses and legacy read aliases", () => {
   const workflow = loadDefaultPersonaPlanWorkflow();
-  assert.equal(workflow.schemaVersion, 4);
+  assert.equal(workflow.schemaVersion, 5);
   assert.equal(workflow.archiveAfterHours, 72);
   assert.deepEqual(workflow.statuses.map((status) => status.key), [
-    "分析中", "待补充信息", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
+    "分析中", "待补充信息", "待审批", "已审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
   ]);
   assert.deepEqual(workflow.roles, {
     initial: "分析中",
     analysis: "分析中",
     informationNeeded: "待补充信息",
     approval: "待审批",
+    approved: "已审批",
     execution: "执行中",
     waitingPackage: "等待打包",
     waitingQa: "等待 QA",
@@ -181,16 +182,16 @@ test("schema v1 workflows migrate once without restoring removed statuses later"
       .filter((status) => status.key !== current.roles.informationNeeded)
       .map((status, order) => ({ ...status, order })),
     roles: Object.fromEntries(
-      Object.entries(current.roles).filter(([role]) => role !== "informationNeeded")
+      Object.entries(current.roles).filter(([role]) => role !== "informationNeeded" && role !== "approved")
     )
   };
   fs.writeFileSync(configPath, `${JSON.stringify({ custom: { keep: true }, planWorkflow: legacyWorkflow }, null, 2)}\n`, "utf8");
 
   const migrated = ensurePersonaPlanWorkflow(roleDir);
-  assert.equal(migrated.workflow.schemaVersion, 4);
+  assert.equal(migrated.workflow.schemaVersion, 5);
   assert.equal(migrated.workflow.roles.informationNeeded, "待补充信息");
   assert.deepEqual(migrated.workflow.statuses.map((status) => status.key), [
-    "分析中", "待补充信息", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
+    "分析中", "待补充信息", "待审批", "已审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
   ]);
   const firstBytes = fs.readFileSync(configPath, "utf8");
   assert.equal((JSON.parse(firstBytes) as Record<string, unknown>).custom != null, true);
@@ -216,14 +217,14 @@ test("schema v3 workflows narrow the stock information-needed meaning without ch
   const informationNeeded = current.statuses.find((status) => status.key === current.roles.informationNeeded)!;
   informationNeeded.description = "分析已完成，但目标、范围、验收标准或实施依据仍不足，正在等待补充信息。";
   informationNeeded.descriptionEn = "Analysis is complete, but the goal, scope, acceptance criteria, or implementation evidence is still insufficient and requires more information.";
-  const legacyWorkflow = { ...current, schemaVersion: 3 };
+  const legacyWorkflow = { ...current, schemaVersion: 3, roles: Object.fromEntries(Object.entries(current.roles).filter(([role]) => role !== "approved")) };
   fs.writeFileSync(configPath, `${JSON.stringify({ custom: { keep: true }, planWorkflow: legacyWorkflow }, null, 2)}\n`, "utf8");
 
   const migrated = ensurePersonaPlanWorkflow(roleDir);
-  assert.equal(migrated.workflow.schemaVersion, 4);
-  assert.equal(migrated.workflow.statuses.length, 10);
+  assert.equal(migrated.workflow.schemaVersion, 5);
+  assert.equal(migrated.workflow.statuses.length, 11);
   assert.deepEqual(migrated.workflow.statuses.map((status) => status.key), [
-    "分析中", "待补充信息", "待审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
+    "分析中", "待补充信息", "待审批", "已审批", "执行中", "等待打包", "等待 QA", "待讨论", "暂停", "完成", "关闭"
   ]);
   assert.equal(planStatusDefinition(migrated.workflow, "待补充信息")?.description, "分析已完成，但无法根据现有信息形成可审批的具体方案。");
   assert.equal(planStatusDefinition(migrated.workflow, "待补充信息")?.descriptionEn, "Analysis is complete, but the available information is insufficient to form a concrete proposal for approval.");
@@ -240,12 +241,12 @@ test("schema v2 workflows use the same one-time stock description migration", (t
   const informationNeeded = current.statuses.find((status) => status.key === current.roles.informationNeeded)!;
   informationNeeded.description = "分析已完成，但目标、范围、验收标准或实施依据仍不足，正在等待补充信息。";
   informationNeeded.descriptionEn = "Analysis is complete, but the goal, scope, acceptance criteria, or implementation evidence is still insufficient and requires more information.";
-  fs.writeFileSync(configPath, `${JSON.stringify({ planWorkflow: { ...current, schemaVersion: 2 } }, null, 2)}\n`, "utf8");
+  fs.writeFileSync(configPath, `${JSON.stringify({ planWorkflow: { ...current, schemaVersion: 2, roles: Object.fromEntries(Object.entries(current.roles).filter(([role]) => role !== "approved")) } }, null, 2)}\n`, "utf8");
 
   const migrated = ensurePersonaPlanWorkflow(roleDir);
-  assert.equal(migrated.workflow.schemaVersion, 4);
+  assert.equal(migrated.workflow.schemaVersion, 5);
   assert.equal(planStatusDefinition(migrated.workflow, "待补充信息")?.description, "分析已完成，但无法根据现有信息形成可审批的具体方案。");
-  assert.equal(migrated.workflow.statuses.length, 10);
+  assert.equal(migrated.workflow.statuses.length, 11);
 });
 
 test("schema v3 migration preserves customized information-needed descriptions", (t) => {
@@ -255,7 +256,7 @@ test("schema v3 migration preserves customized information-needed descriptions",
   const informationNeeded = current.statuses.find((status) => status.key === current.roles.informationNeeded)!;
   informationNeeded.description = "由人格自定义的中文说明。";
   informationNeeded.descriptionEn = "Persona-specific English description.";
-  fs.writeFileSync(configPath, `${JSON.stringify({ planWorkflow: { ...current, schemaVersion: 3 } }, null, 2)}\n`, "utf8");
+  fs.writeFileSync(configPath, `${JSON.stringify({ planWorkflow: { ...current, schemaVersion: 3, roles: Object.fromEntries(Object.entries(current.roles).filter(([role]) => role !== "approved")) } }, null, 2)}\n`, "utf8");
 
   const migrated = ensurePersonaPlanWorkflow(roleDir);
   assert.equal(planStatusDefinition(migrated.workflow, "待补充信息")?.description, "由人格自定义的中文说明。");
@@ -268,12 +269,26 @@ test("schema v3 migration does not restore a retired information-needed status",
   const current = cloneDefault();
   const retiring = beginPersonaPlanStatusRetirement(current, "待补充信息", "分析中");
   const retired = completePersonaPlanStatusRetirement(retiring, "待补充信息");
-  fs.writeFileSync(configPath, `${JSON.stringify({ planWorkflow: { ...retired, schemaVersion: 3 } }, null, 2)}\n`, "utf8");
+  fs.writeFileSync(configPath, `${JSON.stringify({ planWorkflow: { ...retired, schemaVersion: 3, roles: Object.fromEntries(Object.entries(retired.roles).filter(([role]) => role !== "approved")) } }, null, 2)}\n`, "utf8");
 
   const migrated = ensurePersonaPlanWorkflow(roleDir);
   assert.equal(migrated.workflow.roles.informationNeeded, "分析中");
   assert.equal(planStatusDefinition(migrated.workflow, "待补充信息", { allowRetired: true })?.state, "retired");
-  assert.equal(migrated.workflow.statuses.length, 10);
+  assert.equal(migrated.workflow.statuses.length, 11);
+});
+
+test("schema v4 inserts approved once and preserves custom status order and descriptions", () => {
+  const current = cloneDefault();
+  const old = { ...current, schemaVersion: 4,
+    statuses: current.statuses.filter(status => status.key !== current.roles.approved),
+    roles: Object.fromEntries(Object.entries(current.roles).filter(([role]) => role !== "approved")) };
+  old.statuses[0]!.description = "Custom analysis description";
+  const migrated = validatePersonaPlanWorkflow(old);
+  assert.equal(migrated.schemaVersion, 5);
+  assert.equal(migrated.roles.approved, "已审批");
+  assert.equal(migrated.statuses[0]!.description, "Custom analysis description");
+  assert.deepEqual(migrated.statuses.filter(status => status.key !== migrated.roles.approved).map(status => status.key), old.statuses.map(status => status.key));
+  assert.deepEqual(validatePersonaPlanWorkflow(migrated), migrated);
 });
 
 test("atomic workflow writes use revision fencing and preserve the rest of personaConfig", (t) => {

@@ -626,6 +626,8 @@ export async function submitPlanFeedback(input: {
   stepId?: string;
   feedbackId: string;
   text: string;
+  formData?: import("./types").RolePlanFeedbackFormData;
+  reuseFeedbackId?: string;
   attachments: PlanFeedbackAttachmentUpload[];
   planAttachmentIds: string[];
   source: "webgui" | "tray";
@@ -661,6 +663,8 @@ export async function submitPlanFeedback(input: {
         gatewayId: input.gatewayId,
         stepId: input.stepId,
         text: input.text,
+        formData: input.formData,
+        reuseFeedbackId: input.reuseFeedbackId,
         attachments: input.attachments,
         planAttachmentIds: input.planAttachmentIds,
         source: input.source,

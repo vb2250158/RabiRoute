@@ -120,6 +120,15 @@ test("release manifest scans UTF-16 operational scripts", () => {
   });
 });
 
+test("release manifest checks published Agent skills for retired Manager addresses", () => {
+  withPayload(root => {
+    const target = path.join(root, "skills", "fixture", "SKILL.md");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "Call Manager at http://127.0.0.1:8796", "utf8");
+    assert.throws(() => writeManifest(root, "0.2.1"), /retired Manager semantics/);
+  });
+});
+
 test("release manifest ignores test fixtures but not operational package resources", () => {
   withPayload((root) => {
     const fixture = path.join(root, "scripts", "manager-contract.test.mjs");

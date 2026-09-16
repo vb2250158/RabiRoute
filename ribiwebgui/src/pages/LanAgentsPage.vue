@@ -49,18 +49,31 @@ const loading = ref(false);
 const updatingNodeId = ref("");
 const error = ref("");
 const copied = ref(false);
+const issuingTicket = ref(false);
+const ticketExpiresAt = ref("");
+const authorization = ref<{ nodes: Array<{ nodeId: string; enabledAgentIds: string[] }> }>();
 const managerUrl = ref(window.location.origin);
 const connectionToken = ref("");
 const connectionAvailable = ref(false);
 
 async function copyInstallPrompt(): Promise<void> {
+  if (issuingTicket.value) return;
   error.value = "";
   copied.value = false;
+  issuingTicket.value = true;
   try {
-    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: managerUrl.value, token: connectionToken.value, publicKeySha256: releasePublicKeySha256.value }));
+    const body = await readJson(await fetch("/api/lan-agent/enrollments", {
+      method: "POST", headers: { "x-rabiroute-webgui-token": connectionToken.value }
+    }));
+    const data = body.data as { ticket?: string; expiresAt?: number };
+    if (!data?.ticket || !Number.isFinite(data.expiresAt) || data.expiresAt! <= Date.now()) throw new Error("未取得有效的一次性接入票据，请刷新后重试。");
+    ticketExpiresAt.value = new Date(data.expiresAt!).toISOString();
+    await copyTextToClipboard(buildLanAgentBootstrapPrompt({ managerUrl: managerUrl.value, token: data.ticket, expiresAt: ticketExpiresAt.value, publicKeySha256: releasePublicKeySha256.value }));
     copied.value = true;
   } catch (reason) {
     error.value = userFacingError(reason);
+  } finally {
+    issuingTicket.value = false;
   }
 }
 
@@ -92,6 +105,7 @@ async function refresh(): Promise<void> {
     connectionAvailable.value = data.enabled === true && data.listeningOnLan === true;
     const instanceCatalog = await readJson(await fetch("/api/lan-agent/instances", { cache: "no-store", headers: { "x-rabiroute-webgui-token": connectionToken.value } }));
     instances.value = instanceCatalog.instances as AgentInstance[];
+    authorization.value = instanceCatalog.authorization as typeof authorization.value;
     if (!data.enabled) { nodes.value = []; tasks.value = []; return; }
     if (["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) && data.urls?.[0]) managerUrl.value = new URL(data.urls[0].url).origin;
     const body = await readJson(await fetch("/api/lan-agent/nodes", { cache: "no-store", headers: { "x-rabiroute-webgui-token": connectionToken.value } }));
@@ -143,10 +157,10 @@ onMounted(() => { void refresh(); });
       <v-card-text>
         <p class="mb-3">1. 复制接入提示词。2. 粘贴给目标电脑上的 Agent，让它下载并配置环境。3. 节点上线后，在路由的消息适配器中添加“远端 Agent”并选择该节点。</p>
         <v-text-field v-model="managerUrl" label="目标电脑可访问的 Manager 地址" hint="使用当前 Manager 的局域网地址" persistent-hint />
-        <v-btn prepend-icon="mdi-content-copy" color="primary" :disabled="loading || !connectionAvailable || !connectionToken || !releasePublicKeySha256" @click="copyInstallPrompt">复制接入提示词</v-btn>
+        <v-btn prepend-icon="mdi-content-copy" color="primary" :loading="issuingTicket" :disabled="loading || issuingTicket || !connectionAvailable || !connectionToken || !releasePublicKeySha256" @click="copyInstallPrompt">复制接入提示词</v-btn>
         <p v-if="!connectionAvailable" class="text-caption mt-2">接入其他电脑前，请在设置中开启局域网访问，并通过 Host 重启应用。</p>
-        <p class="text-caption mt-2">提示词包含连接密钥，只粘贴到目标电脑的私密 Agent 任务中。</p>
-        <v-alert v-if="copied" type="success" variant="tonal" density="compact" class="mt-2">已复制，粘贴给目标电脑上的 Agent 即可。</v-alert>
+        <p class="text-caption mt-2">点击一次即可复制完整接入指令和一次性票据：签发后 30 分钟内有效，只能成功兑换一次，兑换后立即失效；无需手填 WebGUI 管理密钥。只粘贴到目标电脑的私密 Agent 任务中；节点接入后，还需在下方勾选“允许使用 Manager API 与 skills”。</p>
+        <v-alert v-if="copied" type="success" variant="tonal" density="compact" class="mt-2">已复制完整提示词（含 30 分钟一次性票据），有效期至 {{ formatTime(ticketExpiresAt) }}。请粘贴给目标电脑上的 Agent，成功兑换后票据立即失效。</v-alert>
       </v-card-text>
     </v-card>
     <v-alert v-if="!loading && !nodes.length" type="info" variant="tonal" class="mb-4">
@@ -164,7 +178,7 @@ onMounted(() => { void refresh(); });
             <v-expansion-panel v-for="agent in instance.agents" :key="agent.agentId">
               <v-expansion-panel-title>{{ agent.name }}</v-expansion-panel-title>
               <v-expansion-panel-text>
-                <InstanceAgentSettings v-if="!instance.local || ['codex-desktop', 'dsh'].includes(agent.provider)" :instance="instance" :agent="agent" @saved="refresh" />
+                <InstanceAgentSettings v-if="!instance.local || ['codex-desktop', 'dsh'].includes(agent.provider)" :instance="instance" :agent="agent" :authorization="authorization" @saved="refresh" />
                 <v-btn v-for="route in agentRoutes(instance, agent.agentId, agent.routeId)" :key="route.id" class="mt-3 mr-2" :to="routeScopedAdaptersPath(route.id)">{{ route.routeName || route.id }}：路由与完整 Agent 设置</v-btn>
               </v-expansion-panel-text>
             </v-expansion-panel>

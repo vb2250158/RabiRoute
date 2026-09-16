@@ -97,7 +97,14 @@ export function activatePersona(api: BaseWebBundleApi): readonly Dispose[] {
     {
       routeId: "route.knowledge", rendererId: "builtin.web-page.knowledge.v1",
       loader: () => import("../pages/RoleKnowledgePage.vue"),
-      paths: [{ path: "/routes/:id/knowledge", title: "计划与记忆" }, { path: "/knowledge", title: "计划与记忆" }],
+      // The second address renders one plan in the same page: another client (the DSH
+      // plan panel) needs a stable way to open exactly the plan it is bound to, and the
+      // plan owns its own presentation, so the focus address belongs to this page.
+      paths: [
+        { path: "/routes/:id/knowledge", title: "计划与记忆" },
+        { path: "/knowledge", title: "计划与记忆" },
+        { path: "/routes/:id/plan/:planId", title: "计划" }
+      ],
       navigation: { resolvePath: routeScopedKnowledgePath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-notebook-check-outline"] }
     },
     {

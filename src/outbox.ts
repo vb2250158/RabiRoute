@@ -174,6 +174,12 @@ export type AgentReplyOptions = {
     message: RolePanelTimelineMessage
   ) => Promise<RolePanelTimelineAppendResult>;
   submitPlanFeedback?: AgentPlanFeedbackSubmitPort;
+  /** Trusted code only: authorize ownership and retain the file lease until send settles. Never supplied by request JSON. */
+  withManagedGroupFile?: (
+    fileId: string,
+    expectedSha256: string,
+    send: (file: { path: string; fileName: string }) => Promise<AgentReplyResult>
+  ) => Promise<AgentReplyResult>;
 };
 
 export type AgentReplyResult = {
@@ -236,6 +242,8 @@ type ReplyContent = {
   kind: MessagePayloadKind;
   message: OneBotMessage;
   explicitText?: string;
+  managedFileId?: string;
+  managedFileSha256?: string;
   file?: string;
   fileName?: string;
 };
@@ -300,6 +308,23 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
   const rawText = request.text ?? request.message ?? request.content ?? payload.text ?? payload.message ?? payload.content;
   const text = valueString(rawText) ? String(rawText) : "";
   const kind = valueString(request.payloadType ?? payload.type ?? payload.payloadType) as MessagePayloadKind | undefined;
+  if (Object.prototype.hasOwnProperty.call(payload, "fileId")) {
+    const fileId = payload.fileId;
+    if (typeof fileId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fileId)
+      || kind !== "file" || request.explicitTarget !== true || request.sendChannel !== "napcat"
+      || request.targetType !== "group" || request.adapterType !== "napcat") {
+      throw new Error("Managed fileId requires an explicit NapCat group file send with a UUID.");
+    }
+    if (payloadValue(request, payload, "fileUrl", "filePath", "imageUrl", "imagePath", "voiceUrl", "voicePath", "audioUrl", "audioPath", "url", "file", "path", "fileName", "name")) {
+      throw new Error("Managed fileId cannot be combined with a file path, URL, or name.");
+    }
+    const fileSha256 = payload.fileSha256;
+    if (typeof fileSha256 !== "string" || !/^[0-9a-f]{64}$/.test(fileSha256)) {
+      throw new Error("Managed fileId requires a lowercase SHA-256 digest.");
+    }
+    return { text: text || "[file]", kind: "file", managedFileId: fileId, managedFileSha256: fileSha256, explicitText: text || undefined, message: [] };
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "fileSha256")) throw new Error("fileSha256 requires fileId.");
   if (kind === "image") {
     const file = payloadValue(request, payload, "imageUrl", "imagePath", "url", "file", "path");
     if (!file) throw new Error("Missing image url/path.");
@@ -1906,44 +1931,58 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
 
   try {
     if (target.targetType === "group" && target.groupId) {
-      if (content.kind === "file" && content.file && !isRemoteFileReference(content.file)) {
-        const filePath = validatedOutboundFilePath(options.rootDir, content.file, policy.allowedFileRoots);
-        const fileName = content.fileName || path.basename(filePath);
-        const uploaded = await uploadGroupFile({
-          groupId: target.groupId,
-          filePath,
-          fileName
-        }, endpoint);
-        const result: AgentReplyResult = {
-          ok: true,
-          status: "sent",
-          routeProfileId: route.profile?.id ?? route.runtime.id,
-          messageId,
-          targetType: "group",
-          groupId: target.groupId,
-          instanceId: endpoint.id,
-          sentFileId: valueString(uploaded.fileId),
-          sentFileName: uploaded.fileName || fileName
-        };
-        appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, withConversation(withDeliveryTrace({
-          ...result,
-          attachments: [{ kind: "file", name: fileName, size: fs.statSync(filePath).size }]
-        })));
+      if (content.kind === "file" && (content.managedFileId || (content.file && !isRemoteFileReference(content.file)))) {
+        const groupId = target.groupId;
+        let uploadedResult: AgentReplyResult | undefined;
+        const sendFile = async ({ path: filePath, fileName }: { path: string; fileName: string }): Promise<AgentReplyResult> => {
+          const fileSize = fs.statSync(filePath).size;
+          const uploaded = await uploadGroupFile({ groupId, filePath, fileName }, endpoint);
+          const result: AgentReplyResult = {
+            ok: true,
+            status: "sent",
+            routeProfileId: route.profile?.id ?? route.runtime.id,
+            messageId,
+            targetType: "group",
+            groupId,
+            instanceId: endpoint.id,
+            sentFileId: valueString(uploaded.fileId),
+            sentFileName: content.managedFileId ? fileName : uploaded.fileName || fileName
+          };
+          uploadedResult = result;
+          appendOutboxLog(options, route, "info", "group_file_uploaded", fileName, withConversation(withDeliveryTrace({
+            ...result,
+            attachments: [{ kind: "file", name: fileName, size: fileSize }]
+          })));
 
-        if (content.explicitText) {
+          if (content.explicitText) {
+            try {
+              const caption = await sendGroupMessage({
+                groupId,
+                message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource, target.userId)
+              }, endpoint);
+              result.sentMessageId = valueString(caption.messageId);
+              appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), withConversation(withDeliveryTrace({ ...result, text: content.explicitText })));
+            } catch (captionError) {
+              result.reason = content.managedFileId
+                ? "File uploaded, but the follow-up text failed."
+                : `File uploaded, but the follow-up text failed: ${captionError instanceof Error ? captionError.message : String(captionError)}`;
+              appendOutboxLog(options, route, "warning", "group_file_caption_failed", result.reason, withDeliveryTrace(result));
+            }
+          }
+          return result;
+        };
+        if (content.managedFileId) {
+          if (!options.withManagedGroupFile) throw new Error("Managed group file resolver is unavailable.");
           try {
-            const caption = await sendGroupMessage({
-              groupId: target.groupId,
-              message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource, target.userId)
-            }, endpoint);
-            result.sentMessageId = valueString(caption.messageId);
-            appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), withConversation(withDeliveryTrace({ ...result, text: content.explicitText })));
-          } catch (captionError) {
-            result.reason = `File uploaded, but the follow-up text failed: ${captionError instanceof Error ? captionError.message : String(captionError)}`;
-            appendOutboxLog(options, route, "warning", "group_file_caption_failed", result.reason, result);
+            return await options.withManagedGroupFile(content.managedFileId, content.managedFileSha256!, sendFile);
+          } catch (error) {
+            // A lease-release failure must not turn an uploaded file into a retryable failure.
+            if (uploadedResult) return { ...uploadedResult, reason: uploadedResult.reason || "File uploaded, but managed delivery finalization failed." };
+            throw error;
           }
         }
-        return result;
+        const filePath = validatedOutboundFilePath(options.rootDir, content.file!, policy.allowedFileRoots);
+        return await sendFile({ path: filePath, fileName: content.fileName || path.basename(filePath) });
       }
       const sent = await sendGroupMessage({
         groupId: target.groupId,
@@ -1975,7 +2014,10 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     appendOutboxLog(options, route, "warning", "reply_blocked", result.reason ?? "blocked", result);
     return result;
   } catch (error) {
-    const result: AgentReplyResult = { ok: false, status: "failed", reason: error instanceof Error ? error.message : String(error), routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: endpoint.id, draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId } };
+    const reason = content.managedFileId
+      ? (options.withManagedGroupFile ? "Managed group file delivery failed." : "Managed group file resolver is unavailable.")
+      : error instanceof Error ? error.message : String(error);
+    const result: AgentReplyResult = { ok: false, status: "failed", reason, routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: target.targetType, groupId: target.groupId, userId: target.userId, instanceId: endpoint.id, draft: { text, targetType: target.targetType, groupId: target.groupId, userId: target.userId } };
     appendOutboxLog(options, route, "error", "reply_failed", result.reason ?? "failed", withDeliveryTrace(result));
     return result;
   }

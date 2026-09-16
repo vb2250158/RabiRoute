@@ -132,7 +132,7 @@ function stringList(value: unknown, field: string): string[] {
 }
 
 function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest, "payload" | "payloadType" | "text"> {
-  assertOnlyFields(payload, ["type", "text", "path", "url", "fileName"], "payload");
+  assertOnlyFields(payload, ["type", "text", "path", "url", "fileName", "fileId", "fileSha256"], "payload");
   const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file";
   if (!(["text", "image", "voice", "file"] as string[]).includes(type)) {
     throw new Error("payload.type must be text, image, voice, or file.");
@@ -142,7 +142,25 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
   const text = validatedText && typeof payload.text === "string" ? payload.text : validatedText;
   const path = textValue(payload.path, "payload.path", false);
   const url = textValue(payload.url, "payload.url", false);
-  if (type !== "text" && !path && !url) throw new Error(`${type} payload requires payload.path or payload.url.`);
+  const hasFileId = Object.prototype.hasOwnProperty.call(payload, "fileId");
+  const fileId = hasFileId ? payload.fileId : undefined;
+  if (hasFileId) {
+    if (typeof fileId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(fileId)) {
+      throw new Error("payload.fileId must be a UUID.");
+    }
+    if (type !== "file") throw new Error("payload.fileId is only supported for file payloads.");
+    if (["path", "url", "fileName"].some(key => Object.prototype.hasOwnProperty.call(payload, key))) {
+      throw new Error("payload.fileId cannot be combined with payload.path, payload.url, or payload.fileName.");
+    }
+  }
+  const fileSha256 = payload.fileSha256;
+  if (hasFileId && (typeof fileSha256 !== "string" || !/^[0-9a-f]{64}$/.test(fileSha256))) {
+    throw new Error("payload.fileSha256 must be 64 lowercase hexadecimal characters when payload.fileId is provided.");
+  }
+  if (!hasFileId && Object.prototype.hasOwnProperty.call(payload, "fileSha256")) {
+    throw new Error("payload.fileSha256 requires payload.fileId.");
+  }
+  if (type !== "text" && !path && !url && !fileId) throw new Error(`${type} payload requires payload.path or payload.url or payload.fileId.`);
   return {
     payloadType: type,
     text,
@@ -151,7 +169,8 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
       text,
       path,
       url,
-      fileName: textValue(payload.fileName, "payload.fileName", false)
+      fileName: textValue(payload.fileName, "payload.fileName", false),
+      ...(hasFileId ? { fileId, fileSha256 } : {})
     }
   };
 }
@@ -164,7 +183,11 @@ function normalizeAgentSend(request: AgentSendRequest): NormalizedAgentSend {
   const channel = textValue(request.channel, "channel") as AgentSendChannel;
   if (!SEND_CHANNELS.has(channel)) throw new Error(`Unsupported send channel: ${channel}.`);
   const params = objectValue(request.params, "params");
-  const payload = payloadFields(objectValue(request.payload, "payload"));
+  const rawPayload = objectValue(request.payload, "payload");
+  const payload = payloadFields(rawPayload);
+  if (Object.prototype.hasOwnProperty.call(rawPayload, "fileId") && (channel !== "napcat" || params.target !== "group")) {
+    throw new Error("payload.fileId requires channel=napcat and params.target=group.");
+  }
   const tracking = objectValue(request.tracking, "tracking", false);
   const styleValidation = normalizeStyleValidationMode(request.styleValidation);
   assertOnlyFields(tracking, ["requirementId", "sendContextReviewToken"], "tracking");

@@ -1,5 +1,6 @@
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import type http from "node:http";
+import { validateLanAgentRequestBody } from "./lanAgentBodyAuthority.js";
 import type {
   CriticalProjectFactDisposition,
   KnowledgeMatchCallbackInput,
@@ -75,11 +76,21 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
 function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    let bytes = 0;
+    let tooLarge = false;
+    request.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += buffer.length;
+      if (bytes > 1024 * 1024) { tooLarge = true; chunks.length = 0; }
+      else if (!tooLarge) chunks.push(buffer);
+    });
     request.on("end", () => {
       try {
+        if (tooLarge) throw new Error("Request body exceeds 1048576 bytes.");
         const text = Buffer.concat(chunks).toString("utf8");
-        resolve((text ? JSON.parse(text) : {}) as T);
+        const body = text ? JSON.parse(text) : {};
+        validateLanAgentRequestBody(request, body);
+        resolve(body as T);
       } catch (error) {
         reject(error);
       }

@@ -2,7 +2,7 @@ import { renderAgentReplyParameters } from "./agentRequests/replyParameters.js";
 import { AgentReplyStateError } from "./agentRequests/replyError.js";
 import { promptConfirmsDelivery } from "./agentRequests/rolloutReceipt.js";
 import type { AgentInstanceBinding } from "./shared/agentInstance.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { recoverAgentResponseDeliveryFromRollout } from "./agentRequests/deliveryRecovery.js";
 import { renderAgentResponseContent } from "./agentRequests/responseContent.js";
 import fs from "node:fs";
@@ -156,7 +156,18 @@ export type AgentThreadDriver = {
   }>;
 };
 
+/** Manager-approved identity from the authenticated HTTP request, never its JSON body. */
+export type AgentThreadRemoteSource = {
+  nodeId: string;
+  agentId: string;
+  provider: "codex" | "dsh";
+  sessionId: string;
+  sessionName: string;
+  workspace?: string;
+};
+
 export type AgentThreadRequestOptions = {
+  remoteSource?: AgentThreadRemoteSource;
   onChatHistoryDelivery?: (request: AgentThreadRequest, result: AgentThreadRequestResult) => Promise<void>;
   allowedWorkspaces: string[];
   defaultWorkspace?: string;
@@ -573,8 +584,53 @@ async function resolveAgentThreadSendSource(
     threadId: string;
     threadName: string;
     workspace?: string;
+    nodeId?: string;
+    agentId?: string;
   };
 } | null> {
+  const remote = options.remoteSource;
+  if (remote) {
+    const identity = agentIdentityForMessageSource(messageSource);
+    if (!identity || request.sourceThreadId !== remote.sessionId
+      || identity.sessionId !== remote.sessionId || identity.agentAdapter !== remote.provider) {
+      throw new Error("messageSource.sessionId and adapter must exactly match the trusted remote sourceThreadId.");
+    }
+    const nodeId = requiredText(remote.nodeId, "remoteSource.nodeId", 300);
+    const agentId = requiredText(remote.agentId, "remoteSource.agentId", 300);
+    const sessionId = requiredText(remote.sessionId, "remoteSource.sessionId", 300);
+    const sessionName = requiredText(remote.sessionName, "remoteSource.sessionName", maxTitleInputLength);
+    if (remote.provider !== "codex" && remote.provider !== "dsh") {
+      throw new Error("Invalid trusted remote source provider.");
+    }
+    // Instance dispatch currently has no durable, authenticated reply route for this namespace.
+    if (request.responsePolicy !== "none" || request.inReplyToRequestId) {
+      throw new Error("Trusted remote source requires responsePolicy=none; cross-instance formal replies are not supported.");
+    }
+    const agentType = normalizeAgentThreadSourceType(requiredText(request.sourceAgentType, "sourceAgentType", 40));
+    const threadId = `instance-${createHash("sha256").update(JSON.stringify([nodeId, agentId, sessionId])).digest("hex")}`;
+    const resolvedAgent = {
+      agentAdapter: remote.provider,
+      agentType: agentThreadSourceLabels[agentType],
+      sessionId: threadId,
+      sessionName,
+      ...(remote.workspace ? { workspace: remote.workspace } : {})
+    };
+    return {
+      messageSource: messageSource.type === "plan"
+        ? { ...messageSource, sourceAgent: resolvedAgent }
+        : { type: "agent", ...resolvedAgent },
+      source: {
+        agentAdapter: remote.provider,
+        agentType,
+        agentLabel: agentThreadSourceLabels[agentType],
+        threadId,
+        threadName: sessionName,
+        ...(remote.workspace ? { workspace: remote.workspace } : {}),
+        nodeId,
+        agentId
+      }
+    };
+  }
   const rawSourceThreadId = optionalText(request.sourceThreadId, "sourceThreadId", 80);
   if (!rawSourceThreadId) {
     if (request.sourceAgentType != null) {
@@ -805,8 +861,16 @@ export async function handleAgentThreadRequest(
 ): Promise<AgentThreadRequestResult> {
   const result = await executeAgentThreadRequest(request, options, driver);
   if (request.action === "send" && request.messageSource?.type === "agent"
+    && (!options.remoteSource || Boolean(result.data.source && result.data.messageSource))
     && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(result.data.status))) {
-    try { await options.onChatHistoryDelivery?.(request, result); }
+    const historyRequest = options.remoteSource && result.data.messageSource
+      ? {
+          ...request,
+          sourceThreadId: (result.data.source as { threadId: string }).threadId,
+          messageSource: result.data.messageSource as RabiMessageSource
+        }
+      : request;
+    try { await options.onChatHistoryDelivery?.(historyRequest, result); }
     catch (error) {
       // The message may already be accepted. A history failure must never invite a resend.
       result.data.chatHistoryWarning = error instanceof Error ? error.message : String(error);

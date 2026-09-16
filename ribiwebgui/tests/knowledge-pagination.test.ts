@@ -94,7 +94,7 @@ test("knowledge navigation reuses the session cache until the user explicitly re
   assert.doesNotMatch(visibilityHandler, /refreshKnowledge\(\)/);
   assert.doesNotMatch(activationHandler, /refreshKnowledge\(\)/);
   assert.match(page, /onActivated\(activateKnowledgePage\)/);
-  assert.match(page, /onDeactivated\(deactivateKnowledgePage\)/);
+  assert.match(page, /onDeactivated\(\(\) => \{\s*feedbackFocusOpen\.value = false;\s*deactivateKnowledgePage\(\);/);
   assert.match(page, /@click="refreshKnowledge"/);
 });
 
@@ -199,7 +199,7 @@ test("knowledge page requests bounded plan pages and progressively renders plans
   assert.doesNotMatch(client, /ROLE_PLAN_BACKGROUND_PAGE_SIZE/);
   assert.match(page, /!fromBackground && planPageBackgroundRequest === currentRequest/);
   assert.match(page, /refreshExpandedPlanAgentStatuses\(\);\s*loadAllRemainingPlans\(selectedRoleId, currentRequest\);/);
-  assert.match(page, /onBeforeUnmount\(\(\) => \{\s*requestVersion \+= 1;/);
+  assert.match(page, /onBeforeUnmount\(\(\) => \{\s*feedbackRoleEpoch\+\+;\s*feedbackFocusRequest\+\+;\s*feedbackQueueRequest\+\+;\s*requestVersion \+= 1;/);
   assert.match(page, /if \(hasMorePlans\.value && !planPageBackgroundRequest\) void loadMorePlans\(\)/);
   assert.match(page, /if \(hasMoreMemory\.value\) void loadMoreMemory\(\)/);
   assert.match(page, /MAX_CONCURRENT_PLAN_DETAILS = 4/);

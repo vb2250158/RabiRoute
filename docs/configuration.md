@@ -20,7 +20,7 @@ Manager 监听当前 Profile 和全部包根目录。revision、配置、权限�
 
 ### 插件入口与资源所有权
 
-当前内置目录注册 29 个 Manager 插件。入口按 `in_process`、`isolated` 或 `declarative` 执行；`isolated` 入口不会由 Manager loader 导入顶层代码，长期子进程必须持有 process lease。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、Host 专用关闭路径、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
+当前内置目录注册 31 个 Manager 插件。入口按 `in_process`、`isolated` 或 `declarative` 执行；`isolated` 入口不会由 Manager loader 导入顶层代码，长期子进程必须持有 process lease。`manager:core` 保留恢复、目录和基础页面贡献；可选业务入口由各插件注册。中央 HTTP 链只保留局域网鉴权、只读写门禁、插件路由分发、Manager SSE、插件目录/对账、静态资源、Host 专用关闭路径、控制路径 JSON 404，以及其他路径 WebGUI HTML 回退。业务路由必须声明稳定 `routeId`。生产 Manager 路由使用真实 `exact` 或 `prefix` matcher，`dynamic` 只保留为扩展合同。Registry 拒绝重复 `routeId`，以及 method 重叠时的 `exact/exact`、`exact/prefix` 和 `prefix/prefix` 路径冲突；`/meta`、`/manager-config` 等非 `/api` 路径同样使用显式静态声明。
 
 表现 Contribution Catalog 发布 `page`、`navigation`、`settings-section`、`status-card`、`command`、`tray-menu`、`hotkey` 和 `theme`。WebGUI 的可信 command/renderer 注册表处理随构建发布的表现合同；Desktop 的冻结 Registry 只包含本机构建内置合同，并消费 Manager 校验过的声明式贡献。所有合同绑定 `pluginId + instanceId`，目录引用必须命中同一插件实例，跨插件引用失败关闭。`manager:desktop` 的 `settings-section` 负责系统划词、系统截图、剪贴板贴图快捷键和指向 Host 的登录启动设置；活动 command 贡献控制系统监听、目录操作和手动触发，不能贡献应用 lifecycle。目录不可用或刷新失败时撤销旧贡献，只保留 Host 绑定的 WebGUI 入口。
 

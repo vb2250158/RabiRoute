@@ -20,6 +20,7 @@ const rolesDir = ref("");
 const dirSaving = ref(false);
 const dirError = ref("");
 const rabiName = ref("");
+const agentUploadMaxFileMiB = ref(2048);
 const rabiSaving = ref(false);
 const rabiError = ref("");
 const rabiLinkRelayEnabled = ref(false);
@@ -171,6 +172,7 @@ async function copyWebguiLanText(value: string, successMessage: string): Promise
 }
 
 function loadRabiLinkRelayForm(): void {
+  agentUploadMaxFileMiB.value = store.meta.agentUploads?.maxFileMiB ?? 2048;
   const relay = store.meta.rabiLinkRelay || {};
   rabiLinkRelayEnabled.value = relay.enabled === true;
   rabiLinkRelayUrl.value = relay.url || "";
@@ -223,6 +225,7 @@ async function saveRabiIdentity(): Promise<void> {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         rabiName: rabiName.value,
+        agentUploads: { maxFileMiB: Number(agentUploadMaxFileMiB.value) },
         rabiLinkRelay: relayPatch
       })
     });
@@ -277,6 +280,7 @@ const trackedSettingValues = [
   routeDir,
   rolesDir,
   rabiName,
+  agentUploadMaxFileMiB,
   rabiLinkRelayEnabled,
   rabiLinkRelayUrl,
   rabiLinkRelayAppToken,
@@ -367,6 +371,7 @@ onBeforeUnmount(() => {
         <v-alert v-if="rabiError" type="error" variant="tonal" density="compact" class="mb-3">{{ rabiError }}</v-alert>
         <div class="form-grid">
           <v-text-field v-model="rabiName" label="RabiRoute 实例名" :placeholder="store.meta.computerName || 'RabiRoute'" density="compact" hide-details />
+          <v-text-field v-model.number="agentUploadMaxFileMiB" label="远端 Agent 单文件上传上限（MiB）" type="number" min="1" max="2048" step="1" density="compact" hint="允许 1–2048 MiB；保存后重启 Manager 生效。QQ 群文件仍受平台限制。" persistent-hint />
           <v-text-field :model-value="store.meta.rabiGuid || '-'" label="RabiRoute GUID" density="compact" readonly hide-details />
         </div>
         <v-divider class="my-4" />

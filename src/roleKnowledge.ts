@@ -1182,9 +1182,8 @@ function validatePlanWrite(
   if (plan.isBlocked === true && !plan.blockedBy?.trim()) {
     throw new RoleStorageValidationError("A blocked plan must provide blockedBy.");
   }
-  if (plan.isBlocked === true && !status.requiresApproval) {
-    throw new RoleStorageValidationError("Only a plan status configured to require approval can be blocked by a pending approval.");
-  }
+  // The compatibility blocking projection follows the retained approval contract,
+  // not the marker: recorded feedback and confirmed delivery retain that evidence.
   assertTextLimit("Plan source.summary", plan.source?.summary, limits.sourceSummaryChars);
   assertTextLimit("Plan taskBinding.sessionId", plan.taskBinding?.sessionId, 240);
   assertTextLimit("Plan taskBinding.sessionTitle", plan.taskBinding?.sessionTitle, 240);

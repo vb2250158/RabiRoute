@@ -45,6 +45,35 @@ test("instance identity survives restart and management replies stay on their au
   }
 });
 
+test("node credentials bind identity and Manager grants override remote enabled claims", async () => {
+  const statePath = temporaryStatePath();
+  let credentialValid = true;
+  let enabled = false;
+  const registry = new LanAgentRegistry({ statePath,
+    authenticateNode: token => credentialValid && token === "node-fixture" ? { nodeId: "alpha" } : null,
+    isAgentEnabled: (nodeId, agentId) => enabled && nodeId === "alpha" && agentId === "first"
+  });
+  const server = http.createServer();
+  registry.attach(server, { enabled: () => true, getToken: () => "admin-fixture" });
+  const port = await listen(server);
+  let client: ConnectedClient | undefined;
+  try {
+    client = await connectNode(port, "node-fixture", "alpha", [{ agentId: "first", name: "Worker", provider: "codex-desktop", enabled: true }]);
+    assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, false);
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", agentId: "first", targetAgent: "codex-desktop", message: "fixture" }), /not enabled/);
+    enabled = true;
+    assert.equal(registry.listInstances()[1]?.agents[0]?.enabled, true);
+    assert.throws(() => registry.assignTask({ nodeId: "alpha", targetAgent: "codex-desktop", message: "fixture" }), /not enabled/);
+    const closed = new Promise<void>(resolve => client!.socket.once("close", () => resolve()));
+    credentialValid = false;
+    client.socket.send(JSON.stringify({ type: "heartbeat" }));
+    await closed;
+  } finally {
+    client?.socket.close(); registry.close(); await closeServer(server);
+    fs.rmSync(path.dirname(statePath), { recursive: true, force: true });
+  }
+});
+
 function temporaryStatePath(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-lan-agent-registry-"));
   return path.join(root, "state.json");

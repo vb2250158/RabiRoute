@@ -34,6 +34,7 @@ export const activate = definePlugin({
             messageProcessingBoard: runtime.messageProcessingBoard,
             applyManagedAgentThreadDefaults: runtime.applyManagedAgentThreadDefaults,
             agentThreadRequestOptions: runtime.agentThreadRequestOptions,
+            getTrustedRemoteSource: runtime.getTrustedLanAgentSource,
             handleAgentThreadRequest: runtime.handleAgentThreadRequest,
             agentThreadRequestFailureData: runtime.agentThreadRequestFailureData,
             setMessageProcessingPlanBaseline: runtime.setMessageProcessingPlanBaseline,

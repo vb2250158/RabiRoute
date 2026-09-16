@@ -226,6 +226,7 @@ export type MetaPayload = {
   managerPort: number;
   rabiGuid?: string;
   rabiName?: string;
+  agentUploads?: { maxFileMiB: number };
   webguiLan?: {
     enabled?: boolean;
     tokenConfigured?: boolean;
@@ -359,6 +360,8 @@ export type RolePlan = {
     tone: string;
     statusLevel: number;
     acceptsGuidance: boolean;
+    terminal?: boolean;
+    roles?: string[];
     views: Array<"current" | "plans" | "archived">;
     palette: {
       accent: string;
@@ -386,7 +389,7 @@ export type RolePlan = {
       };
     };
     approval: {
-      state: "none" | "incomplete" | "ready";
+      state: "none" | "incomplete" | "ready" | "approved";
       enabled: boolean;
       label: string;
       helper: string;
@@ -413,6 +416,13 @@ export type RolePlanHistoryRecord = {
   after: RolePlanHistorySnapshot;
 };
 
+export type RolePlanFeedbackFormData = {
+  questions: import("@shared/planQuestions").PlanQuestion[];
+  approvalContract?: RolePlanApprovalContract;
+  answers: Record<string, import("@shared/planQuestions").PlanQuestionAnswer>;
+  text: string;
+};
+
 export type RolePlanFeedback = {
   id: string;
   roleId: string;
@@ -425,6 +435,7 @@ export type RolePlanFeedback = {
   author: "user" | "agent" | "system";
   source: "webgui" | "tray" | "qq" | "agent" | "api";
   text: string;
+  formData?: RolePlanFeedbackFormData;
   attachments: PlanFeedbackAttachment[];
   planAttachments: PlanAttachmentPresentation[];
   createdAt: string;

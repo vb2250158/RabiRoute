@@ -8,6 +8,10 @@ English | <a href="./windows-launcher-and-packaging.md">简体中文</a>
 
 The Windows package has one application-lifecycle entry: `RabiRouteHost.exe`. Manager owns business state and the tray/task window is presentation; both are same-generation children created by Host. The tray is neither a lifecycle owner nor a second desktop application.
 
+## Installation, upgrades, and recovery
+
+A portable ZIP and `SHA256SUMS.txt` are also published. The ZIP uses the `RabiRouteHost.exe + current.json + versions/<releaseId>` layout and must be extracted only into a new empty directory; use Setup for every existing installation. Setup embeds that exact ZIP, stages it on the installation volume, verifies every manifest hash and size plus private-path, reparse-point, and Host self-test gates, then issues a generation-fenced quit. Only a valid candidate can atomically replace `current.json` and the bootstrap; failure restores the previous pointer and bootstrap. Exactly identified retired lifecycle entries move into installer-owned, non-executable quarantine names ending in `.retired`; rollback or power-loss recovery restores them in place, while foreign and similarly suffixed files never move. `data/`, `logs/`, and foreign files are neither overwritten nor removed by uninstall. Windows packages are currently unsigned, so verify the checksum before accepting a SmartScreen unknown-publisher warning.
+
 ## Lifecycle ownership
 
 Background failures are separate from core API readiness: memory-consolidation and other background incidents alone do not degrade `health.state`. `health.backgroundState` and `health.backgroundIncidentCount` retain the failure state, with details in `backgroundLifecycle` and logs. Required capabilities, plan-storage startup and Route readiness checks remain unchanged. Background work backs off independently without blocking unrelated APIs. Uncertain memory delivery persists a pending receipt; subsequent attempts only read the original receipt and never automatically resend an unconfirmed message. Removed schedule targets no longer contribute to current failure summaries.

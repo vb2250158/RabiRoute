@@ -3,6 +3,10 @@ import { EventEmitter } from "node:events";
 import type http from "node:http";
 import test from "node:test";
 import type { AgentRequestRecord, AgentRequestStore } from "../agentRequests/store.js";
+import type { AgentSendSender } from "../agentSend.js";
+import { registerLanAgentBodyGuard, setTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
+import { assertAgentSendPermission } from "./agentSendPermission.js";
+import type { GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import {
   createAgentCommunicationRoutes,
   type AgentCommunicationRoutesContext
@@ -59,6 +63,68 @@ function context(overrides: Partial<AgentCommunicationRoutesContext> = {}): Agen
     ...overrides
   };
 }
+
+test("send forwards only request-owned remote authority to Route permission", async () => {
+  const remote: TrustedLanAgentSource = {
+    nodeId: "remote-node", agentId: "remote-agent", provider: "dsh",
+    sessionId: "same-session", sessionName: "Remote primary"
+  };
+  for (const bound of [false, true]) {
+    const req = request("POST");
+    setTrustedLanAgentSource(req, remote);
+    registerLanAgentBodyGuard(req, () => undefined);
+    const res = response();
+    const statuses: number[] = [];
+    let delivered = false;
+    const definition = {
+      primaryAgentAdapter: "dsh", dshSessionId: remote.sessionId,
+      codexHooks: { onlyPrimaryPersonaCanSendMessages: true },
+      agentInstanceBindings: bound ? { dsh: { instanceId: remote.nodeId, agentId: remote.agentId } } : undefined
+    } as GatewayDefinition;
+    const routes = createAgentCommunicationRoutes(context({
+      readJsonBody: async <T>() => ({
+        sender: { agentType: "primary_persona", sessionId: remote.sessionId },
+        remoteSource: { ...remote, nodeId: "forged-node" }
+      } as T),
+      send: async (body, options) => {
+        assert.deepEqual(options?.remoteSource, remote);
+        assertAgentSendPermission(body.sender as AgentSendSender, definition, options?.remoteSource);
+        delivered = true;
+        return { statusCode: 202, body: { ok: true } };
+      },
+      jsonResponse: (_res, status) => { statuses.push(status); }
+    }));
+    assert.equal(routes.handler(req, new URL("http://localhost/api/agent/send"), res), true);
+    res.emit("close");
+    await routes.stopAcceptingAndDrain();
+    assert.equal(delivered, bound);
+    assert.deepEqual(statuses, [bound ? 202 : 400]);
+  }
+});
+
+test("send ignores body authority locally and fails closed for a remote request without trusted session", async () => {
+  for (const remoteRequest of [false, true]) {
+    const req = request("POST");
+    if (remoteRequest) registerLanAgentBodyGuard(req, () => undefined);
+    let sent = false;
+    const statuses: number[] = [];
+    const routes = createAgentCommunicationRoutes(context({
+      readJsonBody: async <T>() => ({ remoteSource: { nodeId: "forged-node" } } as T),
+      send: async (_body, options) => {
+        assert.equal(options?.remoteSource, undefined);
+        sent = true;
+        return { statusCode: 202, body: { ok: true } };
+      },
+      jsonResponse: (_res, status) => { statuses.push(status); }
+    }));
+    const res = response();
+    routes.handler(req, new URL("http://localhost/api/agent/send"), res);
+    res.emit("close");
+    await routes.stopAcceptingAndDrain();
+    assert.equal(sent, !remoteRequest);
+    assert.deepEqual(statuses, [remoteRequest ? 400 : 202]);
+  }
+});
 
 test("communication drain waits for send after the HTTP response closes", async () => {
   const sendResult = deferred<{ statusCode: number; body: Record<string, unknown> }>();

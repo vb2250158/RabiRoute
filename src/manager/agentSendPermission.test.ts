@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeGatewayDefinition, type GatewayDefinition } from "../shared/gatewayConfigModel.js";
 import { assertAgentSendPermission } from "./agentSendPermission.js";
+import type { TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 
 function route(overrides: Partial<GatewayDefinition> = {}): GatewayDefinition {
   const definition = {
@@ -56,6 +57,40 @@ test("enabled DSH Hook accepts only the configured DSH primary persona session",
     /Only the configured DSH primary persona session/i
   );
 });
+
+for (const provider of ["codex", "dsh"] as const) {
+  test(`${provider} remote primary permission requires the exact approved principal and Route binding`, () => {
+    const remote: TrustedLanAgentSource = {
+      nodeId: "remote-node", agentId: "remote-agent", provider,
+      sessionId: "primary-1", sessionName: "Remote primary"
+    };
+    const definition = route({
+      primaryAgentAdapter: provider,
+      agentAdapters: [provider],
+      dshSessionId: "primary-1",
+      codexHooks: { onlyPrimaryPersonaCanSendMessages: true } as GatewayDefinition["codexHooks"]
+    });
+    const sender = { agentType: "primary_persona", sessionId: "primary-1" };
+    const denied = /Only the configured .* primary persona session/i;
+    // A colliding local session ID never grants a remote principal local authority.
+    assert.throws(() => assertAgentSendPermission(sender, definition, remote), denied);
+    definition.agentInstanceBindings = { [provider]: { instanceId: remote.nodeId, agentId: remote.agentId } };
+    assert.doesNotThrow(() => assertAgentSendPermission(sender, definition, remote));
+    for (const mismatch of [
+      { nodeId: "other-node" }, { agentId: "other-agent" },
+      { sessionId: "other-session" }, { sessionId: "" },
+      { provider: provider === "codex" ? "dsh" as const : "codex" as const }
+    ]) {
+      assert.throws(() => assertAgentSendPermission(sender, definition, { ...remote, ...mismatch }), denied);
+    }
+    assert.throws(() => assertAgentSendPermission({ ...sender, sessionId: "other-session" }, definition, remote), denied);
+    assert.throws(() => assertAgentSendPermission({ ...sender, agentType: "plan_agent" }, definition, remote), denied);
+    // Remote primary sessions need not share the local primary's bare ID.
+    const differentRemote = { ...remote, sessionId: "remote-primary" };
+    assert.doesNotThrow(() => assertAgentSendPermission({ ...sender, sessionId: differentRemote.sessionId }, definition, differentRemote));
+    assert.doesNotThrow(() => assertAgentSendPermission(sender, definition));
+  });
+}
 
 test("the Route configuration enables this setting for managed primary Agents", () => {
   assert.equal(normalizeGatewayDefinition({

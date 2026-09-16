@@ -10,6 +10,15 @@
 - 查找资料、历史决定、预定安排或任务线索时，先读 `.agents/skills/rabi-knowledge-search/SKILL.md`；Rabi 在线时先查记忆和计划，再按需搜索文件，离线直接普通搜索。
 ```
 
-安装前核对目标目录：首次安装创建目录，升级时先比较差异并保留项目修改，再同步源文件。复制后比较文件哈希，并检查 `AGENTS.md` 路径可达。更新 Rabi 仓库不会自动更新已有项目副本；升级时重复比较和同步。新任务可自动加载项目入口；已有任务需明确读取更新后的入口。
+安装前核对目标目录：首次安装创建目录，升级时先比较差异并保留项目修改，再同步源文件；复制后检查 `AGENTS.md` 路径是否可达。项目副本是本地化的派生版，`README.md`、`README_en.md` 等在项目里可能已被改写，不要用整目录覆盖。
+
+上游改动后的差异比对和基线记录使用脚本，不靠人记得：
+
+```powershell
+pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <项目根>
+pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <项目根> -Check
+```
+
+第一条报告每个技能相对基线的漂移，第二条作为门禁（不是 `in-sync` 或被目标项目 `AGENTS.md` 引用缺失时返回非零），移植完成后用 `-UpdateBaseline` 记录新基线。判定含义和 Agent 流程见 [项目技能的分发与漂移检测](../../docs/project-skill-distribution.md)。
 
 当前任务需要已有的相关人格范围与受支持的连接入口；技能不保存机器地址、访问密钥或人格绑定。连接和请求遵循 [SKILL.md](SKILL.md) 的动态地址、有限超时和离线兜底。项目专属连接配置留在项目，不改写 Rabi 的通用正文。

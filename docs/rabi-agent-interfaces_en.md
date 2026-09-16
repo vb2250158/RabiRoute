@@ -661,6 +661,63 @@ Set `channel=napcat`, name the group, and always provide `params.replyToMessageI
 
 Local QQ group-file upload uses the same endpoint with `payload.type: "file"`, an allowed `payload.path`, and a route policy whose NapCat `supportedOutputs` includes `file`. The real path must stay under `messageAdapterPolicies.napcat.allowedFileRoots`.
 
+### Uploading from a remote Agent before sending a group file (experimental contract)
+
+> Upload passed local real-HTTP and simulated-NapCat integration, a full build and deployment health checks for `0.3.4-4b5d30118b40`. Real two-computer group-file acceptance remains pending. Check the running instance's capabilities and version; a local simulated-channel test is not a real-group receipt.
+
+Remote Agents should prefer the installed connector's `--api` command supplied by the Hook. Local Host discovery applies only on the Manager computer; absence of Host remotely does not mean Manager is offline. Use `GET /api/lan-agent/capabilities` for operations, `GET /api/lan-agent/resources` for readable documents and references, then `/api/lan-agent/resources/read?id=...` with a returned ID. Public contracts include English counterparts; arbitrary Markdown links are not readable-resource grants. See [Remote setup and updates](./lan-rabi-agent-bootstrap_en.md#installation-and-releases) for content-digest updates and the first-bootstrap/DSH-reload requirement.
+
+A primary Agent enrolled with an independent node credential and approved by the controlling Manager may upload a remote file to Manager, then explicitly call the send API. The CLI reads the credential and exact Agent identity from private configuration; do not use a shared WebGUI Token or put credentials in command arguments. Uploading never sends automatically:
+
+```bash
+node rabi-agent.mjs --upload <file> --agent <agentId> --upload-id <UUID>
+node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
+```
+
+`--upload-id` is a required stable UUID saved by the caller beforehand; it is not generated automatically. The underlying request is `PUT /api/agent/uploads/<UUID>` with raw file bytes, `Content-Type: application/octet-stream`, and an `Idempotency-Key` exactly matching the path UUID. `x-rabiroute-file-name` is the URI-encoded basename without directories; `x-rabiroute-content-sha256` is the content SHA-256. Authentication uses the Bearer node credential and `x-rabiroute-agent-id`. `GET` on the same path reads metadata. Successful responses have the following shape and never expose Manager's local `path`:
+
+```json
+{
+  "code": 0,
+  "data": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "fileName": "report.zip",
+    "size": 1234,
+    "sha256": "<64 hexadecimal characters>",
+    "expiresAt": "2030-01-02T00:00:00.000Z"
+  }
+}
+```
+
+Defaults are 2 GiB per file (2048 MiB, the hard maximum), 4 GiB total, at most 100 files, and a 24-hour TTL; HTTP uploads have a total concurrency limit of 4 across owners. Ownership is scoped to `nodeId + agentId`. Sessions of the same Agent may share files, but every request still requires a trusted, approved source; knowing an ID is not authorization. After a timeout, 503, uncertain response, or generation change, retain the original UUID, bytes and digest, rediscover and verify current `/meta`, then `GET` the original path to check `id/fileName/size/sha256/expiresAt`. Never automatically retry PUT or change the ID.
+
+If disk permissions or file locks prevent temporary reservation cleanup, its quota remains conservatively reserved and an audit event is recorded rather than deleting possibly active data. Repair the storage fault and trigger cleanup again after a Host restart; automatic recovery from every storage failure is not guaranteed.
+
+Large files use backpressured binary streaming, disk writes, and incremental SHA-256 verification, not whole-package buffers or JSON/Base64 bodies. The upload deadline is 30 minutes. In Settings → Rabi identity, save `agentUploads.maxFileMiB` as an integer from `1..2048` (default `2048`); it is persisted in `data/Config.json` and takes effect after Manager restarts. Local administrators may also use the existing protected `PATCH /api/rabi/identity`; remote Agents cannot raise this quota. The client hard maximum remains 2 GiB, and a lower Manager setting takes precedence.
+
+A controlled integration test transferred **734 MiB (769654784 bytes)** through the real client → loopback HTTP → managed storage → simulated NapCat and verified size and SHA-256. The source was generated in 64 KiB chunks, Buffer allocations/concatenations above 8 MiB were guarded, and the sink checked chunks incrementally. Enable this case in `src/manager/agentUploadFlow.test.ts` with `RABI_TEST_LARGE_UPLOAD=1`; routine runs skip it. This is not a QQ-platform acceptance test: actual QQ/NapCat size, account/group permission, filesystem access and response deadlines still require channel receipts. Legacy connectors need the new bootstrap described in the onboarding guide, and hosts caching the old Hook must reload; raising the server quota does not update old clients.
+
+Minimal send example: complete the upload and verify its receipt first, then supply this JSON through standard input to `node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin`. Replace identities and targets from the current injected template, use upload `data.id` as `fileId`, and save a separate stable `deliveryId` for this send:
+
+```json
+{
+  "deliveryId": "send-upload-example-001",
+  "sender": { "agentType": "primary_persona", "sessionId": "<approved-complete-session-id>" },
+  "routeId": "<exact-route-id>",
+  "channel": "napcat",
+  "params": { "target": "group", "groupId": "<group-id>", "instanceId": "<napcat-instance-id>", "replyToMessageId": "" },
+  "payload": { "type": "file", "fileId": "00000000-0000-4000-8000-000000000001", "fileSha256": "<upload-data.sha256>", "text": "Report file." }
+}
+```
+
+- A `fileId` requires `fileSha256=upload data.sha256` (64 lowercase hexadecimal characters), binding the reference to its original content so UUID reuse after TTL expiry cannot replace the bytes behind an old reference. The send callback checks the actual hash inside the lease and rejects any mismatch.
+- `payload.text` is optional. `replyToMessageId` must be a concrete source message ID or an intentional empty string; existing reference-review and tracking requirements remain unchanged.
+- `fileId` is limited to `channel=napcat`, `target=group`, `type=file` and is mutually exclusive with `path`/`url`/`fileName`. It cannot send images, voice, or another channel. The display filename (`displayName`) comes from upload metadata, not a send-request override.
+- Manager's internal trusted resolver rechecks authorization, ownership, integrity and TTL per request, holding an inflight lease against cleanup. It does not expand `allowedFileRoots`; the existing local `path` flow and file-root checks remain unchanged.
+- The channel must still permit sending and support `file`. `onlyPrimary` still checks the trusted provider, exact Route's remote instance/node and Agent binding, approved session, and `primary_persona` identity. Upload success does not prove group delivery: inspect both Manager and NapCat send receipts, and query the original `deliveryId` receipt if the send is uncertain.
+- If NapCat accepted the group file but its caption failed, retain `status=sent` and send only the missing text, never the file again. The current NapCat API reads the path supplied by Manager. NapCat on another machine therefore needs a shared directory that makes that path readable. This feature uploads from a remote Agent to Manager; it does not solve arbitrary cross-machine NapCat file access.
+- Remote thread-bridge permissions do not expand: only `responsePolicy: "none"` one-way delivery is supported. `required`, formal replies with `inReplyToRequestId`, and remote-to-remote delivery remain rejected.
+
 ### WeCom
 
 Use `channel=wecom` and provide the exact `params.chatId`. A source response may also include `params.reqId`; a proactive send omits it. Source context does not select the channel. The WeCom adapter remains experimental.
@@ -931,7 +988,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI uses this endpoint for whole-plan guidance when `presentation.acceptsGuidance=true` outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both notify the Agent through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
+RibiWebGUI uses this endpoint for whole-plan guidance when `presentation.acceptsGuidance=true` outside approval, while WebGUI and the tray continue to use it for formal feedback on the current approval step. Both support save-only submission; only **Submit and deliver** requests Agent notification through the independent `plan_feedback` system event. Plan guidance carries only `planId` and must omit `stepId`:
 
 ```json
 {
@@ -945,7 +1002,9 @@ RibiWebGUI uses this endpoint for whole-plan guidance when `presentation.accepts
 }
 ```
 
-Approval feedback remains associated with its approval step:
+Approval feedback remains associated with its approval step. Durably saving a user `approval_suggestion` publishes feedback, attachments, and the plan marker change in one WAL transaction. `markerStatus` uses the key referenced by the persona's `planWorkflow.roles.approved`, while `activationStatus` is unchanged. `presentation.approval.state=approved` means feedback was submitted, not that every option was authorized or implementation should start automatically. `notifyAgent=false` saves only; `notifyAgent=true` saves before delivery and changes the marker to `roles.analysis` only when a confirmed successful receipt matches the same `feedbackId` and the plan version has not changed. Pending, failed, or uncertain receipts cannot trigger that transition, and stale receipts cannot overwrite newer submissions or plan changes. Guidance and Agent responses do not trigger these transitions.
+
+Structured approval forms use optional `formData: { questions: PlanQuestion[], approvalContract?: PlanApprovalRequest, answers: Record<string, PlanQuestionAnswer>, text: string }`, with shared types in `src/shared/planFeedbackFormData.ts`. `questions` snapshots the source `currentStep.questions`; `answers` uses `question:<id>` and the default `approval-decision` answer IDs, and `text` preserves supplementary text. Approval forms must match `approvalContract` against the current `step.approvalRequest`; restoration requires both question and approval-contract snapshots to match. Manager generates authoritative `feedback.text` from `formData` instead of accepting conflicting handwritten text. Optional `reuseFeedbackId` reuses all attachments from an earlier feedback record in the same plan and accepts no local paths. Resubmission appends a new record; retries of the same submission retain its original `feedbackId`, form, and complete body. A changed approval contract requires renewed confirmation instead of reusing old selections. This example submits feedback without a structured form:
 
 ```json
 {
@@ -972,7 +1031,7 @@ When feedback targets the current structured `qa-* / verify-*` step, Manager tre
 
 With `notifyAgent=true`, POST returns HTTP `202` immediately after durable recording, normally with `deliveryStatus=pending`. Guidance and approval feedback reuse the same exact `taskBinding` delivery path. A complete binding uses `/api/agent/threads` and Desktop IPC to the original business task; only an incomplete binding sends the full feedback to the persona Agent. An unloaded owner remains `pending` under bounded retries, and only an accepted `start/steer` becomes `delivered`. The event does not enter the role-panel timeline or unified conversation ledger, and terminal state is announced as `plan_feedback_changed`.
 
-Agent handling notes for plan guidance use `kind=guidance_response`, `author=agent`, `source=agent`, and `notifyAgent=false`, associated only with `planId`. The Agent first reads the whole plan, updates its direction and any affected later steps, then writes the handling note without `stepId`. Approval handling continues to use `approval_response` under `planId / stepId`. Both are stored as `record_only`; feedback itself does not advance the plan.
+Agent handling notes for plan guidance use `kind=guidance_response`, `author=agent`, `source=agent`, and `notifyAgent=false`, associated only with `planId`. The Agent first reads the whole plan, updates its direction and any affected later steps, then writes the handling note without `stepId`. Approval handling continues to use `approval_response` under `planId / stepId`. Both Agent responses are stored as `record_only` without changing status, unlike the configured marker transitions triggered by saving and confirming delivery of user approval feedback.
 
 The shared plan API hints in every AgentPacket include both guidance and approval feedback contracts plus the rule to patch the plan separately after recording. Persona Skills do not need to duplicate the common interface.
 

@@ -6,7 +6,7 @@
 
 # 当前能力与成熟度
 
-本文描述 RabiRoute 当前 `0.2.x` 工作树中实际存在的能力，不把需求稿、设计稿或外部设备设想当成已完成功能。结论来自配置 Schema、运行入口、Manager API、WebGUI、适配器实现和当前自动化测试。
+本文描述 RabiRoute 当前 `0.3.4` 工作树中实际存在的能力，不把需求稿、设计稿或外部设备设想当成已完成功能。结论来自配置 Schema、运行入口、Manager API、WebGUI、适配器实现和当前自动化测试。
 
 消息处理 Agent 的列表、数量上限和实际投递共用同一套权重顺序：引用的 Agent 外发消息、原消息组、消息端、会话、说话人和最近使用时间优先，同分时才使用固定序号。缩小上限后，未完成的计划进展通知、计划/记忆回调、Agent 间待回复请求和提醒会迁移到排序范围内的当前任务；关闭消息处理模式后，这些后续工作和新聊天消息改投当前 Route 的主人格，不再自动打开旧消息处理任务。已完成记录仍保留原处理者用于审计。
 
@@ -95,7 +95,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 | 处理端 | 状态 | 实际边界 |
 | --- | --- | --- |
 | Codex | 已验证 | 真实消息只通过 Desktop IPC 投给 Codex/ChatGPT Desktop 任务 owner。有效任务 ID 定位既有任务，每次投递单独指定执行目录；任务保存的默认 cwd、Desktop 改名、索引标题滞后或 goal 完成都不会触发重复创建。任务未加载时用 deeplink 唤醒并重试，失败时不启动备用 Runtime。app-server 只用于空任务元数据 bootstrap。 |
-| 局域网 Rabi Agent | 实验支持 | 其他电脑可运行 `apps/rabi-agent/` 无界面进程，主动连接 Manager，领取任务并只通过该电脑的 Codex Desktop IPC 投给已配置任务 owner。节点、任务和更新状态由 Manager 保存；首次接入固定发布公钥 SHA-256 指纹；更新时先核对指纹，再验证 Ed25519 清单签名和每个文件的 SHA-256。当前自动化合同已通过，真实多电脑接入、更新和重连验收待完成。 |
+| 局域网 Rabi Agent | 实验支持 | `apps/rabi-agent/` 连接其他电脑的 Codex/DSH 既有任务，分别使用 Desktop IPC 与 DSH 本机会话接口。一次性票据换取独立节点凭据；Manager 单独授权各 Agent 使用受限 API、技能与上传。更新校验固定发布公钥指纹、Ed25519 清单签名与文件哈希。真实双机、群文件发送及旧节点迁移仍需验收；见[接入步骤与边界](lan-rabi-agent-bootstrap.md)。 |
 | DSH（DeepSeek Harness） | 实验支持 | 已实现 apiproxy Endpoint、工作目录和会话扫描，支持按完整 ID 续投、按名称 + 工作目录解析、唯一最新同名会话选择、零匹配幂等创建、改名、保存绑定和自动初始化。DSH 可作为主人格、消息处理 Agent、计划秘书、独立记忆整理 Agent 或业务 Agent；`RabiRoute Agent` 插件提供线程桥、外发、计划、记忆、消息处理和 Agent 间通信工具，Hook 约束与“仅允许主人格发送消息”也适用于 DSH 主 Agent。代码、WebGUI 和插件测试已覆盖；匿名测试 profile 已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、正式回复和无效 Endpoint 失败关闭。独立扫描可读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，并诊断插件缺失、未激活和版本不匹配。发布包与全新环境回归待完成。 |
 | Copilot CLI | 实验支持 | 调用本机 Copilot CLI，使用独立 session name 和 cwd，记录输出和状态；扫描接口明确提示尚未完成连续同会话端到端烟测。 |
 | AstrBot | 实验支持 | 支持 Dashboard 登录验证、项目/会话扫描、RabiRoute 插件部署和 ChatUI 会话投递；扫描接口明确提示仍需真实连续发送验收。 |
@@ -104,7 +104,7 @@ RabiRoute 负责消息进入、规则匹配、上下文包装、处理端投递�
 
 处理端创建已接入 Cordis 运行时：六个内置 Agent Adapter 由独立 Fiber 注册到同一清单（WorkBuddy 声明消息处理与 Hook 能力；计划秘书与记忆整理尚未适配，回执恢复亦不声明），类型解析、Gateway 配置枚举、Manager 扫描元数据和快速配置输入读取同一 manifest；兼容入口和原投递路径保持不变。单个 Fiber 与根 Context 的撤销已通过自动化测试。Manager 已通过 `/api/plugins/catalog` 发布统一插件目录；WebGUI 从目录生成受控导航并响应目录变化，Desktop 读取同一目录生成宿主预先注册的菜单、状态、设置、快捷键和主题入口。第三方 Vue 组件、脚本、样式和命令处理器仍未开放。
 
-Manager 的 29 个内置插件与树外插件统一使用 schema/profile v2。入口明确选择 `in_process`、`isolated` 或 `declarative`；Profile 的 `readyRequires` 决定 Manager 是否可对 Host 报 ready；Plugin Kernel 在替换时先释放消费者、再释放 provider，长期插件子进程由 Process Lease Registry 按 generation/activation/instance/revision 回收。任何非 v2 插件 Schema 都不进入运行链。
+Manager 的 31 个内置插件与树外插件统一使用 schema/profile v2。入口明确选择 `in_process`、`isolated` 或 `declarative`；Profile 的 `readyRequires` 决定 Manager 是否可对 Host 报 ready；Plugin Kernel 在替换时先释放消费者、再释放 provider，长期插件子进程由 Process Lease Registry 按 generation/activation/instance/revision 回收。任何非 v2 插件 Schema 都不进入运行链。
 
 目标 Desktop 任务的命令、文件、网络、权限和工具审批与 RabiRoute 的外部消息 Outbox policy 是两层不同边界。
 

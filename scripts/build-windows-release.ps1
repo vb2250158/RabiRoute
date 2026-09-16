@@ -78,7 +78,9 @@ foreach ($legacyRuntimeFile in @(
 
 $requiredPortableRuntimeFiles = @(
     "scripts/Resolve-RabiRouteManagerUrl.ps1",
-    "scripts/lib/discover-manager-url.mjs"
+    "scripts/lib/discover-manager-url.mjs",
+    "apps/rabi-agent/lib/manager-client.mjs",
+    "apps/rabi-agent/lib/manager-cli.mjs"
 )
 
 function Copy-TrackedTree([string]$RelativeRoot) {
@@ -338,6 +340,7 @@ foreach ($hostVersionEntry in Get-ChildItem -LiteralPath $hostVersionRoot -Force
 foreach ($tree in @(
     "assets",
     "docs",
+    "skills",
     "examples\data",
     "apps\rabi-agent",
     "plugin-adapters",
@@ -366,7 +369,7 @@ foreach ($relative in @(
 }
 
 Copy-RequiredPortableRuntimeFiles
-foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks", "skills\rabi-knowledge-search")) {
+foreach ($relative in @("apps\rabi-agent\runtime", "apps\rabi-agent\dist\agent-hooks")) {
     $source = Join-Path $repo $relative
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Instance Agent runtime was not built: $relative" }
     $destination = Join-Path $payload $relative
@@ -451,6 +454,7 @@ if ($rg) {
         (Join-Path $payload "dist"),
         (Join-Path $payload "ribiwebgui\dist"),
         (Join-Path $payload "docs"),
+        (Join-Path $payload "skills"),
         (Join-Path $payload "examples"),
         (Join-Path $payload "plugin-adapters"),
         (Join-Path $payload "scripts"),

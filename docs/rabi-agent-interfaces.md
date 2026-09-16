@@ -749,6 +749,63 @@ Outbox 会在字符串消息前添加 OneBot `[CQ:reply,id=123]`，或在消息�
 
 对应 NapCat 策略必须允许 `file`，并配置 `messageAdapterPolicies.napcat.allowedFileRoots`。RabiRoute 会校验文件存在、类型和真实路径，再调用 `upload_group_file`；成功结果包含 `sentFileName`，NapCat 返回稳定标识时还包含 `sentFileId`。如果文件上传成功但跟随的说明文本失败，返回仍为 `status=sent` 并在 `reason` 中说明文本失败，调用方只能补发文本，不能重复上传文件。
 
+### 远端 Agent 上传后发送群文件（实验合同）
+
+> 上传链路已通过本机真实 HTTP 与模拟 NapCat 集成、完整构建及 `0.3.4-4b5d30118b40` 部署健康核验；真实双机群文件尚未验收。先核对运行实例的 capabilities 与版本，不把本机模拟渠道测试当作真实群回执。
+
+远端优先使用 Hook 提供的已安装连接器 `--api`；本机 Host 发现规则仅适用于 Manager 电脑，远端没有 Host 不代表 Manager 离线。用 `GET /api/lan-agent/capabilities` 发现操作，`GET /api/lan-agent/resources` 发现实际可读的文档与 references，再用 `/api/lan-agent/resources/read?id=...` 读取返回的 ID。公共合同含对应英文版，不能把 Markdown 任意链接当成可读取资源。连接器按内容摘要更新及首次 bootstrap/DSH reload 要求见 [远端接入与更新](./lan-rabi-agent-bootstrap.md#安装与发布)。
+
+已使用独立节点凭据接入、并由总控批准的 primary Agent，可把远端文件上传到 Manager，再显式调用发送接口。CLI 从私有配置读取凭据和准确 Agent 身份；不使用共享 WebGUI Token，也不把凭据写到命令参数。上传不自动发送：
+
+```bash
+node rabi-agent.mjs --upload <file> --agent <agentId> --upload-id <UUID>
+node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
+```
+
+`--upload-id` 是调用方预先保存的稳定 UUID，必填，不自动生成。底层请求为 `PUT /api/agent/uploads/<UUID>`，正文为文件原始字节，`Content-Type: application/octet-stream`，`Idempotency-Key` 必须与路径 UUID 完全相同；`x-rabiroute-file-name` 为 URI 编码的 basename（不含目录），`x-rabiroute-content-sha256` 为内容 SHA-256。鉴权沿用 Bearer 节点凭据和 `x-rabiroute-agent-id`。`GET` 同一路径回读元数据；成功结构如下，不返回 Manager 的本地 `path`：
+
+```json
+{
+  "code": 0,
+  "data": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "fileName": "report.zip",
+    "size": 1234,
+    "sha256": "<64 hexadecimal characters>",
+    "expiresAt": "2030-01-02T00:00:00.000Z"
+  }
+}
+```
+
+默认限制为单文件 2 GiB（2048 MiB，硬上限）、总量 4 GiB、最多 100 个文件、TTL 24 小时；HTTP 上传总并发上限为 4，跨 owner 合计。归属按 `nodeId + agentId` 隔离，同一 Agent 的多个 session 可共享文件，但每次请求仍须来自可信且已批准的 source；知道 ID 不构成授权。超时、503、响应不确定或 generation 变化后，保留原 UUID、文件内容和摘要，先重新发现并核对当前 `/meta`，再 `GET` 原路径核对 `id/fileName/size/sha256/expiresAt`，不自动重试 PUT 或换 ID。
+
+如果磁盘权限或文件锁故障导致临时预留清理失败，系统保守保留其配额并记录审计，不删除可能活跃的数据。需修复存储故障，并在 Host 重启后再次触发回收；不保证任意存储故障都自动恢复。
+
+大文件通过有背压的二进制流上传、落盘和增量 SHA-256 校验，不把完整安装包读入内存，也不使用 JSON/Base64 传包。上传期限为 30 分钟。可在「设置 → Rabi 身份」保存 `agentUploads.maxFileMiB`，整数范围 `1..2048`，默认 `2048`；值保存在 `data/Config.json`，重启 Manager 后生效。本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity` 修改该字段；远端 Agent 不得借此提高配额。客户端硬上限仍是 2 GiB，Manager 配置更低时以服务器限制为准。
+
+受控集成测试已用 **734 MiB（769654784 字节）** 文件完成真实客户端 → loopback HTTP → 受管存储 → 模拟 NapCat 的上传和发送摘要核对；文件由 64 KiB 小块生成，测试禁止大于 8 MiB 的 Buffer 分配/拼接，接收端按块核对。用 `RABI_TEST_LARGE_UPLOAD=1` 启用 `src/manager/agentUploadFlow.test.ts` 的大文件用例，默认日常测试跳过。该结果不是 QQ 平台验收：真实 QQ/NapCat 的文件大小、账号及群权限、磁盘可读性和响应期限仍以实际渠道回执为准。旧连接器须按接入文档执行新版 bootstrap，已缓存旧 Hook 的宿主需重载；服务端增大配额不会升级旧客户端。
+
+最短发送示例：先完成上述上传并确认回执，再把以下 JSON 经标准输入交给 `node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin`。占位身份与目标替换为当前注入模板，`fileId` 使用上传回执 `data.id`；为本次发送保存独立、稳定的 `deliveryId`：
+
+```json
+{
+  "deliveryId": "send-upload-example-001",
+  "sender": { "agentType": "primary_persona", "sessionId": "<approved-complete-session-id>" },
+  "routeId": "<exact-route-id>",
+  "channel": "napcat",
+  "params": { "target": "group", "groupId": "<group-id>", "instanceId": "<napcat-instance-id>", "replyToMessageId": "" },
+  "payload": { "type": "file", "fileId": "00000000-0000-4000-8000-000000000001", "fileSha256": "<upload-data.sha256>", "text": "报告文件。" }
+}
+```
+
+- 使用 `fileId` 时必须同时提交 `fileSha256=上传 data.sha256`（64 位小写十六进制），把引用绑定到原始内容，防止 TTL 到期后 UUID 复用改变旧引用的文件字节。发送 callback 在 lease 内核对实际 hash，不匹配即拒发。
+- `payload.text` 可省略；`replyToMessageId` 必须是具体来源消息 ID 或明确不引用的空字符串，原引用核对和 tracking 要求不变。
+- `fileId` 仅用于 `channel=napcat`、`target=group`、`type=file`，与 `path`/`url`/`fileName` 互斥；不能借此发送图片、语音或其它渠道。显示文件名（`displayName`）取自上传元数据，不由发送请求另行覆盖。
+- Manager 内部可信 resolver 每次请求重新核对授权、归属、完整性和 TTL，并持有 inflight lease 防止在途文件被清理；不扩大 `allowedFileRoots`，原本地 `path` 流程及其根目录检查照旧。
+- 渠道仍须允许发送并支持 `file`；`onlyPrimary` 仍核对可信 provider、精确 Route 的远端实例/节点与 Agent 绑定、获批会话及 `primary_persona` 身份。上传成功不是群发送成功，必须检查 `/api/agent/send` 的 Manager 与 NapCat 回执；发送不确定时查询原 `deliveryId` 回执。
+- NapCat 已接受群文件但随后 caption 失败时，仍保留 `status=sent`，只补发文本，不重发文件。当前 NapCat 接口读取 Manager 交给它的文件路径；异机 NapCat 必须能够通过共享目录读取该路径。本功能只解决远端 Agent 到 Manager 的上传，不解决任意跨机 NapCat 文件可读性。
+- 这不扩大远端线程桥权限：仍只支持 `responsePolicy: "none"` 单向投递，`required`、`inReplyToRequestId` 正式回复和远端到远端投递仍拒绝。
+
 Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要引用原消息，但必须明确 `channel` 和目标参数。是否能发由消息端发送开关、消息端可用性和 payload 策略决定。
 
 主动投递到 RabiLink 眼镜也使用同一个动作安全门，不要直接绕过到 Relay：
@@ -1116,7 +1173,7 @@ GET  /api/roles/:roleId/plans/:planId/feedback
 POST /api/roles/:roleId/plans/:planId/feedback
 ```
 
-RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入审批的计划级引导；WebGUI/托盘也继续用它记录当前审批步骤的正式意见。两者都会请求 Manager 通过独立 `plan_feedback` 系统事件通知 Agent。计划引导只带 `planId`，不能带 `stepId`：
+RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入审批的计划级引导；WebGUI/托盘也继续用它记录当前审批步骤的正式意见。两者均可选择只保存；选择“提交并投递”才请求 Manager 通过独立 `plan_feedback` 系统事件通知 Agent。计划引导只带 `planId`，不能带 `stepId`：
 
 ```json
 {
@@ -1130,7 +1187,9 @@ RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入�
 }
 ```
 
-审批意见继续关联审批步骤：
+审批意见继续关联审批步骤。用户 `approval_suggestion` durable 保存时，反馈、附件与计划标记变更在同一 WAL 事务发布，`markerStatus` 取人格 `planWorkflow.roles.approved` 指向的 key，`activationStatus` 不变。`presentation.approval.state=approved` 表示意见已提交，不表示全部选项获批，也不自动实施。`notifyAgent=false` 只保存；`notifyAgent=true` 先保存再投递，只有 confirmed 成功回执匹配同一 `feedbackId` 且计划版本未变时，才更新为 `roles.analysis`。`pending/failed` 或不确定回执不能触发该转换；旧回执不能覆盖新提交或后续计划变更。`guidance` 与 Agent 回复不触发上述状态转换。
+
+结构化审批表单使用可选 `formData: { questions: PlanQuestion[], approvalContract?: PlanApprovalRequest, answers: Record<string, PlanQuestionAnswer>, text: string }`；共用类型位于 `src/shared/planFeedbackFormData.ts`。`questions` 保存源 `currentStep.questions` 快照，`answers` 使用 `question:<id>` 及默认 `approval-decision` 答案 ID，`text` 保存补充文字。审批表单的 `approvalContract` 必须与当前 `step.approvalRequest` 匹配；只有问题与审批合同快照均匹配才可回填。Manager 从 `formData` 生成权威 `feedback.text`，不采用与表单冲突的手写正文；可选 `reuseFeedbackId` 从同计划原反馈复用全部附件，不接收本机路径。重新提交追加新记录，同一提交重试保持原 `feedbackId`、表单与完整正文。审批合同变化后必须重新确认，不能复用旧选择。以下示例为不带结构化表单的审批意见：
 
 ```json
 {
@@ -1157,7 +1216,7 @@ RibiWebGUI 用该接口记录 `presentation.acceptsGuidance=true` 且未进入�
 
 当 `notifyAgent=true` 时，POST 在反馈成功落盘后立即以 HTTP `202` 返回，通常为 `deliveryStatus=pending`。计划引导与审批意见复用同一 `taskBinding` 投递链：存在完整绑定时，Manager 只通过 `/api/agent/threads` 的 Desktop IPC 主链投向原业务任务；绑定不完整时才把完整反馈交给人格 Agent。owner 未加载时保持 `pending` 并有界重试，只有目标 owner 接受 `start/steer` 才记录 `delivered`。事件不写角色面板 timeline 或统一会话账本，也不注入最近消息；终态通过 `plan_feedback_changed` 通知。
 
-Agent 处理计划引导时使用 `kind=guidance_response`、`author=agent`、`source=agent`、`notifyAgent=false`，只回写 `planId`，不带 `stepId`。Agent 必须先读取整个计划，按引导更新计划说明、范围、优先级或路径，并在需要时调整后续步骤。审批处理仍使用 `kind=approval_response` 并关联 `planId / stepId`。两类 Agent 记录都按 `record_only` 保存，反馈本身不推进计划。
+Agent 处理计划引导时使用 `kind=guidance_response`、`author=agent`、`source=agent`、`notifyAgent=false`，只回写 `planId`，不带 `stepId`。Agent 必须先读取整个计划，按引导更新计划说明、范围、优先级或路径，并在需要时调整后续步骤。审批处理仍使用 `kind=approval_response` 并关联 `planId / stepId`。两类 Agent 记录都按 `record_only` 保存，不改变状态；这不同于用户审批保存及确认投递触发的配置标记转换。
 
 AgentPacket 的共用计划 API 提示会直接包含上述计划引导、审批记录入口与“记录后另行 PATCH 计划”的约束，因此不要求每个人格 Skill 重复维护同一套接口。
 

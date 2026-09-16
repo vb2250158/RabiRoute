@@ -26,7 +26,7 @@ test("Windows release excludes the RabiSpeech runtime unless explicitly requeste
   );
 });
 
-test("Windows release explicitly includes only the dynamic Manager discovery helpers", () => {
+test("Windows release explicitly includes required discovery and Agent transport modules", () => {
   const allowlist = releaseScript.match(
     /\$requiredPortableRuntimeFiles\s*=\s*@\(([\s\S]*?)\r?\n\)/
   );
@@ -36,6 +36,8 @@ test("Windows release explicitly includes only the dynamic Manager discovery hel
     [
       "scripts/Resolve-RabiRouteManagerUrl.ps1",
       "scripts/lib/discover-manager-url.mjs",
+      "apps/rabi-agent/lib/manager-client.mjs",
+      "apps/rabi-agent/lib/manager-cli.mjs",
     ]
   );
   assert.match(
@@ -44,7 +46,7 @@ test("Windows release explicitly includes only the dynamic Manager discovery hel
   );
   assert.match(
     releaseScript,
-    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks", "skills\\rabi-knowledge-search"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
+    /Copy-RequiredPortableRuntimeFiles\s*\r?\n\s*foreach \(\$relative in @\("apps\\rabi-agent\\runtime", "apps\\rabi-agent\\dist\\agent-hooks"\)\)[\s\S]*?if \(\$IncludeSpeech\)/
   );
 });
 

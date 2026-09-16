@@ -26,7 +26,7 @@ Desktop file-read approval does not permit sending that file to a group. QQ text
 | `blocked` | Policy, payload type, or target denied the action |
 | `failed` | An action was attempted, but the platform or connection failed |
 
-There is no generic persistent Action Queue for approving external actions item by item in WebGUI. The Plans page's approval feedback only records user guidance on an Agent plan and notifies the Agent; it neither approves Outbox delivery nor advances the plan directly. `draft` is an output and audit result, not a complete pending-approval center.
+There is no generic persistent Action Queue for approving external actions item by item in WebGUI. The Plans page shows Approved after saving approval feedback and changes to Analyzing only after confirmed delivery. These markers track submission and delivery, not authorization of every question or option, Outbox delivery, or automatic implementation. Guidance does not change status. `draft` is an output and audit result, not a complete pending-approval center.
 
 ![Message Adapters separating message inputs and the handler for the current Route](../../assets/screenshots/webgui-adapters-en.png)
 

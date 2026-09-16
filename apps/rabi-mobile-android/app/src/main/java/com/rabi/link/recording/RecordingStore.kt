@@ -35,6 +35,13 @@ class RecordingStore(private val context: Context) {
         val data = JSONObject(AtomicFile(file).openRead().bufferedReader().use { it.readText() })
         if (data.optString("kind") == "video" && data.has("processingBinding")) data else null
     }
+    fun captureId(sessionId: String): String {
+        require(sessionId.matches(Regex("[A-Za-z0-9_-]{1,100}")))
+        val path = File(root, "$sessionId/session.json")
+        if(!path.isFile) return sessionId
+        val data = JSONObject(AtomicFile(path).openRead().bufferedReader().use { it.readText() })
+        return data.optJSONObject("processingBinding")?.optString("captureId")?.takeIf { it.isNotBlank() } ?: sessionId
+    }
     private fun write(id: String, data: JSONObject) {
         val path = File(root, "$id/session.json"); path.parentFile!!.mkdirs()
         val atomic = AtomicFile(path); val output = atomic.startWrite()

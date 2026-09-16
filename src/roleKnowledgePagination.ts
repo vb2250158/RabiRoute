@@ -89,7 +89,7 @@ type PresentedPlanLike = {
       level: number;
     };
     approval: {
-      state: "none" | "incomplete" | "ready";
+      state: "none" | "incomplete" | "ready" | "approved";
     };
   };
 };

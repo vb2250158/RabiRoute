@@ -1,4 +1,4 @@
-﻿<!-- docs-language-switch -->
+<!-- docs-language-switch -->
 <div align="center">
 <a href="./plan-and-memory-model_en.md">English</a> | 简体中文
 </div>
@@ -9,7 +9,7 @@
 ## 计划激活状态与标记状态
 
 - `activationStatus` 是固定的激活状态：`进行中`、`已完成`、`已归档`。暂停不属于激活状态；已归档记录保持只读。
-- `markerStatus` 是人格可配置的标记状态，例如分析中、待审批、待补充信息、暂停。Agent 通过 `/api/roles/:roleId/plan-marker-statuses` 增删改查目录，沿用强 ETag、`If-Match` 和 `Idempotency-Key`。删除标记需指定替代 key，迁移不改变激活状态；归档记录保留原标记。
+- `markerStatus` 是人格可配置的标记状态，例如分析中、待审批、已审批、待补充信息、暂停。Agent 通过 `/api/roles/:roleId/plan-marker-statuses` 增删改查目录，沿用强 ETag、`If-Match` 和 `Idempotency-Key`。删除标记需指定替代 key，迁移不改变激活状态；归档记录保留原标记。
 - 创建计划省略激活状态时默认进行中。只改 `markerStatus` 不完成、不归档、不重新激活计划；只改 `activationStatus` 保留标记、步骤、附件和任务绑定。完成时间与归档时间由激活状态维护。
 - 自动追问、引导及完成回传只推进激活状态为进行中且标记不等于人格 `roles.paused` 的计划。正文、步骤说明和任务是否空闲不能代替这两个字段。
 - 启动迁移将旧完成状态转为已完成、旧关闭或已归档转为已归档，其余转为进行中；标记原样保留（旧别名规范化除外）。迁移使用计划存储事务并记录历史，重复启动不重复迁移。
@@ -29,7 +29,7 @@
 
 “待补充信息”要求 Agent 先查阅与问题相关的现有代码、配置、设计、文档和附件，在计划中写明资料清单、确认结果、分析卡点和仍无法确定的问题，再提出最少必要的具体询问。缺日志或复现步骤本身不构成等待理由。
 
-待审批和待补充信息的当前步骤均可通过既有计划 POST/PATCH 保存 `questions`。WebGUI 在原有审批/引导提交区显示问题：有 `options` 时按 `selectionMode` 显示单选（`single`）或多选（`multiple`），省略时兼容为单选；无选项时显示文字输入框。各题均可补充文字。推荐项不自动选择，必填题允许选择或输入其他答案。选项不会自动批准方案或改变计划状态，答案通过既有反馈记录保存并通知原绑定任务，由 Agent 消费后推进。
+待审批和待补充信息的当前步骤均可通过既有计划 POST/PATCH 保存 `questions`。WebGUI 在原有审批/引导提交区显示问题：有 `options` 时按 `selectionMode` 显示单选（`single`）或多选（`multiple`），省略时兼容为单选；无选项时显示文字输入框。各题均可补充文字。推荐项不自动选择，必填题允许选择或输入其他答案。选择选项本身不批准方案或改变状态。提交审批后只按下述审批反馈流程更新配置标记；未选项与其它题不获得隐含授权。引导答案仍只记录并可选通知原绑定任务，由 Agent 消费后显式更新计划。
 
 ```json
 {
@@ -112,12 +112,13 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 
 计划用于保存可推进、可等待、可完成、可归档的关注项。计划数据是角色要盯住的事项，不是普通聊天记录，也不是执行器队列。
 
-`plan.status` 只保存所属人格 `personaConfig.json.planWorkflow.statuses` 中启用状态的 `key`。状态的名称、说明、颜色、顺序、所在视图、步骤约束、审批约束、完成行为和归档资格都由同一份人格配置提供；代码、WebGUI 和托盘不维护第二份状态枚举。默认模板提供以下十个状态，`key` 与显示名称彼此独立：
+`plan.status` 只保存所属人格 `personaConfig.json.planWorkflow.statuses` 中启用状态的 `key`。状态的名称、说明、颜色、顺序、所在视图、步骤约束、审批约束、完成行为和归档资格都由同一份人格配置提供；代码、WebGUI 和托盘不维护第二份状态枚举。默认模板提供以下十一个标记状态，`key` 与显示名称彼此独立：
 
 ```text
 分析中
 待补充信息
 待审批
+已审批
 执行中
 等待打包
 等待 QA
@@ -129,7 +130,7 @@ data/roles/<RoleId>/identity-relations/events.jsonl
 
 业务代码通过 `planWorkflow.roles` 查找分析、待补充信息、审批、执行、打包、QA、讨论、暂停、完成和关闭对应的 key。默认配置下，仍在调查和分析时使用“分析中”；只有分析已经完成，但现有信息仍无法形成可审批的具体方案，且缺失信息会影响原因、改法、实施范围或验收合同时，才使用“待补充信息”；完整审批合同正式等待回执时使用“待审批”；批准或用户直接授权后使用“执行中”。暂未复现、疑似历史已修复、等待目标包、等待 QA 或等待是否关闭都不属于“待补充信息”。开发侧完成但缺目标包或纳入证明时使用“等待打包”，目标包确认但缺 QA 结论时使用 QA 状态 key“等待 QA”，默认显示名称为“等待 QA 验收”；确认问题无效或历史已修复且无需验收时凭证据使用“关闭”。Manager 将 `plan.status` 的 key 与配置中的 label、description、palette、order 和 views 一起返回；客户端不解释 key，也不从步骤、`waitingFor` 或审批资料派生第二套状态。
 
-`planWorkflow.schemaVersion=4` 保留 v3 取消步骤状态字段的结构，并收窄默认“待补充信息”说明。现有 v1/v2/v3 人格配置第一次读取时会保留自定义状态和相对顺序；v1 还会在分析状态后加入默认“待补充信息”定义。v2/v3 只替换仍使用旧默认 key、label 和说明的中英文说明，不覆盖人格自定义说明，也不会补回或重新启用被 Agent 移除的状态。
+`planWorkflow.schemaVersion=5` 新增独立 `roles.approved`，保留无步骤状态字段的结构。v1/v2/v3/v4 配置首次读取时迁移到 v5：复用匹配的启用“已审批”定义，或新增默认定义，放在审批标记之后并绑定 role；保留其它自定义状态、说明和相对顺序。匹配的既有定义未启用时拒绝迁移，不擅自重新启用。v1 仍先补齐 `roles.informationNeeded`；v2/v3 继续只更新未自定义的旧默认“待补充信息”说明。v5 后的目录操作仍由 Agent 显式维护，不在每次读取时恢复被移除状态。
 
 状态目录通过 `GET /api/roles/:roleId/plan-statuses` 读取；Agent 可使用同一路径的 `POST` 新增状态、`PATCH /:statusKey` 修改展示和行为、`DELETE /:statusKey` 移除状态。写请求必须携带 `If-Match` 与 `Idempotency-Key`。状态 key 不允许原地改名。移除时必须提供 `replacementKey`：Manager 先迁移仍在使用该状态的未归档计划，再把旧定义保留为 `retired`，使已归档计划和追加式历史仍可解析。只有历史引用也不存在时，后续维护才可物理删除定义。
 
@@ -653,13 +654,17 @@ PATCH /roles/:roleId/memory/recent/:memoryId
 
 激活状态为 `已完成` 的计划，在 `updatedAt` 超过人格 `planWorkflow.archiveAfterHours`（默认 72 小时）后自动改为 `已归档`，并将整个目录从 `plans/active/<planId>/` 移至 `plans/archive/<planId>/`。标记状态保持不变；旧关闭计划在启动迁移时直接归档。
 
-Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 只在 Manager 返回 `presentation.acceptsGuidance=true` 且计划没有进入审批步骤时提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和后续步骤。审批和引导都只追加审计记录并可选通知 Agent，不直接修改计划状态或步骤。WebGUI 统一使用“提交并投递”和“提交”两个动作；“提交”只保存 `record_only` 记录，不要求 Route、不触发 Agent 或 QA 后处理，Agent 可在空闲时读取审阅。
+Qt 托盘和 RibiWebGUI 不直接创建、完成、删除或迁移计划；计划主体仍由 Agent 通过 Manager 维护。对于 Manager 标记为 `approval.enabled=true` 的当前步骤，两端可以提交正式审批建议。RibiWebGUI 只在 Manager 返回 `presentation.acceptsGuidance=true` 且计划没有进入审批步骤时提供计划级引导入口：引导只关联 `planId`，不关联某个 `stepId`，Agent 可据此调整计划说明、执行方向和后续步骤。引导只追加审计记录并可选通知 Agent，不改变状态或步骤。用户审批意见 durable 保存后，Manager 将 `markerStatus` 更新为独立 `planWorkflow.roles.approved` 指向的配置 key，WebGUI 折叠审批区；“已审批”只表示意见已提交，不表示所有题目或选项获批，也不授权自动实施。`activationStatus` 始终不变。WebGUI 统一使用“提交并投递”和“提交”两个动作；“提交”保存 `record_only` 记录及适用的审批标记变更，不要求 Route、不触发 Agent 或 QA 后处理，Agent 可在空闲时读取审阅。
 
 计划分页接口还支持 `sort=<status|updated|importance|urgency>`、可重复的 `status=<状态 key>`、可重复的 `tag=<keywords 标签>` 和 `facets=0`。`updated` 比较 `updatedAt` 时间戳；其余三种排序比较 Manager 生成的整数等级。状态等级来自状态配置的 `order`，并通过 `statusLevel` 返回；重要程度 `importance` 和紧急程度 `urgency` 都使用 `0–4`：`0` 最高，`1` 高，`2` 中，`3` 低，`4` 未设置。旧 `priority` 字符串只在读取边界转换为重要程度整数；旧计划没有 `urgency` 时，可由 `dueAt` 转为兼容等级。排序过程不比较标签文字。响应同时返回状态 key、配置的中英文名称与说明、色板、视图和等级，WebGUI 只负责显示。筛选与排序都在分页前执行。
 
 计划列表的“排序与筛选”弹窗按排序、状态、标签横向分行显示，窄屏自动换行。状态和标签支持多选、全部重置及标签搜索；同组匹配任一项，不同组同时满足。标签先显示 40 项，可继续展开；搜索始终覆盖全部标签。修改只在点击“完成”后应用到目录和卡片，关闭弹窗会放弃未应用的选择。
 
 ## 计划引导与审批意见
+
+人格工作流 v5 提供独立 `roles.approved`，指向可配置的“已审批”标记；它不是新的激活状态，也不是写死的标记 key。用户审批记录、表单数据、附件和已审批计划快照在同一 WAL 事务中 durable 保存。保存成功后审批区折叠；“编辑审批”展开并回填此前提交的数据，再次提交使用新 `feedbackId` 追加历史，不覆盖旧意见。同一提交的重试沿用原 ID 与正文；审批合同已变化时必须重新确认，不能直接套用旧选择。
+
+“提交”保存后停留在 `roles.approved`；“提交并投递”也先保存为已审批，只有投递取得 confirmed 成功回执、且仍是同一 `feedbackId` 与未变化的计划版本时，Manager 才转为 `roles.analysis`。`pending`、`failed` 或不确定回执不能显示为分析中；旧回执不能覆盖新提交或后来计划更新。两次转换都保持 `activationStatus` 不变。已审批只说明用户意见已提交，不代表全部题目或选项获批；Agent 必须逐项读取实际选择与授权边界，不自动实施。`guidance` 及 Agent 回复记录不触发这些状态转换。
 
 计划反馈是保存在同一计划目录 `feedback.jsonl` 的独立 JSONL 审计记录。`kind=guidance` 表示只关联 `planId` 的计划级引导，不能携带 `stepId`；`kind=approval_suggestion` 表示关联审批步骤的正式审批意见。它们都不是计划 JSON 的第二份副本，也不是通用 Outbox Action Queue。
 
@@ -680,15 +685,15 @@ GET /api/roles/:roleId/plans/:planId/history
 
 RibiWebGUI 在计划详情中提供默认折叠的“工作留痕”。其中分别显示计划引导、步骤审批意见和计划版本记录；计划完成、整个目录移动到 `plans/archive/<planId>/` 或不再处于待审批状态，都不会让这些记录从界面消失。归档只改变计划默认所在视图和计划 JSON 的目录，不删除反馈文件、反馈附件或版本留痕。删除本地运行数据仍属于单独的人工文件操作，不是计划生命周期动作。
 
-RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`、`notifyAgent=true`，且不传 `stepId`；Manager 只接受状态定义允许引导，即 `presentation.acceptsGuidance=true`，且没有进入审批步骤的计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray` 和 `notifyAgent=true`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入同一计划目录的 `feedback-attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。两种反馈都会先同步记录并立即返回 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
+RibiWebGUI 提交计划引导时使用 `kind=guidance`、`author=user`、`source=webgui`，按提交动作设置 `notifyAgent`，且不传 `stepId`；Manager 只接受状态定义允许引导，即 `presentation.acceptsGuidance=true`，且没有进入审批步骤的计划。WebGUI 或托盘提交审批时仍使用 `kind=approval_suggestion`、`author=user`、`source=webgui|tray`，并按提交动作设置 `notifyAgent`。计划引导和审批使用同一个反馈输入组件，共享 `@` 引用计划附件、键盘提交、文件选择、剪贴板粘贴、附件预览和删除能力；以后新增输入能力也应在该组件中同时提供。新上传内容写入同一计划目录的 `feedback-attachments/<feedbackId>/` 私有运行目录，JSONL 不内嵌二进制。“提交”使用 `notifyAgent=false`；“提交并投递”使用 `notifyAgent=true`，先 durable 记录并立即返回 HTTP `202`，通常为 `deliveryStatus=pending`：业务绑定完整时通过 `/api/agent/threads` 和 Desktop IPC 直达原业务任务；启用计划秘书时，负责 `secretaryBinding` 同时收到控制通知，主人格不接收每次自动投递通知。业务绑定不完整时完整反馈优先交给负责秘书；只有没有可用秘书时才回退给主人格。owner 未加载时保持 `pending` 并有界重试；只有目标 owner 接受 `start/steer` 才记录 `delivered`。终态发布 `plan_feedback_changed`，WebGUI 只刷新当前计划的反馈摘要。
 
-Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视为整个计划的方向输入；如果范围、优先级、方法或后续路径变化，显式 `PATCH` 计划并同步调整后续步骤，随后以 `kind=guidance_response`、`author=agent`、`notifyAgent=false` 回写同一 `planId`，且不带 `stepId`。收到 `approval_suggestion` 时仍更新对应计划/步骤与审批回执，并以 `approval_response` 回写同一 `planId / stepId`。两种记录本身都不会自动推进计划。
+Agent 收到 `guidance` 后，应先读取当前计划与反馈，把引导视为整个计划的方向输入；如果范围、优先级、方法或后续路径变化，显式 `PATCH` 计划并同步调整后续步骤，随后以 `kind=guidance_response`、`author=agent`、`notifyAgent=false` 回写同一 `planId`，且不带 `stepId`。收到 `approval_suggestion` 时仍更新对应计划/步骤与审批回执，并以 `approval_response` 回写同一 `planId / stepId`。两类 Agent 回复记录本身都不改变状态；用户审批的保存与确认投递仅按上述规则更新标记，不完成步骤，也不自动实施。
 
 后台通知上一条反馈期间，WebGUI 允许继续编辑下一条内容，但在上一条取得终态前禁止再次提交，并显示原因与恢复条件。计划引导入口只出现在 `presentation.acceptsGuidance=true` 且未进入审批的计划；审批计划继续只显示对应步骤内的审批合同与审批输入。
 
 ## Manager 展示顺序与计划视图
 
-Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批入口合同：合同完整、可提交且 `responseStatus=pending` 时，`presentation.approval.state=ready`、`enabled=true`，并要求存储状态为 `planWorkflow.roles.approval` 指向的 key；合同缺项时返回 `incomplete`，计划必须保持 `roles.analysis` 指向的 key。旧 `isBlocked` 仅为兼容投影，`blockedBy` 仅为说明，二者都不能改变计划状态。
+Manager 的计划 API 以当前步骤的 `approvalRequest` 为唯一审批入口合同：合同完整、可提交且 `responseStatus=pending` 时，`presentation.approval.state=ready`、`enabled=true`，并要求存储状态为 `planWorkflow.roles.approval` 指向的 key；合同缺项时返回 `incomplete`，计划必须保持 `roles.analysis` 指向的 key。审批意见 durable 保存后，`presentation.approval.state=approved`，`markerStatus` 使用 `roles.approved` 指向的 key；编辑入口恢复已保存表单，并重新校验当前合同。确认投递后的标记转换按反馈规则执行，不由客户端推断。旧 `isBlocked` 仅为兼容投影，`blockedBy` 仅为说明，二者都不能改变计划状态。
 
 Manager 把 `plan.status` 作为状态 key，并通过 `presentation.label / labelEn` 提供显示名称；说明、色板、顺序和视图也来自同一条状态配置。客户端显示配置名称，不直接把 key 当作界面文字，也不产生另一项显示状态。
 

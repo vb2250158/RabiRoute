@@ -157,6 +157,7 @@ function identityPayload(ctx: RabiApiContext, request: http.IncomingMessage): { 
       addresses: localIpv4Addresses(),
       managerHost: ctx.managerHost,
       rabiLinkRelay: publicRabiLinkRelayConfig(config.rabiLinkRelay),
+      agentUploads: config.agentUploads,
       configPath: ctx.globalConfig.configPath,
       self: true
     }
@@ -876,7 +877,7 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
     return true;
   }
   if (request.method === "PATCH" && pathname === "/api/rabi/identity") {
-    void readJsonBody<Partial<{ rabiName: string; rabiLinkRelay: unknown }>>(request)
+    void readJsonBody<Partial<{ rabiName: string; rabiLinkRelay: unknown; agentUploads: { maxFileMiB: number } }>>(request)
       .then(async (body) => {
         const current = ctx.globalConfig.read();
         const relayPatch = body.rabiLinkRelay && typeof body.rabiLinkRelay === "object" && !Array.isArray(body.rabiLinkRelay)
@@ -887,7 +888,7 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
           throw new Error("开启 RabiLink Relay 前，请先填写服务器地址和应用 token。");
         }
         const beforeRelay = JSON.stringify(current.rabiLinkRelay);
-        const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any });
+        const config = ctx.globalConfig.patch({ rabiName: body.rabiName, rabiLinkRelay: body.rabiLinkRelay as any, agentUploads: body.agentUploads });
         const relayChanged = beforeRelay !== JSON.stringify(config.rabiLinkRelay);
         await ctx.syncRabiLinkRelay();
         if (relayChanged) {

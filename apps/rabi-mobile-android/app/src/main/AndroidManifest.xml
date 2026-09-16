@@ -57,6 +57,7 @@
     </queries>
 
     <application
+        android:name=".RabiMobileApplication"
         android:extractNativeLibs="true"
         android:allowBackup="false"
         android:icon="@drawable/rabiroute_icon"
@@ -199,5 +200,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".RabiAppearanceActivity" android:exported="false" />
     </application>
 </manifest>

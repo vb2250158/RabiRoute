@@ -17,7 +17,7 @@
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="许可证：MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 或更高版本" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="当前版本：0.3.4" src="https://img.shields.io/badge/version-0.3.4-3178c6">
+  <img alt="当前版本：0.3.5" src="https://img.shields.io/badge/version-0.3.5-3178c6">
   <img alt="状态：积极开发中" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -43,7 +43,7 @@ Agent 负责回答、写代码、调用工具和执行任务。RabiRoute 负责�
 
 从 [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest) 下载 `RabiRoute-<版本>-windows-x64-setup.exe`。安装包包含 RabiRoute Host、Desktop 表现层、本机 Manager、RibiWebGUI、Node.js 和生产依赖。在 Windows 上，Host 是唯一的应用生命周期 owner：它创建一代应用，并让 Manager 与 Desktop 始终属于同一代。
 
-发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。便携 ZIP 使用 `RabiRouteHost.exe + current.json + versions/<releaseId>` 布局，只能解压到新的空目录，不能覆盖旧 RabiRoute 目录；升级既有安装必须运行 Setup。Setup 嵌入同一份便携 ZIP，先在安装盘暂存并逐清单校验哈希、大小、私有路径、reparse point 与 Host 自检，再按当前 application generation 执行 fenced quit；只有候选通过后才原子切换 `current.json` 与 bootstrap，失败会恢复上一指针和 bootstrap。经精确识别的旧生命周期入口会以 `.retired` 后缀移入安装器所有的非执行 quarantine；事务失败或断电恢复会把它们原位还原，foreign 和相似后缀文件不移动。`data/`、`logs/` 与 foreign 文件不参与覆盖或卸载。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
+首次安装可使用 Setup，便携 ZIP 只解压到新的空目录；升级已有安装请使用 Setup。当前 Windows 包未签名，下载后先核对 `SHA256SUMS.txt`。安装校验、数据保留与失败恢复见[Windows 安装与升级](docs/windows-launcher-and-packaging.md)。
 
 ### 从源码运行
 
@@ -72,7 +72,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 
 ## 当前能力
 
-仓库当前版本为 `0.3.4`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
+仓库当前版本为 `0.3.5`。下面只列代码、配置入口和测试能够支持的范围；需要账号、外部服务或真机的功能仍要在对应环境验收。
 
 | 范围 | 当前状态 | 用户可以完成什么 |
 | --- | --- | --- |
@@ -87,11 +87,18 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 | DSH | 实验支持 | 作为主人格或辅助处理端使用明确的 API、项目目录和会话绑定。 |
 | WorkBuddy | 实验支持 | 把消息投进用户已有的 WorkBuddy 任务，由该任务用它自带的模型、工具和审批执行。投递需要一次性录入本地网关凭据，缺失时失败关闭。任务发现、绑定和生命周期 Hook 已实现；桌面配对入口尚未提供，冷启动未验证。 |
 | RabiSpeech / RabiLink / 移动与穿戴设备 | 实验支持 | 接入语音、手机、眼镜、Relay 和健康数据链路；每条链路按设备与网络环境单独验收。 |
-| 局域网 Rabi Agent | 实验支持 | 其他电脑运行无界面工作进程，连接 Manager，并把任务交给该电脑上指定的 Codex Desktop 任务。真实多电脑验收待完成。 |
+| 媒体工作台 | 实验支持 | 保存媒体画布项目，组合图片、视频、音频和文本，按需接入本机 H3；模型安装与 GPU 推理需单独验收。 |
+| 局域网 Rabi Agent | 实验支持 | 通过接入提示词连接其他电脑的 Codex/DSH 既有任务；Manager 单独授权节点使用 API 与技能。真实双机与旧节点迁移仍需验收。 |
 
 完整状态、限制和事实源见[当前能力与成熟度](docs/current-capabilities.md)。
 
 ## 近期变化
+
+### 0.3.5：远端 Agent 授权、审批专注视图与移动记录
+
+- 远端 Agent 使用独立节点凭据和逐 Agent 授权，可读取受控 API、公开技能及上传文件；旧节点须按[迁移说明](docs/lan-rabi-agent-bootstrap.md)重新接入。
+- 计划新增待处理专注视图，保存审批后显示“已审批”，可回填编辑；确认投递后才转入分析。
+- Android 0.3.38-dev 增加统一时间线回看、声音事件拆分、浅深色皮肤和多电脑连接；多电脑真机及全天长稳验收仍待完成。
 
 ### 0.3.4：WorkBuddy 投递与 Hook、冷态角色完成回传
 
@@ -99,46 +106,7 @@ Manager 启动后会打印真实的回环地址，端口由操作系统分配。
 - 能力声明收窄到每个适配器真正验证过的范围：WorkBuddy 只声明消息处理与 Hook，不声明计划协助会话、记忆整理与回执恢复。
 - 没写过计划的角色现在是合法冷态，不再中断全部角色的完成回传。详见[版本更新](版本更新日志.md)。
 
-### 0.3.3：私有标识清理与仓库治理
-
-- 计划秘书提示词里的项目专属条目改为通用表述，行为意图不变；管理端问题台账模块更名为 `roleIssueLedger`，导出符号随之统一。
-- 测试夹具和文档示例改用通用路径、通用人名与合成账号。Windows 托盘应用身份改为中立的 `RabiRoute.Desktop`，已固定的任务栏项和通知设置需要重新创建。
-- `RabiPlanCache/` 与 `artifacts/` 不再随源码提交，并移除指向已删除归档目录的过期忽略规则。详见[版本更新](版本更新日志.md)。
-
-### 0.3.2：全天记录、DSH 会话桥认证与计划状态拆分
-
-- 手机端并入「全天记录」源码：手机、眼镜和健康设备共用一条采集协调，采集模式与暂停独立，同一可靠音频分片同时服务本地回放和后续处理，视频只在停止后派生音轨。记录在创建时冻结来源、采集 ID、人格、处理策略和目标电脑身份；仅本地保存不上传，仅转写不投 Agent，缺少新版 PC / Relay 能力或目标身份时保留待处理而不降级改投。手机端目前只是源码整合，构建、部署、眼镜链路和长稳验收另行进行。
-- 计划状态拆成固定的激活状态与 Agent 可配置的标记状态，「暂停」只是一种标记；旧数据事务迁移并保留任务绑定，自动追问排除暂停、完成和归档的计划。
-- DSH Web 会话桥改为从目标 DSH 的启动登录 URL 换取 Cookie，401 只清除缓存而不自动重放，也不跟随认证与 RPC 重定向。移动消息端新增只读历史查询和端点审计；语音记录新增显式的「转写 / 投 Agent」处理策略，并在记录边界冻结。
-- 实验能力：WorkBuddy Agent 端已可投递消息到本机 WorkBuddy 任务（需一次性录入本地网关凭据）；跨电脑隧道和语音服务器下拉仍为实验能力。见[当前能力与成熟度](docs/current-capabilities.md)。
-
-### 0.3.1：媒体项目、H3 工作流与桌面截图
-
-- 媒体画布项目自动保存到服务端，组合图片、视频、音频和文本卡片，并接入图片与语音生成。
-- 按输入与依赖选择 H3 标准或快速路线及可选声音，修正混合 DPI 截图坐标，支持固定 TTS 音色选择。
-- 源码验证与安装版、GPU 推理验收分开，详见[媒体工作台](docs/video-generation-plugin.md)。
-
-### 0.2.5：按需安装的视频生成插件
-
-- 独立插件页面和受鉴权任务 API 支持 H3 视频生成、可选首尾帧、预览和下载。
-- 模型管理支持本机目录配置，按需安装运行环境和下载权重，不自动安装模型。
-
-### 0.2.4：Manager 状态耐久性与客户端恢复
-
-- 计划、记忆、反馈和 Route 目录 mutation 统一使用 revision、稳定幂等键、generation fence、worker ownership 与可恢复回执，不再由 Manager 父进程直接写入。
-- 计划启动迁移先发布完整 canonical package，再退休 legacy 文件；存储 lease 与 durable-delivery ownership 在长任务中持续续租，ownership 改变时失败关闭。
-- RibiWebGUI、Windows 托盘、Android SDK、RabiLink AIUI 与小米家庭设置都携带明确 revision，并能在 Manager generation 或端点变化后恢复，而不会静默重放 mutation。
-- 人格同步把 manifest 与 package 检查移出 Manager 请求路径，保留 canonical plan-package identity，并拒绝过期或冲突证据。
-- Windows developer candidate、事务化安装/应用脚本、Host fencing 与 release manifest 统一遵守本机运行 ownership；源码与已安装状态继续分离。
-
-### 0.2.2：Windows 单一生命周期与插件运行时 v2
-
-- RabiRoute Host 成为唯一 Windows 应用 owner。Manager 与托盘作为同代子程序运行，端口由操作系统分配，并通过 Host 认证状态与 `/meta` identity 发现。
-- Manager 插件升级为 schema/profile v2，明确 execution mode、ready dependency、generation replacement、process lease 与不可变 Web Bundle revision。
-- Codex Desktop 投递增加 `deliveryId` 落盘确认、受控任务替换与侧栏索引名称；RibiWebGUI 增加首屏有界读取和可恢复目录加载。
-- 桌宠、YeYu Gamer、穿戴设备、小米家庭、移动语音与局域网 Agent 均进入明确的插件、设备与验收边界。
-
-逐项记录和迁移说明见[版本更新日志](版本更新日志.md)。
+历史版本与迁移说明见[版本更新日志](版本更新日志.md)。
 
 ## 工作方式
 
@@ -155,14 +123,14 @@ flowchart LR
 
 每条 Route 分开保存消息入口、人格、处理端、项目目录和发送规则。消息端不负责拼接 Agent 指令，Agent 也不能绕过 RabiRoute 直接取得渠道凭据或修改路由状态。
 
-Manager 通过一个插件内核装载 29 个独立内置包。内置包和树外包统一使用 schema/profile v2、SDK、依赖图、权限检查、generation 切换、执行模式边界和 Web 模块生命周期。当前实现说明见[插件包与热替换](docs/plugin-bundles.md)。
+Manager 通过一个插件内核装载 默认 Profile 中的 31 个内置插件实例。内置包和树外包统一使用 schema/profile v2、SDK、依赖图、权限检查、generation 切换、执行模式边界和 Web 模块生命周期。当前实现说明见[插件包与热替换](docs/plugin-bundles.md)。
 
 ## Agent 与安全边界
 
 - Codex 的真实消息只通过 Desktop IPC 交给选定的 Codex/ChatGPT Desktop 任务 owner。
 - 目标 Desktop 任务拥有自己的模型、工具、沙箱和审批；RabiRoute 不替它执行推理。
 - 项目锁定的 `codex app-server` 只用于创建或命名空任务，不执行 Route 消息。
-- Desktop 不可用、任务无法加载、项目目录不一致或 owner 不明确时，投递失败并保留错误记录。
+- Desktop 不可用、任务无法加载、执行目录未通过校验或 owner 不明确时，投递失败并保留错误记录。
 - 平台账号、登录状态和凭据仍由对应平台拥有。
 - 本机 `data/`、日志、录音、转录文本、token、Cookie 和私有路径不进入公开仓库。
 
@@ -196,7 +164,7 @@ data/roles/<RoleId>/personaConfig.json
 ### 安装和接入
 
 - [配置说明](docs/configuration.md)：查看本机配置、目录和主要参数。
-- [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：接入其他电脑上的无界面 Codex 工作进程。
+- [局域网 Rabi Agent](docs/lan-rabi-agent-bootstrap.md)：连接其他电脑上的 Codex/DSH 任务，并配置节点权限。
 - [RabiSpeech](docs/rabispeech-plugin.md)：配置本机或远端 TTS / ASR。
 - [客户端应用](apps/README.md)：构建 Android、Rokid AIUI、浏览器桥和 Rabi Agent。
 
@@ -213,6 +181,7 @@ data/roles/<RoleId>/personaConfig.json
 ```bash
 npm run manager          # 直接运行 TypeScript Manager
 npm run webgui:dev       # 运行 Vue/Vuetify 前端
+npm run test:webgui      # 运行前端测试
 npm run test             # 运行后端与契约测试
 npm run build            # 构建 Manager、独立插件包与 WebGUI
 npm run check:config     # 检查公开和运行期 JSON 文本

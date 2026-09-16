@@ -28,6 +28,7 @@ export const activate = definePlugin({
             });
             try {
         const codexHookRequestTracker = new runtime.ManagerPluginRequestTracker();
+        const uploads = runtime.createAgentUploadRoutes({ store: runtime.agentUploadStore, assertAuthorized: runtime.assertUploadAuthorized, jsonResponse: runtime.jsonResponse });
         const routes = runtime.createAgentCommunicationRoutes({
             readJsonBody: runtime.readJsonBody,
             jsonResponse: runtime.jsonResponse,
@@ -41,11 +42,13 @@ export const activate = definePlugin({
         ctx.effect(() => {
             const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:agent-communication", "manager.agent-communication.api", [
                 routes.handler,
-                codexHookRequestTracker.wrap((request, requestUrl, response) => (runtime.handleCodexHookApi(request, requestUrl, response, runtime.codexHookContextService)))
+                codexHookRequestTracker.wrap((request, requestUrl, response) => (runtime.handleCodexHookApi(request, requestUrl, response, runtime.codexHookContextService))),
+                uploads.handler
             ], [
                 { routeId: "requests", kind: "exact", path: "/api/agent/requests", methods: ["GET"] },
                 { routeId: "request-resource", kind: "prefix", pathPrefix: "/api/agent/requests/" },
                 { routeId: "send", kind: "exact", path: "/api/agent/send", methods: ["POST"] },
+                { routeId: "uploads", kind: "prefix", pathPrefix: "/api/agent/uploads/", methods: ["GET", "PUT"], handlerIndex: 2 },
                 { routeId: "send-traces", kind: "exact", path: "/api/agent/send/traces", methods: ["GET"] },
                 { routeId: "send-receipts", kind: "prefix", pathPrefix: "/api/agent/send/receipts/" },
                 { routeId: "codex-context", kind: "exact", path: "/api/codex-hook/context", methods: ["POST"], handlerIndex: 1 },
@@ -58,6 +61,7 @@ export const activate = definePlugin({
                 unregister();
                 await Promise.all([
                     routes.stopAcceptingAndDrain(),
+                    uploads.stopAcceptingAndDrain(),
                     codexHookRequestTracker.stop()
                 ]);
             };

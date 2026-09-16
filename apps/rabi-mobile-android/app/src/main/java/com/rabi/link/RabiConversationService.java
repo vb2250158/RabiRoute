@@ -65,6 +65,29 @@ public final class RabiConversationService extends Service {
     private volatile long captureGeneration;
     private volatile long glassesGeneration;
     private boolean glassesAudioStarted;
+    private boolean glassesConnected;
+    private long lastGlassRetryAt;
+    private final com.rabi.link.recording.AutomaticAudioSource automaticSource = new com.rabi.link.recording.AutomaticAudioSource();
+    private final Runnable audioSourceWatchdog = new Runnable() {
+        @Override public void run() {
+            if (shutdownComplete || !AllDayRecordingSettings.load(RabiConversationService.this).running) return;
+            reconcileAudioSource();
+            long now = android.os.SystemClock.elapsedRealtime();
+            if ("mobile".equals(automaticSource.preferred(now)) && now - lastGlassRetryAt >= 30000) {
+                lastGlassRetryAt = now;
+                try {
+                    if (glassController == null) startGlassesBackend();
+                    else if (glassesConnected) {
+                        glassController.stopAudioStream();
+                        glassesAudioStarted = glassController.startAudioStream();
+                    }
+                } catch (RuntimeException error) {
+                    updateRuntime("glasses", "眼镜暂不可用 · 使用手机，稍后重试");
+                }
+            }
+            notificationHandler.postDelayed(this, 1000);
+        }
+    };
     private String activeCaptureSource = "mobile";
     private boolean stopAfterCapture;
     private boolean captureSaveFailed;
@@ -79,11 +102,19 @@ public final class RabiConversationService extends Service {
         RabiConversationService current = currentInstance;
         return current == null ? null : current.videoController;
     }
+    private static long recordingStartPendingUntil;
+    /** Persisted intent is not evidence of a live microphone owner after an app update or process death. */
+    public static boolean recordingOwnerAvailable() {
+        return (currentInstance != null && !currentInstance.shutdownComplete)
+                || android.os.SystemClock.elapsedRealtime() < recordingStartPendingUntil;
+    }
     public static void startRecording(Context context) {
         AllDayRecordingSettings s = AllDayRecordingSettings.load(context);
         s.withRunning(true, System.currentTimeMillis()).save(context);
+        recordingStartPendingUntil = android.os.SystemClock.elapsedRealtime() + 15000;
         try { context.startForegroundService(new Intent(context, RabiConversationService.class).setAction(ACTION_RECORD)); }
         catch (RuntimeException error) {
+            recordingStartPendingUntil = 0;
             s.withRunning(false, System.currentTimeMillis()).save(context);
             throw error;
         }
@@ -253,7 +284,7 @@ public final class RabiConversationService extends Service {
             @Override public void onPcm(byte[] pcm) {
                 if (backend != null && inputMode == RabiConversationSettings.InputMode.PHONE) {
                     backend.streamPcmFromSource(pcm, RabiGlassPcBackend.SOURCE_PHONE);
-                    captureReceived(pcm.length);
+                    captureReceived(pcm);
                 }
             }
             @Override public void onPlaybackSuppressed() { }
@@ -630,16 +661,22 @@ public final class RabiConversationService extends Service {
         updateStatus(backend.configured() ? "消息连接已启动" : "未配置电脑 · 本地记录仍可使用");
     }
 
-    private void captureReceived(int bytes) {
-        if (bytes <= 0) return;
+    private void captureReceived(byte[] pcm) {
+        if (pcm == null || pcm.length == 0) return;
+        com.rabi.link.recording.AudioLevels.accept(pcm, android.os.SystemClock.elapsedRealtime());
+        boolean signal = false;
+        for (byte value : pcm) { if (value != 0) { signal = true; break; } }
+        final boolean hasSignal = signal;
+        final long generation = captureGeneration;
+        final String recordId = captureRecordId;
         long now = System.currentTimeMillis();
         if (now - lastCaptureUiAt < 1000) return;
         lastCaptureUiAt = now;
         notificationHandler.post(() -> {
-            if (shutdownComplete || !AllDayRecordingSettings.load(this).running) return;
+            if (shutdownComplete || generation != captureGeneration || !recordId.equals(captureRecordId) || !AllDayRecordingSettings.load(this).running) return;
             getSharedPreferences("rabi_conversation_runtime", MODE_PRIVATE).edit()
-                    .putLong("captureLastReceivedAt", now).apply();
-            setCaptureStatus("正在接收声音 · 可靠保存到手机");
+                    .putLong("captureLastReceivedAt", now).putBoolean("captureHasSignal", hasSignal).apply();
+            setCaptureStatus(("glasses".equals(activeCaptureSource) ? "眼镜" : "手机") + (hasSignal ? " · 正在接收声音" : " · 收到静音数据，请检查麦克风占用"));
         });
     }
 
@@ -659,7 +696,7 @@ public final class RabiConversationService extends Service {
             return;
         }
         terminalCaptureError = "";
-        activeCaptureSource = s.source;
+        activeCaptureSource = "video".equals(s.mode) ? "glasses" : "mobile";
         activeCaptureRoute = s.routeProfileId;
         captureSaveFailed = false;
         final long generation = ++captureGeneration;
@@ -723,25 +760,57 @@ public final class RabiConversationService extends Service {
             videoController.start(false, videoCaptureId, "glasses", s.routeProfileId, s.processingPolicy);
             return;
         }
+        automaticSource.disconnected();
+        startSelectedAudio("mobile");
+        if (voiceServiceActive) {
+            try { startGlassesBackend(); }
+            catch (RuntimeException error) { updateRuntime("glasses", "眼镜暂不可用 · 使用手机"); }
+            notificationHandler.removeCallbacks(audioSourceWatchdog);
+            notificationHandler.postDelayed(audioSourceWatchdog, 1000);
+        }
+    }
+
+    private void startSelectedAudio(String source) {
+        AllDayRecordingSettings s = AllDayRecordingSettings.load(this);
+        if (!s.running || shutdownComplete || !"audio".equals(s.mode)) return;
         try {
-            captureRecordId = backend.beginCapture(s.source, s.routeProfileId, s.processingPolicy);
+            com.rabi.link.recording.AudioLevels.reset();
+            activeCaptureSource = source;
+            captureRecordId = backend.beginCapture(source, s.routeProfileId, s.processingPolicy);
             updateRuntime("recordId", captureRecordId);
+            updateRuntime("actualAudioSource", source);
             voiceServiceActive = true;
             promote("准备录音", true);
-            if ("glasses".equals(s.source)) {
-                if (phoneAudioCapture != null) phoneAudioCapture.pause();
-                setInputMode(RabiConversationSettings.InputMode.PAUSED);
-                startGlassesBackend();
-            } else {
+            if ("glasses".equals(source)) setInputMode(RabiConversationSettings.InputMode.GLASSES);
+            else {
                 setInputMode(RabiConversationSettings.InputMode.PHONE);
                 startPhoneCapture();
             }
-            setCaptureStatus("等待声音 · 尚未确认收到数据");
+            setCaptureStatus(("glasses".equals(source) ? "眼镜" : "手机") + " · 等待实际声音数据");
         } catch (Throwable error) {
-            AllDayRecordingSettings.load(RabiConversationService.this).withRunning(false, System.currentTimeMillis()).save(RabiConversationService.this);
-            updateRuntime("error", "录音未启动 · " + friendlyError(error.getMessage()));
+            AllDayRecordingSettings.load(this).withRunning(false, System.currentTimeMillis()).save(this);
+            terminalCaptureError = "录音未启动 · " + friendlyError(error.getMessage());
             pauseRecordingInternal(null);
         }
+    }
+
+    /** Seal the old physical source before accepting the new one; keep CXR monitoring alive. */
+    private void reconcileAudioSource() {
+        if (captureTransition || shutdownComplete || !voiceServiceActive) return;
+        AllDayRecordingSettings s = AllDayRecordingSettings.load(this);
+        if (!s.running || !"audio".equals(s.mode)) return;
+        String next = automaticSource.preferred(android.os.SystemClock.elapsedRealtime());
+        if (next.equals(activeCaptureSource)) return;
+        backend.recordAudioGap("automatic_source_switch", 0, activeCaptureSource);
+        backend.queueDiagnostic("conversation.source_switch", "info", activeCaptureSource + " -> " + next);
+        captureTransition = true;
+        setInputMode(RabiConversationSettings.InputMode.PAUSED);
+        phoneAudioCapture.pause();
+        voiceServiceActive = false;
+        updateRuntime("actualAudioSource", "");
+        setCaptureStatus("正在保存并自动切换声音设备");
+        afterCaptureStopped = () -> startSelectedAudio(automaticSource.preferred(android.os.SystemClock.elapsedRealtime()));
+        backend.endCapture(() -> notificationHandler.post(this::finishCaptureTransition));
     }
 
     private void applyUploadPolicy() {
@@ -776,7 +845,14 @@ public final class RabiConversationService extends Service {
 
     private Runnable afterCaptureStopped;
     private void pauseRecordingInternal(Runnable after) {
-        if (captureTransition) { afterCaptureStopped = after; return; }
+        if (captureTransition) {
+            afterCaptureStopped = after;
+            notificationHandler.removeCallbacks(audioSourceWatchdog);
+            stopGlassesBackend();
+            if (healthController != null) healthController.stop();
+            return;
+        }
+        notificationHandler.removeCallbacks(audioSourceWatchdog);
         captureTransition = true;
         afterCaptureStopped = after;
         ++captureGeneration;
@@ -786,6 +862,7 @@ public final class RabiConversationService extends Service {
         stopGlassesBackend();
         setInputMode(RabiConversationSettings.InputMode.PAUSED);
         voiceServiceActive = false;
+        updateRuntime("actualAudioSource", "");
         if (videoController != null && videoController.getActive()) {
             videoController.stop();
         } else if (backend != null) {
@@ -802,13 +879,14 @@ public final class RabiConversationService extends Service {
             shutdown(true);
             return;
         }
+        com.rabi.link.recording.AudioLevels.reset();
         captureRecordId = "";
         updateRuntime("recordId", "");
         setCaptureStatus(terminalCaptureError.isEmpty() ? "全天记录已暂停 · 已保存内容仍可处理" : "全天记录已停止 · " + terminalCaptureError);
         Runnable after = afterCaptureStopped;
         afterCaptureStopped = null;
         if (!shutdownComplete) {
-            promote(captureStatus, false);
+            promote(captureStatus, after != null && AllDayRecordingSettings.load(this).running);
             if (com.rabi.link.recording.CaptureCompletionPolicy.mayRestart(after != null,
                     AllDayRecordingSettings.load(this).running, captureSaveFailed, shutdownComplete)) after.run();
             else {
@@ -842,9 +920,11 @@ public final class RabiConversationService extends Service {
         int type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
         // Transport commands must not remove the type of a microphone already in use.
         if (voiceServiceActive || conversation) {
-            type |= "glasses".equals(activeCaptureSource)
-                    ? android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-                    : android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+            // Retain microphone eligibility during automatic glasses capture so fallback can
+            // occur with the screen off. The foreground type does not open AudioRecord.
+            type |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+            if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                type |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
         }
         if (settings.running && "video".equals(settings.mode)) {
             type |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
@@ -853,13 +933,18 @@ public final class RabiConversationService extends Service {
     }
 
     private boolean acceptsGlassCallback(long generation) {
-        return com.rabi.link.recording.CaptureCompletionPolicy.acceptsCallback(generation, captureGeneration,
-                glassesGeneration, shutdownComplete, captureTransition, voiceServiceActive,
-                "glasses".equals(activeCaptureSource), AllDayRecordingSettings.load(this).running);
+        AllDayRecordingSettings s = AllDayRecordingSettings.load(this);
+        return generation == captureGeneration && generation == glassesGeneration
+                && !shutdownComplete && s.running && "audio".equals(s.mode);
     }
 
     private void startGlassesBackend() {
         if (glassBridge != null || glassController != null) return;
+        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            updateRuntime("glasses", "附近设备权限未授予 · 使用手机");
+            return;
+        }
         final long callbackGeneration = captureGeneration;
         glassesGeneration = callbackGeneration;
         android.content.SharedPreferences values = getSharedPreferences("rokid_probe", MODE_PRIVATE);
@@ -891,30 +976,14 @@ public final class RabiConversationService extends Service {
         glassController = new RokidCxrController(this, new RokidCxrController.Listener() {
             @Override public void onLog(String line) { }
             @Override public void onCxrConnectionChanged(boolean connected) {
-                if (!acceptsGlassCallback(callbackGeneration)) return;
-                updateRuntime("glasses", connected ? "眼镜 CXR 已连接，等待蓝牙音频通道" : "眼镜模式不可用：CXR 未连接");
-                updateStatus(connected ? "眼镜 CXR 已连接 · 等待蓝牙音频通道" : "等待眼镜 CXR 连接");
+                notificationHandler.post(() -> {
+                    if (!acceptsGlassCallback(callbackGeneration)) return;
+                    updateRuntime("glasses", connected ? "眼镜 CXR 已连接，等待声音" : "眼镜未连接 · 使用手机");
+                    if (!connected) glassConnectionChanged(false, callbackGeneration);
+                });
             }
             @Override public void onGlassBtConnectionChanged(boolean connected) {
-                if (!acceptsGlassCallback(callbackGeneration)) return;
-                AllDayRecordingSettings captureSettings = AllDayRecordingSettings.load(RabiConversationService.this);
-                if (!captureSettings.running || !"audio".equals(captureSettings.mode)
-                        || !"glasses".equals(captureSettings.source)) return;
-                if (connected) {
-                    if (glassController == null || glassesAudioStarted) return;
-                    glassesAudioStarted = glassController.startAudioStream();
-                    if (!glassesAudioStarted) { setCaptureStatus("眼镜声音未启动，请检查连接"); return; }
-                    setInputMode(RabiConversationSettings.InputMode.GLASSES);
-                    updateRuntime("glasses", "眼镜已连接，可使用麦克风、HUD 和扬声器");
-                    updateStatus("眼镜蓝牙已连接 · 眼镜模式持续聆听");
-                } else {
-                    glassesAudioStarted = false;
-                    if (glassController != null) glassController.stopAudioStream();
-                    backend.pauseAudioStream();
-                    setInputMode(RabiConversationSettings.InputMode.PAUSED);
-                    updateRuntime("glasses", "眼镜模式不可用：蓝牙音频通道未连接；可切回手机模式");
-                    updateStatus("眼镜已断开 · 采集保持暂停，可切回手机模式");
-                }
+                notificationHandler.post(() -> glassConnectionChanged(connected, callbackGeneration));
             }
             @Override public void onGlassDeviceInfo(com.rokid.cxr.link.utils.GlassInfo info) {
                 if (!acceptsGlassCallback(callbackGeneration) || info == null) return;
@@ -925,15 +994,17 @@ public final class RabiConversationService extends Service {
             @Override public void onGlassAppResult(String status, String summary, String error) { if (!acceptsGlassCallback(callbackGeneration)) return; updateStatus("眼镜 App · " + shortText(status + " " + summary)); }
             @Override public void onNativeVoiceProtocol(String payload, String channel, String clientId) { if (!acceptsGlassCallback(callbackGeneration)) return; if (glassBridge != null) glassBridge.handleIncomingProtocol(channel, payload, clientId); }
             @Override public void onAudioPcm(byte[] data, int offset, int length) {
-                if (!acceptsGlassCallback(callbackGeneration) || backend == null || inputMode != RabiConversationSettings.InputMode.GLASSES
-                        || data == null || length <= 0) return;
-                int safeOffset = Math.max(0, offset);
-                int safeLength = Math.min(length, data.length - safeOffset);
-                if (safeLength <= 0) return;
-                byte[] chunk = new byte[safeLength];
-                System.arraycopy(data, safeOffset, chunk, 0, safeLength);
-                backend.streamPcmFromSource(chunk, RabiGlassPcBackend.SOURCE_GLASSES);
-                captureReceived(chunk.length);
+                if (data == null || offset < 0 || length <= 0 || offset > data.length - length) return;
+                byte[] chunk = java.util.Arrays.copyOfRange(data, offset, offset + length);
+                notificationHandler.post(() -> {
+                    if (!acceptsGlassCallback(callbackGeneration) || !glassesConnected || !glassesAudioStarted) return;
+                    automaticSource.receivedGlassesPcm(android.os.SystemClock.elapsedRealtime());
+                    reconcileAudioSource();
+                    if (!captureTransition && voiceServiceActive && inputMode == RabiConversationSettings.InputMode.GLASSES) {
+                        backend.streamPcmFromSource(chunk, RabiGlassPcBackend.SOURCE_GLASSES);
+                        captureReceived(chunk);
+                    }
+                });
             }
         });
         glassController.disableDiagnosticAudioBuffer();
@@ -952,8 +1023,28 @@ public final class RabiConversationService extends Service {
         updateStatus("眼镜后台正在连接");
     }
 
+    private void glassConnectionChanged(boolean connected, long generation) {
+        if (!acceptsGlassCallback(generation)) return;
+        glassesConnected = connected;
+        if (connected) {
+            if (glassController != null && !glassesAudioStarted) {
+                lastGlassRetryAt = android.os.SystemClock.elapsedRealtime();
+                glassesAudioStarted = glassController.startAudioStream();
+            }
+            updateRuntime("glasses", "眼镜已连接 · 等待真实音频");
+        } else {
+            automaticSource.disconnected();
+            glassesAudioStarted = false;
+            if (glassController != null) glassController.stopAudioStream();
+            updateRuntime("glasses", "眼镜已断开 · 自动使用手机");
+            reconcileAudioSource();
+        }
+    }
+
     private void stopGlassesBackend() {
         glassesGeneration = -1;
+        glassesConnected = false;
+        automaticSource.disconnected();
         glassesAudioStarted = false;
         if (glassController != null) {
             RokidCxrController old = glassController;
@@ -1315,6 +1406,7 @@ public final class RabiConversationService extends Service {
         if (videoAudio != null) videoAudio.close();
         if (glassStatusPublisher != null) glassStatusPublisher.close();
         notificationHandler.removeCallbacks(reviewNotificationRefresh);
+        notificationHandler.removeCallbacks(audioSourceWatchdog);
         unregisterNetworkEvents();
         RabiAudioShutdownSequence.run(
                 () -> { if (phoneAudioCapture != null) phoneAudioCapture.close(explicitStop); },

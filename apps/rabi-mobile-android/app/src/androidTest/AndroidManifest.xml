@@ -1,5 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <instrumentation
+        android:name="com.rabi.link.test.DirectVideoInstrumentation"
+        android:targetPackage="com.rabi.link" />
+    <instrumentation
+        android:name="com.rabi.link.test.MobileThemeInstrumentation"
+        android:targetPackage="com.rabi.link" />
+    <instrumentation
         android:name="com.rabi.link.modules.xiaomi.MiHealthInstrumentation"
         android:targetPackage="com.rabi.link" />
 </manifest>

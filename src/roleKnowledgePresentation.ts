@@ -60,7 +60,7 @@ export type PlanPresentation = {
     palette: PlanPresentationPalette;
   };
   approval: {
-    state: "none" | "incomplete" | "ready";
+    state: "none" | "incomplete" | "ready" | "approved";
     enabled: boolean;
     label: string;
     helper: string;
@@ -118,6 +118,12 @@ export function planPresentation(
   workflow: PersonaPlanWorkflow
 ): PlanPresentation {
   const approval = approvalPresentation(plan);
+  if ((plan.markerStatus ?? plan.status) === workflow.roles.approved && planActivationStatus(plan, workflow) === "进行中") {
+    approval.enabled = approval.state === "ready";
+    approval.state = "approved";
+    approval.label = "已审批";
+    approval.helper = "审批意见已保存，可编辑后重新提交；确认投递后回到分析中。";
+  }
   const definition = definitionFor(plan, workflow);
   const activation = planActivationStatus(plan, workflow);
   const views: PlanPresentationView[] = activation === "已归档"
@@ -205,7 +211,7 @@ export function presentPlans(
     .sort((left, right) => {
       const statusDelta = left.presentation.statusLevel - right.presentation.statusLevel;
       if (statusDelta !== 0) return statusDelta;
-      const approvalRank = { ready: 0, incomplete: 1, none: 2 } as const;
+      const approvalRank = { ready: 0, approved: 0, incomplete: 1, none: 2 } as const;
       const approvalDelta = approvalRank[left.presentation.approval.state] - approvalRank[right.presentation.approval.state];
       if (approvalDelta !== 0) return approvalDelta;
       const dateDelta = dateValue(right.updatedAt, right.createdAt) - dateValue(left.updatedAt, left.createdAt);

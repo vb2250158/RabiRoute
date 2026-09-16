@@ -42,8 +42,8 @@ android {
         testInstrumentationRunner "com.rabi.link.test.DirectVideoInstrumentation"
         // The thin-phone package must always be an installable upgrade over
         // the prior diagnostic build.  Keep the normal build metadata intact.
-        versionCode mobileSlim ? 26 : 4
-        versionName mobileSlim ? "0.3.23-dev" : "0.3.1"
+        versionCode mobileSlim ? 41 : 4
+        versionName mobileSlim ? "0.3.38-dev" : "0.3.1"
         buildConfigField "boolean", "MOBILE_SLIM", mobileSlim ? "true" : "false"
         buildConfigField "boolean", "ROKID_VIDEO", (!mobileSlim || rokidVideo) ? "true" : "false"
         buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
@@ -76,6 +76,8 @@ android {
     // models and phone-side legacy ABIs remain excluded from the slim build.
     sourceSets {
         main {
+            java.srcDir("$buildDir/generated/mobileTheme/java")
+            res.srcDir("$buildDir/generated/mobileTheme/res")
             jniLibs.srcDir("$rootDir/out/live-recorder/jniLibs")
             assets.srcDir("$rootDir/out/live-recorder/assets")
             java.srcDir("$rootDir/../../packages/android-sdk/rabiroute-sdk/src/main/java")
@@ -108,7 +110,13 @@ tasks.register("prepareLiveRecorderRuntime", Exec) {
     workingDir rootProject.projectDir
     commandLine "node", "scripts/Prepare-LiveRecorderRuntime.mjs"
 }
-tasks.named("preBuild").configure { dependsOn("prepareLiveRecorderRuntime") }
+tasks.register("generateMobileTheme", Exec) {
+    workingDir rootProject.projectDir
+    commandLine "node", "scripts/generate-mobile-theme.mjs"
+    inputs.files(rootProject.file("../../ribiwebgui/src/themes/light/tokens.css"), rootProject.file("../../ribiwebgui/src/themes/dark/tokens.css"), rootProject.file("scripts/generate-mobile-theme.mjs"))
+    outputs.dir("$buildDir/generated/mobileTheme")
+}
+tasks.named("preBuild").configure { dependsOn("prepareLiveRecorderRuntime", "generateMobileTheme") }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = "UTF-8"

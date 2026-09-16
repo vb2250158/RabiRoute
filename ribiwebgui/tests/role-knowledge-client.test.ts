@@ -121,8 +121,13 @@ test("WebGUI fences plan feedback with a current-generation strong ETag and stab
       planAttachmentIds: [],
       source: "webgui",
       kind: "guidance",
+      formData: { questions: [], answers: {}, text: "continue" },
+      reuseFeedbackId: "previous-feedback",
       expectedRevision: current.etag
     });
+    const submitted = JSON.parse(String(mutations[0].body));
+    assert.deepEqual(submitted.formData, { questions: [], answers: {}, text: "continue" });
+    assert.equal(submitted.reuseFeedbackId, "previous-feedback");
     assert.equal(new Headers(mutations[0]?.headers).get("idempotency-key"), "plan-feedback:feedback-1");
     assert.equal(new Headers(mutations[0]?.headers).get("if-match"), '"revision-a-1"');
 

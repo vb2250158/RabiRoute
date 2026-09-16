@@ -55,6 +55,10 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(tray, "main.py", "new tray\n");
     write(tray, "rabiroute_tray/tray_app.py", "new tray module\n");
     write(host, "RabiRouteHost.Core.dll", "new core\n");
+    for (const filename of ["package.json", "rabi-agent.mjs", "README.md", "README_en.md", "lib/client.mjs", "runtime/management.mjs", "dist/agent-hooks/hook.mjs"]) {
+      write(build, `apps/rabi-agent/${filename}`, "fixture connector asset\n");
+    }
+    write(build, "apps/rabi-agent/data/route/private.json", "private fixture excluded\n");
 
     const result = createDeveloperCandidate({
       baseRoot: base,
@@ -65,6 +69,8 @@ test("developer candidate overlays only built runtime layers and leaves the immu
       packageVersion: "0.2.2-dev.20260901T120000Z"
     });
 
+    assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/data")), false);
+    assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/lib/client.mjs")), true);
     assert.equal(fs.readFileSync(path.join(base, "dist", "manager.js"), "utf8"), "old manager\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "package.json"), "utf8"), '{"scripts":{"build":"current"}}');
     assert.equal(fs.readFileSync(path.join(base, "package.json"), "utf8"), '{"scripts":{"build":"old"}}');

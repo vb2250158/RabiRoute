@@ -20,7 +20,8 @@ public final class AllDayRecordingSettings {
             String routeProfileId, boolean healthEnabled, boolean uploadEnabled, boolean autoResume, long windowStartedAt) {
         this.running = running;
         this.mode = "video".equals(mode) ? "video" : "health".equals(mode) ? "health" : "audio";
-        this.source = "glasses".equals(source) ? "glasses" : "mobile";
+        // Manual preferences migrate to auto. Each capture still freezes its physical source.
+        this.source = "video".equals(this.mode) ? "glasses" : "auto";
         this.processingPolicy = "agent".equals(processingPolicy) ? "agent" : "local_only".equals(processingPolicy) ? "local_only" : "transcribe";
         this.routeProfileId = routeProfileId == null ? "" : routeProfileId.trim();
         this.healthEnabled = healthEnabled;
@@ -46,7 +47,7 @@ public final class AllDayRecordingSettings {
             effectiveWindow = Math.max(effectiveWindow, System.currentTimeMillis());
         }
         if (!existing.edit()
-                .putBoolean("running", running).putString("mode", mode).putString("source", source)
+                .putBoolean("running", running).putString("mode", mode).remove("source")
                 .putString("processingPolicy", processingPolicy).putString("routeProfileId", routeProfileId)
                 .putBoolean("healthEnabled", healthEnabled).putBoolean("uploadEnabled", uploadEnabled)
                 .putBoolean("autoResume", autoResume).putLong("windowStartedAt", effectiveWindow).commit()) {

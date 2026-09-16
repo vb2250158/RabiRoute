@@ -59,7 +59,16 @@ function createDeveloperCandidate(options) {
     replaceDirectory(path.join(buildRoot, "ribiwebgui", "dist"), path.join(stagingRoot, "ribiwebgui", "dist"));
     replaceDirectory(path.join(buildRoot, "assets"), path.join(stagingRoot, "assets"));
     if (fs.statSync(path.join(buildRoot, "apps", "rabi-agent"), { throwIfNoEntry: false })?.isDirectory()) {
-      replaceDirectory(path.join(buildRoot, "apps", "rabi-agent"), path.join(stagingRoot, "apps", "rabi-agent"));
+      const agentSource = path.join(buildRoot, "apps", "rabi-agent");
+      const agentTarget = path.join(stagingRoot, "apps", "rabi-agent");
+      fs.rmSync(agentTarget, { recursive: true, force: true });
+      fs.mkdirSync(agentTarget, { recursive: true });
+      for (const filename of ["package.json", "rabi-agent.mjs", "README.md", "README_en.md"]) {
+        fs.copyFileSync(requireFile(agentSource, filename), path.join(agentTarget, filename));
+      }
+      for (const directory of ["lib", "runtime", "dist"]) {
+        replaceDirectory(path.join(agentSource, directory), path.join(agentTarget, directory));
+      }
     }
     // Runtime context links and plugin entrypoints must match the new Manager build.
     for (const name of ["docs", "plugins", "skills", "source-patches"]) {

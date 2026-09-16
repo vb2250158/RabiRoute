@@ -2,6 +2,7 @@ import type http from "node:http";
 import type { AgentSendRequest } from "../agentSend.js";
 import type { AgentRequestStore } from "../agentRequests/store.js";
 import type { AgentSendTraceQuery } from "./agentSendIdempotency.js";
+import { getTrustedLanAgentSource, hasLanAgentBodyGuard, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
 
@@ -15,7 +16,7 @@ export type AgentCommunicationRoutesContext = {
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   receiptResponse: (deliveryId: string) => AgentCommunicationHttpResponse;
   findSendTraces: (query: AgentSendTraceQuery) => unknown[];
-  send: (request: AgentSendRequest) => Promise<AgentCommunicationHttpResponse>;
+  send: (request: AgentSendRequest, options?: { remoteSource?: TrustedLanAgentSource }) => Promise<AgentCommunicationHttpResponse>;
   agentRequests: AgentRequestStore;
   refreshAgentRequestReminderTimers: () => void;
   publishManagerEvent: (eventType: string, data: unknown) => void;
@@ -130,7 +131,13 @@ function handleSend(
   if (request.method !== "POST" || requestUrl.pathname !== "/api/agent/send") return false;
 
   trackHandledOperation(context.readJsonBody<AgentSendRequest>(request)
-    .then(body => context.send(body))
+    .then(body => {
+      const remoteSource = getTrustedLanAgentSource(request);
+      if (hasLanAgentBodyGuard(request) && !remoteSource) {
+        throw new Error("Remote Agent trusted source session is unavailable.");
+      }
+      return context.send(body, { remoteSource });
+    })
     .then(result => {
       context.jsonResponse(response, result.statusCode, {
         code: result.body.ok ? 0 : -1,

@@ -52,6 +52,7 @@ const props = withDefaults(defineProps<{
   maxLength?: number;
   inputOnly?: boolean;
   footerOnly?: boolean;
+  actionsTarget?: string;
 }>(), {
   notice: undefined,
   maxLength: 2_000
@@ -390,6 +391,7 @@ function formatAttachmentSize(size: number): string {
   >
     {{ localError || notice?.text }}
   </v-alert>
+  <Teleport :to="actionsTarget || 'body'" :disabled="!actionsTarget">
   <div v-if="!inputOnly" class="knowledge-approval-actions">
     <span>{{ footerText }}</span>
     <div class="knowledge-approval-action-buttons">
@@ -412,4 +414,5 @@ function formatAttachmentSize(size: number): string {
       </v-btn>
     </div>
   </div>
+  </Teleport>
 </template>

@@ -1,3 +1,4 @@
+import { normalizePlanFeedbackFormData, planFeedbackFormText } from "./shared/planFeedbackFormData.js";
 import { resolvePlanAttachmentFile } from "./planAttachments.js";
 import {
   createPlanFeedbackRecord,
@@ -32,6 +33,8 @@ export type SubmitPlanFeedbackInput = {
   author?: unknown;
   source?: unknown;
   text?: unknown;
+  formData?: unknown;
+  reuseFeedbackId?: unknown;
   notifyAgent?: unknown;
   planAttachmentIds?: unknown;
   attachments?: unknown;
@@ -78,6 +81,11 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
         : plan.steps.find((item) => item.id === plan.currentStepId);
     if (requestedStepId && !step) throw new Error(`Plan step not found: ${requestedStepId}`);
 
+    const replay = typeof input.feedbackId === "string"
+      ? listPlanFeedbackUnderLease(lease).find(item => item.id === input.feedbackId) : undefined;
+    const currentStep = step ?? plan.steps.find(item => item.id === plan.currentStepId);
+    const formData = normalizePlanFeedbackFormData(input.formData, replay?.formData?.questions ?? currentStep?.questions ?? [],
+      feedbackKind === "approval_suggestion", replay?.formData?.approvalContract ?? currentStep?.approvalRequest);
     const baseCandidate = createPlanFeedbackRecord({
       id: input.feedbackId,
       roleId: input.roleId,
@@ -89,7 +97,7 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
       kind: input.kind,
       author: input.author,
       source: input.source,
-      text: input.text,
+      text: formData ? planFeedbackFormText(formData, feedbackKind === "approval_suggestion") : input.text,
       notifyAgent: input.notifyAgent
     });
     const existing = listPlanFeedbackUnderLease(lease).find((item) => item.id === baseCandidate.id);
@@ -106,12 +114,13 @@ export function submitPlanFeedback(input: SubmitPlanFeedbackInput): SubmitPlanFe
     }));
     const candidate = {
       ...baseCandidate,
+      formData,
       storageRevision: input.storageRevision ?? baseCandidate.storageRevision,
       storageMutationRequestId: input.storageMutationRequestId,
       attachments: existing?.attachments || [],
       planAttachments
     };
-    const committed = commitPlanFeedbackUnderLease(lease, candidate, input.attachments);
-    return { ...committed, plan };
+    const committed = commitPlanFeedbackUnderLease(lease, candidate, input.attachments, { reuseFeedbackId: input.reuseFeedbackId });
+    return { ...committed, plan: readCanonicalPlanJsonUnderLease(lease) as unknown as PlanItem };
   });
 }

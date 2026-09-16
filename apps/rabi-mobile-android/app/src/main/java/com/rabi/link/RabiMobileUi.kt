@@ -5,6 +5,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -105,14 +106,21 @@ object RabiSetupGuide {
 }
 
 object RabiMobileUi {
-    val background = Color.rgb(246, 248, 251)
-    val surface = Color.WHITE
-    val primary = Color.rgb(16, 42, 67)
-    val secondary = Color.rgb(25, 191, 193)
-    val accent = Color.rgb(255, 109, 157)
-    val text = Color.rgb(17, 32, 51)
-    val muted = Color.rgb(102, 117, 134)
-    val border = Color.rgb(218, 226, 234)
+    val background get() = RabiMobileTheme.color("canvas")
+    val surface get() = RabiMobileTheme.color("surface")
+    val primary get() = RabiMobileTheme.color("heading")
+    val secondary get() = RabiMobileTheme.color("accent-strong")
+    val accent get() = RabiMobileTheme.color("error-text")
+    val text get() = RabiMobileTheme.color("text")
+    val muted get() = RabiMobileTheme.color("muted")
+    val border get() = RabiMobileTheme.color("border")
+    val borderStrong get() = RabiMobileTheme.color("border-strong")
+    val inputSurface get() = RabiMobileTheme.color("input")
+    val accentSurface get() = RabiMobileTheme.color("accent-surface")
+    val accentBorder get() = RabiMobileTheme.color("accent-border")
+    val onAccent get() = RabiMobileTheme.color("on-accent-strong")
+    val warning get() = RabiMobileTheme.color("warning-text")
+    val error get() = RabiMobileTheme.color("error-text")
 
     @JvmStatic
     fun dp(context: Context, value: Int): Int =
@@ -131,7 +139,7 @@ object RabiMobileUi {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(context, 16), dp(context, 14), dp(context, 16), dp(context, 14))
-        background = panel(context, Color.rgb(239, 253, 255), Color.rgb(183, 231, 232), 14)
+        background = panel(context, accentSurface, accentBorder, 14)
         addView(ImageView(context).apply {
             setImageResource(R.drawable.rabiroute_icon)
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -184,19 +192,19 @@ object RabiMobileUi {
         hint = hintText
         textSize = 15f
         setTextColor(RabiMobileUi.text)
-        setHintTextColor(Color.rgb(139, 152, 168))
+        setHintTextColor(muted)
         setSingleLine(true)
         minHeight = dp(context, 52)
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(context, 14), 0, dp(context, 14), 0)
-        background = panel(context, surface, Color.rgb(193, 205, 216), 10)
+        background = panel(context, inputSurface, borderStrong, 10)
     }
 
     @JvmStatic
     fun spinner(context: Context, value: Spinner): Spinner = value.apply {
         minimumHeight = dp(context, 52)
         setPadding(dp(context, 10), 0, dp(context, 10), 0)
-        background = panel(context, surface, Color.rgb(193, 205, 216), 10)
+        background = panel(context, inputSurface, borderStrong, 10)
     }
 
     @JvmStatic
@@ -206,8 +214,8 @@ object RabiMobileUi {
         textSize = 15f
         typeface = Typeface.DEFAULT_BOLD
         minHeight = dp(context, 52)
-        setTextColor(Color.WHITE)
-        background = panel(context, primary, primary, 10)
+        setTextColor(onAccent)
+        background = panel(context, secondary, secondary, 10)
         setOnClickListener { action() }
     }
 
@@ -218,7 +226,7 @@ object RabiMobileUi {
         textSize = 15f
         minHeight = dp(context, 52)
         setTextColor(primary)
-        background = panel(context, Color.rgb(239, 253, 255), Color.rgb(171, 224, 225), 10)
+        background = panel(context, accentSurface, accentBorder, 10)
         setOnClickListener { action() }
     }
 
@@ -232,16 +240,50 @@ object RabiMobileUi {
         minimumHeight = dp(context, 48)
         setPadding(dp(context, 12), 0, dp(context, 12), 0)
         setTextColor(primary)
-        background = panel(context, Color.rgb(239, 253, 255), Color.rgb(171, 224, 225), 10)
+        background = panel(context, accentSurface, accentBorder, 10)
         setOnClickListener { action() }
     }
+
+    /** Shared bottom navigation; only the current destination uses a filled background. */
+    fun bottomNavigation(context: Context, selected: String, onSelect: (String) -> Unit): View =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(surface)
+            addView(View(context).apply { setBackgroundColor(border) }, LinearLayout.LayoutParams(-1, dp(context, 1)))
+            addView(LinearLayout(context).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(context, 12), dp(context, 8), dp(context, 12), dp(context, 8))
+                val ids = resources.getStringArray(R.array.mobile_navigation_ids)
+                val names = resources.getStringArray(R.array.mobile_navigation_names)
+                ids.forEachIndexed { index, id ->
+                    addView(Button(context).apply {
+                        text = names[index]
+                        textSize = 13f
+                        isAllCaps = false
+                        isSelected = id == selected
+                        typeface = if (isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                        minWidth = 0; minimumWidth = 0
+                        minHeight = dp(context, 48); minimumHeight = dp(context, 48)
+                        setPadding(dp(context, 4), 0, dp(context, 4), 0)
+                        setTextColor(if (isSelected) secondary else muted)
+                        stateListAnimator = null
+                        background = RippleDrawable(ColorStateList.valueOf(accentBorder),
+                            panel(context, if (isSelected) accentSurface else surface, Color.TRANSPARENT, 10), null)
+                        contentDescription = "${names[index]}${if (isSelected) "，已选择" else ""}"
+                        setOnClickListener { onSelect(id) }
+                    }, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                        if (index > 0) marginStart = dp(context, 6)
+                    })
+                }
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
 
     @JvmStatic
     fun avatar(context: Context, label: String): ImageView = ImageView(context).apply {
         setImageResource(R.drawable.ic_persona_avatar_placeholder)
         scaleType = ImageView.ScaleType.CENTER_CROP
         contentDescription = RabiAvatarLoadRules.placeholderContentDescription(label)
-        background = panel(context, Color.rgb(239, 253, 255), Color.rgb(183, 231, 232), 14)
+        background = panel(context, accentSurface, accentBorder, 14)
         setPadding(dp(context, 3), dp(context, 3), dp(context, 3), dp(context, 3))
     }
 
@@ -253,7 +295,8 @@ object RabiMobileUi {
         gravity = Gravity.CENTER
         minWidth = dp(context, 24)
         setPadding(dp(context, 6), 0, dp(context, 6), 0)
-        setTextColor(Color.WHITE)
+        setTextColor(onAccent)
+        setTextColor(if (RabiMobileTheme.isDark()) Color.BLACK else Color.WHITE)
         background = panel(context, accent, accent, 12)
         contentDescription = "$count 条未读消息"
     }
@@ -269,7 +312,7 @@ object RabiMobileUi {
         )
         trackTintList = ColorStateList(
             arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-            intArrayOf(secondary, Color.rgb(176, 188, 198)),
+            intArrayOf(secondary, borderStrong),
         )
     }
 
@@ -280,17 +323,17 @@ object RabiMobileUi {
         setLineSpacing(0f, 1.16f)
         setTextColor(
             when (value.tone) {
-                RabiGuidanceTone.SUCCESS -> Color.rgb(22, 101, 52)
-                RabiGuidanceTone.WARNING -> Color.rgb(146, 64, 14)
-                RabiGuidanceTone.ERROR -> Color.rgb(153, 27, 27)
+                RabiGuidanceTone.SUCCESS -> RabiMobileTheme.color("success-text")
+                RabiGuidanceTone.WARNING -> warning
+                RabiGuidanceTone.ERROR -> RabiMobileUi.error
                 RabiGuidanceTone.INFO -> primary
             }
         )
         val colors = when (value.tone) {
-            RabiGuidanceTone.SUCCESS -> Color.rgb(240, 253, 244) to Color.rgb(134, 239, 172)
-            RabiGuidanceTone.WARNING -> Color.rgb(255, 251, 235) to Color.rgb(253, 186, 116)
-            RabiGuidanceTone.ERROR -> Color.rgb(254, 242, 242) to Color.rgb(252, 165, 165)
-            RabiGuidanceTone.INFO -> Color.rgb(239, 253, 255) to Color.rgb(165, 227, 229)
+            RabiGuidanceTone.SUCCESS -> RabiMobileTheme.color("success-surface") to RabiMobileTheme.color("success-border")
+            RabiGuidanceTone.WARNING -> RabiMobileTheme.color("warning-surface") to RabiMobileTheme.color("warning-border")
+            RabiGuidanceTone.ERROR -> RabiMobileTheme.color("error-surface") to RabiMobileTheme.color("error-border")
+            RabiGuidanceTone.INFO -> accentSurface to accentBorder
         }
         setPadding(dp(context, 14), dp(context, 12), dp(context, 14), dp(context, 12))
         background = panel(context, colors.first, colors.second, 10)
@@ -325,11 +368,11 @@ object RabiMobileUi {
     fun styleInput(context: Context, value: EditText, multiline: Boolean = false): EditText = value.apply {
         textSize = 15f
         setTextColor(RabiMobileUi.text)
-        setHintTextColor(Color.rgb(139, 152, 168))
+        setHintTextColor(muted)
         minHeight = dp(context, 52)
         gravity = if (multiline) Gravity.TOP else Gravity.CENTER_VERTICAL
         setPadding(dp(context, 14), if (multiline) dp(context, 12) else 0, dp(context, 14), if (multiline) dp(context, 12) else 0)
-        background = panel(context, surface, Color.rgb(193, 205, 216), 10)
+        background = panel(context, inputSurface, borderStrong, 10)
     }
 
     @JvmStatic
@@ -367,18 +410,18 @@ object RabiMobileUi {
         tone: RabiGuidanceTone,
     ): EditText = value.apply {
         val stroke = when (tone) {
-            RabiGuidanceTone.SUCCESS -> Color.rgb(74, 185, 116)
-            RabiGuidanceTone.WARNING -> Color.rgb(245, 158, 66)
-            RabiGuidanceTone.ERROR -> Color.rgb(239, 104, 104)
-            RabiGuidanceTone.INFO -> Color.rgb(193, 205, 216)
+            RabiGuidanceTone.SUCCESS -> RabiMobileTheme.color("success-border")
+            RabiGuidanceTone.WARNING -> RabiMobileTheme.color("warning-border")
+            RabiGuidanceTone.ERROR -> RabiMobileTheme.color("error-border")
+            RabiGuidanceTone.INFO -> borderStrong
         }
-        background = panel(context, surface, stroke, 10)
+        background = panel(context, inputSurface, stroke, 10)
     }
 
     private fun fieldToneColor(tone: RabiGuidanceTone): Int = when (tone) {
-        RabiGuidanceTone.SUCCESS -> Color.rgb(22, 101, 52)
-        RabiGuidanceTone.WARNING -> Color.rgb(146, 64, 14)
-        RabiGuidanceTone.ERROR -> Color.rgb(153, 27, 27)
+        RabiGuidanceTone.SUCCESS -> RabiMobileTheme.color("success-text")
+        RabiGuidanceTone.WARNING -> warning
+        RabiGuidanceTone.ERROR -> error
         RabiGuidanceTone.INFO -> muted
     }
 
@@ -388,8 +431,8 @@ object RabiMobileUi {
         textSize = 15f
         typeface = Typeface.DEFAULT_BOLD
         minHeight = dp(context, 52)
-        setTextColor(Color.WHITE)
-        background = panel(context, primary, primary, 10)
+        setTextColor(onAccent)
+        background = panel(context, secondary, secondary, 10)
     }
 
     @JvmStatic
@@ -398,7 +441,7 @@ object RabiMobileUi {
         textSize = 15f
         minHeight = dp(context, 52)
         setTextColor(primary)
-        background = panel(context, Color.rgb(239, 253, 255), Color.rgb(171, 224, 225), 10)
+        background = panel(context, accentSurface, accentBorder, 10)
     }
 
     @JvmStatic

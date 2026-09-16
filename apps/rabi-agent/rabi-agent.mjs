@@ -6,6 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexDesktopIpcClient } from "./lib/codex-desktop-ipc.mjs";
 import { normalizeDshBinding, sendDshTask } from "./lib/dsh.mjs";
+import { runManagerCommand } from "./lib/manager-cli.mjs";
+import { createManagerClient } from "./lib/manager-client.mjs";
 import { instanceAgents, agentCatalog, configureInstanceAgent, resolveInstanceAgent, registerManagedSession } from "./lib/instance-agents.mjs";
 import { normalizeAllowedWorkspaces, resolveRealDirectory, resolveTaskWorkspace } from "./lib/cwd-policy.mjs";
 
@@ -31,9 +33,7 @@ function configPathFromArgs(args = process.argv.slice(2)) {
 function normalizeManagerUrl(value) {
   const url = new URL(String(value || "").trim());
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("RABI_MANAGER_URL must use http:// or https://.");
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  url.search = "";
-  url.hash = "";
+  if (url.username || url.password || url.search || url.hash || !["", "/"].includes(url.pathname)) throw new Error("RABI_MANAGER_URL must be an explicit origin without credentials or a path.");
   return url.toString().replace(/\/$/, "");
 }
 
@@ -131,14 +131,35 @@ function parseWorkspaceList(value, fallback) {
   return value.split(";");
 }
 
-function bootstrapConfig(configPath) {
+async function verifyNodeIdentity(config, fetcher = fetch) {
+  const response = await authorizedFetch(config, "/api/lan-agent/self", fetcher);
+  const body = await response.json();
+  const identity = body?.data;
+  if (body?.code !== 0 || identity?.nodeId !== config.nodeId || !identity.applicationGenerationId || !identity.managerInstanceId || identity.health?.state !== "healthy" || identity.health?.requiredReady !== true) {
+    throw new Error("Manager node identity or readiness verification failed; reconnect using the current Manager address.");
+  }
+  return identity;
+}
+
+async function bootstrapConfig(configPath, fetcher = fetch) {
   const previous = readJson(configPath, undefined);
   if (fs.existsSync(configPath) && !previous) throw new Error("The existing instance configuration is invalid; refusing to replace its identity.");
-  const managerUrl = normalizeManagerUrl(process.env.RABI_MANAGER_URL);
-  const lanLinkToken = String(process.env.RABI_LAN_LINK_TOKEN || "").trim();
+  const managerUrl = normalizeManagerUrl(process.env.RABI_MANAGER_URL || previous?.managerUrl);
+  const ticket = String(process.env.RABI_AGENT_BOOTSTRAP_TICKET || "").trim();
+  delete process.env.RABI_AGENT_BOOTSTRAP_TICKET;
+  // A reconnect never consumes another single-use ticket or replaces existing bindings.
+  if (previous?.nodeCredential) {
+    const config = { ...previous, managerUrl };
+    delete config.lanLinkToken;
+    delete config.bootstrapTicket;
+    await verifyNodeIdentity(config, fetcher);
+    writePrivateJson(configPath, config);
+    return config;
+  }
+  if (!ticket) throw new Error(previous?.lanLinkToken ? "Legacy lanLinkToken is not accepted; re-enroll using a fresh RABI_AGENT_BOOTSTRAP_TICKET. Existing identities are preserved." : "RABI_AGENT_BOOTSTRAP_TICKET is required for bootstrap.");
   const defaultWorkspace = resolveRealDirectory(process.env.RABI_AGENT_DEFAULT_CWD || process.cwd(), "RABI_AGENT_DEFAULT_CWD");
   const allowedWorkspaces = normalizeAllowedWorkspaces(parseWorkspaceList(process.env.RABI_AGENT_ALLOWED_CWDS, defaultWorkspace), defaultWorkspace);
-  if (!lanLinkToken) throw new Error("RABI_LAN_LINK_TOKEN is required for bootstrap.");
+
   const releasePublicKeySha256 = normalizedPublicKeySha256(process.env.RABI_AGENT_RELEASE_PUBLIC_KEY_SHA256);
   const codexThreadId = String(process.env.RABI_AGENT_CODEX_THREAD_ID || "").trim();
   const agentType = process.env.RABI_AGENT_TYPE?.trim() || "codex-desktop";
@@ -150,7 +171,6 @@ function bootstrapConfig(configPath) {
     agentType,
     dsh,
     managerUrl,
-    lanLinkToken,
     nodeId: previous?.nodeId || String(process.env.RABI_NODE_ID || "").trim() || randomNodeId(),
     releasePublicKeySha256,
     defaultWorkspace,
@@ -166,7 +186,25 @@ function bootstrapConfig(configPath) {
     config.agents = instanceAgents(previous);
     config.allowedWorkspaces = normalizeAllowedWorkspaces([...(previous.allowedWorkspaces || []), ...allowedWorkspaces], defaultWorkspace);
   }
+  config.agents = instanceAgents(config);
+  let response;
+  let body;
+  try {
+    response = await fetcher(`${managerUrl}/api/lan-agent/enroll`, {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(30_000),
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, nodeId: config.nodeId })
+    });
+    body = await response.json();
+  } catch {
+    throw new Error("Enrollment result is uncertain (transport, redirect or timeout); do not automatically retry. Verify the node in Manager before obtaining a new ticket.");
+  }
+  if (!response.ok || body?.code !== 0) throw new Error(`Enrollment ${response.status >= 500 || body?.uncertain ? "result is uncertain" : "failed"} (HTTP ${response.status}); no automatic retry. Verify the node in Manager before reconnecting.`);
+  if (body.data?.nodeId !== config.nodeId || typeof body.data?.token !== "string" || !body.data.token.trim()) throw new Error("Enrollment returned an invalid node identity; result uncertain. Do not retry automatically.");
+  config.nodeCredential = body.data.token;
+  // Persist the successful exchange before the read-only identity check: a timeout
+  // must not lose the only copy of a credential from a consumed ticket.
   writePrivateJson(configPath, config);
+  await verifyNodeIdentity(config, fetcher);
   return config;
 }
 
@@ -174,8 +212,12 @@ function currentReleasePath(configPath) {
   return path.join(path.dirname(configPath), "current-release.json");
 }
 
-function writeCurrentRelease(configPath, entrypoint) {
-  writePrivateJson(currentReleasePath(configPath), { entrypoint: path.resolve(entrypoint), updatedAt: new Date().toISOString() });
+function releaseDigest(release) { return sha256(Buffer.from(manifestPayload(release))); }
+function readInstalledDigest(entrypoint) {
+  try { return JSON.parse(fs.readFileSync(path.join(path.dirname(entrypoint), "release-identity.json"), "utf8")).digest; } catch { return undefined; }
+}
+function writeCurrentRelease(configPath, entrypoint, digest = readInstalledDigest(entrypoint)) {
+  writePrivateJson(currentReleasePath(configPath), { entrypoint: path.resolve(entrypoint), ...(digest ? { digest } : {}), updatedAt: new Date().toISOString() });
 }
 
 function launcherPath(configPath) {
@@ -183,9 +225,10 @@ function launcherPath(configPath) {
 }
 
 function writeLauncher(configPath) {
-  fs.copyFileSync(new URL("./lib/instance-hook.mjs", import.meta.url), path.join(path.dirname(configPath), "hook-client.mjs"));
+  const hookShim = `import fs from "node:fs";\nimport path from "node:path";\nimport { pathToFileURL } from "node:url";\nexport async function requestInstanceHook(input, configPath, fetcher = fetch) {\n const current = JSON.parse(fs.readFileSync(path.join(path.dirname(path.resolve(configPath)), "current-release.json"), "utf8"));\n const module = await import(pathToFileURL(path.join(path.dirname(current.entrypoint), "lib", "instance-hook.mjs")).href);\n return module.requestInstanceHook(input, configPath, fetcher);\n}\n`;
+  fs.writeFileSync(path.join(path.dirname(configPath), "hook-client.mjs"), hookShim, { encoding: "utf8", mode: 0o600 });
   const launcher = launcherPath(configPath);
-  const code = `import fs from "node:fs";\nimport path from "node:path";\nimport { spawn } from "node:child_process";\nconst args = process.argv.slice(2);\nconst index = args.indexOf("--config");\nconst configPath = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : path.join(process.env.LOCALAPPDATA || process.env.HOME || process.cwd(), "RabiAgent", "config.json");\nconst currentPath = path.join(path.dirname(configPath), "current-release.json");\nconst current = JSON.parse(fs.readFileSync(currentPath, "utf8"));\nconst entrypoint = path.resolve(String(current.entrypoint || ""));\nif (!entrypoint || !fs.existsSync(entrypoint)) throw new Error("Rabi Agent current release is missing.");\nconst child = spawn(process.execPath, [entrypoint, "--run", "--config", configPath], { cwd: path.dirname(entrypoint), stdio: "inherit", windowsHide: true });\nchild.once("exit", code => { process.exitCode = typeof code === "number" ? code : 1; });\n`;
+  const code = `import fs from "node:fs";\nimport path from "node:path";\nimport { spawn } from "node:child_process";\nconst args = process.argv.slice(2);\nconst index = args.indexOf("--config");\nconst configPath = index >= 0 && args[index + 1] ? path.resolve(args[index + 1]) : ${JSON.stringify(path.resolve(configPath))};\nconst currentPath = path.join(path.dirname(configPath), "current-release.json");\nconst current = JSON.parse(fs.readFileSync(currentPath, "utf8"));\nconst entrypoint = path.resolve(String(current.entrypoint || ""));\nif (!entrypoint || !fs.existsSync(entrypoint)) throw new Error("Rabi Agent current release is missing.");\nconst forwarded = args.filter((_, i) => i !== index && (index < 0 || i !== index + 1));\nconst child = spawn(process.execPath, [entrypoint, ...(forwarded.length ? forwarded : ["--run"]), "--config", configPath], { cwd: path.dirname(entrypoint), stdio: "inherit", windowsHide: true });\nchild.once("exit", code => { process.exitCode = typeof code === "number" ? code : 1; });\n`;
   fs.writeFileSync(launcher, code, { encoding: "utf8", mode: 0o600 });
   return launcher;
 }
@@ -214,7 +257,8 @@ function readConfig(configPath) {
   const config = readJson(configPath, null);
   if (!config || config.schemaVersion !== 1) throw new Error(`Rabi Agent configuration is missing or invalid: ${configPath}`);
   const managerUrl = normalizeManagerUrl(config.managerUrl);
-  const lanLinkToken = String(config.lanLinkToken || "").trim();
+  const nodeCredential = String(config.nodeCredential || "").trim();
+  if (!nodeCredential && config.lanLinkToken) throw new Error("Legacy lanLinkToken is not accepted; re-enroll using RABI_AGENT_BOOTSTRAP_TICKET. Existing nodeId, agents and workspaces are preserved.");
   const nodeId = String(config.nodeId || "").trim();
   const releasePublicKeySha256 = normalizedPublicKeySha256(config.releasePublicKeySha256, "Rabi Agent release public key fingerprint");
   const defaultWorkspace = resolveRealDirectory(config.defaultWorkspace, "Rabi Agent default workspace");
@@ -222,14 +266,14 @@ function readConfig(configPath) {
   const codexThreadId = String(config.codexDesktop?.threadId || "").trim();
   const agentType = config.agentType || "codex-desktop";
   if (!["codex-desktop", "dsh"].includes(agentType)) throw new Error("Unsupported Rabi Agent type.");
-  if (!lanLinkToken || !nodeId || (agentType === "codex-desktop" && !codexThreadId)) throw new Error(`Rabi Agent configuration is incomplete: ${configPath}`);
+  if (!nodeCredential || !nodeId || (agentType === "codex-desktop" && !codexThreadId)) throw new Error(`Rabi Agent configuration is incomplete: ${configPath}`);
   return {
     agentType,
     dsh: agentType === "dsh" ? normalizeDshBinding(config.dsh) : undefined,
     schemaVersion: 1,
     agents: config.agents,
     managerUrl,
-    lanLinkToken,
+    nodeCredential,
     nodeId,
     releasePublicKeySha256,
     defaultWorkspace,
@@ -261,9 +305,13 @@ function releaseDirectory(configPath, version) {
   return path.join(path.dirname(configPath), "releases", version);
 }
 
-async function authorizedFetch(config, pathname) {
-  const url = new URL(pathname, `${config.managerUrl}/`).toString();
-  const response = await fetch(url, { headers: { authorization: `Bearer ${config.lanLinkToken}` }, cache: "no-store" });
+async function authorizedFetch(config, pathname, fetcher = fetch) {
+  const origin = normalizeManagerUrl(config.managerUrl);
+  const target = new URL(pathname, `${origin}/`);
+  if (!pathname.startsWith("/") || pathname.startsWith("//") || /[\\\r\n#]/.test(pathname) || target.origin !== origin || target.username || target.password) throw new Error("Cross-origin Manager request rejected.");
+  if (!config.nodeCredential) throw new Error("An independent nodeCredential is required; re-enroll this connector.");
+  const url = target.toString();
+  const response = await fetcher(url, { headers: { authorization: `Bearer ${config.nodeCredential}` }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`Rabi Manager returned HTTP ${response.status} for ${new URL(url).pathname}.`);
   return response;
 }
@@ -280,10 +328,19 @@ async function fetchReleaseManifest(config) {
   return release;
 }
 
-async function installRelease(config, release) {
-  const target = releaseDirectory(CONFIG_PATH, release.version);
+async function installRelease(config, release, configPath = CONFIG_PATH) {
+  const digest = releaseDigest(release);
+  const target = releaseDirectory(configPath, `${release.version}-${digest}`);
   const entrypoint = path.join(target, "rabi-agent.mjs");
-  if (fs.existsSync(entrypoint)) return entrypoint;
+  if (fs.existsSync(target)) {
+    for (const file of release.files) {
+      const filename = path.join(target, safeRelativePath(file.path));
+      const stat = fs.lstatSync(filename);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size !== file.size || sha256(fs.readFileSync(filename)) !== file.sha256) throw new Error("Installed release integrity check failed.");
+    }
+    if (readInstalledDigest(entrypoint) !== digest) throw new Error("Installed release identity mismatch.");
+    return entrypoint;
+  }
   const temporary = `${target}.installing-${process.pid}-${Date.now()}`;
   fs.mkdirSync(temporary, { recursive: true, mode: 0o700 });
   try {
@@ -300,6 +357,7 @@ async function installRelease(config, release) {
       fs.writeFileSync(destination, content, { mode: 0o600 });
     }
     if (!fs.existsSync(path.join(temporary, "rabi-agent.mjs"))) throw new Error("Rabi Agent release is missing rabi-agent.mjs.");
+    writePrivateJson(path.join(temporary, "release-identity.json"), { digest, version: release.version });
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
     if (!fs.existsSync(target)) fs.renameSync(temporary, target);
     return entrypoint;
@@ -337,17 +395,20 @@ class RabiAgentRuntime {
     this.desktop.close();
   }
 
-  connect() {
-    if (this.stopped || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
+  async connect() {
+    if (this.stopped || this.connecting || this.socket?.readyState === WebSocket.OPEN || this.socket?.readyState === WebSocket.CONNECTING) return;
+    this.connecting = true;
     let socket;
     try {
+      await verifyNodeIdentity(this.config);
+      if (this.stopped) return;
       socket = new WebSocket(managerWebSocketUrl(this.config.managerUrl));
     } catch (error) {
       this.scheduleReconnect(error);
       return;
-    }
+    } finally { this.connecting = false; }
     this.socket = socket;
-    socket.addEventListener("open", () => this.send({ type: "authenticate", token: this.config.lanLinkToken }));
+    socket.addEventListener("open", () => this.send({ type: "authenticate", token: this.config.nodeCredential }));
     socket.addEventListener("message", event => this.handleManagerMessage(event.data));
     socket.addEventListener("close", () => {
       this.connected = false;
@@ -476,6 +537,10 @@ class RabiAgentRuntime {
       const cwd = resolveTaskWorkspace(task.cwd || agent.workspace, { defaultWorkspace: this.config.defaultWorkspace, allowedWorkspaces: this.config.allowedWorkspaces });
       const prompt = String(task.message || "").trim();
       if (!prompt) throw new Error("Rabi Agent task message is empty.");
+      // Queued work may outlive a grant revocation. Re-check Manager authority at
+      // execution time; connection identity alone does not authorize a host turn.
+      const authority = await createManagerClient({ managerUrl: this.config.managerUrl, credential: this.config.nodeCredential, agentId: agent.agentId }).invoke("GET", "/meta");
+      if (!authority.ok || authority.uncertain || authority.identityChanged) throw new Error("Manager no longer authorizes this Agent task; host execution was refused.");
       if (agent.provider === "dsh") {
         await sendDshTask(agent.dsh, prompt);
         this.send({ type: "progress", taskId, summary: "DSH accepted the message into the bound session queue. Read the response in that DSH session." });
@@ -524,11 +589,11 @@ class RabiAgentRuntime {
     this.send({ type: "updateResult", status: "updating" });
     const release = await fetchReleaseManifest(this.config);
     if (requestedVersion && release.version !== requestedVersion) throw new Error(`Manager requested Rabi Agent ${requestedVersion}, but published ${release.version}.`);
-    if (release.version === AGENT_VERSION) {
+    if (readInstalledDigest(fileURLToPath(import.meta.url)) === releaseDigest(release)) {
       this.send({ type: "updateResult", status: "updated" });
       return;
     }
-    const entrypoint = await installRelease(this.config, release);
+    const entrypoint = await installRelease(this.config, release, this.configPath);
     const npmCli = process.env.npm_execpath || path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
     if (!fs.existsSync(npmCli)) throw new Error("Node.js npm CLI is missing; update this instance using a fresh installation prompt.");
     await new Promise((resolve, reject) => {
@@ -549,7 +614,8 @@ class RabiAgentRuntime {
     while (Date.now() < deadline) {
       if (fs.existsSync(readyFile)) {
         try { fs.unlinkSync(readyFile); } catch { /* no follow-up action required */ }
-        writeCurrentRelease(this.configPath, entrypoint);
+        writeLauncher(this.configPath);
+        writeCurrentRelease(this.configPath, entrypoint, releaseDigest(release));
         this.send({ type: "updateResult", status: "updated" });
         this.stop();
         return;
@@ -569,13 +635,28 @@ const CONFIG_PATH = configPathFromArgs(ARGS);
 async function main() {
   const minimumNodeVersion = String(packageJson.engines.node).replace(/^>=/, "");
   if (!versionAtLeast(process.versions.node, minimumNodeVersion)) throw new Error(`Rabi Agent requires Node.js ${minimumNodeVersion} or newer.`);
+  if (ARGS.includes("--api") || ARGS.includes("--upload")) {
+    const receipt = await runManagerCommand(ARGS, CONFIG_PATH, { readInput: async () => {
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of process.stdin) {
+        size += Buffer.byteLength(chunk);
+        if (size > 1024 * 1024) throw new Error("Manager request body exceeds 1 MiB.");
+        chunks.push(Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks).toString("utf8");
+    } });
+    process.stdout.write(`${JSON.stringify(receipt)}\n`);
+    if (!receipt.ok || receipt.uncertain) process.exitCode = 1;
+    return;
+  }
   if (ARGS.includes("--bootstrap")) {
-    bootstrapConfig(CONFIG_PATH);
+    await bootstrapConfig(CONFIG_PATH);
     writeCurrentRelease(CONFIG_PATH, fileURLToPath(import.meta.url));
     configureCurrentUserStartup(fileURLToPath(import.meta.url), CONFIG_PATH);
   }
   const runtime = new RabiAgentRuntime(readConfig(CONFIG_PATH), CONFIG_PATH);
-  writeLauncher(CONFIG_PATH);
+  if (!READY_FILE) writeLauncher(CONFIG_PATH);
   runtime.start();
   const stop = () => runtime.stop();
   process.once("SIGINT", stop);
@@ -589,4 +670,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   });
 }
 
-export const __test = { safeRelativePath, versionAtLeast, managerWebSocketUrl, verifyReleaseManifest, manifestPayload, publicKeySha256, bootstrapConfig };
+export const __test = { releaseDigest, readInstalledDigest, installRelease, safeRelativePath, versionAtLeast, managerWebSocketUrl, verifyReleaseManifest, manifestPayload, publicKeySha256, bootstrapConfig, readConfig, authorizedFetch, verifyNodeIdentity, writeLauncher, writeCurrentRelease, RabiAgentRuntime };

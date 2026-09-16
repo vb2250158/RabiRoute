@@ -6,22 +6,7 @@
 
 # RabiRoute 文档
 
-开发维护：[安装版 Web 热补丁](web-hot-patches.md)说明生产 Web Bundle 的自动构建、版本固定和受管回滚。
-
-- [眼镜离线录像与实时预览](rabilink-offline-recording.md)：把眼镜直播保存在手机并实时查看；真机验收进行中。
-
 这里同时包含现行使用说明、实验集成、设计方案、调研和历史交接。文件存在不代表功能已经完成；阅读前先看状态。
-
-## 状态说明
-
-| 状态 | 含义 |
-| --- | --- |
-| 当前事实 | 已按代码、Schema、WebGUI 和测试核对，可作为当前版本口径。 |
-| 现行指南 | 对应已实现功能，但仍应随代码变化持续复核。 |
-| 实验集成 | 代码入口存在，外部系统或真机链路仍需环境验收。 |
-| 待校准 | 文档包含有效信息，但已经发现过时或互相矛盾的描述；优先参考“当前能力与成熟度”。 |
-| 设计中 | 方案、需求或路线图，不代表当前代码已经实现。 |
-| 历史参考 | 旧路线、研究或交接记录，不是当前主链。 |
 
 ## 先看这里
 
@@ -36,22 +21,20 @@
 ## 本机安装、配置与恢复
 
 - [DSH Web 会话桥认证](dsh-browser-auth.md) — **双向投递已验收**。使用当前 owner 的启动认证流程连接会话，保留认证与禁止写入重放边界。
-
-- [配置与接入](configuration.md) — **现行指南**。查看 28 个内置 Manager 插件、`provides/requires/optional` 依赖、单一初始化入口、声明式路由、共享资源生命周期、WebGUI/Desktop 扩展入口，以及 AstrBot ChatUI-only 配置。
+- [配置与接入](configuration.md) — **现行指南**。配置消息入口、处理端和本机目录，按需查看插件与权限参数。
 - [常驻性能记录与查看](performance-monitoring.md) — **现行指南**。按开关持续记录 Manager、Gateway 和 WebGUI 的近期性能，查看趋势、慢操作和独立 JSONL 文件。
 - [排障](troubleshooting.md) — NapCat、编码、Codex Desktop 任务归属、模型与审批边界。
 - [Windows 启动与打包](windows-launcher-and-packaging.md) — Windows 安装、启动和打包方式。
 - [NapCat 无值守](napcat-unattended.md) — QQ 登录状态、快速登录、Manager 恢复和守护边界。
 
-## 路由、人格与处理端
+## 接入开发：路由、人格与 Agent 接口
 
-- [安装 Rabi 记忆与计划搜索](../skills/rabi-knowledge-search/README.md) — 项目维护者将技能安装到项目，在线时先查计划和记忆，离线时直接普通搜索。
-
+- [消息投递模板与归属](message-delivery-templates.md)：开发者查看渲染入口、场景差异和历史回执退出条件。
+- [计划与记忆摘要搜索](knowledge-search.md)
 - [路由配置](routing-configuration.md) — **现行指南**。`personaConfig.json`、route kind、regex、schedule、pipeline 和模板变量。
 - [路由与人格](routing-and-personas.md) — **现行指南**。route 与 role 的边界、人格包和消息模板判断框架。
 - [Agent 上下文注入](agent-context-injection.md) — **现行指南**。人格级统一双向账本、分消息端/会话的最近消息额度、归档边界，以及 `AgentPacket` 中的人格目录、跨人格投递凭据、路径和回复上下文。
 - [Rabi Agent 接口](rabi-agent-interfaces.md) — **当前合同**。处理端如何回复、查询可联系人格、进行带幂等回执的单向跨人格投递，以及使用 thread bridge、计划、记忆、Remote Agent 和多实例 API。
-- [长期维护与自修复](rabi-maintenance.md) — **维护工作流**。固定故障受理任务、原计划归属、恢复验证与定期代码质量维护。
 - [计划和记忆机制](plan-and-memory-model.md) — **现行指南**。Role Knowledge 的文件真源、召回和整理副作用。
 - [动态整理记录统一规范](dynamic-record-lifecycle.md) — **现行指南**。统一归档、记忆沉淀、物理分卷、保留策略和 24/72 小时动态窗口的边界与验收。
 - [Pipeline presets](pipeline-presets.md) — Agent 会话、明确外部目标和 Outbox 状态；其中 FenneNote 输出章节仅为归档兼容说明。
@@ -61,14 +44,13 @@
 - [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **统一 Manager 版本**。Hook 只转发真实 Codex session 事件并注入 Rabi PC 返回的统一人格、计划、记忆与技能上下文。
 - [多电脑人格数据同步](persona-data-sync.md) — **实验支持**。同一 RabiLink 应用下的 PC 通过局域网直连优先、Relay 受限中转兜底；后端按文件/连接事件自动补账，人格页可手动同步、预览证据和处理基础冲突。
 
-## 架构与维护
+## 维护开发：架构、构建与诊断
 
-- [移动端记录界面](rabilink-mobile-recording-ui.md) — 四页导航、三档采集、离线保存、会话回看与兼容边界。
-
-- [乐奇开发依据与排障](rokid-development.md) — SDK 路线、官方资料读取状态、安装证据及对应开发 Skill；当前不采用 CXR-M。
-
+- [长期维护与自修复](rabi-maintenance.md) — **维护工作流**。固定故障受理任务、原计划归属、恢复验证与定期代码质量维护。
+- [安装 Rabi 记忆与计划搜索](../skills/rabi-knowledge-search/README.md) — 项目维护者将技能安装到项目，在线时先查计划和记忆，离线时直接普通搜索。
+- [安装版 Web 热补丁](web-hot-patches.md) — 构建、激活、固定和回滚兼容的 Web Bundle。
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
-- [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明 28 个内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
+- [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。
 - [DSH 如何使用 Cordis](dsh-cordis-runtime-analysis.md) — **实现调查**。说明 profile、Loader、Fiber、服务 realm、浏览器插件树、动态代码和进程沙箱的真实边界。
 - [RabiRoute 插件平台目标架构](manager-plugin-implementation-hot-swap.md) — **当前架构**。定义最小插件内核、独立能力包、统一 SDK、多宿主扩展、generation 原子切换、树外插件验收和一次性删除旧运行时。
 - [源码热补丁](source-hot-patches.md) — **开发中**。源码模式自动监听代码与声明资源，编译、校验、保留状态并不停服切换；安装版验收边界见文档状态。
@@ -76,13 +58,16 @@
 - [代码架构](code-architecture.md) — **当前事实**。后端、Manager、消息端、Role Knowledge、WebGUI 和桌面模块地图。
 - [项目功能手册](project-function-map.md) — **当前事实**。按功能、成熟度、副作用、API 和代码入口定位；成熟度仍与当前能力页交叉核对。
 - [路径与目录规范](path-and-directory-conventions.md) — **当前维护规范**。区分软件目录、公开示例、本机运行数据和日志，并规定 API 中相对路径与业务 ID 的写法。
+- [项目技能的分发与漂移检测](project-skill-distribution.md) — **现行维护规范**。RabiRoute 拥有的技能安装到项目 `.agents/skills/` 后的本地化副本与基线记录，以及 Agent 用来报告上游漂移、移植、再记基线的只读命令。
 - [PR 安全门禁](maintainer-security-gates.md) — **现行维护指南**。秘钥扫描、生产依赖审计、CodeQL、最小权限和合并保护要求。
-- [Windows 启动与打包](windows-launcher-and-packaging.md) — **现行指南**。RabiRoute Desktop 的用户入口、内部本机后端和打包边界。
 - [Manager 运行稳定性与故障证据](manager-runtime-resilience.md) — **现行指南**。崩溃日志、单实例、人格索引非致命持久化、watchdog 退避恢复与浸泡验收。
-- [NapCat 无值守](napcat-unattended.md) — **现行指南**。登录态、quick login、Manager 一键恢复和守护边界。
 
 ## 实验集成
 
+- [远端 Agent 接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。复制提示词接入其他电脑，在当前 Manager 管理实例内 Agent，并在路由中选择处理端。
+- [移动端记录界面](rabilink-mobile-recording-ui.md) — 四页导航、三档采集、离线保存、会话回看与兼容边界。
+- [眼镜离线录像与实时预览](rabilink-offline-recording.md)：把眼镜直播保存在手机并实时查看；真机验收进行中。
+- [乐奇开发依据与排障](rokid-development.md) — SDK 路线、官方资料读取状态、安装证据及对应开发 Skill；当前不采用 CXR-M。
 - [YeYu Gamer Manager 本机接入](yeyu-gamer-manager-integration.md) — **实验集成**。固定连接本机 8877，只读 health/meta/snapshot/capabilities，并用独立 `rabiroute.token` 创建 plan-only Agent work item；默认关闭，真实安装联调待验收。
 - [企业微信接入](wecom-integration.md) — WeCom 智能机器人 WebSocket 与 Outbox 回发。
 - [飞书独立消息端接入](feishu-integration.md) — 飞书应用事件订阅、签名/加密回调、持久去重与来源 chat 回发。
@@ -113,17 +98,26 @@
 ## 设计与历史
 
 - [RabiLink 全天记录统一设计](rabilink-all-day-recording.md) — **设计 / 实施中，尚未整体验收**。手机、眼镜、手表唯一协调 owner，模式与暂停分离、通知、可靠记录/转写、隐私边界、无损迁移和验收合同。
-
 - [主动智能系统设计总纲](../主动智能设计思路.md) — **设计中**。描述持续感知、用户性格与偏好、心理状态、情景识别、主动行动、记忆和设备分工；当前实现范围以“当前能力与成熟度”为准。
 - [对话消息收集、消息组与四类 Agent 协作](group-message-batching-and-triage-plan.md)（[HTML 架构预览](group-message-batching-and-triage-plan.html)）— **实验支持**。自然语言消息可先立即记录并等待合并，再综合引用消息对应的 Agent 会话、原消息组、会话、说话人和消息端熟悉度，交给动态 Codex 消息处理 Agent；真实群聊/私聊和四类 Agent 完整联调仍待验收。
 - [人格路由工作台计划](persona-route-workbench-plan.md) — **部分实现**。语音关键词和分端上下文控件已实现；Dry-run RouteDecision / AgentPacket 预览尚未实现。
 - [WorkBuddy 作为 Agent 端接入方案](workbuddy-agent-adapter-plan.md) — **已实现，凭据需手工一步**。把 WorkBuddy 任务接成处理端：会话进程描述文件、任务真源、本地网关 API、投递报文格式与同 ID 复投均已实测通过；网关凭据需在本地忽略文件一次性录入，成熟度仍为 `experimental`。
 - [Windows 托盘任务窗口计划](rabiroute-windows-tray-task-window-plan.md) — 设计记录；实际实现以 `desktop/tray-task-window/` 和打包文档为准。
 - [UE/UX 审计与重构](rabiroute-ue-ux-audit-and-refactor.md) — 阶段性审计。
-- [远端 Agent 接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。复制提示词接入其他电脑，在当前 Manager 管理实例内 Agent，并在路由中选择处理端。
 - [手机 App Webhook 历史方案](mobile-app-webhook-integration.md) — **历史参考**，当前 RabiLink 主链不再以手机桥作为必经中转。
 
 归档材料位于 [`archive/`](../archive/README.md)，可构建客户端位于 [`apps/`](../apps/README.md)，共享 SDK 位于 [`packages/`](../packages/README.md)，可复制样板位于 [`examples/`](../examples/README.md)。
+
+## 状态说明
+
+| 状态 | 含义 |
+| --- | --- |
+| 当前事实 | 已按代码、Schema、WebGUI 和测试核对，可作为当前版本口径。 |
+| 现行指南 | 对应已实现功能，但仍应随代码变化持续复核。 |
+| 实验集成 | 代码入口存在，外部系统或真机链路仍需环境验收。 |
+| 待校准 | 文档包含有效信息，但已经发现过时或互相矛盾的描述；优先参考“当前能力与成熟度”。 |
+| 设计中 | 方案、需求或路线图，不代表当前代码已经实现。 |
+| 历史参考 | 旧路线、研究或交接记录，不是当前主链。 |
 
 ## 文档维护规则
 
@@ -131,7 +125,3 @@
 2. 行为准确后再人工维护英文版本；不要把旧文档直接批量翻译。
 3. 设计稿必须明确写“设计中”或“历史参考”，不能混进当前能力表。
 4. 运行语义文件（`AGENTS.md`、`SKILL.md`、persona、prompt、memory、plan）不做机械翻译。
-
-- [消息投递模板与归属](message-delivery-templates.md)：开发者查看渲染入口、场景差异和历史回执退出条件。
-
-- [计划与记忆摘要搜索](knowledge-search.md)

@@ -26,12 +26,53 @@ import static org.junit.Assert.assertTrue;
 public final class RabiDurableAudioSpoolTest {
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
 
+    @Test public void eventIdentitySurvivesShardsAndCrashRecovery() throws Exception {
+        File root = temporary.newFolder();
+        AtomicLong now = new AtomicLong(1000L);
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(root, policy(8), now::get, file -> Long.MAX_VALUE);
+        assertTrue(spool.append(new byte[12], "phone", "route", "capture", "local_only", 1000, "received", "event-a").accepted);
+        assertTrue(spool.append(new byte[4], "phone", "route", "capture", "local_only", 1001, "received", "event-b").accepted);
+        // Simulate process loss while event-b still owns a partial shard.
+        java.lang.reflect.Field output = RabiDurableAudioSpool.class.getDeclaredField("activeOutput");
+        output.setAccessible(true);
+        ((FileOutputStream)output.get(spool)).close();
+        RabiDurableAudioSpool recovered = new RabiDurableAudioSpool(root, policy(8), now::get, file -> Long.MAX_VALUE);
+        File[] files = new File(root,"segments").listFiles((dir,name) -> name.endsWith(".json"));
+        java.util.Map<String,Long> bytes = new java.util.HashMap<>();
+        for (File file : files) {
+            JSONObject row = new JSONObject(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8));
+            assertEquals("capture",row.getString("captureId"));
+            String event = row.getString("eventId");
+            bytes.put(event,bytes.getOrDefault(event,0L)+row.getLong("bytes"));
+        }
+        assertEquals(Long.valueOf(12),bytes.get("event-a"));
+        assertEquals(Long.valueOf(4),bytes.get("event-b"));
+        recovered.close();
+    }
+
     private static RabiDurableAudioSpool.Policy policy(long maxSegmentBytes) {
         return new RabiDurableAudioSpool.Policy(maxSegmentBytes, 5_000L, 1_000_000L, 0L, 0L);
     }
 
     private static RabiDurableAudioSpool.Policy policyWithRetention(long maxSegmentBytes, long retentionMs) {
         return new RabiDurableAudioSpool.Policy(maxSegmentBytes, 5_000L, 1_000_000L, 0L, retentionMs);
+    }
+
+    @Test public void pendingAccountingSurvivesManySealsAcksAndRecovery() throws Exception {
+        File root = temporary.newFolder();
+        AtomicLong now = new AtomicLong(1000L);
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(root, policy(4L), now::get, file -> Long.MAX_VALUE);
+        for (int i = 0; i < 128; i++) assertTrue(spool.append(new byte[]{1,2,3,4}, "phone", "route").accepted);
+        assertEquals(512L, spool.health().getLong("pendingBytes"));
+        assertTrue(spool.health().getBoolean("accountingBalanced"));
+        RabiDurableAudioSpool.Segment first = spool.assignServerSequence(spool.nextUpload(),1L);
+        assertTrue(spool.acknowledge(first.id,1L,4L,first.sha256));
+        assertEquals(508L,spool.health().getLong("pendingBytes"));
+        spool.close();
+        RabiDurableAudioSpool reopened = new RabiDurableAudioSpool(root,policy(4L),now::get,file -> Long.MAX_VALUE);
+        assertEquals(508L,reopened.health().getLong("pendingBytes"));
+        assertTrue(reopened.health().getBoolean("accountingBalanced"));
+        reopened.close();
     }
 
     @Test

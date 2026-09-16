@@ -1,3 +1,4 @@
+import { feedbackPlanTransition } from "./planFeedbackWorkflow.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -265,6 +266,7 @@ function feedbackIdentitySignature(record: PlanFeedbackRecord): string {
     kind: record.kind,
     author: record.author,
     text: record.text,
+    formData: record.formData,
     attachments: attachmentSignature(normalizeStoredPlanFeedbackAttachments(record.attachments)),
     planAttachments: planAttachmentSignature(normalizeStoredPlanAttachments(record.planAttachments))
   }));
@@ -297,6 +299,29 @@ export function commitPlanFeedbackUnderLease(
   const snapshot = readFeedbackLedger(ledgerPath, inputRecord.planId);
   const sameId = snapshot.records.filter((record) => record.id === inputRecord.id);
   const latestExisting = sameId.at(-1);
+  if (options.reuseFeedbackId !== undefined) {
+    if (typeof options.reuseFeedbackId !== "string") throw new Error("reuseFeedbackId must be a feedback id.");
+    const source = snapshot.records.filter(item => item.id === options.reuseFeedbackId).at(-1);
+    if (!source) throw new Error("Feedback attachment source does not exist in this plan.");
+    const uploads = attachmentUploads === undefined ? [] : attachmentUploads;
+    if (!Array.isArray(uploads)) throw new Error("Approval feedback attachments must be an array.");
+    let reusedBytes = 0;
+    attachmentUploads = [...materializeRecordPaths(source, location.directory).attachments.map(attachment => {
+      const relative = path.relative(location.directory, attachment.path);
+      if (relative.startsWith("..") || path.isAbsolute(relative)
+        || !fs.realpathSync(attachment.path).startsWith(`${fs.realpathSync(location.directory)}${path.sep}`)) {
+        throw new Error("Feedback attachment source is outside canonical plan storage.");
+      }
+      const size = fs.statSync(attachment.path).size;
+      reusedBytes += size;
+      if (size > PLAN_FEEDBACK_ATTACHMENT_MAX_BYTES || reusedBytes > PLAN_FEEDBACK_ATTACHMENTS_MAX_BYTES) {
+        throw new Error("Feedback attachment source exceeds the upload size limit.");
+      }
+      const content = fs.readFileSync(attachment.path);
+      if (sha256(content) !== attachment.sha256) throw new Error("Feedback attachment source hash mismatch.");
+      return { kind: attachment.kind, name: attachment.name, mimeType: attachment.mimeType, contentBase64: content.toString("base64") };
+    }), ...uploads];
+  }
   const prepared = attachmentUploads === undefined
     ? []
     : preparePlanFeedbackAttachments(lease, inputRecord.id, attachmentUploads);
@@ -323,7 +348,9 @@ export function commitPlanFeedbackUnderLease(
     throw new Error(`New feedback attachments require upload bytes: ${record.id}`);
   }
 
-  const operations: PlanStorageTransactionOperation[] = [];
+  const transition = feedbackPlanTransition(lease, record, "saved");
+  record = transition.record;
+  const operations: PlanStorageTransactionOperation[] = [...transition.operations];
   if (prepared.length > 0) {
     operations.push({
       type: "publish-directory",
@@ -394,6 +421,10 @@ function appendPlanFeedbackUnderLease(
     }
   }
   const latest = sameId.at(-1);
+  // Late pending/failed callbacks must not undo an already confirmed receipt.
+  if (latest?.deliveryStatus === "delivered" && record.deliveryStatus !== "delivered") {
+    return materializeRecordPaths(latest, location.directory);
+  }
   if (expectedRevision !== undefined) {
     const currentRevision = storageRevisionToken(latest);
     if (expectedRevision !== currentRevision) {
@@ -403,13 +434,18 @@ function appendPlanFeedbackUnderLease(
   if (latest && feedbackStateSignature(latest) === feedbackStateSignature(record)) {
     return materializeRecordPaths(latest, location.directory);
   }
+  const firstById = new Map<string, PlanFeedbackRecord>();
+  for (const item of snapshot.records) if (!firstById.has(item.id)) firstById.set(item.id, item);
+  const latestApproval = [...firstById.values()].filter(item => item.approvalTransition).at(-1);
+  const planOperations = latestApproval?.id === record.id
+    ? feedbackPlanTransition(lease, record, "delivered").operations : [];
   const state = feedbackStateSignature(record);
   const transition = sha256(`${latest ? feedbackStateSignature(latest) : "initial"}:${state}`);
   commitPlanStorageTransactionUnderLease(lease, {
     transactionId: transactionId("feedback-revision", transition),
     kind: "plan-feedback-revision",
     semanticHash: transition,
-    operations: [{
+    operations: [...planOperations, {
       type: "replace-file",
       relativePath: FEEDBACK_LEDGER_RELATIVE_PATH,
       content: appendLedgerContent(snapshot, record)

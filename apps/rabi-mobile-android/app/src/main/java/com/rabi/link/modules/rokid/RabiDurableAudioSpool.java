@@ -157,6 +157,7 @@ final class RabiDurableAudioSpool {
     private String activeSource = "";
     private String activeRoute = "";
     private String activeCaptureId = "";
+    private String activeEventId = "";
     private String activeProcessingPolicy = "agent";
     private String activeTimeBasis = "received";
     private long lastCapturedAt;
@@ -183,6 +184,10 @@ final class RabiDurableAudioSpool {
     private long ackJournalMaxSourceSequence;
     private final List<File> recoveredCleanupTombstones = new ArrayList<>();
     private final TreeSet<Long> pendingSequences = new TreeSet<>();
+    // Rebuilt during recovery and updated by the same owner as pendingSequences.
+    // Health and fsync must never reread the entire retained queue under the writer lock.
+    private final java.util.Map<Long, Long> pendingByteIndex = new java.util.HashMap<>();
+    private long indexedPendingBytes;
     private final TreeSet<Long> acknowledgedSequences = new TreeSet<>();
 
     RabiDurableAudioSpool(File root, Policy policy) throws Exception {
@@ -239,6 +244,9 @@ final class RabiDurableAudioSpool {
         return append(pcm, source, routeProfileId, captureId, processingPolicy, 0L, "received");
     }
     synchronized AppendResult append(byte[] pcm, String source, String routeProfileId, String captureId, String processingPolicy, long capturedAt, String timeBasis) {
+        return append(pcm, source, routeProfileId, captureId, processingPolicy, capturedAt, timeBasis, "");
+    }
+    synchronized AppendResult append(byte[] pcm, String source, String routeProfileId, String captureId, String processingPolicy, long capturedAt, String timeBasis, String eventId) {
         if (!java.util.Arrays.asList("local_only", "transcribe", "agent").contains(processingPolicy))
             throw new IllegalArgumentException("unknown audio processing policy");
         captureId = clean(captureId, "");
@@ -254,7 +262,7 @@ final class RabiDurableAudioSpool {
         String normalizedRoute = clean(routeProfileId, "");
         try {
             if (activeOutput != null && (!activeSource.equals(normalizedSource) || !activeRoute.equals(normalizedRoute)
-                    || !activeCaptureId.equals(captureId) || !activeProcessingPolicy.equals(processingPolicy))) {
+                    || !activeCaptureId.equals(captureId) || !activeEventId.equals(eventId) || !activeProcessingPolicy.equals(processingPolicy))) {
                 sealActive("state_boundary");
             }
             if (now - lastCleanupAt >= 60_000L) cleanupAcknowledged(false);
@@ -282,6 +290,7 @@ final class RabiDurableAudioSpool {
                 }
                 if (activeOutput == null) {
                     activeCaptureId = captureId;
+                    activeEventId = eventId;
                     activeProcessingPolicy = processingPolicy;
                     activeTimeBasis = timeBasis;
                     openActive(normalizedSource, normalizedRoute, capturedAt > 0L ? capturedAt + offset * 1000L / 32000L : now);
@@ -452,7 +461,7 @@ final class RabiDurableAudioSpool {
                     if (!"agent".equals(segment.processingPolicy) && !"transcribe".equals(segment.processingPolicy)) continue;
                     return segment;
                 }
-                pendingSequences.remove(sequence);
+                removePending(sequence);
             } catch (Throwable error) {
                 boolean isolated = poisonSequence(sequence, metadata,
                         "metadata_" + error.getClass().getSimpleName(), "unknown", "", 0L);
@@ -515,7 +524,7 @@ final class RabiDurableAudioSpool {
         value.remove("lastError");
         writeJson(metadata, value);
         cutpoint.reached("ack_metadata_committed");
-        pendingSequences.remove(localSequence);
+        removePending(localSequence);
         acknowledgedSequences.add(localSequence);
         accountAcknowledged(localSequence, acceptedBytes);
         lastUploadedAt = now;
@@ -686,7 +695,7 @@ final class RabiDurableAudioSpool {
             moveReplacing(file, sealed);
             long startedAt = ownership.optLong("startedAt", timestampFromName(file.getName()));
             createMetadata(sequence, startedAt, startedAt + sealed.length() * 1000L / 32000L, sealed, source, route, "crash_recovery",
-                    ownership.optString("captureId", ""), ownership.optString("processingPolicy", "agent"), ownership.optString("timeBasis", "received"));
+                    ownership.optString("captureId", ""), ownership.optString("processingPolicy", "agent"), ownership.optString("timeBasis", "received"), ownership.optString("eventId", ""));
             partialMetadata.delete();
             appendAudit("partial_recovered", new JSONObject().put("sequence", sequence).put("bytes", sealed.length())
                     .put("source", source).put("routeProfileId", route));
@@ -710,13 +719,15 @@ final class RabiDurableAudioSpool {
                 String route = ownership.optString("routeProfileId", "");
                 createMetadata(sequence, ownership.optLong("startedAt", timestampFromName(pcm.getName())),
                         ownership.optLong("startedAt", timestampFromName(pcm.getName())) + pcm.length() * 1000L / 32000L, pcm, source, route, "metadata_recovery",
-                        ownership.optString("captureId", ""), ownership.optString("processingPolicy", "agent"), ownership.optString("timeBasis", "received"));
+                        ownership.optString("captureId", ""), ownership.optString("processingPolicy", "agent"), ownership.optString("timeBasis", "received"), ownership.optString("eventId", ""));
                 ownershipFile.delete();
                 appendAudit("metadata_recovered", new JSONObject().put("sequence", sequence).put("bytes", pcm.length())
                         .put("source", source).put("routeProfileId", route));
             }
         }
         pendingSequences.clear();
+        pendingByteIndex.clear();
+        indexedPendingBytes = 0L;
         acknowledgedSequences.clear();
         for (File metadata : metadataFiles()) {
             try {
@@ -738,7 +749,7 @@ final class RabiDurableAudioSpool {
                     } else {
                         accountAcknowledged(sequence, value.optLong("bytes", 0L));
                     }
-                } else pendingSequences.add(sequence);
+                } else addPending(sequence, value.optLong("bytes", 0L));
             } catch (Throwable error) {
                 poisonSequence(sequenceFromName(metadata.getName()), metadata,
                         "metadata_" + error.getClass().getSimpleName(), "unknown", "", metadata.length());
@@ -804,6 +815,7 @@ final class RabiDurableAudioSpool {
                 .put("source", source)
                 .put("routeProfileId", route)
                 .put("captureId", activeCaptureId)
+                .put("eventId", activeEventId)
                 .put("processingPolicy", activeProcessingPolicy)
                 .put("timeBasis", activeTimeBasis)
                 .put("pcmFileName", activePartial.getName()));
@@ -847,14 +859,14 @@ final class RabiDurableAudioSpool {
         }
         File sealed = new File(segmentsDirectory, partial.getName().substring(0, partial.getName().length() - ".partial".length()));
         moveReplacing(partial, sealed);
-        createMetadata(sequence, startedAt, startedAt + bytes * 1000L / 32000L, sealed, source, route, reason, activeCaptureId, activeProcessingPolicy, activeTimeBasis);
+        createMetadata(sequence, startedAt, startedAt + bytes * 1000L / 32000L, sealed, source, route, reason, activeCaptureId, activeProcessingPolicy, activeTimeBasis, activeEventId);
         if (partialMetadata != null) partialMetadata.delete();
         appendAudit("sealed", new JSONObject().put("sequence", sequence).put("bytes", bytes).put("reason", reason));
         persistState();
     }
 
     private void createMetadata(long sequence, long startedAt, long endedAt, File pcm, String source,
-                                String route, String reason, String captureId, String processingPolicy, String timeBasis) throws Exception {
+                                String route, String reason, String captureId, String processingPolicy, String timeBasis, String eventId) throws Exception {
         byte[] body = RabiReliableQueueFiles.read(pcm);
         JSONObject value = new JSONObject()
                 .put("schemaVersion", 1)
@@ -868,6 +880,7 @@ final class RabiDurableAudioSpool {
                 .put("source", clean(source, "phone"))
                 .put("routeProfileId", clean(route, ""))
                 .put("captureId", captureId)
+                .put("eventId", eventId)
                 .put("processingPolicy", processingPolicy)
                 .put("timeBasis", timeBasis)
                 .put("sealReason", clean(reason, "boundary"))
@@ -875,7 +888,7 @@ final class RabiDurableAudioSpool {
                 .put("serverSequence", 0L)
                 .put("attempts", 0);
         writeJson(metadataForSequence(sequence), value);
-        pendingSequences.add(sequence);
+        addPending(sequence, body.length);
     }
 
     private void cleanupAcknowledged(boolean pressure) {
@@ -1404,7 +1417,7 @@ final class RabiDurableAudioSpool {
             }
             File isolated = resumeQuarantineTransaction(transaction);
             finishQuarantineRecord(isolated);
-            pendingSequences.remove(sequence);
+            removePending(sequence);
             persistState();
             return true;
         } catch (Throwable error) {
@@ -1479,14 +1492,20 @@ final class RabiDurableAudioSpool {
         recomputeStoredBytes();
     }
 
-    private long pendingAudioBytes() {
-        long bytes = 0L;
-        for (long sequence : pendingSequences) {
-            try { bytes += Math.max(0L, readJson(metadataForSequence(sequence)).optLong("bytes", 0L)); }
-            catch (Throwable ignored) { }
-        }
-        return bytes;
+    private void addPending(long sequence, long bytes) {
+        long value = Math.max(0L, bytes);
+        Long previous = pendingByteIndex.put(sequence, value);
+        indexedPendingBytes += value - (previous == null ? 0L : previous);
+        pendingSequences.add(sequence);
     }
+
+    private void removePending(long sequence) {
+        pendingSequences.remove(sequence);
+        Long previous = pendingByteIndex.remove(sequence);
+        if (previous != null) indexedPendingBytes -= previous;
+    }
+
+    private long pendingAudioBytes() { return indexedPendingBytes; }
 
     private void reconcileCapturedAccounting() {
         long minimumCaptured = totalAcknowledgedBytes + pendingAudioBytes() + activeBytes

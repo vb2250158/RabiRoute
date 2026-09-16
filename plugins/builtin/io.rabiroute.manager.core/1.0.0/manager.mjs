@@ -249,6 +249,10 @@ export const activate = definePlugin({
                         readJsonBody: runtime.readJsonBody,
                         jsonResponse: runtime.jsonResponse,
                         registry: runtime.lanAgentRegistry,
+                         authority: runtime.lanAgentAuthority,
+                         resources: runtime.agentResourceCatalog,
+                         managerIdentity: runtime.lanAgentManagerIdentity,
+                         enabled: () => runtime.rabiGlobalConfig.read().webguiLan.enabled,
                           releases: runtime.lanAgentReleaseStore,
                           localAgents: runtime.localInstanceAgents,
                           handleInstanceHook: runtime.handleInstanceHook,
@@ -269,7 +273,8 @@ export const activate = definePlugin({
                                 ? candidate.headers.authorization[0] ?? ""
                                 : candidate.headers.authorization ?? "";
                             const match = authorization.match(/^Bearer\s+(.+)$/i);
-                            return config.enabled && runtime.webguiTokenMatches(match?.[1]?.trim() ?? "", config.accessToken);
+                            const token = match?.[1]?.trim() ?? "";
+                             return config.enabled && (runtime.lanAgentAuthority.validateBootstrapTicket(token) || Boolean(runtime.lanAgentAuthority.authenticate(token)));
                         }
                     })))
             ], [

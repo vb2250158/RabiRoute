@@ -16,7 +16,7 @@ Android 全天记录整合正在实施：`RabiConversationService` 是手机/眼
 
 实验视频直连由 `RabiDirectVideoSender.kt` 与 `src/manager/rabiDirectVideo.ts` 承担两端传输。RabiLink Manager 插件拥有接收器生命周期和本机文件；`rabiDirectVideoRoutes.ts` 仅接收有界 SDP，Relay 不接收视频字节。SDK 取流留在眼镜适配器。见 [能力与验收限制](rabilink-direct-video.md)。
 
-> 状态：当前代码地图。28 个内置 Manager 插件迁移完成，定义与生命周期 hook 一一对应。
+> 状态：当前代码地图。默认 [desktop Profile](../plugins/profiles/desktop.json) 声明 31 个内置 Manager 实例，对应独立插件包。
 
 这份文档面向需要改代码的人。它不重复解释 RabiRoute 的产品定位；产品边界见 [架构说明](architecture.md)。这里主要说明代码里的 Module 怎么分工、一条消息怎么流动、改某类功能应该先看哪里。
 
@@ -391,7 +391,7 @@ startManager();
 
 正式 Manager 只通过 `startManager()` 初始化。`src/plugin-kernel/` 负责 Manifest 校验、包 revision 隔离、单一 Profile、能力图、权限、generation 和 effect 释放。默认构建从 `dist/plugins/profiles/desktop.json` 与 `dist/plugins/packages/` 加载；树外插件可通过 `RABIROUTE_PLUGIN_PROFILE` 和 `RABIROUTE_PLUGIN_PACKAGE_ROOTS` 选择独立 Profile 与额外包根目录。运行时不读取旧配置格式，也不从源码插件目录加载。
 
-`plugins/builtin/` 中的 28 个内置能力各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
+`plugins/builtin/` 中的 31 个内置能力各自拥有独立包 ID、Manifest、Manager 入口和中英文说明。它们与树外插件都通过 `@rabiroute/plugin-sdk` 使用 `services`、`contributions`、`permissions` 和 `effects`。宿主提供版本化原语能力；插件通过 `provides`、`requires` 和 `optional` 组合，不通过中央包枚举互相调用。
 
 `GenerationRuntime` 按真实依赖组件切换。revision、配置、权限和依赖 revision 不变时复用现有实例；变化只重载受影响组件。缺少必需能力的实例进入 `waiting_dependency`。候选激活或 effect 发布失败时，旧组件继续服务；不相关组件照常更新。成功发布后释放旧 effect scope。Manager API 从 generation 的不可变 service 与 contribution 快照生成 Plugin Catalog；Web 模块按包 ID、版本和 SHA-256 revision 发布不可变资源。
 
@@ -406,7 +406,7 @@ data/plugins/.runtime/
 
 ### Manager 插件持有的运行资源
 
-28 个实例的资源激活函数都把关键卸载步骤放在各自的单一 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginKernel.dispose() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`。共享资源 Runtime 先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
+插件资源激活函数需要把有顺序要求的卸载步骤放在同一个 disposer 中。Manager 根 Fiber 还持有 `managerReadWorkerPool`、`managerCatalogWorkerPool`、`managerPerformanceWorkerPool` 和 `CoalescingMessageProcessingBoardPersistence`。Manager 退出和启动失败回收显式串行执行 `managerPluginKernel.dispose() -> managerSharedResourcesRuntime.unmount() -> managerCordisRoot.dispose()`。共享资源 Runtime 先停止持久化服务并刷新待写数据，再停止读取池；任一停止失败时仍继续清理其余资源，最后汇总第一个错误。读取池拒绝新任务、取消排队和共享请求、终止活动与空闲 Worker，并等待子进程退出。Cordis 同一 Fiber 的多个 disposer 通过 `Promise.all(...)` 并行执行，不能依赖多个 `ctx.effect()` 的登记顺序。一个插件需要按以下顺序停止：
 
 ```text
 unregister routes
@@ -535,11 +535,11 @@ Gateway 配置的事实源 Module。
 - role skills
 - Agent 上下文快照
 
-`src/personaPlanWorkflow.ts` 读取并校验每个人格 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1/v2/v3 配置第一次读取时由同一模块一次性迁移为 v4：保留自定义状态及相对顺序；v1 在分析状态后加入 `roles.informationNeeded` 指向的默认定义；v2/v3 只更新仍保持旧默认 key、label 和说明的中英文说明。迁移不覆盖自定义说明，也不恢复或重新启用 Agent 已移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
+`src/personaPlanWorkflow.ts` 读取并校验每个人格 `personaConfig.json.planWorkflow`，它是状态 key、名称、说明、颜色、顺序、视图和生命周期规则的唯一真源。`src/roleKnowledge.ts` 只把 `plan.status` 当作配置 key，并通过 workflow role 与状态属性校验分析、信息不足、审批、执行、完成和归档，不包含十态枚举。v1/v2/v3/v4 配置第一次读取时由同一模块迁移为 v5：在审批标记后复用匹配的启用“已审批”定义或新增默认定义，并绑定 `roles.approved`；匹配定义未启用时拒绝迁移。其它自定义状态、说明和相对顺序保持不变。v1 仍先补齐 `roles.informationNeeded`，v2/v3 只更新未自定义的旧默认说明。v5 目录读取不自动恢复被移除的状态。`archiveStatus=未归档 | 已归档` 是独立归档变量；只有配置为 `terminal` 且 `archiveEligible` 的状态可以在 `archiveAfterHours` 后归档，归档时保留原 key。`src/roleKnowledgePresentation.ts` 返回配置中的 label、description、palette、order 与 views；`src/roleKnowledgePagination.ts` 动态生成状态筛选和 `byStatus` 计数。状态配置 revision 参与展示缓存。已归档计划在普通列表和关键词召回前被排除，只能通过明确计划 ID 或归档视图读取。状态移除采用 `enabled → retiring → retired`，当前计划先迁移，旧定义继续解释归档计划和追加式历史。
 
 计划目录的物理写入只有一个边界：`src/planStorageRepository.ts`。它拥有跨进程 lease、完整终态快照、publish/receipt 恢复、active/archive 迁移和旧布局冲突隔离；`src/roleKnowledge.ts` 只组装业务终态并调用 Repository，不直接创建、改写或移动计划目录。Manager 在可终止的 one-shot child 中依次执行 lifecycle recovery、旧布局迁移、feedback WAL recovery 和 Persona package recovery，以建立计划存储的读取/变更资格。该资格生命周期不阻塞 Manager READY；`running` 或 `degraded` 时计划变更失败关闭，降级进入 `/health`，Host 与 Tray 保持当前 application generation。`src/planAttachments.ts` 只负责附件数量/大小限制、本机路径或 Base64 读取、图片/视频签名校验、哈希及待提交字节准备，不能自行落盘；附件和 `plan.json` 必须随同一次 Repository transaction 原子发布。`src/manager/planAttachmentRoutes.ts` 只按 `roleId + planId + attachmentId` 提供受控读取，在响应前同时校验词法路径和 realpath 都没有离开该计划目录；图片/视频以内联响应返回，视频支持单段字节范围读取，公开计划 DTO 去掉本机 `path`。WebGUI 只消费该 HTTP 边界来绘制固定宽度的 16:9 图片、视频和 Markdown 简短预览卡片、普通文件卡片及页内完整预览；Markdown 卡片只流式读取正文开头并转成截断纯文本，不在卡片中执行 Markdown HTML、链接或图片。局域网资源统一通过 `managerResourceUrl` 附加当前会话认证；WebGUI 不拥有计划编辑器或任意路径读取能力。
 
-`src/planFeedbackSubmission.ts` 是反馈写入的唯一 command service：它在同一个计划 lease 下重读计划、校验 `stepId/guidance/mentions`，再委托 `src/planFeedbackStore.ts` 以 WAL transaction 原子提交 JSONL 与附件。`src/planFeedback.ts` 只保留公开类型、读取折叠和 post-commit 状态更新，不是第二个物理写入器。同一 `feedbackId` 使用固定 `response-<feedbackId>` 结果 ID；`guidance` 只关联 `planId`，用于人格配置中 `acceptsGuidance=true` 且未进入审批的状态，`approval_suggestion` 关联审批步骤。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 在 durable commit 后立即返回稳定 `202`，Agent/秘书投递进入响应后的持久 post-commit saga。`src/manager/planQaFeedback.ts` 以 `feedback.id` 作为稳定 `deliveryId`，重试前权威 readback；已接收、仍执行、确认缺失分别进入成功、等待和安全重试。`src/manager/planFeedbackRecovery.ts` 参与同一计划存储资格恢复，处理未完成 WAL 和 post-commit/dispatching/dispatch_failed 状态，不能以不确定错误重放第二份反馈。`src/manager/planSecretaryAssignment.ts` 解析计划独立 `secretaryBinding`：已有有效绑定固定复用；未分配时按 planId 从当前启用秘书池稳定选一个并由 `controlPlaneRoutes.ts` 通过规范 `updatePlan()` 保存。启用秘书时，引导/审批正文直达业务任务，负责秘书同时收到控制通知；业务绑定不完整时完整反馈优先交给秘书。只有没有可用秘书时才走人格 Agent 回退。终态统一发布 `plan_feedback_changed`，事件不进入角色面板 timeline、兼容消息历史或统一会话账本。绑定业务任务收到引导后必须 PATCH 整个计划，并在需要时调整后续步骤，再用固定结果 ID 写无 `stepId` 的 `guidance_response`；审批仍写 `approval_response`。反馈记录本身不自动推进计划状态。
+`src/planFeedbackSubmission.ts` 是反馈写入的唯一 command service：它在同一个计划 lease 下重读计划、校验 `stepId/guidance/mentions`，再委托 `src/planFeedbackStore.ts` 以 WAL transaction 原子提交 JSONL 与附件。`src/planFeedback.ts` 只保留公开类型、读取折叠和 post-commit 状态更新，不是第二个物理写入器。同一 `feedbackId` 使用固定 `response-<feedbackId>` 结果 ID；`guidance` 只关联 `planId`，用于人格配置中 `acceptsGuidance=true` 且未进入审批的状态，`approval_suggestion` 关联审批步骤。Manager 的 `/api/roles/:roleId/plans/:planId/feedback` 在 durable commit 后立即返回稳定 `202`，Agent/秘书投递进入响应后的持久 post-commit saga。`src/manager/planQaFeedback.ts` 以 `feedback.id` 作为稳定 `deliveryId`，重试前权威 readback；已接收、仍执行、确认缺失分别进入成功、等待和安全重试。`src/manager/planFeedbackRecovery.ts` 参与同一计划存储资格恢复，处理未完成 WAL 和 post-commit/dispatching/dispatch_failed 状态，不能以不确定错误重放第二份反馈。`src/manager/planSecretaryAssignment.ts` 解析计划独立 `secretaryBinding`：已有有效绑定固定复用；未分配时按 planId 从当前启用秘书池稳定选一个并由 `controlPlaneRoutes.ts` 通过规范 `updatePlan()` 保存。启用秘书时，引导/审批正文直达业务任务，负责秘书同时收到控制通知；业务绑定不完整时完整反馈优先交给秘书。只有没有可用秘书时才走人格 Agent 回退。终态统一发布 `plan_feedback_changed`，事件不进入角色面板 timeline、兼容消息历史或统一会话账本。绑定业务任务收到引导后必须 PATCH 整个计划，并在需要时调整后续步骤，再用固定结果 ID 写无 `stepId` 的 `guidance_response`；审批仍写 `approval_response`。`guidance` 和 Agent 回复不改变状态。用户审批的 durable 保存则在同一 WAL 事务中发布反馈、表单、附件与计划快照，将 `markerStatus` 设为配置 `roles.approved` 的 key，保持 `activationStatus` 不变。WebGUI 消费 `presentation.approval.state=approved`，折叠审批区；编辑时回填持久数据，再提交追加历史。已审批只表示意见已提交，不授权全部选项或自动实施。仅在同一 `feedbackId` 的 confirmed 成功投递且计划版本未变时，post-commit 流程才转为配置 `roles.analysis`；`pending/failed`、不确定结果及过期回执都不能覆盖当前状态。
 
 `src/context/rabiContextManager.ts` 是角色上下文触发的唯一归口。它把 `session_start`、`user_prompt`、`reasoning_pre_tool`、`reasoning_post_tool`、`message_delivery` 和无副作用 `preview` 映射为统一的召回、归档、`viewedAt` 与呈现策略，也是生产代码中 `roleKnowledgeSnapshot()` 的唯一调用方。
 

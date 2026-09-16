@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { PlanFeedbackFormData } from "./shared/planFeedbackFormData.js";
 import { normalizeStoredPlanAttachments } from "./planAttachments.js";
 import {
   appendPlanFeedback,
@@ -53,6 +54,9 @@ export type PlanFeedbackRecord = {
   author: PlanFeedbackAuthor;
   source: PlanFeedbackSource;
   text: string;
+  formData?: PlanFeedbackFormData;
+  /** Version fence for the Manager-owned approval delivery transition. */
+  approvalTransition?: { planRevision: string };
   attachments: PlanFeedbackAttachment[];
   planAttachments: PlanAttachment[];
   createdAt: string;
@@ -83,6 +87,7 @@ export type CreatePlanFeedbackInput = {
 };
 
 export type PlanFeedbackCommitOptions = {
+  reuseFeedbackId?: unknown;
   /** Test-only seam translated into repository transaction hooks by the store. */
   faultInjector?: (
     point: "attachment_staged" | "attachments_committed" | "feedback_committed",

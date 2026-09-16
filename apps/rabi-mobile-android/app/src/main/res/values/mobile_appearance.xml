@@ -1,0 +1,19 @@
+<resources>
+    <string-array name="mobile_navigation_ids">
+        <item>records</item><item>messages</item>
+    </string-array>
+    <string-array name="mobile_navigation_names">
+        <item>记录</item><item>消息</item>
+    </string-array>
+    <string-array name="mobile_theme_ids">
+        <item>system</item><item>light</item><item>dark</item>
+    </string-array>
+    <string-array name="mobile_theme_names">
+        <item>跟随系统</item><item>浅色 · 清透青</item><item>深色 · 夜幕青</item>
+    </string-array>
+    <string-array name="mobile_theme_descriptions">
+        <item>随手机的深色模式自动切换</item>
+        <item>浅灰底色、白色卡片与青色强调</item>
+        <item>蓝灰底色、深色卡片与明亮青色强调</item>
+    </string-array>
+</resources>

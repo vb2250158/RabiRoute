@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentSend, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
+import { handleAgentSend, inspectAgentSendDelivery, prepareAgentSendRequest, type AgentSendRequest } from "./agentSend.js";
 import type { AgentReplyOptions } from "./outbox.js";
 
 async function withJsonServer(
@@ -263,6 +263,140 @@ test("a NapCat reply to an image message requires descriptions and archives them
     const descriptionPath = path.join(mediaDir, "01-dynamic-background.md");
     assert.match(fs.readFileSync(descriptionPath, "utf8"), /背景需要自适应宽度/);
     assert.match(fs.readFileSync(descriptionPath, "utf8"), /8899/);
+  });
+});
+
+const managedFileId = "ed45711a-cd60-4ddf-b875-219b814a1ddc";
+const fileSha256 = "a".repeat(64);
+function managedFileRequest(): AgentSendRequest {
+  return {
+    deliveryId: "managed-file-delivery",
+    sender: { agentType: "primary_persona", sessionId: "managed-file-session" },
+    routeId: "route-main",
+    channel: "napcat",
+    params: { target: "group", groupId: "456", replyToMessageId: "" },
+    payload: { type: "file", fileId: managedFileId, fileSha256, text: "file caption" }
+  };
+}
+
+test("managed fileId is strict and limited to NapCat group files", () => {
+  const base = managedFileRequest();
+  for (const payload of [
+    { type: "image", fileId: managedFileId, fileSha256 }, { type: "voice", fileId: managedFileId, fileSha256 },
+    { type: "text", text: "text", fileId: managedFileId, fileSha256 }, { type: "file", fileId: "../file" },
+    { type: "file", fileId: null }, { type: "file", fileId: managedFileId, fileSha256, path: "" },
+    { type: "file", fileId: managedFileId, fileSha256, url: "https://example.invalid/file" },
+    { type: "file", fileId: managedFileId, fileSha256, fileName: "override.txt" }
+  ]) assert.throws(() => prepareAgentSendRequest({ ...base, payload }), /fileId/);
+  for (const channel of ["wecom", "weixin", "feishu", "speech", "fennenote", "rabilink", "role_panel", "plan_feedback"]) {
+    assert.throws(() => prepareAgentSendRequest({ ...base, channel }), /fileId/);
+  }
+  assert.throws(() => prepareAgentSendRequest({ ...base, params: { target: "private", userId: "123" } }), /fileId/);
+  assert.throws(() => prepareAgentSendRequest({ ...base, withManagedGroupFile: "callback" } as AgentSendRequest), /unsupported fields/);
+  assert.equal((prepareAgentSendRequest(base).internal.payload as Record<string, unknown>).fileId, managedFileId);
+  assert.equal((prepareAgentSendRequest(base).internal.payload as Record<string, unknown>).fileSha256, fileSha256);
+  for (const hash of [undefined, null, "", "A".repeat(64), "a".repeat(63), "g".repeat(64)]) {
+    assert.throws(() => prepareAgentSendRequest({ ...base, payload: { type: "file", fileId: managedFileId, fileSha256: hash } }), /fileSha256/);
+  }
+  assert.throws(() => prepareAgentSendRequest({ ...base, payload: { type: "file", path: "file.txt", fileSha256 } }), /fileSha256 requires/);
+});
+
+test("managed group file lease covers upload and caption; readback retains fileId without resolving", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-managed-file-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const filePath = path.join(rootDir, "private-upload.bin");
+  fs.writeFileSync(filePath, "managed file");
+  let leased = false;
+  let resolutions = 0;
+  const actions: string[] = [];
+  await withJsonServer((body, request) => {
+    assert.equal(leased, true);
+    actions.push(request.url!);
+    if (request.url === "/upload_group_file") {
+      assert.equal(body.file, filePath);
+      assert.equal(body.name, "public.txt");
+      return { status: "ok", retcode: 0, data: { file_id: "qq-file-1", file_name: filePath } };
+    }
+    return { status: "failed", retcode: 1, wording: filePath };
+  }, async url => {
+    const opts = options(rootDir, url);
+    opts.runtimes[0].messageAdapterPolicies!.napcat = { outputEnabled: true, supportedOutputs: ["file"], allowedFileRoots: [] };
+    opts.withManagedGroupFile = async (id, expectedSha256, send) => {
+      assert.equal(id, managedFileId);
+      assert.equal(expectedSha256, fileSha256);
+      resolutions++;
+      leased = true;
+      try { return await send({ path: filePath, fileName: "public.txt" }); }
+      finally { leased = false; }
+    };
+    const request = managedFileRequest();
+    const result = await handleAgentSend(request, opts);
+    assert.equal(result.status, "sent");
+    assert.match(result.reason!, /follow-up text failed/);
+    assert.equal(result.sentFileName, "public.txt");
+    assert.deepEqual(actions, ["/upload_group_file", "/send_group_msg"]);
+    assert.equal(leased, false);
+    const log = fs.readFileSync(path.join(opts.routeRoot, "route-main", "outbox-adapter.log.jsonl"), "utf8");
+    assert.ok(log.includes(managedFileId));
+    assert.ok(!log.includes("private-upload.bin"));
+    assert.ok(!JSON.stringify(result).includes("private-upload.bin"));
+    fs.unlinkSync(filePath);
+    delete opts.withManagedGroupFile;
+    const readback = await inspectAgentSendDelivery(request, opts);
+    assert.equal(readback.state, "completed");
+    if (readback.state === "completed") assert.equal(readback.result.status, "sent");
+    assert.equal(resolutions, 1);
+    assert.equal((await inspectAgentSendDelivery({ ...request, payload: { type: "file", fileId: managedFileId, fileSha256: "b".repeat(64), text: "file caption" } }, opts)).state, "uncertain");
+    assert.equal((await inspectAgentSendDelivery({ ...request, payload: { type: "file", fileId: "ed45711a-cd60-4ddf-b875-219b814a1ddd", fileSha256, text: "file caption" } }, opts)).state, "uncertain");
+  });
+});
+
+test("managed uploads without platform receipt remain uncertain and lease-release errors stay sent", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-managed-receipt-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  const filePath = path.join(rootDir, "private-file.bin");
+  fs.writeFileSync(filePath, "file");
+  let uploads = 0;
+  await withJsonServer((_body, request) => {
+    assert.equal(request.url, "/upload_group_file");
+    uploads++;
+    return { status: "ok", retcode: 0, data: {} };
+  }, async url => {
+    const opts = options(rootDir, url);
+    opts.runtimes[0].messageAdapterPolicies!.napcat = { outputEnabled: true, supportedOutputs: ["file"] };
+    opts.withManagedGroupFile = async (_id, _expectedSha256, send) => {
+      await send({ path: filePath, fileName: "file.txt" });
+      throw new Error(`Release failure: ${filePath}`);
+    };
+    const request = { ...managedFileRequest(), payload: { type: "file", fileId: managedFileId, fileSha256 } };
+    const result = await handleAgentSend(request, opts);
+    assert.equal(result.status, "sent");
+    assert.equal(result.sentFileId, undefined);
+    assert.ok(!JSON.stringify(result).includes("private-file.bin"));
+    assert.equal((await inspectAgentSendDelivery(request, opts)).state, "uncertain");
+    assert.equal(uploads, 1);
+  });
+});
+
+test("managed group files fail closed without resolver, owner authority, or output policy", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-managed-denied-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  let sends = 0;
+  await withJsonServer(() => { sends++; return {}; }, async url => {
+    const opts = options(rootDir, url);
+    opts.runtimes[0].messageAdapterPolicies!.napcat = { outputEnabled: true, supportedOutputs: ["file"] };
+    assert.match((await handleAgentSend(managedFileRequest(), opts)).reason!, /resolver is unavailable/);
+    let resolutions = 0;
+    opts.withManagedGroupFile = async () => { resolutions++; throw new Error(`Owner denied: ${rootDir}`); };
+    const denied = await handleAgentSend({ ...managedFileRequest(), deliveryId: "owner-denied" }, opts);
+    assert.equal(denied.status, "failed");
+    assert.equal(denied.reason, "Managed group file delivery failed.");
+    opts.runtimes[0].messageAdapterPolicies!.napcat.outputEnabled = false;
+    assert.equal((await handleAgentSend({ ...managedFileRequest(), deliveryId: "disabled" }, opts)).status, "blocked");
+    opts.runtimes[0].messageAdapterPolicies!.napcat = { outputEnabled: true, supportedOutputs: ["text"] };
+    assert.equal((await handleAgentSend({ ...managedFileRequest(), deliveryId: "unsupported" }, opts)).status, "blocked");
+    assert.equal(resolutions, 1);
+    assert.equal(sends, 0);
   });
 });
 

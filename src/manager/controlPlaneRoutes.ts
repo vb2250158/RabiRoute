@@ -300,6 +300,9 @@ import { handleGatewayControlApi } from "./gatewayControlRoutes.js";
 import { handleRemoteAgentApi as handleRemoteAgentPluginApi } from "./remoteAgentRoutes.js";
 import { createAgentThreadControlRoutes } from "./agentThreadControlRoutes.js";
 import { createAgentCommunicationRoutes, type AgentCommunicationHttpResponse } from "./agentCommunicationRoutes.js";
+import { AgentUploadStore } from "./agentUploadStore.js";
+import { createAgentUploadRoutes } from "./agentUploadRoutes.js";
+import { guardRequestBodyDeadline } from "./agentUploadDeadline.js";
 import { createAgentProviderControlRouteHandler } from "./agentProviderControlRoutes.js";
 import { AgentProviderProcessScope, CopilotControlService } from "./agentProviderControlService.js";
 import { AgentAdapterCatalogService, mountAgentAdapterCatalogPlugin } from "./agentAdapterCatalog.js";
@@ -396,6 +399,11 @@ import { RabiGlobalConfigStore, type RabiLinkRelayGlobalConfig } from "./globalC
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
 import { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { AgentResourceCatalog } from "./agentResourceCatalog.js";
+import { assertLanAgentBodyAuthority, registerLanAgentBodyGuard, hasLanAgentBodyGuard, validateLanAgentRequestBody, setTrustedLanAgentSource, getTrustedLanAgentSource, type TrustedLanAgentSource } from "./lanAgentBodyAuthority.js";
+import { migrateLanAgentSharedCredential } from "./lanAgentCredentialMigration.js";
 import {
   generateWebguiAccessToken,
   isLoopbackRemoteAddress,
@@ -871,6 +879,10 @@ function messageWorkerDataDir(definition: GatewayDefinition): string {
   return binding ? instanceWorkerStateDirectory(dataDirFor(definition), binding, primaryAgentSessionId(definition) || "unavailable") : dataDirFor(definition);
 }
 async function handleAgentThreadRequest(request: AgentThreadRequest, options: AgentThreadRequestOptions) {
+  if (options.remoteSource) {
+    if (request.instanceBinding) throw new Error("Remote source delivery to another remote instance requires a verified return-routing contract.");
+    return handleLocalAgentThreadRequest(request, options);
+  }
   const remote = instanceThreadTransport ? await routeInstanceThread(request, instanceThreadTransport) : undefined;
   if (!remote) return handleLocalAgentThreadRequest(request, options);
   if (request.action === "send" && ["delivered", "delivered_tracking_failed", "delivery_unconfirmed"].includes(String(remote.data.status))) {
@@ -4146,6 +4158,7 @@ function jsonResponse(response: http.ServerResponse, statusCode: number, body: u
 }
 
 function readJsonBody<T>(request: http.IncomingMessage, maxBytes = 0): Promise<T> {
+  if (hasLanAgentBodyGuard(request)) maxBytes = maxBytes > 0 ? Math.min(maxBytes, 1024 * 1024) : 1024 * 1024;
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
@@ -4164,7 +4177,9 @@ function readJsonBody<T>(request: http.IncomingMessage, maxBytes = 0): Promise<T
       try {
         if (tooLarge) throw new Error(`Request body exceeds ${maxBytes} bytes.`);
         const text = Buffer.concat(chunks).toString("utf8");
-        resolve((text ? JSON.parse(text) : {}) as T);
+        const body = text ? JSON.parse(text) : {};
+        validateLanAgentRequestBody(request, body);
+        resolve(body as T);
       } catch (error) {
         reject(error);
       }
@@ -4315,6 +4330,8 @@ type RolePanelMessageRequest = {
 };
 
 type PlanFeedbackRequest = {
+  formData?: unknown;
+  reuseFeedbackId?: string;
   feedbackId?: string;
   gatewayId?: string;
   stepId?: string;
@@ -4934,11 +4951,14 @@ function recordMessageProcessingSend(request: AgentSendRequest, result: AgentSen
   }
 }
 
-async function performAgentSend(request: AgentSendRequest): Promise<AgentCommunicationHttpResponse> {
+async function performAgentSend(
+  request: AgentSendRequest,
+  options: { remoteSource?: TrustedLanAgentSource; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
+): Promise<AgentCommunicationHttpResponse> {
   const receiptBeforeValidation = readAgentSendReceipt(rootDir, String(request.deliveryId || ""));
   const prepared = prepareAgentSendRequest(request);
-  if (!receiptBeforeValidation) {
-    assertAgentSendPermission(prepared.sender, runtimeForAgentSendRoute(prepared.routeId)?.definition);
+  if (options.remoteSource || !receiptBeforeValidation) {
+    assertAgentSendPermission(prepared.sender, runtimeForAgentSendRoute(prepared.routeId)?.definition, options.remoteSource);
   }
   const validatedSendContext = !receiptBeforeValidation
     ? messageProcessingSendContextReview.validateSend(request)
@@ -4975,6 +4995,7 @@ async function performAgentSend(request: AgentSendRequest): Promise<AgentCommuni
     rootDir,
     routeRoot,
     rolesRoot,
+    withManagedGroupFile: options.withManagedGroupFile,
     speechServiceUrl: speechServiceUrl(),
     publishEvent: publishManagerEvent,
     planStorageReady: () => planStorageStartupStatus().state === "ready",
@@ -7828,6 +7849,8 @@ function handleRoleKnowledgeApi(
               author: body.author,
               source: body.source,
               text: body.text,
+              formData: body.formData,
+              reuseFeedbackId: body.reuseFeedbackId,
               notifyAgent: body.notifyAgent,
               planAttachmentIds: body.planAttachmentIds,
               attachments: body.attachments
@@ -8504,6 +8527,7 @@ function metaPayload(): Record<string, unknown> {
     managerAutostart: managerShouldAutostart,
     rabiGuid: globalConfig.rabiGuid,
     rabiName: globalConfig.rabiName,
+    agentUploads: globalConfig.agentUploads,
     webguiLan: {
       enabled: globalConfig.webguiLan.enabled,
       tokenConfigured: Boolean(globalConfig.webguiLan.accessToken),
@@ -8893,11 +8917,19 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
   } catch (error) {
     await failManagerStartup("manager_shared_resources_acquisition", error);
   }
+  if (!managerReadOnly) migrateLanAgentSharedCredential({
+    registryPath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
+    markerPath: path.join(rootDir, "data", ".runtime", "lan-agent-credential-migration.json"),
+    rotateWebguiToken: () => {
+      const current = rabiGlobalConfig.read().webguiLan;
+      rabiGlobalConfig.patch({ webguiLan: { ...current, accessToken: generateWebguiAccessToken() } });
+    }
+  });
   activeServer = http.createServer(managerStartingRequest);
   managerRuntimeOwner.register("http_server", () => activeServer.listening
     ? new Promise<void>(resolve => activeServer.close(() => resolve()))
     : Promise.resolve());
-  activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
+  activeServer.requestTimeout = 30 * 60 * 1000; // Per-request body deadlines retain the ordinary 30-second limit.
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;
@@ -9022,7 +9054,20 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     managerPluginKernel?.current().records.filter(record => record.status === "active")
       .map(record => record.identity.activationId) ?? []
   ));
-  const lanAgentRegistry = new LanAgentRegistry({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json") });
+  const lanAgentAuthority = new LanAgentAuthority({ statePath: path.join(rootDir, "data", ".runtime", "lan-agent-authority.json") });
+  const agentUploadStore = new AgentUploadStore({ rootDir: path.join(rootDir, "data", ".runtime", "agent-uploads"), maxFileBytes: rabiGlobalConfig.read().agentUploads.maxFileMiB * 1024 * 1024 });
+  const assertUploadAuthorized = (source: TrustedLanAgentSource): void => {
+    const binding = lanAgentAuthority.getApprovedAgentBinding(source.nodeId, source.agentId);
+    if (!lanAgentAuthority.isAgentEnabled(source.nodeId, source.agentId) || binding?.sessionId !== source.sessionId
+      || (binding.provider === "codex-desktop" ? "codex" : binding.provider) !== source.provider) {
+      throw new Error("Remote Agent upload authorization was revoked or rebound.");
+    }
+  };
+  const lanAgentRegistry = new LanAgentRegistry({
+    statePath: path.join(rootDir, "data", ".runtime", "lan-agent-tasks.json"),
+    authenticateNode: token => lanAgentAuthority.authenticate(token),
+    isAgentEnabled: (nodeId, agentId) => lanAgentAuthority.isAgentEnabled(nodeId, agentId)
+  });
   instanceAgentSessions = binding => {
     const agent = lanAgentRegistry.getInstanceAgent(binding.instanceId, binding.agentId);
     return agent ? [agent.sessionId, ...agent.managedSessionIds || []].filter((id): id is string => Boolean(id)) : [];
@@ -9073,6 +9118,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     Object.freeze({ capability: "host.manager.core@1", value: Object.freeze({
       ManagerPluginRequestTracker,
       handleLanAgentApi,
+      lanAgentAuthority,
+      agentResourceCatalog: new AgentResourceCatalog({ rootDir }),
+      lanAgentManagerIdentity: () => ({
+        applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
+        managerInstanceId,
+        health: managerHealthPayload().health
+      }),
       handleWebguiLanAccessApi,
       jsonResponse,
       lanAgentRegistry,
@@ -9106,7 +9158,8 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         return manageInstanceAgent(operation, { ...body, provider, agentAdapter: provider }, { rootDir, defaultWorkspace: definition.codexCwd || definition.dshCwd || rootDir, allowedWorkspaces: [definition.codexCwd || definition.dshCwd || rootDir], dsh: definition.dshBaseUrl ? { baseUrl: definition.dshBaseUrl } : undefined });
       },
       handleInstanceHook: async (instanceId: string, agentId: string, body: Record<string, unknown>, request: http.IncomingMessage) => {
-        const agent = lanAgentRegistry.getInstanceAgent(instanceId, agentId);
+        const approved = lanAgentAuthority.getApprovedAgentBinding(instanceId, agentId);
+        const agent = approved && lanAgentAuthority.isAgentEnabled(instanceId, agentId) ? { ...approved, enabled: true } : undefined;
         const hook = hookContextRequest(body, request);
         if (!agent?.enabled || (hook.sessionId !== agent.sessionId && !agent.managedSessionIds?.includes(hook.sessionId))) throw new Error("Hook does not belong to the bound instance Agent.");
         const sessionId = instanceHookSessionId(instanceId, agentId, hook.sessionId);
@@ -9409,11 +9462,27 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       agentSendReceiptResponse,
       codexHookContextService,
       createAgentCommunicationRoutes,
+      createAgentUploadRoutes,
+      agentUploadStore,
+      assertUploadAuthorized,
       findAgentSendTraces,
       handleCodexHookApi,
       jsonResponse,
       managerPluginRoutes,
-      performAgentSend,
+      performAgentSend: (request: AgentSendRequest, options: { remoteSource?: TrustedLanAgentSource } = {}) => {
+        const source = options.remoteSource;
+        return performAgentSend(request, {
+          remoteSource: source,
+          ...(source ? { withManagedGroupFile: (fileId: string, expectedSha256: string, send: (file: { path: string; fileName: string }) => Promise<import("../outbox.js").AgentReplyResult>) => {
+            assertUploadAuthorized(source);
+            return agentUploadStore.withFile({ nodeId: source.nodeId, agentId: source.agentId }, fileId, async file => {
+              assertUploadAuthorized(source);
+              if (file.sha256 !== expectedSha256) throw new Error("Managed file content does not match the upload receipt.");
+              return send(file);
+            });
+          } } : {})
+        });
+      },
       publishManagerEvent,
       readJsonBody,
       refreshAgentRequestReminderTimers,
@@ -9454,6 +9523,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       agentRequests,
       agentThreadRequestFailureData,
       agentThreadRequestOptions,
+      getTrustedLanAgentSource,
       applyManagedAgentThreadDefaults,
       createAgentThreadControlRoutes,
       handleAgentThreadRequest,
@@ -9843,6 +9913,33 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     try {
       const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
       pathname = requestUrl.pathname;
+      const lanAgentAccess = evaluateLanAgentRequest(request, lanAgentAuthority, rabiGlobalConfig.read().webguiLan.enabled);
+      if (lanAgentAccess.kind === "denied") {
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("Connection", "close");
+        response.once("finish", () => request.socket.destroySoon());
+        jsonResponse(response, lanAgentAccess.status, { code: -1, error: lanAgentAccess.error });
+        return;
+      }
+      if (lanAgentAccess.kind === "agent") {
+        const binding = lanAgentAuthority.getApprovedAgentBinding(lanAgentAccess.nodeId, lanAgentAccess.agentId);
+        if (binding?.sessionId && ["codex-desktop", "codex", "dsh"].includes(binding.provider)) {
+          setTrustedLanAgentSource(request, { nodeId: lanAgentAccess.nodeId, agentId: lanAgentAccess.agentId,
+            provider: binding.provider === "dsh" ? "dsh" : "codex", sessionId: binding.sessionId, sessionName: binding.agentId });
+        }
+        registerLanAgentBodyGuard(request, body => {
+          if (!lanAgentAuthority.isAgentEnabled(lanAgentAccess.nodeId, lanAgentAccess.agentId)) throw new Error("Remote Agent authorization was revoked.");
+          const approved = lanAgentAuthority.getApprovedAgentBinding(lanAgentAccess.nodeId, lanAgentAccess.agentId);
+          assertLanAgentBodyAuthority(pathname, body, approved ? { ...approved, name: approved.agentId, enabled: true } : undefined);
+        });
+      }
+      guardRequestBodyDeadline(request, response, {
+        normalMs: managerHttpLimits.requestTimeoutMs,
+        uploadMs: 30 * 60 * 1000,
+        isAuthorizedUpload: request.method === "PUT"
+          && /^\/api\/agent\/uploads\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(pathname)
+          && Boolean(getTrustedLanAgentSource(request))
+      });
       if (handleManagerLanDiscoveryRequest(request, requestUrl, response, {
         enabled: !managerReadOnly
           && managerListensOnLan(managerHost)
@@ -9888,7 +9985,14 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       })) {
         return;
       }
-      if (!webguiLanRequestAllowed(request, requestUrl)) {
+      const enrollmentAccess = rabiGlobalConfig.read().webguiLan.enabled && (
+        (request.method === "POST" && pathname === "/api/lan-agent/enroll")
+        || (request.method === "GET" && (pathname.startsWith("/api/lan-agent/releases/") || pathname === "/api/lan-agent/self") && (() => {
+          const token = headerValue(request.headers.authorization).match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? "";
+          return lanAgentAuthority.validateBootstrapTicket(token) || Boolean(lanAgentAuthority.authenticate(token));
+        })())
+      );
+      if (lanAgentAccess.kind !== "agent" && !enrollmentAccess && !webguiLanRequestAllowed(request, requestUrl)) {
         response.setHeader("cache-control", "no-store");
         response.setHeader("www-authenticate", "Bearer realm=\"RabiRoute WebGUI\"");
         jsonResponse(response, 401, {
@@ -10017,7 +10121,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     });
   };
 
-  activeServer.requestTimeout = managerHttpLimits.requestTimeoutMs;
+  activeServer.requestTimeout = 30 * 60 * 1000; // Per-request body deadlines retain the ordinary 30-second limit.
   activeServer.headersTimeout = managerHttpLimits.headersTimeoutMs;
   activeServer.keepAliveTimeout = managerHttpLimits.keepAliveTimeoutMs;
   activeServer.maxRequestsPerSocket = managerHttpLimits.maxRequestsPerSocket;

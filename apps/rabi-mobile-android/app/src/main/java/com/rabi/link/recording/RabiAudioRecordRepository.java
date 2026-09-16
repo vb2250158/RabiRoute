@@ -11,41 +11,76 @@ import java.util.*;
 /** Read-only projection of sealed durable PCM. Never constructs a backend or recovers/mutates its queue. */
 public final class RabiAudioRecordRepository {
     private RabiAudioRecordRepository() { }
+    private static String cachedRoot = "";
+    private static final Map<String, CachedMetadata> cachedMetadata = new HashMap<>();
+    private static final class CachedMetadata {
+        final long modified, length;
+        final JSONObject row;
+        CachedMetadata(File file, JSONObject row) { modified = file.lastModified(); length = file.length(); this.row = row; }
+        boolean matches(File file) { return modified == file.lastModified() && length == file.length(); }
+    }
     private static File segments(Context context) {
         return new File(context.getFilesDir(), "rabi-conversation/audio-spool/segments");
     }
-    private static List<JSONObject> metadata(Context context) {
+    private static synchronized List<JSONObject> metadata(Context context) {
+        String root = segments(context).getAbsolutePath();
+        if (!root.equals(cachedRoot)) { cachedMetadata.clear(); cachedRoot = root; }
         File[] files = segments(context).listFiles((dir, name) -> name.endsWith(".json"));
         List<JSONObject> rows = new ArrayList<>();
         if (files == null) return rows;
+        Set<String> retained = new HashSet<>();
         for (File file : files) {
+            retained.add(file.getName());
+            CachedMetadata cached = cachedMetadata.get(file.getName());
+            if (cached != null && cached.matches(file)) {
+                if (cached.row != null) rows.add(cached.row);
+                continue;
+            }
             if (file.length() > 65536) continue;
             try {
                 JSONObject row = new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
-                if (row.optString("captureId").isEmpty() || row.optString("sha256").isEmpty()) continue;
-                rows.add(row);
+                boolean valid = !row.optString("captureId").isEmpty() && !row.optString("sha256").isEmpty();
+                cachedMetadata.put(file.getName(), new CachedMetadata(file, valid ? row : null));
+                if (valid) rows.add(row);
             } catch (Exception ignored) { /* A concurrently replaced or invalid row is not a playable record. */ }
         }
+        cachedMetadata.keySet().retainAll(retained);
         rows.sort(Comparator.comparingLong(row -> row.optLong("sequence")));
         return rows;
     }
     public static JSONArray listCaptureRecords(Context context, int limit) {
+        return listCaptureRecords(context, Math.max(0, Math.min(limit, 500)), 0, Long.MAX_VALUE);
+    }
+    /** Window queries retain complete captures/offsets and are not truncated by the latest-record cap. */
+    public static JSONArray listCaptureRecords(Context context, long from, long to) {
+        return listCaptureRecords(context, Integer.MAX_VALUE, from, to);
+    }
+    private static JSONArray listCaptureRecords(Context context, int limit, long from, long to) {
+        List<JSONObject> segments = metadata(context);
+        Set<String> selected = new HashSet<>();
+        for (JSONObject row : segments) {
+            long start = row.optLong("startedAt"), duration = row.optLong("bytes") * 1000L / 32000L;
+            if (start <= to && duration > 0 && start + duration > from) selected.add(row.optString("captureId"));
+        }
         Map<String, JSONObject> records = new LinkedHashMap<>();
-        for (JSONObject segment : metadata(context)) {
-            String id = segment.optString("captureId");
+        for (JSONObject segment : segments) {
+            if (!selected.contains(segment.optString("captureId"))) continue;
+            String captureId = segment.optString("captureId");
+            String id = segment.optString("eventId", "");
+            if (id.isEmpty()) id = captureId;
             try {
                 JSONObject record = records.get(id);
                 if (record == null) {
-                    record = new JSONObject().put("id", id).put("captureId", id).put("kind", "audio")
+                    record = new JSONObject().put("id", id).put("captureId", captureId).put("kind", "audio")
                         .put("source", segment.optString("source"))
                         .put("routeProfileId", segment.optString("routeProfileId"))
                         .put("processingPolicy", segment.optString("processingPolicy", "agent"))
                         .put("timeBasis", segment.optString("timeBasis", "received"))
                         .put("startedAt", segment.optLong("startedAt")).put("endedAt", segment.optLong("endedAt"))
-                        .put("bytes", 0L).put("segmentCount", 0).put("acknowledgedSegments", 0)
+                        .put("playbackSpans", new JSONArray()).put("bytes", 0L).put("segmentCount", 0).put("acknowledgedSegments", 0)
                         .put("state", "saved_segments");
-                    File descriptor = new File(segments(context).getParentFile(), "capture-" + id + ".json");
-                    if (id.matches("[A-Za-z0-9_-]{1,100}") && descriptor.isFile() && descriptor.length() < 65536) {
+                    File descriptor = new File(segments(context).getParentFile(), "capture-" + captureId + ".json");
+                    if (captureId.matches("[A-Za-z0-9_-]{1,100}") && descriptor.isFile() && descriptor.length() < 65536) {
                         try {
                             JSONObject binding = new JSONObject(new String(java.nio.file.Files.readAllBytes(descriptor.toPath()), StandardCharsets.UTF_8));
                             record.put("parentCaptureId", binding.optString("parentCaptureId", ""));
@@ -54,6 +89,10 @@ public final class RabiAudioRecordRepository {
                     }
                     records.put(id, record);
                 }
+                record.getJSONArray("playbackSpans").put(new JSONObject()
+                    .put("startedAt", segment.optLong("startedAt"))
+                    .put("durationMs", segment.optLong("bytes") * 1000L / 32000L)
+                    .put("offsetMs", record.optLong("bytes") * 1000L / 32000L));
                 record.put("endedAt", Math.max(record.optLong("endedAt"), segment.optLong("endedAt")))
                     .put("bytes", record.optLong("bytes") + segment.optLong("bytes"))
                     .put("segmentCount", record.optInt("segmentCount") + 1)
@@ -65,7 +104,7 @@ public final class RabiAudioRecordRepository {
         List<JSONObject> values = new ArrayList<>(records.values());
         values.sort((a, b) -> Long.compare(b.optLong("startedAt"), a.optLong("startedAt")));
         JSONArray result = new JSONArray();
-        for (int i = 0; i < Math.min(Math.max(0, Math.min(limit, 500)), values.size()); i++) result.put(values.get(i));
+        for (int i = 0; i < Math.min(limit, values.size()); i++) result.put(values.get(i));
         return result;
     }
     /** Explicit single-record export. Missing/corrupt shards fail rather than silently making a truncated WAV. */
@@ -73,7 +112,7 @@ public final class RabiAudioRecordRepository {
         if (captureId == null || !captureId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("invalid capture id");
         List<JSONObject> rows = new ArrayList<>();
         long bytes = 0;
-        for (JSONObject row : metadata(context)) if (captureId.equals(row.optString("captureId"))) {
+        for (JSONObject row : metadata(context)) if (captureId.equals(row.optString("eventId")) || captureId.equals(row.optString("captureId"))) {
             rows.add(row); bytes += row.getLong("bytes");
         }
         if (rows.isEmpty()) throw new IOException("record has no retained sealed audio");

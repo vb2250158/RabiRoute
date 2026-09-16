@@ -22,6 +22,14 @@ Users install one phone APK. The project also builds the glasses frontend that t
 com.rabi.link
 ```
 
+## Skins and appearance
+
+Open **Messages → Settings → Skins and appearance** to choose System, Light (Clear Teal), or Dark (Night Teal). Changes apply immediately, survive restarts, and affect only this phone. Recording, the timeline, messages, settings, platform dialogs, and system bars share the selected skin; video areas keep a dark background. The current application labels are in Chinese.
+
+During Android builds, `scripts/generate-mobile-theme.mjs` generates colors from WebGUI's `ribiwebgui/src/themes/{light,dark}/tokens.css` into `app/build/generated/mobileTheme/`. Do not edit generated files. Importing WebGUI custom skins is not currently supported on mobile.
+
+Recording and device cards use 8dp gaps between controls; skin previews have a 12dp gap before the selection button. Shared bottom navigation includes outer padding and gaps between destinations, highlights only the current page in teal, and keeps touch targets at least 48dp tall.
+
 ## Current product route (2026-07-20)
 
 The project now builds one phone companion and one glasses frontend:
@@ -36,7 +44,7 @@ RabiLink Relay
 ```
 
 - `GlassAudioClientActivity` is the default glasses entry. `glass-app/` is the glasses application module; the primary path handles audio, media, status, and HUD presentation without running ASR/TTS locally.
-- Home unifies all-day recording with audio/audio-video/health-only modes independent of running/paused; the conversation list is under Messages. Every configured persona remains visible even when its Route or chat capability is disabled; such rows retain configuration guidance instead of disappearing. Tapping a persona with an enabled RabiLink message adapter opens chat; Back returns to choose another persona. Settings, health, and glasses remain separate surfaces.
+- Bottom navigation has Records and Messages. Records opens the timeline, with a top start/pause switch and an upper-right recording-device grid; conversations are under Messages. Every configured persona remains visible even when its Route or chat capability is disabled; such rows retain configuration guidance instead of disappearing. Tapping a persona with an enabled RabiLink message adapter opens chat; Back returns to choose another persona. Settings, health, and glasses remain separate surfaces.
 - The phone sends continuous 16 kHz mono phone/glasses PCM through the restricted `audio-streams/rabilink/start|chunk|stop` endpoints to the selected Rabi PC. Android owns no VAD, utterance segmentation, ASR, or voiceprint logic. RabiSpeech segments and recognizes on the PC, then writes the host-wide speech store; frozen policy determines whether results reach the fixed `routeProfileId`. Transcription-only capability/worker fencing is connected in source, pending final regression; unsupported work is deferred rather than downgraded to Agent delivery. Stream start submits stable `source_device_id` separately from transient `stream_id`, so normal replies target the real device rather than an audio-suffixed stream identity. `/api/rabilink/speech/messages` remains compatibility/debug only; spoken output is synthesized by Rabi PC TTS and streamed back as PCM when requested.
 - The glasses HUD shows explicit Connect / Listen / Upload / Speak / Paused / Error states. The phone sends `PLAYBACK_BEGIN → PCM → PLAYBACK_END` over the same ordered Classic-BT channel. The playback worker does not accept PCM until the main thread has confirmed capture is paused, preventing the beginning of TTS from being recorded back into the microphone. Glasses validate message identity and PCM length and return `played` only after the `AudioTrack` playback head reaches its marker; Activity destruction reports an unfinished playback as `playback_failed`. Legacy PCM without BEGIN/END may still play for compatibility but is never reported as confirmed playback.
 - Photos are wired as message attachments. [Direct phone-to-PC video](../../docs/rabilink-direct-video_en.md) now has a verified physical-phone data channel; the glasses Phone SDK Bluetooth connection still fails and no camera frames have arrived. Only explicit video builds include the video SDK. Video never uses Relay or a TURN fallback.
@@ -61,7 +69,7 @@ Offline acceptance uses phone-local `lastWrittenAt`, `nextSequence`, and `reject
 
 Each app installation creates its own stable `rabi-phone-*` device id and reuses a stable audio stream id across reconnects. Several phones register automatically with RabiSpeech and may remain online together; a later phone never steals the input selected in the speech-service page. Only the selected phone feeds VAD/ASR, while a temporarily offline selection is retained and resumes after reconnect.
 
-`AllDayRecordingSettings` unifies `mode=audio|video|health`, `source=mobile|glasses`, `processingPolicy=local_only|transcribe|agent`, and `running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`. Upgrades default to `running=false`; the transcription default does not start capture. The legacy startup-voice switch is no longer a second capture authority. `autoResume` remains internal false; its nonfunctional UI was removed and boot explicitly pauses. Automatic resume is not implemented.
+`AllDayRecordingSettings` unifies `mode=audio|video|health`, `source=auto` (automatic audio; glasses for video), `processingPolicy=local_only|transcribe|agent`, and `running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`. Upgrades default to `running=false`; the transcription default does not start capture. The legacy startup-voice switch is no longer a second capture authority. `autoResume` remains internal false; its nonfunctional UI was removed and boot explicitly pauses. Automatic resume is not implemented.
 
 The implementation continuously captures ordered PCM without Android-side VAD; it does not create one raw 24-hour file. The audio callback only enters a bounded receive queue, while a dedicated single writer owns `.partial`, `fsync`, atomic sealing, and explicit backpressure gaps. Each shard keeps a stable sequence, `chunkId`, source, Route, byte count, checksum, and upload state. A process restart recovers a partial only from its durable ownership sidecar. Corrupt metadata, missing PCM, and checksum failures quarantine the related pair, write a stable gap, and unblock later shards; quarantine counts toward the storage watermark and is deleted only after an explicit user confirmation in Audio & Transcripts. Android connectivity events or a restored RabiLink SSE connection wake upload immediately. While Android knows the device is offline, transport waits on the system network event gate. Each queued shard is uploaded only through a stream matching that shard's source and Route. RabiSpeech persists the processed `source + chunkId + bytes + SHA-256` tuple in a local idempotency ledger, so replay after a lost ACK and RabiSpeech process restart is acknowledged without entering ASR twice. Reliable text/media/receipt facts remain until acknowledged. PC-finalized ASR segments and Agent TTS follow the RabiSpeech contract: per-file 24-hour caching plus daily JSONL metadata with safe relative paths and expiration times.
 
@@ -102,7 +110,7 @@ Native Rokid speech remains unclosed. CXR CustomApp and CustomCmd work, but Glas
 
 ## Application structure
 
-Home is the unified recording entry, Records provides replay, and Messages contains conversations and chat. Device/settings surfaces configure Rabi PC, wearable health, glasses and remote access without creating another capture owner. Hardware/API probes live in a separate Advanced Diagnostics center.
+Records combines capture control and replay; its upper-right action opens recording devices. Messages contains conversations and chat. Device connection pages handle PC, health and glasses authorization without creating another capture owner. Hardware/API probes live in a separate Advanced Diagnostics center.
 
 - `bridge/` defines `DeviceModule`, `Capability`, `ProbeResult`, `BridgeEvent`, storage, and module registration.
 - `modules/xiaomi/` contains BLE, GATT, Health Connect, local Provider, cloud OAuth/SDK, evidence export, and related test screens.

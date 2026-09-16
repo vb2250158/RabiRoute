@@ -58,6 +58,8 @@ type Connection = {
   socket: WebSocket;
   nodeId?: string;
   authenticated: boolean;
+  credential?: string;
+  authenticatedNodeId?: string;
   authenticationTimer: NodeJS.Timeout;
 };
 
@@ -151,7 +153,11 @@ export class LanAgentRegistry {
   private readonly managementRequests = new Map<string, { connection: Connection; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private detachUpgrade: (() => void) | undefined;
 
-  constructor(options: { statePath: string }) {
+  constructor(private readonly options: {
+    statePath: string;
+    authenticateNode?: (token: string) => { nodeId: string } | null;
+    isAgentEnabled?: (nodeId: string, agentId: string) => boolean;
+  }) {
     this.statePath = path.resolve(options.statePath);
     const identityPath = path.join(path.dirname(this.statePath), "agent-instance-id.json");
     fs.mkdirSync(path.dirname(identityPath), { recursive: true });
@@ -176,7 +182,7 @@ export class LanAgentRegistry {
         return;
       }
       if (requestUrl.pathname !== "/api/lan-agent/connect") return;
-      if (!options.enabled() || !options.getToken().trim()) {
+      if (!options.enabled() || (!this.options.authenticateNode && !options.getToken().trim())) {
         rejectUpgrade(socket, 401, "Unauthorized");
         return;
       }
@@ -208,7 +214,7 @@ export class LanAgentRegistry {
   listInstances(localAgents: InstanceAgent[] = []): AgentInstance[] {
     return [{ instanceId: this.localInstanceId, local: true, connected: true, agents: localAgents }, ...this.listNodes().map(node => ({
       instanceId: node.nodeId, local: false, address: node.remoteAddress, connected: node.connected, version: node.version,
-      agents: node.agents ?? []
+      agents: (node.agents ?? []).map(agent => ({ ...agent, enabled: agent.enabled && (this.options.isAgentEnabled?.(node.nodeId, agent.agentId) ?? true) }))
     }))];
   }
 
@@ -272,6 +278,7 @@ export class LanAgentRegistry {
       return { ...existing };
     }
     const connection = this.requireConnection(nodeId);
+    if (this.options.isAgentEnabled && (!input.agentId || !this.options.isAgentEnabled(nodeId, input.agentId))) throw new Error("Manager has not enabled this remote Agent.");
     if (!this.requireNode(nodeId).agentTypes?.includes(targetAgent)) throw new Error("The selected remote node does not support the requested Agent.");
     if (input.agentId) {
       const agent = this.requireNode(nodeId).agents?.find(agent => agent.agentId === input.agentId);
@@ -350,17 +357,30 @@ export class LanAgentRegistry {
   private handleMessage(connection: Connection, message: Record<string, unknown>, getToken: () => string, remoteAddress: string | undefined): void {
     const type = typeof message.type === "string" ? message.type : "";
     if (!connection.authenticated) {
-      if (type !== "authenticate" || !webguiTokenMatches(typeof message.token === "string" ? message.token.trim() : "", getToken().trim())) {
+      const token = typeof message.token === "string" ? message.token.trim() : "";
+      const identity = this.options.authenticateNode?.(token);
+      const accepted = this.options.authenticateNode ? Boolean(identity) : webguiTokenMatches(token, getToken().trim());
+      if (type !== "authenticate" || !accepted) {
         closeSocket(connection.socket, 1008, "Rabi Agent authentication failed.");
         return;
       }
       connection.authenticated = true;
+      connection.credential = token;
+      connection.authenticatedNodeId = identity?.nodeId;
       this.send(connection.socket, { type: "authenticated", managerTime: nowIso() });
+      return;
+    }
+    if (this.options.authenticateNode && this.options.authenticateNode(connection.credential ?? "")?.nodeId !== connection.authenticatedNodeId) {
+      closeSocket(connection.socket, 1008, "Node credential was revoked.");
       return;
     }
     if (!connection.nodeId) {
       if (type !== "hello") throw new Error("Rabi Agent must send hello after authentication.");
       const hello = normalizeHello(message.node);
+      if (this.options.authenticateNode && hello.nodeId !== connection.authenticatedNodeId) {
+        closeSocket(connection.socket, 1008, "Node identity does not match its credential.");
+        return;
+      }
       const previous = this.connections.get(hello.nodeId);
       if (previous && previous.socket !== connection.socket) {
         clearTimeout(previous.authenticationTimer);
@@ -473,6 +493,10 @@ export class LanAgentRegistry {
     const connection = this.connections.get(nodeId);
     if (!connection || connection.socket.readyState !== WebSocket.OPEN) {
       throw new Error(`Rabi Agent node is not connected: ${nodeId}`);
+    }
+    if (this.options.authenticateNode && this.options.authenticateNode(connection.credential ?? "")?.nodeId !== nodeId) {
+      closeSocket(connection.socket, 1008, "Node credential was revoked.");
+      throw new Error("Rabi Agent node credential was revoked.");
     }
     return connection;
   }

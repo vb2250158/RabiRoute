@@ -17,7 +17,7 @@ English | <a href="./README_zh.md">简体中文</a>
   <a href="https://github.com/vb2250158/RabiRoute/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/vb2250158/RabiRoute?style=flat&color=ff7eae"></a>
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f2c744"></a>
   <img alt="Node.js 20 or newer" src="https://img.shields.io/badge/Node.js-20%2B-3c873a">
-  <img alt="Current version: 0.3.4" src="https://img.shields.io/badge/version-0.3.4-3178c6">
+  <img alt="Current version: 0.3.5" src="https://img.shields.io/badge/version-0.3.5-3178c6">
   <img alt="Status: active development" src="https://img.shields.io/badge/status-active%20development-19bfc1">
 </p>
 
@@ -43,7 +43,7 @@ The Agent answers, writes code, calls tools, and performs the task. RabiRoute de
 
 Download `RabiRoute-<version>-windows-x64-setup.exe` from [GitHub Releases](https://github.com/vb2250158/RabiRoute/releases/latest). The package includes RabiRoute Host, the Desktop surface, the local Manager, RibiWebGUI, Node.js, and production dependencies. On Windows, Host is the only application-lifecycle owner: it creates one application generation and keeps Manager and Desktop in that same generation.
 
-A portable ZIP and `SHA256SUMS.txt` are also published. The ZIP uses the `RabiRouteHost.exe + current.json + versions/<releaseId>` layout and must be extracted only into a new empty directory; use Setup for every existing installation. Setup embeds that exact ZIP, stages it on the installation volume, verifies every manifest hash and size plus private-path, reparse-point, and Host self-test gates, then issues a generation-fenced quit. Only a valid candidate can atomically replace `current.json` and the bootstrap; failure restores the previous pointer and bootstrap. Exactly identified retired lifecycle entries move into installer-owned, non-executable quarantine names ending in `.retired`; rollback or power-loss recovery restores them in place, while foreign and similarly suffixed files never move. `data/`, `logs/`, and foreign files are neither overwritten nor removed by uninstall. Windows packages are currently unsigned, so verify the checksum before accepting a SmartScreen unknown-publisher warning.
+Use Setup for installation and upgrades; extract the portable ZIP only into a new empty directory. Windows packages are unsigned: verify `SHA256SUMS.txt` before installation. See [Windows installation and upgrades](docs/windows-launcher-and-packaging_en.md) for validation, data retention, and recovery.
 
 ### Run from source
 
@@ -72,7 +72,7 @@ The manual trigger performs a real delivery. See [Complete the first Route](docs
 
 ## Current capabilities
 
-The repository version is `0.3.4`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
+The repository version is `0.3.5`. The table lists behavior backed by current code, configuration surfaces, and tests. Features that require accounts, external services, or physical devices still need acceptance in their target environment.
 
 | Area | Status | What it provides |
 | --- | --- | --- |
@@ -87,11 +87,18 @@ The repository version is `0.3.4`. The table lists behavior backed by current co
 | DSH | Experimental | Bind an explicit API address, workspace, and session as the primary or an auxiliary handler. |
 | WorkBuddy | Experimental | Deliver a message into a WorkBuddy task the user already owns, using that task's own model, tools and approvals. Delivery needs a one-time local gateway credential; without it, delivery fails closed. Discovery, binding, and lifecycle hooks are implemented; the desktop exposes no pairing handoff yet and cold start is unverified. |
 | RabiSpeech / RabiLink / mobile and wearables | Experimental | Connect speech, phones, glasses, Relay, and health-data paths, with separate acceptance for each device and network environment. |
-| LAN Rabi Agent | Experimental | Run a headless worker on another computer and deliver Manager tasks to a configured Codex Desktop owner on that machine. Real multi-computer acceptance remains pending. |
+| Media workspace | Experimental | Save media canvas projects, combine image/video/audio/text cards, and optionally use local H3; model setup and GPU inference require separate acceptance. |
+| LAN Rabi Agent | Experimental | Connect existing Codex/DSH tasks on another computer through an onboarding prompt; Manager separately grants node access to APIs and skills. Real two-machine and legacy-node migration acceptance remains pending. |
 
 See [Current capabilities and maturity](docs/current-capabilities_en.md) for complete status, limits, and sources of truth.
 
 ## Recent changes
+
+### 0.3.5: Remote Agent authorization, focused approvals and mobile recording
+
+- Remote Agents use individual node credentials and per-Agent grants for controlled APIs, public skills and file uploads. Existing nodes must follow the [migration guide](docs/lan-rabi-agent-bootstrap_en.md).
+- Plans add a focused pending-feedback view, persist submitted approvals for later editing, and return to analysis only after confirmed delivery.
+- Android 0.3.38-dev adds unified timeline playback, sound-event splitting, light/dark themes and saved computers. Physical multi-computer and all-day endurance acceptance remain pending.
 
 ### 0.3.4: WorkBuddy delivery and hooks, cold-role completion callbacks
 
@@ -99,46 +106,7 @@ See [Current capabilities and maturity](docs/current-capabilities_en.md) for com
 - Capability declarations narrow to what each adapter has actually verified: WorkBuddy declares message processing and hooks, not plan assistants, memory consolidation or receipt recovery.
 - A role that has never written a plan is now a legitimate cold state instead of aborting completion callbacks for every role. See the [version history](版本更新日志_en.md).
 
-### 0.3.3: private-identifier scrub and repository hygiene
-
-- Project-specific wording in the plan-secretary prompt is now generic with unchanged intent, and the managed issue-ledger module is renamed to `roleIssueLedger` with matching exports.
-- Test fixtures and documentation examples now use generic paths, generic names and synthetic account numbers. The Windows tray app identity becomes the neutral `RabiRoute.Desktop`, so existing taskbar pins and notification settings must be recreated.
-- `RabiPlanCache/` and `artifacts/` are no longer part of the source submission, and the stale ignore rule for the deleted archive directory is gone. See the [version history](版本更新日志_en.md).
-
-### 0.3.2: all-day recording, DSH web auth and plan state split
-
-- The phone app now carries the All-day Recording source: phone, glasses and health devices share one capture coordinator, capture mode is independent from pause, the same durable audio segments serve local playback and later processing, and video audio is derived only after recording stops. Records freeze source, capture ID, persona, processing policy and target PC identity at creation; local-only stays local, transcription-only does not invoke an Agent, and a missing new PC/Relay capability or target identity defers instead of downgrading. The phone app is source-integrated only, with build, deployment, glasses and endurance acceptance tracked separately.
-- Plan state is split into a fixed activation state plus Agent-configurable markers, and pause is a marker only. Legacy data migrates transactionally with task bindings retained, and automatic follow-up skips paused, completed and archived plans.
-- The DSH web session bridge exchanges its cookie from the target DSH launch login URL, clears the cache on HTTP 401 without replaying, and never follows auth or RPC redirects. Mobile message endpoints gained a read-only history query and an audit script; speech records carry an explicit transcribe/Agent processing policy frozen at the record boundary.
-- Experimental: the WorkBuddy Agent endpoint can deliver messages into a local WorkBuddy task (after a one-time local gateway credential), and the cross-PC tunnel plus speech server selector remain experimental. See [Current capabilities and maturity](docs/current-capabilities_en.md).
-
-### 0.3.1: media projects, H3 workflow profiles and desktop capture
-
-- Save media canvas projects on the server, combine image/video/audio/text cards, and generate images or speech alongside H3 video.
-- Select compatible standard or fast H3 workflows and optional audio; improve mixed-DPI screenshot coordinates and fixed TTS voice selection.
-- Source changes and validation are separate from installed-package and GPU inference acceptance. See [Media Workbench](docs/video-generation-plugin_en.md).
-
-### 0.2.5: optional video generation plugin
-
-- Generate H3 videos through an independent plugin page and authenticated job API, with optional first/last frames, preview and download.
-- Configure a local model directory and explicitly install runtime dependencies and model weights from Model Management. No automatic model installation.
-
-### 0.2.4: durable Manager state and client recovery
-
-- Plan, memory, feedback, and route-catalog mutations now use revision checks, stable idempotency keys, generation fences, worker ownership, and recoverable receipts instead of direct parent-process writes.
-- Plan startup recovery publishes a complete canonical package before retiring legacy files. Storage leases and durable-delivery ownership stay alive during long work and fail closed if ownership changes.
-- RibiWebGUI, the Windows tray, Android SDK, RabiLink AIUI, and Xiaomi Home settings now keep explicit revisions and recover from Manager generation or endpoint changes without silently replaying a mutation.
-- Persona synchronization moves manifest and package inspection off the Manager request path, preserves canonical plan-package identity, and rejects stale or conflicting evidence.
-- Windows developer candidates, transactional install/apply scripts, Host fencing, and release manifests now share the same local-runtime ownership rules; source remains separate from installed state.
-
-### 0.2.2: single Windows lifecycle and plugin runtime v2
-
-- RabiRoute Host became the only Windows application owner. Manager and tray run as same-generation children on an operating-system-assigned port and are discovered through authenticated Host state plus `/meta` identity.
-- Manager plugins moved to schema/profile v2 with explicit execution modes, readiness dependencies, generation replacement, process leases, and immutable Web Bundle revisions.
-- Codex Desktop delivery gained recorded `deliveryId` confirmation, controlled task replacement, and sidebar-index display names; RibiWebGUI gained bounded first-screen reads and recoverable catalog loading.
-- Desktop-pet, YeYu Gamer, wearable, Xiaomi Home, mobile voice, and LAN Agent integrations moved behind explicit plugin, device, and acceptance boundaries.
-
-See the [version changelog](版本更新日志_en.md) for individual changes and migration notes.
+For earlier releases and migration notes, see the [version changelog](版本更新日志_en.md).
 
 ## How it works
 
@@ -155,14 +123,14 @@ flowchart LR
 
 Each Route stores its message input, persona, handler, workspace, and sending rules separately. Message adapters do not build Agent instructions, and Agents do not receive channel credentials or direct ownership of routing state.
 
-Manager loads 29 independent built-in packages through one Plugin Kernel. Built-in and out-of-tree packages share schema/profile v2, the same SDK, dependency graph, permission checks, generation switching, execution-mode boundary, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
+Manager loads 31 built-in plugin instances in the default Profile through one Plugin Kernel. Built-in and out-of-tree packages share schema/profile v2, the same SDK, dependency graph, permission checks, generation switching, execution-mode boundary, and Web module lifecycle. See [Plugin packages and hot replacement](docs/plugin-bundles_en.md).
 
 ## Agent and safety boundaries
 
 - Real Codex messages travel only through Desktop IPC to the selected Codex/ChatGPT Desktop task owner.
 - The target Desktop task owns its model, tools, sandbox, and approvals. RabiRoute does not perform its reasoning.
 - The project-pinned `codex app-server` may create or name an empty task, but it does not execute Route messages.
-- Delivery fails with recorded evidence when Desktop is unavailable, the task cannot load, the workspace differs, or the owner is ambiguous.
+- Delivery fails with recorded evidence when Desktop is unavailable, the task cannot load, the execution workspace fails validation, or the owner is ambiguous.
 - Platform accounts, login state, and credentials remain owned by their platforms.
 - Local `data/`, logs, recordings, transcripts, tokens, cookies, and private paths stay out of the public repository.
 
@@ -196,7 +164,7 @@ Buildable clients live under [`apps/`](apps/), shared SDKs under [`packages/`](p
 ### Installation and integrations
 
 - [Configuration](docs/configuration_en.md): review local files, directories, and main settings.
-- [LAN Rabi Agent](docs/lan-rabi-agent-bootstrap_en.md): connect a headless Codex worker on another computer.
+- [LAN Rabi Agent](docs/lan-rabi-agent-bootstrap_en.md): connect Codex/DSH tasks on another computer and configure node permissions.
 - [RabiSpeech](docs/rabispeech-plugin_en.md): configure local or remote TTS and ASR.
 - [Client applications](apps/README_en.md): build Android, Rokid AIUI, browser bridge, and Rabi Agent clients.
 
@@ -213,6 +181,7 @@ Buildable clients live under [`apps/`](apps/), shared SDKs under [`packages/`](p
 ```bash
 npm run manager          # run Manager from TypeScript
 npm run webgui:dev       # run the Vue/Vuetify frontend
+npm run test:webgui      # run frontend tests
 npm run test             # run backend and contract tests
 npm run build            # build Manager, independent plugin packages, and WebGUI
 npm run check:config     # validate public and runtime JSON text

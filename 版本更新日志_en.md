@@ -6,6 +6,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.5 - 2026-09-17
+
+- Remote Agent enrollment now uses single-use tickets and individual node credentials. Manager grants access per instance and Agent, disabled by default, with revocation, strong ETags and idempotent receipts. Controlled APIs, public skills, source identity and uploads retain separate checks. Uploading never sends a file automatically; group-file delivery verifies the managed file ID, SHA-256 and channel receipt.
+- The connector adds API and upload commands, with current-session discovery guidance from hooks. Signed content digests identify updates; stable launcher and hook pointers switch only after candidate READY. Windows packages include public skills and connector transport modules; developer candidates exclude tests and private files.
+- Migration: shared-credential nodes must re-enroll and verify old-key revocation. Older semver-only connectors require one new bootstrap while preserving node and task bindings. Existing individual credentials do not redeem another ticket. Remote formal replies, cross-remote delivery, physical dual-PC group-file delivery and legacy-node migration acceptance remain pending.
+- Plans add an independent approved marker and persist structured answers for editing. Feedback and marker changes commit together; only confirmed delivery of the same feedback against an unchanged plan returns it to analysis. A focused pending-feedback view combines approvals and requests for information, retaining drafts while switching items within the current page.
+- Android 0.3.38-dev (versionCode 41) integrates timeline and audio/video playback, automatic audio-source selection, real PCM waveforms, sound-event splitting and threshold settings. Light, dark and system themes share the theme source; multiple computers can be saved and selected. Historical records and processing policies are preserved. Physical multi-computer, glasses audio, end-to-end PC transcription and all-day endurance acceptance remain pending.
+- README and documentation navigation separate user tasks from developer maintenance. A project-skill catalog and drift checker preserve downstream local rules. Planning guidance clarifies existing task bindings, workspaces, feedback reads and owner-side status updates.
+
+- Submission validation: related backend regressions passed 326 tests with 2 skipped; WebGUI passed 323, connector/package/theme contracts 67, and Android unit tests 152. Root `npm run build` and the slim APK build passed. Dynamic Manager contracts passed 5 tests; the skill-drift script correctly reports missing copies and fails its check gate. This is a source submission; installed-version switching, remote migration and physical-device acceptance remain separately tracked as described above.
+
 ## 0.3.4 - 2026-09-15
 
 - Fixed a role that has never written a plan aborting completion callbacks for every role. Completion callbacks (plan-completion reminders and project-file-change reminders) traverse all roles to find bound plans, but a role with no plan catalog has nothing published, so the read threw `RoleKnowledgeCacheUnavailableError` and aborted the whole traversal, surfacing as an undelivered reminder. That state is now a legitimate cold state: the role is skipped, its empty `plans/active` and `plans/archive` are created on demand for the first real write, and the condition is logged once per role. Delivery for healthy roles is no longer affected. A missing roles root now returns an empty catalog instead of throwing.

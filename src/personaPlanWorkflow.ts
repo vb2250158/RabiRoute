@@ -12,6 +12,7 @@ export type PersonaPlanWorkflowRole =
   | "analysis"
   | "informationNeeded"
   | "approval"
+  | "approved"
   | "execution"
   | "waitingPackage"
   | "waitingQa"
@@ -48,7 +49,7 @@ export type PersonaPlanWorkflowStatus = {
 export type PersonaPlanStatusDefinition = PersonaPlanWorkflowStatus;
 
 export type PersonaPlanWorkflow = {
-  schemaVersion: 4;
+  schemaVersion: 5;
   archiveAfterHours: number;
   statuses: PersonaPlanWorkflowStatus[];
   roles: Record<PersonaPlanWorkflowRole, string>;
@@ -83,6 +84,7 @@ const WORKFLOW_ROLES: PersonaPlanWorkflowRole[] = [
   "analysis",
   "informationNeeded",
   "approval",
+  "approved",
   "execution",
   "waitingPackage",
   "waitingQa",
@@ -236,8 +238,8 @@ function stableJson(value: unknown): string {
 export function validatePersonaPlanWorkflow(value: unknown): PersonaPlanWorkflow {
   if (!isRecord(value)) throw new Error("planWorkflow must be an object.");
   assertOnlyKeys(value, ["schemaVersion", "archiveAfterHours", "statuses", "roles"], "planWorkflow");
-  if (value.schemaVersion !== 1 && value.schemaVersion !== 2 && value.schemaVersion !== 3 && value.schemaVersion !== 4) {
-    throw new Error("planWorkflow.schemaVersion must be 1, 2, 3, or 4.");
+  if (value.schemaVersion !== 1 && value.schemaVersion !== 2 && value.schemaVersion !== 3 && value.schemaVersion !== 4 && value.schemaVersion !== 5) {
+    throw new Error("planWorkflow.schemaVersion must be 1, 2, 3, 4, or 5.");
   }
   const archiveAfterHours = Number(value.archiveAfterHours);
   if (!Number.isInteger(archiveAfterHours) || archiveAfterHours < 1 || archiveAfterHours > 87_600) {
@@ -266,7 +268,8 @@ export function validatePersonaPlanWorkflow(value: unknown): PersonaPlanWorkflow
   }
 
   if (!isRecord(value.roles)) throw new Error("planWorkflow.roles must be an object.");
-  const roleNames = value.schemaVersion === 1 ? LEGACY_WORKFLOW_ROLES : WORKFLOW_ROLES;
+  const roleNames = value.schemaVersion === 1 ? LEGACY_WORKFLOW_ROLES
+    : value.schemaVersion < 5 ? WORKFLOW_ROLES.filter((role) => role !== "approved") : WORKFLOW_ROLES;
   assertOnlyKeys(value.roles, roleNames, "planWorkflow.roles");
   const roles = {} as Record<PersonaPlanWorkflowRole, string>;
   for (const role of roleNames) {
@@ -283,6 +286,23 @@ export function validatePersonaPlanWorkflow(value: unknown): PersonaPlanWorkflow
       statuses,
       roles
     });
+  }
+  if (value.schemaVersion < 5) {
+    const template = loadDefaultPersonaPlanWorkflow();
+    const definition = template.statuses.find((status) => status.key === template.roles.approved)!;
+    const existing = statuses.find((status) => status.key === definition.key
+      || status.legacyAliases.includes(definition.key) || status.label === definition.label
+      || status.labelEn.toLowerCase() === definition.labelEn.toLowerCase());
+    if (existing && existing.state !== "enabled") {
+      throw new Error("The existing approved plan status must be enabled during schema migration.");
+    }
+    const approved = existing ?? structuredClone(definition);
+    const ordered = statuses.filter((status) => status.key !== approved.key).sort((a, b) => a.order - b.order);
+    ordered.splice(ordered.findIndex((status) => status.key === roles.approval) + 1, 0, approved);
+    return validatePersonaPlanWorkflow({ schemaVersion: 5, archiveAfterHours,
+      statuses: (value.schemaVersion < 4 ? migrateLegacyInformationNeededDescription(ordered, roles) : ordered)
+        .map((status, order) => ({ ...status, order })),
+      roles: { ...roles, approved: approved.key } });
   }
   const migratedStatuses = value.schemaVersion < 4
     ? migrateLegacyInformationNeededDescription(statuses, roles)
@@ -313,7 +333,12 @@ export function validatePersonaPlanWorkflow(value: unknown): PersonaPlanWorkflow
   for (const role of ["initial", "analysis", "informationNeeded", "approval", "execution", "waitingPackage", "waitingQa", "discussion", "paused"] as const) {
     if (roleStatus(role).terminal) throw new Error(`planWorkflow.roles.${role} must not be terminal.`);
   }
-  return { schemaVersion: 4, archiveAfterHours, statuses: migratedStatuses, roles };
+  if (roles.approved === roles.approval || roles.approved === roles.analysis
+    || roleStatus("approved").requiresApproval || roleStatus("approved").acceptsGuidance
+    || roleStatus("approved").terminal || roleStatus("approved").currentStep !== "required") {
+    throw new Error("planWorkflow.roles.approved must be an independent non-terminal delivery-waiting status requiring a current step.");
+  }
+  return { schemaVersion: 5, archiveAfterHours, statuses: migratedStatuses, roles };
 }
 
 function migrateLegacyInformationNeededDescription(
@@ -598,7 +623,7 @@ export function ensurePersonaPlanWorkflow(roleDir: string): PersonaPlanWorkflowR
   const existing = readPersonaPlanWorkflow(roleDir);
   if (existing) {
     const rawSchemaVersion = readPersonaConfig(personaConfigPath(roleDir))?.planWorkflow;
-    if (isRecord(rawSchemaVersion) && rawSchemaVersion.schemaVersion === 4) return existing;
+    if (isRecord(rawSchemaVersion) && rawSchemaVersion.schemaVersion === 5) return existing;
     return writePersonaPlanWorkflow(roleDir, existing.workflow, { expectedRevision: existing.revision });
   }
   return writePersonaPlanWorkflow(roleDir, loadDefaultPersonaPlanWorkflow(), "");

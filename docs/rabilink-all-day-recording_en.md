@@ -51,7 +51,7 @@ The phone owner does not replace PC Host/Manager process or business-data owners
 | Sources | Audio, video and health devices | Persist stable identities and capabilities, not display-name-based ownership. |
 | Processing | Save only / automatic transcription / transcription and review by a selected persona | A setting is not evidence that the processor is online; health-only produces no fake transcription tasks. |
 | Network | Prefer Wi-Fi / allow mobile data / pause synchronization | Offline operation is a condition, not a separate recording feature. |
-| Fallback | No automatic fallback / explicitly selected backup | No silent source switch by default; changes create a record boundary. |
+| Fallback | Automatic audio source | Prefer glasses delivering PCM; fall back to phone on disconnection/stall. Source changes create record boundaries and expose the actual source. |
 | Retention | Confirmed-media age, storage cap and free-space reserve | Never silently remove unconfirmed or quarantined data. |
 | Recovery | User-approved startup recovery policy | Never bypass system permissions or explicit pause. |
 

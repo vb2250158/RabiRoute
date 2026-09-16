@@ -16,7 +16,8 @@ import java.security.MessageDigest
 /** Read-only PC query plus an account/worker/device-isolated, disposable local view cache. */
 class RecordingTranscriptProjection(private val context: Context) {
     data class Scope(val config: RabiLinkRelayConfig, val device: String, val worker: String, val key: String)
-    data class Transcript(val id: String, val captureId: String, val text: String, val processedAt: Long)
+    data class Segment(val text: String, val speaker: String)
+    data class Transcript(val id: String, val captureId: String, val text: String, val processedAt: Long, val segments: List<Segment> = emptyList())
     data class Snapshot(val fetchedAt: Long, val records: List<Transcript>, val unassigned: Int)
     fun scope(): Scope {
         val config = RabiLinkRelaySettings.load(context)
@@ -38,10 +39,10 @@ class RecordingTranscriptProjection(private val context: Context) {
         val rows = root.getJSONArray("records")
         return Snapshot(root.getLong("fetchedAt"), (0 until rows.length()).map { i ->
             val row = rows.getJSONObject(i)
-            Transcript(row.getString("id"), row.getString("captureId"), row.getString("text"), row.optLong("processedAt"))
+            Transcript(row.getString("id"), row.getString("captureId"), row.getString("text"), row.optLong("processedAt"), parseSegments(row))
         }, root.optInt("unassigned"))
     }
-    /** Explicit user refresh only. No stream polling or audio reads; queries last 24h, max 200 results. */
+    /** Visible-live bounded refresh or user refresh. No audio reads; queries last 24h, max 200 results. */
     fun refresh(scope: Scope): Snapshot {
         check(isCurrent(scope)) { "账号或电脑已切换，请重新打开时间线" }
         val capabilityRoot = get(scope, CAPABILITIES_PATH)
@@ -51,7 +52,7 @@ class RecordingTranscriptProjection(private val context: Context) {
         val snapshot = parse(root, scope.device, now)
         check(isCurrent(scope)) { "刷新期间账号或电脑已切换，结果未写入当前缓存" }
         val target = file(scope); check(target.parentFile!!.mkdirs() || target.parentFile!!.isDirectory)
-        val rows = JSONArray(); snapshot.records.forEach { rows.put(JSONObject().put("id", it.id).put("captureId", it.captureId).put("text", it.text).put("processedAt", it.processedAt)) }
+        val rows = JSONArray(); snapshot.records.forEach { rows.put(JSONObject().put("id", it.id).put("captureId", it.captureId).put("text", it.text).put("processedAt", it.processedAt).put("segments", JSONArray().also { rows -> it.segments.forEach { segment -> rows.put(JSONObject().put("text", segment.text).put("speaker_name", segment.speaker)) } })) }
         val data = JSONObject().put("scope", scope.key).put("fetchedAt", snapshot.fetchedAt).put("unassigned", snapshot.unassigned).put("records", rows)
         val atomic = AtomicFile(target); val out = atomic.startWrite()
         try { out.write(data.toString().toByteArray()); atomic.finishWrite(out) }
@@ -77,6 +78,15 @@ class RecordingTranscriptProjection(private val context: Context) {
         } finally { connection.disconnect() }
     }
     companion object {
+        private fun parseSegments(row: JSONObject): List<Segment> {
+            val rows = row.optJSONArray("segments") ?: return emptyList()
+            return (0 until rows.length()).mapNotNull { index ->
+                val item = rows.optJSONObject(index) ?: return@mapNotNull null
+                val text = item.optString("text").trim()
+                fun field(key: String) = if(item.isNull(key)) "" else item.optString(key).trim()
+                if(text.isEmpty()) null else Segment(text, field("speaker_name").ifBlank { field("speaker_label").ifBlank { field("speaker") } })
+            }
+        }
         const val CAPABILITIES_PATH = "/api/rabilink/speech/v1/capabilities"
         fun supportsFencedRecords(root: JSONObject): Boolean {
             val capabilities = root.optJSONObject("rabilinkAudioStream") ?: root.optJSONObject("data")?.optJSONObject("rabilinkAudioStream")
@@ -95,7 +105,7 @@ class RecordingTranscriptProjection(private val context: Context) {
                 if(capture.isEmpty()) { unassigned++; continue }
                 val processed = row.optDouble("processedAt", 0.0) // Contract: Unix seconds; never infer from legacy time.
                 val processedMs = if(!processed.isFinite() || processed <= 0) 0L else (processed * 1000).toLong()
-                records.add(Transcript(row.optString("id", row.optString("record_id")), capture, text, processedMs))
+                records.add(Transcript(row.optString("id", row.optString("record_id")), capture, text, processedMs, parseSegments(row)))
             }
             return Snapshot(now, records.distinctBy { listOf(it.id, it.captureId, it.processedAt.toString(), it.text) }.sortedBy { it.processedAt }, unassigned)
         }

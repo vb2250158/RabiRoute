@@ -201,7 +201,10 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   const openAttachmentPickerBody = composer.match(/function openFilePicker[\s\S]*?\n}/)?.[0] || "";
   const removeAttachmentBody = page.match(/function removeApprovalAttachment[\s\S]*?\n}/)?.[0] || "";
   assert.doesNotMatch(editPolicyBody, /approvalDeliveryPending/);
-  assert.match(submitPolicyBody, /approvalDeliveryPending/);
+  assert.match(submitPolicyBody, /!feedbackDeliveryPending\(plan\)/);
+  const deliveryPolicyBody = page.match(/function feedbackDeliveryPending[\s\S]*?\n}/)?.[0] || "";
+  assert.match(deliveryPolicyBody, /approvalDeliveryPending/);
+  assert.match(deliveryPolicyBody, /plan\.approval\.latest\?\.deliveryStatus === "pending"/);
   assert.doesNotMatch(addAttachmentBody, /approvalDeliveryPending/);
   assert.doesNotMatch(openAttachmentPickerBody, /approvalDeliveryPending/);
   assert.doesNotMatch(removeAttachmentBody, /approvalDeliveryPending/);
@@ -261,7 +264,8 @@ test("knowledge page avoids full-list refresh after feedback and keeps details a
   assert.match(page, /async function sendPlanGuidance[\s\S]*?sendPlanFeedback\(plan, "guidance", notifyAgent\)/);
   assert.match(page, /const stepId = guidance \? undefined : plan\.presentation\.approval\.stepId/);
   assert.match(page, /const attachments = await approvalAttachmentUploads\(plan\.id\)/);
-  assert.match(page, /const planAttachmentIds = referencedPlanAttachmentIds\(text, allApprovalMentionCandidates\(plan\)\)/);
+  assert.match(page, /const planAttachmentIds = \[\.\.\.new Set\(\[\.\.\.referencedPlanAttachmentIds\(text, allApprovalMentionCandidates\(plan\)\)/);
+  assert.match(page, /restored\?\.planAttachments \?\? \[\]/);
   assert.match(page, /submittedApprovalAttachments\.set\(plan\.id, takeApprovalAttachments\(plan\.id\)\)/);
   assert.doesNotMatch(page, /guidance \? \[\] : await approvalAttachmentUploads/);
   assert.match(page, /<section v-if="planAcceptsGuidance\(plan\)"[\s\S]*?<PlanFeedbackComposer[\s\S]*?:attachments="approvalAttachmentsFor\(plan\.id\)"[\s\S]*?@add-files="addApprovalFiles\(plan\.id, \$event\.files, \$event\.fromClipboard\)"/);
@@ -296,7 +300,8 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /class="knowledge-plan-directory"/);
   assert.match(page, /class="knowledge-plan-directory"[\s\S]*?<\/nav>\s*<div[\s\S]*?role="separator"[\s\S]*?<v-card class="app-card knowledge-browser"/);
   assert.match(page, /v-for="plan in visiblePlansForView"/);
-  assert.match(page, /const renderedPlansForView = computed\(\(\) => knowledgeRenderWindow\(\s*visiblePlansForView\.value/);
+  assert.match(page, /const renderedPlansForView = computed\(\(\) => \{\s*const window = knowledgeRenderWindow\(visiblePlansForView\.value/);
+  assert.match(page, /feedbackFocusOpen\.value && selected && !window\.some/);
   assert.match(page, /function currentPlanPageFilter[\s\S]*?sort:\s*planListSortMode\.value[\s\S]*?statuses[\s\S]*?tags/);
   assert.match(page, /v-model="planListDialogOpen"[\s\S]*?max-width="1180"[\s\S]*?scrollable[\s\S]*?aria-labelledby="plan-list-dialog-title"/);
   assert.doesNotMatch(page, /<v-menu v-model="planList/);

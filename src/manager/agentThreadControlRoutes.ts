@@ -2,6 +2,7 @@ import type http from "node:http";
 import type { AgentRequestStore } from "../agentRequests/store.js";
 import type {
   AgentThreadRequest,
+  AgentThreadRemoteSource,
   AgentThreadRequestOptions,
   AgentThreadRequestResult
 } from "../agentThreads.js";
@@ -12,8 +13,10 @@ import type {
 import type { ManagerOperationalEvent, ManagerOperationalLog } from "./operationalLog.js";
 import { ManagerPluginRequestTracker } from "./managerPluginRequestTracker.js";
 import type { ManagerPluginRouteHandler } from "./managerPluginRouteRegistry.js";
+import { hasLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 
 export type AgentThreadControlRoutesContext = {
+  getTrustedRemoteSource?: (request: http.IncomingMessage) => AgentThreadRemoteSource | undefined;
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
   jsonResponse: (response: http.ServerResponse, statusCode: number, body: unknown) => void;
   agentRequests: AgentRequestStore;
@@ -61,13 +64,14 @@ function trackHandledOperation(operation: Promise<void>, trackOperation: TrackOp
 async function handleAgentThreadBody(
   body: AgentThreadRequest,
   response: http.ServerResponse,
-  context: AgentThreadControlRoutesContext
+  context: AgentThreadControlRoutesContext,
+  remoteSource?: AgentThreadRemoteSource
 ): Promise<void> {
   const managedBody = context.applyManagedAgentThreadDefaults(body);
   try {
     const result = await context.handleAgentThreadRequest(
       managedBody,
-      context.agentThreadRequestOptions(managedBody, {
+      { ...context.agentThreadRequestOptions(managedBody, {
         agentRequests: context.agentRequests,
         onMessageProcessingHandoff: (event) => {
           const item = context.messageProcessingBoard.submitOutcome(event.requirementId, {
@@ -84,7 +88,7 @@ async function handleAgentThreadBody(
             status: item.status
           });
         }
-      })
+      }), remoteSource }
     );
 
     const communication = result.data.communication && typeof result.data.communication === "object"
@@ -168,7 +172,13 @@ function handleAgentThreads(
     : context.readJsonBody<AgentThreadRequest>(request);
 
   trackHandledOperation(requestBody
-    .then((body) => handleAgentThreadBody(body, response, context))
+    .then((body) => {
+      const remoteSource = context.getTrustedRemoteSource?.(request);
+      if (hasLanAgentBodyGuard(request) && !remoteSource) {
+        throw new Error("Remote Agent trusted source session is unavailable.");
+      }
+      return handleAgentThreadBody(body, response, context, remoteSource);
+    })
     .catch((error) => {
       context.jsonResponse(response, 400, {
         code: -1,

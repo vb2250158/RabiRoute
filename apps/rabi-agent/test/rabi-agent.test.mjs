@@ -5,7 +5,8 @@ import { __test } from "../rabi-agent.mjs";
 
 test("Rabi Agent turns Manager URLs into outbound WebSocket URLs", () => {
   assert.equal(__test.managerWebSocketUrl("http://192.168.1.10:8790"), "ws://192.168.1.10:8790/api/lan-agent/connect");
-  assert.equal(__test.managerWebSocketUrl("https://manager.local/rabi/"), "wss://manager.local/rabi/api/lan-agent/connect");
+  assert.equal(__test.managerWebSocketUrl("https://manager.test/"), "wss://manager.test/api/lan-agent/connect");
+  for (const url of ["https://manager.test/rabi/", "https://user:fixture@manager.test", "https://manager.test/?token=fixture"]) assert.throws(() => __test.managerWebSocketUrl(url), /explicit origin/);
 });
 
 test("Rabi Agent rejects unsafe package paths and compares Node versions", () => {

@@ -24,6 +24,14 @@
 com.rabi.link
 ```
 
+## 皮肤与外观
+
+打开消息页的“设置 → 皮肤与外观”，选择跟随系统、浅色（清透青）或深色（夜幕青）。选择立即生效，重启后保留，仅影响本机。记录、时间线、消息、设置、原生弹窗和系统栏使用同一皮肤；视频画面区域保留深色背景。
+
+色值在 Android 构建时由 `scripts/generate-mobile-theme.mjs` 从 WebGUI 的 `ribiwebgui/src/themes/{light,dark}/tokens.css` 生成，产物位于 `app/build/generated/mobileTheme/`，不要手改。移动端暂不导入 WebGUI 自定义皮肤。
+
+记录与设备卡片内的操作间隔为 8dp，皮肤预览与选择按钮间隔为 12dp。底部导航统一保留外侧留白与选项间距，仅当前页面显示青色底，触摸区域不小于 48dp。
+
 ## 当前产品主线（2026-07-20）
 
 本工程现在同时构建一个手机伴侣和一个眼镜前端：
@@ -38,7 +46,7 @@ RabiLink Relay
 ```
 
 - 眼镜默认入口是 `GlassAudioClientActivity`；`glass-app/` 是眼镜应用模块，眼镜主链只负责音频、媒体、状态与 HUD，不在本地运行 ASR/TTS。
-- 手机日常首页统一全天记录，音频/音视频/仅健康模式与运行暂停独立，原会话列表移到“消息”；所有已配置人格都会显示，未启用或尚无聊天能力的人格保留配置引导而不会消失。点一个已启用 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
+- 手机底部为“记录、消息”；记录默认打开时间线，顶部开关控制开始／暂停，右上角进入记录设备卡片。原会话列表位于“消息”；所有已配置人格都会显示，未启用或尚无聊天能力的人格保留配置引导而不会消失。点一个已启用 RabiLink 消息端的人格进入聊天，返回后可继续选择其他人格；设置、健康和眼镜能力保持独立入口。
 - 手机后端通过受限 `audio-streams/rabilink/start|chunk|stop` 接口把手机/眼镜的连续 16 kHz mono PCM 送到所选 Rabi PC。Android 不做 VAD、切句、ASR 或声纹；RabiSpeech 在 PC 端切句和识别后自动写主机通用语音库，再按冻结的处理策略决定是否投给固定 `routeProfileId`；仅转写策略与 PC 能力/worker 围栏已接入源码，最终回归仍待，不支持时 deferred，不能降级为 Agent 投递。启动请求分别提交稳定 `source_device_id` 与临时 `stream_id`，普通回复只回稳定设备，不会发给带音频后缀的流 ID。`/api/rabilink/speech/messages` 只保留兼容与调试用途；需要播报时再由 Rabi PC TTS 合成并以 PCM 发回。
 - 眼镜 HUD 使用“连接 / 聆听 / 上传 / 播报 / 暂停 / 异常”状态角标。手机通过同一条有序 Classic BT 通道发送 `PLAYBACK_BEGIN → PCM → PLAYBACK_END`；眼镜必须先在主线程确认暂停采集，播放线程才接受 PCM，避免 TTS 开头被麦克风回录。它会核对消息 ID/PCM 长度，并且只有 `AudioTrack` 播放头到达 marker 后才回 `played` 并恢复聆听；Activity 销毁会把未完成播放明确回为 `playback_failed`。旧版没有 BEGIN/END 的 PCM 仍可兼容播放，但不会冒充已确认播放。
 - 照片已接入消息附件上行。视频新增 [手机到电脑直连接入](../../docs/rabilink-direct-video.md)：手机真机数据通道已验证，眼镜 Phone SDK 蓝牙连接仍失败、未出帧；普通精简包不含视频 SDK，显式视频构建才启用此入口。视频不经过 Relay，不启用 TURN 兜底。
@@ -63,7 +71,7 @@ RabiLink Relay
 
 每台安装首次运行时生成自己的稳定 `rabi-phone-*` 设备 ID，重连沿用稳定音频流 ID，并在建立音频流时一并上报 Android 设备型号；多台手机会自动登记到 RabiSpeech，语音服务页面以“型号 + 稳定 ID 后缀”区分它们，后来连接的设备不会抢占已选择的输入。多台可同时在线，但只把用户选中的一路送入 VAD/ASR；所选设备短暂离线时保留选择，网络恢复后自动续接。
 
-新 `AllDayRecordingSettings` 统一 `mode=audio|video|health`、`source=mobile|glasses`、`processingPolicy=local_only|transcribe|agent`、`running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`。升级默认 `running=false`；默认转写策略不会自动开启录音。旧启动语音开关不再作为第二份采集真源；`autoResume` 仅内部保留 false，无行为 UI 已移除，开机明确暂停，自动恢复尚未实现。
+新 `AllDayRecordingSettings` 统一 `mode=audio|video|health`、`source=auto`（音频自动选源；音视频固定眼镜）、`processingPolicy=local_only|transcribe|agent`、`running/healthEnabled/uploadEnabled/autoResume/windowStartedAt`。升级默认 `running=false`；默认转写策略不会自动开启录音。旧启动语音开关不再作为第二份采集真源；`autoResume` 仅内部保留 false，无行为 UI 已移除，开机明确暂停，自动恢复尚未实现。
 
 当前实现持续采集且不在 Android 做 VAD。录音设备不按零点或固定 24 小时重启；分片由时长、大小、输入/Route 切换、暂停、播放抑制、进程停止等边界触发。崩溃后启动扫描残留 `.partial` 及其归属 sidecar，偶数字节分片原子封口并保留原序号；归属缺失、metadata 损坏、PCM 缺失或 SHA 不符会将关联文件一起隔离、写带稳定 ID 和相邻序号的 gap，再继续后项。隔离区计入存储水位且不会自动删除，只能在“录音与转写”页由用户确认清理。来电/麦克风占用、卡死退避、播放抑制、写入背压和存储不足也写本机轮转审计。传输队列仍有容量与剩余空间水位；新记录即使 ACK 也不按旧传输保留小时自动回收。未确认或隔离分片不自动删除，无法落盘时累计 `rejectedBytes` 并显示缺口；自动滚动删除及全天容量管理仍待完成。断网时上传线程休眠而录音继续落盘，联网后按本地序号逐段切换到该分片自己的来源/Route 流补传。RabiSpeech 的本机持久幂等账本以稳定设备、chunk ID、字节数和 SHA-256 记录处理结果；即使 ACK 响应丢失并重启 RabiSpeech，重放也不会再次送入 ASR。
 
@@ -102,7 +110,7 @@ Rokid ASR/TTS 的最新资料结论见 `docs/rokid-asr-tts-communication-researc
 
 ## 单手机 APK 原则
 
-Rabi Link 只让用户安装一个手机 APK，正式手机包名只有 `com.rabi.link`。小米、Rokid 和后续设备都作为 APK 内部模块接入；日常首页负责本地采集，记录页负责回看，消息页负责会话与聊天；设备及高级设置负责连接 Rabi PC、持续会话、健康消息端、眼镜入口和远程配置，高级接口测试集中在独立诊断中心，各模块把结果写成统一 `ProbeResult`。
+Rabi Link 只让用户安装一个手机 APK，正式手机包名只有 `com.rabi.link`。小米、Rokid 和后续设备都作为 APK 内部模块接入；记录页统一采集开关与时间线回看，右上角进入记录设备，消息页负责会话与聊天；设备连接负责 Rabi PC、健康消息端与眼镜授权，高级接口测试集中在独立诊断中心，各模块把结果写成统一 `ProbeResult`。
 
 `modules/rokid/`、`modules/xiaomi/` 只是源码目录和 Java package 边界，不是第二个手机应用包名。Rokid 的 Glass3 / CustomApp 验证存在一个内置眼镜端测试 APK，包名为 `com.rabi.link.glass`；它是随手机 APK 打包、运行时交给 Rokid SDK 安装到眼镜侧的测试负载，不是用户需要单独安装的第二个手机 APK。
 

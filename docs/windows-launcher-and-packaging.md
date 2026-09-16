@@ -8,6 +8,10 @@
 
 Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Manager 是业务与状态 owner，托盘/任务窗口是表现层；二者都是 Host 创建的同代子程序。托盘不是 Manager 的监督器，也不是另一套桌面应用。
 
+## 安装、升级与恢复
+
+发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。便携 ZIP 使用 `RabiRouteHost.exe + current.json + versions/<releaseId>` 布局，只能解压到新的空目录，不能覆盖旧 RabiRoute 目录；升级既有安装必须运行 Setup。Setup 嵌入同一份便携 ZIP，先在安装盘暂存并逐清单校验哈希、大小、私有路径、reparse point 与 Host 自检，再按当前 application generation 执行 fenced quit；只有候选通过后才原子切换 `current.json` 与 bootstrap，失败会恢复上一指针和 bootstrap。经精确识别的旧生命周期入口会以 `.retired` 后缀移入安装器所有的非执行 quarantine；事务失败或断电恢复会把它们原位还原，foreign 和相似后缀文件不移动。`data/`、`logs/` 与 foreign 文件不参与覆盖或卸载。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
+
 ## 生命周期所有权
 
 后台任务故障与核心接口就绪分开判断：`health.state` 不因记忆整理等后台 incident 单独降级；`health.backgroundState` 和 `health.backgroundIncidentCount` 保留故障状态，详细原因仍在 `backgroundLifecycle` 和日志中。必需能力、计划存储启动和路线就绪检查不变。后台任务独立退避，不能阻断无关 API。记忆整理的投递结果不确定时持久化待核对状态，后续只读原投递回执；没有确认不能自动重发。移除的调度目标不再计入当前故障汇总。

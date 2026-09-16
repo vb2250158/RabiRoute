@@ -9,6 +9,26 @@ function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-global-config-"));
 }
 
+test("Agent upload limit persists, migrates and rejects invalid writes", () => {
+  const root = tempRoot();
+  try {
+    const store = new RabiGlobalConfigStore(root);
+    assert.equal(store.read().agentUploads.maxFileMiB, 2048);
+    store.patch({ agentUploads: { maxFileMiB: 1024 } });
+    assert.equal(new RabiGlobalConfigStore(root).read().agentUploads.maxFileMiB, 1024);
+    const snapshot = store.read(); snapshot.agentUploads.maxFileMiB = 1;
+    assert.equal(store.read().agentUploads.maxFileMiB, 1024);
+    for (const maxFileMiB of [0, -1, 2049, 1.5, NaN, Infinity]) {
+      assert.throws(() => store.patch({ agentUploads: { maxFileMiB } }), /integer/);
+    }
+    const raw = JSON.parse(fs.readFileSync(store.configPath, "utf8"));
+    delete raw.agentUploads;
+    fs.writeFileSync(store.configPath, JSON.stringify(raw));
+    assert.equal(new RabiGlobalConfigStore(root).read().agentUploads.maxFileMiB, 2048);
+    assert.equal(JSON.parse(fs.readFileSync(store.configPath, "utf8")).agentUploads.maxFileMiB, 2048);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("RabiLink Relay uses an explicit global enabled switch", () => {
   const store = new RabiGlobalConfigStore(tempRoot());
   assert.equal(store.read().rabiLinkRelay.enabled, false);

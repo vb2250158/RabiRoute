@@ -10,6 +10,15 @@ The source files are `SKILL.md` and `agents/openai.yaml` in this directory. Copy
 - When finding information, past decisions, scheduled arrangements, or task leads, read `.agents/skills/rabi-knowledge-search/SKILL.md` first. If Rabi is online, search memories and plans before searching files as needed; otherwise use ordinary search.
 ```
 
-Check the destination first. Create the directory for an initial installation; for upgrades, compare differences and preserve project changes before syncing the source files. Compare file hashes after copying and verify the `AGENTS.md` link. Updating the Rabi repository does not update existing project copies automatically; repeat the comparison and synchronization for upgrades. New tasks can load the project entry automatically; existing tasks must explicitly read the updated entry.
+Check the destination first. Create the directory for an initial installation; for upgrades, compare differences and preserve project changes before syncing the source files, then verify the `AGENTS.md` link. A project copy is a localized derivative: files such as `README.md` or `README_en.md` may already be rewritten there, so never replace the whole directory.
+
+Use the script for drift comparison and baseline recording instead of relying on memory:
+
+```powershell
+pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <project root>
+pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <project root> -Check
+```
+
+The first command reports each skill's drift against its baseline; the second acts as a gate (non-zero when a skill is not `in-sync` or its load reference is missing from the target `AGENTS.md`). After a completed port, record the new baseline with `-UpdateBaseline`. See [Project skill distribution and drift detection](../../docs/project-skill-distribution_en.md) for the verdicts and the Agent procedure.
 
 The task needs an existing relevant persona scope and a supported connection entry. The skill does not store machine addresses, credentials, or persona bindings. Follow the dynamic endpoint, bounded timeout, and offline fallback instructions in [SKILL.md](SKILL.md). Keep project-specific connection configuration in the project, separate from Rabi's generic skill.

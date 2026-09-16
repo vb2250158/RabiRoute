@@ -20,6 +20,7 @@ export type RabiGlobalConfig = {
   rabiLinkRelay: RabiLinkRelayGlobalConfig;
   webguiLan: WebguiLanAccessConfig;
   performance: PerformanceMonitoringConfig;
+  agentUploads: { maxFileMiB: number };
   createdAt: string;
   updatedAt: string;
 };
@@ -69,6 +70,7 @@ export class RabiGlobalConfigStore {
       rabiLinkRelay: defaultRabiLinkRelayConfig(),
       webguiLan: defaultWebguiLanAccessConfig(),
       performance: defaultPerformanceMonitoringConfig(),
+      agentUploads: { maxFileMiB: 2048 },
       createdAt: now,
       updatedAt: now
     };
@@ -80,7 +82,11 @@ export class RabiGlobalConfigStore {
     rabiLinkRelay?: Partial<RabiLinkRelayGlobalConfig>;
     webguiLan?: Partial<WebguiLanAccessConfig>;
     performance?: Partial<PerformanceMonitoringConfig>;
+    agentUploads?: { maxFileMiB: number };
   }): RabiGlobalConfig {
+    if (patch.agentUploads !== undefined && (!patch.agentUploads || !Number.isInteger(patch.agentUploads.maxFileMiB) || patch.agentUploads.maxFileMiB < 1 || patch.agentUploads.maxFileMiB > 2048)) {
+      throw new Error("agentUploads.maxFileMiB must be an integer between 1 and 2048.");
+    }
     const current = this.current;
     const next: RabiGlobalConfig = {
       ...current,
@@ -96,12 +102,14 @@ export class RabiGlobalConfigStore {
       performance: patch.performance
         ? normalizePerformanceMonitoringConfig({ ...current.performance, ...patch.performance })
         : current.performance,
+      agentUploads: patch.agentUploads ? { maxFileMiB: patch.agentUploads.maxFileMiB } : current.agentUploads,
       updatedAt: new Date().toISOString()
     };
     const changedFields = [
       current.rabiName !== next.rabiName ? "rabiName" : "",
       JSON.stringify(current.rabiLinkRelay) !== JSON.stringify(next.rabiLinkRelay) ? "rabiLinkRelay" : "",
       JSON.stringify(current.webguiLan) !== JSON.stringify(next.webguiLan) ? "webguiLan" : "",
+      current.agentUploads.maxFileMiB !== next.agentUploads.maxFileMiB ? "agentUploads" : "",
       JSON.stringify(current.performance) !== JSON.stringify(next.performance) ? "performance" : ""
     ].filter(Boolean);
     this.persist(next, changedFields.length ? "patch" : "normalize", current.updatedAt, next.updatedAt, changedFields);
@@ -120,6 +128,7 @@ export class RabiGlobalConfigStore {
         rabiLinkRelay: normalizeRabiLinkRelayConfig(parsed.rabiLinkRelay),
         webguiLan: normalizeWebguiLanAccessConfig(parsed.webguiLan),
         performance: normalizePerformanceMonitoringConfig(parsed.performance),
+        agentUploads: { maxFileMiB: Number.isInteger(parsed.agentUploads?.maxFileMiB) && parsed.agentUploads!.maxFileMiB >= 1 && parsed.agentUploads!.maxFileMiB <= 2048 ? parsed.agentUploads!.maxFileMiB : 2048 },
         createdAt: typeof parsed.createdAt === "string" && parsed.createdAt.trim() ? parsed.createdAt.trim() : now,
         updatedAt: typeof parsed.updatedAt === "string" && parsed.updatedAt.trim() ? parsed.updatedAt.trim() : now
       };
@@ -128,6 +137,7 @@ export class RabiGlobalConfigStore {
         || normalized.rabiName !== parsed.rabiName
         || JSON.stringify(normalized.rabiLinkRelay) !== JSON.stringify(parsed.rabiLinkRelay)
         || JSON.stringify(normalized.webguiLan) !== JSON.stringify(parsed.webguiLan)
+        || JSON.stringify(normalized.agentUploads) !== JSON.stringify(parsed.agentUploads)
         || JSON.stringify(normalized.performance) !== JSON.stringify(parsed.performance)
         || normalized.createdAt !== parsed.createdAt
         || normalized.updatedAt !== parsed.updatedAt
@@ -185,6 +195,7 @@ function cloneGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
     ...config,
     rabiLinkRelay: { ...config.rabiLinkRelay },
     webguiLan: { ...config.webguiLan },
+    agentUploads: { ...config.agentUploads },
     performance: { ...config.performance }
   };
 }
@@ -194,6 +205,7 @@ function freezeGlobalConfig(config: RabiGlobalConfig): RabiGlobalConfig {
   Object.freeze(snapshot.rabiLinkRelay);
   Object.freeze(snapshot.webguiLan);
   Object.freeze(snapshot.performance);
+  Object.freeze(snapshot.agentUploads);
   return Object.freeze(snapshot);
 }
 

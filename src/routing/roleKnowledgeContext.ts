@@ -39,7 +39,7 @@ export function planMemoryApiHint(roleId: unknown): string[] {
     "- 暂未复现、疑似历史已修复、缺目标包、等待 QA 或等待是否关闭都不是 roles.informationNeeded：开发侧完成但缺目标包或纳入证明时用 roles.waitingPackage；目标包确认但缺 QA 结论时用 roles.waitingQa；问题无效或历史已修复且无需验收时凭证据用 roles.closed",
     `- 记录计划反馈：GET ${base}/plans/{planId}/feedback、POST ${base}/plans/{planId}/feedback；计划级引导用 kind=guidance 且不带 stepId，审批意见用 kind=approval_suggestion；QQ 等外部入口记录用户反馈时使用 author=user、source=qq、notifyAgent=false；Agent 处理说明分别用 kind=guidance_response / kind=approval_response、author=agent、notifyAgent=false`,
     "- 收到计划引导后，先 GET 当前计划和反馈，再按引导 PATCH 计划并在需要时调整后续步骤，最后写 guidance_response；收到审批意见则更新对应计划/步骤和审批回执后写 approval_response。两者都不要只在 Agent 会话里直接回答",
-    "- 审批意见只形成计划审计记录，不直接推进步骤；Agent 判断后必须另行 PATCH 对应计划；计划说明要具体到真实文件、完整命令、变更影响、验证、回退和排除范围",
+    "- 用户提交审批意见后，Manager 保存审计记录并将 markerStatus 设为 roles.approved；确认投递成功后才转 roles.analysis，失败或未确认不会推进。已审批只表示意见已提交，不代表所有选项获批，也不自动执行或完成步骤；Agent 必须逐题读取决定，再另行 PATCH 对应计划。计划说明要具体到真实文件、完整命令、变更影响、验证、回退和排除范围",
     `- 查看记忆：GET ${base}/memory、GET ${base}/memory/recent、GET ${base}/memory/recent/{memoryId}、GET ${base}/memory/consolidated、GET ${base}/memory/consolidated/{memoryId}`,
     `- 查看角色技能：GET ${base}/skills、GET ${base}/skills/{skillId}`,
     `- 新增近期记忆：POST ${base}/memory/recent`,

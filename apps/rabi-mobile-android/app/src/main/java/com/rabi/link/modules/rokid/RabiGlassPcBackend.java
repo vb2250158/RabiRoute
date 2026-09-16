@@ -93,6 +93,7 @@ public final class RabiGlassPcBackend {
     private final RabiNetworkWakeGate networkWakeGate = new RabiNetworkWakeGate();
     private final android.content.SharedPreferences preferences;
     private final android.content.Context context;
+    private final com.rabi.link.recording.AudioEventSplitter eventSplitter;
     private final File replyQueueDirectory;
     private final File mediaQueueDirectory;
     private final File controlQueueDirectory;
@@ -263,6 +264,7 @@ public final class RabiGlassPcBackend {
 
     public RabiGlassPcBackend(android.content.Context context, Listener listener) {
         this.context = context.getApplicationContext();
+        this.eventSplitter = new com.rabi.link.recording.AudioEventSplitter(() -> com.rabi.link.recording.EventSplitSettings.load(this.context));
         this.preferences = this.context.getSharedPreferences("rabi_glass_phone_backend", android.content.Context.MODE_PRIVATE);
         this.listener = listener;
         this.settings = RabiConversationSettings.load(this.context);
@@ -492,7 +494,10 @@ public final class RabiGlassPcBackend {
         synchronized (audioWriteIoLock) {
             RabiBoundedAudioWriteQueue.Entry item;
             while ((item = audioWriteQueue.poll()) != null) {
-                RabiDurableAudioSpool.AppendResult written = audioSpool.append(item.pcm, item.source, item.route, item.captureId, item.processingPolicy, item.capturedAt, "received");
+                for (com.rabi.link.recording.AudioEventSplitter.Part part : eventSplitter.accept(
+                        item.captureId + "/" + item.source + "/" + item.route + "/" + item.processingPolicy, item.pcm)) {
+                RabiDurableAudioSpool.AppendResult written = audioSpool.append(part.pcm, item.source, item.route, item.captureId, item.processingPolicy,
+                        item.capturedAt + part.offset * 1000L / 32000L, "received", part.eventId);
                 if (!written.accepted) {
                     blockCapture(written.failure);
                     if (!audioStorageFailureReported) {
@@ -502,7 +507,9 @@ public final class RabiGlassPcBackend {
                     continue;
                 }
                 audioStorageFailureReported = false;
+                if (part.completed) audioSpool.boundary("event_boundary");
                 requestAudioStreamDrain();
+                }
             }
         }
     }
@@ -522,6 +529,7 @@ public final class RabiGlassPcBackend {
     private void closeAudioSpoolDurably() {
         synchronized (audioWriteIoLock) {
             if (audioSpoolClosed.compareAndSet(false, true)) {
+                drainAudioWritesNow();
                 drainAndCloseAudioQueue(audioWriteQueue, audioSpool);
             }
         }

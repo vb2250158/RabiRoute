@@ -2,6 +2,10 @@ import type http from "node:http";
 import type { LanAgentRegistry } from "./lanAgentRegistry.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 import type { InstanceAgent } from "../shared/agentInstance.js";
+import type { LanAgentAuthority } from "./lanAgentAuthority.js";
+import type { AgentResourceCatalog } from "./agentResourceCatalog.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
+import { listAgentApiOperations } from "./agentApiPolicy.js";
 
 export type LanAgentRoutesContext = {
   readJsonBody: <T>(request: http.IncomingMessage) => Promise<T>;
@@ -9,6 +13,10 @@ export type LanAgentRoutesContext = {
   isReleaseRequestAuthorized: (request: http.IncomingMessage) => boolean;
   isManagementRequestAuthorized: (request: http.IncomingMessage, requestUrl: URL) => boolean;
   registry: LanAgentRegistry;
+  authority?: LanAgentAuthority;
+  resources?: AgentResourceCatalog;
+  enabled?: () => boolean;
+  managerIdentity?: () => { applicationGenerationId: string; managerInstanceId: string; health: unknown };
   releases: LanAgentReleaseStore;
   localAgents?: () => InstanceAgent[];
   handleInstanceHook?: (instanceId: string, agentId: string, body: Record<string, unknown>, request: http.IncomingMessage) => Promise<unknown>;
@@ -49,14 +57,97 @@ export function handleLanAgentApi(
   response: http.ServerResponse,
   context: LanAgentRoutesContext
 ): boolean {
+  const nodeAccess = context.authority
+    ? evaluateLanAgentRequest(request, context.authority, context.enabled?.() === true)
+    : { kind: "unrelated" as const };
+  if (nodeAccess.kind === "denied") {
+    context.jsonResponse(response, nodeAccess.status, { code: -1, error: nodeAccess.error });
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/self" && context.authority) {
+    const token = typeof request.headers.authorization === "string" ? request.headers.authorization.match(/^Bearer\s+(.+)$/i)?.[1] ?? "" : "";
+    const identity = context.enabled?.() === true ? context.authority.authenticate(token) : null;
+    if (!identity) { agentUnauthorized(response, context); return true; }
+    const instance = context.registry.listInstances().find(item => item.instanceId === identity.nodeId);
+    context.jsonResponse(response, 200, { code: 0, data: { ...context.managerIdentity?.(), nodeId: identity.nodeId, connected: instance?.connected ?? false, agents: instance?.agents ?? [] } });
+    return true;
+  }
+  if (request.method === "GET" && requestUrl.pathname === "/api/lan-agent/capabilities") {
+    if (nodeAccess.kind !== "agent" && !context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    context.jsonResponse(response, 200, { code: 0, operations: listAgentApiOperations(), resources: "/api/lan-agent/resources" });
+    return true;
+  }
+  if (request.method === "GET" && ["/api/lan-agent/resources", "/api/lan-agent/resources/read"].includes(requestUrl.pathname)) {
+    if (nodeAccess.kind !== "agent" && !context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    if (!context.resources) { context.jsonResponse(response, 503, { code: -1, message: "Agent resources unavailable." }); return true; }
+    const work = requestUrl.pathname.endsWith("/read") ? context.resources.read(requestUrl.searchParams.get("id") ?? "") : context.resources.list();
+    void work.then(data => context.jsonResponse(response, 200, { code: 0, data }))
+      .catch(() => context.jsonResponse(response, 400, { code: -1, message: "Agent resource is unavailable or disallowed." }));
+    return true;
+  }
+  if (requestUrl.pathname === "/api/lan-agent/enrollments" && request.method === "POST" && context.authority) {
+    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    response.setHeader("cache-control", "no-store");
+    context.jsonResponse(response, 201, { code: 0, data: context.authority.issueBootstrapTicket() });
+    return true;
+  }
+  if (requestUrl.pathname === "/api/lan-agent/enroll" && request.method === "POST" && context.authority) {
+    if (context.enabled?.() !== true) { agentUnauthorized(response, context); return true; }
+    response.setHeader("cache-control", "no-store");
+    void context.readJsonBody<Record<string, unknown>>(request).then(body => {
+      const credential = context.authority!.enroll(String(body.ticket ?? ""), String(body.nodeId ?? ""));
+      context.jsonResponse(response, 201, { code: 0, data: credential });
+    }).catch(() => context.jsonResponse(response, 400, { code: -1, message: "Enrollment failed. Inspect node status before obtaining another ticket; do not replay an uncertain enrollment." }));
+    return true;
+  }
   if (requestUrl.pathname === "/api/lan-agent/instances" && request.method === "GET") {
     if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
-    context.jsonResponse(response, 200, { code: 0, instances: context.registry.listInstances(context.localAgents?.()) });
+    const authorization = context.authority?.getSnapshot();
+    if (authorization) response.setHeader("etag", `"${authorization.revision}"`);
+    context.jsonResponse(response, 200, { code: 0, instances: context.registry.listInstances(context.localAgents?.()), authorization });
+    return true;
+  }
+  const grantMatch = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/agents\/([^/]+)\/authorization$/);
+  if (grantMatch && request.method === "PUT" && context.authority) {
+    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context); return true; }
+    const etag = request.headers["if-match"];
+    if (typeof etag !== "string" || !/^"[a-f0-9]{64}"$/.test(etag)) {
+      context.jsonResponse(response, 428, { code: -1, message: "Read the instance catalog and supply its strong If-Match revision." }); return true;
+    }
+    const idempotencyKey = request.headers["idempotency-key"];
+    if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
+      context.jsonResponse(response, 428, { code: -1, message: "Supply a stable Idempotency-Key (8-128 safe characters)." }); return true;
+    }
+    void context.readJsonBody<Record<string, unknown>>(request).then(body => {
+      const nodeId = decodeURIComponent(grantMatch[1]!);
+      const agentId = decodeURIComponent(grantMatch[2]!);
+      if (typeof body.enabled !== "boolean") throw new Error("Invalid grant.");
+      const validateBinding = (): void => {
+        if (!context.registry.getInstanceAgent(nodeId, agentId)) throw new Error("Unknown instance Agent.");
+        if (body.enabled) {
+          const current = context.registry.getInstanceAgent(nodeId, agentId)!;
+          const binding = body.binding as Partial<InstanceAgent> | undefined;
+          if (!binding || binding.provider !== current.provider || binding.sessionId !== current.sessionId
+            || JSON.stringify(binding.managedSessionIds ?? []) !== JSON.stringify(current.managedSessionIds ?? [])) {
+            throw new Error("Agent binding changed; refresh and explicitly approve its current session before enabling.");
+          }
+        }
+      };
+      const receipt = context.authority!.mutateAgentAuthorization({ nodeId, agentId, enabled: body.enabled,
+        ...(body.binding !== undefined ? { binding: { ...(body.binding as InstanceAgent), agentId } } : {}),
+        expectedRevision: etag.slice(1, -1), idempotencyKey, validateBinding });
+      response.setHeader("idempotency-key", idempotencyKey);
+      const snapshot = context.authority!.getSnapshot();
+      response.setHeader("etag", `"${snapshot.revision}"`);
+      context.jsonResponse(response, 200, { code: 0, authorization: snapshot, receipt });
+    }).catch(error => context.jsonResponse(response, errorMessage(error).includes("revision conflict") ? 412 : errorMessage(error).includes("idempotency conflict") ? 409 : 400, { code: -1, message: errorMessage(error) }));
     return true;
   }
   const instanceAction = requestUrl.pathname.match(/^\/api\/lan-agent\/instances\/([^/]+)\/agents(?:\/([^/]+)\/(tasks|configure|scan|threads|hooks|context))?$/);
   if (instanceAction && request.method === "POST") {
-    if (!context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
+    const ownHook = nodeAccess.kind === "agent" && instanceAction[3] === "context"
+      && decodeURIComponent(instanceAction[1]!) === nodeAccess.nodeId && decodeURIComponent(instanceAction[2] ?? "") === nodeAccess.agentId;
+    if (!ownHook && !context.isManagementRequestAuthorized(request, requestUrl)) { agentUnauthorized(response, context, "LAN_AGENT_MANAGEMENT_AUTH_REQUIRED"); return true; }
     void context.readJsonBody<Record<string, unknown>>(request).then(async body => {
       const instanceId = decodeURIComponent(instanceAction[1]!);
       const agentId = instanceAction[2] ? decodeURIComponent(instanceAction[2]) : undefined;

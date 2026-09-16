@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type http from "node:http";
 import test from "node:test";
 import type { AgentRequestStore } from "../agentRequests/store.js";
+import { registerLanAgentBodyGuard } from "./lanAgentBodyAuthority.js";
 import type {
   AgentThreadRequest,
   AgentThreadRequestOptions,
@@ -51,6 +52,30 @@ function context(overrides: Partial<AgentThreadControlRoutesContext> = {}): Agen
     ...overrides
   };
 }
+
+test("remote thread requests without trusted session never fall back to local authority", async () => {
+  for (const method of ["GET", "POST"]) {
+    const req = request(method);
+    registerLanAgentBodyGuard(req, () => undefined);
+    let invoked = false;
+    const statuses: number[] = [];
+    const routes = createAgentThreadControlRoutes(context({
+      getTrustedRemoteSource: () => undefined,
+      readJsonBody: async <T>() => ({ action: "send", remoteSource: { sessionId: "forged" } } as T),
+      handleAgentThreadRequest: async () => {
+        invoked = true;
+        return { statusCode: 200, data: { ok: true } };
+      },
+      jsonResponse: (_response, status) => { statuses.push(status); }
+    }));
+    const res = response();
+    routes.handler(req, new URL("http://localhost/api/agent/threads"), res);
+    res.emit("close");
+    await routes.stopAcceptingAndDrain();
+    assert.equal(invoked, false);
+    assert.deepEqual(statuses, [400]);
+  }
+});
 
 test("thread drain waits for body parsing and thread work after response close", async () => {
   const body = deferred<AgentThreadRequest>();
