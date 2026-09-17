@@ -1,8 +1,9 @@
 import type { PlanItem, PlanTaskBinding } from "../roleKnowledge.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
+import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 
 export type PlanTaskDeliveryTarget = {
-  agentAdapter: "codex" | "dsh";
+  agentAdapter: PlanAssistantAgentType;
   threadId: string;
   title: string;
   cwd: string;
@@ -19,9 +20,12 @@ export function planTaskDeliveryTarget(plan: PlanItem): PlanTaskDeliveryTarget |
   const binding = plan.taskBinding;
   const threadId = binding?.sessionId.trim() || "";
   const cwd = binding?.workspace?.trim() || "";
-  if (!threadId || !cwd) return null;
+  if (!binding || !threadId || !cwd) return null;
   return {
-    agentAdapter: binding?.agentType === "dsh" ? "dsh" : "codex",
+    // Carry the bound owner through unchanged. The old `=== "dsh" ? "dsh" :
+    // "codex"` form silently relabelled every other adapter as Codex, which
+    // would deliver a plan step into a Codex task that has nothing to do with it.
+    agentAdapter: binding.agentType,
     threadId,
     title: binding?.sessionTitle?.trim() || plan.title,
     cwd,

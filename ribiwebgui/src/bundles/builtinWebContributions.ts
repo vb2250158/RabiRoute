@@ -52,9 +52,9 @@ export function activateCore(api: BaseWebBundleApi): readonly Dispose[] {
       },
       {
         routeId: "global.lan-agents", rendererId: "builtin.web-page.lan-agents.v1",
-        loader: () => import("../pages/LanAgentsPage.vue"),
-        paths: [{ path: "/lan-agents", title: "远端 Agent" }],
-        navigation: { resolvePath: () => "/lan-agents", allowedSlots: ["utility"], allowedIcons: ["mdi-lan-connect"] }
+        loader: () => import("../pages/RabiLinkPage.vue"),
+        paths: [{ path: "/rabilink", title: "RabiLink" }],
+        navigation: { resolvePath: () => "/rabilink", allowedSlots: ["utility"], allowedIcons: ["mdi-lan-connect"] }
       },
       {
         routeId: "global.settings", rendererId: "builtin.web-page.settings.v1",

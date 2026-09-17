@@ -103,3 +103,71 @@ Waveform validation: 148 Android tests and APK assembly passed, including callba
 0.3.38-dev (41) supports multiple saved computers in the device center, each with its own card. Existing connections migrate automatically; reconnecting updates the original card. Opening a card verifies and selects that computer. Returning refreshes the list. One computer is the active message and recording target. Scalar connection settings remain the current transport projection; the list stores saved connections.
 
 Multiple-computer validation: 152 Android unit tests and the APK build passed. USB disconnected before installation, so this build has not been installed or validated with multiple computers on the phone. Recording paused before installation has not yet resumed.
+
+0.3.39-dev (42) uses a back-arrow icon and title in the first row, followed by a fixed toolbar containing Recording settings and Add device. Scrollable two-column device cards appear below. The Add computer tile is removed. Add device offers computers, glasses and wearables.
+
+Validation: 0.3.39-dev (42) is installed on the phone. The second-row toolbar, Add device selector, recording settings dialog and back icon passed interaction checks. All 152 Android tests, APK and root builds passed. Recording resumed with a live waveform. Multiple-computer persistence is unit-tested; a second physical computer has not been tested online.
+
+0.3.40-dev (43) places a 24dp close icon with a 48dp touch target at the top right. Closing returns to recording without stopping capture. The second-row toolbar is unchanged; the old back-arrow resource is removed.
+
+Close-button validation: 0.3.40-dev is installed. Tapping the top-right close icon returned to recording while capture and the live waveform continued. Android tests and the APK build passed. The root build is blocked by Manager controlPlaneRoutes.ts type errors; no full release was published.
+
+0.3.41-dev (44) shows one computer card. Opening it fetches computers from the current RabiLink server; selecting one updates the active target after server confirmation. The toolbar adds RabiLink configuration. Add device contains glasses and wearables only. One server supports multiple computers; the phone selects one at a time. Saved connections remain for current-computer names and compatibility, without separate cards.
+
+Validation: 0.3.41-dev is installed. The phone fetched two RabiLink computers and the current selection. Re-selecting the current computer, returning from RabiLink configuration and the glasses/wearables-only Add device menu passed interaction checks. All 152 Android tests and the APK build passed. The root build candidate was revoked because Web sources changed concurrently.
+
+0.3.42-dev (45) removes the computer dropdown and selection button from RabiLink configuration. Computer selection is available through the device center computer card.
+
+0.3.43-dev (46) uses compact recording-setting rows with descriptions and ranges collapsed under help buttons. Slider ranges, steps, save and reset behavior remain unchanged. Backgrounds, text, buttons and sliders use existing shared theme tokens; the close icon also follows the light/dark theme.
+
+Compact-settings validation: 0.3.43-dev is installed; expanding help and saving passed phone interaction checks. All 152 Android tests and the APK build passed. Manager type errors blocked the root build.
+
+0.3.44-dev (47) uses a 20dp circular question-mark vector icon for recording help, without a square background. Its 48dp touch target and theme-aware color are retained.
+
+Circular-help validation: 0.3.44-dev is installed. The phone shows circular icons without square backgrounds, and help expands correctly. All 152 Android tests and the APK build passed; recording resumed. The root build failed, so no full release was published.
+
+## ASR computer priority (0.3.45-dev)
+
+The device toolbar adds ASR settings. It lists computers advertising ASR within the current RabiLink application. Long-press a drag handle to reorder, then save the order to the server. Transcription tries online computers in priority order, proceeding to the next on connection or transcription failure. Audio remains local for retry when all candidates fail. Message handling keeps its independent computer selection.
+
+RabiLink provides discovery and authenticated signalling. Audio tries LAN, then P2P, then encrypted relay. Sessions are reused; pinned peers can reconnect over LAN directly. An in-memory directory refreshes every 30 seconds and retains known peers on failure; initial discovery after application restart still requires the server. Completed mobile events persist transcription before acknowledging audio shards, allowing receipt recovery after a crash. Disabling speech sharing denies automatic speech grants.
+
+Acceptance: 157 Android tests pass. Device tests verify WAV transcription over LAN, P2P and server relay; the relay test explicitly selects that transport without changing product selection order. An isolated synthetic event verifies durable transcription and shard acknowledgement without reading existing recordings. Only one real ASR computer is online; physical multi-computer failover remains unverified, while ordering, offline fallback and application isolation have automated coverage. Pinned keys use normalized PEM; Android and Node share canonical signed payload encoding.
+
+New transcription events bind to the RabiLink application independently of the message computer. Changing applications does not migrate old events. Historical Agent processing retains its existing target bindings and upload contract to avoid redispatching messages.
+
+
+## Recording card transcription (0.3.46-dev)
+
+Saving a nonempty ASR list enables transcription for new recordings and enrolls retained local events for backfill. Agent recordings and ASR bindings from other RabiLink applications are not reassigned. Cards show pending, processing, retry, or transcript text; results also refresh during history playback without changing playback state.
+
+Backfill also groups legacy local audio without event IDs into batches of up to about one minute. Enrollment is bounded per batch. Receipt recovery indexes PCM files once instead of rescanning the directory for every acknowledgement.
+
+All-day recording removes the unscoped audio entry point and capture-level PC transcript queries. Startup retires unscoped historical uploads from scheduling indexes without redispatching their files. Transcript cards read durable per-event results.
+
+All-day recording no longer runs legacy upload-cache cleanup after acknowledgements. Journal maintenance scans at most once per minute unless near capacity, avoiding long file-lock contention between backfill and microphone writes.
+
+Device acceptance for 0.3.46-dev: ASR settings save/readback passes; cards display actual per-event text and no-speech results. Continuous capture works during backfill. All 156 Android tests and APK builds pass. The root build is blocked by type errors in `dshHttpAuth.ts`; this iteration does not publish a full PC package.
+
+
+## Storage management (0.3.47-dev)
+
+The second device-toolbar row opens Storage management. It shows total local recording file size, split into audio, video, transcripts, recording indexes/logs, and playback/export caches, plus available device storage. Units are decimal KB/MB/GB (1 GB = 1000 MB). Background scans include files currently being written. Refresh rescans; unreadable files produce an incomplete-statistics notice. This entry does not modify or delete files.
+
+0.3.47-dev validation: 158 Android unit tests, APK build, and root build passed. Device instrumentation verified navigation from the timeline, touch opening, displayed totals, and refresh.
+
+## Resource cache service (0.3.48-dev)
+
+Desktop WebGUI Settings → Resource cache service sets an absolute writable directory. New objects use the new directory; existing indexes retain their original locations. Desktop objects are durable and are not automatically evicted.
+
+Mobile Storage management independently enables computer caching and chooses 0–168 hours of local retention (0 evicts after desktop confirmation) (disabled by default; 24 hours initially). Only verified desktop copies permit local eviction. Pending audio processing and video audio derivation retain their source media. Timeline metadata and transcripts remain. Playback buffers verified downloads locally; an unavailable PC produces a retryable error without removing indexes. Replay files unused for over 24 hours are removed on cache access.
+
+The separate resources grant does not require ASR. RabiLink bootstraps authentication, followed by LAN, P2P, then Relay fallback. Objects are split into at most 1 MiB blocks. Receipts follow fsync, atomic publication, and device-scoped indexing. Changing paths or the selected PC preserves old resource ownership.
+
+Playback currently downloads a complete segment before starting, so large videos take longer to buffer initially. Version 0.3.48-dev validation: 158 Android unit tests, 17 backend tests, and the full build passed. Device tests over LAN verified synthetic resource upload, download after removing the local test copy, corrupt-cache recovery, and storage totals and refresh. Desktop settings save/readback and deployed asset identity passed. WebGUI visual validation remains incomplete because the browser tool disconnected.
+
+## Recording screen layout (0.3.49-dev)
+
+A full-width 16:9 preview replaces the separate title bar. Tapping shows or hides recording, device access, runtime status, current time, and playback controls. A thin ticked timeline and track legend overlay the preview bottom, retaining dragging and pinch zoom. Existing information remains available in the compact toolbar or overlay. Controls never change layout height, and scrubbing preserves playback state.
+
+The top controls use a transparent background, with live or replay time at the upper left. Redundant paused and capture-status labels are omitted.

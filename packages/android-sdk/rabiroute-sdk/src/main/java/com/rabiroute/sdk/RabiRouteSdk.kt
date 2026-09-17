@@ -77,6 +77,8 @@ data class RabiLinkMobileState(
     val rawJson: JSONObject
 )
 
+data class RabiLinkAsrSettings(val workers: List<RabiLinkPc>, val selectedWorkerId: String)
+
 data class RabiLinkDeviceStatus(
     val batteryLevel: Int,
     val charging: Boolean,
@@ -618,6 +620,15 @@ class RabiRouteSdk @JvmOverloads constructor(
             readTimeoutMs = 10000
         )
         return mobileStateFromJson(json)
+    }
+
+    fun mobileAsrSettings(relayBaseUrl: String, token: String, priority: List<String>? = null): RabiLinkAsrSettings {
+        val json = requestJson("${relayBaseUrl.trimEnd('/')}/api/rabilink/mobile/asr-settings",
+            if(priority == null) "GET" else "PATCH",
+            priority?.let { JSONObject().put("priority", JSONArray(it)).toString() },
+            mapOf("X-RabiLink-Token" to token), readTimeoutMs = 10000)
+        val rows = json.getJSONArray("workers")
+        return RabiLinkAsrSettings((0 until rows.length()).map { rabiLinkPcFromJson(rows.getJSONObject(it)) }, json.optString("selectedWorkerId"))
     }
 
     fun getMobileRoutes(relayBaseUrl: String, token: String, targetDeviceId: String = ""): List<RabiRouteInfo> =

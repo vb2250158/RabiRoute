@@ -42,8 +42,8 @@ android {
         testInstrumentationRunner "com.rabi.link.test.DirectVideoInstrumentation"
         // The thin-phone package must always be an installable upgrade over
         // the prior diagnostic build.  Keep the normal build metadata intact.
-        versionCode mobileSlim ? 41 : 4
-        versionName mobileSlim ? "0.3.38-dev" : "0.3.1"
+        versionCode mobileSlim ? 52 : 4
+        versionName mobileSlim ? "0.3.49-dev" : "0.3.1"
         buildConfigField "boolean", "MOBILE_SLIM", mobileSlim ? "true" : "false"
         buildConfigField "boolean", "ROKID_VIDEO", (!mobileSlim || rokidVideo) ? "true" : "false"
         buildConfigField "String", "BUILD_TIME", "\"${new Date().format("yyyy-MM-dd HH:mm:ss Z")}\""
@@ -141,6 +141,8 @@ tasks.register("copyGlassVideoDebugApk", Copy) {
 }
 
 dependencies {
+    implementation "org.java-websocket:Java-WebSocket:1.6.0"
+    implementation "org.bouncycastle:bcprov-jdk18on:1.77"
     implementation "androidx.media3:media3-exoplayer:1.3.1"
     implementation "androidx.media3:media3-exoplayer-rtsp:1.3.1"
     implementation "androidx.media3:media3-ui:1.3.1"
@@ -156,10 +158,12 @@ dependencies {
         if (rokidVideo) {
             implementation("com.rokid.security:phone.sdk:2.5.1-P") {
                 exclude group: "org.slf4j"
+                exclude group: "org.bouncycastle", module: "bcprov-jdk15on"
             }
         } else {
             compileOnly("com.rokid.security:phone.sdk:2.5.1-P") {
                 exclude group: "org.slf4j"
+                exclude group: "org.bouncycastle", module: "bcprov-jdk15on"
             }
         }
         compileOnly(name: "basic-1.4.3", ext: "aar")
@@ -169,6 +173,12 @@ dependencies {
     } else {
         implementation("com.rokid.security:phone.sdk:2.5.1-P") {
             exclude group: "org.slf4j"
+            // Rokid 链会传递引入 bcprov-jdk15on:1.69，与上面显式声明的
+            // bcprov-jdk18on:1.77 是两个不同 artifact 坐标，Gradle 冲突解析
+            // 不会合并它们，导致同名类与同名 .properties 资源在打包时撞车。
+            // jdk18on 是 jdk15on 的官方继任者且已包含 TunnelCrypto 需要的全部
+            // 类，因此排除旧坐标即可。
+            exclude group: "org.bouncycastle", module: "bcprov-jdk15on"
         }
         implementation(name: "basic-1.4.3", ext: "aar")
         implementation(name: "turenso-1.4.3", ext: "aar")

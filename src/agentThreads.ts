@@ -45,6 +45,11 @@ import {
 import { normalizeCodexThreadTitle } from "./shared/codexThreadTitle.js";
 import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPolicy.js";
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
+import { readAntigravitySession } from "./antigravitySessionStore.js";
+import {
+  isPlanAssistantAgentType,
+  type PlanAssistantAgentType
+} from "./shared/agentAdapterCapabilities.js";
 import { normalizePathForComparison } from "./shared/pathPolicy.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
 import { agentAdapterSupportsReceiptRecovery } from "./shared/agentAdapterCapabilities.js";
@@ -69,6 +74,8 @@ const defaultListLimit = 100;
 const maxResolveCandidates = 10_000;
 
 export type AgentThreadRequest = {
+  /** Explicit local owner selection; remote requests use instanceBinding. */
+  agentTargetId?: string;
   instanceBinding?: AgentInstanceBinding;
   action?: "list" | "read" | "reconcile_delivery" | "open" | "resolve" | "create" | "rename" | "send";
   agentAdapter?: AgentAdapterType;
@@ -151,7 +158,12 @@ export type AgentThreadDriver = {
     threadId: string;
     action: "started" | "steered";
     openedThread: boolean;
-    transport: "desktop-ipc" | "http";
+    /**
+     * How the prompt reached the host. `agentapi` is Antigravity's own CLI
+     * subcommand channel, which is neither the desktop IPC pipe nor a plain
+     * HTTP session endpoint.
+     */
+    transport: "desktop-ipc" | "http" | "agentapi";
     warning?: string;
   }>;
 };
@@ -160,7 +172,7 @@ export type AgentThreadDriver = {
 export type AgentThreadRemoteSource = {
   nodeId: string;
   agentId: string;
-  provider: "codex" | "dsh";
+  provider: AgentAdapterType;
   sessionId: string;
   sessionName: string;
   workspace?: string;
@@ -404,7 +416,44 @@ function normalizeThreadId(value: unknown): string {
   return threadId;
 }
 
-type ThreadCapableAgentAdapter = "codex" | "dsh";
+type ThreadCapableAgentAdapter = PlanAssistantAgentType;
+
+/**
+ * Identify the adapter that owns a thread id, when the id alone is conclusive.
+ *
+ * Only DSH's `session-` prefix is self-identifying. A bare UUID is deliberately
+ * *not* mapped to Codex here: Antigravity conversation ids use the same form, so
+ * treating the shape as evidence of Codex would silently misattribute every
+ * Antigravity session. Callers that need the owner must supply `agentAdapter`.
+ */
+function inferredThreadAdapter(threadId: string): ThreadCapableAgentAdapter | undefined {
+  return isDshSessionId(threadId) ? "dsh" : undefined;
+}
+
+/**
+ * Delivery receipt attribution for an adapter.
+ *
+ * This used to be a binary `dsh ? ... : codex` branch, which quietly reported
+ * every non-DSH adapter as Codex. Antigravity delivers through the host's own
+ * `agy agentapi` CLI, so calling it `codex_desktop_owner`/`desktop-ipc` would
+ * have written a false audit trail. Keep the table adapter-keyed so a new
+ * adapter adds one row instead of silently inheriting Codex's identity.
+ */
+function deliveryReceiptAttribution(agentAdapter: ThreadCapableAgentAdapter): {
+  acceptedBy: string;
+  transport: "desktop-ipc" | "http" | "agentapi";
+} {
+  switch (agentAdapter) {
+    case "dsh":
+      return { acceptedBy: "dsh_session_owner", transport: "http" };
+    case "antigravity":
+      return { acceptedBy: "antigravity_agentapi_owner", transport: "agentapi" };
+    case "workbuddy":
+      return { acceptedBy: "workbuddy_session_owner", transport: "http" };
+    default:
+      return { acceptedBy: "codex_desktop_owner", transport: "desktop-ipc" };
+  }
+}
 
 function threadAgentAdapter(request: Pick<AgentThreadRequest, "agentAdapter" | "threadId">): ThreadCapableAgentAdapter {
   const rawAdapter = request.agentAdapter == null ? "" : String(request.agentAdapter);
@@ -412,18 +461,16 @@ function threadAgentAdapter(request: Pick<AgentThreadRequest, "agentAdapter" | "
   if (rawAdapter && !explicit) {
     throw new Error(`Invalid agentAdapter: ${rawAdapter}`);
   }
-  if (explicit && explicit !== "codex" && explicit !== "dsh") {
+  if (explicit && !isPlanAssistantAgentType(explicit)) {
     throw new Error(`Agent thread operations are not supported for agentAdapter=${explicit}.`);
   }
   const rawThreadId = typeof request.threadId === "string" ? request.threadId.trim() : "";
-  const inferred = isDshSessionId(rawThreadId)
-    ? "dsh"
-    : isCodexTaskId(rawThreadId)
-      ? "codex"
-      : undefined;
+  const inferred = inferredThreadAdapter(rawThreadId);
   if (explicit && inferred && explicit !== inferred) {
     throw new Error(`agentAdapter=${explicit} conflicts with threadId owner=${inferred}.`);
   }
+  // A self-identifying id wins only when no adapter was named; otherwise Codex is
+  // the historical default for callers that predate adapter tagging.
   return explicit || inferred || "codex";
 }
 
@@ -436,7 +483,9 @@ async function readAgentThreadForAdapter(
   if (driver !== defaultDriver) return readAgentThread(threadId, driver);
   const value = adapter === "dsh"
     ? await readDshSession(threadId, dshBaseUrlFor(options))
-    : await readCodexThread(threadId);
+    : adapter === "antigravity"
+      ? readAntigravitySession(threadId)
+      : await readCodexThread(threadId);
   return { value, summary: threadSummary(value) };
 }
 
@@ -1704,6 +1753,7 @@ async function executeAgentThreadRequest(
     const acceptedReceipt = acceptedDelivery && typeof acceptedDelivery === "object"
       ? acceptedDelivery
       : undefined;
+    const receiptAttribution = deliveryReceiptAttribution(targetAgentAdapter);
     let messageProcessingWarning: string | undefined;
     let agentRequestWarning: string | undefined;
     let committedAgentRequest: ReturnType<AgentRequestStore["commit"]> | undefined;
@@ -1741,9 +1791,9 @@ async function executeAgentThreadRequest(
           status: "delivered",
           targetThreadId: threadId,
           deliveryId: agentCommunication?.deliveryId ?? standaloneDeliveryId,
-          acceptedBy: targetAgentAdapter === "dsh" ? "dsh_session_owner" : "codex_desktop_owner",
+          acceptedBy: receiptAttribution.acceptedBy,
           action: acceptedReceipt?.action ?? "accepted",
-          transport: acceptedReceipt?.transport ?? (targetAgentAdapter === "dsh" ? "http" : "desktop-ipc"),
+          transport: acceptedReceipt?.transport ?? receiptAttribution.transport,
           ...(acceptedReceipt ? { openedThread: acceptedReceipt.openedThread } : {}),
           ...(acceptedReceipt?.warning ? { warning: acceptedReceipt.warning } : {})
         },

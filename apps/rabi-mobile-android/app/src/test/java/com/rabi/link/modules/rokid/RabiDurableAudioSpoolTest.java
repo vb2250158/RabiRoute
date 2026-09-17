@@ -26,6 +26,94 @@ import static org.junit.Assert.assertTrue;
 public final class RabiDurableAudioSpoolTest {
     @Rule public final TemporaryFolder temporary = new TemporaryFolder();
 
+    @Test public void transcriptionQueueDoesNotWaitForOrDispatchLegacyAgentAudio() throws Exception {
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        spool.append(new byte[8], "phone", "route"); spool.sealCapture();
+        spool.setAsrEndpointIdentity("asr:account"); spool.bindCaptureEndpoint("asr", "asr:account");
+        spool.append(new byte[8],"phone","","asr","transcribe",1000,"received","event"); spool.sealCapture();
+        assertEquals("agent",spool.nextUpload().processingPolicy);
+        assertEquals("event",spool.nextTranscriptionUpload().eventId);
+        spool.retireUnscopedUploads();
+        assertEquals("event",spool.nextUpload().eventId);
+        spool.close();
+    }
+
+    @Test public void explicitBackfillAssignsBoundedEventsToLegacyLocalAudio() throws Exception {
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        spool.bindCaptureEndpoint("legacy", "old-message"); spool.setAsrEndpointIdentity("asr:account");
+        spool.append(new byte[16],"phone","","legacy","local_only"); spool.sealCapture();
+        assertTrue(spool.enrollLocalEventsForAsr(2000,"asr:account",""));
+        RabiDurableAudioSpool.Segment head = spool.nextUpload();
+        assertTrue(head.eventId.startsWith("backfill-"));
+        assertEquals(2,spool.transcriptionEvent(head).size());
+        spool.close();
+    }
+
+    @Test public void explicitBackfillEnqueuesRetainedLocalEventAndSurvivesRestart() throws Exception {
+        File root = temporary.newFolder();
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(root, policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        spool.setEndpointIdentity("message"); spool.bindCaptureEndpoint("local", "message");
+        spool.setAsrEndpointIdentity("asr:account");
+        spool.append(new byte[8],"phone","","local","local_only",1000,"received","event");
+        spool.sealCapture();
+        assertNull(spool.nextUpload());
+        assertFalse(spool.enrollLocalEventsForAsr(2000,"asr:account","local"));
+        assertNull(spool.nextUpload());
+        assertTrue(spool.enrollLocalEventsForAsr(2000,"asr:account",""));
+        assertEquals("transcribe",spool.nextUpload().processingPolicy);
+        assertEquals(1,spool.transcriptionEvent(spool.nextUpload()).size());
+        spool.close();
+        RabiDurableAudioSpool recovered = new RabiDurableAudioSpool(root, policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        recovered.setAsrEndpointIdentity("asr:account");
+        assertNotNull(recovered.nextUpload());
+        recovered.setAsrEndpointIdentity("asr:other");
+        recovered.enrollLocalEventsForAsr(2000,"asr:other","");
+        assertNull(recovered.nextUpload());
+        assertEquals("asr:account",recovered.captureEndpointIdentity("local"));
+        recovered.close();
+    }
+
+    @Test public void transcriptionBindingUsesAccountWithoutMessageTargetOrRoute() throws Exception {
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        spool.setAsrEndpointIdentity("asr:account"); spool.bindCaptureEndpoint("capture","asr:account");
+        spool.append(new byte[8],"phone","","capture","transcribe",1000,"received","event");
+        spool.sealCapture(); assertNotNull(spool.nextUpload());
+        spool.setEndpointIdentity("another-message-computer"); assertNotNull(spool.nextUpload());
+        spool.setAsrEndpointIdentity("asr:another-account"); assertNull(spool.nextUpload());
+        spool.close();
+    }
+
+    @Test public void nextEventCompletesPriorEventAtExactStorageBoundary() throws Exception {
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(temporary.newFolder(), policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        spool.setEndpointIdentity("account"); spool.bindCaptureEndpoint("capture", "account");
+        assertTrue(spool.append(new byte[8],"phone","route","capture","transcribe",1000,"received","first").accepted);
+        RabiDurableAudioSpool.Segment first = spool.nextUpload();
+        assertTrue(spool.transcriptionEvent(first).isEmpty());
+        assertTrue(spool.append(new byte[2],"phone","route","capture","transcribe",1001,"received","second").accepted);
+        assertEquals(1,spool.transcriptionEvent(first).size());
+        spool.close();
+    }
+
+    @Test public void asrWaitsForCompleteEventAndRecoversReceiptBeforeAcknowledgements() throws Exception {
+        File root = temporary.newFolder();
+        RabiDurableAudioSpool spool = new RabiDurableAudioSpool(root, policy(8), () -> 1000L, file -> Long.MAX_VALUE);
+        spool.setEndpointIdentity("account"); spool.bindCaptureEndpoint("capture", "account");
+        assertTrue(spool.append(new byte[12],"phone","route","capture","transcribe",1000,"received","event").accepted);
+        RabiDurableAudioSpool.Segment head = spool.nextUpload();
+        assertNotNull(head); assertTrue(spool.transcriptionEvent(head).isEmpty());
+        spool.sealCapture();
+        assertEquals(2,spool.transcriptionEvent(head).size());
+        spool.saveEventReceipt("event",new JSONObject().put("eventId","event").put("text","fixture"));
+        RabiDurableAudioSpool.Segment assigned = spool.assignServerSequence(head,head.sequence);
+        spool.acknowledge(assigned.id,assigned.sequence,assigned.bytes,assigned.sha256);
+        spool.close();
+        RabiDurableAudioSpool recovered = new RabiDurableAudioSpool(root,policy(8),()->1000L,file->Long.MAX_VALUE);
+        recovered.setEndpointIdentity("account");
+        assertEquals("fixture",recovered.eventReceipt("event").getString("text"));
+        assertEquals(1,recovered.transcriptionEvent(recovered.nextUpload()).size());
+        recovered.close();
+    }
+
     @Test public void eventIdentitySurvivesShardsAndCrashRecovery() throws Exception {
         File root = temporary.newFolder();
         AtomicLong now = new AtomicLong(1000L);

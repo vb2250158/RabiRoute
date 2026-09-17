@@ -6,7 +6,7 @@ English | <a href="./rabilink-wearable-health.md">简体中文</a>
 
 # RabiLink wearable health endpoint
 
-> Status: **experimental integration with a closed real-device primary path**. The timeline, Manager query API, alert route, RibiWebGUI endpoint, Android settings UI, Health Connect source, and PC ADB Companion are implemented. On the tested Xiaomi phone, mobile-owned settings now drive continuous local-Provider heart-rate and sleep ingestion. Xiaomi Health still leaves Health Connect empty on that phone; direct MiWear SPP collection, which would contend with the official app connection, is not the default collector.
+> Status: **experimental integration with a closed real-device primary path**. The timeline, Manager query API, alert route, RibiWebGUI endpoint, Android settings UI, Health Connect source, and PC ADB Companion are implemented. On the tested Xiaomi phone, mobile-owned settings now drive continuous local-Provider heart-rate and sleep ingestion. Phone-side Health Connect collection now includes steps, aggregated per local calendar day; whether Xiaomi Health writes steps into Health Connect depends on the vendor upstream. Xiaomi Health still leaves Health Connect empty on that phone; direct MiWear SPP collection, which would contend with the official app connection, is not the default collector.
 
 ## All-day recording integration (Unreleased)
 
@@ -42,30 +42,21 @@ Agent / proactive intelligence
 
 Ordinary samples do not enter the conversation ledger and do not wake the Agent. Only rule matches become Agent events.
 
-## Enable the endpoint
+## Mobile settings
 
-Add “Wearable health” in the RibiWebGUI Route editor. The equivalent configuration is:
-
-```json
-{
-  "messageAdapters": ["rolePanel", "rabilink", "wearable"],
-  "messageAdapterPolicies": {
-    "wearable": {
-      "inputEnabled": true,
-      "outputEnabled": false,
-      "supportedOutputs": ["text"]
-    }
-  }
-}
-```
-
-Enable a `wearable_health_alert` persona rule. Runnable examples live in `examples/data/route/RabiLink/adapterConfig.json` and `examples/data/roles/RabiActive/personaConfig.json`.
+Configure watches, bands, and glasses in mobile recording; do not add separate PC device endpoints. See [mobile recording ownership](mobile-recording-event-boundary_en.md) for delivery status and legacy migration.
 
 ## Phone settings
 
-Open “Wearable health” and select either Health Connect or “Xiaomi Health (PC ADB Companion)”, then set the stable device ID/name/kind, event-triggered lookback window, high/low heart-rate thresholds, cooldown, and sleep-state alerts. Health Connect is read once after an explicit user/startup/platform event; the phone no longer runs a periodic health query. ADB Companion uses the phone settings as its source of truth and runs as a Host-owned Manager plugin worker on the paired Rabi PC.
+Open “Wearable health” and select either Health Connect or “Xiaomi Health (PC ADB Companion)”, then set the stable device ID/name/kind, event-triggered lookback window, high/low heart-rate thresholds, cooldown, and sleep-state alerts. On the Health Connect page, grant heart rate, sleep, and steps. Steps is an optional type added later: a phone that already granted heart rate and sleep must re-tick “Steps” there. Health Connect is read once after an explicit user/startup/platform event; the phone no longer runs a periodic health query. ADB Companion uses the phone settings as its source of truth and runs as a Host-owned Manager plugin worker on the paired Rabi PC.
 
 An obtained Xiaomi authentication key may be saved in the password field. Android Keystore protects it with AES-GCM; it is reserved for a future direct-vendor collector and is not uploaded. Neither source invents records when its upstream is empty, and the PC Companion never reads the Keystore secret.
+
+### Health Connect steps
+
+Steps come from the system `StepsRecord` and are read in the same Health Connect pass as heart rate and sleep; no extra polling, scheduled task, or background service is added. Health Connect stores steps as many cumulative segments, and re-reading the same day yields different segment boundaries. The phone therefore aggregates the day's cumulative count by **local calendar day** and reports it under the segment-independent stable ID `health-connect-steps-<date>`; a re-read of the same day is deduplicated downstream by that ID instead of double-counting. Steps do not participate in heart-rate threshold or sleep-state alerts.
+
+Whether Xiaomi Health writes steps into Health Connect depends on the vendor upstream; the app never fabricates step data. The Provider `step` category is still not a collection source, and the phone's “Xiaomi Health (PC ADB Companion)” source reads heart rate and sleep only.
 
 ## Xiaomi ADB Companion
 
@@ -92,14 +83,7 @@ If the phone has not enabled ADB Companion or ADB is temporarily unavailable, th
 
 A child-process `error` event is not proof of exit. Until a real `exit` / `close` event or exit code exists, the process lease retains the global worker key and a replacement plugin generation cannot start another worker. A failed stop keeps the old lease, allows the same handle to retry, and makes handoff fail closed; an asynchronous pidless spawn error is observed by the lease layer and enters bounded retry instead of becoming an unhandled event that terminates Manager.
 
-Threshold alerts use a dedicated `wearable` route to reach the Agent without starting unrelated QQ or FenneNote adapters. Inspect first, then configure explicitly:
-
-```powershell
-node scripts/configure-wearable-health-route.mjs
-node scripts/configure-wearable-health-route.mjs --execute
-```
-
-The script copies only non-secret Agent-binding fields from the existing Night Rain route and backs up the private persona rules and any existing health route under ignored `data/` storage before writing.
+Legacy clients still use the internal `wearable` alert path. Its standalone Route creation script has been removed; migrate to recording events under the boundary above.
 
 ## Agent API
 

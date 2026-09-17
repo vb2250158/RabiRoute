@@ -43,9 +43,6 @@ class MainActivity : Activity() {
     private lateinit var relayToken: EditText
     private lateinit var relayUrlHelp: TextView
     private lateinit var relayTokenHelp: TextView
-    private lateinit var pcHelp: TextView
-    private lateinit var pcSpinner: Spinner
-    private lateinit var pcAdapter: ArrayAdapter<String>
     private lateinit var status: TextView
     private lateinit var connectButton: Button
     private lateinit var discoveredPcAction: Button
@@ -196,7 +193,7 @@ class MainActivity : Activity() {
 
     override fun onBackPressed() {
         if ((screen == Screen.SETTINGS || screen == Screen.SETUP) &&
-            (intent.hasExtra("computer_id") || intent.getBooleanExtra("add_computer",false))) {
+            (intent.hasExtra("computer_id") || intent.getBooleanExtra("relay_settings",false))) {
             finish()
             return
         }
@@ -210,7 +207,6 @@ class MainActivity : Activity() {
 
     private fun showSettings(savedConnection: RabiLinkRelayConfig = RabiLinkRelaySettings.load(this), firstRun: Boolean = !savedConnection.configured) {
         val saved = when {
-            intent.getBooleanExtra("add_computer",false) -> RabiLinkRelayConfig("","",false)
             else -> RabiLinkRelaySettings.computers(this).firstOrNull { it.id == intent.getStringExtra("computer_id") }?.connection ?: savedConnection
         }
         if (!firstRun && screen != Screen.SETTINGS && screen != Screen.SETUP) settingsReturnScreen = screen
@@ -219,7 +215,7 @@ class MainActivity : Activity() {
         avatarTargets.clear()
         chatMessages = null; chatScroll = null; composer = null; conversationListHost = null; conversationListScroll = null
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
-        if (!firstRun) root.addView(appBar(if(intent.getBooleanExtra("add_computer",false)) "添加电脑" else "电脑连接", "连接、设备与诊断", "返回") { onBackPressed() })
+        if (!firstRun) root.addView(appBar("RabiLink 连接", "连接、设备与诊断", "返回") { onBackPressed() })
         root.addView(primary("全天记录 · 模式、设备与处理设置") { openAllDayRecording() }, full(16, 8, 16, 4))
         root.addView(buildUi(), LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
@@ -866,7 +862,7 @@ class MainActivity : Activity() {
 
     private fun serverCard(): View = card().apply {
         addView(title("1. 安全连接"))
-        addView(note("按顺序完成下面三项。App 能识别的会直接填好；需要你确认的内容，就在对应输入框下面告诉你去哪里拿。"))
+        addView(note("配置 RabiLink 服务器地址和登录码。电脑选择在记录设备页的“电脑”卡片中完成。"))
         relayUrl = input("例如：http://192.168.1.10:8794/rabilink")
         relayToken = input("从 Rabi PC 复制的移动端登录码").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
         relayUrlHelp = RabiMobileUi.fieldHelp(this@MainActivity, "这里填手机能访问的 RabiLink 地址。通常不用手填，App 找到电脑后会自动写入。")
@@ -875,23 +871,10 @@ class MainActivity : Activity() {
         addView(label("② 移动端登录码")); addView(relayToken); addView(relayTokenHelp)
         discoveredPcAction = secondary("打开 Rabi PC 获取登录码") { openDiscoveredManager() }.apply { visibility = View.GONE }
         addView(discoveredPcAction, full(0, 0, 0, 8))
-        pcAdapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item, mutableListOf("尚未连接"))
-        pcAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        pcSpinner = RabiMobileUi.spinner(this@MainActivity, Spinner(this@MainActivity).apply {
-            adapter = pcAdapter
-            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { selectedPc = pcs.getOrNull(position); refreshStatus("已选择目标 PC") }
-                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-            }
-        })
-        pcHelp = RabiMobileUi.fieldHelp(this@MainActivity, "③ 登录成功后，这里会列出在线电脑；只有一台时 App 会自动选择。")
-        addView(label("③ 处理消息的 Rabi PC")); addView(pcSpinner); addView(pcHelp)
         connectButton = primary("连接 Rabi") { connectRelay() }
         addView(connectButton, full(0, 0, 0, 8))
         val actions = row()
         actions.addView(secondary("自动检测") { scanLocalRabi() }, LinearLayout.LayoutParams(0, -2, 1f))
-        actions.addView(space(), LinearLayout.LayoutParams(dp(8), 1))
-        actions.addView(secondary("使用所选 PC") { bindPc() }, LinearLayout.LayoutParams(0, -2, 1f))
         addView(actions)
     }
 
@@ -1163,12 +1146,8 @@ class MainActivity : Activity() {
             RabiConversationService.start(this) // Message transport only.
             setUrlHelp("服务器地址验证通过，已保存到本机。", RabiGuidanceTone.SUCCESS)
             setTokenHelp("登录码验证通过，已安全保存到本机。", RabiGuidanceTone.SUCCESS)
-            pcs.clear(); pcs.addAll(state.workers); pcAdapter.clear()
-            if (pcs.isEmpty()) pcAdapter.add("没有在线 Rabi PC") else pcAdapter.addAll(pcs.map { "${it.name} · ${if (it.online) "在线" else "离线"}" })
-            pcAdapter.notifyDataSetChanged(); selectedPc = state.selectedWorker ?: pcs.firstOrNull()
-            selectedPc?.let { pc -> pcSpinner.setSelection(pcs.indexOfFirst { it.id == pc.id }.coerceAtLeast(0)) }
+            pcs.clear(); pcs.addAll(state.workers); selectedPc = state.selectedWorker
             if (pcs.isEmpty()) {
-                setPcHelp("登录已经成功，但服务器当前没有在线 Rabi PC。请在电脑启动 RabiRoute 的 RabiLink worker。", RabiGuidanceTone.WARNING)
                 showGuidance(RabiSetupGuidance(
                     "RabiLink 已登录，但没有在线 PC",
                     "服务器接受了登录码，当前却没有 Rabi PC worker 在线。",
@@ -1177,48 +1156,13 @@ class MainActivity : Activity() {
                 ))
             } else {
                 val pc = selectedPc
-                setPcHelp(
-                    if (state.workers.size == 1) "已自动选择唯一在线电脑：${pc?.name ?: "Rabi PC"}。" else "已选择 ${pc?.name ?: "Rabi PC"}；点下拉框可以切换。",
-                    RabiGuidanceTone.SUCCESS,
-                )
                 showGuidance(RabiSetupGuidance(
                     "连接完成",
                     "已登录 RabiLink，${pc?.name ?: "Rabi PC"} ${if (pc?.online == true) "在线" else "当前离线"}。",
-                    if (state.workers.size == 1) "App 已自动选择唯一的 PC，可以开始使用。" else "如需切换电脑，选择后点“使用所选 PC”。",
+                    "如需选择或切换电脑，请返回记录设备页点击“电脑”卡片。",
                     RabiGuidanceTone.SUCCESS,
                 ))
             }
-        }, complete = { setBusy(false) }, error = { error -> showConnectionError(error) })
-    }
-
-    private fun bindPc() {
-        val pc = selectedPc ?: return run {
-            setPcHelp("这里还没有电脑可选。先完成前两个输入框并点“连接 Rabi”。", RabiGuidanceTone.ERROR)
-            showGuidance(RabiSetupGuidance("还没有可选的 Rabi PC", "请看第三项下方的提示。", "", RabiGuidanceTone.WARNING))
-        }
-        val token = relayToken.text.toString().trim()
-        if (token.isBlank()) {
-            setTokenHelp("先在这里粘贴移动端登录码，再选择电脑。", RabiGuidanceTone.ERROR)
-            return
-        }
-        val url = relayBaseUrl()
-        setBusy(true)
-        runAsync({
-            val state = sdk.selectMobileRabiPc(url, token, pc.id)
-            check(state.selectedWorker?.id == pc.id) { "电脑选择未获服务器确认，未更改记录目标" }
-            state
-        }, { state ->
-            com.rabi.link.recording.TargetWorkerIdentity.save(this, url, token, state.selectedWorker!!.id)
-            state.selectedWorker?.let { RabiLinkRelaySettings.rememberComputer(this,it.name,it.id,url,token) }
-            RabiLinkRelaySettings.save(this, url, token)
-            selectedPc = state.selectedWorker
-            setPcHelp("后续手机、手表和眼镜消息会交给 ${selectedPc?.name ?: "这台 Rabi PC"}。", RabiGuidanceTone.SUCCESS)
-            showGuidance(RabiSetupGuidance(
-                "已切换到 ${selectedPc?.name}",
-                "后续手机、手表和眼镜消息会默认交给这台 Rabi PC。",
-                "现在可以返回会话或继续配置设备。",
-                RabiGuidanceTone.SUCCESS,
-            ))
         }, complete = { setBusy(false) }, error = { error -> showConnectionError(error) })
     }
 
@@ -1258,11 +1202,6 @@ class MainActivity : Activity() {
         if (!::relayTokenHelp.isInitialized || !::relayToken.isInitialized) return
         RabiMobileUi.styleFieldHelp(this, relayTokenHelp, message, tone)
         RabiMobileUi.styleInputState(this, relayToken, tone)
-    }
-
-    private fun setPcHelp(message: String, tone: RabiGuidanceTone) {
-        if (!::pcHelp.isInitialized) return
-        RabiMobileUi.styleFieldHelp(this, pcHelp, message, tone)
     }
 
     private fun showConnectionError(error: Throwable) {

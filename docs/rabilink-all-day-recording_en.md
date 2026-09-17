@@ -1,5 +1,7 @@
 # RabiLink all-day recording: unified design, migration and acceptance
 
+Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
+
 English | [简体中文](rabilink-all-day-recording.md)
 
 > Status: **Target design / implementation contract, not accepted end to end**. This document defines the intended integration of phones, glasses and watches. It does not claim that the installed application supports every item. Writing documentation is not evidence of implementation, builds, deployment or physical-device acceptance. A phase may be marked implemented only after checking its code and evidence; items without completion evidence remain pending implementation or validation.

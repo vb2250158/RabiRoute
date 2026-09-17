@@ -44,7 +44,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.pages",
                     "label": {
-                        "fallback": "远端 Agent"
+                        "fallback": "RabiLink"
                     },
                     "routeId": "global.lan-agents",
                     "rendererId": "builtin.web-page.lan-agents.v1",
@@ -61,7 +61,7 @@ export const activate = definePlugin({
                 "value": {
                     "surface": "web.navigation",
                     "label": {
-                        "fallback": "远端 Agent"
+                        "fallback": "RabiLink"
                     },
                     "routeId": "global.lan-agents",
                     "icon": "mdi-lan-connect",
@@ -244,7 +244,7 @@ export const activate = definePlugin({
         const requestTracker = new runtime.ManagerPluginRequestTracker();
         ctx.effect(() => {
             const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:core", "manager.core.api", [
-                requestTracker.wrap((request, requestUrl, response) => (runtime.handleWebguiLanAccessApi(request, requestUrl, response)
+                requestTracker.wrap((request, requestUrl, response) => (runtime.handleResourceCacheApi(request, requestUrl, response) || runtime.handleWebguiLanAccessApi(request, requestUrl, response)
                     || runtime.handleLanAgentApi(request, requestUrl, response, {
                         readJsonBody: runtime.readJsonBody,
                         jsonResponse: runtime.jsonResponse,
@@ -278,6 +278,7 @@ export const activate = definePlugin({
                         }
                     })))
             ], [
+                { routeId: "resource-cache", kind: "prefix", pathPrefix: "/api/resource-cache/", methods: ["*"] },
                 { routeId: "webgui-access", kind: "exact", path: "/api/webgui-access", methods: ["*"] },
                 { routeId: "lan-agent", kind: "prefix", pathPrefix: "/api/lan-agent/", methods: ["*"] }
             ]);

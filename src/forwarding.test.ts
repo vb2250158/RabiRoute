@@ -3,7 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after, mock } from "node:test";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
 import { config, type RouteProfile } from "./config.js";
 import { deliverPacketToPrimaryAgentAdapter, forwardMessage, forwardMessageAndWait, memoryConsolidationAgentHandles, resetMessageProcessingRuntime, routeKindUsesAutomaticMessageGrouping, shouldSkipHeartbeatDelivery } from "./forwarding.js";
@@ -14,17 +14,48 @@ import { resolvePipeline } from "./pipelines.js";
 import { appendDeliveryReplayAttempt, readDeliveryReplayAttempts } from "./deliveryReplayLedger.js";
 import { listIdentityEndpointAccounts, listIdentityParticipants } from "./identityRelations.js";
 import { replayDeliveryAttempts } from "./deliveryReplay.js";
-import {
-  publishRoleKnowledgeCatalogSnapshot,
-  readRoleKnowledgeCatalogSnapshot
-} from "./roleKnowledge.js";
+import { publishRoleKnowledgeCatalogSnapshot, readRoleKnowledgeCatalogSnapshot } from "./roleKnowledge.js";
 import { createSpeechIngressForwarding } from "./routing/speechIngressForwarding.js";
 import { SpeechIngressStore } from "./speechIngressStore.js";
 import type { PendingMessageGroup } from "./messageGrouping.js";
+import { getBuiltinAgentAdapterRuntime } from "./runtime/agentAdapterRuntime.js";
+import { normalizeRouteAgentTargets } from "./shared/routeAgentTargets.js";
+
+// Tests may use their own loopback Manager fixtures, never installed Agent owners.
+const adapterRegistry = (await getBuiltinAgentAdapterRuntime()).registry;
+const unexpectedAdapterCreations: AgentAdapterType[] = [];
+mock.method(adapterRegistry, "create", (type: AgentAdapterType): never => {
+  unexpectedAdapterCreations.push(type);
+  throw new Error(`Test isolation: real ${type} Agent adapter creation is forbidden.`);
+});
+const isolatedEnvironmentKeys = ["PRIMARY_AGENT_TARGET", "REMOTE_AGENT_TARGETS", "AGENT_INSTANCE_BINDINGS", "GATEWAY_MANAGER_URL"] as const;
+for (const key of isolatedEnvironmentKeys) delete process.env[key];
+const unexpectedManagerRequests: string[] = [];
+const isolatedManager = http.createServer((request, response) => {
+  unexpectedManagerRequests.push(`${request.method} ${request.url}`);
+  response.writeHead(503, { "content-type": "application/json" });
+  response.end(JSON.stringify({ code: -1, message: "Test isolation: no Manager fixture installed for this request." }));
+});
+await new Promise<void>((resolve, reject) => {
+  isolatedManager.once("error", reject);
+  isolatedManager.listen(0, "127.0.0.1", resolve);
+});
+const isolatedAddress = isolatedManager.address();
+assert.ok(isolatedAddress && typeof isolatedAddress === "object");
+process.env.GATEWAY_MANAGER_URL = `http://127.0.0.1:${isolatedAddress.port}`;
+after(async () => {
+  resetMessageProcessingRuntime();
+  await new Promise<void>(resolve => isolatedManager.close(() => resolve()));
+  for (const key of isolatedEnvironmentKeys) delete process.env[key];
+  assert.deepEqual(unexpectedManagerRequests, [], "forwarding tests must install a dedicated Manager fixture before issuing requests");
+  assert.deepEqual(unexpectedAdapterCreations, [], "forwarding tests must never fall through to a real Agent owner");
+});
 
 type ForwardingConfigPatch = Partial<Pick<typeof config,
   "agentAdapters"
   | "primaryAgentAdapter"
+  | "primaryAgentTarget"
+  | "remoteAgentTargets"
   | "agentRoleFile"
   | "agentRoleId"
   | "dataDir"
@@ -37,6 +68,9 @@ type ForwardingConfigPatch = Partial<Pick<typeof config,
   | "codexThreadId"
   | "codexThreadName"
   | "codexCwd"
+  | "dshSessionId"
+  | "dshSessionName"
+  | "dshCwd"
   | "codexMemoryConsolidationAgentEnabled"
   | "codexMemoryConsolidationAgentModel"
 >>;
@@ -108,6 +142,25 @@ test("the dedicated memory Agent handles the exact consolidation trigger for man
   assert.equal(memoryConsolidationAgentHandles("manual_trigger", "another-trigger", true, "codex"), false);
   assert.equal(memoryConsolidationAgentHandles("heartbeat", "memory-consolidation", true, "codex"), false);
   assert.equal(memoryConsolidationAgentHandles("manual_trigger", "memory-consolidation", true, "copilotCli"), false);
+});
+
+test("DSH primary stays the only target beside local and remote Codex", async () => {
+  const dispatched: AgentAdapterType[] = [];
+  await withForwardingConfig({
+    agentAdapters: ["codex", "dsh"],
+    primaryAgentAdapter: "codex",
+    primaryAgentTarget: "local:dsh",
+    remoteAgentTargets: [{ id: "remote:fixture-node:fixture-agent", instanceId: "fixture-node", agentId: "fixture-agent", provider: "codex" }]
+  }, async () => {
+    assert.equal(config.primaryAgentTarget, "local:dsh");
+    assert.equal(config.primaryAgentAdapter, "dsh");
+    const outcomes = await deliverPacketToPrimaryAgentAdapter("main", "direct", {
+      messageSource: { type: "system", eventType: "test", eventName: "isolated routing", eventId: "mixed-primary" },
+      messageContent: "fixture"
+    }, async adapter => { dispatched.push(adapter); });
+    assert.deepEqual(dispatched, ["dsh"]);
+    assert.equal(outcomes[0]?.status, "delivered");
+  });
 });
 
 test("AgentPacket delivery targets only the configured primary Agent", async () => {
@@ -190,6 +243,8 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
   const previous: ForwardingConfigPatch = {
     agentAdapters: config.agentAdapters,
     primaryAgentAdapter: config.primaryAgentAdapter,
+    primaryAgentTarget: config.primaryAgentTarget,
+    remoteAgentTargets: config.remoteAgentTargets,
     agentRoleFile: config.agentRoleFile,
     agentRoleId: config.agentRoleId,
     dataDir: config.dataDir,
@@ -202,12 +257,21 @@ async function withForwardingConfig<T>(patch: ForwardingConfigPatch, run: () => 
     codexThreadId: config.codexThreadId,
     codexThreadName: config.codexThreadName,
     codexCwd: config.codexCwd,
+    dshSessionId: config.dshSessionId,
+    dshSessionName: config.dshSessionName,
+    dshCwd: config.dshCwd,
     codexMemoryConsolidationAgentEnabled: config.codexMemoryConsolidationAgentEnabled,
     codexMemoryConsolidationAgentModel: config.codexMemoryConsolidationAgentModel
   };
-  const effectivePatch = patch.agentAdapters !== undefined && !("primaryAgentAdapter" in patch)
-    ? { ...patch, primaryAgentAdapter: patch.agentAdapters[0] }
-    : patch;
+  const providers = patch.agentAdapters ?? [];
+  const primary = "primaryAgentAdapter" in patch ? patch.primaryAgentAdapter : providers[0];
+  const targets = normalizeRouteAgentTargets({
+    agentAdapters: providers,
+    remoteAgentTargets: patch.remoteAgentTargets ?? [],
+    primaryAgentTarget: patch.primaryAgentTarget ?? (primary ? `local:${primary}` : ""),
+    primaryAgentAdapter: primary
+  });
+  const effectivePatch = { ...patch, ...targets };
   Object.assign(config, effectivePatch);
   for (const profile of patch.routeProfiles ?? []) {
     const roleId = profile.agentRoleId?.trim();
@@ -457,7 +521,8 @@ test("a grouped reply to an Agent-sent QQ message is routed with the referenced 
   }
 });
 
-test("heartbeat bypasses the busy-primary skip and goes immediately to a Message Agent when that mode is enabled", async () => {
+for (const provider of ["codex", "dsh"] as const) {
+test(`${provider} heartbeat Message Agent delivery reports its actual provider`, async () => {
   const root = tempDir();
   const requests: Array<Record<string, any>> = [];
   const manager = http.createServer((request, response) => {
@@ -496,9 +561,12 @@ test("heartbeat bypasses the busy-primary skip and goes immediately to a Message
 
   try {
     await withForwardingConfig({
-      agentAdapters: ["codex"],
-      primaryAgentAdapter: "codex",
-      messageProcessingAgents: { codex: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
+      agentAdapters: [provider],
+      primaryAgentAdapter: provider,
+      messageProcessingAgents: { [provider]: { enabled: true, model: "gpt-5.6-luna", reasoningEffort: "medium" } },
+      dshSessionId: "isolated-dsh-primary",
+      dshSessionName: "isolated DSH primary",
+      dshCwd: root,
       heartbeatSkipWhenAgentBusy: true,
       codexThreadId: "019f0000-0000-7000-8000-000000000001",
       codexThreadName: "主人格",
@@ -508,6 +576,7 @@ test("heartbeat bypasses the busy-primary skip and goes immediately to a Message
       routeProfiles: [route]
     }, async () => {
       const result = await forwardMessageAndWait("heartbeat", record);
+      assert.equal(result.adapterOutcomes[0]?.adapter, provider);
       assert.equal(result.status, "delivered");
       assert.equal(result.reason, undefined);
     });
@@ -518,6 +587,7 @@ test("heartbeat bypasses the busy-primary skip and goes immediately to a Message
     assert.match(deliveryPayloadText(requests[2]), /消息组 ID：message-group-/);
     assert.doesNotMatch(deliveryPayloadText(requests[2]), /消息处理需求 ID：\S/);
     assert.doesNotMatch(deliveryPayloadText(requests[2]), /\[最近消息\]/);
+    assert.equal(requests[2]?.agentAdapter, provider);
   } finally {
     if (oldManagerUrl == null) delete process.env.GATEWAY_MANAGER_URL;
     else process.env.GATEWAY_MANAGER_URL = oldManagerUrl;
@@ -525,6 +595,8 @@ test("heartbeat bypasses the busy-primary skip and goes immediately to a Message
     resetMessageProcessingRuntime();
   }
 });
+
+}
 
 test("replayed platform messages reuse the canonical requirement without a second Agent delivery", async () => {
   const root = tempDir();
@@ -1074,7 +1146,7 @@ test("forwardMessageAndWait surfaces adapter delivery failures", async () => {
   });
 
   await withForwardingConfig({
-    agentAdapters: ["unsupported" as AgentAdapterType],
+    agentAdapters: ["codex"],
     dataDir: path.join(root, "data"),
     memoryDataDir: path.join(root, "route-data"),
     routeProfiles: [route]
@@ -1085,9 +1157,9 @@ test("forwardMessageAndWait surfaces adapter delivery failures", async () => {
     assert.equal(result.matchedRuleCount, 1);
     assert.equal(result.sentPacketCount, 1);
     assert.equal(result.adapterOutcomes.length, 1);
-    assert.equal(result.adapterOutcomes[0].adapter, "unsupported");
+    assert.equal(result.adapterOutcomes[0].adapter, "codex");
     assert.equal(result.adapterOutcomes[0].status, "failed");
-    assert.match(result.adapterOutcomes[0].error ?? "", /Unsupported agent adapter/);
+    assert.match(result.adapterOutcomes[0].error ?? "", /Real Agent adapter delivery is disabled in the Node test runner/);
   });
 });
 
@@ -1136,7 +1208,7 @@ test("replayDeliveryAttempts can merge failed attempts into one agent packet", a
   });
 
   await withForwardingConfig({
-    agentAdapters: ["unsupported" as AgentAdapterType],
+    agentAdapters: ["codex"],
     dataDir,
     memoryDataDir: path.join(root, "route-data"),
     routeProfiles: [route]
@@ -1154,7 +1226,7 @@ test("replayDeliveryAttempts can merge failed attempts into one agent packet", a
     assert.equal(replay.ok, false);
     assert.equal(replay.replayedAttemptIds.length, 2);
     assert.equal(replay.result?.sentPacketCount, 1);
-    assert.match(replay.result?.adapterOutcomes[0].error ?? "", /Unsupported agent adapter/);
+    assert.match(replay.result?.adapterOutcomes[0].error ?? "", /Real Agent adapter delivery is disabled in the Node test runner/);
   });
 });
 
@@ -1187,7 +1259,7 @@ test("merged replay migrates old packet wrappers without nesting their source he
   });
 
   await withForwardingConfig({
-    agentAdapters: ["unsupported" as AgentAdapterType],
+    agentAdapters: ["codex"],
     dataDir,
     memoryDataDir: path.join(root, "route-data"),
     routeProfiles: []
@@ -1249,7 +1321,7 @@ test("single replay falls back to an explicit historical source when an old reco
   });
 
   await withForwardingConfig({
-    agentAdapters: ["unsupported" as AgentAdapterType],
+    agentAdapters: ["codex"],
     dataDir,
     memoryDataDir: path.join(root, "route-data"),
     routeProfiles: [route]

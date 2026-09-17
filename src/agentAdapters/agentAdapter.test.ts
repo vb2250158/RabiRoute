@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAgentAdapter } from "./agentAdapter.js";
+import { listRegisteredAgentAdapterManifests } from "./agentAdapter.js";
 import { normalizeAgentAdapters, parseAgentAdapterType } from "./types.js";
 
-test("codex agent adapter exposes the Desktop-owner delivery entry", async () => {
-  const adapter = await createAgentAdapter("codex");
-  assert.equal(adapter.type, "codex");
-  assert.equal(typeof adapter.deliver, "function");
+test("codex agent adapter remains registered without constructing a real delivery owner", async () => {
+  const manifests = await listRegisteredAgentAdapterManifests();
+  assert.ok(manifests.some(manifest => manifest.type === "codex"));
 });
 
 test("runtime parsing accepts canonical Agent ids while config migration is one-way", () => {
@@ -35,15 +34,15 @@ test("Agent adapter facade reads the builtin Gateway root Registry", async () =>
 
 test("Agent adapter facade follows a rebuilt Gateway root", async () => {
   const { getBuiltinGatewayCordisRoot } = await import("../runtime/gatewayCordisRoot.js");
-  const first = await createAgentAdapter("codex");
-  assert.equal(first.type, "codex");
+  const first = await listRegisteredAgentAdapterManifests();
+  assert.ok(first.some(manifest => manifest.type === "codex"));
 
   const firstRoot = getBuiltinGatewayCordisRoot();
   await firstRoot.dispose();
 
-  const second = await createAgentAdapter("codex");
+  const second = await listRegisteredAgentAdapterManifests();
   const secondRoot = getBuiltinGatewayCordisRoot();
-  assert.equal(second.type, "codex");
+  assert.ok(second.some(manifest => manifest.type === "codex"));
   assert.notStrictEqual(secondRoot, firstRoot);
   await secondRoot.dispose();
 });

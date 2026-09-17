@@ -141,10 +141,9 @@ export async function buildWebPatch(packageRoot: string, outputRoot: string): Pr
       if (!entry) continue;
       const entryPath = path.join(pluginRoot, entry);
       const source = await fs.readFile(entryPath, "utf8").catch(error => {
-        if (error.code === "ENOENT") return undefined;
+        if (error.code === "ENOENT") throw new Error(`Web Bundle entry is missing: ${plugin.id}. Run the complete Web build before publishing.`);
         throw error;
       });
-      if (source === undefined) continue;
       const match = source.match(/^export \{ activate \} from "\/(assets\/[A-Za-z0-9._/-]+)";\s*$/);
       if (!match) throw new Error(`Web Bundle wrapper is not supported: ${plugin.id}`);
       manifest.modules.push({ pluginId: plugin.id, version: plugin.version, entry: `web/${match[1]}` });

@@ -1,0 +1,38 @@
+{
+  "description": "Inject explicitly bound Rabi persona context into individual Antigravity conversations.",
+  "hooks": {
+    "PreInvocation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/rabi-antigravity-hook.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/rabi-antigravity-hook.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/rabi-antigravity-hook.mjs",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

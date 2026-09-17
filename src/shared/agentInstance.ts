@@ -1,3 +1,5 @@
+import { isAgentAdapterType } from "./agentAdapterCapabilities.js";
+
 /** Computer identity is independent of its current network address and provider. */
 export type AgentInstanceBinding = { instanceId: string; agentId: string };
 
@@ -37,7 +39,9 @@ export function normalizeAgentInstanceBindings(value: unknown): Record<string, A
   if (value == null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid instance bindings.");
   const bindings = Object.fromEntries(Object.entries(value).map(([provider, binding]) => {
-    if (!["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy"].includes(provider)) throw new Error("Unknown bound Agent provider.");
+    // Query the adapter registry instead of a local list: a hardcoded array is
+    // the direct cause of every "new adapter cannot be bound" gap.
+    if (!isAgentAdapterType(provider)) throw new Error("Unknown bound Agent provider.");
     const normalized = normalizeAgentInstanceBinding(binding);
     if (!normalized) throw new Error("Empty instance binding.");
     return [provider, normalized];

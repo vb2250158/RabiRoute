@@ -1,6 +1,11 @@
 import { openCodexDesktopThread } from "../codexDesktopBridge.js";
 import { readCodexThread } from "../codexRuntime.js";
 import { openDshSession, readDshSession } from "../dshSessionBridge.js";
+import { openAntigravitySession, readAntigravitySession } from "../antigravitySessionStore.js";
+import {
+  agentAdapterManifest,
+  type PlanAssistantAgentType
+} from "../shared/agentAdapterCapabilities.js";
 import type { PlanItem, PlanSecretaryBinding, PlanTaskBinding } from "../roleKnowledge.js";
 import { normalizePathForComparison } from "../shared/pathPolicy.js";
 
@@ -22,7 +27,7 @@ export type PlanAgentSessionStatus =
 export type PlanAgentBindingStatus = {
   role: PlanAgentRole;
   configured: boolean;
-  agentType: "codex" | "dsh";
+  agentType: PlanAssistantAgentType;
   threadId: string;
   threadTitle: string;
   workspace: string;
@@ -56,7 +61,7 @@ export type PlanAgentStatusService = {
   openPlanAgent(plan: PlanItem, role: PlanAgentRole): Promise<{
     planId: string;
     role: PlanAgentRole;
-    agentType: "codex" | "dsh";
+    agentType: PlanAssistantAgentType;
     threadId: string;
     threadTitle: string;
     workspace: string;
@@ -73,6 +78,8 @@ export type PlanAgentStatusDependencies = {
   openCodexThread?: (threadId: string) => Promise<void>;
   readDshSession?: (sessionId: string, baseUrl?: string) => Promise<unknown>;
   openDshSession?: (sessionId: string, baseUrl?: string) => Promise<void>;
+  readAntigravitySession?: (conversationId: string) => Promise<unknown>;
+  openAntigravitySession?: (conversationId: string) => Promise<void>;
   timeoutMs?: number;
   now?: () => Date;
 };
@@ -104,8 +111,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Human-readable owner name, taken from the adapter manifest so a newly
+ * supported adapter stops being mislabelled as Codex in status messages.
+ */
 function agentLabel(agentType: PlanAgentBinding["agentType"]): string {
-  return agentType === "dsh" ? "DSH" : "Codex Desktop";
+  return agentAdapterManifest(agentType).label;
 }
 
 function isMissingSessionError(error: unknown): boolean {
@@ -175,7 +186,9 @@ function statusFromSession(
   const threadTitle = session.title || identity.threadTitle;
   const workspace = identity.workspace || session.cwd;
   const label = agentLabel(binding.agentType);
-  if (binding.agentType === "dsh" && !workspaceMatches(identity.workspace, session.cwd)) {
+  // Workspace drift matters for every adapter that reports a cwd, not just DSH:
+  // a bound plan step must not act on a session sitting in another project.
+  if (!workspaceMatches(identity.workspace, session.cwd)) {
     return {
       ...identity,
       threadTitle,
@@ -242,6 +255,7 @@ function failedBindingStatus(
 }
 
 function bindingKey(binding: PlanAgentBinding): string {
+  // `baseUrl` only takes part for adapters that address their host over HTTP.
   return [
     binding.agentType,
     String(binding.sessionId || "").trim(),
@@ -257,15 +271,28 @@ export function createPlanAgentStatusService(
   const openCodex = dependencies.openCodexThread ?? dependencies.openThread ?? openCodexDesktopThread;
   const readDsh = dependencies.readDshSession ?? readDshSession;
   const openDsh = dependencies.openDshSession ?? openDshSession;
+  const readAntigravity = dependencies.readAntigravitySession
+    ?? (async (conversationId: string) => readAntigravitySession(conversationId));
+  const openAntigravity = dependencies.openAntigravitySession
+    ?? (async (conversationId: string) => { openAntigravitySession(conversationId); });
   const timeoutMs = Math.max(1, dependencies.timeoutMs ?? PLAN_AGENT_STATUS_TIMEOUT_MS);
   const now = dependencies.now ?? (() => new Date());
 
-  const readBinding = (binding: PlanAgentBinding): Promise<unknown> => binding.agentType === "dsh"
-    ? readDsh(binding.sessionId, binding.baseUrl)
-    : readCodex(binding.sessionId);
-  const openBinding = (binding: PlanAgentBinding, sessionId: string): Promise<void> => binding.agentType === "dsh"
-    ? openDsh(sessionId, binding.baseUrl)
-    : openCodex(sessionId);
+  // Dispatch on the bound adapter, which is preserved verbatim on the binding.
+  // An unrecognized adapter is a hard error rather than a Codex fallback: reading
+  // the wrong owner's session would report a false status.
+  const readBinding = (binding: PlanAgentBinding): Promise<unknown> => {
+    if (binding.agentType === "dsh") return readDsh(binding.sessionId, binding.baseUrl);
+    if (binding.agentType === "antigravity") return readAntigravity(binding.sessionId);
+    if (binding.agentType === "codex") return readCodex(binding.sessionId);
+    return Promise.reject(new Error(`Plan binding names an unsupported agentType: ${binding.agentType}`));
+  };
+  const openBinding = (binding: PlanAgentBinding, sessionId: string): Promise<void> => {
+    if (binding.agentType === "dsh") return openDsh(sessionId, binding.baseUrl);
+    if (binding.agentType === "antigravity") return openAntigravity(sessionId);
+    if (binding.agentType === "codex") return openCodex(sessionId);
+    return Promise.reject(new Error(`Plan binding names an unsupported agentType: ${binding.agentType}`));
+  };
 
   async function inspectBinding(
     role: PlanAgentRole,
@@ -309,7 +336,7 @@ export function createPlanAgentStatusService(
       const session = normalizeSession(value);
       const label = agentLabel(binding.agentType);
       if (!session) throw new Error(`${label} session status response is invalid.`);
-      if (binding.agentType === "dsh" && !workspaceMatches(String(binding.workspace || "").trim(), session.cwd)) {
+      if (!workspaceMatches(String(binding.workspace || "").trim(), session.cwd)) {
         throw new Error(`Bound workspace does not match the ${label} session: ${binding.workspace || ""} != ${session.cwd}`);
       }
       if (session.archived) throw new Error(`${label} session is archived; restore it before opening from the plan.`);

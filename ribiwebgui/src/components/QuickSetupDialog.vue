@@ -4,7 +4,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import type { AgentAdapterType, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterType } from "../types";
-import { adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
+import { isNonMessageEndpoint, adapterDefaultWebhookPath, adapterLabel, adapterSourceAliases, defaultHeartbeatMessage, gatewayAdapterTypes, isWebhookLikeAdapter } from "../utils/gatewayHelpers";
 import { bindAgentSessionsForSave } from "@shared/codexSessionBinding";
 import { agentAdapterValues } from "@shared/gatewayConfigModel";
 import PersonaAvatar from "./PersonaAvatar.vue";
@@ -49,6 +49,9 @@ const form = reactive({
   workbuddySessionName: "",
   workbuddyCwd: "",
   workbuddyEndpoint: "",
+  antigravityConversationId: "",
+  antigravityConversationName: "",
+  antigravityCwd: "",
   gatewayPort: 8790,
   napcatHttpUrl: "http://127.0.0.1:3000",
   napcatWebuiUrl: "http://127.0.0.1:6099/webui",
@@ -74,13 +77,19 @@ const quickMessageAgentModeEnabled = computed(() => (
   && store.selectedGateway?.messageProcessingAgents?.codex?.enabled === true
 ));
 
+const visibleAdapterSelection = computed({
+  get: () => form.adapters.filter(type => !isNonMessageEndpoint(type)),
+  set: (types: MessageAdapterType[]) => {
+    // Editing PC inputs must preserve existing non-message bindings.
+    form.adapters = [...form.adapters.filter(isNonMessageEndpoint), ...types.filter(type => !isNonMessageEndpoint(type))];
+  }
+});
+
 const adapterChoices: Array<{ type: MessageAdapterType; title: string; note: string; icon: string }> = [
   { type: "napcat", title: "NapCat / OneBot", note: "QQ 群聊、私聊实时入口", icon: "mdi-message-badge-outline" },
   { type: "wecom", title: "企业微信 / WeCom", note: "企业微信群聊双向入口", icon: "mdi-domain" },
-  { type: "remoteAgent", title: "远端 Agent", note: "下游 Agent 设备入口，支持局域网发现和任务投递", icon: "mdi-lan-connect" },
   { type: "heartbeat", title: "定时触发", note: "按固定间隔投递内部提醒", icon: "mdi-timer-outline" },
   { type: "fennenote", title: "FenneNote / 芬妮笔记", note: "桌面语音笔记转写入口", icon: "mdi-note-edit-outline" },
-  { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；系统内置 RabiLink 负责转接", icon: "mdi-glasses" },
   { type: "webhook", title: "通用 Webhook", note: "没有专用消息端时的通用 POST 兜底入口", icon: "mdi-webhook" }
 ];
 
@@ -90,7 +99,8 @@ const quickAgentChoices: Array<{ type: AgentAdapterType; title: string; note: st
   { type: "marvis", title: "Marvis", note: "占位支持，人工接力模式", icon: "mdi-message-processing-outline" },
   { type: "astrbot", title: "AstrBot", note: "实验支持，可绑定 ChatUI 会话", icon: "mdi-robot-happy-outline" },
   { type: "dsh", title: "DSH（DeepSeek Harness）", note: "实验支持，通过 session.prompt API 投递消息", icon: "mdi-brain" },
-  { type: "workbuddy", title: "WorkBuddy（腾讯 AI 办公工作台）", note: "实验支持，投递到本机 WorkBuddy 任务的会话网关", icon: "mdi-briefcase-outline" }
+  { type: "workbuddy", title: "WorkBuddy（腾讯 AI 办公工作台）", note: "实验支持，投递到本机 WorkBuddy 任务的会话网关", icon: "mdi-briefcase-outline" },
+  { type: "antigravity", title: "Antigravity（Google 的 Agent 开发环境）", note: "实验支持，通过官方 agy agentapi 投递到本机会话", icon: "mdi-rocket-launch-outline" }
 ];
 
 const agentModelChoices: string[] = [
@@ -192,6 +202,7 @@ const selectedSessionName = computed(() => {
   if (selectedAgent.value === "copilotCli") return form.copilotThreadName;
   if (selectedAgent.value === "dsh") return form.dshSessionId || form.dshSessionName;
   if (selectedAgent.value === "workbuddy") return form.workbuddySessionId || form.workbuddySessionName;
+  if (selectedAgent.value === "antigravity") return form.antigravityConversationId || form.antigravityConversationName;
   return "";
 });
 const roleOptions = computed(() => [
@@ -209,6 +220,7 @@ const agentNeedsAstrbotEndpoint = computed(() => selectedAgent.value === "astrbo
 const agentNeedsMarvisApp = computed(() => selectedAgent.value === "marvis");
 const agentNeedsDshSession = computed(() => selectedAgent.value === "dsh");
 const agentNeedsWorkbuddySession = computed(() => selectedAgent.value === "workbuddy");
+const agentNeedsAntigravitySession = computed(() => selectedAgent.value === "antigravity");
 
 function selectAgent(type: AgentAdapterType): void {
   form.agentAdapters = [type];
@@ -220,6 +232,9 @@ function selectAgent(type: AgentAdapterType): void {
   }
   if (type === "workbuddy" && !form.workbuddyCwd && form.codexCwd) {
     form.workbuddyCwd = form.codexCwd;
+  }
+  if (type === "antigravity" && !form.antigravityCwd && form.codexCwd) {
+    form.antigravityCwd = form.codexCwd;
   }
 }
 
@@ -303,6 +318,7 @@ function currentProject(): string {
   if (agentNeedsMarvisApp.value) return form.marvisAppId || "Tencent.Marvis";
   if (agentNeedsDshSession.value) return form.dshCwd || form.codexCwd;
   if (agentNeedsWorkbuddySession.value) return form.workbuddyCwd || form.codexCwd;
+  if (agentNeedsAntigravitySession.value) return form.antigravityCwd || form.codexCwd;
   return agentNeedsCopilotProject.value ? form.copilotCwd : form.codexCwd;
 }
 
@@ -323,6 +339,7 @@ function agentPrimaryLabel(): string {
   if (agentNeedsMarvisApp.value) return "应用 ID";
   if (agentNeedsDshSession.value) return "DSH 会话 ID";
   if (agentNeedsWorkbuddySession.value) return "WorkBuddy 任务";
+  if (agentNeedsAntigravitySession.value) return "Antigravity 会话";
   return agentNeedsCopilotProject.value ? "项目目录 (-C)" : "项目目录";
 }
 
@@ -331,6 +348,7 @@ function agentSessionLabel(): string {
   if (agentNeedsMarvisApp.value) return "接力模式";
   if (agentNeedsDshSession.value) return "DSH 会话";
   if (agentNeedsWorkbuddySession.value) return "WorkBuddy 任务";
+  if (agentNeedsAntigravitySession.value) return "Antigravity 会话";
   return "线程";
 }
 
@@ -341,6 +359,7 @@ function agentSessionSummary(): string {
   if (agentNeedsMarvisApp.value) return "不绑定会话";
   if (agentNeedsDshSession.value) return form.dshSessionId || "未填写 DSH 会话 ID";
   if (agentNeedsWorkbuddySession.value) return form.workbuddySessionId || "未选择 WorkBuddy 任务";
+  if (agentNeedsAntigravitySession.value) return form.antigravityConversationId || "未选择 Antigravity 会话（每次投递将新开会话）";
   if (selectedAgent.value === "codex") return form.codexThreadName || `自动：${fallbackCodexThreadName()}`;
   if (selectedAgent.value === "copilotCli") return form.copilotThreadName || "未填写";
   return "未填写";
@@ -405,6 +424,28 @@ function selectWorkbuddyTask(value: unknown): void {
   if (selected.projectPath) form.workbuddyCwd = selected.projectPath;
 }
 
+function antigravitySessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
+  return (agentScanFor("antigravity")?.sessions ?? []).map(session => ({
+    title: session.name || session.id || "",
+    value: session.id || session.name,
+    // Antigravity's liveness signal is host-wide: the language server is either
+    // running or it is not, so it is reported as the host state rather than a
+    // per-conversation state.
+    subtitle: [session.projectPath, session.live ? "宿主已运行" : "宿主未运行", session.updatedAt]
+      .filter(Boolean)
+      .join(" · ")
+  }));
+}
+
+function selectAntigravitySession(value: unknown): void {
+  form.antigravityConversationId = String(value || "");
+  const selected = (agentScanFor("antigravity")?.sessions ?? [])
+    .find(session => (session.id || session.name) === form.antigravityConversationId);
+  if (!selected) return;
+  if (!form.antigravityConversationName.trim()) form.antigravityConversationName = selected.name || "";
+  if (selected.projectPath) form.antigravityCwd = selected.projectPath;
+}
+
 function selectAstrbotProject(value: unknown): void {
   form.astrbotProjectId = String(value || "");
   const sessions = astrbotSessionItems();
@@ -435,11 +476,11 @@ function napcatWsUrl(): string {
 }
 
 function selectedWebhookAdapter(): MessageAdapterType {
-  return form.adapters.find(isWebhookLikeAdapter) ?? "webhook";
+  return visibleAdapterSelection.value.find(isWebhookLikeAdapter) ?? "webhook";
 }
 
 function selectedWebhookAdapters(): MessageAdapterType[] {
-  return form.adapters.filter(isWebhookLikeAdapter);
+  return visibleAdapterSelection.value.filter(isWebhookLikeAdapter);
 }
 
 function webhookPortFor(type: MessageAdapterType): number {
@@ -691,6 +732,8 @@ const agentReady = computed(() => {
   if (agentNeedsMarvisApp.value) return true;
   if (agentNeedsDshSession.value) return Boolean(form.dshSessionId.trim() && form.dshCwd.trim());
   if (agentNeedsWorkbuddySession.value) return Boolean(form.workbuddySessionId.trim() && form.workbuddyCwd.trim());
+  // A conversation is optional: with none selected, delivery starts a new one.
+  if (agentNeedsAntigravitySession.value) return true;
   if (agentNeedsCopilotProject.value) return Boolean(form.copilotThreadName.trim() && form.copilotCwd.trim());
   if (agentNeedsCodexProject.value) return true;
   return true;
@@ -714,7 +757,7 @@ const steps = computed(() => [
   {
     value: 1,
     title: "消息入口",
-    note: form.adapters.map(adapterLabel).join(" + "),
+    note: visibleAdapterSelection.value.map(adapterLabel).join(" + "),
     done: messageReady.value,
     icon: "mdi-numeric-1"
   },
@@ -786,6 +829,9 @@ function syncFromGateway() {
   form.workbuddySessionName = gateway?.workbuddySessionName || "";
   form.workbuddyCwd = gateway?.workbuddyCwd || gateway?.codexCwd || "";
   form.workbuddyEndpoint = gateway?.workbuddyEndpoint || "";
+  form.antigravityConversationId = gateway?.antigravityConversationId || "";
+  form.antigravityConversationName = gateway?.antigravityConversationName || "";
+  form.antigravityCwd = gateway?.antigravityCwd || gateway?.codexCwd || "";
   napcatHealthResult.value = null;
   astrbotLoginResult.value = null;
   marvisOpenResult.value = null;
@@ -832,6 +878,9 @@ async function apply() {
     }
     if (selectedAgent.value === "workbuddy" && !form.workbuddySessionName.trim()) {
       form.workbuddySessionName = fallbackCodexThreadName();
+    }
+    if (selectedAgent.value === "antigravity" && !form.antigravityConversationName.trim()) {
+      form.antigravityConversationName = fallbackCodexThreadName();
     }
     if (selectedAgent.value === "codex" || selectedAgent.value === "dsh" || selectedAgent.value === "workbuddy") {
       await bindAgentSessionsForSave(form, async (request) => {
@@ -917,7 +966,7 @@ async function apply() {
                 <div class="catalog-param-panel quick-agent-panel">
                   <div class="catalog-param-grid">
                     <v-select
-                      v-model="form.adapters"
+                      v-model="visibleAdapterSelection"
                       :items="adapterChoices"
                       item-title="title"
                       item-value="type"
@@ -1042,11 +1091,6 @@ async function apply() {
                         </v-btn>
                       </div>
                     </div>
-                  </template>
-                  <template v-if="form.adapters.includes('remoteAgent')">
-                    <v-alert type="info" variant="tonal" density="compact" class="full-span">
-                      远端 Agent 是下游 Agent 设备入口；远端设备只运行独立 bridge，无人值守等待 RabiGUI 扫描。保存后在“消息适配器”页扫描局域网，选择设备并输入密码连接。
-                    </v-alert>
                   </template>
                   <template v-for="webhookAdapter in selectedWebhookAdapters()" :key="webhookAdapter">
                     <v-text-field v-if="webhookAdapter === 'rabilink'" :model-value="webhookHostFor(webhookAdapter)" :label="`${adapterLabel(webhookAdapter)} 监听地址`" placeholder="0.0.0.0" @update:model-value="value => setWebhookHost(webhookAdapter, value)" />
@@ -1289,6 +1333,47 @@ async function apply() {
                     </div>
                   </template>
 
+                  <template v-if="selectedAgent === 'antigravity'">
+                    <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                      Antigravity 会话由本机 Antigravity 桌面应用承载。RabiRoute 通过官方 <code>agy agentapi</code> 把消息投递到指定会话，由该会话以其自带的模型、工具真实执行。
+                      会话 ID 是投递路由键：向同一会话连续投递不会新建会话。使用前请先打开 Antigravity 桌面。
+                      仍为实验性：宿主版本升级可能改动 agentapi 子命令契约。
+                    </v-alert>
+                    <div class="catalog-param-grid">
+                      <v-combobox
+                        v-model="form.antigravityConversationId"
+                        :items="antigravitySessionItems()"
+                        label="Antigravity 会话 ID"
+                        placeholder="请选择或粘贴 Antigravity 会话 ID"
+                        hint="留空时每次投递都会新开会话；填写后按同一会话续投"
+                        persistent-hint
+                        data-no-i18n
+                        @update:model-value="selectAntigravitySession"
+                      >
+                        <template #append-inner>
+                          <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                          <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描" @click.stop="runAgentScan" />
+                        </template>
+                      </v-combobox>
+                      <v-text-field
+                        v-model="form.antigravityConversationName"
+                        label="会话名称"
+                        placeholder="Antigravity Example Conversation"
+                        hint="可选标识，只用于显示，不会改写 Antigravity 中的会话名"
+                        persistent-hint
+                        data-no-i18n
+                      />
+                      <v-combobox
+                        v-model="form.antigravityCwd"
+                        :items="projectItems()"
+                        label="工作目录"
+                        placeholder="C:/Path/To/Project"
+                        hint="用于消歧同名会话；选择已有会话时自动采用会话目录"
+                        persistent-hint
+                      />
+                    </div>
+                  </template>
+
                   <template v-if="selectedAgent === 'astrbot'">
                     <v-combobox
                       v-model="form.astrbotUrl"
@@ -1522,7 +1607,7 @@ async function apply() {
                   clearable
                 />
                 <div class="quick-review">
-                  <div class="status-row"><span>消息入口</span><b>{{ form.adapters.map(adapterLabel).join(" + ") }}</b></div>
+                  <div class="status-row"><span>消息入口</span><b>{{ visibleAdapterSelection.map(adapterLabel).join(" + ") }}</b></div>
                   <div class="status-row"><span>Agent</span><b>{{ quickAgentChoices.find(agent => agent.type === selectedAgent)?.title || selectedAgent }}</b></div>
                   <div class="status-row"><span>{{ agentPrimaryLabel() }}</span><b>{{ currentProject() || "未填写" }}</b></div>
                   <div class="status-row"><span>{{ agentSessionLabel() }}</span><b>{{ agentSessionSummary() }}</b></div>

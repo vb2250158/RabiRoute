@@ -6,6 +6,41 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.6 - 2026-09-17
+
+### Antigravity as an Agent target
+
+- Added the `antigravity` Agent adapter. A Route can select it as its message-processing Agent, and it declares message processing, plan-assistant sessions, memory consolidation, hooks and delivery-receipt recovery. Delivery runs through the host's own `agy agentapi` subcommands (`send-message` uses system identity, `new-conversation` uses user identity) instead of driving the desktop renderer; lifecycle hooks and the transcript log are verified on both the desktop app and the CLI.
+- The Antigravity desktop app owns the session. RabiRoute does not reason on its behalf and starts no fallback runtime. The gRPC address and CSRF token belong to the running instance and are read at call time rather than configured; a binding stores the conversation ID and owner type and resumes the same ID after restart. The adapter stays experimental until address and token discovery prove stable across host upgrades.
+
+### Primary Agent targets and DSH authorization
+
+- The primary Agent is now an explicit target (local / remote + provider + instance), replacing the previous implicit Codex-or-DSH split. Send permission, plan-assistant session filtering and instance thread routing all resolve from that one target, and a new adapter becomes eligible simply by declaring its capability.
+- Added the shared `routeAgentTargets` contracts and `resolvePrimaryAgentTarget`; remote Agent add, remove and select converge in `routeAgentTargetEditor`, with mutual exclusion enforced by `routeAgentOperationGuard`.
+- DSH connections now require explicit local-user authorization: the user submits the current login link in exchange for a credential, and the link is never persisted or returned. Single-use token, cookie name and `SameSite`/expiry attributes are validated, and connection changes use revisions for optimistic concurrency. Log exchange remains only as a one-time migration path; a disconnected or expired protected record no longer falls back to reading logs.
+
+### Interface consolidation
+
+- Added the RabiLink page, which gathers Home, remote Agents and Configuration into three tabs. Home is a read-only view that reads the current in-app computer name, identity, online state and services through Manager. It does not embed the management page, demand a second login, return the token to the Home browser or write it into the URL, or escalate privileges. A failed connection or read is not shown as zero devices or first-time initialization; administrators still log in separately under `/manage` in a new window.
+- Removed the remote Agent add entry, quick-setup shortcut and legacy password connection panel from Route and quick setup; remote instances connect through Agent targets. Removed the standalone glasses/watch/band entries from message endpoints, Quick setup and Route; device settings belong to mobile recording. Unified recording-event delivery remains pending; existing client transport stays compatible.
+- Desktop Settings now configures a resource-cache path, validates that the directory is writable and preserves old location indexes; mobile can independently configure computer caching and local retention.
+- Removed the legacy "task end event / local announcement" contract and its WebGUI card. TTS announcements are now configured with the persona automation hooks in the same place and share event-delivery rules and Outbox receipts with group messages; new rules default to off.
+- The focused plan-feedback view, navigation layout and theme styles were adjusted accordingly, knowledge pages gained pagination recovery, and Chinese and English copy were kept in sync.
+
+### Mobile (0.3.45-dev – 0.3.49-dev)
+
+- ASR settings support draggable computer priority and offline fallback, independent of the message computer; after RabiLink authentication, audio prefers LAN, then P2P, with encrypted relay fallback.
+- Recording cards show pending, processing, retry and per-event text, and history playback refreshes results. Saving a nonempty ASR directory enables future transcription and backfills retained local events.
+- Added recording storage management with total usage, category breakdown, available device space and background refresh; Desktop Settings configures the resource-cache path and playback downloads resources on demand.
+- Fixed an empty mobile ASR directory after the PC starts before ASR is ready: local capabilities are rechecked every 30 seconds, changes update RabiLink, and stopping sharing cancels checks.
+- The recording screen now leads with a full-width 16:9 preview and drops the separate title bar. Tapping the preview toggles the control layer, and a thin ticked timeline and track legend overlay the preview bottom while retaining dragging and pinch zoom. Controls never change layout height.
+
+### Repository and release
+
+- Bumped the version to `0.3.6`, syncing `package.json`, `package-lock.json` (both the top-level and `packages[""]` fields), and both README badges and version statements.
+- Added the Antigravity adapter plan and the mobile recording/event boundary documents in Chinese and English, indexed them from `docs/README.md`, and updated the related capability maturity statements.
+- The Windows release manifest covers the new resources; developer candidates and installer packages continue to exclude tests and private files.
+
 ## 0.3.5 - 2026-09-17
 
 - Remote Agent enrollment now uses single-use tickets and individual node credentials. Manager grants access per instance and Agent, disabled by default, with revocation, strong ETags and idempotent receipts. Controlled APIs, public skills, source identity and uploads retain separate checks. Uploading never sends a file automatically; group-file delivery verifies the managed file ID, SHA-256 and channel receipt.

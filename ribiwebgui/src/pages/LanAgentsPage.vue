@@ -49,6 +49,7 @@ const loading = ref(false);
 const updatingNodeId = ref("");
 const error = ref("");
 const copied = ref(false);
+const enrollmentOpen = ref(false);
 const issuingTicket = ref(false);
 const ticketExpiresAt = ref("");
 const authorization = ref<{ nodes: Array<{ nodeId: string; enabledAgentIds: string[] }> }>();
@@ -142,27 +143,44 @@ onMounted(() => { void refresh(); });
 
 <template>
   <v-container class="lan-agents-page" fluid>
-    <div class="d-flex flex-wrap align-center justify-space-between ga-3 mb-5">
+    <div class="d-flex flex-wrap align-center justify-space-between ga-2 mb-3">
       <div>
-        <h1 class="text-h5">远端 Agent</h1>
-        <p class="text-body-2 lan-muted mb-0">在线 {{ onlineCount }} / {{ nodes.length }} 个节点。发布版本：{{ releaseVersion || "未发布" }}。</p>
-        <p v-if="releasePublicKeySha256" class="text-caption lan-muted mb-0 fingerprint">发布公钥 SHA-256：{{ releasePublicKeySha256 }}</p>
+        <h2 class="text-subtitle-1 font-weight-bold">远端智能体</h2>
+        <p class="text-body-2 lan-muted mb-0">在线 {{ onlineCount }} / {{ nodes.length }} 个节点。</p>
       </div>
-      <v-btn :loading="loading" prepend-icon="mdi-refresh" variant="tonal" @click="refresh">刷新</v-btn>
+      <div class="d-flex flex-wrap ga-2">
+        <v-btn prepend-icon="mdi-plus" color="primary" @click="enrollmentOpen = true">接入一台电脑</v-btn>
+        <v-btn :loading="loading" prepend-icon="mdi-refresh" variant="tonal" @click="refresh">刷新</v-btn>
+      </div>
     </div>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <v-card variant="outlined" class="mb-4">
+    <v-dialog v-model="enrollmentOpen" max-width="760">
+    <v-card>
       <v-card-title>接入一台电脑</v-card-title>
       <v-card-text>
-        <p class="mb-3">1. 复制接入提示词。2. 粘贴给目标电脑上的 Agent，让它下载并配置环境。3. 节点上线后，在路由的消息适配器中添加“远端 Agent”并选择该节点。</p>
-        <v-text-field v-model="managerUrl" label="目标电脑可访问的 Manager 地址" hint="使用当前 Manager 的局域网地址" persistent-hint />
+        <ol class="pl-5 mb-3">
+          <li>复制接入提示词。</li>
+          <li>粘贴给目标电脑上的智能体，让它下载并配置环境。</li>
+          <li>电脑上线后，在路由的智能体执行端中选择该实例与智能体。</li>
+        </ol>
+        <v-text-field v-model="managerUrl" label="目标电脑可访问的 RabiRoute 地址" hint="使用本机 RabiRoute 的局域网地址" density="compact" persistent-hint class="mb-2" />
         <v-btn prepend-icon="mdi-content-copy" color="primary" :loading="issuingTicket" :disabled="loading || issuingTicket || !connectionAvailable || !connectionToken || !releasePublicKeySha256" @click="copyInstallPrompt">复制接入提示词</v-btn>
-        <p v-if="!connectionAvailable" class="text-caption mt-2">接入其他电脑前，请在设置中开启局域网访问，并通过 Host 重启应用。</p>
-        <p class="text-caption mt-2">点击一次即可复制完整接入指令和一次性票据：签发后 30 分钟内有效，只能成功兑换一次，兑换后立即失效；无需手填 WebGUI 管理密钥。只粘贴到目标电脑的私密 Agent 任务中；节点接入后，还需在下方勾选“允许使用 Manager API 与 skills”。</p>
-        <v-alert v-if="copied" type="success" variant="tonal" density="compact" class="mt-2">已复制完整提示词（含 30 分钟一次性票据），有效期至 {{ formatTime(ticketExpiresAt) }}。请粘贴给目标电脑上的 Agent，成功兑换后票据立即失效。</v-alert>
+        <p v-if="!connectionAvailable" class="text-caption mt-2">接入其他电脑前，请在设置中开启局域网访问，然后重启 RabiRoute。</p>
+        <p class="text-caption mt-2">提示词含一次性票据，30 分钟内有效，成功兑换后立即失效。只粘贴到目标电脑的私密智能体任务中，无需手填管理密钥。接入后，在下方勾选“允许使用 Manager API 与 skills”以授权接口与技能访问。</p>
+        <v-alert v-if="copied" type="success" variant="tonal" density="compact" class="mt-2">已复制完整提示词（含 30 分钟一次性票据），有效期至 {{ formatTime(ticketExpiresAt) }}。请粘贴给目标电脑上的智能体，成功兑换后票据立即失效。</v-alert>
       </v-card-text>
+      <v-card-actions><v-spacer /><v-btn @click="enrollmentOpen = false">关闭</v-btn></v-card-actions>
     </v-card>
+    </v-dialog>
+    <v-expansion-panels class="mb-4">
+      <v-expansion-panel title="高级信息">
+        <v-expansion-panel-text>
+          <p>发布版本：{{ releaseVersion || "未发布" }}</p>
+          <p v-if="releasePublicKeySha256" class="text-caption fingerprint">发布公钥 SHA-256：{{ releasePublicKeySha256 }}</p>
+        </v-expansion-panel-text>
+      </v-expansion-panel>
+    </v-expansion-panels>
     <v-alert v-if="!loading && !nodes.length" type="info" variant="tonal" class="mb-4">
       暂无已接入节点。新电脑完成 Rabi Agent 自助接入后会显示在这里。
     </v-alert>
@@ -170,7 +188,7 @@ onMounted(() => { void refresh(); });
     <v-expansion-panels multiple>
       <v-expansion-panel v-for="instance in instances" :key="instance.instanceId">
         <v-expansion-panel-title>
-          {{ instance.local ? "实例：本机" : `远端Agent(${instance.address || "离线"})` }}
+          {{ instance.local ? "实例：本机" : `远端智能体（${instance.address || "离线"}）` }}
           <v-chip class="ml-3" size="small" :color="instance.connected ? 'success' : 'default'">{{ instance.connected ? "在线" : "离线" }}</v-chip>
         </v-expansion-panel-title>
         <v-expansion-panel-text>
@@ -179,13 +197,13 @@ onMounted(() => { void refresh(); });
               <v-expansion-panel-title>{{ agent.name }}</v-expansion-panel-title>
               <v-expansion-panel-text>
                 <InstanceAgentSettings v-if="!instance.local || ['codex-desktop', 'dsh'].includes(agent.provider)" :instance="instance" :agent="agent" :authorization="authorization" @saved="refresh" />
-                <v-btn v-for="route in agentRoutes(instance, agent.agentId, agent.routeId)" :key="route.id" class="mt-3 mr-2" :to="routeScopedAdaptersPath(route.id)">{{ route.routeName || route.id }}：路由与完整 Agent 设置</v-btn>
+                <v-btn v-for="route in agentRoutes(instance, agent.agentId, agent.routeId)" :key="route.id" class="mt-3 mr-2" :to="routeScopedAdaptersPath(route.id)">{{ route.routeName || route.id }}：路由与智能体设置</v-btn>
               </v-expansion-panel-text>
             </v-expansion-panel>
           </v-expansion-panels>
-          <p v-if="!instance.agents.length" class="text-body-2 my-3">此实例还没有 Agent。</p>
+          <p v-if="!instance.agents.length" class="text-body-2 my-3">此实例还没有智能体。</p>
           <template v-if="!instance.local">
-            <v-btn class="mt-3 mr-2" :disabled="!instance.connected" @click="addingInstanceId = addingInstanceId === instance.instanceId ? '' : instance.instanceId">添加 Agent</v-btn>
+            <v-btn class="mt-3 mr-2" :disabled="!instance.connected" @click="addingInstanceId = addingInstanceId === instance.instanceId ? '' : instance.instanceId">添加智能体</v-btn>
             <InstanceAgentSettings v-if="addingInstanceId === instance.instanceId" class="mt-4" :instance="instance" :agent="{ agentId: '', name: 'Agent', provider: instance.agents[0]?.provider || 'codex-desktop', enabled: true }" @saved="addingInstanceId = ''; refresh()" />
             <v-btn v-for="node in nodes.filter(node => node.nodeId === instance.instanceId)" :key="node.nodeId" class="mt-3" :disabled="!node.connected" :loading="updatingNodeId === node.nodeId" @click="requestUpdate(node)">更新连接程序至 {{ releaseVersion }}</v-btn>
           </template>
@@ -193,9 +211,9 @@ onMounted(() => { void refresh(); });
       </v-expansion-panel>
     </v-expansion-panels>
 
-    <v-card class="mt-6" variant="outlined">
-      <v-card-title>最近任务</v-card-title>
-      <v-table density="comfortable">
+    <v-card class="mt-3" variant="outlined">
+      <v-card-title class="text-subtitle-1">最近任务</v-card-title>
+      <v-table density="compact">
         <thead><tr><th>节点</th><th>状态</th><th>更新时间</th><th>结果</th></tr></thead>
         <tbody>
           <tr v-for="task in tasks" :key="task.taskId">

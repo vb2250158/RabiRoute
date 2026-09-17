@@ -781,7 +781,7 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 
 如果磁盘权限或文件锁故障导致临时预留清理失败，系统保守保留其配额并记录审计，不删除可能活跃的数据。需修复存储故障，并在 Host 重启后再次触发回收；不保证任意存储故障都自动恢复。
 
-大文件通过有背压的二进制流上传、落盘和增量 SHA-256 校验，不把完整安装包读入内存，也不使用 JSON/Base64 传包。上传期限为 30 分钟。可在「设置 → Rabi 身份」保存 `agentUploads.maxFileMiB`，整数范围 `1..2048`，默认 `2048`；值保存在 `data/Config.json`，重启 Manager 后生效。本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity` 修改该字段；远端 Agent 不得借此提高配额。客户端硬上限仍是 2 GiB，Manager 配置更低时以服务器限制为准。
+大文件通过有背压的二进制流上传、落盘和增量 SHA-256 校验，不把完整安装包读入内存，也不使用 JSON/Base64 传包。上传期限为 30 分钟。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`，整数范围 `1..2048`，默认 `2048`；值保存在 `data/Config.json`，重启 Manager 后生效。本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity` 修改该字段；远端 Agent 不得借此提高配额。客户端硬上限仍是 2 GiB，Manager 配置更低时以服务器限制为准。
 
 受控集成测试已用 **734 MiB（769654784 字节）** 文件完成真实客户端 → loopback HTTP → 受管存储 → 模拟 NapCat 的上传和发送摘要核对；文件由 64 KiB 小块生成，测试禁止大于 8 MiB 的 Buffer 分配/拼接，接收端按块核对。用 `RABI_TEST_LARGE_UPLOAD=1` 启用 `src/manager/agentUploadFlow.test.ts` 的大文件用例，默认日常测试跳过。该结果不是 QQ 平台验收：真实 QQ/NapCat 的文件大小、账号及群权限、磁盘可读性和响应期限仍以实际渠道回执为准。旧连接器须按接入文档执行新版 bootstrap，已缓存旧 Hook 的宿主需重载；服务端增大配额不会升级旧客户端。
 
@@ -1440,7 +1440,9 @@ POST /roles/:roleId/memory/consolidation-runs/:runId/result
 
 RabiRoute 负责写入沉淀记忆、记录整理轮次和标记近期记忆已沉淀。Agent 不需要移动文件、更新沉淀标记或判断触发时机。
 
-## 远端 Agent 设备接口
+## 远端 Agent 设备接口（旧协议兼容）
+
+当前远端 Agent 作为 Agent 执行端接入，见[远端接入](lan-rabi-agent-bootstrap.md)。消息端独立配置入口已移除；以下接口仅描述存量 bridge 的兼容行为。
 
 > 成熟度：实验。协议、安全边界和 Manager API 已实现并有测试，仍需要按真实局域网、VPN/TLS 和目标设备环境做端到端验收。
 

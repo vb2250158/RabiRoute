@@ -793,6 +793,12 @@ function replyPipeline(route: ResolvedRoute, request: AgentReplyRequest, target:
       ...pipeline,
       outputAdapter: explicitOutputAdapter,
       outputPipeline: explicitOutputAdapter,
+      ...(explicitChannel === "speech" ? {
+        ttsPlay: resolveSpeechRouteProfile(
+          route.profile?.routeVariables ?? route.runtime.routeVariables,
+          valueString(route.profile?.agentRoleId ?? route.runtime.agentRoleId) || "default"
+        ).autoPlay
+      } : {}),
       replyToSource: context.replyToSource === true
     };
   }

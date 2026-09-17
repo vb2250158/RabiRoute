@@ -91,7 +91,7 @@ test("App keeps only refresh, connection state, and recovery as fixed host contr
   assert.doesNotMatch(overview, /addGatewayAndOpenQuickSetup/);
   assert.doesNotMatch(source, /@click="store\.openConfigFile\('manager'\)"/);
   assert.match(source, /aria-label="刷新状态"/);
-  assert.match(source, /Manager \{\{ managerConnected/);
+  assert.match(source, /t\(managerConnected \? "服务已连接" : "服务未连接"\)/);
   assert.match(source, /PLUGIN_RECOVERY_ROUTE_NAME/);
   assert.match(source, /webPageDataRequirements/);
   assert.doesNotMatch(source, /pageNeedsGatewayDiagnostics|\^\/routes/);

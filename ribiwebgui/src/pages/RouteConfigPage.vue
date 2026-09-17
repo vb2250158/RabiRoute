@@ -5,6 +5,12 @@ import { useRoute, useRouter } from "vue-router";
 import { useGatewayStore } from "../stores/gatewayStore";
 import { useSpeechStore } from "../stores/speechStore";
 import InstanceAgentSettings from "../components/InstanceAgentSettings.vue";
+import DshConnectionPanel from "../components/DshConnectionPanel.vue";
+import PrimaryAgentAdvancedSettings from "../components/PrimaryAgentAdvancedSettings.vue";
+import { localAgentTargetKey, remoteAgentTargetKey, resolvePrimaryAgentTarget } from "@shared/routeAgentTargets";
+import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../routeAgentTargetEditor";
+import { postRouteAgentThreadAction } from "../routeAgentThreadClient";
+import { routeAgentOperationGuard } from "../routeAgentOperationGuard";
 import type { AgentInstance } from "@shared/agentInstance";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
@@ -15,16 +21,17 @@ import { webRenderersAt } from "../pluginRenderers";
 import { hotDeliveryEnabled, speechPushModeForHotDelivery } from "../speech/speechDeliveryMode";
 import type { MessageAdapterType, MessageEndpointType, AgentAdapterType, AgentDeliveryTestResult, AgentMaturity, AgentScanResult, AgentScanSession, MessageAdapterScanResult, NapCatInstance } from "../types";
 import { codexModelPickerItems, dshModelPickerItems, dshModelValue, parseDshModelValue, reasoningEffortPickerItems } from "../agentModelPicker";
-import { adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
+import { isNonMessageEndpoint, adapterDefaultWebhookPath, adapterLabel, adapterRuntimeKey, adapterSourceAliases, adapterErrorsFor, applyAdapterDefaults, configNameFor, gatewayAdapterTypes, isAdapterDisabled, isMessageInputsDisabled, isWebhookLikeAdapter, adapterConfigPathFor, messageAdapterPolicyFor, setGatewayAdapters, setMessageAdapterPolicy, toggleAdapterDisabled } from "../utils/gatewayHelpers";
 import { initializeAgentSessionForRoute } from "@shared/codexSessionInitialization";
 import { codexThreadItems, selectCodexThread, type CodexThreadSummary } from "@shared/codexThreadSelection";
 import { DEFAULT_CODEX_MEMORY_CONSOLIDATION_AGENT_MODEL, codexMemoryConsolidationAgentTitle } from "@shared/codexMemoryConsolidationAgent";
-import { agentAdapterManifest, agentAdapterSupportsManagedTaskFeature, primaryMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping, resolvePrimaryAgentAdapter } from "@shared/gatewayConfigModel";
+import { agentAdapterManifest, agentAdapterSupportsManagedTaskFeature, primaryMessageProcessingAgentEnabled, DEFAULT_CODEX_HOOK_SETTINGS, DEFAULT_MESSAGE_PROCESSING_AGENT_MODEL, DEFAULT_MESSAGE_PROCESSING_AGENT_REASONING_EFFORT, MAX_MESSAGE_PROCESSING_AGENTS, messageAdapterUsesAutomaticGrouping } from "@shared/gatewayConfigModel";
 import {
   DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
   codexPlanAssistantInitializationPrompt,
   codexPlanAssistantSessionTitles,
   normalizeCodexPlanAssistantCount,
+  filterCodexPlanAssistantSessionsForTarget,
   planAssistantSessionAgentAdapter
 } from "@shared/codexPlanAssistantSessions";
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
@@ -48,7 +55,7 @@ const route = useRoute();
 const router = useRouter();
 const messageProcessingBoardOpen = ref(false);
 const channelCheckDialogOpen = ref(false);
-const agentDeliveryTest = ref<{ loading: AgentAdapterType | null; result: AgentDeliveryTestResult | null; error: string }>({
+const agentDeliveryTest = ref<{ loading: string | null; result: AgentDeliveryTestResult | null; error: string }>({
   loading: null,
   result: null,
   error: ""
@@ -133,37 +140,6 @@ const messageAdapterScan = ref({
   durationMs: 0,
   checkedAt: ""
 });
-type RemoteAgentDeviceStatus = {
-  deviceId: string;
-  deviceName?: string;
-  agentType?: string;
-  os?: string;
-  osVersion?: string;
-  arch?: string;
-  declaredIp?: string;
-  observedIp?: string;
-  host?: string;
-  port?: number;
-  controlUrl?: string;
-  discoveryPort?: number;
-  protocolVersion?: number;
-  defaultCwd?: string;
-  defaultThreadName?: string;
-  connected?: boolean;
-  passwordSaved?: boolean;
-  connectionError?: string;
-  discoveredAt?: string;
-  connectedAt?: string;
-  lastSeenAt?: string;
-  lastTaskAt?: string;
-};
-const remoteAgentDevices = ref<RemoteAgentDeviceStatus[]>([]);
-const remoteAgentDevicesLoading = ref(false);
-const remoteAgentConnecting = ref(false);
-const remoteAgentPassword = ref("");
-const remoteAgentConnectResult = ref<{ ok: boolean; message: string } | null>(null);
-const remoteAgentDeviceError = ref("");
-const remoteAgentDeviceMenu = ref(false);
 const repairingNapcatAll = ref(false);
 const napcatAutoSteps = ref<Record<string, { ok?: boolean; message: string; steps: string[] }>>({});
 
@@ -275,18 +251,6 @@ async function runAgentScan(): Promise<void> {
 const agentInstances = ref<AgentInstance[]>([]);
 const lanAgentLoading = ref(false);
 const lanAgentError = ref("");
-const remoteAgentScans = ref<Partial<Record<AgentAdapterType, AgentScanResult>>>({});
-async function instanceOperation(type: AgentAdapterType, operation: string, payload: Record<string, unknown> = {}): Promise<any> {
-  const binding = gateway.value?.agentInstanceBindings?.[type];
-  if (!binding) throw new Error("未选择实例 Agent");
-  const access = await fetch("/api/webgui-access").then(response => response.json());
-  const response = await fetch(`/api/lan-agent/instances/${encodeURIComponent(binding.instanceId)}/agents/${encodeURIComponent(binding.agentId)}/${operation}`, {
-    method: "POST", headers: { "content-type": "application/json", "x-rabiroute-webgui-token": access.data?.token || managerAccessToken() }, body: JSON.stringify({ provider: type, ...payload })
-  });
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) throw new Error(body.message || "实例操作失败");
-  return body.result;
-}
 async function refreshLanAgentNodes(): Promise<void> {
   if (lanAgentLoading.value) return;
   lanAgentLoading.value = true;
@@ -305,10 +269,6 @@ async function refreshLanAgentNodes(): Promise<void> {
 }
 
 function refreshAgentScan(type: AgentAdapterType): void {
-  if (gateway.value?.agentInstanceBindings?.[type]) {
-    void instanceOperation(type, "scan").then(result => { remoteAgentScans.value[type] = result?.agents?.[type]; }).catch(error => { lanAgentError.value = String(error.message || error); });
-    return;
-  }
   const scan = type === "dsh" ? runDshAgentScan : runAgentScan;
   void scan();
 }
@@ -495,31 +455,10 @@ const adapterGroups: Array<{ title: string; note: string; choices: Array<{ type:
     ]
   },
   {
-    title: "远端设备",
-    note: "连接远端 Agent 设备，让本机人格按需投递下游任务。",
-    choices: [
-      { type: "remoteAgent", title: "远端 Agent", note: "远端设备只运行独立 bridge，按参数声明实际 Agent 类型", icon: "mdi-lan-connect" }
-    ]
-  },
-  {
     title: "内部触发",
     note: "由 RabiRoute 自己产生的事件。",
     choices: [
       { type: "heartbeat", title: "定时触发", note: "按间隔主动生成内部消息", icon: "mdi-timer-outline" }
-    ]
-  },
-  {
-    title: "语音转写",
-    note: "来自本机 RabiSpeech 或具体设备的语音输入。",
-    choices: [
-      { type: "rabilink", title: "眼镜端（经 RabiLink）", note: "眼镜是消息来源；RabiLink 只是系统内置的转接服务", icon: "mdi-glasses" }
-    ]
-  },
-  {
-    title: "健康与穿戴",
-    note: "来自手机、智能手表或手环的结构化健康记录与规则告警。",
-    choices: [
-      { type: "wearable", title: "智能手表 / 手环", note: "持续记录心率和睡眠，阈值命中时提示 Agent", icon: "mdi-watch-variant" }
     ]
   },
   {
@@ -599,41 +538,8 @@ function weixinSessionPhaseLabel(value: unknown): string {
   };
   return labels[String(value || "")] || "未知";
 }
-const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value));
+const visibleActiveAdapters = computed<MessageAdapterType[]>(() => uniqueAdapters(adapters.value).filter(type => !isNonMessageEndpoint(type)));
 const activeAdapterCount = computed(() => visibleActiveAdapters.value.length);
-const selectedRemoteAgentDeviceId = computed({
-  get: () => gateway.value?.remoteAgentDefaultDeviceId || "",
-  set: (value: string | null) => {
-    if (!gateway.value) return;
-    gateway.value.remoteAgentDefaultDeviceId = String(value || "");
-    const selected = remoteAgentDevices.value.find(device => device.deviceId === gateway.value?.remoteAgentDefaultDeviceId);
-    if (selected?.defaultCwd && !gateway.value.remoteAgentDefaultCwd) gateway.value.remoteAgentDefaultCwd = selected.defaultCwd;
-    if (selected?.defaultThreadName && !gateway.value.remoteAgentDefaultThreadName) gateway.value.remoteAgentDefaultThreadName = selected.defaultThreadName;
-    store.touch();
-  }
-});
-const remoteAgentDeviceOptions = computed(() => {
-  const configuredId = gateway.value?.remoteAgentDefaultDeviceId?.trim();
-  const devices = [...remoteAgentDevices.value];
-  if (configuredId && !devices.some(device => device.deviceId === configuredId)) {
-    devices.push({ deviceId: configuredId, deviceName: `${configuredId}（未连接）`, connected: false });
-  }
-  return devices.map(device => ({
-    ...device,
-    label: remoteAgentDeviceTitle(device),
-    subtitle: remoteAgentDeviceSubtitle(device)
-  }));
-});
-const selectedRemoteAgentDevice = computed(() => remoteAgentDevices.value.find(device => device.deviceId === selectedRemoteAgentDeviceId.value));
-const selectedRemoteAgentDeviceLabel = computed(() => {
-  const option = remoteAgentDeviceOptions.value.find(device => device.deviceId === selectedRemoteAgentDeviceId.value);
-  return option?.label || "选择远端 Agent 设备";
-});
-const remoteAgentConnected = computed(() => remoteAgentDevices.value.some(device => device.connected));
-const remoteAgentDiscoveryDetail = computed(() => {
-  const requirement = messageScanFor("remoteAgent")?.requirements?.find(item => item.id === "discovery");
-  return requirement?.detail || "扫描远端 bridge 公告，无需输入端口。";
-});
 const testingNapcatHealth = ref(false);
 const testingNapcatInstance = ref<Record<string, boolean>>({});
 const launchingNapcatInstance = ref<Record<string, boolean>>({});
@@ -825,7 +731,6 @@ function rawLogJson(entry: Record<string, any>): string {
 function toggleAdapterParams(type: MessageAdapterType): void {
   adapterParamOpen.value[type] = !adapterParamOpen.value[type];
   if (adapterParamOpen.value[type]) void runMessageAdapterScan();
-  if (adapterParamOpen.value[type] && type === "remoteAgent") void refreshRemoteAgentDevices();
 }
 
 function removeAdapter(type: MessageAdapterType): void {
@@ -838,7 +743,7 @@ function removeAdapter(type: MessageAdapterType): void {
 }
 
 const availableToAdd = computed(() => {
-  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "remoteAgent", "speech", "heartbeat", "xiaomiHome", "rabilink", "wearable", "webhook"];
+  const allTypes: MessageAdapterType[] = ["napcat", "wecom", "weixin", "feishu", "speech", "heartbeat", "xiaomiHome", "webhook"];
   return allTypes.filter(t => !addedAdapters.value.includes(t));
 });
 
@@ -857,12 +762,6 @@ watch(
   { immediate: true }
 );
 
-watch(
-  () => [gateway.value?.id, adapterParamOpen.value.remoteAgent] as const,
-  ([id, open]) => {
-    if (id && open) void refreshRemoteAgentDevices();
-  }
-);
 
 function addAdapter(type: MessageAdapterType): void {
   if (!gateway.value) return;
@@ -871,7 +770,6 @@ function addAdapter(type: MessageAdapterType): void {
   applyAdapterDefaults(gateway.value);
   adapterParamOpen.value[type] = true;
   void runMessageAdapterScan();
-  if (type === "remoteAgent") void refreshRemoteAgentDevices();
   store.touch();
 }
 
@@ -1337,7 +1235,7 @@ function messageScanFor(type: MessageAdapterType): MessageAdapterScanResult | un
 const channelCheckItems = computed(() => {
   const catalog = new Map(adapterGroups.flatMap(group => group.choices).map(choice => [choice.type, choice]));
   return addedAdapters.value
-    .filter((type): type is MessageEndpointType => type !== "disabled")
+    .filter((type): type is MessageEndpointType => type !== "disabled" && !isNonMessageEndpoint(type))
     .map(type => catalog.get(type) ?? {
       type,
       title: adapterLabel(type),
@@ -1348,7 +1246,7 @@ const channelCheckItems = computed(() => {
 
 async function runChannelCheck(): Promise<void> {
   const scanAgents = runAgentScan;
-  await Promise.all([runMessageAdapterScan(), scanAgents()]);
+  await Promise.all([runMessageAdapterScan(), scanAgents(), refreshLanAgentNodes()]);
 }
 
 function openChannelCheckDialog(): void {
@@ -1372,14 +1270,14 @@ function agentDeliveryTestCompletedAt(value: string): string {
   return Number.isFinite(time) ? new Date(time).toLocaleString() : value;
 }
 
-async function runAgentDeliveryTest(type: AgentAdapterType): Promise<void> {
+async function runAgentDeliveryTest(type: AgentAdapterType, targetId = localAgentTargetKey(type)): Promise<void> {
   if (!gateway.value) return;
-  agentDeliveryTest.value = { loading: type, result: null, error: "" };
+  agentDeliveryTest.value = { loading: targetId, result: null, error: "" };
   try {
     if (store.dirty) {
       throw new Error("请先保存当前配置，再执行投递测试。");
     }
-    const result = await store.testAgentDelivery(gateway.value.id, type);
+    const result = await store.testAgentDelivery(gateway.value.id, type, targetId);
     agentDeliveryTest.value = { loading: null, result, error: "" };
   } catch (error) {
     agentDeliveryTest.value = {
@@ -1405,12 +1303,14 @@ function channelCheckOverallLabel(): string {
   if (runtime.value.running === false) return "Manager 未运行";
   const scans = enabledChannelCheckScans();
   if (!scans.length) return "没有启用的通道";
-  if (!channelCheckAgentItems.value.length) return "尚未配置 Agent 端";
+  if (!primaryAgent.value) return "尚未选择主控 Agent";
   if (scans.some(scan => !scan)) return "检查完成，状态待确认";
   if (scans.some(scan => scan?.scan?.state === "timeout" || scan?.scan?.state === "error")) {
     return "检查完成，部分结果超时";
   }
-  const agentsReady = channelCheckAgentItems.value.every(item => ["可投递", "已绑定", "已发现"].includes(channelAgentConnectionLabel(item.type)));
+  const agentsReady = primaryAgent.value.binding
+    ? false // Instance connectivity alone does not prove delivery to its task owner.
+    : ["可投递", "已绑定", "已发现"].includes(channelAgentConnectionLabel(primaryAgent.value.provider));
   if (agentsReady && scans.every(scan => ["可用", "已发现"].includes(scanConnectionLabel(scan)))) return "通道状态正常";
   return "发现需要处理的通道";
 }
@@ -1430,125 +1330,6 @@ function channelCheckDetail(scan?: MessageAdapterScanResult): string {
   const missing = scan.requirements?.filter(item => item.required && item.ok === false) ?? [];
   if (missing.length) return `缺少：${missing.map(item => item.label).join("、")}`;
   return scan.installed ? "已发现消息端，连接状态需要进一步确认。" : "尚未发现所需配置或服务。";
-}
-
-function remoteAgentDeviceTitle(device: RemoteAgentDeviceStatus): string {
-  const name = device.deviceName || device.deviceId;
-  return name === device.deviceId ? name : `${name} (${device.deviceId})`;
-}
-
-function remoteAgentDeviceSubtitle(device: RemoteAgentDeviceStatus): string {
-  const status = device.connected ? "已连接" : device.connectionError ? "连接异常" : "已发现";
-  const system = [device.os, device.osVersion, device.arch].filter(Boolean).join(" ");
-  const ip = device.observedIp || device.declaredIp || device.host || "";
-  const password = device.passwordSaved ? "已记住密码" : "";
-  return [status, device.agentType, system, ip, password].filter(Boolean).join(" · ");
-}
-
-function selectRemoteAgentDevice(deviceId: string): void {
-  selectedRemoteAgentDeviceId.value = deviceId;
-  remoteAgentConnectResult.value = null;
-  remoteAgentDeviceMenu.value = false;
-}
-
-async function refreshRemoteAgentDevices(): Promise<void> {
-  if (remoteAgentDevicesLoading.value) return;
-  remoteAgentDevicesLoading.value = true;
-  remoteAgentDeviceError.value = "";
-  try {
-    const res = await fetch("/api/remote-agent/devices");
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.code === -1) {
-      throw new Error(data.message || `HTTP ${res.status}`);
-    }
-    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : [];
-  } catch (error: unknown) {
-    remoteAgentDeviceError.value = userFacingError(error);
-  } finally {
-    remoteAgentDevicesLoading.value = false;
-  }
-}
-
-async function scanRemoteAgentDevices(): Promise<void> {
-  if (remoteAgentDevicesLoading.value) return;
-  remoteAgentDevicesLoading.value = true;
-  remoteAgentDeviceError.value = "";
-  remoteAgentConnectResult.value = null;
-  try {
-    const res = await fetch("/api/remote-agent/scan", { method: "POST" });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.code === -1) {
-      throw new Error(data.message || `HTTP ${res.status}`);
-    }
-    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : [];
-    const selectedId = selectedRemoteAgentDeviceId.value;
-    if (!selectedId && remoteAgentDevices.value[0]) {
-      selectedRemoteAgentDeviceId.value = remoteAgentDevices.value[0].deviceId;
-    }
-  } catch (error: unknown) {
-    remoteAgentDeviceError.value = userFacingError(error);
-  } finally {
-    remoteAgentDevicesLoading.value = false;
-  }
-}
-
-async function connectRemoteAgentDevice(): Promise<void> {
-  if (!selectedRemoteAgentDeviceId.value || remoteAgentConnecting.value) return;
-  remoteAgentConnecting.value = true;
-  remoteAgentDeviceError.value = "";
-  remoteAgentConnectResult.value = null;
-  try {
-    const res = await fetch("/api/remote-agent/connect", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: selectedRemoteAgentDeviceId.value,
-        password: remoteAgentPassword.value
-      })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.code === -1) {
-      throw new Error(data.message || `HTTP ${res.status}`);
-    }
-    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : remoteAgentDevices.value;
-    const device = data.device as RemoteAgentDeviceStatus | undefined;
-    if (device?.deviceId && gateway.value) {
-      gateway.value.remoteAgentDefaultDeviceId = device.deviceId;
-      if (device.defaultCwd && !gateway.value.remoteAgentDefaultCwd) gateway.value.remoteAgentDefaultCwd = device.defaultCwd;
-      if (device.defaultThreadName && !gateway.value.remoteAgentDefaultThreadName) gateway.value.remoteAgentDefaultThreadName = device.defaultThreadName;
-      store.touch();
-    }
-    remoteAgentPassword.value = "";
-    remoteAgentConnectResult.value = { ok: true, message: "已连接远端 Agent，密码已记住。" };
-  } catch (error: unknown) {
-    remoteAgentConnectResult.value = { ok: false, message: userFacingError(error) };
-  } finally {
-    remoteAgentConnecting.value = false;
-  }
-}
-
-async function disconnectRemoteAgentDevice(): Promise<void> {
-  if (!selectedRemoteAgentDeviceId.value || remoteAgentConnecting.value) return;
-  remoteAgentConnecting.value = true;
-  remoteAgentDeviceError.value = "";
-  remoteAgentConnectResult.value = null;
-  try {
-    const res = await fetch("/api/remote-agent/disconnect", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ deviceId: selectedRemoteAgentDeviceId.value })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.code === -1) {
-      throw new Error(data.message || `HTTP ${res.status}`);
-    }
-    remoteAgentDevices.value = Array.isArray(data.devices) ? data.devices : remoteAgentDevices.value;
-    remoteAgentConnectResult.value = { ok: true, message: "已断开远端 Agent。" };
-  } catch (error: unknown) {
-    remoteAgentConnectResult.value = { ok: false, message: userFacingError(error) };
-  } finally {
-    remoteAgentConnecting.value = false;
-  }
 }
 
 function requirementColor(requirement: { ok?: boolean }): string {
@@ -3314,13 +3095,15 @@ const agentDefs: Array<{ type: AgentAdapterType; title: string; note: string; ic
   { type: "astrbot",     title: "AstrBot",         note: "通过 AstrBot ChatUI / 机器人框架投递消息",    icon: "mdi-robot-happy-outline", hasCwd: false, hasThread: false },
   { type: "dsh",         title: "DSH（DeepSeek Harness 会话）", note: "通过 session.prompt API 投递到本机 DSH 会话", icon: "mdi-brain", hasCwd: true, hasThread: true },
   { type: "workbuddy",   title: "WorkBuddy（腾讯 AI 办公工作台）", note: "通过会话网关投递到本机 WorkBuddy 已有任务", icon: "mdi-briefcase-outline", hasCwd: true, hasThread: true },
+  { type: "antigravity", title: "Antigravity（Google 的 Agent 开发环境）", note: "通过官方 agy agentapi 投递到本机 Antigravity 会话", icon: "mdi-rocket-launch-outline", hasCwd: true, hasThread: true },
 ];
 
 /** Short display names for panels that name the bound session owner. Falls back to the manifest label so a newly registered adapter is never mislabelled as Codex. */
 const agentShortLabels: Partial<Record<AgentAdapterType, string>> = {
   codex: "Codex Desktop",
   dsh: "DSH",
-  workbuddy: "WorkBuddy"
+  workbuddy: "WorkBuddy",
+  antigravity: "Antigravity"
 };
 
 const addAgentMenu = ref(false);
@@ -3328,36 +3111,37 @@ const testingAstrbotLogin = ref(false);
 const astrbotLoginResult = ref<{ ok: boolean; message: string } | null>(null);
 
 const agentTypes = computed(() => gateway.value?.agentAdapters ?? []);
-function boundInstance(type: AgentAdapterType) {
-  const binding = gateway.value?.agentInstanceBindings?.[type];
-  return agentInstances.value.find(instance => instance.instanceId === binding?.instanceId);
-}
-function boundInstanceAgent(type: AgentAdapterType) {
-  return boundInstance(type)?.agents.find(agent => agent.agentId === gateway.value?.agentInstanceBindings?.[type]?.agentId);
-}
-const visibleAgentItems = computed(() => agentDefs.filter(a => agentTypes.value.includes(a.type)).map(agent => gateway.value?.agentInstanceBindings?.[agent.type] ? { ...agent, title: `远端Agent(${boundInstance(agent.type)?.address || "离线"})` } : agent));
+const visibleAgentItems = computed(() => agentDefs.filter(agent => agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, title: `本机 · ${agent.title}` })));
+const remoteAgentItems = computed(() => (gateway.value?.remoteAgentTargets || []).map(target => {
+  const instance = agentInstances.value.find(item => item.instanceId === target.instanceId);
+  const agent = instance?.agents.find(item => item.agentId === target.agentId);
+  const definition = agentDefs.find(item => item.type === target.provider);
+  return { ...target, instance, agent, title: `远端 · ${definition?.title || target.provider} · ${agent?.name || target.agentId}（${instance?.address || target.instanceId}）` };
+}));
 const availableAgentsToAdd = computed(() => [
-  ...agentDefs.filter(agent => !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
+  ...agentDefs.filter(agent => !agentTypes.value.includes(agent.type)).map(agent => ({ ...agent, key: localAgentTargetKey(agent.type), title: `本机 · ${agent.title}`, nodeId: undefined as string | undefined, agentId: undefined as string | undefined })),
   ...agentInstances.value.filter(instance => !instance.local).flatMap(instance => instance.agents.flatMap(remote => {
     const def = agentDefs.find(agent => agent.type === (remote.provider === "codex-desktop" ? "codex" : remote.provider));
-    return def ? [{ ...def, title: `远端Agent(${instance.address || "离线"}) · ${remote.name}`, nodeId: instance.instanceId, agentId: remote.agentId }] : [];
+    const key = remoteAgentTargetKey({ instanceId: instance.instanceId, agentId: remote.agentId });
+    if (!def || remoteAgentItems.value.some(item => item.id === key)) return [];
+    return [{ ...def, key, title: `远端 · ${def.title} · ${remote.name}（${instance.address || instance.instanceId}）`, nodeId: instance.instanceId, agentId: remote.agentId }];
   }))
 ]);
-const primaryAgentType = computed(() => resolvePrimaryAgentAdapter(
-  agentTypes.value,
-  gateway.value?.primaryAgentAdapter
-));
+const primaryAgent = computed(() => gateway.value ? resolvePrimaryAgentTarget(gateway.value) : undefined);
+const primaryAgentType = computed(() => primaryAgent.value?.provider);
+const primaryLocalAgentType = computed(() => primaryAgent.value?.binding ? undefined : primaryAgent.value?.provider);
+const remoteAgentParamOpen = ref<Record<string, boolean>>({});
 const managedMessageAgentModeEnabled = computed(() => (
   gateway.value ? primaryMessageProcessingAgentEnabled(gateway.value) : false
 ));
-const primaryAgentItems = computed(() => visibleAgentItems.value.map(agent => ({
-  title: agent.title,
-  value: agent.type
-})));
+const primaryAgentItems = computed(() => [
+  ...visibleAgentItems.value.map(agent => ({ title: agent.title, value: localAgentTargetKey(agent.type) })),
+  ...remoteAgentItems.value.map(agent => ({ title: agent.title, value: agent.id }))
+]);
 
 const channelCheckAgentItems = computed(() => visibleAgentItems.value.map(agent => ({
   ...agent,
-  primary: primaryAgentType.value === agent.type
+  primary: primaryLocalAgentType.value === agent.type
 })));
 
 function channelManagerConnectionLabel(): string {
@@ -3423,6 +3207,8 @@ function setMessageProcessingAgentPolicy(type: AgentAdapterType, patch: Record<s
 }
 
 function agentStateFor(type: AgentAdapterType): Record<string, any> {
+  // Provider-only runtime state belongs to the selected owner, not every same-provider card.
+  if (primaryAgent.value?.binding || primaryLocalAgentType.value !== type) return {};
   return runtime.value.agentStates?.[type] ?? {};
 }
 
@@ -3442,7 +3228,6 @@ function samePath(left?: string, right?: string): boolean {
 }
 
 function agentScanFor(type: AgentAdapterType): AgentScanResult | undefined {
-  if (gateway.value?.agentInstanceBindings?.[type]) return remoteAgentScans.value[type];
   const scan = agentScan.value.agents[type];
   if (type !== "astrbot" || !gateway.value) return scan;
 
@@ -3518,6 +3303,7 @@ function currentAgentProject(type: AgentAdapterType): string {
   if (type === "codex") return gateway.value.codexCwd || "";
   if (type === "dsh") return gateway.value.dshCwd || "";
   if (type === "workbuddy") return gateway.value.workbuddyCwd || "";
+  if (type === "antigravity") return gateway.value.antigravityCwd || "";
   return "";
 }
 
@@ -3667,20 +3453,44 @@ function selectWorkbuddySession(value: unknown): void {
   touch();
 }
 
+function antigravitySessionItems(): Array<{ title: string; value: string; subtitle?: string }> {
+  return agentSessions("antigravity")
+    .filter((session) => session.id)
+    .filter((session) => !gateway.value?.antigravityCwd || !session.projectPath || samePath(session.projectPath, gateway.value.antigravityCwd))
+    .map((session) => ({
+      title: session.name,
+      value: session.id!,
+      subtitle: [
+        session.projectPath,
+        session.live === true ? "宿主在线" : session.live === false ? "宿主未运行" : undefined,
+        session.updatedAt
+      ].filter(Boolean).join(" · ")
+    }));
+}
+
+function selectAntigravitySession(value: unknown): void {
+  if (!gateway.value) return;
+  const raw = String(value || "").trim();
+  const selected = agentSessions("antigravity").find((session) => session.id === raw);
+  if (selected?.id) {
+    gateway.value.antigravityConversationId = selected.id;
+    gateway.value.antigravityConversationName = selected.name;
+    if (selected.projectPath) gateway.value.antigravityCwd = selected.projectPath;
+  } else {
+    gateway.value.antigravityConversationId = "";
+    gateway.value.antigravityConversationName = raw;
+  }
+  touch();
+}
+
 function managedAgentSessionContext(type: AgentAdapterType): {
-  agentAdapter: "codex" | "dsh" | "workbuddy";
+  agentAdapter: "codex" | "dsh" | "workbuddy" | "antigravity";
   sessionId: string;
   sessionName: string;
   workspace: string;
   dshBaseUrl?: string;
 } | null {
-  if (!gateway.value || (type !== "codex" && type !== "dsh" && type !== "workbuddy")) return null;
-  if (gateway.value.agentInstanceBindings?.[type]) {
-    const agent = boundInstanceAgent(type);
-    if (!agent) return null;
-    return { agentAdapter: type, sessionId: agent.sessionId || "", sessionName: agent.name,
-      workspace: agent.workspace || "", dshBaseUrl: agent.dshBaseUrl };
-  }
+  if (!gateway.value || (type !== "codex" && type !== "dsh" && type !== "workbuddy" && type !== "antigravity")) return null;
   if (type === "dsh") {
     return {
       agentAdapter: "dsh",
@@ -3696,6 +3506,14 @@ function managedAgentSessionContext(type: AgentAdapterType): {
       sessionId: String(gateway.value.workbuddySessionId || "").trim(),
       sessionName: String(gateway.value.workbuddySessionName || fallbackCodexThreadName()).trim(),
       workspace: String(gateway.value.workbuddyCwd || "").trim()
+    };
+  }
+  if (type === "antigravity") {
+    return {
+      agentAdapter: "antigravity",
+      sessionId: String(gateway.value.antigravityConversationId || "").trim(),
+      sessionName: String(gateway.value.antigravityConversationName || fallbackCodexThreadName()).trim(),
+      workspace: String(gateway.value.antigravityCwd || "").trim()
     };
   }
   return {
@@ -3758,11 +3576,6 @@ async function updateHooksToAgent(type: AgentAdapterType): Promise<void> {
   if (hookUpdate.value.loading) return;
   hookUpdate.value = { loading: true, message: "", error: "" };
   try {
-    if (gateway.value?.agentInstanceBindings?.[type]) {
-      const result = await instanceOperation(type, "hooks");
-      hookUpdate.value.message = result.message;
-      return;
-    }
     const response = await fetch(`/api/agent-adapters/hooks/update?adapter=${encodeURIComponent(type)}`, { method: "POST" });
     const result = await response.json();
     if (!response.ok || result.ok !== true) throw new Error(result.message || "Hook 更新失败");
@@ -3883,13 +3696,12 @@ function agentWarnings(type: AgentAdapterType): string[] {
 
 function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string): void {
   if (!gateway.value) return;
-  if (nodeId && agentId) gateway.value.agentInstanceBindings = { ...gateway.value.agentInstanceBindings, [type]: { instanceId: nodeId, agentId } };
-
-  gateway.value.agentAdapters = [...new Set([...agentTypes.value, type])];
-  gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(
-    gateway.value.agentAdapters,
-    gateway.value.primaryAgentAdapter
-  );
+  addRouteAgent(gateway.value, type, nodeId, agentId);
+  if (nodeId && agentId) {
+    remoteAgentParamOpen.value[remoteAgentTargetKey({ instanceId: nodeId, agentId })] = true;
+    store.touch();
+    return;
+  }
   agentParamOpen.value[type] = true;
   if (supportsManagedTaskFeature(type, "hooks") && !gateway.value.codexHooks) {
     gateway.value.codexHooks = { ...DEFAULT_CODEX_HOOK_SETTINGS };
@@ -3898,25 +3710,20 @@ function addAgent(type: AgentAdapterType, nodeId?: string, agentId?: string): vo
   store.touch();
 }
 
-async function postAgentThreadAction(payload: Record<string, unknown>): Promise<Record<string, any>> {
-  const type = (payload.agentAdapter || primaryAgentType.value) as AgentAdapterType;
-  if (gateway.value?.agentInstanceBindings?.[type]) {
-    const result = await instanceOperation(type, "threads", { ...payload, agentAdapter: type });
-    if (result.statusCode >= 400) throw new Error(result.data?.message || "实例任务操作失败");
-    return { code: 0, data: result.data };
-  }
-  const response = await fetch("/api/agent/threads", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || body.code === -1) throw new Error(body.message || "Agent 会话操作失败。");
-  return body;
+async function postAgentThreadAction(payload: Record<string, unknown>, target?: ReturnType<typeof resolvePrimaryAgentTarget>): Promise<Record<string, any>> {
+  return postRouteAgentThreadAction(payload, target, { accessToken: managerAccessToken });
 }
 
 async function initializePlanAssistants(): Promise<void> {
   if (!gateway.value || codexPlanAssistants.value.loading) return;
+  const gatewayId = gateway.value.id;
+  const target = primaryAgent.value;
+  const assertSelection = routeAgentOperationGuard(gatewayId, target?.id || "", () => ({ gatewayId: gateway.value?.id, targetId: primaryAgent.value?.id }));
+  const originalGateway = () => {
+    const original = store.gateways.find(item => item.id === gatewayId);
+    if (!original) throw new Error("原路线已被移除，已停止秘书初始化。");
+    return original;
+  };
   codexPlanAssistants.value = {
     count: normalizeCodexPlanAssistantCount(codexPlanAssistants.value.count),
     loading: true,
@@ -3927,9 +3734,16 @@ async function initializePlanAssistants(): Promise<void> {
     if (!String(gateway.value.agentRoleId || "").trim()) {
       throw new Error("请先为当前 Route 绑定人格，再初始化计划协助会话。");
     }
-    await store.save();
-    const current = gateway.value;
-    const rawSource = managedAgentSessionContext(primaryAgentType.value || "codex");
+    if (!target) throw new Error("请先选择主控 Agent。");
+    assertSelection();
+    await store.save(gatewayId);
+    assertSelection();
+    const current = originalGateway();
+    const remote = target.binding ? remoteAgentItems.value.find(item => item.id === target.id) : undefined;
+    if (target.binding && (!remote?.instance?.connected || !remote.agent)) throw new Error("当前远端主控不可用，未创建秘书任务。");
+    const rawSource = remote?.agent
+      ? { agentAdapter: target.provider, sessionId: remote.agent.sessionId || "", sessionName: remote.agent.name, workspace: remote.agent.workspace || "", dshBaseUrl: remote.agent.dshBaseUrl }
+      : managedAgentSessionContext(target.provider);
     if (rawSource && rawSource.agentAdapter !== "codex" && rawSource.agentAdapter !== "dsh") {
       throw new Error(`计划协助会话当前仅支持 Codex 与 DSH 主人格，${managedAgentLabel(rawSource.agentAdapter)} 尚未适配。`);
     }
@@ -3945,7 +3759,8 @@ async function initializePlanAssistants(): Promise<void> {
       agentAdapter: source.agentAdapter,
       threadId: source.sessionId,
       ...(source.dshBaseUrl ? { dshBaseUrl: source.dshBaseUrl } : {})
-    });
+    }, target);
+    assertSelection();
     const sourceThreadName = String(source.agentAdapter === "codex"
       ? sourceRead.thread?.name
       : sourceRead.thread?.name || sourceRead.thread?.title || source.sessionName || fallbackCodexThreadName()).trim();
@@ -3953,11 +3768,12 @@ async function initializePlanAssistants(): Promise<void> {
       throw new Error("无法读取 Codex 侧栏显示的 Name，未创建计划秘书 Agent。");
     }
     const titles = codexPlanAssistantSessionTitles(sourceThreadName, count);
-    const existing = (current.codexPlanAssistantSessions ?? [])
+    const existing = filterCodexPlanAssistantSessionsForTarget(current.codexPlanAssistantSessions, target.id)
       .filter((session) => planAssistantSessionAgentAdapter(session) === source.agentAdapter);
     const resolved = [] as NonNullable<typeof current.codexPlanAssistantSessions>;
 
     for (let index = 0; index < titles.length; index += 1) {
+      assertSelection();
       const desiredTitle = titles[index];
       const previous = existing[index];
       const result = await postAgentThreadAction({
@@ -3969,10 +3785,11 @@ async function initializePlanAssistants(): Promise<void> {
         createIfMissing: true,
         lookupMode: "state_db",
         ...(source.dshBaseUrl ? { dshBaseUrl: source.dshBaseUrl } : {})
-      });
+      }, target);
       const thread = result.thread;
       if (!thread?.id) throw new Error(`计划协助会话 ${index + 1} 没有返回完整任务 ID。`);
       resolved.push({
+        agentTargetId: target.id,
         ...(source.agentAdapter === "dsh" ? { agentAdapter: "dsh" as const } : {}),
         threadId: thread.id,
         threadName: thread.title || desiredTitle,
@@ -3980,13 +3797,20 @@ async function initializePlanAssistants(): Promise<void> {
         index: index + 1,
         initializedAt: previous?.threadId === thread.id ? previous.initializedAt : undefined
       });
+      // Retain a completed creation in the captured route draft even if the user switched while awaiting it.
+      const original = originalGateway();
+      original.codexPlanAssistantSessions = [...(original.codexPlanAssistantSessions || []).filter(session => session.agentTargetId !== target.id), ...resolved, ...existing.slice(index + 1)];
+      assertSelection();
     }
 
-    current.codexPlanAssistantSessions = resolved;
+    assertSelection();
+    originalGateway().codexPlanAssistantSessions = [...(originalGateway().codexPlanAssistantSessions || []).filter(session => session.agentTargetId !== target.id), ...resolved];
     touch();
-    await store.save();
+    await store.save(gatewayId);
+    assertSelection();
 
     for (const session of resolved) {
+      assertSelection();
       if (session.initializedAt) continue;
       await postAgentThreadAction({
         action: "send",
@@ -4020,10 +3844,14 @@ async function initializePlanAssistants(): Promise<void> {
         sourceAgentType: "primary_persona",
         responsePolicy: "none",
         ...(source.dshBaseUrl ? { dshBaseUrl: source.dshBaseUrl } : {})
-      });
+      }, target);
       session.initializedAt = new Date().toISOString();
+      const bound = originalGateway().codexPlanAssistantSessions?.find(item => item.agentTargetId === target.id && item.threadId === session.threadId);
+      if (bound) bound.initializedAt = session.initializedAt;
+      assertSelection();
       touch();
-      await store.save();
+      await store.save(gatewayId);
+      assertSelection();
     }
     const detached = Math.max(0, existing.length - resolved.length);
     codexPlanAssistants.value = {
@@ -4045,19 +3873,21 @@ async function initializePlanAssistants(): Promise<void> {
 
 function removeAgent(type: AgentAdapterType): void {
   if (!gateway.value) return;
-  gateway.value.agentAdapters = agentTypes.value.filter(t => t !== type);
-  if (gateway.value.agentInstanceBindings) delete gateway.value.agentInstanceBindings[type];
-  gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(
-    gateway.value.agentAdapters,
-    gateway.value.primaryAgentAdapter
-  );
+  removeRouteAgent(gateway.value, localAgentTargetKey(type));
   agentParamOpen.value[type] = false;
   store.touch();
 }
 
-function selectPrimaryAgent(value: unknown): void {
+function removeRemoteAgent(targetId: string): void {
   if (!gateway.value) return;
-  gateway.value.primaryAgentAdapter = resolvePrimaryAgentAdapter(agentTypes.value, value);
+  removeRouteAgent(gateway.value, targetId);
+  delete remoteAgentParamOpen.value[targetId];
+  store.touch();
+}
+
+function selectPrimaryAgent(value: unknown): void {
+  if (!gateway.value || typeof value !== "string") return;
+  selectRouteAgent(gateway.value, value);
   store.touch();
 }
 
@@ -4994,98 +4824,6 @@ watch(
                       主机只做一次 ASR，再把同一份文字广播给订阅 Route；不会为每个人格重复占用麦克风或重复跑识别模型。
                     </v-alert>
                   </div>
-                  <div v-else-if="choice.type === 'remoteAgent'" class="catalog-param-grid">
-                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
-                      远端 Agent 是下游 Agent 设备入口。远端机器只运行 <code>plugin-adapters/remote-agent-rabiroute</code> bridge，无人值守等待 RabiGUI 扫描；选择设备并输入密码后，本机人格会通过 Rabi API 投递任务。
-                    </v-alert>
-                    <div class="full-span">
-                      <v-menu v-model="remoteAgentDeviceMenu" location="bottom start" :close-on-content-click="false">
-                        <template #activator="{ props }">
-                          <v-btn
-                            v-bind="props"
-                            class="remote-agent-device-select"
-                            variant="outlined"
-                            block
-                            append-icon="mdi-menu-down"
-                            :loading="remoteAgentDevicesLoading"
-                            @click="remoteAgentDeviceOptions.length ? undefined : scanRemoteAgentDevices()"
-                          >
-                            <span class="remote-agent-device-select-main">{{ selectedRemoteAgentDeviceLabel }}</span>
-                          </v-btn>
-                        </template>
-                        <v-list class="remote-agent-device-menu" density="compact">
-                          <v-list-item
-                            v-for="device in remoteAgentDeviceOptions"
-                            :key="device.deviceId"
-                            prepend-icon="mdi-lan-connect"
-                            :title="device.label"
-                            :subtitle="device.subtitle"
-                            @click="selectRemoteAgentDevice(device.deviceId)"
-                          />
-                          <v-list-item
-                            v-if="remoteAgentDeviceOptions.length === 0"
-                            prepend-icon="mdi-lan-disconnect"
-                            title="还没有扫描到远端 Agent 设备"
-                            subtitle="先在另一台设备运行 remote-agent-rabiroute bridge，再扫描局域网。"
-                          />
-                        </v-list>
-                      </v-menu>
-                      <div class="field-hint">选择当前路由默认投递的远端设备；端口占用会由 bridge 和 Rabi 扫描自动处理。</div>
-                    </div>
-                    <v-text-field
-                      v-model="remoteAgentPassword"
-                      class="full-span"
-                      type="password"
-                      label="连接密码"
-                      :placeholder="selectedRemoteAgentDevice?.passwordSaved ? '已记住密码，留空可直接连接' : '输入远端 bridge 启动时显示的密码'"
-                      autocomplete="current-password"
-                    />
-                    <v-alert v-if="remoteAgentConnectResult" class="full-span" :type="remoteAgentConnectResult.ok ? 'success' : 'warning'" variant="tonal" density="compact">
-                      {{ remoteAgentConnectResult.message }}
-                    </v-alert>
-                    <v-alert v-if="remoteAgentDeviceError" class="full-span" type="warning" variant="tonal" density="compact">
-                      {{ remoteAgentDeviceError }}
-                    </v-alert>
-                    <div v-if="selectedRemoteAgentDevice" class="full-span">
-                      <div class="status-row"><span>选中设备</span><b>{{ remoteAgentDeviceTitle(selectedRemoteAgentDevice) }}</b></div>
-                      <div class="status-row"><span>连接状态</span><b :class="selectedRemoteAgentDevice.connected ? 'text-success' : 'text-warning'">{{ selectedRemoteAgentDevice.connected ? "已连接" : "未连接" }}</b></div>
-                      <div class="status-row"><span>Agent 类型</span><b>{{ selectedRemoteAgentDevice.agentType || "agent" }}</b></div>
-                      <div class="status-row"><span>系统</span><b>{{ [selectedRemoteAgentDevice.os, selectedRemoteAgentDevice.osVersion, selectedRemoteAgentDevice.arch].filter(Boolean).join(" ") || "-" }}</b></div>
-                      <div class="status-row"><span>IP</span><b>{{ selectedRemoteAgentDevice.observedIp || selectedRemoteAgentDevice.declaredIp || selectedRemoteAgentDevice.host || "-" }}</b></div>
-                      <div class="status-row"><span>密码</span><b>{{ selectedRemoteAgentDevice.passwordSaved ? "已记住" : "未保存" }}</b></div>
-                      <div class="status-row"><span>默认 cwd</span><b>{{ selectedRemoteAgentDevice.defaultCwd || "-" }}</b></div>
-                      <div class="status-row"><span>默认线程</span><b>{{ selectedRemoteAgentDevice.defaultThreadName || "-" }}</b></div>
-                      <div v-if="selectedRemoteAgentDevice.connectionError" class="status-row"><span>连接诊断</span><b class="text-warning">{{ selectedRemoteAgentDevice.connectionError }}</b></div>
-                    </div>
-                    <div class="full-span">
-                      <div class="status-row"><span>设备发现 API</span><b>/api/remote-agent/devices</b></div>
-                      <div class="status-row"><span>任务投递 API</span><b>/api/remote-agent/tasks</b></div>
-                      <div class="status-row"><span>局域网扫描</span><b>{{ remoteAgentDiscoveryDetail }}</b></div>
-                      <div class="status-row"><span>在线状态</span><b :class="remoteAgentConnected ? 'text-success' : 'text-warning'">{{ remoteAgentConnected ? '已有设备连接' : '等待扫描并连接' }}</b></div>
-                    </div>
-                    <div class="agent-action-bar full-span mt-2">
-                      <div class="agent-action-status">
-                        <span class="section-note">开启后，Agent prompt 会注入远端 Agent 设备 API。bridge 没有公知默认密码；请使用远端终端显示的临时密码或预先配置的高熵密码。</span>
-                      </div>
-                      <div class="d-flex ga-2 flex-wrap">
-                        <v-btn size="small" variant="tonal" color="secondary" prepend-icon="mdi-lan-pending" :loading="remoteAgentDevicesLoading" @click="scanRemoteAgentDevices">
-                          扫描局域网
-                        </v-btn>
-                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-lan-connect" :loading="remoteAgentConnecting" :disabled="!selectedRemoteAgentDeviceId" @click="connectRemoteAgentDevice">
-                          连接
-                        </v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-lan-disconnect" :loading="remoteAgentConnecting" :disabled="!selectedRemoteAgentDeviceId || !selectedRemoteAgentDevice?.connected" @click="disconnectRemoteAgentDevice">
-                          断开
-                        </v-btn>
-                        <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText('/api/remote-agent/devices', '已复制远端 Agent 设备 API')">
-                          复制设备 API
-                        </v-btn>
-                        <v-btn size="small" variant="text" prepend-icon="mdi-text-box-search-outline" @click="openRuntimeLog">
-                          打开日志
-                        </v-btn>
-                      </div>
-                    </div>
-                  </div>
                   <div v-else-if="choice.type === 'heartbeat'" class="catalog-param-grid">
                     <v-alert v-if="managedMessageAgentModeEnabled" class="full-span" type="success" variant="tonal" density="compact">
                       Codex 消息处理 Agent 模式已开启。heartbeat 会立即交给独立消息处理 Agent，不会因为主人格会话正在工作而跳过，也不进入聊天消息合并等待。
@@ -5336,36 +5074,20 @@ watch(
                       </div>
                     </div>
                   </template>
-                  <div v-else-if="choice.type === 'wearable'" class="catalog-param-grid">
-                    <v-alert class="full-span" type="info" variant="tonal" density="compact">
-                      此消息端复用控制台里的全局 RabiLink Relay，不另开监听端口。RabiLink 手机端负责配置设备、加密保存小米密钥、读取 Health Connect 并上报；普通样本只记录，阈值或睡眠状态规则命中后才投递 Agent。
-                    </v-alert>
-                    <div class="status-row full-span"><span>角色健康状态 API</span><b>/api/roles/{{ gateway.agentRoleId || "Rabi" }}/health/state</b></div>
-                    <div class="status-row full-span"><span>健康历史 API</span><b>/api/roles/{{ gateway.agentRoleId || "Rabi" }}/health/history</b></div>
-                    <div class="status-row full-span"><span>健康摘要 API</span><b>/api/roles/{{ gateway.agentRoleId || "Rabi" }}/health/summary</b></div>
-                  </div>
                   <div v-else-if="isWebhookLikeAdapter(choice.type)" class="catalog-param-grid">
-                    <v-text-field v-if="choice.type === 'rabilink'" :model-value="webhookHostFor(choice.type)" :label="`${sourceTitle(choice.type)} 监听地址`" placeholder="0.0.0.0" @update:model-value="value => setWebhookHost(choice.type, value)" />
                     <v-text-field :model-value="webhookPortFor(choice.type)" type="number" :label="`${sourceTitle(choice.type)} 监听端口`" @update:model-value="value => setWebhookPort(choice.type, value)" />
                     <v-text-field :model-value="webhookPathFor(choice.type)" :label="`${sourceTitle(choice.type)} 路径`" :placeholder="adapterDefaultWebhookPath(choice.type)" @update:model-value="value => setWebhookPath(choice.type, value)" />
-                    <v-alert v-if="choice.type === 'rabilink'" class="full-span" type="info" variant="tonal" density="compact">
-                      Relay 服务器、应用 token 和本机 Rabi PC 标识在控制台的 Rabi 实例里统一配置；这里添加消息端即可接收 RabiLink 输入。
-                    </v-alert>
                   </div>
                   <template v-if="isWebhookLikeAdapter(choice.type) && runtime.running !== undefined">
                     <div class="status-row"><span>运行状态</span><b>{{ runtime.running ? "运行中" : "已停止" }}</b></div>
                     <div class="status-row"><span>监听地址</span><b>{{ webhookUrl(choice.type) }}</b></div>
-                    <div v-if="choice.type === 'rabilink'" class="status-row"><span>复制回调</span><b>{{ callbackUrl(choice.type) }}</b></div>
                     <div class="agent-action-bar mt-2">
                       <div class="agent-action-status">
-                        <span class="section-note">{{ sourceTitle(choice.type) }} 使用底层 HTTP 回调；RabiLink 的回调地址会把 0.0.0.0 换成本机可访问 IP。</span>
+                        <span class="section-note">{{ sourceTitle(choice.type) }} 使用 HTTP 回调接收事件。</span>
                       </div>
                       <div class="d-flex ga-2 flex-wrap">
                         <v-btn size="small" variant="tonal" color="primary" prepend-icon="mdi-content-copy" @click="copyText(callbackUrl(choice.type), `已复制 ${sourceTitle(choice.type)} 回调地址`)">
                           复制回调
-                        </v-btn>
-                        <v-btn v-if="choice.type === 'rabilink'" size="small" variant="text" prepend-icon="mdi-access-point" @click="copyText(webhookUrl(choice.type), '已复制监听地址')">
-                          复制监听
                         </v-btn>
                         <v-btn size="small" variant="text" prepend-icon="mdi-console" @click="copyText(webhookCurl(choice.type), '已复制 curl 示例')">
                           复制 curl
@@ -5482,14 +5204,15 @@ watch(
           </div>
         </div>
 
-        <div v-if="primaryAgentType" class="catalog-param-grid mb-4">
+        <div v-if="primaryAgentItems.length" class="catalog-param-grid mb-4">
           <v-select
             class="full-span"
-            :model-value="primaryAgentType"
+            :model-value="gateway.primaryAgentTarget || null"
             :items="primaryAgentItems"
             item-title="title"
             item-value="value"
             label="主控 Agent"
+            placeholder="请选择负责接收消息的 Agent"
             hint="命中规则的消息只投递给主控 Agent；其他 Agent 保留配置，不会收到默认消息。"
             persistent-hint
             @update:model-value="selectPrimaryAgent"
@@ -5633,7 +5356,7 @@ watch(
                 >
                   {{ warning }}
                 </v-alert>
-                <div v-if="supportsManagedTaskFeature(agent.type, 'messageProcessingAgent') && primaryAgentType === agent.type" class="dependency-panel mb-3">
+                <div v-if="supportsManagedTaskFeature(agent.type, 'messageProcessingAgent') && primaryLocalAgentType === agent.type" class="dependency-panel mb-3">
                   <div class="section-title-row compact-row">
                     <div>
                       <div class="section-title small-title">消息处理 Agent 模式</div>
@@ -5707,11 +5430,7 @@ watch(
                   </v-dialog>
                 </div>
                 <!-- Codex -->
-                <template v-if="gateway.agentInstanceBindings?.[agent.type]">
-                  <InstanceAgentSettings v-if="boundInstance(agent.type) && boundInstanceAgent(agent.type)" :instance="boundInstance(agent.type)!" :agent="boundInstanceAgent(agent.type)!" @saved="refreshLanAgentNodes" />
-                  <v-alert v-else type="warning" variant="tonal">此实例中的 Agent 暂不可用，请刷新实例列表。</v-alert>
-                </template>
-                <template v-else-if="agent.type === 'codex'">
+                <template v-if="agent.type === 'codex'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
                     实际消息只交给 Codex/ChatGPT Desktop 当前任务执行，因此桌面端会立即显示消息并沿用该任务的工具、模型与权限。Desktop 未启动或目标任务无法加载时会明确失败，不会启动备用 Runtime。
                   </v-alert>
@@ -5939,16 +5658,13 @@ watch(
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
                     RabiRoute 通过 DSH apiproxy 发现、创建、重命名、绑定和续投会话。实际消息由同一个 DSH session owner 执行；失败时不会改投 Codex。
                   </v-alert>
-                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
-                    DSH 扫描会读取 <code>RabiRoute Agent</code> 的运行状态、版本、Manager 地址、通信约束和模型工具。显示“未就绪”时按上方诊断更新插件并重启 DSH。
-                  </v-alert>
+                  <DshConnectionPanel :base-url="gateway.dshBaseUrl" @update:base-url="gateway.dshBaseUrl = $event; touch()" />
                   <div class="catalog-param-grid">
                     <v-combobox
                       v-model="gateway.dshBaseUrl"
                       :items="agentScanFor('dsh')?.endpoints?.map(endpoint => endpoint.url) ?? []"
-                      label="DSH API 基地址"
-                      placeholder="http://127.0.0.1:3080"
-                      hint="先填写 apiproxy 地址，再扫描项目和会话；默认 http://127.0.0.1:3080"
+                      label="DSH 地址"
+                      hint="连接面板会自动填入地址；修改地址后请重新验证连接，再扫描会话。"
                       persistent-hint
                       data-no-i18n
                       @update:model-value="touch"
@@ -6155,6 +5871,71 @@ watch(
                     </div>
                   </div>
                 </template>
+                <template v-else-if="agent.type === 'antigravity'">
+                  <v-alert type="info" variant="tonal" density="compact" class="mb-2">
+                    RabiRoute 通过 Antigravity 官方 <code>agy agentapi</code> 投递到本机<b>已有会话</b>：会话 ID 就是路由键，同一会话续投不会新建会话。
+                  </v-alert>
+                  <v-alert type="warning" variant="tonal" density="compact" class="mb-2">
+                    需要 Antigravity 桌面正在运行：language server 端口按进程动态发现，CSRF 令牌从桌面启动日志读取，均无需手工填写。会话 ID 留空时每次投递都会新开会话。
+                  </v-alert>
+                  <div class="catalog-param-grid">
+                    <v-combobox
+                      :model-value="gateway.antigravityConversationId || gateway.antigravityConversationName"
+                      :items="antigravitySessionItems()"
+                      item-title="title"
+                      item-value="value"
+                      :return-object="false"
+                      label="Antigravity 会话"
+                      placeholder="选择已有会话，或输入会话名称"
+                      hint="选择后保存完整会话 ID 和名称；同一会话续投不会新建会话"
+                      persistent-hint
+                      @update:model-value="selectAntigravitySession"
+                    >
+                      <template #item="{ props, item }">
+                        <v-list-item v-bind="props" :subtitle="item.raw.subtitle" />
+                      </template>
+                      <template #append-inner>
+                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                        <v-icon v-else icon="mdi-refresh" size="18" class="scan-btn" title="重新扫描会话" @click.stop="runAgentScan" />
+                      </template>
+                    </v-combobox>
+                    <v-text-field
+                      v-model="gateway.antigravityConversationName"
+                      label="会话名称"
+                      hint="用于界面显示；会话 ID 为空时按名称查找"
+                      persistent-hint
+                      @update:model-value="touch"
+                    />
+                    <v-combobox
+                      v-model="gateway.antigravityCwd"
+                      :items="agentProjectItems('antigravity')"
+                      label="工作目录"
+                      placeholder="C:/Path/To/Project"
+                      hint="用于消歧同名会话；选择已有会话时自动采用会话目录"
+                      persistent-hint
+                      @update:model-value="touch"
+                    >
+                      <template #append-inner>
+                        <v-progress-circular v-if="agentScan.loading" size="16" width="2" indeterminate />
+                        <v-icon v-else-if="agentProjectItems('antigravity').length === 0" icon="mdi-magnify" size="18" class="scan-btn" title="扫描" @click.stop="runAgentScan" />
+                      </template>
+                    </v-combobox>
+                  </div>
+                  <div class="mt-2">
+                    <div class="status-row">
+                      <span>Antigravity 连接</span>
+                      <b :class="`text-${agentConnectionColor('antigravity')}`">{{ agentConnectionLabel('antigravity') }}</b>
+                    </div>
+                    <div class="status-row">
+                      <span>会话发现</span>
+                      <b :class="antigravitySessionItems().length ? 'text-success' : 'text-warning'">{{ antigravitySessionItems().length ? `可选 ${antigravitySessionItems().length} 个` : '未读取到 Antigravity 会话' }}</b>
+                    </div>
+                    <div class="status-row">
+                      <span>投递协议</span>
+                      <b>agy agentapi · 同 ID 续投</b>
+                    </div>
+                  </div>
+                </template>
                 <template v-else-if="agent.type === 'astrbot'">
                   <v-alert type="info" variant="tonal" density="compact" class="mb-2">
                     AstrBot 必须绑定 ChatUI 项目和会话；消息只通过 /api/chat/send 投递。
@@ -6281,7 +6062,7 @@ watch(
                     {{ astrbotLoginResult.message }}
                   </v-alert>
                 </template>
-                  <div v-if="primaryAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'memoryConsolidationAgent')" class="dependency-panel mt-3">
+                  <div v-if="primaryLocalAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'memoryConsolidationAgent')" class="dependency-panel mt-3">
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">独立记忆整理 Agent</div>
@@ -6313,7 +6094,7 @@ watch(
                       />
                     </div>
                   </div>
-                  <div v-if="primaryAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'planAssistantSessions')" class="dependency-panel mt-3">
+                  <div v-if="primaryLocalAgentType === agent.type && supportsManagedTaskFeature(agent.type, 'planAssistantSessions')" class="dependency-panel mt-3">
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">计划协助会话</div>
@@ -6373,7 +6154,7 @@ watch(
                     </div>
                     <div v-if="gateway.codexPlanAssistantEnabled && gateway.codexPlanAssistantSessions?.length" class="d-flex ga-2 flex-wrap mt-2">
                       <v-chip
-                        v-for="session in gateway.codexPlanAssistantSessions"
+                        v-for="session in filterCodexPlanAssistantSessionsForTarget(gateway.codexPlanAssistantSessions, localAgentTargetKey(agent.type))"
                         :key="session.threadId"
                         size="small"
                         variant="tonal"
@@ -6395,7 +6176,39 @@ watch(
             </v-expand-transition>
           </div>
 
-          <div v-if="visibleAgentItems.length === 0" class="empty-state compact-empty">
+          <div v-for="target in remoteAgentItems" :key="target.id" class="catalog-item">
+            <div class="catalog-row active" @click="remoteAgentParamOpen[target.id] = !remoteAgentParamOpen[target.id]">
+              <v-icon class="catalog-row-icon" color="secondary">mdi-monitor-dashboard</v-icon>
+              <span class="catalog-row-main">
+                <strong>{{ target.title }}</strong>
+                <small>由这台远端电脑上的 Agent 处理消息</small>
+              </span>
+              <div class="catalog-row-actions">
+                <v-chip size="x-small" :color="target.instance?.connected && target.agent ? 'success' : 'warning'" variant="tonal">{{ target.instance?.connected && target.agent ? '实例在线' : '暂不可用' }}</v-chip>
+                <v-btn :icon="remoteAgentParamOpen[target.id] ? 'mdi-chevron-up' : 'mdi-chevron-down'" size="small" variant="text" :title="remoteAgentParamOpen[target.id] ? '收起参数' : '展开参数'" @click.stop="remoteAgentParamOpen[target.id] = !remoteAgentParamOpen[target.id]" />
+                <v-btn icon="mdi-close" size="small" variant="text" color="error" title="从此路线移除远端 Agent" @click.stop="removeRemoteAgent(target.id)" />
+              </div>
+            </div>
+            <v-expand-transition>
+              <div v-if="remoteAgentParamOpen[target.id]" class="catalog-param-panel">
+                <InstanceAgentSettings v-if="target.instance && target.agent" :key="target.id" :instance="target.instance" :agent="target.agent" @saved="refreshLanAgentNodes" />
+                <v-alert v-else type="warning" variant="tonal">此远端 Agent 暂不可用，配置仍然保留，不会改投本机。请刷新实例列表。</v-alert>
+                <v-btn class="mt-2" size="small" variant="text" prepend-icon="mdi-refresh" :loading="lanAgentLoading" @click="refreshLanAgentNodes">刷新实例列表</v-btn>
+                <PrimaryAgentAdvancedSettings v-if="gateway.primaryAgentTarget === target.id" :gateway="gateway" :provider="target.provider" :target-title="target.title" :error="codexPlanAssistants.error" :notice="codexPlanAssistants.message" @change="touch">
+                  <template #plan-actions>
+                    <div v-if="gateway.codexPlanAssistantEnabled" class="catalog-param-grid">
+                      <v-text-field v-model.number="codexPlanAssistants.count" type="number" :min="1" :max="8" label="协助会话数量" />
+                      <v-btn :loading="codexPlanAssistants.loading" :disabled="codexPlanAssistants.loading || !target.instance?.connected || !target.agent" @click="initializePlanAssistants">创建 / 同步协助会话</v-btn>
+                      <v-chip v-for="session in filterCodexPlanAssistantSessionsForTarget(gateway.codexPlanAssistantSessions, target.id)" :key="session.threadId">{{ session.threadName }}</v-chip>
+                    </div>
+                  </template>
+                </PrimaryAgentAdvancedSettings>
+              </div>
+            </v-expand-transition>
+          </div>
+          <v-alert v-if="primaryAgentItems.length && !primaryAgent" type="warning" variant="tonal">尚未选择主控 Agent。请选择并保存后再投递消息。</v-alert>
+          <v-alert v-if="lanAgentError" type="warning" variant="tonal">{{ lanAgentError }}</v-alert>
+          <div v-if="visibleAgentItems.length === 0 && remoteAgentItems.length === 0" class="empty-state compact-empty">
             <div>
               <strong>尚未添加任何 Agent 端</strong>
               <span>点击下方按钮添加。</span>
@@ -6419,7 +6232,7 @@ watch(
             <v-list density="compact">
               <v-list-item
                 v-for="agent in availableAgentsToAdd"
-                :key="agent.type"
+                :key="agent.key"
                 :title="agent.title"
                 @click="addAgent(agent.type, agent.nodeId, agent.agentId)"
               />
@@ -6543,7 +6356,7 @@ watch(
                     color="secondary"
                     variant="tonal"
                     prepend-icon="mdi-send-check-outline"
-                    :loading="agentDeliveryTest.loading === agent.type"
+                    :loading="agentDeliveryTest.loading === localAgentTargetKey(agent.type)"
                     :disabled="Boolean(agentDeliveryTest.loading) || store.dirty || agent.type === 'marvis'"
                     @click="runAgentDeliveryTest(agent.type)"
                   >
@@ -6554,7 +6367,16 @@ watch(
                   </button>
                 </span>
               </div>
-              <div v-if="channelCheckAgentItems.length === 0" class="channel-topology-empty">
+              <div v-for="target in remoteAgentItems" :key="target.id" class="channel-topology-node channel-topology-agent-node" :data-tone="target.instance?.connected ? 'success' : 'warning'">
+                <v-icon class="channel-topology-node-icon">mdi-monitor-dashboard</v-icon>
+                <span class="channel-topology-node-main"><strong>{{ target.title }}</strong><small>{{ target.instance?.connected && target.agent ? '实例在线，投递状态需测试确认' : '远端 Agent 暂不可用，未切换到本机' }}</small></span>
+                <span class="channel-topology-node-status"><v-chip size="x-small" :color="gateway?.primaryAgentTarget === target.id ? 'primary' : 'secondary'" variant="tonal">{{ gateway?.primaryAgentTarget === target.id ? '主控' : '备用' }}</v-chip></span>
+                <span class="channel-topology-node-actions">
+                  <v-btn size="x-small" color="secondary" variant="tonal" prepend-icon="mdi-send-check-outline" :loading="agentDeliveryTest.loading === target.id" :disabled="Boolean(agentDeliveryTest.loading) || store.dirty || !target.instance?.connected || !target.agent" @click="runAgentDeliveryTest(target.provider, target.id)">投递测试</v-btn>
+                  <button type="button" class="channel-topology-config-action" @click="channelCheckDialogOpen = false; remoteAgentParamOpen[target.id] = true">查看配置</button>
+                </span>
+              </div>
+              <div v-if="channelCheckAgentItems.length === 0 && remoteAgentItems.length === 0" class="channel-topology-empty">
                 <strong>尚未添加 Agent 端</strong>
                 <span>先在消息配置页添加处理端。</span>
               </div>
@@ -6568,7 +6390,7 @@ watch(
             density="compact"
             class="mt-4"
           >
-            正在向 {{ channelCheckAgentItems.find(item => item.type === agentDeliveryTest.loading)?.title || agentDeliveryTest.loading }} 投递真实测试消息…
+            正在向 {{ primaryAgentItems.find(item => item.value === agentDeliveryTest.loading)?.title || agentDeliveryTest.loading }} 投递真实测试消息…
           </v-alert>
           <v-alert
             v-else-if="agentDeliveryTest.result"
@@ -6579,7 +6401,7 @@ watch(
             title="目标 Agent 已收到测试消息"
           >
             <div class="channel-delivery-test-details">
-              <span>目标：{{ channelCheckAgentItems.find(item => item.type === agentDeliveryTest.result?.agentAdapterType)?.title || agentDeliveryTest.result.agentAdapterType }}</span>
+              <span>目标：{{ primaryAgentItems.find(item => item.value === agentDeliveryTest.result?.agentTargetId)?.title || agentDeliveryTest.result.agentTargetId || agentDeliveryTest.result.agentAdapterType }}</span>
               <span>测试编号：<code>{{ agentDeliveryTest.result.deliveryId }}</code></span>
               <span>完成时间：{{ agentDeliveryTestCompletedAt(agentDeliveryTest.result.completedAt) }}</span>
             </div>

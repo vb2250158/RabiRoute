@@ -6,6 +6,7 @@ import type { GatewayConfigFile, GatewayDefinition } from "../shared/gatewayConf
 import type { ManualTriggerLaunchResult } from "./manualTriggerProcess.js";
 
 export type GatewayAgentDeliveryTestRequest = {
+  agentTargetId?: string;
   agentAdapterType?: AgentAdapterType;
 };
 

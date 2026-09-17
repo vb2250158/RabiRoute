@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export type TunnelIdentity = { deviceId: string; generation: string; publicKey: string; privateKey: string };
-export type TunnelGrant = { deviceId: string; publicKey: string; services: string[] };
+export type TunnelGrant = { deviceId: string; publicKey: string; services: string[]; bootstrapScope?: string };
 export type TunnelHello = { deviceId: string; generation: string; publicKey: string; ephemeral: string; nonce: string; target: string; signature: string };
 export class TunnelDenied extends Error {}
 const protocol = "rabi-tunnel-v1";

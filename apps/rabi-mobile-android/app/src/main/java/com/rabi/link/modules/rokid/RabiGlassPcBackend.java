@@ -110,11 +110,10 @@ public final class RabiGlassPcBackend {
     private String lastDiagnosticKey = "";
     private long lastDiagnosticAt;
     private final RabiDurableAudioSpool audioSpool;
+    public boolean evictArchivedAudio(java.io.File file) throws Exception { return audioSpool.evictArchived(file); }
     private String activeAudioStreamId = "";
     private String activeAudioStreamSource = "";
     private String activeAudioStreamRoute = "";
-    private String desiredAudioStreamSource = "";
-    private String desiredAudioStreamRoute = "";
     private long audioStreamSequence;
     private int audioStreamChunkFailures;
     private boolean audioStreamRetryWaiting;
@@ -125,6 +124,7 @@ public final class RabiGlassPcBackend {
     private volatile boolean processingEnabled = true;
     private final RabiAudioCapabilityCache audioCapabilityCache = new RabiAudioCapabilityCache();
     private volatile String targetWorkerId = "";
+    private final RabiEventAsrUploader eventAsr;
     private volatile long endpointGeneration;
     private final ThreadLocal<Long> responseEndpointGeneration = new ThreadLocal<>();
     static boolean sameEndpointGeneration(long requested, long current) { return requested == current; }
@@ -140,6 +140,7 @@ public final class RabiGlassPcBackend {
         if (!targetWorkerId.equals(clean(workerId))) { endpointGeneration++; audioCapabilityCache.invalidate(); }
         targetWorkerId = clean(workerId);
         audioSpool.setEndpointIdentity(endpointIdentity());
+        audioSpool.setAsrEndpointIdentity(asrEndpointIdentity());
         requestAudioStreamDrain();
     }
 
@@ -153,16 +154,20 @@ public final class RabiGlassPcBackend {
             return result.toString();
         } catch (Exception error) { throw new IllegalStateException("endpoint identity unavailable", error); }
     }
+    private String asrEndpointIdentity() {
+        if (!configured()) return "";
+        return com.rabi.link.transport.AsrDirectory.accountIdentity(baseUrl, token);
+    }
+
     private final Object captureLock = new Object();
     private CaptureContext captureContext;
-    private boolean explicitCaptureLifecycle;
     private boolean importingCapture;
     private boolean captureEnding;
     private final java.util.concurrent.atomic.AtomicBoolean captureBlocked = new java.util.concurrent.atomic.AtomicBoolean();
 
     private void blockCapture(String reason) {
         if (!captureBlocked.compareAndSet(false, true)) return;
-        synchronized (captureLock) { explicitCaptureLifecycle = true; captureContext = null; }
+        synchronized (captureLock) { captureContext = null; }
         listener.onCaptureBlocked(reason == null || reason.isEmpty() ? "local_storage_failure" : reason);
     }
     private static final class CaptureContext {
@@ -185,9 +190,8 @@ public final class RabiGlassPcBackend {
         synchronized (captureLock) {
             if (captureContext != null || importingCapture || captureEnding) throw new IllegalStateException("previous capture/import is still active");
             if (audioSpoolClosed.get() || !audioWriteQueue.isAccepting()) throw new IllegalStateException("backend is closed");
-            try { audioSpool.bindCaptureEndpoint(captureId, endpointIdentity()); }
+            try { audioSpool.bindCaptureEndpoint(captureId, "transcribe".equals(processingPolicy) ? asrEndpointIdentity() : endpointIdentity()); }
             catch (Exception error) { throw new IllegalStateException("cannot persist capture endpoint", error); }
-            explicitCaptureLifecycle = true;
             captureBlocked.set(false);
             captureContext = new CaptureContext(captureId, normalizedSourceKind(source), clean(frozenRoute), processingPolicy);
         }
@@ -197,7 +201,7 @@ public final class RabiGlassPcBackend {
 
     /** Close admission first; callback is on the writer executor after all admitted PCM is sealed. */
     public void endCapture(Runnable onDrained) {
-        synchronized (captureLock) { explicitCaptureLifecycle = true; captureContext = null; captureEnding = true; }
+        synchronized (captureLock) { captureContext = null; captureEnding = true; }
         enqueueAudioWriteControl(() -> {
             try {
                 audioSpool.sealCapture();
@@ -263,6 +267,7 @@ public final class RabiGlassPcBackend {
     }
 
     public RabiGlassPcBackend(android.content.Context context, Listener listener) {
+        eventAsr = new RabiEventAsrUploader(context);
         this.context = context.getApplicationContext();
         this.eventSplitter = new com.rabi.link.recording.AudioEventSplitter(() -> com.rabi.link.recording.EventSplitSettings.load(this.context));
         this.preferences = this.context.getSharedPreferences("rabi_glass_phone_backend", android.content.Context.MODE_PRIVATE);
@@ -282,6 +287,7 @@ public final class RabiGlassPcBackend {
             this.audioSpool = new RabiDurableAudioSpool(
                     new File(this.context.getFilesDir(), "rabi-conversation/audio-spool"),
                     audioPolicy(this.settings));
+            this.audioSpool.retireUnscopedUploads();
         } catch (Throwable error) {
             throw new IllegalStateException("无法恢复手机本地录音队列", error);
         }
@@ -332,6 +338,7 @@ public final class RabiGlassPcBackend {
         this.token = clean(token);
         this.deviceId = clean(deviceId).isEmpty() ? "rabi-glass" : clean(deviceId);
         audioSpool.setEndpointIdentity(endpointIdentity());
+        audioSpool.setAsrEndpointIdentity(asrEndpointIdentity());
         HttpURLConnection current = eventConnection;
         if (running && current != null) {
             eventReconnectRequested.set(true);
@@ -391,16 +398,10 @@ public final class RabiGlassPcBackend {
             closeAudioSpoolDurably();
         }
         audioWriteExecutor.shutdownNow();
+        eventAsr.close();
         uploadExecutor.shutdownNow();
         eventExecutor.shutdownNow();
         audioStreamExecutor.shutdown();
-    }
-
-    public void beginAudioStream(String sourceDeviceKind) {
-        String source = normalizedSourceKind(sourceDeviceKind);
-        String route = routeProfileId();
-        updateDesiredAudioStream(source, route);
-        requestAudioStreamDrain();
     }
 
     public void streamPcmFromSource(byte[] pcm, String sourceDeviceKind) {
@@ -409,14 +410,13 @@ public final class RabiGlassPcBackend {
         synchronized (captureLock) {
         String source = normalizedSourceKind(sourceDeviceKind);
         CaptureContext capture = captureContext;
-        if (explicitCaptureLifecycle && (capture == null || !capture.source.equals(source))) return;
-        String route = capture == null ? routeProfileId() : capture.route;
+        if (capture == null || !capture.source.equals(source)) return;
+        String route = capture.route;
         if (!running || !audioWriteQueue.isAccepting()) {
             audioSpool.recordGap("capture_after_backend_stop", copy.length, source, route);
             return;
         }
-        if (capture == null) updateDesiredAudioStream(source, route);
-        if (!audioWriteQueue.offer(copy, source, route, capture == null ? "" : capture.id, capture == null ? "agent" : capture.policy,
+        if (!audioWriteQueue.offer(copy, source, route, capture.id, capture.policy,
                 Math.max(1L, System.currentTimeMillis() - copy.length * 1000L / 32000L))) {
             if (!audioStorageFailureReported) {
                 audioStorageFailureReported = true;
@@ -451,11 +451,7 @@ public final class RabiGlassPcBackend {
         });
     }
 
-    public void pauseAudioStream() {
-        synchronized (audioStreamQueueLock) {
-            desiredAudioStreamSource = "";
-            desiredAudioStreamRoute = "";
-        }
+    public void pauseCaptureTransport() {
         enqueueAudioBoundary("capture_paused", () -> enqueueAudioControl(this::stopActiveAudioStream));
     }
 
@@ -507,7 +503,11 @@ public final class RabiGlassPcBackend {
                     continue;
                 }
                 audioStorageFailureReported = false;
-                if (part.completed) audioSpool.boundary("event_boundary");
+                if (part.completed) {
+                    audioSpool.boundary("event_boundary");
+                    try { audioSpool.completeEvent(part.eventId); }
+                    catch (Exception error) { blockCapture("event_seal_failure"); listener.onError("录音事件封口失败，文件已保留"); }
+                }
                 requestAudioStreamDrain();
                 }
             }
@@ -590,13 +590,6 @@ public final class RabiGlassPcBackend {
         }
     }
 
-    private void updateDesiredAudioStream(String sourceDeviceKind, String routeProfileId) {
-        synchronized (audioStreamQueueLock) {
-            desiredAudioStreamSource = sourceDeviceKind;
-            desiredAudioStreamRoute = clean(routeProfileId);
-        }
-    }
-
     private void requestAudioStreamDrain() {
         if (audioStreamExecutor.isShutdown()) return;
         audioStreamDrainGate.request(audioStreamExecutor, this::drainAudioStream);
@@ -610,42 +603,45 @@ public final class RabiGlassPcBackend {
             return;
         }
         try {
-            boolean recovering = audioStreamRetryWaiting || audioSpool.nextUpload() != null;
+            android.content.SharedPreferences asrPrefs = context.getSharedPreferences("rabi_asr_enrollment", android.content.Context.MODE_PRIVATE);
+            long requested = asrPrefs.getLong("requestedAt", 0);
+            if (requested > asrPrefs.getLong("completedAt", 0) && asrEndpointIdentity().equals(asrPrefs.getString("scope", ""))) {
+                String active;
+                synchronized (captureLock) { active = captureEnding || importingCapture ? null : captureContext == null ? "" : captureContext.id; }
+                boolean enrolled = active != null && audioSpool.enrollLocalEventsForAsr(requested, asrEndpointIdentity(), active);
+                if (enrolled) {
+                    if (!asrPrefs.edit().putLong("completedAt", requested).commit()) throw new IllegalStateException("Cannot persist ASR enrollment");
+                } else audioStreamExecutor.schedule(this::requestAudioStreamDrain, 1, TimeUnit.SECONDS);
+            }
             audioStreamRetryWaiting = false;
             while (true) {
                 if (!processingEnabled || !configured()) return;
-                RabiDurableAudioSpool.Segment head = audioSpool.nextUpload();
-                String source;
-                String route;
-                if (head != null) {
-                    source = head.source;
-                    route = head.routeProfileId;
-                } else {
-                    synchronized (captureLock) {
-                        if (explicitCaptureLifecycle) return;
-                    }
-                    synchronized (audioStreamQueueLock) {
-                        source = desiredAudioStreamSource;
-                        route = desiredAudioStreamRoute;
-                    }
-                }
+                boolean transcriptionOnly = "transcribe".equals(com.rabi.link.recording.AllDayRecordingSettings.load(context).processingPolicy);
+                RabiDurableAudioSpool.Segment head = transcriptionOnly ? audioSpool.nextTranscriptionUpload() : audioSpool.nextUpload();
+                if (head == null) return;
+                String source = head.source;
+                String route = head.routeProfileId;
                 if (source.isEmpty()) return;
                 synchronized (this) {
-                    activeExpectedEndpointIdentity = head == null ? "" : audioSpool.captureEndpointIdentity(head.captureId);
-                    if (!activeExpectedEndpointIdentity.isEmpty() && !activeExpectedEndpointIdentity.equals(endpointIdentity())) return;
+                    activeExpectedEndpointIdentity = audioSpool.captureEndpointIdentity(head.captureId);
+                    if (!activeExpectedEndpointIdentity.isEmpty() && !activeExpectedEndpointIdentity.equals(activeExpectedEndpointIdentity.startsWith("asr:") ? asrEndpointIdentity() : endpointIdentity())) return;
                     activeExpectedWorkerId = activeExpectedEndpointIdentity.isEmpty() ? "" : targetWorkerId;
                 }
-                String policy = head == null ? "agent" : head.processingPolicy;
-                String captureId = head == null ? "" : head.captureId;
+                String policy = head.processingPolicy;
+                String captureId = head.captureId;
+                if ("transcribe".equals(policy) && !head.eventId.isEmpty()) {
+                    final long processingGeneration = endpointGeneration;
+                    if (!eventAsr.process(audioSpool, head, () -> processingEnabled && processingGeneration == endpointGeneration)) return;
+                    audioStreamChunkFailures = 0;
+                    continue;
+                }
                 if (!captureId.isEmpty() && !supportsCaptureProcessing(policy)) {
                     listener.onStatus("录音已保存 · 电脑尚未确认目标围栏/处理策略能力，处理已挂起");
                     return;
                 }
                 ensureAudioStream(source, route, policy, captureId);
-                if (head == null) break;
                 flushAudioStreamChunk();
             }
-            if (recovering) listener.onStatus("网络连接正常 · 持续聆听中");
         } catch (Throwable error) {
             handleAudioStreamFailure(error);
         }
@@ -666,7 +662,7 @@ public final class RabiGlassPcBackend {
             audioStreamExecutor.schedule(() -> {
                 if (generation != audioStreamRecoveryGeneration.get() || !networkWakeGate.isAvailable()) return;
                 if (generation != audioStreamRecoveryGeneration.get()
-                        || (desiredAudioStreamSource.isEmpty() && audioSpool.nextUpload() == null)) return;
+                        || audioSpool.nextUpload() == null) return;
                 audioStreamDrainGate.request(audioStreamExecutor, this::drainAudioStream);
             }, Math.max(0, delayMs), TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException ignored) {
@@ -713,8 +709,6 @@ public final class RabiGlassPcBackend {
                 && activeAudioCaptureId.equals(captureId) && activeAudioEndpointGeneration == endpointGeneration) return;
         if (!activeAudioStreamId.isEmpty()) {
             stopActiveAudioStream();
-            desiredAudioStreamSource = sourceDeviceKind;
-            desiredAudioStreamRoute = route;
         }
         String suffix = SOURCE_GLASSES.equals(sourceDeviceKind) ? "glasses" : "phone";
         String streamId = captureStreamId(deviceId, suffix, route, processingPolicy, captureId);

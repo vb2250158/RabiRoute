@@ -62,6 +62,8 @@ export const router = createRouter({
       meta: { title: "插件恢复" }
     },
     { path: "/models", redirect: "/speech" },
+    // Bookmark compatibility only; remove after the legacy navigation migration ends.
+    { path: "/lan-agents", redirect: to => ({ path: "/rabilink", query: { ...to.query, tab: "agents" } }) },
     {
       path: "/:pathMatch(.*)*",
       redirect: to => ({ name: PLUGIN_RECOVERY_ROUTE_NAME, query: { from: to.fullPath } })

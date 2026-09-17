@@ -21,7 +21,7 @@ Do not copy the loopback address to another device. Do not use a glasses device 
 
 ## Prepare the remote path
 
-1. Connect the target Rabi PC to Relay from **Rabi instances**.
+1. Connect the target Rabi PC to Relay from **RabiLink → Configuration**.
 2. Enable **Allow speech relay** and keep the local speech target at `http://127.0.0.1:8781`.
 3. In the application's Relay `/manage` page, select that online Rabi PC.
 4. Copy the application's token. Keep it in a temporary process variable or secret store, not in the repository, logs, or URL.

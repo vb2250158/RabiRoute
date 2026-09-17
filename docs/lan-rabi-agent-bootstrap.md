@@ -2,13 +2,15 @@
 <div align="center">简体中文 | <a href="./lan-rabi-agent-bootstrap_en.md">English</a></div>
 <!-- /docs-language-switch -->
 
-# 远端 Agent 接入与更新
+# 远端智能体接入与更新
 
 > 状态：experimental（实验集成）。独立节点凭据、Manager 授权、受限 API、资源读取及上传后群文件发送已完成本机测试、完整构建和部署；`0.3.4-4b5d30118b40` 的 Host/Manager 健康与运行产物已核对。上传闭环通过真实 HTTP 与模拟 NapCat 验证，不代表真实双机、真实群文件或旧节点迁移已验收。后续发现指引与更新机制的审计修复须另行核对最终部署版本。
 
+远端 Agent 只作为执行端接入：在 Agent 区域选择已接入实例及 Agent。消息端菜单、快速配置和设备密码扫描面板中的旧入口已移除。旧 `remoteAgent` 消息端键仅为存量配置兼容保留；完成实例／Agent 绑定迁移和旧任务回执归档后删除，不再用于新增接入。
+
 ## 用户只需三步
 
-1. 打开 **远端 Agent** 页面（`#/lan-agents`），点击 **复制接入提示词**。一次点击即签发并复制包含完整接入指令与一次性票据的提示词（签发后 30 分钟有效，只能成功兑换一次，成功后立即失效），无需手填 WebGUI 密钥；提示词使用当前 Manager 的局域网地址和发布公钥指纹；本机回环地址会替换为当前局域网地址。Manager 须先启用局域网访问。票据过期或 Manager 重启后重新复制，不复用旧提示词。
+1. 打开 **RabiLink → 远端智能体**（`#/rabilink?tab=agents`；旧 `#/lan-agents` 自动跳转至此），点击 **复制接入提示词**。一次点击即签发并复制包含完整接入指令与一次性票据的提示词（签发后 30 分钟有效，只能成功兑换一次，成功后立即失效），无需手填 WebGUI 密钥；提示词使用当前 Manager 的局域网地址和发布公钥指纹；本机回环地址会替换为当前局域网地址。Manager 须先启用局域网访问。票据过期或 Manager 重启后重新复制，不复用旧提示词。
 2. 启动目标电脑上的 Codex 或 DSH，把提示词粘贴到想接收消息的任务里。该 Agent 检查 Node.js 22.13+、发现当前任务与工作目录，下载并验证接入程序，保存私有配置，注册登录启动项并启动后台连接。不需要安装完整 RabiRoute，也不需要手填任务 ID。
 3. 回到当前路由的 **消息适配器 → 添加 AGENT**，选择 **远端Agent(<IP地址>)** 并保存。没有节点时，菜单引导进入接入页面；已接入节点使用 Manager 观察到的连接 IP 展示，保存的稳定身份是 instanceId + agentId。
 
@@ -29,7 +31,7 @@
 | 对象 | 唯一拥有者 | 行为与验收 |
 | --- | --- | --- |
 | 节点、IP、连接和任务状态 | Manager 的节点注册表 | HTTP 管理操作与 WebSocket 连接都显式鉴权；离线投递失败。 |
-| 路由绑定 | 路由配置的 `agentInstanceBindings[provider]` | 界面保存 `instanceId + agentId` 引用，不保存第二套连接凭据；Gateway 从本代 Manager 获得地址与凭据。 |
+| 路由绑定 | 路由配置的 `agentAdapters`、`remoteAgentTargets` 与 `primaryAgentTarget` | 本机处理端和远端目标分别保存；远端引用 `instanceId + agentId`，不复制连接凭据或任务配置。主控选择具体目标，而不是仅选择 Codex/DSH 类型；Gateway 从本代 Manager 获得地址与凭据。 |
 | 任务、模型、工具和权限 | 远端现有 Codex/DSH 宿主 | 实例保存各 Agent 的任务绑定，不新建备用 Runtime，不改变宿主启动配置；Manager 缺席时宿主仍独立运行。 |
 | 后台连接进程 | 当前用户的 Rabi Agent | 主动连接 Manager；管理下载、校验、登录启动和更新。 |
 | 真实消息路径 | 路由 → Agent adapter → Manager 节点注册表 → 远端进程 → 已绑定任务 | Codex 走 Desktop IPC；DSH 走本机 `session.prompt`，`mode=queue`。两者分别只有一条执行路径。 |
@@ -64,7 +66,9 @@ Codex owner 不可用时失败，不使用 `codex app-server`。DSH API 或绑�
 
 实例中的“路由与完整 Agent 设置”进入同一消息适配器页面，包含消息处理、独立记忆整理与计划协助设置。消息处理池和记忆整理按 `instanceId + agentId + 主任务 ID` 隔离持久状态；切换电脑或重绑主任务后不会复用旧电脑的工作任务。创建或解析出的协助任务登记到所属 Agent，Manager 后续按归属分派；离线和身份歧义会失败，不降级到本机。
 
-安装版从当前不可变版本包读取接入程序、共用管理运行库和 Hook 包，签名密钥仍保存在私有数据目录。再次粘贴接入提示词更新连接时保留原实例 ID、Agent 目录和已允许的工作目录。已绑定的本机任务关闭后仍保留在实例中，可以重新开启；远端绑定占用同一路由处理端时，应先在路由设置中切回本机。
+安装版从当前不可变版本包读取接入程序、共用管理运行库和 Hook 包，签名密钥仍保存在私有数据目录。再次粘贴接入提示词更新连接时保留原实例 ID、Agent 目录和已允许的工作目录。已绑定的本机任务关闭后仍保留在实例中，可以重新开启。路由可以同时保留本机 Codex 和多个远端 Codex，各自独立显示、移除和选择；新增远端不会替换本机卡片，也不会自动切换主控。删除主控后须明确选择新的主控，离线时不自动改投本机。
+
+旧版 `agentInstanceBindings[provider]` 只在配置读取边界迁移：保留本机配置字段，转换成独立远端目标；原主控如果指向远端，迁移后仍指向同一实例和 Agent。保存后移除旧字段，避免删除的远端目标再次出现。迁移不创建会话，不更改节点授权；没有本机会话的卡片仍需配置。
 
 ## 从远端任务调用 API 与 skills
 
@@ -102,7 +106,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 `--upload-id` 为必填、预先保存的稳定 UUID，不自动生成。上传 HTTP 使用 `PUT /api/agent/uploads/<UUID>`、`application/octet-stream`、同 UUID 的 `Idempotency-Key`、URI 编码 basename 的 `x-rabiroute-file-name` 和内容摘要 `x-rabiroute-content-sha256`。同路径 GET 返回 `{code:0,data:{id,fileName,size,sha256,expiresAt}}`，到期时间为 ISO，不返回本地 path。默认单文件 2 GiB（2048 MiB，硬上限）、总量 4 GiB、最多 100 个、TTL 24 小时；HTTP 上传总并发上限为 4，跨 owner 合计。超时、503、切代或不确定回执后先重新发现并核对 Manager，再 GET 原 UUID；不自动重试或换 ID。
 
-大包上传使用流式二进制传输、流式落盘及增量 SHA-256 校验，期限 30 分钟，不把整包装进 JSON 或内存。可在「设置 → Rabi 身份」保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），持久化到 `data/Config.json`，重启 Manager 后生效；本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity`，远端 Agent 无权增大配置。
+大包上传使用流式二进制传输、流式落盘及增量 SHA-256 校验，期限 30 分钟，不把整包装进 JSON 或内存。可在「RabiLink → 配置」保存 `agentUploads.maxFileMiB`（整数 `1..2048`，默认 `2048`），持久化到 `data/Config.json`，重启 Manager 后生效；本机管理员也可使用原权限保护的 `PATCH /api/rabi/identity`，远端 Agent 无权增大配置。
 
 已用 734 MiB（769654784 字节）的受控文件完成真实客户端到 loopback Manager、受管磁盘及模拟 NapCat 的 size/SHA-256 集成验收；生成和接收均按 64 KiB 小块，大于 8 MiB 的 Buffer 分配/拼接被测试防线拒绝。大测试由 `RABI_TEST_LARGE_UPLOAD=1` 显式启用，临时文件自动清理。**尚未验证真实 QQ 平台接收这一大小的文件**，仍须核对 NapCat/QQ 限制及群权限。旧连接器需要新版 bootstrap（保留已有节点凭据），旧 Hook 缓存需要重载宿主；仅更新 Manager 不会让旧客户端支持大包。
 
@@ -134,6 +138,18 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 - `WS /api/lan-agent/connect`：`authenticate → authenticated → hello → connected → heartbeat`。
 
 保留 `lan-agent` 连接和发布 API 路径供现有安装更新；未发布的 `lanAgent` 特殊处理端类型与 `lanAgentNodeId` 配置已移除，路由统一使用实例绑定，用户入口统一称为远端 Agent。旧 Remote Agent v3 是独立实验协议，不作为本次 Agent 端的投递路径或安装依赖；其迁移不在本次范围。
+
+## 路由目标与投递测试合同
+
+路由的 `agentAdapters` 保存本机处理端类型；`remoteAgentTargets` 保存 `{ id, provider, instanceId, agentId }`。`id` 为 `remote:<URI 编码的 instanceId>:<URI 编码的 agentId>`，本机目标键为 `local:<provider>`。`primaryAgentTarget` 选择完整目标键，空字符串表示尚未选择；`primaryAgentAdapter` 只是派生的处理端类型，不能区分本机和远端。远端目录、会话和模型仍由所属实例提供。
+
+现有受管路由保存接口保存上述字段；`/api/rabi/instances/:guid/routes/:routeId/agent-binding` 的 PATCH/POST 同样接受 `remoteAgentTargets` 和 `primaryAgentTarget`，沿用原有管理授权、配置版本与幂等合同。旧 `agentAdapter` 参数明确选择本机目标，不删除其它已添加目标。
+
+`POST /gateways/:id/agent-delivery-test` 是**真实消息投递**，不是预览。正文可以指定 `agentTargetId`；同时提供 `agentAdapterType` 时必须与目标一致。只提供旧 `agentAdapterType` 时选择本机；两者均省略时使用已保存的主控。成功返回 `data.agentTargetId` 及原有投递结果。目标不存在、类型不符或离线时失败，不更换目标；结果不确定时先核对原任务，不自动重发。管理鉴权和 Route 启用要求不变。
+
+本机会话操作 `POST /api/agent/threads` 可明确携带 `agentTargetId: "local:<agentAdapter>"`，必须与 `agentAdapter` 一致且不得同时提供远端 `instanceBinding`。此标记禁止按同名会话 ID 推断远端 owner；远端操作仍使用明确的实例绑定或实例路径。未提供标记的旧调用保持原有解析合同，鉴权和任务权限检查不变。
+
+计划秘书会话和绑定保存 `agentTargetId`，即使两台电脑返回相同会话 ID 也不会混用；旧记录只在旧配置迁移时确定归属，已采用新格式却缺失目标身份的记录不自动归给后来选择的主控。
 
 ## 剩余实机验收
 

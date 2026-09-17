@@ -1,3 +1,4 @@
+import { resolvePrimaryAgentTarget } from "../shared/routeAgentTargets.js";
 import type { MessageProcessingRequirement } from "../messageProcessing/board.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
 import {
@@ -18,7 +19,7 @@ export type ResolvedMessageProcessingDeliveryTarget = {
 };
 
 function configuredPrimaryAgentAdapter(definition: GatewayDefinition): string | undefined {
-  return definition.primaryAgentAdapter || definition.agentAdapters?.[0];
+  return resolvePrimaryAgentTarget(definition)?.provider;
 }
 
 function primaryPersonaWorker(

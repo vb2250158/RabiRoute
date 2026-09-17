@@ -76,15 +76,21 @@ onBeforeUnmount(() => { disposed = true; requestSequence++; events?.close(); cle
 </script>
 
 <template>
-  <v-card class="app-card mb-4 pa-4">
-    <v-select :model-value="selected" :items="options" label="语音服务器" :loading="loading || saving" :disabled="saving"
-      hide-details="auto" @update:model-value="select" @update:menu="menuChanged">
+    <v-select class="speech-server-picker" :model-value="selected" :items="options" label="语音服务器" aria-label="选择语音服务器"
+      density="compact" variant="outlined" :loading="loading || saving" :disabled="saving" :error="!!error"
+      :title="error || options.find(item => item.value === selected)?.detail"
+      hide-details @update:model-value="select" @update:menu="menuChanged">
       <template #item="{ props, item }">
         <v-list-item v-bind="props" :subtitle="item.raw.detail" />
       </template>
-      <template #selection="{ item }">{{ item.raw.title }} · {{ item.raw.detail }}</template>
+      <template #selection="{ item }"><span class="text-truncate">{{ item.raw.title }}</span></template>
+      <template #append-inner>
+        <v-icon v-if="error" icon="mdi-alert-circle-outline" color="warning" :aria-label="error" />
+      </template>
+      <template #append-item>
+        <v-divider />
+        <div class="text-caption pa-3">自动选择：局域网 → P2P → 服务器中转。延迟为当前连接的往返时间，不含语音处理耗时。</div>
+        <v-alert v-if="error" type="warning" variant="tonal" class="ma-2" role="alert">{{ error }}</v-alert>
+      </template>
     </v-select>
-    <div class="text-caption mt-2">自动选择：局域网 → P2P → 服务器中转。延迟为当前连接的往返时间，不含语音处理耗时。</div>
-    <v-alert v-if="error" type="warning" variant="tonal" class="mt-2">{{ error }}</v-alert>
-  </v-card>
 </template>

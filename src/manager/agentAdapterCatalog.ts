@@ -1,4 +1,6 @@
 import type http from "node:http";
+import { handleDshConnectionRequest } from "./dshConnectionRoutes.js";
+import { DshConnectionError } from "../dshConnectionStore.js";
 import { fileURLToPath } from "node:url";
 import { updateAgentHooks } from "../agentAdapters/hookInstallation.js";
 import { listRegisteredAgentAdapterManifests } from "../agentAdapters/agentAdapter.js";
@@ -142,6 +144,11 @@ export class AgentAdapterCatalogService {
     this.workerPool = options.workerPool ?? new AgentAdapterCatalogWorkerPool();
     this.listManifests = options.listManifests ?? listRegisteredAgentAdapterManifests;
     this.recordOperation = options.recordOperation ?? recordPerformanceOperation;
+  }
+
+  async connectionOperation(request: http.IncomingMessage, url: URL): Promise<unknown> {
+    this.assertAccepting();
+    return this.track(this.runControlled(controller => handleDshConnectionRequest(request, url, undefined, controller.signal)));
   }
 
   async updateHooks(adapter: string): Promise<{ message: string }> {
@@ -289,6 +296,14 @@ export function handleAgentAdapterCatalogApi(
   response: http.ServerResponse,
   context: AgentAdapterCatalogRoutesContext
 ): boolean {
+  if (["/api/agent-adapters/dsh/connection", "/api/agent-adapters/dsh/connections"].includes(requestUrl.pathname)) {
+    void context.service.connectionOperation(request, requestUrl)
+      .then(data => context.jsonResponse(response, 200, data))
+      .catch(error => context.jsonResponse(response, error instanceof DshConnectionError ? error.status : 500, {
+        ok: false, message: error instanceof DshConnectionError ? error.message : "DSH connection operation failed; refresh before retrying."
+      }));
+    return true;
+  }
   if (request.method === "POST" && requestUrl.pathname === "/api/agent-adapters/hooks/update") {
     void context.service.updateHooks(requestUrl.searchParams.get("adapter") || "")
       .then(data => context.jsonResponse(response, 200, { ok: true, ...data }))

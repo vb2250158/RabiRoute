@@ -6,6 +6,8 @@
 
 # RabiLink Relay 公网中继
 
+设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
+
 > 成熟度：实验。Relay、PC worker、远程 WebGUI、输入/下行队列和统一会话账本已有实现，仍需按真实公网、账号隔离、设备和恢复场景验收。
 
 这个系统内置转接服务用于把 Rokid 云侧插件、手机/便携设备和电脑端 RabiRoute 接起来；它本身不是消息端。输入与输出是两条独立队列。当前眼镜 App 只与手机交换音频/媒体，手机作为眼镜后端调用 Relay；手机不拥有 Agent、账本或 PC 配置。普通 observation 仍可按 record-first 写统一账本；手机/眼镜语音则通过受限 `audio-streams/rabilink/start|chunk|stop` 把连续 PCM 中转到目标 PC RabiSpeech。VAD、切句、ASR 与声纹都在 PC 完成，随后 Manager 写主机通用语音库，并直接投给固定的 RabiLink Route。Agent 回复再走独立下行，默认回原设备；手机请求 PC TTS 后可把 PCM 发回眼镜。
@@ -51,7 +53,7 @@ https://你的域名/manage
 
 首次进入时注册一个服务器账号，然后创建 RabiLink 应用。每个应用会生成独立 `rbl_...` token；控制台卡片默认显示 token 预览，但登录后可以随时复制完整 token。Rokid/灵珠插件和电脑端 RabiLink worker 都使用同一个应用 token，Relay 会按应用隔离 task 和下行消息队列。
 
-电脑端在 RibiWebGUI“Rabi 实例”中填写 Relay 地址、应用 token 和唯一的本机 PC 标识，然后打开全局“连接服务器”开关。该开关由 `data/Config.json` 的 `rabiLinkRelay.enabled` 持久化；开启后 Manager 会立即登记 PC 并常驻代理远程 WebGUI，不需要先启动某条眼镜路由。路由中的“眼镜端（经 RabiLink）”（内部兼容键 `rabilink`）决定 AIUI observation 写入哪个角色账本、由哪个固定 Agent 线程审阅；旧兼容消息仍按该路由直接转发。关闭全局开关会让整台 PC 停止连接 Relay，但不会删除 token 或路由配置。
+电脑端在 RibiWebGUI“RabiLink → 配置”中填写 Relay 地址、应用 token 和唯一的本机 PC 标识，然后打开全局“连接服务器”开关。该开关由 `data/Config.json` 的 `rabiLinkRelay.enabled` 持久化；开启后 Manager 会立即登记 PC 并常驻代理远程 WebGUI，不需要先启动某条眼镜路由。路由中的“眼镜端（经 RabiLink）”（内部兼容键 `rabilink`）决定 AIUI observation 写入哪个角色账本、由哪个固定 Agent 线程审阅；旧兼容消息仍按该路由直接转发。关闭全局开关会让整台 PC 停止连接 Relay，但不会删除 token 或路由配置。
 
 同一个应用 token 可以连接多台 PC。每台 PC 必须拥有独立的 `rabiGuid` 和 `deviceId`；不要把一台电脑的 `data/Config.json` 原样复制到另一台。服务器管理页的 PC 列表目前通过“刷新”按钮重新读取，不会因新 PC 上线自动重载整页。
 
@@ -101,6 +103,12 @@ Manager 的本地监听与 Relay 连接相互独立：Manager 先在操作系统
 若远程请求没有可用 PC worker，API 会返回带诊断请求 ID 的结构化 `RABI_PC_WEBGUI_UNAVAILABLE`；等待 worker 回填超时则返回 `RABI_PC_WEBGUI_TIMEOUT`。两者都标记 `retryable`、发送 `Retry-After: 3`，并避免泄露本机异常、路径或地址。普通浏览器导航收到的是包含同一诊断 ID 和恢复提示的 HTML 错误页，不再只有无上下文的 502/504。
 
 远程 WebGUI 使用 `/manage` 登录 Cookie；PC worker 使用独立的 RabiLink 应用 token。Relay 不会把应用 token、管理 Cookie 或局域网 `webgui_token` 转发给本机 Manager，也不会把三种认证边界合并。
+
+## RabiLink 原生只读主页
+
+主页不再嵌入 `/admin` 或 `/manage`。浏览器只调用 Manager `GET /api/rabi/link-home`；Manager 使用服务端保存的应用 token 调用配置 Relay 的固定 `GET /api/rabilink/peers`，仅向主页返回当前应用内电脑名、标识、在线状态和服务白名单，不透传上游原始对象、凭据或其他应用信息。token 不进入主页浏览器或 URL；此入口只读，不代理任意路径，不授予管理权限。
+
+未配置、连接失败、认证失败和读取失败必须明确区分，不能变成零设备或首次初始化；只有成功读取的空列表表示没有设备。管理员仍从新窗口 `/manage` 独立登录，主页不依赖管理 Cookie。此处记录方案边界，不代表部署和真实交互已经验收。
 
 ## 同应用 PC 发现与人格同步中转
 
@@ -1113,3 +1121,11 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8788/worker/tasks/$id/resu
 
 Receive-Job $rokid -Wait
 ```
+
+## 手机 ASR 优先级
+
+应用鉴权接口 `GET/PATCH /api/rabilink/mobile/asr-settings` 返回有 `asr` 能力的电脑及优先级。PATCH 接收 `{ "priority": ["computer-a", "computer-b"] }`，拒绝重复 ID 和非 ASR 电脑；在线状态只影响当前选择，不删除已保存的排序。电脑需开启语音共享，并由本地 `/v1/capabilities` 声明 ASR，不能把只有 TTS 的电脑列入。
+
+音频使用应用鉴权握手建立的端到端加密通道，先 LAN、再 P2P、最后 Relay。部署必须同时包含 `rabilink-event-hub.mjs`、`rabilink-proxy-request-queue.mjs`、`lib/rabilink-tunnel-broker.mjs`、`lib/rabilink-asr-priority.mjs` 及 `ws` 依赖；仅替换服务器主脚本不足以升级旧实例。
+
+电脑每 30 秒独立复查本地 ASR 能力；能力变化时重新上报，启动较慢或服务恢复后无需等待语音请求。停止共享时取消检查。

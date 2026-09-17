@@ -1,7 +1,8 @@
 import type { InstanceAgent } from "../shared/agentInstance.js";
 import type { IncomingMessage } from "node:http";
+import type { AgentAdapterType } from "../shared/agentAdapterCapabilities.js";
 
-export type TrustedLanAgentSource = { nodeId: string; agentId: string; provider: "codex" | "dsh"; sessionId: string; sessionName: string; workspace?: string };
+export type TrustedLanAgentSource = { nodeId: string; agentId: string; provider: AgentAdapterType; sessionId: string; sessionName: string; workspace?: string };
 const sources = new WeakMap<IncomingMessage, TrustedLanAgentSource>();
 export function setTrustedLanAgentSource(request: IncomingMessage, source: TrustedLanAgentSource): void { sources.set(request, Object.freeze({ ...source })); }
 export function getTrustedLanAgentSource(request: IncomingMessage): TrustedLanAgentSource | undefined { return sources.get(request); }

@@ -327,9 +327,22 @@ internal sealed class NativeChildProcess : IDisposable
 
     private static byte[] BuildEnvironmentBlock(IReadOnlyDictionary<string, string?> overrides)
     {
-        var values = Environment.GetEnvironmentVariables()
+        return BuildEnvironmentBlock(Environment.GetEnvironmentVariables()
             .Cast<System.Collections.DictionaryEntry>()
-            .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value, StringComparer.OrdinalIgnoreCase);
+            .Select(entry => new KeyValuePair<string, string?>((string)entry.Key, (string?)entry.Value)), overrides);
+    }
+
+    internal static byte[] BuildEnvironmentBlock(
+        IEnumerable<KeyValuePair<string, string?>> inherited,
+        IReadOnlyDictionary<string, string?> overrides)
+    {
+        // Launchers can supply case variants even though Windows variable names are
+        // case-insensitive. Collapse them before applying the Host-owned overrides.
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in inherited)
+        {
+            values[pair.Key] = pair.Value;
+        }
         foreach (var pair in overrides)
         {
             if (pair.Value is null) values.Remove(pair.Key);

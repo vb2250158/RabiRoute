@@ -75,7 +75,7 @@ RabiLink Relay
 
 当前实现持续采集且不在 Android 做 VAD。录音设备不按零点或固定 24 小时重启；分片由时长、大小、输入/Route 切换、暂停、播放抑制、进程停止等边界触发。崩溃后启动扫描残留 `.partial` 及其归属 sidecar，偶数字节分片原子封口并保留原序号；归属缺失、metadata 损坏、PCM 缺失或 SHA 不符会将关联文件一起隔离、写带稳定 ID 和相邻序号的 gap，再继续后项。隔离区计入存储水位且不会自动删除，只能在“录音与转写”页由用户确认清理。来电/麦克风占用、卡死退避、播放抑制、写入背压和存储不足也写本机轮转审计。传输队列仍有容量与剩余空间水位；新记录即使 ACK 也不按旧传输保留小时自动回收。未确认或隔离分片不自动删除，无法落盘时累计 `rejectedBytes` 并显示缺口；自动滚动删除及全天容量管理仍待完成。断网时上传线程休眠而录音继续落盘，联网后按本地序号逐段切换到该分片自己的来源/Route 流补传。RabiSpeech 的本机持久幂等账本以稳定设备、chunk ID、字节数和 SHA-256 记录处理结果；即使 ACK 响应丢失并重启 RabiSpeech，重放也不会再次送入 ASR。
 
-手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步/回看周期、心率高低阈值、告警冷却和睡眠状态告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。Health Connect 优先使用手动、启动恢复或平台事件；小米 ADB Provider 没有可靠变更通知，因此用户显式启用的 PC Companion 保留低频轮询，默认按手机配置的分钟级周期运行。PC Companion 由唯一 `RabiRouteHost.exe` 下的 Manager 插件和 generation process lease 持有，动态 READY 身份经 `/meta` 与双 header 围栏，不创建登录计划任务，也不保存或猜测 Manager 端口。结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
+手机首页现在还提供“智能手表 / 手环”配置页：可选择 Health Connect 或“小米运动健康（PC ADB Companion）”，并设置稳定设备 ID、同步/回看周期、心率高低阈值、告警冷却和睡眠状态告警。Health Connect 来源同时采集心率、睡眠和步数；步数按本地自然日聚合当天累计值并使用与分段无关的稳定 ID，同一天的回看重读会被下游按 ID 去重，不会重复累加，也不参与心率/睡眠告警。已取得的小米认证秘钥使用 Android Keystore AES-GCM 加密，仅保存在手机。Health Connect 优先使用手动、启动恢复或平台事件；小米 ADB Provider 没有可靠变更通知，因此用户显式启用的 PC Companion 保留低频轮询，默认按手机配置的分钟级周期运行。PC Companion 由唯一 `RabiRouteHost.exe` 下的 Manager 插件和 generation process lease 持有，动态 READY 身份经 `/meta` 与双 header 围栏，不创建登录计划任务，也不保存或猜测 Manager 端口。结构化样本经 Relay 或可信本机 Manager 进入 RabiRoute 健康时间线，不写入普通聊天账本。完整说明见 [`../../docs/rabilink-wearable-health.md`](../../docs/rabilink-wearable-health.md)。
 
 ### 首次使用与失败引导
 

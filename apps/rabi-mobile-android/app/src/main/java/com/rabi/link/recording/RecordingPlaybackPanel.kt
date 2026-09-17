@@ -36,8 +36,11 @@ class RecordingPlaybackPanel(private val context: Context, files: List<File>, vi
     private fun control(title: String) = Button(context).apply { text = title; textSize = 12f; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(0,0,0,0); setTextColor(android.graphics.Color.WHITE); setBackgroundColor(android.graphics.Color.TRANSPARENT) }
     private val overlay = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xCC192122.toInt()) }
     private val hideControls = Runnable { if(player.isPlaying) setControls(false) }
-    private fun setControls(shown: Boolean) {
+    var onControlsVisibilityChanged: (Boolean) -> Unit = {}
+    fun holdControls() { main.removeCallbacks(hideControls) }
+    fun setControls(shown: Boolean) {
         overlay.visibility = if(shown) View.VISIBLE else View.GONE
+        onControlsVisibilityChanged(shown)
         time.visibility = if(shown) View.VISIBLE else View.GONE
         main.removeCallbacks(hideControls)
         if(shown && player.isPlaying && !(context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager).isTouchExplorationEnabled) main.postDelayed(hideControls,3500)
@@ -63,12 +66,12 @@ class RecordingPlaybackPanel(private val context: Context, files: List<File>, vi
         val pictureFrame = FrameLayout(context).apply { setBackgroundColor(android.graphics.Color.rgb(25,29,34)) }
         val noPicture = TextView(context).apply { text = "无画面"; gravity = android.view.Gravity.CENTER; setTextColor(android.graphics.Color.LTGRAY) }
         pictureFrame.addView(noPicture, FrameLayout.LayoutParams(-1,-1))
-        waveform?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1)) }
+        waveform?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = dp(64) }) }
         picture?.let { pictureFrame.addView(it, FrameLayout.LayoutParams(-1,-1)) }
         view.addView(pictureFrame, FrameLayout.LayoutParams(-1,-1))
         // A transparent tap target sits above both video and waveform, below interactive controls.
         view.addView(View(context).apply { contentDescription = "显示或隐藏播放控制"; setOnClickListener { setControls(this@RecordingPlaybackPanel.overlay.visibility != View.VISIBLE) } },FrameLayout.LayoutParams(-1,-1))
-        view.addView(time,FrameLayout.LayoutParams(-1,dp(24),android.view.Gravity.TOP))
+        view.addView(time,FrameLayout.LayoutParams(-1,dp(24),android.view.Gravity.BOTTOM).apply { bottomMargin = dp(112) })
         val controls = LinearLayout(context).apply { setBackgroundColor(0xCC192122.toInt()) }
         fun action(title: String, run: () -> Unit) = control(title).apply { setOnClickListener { run(); setControls(true) } }
         controls.addView(action("−3秒") { seekBy(-3000) }, LinearLayout.LayoutParams(0,-1,1f))
@@ -89,7 +92,7 @@ class RecordingPlaybackPanel(private val context: Context, files: List<File>, vi
             }
         }.apply { contentDescription = "记录操作" },LinearLayout.LayoutParams(0,-1,1f))
         overlay.addView(controls,LinearLayout.LayoutParams(-1,dp(48)))
-        view.addView(overlay,FrameLayout.LayoutParams(-1,dp(48),android.view.Gravity.BOTTOM))
+        view.addView(overlay,FrameLayout.LayoutParams(-1,dp(48),android.view.Gravity.BOTTOM).apply { bottomMargin = dp(64) })
         play.setOnClickListener {
             if(player.isPlaying) player.pause() else {
                 if(player.playbackState == Player.STATE_ENDED) seekTo(0)

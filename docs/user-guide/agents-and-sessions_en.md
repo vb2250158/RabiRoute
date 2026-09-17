@@ -21,11 +21,13 @@ Maturity in the selector comes from the current scan. Installed does not mean au
 
 ## Select the Primary Agent
 
-A Route may keep configurations for several different Agents, but a matched message is delivered to only one Primary Agent. Choose it above the Agent handler list. Other project, task, and service settings remain saved, but those Agents do not receive default deliveries.
+A Route may retain local Codex, DSH, and multiple remote Codex targets together, but matched messages go to only one Primary Agent. Select the specific local or remote Agent above the handler list. Other project, task, and service settings remain saved without receiving default deliveries. Adding a remote target neither replaces a local card of the same provider nor changes the primary.
 
-For an older Route without a saved primary selection, RabiRoute uses the first Agent in the list. Removing the current Primary Agent selects the first remaining Agent. With no Agent configured, matching and packet records are retained without handler delivery.
+An older Route without a saved primary keeps its original first entry; an existing remote primary retains the same target. Removing the current primary requires an explicit new selection instead of automatically switching to local or another Agent. No Agent delivery occurs without a primary.
 
 If Primary Agent delivery fails, RabiRoute records the failure and does not switch to another Agent. This prevents two handlers from replying or performing the same external action.
+
+The primary is selected per Route, not globally for the application. When investigating why a message reached an Agent, first check its Route ID and then that Route's primary. With an independent message-processing Agent enabled, a message may first reach a processing session on the primary's provider; this does not change the primary or permit delivery to a different provider.
 
 ## Three requirements for Codex
 

@@ -9,6 +9,12 @@ export type InstanceThreadTransport = {
 
 /** Resolve identity before any local provider lookup, including when the remote computer is offline. */
 export async function routeInstanceThread(request: AgentThreadRequest, transport: InstanceThreadTransport): Promise<AgentThreadRequestResult | undefined> {
+  if (request.agentTargetId !== undefined) {
+    if (!request.agentAdapter || request.agentTargetId !== `local:${request.agentAdapter}` || request.instanceBinding) {
+      throw new Error("Explicit local task target must match its provider and cannot include a remote binding.");
+    }
+    return undefined;
+  }
   const instances = transport.instances();
   let binding = normalizeAgentInstanceBinding(request.instanceBinding);
   if (!binding) {

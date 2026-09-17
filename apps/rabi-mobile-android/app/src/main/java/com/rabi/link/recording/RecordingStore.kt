@@ -54,7 +54,7 @@ class RecordingStore(private val context: Context) {
         check(dir.toPath().startsWith(context.filesDir.canonicalFile.toPath()))
         Entry(data.getString("id"), data.getString("kind"), data.getString("source"), data.getLong("started"),
             data.optLong("ended"), data.optString("state"), dir,
-            dir.walkTopDown().filter { it.isFile && it.extension in listOf("mp4", "wav") }.sortedBy { it.name }.toList(), data.optString("title"))
+            (dir.walkTopDown().filter { it.isFile && it.extension in listOf("mp4", "wav") }.toList() + RecordingResourceCache.archivedFiles(context,dir)).distinct().sortedBy { it.name }, data.optString("title"))
     }.getOrNull()
     data class Marker(val id: String, val recordId: String, val at: Long)
     /** Read existing bookmarks only; a corrupt item fails visibly without rewriting source data. */

@@ -55,6 +55,22 @@ public final class AllDayRecordingSettings {
         }
     }
 
+    /** Saving an ASR directory is an explicit request to transcribe retained and future audio. */
+    public static void enableAsr(Context context) {
+        AllDayRecordingSettings s = load(context);
+        new AllDayRecordingSettings(s.running, s.mode, s.source, "agent".equals(s.processingPolicy) ? "agent" : "transcribe",
+                s.routeProfileId, s.healthEnabled, true, s.autoResume, s.windowStartedAt).save(context);
+        com.rabi.link.RabiLinkRelayConfig relay = com.rabi.link.RabiLinkRelaySettings.INSTANCE.load(context);
+        if (!relay.getConfigured()) throw new IllegalStateException("RabiLink 尚未配置");
+        // Persist enrollment before starting a service: process death during queue recovery must not lose it.
+        if (!context.getSharedPreferences("rabi_asr_enrollment", Context.MODE_PRIVATE).edit()
+                .putLong("requestedAt", System.currentTimeMillis())
+                .putString("scope", com.rabi.link.transport.AsrDirectory.accountIdentity(relay.getBaseUrl(), relay.getToken())).commit())
+            throw new IllegalStateException("Cannot save ASR enrollment");
+        context.startForegroundService(new android.content.Intent(context, com.rabi.link.RabiConversationService.class)
+                .setAction(com.rabi.link.RabiConversationService.ACTION_ASR));
+    }
+
     public AllDayRecordingSettings withRunning(boolean value, long now) {
         return new AllDayRecordingSettings(value, mode, source, processingPolicy, routeProfileId,
                 healthEnabled, uploadEnabled, autoResume, value && !running ? now : windowStartedAt);

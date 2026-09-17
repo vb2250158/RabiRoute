@@ -1,4 +1,5 @@
-import { normalizeAgentInstanceBindings, type AgentInstanceBinding } from "./agentInstance.js";
+import { type AgentInstanceBinding } from "./agentInstance.js";
+import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, type RemoteAgentTarget } from "./routeAgentTargets.js";
 import { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
 export { normalizeAgentCompletionDeliveries, type AgentCompletionDeliveryRule } from "./agentHookAutomation.js";
 import {
@@ -373,6 +374,13 @@ export type GatewayDefinition = {
    * the live address published in the session descriptor.
    */
   workbuddyEndpoint?: string;
+  /**
+   * Antigravity conversation the route posts into. When unset, a delivery
+   * starts a new conversation instead of reusing an existing one.
+   */
+  antigravityConversationId?: string;
+  antigravityConversationName?: string;
+  antigravityCwd?: string;
   codexPlanAssistantEnabled?: boolean;
   codexPlanAssistantModel?: string;
   codexPlanAssistantSessions?: CodexPlanAssistantSession[];
@@ -383,7 +391,10 @@ export type GatewayDefinition = {
   copilotCwd?: string;
   copilotCliBin?: string;
   marvisAppId?: string;
+  /** Input-only legacy migration. Normalized output omits this field. */
   agentInstanceBindings?: Record<string, AgentInstanceBinding>;
+  remoteAgentTargets?: RemoteAgentTarget[];
+  primaryAgentTarget?: string;
   astrbotUrl?: string;
   astrbotUsername?: string;
   astrbotPassword?: string;
@@ -468,6 +479,17 @@ function normalizeDshSessionId(value: unknown): string | undefined {
  * valid id would silently unbind a route.
  */
 function normalizeWorkbuddySessionId(value: unknown): string | undefined {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 200) return undefined;
+  return /^[A-Za-z0-9._-]+$/.test(raw) ? raw : undefined;
+}
+
+/**
+ * Antigravity conversation ids are UUIDs issued by the host. Rejecting a valid
+ * id would silently make deliveries fall back to starting a new conversation,
+ * so the shape check stays narrow but the failure is at least not silent.
+ */
+function normalizeAntigravityConversationId(value: unknown): string | undefined {
   const raw = String(value || "").trim();
   if (!raw || raw.length > 200) return undefined;
   return /^[A-Za-z0-9._-]+$/.test(raw) ? raw : undefined;
@@ -1217,9 +1239,9 @@ export function resolvePrimaryAgentAdapter(
 
 export function primaryMessageProcessingAgentAdapter(definition: Pick<
   GatewayDefinition,
-  "agentAdapters" | "primaryAgentAdapter" | "messageProcessingAgents"
+  "agentAdapters" | "primaryAgentAdapter" | "primaryAgentTarget" | "remoteAgentTargets" | "agentInstanceBindings" | "messageProcessingAgents"
 >): AgentAdapterType | undefined {
-  const primary = resolvePrimaryAgentAdapter(definition.agentAdapters, definition.primaryAgentAdapter);
+  const primary = resolvePrimaryAgentTarget(definition)?.provider;
   return primary
     && agentAdapterSupportsManagedTaskFeature(primary, "messageProcessingAgent")
     && definition.messageProcessingAgents?.[primary]?.enabled === true
@@ -1229,7 +1251,7 @@ export function primaryMessageProcessingAgentAdapter(definition: Pick<
 
 export function primaryMessageProcessingAgentEnabled(definition: Pick<
   GatewayDefinition,
-  "agentAdapters" | "primaryAgentAdapter" | "messageProcessingAgents"
+  "agentAdapters" | "primaryAgentAdapter" | "primaryAgentTarget" | "remoteAgentTargets" | "agentInstanceBindings" | "messageProcessingAgents"
 >): boolean {
   return Boolean(primaryMessageProcessingAgentAdapter(definition));
 }
@@ -1237,7 +1259,7 @@ export function primaryMessageProcessingAgentEnabled(definition: Pick<
 /** Compatibility helper for callers that specifically require Codex ownership. */
 export function codexMessageProcessingAgentEnabled(definition: Pick<
   GatewayDefinition,
-  "agentAdapters" | "primaryAgentAdapter" | "messageProcessingAgents"
+  "agentAdapters" | "primaryAgentAdapter" | "primaryAgentTarget" | "remoteAgentTargets" | "agentInstanceBindings" | "messageProcessingAgents"
 >): boolean {
   return primaryMessageProcessingAgentAdapter(definition) === "codex";
 }
@@ -1315,6 +1337,7 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const rolesDir = options.rolesDir ?? definition.rolesDir ?? "data/roles";
   const routeName = definition.routeName?.trim() || definition.name?.trim() || configName;
   const {
+    agentInstanceBindings: _legacyAgentInstanceBindings,
     botNickname: _legacyBotNickname,
     codexOnlyPrimaryPersonaCanSendMessages: _legacyCodexOnlyPrimaryPersonaCanSendMessages,
     ...cleanDefinition
@@ -1342,8 +1365,10 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
   const normalizeAgentAdapters = options.normalizeAgentAdapters ?? normalizeAgentAdaptersFallback;
   const normalizePipeline = options.normalizePipeline ?? normalizePipelineFallback;
   const agentAdapters = normalizeAgentAdapters(definition.agentAdapters);
-  const primaryAgentAdapter = resolvePrimaryAgentAdapter(agentAdapters, definition.primaryAgentAdapter);
-  const messageProcessingAgents = normalizeMessageProcessingAgentPolicies(definition.messageProcessingAgents, agentAdapters);
+  const targets = normalizeRouteAgentTargets({ ...definition, agentAdapters });
+  const primaryAgentAdapter = targets.primaryAgentAdapter;
+  const providers = [...new Set([...agentAdapters, ...targets.remoteAgentTargets.map(target => target.provider)])];
+  const messageProcessingAgents = normalizeMessageProcessingAgentPolicies(definition.messageProcessingAgents, providers);
   const pipelinePreset = typeof definition.pipelinePreset === "string" && definition.pipelinePreset.trim()
     ? definition.pipelinePreset.trim()
     : activeMessageAdapters.includes("speech") ? "voice_chat" : undefined;
@@ -1387,10 +1412,13 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     ? agentAdapterSupportsManagedTaskFeature(primaryAgentAdapter, "hooks")
     : false;
   const normalizedCodexPlanAssistantSessions = normalizeCodexPlanAssistantSessions(definition.codexPlanAssistantSessions)
+    .map(session => ({ ...session, agentTargetId: session.agentTargetId ?? (definition.primaryAgentTarget === undefined ? targets.primaryAgentTarget : undefined) }))
     .filter((session) => {
+      const target = resolvePrimaryAgentTarget({ ...targets, primaryAgentTarget: session.agentTargetId ?? "" });
       const adapter = planAssistantSessionAgentAdapter(session);
-      if (adapter !== primaryAgentAdapter || !planAssistantSupported) return false;
-      const ownerWorkspace = adapter === "dsh" ? dshCwd : codexCwd;
+      if (!target || target.provider !== adapter) return false;
+      if (target.binding) return true;
+      const ownerWorkspace = adapter === "dsh" ? dshCwd : adapter === "antigravity" ? normalizeCodexCwd(definition.antigravityCwd) : adapter === "workbuddy" ? normalizeCodexCwd(definition.workbuddyCwd) : codexCwd;
       return Boolean(ownerWorkspace) && sameCodexWorkspaceSyntax(session.workspace, ownerWorkspace);
     });
   const codexPlanAssistantModel = normalizeCodexPlanAssistantModel(
@@ -1448,7 +1476,8 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     ignoredNapcatInstanceIds: normalizeIgnoredNapcatInstanceIds(definition.ignoredNapcatInstanceIds),
     codexThreadId: isCodexTaskId(rawCodexThreadId) ? rawCodexThreadId : undefined,
     codexThreadName: definition.codexThreadName?.trim() || legacyCodexThreadName || undefined,
-    agentInstanceBindings: normalizeAgentInstanceBindings(definition.agentInstanceBindings),
+    remoteAgentTargets: targets.remoteAgentTargets,
+    primaryAgentTarget: targets.primaryAgentTarget,
     dshSessionId: normalizeDshSessionId(definition.dshSessionId),
     dshSessionName: definition.dshSessionName?.trim() || undefined,
     dshCwd,
@@ -1460,6 +1489,9 @@ export function normalizeGatewayDefinition(definition: GatewayDefinition, option
     workbuddySessionName: definition.workbuddySessionName?.trim() || undefined,
     workbuddyCwd: normalizeCodexCwd(definition.workbuddyCwd) || normalizeCodexCwd(definition.codexCwd),
     workbuddyEndpoint: normalizeWorkbuddyEndpoint(definition.workbuddyEndpoint),
+    antigravityConversationId: normalizeAntigravityConversationId(definition.antigravityConversationId),
+    antigravityConversationName: definition.antigravityConversationName?.trim() || undefined,
+    antigravityCwd: normalizeCodexCwd(definition.antigravityCwd) || normalizeCodexCwd(definition.codexCwd),
     codexPlanAssistantEnabled: planAssistantSupported
       ? codexPlanAssistantEnabled
       : undefined,

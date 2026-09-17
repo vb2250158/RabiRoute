@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPinia, setActivePinia } from "pinia";
 import { cloneGatewayValue, mergeGatewayDraft } from "../src/gatewayDraft";
+import { addRouteAgent, removeRouteAgent, selectRouteAgent } from "../src/routeAgentTargetEditor";
+import { remoteAgentTargetKey } from "../../src/shared/routeAgentTargets";
 
 Object.assign(globalThis, { window: { location: { pathname: "/", hash: "" } } });
 const { useGatewayStore } = await import("../src/stores/gatewayStore");
@@ -49,6 +51,58 @@ async function fixture() {
     recoveryUnavailable(value: boolean) { recoveryUnavailable = value; }
   };
 }
+
+test("instance target selection survives actual store PUT and reload without overwriting local Codex", async () => {
+  const f = await fixture();
+  const draft = f.store.gateways[0];
+  addRouteAgent(draft, "codex");
+  draft.codexThreadId = "local-codex";
+  draft.codexCwd = "C:/LocalProject";
+  const binding = { instanceId: "remote-computer", agentId: "remote-codex" };
+  addRouteAgent(draft, "codex", binding.instanceId, binding.agentId);
+  selectRouteAgent(draft, remoteAgentTargetKey(binding));
+  await f.store.save();
+  assert.equal(f.writes, 1);
+  assert.equal(f.rows[0].primaryAgentTarget, remoteAgentTargetKey(binding));
+  assert.equal(f.rows[0].agentInstanceBindings, undefined);
+  await f.store.load();
+  assert.equal(f.store.gateways[0].primaryAgentTarget, remoteAgentTargetKey(binding));
+  assert.equal(f.store.gateways[0].codexThreadId, "local-codex");
+  assert.equal(f.store.gateways[0].codexCwd, "C:/LocalProject");
+  assert.deepEqual(f.store.gateways[0].agentAdapters, ["codex"]);
+  removeRouteAgent(f.store.gateways[0], remoteAgentTargetKey(binding));
+  await f.store.save();
+  await f.store.load();
+  assert.equal(f.store.gateways[0].primaryAgentTarget, "");
+  assert.equal(f.store.gateways[0].primaryAgentAdapter, undefined);
+  assert.equal(f.store.gateways[0].codexThreadId, "local-codex");
+});
+
+test("delivery tests serialize a concrete target instead of routing by provider", async () => {
+  const f = await fixture();
+  const calls: any[] = [];
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    calls.push(body);
+    return Response.json({ code: 0, data: { ...body, status: "delivered", deliveryId: "test", gatewayId: "a", completedAt: new Date().toISOString() } });
+  }) as typeof fetch;
+  await f.store.testAgentDelivery("a", "codex");
+  const id = remoteAgentTargetKey({ instanceId: "remote", agentId: "codex" });
+  const result = await f.store.testAgentDelivery("a", "codex", id);
+  assert.deepEqual(calls, [{ agentAdapterType: "codex", agentTargetId: "local:codex" }, { agentAdapterType: "codex", agentTargetId: id }]);
+  assert.equal(result.agentTargetId, id);
+});
+
+test("saving a captured route ID does not save the newly selected route", async () => {
+  const f = await fixture();
+  f.store.gateways[0].name = "captured route change";
+  f.store.gateways[1].name = "unrelated draft";
+  f.store.selectedGatewayId = "b";
+  await f.store.save("a");
+  assert.equal(f.rows[0].name, "captured route change");
+  assert.notEqual(f.rows[1].name, "unrelated draft");
+  assert.equal(f.store.selectedGatewayId, "b");
+});
 
 test("saving one route preserves another route's local draft and remote update", async () => {
   const f = await fixture();

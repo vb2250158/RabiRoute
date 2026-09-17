@@ -1,8 +1,19 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { normalizeAgentInstanceBindings, type AgentInstance, type AgentInstanceBinding } from "../shared/agentInstance.js";
+import { resolvePrimaryAgentTarget } from "../shared/routeAgentTargets.js";
 
 export function configuredInstanceBinding(provider: string): AgentInstanceBinding | undefined {
+  if (process.env.PRIMARY_AGENT_TARGET !== undefined) {
+    const target = resolvePrimaryAgentTarget({
+      agentAdapters: [],
+      remoteAgentTargets: JSON.parse(process.env.REMOTE_AGENT_TARGETS || "[]"),
+      primaryAgentTarget: process.env.PRIMARY_AGENT_TARGET
+    });
+    return target?.provider === provider ? target.binding : undefined;
+  }
+  // Transitional child processes launched before instance-target configuration.
+  if (process.env.PRIMARY_AGENT_ADAPTER && process.env.PRIMARY_AGENT_ADAPTER !== provider) return undefined;
   return normalizeAgentInstanceBindings(JSON.parse(process.env.AGENT_INSTANCE_BINDINGS || "{}"))?.[provider];
 }
 

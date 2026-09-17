@@ -55,7 +55,7 @@ const registrationListeners = new Set<RegistrationListener>();
 const replacementListeners = new Set<() => void>();
 let replacementDepth = 0;
 const webPageRegistrationRevision = ref(0);
-const reservedRoutePaths = new Set(["/", "/plugin-recovery", "/models", "/:pathMatch(.*)*"]);
+const reservedRoutePaths = new Set(["/", "/plugin-recovery", "/models", "/lan-agents", "/:pathMatch(.*)*"]);
 const controlledPageRequirements = new Set<WebPageDataRequirement>(["gateway.diagnostics"]);
 
 function isRecord(value: unknown): value is JsonRecord {

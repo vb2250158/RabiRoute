@@ -2244,6 +2244,46 @@ test("DSH Agent-to-Agent delivery verifies the DSH source and does not relabel i
   assert.doesNotMatch(String(calls[0]?.prompt), /处理端：codex/);
 });
 
+test("Antigravity delivery is attributed to agentapi, not relabelled as Codex desktop", async () => {
+  // Antigravity conversation ids are plain UUIDs, exactly like Codex task ids,
+  // so the owner has to come from the declared agentAdapter. The receipt used to
+  // fall through a binary `dsh ? ... : codex` branch and would have reported a
+  // false `codex_desktop_owner` / `desktop-ipc` pair for this delivery.
+  const threadId = "a1e8f5ce-7e09-47d2-833f-ea27f532810b";
+  const sent: Array<{ transport: string }> = [];
+  const driver: AgentThreadDriver = {
+    read: async () => ({
+      id: threadId,
+      title: "Antigravity 计划秘书",
+      cwd: process.cwd(),
+      updatedAt: "2026-09-17T00:00:00.000Z"
+    }),
+    create: async () => { throw new Error("not used"); },
+    send: async () => {
+      // The real Antigravity driver reports its own CLI transport.
+      sent.push({ transport: "agentapi" });
+      return { threadId, action: "steered" as const, openedThread: false, transport: "agentapi" as const };
+    }
+  };
+
+  const result = await handleAgentThreadRequest({
+    action: "send",
+    agentAdapter: "antigravity",
+    threadId,
+    prompt: "继续处理计划",
+    cwd: process.cwd(),
+    messageSource: defaultSystemMessageSource
+  }, { allowedWorkspaces: [process.cwd()] }, driver);
+
+  assert.equal(result.statusCode, 202);
+  assert.equal(result.data.agentAdapter, "antigravity");
+  const delivery = result.data.delivery as { acceptedBy: string; transport: string };
+  assert.equal(delivery.acceptedBy, "antigravity_agentapi_owner");
+  assert.equal(delivery.transport, "agentapi");
+  assert.notEqual(delivery.acceptedBy, "codex_desktop_owner");
+  assert.notEqual(delivery.transport, "desktop-ipc");
+});
+
 test("Agent thread open verifies the exact Codex task independently of its saved cwd", async () => {
   const threadId = "019f0000-0000-7000-8000-000000000041";
   const opened: string[] = [];

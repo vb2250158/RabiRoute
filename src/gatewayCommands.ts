@@ -1,3 +1,5 @@
+import { resolvePrimaryAgentTarget } from "./shared/routeAgentTargets.js";
+import { notifyInstanceAgent } from "./agentAdapters/lanAgentAdapter.js";
 import { config } from "./config.js";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
 import { parseAgentAdapterType } from "./agentAdapters/types.js";
@@ -383,7 +385,10 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
       console.error("RabiRoute direct agent message failed: invalid agent adapter");
       process.exit(1);
     }
-    const adapter = requestedAdapter ?? config.primaryAgentAdapter;
+    const targetArg = argv.find(arg => arg.startsWith("--direct-agent-target="));
+    const requestedTargetId = targetArg ? decodeURIComponent(targetArg.slice("--direct-agent-target=".length)) : requestedAdapter ? `local:${requestedAdapter}` : config.primaryAgentTarget;
+    const target = resolvePrimaryAgentTarget({ ...config, primaryAgentTarget: requestedTargetId ?? "" });
+    const adapter = target?.provider;
     const testDeliveryArg = argv.find((arg) => arg.startsWith("--agent-delivery-test="));
     const deliveryId = testDeliveryArg?.slice("--agent-delivery-test=".length).trim();
     const gatewayArg = argv.find((arg) => arg.startsWith("--direct-agent-gateway="));
@@ -395,12 +400,14 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
       process.exit(1);
     }
     try {
-      await (await createAgentAdapter(adapter)).deliver(envelope);
+      if (target?.binding) await notifyInstanceAgent(adapter, target.binding, envelope);
+      else await (await createAgentAdapter(adapter, "local")).deliver(envelope);
       if (deliveryId) {
         console.log(serializeAgentDeliveryTestResult({
           deliveryId,
           gatewayId,
           agentAdapterType: adapter,
+          agentTargetId: target?.id,
           status: "delivered",
           completedAt: new Date().toISOString()
         }));
@@ -414,6 +421,7 @@ export async function runGatewayCommand(argv: readonly string[] = process.argv):
           deliveryId,
           gatewayId,
           agentAdapterType: adapter,
+          agentTargetId: target?.id,
           status: "failed",
           completedAt: new Date().toISOString(),
           error: detail

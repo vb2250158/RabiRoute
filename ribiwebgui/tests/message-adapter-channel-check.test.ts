@@ -9,7 +9,7 @@ test("message configuration exposes channel status and real Agent delivery tests
   const button = pageSource.indexOf('prepend-icon="mdi-connection"');
   const folderButton = pageSource.indexOf('prepend-icon="mdi-folder-open-outline"');
   assert.ok(button >= 0 && button < folderButton, "channel check belongs in the page header before file operations");
-  assert.match(pageSource, /async function runChannelCheck\(\): Promise<void> \{[\s\S]*const scanAgents = runAgentScan;[\s\S]*Promise\.all\(\[runMessageAdapterScan\(\), scanAgents\(\)\]\)/);
+  assert.match(pageSource, /async function runChannelCheck\(\): Promise<void> \{[\s\S]*const scanAgents = runAgentScan;[\s\S]*Promise\.all\(\[runMessageAdapterScan\(\), scanAgents\(\), refreshLanAgentNodes\(\)\]\)/);
   assert.match(pageSource, /function openChannelCheckDialog\(\): void \{[\s\S]*channelCheckDialogOpen\.value = true;[\s\S]*void runChannelCheck\(\);/);
   assert.match(pageSource, /<v-dialog v-model="channelCheckDialogOpen" max-width="1180" scrollable>/);
   assert.match(pageSource, /class="channel-topology"/);
@@ -21,8 +21,9 @@ test("message configuration exposes channel status and real Agent delivery tests
   assert.match(pageSource, /v-for="agent in channelCheckAgentItems"/);
   assert.match(pageSource, /function enabledChannelCheckScans\(\)[\s\S]*filter\(item => !isAdapterDisabled/);
   assert.match(pageSource, /@click="openChannelCheckDetails\(item\.type\)"/);
-  assert.match(pageSource, /async function runAgentDeliveryTest\(type: AgentAdapterType\): Promise<void>/);
-  assert.match(pageSource, /store\.testAgentDelivery\(gateway\.value\.id, type\)/);
+  assert.match(pageSource, /async function runAgentDeliveryTest\(type: AgentAdapterType, targetId = localAgentTargetKey\(type\)\): Promise<void>/);
+  assert.match(pageSource, /store\.testAgentDelivery\(gateway\.value\.id, type, targetId\)/);
+  assert.match(pageSource, /@click="runAgentDeliveryTest\(target\.provider, target\.id\)"/);
   assert.match(pageSource, /@click="runAgentDeliveryTest\(agent\.type\)"/);
   assert.match(pageSource, /@click="openChannelCheckAgentDetails\(agent\.type\)"/);
   assert.match(pageSource, /目标 Agent 已收到测试消息/);

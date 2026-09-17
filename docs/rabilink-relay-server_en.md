@@ -6,6 +6,8 @@ English | <a href="./rabilink-relay-server.md">简体中文</a>
 
 # RabiLink Public Relay
 
+Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
+
 > Maturity: experimental. Relay, PC worker, remote WebGUI, input/downlink mailboxes, device logs, and the unified ledger have implementations. Real public-network, account-isolation, device, and recovery acceptance is still required.
 
 The Relay is a built-in system transport owned by Manager, not a message adapter. In the primary native-app route, glasses exchange audio/media only with the phone backend; the phone calls Relay, while the PC worker owns the Route-facing `rabilink` path. Ordinary observations may still enter the record-first ledger. Phone/glasses speech instead uses restricted `audio-streams/rabilink/start|chunk|stop` endpoints to forward continuous PCM to target-PC RabiSpeech. VAD, segmentation, ASR, and voiceprint processing run on the PC; Manager then stores one host-wide speech record and delivers it to the frozen RabiLink Route. Replies use the independent downlink and default to the originating device.
@@ -47,7 +49,7 @@ Open the management console:
 https://<relay-host>/manage
 ```
 
-Create an account and RabiLink application there. Copy the application token to the PC's global Relay configuration or client tool. Do not use the retired `RABILINK_RELAY_TOKEN` shared-token model.
+Create an account and RabiLink application there. Copy the application token to the PC's **RabiLink → Configuration** page or client tool. Do not use the retired `RABILINK_RELAY_TOKEN` shared-token model.
 
 ## Device enrollment and status
 
@@ -82,6 +84,12 @@ Local Manager listening is independent from Relay connectivity. Manager serves l
 If no PC worker can serve a remote request, API callers receive structured `RABI_PC_WEBGUI_UNAVAILABLE` with a diagnostic request ID; a worker response deadline returns `RABI_PC_WEBGUI_TIMEOUT`. Both are marked `retryable`, send `Retry-After: 3`, and omit local exceptions, paths, and addresses. Ordinary browser navigation receives an HTML error page with the same diagnostic ID and recovery guidance instead of a context-free 502/504.
 
 Remote WebGUI uses the `/manage` login cookie, while the PC worker uses a separate RabiLink application token. Relay never forwards that application token, the management cookie, or a LAN `webgui_token` to the local Manager, and these authentication boundaries are not merged.
+
+## Native read-only RabiLink Home
+
+Home no longer embeds `/admin` or `/manage`. The browser calls only Manager `GET /api/rabi/link-home`; Manager uses its server-held application token to call the configured Relay's fixed `GET /api/rabilink/peers`. Home receives only an allowlisted projection of computer name, identifier, online state, and services within the current application, not raw upstream objects, credentials, or other applications' data. Tokens never reach the Home browser or URLs. This is a read-only endpoint, not an arbitrary-path proxy or a grant of management privileges.
+
+Unconfigured, connection, authentication, and read failures must remain distinct from zero devices or first-time initialization; only a successful empty response means no devices. Administrators still sign in independently at `/manage` in a new window; Home does not depend on the management cookie. These are design boundaries, not evidence of deployment or real-interaction acceptance.
 
 ## Same-application PC discovery and persona-sync transit
 
@@ -319,3 +327,11 @@ Public acceptance must prove account/application isolation, record-first input, 
 - Do not expose the local Manager directly to the Internet.
 - Enforce body limits, wait limits, leases, TTLs, and target-device filtering.
 - Treat the Relay as transport/mailbox infrastructure, not as an Agent or role-context owner.
+
+## Mobile ASR priority
+
+Application-authenticated `GET/PATCH /api/rabilink/mobile/asr-settings` returns computers advertising `asr` and their priority. PATCH accepts `{ "priority": ["computer-a", "computer-b"] }`, rejecting duplicates and non-ASR computers. Availability affects selection without removing saved ranks. Computers must enable speech sharing and advertise ASR through local `/v1/capabilities`; TTS-only computers are excluded.
+
+Audio uses an end-to-end encrypted connection established through authenticated signalling: LAN, then P2P, then Relay. Deployment must include `rabilink-event-hub.mjs`, `rabilink-proxy-request-queue.mjs`, `lib/rabilink-tunnel-broker.mjs`, `lib/rabilink-asr-priority.mjs` and `ws`. Replacing only the main server script cannot upgrade older installations.
+
+The PC independently rechecks local ASR capabilities every 30 seconds and republishes changes. Slow startup and service recovery do not require an incoming speech request. Stopping sharing cancels discovery.

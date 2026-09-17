@@ -231,7 +231,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceKind: "pc",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "webgui,video-direct,peer-rpc-v1,persona-sync,persona-sync-plan-package-v1",
+    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-sync,persona-sync-plan-package-v1",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
   assert.equal(finishedBody?.deviceId, "pc-a");
@@ -582,6 +582,10 @@ test("global Relay runtime proxies the independent speech plugin without exposin
   const wavPayload = Buffer.from("RIFF-test-wave", "utf8");
   const localState: Record<string, unknown> = {};
   const localSpeech = http.createServer((request, response) => {
+    if (request.url === "/v1/capabilities") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ providers: { asr: { fixture: { enabled: true } } } })); return;
+    }
     const chunks: Buffer[] = [];
     request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
     request.on("end", () => {
@@ -666,7 +670,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "webgui,video-direct,peer-rpc-v1,persona-sync,persona-sync-plan-package-v1,speech");
+  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-sync,persona-sync-plan-package-v1,speech,asr");
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);
@@ -1216,4 +1220,51 @@ test("duplicate Relay availability events keep a single WebGUI drain flight", as
     () => ({ claimCount, activeClaims, maximumActiveClaims })
   );
   assert.equal(maximumActiveClaims, 1);
+});
+
+
+test("idle Relay republishes ASR recovery and loss without speech requests", async (t) => {
+  let available = false;
+  let probes = 0;
+  const advertisements: boolean[] = [];
+  const local = http.createServer((request, response) => {
+    if (request.url === "/v1/capabilities") {
+      probes += 1;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ providers: { asr: { local: { enabled: available } } } }));
+    } else response.writeHead(404).end();
+  });
+  const localPort = await listen(local);
+  t.after(() => close(local));
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/api/rabilink/events") { openRelayEvents(response); return; }
+    if (url.pathname === "/worker/speech-requests") {
+      advertisements.push((url.searchParams.get("capabilities") || "").split(",").includes("asr"));
+    }
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify({ requests: [] }));
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+  const runtime = new RabiLinkRelayRuntime({ asrRefreshIntervalMs: 50 });
+  t.after(() => runtime.stop());
+  await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test",
+    deviceId: "pc", deviceGuid: "guid", deviceName: "PC", claimWaitMs: 0,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`, speechProxyEnabled: true,
+    localSpeechUrl: `http://127.0.0.1:${localPort}` });
+  const details = () => ({ advertisements, probes });
+  await waitForRelayRuntime(runtime, "initial unavailable ASR", () => advertisements.length > 0, details);
+  assert.equal(advertisements[0], false);
+  available = true;
+  await waitForRelayRuntime(runtime, "idle ASR recovery", () => advertisements.includes(true), details);
+  available = false;
+  await waitForRelayRuntime(runtime, "ASR loss", () => advertisements.length >= 3 && advertisements.at(-1) === false, details);
+  const claims = advertisements.length;
+  await new Promise(resolve => setTimeout(resolve, 160));
+  assert.equal(advertisements.length, claims, "unchanged capabilities do not poll Relay queues");
+  await runtime.stop();
+  const stoppedProbes = probes;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(probes, stoppedProbes, "stop cancels capability discovery");
 });

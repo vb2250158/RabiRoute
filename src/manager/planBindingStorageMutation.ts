@@ -105,6 +105,7 @@ export async function ensurePlanSecretaryBindingForEvent(
     planId: string;
     eventId: string;
     sessions: readonly CodexPlanAssistantSession[] | undefined;
+    agentTargetId?: string;
   }>
 ): Promise<{ plan: PlanItem; target?: PlanSecretaryTarget }> {
   let desiredBinding: PlanSecretaryBinding | null = null;
@@ -115,7 +116,7 @@ export async function ensurePlanSecretaryBindingForEvent(
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
     const projection = await exactPlan(storage, input.roleId, input.planId);
     if (!target) {
-      const assignment = resolvePlanSecretaryAssignment(projection.plan, input.sessions);
+      const assignment = resolvePlanSecretaryAssignment(projection.plan, input.sessions, undefined, input.agentTargetId);
       if (!assignment) return { plan: projection.plan };
       target = assignment.target;
       if (!assignment.changed) return { plan: projection.plan, target };
@@ -131,11 +132,11 @@ export async function ensurePlanSecretaryBindingForEvent(
       );
     }
     if (sameBinding(projection.plan.secretaryBinding, desiredBinding)
-      || projection.plan.secretaryBinding?.sessionId === target.threadId) {
+      || (projection.plan.secretaryBinding?.sessionId === target.threadId && projection.plan.secretaryBinding?.agentTargetId === target.agentTargetId)) {
       return { plan: projection.plan, target };
     }
     if (String(projection.plan.secretaryBinding?.sessionId || "unassigned") !== oldSessionId) {
-      const current = resolvePlanSecretaryAssignment(projection.plan, input.sessions);
+      const current = resolvePlanSecretaryAssignment(projection.plan, input.sessions, undefined, input.agentTargetId);
       return { plan: projection.plan, target: current?.target };
     }
     try {

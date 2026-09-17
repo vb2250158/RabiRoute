@@ -65,7 +65,7 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Experimental integrations
 
-- [Remote Agent setup and updates](lan-rabi-agent-bootstrap_en.md) — **Experimental integration**. Copy a prompt to connect another computer, manage its Agents in the current Manager, and select them as route handlers.
+- [Remote Agent setup and updates](lan-rabi-agent-bootstrap_en.md) — **Experimental integration**. Open RabiLink → Remote Agent (远端智能体 in Chinese) to copy a setup prompt, connect another computer, manage its Agents, and select them as route handlers.
 - [Mobile recording interface](rabilink-mobile-recording-ui_en.md) — Four-page navigation, capture modes, offline storage, session replay and compatibility boundaries.
 - [Offline glasses recording and live preview](rabilink-offline-recording_en.md): record glasses streams on the phone and watch locally; device acceptance is in progress.
 - [Rokid development sources and troubleshooting](rokid-development_en.md) — SDK route, official-source reading status, installation evidence and development skill; CXR-M is excluded.
@@ -87,6 +87,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Rabi mobile message endpoint](mobile-message-endpoint_en.md) — **Experimental integration** for standalone phone chat, optional glasses, reliable queues, notifications, attachments, configuration assistance, and device acceptance boundaries.
 - [RabiLink phone edge hub](rabilink-phone-edge-hub_en.md)
 - [Phone-to-PC direct video](rabilink-direct-video_en.md) — experimental signalling and direct transport; camera capture and cross-network acceptance remain pending.
+- [Mobile recording ownership](mobile-recording-event-boundary_en.md) — Developer reference for device configuration, recording events, and legacy retirement.
 - [RabiLink wearable health endpoint](rabilink-wearable-health_en.md) — **Experimental integration** for phone settings, structured health history, Agent queries, alert thresholds, and the Xiaomi ADB fallback.
 - [AIUI-to-phone/native-glasses parity checklist](rabilink-aiui-native-parity_en.md) — migration status separated by code, automation, and real-device evidence.
 - [RabiLink AIUI residency boundaries](rabilink-aiui-residency-plan_en.md)

@@ -18,6 +18,31 @@ function withPayload(run) {
   }
 }
 
+test("release manifest refuses an enabled plugin whose declared Web entry is missing", () => {
+  withPayload(root => {
+    const base = path.join(root, "dist/plugins");
+    fs.mkdirSync(path.join(base, "profiles"), { recursive: true });
+    const pkg = path.join(base, "packages/io.example.web/1.0.0");
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(path.join(base, "profiles/desktop.json"), JSON.stringify({ schemaVersion: 2, instances: [{ id: "example", package: "io.example.web", version: "1.0.0", enabled: true }] }));
+    fs.writeFileSync(path.join(pkg, "rabi.plugin.json"), JSON.stringify({ id: "io.example.web", version: "1.0.0", entries: { web: { execution: "in_process", module: "web/client.mjs" } } }));
+    assert.throws(() => writeManifest(root, "0.2.1"), /Web entry.*io.example.web.*web\/client.mjs/);
+    fs.writeFileSync(path.join(pkg, "rabi.plugin.json"), JSON.stringify({ entries: { web: { execution: "in_process", module: "../escape.mjs" } } }));
+    assert.throws(() => writeManifest(root, "0.2.1"), /Web entry path is invalid/);
+    fs.writeFileSync(path.join(base, "profiles/desktop.json"), JSON.stringify({ instances: [{ package: "io.example.web", version: "1.0.0", enabled: false }] }));
+    assert.doesNotThrow(() => writeManifest(root, "0.2.1"));
+    fs.rmSync(path.join(root, "release-manifest.json"));
+    fs.writeFileSync(path.join(base, "profiles/desktop.json"), JSON.stringify({ instances: [{ package: "io.example.web", version: "1.0.0", enabled: true }] }));
+    fs.writeFileSync(path.join(pkg, "rabi.plugin.json"), JSON.stringify({ entries: { web: { execution: "in_process", module: "web/client.mjs" } } }));
+    fs.mkdirSync(path.join(pkg, "web"));
+    fs.writeFileSync(path.join(pkg, "web/client.mjs"), "export function activate() {}\n");
+    assert.doesNotThrow(() => writeManifest(root, "0.2.1"));
+    fs.rmSync(path.join(root, "release-manifest.json"));
+    fs.writeFileSync(path.join(pkg, "rabi.plugin.json"), JSON.stringify({ entries: { web: { execution: "in_process", module: "./web/client.mjs" } } }));
+    assert.doesNotThrow(() => writeManifest(root, "0.2.1"));
+  });
+});
+
 test("release manifest is deterministic and gives same-version rebuilds distinct identities", () => {
   withPayload((root) => {
     const first = writeManifest(root, "0.2.1");

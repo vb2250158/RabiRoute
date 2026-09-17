@@ -1,4 +1,5 @@
 import { isCodexTaskId } from "./codexTaskId.js";
+import { isPlanAssistantAgentType, type PlanAssistantAgentType } from "./agentAdapterCapabilities.js";
 import { proactiveCommunicationPolicyLines } from "./agentCommunicationPolicy.js";
 import { codexThreadTitleMaxLength, normalizeCodexThreadTitle } from "./codexThreadTitle.js";
 import { roleStorageMutationContractLines } from "./roleStorageMutationContract.js";
@@ -7,8 +8,15 @@ export const MAX_CODEX_PLAN_ASSISTANT_SESSIONS = 8;
 export const DEFAULT_CODEX_PLAN_ASSISTANT_MODEL = "gpt-5.6-terra";
 
 export type CodexPlanAssistantSession = {
-  /** Omitted on legacy Codex rows; DSH rows persist their owner explicitly. */
-  agentAdapter?: "codex" | "dsh";
+  /** Exact configured execution owner. Omitted rows remain in an unassigned legacy pool until configuration migration. */
+  agentTargetId?: string;
+  /**
+   * Omitted only on legacy Codex rows. Every adapter added since persists its
+   * owner explicitly, and callers must prefer this field over inferring from
+   * `threadId`: Antigravity conversation ids are plain UUIDs, exactly the shape
+   * Codex task ids use, so the id alone cannot identify the owner.
+   */
+  agentAdapter?: PlanAssistantAgentType;
   threadId: string;
   threadName: string;
   workspace: string;
@@ -18,8 +26,29 @@ export type CodexPlanAssistantSession = {
   initializedAt?: string;
 };
 
-export function planAssistantSessionAgentAdapter(session: Pick<CodexPlanAssistantSession, "agentAdapter" | "threadId">): "codex" | "dsh" {
-  return session.agentAdapter === "dsh" || session.threadId.startsWith("session-") ? "dsh" : "codex";
+/**
+ * Resolve which adapter owns an assistant session.
+ *
+ * An explicit `agentAdapter` always wins. The `session-` prefix identifies DSH
+ * unambiguously, so it is honoured for legacy rows written before the field
+ * existed. Everything else falls back to Codex, which is the only adapter that
+ * ever wrote rows without the field — note that a bare UUID cannot be used to
+ * infer anything, since Codex and Antigravity both use that form.
+ */
+export function planAssistantSessionAgentAdapter(
+  session: Pick<CodexPlanAssistantSession, "agentAdapter" | "threadId">
+): PlanAssistantAgentType {
+  if (session.agentAdapter && isPlanAssistantAgentType(session.agentAdapter)) return session.agentAdapter;
+  return session.threadId.startsWith("session-") ? "dsh" : "codex";
+}
+
+/** Undefined or blank selects only the legacy unassigned pool, never all owners. */
+export function filterCodexPlanAssistantSessionsForTarget(
+  sessions: readonly CodexPlanAssistantSession[] | undefined,
+  agentTargetId?: string
+): CodexPlanAssistantSession[] {
+  const targetId = agentTargetId?.trim() || undefined;
+  return (sessions || []).filter((session) => (session.agentTargetId?.trim() || undefined) === targetId);
 }
 
 export function normalizeCodexPlanAssistantModel(value: unknown): string {
@@ -31,14 +60,16 @@ export function normalizeCodexPlanAssistantModel(value: unknown): string {
 export function resolveCodexPlanAssistantTurnModel(
   sessions: readonly CodexPlanAssistantSession[] | undefined,
   threadIdValue: unknown,
-  requestedModel: unknown
+  requestedModel: unknown,
+  agentTargetId?: string
 ): string | undefined {
   const explicitModel = typeof requestedModel === "string" ? requestedModel.trim() : "";
   if (explicitModel) return explicitModel;
   const threadId = typeof threadIdValue === "string" ? threadIdValue.trim() : "";
   if (!threadId) return undefined;
-  const session = sessions?.find((item) => item.threadId === threadId);
-  return session ? normalizeCodexPlanAssistantModel(session.model) : undefined;
+  const matches = filterCodexPlanAssistantSessionsForTarget(sessions, agentTargetId).filter((item) => item.threadId === threadId);
+  // Never borrow a model from another provider with a colliding id.
+  return matches.length === 1 ? normalizeCodexPlanAssistantModel(matches[0]!.model) : undefined;
 }
 
 function trimDanglingHighSurrogate(value: string): string {
@@ -71,25 +102,30 @@ export function codexPlanAssistantSessionTitles(baseTitle: unknown, countValue: 
 export function normalizeCodexPlanAssistantSessions(value: unknown): CodexPlanAssistantSession[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
+  const targetCounts = new Map<string | undefined, number>();
   return value.flatMap((item, offset) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const raw = item as Partial<CodexPlanAssistantSession>;
     const threadId = String(raw.threadId || "").trim();
     const threadName = String(raw.threadName || "").trim();
     const workspace = String(raw.workspace || "").trim();
-    const inferredAgentAdapter = isCodexTaskId(threadId)
-      ? "codex"
-      : /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)
+    const explicitAgentAdapter = isPlanAssistantAgentType(raw.agentAdapter) ? raw.agentAdapter : undefined;
+    // Without an explicit owner only two shapes are self-identifying: a DSH
+    // `session-` id, and the bare UUID that both Codex and Antigravity produce.
+    // An id that fits neither is unusable, because nothing can tell who owns it.
+    const inferredAgentAdapter: PlanAssistantAgentType | undefined = explicitAgentAdapter
+      ?? (/^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId)
         ? "dsh"
-        : undefined;
-    const explicitAgentAdapter = raw.agentAdapter === "codex" || raw.agentAdapter === "dsh"
-      ? raw.agentAdapter
-      : undefined;
-    if (!inferredAgentAdapter || (explicitAgentAdapter && explicitAgentAdapter !== inferredAgentAdapter)
-      || !threadName || !workspace || seen.has(threadId)) return [];
-    seen.add(threadId);
+        : isCodexTaskId(threadId)
+          ? "codex"
+          : undefined);
+    const agentTargetId = typeof raw.agentTargetId === "string" ? raw.agentTargetId.trim() || undefined : undefined;
+    const identity = JSON.stringify([agentTargetId ?? null, inferredAgentAdapter, threadId]);
+    if (!inferredAgentAdapter || !threadId || !threadName || !workspace || seen.has(identity)) return [];
+    seen.add(identity);
     return [{
-      ...(inferredAgentAdapter === "dsh" ? { agentAdapter: "dsh" as const } : {}),
+      ...(agentTargetId ? { agentTargetId } : {}),
+      ...(inferredAgentAdapter === "codex" ? {} : { agentAdapter: inferredAgentAdapter }),
       threadId,
       threadName: normalizeCodexThreadTitle(threadName),
       workspace,
@@ -100,14 +136,18 @@ export function normalizeCodexPlanAssistantSessions(value: unknown): CodexPlanAs
         : undefined
     }];
   }).sort((left, right) => left.index - right.index)
-    .slice(0, MAX_CODEX_PLAN_ASSISTANT_SESSIONS)
-    .map((item, index) => ({ ...item, index: index + 1 }));
+    .flatMap((item) => {
+      const index = (targetCounts.get(item.agentTargetId) || 0) + 1;
+      if (index > MAX_CODEX_PLAN_ASSISTANT_SESSIONS) return [];
+      targetCounts.set(item.agentTargetId, index);
+      return [{ ...item, index }];
+    });
 }
 
 export function codexPlanAssistantInitializationPrompt(input: {
   roleId: string;
-  sourceAgentAdapter: "codex" | "dsh";
-  assistantAgentAdapter: "codex" | "dsh";
+  sourceAgentAdapter: PlanAssistantAgentType;
+  assistantAgentAdapter: PlanAssistantAgentType;
   sourceThreadId: string;
   sourceThreadName: string;
   assistantThreadId: string;

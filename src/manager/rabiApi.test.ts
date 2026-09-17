@@ -310,4 +310,27 @@ test("agent binding enforces strong mutation fencing and returns replayable comm
   assert.equal(weakRemote.status, 428, "remote proxying must reject weak If-Match before discovery or forwarding");
   assert.equal((await weakRemote.json() as any).errorCode, "route_catalog_precondition_required");
   assert.equal(commitCount, 1);
+
+  const remoteTarget = { id: "remote:node-a:agent-a", provider: "codex", instanceId: "node-a", agentId: "agent-a" };
+  const remote = await fetch(endpoint, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "idempotency-key": "binding-remote-target", "if-match": hashB },
+    body: JSON.stringify({ remoteAgentTargets: [remoteTarget], primaryAgentTarget: remoteTarget.id })
+  });
+  assert.equal(remote.status, 200);
+  const remoteBody = await remote.json() as any;
+  assert.equal(remoteBody.data.route.primaryAgentTarget, remoteTarget.id);
+  assert.deepEqual(remoteBody.data.route.remoteAgentTargets, [remoteTarget]);
+  assert.deepEqual(remoteBody.data.route.agentAdapters, ["codex"]);
+  assert.equal(remoteBody.data.route.codexThreadName, "thread-a");
+
+  const localAgain = await fetch(endpoint, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", "idempotency-key": "binding-local-target", "if-match": hashB },
+    body: JSON.stringify({ agentAdapter: "codex" })
+  });
+  assert.equal(localAgain.status, 200);
+  const localBody = await localAgain.json() as any;
+  assert.equal(localBody.data.route.primaryAgentTarget, "local:codex");
+  assert.deepEqual(localBody.data.route.remoteAgentTargets, [remoteTarget], "legacy provider selection must retain remote targets");
 });

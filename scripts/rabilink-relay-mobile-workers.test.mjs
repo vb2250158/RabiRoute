@@ -92,7 +92,7 @@ test("mobile PC picker exposes only processing workers", async () => {
       deviceId: "company-pc",
       deviceGuid: "guid-company",
       deviceName: "Company PC",
-      capabilities: "webgui,persona-sync,speech"
+      capabilities: "webgui,persona-sync,speech,asr"
     }));
     subscriptions.push(await subscribe(baseUrl, token, {
       deviceId: "legacy-pc",
@@ -143,6 +143,16 @@ test("mobile PC picker exposes only processing workers", async () => {
     });
     assert.equal(pcTarget.status, 200);
     assert.equal((await pcTarget.json()).selectedWorker?.id, "company-pc");
+    const asrUrl = `${baseUrl}/api/rabilink/mobile/asr-settings`;
+    assert.equal((await fetch(asrUrl)).status, 401);
+    const asrHeaders = { "content-type": "application/json", "x-rabilink-token": token };
+    const asr = await (await fetch(asrUrl, { headers: asrHeaders })).json();
+    assert.deepEqual(asr.workers.map(worker => worker.id), ["company-pc"]);
+    assert.equal(asr.selectedWorkerId, "company-pc");
+    assert.equal((await fetch(asrUrl, { method: "PATCH", headers: asrHeaders, body: JSON.stringify({ priority: ["legacy-pc"] }) })).status, 400);
+    assert.equal((await fetch(asrUrl, { method: "PATCH", headers: asrHeaders, body: JSON.stringify({ priority: ["company-pc"] }) })).status, 200);
+    assert.deepEqual((await (await fetch(asrUrl, { headers: asrHeaders })).json()).priority, ["company-pc"]);
+    assert.equal((await (await fetch(`${baseUrl}/api/rabilink/mobile/state`, { headers: asrHeaders })).json()).selectedWorker.id, "company-pc");
   } finally {
     await Promise.allSettled(subscriptions.map(response => response.body?.cancel()));
     child.kill();

@@ -7,7 +7,7 @@ export const AGENT_HOOK_CONDITIONS = [
 ] as const;
 export const AGENT_HOOK_DESTINATIONS = [
   { value: "napcat", title: "NapCat（QQ）" },
-  { value: "speech", title: "语音" }
+  { value: "speech", title: "TTS 播报" }
 ] as const;
 
 export type AgentHookSession = { id: string; name: string };

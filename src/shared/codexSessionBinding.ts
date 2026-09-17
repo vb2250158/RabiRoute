@@ -1,3 +1,5 @@
+import type { PlanAssistantAgentType } from "./agentAdapterCapabilities.js";
+
 export type CodexRouteBinding = {
   id?: string;
   name?: string;
@@ -17,7 +19,7 @@ export type CodexBindingResolveRequest = {
   title: string;
   cwd?: string;
   createIfMissing: true;
-  agentAdapter?: "codex" | "dsh";
+  agentAdapter?: PlanAssistantAgentType;
   dshBaseUrl?: string;
 };
 
@@ -43,6 +45,7 @@ export async function bindCodexSessionForSave(
   resolve: CodexBindingResolver
 ): Promise<void> {
   if (!gateway.agentAdapters?.includes("codex")) return;
+  if (!gateway.codexThreadId?.trim() && !gateway.codexThreadName?.trim()) return;
 
   const title = configuredCodexTitle(gateway);
   const result = await resolve({
@@ -77,6 +80,7 @@ export async function bindDshSessionForSave(
   resolve: CodexBindingResolver
 ): Promise<void> {
   if (!gateway.agentAdapters?.includes("dsh")) return;
+  if (!gateway.dshSessionId?.trim() && !gateway.dshSessionName?.trim()) return;
 
   const title = configuredDshTitle(gateway);
   const result = await resolve({

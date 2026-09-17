@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import path from "node:path";
 import { Bonjour, type Browser, type Service } from "bonjour-service";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createPublicKey, verify, createHash } from "node:crypto";
 import type http from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
@@ -39,6 +39,8 @@ export class PeerTunnelRuntime {
     services(): Record<string, TunnelService>;
     onStatus(value: unknown): void;
     allowControl?(request: http.IncomingMessage, url: URL): boolean;
+    allowSpeechBootstrap?(): boolean;
+    allowResourceBootstrap?(): boolean;
   }) {
     this.file = path.join(options.dataDir, "tunnel.json");
     this.identity = loadTunnelIdentity(path.join(options.dataDir, "tunnel-identity.json"), options.deviceId, options.generation);
@@ -63,8 +65,11 @@ export class PeerTunnelRuntime {
   }
   private grant(id: string): TunnelGrant {
     const grant = this.config().trustedDevices.find(item => item.deviceId === id);
-    if (!grant) throw new TunnelDenied("peer_device_not_trusted"); return grant;
+    if (!grant) throw new TunnelDenied("peer_device_not_trusted");
+    if (grant.bootstrapScope && (!(this.options.allowSpeechBootstrap?.() || this.options.allowResourceBootstrap?.()) || grant.bootstrapScope !== this.bootstrapScope())) throw new TunnelDenied("peer_service_denied");
+    return grant;
   }
+  private bootstrapScope() { const relay=this.options.relay(); return createHash("sha256").update(relay.url.replace(/\/+$/,"")+"\n"+relay.token).digest("hex"); }
   async select(id: string) {
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
     if (id) { this.grant(id); const peer = await this.target(id); if (!peer.supported) throw new Error("peer_upgrade_required"); }
@@ -151,13 +156,48 @@ export class PeerTunnelRuntime {
     void establishTunnel(channel, this.identity, grant, false, AbortSignal.any([this.controller.signal, AbortSignal.timeout(5_000)]))
       .then(session => {
         this.incoming.add(session); session.once("close", () => this.incoming.delete(session));
-        serveTunnel(session, () => ({ ...this.options.services(), ...this.config().services }), service => {
-          const current = this.grant(source); return current.publicKey === session.remote.publicKey && current.services.includes(service);
+        serveTunnel(session, () => {
+          const services = { ...this.options.services(), ...this.config().services };
+          if (services.resources) services.resources = { ...services.resources, headers: { ...services.resources.headers, "x-rabilink-resource-owner": source } };
+          return services;
+        }, service => {
+          const current = this.grant(source); return current.publicKey === session.remote.publicKey && current.services.includes(service) && (service !== "resources" || this.options.allowResourceBootstrap?.() === true) && (service !== "speech" || !current.bootstrapScope || this.options.allowSpeechBootstrap?.() === true);
         });
       }).catch(() => channel.close()).finally(() => this.accepting--);
   }
   async offer(input: unknown): Promise<unknown> {
     if (this.options.readOnly) throw new TunnelDenied("manager_read_only");
+    // The caller reached this method through the application-authenticated encrypted
+    // signalling dispatcher. Bootstrap grants only the requested service, never Manager access.
+    const bootstrap = input as { kind?: string; source?: string; publicKey?: string; target?: string; expiresAt?: number; signature?: string };
+    if (bootstrap?.kind === "bootstrap-speech" || bootstrap?.kind === "bootstrap-resources") {
+      const resource = bootstrap.kind === "bootstrap-resources";
+      const service = resource ? "resources" : "speech";
+      if (!(resource ? this.options.allowResourceBootstrap?.() : this.options.allowSpeechBootstrap?.())) throw new TunnelDenied("peer_service_denied");
+      if (typeof bootstrap.source !== "string" || !/^[A-Za-z0-9_-]{1,120}$/.test(bootstrap.source)
+          || bootstrap.target !== this.identity.deviceId || typeof bootstrap.publicKey !== "string" || bootstrap.publicKey.length > 2048
+          || !Number.isFinite(bootstrap.expiresAt) || bootstrap.expiresAt! < Date.now() || bootstrap.expiresAt! > Date.now() + 60_000)
+        throw new TunnelDenied("peer_bootstrap_denied");
+      const fields = { source: bootstrap.source, publicKey: bootstrap.publicKey, target: bootstrap.target, expiresAt: bootstrap.expiresAt };
+      const key = createPublicKey(bootstrap.publicKey);
+      if (key.asymmetricKeyType !== "ed25519" || !verify(null, Buffer.from((resource ? "rabi-resources-bootstrap-v1" : "rabi-speech-bootstrap-v1") + JSON.stringify(fields)), key, Buffer.from(bootstrap.signature || "", "base64")))
+        throw new TunnelDenied("peer_signature_denied");
+      const config = this.config();
+      const prior = config.trustedDevices.find(grant => grant.deviceId === bootstrap.source);
+      if (prior && prior.publicKey !== bootstrap.publicKey) throw new TunnelDenied("peer_identity_changed");
+      if (!prior) config.trustedDevices.push({ deviceId: bootstrap.source, publicKey: bootstrap.publicKey, services: [service], bootstrapScope: this.bootstrapScope() });
+      else if (!prior.services.includes(service) && !prior.bootstrapScope) throw new TunnelDenied("peer_service_denied");
+      const addedService = prior && !prior.services.includes(service);
+      if (addedService) prior.services.push(service);
+      const changedScope = prior?.bootstrapScope && prior.bootstrapScope !== this.bootstrapScope();
+      if (changedScope) prior!.bootstrapScope = this.bootstrapScope();
+      if (!prior || changedScope || addedService) {
+        mkdirSync(path.dirname(this.file), { recursive: true });
+        const temporary = this.file + "." + randomUUID() + ".tmp";
+        writeFileSync(temporary, JSON.stringify(config, null, 2), { flag: "wx", mode: 0o600 }); renameSync(temporary, this.file);
+      }
+      return { deviceId: this.identity.deviceId, generation: this.identity.generation, publicKey: this.identity.publicKey };
+    }
     const value = input as { source?: string; kind?: string; sdp?: string; room?: string };
     if (!value || typeof value.source !== "string") throw new TunnelDenied("peer_source_required");
     this.grant(value.source);

@@ -8,7 +8,7 @@ test("route selector appears only on adapters, persona and knowledge pages", () 
   for (const route of ["/routes", "/routes/main", "/routes/main/adapters", "/persona", "/persona/main", "/routes/main/persona", "/routes/main/persona/document", "/routes/main/persona/sync", "/knowledge", "/routes/main/knowledge"]) {
     assert.equal(showsRouteSwitcher(route), true, route);
   }
-  for (const route of ["/overview", "/routes/main/overview", "/speech", "/routes/main/speech", "/runtime", "/routes/main/runtime", "/performance", "/settings", "/video", "/lan-agents", "/docs", "/routes/main/unknown"]) {
+  for (const route of ["/overview", "/routes/main/overview", "/speech", "/routes/main/speech", "/runtime", "/routes/main/runtime", "/performance", "/settings", "/video", "/rabilink", "/lan-agents", "/docs", "/routes/main/unknown"]) {
     assert.equal(showsRouteSwitcher(route), false, route);
   }
 });
@@ -26,6 +26,6 @@ test("one conditional selector follows the title in the top bar and reuses gatew
   assert.match(topbar, /:model-value="store.selectedGatewayId"/);
   assert.match(topbar, /:items="routeOptions"/);
   assert.match(topbar, /@update:model-value="value => selectGateway\(String\(value \|\| ''\)\)"/);
-  assert.match(styles, /\.topbar-context\.has-route-switcher\s*\{[^}]*flex-direction: column/);
+  assert.match(styles, /\.topbar-context\.has-route-switcher\b[^{}]*\{[^}]*flex-direction: column/);
   assert.doesNotMatch(styles, /(?:^|\n)\.route-picker\s*\{/);
 });

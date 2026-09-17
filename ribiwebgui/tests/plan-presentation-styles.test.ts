@@ -300,8 +300,8 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /class="knowledge-plan-directory"/);
   assert.match(page, /class="knowledge-plan-directory"[\s\S]*?<\/nav>\s*<div[\s\S]*?role="separator"[\s\S]*?<v-card class="app-card knowledge-browser"/);
   assert.match(page, /v-for="plan in visiblePlansForView"/);
-  assert.match(page, /const renderedPlansForView = computed\(\(\) => \{\s*const window = knowledgeRenderWindow\(visiblePlansForView\.value/);
-  assert.match(page, /feedbackFocusOpen\.value && selected && !window\.some/);
+  assert.match(page, /const renderedPlansForView = computed\(\(\) => feedbackFocusOpen.value/);
+  assert.match(page, /: knowledgeRenderWindow\(visiblePlansForView.value, planRenderStart.value, planRenderLimit.value\)/);
   assert.match(page, /function currentPlanPageFilter[\s\S]*?sort:\s*planListSortMode\.value[\s\S]*?statuses[\s\S]*?tags/);
   assert.match(page, /v-model="planListDialogOpen"[\s\S]*?max-width="1180"[\s\S]*?scrollable[\s\S]*?aria-labelledby="plan-list-dialog-title"/);
   assert.doesNotMatch(page, /<v-menu v-model="planList/);
@@ -330,7 +330,7 @@ test("plan views expose a floating directory outside the plan browser", () => {
   assert.match(page, /window\.requestAnimationFrame\(syncActiveDirectoryPlan\)/);
   assert.match(page, /window\.addEventListener\("scroll", scheduleActiveDirectoryPlanSync, \{ passive: true \}\)/);
   assert.match(page, /function holdDirectoryJumpTarget\(planId: string, smooth: boolean\)/);
-  assert.match(page, /if \(directoryJumpTargetId\) return;/);
+  assert.match(page, /if \(feedbackFocusOpen.value \|\| directoryJumpTargetId\) return;/);
   assert.match(page, /window\.addEventListener\("scroll", waitForDirectoryJumpSettle, \{ passive: true \}\)/);
   assert.match(page, /async function focusPlanCardAfterDirectoryJump/);
   assert.match(page, /holdDirectoryJumpTarget\(planId, !reduceMotion\)/);

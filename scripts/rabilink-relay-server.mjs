@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { attachTunnelBroker } from "./lib/rabilink-tunnel-broker.mjs";
+import { orderedAsrWorkers, selectAsrWorker, validateAsrPriority } from "./lib/rabilink-asr-priority.mjs";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -5461,6 +5462,23 @@ async function handleMobileApi(req, url, res, body) {
   if (req.method === "GET" && url.pathname === "/api/rabilink/mobile/state") {
     return sendJson(res, 200, mobileStatePayload(app));
   }
+  if (url.pathname === "/api/rabilink/mobile/asr-settings") {
+    if (req.method !== "GET" && req.method !== "PATCH") return sendJson(res, 405, { error: "Method not allowed." });
+    const workers = mobileWorkersForApp(app);
+    let priority = Array.isArray(app.asrPriority) ? app.asrPriority : [];
+    if (req.method === "PATCH") {
+      try { priority = validateAsrPriority(body?.priority, workers); }
+      catch (error) { return sendJson(res, 400, { error: error.message }); }
+      const store = readAppStore();
+      const current = store.apps.find(item => item.id === app.id);
+      if (!current) return sendJson(res, 404, { error: "Application not found." });
+      current.asrPriority = priority;
+      current.updatedAt = nowIso();
+      writeAppStore(store);
+    }
+    return sendJson(res, 200, { ok: true, priority, workers: orderedAsrWorkers(workers, priority),
+      selectedWorkerId: selectAsrWorker(workers, priority)?.id || "" });
+  }
   if (req.method === "POST" && url.pathname === "/api/rabilink/mobile/device-status") {
     const deviceStatus = writeMobileDeviceStatus(app, body || {});
     return sendJson(res, 200, { code: 0, ok: true, deviceStatus });
@@ -5743,6 +5761,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (url.pathname === "/api/rabilink/mobile/state"
+      || url.pathname === "/api/rabilink/mobile/asr-settings"
       || url.pathname === "/api/rabilink/mobile/device-status"
       || url.pathname === "/api/rabilink/mobile/proof"
       || url.pathname === "/api/rabilink/mobile/proofs"

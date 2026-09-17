@@ -16,13 +16,12 @@ import SpeechServerSelect from "../components/SpeechServerSelect.vue";
 import SpeechParameterSlider from "../components/SpeechParameterSlider.vue";
 import SpeechRecordsAndSpeakers from "../components/SpeechRecordsAndSpeakers.vue";
 import SpeechHostMonitor from "../components/SpeechHostMonitor.vue";
-import TaskCompletionAnnouncementsCard from "../components/TaskCompletionAnnouncementsCard.vue";
 import { useGatewayStore } from "../stores/gatewayStore";
-import PersonaAvatar from "../components/PersonaAvatar.vue";
+import TtsModelParameters from "../components/TtsModelParameters.vue";
+import { normalizeTtsParameters, ttsCommandSettings, type TtsParameters } from "../speech/ttsParameters";
 import { useSpeechStore } from "../stores/speechStore";
 import { gatewayAdapterTypes } from "../utils/gatewayHelpers";
 import { copyTextToClipboard } from "../clipboard";
-import { personaOptionDisplayName } from "../personaPresentation";
 import { SpeechControlRequestError, speechControlClient } from "../speech/speechControlClient";
 import { transcriptSpeakerPresentation } from "../speech/speechSpeakerPresentation";
 import { pluginCatalogStore } from "../pluginCatalogStore";
@@ -39,7 +38,6 @@ const speechStatusRenderers = computed(() => webRenderersAt(pluginCatalogStore.s
 const {
   status,
   models,
-  personas,
   microphone: microphoneStatus,
   playback,
   audioStream,
@@ -50,7 +48,7 @@ const activeKind = ref<"tts" | "asr">("tts");
 const speechServerId = ref("");
 async function onSpeechServerChanged(deviceId: string): Promise<void> {
   speechServerId.value = deviceId;
-  ttsModel.value = ""; asrModel.value = ""; voice.value = "";
+  ttsModel.value = ""; asrModel.value = ""; ttsParameters.value = {};
   try { await speech.changeServer(); } catch (error) { requestError.value = error instanceof Error ? error.message : String(error); }
 }
 const modelManagementDialog = ref(false);
@@ -61,12 +59,9 @@ const requestErrorDetail = ref("");
 const requestErrorResolution = ref("");
 const ttsModel = ref("");
 const asrModel = ref("");
-const voice = ref(DEFAULT_SPEECH_ROUTE_PROFILE.voice);
-const ttsLanguage = ref(DEFAULT_SPEECH_ROUTE_PROFILE.language);
+const ttsParameters = ref<TtsParameters>({});
 const asrLanguage = ref(DEFAULT_SPEECH_ROUTE_PROFILE.language);
 const ttsText = ref("你好，我是由 RabiSpeech 语音服务驱动的声音。");
-const instructions = ref("");
-const speed = ref(1);
 const queuePlayback = ref(true);
 const ttsBusy = ref(false);
 const asrBusy = ref(false);
@@ -161,26 +156,12 @@ const speechStatusContext = computed(() => ({
 }));
 const ttsModels = computed(() => models.value.filter(item => item.capability === "tts"));
 const asrModels = computed(() => models.value.filter(item => item.capability === "asr"));
-const personaNames = computed(() => {
-  const names = new Map<string, string>();
-  for (const runtime of store.managerRows) {
-    for (const role of runtime.roleInfo?.options || []) {
-      const name = personaOptionDisplayName(role);
-      if (role.value && name) names.set(role.value, name);
-    }
-  }
-  return names;
-});
-const personaOptions = computed(() => personas.value.map(item => ({
-  title: personaNames.value.get(item.id) || item.id,
-  subtitle: [
-    personaNames.value.get(item.id) && personaNames.value.get(item.id) !== item.id ? `人格 ID · ${item.id}` : "",
-    item.voiceReady ? "已配置声线" : "使用模型默认声线"
-  ].filter(Boolean).join(" · "),
+const selectedTtsModel = computed(() => ttsModels.value.find(item => item.id === ttsModel.value));
+const ttsModelOptions = computed(() => ttsModels.value.map(item => ({
+  title: item.name,
   value: item.id,
-  avatarUrl: item.avatarUrl || ""
+  props: { subtitle: `${item.id} · ${item.available ? "可用" : "未就绪"}`, disabled: !item.available }
 })));
-const selectedPersona = computed(() => personas.value.find(item => item.id === voice.value));
 const speechSubscriberRoutes = computed(() => store.gateways
   .filter(gateway => gateway.enabled !== false && gatewayAdapterTypes(gateway).includes("speech")));
 const micPercent = computed(() => Math.min(100, Math.round((micLevel.value / Math.max(threshold.value, 0.001)) * 50)));
@@ -392,7 +373,7 @@ async function refreshStatus(): Promise<void> {
 }
 
 async function hydrateRuntimeUi(): Promise<void> {
-  await Promise.all([refreshModels(), refreshPersonas(), refreshAudioInputs(), refreshMicrophone()]);
+  await Promise.all([refreshModels(), refreshAudioInputs(), refreshMicrophone()]);
 }
 
 async function toggleRuntime(enabled: boolean | null): Promise<void> {
@@ -442,15 +423,6 @@ async function refreshModels(): Promise<void> {
   syncModelSelections();
 }
 
-function syncPersonaSelection(): void {
-  if (!personas.value.some(item => item.id === voice.value) && personas.value[0]) voice.value = personas.value[0].id;
-}
-
-async function refreshPersonas(): Promise<void> {
-  await speech.refreshPersonas();
-  syncPersonaSelection();
-}
-
 async function refreshPlayback(): Promise<void> {
   try {
     await speech.refreshPlayback();
@@ -465,18 +437,12 @@ async function synthesize(): Promise<void> {
   clearRequestError();
   actionMessage.value = "首次调用可能需要加载模型，请稍候。";
   try {
+    const model = selectedTtsModel.value;
+    if (!model?.available) throw new Error("所选 TTS 模型尚未就绪。");
     const result = await speech.synthesize({
-      model: ttsModel.value,
+      ...ttsCommandSettings(model, ttsParameters.value),
       input: ttsText.value,
-      voice: voice.value || "default",
-      responseFormat: "wav",
-      speed: speed.value,
-      language: ttsLanguage.value || null,
-      instructions: instructions.value || null,
-      sampleRate: null,
-      play: queuePlayback.value,
-      sessionId: null,
-      routeId: null
+      play: queuePlayback.value
     });
     if (queuePlayback.value) {
       actionMessage.value = result.playbackJob ? `已进入全局播放队列：${result.playbackJob}` : "已完成合成并提交播放。";
@@ -585,7 +551,6 @@ async function syncMicrophoneFromStore(): Promise<void> {
 
 async function syncRuntimeUiFromStore(): Promise<void> {
   syncModelSelections();
-  syncPersonaSelection();
   syncAudioInputsFromStore();
   await syncMicrophoneFromStore();
 }
@@ -758,12 +723,8 @@ watch(() => playback.value?.volume, volume => {
   if (playbackVolumeSaving.value || playbackVolumeTimer || pendingPlaybackVolume != null) return;
   if (volume != null) playbackVolume.value = normalizePlaybackVolume(volume);
 }, { immediate: true });
-watch(selectedPersona, persona => {
-  if (!persona) return;
-  if (persona.defaultModel) ttsModel.value = persona.defaultModel;
-  if (persona.language) ttsLanguage.value = persona.language;
-  instructions.value = persona.instructions || persona.voiceStyleSummary || "";
-  speed.value = persona.speed ?? 1;
+watch(ttsModel, () => {
+  ttsParameters.value = normalizeTtsParameters(selectedTtsModel.value);
 });
 watch(
   () => selectedAudioStreamClient.value?.sourceDeviceId || "",
@@ -809,7 +770,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-shell speech-page">
-    <SpeechServerSelect @changed="onSpeechServerChanged" />
+    <Teleport to="#page-topbar-controls">
+      <SpeechServerSelect @changed="onSpeechServerChanged" />
+    </Teleport>
     <div class="page-header speech-page-header">
       <div>
         <div class="speech-eyebrow">LOCAL SPEECH RUNTIME</div>
@@ -1055,40 +1018,22 @@ onBeforeUnmount(() => {
       <v-card v-if="activeKind === 'tts'" class="app-card glass-card speech-console-card">
         <div class="speech-console-head">
           <div>
-            <div class="speech-eyebrow">DIRECT ROLEPLAY TTS</div>
-            <h2>独立 TTS 角色扮演</h2>
-            <p>不需要配置 Route 或接入 Agent；人格名会解析到 <code>data/roles/&lt;人格&gt;/voice</code>。</p>
+            <div class="speech-eyebrow">TEXT TO SPEECH</div>
+            <h2>TTS 语音合成</h2>
+            <p>输入文本，选择模型和音色，调整参数后合成试听。</p>
           </div>
           <v-chip color="info" variant="tonal">{{ ttsModels.filter(item => item.available).length }} 个可用模型</v-chip>
         </div>
         <v-textarea v-model="ttsText" label="要说的话" rows="4" counter="10000" :disabled="ttsBusy" />
-        <div class="speech-form-grid">
-          <v-select v-model="voice" label="人格 / 声线" :items="personaOptions" :disabled="ttsBusy">
-            <template #item="{ props: itemProps, item }">
-              <v-list-item v-bind="itemProps" :subtitle="item.raw.subtitle">
-                <template #prepend><PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="32" /></template>
-              </v-list-item>
-            </template>
-            <template #selection="{ item }">
-              <div class="d-flex align-center ga-2">
-                <PersonaAvatar :role-id="String(item.raw.value || '')" :avatar-url="item.raw.avatarUrl" :size="26" />
-                <span>{{ item.raw.title }}</span>
-              </div>
-            </template>
-          </v-select>
-          <v-text-field :model-value="ttsModel || '由人格配置'" label="TTS 模型" readonly />
-          <v-text-field :model-value="ttsLanguage || '由人格配置'" label="语言" readonly />
-          <v-text-field :model-value="speed" label="语速" readonly />
-        </div>
-        <v-text-field :model-value="instructions || '由人格 voice-profile 配置'" label="情绪 / 风格指令" readonly />
-        <div class="section-note mb-3">模型、声线、语言、语速和表达方式统一来自所选人格的 <code>voice/voice-profile.json</code>。</div>
+        <v-select v-model="ttsModel" label="TTS 模型" :items="ttsModelOptions" :disabled="ttsBusy" />
+        <TtsModelParameters :key="speechServerId" v-model="ttsParameters" :model="selectedTtsModel" :disabled="ttsBusy" />
+        <div class="section-note mt-3 mb-3">仅显示当前模型支持的参数；情绪和风格由本次输入指定。</div>
         <div class="speech-action-row">
           <v-switch v-model="queuePlayback" color="primary" label="进入主机全局 FIFO 播放队列" hide-details />
-          <v-btn color="primary" size="large" prepend-icon="mdi-account-voice" :loading="ttsBusy" :disabled="!ttsText.trim() || !voice" @click="synthesize">合成并播放</v-btn>
+          <v-btn color="primary" size="large" prepend-icon="mdi-account-voice" :loading="ttsBusy" :disabled="!ttsText.trim() || !selectedTtsModel?.available" @click="synthesize">{{ queuePlayback ? '合成并播放' : '合成并试听' }}</v-btn>
         </div>
       </v-card>
 
-      <TaskCompletionAnnouncementsCard v-if="activeKind === 'tts'" />
 
       <v-card v-else class="app-card glass-card speech-console-card">
         <div class="speech-console-head">

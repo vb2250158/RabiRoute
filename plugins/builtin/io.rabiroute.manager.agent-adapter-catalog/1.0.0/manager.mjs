@@ -35,6 +35,8 @@ export const activate = definePlugin({
                 { routeId: "catalog", kind: "exact", path: "/api/agent-adapters/catalog", methods: ["GET"] },
                 { routeId: "scan-agents", kind: "exact", path: "/api/scan/agents", methods: ["GET"] },
                 { routeId: "scan-dsh", kind: "exact", path: "/api/scan/agents/dsh", methods: ["GET"] },
+                { routeId: "dsh-connection", kind: "exact", path: "/api/agent-adapters/dsh/connection", methods: ["GET", "POST", "DELETE"] },
+                { routeId: "dsh-connections", kind: "exact", path: "/api/agent-adapters/dsh/connections", methods: ["GET"] },
                 { routeId: "hooks-update", kind: "exact", path: "/api/agent-adapters/hooks/update", methods: ["POST"] }
             ])
         });

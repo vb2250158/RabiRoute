@@ -8,4 +8,12 @@
     <instrumentation
         android:name="com.rabi.link.modules.xiaomi.MiHealthInstrumentation"
         android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.AsrTunnelInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.modules.rokid.AsrEventInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.AsrUiInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.StorageUiInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.ResourceCacheInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.RecordingLayoutInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.modules.wearable.WearableHealthCollectorInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.modules.wearable.WearableHealthOutboxInstrumentation" android:targetPackage="com.rabi.link" />
 </manifest>

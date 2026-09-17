@@ -6,6 +6,10 @@ English | <a href="./configuration.md">简体中文</a>
 
 # Configuration and Integrations
 
+Remote Agents are execution targets, not message endpoints. Select an instance and Agent through [remote enrollment](lan-rabi-agent-bootstrap_en.md).
+
+Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
+
 > Status: current reference. Fields and maturity are based on the active configuration model, Manager APIs, and scan results. See [Current Capabilities](current-capabilities_en.md) for acceptance status.
 
 ## Plugin platform
@@ -261,9 +265,13 @@ Codex/ChatGPT Desktop must be running for real delivery. RabiRoute may open `cod
 
 ## RabiLink global configuration
 
-The PC identity and Relay connection live in `data/Config.json`, including `rabiGuid` and `rabiLinkRelay` (`enabled`, `url`, `token`, `deviceId`, and timing options). Remote WebGUI identifies the PC at `/manage/<account>/<RabiGUID>/`; the legacy `/webgui` child path remains only for compatibility. Manager registers the PC and proxies remote RibiWebGUI independently of one route process. It also subscribes to local Manager `/api/events` and forwards non-`ready` events to the Relay's remote-WebGUI SSE; attachments, downloads, and media ranges use the same constrained WebGUI channel. A route still needs the `rabilink` message adapter to consume device observations.
+The RabiLink sidebar entry provides Home, Remote Agent, and Configuration tabs. Configuration (`#/rabilink?tab=config`) shows the local instance GUID and edits the instance name, Relay URL and application token, connection switch, advanced timeouts, speech proxy, and Agent upload limit. Settings no longer duplicates these fields; directories, LAN access, and desktop settings remain there. Saving reuses `/api/rabi/identity` and the single `data/Config.json` source. `agentUploads.maxFileMiB` accepts integers `1..2048`, defaults to `2048`, and takes effect after Manager restarts.
 
-The same file owns `webguiLan`, the local Manager's LAN WebGUI switch and access key. It defaults to `enabled=false`, keeping Manager on `127.0.0.1`. Enabling it from the local Console creates a random 32-byte access key when needed; after Manager restarts it listens on `0.0.0.0` while the operating system still assigns the port. Use `http://<Rabi-PC-LAN-IP>:<current-manager-port>/#/overview?webgui_token=<key>`. The browser keeps the captured key only for the current session and removes it from the address bar. Enable, generate, and rotate operations accept only requests originating from the Manager PC itself, through either loopback or one of that PC's own LAN addresses; other devices remain denied, and rotation invalidates old links immediately.
+Home uses the application token stored by Manager to read a same-application, read-only computer overview without repeated login; the token never reaches the Home browser or a URL. Administrators sign in independently at `/manage` in a new window; application tokens cannot elevate privileges. Read failures remain distinct from an empty device list. See [Interface and status](user-guide/interface-and-status_en.md#rabilink-home-remote-agent-and-configuration).
+
+The PC identity and Relay connection live in `data/Config.json`, including `rabiGuid` and `rabiLinkRelay` (`enabled`, `url`, `token`, `deviceId`, and timing options). Remote WebGUI identifies the PC at `/manage/<account>/<RabiGUID>/`; the legacy `/webgui` child path remains only for compatibility. Manager registers the PC and proxies remote RibiWebGUI independently of one route process. It also subscribes to local Manager `/api/events` and forwards non-`ready` events to the Relay's remote-WebGUI SSE; attachments, downloads, and media ranges use the same constrained WebGUI channel. Existing `rabilink` routes remain for legacy clients; configure new devices in mobile recording.
+
+The same file owns `webguiLan`, the local Manager's LAN WebGUI switch and access key. It defaults to `enabled=false`, keeping Manager on `127.0.0.1`. Enabling it from the local Settings page creates a random 32-byte access key when needed; after Manager restarts it listens on `0.0.0.0` while the operating system still assigns the port. Use `http://<Rabi-PC-LAN-IP>:<current-manager-port>/#/overview?webgui_token=<key>`. The browser keeps the captured key only for the current session and removes it from the address bar. Enable, generate, and rotate operations accept only requests originating from the Manager PC itself, through either loopback or one of that PC's own LAN addresses; other devices remain denied, and rotation invalidates old links immediately.
 
 Legacy per-route Relay fields remain readable for compatibility; new configuration belongs in the global file. Public examples never include a Relay URL/token.
 

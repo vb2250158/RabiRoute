@@ -114,6 +114,7 @@ export type RoleMemoryPage = {
 };
 
 export const ROLE_PLAN_PAGE_SIZE = 8;
+export const ROLE_PLAN_BACKGROUND_PAGE_SIZE = 100;
 export const ROLE_MEMORY_BACKGROUND_PAGE_SIZE = 100;
 
 export type RolePlanPageFilter = {

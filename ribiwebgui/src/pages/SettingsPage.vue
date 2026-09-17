@@ -1,8 +1,8 @@
 <script setup lang="ts">
+import ResourceCacheSettings from "../components/ResourceCacheSettings.vue";
 import { userFacingError } from "../userFacingError";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useGatewayStore } from "../stores/gatewayStore";
-import { managerEventSource } from "../managerApi";
 import { routeScopedKnowledgeUrl, routeScopedOverviewUrl } from "../routeScopedNavigation";
 import { configNameFor } from "../utils/gatewayHelpers";
 import { redirectCurrentWebguiToLan } from "../webguiLanRedirect";
@@ -19,19 +19,6 @@ const routeDir = ref("");
 const rolesDir = ref("");
 const dirSaving = ref(false);
 const dirError = ref("");
-const rabiName = ref("");
-const agentUploadMaxFileMiB = ref(2048);
-const rabiSaving = ref(false);
-const rabiError = ref("");
-const rabiLinkRelayEnabled = ref(false);
-const rabiLinkRelayUrl = ref("");
-const rabiLinkRelayAppToken = ref("");
-const rabiLinkRelayTokenConfigured = ref(false);
-const rabiLinkRelayDeviceId = ref("");
-const rabiLinkRelayClaimWaitMs = ref(60000);
-const rabiLinkRelayReplyIdleTimeoutMs = ref(60000);
-const rabiLinkSpeechProxyEnabled = ref(false);
-const rabiLinkSpeechServiceUrl = ref("http://127.0.0.1:8781");
 const settingsDirty = ref(false);
 const settingsSaving = ref(false);
 const settingsHydrating = ref(true);
@@ -72,8 +59,6 @@ async function loadDirConfig() {
     routeDir.value = data.routeDir ?? "";
     rolesDir.value = data.rolesDir ?? "";
   } catch { /* ignore */ }
-  rabiName.value = store.meta.rabiName || store.meta.computerName || "";
-  loadRabiLinkRelayForm();
   await loadWebguiLanAccess();
   await nextTick();
   settingsHydrating.value = false;
@@ -171,20 +156,6 @@ async function copyWebguiLanText(value: string, successMessage: string): Promise
   }
 }
 
-function loadRabiLinkRelayForm(): void {
-  agentUploadMaxFileMiB.value = store.meta.agentUploads?.maxFileMiB ?? 2048;
-  const relay = store.meta.rabiLinkRelay || {};
-  rabiLinkRelayEnabled.value = relay.enabled === true;
-  rabiLinkRelayUrl.value = relay.url || "";
-  rabiLinkRelayAppToken.value = relay.token || "";
-  rabiLinkRelayTokenConfigured.value = relay.tokenConfigured === true || Boolean(relay.token);
-  rabiLinkRelayDeviceId.value = relay.deviceId || store.meta.computerName || "";
-  rabiLinkRelayClaimWaitMs.value = Number(relay.claimWaitMs || 60000);
-  rabiLinkRelayReplyIdleTimeoutMs.value = Number(relay.replyIdleTimeoutMs || 60000);
-  rabiLinkSpeechProxyEnabled.value = relay.speechProxyEnabled === true;
-  rabiLinkSpeechServiceUrl.value = relay.speechServiceUrl || "http://127.0.0.1:8781";
-}
-
 async function saveDirConfig(): Promise<void> {
   dirSaving.value = true;
   dirError.value = "";
@@ -206,89 +177,9 @@ async function saveDirConfig(): Promise<void> {
   }
 }
 
-async function saveRabiIdentity(): Promise<void> {
-  rabiSaving.value = true;
-  rabiError.value = "";
-  try {
-    const relayPatch: Record<string, unknown> = {
-      enabled: rabiLinkRelayEnabled.value,
-      url: rabiLinkRelayUrl.value,
-      deviceId: rabiLinkRelayDeviceId.value,
-      claimWaitMs: Number(rabiLinkRelayClaimWaitMs.value || 60000),
-      replyIdleTimeoutMs: Number(rabiLinkRelayReplyIdleTimeoutMs.value || 60000),
-      speechProxyEnabled: rabiLinkSpeechProxyEnabled.value,
-      speechServiceUrl: rabiLinkSpeechServiceUrl.value
-    };
-    if (rabiLinkRelayAppToken.value.trim()) relayPatch.token = rabiLinkRelayAppToken.value.trim();
-    const res = await fetch("/api/rabi/identity", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        rabiName: rabiName.value,
-        agentUploads: { maxFileMiB: Number(agentUploadMaxFileMiB.value) },
-        rabiLinkRelay: relayPatch
-      })
-    });
-    const data = await res.json();
-    if (data.code !== 0) throw new Error(data.message || "保存失败");
-    await store.load({ replaceDirtyConfig: true });
-    rabiName.value = store.meta.rabiName || "";
-    loadRabiLinkRelayForm();
-  } catch (e) {
-    rabiError.value = userFacingError(e);
-    throw e;
-  } finally {
-    rabiSaving.value = false;
-  }
-}
-
-function toggleRabiLinkRelay(enabled: boolean | null): void {
-  if (typeof enabled !== "boolean") return;
-  rabiLinkRelayEnabled.value = enabled;
-}
-
-const relayRuntimeState = computed(() => store.meta.rabiLinkRelayRuntime?.state || "disabled");
-const relayRuntimeMessage = computed(() => store.meta.rabiLinkRelayRuntime?.message || "RabiLink Relay 全局连接已关闭。");
-const relayRuntimeLabel = computed(() => ({
-  disabled: "已关闭",
-  incomplete: "配置不完整",
-  connecting: "连接中",
-  online: "已连接",
-  error: "连接失败"
-}[relayRuntimeState.value] || "未知"));
-const relayRuntimeColor = computed(() => ({
-  disabled: "grey",
-  incomplete: "warning",
-  connecting: "info",
-  online: "success",
-  error: "error"
-}[relayRuntimeState.value] || "grey"));
-
-async function refreshRelayRuntime(): Promise<void> {
-  try {
-    const response = await fetch("/meta");
-    if (!response.ok) return;
-    const meta = await response.json();
-    store.meta.rabiLinkRelayRuntime = meta.rabiLinkRelayRuntime;
-  } catch {
-    // Keep the most recent status while Manager is restarting.
-  }
-}
-
-let managerEvents: EventSource | null = null;
 const trackedSettingValues = [
   routeDir,
   rolesDir,
-  rabiName,
-  agentUploadMaxFileMiB,
-  rabiLinkRelayEnabled,
-  rabiLinkRelayUrl,
-  rabiLinkRelayAppToken,
-  rabiLinkRelayDeviceId,
-  rabiLinkRelayClaimWaitMs,
-  rabiLinkRelayReplyIdleTimeoutMs,
-  rabiLinkSpeechProxyEnabled,
-  rabiLinkSpeechServiceUrl,
   () => webguiLanAccess.value.enabled
 ];
 
@@ -303,7 +194,6 @@ async function saveSettings(): Promise<void> {
   settingsHydrating.value = true;
   try {
     const results = await Promise.allSettled([
-      saveRabiIdentity(),
       saveDirConfig(),
       webguiLanAccess.value.canManage && !webguiLanAccess.value.hostManagedByEnvironment
         ? updateWebguiLanAccess({ enabled: webguiLanAccess.value.enabled }, false)
@@ -332,18 +222,8 @@ onMounted(async () => {
     save: saveSettings
   });
   await loadDirConfig();
-  await refreshRelayRuntime();
-  managerEvents = managerEventSource("/api/events");
-  managerEvents.addEventListener("rabilink_status", (raw) => {
-    try {
-      store.meta.rabiLinkRelayRuntime = JSON.parse((raw as MessageEvent).data || "{}");
-    } catch {
-      // Keep the latest valid status.
-    }
-  });
 });
 onBeforeUnmount(() => {
-  managerEvents?.close();
   unregisterPageSaveAction?.();
 });
 </script>
@@ -354,87 +234,13 @@ onBeforeUnmount(() => {
       <div>
         <div class="eyebrow">RABIROUTE</div>
         <h1 class="page-title">设置</h1>
-        <div class="page-subtitle">管理本机身份、RabiLink 连接、目录和局域网访问。</div>
+        <div class="page-subtitle">管理界面、目录和局域网访问。RabiLink 连接与实例身份请前往 RabiLink 配置。</div>
       </div>
     </div>
 
     <div class="two-column">
       <TrustedWebRendererHost :renderers="settingsRenderers" />
-
-      <v-card class="app-card glass-card section-card">
-        <div class="section-title-row">
-          <div>
-            <div class="section-title">Rabi 实例</div>
-            <div class="section-note">保存到 data/Config.json，作为这台 Rabi PC 的全局身份。</div>
-          </div>
-        </div>
-        <v-alert v-if="rabiError" type="error" variant="tonal" density="compact" class="mb-3">{{ rabiError }}</v-alert>
-        <div class="form-grid">
-          <v-text-field v-model="rabiName" label="RabiRoute 实例名" :placeholder="store.meta.computerName || 'RabiRoute'" density="compact" hide-details />
-          <v-text-field v-model.number="agentUploadMaxFileMiB" label="远端 Agent 单文件上传上限（MiB）" type="number" min="1" max="2048" step="1" density="compact" hint="允许 1–2048 MiB；保存后重启 Manager 生效。QQ 群文件仍受平台限制。" persistent-hint />
-          <v-text-field :model-value="store.meta.rabiGuid || '-'" label="RabiRoute GUID" density="compact" readonly hide-details />
-        </div>
-        <v-divider class="my-4" />
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">RabiLink 系统转接服务</div>
-            <div class="section-note">全局内置服务，不是消息端。开启后由 Manager 常驻登记本机，可被 WebGUI、语音服务和眼镜端共同使用。</div>
-          </div>
-          <div class="relay-global-controls">
-            <v-chip :color="relayRuntimeColor" size="small" variant="tonal">{{ relayRuntimeLabel }}</v-chip>
-            <v-switch
-              :model-value="rabiLinkRelayEnabled"
-              label="连接服务器"
-              color="success"
-              density="compact"
-              inset
-              hide-details
-              :disabled="rabiSaving"
-              @update:model-value="toggleRabiLinkRelay"
-            />
-          </div>
-        </div>
-        <v-alert
-          :type="relayRuntimeState === 'error' ? 'error' : relayRuntimeState === 'incomplete' ? 'warning' : 'info'"
-          variant="tonal"
-          density="compact"
-          class="mb-3"
-        >
-          {{ relayRuntimeMessage }}
-        </v-alert>
-        <div class="form-grid">
-          <v-text-field v-model="rabiLinkRelayDeviceId" label="本机 Rabi PC 标识" :placeholder="store.meta.computerName || 'rabilink-pc'" density="compact" hide-details />
-          <v-text-field v-model="rabiLinkRelayUrl" label="Relay 服务器地址" placeholder="https://rabiroute.example.com" density="compact" hide-details />
-          <v-text-field
-            v-model="rabiLinkRelayAppToken"
-            label="Relay 应用 token"
-            :placeholder="rabiLinkRelayTokenConfigured ? '已安全保存；留空保持不变' : 'X-RabiLink-Token'"
-            type="password"
-            density="compact"
-            hide-details
-          />
-          <v-text-field v-model.number="rabiLinkRelayClaimWaitMs" label="领取任务等待毫秒" type="number" min="0" max="60000" step="1000" density="compact" hide-details />
-          <v-text-field v-model.number="rabiLinkRelayReplyIdleTimeoutMs" label="回复空闲超时毫秒" type="number" min="1000" max="120000" step="1000" density="compact" hide-details />
-        </div>
-        <v-divider class="my-4" />
-        <div class="section-title-row compact-row mb-2">
-          <div>
-            <div class="section-title small-title">转接本机 TTS / ASR API</div>
-            <div class="section-note">启用后，外部可用 Relay 应用 token 直接调用本机语音服务；本机仍只监听回环地址。</div>
-          </div>
-          <v-switch
-            v-model="rabiLinkSpeechProxyEnabled"
-            label="允许语音中转"
-            color="success"
-            density="compact"
-            inset
-            hide-details
-          />
-        </div>
-        <div class="form-grid">
-          <v-text-field v-model="rabiLinkSpeechServiceUrl" label="本机语音服务地址" placeholder="http://127.0.0.1:8781" density="compact" hide-details />
-        </div>
-      </v-card>
+      <ResourceCacheSettings />
 
       <v-card class="app-card glass-card section-card">
         <div class="section-title-row">

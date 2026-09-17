@@ -1,10 +1,11 @@
 import { planFeedbackResponseId, type PlanFeedbackRecord } from "../planFeedback.js";
+import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 import type { PlanItem } from "../roleKnowledge.js";
 import { planFeedbackResponseMutationInstruction } from "../shared/roleStorageMutationContract.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 
 export type PlanApprovalFeedbackTaskRequest = {
-  agentAdapter: "codex" | "dsh";
+  agentAdapter: PlanAssistantAgentType;
   threadId: string;
   title: string;
   cwd: string;

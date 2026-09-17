@@ -38,6 +38,7 @@ export type RabiLinkRelayRuntimeOptions = {
   relayWriteTimeoutMs?: number;
   relayWriteAttempts?: number;
   channelRetryDelayMs?: number;
+  asrRefreshIntervalMs?: number;
   onStatus?: (status: RabiLinkRelayRuntimeStatus) => void;
   onEvent?: (eventType: string, data: Record<string, unknown>) => void;
 };
@@ -365,8 +366,27 @@ function appendWorkerDiscovery(params: URLSearchParams, config: RabiLinkRelayRun
   if (config.peerUrls?.length) params.set("peerUrls", JSON.stringify(config.peerUrls));
 }
 
+const asrAdvertisements = new WeakMap<RabiLinkRelayRuntimeConfig, { checkedAt: number; available: boolean }>();
+
+async function refreshAsrAdvertisement(config: RabiLinkRelayRuntimeConfig, signal: AbortSignal, force = false): Promise<void> {
+  if (!config.speechProxyEnabled) return;
+  const prior = asrAdvertisements.get(config);
+  if (!force && prior && Date.now() - prior.checkedAt < 30_000) return;
+  let available = false;
+  try {
+    const response = await fetch(`${config.localSpeechUrl}/v1/capabilities`, {
+      signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]), redirect: "error"
+    });
+    if (response.ok) {
+      const body = await response.json() as { providers?: { asr?: Record<string, { enabled?: boolean }> } };
+      available = Object.values(body.providers?.asr || {}).some(provider => provider.enabled !== false);
+    }
+  } catch { /* An unavailable local service must not be advertised as usable ASR. */ }
+  asrAdvertisements.set(config, { checkedAt: Date.now(), available });
+}
+
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -619,6 +639,7 @@ async function claimSpeechRequests(
   waitMs: number,
   signal: AbortSignal
 ): Promise<RelayProxyRequest[]> {
+  await refreshAsrAdvertisement(config, signal);
   const params = new URLSearchParams({
     limit: "1",
     deviceId: config.deviceId,
@@ -680,6 +701,7 @@ export class RabiLinkRelayRuntime {
         Number(options.channelRetryDelayMs) || RETRY_DELAY_MS
       )),
       onStatus: options.onStatus ?? (() => undefined),
+      asrRefreshIntervalMs: Math.max(50, Number(options.asrRefreshIntervalMs) || 30_000),
       onEvent: options.onEvent ?? (() => undefined)
     };
   }
@@ -795,6 +817,8 @@ export class RabiLinkRelayRuntime {
   }
 
   private async run(config: RabiLinkRelayRuntimeConfig, generation: number, signal: AbortSignal): Promise<void> {
+    await refreshAsrAdvertisement(config, signal);
+    if (!this.active(generation, signal)) return;
     let webguiDrain: Promise<void> | null = null;
     let speechDrain: Promise<void> | null = null;
     let webguiDrainFailures = 0;
@@ -880,6 +904,18 @@ export class RabiLinkRelayRuntime {
       });
       speechDrain = attempt;
     };
+    // Capability discovery must progress even when the empty ASR directory prevents requests.
+    // Only a capability change triggers a Relay update; idle queues remain event driven.
+    const capabilityMonitor = (async () => {
+      if (!config.speechProxyEnabled) return;
+      while (this.active(generation, signal)) {
+        await delay(this.options.asrRefreshIntervalMs, signal);
+        if (!this.active(generation, signal)) return;
+        const before = workerCapabilities(config);
+        await refreshAsrAdvertisement(config, signal, true);
+        if (this.active(generation, signal) && before !== workerCapabilities(config)) drainSpeech();
+      }
+    })();
     try {
       while (this.active(generation, signal)) {
         try {
@@ -916,6 +952,7 @@ export class RabiLinkRelayRuntime {
       }
     } finally {
       await Promise.allSettled([
+        capabilityMonitor,
         ...webguiEvents.values(),
         ...(webguiDrain ? [webguiDrain] : []),
         ...(speechDrain ? [speechDrain] : [])

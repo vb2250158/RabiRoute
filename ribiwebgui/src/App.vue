@@ -376,6 +376,7 @@ function selectGateway(id: string): void {
           <div class="font-weight-bold">{{ pageTitle }}</div>
           <div class="topbar-subtitle">{{ selectedGatewayName }}</div>
         </v-toolbar-title>
+        <div id="page-topbar-controls" class="topbar-page-controls" />
         <v-select
           v-if="showRouteSwitcher"
           class="topbar-route-picker"
@@ -401,7 +402,7 @@ function selectGateway(id: string): void {
         <LocaleSwitcher />
         <v-chip class="manager-chip" :color="managerConnected ? 'success' : 'error'" variant="tonal" size="small">
           <v-icon start size="14">mdi-circle</v-icon>
-          <span class="manager-chip-text">Manager {{ managerConnected ? "已连接" : "未连接" }}</span>
+          <span class="manager-chip-text">{{ t(managerConnected ? "服务已连接" : "服务未连接") }}</span>
         </v-chip>
         <v-btn icon="mdi-refresh" :loading="store.loading" aria-label="刷新状态" @click="refresh" />
         <template v-for="command in topbarCommands" :key="command.key">

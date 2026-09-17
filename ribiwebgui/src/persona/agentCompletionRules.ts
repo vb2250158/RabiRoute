@@ -7,3 +7,7 @@ export function createAgentCompletionRule(random: Pick<Crypto, "getRandomValues"
   return { id, enabled: false, event: "task_completed", conditions: [],
     destination: { channel: "napcat", gatewayId: "", params: { target: "group", targetId: "", instanceId: "" } } };
 }
+
+export function createTtsCompletionRule(gatewayId: string): AgentCompletionDeliveryRule {
+  return { ...createAgentCompletionRule(), destination: { channel: "speech", gatewayId, params: {} } };
+}

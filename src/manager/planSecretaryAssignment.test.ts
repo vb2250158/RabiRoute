@@ -35,6 +35,41 @@ const sessions: CodexPlanAssistantSession[] = [
   }
 ];
 
+test("exact target assignment never reuses a different owner's colliding thread", () => {
+  const pools = ["local:codex", "remote-a", "remote-b"].map((agentTargetId) => ({ ...sessions[0]!, agentTargetId }));
+  const first = resolvePlanSecretaryAssignment(plan("target-plan"), pools, "first", "remote-a")!;
+  const second = resolvePlanSecretaryAssignment(plan("target-plan", first.binding), pools, "second", "remote-b")!;
+  assert.equal(first.target.agentTargetId, "remote-a");
+  assert.equal(second.target.agentTargetId, "remote-b");
+  assert.equal(second.binding.agentTargetId, "remote-b");
+  assert.equal(second.binding.assignedAt, "second");
+  assert.equal(second.changed, true);
+  const repeat = resolvePlanSecretaryAssignment(plan("target-plan", second.binding), pools, "third", "remote-b")!;
+  assert.equal(repeat.changed, false);
+  assert.equal(repeat.binding.assignedAt, "second");
+  assert.equal(resolvePlanSecretaryAssignment(plan("target-plan"), pools), undefined);
+  assert.equal(resolvePlanSecretaryAssignment(plan("target-plan"), pools, "now", "missing"), undefined);
+});
+
+test("legacy sessions cannot be attributed to an exact target during assignment", () => {
+  assert.equal(resolvePlanSecretaryAssignment(plan("legacy-plan"), sessions, "now", "remote-a"), undefined);
+  const legacy = resolvePlanSecretaryAssignment(plan("legacy-plan"), sessions, "old")!;
+  const migrated = sessions.map((session) => ({ ...session, agentTargetId: "remote-a" }));
+  const selected = resolvePlanSecretaryAssignment(plan("legacy-plan", legacy.binding), migrated, "new", "remote-a")!;
+  assert.equal(selected.changed, true);
+  assert.equal(selected.binding.assignedAt, "new");
+  assert.equal(selected.binding.agentTargetId, "remote-a");
+});
+
+test("explicit provider ownership prevents reuse of a colliding UUID", () => {
+  const pool = [{ ...sessions[0]!, agentAdapter: "antigravity" as const, agentTargetId: "remote-a" }];
+  const old = { agentType: "codex" as const, agentTargetId: "remote-a", sessionId: pool[0]!.threadId, workspace: pool[0]!.workspace, assignedAt: "old" };
+  const result = resolvePlanSecretaryAssignment(plan("provider-plan", old), pool, "new", "remote-a")!;
+  assert.equal(result.binding.agentType, "antigravity");
+  assert.equal(result.changed, true);
+  assert.equal(result.binding.assignedAt, "new");
+});
+
 test("plan secretary assignment reuses an exact configured binding", () => {
   const existing = {
     agentType: "codex" as const,
@@ -119,6 +154,17 @@ test("workspace reconciliation clears only secretary bindings outside the Primar
 
   assert.deepEqual(result, [stale.id]);
   assert.deepEqual(cleared, [stale.id]);
+});
+
+test("workspace reconciliation preserves all other target bindings", () => {
+  const plans = [undefined, "remote-a", "remote-b"].map((agentTargetId, index) => plan(`scope-${index}`, {
+    agentType: "codex", agentTargetId, sessionId: sessions[0]!.threadId,
+    workspace: "C:/workspace/old"
+  } as PlanItem["secretaryBinding"]));
+  const cleared: string[] = [];
+  assert.deepEqual(reconcilePlanSecretaryBindingsForWorkspace(plans, "C:/workspace/new", (id) => cleared.push(id), "remote-a"), ["scope-1"]);
+  assert.deepEqual(cleared, ["scope-1"]);
+  assert.deepEqual(reconcilePlanSecretaryBindingsForWorkspace(plans, "C:/workspace/new", () => {}), ["scope-0"]);
 });
 
 test("workspace reconciliation does not clear bindings when the Primary Persona workspace is unknown", () => {

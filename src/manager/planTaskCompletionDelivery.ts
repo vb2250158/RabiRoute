@@ -1,3 +1,4 @@
+import { resolvePrimaryAgentTarget, type RouteAgentTargetsDefinition } from "../shared/routeAgentTargets.js";
 import { createHash } from "node:crypto";
 import { normalizeAgentAdapters, type AgentAdapterType } from "../agentAdapters/types.js";
 import { normalizeCodexHookSettings, resolvePrimaryAgentAdapter, type CodexHookSettings } from "../shared/gatewayConfigModel.js";
@@ -11,7 +12,7 @@ import type { PlanTaskCompletionDelivery } from "./codexHookContext.js";
 import { resolvePlanSecretaryAssignment, type PlanSecretaryTarget } from "./planSecretaryAssignment.js";
 
 export type PlanTaskCompletionRuntime = {
-  definition: {
+  definition: RouteAgentTargetsDefinition & {
     id: string;
     agentRoleId?: string;
     agentAdapters?: AgentAdapterType[];
@@ -141,7 +142,7 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
     const secretary = runtime.definition.codexPlanAssistantEnabled === true
       ? options.assignSecretary
         ? await options.assignSecretary(runtime, delivery)
-        : resolvePlanSecretaryAssignment(delivery.plan, runtime.definition.codexPlanAssistantSessions)?.target
+        : resolvePlanSecretaryAssignment(delivery.plan, runtime.definition.codexPlanAssistantSessions, undefined, runtime.definition.primaryAgentTarget)?.target
       : undefined;
     if (secretary) {
       if (!options.sendToSecretary) throw new Error("Plan secretary completion delivery is configured without a secretary sender.");
@@ -162,12 +163,10 @@ export function createPlanTaskCompletionDelivery<TRuntime extends PlanTaskComple
       return;
     }
 
-    const targetAdapters = normalizeAgentAdapters(runtime.definition.agentAdapters);
-    const targetUsesCodex = resolvePrimaryAgentAdapter(
-      targetAdapters,
-      runtime.definition.primaryAgentAdapter
-    ) === "codex";
-    const targetSessionId = String(runtime.definition.codexThreadId || "").trim();
+    const target = resolvePrimaryAgentTarget(runtime.definition);
+    if (!target) throw new Error("Primary Agent target is not configured.");
+    const targetUsesCodex = target.provider === "codex" && !target.binding;
+    const targetSessionId = target.binding ? "" : String(runtime.definition.codexThreadId || "").trim();
     if (targetUsesCodex && !targetSessionId) {
       throw new Error(`Gateway ${runtime.definition.id} has no bound Codex Desktop task.`);
     }

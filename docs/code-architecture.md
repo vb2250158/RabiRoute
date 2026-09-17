@@ -6,6 +6,8 @@
 
 # RabiRoute 代码架构
 
+设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
+
 `webPatchCatalog.ts` 校验不可变候选；`WebPatchService` 通过既有 generation 串行边界原子保存指针和回执；`WebPatchWatcher` 消费完成标记。Host 命令复用身份校验与审计，客户端按文档版本请求模块。容量和旧入口退出条件见[Web 热补丁](web-hot-patches.md)。
 
 Android 全天记录整合正在实施：`RabiConversationService` 是手机/眼镜/健康的唯一协调 owner，旧独立本地音频、录像及设备状态 service 已移除；视频降为普通 controller，音频统一 durable spool 并冻结 record/source/route/policy，健康 controller 受总许可与采集窗口限制。`AllDayRecordingSettings` 将 audio/video/health 模式与 running 分离，唯一常驻状态通知不再被普通消息覆盖。视频停止后才派生音轨，不是实时视频转写。PC 仅转写能力/worker 围栏及 captureId 只读关联已接入源码；不支持时 deferred，不回退 Agent。手机人工刷新按 processedAt 最近24小时最多200条，无ID不猜。健康只统一采集/状态、完整历史仍PC；autoResume内部false、开机暂停，自动恢复未实现。新记录不按传输 ACK 保留期限自动删除，自动滚动删除尚未完成。源码变更不等于构建/安装/长稳通过；见[当前界面边界](rabilink-mobile-recording-ui.md)与[完整设计和验收](rabilink-all-day-recording.md)。
@@ -551,6 +553,8 @@ Gateway 配置的事实源 Module。
 
 ## WebGUI
 
+侧栏 RabiLink 统一承载 `#/rabilink?tab=home|agents|config`，旧 `#/lan-agents` 只重定向到 `agents`。`RabiLinkSettings` 复用 `/api/rabi/identity`，实例名称/GUID、Relay 连接及高级超时、语音中转和 Agent 上传上限仍以 `data/Config.json` 为唯一配置真源；Settings 不再保留副本，目录和 LAN 访问留在原设置页。主页改用紧凑的原生中文只读视图，不再嵌入 `/admin` 或 `/manage`。浏览器调用 `GET /api/rabi/link-home`，Manager 使用服务端保存的应用 token 请求配置 Relay 的固定 `GET /api/rabilink/peers`，按应用隔离并仅投影电脑名、标识、在线状态和服务白名单。token 不返回主页浏览器、不进入 URL，不以应用凭据取得管理员权限。Relay 地址不接受 userinfo、query、hash 或路径前缀。未配置、连接失败、认证失败及读取失败必须单独呈现，不能冒充零设备或首次初始化；只有成功读取的空列表才表示没有设备。管理员操作另从新窗口打开 `/manage`，需要独立账号登录，主页读取不依赖其 Cookie。此处描述现行方案，不代表部署或真实浏览器交互已验收。
+
 `ribiwebgui/` 是 Vue + Vuetify 最小宿主。页面、导航、设置区、状态卡和主题来自 Manager 的受控插件贡献目录；宿主负责路由外壳、安全渲染、连接与恢复，不维护第二份插件入口清单。
 
 关键位置：
@@ -623,6 +627,8 @@ Manager 默认绑定 `127.0.0.1:0`，由操作系统分配空闲端口。Manager
 
 代码生效分为三层：WebGUI 开发态可使用 Vite HMR；正式受管插件只从已构建 package/profile 产生候选 plugin generation，并在成功后原子发布；Host、Manager、Tray 与后端核心改动必须本机构建、打包并切换完整 application generation。正式安装不从 NAS 源码热跑，避免同一运行代混入新旧模块。
 
+声明 Web 入口的插件缺失入口文件时，Web 发布构建必须失败，不得静默省略该模块。开发候选封装前还检查已复制到 staging 的插件入口及其引用资源。发布验收除了根 HTML 与资源哈希，还需核对带当前 `webRelease` 的 `/api/plugins/modules` 成功、页面插件入口可读取并引用新页面；单个页面资源返回 200 不代表实际加载链完整。
+
 ## Desktop Tray
 
 `desktop/tray-task-window/` 是 Windows 最小桌面表现层。命令、快捷键、托盘菜单、设置、状态和主题由插件贡献；Qt 外壳只负责消费 Host 提供的本代 Manager 连接、窗口生命周期、安全 handler 白名单和固定恢复入口。
@@ -660,7 +666,7 @@ Windows 系统级滑词菜单由托盘拥有。`system_selection.py` 用低级�
 
 `interfaceThemeContract.ts` 与 `desktopSettingsContract.ts` 定义主机级主题选择、内置模板和受限的自定义主题声明。`data/desktop/settings.json` 与 Manager 的 `GET/PATCH /api/desktop/settings` 是唯一真源；`theme` 保存 Desktop 可应用的主题，`webTheme` 保存 WebGUI 当前选择并兼容 Web 专属可信插件主题，`customThemes` 保存两端共享的自定义声明。浏览器旧主题键只允许一次性迁移后删除，不拥有主题选择或主题定义。WebGUI 从 `ribiwebgui/src/themes/<theme>/` 读取内置 Vuetify 色板和 CSS token，自定义主题把经过校验的语义颜色、圆角、透明度和阴影映射到同一批 token；Windows 托盘从同一自定义声明生成 Qt 调色板、菜单样式和现有窗口颜色替换表。两端将 `system` 解析为实际浅色或深色后再刷新角色面板、滑词操作条和截图窗口；悬空的 `custom:*` 选择失败关闭并回退可用主题。
 
-`workEndEvents.ts` 是通用任务结束事件的 Manager 真源：生产者向 `/api/work-events/ended` 提交带稳定 ID 的事件，Manager 按敏感键名清洗摘要、按日期物理分卷到本机运行目录，并通过统一 Manager 事件流发布 `work_ended`。分卷是文件轮转，不是归档、过期或删除；当前源码只定义生产者契约，Codex / DSH 的真实生产者仍待各自接入。`taskCompletionAnnouncements.ts` 是独立消费策略，只保存设置和决策/哈希/回执元数据，元数据同样按接收日期分卷；索引保留最近 40 条展示记录和 4096 个幂等 ID，源分卷保留，索引损坏时由源分卷人工重建。原始摘要仍以任务事件分卷为真源；允许的事件经人格 `voice-profile.json` 解析后进入 RabiSpeech 全局 FIFO。
+任务完成播报统一由 `agentCompletionDelivery.ts` 消费 Agent 的 Stop Hook，使用人格 `codexHooks.completionDeliveries` 规则和 `agentSend` / Outbox 投递至 `speech`。不再注册独立任务结束事件接口、播报设置或账本；旧本地文件不再参与运行。
 
 `io.rabiroute.manager.desktop-pet` 独立插件拥有桌宠 HTTP 路由和 effect 生命周期，`desktopPetRoutes.ts` 提供受限的资源包、绑定与设置实现。导入先落临时 staging，校验归属、路径穿越、链接、加密条目、允许类型、条目数和展开大小，再移动到 `data/roles/<RoleId>/desktop-pet/packs/`；资源读取也必须保持在解析后的包根内。WebGUI 和 Qt 只调用 `/api/desktop-pet/`，插件停用时路由随 generation 释放；`desktop_pet_controller.py` 消费同一绑定与 `work_ended`，不直接编辑人格或运行目录。
 
@@ -715,6 +721,8 @@ RibiWebGUI 通过 `personaVoiceIdentityClient.ts` 复用这两个 API，不新�
 - 出站安全策略：测 `outbox`。
 
 不要为了测试越过 Module Interface 去测内部 helper，除非 helper 本身已经是稳定 Interface。
+
+Agent 转发测试必须注入隔离投递边界，不能把本机 Desktop 或远端 Agent 当作测试依赖。Node 测试进程中的 `createAgentAdapter` 默认拒绝创建真实投递端；正常成功路径用注入的 dispatcher 验证。转发夹具应同步设置并恢复 `primaryAgentTarget`、`remoteAgentTargets` 和派生 provider，清理继承的实例环境，Manager 调用只指向临时回环夹具。分组定时任务在退出夹具前清理；意外落入真实 adapter 或未声明的 Manager 请求必须使测试失败，而不是仅记录投递失败。
 
 ## 常见修改入口
 

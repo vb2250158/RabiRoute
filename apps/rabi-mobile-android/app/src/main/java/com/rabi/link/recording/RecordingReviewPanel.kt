@@ -30,14 +30,40 @@ import java.util.concurrent.Executors
 /** A read model of saved media. Scrubbing never starts or changes capture. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class RecordingReviewPanel(private val context: Context, private val share: (RecordingStore.Entry) -> Unit) {
-    private data class Item(val entry: RecordingStore.Entry, val captureId: String, val spans: List<ReviewTimeline.Span>, val audio: Boolean, val parentCaptureId: String = "", val associatedIds: Set<String> = setOf(captureId))
+    private data class Item(val entry: RecordingStore.Entry, val captureId: String, val spans: List<ReviewTimeline.Span>, val audio: Boolean, val parentCaptureId: String = "", val associatedIds: Set<String> = setOf(captureId), val eventTranscript: org.json.JSONObject? = null, val asrState: String = "")
     val view = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
-    private val network = Executors.newSingleThreadExecutor()
     // Every preview state occupies the same bounds, so selecting an event never moves the ruler.
     private val preview = FrameLayout(context)
-    private val position = label("实时", 15f)
+    private val previewStage = object : FrameLayout(context) {
+        override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+            super.onMeasure(widthSpec,View.MeasureSpec.makeMeasureSpec(View.MeasureSpec.getSize(widthSpec)*9/16,View.MeasureSpec.EXACTLY))
+        }
+    }
+    private var controlsVisible = false
+    private var header: View? = null
+    private val liveTap = View(context).apply {
+        contentDescription = "显示或隐藏记录控制"; setOnClickListener { showControls(!controlsVisible) }
+    }
+    fun attachHeader(value: LinearLayout) {
+        value.removeViewAt(0)
+        value.addView(position,0,LinearLayout.LayoutParams(0,-1,1f))
+        fun style(v: View) {
+            if(v is TextView) { v.setTextColor(Color.WHITE); v.setShadowLayer(dp(2).toFloat(),0f,0f,Color.BLACK) }
+            if(v is android.view.ViewGroup) for(i in 0 until v.childCount) style(v.getChildAt(i))
+        }
+        style(value)
+        header = value; previewStage.addView(value,FrameLayout.LayoutParams(-1,dp(52),Gravity.TOP)); showControls(controlsVisible)
+    }
+    private fun showControls(shown: Boolean) {
+        controlsVisible = shown
+        ruler.visibility = if(shown) View.VISIBLE else View.GONE
+        header?.visibility = if(shown) View.VISIBLE else View.GONE
+        position.visibility = if(shown) View.VISIBLE else View.GONE
+        if(player?.state()?.controlsVisible != shown) player?.setControls(shown)
+    }
+    private val position = label("实时", 12f)
     private val dayButton = RabiMobileUi.compactAction(context, "选择日期") {}
     private val ruler = RecordingTimeRuler(context)
     private val rows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12),0,dp(12),dp(12)) }
@@ -53,11 +79,9 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private var dragging = false
     private var closed = false
     private var loading = false
-    private var refreshing = false
     private var revision = 0
     private var selection = 0
     private var lastLoad = 0L
-    private var lastRefresh = 0L
     private var items = emptyList<Item>()
     private var markers = emptyList<RecordingStore.Marker>()
     private var selected: Item? = null
@@ -66,28 +90,36 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private var livePlayer: ExoPlayer? = null
     private var liveUrl = ""
     private var liveWaveform: AudioWaveformView? = null
-    private var texts: RecordingTranscriptProjection.Snapshot? = null
-    private var textScope = ""
-    private val projection = RecordingTranscriptProjection(context)
     private val images = android.util.LruCache<String, Bitmap>(24)
     private val cards = mutableMapOf<String, View>()
-    private var transcriptStatus = ""
     private val liveTick = object : Runnable {
         override fun run() { if(closed) return; refreshLive(); main.postDelayed(this,1000) }
     }
     init {
-        view.addView(preview,LinearLayout.LayoutParams(-1,dp(180)))
+        previewStage.addView(preview,FrameLayout.LayoutParams(-1,-1))
+        previewStage.addView(liveTap,FrameLayout.LayoutParams(-1,-1))
+        previewStage.addView(ruler,FrameLayout.LayoutParams(-1,dp(64),Gravity.BOTTOM))
+        ruler.visibility = View.GONE
+        position.gravity = Gravity.CENTER_VERTICAL
+        position.maxLines = 2
+        position.visibility = View.GONE
+        view.addView(previewStage,LinearLayout.LayoutParams(-1,-2))
         val navigation = LinearLayout(context).apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(8))
+            setPadding(dp(12), 0, dp(12), 0)
         }
-        navigation.addView(dayButton, LinearLayout.LayoutParams(0,-2,1f))
+        dayButton.textSize = 13f
+        dayButton.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        navigation.addView(dayButton, LinearLayout.LayoutParams(0,dp(48),1f))
         navigation.addView(RabiMobileUi.compactAction(context, "回到实时") { enterLive() },
-            LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
-        navigation.addView(RabiMobileUi.compactAction(context, "刷新") { load(); refreshTranscripts() }.apply {
+            LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4) })
+        navigation.addView(RabiMobileUi.compactAction(context, "刷新") { load() }.apply {
             contentDescription = "刷新记录和转写"
-        }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(8) })
-        view.addView(navigation); view.addView(position); view.addView(ruler,LinearLayout.LayoutParams(-1,dp(110)))
+        }, LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4) })
+        for(i in 1 until navigation.childCount) (navigation.getChildAt(i) as? TextView)?.apply {
+            textSize = 13f; setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+        view.addView(navigation)
         view.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
         dayButton.setOnClickListener {
             val date = Calendar.getInstance().apply { timeInMillis = day }
@@ -98,7 +130,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 jump(ruler.time); load(); renderRows()
             }, date.get(Calendar.YEAR),date.get(Calendar.MONTH),date.get(Calendar.DAY_OF_MONTH)).apply { datePicker.maxDate = System.currentTimeMillis() }.show()
         }
-        ruler.onStart = { dragging = true; live = false }
+        ruler.onStart = { dragging = true; live = false; player?.holdControls() }
         ruler.onMove = { time, finished ->
             cursor = time; updateRange(); position.text = "回看 · ${clock(time)}"
             ensureRange()
@@ -111,7 +143,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 highlightAt(time); renderRows()
             }
         }
-        rows.addView(label("正在读取记录…")); updateRange(); showEmpty("实时 · 无画面"); load(); refreshLive(); refreshTranscripts(); main.postDelayed(liveTick,1000)
+        rows.addView(label("正在读取记录…")); updateRange(); showEmpty("实时 · 无画面"); load(); refreshLive(); main.postDelayed(liveTick,1000)
     }
     private fun dp(value: Int) = (context.resources.displayMetrics.density * value).toInt()
     private fun label(text: String, size: Float = 14f) = TextView(context).apply {
@@ -128,7 +160,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         highlight(id)
     }
     private fun clock(time: Long) = SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(Date(time))
-    private fun releasePlayback() { player?.let { playbackState = it.state(); it.close() }; player = null; livePlayer?.release(); livePlayer = null; liveUrl = ""; liveWaveform = null; preview.removeAllViews() }
+    private fun releasePlayback() { player?.let { playbackState = it.state(); it.close() }; player = null; livePlayer?.release(); livePlayer = null; liveUrl = ""; liveWaveform = null; liveTap.visibility = View.VISIBLE; preview.removeAllViews() }
     private fun showEmpty(message: String) {
         liveWaveform = null
         preview.removeAllViews()
@@ -136,16 +168,20 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     }
     private fun enterLive() {
         ruler.cancelGesture(); dragging = false; live = true; cursor = System.currentTimeMillis(); selected = null; selection++
-        releasePlayback(); playbackState = RecordingPlaybackPanel.State(); ruler.setPosition(cursor,true); updateRange(); load(); refreshLive(); refreshTranscripts()
+        releasePlayback(); playbackState = RecordingPlaybackPanel.State(); ruler.setPosition(cursor,true); updateRange(); load(); refreshLive()
     }
     /** Called only while visible, from the owner's runtime events; history playback is not reset. */
     fun refreshLive() {
-        if(closed || !live || dragging) return
+        if(closed || dragging) return
+        if(!live) {
+            if(System.currentTimeMillis() - lastLoad > 3000) load()
+            return
+        }
         cursor = System.currentTimeMillis(); ruler.setPosition(cursor,true); updateRange()
         val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
         val last = runtime.getLong("captureLastReceivedAt",0)
         val recent = AllDayRecordingSettings.load(context).running && System.currentTimeMillis() - last < 5000
-        position.text = "实时 · ${clock(System.currentTimeMillis())} · ${if(recent) "正在收到录音" else "等待声音"}"
+        position.text = "实时 · ${clock(System.currentTimeMillis())}"
         val video = RabiConversationService.currentVideo()
         val url = if(video?.receiving == true) video.previewUrl else ""
         if(url.isBlank()) {
@@ -153,7 +189,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             if(recent) {
                 if(liveWaveform == null) {
                     preview.removeAllViews()
-                    liveWaveform = AudioWaveformView(context,true).also { preview.addView(it,FrameLayout.LayoutParams(-1,-1)) }
+                    liveWaveform = AudioWaveformView(context,true).also { preview.addView(it,FrameLayout.LayoutParams(-1,-1).apply { bottomMargin = dp(64) }) }
                 }
                 liveWaveform?.state = if(runtime.getBoolean("captureHasSignal",false)) "正在收音" else "收到静音"
             } else if(liveWaveform != null || preview.childCount == 0) showEmpty("无画面 · 等待声音")
@@ -167,7 +203,6 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
         }
         if(System.currentTimeMillis() - lastLoad > 5000) load()
-        if(System.currentTimeMillis() - lastRefresh > 30000) refreshTranscripts()
     }
     private fun load() {
         if(closed) return
@@ -182,7 +217,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 val video = store.list().filter { it.state != "recording" && it.files.isNotEmpty() }.flatMap { entry ->
                     if(entry.state == "legacy") entry.files.map { file -> entry.copy(id=file.name,files=listOf(file),started=file.lastModified(),state="legacy-part") } else listOf(entry)
                 }.map { entry ->
-                    val duration = entry.files.sumOf { runCatching { RecordedMedia.duration(it) }.getOrDefault(0L) }
+                    val duration = entry.files.sumOf { runCatching { RecordingResourceCache.duration(context,it) }.getOrDefault(0L) }
                     Item(entry, runCatching { store.captureId(entry.id) }.getOrDefault(entry.id), listOf(ReviewTimeline.Span(entry.started,duration)),false)
                 }
                 val audio = RabiAudioRecordRepository.listCaptureRecords(context,requestedRange.first,requestedRange.last)
@@ -190,25 +225,21 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     val row = audio.getJSONObject(index); val id = row.getString("captureId")
                     val spans = row.getJSONArray("playbackSpans")
                     Item(RecordingStore.Entry(row.getString("id"),"audio",row.optString("source"),row.optLong("startedAt"),row.optLong("endedAt"),"saved_segments",context.cacheDir,emptyList(),"录音"),
-                        id,(0 until spans.length()).map { spans.getJSONObject(it).let { value -> ReviewTimeline.Span(value.getLong("startedAt"),value.getLong("durationMs"),value.getLong("offsetMs")) } },true,row.optString("parentCaptureId"))
+                        id,(0 until spans.length()).map { spans.getJSONObject(it).let { value -> ReviewTimeline.Span(value.getLong("startedAt"),value.getLong("durationMs"),value.getLong("offsetMs")) } },true,row.optString("parentCaptureId"),eventTranscript=row.optJSONObject("transcript"),asrState=row.optString("asrState"))
                 }
-                val scope = runCatching { projection.scope() }.getOrNull()
                 val combined = video.map { item -> item.copy(associatedIds = setOf(item.captureId) + sound.filter { it.parentCaptureId == item.captureId }.map { it.captureId }) }
                 val independentSound = sound.filter { audioItem -> audioItem.parentCaptureId.isBlank() || video.none { it.captureId == audioItem.parentCaptureId } }
                 val savedMarkers = store.listMarkers()
-                Pair(savedMarkers, Triple((combined + independentSound).sortedByDescending { it.entry.started }, scope, scope?.let { projection.cached(it) }))
+                Pair(savedMarkers, (combined + independentSound).sortedByDescending { it.entry.started })
             }
             main.post {
                 loading = false
                 if(closed || version != revision) return@post
-                result.onSuccess { (savedMarkers, loaded) ->
-                    val (records, scope, snapshot) = loaded
+                result.onSuccess { (savedMarkers, records) ->
                     markers = savedMarkers
                     items = records.filter { item -> item.spans.any { TimelineRulerMath.overlaps(it.start,it.duration,requestedRange) } }
                     loadedRange = requestedRange
                     ruler.setCoverage(items.flatMap { item -> item.spans.map { RecordingTimeRuler.Coverage(it.start,it.duration,!item.audio) } })
-                    if(scope != null && projection.isCurrent(scope)) { texts = snapshot; textScope = scope.key }
-                    else { texts = null; textScope = "" }
                     renderRows()
                     if(!live && !dragging && selected == null) jump(cursor)
                 }.onFailure { rows.removeAllViews(); rows.addView(label("记录读取失败：${it.message}")) }
@@ -228,7 +259,6 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             })
         }
         if(visible.isEmpty()) rows.addView(label("此时间范围暂无已保存记录"))
-        if(transcriptStatus.isNotBlank()) rows.addView(label(transcriptStatus,12f))
         visible.forEach { item ->
             val entry = item.entry
             val card = LinearLayout(context).apply {
@@ -239,26 +269,27 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
             cards[entry.id] = card
             val heading = LinearLayout(context)
-            heading.addView(label("${clock(entry.started)} · ${if(entry.kind == "video") "录像与录音" else "录音"}\n${if(entry.source == "glasses") "眼镜" else "手机"}",16f),LinearLayout.LayoutParams(0,-2,1f))
+            heading.addView(label("${clock(entry.started)} · ${if(entry.kind == "video") "录像与录音" else "录音"} · ${if(entry.source == "glasses") "眼镜" else "手机"}",14f),LinearLayout.LayoutParams(0,-2,1f))
             if(entry.kind == "video") {
                 val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; contentDescription = "录像缩略图，点击回看" }
                 heading.addView(image,LinearLayout.LayoutParams(dp(94),dp(65)))
                 thumbnail(entry.files.first(),image)
             }
             card.addView(heading)
-            // PC currently returns capture-level text without a source-time event offset.
-            // Show it once on the first event; never duplicate the full transcript on every split.
-            val firstEvent = items.filter { it.captureId == item.captureId }.minByOrNull { it.entry.started }
-            val transcripts = if(item.audio && firstEvent?.entry?.id != entry.id) emptyList() else texts?.records.orEmpty().filter { it.captureId in item.associatedIds }
-            if(item.audio && entry.id != item.captureId && transcripts.isNotEmpty())
-                card.addView(label("整次记录的转写 · 尚未定位到各片段",12f))
-
-            transcripts.forEach { record ->
-                if(record.segments.isEmpty()) card.addView(label(record.text,17f))
-                else record.segments.forEach { segment ->
-                    card.addView(label(segment.speaker.ifBlank { "说话人未标注" },12f).apply { setTextColor(RabiMobileUi.secondary) })
-                    card.addView(label(segment.text,17f))
+            item.eventTranscript?.let { receipt ->
+                val text = receipt.optString("text").trim()
+                if(text.isNotEmpty()) card.addView(label(text,17f))
+                else card.addView(label("未识别到语音",12f))
+            }
+            if(item.eventTranscript == null) {
+                val status = when(item.asrState) {
+                    "processing" -> "转录中…"
+                    "pending" -> "待转录"
+                    "retry" -> "转录暂未完成 · 等待重试"
+                    "local_only" -> "仅本地保存 · 未转录"
+                    else -> ""
                 }
+                if(status.isNotBlank()) card.addView(label(status,13f).apply { setTextColor(RabiMobileUi.muted) })
             }
             card.addView(label("${item.spans.sumOf { it.duration } / 1000} 秒 · ${if(selected?.entry?.id == entry.id) "回看中" else "点击回看"}",12f).apply { setTextColor(RabiMobileUi.muted) })
             markers.filter { it.at in range && (it.recordId in item.associatedIds || it.recordId == entry.id) }.forEach { marker ->
@@ -296,14 +327,14 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         position.text = "回看 · ${clock(time)}"
         if(selected?.entry?.id == item.entry.id && player != null) { player?.seekTo(offset); return }
         if(selected?.entry?.id == item.entry.id && player == null) return
-        selected = item; val ticket = ++selection; releasePlayback(); showEmpty("正在准备回看…"); highlight(item.entry.id)
+        selected = item; val ticket = ++selection; releasePlayback(); showEmpty("正在缓冲…"); highlight(item.entry.id)
         mediaWorker.execute {
-            val result = runCatching { if(item.audio) item.entry.copy(files=listOf(RabiAudioRecordRepository.exportCaptureWave(context,item.entry.id))) else item.entry }
+            val result = runCatching { if(item.audio) item.entry.copy(files=listOf(RabiAudioRecordRepository.exportCaptureWave(context,item.entry.id))) else item.entry.copy(files=item.entry.files.map { RecordingResourceCache.materialize(context,it) }) }
             main.post {
                 if(closed || ticket != selection || live) return@post
                 result.onSuccess { entry ->
                     preview.removeAllViews()
-                    player = RecordingPlaybackPanel(context,entry.files,entry.kind == "video",ReviewTimeline.mediaAt(item.spans,cursor) ?: offset, playbackState, { share(entry) }) { mediaPosition ->
+                    player = RecordingPlaybackPanel(context,entry.files,entry.kind == "video",ReviewTimeline.mediaAt(item.spans,cursor) ?: offset, playbackState.copy(controlsVisible=controlsVisible), { share(entry) }) { mediaPosition ->
                         if(!dragging && !live && ticket == selection) {
                             ReviewTimeline.timeFor(item.spans,mediaPosition)?.let { wall ->
                                 position.text = "回看 · ${clock(wall)}"
@@ -311,29 +342,15 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                                 if(System.currentTimeMillis()-lastRender > 1000) { lastRender = System.currentTimeMillis(); renderRows() }
                             }
                         }
-                    }.also { preview.addView(it.view,FrameLayout.LayoutParams(-1,-1)) }
+                    }.also {
+                        it.onControlsVisibilityChanged = ::showControls
+                        liveTap.visibility = View.GONE
+                        preview.addView(it.view,FrameLayout.LayoutParams(-1,-1))
+                    }
                 }.onFailure { showEmpty("回看失败，原文件保留"); position.text = it.message ?: "媒体不可用" }
             }
         }
     }
     private fun highlight(id: String?) { cards.forEach { (key, card) -> card.background = com.rabi.link.RabiMobileUi.panel(context,if(key == id) RabiMobileUi.accentSurface else RabiMobileUi.surface,if(key == id) RabiMobileUi.accentBorder else RabiMobileUi.border,16) } }
-    private fun refreshTranscripts() {
-        if(closed || refreshing) return
-        lastRefresh = System.currentTimeMillis()
-        val scope = runCatching { projection.scope() }.getOrNull() ?: return
-        refreshing = true
-        network.execute {
-            val result = runCatching { projection.refresh(scope) }
-            main.post {
-                refreshing = false
-                if(closed) return@post
-                if(projection.isCurrent(scope)) {
-                    result.onSuccess { texts = it; textScope = scope.key; transcriptStatus = "" }
-                        .onFailure { transcriptStatus = "转写刷新未完成，保留已缓存内容" }
-                } else { texts = null; textScope = ""; transcriptStatus = "电脑已切换" }
-                renderRows()
-            }
-        }
-    }
-    fun close() { closed = true; revision++; selection++; releasePlayback(); main.removeCallbacksAndMessages(null); ruler.cancelGesture(); worker.shutdown(); mediaWorker.shutdown(); network.shutdown(); images.evictAll() }
+    fun close() { closed = true; revision++; selection++; releasePlayback(); main.removeCallbacksAndMessages(null); ruler.cancelGesture(); worker.shutdown(); mediaWorker.shutdown(); images.evictAll() }
 }

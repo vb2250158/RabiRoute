@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeRouteAgentTargets } from "./shared/routeAgentTargets.js";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { normalizeAgentAdapters, type AgentAdapterType } from "./agentAdapters/types.js";
@@ -449,9 +450,16 @@ const agentReasoningEffort: CodexReasoningEffort | undefined = normalizeCodexRea
   process.env.AGENT_REASONING_EFFORT
 );
 const agentAdapters = parseAgentAdapters(process.env.AGENT_ADAPTERS);
+const routeAgentTargets = normalizeRouteAgentTargets({
+  agentAdapters,
+  remoteAgentTargets: parseJsonEnvironmentValue(process.env.REMOTE_AGENT_TARGETS, "REMOTE_AGENT_TARGETS") as import("./shared/routeAgentTargets.js").RemoteAgentTarget[] | undefined,
+  primaryAgentTarget: process.env.PRIMARY_AGENT_TARGET,
+  primaryAgentAdapter: process.env.PRIMARY_AGENT_ADAPTER as AgentAdapterType | undefined,
+  agentInstanceBindings: parseJsonEnvironmentValue(process.env.AGENT_INSTANCE_BINDINGS, "AGENT_INSTANCE_BINDINGS") as import("./shared/routeAgentTargets.js").RouteAgentTargetsDefinition["agentInstanceBindings"]
+});
 const messageProcessingAgents = normalizeMessageProcessingAgentPolicies(
   parseJsonEnvironmentValue(process.env.MESSAGE_PROCESSING_AGENTS, "MESSAGE_PROCESSING_AGENTS"),
-  agentAdapters
+  [...new Set([...agentAdapters, ...routeAgentTargets.remoteAgentTargets.map(target => target.provider)])]
 );
 const configuredCodexPlanAssistantSessions = normalizeCodexPlanAssistantSessions(
   parseJsonEnvironmentValue(process.env.CODEX_PLAN_ASSISTANT_SESSIONS, "CODEX_PLAN_ASSISTANT_SESSIONS")
@@ -552,10 +560,9 @@ export const config = {
   feishuWebhookPath: process.env.FEISHU_WEBHOOK_PATH?.trim() || "/feishu",
   feishuWebhookPort: Number(process.env.FEISHU_WEBHOOK_PORT ?? process.env.GATEWAY_PORT ?? "8789"),
   agentAdapters,
-  primaryAgentAdapter: resolvePrimaryAgentAdapter(
-    agentAdapters,
-    process.env.PRIMARY_AGENT_ADAPTER
-  ),
+  primaryAgentTarget: routeAgentTargets.primaryAgentTarget,
+  remoteAgentTargets: routeAgentTargets.remoteAgentTargets,
+  primaryAgentAdapter: routeAgentTargets.primaryAgentAdapter,
   messageProcessingAgents,
   agentModel,
   agentReasoningEffort,
@@ -573,6 +580,11 @@ export const config = {
   workbuddySessionName: process.env.WORKBUDDY_SESSION_NAME?.trim() || "",
   workbuddyCwd: normalizeCodexCwd(process.env.WORKBUDDY_CWD) ?? "",
   workbuddyEndpoint: process.env.WORKBUDDY_ENDPOINT?.trim() || "",
+  antigravityConversationId: process.env.ANTIGRAVITY_CONVERSATION_ID?.trim() || "",
+  antigravityConversationName: process.env.ANTIGRAVITY_CONVERSATION_NAME?.trim() || "",
+  antigravityCwd: normalizeCodexCwd(process.env.ANTIGRAVITY_CWD)
+    ?? normalizeCodexCwd(process.env.CODEX_CWD)
+    ?? "",
   codexPlanAssistantEnabled,
   codexPlanAssistantModel,
   codexPlanAssistantSessions: activeCodexPlanAssistantSessions,

@@ -58,6 +58,31 @@ test("enabled DSH Hook accepts only the configured DSH primary persona session",
   );
 });
 
+test("enabled Antigravity Hook accepts only the configured Antigravity primary persona session", () => {
+  // The Hook used to be gated on `primaryAdapter` being literally codex or dsh,
+  // which silently disabled the restriction for Antigravity and read the wrong
+  // session field. Both are now derived from the adapter.
+  const definition = route({
+    agentAdapters: ["antigravity"],
+    primaryAgentAdapter: "antigravity",
+    antigravityConversationId: "a1e8f5ce-7e09-47d2-833f-ea27f532810b",
+    codexHooks: { onlyPrimaryPersonaCanSendMessages: true } as GatewayDefinition["codexHooks"]
+  });
+  assert.doesNotThrow(() => assertAgentSendPermission({
+    agentType: "primary_persona",
+    sessionId: "a1e8f5ce-7e09-47d2-833f-ea27f532810b"
+  }, definition));
+  assert.throws(
+    () => assertAgentSendPermission({ agentType: "plan_secretary", sessionId: "secretary-1" }, definition),
+    /Only the configured Antigravity primary persona session/i
+  );
+  // A Codex task id must not pass as an Antigravity conversation id.
+  assert.throws(
+    () => assertAgentSendPermission({ agentType: "primary_persona", sessionId: "primary-1" }, definition),
+    /Only the configured Antigravity primary persona session/i
+  );
+});
+
 for (const provider of ["codex", "dsh"] as const) {
   test(`${provider} remote primary permission requires the exact approved principal and Route binding`, () => {
     const remote: TrustedLanAgentSource = {
@@ -74,7 +99,8 @@ for (const provider of ["codex", "dsh"] as const) {
     const denied = /Only the configured .* primary persona session/i;
     // A colliding local session ID never grants a remote principal local authority.
     assert.throws(() => assertAgentSendPermission(sender, definition, remote), denied);
-    definition.agentInstanceBindings = { [provider]: { instanceId: remote.nodeId, agentId: remote.agentId } };
+    definition.remoteAgentTargets = [{ id: "remote:remote-node:remote-agent", provider, instanceId: remote.nodeId, agentId: remote.agentId }];
+    definition.primaryAgentTarget = "remote:remote-node:remote-agent";
     assert.doesNotThrow(() => assertAgentSendPermission(sender, definition, remote));
     for (const mismatch of [
       { nodeId: "other-node" }, { agentId: "other-agent" },
@@ -88,7 +114,9 @@ for (const provider of ["codex", "dsh"] as const) {
     // Remote primary sessions need not share the local primary's bare ID.
     const differentRemote = { ...remote, sessionId: "remote-primary" };
     assert.doesNotThrow(() => assertAgentSendPermission({ ...sender, sessionId: differentRemote.sessionId }, definition, differentRemote));
-    assert.doesNotThrow(() => assertAgentSendPermission(sender, definition));
+    assert.throws(() => assertAgentSendPermission(sender, definition), denied);
+    definition.primaryAgentTarget = "";
+    assert.throws(() => assertAgentSendPermission(sender, definition), /not configured/);
   });
 }
 

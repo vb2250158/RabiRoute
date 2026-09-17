@@ -76,6 +76,7 @@ export type AgentDeliveryTestResult = {
   deliveryId: string;
   gatewayId: string;
   agentAdapterType: AgentAdapterType;
+  agentTargetId?: string;
   status: "delivered" | "failed";
   completedAt: string;
   error?: string;

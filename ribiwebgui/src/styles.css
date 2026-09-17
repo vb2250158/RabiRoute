@@ -530,6 +530,13 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   margin-inline-start: 16px;
 }
 .topbar-context .topbar-title { margin: 0; }
+.topbar-page-controls:empty { display: none; }
+.topbar-page-controls {
+  flex: 0 1 auto;
+  width: clamp(160px, 22vw, 340px);
+  min-width: 0;
+}
+.speech-server-picker .v-field { font-size: 14px; }
 .topbar-route-picker {
   flex: 0 1 220px;
   width: clamp(160px, 16vw, 240px);
@@ -1873,30 +1880,6 @@ button.channel-topology-node:focus-visible {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   gap: 10px;
-}
-
-.remote-agent-device-select {
-  justify-content: space-between;
-  min-height: 48px;
-  text-transform: none;
-}
-
-.remote-agent-device-select .v-btn__content {
-  min-width: 0;
-  justify-content: flex-start;
-}
-
-.remote-agent-device-select-main {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.remote-agent-device-menu {
-  min-width: min(545px, calc(100vw - 32px));
 }
 
 .field-hint {
@@ -7115,27 +7098,33 @@ button.knowledge-plan-attachment.file {
 }
 
 @media (max-width: 720px) {
-  .topbar-context.has-route-switcher {
+  .topbar-context.has-route-switcher,
+  .topbar-context:has(.topbar-page-controls:not(:empty)) {
     flex: 1 1 auto;
     flex-direction: column;
     align-items: stretch;
     gap: 3px;
     margin-inline: 0 6px;
   }
-  .has-route-switcher .topbar-title .font-weight-bold { font-size: 12px; }
-  .has-route-switcher .topbar-subtitle { display: none; }
-  .topbar-route-picker {
+  .has-route-switcher .topbar-title .font-weight-bold,
+  .topbar-context:has(.topbar-page-controls:not(:empty)) .topbar-title .font-weight-bold { font-size: 12px; }
+  .has-route-switcher .topbar-subtitle,
+  .topbar-context:has(.topbar-page-controls:not(:empty)) .topbar-subtitle { display: none; }
+  .topbar-route-picker,
+  .topbar-page-controls {
     flex: 0 0 auto;
     width: 100%;
     min-width: 0;
   }
-  .topbar-route-picker .v-field {
+  .topbar-route-picker .v-field,
+  .speech-server-picker .v-field {
     --v-input-control-height: 32px;
     --v-field-padding-bottom: 4px;
     --v-field-padding-top: 4px;
     font-size: 12px;
   }
-  .topbar-route-picker .v-field__input { min-height: 32px; padding-block: 4px; }
+  .topbar-route-picker .v-field__input,
+  .speech-server-picker .v-field__input { min-height: 32px; padding-block: 4px; }
   .top-app-bar {
     padding-inline: 0 !important;
   }

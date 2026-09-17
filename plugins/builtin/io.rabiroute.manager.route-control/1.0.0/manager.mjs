@@ -175,6 +175,7 @@ export const activate = definePlugin({
                 })
             ], [
                 { routeId: "rabi-identity", kind: "exact", path: "/api/rabi/identity", methods: ["GET", "PATCH"] },
+                { routeId: "rabi-link-home", kind: "exact", path: "/api/rabi/link-home", methods: ["GET"] },
                 { routeId: "rabi-instances", kind: "exact", path: "/api/rabi/instances", methods: ["GET"] },
                 { routeId: "rabi-instance-resource", kind: "prefix", pathPrefix: "/api/rabi/instances/" },
                 { routeId: "manager-config", kind: "exact", path: "/manager-config", methods: ["GET", "POST"] }

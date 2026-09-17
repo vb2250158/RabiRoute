@@ -1683,7 +1683,7 @@ onBeforeUnmount(() => {
             <PlanFollowupSettings :model-value="gateway.codexHooks?.planFollowup" :role-id="gateway.agentRoleId || ''"
               @update:model-value="setPlanFollowup" />
             <AgentCompletionDeliveryRules :model-value="gateway.codexHooks?.completionDeliveries ?? []"
-              :gateways="store.gateways" @update:model-value="setCompletionDeliveries" />
+              :gateways="store.gateways" :gateway-id="gateway.id" @update:model-value="setCompletionDeliveries" />
           </v-window-item>
         </v-window>
       </v-card>

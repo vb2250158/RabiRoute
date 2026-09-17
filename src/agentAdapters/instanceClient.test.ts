@@ -1,7 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
 import { configuredInstanceBinding, readBoundInstanceAgent, requestInstanceThread, instanceWorkerStateDirectory } from "./instanceClient.js";
+
+test("new child environment isolates primary target from all same-provider saved targets", () => {
+  const keys = ["PRIMARY_AGENT_TARGET", "REMOTE_AGENT_TARGETS", "AGENT_INSTANCE_BINDINGS"];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  const remote = { id: "remote:node:agent", instanceId: "node", agentId: "agent", provider: "codex" as const };
+  try {
+    process.env.REMOTE_AGENT_TARGETS = JSON.stringify([remote]);
+    process.env.AGENT_INSTANCE_BINDINGS = JSON.stringify({ codex: remote });
+    for (const primaryAgentTarget of ["local:codex", "", "remote:missing:agent"]) {
+      process.env.PRIMARY_AGENT_TARGET = primaryAgentTarget;
+      assert.equal(configuredInstanceBinding("codex"), undefined);
+    }
+    process.env.PRIMARY_AGENT_TARGET = remote.id;
+    assert.deepEqual(configuredInstanceBinding("codex"), { instanceId: "node", agentId: "agent" });
+    assert.equal(configuredInstanceBinding("dsh"), undefined);
+    assert.deepEqual(primaryAgentInstanceBindings({ agentAdapters: [], remoteAgentTargets: [remote], primaryAgentTarget: remote.id }), { codex: { instanceId: "node", agentId: "agent" } });
+  } finally {
+    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
 
 test("instance requests select the bound owner and never fall back to local tasks", async () => {
   const saved = { url: process.env.GATEWAY_MANAGER_URL, token: process.env.LAN_AGENT_ACCESS_TOKEN, bindings: process.env.AGENT_INSTANCE_BINDINGS };

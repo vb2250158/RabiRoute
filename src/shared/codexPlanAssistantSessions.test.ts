@@ -2,11 +2,49 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DEFAULT_CODEX_PLAN_ASSISTANT_MODEL,
+  filterCodexPlanAssistantSessionsForTarget,
   codexPlanAssistantInitializationPrompt,
   codexPlanAssistantSessionTitles,
   normalizeCodexPlanAssistantSessions,
   resolveCodexPlanAssistantTurnModel
 } from "./codexPlanAssistantSessions.js";
+
+test("target pools retain colliding ids and independently cap and index eight sessions", () => {
+  const rows = [undefined, "local:codex", "remote-a", "remote-b"].flatMap((agentTargetId) =>
+    Array.from({ length: 10 }, (_, index) => ({
+      agentTargetId,
+      threadId: `019fa314-2c07-7523-896f-${String(index).padStart(12, "0")}`,
+      threadName: `Secretary ${index}`,
+      workspace: "C:/workspace/example",
+      index: 10 - index
+    })));
+  const result = normalizeCodexPlanAssistantSessions([...rows, rows[0]]);
+  assert.equal(result.length, 32);
+  for (const target of [undefined, "local:codex", "remote-a", "remote-b"]) {
+    const pool = filterCodexPlanAssistantSessionsForTarget(result, target);
+    assert.deepEqual(pool.map((row) => row.index), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(pool[0]?.threadId, rows[9]?.threadId);
+  }
+  assert.deepEqual(normalizeCodexPlanAssistantSessions(result), result);
+  assert.equal(filterCodexPlanAssistantSessionsForTarget(result, "missing").length, 0);
+  assert.equal(filterCodexPlanAssistantSessionsForTarget(result, " ").length, 8);
+});
+
+test("deduplication includes provider and target without guessing legacy ownership", () => {
+  const base = { threadId: "019fa314-2c07-7523-896f-9bb6b638054a", threadName: "Secretary", workspace: "C:/workspace/example", index: 1 };
+  const result = normalizeCodexPlanAssistantSessions([
+    base, { ...base, agentTargetId: " remote-a " },
+    { ...base, agentTargetId: "remote-a", agentAdapter: "codex" },
+    { ...base, agentTargetId: "remote-a", agentAdapter: "antigravity" },
+    { ...base, agentTargetId: "remote-b" }
+  ]);
+  assert.equal(result.length, 4);
+  assert.equal(filterCodexPlanAssistantSessionsForTarget(result).length, 1);
+  assert.equal(filterCodexPlanAssistantSessionsForTarget(result, "remote-a").length, 2);
+  assert.ok(result.some((row) => row.agentAdapter === "antigravity"));
+  assert.equal(resolveCodexPlanAssistantTurnModel(result, base.threadId, undefined, "remote-a"), undefined);
+  assert.equal(resolveCodexPlanAssistantTurnModel(result, base.threadId, undefined, "remote-b"), DEFAULT_CODEX_PLAN_ASSISTANT_MODEL);
+});
 
 test("one plan assistant uses the unnumbered Chinese suffix", () => {
   assert.deepEqual(codexPlanAssistantSessionTitles("建造师 策划 程序", 1), [

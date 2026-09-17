@@ -1,4 +1,4 @@
-export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy"] as const;
+export const agentAdapterTypes = ["codex", "copilotCli", "marvis", "astrbot", "dsh", "workbuddy", "antigravity"] as const;
 
 export type AgentAdapterType = typeof agentAdapterTypes[number];
 
@@ -66,6 +66,24 @@ const codexTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
   })
 });
 
+/**
+ * Antigravity keeps a durable inbound-prompt log at
+ * `~/.gemini/antigravity/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`,
+ * and its lifecycle hooks hand the adapter that path directly, so a lost delivery
+ * receipt can be reconstructed without scanning for it. Delivery runs through the
+ * host's own `agy agentapi send-message` / `new-conversation` subcommands, which
+ * keeps the transport on a documented surface.
+ */
+const antigravityTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
+  managedTasks: Object.freeze<Partial<Record<ManagedTaskAgentFeature, true>>>({
+    messageProcessingAgent: true,
+    planAssistantSessions: true,
+    memoryConsolidationAgent: true,
+    hooks: true,
+    deliveryReceiptRecovery: true
+  })
+});
+
 const manifestsByAgentType = Object.freeze({
   codex: Object.freeze({
     type: "codex",
@@ -118,6 +136,21 @@ const manifestsByAgentType = Object.freeze({
     transport: Object.freeze({ protocol: "http", mode: "session-gateway" }),
     host: Object.freeze({ name: "WorkBuddy Desktop", required: true }),
     capabilities: messageAndHookCapabilities
+  }),
+  antigravity: Object.freeze({
+    type: "antigravity",
+    label: "Antigravity（Google 的 Agent 开发环境）",
+    // Delivery goes through the host's own `agy agentapi` subcommands
+    // (`send-message` for system-identity messages, `new-conversation` for
+    // user-identity messages), so the transport stays on a documented surface.
+    // Lifecycle hooks and the transcript log are verified end to end on both the
+    // desktop app and the CLI. Stays experimental until the host's gRPC address
+    // and CSRF token discovery proves stable across upgrades: both are read from
+    // the running instance rather than configured.
+    maturity: "experimental",
+    transport: Object.freeze({ protocol: "agentapi", mode: "desktop-or-cli-owner" }),
+    host: Object.freeze({ name: "Antigravity Desktop", required: true }),
+    capabilities: antigravityTaskCapabilities
   })
 }) satisfies Readonly<Record<AgentAdapterType, AgentAdapterManifest>>;
 
@@ -165,4 +198,45 @@ export function agentAdapterSupportsReceiptRecovery(type: string | undefined): b
   const normalized = String(type || "").trim();
   return isAgentAdapterType(normalized)
     && agentAdapterSupportsManagedTaskFeature(normalized, "deliveryReceiptRecovery");
+}
+
+/**
+ * Adapters whose owner can host a Plan assistant session, i.e. hold a durable
+ * session that RabiRoute can bind a Plan role to and deliver into later.
+ *
+ * Plan bindings persist `agentType` verbatim and re-open the bound session by id,
+ * so this list is what keeps a binding from being written back as some other
+ * adapter. Describe the capability here rather than enumerating adapter names at
+ * each call site: a new adapter then becomes eligible by declaring the feature.
+ */
+export const planAssistantAgentTypes = agentAdapterTypes.filter(
+  (type) => manifestsByAgentType[type].capabilities.managedTasks?.planAssistantSessions === true
+);
+
+export type PlanAssistantAgentType = typeof agentAdapterTypes[number];
+
+export function isPlanAssistantAgentType(value: unknown): value is PlanAssistantAgentType {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return Boolean(normalized)
+    && isAgentAdapterType(normalized)
+    && agentAdapterSupportsManagedTaskFeature(normalized, "planAssistantSessions");
+}
+
+/**
+ * Normalize a persisted binding's `agentType`, preserving the adapter that
+ * actually owns the session.
+ *
+ * `fallback` is the value used when the field is absent, which only happens for
+ * bindings written before adapter tagging existed. It must never be applied to a
+ * present-but-unrecognized value: silently rewriting an unknown adapter to the
+ * fallback would deliver into a session of the wrong kind.
+ */
+export function normalizePlanBindingAgentType(
+  value: unknown,
+  fallback: PlanAssistantAgentType = "codex"
+): PlanAssistantAgentType {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) return fallback;
+  if (isPlanAssistantAgentType(normalized)) return normalized;
+  throw new Error(`Unsupported plan binding agentType: ${normalized}`);
 }

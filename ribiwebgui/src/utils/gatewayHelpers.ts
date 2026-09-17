@@ -21,6 +21,12 @@ import { isGatewayMessageAdapterType, isMessageEndpointType } from "@shared/mess
 import { applySpeechRouteVariableDefaults } from "@shared/speechControlContract";
 import { SPEECH_ROUTE_AUTO_SUBMIT } from "../speech/speechDeliveryMode";
 
+/** Device setup belongs to mobile recording; remote execution belongs to Agent targets. Legacy keys remain readable
+ * until existing clients migrate to recording events; see docs/mobile-recording-event-boundary.md. */
+export function isNonMessageEndpoint(type: MessageAdapterType): boolean {
+  return type === "rabilink" || type === "wearable" || type === "remoteAgent";
+}
+
 export const routeKindLabels: Record<string, string> = {
   direct_at: "群聊-直接 @",
   direct_reply: "群聊-直接回复",
@@ -470,12 +476,6 @@ export function routeKindDefinitionsForGateway(_gateway?: GatewayDefinition) {
         { title: "聊天事件", routeKinds: ["role_panel_message"] },
         { title: "手动事件", routeKinds: ["manual_trigger"] }
       ]
-    },
-    {
-      adapter: "remoteAgent",
-      title: "远端 Agent",
-      note: "远端 Agent 设备入口；本机人格可通过 Rabi API 把任务投递到远端设备。",
-      groups: [{ title: "远端任务结果", routeKinds: ["manual_trigger"] }]
     },
     {
       adapter: "speech",

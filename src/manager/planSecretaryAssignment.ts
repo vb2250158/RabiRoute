@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { PlanItem, PlanSecretaryBinding } from "../roleKnowledge.js";
-import { planAssistantSessionAgentAdapter, type CodexPlanAssistantSession } from "../shared/codexPlanAssistantSessions.js";
+import { filterCodexPlanAssistantSessionsForTarget, planAssistantSessionAgentAdapter, type CodexPlanAssistantSession } from "../shared/codexPlanAssistantSessions.js";
 import { sameCodexWorkspace } from "../codexTaskIdentity.js";
+import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 
 export type PlanSecretaryTarget = {
-  agentAdapter: "codex" | "dsh";
+  agentTargetId?: string;
+  agentAdapter: PlanAssistantAgentType;
   threadId: string;
   threadName: string;
   workspace: string;
@@ -14,14 +16,21 @@ export type PlanSecretaryTarget = {
 
 export type PlanSecretaryAssignment = {
   target: PlanSecretaryTarget;
-  binding: PlanSecretaryBinding;
+  binding: PlanSecretaryBinding & { agentTargetId?: string };
   changed: boolean;
 };
 
-function sameBindingIdentity(binding: PlanSecretaryBinding | undefined, session: CodexPlanAssistantSession): boolean {
-  return Boolean(binding
+function sameBindingIdentity(binding: (PlanSecretaryBinding & { agentTargetId?: string }) | undefined, session: CodexPlanAssistantSession): boolean {
+  if (!binding) return false;
+  const targetId = session.agentTargetId?.trim() || undefined;
+  // Preserve the historical DSH type repair only in the unassigned legacy pool.
+  const legacyDshTypeRepair = !targetId && !binding.agentTargetId?.trim()
+    && binding.agentType === "codex" && session.threadId.startsWith("session-")
+    && planAssistantSessionAgentAdapter(session) === "dsh";
+  return (binding.agentTargetId?.trim() || undefined) === targetId
+    && (binding.agentType === planAssistantSessionAgentAdapter(session) || legacyDshTypeRepair)
     && binding.sessionId === session.threadId
-    && sameCodexWorkspace(binding.workspace, session.workspace));
+    && sameCodexWorkspace(binding.workspace, session.workspace);
 }
 
 function orderedSessions(sessions: readonly CodexPlanAssistantSession[] | undefined): CodexPlanAssistantSession[] {
@@ -36,19 +45,22 @@ function selectedIndex(planId: string, count: number): number {
 
 /**
  * Clear only persisted secretary bindings that cannot belong to the current
- * Primary Persona workspace. Existing bindings in the same workspace remain
- * intact so temporarily disabling the secretary pool does not lose history.
+ * selected target's Primary Persona workspace. Other targets are untouched.
+ * An omitted target selects only legacy unassigned bindings. Existing bindings
+ * in the same workspace remain intact when the secretary pool is disabled.
  */
 export function reconcilePlanSecretaryBindingsForWorkspace(
   plans: readonly PlanItem[],
   primaryWorkspace: string | undefined,
-  clearBinding: (planId: string) => void
+  clearBinding: (planId: string) => void,
+  agentTargetId?: string
 ): string[] {
   if (!primaryWorkspace?.trim()) return [];
   const clearedPlanIds: string[] = [];
   for (const plan of plans) {
-    const binding = plan.secretaryBinding;
-    if (!binding || sameCodexWorkspace(binding.workspace, primaryWorkspace)) continue;
+    const binding = plan.secretaryBinding as (PlanSecretaryBinding & { agentTargetId?: string }) | undefined;
+    if (!binding || (binding.agentTargetId?.trim() || undefined) !== (agentTargetId?.trim() || undefined)
+      || sameCodexWorkspace(binding.workspace, primaryWorkspace)) continue;
     clearBinding(plan.id);
     clearedPlanIds.push(plan.id);
   }
@@ -58,15 +70,18 @@ export function reconcilePlanSecretaryBindingsForWorkspace(
 export function resolvePlanSecretaryAssignment(
   plan: PlanItem,
   sessions: readonly CodexPlanAssistantSession[] | undefined,
-  assignedAt = new Date().toISOString()
+  assignedAt = new Date().toISOString(),
+  agentTargetId?: string
 ): PlanSecretaryAssignment | undefined {
-  const candidates = orderedSessions(sessions);
+  // No target means legacy unassigned only; configuration migration owns attribution.
+  const candidates = orderedSessions(filterCodexPlanAssistantSessionsForTarget(sessions, agentTargetId));
   if (!candidates.length) return undefined;
   const existing = candidates.find((session) => sameBindingIdentity(plan.secretaryBinding, session));
   const selected = existing || candidates[selectedIndex(plan.id, candidates.length)]!;
   const selectedAgentAdapter = planAssistantSessionAgentAdapter(selected);
   return {
     target: {
+      ...(selected.agentTargetId ? { agentTargetId: selected.agentTargetId } : {}),
       agentAdapter: selectedAgentAdapter,
       threadId: selected.threadId,
       threadName: selected.threadName,
@@ -74,6 +89,7 @@ export function resolvePlanSecretaryAssignment(
       index: selected.index
     },
     binding: {
+      ...(selected.agentTargetId ? { agentTargetId: selected.agentTargetId } : {}),
       agentType: selectedAgentAdapter,
       sessionId: selected.threadId,
       sessionTitle: selected.threadName,

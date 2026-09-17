@@ -4,9 +4,9 @@ import { computed, ref } from "vue";
 import type { GatewayDefinition } from "@shared/gatewayConfigModel";
 import { AGENT_HOOK_EVENTS, AGENT_HOOK_CONDITIONS, AGENT_HOOK_DESTINATIONS, agentHookRuleErrors,
   type AgentCompletionDeliveryRule, type AgentHookCondition, type AgentHookDestination, type AgentHookSession } from "@shared/agentHookAutomation";
-import { createAgentCompletionRule } from "../persona/agentCompletionRules";
+import { createAgentCompletionRule, createTtsCompletionRule } from "../persona/agentCompletionRules";
 
-const props = defineProps<{ modelValue: AgentCompletionDeliveryRule[]; gateways: GatewayDefinition[] }>();
+const props = defineProps<{ modelValue: AgentCompletionDeliveryRule[]; gateways: GatewayDefinition[]; gatewayId: string }>();
 const emit = defineEmits<{ "update:modelValue": [value: AgentCompletionDeliveryRule[]] }>();
 const projects = ref<string[]>([]);
 const loading = ref(false);
@@ -148,11 +148,12 @@ async function scanProjects() {
               @update:model-value="value => params(rule, { targetId: value.trim() })" />
           </template>
         </div>
-        <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">使用所选消息路线的语音合成与播放设置，无需填写 QQ 参数。</p>
+        <p v-if="rule.destination.channel === 'speech'" class="section-note mt-3">任务完成后，使用所选消息路线的人格声线、语音合成与自动播放设置播报结果。启用规则并保存后生效。</p>
       </div>
       <p v-for="message in agentHookRuleErrors(rule)" :key="message" class="section-note text-warning">{{ message }}</p>
     </v-card>
     <v-btn variant="tonal" prepend-icon="mdi-plus" @click="emit('update:modelValue', [...modelValue, createAgentCompletionRule()])">添加事件投递规则</v-btn>
+    <v-btn class="ml-2" variant="tonal" prepend-icon="mdi-account-voice" @click="emit('update:modelValue', [...modelValue, createTtsCompletionRule(gatewayId)])">添加 TTS 播报</v-btn>
     <p class="section-note mt-2">规则随人格配置保存，发送结果可在消息路线的发送日志中查看。</p>
   </section>
 </template>

@@ -75,6 +75,11 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "package.json"), "utf8"), '{"scripts":{"build":"current"}}');
     assert.equal(fs.readFileSync(path.join(base, "package.json"), "utf8"), '{"scripts":{"build":"old"}}');
     assert.equal(JSON.parse(fs.readFileSync(path.join(result.packageRoot, "package-lock.json"), "utf8")).version, "0.3.1");
+    write(build, "dist/plugins/packages/example/1/rabi.plugin.json", JSON.stringify({ id: "example", version: "1", entries: { web: { module: "web/client.mjs" } } }));
+    assert.throws(() => createDeveloperCandidate({ baseRoot: base, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.missing-web" }), /Web Bundle entry is missing: example/);
+    assert.equal(fs.readdirSync(versions).some(name => name.startsWith(".developer-staging-")), false);
+    write(build, "dist/plugins/packages/example/1/web/client.mjs", 'export { activate } from "/assets/missing.js";\n');
+    assert.throws(() => createDeveloperCandidate({ baseRoot: base, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.missing-asset" }), /ribiwebgui\/dist\/assets\/missing.js/);
     write(build, "package-lock.json", '{"lockfileVersion":3,"changed":true}');
     assert.throws(() => createDeveloperCandidate({ baseRoot: base, buildRoot: build, traySourceRoot: tray, hostCoreRoot: host, versionsRoot: versions, packageVersion: "0.2.2-dev.lock-change" }), /Dependency changes/);
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "dist", "manager.js"), "utf8"), "new manager\n");

@@ -22,6 +22,8 @@ Version 0.3.3 makes WorkBuddy a deliverable Agent endpoint too. A message no lon
 
 Version 0.3.5 adds individual remote Agent credentials, per-Agent authorization and controlled APIs, skills and uploads; shared-credential nodes must re-enroll. Saved plan approvals can be edited and return to analysis only after confirmed delivery; a focused view combines approvals and requests for information. Android recording adds unified playback, sound events, themes and saved computers. Physical multi-computer and all-day endurance acceptance remain pending.
 
+Version 0.3.6 adds Antigravity as a fifth deliverable Agent target, delivering through the host's own `agy agentapi` subcommands rather than driving the desktop renderer, and declaring the same unified capability list as Codex, DSH and WorkBuddy. It also replaces the "Codex or DSH" binary for the primary Agent with an explicit target (local/remote + provider + instance), so send permission, plan-assistant session filtering and instance thread routing all resolve from one target and a new adapter becomes eligible just by declaring its capability. DSH connections now require explicit local-user authorization and never persist the login link. Device settings move to the mobile recording system, dropping the standalone glasses/watch/band entries from the PC side while existing client transport stays compatible; unified recording-event delivery is not implemented yet.
+
 ## Directory contents
 
 - `persona.md` defines identity, voice, boundaries, and routing behavior.

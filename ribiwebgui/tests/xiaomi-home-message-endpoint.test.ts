@@ -23,7 +23,7 @@ const authRendererSource = fs.readFileSync(new URL("../src/components/renderers/
 test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-home input", () => {
   assert.match(routeConfigSource, /title: "智能家居"/);
   assert.match(routeConfigSource, /type: "xiaomiHome", title: "米家 \/ Xiaomi Home"/);
-  assert.match(routeConfigSource, /"heartbeat", "xiaomiHome", "rabilink"/);
+  assert.match(routeConfigSource, /"heartbeat", "xiaomiHome", "webhook"/);
   assert.doesNotMatch(routeConfigSource, /type: "xiaoai", title:/);
   const quickSetupSource = fs.readFileSync(new URL("../src/components/QuickSetupDialog.vue", import.meta.url), "utf8");
   assert.doesNotMatch(quickSetupSource, /type: "xiaoai", title:/);

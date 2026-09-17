@@ -211,7 +211,9 @@ test("endpoint selection delivers to private QQ or speech with independent param
   const address = server.address(); assert.ok(address && typeof address === "object");
   const url = `http://127.0.0.1:${address.port}`;
   const options = { rootDir, routeRoot: path.join(rootDir, "data/route"), rolesRoot: path.join(rootDir, "data/roles"), speechServiceUrl: url,
-    runtimes: [{ id: "route", enabled: true, napcatInstances: [{ id: "qq", httpUrl: url, accessToken: "", enabled: true }],
+    runtimes: [{ id: "route", enabled: true, agentRoleId: "announcer",
+      routeVariables: { speechTtsModel: "local-tts/test", speechSpeed: "1.25", speechLanguage: "zh", speechAutoPlay: "true" },
+      napcatInstances: [{ id: "qq", httpUrl: url, accessToken: "", enabled: true }],
       messageAdapterPolicies: { speech: { outputEnabled: true, supportedOutputs: ["text" as const] } } }] };
   const privateRule = { ...owner.rule, destination: { channel: "napcat", gatewayId: "route",
     params: { target: "private", targetId: "67890", instanceId: "qq" } } };
@@ -230,12 +232,19 @@ test("endpoint selection delivers to private QQ or speech with independent param
     assert.equal(received[0].body.group_id, undefined);
     assert.equal(received[1].url, "/v1/audio/speech");
     assert.equal(received[1].body.user_id, undefined);
+    assert.equal(received[1].body.voice, "announcer");
+    assert.equal(received[1].body.model, "local-tts/test");
+    assert.equal(received[1].body.speed, 1.25);
+    assert.equal(received[1].body.play, true);
     includePlaybackJob = false;
     const synthesisOnly = new AgentCompletionDeliveryService({ rules: () => [{ ...owner, rule: speechRule }],
       deliver: ({ rule }, hook, id, context) => deliverCompletionToEndpoint(rule, hook, id, "route", options, context) });
     assert.equal((await synthesisOnly.handle({ ...event, turnId: "synthesis-only", cwd: undefined }))[0].status, "sent");
     assert.equal((await synthesisOnly.handle({ ...event, turnId: "synthesis-only", cwd: undefined }))[0].status, "sent");
     assert.equal(received.length, 3, "synthesis without a playback job still has an authoritative receipt");
+    options.runtimes[0].routeVariables.speechAutoPlay = "false";
+    assert.equal((await synthesisOnly.handle({ ...event, turnId: "playback-disabled" }))[0].status, "sent");
+    assert.equal(received[3].body.play, false, "TTS Hook respects the route's disabled playback setting");
     assert.deepEqual(await create().handle({ ...event, eventName: "PreToolUse" }), []);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));

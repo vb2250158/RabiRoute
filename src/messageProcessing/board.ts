@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AgentSendResult } from "../agentSend.js";
 import type { AgentReplyResult } from "../outbox.js";
 import type { PlanItem } from "../roleKnowledge.js";
+import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 import type { MessageProcessingSourceAttachmentEvidence } from "./sourceEvidence.js";
 import {
   JsonFileMessageProcessingBoardPersistence,
@@ -161,7 +162,7 @@ export type MessageProcessingSource = {
 };
 
 export type MessageProcessingWorker = {
-  agentAdapter?: "codex" | "dsh" | "workbuddy";
+  agentAdapter?: PlanAssistantAgentType;
   threadId: string;
   threadName: string;
   workspace: string;

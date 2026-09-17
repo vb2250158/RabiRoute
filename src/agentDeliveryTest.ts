@@ -9,6 +9,7 @@ export type AgentDeliveryTestResult = {
   deliveryId: string;
   gatewayId: string;
   agentAdapterType: AgentAdapterType;
+  agentTargetId?: string;
   status: AgentDeliveryTestStatus;
   completedAt: string;
   error?: string;
@@ -67,6 +68,7 @@ export function parseAgentDeliveryTestResult(output: string): AgentDeliveryTestR
       deliveryId: parsed.deliveryId,
       gatewayId: parsed.gatewayId,
       agentAdapterType,
+      ...(typeof parsed.agentTargetId === "string" ? { agentTargetId: parsed.agentTargetId } : {}),
       status: parsed.status,
       completedAt: parsed.completedAt,
       ...(parsed.error ? { error: parsed.error } : {})

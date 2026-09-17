@@ -64,7 +64,7 @@
 
 ## 实验集成
 
-- [远端 Agent 接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。复制提示词接入其他电脑，在当前 Manager 管理实例内 Agent，并在路由中选择处理端。
+- [远端智能体接入与更新](lan-rabi-agent-bootstrap.md) — **实验集成**。从“RabiLink → 远端智能体”复制提示词接入其他电脑，管理实例内 Agent，并在路由中选择处理端。
 - [移动端记录界面](rabilink-mobile-recording-ui.md) — 四页导航、三档采集、离线保存、会话回看与兼容边界。
 - [眼镜离线录像与实时预览](rabilink-offline-recording.md)：把眼镜直播保存在手机并实时查看；真机验收进行中。
 - [乐奇开发依据与排障](rokid-development.md) — SDK 路线、官方资料读取状态、安装证据及对应开发 Skill；当前不采用 CXR-M。
@@ -86,6 +86,7 @@
 - [Rabi 移动设备消息端](mobile-message-endpoint.md) — **实验集成**。手机独立聊天、可选眼镜、可靠队列、通知、附件、配置助手和真机验收边界。
 - [RabiLink 手机边缘枢纽](rabilink-phone-edge-hub.md) — 手机/穿戴设备契约和 Android SDK。
 - [手机与电脑视频直连](rabilink-direct-video.md) — **实验接入**。直连视频的带宽边界、SDK 条件、构建方式和真机验证结果。
+- [移动端记录与事件边界](mobile-recording-event-boundary.md) — 开发维护：设备配置归属、统一事件方向与旧协议退出条件。
 - [RabiLink 智能手表 / 手环健康消息端](rabilink-wearable-health.md) — **实验集成**。手机配置、结构化健康时间线、Agent 查询 API、阈值告警和小米 ADB 过渡桥。
 - [AIUI 到手机 / 原生眼镜方案的功能等价清单](rabilink-aiui-native-parity.md) — 按代码、自动化与真机证据逐项记录迁移完成度。
 - [RabiLink AIUI 常驻边界](rabilink-aiui-residency-plan.md) — 已实现链路与常驻能力限制混合文档，阅读时区分代码事实和计划。

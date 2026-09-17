@@ -3,6 +3,7 @@ import { notifyCopilotCli } from "../copilotCli.js";
 import { notifyMarvis } from "../marvis.js";
 import { notifyDshSession } from "../dshSessionBridge.js";
 import { notifyWorkbuddySession } from "../workbuddySessionBridge.js";
+import { notifyAntigravity } from "../antigravityRuntime.js";
 import { renderRabiDelivery } from "../shared/rabiMessage.js";
 import {
   agentAdapterTypes,
@@ -47,6 +48,12 @@ const factories = Object.freeze({
     type: "workbuddy",
     deliver: async (envelope) => {
       await notifyWorkbuddySession(renderRabiDelivery(envelope));
+    }
+  }),
+  antigravity: (): AgentAdapter => ({
+    type: "antigravity",
+    deliver: async (envelope) => {
+      await notifyAntigravity(renderRabiDelivery(envelope));
     }
   })
 }) satisfies Readonly<Record<AgentAdapterType, () => AgentAdapter>>;

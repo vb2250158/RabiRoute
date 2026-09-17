@@ -19,6 +19,7 @@ import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
@@ -39,7 +40,8 @@ class HealthConnectActivity : ComponentActivity() {
 
     private val requiredPermissions = setOf(
         HealthPermission.getReadPermission(HeartRateRecord::class),
-        HealthPermission.getReadPermission(SleepSessionRecord::class)
+        HealthPermission.getReadPermission(SleepSessionRecord::class),
+        HealthPermission.getReadPermission(StepsRecord::class)
     )
 
     private val permissionLauncher = registerForActivityResult(
@@ -48,12 +50,20 @@ class HealthConnectActivity : ComponentActivity() {
         append("权限结果：${granted.joinToString()}")
         if (granted.containsAll(requiredPermissions)) {
             readHealthData()
+        } else if (granted.isNotEmpty()) {
+            append("没有同时获得心率、睡眠和步数读取权限；穿戴持续采集只能读取已授权的数据类型。")
+            showGuidance(RabiSetupGuidance(
+                "权限只通过了一部分",
+                "Android 只允许 App 读取你明确勾选的健康类型；心率、睡眠或步数至少有一项未授权。",
+                "再次点“授权并读取”，在系统页面允许心率、睡眠和步数；不想授权时可以安全返回，App 不会绕过系统读取。",
+                RabiGuidanceTone.WARNING,
+            ))
         } else {
-            append("没有同时获得心率和睡眠读取权限；穿戴持续采集只能读取已授权的数据类型。")
+            append("没有获得任何健康类型读取权限，无法采集。")
             showGuidance(RabiSetupGuidance(
                 "权限没有全部通过",
-                "Android 只允许 App 读取你明确勾选的健康类型；心率或睡眠至少有一项未授权。",
-                "再次点“授权并读取”，在系统页面允许心率和睡眠；不想授权时可以安全返回，App 不会绕过系统读取。",
+                "Android 只允许 App 读取你明确勾选的健康类型；心率、睡眠或步数至少有一项未授权。",
+                "再次点“授权并读取”，在系统页面允许心率、睡眠和步数；不想授权时可以安全返回，App 不会绕过系统读取。",
                 RabiGuidanceTone.WARNING,
             ))
         }
@@ -78,7 +88,7 @@ class HealthConnectActivity : ComponentActivity() {
         content.addView(RabiMobileUi.hero(
             this,
             "连接 Health Connect",
-            "App 会先检查系统支持，再由 Android 请求心率和睡眠权限；你不需要填写任何参数。",
+            "App 会先检查系统支持，再由 Android 请求心率、睡眠和步数权限；你不需要填写任何参数。",
         ), full(0, 0, 0, 12))
 
         statusView = RabiMobileUi.guidance(this, RabiSetupGuidance(
@@ -125,7 +135,7 @@ class HealthConnectActivity : ComponentActivity() {
                 append("Health Connect 可用。请点击“授权并读取24小时”。")
                 showGuidance(RabiSetupGuidance(
                     "Health Connect 可以使用",
-                    "系统健康服务已就绪，剩下只需要你确认读取心率和睡眠权限。",
+                    "系统健康服务已就绪，剩下只需要你确认读取心率、睡眠和步数权限。",
                     "点“授权并读取最近 24 小时”，按系统页面完成授权。",
                     RabiGuidanceTone.SUCCESS,
                 ))
@@ -170,12 +180,12 @@ class HealthConnectActivity : ComponentActivity() {
             if (granted.containsAll(requiredPermissions)) {
                 readHealthData()
             } else {
-                append("正在请求心率和睡眠读取权限...")
-                append("如果系统打开权限页，请允许“心率”和“睡眠”读取权限后返回本应用。")
+                append("正在请求心率、睡眠和步数读取权限...")
+                append("如果系统打开权限页，请允许“心率”“睡眠”和“步数”读取权限后返回本应用。")
                 showGuidance(RabiSetupGuidance(
                     "等待系统授权",
-                    "心率和睡眠属于敏感健康数据，Android 要求由你亲自确认。",
-                    "在接下来的系统页面允许心率和睡眠读取，然后返回 Rabi。",
+                    "心率、睡眠和步数属于敏感健康数据，Android 要求由你亲自确认。",
+                    "在接下来的系统页面允许心率、睡眠和步数读取，然后返回 Rabi。",
                 ))
                 permissionLauncher.launch(requiredPermissions)
             }
@@ -186,7 +196,7 @@ class HealthConnectActivity : ComponentActivity() {
         val healthClient = client ?: return
         showGuidance(RabiSetupGuidance(
             "正在读取健康数据",
-            "权限已满足，App 正在读取最近 24 小时的心率和睡眠记录。",
+            "权限已满足，App 正在读取最近 24 小时的心率、睡眠和步数记录。",
             "请稍候，不需要重复点击。",
         ))
         lifecycleScope.launch {
@@ -210,14 +220,28 @@ class HealthConnectActivity : ComponentActivity() {
                 failed = true
                 append("SleepSessionRecord 读取失败：${error.javaClass.simpleName}: ${error.message}")
             }
+            runCatching {
+                val end = Instant.now()
+                val stepsRecords = healthClient.readRecords(
+                    ReadRecordsRequest(
+                        recordType = StepsRecord::class,
+                        timeRangeFilter = TimeRangeFilter.between(end.minusSeconds(24 * 60 * 60), end)
+                    )
+                ).records
+                val totalSteps = stepsRecords.sumOf { it.count }
+                append("StepsRecord 最近24小时：记录=${stepsRecords.size} 合计=$totalSteps 步")
+            }.onFailure { error ->
+                failed = true
+                append("StepsRecord 读取失败：${error.javaClass.simpleName}: ${error.message}")
+            }
             showGuidance(if (failed) RabiSetupGuidance(
                 "部分健康数据没有读到",
                 "系统返回了读取错误，具体类型和原因已保留在下方结果中。",
-                "检查 Health Connect 里对 Rabi 的心率和睡眠权限，再重试。",
+                "检查 Health Connect 里对 Rabi 的心率、睡眠和步数权限，再重试。",
                 RabiGuidanceTone.WARNING,
             ) else RabiSetupGuidance(
                 "读取完成",
-                "App 已完成最近 24 小时心率和睡眠查询；即使记录数为 0，也代表系统正常返回了空结果。",
+                "App 已完成最近 24 小时心率、睡眠和步数查询；即使记录数为 0，也代表系统正常返回了空结果。",
                 "查看下方记录数；如果为 0，请确认小米运动健康是否已开启写入 Health Connect。",
                 RabiGuidanceTone.SUCCESS,
             ))

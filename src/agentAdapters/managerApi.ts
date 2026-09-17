@@ -18,6 +18,7 @@ import {
   type DshModelCatalogEntry
 } from "../dshSessionBridge.js";
 import { scanWorkbuddyAgentAdapter } from "./workbuddyManagerApi.js";
+import { scanAntigravityAgentAdapter } from "./antigravityManagerApi.js";
 
 type AgentMaturity = AgentAdapterMaturity;
 
@@ -76,6 +77,10 @@ export type AgentScanOptions = {
   workbuddyOffset?: number;
   workbuddyQuery?: string;
   workbuddyWorkspace?: string;
+  antigravityLimit?: number;
+  antigravityOffset?: number;
+  antigravityQuery?: string;
+  antigravityWorkspace?: string;
 };
 
 export type AgentScanPerformanceOperation = {
@@ -202,6 +207,11 @@ export type AgentManagerApiContext = {
   /** Overrides for the WorkBuddy session descriptor directory and task database. */
   workbuddySessionsDir?: string;
   workbuddyDatabasePath?: string;
+  /** Overrides for the Antigravity conversation index and host process probe. */
+  antigravityDatabasePath?: string;
+  antigravityAppDataDir?: string;
+  antigravityCliPath?: string;
+  isAntigravityHostRunning?: () => boolean;
 };
 
 
@@ -459,6 +469,14 @@ export async function scanAgentAdapters(
   const workbuddyScan = await scanWorkbuddyAgentAdapter({ ...ctx, runtimes }, options);
   const workbuddyAgent = workbuddyScan.agents.workbuddy;
   const workbuddyCwdOptions = workbuddyScan.cwdOptions;
+  const antigravityScan = scanAntigravityAgentAdapter({
+    ...(ctx.antigravityDatabasePath ? { antigravityDatabasePath: ctx.antigravityDatabasePath } : {}),
+    ...(ctx.antigravityAppDataDir ? { antigravityAppDataDir: ctx.antigravityAppDataDir } : {}),
+    ...(ctx.antigravityCliPath ? { antigravityCliPath: ctx.antigravityCliPath } : {}),
+    ...(ctx.isAntigravityHostRunning ? { antigravityHostRunning: ctx.isAntigravityHostRunning } : {})
+  }, options);
+  const antigravityAgent = antigravityScan.agents.antigravity;
+  const antigravityCwdOptions = antigravityScan.cwdOptions;
 
   const astrbotEndpoints = await Promise.all(astrbotUrls.map(async (url) => ({
     label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 AstrBot" : "AstrBot",
@@ -552,7 +570,8 @@ export async function scanAgentAdapters(
       ]
     },
     dsh: dshAgent,
-    workbuddy: workbuddyAgent
+    workbuddy: workbuddyAgent,
+    antigravity: antigravityAgent
   };
 
   return {
@@ -560,13 +579,13 @@ export async function scanAgentAdapters(
     agents,
     legacy: {
       threadNames,
-      cwdOptions: [...new Set([...cwdOptions, ...workbuddyCwdOptions])],
+      cwdOptions: [...new Set([...cwdOptions, ...workbuddyCwdOptions, ...antigravityCwdOptions])],
       copilotSessions: copilotSessions.map((s) => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
       copilotBins: [...new Set(copilotBins)],
       marvisAppIds: [...new Set(marvisAppIds)]
     },
     threadNames,
-    cwdOptions: [...new Set([...cwdOptions, ...workbuddyCwdOptions])],
+    cwdOptions: [...new Set([...cwdOptions, ...workbuddyCwdOptions, ...antigravityCwdOptions])],
     copilotSessions: copilotSessions.map((s) => ({ name: s.name, cwd: s.cwd, userNamed: s.userNamed })),
     copilotBins: [...new Set(copilotBins)],
     marvisAppIds: [...new Set(marvisAppIds)]

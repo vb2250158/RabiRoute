@@ -6,6 +6,10 @@
 
 # RabiRoute 架构说明
 
+远端 Agent 归 Agent 执行端，不再作为消息端添加；通过[远端接入](lan-rabi-agent-bootstrap.md)选择实例与 Agent。
+
+设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
+
 > 状态：当前架构说明。已按 Codex Desktop owner、消息端成熟度和现有 Outbox 边界校准。
 
 RabiRoute 的定位是 **多入口消息网关 + 消息分诊台 + 策略调度层**。

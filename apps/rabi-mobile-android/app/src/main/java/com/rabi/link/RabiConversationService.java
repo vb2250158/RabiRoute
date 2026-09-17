@@ -51,6 +51,7 @@ public final class RabiConversationService extends Service {
         RabiConversationService current = currentInstance;
         if (current != null) pauseRecording(current);
     }
+    public static final String ACTION_ASR = "com.rabi.link.recording.ASR";
     public static final String ACTION_RECORD = "com.rabi.link.recording.START";
     public static final String ACTION_PAUSE_RECORD = "com.rabi.link.recording.PAUSE";
     public static final String ACTION_HEALTH = "com.rabi.link.recording.HEALTH";
@@ -104,6 +105,10 @@ public final class RabiConversationService extends Service {
     }
     private static long recordingStartPendingUntil;
     /** Persisted intent is not evidence of a live microphone owner after an app update or process death. */
+    public static boolean evictArchivedAudio(java.io.File file) throws Exception {
+        RabiConversationService current = currentInstance;
+        return current != null && current.backend != null && current.backend.evictArchivedAudio(file);
+    }
     public static boolean recordingOwnerAvailable() {
         return (currentInstance != null && !currentInstance.shutdownComplete)
                 || android.os.SystemClock.elapsedRealtime() < recordingStartPendingUntil;
@@ -275,6 +280,7 @@ public final class RabiConversationService extends Service {
     public void onCreate() {
         currentInstance = this;
         super.onCreate();
+        com.rabi.link.recording.RecordingResourceCache.start(this);
         createChannel();
         chatStore = new RabiChatStore(this);
         glassStatusPublisher = new com.rabi.link.modules.rokid.RabiGlassStatusPublisher(this, () -> {
@@ -425,6 +431,7 @@ public final class RabiConversationService extends Service {
         if (target != null) target.onNetworkAvailable();
         if (healthController != null) healthController.syncNow();
         if (glassStatusPublisher != null) glassStatusPublisher.onNetworkAvailable();
+        com.rabi.link.recording.RecordingResourceCache.kick();
         drainVideoAudio();
     }
 
@@ -488,12 +495,14 @@ public final class RabiConversationService extends Service {
                             videoAudio = new com.rabi.link.modules.rokid.VideoAudioDerivation(this, () -> {
                                 if (videoAudio != null && !shutdownComplete) {
                                     updateRuntime("videoProcessing", videoAudio.getStatus());
-                                    drainVideoAudio();
+                                    com.rabi.link.recording.RecordingResourceCache.kick();
+        drainVideoAudio();
                                 }
                             });
                             ensureHealthController();
                             videoAudio.resume();
-                            drainVideoAudio();
+                            com.rabi.link.recording.RecordingResourceCache.kick();
+        drainVideoAudio();
                             registerNetworkEvents();
                             while (!pendingStarts.isEmpty() && !shutdownComplete) pendingStarts.removeFirst().run();
                         });
@@ -520,6 +529,13 @@ public final class RabiConversationService extends Service {
             if (!initialized) { shutdown(true); return START_NOT_STICKY; }
             pauseRecordingInternal(null);
             return START_NOT_STICKY;
+        }
+        if (ACTION_ASR.equals(action)) {
+            promote("正在处理录音转录", false);
+            configureBackend();
+            backend.start();
+            if (AllDayRecordingSettings.load(this).running) applyRecording();
+            return START_STICKY;
         }
         if (ACTION_RECORD.equals(action)) {
             applyRecording();
@@ -890,7 +906,8 @@ public final class RabiConversationService extends Service {
             if (com.rabi.link.recording.CaptureCompletionPolicy.mayRestart(after != null,
                     AllDayRecordingSettings.load(this).running, captureSaveFailed, shutdownComplete)) after.run();
             else {
-                drainVideoAudio();
+                com.rabi.link.recording.RecordingResourceCache.kick();
+        drainVideoAudio();
                 if (healthController != null) healthController.syncNow();
             }
         }
@@ -899,7 +916,7 @@ public final class RabiConversationService extends Service {
     private void pauseAllCaptureModes() {
         if (phoneAudioCapture != null) phoneAudioCapture.pause();
         stopGlassesBackend();
-        if (backend != null) backend.pauseAudioStream();
+        if (backend != null) backend.pauseCaptureTransport();
         setInputMode(RabiConversationSettings.InputMode.PAUSED);
         com.rabi.link.recording.CaptureOwnership.release("conversation");
     }

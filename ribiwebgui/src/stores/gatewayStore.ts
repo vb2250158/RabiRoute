@@ -19,11 +19,10 @@ import {
   setGatewayAdapters
 } from "../utils/gatewayHelpers";
 import { routeKeyFromWebguiHash } from "../routeScopedNavigation";
-import {
-  agentAdapterValues,
-  resolvePrimaryAgentAdapter
-} from "@shared/gatewayConfigModel";
+import { agentAdapterValues } from "@shared/gatewayConfigModel";
 import { cloneGatewayValue, mergeGatewayDraft, sameGatewayValue } from "../gatewayDraft";
+import { localAgentTargetKey } from "@shared/routeAgentTargets";
+import { applyRouteAgentDraft } from "../routeAgentTargetEditor";
 import {
   boundedRouteCatalogMutationFetch,
   committedRouteCatalogRevision,
@@ -206,10 +205,7 @@ export const useGatewayStore = defineStore("gateway", () => {
         .map(normalizeAgentAdapterType)
         .filter((item): item is AgentAdapterType => Boolean(item));
       gateway.agentAdapters = [...new Set(agentAdapters)];
-      gateway.primaryAgentAdapter = resolvePrimaryAgentAdapter(
-        gateway.agentAdapters,
-        gateway.primaryAgentAdapter
-      );
+      applyRouteAgentDraft(gateway);
       if (Array.isArray(gateway.notificationRules)) {
         gateway.notificationRules = gateway.notificationRules.map((rule, index) => normalizeRule(rule, index));
       }
@@ -582,11 +578,11 @@ export const useGatewayStore = defineStore("gateway", () => {
     };
   }
 
-  async function testAgentDelivery(id: string, agentAdapterType: AgentAdapterType): Promise<AgentDeliveryTestResult> {
+  async function testAgentDelivery(id: string, agentAdapterType: AgentAdapterType, agentTargetId = localAgentTargetKey(agentAdapterType)): Promise<AgentDeliveryTestResult> {
     const response = await fetch(`${apiBase}/gateways/${encodeURIComponent(id)}/agent-delivery-test`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agentAdapterType })
+      body: JSON.stringify({ agentAdapterType, agentTargetId })
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.code !== 0 || body.data?.status !== "delivered") {
@@ -905,6 +901,9 @@ export const useGatewayStore = defineStore("gateway", () => {
     workbuddySessionName?: string;
     workbuddyCwd?: string;
     workbuddyEndpoint?: string;
+    antigravityConversationId?: string;
+    antigravityConversationName?: string;
+    antigravityCwd?: string;
     gatewayPort: number;
     napcatHttpUrl: string;
     napcatWebuiUrl?: string;
@@ -943,10 +942,8 @@ export const useGatewayStore = defineStore("gateway", () => {
     gateway.agentModel = values.agentModel?.trim() || "";
     gateway.codexCwd = values.codexCwd;
     gateway.agentAdapters = values.agentAdapters?.length ? values.agentAdapters : gateway.agentAdapters;
-    gateway.primaryAgentAdapter = resolvePrimaryAgentAdapter(
-      gateway.agentAdapters,
-      values.primaryAgentAdapter ?? gateway.primaryAgentAdapter
-    );
+    if (values.primaryAgentAdapter) gateway.primaryAgentTarget = localAgentTargetKey(values.primaryAgentAdapter);
+    applyRouteAgentDraft(gateway);
     if (gateway.agentAdapters?.includes("codex")) {
       gateway.codexThreadId = values.codexThreadId;
       gateway.codexThreadName = values.codexThreadName;
@@ -977,6 +974,11 @@ export const useGatewayStore = defineStore("gateway", () => {
       gateway.workbuddySessionName = values.workbuddySessionName || gateway.workbuddySessionName;
       gateway.workbuddyCwd = values.workbuddyCwd || values.codexCwd;
       gateway.workbuddyEndpoint = values.workbuddyEndpoint || gateway.workbuddyEndpoint;
+    }
+    if (gateway.agentAdapters?.includes("antigravity")) {
+      gateway.antigravityConversationId = values.antigravityConversationId || gateway.antigravityConversationId;
+      gateway.antigravityConversationName = values.antigravityConversationName || gateway.antigravityConversationName;
+      gateway.antigravityCwd = values.antigravityCwd || values.codexCwd;
     }
     gateway.gatewayPort = values.gatewayPort;
     gateway.napcatHttpUrl = values.napcatHttpUrl;

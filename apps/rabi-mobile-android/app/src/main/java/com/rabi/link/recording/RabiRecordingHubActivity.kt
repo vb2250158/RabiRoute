@@ -80,8 +80,9 @@ class RabiRecordingHubActivity : Activity() {
     private fun render() {
         reviewPanel?.close(); reviewPanel = null; status = null; recordingToggle = null
         val frame = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(RabiMobileUi.background) }
-        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(18),dp(10),dp(12),dp(8)) }
-        header.addView(label(when(page) { "devices" -> "记录设备"; else -> "记录" },24f),LinearLayout.LayoutParams(0,-2,1f))
+        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL; setPadding(dp(16),dp(2),dp(8),dp(2)) }
+        if(page == "devices") header.addView(label("记录设备",20f),LinearLayout.LayoutParams(0,-2,1f))
+        else header.addView(android.view.View(this),LinearLayout.LayoutParams(0,0,1f))
         if(page == "records") {
             recordingToggle = Switch(this).apply {
                 text = if(settings().running) "记录中" else "开始记录"; textSize = 14f
@@ -94,14 +95,46 @@ class RabiRecordingHubActivity : Activity() {
                     }
                 }
             }.also { header.addView(it) }
-            header.addView(RabiMobileUi.compactAction(this,"☰") { page = "devices"; render() }.apply { contentDescription = "记录设备" },LinearLayout.LayoutParams(dp(48),dp(48)))
+            header.addView(RabiMobileUi.compactAction(this,"☰") { page = "devices"; render() }.apply { contentDescription = "记录设备"; setBackgroundColor(android.graphics.Color.TRANSPARENT); stateListAnimator = null },LinearLayout.LayoutParams(dp(48),dp(48)))
         }
-        if(page == "devices") header.addView(button("返回记录") { page = "records"; render() })
-        frame.addView(header)
+        val deviceToolbar = LinearLayout(this).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(16),0,dp(16),dp(12))
+        }
+        if(page == "devices") {
+            header.addView(android.widget.ImageButton(this).apply {
+                setImageResource(com.rabi.link.R.drawable.ic_recording_close)
+                imageTintList = android.content.res.ColorStateList.valueOf(RabiMobileUi.primary)
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                setPadding(dp(12),dp(12),dp(12),dp(12))
+                contentDescription = "关闭设备页，返回记录"
+                setOnClickListener { page = "records"; render() }
+            },LinearLayout.LayoutParams(dp(48),dp(48)))
+            deviceToolbar.addView(button("⚙  记录设置") { showEventSplitSettings() }.apply { textSize = 14f },LinearLayout.LayoutParams(0,dp(48),1f).apply { marginEnd = dp(8) })
+            deviceToolbar.addView(button("＋  添加设备") {
+                AlertDialog.Builder(this).setTitle("添加设备").setItems(arrayOf("眼镜","手表 / 手环")) { _, index ->
+                    when(index) {
+                        0 -> if(settings().running) toast("请先关闭记录开关，再连接眼镜") else startActivity(Intent(this,RokidProbeActivity::class.java))
+                        1 -> startActivity(Intent(this,WearableHealthSettingsActivity::class.java))
+                    }
+                }.show()
+            }.apply { textSize = 13f; contentDescription = "添加设备" },LinearLayout.LayoutParams(0,dp(48),1f).apply { marginEnd = dp(8) })
+            deviceToolbar.addView(button("RabiLink") {
+                startActivity(Intent(this,MainActivity::class.java).putExtra("open_settings",true).putExtra("relay_settings",true))
+            }.apply { textSize = 13f; contentDescription = "配置 RabiLink" },LinearLayout.LayoutParams(0,dp(48),1f).apply { marginEnd = dp(8) })
+            deviceToolbar.addView(button("ASR 设置") { AsrSettingsDialog.show(this) }.apply { textSize = 13f },LinearLayout.LayoutParams(0,dp(48),1f))
+        }
+        if(page == "devices") frame.addView(header)
+        if(page == "devices") {
+            frame.addView(deviceToolbar)
+            frame.addView(button("存储管理") { RecordingStorageDialog.show(this) },LinearLayout.LayoutParams(-1,dp(48)).apply {
+                marginStart = dp(16); marginEnd = dp(16); bottomMargin = dp(12)
+            })
+        }
         body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), dp(12)) }
         if(page == "records") {
-            status = label("",12f).apply { setPadding(dp(18),0,dp(18),dp(6)); setTextColor(RabiMobileUi.muted); maxLines = 2 }.also { frame.addView(it) }
-            reviewPanel = RecordingReviewPanel(this, ::share).also { frame.addView(it.view, LinearLayout.LayoutParams(-1,0,1f)) }
+            header.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            reviewPanel = RecordingReviewPanel(this, ::share).also { it.attachHeader(header); frame.addView(it.view, LinearLayout.LayoutParams(-1,0,1f)) }
         } else {
             frame.addView(ScrollView(this).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
             renderDevices()
@@ -115,6 +148,52 @@ class RabiRecordingHubActivity : Activity() {
     private fun serviceAction(action: () -> Unit) {
         runCatching(action).onFailure { toast("操作未完成：${it.message ?: "系统未允许启动服务"}") }
         refreshRuntime()
+    }
+    private var computerRequestPending = false
+    private fun chooseRelayComputer() {
+        val relay = RabiLinkRelaySettings.load(this)
+        if(!relay.configured) {
+            toast("请先通过工具栏配置 RabiLink")
+            return
+        }
+        computerRequest("正在读取电脑列表…") {
+            val state = com.rabiroute.sdk.RabiRouteSdk().getMobileState(relay.baseUrl,relay.token)
+            main.post {
+                if(!active || isFinishing || isDestroyed) return@post
+                if(state.workers.isEmpty()) { toast("RabiLink 上暂无电脑"); return@post }
+                AlertDialog.Builder(this).setTitle("切换电脑")
+                    .setItems(state.workers.map { "${it.name} · ${if(it.online) "在线" else "离线"}${if(it.id == state.selectedWorker?.id) " · 当前" else ""}" }.toTypedArray()) { _, index ->
+                        val pc = state.workers[index]
+                        computerRequest("正在切换电脑…") {
+                            val current = RabiLinkRelaySettings.load(this)
+                            check(current.baseUrl == relay.baseUrl && current.token == relay.token)
+                            val confirmed = com.rabiroute.sdk.RabiRouteSdk().selectMobileRabiPc(relay.baseUrl,relay.token,pc.id)
+                            check(confirmed.selectedWorker?.id == pc.id)
+                            TargetWorkerIdentity.save(this,relay.baseUrl,relay.token,pc.id)
+                            RabiLinkRelaySettings.rememberComputer(this,pc.name,pc.id,relay.baseUrl,relay.token)
+                            main.post {
+                                if(!isFinishing && !isDestroyed) {
+                                    RabiConversationService.start(this)
+                                    if(page == "devices") render()
+                                    toast("已切换到 ${pc.name}")
+                                }
+                            }
+                        }
+                    }.setNegativeButton("取消",null).show()
+            }
+        }
+    }
+    private fun computerRequest(message: String, operation: () -> Unit) {
+        if(computerRequestPending) return
+        computerRequestPending = true
+        toast(message)
+        Thread {
+            val result = runCatching(operation)
+            main.post {
+                computerRequestPending = false
+                if(!isFinishing && !isDestroyed && result.isFailure) toast("RabiLink 请求失败，请检查连接后重试")
+            }
+        }.start()
     }
     private fun transitionPending(): Boolean = runtime().getString("allDayStatus", "").orEmpty().let { it.contains("正在停止") || it.contains("正在保存") }
     private fun startRecording() {
@@ -227,32 +306,39 @@ class RabiRecordingHubActivity : Activity() {
             card("watch","手表 / 手环",if(healthAt > 0) "最近同步 ${date(healthAt)}" else "尚未收到健康数据") { startActivity(Intent(this,WearableHealthSettingsActivity::class.java)) }
 
         )
-        RabiLinkRelaySettings.computers(this).forEach { computer ->
-            cards.add(card("computer",computer.name,if(RabiLinkRelaySettings.isActive(this,computer)) "当前使用 · 点击管理" else "已添加 · 点击连接") {
-                startActivity(Intent(this,MainActivity::class.java).putExtra("open_settings",true).putExtra("computer_id",computer.id))
-            })
-        }
-        cards.add(card("computer","添加电脑","连接另一台 Rabi PC") {
-            startActivity(Intent(this,MainActivity::class.java).putExtra("open_settings",true).putExtra("add_computer",true))
-        })
+        val selectedComputer = RabiLinkRelaySettings.computers(this).firstOrNull { RabiLinkRelaySettings.isActive(this,it) }
+        cards.add(card("computer","电脑",selectedComputer?.name?.let { "$it · 点击切换" } ?: "点击选择 RabiLink 电脑") { chooseRelayComputer() })
         cards.chunked(2).forEach { pair ->
             body.addView(LinearLayout(this).apply {
                 pair.forEachIndexed { index, tile -> addView(tile,LinearLayout.LayoutParams(0,dp(158),1f).apply { if(index == 0) marginEnd = dp(10) }) }
                 if(pair.size == 1) addView(View(this@RabiRecordingHubActivity),LinearLayout.LayoutParams(0,dp(158),1f))
             },LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = dp(10) })
         }
-        body.addView(button("记录设置") { showEventSplitSettings() })
+    }
+    private fun helpIcon(action: () -> Unit) = ImageButton(this).apply {
+        setImageResource(R.drawable.ic_recording_help)
+        imageTintList = android.content.res.ColorStateList.valueOf(RabiMobileUi.muted)
+        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        setPadding(dp(14),dp(14),dp(14),dp(14))
+        setOnClickListener { action() }
     }
     private fun showEventSplitSettings() {
         val policy = EventSplitSettings.load(this)
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20),dp(8),dp(20),dp(8)) }
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20),dp(4),dp(20),dp(8)); setBackgroundColor(RabiMobileUi.surface) }
         fun slider(title: String, minimum: Int, maximum: Int, step: Int, initial: Int, unit: String, hint: String, fractional: Boolean = false): SeekBar {
             val heading = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-            heading.addView(label(title,16f),LinearLayout.LayoutParams(0,-2,1f))
-            val current = label("",16f).apply { setTextColor(RabiMobileUi.secondary) }
+            heading.addView(label(title,14f),LinearLayout.LayoutParams(0,-2,1f))
+            val current = label("",14f).apply { setTextColor(RabiMobileUi.secondary) }
             heading.addView(current)
+            val range = if(fractional) "0.001–0.300" else "$minimum–$maximum $unit"
+            val explanation = label("$hint。范围 $range。保存后分段参数从下一段生效。",12f).apply {
+                setTextColor(RabiMobileUi.muted); visibility = View.GONE
+            }
+            heading.addView(helpIcon {
+                explanation.visibility = if(explanation.visibility == View.GONE) View.VISIBLE else View.GONE
+            }.apply { contentDescription = "${title}说明" },LinearLayout.LayoutParams(dp(48),dp(48)))
             panel.addView(heading)
-            panel.addView(label(hint,12f).apply { setTextColor(RabiMobileUi.muted) })
+            panel.addView(explanation)
             val track = SeekBar(this).apply {
                 max = (maximum-minimum)/step
                 progress = (initial-minimum)/step
@@ -271,27 +357,29 @@ class RabiRecordingHubActivity : Activity() {
                 })
             }
             panel.addView(track,LinearLayout.LayoutParams(-1,dp(48)))
-            val bounds = LinearLayout(this)
-            bounds.addView(label(if(fractional) "0.001" else "$minimum $unit",12f).apply { setTextColor(RabiMobileUi.muted) },LinearLayout.LayoutParams(0,-2,1f))
-            bounds.addView(label(if(fractional) "0.300" else "$maximum $unit",12f).apply { setTextColor(RabiMobileUi.muted) })
-            panel.addView(bounds)
             return track
         }
         val threshold = slider("声音阈值",1,300,1,Math.round(policy.signalThreshold*1000).toInt(),"","越低越容易判为有效声音；参考线同步显示",true)
         val silence = slider("静音收尾",200,3000,50,policy.silenceMs,"毫秒","连续静音多久后拆分事件")
         val maximum = slider("最长语音",3,120,1,policy.maxMs/1000,"秒","达到上限时自动拆分，录音继续")
-        panel.addView(label("从下一段生效，已有事件保持不变。",13f))
         val thresholdLine = Switch(this).apply {
             text = "显示转写参考线"
             isChecked = EventSplitSettings.showTranscribeLine(this@RabiRecordingHubActivity)
-            minHeight = dp(48)
+            minHeight = dp(48); textSize = 14f; setTextColor(RabiMobileUi.text)
+            thumbTintList = android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(RabiMobileUi.secondary,RabiMobileUi.muted))
         }
-        panel.addView(thresholdLine,LinearLayout.LayoutParams(-1,-2))
-        panel.addView(label("实时声波显示声音阈值，达到时柱条变绿。仅辅助判断声音与分段，不表示已完成转写。",12f))
+        val lineHelp = label("参考线标出当前声音阈值；达到时音柱变绿，不表示已完成转写。隐藏不影响录音与分段。",12f).apply { visibility = View.GONE; setTextColor(RabiMobileUi.muted) }
+        panel.addView(LinearLayout(this).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(thresholdLine,LinearLayout.LayoutParams(0,-2,1f))
+            addView(helpIcon { lineHelp.visibility = if(lineHelp.visibility == View.GONE) View.VISIBLE else View.GONE }.apply { contentDescription = "参考线说明" },LinearLayout.LayoutParams(dp(48),dp(48)))
+        })
+        panel.addView(lineHelp)
         val dialog = AlertDialog.Builder(this).setTitle("记录设置").setView(ScrollView(this).apply { addView(panel) })
             .setPositiveButton("保存",null).setNegativeButton("取消",null)
             .setNeutralButton("恢复默认",null).create()
         dialog.setOnShowListener {
+            listOf(AlertDialog.BUTTON_POSITIVE,AlertDialog.BUTTON_NEGATIVE,AlertDialog.BUTTON_NEUTRAL).forEach { dialog.getButton(it).setTextColor(RabiMobileUi.secondary) }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { threshold.progress = 14; silence.progress = 6; maximum.progress = 57; thresholdLine.isChecked = true }
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 EventSplitSettings.save(this,200+silence.progress*50,(3+maximum.progress)*1000,threshold.progress+1)

@@ -83,6 +83,7 @@ final class RabiDurableAudioSpool {
         final String uploadState;
         final long serverSequence;
         final long acknowledgedAt;
+        final String eventId;
 
         Segment(JSONObject value, File pcmFile, File metadataFile) {
             sequence = value.optLong("sequence", 0L);
@@ -100,6 +101,7 @@ final class RabiDurableAudioSpool {
             uploadState = value.optString("uploadState", "sealed");
             serverSequence = value.optLong("serverSequence", 0L);
             acknowledgedAt = value.optLong("acknowledgedAt", 0L);
+            eventId = value.optString("eventId", "");
         }
     }
 
@@ -184,6 +186,11 @@ final class RabiDurableAudioSpool {
     private long ackJournalMaxSourceSequence;
     private final List<File> recoveredCleanupTombstones = new ArrayList<>();
     private final TreeSet<Long> pendingSequences = new TreeSet<>();
+    private final TreeSet<Long> transcriptionSequences = new TreeSet<>();
+    private final TreeSet<Long> localSequences = new TreeSet<>();
+    private final TreeSet<Long> unscopedSequences = new TreeSet<>();
+    private boolean allDayOnly;
+    private long lastJournalPruneAt;
     // Rebuilt during recovery and updated by the same owner as pendingSequences.
     // Health and fsync must never reread the entire retained queue under the writer lock.
     private final java.util.Map<Long, Long> pendingByteIndex = new java.util.HashMap<>();
@@ -234,6 +241,11 @@ final class RabiDurableAudioSpool {
         ensureDirectory(ackJournalDirectory);
         ensureDirectory(cleanupTombstoneDirectory);
         recover();
+        // Recovered events have no live writer. Seal their ASR boundary after recovering partial PCM.
+        for (long sequence : new ArrayList<>(pendingSequences)) {
+            Segment item = readSegment(metadataForSequence(sequence));
+            if (item != null && "transcribe".equals(item.processingPolicy) && !item.eventId.isEmpty()) completeEvent(item.eventId);
+        }
     }
 
     synchronized AppendResult append(byte[] pcm, String source, String routeProfileId) {
@@ -261,6 +273,10 @@ final class RabiDurableAudioSpool {
         String normalizedSource = clean(source, "phone");
         String normalizedRoute = clean(routeProfileId, "");
         try {
+            if (!activeEventId.isEmpty() && (!activeEventId.equals(eventId) || !activeCaptureId.equals(captureId))) {
+                sealActive("event_boundary");
+                completeEvent(activeEventId);
+            }
             if (activeOutput != null && (!activeSource.equals(normalizedSource) || !activeRoute.equals(normalizedRoute)
                     || !activeCaptureId.equals(captureId) || !activeEventId.equals(eventId) || !activeProcessingPolicy.equals(processingPolicy))) {
                 sealActive("state_boundary");
@@ -319,7 +335,84 @@ final class RabiDurableAudioSpool {
         cleanupAcknowledged(false);
     }
 
-    synchronized void sealCapture() throws Exception { sealActive("capture_end"); }
+    synchronized void sealCapture() throws Exception { sealActive("capture_end"); completeEvent(activeEventId); }
+
+    synchronized void completeEvent(String eventId) throws Exception {
+        if (eventId == null || eventId.isEmpty()) return;
+        if (!eventId.matches("[A-Za-z0-9_-]{1,120}")) throw new IllegalArgumentException("invalid event id");
+        writeJson(new File(root, "event-" + eventId + ".json"), new JSONObject().put("complete", true));
+    }
+
+    /** A complete VAD event may span several storage shards. Never transcribe a partial event. */
+    synchronized List<Segment> transcriptionEvent(Segment head) throws Exception {
+        List<Segment> result = new ArrayList<>();
+        if (head.eventId.isEmpty() || !new File(root, "event-" + head.eventId + ".json").isFile()) return result;
+        long bytes = 0;
+        for (long sequence : new ArrayList<>(pendingSequences)) {
+            Segment item = readSegment(metadataForSequence(sequence));
+            if (item == null) continue;
+            if (!item.eventId.equals(head.eventId) || !item.captureId.equals(head.captureId)) {
+                if (!result.isEmpty()) break;
+                continue;
+            }
+            bytes += item.bytes;
+            if (bytes > 4 * 1024 * 1024) throw new IllegalStateException("ASR event exceeds size bound");
+            result.add(item);
+        }
+        result.sort(Comparator.comparingLong(item -> item.sequence));
+        return result;
+    }
+
+    /** Explicit ASR enrollment of retained local events; never reassign Agent or already-bound ASR work. */
+    synchronized boolean enrollLocalEventsForAsr(long before, String identity, String activeCapture) throws Exception {
+        if (!identity.startsWith("asr:")) throw new IllegalArgumentException("ASR account required");
+        boolean complete = true;
+        int enrolled = 0;
+        String lastEvent = "";
+        String legacyCapture = "", legacyEvent = "";
+        long legacyBytes = 0;
+        for (long sequence : new ArrayList<>(localSequences)) {
+            File file = metadataForSequence(sequence);
+            Segment item = readSegment(file);
+            if (item == null || !"local_only".equals(item.processingPolicy)) continue;
+            JSONObject value = readJson(file);
+            if (value.optLong("startedAt") > before) continue;
+            if (item.captureId.equals(activeCapture)) { complete = false; continue; }
+            if (enrolled >= 32 && (item.eventId.isEmpty() || !item.eventId.equals(lastEvent))) return false; // Bound disk work while capture remains active.
+            File descriptorFile = new File(root, "capture-" + item.captureId + ".json");
+            JSONObject descriptor = descriptorFile.exists() ? readJson(descriptorFile) : new JSONObject().put("captureId", item.captureId);
+            String prior = descriptor.optString("endpointIdentity");
+            if (prior.startsWith("asr:") && !prior.equals(identity)) continue;
+            descriptor.put("endpointIdentity", identity);
+            writeJson(descriptorFile, descriptor);
+            String eventId = item.eventId;
+            if (eventId.isEmpty()) {
+                if (!legacyCapture.equals(item.captureId) || legacyBytes + item.bytes > 1_920_000L) {
+                    legacyCapture = item.captureId; legacyEvent = "backfill-" + item.id; legacyBytes = 0;
+                }
+                eventId = legacyEvent; legacyBytes += item.bytes;
+                value.put("eventId", eventId);
+            }
+            completeEvent(eventId);
+            value.put("processingPolicy", "transcribe");
+            writeJson(file, value);
+            transcriptionSequences.add(sequence);
+            localSequences.remove(sequence);
+            lastEvent = eventId;
+            enrolled++;
+        }
+        return complete;
+    }
+
+    synchronized JSONObject eventReceipt(String eventId) throws Exception {
+        File file = new File(root, "asr-" + eventId + ".json");
+        return file.isFile() ? readJson(file) : null;
+    }
+
+    synchronized void saveEventReceipt(String eventId, JSONObject receipt) throws Exception {
+        if (!eventId.matches("[A-Za-z0-9_-]{1,120}")) throw new IllegalArgumentException("invalid event id");
+        writeJson(new File(root, "asr-" + eventId + ".json"), receipt);
+    }
 
     /** Single-record resumable import. The descriptor gates uploads until the complete PCM is durable. */
     synchronized boolean importCapture(String source, String route, String processingPolicy, String captureId, File pcm) throws Exception {
@@ -373,6 +466,8 @@ final class RabiDurableAudioSpool {
     }
 
     private String currentEndpointIdentity = "";
+    private String currentAsrIdentity = "";
+    synchronized void setAsrEndpointIdentity(String identity) { currentAsrIdentity = identity == null ? "" : identity; }
     synchronized void setEndpointIdentity(String identity) { currentEndpointIdentity = identity == null ? "" : identity; }
     synchronized void bindCaptureEndpoint(String captureId, String identity) throws Exception {
         if (captureId == null || !captureId.matches("[A-Za-z0-9_-]{1,100}")) throw new IllegalArgumentException("invalid capture id");
@@ -398,8 +493,10 @@ final class RabiDurableAudioSpool {
     private boolean endpointMatches(String captureId) throws Exception {
         if (captureId.isEmpty()) return true; // Preserve pre-unification behavior for legacy queues.
         File descriptor = new File(root, "capture-" + captureId + ".json");
-        return descriptor.exists() && !currentEndpointIdentity.isEmpty()
-                && currentEndpointIdentity.equals(readJson(descriptor).optString("endpointIdentity"));
+        if (!descriptor.exists()) return false;
+        String saved = readJson(descriptor).optString("endpointIdentity");
+        String current = saved.startsWith("asr:") ? currentAsrIdentity : currentEndpointIdentity;
+        return !current.isEmpty() && current.equals(saved);
     }
 
     private boolean importComplete(String captureId) throws Exception {
@@ -448,8 +545,16 @@ final class RabiDurableAudioSpool {
         }
     }
 
-    synchronized Segment nextUpload() {
-        for (long sequence : new ArrayList<>(pendingSequences)) {
+    /** All-day recording never dispatches pre-recording, unscoped message audio. Originals remain on disk. */
+    synchronized void retireUnscopedUploads() {
+        allDayOnly = true;
+        for (long sequence : new ArrayList<>(unscopedSequences)) removePending(sequence);
+    }
+
+    synchronized Segment nextUpload() { return nextUpload(pendingSequences); }
+    synchronized Segment nextTranscriptionUpload() { return nextUpload(transcriptionSequences); }
+    private Segment nextUpload(TreeSet<Long> candidates) {
+        for (long sequence : new ArrayList<>(candidates)) {
             File metadata = metadataForSequence(sequence);
             try {
                 Segment segment = readSegment(metadata);
@@ -457,7 +562,7 @@ final class RabiDurableAudioSpool {
                 if (segment != null && !"acked".equals(segment.uploadState)) {
                     if (!importComplete(segment.captureId) || !endpointMatches(segment.captureId)) continue;
                     if ("local_only".equals(segment.processingPolicy)
-                            || (!segment.captureId.isEmpty() && segment.routeProfileId.isEmpty())) continue;
+                            || (!segment.captureId.isEmpty() && segment.routeProfileId.isEmpty() && !("transcribe".equals(segment.processingPolicy) && !segment.eventId.isEmpty()))) continue;
                     if (!"agent".equals(segment.processingPolicy) && !"transcribe".equals(segment.processingPolicy)) continue;
                     return segment;
                 }
@@ -584,9 +689,23 @@ final class RabiDurableAudioSpool {
         writeJson(segment.metadataFile, value);
     }
 
+    synchronized boolean evictArchived(File file) throws Exception {
+        if (!file.getCanonicalFile().getParentFile().equals(segmentsDirectory.getCanonicalFile())
+                || !com.rabi.link.recording.RecordingResourceCache.isArchived(file)) return false;
+        Segment item = readSegment(metadataForSequence(sequenceFromName(file.getName())));
+        if (item == null || !("acked".equals(item.uploadState) || "local_only".equals(item.processingPolicy))) return false;
+        if (!file.exists()) return true;
+        byte[] bytes = RabiReliableQueueFiles.read(file);
+        if (bytes.length != item.bytes || !sha256(bytes).equals(item.sha256)) return false;
+        if (!file.delete()) return false;
+        totalStoredBytes = Math.max(0L,totalStoredBytes-bytes.length);
+        appendAudit("media_archived_to_pc",new JSONObject().put("id",item.id).put("bytes",bytes.length));
+        persistState(); return true;
+    }
+
     synchronized byte[] readPcm(Segment segment) throws Exception {
         if (segment == null) return new byte[0];
-        byte[] data = RabiReliableQueueFiles.read(segment.pcmFile);
+        byte[] data = RabiReliableQueueFiles.read(com.rabi.link.recording.RecordingResourceCache.resolve(segment.pcmFile));
         if (data.length != segment.bytes || !sha256(data).equalsIgnoreCase(segment.sha256)) {
             boolean isolated = poisonSegment(segment, "checksum_mismatch");
             throw new PoisonedSegmentException("sealed audio shard checksum mismatch", isolated);
@@ -726,6 +845,9 @@ final class RabiDurableAudioSpool {
             }
         }
         pendingSequences.clear();
+        transcriptionSequences.clear();
+        localSequences.clear();
+        unscopedSequences.clear();
         pendingByteIndex.clear();
         indexedPendingBytes = 0L;
         acknowledgedSequences.clear();
@@ -749,7 +871,7 @@ final class RabiDurableAudioSpool {
                     } else {
                         accountAcknowledged(sequence, value.optLong("bytes", 0L));
                     }
-                } else addPending(sequence, value.optLong("bytes", 0L));
+                } else addPending(sequence, value.optLong("bytes", 0L), value);
             } catch (Throwable error) {
                 poisonSequence(sequenceFromName(metadata.getName()), metadata,
                         "metadata_" + error.getClass().getSimpleName(), "unknown", "", metadata.length());
@@ -888,10 +1010,12 @@ final class RabiDurableAudioSpool {
                 .put("serverSequence", 0L)
                 .put("attempts", 0);
         writeJson(metadataForSequence(sequence), value);
-        addPending(sequence, body.length);
+        addPending(sequence, body.length, value);
     }
 
     private void cleanupAcknowledged(boolean pressure) {
+        // All-day records retain their PCM after ASR; the retired transport cache has no live cleanup owner.
+        if (allDayOnly) { lastCleanupAt = clock.now(); return; }
         long now = clock.now();
         lastCleanupAt = now;
         for (long sequence : new ArrayList<>(acknowledgedSequences)) {
@@ -994,6 +1118,9 @@ final class RabiDurableAudioSpool {
     }
 
     private void recoverAckReceipts() throws Exception {
+        // Recovery holds the sole spool owner. Index once instead of scanning every file for each receipt.
+        java.util.Map<Long, File> recoveredPcm = new java.util.HashMap<>();
+        for (File file : pcmFiles()) recoveredPcm.putIfAbsent(sequenceFromName(file.getName()), file);
         for (File receiptFile : journalFiles()) {
             JSONObject receipt = readAckJournalRecord(receiptFile);
             long sequence = receipt.getLong("sourceSequence");
@@ -1016,8 +1143,10 @@ final class RabiDurableAudioSpool {
                         .put("sequence", sequence)
                         .put("serverSequence", acknowledgement.getLong("serverSequence")));
             }
-            File pcm = pcmForSequence(sequence);
-            if (!pcm.exists()) {
+            File pcm = recoveredPcm.get(sequence);
+            File archivedPcm = new File(segmentsDirectory, metadata.optString("pcmFileName", "missing"));
+            if (com.rabi.link.recording.RecordingResourceCache.isArchived(archivedPcm)) continue;
+            if (pcm == null || !pcm.exists()) {
                 File tombstone = cleanupTombstoneForSequence(sequence);
                 if (!tombstone.exists()) {
                     writeJson(tombstone, new JSONObject()
@@ -1029,7 +1158,7 @@ final class RabiDurableAudioSpool {
                             .put("source", acknowledgement.optString("source", "phone"))
                             .put("serverSequence", acknowledgement.getLong("serverSequence"))
                             .put("acknowledgedAt", acknowledgement.getLong("acknowledgedAt"))
-                            .put("pcmFileName", metadata.optString("pcmFileName", pcm.getName()))
+                            .put("pcmFileName", metadata.optString("pcmFileName", pcm == null ? "missing" : pcm.getName()))
                             .put("metadataFileName", metadataFile.getName())
                             .put("reason", "receipt_recovery")
                             .put("createdAt", clock.now()));
@@ -1123,6 +1252,10 @@ final class RabiDurableAudioSpool {
     }
 
     private void pruneAckJournal() throws Exception {
+        long now = clock.now();
+        if (lastJournalPruneAt > 0 && now >= lastJournalPruneAt && now - lastJournalPruneAt < 60_000L
+                && ackJournalRecords + 1 < ackJournalMaxRecords && ackJournalBytes + 65536L < ackJournalMaxBytes) return;
+        lastJournalPruneAt = now;
         long cutoff = clock.now() - ACK_JOURNAL_RETENTION_MS;
         for (File file : journalFiles()) {
             JSONObject record = readAckJournalRecord(file);
@@ -1165,7 +1298,7 @@ final class RabiDurableAudioSpool {
         File pcm = pcmFileName.isEmpty()
                 ? pcmForSequence(sequence)
                 : new File(segmentsDirectory, new File(pcmFileName).getName());
-        if (!pcm.exists()) {
+        if (!pcm.exists() && !com.rabi.link.recording.RecordingResourceCache.isArchived(pcm)) {
             if (!poisonSequence(sequence, metadata, "missing_pcm",
                     value.optString("source", "unknown"), value.optString("routeProfileId", ""),
                     Math.max(0L, value.optLong("bytes", 0L)))) {
@@ -1492,7 +1625,10 @@ final class RabiDurableAudioSpool {
         recomputeStoredBytes();
     }
 
-    private void addPending(long sequence, long bytes) {
+    private void addPending(long sequence, long bytes, JSONObject metadata) {
+        if (metadata.optString("captureId").isEmpty()) unscopedSequences.add(sequence);
+        if ("transcribe".equals(metadata.optString("processingPolicy")) && !metadata.optString("eventId").isEmpty()) transcriptionSequences.add(sequence);
+        if ("local_only".equals(metadata.optString("processingPolicy"))) localSequences.add(sequence);
         long value = Math.max(0L, bytes);
         Long previous = pendingByteIndex.put(sequence, value);
         indexedPendingBytes += value - (previous == null ? 0L : previous);
@@ -1501,6 +1637,9 @@ final class RabiDurableAudioSpool {
 
     private void removePending(long sequence) {
         pendingSequences.remove(sequence);
+        transcriptionSequences.remove(sequence);
+        localSequences.remove(sequence);
+        unscopedSequences.remove(sequence);
         Long previous = pendingByteIndex.remove(sequence);
         if (previous != null) indexedPendingBytes -= previous;
     }
@@ -1655,7 +1794,8 @@ final class RabiDurableAudioSpool {
     }
     private File metadataForSequence(long sequence) { return new File(segmentsDirectory, idFor(sequence) + ".json"); }
     private File pcmForSequence(long sequence) {
-        File[] matches = segmentsDirectory.listFiles((directory, name) -> name.startsWith(String.format(Locale.US, "%020d-", sequence)) && name.endsWith(".pcm"));
+        String prefix = String.format(Locale.US, "%020d-", sequence);
+        File[] matches = segmentsDirectory.listFiles((directory, name) -> name.startsWith(prefix) && name.endsWith(".pcm"));
         return matches == null || matches.length == 0 ? new File(segmentsDirectory, idFor(sequence) + ".missing.pcm") : matches[0];
     }
 

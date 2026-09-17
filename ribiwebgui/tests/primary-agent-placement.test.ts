@@ -17,7 +17,7 @@ test("primary Agent selector belongs to the Agent section before the Agent list"
 });
 
 test("Codex managed-task controls are rendered through capability gates", () => {
-  assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'messageProcessingAgent'\) && primaryAgentType === agent\.type/);
+  assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'messageProcessingAgent'\) && primaryLocalAgentType === agent\.type/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'memoryConsolidationAgent'\)/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'planAssistantSessions'\)/);
   assert.match(source, /supportsManagedTaskFeature\(agent\.type, 'hooks'\)/);

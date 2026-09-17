@@ -18,6 +18,11 @@ import {
   preparePlanAttachments,
   type PreparedPlanAttachment
 } from "./planAttachments.js";
+import {
+  isPlanAssistantAgentType,
+  normalizePlanBindingAgentType,
+  type PlanAssistantAgentType
+} from "./shared/agentAdapterCapabilities.js";
 import type { PlanAttachment } from "./shared/planAttachmentContract.js";
 import type { PlanImportanceLevel, PlanUrgencyLevel } from "./shared/planSortContract.js";
 import { resolveRuntimeLayout } from "./shared/runtimeLayout.js";
@@ -148,7 +153,7 @@ export type PlanTaskCompletionHook = {
 };
 
 export type PlanTaskBinding = {
-  agentType: "codex" | "dsh";
+  agentType: PlanAssistantAgentType;
   sessionId: string;
   sessionTitle?: string;
   /** Last model confirmed for this business task; not a permanent owner setting. */
@@ -160,7 +165,8 @@ export type PlanTaskBinding = {
 };
 
 export type PlanSecretaryBinding = {
-  agentType: "codex" | "dsh";
+  agentTargetId?: string;
+  agentType: PlanAssistantAgentType;
   sessionId: string;
   sessionTitle?: string;
   workspace: string;
@@ -1402,7 +1408,7 @@ function validatePlanTaskBindingInput(value: unknown): void {
   if (value == null) return;
   const raw = recordValue(value);
   if (Object.keys(raw).length === 0) throw new Error("Plan taskBinding must be an object with an Agent sessionId.");
-  if (raw.agentType != null && raw.agentType !== "codex" && raw.agentType !== "dsh") {
+  if (raw.agentType != null && !isPlanAssistantAgentType(raw.agentType)) {
     throw new Error(`Unsupported plan taskBinding agentType: ${String(raw.agentType)}`);
   }
   if (!String(raw.sessionId || "").trim()) throw new Error("Plan taskBinding.sessionId is required.");
@@ -1418,7 +1424,7 @@ function validatePlanSecretaryBindingInput(value: unknown): void {
   if (value == null) return;
   const raw = recordValue(value);
   if (Object.keys(raw).length === 0) throw new Error("Plan secretaryBinding must identify a configured secretary session.");
-  if (raw.agentType != null && raw.agentType !== "codex" && raw.agentType !== "dsh") {
+  if (raw.agentType != null && !isPlanAssistantAgentType(raw.agentType)) {
     throw new Error(`Unsupported plan secretaryBinding agentType: ${String(raw.agentType)}`);
   }
   if (!String(raw.sessionId || "").trim()) throw new Error("Plan secretaryBinding.sessionId is required.");
@@ -1433,11 +1439,12 @@ function normalizePlanSecretaryBinding(value: unknown): PlanSecretaryBinding | u
   const workspace = String(raw.workspace || "").trim();
   if (!sessionId || !workspace) return undefined;
   return {
-    agentType: raw.agentType === "dsh" ? "dsh" : "codex",
+    agentType: normalizePlanBindingAgentType(raw.agentType),
     sessionId,
     sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
     workspace,
     ...(typeof raw.baseUrl === "string" && raw.baseUrl.trim() ? { baseUrl: raw.baseUrl.trim() } : {}),
+    agentTargetId: typeof raw.agentTargetId === "string" ? raw.agentTargetId.trim() || undefined : undefined,
     assignedAt: typeof raw.assignedAt === "string" ? raw.assignedAt.trim() || undefined : undefined
   };
 }
@@ -1449,7 +1456,7 @@ function normalizePlanTaskBinding(value: unknown): PlanTaskBinding | undefined {
   if (!sessionId) return undefined;
   const hook = recordValue(raw.completionHook);
   return {
-    agentType: raw.agentType === "dsh" ? "dsh" : "codex",
+    agentType: normalizePlanBindingAgentType(raw.agentType),
     sessionId,
     sessionTitle: typeof raw.sessionTitle === "string" ? raw.sessionTitle.trim() || undefined : undefined,
     ...(typeof raw.modelSnapshot === "string" && raw.modelSnapshot.trim() ? { modelSnapshot: raw.modelSnapshot.trim() } : {}),

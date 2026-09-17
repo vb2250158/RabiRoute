@@ -61,13 +61,15 @@ export async function drainKnowledgePages(options: {
   shouldContinue: () => boolean;
   loadNextPage: () => Promise<void>;
   yieldToUi?: () => Promise<void>;
-}): Promise<void> {
+}): Promise<"completed" | "stalled" | "stopped"> {
   while (options.shouldContinue()) {
     const cursor = options.nextCursor();
-    if (!cursor) return;
+    if (!cursor) return "completed";
     await options.yieldToUi?.();
-    if (!options.shouldContinue()) return;
+    if (!options.shouldContinue()) return "stopped";
     await options.loadNextPage();
-    if (options.nextCursor() === cursor) return;
+    if (!options.shouldContinue()) return "stopped";
+    if (options.nextCursor() === cursor) return "stalled";
   }
+  return "stopped";
 }

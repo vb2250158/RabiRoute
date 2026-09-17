@@ -6,9 +6,11 @@
 
 > Status: experimental. Independent credentials, Manager grants, restricted APIs, resource reads, and upload-to-group-file delivery have passed local tests, a full build and deployment. Host/Manager health and runtime artifacts were verified for `0.3.4-4b5d30118b40`. Upload integration used real HTTP and simulated NapCat; this does not establish real two-computer, real-group or older-node migration acceptance. Subsequent discovery-guidance and update-mechanism audit fixes require separate verification of their final deployed version.
 
+Remote Agents connect as execution targets only: select an enrolled instance and Agent in the Agent section. The old message-endpoint menu, quick setup choice, and password-based device scanning panel are removed. The legacy `remoteAgent` message-endpoint key remains only for saved configuration compatibility; remove it after instance/Agent bindings migrate and old task receipts are archived. Do not use it for new connections.
+
 ## Three user steps
 
-1. Open **Remote Agent** (`#/lan-agents`) and select **Copy setup prompt**. One click issues and copies the complete setup instructions together with a single-use ticket, valid for 30 minutes after issuance and invalid immediately after one successful exchange. No manual WebGUI key is needed. The prompt uses the current Manager LAN address and pinned release public-key fingerprint. A loopback page selects a current LAN address. Enable LAN access first. Copy a new prompt after expiry or a Manager restart.
+1. Open **RabiLink → Remote Agent** (远端智能体 in Chinese) (`#/rabilink?tab=agents`; the old `#/lan-agents` redirects here) and select **Copy setup prompt**. One click issues and copies the complete setup instructions together with a single-use ticket, valid for 30 minutes after issuance and invalid immediately after one successful exchange. No manual WebGUI key is needed. The prompt uses the current Manager LAN address and pinned release public-key fingerprint. A loopback page selects a current LAN address. Enable LAN access first. Copy a new prompt after expiry or a Manager restart.
 2. Start Codex or DSH on the target computer and paste the prompt into the task that should receive messages. That Agent checks Node.js 22.13+, discovers its current task and workspace, downloads and verifies the worker, writes private configuration, registers login startup and starts the background connection. Full RabiRoute installation and manual task IDs are unnecessary.
 3. In the Route, open **Message adapters → Add AGENT**, choose **RemoteAgent(<IP address>)**, and save. With no nodes, the menu links to setup. The displayed IP is observed by Manager; the persisted identity is instanceId + agentId.
 
@@ -29,7 +31,7 @@ An old configuration without `nodeCredential` cannot reuse `lanLinkToken` as a n
 | Object | Owner | Behavior and acceptance |
 | --- | --- | --- |
 | Nodes, IP, connections and task states | Manager node registry | Both HTTP management and WebSocket connections require explicit authentication; offline delivery fails. |
-| Route binding | Route `agentInstanceBindings[provider]` | UI saves `instanceId + agentId`, not another credential. Gateway receives its endpoint and credential from the current Manager generation. |
+| Route binding | Route `agentAdapters`, `remoteAgentTargets`, and `primaryAgentTarget` | Local providers and remote targets are stored separately. Remote entries reference `instanceId + agentId` without copying credentials or task configuration. The primary selects a specific target, not just a Codex/DSH provider. Gateway receives its endpoint and credential from the current Manager generation. |
 | Task, model, tools and permissions | Existing remote Codex/DSH host | Each Agent retains its task binding. No fallback Runtime or host startup modification. The host remains independent when Manager stops. |
 | Background connection | Current-user Rabi Agent | Owns outbound connection, downloads, verification, login startup and updates. |
 | Message path | Route → Agent adapter → Manager registry → remote worker → bound task | Codex uses Desktop IPC; DSH uses local `session.prompt` with `mode=queue`. Each host has one execution path. |
@@ -64,7 +66,9 @@ Both transports use `instanceManagement.ts` for scans, tasks and Hook installati
 
 Each instance links to its bound route's shared complete Agent settings, including message processing, dedicated memory consolidation and plan assistants. Worker state is scoped by instanceId, agentId and primary task ID. Moving computers or rebinding the primary never reuses workers from the previous owner. Resolved or created assistant tasks register under their owning Agent; Manager followups dispatch by that ownership and fail on offline or ambiguous identities without local fallback.
 
-Installed Manager reads connector assets, the shared management runtime and Hook packages from its immutable release, while signing keys remain in private data. Reconnecting preserves instance identity, the Agent catalog and permitted workspaces. Disabled local task bindings remain visible and can be enabled again; a route assigned to a remote provider must first be switched back to local in route settings.
+Installed Manager reads connector assets, the shared management runtime and Hook packages from its immutable release, while signing keys remain in private data. Reconnecting preserves instance identity, the Agent catalog and permitted workspaces. Disabled local task bindings remain visible and can be enabled again. A Route can retain local Codex and multiple remote Codex targets, with independent cards, removal, and selection. Adding a remote target neither replaces the local card nor changes the primary. Removing the primary requires an explicit new selection; an offline remote target never falls back to local.
+
+Legacy `agentInstanceBindings[provider]` is migrated only at the configuration read boundary: local configuration fields are retained and remote bindings become independent targets. An existing remote primary continues to select the same instance and Agent. Saving removes the legacy field so deleted targets cannot reappear. Migration does not create sessions or change node grants; local cards without a bound session still require configuration.
 
 ## Calling APIs and skills from a remote task
 
@@ -102,7 +106,7 @@ node rabi-agent.mjs --api POST /api/agent/send --agent <agentId> --body-stdin
 
 `--upload-id` is a required stable UUID saved beforehand, never generated automatically. Upload uses `PUT /api/agent/uploads/<UUID>`, `application/octet-stream`, the same UUID as `Idempotency-Key`, `x-rabiroute-file-name` containing a URI-encoded basename, and `x-rabiroute-content-sha256` containing the content digest. GET on the same path returns `{code:0,data:{id,fileName,size,sha256,expiresAt}}`, with ISO expiry and no local path. Defaults are 2 GiB per file (2048 MiB, the hard maximum), 4 GiB total, at most 100 files, and a 24-hour TTL. HTTP uploads have a total concurrency limit of 4 across owners. After timeout, 503, a generation change or an uncertain receipt, rediscover and verify Manager, then GET the original UUID; never automatically retry or change IDs.
 
-Large uploads use binary streaming, streamed disk writes and incremental SHA-256 verification with a 30-minute deadline, not whole-file JSON or memory buffers. In Settings → Rabi identity, save `agentUploads.maxFileMiB` (integer `1..2048`, default `2048`), persisted in `data/Config.json` and effective after Manager restarts. Local administrators may also use the existing protected `PATCH /api/rabi/identity`; remote Agents cannot raise this setting.
+Large uploads use binary streaming, streamed disk writes and incremental SHA-256 verification with a 30-minute deadline, not whole-file JSON or memory buffers. In RabiLink → Configuration, save `agentUploads.maxFileMiB` (integer `1..2048`, default `2048`), persisted in `data/Config.json` and effective after Manager restarts. Local administrators may also use the existing protected `PATCH /api/rabi/identity`; remote Agents cannot raise this setting.
 
 A controlled 734 MiB (769654784-byte) file passed size/SHA-256 integration verification through the real client, loopback Manager, managed disk and simulated NapCat. Generation and sink reads used 64 KiB chunks, with test guards rejecting Buffer allocations/concatenations above 8 MiB. The large case requires `RABI_TEST_LARGE_UPLOAD=1` and automatically cleans temporary files. **Actual QQ-platform acceptance of this file size remains unverified**; check NapCat/QQ limits and group permissions. Legacy connectors require the new bootstrap (preserving their node credential), and hosts caching an old Hook must reload. Updating Manager alone does not add large-file support to an old client.
 
@@ -133,6 +137,18 @@ Management and node endpoints are distinct. Listing an endpoint here does not gr
 - `WS /api/lan-agent/connect`: `authenticate → authenticated → hello → connected → heartbeat`.
 
 The existing `lan-agent` connection and release API paths remain available for installed connectors to update. The unreleased `lanAgent` provider and `lanAgentNodeId` setting have been removed; routes use instance bindings and the user-facing feature is Remote Agent. Old Remote Agent v3 is a separate experimental protocol, not a delivery path or installation dependency of this adapter. Migrating it is outside this change.
+
+## Route targets and delivery-test contract
+
+`agentAdapters` stores local provider types; `remoteAgentTargets` stores `{ id, provider, instanceId, agentId }`. The remote key is `remote:<URI-encoded instanceId>:<URI-encoded agentId>`; a local key is `local:<provider>`. `primaryAgentTarget` selects the full target key, with an empty string indicating no selection. `primaryAgentAdapter` is only a derived provider and cannot distinguish computers. Remote workspace, session, and model settings remain owned by the instance.
+
+Existing managed Route saves persist these fields. PATCH/POST `/api/rabi/instances/:guid/routes/:routeId/agent-binding` also accepts `remoteAgentTargets` and `primaryAgentTarget`, retaining its existing administrator authorization, configuration-version, and idempotency contract. The legacy `agentAdapter` parameter explicitly selects a local target without removing other targets.
+
+`POST /gateways/:id/agent-delivery-test` performs **real delivery**, not a preview. Its body may specify `agentTargetId`; an accompanying `agentAdapterType` must match that target. A legacy provider-only request selects local; omitting both uses the saved primary. Successful responses include `data.agentTargetId` alongside the existing result. Missing, mismatched, or offline targets fail without substitution. After an uncertain result, inspect the original task before any retry. Administrator authorization and Route enablement requirements remain unchanged.
+
+Local `POST /api/agent/threads` operations may explicitly provide `agentTargetId: "local:<agentAdapter>"`. It must match `agentAdapter` and cannot accompany a remote `instanceBinding`. This disables remote-owner inference from a colliding session ID. Remote operations retain explicit instance bindings or instance paths. Legacy callers without the marker retain their existing resolution contract; authentication and task permissions remain unchanged.
+
+Secretary sessions and bindings persist `agentTargetId`, isolating identical session IDs on different computers. Legacy ownership is attributed only during legacy configuration migration; a record missing target identity in an already migrated configuration is not automatically assigned to a subsequently selected primary.
 
 ## Remaining device acceptance
 

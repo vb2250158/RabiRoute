@@ -16,6 +16,7 @@ void Check(bool condition, string message)
 
 await SourcePatchTests.RunAsync(Check);
 await ShortcutRecoveryTests.RunAsync(Check);
+EnvironmentBlockTests.Run(Check);
 
 Check(NativeChildProcess.QuoteWindowsArgument("plain") == "plain", "plain argument quoting");
 Check(NativeChildProcess.QuoteWindowsArgument("two words") == "\"two words\"", "space argument quoting");

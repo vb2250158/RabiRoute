@@ -494,6 +494,7 @@ test("Codex plan assistant sessions keep exact Desktop task bindings", () => {
   }));
 
   assert.deepEqual(normalized.codexPlanAssistantSessions, [{
+    agentTargetId: "local:codex",
     threadId: "019fa314-2c07-7523-896f-9bb6b638054b",
     threadName: "主任务 协助处理计划",
     workspace: "C:\\workspace\\project",

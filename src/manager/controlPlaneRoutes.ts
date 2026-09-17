@@ -1,3 +1,5 @@
+import { ResourceCache, resourceCacheHandler } from "./resourceCache.js";
+import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
 import { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
 import { PLAN_ACTIVATION_STATUSES } from "../planState.js";
 import { createPeerSpeechAdapter } from "../peerTunnel/speechAdapter.js";
@@ -27,7 +29,7 @@ import {
   type AgentDeliveryTestResult
 } from "../agentDeliveryTest.js";
 import { normalizeAgentAdapters, parseAgentAdapterType, type AgentAdapterType } from "../agentAdapters/types.js";
-import { agentAdapterManifest } from "../shared/agentAdapterCapabilities.js";
+import { agentAdapterManifest, isPlanAssistantAgentType, normalizePlanBindingAgentType } from "../shared/agentAdapterCapabilities.js";
 import { agentThreadRequestFailureData, handleAgentThreadRequest as handleLocalAgentThreadRequest, type AgentThreadRequest, type AgentThreadRequestOptions } from "../agentThreads.js";
 import { routeInstanceThread, type InstanceThreadTransport } from "./instanceThreadRouting.js";
 import { instanceWorkerStateDirectory } from "../agentAdapters/instanceClient.js";
@@ -683,6 +685,13 @@ type GatewayDefinition = {
   dshCwd?: string;
   dshBaseUrl?: string;
   dshModelProvider?: string;
+  workbuddySessionId?: string;
+  workbuddySessionName?: string;
+  workbuddyCwd?: string;
+  workbuddyEndpoint?: string;
+  antigravityConversationId?: string;
+  antigravityConversationName?: string;
+  antigravityCwd?: string;
   dshModel?: string;
   dshReasoningEffort?: string;
   codexPlanAssistantEnabled?: boolean;
@@ -696,6 +705,8 @@ type GatewayDefinition = {
   copilotCliBin?: string;
   marvisAppId?: string;
   agentInstanceBindings?: Record<string, AgentInstanceBinding>;
+  remoteAgentTargets?: import("../shared/routeAgentTargets.js").RemoteAgentTarget[];
+  primaryAgentTarget?: string;
   astrbotUrl?: string;
   astrbotUsername?: string;
   astrbotPassword?: string;
@@ -803,16 +814,49 @@ function agentMessageSourceForSession(
   };
 }
 
+/**
+ * Read the primary Agent's session identity from the definition.
+ *
+ * Each adapter stores its own fields, so this is a table rather than a boolean
+ * test: a missing branch would fall back to another adapter's fields and report
+ * a session that belongs to a different owner.
+ */
+function primaryAgentSessionFields(
+  definition: GatewayDefinition,
+  agentAdapter: AgentAdapterType
+): { sessionId?: string; sessionName?: string; workspace?: string } {
+  switch (agentAdapter) {
+    case "dsh":
+      return { sessionId: definition.dshSessionId, sessionName: definition.dshSessionName, workspace: definition.dshCwd };
+    case "antigravity":
+      return {
+        sessionId: definition.antigravityConversationId,
+        sessionName: definition.antigravityConversationName,
+        workspace: definition.antigravityCwd
+      };
+    case "workbuddy":
+      return {
+        sessionId: definition.workbuddySessionId,
+        sessionName: definition.workbuddySessionName,
+        workspace: definition.workbuddyCwd
+      };
+    default:
+      return { sessionId: definition.codexThreadId, sessionName: definition.codexThreadName, workspace: definition.codexCwd };
+  }
+}
+
 function primaryAgentMessageSource(definition: GatewayDefinition): AgentMessageSource {
   const agentAdapter = definition.primaryAgentAdapter
     || normalizeAgentAdapters(definition.agentAdapters)[0]
     || "codex";
-  const sessionId = agentAdapter === "dsh" ? definition.dshSessionId : definition.codexThreadId;
-  const sessionName = agentAdapter === "dsh"
-    ? definition.dshSessionName
-    : definition.codexThreadName;
-  const workspace = agentAdapter === "dsh" ? definition.dshCwd : definition.codexCwd;
-  return agentMessageSourceForSession(sessionId, sessionName, agentAdapter, "主人格 Agent", workspace);
+  const fields = primaryAgentSessionFields(definition, agentAdapter);
+  return agentMessageSourceForSession(
+    fields.sessionId,
+    fields.sessionName,
+    agentAdapter,
+    "主人格 Agent",
+    fields.workspace
+  );
 }
 
 function planMessageSource(
@@ -834,20 +878,20 @@ function planMessageSource(
 
 function primaryAgentWorkspace(definition: GatewayDefinition): string | undefined {
   definition = effectiveInstanceDefinition(definition);
-  const adapter = definition.primaryAgentAdapter || normalizeAgentAdapters(definition.agentAdapters)[0];
-  return adapter === "dsh" ? definition.dshCwd : adapter === "codex" ? definition.codexCwd : undefined;
+  const adapter = resolvePrimaryAgentTarget(definition)?.provider ?? "codex";
+  return adapter ? primaryAgentSessionFields(definition, adapter).workspace : undefined;
 }
 
 function primaryAgentSessionId(definition: GatewayDefinition): string | undefined {
   definition = effectiveInstanceDefinition(definition);
-  const adapter = definition.primaryAgentAdapter || normalizeAgentAdapters(definition.agentAdapters)[0];
-  return adapter === "dsh" ? definition.dshSessionId : adapter === "codex" ? definition.codexThreadId : undefined;
+  const adapter = resolvePrimaryAgentTarget(definition)?.provider ?? "codex";
+  return adapter ? primaryAgentSessionFields(definition, adapter).sessionId : undefined;
 }
 
 function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): boolean {
   const id = sessionId.trim();
   if (!id) return false;
-  if (Object.values(runtime.definition.agentInstanceBindings || {}).some(binding => instanceAgentSessions(binding).includes(id))) return true;
+  if (normalizeRouteAgentTargets(runtime.definition).remoteAgentTargets.some(binding => instanceAgentSessions(binding).includes(id))) return true;
   if (String(runtime.definition.codexThreadId || "").trim() === id) return true;
   if (String(runtime.definition.dshSessionId || "").trim() === id) return true;
   if ((runtime.definition.codexPlanAssistantSessions ?? []).some((session) => session.threadId === id)) return true;
@@ -866,16 +910,18 @@ function runtimeOwnsAgentSession(runtime: GatewayRuntime, sessionId: string): bo
 
 let instanceThreadTransport: InstanceThreadTransport | undefined;
 function effectiveInstanceDefinition(definition: GatewayDefinition): GatewayDefinition {
-  const adapter = definition.primaryAgentAdapter || definition.agentAdapters?.[0];
-  const binding = adapter ? definition.agentInstanceBindings?.[adapter] : undefined;
+  const target = resolvePrimaryAgentTarget(definition);
+  const adapter = target?.provider;
+  const binding = target?.binding;
   if (!binding) return definition;
   const agent = instanceThreadTransport?.instances().find(instance => instance.instanceId === binding.instanceId)?.agents.find(agent => agent.agentId === binding.agentId);
   return adapter === "dsh" ? { ...definition, dshSessionId: agent?.sessionId, dshSessionName: agent?.name, dshCwd: agent?.workspace, dshBaseUrl: agent?.dshBaseUrl }
     : { ...definition, codexThreadId: agent?.sessionId, codexThreadName: agent?.name, codexCwd: agent?.workspace };
 }
 function messageWorkerDataDir(definition: GatewayDefinition): string {
-  const adapter = definition.primaryAgentAdapter || definition.agentAdapters?.[0];
-  const binding = adapter ? definition.agentInstanceBindings?.[adapter] : undefined;
+  const target = resolvePrimaryAgentTarget(definition);
+  const adapter = target?.provider;
+  const binding = target?.binding;
   return binding ? instanceWorkerStateDirectory(dataDirFor(definition), binding, primaryAgentSessionId(definition) || "unavailable") : dataDirFor(definition);
 }
 async function handleAgentThreadRequest(request: AgentThreadRequest, options: AgentThreadRequestOptions) {
@@ -995,6 +1041,13 @@ const managerRuntimeLayout = resolveRuntimeLayout(
 );
 const packageRoot = managerRuntimeLayout.packageRoot;
 const rootDir = managerRuntimeLayout.stateRoot;
+const resourceCacheKey = randomUUID();
+const resourceCache = new ResourceCache(path.join(rootDir, "data"));
+const handleResourceCacheApi = resourceCacheHandler(resourceCache, {
+  local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address)),
+  tunnelKey: () => resourceCacheKey,
+  readOnly: () => managerReadOnly
+});
 const managerHostIdentity = managerHostIdentityFromEnvironment();
 const managerPortPolicy = parseManagerPortPolicy(process.env.GATEWAY_MANAGER_PORT);
 let managerPort = managerPortPolicy.mode === "fixed" ? managerPortPolicy.port : 0;
@@ -1484,6 +1537,8 @@ function createManagerPeerRuntime() {
   });
   tunnel = new PeerTunnelRuntime({
     readOnly: managerReadOnly,
+    allowResourceBootstrap: () => rabiLinkRelayConfigForMeta().enabled,
+    allowSpeechBootstrap: () => rabiLinkRelayConfigForMeta().enabled && rabiGlobalConfig.read().rabiLinkRelay.speechProxyEnabled,
     allowControl: (request, url) => request.socket.localPort === managerPort && webguiLanRequestAllowed(request, url),
     dataDir: path.join(rootDir, "data", "rabilink"),
     deviceId: rabiLinkRelayConfigForMeta().deviceId,
@@ -1491,7 +1546,7 @@ function createManagerPeerRuntime() {
     discover: () => discoverRabiPeers(personaSyncRouteContext().relay()),
     signal: (call, signal) => runtime.signal(call, signal),
     relay: () => personaSyncRouteContext().relay(),
-    services: () => ({ manager: { baseUrl: managerBaseUrl, headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, speech: { baseUrl: speechServiceUrl() } }),
+    services: () => ({ manager: { baseUrl: managerBaseUrl, headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, speech: { baseUrl: speechServiceUrl() }, resources: { baseUrl: managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": resourceCacheKey, "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } } }),
     onStatus: value => publishManagerEvent("peer_tunnel_status", value)
   });
   activePeerTunnel = tunnel;
@@ -1831,7 +1886,8 @@ export function adapterConfigItem(definition: GatewayDefinition): Record<string,
     codexThreadId: definition.codexThreadId,
     codexThreadName: definition.codexThreadName,
     codexCwd: configPathValue(definition.codexCwd),
-    agentInstanceBindings: definition.agentInstanceBindings,
+    remoteAgentTargets: definition.remoteAgentTargets,
+    primaryAgentTarget: definition.primaryAgentTarget,
     dshSessionId: definition.dshSessionId,
     dshSessionName: definition.dshSessionName,
     dshCwd: configPathValue(definition.dshCwd),
@@ -2181,16 +2237,17 @@ async function ensureRoleFolder(roleId: string): Promise<string> {
 }
 
 async function reconcilePersistedPlanSecretaryWorkspaces(): Promise<void> {
-  const ownerByRoleDir = new Map<string, { roleDir: string; roleId: string; workspace: string; conflicting: boolean }>();
+  const ownerByRoleDir = new Map<string, { roleDir: string; roleId: string; workspace: string; agentTargetId: string; conflicting: boolean }>();
   for (const runtime of runtimes.values()) {
-    const workspace = runtime.definition.codexCwd?.trim();
-    if (!workspace) continue;
+    const target = resolvePrimaryAgentTarget(runtime.definition);
+    const workspace = primaryAgentWorkspace(runtime.definition)?.trim();
+    if (!target || !workspace) continue;
     const roleDir = roleDirForDefinition(runtime.definition);
     const roleId = roleIdForDefinition(runtime.definition);
-    const key = path.resolve(roleDir).toLowerCase();
+    const key = `${path.resolve(roleDir).toLowerCase()}\0${target.id}`;
     const existing = ownerByRoleDir.get(key);
     if (!existing) {
-      ownerByRoleDir.set(key, { roleDir, roleId, workspace, conflicting: false });
+      ownerByRoleDir.set(key, { roleDir, roleId, workspace, agentTargetId: target.id, conflicting: false });
       continue;
     }
     if (!sameCodexWorkspace(existing.workspace, workspace)) existing.conflicting = true;
@@ -2210,7 +2267,8 @@ async function reconcilePersistedPlanSecretaryWorkspaces(): Promise<void> {
       reconcilePlanSecretaryBindingsForWorkspace(
         plans,
         owner.workspace,
-        (planId) => { stalePlanIds.push(planId); }
+        (planId) => { stalePlanIds.push(planId); },
+        owner.agentTargetId
       );
       for (const planId of stalePlanIds) {
         const projection = await currentRoleStorageApplication().queries.plan(owner.roleId, planId, { timeoutMs: 30_000 });
@@ -2562,8 +2620,10 @@ function envFor(
       : (definition.codexThreadId?.trim() || ""),
     CODEX_THREAD_NAME: resolveCodexThreadName(definition),
     CODEX_CWD: normalizeCodexCwd(definition.codexCwd) ?? normalizeCodexCwd(process.env.CODEX_CWD) ?? rootDir,
-    AGENT_INSTANCE_BINDINGS: JSON.stringify(definition.agentInstanceBindings || {}),
-    LAN_AGENT_ACCESS_TOKEN: Object.keys(definition.agentInstanceBindings || {}).length ? globalConfig.webguiLan.accessToken : "",
+    AGENT_INSTANCE_BINDINGS: JSON.stringify(primaryAgentInstanceBindings(definition) || {}),
+    REMOTE_AGENT_TARGETS: JSON.stringify(definition.remoteAgentTargets || []),
+    PRIMARY_AGENT_TARGET: normalizeRouteAgentTargets(definition).primaryAgentTarget ?? "",
+    LAN_AGENT_ACCESS_TOKEN: resolvePrimaryAgentTarget(definition)?.binding ? globalConfig.webguiLan.accessToken : "",
     DSH_SESSION_ID: definition.dshSessionId?.trim() || "",
     DSH_SESSION_NAME: definition.dshSessionName?.trim() || "",
     DSH_BASE_URL: definition.dshBaseUrl?.trim() || "",
@@ -4682,7 +4742,7 @@ function gatewayIdsForManagedSession(sessionId: string, cwd?: string): Set<strin
   const exactSessionId = String(sessionId || "").trim();
   const gatewayIds = new Set<string>();
   for (const runtime of runtimes.values()) {
-    if (Object.values(runtime.definition.agentInstanceBindings ?? {}).some(binding => {
+    if (normalizeRouteAgentTargets(runtime.definition).remoteAgentTargets.some(binding => {
       return instanceAgentSessions(binding).some(sessionId => instanceHookSessionId(binding.instanceId, binding.agentId, sessionId) === exactSessionId);
     })) {
       gatewayIds.add(runtime.definition.id);
@@ -4916,7 +4976,7 @@ function applyManagedAgentThreadDefaults(request: AgentThreadRequest): AgentThre
   const model = resolveCodexPlanAssistantTurnModel(
     [...runtimes.values()].flatMap((runtime) => runtime.definition.codexPlanAssistantEnabled === true
       ? (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => ({ ...session, model: normalizeCodexPlanAssistantModel(runtime.definition.codexPlanAssistantModel) }))
-      : []), request.threadId, request.model
+      : []), request.threadId, request.model, request.instanceBinding ? `remote:${encodeURIComponent(request.instanceBinding.instanceId)}:${encodeURIComponent(request.instanceBinding.agentId)}` : `local:${request.agentAdapter || "codex"}`
   );
   return model ? { ...request, model } : request;
 }
@@ -5657,7 +5717,8 @@ async function ensurePlanSecretaryTarget(
     roleId,
     planId: plan.id,
     eventId,
-    sessions: runtime.definition.codexPlanAssistantSessions
+    sessions: runtime.definition.codexPlanAssistantSessions,
+    agentTargetId: resolvePrimaryAgentTarget(runtime.definition)?.id
   });
   return assignment.target ? {
     plan: assignment.plan,
@@ -5678,8 +5739,9 @@ async function sendPlanFeedbackToSecretary(
   userFeedback?: PlanFeedbackRecord
 ): Promise<void> {
   const resolved = await resolvePlanSecretaryDeliveryTarget(runtime, roleId, plan, target, eventId);
-  const result = await handleAgentThreadRequest({
+  const result = await (resolvePrimaryAgentTarget(runtime.definition)?.binding ? handleAgentThreadRequest : handleLocalAgentThreadRequest)({
     action: "send",
+    instanceBinding: resolvePrimaryAgentTarget(runtime.definition)?.binding,
     agentAdapter: resolved.target.agentAdapter,
     threadId: resolved.target.threadId,
     title: resolved.target.threadName,
@@ -5718,8 +5780,9 @@ async function sendPlanTaskCompletionToSecretary(
     target,
     `completion:${delivery.sourceSessionId}:${delivery.sourceTurnId}`
   );
-  const result = await handleAgentThreadRequest({
+  const result = await (resolvePrimaryAgentTarget(runtime.definition)?.binding ? handleAgentThreadRequest : handleLocalAgentThreadRequest)({
     action: "send",
+    instanceBinding: resolvePrimaryAgentTarget(runtime.definition)?.binding,
     agentAdapter: resolved.target.agentAdapter,
     threadId: resolved.target.threadId,
     title: resolved.target.threadName,
@@ -5759,7 +5822,7 @@ async function sendPlanTaskCompletionToSecretary(
 async function markPlanSecretaryInitialized(runtime: GatewayRuntime, threadId: string): Promise<void> {
   let changed = false;
   runtime.definition.codexPlanAssistantSessions = (runtime.definition.codexPlanAssistantSessions ?? []).map((session) => {
-    if (session.threadId !== threadId || session.initializedAt) return session;
+    if (session.threadId !== threadId || session.agentTargetId !== resolvePrimaryAgentTarget(runtime.definition)?.id || session.initializedAt) return session;
     changed = true;
     return { ...session, initializedAt: new Date().toISOString() };
   });
@@ -5776,13 +5839,18 @@ async function resolvePlanSecretaryDeliveryTarget(
   const targetAgentAdapter = "agentAdapter" in target
     ? target.agentAdapter
     : isDshSessionId(target.threadId) ? "dsh" : "codex";
-  const ownerWorkspace = targetAgentAdapter === "dsh" ? runtime.definition.dshCwd : runtime.definition.codexCwd;
+  const primaryTarget = resolvePrimaryAgentTarget(runtime.definition);
+  if (!primaryTarget || primaryTarget.provider !== targetAgentAdapter || ("agentTargetId" in target && target.agentTargetId && target.agentTargetId !== primaryTarget.id)) throw new Error("Plan secretary does not belong to the primary Agent target.");
+  const effective = effectiveInstanceDefinition(runtime.definition);
+  const ownerWorkspace = targetAgentAdapter === "dsh" ? effective.dshCwd : effective.codexCwd;
   if (!sameCodexWorkspace(target.workspace, ownerWorkspace)) {
     throw new Error("Plan secretary session is outside the Primary Persona workspace.");
   }
   const previousSession = (runtime.definition.codexPlanAssistantSessions ?? [])
-    .find((session) => session.threadId === target.threadId);
-  const result = await handleAgentThreadRequest({
+    .find((session) => session.threadId === target.threadId && session.agentTargetId === primaryTarget.id);
+  if (!previousSession) throw new Error("Plan secretary is not configured for the primary Agent target.");
+  const result = await (primaryTarget.binding ? handleAgentThreadRequest : handleLocalAgentThreadRequest)({
+    instanceBinding: primaryTarget.binding,
     action: "resolve",
     agentAdapter: targetAgentAdapter,
     threadId: target.threadId,
@@ -5806,6 +5874,7 @@ async function resolvePlanSecretaryDeliveryTarget(
     throw new Error("Plan secretary session resolution returned a workspace different from the Primary Persona.");
   }
   const resolvedTarget: PlanSecretaryTarget = {
+    agentTargetId: primaryTarget.id,
     agentAdapter: targetAgentAdapter,
     threadId,
     threadName: String(thread?.title || target.threadName),
@@ -5816,7 +5885,7 @@ async function resolvePlanSecretaryDeliveryTarget(
   if (threadId === target.threadId) return { target: resolvedTarget };
 
   const sessions = runtime.definition.codexPlanAssistantSessions ?? [];
-  runtime.definition.codexPlanAssistantSessions = sessions.map((session) => session.threadId === target.threadId
+  runtime.definition.codexPlanAssistantSessions = sessions.map((session) => session.threadId === target.threadId && session.agentTargetId === primaryTarget.id
     ? {
         ...session,
         ...(targetAgentAdapter === "dsh" ? { agentAdapter: "dsh" as const } : {}),
@@ -5853,7 +5922,7 @@ async function resolvePlanSecretaryDeliveryTarget(
     target: resolvedTarget,
     initializationPrompt: codexPlanAssistantInitializationPrompt({
       roleId: String(runtime.definition.agentRoleId || ""),
-      sourceAgentAdapter: source.agentAdapter === "dsh" ? "dsh" : "codex",
+      sourceAgentAdapter: normalizePlanBindingAgentType(source.agentAdapter),
       assistantAgentAdapter: targetAgentAdapter,
       sourceThreadId: source.sessionId,
       sourceThreadName,
@@ -6551,18 +6620,17 @@ function triggerGatewaySpeechMessage(runtime: GatewayRuntime, record: SpeechIngr
 
 async function testGatewayAgentDelivery(
   id: string,
-  request: { agentAdapterType?: AgentAdapterType }
+  request: { agentAdapterType?: AgentAdapterType; agentTargetId?: string }
 ): Promise<AgentDeliveryTestResult> {
   const runtime = runtimes.get(id);
   if (!runtime) throw new Error(`Gateway not found: ${id}`);
   if (runtime.definition.enabled === false) throw new Error("当前 Route 已停用，不能执行投递测试。");
 
-  const configuredAdapters = normalizeAgentAdapters(runtime.definition.agentAdapters);
   const requestedAdapter = parseAgentAdapterType(request.agentAdapterType);
-  const adapter = requestedAdapter
-    ?? runtime.definition.primaryAgentAdapter
-    ?? configuredAdapters[0];
-  if (!adapter || !configuredAdapters.includes(adapter)) {
+  const targetId = request.agentTargetId ?? (requestedAdapter ? `local:${requestedAdapter}` : normalizeRouteAgentTargets(runtime.definition).primaryAgentTarget);
+  const target = resolvePrimaryAgentTarget({ ...runtime.definition, primaryAgentTarget: targetId ?? "" });
+  const adapter = target?.provider;
+  if (!adapter || (requestedAdapter && requestedAdapter !== adapter)) {
     throw new Error("目标 Agent 未添加到当前 Route。");
   }
   if (agentAdapterManifest(adapter).maturity === "stub") {
@@ -6578,7 +6646,7 @@ async function testGatewayAgentDelivery(
   });
   const command = childCommand([
     `--direct-agent-envelope=${encodeURIComponent(JSON.stringify(envelope))}`,
-    `--direct-agent-adapter=${adapter}`,
+    `--direct-agent-target=${encodeURIComponent(target!.id)}`,
     `--direct-agent-gateway=${encodeURIComponent(id)}`,
     `--agent-delivery-test=${deliveryId}`
   ]);
@@ -9126,6 +9194,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         health: managerHealthPayload().health
       }),
       handleWebguiLanAccessApi,
+      handleResourceCacheApi,
       jsonResponse,
       lanAgentRegistry,
       lanAgentReleaseStore,
@@ -9139,7 +9208,6 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
           if (body.enabled === false) updated.agentAdapters = (updated.agentAdapters ?? ["codex"]).filter(type => type !== provider);
           if (body.enabled === true) {
             updated.agentAdapters = [...new Set([...(updated.agentAdapters ?? ["codex"]), provider])];
-            if (updated.agentInstanceBindings?.[provider]) throw new Error("此路由已选择远端 Agent，请先在路由设置中切换到本机实例。");
           }
           if (provider === "codex") {
             updated.codexThreadName = String(body.name || "");
@@ -9150,6 +9218,15 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
             updated.dshSessionId = String(body.sessionId || ""); updated.dshCwd = String(body.workspace || "");
             updated.dshModel = String(body.model || ""); updated.dshReasoningEffort = String(body.reasoningEffort || "");
             updated.dshBaseUrl = String(body.dshBaseUrl || definition.dshBaseUrl || "");
+          } else if (provider === "antigravity") {
+            updated.antigravityConversationName = String(body.name || "");
+            updated.antigravityConversationId = String(body.sessionId || "");
+            updated.antigravityCwd = String(body.workspace || "");
+          } else if (provider === "workbuddy") {
+            updated.workbuddySessionName = String(body.name || "");
+            updated.workbuddySessionId = String(body.sessionId || "");
+            updated.workbuddyCwd = String(body.workspace || "");
+            updated.workbuddyEndpoint = String(body.workbuddyEndpoint || definition.workbuddyEndpoint || "");
           }
           await writeGatewayConfig(definition.id, updated, String(body.configRevision || ""), randomUUID());
           syncRunningGateways();
@@ -9163,28 +9240,37 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         const hook = hookContextRequest(body, request);
         if (!agent?.enabled || (hook.sessionId !== agent.sessionId && !agent.managedSessionIds?.includes(hook.sessionId))) throw new Error("Hook does not belong to the bound instance Agent.");
         const sessionId = instanceHookSessionId(instanceId, agentId, hook.sessionId);
-        const routes = routeCatalogConfig.gateways.filter(definition => Object.values(definition.agentInstanceBindings ?? {}).some(binding => binding.instanceId === instanceId && binding.agentId === agentId));
+        const routes = routeCatalogConfig.gateways.filter(definition => normalizeRouteAgentTargets(definition).remoteAgentTargets.some(binding => binding.instanceId === instanceId && binding.agentId === agentId));
         const roles = [...new Set(routes.map(definition => roleIdForDefinition(definition)))];
         if (roles.length !== 1) throw new Error("Bind this instance Agent to one persona before using its Hooks.");
         if (codexHookContextService.getBinding(sessionId)?.roleId !== roles[0]) codexHookContextService.bindSession(sessionId, roles[0]!);
         return codexHookContextService.handleHook({ ...hook, sessionId });
       },
       localInstanceAgents: () => routeCatalogConfig.gateways.flatMap(definition => [...new Set<AgentAdapterType>([
-        ...(definition.agentAdapters ?? ["codex"]).filter(provider => !definition.agentInstanceBindings?.[provider]),
-        ...(definition.codexThreadId ? ["codex" as const] : []), ...(definition.dshSessionId ? ["dsh" as const] : [])
-      ])].map(provider => ({
-        agentId: `${definition.id}:${provider}`,
-        name: (provider === "codex" ? definition.codexThreadName : provider === "dsh" ? definition.dshSessionName : undefined) || definition.routeName || definition.id,
-        provider: provider === "codex" ? "codex-desktop" : provider,
-        enabled: (definition.agentAdapters ?? ["codex"]).includes(provider) && !definition.agentInstanceBindings?.[provider],
-        routeId: definition.id,
-        configRevision: routeCatalogVersion().routeConfigHash,
-        workspace: provider === "dsh" ? definition.dshCwd : definition.codexCwd,
-        sessionId: provider === "dsh" ? definition.dshSessionId : definition.codexThreadId,
-        model: provider === "dsh" ? definition.dshModel : definition.agentModel,
-        reasoningEffort: provider === "dsh" ? definition.dshReasoningEffort : definition.agentReasoningEffort,
-        dshBaseUrl: provider === "dsh" ? definition.dshBaseUrl : undefined
-      }))),
+        ...(definition.agentAdapters ?? ["codex"]),
+        ...(definition.codexThreadId ? ["codex" as const] : []),
+        ...(definition.dshSessionId ? ["dsh" as const] : []),
+        ...(definition.antigravityConversationId ? ["antigravity" as const] : []),
+        ...(definition.workbuddySessionId ? ["workbuddy" as const] : [])
+      ])].map(provider => {
+        // Reuse the shared field table: the identity of a local Agent is
+        // adapter-specific, and a per-adapter ternary here had already drifted
+        // from the one used when the route is saved.
+        const fields = primaryAgentSessionFields(definition, provider);
+        return {
+          agentId: `${definition.id}:${provider}`,
+          name: fields.sessionName || definition.routeName || definition.id,
+          provider: provider === "codex" ? "codex-desktop" : provider,
+          enabled: (definition.agentAdapters ?? ["codex"]).includes(provider),
+          routeId: definition.id,
+          configRevision: routeCatalogVersion().routeConfigHash,
+          workspace: fields.workspace || definition.codexCwd,
+          sessionId: fields.sessionId,
+          model: provider === "dsh" ? definition.dshModel : definition.agentModel,
+          reasoningEffort: provider === "dsh" ? definition.dshReasoningEffort : definition.agentReasoningEffort,
+          dshBaseUrl: provider === "dsh" ? definition.dshBaseUrl : undefined
+        };
+      })),
       managerPluginRoutes,
       rabiGlobalConfig,
       readJsonBody,
@@ -9923,9 +10009,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       }
       if (lanAgentAccess.kind === "agent") {
         const binding = lanAgentAuthority.getApprovedAgentBinding(lanAgentAccess.nodeId, lanAgentAccess.agentId);
-        if (binding?.sessionId && ["codex-desktop", "codex", "dsh"].includes(binding.provider)) {
+        // Normalize the wire provider the same way `lanAgentBodyAuthority` does,
+        // then accept any adapter that supports managed plan tasks. The previous
+        // literal list predated Antigravity and silently dropped its binding.
+        const bindingProvider = binding?.provider === "codex-desktop" ? "codex" : binding?.provider;
+        if (binding?.sessionId && isPlanAssistantAgentType(bindingProvider)) {
           setTrustedLanAgentSource(request, { nodeId: lanAgentAccess.nodeId, agentId: lanAgentAccess.agentId,
-            provider: binding.provider === "dsh" ? "dsh" : "codex", sessionId: binding.sessionId, sessionName: binding.agentId });
+            provider: bindingProvider, sessionId: binding.sessionId, sessionName: binding.agentId });
         }
         registerLanAgentBodyGuard(request, body => {
           if (!lanAgentAuthority.isAgentEnabled(lanAgentAccess.nodeId, lanAgentAccess.agentId)) throw new Error("Remote Agent authorization was revoked.");

@@ -1,6 +1,8 @@
+import { localAgentTargetKey, normalizeRouteAgentTargets, type RemoteAgentTarget } from "../shared/routeAgentTargets.js";
 import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import { normalizeAgentInstanceBindings, type AgentInstanceBinding } from "../shared/agentInstance.js";
 import http from "node:http";
+import { readRabiLinkHome, RabiLinkHomeError } from "./rabiLinkHome.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -82,6 +84,8 @@ type AgentBindingPatch = {
   copilotCliBin?: string;
   marvisAppId?: string;
   agentInstanceBindings?: Record<string, AgentInstanceBinding>;
+  remoteAgentTargets?: RemoteAgentTarget[];
+  primaryAgentTarget?: string;
   astrbotUrl?: string;
   astrbotUsername?: string;
   astrbotPassword?: string;
@@ -320,7 +324,8 @@ function routeSummary(
     copilotCwd: definition.copilotCwd ?? "",
     copilotCliBin: definition.copilotCliBin ?? "",
     marvisAppId: definition.marvisAppId ?? "",
-    agentInstanceBindings: definition.agentInstanceBindings,
+    remoteAgentTargets: definition.remoteAgentTargets,
+    primaryAgentTarget: definition.primaryAgentTarget,
     astrbotUrl: definition.astrbotUrl ?? "",
     astrbotProjectId: definition.astrbotProjectId ?? "",
     astrbotSessionId: definition.astrbotSessionId ?? "",
@@ -607,7 +612,8 @@ async function setLocalAgentBinding(
     if (!isAgentAdapterType(patch.agentAdapter)) {
       return { code: -1, message: `Unsupported agent adapter: ${patch.agentAdapter}` };
     }
-    route.agentAdapters = [patch.agentAdapter];
+    route.agentAdapters = [...new Set([...(route.agentAdapters ?? []), patch.agentAdapter])];
+    route.primaryAgentTarget = localAgentTargetKey(patch.agentAdapter);
     route.primaryAgentAdapter = patch.agentAdapter;
   }
   if (patch.codexCwd !== undefined) route.codexCwd = String(patch.codexCwd || "");
@@ -621,12 +627,18 @@ async function setLocalAgentBinding(
   if (patch.astrbotUsername !== undefined) route.astrbotUsername = String(patch.astrbotUsername || "");
   if (patch.astrbotPassword !== undefined) route.astrbotPassword = String(patch.astrbotPassword || "");
   if (patch.astrbotProjectId !== undefined) route.astrbotProjectId = String(patch.astrbotProjectId || "");
-  if (patch.agentInstanceBindings !== undefined) route.agentInstanceBindings = normalizeAgentInstanceBindings(patch.agentInstanceBindings);
+  if (patch.remoteAgentTargets !== undefined) route.remoteAgentTargets = patch.remoteAgentTargets;
+  if (patch.primaryAgentTarget !== undefined) route.primaryAgentTarget = patch.primaryAgentTarget;
+  // Legacy input migrates once; never replaces explicit instance targets.
+  if (patch.agentInstanceBindings !== undefined && patch.remoteAgentTargets === undefined && route.remoteAgentTargets === undefined) route.agentInstanceBindings = normalizeAgentInstanceBindings(patch.agentInstanceBindings);
   if (patch.astrbotSessionId !== undefined) route.astrbotSessionId = String(patch.astrbotSessionId || "");
   if (patch.dshSessionId !== undefined) route.dshSessionId = String(patch.dshSessionId || "");
   if (patch.dshSessionName !== undefined) route.dshSessionName = String(patch.dshSessionName || "");
   if (patch.dshCwd !== undefined) route.dshCwd = String(patch.dshCwd || "");
   if (patch.dshBaseUrl !== undefined) route.dshBaseUrl = String(patch.dshBaseUrl || "");
+  const targets = normalizeRouteAgentTargets(route);
+  Object.assign(route, targets);
+  delete route.agentInstanceBindings;
   const normalized = await ctx.writeConfig(config, mutation.expectedContentHash, mutation.operationId);
   ctx.syncRunningGateways();
   const updated = findGateway(normalized, routeId) ?? route;
@@ -869,6 +881,29 @@ export function handleRabiApi(request: http.IncomingMessage, requestUrl: URL, re
   if ((expectedGeneration && expectedGeneration !== ctx.applicationGenerationId)
     || (expectedManager && expectedManager !== ctx.managerInstanceId)) {
     jsonResponse(response, 409, { code: -1, message: "The requested Manager generation is no longer active." });
+    return true;
+  }
+
+  if (request.method === "GET" && pathname === "/api/rabi/link-home") {
+    response.setHeader("cache-control", "no-store");
+    if (requestUrl.search || request.headers["transfer-encoding"] || Number(request.headers["content-length"] || 0) > 0) {
+      jsonResponse(response, 400, { code: -1, errorCode: "RABILINK_HOME_INVALID_REQUEST", message: "此接口不接受查询参数或请求正文。" });
+      return true;
+    }
+    const saved = { ...ctx.globalConfig.read().rabiLinkRelay };
+    void readRabiLinkHome(saved)
+      .then((data) => {
+        const current = ctx.globalConfig.read().rabiLinkRelay;
+        if (current.enabled !== saved.enabled || current.url !== saved.url || current.token !== saved.token || current.deviceId !== saved.deviceId) {
+          throw new RabiLinkHomeError(409, "RABILINK_HOME_CONFIG_CHANGED", "RabiLink 配置已变更，请重新刷新。");
+        }
+        jsonResponse(response, 200, { code: 0, data });
+      })
+      .catch((error: unknown) => {
+        const safe = error instanceof RabiLinkHomeError ? error
+          : new RabiLinkHomeError(502, "RABILINK_HOME_UPSTREAM_FAILED", "无法读取 RabiLink 设备，请稍后重试。");
+        jsonResponse(response, safe.statusCode, { code: -1, errorCode: safe.errorCode, message: safe.message });
+      });
     return true;
   }
 

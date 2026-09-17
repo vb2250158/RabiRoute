@@ -1,9 +1,11 @@
 import path from "node:path";
 import { createAgentAdapter } from "./agentAdapters/agentAdapter.js";
-import { configuredInstanceBinding, readBoundInstanceAgent, requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
+import { readBoundInstanceAgent, requestInstanceThread, instanceWorkerStateDirectory } from "./agentAdapters/instanceClient.js";
+import { resolvePrimaryAgentTarget, type RouteAgentTarget } from "./shared/routeAgentTargets.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { AgentAdapterType } from "./agentAdapters/types.js";
+import { isPlanAssistantAgentType, type PlanAssistantAgentType } from "./shared/agentAdapterCapabilities.js";
 import {
   measurePerformanceOperation,
   measureSyncPerformanceOperation
@@ -154,13 +156,13 @@ export function resetMessageProcessingRuntime(): void {
 }
 
 function primaryManagedAgentBinding(): {
-  agentAdapter: "codex" | "dsh" | "workbuddy";
+  agentAdapter: PlanAssistantAgentType;
   sessionId: string;
   sessionName: string;
   workspace: string;
 } | undefined {
-  if (configuredInstanceBinding(config.primaryAgentAdapter || "")) return undefined;
-  if (config.primaryAgentAdapter === "dsh" && config.dshSessionId && config.dshSessionName && config.dshCwd) {
+  if (resolvePrimaryAgentTarget(config)?.binding) return undefined;
+  if (configuredPrimaryAgentAdapter() === "dsh" && config.dshSessionId && config.dshSessionName && config.dshCwd) {
     return {
       agentAdapter: "dsh",
       sessionId: config.dshSessionId,
@@ -168,7 +170,16 @@ function primaryManagedAgentBinding(): {
       workspace: config.dshCwd
     };
   }
-  if (config.primaryAgentAdapter === "workbuddy" && config.workbuddySessionId && config.workbuddyCwd) {
+  if (configuredPrimaryAgentAdapter() === "antigravity"
+    && config.antigravityConversationId && config.antigravityConversationName && config.antigravityCwd) {
+    return {
+      agentAdapter: "antigravity",
+      sessionId: config.antigravityConversationId,
+      sessionName: config.antigravityConversationName,
+      workspace: config.antigravityCwd
+    };
+  }
+  if (configuredPrimaryAgentAdapter() === "workbuddy" && config.workbuddySessionId && config.workbuddyCwd) {
     return {
       agentAdapter: "workbuddy",
       sessionId: config.workbuddySessionId,
@@ -176,7 +187,7 @@ function primaryManagedAgentBinding(): {
       workspace: config.workbuddyCwd
     };
   }
-  if (config.primaryAgentAdapter === "codex" && config.codexThreadId && config.codexThreadName && config.codexCwd) {
+  if (configuredPrimaryAgentAdapter() === "codex" && config.codexThreadId && config.codexThreadName && config.codexCwd) {
     return {
       agentAdapter: "codex",
       sessionId: config.codexThreadId,
@@ -188,17 +199,22 @@ function primaryManagedAgentBinding(): {
 }
 
 function messageAgentModeEnabled(): boolean {
-  return Boolean(primaryMessageProcessingAgentAdapter(config) && (configuredInstanceBinding(config.primaryAgentAdapter || "") || primaryManagedAgentBinding()));
+  return Boolean(primaryMessageProcessingAgentAdapter(config) && (resolvePrimaryAgentTarget(config)?.binding || primaryManagedAgentBinding()));
 }
 
 async function managedAgentExecution() {
-  const instanceBinding = configuredInstanceBinding(config.primaryAgentAdapter || "");
+  const target = resolvePrimaryAgentTarget(config);
+  const instanceBinding = target?.binding;
   if (!instanceBinding) return { binding: primaryManagedAgentBinding(), dataDir: config.dataDir, dependencies: {} };
   const agent = await readBoundInstanceAgent(instanceBinding);
   const adapter = agent.provider === "codex-desktop" ? "codex" : agent.provider;
-  if ((adapter !== "codex" && adapter !== "dsh") || adapter !== config.primaryAgentAdapter) throw new Error("The instance task provider does not match the configured primary Agent.");
+  // Consulting the capability table keeps a newly supported adapter from being
+  // rejected here just because this check predates it.
+  if (!isPlanAssistantAgentType(adapter) || adapter !== target.provider) {
+    throw new Error("The instance task provider does not match the configured primary Agent.");
+  }
   return {
-    binding: { agentAdapter: adapter as "codex" | "dsh", sessionId: agent.sessionId!, sessionName: agent.name, workspace: agent.workspace! },
+    binding: { agentAdapter: adapter, sessionId: agent.sessionId!, sessionName: agent.name, workspace: agent.workspace! },
     dataDir: instanceWorkerStateDirectory(config.dataDir, instanceBinding, agent.sessionId!),
     dependencies: { request: (payload: Record<string, unknown>) => requestInstanceThread(instanceBinding, payload) }
   };
@@ -348,18 +364,21 @@ async function deliverPacketToMessageAgent(
   roleId: string,
   group: PendingMessageGroup
 ): Promise<ForwardAdapterOutcome[]> {
+  const target = resolvePrimaryAgentTarget(config);
+  if (!target) throw new Error("Primary Agent target is not configured.");
+  const adapter = target.provider;
   if (group.endpoint === "heartbeat") {
     try {
       await measurePerformanceOperation(
         `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.message_agent`,
         async () => (await activeMessageAgentPool()).deliver(group, messageGroupPrompt(group, packetContent), { messageSource })
       );
-      return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+      return [{ routeId, ruleId, adapter, status: "delivered" }];
     } catch (error) {
       return [{
         routeId,
         ruleId,
-        adapter: "codex",
+        adapter,
         status: "failed",
         error: error instanceof Error ? error.message : String(error)
       }];
@@ -416,7 +435,7 @@ async function deliverPacketToMessageAgent(
         message: `Duplicate message group reused requirementId=${canonicalRequirementId}; no second Agent delivery was created.`,
         data: { requestedRequirementId: requirementId, canonicalRequirementId, status: registeredStatus }
       }, config.dataDir);
-      return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+      return [{ routeId, ruleId, adapter, status: "delivered" }];
     }
     const referencedSenders = await referencedAgentSendersForMessageGroup(routeId, group);
     const worker = await measurePerformanceOperation(
@@ -467,7 +486,7 @@ async function deliverPacketToMessageAgent(
         data: { requirementId: canonicalRequirementId, error: error instanceof Error ? error.message : String(error) }
       }, config.dataDir);
     }
-    return [{ routeId, ruleId, adapter: "codex", status: "delivered" }];
+    return [{ routeId, ruleId, adapter, status: "delivered" }];
   } catch (error) {
     void sendMessageProcessingManagerCommand(managerBaseUrl(), {
       action: "dispatch_failed",
@@ -477,7 +496,7 @@ async function deliverPacketToMessageAgent(
     return [{
       routeId,
       ruleId,
-      adapter: "codex",
+      adapter,
       status: "failed",
       error: error instanceof Error ? error.message : String(error)
     }];
@@ -544,7 +563,7 @@ function logDeliveryResult(result: ForwardDeliveryResult): void {
 }
 
 function configuredPrimaryAgentAdapter(): AgentAdapterType | undefined {
-  return config.primaryAgentAdapter;
+  return resolvePrimaryAgentTarget(config)?.provider;
 }
 
 export function memoryConsolidationAgentHandles(
@@ -574,7 +593,10 @@ export function shouldSkipHeartbeatDelivery(
 }
 
 async function heartbeatShouldSkipForBusyAgent(routeKind: ForwardRouteKind): Promise<boolean> {
-  const adapters = config.primaryAgentAdapter ? [config.primaryAgentAdapter] : [];
+  // A remote task owner cannot be inferred from this computer's Desktop state.
+  if (resolvePrimaryAgentTarget(config)?.binding) return false;
+  const primary = configuredPrimaryAgentAdapter();
+  const adapters = primary ? [primary] : [];
   if (!shouldSkipHeartbeatDelivery(
     routeKind,
     config.heartbeatSkipWhenAgentBusy,
@@ -630,8 +652,9 @@ function logKindForRoute(routeKind: ForwardRouteKind): ForwardLogKind {
   return routeKind === "private" ? "private" : "group_mention";
 }
 
-async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = []): Promise<void> {
-  const adapter = await createAgentAdapter(type);
+async function dispatchToAgentAdapter(type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths: string[] = [], target?: RouteAgentTarget): Promise<void> {
+  if (!target || target.provider !== type) throw new Error("Primary Agent target is missing or mismatched.");
+  const adapter = await createAgentAdapter(type, target.binding ? { binding: target.binding } : "local");
   return measurePerformanceOperation(
     `${PERFORMANCE_OPERATIONS.gatewayAgentDeliver}.${type}`,
     () => adapter.deliver(envelope, imagePaths.length ? { imagePaths } : undefined)
@@ -654,13 +677,14 @@ export async function deliverPacketToPrimaryAgentAdapter(
   routeId: string,
   ruleId: string,
   envelope: RabiDeliveryEnvelope,
-  dispatch: (type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths?: string[]) => Promise<void> = dispatchToAgentAdapter,
+  dispatch: (type: AgentAdapterType, envelope: RabiDeliveryEnvelope, imagePaths?: string[], target?: RouteAgentTarget) => Promise<void> = dispatchToAgentAdapter,
   imagePaths: string[] = []
 ): Promise<ForwardAdapterOutcome[]> {
-  const adapter = configuredPrimaryAgentAdapter();
-  if (!adapter) return [];
+  const target = resolvePrimaryAgentTarget(config);
+  if (!target) return [];
+  const adapter = target.provider;
   try {
-    await dispatch(adapter, envelope, imagePaths);
+    await dispatch(adapter, envelope, imagePaths, target);
     return [{
       routeId,
       ruleId,

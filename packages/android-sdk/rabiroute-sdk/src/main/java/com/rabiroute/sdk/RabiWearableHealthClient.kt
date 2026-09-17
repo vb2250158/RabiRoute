@@ -29,6 +29,7 @@ data class RabiWearableHealthSample(
     val startAt: String = recordedAt,
     val endAt: String = "",
     val value: Int? = null,
+    val unit: String = "",
     val sleepState: String = "",
     val sleepStage: String = "",
     val source: String = "health-connect"
@@ -42,12 +43,18 @@ data class RabiWearableHealthSample(
             if (endAt.isNotBlank()) put("endAt", endAt)
             if (value != null) {
                 put("value", value)
-                put("unit", "bpm")
+                put("unit", unit.ifBlank { defaultUnit(metric) })
             }
             if (sleepState.isNotBlank()) put("sleepState", sleepState)
             if (sleepStage.isNotBlank()) put("sleepStage", sleepStage)
             if (source.isNotBlank()) put("source", source)
         }
+
+    private fun defaultUnit(metric: String): String = when (metric) {
+        "heart_rate" -> "bpm"
+        "steps" -> "count"
+        else -> ""
+    }
 }
 
 class RabiWearableHealthClient(
@@ -120,10 +127,12 @@ class RabiWearableHealthClient(
     private fun observationSummary(samples: List<RabiWearableHealthSample>): String {
         val heartRates = samples.mapNotNull { sample -> sample.value?.takeIf { sample.metric == "heart_rate" } }
         val sleepSessions = samples.count { it.metric == "sleep_session" }
+        val stepTotal = samples.filter { it.metric == "steps" }.sumOf { it.value ?: 0 }
         return buildList {
             add("智能手表/手环健康数据 ${samples.size} 条")
             if (heartRates.isNotEmpty()) add("最近心率 ${heartRates.last()} bpm")
             if (sleepSessions > 0) add("睡眠记录 $sleepSessions 条")
+            if (stepTotal > 0) add("步数合计 $stepTotal 步")
         }.joinToString("，")
     }
 }

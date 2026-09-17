@@ -24,6 +24,9 @@ import com.rabi.link.RabiSetupGuidance
 import com.rabi.link.MainActivity
 import com.rabi.link.modules.xiaomi.HealthConnectActivity
 import com.rabiroute.sdk.RabiWearableHealthPolicy
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -43,6 +46,8 @@ class WearableHealthSettingsActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var advancedSettings: LinearLayout
     private lateinit var scroll: ScrollView
+    /** null = 尚未查到；true/false = 是否已授权 Health Connect 步数读取。 */
+    private var stepsGranted: Boolean? = null
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -53,6 +58,7 @@ class WearableHealthSettingsActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::status.isInitialized) refreshStatus()
+        if (selectedMode() == WearableHealthCollectorMode.HEALTH_CONNECT) refreshStepsPermission()
     }
 
     private fun buildUi(): View {
@@ -64,7 +70,7 @@ class WearableHealthSettingsActivity : Activity() {
         content.addView(RabiMobileUi.hero(
             this,
             "让 Rabi 读懂你的健康状态",
-            "优先使用系统可用的 Health Connect；只有小米 ADB Companion 等特殊链路才需要额外密钥。",
+            "优先使用系统可用的 Health Connect，可读取心率、睡眠和步数；只有小米 ADB Companion 等特殊链路才需要额外密钥。",
         ), full(0, 0, 0, 12))
         status = RabiMobileUi.guidance(this, RabiSetupGuidance(
             "正在检查健康采集条件",
@@ -82,7 +88,7 @@ class WearableHealthSettingsActivity : Activity() {
     private fun deviceCard(): View = card().apply {
         addView(title("1. 选择采集方式"))
         addView(note("App 会使用推荐默认值。设备 ID、事件触发回看窗口和阈值等工程参数已经收进高级设置，小白不需要逐项填写。"))
-        enabled = RabiMobileUi.styleSwitch(this@WearableHealthSettingsActivity, Switch(this@WearableHealthSettingsActivity).apply { text = "持续记录心率与睡眠" })
+        enabled = RabiMobileUi.styleSwitch(this@WearableHealthSettingsActivity, Switch(this@WearableHealthSettingsActivity).apply { text = "持续记录心率、睡眠与步数" })
         addView(enabled)
         collectorMode = RabiMobileUi.spinner(this@WearableHealthSettingsActivity, Spinner(this@WearableHealthSettingsActivity).apply {
             adapter = ArrayAdapter(
@@ -91,11 +97,15 @@ class WearableHealthSettingsActivity : Activity() {
                 listOf("Health Connect", "小米运动健康（PC ADB Companion）")
             )
             onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) = refreshStatus()
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    refreshStatus()
+                    if (selectedMode() == WearableHealthCollectorMode.HEALTH_CONNECT) refreshStepsPermission()
+                }
                 override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
             }
         })
         addView(label("采集来源")); addView(collectorMode, full(0, 0, 0, 6))
+        addView(note("Health Connect 来源会同时读取心率、睡眠和步数；步数由系统按当天累计，App 不会重复累加同一天的记录。"))
         deviceName = input("留空时由 App 自动命名")
         deviceId = input("mi-band-10-pro")
         deviceKind = input("band")
@@ -201,7 +211,7 @@ class WearableHealthSettingsActivity : Activity() {
                 showGuidance(RabiSetupGuidance(
                     "健康同步已启用",
                     "已保存参与选择；仅在全天记录运行且允许健康采集时读取 ${sourceName(config.collectorMode)}。",
-                    if (config.collectorMode == WearableHealthCollectorMode.HEALTH_CONNECT) "首次使用请完成系统健康权限授权；同步结果会继续显示在这里。" else "保持手机与已配对的 Rabi PC Companion 可连接。",
+                    if (config.collectorMode == WearableHealthCollectorMode.HEALTH_CONNECT) "首次使用请完成系统健康权限授权（心率、睡眠、步数）；同步结果会继续显示在这里。" else "保持手机与已配对的 Rabi PC Companion 可连接。",
                     RabiGuidanceTone.SUCCESS,
                 ))
             } else {
@@ -328,7 +338,7 @@ class WearableHealthSettingsActivity : Activity() {
             return null
         }
         return when (HealthConnectClient.getSdkStatus(this)) {
-            HealthConnectClient.SDK_AVAILABLE -> null
+            HealthConnectClient.SDK_AVAILABLE -> stepsPermissionProblem()
             HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> RabiSetupGuidance(
                 "Health Connect 需要安装或更新",
                 "当前系统支持健康连接，但提供程序版本太旧或尚未安装。App 不能替你同意系统安装。",
@@ -341,6 +351,33 @@ class WearableHealthSettingsActivity : Activity() {
                 "更新系统或启用 Health Connect；也可以改用已配置的小米 ADB Companion。",
                 RabiGuidanceTone.WARNING,
             )
+        }
+    }
+
+    /**
+     * 步数是后加的可选数据类型：老用户可能只授权过心率和睡眠。
+     * 权限查询是 binder 调用，这里不在主线程同步等待，改用后台缓存值。
+     * 缓存未知时不阻断启用，交由 Health Connect 页面的实时授权结果兜底。
+     */
+    private fun stepsPermissionProblem(): RabiSetupGuidance? {
+        if (stepsGranted != false) return null
+        return RabiSetupGuidance(
+            "还没有步数读取权限",
+            "心率、睡眠已可用，但 Health Connect 尚未授权 Rabi 读取步数，因此步数不会进入健康记录。",
+            "点“检查并授权 Health Connect”，在系统页面允许“步数”后再返回。",
+            RabiGuidanceTone.WARNING,
+        )
+    }
+
+    private fun refreshStepsPermission() {
+        val client = runCatching { HealthConnectClient.getOrCreate(this) }.getOrNull() ?: run {
+            stepsGranted = null
+            return
+        }
+        CoroutineScope(Dispatchers.IO).launch {
+            val granted = runCatching { client.permissionController.getGrantedPermissions() }.getOrNull()
+            stepsGranted = granted?.any { it.endsWith("StepsRecord") }
+            if (!isFinishing) runOnUiThread { if (::status.isInitialized) refreshStatus() }
         }
     }
 

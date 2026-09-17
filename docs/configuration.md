@@ -6,6 +6,10 @@
 
 # 配置与接入
 
+远端 Agent 归 Agent 执行端，不再作为消息端添加；通过[远端接入](lan-rabi-agent-bootstrap.md)选择实例与 Agent。
+
+设备接入边界已调整：手表、手环和眼镜在移动端记录系统设置，由记录系统统一投递事件。PC 独立设备入口已移除；下文旧设备协议仅作兼容维护，实施与退出条件见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
+
 > 状态：现行指南。字段和成熟度以当前配置模型、Manager API 和扫描结果为准；验收状态见[当前能力与成熟度](current-capabilities.md)。
 
 ## 插件平台
@@ -73,7 +77,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `data/roles/<角色名>/persona.md`：人格正文。
 - `data/roles/<角色名>/personaConfig.json`：人格自动化规则、语音唤醒关键词和各消息端最近上下文额度。一个人格可以服务多个路由配置。
 
-如果运行期 data 不存在，manager 会优先复制整包 `examples/data`，让默认 Rabi 路由与 RabiLink 主动智能模板一起落地。只有 `main` 默认启用；其他接入均以禁用模板出现，填写凭据、工作目录并检查端口后再逐条启用。`examples/data` 不是运行依赖；缺少 examples 时，manager 也能创建最小 QQ / NapCat 到 Codex 配置。RabiLink 模板不包含 Relay 地址或 token，仍需在本机全局设置中显式配置并开启连接。
+如果运行期 data 不存在，manager 会优先复制整包 `examples/data`，让默认 Rabi 路由与 RabiLink 主动智能模板一起落地。只有 `main` 默认启用；其他接入均以禁用模板出现，填写凭据、工作目录并检查端口后再逐条启用。`examples/data` 不是运行依赖；缺少 examples 时，manager 也能创建最小 QQ / NapCat 到 Codex 配置。RabiLink 模板不包含 Relay 地址或 token，仍需在“RabiLink → 配置”中显式配置并开启连接。
 
 ## 代表性 Route 配置
 
@@ -240,11 +244,15 @@ NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。每�
 - `wearable`：智能手表 / 手环健康消息端。它复用全局 RabiLink Relay worker 接收结构化 `wearable.health` observation，按角色写入 `wearable-health/` 时间线；普通样本不进入聊天账本，只有命中心率/睡眠规则时才以 `wearable_health_alert` 投递 Agent。手机配置、Agent 查询 API 和实验数据源见 `docs/rabilink-wearable-health.md`。
 - `webhook`：接收暂时没有专用消息端的外部系统 POST 事件。FenneNote、小爱、企业微信、飞书、眼镜端这类已命名来源应使用各自专用消息端，避免日志、模板变量和回传语义混在通用 webhook 里。
 
-如果要让 Rokid/灵珠在公网访问 RabiRoute，不应暴露本机 Manager，而是部署公网 Relay，在服务器 `/manage` 创建 RabiLink 应用，并在控制台“Rabi 实例”中填写全局 Relay 地址、应用 token 和本机 PC 标识，再打开“连接服务器”开关。Manager 会立即让这台 PC 在服务器上线；需要处理眼镜消息时，再给目标路由添加“眼镜端（经 RabiLink）”（内部键 `rabilink`）。当前主链路不经过手机桥：Relay 的输入队列由电脑端 worker 领取，AIUI observation 采用 record-first；主动回复走独立的全局下行队列，不与某个输入任务的生命周期绑定。需要在服务器上配置这台 PC 时，登录后访问 `/manage/<账号>/<RabiGUID>/#/routes`，PC worker 会从 Host 状态取得当前 `managerBaseUrl` 后转发，不依赖固定本机端口。
+如果要让 Rokid/灵珠在公网访问 RabiRoute，不应暴露本机 Manager，而是部署公网 Relay，在服务器 `/manage` 创建 RabiLink 应用，并在“RabiLink → 配置”中填写全局 Relay 地址、应用 token 和本机 PC 标识，再打开“连接服务器”开关。Manager 会立即让这台 PC 在服务器上线；新设备统一在移动端记录系统设置；已有 `rabilink` 路由仅用于旧客户端兼容。当前主链路不经过手机桥：Relay 的输入队列由电脑端 worker 领取，AIUI observation 采用 record-first；主动回复走独立的全局下行队列，不与某个输入任务的生命周期绑定。需要在服务器上配置这台 PC 时，登录后访问 `/manage/<账号>/<RabiGUID>/#/routes`，PC worker 会从 Host 状态取得当前 `managerBaseUrl` 后转发，不依赖固定本机端口。
 
 新增平台时，优先在 `src/adapters/` 新增 adapter，并输出统一消息记录和路由事件，不要把新平台逻辑塞进 NapCat adapter。
 
 ## RabiLink 全局配置
+
+侧栏“RabiLink”提供“主页 / 远端智能体 / 配置”三个标签。在“配置”（`#/rabilink?tab=config`）查看本机实例 GUID，编辑实例名称、Relay 地址与应用 token、连接开关、高级超时、语音中转和 Agent 上传上限。原“设置”不再重复这些字段，目录、局域网访问和桌面设置仍留在原处。保存复用 `/api/rabi/identity` 与 `data/Config.json`，不新建配置副本；上传上限 `agentUploads.maxFileMiB` 为整数 `1..2048`，默认 `2048`，重启 Manager 后生效。
+
+主页通过 Manager 保存的应用 token 读取同应用电脑的只读概览，无需重复登录；token 不返回主页浏览器或进入 URL。管理员另在新窗口 `/manage` 独立登录，不能由应用 token 提权。读取失败与空设备列表分开显示。详情见[界面与状态](user-guide/interface-and-status.md#rabilink-主页远端智能体与配置)。
 
 `data/Config.json` 持有本机 `rabiGuid`、全局 Relay 开关、地址、应用 token、设备身份和 LAN WebGUI 设置。它是 Manager 级配置，不属于任何单条 Route；公开示例不包含 Relay 地址或 token。
 

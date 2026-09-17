@@ -1,11 +1,12 @@
 import type { PlanFeedbackRecord, PlanQaFeedbackHandling } from "../planFeedback.js";
 import { planStepIsCompleted, type PlanItem, type PlanStep } from "../roleKnowledge.js";
 import { roleStorageOperationKey } from "./roleStorageApplication.js";
+import type { PlanAssistantAgentType } from "../shared/agentAdapterCapabilities.js";
 import { planTaskDeliveryTarget } from "./planTaskBindingDelivery.js";
 import { planStatusKeyForRole, type PersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 
 export type PlanQaTaskRequest = {
-  agentAdapter: "codex" | "dsh";
+  agentAdapter: PlanAssistantAgentType;
   threadId: string;
   title: string;
   cwd: string;

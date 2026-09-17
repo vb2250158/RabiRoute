@@ -85,6 +85,12 @@ test("atomic release keeps old HTML, lazy assets, documentation and module entry
   assert.deepEqual(restored.operation("publish"), receipt);
 });
 
+test("Web release construction rejects a declared but missing plugin entry", async context => {
+  const sample = await fixture(context);
+  await fs.unlink(path.join(sample.packageRoot, "dist/plugins/packages/example/web/client.mjs"));
+  await assert.rejects(sample.candidate(), /Web Bundle entry is missing: example/);
+});
+
 test("code and Web share one durable publication and recover together", async context => {
   const sample = await fixture(context);
   const service = sample.start();
@@ -144,9 +150,9 @@ test("a persisted code revision without its owner fails closed on restart", asyn
   assert.match(missingOwner.status().error!, /owner is unavailable/);
 });
 
-test("a missing optional Web entry does not block the complete Web baseline", async context => {
+test("a backend-only plugin does not require a Web entry in the complete baseline", async context => {
   const sample = await fixture(context);
-  await sample.write("dist/plugins/packages/optional/rabi.plugin.json", JSON.stringify({ id: "optional", version: "1", entries: { web: { module: "web/client.mjs" } } }));
+  await sample.write("dist/plugins/packages/optional/rabi.plugin.json", JSON.stringify({ id: "optional", version: "1", entries: { manager: { module: "manager.mjs" } } }));
   const baseline = await buildWebPatch(sample.packageRoot, path.join(sample.packageRoot, "candidate")).catch(error => { throw error; });
   const manifest = await verifyWebPatch(path.join(sample.packageRoot, "candidate", baseline), baseline);
   assert.equal(manifest.modules.some(module => module.pluginId === "optional"), false);

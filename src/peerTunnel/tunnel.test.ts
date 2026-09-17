@@ -5,6 +5,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { sign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { once } from "node:events";
 import { createTunnelHandshake, loadTunnelIdentity } from "./security.js";
 import { establishTunnel, type TunnelSession } from "./session.js";
@@ -22,6 +24,41 @@ function channelPair(): [TunnelChannel, TunnelChannel] {
   a.close = b.close = () => { if (!closed) { closed = true; a.emit("close"); b.emit("close"); } };
   return [a,b];
 }
+
+test("application-authenticated speech bootstrap pins identity and grants only speech", async t => {
+  const { a, b, folder } = identities(t);
+  const directory = path.join(folder,"bootstrap");
+  const runtime = new PeerTunnelRuntime({ dataDir:directory,deviceId:"pc",generation:"test",allowSpeechBootstrap:()=>true,
+    discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:""}),services:()=>({}),onStatus:()=>{} });
+  t.after(()=>runtime.stop());
+  const request = (identity: typeof a, expiresAt = Date.now()+30_000) => {
+    const fields={source:"phone",publicKey:identity.publicKey,target:"pc",expiresAt};
+    return {...fields,kind:"bootstrap-speech",signature:sign(null,Buffer.from("rabi-speech-bootstrap-v1"+JSON.stringify(fields)),identity.privateKey).toString("base64")};
+  };
+  const response = await runtime.offer(request(a)) as { deviceId:string; publicKey:string };
+  assert.equal(response.deviceId,"pc");
+  const config=JSON.parse(readFileSync(path.join(directory,"tunnel.json"),"utf8"));
+  assert.equal(config.trustedDevices[0].publicKey,a.publicKey);
+  assert.deepEqual(config.trustedDevices[0].services,["speech"]);
+  assert.match(config.trustedDevices[0].bootstrapScope,/^[a-f0-9]{64}$/);
+  await runtime.offer(request(a));
+  await assert.rejects(runtime.offer(request(b)),/peer_identity_changed/);
+  await assert.rejects(runtime.offer(request(a,Date.now()-1)),/peer_bootstrap_denied/);
+  await assert.rejects(runtime.offer({...request(a),signature:"invalid"}),/peer_signature_denied/);
+});
+test("resource bootstrap is independent of speech and cannot grant Manager", async t => {
+  const { a, folder } = identities(t);
+  const directory=path.join(folder,"resource-bootstrap");
+  const runtime=new PeerTunnelRuntime({dataDir:directory,deviceId:"pc",generation:"test",allowResourceBootstrap:()=>true,
+    discover:async()=>[],signal:async()=>{},relay:()=>({url:"http://127.0.0.1",token:""}),services:()=>({}),onStatus:()=>{}});
+  t.after(()=>runtime.stop());
+  const fields={source:"phone",publicKey:a.publicKey,target:"pc",expiresAt:Date.now()+30000};
+  const request={...fields,kind:"bootstrap-resources",signature:sign(null,Buffer.from("rabi-resources-bootstrap-v1"+JSON.stringify(fields)),a.privateKey).toString("base64")};
+  await runtime.offer(request);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(directory,"tunnel.json"),"utf8")).trustedDevices[0].services,["resources"]);
+  await assert.rejects(runtime.offer({...request,kind:"bootstrap-speech"}),/peer_service_denied/);
+  await assert.rejects(runtime.offer({...request,signature:"invalid"}),/peer_signature_denied/);
+});
 function identities(t: test.TestContext) {
   const folder = mkdtempSync(path.join(os.tmpdir(), "rabi-tunnel-test-"));
   t.after(() => rmSync(folder, { recursive: true, force: true }));

@@ -52,7 +52,6 @@ test("sidebar brand shows only the version and route picker has no count or expl
 test("console is route-card-only while host settings live on the Settings page", () => {
   assert.match(overviewSource, /class="app-card glass-card route-card"/);
   assert.doesNotMatch(overviewSource, /Rabi 实例|目录配置|局域网访问 WebGUI|RabiLink 系统转接服务/);
-  assert.match(settingsSource, /class="section-title">Rabi 实例<\/div>/);
   assert.match(settingsSource, /class="section-title">目录配置<\/div>/);
   assert.match(settingsSource, /class="section-title small-title">局域网访问 WebGUI<\/div>/);
 });

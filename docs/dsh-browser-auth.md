@@ -14,7 +14,35 @@ RabiRoute 仍只通过当前 DSH Web owner 的会话接口访问任务；不启�
 
 当前 DSH Web 使用启动登录 URL 在根路径交换 Cookie。旧的无认证桥会得到 HTTP 401。仅改端口不能恢复认证或旧版 RPC 合同。
 
-## 本机配置
+## 在 WebGUI 连接（开发中，尚未部署验收）
+
+在本机 RabiRoute 控制台的 DSH 设置中使用“连接 DSH”：
+
+1. 启动 DSH，复制它提供的当前登录链接。链接包含访问凭据，不要发到聊天或共享文档。
+2. 粘贴到“DSH 登录链接”，点击“连接 DSH”。RabiRoute 验证登录和只读会话接口后，加密保存授权并自动填入不含凭据的地址。无需查找日志或手改 JSON。
+3. 点击原有扫描按钮选择会话，再保存路线。连接或移除授权都不创建、删除或替换会话绑定。
+4. 已有日志配置可点击“验证并保存现有连接”迁移；旧日志不可用时直接提供当前登录链接。
+
+授权只保存在当前电脑的 `stateRoot/data/dsh-connections/`，不属于人格同步数据。Windows 使用当前用户 DPAPI；其他平台使用本机受限权限密钥加密。DSH 目前授予的是整个 Web owner 的访问权限，不支持仅投递或单会话 scope。移除授权只停止 RabiRoute 使用，不会撤销其他客户端的登录。
+
+同地址、同签名配置的正常 DSH 重启可沿用未过期授权。换 hostname/端口、授权过期或 DSH 更换签名配置时重新连接；不扫描端口或自动切换到另一个实例。远端/Relay 页面不能配置本机授权，应到运行 RabiRoute 的电脑操作。跨电脑分别连接各自的 DSH，通过远端 Agent 功能协作，不共享 Cookie。
+
+### 接口与安全边界
+
+- `GET /api/agent-adapters/dsh/connections`：返回 `ok`、`revision`、`endpoints`，仅含干净地址、状态、时间；`saved` 不代表在线。
+- `GET /api/agent-adapters/dsh/connection?baseUrl=<origin>`：返回单项元数据及全局配置 revision，不扫描会话。
+- `POST /api/agent-adapters/dsh/connection`：JSON `{launchUrl, expectedRevision}`，或显式迁移 `{baseUrl, expectedRevision}`。先严格同 origin 交换，再验证只读 `session/list`；成功返回 `connection` 和新 revision。
+- `DELETE /api/agent-adapters/dsh/connection`：JSON `{baseUrl, expectedRevision}`，保存断开标记，阻止旧日志配置自动恢复授权。
+- 写请求仅接受本机同源浏览器：必须有匹配 Origin，拒绝 LAN、转发头、跨站与 Relay；请求体上限 16 KiB。冲突返回 409，重新读取后由用户决定是否提交，客户端不自动重放。
+- 认证只接受本机回环根路径和单一 token，不跟随重定向，凭据不进入普通配置、API 响应、错误或日志。登录与验证分别有十秒超时；任务 RPC 仍保持不自动重放的边界。
+
+2026-09-17 开发验证：认证、会话桥和界面客户端匹配测试通过；包含真实 Windows DPAPI 加密保存、同地址读取、401 不重放、移除/过期不恢复旧日志、版本冲突和 Relay/跨站拒绝。前后端类型检查及隔离完整 `npm run build` 通过，动态 Manager 合同 5/5 通过。受管候选已成功启动，并通过运行接口验证元数据读取、缺少 Origin 时拒绝写入，以及真实 DSH 旧授权迁移与加密保存。随后被另一发布版本替换，因此尚无最终稳定运行验收；真实浏览器和第二台电脑验收仍待完成，不能视为完整上线。
+
+### 旧日志兼容的退出条件
+
+为避免升级立即中断已有安装，仅对从未建立保护存储记录的旧端点保留现有日志认证。唯一迁移入口是 WebGUI“验证并保存现有连接”，或重新粘贴当前登录链接；一旦保存授权、过期或移除，业务 RPC 不再使用该端点的旧日志。移除后必须重新提供登录链接。配置中的所有端点完成迁移后可删除旧 `dsh-auth.json`；新安装不需要创建它。授权即时保存，不受路线表单取消影响。断开阻止尚未派发的请求，但不能撤回已经交给 DSH 的任务。
+
+## 旧版本本机配置（兼容入口）
 
 在 Host 的稳定 `stateRoot/data/dsh-auth.json` 配置端点和该 DSH owner 的启动日志路径。可用进程变量 `RABI_DSH_AUTH_FILE` 显式指定配置文件；不需要修改用户级环境或 DSH 启动方式。示例中的路径由运维替换为已核验的本机值：
 

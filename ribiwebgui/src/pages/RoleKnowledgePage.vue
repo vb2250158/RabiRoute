@@ -18,7 +18,6 @@ import PlanFeedbackComposer from "../components/PlanFeedbackComposer.vue";
 import PlanQuestionFields from "../components/PlanQuestionFields.vue";
 import { approvalDecisionQuestions, planQuestionReply, type PlanQuestionAnswer } from "@shared/planQuestions";
 import PlanStepDetail from "../components/PlanStepDetail.vue";
-import { feedbackFocusSelection, filterFeedbackFocusItems, pendingFeedbackKind } from "../planFeedbackFocus";
 import "../planFeedbackFocus.css";
 import { useI18n } from "../i18n";
 import { knowledgeItemMatchesQuery, normalizeKnowledgeQuery } from "../knowledgeSearch";
@@ -54,6 +53,7 @@ import {
   loadRolePlan,
   loadRolePlanPage,
   loadRolePlanPreview,
+  ROLE_PLAN_BACKGROUND_PAGE_SIZE,
   openPlanAgentTask,
   submitPlanFeedback,
   ManagerRequestError,
@@ -85,6 +85,9 @@ const loading = ref(false);
 const loadingMorePlans = ref(false);
 const memoryLoading = ref(false);
 const planError = ref("");
+const planPageError = ref("");
+const knowledgeCountsError = ref("");
+const planDetailErrors = reactive<Record<string, string>>({});
 const memoryError = ref("");
 const activeView = ref<PlanKnowledgeView>("plans");
 const query = ref<string | null>("");
@@ -123,99 +126,14 @@ const planListTagOptions = ref<Array<{
   count: number;
 }>>([]);
 const feedbackFocusOpen = ref(false);
-const feedbackFocusPlanId = ref("");
-const feedbackFocusQuery = ref("");
-const feedbackFocusLoading = ref(false);
-const feedbackFocusError = ref("");
-const feedbackFocusLoaded = ref(false);
 const feedbackFocusExpanded = ref(false);
-const feedbackFocusDetailLoading = ref(false);
-const feedbackFocusDetailFailed = ref(false);
-// This is a navigation-only cache. Full records and writes still use the page's plans and feedback chain.
-const feedbackQueueCache = ref<RolePlan[]>([]);
-const feedbackInjectedPlanIds = reactive(new Set<string>());
-let feedbackFocusRequest = 0;
-let feedbackQueueRequest = 0;
 let feedbackRoleEpoch = 0;
-watch(feedbackFocusOpen, open => {
-  if (!open) {
-    feedbackQueueRequest++;
-    feedbackFocusRequest++;
-    feedbackFocusLoading.value = false;
-    feedbackFocusDetailLoading.value = false;
-    feedbackFocusDetailFailed.value = false;
-    feedbackFocusLoaded.value = false;
-  }
-});
-const feedbackFocusItems = computed(() => feedbackQueueCache.value.map(item =>
-  plans.value.find(plan => plan.id === item.id && plan.detailLevel !== "summary" && plan.updatedAt >= item.updatedAt) ?? item
-).filter(plan => pendingFeedbackKind(plan)));
-const filteredFeedbackFocusItems = computed(() => filterFeedbackFocusItems(feedbackFocusItems.value, feedbackFocusQuery.value));
-const feedbackFocusPlan = computed(() => plans.value.find(plan => plan.id === feedbackFocusPlanId.value));
 function feedbackFocusActive(plan: RolePlan): boolean {
-  return feedbackFocusOpen.value && feedbackFocusPlanId.value === plan.id;
+  return feedbackFocusOpen.value && feedbackFocusPlan.value?.id === plan.id;
 }
-async function selectFeedbackFocus(planId: string): Promise<void> {
-  feedbackFocusPlanId.value = planId;
-  const selectedRoleId = roleId.value;
-  const request = ++feedbackFocusRequest;
-  feedbackFocusDetailLoading.value = true;
-  feedbackFocusDetailFailed.value = false;
-  feedbackFocusError.value = "";
-  try {
-    const plan = await loadRolePlan(selectedRoleId, planId);
-    if (request !== feedbackFocusRequest || selectedRoleId !== roleId.value) return;
-    if (!plans.value.some(item => item.id === planId)) feedbackInjectedPlanIds.add(planId);
-    plans.value = mergeKnowledgePage(plans.value, [plan]);
-    planFullDetailsLoaded[planId] = true;
-    planDetailsLoaded[planId] = true;
-    expandedPlans[planId] = true;
-    applyFeedbackDeliveryState(planId, plan.approval.latest);
-  } catch (error) {
-    if (request === feedbackFocusRequest) {
-      feedbackFocusError.value = userFacingError(error);
-      feedbackFocusDetailFailed.value = true;
-    }
-  } finally {
-    if (request === feedbackFocusRequest) feedbackFocusDetailLoading.value = false;
-  }
-}
-async function openFeedbackFocus(plan?: RolePlan): Promise<void> {
+function openFeedbackFocus(plan?: RolePlan): void {
+  if (plan && visiblePlansForView.value.some(item => item.id === plan.id)) activeDirectoryPlanId.value = plan.id;
   feedbackFocusOpen.value = true;
-  if (plan) {
-    feedbackFocusPlanId.value = plan.id;
-    if (plan.presentation.approval.state === "approved" && !approvalEditing[plan.id]) openApprovalEditor(plan);
-    void selectFeedbackFocus(plan.id);
-  } else if (feedbackFocusPlanId.value) {
-    void selectFeedbackFocus(feedbackFocusPlanId.value);
-  }
-  if (feedbackFocusLoaded.value || feedbackFocusLoading.value) return;
-  const selectedRoleId = roleId.value;
-  const queueRequest = ++feedbackQueueRequest;
-  feedbackFocusLoading.value = true;
-  feedbackFocusError.value = "";
-  try {
-    let cursor = "";
-    let nextQueue: RolePlan[] = [];
-    const seen = new Set<string>();
-    do {
-      const page = await loadRolePlanPage(selectedRoleId, cursor, 100, { view: "plans", includeFacets: false });
-      if (queueRequest !== feedbackQueueRequest || selectedRoleId !== roleId.value || !feedbackFocusOpen.value) return;
-      nextQueue = mergeKnowledgePage(nextQueue, page.items);
-      cursor = page.nextCursor;
-      if (cursor && seen.has(cursor)) throw new Error(t("待处理列表未能完整加载，请重试。"));
-      seen.add(cursor);
-      await nextTick();
-    } while (cursor);
-    feedbackQueueCache.value = nextQueue;
-    feedbackFocusLoaded.value = true;
-    const selected = feedbackFocusSelection(feedbackFocusPlanId.value, plan?.id, feedbackFocusItems.value);
-    if (selected && !feedbackFocusPlanId.value) void selectFeedbackFocus(selected);
-  } catch (error) {
-    if (queueRequest === feedbackQueueRequest) feedbackFocusError.value = userFacingError(error);
-  } finally {
-    if (queueRequest === feedbackQueueRequest) feedbackFocusLoading.value = false;
-  }
 }
 const approvalDrafts = reactive<Record<string, string>>({});
 const approvalEditing = reactive<Record<string, boolean>>({});
@@ -244,7 +162,7 @@ const questionDrafts = reactive<Record<string, { signature: string; answers: Rec
 watch(() => plans.value.map(plan => [plan.id, questionSignature(plan)]), () => {
   for (const plan of plans.value) {
     const draft = questionDrafts[plan.id];
-    if (plan.detailLevel === "summary" || !draft || draft.signature === questionSignature(plan)) continue;
+    if (plan.detailLevel !== "full" || !draft || draft.signature === questionSignature(plan)) continue;
     if (feedbackFocusActive(plan)) approvalNotices[plan.id] = { tone: "warning", text: t("计划问题已更新，请重新确认回答。") };
     delete questionDrafts[plan.id];
     delete approvalDrafts[plan.id];
@@ -382,15 +300,9 @@ const roleId = computed(() => String(store.selectedGateway?.agentRoleId || route
 const focusedPlanId = computed(() => String((route.params as Record<string, string | string[]>).planId || "").trim());
 watch(roleId, () => {
   feedbackRoleEpoch++;
-  feedbackQueueRequest++;
-  feedbackFocusRequest++;
   feedbackFocusOpen.value = false;
-  feedbackFocusPlanId.value = "";
-  feedbackQueueCache.value = [];
-  feedbackInjectedPlanIds.clear();
-  feedbackFocusLoaded.value = false;
-  feedbackFocusLoading.value = false;
-  feedbackFocusError.value = "";
+  for (const id of Object.keys(approvalDrafts)) delete approvalDrafts[id];
+  for (const id of Object.keys(questionDrafts)) delete questionDrafts[id];
 });
 const gatewayId = computed(() => String(store.selectedGateway?.id || routeSummary.value?.id || "").trim());
 const dateFormatter = computed(() => new Intl.DateTimeFormat(isEnglish.value ? "en" : "zh-CN", {
@@ -438,12 +350,16 @@ const visiblePlansForView = computed(() => {
     : activeView.value === "archived"
       ? archivedPlans.value
       : [];
-  return source.filter(plan => !feedbackInjectedPlanIds.has(plan.id) && matchesQuery(plan));
+  return source.filter(matchesQuery);
 });
-const renderedPlansForView = computed(() => {
-  const window = knowledgeRenderWindow(visiblePlansForView.value, planRenderStart.value, planRenderLimit.value);
-  const selected = plans.value.find(plan => plan.id === feedbackFocusPlanId.value);
-  return feedbackFocusOpen.value && selected && !window.some(plan => plan.id === selected.id) ? [...window, selected] : window;
+const feedbackFocusPlan = computed(() => visiblePlansForView.value.find(plan => plan.id === activeDirectoryPlanId.value));
+const renderedPlansForView = computed(() => feedbackFocusOpen.value
+  ? (feedbackFocusPlan.value ? [feedbackFocusPlan.value] : [])
+  : knowledgeRenderWindow(visiblePlansForView.value, planRenderStart.value, planRenderLimit.value));
+watch([feedbackFocusOpen, feedbackFocusPlan], ([enabled, plan]) => {
+  if (!enabled || !plan) return;
+  expandedPlans[plan.id] = true;
+  void loadFullPlanDetails(plan.id);
 });
 const visibleRecentMemory = computed(() => recentMemory.value.filter(matchesQuery));
 const visibleConsolidatedMemory = computed(() => consolidatedMemory.value.filter(matchesQuery));
@@ -523,7 +439,7 @@ function planReadingAnchorTop(): number {
 
 function syncActiveDirectoryPlan(): void {
   planDirectorySyncFrame = 0;
-  if (directoryJumpTargetId) return;
+  if (feedbackFocusOpen.value || directoryJumpTargetId) return;
   const rects = renderedPlansForView.value.flatMap((plan) => {
     const element = document.getElementById(planCardDomId(plan.id));
     if (!element) return [];
@@ -602,6 +518,7 @@ function rebuildPlanCardObserver(): void {
 }
 
 function schedulePlanCardObserverRefresh(): void {
+  updateFeedbackFocusHeight();
   if (planObserverRefreshFrame || typeof window === "undefined") return;
   planObserverRefreshFrame = window.requestAnimationFrame(rebuildPlanCardObserver);
 }
@@ -625,7 +542,17 @@ function keepActiveDirectoryLinkVisible(): void {
   if (nextScrollTop !== null) list.scrollTop = nextScrollTop;
 }
 
+function updateFeedbackFocusHeight(): void {
+  const browser = knowledgeToolbar.value?.parentElement;
+  if (!browser || !feedbackFocusOpen.value) return;
+  const top = Math.max(0, browser.getBoundingClientRect().top);
+  browser.style.setProperty("--feedback-focus-height", `${Math.max(0, window.innerHeight - top - 16)}px`);
+}
+
+watch([feedbackFocusOpen, showsPlanList], () => nextTick(updateFeedbackFocusHeight));
+
 function handleKnowledgeWindowScroll(): void {
+  updateFeedbackFocusHeight();
   const nextScrollY = Math.max(0, window.scrollY);
   if (directoryJumpTargetId) {
     lastKnowledgeScrollY = nextScrollY;
@@ -727,6 +654,7 @@ function resetPlanDetailHydration(): void {
   planDetailObserver = null;
   planDetailQueue = [];
   queuedPlanDetailIds.clear();
+  for (const key of Object.keys(planDetailErrors)) delete planDetailErrors[key];
   for (const key of Object.keys(planDetailsLoaded)) delete planDetailsLoaded[key];
   for (const key of Object.keys(planDetailsLoading)) delete planDetailsLoading[key];
   for (const key of Object.keys(planFullDetailsLoaded)) delete planFullDetailsLoaded[key];
@@ -954,12 +882,13 @@ function drainPlanDetailQueue(): void {
         ) return;
         plans.value = mergeKnowledgePage(plans.value, [plan]);
         planDetailsLoaded[task.planId] = true;
+        delete planDetailErrors[task.planId];
         applyFeedbackDeliveryState(plan.id, plan.approval.latest);
         void refreshPlanMarkdownTeasers([plan], task.request);
       })
       .catch((loadError) => {
         if (task.request === requestVersion) {
-          planError.value = userFacingError(loadError);
+          planDetailErrors[task.planId] = userFacingError(loadError);
         }
       })
       .finally(() => {
@@ -975,6 +904,7 @@ function queuePlanDetails(nextPlans: RolePlan[], request: number, priority = fal
   for (const plan of nextPlans) {
     if (
       planDetailsLoaded[plan.id]
+      || planDetailErrors[plan.id]
       || planDetailsLoading[plan.id]
       || planFullDetailsLoaded[plan.id]
       || planFullDetailsLoading[plan.id]
@@ -1022,11 +952,8 @@ function schedulePlanDetailObserverRefresh(): void {
 }
 
 function applyPlanSnapshots(nextPlans: RolePlan[], replace: boolean, request: number): void {
-  for (const plan of nextPlans) feedbackInjectedPlanIds.delete(plan.id);
   const unresolvedPlans = replace ? nextPlans : nextPlans.filter((plan) => !planDetailsLoaded[plan.id]);
-  const focused = feedbackFocusOpen.value ? plans.value.find(plan => plan.id === feedbackFocusPlanId.value) : undefined;
   plans.value = replace ? unresolvedPlans : mergeKnowledgePage(plans.value, unresolvedPlans);
-  if (focused) plans.value = mergeKnowledgePage(plans.value, [focused]);
   if (replace) resetPlanMarkdownTeasers();
   for (const plan of unresolvedPlans) planDetailsLoaded[plan.id] = false;
   if (normalizedQuery.value) queuePlanDetails(unresolvedPlans, request);
@@ -1055,7 +982,7 @@ function observeProgressiveSentinels(): void {
         Boolean(directoryJumpTargetId)
       )) return;
       if (hasMoreRenderedPlans.value) loadMoreRenderedPlans();
-      if (hasMorePlans.value && !planPageBackgroundRequest) void loadMorePlans();
+      if (hasMorePlans.value && !planPageBackgroundRequest && !planPageError.value) loadAllRemainingPlans(roleId.value, requestVersion);
     }, { rootMargin: "700px 0px" });
     if (observesPreviousPlans && planLoadPreviousSentinel.value) {
       planPageObserver.observe(planLoadPreviousSentinel.value);
@@ -1143,7 +1070,7 @@ function loadMoreRenderedPlans(): void {
   schedulePlanDetailObserverRefresh();
 }
 
-async function loadMorePlans(limit = 8, fromBackground = false): Promise<void> {
+async function loadMorePlans(limit = ROLE_PLAN_BACKGROUND_PAGE_SIZE, fromBackground = false): Promise<void> {
   const selectedRoleId = roleId.value;
   const cursor = planNextCursor.value;
   const currentRequest = requestVersion;
@@ -1151,6 +1078,7 @@ async function loadMorePlans(limit = 8, fromBackground = false): Promise<void> {
     !selectedRoleId
     || !cursor
     || loadingMorePlans.value
+    || planPageError.value
     || (!fromBackground && planPageBackgroundRequest === currentRequest)
     || !knowledgePageWorkAllowed()
   ) return;
@@ -1165,9 +1093,10 @@ async function loadMorePlans(limit = 8, fromBackground = false): Promise<void> {
     planPageCounts.value = page.counts;
     planListResultTotal.value = page.total;
     planNextCursor.value = page.nextCursor;
+    planPageError.value = "";
   } catch (loadError) {
     if (currentRequest === requestVersion) {
-      planError.value = userFacingError(loadError);
+      planPageError.value = userFacingError(loadError);
     }
   } finally {
     if (currentRequest === requestVersion) loadingMorePlans.value = false;
@@ -1197,7 +1126,7 @@ async function yieldToKnowledgePaint(): Promise<void> {
 // 计划目录必须在页面可工作时自动读到 nextCursor 为空；缺失或提前停止属于功能缺陷。
 // 滚动只控制已缓存计划卡片的挂载窗口，不能决定目录数据是否继续加载。
 function loadAllRemainingPlans(selectedRoleId: string, currentRequest: number): void {
-  if (!planNextCursor.value || planPageBackgroundRequest === currentRequest) return;
+  if (!planNextCursor.value || planPageError.value || planPageBackgroundRequest === currentRequest) return;
   planPageBackgroundRequest = currentRequest;
   void drainKnowledgePages({
     nextCursor: () => (
@@ -1215,10 +1144,27 @@ function loadAllRemainingPlans(selectedRoleId: string, currentRequest: number): 
       && knowledgePageWorkAllowed()
     ),
     yieldToUi: yieldToKnowledgePaint,
-    loadNextPage: () => loadMorePlans(8, true)
+    loadNextPage: () => loadMorePlans(ROLE_PLAN_BACKGROUND_PAGE_SIZE, true)
+  }).then((result) => {
+    if (result === "stalled" && currentRequest === requestVersion && !planPageError.value) {
+      planPageError.value = t("目录加载未能继续，请重试。");
+    }
   }).finally(() => {
     if (planPageBackgroundRequest === currentRequest) planPageBackgroundRequest = 0;
   });
+}
+
+function retryPlanPages(): void {
+  if (loadingMorePlans.value || planPageBackgroundRequest === requestVersion) return;
+  planPageError.value = "";
+  loadAllRemainingPlans(roleId.value, requestVersion);
+}
+
+function retryPlanDetails(plan: RolePlan): void {
+  if (planDetailsLoading[plan.id] || planFullDetailsLoading[plan.id]) return;
+  delete planDetailErrors[plan.id];
+  if (expandedPlans[plan.id] || feedbackFocusActive(plan)) void loadFullPlanDetails(plan.id);
+  else queuePlanDetails([plan], requestVersion, true);
 }
 
 async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: number): Promise<void> {
@@ -1320,6 +1266,8 @@ async function refreshFocusedPlan(selectedRoleId: string, currentRequest: number
 async function refreshKnowledge(): Promise<void> {
   const selectedRoleId = roleId.value;
   if (!knowledgePageWorkAllowed()) return;
+  planPageError.value = "";
+  knowledgeCountsError.value = "";
   if (!selectedRoleId) {
     resetPlanMarkdownTeasers();
     resetPlanMediaLoadStates();
@@ -1372,7 +1320,7 @@ async function refreshKnowledge(): Promise<void> {
     })
     .catch((loadError) => {
       if (currentRequest === requestVersion && selectedRoleId === roleId.value) {
-        planError.value = userFacingError(loadError);
+        knowledgeCountsError.value = userFacingError(loadError);
       }
     });
   if (focusedPlanId.value) {
@@ -1394,6 +1342,8 @@ async function refreshKnowledge(): Promise<void> {
 }
 
 watch([activeView, query], () => {
+  planPageError.value = "";
+  knowledgeCountsError.value = "";
   requestVersion += 1;
   loading.value = false;
   loadingMorePlans.value = false;
@@ -1796,7 +1746,8 @@ async function loadFullPlanDetails(planId: string): Promise<void> {
   const currentRequest = requestVersion;
   if (
     !selectedRoleId
-    || planFullDetailsLoaded[planId]
+    || planDetailErrors[planId]
+    || (planFullDetailsLoaded[planId] && plans.value.find(plan => plan.id === planId)?.detailLevel === "full")
     || planFullDetailsLoading[planId]
     || !plans.value.some((plan) => plan.id === planId)
   ) return;
@@ -1810,11 +1761,12 @@ async function loadFullPlanDetails(planId: string): Promise<void> {
     plans.value = mergeKnowledgePage(plans.value, [plan]);
     planDetailsLoaded[planId] = true;
     planFullDetailsLoaded[planId] = true;
+    delete planDetailErrors[planId];
     applyFeedbackDeliveryState(plan.id, plan.approval.latest);
     void refreshPlanMarkdownTeasers([plan], currentRequest);
   } catch (loadError) {
     if (currentRequest === requestVersion) {
-      planError.value = userFacingError(loadError);
+      planDetailErrors[planId] = userFacingError(loadError);
     }
   } finally {
     if (currentRequest === requestVersion) planFullDetailsLoading[planId] = false;
@@ -1825,6 +1777,7 @@ function togglePlan(plan: RolePlan): void {
   const expanded = !expandedPlans[plan.id];
   expandedPlans[plan.id] = expanded;
   if (expanded) {
+    delete planDetailErrors[plan.id];
     void loadFullPlanDetails(plan.id);
     if (!planAgentStatusIsFresh(plan.id)) void refreshPlanAgentStatuses([plan.id], true);
     void refreshPlanApproval(plan.id);
@@ -2176,7 +2129,7 @@ function approvalFeedbackBaseAvailable(plan: RolePlan): boolean {
 }
 
 function feedbackFocusReadReady(plan: RolePlan): boolean {
-  return !feedbackFocusActive(plan) || (!feedbackFocusDetailLoading.value && !feedbackFocusDetailFailed.value);
+  return !feedbackFocusActive(plan) || Boolean(!loading.value && plan.detailLevel === "full" && planFullDetailsLoaded[plan.id] && !planFullDetailsLoading[plan.id]);
 }
 function canEditApprovalFeedback(plan: RolePlan): boolean {
   return feedbackFocusReadReady(plan) && approvalFeedbackBaseAvailable(plan) && !approvalPending[plan.id] && !feedbackDeliveryPending(plan);
@@ -2349,8 +2302,7 @@ async function reloadFeedbackPlan(planId: string, selectedRoleId = roleId.value)
   if (epoch !== feedbackRoleEpoch || selectedRoleId !== roleId.value) return;
   const index = plans.value.findIndex(plan => plan.id === planId);
   if (index < 0) return;
-  const previous = plans.value[index];
-  if (questionSignature(previous) !== questionSignature(latest)) {
+  if (questionDrafts[planId] && questionDrafts[planId].signature !== questionSignature(latest)) {
     delete questionDrafts[planId];
     delete approvalDrafts[planId];
     delete approvalRestoredFeedback[planId];
@@ -2374,7 +2326,7 @@ async function refreshPlanApproval(planId: string): Promise<void> {
     applyFeedbackDeliveryState(planId, resource.approval.latest);
     await reloadFeedbackPlan(planId, selectedRoleId);
   } catch (error) {
-    if (epoch === feedbackRoleEpoch && feedbackFocusPlanId.value === planId && feedbackFocusOpen.value) {
+    if (epoch === feedbackRoleEpoch && activeDirectoryPlanId.value === planId && feedbackFocusOpen.value) {
       approvalNotices[planId] = { tone: "warning", text: localizedPlanError(error, isEnglish.value) };
     }
   }
@@ -2548,8 +2500,6 @@ onDeactivated(() => {
 
 onBeforeUnmount(() => {
   feedbackRoleEpoch++;
-  feedbackFocusRequest++;
-  feedbackQueueRequest++;
   requestVersion += 1;
   planPageBackgroundRequest = 0;
   deactivateKnowledgePage();
@@ -2711,55 +2661,6 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
 
 <template>
   <div class="page-shell knowledge-page">
-    <v-dialog v-model="feedbackFocusOpen" fullscreen eager transition="dialog-bottom-transition">
-      <v-card class="feedback-focus-shell" :class="{ 'editor-expanded': feedbackFocusExpanded }">
-        <header class="feedback-focus-header">
-          <div><h2>{{ t('待你处理') }}</h2><small>{{ t('当前人格') }}：<span data-no-i18n>{{ roleId }}</span> · {{ t('切换事项保留本页草稿；关闭后可继续，刷新页面不保留。') }}</small></div>
-          <v-btn variant="text" prepend-icon="mdi-close" @click="feedbackFocusOpen = false">{{ t('关闭专注视图') }}</v-btn>
-        </header>
-        <div class="feedback-focus-tools">
-          <v-switch class="feedback-focus-switch" :disabled="!roleId" :model-value="feedbackFocusOpen" :label="t('专注')" color="primary" density="compact" hide-details inset @update:model-value="$event ? openFeedbackFocus() : feedbackFocusOpen = false" />
-          <v-text-field v-model="feedbackFocusQuery" :label="t('搜索待处理事项')" prepend-inner-icon="mdi-magnify" clearable hide-details density="compact">
-            <template #append-inner>
-              <v-btn class="feedback-refresh-icon" icon="mdi-refresh" variant="text" :aria-label="t('刷新待处理列表')" :title="t('刷新待处理列表')" :loading="feedbackFocusLoading" @click.stop="feedbackFocusLoaded = false; openFeedbackFocus()" />
-            </template>
-          </v-text-field>
-        </div>
-        <div class="feedback-focus-layout">
-          <nav class="feedback-focus-list" :aria-label="t('待处理事项')">
-            <p role="status">{{ t(feedbackFocusLoading ? '正在读取当前人格全部计划…' : '当前人格待处理') }}<template v-if="feedbackFocusLoaded"> · {{ feedbackFocusItems.length }}</template></p>
-            <v-progress-linear v-if="feedbackFocusLoading" indeterminate color="primary" />
-            <v-select class="feedback-focus-mobile-select" :label="t('待处理事项')" :items="filteredFeedbackFocusItems" item-title="title" item-value="id" :model-value="feedbackFocusPlanId" hide-details density="compact" @update:model-value="selectFeedbackFocus($event)" />
-            <button v-for="item in filteredFeedbackFocusItems" :key="item.id" type="button" class="feedback-focus-item" :aria-current="feedbackFocusPlanId === item.id ? 'true' : undefined" @click="selectFeedbackFocus(item.id)">
-              <small>{{ t(pendingFeedbackKind(item) === 'approval' ? '待审批' : '补充信息') }}</small><b data-no-i18n>{{ item.title }}</b>
-            </button>
-            <p v-if="feedbackFocusLoaded && !feedbackFocusItems.length">{{ t('当前人格没有待审批或待补充事项。') }}</p>
-            <p v-else-if="feedbackFocusLoaded && !filteredFeedbackFocusItems.length" role="status">{{ t('没有匹配的待处理事项') }}</p>
-          </nav>
-          <main class="feedback-focus-main" :aria-busy="feedbackFocusDetailLoading">
-            <v-progress-linear v-if="feedbackFocusDetailLoading" indeterminate color="primary" />
-            <p v-if="feedbackFocusDetailLoading" role="status">{{ t('正在加载计划详情…') }}</p>
-            <v-alert v-if="feedbackFocusError" type="error" variant="tonal" role="alert">{{ feedbackFocusError }}<v-btn v-if="feedbackFocusPlanId" variant="text" @click="selectFeedbackFocus(feedbackFocusPlanId)">{{ t('重试加载') }}</v-btn></v-alert>
-            <div v-if="feedbackFocusPlan" class="feedback-focus-current"><b data-no-i18n>{{ feedbackFocusPlan.title }}</b><v-chip size="small">{{ planStatusLabel(feedbackFocusPlan) }}</v-chip></div>
-            <div id="feedback-focus-context" class="feedback-focus-context">
-              <template v-if="feedbackFocusPlan">
-                <PlanStepDetail :text="currentStep(feedbackFocusPlan)?.detail || planDescriptionForDisplay(feedbackFocusPlan) || ''" />
-                <PlanQuestionFields presentation="context" :questions="feedbackQuestions(feedbackFocusPlan)" :answers="questionAnswers(feedbackFocusPlan)" form-id="focus-context" :plan-attachments="feedbackFocusPlan.attachments" :attachment-url="id => planAttachmentUrl(feedbackFocusPlan!.id, id)" disabled submit-disabled />
-              </template>
-              <p v-else>{{ t('从列表选择一项，查看问题并作答。') }}</p>
-            </div>
-            <footer class="feedback-focus-footer">
-              <div class="feedback-focus-footer-head"><span>{{ t('提交后停留在当前事项，不会自动切换。') }}</span><v-btn size="small" variant="text" @click="feedbackFocusExpanded = !feedbackFocusExpanded">{{ t(feedbackFocusExpanded ? '收起编辑区' : '展开编辑区') }}</v-btn></div>
-              <div v-if="feedbackFocusPlan && approvalNotices[feedbackFocusPlan.id]" role="status" aria-live="polite" class="feedback-focus-receipt">{{ approvalNotices[feedbackFocusPlan.id].text }}</div>
-              <v-btn v-if="feedbackFocusPlan && approvalReloadRequired[feedbackFocusPlan.id]" variant="tonal" @click="refreshPlanApproval(feedbackFocusPlan.id)">{{ t('读取最新状态') }}</v-btn>
-              <v-btn v-if="feedbackFocusPlan?.presentation.approval.state === 'approved' && !approvalEditing[feedbackFocusPlan.id]" variant="tonal" @click="openApprovalEditor(feedbackFocusPlan)">{{ t('编辑审批') }}</v-btn>
-              <div id="feedback-focus-actions" class="feedback-focus-actions" />
-              <div id="feedback-focus-submit" class="feedback-focus-submit" />
-            </footer>
-          </main>
-        </div>
-      </v-card>
-    </v-dialog>
     <!-- Single-plan mode has no catalog totals to report. -->
     <div v-if="!focusedPlanId" class="knowledge-metrics">
       <div class="knowledge-metric blocked"><span>当前计划文件</span><b>{{ planCounts.plans }}</b><small>plans/active/&lt;planId&gt;</small></div>
@@ -3038,7 +2939,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         @keydown="directoryResizeKeydown"
       />
 
-      <v-card class="app-card knowledge-browser" variant="flat">
+      <v-card class="app-card knowledge-browser" :class="{ 'knowledge-focus-layout': feedbackFocusOpen && showsPlanList, 'editor-expanded': feedbackFocusExpanded }" variant="flat">
       <div ref="knowledgeToolbar" class="knowledge-toolbar">
         <!-- One plan has no views to switch between and nothing to search within. -->
         <v-btn-toggle v-if="!focusedPlanId" v-model="activeView" mandatory color="primary" density="comfortable" class="knowledge-tabs">
@@ -3069,9 +2970,14 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <v-progress-linear v-if="knowledgeListLoading" indeterminate color="secondary" />
       <div v-if="roleId && (showsPlanList || showsMemoryList)" class="knowledge-progressive-status" aria-live="polite">
         <v-progress-circular v-if="knowledgeListLoading" indeterminate size="16" width="2" color="primary" />
-        <v-icon v-else size="16" color="success">mdi-check-circle-outline</v-icon>
+        <v-icon v-else size="16" :color="planPageError ? 'warning' : 'success'">{{ planPageError ? 'mdi-alert-circle-outline' : 'mdi-check-circle-outline' }}</v-icon>
         <span data-no-i18n>{{ knowledgeListStatus }}</span>
       </div>
+      <v-alert v-if="knowledgeCountsError" type="warning" variant="tonal" class="ma-5">{{ t('数量暂时无法更新，已加载内容仍可使用。') }} <span data-no-i18n>{{ knowledgeCountsError }}</span></v-alert>
+      <v-alert v-if="roleId && showsPlanList && planPageError" type="warning" variant="tonal" class="ma-5">
+        {{ t('目录尚未加载完整，已加载内容仍可使用。') }} <span data-no-i18n>{{ planPageError }}</span>
+        <v-btn variant="text" :disabled="loadingMorePlans" @click="retryPlanPages">{{ t('继续加载目录') }}</v-btn>
+      </v-alert>
       <v-alert v-if="roleId && showsPlanList && planError" type="error" variant="tonal" class="ma-5">
         {{ t("计划加载失败") }}：{{ planError }}
       </v-alert>
@@ -3080,7 +2986,14 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       </v-alert>
       <v-alert v-if="!roleId" type="warning" variant="tonal" class="ma-5">当前 Route 尚未绑定人格。</v-alert>
 
-      <div v-if="roleId && (showsPlanList || feedbackFocusOpen)" class="knowledge-list">
+      <v-btn v-if="feedbackFocusOpen && feedbackFocusPlan && !planFullDetailsLoaded[feedbackFocusPlan.id] && !planFullDetailsLoading[feedbackFocusPlan.id]" variant="text" @click="retryPlanDetails(feedbackFocusPlan)">{{ t('重试加载') }}</v-btn>
+      <div class="knowledge-focus-body">
+      <aside v-show="feedbackFocusOpen && showsPlanList && feedbackFocusPlan" class="feedback-focus-footer" :aria-label="isEnglish ? 'Approval and feedback' : '审批与补充信息'">
+        <div class="feedback-focus-footer-head"><v-btn size="small" variant="text" @click="feedbackFocusExpanded = !feedbackFocusExpanded">{{ t(feedbackFocusExpanded ? '收起编辑区' : '展开编辑区') }}</v-btn></div>
+        <div id="feedback-focus-actions" class="feedback-focus-actions" />
+        <div id="feedback-focus-submit" class="feedback-focus-submit" />
+      </aside>
+      <div v-if="roleId && showsPlanList" class="knowledge-list">
         <div v-if="activeView === 'archived'" class="knowledge-subsection-heading">
           <v-icon size="20">mdi-archive-outline</v-icon>
           <b>{{ isEnglish ? "Archived plans" : "已归档计划" }}</b>
@@ -3091,7 +3004,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           </div>
         </div>
         <div
-          v-if="hasMoreRenderedPlansBefore"
+          v-if="!feedbackFocusOpen && hasMoreRenderedPlansBefore"
           ref="planLoadPreviousSentinel"
           class="knowledge-load-more"
           aria-live="polite"
@@ -3119,7 +3032,6 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                 <h2 data-no-i18n>{{ plan.title }}</h2>
               </div>
               <div class="knowledge-plan-head-actions">
-                <v-btn v-if="pendingFeedbackKind(plan)" color="primary" variant="tonal" prepend-icon="mdi-focus-field" @click="openFeedbackFocus(plan)">{{ t('去处理') }}</v-btn>
                 <v-chip class="knowledge-plan-activation" variant="outlined" size="small">{{ t('激活状态') }}：{{ t(plan.activationStatus || '进行中') }}</v-chip>
                 <v-chip class="knowledge-plan-status" :title="planStatusDescription(plan)" :style="planStatusStyle(plan.presentation.palette)" variant="flat" size="small">{{ t('标记状态') }}：{{ planStatusLabel(plan) }}</v-chip>
                 <v-btn
@@ -3147,6 +3059,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               {{ planAgentNotices[planAgentOpenKey(plan.id, "task")]?.text }}
             </div>
 
+            <v-alert v-if="planDetailErrors[plan.id]" type="warning" variant="tonal" class="knowledge-plan-detail-error">
+              {{ t('这项计划的详情暂时无法加载。') }} <span data-no-i18n>{{ planDetailErrors[plan.id] }}</span>
+              <v-btn variant="text" :disabled="planDetailsLoading[plan.id] || planFullDetailsLoading[plan.id]" @click="retryPlanDetails(plan)">{{ t('重试加载') }}</v-btn>
+            </v-alert>
             <div v-if="planDetailsLoading[plan.id]" class="knowledge-plan-detail-loading" aria-live="polite">
               <div>
                 <v-progress-circular indeterminate size="22" width="2" color="primary" />
@@ -3244,7 +3160,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               <v-icon size="18">{{ expandedPlans[plan.id] ? "mdi-chevron-up" : "mdi-chevron-down" }}</v-icon>
             </button>
 
-            <div v-if="expandedPlans[plan.id]" class="knowledge-plan-details">
+            <div v-if="expandedPlans[plan.id] || feedbackFocusActive(plan)" class="knowledge-plan-details">
               <v-alert
                 v-if="planFullDetailsLoading[plan.id]"
                 type="info"
@@ -3338,7 +3254,6 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
               </section>
 
               <section v-if="planAcceptsGuidance(plan)" class="knowledge-approval-panel" data-state="guidance">
-                <v-btn v-if="!feedbackFocusActive(plan)" variant="tonal" color="primary" @click="openFeedbackFocus(plan)">{{ t('打开专注视图') }}</v-btn>
                 <div class="knowledge-approval-head">
                   <div>
                     <span>{{ t(feedbackQuestions(plan).length ? "补充信息" : "计划引导") }}</span>
@@ -3383,6 +3298,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                     </div>
                   </article>
                 </div>
+                <PlanQuestionFields v-if="feedbackFocusActive(plan)" presentation="context" :questions="feedbackQuestions(plan)" :answers="questionAnswers(plan)" :form-id="`context-${plan.id}`" :plan-attachments="plan.attachments" :attachment-url="id => planAttachmentUrl(plan.id, id)" disabled submit-disabled />
                 <Teleport to="#feedback-focus-actions" :disabled="!feedbackFocusActive(plan)">
                 <div>
                 <div
@@ -3503,9 +3419,8 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   </div>
                   <p v-if="!isApprovalExpanded(plan)" data-no-i18n>{{ plan.presentation.approval.contract?.request }}</p>
                   <div v-if="!isApprovalExpanded(plan) && approvalNotices[plan.id]" role="status">{{ approvalNotices[plan.id].text }}</div>
-                  <v-btn v-if="!feedbackFocusActive(plan)" variant="tonal" color="primary" @click="openFeedbackFocus(plan)">{{ t('打开专注视图') }}</v-btn>
+
                   <div v-if="isApprovalExpanded(plan)" :id="`approval-body-${plan.id}`">
-                  <Teleport to="#feedback-focus-context" :disabled="!feedbackFocusActive(plan)">
                   <div>
                   <v-alert
                     v-if="plan.presentation.approval.missing.length"
@@ -3662,8 +3577,8 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
                   </div>
                   </details>
                   </div>
-                  </Teleport>
-                  <Teleport to="#feedback-focus-actions" :disabled="!feedbackFocusActive(plan)">
+                  <PlanQuestionFields v-if="feedbackFocusActive(plan)" presentation="context" :questions="feedbackQuestions(plan)" :answers="questionAnswers(plan)" :form-id="`context-${plan.id}`" :plan-attachments="plan.attachments" :attachment-url="id => planAttachmentUrl(plan.id, id)" disabled submit-disabled />
+                <Teleport to="#feedback-focus-actions" :disabled="!feedbackFocusActive(plan)">
                   <div>
                   <div
                     v-if="approvalComposeStatus(plan)"
@@ -3861,14 +3776,14 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
         </div>
 
         <div
-          v-if="hasMorePlans || hasMoreRenderedPlans"
+          v-if="!feedbackFocusOpen && (hasMorePlans || hasMoreRenderedPlans)"
           ref="planLoadMoreSentinel"
           class="knowledge-load-more"
           aria-live="polite"
         >
           <v-progress-circular v-if="loadingMorePlans" indeterminate size="20" width="2" color="primary" />
           <span>{{ t(hasMoreRenderedPlans ? "继续向下滚动加载更多计划卡片" : "正在持续加载更多计划…") }}</span>
-          <v-btn v-if="!loadingMorePlans" size="small" variant="text" @click="hasMoreRenderedPlans ? loadMoreRenderedPlans() : loadMorePlans()">{{ t("加载更多") }}</v-btn>
+          <v-btn v-if="!loadingMorePlans" size="small" variant="text" @click="hasMoreRenderedPlans ? loadMoreRenderedPlans() : retryPlanPages()">{{ t("加载更多") }}</v-btn>
         </div>
 
         <div v-if="!loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length" class="knowledge-empty">
@@ -3876,6 +3791,8 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <b>没有匹配的计划</b>
           <span>{{ planListHasFilters ? t("可以调整筛选条件，恢复其它计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>
         </div>
+      </div>
+
       </div>
 
       <div v-if="roleId && showsMemoryList" class="knowledge-memory-grid">

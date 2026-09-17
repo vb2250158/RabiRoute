@@ -170,12 +170,43 @@ function assertNoRetiredManagerSemantics(payloadRoot, files) {
   }
 }
 
+function assertDeclaredWebEntries(payloadRoot, files) {
+  const profilePath = "dist/plugins/profiles/desktop.json";
+  const included = new Set(files.map(file => file.path));
+  // Scoped host/runtime manifests do not own a plugin profile.
+  if (!included.has(profilePath)) return;
+  const profile = JSON.parse(readTextFile(path.join(payloadRoot, profilePath)));
+  if (!Array.isArray(profile.instances)) throw new Error("Release plugin profile has no instances.");
+  for (const instance of profile.instances) {
+    if (instance.enabled === false) continue;
+    const packageId = instance.package;
+    const version = instance.version;
+    if (typeof packageId !== "string" || typeof version !== "string" || !/^[a-zA-Z0-9._+-]+$/.test(version)) {
+      throw new Error("Release plugin profile has an invalid package identity.");
+    }
+    const packagePath = `dist/plugins/packages/${encodeURIComponent(packageId)}/${version}`;
+    const manifestPath = `${packagePath}/rabi.plugin.json`;
+    if (!included.has(manifestPath)) throw new Error(`Release plugin manifest is missing: ${packageId}@${version}`);
+    const manifest = JSON.parse(readTextFile(path.join(payloadRoot, manifestPath)));
+    const web = manifest.entries?.web;
+    if (web?.execution !== "in_process") continue;
+    const module = typeof web.module === "string" ? web.module.replace(/^\.\//, "") : web.module;
+    if (typeof module !== "string" || module.includes("\\") || module.startsWith("/") || module.split("/").some(part => !part || part === "." || part === "..") || /^[a-z]:/i.test(module)) {
+      throw new Error(`Web entry path is invalid: ${packageId}@${version}`);
+    }
+    if (!included.has(`${packagePath}/${module}`)) {
+      throw new Error(`Web entry is missing: ${packageId}@${version} ${module}; rebuild Web plugin bundles before packaging.`);
+    }
+  }
+}
+
 function writeManifest(payloadRoot, packageVersion) {
   if (!fs.statSync(payloadRoot).isDirectory()) {
     throw new Error(`Payload root is not a directory: ${payloadRoot}`);
   }
   const files = collectFiles(payloadRoot).sort((left, right) => left.path.localeCompare(right.path, "en"));
   if (files.length === 0) throw new Error("Release payload is empty.");
+  assertDeclaredWebEntries(payloadRoot, files);
   assertNoRetiredManagerSemantics(payloadRoot, files);
   const canonical = files.map((entry) => `${entry.path}\0${entry.size}\0${entry.sha256}\n`).join("");
   const payloadSha256 = createHash("sha256").update(canonical, "utf8").digest("hex");

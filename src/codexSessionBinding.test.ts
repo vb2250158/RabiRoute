@@ -3,6 +3,13 @@ import test from "node:test";
 import { bindCodexSessionForSave, bindDshSessionForSave } from "./shared/codexSessionBinding.js";
 import { handleAgentThreadRequest, type AgentThreadDriver } from "./agentThreads.js";
 
+test("restored local cards without explicit session selection do not create tasks on save", async () => {
+  const gateway = { id: "example", name: "Example", agentAdapters: ["codex", "dsh"] };
+  const resolve = async () => { throw new Error("must not create a session"); };
+  await bindCodexSessionForSave(gateway, resolve);
+  await bindDshSessionForSave(gateway, resolve);
+});
+
 test("saving a Rabi route switches its binding to the selected existing Desktop task", async () => {
   const gateway = {
     id: "RabiLink",

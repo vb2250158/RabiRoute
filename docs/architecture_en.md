@@ -6,6 +6,10 @@ English | <a href="./architecture.md">简体中文</a>
 
 # RabiRoute Architecture
 
+Remote Agents are execution targets, not message endpoints. Select an instance and Agent through [remote enrollment](lan-rabi-agent-bootstrap_en.md).
+
+Device ownership has changed: configure watches, bands, and glasses in mobile recording, which submits recording events. Separate PC device entries are removed; legacy device protocols below are retained for compatibility maintenance. See [implementation and retirement criteria](mobile-recording-event-boundary_en.md).
+
 > Status: current architecture guide. Calibrated against the Codex Desktop owner, message-endpoint maturity, and the actual Outbox boundary.
 
 RabiRoute is an open-source message gateway and Policy Router. It normalizes incoming events, records them, evaluates routing policy, builds handler context, delivers work to a handler, and controls how results may return.

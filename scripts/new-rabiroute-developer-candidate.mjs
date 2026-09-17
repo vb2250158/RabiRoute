@@ -24,6 +24,27 @@ function replaceDirectory(source, destination) {
   fs.cpSync(source, destination, { recursive: true, dereference: false, errorOnExist: false });
 }
 
+function assertWebPluginEntries(root) {
+  const packages = path.join(root, "dist/plugins/packages");
+  if (!fs.existsSync(packages)) return;
+  for (const item of fs.readdirSync(packages, { recursive: true, withFileTypes: true })) {
+    if (!item.isFile() || item.name !== "rabi.plugin.json") continue;
+    const manifestPath = path.join(item.parentPath, item.name);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const entry = manifest.entries?.web?.module;
+    if (!entry) continue;
+    const entryPath = path.resolve(path.dirname(manifestPath), entry);
+    const relative = path.relative(path.dirname(manifestPath), entryPath);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Invalid Web Bundle entry: ${manifest.id}`);
+    if (!fs.statSync(entryPath, { throwIfNoEntry: false })?.isFile()) throw new Error(`Web Bundle entry is missing: ${manifest.id}`);
+    const source = fs.readFileSync(entryPath, "utf8");
+    const match = source.match(/^export \{ activate \} from "\/(assets\/[A-Za-z0-9._/-]+)";\s*$/);
+    if (!match) throw new Error(`Web Bundle wrapper is not supported: ${manifest.id}`);
+    if (match[1].split("/").some(segment => !segment || segment === "." || segment === "..")) throw new Error(`Invalid Web Bundle asset: ${manifest.id}`);
+    requireFile(root, `ribiwebgui/dist/${match[1]}`);
+  }
+}
+
 function createDeveloperCandidate(options) {
   const baseRoot = path.resolve(options.baseRoot);
   const buildRoot = path.resolve(options.buildRoot);
@@ -87,6 +108,8 @@ function createDeveloperCandidate(options) {
         fs.copyFileSync(source, path.join(stagingRoot, name));
       }
     }
+    // Validate the copied snapshot, not the mutable source tree, before sealing it.
+    assertWebPluginEntries(stagingRoot);
     const manifest = writeManifest(stagingRoot, packageVersion);
     const packageRoot = path.join(versionsRoot, manifest.releaseId);
     if (fs.existsSync(packageRoot)) {

@@ -6,7 +6,7 @@
 
 # RabiLink 智能手表 / 手环健康消息端
 
-> 状态：**实验集成，真机主链路已闭环**。结构化健康时间线、Manager 查询 API、阈值告警路由、RibiWebGUI 消息端配置、Android 配置页、Health Connect 和 PC ADB Companion 均已实现。小米真机已由手机端配置驱动，持续读取本地 Provider 的最近心率、睡眠日报和睡眠阶段，并写入可查询时间线。小米运动健康仍未向该机的 Health Connect 写入数据；无需 ADB、会争用官方 App 连接的 MiWear SPP 直连仍未作为默认采集器。
+> 状态：**实验集成，真机主链路已闭环**。结构化健康时间线、Manager 查询 API、阈值告警路由、RibiWebGUI 消息端配置、Android 配置页、Health Connect 和 PC ADB Companion 均已实现。小米真机已由手机端配置驱动，持续读取本地 Provider 的最近心率、睡眠日报和睡眠阶段，并写入可查询时间线。手机端 Health Connect 采集已包含步数（按本地自然日聚合）；小米运动健康是否把步数写入 Health Connect 取决于厂商上游。小米运动健康仍未向该机的 Health Connect 写入数据；无需 ADB、会争用官方 App 连接的 MiWear SPP 直连仍未作为默认采集器。
 
 ## 全天记录整合（Unreleased）
 
@@ -43,24 +43,9 @@ Agent / 主动智能
 
 健康观测不会写进普通聊天账本，也不会让每个常规样本唤醒 Agent；只有命中规则的告警才进入 Agent 路由。
 
-## 启用消息端
+## 移动端设置
 
-在 RibiWebGUI 的 Route 配置中添加“智能手表 / 手环”消息端。配置文件等价项如下：
-
-```json
-{
-  "messageAdapters": ["rolePanel", "rabilink", "wearable"],
-  "messageAdapterPolicies": {
-    "wearable": {
-      "inputEnabled": true,
-      "outputEnabled": false,
-      "supportedOutputs": ["text"]
-    }
-  }
-}
-```
-
-人格规则应启用 `wearable_health_alert`。当前示例位于 `examples/data/route/RabiLink/adapterConfig.json` 与 `examples/data/roles/RabiActive/personaConfig.json`。
+手表、手环和眼镜统一在手机记录系统设置，PC 不再添加独立设备消息端。记录事件投递的分工、实施状态和旧协议迁移见[移动端记录与事件边界](mobile-recording-event-boundary.md)。
 
 ## 手机配置
 
@@ -69,11 +54,17 @@ Agent / 主动智能
 1. 设置设备名称、稳定设备 ID 和设备类别。
 2. 选择采集来源：`Health Connect` 或“小米运动健康（PC ADB Companion）”，再设置同步间隔与回看时间。
 3. 设置心率高/低阈值、告警冷却和睡眠状态变化告警。
-4. 打开 Health Connect 权限页，授权心率与睡眠读取。
+4. 打开 Health Connect 权限页，授权心率、睡眠和步数读取。步数是后加的可选类型：已单独授权过心率和睡眠的设备需要在这里补勾“步数”。
 5. 如已取得小米认证秘钥，可在密码框保存；它经 Android Keystore AES-GCM 加密，只为后续厂商直连采集器保留，当前不会上传。
 6. 保存并启动，或点“立即同步”。Health Connect 使用手机前台服务；ADB Companion 模式由已配对 Rabi PC 上的 Host 所有插件 worker 读取同一份手机配置。
 
 Health Connect 没有数据时不会制造样本。手机端不再常驻轮询 Health Connect；只在用户手动同步、启动恢复或后续平台/设备事件到达时读取一次回看窗口。当前已验证手机选择 ADB Companion 后，电脑会把手机上的启用开关、稳定设备 ID、名称、类别、事件触发回看窗口和告警规则作为配置真源；电脑不读取 Keystore 密钥。
+
+### Health Connect 步数
+
+步数来自系统的 `StepsRecord`，与心率和睡眠走同一次 Health Connect 读取，不新增任何采集轮询或后台服务。Health Connect 把步数写成许多累计小段，且同一天重复读取会得到不同的分段边界，因此手机端先按**本地自然日**聚合当天的累计步数，再用「`health-connect-steps-<日期>`」这个与分段无关的稳定 ID 上报；同一天的回看重读会被下游按 ID 去重，而不会把步数重复累加。步数不参与心率阈值或睡眠状态告警。
+
+小米运动健康是否把步数写进 Health Connect 取决于厂商上游，App 不会伪造步数。Provider 侧 `step` 分类当前仍未作为采集来源；手机端“小米运动健康（PC ADB Companion）”来源只读取心率与睡眠。
 
 ## 小米 ADB Companion
 
@@ -101,14 +92,7 @@ Manager 默认绑定 `127.0.0.1:0`。worker 只接收 Host 当前 READY 发布�
 
 子进程的 `error` 事件不等于已经退出：只要没有真实 `exit` / `close` 或退出码，process lease 继续占有全局 worker key，新的插件代不得启动第二个 worker。停止失败会保持旧 lease、允许同一 handle 重试，并让代际交接超时关闭；pid 尚未建立的异步 spawn 错误由 lease 层吸收并交给有界重试，不会成为未处理事件带退 Manager。
 
-健康阈值告警使用独立的 `wearable` 消息端路由交给 Agent，避免为了健康采集启动 QQ、FenneNote 等无关消息端。首次配置可先检查，再显式执行：
-
-```powershell
-node scripts/configure-wearable-health-route.mjs
-node scripts/configure-wearable-health-route.mjs --execute
-```
-
-脚本只从既有夜雨路由复制 Agent 绑定所需的非密钥字段，修改前会把私有人格规则和既有健康路由备份到忽略提交的 `data/` 下。
+旧客户端仍使用内部 `wearable` 告警链路。独立健康 Route 创建脚本已移除，按上述边界迁移到记录事件。
 
 ## Agent 查询 API
 

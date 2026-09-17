@@ -693,7 +693,7 @@ Defaults are 2 GiB per file (2048 MiB, the hard maximum), 4 GiB total, at most 1
 
 If disk permissions or file locks prevent temporary reservation cleanup, its quota remains conservatively reserved and an audit event is recorded rather than deleting possibly active data. Repair the storage fault and trigger cleanup again after a Host restart; automatic recovery from every storage failure is not guaranteed.
 
-Large files use backpressured binary streaming, disk writes, and incremental SHA-256 verification, not whole-package buffers or JSON/Base64 bodies. The upload deadline is 30 minutes. In Settings → Rabi identity, save `agentUploads.maxFileMiB` as an integer from `1..2048` (default `2048`); it is persisted in `data/Config.json` and takes effect after Manager restarts. Local administrators may also use the existing protected `PATCH /api/rabi/identity`; remote Agents cannot raise this quota. The client hard maximum remains 2 GiB, and a lower Manager setting takes precedence.
+Large files use backpressured binary streaming, disk writes, and incremental SHA-256 verification, not whole-package buffers or JSON/Base64 bodies. The upload deadline is 30 minutes. In RabiLink → Configuration, save `agentUploads.maxFileMiB` as an integer from `1..2048` (default `2048`); it is persisted in `data/Config.json` and takes effect after Manager restarts. Local administrators may also use the existing protected `PATCH /api/rabi/identity`; remote Agents cannot raise this quota. The client hard maximum remains 2 GiB, and a lower Manager setting takes precedence.
 
 A controlled integration test transferred **734 MiB (769654784 bytes)** through the real client → loopback HTTP → managed storage → simulated NapCat and verified size and SHA-256. The source was generated in 64 KiB chunks, Buffer allocations/concatenations above 8 MiB were guarded, and the sink checked chunks incrementally. Enable this case in `src/manager/agentUploadFlow.test.ts` with `RABI_TEST_LARGE_UPLOAD=1`; routine runs skip it. This is not a QQ-platform acceptance test: actual QQ/NapCat size, account/group permission, filesystem access and response deadlines still require channel receipts. Legacy connectors need the new bootstrap described in the onboarding guide, and hosts caching the old Hook must reload; raising the server quota does not update old clients.
 
@@ -1138,6 +1138,8 @@ RabiRoute writes the consolidated items, completes the run, and marks input memo
 GET  /api/remote-agent/devices
 POST /api/remote-agent/tasks
 ```
+
+Remote Agents now enroll as execution targets; see [remote enrollment](lan-rabi-agent-bootstrap_en.md). The message-endpoint setup UI is removed. The following describes legacy bridge compatibility only.
 
 The Manager discovers a remote `plugin-adapters/remote-agent-rabiroute` bridge and connects after the user supplies its password. Protocol v3 uses per-connection role-separated HMAC-SHA256 challenges and does not send the plaintext password over the WebSocket. Plain `ws://` authenticates peers but does not encrypt the link; use a trusted VPN or properly terminated `wss://` across untrusted networks.
 

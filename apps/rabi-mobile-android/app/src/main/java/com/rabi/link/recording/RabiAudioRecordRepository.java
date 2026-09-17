@@ -56,6 +56,10 @@ public final class RabiAudioRecordRepository {
         return listCaptureRecords(context, Integer.MAX_VALUE, from, to);
     }
     private static JSONArray listCaptureRecords(Context context, int limit, long from, long to) {
+        android.content.SharedPreferences enrollment = context.getSharedPreferences("rabi_asr_enrollment", Context.MODE_PRIVATE);
+        com.rabi.link.RabiLinkRelayConfig relay = com.rabi.link.RabiLinkRelaySettings.INSTANCE.load(context);
+        long pendingBefore = relay.getConfigured() && com.rabi.link.transport.AsrDirectory.accountIdentity(relay.getBaseUrl(), relay.getToken()).equals(enrollment.getString("scope", ""))
+                && enrollment.getLong("requestedAt", 0) > enrollment.getLong("completedAt", 0) ? enrollment.getLong("requestedAt", 0) : 0;
         List<JSONObject> segments = metadata(context);
         Set<String> selected = new HashSet<>();
         for (JSONObject row : segments) {
@@ -87,7 +91,17 @@ public final class RabiAudioRecordRepository {
                             record.put("targetBound", !binding.optString("endpointIdentity", "").isEmpty());
                         } catch (Exception ignored) { record.put("targetBound", false); }
                     }
+                    if ("transcribe".equals(record.optString("processingPolicy")))
+                        record.put("asrState", com.rabi.link.transport.AsrEventProgress.get(id));
+                    else if ("local_only".equals(record.optString("processingPolicy"))) record.put("asrState", pendingBefore > 0 && segment.optLong("startedAt") <= pendingBefore ? "pending" : "local_only");
                     records.put(id, record);
+                    File transcript = new File(segments(context).getParentFile(), "asr-" + id + ".json");
+                    if (id.matches("[A-Za-z0-9_-]{1,120}") && transcript.isFile() && transcript.length() < 2_000_000) {
+                        try {
+                            JSONObject receipt = new JSONObject(new String(java.nio.file.Files.readAllBytes(transcript.toPath()), StandardCharsets.UTF_8));
+                            if (id.equals(receipt.optString("eventId")) && captureId.equals(receipt.optString("captureId"))) record.put("transcript", receipt);
+                        } catch (Exception ignored) { /* Keep playable audio visible while a receipt is replaced. */ }
+                    }
                 }
                 record.getJSONArray("playbackSpans").put(new JSONObject()
                     .put("startedAt", segment.optLong("startedAt"))
@@ -133,7 +147,7 @@ public final class RabiAudioRecordRepository {
                     File pcm = new File(segments(context), row.getString("pcmFileName")).getCanonicalFile();
                     if (!pcm.getParentFile().equals(segments(context).getCanonicalFile())) throw new IOException("invalid PCM path");
                     MessageDigest digest = MessageDigest.getInstance("SHA-256"); long count = 0;
-                    try (InputStream input = new FileInputStream(pcm)) {
+                    try (InputStream input = new FileInputStream(RecordingResourceCache.materialize(context, pcm))) {
                         byte[] buffer = new byte[32768]; int read;
                         while ((read = input.read(buffer)) != -1) { count += read; digest.update(buffer, 0, read); output.write(buffer, 0, read); }
                     }

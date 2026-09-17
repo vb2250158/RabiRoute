@@ -48,7 +48,8 @@ test("Agent adapter catalog dispatches DSH scans through its owned worker pool",
 });
 
 test("DSH plugin diagnostics render the live health fields", () => {
-  assert.match(pageSource, /RabiRoute Agent<\/code> 的运行状态、版本、Manager 地址、通信约束和模型工具/);
+  assert.match(pageSource, /v-for="plugin in agentScanFor\(agent\.type\)\?\.plugins \?\? \[\]"/);
+  assert.match(pageSource, /plugin\.installed && plugin\.healthy !== false \? 'success' : 'warning'/);
   assert.match(pageSource, /plugin\.healthy === false \? "未就绪" : "已加载"/);
   assert.match(pageSource, /plugin\.details \?\? \[\]/);
 });

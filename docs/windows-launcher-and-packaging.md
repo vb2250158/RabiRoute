@@ -12,6 +12,8 @@ Windows 安装版只有一个应用生命周期入口：`RabiRouteHost.exe`。Ma
 
 发布页同时提供便携 ZIP 和 `SHA256SUMS.txt`。便携 ZIP 使用 `RabiRouteHost.exe + current.json + versions/<releaseId>` 布局，只能解压到新的空目录，不能覆盖旧 RabiRoute 目录；升级既有安装必须运行 Setup。Setup 嵌入同一份便携 ZIP，先在安装盘暂存并逐清单校验哈希、大小、私有路径、reparse point 与 Host 自检，再按当前 application generation 执行 fenced quit；只有候选通过后才原子切换 `current.json` 与 bootstrap，失败会恢复上一指针和 bootstrap。经精确识别的旧生命周期入口会以 `.retired` 后缀移入安装器所有的非执行 quarantine；事务失败或断电恢复会把它们原位还原，foreign 和相似后缀文件不移动。`data/`、`logs/` 与 foreign 文件不参与覆盖或卸载。当前 Windows 包尚未签名，遇到 SmartScreen“未知发布者”提示时先核对校验和。
 
+发布清单生成时会核对桌面 profile 中启用插件声明的进程内 Web 入口：入口必须在包内且实际存在，否则拒绝打包并指出插件与缺失路径。单独重建插件包会移除后续 Web 构建生成的入口，因此必须完成 Web Bundle 同步后再冻结发布产物；不能仅凭 Manager 健康或 HTML 可下载判断页面可用。安装验收还需读取与 HTML `webRelease` 一致的模块目录及模块入口。
+
 ## 生命周期所有权
 
 后台任务故障与核心接口就绪分开判断：`health.state` 不因记忆整理等后台 incident 单独降级；`health.backgroundState` 和 `health.backgroundIncidentCount` 保留故障状态，详细原因仍在 `backgroundLifecycle` 和日志中。必需能力、计划存储启动和路线就绪检查不变。后台任务独立退避，不能阻断无关 API。记忆整理的投递结果不确定时持久化待核对状态，后续只读原投递回执；没有确认不能自动重发。移除的调度目标不再计入当前故障汇总。
@@ -61,6 +63,12 @@ Host 同时向 Manager 与 Desktop 提供只读的发布目录（`RABIROUTE_PACK
 - DSH 只提供插件 scope 与依赖感知卸载的设计参考：RabiRoute 据此用 generation、`readyRequires`、process lease 和依赖逆序释放管理插件。DSH 式进程内 isolate 不被当作安全沙箱；RabiRoute 的 `in_process` 是受信任扩展，`isolated` 是独立故障域，名称不能替代操作系统权限边界。
 
 Sunshine 的固定 base-port 约定不属于这里采用的不变量。RabiRoute 不把端口写死为安装配置；Host 只缓存最近一次成功启动的端口，并由本代 Manager 重新绑定、发布和验证。
+
+## 环境变量重复键导致启动失败
+
+若 Host 日志出现 `An item with the same key has already been added. Key: NO_PROXY`，且堆栈指向 `BuildEnvironmentBlock`，表示旧版 Host 构造子进程环境时无法处理大小写不同的同名变量；并不表示知识库损坏或必须删除系统代理设置。修复后的 Host 按 Windows 的大小写不敏感规则合并继承变量（枚举中后出现的值覆盖先出现的值），然后应用 Host 显式覆盖；值为 `null` 的覆盖会删除该键。输出仍为按键排序、双 NUL 结尾的 UTF-16 环境块，不修改父进程或系统环境，也不记录变量值。
+
+通过 Setup 或本机 Developer Channel 安装包含修复的 Host Core，保留既有数据与版本回滚点；只重试同一个旧 Host 不会修复此问题。恢复后从 Host `status` 动态取得 URL，核对 `/meta` 的 generation、实例和 PID，再检查 WebGUI 文档及其模块入口。不要扫描端口、单独启动 Manager 或原地替换活动版本 DLL。
 
 ## 动态 Manager 端点
 

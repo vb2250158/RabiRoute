@@ -16,6 +16,15 @@ test("primary and managed tasks use their owning instance, including scheduled f
   assert.equal(calls.length, 1);
 });
 
+test("explicit local owner never gets hijacked by a remote task with the same id", async () => {
+  let discovered = false;
+  const transport = { instances: () => { discovered = true; return []; }, manage: async () => { throw new Error("must not send remotely"); } };
+  assert.equal(await routeInstanceThread({ action: "read", threadId: "same-id", agentAdapter: "codex", agentTargetId: "local:codex" }, transport), undefined);
+  assert.equal(discovered, false);
+  await assert.rejects(routeInstanceThread({ agentAdapter: "codex", agentTargetId: "local:dsh" }, transport), /must match/);
+  await assert.rejects(routeInstanceThread({ agentAdapter: "codex", agentTargetId: "local:codex", instanceBinding: { instanceId: "remote", agentId: "agent" } }, transport), /remote binding/);
+});
+
 test("ambiguous session ids require a stable instance binding", async () => {
   const instances: AgentInstance[] = ["a", "b"].map(instanceId => ({ instanceId, local: false, connected: true, agents: [{ agentId: "agent", name: "Agent", provider: "codex-desktop", enabled: true, sessionId: "same-id" }] }));
   const transport = { instances: () => instances, manage: async () => ({ statusCode: 200, data: {} }) };

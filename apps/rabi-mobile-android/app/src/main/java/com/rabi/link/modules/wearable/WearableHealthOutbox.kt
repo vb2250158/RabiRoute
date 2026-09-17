@@ -40,7 +40,7 @@ internal class WearableHealthOutbox(private val context: Context) {
                 .put("sleepStale", policy.sleepStateStaleAfterMinutes))
             .put("samples", JSONArray(samples.map { s -> JSONObject().put("id", s.id).put("metric", s.metric)
                 .put("recordedAt", s.recordedAt).put("startAt", s.startAt).put("endAt", s.endAt)
-                .put("value", s.value ?: JSONObject.NULL).put("sleepState", s.sleepState)
+                .put("value", s.value ?: JSONObject.NULL).put("unit", s.unit).put("sleepState", s.sleepState)
                 .put("sleepStage", s.sleepStage).put("source", s.source) }))
         val file = AtomicFile(File(root, "$id.json"))
         val stream = file.startWrite()
@@ -58,9 +58,19 @@ internal class WearableHealthOutbox(private val context: Context) {
                     p.getInt("cooldown"), p.getBoolean("sleepAlert"), p.getInt("heartStale"), p.getInt("sleepStale")), false)
             val array = j.getJSONArray("samples")
             val samples = (0 until array.length()).map { i -> val s = array.getJSONObject(i)
-                RabiWearableHealthSample(s.getString("id"), s.getString("metric"), s.getString("recordedAt"),
-                    s.getString("startAt"), s.getString("endAt"), if (s.isNull("value")) null else s.getInt("value"),
-                    s.getString("sleepState"), s.getString("sleepStage"), s.getString("source")) }
+                RabiWearableHealthSample(
+                    id = s.getString("id"),
+                    metric = s.getString("metric"),
+                    recordedAt = s.getString("recordedAt"),
+                    startAt = s.getString("startAt"),
+                    endAt = s.getString("endAt"),
+                    value = if (s.isNull("value")) null else s.getInt("value"),
+                    // unit 是后加字段：旧队列文件没有它，缺省由 metric 推导。
+                    unit = s.optString("unit", ""),
+                    sleepState = s.getString("sleepState"),
+                    sleepStage = s.getString("sleepStage"),
+                    source = s.getString("source")
+                ) }
             Entry(file, j.getString("id"), j.optString("endpoint"), j.optString("credentialIdentity"), j.optString("workerId"),
                 j.optString("processingPolicy", "local_only"), j.optString("routeProfileId"), j.getLong("capturedAt"), config, samples)
         } ?: emptyList()

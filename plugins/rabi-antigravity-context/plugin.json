@@ -1,0 +1,6 @@
+{
+  "name": "rabi-antigravity-context",
+  "version": "0.1.0",
+  "description": "Inject explicitly bound Rabi persona context into Antigravity conversations.",
+  "author": "RabiRoute"
+}

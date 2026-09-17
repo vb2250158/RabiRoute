@@ -127,6 +127,14 @@ New-Item -ItemType Directory -Path $bundleDataRoot -Force | Out-Null
 Copy-Item -LiteralPath $relayScript -Destination (Join-Path $bundleRoot "rabilink-relay-server.mjs") -Force
 Copy-Item -LiteralPath $deviceLogStoreScript -Destination (Join-Path $bundleRoot "rabilink-device-log-store.mjs") -Force
 Copy-Item -LiteralPath $proxyRequestQueueScript -Destination (Join-Path $bundleRoot "rabilink-proxy-request-queue.mjs") -Force
+# Relay signalling, ASR directory and binary tunnel dependencies must travel together.
+foreach ($relative in @("rabilink-event-hub.mjs", "lib/rabilink-tunnel-broker.mjs", "lib/rabilink-asr-priority.mjs")) {
+    $destination = Join-Path $bundleRoot $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path (Join-Path $repoRoot "scripts") $relative) -Destination $destination -Force
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $bundleRoot "node_modules") | Out-Null
+Copy-Item -LiteralPath (Join-Path $repoRoot "node_modules/ws") -Destination (Join-Path $bundleRoot "node_modules/ws") -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $bundleRoot "ribiwebgui") -Force | Out-Null
 Copy-Item -LiteralPath $webguiDist -Destination (Join-Path $bundleRoot "ribiwebgui\dist") -Recurse -Force
 Copy-Item -LiteralPath $webguiAssets -Destination (Join-Path $bundleRoot "assets") -Recurse -Force
@@ -135,9 +143,11 @@ Copy-Item -LiteralPath $manualAuthOpenApiFile -Destination (Join-Path $bundleDat
 Copy-Item -LiteralPath $agentTokenOpenApiFile -Destination (Join-Path $bundleDataRoot "rokid-rabilink-plugin.AGENT_TOKEN.openapi.json") -Force
 Copy-Item -LiteralPath $speechOpenApiFile -Destination (Join-Path $bundleDataRoot "rabilink-speech-api.openapi.json") -Force
 
+$wsVersion = (Get-Content -Raw -LiteralPath (Join-Path $repoRoot "node_modules/ws/package.json") | ConvertFrom-Json).version
 New-AsciiFile -Path (Join-Path $bundleRoot "package.json") -Content @"
 {
   "name": "rabilink-relay",
+  "dependencies": { "ws": "$wsVersion" },
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -365,7 +375,7 @@ $remoteSetup = @"
 New-Item -ItemType Directory -Force -Path `$remoteRoot | Out-Null
 `$backupRoot = Join-Path `$remoteRoot ("backups\code-" + [DateTime]::Now.ToString("yyyyMMdd-HHmmss"))
 New-Item -ItemType Directory -Force -Path `$backupRoot | Out-Null
-foreach (`$name in @("rabilink-relay-server.mjs", "rabilink-device-log-store.mjs", "rabilink-proxy-request-queue.mjs", "Caddyfile", "package.json")) {
+foreach (`$name in @("rabilink-relay-server.mjs", "rabilink-device-log-store.mjs", "rabilink-proxy-request-queue.mjs", "rabilink-event-hub.mjs", "Caddyfile", "package.json")) {
     `$source = Join-Path `$remoteRoot `$name
     if (Test-Path -LiteralPath `$source) {
         Copy-Item -LiteralPath `$source -Destination `$backupRoot -Force
