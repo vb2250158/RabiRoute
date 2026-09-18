@@ -2858,8 +2858,69 @@ export async function autoLoginNapcatInstancesOnRabiStart(
   return groupedResults.flat();
 }
 
-async function restartNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: NapcatLaunchRequest): Promise<Record<string, unknown>> {
-  if (!ctx.stopOwnedInstanceForRestart) throw new Error("NapCat 进程归属管理尚未就绪，不能停止实例。");
+/**
+ * Instances the runtime guardian owns: enabled ones with startup auto-login, grouped by
+ * QQ account exactly like the startup pass so one account is never double-launched.
+ */
+export function napcatGuardianInstances(ctx: NapcatManagerContext): Array<{ gatewayId: string; instanceId: string }> {
+  const seen = new Set<string>();
+  const result: Array<{ gatewayId: string; instanceId: string }> = [];
+  for (const runtime of ctx.getRuntimes()) {
+    if (!runtimeUsesNapcat(runtime.definition) || runtime.definition.enabled === false) continue;
+    for (const instance of napcatInstancesFor(ctx, runtime)) {
+      if (instance.enabled === false || instance.autoLoginOnRabiStart === false) continue;
+      const botUserId = String(instance.botUserId || "").trim();
+      const key = botUserId ? `qq:${botUserId}` : `instance:${runtime.definition.id}:${instance.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ gatewayId: runtime.definition.id, instanceId: instance.id });
+    }
+  }
+  return result;
+}
+
+/**
+ * Health observation for one instance, reusing the same health probe the manual cards use.
+ * Only an explicitly healthy snapshot counts as healthy; an unknown state is not health.
+ */
+export async function observeNapcatGuardianInstance(
+  ctx: NapcatManagerContext,
+  request: { gatewayId: string; instanceId: string }
+): Promise<{ state: string; healthy: boolean; needsUserAction?: boolean; message?: string }> {
+  const health = await testNapcatHealth(ctx, {
+    gatewayId: request.gatewayId,
+    instanceId: request.instanceId,
+    readWebuiLoginInfo: false,
+    inspectProcesses: false
+  }) as NapcatEnsureHealth;
+  const state = String(health.loginState || health.state || (health.ok === true ? NapcatState.Ready : NapcatState.Unreachable));
+  return {
+    state,
+    healthy: health.ok === true,
+    needsUserAction: health.needsUserAction === true,
+    message: typeof health.message === "string" ? health.message : undefined
+  };
+}
+
+/**
+ * Relaunch for the runtime guardian. Reuses the ordinary launch path, so the existing
+ * account-owner protection, lifecycle lock and duplicate-launch suppression all apply;
+ * it never forces a restart or displaces an instance that is already serving the account.
+ */
+export async function relaunchNapcatGuardianInstance(
+  ctx: NapcatManagerContext,
+  request: { gatewayId: string; instanceId: string }
+): Promise<{ ok?: boolean; state?: string; needsUserAction?: boolean; message?: string }> {
+  const result = await launchNapcatInstance(ctx, { ...request, forceRestart: false });
+  return {
+    ok: result.ok === true,
+    state: typeof result.state === "string" ? result.state : undefined,
+    needsUserAction: result.needsUserAction === true,
+    message: typeof result.message === "string" ? result.message : undefined
+  };
+}
+
+async function restartNapcatInstanceUnlocked(ctx: NapcatManagerContext, request: NapcatLaunchRequest): Promise<Record<string, unknown>> {  if (!ctx.stopOwnedInstanceForRestart) throw new Error("NapCat 进程归属管理尚未就绪，不能停止实例。");
   await ctx.stopOwnedInstanceForRestart(request);
   const result = await launchNapcatInstanceUnlocked(ctx, { ...request, forceRestart: false });
   return { ...result, steps: ["已核对实例归属并停止旧进程。", ...(Array.isArray(result.steps) ? result.steps : [])] };

@@ -31,9 +31,20 @@ export const activate = definePlugin({
             return () => { };
         const supervisor = new runtime.NapcatSupervisorService({
             run: async (signal) => {
-                if (runtime.activeNapcatControlContext) {
-                    await runtime.autoLoginNapcatInstancesOnRabiStart(runtime.activeNapcatControlContext, undefined, signal);
-                }
+                const context = runtime.activeNapcatControlContext;
+                if (!context)
+                    return;
+                // One startup pass: bring up instances that auto-login on Rabi start.
+                await runtime.autoLoginNapcatInstancesOnRabiStart(context, undefined, signal);
+                if (signal.aborted)
+                    return;
+                // Then keep watching: the startup pass alone left an instance that exited
+                // mid-run down indefinitely, because nothing re-checked it afterwards.
+                await runtime.runNapcatGuardianLoop({
+                    listInstances: () => runtime.napcatGuardianInstances(context),
+                    observe: request => runtime.observeNapcatGuardianInstance(context, request),
+                    relaunch: request => runtime.relaunchNapcatGuardianInstance(context, request)
+                }, signal);
             },
             onError: error => console.warn(`NapCat startup auto login failed: ${error instanceof Error ? error.message : String(error)}`)
         });

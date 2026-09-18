@@ -806,6 +806,33 @@ node rabi-agent.mjs --api GET /api/agent/uploads/<UUID> --agent <agentId>
 - NapCat 已接受群文件但随后 caption 失败时，仍保留 `status=sent`，只补发文本，不重发文件。当前 NapCat 接口读取 Manager 交给它的文件路径；异机 NapCat 必须能够通过共享目录读取该路径。本功能只解决远端 Agent 到 Manager 的上传，不解决任意跨机 NapCat 文件可读性。
 - 这不扩大远端线程桥权限：仍只支持 `responsePolicy: "none"` 单向投递，`required`、`inReplyToRequestId` 正式回复和远端到远端投递仍拒绝。
 
+当图片或文件已经作为受管计划附件存在时，可用 `payload.planAttachment` 按 ID 引用，不必先复制到 `allowedFileRoots` 里的目录：
+
+```json
+{
+  "deliveryId": "send-plan-attachment-001",
+  "sender": { "agentType": "codex", "sessionId": "<当前会话 ID>" },
+  "routeId": "<exact-route-id>",
+  "channel": "napcat",
+  "params": { "target": "group", "groupId": "<group-id>", "instanceId": "<napcat-instance-id>", "replyToMessageId": "" },
+  "payload": {
+    "type": "image",
+    "text": "[CQ:at,qq=<qq>] 截图见下。",
+    "planAttachment": { "roleId": "<role-id>", "planId": "plan-...", "attachmentId": "<attachment-id>" }
+  }
+}
+```
+
+- `planAttachment` 只接受 `type=image` 或 `type=file`，与 `path`/`url`/`fileId` 互斥；`roleId` 为拥有该计划的人格角色 ID。
+- Manager 每次请求从真实计划存储解析该附件，并再次核对解析结果仍位于该计划的受管附件目录内；计划或附件不存在、类型不符、逃出受管目录都拒发。它**不**扩大 `allowedFileRoots`，普通 `path` 流程的根目录检查完全照旧。
+- 与 `fileId` 一样，信任边界是「按 ID 引用受管对象」，不是「任意路径可读」；未接入该 resolver 的运行环境会明确失败而不是退回读取原路径。
+
+`payload.text` 中的 CQ 码按固定白名单解析为真实消息段，而不是按纯文本发送：
+
+- 支持 `[CQ:at,qq=<QQ或all>]`、`[CQ:reply,id=<消息ID>]`、`[CQ:face,id=<表情ID>]`，参数值按 URL 解码；`at` 的 `qq` 必须是数字或 `all`。
+- 其余 CQ 形态（`image`、`record`、`video`、`file`、`json`、`xml`、`forward`、`node`）会被明确拒绝，因为文本注入这些段会绕过渠道的 `payloadKind` 策略和 `allowedFileRoots` 校验；需要发这些内容请改用带 `path`/`url`/`planAttachment` 的类型化 payload。
+- 无法识别的 CQ 样式 token（例如缺少必需参数）会从文本中剥离，不再作为字面文本进入群聊。正文里若要展示 CQ 字样，请改用全角字符或拆分书写。
+
 Agent 可以主动向自己已经掌握的群号或企业微信群 chat id 发送推进消息，不需要引用原消息，但必须明确 `channel` 和目标参数。是否能发由消息端发送开关、消息端可用性和 payload 策略决定。
 
 主动投递到 RabiLink 眼镜也使用同一个动作安全门，不要直接绕过到 Relay：

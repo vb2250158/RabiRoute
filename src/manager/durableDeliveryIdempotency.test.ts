@@ -156,8 +156,132 @@ test("a new instance authoritatively recovers an earlier sending receipt without
   assert.equal(sends, 1);
 });
 
-test("a new instance retries an earlier sending receipt once after authoritative missing readback", async () => {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-durable-reload-missing-"));
+/** Reserves a real receipt, then re-points it at an owner that can never be alive. */
+async function reserveReceiptWithDeadOwner(
+  rootDir: string,
+  namespace: string,
+  deliveryId: string,
+  payload: unknown
+): Promise<void> {
+  let releaseOwner!: () => void;
+  const ownerHolds = new Promise<void>(resolve => { releaseOwner = resolve; });
+  const holding = executeDurableDelivery({
+    rootDir,
+    namespace,
+    deliveryId,
+    payload,
+    waitForCompletionMs: 0,
+    deliver: async () => { await ownerHolds; return { accepted: "owner" }; },
+    recover: async () => ({ state: "in_progress" as const, reason: "owner still running" })
+  });
+  const receiptPath = durableDeliveryReceiptPath(rootDir, namespace, deliveryId);
+  for (let attempt = 0; attempt < 200 && !fs.existsSync(receiptPath); attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  // Re-point ownership at a pid that cannot exist; the recorded lease stays valid.
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as Record<string, unknown>;
+  fs.writeFileSync(receiptPath, `${JSON.stringify({
+    ...receipt,
+    executionId: "dead-generation-execution",
+    ownerHost: os.hostname(),
+    ownerPid: 2147483646,
+    leaseExpiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+    leaseDurationMs: 15 * 60_000
+  }, null, 2)}\n`, "utf8");
+  releaseOwner();
+  await holding;
+}
+
+test("a receipt owned by a dead same-host pid is reclaimable before its lease expires", async () => {
+  // Regression: Manager generation churn left receipts owned by a dead pid pinned as
+  // in_progress for the full 15-minute lease, so /api/agent/send/receipts/<id> kept
+  // returning status=failed + idempotency.state=in_progress.
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-durable-dead-owner-"));
+  const namespace = "agent-send-idempotency";
+  const deliveryId = "92345678-1234-4567-8123-123456789abc";
+  await reserveReceiptWithDeadOwner(rootDir, namespace, deliveryId, { batch: 1 });
+  assert.equal(readDurableDeliveryReceipt(rootDir, namespace, deliveryId)?.state, "sending");
+
+  let sends = 0;
+  const outcome = await executeDurableDelivery({
+    rootDir,
+    namespace,
+    deliveryId,
+    payload: { batch: 1 },
+    waitForCompletionMs: 0,
+    deliver: async () => { sends += 1; return { accepted: true }; },
+    // The inherited owner is dead, so the reclaim must still prove the earlier result first.
+    recover: async () => ({ state: "retry" as const })
+  });
+
+  assert.equal(outcome.state, "completed");
+  assert.equal(sends, 1, "the reclaim must retry exactly once");
+  assert.equal(readDurableDeliveryReceipt(rootDir, namespace, deliveryId)?.state, "completed");
+});
+
+test("a dead same-host owner is not reclaimed while recovery cannot prove the earlier result", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-durable-dead-owner-uncertain-"));
+  const namespace = "agent-send-idempotency";
+  const deliveryId = "94345678-1234-4567-8123-123456789abc";
+  await reserveReceiptWithDeadOwner(rootDir, namespace, deliveryId, { batch: 1 });
+
+  let sends = 0;
+  const outcome = await executeDurableDelivery({
+    rootDir,
+    namespace,
+    deliveryId,
+    payload: { batch: 1 },
+    waitForCompletionMs: 0,
+    deliver: async () => { sends += 1; return { accepted: true }; },
+    recover: async () => ({ state: "uncertain" as const, reason: "outbox log unavailable" })
+  });
+
+  assert.equal(outcome.state, "uncertain");
+  assert.equal(sends, 0, "an unproven earlier result must never resend automatically");
+});
+
+test("a live same-host owner still fences a concurrent reclaim", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-durable-live-owner-"));
+  const namespace = "agent-send-idempotency";
+  const deliveryId = "93345678-1234-4567-8123-123456789abc";
+  let releaseOwner!: () => void;
+  const ownerHolds = new Promise<void>(resolve => { releaseOwner = resolve; });
+  let ownerStarted = false;
+  const holding = executeDurableDelivery({
+    rootDir,
+    namespace,
+    deliveryId,
+    payload: { batch: 1 },
+    waitForCompletionMs: 0,
+    deliver: async () => { ownerStarted = true; await ownerHolds; return { accepted: "owner" }; },
+    recover: async () => ({ state: "in_progress" as const, reason: "owner still running" })
+  });
+  const receiptPath = durableDeliveryReceiptPath(rootDir, namespace, deliveryId);
+  for (let attempt = 0; attempt < 200 && !ownerStarted; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+
+  let sends = 0;
+  try {
+    // This process is alive, so the lease must keep fencing other executions.
+    const outcome = await executeDurableDelivery({
+      rootDir,
+      namespace,
+      deliveryId,
+      payload: { batch: 1 },
+      waitForCompletionMs: 0,
+      deliver: async () => { sends += 1; return { accepted: true }; },
+      recover: async () => ({ state: "retry" as const })
+    });
+    assert.equal(outcome.state, "in_progress");
+  } finally {
+    releaseOwner();
+    await holding;
+  }
+  assert.equal(sends, 0, "a live owner must not be displaced");
+});
+
+test("a new instance retries an earlier sending receipt once after authoritative missing readback", async () => {  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-durable-reload-missing-"));
   let sends = 0;
   const base = {
     rootDir,

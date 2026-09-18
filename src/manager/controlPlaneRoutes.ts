@@ -74,9 +74,12 @@ import {
   ensureNapcatInstanceReady,
   launchNapcatInstance as launchNapcatInstanceEndpoint,
   launchNapcatProcess as launchManagedNapcatProcess,
+  napcatGuardianInstances,
   nextFreeLocalPort,
+  observeNapcatGuardianInstance,
   prepareManagedNapcatInstance,
   readNapcatLoginPanel,
+  relaunchNapcatGuardianInstance,
   requestNapcatBotExit,
   restartNapcatInstance as restartNapcatInstanceEndpoint,
   runNapcatLoginAction,
@@ -328,6 +331,7 @@ import { handleMessageProcessingApi } from "./messageProcessingRoutes.js";
 import { ManagerGatewayRuntimeService } from "./managerGatewayRuntimeService.js";
 import { GenerationHandoffLease } from "./generationHandoffLease.js";
 import { NapcatSupervisorService } from "./napcatSupervisorService.js";
+import { runNapcatGuardianLoop } from "../messageEndpoints/napcatGuardian.js";
 import { MessageProcessingAutomationService } from "./messageProcessingAutomationService.js";
 import { KnowledgeCallbackReminderService } from "./knowledgeCallbackReminderService.js";
 import { PlanFeedbackRecoveryService } from "./planFeedbackRecoveryService.js";
@@ -548,6 +552,8 @@ import {
   validateRoleKnowledge
 } from "../roleKnowledge.js";
 import { presentPlan, presentPlans } from "../roleKnowledgePresentation.js";
+import { resolvePlanAttachmentFile } from "../planAttachments.js";
+import { planAttachmentDirectory, type PlanStorageBucket } from "../planStorageLayout.js";
 import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   normalizeRoleMemoryPageLimit,
@@ -5056,6 +5062,7 @@ async function performAgentSend(
     routeRoot,
     rolesRoot,
     withManagedGroupFile: options.withManagedGroupFile,
+    withManagedPlanAttachment: resolveSendManagedPlanAttachment,
     speechServiceUrl: speechServiceUrl(),
     publishEvent: publishManagerEvent,
     planStorageReady: () => planStorageStartupStatus().state === "ready",
@@ -7357,6 +7364,47 @@ function roleDirForApi(roleId: string): string {
     throw new Error("Missing role id.");
   }
   return roleFolderPath(rolesRoot, safeRoleId);
+}
+
+/**
+ * Resolves `payload.planAttachment` for an Agent send. Plan attachment directories live
+ * outside the route's configured allowedFileRoots, so this is the only sanctioned way to
+ * send one: the attachment must resolve through real plan storage, and the returned file
+ * must still sit inside that plan's managed attachment directories. It never widens
+ * allowedFileRoots for ordinary paths, and a missing plan or attachment fails closed.
+ */
+async function resolveSendManagedPlanAttachment<T>(
+  reference: { roleId?: string; planId: string; attachmentId: string },
+  send: (file: { path: string; fileName: string }) => Promise<T>
+): Promise<T> {
+  const roleId = sanitizeRoleId(reference.roleId ?? "");
+  if (!roleId) throw new Error("A managed plan attachment requires the owning roleId.");
+  const roleDir = roleDirForApi(roleId);
+  const plan = getPlan(roleDir, reference.planId);
+  if (!plan) throw new Error(`Plan attachment plan was not found: ${reference.planId}.`);
+  const attachment = plan.attachments.find(item => item.id === reference.attachmentId);
+  if (!attachment) {
+    throw new Error(`Plan attachment was not found on plan ${reference.planId}: ${reference.attachmentId}.`);
+  }
+  if (attachment.kind !== "image" && attachment.kind !== "file") {
+    throw new Error(`Plan attachment ${reference.attachmentId} is not an image or file.`);
+  }
+  // resolvePlanAttachmentFile re-checks containment in the active and archive directories.
+  const filePath = resolvePlanAttachmentFile(roleDir, plan.id, attachment);
+  const realFile = fs.realpathSync(filePath);
+  const managedRoots = (["active", "archive"] as PlanStorageBucket[])
+    .map(bucket => planAttachmentDirectory(roleDir, plan.id, bucket))
+    .map(directory => path.resolve(directory));
+  const containedInManagedPlanDirectory = managedRoots.some(root => {
+    let realRoot: string;
+    try { realRoot = fs.realpathSync(root); } catch { return false; }
+    const relative = path.relative(realRoot, realFile);
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  });
+  if (!containedInManagedPlanDirectory) {
+    throw new Error(`Plan attachment ${reference.attachmentId} is outside its managed plan directory.`);
+  }
+  return await send({ path: realFile, fileName: attachment.name });
 }
 
 const roleKnowledgeCatalogRefreshes = new Map<string, Promise<void>>();
@@ -9679,8 +9727,11 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     Object.freeze({ capability: "host.manager.napcat-supervisor@1", value: Object.freeze({
       NapcatSupervisorService,
       autoLoginNapcatInstancesOnRabiStart,
-      get routeCatalogReady() { return routeCatalogStartupLifecycle.snapshot().state === "ready"; },
-      managerReadOnly,
+      runNapcatGuardianLoop,
+      napcatGuardianInstances,
+      observeNapcatGuardianInstance,
+      relaunchNapcatGuardianInstance,
+      get routeCatalogReady() { return routeCatalogStartupLifecycle.snapshot().state === "ready"; },      managerReadOnly,
       managerShouldAutostart,
       get activeNapcatControlContext() { return activeNapcatControlContext; },
       set activeNapcatControlContext(value) { activeNapcatControlContext = value; },

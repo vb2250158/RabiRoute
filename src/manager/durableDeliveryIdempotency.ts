@@ -419,9 +419,28 @@ function sameHostOwnerAlive(receipt: DurableDeliveryReceipt<unknown>): boolean {
   }
 }
 
+/**
+ * A same-host owner pid that no longer exists cannot still be executing the send,
+ * even while its recorded lease has not expired. Without this, a Manager generation
+ * that dies mid-send leaves its receipt owned by a dead pid and `claimReceipt` refuses
+ * to take over until the full lease (default 15 minutes) lapses, so the delivery stays
+ * `in_progress` long after the process that owned it is gone.
+ */
+function sameHostOwnerGone(receipt: DurableDeliveryReceipt<unknown>): boolean {
+  const ownerHost = receipt.ownerHost;
+  const ownerPid = receipt.ownerPid;
+  return Boolean(ownerHost)
+    && ownerHost!.toLowerCase() === os.hostname().toLowerCase()
+    && Number.isInteger(ownerPid)
+    && Number(ownerPid) > 0
+    && !sameHostOwnerAlive(receipt);
+}
+
 function receiptExecutionActive(receipt: DurableDeliveryReceipt<unknown>): boolean {
   if (receipt.state !== "sending" || !receipt.executionId) return false;
   if (sameHostOwnerAlive(receipt)) return true;
+  // A dead same-host owner releases the lease immediately.
+  if (sameHostOwnerGone(receipt)) return false;
   const leaseExpiresAt = Date.parse(String(receipt.leaseExpiresAt || ""));
   return Number.isFinite(leaseExpiresAt) && leaseExpiresAt > Date.now();
 }

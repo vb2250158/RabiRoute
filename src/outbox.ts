@@ -49,6 +49,7 @@ export type AgentReplyRequest = {
   fileUrl?: unknown;
   filePath?: unknown;
   fileName?: unknown;
+  planAttachment?: unknown;
   routeProfileId?: unknown;
   messageId?: unknown;
   targetType?: unknown;
@@ -174,6 +175,17 @@ export type AgentReplyOptions = {
     message: RolePanelTimelineMessage
   ) => Promise<RolePanelTimelineAppendResult>;
   submitPlanFeedback?: AgentPlanFeedbackSubmitPort;
+  /**
+   * Trusted code only: resolves a managed plan attachment to a concrete, validated file on
+   * disk. Plan-attachment directories are not route-configured allowedFileRoots, so this
+   * port is the only way Agent request JSON can reference one; it must re-check that the
+   * plan and attachment really belong to this host's managed storage. Never supplied by
+   * request JSON, and it never widens allowedFileRoots for ordinary paths.
+   */
+  withManagedPlanAttachment?: <T>(
+    reference: { roleId?: string; planId: string; attachmentId: string },
+    send: (file: { path: string; fileName: string }) => Promise<T>
+  ) => Promise<T>;
   /** Trusted code only: authorize ownership and retain the file lease until send settles. Never supplied by request JSON. */
   withManagedGroupFile?: (
     fileId: string,
@@ -246,6 +258,8 @@ type ReplyContent = {
   managedFileSha256?: string;
   file?: string;
   fileName?: string;
+  /** Trusted resolution of a managed plan attachment; never a raw request path. */
+  managedPlanAttachment?: { roleId?: string; planId: string; attachmentId: string };
 };
 
 function valueString(value: unknown): string | undefined {
@@ -303,6 +317,31 @@ function rolePanelAttachmentsForRequest(request: AgentReplyRequest, content: Rep
   return normalizeRolePanelAttachments([{ kind: content.kind, name, path: filePath, url }]);
 }
 
+/**
+ * A managed plan attachment is addressed by id, never by a filesystem path. The Manager
+ * resolves it against real plan storage through `withManagedPlanAttachment`, so the
+ * route's allowedFileRoots guard stays untouched for every ordinary path.
+ */
+function managedPlanAttachmentReference(
+  payload: Record<string, unknown>,
+  kind: MessagePayloadKind | undefined
+): { roleId?: string; planId: string; attachmentId: string } | undefined {
+  const raw = payload.planAttachment;
+  if (raw == null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("planAttachment must be an object.");
+  const reference = raw as Record<string, unknown>;
+  if (kind !== "image" && kind !== "file") {
+    throw new Error(`Managed plan attachments are not supported for ${kind ?? "text"} payloads.`);
+  }
+  const planId = valueString(reference.planId);
+  const attachmentId = valueString(reference.attachmentId);
+  if (!planId || !attachmentId) {
+    throw new Error("A managed plan attachment requires planId and attachmentId.");
+  }
+  const roleId = valueString(reference.roleId);
+  return { ...(roleId ? { roleId } : {}), planId, attachmentId };
+}
+
 function requestContent(request: AgentReplyRequest): ReplyContent {
   const payload = payloadObject(request);
   const rawText = request.text ?? request.message ?? request.content ?? payload.text ?? payload.message ?? payload.content;
@@ -325,8 +364,12 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
     return { text: text || "[file]", kind: "file", managedFileId: fileId, managedFileSha256: fileSha256, explicitText: text || undefined, message: [] };
   }
   if (Object.prototype.hasOwnProperty.call(payload, "fileSha256")) throw new Error("fileSha256 requires fileId.");
+  const planAttachment = managedPlanAttachmentReference(payload, kind);
   if (kind === "image") {
     const file = payloadValue(request, payload, "imageUrl", "imagePath", "url", "file", "path");
+    if (planAttachment) {
+      return { text: text || "[image]", kind: "image", file: "", fileName: undefined, managedPlanAttachment: planAttachment, message: [] };
+    }
     if (!file) throw new Error("Missing image url/path.");
     return { text: text || "[image]", kind: "image", file, fileName: file.split(/[\\/]/).pop(), message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "image" as const, data: { file } }] };
   }
@@ -337,8 +380,18 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
   }
   if (kind === "file") {
     const file = payloadValue(request, payload, "fileUrl", "filePath", "url", "file", "path");
-    if (!file) throw new Error("Missing file url/path.");
     const name = payloadValue(request, payload, "fileName", "name");
+    if (planAttachment) {
+      return {
+        text: text || name || "[file]",
+        kind: "file",
+        message: [],
+        explicitText: text || undefined,
+        fileName: name,
+        managedPlanAttachment: planAttachment
+      };
+    }
+    if (!file) throw new Error("Missing file url/path.");
     return {
       text: text || name || "[file]",
       kind: "file",
@@ -430,6 +483,22 @@ function validatedNapCatImageMessage(rootDir: string, message: OneBotMessage, al
       : validatedOutboundFilePath(rootDir, file, allowedFileRoots);
     return { ...segment, data: { ...segment.data, file: validatedFile } };
   });
+}
+
+/**
+ * Resolves a managed plan attachment through the Manager-owned port. The port is
+ * responsible for proving the attachment belongs to managed plan storage; this function
+ * only refuses to proceed when no port is wired, so a missing resolver fails closed.
+ */
+async function resolveManagedPlanAttachment<T>(
+  options: AgentReplyOptions,
+  reference: { roleId?: string; planId: string; attachmentId: string },
+  send: (file: { path: string; fileName: string }) => Promise<T>
+): Promise<T> {
+  if (!options.withManagedPlanAttachment) {
+    throw new Error("Managed plan attachment resolver is unavailable for this route.");
+  }
+  return await options.withManagedPlanAttachment(reference, send);
 }
 
 function mobileAttachmentContentType(kind: MessagePayloadKind, filePath: string): string {
@@ -837,6 +906,94 @@ function hasNapCatReplySegment(message: OneBotMessage): boolean {
     return /\[CQ:reply\b[^\]]*\]/i.test(message);
   }
   return message.some((segment) => segment.type.toLowerCase() === "reply");
+}
+
+const NAPCAT_CQ_CODE_PATTERN = /\[CQ:([A-Za-z][A-Za-z0-9_]*)((?:,[^\]]*)?)\]/g;
+/** CQ codes that must never be reconstructed from untrusted Agent text. */
+const NAPCAT_REJECTED_CQ_TYPES = new Set(["image", "record", "video", "file", "json", "xml", "forward", "node"]);
+
+function decodeCqParamValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseNapCatCqParams(rawParams: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const pair of (rawParams ?? "").replace(/^,/, "").split(",")) {
+    if (!pair) continue;
+    const separator = pair.indexOf("=");
+    if (separator <= 0) continue;
+    params[pair.slice(0, separator)] = decodeCqParamValue(pair.slice(separator + 1));
+  }
+  return params;
+}
+
+function napCatCqSegmentFor(type: string, params: Record<string, string>): { type: string; data: Record<string, string> } | undefined {
+  if (type === "reply") return params.id ? { type: "reply", data: { id: params.id } } : undefined;
+  if (type === "at") {
+    if (!params.qq) return undefined;
+    return { type: "at", data: { qq: params.qq.toLowerCase() === "all" ? "all" : params.qq } };
+  }
+  if (type === "face") return params.id ? { type: "face", data: { id: params.id } } : undefined;
+  return undefined;
+}
+
+/**
+ * Converts the strict CQ subset an Agent may legitimately author in `payload.text`
+ * (reply / at / face) into real OneBot segments, and drops every other CQ-looking
+ * token so NapCat cannot silently render it as literal group text.
+ *
+ * Media, forward and node codes are rejected: letting Agent text inject them would
+ * bypass the route policy's payload-kind check and the allowedFileRoots guard,
+ * which only runs for typed image/file payloads.
+ */
+export function napcatSegmentsFromAgentText(text: string): OneBotMessage {
+  const trimmed = valueString(text);
+  if (!trimmed) return [];
+  const codes = [...trimmed.matchAll(NAPCAT_CQ_CODE_PATTERN)];
+  if (codes.length === 0) return trimmed;
+
+  const rejected = [...new Set(codes.map((match) => match[1].toLowerCase()).filter((type) => NAPCAT_REJECTED_CQ_TYPES.has(type)))];
+  if (rejected.length > 0) {
+    throw new Error(
+      `NapCat text payload cannot embed [CQ:${rejected[0]}] media or forward codes; `
+      + "use a typed payload with payload.path so the route policy can validate the file."
+    );
+  }
+
+  const segments: OneBotMessage = [];
+  const pushText = (value: string) => {
+    if (value) segments.push({ type: "text", data: { text: value } });
+  };
+  let cursor = 0;
+  for (const match of codes) {
+    const index = match.index ?? 0;
+    pushText(trimmed.slice(cursor, index));
+    cursor = index + match[0].length;
+    const segment = napCatCqSegmentFor(match[1].toLowerCase(), parseNapCatCqParams(match[2] ?? ""));
+    if (segment) segments.push(segment);
+  }
+  pushText(trimmed.slice(cursor));
+
+  // A malformed or unsupported code inside a literal run must not reach NapCat as text.
+  return segments
+    .map((segment) => segment.type !== "text"
+      ? segment
+      : { type: "text" as const, data: { text: String(segment.data.text ?? "").replace(NAPCAT_CQ_CODE_PATTERN, "") } })
+    .filter((segment) => segment.type !== "text" || String(segment.data.text ?? "").length > 0);
+}
+
+function validatedNapCatAtSegments(segments: OneBotMessage): OneBotMessage {
+  if (typeof segments === "string") return segments;
+  return segments.map((segment) => {
+    if (segment.type.toLowerCase() !== "at") return segment;
+    const qq = String(segment.data.qq ?? "").trim();
+    if (qq.toLowerCase() === "all" || /^\d+$/.test(qq)) return segment;
+    throw new Error(`NapCat at segment requires a numeric QQ or "all": ${qq || "(empty)"}.`);
+  });
 }
 
 function stableDeliveryJson(value: unknown): string {
@@ -1964,7 +2121,12 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
             try {
               const caption = await sendGroupMessage({
                 groupId,
-                message: napcatGroupReplyMessage(content.explicitText, target.messageId ?? messageId, pipeline.replyToSource, target.userId)
+                message: validatedNapCatAtSegments(napcatGroupReplyMessage(
+                  napcatSegmentsFromAgentText(content.explicitText),
+                  target.messageId ?? messageId,
+                  pipeline.replyToSource,
+                  target.userId
+                ))
               }, endpoint);
               result.sentMessageId = valueString(caption.messageId);
               appendOutboxLog(options, route, "info", "group_file_caption_sent", content.explicitText.slice(0, 500), withConversation(withDeliveryTrace({ ...result, text: content.explicitText })));
@@ -1987,19 +2149,42 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
             throw error;
           }
         }
+        if (content.managedPlanAttachment) {
+          return await resolveManagedPlanAttachment(options, content.managedPlanAttachment, sendFile);
+        }
         const filePath = validatedOutboundFilePath(options.rootDir, content.file!, policy.allowedFileRoots);
         return await sendFile({ path: filePath, fileName: content.fileName || path.basename(filePath) });
       }
+      if (content.managedPlanAttachment) {
+        return await resolveManagedPlanAttachment(options, content.managedPlanAttachment, async ({ path: filePath }) => {
+          const sent = await sendGroupMessage({
+            groupId: target.groupId!,
+            message: validatedNapCatAtSegments(napcatGroupReplyMessage(
+              [
+                ...napcatSegmentsFromAgentText(text) as Array<{ type: string; data: Record<string, unknown> }>,
+                { type: "image", data: { file: filePath } }
+              ],
+              target.messageId ?? messageId,
+              pipeline.replyToSource,
+              target.userId
+            ))
+          }, endpoint);
+          const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: target.groupId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
+          appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation(withDeliveryTrace({ ...result })));
+          return result;
+        });
+      }
+      const outboundMessage = content.kind === "image"
+        ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
+        : napcatSegmentsFromAgentText(text);
       const sent = await sendGroupMessage({
         groupId: target.groupId,
-        message: napcatGroupReplyMessage(
-          content.kind === "image"
-            ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
-            : content.message,
+        message: validatedNapCatAtSegments(napcatGroupReplyMessage(
+          outboundMessage,
           target.messageId ?? messageId,
           pipeline.replyToSource,
           target.userId
-        )
+        ))
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "group", groupId: target.groupId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
       appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation(withDeliveryTrace({ ...result })));
@@ -2008,9 +2193,9 @@ export async function handleAgentReply(request: AgentReplyRequest, options: Agen
     if (target.targetType === "private" && target.userId) {
       const sent = await sendPrivateMessage({
         userId: target.userId,
-        message: content.kind === "image"
+        message: validatedNapCatAtSegments(content.kind === "image"
           ? validatedNapCatImageMessage(options.rootDir, content.message, policy.allowedFileRoots)
-          : content.message
+          : napcatSegmentsFromAgentText(text))
       }, endpoint);
       const result: AgentReplyResult = { ok: true, status: "sent", routeProfileId: route.profile?.id ?? route.runtime.id, messageId, targetType: "private", userId: target.userId, instanceId: endpoint.id, sentMessageId: valueString(sent.messageId) };
       appendOutboxLog(options, route, "info", "reply_sent", text.slice(0, 500), withConversation(withDeliveryTrace({ ...result })));

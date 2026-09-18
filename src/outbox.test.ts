@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { handleAgentReply, inspectAgentReplyDelivery, napcatGroupReplyMessage, type AgentReplyOptions } from "./outbox.js";
+import { handleAgentReply, inspectAgentReplyDelivery, napcatGroupReplyMessage, napcatSegmentsFromAgentText, type AgentReplyOptions } from "./outbox.js";
 import { publishRabiLinkRelayMessage } from "./adapters/rabilinkRelayWorker.js";
 import { resetWeComClientFactory, setWeComClientFactory, type WeComClientLike } from "./wecom.js";
 import { recentMessageContextItems } from "./messageContextStore.js";
@@ -395,6 +395,178 @@ test("NapCat group reply helper respects opt-out and does not duplicate an exist
     napcatGroupReplyMessage("[CQ:reply,id=source-1][CQ:at,qq=10001]继续跟进。", "source-1", true, "10001"),
     "[CQ:reply,id=source-1][CQ:at,qq=10001]继续跟进。"
   );
+});
+
+test("Agent text CQ codes become real NapCat segments instead of literal group text", () => {
+  // Regression: 2026-09-18 message 2060586842 rendered "[CQ:at,qq=1050739541]" literally.
+  assert.deepEqual(napcatSegmentsFromAgentText("[CQ:at,qq=1050739541] 【R242】请定规则。"), [
+    { type: "at", data: { qq: "1050739541" } },
+    { type: "text", data: { text: " 【R242】请定规则。" } }
+  ]);
+  assert.deepEqual(napcatSegmentsFromAgentText("[CQ:reply,id=2060586842][CQ:at,qq=10001]说明。"), [
+    { type: "reply", data: { id: "2060586842" } },
+    { type: "at", data: { qq: "10001" } },
+    { type: "text", data: { text: "说明。" } }
+  ]);
+  assert.deepEqual(napcatSegmentsFromAgentText("全体注意：[CQ:at,qq=all] 收工。"), [
+    { type: "text", data: { text: "全体注意：" } },
+    { type: "at", data: { qq: "all" } },
+    { type: "text", data: { text: " 收工。" } }
+  ]);
+  assert.deepEqual(napcatSegmentsFromAgentText("[CQ:face,id=14]辛苦了。"), [
+    { type: "face", data: { id: "14" } },
+    { type: "text", data: { text: "辛苦了。" } }
+  ]);
+  // Plain text stays a plain string so existing one-string call sites are unchanged.
+  assert.equal(napcatSegmentsFromAgentText("普通正文，没有 CQ 码。"), "普通正文，没有 CQ 码。");
+  // URL-encoded parameter values are decoded before they reach NapCat.
+  assert.deepEqual(napcatSegmentsFromAgentText("[CQ:reply,id=a%2Cb]继续。"), [
+    { type: "reply", data: { id: "a,b" } },
+    { type: "text", data: { text: "继续。" } }
+  ]);
+});
+
+test("Agent text cannot smuggle media or forward codes past the route policy", () => {
+  // Media codes would bypass payload-kind and allowedFileRoots validation.
+  assert.throws(
+    () => napcatSegmentsFromAgentText("这是截图 [CQ:image,file=file:///C:/secret.png] 请查收。"),
+    /cannot embed \[CQ:image\]/
+  );
+  assert.throws(() => napcatSegmentsFromAgentText("[CQ:record,file=file:///C:/secret.amr]"), /cannot embed \[CQ:record\]/);
+  assert.throws(() => napcatSegmentsFromAgentText("[CQ:file,file=file:///C:/secret.zip]"), /cannot embed \[CQ:file\]/);
+  assert.throws(() => napcatSegmentsFromAgentText("[CQ:forward,id=abc]"), /cannot embed \[CQ:forward\]/);
+
+  // Unsupported or malformed codes are dropped rather than leaked to the group as text.
+  assert.deepEqual(napcatSegmentsFromAgentText("前缀 [CQ:unknown,id=1] 后缀"), [
+    { type: "text", data: { text: "前缀 " } },
+    { type: "text", data: { text: " 后缀" } }
+  ]);
+  assert.deepEqual(napcatSegmentsFromAgentText("[CQ:at]正文"), [{ type: "text", data: { text: "正文" } }]);
+  assert.deepEqual(napcatSegmentsFromAgentText("[CQ:reply]继续。"), [{ type: "text", data: { text: "继续。" } }]);
+});
+
+test("QQ group text send converts Agent CQ codes into a real at segment", async () => {
+  let sentBody: Record<string, unknown> | undefined;
+  await withJsonServer((body) => {
+    sentBody = body;
+    return { status: "ok", retcode: 0, data: { message_id: "sent-cq-1" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      text: "[CQ:at,qq=1050739541] 【R242 水族馆容量上限】请定一个规则。",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        outputAdapter: "qq",
+        outputPipeline: "qq",
+        replyToSource: false
+      }
+    }, {
+      rootDir: process.cwd(),
+      routeRoot: "data/route",
+      rolesRoot: "data/roles",
+      runtimes: [{
+        id: "main",
+        pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
+        messageAdapterPolicies: {
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"] }
+        },
+        napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+
+    assert.equal(result.status, "sent");
+  });
+
+  assert.ok(Array.isArray(sentBody?.message), "the group message must be sent as segments, not as one literal string");
+  assert.deepEqual(sentBody?.message, [
+    { type: "at", data: { qq: "1050739541" } },
+    { type: "text", data: { text: " 【R242 水族馆容量上限】请定一个规则。" } }
+  ]);
+  assert.doesNotMatch(JSON.stringify(sentBody?.message), /CQ:at/);
+});
+
+test("QQ group text send keeps a real reply segment with the converted at segment", async () => {
+  let sentBody: Record<string, unknown> | undefined;
+  await withJsonServer((body) => {
+    sentBody = body;
+    return { status: "ok", retcode: 0, data: { message_id: "sent-cq-2" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      text: "[CQ:at,qq=1050739541] 规则定了就能直接改。",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        messageId: "source-99",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        outputAdapter: "qq",
+        outputPipeline: "qq"
+      }
+    }, {
+      rootDir: process.cwd(),
+      routeRoot: "data/route",
+      rolesRoot: "data/roles",
+      runtimes: [{
+        id: "main",
+        pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: true },
+        messageAdapterPolicies: {
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"] }
+        },
+        napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+
+    assert.equal(result.status, "sent");
+  });
+
+  assert.deepEqual(sentBody?.message, [
+    { type: "reply", data: { id: "source-99" } },
+    { type: "at", data: { qq: "1050739541" } },
+    { type: "text", data: { text: " 规则定了就能直接改。" } }
+  ]);
+});
+
+test("QQ group text send fails closed when Agent text embeds a media CQ code", async () => {
+  let sends = 0;
+  await withJsonServer(() => {
+    sends += 1;
+    return { status: "ok", retcode: 0, data: { message_id: "sent-should-not-happen" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      text: "截图：[CQ:image,file=file:///C:/Data/secret.png]",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        outputAdapter: "qq",
+        outputPipeline: "qq",
+        replyToSource: false
+      }
+    }, {
+      rootDir: process.cwd(),
+      routeRoot: "data/route",
+      rolesRoot: "data/roles",
+      runtimes: [{
+        id: "main",
+        pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
+        messageAdapterPolicies: {
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"] }
+        },
+        napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+
+    assert.equal(result.status, "failed");
+    assert.match(result.reason ?? "", /cannot embed \[CQ:image\]/);
+  });
+
+  assert.equal(sends, 0, "a rejected CQ media code must not reach NapCat");
 });
 
 test("QQ group source reply sends a real NapCat reply segment", async () => {

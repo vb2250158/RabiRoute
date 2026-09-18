@@ -131,8 +131,42 @@ function stringList(value: unknown, field: string): string[] {
   return value.map((item, index) => textValue(item, `${field}[${index}]`) as string);
 }
 
+export type AgentSendPlanAttachmentReference = { roleId?: string; planId: string; attachmentId: string };
+
+/**
+ * `payload.planAttachment` lets an Agent attach an image that already lives in a managed
+ * plan's attachment directory. The Manager resolves the id against real plan storage and
+ * re-validates containment there; this parser only checks the request shape.
+ */
+function planAttachmentReference(
+  value: unknown,
+  type: string,
+  fallback: { path?: string; url?: string }
+): AgentSendPlanAttachmentReference | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("payload.planAttachment must be an object.");
+  const reference = value as Record<string, unknown>;
+  assertOnlyFields(reference, ["roleId", "planId", "attachmentId"], "payload.planAttachment");
+  if (type !== "image" && type !== "file") {
+    throw new Error("payload.planAttachment is only supported for image or file payloads.");
+  }
+  if (!fallback.path && !fallback.url && !Object.prototype.hasOwnProperty.call(reference, "attachmentId")) {
+    throw new Error("payload.planAttachment requires payload.planAttachment.attachmentId.");
+  }
+  const planId = textValue(reference.planId, "payload.planAttachment.planId") as string;
+  const attachmentId = textValue(reference.attachmentId, "payload.planAttachment.attachmentId") as string;
+  if (planId.length > 200 || /[\u0000-\u001f\u007f]/.test(planId)) {
+    throw new Error("payload.planAttachment.planId must be a stable plan id.");
+  }
+  if (attachmentId.length > 200 || /[\u0000-\u001f\u007f]/.test(attachmentId)) {
+    throw new Error("payload.planAttachment.attachmentId must be a stable attachment id.");
+  }
+  const roleId = textValue(reference.roleId, "payload.planAttachment.roleId", false);
+  return { ...(roleId ? { roleId } : {}), planId, attachmentId };
+}
+
 function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest, "payload" | "payloadType" | "text"> {
-  assertOnlyFields(payload, ["type", "text", "path", "url", "fileName", "fileId", "fileSha256"], "payload");
+  assertOnlyFields(payload, ["type", "text", "path", "url", "fileName", "fileId", "fileSha256", "planAttachment"], "payload");
   const type = textValue(payload.type, "payload.type") as "text" | "image" | "voice" | "file";
   if (!(["text", "image", "voice", "file"] as string[]).includes(type)) {
     throw new Error("payload.type must be text, image, voice, or file.");
@@ -142,6 +176,10 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
   const text = validatedText && typeof payload.text === "string" ? payload.text : validatedText;
   const path = textValue(payload.path, "payload.path", false);
   const url = textValue(payload.url, "payload.url", false);
+  const planAttachment = planAttachmentReference(payload.planAttachment, type, { path, url });
+  if (planAttachment && (path || url)) {
+    throw new Error("payload.planAttachment cannot be combined with payload.path or payload.url.");
+  }
   const hasFileId = Object.prototype.hasOwnProperty.call(payload, "fileId");
   const fileId = hasFileId ? payload.fileId : undefined;
   if (hasFileId) {
@@ -149,8 +187,8 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
       throw new Error("payload.fileId must be a UUID.");
     }
     if (type !== "file") throw new Error("payload.fileId is only supported for file payloads.");
-    if (["path", "url", "fileName"].some(key => Object.prototype.hasOwnProperty.call(payload, key))) {
-      throw new Error("payload.fileId cannot be combined with payload.path, payload.url, or payload.fileName.");
+    if (planAttachment || ["path", "url", "fileName"].some(key => Object.prototype.hasOwnProperty.call(payload, key))) {
+      throw new Error("payload.fileId cannot be combined with payload.path, payload.url, payload.fileName, or payload.planAttachment.");
     }
   }
   const fileSha256 = payload.fileSha256;
@@ -160,7 +198,9 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
   if (!hasFileId && Object.prototype.hasOwnProperty.call(payload, "fileSha256")) {
     throw new Error("payload.fileSha256 requires payload.fileId.");
   }
-  if (type !== "text" && !path && !url && !fileId) throw new Error(`${type} payload requires payload.path or payload.url or payload.fileId.`);
+  if (type !== "text" && !path && !url && !fileId && !planAttachment) {
+    throw new Error(`${type} payload requires payload.path or payload.url or payload.fileId or payload.planAttachment.`);
+  }
   return {
     payloadType: type,
     text,
@@ -170,6 +210,7 @@ function payloadFields(payload: Record<string, unknown>): Pick<AgentReplyRequest
       path,
       url,
       fileName: textValue(payload.fileName, "payload.fileName", false),
+      ...(planAttachment ? { planAttachment } : {}),
       ...(hasFileId ? { fileId, fileSha256 } : {})
     }
   };

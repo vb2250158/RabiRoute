@@ -400,6 +400,92 @@ test("managed group files fail closed without resolver, owner authority, or outp
   });
 });
 
+test("a managed plan attachment image is sent through the resolver port only", async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-plan-attachment-"));
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+  // Deliberately outside any allowedFileRoots, mirroring the real plan attachment layout.
+  const attachmentDir = path.join(rootDir, "data", "roles", "XinghaiBuilder", "plans", "active", "plan-abc", "attachments");
+  fs.mkdirSync(attachmentDir, { recursive: true });
+  const imagePath = path.join(attachmentDir, "attachment-shot-1.png");
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+  let sentBody: Record<string, unknown> | undefined;
+  await withJsonServer((body) => {
+    sentBody = body;
+    return { status: "ok", retcode: 0, data: { message_id: "plan-attachment-1" } };
+  }, async url => {
+    const opts = options(rootDir, url);
+    opts.runtimes[0].messageAdapterPolicies!.napcat = {
+      outputEnabled: true,
+      supportedOutputs: ["text", "image"],
+      // The plan attachment directory is intentionally NOT an allowedFileRoot.
+      allowedFileRoots: []
+    };
+    const request: AgentSendRequest = {
+      deliveryId: "send-plan-attachment-1",
+      sender: { agentType: "codex", sessionId: "thread-plan-attachment-1" },
+      routeId: "route-main",
+      channel: "napcat",
+      params: { target: "group", groupId: "474222421", instanceId: "qq-main", replyToMessageId: "" },
+      payload: {
+        type: "image",
+        text: "[CQ:at,qq=1050739541] 这是截图。",
+        planAttachment: { roleId: "XinghaiBuilder", planId: "plan-abc", attachmentId: "shot-1" }
+      }
+    };
+
+    // Without the port the send must fail closed rather than read an unvalidated path.
+    assert.match((await handleAgentSend(request, opts)).reason ?? "", /plan attachment resolver is unavailable|Managed plan attachment resolver is unavailable/);
+
+    let observed: { path: string; fileName: string } | undefined;
+    opts.withManagedPlanAttachment = async (reference, send) => {
+      assert.deepEqual(reference, { roleId: "XinghaiBuilder", planId: "plan-abc", attachmentId: "shot-1" });
+      return await send({ path: imagePath, fileName: "attachment-shot-1.png" });
+    };
+    const result = await handleAgentSend({ ...request, deliveryId: "send-plan-attachment-2" }, opts);
+    assert.equal(result.status, "sent");
+    observed = { path: imagePath, fileName: "attachment-shot-1.png" };
+    assert.ok(observed);
+  });
+
+  // The real at segment must survive alongside the resolved image segment.
+  assert.deepEqual(sentBody?.message, [
+    { type: "at", data: { qq: "1050739541" } },
+    { type: "text", data: { text: " 这是截图。" } },
+    { type: "image", data: { file: imagePath } }
+  ]);
+});
+
+test("plan attachment payloads are rejected for text and voice kinds", () => {
+  const base = {
+    deliveryId: "send-plan-attachment-invalid",
+    sender: { agentType: "codex", sessionId: "thread-plan-attachment-invalid" },
+    routeId: "route-main",
+    channel: "napcat" as const,
+    params: { target: "group", groupId: "474222421" }
+  };
+  assert.throws(
+    () => prepareAgentSendRequest({ ...base, payload: { type: "text", text: "hi", planAttachment: { planId: "p", attachmentId: "a" } } }),
+    /only supported for image or file payloads/
+  );
+  assert.throws(
+    () => prepareAgentSendRequest({ ...base, payload: { type: "voice", path: "x.wav", planAttachment: { planId: "p", attachmentId: "a" } } }),
+    /only supported for image or file payloads/
+  );
+  assert.throws(
+    () => prepareAgentSendRequest({ ...base, payload: { type: "image", planAttachment: { planId: "p" } } }),
+    /requires payload\.planAttachment\.attachmentId/
+  );
+  assert.throws(
+    () => prepareAgentSendRequest({ ...base, payload: { type: "image", path: "x.png", planAttachment: { planId: "p", attachmentId: "a" } } }),
+    /cannot be combined with payload\.path/
+  );
+  assert.throws(
+    () => prepareAgentSendRequest({ ...base, payload: { type: "image", planAttachment: { planId: "p", attachmentId: "a", extra: 1 } } }),
+    /unsupported fields: extra/
+  );
+});
+
 test("speech is used only when the request explicitly selects the speech channel", async (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-send-speech-"));
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));

@@ -30,6 +30,54 @@ test("startup plugin waits for bound Route readiness before consuming its one au
   } finally { await dispose(); }
 });
 
+test("startup plugin keeps supervising after the one-shot login pass", async () => {
+  // Regression: the plugin used to run only autoLoginNapcatInstancesOnRabiStart once, so an
+  // instance that exited mid-run (napcat-1 at 12:44 on 2026-09-18) was never brought back.
+  const pluginUrl = new URL("../../plugins/builtin/io.rabiroute.manager.napcat-supervisor/1.0.0/manager.mjs", import.meta.url).href;
+  const plugin = await import(pluginUrl);
+  let guardianRuns = 0;
+  let observedSignal: AbortSignal | undefined;
+  let guardianInstances: unknown[] = [];
+  const runtime = {
+    NapcatSupervisorService, managerReadOnly: false, managerShouldAutostart: true,
+    managerListenerReady: true, routeCatalogReady: true,
+    activeNapcatControlContext: { marker: "ctx" },
+    startActiveNapcatSupervisor: () => {}, stopActiveNapcatSupervisor: async () => {},
+    autoLoginNapcatInstancesOnRabiStart: async () => {},
+    napcatGuardianInstances: (context: unknown) => {
+      assert.deepEqual(context, { marker: "ctx" });
+      return [{ gatewayId: "route-1", instanceId: "napcat-1" }];
+    },
+    observeNapcatGuardianInstance: async () => ({ state: "ready", healthy: true }),
+    relaunchNapcatGuardianInstance: async () => ({ ok: true }),
+    runNapcatGuardianLoop: async (deps: { listInstances: () => unknown[] }, signal: AbortSignal) => {
+      guardianRuns += 1;
+      observedSignal = signal;
+      guardianInstances = deps.listInstances();
+      // Stand in for a long-lived supervisor that keeps watching until it is aborted.
+      await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return 1;
+    }
+  };
+  const starters: Array<() => Promise<() => Promise<void>>> = [];
+  await plugin.activate({ identity: { instanceId: "supervisor-guardian-test" },
+    services: { require: () => runtime, provide: () => {} },
+    contributions: { register: () => {} }, effects: { add: (start: typeof starters[number]) => { starters.push(start); } }
+  });
+  const dispose = await starters[0]!();
+  try {
+    runtime.startActiveNapcatSupervisor();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(guardianRuns, 1, "the guardian loop must run after the startup pass");
+    assert.equal(observedSignal?.aborted, false, "the guardian must stay active, not exit after one pass");
+    assert.deepEqual(guardianInstances, [{ gatewayId: "route-1", instanceId: "napcat-1" }]);
+  } finally {
+    await dispose();
+  }
+  assert.equal(observedSignal?.aborted, true, "disposal must abort the guardian loop");
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
