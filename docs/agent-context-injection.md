@@ -318,6 +318,8 @@ MVP 使用 ID、标题 `includes` 和 Agent 写入的 `keywords` 做打分。不
 
 处理端写出的 Codex 最终文本只属于当前任务记录，不代表来源用户、主人格或另一个 Agent 已经收到。需要向消息端发送时，处理端必须从 `sendRequestJson` 开始，填写 `sender.agentType` 和当前完整 `sender.sessionId`，再明确提交 `routeId`、`channel`、渠道专用 `params` 和 `payload`，并取得该渠道回执；不得把 `replyContextJson` 原样提交，也不得根据来源自动猜测目标。NapCat 群聊引用消息含图片时，必须按原图顺序填写 `params.replyImageDescriptions`，逐张写明实际内容和图片表达的意思；不能查看、缺少描述或数量不一致时不得发送。需要交给主人格、秘书或计划 Agent 时，必须调用 Manager 线程桥并携带发送任务自己的完整 ID 和 Agent 类型。只生成回复草稿、审批问题或阶段摘要而没有进入上述出口，不能标记为已回复或已通知。
 
+`sendRequestJson` 的 `payload.type` 是待填占位而不是固定的 `text`：只要存在已实际核对、能降低理解成本的图片、截图、效果图、流程图或文档页面，就应提交 `type=image` 并在同一 `payload.text` 里写清图片来源类型与关注点；纯文字是没有可用图片时的退路。NapCat 模板额外给出授权目录内的 `payload.path` 占位，本地图片仍只能取自路由 `allowedFileRoots`，越界即拒发。图片与说明必须落在同一条消息；配图不改变引用、`replyImageDescriptions`、发送回执或 QA 证据边界。
+
 跨人格能力凭据只证明“当前 AgentPacket 所属 Route 与人格”，不会出现在 `GET /api/personas`、目标 timeline 或投递回执中。`sourceRouteId` 不能单独证明发送身份。目标人格收到跨人格消息后，普通回复不会自动返回来源；需要回复时必须显式反向 POST，并使用收到的会话、引用和跳数字段。
 
 `[消息代码解析]` 只在当前消息或引用链里存在可解析 CQ 码时出现。RabiRoute 会从本 route 的群聊/私聊消息记录中按 `messageId` 追溯 `CQ:reply`；AgentPacket 也会把成功外发的 Outbox 记录作为本地兜底。NapCat 实时入口发现引用 ID 尚未落盘时，会在路由投递前调用 OneBot `get_msg`，把查到的群聊/私聊消息标记为 `lookupSource=onebot_get_msg` 后缓存，再继续追溯下一层引用。接口失败只记录 warning，不阻塞当前消息。展开持续到没有引用、仍无法解析、出现循环或达到安全上限为止。每条引用摘要最多显示 200 字，超过后以 `……(更多信息调用接口查看)` 截断；展开过程中遇到的 `CQ:at` 会去重后集中显示为 `[CQ:at,qq=xxxx] : 群名片或昵称`。本段不额外显示当前消息 ID，也不重复输出纯文本正文。

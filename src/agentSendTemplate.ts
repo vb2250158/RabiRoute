@@ -67,7 +67,14 @@ export function agentSendRequestTemplateForSource(context: Record<string, unknow
     channel,
     styleValidation: 1,
     params,
-    payload: { type: "text", text: "<这里填写要发送的正文>" },
+    payload: {
+      type: "<有可核对的图片时填 image，否则填 text>",
+      text: "<这里填写要发送的正文；type=image 时这里仍要写清图片来源类型与关注点>",
+      // Only NapCat carries a local path; other channels resolve media by URL or their own id.
+      ...(channel === "napcat"
+        ? { path: "<type=image 时填写授权目录内已实际查看过的图片路径，例如 C:\\Data\\CottonProject\\PangHu\\output\\xx.png>" }
+        : {})
+    },
     ...(context.messageProcessingRequirementId
       ? {
           tracking: {
