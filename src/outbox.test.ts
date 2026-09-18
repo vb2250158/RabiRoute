@@ -569,6 +569,157 @@ test("QQ group text send fails closed when Agent text embeds a media CQ code", a
   assert.equal(sends, 0, "a rejected CQ media code must not reach NapCat");
 });
 
+test("QQ group image send converts CQ codes in its caption text", async () => {
+  // Regression found by live group verification on 2026-09-18: the text-only path was fixed
+  // but the image payload path built [{text: raw}, {image}] directly, so the caption still
+  // reached NapCat as literal "[CQ:at,qq=...]" text.
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-image-cq-"));
+  const imageDir = path.join(rootDir, "output");
+  fs.mkdirSync(imageDir, { recursive: true });
+  const imagePath = path.join(imageDir, "verify.png");
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+  let sentBody: Record<string, unknown> | undefined;
+  await withJsonServer((body) => {
+    sentBody = body;
+    return { status: "ok", retcode: 0, data: { message_id: "sent-image-cq-1" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      payloadType: "image",
+      imagePath,
+      text: "[CQ:at,qq=1050739541] 图文并茂：正文含真实 at 段。",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        outputAdapter: "qq",
+        outputPipeline: "qq",
+        replyToSource: false
+      }
+    }, {
+      rootDir,
+      routeRoot: "data/route",
+      rolesRoot: "data/roles",
+      runtimes: [{
+        id: "main",
+        pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
+        messageAdapterPolicies: {
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [imageDir] }
+        },
+        napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+
+    assert.equal(result.status, "sent");
+  });
+
+  assert.ok(Array.isArray(sentBody?.message));
+  assert.deepEqual(sentBody?.message, [
+    { type: "at", data: { qq: "1050739541" } },
+    { type: "text", data: { text: " 图文并茂：正文含真实 at 段。" } },
+    { type: "image", data: { file: imagePath } }
+  ]);
+  assert.doesNotMatch(JSON.stringify(sentBody?.message), /CQ:at,qq/);
+});
+
+test("QQ group image send drops an unsupported CQ code from its caption", async () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-image-cq-unknown-"));
+  const imageDir = path.join(rootDir, "output");
+  fs.mkdirSync(imageDir, { recursive: true });
+  const imagePath = path.join(imageDir, "verify.png");
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+  let sentBody: Record<string, unknown> | undefined;
+  await withJsonServer((body) => {
+    sentBody = body;
+    return { status: "ok", retcode: 0, data: { message_id: "sent-image-cq-2" } };
+  }, async (url) => {
+    const result = await handleAgentReply({
+      payloadType: "image",
+      imagePath,
+      text: "前 [CQ:at] 后",
+      replyContext: {
+        routeProfileId: "main",
+        targetType: "group",
+        groupId: "20002",
+        instanceId: "main-qq",
+        adapterType: "napcat",
+        outputAdapter: "qq",
+        outputPipeline: "qq",
+        replyToSource: false
+      }
+    }, {
+      rootDir,
+      routeRoot: "data/route",
+      rolesRoot: "data/roles",
+      runtimes: [{
+        id: "main",
+        pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
+        messageAdapterPolicies: {
+          napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [imageDir] }
+        },
+        napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+      }]
+    });
+
+    assert.equal(result.status, "sent");
+  });
+
+  // The malformed code is stripped; no literal CQ text may survive next to the image.
+  assert.doesNotMatch(JSON.stringify(sentBody?.message), /CQ:at/);
+  assert.ok(Array.isArray(sentBody?.message));
+  assert.deepEqual(sentBody?.message?.at(-1), { type: "image", data: { file: imagePath } });
+});
+
+test("QQ group image send still rejects a media CQ code in the caption", async () => {
+  let sends = 0;
+  await withJsonServer(() => {
+    sends += 1;
+    return { status: "ok", retcode: 0, data: { message_id: "should-not-happen" } };
+  }, async (url) => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-outbox-image-cq-reject-"));
+    const imageDir = path.join(rootDir, "output");
+    fs.mkdirSync(imageDir, { recursive: true });
+    const imagePath = path.join(imageDir, "verify.png");
+    fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    // The payload is rejected while the content is being parsed, before any send is attempted.
+    await assert.rejects(async () => {
+      await handleAgentReply({
+        payloadType: "image",
+        imagePath,
+        text: "看图 [CQ:image,file=file:///C:/Data/secret.png]",
+        replyContext: {
+          routeProfileId: "main",
+          targetType: "group",
+          groupId: "20002",
+          instanceId: "main-qq",
+          adapterType: "napcat",
+          outputAdapter: "qq",
+          outputPipeline: "qq",
+          replyToSource: false
+        }
+      }, {
+        rootDir,
+        routeRoot: "data/route",
+        rolesRoot: "data/roles",
+        runtimes: [{
+          id: "main",
+          pipeline: { outputAdapter: "qq", outputPipeline: "qq", replyToSource: false },
+          messageAdapterPolicies: {
+            napcat: { outputEnabled: true, supportedOutputs: ["text", "image", "voice", "file"], allowedFileRoots: [imageDir] }
+          },
+          napcatInstances: [{ id: "main-qq", httpUrl: url, accessToken: "", enabled: true }]
+        }]
+      });
+    }, /cannot embed \[CQ:image\]/);
+  });
+
+  assert.equal(sends, 0, "a rejected CQ media code must not reach NapCat even on the image path");
+});
+
 test("QQ group source reply sends a real NapCat reply segment", async () => {
   let sentBody: Record<string, unknown> | undefined;
   await withJsonServer((body) => {

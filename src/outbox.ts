@@ -317,6 +317,106 @@ function rolePanelAttachmentsForRequest(request: AgentReplyRequest, content: Rep
   return normalizeRolePanelAttachments([{ kind: content.kind, name, path: filePath, url }]);
 }
 
+const NAPCAT_CQ_CODE_PATTERN = /\[CQ:([A-Za-z][A-Za-z0-9_]*)((?:,[^\]]*)?)\]/g;
+/** CQ codes that must never be reconstructed from untrusted Agent text. */
+const NAPCAT_REJECTED_CQ_TYPES = new Set(["image", "record", "video", "file", "json", "xml", "forward", "node"]);
+
+function decodeCqParamValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseNapCatCqParams(rawParams: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const pair of (rawParams ?? "").replace(/^,/, "").split(",")) {
+    if (!pair) continue;
+    const separator = pair.indexOf("=");
+    if (separator <= 0) continue;
+    params[pair.slice(0, separator)] = decodeCqParamValue(pair.slice(separator + 1));
+  }
+  return params;
+}
+
+function napCatCqSegmentFor(type: string, params: Record<string, string>): { type: string; data: Record<string, string> } | undefined {
+  if (type === "reply") return params.id ? { type: "reply", data: { id: params.id } } : undefined;
+  if (type === "at") {
+    if (!params.qq) return undefined;
+    return { type: "at", data: { qq: params.qq.toLowerCase() === "all" ? "all" : params.qq } };
+  }
+  if (type === "face") return params.id ? { type: "face", data: { id: params.id } } : undefined;
+  return undefined;
+}
+
+/**
+ * Converts the strict CQ subset an Agent may legitimately author in `payload.text`
+ * (reply / at / face) into real OneBot segments, and drops every other CQ-looking
+ * token so NapCat cannot silently render it as literal group text.
+ *
+ * Media, forward and node codes are rejected: letting Agent text inject them would
+ * bypass the route policy's payload-kind check and the allowedFileRoots guard,
+ * which only runs for typed image/file payloads.
+ */
+export function napcatSegmentsFromAgentText(text: string): OneBotMessage {
+  const trimmed = valueString(text);
+  if (!trimmed) return [];
+  const codes = [...trimmed.matchAll(NAPCAT_CQ_CODE_PATTERN)];
+  if (codes.length === 0) return trimmed;
+
+  const rejected = [...new Set(codes.map((match) => match[1].toLowerCase()).filter((type) => NAPCAT_REJECTED_CQ_TYPES.has(type)))];
+  if (rejected.length > 0) {
+    throw new Error(
+      `NapCat text payload cannot embed [CQ:${rejected[0]}] media or forward codes; `
+      + "use a typed payload with payload.path so the route policy can validate the file."
+    );
+  }
+
+  const segments: OneBotMessage = [];
+  const pushText = (value: string) => {
+    if (value) segments.push({ type: "text", data: { text: value } });
+  };
+  let cursor = 0;
+  for (const match of codes) {
+    const index = match.index ?? 0;
+    pushText(trimmed.slice(cursor, index));
+    cursor = index + match[0].length;
+    const segment = napCatCqSegmentFor(match[1].toLowerCase(), parseNapCatCqParams(match[2] ?? ""));
+    if (segment) segments.push(segment);
+  }
+  pushText(trimmed.slice(cursor));
+
+  // A malformed or unsupported code inside a literal run must not reach NapCat as text.
+  return segments
+    .map((segment) => segment.type !== "text"
+      ? segment
+      : { type: "text" as const, data: { text: String(segment.data.text ?? "").replace(NAPCAT_CQ_CODE_PATTERN, "") } })
+    .filter((segment) => segment.type !== "text" || String(segment.data.text ?? "").length > 0);
+}
+
+function validatedNapCatAtSegments(segments: OneBotMessage): OneBotMessage {
+  if (typeof segments === "string") return segments;
+  return segments.map((segment) => {
+    if (segment.type.toLowerCase() !== "at") return segment;
+    const qq = String(segment.data.qq ?? "").trim();
+    if (qq.toLowerCase() === "all" || /^\d+$/.test(qq)) return segment;
+    throw new Error(`NapCat at segment requires a numeric QQ or "all": ${qq || "(empty)"}.`);
+  });
+}
+
+/**
+ * Text segments for a typed payload that also carries media. `napcatSegmentsFromAgentText`
+ * returns a bare string when the text holds no CQ code, which cannot be spliced into a
+ * segment array, so this normalizes it to segments and preserves an empty text run.
+ */
+function textSegmentsForAgentText(text: string): Array<{ type: string; data: Record<string, string> }> {
+  const converted = napcatSegmentsFromAgentText(text);
+  if (typeof converted === "string") {
+    return converted ? [{ type: "text", data: { text: converted } }] : [];
+  }
+  return converted as Array<{ type: string; data: Record<string, string> }>;
+}
 /**
  * A managed plan attachment is addressed by id, never by a filesystem path. The Manager
  * resolves it against real plan storage through `withManagedPlanAttachment`, so the
@@ -371,12 +471,24 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
       return { text: text || "[image]", kind: "image", file: "", fileName: undefined, managedPlanAttachment: planAttachment, message: [] };
     }
     if (!file) throw new Error("Missing image url/path.");
-    return { text: text || "[image]", kind: "image", file, fileName: file.split(/[\\/]/).pop(), message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "image" as const, data: { file } }] };
+    return {
+      text: text || "[image]",
+      kind: "image",
+      file,
+      fileName: file.split(/[\\/]/).pop(),
+      message: [...textSegmentsForAgentText(text), { type: "image" as const, data: { file } }]
+    };
   }
   if (kind === "voice") {
     const file = payloadValue(request, payload, "voiceUrl", "voicePath", "audioUrl", "audioPath", "url", "file", "path");
     if (!file) throw new Error("Missing voice url/path.");
-    return { text: text || "[voice]", kind: "voice", file, fileName: file.split(/[\\/]/).pop(), message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "record" as const, data: { file } }] };
+    return {
+      text: text || "[voice]",
+      kind: "voice",
+      file,
+      fileName: file.split(/[\\/]/).pop(),
+      message: [...textSegmentsForAgentText(text), { type: "record" as const, data: { file } }]
+    };
   }
   if (kind === "file") {
     const file = payloadValue(request, payload, "fileUrl", "filePath", "url", "file", "path");
@@ -395,7 +507,7 @@ function requestContent(request: AgentReplyRequest): ReplyContent {
     return {
       text: text || name || "[file]",
       kind: "file",
-      message: [...(text ? [{ type: "text" as const, data: { text } }] : []), { type: "file" as const, data: { file, name } }],
+      message: [...textSegmentsForAgentText(text), { type: "file" as const, data: { file, name } }],
       explicitText: text || undefined,
       file,
       fileName: name
@@ -411,7 +523,6 @@ function requestField(request: AgentReplyRequest, key: keyof AgentReplyRequest):
   const ctx = contextObject(request);
   return valueString(request[key] ?? ctx[key]);
 }
-
 function requestFlag(request: AgentReplyRequest, key: keyof AgentReplyRequest): boolean {
   const ctx = contextObject(request);
   const value = request[key] ?? ctx[key];
@@ -908,93 +1019,6 @@ function hasNapCatReplySegment(message: OneBotMessage): boolean {
   return message.some((segment) => segment.type.toLowerCase() === "reply");
 }
 
-const NAPCAT_CQ_CODE_PATTERN = /\[CQ:([A-Za-z][A-Za-z0-9_]*)((?:,[^\]]*)?)\]/g;
-/** CQ codes that must never be reconstructed from untrusted Agent text. */
-const NAPCAT_REJECTED_CQ_TYPES = new Set(["image", "record", "video", "file", "json", "xml", "forward", "node"]);
-
-function decodeCqParamValue(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function parseNapCatCqParams(rawParams: string): Record<string, string> {
-  const params: Record<string, string> = {};
-  for (const pair of (rawParams ?? "").replace(/^,/, "").split(",")) {
-    if (!pair) continue;
-    const separator = pair.indexOf("=");
-    if (separator <= 0) continue;
-    params[pair.slice(0, separator)] = decodeCqParamValue(pair.slice(separator + 1));
-  }
-  return params;
-}
-
-function napCatCqSegmentFor(type: string, params: Record<string, string>): { type: string; data: Record<string, string> } | undefined {
-  if (type === "reply") return params.id ? { type: "reply", data: { id: params.id } } : undefined;
-  if (type === "at") {
-    if (!params.qq) return undefined;
-    return { type: "at", data: { qq: params.qq.toLowerCase() === "all" ? "all" : params.qq } };
-  }
-  if (type === "face") return params.id ? { type: "face", data: { id: params.id } } : undefined;
-  return undefined;
-}
-
-/**
- * Converts the strict CQ subset an Agent may legitimately author in `payload.text`
- * (reply / at / face) into real OneBot segments, and drops every other CQ-looking
- * token so NapCat cannot silently render it as literal group text.
- *
- * Media, forward and node codes are rejected: letting Agent text inject them would
- * bypass the route policy's payload-kind check and the allowedFileRoots guard,
- * which only runs for typed image/file payloads.
- */
-export function napcatSegmentsFromAgentText(text: string): OneBotMessage {
-  const trimmed = valueString(text);
-  if (!trimmed) return [];
-  const codes = [...trimmed.matchAll(NAPCAT_CQ_CODE_PATTERN)];
-  if (codes.length === 0) return trimmed;
-
-  const rejected = [...new Set(codes.map((match) => match[1].toLowerCase()).filter((type) => NAPCAT_REJECTED_CQ_TYPES.has(type)))];
-  if (rejected.length > 0) {
-    throw new Error(
-      `NapCat text payload cannot embed [CQ:${rejected[0]}] media or forward codes; `
-      + "use a typed payload with payload.path so the route policy can validate the file."
-    );
-  }
-
-  const segments: OneBotMessage = [];
-  const pushText = (value: string) => {
-    if (value) segments.push({ type: "text", data: { text: value } });
-  };
-  let cursor = 0;
-  for (const match of codes) {
-    const index = match.index ?? 0;
-    pushText(trimmed.slice(cursor, index));
-    cursor = index + match[0].length;
-    const segment = napCatCqSegmentFor(match[1].toLowerCase(), parseNapCatCqParams(match[2] ?? ""));
-    if (segment) segments.push(segment);
-  }
-  pushText(trimmed.slice(cursor));
-
-  // A malformed or unsupported code inside a literal run must not reach NapCat as text.
-  return segments
-    .map((segment) => segment.type !== "text"
-      ? segment
-      : { type: "text" as const, data: { text: String(segment.data.text ?? "").replace(NAPCAT_CQ_CODE_PATTERN, "") } })
-    .filter((segment) => segment.type !== "text" || String(segment.data.text ?? "").length > 0);
-}
-
-function validatedNapCatAtSegments(segments: OneBotMessage): OneBotMessage {
-  if (typeof segments === "string") return segments;
-  return segments.map((segment) => {
-    if (segment.type.toLowerCase() !== "at") return segment;
-    const qq = String(segment.data.qq ?? "").trim();
-    if (qq.toLowerCase() === "all" || /^\d+$/.test(qq)) return segment;
-    throw new Error(`NapCat at segment requires a numeric QQ or "all": ${qq || "(empty)"}.`);
-  });
-}
 
 function stableDeliveryJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
