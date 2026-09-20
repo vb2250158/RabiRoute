@@ -110,21 +110,17 @@ Manager 的本地监听与 Relay 连接相互独立：Manager 先在操作系统
 
 未配置、连接失败、认证失败和读取失败必须明确区分，不能变成零设备或首次初始化；只有成功读取的空列表表示没有设备。管理员仍从新窗口 `/manage` 独立登录，主页不依赖管理 Cookie。此处记录方案边界，不代表部署和真实交互已经验收。
 
-## 同应用 PC 发现与人格同步中转
+## 同应用 PC 发现与通用远端访问
 
-全局 worker 现在会登记 `persona-sync` 能力和专用局域网人格同步 listener URL。该 listener 只暴露 manifest/file/merge 数据面，不要求把完整 Manager/WebGUI 绑定到局域网。同一个应用 token 下的 PC 可以调用：
+全局 worker 保留同应用设备发现与通用 peer 能力，不再登记人格同步能力。`PeerLanServer` 提供共用 LAN listener：HTTP 只接受加密 peer RPC 的 `POST /api/rabilink/peer/receive`，WebSocket upgrade 交由现有 peer runtime 授权处理，不暴露完整 Manager/WebGUI 或旧同步 API。端口默认由系统分配，可通过本机环境变量 `RABILINK_PEER_LAN_PORT` 配置；状态由 Manager `peer_lan_status` 事件发布。同一个应用 token 下的 PC 可以调用：
 
 ```text
 GET /api/rabilink/peers?deviceId=<self>&deviceGuid=<self-guid>
 ```
 
-响应只返回同一应用内的其它 worker，包括稳定 ID、GUID、在线状态、能力和 `peerUrls`。活跃 `/api/rabilink/events` SSE 连接本身就是 PC 在线证据，不会为了续在线状态轮询；重连交叠时只有同一 PC 的最后一条连接关闭才立即离线。新连接、能力/局域网地址变化和最后一条连接断开会向同应用其它订阅者发布 `persona_sync_peer_changed`，只用于唤醒一次 peer/manifest 补查。只有没有 SSE 的旧客户端才使用最近真实请求时间做有界兼容判断。人格同步器先尝试这些局域网 URL；直连失败时调用：
+响应只返回同一应用内的其它 worker，包括稳定 ID、GUID、在线状态、能力和 `peerUrls`。活跃 `/api/rabilink/events` SSE 连接本身就是 PC 在线证据，不会为了续在线状态轮询；重连交叠时只有同一 PC 的最后一条连接关闭才立即离线。新连接、能力/局域网地址变化和最后一条连接断开向同应用其它订阅者发布通用 `peer_changed` 事件，不再触发人格 manifest 对账。只有没有 SSE 的旧客户端才使用最近真实请求时间做有界兼容判断。
 
-```text
-POST /api/rabilink/persona-sync/proxy
-```
-
-该代理只接受目标 PC、`GET/POST` 和 `/api/persona-sync/manifest|files|merge` 路径。Relay 通过 `/api/rabilink/events` 向目标 PC 推送 `webgui_available`，PC 再即时领取 `/worker/webgui-requests` 并访问回环 Manager。它不能代理任意本机 URL，也不在 Relay 保存一份主人格。详细合并规则见 [多电脑人格数据同步](persona-data-sync.md)。
+人格自动/手动同步和 `/api/rabilink/persona-sync/proxy` 已退役。改用现有 RabiLink 访问目标 PC 的人格、Agent 与数据，不复制人格数据；目标 PC 保持数据归属。通用 LAN/P2P/Relay 传输与远端 WebGUI、Agent、语音入口继续保留，权限与支持范围见[跨电脑接口调用](rabilink-peer-rpc.md)和[通用跨 PC 连接](rabilink-peer-tunnel.md)。历史资料保留边界见[人格数据同步退役说明](persona-data-sync.md)。这些是源码合同，不代表已部署或远端全功能验收。
 
 旧路径 `/manage/<账号>/<RabiGUID>/webgui/...` 保留兼容，但推荐使用上面的根路径。
 
@@ -568,17 +564,17 @@ Authorization: Bearer <token>
 
 ## 电脑端 RabiLink worker 取任务
 
-PC worker 与 Manager 先保持一条事件流；`ready` 用于连接恢复检查，`task_available`、`webgui_available`、`speech_available` 分别触发对应队列的一次即时 drain，`persona_sync_peer_changed` 触发一次人格 peer/manifest 对账：
+PC worker 与 Manager 先保持一条事件流；`ready` 用于连接恢复检查，`task_available`、`webgui_available`、`speech_available` 分别触发对应队列的一次即时 drain，`peer_changed` 通知同应用设备发现状态变化，不启动人格同步：
 
 ```http
-GET /api/rabilink/events?deviceId=<RabiPC>&deviceGuid=<RabiGUID>&capabilities=tasks,webgui,persona-sync,speech
+GET /api/rabilink/events?deviceId=<RabiPC>&deviceGuid=<RabiGUID>&capabilities=tasks,webgui,speech
 Authorization: Bearer <token>
 Accept: text/event-stream
 ```
 
 正式 PC worker 收到事件后才调用领取接口，并固定 `waitMs=0`。旧客户端传入非零 `waitMs` 时，Relay 只阻塞等待对应内部事件并在订阅后复查一次，不恢复扫描轮询：
 
-手机端的“处理消息的 Rabi PC”列表由 Relay 按 worker 能力统一筛选：只有声明 `tasks`、`webgui`、`persona-sync` 或 `speech` 至少一项处理能力的实例才会出现在 `GET /api/rabilink/mobile/state` 的 `workers` 中。声明为 `phone`、`glasses`、`watch` 或 `earbuds` 的终端设备即使保持 `/api/rabilink/events` 在线，也不会成为 PC 候选；`PATCH /api/rabilink/mobile/target` 使用同一判据并拒绝把终端设备设为处理目标。
+手机端的“处理消息的 Rabi PC”列表由 Relay 按 worker 能力统一筛选：PC 类设备、声明 `tasks`、`webgui` 或 `speech` 处理能力的实例，以及保留稳定 GUID 的兼容旧记录可以进入 `GET /api/rabilink/mobile/state` 的 `workers`；退役同步能力不再作为处理资格。声明为 `phone`、`glasses`、`watch` 或 `earbuds` 的终端设备即使保持 `/api/rabilink/events` 在线，也不会成为 PC 候选；`PATCH /api/rabilink/mobile/target` 使用同一判据并拒绝把终端设备设为处理目标。
 
 Relay 管理后台的“已连接的 PC Rabi”、顶部 PC 数量和应用“通讯 Rabi PC”选择器使用同一判据。手机、眼镜、手表和耳机仍保留自己的在线事件、消息与设备日志，但不会显示“打开 PC WebGUI”。没有 `deviceKind/capabilities` 的旧记录只有在保存了稳定 `rabiGuid` 时才按兼容 PC 展示；没有 GUID 的旧 `rabi-phone` / `rabi-glass` 记录会被排除。
 

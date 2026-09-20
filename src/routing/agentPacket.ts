@@ -5,7 +5,6 @@ import { resolvePipeline, type ResolvedPipeline } from "../pipelines.js";
 import { rabiContextManager } from "../context/rabiContextManager.js";
 import { buildRoleKnowledgeContextView } from "./roleKnowledgeContext.js";
 import {
-  personaSyncCapabilityHint,
   voiceIdentityReviewCapabilityHint,
   needsPlanAssistantHint,
   needsRemoteAgentHint
@@ -1191,7 +1190,6 @@ function buildAgentMessage(
   const identityObservationUrl = capabilityContext.roleId
     ? `http://127.0.0.1:${capabilityContext.managerPort}/api/roles/${encodeURIComponent(capabilityContext.roleId)}/identity-relations/observations`
     : "";
-  const personaSyncHint = hasPersona ? personaSyncCapabilityHint(capabilityIntentText, capabilityContext) : null;
   const voiceIdentityReviewHint = hasPersona
     ? voiceIdentityReviewCapabilityHint(capabilityIntentText, capabilityContext)
     : null;
@@ -1338,7 +1336,6 @@ function buildAgentMessage(
       ...planAssistantLines
     ]) : "",
     hasPersona ? section("处理前上下文确认", requiredReadIndex) : "",
-    personaSyncHint ? section("多电脑人格同步", personaSyncHint) : "",
     voiceIdentityReviewHint ? section("全天语音与声纹归类", voiceIdentityReviewHint) : "",
     section("日志", [
       optionalLine("群聊日志", values.groupLogPath),

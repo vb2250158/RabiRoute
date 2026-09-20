@@ -54,7 +54,7 @@ async function waitForSseEvent(response, expectedType, timeoutMs = 2_000) {
   throw new Error(`SSE event was not received: ${expectedType}`);
 }
 
-test("persona-sync discovery and proxy stay isolated by application token", async () => {
+test("peer discovery and RPC stay isolated while retired synchronization is unavailable", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rabilink-relay-peers-"));
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -100,7 +100,7 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
         deviceGuid,
         deviceName: deviceId,
         waitMs: "0",
-        capabilities: "webgui,persona-sync",
+        capabilities: "webgui,persona-sync,persona-sync-plan-package-v1",
         peerUrls: JSON.stringify(peerUrls)
       });
       if (deviceKind !== undefined) params.set("deviceKind", deviceKind);
@@ -113,18 +113,18 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
       deviceId: "pc-a",
       deviceGuid: "guid-a",
       deviceName: "pc-a",
-      capabilities: "webgui,persona-sync",
+      capabilities: "webgui,persona-sync,persona-sync-plan-package-v1",
       peerUrls: JSON.stringify(["http://192.168.1.10:8790"])
     })}`, {
       headers: { "x-rabilink-token": tokenA, accept: "text/event-stream" }
     });
     assert.equal(peerObserver.status, 200);
     await register(tokenA, "pc-b", "guid-b", ["http://192.168.1.11:8790", "not a URL"]);
-    const peerChangedReader = await waitForSseEvent(peerObserver, "persona_sync_peer_changed");
+    const peerChangedReader = await waitForSseEvent(peerObserver, "peer_changed");
     await peerChangedReader.cancel();
     await register(tokenB, "pc-c", "guid-c", ["http://192.168.1.12:8790"]);
 
-    const liveEventsUrl = `${baseUrl}/api/rabilink/events?deviceId=pc-live&deviceGuid=guid-live&deviceName=pc-live&capabilities=persona-sync&peerUrls=${encodeURIComponent(JSON.stringify(["http://192.168.1.13:8790"]))}`;
+    const liveEventsUrl = `${baseUrl}/api/rabilink/events?deviceId=pc-live&deviceGuid=guid-live&deviceName=pc-live&capabilities=peer-rpc-v1&peerUrls=${encodeURIComponent(JSON.stringify(["http://192.168.1.13:8790"]))}`;
     const liveEvents = await fetch(liveEventsUrl, {
       headers: { "x-rabilink-token": tokenA, accept: "text/event-stream" }
     });
@@ -153,7 +153,7 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
     const peerB = peersA.find(peer => peer.id === "pc-b");
     assert.ok(peerB);
     assert.deepEqual(peerB.peerUrls, ["http://192.168.1.11:8790"]);
-    assert.deepEqual(peerB.capabilities, ["persona-sync", "webgui"]);
+    assert.deepEqual(peerB.capabilities, ["webgui"]);
 
     await liveEvents.body.cancel();
     const stillConnectedResponse = await fetch(`${baseUrl}/api/rabilink/peers?deviceId=pc-a&deviceGuid=guid-a`, {
@@ -217,45 +217,19 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
     });
     assert.equal(crossAppProxyB.status, 404);
 
-    const proxiedPromise = fetch(`${baseUrl}/api/rabilink/persona-sync/proxy`, {
+    const retiredProxy = await fetch(`${baseUrl}/api/rabilink/persona-sync/proxy`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-rabilink-token": tokenA },
-      body: JSON.stringify({
-        targetDeviceId: "pc-b",
-        method: "GET",
-        path: "/api/persona-sync/manifest?roleId=Rabi"
-      })
+      body: JSON.stringify({ targetDeviceId: "pc-b", method: "GET", path: "/api/persona-sync/manifest" })
     });
-    let claimedRequest;
-    for (let attempt = 0; attempt < 30 && !claimedRequest; attempt += 1) {
-      const claim = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&deviceName=pc-b&waitMs=0&capabilities=webgui,persona-sync`, {
-        headers: { "x-rabilink-token": tokenA }
-      });
-      const page = await claim.json();
-      claimedRequest = page.requests?.[0];
-      if (!claimedRequest) await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    assert.equal(claimedRequest.path, "/api/persona-sync/manifest?roleId=Rabi");
-    const manifest = { schemaVersion: 1, generatedAt: new Date().toISOString(), roles: [{ roleId: "Rabi", files: [] }] };
-    const finish = await fetch(`${baseUrl}/worker/webgui-requests/${encodeURIComponent(claimedRequest.id)}/response`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-rabilink-token": tokenA },
-      body: JSON.stringify({
-        deviceId: "pc-b",
-        deviceGuid: "guid-b",
-        ok: true,
-        statusCode: 200,
-        headers: { "content-type": "application/json" },
-        bodyBase64: Buffer.from(JSON.stringify({ code: 0, data: manifest })).toString("base64")
-      })
+    assert.equal(retiredProxy.status, 404);
+    const emptyQueue = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&waitMs=0`, {
+      headers: { "x-rabilink-token": tokenA }
     });
-    assert.equal(finish.status, 200);
-    const proxied = await proxiedPromise;
-    assert.equal(proxied.status, 200);
-    assert.deepEqual((await proxied.json()).data.roles[0], { roleId: "Rabi", files: [] });
+    assert.deepEqual((await emptyQueue.json()).requests, []);
 
     // Unified RPC reuses this real queue but cannot choose a Manager path.
-    const registerRpc = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&deviceName=pc-b&waitMs=0&capabilities=webgui,persona-sync,peer-rpc-v1`, {
+    const registerRpc = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&deviceName=pc-b&waitMs=0&capabilities=webgui,peer-rpc-v1`, {
       headers: { "x-rabilink-token": tokenA }
     });
     assert.equal(registerRpc.status, 200);
@@ -268,7 +242,7 @@ test("persona-sync discovery and proxy stay isolated by application token", asyn
     const rpcPending = rpc(tokenA, { targetDeviceId: "pc-b", packet });
     let rpcClaim;
     for (let attempt = 0; attempt < 30 && !rpcClaim; attempt++) {
-      const claim = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&deviceName=pc-b&waitMs=100&capabilities=webgui,persona-sync,peer-rpc-v1`, {
+      const claim = await fetch(`${baseUrl}/worker/webgui-requests?deviceId=pc-b&deviceGuid=guid-b&deviceName=pc-b&waitMs=100&capabilities=webgui,peer-rpc-v1`, {
         headers: { "x-rabilink-token": tokenA }
       });
       rpcClaim = (await claim.json()).requests?.[0];

@@ -66,7 +66,8 @@ final class RabiEventAsrUploader implements AutoCloseable {
                     if (!current.getAsBoolean()) throw new IllegalStateException("ASR processing context changed");
                     receipt = new JSONObject().put("eventId", head.eventId).put("captureId", head.captureId)
                         .put("workerId", worker.getId()).put("transport", tunnel.getTransport()).put("text", result.getString("text"))
-                        .put("segments", result.optJSONArray("segments")).put("processedAt", System.currentTimeMillis());
+                        .put("segments", result.optJSONArray("segments")).put("processedAt", System.currentTimeMillis())
+                        .put("timelineWorker", worker.getRawJson()).put("timelineScope", com.rabi.link.transport.AsrDirectory.accountIdentity(relay.getBaseUrl(), relay.getToken()));
                     // Commit text before acknowledging any shard. A crash during ACK resumes from this receipt.
                     spool.saveEventReceipt(head.eventId, receipt);
                     break;
@@ -74,6 +75,7 @@ final class RabiEventAsrUploader implements AutoCloseable {
             }
             if (receipt == null) throw new IllegalStateException("没有可用的 ASR 电脑，录音已保留，稍后重试");
         }
+        RabiRecordingEventSync.enqueue(context, receipt, event);
         for (RabiDurableAudioSpool.Segment part : event) {
             if (!current.getAsBoolean()) throw new IllegalStateException("ASR processing context changed");
             if ("acked".equals(part.uploadState)) continue;
@@ -83,7 +85,7 @@ final class RabiEventAsrUploader implements AutoCloseable {
         com.rabi.link.transport.AsrEventProgress.complete(head.eventId);
         return true;
     }
-    private static byte[] wav(byte[] pcm) {
+    static byte[] wav(byte[] pcm) {
         ByteBuffer b = ByteBuffer.allocate(44 + pcm.length).order(ByteOrder.LITTLE_ENDIAN);
         b.put("RIFF".getBytes(StandardCharsets.US_ASCII)).putInt(36 + pcm.length).put("WAVEfmt ".getBytes(StandardCharsets.US_ASCII))
             .putInt(16).putShort((short)1).putShort((short)1).putInt(16000).putInt(32000).putShort((short)2).putShort((short)16)

@@ -10,6 +10,8 @@ This directory contains current guides, experimental integrations, designs, rese
 
 ## Start here
 
+- [Persona all-day recording](persona-all-day-recording_en.md) — **New implementation**. Review computer and selected phone events by date, with explicit capture sources, pause state and coverage gaps.
+
 - [RibiWebGUI User Guide](user-guide/README_en.md) — **Current guide**. Start here on your first use to complete a real delivery, read status, change rules, and recover from common failures.
 - [Getting Started](getting-started_en.md) — **Current guide**. Install RabiRoute, start Manager, and confirm that the console opens.
 - [Interface and status](user-guide/interface-and-status_en.md) — **Current guide**. Understand the current Route, Manager connection, unsaved changes, runtime state, and Settings-page screenshots, selected-text menu, and login startup.
@@ -42,7 +44,7 @@ This directory contains current guides, experimental integrations, designs, rese
 - [Standard Agent Adapter Requirements](agent-adapter-standard-requirements_en.md) — **Current guide** for discovery, authentication, tasks, idempotent creation, delivery, results, tools, lifecycle, UI, security, and acceptance.
 - [Codex Desktop Agent Integration and Acceptance Contract](codex-desktop-agent-acceptance_en.md) — **Current fact** for stable IDs, side-effect-free scanning, automatic initialization, the Desktop owner boundary, and metadata bootstrap gates.
 - [Rabi Codex Context plugin](rabi-codex-context-plugin_en.md) — **Unified Manager version** where hooks only forward real Codex session events and inject Rabi PC-owned persona, plan, memory, and skill context.
-- [Multi-PC persona data synchronization](persona-data-sync_en.md) — **Experimental**. PCs in one RabiLink application prefer direct LAN transfer and fall back to restricted Relay transit. Backend file/connection events drive automatic catch-up, while the persona page supports immediate sync, evidence preview, and basic conflict resolution.
+- [Persona data synchronization retirement](persona-data-sync_en.md) — **Retired**. Automatic/manual synchronization and synchronization APIs are no longer provided. Use existing RabiLink remote persona, Agent, and data access without replication; historical data is retained.
 
 
 ## Maintainer: architecture, builds, and diagnostics

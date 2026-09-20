@@ -30,7 +30,7 @@ export async function readRabiLinkHome(signal: AbortSignal, request: typeof fetc
 }
 
 const capabilityLabels: Record<string, string> = {
-  tasks: "任务处理", webgui: "网页管理", "persona-sync": "人格同步",
+  tasks: "任务处理", webgui: "网页管理",
   speech: "语音服务", tts: "语音合成", asr: "语音识别",
   "peer-rpc": "跨电脑调用", "peer-tunnel": "跨电脑连接"
 };

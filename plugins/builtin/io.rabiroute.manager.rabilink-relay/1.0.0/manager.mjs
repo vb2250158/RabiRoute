@@ -48,7 +48,7 @@ export const activate = definePlugin({
                 runtime.syncActiveRabiLinkRelay = async () => { };
             }
             await Promise.all([
-                runtime.personaSyncLanServer.stop(),
+                runtime.peerLanServer.stop(),
                 runtime.rabiLinkRelayRuntime.stop()
             ]);
         }, "stop Manager RabiLink Relay plugin");

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import shutil
@@ -12,6 +13,10 @@ from typing import Any, Callable
 
 
 PlaybackPlayer = Callable[[Path, int, threading.Event], None]
+
+
+class PlaybackUnavailableError(RuntimeError):
+    """A playback failure whose message is safe to show to the caller."""
 
 
 def _validated_volume(value: object) -> int:
@@ -209,7 +214,9 @@ class PlaybackCoordinator:
                 if cancel.is_set():
                     self._update(job_id, status="cancelled", completed_at=time.time())
                 else:
-                    self._update(job_id, status="error", error=f"{type(exc).__name__}: playback failed")
+                    logging.getLogger("rabispeech.playback").exception("Playback job %s failed", job_id)
+                    message = str(exc) if isinstance(exc, PlaybackUnavailableError) else "播放失败，请查看 RabiSpeech 日志。"
+                    self._update(job_id, status="error", error=message, completed_at=time.time())
             finally:
                 self._cleanup(job_id)
                 with self._lock:

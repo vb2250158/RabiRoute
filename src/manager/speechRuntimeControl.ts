@@ -34,6 +34,7 @@ export class SpeechRuntimeControlError extends Error {
 
 export type SpeechRuntimeControlOptions = {
   rootDir: string;
+  packageRoot?: string;
   serviceUrl(): string;
   platform?: NodeJS.Platform;
   existsSync?: typeof fs.existsSync;
@@ -162,7 +163,7 @@ export class SpeechRuntimeControl {
     hostScript: string;
     startScript: string;
   } {
-    const serviceRoot = path.join(this.options.rootDir, "plugin-adapters", "rabi-speech");
+    const serviceRoot = path.join(this.options.packageRoot ?? this.options.rootDir, "plugin-adapters", "rabi-speech");
     return {
       serviceRoot,
       runtimeExecutable: path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
@@ -187,7 +188,7 @@ export class SpeechRuntimeControl {
     if (this.platform !== "win32") {
       throw new SpeechRuntimeControlError("WebGUI 启停 RabiSpeech 当前只支持 Windows 主机。", 409);
     }
-    if (!this.existsSync(path.join(paths.serviceRoot, ".deps"))) {
+    if (!this.existsSync(path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps"))) {
       throw new SpeechRuntimeControlError("RabiSpeech 尚未安装依赖，请先运行 scripts\\install.ps1。", 409);
     }
     if (!this.existsSync(paths.runtimeExecutable)) {
@@ -230,6 +231,7 @@ export class SpeechRuntimeControl {
               ...process.env,
               PYTHONUTF8: "1",
               PYTHONIOENCODING: "utf-8",
+              RABISPEECH_DEPS_ROOT: path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps"),
               RABISPEECH_CONFIG: this.userSpeechConfigPath(paths)
             }
           }

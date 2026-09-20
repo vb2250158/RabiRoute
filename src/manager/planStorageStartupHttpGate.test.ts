@@ -17,11 +17,7 @@ const PLAN_STORAGE_MUTATIONS = Object.freeze([
   ["POST", "/api/roles/YeYu/plans"],
   ["PATCH", "/api/roles/YeYu/plans/plan-1"],
   ["POST", "/api/roles/YeYu/plans/plan-1/feedback"],
-  ["POST", "/api/roles/YeYu/plan-agents/plan-1/open"],
-  ["POST", "/api/persona-sync/sync"],
-  ["POST", "/api/persona-sync/conflicts/resolve"],
-  ["POST", "/api/persona-sync/plan-packages/active"],
-  ["POST", "/api/persona-sync/plan-packages/archive"]
+  ["POST", "/api/roles/YeYu/plan-agents/plan-1/open"]
 ] as const);
 
 function snapshot(
@@ -96,7 +92,7 @@ test("non-plan, Xiaomi Home, and read-only requests remain available during star
     ["POST", "/api/codex-hook/context"],
     ["GET", "/api/roles/YeYu/plans"],
     ["HEAD", "/api/roles/YeYu/plans/plan-1"],
-    ["OPTIONS", "/api/persona-sync/sync"]
+    ["OPTIONS", "/api/roles/YeYu/plans"]
   ] as const;
 
   for (const [method, pathname] of requests) {

@@ -11,6 +11,19 @@ const lifecycleFence = {
   managerInstanceId: "manager-instance-current"
 };
 
+test("deployment paths and startup remain local and fenced before any body is read", () => {
+  const responses: Array<{ status: number; body: any }> = [];
+  let reads = 0;
+  const ctx = context(() => { reads++; }, () => undefined, responses);
+  ctx.controlPlaneAccessAllowed = () => true;
+  for (const suffix of ["/deployment", "/deployment/start"]) {
+    handleXiaomiHomeManagerApi(request({}, "POST", "192.168.0.20"), new URL(`http://localhost/api/agent/xiaomi-home${suffix}`), {} as http.ServerResponse, ctx);
+  }
+  handleXiaomiHomeManagerApi(request({}, "POST"), new URL("http://localhost/api/agent/xiaomi-home/deployment/start"), {} as http.ServerResponse, ctx);
+  assert.deepEqual(responses.map(value => value.status), [403, 403, 400]);
+  assert.equal(reads, 0);
+});
+
 function request(headers: Record<string, string> = {}, method = "PUT", remoteAddress = "127.0.0.1"): http.IncomingMessage {
   return {
     method,

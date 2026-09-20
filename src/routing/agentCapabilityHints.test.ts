@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  personaSyncCapabilityHint,
   voiceIdentityReviewCapabilityHint,
   needsPlanAssistantHint,
   needsRemoteAgentHint
@@ -20,14 +19,6 @@ test("operation tutorials are selected by current intent instead of installed ca
   assert.equal(needsRemoteAgentHint("dispatch a remote agent task"), true);
 });
 
-test("persona sync capability appears only for explicit multi-PC persona intent", () => {
-  const hint = personaSyncCapabilityHint("把当前人格同步到另一台电脑", context);
-  assert.ok(hint);
-  assert.match(hint.join("\n"), /127\.0\.0\.1:9000\/api\/persona-sync\/peers/);
-  assert.match(hint.join("\n"), /"roleId": "Rabi A"/);
-  assert.equal(personaSyncCapabilityHint("整理今天的会议记录", context), null);
-});
-
 test("voice identity review capability exposes persona-owned daily classification without host identity", () => {
   const hint = voiceIdentityReviewCapabilityHint("今天哪些录音是我说的，哪些是别人说的？", context);
   assert.ok(hint);
@@ -43,7 +34,7 @@ test("voice identity review capability exposes persona-owned daily classificatio
 test("capability hints fail closed without a valid current Manager port", () => {
   for (const managerPort of [undefined, "", "0", "65536", "not-a-port", "9000.5"]) {
     assert.throws(
-      () => personaSyncCapabilityHint("把当前人格同步到另一台电脑", { managerPort, roleId: "Rabi" }),
+      () => voiceIdentityReviewCapabilityHint("今天哪些录音是我说的？", { managerPort, roleId: "Rabi" }),
       /valid current Manager port/
     );
   }

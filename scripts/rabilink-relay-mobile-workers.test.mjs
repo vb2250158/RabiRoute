@@ -92,7 +92,7 @@ test("mobile PC picker exposes only processing workers", async () => {
       deviceId: "company-pc",
       deviceGuid: "guid-company",
       deviceName: "Company PC",
-      capabilities: "webgui,persona-sync,speech,asr"
+      capabilities: "webgui,speech,asr"
     }));
     subscriptions.push(await subscribe(baseUrl, token, {
       deviceId: "legacy-pc",

@@ -28,6 +28,12 @@ test("DTO projection discards unexpected credential and address fields", async (
   const result = await readRabiLinkHome(new AbortController().signal, response({ code: 0, data: { ...data, token: "fake-token", devices: [{ ...device, token: "fake-token", address: "private" }] } }));
   assert.deepEqual(result, data);
 });
+test("remote access capabilities remain available without advertising persona sync", () => {
+  assert.deepEqual(rabiLinkCapabilities(["webgui", "peer-rpc", "peer-tunnel", "persona-sync"]), {
+    known: ["网页管理", "跨电脑调用", "跨电脑连接"],
+    advanced: ["persona-sync"]
+  });
+});
 test("known service labels are Chinese and unknown capabilities stay in advanced details", () => {
   assert.deepEqual(rabiLinkCapabilities(["asr", "tts", "asr", "future-cap", "constructor", "__proto__"]), { known: ["语音识别", "语音合成"], advanced: ["future-cap", "constructor", "__proto__"] });
 });

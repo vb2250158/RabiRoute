@@ -1254,7 +1254,7 @@ test("AgentPacket injects persona-owned identity state for every voiceprint in a
   assert.equal(replyContext.speakerId, undefined);
 });
 
-test("AgentPacket exposes one-shot persona capabilities only for explicit current intent", () => {
+test("AgentPacket omits retired persona sync instructions and retains intent-gated voice capabilities", () => {
   const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-agent-packet-persona-sync-"));
   const rule: NotificationRule = {
     id: "persona-sync-intent",
@@ -1300,12 +1300,9 @@ test("AgentPacket exposes one-shot persona capabilities only for explicit curren
   const syncPacket = packetFor("我有多台电脑，请把当前人格同步到另一台电脑。");
   const managerBaseUrl = process.env.GATEWAY_MANAGER_URL ?? "";
   assert.ok(managerBaseUrl);
-  assert.match(syncPacket.message, /\[多电脑人格同步\]/);
-  assert.ok(syncPacket.message.includes(`GET ${managerBaseUrl}/api/persona-sync/peers`));
-  assert.ok(syncPacket.message.includes(`POST ${managerBaseUrl}/api/persona-sync/sync`));
-  assert.match(syncPacket.message, /"roleId": "Rabi"/);
-  assert.match(syncPacket.message, /只执行一次查询\/同步，不创建后台轮询/);
-  assert.match(syncPacket.message, /存在冲突时不能声称同步完成/);
+  assert.doesNotMatch(syncPacket.message, /\[多电脑人格同步\]/);
+  assert.doesNotMatch(syncPacket.message, /api\/persona-sync\//);
+  assert.doesNotMatch(syncPacket.message, /只执行一次查询\/同步，不创建后台轮询/);
 
   const ordinaryPacket = packetFor("请整理一下今天的会议记录。");
   assert.doesNotMatch(ordinaryPacket.message, /\[多电脑人格同步\]/);

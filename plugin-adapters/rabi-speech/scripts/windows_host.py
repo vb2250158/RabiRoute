@@ -80,7 +80,8 @@ def configure_runtime(
     module_paths: MutableSequence[str] | None = None,
 ) -> dict[str, str]:
     root = Path(service_root).expanduser().resolve()
-    dependencies = root / ".deps"
+    env = environment if environment is not None else os.environ
+    dependencies = Path(env.get("RABISPEECH_DEPS_ROOT") or root / ".deps").expanduser().resolve()
     if not dependencies.is_dir():
         raise RuntimeError(f"RabiSpeech dependencies are missing: {dependencies}")
 

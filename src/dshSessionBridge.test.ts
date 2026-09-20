@@ -14,6 +14,7 @@ type SessionRow = {
   sessionId: string; updatedAt: number; running: boolean; cwd?: string;
   projections?: { values?: { title?: string; modelSelection?: { next: DshModelSelection | null; lastUsed: DshModelSelection | null } } };
 };
+const fixtureBaseUrl = "http://127.0.0.1:3080";
 const id = (n: number) => `session-00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const row = (n: number, title = `Agent ${n}`): SessionRow => ({
   sessionId: id(n), updatedAt: 1000 + n, running: false, cwd: "C:\\work\\example", projections: { values: { title } }
@@ -100,21 +101,35 @@ test("complete owner list: filter and paginate locally beyond 50/100; read exact
   rows.slice(220).forEach(item => { item.cwd = "C:\\work\\other"; });
   const stub = installDshRpcStub(rows);
   try {
-    const result = await listDshSessions({ query: "Agent", offset: 200, limit: 25, allowedWorkspaces: ["c:/work/example/"] });
+    const result = await listDshSessions({ query: "Agent", offset: 200, limit: 25, allowedWorkspaces: ["c:/work/example/"], baseUrl: fixtureBaseUrl });
     assert.equal(result.length, 20);
     assert.equal(result[0]?.title, "Agent 20");
     assert.equal(stub.requests.length, 1);
-    assert.equal((await readDshSession(id(230))).id, id(230));
-    const resolved = await resolveDshSession({ sessionId: id(220), title: "changed", cwd: "C:\\work\\example", createIfMissing: true });
+    assert.equal((await readDshSession(id(230), fixtureBaseUrl)).id, id(230));
+    const resolved = await resolveDshSession({ sessionId: id(220), title: "changed", cwd: "C:\\work\\example", createIfMissing: true, baseUrl: fixtureBaseUrl });
     assert.equal(resolved.kind, "id");
     assert.ok(stub.requests.every(request => request.method === "session/list"));
   } finally { stub.restore(); }
 });
 
+test("session reads resolve an omitted endpoint through local discovery", async () => {
+  const previousUrl = process.env.DSH_WEB_URL;
+  process.env.DSH_WEB_URL = fixtureBaseUrl;
+  const stub = installDshRpcStub([row(1)]);
+  try {
+    assert.equal((await readDshSession(id(1))).id, id(1));
+    assert.deepEqual(stub.requests.map(request => request.method), ["session/list"]);
+  } finally {
+    stub.restore();
+    if (previousUrl === undefined) delete process.env.DSH_WEB_URL;
+    else process.env.DSH_WEB_URL = previousUrl;
+  }
+});
+
 test("resolver chooses uniquely latest matching title, reports ties and workspace mismatches", async () => {
   const rows = [row(1, "Secretary"), row(2, "Secretary")];
   const stub = installDshRpcStub(rows);
-  const params = { title: "Secretary", cwd: "C:\\work\\example", createIfMissing: false };
+  const params = { title: "Secretary", cwd: "C:\\work\\example", createIfMissing: false, baseUrl: fixtureBaseUrl };
   try {
     const latest = await resolveDshSession(params);
     assert.equal(latest.kind, "name");
@@ -122,7 +137,7 @@ test("resolver chooses uniquely latest matching title, reports ties and workspac
     rows[0]!.updatedAt = rows[1]!.updatedAt;
     assert.equal((await resolveDshSession(params)).kind, "ambiguous");
     assert.equal((await resolveDshSession({ ...params, sessionId: id(1), cwd: "C:\\other" })).kind, "workspace-mismatch");
-    await assert.rejects(renameDshSession({ sessionId: id(1), title: "New", cwd: "C:\\other" }), /workspace different/);
+    await assert.rejects(renameDshSession({ sessionId: id(1), title: "New", cwd: "C:\\other", baseUrl: fixtureBaseUrl }), /workspace different/);
     assert.ok(stub.requests.every(request => request.method === "session/list"));
   } finally { stub.restore(); }
 });
@@ -130,7 +145,7 @@ test("resolver chooses uniquely latest matching title, reports ties and workspac
 test("workspace registration, session creation and rename use named request arguments", async () => {
   const stub = installDshRpcStub([]);
   try {
-    const created = await createDshSession({ title: "Secretary", cwd: "C:\\work\\example", agentPreset: "default", sessionId: id(1) });
+    const created = await createDshSession({ title: "Secretary", cwd: "C:\\work\\example", agentPreset: "default", sessionId: id(1), baseUrl: fixtureBaseUrl });
     assert.equal(created.title, "Secretary");
     assert.equal(created.cwd, "C:\\work\\example");
     assert.deepEqual(stub.requests.map(r => r.method), ["workspace/create", "session/create", "session/rename", "session/list"]);
@@ -141,16 +156,16 @@ test("workspace registration, session creation and rename use named request argu
 test("current model catalog is no-argument session/modelCatalog with reasoning and failures", async () => {
   const stub = installDshRpcStub([]);
   try {
-    assert.deepEqual(await listDshModels(), normalizeDshModelCatalogForTest(catalog));
-    assert.deepEqual((await listDshModels()).models[0], { provider: "example-provider", providerName: "Example", id: "reasoner", name: "Reasoner", defaultReasoningEffort: "high", reasoningEfforts: [{ id: "high" }] });
-    assert.deepEqual((await listDshModels()).warnings, ["Offline：not connected"]);
+    assert.deepEqual(await listDshModels(fixtureBaseUrl), normalizeDshModelCatalogForTest(catalog));
+    assert.deepEqual((await listDshModels(fixtureBaseUrl)).models[0], { provider: "example-provider", providerName: "Example", id: "reasoner", name: "Reasoner", defaultReasoningEffort: "high", reasoningEfforts: [{ id: "high" }] });
+    assert.deepEqual((await listDshModels(fixtureBaseUrl)).warnings, ["Offline：not connected"]);
   } finally { stub.restore(); }
 });
 
 test("explicit model selection uses projected next, avoids redundant default writes, then steers content", async () => {
   const rows = [row(1)];
   const stub = installDshRpcStub(rows);
-  const params = { sessionId: id(1), prompt: "Exact source context", cwd: "C:\\work\\example", modelSelection: selection, requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" };
+  const params = { sessionId: id(1), prompt: "Exact source context", cwd: "C:\\work\\example", modelSelection: selection, requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", baseUrl: fixtureBaseUrl };
   try {
     await sendDshSessionMessage(params);
     assert.deepEqual(stub.requests.map(r => r.method), ["session/list", "session/selectModel", "session/prompt"]);
@@ -164,7 +179,7 @@ test("explicit model selection uses projected next, avoids redundant default wri
 
 test("missing session model fails closed without selecting or prompting", async () => {
   const stub = installDshRpcStub([]);
-  try { await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example", modelSelection: selection }), /not found/); }
+  try { await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example", modelSelection: selection, baseUrl: fixtureBaseUrl }), /not found/); }
   finally { stub.restore(); }
 });
 
@@ -175,7 +190,7 @@ test("image rejection reuses request identity and current prompt endpoint; no im
   const stub = installDshRpcStub([], body => body.payload.args.request?.content?.some((part: any) => part.type === "image")
     ? { ok: false, error: { code: "session/attachment-invalid", message: "Model does not support image input." } } : undefined);
   try {
-    const result = await sendDshSessionMessage({ sessionId: id(1), prompt: "source context", cwd: "C:\\work\\example", imagePaths: [image] });
+    const result = await sendDshSessionMessage({ sessionId: id(1), prompt: "source context", cwd: "C:\\work\\example", imagePaths: [image], baseUrl: fixtureBaseUrl });
     assert.ok(result.warning);
     assert.deepEqual(stub.requests.map(r => r.method), ["session/prompt", "session/prompt"]);
     const first = stub.requests[0]!.payload.args.request;
@@ -191,7 +206,7 @@ test("owner rejection and missing acceptance never claim delivery or try old RPC
   for (const response of [{ ok: false, error: { code: "session/agent-busy", message: "prompt rejected" } }, { ok: true, value: {} }]) {
     const stub = installDshRpcStub([], () => response);
     try {
-      await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example" }), /rejected|acceptance/);
+      await assert.rejects(sendDshSessionMessage({ sessionId: id(1), prompt: "test", cwd: "C:\\work\\example", baseUrl: fixtureBaseUrl }), /rejected|acceptance/);
       assert.deepEqual(stub.requests.map(r => r.method), ["session/prompt"]);
     } finally { stub.restore(); }
   }

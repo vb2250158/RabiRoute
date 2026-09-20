@@ -55,7 +55,7 @@ Agent / 定时器 / 规划器
 9. 照片和短视频按可靠消息附件处理；首版不承诺实时视频或 24 小时录音。
 10. 高风险外部动作继续经过 RabiRoute 动作安全门。
 11. PC 维护版本化的用户当前状态和情景快照；Agent 根据状态、情景、人格和用户配置综合决定不打扰、后台准备、提示、建议或行动。
-12. 每个人格维护可查看、可纠正、可删除和可同步的用户个体模型，区分稳定性格假设、学习偏好和当前心理状态，不以单次行为给用户定型。
+12. 每个人格维护可查看、可纠正和可删除的用户个体模型，区分稳定性格假设、学习偏好和当前心理状态，不以单次行为给用户定型。
 13. Companion App 用唯一持久状态提供 `PAUSED / PHONE / GLASSES` 三态切换；进入新模式前先释放旧采集端，眼镜未真实连接时保持暂停并显示原因。
 14. 用户可提交明确主动性偏好，但 App 与 Relay 只把它作为 observation 和消息元数据；最终介入判断仍归 PC 上下文、Route 动作门与目标 Agent 人格。
 15. 每条群消息都进入可恢复的处理记录；“不需要在群里回复”不能替代计划、记忆和项目事实检查。
@@ -136,7 +136,7 @@ Manager 使用计划和记忆的 ID、标题与关键词生成候选关联，并
 | 麦克风/播放状态与最小 HUD 状态 | 眼镜 App |
 | 模型、工具、沙箱、审批和当前 turn | PC Agent runtime |
 | 用户当前状态与情景快照 | PC 主动智能上下文层；从设备事件和会话证据派生，可重建 |
-| 稳定性格假设与学习偏好 | 目标人格的用户资料域；通过追加式证据和纠正派生，随人格同步 |
+| 稳定性格假设与学习偏好 | 目标人格的用户资料域；通过追加式证据和纠正派生；跨电脑使用 RabiLink 访问目标人格，不复制同步 |
 | Agent 自身的性格、语气和主动倾向 | 人格配置；与用户个体模型分开维护 |
 | 介入强度与表现方式 | 目标 Agent 人格结合用户状态、情景、用户模型、明确指令和风险决定 |
 
@@ -287,7 +287,9 @@ AgentPacket 只注入与当前情景相关的最小用户模型切片、来源�
 8. 接入真眼镜视频文件采集；可靠文件消息完成后才评估实时视频。
 9. 对支持图片的消息端验证一条主动图文消息：图片来自授权目录或已鉴权附件，正文说明关注点，平台回读能确认图片真实送达；纯语音端验证同一结论能降级为语音并在伴侣界面保留图片。
 
-## 当前完成度审计（2026-07-24）
+## 历史完成度审计（2026-07-24）
+
+以下保留当时的版本事实，不作为当前同步能力或验收要求。人格数据同步现已退役，包含自动/手动同步、合并与同步 API；不是开关。RabiLink 远端人格访问、RPC 和 tunnel 保留，所有现有数据与历史证据保留。见[退役说明](persona-data-sync.md)。
 
 | 要求 | 当前证据 | 状态 |
 | --- | --- | --- |
@@ -306,16 +308,15 @@ AgentPacket 只注入与当前情景相关的最小用户模型切片、来源�
 | 多 PC 人格同步 | 同 token 发现、LAN 优先、Relay fallback、JSONL union、普通文件快进/删除/冲突/解决回发均有实际 HTTP/Relay 子进程测试 | 自动化通过，仍需两台实体 PC 长期验收 |
 | 用户状态与情景识别 | 已明确多维状态、证据外壳、情景层级和“状态 + 情景 + 人格”介入合同 | 设计完成；统一状态服务、情景引擎和实体场景验收尚未完成 |
 
-因此当前不能把“APK 可构建”和“模型可推理”写成实体环境完成。最终剩余证据是：真人声纹阈值报告、两台实体 PC 的断线/冲突/长期同步，以及手机/眼镜的弱网持续 PCM、系统回收与真实播放。
+因此当前不能把“APK 可构建”和“模型可推理”写成实体环境完成。当前剩余证据是：真人声纹阈值报告，以及手机/眼镜的弱网持续 PCM、系统回收与真实播放。两台实体 PC 的同步验收已经退出当前要求；远端访问链路仍需按 RabiLink 自身合同验收。
 
 ## 统一实体环境验收状态
 
-`npm run check:active-intelligence:physical -- [参数]` 是失败关闭的一次性证据汇总入口。它不启动模型、Manager、手机或眼镜测试，不轮询设备，也不把自动化绿灯当成实体环境完成。默认从受 Git 忽略的窄目录读取最近的人格同步、Android soak 和 Rokid 真机摘要；正式声纹报告必须显式传 `--speaker-report <json>`。汇总只写证据 SHA-256、时间、检查项和 `missing / partial / passed / stale / invalid` 状态，不写 token、正文、人格名、设备序列号、主机名或私有路径。默认只要任一领域未通过就退出 `2`；仅查看状态时可显式加 `--allow-incomplete`。
+`npm run check:active-intelligence:physical -- [参数]` 是失败关闭的一次性证据汇总入口。它不启动模型、Manager、手机或眼镜测试，不轮询设备，也不把自动化绿灯当成实体环境完成。默认从受 Git 忽略的窄目录读取最近的 Android soak 和 Rokid 真机摘要；正式声纹报告必须显式传 `--speaker-report <json>`。汇总只写证据 SHA-256、时间、检查项和 `missing / partial / passed / stale / invalid` 状态，不写 token、正文、人格名、设备序列号、主机名或私有路径。默认只要任一领域未通过就退出 `2`；仅查看状态时可显式加 `--allow-incomplete`。
 
-四个领域都必须独立通过：
+当前三个领域都必须独立通过（移除同步维度，不放宽其他门禁）：
 
 - `voiceprint`：私有数据集必须声明 `real_person_private`，正式资格为真，完整 policy 与全部目标引擎通过，且报告内 dataset hash 与当前 manifest 一致；合成 TTS 不能冒充正式证据。
-- `personaSync`：schema v2 实体同步证据必须同时满足 `syncPassed`、显式的两台不同物理主机确认和 `formalAcceptanceEligible`，并由人工观察证据确认 LAN、Relay fallback、断线恢复、冲突解决和长期运行。普通功能同步成功不能冒充正式实体证据。
 - `android`：真实设备 soak 至少 23.5 小时且 PCM 持续增长，并确认断网自动恢复、系统回收恢复、开机恢复和手机扬声器真实播放。
 - `rokid`：真实设备脚本必须实际请求并得到 TTS 与非空 ASR 证据；另需确认持续 PCM、触摸板、实际听到播报和连接恢复。
 
@@ -323,10 +324,12 @@ AgentPacket 只注入与当前情景相关的最小用户模型切片、来源�
 
 ```powershell
 npm run record:active-intelligence:physical -- --list
-npm run record:active-intelligence:physical -- --confirm personaSyncLan
-npm run record:active-intelligence:physical -- --revoke personaSyncLan
+npm run record:active-intelligence:physical -- --confirm androidPhonePlayback
+npm run record:active-intelligence:physical -- --revoke androidPhonePlayback
 npm run record:active-intelligence:physical -- --reset
 ```
+
+含旧 `personaSync*` 字段的 observation 会被当前精确字段校验拒绝，不会自动删字段或把它算作通过。需要重新记录时，先用 `--reset` 归档旧文件并生成当前格式，再逐项记录真实观察；保留归档，不改写历史证据。源码调整不代表已完成现场验收。
 
 每个 `--confirm` 都必须显式写出 allowlist 内的检查 ID；命令不启动测试、不轮询设备，也不提供“全部通过”捷径。已有文件会先复制到同目录 `archive/`，再原子更新当前文件。工具首次生成随机环境证据后只保存 SHA-256，后续沿用该 hash；不会保存主机名、设备序列号、账号、备注或自由文本。当前文件格式为：
 
@@ -338,12 +341,6 @@ npm run record:active-intelligence:physical -- --reset
   "operatorConfirmed": true,
   "environmentIdHash": "<64 lowercase hex characters>",
   "checks": {
-    "personaSyncDistinctPhysicalHosts": false,
-    "personaSyncLan": false,
-    "personaSyncRelayFallback": false,
-    "personaSyncDisconnectRecovery": false,
-    "personaSyncConflictResolution": false,
-    "personaSyncLongRun": false,
     "androidOfflineRecovery": false,
     "androidProcessReclaimRecovery": false,
     "androidBootRecovery": false,

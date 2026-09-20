@@ -6,7 +6,6 @@ import {
   queryPersonaVoiceTranscriptViews,
   type PersonaVoiceTranscriptQuery
 } from "../personaVoiceTranscriptView.js";
-import { PersonaSyncService } from "../personaSync.js";
 import { readPersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   getPlan,
@@ -52,12 +51,6 @@ export type ManagerReadWorkerTask =
       type: "persona_voice_transcripts";
       roleDir: string;
       query: PersonaVoiceTranscriptQuery;
-    }
-  | {
-      type: "persona_sync_conflicts";
-      rolesRoot: string;
-      stateRoot: string;
-      roleId?: string;
     }
   | {
       type: "plan_feedback_recovery_candidates";
@@ -256,13 +249,6 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
     }
     case "persona_voice_transcripts":
       return queryPersonaVoiceTranscriptViews(task.roleDir, task.query);
-    case "persona_sync_conflicts": {
-      const service = new PersonaSyncService(() => task.rolesRoot, task.stateRoot);
-      return service.listConflictsAsync(task.roleId, {
-        pauseEveryEntries: 64,
-        pauseMs: 10
-      });
-    }
     case "plan_feedback_recovery_candidates":
       return await listOpenPlanFeedbackRecoveryCandidates(task.rolesRoot);
     case "role_directories":

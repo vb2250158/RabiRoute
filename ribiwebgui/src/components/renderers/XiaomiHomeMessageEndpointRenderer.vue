@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { userFacingError } from "../../userFacingError";
+import HomeAssistantDeploymentPanel from "./HomeAssistantDeploymentPanel.vue";
+import type { HomeAssistantDeploymentSnapshot } from "@shared/homeAssistantDeploymentContract";
+import { homeAssistantDeploymentClient } from "../../homeAssistantDeploymentClient";
 import { computed, onMounted, ref } from "vue";
 import type { XiaomiHomeAuthorizationSnapshot } from "@shared/xiaomiHomeAuthContract";
 import type { XiaomiHomeSettingsSnapshot } from "@shared/xiaomiHomeSettingsContract";
@@ -13,7 +16,10 @@ import {
 } from "../../xiaomiHomeCredentialHelp";
 import { xiaomiHomeSettingsClient } from "../../xiaomiHomeSettingsClient";
 
+const props = defineProps<{ context?: { refreshScan?: () => Promise<void> } }>();
+
 const authorization = ref<XiaomiHomeAuthorizationSnapshot | null>(null);
+const deployment = ref<HomeAssistantDeploymentSnapshot>();
 const settings = ref<XiaomiHomeSettingsSnapshot | null>(null);
 const baseUrl = ref("");
 const accessToken = ref("");
@@ -54,6 +60,7 @@ const stateDetail = computed(() => ({
 
 const loginUrl = computed(() => homeAssistantLoginUrl(baseUrl.value));
 const profileUrl = computed(() => homeAssistantProfileUrl(baseUrl.value));
+const serviceReady = computed(() => deployment.value?.state === "ready" && homeAssistantLoginUrl(deployment.value.baseUrl) === loginUrl.value);
 
 const sourceLabel = computed(() => authorization.value?.credentialSource === "protected"
   ? "本机受保护凭证"
@@ -112,12 +119,26 @@ async function connect(): Promise<void> {
     settings.value = await xiaomiHomeSettingsClient.read();
     baseUrl.value = settings.value.settings.baseUrl;
     error.value = "";
+    await props.context?.refreshScan?.();
   } catch (cause) {
     error.value = userFacingError(cause);
   } finally {
     accessToken.value = "";
     busy.value = false;
   }
+}
+
+async function saveAddress(): Promise<void> {
+  if (busy.value || !settings.value) return;
+  busy.value = true;
+  try {
+    settings.value = await xiaomiHomeSettingsClient.update(settings.value, { ...settings.value.settings, baseUrl: baseUrl.value.trim() });
+    baseUrl.value = settings.value.settings.baseUrl;
+    deployment.value = await homeAssistantDeploymentClient.read();
+    authorization.value = await xiaomiHomeAuthClient.read();
+    error.value = "";
+  } catch (cause) { error.value = userFacingError(cause); }
+  finally { busy.value = false; }
 }
 
 async function refresh(): Promise<void> {
@@ -142,6 +163,7 @@ async function disconnect(): Promise<void> {
     if (!authorization.value) throw new Error("米家授权状态尚未加载。");
     authorization.value = await xiaomiHomeAuthClient.disconnect(authorization.value.revision);
     error.value = "";
+    await props.context?.refreshScan?.();
   } catch (cause) {
     error.value = userFacingError(cause);
   } finally {
@@ -154,6 +176,7 @@ onMounted(() => void load());
 
 <template>
   <div class="xiaomi-home-endpoint-auth">
+    <HomeAssistantDeploymentPanel :key="settings?.settings.baseUrl" @state="deployment = $event" />
     <div class="section-title-row">
       <div>
         <div class="section-title small-title">连接 Home Assistant</div>
@@ -178,9 +201,10 @@ onMounted(() => void load());
         @update:model-value="baseUrlError = ''"
       />
       <div class="credential-help-actions">
+        <v-btn variant="tonal" :disabled="busy || baseUrl === settings.settings.baseUrl" @click="saveAddress">保存服务地址</v-btn>
         <v-btn
           :href="loginUrl || undefined"
-          :disabled="!loginUrl"
+          :disabled="!loginUrl || !serviceReady"
           target="_blank"
           rel="noopener noreferrer"
           variant="tonal"
@@ -189,7 +213,7 @@ onMounted(() => void load());
         >打开 Home Assistant</v-btn>
         <v-btn
           :href="profileUrl || undefined"
-          :disabled="!profileUrl"
+          :disabled="!profileUrl || !serviceReady"
           target="_blank"
           rel="noopener noreferrer"
           variant="tonal"
@@ -198,6 +222,7 @@ onMounted(() => void load());
         >打开令牌管理</v-btn>
       </div>
       <div v-if="!loginUrl" class="section-note">先填写有效的 Home Assistant 地址。</div>
+      <div v-else-if="!serviceReady" class="section-note">先在上方启动并检查服务，就绪后再打开登录页面。</div>
       <v-text-field
         v-model="accessToken"
         type="password"

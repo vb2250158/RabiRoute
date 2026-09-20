@@ -37,13 +37,27 @@ async function timedRequest(pathname, timeoutMs) {
 }
 
 async function main() {
+  const verifyIdentity = async expected => {
+    const response = await fetch(`${baseUrl}/meta`, {
+      headers: { accept: "application/json" }, signal: AbortSignal.timeout(5_000)
+    });
+    if (response.status !== 200) throw new Error(`Manager /meta failed (HTTP ${response.status}).`);
+    const meta = await response.json();
+    if (meta?.health?.state !== "healthy" || meta?.health?.requiredReady !== true
+      || !meta.applicationGenerationId || !meta.managerInstanceId
+      || (expected && (meta.applicationGenerationId !== expected.applicationGenerationId
+        || meta.managerInstanceId !== expected.managerInstanceId))) {
+      throw new Error("Manager is not healthy or its identity changed; supply the newly discovered Manager URL.");
+    }
+    return meta;
+  };
+  const identity = await verifyIdentity();
   const encodedRoleId = encodeURIComponent(roleId);
   const from = Math.floor(Date.now() / 1_000) - 24 * 60 * 60;
   const heavyPaths = [
     `/api/roles/${encodedRoleId}/voice-transcripts?includeArchives=true&includeDetails=false&from=${from}`,
     `/api/roles/${encodedRoleId}/voice-transcripts?includeArchives=true&includeDetails=false&from=${from}&limit=100`,
     `/api/roles/${encodedRoleId}/voice-transcripts?includeArchives=true&includeDetails=false&from=${from}&limit=50`,
-    `/api/persona-sync/conflicts?roleId=${encodedRoleId}`,
     "/gateways",
     `/api/roles/${encodedRoleId}/plans?limit=50&detail=summary`
   ];
@@ -55,6 +69,7 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   const heavyResults = await Promise.all(heavy);
+  await verifyIdentity(identity);
   const metaDurations = meta.map(item => item.durationMs);
   const metaP95Ms = percentile(metaDurations, 0.95);
   const metaMaxMs = Math.max(0, ...metaDurations);

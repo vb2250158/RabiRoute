@@ -37,8 +37,12 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     // Every preview state occupies the same bounds, so selecting an event never moves the ruler.
     private val preview = FrameLayout(context)
     private val previewStage = object : FrameLayout(context) {
+        init { contentDescription = "记录预览" }
         override fun onMeasure(widthSpec: Int, heightSpec: Int) {
-            super.onMeasure(widthSpec,View.MeasureSpec.makeMeasureSpec(View.MeasureSpec.getSize(widthSpec)*9/16,View.MeasureSpec.EXACTLY))
+            val preferredHeight = View.MeasureSpec.getSize(widthSpec)*9/16
+            val height = if(View.MeasureSpec.getMode(heightSpec) == View.MeasureSpec.UNSPECIFIED) preferredHeight
+                else minOf(preferredHeight, View.MeasureSpec.getSize(heightSpec))
+            super.onMeasure(widthSpec,View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY))
         }
     }
     private var controlsVisible = false
@@ -58,7 +62,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     }
     private fun showControls(shown: Boolean) {
         controlsVisible = shown
-        ruler.visibility = if(shown) View.VISIBLE else View.GONE
+        ruler.visibility = View.VISIBLE
         header?.visibility = if(shown) View.VISIBLE else View.GONE
         position.visibility = if(shown) View.VISIBLE else View.GONE
         if(player?.state()?.controlsVisible != shown) player?.setControls(shown)
@@ -66,8 +70,24 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private val position = label("实时", 12f)
     private val dayButton = RabiMobileUi.compactAction(context, "选择日期") {}
     private val ruler = RecordingTimeRuler(context)
-    private val rows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12),0,dp(12),dp(12)) }
-    private val scroll = ScrollView(context).apply { addView(rows) }
+    private val reviewColumn = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val eventColumn = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    private val listStatus = label("正在读取记录…", 12f)
+    private val scroll = ListView(context).apply { divider = null; dividerHeight = dp(10); setPadding(dp(12),0,dp(12),dp(12)); clipToPadding = false }
+    private var displayedItems = emptyList<Item>()
+    private var sourceFilter = 0
+    private var listDriving = false
+    private var programmaticScroll = false
+    private val rowAdapter = object : BaseAdapter() {
+        override fun getCount() = displayedItems.size
+        override fun getItem(position: Int) = displayedItems[position]
+        override fun getItemId(position: Int) = position.toLong()
+        override fun getView(position: Int, recycled: View?, parent: android.view.ViewGroup): View = bindCard(displayedItems[position], recycled)
+    }
+    private val durations = object : LinkedHashMap<String,Long>(128,0.75f,true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String,Long>?) = size > 2048
+    }
+    private var lastDataSignal = ""
     private var day = midnight(System.currentTimeMillis())
     private var cursor = System.currentTimeMillis()
     private var loadedRange = 0L..0L
@@ -92,18 +112,20 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private var liveWaveform: AudioWaveformView? = null
     private val images = android.util.LruCache<String, Bitmap>(24)
     private val cards = mutableMapOf<String, View>()
+    private val thumbnailWorker = java.util.concurrent.ThreadPoolExecutor(1,1,0L,java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(24),java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy())
     private val liveTick = object : Runnable {
         override fun run() { if(closed) return; refreshLive(); main.postDelayed(this,1000) }
     }
     init {
         previewStage.addView(preview,FrameLayout.LayoutParams(-1,-1))
         previewStage.addView(liveTap,FrameLayout.LayoutParams(-1,-1))
-        previewStage.addView(ruler,FrameLayout.LayoutParams(-1,dp(64),Gravity.BOTTOM))
-        ruler.visibility = View.GONE
+        ruler.visibility = View.VISIBLE
         position.gravity = Gravity.CENTER_VERTICAL
         position.maxLines = 2
         position.visibility = View.GONE
-        view.addView(previewStage,LinearLayout.LayoutParams(-1,-2))
+        reviewColumn.addView(previewStage,LinearLayout.LayoutParams(-1,-2))
+        reviewColumn.addView(ruler,LinearLayout.LayoutParams(-1,dp(64)))
         val navigation = LinearLayout(context).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), 0, dp(12), 0)
@@ -119,8 +141,36 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         for(i in 1 until navigation.childCount) (navigation.getChildAt(i) as? TextView)?.apply {
             textSize = 13f; setBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
-        view.addView(navigation)
-        view.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
+        eventColumn.addView(navigation)
+        eventColumn.addView(Spinner(context).apply {
+            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部来源","手机","眼镜"))
+            contentDescription = "筛选记录来源"
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { sourceFilter = position; renderRows() }
+            }
+        },LinearLayout.LayoutParams(-1,dp(48)))
+        eventColumn.addView(listStatus)
+        scroll.adapter = rowAdapter
+        eventColumn.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
+        val wide = context.resources.configuration.screenWidthDp >= 700
+        if(wide) previewStage.layoutParams = LinearLayout.LayoutParams(-1,0,1f)
+        view.orientation = if(wide) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+        view.addView(reviewColumn, if(wide) LinearLayout.LayoutParams(0,-1,3f) else LinearLayout.LayoutParams(-1,-2))
+        view.addView(eventColumn, if(wide) LinearLayout.LayoutParams(0,-1,2f) else LinearLayout.LayoutParams(-1,0,1f))
+        scroll.setOnScrollListener(object : AbsListView.OnScrollListener {
+            override fun onScrollStateChanged(list: AbsListView, state: Int) {
+                if(state == AbsListView.OnScrollListener.SCROLL_STATE_TOUCH_SCROLL) { listDriving = true; live = false; ruler.cancelGesture() }
+                if(state == AbsListView.OnScrollListener.SCROLL_STATE_IDLE && listDriving) {
+                    displayedItems.getOrNull(scroll.firstVisiblePosition)?.let { jump(it.entry.started) }
+                }
+            }
+            override fun onScroll(list: AbsListView, first: Int, count: Int, total: Int) {
+                if(programmaticScroll || !listDriving) return
+                displayedItems.getOrNull(first)?.let { cursor = it.entry.started; ruler.setPosition(cursor,false); updateRange(); position.text = "回看 · ${clock(cursor)}" }
+                if(total > 0 && count > 0 && (first == 0 || first + count >= total)) ensureRange()
+            }
+        })
         dayButton.setOnClickListener {
             val date = Calendar.getInstance().apply { timeInMillis = day }
             DatePickerDialog(context, { _, year, month, dayOfMonth ->
@@ -130,7 +180,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 jump(ruler.time); load(); renderRows()
             }, date.get(Calendar.YEAR),date.get(Calendar.MONTH),date.get(Calendar.DAY_OF_MONTH)).apply { datePicker.maxDate = System.currentTimeMillis() }.show()
         }
-        ruler.onStart = { dragging = true; live = false; player?.holdControls() }
+        ruler.onStart = { listDriving = false; dragging = true; live = false; player?.holdControls() }
         ruler.onMove = { time, finished ->
             cursor = time; updateRange(); position.text = "回看 · ${clock(time)}"
             ensureRange()
@@ -143,7 +193,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 highlightAt(time); renderRows()
             }
         }
-        rows.addView(label("正在读取记录…")); updateRange(); showEmpty("实时 · 无画面"); load(); refreshLive(); main.postDelayed(liveTick,1000)
+        updateRange(); showEmpty("实时 · 无画面"); load(); refreshLive(); main.postDelayed(liveTick,1000)
     }
     private fun dp(value: Int) = (context.resources.displayMetrics.density * value).toInt()
     private fun label(text: String, size: Float = 14f) = TextView(context).apply {
@@ -167,14 +217,14 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         preview.addView(label(message, 18f).apply { gravity = Gravity.CENTER; setTextColor(Color.LTGRAY); setBackgroundColor(Color.rgb(25,29,34)) },FrameLayout.LayoutParams(-1,-1))
     }
     private fun enterLive() {
-        ruler.cancelGesture(); dragging = false; live = true; cursor = System.currentTimeMillis(); selected = null; selection++
+        ruler.cancelGesture(); listDriving = false; dragging = false; live = true; cursor = System.currentTimeMillis(); selected = null; selection++
         releasePlayback(); playbackState = RecordingPlaybackPanel.State(); ruler.setPosition(cursor,true); updateRange(); load(); refreshLive()
     }
     /** Called only while visible, from the owner's runtime events; history playback is not reset. */
     fun refreshLive() {
         if(closed || dragging) return
         if(!live) {
-            if(System.currentTimeMillis() - lastLoad > 3000) load()
+            refreshChangedData()
             return
         }
         cursor = System.currentTimeMillis(); ruler.setPosition(cursor,true); updateRange()
@@ -202,7 +252,12 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 current.prepare(); current.play()
             }
         }
-        if(System.currentTimeMillis() - lastLoad > 5000) load()
+        refreshChangedData()
+    }
+    private fun refreshChangedData() {
+        val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
+        val signal = "${runtime.getLong("captureLastReceivedAt",0)}:${runtime.getString("allDayStatus","")}:${File(context.filesDir,"rabi-conversation/audio-spool").lastModified()}"
+        if(signal != lastDataSignal && System.currentTimeMillis() - lastLoad >= 5000) { lastDataSignal = signal; load() }
     }
     private fun load() {
         if(closed) return
@@ -210,14 +265,17 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         val visibleRange = ruler.visibleRange()
         val margin = maxOf(86_400_000L,ruler.window)
         val requestedRange = maxOf(0,visibleRange.first-margin)..(visibleRange.last+margin)
-        loading = true; lastLoad = System.currentTimeMillis(); val version = ++revision
+        loading = true; listStatus.text = if(items.isEmpty()) "正在读取记录…" else "正在更新…"; lastLoad = System.currentTimeMillis(); val version = ++revision
         worker.execute {
             val result = runCatching {
                 val store = RecordingStore(context)
-                val video = store.list().filter { it.state != "recording" && it.files.isNotEmpty() }.flatMap { entry ->
+                val video = store.list(requestedRange.first, requestedRange.last).filter { it.state != "recording" && it.files.isNotEmpty() }.flatMap { entry ->
                     if(entry.state == "legacy") entry.files.map { file -> entry.copy(id=file.name,files=listOf(file),started=file.lastModified(),state="legacy-part") } else listOf(entry)
                 }.map { entry ->
-                    val duration = entry.files.sumOf { runCatching { RecordingResourceCache.duration(context,it) }.getOrDefault(0L) }
+                    val duration = entry.files.sumOf { file ->
+                        val key = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
+                        durations[key] ?: runCatching { RecordingResourceCache.duration(context,file) }.getOrDefault(0L).also { if(it > 0) durations[key] = it }
+                    }
                     Item(entry, runCatching { store.captureId(entry.id) }.getOrDefault(entry.id), listOf(ReviewTimeline.Span(entry.started,duration)),false)
                 }
                 val audio = RabiAudioRecordRepository.listCaptureRecords(context,requestedRange.first,requestedRange.last)
@@ -240,32 +298,34 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     items = records.filter { item -> item.spans.any { TimelineRulerMath.overlaps(it.start,it.duration,requestedRange) } }
                     loadedRange = requestedRange
                     ruler.setCoverage(items.flatMap { item -> item.spans.map { RecordingTimeRuler.Coverage(it.start,it.duration,!item.audio) } })
+                    listStatus.text = if(items.isEmpty()) "此时间范围暂无已保存记录" else "${items.size} 条事件"
                     renderRows()
                     if(!live && !dragging && selected == null) jump(cursor)
-                }.onFailure { rows.removeAllViews(); rows.addView(label("记录读取失败：${it.message}")) }
-                if(reloadPending) { reloadPending = false; ensureRange() }
+                }.onFailure { listStatus.text = "刷新失败，已保留当前记录 · 点击刷新重试" }
+                if(reloadPending) { reloadPending = false; main.postDelayed({ if(!closed) load() },1000) }
             }
         }
     }
     private fun renderRows() {
-        rows.removeAllViews(); cards.clear()
-        val range = ruler.visibleRange()
-        val visible = items.filter { item -> item.spans.any { TimelineRulerMath.overlaps(it.start,it.duration,range) } }
-        if(live && AllDayRecordingSettings.load(context).running) {
-            val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
-            val last = runtime.getLong("captureLastReceivedAt",0)
-            rows.addView(label(if(last > 0) "最新录音 · ${clock(last)}\n${runtime.getString("allDayStatus", "等待声音")}" else "正在等待最新录音",15f).apply {
-                setOnClickListener { enterLive() }
-            })
-        }
-        if(visible.isEmpty()) rows.addView(label("此时间范围暂无已保存记录"))
-        visible.forEach { item ->
+        val anchor = displayedItems.getOrNull(scroll.firstVisiblePosition)?.entry?.id
+        val offset = scroll.getChildAt(0)?.top ?: 0
+        displayedItems = items.filter { sourceFilter == 0 || (sourceFilter == 2) == (it.entry.source == "glasses") }
+        cards.clear()
+        programmaticScroll = true
+        rowAdapter.notifyDataSetChanged()
+        val restored = RecordingListPosition.restore(displayedItems.map { it.entry.id },anchor,selected?.entry?.id,listDriving)
+        val index = if(restored >= 0) restored else if(!listDriving) displayedItems.indexOfFirst { ReviewTimeline.mediaAt(it.spans,cursor) != null } else -1
+        if(index >= 0) scroll.setSelectionFromTop(index, if(listDriving) offset else 0)
+        scroll.post { programmaticScroll = false; highlightAt(cursor) }
+    }
+    private fun bindCard(item: Item, recycled: View?): View {
             val entry = item.entry
-            val card = LinearLayout(context).apply {
+            val card = (recycled as? LinearLayout ?: LinearLayout(context)).apply {
+                (tag as? String)?.let { cards.remove(it) }; tag = entry.id; removeAllViews()
                 orientation = LinearLayout.VERTICAL; setPadding(dp(8),dp(8),dp(8),dp(8))
                 background = GradientDrawable().apply { setColor(RabiMobileUi.surface); cornerRadius = dp(16).toFloat() }
-                layoutParams = LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = dp(10) }
-                isClickable = true; setOnClickListener { ruler.cancelGesture(); dragging = false; open(item,entry.started); renderRows() }
+                layoutParams = AbsListView.LayoutParams(-1,-2)
+                isClickable = true; setOnClickListener { ruler.cancelGesture(); listDriving = false; dragging = false; open(item,entry.started); renderRows() }
             }
             cards[entry.id] = card
             val heading = LinearLayout(context)
@@ -292,22 +352,21 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                 if(status.isNotBlank()) card.addView(label(status,13f).apply { setTextColor(RabiMobileUi.muted) })
             }
             card.addView(label("${item.spans.sumOf { it.duration } / 1000} 秒 · ${if(selected?.entry?.id == entry.id) "回看中" else "点击回看"}",12f).apply { setTextColor(RabiMobileUi.muted) })
-            markers.filter { it.at in range && (it.recordId in item.associatedIds || it.recordId == entry.id) }.forEach { marker ->
+            markers.filter { (it.recordId in item.associatedIds || it.recordId == entry.id) }.forEach { marker ->
                 card.addView(Button(context).apply { text = "标记 · ${clock(marker.at)}"; setOnClickListener { jump(marker.at) } })
             }
-            rows.addView(card)
-        }
-        highlightAt(cursor)
+        return card
     }
     private fun thumbnail(file: File, target: ImageView) {
         val key = file.absolutePath + file.lastModified()
         images.get(key)?.let { target.setImageBitmap(it); return }
-        worker.execute {
+        target.tag = key
+        thumbnailWorker.execute {
             val bitmap = runCatching {
                 val reader = MediaMetadataRetriever()
                 try { reader.setDataSource(file.absolutePath); reader.getScaledFrameAtTime(0,MediaMetadataRetriever.OPTION_CLOSEST_SYNC,240,160) } finally { reader.release() }
             }.getOrNull()
-            main.post { if(!closed && bitmap != null) { images.put(key,bitmap); target.setImageBitmap(bitmap) } }
+            main.post { if(!closed && bitmap != null) { images.put(key,bitmap); if(target.tag == key) target.setImageBitmap(bitmap) } }
         }
     }
     private fun jump(time: Long) {
@@ -339,7 +398,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                             ReviewTimeline.timeFor(item.spans,mediaPosition)?.let { wall ->
                                 position.text = "回看 · ${clock(wall)}"
                                 cursor = wall; ruler.setPosition(wall,false); updateRange(); ensureRange()
-                                if(System.currentTimeMillis()-lastRender > 1000) { lastRender = System.currentTimeMillis(); renderRows() }
+                                if(System.currentTimeMillis()-lastRender > 1000) { lastRender = System.currentTimeMillis(); highlightAt(cursor) }
                             }
                         }
                     }.also {
@@ -352,5 +411,5 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         }
     }
     private fun highlight(id: String?) { cards.forEach { (key, card) -> card.background = com.rabi.link.RabiMobileUi.panel(context,if(key == id) RabiMobileUi.accentSurface else RabiMobileUi.surface,if(key == id) RabiMobileUi.accentBorder else RabiMobileUi.border,16) } }
-    fun close() { closed = true; revision++; selection++; releasePlayback(); main.removeCallbacksAndMessages(null); ruler.cancelGesture(); worker.shutdown(); mediaWorker.shutdown(); images.evictAll() }
+    fun close() { closed = true; revision++; selection++; releasePlayback(); main.removeCallbacksAndMessages(null); ruler.cancelGesture(); worker.shutdown(); mediaWorker.shutdown(); thumbnailWorker.shutdown(); images.evictAll() }
 }

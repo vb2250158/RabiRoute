@@ -30,22 +30,22 @@ test("records only explicitly confirmed checks and stores only a hashed environm
 test("archives the previous observation and preserves confirmations across updates", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabi-physical-observation-archive-"));
   const outputPath = path.join(root, "observation.json");
-  const first = recordPhysicalObservation({ confirm: ["personaSyncLan"], outputPath }, {
+  const first = recordPhysicalObservation({ confirm: ["androidOfflineRecovery"], outputPath }, {
     now: () => FIRST_NOW,
     randomBytes: size => Buffer.alloc(size, 3)
   });
-  const second = recordPhysicalObservation({ confirm: ["personaSyncRelayFallback"], outputPath }, {
+  const second = recordPhysicalObservation({ confirm: ["androidBootRecovery"], outputPath }, {
     now: () => SECOND_NOW,
     randomBytes: size => Buffer.alloc(size, 9)
   });
 
-  assert.equal(second.payload.checks.personaSyncLan, true);
-  assert.equal(second.payload.checks.personaSyncRelayFallback, true);
+  assert.equal(second.payload.checks.androidOfflineRecovery, true);
+  assert.equal(second.payload.checks.androidBootRecovery, true);
   assert.equal(second.payload.environmentIdHash, first.payload.environmentIdHash);
   assert.equal(fs.existsSync(second.archivePath), true);
   const archived = JSON.parse(fs.readFileSync(second.archivePath, "utf8"));
-  assert.equal(archived.checks.personaSyncLan, true);
-  assert.equal(archived.checks.personaSyncRelayFallback, false);
+  assert.equal(archived.checks.androidOfflineRecovery, true);
+  assert.equal(archived.checks.androidBootRecovery, false);
 });
 
 test("revokes one check without changing unrelated observations", () => {

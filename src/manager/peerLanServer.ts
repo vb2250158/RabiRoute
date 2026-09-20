@@ -1,53 +1,41 @@
 import http from "node:http";
 import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import os from "node:os";
-import type { PersonaSyncRouteContext } from "./personaSyncRoutes.js";
-import { handlePersonaSyncApi } from "./personaSyncRoutes.js";
-import { errorResponsePresentation } from "../shared/errorPresentation.js";
+import { PEER_RPC_PATH } from "../rabiPeerProtocol.js";
 
-export type PersonaSyncLanStatus = {
+export type PeerLanStatus = {
   state: "disabled" | "starting" | "listening" | "error";
   port?: number;
   urls: string[];
   error?: string;
 };
 
-export type PersonaSyncLanServerOptions = {
-  peerHandler?: (request: http.IncomingMessage, url: URL, response: http.ServerResponse) => boolean;
-  peerUpgrade?: (request: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => boolean;
+export type PeerLanServerOptions = {
+  peerHandler: (request: http.IncomingMessage, url: URL, response: http.ServerResponse) => boolean;
+  peerUpgrade?: (request: http.IncomingMessage, socket: Duplex, head: Buffer) => boolean;
   host?: string;
   port?: number;
   addresses?: () => string[];
-  onStatus?: (status: PersonaSyncLanStatus) => void;
+  onStatus?: (status: PeerLanStatus) => void;
 };
 
 function privateIpv4(value: string): boolean {
   const parts = value.split(".").map(Number);
   if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
   const [a, b] = parts;
-  return a === 10
-    || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168)
-    || (a === 169 && b === 254);
+  return a === 10 || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168) || (a === 169 && b === 254);
 }
 
-export function personaSyncLanAddresses(): string[] {
+export function peerLanAddresses(): string[] {
   return [...new Set(Object.values(os.networkInterfaces()).flatMap(entries => (entries ?? [])
     .filter(entry => entry.family === "IPv4" && !entry.internal && privateIpv4(entry.address))
     .map(entry => entry.address)))].sort();
 }
 
-function dataPlaneRequest(method: string | undefined, pathname: string): boolean {
-  if (method === "GET" && pathname === "/api/persona-sync/manifest") return true;
-  if (method === "GET" && /^\/api\/persona-sync\/files\/[^/]+\/.+/.test(pathname)) return true;
-  return method === "POST" && new Set([
-    "/api/persona-sync/merge",
-    "/api/persona-sync/plan-packages/active",
-    "/api/persona-sync/plan-packages/archive"
-  ]).has(pathname);
-}
-
-export class PersonaSyncLanServer {
+/** Shared peer transport only; authentication and operation authorization remain with the peer runtime. */
+export class PeerLanServer {
   private server: http.Server | null = null;
   private startFlight: Promise<void> | null = null;
   private startGeneration = 0;
@@ -55,28 +43,23 @@ export class PersonaSyncLanServer {
   private stopFlight: Promise<void> | null = null;
   private readonly connections = new Set<Socket>();
   private readonly connectionDrainWaiters = new Set<() => void>();
-  private runtimeStatus: PersonaSyncLanStatus = { state: "disabled", urls: [] };
+  private runtimeStatus: PeerLanStatus = { state: "disabled", urls: [] };
   private readonly host: string;
   private readonly port: number;
   private readonly addresses: () => string[];
 
-  constructor(
-    private readonly context: PersonaSyncRouteContext,
-    private readonly options: PersonaSyncLanServerOptions = {}
-  ) {
+  constructor(private readonly options: PeerLanServerOptions) {
     this.host = options.host?.trim() || "0.0.0.0";
     const requestedPort = Number(options.port ?? 0);
     this.port = Number.isInteger(requestedPort) && requestedPort >= 0 && requestedPort <= 65_535 ? requestedPort : 0;
-    this.addresses = options.addresses ?? personaSyncLanAddresses;
+    this.addresses = options.addresses ?? peerLanAddresses;
   }
 
-  status(): PersonaSyncLanStatus {
+  status(): PeerLanStatus {
     return { ...this.runtimeStatus, urls: [...this.runtimeStatus.urls] };
   }
 
-  peerUrls(): string[] {
-    return this.status().urls;
-  }
+  peerUrls(): string[] { return this.status().urls; }
 
   start(): Promise<void> {
     if (this.stopFlight) return this.stopFlight.then(() => this.start());
@@ -95,23 +78,23 @@ export class PersonaSyncLanServer {
       };
       cancel = () => finish();
       const server = http.createServer((request, response) => {
-        const requestUrl = new URL(request.url || "/", "http://persona-sync.local");
-        if (requestUrl.pathname === "/api/rabilink/peer/receive" && this.options.peerHandler?.(request, requestUrl, response)) return;
-        if (!dataPlaneRequest(request.method, requestUrl.pathname)) {
-          response.writeHead(404, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-          response.end(JSON.stringify({ code: -1, message: "This LAN listener only exposes persona synchronization data-plane APIs." }));
-          return;
-        }
         try {
-          if (!handlePersonaSyncApi(request, requestUrl, response, this.context)) {
-            response.writeHead(404, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-            response.end(JSON.stringify(errorResponsePresentation({ code: -1, message: "Not found" }, 404)));
-          }
-        } catch (error) {
+          const requestUrl = new URL(request.url || "/", "http://peer.local");
+          // Never expose Manager control endpoints or the retired synchronization APIs here.
+          if (request.method === "POST" && requestUrl.pathname === PEER_RPC_PATH
+            && this.options.peerHandler(request, requestUrl, response)) return;
+          response.writeHead(404, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+          response.end(JSON.stringify({ code: -1, message: "Not found" }));
+        } catch {
+          if (response.headersSent) { response.destroy(); return; }
           response.writeHead(500, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-          response.end(JSON.stringify(errorResponsePresentation({ code: -1, message: error instanceof Error ? error.message : String(error) }, 500)));
+          response.end(JSON.stringify({ code: -1, message: "Peer request rejected." }));
         }
       });
+      server.requestTimeout = 30_000;
+      server.headersTimeout = 10_000;
+      server.keepAliveTimeout = 5_000;
+      server.maxRequestsPerSocket = 100;
       server.on("connection", socket => {
         this.connections.add(socket);
         socket.once("close", () => {
@@ -122,15 +105,15 @@ export class PersonaSyncLanServer {
           }
         });
       });
-      server.on("upgrade", (request, socket, head) => { if (!this.options.peerUpgrade?.(request, socket, head)) socket.destroy(); });
+      server.on("upgrade", (request, socket, head) => {
+        try {
+          if (!this.options.peerUpgrade?.(request, socket, head)) socket.destroy();
+        } catch { socket.destroy(); }
+      });
       this.server = server;
       const current = (): boolean => generation === this.startGeneration && this.server === server;
       const fail = (error: Error) => {
-        if (!current()) {
-          server.close();
-          finish();
-          return;
-        }
+        if (!current()) { server.close(); finish(); return; }
         this.server = null;
         this.updateStatus({ state: "error", urls: [], error: error.message });
         finish(error);
@@ -138,13 +121,9 @@ export class PersonaSyncLanServer {
       server.once("error", fail);
       server.listen(this.port, this.host, () => {
         server.off("error", fail);
-        if (!current()) {
-          finish();
-          return;
-        }
+        if (!current()) { finish(); return; }
         server.on("error", error => {
-          if (!current()) return;
-          this.updateStatus({ state: "error", urls: [], error: error.message });
+          if (current()) this.updateStatus({ state: "error", urls: [], error: error.message });
         });
         const address = server.address();
         const port = address && typeof address === "object" ? address.port : 0;
@@ -189,10 +168,7 @@ export class PersonaSyncLanServer {
     return new Promise((resolve, reject) => {
       try {
         server.close(error => {
-          if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") {
-            reject(error);
-            return;
-          }
+          if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") { reject(error); return; }
           resolve();
         });
         server.closeIdleConnections?.();
@@ -208,7 +184,7 @@ export class PersonaSyncLanServer {
     return new Promise(resolve => this.connectionDrainWaiters.add(resolve));
   }
 
-  private updateStatus(status: PersonaSyncLanStatus): void {
+  private updateStatus(status: PeerLanStatus): void {
     this.runtimeStatus = status;
     this.options.onStatus?.(this.status());
   }

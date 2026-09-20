@@ -12,11 +12,16 @@ import { PERFORMANCE_OPERATIONS } from "../shared/performanceOperations.js";
 import { CodexDesktopBridge } from "../codexDesktopBridge.js";
 import { listCodexModels, listCodexThreads, type CodexModelCatalogEntry } from "../codexRuntime.js";
 import {
-  DEFAULT_DSH_BASE_URL,
   listDshModels,
   listDshSessions,
   type DshModelCatalogEntry
 } from "../dshSessionBridge.js";
+import {
+  DEFAULT_DSH_BASE_URL,
+  discoverLocalDsh,
+  resolveDshBaseUrl,
+  type DshLocalDiscovery
+} from "../dshDiscovery.js";
 import { scanWorkbuddyAgentAdapter } from "./workbuddyManagerApi.js";
 import { scanAntigravityAgentAdapter } from "./antigravityManagerApi.js";
 
@@ -204,6 +209,7 @@ export type AgentManagerApiContext = {
   dshSessions?: AgentScanSession[];
   listDshSessions?: (query: AgentSessionPageQuery & { baseUrl: string }) => Promise<AgentScanSession[]>;
   listDshModels?: (baseUrl: string) => Promise<{ models: DshModelCatalogEntry[]; warnings: string[] }>;
+  discoverLocalDsh?: () => DshLocalDiscovery;
   /** Overrides for the WorkBuddy session descriptor directory and task database. */
   workbuddySessionsDir?: string;
   workbuddyDatabasePath?: string;
@@ -225,18 +231,27 @@ export async function scanDshAgentAdapter(
   const dshQuery = String(options.dshQuery || "").trim() || undefined;
   const runtimes = getRuntimeList(ctx);
   const checkEndpoint = ctx.checkHttpEndpoint ?? checkHttpEndpoint;
+  const discovery = ctx.discoverLocalDsh?.() ?? discoverLocalDsh();
   const configuredDshUrls = [
     options.dshBaseUrl?.trim().replace(/\/+$/, ""),
     ...runtimes.map((runtime) => runtime.definition.dshBaseUrl?.trim().replace(/\/+$/, ""))
   ].filter(Boolean) as string[];
-  const dshUrls = [...new Set([...configuredDshUrls, DEFAULT_DSH_BASE_URL])];
+  const dshUrls = [...new Set([
+    ...configuredDshUrls,
+    ...discovery.discoveredBaseUrls,
+    ...(configuredDshUrls.length || discovery.discoveredBaseUrls.length ? [] : [DEFAULT_DSH_BASE_URL])
+  ])];
   const dshEndpoints = await Promise.all(dshUrls.map(async (url) => ({
     label: url.includes("127.0.0.1") || url.includes("localhost") ? "本机 DSH apiproxy" : "DSH apiproxy",
     url,
     healthy: await checkEndpoint(url)
   })));
-  const dshBaseUrl = configuredDshUrls[0] || DEFAULT_DSH_BASE_URL;
+  const configuredBaseUrl = configuredDshUrls[0];
+  const healthyConfigured = dshEndpoints.find((endpoint) => endpoint.url === configuredBaseUrl && endpoint.healthy);
+  const firstHealthy = dshEndpoints.find((endpoint) => endpoint.healthy);
+  const dshBaseUrl = healthyConfigured?.url || firstHealthy?.url || resolveDshBaseUrl(configuredBaseUrl, discovery);
   const dshEndpointHealthy = dshEndpoints.some((endpoint) => endpoint.url === dshBaseUrl && endpoint.healthy);
+  const dshAnyHealthy = Boolean(firstHealthy);
   const shouldReadDshModels = dshEndpointHealthy && (
     ctx.listDshModels != null
     || (ctx.dshSessions == null && ctx.listDshSessions == null)
@@ -302,7 +317,8 @@ export async function scanDshAgentAdapter(
   return {
     agents: { dsh: {
       ...agentScanManifestFields("dsh"),
-      installed: dshEndpoints.some((endpoint) => endpoint.healthy),
+      installed: discovery.installed || dshAnyHealthy,
+      ...(discovery.installCandidates.length ? { installCandidates: discovery.installCandidates } : {}),
       endpoints: dshEndpoints,
       projects: dshProjects,
       sessions: dshSessions,
@@ -320,7 +336,11 @@ export async function scanDshAgentAdapter(
         ...(modelRead.error ? [`读取 DSH 模型目录失败：${modelRead.error}`] : []),
         ...modelRead.catalog.warnings.map((warning) => `DSH 模型目录：${warning}`),
         ...(dshSessionWarning ? [dshSessionWarning] : []),
-        ...(dshEndpoints.some((endpoint) => endpoint.healthy) ? [] : ["DSH apiproxy 不可用；请启动 DSH 并确认服务地址。"]),
+        ...discovery.warnings,
+        ...(configuredBaseUrl && !healthyConfigured && firstHealthy
+          ? [`已保存的 DSH 地址 ${configuredBaseUrl} 未响应；本机扫描到 ${firstHealthy.url}。`]
+          : []),
+        ...(dshAnyHealthy ? [] : ["DSH apiproxy 不可用；请启动 DSH 并确认服务地址。"]),
         ...(dshSessions.length === 0 && !dshSessionWarning ? ["未发现 DSH 会话；保存配置时可按名称和工作目录创建。"] : []),
         "RabiRoute 可以发现、创建、重命名、绑定 DSH 会话，并通过 session.prompt（mode=queue）投递。",
         "DSH 支持主人格、计划秘书、消息处理和独立记忆整理会话；请在当前实例核对任务可用性和实际投递结果。"

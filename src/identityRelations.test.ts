@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { PersonaSyncService } from "./personaSync.js";
 import {
   identityRelationsPath,
   listIdentityEndpointAccounts,
@@ -82,13 +81,8 @@ test("automatic identity observations from two PCs merge display-name clues with
   observeIdentityEndpoint(roleB, {
     platform: "napcat", endpointIdentityNamespace: "bot:999", senderStableId: "202", displayName: "群昵称 B"
   });
-  const service = new PersonaSyncService(() => rolesA, path.join(root, "sync"));
-  service.merge({
-    roleId: "Rabi",
-    path: "identity-relations/events.jsonl",
-    contentBase64: fs.readFileSync(identityRelationsPath(roleB)).toString("base64"),
-    peerId: "pc-b"
-  });
+  // Historical multi-writer rows remain readable without a sync service.
+  fs.appendFileSync(identityRelationsPath(roleA), fs.readFileSync(identityRelationsPath(roleB)));
   const account = listIdentityEndpointAccounts(roleA)[0];
   const participant = listIdentityParticipants(roleA)[0];
   assert.equal(account?.conflicted, undefined);
@@ -405,14 +399,8 @@ test("concurrent identity-relation branches stay conflicted until one explicit u
     kind: "participant", participantId: "participant-cotton", participantKind: "person", displayName: "COTTON B",
     status: "confirmed", aliases: ["B"], evidenceRefs: [{ messageId: "b" }]
   });
-  const service = new PersonaSyncService(() => rolesA, path.join(root, "sync"));
-  const remote = fs.readFileSync(identityRelationsPath(roleB));
-  service.merge({
-    roleId: "Rabi",
-    path: "identity-relations/events.jsonl",
-    contentBase64: remote.toString("base64"),
-    peerId: "pc-b"
-  });
+  // Existing histories can contain duplicate ancestors and divergent branches.
+  fs.appendFileSync(identityRelationsPath(roleA), fs.readFileSync(identityRelationsPath(roleB)));
   const conflicted = listIdentityParticipants(roleA).find(item => item.id === "participant-cotton");
   assert.equal(conflicted?.conflicted, true);
   assert.equal(conflicted?.conflictCandidates?.length, 2);

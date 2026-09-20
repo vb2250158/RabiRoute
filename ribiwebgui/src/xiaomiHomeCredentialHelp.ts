@@ -1,6 +1,6 @@
 export const HOME_ASSISTANT_AUTHENTICATION_DOCS_URL = "https://www.home-assistant.io/docs/authentication/";
 export const HOME_ASSISTANT_INSTALLATION_URL = "https://www.home-assistant.io/installation/";
-export const HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL = "https://www.home-assistant.io/integrations/xiaomi_miio/";
+export const HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL = "https://github.com/XiaoMi/ha_xiaomi_home/blob/main/doc/README_zh.md";
 
 function homeAssistantUrl(baseUrl: string, pathname: string): string {
   try {

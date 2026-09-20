@@ -68,7 +68,7 @@ onMounted(refresh);
     <v-card-title>连接 DSH</v-card-title>
     <v-card-text>
       <v-chip size="small" class="mb-2">{{ dshConnectionLabel(connection?.baseUrl === baseUrl ? connection?.state : undefined) }}</v-chip>
-      <p class="mb-3">授权加密保存在运行 RabiRoute 的这台电脑上，不随人格同步。正常重启可沿用；过期、地址改变或 DSH 撤销认证后需重新连接。保存授权不表示当前在线。授权立即保存，不随路线表单的取消而撤销。</p>
+      <p class="mb-3">授权仅加密保存在运行 RabiRoute 的这台电脑上。正常重启可沿用；过期、地址改变或 DSH 撤销认证后需重新连接。保存授权不表示当前在线。授权立即保存，不随路线表单的取消而撤销。</p>
       <v-alert v-if="localSetup" type="warning" variant="tonal" class="mb-3">连接将允许 RabiRoute 访问此 DSH 的完整 Web 会话功能，包括读取会话和提交任务，并非仅发送消息。只连接你信任的本机 DSH。</v-alert>
       <v-alert v-if="!localSetup" type="info" variant="tonal" class="mb-3">
         请到运行 RabiRoute 的电脑上打开本机控制台完成授权。远端页面中的本机地址不代表你正在使用的电脑；连接其他电脑请使用远端 Agent 接入。

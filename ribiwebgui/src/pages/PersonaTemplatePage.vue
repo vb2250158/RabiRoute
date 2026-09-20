@@ -8,6 +8,7 @@ import PersonaAvatar from "../components/PersonaAvatar.vue";
 import PersonaDesktopPetPanel from "../components/PersonaDesktopPetPanel.vue";
 import PersonaIdentityRelationsCard from "../components/PersonaIdentityRelationsCard.vue";
 import PersonaChatHistory from "../components/PersonaChatHistory.vue";
+import PersonaAllDayRecording from "../components/PersonaAllDayRecording.vue";
 import AgentCompletionDeliveryRules from "../components/AgentCompletionDeliveryRules.vue";
 import { managerEventSource } from "../managerApi";
 import { useI18n } from "../i18n";
@@ -72,7 +73,7 @@ const ruleDialog = ref(false);
 const automationDialog = ref(false);
 const automationWorkspaceTab = ref<"messages" | "schedule" | "hooks">("messages");
 const templateVariablesDialog = ref(false);
-type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation" | "chat-history";
+type PersonaPageTab = "profile" | "expression" | "avatar" | "identity" | "context" | "automation" | "chat-history" | "all-day-recording";
 const activePersonaPageTab = ref<PersonaPageTab>("profile");
 const chatHistoryVersion = ref(0);
 const activeAutomationId = ref("");
@@ -854,7 +855,7 @@ async function unlinkVoiceIdentity(identity: PersonaVoiceIdentity): Promise<void
   await setVoiceIdentity(identity.sourceHostId, identity.sourceHostName, identity.voiceprintId, undefined, null);
 }
 
-function personaSyncEventData(raw: Event): { roleId?: string; path?: string } | null {
+function personaEventData(raw: Event): { roleId?: string; path?: string } | null {
   try {
     return JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string; path?: string };
   } catch {
@@ -862,8 +863,8 @@ function personaSyncEventData(raw: Event): { roleId?: string; path?: string } | 
   }
 }
 
-function relevantPersonaSyncEvent(raw: Event): boolean {
-  const data = personaSyncEventData(raw);
+function relevantPersonaEvent(raw: Event): boolean {
+  const data = personaEventData(raw);
   if (!data) return false;
   try {
     const roleId = gateway.value?.agentRoleId || "";
@@ -889,20 +890,13 @@ function startPersonaEvents(): void {
     else managerEventsReady = true;
   });
   managerEvents.addEventListener("persona_voice_identity_changed", (raw) => {
-    if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
+    if (voiceIdentityLoaded.value && relevantPersonaEvent(raw)) void refreshVoiceIdentityReview();
   });
   managerEvents.addEventListener("persona_chat_history_changed", (raw) => {
-    if (personaSyncEventData(raw)?.roleId === gateway.value?.agentRoleId) chatHistoryVersion.value += 1;
+    if (personaEventData(raw)?.roleId === gateway.value?.agentRoleId) chatHistoryVersion.value += 1;
   });
   managerEvents.addEventListener("identity_relation_changed", (raw) => {
-    if (relevantPersonaSyncEvent(raw)) identityRelationsVersion.value += 1;
-  });
-  managerEvents.addEventListener("persona_sync_manifest_changed", (raw) => {
-    const data = personaSyncEventData(raw);
-    const roleId = gateway.value?.agentRoleId || "";
-    if (roleId && (!data?.roleId || data.roleId === roleId)) identityRelationsVersion.value += 1;
-    if (roleId && (!data?.roleId || data.roleId === roleId)) chatHistoryVersion.value += 1;
-    if (voiceIdentityLoaded.value && relevantPersonaSyncEvent(raw)) void refreshVoiceIdentityReview();
+    if (relevantPersonaEvent(raw)) identityRelationsVersion.value += 1;
   });
 }
 
@@ -1015,10 +1009,16 @@ onBeforeUnmount(() => {
           <v-tab value="context" prepend-icon="mdi-message-text-clock-outline">消息上下文</v-tab>
           <v-tab value="automation" prepend-icon="mdi-robot-outline">自动化</v-tab>
           <v-tab value="chat-history" prepend-icon="mdi-message-text-outline" :disabled="!hasPersona">聊天记录</v-tab>
+          <v-tab value="all-day-recording" prepend-icon="mdi-timeline-clock-outline" :disabled="!hasPersona">{{ t('全天记录') }}</v-tab>
         </v-tabs>
       </v-card>
 
       <v-window v-model="activePersonaPageTab" class="persona-page-window" :touch="false">
+        <v-window-item value="all-day-recording">
+          <div class="persona-tab-panel">
+            <PersonaAllDayRecording v-if="hasPersona && activePersonaPageTab === 'all-day-recording'" :role-id="gateway.agentRoleId || ''" />
+          </div>
+        </v-window-item>
         <v-window-item value="chat-history">
           <div class="persona-tab-panel">
             <PersonaChatHistory v-if="hasPersona && activePersonaPageTab === 'chat-history'" :role-id="gateway.agentRoleId || ''" :version="chatHistoryVersion" />
@@ -1976,7 +1976,7 @@ onBeforeUnmount(() => {
                 <div class="script-permission-row">
                   <div>
                     <strong>允许当前 Route 运行人格脚本</strong>
-                    <span>这是本机 Route 的权限，不会跟随人格同步到其他电脑。</span>
+                    <span>这是本机 Route 的权限，只在这台电脑生效。</span>
                   </div>
                   <v-switch
                     :model-value="gateway.personaAutomationScriptsEnabled === true"

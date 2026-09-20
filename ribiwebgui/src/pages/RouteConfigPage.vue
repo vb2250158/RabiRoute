@@ -4111,7 +4111,7 @@ watch(
               </div>
               <v-expand-transition>
                 <div v-if="adapterParamOpen[choice.type]" class="catalog-param-panel">
-                  <div class="dependency-panel mb-3">
+                  <div v-if="choice.type !== 'xiaomiHome'" class="dependency-panel mb-3">
                     <div class="section-title-row compact-row">
                       <div>
                         <div class="section-title small-title">环境和依赖</div>
@@ -4208,7 +4208,7 @@ watch(
                   <TrustedWebRendererHost
                     v-if="settingsRenderersForMessageEndpoint(choice.type).length"
                     :renderers="settingsRenderersForMessageEndpoint(choice.type)"
-                    :context="{ messageEndpointType: choice.type, routeId: gateway?.id ?? '' }"
+                    :context="{ messageEndpointType: choice.type, routeId: gateway?.id ?? '', scan: messageScanFor(choice.type), scanError: messageAdapterScan.error, scanLoading: messageAdapterScan.loading, refreshScan: runMessageAdapterScan }"
                   />
                   <div v-if="usesAutomaticMessageGrouping(choice.type)" class="dependency-panel mb-3">
                     <div class="section-title small-title">消息组等待</div>
@@ -5664,7 +5664,7 @@ watch(
                       v-model="gateway.dshBaseUrl"
                       :items="agentScanFor('dsh')?.endpoints?.map(endpoint => endpoint.url) ?? []"
                       label="DSH 地址"
-                      hint="连接面板会自动填入地址；修改地址后请重新验证连接，再扫描会话。"
+                      hint="留空时按本机 DSH 启动日志自动发现；写死的默认端口不是安装状态。修改地址后请重新验证连接，再扫描会话。"
                       persistent-hint
                       data-no-i18n
                       @update:model-value="touch"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { userFacingError } from "../userFacingError";
+import { playbackOutputLabel, playbackOutputError } from "../speech/playbackPresentation";
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import {
@@ -66,6 +67,7 @@ const queuePlayback = ref(true);
 const ttsBusy = ref(false);
 const asrBusy = ref(false);
 const actionMessage = ref("");
+const submittedPlaybackJob = ref<string | null>(null);
 const transcript = ref("");
 const transcriptHistory = ref<Array<{ time: string; text: string; model: string }>>([]);
 const listening = computed(() => microphoneStatus.value?.running === true);
@@ -183,7 +185,10 @@ const audioStreamOptions = computed(() => [
       : [client.deviceModel ? `设备型号 ${client.deviceModel}` : "", "离线"].filter(Boolean).join(" · ")
   }))
 ]);
-const selectedAudioStreamLabel = computed(() => audioStreamOptions.value.find(item => item.value === selectedAudioStream.value)?.title || "本机");
+const selectedAudioStreamLabel = computed(() => {
+  return playbackOutputLabel(audioStream.value, audioStreamOptions.value.find(item => item.value === selectedAudioStream.value)?.title);
+});
+const latestPlaybackFailure = computed(() => [...(playback.value?.jobs ?? [])].reverse().find(job => job.status === "error"));
 const selectedAudioStreamClient = computed(() => audioStream.value?.clients.find(client => client.id === audioStream.value?.selectedClientId));
 const selectedAudioStreamEvents = computed(() => {
   const merged = new Map<string, SpeechAudioStreamEvent>();
@@ -439,6 +444,11 @@ async function synthesize(): Promise<void> {
   try {
     const model = selectedTtsModel.value;
     if (!model?.available) throw new Error("所选 TTS 模型尚未就绪。");
+    if (queuePlayback.value) {
+      await speech.refreshAudioStreams();
+      const outputError = playbackOutputError(audioStream.value);
+      if (outputError) throw new Error(outputError);
+    }
     const result = await speech.synthesize({
       ...ttsCommandSettings(model, ttsParameters.value),
       input: ttsText.value,
@@ -446,6 +456,7 @@ async function synthesize(): Promise<void> {
     });
     if (queuePlayback.value) {
       actionMessage.value = result.playbackJob ? `已进入全局播放队列：${result.playbackJob}` : "已完成合成并提交播放。";
+      submittedPlaybackJob.value = result.playbackJob || null;
     } else {
       if (!result.audio) throw new Error("TTS 没有返回可播放音频。");
       const audioUrl = URL.createObjectURL(result.audio);
@@ -719,6 +730,19 @@ function schedulePlaybackVolume(value: number): void {
   }, 120);
 }
 
+watch(() => playback.value?.jobs.find(job => job.id === submittedPlaybackJob.value), job => {
+  if (job?.status === "error") {
+    actionMessage.value = "";
+    recordRequestError(new Error(job.error || "播放失败，请检查音频设备和 RabiSpeech 日志。"));
+    submittedPlaybackJob.value = null;
+  } else if (job?.status === "done") {
+    actionMessage.value = "播放完成。";
+    submittedPlaybackJob.value = null;
+  } else if (job?.status === "cancelled") {
+    actionMessage.value = "播放已取消。";
+    submittedPlaybackJob.value = null;
+  }
+});
 watch(() => playback.value?.volume, volume => {
   if (playbackVolumeSaving.value || playbackVolumeTimer || pendingPlaybackVolume != null) return;
   if (volume != null) playbackVolume.value = normalizePlaybackVolume(volume);
@@ -1156,6 +1180,9 @@ onBeforeUnmount(() => {
         :disabled="status?.state !== 'online'"
         @update:model-value="schedulePlaybackVolume"
       />
+      <v-alert v-if="latestPlaybackFailure" class="mt-4" type="error" variant="tonal" role="alert">
+        最近一次播放失败：{{ latestPlaybackFailure.error || '请检查音频设备连接和 RabiSpeech 日志。' }}
+      </v-alert>
     </v-card>
 
     <v-card class="app-card glass-card speech-workbench">

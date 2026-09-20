@@ -144,6 +144,7 @@ async function launchBuiltManager() {
     throw error;
   }
   return {
+    // This isolated test fixture injects its allocated URL; it never discovers a live installation.
     baseUrl: `http://127.0.0.1:${port}`,
     stop: async () => {
       await stopManager(child);
@@ -192,14 +193,23 @@ function endpointCheck(id, response, count) {
   return { id, method: "GET", status: response.status, count, passed: response.status === 200 };
 }
 
-export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = globalThis.fetch) {
+export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = globalThis.fetch, expectedIdentity) {
+  const verifyIdentity = async expected => {
+    const { body } = await requestJson(fetchImpl, baseUrl, "/meta");
+    if (body?.health?.state !== "healthy" || body?.health?.requiredReady !== true
+      || !body.applicationGenerationId || !body.managerInstanceId
+      || (expected && (body.applicationGenerationId !== expected.applicationGenerationId
+        || body.managerInstanceId !== expected.managerInstanceId))) {
+      throw new Error("Built Manager is not healthy or its READY identity changed; rediscover the current Manager.");
+    }
+    return body;
+  };
+  const identity = await verifyIdentity(expectedIdentity);
   const gateways = await requestJson(fetchImpl, baseUrl, "/gateways?summary=1");
-  const [manifest, conflicts, speechMessages] = await Promise.all([
-    requestJson(fetchImpl, baseUrl, "/api/persona-sync/manifest"),
-    requestJson(fetchImpl, baseUrl, "/api/persona-sync/conflicts"),
+  const [personas, speechMessages] = await Promise.all([
+    requestJson(fetchImpl, baseUrl, "/api/personas"),
     requestJson(fetchImpl, baseUrl, "/api/speech/messages?limit=1")
   ]);
-  const manifestIndex = await requestJson(fetchImpl, baseUrl, "/api/persona-sync/index-status");
   const messageAdapterScan = await requestJson(
     fetchImpl,
     baseUrl,
@@ -207,19 +217,15 @@ export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = gl
     "message_adapter_read_only_scan"
   );
   const managers = Array.isArray(gateways.body?.data?.manager) ? gateways.body.data.manager : [];
-  const roles = Array.isArray(manifest.body?.data?.roles) ? manifest.body.data.roles : [];
-  const personaFileCount = roles.reduce((total, role) => total + (Array.isArray(role?.files) ? role.files.length : 0), 0);
-  const conflictRows = Array.isArray(conflicts.body?.data?.conflicts) ? conflicts.body.data.conflicts : [];
+  const roles = Array.isArray(personas.body?.personas) ? personas.body.personas : [];
   const speechRows = Array.isArray(speechMessages.body?.data?.records) ? speechMessages.body.data.records : [];
-  const manifestIndexFiles = Number(manifestIndex.body?.data?.files || 0);
   const scannedAdapters = messageAdapterScan.body?.adapters && typeof messageAdapterScan.body.adapters === "object"
     ? Object.keys(messageAdapterScan.body.adapters)
     : [];
   const scanDurationMs = Number(messageAdapterScan.body?.scan?.durationMs || 0);
   const checks = [
     endpointCheck("gateway_summary", gateways, managers.length),
-    endpointCheck("persona_sync_manifest", manifest, roles.length),
-    endpointCheck("persona_sync_conflicts", conflicts, conflictRows.length),
+    endpointCheck("persona_catalog", personas, roles.length),
     endpointCheck("host_speech_messages", speechMessages, speechRows.length),
     {
       id: "message_adapter_read_only_scan",
@@ -233,16 +239,6 @@ export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = gl
         && messageAdapterScan.body?.repair?.changed === false
         && typeof messageAdapterScan.body?.scan?.partial === "boolean"
         && scanDurationMs <= 8_000
-    },
-    {
-      id: "persona_sync_manifest_index",
-      method: "GET",
-      status: manifestIndex.status,
-      count: manifestIndexFiles,
-      state: String(manifestIndex.body?.data?.state || ""),
-      watchMode: String(manifestIndex.body?.data?.watchMode || ""),
-      passed: manifestIndex.status === 200
-        && new Set(["ready", "fallback"]).has(String(manifestIndex.body?.data?.state || ""))
     }
   ];
   let identityCount = 0;
@@ -251,8 +247,8 @@ export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = gl
   let personasProbed = 0;
   if (roles.length > 0) {
     const personaSummaries = await Promise.all(roles.map(async role => {
-      const roleId = String(role?.roleId || "").trim();
-      if (!roleId) throw new Error("Persona sync manifest returned a persona without an id.");
+      const roleId = String(role?.personaId || "").trim();
+      if (!roleId) throw new Error("Persona catalog returned a persona without an id.");
       const rolePath = encodeURIComponent(roleId);
       const [identities, transcripts] = await Promise.all([
         requestJson(fetchImpl, baseUrl, `/api/roles/${rolePath}/voice-identities`, "persona_voice_identities"),
@@ -282,14 +278,12 @@ export async function collectBuiltManagerReadOnlySummary(baseUrl, fetchImpl = gl
       reason: "no_persona_available"
     });
   }
+  await verifyIdentity(identity);
   return {
     counts: {
       gateways: managers.length,
       personas: roles.length,
       personasProbed,
-      personaFiles: personaFileCount,
-      personaManifestIndexFiles: manifestIndexFiles,
-      personaSyncConflicts: conflictRows.length,
       returnedSpeechMessages: speechRows.length,
       scannedMessageAdapters: scannedAdapters.length,
       personaVoiceIdentities: identityCount,
@@ -319,7 +313,7 @@ export async function runBuiltManagerReadOnlyAcceptance(options = {}, dependenci
   let exitCode = 1;
   try {
     handle = await launch();
-    const summary = await collectBuiltManagerReadOnlySummary(handle.baseUrl, dependencies.fetchImpl ?? globalThis.fetch);
+    const summary = await collectBuiltManagerReadOnlySummary(handle.baseUrl, dependencies.fetchImpl ?? globalThis.fetch, handle.identity);
     report.counts = summary.counts;
     report.checks = [
       { id: "read_only_startup_mode", passed: true },

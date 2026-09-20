@@ -42,6 +42,8 @@ The caller receives the final audio or transcript for that request and does not 
 
 ## API
 
+The playback queue retains failures and recovery instructions. If the selected remote device is offline or disconnects during playback, audio does not fall back to local speakers; reconnect the device or explicitly select local output. The speech page shows the actual output target and the most recent playback failure. Enqueueing does not mean playback has completed. Detailed tracebacks for unexpected playback failures are recorded by the `rabispeech.playback` logger.
+
 Common compatibility surface:
 
 ```text

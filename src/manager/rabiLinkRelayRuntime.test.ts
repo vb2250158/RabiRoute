@@ -130,6 +130,62 @@ test("Relay never forwards local-only model directory settings", async (t) => {
   assert.equal(forwarded, 0);
 });
 
+test("Relay rejects retired persona synchronization paths before local fetch", async (t) => {
+  const paths = [
+    "/api/persona-sync", "/api/persona-sync/", "/api/persona-sync/manifest?roleId=test",
+    "/api/other/../persona-sync/files/test", "/api/%70ersona-sync/merge",
+    "/api%2fpersona-sync%2fmanifest", "/api/%2570ersona-sync/manifest",
+    "/api%252fpersona-sync%252fmanifest", "/api/%2e%2e/api/persona-sync/manifest",
+    "/api%5cpersona-sync%5cmanifest", "/api//persona-sync/manifest",
+    "/api/persona-sync%3fignored", "/api/persona-sync%23ignored",
+    "/API/PERSONA-SYNC/manifest", "/api/%ZZ",
+    "/%E6%B5%8B/%252e%252e/api/%2570ersona-sync/manifest"
+  ];
+  const forwarded: string[] = [];
+  const local = http.createServer((request, response) => {
+    if (!["/api/events", "/api/speech/events"].includes(request.url || "")) forwarded.push(request.url || "");
+    response.end("test response");
+  });
+  const localPort = await listen(local);
+  t.after(() => close(local));
+  const completed = new Map<string, Record<string, unknown>>();
+  let claimed = false;
+  const relay = http.createServer((request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/api/rabilink/events") { openRelayEvents(response); return; }
+    if (url.pathname === "/worker/webgui-requests") {
+      const requests = claimed ? [] : paths.map((path, index) => ({ id: `retired-${index}`, method: index % 2 ? "POST" : "GET", path }));
+      claimed = true;
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ requests }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname.endsWith("/response")) {
+      const chunks: Buffer[] = [];
+      request.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        completed.set(url.pathname, JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+        response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
+      });
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json" }).end('{"requests":[]}');
+  });
+  const relayPort = await listen(relay);
+  t.after(() => close(relay));
+  const runtime = new RabiLinkRelayRuntime();
+  t.after(() => runtime.stop());
+  await runtime.sync({ enabled: true, url: `http://127.0.0.1:${relayPort}`, token: "test-only-token",
+    deviceId: "test-pc", deviceGuid: "test-guid", deviceName: "Test PC", claimWaitMs: 60000,
+    localWebguiUrl: `http://127.0.0.1:${localPort}`, speechProxyEnabled: false, localSpeechUrl: "" });
+  await waitForRelayRuntime(runtime, "retired path rejection", () => completed.size === paths.length, () => ({ completed: completed.size }));
+  assert.deepEqual(forwarded, []);
+  for (const [path, receipt] of completed) {
+    assert.equal(receipt.ok, false, path);
+    assert.equal(receipt.statusCode, 502, path);
+    assert.match(String(receipt.error), /removed|URI malformed/, path);
+  }
+});
+
 test("global Relay runtime registers the PC and proxies remote WebGUI requests", async (t) => {
   const localWebgui = http.createServer((request, response) => {
     response.writeHead(request.url === "/meta" ? 200 : 404, { "content-type": "application/json" });
@@ -231,7 +287,7 @@ test("global Relay runtime registers the PC and proxies remote WebGUI requests",
     deviceKind: "pc",
     deviceName: "Test PC",
     waitMs: "0",
-    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-sync,persona-sync-plan-package-v1",
+    capabilities: "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1",
     peerUrls: JSON.stringify(["http://192.168.1.10:24001"])
   });
   assert.equal(finishedBody?.deviceId, "pc-a");
@@ -670,7 +726,7 @@ test("global Relay runtime proxies the independent speech plugin without exposin
     () => relayState.finishedBody !== undefined,
     () => ({ declaredCapabilities, localMethod: localState.method, relayReceiptReceived: relayState.finishedBody !== undefined })
   );
-  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,persona-sync,persona-sync-plan-package-v1,speech,asr");
+  assert.equal(declaredCapabilities, "wearable-observation-policy-v1,webgui,video-direct,peer-rpc-v1,peer-tunnel-v1,speech,asr");
   assert.equal(localState.method, "POST");
   assert.equal(localState.url, "/v1/audio/transcriptions?language=zh");
   assert.equal(localState.authorization, undefined);

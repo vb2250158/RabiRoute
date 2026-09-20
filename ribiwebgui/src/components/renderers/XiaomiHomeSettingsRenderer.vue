@@ -5,6 +5,18 @@ import type { XiaomiHomeRuntimeSettings, XiaomiHomeSettingsSnapshot } from "@sha
 import { registerPageSaveAction } from "../../pageSaveAction";
 import { xiaomiHomeSettingsClient } from "../../xiaomiHomeSettingsClient";
 
+import type { MessageAdapterScanResult } from "../../types";
+
+const props = defineProps<{
+  context?: {
+    scan?: MessageAdapterScanResult;
+    scanError?: string;
+    scanLoading?: boolean;
+    refreshScan?: () => Promise<void>;
+  };
+}>();
+const monitorRequirement = computed(() => props.context?.scan?.requirements?.find(item => item.id === "event-monitor"));
+
 type XiaomiHomeSettingsDraft = { -readonly [Key in keyof XiaomiHomeRuntimeSettings]: XiaomiHomeRuntimeSettings[Key] };
 
 const snapshot = ref<XiaomiHomeSettingsSnapshot | null>(null);
@@ -62,6 +74,7 @@ async function save(): Promise<void> {
     };
     hydrate(await xiaomiHomeSettingsClient.update(snapshot.value, settings));
     error.value = "";
+    await props.context?.refreshScan?.();
   } catch (cause) {
     error.value = userFacingError(cause);
     throw cause;
@@ -101,19 +114,29 @@ onBeforeUnmount(() => unregisterSaveAction?.());
         地址与登录凭据都在当前 Route 的“米家 / Xiaomi Home 连接”卡片完成；此页只保存事件、设备控制与录像策略。
       </v-alert>
       <div class="xiaomi-switch-grid mt-2">
-        <v-switch v-model="draft.eventMonitorEnabled" label="监听设备事件" color="success" inset hide-details />
-        <v-switch v-model="draft.writeEnabled" label="允许控制设备" color="warning" inset hide-details />
-        <v-switch v-model="draft.cameraClipCaptureEnabled" label="保存移动事件录像" color="warning" inset hide-details />
+        <section aria-label="监听设备事件">
+          <v-switch v-model="draft.eventMonitorEnabled" label="监听设备事件" color="success" inset hide-details />
+          <div v-if="draft.eventMonitorEnabled !== snapshot?.settings.eventMonitorEnabled" class="section-note">尚未保存</div>
+          <div v-else-if="!draft.eventMonitorEnabled" class="section-note">已关闭</div>
+          <v-alert v-else-if="context?.scanError" type="error" variant="tonal" density="compact">{{ context.scanError }}</v-alert>
+          <div v-else role="status" class="section-note">{{ monitorRequirement?.detail || '尚未检查' }}</div>
+          <v-btn size="small" variant="text" :loading="context?.scanLoading" @click="context?.refreshScan?.()">检查事件监听</v-btn>
+        </section>
+        <section aria-label="设备控制">
+          <v-switch v-model="draft.writeEnabled" label="允许控制设备" color="warning" inset hide-details />
+          <div class="section-note">{{ draft.writeEnabled !== snapshot?.settings.writeEnabled ? '尚未保存' : draft.writeEnabled ? '已开启' : '已关闭' }}</div>
+          <v-alert v-if="draft.writeEnabled" type="warning" variant="tonal" density="compact" class="my-3">
+            开启后 Agent 才能实际控制设备；动作仍要求幂等键、最新状态版本和当前 Manager 代际围栏。
+          </v-alert>
+        </section>
+        <section aria-label="摄像头事件录像">
+          <v-switch v-model="draft.cameraClipCaptureEnabled" label="保存移动事件录像" color="warning" inset hide-details />
+          <div class="section-note">{{ draft.cameraClipCaptureEnabled !== snapshot?.settings.cameraClipCaptureEnabled ? '尚未保存' : draft.cameraClipCaptureEnabled ? '已开启' : '已关闭' }}</div>
+        </section>
       </div>
-      <v-alert v-if="draft.writeEnabled" type="warning" variant="tonal" density="compact" class="my-3">
-        开启后 Agent 才能实际控制设备；动作仍要求幂等键、最新状态版本和当前 Manager 代际围栏。
-      </v-alert>
-      <v-alert v-if="draft.cameraClipCaptureEnabled && !cameraAllowedHosts.trim()" type="warning" variant="tonal" density="compact" class="my-3">
-        录像抓取已开启，但媒体域名白名单为空，因此仍不会下载录像。
-      </v-alert>
       <div class="xiaomi-form-grid mt-3">
         <v-textarea v-model="cameraMotionEntities" label="摄像头移动事件实体" placeholder="binary_sensor.living_room_camera_motion" rows="3" hint="每行一个 Home Assistant entity_id；先从真实设备枚举确认。" persistent-hint />
-        <v-textarea v-model="cameraAllowedHosts" label="录像媒体域名白名单" placeholder="example.xiaomi.com\n*.example.xiaomi.com" rows="3" hint="每行一个 HTTPS 主机；只登记真实事件录像 URL 使用的域名。" persistent-hint />
+        <v-textarea v-model="cameraAllowedHosts" label="录像媒体域名白名单" placeholder="example.xiaomi.com\n*.example.xiaomi.com" rows="3" hint="每行一个 HTTPS 主机；只登记真实事件录像 URL 使用的域名。" :error-messages="draft.cameraClipCaptureEnabled && !cameraAllowedHosts.trim() ? '录像抓取已开启，但媒体域名白名单为空，因此仍不会下载录像。' : ''" persistent-hint />
       </div>
       <v-expansion-panels variant="accordion" class="mt-3">
         <v-expansion-panel>

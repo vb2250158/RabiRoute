@@ -76,7 +76,7 @@ pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <项目根>
 | 机制 | 同步对象 | 范围 |
 | --- | --- | --- |
 | 本文 | RabiRoute 拥有的项目技能 | 上游仓库 → 目标项目的 `.agents/skills/` |
-| [多电脑人格数据同步](persona-data-sync.md) | 人格目录数据 | 同一 RabiLink 应用下的多台电脑 |
+| [RabiLink 跨电脑访问](rabilink-peer-rpc.md) | 按授权读取目标电脑数据，不同步副本 | 同一可信 RabiLink 应用内 |
 | LAN Agent 资源目录 | RabiRoute 包内 `skills/*/SKILL.md` 与显式公开文档 | 已授权 Agent 按需只读拉取，见 [远端 Agent 接入](lan-rabi-agent-bootstrap.md) |
 
-RabiRoute 不向项目或 Agent 端推送技能：本机 Codex / DSH / WorkBuddy 会话各自从自己的工作区技能目录加载，跨电脑只同步人格数据。
+RabiRoute 不向项目或 Agent 端推送技能：本机 Codex / DSH / WorkBuddy 会话各自从自己的工作区技能目录加载，跨电脑通过 RabiLink 访问目标电脑的人格，不再同步人格数据副本。

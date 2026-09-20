@@ -231,7 +231,7 @@ onBeforeUnmount(() => {
       <div class="section-title-row">
         <div>
           <div class="section-title">本机显示方式</div>
-          <div class="section-note">大小、位置和窗口行为只影响这台电脑，不随人格同步。</div>
+          <div class="section-note">大小、位置和窗口行为只影响这台电脑。</div>
         </div>
       </div>
       <div

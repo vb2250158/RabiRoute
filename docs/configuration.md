@@ -48,7 +48,7 @@ Manager 根 Fiber 持有三个共享读取 Worker Pool 与 `CoalescingMessagePro
 | `manager:remote-agent` | Remote Agent 扫描、连接、任务和事件入口；活动 WebSocket 与 Hub 回调 | 撤销入口并 drain 请求；未完成任务改为 `interrupted`，关闭 WebSocket 并等待已开始的回调结束 |
 | `manager:napcat-control` | NapCat 修复、健康检查、三种登录方式、OneBot 配置、绑定、启动、重启和删除入口 | 停止接收并 drain 请求，停止 supervisor，然后只停止本插件明确启动且仍归它所有的实例；端口扫描发现或由外部程序启动的实例不归本插件所有 |
 | `manager:napcat-supervisor` | Manager 自动启动后的 NapCat 登录检查队列 | 取消剩余账号队列，等待当前检查结束，并忽略停用后的旧完成回调 |
-| `manager:rabilink-relay` | RabiLink Relay Runtime 和人格同步局域网服务 | 停止 Relay、同步 listener 和活动回调 |
+| `manager:rabilink-relay` | RabiLink Relay Runtime 与通用 peer LAN listener（`PeerLanServer`），保留远端访问、RPC 和 tunnel | 停止 Relay、peer listener 和活动回调，不删除人格或历史数据 |
 | `manager:memory-consolidation` | 记忆整理调度器和本实例启动的一次性进程 | 停止调度器、终止进程并等待当前整理结束 |
 | `manager:message-processing-automation` | Agent 回复提醒、计划订阅和知识回调提醒 | 取消订阅和计时器，阻止旧回调重新排程，并等待已开始的投递 |
 | `manager:plan-feedback-delivery` | 计划反馈恢复扫描、投递和重试计时器 | 拒绝新投递，清除重试计时器，并等待当前扫描和投递结束 |
@@ -142,7 +142,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 ## 核心字段
 
 - `messageAdapters`：可配置消息入口列表。支持 `napcat`、`remoteAgent`、`heartbeat`、`speech`、`webhook`、`fennenote`、`xiaoai`、`rabilink`、`wearable`、`wecom`、`weixin`、`feishu`；旧配置中的 `rolePanel` 仍兼容，但 WebGUI 不再把它显示为可配置消息端，因为角色面板消息由 Manager 默认提供，Gateway 子进程不另开 listener。
-- `personaAutomationScriptsEnabled`：当前 Route 是否允许人格自动化运行本机脚本，默认关闭。它是本机权限，不写入人格目录，也不会随人格同步到其它电脑；收到消息和定时触发的脚本动作都受同一个开关约束。
+- `personaAutomationScriptsEnabled`：当前 Route 是否允许人格自动化运行本机脚本，默认关闭。它是本机权限，不写入人格目录，也不会因远端访问而授予其它电脑；收到消息和定时触发的脚本动作都受同一个开关约束。
 - `messageAdapterPolicies`：每个消息端的管道级权限。`inputEnabled` 控制是否接收，`outputEnabled` 控制是否允许出站。QQ、微信、飞书、企业微信、角色面板和 RabiLink 文字聊天默认使用消息组，不提供关闭开关；可用 `messageGrouping` 的三个秒数调整普通停顿、疑似半句话停顿和最长等待，默认 `6 / 12 / 20` 秒。ASR / 语音转写、heartbeat、命令、审批、健康告警和结构化事件照常直接投递，不进入这段等待。只有 Codex Agent 同时开启消息处理模式时，聊天消息才交给消息处理 Agent；否则保持原有逐条路由。
 - `supportedOutputs`：这个消息端允许发送的消息类型。NapCat/OneBot 当前支持 `text`、`image`、`voice`、`file`；旧的纯文本 `text/message/content` 请求仍兼容。QQ 群本地文件使用 `upload_group_file`，不是把大文件伪装成普通文本或普通消息段。
 - `allowedFileRoots`：本地文件出站白名单目录，仅在 `payloadType=file` 且使用本地路径时生效。文件必须真实存在、是普通文件，并且解析真实路径后仍位于其中一个目录内；未配置时本地群文件上传会被阻止。公开示例只能使用占位路径，运行期按角色实际构建产物目录配置。
@@ -161,7 +161,7 @@ Codex 已并入新的 ChatGPT desktop，但 Codex 仍是 Agent 和 runtime 的�
 - `feishuAppId` / `feishuAppSecret` / `feishuVerificationToken` / `feishuEncryptKey`：飞书企业自建应用的独立凭据。`feishuWebhookPort` / `feishuWebhookPath` 配置本机回调；只有平台侧 HTTPS 回调和 `im.message.receive_v1` 已完成配置后，才设置 `feishuEventSubscriptionEnabled: true`。群机器人 Webhook 不能替代这些字段；详见 [飞书独立消息端接入](feishu-integration.md)。
 - `napcatHttpUrl`：OneBot HTTP API 地址。
 - `agentAdapters`：Agent 端适配器列表。当前支持 `codex`、`copilotCli`、`astrbot`、`marvis`、`dsh`。成熟度分别是：Codex 已验证；Copilot CLI、AstrBot、DSH 实验支持；Marvis 仅人工接力。
-- `dshSessionId` / `dshSessionName` / `dshCwd` / `dshBaseUrl`：DSH（DeepSeek Harness）主人格绑定。WebGUI 按“API 地址 → 工作目录 → 会话”扫描并选择；也可输入新名称，保存时按名称和工作目录查找，零匹配才幂等创建。创建前先通过 DSH `workspace.create` 注册或复用该工作目录，再把返回的 `workspaceId` 传给 `session.create`；RabiRoute 创建的主人格、消息处理、计划秘书和记忆整理会话会直接进入对应工作空间分组。选择或创建后保存完整 `session-<uuid>`、名称和工作目录；“自动初始化会话”先保存绑定，再向同一 DSH owner 投递角色、计划、记忆和必读项。真实消息通过 `POST /api/session.prompt` queue 模式续投，失败时不改投 Codex。DSH“设置 → 我的插件”需要启用 `RabiRoute Agent`；该插件提供线程桥、外发、计划、消息处理、记忆和 Agent 间通信工具。WebGUI 的 DSH 刷新和会话分页使用独立的 `GET /api/scan/agents/dsh`，不等待 Codex、Copilot CLI、AstrBot 或 Marvis 的通用扫描。匿名测试路由已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、`required` 正式回复和无效 Endpoint 失败关闭；独立扫描还会读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，缺失、未激活或版本不匹配时给出更新并重启 DSH 的修复提示。适配器仍标为实验，等待发布包和全新环境回归。
+- `dshSessionId` / `dshSessionName` / `dshCwd` / `dshBaseUrl`：DSH（DeepSeek Harness）主人格绑定。WebGUI 按“API 地址 → 工作目录 → 会话”扫描并选择；地址留空时从本机 `DSH_HOME` 的 web profile 和 `logs/web-host.stdout.log` 的 `dsh web:` 横幅自动发现当前 loopback 地址，不再把文档默认端口 `3080` 当成“未安装”。也可输入新名称，保存时按名称和工作目录查找，零匹配才幂等创建。创建前先通过 DSH `workspace.create` 注册或复用该工作目录，再把返回的 `workspaceId` 传给 `session.create`；RabiRoute 创建的主人格、消息处理、计划秘书和记忆整理会话会直接进入对应工作空间分组。选择或创建后保存完整 `session-<uuid>`、名称和工作目录；“自动初始化会话”先保存绑定，再向同一 DSH owner 投递角色、计划、记忆和必读项。真实消息通过 `POST /api/session.prompt` queue 模式续投，失败时不改投 Codex。DSH“设置 → 我的插件”需要启用 `RabiRoute Agent`；该插件提供线程桥、外发、计划、消息处理、记忆和 Agent 间通信工具。WebGUI 的 DSH 刷新和会话分页使用独立的 `GET /api/scan/agents/dsh`，不等待 Codex、Copilot CLI、AstrBot 或 Marvis 的通用扫描。匿名测试路由已通过连续投递、Manager/DSH 重启读回、计划秘书、消息处理、独立记忆整理、`required` 正式回复和无效 Endpoint 失败关闭；独立扫描还会读取 `RabiRoute Agent` 的运行状态、版本、Manager 地址、通信约束和三个模型工具，缺失、未激活或版本不匹配时给出更新并重启 DSH 的修复提示。适配器仍标为实验，等待发布包和全新环境回归。
 - `dshModelProvider` / `dshModel` / `dshReasoningEffort`：可选的 DSH 主人格模型设置。WebGUI 在 DSH 可用时通过 `llm.models` 读取提供方、模型和推理强度；读取失败时仍可按 `provider/model` 手动输入。配置非空时，Gateway 在主人格下一次消息投递前先读取 `session.models`，仅在当前选择不一致时调用 `session.selectModel`，随后再调用 `session.prompt`。留空则沿用 DSH 绑定会话自己的当前设置。
 - `primaryAgentAdapter`：当前 Route 的主控 Agent，必须是 `agentAdapters` 中的一项。消息命中规则后只投递给主控，不会广播给列表里的其他 Agent。旧配置没有该字段时使用列表第一项；删除主控后自动改用仍存在的第一项。
 - Agent 端先使用基础能力层描述安装、认证、项目、会话和投递，再按真实支持情况声明托管任务扩展。Codex 与 DSH 都声明“消息处理 Agent 模式”“独立记忆整理 Agent”“计划协助会话”和“Hook 管理”；这些设置只归当前主 Agent，切换主 Agent 时会过滤另一端的辅助会话绑定。DSH 通过 `RabiRoute Agent` 插件提供对应工具；其它 Agent 端仍按各自真实能力显示。
@@ -249,6 +249,8 @@ NapCat 的 QQ 密码、设备验证和验证码不属于 RabiRoute 配置。每�
 新增平台时，优先在 `src/adapters/` 新增 adapter，并输出统一消息记录和路由事件，不要把新平台逻辑塞进 NapCat adapter。
 
 ## RabiLink 全局配置
+
+人格数据同步已经退役，不提供重新开启同步的配置。RabiLink 连接保留远端人格访问、RPC 与 tunnel；不要为删除同步而关闭整条 Relay 连接或删除现有人格、计划、记忆及历史同步数据。通用 peer listener 使用 `PeerLanServer`、`peer_lan_status` 与 `RABILINK_PEER_LAN_PORT`，设备变更使用 `peer_changed`；它们不是旧同步服务的别名。源码接线正在校准，安装版状态须单独验收。见[退役说明](persona-data-sync.md)及[跨电脑调用](rabilink-peer-rpc.md)。
 
 侧栏“RabiLink”提供“主页 / 远端智能体 / 配置”三个标签。在“配置”（`#/rabilink?tab=config`）查看本机实例 GUID，编辑实例名称、Relay 地址与应用 token、连接开关、高级超时、语音中转和 Agent 上传上限。原“设置”不再重复这些字段，目录、局域网访问和桌面设置仍留在原处。保存复用 `/api/rabi/identity` 与 `data/Config.json`，不新建配置副本；上传上限 `agentUploads.maxFileMiB` 为整数 `1..2048`，默认 `2048`，重启 Manager 后生效。
 

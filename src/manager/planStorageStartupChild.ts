@@ -1,6 +1,6 @@
 import { recoverPlanFeedbackStoreTransactions } from "../planFeedback.js";
 import { recoverPlanLifecycleTransitions } from "../planStorageRepository.js";
-import { recoverPersonaSyncPlanPackageTransactions } from "../personaSyncPlanPackage.js";
+import { recoverStoredPlanPackages } from "../planStoragePackageRecovery.js";
 import { migrateRolePlanLayoutAtStartup } from "./planStorageStartupMigration.js";
 import {
   PlanStorageStartupGateError,
@@ -47,7 +47,7 @@ try {
     recoverRoleLifecycle: async roleDir => recoverPlanLifecycleTransitions(roleDir),
     migrateRole: async roleDir => migrateRolePlanLayoutAtStartup(roleDir),
     recoverRoleFeedback: async roleDir => recoverPlanFeedbackStoreTransactions(roleDir),
-    recoverRolePackages: async roleDir => recoverPersonaSyncPlanPackageTransactions(roleDir)
+    recoverRolePackages: async roleDir => recoverStoredPlanPackages(roleDir)
   });
   sendAndExit({ ok: true, summary }, 0);
 } catch (error) {

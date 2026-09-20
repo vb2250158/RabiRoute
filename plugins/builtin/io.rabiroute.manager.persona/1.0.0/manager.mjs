@@ -74,40 +74,6 @@ export const activate = definePlugin({
             },
             {
                 "kind": "page",
-                "id": "persona-sync-page",
-                "value": {
-                    "surface": "web.pages",
-                    "label": {
-                        "fallback": "多电脑人格同步"
-                    },
-                    "routeId": "route.persona-sync",
-                    "rendererId": "builtin.web-page.persona-sync.v1",
-                    "slot": "route",
-                    "hosts": [
-                        "web"
-                    ],
-                    "order": 45
-                }
-            },
-            {
-                "kind": "navigation",
-                "id": "persona-sync",
-                "value": {
-                    "surface": "web.navigation",
-                    "label": {
-                        "fallback": "多电脑人格同步"
-                    },
-                    "routeId": "route.persona-sync",
-                    "icon": "mdi-folder-sync-outline",
-                    "slot": "persona-secondary",
-                    "hosts": [
-                        "web"
-                    ],
-                    "order": 45
-                }
-            },
-            {
-                "kind": "page",
                 "id": "persona-document-page",
                 "value": {
                     "surface": "web.pages",
@@ -204,50 +170,22 @@ export const activate = definePlugin({
                 }
             });
             try {
-        let personaSyncStarted = false;
-        let personaSyncDisposed = false;
-        let manifestStartTimer;
-        const startPersonaSync = () => {
-            if (personaSyncStarted || personaSyncDisposed) return;
-            personaSyncStarted = true;
-            runtime.personaSyncAutoReconciler?.start();
-            // The manifest index and automatic sync can traverse or apply plan packages.
-            // They share the Manager-owned plan-storage startup admission gate.
-            manifestStartTimer = setTimeout(() => {
-                manifestStartTimer = undefined;
-                if (personaSyncDisposed) return;
-                void runtime.personaSyncService.startManifestIndex()
-                    .catch(error => console.warn(`Persona sync manifest index unavailable; queries will reconcile on demand: ${error instanceof Error ? error.message : String(error)}`));
-            }, 0);
-            manifestStartTimer.unref();
-        };
-        const removePlanStorageReadyListener = runtime.planStorageStartup?.onReady(startPersonaSync) ?? (() => {
-            startPersonaSync();
-            return () => {};
-        })();
         const requestTracker = new runtime.ManagerPluginRequestTracker();
         ctx.effect(() => {
             const unregister = runtime.registerManagerPluginHandlerRoutes(runtime.managerPluginRoutes, "manager:persona", "manager.persona.api", [
                 requestTracker.wrap((request, requestUrl, response) => (runtime.handlePersonaPluginApi(request, requestUrl, response)
-                    || runtime.handleLanguageStyleApi(request, requestUrl, response, runtime.languageStyleValidator)
-                    || runtime.handlePersonaSyncApi(request, requestUrl, response, runtime.personaSyncRouteContext(true))))
+                    || runtime.handleLanguageStyleApi(request, requestUrl, response, runtime.languageStyleValidator)))
             ], [
                 { routeId: "personas", kind: "exact", path: "/api/personas", methods: ["GET"] },
                 { routeId: "personas-resource", kind: "prefix", pathPrefix: "/api/personas/" },
                 { routeId: "roles-api", kind: "prefix", pathPrefix: "/api/roles/" },
                 { routeId: "roles-static", kind: "prefix", pathPrefix: "/roles/" },
-                { routeId: "persona-sync", kind: "prefix", pathPrefix: "/api/persona-sync" },
                 { routeId: "language-style-validate", kind: "exact", path: "/api/language-style/validate", methods: ["POST"] },
                 { routeId: "role-panel-messages", kind: "exact", path: "/api/role-panel/messages", methods: ["POST"] }
             ]);
             return async () => {
-                personaSyncDisposed = true;
-                removePlanStorageReadyListener();
-                if (manifestStartTimer) clearTimeout(manifestStartTimer);
                 unregister();
                 await requestTracker.stop();
-                runtime.personaSyncAutoReconciler?.stop();
-                runtime.personaSyncService.stopManifestIndex();
             };
         }, "activate Manager persona plugin");
 

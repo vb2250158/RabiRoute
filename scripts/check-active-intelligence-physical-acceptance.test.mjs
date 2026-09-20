@@ -35,17 +35,6 @@ function completeFixture({ generatedAt = NOW.toISOString(), synthetic = false } 
     validation: { passed: true, policy_sha256: "a".repeat(64) },
     results: [{ engine: "eres2net", validation: { passed: true } }]
   });
-  const persona = writeJson(root, "persona.json", {
-    schemaVersion: 2,
-    kind: "persona_sync_physical_acceptance",
-    generatedAt,
-    mode: "sync",
-    syncPassed: true,
-    physicalHostsConfirmed: true,
-    formalAcceptanceEligible: true,
-    acceptancePassed: true,
-    status: "passed"
-  });
   const mobile = writeJson(root, "mobile.json", {
     passed: true,
     serial: "private-device",
@@ -69,12 +58,6 @@ function completeFixture({ generatedAt = NOW.toISOString(), synthetic = false } 
     operatorConfirmed: true,
     environmentIdHash: "b".repeat(64),
     checks: {
-      personaSyncDistinctPhysicalHosts: true,
-      personaSyncLan: true,
-      personaSyncRelayFallback: true,
-      personaSyncDisconnectRecovery: true,
-      personaSyncConflictResolution: true,
-      personaSyncLongRun: true,
       androidOfflineRecovery: true,
       androidProcessReclaimRecovery: true,
       androidBootRecovery: true,
@@ -85,14 +68,13 @@ function completeFixture({ generatedAt = NOW.toISOString(), synthetic = false } 
       rokidConnectionRecovery: true
     }
   });
-  return { root, dataset, report, persona, mobile, rokid, observation };
+  return { root, dataset, report, mobile, rokid, observation };
 }
 
 function runFixture(fixture, extra = {}) {
   return buildActiveIntelligencePhysicalAcceptance({
     speakerDataset: fixture.dataset,
     speakerReport: fixture.report,
-    personaSync: fixture.persona,
     mobileSoak: fixture.mobile,
     rokid: fixture.rokid,
     observation: fixture.observation,
@@ -107,7 +89,9 @@ test("physical acceptance passes only with fresh formal and real-device evidence
   const result = runFixture(fixture);
   assert.equal(result.exitCode, 0);
   assert.equal(result.report.overall.state, "passed");
-  assert.deepEqual(Object.values(result.report.domains).map(domain => domain.state), ["passed", "passed", "passed", "passed"]);
+  assert.deepEqual(Object.keys(result.report.domains), ["voiceprint", "android", "rokid"]);
+  assert.equal(result.report.overall.totalDomains, 3);
+  assert.deepEqual(Object.values(result.report.domains).map(domain => domain.state), ["passed", "passed", "passed"]);
   const output = fs.readFileSync(result.outputPath, "utf8");
   assert.equal(output.includes("private-device"), false);
   assert.equal(output.includes("private-a"), false);
@@ -119,7 +103,6 @@ test("physical acceptance fails closed when evidence is missing", () => {
   const result = buildActiveIntelligencePhysicalAcceptance({
     speakerDataset: path.join(root, "missing-dataset.json"),
     speakerReport: path.join(root, "missing-report.json"),
-    personaSync: path.join(root, "missing-persona.json"),
     mobileSoak: path.join(root, "missing-mobile.json"),
     rokid: path.join(root, "missing-rokid.json"),
     observation: path.join(root, "missing-observation.json"),
@@ -144,34 +127,20 @@ test("otherwise passing old evidence is reported as stale", () => {
   assert.equal(result.exitCode, 2);
   assert.equal(result.report.overall.state, "stale");
   assert.equal(result.report.domains.voiceprint.state, "stale");
-  assert.equal(result.report.domains.personaSync.state, "stale");
+  assert.equal(result.report.domains.android.state, "stale");
+  assert.equal(result.report.domains.rokid.state, "stale");
 });
 
-test("functional persona sync without physical-host confirmation remains partial", () => {
+test("Android soak duration remains required without the removed synchronization domain", () => {
   const fixture = completeFixture();
-  const payload = JSON.parse(fs.readFileSync(fixture.persona, "utf8"));
-  payload.physicalHostsConfirmed = false;
-  payload.formalAcceptanceEligible = false;
-  payload.acceptancePassed = false;
-  fs.writeFileSync(fixture.persona, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const payload = JSON.parse(fs.readFileSync(fixture.mobile, "utf8"));
+  payload.observedDurationHours = 1;
+  fs.writeFileSync(fixture.mobile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   const result = runFixture(fixture);
   assert.equal(result.exitCode, 2);
-  assert.equal(result.report.domains.personaSync.state, "partial");
-});
-
-test("legacy schema-one persona evidence remains partial instead of becoming formal", () => {
-  const fixture = completeFixture();
-  fs.writeFileSync(fixture.persona, `${JSON.stringify({
-    schemaVersion: 1,
-    kind: "persona_sync_physical_acceptance",
-    generatedAt: NOW.toISOString(),
-    mode: "sync",
-    acceptancePassed: true,
-    status: "passed"
-  }, null, 2)}\n`, "utf8");
-  const result = runFixture(fixture);
-  assert.equal(result.exitCode, 2);
-  assert.equal(result.report.domains.personaSync.state, "partial");
+  assert.equal(result.report.domains.android.state, "partial");
+  assert.equal(result.report.domains.voiceprint.state, "passed");
+  assert.equal(result.report.domains.rokid.state, "passed");
 });
 
 test("observation with missing or unknown checks fails closed", () => {
@@ -182,7 +151,6 @@ test("observation with missing or unknown checks fails closed", () => {
   fs.writeFileSync(fixture.observation, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   const result = runFixture(fixture);
   assert.equal(result.exitCode, 2);
-  assert.equal(result.report.domains.personaSync.state, "invalid");
   assert.equal(result.report.domains.android.state, "invalid");
   assert.equal(result.report.domains.rokid.state, "invalid");
 });

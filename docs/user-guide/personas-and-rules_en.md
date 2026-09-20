@@ -55,7 +55,7 @@ Use **Open persona configuration** to edit the full text. Do not mechanically tr
 
 Open **Virtual avatar**, select or import a GIF, PNG, or ZIP animation pack for the current persona, then turn on **Enable on this PC**. The switch stays unavailable until a runnable pack is selected, and no empty window is shown. Each enabled persona gets its own pet: enabling several personas displays several pets, while disabling one removes only that persona's pet. Window names use persona names.
 
-Animation assets live under the current persona's `desktop-pet/packs/` directory and can travel with persona-folder synchronization. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate remain display preferences for this PC and do not synchronize with the persona.
+Animation assets live under the current persona's `desktop-pet/packs/` directory and are retained after synchronization retirement. Size, position, opacity, always-on-top, click-through, locking, fullscreen hiding, result bubbles, and frame rate are display preferences for this PC rather than persona data.
 
 After selecting a pack, the page lists the total number of actions, animation entries, and static images, grouped by idle and sleep, task and connection feedback, mouse interactions, random idle actions, and other actions. Each entry shows its trigger, format, and looping behavior; PNG sequences also show frame count and frame rate. Counts refer to available action entries. Single-frame PNG entries count as static images; GIF frame counts are not guessed.
 
@@ -69,17 +69,13 @@ The target persona's ordinary reply does not return to the source automatically.
 
 User-facing copy uses **persona**. Existing `roleId`, `/api/roles/*`, and `data/roles/` names remain compatibility internals; no directory migration is required.
 
-## Synchronize the current persona across PCs
+## Access a persona on another PC
 
-After selecting a persona, use **Multi-PC persona sync** in the page header to open a dedicated persona-folder synchronization workspace. Choose another PC using the same RabiLink application token on the left. Changed Files then shows, without writing files, what would be pulled, pushed, deleted, automatically merged, or require confirmation. Synchronization starts only after you select **Pull and synchronize**. Automatic synchronization runs in the backend and does not require the page to remain open. A local persona-file change, peer availability change, or Relay reconnection triggers one manifest reconciliation. LAN is preferred, with restricted Relay transit only when direct access is unavailable. Unfinished scope is persisted locally, so disconnects and Manager restarts do not forget it; an offline target waits for a connection event instead of fixed-interval business queries.
+Persona data synchronization is retired: the feature is removed, not disabled by default. **Multi-PC persona sync**, Changed Files, **Pull and synchronize**, and the conflict-resolution workspace are no longer operating entry points. No background persona-file merge remains.
 
-The page shows automatic-reconciliation state, and **Sync current persona** runs it immediately. Results distinguish pull, push, already converged, LAN/Relay transport, and conflict counts. Two-sided ordinary-file edits or concurrent deletion versus editing never use last-writer-wins replacement. They enter **Human confirmation required**:
+Use [RabiLink](interface-and-status_en.md#rabilink-home-remote-agent-and-configuration) to access personas, Agents, and data on the target PC without creating a synchronized copy. Remote access remains subject to target permissions and connection state; it does not authorize arbitrary writes.
 
-- **Keep local** retains the current file and tries to publish that decision back to the source PC.
-- **Use remote / Accept remote deletion** explicitly accepts the remote content or deletion intent.
-- **Manual merge** lets the local Agent submit reviewed content through the `use_merged` API.
-
-Concurrent voice-account classification branches do not let the file-conflict dialog guess who is the user. Confirm them again under **Voice endpoint accounts** in **Identity relations** so a new classification event explicitly converges the branch. Relay performs discovery and transit only; it stores no server-side master persona. Synchronization also does not replace independent backups or Git/SVN.
+Existing personas, plans, memories, conversations, pet assets, historical synchronization archives, and conflict evidence are retained. Retirement requires no deletion or relocation of user data. See [Synchronization retirement and data retention](../persona-data-sync_en.md). This describes source boundaries, not an installed update or completed physical-device acceptance.
 
 ## Recognize a person across endpoint accounts
 
@@ -106,7 +102,7 @@ For an unresolved voiceprint, choose:
 - **Another person**: explicitly mark it as not the user.
 - **Clear decision**: retain the relationship event while removing the `isUser` conclusion, returning it to unknown.
 
-The page requests only statistics, abbreviated voiceprints, duration, last-seen time, and relationships; it neither requests nor displays transcript text. New recordings, local relationship corrections, and multi-PC persona synchronization each trigger one event-driven refresh. Reconnecting the event stream performs one catch-up query instead of fixed-interval coverage polling. The current version keeps existing voice classifications in the persona's `voice/voice-identities.jsonl` while presenting them inside Identity relations. A later unified-data migration must preserve those classifications. Multi-PC conflicts remain visible until a later explicit confirmation converges the branches.
+The page requests only statistics, abbreviated voiceprints, duration, last-seen time, and relationships; it neither requests nor displays transcript text. New recordings and local relationship corrections each trigger one event-driven refresh. Reconnecting the event stream performs one catch-up query instead of fixed-interval coverage polling. The current version keeps existing voice classifications in the persona's `voice/voice-identities.jsonl` while presenting them inside Identity relations. A later unified-data migration must preserve those classifications. Historical voice-classification conflicts remain visible until a later explicit confirmation converges the branches.
 
 On first use, an opaque voiceprint ID may be impossible to recognize. Select **Mark the next recording**, then speak one continuous sentence by yourself through the PC, phone, or glasses you want to classify, preferably in a quiet environment. When the next recording event completes, unresolved voiceprints newly observed during that attempt move to the front and receive an **Observed this time** marker. This only narrows the candidates: it starts no second recorder, performs no automatic identification, and never assigns the user merely because one candidate appeared. If other people spoke at the same time, confirm only a voiceprint you can identify confidently or capture again.
 
@@ -169,7 +165,7 @@ A scheduled task requires the Route's Scheduled Tasks input. Agent actions carry
 
 ## Script restrictions
 
-Scripts are disabled by default. The current Route must explicitly enable **Allow this Route to run persona scripts**. This permission stays on the local PC and is not synchronized with the persona.
+Scripts are disabled by default. The current Route must explicitly enable **Allow this Route to run persona scripts**. This permission stays on the local PC and is not granted to another PC by remote access.
 
 - A script must remain physically inside the current persona's `scripts/` directory; links and `..` cannot escape it.
 - Only `.cmd`, `.bat`, and `.py` are accepted. Arbitrary command text is not.

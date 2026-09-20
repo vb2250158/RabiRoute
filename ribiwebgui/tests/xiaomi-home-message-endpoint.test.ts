@@ -38,8 +38,8 @@ test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-ho
   assert.match(authRendererSource, /不是小米账号密码或设备 token/);
   assert.match(authRendererSource, /打开 Home Assistant/);
   assert.match(authRendererSource, /打开令牌管理/);
-  assert.match(authRendererSource, /:disabled="!loginUrl"/);
-  assert.match(authRendererSource, /:disabled="!profileUrl"/);
+  assert.match(authRendererSource, /:disabled="!loginUrl \|\| !serviceReady"/);
+  assert.match(authRendererSource, /:disabled="!profileUrl \|\| !serviceReady"/);
   assert.doesNotMatch(authRendererSource, /v-if="loginUrl"/);
   assert.doesNotMatch(authRendererSource, /v-if="profileUrl"/);
   assert.match(authRendererSource, /先填写有效的 Home Assistant 地址/);
@@ -51,6 +51,24 @@ test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-ho
   assert.notEqual(adapterLabel("xiaomiHome"), adapterLabel("xiaoai"));
   assert.equal(adapterSourceAliases("xiaomiHome").includes("xiaomi"), false);
   assert.equal(adapterSourceAliases("xiaoai").includes("xiaomi"), true);
+});
+
+test("Xiaomi Home diagnostics stay beside their owning settings instead of the top dependency panel", () => {
+  assert.match(routeConfigSource, /v-if="choice\.type !== 'xiaomiHome'" class="dependency-panel mb-3"/);
+  assert.match(routeConfigSource, /scan: messageScanFor\(choice\.type\)/);
+  assert.match(endpointRendererSource, /item\.id === "event-monitor"/);
+  assert.match(endpointRendererSource, /aria-label="监听设备事件"/);
+  assert.match(endpointRendererSource, /aria-label="设备控制"/);
+  assert.match(endpointRendererSource, /aria-label="摄像头事件录像"/);
+  assert.match(endpointRendererSource, /检查事件监听/);
+  assert.match(endpointRendererSource, /v-if="draft\.eventMonitorEnabled !== snapshot\?\.settings\.eventMonitorEnabled"/);
+  assert.match(endpointRendererSource, /v-else-if="!draft\.eventMonitorEnabled"/);
+  assert.match(endpointRendererSource, /await props\.context\?\.refreshScan\?\.\(\)/);
+  assert.match(authRendererSource, /await props\.context\?\.refreshScan\?\.\(\)/);
+  assert.doesNotMatch(endpointRendererSource, /未发现/);
+  assert.match(authRendererSource, /stateDetail/);
+  assert.match(authRendererSource, /:error-messages="baseUrlError"/);
+  assert.match(authRendererSource, /:error-messages="accessTokenError"/);
 });
 
 test("Xiaomi Home credential help links only create safe Home Assistant profile URLs", () => {
@@ -66,7 +84,7 @@ test("Xiaomi Home credential help links only create safe Home Assistant profile 
   }
   assert.equal(HOME_ASSISTANT_AUTHENTICATION_DOCS_URL, "https://www.home-assistant.io/docs/authentication/");
   assert.equal(HOME_ASSISTANT_INSTALLATION_URL, "https://www.home-assistant.io/installation/");
-  assert.equal(HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL, "https://www.home-assistant.io/integrations/xiaomi_miio/");
+  assert.equal(HOME_ASSISTANT_XIAOMI_HOME_DOCS_URL, "https://github.com/XiaoMi/ha_xiaomi_home/blob/main/doc/README_zh.md");
 });
 
 test("Xiaomi Home rule catalog uses the owner event kind without a Gateway callback", () => {

@@ -17,6 +17,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .audio_stream_events import AudioStreamEventStore
+from .playback import PlaybackUnavailableError
 
 
 RemoteFeed = Callable[[str, np.ndarray], None]
@@ -1257,9 +1258,11 @@ class RemoteAudioHub:
         if not client_id:
             self._local_player(path, volume, cancel)
             return
+        if client_id not in self._clients:
+            raise PlaybackUnavailableError("所选音频设备已离线，请重新连接设备或切换到本机。")
         loop = self._loop
         if loop is None or not loop.is_running():
-            raise RuntimeError("Remote audio event loop is unavailable.")
+            raise PlaybackUnavailableError("远端音频服务未就绪，请检查语音服务状态。")
         future = asyncio.run_coroutine_threadsafe(self._play_remote(client_id, path, volume, cancel), loop)
         future.result()
 
@@ -1352,7 +1355,7 @@ class RemoteAudioHub:
                 )
                 self._emit_changed()
                 if client.playback_waiter and not client.playback_waiter.done():
-                    client.playback_waiter.set_exception(RuntimeError("Remote audio client disconnected during playback."))
+                    client.playback_waiter.set_exception(PlaybackUnavailableError("音频设备在播放期间断开，请重新连接后重试。"))
 
     def _authorized(self, websocket: Any) -> bool:
         request = getattr(websocket, "request", None)
@@ -1416,7 +1419,7 @@ class RemoteAudioHub:
     async def _play_remote(self, client_id: str, path: Path, volume: int, cancel: threading.Event) -> None:
         client = self._clients.get(client_id)
         if client is None:
-            raise RuntimeError("The selected remote audio client is offline.")
+            raise PlaybackUnavailableError("所选音频设备已离线，请重新连接设备或切换到本机。")
         playback_id = uuid.uuid4().hex
         client.playback_id = playback_id
         client.playback_waiter = asyncio.get_running_loop().create_future()
