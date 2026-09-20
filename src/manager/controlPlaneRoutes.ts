@@ -1,4 +1,5 @@
 import { ResourceCache, resourceCacheHandler } from "./resourceCache.js";
+import { createAllDayRecording, allDayRecordingHandler } from "./allDayRecordingRoutes.js";
 import { normalizeRouteAgentTargets, resolvePrimaryAgentTarget, primaryAgentInstanceBindings } from "../shared/routeAgentTargets.js";
 import { PeerTunnelRuntime } from "../peerTunnel/runtime.js";
 import { PLAN_ACTIVATION_STATUSES } from "../planState.js";
@@ -109,9 +110,6 @@ import {
 } from "../observability/dataMutationAudit.js";
 import { readJsonlTail } from "./jsonlTail.js";
 import { requestWeixinLogin } from "../weixinLoginRequest.js";
-import { PersonaSyncService } from "../personaSync.js";
-import { PersonaSyncCoordinator } from "../personaSyncCoordinator.js";
-import { PersonaSyncAutoReconciler } from "../personaSyncAutoReconciler.js";
 import {
   findPersonaVoiceIdentity,
   listPersonaVoiceIdentities,
@@ -444,10 +442,10 @@ import { handlePersonaAvatarApi } from "./personaAvatarRoutes.js";
 import { handlePlanAttachmentApi } from "./planAttachmentRoutes.js";
 import { roleInfoPayload } from "./roleInfoPayload.js";
 import type { ScanDiagnostic } from "./scanController.js";
-import { PersonaSyncLanServer } from "./personaSyncLanServer.js";
+import { PeerLanServer } from "./peerLanServer.js";
+import { readPeerPersonaManifest } from "./peerPersonaManifest.js";
 import { RabiDirectVideo } from "./rabiDirectVideo.js";
 import { createDirectVideoRoutes } from "./rabiDirectVideoRoutes.js";
-import { handlePersonaSyncApi, type PersonaSyncRouteContext } from "./personaSyncRoutes.js";
 import { handlePersonaVoiceTranscriptApi } from "./personaVoiceTranscriptRoutes.js";
 import { handlePersonaChatHistoryApi } from "./personaChatHistoryRoutes.js";
 import {
@@ -1048,11 +1046,35 @@ const managerRuntimeLayout = resolveRuntimeLayout(
 const packageRoot = managerRuntimeLayout.packageRoot;
 const rootDir = managerRuntimeLayout.stateRoot;
 const resourceCacheKey = randomUUID();
+const allDayRecording = createAllDayRecording({
+  roleDirectory: roleDirForApi,
+  hostId: os.hostname(),
+  mobileRoot: path.join(rootDir, "data", "mobile-recording-events"),
+  mobileAudio: async (owner, chunks) => {
+    const parts: Buffer[] = [];
+    for (const id of chunks) parts.push(await resourceCache.read(owner, id));
+    return Buffer.concat(parts);
+  },
+  speechUrl: () => speechServiceUrl(),
+  changed: roleId => publishManagerEvent("all_day_recording", { roleId })
+});
+const handleAllDayRecordingApi = allDayRecordingHandler(allDayRecording, {
+  local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, []),
+  readOnly: () => managerReadOnly,
+  readBody: request => readJsonBody(request)
+});
 const resourceCache = new ResourceCache(path.join(rootDir, "data"));
 const handleResourceCacheApi = resourceCacheHandler(resourceCache, {
   local: request => isLocalMachineRemoteAddress(request.socket.remoteAddress, localIpv4AddressEntries().map(item => item.address)),
   tunnelKey: () => resourceCacheKey,
-  readOnly: () => managerReadOnly
+  readOnly: () => managerReadOnly,
+  receiveRecording: async (owner, body) => {
+    const chunks = (body as { chunks?: unknown })?.chunks;
+    if (!Array.isArray(chunks) || chunks.length > 16) throw new Error("Invalid recording chunks");
+    for (const id of chunks) await resourceCache.read(owner, String(id));
+    await allDayRecording.store.receiveMobile(owner, body);
+    publishManagerEvent("all_day_recording", { mobile: true });
+  }
 });
 const managerHostIdentity = managerHostIdentityFromEnvironment();
 const managerPortPolicy = parseManagerPortPolicy(process.env.GATEWAY_MANAGER_PORT);
@@ -1254,8 +1276,6 @@ export function listenManagerServer(server: http.Server, port: number, host: str
   });
 }
 
-let personaSyncAutoReconciler: PersonaSyncAutoReconciler | undefined;
-
 function relayReceiptText(value: unknown, maxLength = 160): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
 }
@@ -1313,10 +1333,8 @@ function recordRabiLinkRelayReceipt(data: Record<string, unknown>): void {
 const rabiLinkRelayRuntime = new RabiLinkRelayRuntime({
   onStatus: status => {
     publishManagerEvent("rabilink_status", status);
-    personaSyncAutoReconciler?.noteRelayStatus(status.state);
   },
   onEvent: (eventType, data) => {
-    personaSyncAutoReconciler?.noteRelayEvent(eventType);
     if (eventType === "outbox_receipt") recordRabiLinkRelayReceipt(data);
   }
 });
@@ -1448,68 +1466,14 @@ const speechIngressStore = new SpeechIngressStore(
   path.join(rootDir, "data", "speech", "messages"),
   path.join(rootDir, "data", "speech", "deliveries")
 );
-const personaSyncService = new PersonaSyncService(
-  () => rolesRoot,
-  path.join(rootDir, "data", "persona-sync"),
-  {
-    readOnly: managerReadOnly,
-    watch: managerShouldAutostart,
-    reconcileOnQueryFallback: !managerReadOnly,
-    scanExecutionMode: managerReadOnly ? "inline" : "child_process",
-    autoStart: !managerReadOnly,
-    onEvent: event => {
-      publishManagerEvent("persona_sync_manifest_changed", event);
-      personaSyncAutoReconciler?.noteManifestEvent(event);
-    }
-  }
-);
-const personaSyncCoordinator = new PersonaSyncCoordinator(
-  personaSyncService,
-  path.join(rootDir, "data", "persona-sync"),
-  () => {
-    const config = rabiGlobalConfig.read();
-    const relay = rabiLinkRelayConfigForMeta();
-    return {
-      url: relay.url,
-      token: relay.token,
-      deviceId: relay.deviceId,
-      deviceGuid: config.rabiGuid
-    };
-  }
-);
-personaSyncAutoReconciler = new PersonaSyncAutoReconciler(
-  personaSyncCoordinator,
-  path.join(rootDir, "data", "persona-sync"),
-  {
-    enabled: managerShouldAutostart,
-    onStatus: status => publishManagerEvent("persona_sync_auto_status", status)
-  }
-);
-function personaSyncRouteContext(controlPlaneAuthorized = false): PersonaSyncRouteContext {
+function peerRelayConfig() {
+  const config = rabiGlobalConfig.read();
+  const relay = rabiLinkRelayConfigForMeta();
   return {
-    service: personaSyncService,
-    coordinator: personaSyncCoordinator,
-    autoReconciler: personaSyncAutoReconciler!,
-    listConflicts: roleId => personaSyncService.listConflictsUsing(roleId, requestedRoleId =>
-      managerCatalogWorkerPool.queryPersonaSyncConflicts(
-        rolesRoot,
-        path.join(rootDir, "data", "persona-sync"),
-        requestedRoleId
-      )),
-    readOnlySnapshot: managerReadOnly,
-    controlPlaneAuthorized,
-    planStorageStartup: planStorageStartupStatus,
-    token: () => rabiLinkRelayConfigForMeta().token,
-    relay: () => {
-      const config = rabiGlobalConfig.read();
-      const relay = rabiLinkRelayConfigForMeta();
-      return {
-        url: relay.url,
-        token: relay.token,
-        deviceId: relay.deviceId,
-        deviceGuid: config.rabiGuid
-      };
-    }
+    url: relay.url,
+    token: relay.token,
+    deviceId: relay.deviceId,
+    deviceGuid: config.rabiGuid
   };
 }
 let activePeerRuntime: ReturnType<typeof createRabiPeerRuntime> | undefined;
@@ -1528,8 +1492,8 @@ function createManagerPeerRuntime() {
       generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId, instanceId: managerInstanceId }),
     token: () => rabiLinkRelayConfigForMeta().token,
     allowed: () => access().operations,
-    peers: () => discoverRabiPeers(personaSyncRouteContext().relay()),
-    relay: () => personaSyncRouteContext().relay(),
+    peers: () => discoverRabiPeers(peerRelayConfig()),
+    relay: () => peerRelayConfig(),
     readJson: readJsonBody, json: jsonResponse,
     onResult: event => publishManagerEvent("peer_rpc_completed", event),
     operations: [
@@ -1538,7 +1502,7 @@ function createManagerPeerRuntime() {
         const plans = await listPlansAsync(roleDirForApi(roleId));
         return { roleId, plans: plans.map(({ id, title, status, updatedAt }) => ({ id, title, status, updatedAt })) };
       } },
-      { capability: "persona", operation: "manifest", execute: input => personaSyncService.manifest(role(input)) }
+      { capability: "persona", operation: "manifest", execute: input => readPeerPersonaManifest(rolesRoot, role(input)) }
     ]
   });
   tunnel = new PeerTunnelRuntime({
@@ -1549,14 +1513,14 @@ function createManagerPeerRuntime() {
     dataDir: path.join(rootDir, "data", "rabilink"),
     deviceId: rabiLinkRelayConfigForMeta().deviceId,
     generation: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
-    discover: () => discoverRabiPeers(personaSyncRouteContext().relay()),
+    discover: () => discoverRabiPeers(peerRelayConfig()),
     signal: (call, signal) => runtime.signal(call, signal),
-    relay: () => personaSyncRouteContext().relay(),
-    services: () => ({ manager: { baseUrl: managerBaseUrl, headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, speech: { baseUrl: speechServiceUrl() }, resources: { baseUrl: managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": resourceCacheKey, "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } } }),
+    relay: () => peerRelayConfig(),
+    services: () => ({ manager: { baseUrl: managerBaseUrl, headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, speech: { baseUrl: speechServiceUrl(), headers: { "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } }, resources: { baseUrl: managerBaseUrl, pathPrefix: "/api/resource-cache/data", headers: { "x-rabilink-resource-key": resourceCacheKey, "x-rabilink-tunnel-local": managerHostIdentity?.applicationGenerationId ?? managerInstanceId } } }),
     onStatus: value => publishManagerEvent("peer_tunnel_status", value)
   });
   activePeerTunnel = tunnel;
-  const currentLan = personaSyncLanServer.status();
+  const currentLan = peerLanServer.status();
   if (currentLan.state === "listening") tunnel.startLanDiscovery(currentLan.port || 0);
   const handler: typeof runtime.handler = (request, url, response) => tunnel.handler(request, url, response, readJsonBody) || runtime.handler(request, url, response);
   const combined = { ...runtime, handler };
@@ -1567,12 +1531,12 @@ function createManagerPeerRuntime() {
     tunnel.stop(); await runtime.stop();
   } };
 }
-const personaSyncLanServer = new PersonaSyncLanServer(personaSyncRouteContext(), {
+const peerLanServer = new PeerLanServer({
   peerHandler: (request, url, response) => activePeerRuntime?.handler(request, url, response) ?? false,
   peerUpgrade: (request, socket, head) => activePeerTunnel?.upgrade(request, socket, head) ?? false,
-  port: Number(process.env.RABILINK_PERSONA_SYNC_LAN_PORT ?? 0),
+  port: Number(process.env.RABILINK_PEER_LAN_PORT ?? 0),
   onStatus: status => {
-    publishManagerEvent("persona_sync_lan_status", status);
+    publishManagerEvent("peer_lan_status", status);
     if (status.state === "listening") activePeerTunnel?.startLanDiscovery(status.port || 0);
   }
 });
@@ -1613,6 +1577,7 @@ const speechControl = new ManagerSpeechControl({
 });
 const speechRuntimeControl = new SpeechRuntimeControl({
   rootDir,
+  packageRoot,
   serviceUrl: () => speechServiceUrl()
 });
 const agentStateByGateway = new Map<string, Partial<Record<AgentAdapterType, AgentRuntimeState>>>();
@@ -1978,7 +1943,7 @@ function rabiLinkRelayConfigForMeta(): RabiLinkRelayGlobalConfig {
 async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>): Promise<void> {
   if (!managerShouldAutostart) {
     await Promise.all([
-      personaSyncLanServer.stop(),
+      peerLanServer.stop(),
       rabiLinkRelayRuntime.stop()
     ]);
     return;
@@ -1986,21 +1951,21 @@ async function syncRabiLinkRelayRuntime(onLanReady?: () => void | Promise<void>)
   const globalConfig = rabiGlobalConfig.read();
   const relay = rabiLinkRelayConfigForMeta();
   const lanEnabled = relay.enabled && Boolean(relay.url.trim()) && Boolean(relay.token.trim());
-  if (!lanEnabled) await personaSyncLanServer.stop();
+  if (!lanEnabled) await peerLanServer.stop();
   await rabiLinkRelayRuntime.sync({
     ...relay,
     deviceGuid: globalConfig.rabiGuid,
     deviceName: globalConfig.rabiName || os.hostname(),
     localWebguiUrl: `http://127.0.0.1:${managerPort}`,
-    peerUrls: lanEnabled ? personaSyncLanServer.peerUrls() : [],
+    peerUrls: lanEnabled ? peerLanServer.peerUrls() : [],
     speechProxyEnabled: relay.speechProxyEnabled,
     localSpeechUrl: relay.speechServiceUrl
   });
-  if (lanEnabled && personaSyncLanServer.status().state !== "listening") {
+  if (lanEnabled && peerLanServer.status().state !== "listening") {
     try {
-      await personaSyncLanServer.start();
+      await peerLanServer.start();
     } catch (error) {
-      console.warn(`Persona sync LAN listener unavailable; Relay fallback remains active: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Peer LAN listener unavailable; Relay fallback remains active: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
     await onLanReady?.();
@@ -7650,6 +7615,7 @@ function handleRoleKnowledgeApi(
   resolveRoleDir: (roleId: string) => string = roleDirForApi,
   resolveRoleStorageApplication: () => RoleStorageApplication = currentRoleStorageApplication
 ): boolean {
+  if (handleAllDayRecordingApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response)) return true;
   if (handleMessageEndpointHistoryApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response, { roleDirectory: resolveRoleDir, json: jsonResponse })) return true;
   if (handleKnowledgeSearch(request, pathname, response, {
     service: knowledgeSearchService, roleDirectory: resolveRoleDir,
@@ -8674,7 +8640,7 @@ function metaPayload(): Record<string, unknown> {
     },
     performanceWorkers: managerPerformanceWorkerPool.status(),
     httpLimits: managerHttpLimits,
-    personaSyncLan: personaSyncLanServer.status(),
+    peerLan: peerLanServer.status(),
     computerName: os.hostname()
   };
 }
@@ -9329,18 +9295,9 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       ManagerPluginRequestTracker,
       handleLanguageStyleApi,
       handlePersonaPluginApi,
-      handlePersonaSyncApi,
       languageStyleValidator,
       managerPluginRoutes,
-      personaSyncRouteContext,
-      personaSyncService,
-      planStorageStartup: Object.freeze({
-        snapshot: () => planStorageStartupLifecycle.snapshot(),
-        onReady: (listener: Parameters<PlanStorageStartupLifecycle["onReady"]>[0]) => planStorageStartupLifecycle.onReady(listener)
-      }),
       registerManagerPluginHandlerRoutes,
-      get personaSyncAutoReconciler() { return personaSyncAutoReconciler; },
-      set personaSyncAutoReconciler(value) { personaSyncAutoReconciler = value; },
     }) }),
     Object.freeze({ capability: "host.manager.speech@1", value: Object.freeze({
       ManagerPluginRequestTracker,
@@ -9464,7 +9421,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       ManagerPluginRequestTracker,
       registerManagerPluginHandlerRoutes,
       managerPluginRoutes,
-      personaSyncLanServer,
+      peerLanServer,
       rabiLinkRelayRuntime,
       syncRabiLinkRelayRuntime,
       get managerListenerReady() { return managerListenerReady; },
@@ -9996,6 +9953,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     gatewayDiagnosticsSnapshotService = undefined;
     closeManagerEventClients();
   }
+  managerRuntimeOwner.register("all_day_recording", () => allDayRecording.service.dispose());
   managerRuntimeOwner.register("request_scoped_resources", () => stopManagerResources());
   managerRuntimeOwner.register("manual_trigger_processes", () => manualTriggerProcesses.stopAll());
 

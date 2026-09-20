@@ -914,7 +914,8 @@ function normalizeWorkerCapabilities(value) {
   const items = Array.isArray(value) ? value : String(value || "").split(",");
   return [...new Set(items
     .map((item) => String(item || "").trim().toLowerCase())
-    .filter((item) => /^[a-z][a-z0-9._-]{0,31}$/.test(item)))]
+    .filter((item) => /^[a-z][a-z0-9._-]{0,31}$/.test(item))
+    .filter((item) => item !== "persona-sync" && item !== "persona-sync-plan-package-v1"))]
     .sort((left, right) => left.localeCompare(right));
 }
 
@@ -930,7 +931,7 @@ function workerCanProcessMobileRequests(worker) {
   if (terminalKinds.has(deviceKind)) return false;
   if (pcKinds.has(deviceKind)) return true;
   const capabilities = normalizeWorkerCapabilities(worker?.capabilities);
-  if (capabilities.some((capability) => ["tasks", "webgui", "persona-sync", "speech"].includes(capability))) return true;
+  if (capabilities.some((capability) => ["tasks", "webgui", "speech"].includes(capability))) return true;
   return Boolean(stringValue(worker?.guid));
 }
 
@@ -1007,7 +1008,7 @@ function recordWorkerSeen(appId, deviceId, deviceName, deviceGuid = "", capabili
   }
   writeAppStore(store);
   if (peerChangeReason) {
-    relayEventHub.publish("persona_sync_peer_changed", {
+    relayEventHub.publish("peer_changed", {
       appId,
       data: {
         peerId: worker.id,
@@ -1039,7 +1040,7 @@ function recordWorkerDisconnected(appId, deviceId, deviceGuid = "") {
     workerName: worker.name,
     status: "offline"
   });
-  relayEventHub.publish("persona_sync_peer_changed", {
+  relayEventHub.publish("peer_changed", {
     appId,
     data: {
       peerId: worker.id,
@@ -4986,39 +4987,28 @@ function handlePeerDiscovery(req, url, res, body) {
   });
 }
 
-async function handlePersonaSyncProxy(req, url, res, body) {
-  return handleBoundedPcProxy(req, url, res, body, false);
-}
-
-// Both contracts share the existing worker queue and application isolation.
 // Peer RPC carries an opaque encrypted packet and never accepts a caller URL.
-async function handleBoundedPcProxy(req, url, res, body, peerRpc) {
+async function handlePeerRpcProxy(req, url, res, body) {
   const auth = authorizeRabiLinkRequest(req, url, body);
   if (!auth.ok) return sendRabiLinkAuthError(res, auth);
   const targetDeviceId = stringValue(body?.targetDeviceId);
   const worker = readAppStore().workers.find(item => item.appId === auth.app.id
     && (item.id === targetDeviceId || item.guid === targetDeviceId));
-  if (!worker) return sendJson(res, 404, { code: -1, ok: false, message: `Persona sync peer not found: ${targetDeviceId}` });
-  if (!workerOnline(worker)) return sendJson(res, 503, { code: -1, ok: false, message: `Persona sync peer is offline: ${worker.name || worker.id}` });
-  if (!normalizeWorkerCapabilities(worker.capabilities).includes(peerRpc ? "peer-rpc-v1" : "persona-sync")) {
-    return sendJson(res, 409, { code: -1, ok: false, message: `Peer ${worker.name || worker.id} does not advertise persona-sync.` });
+  if (!worker) return sendJson(res, 404, { code: -1, ok: false, message: `Peer not found: ${targetDeviceId}` });
+  if (!workerOnline(worker)) return sendJson(res, 503, { code: -1, ok: false, message: `Peer is offline: ${worker.name || worker.id}` });
+  if (!normalizeWorkerCapabilities(worker.capabilities).includes("peer-rpc-v1")) {
+    return sendJson(res, 409, { code: -1, ok: false, message: `Peer ${worker.name || worker.id} does not advertise peer-rpc-v1.` });
   }
-  const method = peerRpc ? "POST" : stringValue(body?.method || "GET").toUpperCase();
-  if (!new Set(["GET", "POST"]).has(method)) return sendJson(res, 405, { code: -1, ok: false, message: "Persona sync proxy only supports GET and POST." });
-  const localPath = peerRpc ? "/api/rabilink/peer/receive" : stringValue(body?.path);
-  if (!peerRpc && !/^\/api\/persona-sync\/(?:manifest(?:\?|$)|files\/|merge$)/.test(localPath)) {
-    return sendJson(res, 400, { code: -1, ok: false, message: "Persona sync proxy path is not allowed." });
-  }
-  if (peerRpc && (!body?.packet || body.packet.version !== 1 || Object.keys(body).some(key => !["targetDeviceId", "packet"].includes(key)))) {
+  if (!body?.packet || body.packet.version !== 1 || Object.keys(body).some(key => !["targetDeviceId", "packet"].includes(key))) {
     return sendJson(res, 400, { ok: false, message: "Peer proxy accepts only targetDeviceId and an encrypted packet." });
   }
-  const bodyBase64 = peerRpc ? Buffer.from(JSON.stringify(body.packet)).toString("base64") : stringValue(body?.bodyBase64);
-  if (bodyBase64 && Buffer.byteLength(bodyBase64, "base64") > (peerRpc ? 1_500_000 : 24 * 1024 * 1024)) {
-    return sendJson(res, 413, { code: -1, ok: false, message: "Persona sync proxy body is too large." });
+  const bodyBase64 = Buffer.from(JSON.stringify(body.packet)).toString("base64");
+  if (Buffer.byteLength(bodyBase64, "base64") > 1_500_000) {
+    return sendJson(res, 413, { code: -1, ok: false, message: "Peer RPC proxy body is too large." });
   }
   const now = Date.now();
   const request = {
-    id: `rabilink-${peerRpc ? "peer-rpc" : "persona-sync"}-${now}-${randomUUID().slice(0, 8)}`,
+    id: `rabilink-peer-rpc-${now}-${randomUUID().slice(0, 8)}`,
     status: "queued",
     createdAt: now,
     updatedAt: now,
@@ -5028,18 +5018,17 @@ async function handleBoundedPcProxy(req, url, res, body, peerRpc) {
     appId: auth.app.id,
     appName: auth.app.name || "",
     targetDeviceId: worker.id,
-    method,
-    path: localPath,
+    method: "POST",
+    path: "/api/rabilink/peer/receive",
     headers: {
-      accept: stringValue(body?.accept || "application/json"),
-      ...(method === "POST" ? { "content-type": "application/json; charset=utf-8" } : {})
+      accept: "application/json",
+      "content-type": "application/json; charset=utf-8"
     },
     bodyBase64,
     response: null
   };
   webguiRequests.set(request.id, request);
-  if (peerRpc) writeEvent("peer_rpc_proxy_created", { requestId: request.id, targetDeviceId: worker.id });
-  else writeEvent("persona_sync_proxy_created", webguiRequestForResponse(request));
+  writeEvent("peer_rpc_proxy_created", { requestId: request.id, targetDeviceId: worker.id });
   relayEventHub.publish("webgui_available", {
     appId: request.appId,
     targetDeviceId: request.targetDeviceId,
@@ -5050,7 +5039,7 @@ async function handleBoundedPcProxy(req, url, res, body, peerRpc) {
     return sendJson(res, finished.status === "failed" ? 502 : 504, {
       code: -1,
       ok: false,
-      message: finished.error || "Persona sync peer did not return a response."
+      message: finished.error || "Peer did not return a response."
     });
   }
   const headers = normalizeProxyResponseHeaders(finished.response.headers);
@@ -5735,7 +5724,6 @@ const server = http.createServer(async (req, res) => {
     const webguiWorkerResponse = /^\/worker\/webgui-requests\/[^/]+\/response$/.test(url.pathname);
     const webguiWorkerEvent = url.pathname === "/worker/webgui-events";
     const speechWorkerResponse = /^\/worker\/speech-requests\/[^/]+\/response$/.test(url.pathname);
-    const personaSyncProxy = url.pathname === "/api/rabilink/persona-sync/proxy";
     const peerRpcProxy = url.pathname === "/api/rabilink/peer/proxy";
     const body = req.method === "GET"
       ? {}
@@ -5747,8 +5735,6 @@ const server = http.createServer(async (req, res) => {
             ? { maxBytes: speechWorkerResponseMaxBytes, label: "Speech worker response" }
             : peerRpcProxy
               ? { maxBytes: 1_500_000, label: "Peer RPC proxy" }
-            : personaSyncProxy
-              ? { maxBytes: 32 * 1024 * 1024, label: "Persona sync proxy" }
               : {});
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/token") {
       const claimed = claimDeviceToken(body);
@@ -5799,11 +5785,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/rabilink/peers") {
       return handlePeerDiscovery(req, url, res, body);
     }
-    if (req.method === "POST" && url.pathname === "/api/rabilink/persona-sync/proxy") {
-      return await handlePersonaSyncProxy(req, url, res, body);
-    }
     if (req.method === "POST" && peerRpcProxy) {
-      return await handleBoundedPcProxy(req, url, res, body, true);
+      return await handlePeerRpcProxy(req, url, res, body);
     }
     if (req.method === "POST" && url.pathname === "/api/rabilink/devices/logs") {
       return handleDeviceLogs(req, url, res, body);

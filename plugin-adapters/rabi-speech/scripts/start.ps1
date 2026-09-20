@@ -4,8 +4,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Program versions are immutable; bytecode caches must not enter the manifest tree.
+$env:PYTHONDONTWRITEBYTECODE = "1"
 $root = Split-Path -Parent $PSScriptRoot
-$deps = Join-Path $root ".deps"
+$deps = if ($env:RABISPEECH_DEPS_ROOT) { $env:RABISPEECH_DEPS_ROOT } else { Join-Path $root ".deps" }
 $dataRoot = if ($env:RABISPEECH_DATA_ROOT) {
   $env:RABISPEECH_DATA_ROOT
 } elseif ($env:LOCALAPPDATA) {

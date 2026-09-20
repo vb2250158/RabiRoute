@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rabispeech.playback import PlaybackCoordinator, PlaybackSettingsStore, _apply_volume
+from rabispeech.playback import PlaybackCoordinator, PlaybackSettingsStore, PlaybackUnavailableError, _apply_volume
 
 
 def wav(path: Path) -> Path:
@@ -19,6 +19,23 @@ def wav(path: Path) -> Path:
         output.setframerate(16000)
         output.writeframes(b"\x00\x00" * 160)
     return path
+
+
+@pytest.mark.parametrize("failure, expected", [
+    (PlaybackUnavailableError("所选音频设备已离线，请重新连接设备或切换到本机。"), "所选音频设备已离线，请重新连接设备或切换到本机。"),
+    (RuntimeError("private-path-or-device-detail"), "播放失败，请查看 RabiSpeech 日志。"),
+])
+def test_queue_exposes_actionable_errors_without_raw_internal_details(tmp_path: Path, failure: Exception, expected: str, caplog) -> None:
+    def fail(_path, _volume, _cancel):
+        raise failure
+
+    coordinator = PlaybackCoordinator(tmp_path / "queue", player=fail)
+    coordinator.enqueue(wav(tmp_path / "speech.wav"), provider="test", model="test", voice="default")
+    wait_until(lambda: coordinator.snapshot()["jobs"][0]["status"] == "error")
+    job = coordinator.snapshot()["jobs"][0]
+    assert job["error"] == expected
+    assert job["completed_at"] >= job["started_at"]
+    assert any(record.exc_info and job["id"] in record.getMessage() for record in caplog.records)
 
 
 def wait_until(predicate, timeout: float = 2.0) -> None:

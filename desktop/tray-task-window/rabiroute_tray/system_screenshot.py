@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
-from PIL import ImageGrab
+from .desktop_capture import capture_desktop_pixels
 from PySide6.QtCore import QEvent, QFileSystemWatcher, QObject, QPoint, QRect, QSize, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QContextMenuEvent, QCursor, QFont, QFontMetrics, QBrush, QIcon, QImage, QKeyEvent, QMouseEvent, QPainter, QPalette, QPen, QPixmap, QWheelEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -828,7 +828,7 @@ def capture_desktop_image(screens: list[Any] | None = None) -> QImage:
 def capture_desktop_image_async() -> QImage:
     if sys.platform != "win32":
         raise RuntimeError("系统截图仅支持 Windows。")
-    captured = ImageGrab.grab(all_screens=True)
+    captured = capture_desktop_pixels()
     if captured.mode != "RGBA":
         captured = captured.convert("RGBA")
     image = QImage(captured.tobytes(), captured.width, captured.height, QImage.Format.Format_RGBA8888).copy()

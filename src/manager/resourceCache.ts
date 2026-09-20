@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
+import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
 
 const digest = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const validId = (id: string) => /^[a-f0-9]{64}$/.test(id);
@@ -14,13 +15,25 @@ export class ResourceCache {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return { directory: path.join(this.stateDir, "resource-cache") }; }
   }
   private async atomic(file: string, body: Buffer) {
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    const temporary = file + "." + randomUUID() + ".partial";
+    const audit = (outcome: "started" | "committed" | "failed") => recordDataMutationAudit({
+      group: "resource-cache", event: "resource_file_write", owner: "resource-cache",
+      action: "write", target: { type: "resource-file", id: digest(file) },
+      dataSource: { kind: "file", id: digest(file) }, outcome
+    });
+    audit("started");
     try {
-      const handle = await fs.open(temporary, "wx");
-      try { await handle.writeFile(body); await handle.sync(); } finally { await handle.close(); }
-      await fs.rename(temporary, file);
-    } finally { await fs.rm(temporary, { force: true }); }
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      const temporary = file + "." + randomUUID() + ".partial";
+      try {
+        const handle = await fs.open(temporary, "wx");
+        try { await handle.writeFile(body); await handle.sync(); } finally { await handle.close(); }
+        await fs.rename(temporary, file);
+      } finally { await fs.rm(temporary, { force: true }); }
+      audit("committed");
+    } catch (error) {
+      audit("failed");
+      throw error;
+    }
   }
   async configure(directory: unknown) {
     if (typeof directory !== "string" || !path.isAbsolute(directory) || directory.length > 2048) throw new Error("请输入电脑上的绝对目录路径");
@@ -53,7 +66,7 @@ export class ResourceCache {
   }
 }
 
-export function resourceCacheHandler(store: ResourceCache, options: { local(request: http.IncomingMessage): boolean; tunnelKey(): string; readOnly(): boolean }) {
+export function resourceCacheHandler(store: ResourceCache, options: { local(request: http.IncomingMessage): boolean; tunnelKey(): string; readOnly(): boolean; receiveRecording?(owner: string, body: unknown): Promise<void> }) {
   return (request: http.IncomingMessage, url: URL, response: http.ServerResponse): boolean => {
     if (!url.pathname.startsWith("/api/resource-cache/")) return false;
     const json = (status: number, data: unknown) => { response.writeHead(status,{ "content-type":"application/json" }); response.end(JSON.stringify(data)); };
@@ -63,9 +76,10 @@ export function resourceCacheHandler(store: ResourceCache, options: { local(requ
       if (request.method !== "GET" && options.readOnly()) { json(403,{ message:"Read only" }); return; }
       if (settings && request.method === "GET") { json(200,await store.settings()); return; }
       const match = /^\/api\/resource-cache\/data\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
-      if (!settings && !match) { json(404,{ message:"Not found" }); return; }
+      const recording = url.pathname === "/api/resource-cache/data/recording-events" && !!options.receiveRecording;
+      if (!settings && !match && !recording) { json(404,{ message:"Not found" }); return; }
       const owner = String(request.headers["x-rabilink-resource-owner"] || "");
-      if (!settings && request.method === "GET") {
+      if (!settings && !recording && request.method === "GET") {
         const body = await store.read(owner,match![1]);
         response.writeHead(200,{ "content-type":"application/octet-stream", "content-length":body.length }); response.end(body); return;
       }
@@ -73,6 +87,7 @@ export function resourceCacheHandler(store: ResourceCache, options: { local(requ
       const chunks: Buffer[] = []; let size=0;
       for await (const chunk of request) { size += chunk.length; if(size > (settings ? 8192 : 1024*1024)) throw new Error("Request too large"); chunks.push(Buffer.from(chunk)); }
       const body = Buffer.concat(chunks);
+      if (recording) { await options.receiveRecording!(owner, JSON.parse(body.toString())); json(200, { durable: true }); return; }
       json(200,settings ? await store.configure(JSON.parse(body.toString()).directory) : await store.put(owner,match![1],body));
     })().catch(error => { if (!response.headersSent) json((error as NodeJS.ErrnoException).code === "ENOENT" ? 404 : 400,{ message: error instanceof Error ? error.message : String(error) }); else response.destroy(); });
     return true;

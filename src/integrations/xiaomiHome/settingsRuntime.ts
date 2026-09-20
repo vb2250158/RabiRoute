@@ -11,6 +11,7 @@ import type {
 } from "../../shared/xiaomiHomeSettingsContract.js";
 import { atomicWriteFileSync, withFileLockSync } from "../../shared/filePersistence.js";
 import { XiaomiHomeArtifactAccess } from "./artifactAccess.js";
+import { HomeAssistantDeployment } from "./homeAssistantDeployment.js";
 import { XiaomiHomeArtifactStore } from "./artifactStore.js";
 import { XiaomiHomeClipCaptureWorker } from "./clipCapture.js";
 import { XiaomiHomeEventMonitor } from "./eventMonitor.js";
@@ -157,6 +158,7 @@ export class XiaomiHomeSettingsStore {
 }
 
 export class XiaomiHomeRuntimeController {
+  readonly deployment: HomeAssistantDeployment;
   readonly artifacts: XiaomiHomeArtifactStore;
   private snapshotValue: XiaomiHomeSettingsSnapshot;
   private clientValue: XiaomiHomeManagerApiClient;
@@ -175,6 +177,7 @@ export class XiaomiHomeRuntimeController {
     this.artifacts = artifacts;
     this.credentialStore = credentialStore;
     this.snapshotValue = store.read();
+    this.deployment = new HomeAssistantDeployment(artifacts.runtimeDir, () => this.snapshotValue.settings.baseUrl);
     const runtime = this.createRuntime(this.snapshotValue.settings);
     this.clientValue = runtime.client;
     this.accessValue = runtime.access;
@@ -187,12 +190,14 @@ export class XiaomiHomeRuntimeController {
 
   start(): void {
     this.started = true;
+    this.deployment.start();
     this.monitorValue.start();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.started = false;
     this.monitorValue.stop();
+    await this.deployment.stop();
   }
 
   settings(): XiaomiHomeSettingsSnapshot {

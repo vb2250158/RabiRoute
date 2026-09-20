@@ -6,6 +6,8 @@ English | <a href="./rabi-agent-interfaces.md">简体中文</a>
 
 # Rabi Interfaces for Handlers
 
+For persona computer/mobile timelines, source selection and capture controls, see [Persona all-day recording API](persona-all-day-recording_en.md#local-api). Reading events does not start capture; an empty result does not prove no activity throughout the day.
+
 > Status: current Agent-interface guide. The Remote Agent device path remains experimental; other interfaces have been checked against the current Manager API and tests.
 
 These are local RabiRoute interfaces used by a handler after it receives an `AgentPacket`. They let the handler return a normal reply, work with Codex threads, maintain role plans and memories, read role skills, and optionally delegate to a connected Remote Agent device.

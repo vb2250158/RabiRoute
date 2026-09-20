@@ -21,10 +21,7 @@ function productionTypeScriptFiles(directory: string): string[] {
 
 test("online plan storage paths do not depend on legacy migration or reconciliation", () => {
   for (const fileName of [
-    "personaSync.ts",
-    "personaSyncCoordinator.ts",
-    "personaSyncManifestIndex.ts",
-    "personaSyncPlanPackage.ts",
+    "planStoragePackageRecovery.ts",
     "personaPlanStorage.ts"
   ]) {
     const content = source(fileName);
@@ -97,12 +94,12 @@ test("Manager publishes its fenced READY identity before starting the plan-stora
   assert.ok(recoveryChildStarted > readyPublished, "the plan-storage child must start only after fenced READY");
   assert.doesNotMatch(startup, /await\s+planStorageStartupLifecycle\.start\s*\(/);
   assert.doesNotMatch(controlPlane, /[A-Za-z0-9_]*BeforeReady[A-Za-z0-9_]*/);
-  assert.doesNotMatch(controlPlane, /\bmigrateRolePlanLayout\b|runPlanStorageStartupGate|recoverPlanLifecycleTransitions|recoverPlanFeedbackStoreTransactions|recoverPersonaSyncPlanPackageTransactions/);
+  assert.doesNotMatch(controlPlane, /\bmigrateRolePlanLayout\b|runPlanStorageStartupGate|recoverPlanLifecycleTransitions|recoverPlanFeedbackStoreTransactions|recoverStoredPlanPackages/);
 
   const child = source(path.join("manager", "planStorageStartupChild.ts"));
   assert.match(child, /\bmigrateRolePlanLayoutAtStartup\b/);
   assert.match(child, /runPlanStorageStartupGate/);
   assert.match(child, /recoverPlanLifecycleTransitions/);
   assert.match(child, /recoverPlanFeedbackStoreTransactions/);
-  assert.match(child, /recoverPersonaSyncPlanPackageTransactions/);
+  assert.match(child, /recoverStoredPlanPackages/);
 });

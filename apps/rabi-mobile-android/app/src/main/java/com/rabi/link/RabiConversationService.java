@@ -309,6 +309,7 @@ public final class RabiConversationService extends Service {
     /** Queue recovery can inspect many files. It must never run on Android's main thread. */
     private void initializeBackend() {
         speechArchive = RabiMobileSpeechArchive.tryCreate(this);
+        com.rabi.link.modules.rokid.RabiRecordingEventSync.wake(this);
         if (speechArchive != null) try { speechArchive.cleanup(); }
         catch (Throwable ignored) { }
         backend = new RabiGlassPcBackend(this, new RabiGlassPcBackend.Listener() {

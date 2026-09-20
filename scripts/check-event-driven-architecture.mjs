@@ -57,11 +57,6 @@ const checks = [
     files: ["plugin-adapters/rabi-speech/rabispeech/app.py"],
     pattern: /_watch_rabilink_audio_streams|RABILINK_AUDIO_WATCHDOG_INTERVAL/,
     message: "RabiLink PCM expiry must rearm from start/chunk events instead of polling stream age."
-  },
-  {
-    files: ["src/personaSync.ts"],
-    pattern: /function\s+walkFiles\s*\(/,
-    message: "Persona sync manifest queries must read the event-maintained index instead of rescanning and rehashing the persona tree."
   }
 ];
 
@@ -96,11 +91,6 @@ for (const check of checks) {
     const text = fs.readFileSync(file, "utf8");
     if (check.pattern.test(text)) failures.push(`${path.relative(root, file)}: ${check.message}`);
   }
-}
-
-const personaSyncSource = fs.readFileSync(path.join(root, "src/personaSync.ts"), "utf8");
-if (!/new\s+PersonaSyncManifestIndex\s*\(/.test(personaSyncSource)) {
-  failures.push("src/personaSync.ts: Persona sync manifest queries must be owned by PersonaSyncManifestIndex.");
 }
 
 for (const file of runtimeRoots.flatMap(filesUnder).filter(isRuntimeSource)) {

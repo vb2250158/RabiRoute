@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from pydantic import BaseModel, Field
 
 from .audio import AudioTranscoder, subtitle_text
+from .all_day_capture import register_all_day_capture
 from .audio_stream_events import AudioStreamEventStore
 from .config import Settings, load_settings
 from .contracts import SpeechSynthesisRequest, TranscriptionRequest, TranscriptionResult
@@ -531,6 +532,8 @@ def create_app(
         description="TTS and ASR provider gateway. Local providers are the default; explicitly configured API providers are optional.",
         lifespan=lifespan,
     )
+
+    register_all_day_capture(api, microphone, _require_loopback)
 
     @api.get("/health")
     async def health() -> dict[str, object]:

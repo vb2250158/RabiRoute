@@ -10,6 +10,16 @@ RabiRoute's single `xiaomiHome` message endpoint. It uses the Home Assistant RES
 
 ## Configuration and authorization
 
+Connection failures and authorization guidance appear in the connection card. Event monitoring status and its check action sit beside the monitoring switch; disabled device control and recording show “Off”. The Xiaomi card keeps only its overall status at the top, without a duplicate environment/dependency alert list. Unsaved switch changes are marked separately rather than presented as active settings.
+
+### Home Assistant installation and startup
+
+The connection card includes an installation and startup panel. Select a local Docker container and enter its name to inspect the official image, container location, and actual `/config` mount source. An unavailable engine produces an unknown installation status; only an absent named container is reported as not found. The installation button opens the official guide; it does not download or create containers. Select external service for a separately managed VM or remote installation.
+
+Saving with autostart enabled runs a startup check immediately and repeats it when the Xiaomi Home plugin starts. On Windows, startup attempts the official `docker desktop start` command if the engine is unavailable. Only official Home Assistant images with a local published `8123/tcp` endpoint matching the saved URL can be started, using the inspected immutable container ID. Operations are serialized and reuse ready containers. Readiness waits up to 60 seconds; failures remain visible and can be retried. Closing Rabi cancels waiting but leaves Home Assistant and Docker running for other consumers.
+
+Local `home-assistant-deployment.json` owns the deployment binding and autostart setting, separately from credentials and Route policy. `GET/PUT /api/agent/xiaomi-home/deployment` and `POST /api/agent/xiaomi-home/deployment/start` are loopback-only. Mutations require the current Manager lifecycle fence and deployment revision. Startup is an idempotent desired-state operation. Login and token links become available only when the saved endpoint is ready. Authorize the Xiaomi account in the [official Xiaomi integration](https://github.com/XiaoMi/ha_xiaomi_home).
+
 In WebGUI, add **Xiaomi Home** to the current Route under **Message Adapters**. Its connection card submits the Home Assistant address and long-lived access token; its policy card controls events, device actions, and recordings. Before the first save, settings come from the plugin Profile. Afterward, local `settings.json` is the policy-settings source of truth. Manager uses revision fencing and atomic writes to hot-load the client, event monitor, and capture worker.
 
 A protected local credential store is the sole login source: current-user DPAPI on Windows, or an access-restricted local key plus AES-256-GCM elsewhere. Route configuration, settings, logs, and API responses never persist or echo plaintext tokens. Authentication requests require the current Manager lifecycle fence and a stable `Idempotency-Key`; the address and candidate token are verified together before they are committed. Recording artifacts retain a separate read credential:

@@ -66,6 +66,8 @@ export const activate = definePlugin({
           [tracker.wrap(handler)],
           [
             { routeId: "health", kind: "exact", path: "/api/agent/xiaomi-home/health", methods: ["GET"] },
+            { routeId: "deployment", kind: "exact", path: "/api/agent/xiaomi-home/deployment", methods: ["GET", "PUT"] },
+            { routeId: "deployment-start", kind: "exact", path: "/api/agent/xiaomi-home/deployment/start", methods: ["POST"] },
             { routeId: "auth", kind: "exact", path: "/api/agent/xiaomi-home/auth", methods: ["GET", "POST", "DELETE"] },
             { routeId: "auth-refresh", kind: "exact", path: "/api/agent/xiaomi-home/auth/refresh", methods: ["POST"] },
             { routeId: "settings", kind: "exact", path: "/api/agent/xiaomi-home/settings", methods: ["GET", "PUT"] },
@@ -80,7 +82,7 @@ export const activate = definePlugin({
         activationStage = "runtime start";
         xiaomiHomeRuntime.start();
         return async () => {
-          xiaomiHomeRuntime.stop();
+          await xiaomiHomeRuntime.stop();
           unregister();
           await tracker.stop();
         };

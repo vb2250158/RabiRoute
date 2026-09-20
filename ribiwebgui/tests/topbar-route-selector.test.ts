@@ -5,10 +5,10 @@ import test from "node:test";
 import { showsRouteSwitcher } from "../src/routeScopedNavigation";
 
 test("route selector appears only on adapters, persona and knowledge pages", () => {
-  for (const route of ["/routes", "/routes/main", "/routes/main/adapters", "/persona", "/persona/main", "/routes/main/persona", "/routes/main/persona/document", "/routes/main/persona/sync", "/knowledge", "/routes/main/knowledge"]) {
+  for (const route of ["/routes", "/routes/main", "/routes/main/adapters", "/persona", "/persona/main", "/routes/main/persona", "/routes/main/persona/document", "/knowledge", "/routes/main/knowledge"]) {
     assert.equal(showsRouteSwitcher(route), true, route);
   }
-  for (const route of ["/overview", "/routes/main/overview", "/speech", "/routes/main/speech", "/runtime", "/routes/main/runtime", "/performance", "/settings", "/video", "/rabilink", "/lan-agents", "/docs", "/routes/main/unknown"]) {
+  for (const route of ["/overview", "/routes/main/overview", "/speech", "/routes/main/speech", "/runtime", "/routes/main/runtime", "/performance", "/settings", "/video", "/rabilink", "/lan-agents", "/docs", "/routes/main/unknown", "/routes/main/persona/sync"]) {
     assert.equal(showsRouteSwitcher(route), false, route);
   }
 });

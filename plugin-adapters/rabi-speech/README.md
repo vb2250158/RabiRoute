@@ -42,6 +42,8 @@ https://<relay>/api/rabilink/speech/v1/audio/transcriptions
 
 ## API
 
+播放队列会保留失败状态和恢复提示。所选远端设备离线或在播放期间断开时，不会自动改用本机扬声器；请重新连接设备或明确切换到本机。语音页面显示真实输出设备及最近一次播放失败，提交到队列不代表播放完成。未知播放异常的详细堆栈记录在 `rabispeech.playback` 日志中。
+
 常见兼容面：
 
 ```text

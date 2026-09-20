@@ -9,8 +9,6 @@ import { translateText } from "../src/i18n/index";
 test("translates exact interface copy and preserves surrounding whitespace", () => {
   assert.equal(translateText("人格配置", "en"), "Persona configuration");
   assert.equal(translateText("设置", "en"), "Settings");
-  assert.equal(translateText("人格文件变化", "en"), "Persona file changes");
-  assert.equal(translateText("拉取并同步", "en"), "Pull and synchronize");
   assert.equal(translateText("语音服务", "en"), "Speech service");
   assert.equal(translateText("划词朗读", "en"), "Read selected text aloud");
   assert.equal(translateText("RabiRoute 桌面功能", "en"), "RabiRoute Desktop features");
@@ -67,15 +65,6 @@ test("translates speech delivery and persona configuration copy", () => {
   assert.equal(translateText("语音唤醒关键词", "en"), "Speech wake-up keywords");
   assert.equal(translateText("最近消息上下文", "en"), "Recent message context");
   assert.equal(translateText("语音消息端账号归类", "en"), "Voice endpoint account classification");
-  assert.equal(translateText("多电脑人格同步", "en"), "Multi-PC persona sync");
-  assert.equal(translateText("同步当前人格", "en"), "Sync current persona");
-  assert.equal(translateText("确认文件冲突", "en"), "Confirm file conflict");
-  assert.equal(translateText("自动对账已完成", "en"), "Automatic reconciliation complete");
-  assert.equal(translateText("12 个变化 · 2 个冲突", "en"), "12 changes · 2 conflicts");
-  assert.equal(
-    translateText("自动对账保留了待同步标记，将在连接事件或有界重试时继续：temporary failure", "en"),
-    "Automatic reconciliation retained its pending marker and will continue on a connection event or bounded retry: temporary failure"
-  );
   assert.equal(translateText("这是我", "en"), "This is me");
   assert.equal(translateText("清除判断", "en"), "Clear decision");
   assert.equal(translateText("12 个分段", "en"), "12 segments");

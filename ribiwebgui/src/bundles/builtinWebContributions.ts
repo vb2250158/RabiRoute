@@ -10,7 +10,6 @@ import {
   routeScopedKnowledgePath,
   routeScopedOverviewPath,
   routeScopedPersonaPath,
-  routeScopedPersonaSyncPath,
   routeScopedRuntimePath,
   routeScopedSpeechPath
 } from "../routeScopedNavigation";
@@ -106,12 +105,6 @@ export function activatePersona(api: BaseWebBundleApi): readonly Dispose[] {
         { path: "/routes/:id/plan/:planId", title: "计划" }
       ],
       navigation: { resolvePath: routeScopedKnowledgePath, allowedSlots: ["route-primary"], allowedIcons: ["mdi-notebook-check-outline"] }
-    },
-    {
-      routeId: "route.persona-sync", rendererId: "builtin.web-page.persona-sync.v1",
-      loader: () => import("../pages/PersonaSyncPage.vue"),
-      paths: [{ path: "/routes/:id/persona/sync", title: "多电脑人格同步" }],
-      navigation: { resolvePath: routeScopedPersonaSyncPath, allowedSlots: ["persona-secondary"], allowedIcons: ["mdi-folder-sync-outline"] }
     }
   ]);
 }

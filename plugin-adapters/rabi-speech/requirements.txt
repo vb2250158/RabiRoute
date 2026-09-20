@@ -6,6 +6,8 @@ faster-whisper==1.2.1
 numpy>=1.24,<2
 soundfile>=0.12,<1
 sounddevice>=0.5,<1
+Pillow>=10,<12
+opencv-python-headless>=4.8,<4.12
 websockets>=13,<17
 pycaw==20251023; platform_system == "Windows"
 onnxruntime>=1.16,<2

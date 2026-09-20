@@ -286,7 +286,6 @@ test("theme-sensitive tabs and deferred knowledge states use shared surface toke
 
 test("dark identity cards and disabled controls keep readable theme colors", () => {
   const styles = fs.readFileSync(path.join(root, "src", "styles.css"), "utf8");
-  const personaSync = fs.readFileSync(path.join(root, "src", "components", "PersonaSyncCard.vue"), "utf8");
   const performance = fs.readFileSync(path.join(root, "src", "pages", "PerformancePage.vue"), "utf8");
 
   assert.match(styles, /html\[data-rabiroute-theme="dark"\] :is\([\s\S]*\.identity-habit-card/);
@@ -304,7 +303,5 @@ test("dark identity cards and disabled controls keep readable theme colors", () 
   );
   assert.match(styles, /\.knowledge-plan-list-filter-options label\.disabled\s*\{[^}]*color:\s*var\(--rr-muted\)[^}]*opacity:\s*1/s);
   assert.match(styles, /:is\([\s\S]*\.v-field-label,[\s\S]*\.v-messages,[\s\S]*\.v-messages__message[\s\S]*\)\s*\{[^}]*color:\s*var\(--rr-muted\)[^}]*opacity:\s*1/s);
-  assert.doesNotMatch(personaSync, /\.sync-peer-choice\.disabled\s*\{[^}]*opacity:\s*\.(?:[0-9]+)/s);
-  assert.match(personaSync, /\.sync-peer-choice\.disabled\s*\{[^}]*background:\s*var\(--rr-subtle\)[^}]*opacity:\s*1/s);
   assert.match(performance, /\.performance-kicker\s*\{\s*color:\s*#b8f5f3/);
 });

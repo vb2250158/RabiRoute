@@ -45,7 +45,7 @@ PC 在事件连接和 worker 请求中明确上报 `deviceKind=pc`；手机和�
 
 ## 传输与生命周期
 
-设备发现与人格同步复用同一模块。调用方每次从 Relay 获取当前设备地址，先用加密 `system.describe` 校验目标和 generation，再发送绑定该 generation 的请求。请求与回复统一使用应用密钥派生的 AES-256-GCM 加密，LAN 不传应用 token；Relay 只转发密文，固定到 `/api/rabilink/peer/receive`，不能由调用者指定 URL。
+设备发现由 RabiLink 共用模块提供，不依赖人格数据同步。调用方每次从 Relay 获取当前设备地址，先用加密 `system.describe` 校验目标和 generation，再发送绑定该 generation 的请求。请求与回复统一使用应用密钥派生的 AES-256-GCM 加密，LAN 不传应用 token；Relay 只转发密文，固定到 `/api/rabilink/peer/receive`，不能由调用者指定 URL。
 
 先尝试最多四个登记的私有 IPv4 地址，每个发现请求最多两秒。LAN 不可用时，经 Relay 交换加密 SDP，用现有 werift 实现建立一次 WebRTC DataChannel；STUN 只帮助发现地址，没有 TURN。一次直连尝试最多十二秒，单连接只完成一次调用，最多同时八条连接。连接失败后只读请求可使用 Relay，业务拒绝不会被改成成功。请求有效期最多两分钟，明文请求或结果最多 1 MiB，传输包有独立大小限制。
 
@@ -55,6 +55,6 @@ Manager RabiLink 插件拥有调用入口和 WebRTC 连接；停用时撤销路�
 
 ## 现有功能的兼容边界
 
-人格同步的设备发现已迁入共用模块。它原有的 LAN 文件传输、合并和 `/persona-sync/proxy` 继续为现有版本及写入合同服务；统一只读 RPC 不代替同步写入。退出条件是写入协议完成持久化去重及双 PC 验收、所有受支持 PC 已升级，届时把旧入口改成转换层并移除内部调用。视频仍保留独立通道和“禁止服务器承载视频字节”的带宽合同。
+人格数据同步功能已从源码移除：不再提供 LAN 同步文件传输、合并或 `/persona-sync/proxy`。跨电脑访问继续通过 RabiLink 在目标电脑读取数据，不创建同步副本；只读 RPC 不因此获得写入权限。已有的人格、计划、记忆和历史冲突证据不删除。视频仍保留独立通道和“禁止服务器承载视频字节”的带宽合同。
 
-验证入口：`src/rabiPeer.test.ts`、`scripts/rabilink-relay-peers.test.mjs`，以及现有 Relay runtime、persona LAN 与同步 Coordinator 回归。自动化传输成功不代替远程 Relay 部署或公网验收。
+验证入口：`src/rabiPeer.test.ts`、`scripts/rabilink-relay-peers.test.mjs`，以及 Relay runtime 与共用 peer LAN 通道回归。源码变更和自动化传输成功不代替本机受管部署、远程 Relay 升级或真实双 PC 验收。

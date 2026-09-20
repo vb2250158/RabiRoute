@@ -10,6 +10,8 @@
 
 ## 先看这里
 
+- [人格全天记录](persona-all-day-recording.md) — **新增实现**。按日期查看电脑与已选择手机的时间轴和事件，明确采集来源、暂停状态和记录缺口。
+
 - [RibiWebGUI 使用手册](user-guide/README.md) — **现行指南**。第一次使用时从这里开始，完成一条真实投递，并学会看状态、改规则和处理常见失败。
 - [快速上手](getting-started.md) — **现行指南**。完成安装，启动 Manager，并确认浏览器能打开控制台。
 - [界面与状态](user-guide/interface-and-status.md) — **现行指南**。看懂当前 Route、Manager 连接、未保存修改、运行状态，以及设置页的截图、滑词菜单和登录启动。
@@ -42,7 +44,7 @@
 - [标准 Agent 端接入需求](agent-adapter-standard-requirements.md) — **现行指南**。发现、认证、任务、幂等创建、投递、结果、工具、生命周期、UI、安全和验收要求。
 - [Codex Desktop Agent 接入与验收合同](codex-desktop-agent-acceptance.md) — **当前事实**。稳定 ID、按需扫描、自动初始化、Desktop 唯一 owner 和元数据 bootstrap 安全门。
 - [Rabi Codex Context 插件](rabi-codex-context-plugin.md) — **统一 Manager 版本**。Hook 只转发真实 Codex session 事件并注入 Rabi PC 返回的统一人格、计划、记忆与技能上下文。
-- [多电脑人格数据同步](persona-data-sync.md) — **实验支持**。同一 RabiLink 应用下的 PC 通过局域网直连优先、Relay 受限中转兜底；后端按文件/连接事件自动补账，人格页可手动同步、预览证据和处理基础冲突。
+- [人格数据同步退役说明](persona-data-sync.md) — **已退役**。不再提供自动/手动同步或同步 API；改用现有 RabiLink 远端人格、Agent 与数据访问，不复制数据，保留历史资料。
 
 ## 维护开发：架构、构建与诊断
 

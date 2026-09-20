@@ -102,7 +102,7 @@ test("Xiaomi Home plugin registers exact and prefix routes with the Manager cont
     slot: "xiaomiHome",
     rendererId: "builtin.xiaomi-home-auth.v1"
   }]);
-  assert.equal(snapshot[0]?.routeCount, 10);
+  assert.equal(snapshot[0]?.routeCount, 12);
   assert.deepEqual(
     snapshot[0]?.routes
       .filter(route => route.match.kind === "prefix")

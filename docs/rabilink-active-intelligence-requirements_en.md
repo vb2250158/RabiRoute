@@ -57,7 +57,7 @@ It must not reread ledgers or query coverage on an interval to discover changes.
 9. Photos and short videos are reliable message attachments. The first release does not claim live video or 24-hour capture.
 10. High-risk external actions still pass through the RabiRoute action gate.
 11. The PC maintains versioned current-user-state and scenario snapshots. The Agent combines them with persona and user settings to choose no interruption, preparation, prompting, recommendation, or action.
-12. Each persona maintains an inspectable, correctable, deletable, and synchronized user model that separates trait hypotheses, learned preferences, and current psychological state.
+12. Each persona maintains an inspectable, correctable, and deletable user model that separates trait hypotheses, learned preferences, and current psychological state.
 13. The Companion App exposes one persisted `PAUSED / PHONE / GLASSES` mode state. A transition releases the old capture path before enabling the new one, and glasses mode remains paused with a visible reason until a physical glasses connection exists.
 14. A user may submit an explicit proactivity preference, but the App and Relay carry it only as an observation and message metadata. Final intervention remains a PC-context, Route-action-gate, and target-Agent decision.
 15. Every group message enters a recoverable processing record. “No group reply is needed” does not replace plan, memory, and project-fact review.
@@ -138,7 +138,7 @@ The reminder targets only recall items without a final callback. It must not per
 | Microphone/playback state and minimal HUD state | Glasses app |
 | Model, tools, sandbox, approvals, and active turn | Bound PC Agent runtime |
 | Current user state and scenario snapshots | PC active-intelligence context layer; rebuildable from device events and conversation evidence |
-| Stable trait hypotheses and learned preferences | Target persona's user-profile domain, derived from append-only evidence and corrections and synchronized with the persona |
+| Stable trait hypotheses and learned preferences | Target persona's user-profile domain, derived from append-only evidence and corrections; access the target persona through RabiLink instead of replicating it |
 | Agent personality, tone, and proactivity tendency | Persona configuration, separate from the individual user model |
 | Intervention intensity and presentation | Target Agent persona combining user state, scenario, user model, explicit instruction, and risk |
 
@@ -307,7 +307,9 @@ Phone-private text, control, media, receipt, and downlink queues share fsync plu
 8. Wire physical-device video-file capture; assess live video only after reliable file messages.
 9. On an image-capable endpoint, verify one proactive mixed text-image message whose image comes from an authorized root or authenticated attachment, whose text identifies the focus, and whose platform readback confirms real delivery. On a speech-only endpoint, verify that the same conclusion degrades to speech while the companion surface retains the image.
 
-## Current completion audit (2026-07-24)
+## Historical completion audit (2026-07-24)
+
+The table preserves facts about that version, not current synchronization capabilities or acceptance requirements. Persona data synchronization, including automatic/manual synchronization, merges, and synchronization APIs, is now retired rather than switched off. RabiLink remote persona access, RPC, and tunnels remain, as do all existing data and historical evidence. See [retirement](persona-data-sync_en.md).
 
 | Requirement | Current evidence | Status |
 | --- | --- | --- |
@@ -326,16 +328,15 @@ Phone-private text, control, media, receipt, and downlink queues share fsync plu
 | Multi-PC persona synchronization | Same-token discovery, LAN-first, Relay fallback, JSONL union, ordinary-file fast-forward/deletion/conflict/resolution publication all have real HTTP and Relay-child-process tests | Automation passes; two physical PCs and long-run acceptance remain |
 | User-state and scenario recognition | The multidimensional state, evidence envelope, scenario hierarchy, and state-plus-scenario-plus-persona intervention contract are defined | Design complete; unified state service, scenario engine, and physical-scenario acceptance remain |
 
-Therefore neither buildable APKs nor a runnable model are presented as physical-environment completion. Remaining evidence is a private real-speaker threshold report, two physical PCs exercising disconnect/conflict/endurance, and phone/glasses weak-network PCM, process-reclaim, and real playback acceptance.
+Therefore neither buildable APKs nor a runnable model are presented as physical-environment completion. Remaining evidence is a private real-speaker threshold report and phone/glasses weak-network PCM, process-reclaim, and real playback acceptance. Two-PC synchronization is no longer a current acceptance requirement; remote access still requires acceptance under its own RabiLink contract.
 
 ## Unified physical-environment acceptance status
 
-`npm run check:active-intelligence:physical -- [options]` is the fail-closed, one-shot evidence aggregator. It starts no model, Manager, phone, or glasses test, never polls a device, and never treats green automation as physical completion. By default it reads only narrow Git-ignored locations for the latest persona-sync, Android soak, and Rokid summaries; the formal speaker report must be supplied explicitly through `--speaker-report <json>`. The aggregate contains evidence SHA-256 values, times, check results, and `missing / partial / passed / stale / invalid` states only. It omits tokens, message bodies, persona names, device serials, host names, and private paths. Any incomplete domain returns exit code `2` by default; `--allow-incomplete` is an explicit report-only mode.
+`npm run check:active-intelligence:physical -- [options]` is the fail-closed, one-shot evidence aggregator. It starts no model, Manager, phone, or glasses test, never polls a device, and never treats green automation as physical completion. By default it reads only narrow Git-ignored locations for the latest Android soak and Rokid summaries; the formal speaker report must be supplied explicitly through `--speaker-report <json>`. The aggregate contains evidence SHA-256 values, times, check results, and `missing / partial / passed / stale / invalid` states only. It omits tokens, message bodies, persona names, device serials, host names, and private paths. Any incomplete domain returns exit code `2` by default; `--allow-incomplete` is an explicit report-only mode.
 
-All four domains must pass independently:
+All three current domains must pass independently (removing synchronization does not weaken any other gate):
 
 - `voiceprint`: the private dataset must be `real_person_private`, formally eligible, pass the complete policy and every target engine, and match the dataset hash in the report. Synthetic TTS cannot satisfy formal evidence.
-- `personaSync`: schema-v2 physical synchronization evidence must combine `syncPassed`, explicit confirmation of two distinct physical hosts, and `formalAcceptanceEligible`; operator evidence must separately confirm LAN, Relay fallback, disconnect recovery, conflict resolution, and endurance. A successful functional sync cannot impersonate formal physical evidence.
 - `android`: a real-device soak must run for at least 23.5 hours with increasing PCM, plus operator confirmation of offline recovery, process-reclaim recovery, boot recovery, and audible phone playback.
 - `rokid`: the real-device script must actually request and receive TTS and non-empty ASR evidence, plus operator confirmation of continuous PCM, touchpad behavior, audible playback, and connection recovery.
 
@@ -343,10 +344,12 @@ Physical facts that require human observation go in the local ignored file `outp
 
 ```powershell
 npm run record:active-intelligence:physical -- --list
-npm run record:active-intelligence:physical -- --confirm personaSyncLan
-npm run record:active-intelligence:physical -- --revoke personaSyncLan
+npm run record:active-intelligence:physical -- --confirm androidPhonePlayback
+npm run record:active-intelligence:physical -- --revoke androidPhonePlayback
 npm run record:active-intelligence:physical -- --reset
 ```
+
+An observation containing legacy `personaSync*` fields is rejected by exact-field validation; fields are not silently removed and the report is not treated as passing. Use `--reset` to archive the old file and generate the current shape, then record actual observations individually. Retain the archive rather than rewriting historical evidence. Source changes do not establish physical acceptance.
 
 Every `--confirm` must explicitly name an allowlisted check ID. The command starts no test, polls no device, and offers no confirm-all shortcut. It copies an existing file into the sibling `archive/` directory before atomically updating the current file. The first run generates random environment evidence and stores only its SHA-256; later updates reuse that hash. Host names, device serials, accounts, notes, and free text are never stored. The current file shape is:
 
@@ -358,12 +361,6 @@ Every `--confirm` must explicitly name an allowlisted check ID. The command star
   "operatorConfirmed": true,
   "environmentIdHash": "<64 lowercase hex characters>",
   "checks": {
-    "personaSyncDistinctPhysicalHosts": false,
-    "personaSyncLan": false,
-    "personaSyncRelayFallback": false,
-    "personaSyncDisconnectRecovery": false,
-    "personaSyncConflictResolution": false,
-    "personaSyncLongRun": false,
     "androidOfflineRecovery": false,
     "androidProcessReclaimRecovery": false,
     "androidBootRecovery": false,

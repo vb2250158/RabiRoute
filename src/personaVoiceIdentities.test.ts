@@ -11,7 +11,6 @@ import {
   resolvePersonaVoiceIdentities,
   updatePersonaVoiceIdentity
 } from "./personaVoiceIdentities.js";
-import { PersonaSyncService } from "./personaSync.js";
 import { listPersonaVoiceTranscriptViews } from "./personaVoiceTranscriptView.js";
 
 test("persona voice identities are scoped by processing host and remain merge-friendly JSONL", () => {
@@ -182,14 +181,8 @@ test("persona voice identities preserve concurrent PC branches until the persona
     aliases: ["客人"]
   });
 
-  const syncA = new PersonaSyncService(() => rolesA, path.join(root, "pc-a", "sync"));
-  const remote = fs.readFileSync(personaVoiceIdentitiesPath(roleB));
-  assert.equal(syncA.merge({
-    roleId: "Rabi",
-    path: "voice/voice-identities.jsonl",
-    contentBase64: remote.toString("base64"),
-    peerId: "pc-b"
-  }).status, "merged");
+  // Preserve regression coverage for branches already present in historical JSONL.
+  fs.appendFileSync(personaVoiceIdentitiesPath(roleA), fs.readFileSync(personaVoiceIdentitiesPath(roleB)));
 
   const conflicted = findPersonaVoiceIdentity(roleA, "host-audio", "cluster-user");
   assert.equal(conflicted?.conflicted, true);
@@ -231,16 +224,6 @@ test("persona voice identities preserve concurrent PC branches until the persona
   const rows = fs.readFileSync(personaVoiceIdentitiesPath(roleA), "utf8").trim().split(/\r?\n/).map(line => JSON.parse(line));
   assert.equal(rows.at(-1)?.supersedes.length, 2);
 
-  const syncB = new PersonaSyncService(() => rolesB, path.join(root, "pc-b", "sync"));
-  const resolvedContent = fs.readFileSync(personaVoiceIdentitiesPath(roleA));
-  assert.equal(syncB.merge({
-    roleId: "Rabi",
-    path: "voice/voice-identities.jsonl",
-    contentBase64: resolvedContent.toString("base64"),
-    peerId: "pc-a"
-  }).status, "merged");
-  assert.equal(findPersonaVoiceIdentity(roleB, "host-audio", "cluster-user")?.isUser, true);
-  assert.equal(findPersonaVoiceIdentity(roleB, "host-audio", "cluster-user")?.conflicted, undefined);
 });
 
 test("persona voice identities treat concurrent deletion and retention as an explicit conflict", () => {
@@ -271,14 +254,7 @@ test("persona voice identities treat concurrent deletion and retention as an exp
     aliases: []
   });
 
-  const syncA = new PersonaSyncService(() => rolesA, path.join(root, "pc-a", "sync"));
-  const remote = fs.readFileSync(personaVoiceIdentitiesPath(roleB));
-  syncA.merge({
-    roleId: "Rabi",
-    path: "voice/voice-identities.jsonl",
-    contentBase64: remote.toString("base64"),
-    peerId: "pc-b"
-  });
+  fs.appendFileSync(personaVoiceIdentitiesPath(roleA), fs.readFileSync(personaVoiceIdentitiesPath(roleB)));
   const conflicted = findPersonaVoiceIdentity(roleA, "host-audio", "cluster-delete");
   assert.equal(conflicted?.conflicted, true);
   assert.deepEqual(conflicted?.conflictFields, ["deleted"]);

@@ -7,7 +7,6 @@ import type {
   PersonaVoiceTranscriptQuery,
   PersonaVoiceTranscriptQueryResult
 } from "../personaVoiceTranscriptView.js";
-import type { PersonaSyncConflict } from "../personaSync.js";
 import {
   publishRoleKnowledgeCatalogSnapshot,
   publishRolePlanCatalog,
@@ -393,20 +392,6 @@ export class ManagerReadWorkerPool {
       this.voiceSummaryInFlight.set(key, current);
     }
     return this.subscribe(shared, options.signal);
-  }
-
-  queryPersonaSyncConflicts(
-    rolesRoot: string,
-    stateRoot: string,
-    roleId?: string,
-    options: { signal?: AbortSignal; timeoutMs?: number } = {}
-  ): Promise<PersonaSyncConflict[]> {
-    return this.run<PersonaSyncConflict[]>({
-      type: "persona_sync_conflicts",
-      rolesRoot,
-      stateRoot,
-      roleId
-    }, options);
   }
 
   queryPlanFeedbackRecoveryCandidates(

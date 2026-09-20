@@ -1,5 +1,3 @@
-import { PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY } from "../personaSyncPlanPackage.js";
-
 type RelayProxyRequest = {
   id?: string;
   method?: string;
@@ -386,7 +384,7 @@ async function refreshAsrAdvertisement(config: RabiLinkRelayRuntimeConfig, signa
 }
 
 function workerCapabilities(config: RabiLinkRelayRuntimeConfig): string {
-  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", "persona-sync", PERSONA_SYNC_PLAN_PACKAGE_CAPABILITY, config.speechProxyEnabled ? "speech" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
+  return ["wearable-observation-policy-v1", "webgui", "video-direct", "peer-rpc-v1", "peer-tunnel-v1", config.speechProxyEnabled ? "speech" : "", asrAdvertisements.get(config)?.available ? "asr" : ""]
     .filter(Boolean)
     .join(",");
 }
@@ -398,9 +396,21 @@ function safeLocalUrl(config: RabiLinkRelayRuntimeConfig, pathname: string): str
   localUrl.host = base.host;
   // Relay requests arrive over loopback too; reject private directory controls here
   // before the Manager's local-socket guard could mistake them for local UI requests.
-  const normalizedPath = new URL(decodeURIComponent(localUrl.pathname), base).pathname.replace(/\/+$/, "");
-  if (normalizedPath === "/api/speech/model-management/settings") {
-    throw new Error("Model directory settings are available only in the local WebGUI.");
+  // Decode repeatedly so encoded separators, dot segments and nested escapes cannot
+  // turn a retired API into an ordinary WebGUI request at a downstream boundary.
+  let encodedPath = localUrl.pathname;
+  while (true) {
+    const decodedPath = decodeURIComponent(encodedPath);
+    const normalizedPath = new URL(`/${decodedPath.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+/, "")}`, base).pathname;
+    const checkedPath = normalizedPath.replace(/\/+$/, "").toLowerCase();
+    if (checkedPath === "/api/persona-sync" || checkedPath.startsWith("/api/persona-sync/")) {
+      throw new Error("Persona synchronization API has been removed.");
+    }
+    if (checkedPath === "/api/speech/model-management/settings") {
+      throw new Error("Model directory settings are available only in the local WebGUI.");
+    }
+    if (decodedPath === encodedPath || !/%[0-9a-f]{2}/i.test(decodedPath)) break;
+    encodedPath = decodedPath;
   }
   return localUrl.toString();
 }
@@ -487,19 +497,18 @@ async function proxyWebguiRequest(
       throw new Error("SSE event streams must use the Relay event channel instead of the finite WebGUI response proxy.");
     }
     const requestBody = request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined;
-    const personaSyncRequest = localPath.startsWith("/api/persona-sync/");
-    const localTimeoutMs = personaSyncRequest ? Math.max(options.localRequestTimeoutMs, 30_000) : options.localRequestTimeoutMs;
+    const localUrl = safeLocalUrl(config, localPath);
     const requestAttempts = method === "GET" || method === "HEAD" ? options.localRequestAttempts : 1;
     let response: Response | null = null;
     let lastError: unknown;
     for (let attempt = 1; attempt <= requestAttempts; attempt += 1) {
       try {
-        response = await localFetchWithTimeout(safeLocalUrl(config, localPath), {
+        response = await localFetchWithTimeout(localUrl, {
           method,
           headers,
           body: method === "GET" || method === "HEAD" ? undefined : requestBody,
           signal
-        }, localTimeoutMs, personaSyncRequest ? "persona sync" : "Rabi WebGUI");
+        }, options.localRequestTimeoutMs, "Rabi WebGUI");
         break;
       } catch (error) {
         lastError = error;
@@ -532,9 +541,7 @@ async function proxyWebguiRequest(
       statusCode: response.status,
       headers: responseHeaders,
       bodyBase64: responseBody.toString("base64")
-    }, personaSyncRequest
-      ? { ...options, relayWriteTimeoutMs: Math.max(options.relayWriteTimeoutMs, 30_000) }
-      : options, signal);
+    }, options, signal);
   } catch (error) {
     if (signal.aborted) return;
     await finishWebguiRequest(config, requestId, {
@@ -603,6 +610,7 @@ async function proxySpeechRequest(
     const managerVideoOffer = method === "POST" && localPath === "/api/rabilink/video/offer";
     if (!managerVideoOffer && !config.speechProxyEnabled) throw new Error("Speech proxy is disabled.");
     const managerSpeechIngress = localPath === "/api/speech/messages" || managerVideoOffer;
+    if (!managerSpeechIngress) headers["x-rabilink-tunnel-local"] = "relay-speech";
     const response = await localFetchWithTimeout(
       managerSpeechIngress ? safeLocalUrl(config, localPath) : safeSpeechUrl(config, localPath), {
       method,

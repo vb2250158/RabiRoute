@@ -171,3 +171,11 @@ Playback currently downloads a complete segment before starting, so large videos
 A full-width 16:9 preview replaces the separate title bar. Tapping shows or hides recording, device access, runtime status, current time, and playback controls. A thin ticked timeline and track legend overlay the preview bottom, retaining dragging and pinch zoom. Existing information remains available in the compact toolbar or overlay. Controls never change layout height, and scrubbing preserves playback state.
 
 The top controls use a transparent background, with live or replay time at the upper left. Redundant paused and capture-status labels are omitted.
+
+## Review experience update, 2026-09-20
+
+Current source and debug APK: widths of at least 700dp use a 60/40 split, with preview and a persistent timeline on the left and source filtering and events on the right. Narrow portrait screens stack them. A native ListView recycles visible cards and synchronizes scrolling with the timeline. Refresh retains the event ID, top offset and existing player; failures preserve existing content. Playback updates highlighting without rebuilding the list.
+
+Visible pages coalesce refresh when capture signals, status or the audio directory change; explicit refresh remains available. Video sessions outside the time window are excluded before media traversal. Durations use a page-local cache bounded to 2048 entries, keyed by path, modification time and size, and rebuilt after closing. Thumbnails use a separate bounded queue, avoiding contention with record queries and playback. Original media and metadata remain unchanged; no deletion, migration or archival was added.
+
+Persistent indexed pagination is not complete: audio still uses its existing metadata cache and directory enumeration, and video manifests are enumerated. The debug APK was installed on a physical phone and passed portrait proportions, stable bounds when toggling controls, landscape split layout and a fully visible timeline. Landscape preview height is constrained by available space. The tested range contained no saved events, so real event clicks, refresh anchoring and long-running recording remain unverified; builds and unit tests do not replace that evidence.

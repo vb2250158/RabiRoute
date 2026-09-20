@@ -210,6 +210,13 @@ test("DSH settings scan exposes endpoint, projects, sessions, and local paginati
     copilotSessions: [],
     copilotBins: [],
     marvisAppIds: [],
+    discoverLocalDsh: () => ({
+      installed: true,
+      homeDir: process.cwd(),
+      installCandidates: [{ label: "DSH web profile", path: process.cwd() }],
+      discoveredBaseUrls: [],
+      warnings: []
+    }),
     checkHttpEndpoint: async (url) => url === "http://127.0.0.1:3080",
     resolveWingetCopilot: () => null,
     listDshModels: async () => ({
@@ -277,6 +284,13 @@ test("dedicated DSH scan does not wait for the Codex catalog or other adapters",
     scanDshAgentAdapter({
       rootDir: process.cwd(),
       runtimes: [{ definition: { dshBaseUrl: "http://127.0.0.1:3080", dshCwd: process.cwd() } }],
+      discoverLocalDsh: () => ({
+        installed: true,
+        homeDir: process.cwd(),
+        installCandidates: [],
+        discoveredBaseUrls: [],
+        warnings: []
+      }),
       checkHttpEndpoint: async () => true,
       listCodexSessions: async () => {
         codexCatalogCalls += 1;
@@ -308,6 +322,13 @@ test("dedicated DSH scan retries one transient session.list 404", async () => {
   const result = await scanDshAgentAdapter({
     rootDir: process.cwd(),
     runtimes: [],
+    discoverLocalDsh: () => ({
+      installed: true,
+      homeDir: process.cwd(),
+      installCandidates: [],
+      discoveredBaseUrls: [],
+      warnings: []
+    }),
     checkHttpEndpoint: async () => true,
     listDshSessions: async () => {
       calls += 1;
@@ -333,6 +354,13 @@ test("DSH base scan does not probe or require optional Rabi extensions", async (
   try {
     const result = await scanDshAgentAdapter({
       rootDir: process.cwd(),
+      discoverLocalDsh: () => ({
+        installed: true,
+        homeDir: process.cwd(),
+        installCandidates: [],
+        discoveredBaseUrls: [],
+        warnings: []
+      }),
       checkHttpEndpoint: async () => true,
       dshSessions: [{ id: "session-00000000-0000-4000-8000-000000000001", name: "Existing task", projectPath: process.cwd() }]
     });
@@ -345,8 +373,57 @@ test("DSH base scan does not probe or require optional Rabi extensions", async (
 });
 
 test("DSH base scan still diagnoses an offline owner without extension advice", async () => {
-  const result = await scanDshAgentAdapter({ rootDir: process.cwd(), checkHttpEndpoint: async () => false, dshSessions: [] });
+  const result = await scanDshAgentAdapter({
+    rootDir: process.cwd(),
+    discoverLocalDsh: () => ({
+      installed: false,
+      homeDir: process.cwd(),
+      installCandidates: [],
+      discoveredBaseUrls: [],
+      warnings: []
+    }),
+    checkHttpEndpoint: async () => false,
+    dshSessions: []
+  });
   assert.equal(result.agents.dsh.installed, false);
   assert.match(result.agents.dsh.warnings?.join(" ") ?? "", /apiproxy 不可用/);
   assert.equal(result.agents.dsh.plugins, undefined);
+});
+
+test("DSH scan treats a local Home as installed and prefers a live launch-log origin over the default port", async () => {
+  const probed: string[] = [];
+  const requested: string[] = [];
+  const result = await scanDshAgentAdapter({
+    rootDir: process.cwd(),
+    runtimes: [{ definition: { dshBaseUrl: "http://127.0.0.1:3080" } }],
+    discoverLocalDsh: () => ({
+      installed: true,
+      homeDir: "C:/Users/example/.dsh",
+      installCandidates: [
+        { label: "DSH web profile", path: "C:/Users/example/.dsh/profiles/web" },
+        { label: "本机 DSH web", url: "http://127.0.0.1:3180" }
+      ],
+      discoveredBaseUrls: ["http://127.0.0.1:3180"],
+      warnings: []
+    }),
+    checkHttpEndpoint: async (url) => {
+      probed.push(url);
+      return url === "http://127.0.0.1:3180";
+    },
+    listDshSessions: async (query) => {
+      requested.push(query.baseUrl);
+      return [{
+        id: "session-00000000-0000-4000-8000-000000000318",
+        name: "本机会话",
+        projectPath: process.cwd()
+      }];
+    }
+  });
+
+  assert.equal(result.agents.dsh.installed, true);
+  assert.deepEqual(probed, ["http://127.0.0.1:3080", "http://127.0.0.1:3180"]);
+  assert.deepEqual(requested, ["http://127.0.0.1:3180"]);
+  assert.equal(result.agents.dsh.endpoints?.find((endpoint) => endpoint.url === "http://127.0.0.1:3180")?.healthy, true);
+  assert.match(result.agents.dsh.warnings?.join(" ") ?? "", /已保存的 DSH 地址 http:\/\/127\.0\.0\.1:3080 未响应/);
+  assert.doesNotMatch(result.agents.dsh.warnings?.join(" ") ?? "", /没有发现可用安装/);
 });

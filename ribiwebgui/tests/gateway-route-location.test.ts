@@ -32,7 +32,7 @@ function serveGateways(configResponse?: Promise<Response>) {
 }
 
 test("lazy recovery retains the bookmarked Route including encoded names and query parameters", () => {
-  for (const page of ["knowledge", "adapters", "persona", "persona/document", "persona/sync", "overview", "speech", "runtime"]) {
+  for (const page of ["knowledge", "adapters", "persona", "persona/document", "overview", "speech", "runtime"]) {
     const target = `/routes/${encodeURIComponent("测试 路线")}/${page}?view=archived`;
     assert.equal(routeKeyFromWebguiHash(`#${target}`), "测试 路线");
     assert.equal(routeKeyFromWebguiHash(`#/plugin-recovery?from=${encodeURIComponent(target)}`), "测试 路线");
@@ -103,7 +103,7 @@ test("App owns URL selection; startup and page watchers cannot overwrite explici
   assert.match(app, /selectedRouteKey.value && !routeKeyFromWebguiHash/);
   assert.match(app, /router.push\(\{ path: scopedPath, query: route.query, hash: route.hash \}\)/);
   assert.match(main, /await router.isReady\(\);\s*app.mount/);
-  for (const page of ["RouteConfigPage", "PersonaTemplatePage", "PersonaSyncPage"]) {
+  for (const page of ["RouteConfigPage", "PersonaTemplatePage"]) {
     const source = fs.readFileSync(new URL(`../src/pages/${page}.vue`, import.meta.url), "utf8");
     assert.doesNotMatch(source, /watch\(\(\) => store.selectedGatewayId/);
     assert.doesNotMatch(source, /store.selectGateway\(/);

@@ -21,7 +21,6 @@ test("WebGUI route pages use the trusted renderer registry and asynchronous page
     "RouteConfigPage",
     "PersonaTemplatePage",
     "PersonaDocumentPage",
-    "PersonaSyncPage",
     "ProjectDocsPage",
     "RoleKnowledgePage",
     "RuntimeLogPage",

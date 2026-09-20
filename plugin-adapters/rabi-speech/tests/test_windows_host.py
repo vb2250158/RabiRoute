@@ -110,3 +110,17 @@ def test_only_windows_network_error_59_is_treated_as_transient() -> None:
     assert WINDOWS_HOST.is_transient_network_filesystem_error(wrapped)
     assert not WINDOWS_HOST.is_transient_network_filesystem_error(OSError("other problem"))
     assert not WINDOWS_HOST.is_transient_network_filesystem_error(RuntimeError("ordinary failure"))
+
+
+def test_versioned_code_reuses_stable_dependencies_without_writing_version(tmp_path: Path) -> None:
+    root = tmp_path / "versions" / "candidate" / "rabi-speech"
+    root.mkdir(parents=True)
+    deps = tmp_path / "shared-deps"
+    deps.mkdir()
+    config = tmp_path / "state" / "config.json"
+    config.parent.mkdir()
+    config.write_text("{}", encoding="utf-8")
+    result = WINDOWS_HOST.configure_runtime(root, environment={"RABISPEECH_DEPS_ROOT": str(deps), "RABISPEECH_CONFIG": str(config)}, module_paths=[])
+    assert Path(result["dependencies"]) == deps.resolve()
+    assert Path(result["service_root"]) == root.resolve()
+    assert list(root.iterdir()) == []

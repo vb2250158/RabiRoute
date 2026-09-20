@@ -3,7 +3,6 @@ export type AgentCapabilityHintContext = {
   roleId: string;
 };
 
-const PERSONA_SYNC_INTENT_PATTERN = /(?:人格|角色).{0,8}(?:同步|跨机|多机|多电脑|合并)|同步.{0,8}(?:人格|角色)|多台?电脑.{0,12}(?:人格|角色|同步|数据)|persona[\s_-]*sync|(?:persona|role).{0,8}\bpeer\b/i;
 const VOICE_IDENTITY_INTENT_PATTERN = /声纹|谁(?:在)?说的|说话人|哪些.{0,8}(?:是我|用户).{0,8}说|(?:用户|我).{0,8}说的.{0,8}(?:别人|其他人)|(?:别人|其他人).{0,8}说的|区分.{0,12}(?:用户|我|别人|其他人).{0,8}说|(?:一天|全天).{0,8}录音|voiceprint|speaker[\s_-]*identity/i;
 const PLAN_ASSISTANT_INTENT_PATTERN = /计划|秘书|委派|委托|派发|分派|交给.{0,12}(?:处理|执行)|\b(?:plan|delegate|delegation|secretary)\b/i;
 const REMOTE_AGENT_INTENT_PATTERN = /远端|远程.{0,12}(?:执行|任务|运行|构建|打包|设备)|(?:另一台|其他|其它)电脑.{0,12}(?:执行|运行|构建|打包)|\bremote[\s_-]*(?:agent|task|device|exec|build)\b/i;
@@ -27,27 +26,6 @@ function managerBaseUrl(context: AgentCapabilityHintContext): string {
     throw new Error("A valid current Manager port is required for Agent capability hints.");
   }
   return `http://127.0.0.1:${port}`;
-}
-
-export function personaSyncCapabilityHint(
-  text: string,
-  context: AgentCapabilityHintContext
-): string[] | null {
-  if (!PERSONA_SYNC_INTENT_PATTERN.test(text)) return null;
-  const baseUrl = managerBaseUrl(context);
-  return [
-    "这是一次显式的人格同步请求；只执行一次查询/同步，不创建后台轮询或自动定时同步。",
-    `- 查询同应用在线设备：GET ${baseUrl}/api/persona-sync/peers`,
-    `- 同步当前人格：POST ${baseUrl}/api/persona-sync/sync`,
-    "请求体：",
-    JSON.stringify({ peerId: "<从 peers 中选择的 id>", roleId: context.roleId }, null, 2),
-    "默认只同步当前人格；只有用户明确要求时才省略 roleId 同步全部人格。",
-    "如果没有唯一可用 peer，不要猜目标设备；先向用户确认。",
-    "必须检查 HTTP 200/409、conflicts、fileConflicts 和 semanticConflicts；存在冲突时不能声称同步完成。",
-    `- 查看普通文件冲突：GET ${baseUrl}/api/persona-sync/conflicts?roleId=${encodeURIComponent(context.roleId)}`,
-    `- 读取/解决冲突：GET ${baseUrl}/api/persona-sync/conflicts/content；POST ${baseUrl}/api/persona-sync/conflicts/resolve`,
-    "冲突解决必须基于当前证据并携带 expectedLocalHash；不要按最后写入者自动覆盖。"
-  ];
 }
 
 export function voiceIdentityReviewCapabilityHint(

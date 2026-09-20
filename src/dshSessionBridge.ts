@@ -17,8 +17,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dshAuthenticatedFetch } from "./dshHttpAuth.js";
+import { DEFAULT_DSH_BASE_URL, resolveDshBaseUrl } from "./dshDiscovery.js";
 
-export const DEFAULT_DSH_BASE_URL = "http://127.0.0.1:3080";
+export { DEFAULT_DSH_BASE_URL };
 export const DEFAULT_DSH_SESSION_NAME = "Rabi Agent";
 export const DSH_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -74,9 +75,9 @@ export function readDshPrimaryBinding(routeConfigPath: string = dshRouteConfigPa
     const sessionId = typeof parsed.dshSessionId === "string" ? parsed.dshSessionId.trim() : "";
     const cwd = typeof parsed.dshCwd === "string" ? parsed.dshCwd.trim() : "";
     if (!sessionId || !isDshSessionId(sessionId) || !cwd) return null;
-    const baseUrl = typeof parsed.dshBaseUrl === "string" && parsed.dshBaseUrl.trim()
-      ? parsed.dshBaseUrl.trim().replace(/\/+$/, "")
-      : DEFAULT_DSH_BASE_URL;
+    const baseUrl = resolveDshBaseUrl(
+      typeof parsed.dshBaseUrl === "string" ? parsed.dshBaseUrl : undefined
+    );
     const sessionName = typeof parsed.dshSessionName === "string" && parsed.dshSessionName.trim()
       ? parsed.dshSessionName.trim()
       : DEFAULT_DSH_SESSION_NAME;
@@ -215,7 +216,7 @@ export function normalizeDshModelCatalogForTest(value: unknown): {
   return { models, warnings };
 }
 
-export async function listDshModels(baseUrl: string = DEFAULT_DSH_BASE_URL): Promise<{
+export async function listDshModels(baseUrl?: string): Promise<{
   models: DshModelCatalogEntry[];
   warnings: string[];
 }> {
@@ -282,7 +283,7 @@ const recentDshCreationTtlMs = 60_000;
 const dshCreations = new Map<string, { promise: Promise<DshSessionSummary>; settledAt?: number }>();
 
 function normalizedDshBaseUrl(value: string | undefined): string {
-  return (value?.trim() || DEFAULT_DSH_BASE_URL).replace(/\/+$/, "");
+  return resolveDshBaseUrl(value);
 }
 
 function canonicalDshWorkspace(value: string): string {
@@ -355,7 +356,7 @@ export async function listDshSessions(options: {
   );
   const offset = Math.max(0, Math.trunc(options.offset ?? 0));
   const limit = Math.max(0, Math.trunc(options.limit ?? 100));
-  const rows = await readDshSessionCatalog(options.baseUrl || DEFAULT_DSH_BASE_URL);
+  const rows = await readDshSessionCatalog(normalizedDshBaseUrl(options.baseUrl));
   return rows
     .filter((item) => workspaceKeys.size === 0 || (item.cwd && workspaceKeys.has(canonicalDshWorkspace(item.cwd))))
     .filter((item) => !query || `${item.title}\n${item.id}\n${item.cwd || ""}`.toLocaleLowerCase().includes(query))
@@ -520,7 +521,7 @@ export async function resolveDshSession(params: {
  */
 export async function readDshSession(
   sessionId: string,
-  baseUrl: string = DEFAULT_DSH_BASE_URL
+  baseUrl?: string
 ): Promise<{
   id: string;
   title: string;
@@ -531,7 +532,7 @@ export async function readDshSession(
   active: boolean;
   status: { type: "active" | "idle" };
 }> {
-  const item = (await readDshSessionRows(baseUrl)).find((candidate) => candidate.sessionId === sessionId);
+  const item = (await readDshSessionRows(normalizedDshBaseUrl(baseUrl))).find((candidate) => candidate.sessionId === sessionId);
   if (!item) {
     throw new Error(`DSH session was not found: ${sessionId}`);
   }
@@ -555,7 +556,7 @@ export async function readDshSession(
 }
 
 /** URL understood by DSH Web to select one exact session without sending it a prompt. */
-export function dshSessionFocusUrl(sessionId: string, baseUrl: string = DEFAULT_DSH_BASE_URL): string {
+export function dshSessionFocusUrl(sessionId: string, baseUrl?: string): string {
   const id = sessionId.trim();
   if (!isDshSessionId(id)) throw new Error(`Invalid DSH session id: ${sessionId}`);
   const url = new URL(normalizedDshBaseUrl(baseUrl));
@@ -567,7 +568,7 @@ export function dshSessionFocusUrl(sessionId: string, baseUrl: string = DEFAULT_
 }
 
 /** Open the DSH Web owner with an exact session-selection request. */
-export async function openDshSession(sessionId: string, baseUrl: string = DEFAULT_DSH_BASE_URL): Promise<void> {
+export async function openDshSession(sessionId: string, baseUrl?: string): Promise<void> {
   const target = dshSessionFocusUrl(sessionId, baseUrl);
   const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
   const child = spawn(command, [target], { detached: true, windowsHide: true, stdio: "ignore" });
@@ -624,7 +625,7 @@ export async function sendDshSessionMessage(params: {
   /** Reuse across retries of the same delivery; persisted by the owner on the user message. */
   requestId?: string;
 }): Promise<DshSessionDelivery> {
-  const baseUrl = (params.baseUrl || DEFAULT_DSH_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = resolveDshBaseUrl(params.baseUrl);
   await applyDshSessionModel(baseUrl, params.sessionId, params.modelSelection);
   const imagePaths = params.imagePaths || [];
   const content: Array<{ type: "text"; text: string } | { type: "image"; mediaType: string; data: string; name: string }> = [

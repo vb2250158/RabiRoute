@@ -91,21 +91,17 @@ Home no longer embeds `/admin` or `/manage`. The browser calls only Manager `GET
 
 Unconfigured, connection, authentication, and read failures must remain distinct from zero devices or first-time initialization; only a successful empty response means no devices. Administrators still sign in independently at `/manage` in a new window; Home does not depend on the management cookie. These are design boundaries, not evidence of deployment or real-interaction acceptance.
 
-## Same-application PC discovery and persona-sync transit
+## Same-application PC discovery and generic remote access
 
-The global worker now registers `persona-sync` capability and a dedicated LAN persona-sync listener URL. That listener exposes only the manifest/file/merge data plane, so the complete Manager/WebGUI does not need to bind to the LAN. PCs using the same application token can call:
+The global worker retains same-application discovery and generic peer capabilities but no longer advertises persona synchronization. The shared `PeerLanServer` LAN listener accepts only encrypted peer RPC at `POST /api/rabilink/peer/receive` over HTTP; WebSocket upgrades are authorized by the existing peer runtime. It exposes neither the full Manager/WebGUI nor retired synchronization APIs. The OS assigns its port by default; the local `RABILINK_PEER_LAN_PORT` environment variable can configure it. Manager emits `peer_lan_status` for listener state. PCs using the same application token can call:
 
 ```text
 GET /api/rabilink/peers?deviceId=<self>&deviceGuid=<self-guid>
 ```
 
-The response contains only other workers in that application, with stable ID, GUID, online state, capabilities, and `peerUrls`. An active `/api/rabilink/events` SSE connection is direct PC-presence evidence and requires no polling to remain online. During reconnect overlap, the PC becomes offline only when its last active connection closes. A new connection, capability/LAN-address change, or final disconnect publishes `persona_sync_peer_changed` to other subscribers in the same application; it only wakes one peer/manifest catch-up query. Only legacy clients without SSE use bounded recent-request activity as a compatibility fallback. Persona synchronization first tries those LAN URLs. If direct access fails, it calls:
+The response contains only other workers in that application, with stable ID, GUID, online state, capabilities, and `peerUrls`. An active `/api/rabilink/events` SSE connection is direct PC-presence evidence and requires no polling to remain online. During reconnect overlap, the PC becomes offline only when its last active connection closes. New connections, capability/LAN-address changes, and final disconnects publish the generic `peer_changed` event to other subscribers in the same application; they no longer trigger persona-manifest reconciliation. Only legacy clients without SSE use bounded recent-request activity as a compatibility fallback.
 
-```text
-POST /api/rabilink/persona-sync/proxy
-```
-
-The proxy accepts only a target PC, `GET/POST`, and `/api/persona-sync/manifest|files|merge` paths. Relay pushes `webgui_available` through `/api/rabilink/events`; the target PC then immediately claims `/worker/webgui-requests` and reaches its loopback Manager. It cannot proxy arbitrary local URLs and Relay does not store a master persona. See [Multi-PC persona data synchronization](persona-data-sync_en.md) for merge behavior.
+Automatic/manual persona synchronization and `/api/rabilink/persona-sync/proxy` are retired. Use existing RabiLink access to the target PC's persona, Agent, and data without replicating persona data; the target retains ownership. Generic LAN/P2P/Relay transport and remote WebGUI, Agent, and speech entry points remain. See [Cross-PC API calls](rabilink-peer-rpc_en.md) and [Generic cross-PC connections](rabilink-peer-tunnel_en.md) for permissions and limits, and [Persona data synchronization retirement](persona-data-sync_en.md) for historical-data retention. These are source contracts, not evidence of deployment or comprehensive remote acceptance.
 
 Worker endpoints:
 
@@ -252,9 +248,9 @@ Claim inputs with:
 GET /worker/tasks?limit=1&deviceId=<pc-device-id>
 ```
 
-The PC first subscribes to `/api/rabilink/events` with its stable device ID/GUID and capabilities. `task_available`, `webgui_available`, and `speech_available` each trigger one immediate queue drain with `waitMs=0`; `persona_sync_peer_changed` triggers one persona peer/manifest reconciliation. A legacy nonzero `waitMs` blocks on the same internal event and performs one recovery claim after subscription; it does not restore queue scanning.
+The PC first subscribes to `/api/rabilink/events` with its stable device ID/GUID and capabilities. `task_available`, `webgui_available`, and `speech_available` each trigger one immediate queue drain with `waitMs=0`; `peer_changed` notifies same-application discovery changes without starting persona synchronization. A legacy nonzero `waitMs` blocks on the same internal event and performs one recovery claim after subscription; it does not restore queue scanning.
 
-Relay is the single filter for the phone's "processing Rabi PC" picker. Only workers advertising at least one processing capability (`tasks`, `webgui`, `persona-sync`, or `speech`) appear in `GET /api/rabilink/mobile/state`. Portable terminals declared as `phone`, `glasses`, `watch`, or `earbuds` remain valid `/api/rabilink/events` subscribers but are never PC candidates. `PATCH /api/rabilink/mobile/target` applies the same rule and rejects terminal devices as processing targets.
+Relay is the single filter for the phone's "processing Rabi PC" picker. PC-class workers, workers advertising `tasks`, `webgui`, or `speech`, and compatible legacy records with a stable GUID can appear in `GET /api/rabilink/mobile/state`; retired synchronization capabilities do not qualify a worker. Portable terminals declared as `phone`, `glasses`, `watch`, or `earbuds` remain valid `/api/rabilink/events` subscribers but are never PC candidates. `PATCH /api/rabilink/mobile/target` applies the same rule and rejects terminal devices as processing targets.
 
 Relay management uses the same rule for **Connected PC Rabi**, the PC count, and each application's processing-PC selector. Phones, glasses, watches, and earbuds keep their own online events, messages, and device logs, but never receive an **Open PC WebGUI** action. A legacy record without `deviceKind/capabilities` is treated as a compatibility PC only when it has a stable `rabiGuid`; old GUID-less `rabi-phone` / `rabi-glass` records are excluded.
 

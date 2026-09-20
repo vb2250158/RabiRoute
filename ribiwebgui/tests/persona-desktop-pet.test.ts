@@ -26,7 +26,7 @@ test("persona desktop pet editor separates persona assets from local display pre
   assert.match(panel, /desktopPetClient\.packs\(personaId\)/);
   assert.match(panel, /label="在本机启用"/);
   assert.match(panel, /动作素材保存在[\s\S]*personaId[\s\S]*人格目录/);
-  assert.match(panel, /大小、位置和窗口行为只影响这台电脑，不随人格同步/);
+  assert.match(panel, /大小、位置和窗口行为只影响这台电脑/);
   assert.match(panel, /registerPageSaveAction/);
   assert.match(panel, /if \(store\.dirty\) await store\.save\(\)/);
   assert.doesNotMatch(panel, /const petPersonaId = "YeYu"/);

@@ -48,8 +48,11 @@ class RecordingStore(private val context: Context) {
         try { output.write(data.toString().toByteArray()); atomic.finishWrite(output) }
         catch (error: Exception) { atomic.failWrite(output); throw error }
     }
-    private fun read(path: File): Entry? = runCatching {
+    private fun read(path: File, from: Long = 0, to: Long = Long.MAX_VALUE): Entry? = runCatching {
         val data = JSONObject(AtomicFile(path).openRead().bufferedReader().use { it.readText() })
+        val started = data.getLong("started")
+        val ended = data.optLong("ended")
+        if(started > to || (ended > 0 && ended < from)) return@runCatching null
         val dir = File(context.filesDir, data.getString("directory")).canonicalFile
         check(dir.toPath().startsWith(context.filesDir.canonicalFile.toPath()))
         Entry(data.getString("id"), data.getString("kind"), data.getString("source"), data.getLong("started"),
@@ -66,8 +69,8 @@ class RecordingStore(private val context: Context) {
             Marker(data.getString("id"), data.optString("recordId"), data.getLong("at"))
         }.sortedByDescending { it.at }
 
-    fun list(): List<Entry> {
-        val sessions = root.listFiles().orEmpty().mapNotNull { read(File(it, "session.json")) }
+    @JvmOverloads fun list(from: Long = 0, to: Long = Long.MAX_VALUE): List<Entry> {
+        val sessions = root.listFiles().orEmpty().mapNotNull { read(File(it, "session.json"), from, to) }
         val oldRoot = File(context.filesDir, "rabi-live-recordings/rabi")
         val oldFiles = oldRoot.walkTopDown().filter { it.isFile && it.extension == "mp4" }.sortedBy { it.name }.toList()
         val legacy = if (oldFiles.isEmpty()) emptyList() else listOf(Entry("legacy-archive", "video", "glasses",

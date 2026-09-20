@@ -43,7 +43,7 @@ Grants cover the entire trusted application group. Members sharing a token share
 
 ## Transport and lifecycle
 
-Discovery is shared with persona synchronization. Every call refreshes registered addresses, verifies the target and generation through encrypted `system.describe`, and binds its request to that generation. Requests and replies use AES-256-GCM with an application-derived key. LAN never carries the application token. Relay forwards encrypted packets only to `/api/rabilink/peer/receive`; callers cannot supply arbitrary URLs.
+Discovery is provided by the shared RabiLink module and does not depend on persona data synchronization. Every call refreshes registered addresses, verifies the target and generation through encrypted `system.describe`, and binds its request to that generation. Requests and replies use AES-256-GCM with an application-derived key. LAN never carries the application token. Relay forwards encrypted packets only to `/api/rabilink/peer/receive`; callers cannot supply arbitrary URLs.
 
 At most four registered private IPv4 addresses are tried, with a two-second discovery deadline each. If LAN is unavailable, encrypted SDP travels through Relay to establish a werift WebRTC DataChannel. STUN discovers addresses; TURN is not enabled. Each direct attempt has a twelve-second deadline, each connection serves one call, and at most eight connections coexist. Read requests can fall back to Relay, while business rejection remains a failure. Requests expire within two minutes; plaintext requests/results are limited to 1 MiB, with a separate wire limit.
 
@@ -53,6 +53,6 @@ This protocol version registers read operations only. Adding mutations requires 
 
 ## Existing contracts
 
-Persona discovery now uses the shared module. Existing persona LAN file transfer, merge and `/persona-sync/proxy` remain required by deployed versions and mutation contracts; read RPC does not replace synchronization writes. Retirement requires durable mutation recovery, dual-PC acceptance and upgrades across all supported PCs, followed by a compatibility adapter and removal of internal legacy calls. Video retains its separate channel and prohibition on server-carried video bytes.
+Persona data synchronization has been removed from the source: LAN synchronization file transfer, merge and `/persona-sync/proxy` are no longer provided. Cross-PC access reads data on the target computer through RabiLink without creating synchronized replicas; read RPC does not acquire mutation permissions. Existing personas, plans, memories and conflict evidence are retained. Video retains its separate channel and prohibition on server-carried video bytes.
 
-Checks: `src/rabiPeer.test.ts`, `scripts/rabilink-relay-peers.test.mjs`, and existing Relay runtime, persona LAN and Coordinator regressions. Automated success does not establish remote Relay deployment or public-network acceptance.
+Checks: `src/rabiPeer.test.ts`, `scripts/rabilink-relay-peers.test.mjs`, and Relay runtime and shared peer LAN regressions. Source changes and automated success do not establish managed local deployment, remote Relay upgrades or physical dual-PC acceptance.

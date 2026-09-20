@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { defaultPerformanceMonitoringConfig, type PerformanceSample } from "../shared/performanceContract.js";
-import { PersonaSyncService } from "../personaSync.js";
 import { appendPlanFeedback, createPlanFeedbackRecord } from "../planFeedback.js";
 import { createPlan, createRecentMemory, listRecentMemories, publishedRolePlans } from "../roleKnowledge.js";
 import { appendRolePanelTimelineMessageIfAbsent } from "../rolePanelTimeline.js";
@@ -73,10 +71,6 @@ class FakeReadWorker extends EventEmitter implements ManagerReadWorkerChild {
 
 function fakeReadTask(roleDir: string) {
   return { type: "role_memory_counts" as const, roleDir };
-}
-
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function voiceArchiveFixture(archiveCount = 8, entriesPerArchive = 500): string {
@@ -345,43 +339,6 @@ test("manager read workers coalesce simultaneous voice-summary scans", async () 
   } finally {
     await pool.stop();
     fs.rmSync(roleDir, { recursive: true, force: true });
-  }
-});
-
-test("manager read workers keep conflict-history scans off the main event loop", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-manager-conflict-worker-"));
-  const rolesRoot = path.join(root, "roles");
-  const roleRoot = path.join(rolesRoot, "Rabi");
-  const stateRoot = path.join(root, "sync-state");
-  fs.mkdirSync(roleRoot, { recursive: true });
-  fs.writeFileSync(path.join(roleRoot, "persona.md"), "local divergent\n", "utf8");
-  const service = new PersonaSyncService(() => rolesRoot, stateRoot);
-  const conflict = service.merge({
-    roleId: "Rabi",
-    path: "persona.md",
-    contentBase64: Buffer.from("remote divergent\n").toString("base64"),
-    baseHash: hash("base\n"),
-    peerId: "pc-b"
-  });
-  const original = path.join(stateRoot, conflict.conflictPath!);
-  const directory = path.dirname(original);
-  for (let index = 0; index < 500; index += 1) {
-    const duplicate = path.join(directory, `legacy-${String(index).padStart(4, "0")}-${path.basename(original)}`);
-    fs.copyFileSync(original, duplicate);
-    fs.copyFileSync(`${original}.meta.json`, `${duplicate}.meta.json`);
-  }
-
-  const pool = new ManagerReadWorkerPool({ maxConcurrency: 1, maxQueue: 1, timeoutMs: 30_000 });
-  let ticks = 0;
-  const timer = setInterval(() => { ticks += 1; }, 5);
-  try {
-    const conflicts = await pool.queryPersonaSyncConflicts(rolesRoot, stateRoot, "Rabi");
-    assert.equal(conflicts.length, 1);
-    assert.ok(ticks >= 5, `expected the Manager event loop to keep ticking, got ${ticks}`);
-  } finally {
-    clearInterval(timer);
-    await pool.stop();
-    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

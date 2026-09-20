@@ -28,13 +28,7 @@ export function isPlanStorageMutationRequest(method: string | undefined, pathnam
   if (READ_METHODS.has(normalizedMethod)) return false;
   if (/^\/(?:api\/)?roles\/[^/]+\/plans(?:\/|$)/.test(pathname)) return true;
   if (normalizedMethod === "POST" && /^\/api\/roles\/[^/]+\/plan-agents\/[^/]+\/open$/.test(pathname)) return true;
-  if (normalizedMethod !== "POST") return false;
-  return new Set([
-    "/api/persona-sync/sync",
-    "/api/persona-sync/conflicts/resolve",
-    "/api/persona-sync/plan-packages/active",
-    "/api/persona-sync/plan-packages/archive"
-  ]).has(pathname);
+  return false;
 }
 
 export function planStorageStartupUnavailable(

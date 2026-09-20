@@ -76,7 +76,7 @@ The report also states whether the target project's `AGENTS.md` references the c
 | Mechanism | Synchronized object | Scope |
 | --- | --- | --- |
 | This page | RabiRoute-owned project skills | Upstream repository to the target project's `.agents/skills/` |
-| [Multi-PC persona data sync](persona-data-sync_en.md) | Persona directory data | Multiple PCs under one RabiLink application |
+| [RabiLink cross-PC access](rabilink-peer-rpc_en.md) | Authorized reads on the target computer, without synchronized replicas | Within one trusted RabiLink application |
 | LAN Agent resource catalog | Packaged `skills/*/SKILL.md` plus explicitly published documents | Authorized Agents pull them read-only on demand; see [remote Agent onboarding](lan-rabi-agent-bootstrap_en.md) |
 
-RabiRoute does not push skills into projects or Agent endpoints: local Codex, DSH, and WorkBuddy sessions each load from their own workspace skill directories, and cross-PC synchronization covers persona data only.
+RabiRoute does not push skills into projects or Agent endpoints: local Codex, DSH, and WorkBuddy sessions each load from their own workspace skill directories, and cross-PC persona access uses RabiLink to read the target computer rather than synchronizing persona data replicas.

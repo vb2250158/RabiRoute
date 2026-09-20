@@ -14,6 +14,7 @@ import type {
 } from "../../shared/xiaomiHomeAuthContract.js";
 import type { XiaomiHomeRuntimeController } from "./settingsRuntime.js";
 import { XiaomiHomeAuthMutationReceipts } from "./authMutationReceipts.js";
+import type { HomeAssistantDeploymentConfig } from "../../shared/homeAssistantDeploymentContract.js";
 
 export type XiaomiHomeManagerRoutesContext = {
   runtime: XiaomiHomeRuntimeController;
@@ -129,6 +130,23 @@ export function handleXiaomiHomeManagerApi(
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/health`) {
     respond(response, context, context.runtime.health());
+    return true;
+  }
+  // Local installation paths and process controls are intentionally loopback-only.
+  if (request.method === "GET" && requestUrl.pathname === `${root}/deployment`) {
+    respond(response, context, context.runtime.deployment.inspect());
+    return true;
+  }
+  if (request.method === "PUT" && requestUrl.pathname === `${root}/deployment`) {
+    if (!requireLifecycleFence(request, response, context)) return true;
+    respond(response, context, context.readJsonBody<{ config: HomeAssistantDeploymentConfig; revision: string }>(request)
+      .then(body => context.runtime.deployment.save(body.config, body.revision)));
+    return true;
+  }
+  if (request.method === "POST" && requestUrl.pathname === `${root}/deployment/start`) {
+    if (!requireLifecycleFence(request, response, context)) return true;
+    respond(response, context, context.readJsonBody<{ revision: string }>(request)
+      .then(body => context.runtime.deployment.ensureReady(body.revision)));
     return true;
   }
   if (request.method === "GET" && requestUrl.pathname === `${root}/auth`) {

@@ -9,12 +9,28 @@ import sys
 import time
 import json
 import socket
+import threading
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from rabispeech.remote_audio import RemoteAudioHub, RemoteAudioServerConfig
+from rabispeech.playback import PlaybackUnavailableError
+
+
+def test_offline_saved_selection_reports_recovery_without_local_fallback(tmp_path: Path) -> None:
+    settings = tmp_path / "selection.json"
+    settings.write_text(json.dumps({"version": 1, "selected_client_id": "offline-device"}))
+    played = []
+    hub = RemoteAudioHub(
+        RemoteAudioServerConfig(enabled=True, host="127.0.0.1", port=0, token="test", settings_path=settings, discovery_port=0, service_name="test"),
+        local_player=lambda *_args: played.append(True), local_stopper=lambda: None,
+    )
+    with pytest.raises(PlaybackUnavailableError, match="已离线"):
+        hub.play(tmp_path / "unused.wav", 100, threading.Event())
+    assert played == []
+    assert hub.snapshot()["source"] == "remote"
 
 
 def _free_port() -> int:

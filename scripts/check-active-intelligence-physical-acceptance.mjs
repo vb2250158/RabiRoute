@@ -7,7 +7,6 @@ import {
   PHYSICAL_OBSERVATION_KIND,
   PHYSICAL_OBSERVATION_SCHEMA_VERSION,
   REQUIRED_ANDROID_CHECKS,
-  REQUIRED_PERSONA_CHECKS,
   REQUIRED_ROKID_CHECKS,
   isPhysicalObservationChecks
 } from "./active-intelligence-physical-contract.mjs";
@@ -19,7 +18,6 @@ function parseArgs(argv) {
   const options = {
     speakerDataset: path.join(REPO_ROOT, "plugin-adapters", "rabi-speech", "benchmarks", "private", "speaker-validation", "speaker-cases.json"),
     speakerReport: "",
-    personaSync: "",
     mobileSoak: "",
     rokid: "",
     observation: path.join(REPO_ROOT, "output", "acceptance", "active-intelligence-physical-observation.json"),
@@ -32,7 +30,6 @@ function parseArgs(argv) {
     const argument = argv[index];
     if (argument === "--speaker-dataset") options.speakerDataset = String(argv[++index] || "");
     else if (argument === "--speaker-report") options.speakerReport = String(argv[++index] || "");
-    else if (argument === "--persona-sync") options.personaSync = String(argv[++index] || "");
     else if (argument === "--mobile-soak") options.mobileSoak = String(argv[++index] || "");
     else if (argument === "--rokid") options.rokid = String(argv[++index] || "");
     else if (argument === "--observation") options.observation = String(argv[++index] || "");
@@ -71,10 +68,6 @@ function latestFile(root, predicate) {
 function resolveDefaults(options) {
   return {
     ...options,
-    personaSync: options.personaSync || latestFile(
-      path.join(REPO_ROOT, "data", "persona-sync", "acceptance"),
-      file => /^persona-sync-.*\.json$/i.test(path.basename(file))
-    ),
     mobileSoak: options.mobileSoak || latestFile(
       path.join(REPO_ROOT, "apps", "rabi-mobile-android", "out"),
       file => path.basename(file).toLowerCase() === "summary.json" && file.toLowerCase().includes("mobile-audio-soak")
@@ -228,45 +221,6 @@ function voiceprintDomain(datasetEvidence, reportEvidence, nowMs, maxAgeMs) {
   return finishDomain(domain, { invalid, stale });
 }
 
-function personaDomain(evidence, observation, nowMs, maxAgeMs) {
-  const domain = { state: "missing", passed: false, checks: [], issues: [], evidence: [...observation.evidence] };
-  let invalid = observation.invalid;
-  let stale = observation.stale;
-  if (observation.issue) domain.issues.push(observation.issue);
-  if (evidence.present) {
-    if (!evidence.valid) {
-      invalid = true;
-      domain.issues.push("persona_sync_json_invalid");
-    } else {
-      const payload = evidence.payload;
-      const source = sourceSummary(evidence, String(payload.kind || "unknown"), payload.generatedAt, nowMs, maxAgeMs);
-      domain.evidence.push(source);
-      stale ||= !source.fresh;
-      const schemaVersion = Number(payload.schemaVersion);
-      const contractValid = (schemaVersion === 1 || schemaVersion === 2) && payload.kind === "persona_sync_physical_acceptance";
-      const functionalPass = schemaVersion === 2
-        ? payload.syncPassed === true && payload.status === "passed"
-        : payload.mode === "sync" && payload.acceptancePassed === true && payload.status === "passed";
-      domain.checks.push(
-        check("persona_sync_evidence_contract", contractValid),
-        check("persona_sync_schema_v2", schemaVersion === 2),
-        check("persona_sync_mode", payload.mode === "sync"),
-        check("persona_sync_functional_pass", functionalPass),
-        check("persona_sync_physical_hosts_confirmed", schemaVersion === 2 && payload.physicalHostsConfirmed === true),
-        check("persona_sync_formal_acceptance_eligible", schemaVersion === 2 && payload.formalAcceptanceEligible === true && payload.acceptancePassed === true)
-      );
-      if (!contractValid) {
-        invalid = true;
-        domain.issues.push("persona_sync_contract_invalid");
-      }
-    }
-  } else {
-    domain.issues.push("persona_sync_evidence_missing");
-  }
-  for (const id of REQUIRED_PERSONA_CHECKS) domain.checks.push(check(id, observation.checks[id] === true));
-  return finishDomain(domain, { invalid, stale });
-}
-
 function androidDomain(evidence, observation, nowMs, maxAgeMs) {
   const domain = { state: "missing", passed: false, checks: [], issues: [], evidence: [...observation.evidence] };
   let invalid = observation.invalid;
@@ -368,7 +322,6 @@ export function buildActiveIntelligencePhysicalAcceptance(rawOptions = {}, depen
   const options = resolveDefaults({
     speakerDataset: "",
     speakerReport: "",
-    personaSync: "",
     mobileSoak: "",
     rokid: "",
     observation: "",
@@ -381,14 +334,12 @@ export function buildActiveIntelligencePhysicalAcceptance(rawOptions = {}, depen
   const maxAgeMs = Number(options.maxAgeDays) * 24 * 60 * 60 * 1000;
   const dataset = readEvidence(options.speakerDataset, "speaker_dataset");
   const speakerReport = readEvidence(options.speakerReport, "speaker_report");
-  const persona = readEvidence(options.personaSync, "persona_sync");
   const mobile = readEvidence(options.mobileSoak, "mobile_soak");
   const rokid = readEvidence(options.rokid, "rokid");
   const observationEvidence = readEvidence(options.observation, "observation");
   const observation = manualObservation(observationEvidence, nowMs, maxAgeMs);
   const domains = {
     voiceprint: voiceprintDomain(dataset, speakerReport, nowMs, maxAgeMs),
-    personaSync: personaDomain(persona, observation, nowMs, maxAgeMs),
     android: androidDomain(mobile, observation, nowMs, maxAgeMs),
     rokid: rokidDomain(rokid, observation, nowMs, maxAgeMs)
   };
@@ -421,7 +372,6 @@ function helpText() {
     "Usage: node scripts/check-active-intelligence-physical-acceptance.mjs [options]",
     "  --speaker-dataset <json>  Private real-person speaker-cases.json",
     "  --speaker-report <json>   Formal speaker benchmark report",
-    "  --persona-sync <json>     Physical persona-sync acceptance report",
     "  --mobile-soak <json>      Android mobile-audio soak summary.json",
     "  --rokid <json>            Rokid real-device summary JSON",
     "  --observation <json>      Operator-confirmed physical observation JSON",

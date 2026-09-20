@@ -6,6 +6,26 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.7 - 2026-09-20
+
+### Local DSH discovery
+
+- DSH scan no longer treats the documented default `http://127.0.0.1:3080` as the install signal. A local `DSH_HOME`, web profile, or `dsh web:` launch banner is enough to report installed; the live loopback origin is read from `logs/web-host.stdout.log`, and login tokens never enter the scan payload.
+- When a saved address is down and another local instance is healthy, session listing uses the discovered origin and warns that the saved address did not respond. Empty-address delivery uses the same discovery instead of silently hitting port 3080.
+
+### All-day recording, mobile review and speech
+
+- Atomic recording and resource-cache writes now use the shared audit sink with started, committed and failed outcomes. Audit records contain path hashes rather than transcripts, media contents or raw paths.
+- Added persona recording settings and timeline review. Desktop microphone, screen, window and camera sources default to off, require an explicit start, and do not resume after Manager restart. Daily event files use rebuildable indexes without automatic deletion of raw records.
+- Mobile transcription events synchronize source times, text and playable audio through authenticated resources transport. The retry queue is independent of ASR acknowledgements. Mobile lists retain browsing position; desktop review adds a wide preview and linked timeline.
+- Unified native multi-monitor capture, reused the RabiSpeech microphone owner with leases, clarified offline remote playback, and separated installed code from speech dependency paths.
+
+### Local deployment and legacy synchronization retirement
+
+- Xiaomi Home settings now expose local Home Assistant container detection, installation paths, explicit startup, auto-start configuration and readiness. Operations target verified local official-image containers; Home Assistant login and Xiaomi OAuth remain platform-owned.
+- Removed legacy persona synchronization pages, writable services, Relay proxy and automatic merge jobs. Authorized Peer RPC, read-only persona manifests and startup recovery of prepared plan-storage transactions remain. Existing private data is preserved.
+- Device and installation acceptance remain separate requirements. This source-version increment does not publish an installer or establish physical-device acceptance.
+
 ## 0.3.6 - 2026-09-17
 
 ### Antigravity as an Agent target
