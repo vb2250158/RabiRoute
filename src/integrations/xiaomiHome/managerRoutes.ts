@@ -149,6 +149,12 @@ export function handleXiaomiHomeManagerApi(
       .then(body => context.runtime.deployment.ensureReady(body.revision)));
     return true;
   }
+  if (request.method === "POST" && requestUrl.pathname === `${root}/deployment/install`) {
+    if (!requireLifecycleFence(request, response, context)) return true;
+    respond(response, context, context.readJsonBody<{ revision: string }>(request)
+      .then(body => context.runtime.deployment.install(body.revision)));
+    return true;
+  }
   if (request.method === "GET" && requestUrl.pathname === `${root}/auth`) {
     respond(response, context, context.runtime.authorization());
     return true;

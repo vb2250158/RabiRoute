@@ -12,7 +12,7 @@ async function fixture(t) {
   let stopped = 0;
   const runtime = { stateRoot, alive: () => true, stop: async () => { stopped++; } };
   const service = new VideoService(runtime, catalog, () => {});
-  await service.initialize(); service.online = true; service.pump = () => {};
+  await service.initialize(); service.online = true; service.frameAdaptationAvailable = true; service.pump = () => {};
   t.after(async () => { await service.close(); await fs.rm(stateRoot, { recursive: true, force: true }); });
   return { service, runtime, stopped: () => stopped };
 }
@@ -22,9 +22,47 @@ test("invalid dimensions, frame counts, unknown fields and disguised images are 
 });
 test("workflow has no sound track and keeps optional first and last frames separate", () => {
   const workflow = buildWorkflow(catalog.models[0], { ...command, id: "example" }, "first.png", "last.png");
-  assert.deepEqual(workflow["8"].inputs.first_frame, ["1", 0]);
+  assert.deepEqual(workflow["8"].inputs.first_frame, ["fit_1", 0]);
   assert.equal(workflow["2"].inputs.image, "last.png");
   assert.equal(workflow["16"].inputs.audio, undefined);
+});
+
+function pngHeader(width, height) {
+  const bytes = Buffer.alloc(33);
+  Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(bytes);
+  bytes.writeUInt32BE(width, 16); bytes.writeUInt32BE(height, 20);
+  return bytes.toString("base64");
+}
+
+test("different portrait and landscape anchors keep original inputs and fit the same output canvas", async t => {
+  const input = { ...command, firstFrame: pngHeader(612, 865), lastFrame: pngHeader(1200, 600) };
+  const checked = validateCommand(input, catalog);
+  assert.equal(checked.firstFrame, input.firstFrame);
+  assert.equal(checked.lastFrame, input.lastFrame);
+  const { service } = await fixture(t);
+  const job = await service.submit(input, "fit-frames-001");
+  assert.equal(job.status, "queued");
+  assert.equal((await service.submit(input, "fit-frames-001")).id, job.id);
+  const graph = buildWorkflow(catalog.models[0], { ...checked, id: job.id }, "first.png", "last.png");
+  for (const [field, node] of [["first_frame", "1"], ["last_frame", "2"]]) {
+    const fit = graph[graph[8].inputs[field][0]];
+    assert.equal(fit.class_type, "ResizeAndPadImage");
+    assert.deepEqual(fit.inputs, { image: [node, 0], target_width: 512, target_height: 512, padding_color: "black", interpolation: "lanczos" });
+  }
+});
+
+test("oversized and degenerate frame inputs remain rejected", () => {
+  for (const [width, height] of [[0, 100], [4097, 100], [100, 4097], [1, 4096]]) {
+    assert.throws(() => validateCommand({ ...command, firstFrame: pngHeader(width, height) }, catalog), /像素|比例/);
+  }
+});
+
+test("missing adaptation support rejects frame jobs before queueing but preserves text jobs", async t => {
+  const { service } = await fixture(t);
+  service.frameAdaptationAvailable = false;
+  await assert.rejects(service.submit({ ...command, firstFrame: pngHeader(612, 865) }, "fit-unavailable"), /ResizeAndPadImage/);
+  assert.equal(service.jobs.size, 0);
+  assert.equal((await service.submit(command, "text-still-works")).status, "queued");
 });
 test("same key replays one job, changed command conflicts, and replay survives restart", async t => {
   const { service, runtime } = await fixture(t);

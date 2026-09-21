@@ -79,6 +79,19 @@ function createDeveloperCandidate(options) {
     replaceDirectory(path.join(buildRoot, "dist"), path.join(stagingRoot, "dist"));
     replaceDirectory(path.join(buildRoot, "ribiwebgui", "dist"), path.join(stagingRoot, "ribiwebgui", "dist"));
     replaceDirectory(path.join(buildRoot, "assets"), path.join(stagingRoot, "assets"));
+    const speechRelative = "plugin-adapters/rabi-speech";
+    if (fs.existsSync(path.join(baseRoot, speechRelative, "rabispeech"))) {
+      const baseRequirements = fs.readFileSync(requireFile(baseRoot, `${speechRelative}/requirements.txt`));
+      const nextRequirements = fs.readFileSync(requireFile(buildRoot, `${speechRelative}/requirements.txt`));
+      if (baseRequirements.toString("utf8").replace(/\r\n/g,"\n") !== nextRequirements.toString("utf8").replace(/\r\n/g,"\n")) throw new Error("Speech dependency changes require a full release");
+      const speechTarget = path.join(stagingRoot, speechRelative, "rabispeech");
+      fs.rmSync(speechTarget, {recursive:true,force:true});
+      fs.cpSync(path.join(buildRoot, speechRelative, "rabispeech"), speechTarget, {
+        recursive:true, dereference:false,
+        filter: source => path.basename(source) !== "__pycache__" && !source.endsWith(".pyc")
+      });
+      replaceDirectory(path.join(buildRoot, speechRelative, "scripts"), path.join(stagingRoot, speechRelative, "scripts"));
+    }
     if (fs.statSync(path.join(buildRoot, "apps", "rabi-agent"), { throwIfNoEntry: false })?.isDirectory()) {
       const agentSource = path.join(buildRoot, "apps", "rabi-agent");
       const agentTarget = path.join(stagingRoot, "apps", "rabi-agent");

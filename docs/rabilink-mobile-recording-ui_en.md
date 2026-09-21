@@ -1,5 +1,7 @@
 # Rabi mobile: all-day recording, messages and devices
 
+The event list supports bidirectional cursor pagination, appending 100 events across empty dates until the actual boundary. Memory retains at most 1000 events; evicted pages can be loaded again. Time plus event ID ordering preserves equal-timestamp records. Audio remains independently visible and linked to its video. Read failures preserve the list and player. Pagination still enumerates metadata and does not imply a persistent index.
+
 English | [简体中文](rabilink-mobile-recording-ui.md)
 
 > Status: 0.3.30-dev is installed. Two-page recording navigation, the top switch, unified review, phone recording and waveforms have current physical-device evidence. Glasses audio, PC transcription end-to-end and all-day soak remain pending. Historical evidence and current acceptance scope are separated below. See the [design, migration and acceptance contract](rabilink-all-day-recording_en.md).
@@ -139,7 +141,7 @@ New transcription events bind to the RabiLink application independently of the m
 
 ## Recording card transcription (0.3.46-dev)
 
-Saving a nonempty ASR list enables transcription for new recordings and enrolls retained local events for backfill. Agent recordings and ASR bindings from other RabiLink applications are not reassigned. Cards show pending, processing, retry, or transcript text; results also refresh during history playback without changing playback state.
+Saving a nonempty ASR list enables transcription for new recordings and enrolls retained local events for backfill. Agent recordings and ASR bindings from other RabiLink applications are not reassigned. Pending, processing and retry states remain in the background; review cards now show only ASR events with text, and refresh results during history playback without changing playback state.
 
 Backfill also groups legacy local audio without event IDs into batches of up to about one minute. Enrollment is bounded per batch. Receipt recovery indexes PCM files once instead of rescanning the directory for every acknowledgement.
 
@@ -179,3 +181,6 @@ Current source and debug APK: widths of at least 700dp use a 60/40 split, with p
 Visible pages coalesce refresh when capture signals, status or the audio directory change; explicit refresh remains available. Video sessions outside the time window are excluded before media traversal. Durations use a page-local cache bounded to 2048 entries, keyed by path, modification time and size, and rebuilt after closing. Thumbnails use a separate bounded queue, avoiding contention with record queries and playback. Original media and metadata remain unchanged; no deletion, migration or archival was added.
 
 Persistent indexed pagination is not complete: audio still uses its existing metadata cache and directory enumeration, and video manifests are enumerated. The debug APK was installed on a physical phone and passed portrait proportions, stable bounds when toggling controls, landscape split layout and a fully visible timeline. Landscape preview height is constrained by available space. The tested range contained no saved events, so real event clicks, refresh anchoring and long-running recording remain unverified; builds and unit tests do not replace that evidence.
+
+
+ASR review events appear only after successful transcription produces non-blank text. Raw audio remains saved but is hidden from the event list and historical timeline. Events keep their original capture time and identity, not the transcription completion time. Filters, pagination and previous/next navigation skip hidden audio before counting a page. Mobile live mode retains the microphone waveform. The mobile date/live/refresh toolbar includes previous/next event controls, and event type (ASR/video) is independent of device source.

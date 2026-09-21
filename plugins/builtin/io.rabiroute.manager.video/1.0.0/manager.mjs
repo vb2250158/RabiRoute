@@ -39,6 +39,11 @@ export const activate = definePlugin({ async activate(context) {
         response.setHeader("cache-control", "no-store");
         if (!runtime.localSettingsAllowed(request)) throw new VideoError("模型管理仅允许本机页面访问。", 403);
         if (request.method === "GET" && route === "/models") return respond(response, await models.snapshot());
+        if (request.method === "GET" && route === "/models/initialization") return respond(response, await models.downloadPlan());
+        if (request.method === "POST" && route === "/models/initialize") {
+          const body = await http.readJsonBody(request, 4096);
+          return respond(response, await service.exclusive(() => models.initializeModels(body)));
+        }
         if (request.method === "GET" && route === "/models/settings") return respond(response, models.directories());
         if (request.method === "PATCH" && route === "/models/settings") {
           const body = await http.readJsonBody(request, 4096);
@@ -57,10 +62,9 @@ export const activate = definePlugin({ async activate(context) {
       if (request.method === "GET" && route === "/status") return respond(response, service.snapshot());
       if (request.method === "POST" && route === "/runtime/start") {
         if (models.flight) throw new VideoError("请等待安装结束。", 409);
-        return respond(response, await service.start(() => models.root(), async () => {
+        return respond(response, await service.start(() => models.runtimeRoots(), async () => {
           if (models.flight) throw new VideoError("请等待安装结束。", 409);
-          const ready = await models.snapshot();
-          if (!ready.runtimeInstalled || !ready.models.some(model => model.installed)) throw new VideoError("请在模型管理中安装运行环境并下载模型。", 409);
+          await models.assertStartable();
         }));
       }
       if (request.method === "POST" && route === "/runtime/stop") return respond(response, await service.stop());

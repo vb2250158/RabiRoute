@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { HomeAssistantDeployment, type HomeAssistantDeploymentDriver } from "./homeAssistantDeployment.js";
+import type { HomeAssistantOsStatus } from "./homeAssistantOs.js";
 
 function fixture(t: test.TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ha-deployment-"));
@@ -79,4 +80,34 @@ test("stale revision, foreign images, mismatched addresses and stopped owners ca
   await f.owner.stop();
   await assert.rejects(f.owner.ensureReady(saved.revision), /正在停止/);
   assert.equal(f.calls.some(args => args[1] === "start"), false);
+});
+
+test("HA OS install preserves the preset directory and resumes after reboot without Docker", async t => {
+  const f = fixture(t);
+  const operations: string[] = [];
+  let status: HomeAssistantOsStatus = { state: "not_installed", message: "install", root: f.root };
+  const owner = new HomeAssistantDeployment(f.root, () => "http://127.0.0.1:8123", f.io, {
+    installationPath: f.root,
+    inspect: async () => status,
+    async run(operation, autoStart) {
+      operations.push(operation);
+      assert.equal(autoStart, true);
+      status = { ...status, state: operations.length === 1 ? "reboot_required" : "installed" };
+      return status;
+    }
+  });
+  const before = await owner.inspect();
+  const saved = await owner.save({ mode: "haos", containerName: "homeassistant", autoStart: true }, before.revision);
+  assert.equal(operations.length, 0, "saving must not elevate or install");
+  await assert.rejects(owner.install("stale"), /部署配置已变化/);
+  assert.equal((await owner.install(saved.revision)).state, "reboot_required");
+  const installed = await owner.install(saved.revision);
+  assert.equal(installed.installation, "installed");
+  assert.equal(installed.haosInstallPath, f.root);
+  assert.equal(installed.state, "starting", "VM creation is not HA readiness");
+  f.setRunning(true);
+  assert.equal((await owner.inspect()).state, "ready");
+  assert.deepEqual(operations, ["Install", "Install"]);
+  await owner.stop();
+  await assert.rejects(owner.install(saved.revision), /正在停止/);
 });

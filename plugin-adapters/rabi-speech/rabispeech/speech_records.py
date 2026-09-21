@@ -50,6 +50,7 @@ class SpeechRecordStore:
         processing_policy: str = "agent",
         capture_id: str = "",
         route_profile_id: str | None = None,
+        transcription_state: str = "ready",
     ) -> dict[str, object]:
         record_id = str(record_id or result.record_id or f"speech-{uuid.uuid4().hex}")
         resolved = (
@@ -97,6 +98,7 @@ class SpeechRecordStore:
                 "processing_policy": processing_policy,
                 "captureId": capture_id,
                 "processedAt": time.time(),
+                "transcription_state": transcription_state,
                 "route_profile_id": route_profile_id,
             }
         )
@@ -175,6 +177,7 @@ class SpeechRecordStore:
     ) -> list[dict[str, object]]:
         maximum = min(1000, max(1, int(limit)))
         records: list[dict[str, object]] = []
+        seen: set[str] = set()
         with self._lock:
             files = sorted(self.root.glob("*.jsonl"), reverse=True)
             for path in files:
@@ -187,7 +190,10 @@ class SpeechRecordStore:
                         row = json.loads(line)
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
-                    if not isinstance(row, dict) or not self._matches(
+                    if not isinstance(row, dict) or str(row.get("id")) in seen:
+                        continue
+                    seen.add(str(row.get("id")))
+                    if not self._matches(
                         row,
                         kind,
                         session_id,

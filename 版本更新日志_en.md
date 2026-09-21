@@ -6,6 +6,33 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.8 - 2026-09-21
+
+### All-day recording review and capture restore
+
+- Review shows only ASR events with successful, non-empty text. Raw recordings remain durable but stay out of the event list, timeline, filters and previous/next navigation. Events keep their original capture time and stable IDs rather than transcription-completion time.
+- Event lists paginate with a bidirectional `(startedAt,id)` cursor across empty dates to the real bounds. Desktop adds `GET /recent` and a rebuildable `recent-preview.json` so the first paint does not wait for the day index. Original records are not deleted.
+- Enable intent is persisted locally and restored for that persona on the next start; turning the master switch off clears it. One computer records for one persona. Sources can change while running, and a microphone failure does not stop screen or camera sampling.
+- Mobile events share `transcriptionState` (`pending` / `processing` / `ready` / `empty` / `error`). The phone review toolbar adds previous/next event controls plus independent type and device-source filters. Timeline zoom is 3 seconds to 24 hours.
+
+### Media workspace progress and model layout
+
+- Generation cards show the current ComfyUI stage, that stage's real percentage, sample steps and elapsed time. Stages without a count use an indeterminate bar and never estimate whole-video completion or remaining time.
+- Only one model root is saved; image and video weights are read from catalog categories. Initialization shows download size, additional disk use and free space before an explicit start.
+- First and last frames no longer need to match the output size. The workflow scales them proportionally and pads them to the selected size without cropping or stretching.
+
+### Home Assistant OS and speech launcher
+
+- Xiaomi Home Setup on Windows can install a local Hyper-V Home Assistant OS: it checks and enables Hyper-V, downloads the official stable VHDX, verifies SHA-256, and publishes only `127.0.0.1:8123`. The path is fixed in the local runtime directory and is not supplied by the browser. Existing unmanaged VMs are left unchanged, and no LAN firewall rule is created.
+- Packaged RabiSpeech uses a stable `runtime/speech/RabiSpeech.exe`. Identical bytes are left in place; content changes replace the file atomically. A running executable is reported as an error rather than falling back to a versioned path, so ordinary updates do not create a new Windows firewall identity.
+- Developer candidates copy `rabispeech` code and scripts when speech requirements are unchanged; a requirements change still requires a full release.
+
+### Repository and release
+
+- Version incremented to `0.3.8`, keeping `package.json`, `package-lock.json` (top-level and `packages[""]`), and both README badges and body version statements aligned.
+- Chinese and English Xiaomi Home, all-day recording, media workspace and Windows launcher documents follow the behavior above.
+- Device and installation acceptance remain separate. This source-version increment does not publish an installer or establish physical-device acceptance.
+
 ## 0.3.7 - 2026-09-20
 
 ### Local DSH discovery

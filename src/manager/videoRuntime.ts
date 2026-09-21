@@ -28,7 +28,7 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
   let mediaProbe: ProcessLease | undefined;
   let probesClosed = false;
   const exitListeners = new Set<() => void>();
-  async function start(modelRoot?: string): Promise<string> {
+  async function start(modelRoot?: string | string[]): Promise<string> {
     if(mediaProbe) throw new Error("请等待素材检查完成。");
     if (readOnly) throw new Error("视频服务在只读模式下不能启动。");
     if (lease && lease.child.exitCode === null && endpoint) return endpoint;
@@ -44,7 +44,8 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
       if (realRoot.startsWith("\\\\")) throw new Error("视频运行环境必须安装在本机磁盘。");
       const modelArguments: string[] = [];
       if (modelRoot) {
-        await validateLocalModelRoot(modelRoot);
+        const roots = [...new Set(Array.isArray(modelRoot) ? modelRoot : [modelRoot])];
+        for (const root of roots) await validateLocalModelRoot(root);
         const config = path.join(componentRoot, "model-paths.json");
         // JSON is a YAML subset; paths are never interpolated into YAML or a command.
         const audit: Omit<DataMutationAuditRecord, "outcome"> = {
@@ -55,7 +56,7 @@ export function createVideoRuntime(rootDir: string, identity: PluginIdentity, le
         };
         recordDataMutationAudit({ ...audit, outcome: "started" });
         try {
-          await fs.writeFile(config, JSON.stringify({ rabi_video: { base_path: modelRoot, is_default: true, diffusion_models: "diffusion_models", text_encoders: "text_encoders", vae: "vae", loras: "loras" } }));
+          await fs.writeFile(config, JSON.stringify(Object.fromEntries(roots.map((root, index) => [`rabi_media_${index}`, { base_path: root, is_default: true, diffusion_models: "diffusion_models", text_encoders: "text_encoders", vae: "vae", loras: "loras" }]))));
           recordDataMutationAudit({ ...audit, outcome: "committed" });
         } catch (error) {
           recordDataMutationAudit({ ...audit, outcome: "failed", result: "model_paths_write_failed" });

@@ -62,7 +62,10 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pythonHome -PathType C
 $env:PYTHONHOME = $pythonHome
 $env:PATH = "$pythonHome;$env:PATH"
 $hostScript = Join-Path $PSScriptRoot "windows_host.py"
-$hostExe = Join-Path $root "runtime\RabiSpeech.exe"
+$hostExe = if ($env:RABISPEECH_HOST_EXECUTABLE) { $env:RABISPEECH_HOST_EXECUTABLE } else { Join-Path $root "runtime\RabiSpeech.exe" }
+if ($env:RABISPEECH_HOST_EXECUTABLE -and -not (Test-Path -LiteralPath $hostExe -PathType Leaf)) {
+  throw "The configured stable RabiSpeech executable is missing."
+}
 if (-not $Reload -and $env:OS -eq "Windows_NT" -and (Test-Path -LiteralPath $hostExe -PathType Leaf)) {
   & $hostExe $hostScript
   exit $LASTEXITCODE

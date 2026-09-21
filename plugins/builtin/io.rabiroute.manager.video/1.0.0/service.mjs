@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildWorkflow, validateCommand, resolveWorkflow } from "./workflow.mjs";
+import { readProgressEvent } from "./progress.mjs";
 
 export class VideoError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -18,6 +19,7 @@ export class VideoService {
     this.jobs = new Map();
     this.endpoint = "";
     this.online = false;
+    this.frameAdaptationAvailable = false;
     this.closing = false;
     this.active = undefined;
     this.serial = Promise.resolve();
@@ -83,6 +85,7 @@ export class VideoService {
           }
         }
         const info = await this.request("/object_info");
+        this.frameAdaptationAvailable = Boolean(info.LoadImage && info.ResizeAndPadImage);
         this.availableModels=[];
         this.availableWorkflows=[];
         for (const model of this.catalog.models) {
@@ -129,6 +132,7 @@ export class VideoService {
         return this.view(previous);
       }
       if (this.closing || !this.online || !this.runtime.alive()) throw new VideoError("请先启动视频生成服务。", 503);
+      if ((command.firstFrame || command.lastFrame) && !this.frameAdaptationAvailable) throw new VideoError("视频运行环境缺少 ResizeAndPadImage 自动适配节点，请更新 ComfyUI 后重启视频服务。", 409);
       if(this.availableModels && !this.availableModels.includes(command.model)) throw new VideoError("所选模式的模型尚未安装，请打开模型管理。",409);
       let resolved;
       const routingCommand = {...command};
@@ -169,7 +173,7 @@ export class VideoService {
     while (!this.closing) {
       const job = await this.exclusive(async () => {
         const next = [...this.jobs.values()].find(item => item.status === "queued");
-        if (next) { next.status = "running"; await this.save(next); }
+        if (next) { next.status = "running"; next.startedAt = new Date().toISOString(); next.progressStage = "准备素材"; await this.save(next); }
         return next;
       });
       if (!job) return;
@@ -229,6 +233,7 @@ export class VideoService {
     const clientId = randomUUID();
     const socket = new this.WebSocket(`${this.endpoint.replace("http:", "ws:")}/ws?clientId=${clientId}`);
     let settle, rejectResult, promptId;
+    const earlyEvents = [];
     const result = new Promise((resolve, reject) => { settle = resolve; rejectResult = reject; });
     // The result can fail while the submission HTTP request is still pending.
     result.catch(() => {});
@@ -241,17 +246,21 @@ export class VideoService {
       if (record?.status?.status_str === "error") rejectResult(new VideoError("H3 执行失败，请检查视频服务日志。", 502));
       else if (record?.status?.completed) settle(record);
     };
-    socket.addEventListener("message", event => {
-      if (typeof event.data !== "string") return;
-      try {
-        const { type, data } = JSON.parse(event.data);
-        if (!promptId || data?.prompt_id !== promptId) return;
-        if (type === "progress" && data.max > 0) {
-          job.progress = Math.min(0.99, data.value / data.max);
-          this.publish("video.progress", { jobId: job.id, progress: job.progress });
+    const handleEvent = ({ type, data }) => {
+        if (!data?.prompt_id) return;
+        if (!promptId) { if (earlyEvents.length >= 128) earlyEvents.shift(); earlyEvents.push({ type, data }); return; }
+        if (data?.prompt_id !== promptId) return;
+        const patch = readProgressEvent(job, workflow, this.catalog.progressStages, type, data);
+        if (patch) {
+          Object.assign(job, patch);
+          this.publish("video.progress", { jobId: job.id, startedAt: job.startedAt, ...patch });
         }
         if (type === "execution_error" || type === "execution_interrupted") rejectResult(new VideoError("H3 执行失败或中断。", 502));
         if (type === "execution_success" || (type === "executing" && data.node === null)) inspect().catch(rejectResult);
+    };
+    socket.addEventListener("message", event => {
+      if (typeof event.data !== "string") return;
+      try { handleEvent(JSON.parse(event.data));
       } catch { rejectResult(new VideoError("H3 进度事件格式无效。", 502)); }
     });
     socket.addEventListener("error", () => rejectResult(new VideoError("H3 进度连接失败。", 502)));
@@ -262,6 +271,7 @@ export class VideoService {
       if (!submitted.prompt_id || Object.keys(submitted.node_errors ?? {}).length) throw new VideoError("H3 拒绝了生成工作流。", 502);
       promptId = submitted.prompt_id;
       job.providerJobId = promptId;
+      for (const event of earlyEvents.splice(0)) handleEvent(event);
       await this.save(job);
       await inspect();
       return await result;

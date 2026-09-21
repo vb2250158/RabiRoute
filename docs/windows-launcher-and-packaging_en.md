@@ -93,6 +93,8 @@ Only the returned `managerBaseUrl` is the current WebGUI and local API address. 
 
 ## Start, restart, and quit
 
+Installed RabiSpeech uses the stable `runtime/speech/RabiSpeech.exe` entrypoint while the current release supplies `windows_host.py`, business code and dependency locations. The verified release prepares the entrypoint on first launch, leaves identical bytes untouched and replaces changed bytes atomically. A running executable that cannot be replaced fails explicitly instead of falling back to a versioned executable path. Routine updates therefore retain the Windows firewall path identity. Migration may still require one authorization. No public-network allow rules are created or expanded; existing listener and phone connection settings are preserved.
+
 The installed Start-menu, desktop, and login-startup entries launch `RabiRouteHost.exe` directly. The source repository no longer provides a production-launch compatibility entry. Use `npm run dev` for source development or `npm run dev:hot` when WebGUI hot reload is needed. To validate a built Windows runtime, start only `RabiRouteHost.exe` from the local build or installation directory.
 
 Ordinary code changes do not require rebuilding the compressed Setup/ZIP. Materialize the NAS source into a local development directory, install the locked dependencies there, and run:

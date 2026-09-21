@@ -30,8 +30,7 @@ test("Route message endpoint catalog includes Xiaomi Home as a distinct smart-ho
   assert.equal(routeKindDefinitionsForGateway().some((entry) => entry.adapter === "xiaoai"), false);
   assert.match(routeConfigSource, /route\.adapters\.message-endpoint-settings/);
   assert.match(routeConfigSource, /settingsRenderersForMessageEndpoint/);
-  assert.match(endpointRendererSource, /此配置属于米家消息端/);
-  assert.match(endpointRendererSource, /地址与登录凭据都在当前 Route/);
+  assert.match(endpointRendererSource, /事件、设备控制与录像/);
   assert.match(authRendererSource, /type="password"/);
   assert.match(authRendererSource, /xiaomiHomeAuthClient\.connect\(\{/);
   assert.match(authRendererSource, /accessToken\.value = ""/);

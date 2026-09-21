@@ -93,6 +93,8 @@ Sunshine 的固定 base-port 约定不属于这里采用的不变量。RabiRoute
 
 ## 启动、重启与退出
 
+安装版 RabiSpeech 通过固定的 `runtime/speech/RabiSpeech.exe` 启动，当前版本提供 `windows_host.py`、业务代码和依赖位置。首次启动从已验证版本准备入口，内容相同不重写，内容变化时原子替换；运行中无法替换就报错，不退回带版本号的可执行路径。这样普通更新不会因路径变化再次触发 Windows 防火墙提示。迁移到固定路径时仍可能需要一次授权；不自动创建或扩大公用网络放行规则，保留现有监听地址与手机连接配置。
+
 安装版从开始菜单、桌面快捷方式或登录启动项直接运行 `RabiRouteHost.exe`。源码仓库不再提供生产启动兼容入口；开发时使用 `npm run dev`，需要 WebGUI 热更新时使用 `npm run dev:hot`。验证构建后的 Windows 运行态时，只启动本机构建或安装目录里的 `RabiRouteHost.exe`。
 
 普通代码改动不需要重新压缩 Setup/ZIP。先把 NAS 源码物化到本机开发目录并安装好锁定依赖，再运行：

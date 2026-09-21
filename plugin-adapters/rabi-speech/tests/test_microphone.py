@@ -33,13 +33,14 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
         lifecycle: list[str] = []
 
         async def transcribe(path: Path, config) -> TranscriptionResult:
+            assert lifecycle == ["processing"]
             assert path.read_bytes()[:4] == b"RIFF"
             assert config.asr_model == "fake-asr/local"
             transcribed.set()
             return TranscriptionResult(text="常驻转录成功", language="zh", duration=0.3, provider="fake-asr", model="local")
 
         async def submit(result: TranscriptionResult, session_id: str, utterance, input_source) -> dict[str, object]:
-            assert lifecycle == ["persisted"]
+            assert lifecycle == ["processing", "persisted"]
             lifecycle.append("submitted")
             submitted.append((result.text, session_id, utterance, input_source))
             return {
@@ -58,6 +59,7 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
             submitter=submit,
             playback_active=lambda: False,
             record_transcription=persist,
+            record_audio_state=lambda _config, _started, path, _source, state: lifecycle.append(state) if path.read_bytes()[:4] == b"RIFF" else None,
             stream_factory=lambda _config, _callback: stream,
         )
         await service.start(
@@ -119,7 +121,7 @@ def test_resident_microphone_segments_transcribes_and_submits(tmp_path: Path) ->
         ]
         assert all("text" not in item.get("details", {}) for item in snapshot["events"])
         assert len(submitted) == 1
-        assert lifecycle == ["persisted", "submitted"]
+        assert lifecycle == ["processing", "persisted", "submitted"]
         assert submitted[0][:2] == ("常驻转录成功", "session-one")
         assert submitted[0][2].started_at > 0
         assert submitted[0][2].completed_at >= submitted[0][2].started_at

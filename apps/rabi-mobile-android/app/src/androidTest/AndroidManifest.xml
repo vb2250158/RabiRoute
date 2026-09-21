@@ -16,4 +16,6 @@
     <instrumentation android:name="com.rabi.link.test.RecordingLayoutInstrumentation" android:targetPackage="com.rabi.link" />
     <instrumentation android:name="com.rabi.link.modules.wearable.WearableHealthCollectorInstrumentation" android:targetPackage="com.rabi.link" />
     <instrumentation android:name="com.rabi.link.modules.wearable.WearableHealthOutboxInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.RecordingPaginationInstrumentation" android:targetPackage="com.rabi.link" />
+    <instrumentation android:name="com.rabi.link.test.RecordingAsrNavigationInstrumentation" android:targetPackage="com.rabi.link" />
 </manifest>

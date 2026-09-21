@@ -105,7 +105,7 @@ class RecordingTimeRuler(context: Context) : View(context) {
         // A thin visual track retains a 64dp touch surface inside the preview.
         canvas.drawColor(0xB3191D22.toInt())
         paint.color = android.graphics.Color.LTGRAY; paint.textSize = d(10); paint.textAlign = Paint.Align.LEFT
-        canvas.drawText("绿色 录音 · 青色 录像",d(10),d(58),paint)
+        canvas.drawText("绿色 ASR · 青色 录像",d(10),d(58),paint)
         paint.textAlign = Paint.Align.RIGHT; canvas.drawText("双指缩放",width-d(10),d(58),paint)
         val step = TimelineRulerMath.majorStep(window,width/density)
         val minor = step/5

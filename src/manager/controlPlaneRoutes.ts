@@ -9954,6 +9954,10 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
     closeManagerEventClients();
   }
   managerRuntimeOwner.register("all_day_recording", () => allDayRecording.service.dispose());
+  if (!managerReadOnly) {
+    try { await allDayRecording.service.restore(); }
+    catch (error) { console.error("All-day recording could not restore its saved intent:", error); }
+  }
   managerRuntimeOwner.register("request_scoped_resources", () => stopManagerResources());
   managerRuntimeOwner.register("manual_trigger_processes", () => manualTriggerProcesses.stopAll());
 

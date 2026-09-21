@@ -34,6 +34,12 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     write(base, "skills/retired/SKILL.md", "retired skill\n");
     write(base, "source-patches/retired.json", "retired catalog\n");
     write(base, "node.exe", "node\n");
+    write(base, "plugin-adapters/rabi-speech/requirements.txt", "same dependencies\n");
+    write(build, "plugin-adapters/rabi-speech/requirements.txt", "same dependencies\n");
+    write(base, "plugin-adapters/rabi-speech/rabispeech/all_day_capture.py", "old capture\n");
+    write(build, "plugin-adapters/rabi-speech/rabispeech/all_day_capture.py", "new capture\n");
+    write(build, "plugin-adapters/rabi-speech/scripts/start.ps1", "new launcher\n");
+    write(build, "plugin-adapters/rabi-speech/config.json", "private excluded\n");
     write(base, "package.json", '{"scripts":{"build":"old"}}');
     write(build, "package.json", '{"scripts":{"build":"current"}}');
     write(base, "package-lock.json", '{"version":"0.3.0","lockfileVersion":3,"packages":{"":{"version":"0.3.0"}}}');
@@ -70,6 +76,8 @@ test("developer candidate overlays only built runtime layers and leaves the immu
     });
 
     assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/data")), false);
+    assert.equal(fs.readFileSync(path.join(result.packageRoot,"plugin-adapters/rabi-speech/rabispeech/all_day_capture.py"),"utf8"),"new capture\n");
+    assert.equal(fs.existsSync(path.join(result.packageRoot,"plugin-adapters/rabi-speech/config.json")),false);
     assert.equal(fs.existsSync(path.join(result.packageRoot, "apps/rabi-agent/lib/client.mjs")), true);
     assert.equal(fs.readFileSync(path.join(base, "dist", "manager.js"), "utf8"), "old manager\n");
     assert.equal(fs.readFileSync(path.join(result.packageRoot, "package.json"), "utf8"), '{"scripts":{"build":"current"}}');

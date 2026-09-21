@@ -123,6 +123,12 @@ def register_all_day_capture(api, microphone, require_loopback):
             raise HTTPException(422, "Invalid recording session")
         async with gate:
             if lease["id"] == session_id:
+                state = microphone.snapshot()
+                if state.get("audio_stream", {}).get("source") == "remote" or microphone.config.session_id != lease["audio_session"]:
+                    raise HTTPException(409, "麦克风输入来源已改变")
+                if not state.get("stream_active", state.get("running", False)):
+                    await microphone.stop(persist=False)
+                    await microphone.start({"session_id": lease["audio_session"]}, persist=False)
                 renew(session_id, 90)
                 return {"ok": True, "audioSessionId": lease["audio_session"], "shared": not lease["owned"]}
             if lease["id"]:
@@ -159,10 +165,13 @@ def register_all_day_capture(api, microphone, require_loopback):
                 if lease["id"] != session_id or microphone.config.session_id != lease["audio_session"] or not microphone.snapshot().get("running") or microphone.snapshot().get("audio_stream", {}).get("source") == "remote":
                     raise HTTPException(409, "麦克风监听已停止或输入来源已改变，请重新开始全天记录")
                 renew(session_id, interval + 45)
+        async def one(source):
             try:
-                return {"samples": await asyncio.to_thread(bounded_capture, sources, index)}
-            except subprocess.TimeoutExpired:
-                return {"samples": [{"source": key, "error": "Snapshot timed out"} for key in ("screen", "window", "camera") if sources.get(key)]}
+                return await asyncio.to_thread(bounded_capture, {source: True}, index)
+            except Exception as error:
+                return [{"source": source, "error": "Snapshot timed out" if isinstance(error, subprocess.TimeoutExpired) else str(error)[:500]}]
+        groups = await asyncio.gather(*(one(source) for source in ("screen", "window", "camera") if sources.get(source)))
+        return {"samples": [sample for group in groups for sample in group]}
 
 
 if __name__ == "__main__":

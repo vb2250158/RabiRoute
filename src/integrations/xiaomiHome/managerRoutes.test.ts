@@ -16,11 +16,12 @@ test("deployment paths and startup remain local and fenced before any body is re
   let reads = 0;
   const ctx = context(() => { reads++; }, () => undefined, responses);
   ctx.controlPlaneAccessAllowed = () => true;
-  for (const suffix of ["/deployment", "/deployment/start"]) {
+  for (const suffix of ["/deployment", "/deployment/start", "/deployment/install"]) {
     handleXiaomiHomeManagerApi(request({}, "POST", "192.168.0.20"), new URL(`http://localhost/api/agent/xiaomi-home${suffix}`), {} as http.ServerResponse, ctx);
   }
   handleXiaomiHomeManagerApi(request({}, "POST"), new URL("http://localhost/api/agent/xiaomi-home/deployment/start"), {} as http.ServerResponse, ctx);
-  assert.deepEqual(responses.map(value => value.status), [403, 403, 400]);
+  handleXiaomiHomeManagerApi(request({}, "POST"), new URL("http://localhost/api/agent/xiaomi-home/deployment/install"), {} as http.ServerResponse, ctx);
+  assert.deepEqual(responses.map(value => value.status), [403, 403, 403, 400, 400]);
   assert.equal(reads, 0);
 });
 

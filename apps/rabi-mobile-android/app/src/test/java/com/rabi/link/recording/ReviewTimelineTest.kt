@@ -11,7 +11,12 @@ class ReviewTimelineTest {
         assertEquals(0L,TimelineRulerMath.pan(now,100000.0,400,86_400_000L,now))
     }
     @Test fun rulerZoomIsBoundedAndViewportIncludesOverlappingRecords() {
-        assertEquals(30_000L,TimelineRulerMath.zoom(30_000,10.0))
+        assertEquals(3_000L,TimelineRulerMath.zoom(3_000,10.0))
+        assertEquals(86_400_000L,TimelineRulerMath.zoom(86_400_000,0.1))
+        for (window in listOf(3_000L,86_400_000L)) {
+            val bounds = TimelineRulerMath.range(10*86_400_000L,window)
+            assertEquals(window,bounds.last-bounds.first)
+        }
         assertEquals(TimelineRulerMath.MAX_WINDOW,TimelineRulerMath.zoom(TimelineRulerMath.MAX_WINDOW,0.1))
         assertEquals(60_000L,TimelineRulerMath.zoom(120_000,2.0))
         val range = TimelineRulerMath.range(100_000,60_000)

@@ -14,6 +14,7 @@ import { routeAgentOperationGuard } from "../routeAgentOperationGuard";
 import type { AgentInstance } from "@shared/agentInstance";
 import PersonaAvatar from "../components/PersonaAvatar.vue";
 import TrustedWebRendererHost from "../components/TrustedWebRendererHost.vue";
+import XiaomiHomeRendererHost from "../components/XiaomiHomeRendererHost.vue";
 import { NapcatState, type NapcatLoginPanelData, type NapcatHealthSnapshot } from "@shared/napcatStateContract";
 import { managerEventSource, managerAccessToken } from "../managerApi";
 import { pluginCatalogStore } from "../pluginCatalogStore";
@@ -4205,7 +4206,8 @@ watch(
 
                     <div v-else class="section-note">尚未扫描。展开面板后会自动扫描，也可以手动刷新。</div>
                   </div>
-                  <TrustedWebRendererHost
+                  <component
+                    :is="choice.type === 'xiaomiHome' ? XiaomiHomeRendererHost : TrustedWebRendererHost"
                     v-if="settingsRenderersForMessageEndpoint(choice.type).length"
                     :renderers="settingsRenderersForMessageEndpoint(choice.type)"
                     :context="{ messageEndpointType: choice.type, routeId: gateway?.id ?? '', scan: messageScanFor(choice.type), scanError: messageAdapterScan.error, scanLoading: messageAdapterScan.loading, refreshScan: runMessageAdapterScan }"
