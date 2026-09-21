@@ -16,7 +16,7 @@ test("Manager control plane has one owner and one atomic publication boundary", 
   assert.equal(occurrences("new ManagerRuntimeOwner<"), 1);
   assert.equal(occurrences("managerRuntimeOwner.publish("), 1);
   assert.match(control, /publish\(publication\)[\s\S]*removeAllListeners\("request"\)[\s\S]*on\("request", publication\.requestHandler\)[\s\S]*activeStorageLifecycleGeneration = publication/);
-  assert.match(control, /managerRuntimeOwner\.publish\(Object\.freeze\(\{[\s\S]*roleStorage: roleStorageApplication,[\s\S]*planStorage: planStorageStartupLifecycle,[\s\S]*routeCatalog: routeCatalogStartupLifecycle,[\s\S]*requestHandler: handleManagerRequest/);
+  assert.match(control, /managerRuntimeOwner\.publish\(Object\.freeze\(\{[\s\S]*roleStorage: roleStorageApplication,[\s\S]*planStorage: planStorageStartupLifecycle,[\s\S]*routeCatalog: routeCatalogStartupLifecycle,[\s\S]*requestHandler: withAutomaticCodeRequest\(handleManagerRequest\)/);
 });
 
 test("Manager teardown fences ingress and uses only the shared owner flight", () => {

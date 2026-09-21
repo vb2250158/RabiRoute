@@ -1293,7 +1293,7 @@ function buildAgentMessage(
       identityContexts.some(context => context.candidateParticipants.length > 0)
         ? "候选身份尚未确认；显示名仅作别名线索，不授予权限。" : "",
       ...identityObservationHints,
-      "身份关系独立于知识召回；确认、纠正或冲突处理前读取接口文档中的 identity-relations 合同。"
+      "身份关系独立于知识召回；确认、纠正、冲突处理或多电脑共用账号核对前，读取 skills/manage-rabiroute-identity-relations/SKILL.md，字段真源仍以接口文档中的 identity-relations 合同为准。"
     ]) : "",
     hasPersona && conversationSituation ? section("情景记录", conversationSituationLines(conversationSituation)) : "",
     String(values.configurationRequested || "") === "true" ? section("移动端配置助手", [

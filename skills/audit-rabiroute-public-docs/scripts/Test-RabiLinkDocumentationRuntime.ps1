@@ -2,13 +2,17 @@
 param(
   [string]$ProjectRoot = "",
   [string]$ConfigPath = "",
-  [string]$Username = "Administrator",
-  [string]$RemoteRoot = "C:\opt\rabilink-relay",
+  [string]$Username = "",
+  [string]$RemoteRoot = "",
   [switch]$Json
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+if ([string]::IsNullOrWhiteSpace($Username) -or [string]::IsNullOrWhiteSpace($RemoteRoot)) {
+  throw "Pass -Username and -RemoteRoot from the authorized deployment configuration."
+}
 
 if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
   $ProjectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\.."))

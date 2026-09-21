@@ -11,7 +11,7 @@ test("AgentPacket plan hints explain shared guidance and approval feedback workf
   assert.match(hints, /guidance_response/);
   assert.match(hints, /kind=approval_response/);
   assert.match(hints, /调整后续步骤/);
-  assert.match(hints, /不直接推进步骤/);
+  assert.match(hints, /不自动执行或完成步骤/);
   assert.match(hints, /另行 PATCH/);
   assert.match(hints, /approvalRequest/);
   assert.match(hints, /files\/commands\/changes/);

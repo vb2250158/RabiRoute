@@ -1,10 +1,13 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
+import { listWorkbuddySessionDescriptors } from "../workbuddySessionStore.js";
+import { workbuddyHomeDir } from "../workbuddyHome.js";
+export { workbuddyHomeDir } from "../workbuddyHome.js";
 
 const execute = promisify(execFile);
 type RunInstaller = (args: string[]) => Promise<unknown>;
@@ -40,15 +43,10 @@ function workbuddyHookInstallRoot(): string {
   return path.join(base, "RabiRoute", "agent-hooks", WORKBUDDY_HOOK_PACKAGE);
 }
 
-/**
- * CodeBuddy resolves its user-level settings through `WORKBUDDY_CONFIG_DIR`
- * (`~/.workbuddy`) in the desktop app, so that is the file RabiRoute writes.
- */
 function workbuddySettingsPath(): string {
   const configured = process.env.RABI_WORKBUDDY_SETTINGS_FILE?.trim();
   if (configured) return configured;
-  const configDir = process.env.WORKBUDDY_CONFIG_DIR?.trim();
-  return path.join(configDir || path.join(os.homedir(), ".workbuddy"), "settings.json");
+  return path.join(workbuddyHomeDir(), "settings.json");
 }
 
 type HookCommand = { type?: string; command?: string; timeout?: number };
@@ -114,6 +112,124 @@ function writeSettingsFile(filePath: string, settings: Record<string, unknown>):
   fs.renameSync(temporary, filePath);
 }
 
+type WorkbuddyHookProbe = {
+  ok: boolean;
+  scriptPath: string;
+  detail: string;
+};
+
+/**
+ * Prove the installed hook actually runs, rather than trusting that the file
+ * write succeeded. A settings file can be perfectly well-formed and still be
+ * inert: the script may be missing after an interrupted copy, the Node runtime
+ * may not resolve, or the Manager may be unreachable so every event silently
+ * returns null. The hook's own `--self-check` mode walks that whole path and
+ * reports one verdict, so this delegates instead of re-implementing the probe.
+ */
+const activeWorkbuddyProbes = new Map<string, ChildProcess>();
+
+export async function probeWorkbuddyHook(installRoot: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<WorkbuddyHookProbe> {
+  const scriptPath = path.join(installRoot, "scripts", WORKBUDDY_HOOK_MARKER);
+  const failed = (detail: string): WorkbuddyHookProbe => ({ ok: false, scriptPath, detail });
+  if (options.signal?.aborted) return failed("自检已取消");
+  if (!fs.existsSync(scriptPath)) return failed("未找到 Hook 入口脚本");
+  const key = path.resolve(scriptPath);
+  if (activeWorkbuddyProbes.has(key)) return failed("上一次自检仍未确认退出，请稍后检查");
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.min(20_000, Math.max(1, Math.floor(options.timeoutMs!))) : 20_000;
+  return new Promise(resolve => {
+    let child: ChildProcess;
+    try { child = spawn(process.execPath, [scriptPath, "--self-check"], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); }
+    catch { resolve(failed("无法启动自检进程")); return; }
+    activeWorkbuddyProbes.set(key, child);
+    let settled = false;
+    let failure: string | undefined;
+    let bytes = 0;
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let closeDeadline: NodeJS.Timeout | undefined;
+    const finish = (result: WorkbuddyHookProbe) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline); if (closeDeadline) clearTimeout(closeDeadline);
+      options.signal?.removeEventListener("abort", aborted);
+      stdout.length = 0; stderr.length = 0;
+      resolve(result);
+    };
+    const stop = (reason: string) => {
+      if (failure) return;
+      failure = reason;
+      try { child.kill("SIGKILL"); } catch { /* Close confirmation, not kill's return value, is authoritative. */ }
+      closeDeadline = setTimeout(() => {
+        child.stdout?.pause(); child.stderr?.pause();
+        // Keep the resource entry until close; another probe must not pile up.
+        finish(failed("自检未能确认退出，已禁止重复启动"));
+      }, 1000);
+    };
+    const aborted = () => stop("自检已取消");
+    const receive = (target: Buffer[], chunk: Buffer) => {
+      if (settled || failure) return;
+      bytes += chunk.length;
+      if (bytes > 64 * 1024) { stop("自检输出超过安全上限"); return; }
+      target.push(chunk);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => receive(stdout, chunk));
+    child.stderr?.on("data", (chunk: Buffer) => receive(stderr, chunk));
+    child.once("error", () => stop("自检进程执行失败"));
+    child.once("close", (code, signal) => {
+      if (activeWorkbuddyProbes.get(key) === child) activeWorkbuddyProbes.delete(key);
+      if (settled) return;
+      if (failure) { finish(failed(failure)); return; }
+      if (code !== 0 || signal) { finish(failed(`自检进程未成功退出（${code ?? "signal"}）`)); return; }
+      if (Buffer.concat(stderr).toString("utf8").includes("[rabi-workbuddy-context]")) { finish(failed("Hook 报告自检失败")); return; }
+      try {
+        const verdict = JSON.parse(Buffer.concat(stdout).toString("utf8").trim().split("\n").pop() || "null") as { ok?: unknown } | null;
+        // Neither child output nor error messages are safe to echo into audit/UI diagnostics.
+        finish(verdict?.ok === true ? { ok: true, scriptPath, detail: "自检通过" } : failed("自检未确认 Manager 可用，请检查 Host 与绑定状态"));
+      } catch { finish(failed("自检没有返回有效结果")); }
+    });
+    const deadline = setTimeout(() => stop("自检超时"), timeoutMs);
+    options.signal?.addEventListener("abort", aborted, { once: true });
+    if (options.signal?.aborted) aborted();
+  });
+}
+
+/**
+ * WorkBuddy reads its hook configuration once, when a session process starts,
+ * and there is no settings watcher to reload it. An already-running task
+ * therefore keeps the hook set it started with, no matter how many times the
+ * installer runs. Rather than let the operator guess, name the tasks that are
+ * still on the old set so "restart this one" is a concrete instruction.
+ */
+function workbuddyRestartGuidance(): string[] {
+  try {
+    const descriptors = listWorkbuddySessionDescriptors();
+    // Only surfaces the operator actually recognises. `prewarm` and `teammate`
+    // sessions are internal, and the CLI host helper carries its own temp cwd —
+    // naming it would tell the user to restart something they never opened.
+    const live = descriptors.filter(descriptor => {
+      if (!descriptor.processAlive || descriptor.stale) return false;
+      if (descriptor.kind === "prewarm" || descriptor.kind === "teammate") return false;
+      const cwd: string | undefined = descriptor.cwd;
+      return typeof cwd === "string" && cwd.length > 0 && !cwd.includes("__workbuddy_cli_host__");
+    });
+    if (live.length === 0) return ["当前没有正在运行的 WorkBuddy 任务，新开任务即会带上新 Hook。"];
+    // Several sessions can share one workspace; the operator opens tasks by
+    // project, so collapse them rather than naming the same path twice.
+    const workspaces = [...new Set(live.map(descriptor => descriptor.cwd || descriptor.sessionId))];
+    const names = workspaces.slice(0, 5);
+    if (workspaces.length > names.length) names.push(`…另有 ${workspaces.length - names.length} 个工作目录`);
+    return [
+      `以下 ${workspaces.length} 个运行中的工作区仍在使用旧 Hook，需重启会话才会生效：`,
+      ...names.map(name => `  · ${name}`),
+      "新开任务会自动加载新 Hook，无需重启桌面端。"
+    ];
+  } catch {
+    // Guidance is best-effort: failing to enumerate sessions must not fail an
+    // otherwise successful install.
+    return ["新开任务会自动加载新 Hook；已打开的任务需重启会话后生效。"];
+  }
+}
+
 /**
  * WorkBuddy hook installation. CodeBuddy exposes the same lifecycle hooks as
  * Codex, but its plugin CLI costs roughly ninety seconds per invocation and its
@@ -121,7 +237,7 @@ function writeSettingsFile(filePath: string, settings: Record<string, unknown>):
  * the user-level settings file instead and keeps the plugin package available
  * for users who prefer `/plugin` management.
  */
-async function installWorkbuddyHooks(rootDir: string): Promise<{ message: string }> {
+async function installWorkbuddyHooks(rootDir: string, options: { signal?: AbortSignal } = {}): Promise<{ message: string }> {
   const packageRoot = path.join(rootDir, "dist", "agent-hooks", "plugins", WORKBUDDY_HOOK_PACKAGE);
   const declarationFile = path.join(packageRoot, "hooks", "hooks.json");
   if (!fs.existsSync(declarationFile)) {
@@ -145,14 +261,22 @@ async function installWorkbuddyHooks(rootDir: string): Promise<{ message: string
   }
   writeSettingsFile(settingsPath, { ...settings, hooks: merged });
 
-  return {
-    message: `Hook 已更新到本机 WorkBuddy（脚本目录 ${installRoot}，配置 ${settingsPath}）。`
-      + "新开的 WorkBuddy 任务会自动加载；已打开的任务需要重启会话后生效。"
-  };
+  const probe = await probeWorkbuddyHook(installRoot, options);
+  const installedEvents = Object.keys(merged).filter(event => merged[event]?.length).join("、");
+  const lines = [
+    `Hook 已写入 WorkBuddy（${installedEvents}）。`,
+    `脚本目录 ${installRoot}`,
+    `配置文件 ${settingsPath}`,
+    probe.ok
+      ? `自检通过：${probe.detail}`
+      : `自检未通过：${probe.detail}。Hook 配置已写入，但尚未确认可用；请检查 Host 与绑定状态。`,
+    ...workbuddyRestartGuidance()
+  ];
+  return { message: lines.join("\n") };
 }
 
 /** Install only the Rabi context plugin through the Agent's own plugin manager. */
-export function updateAgentHooks(rootDir: string, adapter: string, run?: RunInstaller): Promise<{ message: string }> {
+export function updateAgentHooks(rootDir: string, adapter: string, run?: RunInstaller, options: { signal?: AbortSignal } = {}): Promise<{ message: string }> {
   if (adapter !== "codex" && adapter !== "dsh" && adapter !== "workbuddy" && adapter !== "antigravity") {
     return Promise.reject(new Error("当前 Agent 尚未提供 Hook 更新安装包。"));
   }
@@ -161,7 +285,7 @@ export function updateAgentHooks(rootDir: string, adapter: string, run?: RunInst
   if (existing) return existing;
   const operation = (async () => {
     if (adapter === "workbuddy") {
-      const result = await installWorkbuddyHooks(rootDir);
+      const result = await installWorkbuddyHooks(rootDir, options);
       recordDataMutationAudit({ group: "config", event: "agent_hooks_updated", owner: "agent-hook-installer",
         action: "update-hooks", dataSource: { kind: "file", id: `plugins/${WORKBUDDY_HOOK_PACKAGE}` }, target: { type: "agent", id: adapter }, outcome: "committed" });
       return result;

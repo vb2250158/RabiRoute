@@ -101,6 +101,9 @@ npm run webgui:build
 
 ```powershell
 $status = & "$env:LOCALAPPDATA\Programs\RabiRoute\RabiRouteHost.exe" --command status --json | ConvertFrom-Json
+if (-not $status.managerBaseUrl -or -not $status.applicationGenerationId -or -not $status.managerInstanceId) { throw "Host 未返回完整身份。" }
+$meta = Invoke-RestMethod ($status.managerBaseUrl + "/meta") -TimeoutSec 10
+if ($meta.applicationGenerationId -ne $status.applicationGenerationId -or $meta.managerInstanceId -ne $status.managerInstanceId) { throw "Manager 身份不一致。" }
 Start-Process ($status.managerBaseUrl + "/#/docs")
 Start-Process ($status.managerBaseUrl + "/#/speech")
 Start-Process ($status.managerBaseUrl + "/reports/rabispeech-model-benchmark.html")

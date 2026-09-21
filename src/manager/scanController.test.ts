@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import { runBoundedScans } from "./scanController.js";
 
 test("bounded scans return partial results when one probe never settles", async () => {
   const startedAt = Date.now();
-  const result = await runBoundedScans([
+  const result = await withTestDeadline(runBoundedScans([
     {
       key: "healthy",
       run: async () => ({ value: "ready" }),
@@ -22,7 +23,7 @@ test("bounded scans return partial results when one probe never settles", async 
       },
       fallback: (diagnostic) => ({ value: diagnostic.state })
     }
-  ] as const, { deadlineMs: 40 });
+  ] as const, { deadlineMs: 40 }), 1_000);
 
   assert.equal(result.values.healthy.value, "ready");
   assert.equal(result.values.stalled.value, "timeout");

@@ -422,7 +422,8 @@ export async function loadRolePlanPage(
   roleId: string,
   cursor = "",
   limit = ROLE_PLAN_PAGE_SIZE,
-  filter: RolePlanPageFilter = {}
+  filter: RolePlanPageFilter = {},
+  signal?: AbortSignal
 ): Promise<RolePlanPage> {
   const params = new URLSearchParams({ limit: String(limit), detail: "summary" });
   if (cursor) params.set("cursor", cursor);
@@ -433,7 +434,7 @@ export async function loadRolePlanPage(
   for (const tag of filter.tags || []) params.append("tag", tag);
   if (filter.includeFacets === false) params.set("facets", "0");
   const page = await managerData<Omit<RolePlanPage, "items"> & { items: RolePlanSummary[] }>(
-    `/api/roles/${encodeURIComponent(roleId)}/plans?${params.toString()}`
+    `/api/roles/${encodeURIComponent(roleId)}/plans?${params.toString()}`, { signal }
   );
   return {
     ...page,
@@ -451,9 +452,9 @@ export async function loadRolePlanPreview(roleId: string, planId: string): Promi
   ));
 }
 
-export async function loadRolePlan(roleId: string, planId: string): Promise<RolePlan> {
+export async function loadRolePlan(roleId: string, planId: string, signal?: AbortSignal): Promise<RolePlan> {
   const plan = normalizeRolePlanFromManager(await managerData<RolePlan>(
-    `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`
+    `/api/roles/${encodeURIComponent(roleId)}/plans/${encodeURIComponent(planId)}`, { signal }
   ));
   return {
     ...plan,

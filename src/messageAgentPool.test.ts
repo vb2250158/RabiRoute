@@ -374,6 +374,7 @@ test("Message Agent pool sends the body once with explicit attachment recovery g
   const sends = calls.filter((call) => call.action === "send");
   assert.equal(sends.length, 1);
   assert.deepEqual(sends[0]?.imagePaths, []);
+  assert.match(deliveryPayloadText(sends[0]), /请判断图片中的问题/);
   assert.match(deliveryPayloadText(sends[0]), /message:image:missing/);
   assert.match(deliveryPayloadText(sends[0]), /等待附件恢复或交接/);
   assert.match(deliveryPayloadText(sends[0]), /不得推断内容/);

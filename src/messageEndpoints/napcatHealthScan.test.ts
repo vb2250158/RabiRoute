@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import { scanNapcatHealthReadOnly } from "./napcatHealthScan.js";
 
 type Instance = {
@@ -22,7 +23,7 @@ test("NapCat health scan is concurrent, bounded, and preserves partial instance 
   ];
 
   const startedAt = Date.now();
-  const result = await scanNapcatHealthReadOnly({
+  const result = await withTestDeadline(scanNapcatHealthReadOnly({
     runtimes,
     gatewayId: (runtime) => runtime.id,
     instances: (runtime) => runtime.instances,
@@ -44,7 +45,7 @@ test("NapCat health scan is concurrent, bounded, and preserves partial instance 
         webui: { reachable: false, url: instance.webuiUrl }
       };
     }
-  }, { deadlineMs: 45 });
+  }, { deadlineMs: 45 }), 1_000);
 
   assert.deepEqual(starts.sort(), ["ready", "stalled"]);
   assert.equal(result.payload["route-a"].instances.ready.ok, true);

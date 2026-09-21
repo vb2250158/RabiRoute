@@ -7,10 +7,21 @@ description: 查找项目资料、预定安排、历史决定、任务进展或�
 
 本技能由 RabiRoute 维护，可整目录安装到项目 `.agents/skills/rabi-knowledge-search/`。仅负责查询和定位线索，不创建计划、不绑定人格、不投递任务，也不修改记忆正文。
 
+## 首轮业务查询
+
+用户询问项目事实、历史决定、进度或要求根据群聊回复时，先从原话和附件提取主题、对象、平台和少量同义词。完成必要的身份发现后，第一轮业务查询搜索相关计划、近期记忆和沉淀记忆；涉及消息上下文时并行查询消息端历史。当前已知 roleId 时不先列 Agent 会话或扫描插件源码。截图与旧回复是证据，不自动授权发送或改计划。
+
+```http
+GET /api/roles/:roleId/message-endpoint-history?query=:query&match=any&includeArchives=1&limit=10
+GET /api/roles/:roleId/knowledge/search?query=:query&mode=keywords&limit=10
+```
+
+路径和查询参数 URL 编码。消息 query 支持空格、英文逗号、中文逗号和顿号；match=all 要求全部命中。按已知目标增加 adapter、target、conversationKey、from、to。查群里已有答案时保留出站回复；只查用户原始群反馈时才加 kind=group，私聊反馈用 kind=private。核对 entries、coverage、消息时间、方向及回复链；空结果只说明已覆盖范围。知识与消息是两个独立索引，任一失败不取消另一个成功结果。需要进一步恢复上下文时读 [消息查询](../napcat-qq-gateway/references/message-query.md)。
+
 ## 搜索顺序
 
 1. 先判断用户在找什么：预定安排和历史决定优先查相关计划及记忆；当前生效值还要回到配置、服务或运行证据核验。用户指定精确文件、要求源码调查或禁止 Rabi 查询时，直接按用户范围处理。读取已知的规则、连接配置和必要接口定义不受此顺序限制。
-2. Rabi 在线才做前置查询。复用本轮已核验的 Manager 身份；否则通过现有连接工具或 `RabiRouteHost.exe --command status --json` 获取 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`。源码模式只使用当前结构化 READY 或显式注入的完整地址。读取 `<managerBaseUrl>/meta`，确认 `health.state=healthy`、`requiredReady=true` 且地址、generation 与实例一致。
+2. Rabi 在线才做前置查询。复用本轮已核验的 Manager 身份；否则通过现有连接工具或 `RabiRouteHost.exe --command status --json` 获取 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`。源码模式只使用当前结构化 READY 或显式注入的完整地址。读取 `<managerBaseUrl>/meta`，确认 `health.live=true`、`health.requiredReady=true`、`health.state` 为 `healthy` 或 `degraded` 且地址、generation 与实例一致。
 3. Host 未在线、没有 READY、健康或身份核对失败、查询超时或接口不可用时，本轮跳过 Rabi，直接普通搜索。不等待上线，不扫描端口、不读取退役实例锁、不启动或重启 Host/Manager，不为了可选查询修复服务或遍历角色文件。请求使用有限超时，建议每次 5 秒；身份失效最多重新发现一次，已确认离线后本轮不逐次探测。鉴权仅使用已有授权配置，不输出凭据；没有访问权限就跳过。
 4. 从当前任务注入、已知会话绑定或项目配置确定相关 `roleId`，不写死人格，不自动换绑，不遍历全部人格。无法确定相关人格时继续普通搜索。将用户原词及少量同义词分别查询，保留时间、项目、对象等限定；不要把多个词拼成未经接口支持的正则或 OR 表达式。
 5. 在调用文件搜索前，使用下列统一索引 API 搜索相关人格的计划、近期记忆和沉淀记忆。先用少量结果缩小范围；只读必要的命中详情。已有必读项或本轮同一查询结果可复用，Hook 未召回不表示搜索无结果。

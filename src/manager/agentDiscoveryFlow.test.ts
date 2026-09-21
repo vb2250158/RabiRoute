@@ -63,7 +63,7 @@ test("real Hook discovery GET guidance reaches authorized API and public Skill c
   try {
     const { requestInstanceHook } = await import(hookModuleUrl) as { requestInstanceHook: (input: unknown, configPath: string) => Promise<{ additionalContext: string }> };
     const decision = await requestInstanceHook({ session_id: agent.sessionId }, configPath);
-    const targets = [...decision.additionalContext.matchAll(/\bGET\s+(\/[^\s`]+)/g)].map(match => match[1]);
+    const targets = [...decision.additionalContext.matchAll(/--api GET\s+(\/[^\s`]+)/g)].map(match => match[1]);
     assert.ok(targets.includes("/api/lan-agent/capabilities"));
     assert.ok(targets.includes("/api/lan-agent/resources"));
     const results = new Map<string, Record<string, any>>();

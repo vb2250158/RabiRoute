@@ -66,9 +66,18 @@ test("RabiLink event hub resolves one-shot waiters only for matching events", as
 
   hub.publish("outbox_available", { appId: "app-one" });
 
-  assert.equal(await matching.promise, true);
-  assert.equal(await otherApp.promise, false);
-  hub.close();
+  let deadline;
+  try {
+    const boundedOther = Promise.race([
+      otherApp.promise,
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("Fixture waiter exceeded its deadline.")), 1000); })
+    ]);
+    assert.equal(await matching.promise, true);
+    assert.equal(await boundedOther, false);
+  } finally {
+    clearTimeout(deadline);
+    hub.close();
+  }
 });
 
 test("RabiLink event hub keeps independent stream channels isolated", () => {

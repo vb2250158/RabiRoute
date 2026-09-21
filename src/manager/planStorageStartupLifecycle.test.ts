@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import { fileURLToPath } from "node:url";
 import {
   createPlanStorageStartupAttempt,
@@ -171,7 +172,7 @@ test("stop during timeout cancellation awaits one shared cancellation flight and
   });
 
   lifecycle.start();
-  await cancellationStarted.promise;
+  await withTestDeadline(cancellationStarted.promise, 2_000);
 
   let stopSettled = false;
   const sharedStop = lifecycle.stop();

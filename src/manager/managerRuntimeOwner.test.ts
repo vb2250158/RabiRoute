@@ -1,6 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { runIsolatedDeadlineProbe } from "../testFiniteDeadline.js";
 import { ManagerRuntimeOwner } from "./managerRuntimeOwner.js";
+
+for (const outcome of ["resolved", "timeout"] as const) {
+  test(`isolated teardown ${outcome} settles without a ref keeper and exits`, () => {
+    runIsolatedDeadlineProbe(`
+      import assert from "node:assert/strict";
+      import { ManagerRuntimeOwner } from "./src/manager/managerRuntimeOwner.ts";
+      const owner = new ManagerRuntimeOwner({
+        fenceIngress() {}, publish() {}, unpublish() {}, resourceStopTimeoutMs: 20
+      });
+      owner.register("fixture", () => ${outcome === "timeout" ? "new Promise(() => {})" : "Promise.resolve()"});
+      const stopping = owner.teardown("isolated-probe");
+      assert.equal(owner.teardown("duplicate"), stopping);
+      ${outcome === "timeout" ? `await assert.rejects(stopping, error => {
+        assert(error instanceof AggregateError);
+        assert.equal(error.errors.length, 1);
+        assert.match(error.errors[0].message, /resource stop timed out/);
+        return true;
+      });` : "await stopping;"}
+      console.log("deadline-probe-complete");
+    `);
+  });
+}
 
 test("publish is unique and teardown fences synchronously before reverse awaited release", async () => {
   const events: string[] = [];

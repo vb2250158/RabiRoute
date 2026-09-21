@@ -51,6 +51,25 @@ test("managed message images are split into stable batches of eight and only the
   );
 });
 
+test("unavailable images produce one body-only batch without throwing", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-unavailable-image-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const staged = stageManagedMessageImages({
+    workspace: root,
+    requirementId: "missing-image-fixture",
+    attachments: [{ id: "missing-image", path: path.join(root, "missing.png") }]
+  });
+  assert.deepEqual(staged.ready, []);
+  assert.equal(staged.unavailable.length, 1);
+  assert.equal(staged.unavailable[0]?.id, "missing-image");
+  const batches = buildManagedMessageImageBatches({
+    requirementId: "missing-image-fixture", prompt: "Keep the original body", images: staged.ready
+  });
+  assert.equal(batches.length, 1);
+  assert.deepEqual(batches[0]?.imagePaths, []);
+  assert.ok(batches[0]?.prompt.startsWith("Keep the original body\n\n"));
+});
+
 test("managed image staging rejects a symlink that redirects its cache outside the workspace", { skip: process.platform === "win32" }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-managed-message-symlink-"));
   const workspace = path.join(root, "workspace");

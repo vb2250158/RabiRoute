@@ -1,0 +1,4 @@
+interface:
+  display_name: "RabiSpeech IndexTTS2"
+  short_description: "通过 RabiSpeech 使用本地 IndexTTS2 生成人格语音"
+  default_prompt: "使用 $indextts2-audio 通过 RabiSpeech 把这段文字生成为本地 IndexTTS2 语音。"

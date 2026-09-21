@@ -38,8 +38,8 @@ Ask the user to submit one strict marker:
 Example:
 
 ```text
-[rabi:use YeYu]
-从这一轮开始使用夜雨人格。
+[rabi:use ExampleRole]
+从这一轮开始使用示例人格。
 ```
 
 `UserPromptSubmit` sends the real `session_id` and raw prompt to Rabi Manager. The Manager validates the role, persists the binding, runs the normal Rabi role-knowledge snapshot, and returns the context for same-turn injection.

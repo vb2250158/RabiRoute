@@ -11,6 +11,7 @@ import {
   normalizeWorkbuddyWorkspace,
   parseWorkbuddySessionDescriptor,
   resolveWorkbuddyTask,
+  readWorkbuddyTask,
   sameWorkbuddyWorkspace,
   workbuddyProjectId,
   WORKBUDDY_SESSION_STALE_MS
@@ -45,6 +46,7 @@ function createTaskDatabase(rows: Array<Record<string, unknown>>): { root: strin
       last_activity_at, deleted_at, is_playground, is_background_automation, mode, model
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
   `);
+  database.exec("BEGIN");
   for (const row of rows) {
     insert.run(
       String(row.id), String(row.cwd), String(row.title ?? ""),
@@ -55,6 +57,7 @@ function createTaskDatabase(rows: Array<Record<string, unknown>>): { root: strin
       Number(row.deleted_at ?? 0), String(row.mode ?? "craft"), String(row.model ?? "m")
     );
   }
+  database.exec("COMMIT");
   database.close();
   return { root, databasePath };
 }
@@ -224,6 +227,57 @@ test("auto title never drives the visible name or name lookup", () => {
   assert.equal(tasks[0].userNamed, false);
   assert.equal(tasks[0].autoTitle, "首条 prompt 自动标题");
   assert.deepEqual(listWorkbuddyWorkspaces(databasePath), ["C:\\Data\\Project"]);
+});
+
+test("listWorkbuddyTasks intersects workspace selectors before stable pagination", (t) => {
+  const { root, databasePath } = createTaskDatabase([
+    { id: "outside", cwd: "C:\\work\\outside", title: "shared", updated_at: 9_000 },
+    { id: "z", cwd: "C:\\work\\one", title: "shared", updated_at: 8_000 },
+    { id: "a", cwd: "C:\\work\\two", title: "shared", updated_at: 8_000 },
+    { id: "older", cwd: "C:\\work\\one", title: "shared", updated_at: 7_000 },
+    { id: "not-query", cwd: "C:\\work\\one", title: "different", updated_at: 10_000 }
+  ]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const request = { databasePath, descriptors: [], query: "shared", limit: 1, allowedWorkspaces: ["c:/work/one/", "C:\\WORK\\TWO"] };
+  assert.deepEqual(listWorkbuddyTasks(request).map(task => task.id), ["a"]);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, offset: 1 }).map(task => task.id), ["z"]);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, offset: 2 }).map(task => task.id), ["older"]);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, workspace: "C:\\work\\one", limit: 10 }).map(task => task.id), ["z", "older"]);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, workspace: "C:\\work\\outside" }), []);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, allowedWorkspaces: [] }).map(task => task.id), ["outside"]);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, allowedWorkspaces: undefined, workspace: "C:\\work\\one" }).map(task => task.id), ["z"]);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, allowedWorkspaces: ["C:\\work\\missing"] }), []);
+});
+
+test("SQL workspace selection reuses normalization and treats quoted paths as data", (t) => {
+  const { root, databasePath } = createTaskDatabase([
+    { id: "quoted", cwd: "C:\\work\\user's-project", title: "same" },
+    { id: "unicode", cwd: "C:\\WORK\\Ärea", title: "same" },
+    { id: "other", cwd: "C:\\work\\other", title: "same" }
+  ]);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.deepEqual(listWorkbuddyTasks({ databasePath, descriptors: [], allowedWorkspaces: ["c:/work/user's-project/", " c:/work/ärea/ "] }).map(task => task.id), ["quoted", "unicode"]);
+});
+
+test("workspace selection happens before the 10000-row inventory cap", (t) => {
+  const rows = Array.from({ length: 10_001 }, (_, index) => ({
+    id: `outside-${index}`, cwd: "C:\\work\\outside", title: "same", updated_at: 20_000 + index
+  }));
+  rows.push({ id: "allowed-old", cwd: "C:\\work\\one", title: "same", updated_at: 1_000 });
+  const { root, databasePath } = createTaskDatabase(rows);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const request = { databasePath, descriptors: [], limit: 10_000 };
+  assert.equal(listWorkbuddyTasks(request).length, 10_000);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, allowedWorkspaces: ["c:/work/one/"] }).map(task => task.id), ["allowed-old"]);
+  assert.deepEqual(listWorkbuddyTasks({ ...request, workspace: "c:/work/one/" }).map(task => task.id), ["allowed-old"]);
+  assert.equal(readWorkbuddyTask("allowed-old", request)?.id, "allowed-old");
+  assert.equal(readWorkbuddyTask("missing", request), null);
+  assert.equal(readWorkbuddyTask("allowed-old' OR 1=1 --", request), null);
+  const resolved = resolveWorkbuddyTask({ ...request, sessionId: "allowed-old", workspace: "c:/work/one/" });
+  assert.equal(resolved.outcome, "bound");
+  assert.equal(resolved.outcome === "bound" && resolved.task.id, "allowed-old");
+  assert.equal(resolveWorkbuddyTask({ ...request, sessionId: "allowed-old", workspace: "C:\\work\\outside" }).outcome, "invalid");
+  assert.equal(resolveWorkbuddyTask({ ...request, sessionId: "allowed-old' OR 1=1 --" }).outcome, "invalid");
 });
 
 test("listWorkbuddyTasks filters archived and reports workspace candidates", () => {

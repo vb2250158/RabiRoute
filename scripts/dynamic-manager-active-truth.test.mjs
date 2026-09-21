@@ -81,6 +81,24 @@ test("all active Skills, workflows, and scripts reject retired Manager discovery
   assert.deepEqual(violations, []);
 });
 
+test("Agent contracts separate identity, request readiness, diagnostics, and write reconciliation", () => {
+  for (const relative of ["../AGENTS.md", "../docs/rabi-agent-interfaces.md", "../docs/rabi-agent-interfaces_en.md"]) {
+    const source = read(relative);
+    for (const required of ["applicationGenerationId", "managerInstanceId", "health.live=true", "health.requiredReady=true", "`healthy`", "`degraded`", "GET /meta"]) {
+      assert.ok(source.includes(required), `${relative}: missing layered Manager contract ${required}`);
+    }
+    assert.doesNotMatch(source, /health\.state=healthy/, `${relative}: aggregate health must not gate unrelated requests`);
+  }
+  const chinese = read("../docs/rabi-agent-interfaces.md");
+  const english = read("../docs/rabi-agent-interfaces_en.md");
+  assert.match(chinese, /诊断入口[\s\S]*不能推广到其它 GET/);
+  assert.match(english, /diagnostic entry point[\s\S]*Do not extend this exception to other GET requests/);
+  assert.match(chinese, /只复核两项身份[\s\S]*不自动重放/);
+  assert.match(english, /check only that both identities[\s\S]*without automatic replay/);
+  assert.match(chinese, /身份一致不消除原写请求超时、5xx/);
+  assert.match(english, /Matching identities do not remove uncertainty[\s\S]*write timeout, 5xx/);
+});
+
 test("repository guidance applies the dynamic Manager contract to future entry points", () => {
   const guide = fs.readFileSync(path.join(ROOT, "AGENTS.md"), "utf8");
   for (const required of [

@@ -1,0 +1,3 @@
+display_name: Rokid RabiLink Plugin
+short_description: Rokid/Rizon RabiLink 插件与工具导入流程
+default_prompt: 处理 Rokid Rizon 灵珠平台的 RabiLink 插件、工具导入、OpenAPI JSON 和双向消息队列。

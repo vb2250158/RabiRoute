@@ -18,8 +18,8 @@ Ask the user to submit this marker as part of a prompt:
 Example:
 
 ```text
-[rabi:use YeYu]
-从这一轮开始用夜雨人格和对应上下文。
+[rabi:use ExampleRole]
+从这一轮开始用示例人格和对应上下文。
 ```
 
 The `UserPromptSubmit` hook receives the real Codex `session_id`, resolves the role from configured Rabi role roots, persists the binding, and injects the role context in the same turn. Never guess a role ID. If resolution fails, report the available role IDs from the hook result.

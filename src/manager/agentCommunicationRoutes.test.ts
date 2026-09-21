@@ -219,3 +219,23 @@ test("communication operation rejection is observed after response close", async
   await stopping;
   await new Promise(resolve => setImmediate(resolve));
 });
+
+test("send validation failure returns the actual protocol contract without delivering", async () => {
+  const received = deferred<{ status: number; body: Record<string, any> }>();
+  const routes = createAgentCommunicationRoutes(context({
+    send: async () => { throw new Error("Missing deliveryId"); },
+    jsonResponse: (_response, status, body) => received.resolve({ status, body: body as Record<string, any> })
+  }));
+  const res = response();
+  assert.equal(routes.handler(request("POST"), new URL("http://localhost/api/agent/send"), res), true);
+  const result = await received.promise;
+  assert.equal(result.status, 400);
+  assert.equal(result.body.ok, false);
+  assert.equal(result.body.contract.method, "POST");
+  assert.equal(result.body.contract.path, "/api/agent/send");
+  assert.deepEqual(result.body.contract.requiredFields, ["deliveryId", "sender", "routeId", "channel", "params", "payload"]);
+  assert.deepEqual(result.body.contract.senderFields, ["agentType", "sessionId"]);
+  assert.match(result.body.contract.retryRule, /same deliveryId/);
+  res.emit("finish");
+  await routes.stopAcceptingAndDrain();
+});

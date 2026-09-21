@@ -8,6 +8,17 @@ export type ManagedTaskAgentFeature =
   | "memoryConsolidationAgent"
   | "hooks"
   /**
+   * The adapter's owner exposes a session surface RabiRoute can enumerate, read
+   * and deliver into on its own, so the Agent thread bridge can address one
+   * session of that adapter by id.
+   *
+   * Deliberately separate from `planAssistantSessions`: hosting an addressable
+   * session is not the same as being eligible to hold a Plan role or run memory
+   * consolidation. Folding the two together would have opened those paths to
+   * adapters whose delivery is a handoff into someone else's runtime.
+   */
+  | "agentThreads"
+  /**
    * The adapter transport keeps a durable, locally readable log of inbound
    * prompts, so a lost delivery receipt can be reconstructed after the fact.
    * Codex Desktop writes rollout files; an HTTP transport that only returns a
@@ -37,7 +48,8 @@ const managedTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
     messageProcessingAgent: true,
     planAssistantSessions: true,
     memoryConsolidationAgent: true,
-    hooks: true
+    hooks: true,
+    agentThreads: true
   })
 });
 
@@ -55,6 +67,25 @@ const messageAndHookCapabilities: AgentAdapterCapabilities = Object.freeze({
   })
 });
 
+/**
+ * WorkBuddy accepts inbound messages through the bound task's session gateway
+ * and reports a per-session surface, so the Agent thread bridge can address one
+ * task by id.
+ *
+ * Plan assistants and memory consolidation stay undeclared: a delivered turn is
+ * executed by the WorkBuddy task owner with its own model, tools and approvals,
+ * so RabiRoute cannot host a Plan role or a consolidation agent inside it. No
+ * `deliveryReceiptRecovery` either — the gateway returns a one-shot acceptance
+ * receipt and keeps no readable inbound log.
+ */
+const workbuddyTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
+  managedTasks: Object.freeze<Partial<Record<ManagedTaskAgentFeature, true>>>({
+    messageProcessingAgent: true,
+    hooks: true,
+    agentThreads: true
+  })
+});
+
 /** Codex Desktop persists inbound prompts to rollout files; its transport is the only receipt-recoverable one. */
 const codexTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
   managedTasks: Object.freeze<Partial<Record<ManagedTaskAgentFeature, true>>>({
@@ -62,6 +93,7 @@ const codexTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
     planAssistantSessions: true,
     memoryConsolidationAgent: true,
     hooks: true,
+    agentThreads: true,
     deliveryReceiptRecovery: true
   })
 });
@@ -80,6 +112,7 @@ const antigravityTaskCapabilities: AgentAdapterCapabilities = Object.freeze({
     planAssistantSessions: true,
     memoryConsolidationAgent: true,
     hooks: true,
+    agentThreads: true,
     deliveryReceiptRecovery: true
   })
 });
@@ -128,14 +161,13 @@ const manifestsByAgentType = Object.freeze({
     // Delivery is implemented and verified for same-id redelivery, and the hook
     // package installs through the WorkBuddy user settings file. The desktop
     // pairing handoff for the gateway credential is still manual, so this stays
-    // experimental. Plan assistants and memory consolidation stay undeclared:
-    // they go through the Codex/DSH thread driver. No `deliveryReceiptRecovery`
-    // either — the gateway returns a one-shot acceptance receipt and keeps no
-    // readable inbound log.
+    // experimental. Addressable sessions are declared; the other managed
+    // features stay undeclared because the WorkBuddy task owner executes the
+    // delivered turn itself with its own model, tools and approvals.
     maturity: "experimental",
     transport: Object.freeze({ protocol: "http", mode: "session-gateway" }),
     host: Object.freeze({ name: "WorkBuddy Desktop", required: true }),
-    capabilities: messageAndHookCapabilities
+    capabilities: workbuddyTaskCapabilities
   }),
   antigravity: Object.freeze({
     type: "antigravity",
@@ -220,6 +252,26 @@ export function isPlanAssistantAgentType(value: unknown): value is PlanAssistant
   return Boolean(normalized)
     && isAgentAdapterType(normalized)
     && agentAdapterSupportsManagedTaskFeature(normalized, "planAssistantSessions");
+}
+
+/**
+ * Adapters whose owner can be addressed session-by-session through the Agent
+ * thread bridge.
+ *
+ * Kept apart from {@link planAssistantAgentTypes}: the bridge needs only an
+ * addressable session surface, while a Plan binding additionally promises that
+ * RabiRoute can hold a role inside that session. An adapter that hands the turn
+ * to a foreign runtime declares this one alone.
+ */
+export const agentThreadCapableAgentTypes = agentAdapterTypes.filter(
+  (type) => manifestsByAgentType[type].capabilities.managedTasks?.agentThreads === true
+);
+
+export function isAgentThreadCapableAdapter(value: unknown): value is AgentAdapterType {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return Boolean(normalized)
+    && isAgentAdapterType(normalized)
+    && agentAdapterSupportsManagedTaskFeature(normalized, "agentThreads");
 }
 
 /**

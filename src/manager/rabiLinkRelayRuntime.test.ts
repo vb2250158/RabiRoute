@@ -1282,10 +1282,32 @@ test("duplicate Relay availability events keep a single WebGUI drain flight", as
 test("idle Relay republishes ASR recovery and loss without speech requests", async (t) => {
   let available = false;
   let probes = 0;
+  let fetchStarts = 0;
+  let stopping = false;
+  let lateFetchStarts = 0;
+  let holdProbe = false;
+  let heldProbe: http.ServerResponse | undefined;
+  let probeAborted = false;
+  let heldProbes = 0;
+  const nativeFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.pathname === "/v1/capabilities") {
+      fetchStarts++;
+      if (stopping) lateFetchStarts++;
+    }
+    return nativeFetch(input, init);
+  });
   const advertisements: boolean[] = [];
   const local = http.createServer((request, response) => {
     if (request.url === "/v1/capabilities") {
       probes += 1;
+      if (holdProbe) {
+        heldProbes++;
+        heldProbe = response;
+        response.once("close", () => { probeAborted = !response.writableEnded; });
+        return;
+      }
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ providers: { asr: { local: { enabled: available } } } }));
     } else response.writeHead(404).end();
@@ -1309,7 +1331,7 @@ test("idle Relay republishes ASR recovery and loss without speech requests", asy
     deviceId: "pc", deviceGuid: "guid", deviceName: "PC", claimWaitMs: 0,
     localWebguiUrl: `http://127.0.0.1:${localPort}`, speechProxyEnabled: true,
     localSpeechUrl: `http://127.0.0.1:${localPort}` });
-  const details = () => ({ advertisements, probes });
+  const details = () => ({ advertisements, probes, fetchStarts, lateFetchStarts, heldProbes, probeAborted });
   await waitForRelayRuntime(runtime, "initial unavailable ASR", () => advertisements.length > 0, details);
   assert.equal(advertisements[0], false);
   available = true;
@@ -1319,8 +1341,20 @@ test("idle Relay republishes ASR recovery and loss without speech requests", asy
   const claims = advertisements.length;
   await new Promise(resolve => setTimeout(resolve, 160));
   assert.equal(advertisements.length, claims, "unchanged capabilities do not poll Relay queues");
+  // A request dispatched before abort may still arrive at the HTTP fixture.
+  // Stop at an acknowledged in-flight probe, not an arbitrary network boundary.
+  holdProbe = true;
+  await waitForRelayRuntime(runtime, "acknowledged in-flight capability probe", () => heldProbe !== undefined, details);
+  assert.equal(heldProbes, 1);
+  assert.equal(fetchStarts, probes, "all dispatched probes have reached the fixture before stop");
+  stopping = true;
+  const stoppedFetchStarts = fetchStarts;
   await runtime.stop();
   const stoppedProbes = probes;
   await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(probeAborted, true, "stop aborts the acknowledged in-flight capability response");
+  assert.equal(heldProbes, 1, "no successor probe reaches the fixture");
+  assert.equal(lateFetchStarts, 0, "stop never initiates another capability fetch");
+  assert.equal(fetchStarts, stoppedFetchStarts, "stop does not restart capability discovery");
   assert.equal(probes, stoppedProbes, "stop cancels capability discovery");
 });

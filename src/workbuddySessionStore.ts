@@ -14,7 +14,7 @@
  */
 
 import fs from "node:fs";
-import os from "node:os";
+import { workbuddyHomeDir as resolveWorkbuddyHomeDir } from "./workbuddyHome.js";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -87,8 +87,7 @@ export type WorkbuddyResolveResult =
   | { outcome: "invalid"; reason: string };
 
 export function workbuddyHomeDir(): string {
-  const configured = process.env.RABI_WORKBUDDY_HOME?.trim();
-  return configured ? path.resolve(configured) : path.join(os.homedir(), ".workbuddy");
+  return resolveWorkbuddyHomeDir();
 }
 
 export function workbuddyDatabasePath(home = workbuddyHomeDir()): string {
@@ -247,14 +246,31 @@ function mapTaskRow(row: Record<string, unknown>): WorkbuddyTaskRow {
   };
 }
 
-/** Read the desktop task rows. Returns an empty list when the database is absent. */
-export function readWorkbuddyTaskRows(databasePath = workbuddyDatabasePath()): WorkbuddyTaskRow[] {
+/** Read up to 10,000 desktop task rows after workspace selection, newest first. */
+export function readWorkbuddyTaskRows(
+  databasePath = workbuddyDatabasePath(),
+  options: { workspace?: string; allowedWorkspaces?: readonly string[] } = {}
+): WorkbuddyTaskRow[] {
   if (!fs.existsSync(databasePath)) return [];
+  const workspace = normalizeWorkbuddyWorkspace(options.workspace);
+  const allowed = options.allowedWorkspaces?.length
+    ? new Set(options.allowedWorkspaces.map(normalizeWorkbuddyWorkspace))
+    : null;
+  const scoped = Boolean(workspace || allowed);
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
+    if (scoped) {
+      // Reuse the store's exact path comparison rather than approximate it with
+      // SQL string replacements. Selection must precede the bounded inventory.
+      database.function("matches_workspace", { deterministic: true }, (cwd) => {
+        const key = normalizeWorkbuddyWorkspace(typeof cwd === "string" ? cwd : "");
+        return (!workspace || key === workspace) && (!allowed || allowed.has(key)) ? 1 : 0;
+      });
+    }
     const rows = database.prepare(`
       SELECT ${TASK_COLUMNS} FROM sessions
-      ORDER BY COALESCE(NULLIF(last_activity_at, 0), NULLIF(updated_at, 0), created_at) DESC
+      ${scoped ? "WHERE matches_workspace(cwd) = 1" : ""}
+      ORDER BY COALESCE(NULLIF(last_activity_at, 0), NULLIF(updated_at, 0), created_at) DESC, id ASC
       LIMIT 10000
     `).all() as Record<string, unknown>[];
     return rows.map(mapTaskRow);
@@ -303,23 +319,35 @@ export function listWorkbuddyTasks(options: {
   descriptors?: WorkbuddySessionDescriptor[];
   query?: string;
   workspace?: string;
+  /** Empty means unrestricted; a nonempty list intersects the single-workspace filter. */
+  allowedWorkspaces?: readonly string[];
   limit?: number;
   offset?: number;
   includeArchived?: boolean;
 } = {}): WorkbuddyTask[] {
   const descriptors = options.descriptors ?? listWorkbuddySessionDescriptors();
   const query = options.query?.trim().toLocaleLowerCase() ?? "";
-  const workspace = normalizeWorkbuddyWorkspace(options.workspace);
   const limit = Math.max(1, Math.min(10_000, Math.floor(options.limit ?? 200) || 200));
   const offset = Math.max(0, Math.floor(options.offset ?? 0) || 0);
-  return readWorkbuddyTaskRows(options.databasePath)
+  return readWorkbuddyTaskRows(options.databasePath, options)
     .filter(row => options.includeArchived || !row.deletedAt)
-    .filter(row => !workspace || normalizeWorkbuddyWorkspace(row.cwd) === workspace)
     .map(row => toWorkbuddyTask(row, descriptors))
     .filter(task => !query
       || task.name.toLocaleLowerCase().includes(query)
       || task.autoTitle.toLocaleLowerCase().includes(query))
     .slice(offset, offset + limit);
+}
+
+/** Exact identity reads must not depend on the bounded discovery inventory. */
+function readWorkbuddyTaskRow(taskId: string, databasePath = workbuddyDatabasePath()): WorkbuddyTaskRow | null {
+  if (!fs.existsSync(databasePath)) return null;
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = database.prepare(`SELECT ${TASK_COLUMNS} FROM sessions WHERE id = ?`).get(taskId);
+    return row ? mapTaskRow(row) : null;
+  } finally {
+    database.close();
+  }
 }
 
 export function readWorkbuddyTask(
@@ -328,7 +356,7 @@ export function readWorkbuddyTask(
 ): WorkbuddyTask | null {
   const id = nonEmptyString(taskId);
   if (!id) return null;
-  const row = readWorkbuddyTaskRows(options.databasePath).find(candidate => candidate.id === id);
+  const row = readWorkbuddyTaskRow(id, options.databasePath);
   return row ? toWorkbuddyTask(row, options.descriptors ?? listWorkbuddySessionDescriptors()) : null;
 }
 
@@ -348,10 +376,9 @@ export function resolveWorkbuddyTask(input: {
   descriptors?: WorkbuddySessionDescriptor[];
 }): WorkbuddyResolveResult {
   const descriptors = input.descriptors ?? listWorkbuddySessionDescriptors();
-  const rows = readWorkbuddyTaskRows(input.databasePath);
   const requestedId = nonEmptyString(input.sessionId);
   if (requestedId) {
-    const byId = rows.find(row => row.id === requestedId);
+    const byId = readWorkbuddyTaskRow(requestedId, input.databasePath);
     if (!byId) return { outcome: "invalid", reason: "保存的任务 ID 在当前 WorkBuddy 任务库中不存在。" };
     if (byId.deletedAt > 0) return { outcome: "archived", taskId: byId.id };
     const workspace = input.workspace?.trim();
@@ -366,6 +393,7 @@ export function resolveWorkbuddyTask(input: {
   const requestedName = nonEmptyString(input.sessionName);
   if (!requestedName) return { outcome: "invalid", reason: "缺少任务 ID，也没有可用于查找的任务名称。" };
   const normalizedWorkspace = normalizeWorkbuddyWorkspace(input.workspace);
+  const rows = readWorkbuddyTaskRows(input.databasePath);
   const matches = rows
     .filter(row => !row.deletedAt)
     .filter(row => (row.customTitle || row.title) === requestedName)

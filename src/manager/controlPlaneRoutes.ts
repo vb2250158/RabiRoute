@@ -21,6 +21,7 @@ import { discoverRabiPeers } from "../rabiPeerDiscovery.js";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { subscribeKnowledgeChanges } from "../roleKnowledgeSearch.js";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { randomUUID, createHash } from "node:crypto";
@@ -550,7 +551,6 @@ import {
 } from "../roleKnowledge.js";
 import { presentPlan, presentPlans } from "../roleKnowledgePresentation.js";
 import { resolvePlanAttachmentFile } from "../planAttachments.js";
-import { planAttachmentDirectory, type PlanStorageBucket } from "../planStorageLayout.js";
 import { ensurePersonaPlanWorkflow } from "../personaPlanWorkflow.js";
 import {
   normalizeRoleMemoryPageLimit,
@@ -1187,11 +1187,16 @@ const napcatProcessOwner = new NapcatLifecycleOwner({
 });
 
 const managerEventClients = new Map<http.ServerResponse, NodeJS.Timeout>();
+let unsubscribePlanEvents: (() => void) | undefined;
 
 function removeManagerEventClient(response: http.ServerResponse): void {
   const keepAlive = managerEventClients.get(response);
   if (keepAlive) clearInterval(keepAlive);
   managerEventClients.delete(response);
+  if (!managerEventClients.size) {
+    unsubscribePlanEvents?.();
+    unsubscribePlanEvents = undefined;
+  }
 }
 
 export function closeManagerEventClients(): void {
@@ -1201,12 +1206,22 @@ export function closeManagerEventClients(): void {
   }
 }
 
+export function writeManagerEventFrame(response: http.ServerResponse, frame: string): boolean {
+  if (!response.writableEnded && !response.destroyed) {
+    try {
+      if (response.write(frame)) return true;
+    } catch {
+      // A disconnected subscriber must never fail an already committed plan write.
+    }
+  }
+  removeManagerEventClient(response);
+  response.destroy();
+  return false;
+}
+
 function publishManagerEvent(eventType: string, data: unknown): void {
   const frame = `event: ${eventType.replace(/[^a-zA-Z0-9_.:-]/g, "_")}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const response of [...managerEventClients.keys()]) {
-    if (response.writableEnded || response.destroyed) removeManagerEventClient(response);
-    else response.write(frame);
-  }
+  for (const response of [...managerEventClients.keys()]) writeManagerEventFrame(response, frame);
 }
 
 function openManagerEventStream(request: http.IncomingMessage, response: http.ServerResponse): void {
@@ -1216,13 +1231,18 @@ function openManagerEventStream(request: http.IncomingMessage, response: http.Se
     connection: "keep-alive",
     "x-accel-buffering": "no"
   });
-  response.write("retry: 3000\n\nevent: ready\ndata: {}\n\n");
+  if (!writeManagerEventFrame(response, "retry: 3000\n\nevent: ready\ndata: {}\n\n")) return;
   // event-driven-allow: SSE protocol keepalive; no business state is queried.
   const keepAlive = setInterval(() => {
-    if (!response.writableEnded) response.write(`: keepalive ${Date.now()}\n\n`);
+    writeManagerEventFrame(response, `: keepalive ${Date.now()}\n\n`);
   }, 15000);
   keepAlive.unref();
   managerEventClients.set(response, keepAlive);
+  unsubscribePlanEvents ??= subscribeKnowledgeChanges((roleDir, change) => {
+    if (change.kind === "plan") publishManagerEvent("plan_changed", {
+      roleId: path.basename(roleDir), planId: change.item.id
+    });
+  });
   const removeClient = () => removeManagerEventClient(response);
   request.once("close", removeClient);
   response.once("close", removeClient);
@@ -7359,21 +7379,9 @@ async function resolveSendManagedPlanAttachment<T>(
   if (attachment.kind !== "image" && attachment.kind !== "file") {
     throw new Error(`Plan attachment ${reference.attachmentId} is not an image or file.`);
   }
-  // resolvePlanAttachmentFile re-checks containment in the active and archive directories.
-  const filePath = resolvePlanAttachmentFile(roleDir, plan.id, attachment);
-  const realFile = fs.realpathSync(filePath);
-  const managedRoots = (["active", "archive"] as PlanStorageBucket[])
-    .map(bucket => planAttachmentDirectory(roleDir, plan.id, bucket))
-    .map(directory => path.resolve(directory));
-  const containedInManagedPlanDirectory = managedRoots.some(root => {
-    let realRoot: string;
-    try { realRoot = fs.realpathSync(root); } catch { return false; }
-    const relative = path.relative(realRoot, realFile);
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-  });
-  if (!containedInManagedPlanDirectory) {
-    throw new Error(`Plan attachment ${reference.attachmentId} is outside its managed plan directory.`);
-  }
+  // The storage owner returns a canonical regular file contained in this plan's
+  // active/archive roots; do not repeat its filesystem checks in the parent.
+  const realFile = resolvePlanAttachmentFile(roleDir, plan.id, attachment);
   return await send({ path: realFile, fileName: attachment.name });
 }
 

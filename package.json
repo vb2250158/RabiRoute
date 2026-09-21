@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -53,7 +53,8 @@
     "relay:rabilink:worker:deploy": "npx wrangler deploy --config wrangler.rabilink-relay.toml",
     "send:onebot": "node scripts/send-onebot-message.mjs",
     "build:plugins": "node scripts/build-plugin-packages.mjs && node scripts/build-agent-hook-packages.mjs",
-    "check:plugin-architecture": "node scripts/check-plugin-platform-architecture.mjs"
+    "check:plugin-architecture": "node scripts/check-plugin-platform-architecture.mjs",
+    "check:skills": "node --test scripts/sync-agent-skills.test.mjs scripts/skill-catalog.test.mjs scripts/dynamic-manager-active-truth.test.mjs"
   },
   "dependencies": {
     "@openai/codex": "0.144.1",

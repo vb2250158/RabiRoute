@@ -1,0 +1,4 @@
+interface:
+  display_name: "NapCat QQ Gateway"
+  short_description: "NapCat QQ 消息收发、WebUI配置与网关接入指南"
+  default_prompt: "Use $napcat-qq-gateway to configure NapCat QQ message receiving, sending, and local gateway integration."

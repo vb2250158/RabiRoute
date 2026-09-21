@@ -10,7 +10,7 @@
 
 ## 分发的是规则，不是文件
 
-`project-skills.json` 列出 RabiRoute 负责维护、可安装到下游项目的技能。这些技能进入目标项目的 `.agents/skills/<name>/`，由该项目的 `AGENTS.md` 引用后按任务加载。
+`project-skills.json` 的 `skills` 列出 RabiRoute 负责维护、可安装到下游项目的技能。这些技能进入目标项目的 `.agents/skills/<name>/`，由该项目的 `AGENTS.md` 引用后按任务加载。
 
 下游副本是**本地化派生版**，不是字节拷贝：
 
@@ -80,3 +80,32 @@ pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <项目根>
 | LAN Agent 资源目录 | RabiRoute 包内 `skills/*/SKILL.md` 与显式公开文档 | 已授权 Agent 按需只读拉取，见 [远端 Agent 接入](lan-rabi-agent-bootstrap.md) |
 
 RabiRoute 不向项目或 Agent 端推送技能：本机 Codex / DSH / WorkBuddy 会话各自从自己的工作区技能目录加载，跨电脑通过 RabiLink 访问目标电脑的人格，不再同步人格数据副本。
+
+## 用户级技能与宿主分工
+
+同一清单的 `agentSkills` 管理通用、仓库开发、子应用及宿主专项技能：`source` 是权威目录，`audience` 是用途，`hosts` 是可用宿主，`install=false` 的子应用技能只留在应用目录。运行任务按需加载通用技能，源码开发技能按开发任务加载；人格运行数据不在此清单中。
+
+DSH 工具映射由其增强插件的 `skills/dsh-rabi-tools` 与 `skill-catalog.json` 维护，生命周期事件由 `plugins/rabi-dsh-context` 处理。Codex 绑定由 `plugins/rabi-codex-context/skills` 维护。通用检索、计划与发送流程只在 Rabi 维护一次。
+
+```powershell
+# 只比较；共享资产仓库用 all，独立宿主目录可选 codex、dsh、workbuddy
+node scripts/sync-agent-skills.mjs --target-root <真实技能源目录> --host all
+
+# 写前备份，逐文件回读，记录源与安装内容的 SHA-256
+node scripts/sync-agent-skills.mjs --target-root <真实技能源目录> --backup-root <技能目录外的备份目录> --host all --apply
+
+# DSH 专项技能从其源码仓库投影，仍使用同一同步器
+node scripts/sync-agent-skills.mjs --source-root <DSH插件源码> --catalog skill-catalog.json --target-root <真实技能源目录> --backup-root <备份目录> --host dsh --apply
+```
+
+这是显式 opt-in 的本地安装工具，默认 dry-run；不会后台推送或自动更新人格技能、已配置人格或 Agent 资产。只在用户明确授权的真实目标根运行 `--apply`。已有目录无基线或被人工修改时，脚本拒绝覆盖；先完成逐项语义比较和必要合并，再决定是否接受源投影。
+
+**`--adopt --apply` 授权用源投影覆盖目标，并删除该技能中源投影不再包含的文件；它不是“只记录当前目标基线”，也不会把本地修改自动合回源。** 必须先保留需要的本地内容并明确接受该覆盖结果，不能按修改时间选新版本。脚本在独立外部目录保存完整备份，写失败恢复当前技能；已经成功的前序技能保留其回读记录，因此不是整批原子事务。每项 `.rabi-skill-lock.json` 记录源哈希与安装哈希。未发布源码的哈希是本机内容快照，不能当作已发布版本。
+
+源、目标、备份根必须互不包含，所有已存在父级及内部条目均不得通过符号链接或 junction 写穿；备份也不能是源或目标的祖先。传入经 `realpath` 核对的真实路径。Mac 常见 `/tmp` 等系统别名也会被拒绝，应使用对应真实目录，并非不支持 Mac。Windows 比较按本机路径语义处理大小写和分隔符，不用字符串前缀判包含。此工具面向受信本地目录且要求没有外部并发写入；检查不构成抵御恶意并发换链的原子文件系统隔离。
+
+跨目录 Markdown 引用在本机安装副本中解析为源仓库的实际路径，完整参考资料仍由源仓库拥有；因此安装机器必须保留该源码目录。锁文件与安装路径属于本机派生数据，不回流到公开技能。源码移动后重新运行同步器。跨机应先取得同一固定提交，再在该机器重新投影，不能直接复制含另一台机器绝对路径的安装副本。
+
+已接入共享资产的客户端继续使用 junction；同步器要求写真实源目录，不覆盖链接。为独立客户端创建入口时按 hosts 过滤。共享扫描根可能看到其他宿主技能，因此宿主专用技能的触发说明也必须明确限制；文件可发现不表示会自动执行。
+
+验收运行 `npm run check:skills`，再无写入重跑同步器确认全部 in-sync。最后分别核对客户端发现、按需读取和真实首轮调用；文件同步不替代模型行为验收。公开副本清理项目、人名、账号、私有路径和凭据，脚本与测试也包括在内；必要的产品标识及许可署名保持准确。

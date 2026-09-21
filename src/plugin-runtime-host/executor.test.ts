@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import { GenerationRuntime } from "../plugin-kernel/generationRuntime.js";
 import type { PluginCandidate, PluginManifest } from "../plugin-kernel/types.js";
 import { IsolatedPluginExecutor } from "./executor.js";
@@ -146,7 +147,7 @@ test("isolated executor applies bounded restart and reports exhaustion to Genera
   t.after(async () => { await runtime.dispose().catch(() => {}); await executor.leases.disposeAll(); });
   const activated = await runtime.switch([candidate]);
   assert.equal(activated.generation.readiness.state, "ready");
-  await failureObserved;
+  await withTestDeadline(failureObserved, 90_000);
   await waitFor(() => executor.leases.list().length === 0);
   const rows = (await fs.readFile(marker, "utf8")).trim().split(/\r?\n/).map(line => JSON.parse(line));
   assert.equal(rows.length, 2);
@@ -203,7 +204,7 @@ test("isolated executor terminates a replacement whose commit is rejected", asyn
   t.after(async () => { await runtime.dispose().catch(() => {}); await executor.leases.disposeAll().catch(() => {}); });
 
   await runtime.switch([candidate]);
-  await failureObserved;
+  await withTestDeadline(failureObserved, 90_000);
   assert.equal(executor.leases.list().length, 0);
   assert.match(runtime.current().records[0]?.error?.message ?? "", /replacement commit rejected/);
 });
@@ -258,7 +259,7 @@ test("isolated executor heartbeat terminates an unresponsive child and reports r
   t.after(async () => { await runtime.dispose().catch(() => {}); await executor.leases.disposeAll(); });
   const activated = await runtime.switch([candidate]);
   assert.equal(activated.generation.readiness.state, "ready");
-  await failureObserved;
+  await withTestDeadline(failureObserved, 90_000);
   await waitFor(() => executor.leases.list().length === 0);
   const rows = (await fs.readFile(marker, "utf8")).trim().split(/\r?\n/).map(line => JSON.parse(line));
   assert.equal(rows.length, 2);

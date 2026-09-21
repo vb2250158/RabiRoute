@@ -6,6 +6,18 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.11 - 2026-09-21
+
+### Bounded plan refresh, WorkBuddy integration and public Skill synchronization
+
+- The plan page reads 8 initial items and at most 50 per explicit load-more action. Scrolling only reveals loaded cards instead of draining the catalog. SSE notifications coalesce into one in-flight and one pending refresh; list and event refreshes cancel stale work on hiding, persona changes or filter changes, and events reload only the first page with a notice. The backend publishes committed `roleId`/`planId` notifications through the existing authorized event stream, releasing subscriptions on slow connections or failed ready/keepalive writes without adding role-level authorization guarantees.
+- The WorkBuddy thread bridge lists, reads and delivers to existing tasks. Workspace filtering precedes SQLite ordering and the 10,000-row limit, while exact-ID reads and resolution are no longer hidden behind a global inventory cap; create and rename remain fail-closed. Hook probing uses a bounded asynchronous process and a shared home resolver, preserves deny decisions and tool input, sanitizes diagnostics, and distinguishes installation writes from confirmed context. This is not real-host delivery acceptance.
+- Add public Skills, bilingual references and catalog checks, aligning current Manager identity, layered health contracts and identity-resolution guidance. Skill synchronization defaults to dry-run and requires explicit opt-in. It rejects linked paths, overlapping roots and bidirectional file/directory path-shape conflicts, including empty directories, before writing, retaining external snapshots. `--adopt --apply` authorizes source-projection replacement, not merely baseline registration; the batch is not atomic and does not automatically update persona or host assets.
+- Preserve boundary newlines during NapCat text-chunk conversion without changing approval text, CQ safety checks or idempotent receipts. Update older synthetic fixtures to independent node credentials and current session-catalog/identity contracts, avoiding waits for already-exited children. Speech tests replace only the final external-delivery boundary and retain the production test-isolation guard. Instance end-to-end tests require the plugin runtime to be built first.
+- Keep bounded termination timers referenced while explicitly stopping storage children, Manager resources and manually triggered processes, so closing the last external handle cannot abandon the pending stop result. Idle children and background scans, heartbeats and retries remain non-blocking. Add isolated-process exit regressions and finite, rejecting, cleaned-up deadlines for deliberately stalled test fixtures; align workspace-isolation, state and path fixtures with current contracts without relaxing production safety boundaries.
+- Restore UTF-8 BOMs in both wearable synchronization scripts for Windows PowerShell 5.1 parsing without changing their bodies. Managed plan attachments retain the storage owner's canonical-path, regular-file and containment checks while removing duplicate Manager-parent I/O; keep the migration ledger and send-authorization boundaries, with a directory-link escape regression.
+- Add pagination, SSE, Hook-permission, path-safety and shape-conflict regressions while retaining the 0.3.10 package-root wiring and directory-Skill boundaries. LAN automatic discovery, 100,000-record performance acceptance, mounted-browser acceptance and actual deployment are not included; cross-machine use still requires installing the corresponding version.
+
 ## 0.3.10 - 2026-09-21
 
 ### Packaged resources and directory-form persona Skills

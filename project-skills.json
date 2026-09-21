@@ -12,5 +12,268 @@
       "name": "rabi-knowledge-search",
       "note": "Read-only entry point for Rabi plans, memories, and message history."
     }
+  ],
+  "agentSkills": [
+    {
+      "name": "rabiroute-webgui-build",
+      "source": ".github/skills/rabiroute-webgui-build",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "aiui-dev",
+      "source": "apps/rabilink-aiui/.agents/skills/aiui-dev",
+      "audience": "application-development",
+      "hosts": [
+        "*"
+      ],
+      "install": false
+    },
+    {
+      "name": "use-rabi-codex-context",
+      "source": "plugins/rabi-codex-context/skills/use-rabi-codex-context",
+      "audience": "codex",
+      "hosts": [
+        "codex"
+      ],
+      "install": true
+    },
+    {
+      "name": "audit-rabiroute-public-docs",
+      "source": "skills/audit-rabiroute-public-docs",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "benchmark-rabispeech-models",
+      "source": "skills/benchmark-rabispeech-models",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "character-tts-dialogue",
+      "source": "skills/character-tts-dialogue",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "create-rabiroute-agent-adapter",
+      "source": "skills/create-rabiroute-agent-adapter",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "create-rabiroute-message-adapter",
+      "source": "skills/create-rabiroute-message-adapter",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "create-rabiroute-persona",
+      "source": "skills/create-rabiroute-persona",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "indextts2-audio",
+      "source": "skills/indextts2-audio",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "manage-rabiroute-identity-relations",
+      "source": "skills/manage-rabiroute-identity-relations",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "napcat-qq-gateway",
+      "source": "skills/napcat-qq-gateway",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "plan-task-orchestration",
+      "source": "skills/plan-task-orchestration",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "qwen-tts-audio",
+      "source": "skills/qwen-tts-audio",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabi-desktop-pet-animation",
+      "source": "skills/rabi-desktop-pet-animation",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabi-github-pull",
+      "source": "skills/rabi-github-pull",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabi-github-submit",
+      "source": "skills/rabi-github-submit",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabi-knowledge-search",
+      "source": "skills/rabi-knowledge-search",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabiroute-agent-adapter-onboarding",
+      "source": "skills/rabiroute-agent-adapter-onboarding",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabiroute-build",
+      "source": "skills/rabiroute-build",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabiroute-developer-publish",
+      "source": "skills/rabiroute-developer-publish",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabiroute-message-delivery",
+      "source": "skills/rabiroute-message-delivery",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabiroute-nas-windows-package",
+      "source": "skills/rabiroute-nas-windows-package",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rabiroute-voice-workstation",
+      "source": "skills/rabiroute-voice-workstation",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rokid-development",
+      "source": "skills/rokid-development",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "rokid-rabilink-plugin",
+      "source": "skills/rokid-rabilink-plugin",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "source-hot-patch-development",
+      "source": "skills/source-hot-patch-development",
+      "audience": "repository-development",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "tts-router",
+      "source": "skills/tts-router",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    },
+    {
+      "name": "tts-router-workflow",
+      "source": "skills/tts-router-workflow",
+      "audience": "runtime",
+      "hosts": [
+        "*"
+      ],
+      "install": true
+    }
   ]
 }

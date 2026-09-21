@@ -50,6 +50,7 @@
 
 - [长期维护与自修复](rabi-maintenance.md) — **维护工作流**。固定故障受理任务、原计划归属、恢复验证与定期代码质量维护。
 - [安装 Rabi 记忆与计划搜索](../skills/rabi-knowledge-search/README.md) — 项目维护者将技能安装到项目，在线时先查计划和记忆，离线时直接普通搜索。
+- [安装身份关系管理技能](../skills/manage-rabiroute-identity-relations/README.md) — 处理端按账号查“这是谁”、确认或纠正归属、处理并发冲突与共用账号，并在现场只提交候选观察。
 - [安装版 Web 热补丁](web-hot-patches.md) — 构建、激活、固定和回滚兼容的 Web Bundle。
 - [架构说明](architecture.md) — **当前事实**。项目边界、Codex Desktop owner 和现有 Outbox / 未来 Action Queue 已分开说明。
 - [从 DSH 学习的插件化设计理念](dsh-plugin-architecture-lessons.md) — **调研与实施总结**。说明内置 Manager 插件迁移、WebGUI/Desktop 最小扩展宿主、贡献点、进程隔离边界和第三方表现 Extension Host 后续路线。

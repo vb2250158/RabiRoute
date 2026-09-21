@@ -5,12 +5,19 @@ import path from "node:path";
 import test from "node:test";
 import { runSpeechIngressSeparationAcceptance } from "./speechIngressSeparation.js";
 
-test("isolated speech ingress acceptance separates PC and mobile persona contexts", async () => {
+test("isolated speech ingress acceptance separates PC and mobile persona contexts", async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rabiroute-speech-acceptance-test-"));
   const outputPath = path.join(root, "report.json");
+  const receiptPath = path.join(root, "test-deliveries.jsonl");
+  const previousReceiptPath = process.env.RABI_SPEECH_TEST_RECEIPT_FILE;
+  process.env.RABI_SPEECH_TEST_RECEIPT_FILE = receiptPath;
+  t.after(() => {
+    if (previousReceiptPath === undefined) delete process.env.RABI_SPEECH_TEST_RECEIPT_FILE;
+    else process.env.RABI_SPEECH_TEST_RECEIPT_FILE = previousReceiptPath;
+  });
   const result = await runSpeechIngressSeparationAcceptance({
     entryPath: path.resolve("src", "index.ts"),
-    entryArgsPrefix: ["--import", "tsx"],
+    entryArgsPrefix: ["--import", "tsx", "--experimental-test-module-mocks", "--import", new URL("./fixtures/speechDeliveryMock.mjs", import.meta.url).href],
     outputPath,
     // Two isolated source-mode TSX children start concurrently. A mapped NAS
     // workspace can push their cold start beyond one minute.
@@ -21,6 +28,9 @@ test("isolated speech ingress acceptance separates PC and mobile persona context
 
   assert.equal(result.exitCode, 0);
   assert.equal(result.report.acceptancePassed, true);
+  const receipts = fs.readFileSync(receiptPath, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.deepEqual(receipts.map(receipt => receipt.messageAdapter).sort(), ["rabilink", "speech"]);
+  assert.ok(receipts.every(receipt => receipt.provider === "marvis"));
   assert.deepEqual(result.report.endpoints, ["rabilink", "speech"]);
   assert.deepEqual(result.report.counts, {
     hostRecords: 2,

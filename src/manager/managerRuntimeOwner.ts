@@ -165,7 +165,7 @@ export class ManagerRuntimeOwner<TPublication> {
           () => finish(resourceStopTimeoutError(resource.owner, timeoutMs)),
           timeoutMs
         );
-        timer.unref?.();
+        // 显式 teardown 必须等到有界结果，即使其它资源已全部释放。
         void Promise.resolve()
           .then(() => resource.stop())
           .then(() => finish(), error => finish(error));

@@ -1,0 +1,4 @@
+interface:
+  display_name: "RabiRoute NAS Windows 打包"
+  short_description: "将 RabiRoute 安装为本机托盘程序并共享 NAS 全部人格"
+  default_prompt: "Use $rabiroute-nas-windows-package to package RabiRoute locally with machine-specific routes and shared NAS personas."

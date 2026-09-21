@@ -491,3 +491,7 @@ npm run build
 - 只验证了扫描，不算 `verified`。
 - 没有真实投递目标时，保留 `experimental`，并记录 mock 验证范围。
 - 真实跑通过扫描、配置保存、消息投递、失败诊断后，才升为 `verified`。
+
+## 宿主接入检查表
+
+接入能力探测、Hook 自检和宿主专项诊断再读 [宿主接入检查表](references/host-onboarding-checklist.md)。当前正文与现行 Manager 合同优先；参考中的宿主能力必须在当前安装版本复核。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rabi 桌宠动画"
+  short_description: "定位并维护 Rabi 桌宠动作、资源包、行为触发和本地运行验收"
+  default_prompt: "使用 $rabi-desktop-pet-animation 按 Rabi 桌宠规范定位或处理动画；先判断是只读查询、行为修复、重切帧、媒体生成还是资源包启用。"

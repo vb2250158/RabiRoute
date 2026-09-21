@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, test } from "node:test";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import {
   ManagerWatchBroker,
   isUncPath,
@@ -464,8 +465,8 @@ test("the production snapshot attempt exits after reading a local fixture", asyn
 
   const attempt = spawnConfigWatchSnapshotAttempt({ routeRoot, rolesRoot, operationTimeoutMs: 500 });
   t.after(() => attempt.terminate());
-  const result = await attempt.result;
-  await attempt.closed;
+  const result = await withTestDeadline(attempt.result, 10_000);
+  await withTestDeadline(attempt.closed, 10_000);
 
   assert.equal(result.partial, false);
   assert.ok(result.files.includes(path.join(routeRoot, "route-a", "adapterConfig.json")));

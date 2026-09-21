@@ -80,3 +80,27 @@ The report also states whether the target project's `AGENTS.md` references the c
 | LAN Agent resource catalog | Packaged `skills/*/SKILL.md` plus explicitly published documents | Authorized Agents pull them read-only on demand; see [remote Agent onboarding](lan-rabi-agent-bootstrap_en.md) |
 
 RabiRoute does not push skills into projects or Agent endpoints: local Codex, DSH, and WorkBuddy sessions each load from their own workspace skill directories, and cross-PC persona access uses RabiLink to read the target computer rather than synchronizing persona data replicas.
+
+## User skills and host ownership
+
+The `agentSkills` section of `project-skills.json` records each source directory, audience, supported hosts and installation choice. Application-only entries use `install=false`. Shared runtime workflows belong to Rabi; repository development skills load only for development tasks. Private persona data is excluded.
+
+The DSH enhancement plugin owns `skills/dsh-rabi-tools` and `skill-catalog.json`; `plugins/rabi-dsh-context` owns lifecycle events. Codex binding guidance remains in `plugins/rabi-codex-context/skills`. Search, plans and delivery policy have one shared owner.
+
+```powershell
+node scripts/sync-agent-skills.mjs --target-root <real-skill-source> --host all
+node scripts/sync-agent-skills.mjs --target-root <real-skill-source> --backup-root <external-backup-root> --host all --apply
+node scripts/sync-agent-skills.mjs --source-root <DSH-plugin-source> --catalog skill-catalog.json --target-root <real-skill-source> --backup-root <external-backup-root> --host dsh --apply
+```
+
+Use `all` for a shared asset store, or `codex`, `dsh` and `workbuddy` for separate host directories. This is an explicit opt-in local installer, defaulting to dry-run: it never pushes in the background or automatically updates persona skills, configured personas, or Agent assets. Use `--apply` only for the explicitly authorized real target root. Existing unversioned files and local edits block replacement; complete semantic comparison and necessary merging before choosing the source projection.
+
+**`--adopt --apply` authorizes replacing the target with the source projection and deleting files no longer present in that projection. It does not merely record the current target baseline or merge local edits into the source.** Preserve needed local content first and explicitly accept the replacement; timestamps never decide precedence. The installer snapshots selected trees in an independent external directory, verifies results, and restores the current skill after a write failure. Earlier successful skills retain their receipts, so the batch is not an atomic transaction. Each `.rabi-skill-lock.json` records source and installed SHA-256 hashes; an unpublished working-tree hash is not a released version.
+
+Source, target, and backup roots must not contain one another. Existing ancestors and internal entries must not redirect writes through symlinks or junctions; backups cannot be ancestors of source or target either. Supply real paths verified with `realpath`. System aliases such as `/tmp` on Mac are also rejected: use the actual directory rather than treating this as lack of Mac support. Windows comparisons follow native case and separator semantics, not string-prefix containment. The tool is for trusted local directories without external concurrent writers; these checks are not atomic filesystem isolation against malicious link-swap races.
+
+Cross-directory Markdown references resolve to the local source checkout in installed copies. Keep that checkout available and rerun projection after moving it. Paths and receipts remain machine-local; do not copy those projections to another machine or commit them into public skills. For cross-machine use, obtain the same fixed source commit and project on the destination machine.
+
+Existing shared asset junctions remain intact: write their real source, not the links. Filter dedicated client entries by hosts. Shared scan roots may expose other hosts' entries, so host-only descriptions also restrict invocation. Discovery is not execution.
+
+Run `npm run check:skills`, then rerun the installer without writing and require in-sync results. Verify host discovery, skill reading and actual first-turn tool calls separately. Public review includes references, scripts, tests and package output; remove private project, person, account, path and credential data while retaining accurate product identifiers and required license attribution.

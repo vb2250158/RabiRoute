@@ -6,6 +6,8 @@ import path from "node:path";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { LanAgentRegistry } from "./lanAgentRegistry.js";
+import { LanAgentAuthority } from "./lanAgentAuthority.js";
+import { evaluateLanAgentRequest } from "./lanAgentRequestAccess.js";
 import { handleLanAgentApi } from "./lanAgentRoutes.js";
 import type { LanAgentReleaseStore } from "./lanAgentReleaseStore.js";
 
@@ -20,15 +22,31 @@ test("headless instance configures two Agents and dispatches only to the stable 
   const dsh = http.createServer(async (request, response) => {
     const body = await read<{ rpcId: string; method: string; payload: { sessionId: string } }>(request);
     if (body.method === "session.prompt") sessions.push(body.payload.sessionId);
-    const value = body.method === "session.list" ? { items: ["session-11111111-1111-4111-8111-111111111111", "session-22222222-2222-4222-8222-222222222222", "session-33333333-3333-4333-8333-333333333333"].map(sessionId => ({ sessionId, cwd: directory, updatedAt: Date.now(), projections: { values: { title: sessionId === "session-33333333-3333-4333-8333-333333333333" ? "Managed task" : sessionId } } })) } : {};
+    const value = body.method === "session/list" ? { items: ["session-11111111-1111-4111-8111-111111111111", "session-22222222-2222-4222-8222-222222222222", "session-33333333-3333-4333-8333-333333333333"].map(sessionId => ({ sessionId, cwd: directory, updatedAt: Date.now(), projections: { values: { title: sessionId === "session-33333333-3333-4333-8333-333333333333" ? "Managed task" : sessionId } } })) } : {};
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value } }));
   });
   const dshUrl = await listen(dsh);
-  const registry = new LanAgentRegistry({ statePath: path.join(directory, "registry.json") });
+  const authority = new LanAgentAuthority({ statePath: path.join(directory, "authority.json") });
+  const nodeId = "remote-fixture";
+  const credential = authority.enroll(authority.issueBootstrapTicket().ticket, nodeId);
+  const registry = new LanAgentRegistry({
+    statePath: path.join(directory, "registry.json"),
+    authenticateNode: token => authority.authenticate(token),
+    isAgentEnabled: (node, agent) => authority.isAgentEnabled(node, agent)
+  });
   const manager = http.createServer((request, response) => {
+    if (request.url === "/meta") {
+      const access = evaluateLanAgentRequest(request, authority, true);
+      response.writeHead(access.kind === "agent" ? 200 : 403, { "content-type": "application/json" });
+      response.end(JSON.stringify(access.kind === "agent"
+        ? { applicationGenerationId: "headless-fixture-generation", managerInstanceId: "headless-fixture-manager", health: { live: true, requiredReady: true, state: "healthy" } }
+        : { code: -1 }));
+      return;
+    }
     if (!handleLanAgentApi(request, new URL(request.url!, "http://localhost"), response, {
-      registry, releases: {} as LanAgentReleaseStore, readJsonBody: read,
+      authority, enabled: () => true, registry, releases: {} as LanAgentReleaseStore, readJsonBody: read,
+      managerIdentity: () => ({ applicationGenerationId: "headless-fixture-generation", managerInstanceId: "headless-fixture-manager", health: { live: true, requiredReady: true, state: "healthy" } }),
       isReleaseRequestAuthorized: () => false,
       isManagementRequestAuthorized: request => request.headers.authorization === "Bearer test-instance",
       jsonResponse: (response, code, body) => { response.writeHead(code, { "content-type": "application/json" }); response.end(JSON.stringify(body)); }
@@ -37,8 +55,16 @@ test("headless instance configures two Agents and dispatches only to the stable 
   registry.attach(manager, { enabled: () => true, getToken: () => "test-instance" });
   const managerUrl = await listen(manager);
   const configPath = path.join(directory, "config.json");
-  fs.writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, managerUrl, lanLinkToken: "test-instance", nodeId: "remote-fixture", releasePublicKeySha256: "a".repeat(64), agentType: "dsh", dsh: { baseUrl: dshUrl, sessionId: "session-11111111-1111-4111-8111-111111111111" }, defaultWorkspace: directory, allowedWorkspaces: [directory] }));
-  const worker = spawn(process.execPath, [path.resolve("apps/rabi-agent/rabi-agent.mjs"), "--run", "--config", configPath], { windowsHide: true, stdio: "ignore" });
+  fs.writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, managerUrl, nodeCredential: credential.token, nodeId, releasePublicKeySha256: "a".repeat(64), agentType: "dsh", dsh: { baseUrl: dshUrl, sessionId: "session-11111111-1111-4111-8111-111111111111" }, defaultWorkspace: directory, allowedWorkspaces: [directory] }));
+  const worker = spawn(process.execPath, [path.resolve("apps/rabi-agent/rabi-agent.mjs"), "--run", "--config", configPath], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+  let workerDiagnostic = "";
+  worker.stderr.on("data", chunk => { workerDiagnostic = (workerDiagnostic + String(chunk)).slice(-4096).replaceAll(credential.token, "<redacted>"); });
+  // Observe exit immediately; an early configuration failure must not leave
+  // finally waiting for an event that already happened.
+  const workerStopped = new Promise<void>(resolve => {
+    worker.once("exit", () => resolve());
+    worker.once("error", () => resolve());
+  });
   const request = async (suffix: string, body: unknown) => {
     const response = await fetch(`${managerUrl}/api/lan-agent/instances/remote-fixture/agents${suffix}`, { method: "POST", headers: { authorization: "Bearer test-instance", "content-type": "application/json" }, body: JSON.stringify(body) });
     return { response, body: await response.json() as any };
@@ -46,11 +72,12 @@ test("headless instance configures two Agents and dispatches only to the stable 
   try {
     const deadline = Date.now() + 8000;
     while (!registry.listNodes()[0]?.connected && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
-    assert.equal(registry.listNodes()[0]?.connected, true);
+    assert.equal(registry.listNodes()[0]?.connected, true, workerDiagnostic || 'Fixture connector did not connect.');
     const created = await request("", { provider: "dsh", name: "Second Agent", sessionId: "session-22222222-2222-4222-8222-222222222222", workspace: directory });
     assert.equal(created.body.code, 0);
     const second = created.body.result.find((agent: any) => agent.name === "Second Agent");
     assert.ok(second.agentId);
+    authority.approveAndEnableAgent(nodeId, second, authority.getSnapshot().revision);
     const sent = await request(`/${second.agentId}/tasks`, { message: "fixture message", provider: "dsh", idempotencyKey: "delivery-1" });
     assert.equal(sent.body.result.status, "progress");
     await request(`/${second.agentId}/tasks`, { message: "fixture message", provider: "dsh", idempotencyKey: "delivery-1" });
@@ -71,8 +98,8 @@ test("headless instance configures two Agents and dispatches only to the stable 
     assert.deepEqual(sessions, ["session-22222222-2222-4222-8222-222222222222"]);
     assert.equal(JSON.parse(fs.readFileSync(configPath, "utf8")).agents.find((agent: any) => agent.agentId === second.agentId).enabled, false);
   } finally {
-    worker.kill();
-    await new Promise(resolve => worker.once("exit", resolve));
+    if (worker.exitCode === null && worker.signalCode === null) worker.kill();
+    await workerStopped;
     registry.close();
     await Promise.all([new Promise(resolve => manager.close(resolve)), new Promise(resolve => dsh.close(resolve))]);
     fs.rmSync(directory, { recursive: true, force: true });

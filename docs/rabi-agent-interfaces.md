@@ -23,11 +23,13 @@
 
 `focused` 消息包只给出本节入口。涉及计划、近期记忆、反馈或整理结果的写入前，必须先读本节及目标接口章节；文档不可读时停止该操作。写入仍受当前授权和 Action Gate 约束。计划状态先读取当前人格的 `plan-statuses`，不猜 key；附件通过计划 `attachments` 提交。
 
-1. 从 Host 状态（安装版）、结构化 READY（源码版）或测试显式注入取得当前完整 Manager URL。每次请求设置最长 12 秒的有界超时。写入前 GET `/meta`，核对 `health.state=healthy`、`health.requiredReady=true`，保存非空 `applicationGenerationId` 和 `managerInstanceId`。
+1. 从 Host 状态（安装版）、结构化 READY（源码版）或测试显式注入取得当前完整 Manager URL。每次请求设置最长 12 秒的有界超时。写入前 GET `/meta`，核对非空 `applicationGenerationId`、`managerInstanceId` 与当前 Host/READY 身份；普通业务请求要求 `health.live=true`、`health.requiredReady=true`，且 `health.state` 为 `healthy` 或 `degraded`。`businessReady=false` 或无关 Route 降级不阻断全部请求，计划恢复、目标路线等依赖由 Manager 对应接口判断。
 2. 每项逻辑写入先生成并保存稳定 `Idempotency-Key` 与完整请求体。PATCH 计划/近期记忆、POST 计划反馈或回传记忆整理结果前，先 GET 对应单项资源或 feedback，把返回的强 ETag 原样放入 `If-Match`。禁止使用弱 ETag、`*` 或 `updatedAt` 替代版本。新增计划、新增近期记忆和发起整理带幂等键，不带 `If-Match`。
 3. 超时、HTTP 503 或结果不确定时，保留原请求和原键，先权威读回；重试只能使用相同请求体和相同键，不创建第二项操作。HTTP 412 明确表示旧前置版本未提交：废弃旧键和旧 `If-Match`，重新 GET；原意仍适用时保存新键，以新强 ETag 提交。
 4. 成功响应必须回显完全相同的 `Idempotency-Key`、返回强 ETag，且 body 的资源身份必须与目标一致。任一条件不满足时不得宣布成功。
-5. 响应后再次有界 GET `/meta`，两项身份必须与写前一致；缺失、请求失败或切代均视为结果不确定，重新发现当前地址，保留原请求和键做权威读回或安全重试。通过资源读回核对实际结果。
+5. 响应后再次有界 GET `/meta`，只复核两项身份是否与写前一致，不把无关健康变化当作切代；身份缺失、请求失败或身份变化均视为结果不确定，重新发现当前地址，保留原请求和键做权威读回，不自动重放。身份一致不消除原写请求超时、5xx 等已经存在的不确定性。通过资源读回核对实际结果。
+
+精确 `GET /meta` 是诊断入口：取得有效响应并核对当前身份后即可返回健康详情，不要求 `live`、`requiredReady` 或业务就绪；地址约束、鉴权、超时、禁止重定向和身份校验仍保留。此豁免不能推广到其它 GET，一些读取会更新 `viewedAt`。本节降级访问与写后身份分离合同须由新版客户端实现；仍要求整体 `healthy` 的旧版插件需要升级，本文更新不代表运行中的插件已完成安装或验收。
 
 跨人格投递另读“查询其它人格并投递消息”，保留 deliveryId、来源能力、目标 Route 和跳数合同；远端任务另读“远端 Agent 设备接口”。按需加载说明不会放宽这些要求。
 
@@ -45,7 +47,7 @@
 
 ## 消息查询：先 Rabi，无法完成时才绕过
 
-正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，核对 `health.state=healthy`、`health.requiredReady=true` 和 generation/实例身份。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
+正常群聊、私聊和最新反馈查询先走 Rabi。安装版通过 `RabiRouteHost.exe --command status --json` 获取当前 `managerBaseUrl`、`applicationGenerationId`、`managerInstanceId`；源码模式使用结构化 READY 地址。读取 `<managerBaseUrl>/meta`，按上节合同核对 generation/实例身份；普通查询要求 `health.live=true`、`health.requiredReady=true`，接受 `healthy` 或 `degraded`，再由目标接口判断依赖是否可用。旧地址或瞬时失败时重新发现并有界重试；Hook 的概括性“Host 未运行”提示不能替代实际失败原因。不扫描端口、不读取退役实例锁、不直接启停 Manager。
 
 当前 `GET <managerBaseUrl>/api/gateways` 提供 Route 诊断，其 `messageFiles` 包含近期消息摘要。NapCat 摘要合并群聊和私聊后仅返回最近 8 条，须按目标 Route、群/私聊、消息 ID 和时间筛选；它不是完整历史检索接口。`GET /api/roles/{roleId}/chat-history` 读取的是 Agent 最终回复，不能替代 QQ 群聊历史。
 ### 查询消息端历史消息

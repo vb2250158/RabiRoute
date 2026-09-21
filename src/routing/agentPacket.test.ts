@@ -1347,6 +1347,7 @@ test("AgentPacket injects identity context without turning another project's dis
   assert.match(packet.message, /已确认参与者：COTTON/);
   assert.match(packet.message, /不能单独证明项目归属、委托、决策权或执行授权/);
   assert.match(packet.message, /identity-relations 合同/);
+  assert.match(packet.message, /skills\/manage-rabiroute-identity-relations\/SKILL\.md/);
   assert.match(packet.message, /\[情景记录\]/);
   assert.match(packet.message, /已确认项目关系：edge-space（参与讨论）/);
   assert.match(packet.message, /可以自然参与有价值的讨论、澄清问题或提出建议/);

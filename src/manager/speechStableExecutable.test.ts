@@ -6,7 +6,7 @@ import test from "node:test";
 import {prepareStableSpeechExecutable} from "./speechStableExecutable.js";
 
 test("speech executable keeps its identity and unchanged bytes across release directories", async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(),"rabi-speech-stable-"));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"rabi-speech-stable-")));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
   const first = path.join(root,"first.exe"), second = path.join(root,"second.exe");
   await fs.writeFile(first,"trusted launcher"); await fs.writeFile(second,"trusted launcher");
@@ -22,7 +22,7 @@ test("speech executable keeps its identity and unchanged bytes across release di
 });
 
 test("invalid stable executable target fails without changing the source", async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(),"rabi-speech-stable-"));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),"rabi-speech-stable-")));
   t.after(()=>fs.rm(root,{recursive:true,force:true}));
   const source=path.join(root,"source.exe"); await fs.writeFile(source,"trusted");
   await fs.mkdir(path.join(root,"runtime","speech","RabiSpeech.exe"),{recursive:true});

@@ -1,0 +1,4 @@
+interface:
+  display_name: "RabiSpeech TTS Router"
+  short_description: "在本地 TTS 模型、Rabi 人格和全局播放策略之间路由"
+  default_prompt: "Use $tts-router to select a local RabiSpeech model and persona voice for this text."

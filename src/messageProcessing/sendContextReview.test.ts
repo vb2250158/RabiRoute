@@ -140,6 +140,13 @@ test("message-processing send is rejected until the exact latest context and pay
   const validated = await review.validateSend(approvedRequest);
   assert.equal(validated?.requirement.id, "requirement-1");
   assert.equal(validated?.sourceMessageId, "source-1");
+  for (const whitespace of [" ", "\n"]) {
+    const changedWhitespace = structuredClone(approvedRequest);
+    const payload = changedWhitespace.payload as { type: string; text: string };
+    payload.text += whitespace;
+    await assert.rejects(() => review.validateSend(changedWhitespace), /The send request changed after context review/);
+  }
+  assert.equal((await review.validateSend(approvedRequest))?.sourceMessageId, "source-1", "rejected whitespace changes do not rewrite the approved request");
 
   records.push(inbound("newer-1", "已经有人说明了，不用重复回复", 3));
   await assert.rejects(async () => await review.validateSend(approvedRequest), /context changed.*review again/i);

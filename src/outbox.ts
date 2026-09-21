@@ -360,10 +360,11 @@ function napCatCqSegmentFor(type: string, params: Record<string, string>): { typ
  * which only runs for typed image/file payloads.
  */
 export function napcatSegmentsFromAgentText(text: string): OneBotMessage {
-  const trimmed = valueString(text);
-  if (!trimmed) return [];
-  const codes = [...trimmed.matchAll(NAPCAT_CQ_CODE_PATTERN)];
-  if (codes.length === 0) return trimmed;
+  const source = String(text ?? "");
+  // Validate emptiness without removing whitespace owned by the sender/chunker.
+  if (!source.trim()) return [];
+  const codes = [...source.matchAll(NAPCAT_CQ_CODE_PATTERN)];
+  if (codes.length === 0) return source;
 
   const rejected = [...new Set(codes.map((match) => match[1].toLowerCase()).filter((type) => NAPCAT_REJECTED_CQ_TYPES.has(type)))];
   if (rejected.length > 0) {
@@ -380,12 +381,12 @@ export function napcatSegmentsFromAgentText(text: string): OneBotMessage {
   let cursor = 0;
   for (const match of codes) {
     const index = match.index ?? 0;
-    pushText(trimmed.slice(cursor, index));
+    pushText(source.slice(cursor, index));
     cursor = index + match[0].length;
     const segment = napCatCqSegmentFor(match[1].toLowerCase(), parseNapCatCqParams(match[2] ?? ""));
     if (segment) segments.push(segment);
   }
-  pushText(trimmed.slice(cursor));
+  pushText(source.slice(cursor));
 
   // A malformed or unsupported code inside a literal run must not reach NapCat as text.
   return segments

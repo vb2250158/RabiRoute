@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
+import { runIsolatedDeadlineProbe } from "../testFiniteDeadline.js";
 import type { ChildProcess } from "node:child_process";
 import {
   DEFAULT_MANUAL_TRIGGER_PROCESS_OWNER,
@@ -27,6 +28,33 @@ function fakeChild(): FakeChild {
 function exitChild(child: FakeChild, code = 0): void {
   child.exitCode = code;
   child.emit("exit", code, null);
+}
+
+for (const outcome of ["confirmed", "unconfirmed"] as const) {
+  test(`isolated manual stop ${outcome} settles without a ref keeper and exits`, () => {
+    runIsolatedDeadlineProbe(`
+      import assert from "node:assert/strict";
+      import { EventEmitter } from "node:events";
+      import { ManualTriggerProcessRegistry, ManualTriggerTerminationUnconfirmedError }
+        from "./src/manager/manualTriggerProcess.ts";
+      const child = Object.assign(new EventEmitter(), { exitCode: null });
+      let forced = 0;
+      const registry = new ManualTriggerProcessRegistry(async () => {}, "fixture-owner", {
+        terminateTimeoutMs: 20, forceKillTimeoutMs: 20,
+        forceStopProcess: async () => {
+          forced += 1;
+          ${outcome === "confirmed" ? 'child.exitCode = 0; child.emit("exit", 0, null);' : ""}
+        }
+      });
+      registry.launch("fixture", () => child);
+      const stopping = registry.stopAll();
+      assert.equal(registry.stopAll(), stopping);
+      ${outcome === "confirmed" ? "await stopping; assert.equal(registry.isRunning('fixture'), false);" : `await assert.rejects(stopping, ManualTriggerTerminationUnconfirmedError);
+      assert.throws(() => registry.launch("new", () => child), /fenced/);`}
+      assert.equal(forced, 1);
+      console.log("deadline-probe-complete");
+    `);
+  });
 }
 
 test("manual trigger acceptance does not wait for the delivery child to exit", () => {

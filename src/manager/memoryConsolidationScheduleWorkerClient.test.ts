@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import {
   evaluateMemoryConsolidationSchedule,
   type MemoryConsolidationScheduleChild,
@@ -250,7 +251,7 @@ test("unconfirmed child termination is non-retryable and fences new children unt
     terminationTimeoutMs: 5
   });
 
-  await assert.rejects(evaluation, (error: unknown) => {
+  await assert.rejects(withTestDeadline(evaluation, 2_000), (error: unknown) => {
     const failure = error as NodeJS.ErrnoException & { retryable?: boolean };
     assert.equal(failure.code, "MEMORY_SCHEDULE_CHILD_TERMINATION_UNCONFIRMED");
     assert.equal(failure.retryable, false);

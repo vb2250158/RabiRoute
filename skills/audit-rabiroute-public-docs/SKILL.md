@@ -61,6 +61,8 @@ description: 审计并修复 RabiRoute 公共文档在本机、远端 RabiLink W
 
 ## 验收证据
 
+调用 `scripts/Test-RabiLinkDocumentationRuntime.ps1` 时，显式传入当前源码根 `-ProjectRoot`，以及授权部署配置中的 `-Username` 和 `-RemoteRoot`；不使用内置账号或机器路径。没有远端验收授权时只执行本地文档检查。
+
 交付时记录：
 
 - 审计脚本的零错误输出；

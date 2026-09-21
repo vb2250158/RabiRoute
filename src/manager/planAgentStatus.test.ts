@@ -105,9 +105,19 @@ test("plan Agent status keeps read failures separate and uses the plan workspace
   const [mismatch] = await mismatchService.inspectPlans([plan({
     taskBinding: { agentType: "codex", sessionId: "thread-1", workspace: "C:\\work" }
   })]);
-  assert.equal(mismatch?.taskAgent.sessionStatus, "idle");
+  assert.equal(mismatch?.taskAgent.sessionStatus, "workspace_mismatch");
   assert.equal(mismatch?.taskAgent.workspace, "C:\\work");
-  assert.equal(mismatch?.taskAgent.canOpen, true);
+  assert.equal(mismatch?.taskAgent.canOpen, false);
+
+  const matchingService = createPlanAgentStatusService({
+    readThread: async () => thread({ cwd: "C:\\work" })
+  });
+  const [matching] = await matchingService.inspectPlans([plan({
+    taskBinding: { agentType: "codex", sessionId: "thread-1", workspace: "C:\\work" }
+  })]);
+  assert.equal(matching?.taskAgent.sessionStatus, "idle");
+  assert.equal(matching?.taskAgent.workspace, "C:\\work");
+  assert.equal(matching?.taskAgent.canOpen, true);
 });
 
 test("opening a plan Agent only opens the exact verified Codex task", async () => {

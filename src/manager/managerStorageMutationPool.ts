@@ -175,8 +175,9 @@ function closesWithin(slot: ChildSlot, timeoutMs: number): Promise<boolean> {
   return Promise.race([
     slot.closePromise.then(() => true),
     new Promise<boolean>(resolve => {
+      // Explicit stop must observe close or its bounded deadline even after
+      // the HTTP listener and the idle child no longer keep the process alive.
       timer = setTimeout(() => resolve(false), timeoutMs);
-      timer.unref?.();
     })
   ]).finally(() => {
     if (timer) clearTimeout(timer);

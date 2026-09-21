@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import {
   collectWatchedConfigFiles,
   type ConfigWatchDirectoryReader
@@ -15,7 +16,7 @@ test("config watcher returns a bounded partial snapshot when a NAS directory sta
   };
 
   const startedAt = Date.now();
-  const result = await collectWatchedConfigFiles({
+  const result = await withTestDeadline(collectWatchedConfigFiles({
     routeRoot,
     rolesRoot,
     timeoutMs: 20,
@@ -23,7 +24,7 @@ test("config watcher returns a bounded partial snapshot when a NAS directory sta
     adapterConfigPath: name => path.join(routeRoot, name, "adapterConfig.json"),
     personaConfigPath: name => path.join(rolesRoot, name, "personaConfig.json"),
     fileExists: async () => true
-  });
+  }), 1_000);
 
   assert.ok(Date.now() - startedAt < 250);
   assert.equal(result.partial, true);

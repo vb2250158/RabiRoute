@@ -22,3 +22,5 @@ pwsh -NoProfile -File scripts/Test-ProjectSkillSync.ps1 -ProjectPath <项目根>
 第一条报告每个技能相对基线的漂移，第二条作为门禁（不是 `in-sync` 或被目标项目 `AGENTS.md` 引用缺失时返回非零），移植完成后用 `-UpdateBaseline` 记录新基线。判定含义和 Agent 流程见 [项目技能的分发与漂移检测](../../docs/project-skill-distribution.md)。
 
 当前任务需要已有的相关人格范围与受支持的连接入口；技能不保存机器地址、访问密钥或人格绑定。连接和请求遵循 [SKILL.md](SKILL.md) 的动态地址、有限超时和离线兜底。项目专属连接配置留在项目，不改写 Rabi 的通用正文。
+
+用户级完整分发与宿主筛选使用同页的 agentSkills 流程。首轮群消息历史查询还引用 napcat-qq-gateway；手工安装到项目时同时移植该引用，或改为项目自己的现行消息查询说明，不留下缺失的相对链接。

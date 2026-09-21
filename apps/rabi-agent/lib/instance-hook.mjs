@@ -30,6 +30,7 @@ export async function requestInstanceHook(input, configPath, fetcher = fetch) {
     "On this remote computer, use this installed transport even when a Skill describes local RabiRouteHost discovery. Missing a local Host does not mean Manager is offline; do not launch a second Host or read local business files as a fallback.",
     `Use the installed command: ${command} METHOD /relative-path.`,
     `To upload a local file, replace --api with --upload FILE --upload-id UUID. Keep that UUID stable; upload never sends automatically. Use the returned id as payload.fileId and sha256 as payload.fileSha256 with type=file through /api/agent/send (NapCat group only); do not pass the remote local path. Check upload and channel receipts separately.`,
+    `For external Agent delivery, use exactly POST /api/agent/send with JSON fields deliveryId (stable retry key), sender:{agentType,sessionId}, routeId, channel, params, payload. Do not use conversationId, recipient, message, or a bare payload. Read docs/rabi-agent-interfaces.md for the current channel params and source-specific sender template before sending. On timeout or Manager generation change, read GET /api/agent/send/receipts/<same deliveryId> before retrying; never invent a new deliveryId.`,
     `Discover allowed operations: ${command} GET /api/lan-agent/capabilities`,
     `Discover resources and contracts: ${command} GET /api/lan-agent/resources`,
     `Read the API contract before business calls: ${command} GET /api/lan-agent/resources/read?id=docs/rabi-agent-interfaces.md`,

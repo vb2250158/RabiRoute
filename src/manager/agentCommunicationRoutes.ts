@@ -149,7 +149,14 @@ function handleSend(
         code: -1,
         ok: false,
         status: "blocked",
-        message: errorMessage(error)
+        message: errorMessage(error),
+        contract: {
+          method: "POST",
+          path: "/api/agent/send",
+          requiredFields: ["deliveryId", "sender", "routeId", "channel", "params", "payload"],
+          senderFields: ["agentType", "sessionId"],
+          retryRule: "Keep the same deliveryId; on timeout or uncertain result, GET /api/agent/send/receipts/{deliveryId} before retrying."
+        }
       });
     }), trackOperation);
   return true;

@@ -53,7 +53,7 @@ RabiRoute 是一个开源的消息网关 / Policy Router 项目。协作时先�
 
 - 所有新增或修改的 Skill、工作流和脚本，只要访问 RabiRoute Manager，都必须使用当前 application generation 发布的完整地址，不得写死 Manager 端口。
 - 安装版通过 `RabiRouteHost.exe --command status --json` 取得 `managerBaseUrl`、`applicationGenerationId` 和 `managerInstanceId`；源码模式只使用 Manager 输出的结构化 READY 地址；测试或外部调用可以显式注入完整 URL。
-- 取得地址后必须读取 `<managerBaseUrl>/meta`，确认 `health.state=healthy`、`requiredReady=true`，并核对 generation 与 Manager 实例身份。generation 变化后重新发现地址，不缓存旧 URL。
+- 取得地址后必须读取 `<managerBaseUrl>/meta`，先核对非空 `applicationGenerationId`、`managerInstanceId` 与当前 Host/READY 身份。普通业务请求要求 `health.live=true`、`health.requiredReady=true`，且 `health.state` 为 `healthy` 或 `degraded`；具体依赖由目标接口判断，不以 `businessReady=false` 或无关 Route 降级阻断全部请求。精确 `GET /meta` 诊断只校验身份，不要求业务就绪，仍保留超时、地址和身份安全检查。写后复核只检查身份：身份变化或无法核对时标记 `uncertain`，单纯健康波动不是切代；原请求超时、5xx 等结果不确定性仍按写入合同处理。身份变化后重新发现地址，不缓存旧 URL。
 - 禁止端口扫描、读取退役实例锁、直接启动或结束 Manager 进程。安装版应用生命周期只由 Host 管理。测试夹具和明确的旧任务迁移器可以保留退役端口文本用于检测，但不得把它作为当前连接目标。
 - 修改 Skill、工作流或脚本后运行 `node --test scripts/dynamic-manager-active-truth.test.mjs`；该测试递归检查现有和新增入口。
 

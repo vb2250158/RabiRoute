@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { spawn } from "node:child_process";
+import { withTestDeadline } from "../testFiniteDeadline.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -108,6 +110,76 @@ function tempRolesRoot(t: test.TestContext): { rolesRoot: string; roleDir: strin
   return { rolesRoot, roleDir };
 }
 
+for (const mode of ["real-close", "unconfirmed"] as const) {
+  test(`explicit storage pool stop settles without unrelated live handles: ${mode}`, { timeout: 20_000 }, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "storage-stop-exit-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const script = `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs';
+      import path from 'node:path';
+      import { EventEmitter } from 'node:events';
+      import { ManagerStorageMutationPool } from ${JSON.stringify(new URL("./managerStorageMutationPool.ts", import.meta.url).href)};
+      const rolesRoot = ${JSON.stringify(root)};
+      const mode = ${JSON.stringify(mode)};
+      fs.mkdirSync(path.join(rolesRoot, 'FixtureRole'), { recursive: true });
+      class SilentChild extends EventEmitter {
+        pid = 12345; exitCode = null; signalCode = null; connected = true; signals = [];
+        stdout = Object.assign(new EventEmitter(), { destroy() {} });
+        stderr = Object.assign(new EventEmitter(), { destroy() {} });
+        channel = { unref() {} };
+        send(request, callback) {
+          queueMicrotask(() => this.emit('message', { protocolVersion: request.protocolVersion,
+            requestId: request.requestId, fence: request.fence, ok: true, value: { id: 'stop-fixture' } }));
+          callback?.(null); return true;
+        }
+        kill(signal) { this.signals.push(signal); return true; }
+        disconnect() { this.connected = false; }
+        unref() {}
+      }
+      const silent = new SilentChild();
+      const pool = new ManagerStorageMutationPool({ rolesRoot,
+        applicationGenerationId: 'stop-fixture-generation', managerInstanceId: 'stop-fixture-manager',
+        terminationTimeoutMs: mode === 'real-close' ? 1000 : 20, forceTerminationTimeoutMs: 20,
+        ...(mode === 'unconfirmed' ? { childFactory: () => silent } : {}) });
+      try {
+      await pool.createPlan('FixtureRole', 'stop-fixture', { title: 'Stop fixture', focus: 'Bounded stop',
+        status: '分析中', currentStepId: 'verify', steps: [{ id: 'verify', title: 'Verify' }], keywords: ['fixture'] }, { idempotencyKey: 'stop-fixture-create', expectedRevision: null, timeoutMs: 10000 });
+      const stopped = pool.stop();
+      assert.equal(pool.stop(), stopped);
+      if (mode === 'real-close') {
+        await stopped;
+        process.stdout.write('STOP_COMPLETED\\n');
+      } else {
+        await assert.rejects(stopped, error => error.code === 'termination_unconfirmed');
+        assert.deepEqual(silent.signals, ['SIGTERM', 'SIGKILL']);
+        process.stdout.write('STOP_REJECTED_BOUNDED\\n');
+      }
+      } finally { await pool.stop().catch(() => {}); }
+    `;
+    const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+        windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
+      });
+      let stdout = "";
+      let stderr = "";
+      let expired = false;
+      // Only the parent test has a hard deadline; the child has no keeper.
+      const deadline = setTimeout(() => { expired = true; child.kill(); }, 15_000);
+      child.stdout.on("data", data => { stdout += String(data); });
+      child.stderr.on("data", data => { stderr += String(data); });
+      child.once("error", error => { clearTimeout(deadline); reject(error); });
+      child.once("close", code => {
+        clearTimeout(deadline);
+        if (expired) reject(new Error("Storage stop child exceeded its exit deadline."));
+        else resolve({ code, stdout, stderr });
+      });
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, mode === "real-close" ? /STOP_COMPLETED/ : /STOP_REJECTED_BOUNDED/);
+  });
+}
+
 test("terminal plan validation resolves legacy uncertain receipts without changing the plan", async t => {
   const { rolesRoot, roleDir } = tempRolesRoot(t);
   const plan = createPlan(roleDir, {
@@ -115,7 +187,7 @@ test("terminal plan validation resolves legacy uncertain receipts without changi
     status: "分析中", currentStepId: "verify", steps: [{ id: "verify", title: "Verify" }], keywords: ["validation"]
   });
   const before = planRevision(roleDir, plan.id);
-  const patch = { status: "完成", currentStepId: "verify" };
+  const patch = { activationStatus: "进行中" as const, markerStatus: "完成", currentStepId: "verify" };
   const key = "legacy-terminal-validation";
   const rootDir = path.join(roleDir, "runtime");
   await executeDurableDelivery({
@@ -909,7 +981,7 @@ test("timeout ignores a late response and starts the next command only after chi
   });
   const second = pool.createRecentMemory("YeYu", { title: "after" }, operation("timeout-two"));
   await assert.rejects(
-    first,
+    withTestDeadline(first, 2_000),
     (error: unknown) => error instanceof ManagerStorageMutationError && error.code === "timeout"
   );
   assert.deepEqual(await second, { ok: "second" });
@@ -982,11 +1054,11 @@ test("unconfirmed child termination blocks commands and stop cannot masquerade a
   });
 
   await assert.rejects(
-    pool.createRecentMemory("YeYu", { title: "hung" }, {
+    withTestDeadline(pool.createRecentMemory("YeYu", { title: "hung" }, {
       idempotencyKey: "blocked-one",
       expectedRevision: null,
       timeoutMs: 10
-    }),
+    }), 2_000),
     (error: unknown) => error instanceof ManagerStorageMutationError && error.code === "termination_unconfirmed"
   );
   assert.equal(pool.status().state, "blocked");

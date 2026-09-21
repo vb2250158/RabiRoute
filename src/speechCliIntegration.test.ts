@@ -83,7 +83,7 @@ async function startRoleContextFixture(roleId: string, roleDir: string, gatewayI
 
 function runSpeechCli(args: string[], env: NodeJS.ProcessEnv): Promise<ChildResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", path.resolve("src", "index.ts"), ...args], {
+    const child = spawn(process.execPath, ["--import", "tsx", "--experimental-test-module-mocks", "--import", new URL("./acceptance/fixtures/speechDeliveryMock.mjs", import.meta.url).href, path.resolve("src", "index.ts"), ...args], {
       cwd: process.cwd(),
       env,
       windowsHide: true,
@@ -226,6 +226,7 @@ test("speech CLI reads the host record once and writes one RabiLink persona even
 
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.equal(parseSpeechProcessResult(result.stdout)?.status, "delivered");
+  assert.match(result.stdout, /RABI_SPEECH_TEST_DELIVERY \{"provider":"marvis","messageAdapter":"(?:speech|rabilink)"\}/);
   const voiceRows = fs.readFileSync(path.join(fixture.roleDir, "voice-transcripts.jsonl"), "utf8").trim().split(/\r?\n/);
   const conversationRows = fs.readFileSync(path.join(fixture.roleDir, "conversation", "current.jsonl"), "utf8").trim().split(/\r?\n/);
   assert.equal(voiceRows.length, 1);
@@ -311,6 +312,7 @@ test("speech CLI keeps the PC microphone on the independent voice endpoint", asy
 
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.equal(parseSpeechProcessResult(result.stdout)?.status, "delivered");
+  assert.match(result.stdout, /RABI_SPEECH_TEST_DELIVERY \{"provider":"marvis","messageAdapter":"(?:speech|rabilink)"\}/);
   assert.equal(fixture.ingressStore.list().length, 1);
   const voiceRows = fs.readFileSync(path.join(fixture.roleDir, "voice-transcripts.jsonl"), "utf8").trim().split(/\r?\n/);
   const conversationRows = fs.readFileSync(path.join(fixture.roleDir, "conversation", "current.jsonl"), "utf8").trim().split(/\r?\n/);

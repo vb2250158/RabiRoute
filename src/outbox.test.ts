@@ -426,6 +426,24 @@ test("Agent text CQ codes become real NapCat segments instead of literal group t
   ]);
 });
 
+test("Agent text conversion preserves whitespace without weakening CQ policy", () => {
+  for (const text of ["  正文  ", "\n正文\n", "\r\n  缩进😀\r\n\t", "正文\n\n"]) {
+    assert.equal(napcatSegmentsFromAgentText(text), text);
+  }
+  for (const text of ["", " \r\n\t"]) assert.deepEqual(napcatSegmentsFromAgentText(text), []);
+  assert.deepEqual(napcatSegmentsFromAgentText("\r\n [CQ:at,qq=10001]正文\n\t"), [
+    { type: "text", data: { text: "\r\n " } },
+    { type: "at", data: { qq: "10001" } },
+    { type: "text", data: { text: "正文\n\t" } }
+  ]);
+  assert.deepEqual(napcatSegmentsFromAgentText("\n[CQ:unknown,id=1]正文\r\n"), [
+    { type: "text", data: { text: "\n" } },
+    { type: "text", data: { text: "正文\r\n" } }
+  ]);
+  assert.throws(() => napcatSegmentsFromAgentText("\n [CQ:image,file=blocked.png]\n"), /cannot embed/);
+  assert.throws(() => napcatSegmentsFromAgentText("\n[CQ:forward,id=blocked]\r\n"), /cannot embed/);
+});
+
 test("Agent text cannot smuggle media or forward codes past the route policy", () => {
   // Media codes would bypass payload-kind and allowedFileRoots validation.
   assert.throws(
@@ -885,6 +903,10 @@ test("Outbox delivery readback distinguishes missing, completed, and payload mis
 
       const mismatch = await inspectAgentReplyDelivery({ ...request, text: "changed payload" }, options);
       assert.equal(mismatch.state, "uncertain");
+      for (const text of [` ${request.text}`, `${request.text}\n`]) {
+        const whitespaceMismatch = await inspectAgentReplyDelivery({ ...request, text }, options);
+        assert.equal(whitespaceMismatch.state, "uncertain", "boundary whitespace remains part of the persisted request digest");
+      }
     });
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });

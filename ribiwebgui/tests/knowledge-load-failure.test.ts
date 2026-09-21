@@ -11,7 +11,7 @@ test("failed first page cannot show successful empty state or start background r
   assert.match(page, /v-if="planListReady && !planError && !planPageError && !loading/);
   assert.match(page, /knowledgeListWarning \? 'warning' : 'success'/);
   assert.match(page, /knowledgeCountsReady \? planCounts.plans : '—'/);
-  assert.match(page, /if \(!planListReady.value \|\| planError.value \|\| !planNextCursor.value/);
+  assert.match(page, /planEventRefresh.running \|\| !planListReady.value \|\| Boolean\(planError.value\)/);
   assert.match(page, /if \(planError.value \|\| !planListReady.value\) \{ void refreshKnowledge\(\); return; \}/);
 });
 

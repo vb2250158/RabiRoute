@@ -19,6 +19,14 @@ This document covers only "RabiRoute to WorkBuddy delivery and discovery". It ex
 - The reverse direction (WorkBuddy calling Rabi APIs through MCP / hooks): that is tool integration, not endpoint delivery, and needs its own design.
 - Message ingress: WorkBuddy is not a messaging endpoint, so no adapter is added under `src/adapters/`.
 
+### Agent thread bridge and pagination boundary
+
+The WorkBuddy thread bridge supports listing, reading, and delivering to existing tasks. Creation, renaming, and opening remain owned by WorkBuddy Desktop. It does not claim plan-assistant, memory-consolidation, or lost-delivery-receipt recovery capabilities; maturity remains `experimental`.
+
+The store intersects `allowedWorkspaces` with the optional single `workspace`, using one shared path-normalization rule, then orders by latest activity descending and task ID ascending. Workspace selection precedes both the 10,000-row read cap and `offset` / `limit` pagination. An empty allowlist adds no restriction. Query and archive filtering operate within that bounded inventory, so this is not an unlimited task catalog. Interleaved workspaces, identical titles, and larger offsets no longer produce holes caused by filtering a page in the bridge. Detail reads and exact-ID resolution use a parameterized single-row lookup independent of the discovery inventory's 10,000-row cap; workspace-conflict and archived-task checks remain in place.
+
+Validation uses temporary SQLite databases and mock HTTP; it is not a new real-desktop delivery acceptance. Delivery still uses the single session gateway and fails closed when the owner is offline or the workspace differs, without starting a fallback runtime.
+
 ## 2. Gate zero: user-observable contract
 
 | Requirement | Needed | Single source of truth | Acceptance evidence | Forbidden substitute |
@@ -223,7 +231,9 @@ Merge semantics: only entries carrying the `rabi-workbuddy-hook.mjs` fingerprint
 
 **Difference from Codex/DSH**: those two install through their own plugin managers and let the plugin system inject the plugin root; WorkBuddy is configured directly in the user settings file by RabiRoute. The capability is equivalent (same five events, same context injection and completion reporting); only the installation vehicle differs, and it buys freedom from CLI startup cost and path coupling.
 
-**Not yet verified**: hook end-to-end validation on a real interactive task has not run (already-open sessions must restart before they load the new configuration), so the Hook row in the section 11 acceptance matrix is still marked as pending.
+**Hook self-check boundary (candidate implementation, not production acceptance)**: writing configuration does not establish self-check health. The installer uses asynchronous Node `spawn` to run `--self-check`, with a default 20-second limit and a combined 64 KiB stdout/stderr limit. Timeout or cancellation must confirm child exit; the exit code takes precedence, so an output field of `ok:true` cannot override a nonzero exit. The script returns `ok:true` only for nonempty valid context through the existing client path, excluding known fail-open diagnostics. Empty responses (including empty context synthesized locally by a disabled helper) or `null` from `handleHookInput` mean only “no verifiable context; availability not confirmed” and exit nonzero; they do not establish that Manager is offline. This verifies context evidence, not complete Manager health, and does not prove that the host has loaded the Hook.
+
+**Not yet verified**: Hook end-to-end validation on a real interactive task has not run. Already-open sessions must reload (restart the session if necessary) to read the new configuration. These candidate changes and isolated tests do not establish a build, deployment, or production release.
 
 ### 5.8 Open items and blockers
 

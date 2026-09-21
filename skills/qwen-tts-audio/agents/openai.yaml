@@ -1,0 +1,4 @@
+interface:
+  display_name: "RabiSpeech Qwen3-TTS"
+  short_description: "通过 RabiSpeech 使用本地 Qwen3-TTS 生成人格多语言语音"
+  default_prompt: "使用 $qwen-tts-audio 通过 RabiSpeech 把这段文字生成为本地 Qwen3-TTS 语音。"

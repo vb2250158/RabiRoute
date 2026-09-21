@@ -47,9 +47,14 @@ import { proactiveCommunicationPolicyLines } from "./shared/agentCommunicationPo
 import type { CodexReasoningEffort } from "./shared/gatewayConfigModel.js";
 import { readAntigravitySession } from "./antigravitySessionStore.js";
 import {
-  isPlanAssistantAgentType,
+  isAgentThreadCapableAdapter,
   type PlanAssistantAgentType
 } from "./shared/agentAdapterCapabilities.js";
+import {
+  listWorkbuddyThreads,
+  readWorkbuddyThread,
+  sendWorkbuddyThreadMessage
+} from "./workbuddyThreads.js";
 import { normalizePathForComparison } from "./shared/pathPolicy.js";
 import { parseAgentAdapterType, type AgentAdapterType } from "./agentAdapters/types.js";
 import { agentAdapterSupportsReceiptRecovery } from "./shared/agentAdapterCapabilities.js";
@@ -461,7 +466,7 @@ function threadAgentAdapter(request: Pick<AgentThreadRequest, "agentAdapter" | "
   if (rawAdapter && !explicit) {
     throw new Error(`Invalid agentAdapter: ${rawAdapter}`);
   }
-  if (explicit && !isPlanAssistantAgentType(explicit)) {
+  if (explicit && !isAgentThreadCapableAdapter(explicit)) {
     throw new Error(`Agent thread operations are not supported for agentAdapter=${explicit}.`);
   }
   const rawThreadId = typeof request.threadId === "string" ? request.threadId.trim() : "";
@@ -485,7 +490,9 @@ async function readAgentThreadForAdapter(
     ? await readDshSession(threadId, dshBaseUrlFor(options))
     : adapter === "antigravity"
       ? readAntigravitySession(threadId)
-      : await readCodexThread(threadId);
+      : adapter === "workbuddy"
+        ? readWorkbuddyThread(threadId)
+        : await readCodexThread(threadId);
   return { value, summary: threadSummary(value) };
 }
 
@@ -507,6 +514,9 @@ async function listThreadsForAdapter(
       offset,
       allowedWorkspaces
     });
+  }
+  if (adapter === "workbuddy" && driver === defaultDriver) {
+    return listWorkbuddyThreads({ query, limit, offset, allowedWorkspaces });
   }
   return listThreads(query, limit, offset, allowedWorkspaces, options, driver, stateDbOnly);
 }
@@ -963,6 +973,12 @@ async function executeAgentThreadRequest(
 
   if (action === "reconcile_delivery") {
     if (!options.agentRequests) throw new Error("Agent request tracking is unavailable.");
+    const reconcileAdapter = threadAgentAdapter(request);
+    if (!agentAdapterSupportsReceiptRecovery(reconcileAdapter)) {
+      throw new Error(
+        `adapter_has_no_receipt_log: agentAdapter=${reconcileAdapter} keeps no readable inbound log, so a lost delivery receipt cannot be reconstructed.`
+      );
+    }
     const threadId = normalizeThreadId(request.threadId);
     const deliveryId = optionalText(request.deliveryId, "deliveryId", 200);
     if (!deliveryId) throw new Error("deliveryId is required for receipt reconciliation.");
@@ -1015,6 +1031,9 @@ async function executeAgentThreadRequest(
     }
     if (agentAdapter === "dsh" && (!thread.cwd || canonicalWorkspace(thread.cwd) !== canonicalWorkspace(cwd))) {
       throw new Error(`Agent ${agentAdapter === "dsh" ? "session" : "task"} belongs to another workspace: ${thread.cwd || "unknown"}`);
+    }
+    if (agentAdapter === "workbuddy") {
+      throw new Error("Opening a WorkBuddy task happens inside the WorkBuddy app; the bridge cannot open one.");
     }
     if (agentAdapter === "dsh") {
       await (options.openDshSession ?? openDshSession)(threadId, dshBaseUrlFor(options));
@@ -1170,6 +1189,9 @@ async function executeAgentThreadRequest(
 
   if (action === "create") {
     const agentAdapter = threadAgentAdapter(request);
+    if (agentAdapter === "workbuddy") {
+      throw new Error("WorkBuddy tasks are created inside the WorkBuddy app; the bridge cannot create one.");
+    }
     const sandbox = normalizeSandbox(request.sandbox);
     const initialPrompt = optionalText(request.prompt, "prompt", maxPromptLength);
     const declaredMessageSource = initialPrompt
@@ -1360,6 +1382,9 @@ async function executeAgentThreadRequest(
 
   if (action === "rename") {
     const agentAdapter = threadAgentAdapter(request);
+    if (agentAdapter === "workbuddy") {
+      throw new Error("WorkBuddy task titles are owned by the WorkBuddy app; the bridge cannot rename one.");
+    }
     const threadId = normalizeThreadId(request.threadId);
     const rawTitle = requiredText(request.title, "title", maxTitleInputLength);
     const title = agentAdapter === "dsh" ? rawTitle : normalizeCodexThreadTitle(rawTitle);
@@ -1668,6 +1693,12 @@ async function executeAgentThreadRequest(
       if (model) delivery.model = model;
       if (reasoningEffort) delivery.reasoningEffort = reasoningEffort;
       if (imagePaths.length) delivery.imagePaths = imagePaths;
+      if (targetAgentAdapter === "workbuddy" && driver === defaultDriver) {
+        if (imagePaths.length) {
+          throw new Error("WorkBuddy deliveries do not carry image attachments.");
+        }
+        return await sendWorkbuddyThreadMessage({ threadId, prompt, cwd });
+      }
       return targetAgentAdapter === "dsh" && driver === defaultDriver
         ? await sendDshSessionMessage({
             sessionId: threadId,

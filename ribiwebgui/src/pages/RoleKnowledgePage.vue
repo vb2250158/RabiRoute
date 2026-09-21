@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createBoundedPlanRefresh } from "../boundedPlanRefresh";
 import { usePlanDirectoryResize } from "../planDirectoryResize";
 import { userFacingError } from "../userFacingError";
 import { computed, markRaw, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from "vue";
@@ -38,7 +39,6 @@ import {
   hasMoreKnowledgeBeforeWindow,
   knowledgeRenderWindow,
   mergeKnowledgePage,
-  drainKnowledgePages,
   nextKnowledgeRenderLimit,
   previousKnowledgeRenderWindow,
   shouldAutoLoadNextKnowledgeBatch
@@ -53,7 +53,6 @@ import {
   loadRolePlan,
   loadRolePlanPage,
   loadRolePlanPreview,
-  ROLE_PLAN_BACKGROUND_PAGE_SIZE,
   openPlanAgentTask,
   submitPlanFeedback,
   ManagerRequestError,
@@ -87,6 +86,7 @@ const memoryLoading = ref(false);
 const planError = ref("");
 const planPageError = ref("");
 const planListReady = ref(false);
+const planEventReset = ref(false);
 const knowledgeCountsReady = ref(false);
 const knowledgeCountsError = ref("");
 const planDetailErrors = reactive<Record<string, string>>({});
@@ -282,7 +282,17 @@ let activePlanDetailRequests = 0;
 const MAX_CONCURRENT_PLAN_DETAILS = 4;
 let knowledgeFilterTimer = 0;
 let memoryClockTimer = 0;
-let planPageBackgroundRequest = 0;
+let planListAbort: AbortController | null = null;
+const planEventRefresh = createBoundedPlanRefresh({
+  allowed: () => knowledgePageWorkAllowed() && showsPlanList.value && Boolean(roleId.value),
+  busy: () => loading.value || loadingMorePlans.value,
+  refresh: refreshPlansFromEvent,
+  failed: error => { planError.value = userFacingError(error); }
+});
+function cancelPlanListWork(keepPending = false): void {
+  planEventRefresh.cancel(keepPending);
+  planListAbort?.abort();
+}
 let planAgentStatusGeneration = 0;
 let cachedKnowledgeScrollY = 0;
 let planListDialogContentRequest: Promise<void> | null = null;
@@ -420,6 +430,9 @@ const knowledgeListStatus = computed(() => {
   if (showsPlanList.value && !planListReady.value && !loading.value) {
     return isEnglish.value ? "Plan list has not loaded yet." : "计划列表尚未加载。";
   }
+  if (showsPlanList.value && planEventReset.value && !loading.value) {
+    return isEnglish.value ? "Plans updated; showing the first page. Use Load more to continue." : "计划已更新，当前显示首屏；可点击加载更多继续查看。";
+  }
   const counts: string[] = [];
   if (showsPlanList.value) counts.push(isEnglish.value
     ? `${visiblePlansForView.value.length} / ${planListResultTotal.value} plans`
@@ -431,7 +444,7 @@ const knowledgeListStatus = computed(() => {
     ? (isEnglish.value ? "Loading the first visible items" : "正在加载首屏内容")
     : loadingMorePlans.value
       ? (isEnglish.value ? "The visible list is ready; loading more titles in background" : "当前列表已可用，正在后台补齐更多标题")
-      : (isEnglish.value ? "List data loaded" : "列表数据已加载");
+      : (isEnglish.value ? "Visible items loaded; use Load more for another page" : "当前内容已加载，可点击加载更多读取下一页");
   const detailHint = showsPlanList.value
     ? (isEnglish.value
       ? "Plan bodies and attachments load near the reading position."
@@ -634,6 +647,7 @@ watch(activeView, () => {
 });
 
 watch([activeView, query, planListSortMode, () => planListHiddenStatuses.value.join("\u001f"), () => planListSelectedTags.value.join("\u001f")], () => {
+  cancelPlanListWork();
   planRenderStart.value = 0;
   planRenderLimit.value = 8;
   memoryRenderLimit.value = 24;
@@ -999,7 +1013,7 @@ function observeProgressiveSentinels(): void {
         Boolean(directoryJumpTargetId)
       )) return;
       if (hasMoreRenderedPlans.value) loadMoreRenderedPlans();
-      if (hasMorePlans.value && !planPageBackgroundRequest && !planPageError.value) loadAllRemainingPlans(roleId.value, requestVersion);
+      // Network pagination is explicitly requested with Load more, never drained by visibility.
     }, { rootMargin: "700px 0px" });
     if (observesPreviousPlans && planLoadPreviousSentinel.value) {
       planPageObserver.observe(planLoadPreviousSentinel.value);
@@ -1087,7 +1101,7 @@ function loadMoreRenderedPlans(): void {
   schedulePlanDetailObserverRefresh();
 }
 
-async function loadMorePlans(limit = ROLE_PLAN_BACKGROUND_PAGE_SIZE, fromBackground = false): Promise<void> {
+async function loadMorePlans(limit = 50): Promise<void> {
   const selectedRoleId = roleId.value;
   const cursor = planNextCursor.value;
   const currentRequest = requestVersion;
@@ -1096,27 +1110,32 @@ async function loadMorePlans(limit = ROLE_PLAN_BACKGROUND_PAGE_SIZE, fromBackgro
     || !cursor
     || loadingMorePlans.value
     || planPageError.value
-    || (!fromBackground && planPageBackgroundRequest === currentRequest)
+    || loading.value || planEventRefresh.running || !planListReady.value || Boolean(planError.value)
     || !knowledgePageWorkAllowed()
   ) return;
   loadingMorePlans.value = true;
+  const controller = new AbortController();
+  planListAbort = controller;
   try {
     const page = await loadRolePlanPage(selectedRoleId, cursor, limit, {
       ...currentPlanPageFilter(),
       includeFacets: false
-    });
-    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+    }, controller.signal);
+    if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(page.items, false, currentRequest);
+    planEventReset.value = false;
     planPageCounts.value = page.counts;
     planListResultTotal.value = page.total;
     planNextCursor.value = page.nextCursor;
     planPageError.value = "";
   } catch (loadError) {
-    if (currentRequest === requestVersion) {
+    if (!controller.signal.aborted && currentRequest === requestVersion) {
       planPageError.value = userFacingError(loadError);
     }
   } finally {
+    if (planListAbort === controller) planListAbort = null;
     if (currentRequest === requestVersion) loadingMorePlans.value = false;
+    planEventRefresh.idle();
     scheduleProgressiveSentinelRefresh();
   }
 }
@@ -1140,44 +1159,13 @@ async function yieldToKnowledgePaint(): Promise<void> {
   });
 }
 
-// 计划目录必须在页面可工作时自动读到 nextCursor 为空；缺失或提前停止属于功能缺陷。
-// 滚动只控制已缓存计划卡片的挂载窗口，不能决定目录数据是否继续加载。
-function loadAllRemainingPlans(selectedRoleId: string, currentRequest: number): void {
-  if (!planListReady.value || planError.value || !planNextCursor.value || planPageError.value || planPageBackgroundRequest === currentRequest) return;
-  planPageBackgroundRequest = currentRequest;
-  void drainKnowledgePages({
-    nextCursor: () => (
-      currentRequest === requestVersion
-      && selectedRoleId === roleId.value
-      && showsPlanList.value
-      && planListReady.value && !planError.value && !planPageError.value
-      && knowledgePageWorkAllowed()
-        ? planNextCursor.value
-        : ""
-    ),
-    shouldContinue: () => (
-      currentRequest === requestVersion
-      && selectedRoleId === roleId.value
-      && showsPlanList.value
-      && planListReady.value && !planError.value && !planPageError.value
-      && knowledgePageWorkAllowed()
-    ),
-    yieldToUi: yieldToKnowledgePaint,
-    loadNextPage: () => loadMorePlans(ROLE_PLAN_BACKGROUND_PAGE_SIZE, true)
-  }).then((result) => {
-    if (result === "stalled" && currentRequest === requestVersion && !planPageError.value) {
-      planPageError.value = t("目录加载未能继续，请重试。");
-    }
-  }).finally(() => {
-    if (planPageBackgroundRequest === currentRequest) planPageBackgroundRequest = 0;
-  });
-}
+// A user action loads at most one page; a nonempty cursor is not a prefetch request.
 
 function retryPlanPages(): void {
   if (planError.value || !planListReady.value) { void refreshKnowledge(); return; }
-  if (loadingMorePlans.value || planPageBackgroundRequest === requestVersion) return;
+  if (loading.value || loadingMorePlans.value || planEventRefresh.running) return;
   planPageError.value = "";
-  loadAllRemainingPlans(roleId.value, requestVersion);
+  void loadMorePlans(50);
 }
 
 function retryPlanDetails(plan: RolePlan): void {
@@ -1197,9 +1185,11 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
     return;
   }
   loading.value = true;
+  const controller = new AbortController();
+  planListAbort = controller;
   try {
-    const result = await loadRolePlanPage(selectedRoleId, "", 8, currentPlanPageFilter());
-    if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+    const result = await loadRolePlanPage(selectedRoleId, "", 8, currentPlanPageFilter(), controller.signal);
+    if (controller.signal.aborted || currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(result.items, true, currentRequest);
     planListReady.value = true;
     planPageCounts.value = result.counts;
@@ -1208,19 +1198,20 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
     planListTagOptions.value = result.facets?.tags || [];
     planNextCursor.value = result.nextCursor;
   } catch (loadError) {
-    if (currentRequest === requestVersion) {
+    if (!controller.signal.aborted && currentRequest === requestVersion) {
       planError.value = userFacingError(loadError);
       planNextCursor.value = "";
       planListReady.value = false;
     }
     return;
   } finally {
+    if (planListAbort === controller) planListAbort = null;
     if (currentRequest === requestVersion) loading.value = false;
+    planEventRefresh.idle();
     scheduleProgressiveSentinelRefresh();
   }
   if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
   refreshExpandedPlanAgentStatuses();
-  loadAllRemainingPlans(selectedRoleId, currentRequest);
 }
 
 async function refreshMemoryKnowledge(selectedRoleId: string, currentRequest: number): Promise<void> {
@@ -1293,6 +1284,8 @@ async function refreshFocusedPlan(selectedRoleId: string, currentRequest: number
 async function refreshKnowledge(): Promise<void> {
   const selectedRoleId = roleId.value;
   if (!knowledgePageWorkAllowed()) return;
+  cancelPlanListWork();
+  planEventReset.value = false;
   const currentRequest = ++requestVersion;
   planPageError.value = "";
   planListReady.value = false;
@@ -1372,6 +1365,7 @@ async function refreshKnowledge(): Promise<void> {
 }
 
 watch([activeView, query], () => {
+  cancelPlanListWork();
   planPageError.value = "";
   planListReady.value = false;
   knowledgeCountsReady.value = false;
@@ -2421,14 +2415,54 @@ function handleMemoryConsolidationChanged(raw: Event): void {
   }
 }
 
+function handlePlanChanged(raw: Event): void {
+  try {
+    const data = JSON.parse((raw as MessageEvent).data || "{}") as { roleId?: string };
+    if (data.roleId === roleId.value) planEventRefresh.request();
+  } catch { /* Keep the last valid snapshot on malformed notifications. */ }
+}
+
+async function refreshPlansFromEvent(signal: AbortSignal): Promise<void> {
+  const request = requestVersion;
+  const selectedRole = roleId.value;
+  const fingerprint = JSON.stringify([currentPlanPageFilter(), focusedPlanId.value]);
+  const current = () => !signal.aborted && request === requestVersion && selectedRole === roleId.value
+    && fingerprint === JSON.stringify([currentPlanPageFilter(), focusedPlanId.value]) && knowledgePageWorkAllowed();
+  if (focusedPlanId.value) {
+    const latest = await loadRolePlan(selectedRole, focusedPlanId.value, signal);
+    if (current()) { plans.value = [latest]; planListReady.value = true; planError.value = ""; }
+    return;
+  }
+  // One event refresh is one first page, never the entire cursor chain.
+  const result = await loadRolePlanPage(selectedRole, "", 8, currentPlanPageFilter(), signal);
+  if (!current()) return;
+  applyPlanSnapshots(result.items, true, request);
+  planEventReset.value = true;
+  planRenderStart.value = 0;
+  planRenderLimit.value = 8;
+  planPageCounts.value = result.counts;
+  planListResultTotal.value = result.total;
+  planListStatusOptions.value = result.facets?.statuses || [];
+  planListTagOptions.value = result.facets?.tags || [];
+  planNextCursor.value = result.nextCursor;
+  planListReady.value = true;
+  planError.value = "";
+  planPageError.value = "";
+  schedulePlanDetailObserverRefresh();
+}
+
 function connectManagerEvents(): void {
   if (managerEvents || !knowledgePageWorkAllowed()) return;
   managerEvents = managerEventSource("/api/events");
+  managerEvents.addEventListener("ready", () => planEventRefresh.request());
+  managerEvents.addEventListener("plan_changed", handlePlanChanged);
+  managerEvents.addEventListener("plan_status_catalog_changed", handlePlanChanged);
   managerEvents.addEventListener("plan_feedback_changed", handlePlanFeedbackChanged);
   managerEvents.addEventListener("memory_consolidation_changed", handleMemoryConsolidationChanged);
 }
 
 function disconnectManagerEvents(): void {
+  cancelPlanListWork(true);
   managerEvents?.close();
   managerEvents = null;
 }
@@ -2447,6 +2481,7 @@ function scheduleMemoryClockDeadline(): void {
 
 function handleKnowledgeVisibilityChange(): void {
   if (!knowledgePageShouldWork(document.visibilityState, planDirectoryMounted)) {
+    disconnectManagerEvents();
     planPageObserver?.disconnect();
     memoryPageObserver?.disconnect();
     planDetailObserver?.disconnect();
@@ -2460,11 +2495,7 @@ function handleKnowledgeVisibilityChange(): void {
   schedulePlanCardObserverRefresh();
   schedulePlanDetailObserverRefresh();
   scheduleProgressiveSentinelRefresh();
-  window.setTimeout(() => {
-    if (showsPlanList.value && planNextCursor.value && !planPageBackgroundRequest) {
-      loadAllRemainingPlans(roleId.value, requestVersion);
-    }
-  }, 0);
+  planEventRefresh.idle();
 }
 
 function activateKnowledgePage(): void {
@@ -2488,11 +2519,7 @@ function activateKnowledgePage(): void {
   void nextTick(() => {
     window.scrollTo({ top: cachedKnowledgeScrollY, behavior: "auto" });
   });
-  window.setTimeout(() => {
-    if (showsPlanList.value && planNextCursor.value && !planPageBackgroundRequest) {
-      loadAllRemainingPlans(roleId.value, requestVersion);
-    }
-  }, 0);
+  planEventRefresh.idle();
 }
 
 function deactivateKnowledgePage(): void {
@@ -2533,7 +2560,7 @@ onDeactivated(() => {
 onBeforeUnmount(() => {
   feedbackRoleEpoch++;
   requestVersion += 1;
-  planPageBackgroundRequest = 0;
+  cancelPlanListWork();
   deactivateKnowledgePage();
   if (knowledgeFilterTimer) window.clearTimeout(knowledgeFilterTimer);
   resetPlanAgentStatusState();
@@ -3815,7 +3842,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           aria-live="polite"
         >
           <v-progress-circular v-if="loadingMorePlans" indeterminate size="20" width="2" color="primary" />
-          <span>{{ t(hasMoreRenderedPlans ? "继续向下滚动加载更多计划卡片" : "正在持续加载更多计划…") }}</span>
+          <span>{{ t(hasMoreRenderedPlans ? "继续向下滚动加载更多计划卡片" : "点击加载更多读取下一页计划") }}</span>
           <v-btn v-if="!loadingMorePlans" size="small" variant="text" @click="hasMoreRenderedPlans ? loadMoreRenderedPlans() : retryPlanPages()">{{ t("加载更多") }}</v-btn>
         </div>
 

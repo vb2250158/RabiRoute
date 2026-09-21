@@ -52,7 +52,7 @@ function waitBounded(promise: Promise<unknown>, timeoutMs: number): Promise<bool
       resolve(value);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
-    timer.unref?.();
+    // 显式停止必须保留有界等待，直到退出确认或超时失败。
     void promise.then(() => finish(true), () => finish(false));
   });
 }
