@@ -108,7 +108,7 @@ function aggregateRequirement(): MessageProcessingRequirement {
   };
 }
 
-test("message-processing send is rejected until the exact latest context and payload are reviewed", () => {
+test("message-processing send is rejected until the exact latest context and payload are reviewed", async () => {
   let currentRequirement = requirement();
   currentRequirement.source.replyChainMessageIds = ["wrong-agent-reply"];
   const records = [
@@ -118,14 +118,14 @@ test("message-processing send is rejected until the exact latest context and pay
   const review = new MessageProcessingSendContextReview({
     getRequirement: (id) => id === currentRequirement.id ? structuredClone(currentRequirement) : undefined,
     findRequirementBySourceMessage: (_routeId, messageId) => messageId === "source-1" ? structuredClone(currentRequirement) : undefined,
-    loadContext: () => structuredClone(records),
+    loadContext: async () => structuredClone(records),
     now: () => new Date("2026-08-11T09:42:00.000Z")
   });
 
-  assert.throws(() => review.validateSend(sendRequest()), /send-context review/i);
+  await assert.rejects(async () => await review.validateSend(sendRequest()), /send-context review/i);
 
-  const snapshot = review.snapshot("requirement-1");
-  const approval = review.approve("requirement-1", {
+  const snapshot = await review.snapshot("requirement-1");
+  const approval = await review.approve("requirement-1", {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -137,15 +137,15 @@ test("message-processing send is rejected until the exact latest context and pay
     requirementId: "requirement-1",
     sendContextReviewToken: approval.sendContextReviewToken
   };
-  const validated = review.validateSend(approvedRequest);
+  const validated = await review.validateSend(approvedRequest);
   assert.equal(validated?.requirement.id, "requirement-1");
   assert.equal(validated?.sourceMessageId, "source-1");
 
   records.push(inbound("newer-1", "已经有人说明了，不用重复回复", 3));
-  assert.throws(() => review.validateSend(approvedRequest), /context changed.*review again/i);
+  await assert.rejects(async () => await review.validateSend(approvedRequest), /context changed.*review again/i);
 });
 
-test("approval reviews only the proposed reply source, its explicit chain, and their attachments", () => {
+test("approval reviews only the proposed reply source, its explicit chain, and their attachments", async () => {
   const currentRequirement = aggregateRequirement();
   const records = [
     inbound("source-parent", "前一条明确问题", 1),
@@ -158,11 +158,11 @@ test("approval reviews only the proposed reply source, its explicit chain, and t
     findRequirementBySourceMessage: (_routeId, messageId) => currentRequirement.source.messageIds.includes(messageId)
       ? structuredClone(currentRequirement)
       : undefined,
-    loadContext: () => structuredClone(records)
+    loadContext: async () => structuredClone(records)
   });
-  const snapshot = review.snapshot(currentRequirement.id);
+  const snapshot = await review.snapshot(currentRequirement.id);
 
-  assert.doesNotThrow(() => review.approve(currentRequirement.id, {
+  await assert.doesNotReject(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: ["source-parent", "source-1"],
     reviewedByThreadId: "message-agent-1",
@@ -171,7 +171,7 @@ test("approval reviews only the proposed reply source, its explicit chain, and t
   }));
 });
 
-test("approval fails closed when the quoted source attachment is unavailable", () => {
+test("approval fails closed when the quoted source attachment is unavailable", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.source.attachments = [{
     id: "source-1:image:1",
@@ -189,14 +189,14 @@ test("approval fails closed when the quoted source attachment is unavailable", (
   const review = new MessageProcessingSendContextReview({
     getRequirement: () => structuredClone(currentRequirement),
     findRequirementBySourceMessage: () => structuredClone(currentRequirement),
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "[CQ:image,file=expired.png]", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id);
+  const snapshot = await review.snapshot(currentRequirement.id);
 
-  assert.throws(() => review.approve(currentRequirement.id, {
+  await assert.rejects(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: ["source-parent", "source-1"],
     reviewedByThreadId: "message-agent-1",
@@ -205,20 +205,20 @@ test("approval fails closed when the quoted source attachment is unavailable", (
   }), /attachment.*unavailable|unavailable.*attachment/i);
 });
 
-test("approval fails closed when the explicit reply chain was not verified", () => {
+test("approval fails closed when the explicit reply chain was not verified", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.sourceEvidenceReview!.reviewedMessageIds = ["source-1"];
   const review = new MessageProcessingSendContextReview({
     getRequirement: () => structuredClone(currentRequirement),
     findRequirementBySourceMessage: () => structuredClone(currentRequirement),
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id);
+  const snapshot = await review.snapshot(currentRequirement.id);
 
-  assert.throws(() => review.approve(currentRequirement.id, {
+  await assert.rejects(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: ["source-parent", "source-1"],
     reviewedByThreadId: "message-agent-1",
@@ -227,20 +227,20 @@ test("approval fails closed when the explicit reply chain was not verified", () 
   }), /sourceEvidenceReview.*source-parent/i);
 });
 
-test("approval fails closed when the proposed body relies on messages outside the verified fact assessment", () => {
+test("approval fails closed when the proposed body relies on messages outside the verified fact assessment", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.projectFactAssessment!.reviewedMessageIds = ["source-1"];
   const review = new MessageProcessingSendContextReview({
     getRequirement: () => structuredClone(currentRequirement),
     findRequirementBySourceMessage: () => structuredClone(currentRequirement),
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id);
+  const snapshot = await review.snapshot(currentRequirement.id);
 
-  assert.throws(() => review.approve(currentRequirement.id, {
+  await assert.rejects(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: ["source-parent", "source-1"],
     reviewedByThreadId: "message-agent-1",
@@ -249,7 +249,7 @@ test("approval fails closed when the proposed body relies on messages outside th
   }), /projectFactAssessment.*source-parent/i);
 });
 
-test("approval fails closed when the quoted source belongs to conflicting requirements", () => {
+test("approval fails closed when the quoted source belongs to conflicting requirements", async () => {
   const currentRequirement = aggregateRequirement();
   const conflictingRequirement = { ...aggregateRequirement(), id: "requirement-conflict" };
   const review = new MessageProcessingSendContextReview({
@@ -259,14 +259,14 @@ test("approval fails closed when the quoted source belongs to conflicting requir
       structuredClone(currentRequirement),
       structuredClone(conflictingRequirement)
     ],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id);
+  const snapshot = await review.snapshot(currentRequirement.id);
 
-  assert.throws(() => review.approve(currentRequirement.id, {
+  await assert.rejects(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: ["source-parent", "source-1"],
     reviewedByThreadId: "message-agent-1",
@@ -275,7 +275,7 @@ test("approval fails closed when the quoted source belongs to conflicting requir
   }), /conflicting message-processing requirements/i);
 });
 
-test("historical requirements for the same Route, message group, and source resolve to the newest canonical requirement", () => {
+test("historical requirements for the same Route, message group, and source resolve to the newest canonical requirement", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.id = "requirement-current";
   currentRequirement.createdAt = "2026-08-14T12:48:10.226Z";
@@ -294,16 +294,16 @@ test("historical requirements for the same Route, message group, and source reso
       structuredClone(historicalRequirement),
       structuredClone(currentRequirement)
     ],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
   const proposedSend = sendRequest();
   proposedSend.tracking = { requirementId: currentRequirement.id };
-  const snapshot = review.snapshot(currentRequirement.id, "source-1");
+  const snapshot = await review.snapshot(currentRequirement.id, "source-1");
 
-  assert.doesNotThrow(() => review.approve(currentRequirement.id, {
+  await assert.doesNotReject(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -312,7 +312,7 @@ test("historical requirements for the same Route, message group, and source reso
   }));
 });
 
-test("a newer plan progress notification cannot take reply ownership from a message reply requirement", () => {
+test("a newer plan progress notification cannot take reply ownership from a message reply requirement", async () => {
   const replyRequirement = aggregateRequirement();
   replyRequirement.id = "requirement-message-reply";
   replyRequirement.messageGroupId = "message-group-b4f8";
@@ -335,16 +335,16 @@ test("a newer plan progress notification cannot take reply ownership from a mess
       structuredClone(planNotification),
       structuredClone(replyRequirement)
     ],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "昼夜问题应该怎样处理？", 2, "source-parent")
     ]
   });
   const proposedSend = sendRequest();
   proposedSend.tracking = { requirementId: replyRequirement.id };
-  const snapshot = review.snapshot(replyRequirement.id, "source-1");
+  const snapshot = await review.snapshot(replyRequirement.id, "source-1");
 
-  assert.doesNotThrow(() => review.approve(replyRequirement.id, {
+  await assert.doesNotReject(async () => await review.approve(replyRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -353,7 +353,7 @@ test("a newer plan progress notification cannot take reply ownership from a mess
   }));
 });
 
-test("a plan progress notification alone cannot own a quoted group source message", () => {
+test("a plan progress notification alone cannot own a quoted group source message", async () => {
   const planNotification = aggregateRequirement();
   planNotification.id = "requirement-plan-progress";
   planNotification.kind = "plan_progress_notification";
@@ -369,16 +369,16 @@ test("a plan progress notification alone cannot own a quoted group source messag
     getRequirement: () => structuredClone(planNotification),
     findRequirementBySourceMessage: () => structuredClone(planNotification),
     findRequirementsBySourceMessage: () => [structuredClone(planNotification)],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "昼夜问题应该怎样处理？", 2, "source-parent")
     ]
   });
   const proposedSend = sendRequest();
   proposedSend.tracking = { requirementId: planNotification.id };
-  const snapshot = review.snapshot(planNotification.id, "source-1");
+  const snapshot = await review.snapshot(planNotification.id, "source-1");
 
-  assert.throws(() => review.approve(planNotification.id, {
+  await assert.rejects(async () => await review.approve(planNotification.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -387,7 +387,7 @@ test("a plan progress notification alone cannot own a quoted group source messag
   }), /conflicting message-processing requirements or none.*none/i);
 });
 
-test("historical duplicates with an invalid creation time remain a source ownership conflict", () => {
+test("historical duplicates with an invalid creation time remain a source ownership conflict", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.id = "requirement-current";
   currentRequirement.messageGroupId = "message-group-b4f8";
@@ -403,16 +403,16 @@ test("historical duplicates with an invalid creation time remain a source owners
       structuredClone(currentRequirement),
       structuredClone(historicalRequirement)
     ],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id, "source-1");
+  const snapshot = await review.snapshot(currentRequirement.id, "source-1");
   const proposedSend = sendRequest();
   proposedSend.tracking = { requirementId: currentRequirement.id };
 
-  assert.throws(() => review.approve(currentRequirement.id, {
+  await assert.rejects(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -421,7 +421,7 @@ test("historical duplicates with an invalid creation time remain a source owners
   }), /conflicting message-processing requirements/i);
 });
 
-test("an older duplicate cannot approve a source owned by the newer canonical requirement", () => {
+test("an older duplicate cannot approve a source owned by the newer canonical requirement", async () => {
   const historicalRequirement = aggregateRequirement();
   historicalRequirement.id = "requirement-historical";
   historicalRequirement.messageGroupId = "message-group-b4f8";
@@ -440,16 +440,16 @@ test("an older duplicate cannot approve a source owned by the newer canonical re
       structuredClone(historicalRequirement),
       structuredClone(canonicalRequirement)
     ],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
   const proposedSend = sendRequest();
   proposedSend.tracking = { requirementId: historicalRequirement.id };
-  const snapshot = review.snapshot(historicalRequirement.id, "source-1");
+  const snapshot = await review.snapshot(historicalRequirement.id, "source-1");
 
-  assert.throws(() => review.approve(historicalRequirement.id, {
+  await assert.rejects(async () => await review.approve(historicalRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -458,7 +458,7 @@ test("an older duplicate cannot approve a source owned by the newer canonical re
   }), /belongs to message-processing requirement requirement-current, not requirement-historical/i);
 });
 
-test("requirements from different message groups remain a source ownership conflict", () => {
+test("requirements from different message groups remain a source ownership conflict", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.messageGroupId = "message-group-current";
   const independentRequirement = aggregateRequirement();
@@ -472,14 +472,14 @@ test("requirements from different message groups remain a source ownership confl
       structuredClone(currentRequirement),
       structuredClone(independentRequirement)
     ],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id, "source-1");
+  const snapshot = await review.snapshot(currentRequirement.id, "source-1");
 
-  assert.throws(() => review.approve(currentRequirement.id, {
+  await assert.rejects(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -488,7 +488,7 @@ test("requirements from different message groups remain a source ownership confl
   }), /conflicting message-processing requirements/i);
 });
 
-test("requirements from different Routes remain a source ownership conflict", () => {
+test("requirements from different Routes remain a source ownership conflict", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.messageGroupId = "message-group-b4f8";
   const otherRouteRequirement = aggregateRequirement();
@@ -504,14 +504,14 @@ test("requirements from different Routes remain a source ownership conflict", ()
       structuredClone(currentRequirement),
       structuredClone(otherRouteRequirement)
     ],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id, "source-1");
+  const snapshot = await review.snapshot(currentRequirement.id, "source-1");
 
-  assert.throws(() => review.approve(currentRequirement.id, {
+  await assert.rejects(async () => await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -520,7 +520,7 @@ test("requirements from different Routes remain a source ownership conflict", ()
   }), /conflicting message-processing requirements/i);
 });
 
-test("a source ownership conflict appearing after approval blocks the send before Outbox", () => {
+test("a source ownership conflict appearing after approval blocks the send before Outbox", async () => {
   const currentRequirement = aggregateRequirement();
   const conflictingRequirement = { ...aggregateRequirement(), id: "requirement-conflict" };
   let conflict = false;
@@ -530,13 +530,13 @@ test("a source ownership conflict appearing after approval blocks the send befor
     findRequirementsBySourceMessage: () => conflict
       ? [structuredClone(currentRequirement), structuredClone(conflictingRequirement)]
       : [structuredClone(currentRequirement)],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
-  const snapshot = review.snapshot(currentRequirement.id, "source-1");
-  const approval = review.approve(currentRequirement.id, {
+  const snapshot = await review.snapshot(currentRequirement.id, "source-1");
+  const approval = await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -550,10 +550,10 @@ test("a source ownership conflict appearing after approval blocks the send befor
   };
   conflict = true;
 
-  assert.throws(() => review.validateSend(approvedRequest), /conflicting message-processing requirements/i);
+  await assert.rejects(async () => await review.validateSend(approvedRequest), /conflicting message-processing requirements/i);
 });
 
-test("a newer canonical requirement appearing after approval invalidates the older review token", () => {
+test("a newer canonical requirement appearing after approval invalidates the older review token", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.id = "requirement-current";
   currentRequirement.messageGroupId = "message-group-b4f8";
@@ -572,15 +572,15 @@ test("a newer canonical requirement appearing after approval invalidates the old
     findRequirementsBySourceMessage: () => newerExists
       ? [structuredClone(currentRequirement), structuredClone(newerRequirement)]
       : [structuredClone(currentRequirement)],
-    loadContext: () => [
+    loadContext: async () => [
       inbound("source-parent", "前一条明确问题", 1),
       inbound("source-1", "这和局域网访问有什么关系？", 2, "source-parent")
     ]
   });
   const proposedSend = sendRequest();
   proposedSend.tracking = { requirementId: currentRequirement.id };
-  const snapshot = review.snapshot(currentRequirement.id, "source-1");
-  const approval = review.approve(currentRequirement.id, {
+  const snapshot = await review.snapshot(currentRequirement.id, "source-1");
+  const approval = await review.approve(currentRequirement.id, {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -593,10 +593,10 @@ test("a newer canonical requirement appearing after approval invalidates the old
   };
   newerExists = true;
 
-  assert.throws(() => review.validateSend(proposedSend), /belongs to message-processing requirement requirement-newer/i);
+  await assert.rejects(async () => await review.validateSend(proposedSend), /belongs to message-processing requirement requirement-newer/i);
 });
 
-test("a prior outbound reply blocks another Agent from approving a paraphrase", () => {
+test("a prior outbound reply blocks another Agent from approving a paraphrase", async () => {
   const currentRequirement = requirement("sent");
   const records = [
     inbound("source-1", "这和局域网访问有什么关系？", 1),
@@ -605,13 +605,13 @@ test("a prior outbound reply blocks another Agent from approving a paraphrase", 
   const review = new MessageProcessingSendContextReview({
     getRequirement: () => structuredClone(currentRequirement),
     findRequirementBySourceMessage: (_routeId, messageId) => messageId === "source-1" ? structuredClone(currentRequirement) : undefined,
-    loadContext: () => structuredClone(records)
+    loadContext: async () => structuredClone(records)
   });
 
-  const snapshot = review.snapshot("requirement-1");
+  const snapshot = await review.snapshot("requirement-1");
   assert.equal(snapshot.alreadyReplied, true);
   assert.deepEqual(snapshot.priorReplies.map((item) => item.messageId), ["sent-1"]);
-  assert.throws(() => review.approve("requirement-1", {
+  await assert.rejects(async () => await review.approve("requirement-1", {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "primary-agent-1",
@@ -623,21 +623,21 @@ test("a prior outbound reply blocks another Agent from approving a paraphrase", 
   }), /already has a sent reply/i);
 });
 
-test("a reply to a tracked source message cannot bypass its requirement from another Agent", () => {
+test("a reply to a tracked source message cannot bypass its requirement from another Agent", async () => {
   const currentRequirement = requirement("sent");
   const review = new MessageProcessingSendContextReview({
     getRequirement: () => structuredClone(currentRequirement),
     findRequirementBySourceMessage: (_routeId, messageId) => messageId === "source-1" ? structuredClone(currentRequirement) : undefined,
-    loadContext: () => [inbound("source-1", "这和局域网访问有什么关系？", 1)]
+    loadContext: async () => [inbound("source-1", "这和局域网访问有什么关系？", 1)]
   });
   const untracked = sendRequest("primary-agent-1");
   untracked.sender = { agentType: "primary_persona", sessionId: "primary-agent-1" };
   untracked.tracking = {};
 
-  assert.throws(() => review.validateSend(untracked), /belongs to message-processing requirement requirement-1/i);
+  await assert.rejects(async () => await review.validateSend(untracked), /belongs to message-processing requirement requirement-1/i);
 });
 
-test("context review stays sensitive to new messages after a long conversation", () => {
+test("context review stays sensitive to new messages after a long conversation", async () => {
   const currentRequirement = requirement();
   const records: MessageContextRecord[] = [inbound("source-1", "原始问题", 1)];
   for (let index = 0; index < 50; index += 1) {
@@ -646,12 +646,12 @@ test("context review stays sensitive to new messages after a long conversation",
   const review = new MessageProcessingSendContextReview({
     getRequirement: () => structuredClone(currentRequirement),
     findRequirementBySourceMessage: (_routeId, messageId) => messageId === "source-1" ? structuredClone(currentRequirement) : undefined,
-    loadContext: () => structuredClone(records),
+    loadContext: async () => structuredClone(records),
     now: () => new Date("2026-08-11T09:42:00.000Z")
   });
-  const snapshot = review.snapshot("requirement-1");
+  const snapshot = await review.snapshot("requirement-1");
   assert.equal(snapshot.contextItems.at(-1)?.messageId, "followup-49");
-  const approval = review.approve("requirement-1", {
+  const approval = await review.approve("requirement-1", {
     contextVersion: snapshot.contextVersion,
     reviewedContextIds: snapshot.requiredReviewIds,
     reviewedByThreadId: "message-agent-1",
@@ -665,10 +665,10 @@ test("context review stays sensitive to new messages after a long conversation",
   };
 
   records.push(inbound("followup-50", "审核后新到的消息", 52));
-  assert.throws(() => review.validateSend(approvedRequest), /context changed.*review again/i);
+  await assert.rejects(async () => await review.validateSend(approvedRequest), /context changed.*review again/i);
 });
 
-test("a scoped snapshot keeps a selected source reviewable inside an aggregate with dozens of messages", () => {
+test("a scoped snapshot keeps a selected source reviewable inside an aggregate with dozens of messages", async () => {
   const currentRequirement = aggregateRequirement();
   currentRequirement.source.messageIds = Array.from({ length: 60 }, (_, index) => `aggregate-${index}`);
   currentRequirement.source.messageIds[30] = "source-1";
@@ -679,10 +679,10 @@ test("a scoped snapshot keeps a selected source reviewable inside an aggregate w
   const review = new MessageProcessingSendContextReview({
     getRequirement: () => structuredClone(currentRequirement),
     findRequirementBySourceMessage: () => structuredClone(currentRequirement),
-    loadContext: () => structuredClone(records)
+    loadContext: async () => structuredClone(records)
   });
 
-  const snapshot = review.snapshot(currentRequirement.id, "source-1");
+  const snapshot = await review.snapshot(currentRequirement.id, "source-1");
 
   assert.equal(snapshot.sourceMessageId, "source-1");
   assert.deepEqual(snapshot.requiredReviewIds, ["source-1", "source-parent"]);

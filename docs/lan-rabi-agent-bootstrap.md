@@ -85,6 +85,8 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 - `capabilities` 返回当前受控操作目录，包含受控业务入口及别名，不是全部 Manager API，也不是全部远端可执行功能。以运行实例返回的目录与各项 `limitations` 为准；处理器的对象权限、Action Gate、来源身份、文件根、幂等与版本检查仍有效。
 - `resources` 只列公开技能和显式发布的文档；`resources/read?id=...` 只接受目录内文档、`SKILL.md` 及同一技能直接引用的受控文本。不支持任意 `file`、路径穿越、链接逃逸、私有数据或宿主文件读取。读取脚本不等于授权执行。
 - 资源目录只广告已发布且可实际读取的文件及 references，不把 Markdown 中任意链接自动授予读取权。公共文档为接口、计划与记忆、上下文注入、远端接入四份合同及对应英文版，共八份；仍以实际 `resources` 返回的 ID 为准。发现入口是 `/api/lan-agent/capabilities` 和 `/api/lan-agent/resources`，不是 `/api/agent/capabilities` 或 `/api/agent/resources`。
+- 人格技能另走 `GET /api/roles/:roleId/skills`（摘要列表）与 `GET /api/roles/:roleId/skills/:skillId`（详情）；`/roles/...` 别名遵守相同边界。已获 Manager API 授权且在该人格 Route 中配置的准确 `instanceId + agentId`，可以读取该人格有效技能目录，不需要逐技能重复授权。未配置该人格返回 `403 LAN_AGENT_PERSONA_NOT_CONFIGURED`，同名 Agent 或其他节点不能借用绑定；本机管理请求保留原认证。这里不合并宿主全局或私有技能目录，也不将私有技能、凭据和同步配置发布到公共 `resources`。
+- 人格技能列表和详情均使用有界交互读取池，不排在目录批量任务之后；断连取消读取，队列忙、任务超时或工作进程终止未确认返回 `503`，而不是合法空列表。已授权人格的技能不存在返回 `404`，正常无技能为 `200` 加空列表。上述人格权限与队列修复需以实际部署版本验收，源码测试不代表所有运行节点已更新。
 - 按需取 Manager 当前发布的最新技能和合同，随后读取目录中可用的 references；不要把整套技能长期复制为另一份权威来源。计划、记忆与消息处理状态仍由 Manager 持有，不复制到远端维护第二套业务状态。
 - 管理员设置、授权修改、任意文件和宿主控制不向节点 API 开放。已有 loopback-only 处理器仍拒绝远端调用，不通过本机代理绕过限制。
 - 向消息渠道正式发送沿用 Manager 的消息合同，必须取得 Manager 与渠道回执；任务最终文本不代表已发送。远端调用仍遵守 Route 发送权限：`onlyPrimary` 要求可信 `provider`、Route 的 `instanceId`/`nodeId` 与 `agentId`、已批准的会话及 `primary_persona` 身份全部匹配；仅裸会话 ID 同名不会继承本机权限。

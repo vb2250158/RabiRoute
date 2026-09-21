@@ -101,12 +101,12 @@ function createFixture() {
       }
     },
     sendContextReview: {
-      snapshot: (id, sourceMessageId) => {
+      snapshot: async (id, sourceMessageId) => {
         remember("snapshot", id, sourceMessageId);
         if (id === "bad") throw new Error("snapshot failed");
         return { requirementId: id, sourceMessageId };
       },
-      approve: (id, input) => {
+      approve: async (id, input) => {
         remember("approve", id, input);
         return {
           token: "review-token",

@@ -48,11 +48,11 @@ export type MessageProcessingApiContext = {
     ) => MessageProcessingRequirement;
   };
   sendContextReview: {
-    snapshot: (requirementId: string, sourceMessageId?: string) => unknown;
+    snapshot: (requirementId: string, sourceMessageId?: string) => Promise<unknown>;
     approve: (
       requirementId: string,
       input: MessageProcessingSendContextApprovalInput
-    ) => { expiresAt: string } & Record<string, unknown>;
+    ) => Promise<{ expiresAt: string } & Record<string, unknown>>;
   };
   operationalLog: Pick<ManagerOperationalLog, "record">;
   recallKnowledge: (source: RegisterMessageGroupRequirementInput["source"]) => KnowledgeRecallMatch[];
@@ -189,12 +189,10 @@ export function handleMessageProcessingApi(
   if (request.method === "GET" && sendContextMatch) {
     const requirementId = decodeURIComponent(sendContextMatch[1]);
     const sourceMessageId = requestUrl.searchParams.get("sourceMessageId")?.trim() || undefined;
-    try {
-      const data = context.sendContextReview.snapshot(requirementId, sourceMessageId);
-      jsonResponse(response, 200, { code: 0, data });
-    } catch (error) {
-      jsonResponse(response, 400, { code: -1, message: errorMessage(error) });
-    }
+    runTrackedOperation(context, Promise.resolve()
+      .then(() => context.sendContextReview.snapshot(requirementId, sourceMessageId))
+      .then(data => jsonResponse(response, 200, { code: 0, data }))
+      .catch(error => jsonResponse(response, 400, { code: -1, message: errorMessage(error) })));
     return true;
   }
   if (request.method === "POST" && sendContextMatch) {

@@ -2,6 +2,7 @@ import { RoleStorageValidationError } from "./shared/roleStorageValidationError.
 import { planActivationStatus, planState, planStateForWrite, planCanAutoAdvance } from "./planState.js";
 import { publishKnowledgeChange, type KnowledgeChange, type KnowledgeKind } from "./roleKnowledgeSearch.js";
 import { readPlanIdentity, readPlanIdentityAsync } from "./planIdentityReadCache.js";
+import { invalidatePlanReads, type PlanReadFence } from "./planReadInvalidation.js";
 import { normalizePlanQuestions, type PlanQuestion } from "./shared/planQuestions.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -590,13 +591,38 @@ function planJsonFilesInBucket(roleDir: string, bucket: PlanStorageBucket): stri
   }
 }
 
+function roleKnowledgeNonPlanFileCounts(roleDir: string) {
+  return {
+    recentMemory: markdownFiles(path.join(memoryDir(roleDir), "recent")).length,
+    consolidatedMemory: markdownFiles(path.join(memoryDir(roleDir), "consolidated")).length,
+    consolidationRuns: jsonFiles(path.join(memoryDir(roleDir), "consolidation-runs")).length
+  };
+}
+
 export function roleKnowledgeFileCounts(roleDir: string): RoleKnowledgeFileCounts {
   return {
     activePlans: planJsonFilesInBucket(roleDir, "active").length,
     archivedPlans: planJsonFilesInBucket(roleDir, "archive").length,
-    recentMemory: markdownFiles(path.join(memoryDir(roleDir), "recent")).length,
-    consolidatedMemory: markdownFiles(path.join(memoryDir(roleDir), "consolidated")).length,
-    consolidationRuns: jsonFiles(path.join(memoryDir(roleDir), "consolidation-runs")).length
+    ...roleKnowledgeNonPlanFileCounts(roleDir)
+  };
+}
+
+/** Metadata-only counterpart for interactive counts in an isolated reader. */
+export async function roleKnowledgeFileCountsInWorker(roleDir: string): Promise<RoleKnowledgeFileCounts> {
+  const files = await allPlanFilesAsync(roleDir);
+  const activePrefix = `${path.resolve(plansDir(roleDir),"active")}${path.sep}`;
+  let cursor = 0, activePlans = 0, archivedPlans = 0;
+  await Promise.all(Array.from({length:Math.min(16,files.length)},async()=>{
+    while(cursor < files.length) {
+      const file=files[cursor++]!;
+      try { await fs.promises.stat(file); }
+      catch(error) { if((error as NodeJS.ErrnoException).code==="ENOENT") continue; throw error; }
+      if(path.resolve(file).startsWith(activePrefix)) activePlans++; else archivedPlans++;
+    }
+  }));
+  return {
+    activePlans, archivedPlans,
+    ...roleKnowledgeNonPlanFileCounts(roleDir)
   };
 }
 
@@ -1756,8 +1782,19 @@ function immutablePlanCatalog(plans: PlanItem[]): PlanItem[] {
 type PlanFileCacheEntry = {
   size: number;
   mtimeMs: number;
+  ctimeMs?: number;
+  ino?: number;
   plan: PlanItem | null;
 };
+
+function samePlanFileMetadata(entry: PlanFileCacheEntry, stat: fs.Stats): boolean {
+  return Number.isFinite(stat.ctimeMs) && stat.ctimeMs > 0 && Number.isFinite(stat.ino) && stat.ino > 0
+    && entry.size === stat.size && entry.mtimeMs === stat.mtimeMs && entry.ctimeMs === stat.ctimeMs && entry.ino === stat.ino;
+}
+
+function planFileSignature(file: string, entry: Pick<PlanFileCacheEntry,"size"|"mtimeMs"|"ctimeMs"|"ino">): string {
+  return `${file}\u001f${entry.size}\u001f${entry.mtimeMs}\u001f${entry.ctimeMs ?? "unknown"}\u001f${entry.ino ?? "unknown"}`;
+}
 
 const PLAN_LIST_CACHE_TTL_MS = 500;
 const PLAN_LIST_WATCH_DEBOUNCE_MS = 120;
@@ -1790,7 +1827,12 @@ function clearPlanListCache(roleDir: string): void {
   planListWatchers.delete(cacheKey);
 }
 
-subscribePlanStorageBeforeMutation(({ roleDir }) => clearPlanListCache(roleDir));
+subscribePlanStorageBeforeMutation(({ roleDir, planId }) => {
+  clearPlanListCache(roleDir);
+  // Conservative invalidation before direct in-process writes is safe even if
+  // the transaction subsequently fails; it does not publish a successful value.
+  invalidatePlanReads(roleDir, planId);
+});
 
 function markPlanListCacheDirty(roleDir: string, filePath?: string): void {
   const cacheKey = planListCacheKey(roleDir);
@@ -1834,13 +1876,14 @@ function readPlansWithFileCache(roleDir: string, files: string[]): { signature: 
       signatureParts.push(`${filePath}\u001fmissing`);
       continue;
     }
-    signatureParts.push(`${filePath}\u001f${stat.size}\u001f${stat.mtimeMs}`);
+    signatureParts.push(planFileSignature(filePath,stat));
     let cachedFile = cachedFiles.get(filePath);
-    if (!cachedFile || cachedFile.size !== stat.size || cachedFile.mtimeMs !== stat.mtimeMs) {
+    if (!cachedFile || !samePlanFileMetadata(cachedFile,stat)) {
       const raw = readJson<Record<string, unknown>>(filePath);
       cachedFile = {
         size: stat.size,
         mtimeMs: stat.mtimeMs,
+        ctimeMs:stat.ctimeMs, ino:stat.ino,
         plan: raw ? normalizePlan(raw) : null
       };
       cachedFiles.set(filePath, cachedFile);
@@ -1859,7 +1902,7 @@ function plansFromFileCache(roleDir: string): { signature: string; items: PlanIt
     return priorityDelta || left.localeCompare(right);
   });
   return {
-    signature: entries.map(([filePath, entry]) => `${filePath}\u001f${entry.size}\u001f${entry.mtimeMs}`).join("\u001e"),
+    signature: entries.map(([filePath, entry]) => planFileSignature(filePath,entry)).join("\u001e"),
     items: entries.flatMap(([, entry]) => entry.plan ? [entry.plan] : [])
   };
 }
@@ -1889,7 +1932,7 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
       fs.promises.readFile(filePath, "utf8")
     ]);
     const after = await fs.promises.stat(filePath);
-    if (stat.size !== after.size || stat.mtimeMs !== after.mtimeMs) {
+    if (stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs || stat.ino !== after.ino) {
       return { filePath, retry: true };
     }
     let raw: Record<string, unknown> | null = null;
@@ -1906,6 +1949,7 @@ async function readChangedPlanFile(filePath: string, retryOnTransient = true): P
       entry: {
         size: after.size,
         mtimeMs: after.mtimeMs,
+        ctimeMs:after.ctimeMs, ino:after.ino,
         plan: raw ? normalizePlan(raw) : null
       }
     };
@@ -1965,6 +2009,8 @@ async function readPlanFileForCatalog(filePath: string): Promise<AsyncPlanFileCa
 
 function schedulePlanListCacheRefresh(roleDir: string): void {
   const cacheKey = planListCacheKey(roleDir);
+  // Page workers consume invalidations before replying, never stale-while-revalidate.
+  if (planPageWorkerRoles.has(cacheKey)) return;
   const current = planListRefreshTimers.get(cacheKey);
   if (current) clearTimeout(current);
   const timer = setTimeout(() => {
@@ -2039,6 +2085,7 @@ function updatePlanListCacheAfterWrite(
   }
 ): void {
   const cacheKey = planListCacheKey(roleDir);
+  invalidatePlanReads(roleDir, plan.id);
   const cachedFiles = planFileCache.get(cacheKey) ?? previousCache?.files;
   const cachedCatalog = planListCache.get(cacheKey) ?? previousCache?.catalog;
   if (!cachedCatalog) {
@@ -2064,7 +2111,7 @@ function updatePlanListCacheAfterWrite(
   const resolvedDestination = path.resolve(destination);
   try {
     const stat = fs.statSync(resolvedDestination);
-    cachedFiles.set(resolvedDestination, { size: stat.size, mtimeMs: stat.mtimeMs, plan });
+    cachedFiles.set(resolvedDestination, { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs:stat.ctimeMs, ino:stat.ino, plan });
   } catch {
     clearPlanListCache(roleDir);
     return;
@@ -2109,21 +2156,37 @@ function ensurePlanListWatchers(roleDir: string): boolean {
   try {
     const watcher = fs.watch(directory, { persistent: false, recursive: true }, (_eventType, fileName) => {
       if (!fs.existsSync(directory)) {
+        planPageStrongInvalidations.add(cacheKey);
         watcher.close();
         watchers?.delete(directory);
         markPlanListCacheDirty(roleDir);
         return;
       }
       if (!fileName) {
+        if (planPageWorkerRoles.has(cacheKey)) planPageWatchEvents.set(cacheKey,[`${_eventType}:<unknown>`]);
         markPlanListCacheDirty(roleDir);
         return;
       }
       const relativeName = fileName.toString();
-      if (!relativeName.toLowerCase().endsWith(".json")) return;
+      if (planPageWorkerRoles.has(cacheKey)) {
+        const events = planPageWatchEvents.get(cacheKey) ?? [];
+        events.push(`${_eventType}:${relativeName}`);
+        if (events.length > 16) events.shift();
+        planPageWatchEvents.set(cacheKey,events);
+      }
+      if (!relativeName.toLowerCase().endsWith(".json")) {
+        // Atomic directory replacement/deletion may not name plan.json.
+        if (_eventType === "rename") {
+          planPageStrongInvalidations.add(cacheKey);
+          markPlanListCacheDirty(roleDir);
+        }
+        return;
+      }
       markPlanListCacheDirty(roleDir, path.join(directory, relativeName));
     });
     watcher.unref();
     watcher.on("error", () => {
+      planPageStrongInvalidations.add(cacheKey);
       watcher.close();
       watchers?.delete(directory);
       markPlanListCacheDirty(roleDir);
@@ -2192,12 +2255,173 @@ export function readPlansFromStorageInWorker(roleDir: string): PlanItem[] {
   try {
     const files = allPlanFiles(roleDir);
     const { signature, items } = readPlansWithFileCache(roleDir, files);
-    const plans = immutablePlanCatalog(uniquePlans(items));
+    const previous = planListCache.get(cacheKey);
+    const plans = previous?.signature === signature ? previous.plans : immutablePlanCatalog(uniquePlans(items));
     planListCache.set(cacheKey, { signature, validUntil: now + PLAN_LIST_CACHE_TTL_MS, plans });
     planListDirtyAt.delete(cacheKey);
     planListDirtyFiles.delete(cacheKey);
     return plans;
   } catch (error) {
+    clearPlanListCache(roleDir);
+    throw error;
+  }
+}
+
+const planPageReconcileTimings = new Map<string, Record<string, number>>();
+async function reconcilePlanPageFiles(roleDir: string): Promise<void> {
+  const started = performance.now();
+  let normalizeMs = 0;
+  const key = planListCacheKey(roleDir);
+  const files = (await allPlanFilesAsync(roleDir)).map(file => path.resolve(file)).sort();
+  const previousFiles = planFileCache.get(key);
+  const nextFiles = new Map<string, PlanFileCacheEntry>();
+  const signatures: string[] = new Array(files.length);
+  const plans: Array<PlanItem | null> = new Array(files.length);
+  let cursor = 0;
+  // Bounded concurrency inside the already isolated read worker, not one
+  // Promise per plan. Avoids the old existsSync + statSync double round trip.
+  await Promise.all(Array.from({ length: Math.min(16, files.length) }, async () => {
+    while (cursor < files.length) {
+      const index = cursor++;
+      const file = files[index]!;
+      let stat: fs.Stats;
+      try {
+        // Cold content hydration is kept contiguous in this isolated process.
+        // Interleaving libuv metadata waits with synchronous body reads adds
+        // avoidable scheduling gaps; warm reconciliation stays concurrent.
+        stat = previousFiles ? await fs.promises.stat(file) : fs.statSync(file);
+      }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        signatures[index] = `${file}\u001fmissing`; plans[index] = null; continue;
+      }
+      let entry = previousFiles?.get(file);
+      if (!entry || !samePlanFileMetadata(entry,stat)) {
+        try {
+          // This is an isolated reader process. A synchronous body read avoids
+          // one asynchronous open/close scheduling chain per cold document;
+          // reuse the metadata already fetched and verify it once afterwards.
+          const text = fs.readFileSync(file,"utf8");
+          const after = fs.statSync(file);
+          if (stat.size === after.size && stat.mtimeMs === after.mtimeMs && stat.ctimeMs === after.ctimeMs && stat.ino === after.ino) {
+            const normalizeStart = performance.now();
+            const raw = JSON.parse(text) as Record<string,unknown> | null;
+            entry = { size:after.size,mtimeMs:after.mtimeMs,ctimeMs:after.ctimeMs,ino:after.ino,plan:raw ? normalizePlan(raw) : null };
+            normalizeMs += performance.now() - normalizeStart;
+          } else {
+            const result = await readPlanFileForCatalog(file);
+            if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+            entry = result.entry;
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") entry = undefined;
+          else if (error instanceof SyntaxError) {
+            const result = await readPlanFileForCatalog(file);
+            if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+            entry = result.entry;
+          } else throw error;
+        }
+      }
+      if (!entry) { signatures[index] = `${file}\u001fmissing`; plans[index] = null; continue; }
+      nextFiles.set(file,entry);
+      signatures[index] = planFileSignature(file,entry);
+      plans[index] = entry.plan;
+      if (!previousFiles && index % 64 === 63) await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  }));
+  const scanMs = performance.now()-started;
+  const signature = signatures.join("\u001e");
+  const previous = planListCache.get(key);
+  const catalog = previous?.signature === signature ? previous.plans : immutablePlanCatalog(uniquePlans(plans.filter((plan): plan is PlanItem => Boolean(plan))));
+  planFileCache.set(key,nextFiles);
+  planListCache.set(key,{ signature,validUntil:Date.now()+PLAN_LIST_CACHE_TTL_MS,plans:catalog });
+  planPageReconcileTimings.set(key,{scanMs,normalizeMs,freezeMs:performance.now()-started-scanMs});
+}
+
+/** Request-triggered reconciliation bounds missed external watcher events. */
+export const PLAN_PAGE_RECONCILE_INTERVAL_MS = 5_000;
+const planPageWorkerRoles = new Set<string>();
+const planPageWorkerState = new Map<string, { epoch: string; revision: number; checkedAt: number }>();
+const planPageReadReasons = new Map<string, string[]>();
+const planPageWatchEvents = new Map<string,string[]>();
+const planPageStrongInvalidations = new Set<string>();
+/** Read-only diagnostics for isolated performance acceptance. */
+export function planPageReadDiagnostics(roleDir: string): { reasons: string[]; revision?: number; checkedAt?: number; reconciliation?:Record<string,number>; watchEvents:string[] } {
+  const key = planListCacheKey(roleDir);
+  const state = planPageWorkerState.get(key);
+  return { reasons: [...(planPageReadReasons.get(key) ?? [])], revision: state?.revision, checkedAt: state?.checkedAt, reconciliation:planPageReconcileTimings.get(key), watchEvents:[...(planPageWatchEvents.get(key)??[])] };
+}
+
+/** Resident read-worker only. Managed commit fences are consumed before reply. */
+export async function readPlanPageCatalogInWorker(roleDir: string, fence: PlanReadFence, authoritative = false, attempt = 0): Promise<PlanItem[]> {
+  const key = planListCacheKey(roleDir);
+  planPageWorkerRoles.add(key);
+  const watchBacked = ensurePlanListWatchers(roleDir);
+  // Let already queued native watch callbacks run; this is not an external-write
+  // linearizability guarantee. The periodic authoritative scan is the backstop.
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const previous = planPageWorkerState.get(key);
+  const cached = planListCache.get(key);
+  const reasons = [
+    authoritative && "authoritative", !watchBacked && "watch-unavailable", !cached && "catalog-cold", !previous && "worker-cold",
+    previous && previous.epoch !== fence.epoch && "epoch-changed",
+    previous && previous.revision > fence.revision && "older-fence",
+    previous && previous.revision < fence.fullRevision && "fence-gap",
+    previous && Date.now() - previous.checkedAt >= PLAN_PAGE_RECONCILE_INTERVAL_MS && "periodic-metadata",
+    planListDirtyFiles.get(key) === null && "unknown-watch-change"
+  ].filter((reason): reason is string => typeof reason === "string");
+  planPageReadReasons.set(key,reasons);
+  const full = reasons.length > 0;
+  try {
+    if (full) {
+      // Periodic reconciliation enumerates/stat-checks, but does not discard
+      // unchanged JSON. Only explicit authoritative refresh, an unknown watch
+      // event or a fence gap requires content rehydration. An external writer
+      // preserving metadata AND losing all watch events needs explicit refresh.
+      if (authoritative || planPageStrongInvalidations.has(key)
+        || (previous && (previous.epoch !== fence.epoch || previous.revision < fence.fullRevision))) {
+        planFileCache.delete(key);
+        planListCache.delete(key);
+      }
+      planPageStrongInvalidations.delete(key);
+      planListDirtyFiles.delete(key);
+      planListDirtyAt.delete(key);
+      await reconcilePlanPageFiles(roleDir);
+    } else {
+      const dirty = new Set(planListDirtyFiles.get(key) ?? []);
+      for (const change of fence.changes) if (change.revision > (previous?.revision ?? -1)) {
+        for (const file of planCandidateFiles(roleDir, change.planId)) dirty.add(path.resolve(file));
+      }
+      if (dirty.size) {
+        const files = planFileCache.get(key);
+        if (!files) return await readPlanPageCatalogInWorker(roleDir, fence, true);
+        // Clear only the batch being read; callbacks arriving during async reads
+        // remain queued for the subsequent request rather than being discarded.
+        planListDirtyFiles.delete(key);
+        planListDirtyAt.delete(key);
+        for (const filePath of dirty) {
+          if (path.basename(filePath) !== "plan.json" && !files.has(filePath)) {
+            return await readPlanPageCatalogInWorker(roleDir, fence, true);
+          }
+          const result = await readChangedPlanFile(filePath);
+          if (result.retry) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+          if (result.missing) files.delete(filePath);
+          else if (result.entry) files.set(filePath, result.entry);
+        }
+        const refreshed = plansFromFileCache(roleDir);
+        if (!refreshed) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+        planListCache.set(key, { signature: refreshed.signature, validUntil: Date.now() + PLAN_LIST_CACHE_TTL_MS, plans: immutablePlanCatalog(uniquePlans(refreshed.items)) });
+      }
+    }
+    planPageWorkerState.set(key, { epoch: fence.epoch, revision: fence.revision, checkedAt: full ? Date.now() : previous!.checkedAt });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    if (planListDirtyFiles.has(key)) {
+      if (attempt >= 2) throw new Error("PLAN_CATALOG_REFRESH_UNAVAILABLE");
+      return await readPlanPageCatalogInWorker(roleDir, fence, false, attempt + 1);
+    }
+    return planListCache.get(key)!.plans;
+  } catch (error) {
+    planPageWorkerState.delete(key);
     clearPlanListCache(roleDir);
     throw error;
   }
@@ -2775,6 +2999,7 @@ function normalizedPublishedMemories<T extends RecentMemoryItem | ConsolidatedMe
 /** Publishes a normalized worker result into the existing plan catalog cache. */
 export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): readonly PlanItem[] {
   const plans = immutablePlanCatalog(normalizedPublishedPlans(rawPlans));
+  invalidatePlanReads(roleDir);
   const cacheKey = planListCacheKey(roleDir);
   planListCache.set(cacheKey, {
     signature: JSON.stringify(plans.map((plan) => [plan.id, plan.status, plan.updatedAt])),
@@ -2796,6 +3021,7 @@ export function publishRolePlanCatalog(roleDir: string, rawPlans: unknown): read
  */
 export function publishCommittedRolePlan(roleDir: string, rawPlan: unknown): Readonly<PlanItem> {
   const [plan] = immutablePlanCatalog(normalizedPublishedPlans([rawPlan]));
+  invalidatePlanReads(roleDir, plan.id);
   publishKnowledgeChange(roleDir, { kind: "plan", item: plan });
   const cacheKey = planListCacheKey(roleDir);
   const cached = planListCache.get(cacheKey);

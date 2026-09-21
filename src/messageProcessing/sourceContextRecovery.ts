@@ -21,14 +21,21 @@ export type ReviewedMessageProcessingSourceRecordEvidence = MessageProcessingSou
   reviewedAttachmentIds: string[];
 };
 
+export type MessageProcessingContextRead = {
+  records: MessageContextRecord[];
+  reviewedSource?: ReviewedMessageProcessingSourceRecordEvidence;
+};
+
 export type RecoverMessageProcessingSourceRecordOptions = {
   expectedGroupId?: string;
   expectedInstanceId?: string;
 };
 
+export type MessageProcessingContextSource = Pick<MessageProcessingRequirement, "id" | "source">;
+
 export type LoadMessageProcessingContextInput = {
   roleDir: string;
-  requirement: MessageProcessingRequirement;
+  requirement: MessageProcessingContextSource;
   sourceMessageId?: string;
   limit?: number;
   maxChars?: number;
@@ -61,7 +68,7 @@ function readJsonl(filePath: string): Record<string, unknown>[] {
     });
 }
 
-function requirementRouteId(requirement: MessageProcessingRequirement): string {
+function requirementRouteId(requirement: MessageProcessingContextSource): string {
   const routeId = text(requirement.source.routeProfileId) || text(requirement.source.routeId);
   const replyContext = objectValue(requirement.source.replyContext);
   const recordedRouteIds = [
@@ -90,7 +97,7 @@ function imageSegmentCount(record: Record<string, unknown>): number {
 
 export function recoverMessageProcessingSourceRecord(
   roleDirInput: string,
-  requirement: MessageProcessingRequirement,
+  requirement: MessageProcessingContextSource,
   sourceMessageIdInput: string,
   options: RecoverMessageProcessingSourceRecordOptions = {}
 ): MessageProcessingSourceRecordEvidence {
@@ -155,7 +162,7 @@ export function recoverMessageProcessingSourceRecord(
 
 export function recoverReviewedMessageProcessingSourceRecord(
   roleDirInput: string,
-  requirement: MessageProcessingRequirement,
+  requirement: MessageProcessingContextSource & Pick<MessageProcessingRequirement, "sourceEvidenceReview">,
   sourceMessageIdInput: string,
   options: RecoverMessageProcessingSourceRecordOptions = {}
 ): ReviewedMessageProcessingSourceRecordEvidence {

@@ -14,7 +14,8 @@ export type KnowledgeSearchOptions = {
   archived?: boolean; limit?: number; cursor?: string;
 };
 
-const normalize = (value: string) => value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+export const normalizeKnowledgeSearchText = (value: string) => value.normalize("NFKC").trim().toLocaleLowerCase("en-US");
+const normalize = normalizeKnowledgeSearchText;
 export const knowledgeReference = (kind: KnowledgeKind, id: string) => JSON.stringify([kind, id]);
 const ignoredSearchFields = new Set(["viewedAt", "recalledAt", "storageRevision", "storageMutationRequestId"]);
 function collectText(value: unknown, result: string[] = []): string[] {
@@ -24,6 +25,10 @@ function collectText(value: unknown, result: string[] = []): string[] {
     for (const [key, item] of Object.entries(value)) if (!ignoredSearchFields.has(key)) collectText(item, result);
   }
   return result;
+}
+
+export function knowledgeSearchRecordText(value: unknown): string {
+  return normalize(collectText(value).join("\n"));
 }
 
 /** Derived, memory-only index. Its owner applies a batch synchronously, without yielding between entries. */
@@ -43,7 +48,7 @@ export class RoleKnowledgeSearchIndex {
     const old = this.entries.get(ref);
     const plan = kind === "plan" ? item as PlanItem : undefined;
     const memory = kind !== "plan" ? item as RecentMemoryItem : undefined;
-    const text = normalize(collectText(item).join("\n"));
+    const text = knowledgeSearchRecordText(item);
     const terms = [...new Set([item.id, item.title, ...item.keywords].map(normalize).filter(Boolean))];
     const contentKey = JSON.stringify([terms, text]);
     const summary: KnowledgeSummary = {

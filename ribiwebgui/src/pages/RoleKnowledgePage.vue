@@ -86,6 +86,8 @@ const loadingMorePlans = ref(false);
 const memoryLoading = ref(false);
 const planError = ref("");
 const planPageError = ref("");
+const planListReady = ref(false);
+const knowledgeCountsReady = ref(false);
 const knowledgeCountsError = ref("");
 const planDetailErrors = reactive<Record<string, string>>({});
 const memoryError = ref("");
@@ -402,7 +404,22 @@ const totalMemoryForView = computed(() => activeView.value === "consolidated_mem
     ? memoryPageCounts.value.archived
     : memoryPageCounts.value.recent);
 const knowledgeListLoading = computed(() => loading.value || memoryLoading.value);
+const knowledgeListWarning = computed(() => Boolean(
+  knowledgeCountsError.value || (showsPlanList.value && (planError.value || planPageError.value || !planListReady.value))
+  || (showsMemoryList.value && memoryError.value)
+));
 const knowledgeListStatus = computed(() => {
+  if (showsPlanList.value && !loading.value && (planError.value || planPageError.value)) {
+    return isEnglish.value
+      ? "Plans could not be refreshed. Any visible items are previously loaded data; retry to update."
+      : "计划未能刷新；如有显示内容，仍是此前加载的数据，请重试更新。";
+  }
+  if (knowledgeCountsError.value || (showsMemoryList.value && memoryError.value)) {
+    return isEnglish.value ? "Some data could not be refreshed. Counts may be unavailable; please retry." : "部分数据未能刷新，数量可能暂时未知，请重试。";
+  }
+  if (showsPlanList.value && !planListReady.value && !loading.value) {
+    return isEnglish.value ? "Plan list has not loaded yet." : "计划列表尚未加载。";
+  }
   const counts: string[] = [];
   if (showsPlanList.value) counts.push(isEnglish.value
     ? `${visiblePlansForView.value.length} / ${planListResultTotal.value} plans`
@@ -1126,13 +1143,14 @@ async function yieldToKnowledgePaint(): Promise<void> {
 // 计划目录必须在页面可工作时自动读到 nextCursor 为空；缺失或提前停止属于功能缺陷。
 // 滚动只控制已缓存计划卡片的挂载窗口，不能决定目录数据是否继续加载。
 function loadAllRemainingPlans(selectedRoleId: string, currentRequest: number): void {
-  if (!planNextCursor.value || planPageError.value || planPageBackgroundRequest === currentRequest) return;
+  if (!planListReady.value || planError.value || !planNextCursor.value || planPageError.value || planPageBackgroundRequest === currentRequest) return;
   planPageBackgroundRequest = currentRequest;
   void drainKnowledgePages({
     nextCursor: () => (
       currentRequest === requestVersion
       && selectedRoleId === roleId.value
       && showsPlanList.value
+      && planListReady.value && !planError.value && !planPageError.value
       && knowledgePageWorkAllowed()
         ? planNextCursor.value
         : ""
@@ -1141,6 +1159,7 @@ function loadAllRemainingPlans(selectedRoleId: string, currentRequest: number): 
       currentRequest === requestVersion
       && selectedRoleId === roleId.value
       && showsPlanList.value
+      && planListReady.value && !planError.value && !planPageError.value
       && knowledgePageWorkAllowed()
     ),
     yieldToUi: yieldToKnowledgePaint,
@@ -1155,6 +1174,7 @@ function loadAllRemainingPlans(selectedRoleId: string, currentRequest: number): 
 }
 
 function retryPlanPages(): void {
+  if (planError.value || !planListReady.value) { void refreshKnowledge(); return; }
   if (loadingMorePlans.value || planPageBackgroundRequest === requestVersion) return;
   planPageError.value = "";
   loadAllRemainingPlans(roleId.value, requestVersion);
@@ -1181,13 +1201,19 @@ async function refreshPlanKnowledge(selectedRoleId: string, currentRequest: numb
     const result = await loadRolePlanPage(selectedRoleId, "", 8, currentPlanPageFilter());
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     applyPlanSnapshots(result.items, true, currentRequest);
+    planListReady.value = true;
     planPageCounts.value = result.counts;
     planListResultTotal.value = result.total;
     planListStatusOptions.value = result.facets?.statuses || [];
     planListTagOptions.value = result.facets?.tags || [];
     planNextCursor.value = result.nextCursor;
   } catch (loadError) {
-    if (currentRequest === requestVersion) planError.value = userFacingError(loadError);
+    if (currentRequest === requestVersion) {
+      planError.value = userFacingError(loadError);
+      planNextCursor.value = "";
+      planListReady.value = false;
+    }
+    return;
   } finally {
     if (currentRequest === requestVersion) loading.value = false;
     scheduleProgressiveSentinelRefresh();
@@ -1247,6 +1273,7 @@ async function refreshFocusedPlan(selectedRoleId: string, currentRequest: number
     const plan = await loadRolePlan(selectedRoleId, focusedPlanId.value);
     if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
     plans.value = [plan];
+    planListReady.value = true;
     planListResultTotal.value = 1;
     planNextCursor.value = "";
     planListStatusOptions.value = [];
@@ -1266,7 +1293,10 @@ async function refreshFocusedPlan(selectedRoleId: string, currentRequest: number
 async function refreshKnowledge(): Promise<void> {
   const selectedRoleId = roleId.value;
   if (!knowledgePageWorkAllowed()) return;
+  const currentRequest = ++requestVersion;
   planPageError.value = "";
+  planListReady.value = false;
+  knowledgeCountsReady.value = false;
   knowledgeCountsError.value = "";
   if (!selectedRoleId) {
     resetPlanMarkdownTeasers();
@@ -1289,7 +1319,6 @@ async function refreshKnowledge(): Promise<void> {
     memoryError.value = "";
     return;
   }
-  const currentRequest = ++requestVersion;
   resetPlanAgentStatusState();
   loadingMorePlans.value = false;
   planError.value = "";
@@ -1304,6 +1333,7 @@ async function refreshKnowledge(): Promise<void> {
   void loadRoleKnowledgeFileCounts(selectedRoleId)
     .then((counts) => {
       if (currentRequest !== requestVersion || selectedRoleId !== roleId.value) return;
+      knowledgeCountsReady.value = true;
       planPageCounts.value = {
         ...planPageCounts.value,
         total: counts.activePlans + counts.archivedPlans,
@@ -1343,6 +1373,8 @@ async function refreshKnowledge(): Promise<void> {
 
 watch([activeView, query], () => {
   planPageError.value = "";
+  planListReady.value = false;
+  knowledgeCountsReady.value = false;
   knowledgeCountsError.value = "";
   requestVersion += 1;
   loading.value = false;
@@ -2663,10 +2695,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
   <div class="page-shell knowledge-page">
     <!-- Single-plan mode has no catalog totals to report. -->
     <div v-if="!focusedPlanId" class="knowledge-metrics">
-      <div class="knowledge-metric blocked"><span>当前计划文件</span><b>{{ planCounts.plans }}</b><small>plans/active/&lt;planId&gt;</small></div>
-      <div class="knowledge-metric qa"><span>已归档计划文件</span><b>{{ planCounts.archived }}</b><small>plans/archive/&lt;planId&gt;</small></div>
-      <div class="knowledge-metric active"><span>近期记忆文件</span><b>{{ memoryPageCounts.recent }}</b><small>memory/recent</small></div>
-      <div class="knowledge-metric memory"><span>沉淀记忆文件</span><b>{{ memoryPageCounts.consolidated }}</b><small>memory/consolidated</small></div>
+      <div class="knowledge-metric blocked"><span>当前计划文件</span><b>{{ knowledgeCountsReady ? planCounts.plans : '—' }}</b><small>plans/active/&lt;planId&gt;</small></div>
+      <div class="knowledge-metric qa"><span>已归档计划文件</span><b>{{ knowledgeCountsReady ? planCounts.archived : '—' }}</b><small>plans/archive/&lt;planId&gt;</small></div>
+      <div class="knowledge-metric active"><span>近期记忆文件</span><b>{{ knowledgeCountsReady ? memoryPageCounts.recent : '—' }}</b><small>memory/recent</small></div>
+      <div class="knowledge-metric memory"><span>沉淀记忆文件</span><b>{{ knowledgeCountsReady ? memoryPageCounts.consolidated : '—' }}</b><small>memory/consolidated</small></div>
     </div>
 
     <div
@@ -2943,10 +2975,10 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <div ref="knowledgeToolbar" class="knowledge-toolbar">
         <!-- One plan has no views to switch between and nothing to search within. -->
         <v-btn-toggle v-if="!focusedPlanId" v-model="activeView" mandatory color="primary" density="comfortable" class="knowledge-tabs">
-          <v-btn value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ planPageCounts.plans }}</b></v-btn>
-          <v-btn value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ memoryPageCounts.recent }}</b></v-btn>
-          <v-btn value="consolidated_memory" prepend-icon="mdi-bookshelf"><span>{{ t("沉淀记忆") }}</span><b>{{ memoryPageCounts.consolidated }}</b></v-btn>
-          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ planPageCounts.archived + memoryPageCounts.archived }}</b></v-btn>
+          <v-btn value="plans" prepend-icon="mdi-clipboard-play-outline"><span>{{ t("当前计划") }}</span><b>{{ knowledgeCountsReady || planListReady ? planPageCounts.plans : '—' }}</b></v-btn>
+          <v-btn value="recent_memory" prepend-icon="mdi-memory"><span>{{ t("近期记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.recent : '—' }}</b></v-btn>
+          <v-btn value="consolidated_memory" prepend-icon="mdi-bookshelf"><span>{{ t("沉淀记忆") }}</span><b>{{ knowledgeCountsReady ? memoryPageCounts.consolidated : '—' }}</b></v-btn>
+          <v-btn value="archived" prepend-icon="mdi-archive-outline"><span>{{ isEnglish ? "Archived" : "已归档" }}</span><b>{{ knowledgeCountsReady ? planPageCounts.archived + memoryPageCounts.archived : '—' }}</b></v-btn>
         </v-btn-toggle>
         <div class="knowledge-tools">
           <v-switch class="feedback-focus-switch" :disabled="!roleId" :model-value="feedbackFocusOpen" :label="t('专注')" color="primary" density="compact" hide-details inset @update:model-value="$event ? openFeedbackFocus() : feedbackFocusOpen = false" />
@@ -2970,7 +3002,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       <v-progress-linear v-if="knowledgeListLoading" indeterminate color="secondary" />
       <div v-if="roleId && (showsPlanList || showsMemoryList)" class="knowledge-progressive-status" aria-live="polite">
         <v-progress-circular v-if="knowledgeListLoading" indeterminate size="16" width="2" color="primary" />
-        <v-icon v-else size="16" :color="planPageError ? 'warning' : 'success'">{{ planPageError ? 'mdi-alert-circle-outline' : 'mdi-check-circle-outline' }}</v-icon>
+        <v-icon v-else size="16" :color="knowledgeListWarning ? 'warning' : 'success'">{{ knowledgeListWarning ? 'mdi-alert-circle-outline' : 'mdi-check-circle-outline' }}</v-icon>
         <span data-no-i18n>{{ knowledgeListStatus }}</span>
       </div>
       <v-alert v-if="knowledgeCountsError" type="warning" variant="tonal" class="ma-5">{{ t('数量暂时无法更新，已加载内容仍可使用。') }} <span data-no-i18n>{{ knowledgeCountsError }}</span></v-alert>
@@ -2980,6 +3012,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
       </v-alert>
       <v-alert v-if="roleId && showsPlanList && planError" type="error" variant="tonal" class="ma-5">
         {{ t("计划加载失败") }}：{{ planError }}
+        <v-btn variant="text" :disabled="loading" @click="refreshKnowledge">{{ isEnglish ? 'Retry' : '重试' }}</v-btn>
       </v-alert>
       <v-alert v-if="roleId && showsMemoryList && memoryError" type="error" variant="tonal" class="ma-5">
         {{ t("记忆加载失败") }}：{{ memoryError }}
@@ -3786,7 +3819,7 @@ async function sendPlanFeedback(plan: RolePlan, kind: "guidance" | "approval_sug
           <v-btn v-if="!loadingMorePlans" size="small" variant="text" @click="hasMoreRenderedPlans ? loadMoreRenderedPlans() : retryPlanPages()">{{ t("加载更多") }}</v-btn>
         </div>
 
-        <div v-if="!loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length" class="knowledge-empty">
+        <div v-if="planListReady && !planError && !planPageError && !loading && !loadingMorePlans && !hasMorePlans && !visiblePlansForView.length" class="knowledge-empty">
           <v-icon size="32">mdi-clipboard-text-off-outline</v-icon>
           <b>没有匹配的计划</b>
           <span>{{ planListHasFilters ? t("可以调整筛选条件，恢复其它计划。") : activeView === "archived" ? t("当前没有匹配的已归档计划。") : t("可以清空搜索，或等待 Agent 通过 Manager 写入计划。") }}</span>

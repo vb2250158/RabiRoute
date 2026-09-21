@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { prepareAgentSendRequest, type AgentSendRequest } from "../agentSend.js";
 import type { MessageContextRecord } from "../messageContextStore.js";
 import type { MessageProcessingRequirement } from "./board.js";
+import type { MessageProcessingContextRead, RecoverMessageProcessingSourceRecordOptions, ReviewedMessageProcessingSourceRecordEvidence } from "./sourceContextRecovery.js";
 
 const SEND_CONTEXT_REVIEW_TTL_MS = 2 * 60 * 1_000;
 const MAX_CONTEXT_ITEMS = 40;
@@ -44,13 +45,14 @@ export type MessageProcessingSendContextApproval = {
 export type ValidatedMessageProcessingSendContext = {
   requirement: MessageProcessingRequirement;
   sourceMessageId?: string;
+  reviewedSource?: ReviewedMessageProcessingSourceRecordEvidence;
 };
 
 export type MessageProcessingSendContextReviewDependencies = {
   getRequirement: (requirementId: string) => MessageProcessingRequirement | undefined;
   findRequirementBySourceMessage: (routeId: string, messageId: string) => MessageProcessingRequirement | undefined;
   findRequirementsBySourceMessage?: (routeId: string, messageId: string) => MessageProcessingRequirement[];
-  loadContext: (requirement: MessageProcessingRequirement, sourceMessageId?: string) => MessageContextRecord[];
+  loadContext: (requirement: MessageProcessingRequirement, sourceMessageId?: string, reviewedSource?: RecoverMessageProcessingSourceRecordOptions) => Promise<MessageContextRecord[] | MessageProcessingContextRead>;
   now?: () => Date;
 };
 
@@ -307,14 +309,30 @@ export class MessageProcessingSendContextReview {
     this.now = dependencies.now ?? (() => new Date());
   }
 
-  snapshot(requirementId: string, sourceMessageIdInput?: string): MessageProcessingSendContextSnapshot {
-    const requirement = this.dependencies.getRequirement(requirementId);
-    if (!requirement) throw new Error(`Message processing requirement not found: ${requirementId}`);
+  private requirementSnapshot(requirementId: string, expected?: string): MessageProcessingRequirement {
+    const current = this.dependencies.getRequirement(requirementId);
+    if (!current) throw new Error(`Message processing requirement not found: ${requirementId}`);
+    const snapshot = structuredClone(current);
+    if (expected !== undefined && stableJson(snapshot) !== expected) {
+      throw new Error("The message-processing requirement changed while loading send-context. Review again.");
+    }
+    return snapshot;
+  }
+
+  async snapshot(requirementId: string, sourceMessageIdInput?: string): Promise<MessageProcessingSendContextSnapshot> {
+    return (await this.readSnapshot(requirementId, sourceMessageIdInput)).snapshot;
+  }
+
+  private async readSnapshot(requirementId: string, sourceMessageIdInput?: string, reviewedSource?: RecoverMessageProcessingSourceRecordOptions): Promise<{ snapshot: MessageProcessingSendContextSnapshot; reviewedSource?: ReviewedMessageProcessingSourceRecordEvidence }> {
+    const requirement = this.requirementSnapshot(requirementId);
+    const requirementVersion = stableJson(requirement);
     const sourceMessageId = cleanText(sourceMessageIdInput) || undefined;
     if (sourceMessageId && !sourceMessageIds(requirement).has(sourceMessageId)) {
       throw new Error(`Source message ${sourceMessageId} does not belong to message-processing requirement ${requirementId}.`);
     }
-    const records = this.dependencies.loadContext(requirement, sourceMessageId);
+    const loaded = await this.dependencies.loadContext(structuredClone(requirement), sourceMessageId, reviewedSource);
+    const records = Array.isArray(loaded) ? loaded : loaded.records;
+    this.requirementSnapshot(requirementId, requirementVersion);
     const items = contextItemsForRequirement(requirement, records, sourceMessageId);
     const sourceIds = sourceMessageId ? new Set([sourceMessageId]) : sourceMessageIds(requirement);
     const priorReplies = records
@@ -333,7 +351,7 @@ export class MessageProcessingSendContextReview {
         messageId: cleanText(record.messageId) || undefined,
         replyToMessageId: cleanText(record.replyToMessageId) || undefined
       }));
-    return {
+    return { reviewedSource: Array.isArray(loaded) ? undefined : loaded.reviewedSource, snapshot: {
       requirementId,
       sourceMessageId,
       requirementStatus: requirement.status,
@@ -346,19 +364,27 @@ export class MessageProcessingSendContextReview {
         || requirement.delivery?.status === "sent"
         || priorReplies.length > 0,
       priorReplies
-    };
+    } };
   }
 
-  approve(
+  async approve(
     requirementId: string,
     input: MessageProcessingSendContextApprovalInput
-  ): MessageProcessingSendContextApproval {
+  ): Promise<MessageProcessingSendContextApproval> {
+    const providedInput = input;
+    const inputVersion = stableJson(input);
+    input = structuredClone(input);
     const proposed = input.proposedSend;
     const prepared = prepareAgentSendRequest(proposed);
     const sourceMessageId = prepared.channel === "napcat" && prepared.target.target === "group"
       ? cleanText(prepared.target.replyToMessageId)
       : "";
-    const snapshot = this.snapshot(requirementId, sourceMessageId || undefined);
+    const requirementVersion = stableJson(this.requirementSnapshot(requirementId));
+    const snapshot = await this.snapshot(requirementId, sourceMessageId || undefined);
+    const requirement = this.requirementSnapshot(requirementId, requirementVersion);
+    if (stableJson(providedInput) !== inputVersion) {
+      throw new Error("The send-context approval input changed while loading context. Review the exact request again.");
+    }
     if (snapshot.contextVersion !== cleanText(input.contextVersion)) {
       throw new Error("The conversation context changed before approval. GET the latest send-context and review again.");
     }
@@ -376,7 +402,6 @@ export class MessageProcessingSendContextReview {
     if (tracking.requirementId !== requirementId) {
       throw new Error(`The proposed send must include tracking.requirementId=${requirementId}.`);
     }
-    const requirement = this.dependencies.getRequirement(requirementId)!;
     if (prepared.routeId !== (requirement.source.routeProfileId || requirement.source.routeId)) {
       throw new Error("The proposed send Route does not match the message-processing requirement source Route.");
     }
@@ -450,7 +475,7 @@ export class MessageProcessingSendContextReview {
     return { sendContextReviewToken: token, expiresAt: new Date(expiresAt).toISOString() };
   }
 
-  validateSend(request: AgentSendRequest): ValidatedMessageProcessingSendContext | undefined {
+  async validateSend(request: AgentSendRequest): Promise<ValidatedMessageProcessingSendContext | undefined> {
     const prepared = prepareAgentSendRequest(request);
     const tracking = trackingFields(request);
     const replyToMessageId = prepared.channel === "napcat" && prepared.target.target === "group"
@@ -473,15 +498,18 @@ export class MessageProcessingSendContextReview {
       throw new Error("message_processing sends require tracking.requirementId and a completed send-context review.");
     }
     if (!tracking.requirementId) return undefined;
-    const requirement = this.dependencies.getRequirement(tracking.requirementId);
-    if (!requirement) throw new Error(`Message processing requirement not found: ${tracking.requirementId}`);
+    const requirement = this.requirementSnapshot(tracking.requirementId);
+    const requirementVersion = stableJson(requirement);
+    const ownerIds = stableJson(owners.map(owner => owner.id).sort());
+    const requestVersion = sendFingerprint(request);
     if (requirement.status !== "awaiting_send") {
       throw new Error(`Message-processing requirement ${requirement.id} is ${requirement.status}, not awaiting_send.`);
     }
     if (!tracking.reviewToken) {
       throw new Error("A completed send-context review is required. Include tracking.sendContextReviewToken.");
     }
-    const approval = this.approvals.get(tracking.reviewToken);
+    const storedApproval = this.approvals.get(tracking.reviewToken);
+    const approval = storedApproval && structuredClone(storedApproval);
     if (!approval || approval.requirementId !== requirement.id) {
       throw new Error("The send-context review token is missing, expired, or belongs to another requirement.");
     }
@@ -495,13 +523,33 @@ export class MessageProcessingSendContextReview {
     if (approval.sendFingerprint !== sendFingerprint(request)) {
       throw new Error("The send request changed after context review. Review the exact payload and target again.");
     }
-    const current = this.snapshot(requirement.id, approval.sourceMessageId);
+    const loaded = await this.readSnapshot(requirement.id, approval.sourceMessageId,
+      approval.sourceMessageId && prepared.channel === "napcat" && prepared.target.target === "group"
+        ? { expectedGroupId: String(prepared.target.groupId || ""), expectedInstanceId: String(prepared.target.instanceId || "") }
+        : undefined);
+    const current = loaded.snapshot;
+    this.requirementSnapshot(requirement.id, requirementVersion);
+    const liveApproval = this.approvals.get(tracking.reviewToken);
+    if (!liveApproval || stableJson(liveApproval) !== stableJson(approval) || liveApproval.expiresAt <= this.now().getTime()) {
+      throw new Error("The send-context review expired or changed while loading context. Review again.");
+    }
+    if (sendFingerprint(request) !== requestVersion || trackingFields(request).reviewToken !== tracking.reviewToken) {
+      throw new Error("The send request changed while loading context. Review the exact payload and target again.");
+    }
+    const currentOwners = replyToMessageId ? requirementsForSourceMessage(this.dependencies, prepared.routeId, replyToMessageId) : [];
+    if (currentOwners.length > 1) {
+      throw new Error(`The quoted source belongs to conflicting message-processing requirements: ${currentOwners.map(item => item.id).join(", ")}.`);
+    }
+    if (stableJson(currentOwners.map(owner => owner.id).sort()) !== ownerIds) {
+      throw new Error("The source message requirement ownership changed while loading context. Review again.");
+    }
     if (current.contextVersion !== approval.contextVersion) {
       throw new Error("The conversation context changed after review. GET the latest send-context and review again.");
     }
     return {
       requirement: structuredClone(requirement),
-      sourceMessageId: approval.sourceMessageId
+      sourceMessageId: approval.sourceMessageId,
+      ...(loaded.reviewedSource ? { reviewedSource: structuredClone(loaded.reviewedSource) } : {})
     };
   }
 }

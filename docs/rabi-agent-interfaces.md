@@ -58,6 +58,8 @@ GET /api/roles/{roleId}/message-endpoint-history
 
 常用参数：`query`（支持空格、英文逗号、中文逗号、顿号分隔的多个关键词）、`match=any|all`（默认 `any`）、`adapter`、`kind=group|private`、`sender`、`target`、`conversationKey`、`from`、`to`、`includeArchives=1`、`limit`。返回 `entries`、`count` 和 `coverage`；消息记录保留消息端、群/私聊会话键、发送者、目标、消息 ID、回复 ID 和附件摘要。`kind=group` 只查群聊入站消息，`kind=private` 只查私聊入站消息；`reply_sent` 等出站回复不应当当作用户原始反馈。
 
+查询由有界交互读进程执行，不占用目录整理任务队列；客户端断开会取消排队任务或终止仍在读取的进程。另支持 `channel` 和 `maxChars`；`limit` 默认 50、最多 200，`maxChars` 默认及最多 200,000。成功结构和筛选语义不变；读池繁忙、超时或无法确认子进程终止返回 HTTP 503，业务参数错误仍返回 400，不把失败伪装成零条记录。此隔离不承诺任意大小历史都能在超时前查完，也不代表其它同步入口或线上健康已验收。
+
 新会话的上下文恢复顺序：先从用户原话提取对象和关键词；再查本接口恢复消息端历史；涉及计划、记忆或原任务归属时另查 `knowledge/search`；最后回到当前文件、配置、代码或运行证据。查询覆盖范围必须随结果一起判断，空结果不等于系统从未出现过该消息。
 
 
@@ -404,6 +406,10 @@ GET /api/message-processing/requirements/:requirementId/send-context?sourceMessa
 单条回复必须传本次准备引用的 `sourceMessageId`。响应保留有界上下文，并把 `requiredReviewIds` 缩小为该主消息和从消息记录解析出的明确回复链；同一聚合需求里的其它消息仍参与上下文版本计算，但不要求逐条声明为本次正文依据。Agent 判断拟发送内容仍合适后，把这次精确发送请求作为 `proposedSend` 提交审核：
 
 来源消息较早、已超出近期窗口时，Manager 只会从该需求所属人格的正式 `group-messages.jsonl` 恢复同 Route、同 `sourceMessageId` 的唯一记录。找不到、出现重复记录或 Route 证据冲突时，GET 失败关闭，不会扩大到其它群或其它历史需求。
+
+上下文读取使用同一有界交互读池。发送校验才额外恢复完整来源和附件证据，并与最近上下文合并在一次读任务中；GET 和审批不增加这项额外恢复。最近窗口沿用 80 条、24,000 字符预算，必要时允许附加 1 条精确来源；记录与来源、附件元数据合计的 UTF-8 JSON 最多 1 MiB，超限拒绝，不截断证据。读取前后发现相关文件清单或元数据变化会失败关闭；这不是跨文件原子快照。
+
+等待结束后重新读取需求并核对版本、来源归属、凭证有效期、审查会话、上下文版本和发送指纹。变更或读取失败要求重新审查，不自动循环校验。发送入口冻结请求；校验成功或失败后都权威重读同一 `deliveryId` 回执。只有已持久化的 `completed` 回执且包含结果才交原幂等发送服务核对指纹与发送者后重放。`reserved`、`sending`、`uncertain` 不能借此发起新发送；重放期间回执消失也不会重新发送。保留原 `deliveryId` 并查询回执，不以新 ID 绕过未决状态。
 
 ```http
 POST /api/message-processing/requirements/:requirementId/send-context

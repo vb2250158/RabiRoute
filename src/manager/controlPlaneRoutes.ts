@@ -8,6 +8,8 @@ import { errorResponsePresentation } from "../shared/errorPresentation.js";
 import { KnowledgeSearchService } from "./knowledgeSearchService.js";
 import { handleKnowledgeSearch } from "./knowledgeSearchRoutes.js";
 import { handleMessageEndpointHistoryApi } from "./messageEndpointHistoryRoutes.js";
+import { respondRoleSkillRead } from "./roleSkillReadRoutes.js";
+import { authorizeLanAgentRoleSkillRequest } from "./lanAgentRoleSkillAccess.js";
 import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
 import { agentRequestReminderPrompt } from "../agentRequests/replyParameters.js";
@@ -157,10 +159,7 @@ import {
   messageProcessingBoardStatePath
 } from "../messageProcessing/persistence.js";
 import { MessageProcessingSendContextReview } from "../messageProcessing/sendContextReview.js";
-import {
-  loadMessageProcessingContext,
-  recoverReviewedMessageProcessingSourceRecord
-} from "../messageProcessing/sourceContextRecovery.js";
+import { resolveReviewedAgentSendGate, assertReviewedAgentSendMayDeliver } from "./reviewedAgentSendGate.js";
 import { normalizeCodexMemoryConsolidationAgentModel } from "../shared/codexMemoryConsolidationAgent.js";
 import {
   agentSendReceiptResponse,
@@ -1360,13 +1359,17 @@ const messageProcessingSendContextReview = new MessageProcessingSendContextRevie
   getRequirement: (requirementId) => messageProcessingBoard.getRequirement(requirementId),
   findRequirementBySourceMessage: (routeId, messageId) => messageProcessingBoard.findLatestBySourceMessage(routeId, messageId),
   findRequirementsBySourceMessage: (routeId, messageId) => messageProcessingBoard.findBySourceMessage(routeId, messageId),
-  loadContext: (requirement, sourceMessageId) => {
+  loadContext: async (requirement, sourceMessageId, reviewedSource) => {
     const roleId = String(requirement.source.roleId || "").trim();
     if (!roleId) return [];
-    return loadMessageProcessingContext({
-      roleDir: roleDirForApi(roleId),
-      requirement,
-      sourceMessageId
+    return managerKnowledgePageWorkerPool.run({
+      type: "message_processing_send_context",
+      input: {
+        roleDir: roleDirForApi(roleId),
+        requirement: { id: requirement.id, source: requirement.source, ...(reviewedSource ? { sourceEvidenceReview: requirement.sourceEvidenceReview } : {}) },
+        sourceMessageId,
+        reviewedSource
+      }
     });
   }
 });
@@ -4986,14 +4989,20 @@ async function performAgentSend(
   request: AgentSendRequest,
   options: { remoteSource?: TrustedLanAgentSource; withManagedGroupFile?: import("../outbox.js").AgentReplyOptions["withManagedGroupFile"] } = {}
 ): Promise<AgentCommunicationHttpResponse> {
-  const receiptBeforeValidation = readAgentSendReceipt(rootDir, String(request.deliveryId || ""));
+  const gate = await resolveReviewedAgentSendGate(request, {
+    readReceipt: deliveryId => readAgentSendReceipt(rootDir, deliveryId),
+    authorize: (snapshot, receipt) => {
+      const identity = prepareAgentSendRequest(snapshot);
+      if (options.remoteSource || !receipt) {
+        assertAgentSendPermission(identity.sender, runtimeForAgentSendRoute(identity.routeId)?.definition, options.remoteSource);
+      }
+    },
+    validate: snapshot => messageProcessingSendContextReview.validateSend(snapshot)
+  });
+  request = gate.request;
+  const receiptBeforeValidation = gate.receipt;
   const prepared = prepareAgentSendRequest(request);
-  if (options.remoteSource || !receiptBeforeValidation) {
-    assertAgentSendPermission(prepared.sender, runtimeForAgentSendRoute(prepared.routeId)?.definition, options.remoteSource);
-  }
-  const validatedSendContext = !receiptBeforeValidation
-    ? messageProcessingSendContextReview.validateSend(request)
-    : undefined;
+  const validatedSendContext = gate.context;
   let reviewedReplySource: ReviewedReplySourceEvidence | undefined;
   if (validatedSendContext?.sourceMessageId
     && prepared.channel === "napcat"
@@ -5002,15 +5011,8 @@ async function performAgentSend(
     if (!roleId) {
       throw new Error(`Cannot recover reviewed source ${validatedSendContext.sourceMessageId}: requirement has no roleId.`);
     }
-    const recovered = recoverReviewedMessageProcessingSourceRecord(
-      roleDirForApi(roleId),
-      validatedSendContext.requirement,
-      validatedSendContext.sourceMessageId,
-      {
-        expectedGroupId: String(prepared.target.groupId || ""),
-        expectedInstanceId: String(prepared.target.instanceId || "")
-      }
-    );
+    const recovered = validatedSendContext.reviewedSource;
+    if (!recovered) throw new Error("The bounded reader did not return the reviewed source evidence.");
     reviewedReplySource = {
       routeId: recovered.routeId,
       sourceMessageId: recovered.sourceMessageId,
@@ -5072,14 +5074,17 @@ async function performAgentSend(
     }
   }
 
-  const deliver = async () => ({
-    ...await handleAgentSend(request, replyOptions, reviewedReplySource),
-    ...(languageStyleValidation ? { languageStyleValidation } : {})
-  });
+  const deliver = async () => {
+    assertReviewedAgentSendMayDeliver(gate);
+    return {
+      ...await handleAgentSend(request, replyOptions, reviewedReplySource),
+      ...(languageStyleValidation ? { languageStyleValidation } : {})
+    };
+  };
   const result = await executeIdempotentAgentSend(request, {
     rootDir,
     deliver,
-    recover: async () => {
+    recover: gate.replayOnly ? undefined : async () => {
       const inspection = await inspectAgentSendDelivery(request, replyOptions);
       if (inspection.state === "completed") return inspection;
       if (inspection.state === "missing") return { state: "retry" };
@@ -7616,7 +7621,13 @@ function handleRoleKnowledgeApi(
   resolveRoleStorageApplication: () => RoleStorageApplication = currentRoleStorageApplication
 ): boolean {
   if (handleAllDayRecordingApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response)) return true;
-  if (handleMessageEndpointHistoryApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response, { roleDirectory: resolveRoleDir, json: jsonResponse })) return true;
+  if (handleMessageEndpointHistoryApi(request, new URL(request.url || pathname, "http://127.0.0.1"), response, {
+    roleDirectory: resolveRoleDir,
+    json: jsonResponse,
+    queryHistory: (roleDir, query, options) => managerKnowledgePageWorkerPool.run({
+      type: "role_message_endpoint_history", roleDir, query
+    }, options)
+  })) return true;
   if (handleKnowledgeSearch(request, pathname, response, {
     service: knowledgeSearchService, roleDirectory: resolveRoleDir,
     readBody: request => readRoleStorageJsonBody<Record<string, unknown>>(request), json: jsonResponse
@@ -8005,7 +8016,7 @@ function handleRoleKnowledgeApi(
   try {
     const roleDir = resolveRoleDir(roleId);
     if (request.method === "GET" && resource === "counts") {
-      void managerCatalogWorkerPool.run({ type: "role_knowledge_file_counts", roleDir })
+      void managerKnowledgePageWorkerPool.queryRoleFileCounts(roleDir)
         .then((data) => jsonResponse(response, 200, { code: 0, data }))
         .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
           code: -1,
@@ -8132,18 +8143,12 @@ function handleRoleKnowledgeApi(
       return true;
     }
     if (request.method === "GET" && resource === "skills") {
-      void managerCatalogWorkerPool.run({ type: "role_skill_catalog", roleDir, ...(itemId ? { skillId: itemId } : {}) })
-        .then((data) => {
-          if (itemId && !data) {
-            jsonResponse(response, 404, { code: -1, message: `Skill not found: ${itemId}` });
-            return;
-          }
-          jsonResponse(response, 200, { code: 0, data });
-        })
-        .catch((error) => jsonResponse(response, error instanceof ManagerReadWorkerError && error.code === "busy" ? 503 : 500, {
-          code: -1,
-          message: error instanceof Error ? error.message : String(error)
-        }));
+      void respondRoleSkillRead(request, response, roleDir, itemId, {
+        json: jsonResponse,
+        querySkills: (directory, skillId, options) => managerKnowledgePageWorkerPool.run({
+          type: "role_skill_catalog", roleDir: directory, ...(skillId ? { skillId } : {})
+        }, options)
+      });
       return true;
     }
     if (request.method === "GET" && resource === "memory" && !itemId) {
@@ -10021,6 +10026,13 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
         return;
       }
       if (lanAgentAccess.kind === "agent") {
+        const skillAccess = authorizeLanAgentRoleSkillRequest(
+          lanAgentAccess, request.method, pathname, routeCatalogConfig.gateways, roleIdForDefinition
+        );
+        if (!skillAccess.allowed) {
+          jsonResponse(response, skillAccess.status, { code: -1, error: skillAccess.error });
+          return;
+        }
         const binding = lanAgentAuthority.getApprovedAgentBinding(lanAgentAccess.nodeId, lanAgentAccess.agentId);
         // Normalize the wire provider the same way `lanAgentBodyAuthority` does,
         // then accept any adapter that supports managed plan tasks. The previous

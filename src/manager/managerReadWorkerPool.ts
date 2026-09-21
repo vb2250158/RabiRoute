@@ -1,5 +1,6 @@
 import { fork } from "node:child_process";
 import os from "node:os";
+import { planReadFence } from "../planReadInvalidation.js";
 import { fileURLToPath } from "node:url";
 import { recordPerformanceOperation } from "../performance/performanceInstrumentation.js";
 import { managerReadWorkerOperation } from "../shared/performanceOperations.js";
@@ -164,8 +165,9 @@ function closesWithin(slot: WorkerSlot, timeoutMs: number): Promise<boolean> {
   return Promise.race([
     slot.closedPromise.then(() => true),
     new Promise<boolean>(resolve => {
+      // A caller awaiting stop must observe close (or the bounded deadline)
+      // even when the otherwise idle child and its IPC channel are unreferenced.
       timer = setTimeout(() => resolve(false), timeoutMs);
-      timer.unref?.();
     })
   ]).finally(() => {
     if (timer) clearTimeout(timer);
@@ -195,6 +197,7 @@ export class ManagerReadWorkerPool {
   private readonly voiceSummaryInFlight = new Map<string, SharedRead<PersonaVoiceTranscriptQueryResult>>();
   private readonly performanceInFlight = new Map<string, SharedRead<string>>();
   private readonly rolePlanPageInFlight = new Map<string, SharedRead<unknown>>();
+  private readonly roleFileCountsInFlight = new Map<string, SharedRead<unknown>>();
   private readonly roleMemoryPageInFlight = new Map<string, SharedRead<unknown>>();
   private readonly workers = new Set<WorkerSlot>();
   private readonly terminationPendingWorkers = new Set<WorkerSlot>();
@@ -254,6 +257,7 @@ export class ManagerReadWorkerPool {
     for (const shared of this.voiceSummaryInFlight.values()) shared.controller.abort();
     for (const shared of this.performanceInFlight.values()) shared.controller.abort();
     for (const shared of this.rolePlanPageInFlight.values()) shared.controller.abort();
+    for (const shared of this.roleFileCountsInFlight.values()) shared.controller.abort();
     for (const shared of this.roleMemoryPageInFlight.values()) shared.controller.abort();
     const slots = [...this.workers];
     const closed = await Promise.all(slots.map(slot => this.discardWorker(slot, stoppingError)));
@@ -271,6 +275,7 @@ export class ManagerReadWorkerPool {
     this.voiceSummaryInFlight.clear();
     this.performanceInFlight.clear();
     this.rolePlanPageInFlight.clear();
+    this.roleFileCountsInFlight.clear();
     this.roleMemoryPageInFlight.clear();
     this.stopped = true;
   }
@@ -340,16 +345,25 @@ export class ManagerReadWorkerPool {
       }));
   }
 
+  queryRoleFileCounts<T>(roleDir: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+    const fence=planReadFence(roleDir);
+    return this.querySharedRead<T>(this.roleFileCountsInFlight,JSON.stringify(["role_knowledge_file_counts",roleDir,fence.epoch,fence.revision]),
+      {type:"role_knowledge_file_counts",roleDir},options);
+  }
+
   queryRolePlanPage<T>(
     roleDir: string,
     input: RolePlanPageReadInput,
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<T> {
-    const key = JSON.stringify(["role_plan_page", roleDir, input]);
+    // Capture after successful commit publication; never coalesce a post-write
+    // request with a pre-write task already queued in another resident reader.
+    const fence = planReadFence(roleDir);
+    const key = JSON.stringify(["role_plan_page", roleDir, input, fence.epoch, fence.revision]);
     return this.querySharedRead<T>(
       this.rolePlanPageInFlight,
       key,
-      { type: "role_plan_page", roleDir, ...input },
+      { type: "role_plan_page", roleDir, ...input, fence },
       options
     );
   }
@@ -689,7 +703,8 @@ export class ManagerReadWorkerPool {
         new ManagerReadWorkerError(`Manager read exceeded ${pending.timeoutMs} ms.`, "timeout")
       );
     }, pending.timeoutMs);
-    timer.unref?.();
+    // Keep only the bounded active operation alive; settlement clears this
+    // deadline, while idle children remain unreferenced.
     const abortListener = pending.signal
       ? () => {
           void this.discardWorker(slot, new ManagerReadWorkerError("Manager read request was aborted.", "aborted"));

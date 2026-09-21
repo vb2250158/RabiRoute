@@ -6,6 +6,25 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.9 - 2026-09-21
+
+### Plan pagination and knowledge-page state
+
+- Plan-page reads carry an in-process invalidation revision so requests after managed writes do not coalesce with an older revision. Unchanged catalog metadata and workflow presentation are reused to reduce repeated body reads. Periodic reconciliation still checks complete metadata; unknown file events and read failures retain conservative handling, without promising an atomic snapshot of arbitrary external writes.
+- Persona counts and Skill list/detail reads use the existing bounded interactive reader pool instead of waiting directly behind catalog batch jobs, without raising resource limits. Disconnected Skill requests are cancelled; a busy pool or timeout returns 503 rather than a false empty result.
+- The knowledge page distinguishes not-yet-loaded data, read failures and genuine zero results. Unknown counts show `—`; failures retain and label previously loaded data and offer retry instead of showing a green success or a no-matching-plans state. A failed first page does not start further automatic page loading.
+
+### Isolated history reads and approval consistency
+
+- Message history, send-context review and exact source recovery run in bounded reader processes instead of synchronously scanning history in the Manager HTTP thread. Existing filters, unique-source matching and attachment-evidence checks remain. Transport limits, changing input files and read failures reject the operation rather than truncating approval evidence.
+- After asynchronous reads, approval and send validation recheck the requirement, source, reviewing session, expiry, request fingerprint and context version. The existing idempotent send service remains the delivery owner: only completed receipts permit controlled replay; pending or uncertain receipts cannot authorize a new send, and a receipt disappearing during replay cannot trigger another delivery.
+- Before LAN Agents read persona Skills, the service checks persona ownership against the existing node/Agent Route configuration. An unconfigured persona returns 403, without additional per-Skill grants or changes to local management authentication.
+
+### Acceptance scope
+
+- This change includes regressions for isolated health responsiveness, cancellation and timeout cleanup, approval races, transport limits, persona Skill authorization and knowledge-page failure states. Build, deployment and live stability must still be verified separately against the final candidate; source tests are not runtime evidence.
+- A production search index for 100,000 records and private persona Skill-package completion are outside this completed scope. Experimental indexes and local evidence are not released as production implementations. Large-history reads can still time out; isolation does not promise instant responses at every scale or establish that all automatic-restart causes are eliminated.
+
 ## 0.3.8 - 2026-09-21
 
 ### All-day recording review and capture restore

@@ -17,8 +17,9 @@ import {
   listPlanHistory,
   listRoleSkills,
   readPlansFromStorageInWorker,
+  readPlanPageCatalogInWorker,
   readRoleKnowledgeCatalogSnapshot,
-  roleKnowledgeFileCounts,
+  roleKnowledgeFileCountsInWorker,
   roleMemoryCounts,
   presentRoleMemories,
   readRecentMemoryFromStorageInWorker,
@@ -27,11 +28,15 @@ import {
 import { listPlanFeedback, planFeedbackSummary } from "../planFeedback.js";
 import { readPlanStoragePackage } from "../planStorageRepository.js";
 import { readRolePanelTimeline } from "../rolePanelTimeline.js";
+import { recentMessageContextItems, type RecentMessageContextQuery } from "../messageContextStore.js";
+import { readMessageProcessingProjection, type MessageProcessingReadInput } from "./messageProcessingReadProjection.js";
 import { roleFolderPath } from "../shared/routePaths.js";
 import { sanitizeRoleId } from "../shared/routeIdentity.js";
 import { storageInventoryRevisionToken, storageRevisionToken } from "../shared/storageRevision.js";
 import { paginateRoleMemory, paginateRolePlans, summarizeRolePlan } from "../roleKnowledgePagination.js";
 import { presentPlans, sortKnowledgeByUpdatedAt } from "../roleKnowledgePresentation.js";
+import type { PlanReadFence } from "../planReadInvalidation.js";
+const planPagePresentations = new WeakMap<object, { workflow: string; plans: ReturnType<typeof presentPlans> }>();
 import type {
   PerformanceMonitoringConfig,
   PerformanceSample,
@@ -42,6 +47,8 @@ import { listOpenPlanFeedbackRecoveryCandidates } from "./planFeedbackRecoveryDi
 import type { GatewayDiagnosticsWorkerInput } from "./gatewayDiagnosticsSnapshot.js";
 
 export type ManagerReadWorkerTask =
+  | { type: "role_message_endpoint_history"; roleDir: string; query: RecentMessageContextQuery }
+  | { type: "message_processing_send_context"; input: MessageProcessingReadInput }
   | { type: "knowledge_search_delta"; roleDir: string; previous: KnowledgeInventory }
   | {
       type: "gateway_diagnostics_snapshot";
@@ -81,6 +88,8 @@ export type ManagerReadWorkerTask =
   | {
       type: "role_plan_page";
       roleDir: string;
+      fence: PlanReadFence;
+      authoritative?: boolean;
       cursor: string;
       limit: number;
       view?: "current" | "plans" | "archived";
@@ -249,6 +258,10 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
     }
     case "persona_voice_transcripts":
       return queryPersonaVoiceTranscriptViews(task.roleDir, task.query);
+    case "role_message_endpoint_history":
+      return recentMessageContextItems([task.roleDir], task.query);
+    case "message_processing_send_context":
+      return readMessageProcessingProjection(task.input);
     case "plan_feedback_recovery_candidates":
       return await listOpenPlanFeedbackRecoveryCandidates(task.rolesRoot);
     case "role_directories":
@@ -279,8 +292,15 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
     case "role_plan_page": {
       const workflow = readPersonaPlanWorkflow(task.roleDir)?.workflow;
       if (!workflow) throw new Error(`PLAN_STATUS_CONFIG_MISSING: ${task.roleDir}`);
+      const catalog = await readPlanPageCatalogInWorker(task.roleDir, task.fence, task.authoritative);
+      const workflowKey = JSON.stringify(workflow);
+      let presentation = planPagePresentations.get(catalog);
+      if (!presentation || presentation.workflow !== workflowKey) {
+        presentation = { workflow: workflowKey, plans: presentPlans(catalog, workflow) };
+        planPagePresentations.set(catalog, presentation);
+      }
       const page = paginateRolePlans(
-        presentPlans(readPlansFromStorageInWorker(task.roleDir), workflow),
+        presentation.plans,
         task.cursor,
         task.limit,
         {
@@ -335,7 +355,7 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
       };
     }
     case "role_knowledge_file_counts":
-      return roleKnowledgeFileCounts(task.roleDir);
+      return await roleKnowledgeFileCountsInWorker(task.roleDir);
     case "role_skill_catalog":
       return task.skillId ? getRoleSkill(task.roleDir, task.skillId) ?? null : listRoleSkills(task.roleDir);
     case "role_consolidation_runs": {
