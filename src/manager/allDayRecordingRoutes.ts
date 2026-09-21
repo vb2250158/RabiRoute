@@ -40,7 +40,8 @@ export function createAllDayRecording(options: {
         for (const row of rows) {
           if (row.session_id !== sessionId || row.kind !== "asr" || row.source_device_kind !== "pc_microphone") continue;
           const startedAt = Number(row.time) * 1000;
-          events.set(String(row.id), { id: `speech:${row.id}`, speechRecordId: String(row.id), startedAt, endedAt: startedAt + Math.max(0, Number(row.duration) || 0) * 1000, source: "microphone", deviceId: options.hostId, kind: "audio", text: String(row.text || ""), state: "saved" });
+          const transcriptionState = ["pending","processing","ready","empty","error"].includes(String(row.transcription_state)) ? row.transcription_state as AllDayEvent["transcriptionState"] : "ready";
+          events.set(String(row.id), { id: `speech:${row.id}`, speechRecordId: String(row.id), startedAt, endedAt: startedAt + Math.max(0, Number(row.duration) || 0) * 1000, source: "microphone", deviceId: options.hostId, kind: "audio", text: String(row.text || ""), state: "saved", transcriptionState });
         }
         if (rows.length < 1000) return [...events.values()];
         const earliest = Math.min(...rows.map(row => Number(row.time)));
@@ -79,6 +80,12 @@ export function allDayRecordingHandler(runtime: ReturnType<typeof createAllDayRe
       if (request.method !== "GET" && !String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) { send(415, { code: -1, message: "Use application/json for recording controls" }); return; }
       let data: unknown;
       if (request.method === "GET" && !action) data = { ...await runtime.service.snapshot(roleId), devices: await runtime.store.mobileDevices() };
+      else if (request.method === "GET" && action === "recent") data = { events: await runtime.store.recent(roleId) };
+      else if (request.method === "GET" && action === "page") {
+        const direction = url.searchParams.get("direction");
+        if (direction !== "older" && direction !== "newer") throw new Error("Invalid event direction");
+        data = await runtime.store.page(roleId, direction, { time: Number(url.searchParams.get("time")), id: url.searchParams.get("id") || "" }, url.searchParams.get("source") || "all", 100, url.searchParams.get("type") || "all");
+      }
       else if (request.method === "GET" && action === "events") data = { events: await runtime.store.timeline(roleId, Number(url.searchParams.get("since")), Number(url.searchParams.get("until"))) };
       else if (request.method === "PUT" && action === "settings") data = await runtime.service.configure(roleId, await options.readBody(request));
       else if (request.method === "POST" && action === "start") data = await runtime.service.start(roleId);

@@ -77,7 +77,10 @@ export function buildWorkflow(model, job, first, last, references = []) {
   for (const [name, value, node] of [["first_frame", first, "1"], ["last_frame", last, "2"]]) {
     if (!value) continue;
     nodes[node] = { class_type: "LoadImage", inputs: { image: value } };
-    nodes["8"].inputs[name] = [node, 0];
+    // Normalize both anchors identically before H3's differing first/last resize rules.
+    const adapted = `fit_${node}`;
+    nodes[adapted] = { class_type: "ResizeAndPadImage", inputs: { image: [node, 0], target_width: job.width, target_height: job.height, padding_color: "black", interpolation: "lanczos" } };
+    nodes["8"].inputs[name] = [adapted, 0];
   }
   return nodes;
 }
@@ -114,15 +117,16 @@ export function validateCommand(input, catalog) {
   if (![result.width, result.height].every(value => Number.isSafeInteger(value) && value >= 256 && value % 32 === 0) || result.width * result.height > model.maxArea) throw new Error("宽高须为不小于 256 的 32 倍数，且像素总数不超过模型上限。");
   if (!Number.isSafeInteger(result.frames) || result.frames < 22 || result.frames > model.maxFrames || (result.frames - 5) % 17 !== 0) throw new Error("帧数须为 17k+5，范围 22–260。");
   if (!Number.isSafeInteger(result.seed) || result.seed < 0) throw new Error("种子须为非负安全整数。");
-  let dimensions;
   for (const name of ["firstFrame", "lastFrame"]) {
     if (input[name] === undefined || input[name] === "") continue;
     if (typeof input[name] !== "string" || input[name].length > 12 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(input[name])) throw new Error("图片须为不超过 9 MB 的 PNG Base64。");
     const bytes = Buffer.from(input[name], "base64");
     if (bytes.length < 33 || bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a" || bytes.toString("ascii", 12, 16) !== "IHDR") throw new Error("仅支持 PNG 图片。");
-    const shape = `${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`;
-    if (shape !== `${result.width}x${result.height}` || (dimensions && dimensions !== shape)) throw new Error("首尾帧必须与输出宽高完全一致，请先调整图片尺寸。");
-    dimensions = shape;
+    const sourceWidth = bytes.readUInt32BE(16), sourceHeight = bytes.readUInt32BE(20);
+    if (![sourceWidth, sourceHeight].every(value => value >= 1 && value <= 4096)) throw new Error("首尾帧图片宽高须为 1–4096 像素。");
+    // The provider's fit operation truncates scaled dimensions to integer pixels.
+    const scale = Math.min(result.width / sourceWidth, result.height / sourceHeight);
+    if (Math.floor(sourceWidth * scale) < 1 || Math.floor(sourceHeight * scale) < 1) throw new Error("图片比例过于极端，无法适配当前输出尺寸。");
     result[name] = input[name];
   }
   return result;

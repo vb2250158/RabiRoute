@@ -230,8 +230,10 @@ def create_app(
         if cache_dir.is_dir():
             tts_audio_stores.get(cache_dir)
 
+    pending_audio_ids: dict[str, str] = {}
+
     async def microphone_transcriber(audio_path: Path, config: MicrophoneConfig) -> TranscriptionResult:
-        record_id = f"speech-{uuid4().hex}"
+        record_id = pending_audio_ids.get(str(audio_path)) or f"speech-{uuid4().hex}"
         remote = None
         if os.environ.get("RABIROUTE_MANAGER_URL", "").strip() or os.environ.get("GATEWAY_MANAGER_URL", "").strip():
             remote = await selected_remote_transcription(_manager_loopback_url(), audio_path, model=config.asr_model, language=config.language, prompt=config.prompt)
@@ -349,6 +351,7 @@ def create_app(
         recorded_at: float | None = None,
         record_id: str | None = None,
         input_source: SpeechInputSource | None = None,
+        transcription_state: str = "ready",
     ) -> dict[str, object]:
         retained = asr_audio_store.retain(audio_path)
         return records.append_asr(
@@ -368,7 +371,24 @@ def create_app(
             processing_policy=input_source.processing_policy if input_source else "agent",
             capture_id=input_source.capture_id if input_source else "",
             route_profile_id=input_source.route_profile_id if input_source else None,
+            transcription_state=transcription_state,
         )
+
+    def record_audio_state(config, started_at, audio_path, input_source, state):
+        key = str(audio_path)
+        record_id = pending_audio_ids.setdefault(key, f"speech-{uuid4().hex}")
+        with wave.open(key, "rb") as audio:
+            duration = audio.getnframes() / audio.getframerate()
+        persist_asr_record(TranscriptionResult(text="", language=config.language or "", duration=duration, provider="", model=config.asr_model, record_id=record_id),
+            source="microphone", audio_path=audio_path, session_id=config.session_id, recorded_at=started_at,
+            record_id=record_id, input_source=input_source, transcription_state=state)
+        if state != "processing":
+            pending_audio_ids.pop(key, None)
+
+    def record_completed_audio(result, config, started_at, audio_path, input_source):
+        persist_asr_record(result, source="microphone", audio_path=audio_path, session_id=config.session_id,
+            route_id=config.route_id, recorded_at=started_at, record_id=result.record_id, input_source=input_source)
+        pending_audio_ids.pop(str(audio_path), None)
 
     microphone = MicrophoneService(
         state_path=current.server.temp_dir.parent / "microphone.json",
@@ -377,16 +397,8 @@ def create_app(
         submitter=microphone_submitter,
         playback_active=lambda: bool(playback_queue.snapshot().get("current")),
         stop_playback=lambda: playback_queue.stop(clear_pending=True),
-        record_transcription=lambda result, config, started_at, audio_path, input_source: persist_asr_record(
-            result,
-            source="microphone",
-            audio_path=audio_path,
-            session_id=config.session_id,
-            route_id=config.route_id,
-            recorded_at=started_at,
-            record_id=result.record_id,
-            input_source=input_source,
-        ),
+        record_transcription=record_completed_audio,
+        record_audio_state=record_audio_state,
         remote_audio=remote_audio,
         event_sink=publish_microphone_event,
     )

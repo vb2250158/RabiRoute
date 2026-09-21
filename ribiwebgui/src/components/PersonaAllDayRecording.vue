@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, toRaw, watch } from "vue";
 import { useI18n } from "../i18n";
 import { managerEventSource } from "../managerApi";
-import { reviewIndex, reviewWindow, latestReviewEvent } from "../allDayReviewModel";
-import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "@shared/allDayRecording";
+import { reviewIndex, reviewWindow, latestReviewEvent, adjacentLoadedEvent } from "../allDayReviewModel";
+import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "@shared/allDayRecording";
 
 const props = defineProps<{ roleId: string }>();
 const { isEnglish } = useI18n();
@@ -17,14 +17,28 @@ const sources = computed(() => [
   { id: "session", name: label("采集状态", "Capture status"), icon: "mdi-record-circle-outline", color: "#95a5ad" }
 ]);
 const sourceInfo = (id: string) => sources.value.find(source => source.id === id)!;
+function recordingState(event: AllDayEvent) {
+  const state = event.transcriptionState ?? (event.text ? "ready" : "empty");
+  if (state === "pending" || state === "processing") return label('转写中', 'Transcribing');
+  if (state === "error") return label('转写失败，录音已保存', 'Transcription failed; audio saved');
+  if (state === "empty") return label('未识别到文字', 'No speech recognized');
+  return label('已转写', 'Transcribed');
+}
+function eventTitle(event: AllDayEvent) {
+  return event.kind === "audio" ? label('ASR 事件 · ', 'ASR event · ') + (event.source === "mobile" ? label('手机', 'Mobile') : label('电脑', 'Computer')) : sourceInfo(event.source).name;
+}
 const localDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const date = computed(() => localDate(new Date(cursor.value)));
 const cursor = ref(Date.now());
+const minSpan = 3_000;
+const maxSpan = 86_400_000;
 const span = ref(30 * 60_000);
 const viewStart = computed(() => Math.max(0, cursor.value - span.value / 2));
 const viewEnd = computed(() => cursor.value + span.value / 2);
 const live = ref(true);
 let loadedRange = { start: 0, end: 0 };
+let completeRange = false;
+let navigationController: AbortController | undefined;
 let requestedRange: { start: number; end: number } | undefined;
 let rangeTimer: ReturnType<typeof setTimeout> | undefined;
 let inertia = 0;
@@ -34,6 +48,8 @@ let lastX = 0;
 const events = shallowRef<AllDayEvent[]>([]);
 const fetching = ref(false);
 const hasLoaded = ref(false);
+const cachedPreview = ref(false);
+let recentController: AbortController | undefined;
 let refreshQueued = false;
 let disposed = false;
 const rowStride = 90;
@@ -44,6 +60,8 @@ const settings = ref<AllDaySettings>(structuredClone(DEFAULT_ALL_DAY_SETTINGS));
 const settingsOpen = ref(false);
 const selectedId = ref("");
 const filter = ref("all");
+const eventType = ref("all");
+const matchesFilter = (event: AllDayEvent) => matchesReviewType(event,eventType.value) && (filter.value === "all" || event.source === filter.value);
 const busy = ref(false);
 const error = ref("");
 const stateError = ref("");
@@ -53,6 +71,11 @@ let listDriving = false;
 let expectedScrollTop: number | undefined;
 let listFrame = 0;
 const loadingMore = ref(false);
+const navigatingEvent = ref(false);
+const navigationMessage = ref("");
+const reachedOlder = ref(false);
+const reachedNewer = ref(false);
+let pageController: AbortController | undefined;
 let lastEdgeLoad = 0;
 let drag: { x: number; time: number; span: number; width: number; moved: boolean } | undefined;
 let controller: AbortController | undefined;
@@ -61,9 +84,9 @@ let eventSource: EventSource | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 const api = computed(() => `/api/roles/${encodeURIComponent(props.roleId)}/all-day-recording`);
 const indexedEvents = computed(() => reviewIndex(events.value));
-const visible = computed(() => reviewWindow(indexedEvents.value,viewStart.value,viewEnd.value).filter(event => filter.value === "all" || event.source === filter.value));
+const visible = computed(() => reviewWindow(indexedEvents.value,viewStart.value,viewEnd.value).filter(matchesFilter));
 // Keep the buffered list stable while its scrolling drives the timeline viewport.
-const listEvents = computed(() => events.value.filter(event => filter.value === "all" || event.source === filter.value).slice().reverse());
+const listEvents = computed(() => events.value.filter(matchesFilter).slice().sort((a,b) => b.startedAt-a.startedAt || b.id.localeCompare(a.id)));
 const listIndices = computed(() => new Map(listEvents.value.map((event,index) => [event.id,index])));
 const renderedEvents = computed(() => listEvents.value.slice(virtualStart.value, virtualStart.value + 24));
 // Co-located events share a marker at wide zoom; zooming reveals individual events.
@@ -80,10 +103,13 @@ const markerGroups = computed(() => {
 });
 function selectMarker(group: { event: AllDayEvent; count: number }) {
   select(group.event);
-  if (group.count > 1) span.value = Math.max(30_000, span.value / 4);
+  if (group.count > 1) span.value = Math.max(minSpan, span.value / 4);
 }
 const selected = computed(() => indexedEvents.value.byId.get(selectedId.value));
-const ticks = computed(() => Array.from({ length: 7 }, (_, i) => viewStart.value + (viewEnd.value - viewStart.value) * i / 6));
+const ticks = computed(() => {
+  const count = span.value < 6_000 ? 4 : 7;
+  return Array.from({ length: count }, (_, i) => viewStart.value + (viewEnd.value - viewStart.value) * i / (count - 1));
+});
 const formatTime = (time: number) => new Date(time).toLocaleTimeString(isEnglish.value ? "en-GB" : "zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const percent = (time: number) => Math.max(0, Math.min(100, (time - viewStart.value) / (viewEnd.value - viewStart.value) * 100));
 const mediaUrl = computed(() => selected.value?.kind === 'image' && selected.value.media ? `${api.value}/${selected.value.media}` : "");
@@ -143,8 +169,8 @@ function requestImage() {
 }
 watch(mediaUrl, requestImage);
 watch(selectedId, () => { expandedText.value = false; });
-watch([events,filter], () => {
-  if(live.value) selectedId.value = latestReviewEvent(events.value,filter.value)?.id ?? "";
+watch([events,filter,eventType], () => {
+  if(live.value) selectedId.value = latestReviewEvent(events.value.filter(matchesFilter),filter.value)?.id ?? "";
 });
 
 async function data<T>(suffix: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T> {
@@ -154,6 +180,10 @@ async function data<T>(suffix: string, init: RequestInit = {}, signal?: AbortSig
   return result.data;
 }
 async function load(direction: -1 | 0 | 1 = 0, refresh = false) {
+  if (listDriving && refresh) { reachedNewer.value = false; void loadRecent(); return; }
+  pageController?.abort(); pageController = undefined; loadingMore.value = false;
+  reachedOlder.value = false; reachedNewer.value = false;
+  if (!direction && live.value) void loadRecent();
   if (refresh && controller) { refreshQueued = true; return; }
   const margin = Math.max(15 * 60_000, span.value / 4);
   const step = Math.max(30 * 60_000, (loadedRange.end - loadedRange.start) / 2);
@@ -183,14 +213,14 @@ async function load(direction: -1 | 0 | 1 = 0, refresh = false) {
       })();
     if (pending.signal.aborted) return;
     const anchor = listDriving ? listAnchor() : undefined;
-    loadedRange = { start, end }; events.value = timeline.events; error.value = ""; hasLoaded.value = true;
-    // Tab-local, bounded warm preview; the owner is always revalidated on entry.
+    loadedRange = { start, end }; completeRange = true; events.value = timeline.events; error.value = ""; hasLoaded.value = true; cachedPreview.value = false;
+    // Bounded read-only preview; the owner is always revalidated on entry.
     clearTimeout(cacheTimer);
     const cacheRole = props.roleId;
     cacheTimer = setTimeout(() => {
       try {
-        const cached = JSON.stringify({ at: Date.now(), events: timeline.events.slice(-2000) });
-        if (cached.length <= 1_000_000) sessionStorage.setItem(`all-day-preview:${cacheRole}`, cached);
+        const cached = JSON.stringify({ at: Date.now(), events: timeline.events.slice(-200) });
+        if (cached.length <= 1_000_000) localStorage.setItem(`all-day-preview:${cacheRole}`, cached);
       } catch { /* Storage may be disabled or full; live reads remain authoritative. */ }
     },300);
     await nextTick();
@@ -210,6 +240,29 @@ async function load(direction: -1 | 0 | 1 = 0, refresh = false) {
       }
     }
   }
+}
+async function loadRecent() {
+  if (recentController || disposed) return;
+  const pending = new AbortController(); recentController = pending;
+  const timeout = setTimeout(() => pending.abort(), 8000);
+  const role = props.roleId;
+  try {
+    const result = await data<{ events: AllDayEvent[] }>("/recent", {}, pending.signal);
+    if (pending.signal.aborted || disposed || role !== props.roleId || !result.events.length) return;
+    if (!live.value) {
+      const updates = new Map(result.events.map(row => [row.id,row]));
+      events.value = events.value.map(row => updates.get(row.id) ?? row);
+      return;
+    }
+    events.value = [...new Map([...events.value, ...result.events].map(row => [row.id, row])).values()]
+      .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+    cachedPreview.value = false;
+    try {
+      const preview = JSON.stringify({ at: Date.now(), events: result.events.slice(-200) });
+      if (preview.length <= 1_000_000) localStorage.setItem(`all-day-preview:${role}`, preview);
+    } catch { /* Preview storage is optional; original records remain on the server. */ }
+  } catch { /* The full range request reports errors and remains authoritative. */ }
+  finally { clearTimeout(timeout); if (recentController === pending) recentController = undefined; }
 }
 async function action(name: "start" | "stop" | "settings") {
   if (name === "start" && state.value && !ALL_DAY_SOURCES.some(source => state.value!.settings.sources[source])) { openSettings(); return; }
@@ -246,23 +299,44 @@ function syncListToCursor() {
   }
   scrollListTo(index * rowStride);
 }
-function takeListControl() { stopMotion(); listDriving = true; expectedScrollTop = undefined; }
+function takeListControl() { stopMotion(); live.value = false; listDriving = true; expectedScrollTop = undefined; }
 async function browseList(event: WheelEvent) {
   takeListControl();
   const list = eventList.value;
   if (!list || !listEvents.value.length || loadingMore.value || performance.now() - lastEdgeLoad < 500) return;
-  const direction = event.deltaY < 0 && list.scrollTop < 24 ? 1
-    : event.deltaY > 0 && list.scrollTop >= (listEvents.value.length - 1) * rowStride - 24 ? -1 : 0;
-  if (!direction || (direction < 0 && loadedRange.start <= 0) || (direction > 0 && loadedRange.end >= Date.now())) return;
-  loadingMore.value = true; lastEdgeLoad = performance.now();
-  try { await load(direction); } finally { loadingMore.value = false; }
+  if (event.deltaY < 0 && list.scrollTop < rowStride * 2) void loadPage("newer");
+  if (event.deltaY > 0 && list.scrollTop + list.clientHeight >= listEvents.value.length * rowStride - rowStride * 2) void loadPage("older");
+}
+async function loadPage(direction: "older" | "newer") {
+  if (loadingMore.value || disposed || (direction === "older" ? reachedOlder.value : reachedNewer.value)) return;
+  const boundary = direction === "older" ? listEvents.value.at(-1) : listEvents.value[0];
+  const query = new URLSearchParams({ direction, time: String(boundary?.startedAt ?? Date.now()), id: boundary?.id ?? "\uffff", source: filter.value, type: eventType.value });
+  const pending = new AbortController(); pageController = pending; loadingMore.value = true;
+  controller?.abort(); clearTimeout(rangeTimer); lastEdgeLoad = performance.now();
+  try {
+    const page = await data<{events: AllDayEvent[]; hasMore: boolean}>(`/page?${query}`, {}, pending.signal);
+    if (pending.signal.aborted || disposed) return;
+    error.value = ""; hasLoaded.value = true;
+    const anchor = listAnchor();
+    const merged = [...new Map([...events.value, ...page.events].map(row => [row.id,row])).values()].sort((a,b) => a.startedAt-b.startedAt || a.id.localeCompare(b.id));
+    if (merged.length > 2000) completeRange = false;
+    events.value = direction === "older" ? merged.slice(0,2000) : merged.slice(-2000);
+    if (direction === "older") { reachedOlder.value = !page.hasMore; if (merged.length > 2000) reachedNewer.value = false; }
+    else { reachedNewer.value = !page.hasMore; if (merged.length > 2000) reachedOlder.value = false; }
+    await nextTick();
+    if (anchor) { const index = listEvents.value.findIndex(row => row.id === anchor.id); if (index >= 0) scrollListTo(index * rowStride-anchor.offset); }
+  } catch (failure) { if (!pending.signal.aborted) error.value = String(failure); }
+  finally { if (pageController === pending) { pageController = undefined; loadingMore.value = false; } }
 }
 function scrollEvents() {
   lastNavigation = performance.now();
   const list = eventList.value;
+  const previousTop = listScrollTop.value;
   listScrollTop.value = list?.scrollTop ?? 0;
   if (!list || (expectedScrollTop !== undefined && Math.abs(list.scrollTop - expectedScrollTop) < 1)) return;
   takeListControl();
+  if (list.scrollTop > previousTop && list.scrollTop + list.clientHeight >= listEvents.value.length * rowStride - rowStride * 2) void loadPage("older");
+  if (list.scrollTop < previousTop && list.scrollTop < rowStride * 2) void loadPage("newer");
   cancelAnimationFrame(listFrame);
   listFrame = requestAnimationFrame(() => {
     const anchor = listAnchor();
@@ -278,17 +352,44 @@ function position(time: number) {
   cursor.value = Math.max(0, Math.min(Date.now(), time));
   live.value = cursor.value >= Date.now() - 1000;
   const nearby = reviewWindow(indexedEvents.value,cursor.value - Math.max(15000,settings.value.intervalSeconds * 2500),cursor.value);
-  const match = latestReviewEvent(nearby.filter(item => item.kind !== "status"),filter.value);
+  const match = latestReviewEvent(nearby.filter(item => item.kind !== "status" && matchesFilter(item)),filter.value);
   selectedId.value = match?.id ?? "";
 }
 function select(event: AllDayEvent) { lastNavigation = 0; stopMotion(); takeTimelineControl(); live.value = false; cursor.value = event.startedAt; selectedId.value = event.id; void nextTick(syncListToCursor); }
+async function adjacentEvent(direction: "older" | "newer") {
+  if (navigatingEvent.value || disposed) return;
+  navigatingEvent.value = true;
+  stopMotion(); takeTimelineControl(); live.value = false; navigationMessage.value = "";
+  const role = props.roleId, source = filter.value, type = eventType.value, selected = selectedId.value;
+  const current = indexedEvents.value.byId.get(selected);
+  const anchor = { time: current?.startedAt ?? cursor.value, id: current?.id ?? (direction === "older" ? "\uffff" : "") };
+  const cached = adjacentLoadedEvent(events.value.filter(matchesFilter),anchor,direction,loadedRange,completeRange);
+  if (cached) { select(cached); navigatingEvent.value = false; return; }
+  controller?.abort(); recentController?.abort(); pageController?.abort(); clearTimeout(rangeTimer);
+  const pending = new AbortController(); navigationController = pending;
+  const timeout = setTimeout(() => pending.abort(),15000);
+  const query = new URLSearchParams({ direction, time: String(anchor.time), id: anchor.id, source, type });
+  try {
+    // Query the adjacent page so sparse loaded windows cannot skip unseen events.
+    const page = await data<{ events: AllDayEvent[] }>(`/page?${query}`,{},pending.signal);
+    if (disposed || role !== props.roleId || source !== filter.value || type !== eventType.value || selected !== selectedId.value) return;
+    const next = direction === "older" ? page.events.at(-1) : page.events[0];
+    if (!next) { navigationMessage.value = direction === "older" ? label('已到最早事件', 'First event reached') : label('已到最新事件', 'Latest event reached'); return; }
+    events.value = [...new Map([...events.value, ...page.events].map(row => [row.id,row])).values()]
+      .sort((a,b) => a.startedAt-b.startedAt || a.id.localeCompare(b.id));
+    if (events.value.length > 2000) { completeRange = false; events.value = direction === "older" ? events.value.slice(0,2000) : events.value.slice(-2000); }
+    error.value = "";
+    select(next);
+  } catch (failure) { if (!disposed && role === props.roleId) error.value = String(failure); }
+  finally { clearTimeout(timeout); if(navigationController === pending) navigationController = undefined; navigatingEvent.value = false; }
+}
 function jumpDate(value: string) {
   const time = new Date(`${value}T12:00:00`).getTime();
   if (!Number.isFinite(time)) return;
   stopMotion(); span.value = 86400_000; position(time);
 }
-function now() { stopMotion(); live.value = true; position(Date.now()); selectedId.value = latestReviewEvent(events.value,filter.value)?.id ?? ""; void load(); }
-function zoom(factor: number) { takeTimelineControl(); span.value = Math.max(30_000, Math.min(7 * 86400_000, span.value * factor)); }
+function now() { stopMotion(); live.value = true; position(Date.now()); selectedId.value = latestReviewEvent(events.value.filter(matchesFilter),filter.value)?.id ?? ""; void load(); }
+function zoom(factor: number) { takeTimelineControl(); span.value = Math.max(minSpan, Math.min(maxSpan, span.value * factor)); }
 function beginDrag(event: PointerEvent) {
   if (!ruler.value || event.button !== 0 || (event.target as HTMLElement).closest('button, input, audio')) return;
   stopMotion(); takeTimelineControl(); velocity = 0; lastX = event.clientX; lastMove = performance.now();
@@ -336,23 +437,28 @@ function animateClock() {
   liveFrame = requestAnimationFrame(animateClock);
 }
 liveFrame = requestAnimationFrame(animateClock);
-watch([cursor, selectedId, filter], () => { if (!listDriving) void nextTick(syncListToCursor); });
+watch([cursor, selectedId, filter, eventType], () => { navigationMessage.value = ""; if (!listDriving) void nextTick(syncListToCursor); });
+watch([filter,eventType], () => { pageController?.abort(); pageController = undefined; loadingMore.value = false; reachedOlder.value = false; reachedNewer.value = false; });
 watch([viewStart, viewEnd], () => {
+  if (listDriving || navigatingEvent.value) return;
   const range = requestedRange ?? loadedRange;
   if (viewStart.value >= range.start && viewEnd.value <= range.end) return;
   clearTimeout(rangeTimer); rangeTimer = setTimeout(() => void load(), 120);
 });
 function openSettings() { if (state.value) settings.value = structuredClone(toRaw(state.value.settings)); settingsOpen.value = true; }
 watch(() => props.roleId, () => {
+  pageController?.abort(); pageController = undefined; loadingMore.value = false; reachedOlder.value = false; reachedNewer.value = false;
+  recentController?.abort(); recentController = undefined; cachedPreview.value = false;
   clearImages(); clearTimeout(cacheTimer); live.value = true;
   statusController?.abort(); stateError.value = "";
   controller?.abort(); controller = undefined; refreshQueued = false; listScrollTop.value = 0; eventSource?.close(); clearTimeout(refreshTimer);
-  stopMotion(); loadedRange = { start: 0, end: 0 }; state.value = null; events.value = []; selectedId.value = ""; settingsOpen.value = false;
+  stopMotion(); loadedRange = { start: 0, end: 0 }; completeRange = false; navigationController?.abort(); state.value = null; events.value = []; selectedId.value = ""; settingsOpen.value = false;
   hasLoaded.value = false;
   try {
-    const cached = JSON.parse(sessionStorage.getItem(`all-day-preview:${props.roleId}`) || "null");
-    if (cached && Date.now() - cached.at < 300_000 && Array.isArray(cached.events)) {
-      events.value = cached.events.filter((item: AllDayEvent) => item && typeof item.id === 'string' && sources.value.some(source => source.id === item.source));
+    const cached = JSON.parse(localStorage.getItem(`all-day-preview:${props.roleId}`) || "null");
+    if (cached && Date.now() - cached.at < 86400_000 && Array.isArray(cached.events)) {
+      events.value = cached.events.filter((item: AllDayEvent) => item && typeof item.id === 'string' && isReviewEvent(item) && sources.value.some(source => source.id === item.source));
+      cachedPreview.value = events.value.length > 0;
     }
   } catch { /* Ignore an unavailable or invalid preview cache. */ }
   takeTimelineControl(); expectedScrollTop = undefined;
@@ -361,28 +467,33 @@ watch(() => props.roleId, () => {
   eventSource.addEventListener("all_day_recording", raw => {
     try { const event = JSON.parse((raw as MessageEvent).data); if (!event.mobile && event.roleId !== props.roleId) return; } catch { return; }
     if (document.hidden) { refreshQueued = true; return; }
-    if (controller) { refreshQueued = true; return; }
+    if (navigatingEvent.value) { refreshQueued = true; return; }
+    if (controller) { refreshQueued = true; if (live.value) void loadRecent(); return; }
     clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void load(0, true), 500);
   });
 }, { immediate: true });
 
 function resumeVisible() { if (!document.hidden && refreshQueued) { refreshQueued = false; void load(0, true); } }
 document.addEventListener("visibilitychange", resumeVisible);
-onBeforeUnmount(() => { disposed = true; clearImages(); clearTimeout(cacheTimer); statusController?.abort(); document.removeEventListener("visibilitychange", resumeVisible); stopMotion(); cancelAnimationFrame(listFrame); cancelAnimationFrame(liveFrame); clearTimeout(rangeTimer); controller?.abort(); eventSource?.close(); clearTimeout(refreshTimer); });
+onBeforeUnmount(() => recentController?.abort());
+onBeforeUnmount(() => pageController?.abort());
+onBeforeUnmount(() => { disposed = true; navigationController?.abort(); clearImages(); clearTimeout(cacheTimer); statusController?.abort(); document.removeEventListener("visibilitychange", resumeVisible); stopMotion(); cancelAnimationFrame(listFrame); cancelAnimationFrame(liveFrame); clearTimeout(rangeTimer); controller?.abort(); eventSource?.close(); clearTimeout(refreshTimer); });
 </script>
 
 <template>
   <section class="all-day" data-testid="persona-all-day-recording">
     <div class="recording-toolbar">
       <div><h2>{{ label('全天记录', 'All-day recording') }}</h2><span class="muted">{{ label('电脑与手机 · 时间轴和事件', 'Computer and mobile · Timeline and events') }}</span></div>
+    <div class="event-heading"><h3>{{ label('事件', 'Events') }} <span class="muted">{{ listEvents.length }}</span></h3><span v-if="loadingMore || fetching" role="status" class="muted">{{ label('正在加载…', 'Loading…') }}</span><v-select v-model="eventType" :items="[{id: 'all', name: label('全部类型','All types')}, {id: 'asr', name: label('ASR 事件','ASR events')}, {id: 'image', name: label('画面','Images')}, {id: 'window', name: label('窗口','Windows')}, {id: 'status', name: label('采集状态','Capture status')}]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选事件类型','Filter event types')" /><v-select v-model="filter" :items="[{ id: 'all', name: label('全部来源', 'All sources') }, ...sources]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选来源', 'Filter sources')" /><v-btn icon="mdi-refresh" variant="text" :aria-label="label('刷新记录', 'Refresh records')" @click="load(0, true)" /></div>
       <div class="toolbar-buttons">
-        <v-chip :color="state?.running ? 'success' : undefined" size="small" variant="tonal">{{ !state ? label('正在加载', 'Loading') : state.running ? label('正在记录', 'Recording') : label('已暂停', 'Paused') }}</v-chip>
-        <v-btn :disabled="busy || !state" :loading="busy" :color="state?.running ? 'warning' : 'secondary'" :prepend-icon="state?.running ? 'mdi-pause' : 'mdi-record-circle-outline'" @click="action(state?.running ? 'stop' : 'start')">{{ state?.running ? label('暂停记录', 'Pause') : label('开始记录', 'Start recording') }}</v-btn>
+        <v-chip :color="state?.running ? 'success' : undefined" size="small" variant="tonal">{{ !state ? label('正在加载', 'Loading') : state.activeRoleId && state.activeRoleId !== roleId ? label('其他人格记录中', 'Another persona is recording') : state.running ? state.error ? label('部分来源不可用', 'Some sources unavailable') : label('正在记录', 'Recording') : state.enabled ? label('等待启动', 'Waiting to start') : label('已关闭', 'Off') }}</v-chip>
+        <v-switch :model-value="state?.enabled ?? state?.running ?? false" :disabled="busy || !state || !!(state.activeRoleId && state.activeRoleId !== roleId)" :loading="busy" color="secondary" hide-details inset :label="label('开启记录', 'Enable recording')" @update:model-value="action($event ? 'start' : 'stop')" />
         <v-btn icon="mdi-cog-outline" variant="text" :aria-label="label('记录设置', 'Recording settings')" :disabled="!state" @click="openSettings" />
       </div>
     </div>
     <v-alert v-if="error || stateError || state?.error" type="error" variant="tonal">{{ error || stateError || state?.error }}</v-alert>
     <v-alert v-if="state?.activeRoleId && state.activeRoleId !== roleId" type="info" variant="tonal">{{ label('这台电脑正在为另一个人格记录：', 'This computer is recording for another persona: ') }}{{ state.activeRoleId }}</v-alert>
+    <span v-if="cachedPreview" class="muted" role="status">{{ label('已显示上次记录，正在更新…', 'Showing cached records. Updating…') }}</span>
     <div class="recording-workspace">
     <div class="review-column">
     <v-card class="app-card glass-card review-card">
@@ -391,7 +502,7 @@ onBeforeUnmount(() => { disposed = true; clearImages(); clearTimeout(cacheTimer)
         <div v-else-if="mediaUrl" class="preview-empty"><v-progress-circular v-if="imageLoading" indeterminate size="30" /><p>{{ imageError ? label('画面暂不可用', 'Image unavailable') : label('正在读取画面…', 'Loading image…') }}</p></div>
         <div v-else-if="selected" class="event-preview">
           <v-icon :icon="sourceInfo(selected.source).icon" size="38" :color="sourceInfo(selected.source).color" />
-          <p>{{ selected.text ? expandedText ? selected.text : selected.text.slice(0,600) : label('暂无转写', 'No transcript') }}</p>
+          <p>{{ selected.text ? expandedText ? selected.text : selected.text.slice(0,600) : selected.kind === 'audio' ? recordingState(selected) : label('暂无转写', 'No transcript') }}</p>
           <v-btn v-if="(selected.text?.length || 0) > 600" size="small" variant="text" @click="expandedText = !expandedText">{{ expandedText ? label('收起', 'Collapse') : label('展开全文', 'Read more') }}</v-btn>
           <audio v-if="audioUrl" :key="audioUrl" controls preload="none" :src="audioUrl" />
         </div>
@@ -404,11 +515,15 @@ onBeforeUnmount(() => { disposed = true; clearImages(); clearTimeout(cacheTimer)
     <div class="timeline-dock">
       <div class="date-toolbar">
         <input :value="date" :max="localDate(new Date())" type="date" :aria-label="label('跳转日期', 'Jump to date')" @change="jumpDate(($event.target as HTMLInputElement).value)" />
-        <v-spacer /><v-btn variant="text" @click="now">{{ label('回到实时', 'Live') }}</v-btn>
-        <v-btn icon="mdi-minus" variant="text" :aria-label="label('缩小时间轴', 'Zoom out')" @click="zoom(2)" />
-        <v-btn icon="mdi-plus" variant="text" :aria-label="label('放大时间轴', 'Zoom in')" @click="zoom(.5)" />
+        <v-spacer />
+        <v-btn variant="text" prepend-icon="mdi-chevron-left" :loading="navigatingEvent" :disabled="navigatingEvent" @click="adjacentEvent('older')">{{ label('上一个事件', 'Previous event') }}</v-btn>
+        <v-btn variant="text" append-icon="mdi-chevron-right" :loading="navigatingEvent" :disabled="navigatingEvent" @click="adjacentEvent('newer')">{{ label('下一个事件', 'Next event') }}</v-btn>
+        <v-btn variant="text" @click="now">{{ label('回到实时', 'Live') }}</v-btn>
+        <v-btn icon="mdi-minus" variant="text" :disabled="span >= maxSpan" :aria-label="label('缩小时间轴', 'Zoom out')" @click="zoom(2)" />
+        <v-btn icon="mdi-plus" variant="text" :disabled="span <= minSpan" :aria-label="label('放大时间轴', 'Zoom in')" @click="zoom(.5)" />
       </div>
-      <div ref="ruler" class="time-ruler" tabindex="0" role="group" :aria-label="label('记录时间尺，左右滚动回看，跨日连续浏览', 'Recording timeline, scroll across dates')" @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="drag = undefined" @pointerleave="leaveDrag" @wheel.prevent="wheel" @keydown.left.self.prevent="position(cursor - span / 4)" @keydown.right.self.prevent="position(cursor + span / 4)">
+      <div v-if="navigationMessage" class="navigation-message" role="status">{{ navigationMessage }}</div>
+      <div ref="ruler" class="time-ruler" tabindex="0" role="group" :aria-label="label('记录时间尺，左右方向键切换事件，滚动回看', 'Recording timeline, arrow keys select adjacent events, scroll to browse')" @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="drag = undefined" @pointerleave="leaveDrag" @wheel.prevent="wheel" @keydown.left.prevent="adjacentEvent('older')" @keydown.right.prevent="adjacentEvent('newer')">
         <div class="time-ticks"><time v-for="tick in ticks" :key="tick">{{ span >= 86400_000 ? localDate(new Date(tick)).slice(5) + " " : "" }}{{ formatTime(tick).slice(0, span < 300000 ? 8 : 5) }}</time></div>
         <div v-for="source in sources" :key="source.id" class="source-lane">
           <span class="lane-name">{{ source.name }}</span>
@@ -420,27 +535,28 @@ onBeforeUnmount(() => { disposed = true; clearImages(); clearTimeout(cacheTimer)
     </div>
     </div>
     <div class="events-column">
-    <div class="event-heading"><h3>{{ label('事件', 'Events') }} <span class="muted">{{ listEvents.length }}</span></h3><span v-if="loadingMore || fetching" role="status" class="muted">{{ label('正在加载…', 'Loading…') }}</span><v-select v-model="filter" :items="[{ id: 'all', name: label('全部来源', 'All sources') }, ...sources]" item-title="name" item-value="id" density="compact" hide-details variant="outlined" :aria-label="label('筛选来源', 'Filter sources')" /><v-btn icon="mdi-refresh" variant="text" :aria-label="label('刷新记录', 'Refresh records')" @click="load(0, true)" /></div>
     <div ref="eventList" class="events-scroller" tabindex="0" role="region" :aria-label="label('事件列表，滚动同步时间轴', 'Events, scrolling synchronizes the timeline')" @scroll.passive="scrollEvents" @wheel.passive="browseList" @touchstart.passive="takeListControl" @pointerdown="takeListControl" @keydown="takeListControl">
-    <div v-if="!listEvents.length" class="no-events">{{ !hasLoaded ? error ? label('记录读取失败，请重试', 'Could not load records. Please retry.') : label('正在读取最近记录…', 'Loading recent records…') : label('这个时间范围内没有已保存事件', 'No saved events in this time range') }}</div>
+    <div v-if="!listEvents.length" class="no-events">{{ !hasLoaded ? error ? label('记录读取失败，请重试', 'Could not load records. Please retry.') : label('正在读取最近记录…', 'Loading recent records…') : label('这个时间范围内没有已保存事件', 'No saved events in this time range') }}<v-btn variant="text" @click="takeListControl(); loadPage('older')">{{ label('查找更早记录', 'Find earlier records') }}</v-btn></div>
     <div v-if="listEvents.length" class="virtual-events" :style="{ height: `${listEvents.length * rowStride}px` }">
     <button v-for="(event, offset) in renderedEvents" :style="{ top: `${(virtualStart + offset) * rowStride}px` }" :key="event.id" :data-event-id="event.id" class="recording-event-row" :class="{ active: selectedId === event.id }" :aria-pressed="selectedId === event.id" @click="select(event)">
-      <time>{{ localDate(new Date(event.startedAt)) }}<br />{{ formatTime(event.startedAt) }}</time><v-icon :icon="sourceInfo(event.source).icon" :color="sourceInfo(event.source).color" /><div><b>{{ sourceInfo(event.source).name }}</b><p>{{ event.text?.slice(0,200) || label('已保存画面', 'Saved frame') }}</p></div><v-chip v-if="event.state === 'error'" size="small" color="error">{{ label('采集失败', 'Capture failed') }}</v-chip>
+      <time>{{ localDate(new Date(event.startedAt)) }}<br />{{ formatTime(event.startedAt) }}</time><v-icon :icon="sourceInfo(event.source).icon" :color="sourceInfo(event.source).color" /><div><b>{{ eventTitle(event) }}</b><p>{{ event.kind === 'audio' ? `${Math.max(0,(event.endedAt-event.startedAt)/1000).toFixed(1)} ${label('秒','s')} · ${recordingState(event)} · ` : '' }}{{ event.text?.slice(0,200) || (event.kind === 'audio' ? '' : label('已保存画面', 'Saved frame')) }}</p></div><v-chip v-if="event.state === 'error'" size="small" color="error">{{ label('采集失败', 'Capture failed') }}</v-chip>
     </button>
     </div>
+    <span v-if="reachedOlder" class="muted">{{ label('已到最早记录', 'Beginning of records') }}</span>
     </div>
     </div>
     </div>
     <v-dialog v-model="settingsOpen" max-width="560">
       <v-card class="section-card"><v-card-title>{{ label('记录设置', 'Recording settings') }}</v-card-title><v-card-text>
         <p>{{ label('屏幕和摄像头按间隔保存画面；麦克风复用语音服务的监听，暂停记录不会停止原有监听。', 'Screen and camera save periodic frames. Microphone uses the Speech service recording and transcription settings.') }}</p>
-        <v-switch v-for="source in ALL_DAY_SOURCES" :key="source" v-model="settings.sources[source]" :label="sourceInfo(source).name" color="secondary" :disabled="state?.running" hide-details />
-        <v-text-field v-model.number="settings.intervalSeconds" type="number" :min="10" :max="3600" :label="label('画面采样间隔（秒）', 'Frame interval (seconds)')" :disabled="state?.running" class="mt-4" />
-        <v-text-field v-if="settings.sources.camera" v-model.number="settings.cameraIndex" type="number" :min="0" :max="16" :label="label('摄像头编号（默认 0）', 'Camera index (default 0)')" :disabled="state?.running" />
+        <v-switch v-for="source in ALL_DAY_SOURCES" :key="source" v-model="settings.sources[source]" :label="sourceInfo(source).name" color="secondary" :disabled="busy" hide-details />
+        <p v-for="(message, source) in state?.sourceErrors" :key="source" class="muted">{{ sourceInfo(source).name }}：{{ message }}</p>
+        <v-text-field v-model.number="settings.intervalSeconds" type="number" :min="10" :max="3600" :label="label('画面采样间隔（秒）', 'Frame interval (seconds)')" :disabled="busy" class="mt-4" />
+        <v-text-field v-if="settings.sources.camera" v-model.number="settings.cameraIndex" type="number" :min="0" :max="16" :label="label('摄像头编号（默认 0）', 'Camera index (default 0)')" :disabled="busy" />
         <v-select v-model="settings.mobileDeviceIds" :items="state?.devices || []" :item-title="device => `${label('手机', 'Mobile')} ${device.id.slice(0, 8)}`" item-value="id" multiple chips :label="label('汇总这些手机的事件', 'Include events from these phones')" :disabled="state?.running" />
         <p v-if="!state?.devices?.length" class="muted">{{ label('尚未收到手机事件。更新手机端并完成一次转写后，再选择设备。', 'No mobile events received. Update the phone app and complete a transcription, then select the device.') }}</p>
-        <p class="muted">{{ label('保存设置不会启动采集。暂停或重启后，需要手动开始。原始记录不会自动删除。', 'Saving does not start capture. Resume manually after pausing or restarting. Original records are not automatically deleted.') }}</p>
-      </v-card-text><v-card-actions><v-spacer /><v-btn @click="settingsOpen = false">{{ label('取消', 'Cancel') }}</v-btn><v-btn color="secondary" :loading="busy" :disabled="state?.running" @click="action('settings')">{{ label('保存设置', 'Save settings') }}</v-btn></v-card-actions></v-card>
+        <p class="muted">{{ label('总开关开启后，下次启动软件自动恢复记录。运行中保存设备设置立即生效；设备不可用时继续记录其他来源。', 'When enabled, recording resumes on application startup. Save source changes while running; unavailable devices do not stop other sources.') }}</p>
+      </v-card-text><v-card-actions><v-spacer /><v-btn @click="settingsOpen = false">{{ label('取消', 'Cancel') }}</v-btn><v-btn color="secondary" :loading="busy" :disabled="busy" @click="action('settings')">{{ label('保存设置', 'Save settings') }}</v-btn></v-card-actions></v-card>
     </v-dialog>
   </section>
 </template>
@@ -451,8 +567,9 @@ onBeforeUnmount(() => { disposed = true; clearImages(); clearTimeout(cacheTimer)
   .recording-workspace { grid-template-columns: minmax(0,3fr) minmax(320px,2fr); align-items: start; }
   .review-column,.events-column { position: sticky; top: calc(var(--v-layout-top,64px) + 12px); }
   .review-column .recording-preview { height: clamp(180px, calc(100dvh - var(--v-layout-top,64px) - 300px), 330px); }
-  .events-column .event-heading { flex-wrap: wrap; }
-  .events-column { --event-list-height: clamp(240px, calc(100dvh - var(--v-layout-top,64px) - 110px), 1100px); }
+  .recording-toolbar .event-heading { flex: 1 1 360px; max-width: 550px; margin-left: auto; }
+  .events-column { contain: size; align-self: stretch; grid-template-rows: minmax(0,1fr); align-content: normal; min-height: 0; --event-list-height: 100%; }
+  .events-column .events-scroller { min-height: 0; }
 }
 @media(max-width: 999px) { .review-card { position: sticky; top: calc(var(--v-layout-top,64px) + 8px); z-index: 5; } }
 .all-day { display: grid; gap: 18px; --event-list-height: clamp(180px, calc(100dvh - var(--v-layout-top, 64px) - 400px), 520px); }
@@ -467,7 +584,8 @@ h2 { font-size: 22px; } .muted { color: rgb(var(--v-theme-on-surface)); opacity:
 .event-preview { text-align: center; padding: 28px; max-height: 290px; overflow: auto; max-width: 800px; display: grid; gap: 16px; justify-items: center; }
 .preview-time { position: absolute; left: 20px; top: 16px; font-variant-numeric: tabular-nums; padding: 4px 9px; background: #111c26cc; border-radius: 6px; }
 .preview-progress { position: absolute; bottom: 14px; right: 14px; padding: 5px 10px; border-radius: 6px; background: #111c26dd; font-size: 12px; }
-.date-toolbar { padding: 8px 14px; } .date-toolbar input { color: inherit; color-scheme: dark; padding: 8px; border-radius: 6px; }
+.date-toolbar { padding: 8px 14px; flex-wrap: wrap; } .date-toolbar input { color: inherit; color-scheme: dark; padding: 8px; border-radius: 6px; }
+.navigation-message { padding: 0 14px 8px; font-size: 12px; opacity: .7; }
 .time-ruler { position: relative; margin: 0 28px 0 110px; padding: 30px 0 12px; touch-action: pan-y; cursor: grab; user-select: none; }
 .time-ticks { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; font-size: 11px; opacity: .65; pointer-events: none; }
 .source-lane { height: 22px; position: relative; border-bottom: 1px solid #8197a215; }
@@ -480,7 +598,7 @@ h2 { font-size: 22px; } .muted { color: rgb(var(--v-theme-on-surface)); opacity:
 .events-scroller::after { content: ''; flex: 0 0 calc(var(--event-list-height) - 80px); }
 .virtual-events { position: relative; flex: 0 0 auto; }
 .recording-event-row { position: absolute; height: 80px; overflow: hidden; cursor: pointer; }
-.event-heading h3 { flex: 1; } .event-heading .v-select { max-width: 200px; }
+.event-heading { min-width: 0; flex-wrap: wrap; } .event-heading h3 { flex: 1; white-space: nowrap; } .event-heading .v-select { max-width: 200px; }
 .recording-event-row { display: flex; align-items: center; gap: 18px; width: 100%; padding: 14px 18px; border: 1px solid #829aaa22; border-radius: 12px; text-align: left; }
 .recording-event-row.active { background: #65cde412; border-color: #65cde470; }
 .recording-event-row time { font-size: 12px; opacity: .65; font-variant-numeric: tabular-nums; }

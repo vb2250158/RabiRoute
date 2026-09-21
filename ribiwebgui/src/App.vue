@@ -146,7 +146,6 @@ const routeOptions = computed(() => store.gateways.map(gateway => {
   const title = gatewayPersonaDisplayName(gateway, runtime.roleInfo);
   return { title, value: gateway.id };
 }));
-const selectedGatewayName = computed(() => selectedRouteKey.value || "未选择路由");
 
 function pageSaveState(): WebCommandState {
   return {
@@ -374,7 +373,6 @@ function selectGateway(id: string): void {
       <div class="topbar-context" :class="{ 'has-route-switcher': showRouteSwitcher }">
         <v-toolbar-title class="topbar-title">
           <div class="font-weight-bold">{{ pageTitle }}</div>
-          <div class="topbar-subtitle">{{ selectedGatewayName }}</div>
         </v-toolbar-title>
         <div id="page-topbar-controls" class="topbar-page-controls" />
         <v-select

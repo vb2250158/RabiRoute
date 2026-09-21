@@ -9,16 +9,23 @@ import type { SpeechModel } from "@shared/speechControlContract";
 import { readDraft, writeDraft } from "./videoDraftStorage";
 import { useVideoCanvas } from "./useVideoCanvas";
 import { managerEventSource, managerResourceUrl } from "../managerApi";
+import VideoGenerationProgress from "../components/VideoGenerationProgress.vue";
+import type { VideoProgressJob } from "./videoJobProgress";
 
 type WorkflowProfile = { kind?: string; label: string; steps: number };
 type Model = { workflows?: Record<string, WorkflowProfile>; defaultWorkflow?: string; id: string; label: string; mode?: string; fps: number; width: number; height: number; frames: number };
 type AssetKind = "image" | "video" | "audio";
 type Asset = { id: string; kind: AssetKind; width?: number; height?: number; duration?: number; hasAudio?: boolean };
-type Job = { quickGeneration?: boolean; workflowId?: string; samplingSteps?: number; id: string; prompt: string; model?: string; width?: number; height?: number; frames?: number; seed?: number; references?: string[]; generateAudio?: boolean; referenceVideoSound?: boolean; hasFirstFrame?: boolean; hasLastFrame?: boolean; status: string; progress: number; createdAt: string; error?: string; videoUrl?: string; imageUrl?: string; mediaKind?: string };
+type Job = VideoProgressJob & { quickGeneration?: boolean; workflowId?: string; samplingSteps?: number; id: string; prompt: string; model?: string; width?: number; height?: number; frames?: number; seed?: number; references?: string[]; generateAudio?: boolean; referenceVideoSound?: boolean; hasFirstFrame?: boolean; hasLastFrame?: boolean; progress: number; error?: string; videoUrl?: string; imageUrl?: string; mediaKind?: string };
 type Snapshot = { availableWorkflows?: { model: string; workflowId: string; generateAudio: boolean }[]; online: boolean; availableModels?: string[]; models: Model[]; states: Record<string, { label: string; terminal: boolean }>; jobs: Job[] };
 const snapshot = ref<Snapshot>();
-type ModelManagement = { runtimeInstalled: boolean; models: { id: string; label: string; bytes: number; installed: boolean }[]; job: { kind: string; state: string; bytes: number; total: number; message?: string } | null };
-type Directories = { revision: number; modelRoot: string | null; effectiveModelRoot: string; defaultModelRoot: string };
+type ModelFile = { name: string; bytes: number; installed: boolean; state: string };
+type ModelManagement = { runtimeInstalled: boolean; models: { id: string; label: string; bytes: number; installed: boolean; files: ModelFile[]; workflows?: { id: string; label: string; installed: boolean; missingFiles: string[] }[] }[]; job: { kind: string; state: string; bytes: number; total: number; message?: string; currentFile?: string } | null };
+type Directories = { revision: number; modelRoot: string | null; effectiveModelRoot: string; defaultModelRoot: string; layout: string };
+type InitializationPlan = { revision: number; modelRoot: string; downloadBytes: number; additionalBytes: number; availableBytes: number; canDownload: boolean; errors: string[]; files: (ModelFile & { relative: string })[] };
+const initialization = ref<InitializationPlan>();
+const directoryChanged = computed(() => modelDirectory.value.trim() !== (directories.value?.modelRoot || ""));
+const sizeLabel = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 const management = ref<ModelManagement>();
 const directories = ref<Directories>();
 const modelDirectory = ref("");
@@ -33,7 +40,17 @@ async function openModels() {
   modelDirectory.value = directories.value.modelRoot || "";
 }
 async function saveDirectory() {
-  directories.value = await request<Directories>("/models/settings", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelRoot: modelDirectory.value.trim() || null, expectedRevision: directories.value?.revision }) });
+  initialization.value = undefined;
+  directories.value = await request<Directories>("/models/settings", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ modelRoot: modelDirectory.value.trim() || null, layout: "categorized", expectedRevision: directories.value?.revision }) });
+  await refreshModels();
+}
+async function previewInitialization() {
+  initialization.value = undefined;
+  initialization.value = await request<InitializationPlan>("/models/initialization");
+}
+async function initializeModels() {
+  await request("/models/initialize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRevision: initialization.value?.revision }) });
+  initialization.value = undefined;
   await refreshModels();
 }
 async function install(route: string) { await request(route, { method: "POST" }); await refreshModels(); }
@@ -51,7 +68,7 @@ const references = ref<Asset[]>([]), uploading = ref(false);
 const quickGeneration = ref(false);
 const generateAudio = ref(false), referenceVideoSound = ref(false);
 const referenceKinds: { id: AssetKind; label: string; icon: string; accept: string; limit: number; bytes: number }[] = [
-  { id: "image", label: "图片", icon: "mdi-image-outline", accept: "image/png", limit: 9, bytes: 9 * 1024 ** 2 },
+  { id: "image", label: "图片", icon: "mdi-image-outline", accept: "image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif", limit: 9, bytes: 9 * 1024 ** 2 },
   { id: "video", label: "视频", icon: "mdi-video-outline", accept: "video/mp4", limit: 3, bytes: 64 * 1024 ** 2 },
   { id: "audio", label: "音频", icon: "mdi-music-note-outline", accept: ".wav", limit: 3, bytes: 16 * 1024 ** 2 },
 ];
@@ -412,7 +429,6 @@ const inputProblem = computed(() => {
   if (mode.value === "reference" && !references.value.length) return "请添加图片、视频或音频参考。";
   if (snapshot.value?.online && !snapshot.value.availableModels?.includes(model.value)) return "当前方案尚未就绪，请在模型管理中检查下载，并重启视频服务。";
   if (mode.value === "image" && !firstFrame.value && !lastFrame.value) return "请添加首帧或尾帧。";
-  if (mode.value === "image" && Object.values(frameShapes.value).some(shape => shape !== `${width.value}×${height.value}`)) return "图片尺寸须与所选画幅和清晰度一致，请调整图片或切换预设。";
   if (![width.value, height.value].every(value => Number.isSafeInteger(value) && value >= 256 && value % 32 === 0) || width.value * height.value > 1032192) return "宽高须为 32 的倍数，总像素不超过 1032192。";
   if (!Number.isSafeInteger(frames.value) || frames.value < 22 || frames.value > 260 || (frames.value - 5) % 17 !== 0) return "帧数须为 17k+5，范围 22–260。";
   if (!Number.isSafeInteger(seed.value) || seed.value < 0) return "随机种子须为非负整数。";
@@ -472,22 +488,49 @@ async function action(operation: () => Promise<unknown>) {
   catch (failure) { error.value = failure instanceof Error ? failure.message : "请求失败。"; }
   finally { busy.value = false; }
 }
+async function pngBase64FromBitmap(bitmap: ImageBitmap) {
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width; canvas.height = bitmap.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("无法编码图片。");
+  context.drawImage(bitmap, 0, 0);
+  const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error("无法编码 PNG。")), "image/png"));
+  const buffer = new Uint8Array(await blob.arrayBuffer());
+  let encoded = "";
+  for (let i = 0; i < buffer.length; i += 0x8000) encoded += String.fromCharCode(...buffer.subarray(i, i + 0x8000));
+  return btoa(encoded);
+}
+function isPngBase64(value: string) {
+  return value.startsWith("iVBORw0KGgo");
+}
+async function ensurePngBase64(value: string) {
+  if (isPngBase64(value)) return value;
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const bitmap = await createImageBitmap(new Blob([bytes]));
+  try { return await pngBase64FromBitmap(bitmap); } finally { bitmap.close(); }
+}
 async function loadImage(event: Event, first: boolean) {
   const file = (event.target as HTMLInputElement).files?.[0];
   (event.target as HTMLInputElement).value = "";
   if (!file) return;
-  if (file.type !== "image/png" || file.size > 9 * 1024 * 1024) { error.value = "请选择不超过 9 MB 的 PNG。"; return; }
+  if (file.size > 9 * 1024 * 1024) { error.value = "请选择不超过 9 MB 的图片。"; return; }
   try {
-    const encoded = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1]); reader.onerror = reject; reader.readAsDataURL(file);
-    });
     const bitmap = await createImageBitmap(file);
-    frameShapes.value[first ? "first" : "last"] = `${bitmap.width}×${bitmap.height}`; bitmap.close();
+    const sourceWidth = bitmap.width, sourceHeight = bitmap.height;
+    if (sourceWidth > 4096 || sourceHeight > 4096) { bitmap.close(); error.value = "首尾帧图片宽高不能超过 4096 像素。"; return; }
+    const encoded = await pngBase64FromBitmap(bitmap); bitmap.close();
+    frameShapes.value[first ? "first" : "last"] = `${sourceWidth}×${sourceHeight}`;
     if (first) { firstFrame.value = encoded; firstName.value = file.name; } else { lastFrame.value = encoded; lastName.value = file.name; }
-  } catch { error.value = "图片读取失败，请重新选择。"; }
+  } catch { error.value = "图片读取失败，请重新选择 PNG、JPEG、WebP 或 GIF。"; }
 }
 async function submit() {
   if (inputProblem.value) throw new Error(inputProblem.value);
+  if (mode.value === "image") {
+    if (firstFrame.value) firstFrame.value = await ensurePngBase64(firstFrame.value);
+    if (lastFrame.value) lastFrame.value = await ensurePngBase64(lastFrame.value);
+  }
   const body = JSON.stringify({ model: model.value, prompt: prompt.value, width: width.value, height: height.value, frames: frames.value, seed: seed.value, quickGeneration: quickGeneration.value, generateAudio: generateAudio.value, ...(mode.value === "reference" ? { references: references.value.map(asset => asset.id), referenceVideoSound: referenceVideoSound.value } : {}), ...(mode.value === "image" && firstFrame.value ? { firstFrame: firstFrame.value } : {}), ...(mode.value === "image" && lastFrame.value ? { lastFrame: lastFrame.value } : {}) });
   if (!pendingSubmission || pendingSubmission.body !== body) pendingSubmission = { body, key: crypto.randomUUID() };
   const result = await request<Job>("/jobs", { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": pendingSubmission.key }, body });
@@ -612,7 +655,10 @@ onMounted(() => {
       if (value.name === "video.models") { if (showModels.value) void refreshModels().catch(() => { error.value = "无法更新模型状态。"; }); return; }
       if (value.name === "video.progress") {
         const job = snapshot.value?.jobs.find(item => item.id === value.data.jobId);
-        if (job) job.progress = value.data.progress;
+        if (job && ['queued', 'running'].includes(job.status)) {
+          const { progress, progressStage, progressValue, progressMax, progressUnit, startedAt } = value.data;
+          Object.assign(job, { status: 'running', progress, progressStage, progressValue, progressMax, progressUnit, startedAt: startedAt || job.startedAt });
+        }
       } else if (value.name === "video.changed") void refresh().catch(() => { error.value = "任务状态更新失败，请刷新。"; });
     } catch { error.value = "任务事件读取失败，请刷新。"; }
   });
@@ -647,15 +693,28 @@ onBeforeUnmount(() => { disposed = true; events?.close(); for (const url of gene
       <v-card title="媒体模型管理" class="pa-4">
         <v-card-text>
           <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-          <v-text-field v-model="modelDirectory" label="模型目录" :placeholder="directories?.defaultModelRoot" hint="留空使用默认目录。修改目录不会移动已有模型。" persistent-hint :disabled="busy || installing || snapshot?.online" />
+          <v-text-field v-model="modelDirectory" label="模型主目录" :placeholder="directories?.defaultModelRoot" hint="视频使用 video/minimax-h3，图像使用 image/comfyui。留空使用程序默认目录。" persistent-hint :disabled="busy || installing || snapshot?.online" @update:model-value="initialization = undefined" />
           <p v-if="directories" class="video-hint">当前目录：{{ directories.effectiveModelRoot }}</p>
+          <p v-if="directories?.modelRoot && directories.layout === 'flat'" class="video-hint">当前为旧版平铺目录；保存主目录后按图像、视频分类查找。已有文件不会移动。</p>
           <v-btn variant="outlined" :disabled="busy || installing || snapshot?.online || !directories" @click="action(saveDirectory)">保存目录</v-btn>
+          <v-btn class="ml-2" color="primary" :disabled="busy || installing || snapshot?.online || !directories || directoryChanged" @click="action(previewInitialization)">初始化服务器环境所需模型</v-btn>
+          <p v-if="directoryChanged" class="video-hint">请先保存模型主目录。</p>
+          <v-card v-if="initialization" variant="outlined" class="mt-4 pa-3" aria-label="模型初始化空间确认">
+            <p>下载目录：{{ initialization.modelRoot }}</p>
+            <p>需要下载：{{ sizeLabel(initialization.downloadBytes) }} · 新增占用：{{ sizeLabel(initialization.additionalBytes) }} · 磁盘剩余：{{ sizeLabel(initialization.availableBytes) }}</p>
+            <p class="video-hint">只下载当前媒体服务清单中的缺失权重，共用文件只下载一次；不改动已有 TTS / ASR 配置。</p>
+            <v-alert v-for="message in initialization.errors" :key="message" type="error" variant="tonal" class="my-2">{{ message }}</v-alert>
+            <ul><li v-for="file in initialization.files.filter(file => !file.installed)" :key="file.relative">{{ file.relative }} · {{ sizeLabel(file.bytes) }} · {{ file.state === 'invalid' ? '文件损坏或大小不符' : '缺失' }}</li></ul>
+            <p v-if="!initialization.downloadBytes">所需模型已齐全，无需下载。</p>
+            <v-btn v-if="initialization.downloadBytes" color="primary" :disabled="busy || installing || snapshot?.online || !initialization.canDownload" @click="action(initializeModels)">开始下载</v-btn>
+          </v-card>
           <v-divider class="my-5" />
           <div class="video-heading"><strong>媒体运行环境</strong><v-btn :disabled="busy || installing || snapshot?.online || management?.runtimeInstalled" @click="action(() => install('/models/runtime'))">{{ management?.runtimeInstalled ? '已安装' : '安装运行环境' }}</v-btn></div>
           <p class="video-hint">需要 NVIDIA CUDA 显卡。首次安装会下载 Python、ComfyUI 和推理依赖。</p>
-          <div v-for="item in management?.models || []" :key="item.id" class="video-heading"><div><strong>{{ item.label }}</strong><p>{{ (item.bytes / 1024 ** 3).toFixed(1) }} GiB · {{ item.installed ? '已下载' : '未下载完整' }}</p></div><v-btn :disabled="busy || installing || snapshot?.online || item.installed" @click="action(() => install(`/models/${item.id}/download`))">{{ item.installed ? '已下载' : '下载模型' }}</v-btn></div>
+          <div v-for="item in management?.models || []" :key="item.id" class="video-heading"><div><strong>{{ item.label }}</strong><p>{{ sizeLabel(item.bytes) }} · {{ item.installed ? '已下载' : '部分依赖缺失' }}</p><p v-for="workflow in item.workflows || []" :key="workflow.id">{{ workflow.label }}：{{ workflow.installed ? '依赖齐全' : `缺少 ${workflow.missingFiles.join('、')}` }}</p><p v-for="file in item.files.filter(file => !file.installed)" :key="file.name" class="text-error">{{ file.state === 'invalid' ? '文件损坏或大小不符' : '缺失' }}：{{ file.name }}</p></div><v-btn :disabled="busy || installing || snapshot?.online || item.installed || directoryChanged" @click="action(() => install(`/models/${item.id}/download`))">{{ item.installed ? '已下载' : '下载模型' }}</v-btn></div>
           <v-progress-linear v-if="installing" :model-value="management?.job?.total ? management.job.bytes / management.job.total * 100 : 0" :indeterminate="!management?.job?.total" color="primary" />
           <p v-if="management?.job" role="status">{{ management.job.state === 'running' ? '正在安装，请保持程序运行' : management.job.state === 'completed' ? '安装完成' : management.job.message }}</p>
+          <p v-if="installing && management?.job?.currentFile" role="status">{{ management.job.currentFile }} · {{ sizeLabel(management.job.bytes) }} / {{ sizeLabel(management.job.total) }}</p>
           <p v-if="snapshot?.online" class="video-hint">停止视频服务后可以修改目录或安装。</p>
         </v-card-text>
         <v-card-actions><v-btn @click="action(refreshModels)">刷新状态</v-btn><v-spacer /><v-btn @click="showModels = false">关闭</v-btn></v-card-actions>
@@ -723,7 +782,7 @@ onBeforeUnmount(() => { disposed = true; events?.close(); for (const url of gene
         <button class="canvas-drag-handle" :aria-label="`移动${activeVideo.title}`" @click="selectCard(activeVideo)" @keydown="canvas.nudge($event,activeVideoId)"><v-icon icon="mdi-video-outline" size="16" />{{ activeVideo.title }}<v-icon icon="mdi-drag" size="16" /></button>
         <div class="preview-stage">
           <video v-if="canvasVideoUrl(activeVideo)" :key="activeVideo.id" :src="canvasVideoUrl(activeVideo)" controls preload="metadata" @pointerdown.stop />
-          <div v-else class="preview-empty"><v-icon :icon="selected ? 'mdi-movie-open-outline' : 'mdi-play-box-outline'" size="32" /><h2>{{ selected ? snapshot?.states[selected.status]?.label || selected.status : '让想象成为镜头' }}</h2><p>{{ selected?.error || (selected ? '生成结果会出现在这里' : '从一段描述或参考素材开始') }}</p><label v-if="!selected" class="card-upload-button" @pointerdown.stop>上传视频<input type="file" accept="video/mp4" aria-label="上传当前视频素材" :disabled="busy || uploading" @change="uploadCanvasAsset($event,activeVideo)" /></label><v-progress-linear v-if="selected?.status==='running'" :model-value="selected.progress*100" :indeterminate="!selected.progress" color="primary" /></div>
+          <div v-else class="preview-empty"><v-icon :icon="selected ? 'mdi-movie-open-outline' : 'mdi-play-box-outline'" size="32" /><h2>{{ selected ? snapshot?.states[selected.status]?.label || selected.status : '让想象成为镜头' }}</h2><p>{{ selected?.error || (selected ? '生成结果会出现在这里' : '从一段描述或参考素材开始') }}</p><label v-if="!selected" class="card-upload-button" @pointerdown.stop>上传视频<input type="file" accept="video/mp4" aria-label="上传当前视频素材" :disabled="busy || uploading" @change="uploadCanvasAsset($event,activeVideo)" /></label><VideoGenerationProgress v-if="selected && ['running','queued'].includes(selected.status)" :job="selected" /></div>
         </div>
         <div v-if="selected" class="result-details"><div class="result-actions"><v-chip size="small" variant="tonal">{{ snapshot?.states[selected.status]?.label || selected.status }}</v-chip><span class="video-hint">{{ selected.width }} × {{ selected.height }} · {{ ((selected.frames || 0)/24).toFixed(2) }} 秒</span><v-spacer /><v-btn v-if="selected.videoUrl" :href="managerResourceUrl(selected.videoUrl)" :download="`${selected.id}.mp4`" variant="outlined" size="small" prepend-icon="mdi-download">下载</v-btn><v-btn variant="text" size="small" @click="copyPrompt(selected)">复制提示词</v-btn><v-btn variant="tonal" size="small" @click="reuse(selected)">复用参数</v-btn><v-btn v-if="selected.status==='queued'" variant="text" size="small" :disabled="busy" @click="cancelSelected">取消排队</v-btn></div><details class="result-prompt"><summary>生成提示词</summary><p class="video-prompt">{{ selected.prompt }}</p></details></div>
       <section v-show="selectedIds.length===1 && selectedIds.includes(activeVideoId)" class="composer" aria-label="视频创作">
@@ -738,8 +797,8 @@ onBeforeUnmount(() => { disposed = true; events?.close(); for (const url of gene
                 <img v-if="first ? firstFrame : lastFrame" :src="`data:image/png;base64,${first ? firstFrame : lastFrame}`" :alt="first ? '首帧预览' : '尾帧预览'" />
                 <v-icon v-else icon="mdi-image-plus-outline" size="28" />
                 <strong>{{ first ? '添加首帧' : '添加尾帧' }}</strong>
-                <small>{{ first ? frameShapes.first || 'PNG · 最大 9 MB' : frameShapes.last || '可选 · PNG' }}</small>
-                <input type="file" accept="image/png" :aria-label="first ? '上传首帧' : '上传尾帧'" @change="event => loadImage(event, first)" />
+                <small>{{ first ? frameShapes.first || '图片 · 最大 9 MB' : frameShapes.last || '可选 · 图片' }}</small>
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" :aria-label="first ? '上传首帧' : '上传尾帧'" @change="event => loadImage(event, first)" />
               </label>
               <button v-if="first ? firstFrame : lastFrame" class="text-action" @click="clearImage(first)">移除{{ first ? '首帧' : '尾帧' }}</button>
             </div>
@@ -789,7 +848,7 @@ onBeforeUnmount(() => { disposed = true; events?.close(); for (const url of gene
           <v-btn size="small" variant="text" :aria-pressed="quickGeneration" :disabled="!selectedWorkflow" prepend-icon="mdi-lightning-bolt" @click="quickGeneration=!quickGeneration">{{ quickGeneration ? '快速' : '标准' }}</v-btn>
           <v-btn class="generate-button" size="small" color="white" icon="mdi-arrow-up" aria-label="生成视频" :disabled="busy || uploading || !snapshot?.online || !prompt.trim() || !!inputProblem" :loading="busy" @click="action(submit)" />
         </div>
-        <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!snapshot?.online" class="video-hint">请先启动顶部的视频服务。</p><p v-else-if="!prompt.trim()" class="video-hint">写下提示词，开始创作。</p></div>
+        <div class="generate-feedback" role="status"><p v-if="inputProblem" class="input-warning">{{ inputProblem }}</p><p v-else-if="!snapshot?.online" class="video-hint">请先启动顶部的视频服务。</p><p v-else-if="!prompt.trim()" class="video-hint">写下提示词，开始创作。</p><p v-else-if="mode === 'image'" class="video-hint">自动适配至 {{ width }}×{{ height }} · 等比缩放，必要时补黑边，保留完整画面。</p></div>
       </section>
       </div>
       </div>

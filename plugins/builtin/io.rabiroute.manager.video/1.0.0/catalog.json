@@ -2,6 +2,7 @@
   "models": [
     {
       "id": "minimax-h3-fl2va",
+      "directory": "video/minimax-h3",
       "label": "MiniMax H3 · 文生与首尾帧",
       "fps": 24,
       "width": 768,
@@ -69,6 +70,7 @@
     },
     {
       "id": "minimax-h3-ref2va",
+      "directory": "video/minimax-h3",
       "label": "MiniMax H3 · 多模态参考",
       "fps": 24,
       "width": 768,
@@ -120,6 +122,7 @@
     },
     {
       "id": "z-image-turbo",
+      "directory": "image/comfyui",
       "label": "Z-Image Turbo",
       "mode": "image",
       "width": 1024,
@@ -144,6 +147,26 @@
       "downloadBase": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files"
     }
   ],
+  "progressStages": {
+    "LoadImage": { "label": "读取图片" },
+    "LoadVideo": { "label": "读取视频" },
+    "LoadAudio": { "label": "读取音频" },
+    "ResizeAndPadImage": { "label": "适配图片尺寸" },
+    "UNETLoader": { "label": "加载生成模型" },
+    "CLIPLoader": { "label": "加载文本编码器" },
+    "VAELoader": { "label": "加载编解码器" },
+    "LoraLoaderModelOnly": { "label": "加载加速模型" },
+    "CLIPTextEncode": { "label": "编码提示词" },
+    "MiniMaxH3ImageToVideo": { "label": "编码提示词与首尾帧" },
+    "MiniMaxH3ReferenceToVideo": { "label": "编码提示词与参考素材" },
+    "SamplerCustomAdvanced": { "label": "采样", "unit": "步" },
+    "KSampler": { "label": "采样", "unit": "步" },
+    "VAEDecode": { "label": "解码画面" },
+    "VAEDecodeAudio": { "label": "解码音频" },
+    "CreateVideo": { "label": "合成视频" },
+    "SaveVideo": { "label": "编码并保存视频" },
+    "SaveImage": { "label": "保存图片" }
+  },
   "states": {
     "queued": {
       "label": "排队中",

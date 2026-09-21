@@ -51,6 +51,25 @@ class AllDayCaptureTests(unittest.TestCase):
     def test_defaults_never_open_hardware(self):
         self.assertEqual(capture_sources({}, 0), [])
 
+    def test_disconnected_microphone_reopens_same_session(self):
+        with self.client as client:
+            client.post("/v1/all-day/microphone/start", json={"sessionId": self.session})
+            self.microphone.running = False
+            response = client.post("/v1/all-day/microphone/start", json={"sessionId": self.session})
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(self.microphone.running)
+            self.assertEqual(response.json()["audioSessionId"], self.session)
+
+    def test_camera_failure_does_not_discard_screen(self):
+        def capture(sources, index):
+            if sources.get("camera"):
+                raise RuntimeError("Camera disconnected")
+            return [{"source": "screen", "jpeg": "saved"}]
+        with self.client as client, patch("all_day_capture.bounded_capture", side_effect=capture):
+            response = client.post("/v1/all-day/capture", json={"sources": {"screen": True, "camera": True}})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["samples"], [{"source":"screen","jpeg":"saved"},{"source":"camera","error":"Camera disconnected"}])
+
     def test_screen_uses_desktop_capture_without_loading_qt(self):
         from PIL import Image
         import base64

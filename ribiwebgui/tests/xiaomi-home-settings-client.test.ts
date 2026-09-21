@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { XiaomiHomeRuntimeSettings, XiaomiHomeSettingsSnapshot } from "../../src/shared/xiaomiHomeSettingsContract";
 import { xiaomiHomeSettingsClient } from "../src/xiaomiHomeSettingsClient";
+import { homeAssistantDeploymentClient } from "../src/homeAssistantDeploymentClient";
 
 const settings: XiaomiHomeRuntimeSettings = {
   baseUrl: "http://127.0.0.1:8123",
@@ -24,6 +25,22 @@ const settings: XiaomiHomeRuntimeSettings = {
   cameraClipMaxSegmentBytes: 33554432
 };
 const snapshot: XiaomiHomeSettingsSnapshot = { schemaVersion: 1, source: "profile", revision: "revision-one", settings };
+
+test("HA OS install sends only the deployment revision with current lifecycle headers", async t => {
+  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify(String(input) === "/meta"
+      ? { applicationGenerationId: "current-generation", managerInstanceId: "current-manager" }
+      : { code: 0, data: { state: "reboot_required" } }));
+  });
+  assert.equal((await homeAssistantDeploymentClient.install("deployment-revision")).state, "reboot_required");
+  assert.deepEqual(requests.map(request => request.input), ["/meta", "/api/agent/xiaomi-home/deployment/install"]);
+  assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), { revision: "deployment-revision" });
+  const headers = new Headers(requests[1]?.init?.headers);
+  assert.equal(headers.get("x-rabiroute-expected-application-generation-id"), "current-generation");
+  assert.equal(headers.get("x-rabiroute-expected-manager-instance-id"), "current-manager");
+});
 
 test("Xiaomi Home WebGUI saves through current /meta fencing and relative Manager APIs", async () => {
   const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];

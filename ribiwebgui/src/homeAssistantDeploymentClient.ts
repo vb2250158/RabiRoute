@@ -19,5 +19,6 @@ async function request(method: string, body?: unknown, suffix = ""): Promise<Hom
 export const homeAssistantDeploymentClient = {
   read: () => request("GET"),
   save: (config: HomeAssistantDeploymentConfig, revision: string) => request("PUT", { config, revision }),
-  start: (revision: string) => request("POST", { revision }, "/start")
+  start: (revision: string) => request("POST", { revision }, "/start"),
+  install: (revision: string) => request("POST", { revision }, "/install")
 };

@@ -77,4 +77,26 @@ class RecordingStore(private val context: Context) {
             oldFiles.maxOf { it.lastModified() }, oldFiles.maxOf { it.lastModified() }, "legacy", oldRoot, oldFiles, "历史视频"))
         return (sessions + legacy).sortedByDescending { it.started }
     }
+    fun page(time: Long, cursorId: String, older: Boolean, sourceFilter: Int, videoOnly: Boolean = false): List<Entry> {
+        val candidates = root.listFiles().orEmpty().mapNotNull { directory ->
+            val file = File(directory,"session.json")
+            if(!file.isFile) return@mapNotNull null
+            val data = JSONObject(AtomicFile(file).openRead().bufferedReader().use { it.readText() })
+            if(videoOnly && data.optString("kind") != "video") return@mapNotNull null
+            if(data.optString("state") == "recording") return@mapNotNull null
+            if(sourceFilter != 0 && (sourceFilter == 2) != (data.optString("source") == "glasses")) return@mapNotNull null
+            val started = data.getLong("started"); val id = data.getString("id")
+            val order = if(started == time) id.compareTo(cursorId) else started.compareTo(time)
+            if(if(older) order >= 0 else order <= 0) null else Triple(started,id,file)
+        }
+        val legacy = if(sourceFilter == 1) emptyList() else File(context.filesDir,"rabi-live-recordings/rabi").walkTopDown()
+            .filter { it.isFile && it.extension == "mp4" }.map { Triple(it.lastModified(),it.name,it) }.filter {
+                val order = if(it.first == time) it.second.compareTo(cursorId) else it.first.compareTo(time)
+                if(older) order < 0 else order > 0
+            }.toList()
+        val sorted = (candidates + legacy).sortedWith(compareBy<Triple<Long,String,File>> { it.first }.thenBy { it.second })
+        return (if(older) sorted.asReversed() else sorted).asSequence().mapNotNull {
+            if(it.third.extension == "mp4") Entry(it.second,"video","glasses",it.first,it.first,"legacy-part",it.third.parentFile!!,listOf(it.third),"历史视频") else read(it.third)
+        }.filter { it.files.isNotEmpty() }.take(101).toList()
+    }
 }

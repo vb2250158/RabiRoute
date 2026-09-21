@@ -99,8 +99,7 @@ onBeforeUnmount(() => unregisterSaveAction?.());
   <v-card class="app-card glass-card section-card xiaomi-home-message-endpoint-settings">
     <div class="section-title-row">
       <div>
-        <div class="section-title">Home Assistant 连接与事件</div>
-        <div class="section-note">此配置属于米家消息端，用于接收设备状态、有人移动事件和本机留存的摄像头录像。</div>
+        <div class="section-title">事件、设备控制与录像</div>
       </div>
       <v-chip v-if="snapshot" size="small" variant="tonal" :color="snapshot.source === 'runtime' ? 'success' : 'info'">
         {{ snapshot.source === "runtime" ? "本机设置" : "Profile 默认值" }}
@@ -110,9 +109,6 @@ onBeforeUnmount(() => unregisterSaveAction?.());
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mb-3">{{ error }}</v-alert>
 
     <template v-if="draft">
-      <v-alert type="info" variant="tonal" density="compact" class="mb-4">
-        地址与登录凭据都在当前 Route 的“米家 / Xiaomi Home 连接”卡片完成；此页只保存事件、设备控制与录像策略。
-      </v-alert>
       <div class="xiaomi-switch-grid mt-2">
         <section aria-label="监听设备事件">
           <v-switch v-model="draft.eventMonitorEnabled" label="监听设备事件" color="success" inset hide-details />

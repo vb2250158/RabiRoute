@@ -9,6 +9,7 @@ import type {
 } from "../shared/speechControlContract.js";
 import { normalizeLocalSpeechServiceUrl } from "../speech/localSpeechClient.js";
 import { inspectLocalSpeechService } from "./speechServiceStatus.js";
+import { prepareStableSpeechExecutable } from "./speechStableExecutable.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -160,13 +161,17 @@ export class SpeechRuntimeControl {
   private runtimePaths(): {
     serviceRoot: string;
     runtimeExecutable: string;
+    bundledExecutable: string;
     hostScript: string;
     startScript: string;
   } {
     const serviceRoot = path.join(this.options.packageRoot ?? this.options.rootDir, "plugin-adapters", "rabi-speech");
     return {
       serviceRoot,
-      runtimeExecutable: path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
+      bundledExecutable: path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
+      runtimeExecutable: this.options.packageRoot && path.resolve(this.options.packageRoot) !== path.resolve(this.options.rootDir)
+        ? path.join(this.options.rootDir, "runtime", "speech", "RabiSpeech.exe")
+        : path.join(serviceRoot, "runtime", "RabiSpeech.exe"),
       hostScript: path.join(serviceRoot, "scripts", "windows_host.py"),
       startScript: path.join(serviceRoot, "scripts", "start.ps1")
     };
@@ -191,7 +196,7 @@ export class SpeechRuntimeControl {
     if (!this.existsSync(path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps"))) {
       throw new SpeechRuntimeControlError("RabiSpeech 尚未安装依赖，请先运行 scripts\\install.ps1。", 409);
     }
-    if (!this.existsSync(paths.runtimeExecutable)) {
+    if (!this.existsSync(paths.bundledExecutable)) {
       throw new SpeechRuntimeControlError("RabiSpeech Windows 运行时不存在，请先完成安装。", 409);
     }
     if (!this.existsSync(paths.hostScript)) {
@@ -215,6 +220,7 @@ export class SpeechRuntimeControl {
 
     const paths = this.runtimePaths();
     this.assertWindowsRuntimeInstalled(paths);
+    if (paths.runtimeExecutable !== paths.bundledExecutable) await prepareStableSpeechExecutable(paths.bundledExecutable, this.options.rootDir);
     let recoveredOwnedBindConflict = false;
     while (true) {
       if (!this.launchChild || this.launchChild.exitCode !== null) {
@@ -232,6 +238,7 @@ export class SpeechRuntimeControl {
               PYTHONUTF8: "1",
               PYTHONIOENCODING: "utf-8",
               RABISPEECH_DEPS_ROOT: path.join(this.options.rootDir, "plugin-adapters", "rabi-speech", ".deps"),
+              RABISPEECH_HOST_EXECUTABLE: paths.runtimeExecutable,
               RABISPEECH_CONFIG: this.userSpeechConfigPath(paths)
             }
           }

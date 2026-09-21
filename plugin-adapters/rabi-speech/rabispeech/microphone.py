@@ -165,6 +165,7 @@ class MicrophoneService:
         playback_active: Callable[[], bool],
         stop_playback: PlaybackStopper | None = None,
         record_transcription: RecordTranscription | None = None,
+        record_audio_state: Callable[[MicrophoneConfig, float, Path, SpeechInputSource, str], None] | None = None,
         stream_factory: StreamFactory | None = None,
         remote_audio: RemoteAudioController | None = None,
         event_sink: Callable[[str, object], None] | None = None,
@@ -176,6 +177,7 @@ class MicrophoneService:
         self._playback_active = playback_active
         self._stop_playback = stop_playback
         self._record_transcription = record_transcription
+        self._record_audio_state = record_audio_state
         self._stream_factory = stream_factory or _sounddevice_stream
         self._remote_audio = remote_audio
         self._event_sink = event_sink
@@ -343,6 +345,7 @@ class MicrophoneService:
                 "client_id": self._remote_audio.selected_client_id if self._remote_audio is not None else None,
             },
             "running": self._running,
+            "stream_active": bool(self._stream is not None and getattr(self._stream, "active", self._running)),
             "state": self._state,
             "error": self._error,
             "last_submit_error": self._last_submit_error,
@@ -681,6 +684,7 @@ class MicrophoneService:
         while True:
             audio, started_at, peak, input_source = await self._phrases.get()
             target: Path | None = None
+            pending_record = False
             try:
                 self._state = "transcribing"
                 duration = round(audio.size / self.config.sample_rate, 3)
@@ -692,9 +696,15 @@ class MicrophoneService:
                     model=self.config.asr_model,
                 )
                 target = _write_wav(self.temp_dir, audio, self.config.sample_rate)
+                if self._record_audio_state is not None:
+                    self._record_audio_state(self.config, started_at, target, input_source, "processing")
+                    pending_record = True
                 result = await self._transcriber(target, self.config)
                 text = result.text.strip()
                 if not text:
+                    if self._record_audio_state is not None:
+                        self._record_audio_state(self.config, started_at, target, input_source, "empty")
+                    pending_record = False
                     self._empty += 1
                     self._emit_event("asr", "transcription_empty", "识别完成，但没有得到有效文字", level="warning", duration=duration)
                     self._state = "listening"
@@ -749,6 +759,7 @@ class MicrophoneService:
                         if target is None:
                             raise RuntimeError("ASR source audio was not available for record persistence.")
                         self._record_transcription(result, self.config, started_at, target, input_source)
+                        pending_record = False
                     except Exception as exc:
                         self._emit_event(
                             "storage",
@@ -862,6 +873,11 @@ class MicrophoneService:
                 self._error = f"{type(exc).__name__}: {exc}"[:500]
                 self._emit_event("asr", "transcription_failed", "语音识别失败", level="error", error=self._error)
             finally:
+                if pending_record and target is not None and self._record_audio_state is not None:
+                    try:
+                        self._record_audio_state(self.config, started_at, target, input_source, "error")
+                    except Exception as exc:
+                        self._emit_event("storage", "record_persistence_failed", "录音状态保存失败", level="error", error=str(exc)[:500])
                 if target is not None:
                     target.unlink(missing_ok=True)
                 self._phrases.task_done()

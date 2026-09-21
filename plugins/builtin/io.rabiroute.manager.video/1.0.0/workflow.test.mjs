@@ -14,8 +14,8 @@ test("standard and fast routes preserve conditioning and use variant-specific Lo
       assert.equal(graph[12].inputs.steps,quickGeneration ? model.workflows.fast.steps : 20);
       assert.equal(graph[4]?.inputs.lora_name,quickGeneration ? model.files.lora : undefined);
       assert.deepEqual(graph[10].inputs.model,graph[12].inputs.model);
-      assert.deepEqual(graph[8].inputs.first_frame,["1",0]);
-      assert.deepEqual(graph[8].inputs.last_frame,["2",0]);
+      assert.deepEqual(graph[8].inputs.first_frame,["fit_1",0]);
+      assert.deepEqual(graph[8].inputs.last_frame,["fit_2",0]);
       assert.equal(graph[16].inputs.audio,undefined);
     }
   }

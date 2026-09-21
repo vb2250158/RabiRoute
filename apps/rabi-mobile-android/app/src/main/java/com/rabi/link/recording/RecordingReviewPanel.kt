@@ -76,6 +76,8 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private val scroll = ListView(context).apply { divider = null; dividerHeight = dp(10); setPadding(dp(12),0,dp(12),dp(12)); clipToPadding = false }
     private var displayedItems = emptyList<Item>()
     private var sourceFilter = 0
+    private var typeFilter = 0
+    private var navigating = false
     private var listDriving = false
     private var programmaticScroll = false
     private val rowAdapter = object : BaseAdapter() {
@@ -99,6 +101,8 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private var dragging = false
     private var closed = false
     private var loading = false
+    private var reachedOlder = false
+    private var reachedNewer = false
     private var revision = 0
     private var selection = 0
     private var lastLoad = 0L
@@ -132,7 +136,9 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         }
         dayButton.textSize = 13f
         dayButton.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        navigation.addView(dayButton, LinearLayout.LayoutParams(0,dp(48),1f))
+        navigation.addView(dayButton, LinearLayout.LayoutParams(-2,dp(48)))
+        navigation.addView(RabiMobileUi.compactAction(context, "‹") { adjacent(true) }.apply { contentDescription = "上一个事件" }, LinearLayout.LayoutParams(dp(48),dp(48)))
+        navigation.addView(RabiMobileUi.compactAction(context, "›") { adjacent(false) }.apply { contentDescription = "下一个事件" }, LinearLayout.LayoutParams(dp(48),dp(48)))
         navigation.addView(RabiMobileUi.compactAction(context, "回到实时") { enterLive() },
             LinearLayout.LayoutParams(-2, dp(48)).apply { marginStart = dp(4) })
         navigation.addView(RabiMobileUi.compactAction(context, "刷新") { load() }.apply {
@@ -141,16 +147,25 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         for(i in 1 until navigation.childCount) (navigation.getChildAt(i) as? TextView)?.apply {
             textSize = 13f; setBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
-        eventColumn.addView(navigation)
+        eventColumn.addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(navigation) })
+        eventColumn.addView(Spinner(context).apply {
+            adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部类型","ASR 事件","录像"))
+            contentDescription = "筛选事件类型"
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { if(typeFilter != position) { typeFilter = position; renderRows(); load() } }
+            }
+        },LinearLayout.LayoutParams(-1,dp(48)))
         eventColumn.addView(Spinner(context).apply {
             adapter = ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,listOf("全部来源","手机","眼镜"))
             contentDescription = "筛选记录来源"
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { sourceFilter = position; renderRows() }
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { if(sourceFilter != position) { sourceFilter = position; renderRows(); load() } }
             }
         },LinearLayout.LayoutParams(-1,dp(48)))
         eventColumn.addView(listStatus)
+        listStatus.setOnClickListener { listDriving = true; live = false; load(true) }
         scroll.adapter = rowAdapter
         eventColumn.addView(scroll, LinearLayout.LayoutParams(-1,0,1f))
         val wide = context.resources.configuration.screenWidthDp >= 700
@@ -168,7 +183,10 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             override fun onScroll(list: AbsListView, first: Int, count: Int, total: Int) {
                 if(programmaticScroll || !listDriving) return
                 displayedItems.getOrNull(first)?.let { cursor = it.entry.started; ruler.setPosition(cursor,false); updateRange(); position.text = "回看 · ${clock(cursor)}" }
-                if(total > 0 && count > 0 && (first == 0 || first + count >= total)) ensureRange()
+                if(total > 0 && count > 0) {
+                    if(first + count >= total - 2) load(true)
+                    else if(first <= 1) load(false)
+                }
             }
         })
         dayButton.setOnClickListener {
@@ -202,6 +220,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private fun midnight(time: Long) = Calendar.getInstance().apply { timeInMillis = time; set(Calendar.HOUR_OF_DAY,0); set(Calendar.MINUTE,0); set(Calendar.SECOND,0); set(Calendar.MILLISECOND,0) }.timeInMillis
     private fun updateRange() { day = midnight(cursor); dayButton.text = SimpleDateFormat("M月d日",Locale.CHINA).format(Date(day)) }
     private fun ensureRange() {
+        if(listDriving) return
         val range = ruler.visibleRange()
         if(range.first < loadedRange.first || range.last > loadedRange.last) load()
     }
@@ -257,10 +276,26 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private fun refreshChangedData() {
         val runtime = context.getSharedPreferences("rabi_conversation_runtime",Context.MODE_PRIVATE)
         val signal = "${runtime.getLong("captureLastReceivedAt",0)}:${runtime.getString("allDayStatus","")}:${File(context.filesDir,"rabi-conversation/audio-spool").lastModified()}"
-        if(signal != lastDataSignal && System.currentTimeMillis() - lastLoad >= 5000) { lastDataSignal = signal; load() }
+        if(signal != lastDataSignal) reachedNewer = false
+        if(!listDriving && signal != lastDataSignal && System.currentTimeMillis() - lastLoad >= 5000) { lastDataSignal = signal; load() }
     }
-    private fun load() {
-        if(closed) return
+    private fun adjacent(older: Boolean) {
+        if(loading || navigating || closed) return
+        ruler.cancelGesture(); listDriving = false; dragging = false; live = false
+        load(older,true)
+    }
+    private fun matchesFilter(item: Item) = (sourceFilter == 0 || (sourceFilter == 2) == (item.entry.source == "glasses")) && (typeFilter == 0 || (typeFilter == 1) == item.audio)
+    private fun load(older: Boolean? = null, adjacent: Boolean = false) {
+        if(closed || (!adjacent && ((older == true && reachedOlder) || (older == false && reachedNewer)))) return
+        if(older != null && loading) return
+        val boundary = if(adjacent) selected?.takeIf { matchesFilter(it) } else if(older == true) displayedItems.lastOrNull() else displayedItems.firstOrNull()
+        val boundaryTime = boundary?.entry?.started ?: if(adjacent) cursor else System.currentTimeMillis()
+        val boundaryId = boundary?.entry?.id ?: if(older == false) "" else "\uffff"
+        val requestedFilter = sourceFilter
+        val requestedType = typeFilter
+        val selectedBefore = selected?.entry?.id
+        navigating = adjacent
+        if(older == null) { reachedOlder = false; reachedNewer = false }
         if(loading) { reloadPending = true; return }
         val visibleRange = ruler.visibleRange()
         val margin = maxOf(86_400_000L,ruler.window)
@@ -269,7 +304,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
         worker.execute {
             val result = runCatching {
                 val store = RecordingStore(context)
-                val video = store.list(requestedRange.first, requestedRange.last).filter { it.state != "recording" && it.files.isNotEmpty() }.flatMap { entry ->
+                val video = (if(requestedType == 1) emptyList() else if(older == null) store.list(requestedRange.first, requestedRange.last) else store.page(boundaryTime,boundaryId,older,requestedFilter,true)).filter { it.kind == "video" && it.state != "recording" && it.files.isNotEmpty() }.flatMap { entry ->
                     if(entry.state == "legacy") entry.files.map { file -> entry.copy(id=file.name,files=listOf(file),started=file.lastModified(),state="legacy-part") } else listOf(entry)
                 }.map { entry ->
                     val duration = entry.files.sumOf { file ->
@@ -278,29 +313,43 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
                     }
                     Item(entry, runCatching { store.captureId(entry.id) }.getOrDefault(entry.id), listOf(ReviewTimeline.Span(entry.started,duration)),false)
                 }
-                val audio = RabiAudioRecordRepository.listCaptureRecords(context,requestedRange.first,requestedRange.last)
+                val audio = if(requestedType == 2) org.json.JSONArray() else if(older == null) RabiAudioRecordRepository.listAsrRecords(context,requestedRange.first,requestedRange.last) else RabiAudioRecordRepository.page(context,boundaryTime,boundaryId,older,requestedFilter,true)
                 val sound = (0 until audio.length()).map { index ->
                     val row = audio.getJSONObject(index); val id = row.getString("captureId")
                     val spans = row.getJSONArray("playbackSpans")
-                    Item(RecordingStore.Entry(row.getString("id"),"audio",row.optString("source"),row.optLong("startedAt"),row.optLong("endedAt"),"saved_segments",context.cacheDir,emptyList(),"录音"),
+                    Item(RecordingStore.Entry(row.getString("id"),"audio",row.optString("source"),row.optLong("startedAt"),row.optLong("endedAt"),"saved_segments",context.cacheDir,emptyList(),"ASR 事件"),
                         id,(0 until spans.length()).map { spans.getJSONObject(it).let { value -> ReviewTimeline.Span(value.getLong("startedAt"),value.getLong("durationMs"),value.getLong("offsetMs")) } },true,row.optString("parentCaptureId"),eventTranscript=row.optJSONObject("transcript"),asrState=row.optString("asrState"))
                 }
                 val combined = video.map { item -> item.copy(associatedIds = setOf(item.captureId) + sound.filter { it.parentCaptureId == item.captureId }.map { it.captureId }) }
-                val independentSound = sound.filter { audioItem -> audioItem.parentCaptureId.isBlank() || video.none { it.captureId == audioItem.parentCaptureId } }
                 val savedMarkers = store.listMarkers()
-                Pair(savedMarkers, (combined + independentSound).sortedByDescending { it.entry.started })
+                Pair(savedMarkers, (combined + sound).sortedByDescending { it.entry.started })
             }
             main.post {
-                loading = false
+                loading = false; navigating = false
                 if(closed || version != revision) return@post
                 result.onSuccess { (savedMarkers, records) ->
                     markers = savedMarkers
-                    items = records.filter { item -> item.spans.any { TimelineRulerMath.overlaps(it.start,it.duration,requestedRange) } }
+                    if(requestedFilter != sourceFilter || requestedType != typeFilter || (adjacent && selectedBefore != selected?.entry?.id)) return@onSuccess
+                    if(older == null) items = records.filter { item -> item.spans.any { TimelineRulerMath.overlaps(it.start,it.duration,requestedRange) } }
+                    else {
+                        val ordered = records.sortedWith(compareBy<Item> { it.entry.started }.thenBy { it.entry.id }).let { if(older) it.asReversed() else it }
+                        val page = ordered.take(100)
+                        val merged = (items + page).associateBy { it.entry.id }.values.sortedWith(compareByDescending<Item> { it.entry.started }.thenByDescending { it.entry.id })
+                        items = if(older) merged.takeLast(1000) else merged.take(1000)
+                        if(adjacent) { reachedOlder = false; reachedNewer = false }
+                        else if(older) { reachedOlder = ordered.size <= 100; if(merged.size > 1000) reachedNewer = false }
+                        else { reachedNewer = ordered.size <= 100; if(merged.size > 1000) reachedOlder = false }
+                    }
                     loadedRange = requestedRange
-                    ruler.setCoverage(items.flatMap { item -> item.spans.map { RecordingTimeRuler.Coverage(it.start,it.duration,!item.audio) } })
-                    listStatus.text = if(items.isEmpty()) "此时间范围暂无已保存记录" else "${items.size} 条事件"
+                    ruler.setCoverage(items.filter(::matchesFilter).flatMap { item -> item.spans.map { RecordingTimeRuler.Coverage(it.start,it.duration,!item.audio) } })
+                    listStatus.text = if(items.isEmpty()) "此时间范围暂无已保存记录" else "${items.size} 条事件" + if(older == true && reachedOlder) " · 已到最早记录" else if(older == false && reachedNewer) " · 已到最新记录" else ""
                     renderRows()
-                    if(!live && !dragging && selected == null) jump(cursor)
+                    if(displayedItems.isEmpty() && older == null) main.post { if(!closed) load(true) }
+                    if(adjacent) {
+                        val target = records.filter(::matchesFilter).sortedWith(compareBy<Item> { it.entry.started }.thenBy { it.entry.id }).let { if(older == true) it.lastOrNull() else it.firstOrNull() }
+                        if(target == null) listStatus.text = if(older == true) "已到最早事件" else "已到最新事件"
+                        else { open(target,target.entry.started); renderRows() }
+                    } else if(!live && !dragging && selected == null) jump(cursor)
                 }.onFailure { listStatus.text = "刷新失败，已保留当前记录 · 点击刷新重试" }
                 if(reloadPending) { reloadPending = false; main.postDelayed({ if(!closed) load() },1000) }
             }
@@ -309,7 +358,8 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     private fun renderRows() {
         val anchor = displayedItems.getOrNull(scroll.firstVisiblePosition)?.entry?.id
         val offset = scroll.getChildAt(0)?.top ?: 0
-        displayedItems = items.filter { sourceFilter == 0 || (sourceFilter == 2) == (it.entry.source == "glasses") }
+        displayedItems = items.filter(::matchesFilter)
+        ruler.setCoverage(displayedItems.flatMap { item -> item.spans.map { RecordingTimeRuler.Coverage(it.start,it.duration,!item.audio) } })
         cards.clear()
         programmaticScroll = true
         rowAdapter.notifyDataSetChanged()
@@ -329,7 +379,7 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
             }
             cards[entry.id] = card
             val heading = LinearLayout(context)
-            heading.addView(label("${clock(entry.started)} · ${if(entry.kind == "video") "录像与录音" else "录音"} · ${if(entry.source == "glasses") "眼镜" else "手机"}",14f),LinearLayout.LayoutParams(0,-2,1f))
+            heading.addView(label("${clock(entry.started)} · ${if(entry.kind == "video") "录像" else "ASR 事件"} · ${if(entry.source == "glasses") "眼镜" else "手机"}",14f),LinearLayout.LayoutParams(0,-2,1f))
             if(entry.kind == "video") {
                 val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; contentDescription = "录像缩略图，点击回看" }
                 heading.addView(image,LinearLayout.LayoutParams(dp(94),dp(65)))
@@ -371,10 +421,10 @@ class RecordingReviewPanel(private val context: Context, private val share: (Rec
     }
     private fun jump(time: Long) {
         live = false; cursor = time; ruler.setPosition(time,false); updateRange(); ensureRange()
-        val item = items.firstOrNull { it.entry.kind == "video" && ReviewTimeline.mediaAt(it.spans,time) != null }
-            ?: items.firstOrNull { ReviewTimeline.mediaAt(it.spans,time) != null }
+        val item = displayedItems.firstOrNull { it.entry.kind == "video" && ReviewTimeline.mediaAt(it.spans,time) != null }
+            ?: displayedItems.firstOrNull { ReviewTimeline.mediaAt(it.spans,time) != null }
         if(item == null) {
-            selected = null; selection++; releasePlayback(); showEmpty("无画面 · 此时段没有已保存录音")
+            selected = null; selection++; releasePlayback(); showEmpty("无画面 · 此时段没有事件")
             position.text = "回看 · ${clock(time)} · 记录空缺"; highlight(null)
         } else open(item,time)
     }

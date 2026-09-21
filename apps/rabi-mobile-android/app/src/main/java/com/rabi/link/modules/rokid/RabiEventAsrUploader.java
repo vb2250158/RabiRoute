@@ -59,6 +59,8 @@ final class RabiEventAsrUploader implements AutoCloseable {
                         + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"event.wav\"\r\nContent-Type: audio/wav\r\n\r\n").getBytes(StandardCharsets.UTF_8));
                     body.write(audio); body.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
                     com.rabi.link.transport.AsrEventProgress.processing(head.eventId);
+                    RabiRecordingEventSync.enqueue(context, new JSONObject().put("eventId",head.eventId).put("text","").put("transcriptionState","processing")
+                        .put("timelineWorker",worker.getRawJson()).put("timelineScope",com.rabi.link.transport.AsrDirectory.accountIdentity(relay.getBaseUrl(),relay.getToken())), event);
                     RabiSpeechTunnel.Response response = tunnel.request("POST", "/v1/audio/transcriptions", "multipart/form-data; boundary=" + boundary, body.toByteArray(), 190000L);
                     if (response.getStatus() != 200) { close(); continue; }
                     JSONObject result = new JSONObject(new String(response.getBody(), StandardCharsets.UTF_8));
@@ -72,6 +74,10 @@ final class RabiEventAsrUploader implements AutoCloseable {
                     spool.saveEventReceipt(head.eventId, receipt);
                     break;
                 } catch (Exception error) { close(); }
+                finally {
+                    if (receipt == null) RabiRecordingEventSync.enqueue(context, new JSONObject().put("eventId",head.eventId).put("text","").put("transcriptionState","pending")
+                        .put("timelineWorker",worker.getRawJson()).put("timelineScope",com.rabi.link.transport.AsrDirectory.accountIdentity(relay.getBaseUrl(),relay.getToken())), event);
+                }
             }
             if (receipt == null) throw new IllegalStateException("没有可用的 ASR 电脑，录音已保留，稍后重试");
         }

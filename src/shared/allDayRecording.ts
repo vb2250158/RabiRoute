@@ -19,11 +19,14 @@ export type AllDayEvent = {
   kind: "audio" | "image" | "window" | "status";
   text: string;
   state: "saved" | "error";
+  transcriptionState?: "pending" | "processing" | "ready" | "empty" | "error";
   media?: string;
   speechRecordId?: string;
   mobileMedia?: { owner: string; chunks: string[] };
 };
 export type AllDaySnapshot = {
+  enabled?: boolean;
+  sourceErrors?: Partial<Record<AllDaySource, string>>;
   settings: AllDaySettings;
   running: boolean;
   activeRoleId: string | null;
@@ -31,6 +34,13 @@ export type AllDaySnapshot = {
   lastSampleAt: number | null;
   error: string;
 };
+/** Raw audio stays durable; only recognized speech belongs in the review event stream. */
+export function isReviewEvent(event: AllDayEvent): boolean {
+  return event.kind !== "audio" || ((event.transcriptionState === undefined || event.transcriptionState === "ready") && !!event.text?.trim());
+}
+export function matchesReviewType(event: AllDayEvent, type: string): boolean {
+  return isReviewEvent(event) && (type === "all" || (type === "asr" ? event.kind === "audio" : event.kind === type));
+}
 export function normalizeAllDaySettings(value: unknown): AllDaySettings {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid recording settings");
   const input = value as Partial<AllDaySettings>;

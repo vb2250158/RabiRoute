@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class RabiRecordingEventSync {
     private static final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private static final AtomicBoolean queued = new AtomicBoolean();
+    private static final AtomicBoolean rerun = new AtomicBoolean();
     private static final Object diskLock = new Object();
     private static File root(Context context) { return new File(context.getFilesDir(), "recording-event-sync"); }
 
@@ -48,6 +49,14 @@ public final class RabiRecordingEventSync {
                     .put("text", receipt.optString("text")).put("files", files)
                     .put("worker", receipt.getJSONObject("timelineWorker")).put("scope", receipt.getString("timelineScope")));
             }
+            JSONObject item = new JSONObject(new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8));
+            String state = receipt.optString("transcriptionState", receipt.optString("text").isEmpty() ? "empty" : "ready");
+            if (!(("processing".equals(state) || "pending".equals(state)) && ("ready".equals(item.optString("transcriptionState")) || "empty".equals(item.optString("transcriptionState"))))) {
+                if (!state.equals(item.optString("transcriptionState")) || !receipt.optString("text").equals(item.optString("text"))) {
+                    item.put("text", receipt.optString("text")).put("transcriptionState", state).put("synced", false).put("revision", item.optLong("revision") + 1);
+                    write(target, item);
+                }
+            }
         }
         wake(context);
     }
@@ -59,7 +68,7 @@ public final class RabiRecordingEventSync {
     }
     public static void wake(Context source) {
         Context context = source.getApplicationContext();
-        if (!queued.compareAndSet(false, true)) return;
+        if (!queued.compareAndSet(false, true)) { rerun.set(true); return; }
         executor.execute(() -> {
             boolean retry = false;
             try {
@@ -75,7 +84,8 @@ public final class RabiRecordingEventSync {
             } catch (Exception error) { retry = true; }
             finally {
                 queued.set(false);
-                if (retry) executor.schedule(() -> wake(context), 60, TimeUnit.SECONDS);
+                if (rerun.getAndSet(false)) executor.schedule(() -> wake(context), 1, TimeUnit.SECONDS);
+                else if (retry) executor.schedule(() -> wake(context), 60, TimeUnit.SECONDS);
             }
         });
     }
@@ -108,10 +118,15 @@ public final class RabiRecordingEventSync {
                 chunks.put(id);
             }
             JSONObject event = new JSONObject().put("id", item.getString("id")).put("startedAt", item.getLong("startedAt"))
-                .put("endedAt", item.getLong("endedAt")).put("text", item.getString("text")).put("chunks", chunks);
+                .put("endedAt", item.getLong("endedAt")).put("text", item.getString("text")).put("chunks", chunks)
+                .put("transcriptionState", item.optString("transcriptionState", "ready"));
             RabiSpeechTunnel.Response reply = tunnel.request("PUT", "/recording-events", "application/json", event.toString().getBytes(StandardCharsets.UTF_8), 30000L);
             if (reply.getStatus() != 200 || !new JSONObject(new String(reply.getBody(), StandardCharsets.UTF_8)).optBoolean("durable")) throw new IllegalStateException("电脑尚未接收时间轴事件 " + reply.getStatus());
-            synchronized (diskLock) { item.put("synced", true); write(file, item); }
+            synchronized (diskLock) {
+                JSONObject latest = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+                if (latest.optLong("revision") == item.optLong("revision")) { latest.put("synced", true); write(file, latest); }
+                else executor.schedule(() -> wake(context), 1, TimeUnit.SECONDS);
+            }
             context.getSharedPreferences("recording_event_sync", Context.MODE_PRIVATE).edit().putString("status", "时间轴事件已同步到电脑").apply();
         }
     }

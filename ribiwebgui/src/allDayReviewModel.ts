@@ -1,5 +1,18 @@
 import type { AllDayEvent } from "../../src/shared/allDayRecording";
 
+/** A local step is safe only inside an untrimmed, fully loaded time range. */
+export function adjacentLoadedEvent(events: readonly AllDayEvent[], cursor: { time: number; id: string }, direction: "older" | "newer", range: { start: number; end: number }, complete: boolean) {
+  if (!complete || cursor.time < range.start || cursor.time >= range.end) return;
+  const compare = (a: AllDayEvent, b: AllDayEvent) => a.startedAt - b.startedAt || a.id.localeCompare(b.id);
+  let candidate: AllDayEvent | undefined;
+  for (const event of events) {
+    const order = event.startedAt - cursor.time || event.id.localeCompare(cursor.id);
+    if (direction === "older" ? order >= 0 : order <= 0) continue;
+    if (!candidate || (direction === "older" ? compare(event,candidate) > 0 : compare(event,candidate) < 0)) candidate = event;
+  }
+  return candidate && candidate.startedAt >= range.start && candidate.startedAt < range.end ? candidate : undefined;
+}
+
 /** Interval maximums prune offscreen events without losing long overlapping audio. */
 export function reviewIndex(events: readonly AllDayEvent[]) {
   let leaves = 1; while(leaves < events.length) leaves *= 2;

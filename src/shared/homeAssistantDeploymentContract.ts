@@ -1,5 +1,5 @@
 export type HomeAssistantDeploymentConfig = Readonly<{
-  mode: "external" | "docker";
+  mode: "external" | "docker" | "haos";
   containerName: string;
   autoStart: boolean;
 }>;
@@ -10,7 +10,7 @@ export type HomeAssistantDeploymentSnapshot = Readonly<{
   configured: boolean;
   config: HomeAssistantDeploymentConfig;
   installation: "installed" | "not_found" | "unknown" | "external";
-  state: "ready" | "stopped" | "starting" | "unavailable" | "error";
+  state: "ready" | "stopped" | "starting" | "unavailable" | "error" | "installing" | "reboot_required";
   message: string;
   image?: string;
   containerId?: string;
@@ -18,4 +18,6 @@ export type HomeAssistantDeploymentSnapshot = Readonly<{
   configPath?: string;
   baseUrl: string;
   canStart: boolean;
+  canInstall?: boolean;
+  haosInstallPath?: string;
 }>;

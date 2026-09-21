@@ -2,8 +2,8 @@ package com.rabi.link.recording
 
 /** A movable wall-clock viewport, independent of day boundaries and retained-record count. */
 object TimelineRulerMath {
-    const val MIN_WINDOW = 30_000L
-    const val MAX_WINDOW = 7 * 86_400_000L
+    const val MIN_WINDOW = 3_000L
+    const val MAX_WINDOW = 86_400_000L
     fun pan(time: Long, deltaPixels: Double, width: Int, window: Long, now: Long): Long =
         (time - deltaPixels * window / width.coerceAtLeast(1)).coerceIn(0.0,now.toDouble()).toLong()
     fun zoom(window: Long, factor: Double): Long =

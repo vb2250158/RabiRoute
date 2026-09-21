@@ -7,6 +7,18 @@ from rabispeech.speaker_profiles import SpeakerProfileRegistry
 from rabispeech.speech_records import SpeechRecordStore
 
 
+def test_pending_record_updates_in_place_after_transcription(tmp_path):
+    store = SpeechRecordStore(tmp_path / "records")
+    pending = TranscriptionResult(text="", language="zh", duration=2.5, provider="", model="local", record_id="audio-one")
+    store.append_asr(pending, source="microphone", recorded_at=1000, transcription_state="processing")
+    assert store.list()[0]["transcription_state"] == "processing"
+    store.append_asr(TranscriptionResult(text="done", language="zh", duration=2.5, provider="test", model="local", record_id="audio-one"), source="microphone", recorded_at=1000)
+    rows = SpeechRecordStore(tmp_path / "records").list()
+    assert len(rows) == 1
+    assert rows[0]["id"] == "audio-one" and rows[0]["text"] == "done"
+    assert rows[0]["transcription_state"] == "ready"
+
+
 def test_speech_records_persist_and_filter_speakers(tmp_path) -> None:
     store = SpeechRecordStore(tmp_path / "records")
     asr = store.append_asr(

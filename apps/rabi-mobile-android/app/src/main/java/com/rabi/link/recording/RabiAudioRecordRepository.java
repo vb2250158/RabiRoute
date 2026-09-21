@@ -13,6 +13,29 @@ public final class RabiAudioRecordRepository {
     private RabiAudioRecordRepository() { }
     private static String cachedRoot = "";
     private static final Map<String, CachedMetadata> cachedMetadata = new HashMap<>();
+    private static final Map<String, CachedMetadata> transcriptCache = new LinkedHashMap<String, CachedMetadata>(128,0.75f,true) {
+        protected boolean removeEldestEntry(Map.Entry<String,CachedMetadata> entry) { return size() > 2048; }
+    };
+    private static synchronized JSONObject transcript(Context context, String id, String captureId) {
+        if (!id.matches("[A-Za-z0-9_-]{1,120}")) return null;
+        File file = new File(segments(context).getParentFile(), "asr-" + id + ".json");
+        if (!file.isFile() || file.length() >= 2_000_000) return null;
+        try {
+            CachedMetadata cached = transcriptCache.get(file.getAbsolutePath());
+            JSONObject receipt = cached != null && cached.matches(file) ? cached.row
+                : new JSONObject(new String(java.nio.file.Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+            transcriptCache.put(file.getAbsolutePath(),new CachedMetadata(file,receipt));
+            return id.equals(receipt.optString("eventId")) && captureId.equals(receipt.optString("captureId")) ? receipt : null;
+        } catch (Exception ignored) { return null; }
+    }
+    public static JSONArray listAsrRecords(Context context, long from, long to) {
+        JSONArray records = listCaptureRecords(context, from, to), result = new JSONArray();
+        for (int i = 0; i < records.length(); i++) {
+            JSONObject row = records.optJSONObject(i), receipt = row.optJSONObject("transcript");
+            if (receipt != null && !receipt.optString("text").trim().isEmpty()) result.put(row);
+        }
+        return result;
+    }
     private static final class CachedMetadata {
         final long modified, length;
         final JSONObject row;
@@ -55,7 +78,32 @@ public final class RabiAudioRecordRepository {
     public static JSONArray listCaptureRecords(Context context, long from, long to) {
         return listCaptureRecords(context, Integer.MAX_VALUE, from, to);
     }
+    public static JSONArray page(Context context, long time, String cursorId, boolean older, int sourceFilter) {
+        return page(context,time,cursorId,older,sourceFilter,false);
+    }
+    public static JSONArray page(Context context, long time, String cursorId, boolean older, int sourceFilter, boolean asrOnly) {
+        Map<String, Long> starts = new HashMap<>();
+        for (JSONObject row : metadata(context)) {
+            if (row.optLong("bytes") < 32) continue;
+            if (sourceFilter != 0 && (sourceFilter == 2) != "glasses".equals(row.optString("source"))) continue;
+            String id = row.optString("eventId");
+            if (id.isEmpty()) id = row.optString("captureId");
+            if (asrOnly) {
+                JSONObject receipt = transcript(context,id,row.optString("captureId"));
+                if (receipt == null || receipt.optString("text").trim().isEmpty()) continue;
+            }
+            starts.merge(id, row.optLong("startedAt"), Math::min);
+        }
+        List<String> ids = new ArrayList<>(starts.keySet());
+        ids.removeIf(id -> { int order = Long.compare(starts.get(id), time); if (order == 0) order = id.compareTo(cursorId); return older ? order >= 0 : order <= 0; });
+        ids.sort((a,b) -> { int order = Long.compare(starts.get(a),starts.get(b)); if(order == 0) order = a.compareTo(b); return older ? -order : order; });
+        Set<String> selected = new HashSet<>(ids.subList(0, Math.min(101,ids.size())));
+        return listCaptureRecords(context, Integer.MAX_VALUE, 0, Long.MAX_VALUE, selected);
+    }
     private static JSONArray listCaptureRecords(Context context, int limit, long from, long to) {
+        return listCaptureRecords(context, limit, from, to, null);
+    }
+    private static JSONArray listCaptureRecords(Context context, int limit, long from, long to, Set<String> eventIds) {
         android.content.SharedPreferences enrollment = context.getSharedPreferences("rabi_asr_enrollment", Context.MODE_PRIVATE);
         com.rabi.link.RabiLinkRelayConfig relay = com.rabi.link.RabiLinkRelaySettings.INSTANCE.load(context);
         long pendingBefore = relay.getConfigured() && com.rabi.link.transport.AsrDirectory.accountIdentity(relay.getBaseUrl(), relay.getToken()).equals(enrollment.getString("scope", ""))
@@ -72,6 +120,7 @@ public final class RabiAudioRecordRepository {
             String captureId = segment.optString("captureId");
             String id = segment.optString("eventId", "");
             if (id.isEmpty()) id = captureId;
+            if (eventIds != null && !eventIds.contains(id)) continue;
             try {
                 JSONObject record = records.get(id);
                 if (record == null) {
@@ -95,13 +144,8 @@ public final class RabiAudioRecordRepository {
                         record.put("asrState", com.rabi.link.transport.AsrEventProgress.get(id));
                     else if ("local_only".equals(record.optString("processingPolicy"))) record.put("asrState", pendingBefore > 0 && segment.optLong("startedAt") <= pendingBefore ? "pending" : "local_only");
                     records.put(id, record);
-                    File transcript = new File(segments(context).getParentFile(), "asr-" + id + ".json");
-                    if (id.matches("[A-Za-z0-9_-]{1,120}") && transcript.isFile() && transcript.length() < 2_000_000) {
-                        try {
-                            JSONObject receipt = new JSONObject(new String(java.nio.file.Files.readAllBytes(transcript.toPath()), StandardCharsets.UTF_8));
-                            if (id.equals(receipt.optString("eventId")) && captureId.equals(receipt.optString("captureId"))) record.put("transcript", receipt);
-                        } catch (Exception ignored) { /* Keep playable audio visible while a receipt is replaced. */ }
-                    }
+                    JSONObject receipt = transcript(context,id,captureId);
+                    if (receipt != null) record.put("transcript",receipt);
                 }
                 record.getJSONArray("playbackSpans").put(new JSONObject()
                     .put("startedAt", segment.optLong("startedAt"))

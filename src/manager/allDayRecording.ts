@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { recordDataMutationAudit } from "../observability/dataMutationAudit.js";
-import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, normalizeAllDaySettings, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
+import { ALL_DAY_SOURCES, DEFAULT_ALL_DAY_SETTINGS, isReviewEvent, matchesReviewType, normalizeAllDaySettings, type AllDayEvent, type AllDaySettings, type AllDaySnapshot } from "../shared/allDayRecording.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 export const recordingDay = (time: number) => new Date(time).toISOString().slice(0, 10);
@@ -36,6 +36,23 @@ async function jsonOr<T>(file: string, fallback: T): Promise<T> {
 const dayReads = new Map<string, { expires: number; rows: Promise<AllDayEvent[]> }>();
 type DayIndex = { schemaVersion: 2; events: AllDayEvent[] };
 const dayWrites = new Map<string, Promise<unknown>>();
+const recentPath = (directory: string) => path.join(path.dirname(directory), "recent-preview.json");
+async function recentRows(directory: string): Promise<AllDayEvent[]> {
+  try {
+    const value = await jsonOr<{ events: AllDayEvent[] }>(recentPath(directory), { events: [] });
+    return Array.isArray(value.events) ? value.events.filter(row => row && typeof row.id === "string" && Number.isFinite(row.startedAt) && Number.isFinite(row.endedAt)).slice(-128) : [];
+  } catch (error) {
+    if (error instanceof SyntaxError) return [];
+    throw error;
+  }
+}
+async function updateRecent(directory: string, rows: AllDayEvent[]): Promise<void> {
+  await withDay(recentPath(directory), async () => {
+    const events = [...new Map([...(await recentRows(directory)), ...rows].map(row => [row.id, row])).values()]
+      .filter(isReviewEvent).sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id)).slice(-128);
+    await atomicRecordingJson(recentPath(directory), { events });
+  });
+}
 const dayIndexPath = (directory: string, day: string) => path.join(path.dirname(directory), "events-index", `${day}.json`);
 const dayDirtyPath = (directory: string, day: string) => path.join(path.dirname(directory), "events-index", `${day}.dirty.json`);
 async function withDay<T>(scope: string, action: () => Promise<T>): Promise<T> {
@@ -59,6 +76,7 @@ async function writeIndexedEvent(directory: string, day: string, key: string, ev
     // The durable marker survives a crash between the original and derived writes.
     await atomicRecordingJson(dayDirtyPath(directory,day),{eventId:event.id});
     await atomicRecordingJson(path.join(scope,`${key}.json`),event);
+    await updateRecent(directory, [event]);
     dayReads.delete(scope);
     // An absent index is rebuilt by the next query, never by the capture loop.
     if(index) {
@@ -76,9 +94,10 @@ async function readDay(directory: string, day: string): Promise<AllDayEvent[]> {
   if (cached && cached.expires > Date.now()) return cached.rows;
   const entry = { expires: Infinity, rows: withDay(key,async () => {
     const index = await validDayIndex(directory,day);
-    if(index) return index.events;
+    if(index) { await updateRecent(directory, index.events); return index.events; }
     const rows = await scanDay(directory,day);
     await atomicRecordingJson(dayIndexPath(directory,day),{schemaVersion:2,events:rows});
+    await updateRecent(directory, rows);
     await fs.rm(dayDirtyPath(directory,day),{force:true});
     return rows;
   }) };
@@ -109,6 +128,14 @@ async function scanDay(directory: string, day: string): Promise<AllDayEvent[]> {
 }
 export class AllDayRecordingStore {
   constructor(readonly roleDirectory: (roleId: string) => string, readonly hostId: string, readonly mobileRoot: string) {}
+  async enabledRole(): Promise<string | null> {
+    const value = await jsonOr<{roleId: string | null}>(path.join(this.mobileRoot, "capture-intent.json"), {roleId:null});
+    if (value.roleId !== null && (typeof value.roleId !== "string" || !value.roleId || value.roleId.length > 128 || /[\\/\x00-\x1f]/.test(value.roleId) || [".",".."].includes(value.roleId))) throw new Error("Invalid saved recording persona");
+    return value.roleId;
+  }
+  async enableRole(roleId: string | null) {
+    await atomicRecordingJson(path.join(this.mobileRoot, "capture-intent.json"), {roleId});
+  }
   directory(roleId: string) { return path.join(this.roleDirectory(roleId), "all-day-recording", hash(this.hostId)); }
   async settings(roleId: string): Promise<AllDaySettings> {
     return normalizeAllDaySettings(await jsonOr(path.join(this.directory(roleId), "settings.json"), DEFAULT_ALL_DAY_SETTINGS));
@@ -149,7 +176,48 @@ export class AllDayRecordingStore {
         result.push(...(await readDay(path.join(this.mobileRoot, "events"), recordingDay(time))).filter(event => settings.mobileDeviceIds.includes(event.deviceId)));
       }
     }
-    return result.filter(event => event.startedAt < until && event.endedAt >= since).sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+    return result.filter(event => isReviewEvent(event) && event.startedAt < until && event.endedAt >= since).sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+  }
+  async recent(roleId: string): Promise<AllDayEvent[]> {
+    const [settings, computer] = await Promise.all([
+      this.settings(roleId), recentRows(path.join(this.directory(roleId), "events"))
+    ]);
+    const mobile = settings.mobileDeviceIds.length
+      ? (await recentRows(path.join(this.mobileRoot, "events"))).filter(row => settings.mobileDeviceIds.includes(row.deviceId)) : [];
+    return [...computer, ...mobile].filter(isReviewEvent).sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+  }
+  async page(roleId: string, direction: "older" | "newer", cursor: { time: number; id: string }, source = "all", limit = 100, eventType = "all") {
+    if (!["all", "asr", "image", "window", "status"].includes(eventType)) throw new Error("Invalid event type");
+    if (!Number.isFinite(cursor.time) || cursor.time < 0 || cursor.id.length > 512 || !["all", ...ALL_DAY_SOURCES, "mobile", "session"].includes(source)) throw new Error("Invalid event cursor");
+    const settings = await this.settings(roleId);
+    const directories = [path.join(this.directory(roleId), "events"), ...(settings.mobileDeviceIds.length ? [path.join(this.mobileRoot, "events")] : [])];
+    const dates = new Set<string>();
+    for (const directory of directories) {
+      try { for (const day of await fs.readdir(directory)) if (/^\d{4}-\d{2}-\d{2}$/.test(day)) dates.add(day); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
+    const cursorDay = recordingDay(cursor.time);
+    const days = [...dates].filter(day => direction === "older" ? day <= cursorDay : day >= cursorDay).sort();
+    if (direction === "older") days.reverse();
+    const rows: AllDayEvent[] = [];
+    const compare = (a: AllDayEvent, b: AllDayEvent) => a.startedAt - b.startedAt || a.id.localeCompare(b.id);
+    for (const day of days) {
+      const records = (await Promise.all(directories.map(directory => readDay(directory, day)))).flat();
+      const matches = records.filter(row => {
+        if (!matchesReviewType(row, eventType)) return false;
+        if (row.source === "mobile" && !settings.mobileDeviceIds.includes(row.deviceId)) return false;
+        if (source !== "all" && row.source !== source) return false;
+        const order = row.startedAt - cursor.time || row.id.localeCompare(cursor.id);
+        return direction === "older" ? order < 0 : order > 0;
+      }).sort(compare);
+      if (direction === "older") matches.reverse();
+      rows.push(...matches.slice(0, limit + 1 - rows.length));
+      if (rows.length > limit) break;
+    }
+    const hasMore = rows.length > limit;
+    const events = rows.slice(0, limit);
+    const last = events.at(-1);
+    return { events: events.sort(compare), hasMore, cursor: last ? { time: last.startedAt, id: last.id } : cursor };
   }
   async mobileDevices(): Promise<{ id: string; lastReceivedAt: number }[]> {
     return jsonOr(path.join(this.mobileRoot, "devices.json"), []);
@@ -163,7 +231,9 @@ export class AllDayRecordingStore {
       if (typeof row.id !== "string" || !/^[\w-]{1,200}$/.test(row.id) || !Number.isFinite(startedAt) || startedAt < 0 || !Number.isFinite(endedAt) || endedAt < startedAt || endedAt > Date.now() + 86400_000 || typeof row.text !== "string" || row.text.length > 100_000) throw new Error("Invalid mobile event fields");
       const deviceId = hash(owner);
       if (!Array.isArray(row.chunks) || row.chunks.length < 1 || row.chunks.length > 16 || row.chunks.some(id => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id))) throw new Error("Invalid recording media chunks");
-      const event: AllDayEvent = { id: `mobile:${deviceId}:${row.id}`, startedAt, endedAt, source: "mobile", deviceId, kind: "audio", text: row.text, state: "saved", mobileMedia: { owner, chunks: row.chunks as string[] } };
+      const transcriptionState = row.transcriptionState === undefined ? "ready" : row.transcriptionState;
+      if (!["pending","processing","ready","empty","error"].includes(String(transcriptionState))) throw new Error("Invalid transcription state");
+      const event: AllDayEvent = { id: `mobile:${deviceId}:${row.id}`, startedAt, endedAt, source: "mobile", deviceId, kind: "audio", text: row.text, state: "saved", transcriptionState: transcriptionState as AllDayEvent["transcriptionState"], mobileMedia: { owner, chunks: row.chunks as string[] } };
       await writeIndexedEvent(path.join(this.mobileRoot,"events"),recordingDay(startedAt),hash(event.id),event);
       const devices = await this.mobileDevices();
       const updated = [...devices.filter(device => device.id !== deviceId), { id: deviceId, lastReceivedAt: Date.now() }];
@@ -189,11 +259,13 @@ export type AllDayCaptureDependencies = {
 };
 type RecordingSession = { audioSessionId?: string; roleId: string; id: string; settings: AllDaySettings; startedAt: number; lastSampleAt: number | null; audioSince: number; error: string; timer?: NodeJS.Timeout; pending?: Promise<void>; stopping: boolean; windowTitle: string | null };
 
-/** One host capture owner. Settings never imply consent to restart recording. */
+/** One host capture owner; explicit enable intent survives orderly shutdown. */
 export class AllDayRecordingService {
   private session: RecordingSession | null = null;
   private transition: Promise<unknown> = Promise.resolve();
+  private sourceErrors: Partial<Record<typeof ALL_DAY_SOURCES[number], string>> = {};
   constructor(readonly store: AllDayRecordingStore, private readonly dependencies: AllDayCaptureDependencies) {}
+  async restore() { const roleId = await this.store.enabledRole(); if (roleId) await this.start(roleId); }
   private serialize<T>(action: () => Promise<T>): Promise<T> {
     const result = this.transition.catch(() => undefined).then(action);
     this.transition = result;
@@ -201,12 +273,26 @@ export class AllDayRecordingService {
   }
   async snapshot(roleId: string): Promise<AllDaySnapshot> {
     const session = this.session?.roleId === roleId ? this.session : null;
-    return { settings: await this.store.settings(roleId), running: !!session && !session.stopping, activeRoleId: this.session?.roleId ?? null, startedAt: session?.startedAt ?? null, lastSampleAt: session?.lastSampleAt ?? null, error: session?.error ?? "" };
+    return { settings: await this.store.settings(roleId), enabled: await this.store.enabledRole() === roleId, sourceErrors:session ? {...this.sourceErrors} : {}, running: !!session && !session.stopping, activeRoleId: this.session?.roleId ?? null, startedAt: session?.startedAt ?? null, lastSampleAt: session?.lastSampleAt ?? null, error: session?.error ?? "" };
   }
   configure(roleId: string, input: unknown) {
     return this.serialize(async () => {
-      if (this.session?.roleId === roleId) throw new Error("Pause recording before changing sources");
-      await this.store.configure(roleId, input);
+      const settings = normalizeAllDaySettings(input);
+      const session = this.session?.roleId === roleId ? this.session : null;
+      if (session) {
+        clearTimeout(session.timer); session.stopping = true;
+        try {
+          await session.pending;
+          if (session.settings.sources.microphone && !settings.sources.microphone) {
+            await this.dependencies.stopMicrophone(session.id);
+            await this.collectAudio(session);
+            session.audioSessionId = undefined;
+          }
+          await this.store.configure(roleId, settings);
+          if (!session.settings.sources.microphone && settings.sources.microphone) session.audioSince = Date.now();
+          session.settings = settings; session.windowTitle = null;
+        } finally { session.stopping = false; this.schedule(session, 0); }
+      } else await this.store.configure(roleId, settings);
       this.dependencies.changed(roleId);
       return this.snapshot(roleId);
     });
@@ -218,10 +304,11 @@ export class AllDayRecordingService {
         return this.snapshot(roleId);
       }
       const settings = await this.store.settings(roleId);
-      if (!ALL_DAY_SOURCES.some(source => settings.sources[source])) throw new Error("Select at least one computer source");
+      if (!ALL_DAY_SOURCES.some(source => settings.sources[source]) && await this.store.enabledRole() !== roleId) throw new Error("Select at least one computer source");
       const now = Date.now();
+      this.sourceErrors = {};
       const session: RecordingSession = { roleId, id: randomUUID(), settings, startedAt: now, audioSince: now, lastSampleAt: null, error: "", stopping: false, windowTitle: null };
-      if (settings.sources.microphone) session.audioSessionId = await this.dependencies.startMicrophone(session.id) || session.id;
+      await this.store.enableRole(roleId);
       this.session = session;
       try { await this.statusEvent(session, "Recording started"); }
       catch (error) { this.session = null; if (settings.sources.microphone) await this.dependencies.stopMicrophone(session.id); throw error; }
@@ -230,8 +317,9 @@ export class AllDayRecordingService {
       return this.snapshot(roleId);
     });
   }
-  stop(roleId: string) {
+  stop(roleId: string, preserveIntent = false) {
     return this.serialize(async () => {
+      if (!preserveIntent && await this.store.enabledRole() === roleId) await this.store.enableRole(null);
       const session = this.session;
       if (!session || session.roleId !== roleId) return this.snapshot(roleId);
       session.stopping = true;
@@ -245,7 +333,7 @@ export class AllDayRecordingService {
       return this.snapshot(roleId);
     });
   }
-  async dispose() { if (this.session) await this.stop(this.session.roleId); }
+  async dispose() { if (this.session) await this.stop(this.session.roleId, true); }
   private async statusEvent(session: RecordingSession, text: string) {
     const now = Date.now();
     await this.store.append(session.roleId, { id: randomUUID(), startedAt: now, endedAt: now, source: "session", deviceId: this.store.hostId, kind: "status", text, state: "saved" });
@@ -261,26 +349,36 @@ export class AllDayRecordingService {
     session.timer.unref();
   }
   private async collectAudio(session: RecordingSession) {
-    if (!session.settings.sources.microphone) return;
+    if (!session.settings.sources.microphone || !session.audioSessionId) return;
     const until = Date.now();
     // Re-read this session: delayed ASR completion must not disappear behind a timestamp cursor.
-    for (const event of await this.dependencies.audio(session.startedAt, until, session.audioSessionId ?? session.id)) {
-      if (await this.store.hasEvent(session.roleId, event)) continue;
+    for (const event of await this.dependencies.audio(session.audioSince, until, session.audioSessionId)) {
+      const filename = path.join(this.store.directory(session.roleId), "events", recordingDay(event.startedAt), `${hash(event.id)}.json`);
+      const existing = await jsonOr<AllDayEvent | null>(filename, null);
+      if (existing && existing.text === event.text && existing.transcriptionState === event.transcriptionState) continue;
+      if (existing?.media) { await this.store.append(session.roleId, { ...event, media: existing.media }); continue; }
       await this.store.append(session.roleId, event, await this.dependencies.audioFile(event.speechRecordId!));
     }
   }
   private async sample(session: RecordingSession) {
     const now = Date.now();
-    const samples = await this.dependencies.capture(session.settings, session.id);
     const errors: string[] = [];
+    this.sourceErrors = {};
+    let microphoneReady = false;
+    if (session.settings.sources.microphone) {
+      try { session.audioSessionId = await this.dependencies.startMicrophone(session.id) || session.id; microphoneReady = true; }
+      catch (error) { this.sourceErrors.microphone = error instanceof Error ? error.message : String(error); errors.push(`microphone: ${this.sourceErrors.microphone}`); }
+    }
+    const samples = await this.dependencies.capture({...session.settings, sources:{...session.settings.sources,microphone:microphoneReady}}, session.id);
     for (const sample of samples) {
       if (!session.settings.sources[sample.source]) continue;
-      if (sample.error) errors.push(`${sample.source}: ${sample.error}`);
+      if (sample.error) { this.sourceErrors[sample.source] = sample.error; errors.push(`${sample.source}: ${sample.error}`); }
       if (sample.source === "window" && !sample.error && session.windowTitle === sample.text) continue;
       if (sample.source === "window" && !sample.error) session.windowTitle = sample.text ?? "";
       await this.store.append(session.roleId, { id: randomUUID(), startedAt: now, endedAt: now, source: sample.source, deviceId: this.store.hostId, kind: sample.jpeg ? "image" : sample.source === "window" ? "window" : "status", text: sample.error ?? sample.text ?? "", state: sample.error ? "error" : "saved" }, sample.jpeg ? Buffer.from(sample.jpeg, "base64") : undefined);
     }
-    await this.collectAudio(session);
+    try { await this.collectAudio(session); }
+    catch (error) { errors.push(`microphone: ${error instanceof Error ? error.message : String(error)}`); }
     session.lastSampleAt = now;
     session.error = errors.join("; ");
   }

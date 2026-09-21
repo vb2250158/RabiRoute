@@ -119,7 +119,7 @@ The approval section offers **Submit** and **Submit and deliver**. Both save you
 
 The top-bar selector changes the current Route on Message Adapters, Persona Configuration (including document and sync subpages), and Plans & Memory. Other pages hide the selector and retain the current selection. If changes are unsaved, the interface asks before switching.
 
-The selected value and menu items show the persona name. At desktop widths, the current Route configuration name appears beneath the top-bar title.
+The selected value and menu items show the persona name. The top-bar title shows only the current page name.
 
 Shared navigation includes **Speech Service**, **Performance**, **RabiLink**, **Log Diagnostics**, and **Settings**, above **User Guide**.
 

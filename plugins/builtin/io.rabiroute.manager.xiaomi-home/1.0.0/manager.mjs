@@ -68,6 +68,7 @@ export const activate = definePlugin({
             { routeId: "health", kind: "exact", path: "/api/agent/xiaomi-home/health", methods: ["GET"] },
             { routeId: "deployment", kind: "exact", path: "/api/agent/xiaomi-home/deployment", methods: ["GET", "PUT"] },
             { routeId: "deployment-start", kind: "exact", path: "/api/agent/xiaomi-home/deployment/start", methods: ["POST"] },
+            { routeId: "deployment-install", kind: "exact", path: "/api/agent/xiaomi-home/deployment/install", methods: ["POST"] },
             { routeId: "auth", kind: "exact", path: "/api/agent/xiaomi-home/auth", methods: ["GET", "POST", "DELETE"] },
             { routeId: "auth-refresh", kind: "exact", path: "/api/agent/xiaomi-home/auth/refresh", methods: ["POST"] },
             { routeId: "settings", kind: "exact", path: "/api/agent/xiaomi-home/settings", methods: ["GET", "PUT"] },

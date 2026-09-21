@@ -8,6 +8,7 @@ import { atomicWriteFileSync, withFileLockSync } from "../../shared/filePersiste
 import { KeyedAsyncLock } from "../../shared/keyedAsyncLock.js";
 import { recordDataMutationAudit } from "../../observability/dataMutationAudit.js";
 import { XiaomiHomeManagerApiError } from "./managerApi.js";
+import { WindowsHomeAssistantOs, type HomeAssistantOsDriver } from "./homeAssistantOs.js";
 
 const runFile = promisify(execFile);
 type Container = {
@@ -43,10 +44,10 @@ function invalid(message: string): never {
   throw new XiaomiHomeManagerApiError(400, "home_assistant_deployment_invalid", message);
 }
 function normalize(input: HomeAssistantDeploymentConfig): HomeAssistantDeploymentConfig {
-  if (!input || !["external", "docker"].includes(input.mode) || typeof input.autoStart !== "boolean") invalid("请选择 Home Assistant 部署方式。");
+  if (!input || !["external", "docker", "haos"].includes(input.mode) || typeof input.autoStart !== "boolean") invalid("请选择 Home Assistant 部署方式。");
   const name = String(input.containerName ?? "").trim();
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) invalid("请填写有效的 Docker 容器名称。");
-  return Object.freeze({ mode: input.mode, containerName: name, autoStart: input.mode === "docker" && input.autoStart });
+  return Object.freeze({ mode: input.mode, containerName: name, autoStart: input.mode !== "external" && input.autoStart });
 }
 
 /** Local deployment ownership is separate from HA credentials and shared Route policy. */
@@ -56,13 +57,16 @@ export class HomeAssistantDeployment {
   private stopped = false;
   private failure = "";
   private flight?: Promise<void>;
+  private readonly os: HomeAssistantOsDriver;
+  private installing = false;
 
-  constructor(runtimeDir: string, private readonly baseUrl: () => string, private readonly io = driver) {
+  constructor(runtimeDir: string, private readonly baseUrl: () => string, private readonly io = driver, os?: HomeAssistantOsDriver) {
     this.file = path.join(runtimeDir, "home-assistant-deployment.json");
+    this.os = os ?? new WindowsHomeAssistantOs(runtimeDir);
   }
 
   private read(): { config: HomeAssistantDeploymentConfig; revision: string } {
-    let config = normalize({ mode: "docker", containerName: "homeassistant", autoStart: false });
+    let config = normalize({ mode: process.platform === "win32" ? "haos" : "docker", containerName: "homeassistant", autoStart: false });
     if (fs.existsSync(this.file)) {
       const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
       if (saved.schemaVersion !== 1) invalid("Home Assistant 部署配置版本无效。");
@@ -87,7 +91,7 @@ export class HomeAssistantDeployment {
       this.audit("configure", "committed");
       return this.inspect();
     });
-    if (!saved.config.autoStart) return saved;
+    if (!saved.config.autoStart || saved.config.mode === "haos") return saved;
     try { return await this.ensureReady(saved.revision); }
     catch (error) {
       this.failure = error instanceof XiaomiHomeManagerApiError ? error.message : "Home Assistant 自动启动失败，请重新检测。";
@@ -117,7 +121,21 @@ export class HomeAssistantDeployment {
 
   async inspect(): Promise<HomeAssistantDeploymentSnapshot> {
     const saved = this.read();
-    const base = { schemaVersion: 1 as const, ...saved, configured: fs.existsSync(this.file), baseUrl: this.baseUrl(), canStart: false };
+    const base = { schemaVersion: 1 as const, ...saved, configured: fs.existsSync(this.file), baseUrl: this.baseUrl(), canStart: false, haosInstallPath: this.os.installationPath };
+    if (saved.config.mode === "haos") {
+      try {
+        const status = await this.os.inspect();
+        const installed = status.state === "installed";
+        const ready = installed && await this.io.ready("http://127.0.0.1:8123");
+        return { ...base, baseUrl: "http://127.0.0.1:8123", installation: installed ? "installed" : "not_found",
+          state: this.failure ? "error" : this.installing || status.state === "installing" ? "installing" : ready ? "ready" : status.state === "reboot_required" ? "reboot_required" : status.state === "error" ? "error" : installed ? "starting" : "stopped",
+          message: this.failure || (ready ? "Home Assistant OS 已就绪。" : status.message),
+          image: status.version ? `Home Assistant OS ${status.version}` : undefined,
+          installationPath: status.root, canInstall: !this.installing, canStart: installed && !this.installing };
+      } catch {
+        return { ...base, installation: "unknown", state: "error", message: "无法读取 Home Assistant OS 安装状态，请检查本机安装日志。" };
+      }
+    }
     if (saved.config.mode === "external") {
       const ready = await this.io.ready(base.baseUrl);
       return { ...base, installation: "external", state: ready ? "ready" : "unavailable",
@@ -147,6 +165,9 @@ export class HomeAssistantDeployment {
       this.requireRevision(revision);
       if (this.stopped) invalid("米家模块正在停止，请刷新页面。");
       this.failure = "";
+      if (this.read().config.mode === "haos") {
+        return this.runOs("Start");
+      }
       let before = await this.inspect();
       if (before.installation === "unknown" && before.canStart && process.platform === "win32") {
         try { await this.io.run(["desktop", "start"]); }
@@ -179,6 +200,32 @@ export class HomeAssistantDeployment {
     });
   }
 
+  install(revision: string): Promise<HomeAssistantDeploymentSnapshot> {
+    return this.operations.run("deployment", async () => {
+      this.requireRevision(revision);
+      if (this.stopped) invalid("米家模块正在停止，请刷新页面。");
+      if (this.read().config.mode !== "haos") invalid("请选择 Home Assistant OS（Hyper-V）后安装。");
+      return this.runOs("Install");
+    });
+  }
+
+  private async runOs(operation: "Install" | "Start"): Promise<HomeAssistantDeploymentSnapshot> {
+    this.installing = true;
+    this.failure = "";
+    this.audit(operation.toLowerCase(), "started");
+    try {
+      const result = await this.os.run(operation, this.read().config.autoStart);
+      if (result.state === "reboot_required") this.audit("enable-hyper-v", "committed");
+      else this.audit(operation.toLowerCase(), result.state === "installed" ? "committed" : "failed");
+    } catch {
+      this.failure = "安装操作未能完成，请重新检测进度；不要删除已有虚拟机或磁盘。";
+      this.audit(operation.toLowerCase(), "failed");
+    } finally {
+      this.installing = false;
+    }
+    return this.inspect();
+  }
+
   start(): void {
     this.stopped = false;
     const saved = this.read();
@@ -197,7 +244,7 @@ export class HomeAssistantDeployment {
 
   private audit(action: string, outcome: "started" | "committed" | "failed"): void {
     recordDataMutationAudit({ group: "xiaomi-home", event: `home_assistant_${action}`, owner: "home-assistant-deployment",
-      action, target: { type: "container", id: this.read().config.containerName },
+      action, target: { type: this.read().config.mode === "haos" ? "virtual-machine" : "container", id: this.read().config.mode === "haos" ? "RabiRoute-HomeAssistant" : this.read().config.containerName },
       dataSource: { kind: "runtime", id: "home-assistant-deployment" }, outcome });
   }
 }

@@ -559,16 +559,6 @@ html[data-rabiroute-theme="light"] .vad-meter .bg-warning {
   line-height: 1.1;
 }
 
-.topbar-subtitle {
-  margin-top: 2px;
-  color: var(--rr-muted-faint);
-  font-size: 11px;
-  font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -7108,8 +7098,6 @@ button.knowledge-plan-attachment.file {
   }
   .has-route-switcher .topbar-title .font-weight-bold,
   .topbar-context:has(.topbar-page-controls:not(:empty)) .topbar-title .font-weight-bold { font-size: 12px; }
-  .has-route-switcher .topbar-subtitle,
-  .topbar-context:has(.topbar-page-controls:not(:empty)) .topbar-subtitle { display: none; }
   .topbar-route-picker,
   .topbar-page-controls {
     flex: 0 0 auto;
