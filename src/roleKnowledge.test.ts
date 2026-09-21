@@ -2744,3 +2744,155 @@ Hidden-only body phrase.
   const hidden = roleKnowledgeSnapshotFromStorage(roleDir, "Hidden-only body phrase.");
   assert.deepEqual(hidden.requiredReadItems, []);
 });
+
+test("a persona skill can be a directory holding SKILL.md plus its own references", () => {
+  const roleDir = makeRoleDir();
+  writeSkill(roleDir, "packaging/SKILL.md", `---
+id: packaging
+title: Packaging
+summary: Build the client package for every platform.
+keywords: packaging, build, platform
+updatedAt: 2026-06-18T00:00:00.000Z
+status: active
+---
+# Packaging
+
+Entry body that only appears when read directly.
+`);
+  writeSkill(roleDir, "packaging/references/android.md", "# Android\n\nSibling reference body.\n");
+
+  const skills = listRoleSkills(roleDir);
+  assert.deepEqual(skills.map((item) => item.id), ["packaging"]);
+  assert.equal(skills[0].title, "Packaging");
+
+  const detail = getRoleSkill(roleDir, "packaging");
+  assert.match(detail?.content ?? "", /Entry body/);
+});
+
+test("a directory skill without an explicit id falls back to its folder name", () => {
+  const roleDir = makeRoleDir();
+  writeSkill(roleDir, "no-explicit-id/SKILL.md", `---
+title: No explicit id
+summary: Directory form that relies on the folder name for its id.
+keywords: directory, fallback
+---
+# No explicit id
+
+Body.
+`);
+
+  const skills = listRoleSkills(roleDir);
+  assert.deepEqual(skills.map((item) => item.id), ["no-explicit-id"]);
+});
+
+test("flat skills and directory skills are indexed together", () => {
+  const roleDir = makeRoleDir();
+  writeSkill(roleDir, "flat-one.md", `---
+id: flat-one
+title: Flat one
+summary: A flat markdown skill.
+keywords: flat
+---
+# Flat one
+
+Body.
+`);
+  writeSkill(roleDir, "nested-one/SKILL.md", `---
+id: nested-one
+title: Nested one
+summary: A directory skill.
+keywords: nested
+---
+# Nested one
+
+Body.
+`);
+
+  const skills = listRoleSkills(roleDir);
+  assert.deepEqual(skills.map((item) => item.id).sort(), ["flat-one", "nested-one"]);
+});
+
+function directorySkillBoundaryFixture(t: import("node:test").TestContext) {
+  const roleDir = makeRoleDir();
+  t.after(() => fs.rmSync(roleDir, { recursive: true, force: true }));
+  const content = "---\ntitle: Synthetic entry\nsummary: Boundary test only.\nkeywords: synthetic, boundary\n---\n# Synthetic entry\n\nSynthetic body.\n";
+  writeSkill(roleDir, "flat.md", content);
+  writeSkill(roleDir, "nested/SKILL.md", content);
+  return { roleDir, content, root: path.join(roleDir, "skills"), directory: path.join(roleDir, "skills", "nested"), file: path.join(roleDir, "skills", "nested", "SKILL.md") };
+}
+
+for (const kind of ["file", "directory"] as const) {
+  test(`directory Skill rejects a real external ${kind} link without reading its body`, t => {
+    const sample = directorySkillBoundaryFixture(t);
+    const outside = path.join(sample.roleDir, "skills-other");
+    fs.mkdirSync(outside);
+    const external = path.join(outside, "SKILL.md");
+    fs.writeFileSync(external, sample.content);
+    const link = kind === "file" ? sample.file : path.join(sample.root, "linked");
+    if (kind === "file") fs.unlinkSync(sample.file);
+    try {
+      fs.symlinkSync(kind === "file" ? external : outside, link, kind === "file" ? "file" : process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(String((error as NodeJS.ErrnoException).code))) {
+        t.skip("This host cannot create the required link; mocked rejection is tested separately.");
+        return;
+      }
+      throw error;
+    }
+    const read = fs.readFileSync;
+    t.mock.method(fs, "readFileSync", (...args: Parameters<typeof read>) => {
+      assert.notEqual(String(args[0]), link, "a rejected entry must not reach its linked body");
+      assert.notEqual(String(args[0]), path.join(link, "SKILL.md"));
+      return read(...args);
+    });
+    assert.deepEqual(listRoleSkills(sample.roleDir).map(item => item.id).sort(), kind === "file" ? ["flat"] : ["flat", "nested"]);
+  });
+
+  test(`directory Skill rejects a ${kind} link reported after enumeration`, t => {
+    const sample = directorySkillBoundaryFixture(t);
+    const original = fs.lstatSync;
+    t.mock.method(fs, "lstatSync", (...args: Parameters<typeof original>) => {
+      const stat = original(...args);
+      assert.ok(stat, "The synthetic fixture exists");
+      if (String(args[0]) === (kind === "file" ? sample.file : sample.directory)) {
+        return Object.assign(stat, { isSymbolicLink: () => true });
+      }
+      return stat;
+    });
+    assert.deepEqual(listRoleSkills(sample.roleDir).map(item => item.id), ["flat"]);
+  });
+}
+
+for (const kind of ["file", "directory"] as const) {
+  test(`directory Skill rejects canonical ${kind} paths under an adjacent root prefix`, t => {
+    const sample = directorySkillBoundaryFixture(t);
+    const original = fs.realpathSync;
+    t.mock.method(fs, "realpathSync", (...args: Parameters<typeof original>) => {
+      if (String(args[0]) === (kind === "file" ? sample.file : sample.directory)) {
+        return path.join(`${sample.root}-other`, "nested", ...(kind === "file" ? ["SKILL.md"] : []));
+      }
+      return original(...args);
+    });
+    assert.deepEqual(listRoleSkills(sample.roleDir).map(item => item.id), ["flat"]);
+  });
+}
+
+test("directory Skill canonical containment follows platform case rules", t => {
+  const sample = directorySkillBoundaryFixture(t);
+  const original = fs.realpathSync;
+  t.mock.method(fs, "realpathSync", (...args: Parameters<typeof original>) => {
+    if (String(args[0]) === sample.directory || String(args[0]) === sample.file) return String(args[0]).toUpperCase();
+    return original(...args);
+  });
+  assert.deepEqual(listRoleSkills(sample.roleDir).map(item => item.id).sort(), process.platform === "win32" ? ["flat", "nested"] : ["flat"]);
+});
+
+test("unreadable directory Skill entry does not hide compatible flat entries", t => {
+  const sample = directorySkillBoundaryFixture(t);
+  const original = fs.lstatSync;
+  t.mock.method(fs, "lstatSync", (...args: Parameters<typeof original>) => {
+    if (String(args[0]) === sample.file) throw Object.assign(new Error("Synthetic denied read"), { code: "EACCES" });
+    return original(...args);
+  });
+  assert.deepEqual(listRoleSkills(sample.roleDir).map(item => item.id), ["flat"]);
+});

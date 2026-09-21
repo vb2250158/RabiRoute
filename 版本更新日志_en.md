@@ -6,6 +6,14 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.10 - 2026-09-21
+
+### Packaged resources and directory-form persona Skills
+
+- Wire the Manager public resource catalog to the current installation's `packageRoot` for public Skills and allowlisted documents, rather than the writable state directory. Split package/state layouts no longer produce an empty resource list merely because the wrong root was scanned. Existing authentication, file allowlists and path boundaries remain unchanged.
+- Persona Skill lists and details support existing flat Markdown files and `SKILL.md` entries in immediate child directories. Directory entries without an explicit ID use their folder name. Directory and entry checks use `lstat` and canonical-path containment to reject symbolic links, junctions and paths outside the Skill root while preserving flat-file compatibility. Only the entry body is indexed and read; this does not add HTTP download or execution permissions for sibling `scripts/`, `references/` or other dependencies, or copy private Skills into the public repository.
+- Add package-root wiring, split-layout and three directory-Skill regressions, and synchronize bilingual LAN resource troubleshooting. Other Hook guidance, Skill distribution, plan SSE and runtime configuration changes are outside this version. Installation and cross-machine use still require deployment of the corresponding version.
+
 ## 0.3.9 - 2026-09-21
 
 ### Plan pagination and knowledge-page state

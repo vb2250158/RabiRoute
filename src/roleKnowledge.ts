@@ -565,6 +565,48 @@ function markdownFiles(dir: string): string[] {
   }
 }
 
+/**
+ * A persona skill is either a flat markdown file or a directory holding `SKILL.md`.
+ * The directory form is what lets a skill keep its own `references/`, `scripts/`
+ * and `agents/` files next to the entry instead of being flattened into one body.
+ * Only the entry file is indexed here; sibling files stay on-demand reads.
+ */
+function skillEntryFiles(dir: string): string[] {
+  try {
+    if (!fs.existsSync(dir)) return [];
+    const root = fs.realpathSync(dir);
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const flat = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .map((entry) => path.join(dir, entry.name));
+    const isWithinRoot = (resolved: string): boolean => {
+      // path.relative uses the platform's path/case rules and rejects sibling
+      // prefixes such as skills-other; string startsWith is not containment.
+      const relative = path.relative(root, resolved);
+      return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    };
+    const nested = entries.filter((entry) => entry.isDirectory()).flatMap((entry) => {
+      const directory = path.join(dir, entry.name);
+      const filePath = path.join(directory, "SKILL.md");
+      try {
+        const directoryStat = fs.lstatSync(directory);
+        if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) return [];
+        if (!isWithinRoot(fs.realpathSync(directory))) return [];
+        const fileStat = fs.lstatSync(filePath);
+        if (fileStat.isSymbolicLink() || !fileStat.isFile()) return [];
+        if (!isWithinRoot(fs.realpathSync(filePath))) return [];
+        return [filePath];
+      } catch {
+        // Missing/unreadable entries remain absent, as with flat Skill reads.
+        return [];
+      }
+    });
+    return [...flat, ...nested].sort();
+  } catch {
+    return [];
+  }
+}
+
 export type RoleKnowledgeFileCounts = {
   activePlans: number;
   archivedPlans: number;
@@ -1626,7 +1668,9 @@ function parseSkillMarkdown(filePath: string): RoleSkillDetail | null {
     }
   }
 
-  const fallbackId = path.basename(filePath, ".md");
+  // Directory-form skills are indexed by their folder name, not the literal "SKILL".
+  const baseName = path.basename(filePath, ".md");
+  const fallbackId = baseName.toLowerCase() === "skill" ? path.basename(path.dirname(filePath)) : baseName;
   const title = String(metadata.title || content.match(/^#\s+(.+)$/m)?.[1] || fallbackId).trim();
   const summary = String(metadata.summary || content.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#")) || "").trim();
   const keywords = parseKeywordValue(metadata.keywords);
@@ -2944,7 +2988,7 @@ export function listConsolidatedMemories(roleDir: string): ConsolidatedMemoryIte
 }
 
 export function listRoleSkillDetails(roleDir: string): RoleSkillDetail[] {
-  return markdownFiles(skillsDir(roleDir)).flatMap((file) => {
+  return skillEntryFiles(skillsDir(roleDir)).flatMap((file) => {
     try {
       const item = parseSkillMarkdown(file);
       return item ? [item] : [];

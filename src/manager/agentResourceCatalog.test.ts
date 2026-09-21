@@ -22,6 +22,23 @@ function denied(code: AgentResourceErrorCode) {
   return (error: unknown) => error instanceof AgentResourceCatalogError && error.code === code;
 }
 
+test("installed Manager wires public resources to packageRoot, never mutable stateRoot", async () => {
+  const source = await fs.readFile(new URL("./controlPlaneRoutes.ts", import.meta.url), "utf8");
+  assert.match(source, /agentResourceCatalog:\s*new AgentResourceCatalog\(\{\s*rootDir:\s*packageRoot\s*\}\)/);
+});
+
+test("split installed layout reproduces empty state catalog and reads packaged contracts", async context => {
+  const sample = await fixture(context);
+  const stateRoot = path.join(sample.root, "state");
+  await fs.mkdir(stateRoot);
+  await sample.write("skills/sample/SKILL.md", "# Public skill\n");
+  await sample.write("docs/rabi-agent-interfaces.md", "Public API contract\n");
+  assert.deepEqual(await new AgentResourceCatalog({ rootDir: stateRoot }).list(), []);
+  const entries = await sample.catalog.list();
+  assert.deepEqual(entries.map(entry => entry.id).sort(), ["docs/rabi-agent-interfaces.md", "skills/sample/SKILL.md"]);
+  assert.equal((await sample.catalog.read("docs/rabi-agent-interfaces.md")).content, "Public API contract\n");
+});
+
 test("discovers manifest metadata and returns original text, stable relative IDs and byte hashes without executing scripts", async context => {
   const sample = await fixture(context);
   const manifest = '---\nname: "sample"\ndescription: >-\n  第一行\n  第二行\n---\n[guide](references/guide.md#section)\nRun `scripts/helper.mjs`.\n';

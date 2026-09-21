@@ -9206,7 +9206,7 @@ export async function startManager(options: StartManagerOptions = {}): Promise<v
       ManagerPluginRequestTracker,
       handleLanAgentApi,
       lanAgentAuthority,
-      agentResourceCatalog: new AgentResourceCatalog({ rootDir }),
+      agentResourceCatalog: new AgentResourceCatalog({ rootDir: packageRoot }),
       lanAgentManagerIdentity: () => ({
         applicationGenerationId: managerHostIdentity?.applicationGenerationId ?? managerInstanceId,
         managerInstanceId,
