@@ -6,6 +6,17 @@ English | <a href="./版本更新日志.md">简体中文</a>
 
 # Version update
 
+## 0.3.12 - 2026-09-21
+
+### Complete-folder downloads for an explicitly selected persona Skill
+
+- This is a source-only publication explicitly requested by the user. The integrated candidate passed static gates and five offline regressions. Dependency downloads are blocked, so integrated TypeScript checks, complete dynamic tests, new dependency security audits (SCA), build and deployment remain unverified. Tests of the earlier standalone patch do not establish acceptance of this integration. No installer is published.
+
+- Add `GET /api/roles/:roleId/skills/:skillId/download` with the `/roles/...` alias, retaining existing node/Agent permissions and exact persona Route binding. ZIP downloads preserve original bytes, hidden files, scripts and empty directories; a flat Skill contains only `SKILL.md`. Other Skills are neither guessed nor followed.
+- Build the archive in a bounded child before streaming it. Within the trusted source-owner boundary, reject links, non-regular files, duplicate/conflicting paths and source changes. Limits are 16 MiB per file, 64 MiB of source data, 4096 entries, depth 32 and a 68 MiB ZIP, with at most four leases spanning generation, transfer and quarantine, and a 30-second post-generation transfer deadline. Unconfirmed termination or failed cleanup retains admission and never deletes live-worker artifacts early. This is not protection against arbitrary malicious concurrent replacement by a source-directory writer.
+- The existing Rabi Agent CLI gains `--output` downloads using the original node credential, Agent ID and before/after identity checks. Streamed length, hash and ZIP-signature validation precedes hard-link publication without overwriting an existing file. Choose an absolute path outside the installation with an existing parent directory. Unsupported hard links fail; there is no automatic extraction, execution, retry or overwriting fallback. A cleanup error with `committed:true` requires checking the existing file first.
+- Pin the MIT dependency `yazl@3.3.1`; deployment requires a complete immutable release containing the new dependencies. Server publication, updating the existing Mac or other remote connector, and the currently trusted connection address remain separate acceptance conditions. Automatic LAN relocation is excluded, and public Relay large-binary transport and real Mac downloads are not claimed as accepted. Downloading a script does not establish its executability on the target system.
+
 ## 0.3.11 - 2026-09-21
 
 ### Bounded plan refresh, WorkBuddy integration and public Skill synchronization

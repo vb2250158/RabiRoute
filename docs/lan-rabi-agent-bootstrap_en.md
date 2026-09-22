@@ -98,6 +98,20 @@ Use the exact `agentId` from private configuration; never guess an identity. The
 
 The Windows release process will copy public `skills/` through a controlled Git-tracked file selection, excluding private or untracked workspace content. ZIP acceptance has not been run for this packaging chain; do not claim that the installed package already contains a complete usable skill catalog.
 
+### Download one Skill and its support files
+
+When the Skill body is readable but `scripts/` or `references/` files are missing locally, download that Skill's complete directory. Do not copy the whole persona or guess host filesystem paths. An Agent configured for the persona reuses its existing node credential and persona permission. This endpoint does not execute scripts.
+
+The installed launcher uses the current immutable release directory as its working directory; `./` does not refer to your shell or project directory. Explicitly choose an existing parent directory on this computer outside the Rabi Agent installation and pass an absolute file path to `--output`; the final file must not exist. Use the Bash example below only if you have chosen and confirmed that `$HOME/Downloads` exists and is outside the installation; otherwise substitute your chosen existing directory. Do not create directories automatically. The shell expands `$HOME` to an absolute path.
+
+```bash
+node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --agent "<agentId>" --output "$HOME/Downloads/selected-skill.zip"
+```
+
+Use the installed connector path supplied by the Hook. Manager and remote connector versions require separate acceptance: a new Manager does not prove that the Mac already has a CLI supporting `--output`. Upgrade old connectors through the installation/signed-update flow above, then verify the Hook and CLI option; do not install a second updater. The HTTP endpoint can also be used independently by an authenticated binary client. The destination parent must exist and existing files are not overwritten. The client validates ZIP length, SHA-256 and Manager identity before/after transfer before reporting success; it never extracts or executes content. The ZIP root is `<skillId>/`, containing all regular support files in that Skill directory. A flat Markdown Skill contains only `<skillId>/SKILL.md`. Download another Skill separately; external references are not followed. Links, escapes, unsafe names and exceeded limits fail the entire package rather than silently omitting scripts. Consult the deployed [download contract, limits and errors](rabi-agent-interfaces_en.md#download-one-complete-skill-folder).
+
+Downloading `.ps1` on macOS does not prove that `pwsh` exists, paths are suitable or execution is authorized. This covers registered Rabi Agent downloads from their configured Manager; public RabiLink large-binary forwarding and real cross-machine acceptance are separate.
+
 ## Upload a file and send it to a QQ group
 
 > Upload integration, the full build and deployment were verified locally in `0.3.4-4b5d30118b40`. Tests used real HTTP and simulated NapCat without sending files to a real group. Real two-computer group-file delivery remains unverified.

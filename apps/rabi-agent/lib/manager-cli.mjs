@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { createManagerClient } from "./manager-client.mjs";
+import { createManagerClient, isSkillDownloadTarget } from "./manager-client.mjs";
 
 /** Explicit CLI invocation uses the existing host shell, never a second Agent runtime. */
 export async function runManagerCommand(args, configPath, { fetchImpl = fetch, readInput = async () => "" } = {}) {
@@ -17,6 +17,12 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, r
     if (!value || value.startsWith("--")) throw new Error(`Missing value for ${name}.`);
     return value;
   }
+  const downloading = args.includes("--output");
+  const downloadTarget = isSkillDownloadTarget(target);
+  if (downloading) {
+    if (args.filter(item => item === "--output").length !== 1 || args.filter(item => item === "--api").length !== 1 || uploading || method !== "GET" || !downloadTarget || ["--body-stdin", "--if-match", "--idempotency-key", "--upload-id"].some(flag => args.includes(flag))) throw new Error("--output is only allowed with GET role skill download, without mutation, upload, body or header options.");
+    option("--output");
+  } else if (downloadTarget) throw new Error("Skill download requires --output <local.zip>; binary output is never printed.");
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   if (!config.nodeCredential) throw new Error("This connector must be enrolled with an independent node credential; shared WebGUI credentials are not accepted.");
   const agentId = option("--agent");
@@ -24,6 +30,17 @@ export async function runManagerCommand(args, configPath, { fetchImpl = fetch, r
   if (!agentId || !agent) throw new Error("Select a registered Agent with --agent; identities are never guessed.");
   if (agent.enabled === false) throw new Error("The selected Agent is disabled.");
   const client = createManagerClient({ managerUrl: config.managerUrl, credential: config.nodeCredential, agentId, fetchImpl });
+  if (downloading) {
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try { return await client.download(target, option("--output"), { signal: controller.signal }); }
+    finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
+    }
+  }
   if (uploading) {
     if (["--body-stdin", "--if-match", "--idempotency-key"].some(flag => args.includes(flag))) throw new Error("--upload does not accept API body or header options; --upload-id is the stable idempotency key.");
     return client.upload(option("--upload"), option("--upload-id"));

@@ -1,6 +1,6 @@
 import { normalizeRouteAgentTargets, type RouteAgentTargetsDefinition } from "../shared/routeAgentTargets.js";
 import type { LanAgentRequestAccess } from "./lanAgentRequestAccess.js";
-import { parseRoleKnowledgeResourceRoute } from "./roleKnowledgeRoute.js";
+import { parseRoleKnowledgeResourceRoute, parseRoleSkillDownloadRoute } from "./roleKnowledgeRoute.js";
 
 export type LanAgentRoleSkillAccess =
   | { allowed: true }
@@ -16,6 +16,10 @@ export function authorizeLanAgentRoleSkillRequest<Definition extends RouteAgentT
 ): LanAgentRoleSkillAccess {
   if (access.kind === "denied") return { allowed: false, status: access.status, error: access.error };
   if (method !== "GET") return { allowed: true };
+  let download: ReturnType<typeof parseRoleSkillDownloadRoute>;
+  try { download = parseRoleSkillDownloadRoute(pathname); }
+  catch { return { allowed: false, status: 403, error: "INVALID_SKILL_DOWNLOAD_PATH" }; }
+  if (download) return authorizeLanAgentRoleSkillRead(access, download.roleId, definitions, roleIdForDefinition);
   const route = parseRoleKnowledgeResourceRoute(pathname);
   if (route?.resource !== "skills") return { allowed: true };
   return authorizeLanAgentRoleSkillRead(access, route.roleId, definitions, roleIdForDefinition);

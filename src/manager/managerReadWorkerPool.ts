@@ -93,6 +93,8 @@ type PendingRead = {
   resolve(value: unknown): void;
   reject(error: Error): void;
   abortListener?: () => void;
+  /** Trusted non-throwing observer; called only when this task can no longer write files. */
+  onWorkerReleased?: () => void;
 };
 
 type SharedRead<T> = {
@@ -280,11 +282,12 @@ export class ManagerReadWorkerPool {
     this.stopped = true;
   }
 
-  run<T>(task: ManagerReadWorkerTask, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
+  run<T>(task: ManagerReadWorkerTask, options: { signal?: AbortSignal; timeoutMs?: number; onWorkerReleased?: () => void } = {}): Promise<T> {
     if (!this.accepting) {
       return Promise.reject(new ManagerReadWorkerError("Manager read worker pool is stopped.", "aborted"));
     }
     if (this.terminationBlockedWorkers.size > 0) {
+      options.onWorkerReleased?.(); // This request never acquired a worker.
       return Promise.reject(this.terminationBlockedError());
     }
     if (this.terminationPendingWorkers.size > 0) {
@@ -307,6 +310,7 @@ export class ManagerReadWorkerPool {
         queuedAt: performance.now(),
         timeoutMs: Math.max(100, Math.floor(options.timeoutMs ?? this.timeoutMs)),
         signal: options.signal,
+        onWorkerReleased: options.onWorkerReleased,
         resolve: value => resolve(value as T),
         reject
       };
@@ -829,11 +833,13 @@ export class ManagerReadWorkerPool {
     slot.active = undefined;
     this.active -= 1;
     ManagerReadWorkerPool.globalActive -= 1;
+    current.pending.onWorkerReleased?.();
   }
 
   private rejectQueue(error: Error): void {
     for (const pending of this.queue.splice(0)) {
       if (pending.abortListener) pending.signal?.removeEventListener("abort", pending.abortListener);
+      pending.onWorkerReleased?.();
       pending.reject(error);
     }
   }

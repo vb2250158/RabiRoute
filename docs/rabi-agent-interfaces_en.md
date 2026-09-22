@@ -1161,6 +1161,7 @@ Role skills live under:
 
 ```text
 data/roles/<RoleId>/skills/*.md
+data/roles/<RoleId>/skills/<skill-folder>/SKILL.md
 ```
 
 ```http
@@ -1169,6 +1170,36 @@ GET /api/roles/:roleId/skills/:skillId
 ```
 
 The list returns metadata; the item endpoint returns the complete Markdown body. Skill bodies are not injected into every packet. If a skill appears in required reads, the handler must fetch it before acting.
+
+### Download one complete skill folder
+
+`GET /api/roles/:roleId/skills/:skillId/download` returns one complete Skill ZIP. `GET /roles/:roleId/skills/:skillId/download` is an alias with identical authorization. No query parameters, arbitrary file paths, or whole-persona export are accepted. Remote callers need registered node credentials, Manager API permission for the exact Agent, and the persona Route's matching `instanceId + agentId`; no per-Skill grant is added. Local management retains existing authentication.
+
+Directory Skills preserve all regular files, subdirectories and bytes, including `scripts/`, `references/`, `agents/`, hidden files and binary support files, beneath one `<skillId>/` ZIP root. A flat Markdown Skill produces only `<skillId>/SKILL.md`. Resolution follows the indexed Skill ID rather than assuming that frontmatter `id` equals the folder name; duplicate IDs are conflicts. Markdown references never pull in files outside the root or another Skill. Download another Skill separately when needed. Private persona content is not copied into public `resources` or release packages.
+
+Example (Bash; use the installed connector path supplied by the Hook and replace placeholders, without using a local Host or guessing ports on a remote computer):
+
+The installed launcher uses the current immutable release directory as its working directory; `./` does not refer to your shell or project directory. Explicitly choose an existing parent directory on this computer outside the Rabi Agent installation and pass an absolute file path to `--output`; the final file must not exist. Use the Bash example below only if you have chosen and confirmed that `$HOME/Downloads` exists and is outside the installation; otherwise substitute your chosen existing directory. Do not create directories automatically. The shell expands `$HOME` to an absolute path.
+
+```bash
+node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --agent "<agentId>" --output "$HOME/Downloads/selected-skill.zip"
+```
+
+The connector reads `managerUrl` and node credentials from private configuration, checks `/meta` generation and instance identity before and after the request, and rejects redirects. `--output` is limited to this GET download. The parent directory must exist; existing files are never overwritten, and nothing is extracted, installed or executed automatically. Streaming validation checks `Content-Length`, `x-rabiroute-content-sha256` and the ZIP signature before committing the local file without replacement. The receipt contains `ok`, the local path, byte count and SHA-256. Failures remove temporary files and never save JSON errors as ZIPs. Ordinary JSON `--api` output is not a binary download mechanism. Atomic non-replacement commit requires hard-link support in the destination filesystem; unsupported Mac/NAS filesystems fail explicitly without a potentially overwriting copy/rename fallback. If the destination was committed but temporary cleanup failed, the fixed error includes `committed:true` and states that the complete target may already exist: inspect it and compare against a trusted SHA-256 rather than retrying automatically. Download errors preserve fixed local codes and allowlisted HTTP statuses, never server bodies, transport exceptions or credentials.
+
+Responses use `application/zip`, safe `Content-Disposition: attachment`, `Content-Length`, `x-rabiroute-content-sha256`, a strong ETag and `Cache-Control: private, no-store`. Range/resume is not promised. A bounded interactive worker fully generates and validates the private artifact before HTTP streaming; IPC carries no whole-package Buffer/base64. Defaults are 16 MiB per file, 64 MiB total source bytes, 4096 file/directory entries, depth 32 and 68 MiB ZIP output. Traversal, symlinks/junctions, hard links, non-regular files, unsafe cross-platform names and case/Unicode-normalization collisions fail the entire archive. Limits never truncate or silently omit dependencies. Changes detected during generation return a conflict. Skill roots must remain writable only by trusted local owners; Node path checks do not provide complete protection against an adversary with local write permission replacing ancestors concurrently.
+
+| HTTP | Meaning and recovery |
+| --- | --- |
+| 401 | Missing or invalid credentials; check enrolled configuration without exposing secrets. |
+| 403 | Node/Agent or persona permission denied, or unsafe Skill paths/links; fix bindings or have the Skill owner inspect the directory, never bypass checks. |
+| 404 | Skill absent from an authorized persona; refresh the list and verify the ID. |
+| 409 | Conflicting Skill IDs/archive names, or source changes during generation; the owner must resolve them before a new download. |
+| 413 | File, entry, depth or archive limit exceeded; explicitly reduce the package, never accept partial content. |
+| 503 | Busy queue, deadline or unconfirmed worker exit; not an empty package and not a reason for automatic repeated retries. |
+| 500 | Internal generation or transfer failure; retain the error code for the Manager owner. |
+
+Manager admits at most four live download leases, covering generation, slow transfers and quarantined workers. Excess requests return 503 before creating a temporary directory. Transfer after generation has a 30-second deadline: timeout destroys the stream and cleans the artifact, so slow clients cannot accumulate unbounded disk usage. Disconnects cancel generation/transfer and remove private temporary artifacts. An unconfirmed worker exit retains both the artifact and its admission slot until actual close; cleanup failure also retains admission. Node on macOS can download `.ps1` files, but this does not establish that PowerShell is installed, paths are portable, or execution gates passed. Download success proves content integrity, not execution permission. This contract targets registered Rabi Agent connections to their configured Manager; public RabiLink large-binary forwarding and real cross-machine downloads need separate acceptance, not an inference from local tests.
 
 ## Local YeYu Gamer Manager facade
 

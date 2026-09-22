@@ -28,6 +28,9 @@ test("Hook checks metadata around own context, injects installed API guide only 
   assert.match(result.additionalContext, /\/api\/lan-agent\/capabilities/);
   assert.match(result.additionalContext, /\/api\/lan-agent\/resources/);
   assert.match(result.additionalContext, /session-b/);
+  assert.match(result.additionalContext, /download --output "ABSOLUTE_LOCAL_ZIP_PATH".*outside the installation and under an existing parent directory/);
+  assert.match(result.additionalContext, /direct user request/);
+  assert.match(result.additionalContext, /\.mac or \.ps1.*not permission to execute/);
   assert.equal(result.additionalContext.includes("fixture-only"), false);
   assert.equal(requests[1].url, "http://manager.test:54321/api/lan-agent/instances/instance-a/agents/agent-b/context");
   assert.equal(requests.length, 3);

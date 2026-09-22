@@ -1,4 +1,5 @@
 import { parentPort, workerData } from "node:worker_threads";
+import { buildRoleSkillArchive, RoleSkillArchiveError } from "./roleSkillArchive.js";
 import { readKnowledgeStorageDelta, type KnowledgeInventory } from "./knowledgeSearchStorage.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -118,6 +119,13 @@ export type ManagerReadWorkerTask =
       type: "role_skill_catalog";
       roleDir: string;
       skillId?: string;
+    }
+  | {
+      type: "role_skill_archive";
+      roleDir: string;
+      skillId: string;
+      /** Parent-owned private lease, never taken from HTTP input. */
+      outputPath: string;
     }
   | {
       type: "role_consolidation_runs";
@@ -358,6 +366,14 @@ async function execute(task: ManagerReadWorkerTask): Promise<unknown> {
       return await roleKnowledgeFileCountsInWorker(task.roleDir);
     case "role_skill_catalog":
       return task.skillId ? getRoleSkill(task.roleDir, task.skillId) ?? null : listRoleSkills(task.roleDir);
+    case "role_skill_archive": {
+      try {
+        return { ok: true, ...await buildRoleSkillArchive(task.roleDir, task.skillId, task.outputPath) };
+      } catch (error) {
+        if (error instanceof RoleSkillArchiveError) return { ok: false, code: error.code };
+        throw error;
+      }
+    }
     case "role_consolidation_runs": {
       const runs = listConsolidationRuns(task.roleDir);
       return task.runId ? runs.find(run => run.id === task.runId) ?? null : runs;

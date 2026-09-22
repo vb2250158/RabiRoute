@@ -1,7 +1,49 @@
 import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import fsPromises, { lstat, open } from "node:fs/promises";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+
+// Keep aligned with the server skill ZIP archive ceiling (68 MiB).
+export const MAX_SKILL_DOWNLOAD_BYTES = 68 * 1024 * 1024;
+export function isSkillDownloadTarget(target) {
+  if (typeof target !== "string") return false;
+  const match = /^\/(?:api\/)?roles\/([^/?#\\]+)\/skills\/([^/?#\\]+)\/download$/.exec(target);
+  if (!match) return false;
+  try {
+    return match.slice(1).every(part => {
+      const value = decodeURIComponent(part);
+      return value.trim().length > 0 && !/[.\s]$/.test(value) && !/[\\/:\u0000-\u0020\u007f]/.test(value) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value);
+    });
+  } catch { return false; }
+}
+
+const DOWNLOAD_ERRORS = Object.freeze({
+  HTTP_401: "Node authentication failed.", HTTP_403: "Download access denied.",
+  HTTP_404: "Requested skill was not found.", HTTP_409: "Skill snapshot conflicted.",
+  HTTP_413: "Manager archive size limit exceeded.", HTTP_503: "Manager download service unavailable.",
+  HTTP_ERROR: "Manager returned an unexpected HTTP status.",
+  OUTPUT_EXISTS: "Local output already exists and was not overwritten.",
+  HASH_MISMATCH: "ZIP SHA-256 does not match the response header.",
+  LENGTH_MISMATCH: "ZIP length does not match the response header.",
+  TOO_LARGE: "ZIP exceeds the client size limit.", INVALID_ZIP: "Invalid ZIP headers or signature.",
+  METADATA_INVALID: "Manager metadata is invalid.", MANAGER_NOT_READY: "Manager is not ready.",
+  IDENTITY_CHANGED: "Manager identity changed during download.",
+  TRANSPORT: "Download transport failed.", CANCELLED: "Download cancelled or timed out.",
+  FILESYSTEM: "Local download filesystem operation failed.",
+  LINK_UNSUPPORTED: "Destination filesystem does not support the required atomic hard link; no fallback was attempted.",
+  CLEANUP_FAILED: "Temporary-file cleanup failed; inspect local partial files."
+});
+export class SkillDownloadError extends Error {
+  constructor(code, statusCode = 0, committed = false) {
+    const safeCode = Object.hasOwn(DOWNLOAD_ERRORS, code) ? code : "TRANSPORT";
+    const safeStatus = Number.isInteger(statusCode) && statusCode >= 100 && statusCode <= 599 ? statusCode : 0;
+    super(`Skill download [${safeCode}] HTTP ${safeStatus}: ${DOWNLOAD_ERRORS[safeCode]} ${committed === true ? "The complete destination may already exist (committed:true); manually verify its SHA-256 before any further action." : "Output was not confirmed."} Do not retry automatically.`);
+    this.name = "SkillDownloadError";
+    this.code = safeCode;
+    this.statusCode = safeStatus;
+    this.committed = committed === true;
+  }
+}
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
@@ -90,7 +132,7 @@ async function boundedResponse(response) {
 }
 
 /** Transport only: Manager owns authorization, business state and mutation receipts. */
-export function createManagerClient({ managerUrl, credential, agentId, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000 }) {
+export function createManagerClient({ managerUrl, credential, agentId, fetchImpl = fetch, timeoutMs = 30_000, uploadTimeoutMs = 30 * 60_000, downloadTimeoutMs = 120_000 }) {
   const origin = managerOrigin(managerUrl);
   if (!credential || !agentId) throw new Error("A node credential and Agent identity are required.");
   async function request(method, target, { body, headers = {} } = {}, upload) {
@@ -126,6 +168,10 @@ export function createManagerClient({ managerUrl, credential, agentId, fetchImpl
         method, headers: outgoing, redirect: "error", signal: upload?.signal ?? AbortSignal.timeout(timeoutMs),
         ...(upload ? { body: upload.stream, duplex: "half" } : body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) })
       });
+      if (response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/zip") {
+        await response.body?.cancel();
+        throw new Error("Binary ZIP responses require the explicit download operation.");
+      }
       const text = await boundedResponse(response);
       let data;
       try { data = JSON.parse(text); } catch { data = undefined; }
@@ -161,6 +207,7 @@ export function createManagerClient({ managerUrl, credential, agentId, fetchImpl
     };
   }
   async function invoke(method, target, options = {}) {
+    if (isSkillDownloadTarget(target)) throw new Error("Skill download requires the explicit download operation and local output path.");
     return verifiedRequest(method, target, options);
   }
   async function upload(filePath, uploadId) {
@@ -190,5 +237,123 @@ export function createManagerClient({ managerUrl, credential, agentId, fetchImpl
     if (!result.ok || uncertain) return { ...result, body: publicBody, ok: false, uncertain, query, guidance: `${result.statusCode === 413 ? "The configured Manager upload limit was exceeded; the 2 GiB client ceiling does not override a lower Manager limit. " : ""}Query GET ${target} with the same Agent identity before any retry. Do not change the upload ID, automatically upload again, or send a message.` };
     return { ...result, body: publicBody, query, guidance: "Uploaded only; nothing was sent. To send explicitly, use /api/agent/send with payload: {type:'file',fileId:...,fileSha256:...} and an authorized target; fileSha256 is required to bind the exact uploaded bytes.", payload: { type: "file", fileId: dto.id, fileSha256: dto.sha256 } };
   }
-  return { invoke, upload };
+  async function download(target, outputPath, { signal: callerSignal } = {}) {
+    if (!isSkillDownloadTarget(target)) throw new Error("Download requires an exact role skill download path without a query.");
+    if (typeof outputPath !== "string" || !outputPath.trim() || outputPath.includes("\0")) throw new Error("Download requires an explicit local output path.");
+    const finalPath = path.resolve(outputPath);
+    const temporaryPath = path.join(path.dirname(finalPath), `.rabi-download-${randomUUID()}.partial`);
+    const signal = callerSignal ? AbortSignal.any([callerSignal, AbortSignal.timeout(downloadTimeoutMs)]) : AbortSignal.timeout(downloadTimeoutMs);
+    const headers = { authorization: `Bearer ${credential}`, "x-rabiroute-agent-id": agentId };
+    let handle;
+    let reader;
+    let temporaryCreated = false;
+    let committed = false;
+    let statusCode = 0;
+    let failureCode = "FILESYSTEM";
+    const failure = code => new SkillDownloadError(code, statusCode, committed);
+    function checkStatus(response) {
+      statusCode = response.status;
+      if (statusCode !== 200) throw failure(Object.hasOwn(DOWNLOAD_ERRORS, `HTTP_${statusCode}`) ? `HTTP_${statusCode}` : "HTTP_ERROR");
+    }
+    // Race reads as well as fetch: a stalled body must not retain a partial file.
+    async function bounded(operation) {
+      signal.throwIfAborted();
+      let listener;
+      try {
+        return await Promise.race([operation(), new Promise((_, reject) => {
+          listener = () => reject(new Error("Download cancelled or timed out."));
+          signal.addEventListener("abort", listener, { once: true });
+          if (signal.aborted) listener();
+        })]);
+      } finally { signal.removeEventListener("abort", listener); }
+    }
+    async function metadata(requireReady) {
+      failureCode = "TRANSPORT";
+      const response = await bounded(() => fetchImpl(relativeTarget(origin, "/meta"), { method: "GET", headers: { ...headers, accept: "application/json" }, redirect: "error", signal }));
+      if (response.status !== 200) { response.body?.cancel().catch(() => {}); checkStatus(response); }
+      failureCode = "METADATA_INVALID";
+      if (response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
+        response.body?.cancel().catch(() => {});
+        throw new Error("Metadata unavailable.");
+      }
+      const value = JSON.parse(await bounded(() => boundedResponse(response)));
+      if (typeof value.applicationGenerationId !== "string" || !value.applicationGenerationId.trim() || typeof value.managerInstanceId !== "string" || !value.managerInstanceId.trim()) throw new Error("Metadata identity missing.");
+      if (requireReady && (value.health?.live !== true || value.health?.requiredReady !== true || !["healthy", "degraded"].includes(value.health?.state))) throw failure("MANAGER_NOT_READY");
+      return { applicationGenerationId: value.applicationGenerationId, managerInstanceId: value.managerInstanceId };
+    }
+    try {
+      try { await lstat(finalPath); throw failure("OUTPUT_EXISTS"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      const identity = await metadata(true);
+      failureCode = "TRANSPORT";
+      const response = await bounded(() => fetchImpl(relativeTarget(origin, target), { method: "GET", headers: { ...headers, accept: "application/zip", "accept-encoding": "identity" }, redirect: "error", signal }));
+      reader = response.body?.getReader();
+      checkStatus(response);
+      const lengthHeader = response.headers.get("content-length");
+      const expectedHash = response.headers.get("x-rabiroute-content-sha256");
+      const expectedLength = Number(lengthHeader);
+      if (response.headers.get("content-type")?.trim().toLowerCase() !== "application/zip" || !/^[1-9][0-9]*$/.test(lengthHeader ?? "") || !Number.isSafeInteger(expectedLength) || !/^[0-9a-f]{64}$/i.test(expectedHash ?? "") || !reader) throw failure("INVALID_ZIP");
+      if (expectedLength > MAX_SKILL_DOWNLOAD_BYTES) throw failure("TOO_LARGE");
+      failureCode = "FILESYSTEM";
+      handle = await open(temporaryPath, "wx", 0o600);
+      temporaryCreated = true;
+      const hash = createHash("sha256");
+      let sizeBytes = 0;
+      let signature = Buffer.alloc(0);
+      while (true) {
+        failureCode = "TRANSPORT";
+        const chunk = await bounded(() => reader.read());
+        if (chunk.done) break;
+        const bytes = Buffer.from(chunk.value);
+        sizeBytes += bytes.length;
+        if (sizeBytes > MAX_SKILL_DOWNLOAD_BYTES) throw failure("TOO_LARGE");
+        if (sizeBytes > expectedLength) throw failure("LENGTH_MISMATCH");
+        if (signature.length < 4) signature = Buffer.concat([signature, bytes.subarray(0, 4 - signature.length)]);
+        hash.update(bytes);
+        let offset = 0;
+        failureCode = "FILESYSTEM";
+        while (offset < bytes.length) {
+          signal.throwIfAborted();
+          const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset);
+          if (!bytesWritten) throw new Error("Download write failed.");
+          offset += bytesWritten;
+        }
+      }
+      const sha256 = hash.digest("hex");
+      if (sizeBytes !== expectedLength) throw failure("LENGTH_MISMATCH");
+      if (sha256 !== expectedHash.toLowerCase()) throw failure("HASH_MISMATCH");
+      if (!["504b0304", "504b0506"].includes(signature.toString("hex"))) throw failure("INVALID_ZIP");
+      failureCode = "FILESYSTEM";
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      const after = await metadata(false);
+      if (after.applicationGenerationId !== identity.applicationGenerationId || after.managerInstanceId !== identity.managerInstanceId) throw failure("IDENTITY_CHANGED");
+      signal.throwIfAborted();
+      failureCode = "FILESYSTEM";
+      // Same-directory hard link is atomic and fails if the destination exists (including Windows).
+      // Unlike rename, it never replaces a file created concurrently by another caller.
+      try { await fsPromises.link(temporaryPath, finalPath); }
+      catch (error) {
+        if (error.code === "EEXIST") throw failure("OUTPUT_EXISTS");
+        if (["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EPERM"].includes(error.code)) throw failure("LINK_UNSUPPORTED");
+        throw failure("FILESYSTEM");
+      }
+      committed = true;
+      failureCode = "CLEANUP_FAILED";
+      await fsPromises.unlink(temporaryPath);
+      temporaryCreated = false;
+      return { ok: true, statusCode: 200, path: finalPath, sizeBytes, sha256, identity };
+    } catch (error) {
+      // Return only our closed error vocabulary, never the original exception or server body.
+      if (error instanceof SkillDownloadError) throw error;
+      throw failure(signal.aborted && !committed ? "CANCELLED" : failureCode);
+    } finally {
+      if (reader) { try { const cancelled = reader.cancel(); cancelled?.catch(() => {}); } catch { /* Preserve failure. */ } }
+      let cleanupFailed = false;
+      try { if (handle) await handle.close(); } catch { cleanupFailed = true; }
+      try { if (temporaryCreated) await fsPromises.unlink(temporaryPath); } catch { cleanupFailed = true; }
+      if (cleanupFailed) throw failure("CLEANUP_FAILED");
+    }
+  }
+  return { invoke, upload, download };
 }

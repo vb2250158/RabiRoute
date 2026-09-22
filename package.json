@@ -1,6 +1,6 @@
 {
   "name": "rabiroute",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -66,13 +66,16 @@
     "qrcode": "^1.5.4",
     "typescript": "^5.7.3",
     "werift": "0.24.4",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yazl": "3.3.1"
   },
   "devDependencies": {
     "@mdi/font": "^7.4.47",
     "@types/node": "^22.10.7",
     "@types/qrcode": "^1.5.5",
     "@types/ws": "^8.5.13",
+    "@types/yauzl": "2.10.3",
+    "@types/yazl": "3.3.0",
     "@vitejs/plugin-vue": "^5.2.4",
     "marked": "^15.0.12",
     "pinia": "^2.3.1",
@@ -81,6 +84,7 @@
     "vue": "^3.5.35",
     "vue-router": "^4.6.4",
     "vue-tsc": "^2.2.12",
-    "vuetify": "^3.12.8"
+    "vuetify": "^3.12.8",
+    "yauzl": "3.4.0"
   }
 }

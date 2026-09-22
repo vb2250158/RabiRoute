@@ -1654,7 +1654,11 @@ function normalizeConsolidatedMemory(raw: Partial<ConsolidatedMemoryItem> & Reco
 }
 
 function parseSkillMarkdown(filePath: string): RoleSkillDetail | null {
-  const raw = fs.readFileSync(filePath, "utf8");
+  return parseRoleSkillMarkdown(fs.readFileSync(filePath, "utf8"), filePath, () => fs.statSync(filePath).mtime.toISOString());
+}
+
+/** Parse bytes already read by the caller; archive readers supply their checked-handle timestamp. */
+export function parseRoleSkillMarkdown(raw: string, filePath: string, fallbackUpdatedAt: () => string): RoleSkillDetail | null {
   const metadata: Record<string, string> = {};
   let content = raw.trim();
   const frontmatter = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -1684,7 +1688,7 @@ function parseSkillMarkdown(filePath: string): RoleSkillDetail | null {
     title,
     summary,
     source: sourceSummary ? { kind: "skill", summary: sourceSummary } : undefined,
-    updatedAt: String(metadata.updatedAt || "").trim() || fs.statSync(filePath).mtime.toISOString(),
+    updatedAt: String(metadata.updatedAt || "").trim() || fallbackUpdatedAt(),
     status,
     keywords,
     path: filePath,

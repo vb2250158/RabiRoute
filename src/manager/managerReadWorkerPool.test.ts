@@ -650,15 +650,22 @@ test("unconfirmed read-worker termination blocks only its owning pool until a re
     setWorkerPriority: () => {},
     workerFactory: () => recoveryChild
   });
+  let released = 0;
   try {
     await assert.rejects(
-      blockedPool.run(fakeReadTask("never-close")),
+      blockedPool.run(fakeReadTask("never-close"), { onWorkerReleased: () => { released++; } }),
       (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed"
     );
     assert.equal(blockedPool.status().active, 1);
     assert.equal(blockedPool.status().workers, 1);
     assert.equal(blockedPool.status().terminationBlocked, true);
     assert.deepEqual(blockedPool.status().blockedWorkerPids, [53_001]);
+    assert.equal(released, 0, "a rejected promise is not proof that the worker stopped writing");
+    let rejectedBeforeDispatch = false;
+    await assert.rejects(blockedPool.run(fakeReadTask("blocked-before-dispatch"), {
+      onWorkerReleased: () => { rejectedBeforeDispatch = true; }
+    }), (error: unknown) => error instanceof ManagerReadWorkerError && error.code === "termination_unconfirmed");
+    assert.equal(rejectedBeforeDispatch, true, "an undispatched archive lease can be removed immediately");
 
     assert.deepEqual(
       await recoveryPool.run<{ restored: boolean }>(fakeReadTask("other-pool-still-serves")),
@@ -675,6 +682,7 @@ test("unconfirmed read-worker termination blocks only its owning pool until a re
 
     blockedChild.close(null, "SIGKILL");
     await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(released, 1, "late confirmed close releases the private archive lease once");
     assert.equal(blockedPool.status().active, 0);
     assert.equal(blockedPool.status().workers, 0);
     assert.equal(recoveryPool.status().terminationBlocked, false);

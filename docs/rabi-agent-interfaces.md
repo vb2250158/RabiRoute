@@ -1569,6 +1569,7 @@ Agent 应该：
 
 ```text
 data/roles/<RoleId>/skills/*.md
+data/roles/<RoleId>/skills/<skill-folder>/SKILL.md
 ```
 
 每个技能文件使用 Markdown 正文和简单 frontmatter：
@@ -1597,6 +1598,36 @@ GET /roles/:roleId/skills/:skillId
 ```
 
 列表接口只返回元信息。单项接口返回完整正文。Agent 在 `[处理前上下文确认]` 里看到 `role_skill` 条目时，回复、更新计划/记忆或执行外部动作前应先按 GET 路径读取技能全文。
+
+### 下载指定技能目录
+
+`GET /api/roles/:roleId/skills/:skillId/download` 返回该技能的完整 ZIP；`GET /roles/:roleId/skills/:skillId/download` 是同权限别名。不接受查询参数、任意文件路径或批量人格导出。远端调用需要已登记节点凭据、准确 Agent 的 Manager API 授权，以及该人格 Route 中的 `instanceId + agentId` 配置；与读取人格技能相同，不增加逐技能授权。本机管理保留原认证。
+
+目录型技能保留所有普通文件、子目录和字节，包括 `scripts/`、`references/`、`agents/`、隐藏文件及二进制配套文件，ZIP 顶层为 `<skillId>/`。平面 Markdown 技能只生成 `<skillId>/SKILL.md`。按技能索引 ID 找真实入口，不假定 frontmatter `id` 等于目录名；重复 ID 返回冲突。不沿 Markdown 引用追踪根外路径或其他技能，需要另一技能时单独下载。下载的是当前 Manager 管理的技能内容，不会将其复制到公开 `resources` 或发布包。
+
+示例（Bash；使用 Hook 给出的已安装连接程序路径，替换占位符，不在远端使用本机 Host 或猜端口）：
+
+安装 launcher 会以当前不可变 release 目录作为工作目录，`./` 不指向用户 shell 或项目目录。请明确选择本机 Rabi Agent 安装目录外、已存在的父目录，并为 `--output` 提供绝对文件路径；最终文件必须不存在。以下 Bash 示例仅在你已选择并确认 `$HOME/Downloads` 存在且位于安装目录外时使用；否则替换为你选择的已有目录，不自动创建目录。`$HOME` 由 shell 展开为绝对路径。
+
+```bash
+node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --agent "<agentId>" --output "$HOME/Downloads/selected-skill.zip"
+```
+
+连接程序从私有配置读取 `managerUrl` 和节点凭据，前后核对 `/meta` 的 generation 与实例身份，拒绝重定向。`--output` 仅用于上述 GET 下载；目标父目录须存在，不覆盖已有文件，不自动解压、安装或运行脚本。客户端流式校验 `Content-Length`、`x-rabiroute-content-sha256` 与 ZIP 签名后，以不覆盖方式完成本地文件；返回 `ok`、本地路径、字节数和 SHA-256。失败删除临时文件，不把 JSON 错误保存为 ZIP。普通 `--api` 的 JSON 输出不能用作二进制下载。原子非覆盖完成依赖目标文件系统支持硬链接；不支持的 Mac/NAS 文件系统明确失败，不自动降级为可能覆盖的复制或重命名。若目标已完成但临时文件清理失败，固定错误会以 `committed:true` 提示目标可能已经存在，应先检查现有文件并与可信 SHA-256 人工核对，不自动重下。下载失败保留固定的本地错误码及允许的 HTTP 状态，不回显服务端正文、传输异常或凭据。
+
+响应为 `application/zip`，包含安全 `Content-Disposition: attachment`、`Content-Length`、`x-rabiroute-content-sha256`、强 ETag 和 `Cache-Control: private, no-store`；不承诺 Range/断点续传。服务端在有界交互工作进程中先完整生成并校验，再流式响应；IPC 不传整包 Buffer/base64。默认限单文件 16 MiB、原始累计 64 MiB、4096 个文件/目录条目、深度 32、ZIP 68 MiB。路径穿越、软链/junction、硬链接、非普通文件、不安全跨平台名称或大小写/Unicode 规范化名称冲突会使整包失败；超限也不截断或静默漏文件。读取期间源目录变化返回冲突。技能目录只能由受信本机拥有者维护；Node 的路径检查不等于抵抗拥有本机写权限者的任意并发替换。
+
+| HTTP | 含义与处理 |
+| --- | --- |
+| 401 | 凭据缺失或无效；核对已登记连接配置，不公开凭据。 |
+| 403 | 节点/Agent 或人格未授权，或技能路径/链接不安全；修正绑定或由技能拥有者检查源目录，不绕过限制。 |
+| 404 | 已授权人格中不存在该技能；刷新技能列表并核对 ID。 |
+| 409 | 技能 ID/归档名称冲突或生成期间源内容变化；由拥有者解决后重新下载。 |
+| 413 | 文件、条目、深度或包大小超限；明确缩小技能包，不接受残缺文件。 |
+| 503 | 队列忙、超时或工作进程退出未确认；不当作空技能包，不自动反复重试。 |
+| 500 | 内部生成或传输失败；保留错误码交 Manager 拥有者排查。 |
+
+整个 Manager 最多同时持有 4 份下载租约，覆盖生成、慢客户端传输和退出未确认的隔离工件；超过上限在创建临时目录前返回 503。成包后的传输限时 30 秒，超时断流并清理，不让慢客户端无限占盘。客户端断连取消生成/传输并清理私有临时工件；退出未确认时保留隔离工件和名额至工作进程实际关闭；清理失败也不提前释放名额。Mac 上的 Node 可以下载 `.ps1`，但这不证明已安装 PowerShell、脚本路径适用于 Mac 或脚本已通过执行门禁。下载成功仅证明文件完整性，不是执行授权。本合同面向已登记 Rabi Agent 到配置 Manager 的连接；公网 RabiLink 大包转发和实际跨机下载仍须单独验收，不能以本地测试代替。
 
 计划可选 `messageChannels` 列表，Agent 可在创建计划或 PATCH 时绑定；省略或 `[]` 均合法，不阻断建计划、执行或人格事件投递。每项为 `{channel, gatewayId, params}`，复用事件投递的 NapCat 群／个人 QQ 与语音参数。计划渠道只用于绑定 Codex 任务的最终结果；与人格规则共同匹配，同一任务、轮次、目标去重。Hook 自动通知不要求原始群消息编号，也不被旧引用式进度通知的失败阻断；Agent 主动回复仍尽量引用来源。
 

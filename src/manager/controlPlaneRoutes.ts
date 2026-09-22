@@ -9,6 +9,7 @@ import { KnowledgeSearchService } from "./knowledgeSearchService.js";
 import { handleKnowledgeSearch } from "./knowledgeSearchRoutes.js";
 import { handleMessageEndpointHistoryApi } from "./messageEndpointHistoryRoutes.js";
 import { respondRoleSkillRead } from "./roleSkillReadRoutes.js";
+import { handleRoleSkillDownloadApi, type RoleSkillArchiveReply } from "./roleSkillDownloadRoutes.js";
 import { authorizeLanAgentRoleSkillRequest } from "./lanAgentRoleSkillAccess.js";
 import type { AgentInstanceBinding } from "../shared/agentInstance.js";
 import { manageInstanceAgent } from "../agentAdapters/instanceManagement.js";
@@ -8013,6 +8014,15 @@ function handleRoleKnowledgeApi(
       return true;
     }
   }
+
+  if (handleRoleSkillDownloadApi(request, pathname, response, {
+    roleDirectory: resolveRoleDir,
+    json: jsonResponse,
+    archive: (roleDir, skillId, outputPath, options) => managerKnowledgePageWorkerPool.run<RoleSkillArchiveReply>({
+      type: "role_skill_archive", roleDir, skillId, outputPath
+    }, options),
+    reportCleanupError: () => console.error("[role-skill-download] Private archive cleanup failed.")
+  })) return true;
 
   const route = parseRoleKnowledgeResourceRoute(pathname);
   if (!route) {

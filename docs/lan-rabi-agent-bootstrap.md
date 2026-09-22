@@ -98,6 +98,20 @@ node rabi-agent.mjs --api GET "/api/lan-agent/resources/read?id=docs%2Frabi-agen
 
 Windows 发布流程将公共 `skills/` 按受控的 Git tracked 文件复制进版本包，不复制工作区中的私有或未跟踪内容。该打包链尚未运行 ZIP 验收；不能据此宣称安装包已经包含可用的完整技能目录。
 
+### 下载一个技能及其配套文件
+
+读到技能正文但缺少 `scripts/` 或 `references/` 时，下载选中技能的完整目录，不要复制整个人格或让远端猜主机路径。已配置该人格的 Agent 沿用同一节点凭据与人格权限；接口不会执行脚本。
+
+安装 launcher 会以当前不可变 release 目录作为工作目录，`./` 不指向用户 shell 或项目目录。请明确选择本机 Rabi Agent 安装目录外、已存在的父目录，并为 `--output` 提供绝对文件路径；最终文件必须不存在。以下 Bash 示例仅在你已选择并确认 `$HOME/Downloads` 存在且位于安装目录外时使用；否则替换为你选择的已有目录，不自动创建目录。`$HOME` 由 shell 展开为绝对路径。
+
+```bash
+node rabi-agent.mjs --api GET "/api/roles/<roleId>/skills/<skillId>/download" --agent "<agentId>" --output "$HOME/Downloads/selected-skill.zip"
+```
+
+使用 Hook 给出的已安装连接程序路径。Manager 与远端连接程序分别验收：部署新 Manager 不证明 Mac 已有支持 `--output` 的 CLI；旧连接程序须沿上文安装/签名更新流程升级，再确认 Hook 与 CLI 提供此选项，不另装备用更新器。HTTP 下载接口本身可由符合鉴权合同的二进制客户端独立调用。目标父目录须存在，已有文件不会被覆盖；客户端验证 ZIP 长度、SHA-256 与 Manager 前后身份后才报告成功，不自动解压或执行。包顶层是 `<skillId>/`，包含该技能目录的全部普通配套文件；flat Markdown 只包含 `<skillId>/SKILL.md`。另一技能需单独下载，不自动追根外引用。链接、越界、不安全名称或超限使整包明确失败，不静默漏脚本。完整[下载合同、上限与错误处理](rabi-agent-interfaces.md#下载指定技能目录)以部署版本为准。
+
+Mac 可以下载 `.ps1` 不代表有 `pwsh`、脚本中的路径适用或已获执行授权。这里只验证已登记 Rabi Agent 到其配置 Manager 的下载；公网 RabiLink 大包转发及真实跨机验收另计。
+
 ## 上传文件并发送到 QQ 群
 
 > 上传链路已完成本机集成测试、完整构建及 `0.3.4-4b5d30118b40` 部署验证。测试使用真实 HTTP 与模拟 NapCat，未向真实群发送文件；真实双机群文件链路仍待验收。

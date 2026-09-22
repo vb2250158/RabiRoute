@@ -54,6 +54,7 @@ const roleKnowledge: readonly Definition[] = [
   ["DELETE", "/plan-marker-statuses/:statusKey", "通过兼容入口退役计划状态"],
   ["GET", "/skills", "列出人格技能"],
   ["GET", "/skills/:skillId", "读取人格技能"],
+  ["GET", "/skills/:skillId/download", "下载指定人格技能完整目录ZIP；仍需人格绑定，不执行脚本"],
   ["GET", "/memory", "读取记忆概览、数量或分页", "counts limit cursor kind query"],
   ["GET", "/memory/recent", "列出近期记忆"],
   ["GET", "/memory/recent/:memoryId", "读取近期记忆（可能刷新 viewedAt）"],

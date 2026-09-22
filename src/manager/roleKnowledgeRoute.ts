@@ -1,3 +1,6 @@
+import { isPortableSkillArchiveSegment } from "../shared/skillArchivePath.js";
+import { sanitizeRoleId } from "../shared/routeIdentity.js";
+
 export type RoleKnowledgeResource =
   | "counts"
   | "plans"
@@ -15,6 +18,18 @@ export type RoleKnowledgeResourceRoute = {
   resource: RoleKnowledgeResource;
   itemId: string;
 };
+
+export function parseRoleSkillDownloadRoute(pathname: string): { roleId: string; skillId: string } | null {
+  const match = pathname.match(/^\/(?:api\/)?roles\/([^/]+)\/skills\/([^/]+)\/download$/);
+  if (!match) return null;
+  const roleId = decodeURIComponent(match[1]);
+  const skillId = decodeURIComponent(match[2]);
+  if (!isPortableSkillArchiveSegment(roleId) || sanitizeRoleId(roleId) !== roleId
+    || !isPortableSkillArchiveSegment(skillId) || skillId.includes("%")) {
+    throw new Error("Invalid skill download path.");
+  }
+  return { roleId, skillId };
+}
 
 const roleKnowledgeResourcePattern = /^\/(?:api\/)?roles\/([^/]+)\/(memory\/consolidation-requests|memory\/consolidation-runs|memory\/consolidated|memory\/recent|memory|counts|plan-statuses|plan-marker-statuses|plans|skills)(?:\/([^/]+))?$/;
 

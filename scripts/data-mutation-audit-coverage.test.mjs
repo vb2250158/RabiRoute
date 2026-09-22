@@ -15,6 +15,7 @@ const infrastructureExclusions = new Map([
   ["src/manager/webPatchService.ts", "immutable Web bundle cache; committed state emits web_patch_committed through the injected audit callback"],
   ["src/manager/webPatchCatalog.ts", "content-addressed Web artifacts and atomic patch-state writer owned by WebPatchService"],
   ["src/manager/speechStableExecutable.ts", "rebuildable installed speech executable with stable firewall identity; fsync and atomic rename, no persona or message state"],
+  ["src/manager/roleSkillDownloadRoutes.ts", "private temporary ZIP leases only, no persona or message state; unconfirmed worker exit retains quarantine until confirmed release; failed cleanup retains admission"],
   ["src/plugin-kernel/hotPatchBundleJournal.ts", "dependency-free hot patch transaction journal with fsync and exclusive recovery locks"],
   ["src/codexAppServerClient.ts", "app-server stderr log sink"],
   ["src/managerInstanceLock.ts", "Manager ownership lock and lease files"],
